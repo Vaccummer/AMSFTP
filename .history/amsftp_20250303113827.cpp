@@ -1347,7 +1347,6 @@ public:
             return rc;
         }
 
-        // Ensure path ends with appropriate separator for the target system
         std::string normalized_path = path;
         char separator = (amsession->tar_system == TarSystemType::Windows) ? '\\' : '/';
         if (!normalized_path.empty() && normalized_path.back() != separator)
@@ -1365,7 +1364,6 @@ public:
 
         if (!sftp_handle)
         {
-            // Check specific SFTP error for better diagnostics
             unsigned long sftp_error = libssh2_sftp_last_error(amsession->sftp);
             switch (sftp_error)
             {
@@ -1382,11 +1380,9 @@ public:
         std::string name;
         std::string path_i;
 
-        // Use a reasonably sized buffer for filenames
         const size_t buffer_size = 4096;
         std::vector<char> filename_buffer(buffer_size);
 
-        // Read directory entries
         while (true)
         {
             int rc = libssh2_sftp_readdir_ex(
@@ -1398,7 +1394,6 @@ public:
 
             if (rc <= 0)
             {
-                // Check if there was an error or just end of directory
                 if (rc < 0)
                 {
                     unsigned long sftp_error = libssh2_sftp_last_error(amsession->sftp);
@@ -1414,22 +1409,18 @@ public:
                         return EC::UnknownError;
                     }
                 }
-                break; // End of directory
+                break;
             }
 
-            // Process the entry
             name.assign(filename_buffer.data(), rc);
 
-            // Skip "." and ".." entries
             if (name == "." || name == "..")
             {
                 continue;
             }
 
-            // Construct the full path based on target system
             path_i = normalized_path + name;
 
-            // Create PathInfo object and add to list
             PathInfo info = formatstat(path_i, attrs);
             file_list.push_back(info);
         }

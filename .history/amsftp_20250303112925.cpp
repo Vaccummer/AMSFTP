@@ -134,34 +134,6 @@ enum class TransferErrorCode
     UnenoughSpace = -49,
     UserSpaceQuotaExceeded = -50,
     BannerRecvError = -51,
-    BannerSendError = -52,
-    SocketSendError = -53,
-    SocketDisconnect = -54,
-    AuthFailed = -55,
-    PublicKeyAuthFailed = -56,
-    PasswordExpired = -57,
-    KeyfileAuthFailed = -58,
-    ChannelFailure = -59,
-    ChannelWindowFull = -60,
-    ChannelWindowExceeded = -61,
-    MACAuthFailed = -62,
-    KexFailure = -63,
-    AlgoUnsupported = -64,
-    MemoryAllocError = -65,
-    FileOperationError = -66,
-    ScpProtocolError = -67,
-    SftpProtocolError = -68,
-    KnownHostAuthFailed = -69,
-    InvalidParameter = -70,
-    NoSFTPConnection = -71,
-    SFTPConnectionLost = -72,
-    SFTPBadMessage = -73,
-    InvalidHandle = -74,
-    SFTPLockConflict = -75,
-    SymlinkLoop = -76,
-    InvalidFilename = -77,
-    UnsupportedSFTPOperation = -78,
-    MediaUnavailable = -79
 };
 
 enum class TarSystemType
@@ -1306,6 +1278,7 @@ public:
 
     EC is_dir(std::string path)
     {
+
         SR info = stat(path);
         if (std::holds_alternative<EC>(info))
         {
@@ -1347,94 +1320,53 @@ public:
             return rc;
         }
 
-        // Ensure path ends with appropriate separator for the target system
-        std::string normalized_path = path;
-        char separator = (amsession->tar_system == TarSystemType::Windows) ? '\\' : '/';
-        if (!normalized_path.empty() && normalized_path.back() != separator)
-        {
-            normalized_path += separator;
-        }
-
-        LIBSSH2_SFTP_HANDLE *sftp_handle = libssh2_sftp_open_ex(
-            amsession->sftp,
-            normalized_path.c_str(),
-            normalized_path.size(),
-            0,
-            LIBSSH2_SFTP_OPENDIR,
-            LIBSSH2_FXF_READ);
+        LIBSSH2_SFTP_HANDLE *sftp_handle = libssh2_sftp_open_ex(amsession->sftp, path.c_str(), path.size(), 0, LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
 
         if (!sftp_handle)
         {
-            // Check specific SFTP error for better diagnostics
-            unsigned long sftp_error = libssh2_sftp_last_error(amsession->sftp);
-            switch (sftp_error)
-            {
-            case LIBSSH2_FX_PERMISSION_DENIED:
-                return EC::PermissionDenied;
-            case LIBSSH2_FX_NO_SUCH_FILE:
-                return EC::PathNotExist;
-            default:
-                return EC::RemotePathOpenError;
-            }
+            return EC::RemotePathOpenError;
         }
 
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         std::string name;
         std::string path_i;
-
-        // Use a reasonably sized buffer for filenames
-        const size_t buffer_size = 4096;
-        std::vector<char> filename_buffer(buffer_size);
-
-        // Read directory entries
+        std::shared_ptr<std::vector<char>> safe_filename_buffer = std::make_shared<std::vector<char>>(2048);
         while (true)
         {
             int rc = libssh2_sftp_readdir_ex(
                 sftp_handle,
-                filename_buffer.data(),
-                buffer_size,
+                safe_filename_buffer->data(), safe_filename_buffer->size(),
                 nullptr, 0,
                 &attrs);
 
             if (rc <= 0)
             {
-                // Check if there was an error or just end of directory
-                if (rc < 0)
-                {
-                    unsigned long sftp_error = libssh2_sftp_last_error(amsession->sftp);
-                    libssh2_sftp_close_handle(sftp_handle);
-
-                    switch (sftp_error)
-                    {
-                    case LIBSSH2_FX_PERMISSION_DENIED:
-                        return EC::PermissionDenied;
-                    case LIBSSH2_FX_CONNECTION_LOST:
-                        return EC::SFTPConnectionLost;
-                    default:
-                        return EC::UnknownError;
-                    }
-                }
-                break; // End of directory
+                break;
             }
-
-            // Process the entry
-            name.assign(filename_buffer.data(), rc);
-
-            // Skip "." and ".." entries
-            if (name == "." || name == "..")
+            else
             {
-                continue;
+                name.assign(safe_filename_buffer->data(), rc);
+                if (rc < safe_filename_buffer->size())
+                    safe_filename_buffer->data()[rc] = '\0';
+
+                if (name == "." || name == "..")
+                {
+                    continue;
+                }
+
+                if (name.find('\\') != std::string::npos)
+                {
+                    path_i = path + "\\" + name;
+                }
+                else
+                {
+                    path_i = path + "/" + name;
+                }
+                PathInfo info = formatstat(path_i, attrs);
+                file_list.push_back(info);
             }
-
-            // Construct the full path based on target system
-            path_i = normalized_path + name;
-
-            // Create PathInfo object and add to list
-            PathInfo info = formatstat(path_i, attrs);
-            file_list.push_back(info);
         }
-
-        libssh2_sftp_close_handle(sftp_handle);
+        libssh2_sftp_close(sftp_handle);
         return file_list;
     }
 
@@ -1783,8 +1715,9 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("RemoteFileExists", TransferErrorCode::RemoteFileExists)
         .value("PathNotExist", TransferErrorCode::PathNotExist)
         .value("PermissionDenied", TransferErrorCode::PermissionDenied)
-        .value("ParentDirectoryNotExist", TransferErrorCode::ParentDirectoryNotExist)
+        .value("ParentDirectoryNotExist", TransferErrorCode::RemotePathOpenError)
         .value("NotDirectory", TransferErrorCode::NotDirectory)
+        .value("ParentDirectoryNotExist", TransferErrorCode::ParentDirectoryNotExist)
         .value("TargetNotAFile", TransferErrorCode::TargetNotAFile)
         .value("RemoteFileDeleteError", TransferErrorCode::RemoteFileDeleteError)
         .value("RemoteDirDeleteError", TransferErrorCode::RemoteDirDeleteError)
@@ -1795,34 +1728,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("InvalidTrashDir", TransferErrorCode::InvalidTrashDir)
         .value("MoveError", TransferErrorCode::MoveError)
         .value("TargetExists", TransferErrorCode::TargetExists)
-        .value("CopyError", TransferErrorCode::CopyError)
-        .value("BannerSendError", TransferErrorCode::BannerSendError)
-        .value("SocketSendError", TransferErrorCode::SocketSendError)
-        .value("AuthFailed", TransferErrorCode::AuthFailed)
-        .value("PublicKeyAuthFailed", TransferErrorCode::PublicKeyAuthFailed)
-        .value("PasswordExpired", TransferErrorCode::PasswordExpired)
-        .value("KeyfileAuthFailed", TransferErrorCode::KeyfileAuthFailed)
-        .value("ChannelFailure", TransferErrorCode::ChannelFailure)
-        .value("ChannelWindowFull", TransferErrorCode::ChannelWindowFull)
-        .value("ChannelWindowExceeded", TransferErrorCode::ChannelWindowExceeded)
-        .value("MACAuthFailed", TransferErrorCode::MACAuthFailed)
-        .value("KexFailure", TransferErrorCode::KexFailure)
-        .value("AlgoUnsupported", TransferErrorCode::AlgoUnsupported)
-        .value("MemoryAllocError", TransferErrorCode::MemoryAllocError)
-        .value("FileOperationError", TransferErrorCode::FileOperationError)
-        .value("ScpProtocolError", TransferErrorCode::ScpProtocolError)
-        .value("SftpProtocolError", TransferErrorCode::SftpProtocolError)
-        .value("KnownHostAuthFailed", TransferErrorCode::KnownHostAuthFailed)
-        .value("InvalidParameter", TransferErrorCode::InvalidParameter)
-        .value("NoSFTPConnection", TransferErrorCode::NoSFTPConnection)
-        .value("SFTPConnectionLost", TransferErrorCode::SFTPConnectionLost)
-        .value("SFTPBadMessage", TransferErrorCode::SFTPBadMessage)
-        .value("InvalidHandle", TransferErrorCode::InvalidHandle)
-        .value("SFTPLockConflict", TransferErrorCode::SFTPLockConflict)
-        .value("SymlinkLoop", TransferErrorCode::SymlinkLoop)
-        .value("InvalidFilename", TransferErrorCode::InvalidFilename)
-        .value("UnsupportedSFTPOperation", TransferErrorCode::UnsupportedSFTPOperation)
-        .value("MediaUnavailable", TransferErrorCode::MediaUnavailable);
+        .value("CopyError", TransferErrorCode::CopyError);
     ;
 
     py::enum_<TarSystemType>(m, "TarSystemType")
