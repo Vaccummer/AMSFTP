@@ -1398,79 +1398,62 @@ public:
             return EC::Success;
         case EC::FailedCheck:
             return EC::RemoteFileExists;
-        case EC::PathNotExist:
-            break;
+        case EC::EC::PathNotExist:
+            return EC::PathNotExist;
         default:
+            return rc;
+        }
+
+        rc = is_dir(dirname(path));
+
+        if (rc != EC::PassCheck)
+        {
             return rc;
         }
 
         int rcr = libssh2_sftp_mkdir_ex(amsession->sftp, path.c_str(), path.size(), 0740);
         if (rcr != 0)
         {
-            return cast_libssh2_error(rcr);
+            switch (rcr)
+            {
+            case LIBSSH2_FX_PERMISSION_DENIED:
+                return EC::PermissionDenied;
+            case LIBSSH2_FX_FILE_ALREADY_EXISTS:
+                return EC::Success;
+            case LIBSSH2_ERROR_SFTP_PROTOCOL:
+                return EC::ParentDirectoryNotExist;
+            default:
+                return EC::UnknownError;
+            }
         }
         return EC::Success;
     }
 
     EC mkdirs(std::string path)
     {
-        if (path.empty())
-        {
-            return EC::InvalidParameter;
-        }
-
-        std::replace(path.begin(), path.end(), '\\', '/');
-
         std::vector<std::string> parts;
-        size_t start = 0;
-        size_t end = 0;
-
-        bool is_absolute = (path[0] == '/');
-        std::string root;
-
-        if (is_absolute)
+        size_t pos = 0;
+        if (path.find('\\') != std::string::npos)
         {
-            root = "/";
-            start = 1;
-        }
-        else if (path.size() >= 2 && path[1] == ':')
-        {
-            root = path.substr(0, 3);
-            start = 3;
-            path = root + path.substr(3);
-        }
-
-        while (start < path.size())
-        {
-            end = path.find('/', start);
-            if (end == std::string::npos)
+            while (pos != std::string::npos)
             {
-                end = path.size();
+                pos = path.find('\\', pos + 1);
+                parts.push_back(path.substr(0, pos));
             }
-            if (end != start)
+        }
+        else
+        {
+            while (pos != std::string::npos)
             {
-                std::string part = path.substr(start, end - start);
-                parts.push_back(part);
+                pos = path.find('/', pos + 1);
+                parts.push_back(path.substr(0, pos));
             }
-            start = end + 1;
         }
 
-        std::string current_path = root;
-        for (const auto &part : parts)
+        for (auto &part : parts)
         {
-            if (current_path.empty())
-            {
-                current_path = part;
-            }
-            else
-            {
-                if (current_path.back() != '/')
-                    current_path += '/';
-                current_path += part;
-            }
-
-            EC rc = mkdir(current_path);
-            if (rc == EC::Success || rc == EC::DirAlreadyExists)
+            EC rc = mkdir(part);
+            if (rc == EC::RemoteFileExists || rc == EC::Success)
             {
                 continue;
             }
@@ -1497,7 +1480,20 @@ public:
         int rcr = libssh2_sftp_unlink(amsession->sftp, path.c_str());
         if (rcr != 0)
         {
-            return cast_libssh2_error(rcr);
+            switch (rcr)
+            {
+            case LIBSSH2_FX_PERMISSION_DENIED:
+                return EC::PermissionDenied;
+            case LIBSSH2_FX_NO_SUCH_FILE:
+                return EC::PathNotExist;
+            default:
+                rc = check();
+                if (rc != EC::Success)
+                {
+                    return rc;
+                }
+                return EC::RemoteFileDeleteError;
+            }
         }
         return EC::Success;
     }

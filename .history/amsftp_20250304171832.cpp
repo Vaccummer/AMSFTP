@@ -1470,15 +1470,18 @@ public:
             }
 
             EC rc = mkdir(current_path);
-            if (rc == EC::Success || rc == EC::DirAlreadyExists)
+            if (rc == EC::Success || rc == EC::RemoteFileExists)
             {
                 continue;
             }
             else
             {
+                // 进一步检查：若路径存在但不是目录，应返回明确错误
+                // （需依赖 mkdir 实现或额外检查）
                 return rc;
             }
         }
+
         return EC::Success;
     }
 

@@ -1416,15 +1416,17 @@ public:
     {
         if (path.empty())
         {
-            return EC::InvalidParameter;
+            return EC::InvalidPath; // 假设 EC 包含此错误码
         }
 
+        // 统一替换所有反斜杠为正斜杠，避免混合分隔符问题
         std::replace(path.begin(), path.end(), '\\', '/');
 
         std::vector<std::string> parts;
         size_t start = 0;
         size_t end = 0;
 
+        // 处理绝对路径或 Windows 盘符
         bool is_absolute = (path[0] == '/');
         std::string root;
 
@@ -1435,11 +1437,13 @@ public:
         }
         else if (path.size() >= 2 && path[1] == ':')
         {
-            root = path.substr(0, 3);
+            // Windows 盘符（如 "C:/"）
+            root = path.substr(0, 3); // 提取 "C:/"
             start = 3;
-            path = root + path.substr(3);
+            path = root + path.substr(3); // 确保路径规范化
         }
 
+        // 分割路径部分
         while (start < path.size())
         {
             end = path.find('/', start);
@@ -1448,13 +1452,14 @@ public:
                 end = path.size();
             }
             if (end != start)
-            {
+            { // 跳过空部分（如连续或末尾的 '/'）
                 std::string part = path.substr(start, end - start);
                 parts.push_back(part);
             }
             start = end + 1;
         }
 
+        // 逐级构建路径并创建目录
         std::string current_path = root;
         for (const auto &part : parts)
         {
@@ -1464,21 +1469,25 @@ public:
             }
             else
             {
+                // 避免重复添加 '/'（如 root 已含 '/'）
                 if (current_path.back() != '/')
                     current_path += '/';
                 current_path += part;
             }
 
             EC rc = mkdir(current_path);
-            if (rc == EC::Success || rc == EC::DirAlreadyExists)
+            if (rc == EC::Success || rc == EC::RemoteFileExists)
             {
                 continue;
             }
             else
             {
+                // 进一步检查：若路径存在但不是目录，应返回明确错误
+                // （需依赖 mkdir 实现或额外检查）
                 return rc;
             }
         }
+
         return EC::Success;
     }
 

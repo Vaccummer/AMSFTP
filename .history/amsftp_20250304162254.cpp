@@ -88,7 +88,7 @@ std::string join_path(Args &&...args)
     fs::path combined;
     for (auto &seg : segments)
     {
-        combined /= seg;
+        combined /= seg; // 依赖 filesystem 自动处理分隔符
     }
     return combined.lexically_normal().generic_string();
 }
@@ -178,8 +178,7 @@ enum class TransferErrorCode
     UnsupportedSFTPOperation = -78,
     MediaUnavailable = -79,
     SftpNotInitialized = -80,
-    SessionNotInitialized = -81,
-    DirAlreadyExists = -82
+    SessionNotInitialized = -81
 };
 
 enum class TarSystemType
@@ -264,14 +263,13 @@ struct PathInfo
 {
     std::string name;
     std::string path;
-    std::string dir;
     uint64_t size = -1;
     uint64_t atime = -1;
     uint64_t mtime = -1;
     PathType path_type = PathType::FILE;
     PathInfo()
-        : name(""), path(""), dir(""), size(-1), atime(-1), mtime(-1), path_type(PathType::FILE) {}
-    PathInfo(std::string name, std::string path, std::string dir, uint64_t size, uint64_t atime, uint64_t mtime, PathType path_type)
+        : name(""), path(""), size(-1), atime(-1), mtime(-1), path_type(PathType::FILE) {}
+    PathInfo(std::string name, std::string path, uint64_t size, uint64_t atime, uint64_t mtime, PathType path_type)
         : name(name), path(path), size(size), atime(atime), mtime(mtime), path_type(path_type) {}
 };
 
@@ -1115,12 +1113,18 @@ private:
     std::string trash_dir = "";
     LIBSSH2_CHANNEL *channel = nullptr;
 
-    PathInfo format_stat(std::string path, LIBSSH2_SFTP_ATTRIBUTES &attrs)
+    PathInfo formatstat(std::string path, LIBSSH2_SFTP_ATTRIBUTES &attrs)
     {
         PathInfo info;
         info.path = path;
-        info.name = basename(path);
-        info.dir = dirname(path);
+        if (path.find('\\') != std::string::npos)
+        {
+            info.name = path.substr(path.find_last_of('\\') + 1);
+        }
+        else
+        {
+            info.name = path.substr(path.find_last_of('/') + 1);
+        }
 
         if (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE)
         {
@@ -1247,7 +1251,7 @@ public:
         {
             return cast_libssh2_error(rct);
         }
-        return format_stat(path, attrs);
+        return formatstat(path, attrs);
     }
 
     EC exists(std::string path)
@@ -1324,6 +1328,11 @@ public:
         // Ensure path ends with appropriate separator for the target system
 
         std::string normalized_path = path;
+        char separator = (amsession->tar_system == TarSystemType::Windows) ? '\\' : '/';
+        if (!normalized_path.empty() && normalized_path.back() != separator)
+        {
+            normalized_path += separator;
+        }
 
         LIBSSH2_SFTP_HANDLE *sftp_handle = libssh2_sftp_open_ex(
             amsession->sftp,
@@ -1335,7 +1344,17 @@ public:
 
         if (!sftp_handle)
         {
-            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            // Check specific SFTP error for better diagnostics
+            unsigned long sftp_error = libssh2_sftp_last_error(amsession->sftp);
+            switch (sftp_error)
+            {
+            case LIBSSH2_FX_PERMISSION_DENIED:
+                return EC::PermissionDenied;
+            case LIBSSH2_FX_NO_SUCH_FILE:
+                return EC::PathNotExist;
+            default:
+                return EC::RemotePathOpenError;
+            }
         }
 
         LIBSSH2_SFTP_ATTRIBUTES attrs;
@@ -1356,15 +1375,25 @@ public:
                 nullptr, 0,
                 &attrs);
 
-            if (rc < 0)
+            if (rc <= 0)
             {
                 // Check if there was an error or just end of directory
-                libssh2_sftp_close_handle(sftp_handle);
-                return cast_libssh2_error(rc);
-            }
-            else if (rc == 0)
-            {
-                break;
+                if (rc < 0)
+                {
+                    unsigned long sftp_error = libssh2_sftp_last_error(amsession->sftp);
+                    libssh2_sftp_close_handle(sftp_handle);
+
+                    switch (sftp_error)
+                    {
+                    case LIBSSH2_FX_PERMISSION_DENIED:
+                        return EC::PermissionDenied;
+                    case LIBSSH2_FX_CONNECTION_LOST:
+                        return EC::SFTPConnectionLost;
+                    default:
+                        return EC::UnknownError;
+                    }
+                }
+                break; // End of directory
             }
 
             // Process the entry
@@ -1377,10 +1406,10 @@ public:
             }
 
             // Construct the full path based on target system
-            path_i = join_path(normalized_path, name);
+            path_i = normalized_path + name;
 
             // Create PathInfo object and add to list
-            PathInfo info = format_stat(path_i, attrs);
+            PathInfo info = formatstat(path_i, attrs);
             file_list.push_back(info);
         }
 
@@ -1390,87 +1419,68 @@ public:
 
     EC mkdir(std::string path)
     {
-        EC rc = is_dir(path);
+        EC rc = exists(path);
 
         switch (rc)
         {
         case EC::PassCheck:
-            return EC::Success;
-        case EC::FailedCheck:
             return EC::RemoteFileExists;
-        case EC::PathNotExist:
+        case EC::FailedCheck:
             break;
         default:
+            return rc;
+        }
+
+        rc = is_dir(dirname(path));
+
+        if (rc != EC::PassCheck)
+        {
             return rc;
         }
 
         int rcr = libssh2_sftp_mkdir_ex(amsession->sftp, path.c_str(), path.size(), 0740);
         if (rcr != 0)
         {
-            return cast_libssh2_error(rcr);
+            switch (rcr)
+            {
+            case LIBSSH2_FX_PERMISSION_DENIED:
+                return EC::PermissionDenied;
+            case LIBSSH2_FX_FILE_ALREADY_EXISTS:
+                return EC::Success;
+            case LIBSSH2_ERROR_SFTP_PROTOCOL:
+                return EC::ParentDirectoryNotExist;
+            default:
+                return EC::UnknownError;
+            }
         }
         return EC::Success;
     }
 
     EC mkdirs(std::string path)
     {
-        if (path.empty())
-        {
-            return EC::InvalidParameter;
-        }
-
-        std::replace(path.begin(), path.end(), '\\', '/');
-
         std::vector<std::string> parts;
-        size_t start = 0;
-        size_t end = 0;
-
-        bool is_absolute = (path[0] == '/');
-        std::string root;
-
-        if (is_absolute)
+        size_t pos = 0;
+        if (path.find('\\') != std::string::npos)
         {
-            root = "/";
-            start = 1;
-        }
-        else if (path.size() >= 2 && path[1] == ':')
-        {
-            root = path.substr(0, 3);
-            start = 3;
-            path = root + path.substr(3);
-        }
-
-        while (start < path.size())
-        {
-            end = path.find('/', start);
-            if (end == std::string::npos)
+            while (pos != std::string::npos)
             {
-                end = path.size();
+                pos = path.find('\\', pos + 1);
+                parts.push_back(path.substr(0, pos));
             }
-            if (end != start)
+        }
+        else
+        {
+            while (pos != std::string::npos)
             {
-                std::string part = path.substr(start, end - start);
-                parts.push_back(part);
+                pos = path.find('/', pos + 1);
+                parts.push_back(path.substr(0, pos));
             }
-            start = end + 1;
         }
 
-        std::string current_path = root;
-        for (const auto &part : parts)
+        for (auto &part : parts)
         {
-            if (current_path.empty())
-            {
-                current_path = part;
-            }
-            else
-            {
-                if (current_path.back() != '/')
-                    current_path += '/';
-                current_path += part;
-            }
-
-            EC rc = mkdir(current_path);
-            if (rc == EC::Success || rc == EC::DirAlreadyExists)
+            EC rc = mkdir(part);
+            if (rc == EC::RemoteFileExists || rc == EC::Success)
             {
                 continue;
             }
@@ -1497,7 +1507,20 @@ public:
         int rcr = libssh2_sftp_unlink(amsession->sftp, path.c_str());
         if (rcr != 0)
         {
-            return cast_libssh2_error(rcr);
+            switch (rcr)
+            {
+            case LIBSSH2_FX_PERMISSION_DENIED:
+                return EC::PermissionDenied;
+            case LIBSSH2_FX_NO_SUCH_FILE:
+                return EC::PathNotExist;
+            default:
+                rc = check();
+                if (rc != EC::Success)
+                {
+                    return rc;
+                }
+                return EC::RemoteFileDeleteError;
+            }
         }
         return EC::Success;
     }

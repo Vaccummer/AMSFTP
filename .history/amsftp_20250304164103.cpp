@@ -1414,63 +1414,29 @@ public:
 
     EC mkdirs(std::string path)
     {
-        if (path.empty())
-        {
-            return EC::InvalidParameter;
-        }
-
-        std::replace(path.begin(), path.end(), '\\', '/');
-
         std::vector<std::string> parts;
-        size_t start = 0;
-        size_t end = 0;
-
-        bool is_absolute = (path[0] == '/');
-        std::string root;
-
-        if (is_absolute)
+        size_t pos = 0;
+        if (path.find('\\') != std::string::npos)
         {
-            root = "/";
-            start = 1;
-        }
-        else if (path.size() >= 2 && path[1] == ':')
-        {
-            root = path.substr(0, 3);
-            start = 3;
-            path = root + path.substr(3);
-        }
-
-        while (start < path.size())
-        {
-            end = path.find('/', start);
-            if (end == std::string::npos)
+            while (pos != std::string::npos)
             {
-                end = path.size();
+                pos = path.find('\\', pos + 1);
+                parts.push_back(path.substr(0, pos));
             }
-            if (end != start)
+        }
+        else
+        {
+            while (pos != std::string::npos)
             {
-                std::string part = path.substr(start, end - start);
-                parts.push_back(part);
+                pos = path.find('/', pos + 1);
+                parts.push_back(path.substr(0, pos));
             }
-            start = end + 1;
         }
 
-        std::string current_path = root;
-        for (const auto &part : parts)
+        for (auto &part : parts)
         {
-            if (current_path.empty())
-            {
-                current_path = part;
-            }
-            else
-            {
-                if (current_path.back() != '/')
-                    current_path += '/';
-                current_path += part;
-            }
-
-            EC rc = mkdir(current_path);
-            if (rc == EC::Success || rc == EC::DirAlreadyExists)
+            EC rc = mkdir(part);
+            if (rc == EC::RemoteFileExists || rc == EC::Success)
             {
                 continue;
             }
@@ -1498,214 +1464,228 @@ public:
         if (rcr != 0)
         {
             return cast_libssh2_error(rcr);
-        }
-        return EC::Success;
-    }
-
-    EC rmdir(std::string path)
-    {
-        EC rc = is_dir(path);
-        switch (rc)
-        {
-        case EC::PassCheck:
-            break;
-        case EC::FailedCheck:
-            return EC::TargetNotADirectory;
+        case LIBSSH2_FX_PERMISSION_DENIED:
+            return EC::PermissionDenied;
+        case LIBSSH2_FX_NO_SUCH_FILE:
+            return EC::PathNotExist;
         default:
-            return rc;
-        }
-        int rcr = libssh2_sftp_rmdir(amsession->sftp, path.c_str());
-        if (rcr != 0)
-        {
-            switch (rcr)
-            {
-            case LIBSSH2_FX_PERMISSION_DENIED:
-                return EC::PermissionDenied;
-            case LIBSSH2_FX_NO_SUCH_FILE:
-                return EC::PathNotExist;
-            default:
-                rc = check();
-                if (rc != EC::Success)
-                {
-                    return rc;
-                }
-                return EC::RemoteDirDeleteError;
-            }
-        }
-        return EC::Success;
-    }
-
-    EC rm(std::string path)
-    {
-        EC rc = is_dir(path);
-        int path_type = 0;
-        switch (rc)
-        {
-        case EC::PassCheck:
-            path_type = 1;
-            break;
-        case EC::FailedCheck:
-            path_type = 0;
-            break;
-        default:
-            return rc;
-        }
-
-        if (path_type == 0)
-        {
-            return rmfile(path);
-        }
-
-        LR file_list = listdir(path);
-        if (std::holds_alternative<std::vector<PathInfo>>(file_list))
-        {
-            std::vector<PathInfo> file_list_f = std::get<std::vector<PathInfo>>(file_list);
-            for (auto &file : file_list_f)
-            {
-                rm(file.path);
-            }
-            return rmdir(path);
-        }
-        else
-        {
-            if (std::holds_alternative<EC>(file_list))
-            {
-                return std::get<EC>(file_list);
-            }
-            else
-            {
-                return EC::UnknownError;
-            }
-        }
-    }
-
-    EC saferm(std::string path)
-    {
-        EC rc = exists(path);
-        if (rc != EC::PassCheck)
-        {
-            return rc;
-        }
-        rc = is_dir(trash_dir);
-        if (rc != EC::PassCheck)
-        {
-            rc = mkdirs(trash_dir);
+            rc = check();
             if (rc != EC::Success)
             {
                 return rc;
             }
+            return EC::RemoteFileDeleteError;
         }
-        std::string base = basename(path);
-        std::string target_path;
-        if (trash_dir.find('\\') != std::string::npos)
-        {
-            target_path = trash_dir + "\\" + base;
-        }
-        else
-        {
-            target_path = trash_dir + "/" + base;
-        }
-        int i = 0;
-        while (exists(target_path) == EC::PassCheck)
-        {
-            if (trash_dir.find('\\') != std::string::npos)
-            {
-                target_path = trash_dir + "\\" + std::to_string(i) + "_" + base;
-            }
-            else
-            {
-                target_path = trash_dir + "/" + std::to_string(i) + "_" + base;
-            }
-            i++;
-        }
-        int rcr = libssh2_sftp_rename(amsession->sftp, path.c_str(), target_path.c_str());
-        if (rcr != 0)
-        {
-            return EC::MoveError;
-        }
-        return EC::Success;
     }
+    return EC::Success;
+}
 
-    EC move(std::string src, std::string dst, bool need_mkdir = false)
+EC
+rmdir(std::string path)
+{
+    EC rc = is_dir(path);
+    switch (rc)
     {
-        EC rc = exists(src);
-        if (rc != EC::PassCheck)
-        {
-            return rc;
-        }
-
-        std::string src_base = basename(src);
-        std::string dst_base = basename(dst);
-        std::string dst_dir = dst;
-        if (src_base == dst_base)
-        {
-            dst_dir = dirname(dst);
-        }
-        rc = exists(dst_dir);
-        if (rc != EC::PassCheck)
-        {
-            if (need_mkdir)
-            {
-                mkdirs(dst_dir);
-            }
-            else
-            {
-                return EC::ParentDirectoryNotExist;
-            }
-        }
-        if (exists(dst) == EC::PassCheck)
-        {
-            return EC::RemoteFileExists;
-        }
-        int rcr = libssh2_sftp_rename(amsession->sftp, src.c_str(), dst.c_str());
-        if (rcr != 0)
-        {
-            return EC::MoveError;
-        }
-        return EC::Success;
-    };
-
-    EC copy(std::string src, std::string dst, bool need_mkdir = false)
+    case EC::PassCheck:
+        break;
+    case EC::FailedCheck:
+        return EC::TargetNotADirectory;
+    default:
+        return rc;
+    }
+    int rcr = libssh2_sftp_rmdir(amsession->sftp, path.c_str());
+    if (rcr != 0)
     {
-        EC rc = exists(src);
-        switch (rc)
+        switch (rcr)
         {
-        case EC::PassCheck:
-            break;
-        case EC::FailedCheck:
+        case LIBSSH2_FX_PERMISSION_DENIED:
+            return EC::PermissionDenied;
+        case LIBSSH2_FX_NO_SUCH_FILE:
             return EC::PathNotExist;
         default:
-            return rc;
-        }
-
-        rc = is_file(src);
-        if (rc == EC::PassCheck)
-        {
-            return EC::TargetExists;
-        }
-        rc = is_dir(src);
-
-        if (rc != EC::PassCheck)
-        {
-            rc = is_dir(dirname(src));
-            if (rc != EC::PassCheck)
+            rc = check();
+            if (rc != EC::Success)
             {
                 return rc;
             }
+            return EC::RemoteDirDeleteError;
         }
+    }
+    return EC::Success;
+}
 
-        std::string command = "cp -r \"" + src + "\" \"" + dst + "\"";
+EC rm(std::string path)
+{
+    EC rc = is_dir(path);
+    int path_type = 0;
+    switch (rc)
+    {
+    case EC::PassCheck:
+        path_type = 1;
+        break;
+    case EC::FailedCheck:
+        path_type = 0;
+        break;
+    default:
+        return rc;
+    }
 
-        int rcr = libssh2_channel_exec(channel, command.c_str());
+    if (path_type == 0)
+    {
+        return rmfile(path);
+    }
 
-        if (rcr != 0)
+    LR file_list = listdir(path);
+    if (std::holds_alternative<std::vector<PathInfo>>(file_list))
+    {
+        std::vector<PathInfo> file_list_f = std::get<std::vector<PathInfo>>(file_list);
+        for (auto &file : file_list_f)
         {
-            return EC::CopyError;
+            rm(file.path);
         }
+        return rmdir(path);
+    }
+    else
+    {
+        if (std::holds_alternative<EC>(file_list))
+        {
+            return std::get<EC>(file_list);
+        }
+        else
+        {
+            return EC::UnknownError;
+        }
+    }
+}
 
-        return EC::Success;
-    };
+EC saferm(std::string path)
+{
+    EC rc = exists(path);
+    if (rc != EC::PassCheck)
+    {
+        return rc;
+    }
+    rc = is_dir(trash_dir);
+    if (rc != EC::PassCheck)
+    {
+        rc = mkdirs(trash_dir);
+        if (rc != EC::Success)
+        {
+            return rc;
+        }
+    }
+    std::string base = basename(path);
+    std::string target_path;
+    if (trash_dir.find('\\') != std::string::npos)
+    {
+        target_path = trash_dir + "\\" + base;
+    }
+    else
+    {
+        target_path = trash_dir + "/" + base;
+    }
+    int i = 0;
+    while (exists(target_path) == EC::PassCheck)
+    {
+        if (trash_dir.find('\\') != std::string::npos)
+        {
+            target_path = trash_dir + "\\" + std::to_string(i) + "_" + base;
+        }
+        else
+        {
+            target_path = trash_dir + "/" + std::to_string(i) + "_" + base;
+        }
+        i++;
+    }
+    int rcr = libssh2_sftp_rename(amsession->sftp, path.c_str(), target_path.c_str());
+    if (rcr != 0)
+    {
+        return EC::MoveError;
+    }
+    return EC::Success;
+}
+
+EC move(std::string src, std::string dst, bool need_mkdir = false)
+{
+    EC rc = exists(src);
+    if (rc != EC::PassCheck)
+    {
+        return rc;
+    }
+
+    std::string src_base = basename(src);
+    std::string dst_base = basename(dst);
+    std::string dst_dir = dst;
+    if (src_base == dst_base)
+    {
+        dst_dir = dirname(dst);
+    }
+    rc = exists(dst_dir);
+    if (rc != EC::PassCheck)
+    {
+        if (need_mkdir)
+        {
+            mkdirs(dst_dir);
+        }
+        else
+        {
+            return EC::ParentDirectoryNotExist;
+        }
+    }
+    if (exists(dst) == EC::PassCheck)
+    {
+        return EC::RemoteFileExists;
+    }
+    int rcr = libssh2_sftp_rename(amsession->sftp, src.c_str(), dst.c_str());
+    if (rcr != 0)
+    {
+        return EC::MoveError;
+    }
+    return EC::Success;
 };
+
+EC copy(std::string src, std::string dst, bool need_mkdir = false)
+{
+    EC rc = exists(src);
+    switch (rc)
+    {
+    case EC::PassCheck:
+        break;
+    case EC::FailedCheck:
+        return EC::PathNotExist;
+    default:
+        return rc;
+    }
+
+    rc = is_file(src);
+    if (rc == EC::PassCheck)
+    {
+        return EC::TargetExists;
+    }
+    rc = is_dir(src);
+
+    if (rc != EC::PassCheck)
+    {
+        rc = is_dir(dirname(src));
+        if (rc != EC::PassCheck)
+        {
+            return rc;
+        }
+    }
+
+    std::string command = "cp -r \"" + src + "\" \"" + dst + "\"";
+
+    int rcr = libssh2_channel_exec(channel, command.c_str());
+
+    if (rcr != 0)
+    {
+        return EC::CopyError;
+    }
+
+    return EC::Success;
+};
+}
+;
 
 PYBIND11_MODULE(AMSFTP, m)
 {
