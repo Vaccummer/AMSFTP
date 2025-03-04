@@ -58,26 +58,16 @@ std::string join_path(Args &&...args)
     namespace fs = std::filesystem;
 
     std::vector<std::string> segments;
+    fs::path combined;
+
     auto process_arg = [&](auto &&arg)
     {
         std::string s = std::forward<decltype(arg)>(arg);
         if (s.empty())
-            return;
-
-        size_t pos = 0;
-        while (pos < s.size())
         {
-            size_t next = s.find_first_of("/\\", pos);
-            if (next == std::string::npos)
-                next = s.size();
-
-            std::string segment = s.substr(pos, next - pos);
-            if (!segment.empty())
-            {
-                segments.push_back(std::move(segment));
-            }
-            pos = next + 1;
+            return;
         }
+        segments.push_back(s);
     };
 
     (process_arg(std::forward<Args>(args)), ...);
@@ -85,10 +75,16 @@ std::string join_path(Args &&...args)
     if (segments.empty())
         return "";
 
-    fs::path combined;
     for (auto &seg : segments)
     {
-        combined /= seg;
+        if (combined.empty())
+        {
+            combined = seg;
+        }
+        else
+        {
+            combined /= seg;
+        }
     }
     return combined.lexically_normal().generic_string();
 }
@@ -217,10 +213,11 @@ struct ConRequst
     bool compression;
     int port;
     std::string trash_dir;
+    std::string test_path;
     ConRequst()
-        : hostname(""), username(""), password(""), port(22), tar_system(TarSystemType::Unix), compression(false), trash_dir("") {}
-    ConRequst(std::string hostname, std::string username, std::string password, int port, TarSystemType tar_system, bool compression, std::string trash_dir)
-        : hostname(hostname), username(username), password(password), port(port), tar_system(tar_system), compression(compression) {}
+        : hostname(""), username(""), password(""), port(22), tar_system(TarSystemType::Unix), compression(false), trash_dir(""), test_path("") {}
+    ConRequst(std::string hostname, std::string username, std::string password, int port, TarSystemType tar_system, bool compression, std::string trash_dir, std::string test_path)
+        : hostname(hostname), username(username), password(password), port(port), tar_system(tar_system), compression(compression), trash_dir(trash_dir), test_path(test_path) {}
 };
 
 struct TransferSet
@@ -256,7 +253,7 @@ struct TransferTask
     std::string dst;
     PathType path_type;
     uint64_t size;
-    TransferTask(std::string &src, std::string &dst, PathType path_type, uint64_t size)
+    TransferTask(std::string src, std::string dst, PathType path_type, uint64_t size)
         : src(src), dst(dst), path_type(path_type), size(size) {}
 };
 
@@ -272,7 +269,7 @@ struct PathInfo
     PathInfo()
         : name(""), path(""), dir(""), size(-1), atime(-1), mtime(-1), path_type(PathType::FILE) {}
     PathInfo(std::string name, std::string path, std::string dir, uint64_t size, uint64_t atime, uint64_t mtime, PathType path_type)
-        : name(name), path(path), size(size), atime(atime), mtime(mtime), path_type(path_type) {}
+        : name(name), path(path), dir(dir), size(size), atime(atime), mtime(mtime), path_type(path_type) {}
 };
 
 struct BufferSizePair
@@ -488,6 +485,8 @@ EC cast_libssh2_error(int error_code)
         return EC::UnsupportedSFTPOperation;
     case LIBSSH2_FX_NO_MEDIA:
         return EC::MediaUnavailable;
+    default:
+        return EC::UnknownError;
     }
 }
 
@@ -500,6 +499,7 @@ public:
     ConRequst request;
     SOCKET sock = INVALID_SOCKET;
     TarSystemType tar_system;
+    LIBSSH2_CHANNEL *channel = nullptr;
     EC init()
     {
         WSADATA wsaData;
@@ -566,19 +566,18 @@ public:
             return TransferErrorCode::SftpCreateError;
         }
 
-        LIBSSH2_CHANNEL *channel = libssh2_channel_open_ex(session,
-                                                           "session",
-                                                           sizeof("session") - 1,
-                                                           2 * AMMB,
-                                                           512 * AMKB,
-                                                           nullptr,
-                                                           0);
+        channel = libssh2_channel_open_ex(session,
+                                          "session",
+                                          sizeof("session") - 1,
+                                          4 * AMMB,
+                                          512 * AMKB,
+                                          nullptr,
+                                          0);
 
         if (!channel)
         {
             return TransferErrorCode::ChannelCreateError;
         }
-
         return rc;
     }
 
@@ -595,18 +594,11 @@ public:
         }
 
         LIBSSH2_SFTP_ATTRIBUTES attrs;
-        int rct;
-        if (tar_system == TarSystemType::Windows)
-        {
-            rct = libssh2_sftp_stat(sftp, ("C:\\Users\\" + request.username).c_str(), &attrs);
-        }
-        else
-        {
-            rct = libssh2_sftp_stat(sftp, ("/home/" + request.username).c_str(), &attrs);
-        }
+        int rct = libssh2_sftp_stat(sftp, request.test_path.c_str(), &attrs);
+
         if (rct != 0)
         {
-            return cast_libssh2_error(rct);
+            return cast_libssh2_error(libssh2_session_last_errno(session));
         }
         return EC::Success;
     }
@@ -645,7 +637,7 @@ public:
         this->private_keys = {};
     }
 
-    AMSession(ConRequst &request, std::vector<std::string> &private_keys)
+    AMSession(ConRequst request, std::vector<std::string> private_keys)
         : request(request), private_keys(private_keys)
     {
     }
@@ -773,7 +765,7 @@ private:
             }
             else
             {
-                rc_r = cast_libssh2_error(rc);
+                rc_r = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
                 goto clean;
             }
         }
@@ -864,7 +856,7 @@ private:
             }
             else
             {
-                rc_r = cast_libssh2_error(rc);
+                rc_r = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
                 goto clean;
             }
         }
@@ -974,7 +966,7 @@ private:
             }
             else
             {
-                rc_final = cast_libssh2_error(rc_read);
+                rc_final = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
                 goto clean;
             }
         }
@@ -1111,9 +1103,8 @@ class AMSFTPClient
 private:
     ConRequst request;
     std::vector<std::string> private_keys;
+
     AMSession *amsession;
-    std::string trash_dir = "";
-    LIBSSH2_CHANNEL *channel = nullptr;
 
     PathInfo format_stat(std::string path, LIBSSH2_SFTP_ATTRIBUTES &attrs)
     {
@@ -1152,17 +1143,16 @@ private:
         return info;
     }
 
+    EC _walk(std::string path, std::function<void(std::string, PathType)> callback)
+    {
+        LR list = listdir(path);
+    }
+
 public:
     ~AMSFTPClient()
     {
         delete amsession;
         amsession = nullptr;
-        if (channel)
-        {
-            libssh2_channel_close(channel);
-            libssh2_channel_free(channel);
-            channel = nullptr;
-        }
     }
 
     AMSFTPClient(ConRequst request, std::vector<std::string> private_keys)
@@ -1183,8 +1173,9 @@ public:
     EC reconnect()
     {
         delete amsession;
+        // AMSession amsession_f = AMSession(request, private_keys);
+
         amsession = new AMSession(request, private_keys);
-        channel = libssh2_channel_open_session(amsession->session);
         return amsession->init();
     }
 
@@ -1200,7 +1191,7 @@ public:
 
     EC ensure_trash_dir()
     {
-        SR info = stat(trash_dir);
+        SR info = stat(request.trash_dir);
         if (std::holds_alternative<EC>(info))
         {
             return std::get<EC>(info);
@@ -1213,7 +1204,7 @@ public:
         {
             return EC::Success;
         }
-        EC rc = mkdirs(trash_dir);
+        EC rc = mkdirs(request.trash_dir);
         if (rc != EC::Success)
         {
             return rc;
@@ -1233,8 +1224,6 @@ public:
         {
             return rc;
         }
-        trash_dir = request.trash_dir;
-        channel = libssh2_channel_open_session(amsession->session);
         return rc;
     }
 
@@ -1245,7 +1234,7 @@ public:
         int rct = libssh2_sftp_stat(amsession->sftp, path.c_str(), &attrs);
         if (rct != 0)
         {
-            return cast_libssh2_error(rct);
+            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
         }
         return format_stat(path, attrs);
     }
@@ -1360,7 +1349,7 @@ public:
             {
                 // Check if there was an error or just end of directory
                 libssh2_sftp_close_handle(sftp_handle);
-                return cast_libssh2_error(rc);
+                return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
             }
             else if (rc == 0)
             {
@@ -1407,7 +1396,7 @@ public:
         int rcr = libssh2_sftp_mkdir_ex(amsession->sftp, path.c_str(), path.size(), 0740);
         if (rcr != 0)
         {
-            return cast_libssh2_error(rcr);
+            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
         }
         return EC::Success;
     }
@@ -1497,7 +1486,7 @@ public:
         int rcr = libssh2_sftp_unlink(amsession->sftp, path.c_str());
         if (rcr != 0)
         {
-            return cast_libssh2_error(rcr);
+            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
         }
         return EC::Success;
     }
@@ -1515,22 +1504,10 @@ public:
             return rc;
         }
         int rcr = libssh2_sftp_rmdir(amsession->sftp, path.c_str());
-        if (rcr != 0)
+        if (rcr < 0)
         {
-            switch (rcr)
-            {
-            case LIBSSH2_FX_PERMISSION_DENIED:
-                return EC::PermissionDenied;
-            case LIBSSH2_FX_NO_SUCH_FILE:
-                return EC::PathNotExist;
-            default:
-                rc = check();
-                if (rc != EC::Success)
-                {
-                    return rc;
-                }
-                return EC::RemoteDirDeleteError;
-            }
+            std::cout << libssh2_sftp_last_error(amsession->sftp) << std::endl;
+            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
         }
         return EC::Success;
     }
@@ -1586,10 +1563,10 @@ public:
         {
             return rc;
         }
-        rc = is_dir(trash_dir);
+        rc = is_dir(request.trash_dir);
         if (rc != EC::PassCheck)
         {
-            rc = mkdirs(trash_dir);
+            rc = mkdirs(request.trash_dir);
             if (rc != EC::Success)
             {
                 return rc;
@@ -1597,36 +1574,31 @@ public:
         }
         std::string base = basename(path);
         std::string target_path;
-        if (trash_dir.find('\\') != std::string::npos)
+        std::string base_name = base;
+        std::string base_ext = "";
+        size_t dot_pos = base.find_last_of('.');
+        if (dot_pos != std::string::npos)
         {
-            target_path = trash_dir + "\\" + base;
+            base_name = base.substr(0, dot_pos);
+            base_ext = base.substr(dot_pos);
         }
-        else
-        {
-            target_path = trash_dir + "/" + base;
-        }
-        int i = 0;
+
+        target_path = join_path(request.trash_dir, base);
+        size_t i = 1;
         while (exists(target_path) == EC::PassCheck)
         {
-            if (trash_dir.find('\\') != std::string::npos)
-            {
-                target_path = trash_dir + "\\" + std::to_string(i) + "_" + base;
-            }
-            else
-            {
-                target_path = trash_dir + "/" + std::to_string(i) + "_" + base;
-            }
+            target_path = join_path(request.trash_dir, base_name + "_" + std::to_string(i) + base_ext);
             i++;
         }
         int rcr = libssh2_sftp_rename(amsession->sftp, path.c_str(), target_path.c_str());
         if (rcr != 0)
         {
-            return EC::MoveError;
+            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
         }
         return EC::Success;
     }
 
-    EC move(std::string src, std::string dst, bool need_mkdir = false)
+    EC move(std::string src, std::string dst, bool need_mkdir = false, bool force_write = false)
     {
         EC rc = exists(src);
         if (rc != EC::PassCheck)
@@ -1635,12 +1607,8 @@ public:
         }
 
         std::string src_base = basename(src);
-        std::string dst_base = basename(dst);
         std::string dst_dir = dst;
-        if (src_base == dst_base)
-        {
-            dst_dir = dirname(dst);
-        }
+        std::string dst_path = join_path(dst_dir, src_base);
         rc = exists(dst_dir);
         if (rc != EC::PassCheck)
         {
@@ -1653,15 +1621,18 @@ public:
                 return EC::ParentDirectoryNotExist;
             }
         }
-        if (exists(dst) == EC::PassCheck)
+        if (exists(dst_path) == EC::PassCheck)
         {
             return EC::RemoteFileExists;
         }
-        int rcr = libssh2_sftp_rename(amsession->sftp, src.c_str(), dst.c_str());
+
+        int rcr = libssh2_sftp_rename_ex(amsession->sftp, src.c_str(), src.size(), dst_path.c_str(), dst_path.size(), force_write ? LIBSSH2_SFTP_RENAME_OVERWRITE : 0);
+
         if (rcr != 0)
         {
-            return EC::MoveError;
+            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
         }
+
         return EC::Success;
     };
 
@@ -1678,33 +1649,87 @@ public:
             return rc;
         }
 
-        rc = is_file(src);
+        rc = is_file(dst);
         if (rc == EC::PassCheck)
         {
             return EC::TargetExists;
         }
-        rc = is_dir(src);
 
+        rc = is_dir(dst);
         if (rc != EC::PassCheck)
         {
-            rc = is_dir(dirname(src));
-            if (rc != EC::PassCheck)
+            if (need_mkdir)
             {
-                return rc;
+                rc = mkdirs(dst);
+                if (rc != EC::Success)
+                {
+                    return rc;
+                }
+            }
+            else
+            {
+                return EC::ParentDirectoryNotExist;
             }
         }
 
         std::string command = "cp -r \"" + src + "\" \"" + dst + "\"";
 
-        int rcr = libssh2_channel_exec(channel, command.c_str());
+        int rcr = libssh2_channel_exec(amsession->channel, command.c_str());
 
         if (rcr != 0)
         {
             return EC::CopyError;
         }
-
+        int exit_code = libssh2_channel_get_exit_status(amsession->channel);
+        if (exit_code != 0)
+        {
+            return EC::CopyError;
+        }
         return EC::Success;
     };
+
+    EC rename(std::string src, std::string dst, bool need_mkdir = false, bool force_write = false)
+    {
+        EC rc = exists(src);
+        std::string dst_dir;
+        if (rc != EC::PassCheck)
+        {
+            return rc;
+        }
+        rc = exists(dst);
+        switch (rc)
+        {
+        case EC::PassCheck:
+            if (!force_write)
+            {
+                return EC::TargetExists;
+            }
+            break;
+        case EC::FailedCheck:
+            break;
+        default:
+            return rc;
+        }
+        dst_dir = dirname(dst);
+        rc = exists(dst_dir);
+        if (rc != EC::PassCheck)
+        {
+            if (need_mkdir)
+            {
+                rc = mkdirs(dst_dir);
+                if (rc != EC::Success)
+                {
+                    return rc;
+                }
+            }
+            else
+            {
+                return EC::ParentDirectoryNotExist;
+            }
+        }
+
+        int rcr = libssh2_sftp_rename_ex(amsession->sftp, src.c_str(), src.size(), dst.c_str(), dst.size(), force_write ? LIBSSH2_SFTP_RENAME_OVERWRITE : 0);
+    }
 };
 
 PYBIND11_MODULE(AMSFTP, m)
@@ -1739,8 +1764,9 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("RemoteFileExists", TransferErrorCode::RemoteFileExists)
         .value("PathNotExist", TransferErrorCode::PathNotExist)
         .value("PermissionDenied", TransferErrorCode::PermissionDenied)
-        .value("ParentDirectoryNotExist", TransferErrorCode::ParentDirectoryNotExist)
+        .value("RemotePathOpenError", TransferErrorCode::RemotePathOpenError)
         .value("NotDirectory", TransferErrorCode::NotDirectory)
+        .value("ParentDirectoryNotExist", TransferErrorCode::ParentDirectoryNotExist)
         .value("TargetNotAFile", TransferErrorCode::TargetNotAFile)
         .value("RemoteFileDeleteError", TransferErrorCode::RemoteFileDeleteError)
         .value("RemoteDirDeleteError", TransferErrorCode::RemoteDirDeleteError)
@@ -1752,8 +1778,20 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("MoveError", TransferErrorCode::MoveError)
         .value("TargetExists", TransferErrorCode::TargetExists)
         .value("CopyError", TransferErrorCode::CopyError)
+        .value("EndOfFile", TransferErrorCode::EndOfFile)
+        .value("EAgain", TransferErrorCode::EAgain)
+        .value("SocketNone", TransferErrorCode::SocketNone)
+        .value("SocketSend", TransferErrorCode::SocketSend)
+        .value("SocketTimeout", TransferErrorCode::SocketTimeout)
+        .value("SocketRecv", TransferErrorCode::SocketRecv)
+        .value("SocketAccept", TransferErrorCode::SocketAccept)
+        .value("WriteProtected", TransferErrorCode::WriteProtected)
+        .value("UnenoughSpace", TransferErrorCode::UnenoughSpace)
+        .value("UserSpaceQuotaExceeded", TransferErrorCode::UserSpaceQuotaExceeded)
+        .value("BannerRecvError", TransferErrorCode::BannerRecvError)
         .value("BannerSendError", TransferErrorCode::BannerSendError)
         .value("SocketSendError", TransferErrorCode::SocketSendError)
+        .value("SocketDisconnect", TransferErrorCode::SocketDisconnect)
         .value("AuthFailed", TransferErrorCode::AuthFailed)
         .value("PublicKeyAuthFailed", TransferErrorCode::PublicKeyAuthFailed)
         .value("PasswordExpired", TransferErrorCode::PasswordExpired)
@@ -1773,13 +1811,14 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("NoSFTPConnection", TransferErrorCode::NoSFTPConnection)
         .value("SFTPConnectionLost", TransferErrorCode::SFTPConnectionLost)
         .value("SFTPBadMessage", TransferErrorCode::SFTPBadMessage)
-        .value("InvalidHandle", TransferErrorCode::InvalidHandle)
         .value("SFTPLockConflict", TransferErrorCode::SFTPLockConflict)
         .value("SymlinkLoop", TransferErrorCode::SymlinkLoop)
         .value("InvalidFilename", TransferErrorCode::InvalidFilename)
         .value("UnsupportedSFTPOperation", TransferErrorCode::UnsupportedSFTPOperation)
-        .value("MediaUnavailable", TransferErrorCode::MediaUnavailable);
-    ;
+        .value("MediaUnavailable", TransferErrorCode::MediaUnavailable)
+        .value("SftpNotInitialized", TransferErrorCode::SftpNotInitialized)
+        .value("SessionNotInitialized", TransferErrorCode::SessionNotInitialized)
+        .value("DirAlreadyExists", TransferErrorCode::DirAlreadyExists);
 
     py::enum_<TarSystemType>(m, "TarSystemType")
         .value("Unix", TarSystemType::Unix)
@@ -1796,13 +1835,15 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("RemoteToRemote", TransferType::RemoteToRemote);
 
     py::class_<ConRequst>(m, "ConRequst")
-        .def(py::init<std::string, std::string, std::string, int, TarSystemType, bool>(), py::arg("hostname"), py::arg("username"), py::arg("password"), py::arg("port"), py::arg("tar_system"), py::arg("compression"))
+        .def(py::init<std::string, std::string, std::string, int, TarSystemType, bool, std::string, std::string>(), py::arg("hostname"), py::arg("username"), py::arg("password"), py::arg("port"), py::arg("tar_system"), py::arg("compression"), py::arg("trash_dir"), py::arg("test_path"))
         .def_readwrite("hostname", &ConRequst::hostname)
         .def_readwrite("username", &ConRequst::username)
         .def_readwrite("password", &ConRequst::password)
         .def_readwrite("port", &ConRequst::port)
         .def_readwrite("tar_system", &ConRequst::tar_system)
-        .def_readwrite("compression", &ConRequst::compression);
+        .def_readwrite("compression", &ConRequst::compression)
+        .def_readwrite("trash_dir", &ConRequst::trash_dir)
+        .def_readwrite("test_path", &ConRequst::test_path);
 
     py::class_<TransferSet>(m, "TransferSet")
         .def(py::init<TransferType, bool>(), py::arg("transfer_type"), py::arg("force_write"))
@@ -1815,7 +1856,10 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("progress_cb", &TransferCallback::progress_cb)
         .def_readwrite("filename_cb", &TransferCallback::filename_cb)
         .def_readwrite("cb_interval_ms", &TransferCallback::cb_interval_ms)
-        .def_readwrite("total_bytes", &TransferCallback::total_bytes);
+        .def_readwrite("total_bytes", &TransferCallback::total_bytes)
+        .def_readwrite("need_error_cb", &TransferCallback::need_error_cb)
+        .def_readwrite("need_progress_cb", &TransferCallback::need_progress_cb)
+        .def_readwrite("need_filename_cb", &TransferCallback::need_filename_cb);
 
     py::class_<TransferTask>(m, "TransferTask")
         .def(py::init<std::string, std::string, PathType, uint64_t>(), py::arg("src"), py::arg("dst"), py::arg("path_type"), py::arg("size"))
@@ -1825,9 +1869,10 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("size", &TransferTask::size);
 
     py::class_<PathInfo>(m, "PathInfo")
-        .def(py::init<std::string, std::string, uint64_t, uint64_t, uint64_t, PathType>(), py::arg("name"), py::arg("path"), py::arg("size"), py::arg("atime"), py::arg("mtime"), py::arg("path_type"))
+        .def(py::init<std::string, std::string, std::string, uint64_t, uint64_t, uint64_t, PathType>(), py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("size"), py::arg("atime"), py::arg("mtime"), py::arg("path_type"))
         .def_readwrite("name", &PathInfo::name)
         .def_readwrite("path", &PathInfo::path)
+        .def_readwrite("dir", &PathInfo::dir)
         .def_readwrite("size", &PathInfo::size)
         .def_readwrite("atime", &PathInfo::atime)
         .def_readwrite("mtime", &PathInfo::mtime)
@@ -1868,8 +1913,9 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("rmdir", &AMSFTPClient::rmdir, py::arg("path"))
         .def("rm", &AMSFTPClient::rm, py::arg("path"))
         .def("saferm", &AMSFTPClient::saferm, py::arg("path"))
-        .def("move", &AMSFTPClient::move, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false)
-        .def("copy", &AMSFTPClient::copy, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false);
+        .def("move", &AMSFTPClient::move, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false, py::arg("force_write") = false)
+        .def("copy", &AMSFTPClient::copy, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false)
+        .def("rename", &AMSFTPClient::rename, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false, py::arg("force_write") = false);
 }
 
 // int TRIAL_Function()
