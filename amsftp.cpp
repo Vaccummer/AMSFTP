@@ -21,7 +21,6 @@
 
 namespace py = pybind11;
 namespace fs = std::filesystem;
-template <typename... Args>
 using f_ptr = std::shared_ptr<py::function>;
 
 constexpr uint64_t AMKB = 1024 * 1024;
@@ -209,15 +208,14 @@ struct ConRequst
     std::string hostname;
     std::string username;
     std::string password;
-    TarSystemType tar_system;
     bool compression;
     int port;
     std::string trash_dir;
     std::string test_path;
     ConRequst()
-        : hostname(""), username(""), password(""), port(22), tar_system(TarSystemType::Unix), compression(false), trash_dir(""), test_path("") {}
-    ConRequst(std::string hostname, std::string username, std::string password, int port, TarSystemType tar_system, bool compression, std::string trash_dir, std::string test_path)
-        : hostname(hostname), username(username), password(password), port(port), tar_system(tar_system), compression(compression), trash_dir(trash_dir), test_path(test_path) {}
+        : hostname(""), username(""), password(""), port(22), compression(false), trash_dir(""), test_path("") {}
+    ConRequst(std::string hostname, std::string username, std::string password, int port, bool compression, std::string trash_dir, std::string test_path)
+        : hostname(hostname), username(username), password(password), port(port), compression(compression), trash_dir(trash_dir), test_path(test_path) {}
 };
 
 struct TransferSet
@@ -232,7 +230,6 @@ struct TransferSet
 
 struct TransferCallback
 {
-    int trace_level;
     int cb_interval_ms;
     uint64_t total_bytes;
     bool need_error_cb;
@@ -242,9 +239,9 @@ struct TransferCallback
     py::function filename_cb;
     py::function error_cb;
     TransferCallback()
-        : trace_level(0), progress_cb(py::function()), filename_cb(py::function()), error_cb(py::function()), cb_interval_ms(10000), total_bytes(1000), need_progress_cb(false), need_filename_cb(false), need_error_cb(false) {}
+        : progress_cb(py::function()), filename_cb(py::function()), error_cb(py::function()), cb_interval_ms(10000), total_bytes(1000), need_progress_cb(false), need_filename_cb(false), need_error_cb(false) {}
     TransferCallback(py::function error_cb, py::function progress_cb, py::function filename_cb, int cb_interval_ms, uint64_t total_bytes, bool need_error_cb, bool need_progress_cb, bool need_filename_cb)
-        : trace_level(0), progress_cb(progress_cb), filename_cb(filename_cb), error_cb(error_cb), cb_interval_ms(cb_interval_ms), total_bytes(total_bytes), need_progress_cb(need_progress_cb), need_filename_cb(need_filename_cb), need_error_cb(need_error_cb) {}
+        : progress_cb(progress_cb), filename_cb(filename_cb), error_cb(error_cb), cb_interval_ms(cb_interval_ms), total_bytes(total_bytes), need_progress_cb(need_progress_cb), need_filename_cb(need_filename_cb), need_error_cb(need_error_cb) {}
 };
 
 struct TransferTask
@@ -385,6 +382,26 @@ public:
     }
 };
 
+struct ErrorInfo
+{
+    TransferErrorCode error_code;
+    std::string src;
+    std::string dst;
+    std::string function_name;
+    std::string msg;
+
+    ErrorInfo()
+        : error_code(TransferErrorCode::UnknownError), src(""), dst(""), function_name(""), msg("") {}
+
+    ErrorInfo(TransferErrorCode error_code, std::string src, std::string dst, std::string function_name, std::string msg)
+        : error_code(error_code), src(src), dst(dst), function_name(function_name), msg(msg) {}
+
+    std::string toString()
+    {
+        return "ErrorInfo(error_code=" + std::to_string(static_cast<int>(error_code)) + ", src=" + src + ", dst=" + dst + ", function_name=" + function_name + ", msg=" + msg + ")";
+    }
+};
+
 using result_map = std::unordered_map<std::string, TransferErrorCode>;
 using TASKS = std::vector<TransferTask>;
 using int_ptr = std::shared_ptr<uint64_t>;
@@ -394,6 +411,9 @@ using TRM = std::unordered_map<std::string, TransferErrorCode>;
 using TR = std::variant<TRM, EC>;
 using SR = std::variant<PathInfo, EC>;
 using LR = std::variant<std::vector<PathInfo>, EC>;
+using WRV = std::vector<PathInfo>;
+using WR = std::variant<WRV, EC>;
+using ED = std::pair<EC, std::string>;
 
 EC cast_libssh2_error(int error_code)
 {
@@ -490,6 +510,63 @@ EC cast_libssh2_error(int error_code)
     }
 }
 
+class CircularBuffer
+{
+private:
+    std::vector<ErrorInfo> buffer;
+    size_t capacity;
+    size_t head = 0;
+    size_t tail = 0;
+    size_t count = 0;
+
+public:
+    CircularBuffer() : capacity(10) {}
+    CircularBuffer(size_t size) : capacity(size)
+    {
+        buffer.resize(size);
+    }
+
+    void push(const ErrorInfo &value)
+    {
+        if (count == capacity)
+        {
+            head = (head + 1) % capacity;
+            count--;
+        }
+        buffer[tail] = value;
+        tail = (tail + 1) % capacity;
+        count++;
+    }
+
+    size_t size() const { return count; }
+
+    size_t getCapacity() const { return capacity; }
+
+    ErrorInfo &back()
+    {
+        if (count == 0)
+        {
+            throw std::out_of_range("Buffer is empty");
+        }
+        return buffer[(tail - 1 + capacity) % capacity];
+    }
+
+    std::vector<ErrorInfo> toVector() const
+    {
+        std::vector<ErrorInfo> vec;
+        vec.reserve(count);
+        size_t current = head;
+        for (size_t i = 0; i < count; ++i)
+        {
+            vec.push_back(buffer[current]);
+            current = (current + 1) % capacity;
+        }
+        return vec;
+    }
+
+    bool empty() const { return count == 0; }
+};
+
 class AMSession
 {
 public:
@@ -498,7 +575,6 @@ public:
     std::vector<std::string> private_keys;
     ConRequst request;
     SOCKET sock = INVALID_SOCKET;
-    TarSystemType tar_system;
     LIBSSH2_CHANNEL *channel = nullptr;
     EC init()
     {
@@ -509,7 +585,6 @@ public:
             return TransferErrorCode::NetworkError;
         }
 
-        tar_system = request.tar_system;
         sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         sockaddr_in sin = {0};
         sin.sin_family = AF_INET;
@@ -633,7 +708,6 @@ public:
         this->private_keys = {};
         this->sock = INVALID_SOCKET;
         this->request = ConRequst();
-        this->tar_system = TarSystemType::Unix;
         this->private_keys = {};
     }
 
@@ -1025,10 +1099,10 @@ public:
             return init_code;
         }
 
-        if (callback.trace_level > 0)
-        {
-            libssh2_trace(amsession->session, LIBSSH2_TRACE_ERROR);
-        }
+        // if (callback.trace_level > 0)
+        // {
+        //     libssh2_trace(amsession->session, LIBSSH2_TRACE_ERROR);
+        // }
         std::unordered_map<std::string, TransferErrorCode> result;
 
         switch (set.transfer_type)
@@ -1103,7 +1177,7 @@ class AMSFTPClient
 private:
     ConRequst request;
     std::vector<std::string> private_keys;
-
+    CircularBuffer error_info_buffer;
     AMSession *amsession;
 
     PathInfo format_stat(std::string path, LIBSSH2_SFTP_ATTRIBUTES &attrs)
@@ -1143,9 +1217,48 @@ private:
         return info;
     }
 
-    EC _walk(std::string path, std::function<void(std::string, PathType)> callback)
+    void _walk(std::string path, WRV &result)
     {
         LR list = listdir(path);
+        std::vector<PathInfo> list_info = {};
+        if (!std::holds_alternative<std::vector<PathInfo>>(list))
+        {
+            return;
+        }
+        list_info = std::get<std::vector<PathInfo>>(list);
+        if (list_info.empty())
+        {
+            SR info = stat(path);
+            if (!std::holds_alternative<PathInfo>(info))
+            {
+                return;
+            }
+            result.push_back(std::get<PathInfo>(info));
+            return;
+        }
+        bool all_file = true;
+        for (auto &info : list_info)
+        {
+            if (info.path_type == PathType::DIR)
+            {
+                _walk(info.path, result);
+                all_file = false;
+            }
+            else
+            {
+                result.push_back(info);
+            }
+        }
+        if (all_file)
+        {
+            SR info = stat(path);
+            if (!std::holds_alternative<PathInfo>(info))
+            {
+                return;
+            }
+            result.push_back(std::get<PathInfo>(info));
+            return;
+        }
     }
 
 public:
@@ -1155,28 +1268,44 @@ public:
         amsession = nullptr;
     }
 
-    AMSFTPClient(ConRequst request, std::vector<std::string> private_keys)
+    AMSFTPClient(ConRequst request, std::vector<std::string> private_keys, size_t error_info_buffer_size = 10)
         : request(request), private_keys(private_keys)
     {
         this->amsession = new AMSession(request, private_keys);
+        this->error_info_buffer = CircularBuffer(error_info_buffer_size);
     }
 
     EC check()
     {
+        EC rc = EC::Success;
         if (!amsession)
         {
-            return EC::SessionBroken;
+            rc = EC::SessionBroken;
+            error_info_buffer.push(ErrorInfo(TransferErrorCode::SessionBroken, "", "", "AMSFTPClient::check", "Session is not initialized"));
+            return rc;
         }
-        return amsession->check();
+        else
+        {
+            rc = amsession->check();
+            if (rc != EC::Success)
+            {
+                error_info_buffer.push(ErrorInfo(rc, "", "", "AMSFTPClient::check", "Session is broken"));
+            }
+        }
+        return rc;
     }
 
     EC reconnect()
     {
         delete amsession;
         // AMSession amsession_f = AMSession(request, private_keys);
-
         amsession = new AMSession(request, private_keys);
-        return amsession->init();
+        EC rc = amsession->init();
+        if (rc != EC::Success)
+        {
+            error_info_buffer.push(ErrorInfo(rc, "", "", "AMSFTPClient::reconnect", "Session init failed"));
+        }
+        return rc;
     }
 
     EC ensure()
@@ -1184,27 +1313,43 @@ public:
         EC rc = check();
         if (rc != EC::Success)
         {
-            return reconnect();
+            rc = reconnect();
+            if (rc != EC::Success)
+            {
+                error_info_buffer.push(ErrorInfo(rc, "", "", "AMSFTPClient::ensure", "Session reconnect failed"));
+                return rc;
+            }
         }
-        return EC::Success;
+        return rc;
     }
 
     EC ensure_trash_dir()
     {
         SR info = stat(request.trash_dir);
+        EC rc;
         if (std::holds_alternative<EC>(info))
         {
-            return std::get<EC>(info);
+            rc = std::get<EC>(info);
+            if (rc != EC::PathNotExist)
+            {
+                error_info_buffer.push(ErrorInfo(rc, "", "", "AMSFTPClient::ensure_trash_dir", "Trash dir initializes failed"));
+                return rc;
+            }
         }
-        if (!std::holds_alternative<PathInfo>(info))
+
+        if (std::holds_alternative<PathInfo>(info))
         {
-            return EC::UnknownError;
+            if (std::get<PathInfo>(info).path_type == PathType::DIR)
+            {
+                return EC::Success;
+            }
+            else
+            {
+                error_info_buffer.push(ErrorInfo(EC::TargetNotADirectory, request.trash_dir, "", "AMSFTPClient::ensure_trash_dir", "trash_dir is not a directory"));
+                return EC::TargetNotADirectory;
+            }
         }
-        if (std::get<PathInfo>(info).path_type == PathType::DIR)
-        {
-            return EC::Success;
-        }
-        EC rc = mkdirs(request.trash_dir);
+        rc = mkdirs(request.trash_dir);
         if (rc != EC::Success)
         {
             return rc;
@@ -1217,11 +1362,13 @@ public:
         EC rc = amsession->init();
         if (rc != EC::Success)
         {
+            error_info_buffer.push(ErrorInfo(rc, "", "", "AMSFTPClient::init", "Session init failed"));
             return rc;
         }
         rc = check();
         if (rc != EC::Success)
         {
+            error_info_buffer.push(ErrorInfo(rc, "", "", "AMSFTPClient::init", "Session check failed"));
             return rc;
         }
         return rc;
@@ -1234,7 +1381,9 @@ public:
         int rct = libssh2_sftp_stat(amsession->sftp, path.c_str(), &attrs);
         if (rct != 0)
         {
-            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            rc = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::stat", "stat failed"));
+            return rc;
         }
         return format_stat(path, attrs);
     }
@@ -1242,56 +1391,72 @@ public:
     EC exists(std::string path)
     {
         SR info = stat(path);
+        EC rc;
         if (std::holds_alternative<EC>(info))
         {
-            return std::get<EC>(info);
+            rc = std::get<EC>(info);
+            if (rc == EC::PathNotExist)
+            {
+                return EC::FailedCheck;
+            }
+            return rc;
         }
         if (std::holds_alternative<PathInfo>(info))
         {
             return EC::PassCheck;
         }
-        return EC::FailedCheck;
+        error_info_buffer.push(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::exists", "Value Type Error"));
+        return EC::UnknownError;
     }
 
     EC is_file(std::string path)
     {
         SR info = stat(path);
+        EC rc;
         if (std::holds_alternative<EC>(info))
         {
-            return std::get<EC>(info);
+            rc = std::get<EC>(info);
+            return rc;
         }
         if (std::holds_alternative<PathInfo>(info))
         {
             return std::get<PathInfo>(info).path_type == PathType::FILE ? EC::PassCheck : EC::FailedCheck;
         }
+        error_info_buffer.push(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::is_file", "Value Type Error"));
         return EC::UnknownError;
     }
 
     EC is_dir(std::string path)
     {
         SR info = stat(path);
+        EC rc;
         if (std::holds_alternative<EC>(info))
         {
-            return std::get<EC>(info);
+            rc = std::get<EC>(info);
+            return rc;
         }
         if (std::holds_alternative<PathInfo>(info))
         {
             return std::get<PathInfo>(info).path_type == PathType::DIR ? EC::PassCheck : EC::FailedCheck;
         }
+        error_info_buffer.push(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::is_dir", "Value Type Error"));
         return EC::UnknownError;
     }
 
     EC is_symlink(std::string path)
     {
         SR info = stat(path);
+        EC rc;
         if (std::holds_alternative<EC>(info))
         {
-            return std::get<EC>(info);
+            rc = std::get<EC>(info);
+            return rc;
         }
         if (std::holds_alternative<PathInfo>(info))
         {
             return std::get<PathInfo>(info).path_type == PathType::SYMLINK ? EC::PassCheck : EC::FailedCheck;
         }
+        error_info_buffer.push(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::is_symlink", "Value Type Error"));
         return EC::UnknownError;
     }
 
@@ -1305,8 +1470,10 @@ public:
         case EC::PassCheck:
             break;
         case EC::FailedCheck:
+            error_info_buffer.push(ErrorInfo(EC::NotDirectory, path, "", "AMSFTPClient::listdir", "Path is not a directory"));
             return EC::NotDirectory;
         default:
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::listdir", "Path check failed"));
             return rc;
         }
 
@@ -1324,7 +1491,9 @@ public:
 
         if (!sftp_handle)
         {
-            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            rc = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::listdir", "Handle open failed"));
+            return rc;
         }
 
         LIBSSH2_SFTP_ATTRIBUTES attrs;
@@ -1338,26 +1507,28 @@ public:
         // Read directory entries
         while (true)
         {
-            int rc = libssh2_sftp_readdir_ex(
+            int rct = libssh2_sftp_readdir_ex(
                 sftp_handle,
                 filename_buffer.data(),
                 buffer_size,
                 nullptr, 0,
                 &attrs);
 
-            if (rc < 0)
+            if (rct < 0)
             {
                 // Check if there was an error or just end of directory
                 libssh2_sftp_close_handle(sftp_handle);
-                return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+                rc = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+                error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::listdir", "Readdir failed"));
+                return rc;
             }
-            else if (rc == 0)
+            else if (rct == 0)
             {
                 break;
             }
 
             // Process the entry
-            name.assign(filename_buffer.data(), rc);
+            name.assign(filename_buffer.data(), rct);
 
             // Skip "." and ".." entries
             if (name == "." || name == "..")
@@ -1386,6 +1557,7 @@ public:
         case EC::PassCheck:
             return EC::Success;
         case EC::FailedCheck:
+            error_info_buffer.push(ErrorInfo(EC::RemoteFileExists, path, "", "AMSFTPClient::mkdir", "Path exists and is not a directory"));
             return EC::RemoteFileExists;
         case EC::PathNotExist:
             break;
@@ -1396,7 +1568,9 @@ public:
         int rcr = libssh2_sftp_mkdir_ex(amsession->sftp, path.c_str(), path.size(), 0740);
         if (rcr != 0)
         {
-            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            rc = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::mkdir", "Mkdir failed"));
+            return rc;
         }
         return EC::Success;
     }
@@ -1473,20 +1647,35 @@ public:
 
     EC rmfile(std::string path)
     {
-        EC rc = is_file(path);
-        switch (rc)
+        SR info = stat(path);
+        EC rc;
+        if (std::holds_alternative<EC>(info))
         {
-        case EC::PassCheck:
-            break;
-        case EC::FailedCheck:
-            return EC::TargetNotAFile;
-        default:
-            return rc;
+            return std::get<EC>(info);
         }
+        if (std::holds_alternative<PathInfo>(info))
+        {
+            if (std::get<PathInfo>(info).path_type == PathType::FILE || std::get<PathInfo>(info).path_type == PathType::SYMLINK)
+            {
+            }
+            else
+            {
+                error_info_buffer.push(ErrorInfo(EC::TargetNotAFile, path, "", "AMSFTPClient::rmfile", "Path is not a file"));
+                return EC::TargetNotAFile;
+            }
+        }
+        else
+        {
+            error_info_buffer.push(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::rmfile", "Value Type Error"));
+            return EC::UnknownError;
+        }
+
         int rcr = libssh2_sftp_unlink(amsession->sftp, path.c_str());
         if (rcr != 0)
         {
-            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            rc = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::rmfile", "Rmfile failed"));
+            return rc;
         }
         return EC::Success;
     }
@@ -1501,13 +1690,15 @@ public:
         case EC::FailedCheck:
             return EC::TargetNotADirectory;
         default:
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::rmdir", "Path check failed"));
             return rc;
         }
         int rcr = libssh2_sftp_rmdir(amsession->sftp, path.c_str());
         if (rcr < 0)
         {
-            std::cout << libssh2_sftp_last_error(amsession->sftp) << std::endl;
-            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            rc = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::rmdir", "Rmdir failed"));
+            return rc;
         }
         return EC::Success;
     }
@@ -1525,6 +1716,7 @@ public:
             path_type = 0;
             break;
         default:
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::rm", "path check failed"));
             return rc;
         }
 
@@ -1561,6 +1753,7 @@ public:
         EC rc = exists(path);
         if (rc != EC::PassCheck)
         {
+            error_info_buffer.push(ErrorInfo(rc, path, request.trash_dir, "AMSFTPClient::saferm", "Src path not exists"));
             return rc;
         }
         rc = is_dir(request.trash_dir);
@@ -1569,6 +1762,7 @@ public:
             rc = mkdirs(request.trash_dir);
             if (rc != EC::Success)
             {
+                error_info_buffer.push(ErrorInfo(rc, path, request.trash_dir, "AMSFTPClient::saferm", "Trash dir mkdir failed"));
                 return rc;
             }
         }
@@ -1593,7 +1787,9 @@ public:
         int rcr = libssh2_sftp_rename(amsession->sftp, path.c_str(), target_path.c_str());
         if (rcr != 0)
         {
-            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            rc = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            error_info_buffer.push(ErrorInfo(rc, path, request.trash_dir, "AMSFTPClient::saferm", "Rename failed"));
+            return rc;
         }
         return EC::Success;
     }
@@ -1603,6 +1799,7 @@ public:
         EC rc = exists(src);
         if (rc != EC::PassCheck)
         {
+            error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::move", "Src not exists"));
             return rc;
         }
 
@@ -1614,23 +1811,35 @@ public:
         {
             if (need_mkdir)
             {
-                mkdirs(dst_dir);
+                rc = mkdirs(dst_dir);
+                if (rc != EC::Success)
+                {
+                    error_info_buffer.push(ErrorInfo(rc, src, dst_dir, "AMSFTPClient::move", "Dst dir mkdir failed"));
+                    return rc;
+                }
             }
             else
             {
+                error_info_buffer.push(ErrorInfo(EC::ParentDirectoryNotExist, src, dst_dir, "AMSFTPClient::move", "Dst dir not exists"));
                 return EC::ParentDirectoryNotExist;
             }
         }
         if (exists(dst_path) == EC::PassCheck)
         {
-            return EC::RemoteFileExists;
+            if (!force_write)
+            {
+                error_info_buffer.push(ErrorInfo(EC::TargetExists, src, dst_path, "AMSFTPClient::move", "Dst path already exists"));
+                return EC::TargetExists;
+            }
         }
 
         int rcr = libssh2_sftp_rename_ex(amsession->sftp, src.c_str(), src.size(), dst_path.c_str(), dst_path.size(), force_write ? LIBSSH2_SFTP_RENAME_OVERWRITE : 0);
 
         if (rcr != 0)
         {
-            return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            rc = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            error_info_buffer.push(ErrorInfo(rc, src, dst_path, "AMSFTPClient::move", "Rename failed"));
+            return rc;
         }
 
         return EC::Success;
@@ -1644,8 +1853,10 @@ public:
         case EC::PassCheck:
             break;
         case EC::FailedCheck:
+            error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::copy", "Src not exists"));
             return EC::PathNotExist;
         default:
+            error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::copy", "Src check failed"));
             return rc;
         }
 
@@ -1663,11 +1874,13 @@ public:
                 rc = mkdirs(dst);
                 if (rc != EC::Success)
                 {
+                    error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::copy", "Dst dir mkdir failed"));
                     return rc;
                 }
             }
             else
             {
+                error_info_buffer.push(ErrorInfo(EC::ParentDirectoryNotExist, src, dst, "AMSFTPClient::copy", "Dst parent dir not exists"));
                 return EC::ParentDirectoryNotExist;
             }
         }
@@ -1678,12 +1891,12 @@ public:
 
         if (rcr != 0)
         {
-            return EC::CopyError;
-        }
-        int exit_code = libssh2_channel_get_exit_status(amsession->channel);
-        if (exit_code != 0)
-        {
-            return EC::CopyError;
+            int exit_code = libssh2_channel_get_exit_status(amsession->channel);
+            if (exit_code != 0)
+            {
+                error_info_buffer.push(ErrorInfo(cast_libssh2_error(exit_code), src, dst, "AMSFTPClient::copy", "Cmd exec failed"));
+                return EC::CopyError;
+            }
         }
         return EC::Success;
     };
@@ -1694,7 +1907,8 @@ public:
         std::string dst_dir;
         if (rc != EC::PassCheck)
         {
-            return rc;
+            error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::rename", "Src not exists"));
+            return EC::PathNotExist;
         }
         rc = exists(dst);
         switch (rc)
@@ -1702,15 +1916,18 @@ public:
         case EC::PassCheck:
             if (!force_write)
             {
+                error_info_buffer.push(ErrorInfo(EC::TargetExists, src, dst, "AMSFTPClient::rename", "Dst exists"));
                 return EC::TargetExists;
             }
             break;
         case EC::FailedCheck:
             break;
         default:
+            error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::rename", "Dst check failed"));
             return rc;
         }
         dst_dir = dirname(dst);
+        std::cout << "dst_dir: " << dst_dir << std::endl;
         rc = exists(dst_dir);
         if (rc != EC::PassCheck)
         {
@@ -1719,16 +1936,60 @@ public:
                 rc = mkdirs(dst_dir);
                 if (rc != EC::Success)
                 {
+                    error_info_buffer.push(ErrorInfo(rc, src, dst_dir, "AMSFTPClient::rename", "Dst dir mkdir failed"));
                     return rc;
                 }
             }
             else
             {
+                error_info_buffer.push(ErrorInfo(EC::ParentDirectoryNotExist, src, dst_dir, "AMSFTPClient::rename", "Dst dir not exists"));
                 return EC::ParentDirectoryNotExist;
             }
         }
 
         int rcr = libssh2_sftp_rename_ex(amsession->sftp, src.c_str(), src.size(), dst.c_str(), dst.size(), force_write ? LIBSSH2_SFTP_RENAME_OVERWRITE : 0);
+        if (rcr != 0)
+        {
+            rc = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+            error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::rename", "Rename failed"));
+            return rc;
+        }
+        return EC::Success;
+    }
+
+    WR walk(std::string path)
+    {
+        // get all files and deepest folders
+        WRV result = {};
+        EC rc;
+        rc = exists(path);
+        if (rc != EC::PassCheck)
+        {
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::walk", "Path not exists"));
+            return rc;
+        }
+        rc = is_dir(path);
+        if (rc != EC::PassCheck)
+        {
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::walk", "Path is not a directory"));
+            return rc;
+        }
+        _walk(path, result);
+        return result;
+    }
+
+    ErrorInfo get_last_error_info()
+    {
+        if (error_info_buffer.empty())
+        {
+            return ErrorInfo(EC::Success, "", "", "", "");
+        }
+        return error_info_buffer.back();
+    }
+
+    std::vector<ErrorInfo> get_all_error_info()
+    {
+        return error_info_buffer.toVector();
     }
 };
 
@@ -1835,12 +2096,11 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("RemoteToRemote", TransferType::RemoteToRemote);
 
     py::class_<ConRequst>(m, "ConRequst")
-        .def(py::init<std::string, std::string, std::string, int, TarSystemType, bool, std::string, std::string>(), py::arg("hostname"), py::arg("username"), py::arg("password"), py::arg("port"), py::arg("tar_system"), py::arg("compression"), py::arg("trash_dir"), py::arg("test_path"))
+        .def(py::init<std::string, std::string, std::string, int, bool, std::string, std::string>(), py::arg("hostname"), py::arg("username"), py::arg("password"), py::arg("port"), py::arg("compression"), py::arg("trash_dir"), py::arg("test_path"))
         .def_readwrite("hostname", &ConRequst::hostname)
         .def_readwrite("username", &ConRequst::username)
         .def_readwrite("password", &ConRequst::password)
         .def_readwrite("port", &ConRequst::port)
-        .def_readwrite("tar_system", &ConRequst::tar_system)
         .def_readwrite("compression", &ConRequst::compression)
         .def_readwrite("trash_dir", &ConRequst::trash_dir)
         .def_readwrite("test_path", &ConRequst::test_path);
@@ -1894,6 +2154,14 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("resume", &AMSFTPWorker::resume)
         .def("start", &AMSFTPWorker::start);
 
+    py::class_<ErrorInfo>(m, "ErrorInfo")
+        .def(py::init<TransferErrorCode, std::string, std::string, std::string, std::string>(), py::arg("error_code"), py::arg("src"), py::arg("dst"), py::arg("function_name"), py::arg("msg"))
+        .def_readwrite("error_code", &ErrorInfo::error_code)
+        .def_readwrite("src", &ErrorInfo::src)
+        .def_readwrite("dst", &ErrorInfo::dst)
+        .def_readwrite("function_name", &ErrorInfo::function_name)
+        .def_readwrite("msg", &ErrorInfo::msg);
+
     py::class_<AMSFTPClient>(m, "AMSFTPClient")
         .def(py::init<ConRequst, std::vector<std::string>>(), py::arg("request"), py::arg("private_keys"))
         .def("check", &AMSFTPClient::check)
@@ -1915,27 +2183,8 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("saferm", &AMSFTPClient::saferm, py::arg("path"))
         .def("move", &AMSFTPClient::move, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false, py::arg("force_write") = false)
         .def("copy", &AMSFTPClient::copy, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false)
-        .def("rename", &AMSFTPClient::rename, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false, py::arg("force_write") = false);
+        .def("rename", &AMSFTPClient::rename, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false, py::arg("force_write") = false)
+        .def("walk", &AMSFTPClient::walk, py::arg("path"))
+        .def("get_last_error_info", &AMSFTPClient::get_last_error_info)
+        .def("get_all_error_info", &AMSFTPClient::get_all_error_info);
 }
-
-// int TRIAL_Function()
-// {
-//     clock_t start_time = clock();
-//     std::string host = "192.168.31.46";
-//     std::string user = "am";
-//     std::string password = "1984";
-//     int port = 45;
-//     std::string src = "F:\\Windows_Data\\Desktop_File\\voc2007.rar";
-//     std::string dst = "d:\\Document\\Desktop\\trial\\voc2007.rar";
-//     std::string private_key = "C:\\Users\\am\\.ssh\\id_rsa";
-//     TransferSet AMset;
-//     TransferCallback AMcallback;
-//     TASKS AMtasks;
-//     AMtasks.push_back(TransferTask(src, dst, PathType::FILE, 0));
-//     ConRequst AMrequest(host, user, password, port, TarSystemType::Unix, true);
-//     std::vector<std::string> AMprivate_keys;
-//     AMprivate_keys.push_back(private_key);
-//     AMSession AMsession(AMrequest, &AMprivate_keys, AMset);
-//     AMSFTPWorker AMsfpt(0, AMsession, AMset, AMcallback, AMtasks);
-//     AMsfpt.start();
-// }

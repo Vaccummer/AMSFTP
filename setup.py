@@ -10,7 +10,7 @@ module = Extension(
         'amsftp.cpp',
     ],
     include_dirs=[
-                    "E:\\Softwares\\Anaconda\\envs\\Launcher\\lib\\site-packages\\pybind11\\include",
+                    pybind11.get_include(),
                     "E:\\Softwares\\Anaconda\\envs\\Launcher\\include",
                     "C:\\Program Files (x86)\\Windows Kits\\10\\Include\\10.0.22000.0\\ucrt",
                     "E:\\vcpkg\\installed\\x64-windows\\include",

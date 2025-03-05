@@ -31,5 +31,5 @@ tasks = [
 ]
 client = AMSFTPClient(request, keys)
 print(client.init())
-print(client.is_dir('/home/am/test2.rar'))
+a = 1
 
