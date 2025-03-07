@@ -52,6 +52,20 @@ std::string basename(const std::string &path)
     return p.filename().string();
 }
 
+void mkdirs(const std::string &path)
+{
+    try
+    {
+
+        fs::path p(path);
+        fs::create_directories(p);
+    }
+    catch (const fs::filesystem_error &e)
+    {
+        return;
+    }
+}
+
 template <typename... Args>
 std::string join_path(Args &&...args)
 {
@@ -192,14 +206,6 @@ enum class PathType
     SYMLINK = 2,
 };
 
-enum class TransferType
-{
-    LocalToLocal = -2,
-    RemoteToLocal = -1,
-    LocalToRemote = 1,
-    RemoteToRemote = 0,
-};
-
 enum class MapType
 {
     Read = 0,
@@ -219,16 +225,6 @@ struct ConRequst
         : hostname(""), username(""), password(""), port(22), compression(false), timeout_s(3), trash_dir("") {}
     ConRequst(std::string hostname, std::string username, std::string password, int port, bool compression, size_t timeout_s = 3, std::string trash_dir = "")
         : hostname(hostname), username(username), password(password), port(port), compression(compression), timeout_s(timeout_s), trash_dir(trash_dir) {}
-};
-
-struct TransferSet
-{
-    TransferType transfer_type;
-    bool force_write;
-    TransferSet()
-        : transfer_type(TransferType::LocalToRemote), force_write(false) {}
-    TransferSet(TransferType transfer_type, bool force_write)
-        : transfer_type(transfer_type), force_write(force_write) {}
 };
 
 struct TransferCallback
@@ -251,10 +247,8 @@ struct TransferTask
 {
     std::string src;
     std::string dst;
-    PathType path_type;
-    uint64_t size;
-    TransferTask(std::string src, std::string dst, PathType path_type, uint64_t size)
-        : src(src), dst(dst), path_type(path_type), size(size) {}
+    TransferTask(std::string src, std::string dst)
+        : src(src), dst(dst) {}
 };
 
 struct PathInfo
@@ -283,6 +277,7 @@ struct BufferSizePair
 struct BufferSet
 {
     std::vector<BufferSizePair> buffer_sizes;
+    uint64_t min_buffer_size;
     BufferSet()
         : buffer_sizes({BufferSizePair{16 * AMGB, 16 * AMMB},
                         BufferSizePair{4 * AMGB, 8 * AMMB},
@@ -290,13 +285,14 @@ struct BufferSet
                         BufferSizePair{512 * AMMB, AMMB},
                         BufferSizePair{50 * AMMB, 256 * AMKB},
                         BufferSizePair{10 * AMMB, 128 * AMKB},
-                        BufferSizePair{0, 64 * AMKB}}) {}
+                        BufferSizePair{0, 64 * AMKB}}),
+          min_buffer_size(64 * AMKB) {}
     BufferSet(std::vector<BufferSizePair> buffer_sizes, uint64_t min_buffer_size = 64 * AMKB)
+        : buffer_sizes(buffer_sizes), min_buffer_size(min_buffer_size)
     {
-        this->buffer_sizes = buffer_sizes;
+        this->buffer_sizes.push_back(BufferSizePair{0, min_buffer_size});
         std::sort(this->buffer_sizes.begin(), this->buffer_sizes.end(), [](BufferSizePair a, BufferSizePair b)
                   { return a.threshold > b.threshold; });
-        this->buffer_sizes.push_back(BufferSizePair{0, min_buffer_size});
     }
 };
 
@@ -329,7 +325,7 @@ public:
         this->addr = nullptr;
         this->file_ptr = nullptr;
     }
-    FileMapper(std::wstring &file_path, MapType map_type, bool force_write = false, uint64_t file_size = 0)
+    FileMapper(std::wstring &file_path, MapType map_type, uint64_t file_size = 0)
     {
         if (map_type == MapType::Read)
         {
@@ -341,22 +337,8 @@ public:
             this->file_ptr = (char *)addr;
             return;
         }
-        if (force_write)
-        {
-            this->hFile = CreateFileW(file_path.c_str(), GENERIC_WRITE | GENERIC_READ, 0, NULL,
-                                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-        }
-        else
-        {
-            if (GetFileAttributesW(file_path.c_str()) == INVALID_FILE_ATTRIBUTES)
-            {
-                this->hFile = CreateFileW(file_path.c_str(), GENERIC_WRITE | GENERIC_READ, FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-            }
-            else
-            {
-                this->hFile = nullptr;
-            }
-        }
+        this->hFile = CreateFileW(file_path.c_str(), GENERIC_WRITE | GENERIC_READ, 0, NULL,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (this->hFile == nullptr)
         {
             this->file_ptr = nullptr;
@@ -405,6 +387,21 @@ struct ErrorInfo
     }
 };
 
+struct TransferContext
+{
+    std::unique_ptr<char[]> buf_a;
+    std::unique_ptr<char[]> buf_b;
+    size_t buf_a_size = 0;
+    size_t buf_b_size = 0;
+    bool buf_a_ready = false;
+    bool buf_b_ready = false;
+    bool read_complete = false;
+    bool write_complete = false;
+    uint64_t total_written = 0;
+
+    TransferContext(size_t buffer_size) : buf_a(std::make_unique<char[]>(buffer_size)),
+                                          buf_b(std::make_unique<char[]>(buffer_size)) {}
+};
 using result_map = std::unordered_map<std::string, TransferErrorCode>;
 using TASKS = std::vector<TransferTask>;
 using int_ptr = std::shared_ptr<uint64_t>;
@@ -782,12 +779,11 @@ public:
 class AMSFTPWorker
 {
 private:
-    TransferSet set;
     TransferCallback callback;
-    ConRequst request;
-    ConRequst extra_request;
-    AMSession *amsession = nullptr;
-    AMSession *extra_session = nullptr;
+    ConRequst src_request;
+    ConRequst dst_request;
+    AMSession *src_session = nullptr;
+    AMSession *dst_session = nullptr;
     TASKS tasks;
     std::atomic<bool> is_terminate = false;
     std::atomic<bool> is_pause = false;
@@ -800,7 +796,7 @@ private:
     uint64_t
     calculate_buffer_size(uint64_t file_size, double speed)
     {
-        double f_s = speed / 5 + 1;
+        double f_s = speed / 50;
         uint64_t speed_limit_uint = static_cast<uint64_t>(f_s);
         speed_limit_uint = (speed_limit_uint + 4096 - 1) / 4096 * 4096;
         uint64_t buffer_size_out = 64 * AMKB;
@@ -813,32 +809,34 @@ private:
             }
         }
         buffer_size_out = buffer_size_out > speed_limit_uint ? speed_limit_uint : buffer_size_out;
+        buffer_size_out = buffer_size_out < buffer_set.min_buffer_size ? buffer_set.min_buffer_size : buffer_size_out;
         return buffer_size_out;
     }
 
     EC Local2Remote(const TransferTask &task)
     {
         TransferErrorCode rc_r = EC::Success;
+        long rct;
         LIBSSH2_SFTP_HANDLE *sftpFile;
-        if (set.force_write)
-        {
-            sftpFile = libssh2_sftp_open(amsession->sftp, task.dst.c_str(), LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0740);
-        }
-        else
-        {
-            sftpFile = libssh2_sftp_open(amsession->sftp, task.dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0740);
-        }
+
+        sftpFile = libssh2_sftp_open(dst_session->sftp, task.dst.c_str(), LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
+
         if (!sftpFile)
         {
-            return EC::RemoteFileOpenError;
-        }
-        LIBSSH2_SFTP_ATTRIBUTES attrs;
-        libssh2_sftp_fstat(sftpFile, &attrs);
-
-        if (attrs.filesize != 0 && !set.force_write)
-        {
-            libssh2_sftp_close_handle(sftpFile);
-            return EC::RemoteFileExists;
+            rct = libssh2_sftp_last_error(dst_session->sftp);
+            if (rct == LIBSSH2_FX_NO_SUCH_FILE)
+            {
+                libssh2_sftp_mkdir(dst_session->sftp, dirname(task.dst).c_str(), 0744);
+                sftpFile = libssh2_sftp_open(dst_session->sftp, task.dst.c_str(), LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
+                if (!sftpFile)
+                {
+                    return EC::RemoteFileOpenError;
+                }
+            }
+            else
+            {
+                return EC::RemoteFileOpenError;
+            }
         }
 
         FileMapper l_file_m(Wstring(task.src), MapType::Read);
@@ -911,7 +909,7 @@ private:
             }
             else
             {
-                rc_r = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+                rc_r = cast_libssh2_error(libssh2_sftp_last_error(dst_session->sftp));
                 goto clean;
             }
         }
@@ -927,7 +925,7 @@ private:
     {
         TransferErrorCode rc_r = EC::Success;
         LIBSSH2_SFTP_HANDLE *sftpFile;
-        sftpFile = libssh2_sftp_open(amsession->sftp, task.src.c_str(), LIBSSH2_FXF_READ, 0400);
+        sftpFile = libssh2_sftp_open(src_session->sftp, task.src.c_str(), LIBSSH2_FXF_READ, 0400);
         if (!sftpFile)
         {
             return EC::RemoteFileOpenError;
@@ -936,13 +934,9 @@ private:
         libssh2_sftp_fstat(sftpFile, &attrs);
         uint64_t file_size = attrs.filesize;
 
-        if ((!set.force_write) && GetFileAttributesW(Wstring(task.dst).c_str()) != INVALID_FILE_ATTRIBUTES)
-        {
-            libssh2_sftp_close_handle(sftpFile);
-            return EC::LocalFileExists;
-        }
+        mkdirs(dirname(task.dst));
 
-        FileMapper l_file_m = FileMapper(Wstring(task.dst), MapType::Write, set.force_write, file_size);
+        FileMapper l_file_m = FileMapper(Wstring(task.dst), MapType::Write, file_size);
         if (!l_file_m.file_ptr)
         {
             libssh2_sftp_close_handle(sftpFile);
@@ -1013,7 +1007,7 @@ private:
             }
             else
             {
-                rc_r = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+                rc_r = cast_libssh2_error(libssh2_sftp_last_error(src_session->sftp));
                 goto clean;
             }
         }
@@ -1028,48 +1022,44 @@ private:
 
     EC Remote2Remote(const TransferTask &task)
     {
-        if (!extra_session)
-        {
-            return EC::NoSFTPConnection;
-        }
         TransferErrorCode rc_final = EC::Success;
+        long rct;
         LIBSSH2_SFTP_HANDLE *srcFile;
         LIBSSH2_SFTP_HANDLE *dstFile;
         char *buffer = nullptr;
-        srcFile = libssh2_sftp_open(amsession->sftp, task.src.c_str(), LIBSSH2_FXF_READ, 0400);
-        if (set.force_write)
-        {
-            dstFile = libssh2_sftp_open(extra_session->sftp, task.dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0740);
-        }
-        else
-        {
-            dstFile = libssh2_sftp_open(extra_session->sftp, task.dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0740);
-            LIBSSH2_SFTP_ATTRIBUTES attrd;
-            if (!dstFile)
-            {
-                libssh2_sftp_close_handle(srcFile);
-                return EC::RemoteFileOpenError;
-            }
-            libssh2_sftp_fstat(dstFile, &attrd);
-            uint64_t file_size = attrd.filesize;
-            if (file_size != 0)
-            {
-                libssh2_sftp_close_handle(dstFile);
-                libssh2_sftp_close_handle(srcFile);
-                return EC::RemoteFileExists;
-            }
-        }
-        if (!srcFile || !dstFile)
+        srcFile = libssh2_sftp_open(src_session->sftp, task.src.c_str(), LIBSSH2_FXF_READ, 0400);
+
+        dstFile = libssh2_sftp_open(dst_session->sftp, task.dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
+
+        if (!srcFile)
         {
             rc_final = EC::RemoteFileOpenError;
             goto clean;
         }
-
+        if (!dstFile)
+        {
+            rct = libssh2_sftp_last_error(dst_session->sftp);
+            if (rct == LIBSSH2_FX_NO_SUCH_FILE)
+            {
+                libssh2_sftp_mkdir(dst_session->sftp, dirname(task.dst).c_str(), 0744);
+                dstFile = libssh2_sftp_open(dst_session->sftp, task.dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
+                if (!dstFile)
+                {
+                    return EC::RemoteFileOpenError;
+                }
+            }
+            else
+            {
+                return EC::RemoteFileOpenError;
+            }
+        }
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         libssh2_sftp_fstat(srcFile, &attrs);
         uint64_t file_size = attrs.filesize;
 
         double speed = 32 * AMGB;
+        double speed_ori = 64 * AMMB;
+
         uint64_t buffer_size_ori = calculate_buffer_size(file_size, speed);
         uint64_t buffer_size = buffer_size_ori;
         buffer = new char[buffer_size_ori];
@@ -1078,20 +1068,20 @@ private:
 
         long rc_read = 0;
         long rc_write = 0;
-        double time_end = std::chrono::duration<double>(
-                              std::chrono::system_clock::now().time_since_epoch())
-                              .count();
-        double time_middle = std::chrono::duration<double>(
-                                 std::chrono::system_clock::now().time_since_epoch())
-                                 .count();
+
         double time_start = std::chrono::duration<double>(
                                 std::chrono::system_clock::now().time_since_epoch())
                                 .count();
+        double time_middle = time_start;
+        double time_end = std::chrono::duration<double>(
+                              std::chrono::system_clock::now().time_since_epoch())
+                              .count();
         double interval_time = 0;
 
         uint64_t count = 0;
         uint64_t local_write = 0;
         uint64_t local_read = 0;
+        uint64_t chunk_size = 0;
 
         while (offset < file_size)
         {
@@ -1101,8 +1091,7 @@ private:
                                  std::chrono::system_clock::now().time_since_epoch())
                                  .count();
             }
-
-            uint64_t chunk_size = std::min<uint64_t>(buffer_size, file_size - offset);
+            chunk_size = std::min<uint64_t>(AMMB, file_size - offset);
             local_read = 0;
             local_write = 0;
 
@@ -1119,7 +1108,7 @@ private:
                 }
                 else
                 {
-                    rc_final = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+                    rc_final = cast_libssh2_error(libssh2_sftp_last_error(src_session->sftp));
                     goto clean;
                 }
             }
@@ -1135,9 +1124,12 @@ private:
                 std::this_thread::sleep_for(std::chrono::milliseconds(300));
             }
 
-            time_middle = std::chrono::duration<double>(
-                              std::chrono::system_clock::now().time_since_epoch())
-                              .count();
+            if (count % adjust_interval == 0)
+            {
+                time_middle = std::chrono::duration<double>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
+            }
 
             while (local_write < chunk_size)
             {
@@ -1152,7 +1144,7 @@ private:
                 }
                 else
                 {
-                    rc_final = EC::RemoteFileWriteError;
+                    rc_final = cast_libssh2_error(libssh2_sftp_last_error(dst_session->sftp));
                     goto clean;
                 }
             }
@@ -1165,8 +1157,10 @@ private:
             if (count % adjust_interval == 0)
             {
                 interval_time = std::max<double>(time_end - time_middle, time_middle - time_start);
-                speed = static_cast<double>(rc_write) / (interval_time > 0 ? interval_time : 1E-7);
+                speed = (chunk_size / (interval_time > 0 ? interval_time : 1E-7) / AMMB) * 0.7 + speed_ori * 0.3;
+                speed_ori = speed;
                 buffer_size = calculate_buffer_size(file_size - offset, speed);
+                buffer_size = buffer_size > buffer_size_ori ? buffer_size_ori : buffer_size;
             }
             count++;
 
@@ -1181,7 +1175,6 @@ private:
             }
         }
     clean:
-        std::cout << "5" << std::endl;
         if (srcFile)
         {
             libssh2_sftp_close_handle(srcFile);
@@ -1204,25 +1197,28 @@ public:
 
     ~AMSFTPWorker()
     {
-        if (amsession)
+        if (src_session)
         {
-            delete amsession;
-            amsession = nullptr;
+            delete src_session;
+            src_session = nullptr;
         }
-        if (extra_session)
+        if (dst_session)
         {
-            delete extra_session;
-            extra_session = nullptr;
+            delete dst_session;
+            dst_session = nullptr;
         }
     }
 
-    AMSFTPWorker(uint64_t ID, std::vector<std::string> private_keys, ConRequst request, TransferSet set, TransferCallback callback, TASKS tasks, ConRequst extra_request = ConRequst())
-        : ID(ID), request(request), set(set), callback(callback), tasks(tasks), extra_request(extra_request)
+    AMSFTPWorker(uint64_t ID, std::vector<std::string> private_keys, TransferCallback callback, TASKS tasks, ConRequst src_request = ConRequst(), ConRequst dst_request = ConRequst())
+        : ID(ID), src_request(src_request), dst_request(dst_request), callback(callback), tasks(tasks)
     {
-        this->amsession = new AMSession(request, private_keys);
-        if (!extra_request.hostname.empty())
+        if (!src_request.hostname.empty())
         {
-            this->extra_session = new AMSession(extra_request, private_keys);
+            this->src_session = new AMSession(src_request, private_keys);
+        }
+        if (!dst_request.hostname.empty())
+        {
+            this->dst_session = new AMSession(dst_request, private_keys);
         }
     }
 
@@ -1243,26 +1239,28 @@ public:
 
     TR start()
     {
-        EC init_code = amsession->init();
-        EC init_code_extra = EC::Success;
-        if (init_code != EC::Success)
+        EC init_code;
+        if (!src_session && !dst_session)
         {
-            return init_code;
+            return EC::NoSFTPConnection;
         }
-        if (extra_session)
+        if (src_session)
         {
-            init_code_extra = extra_session->init();
-            if (init_code_extra != EC::Success)
+            init_code = src_session->init();
+            if (init_code != EC::Success)
             {
-                return init_code_extra;
+                return init_code;
             }
+        }
+        if (dst_session)
+        {
+            init_code = dst_session->init();
         }
 
         std::unordered_map<std::string, TransferErrorCode> result;
-
-        switch (set.transfer_type)
+        if (!src_session && dst_session)
         {
-        case TransferType::LocalToRemote:
+
             for (auto &task : tasks)
             {
                 current_filename = task.src;
@@ -1279,8 +1277,9 @@ public:
                     callback.error_cb(current_filename, our_i);
                 }
             }
-            break;
-        case TransferType::RemoteToLocal:
+        }
+        else if (src_session && !dst_session)
+        {
             for (auto &task : tasks)
             {
                 current_filename = task.src;
@@ -1297,8 +1296,9 @@ public:
                     callback.error_cb(current_filename, our_i);
                 }
             }
-            break;
-        case TransferType::RemoteToRemote:
+        }
+        else if (src_session && dst_session)
+        {
             for (auto &task : tasks)
             {
                 current_filename = task.src;
@@ -1315,7 +1315,6 @@ public:
                     callback.error_cb(current_filename, our_i);
                 }
             }
-            break;
         }
         return result;
     }
@@ -1338,6 +1337,7 @@ private:
     std::vector<std::string> private_keys;
     CircularBuffer error_info_buffer;
     AMSession *amsession;
+    std::mutex mutex_;
 
     PathInfo format_stat(std::string path, LIBSSH2_SFTP_ATTRIBUTES &attrs)
     {
@@ -1438,6 +1438,7 @@ public:
 
     EC check()
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         EC rc = EC::Success;
         if (!amsession)
         {
@@ -1458,6 +1459,7 @@ public:
 
     EC reconnect()
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         delete amsession;
         // AMSession amsession_f = AMSession(request, private_keys);
         amsession = new AMSession(request, private_keys);
@@ -1471,6 +1473,7 @@ public:
 
     EC ensure()
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         EC rc = check();
         if (rc != EC::Success)
         {
@@ -1486,6 +1489,7 @@ public:
 
     EC ensure_trash_dir()
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         SR info = stat(trash_dir);
         EC rc;
         if (std::holds_alternative<EC>(info))
@@ -1520,6 +1524,7 @@ public:
 
     EC init()
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         EC rc = amsession->init();
         if (rc != EC::Success)
         {
@@ -1539,6 +1544,7 @@ public:
 
     SR stat(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         EC rc;
         int rct = libssh2_sftp_stat(amsession->sftp, path.c_str(), &attrs);
@@ -1553,6 +1559,7 @@ public:
 
     EC exists(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         SR info = stat(path);
         EC rc;
         if (std::holds_alternative<EC>(info))
@@ -1574,6 +1581,7 @@ public:
 
     EC is_file(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         SR info = stat(path);
         EC rc;
         if (std::holds_alternative<EC>(info))
@@ -1591,6 +1599,7 @@ public:
 
     EC is_dir(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         SR info = stat(path);
         EC rc;
         if (std::holds_alternative<EC>(info))
@@ -1608,6 +1617,7 @@ public:
 
     EC is_symlink(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         SR info = stat(path);
         EC rc;
         if (std::holds_alternative<EC>(info))
@@ -1625,6 +1635,7 @@ public:
 
     LR listdir(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         std::vector<PathInfo> file_list = {};
         EC rc = is_dir(path);
 
@@ -1713,6 +1724,7 @@ public:
 
     EC mkdir(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         EC rc = is_dir(path);
 
         switch (rc)
@@ -1740,6 +1752,7 @@ public:
 
     EC mkdirs(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (path.empty())
         {
             return EC::InvalidParameter;
@@ -1810,6 +1823,7 @@ public:
 
     EC rmfile(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         SR info = stat(path);
         EC rc;
         if (std::holds_alternative<EC>(info))
@@ -1845,6 +1859,7 @@ public:
 
     EC rmdir(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         EC rc = is_dir(path);
         switch (rc)
         {
@@ -1868,6 +1883,7 @@ public:
 
     EC rm(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         EC rc = is_dir(path);
         int path_type = 0;
         switch (rc)
@@ -1913,6 +1929,7 @@ public:
 
     EC saferm(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         EC rc = exists(path);
         if (rc != EC::PassCheck)
         {
@@ -1959,6 +1976,7 @@ public:
 
     EC move(std::string src, std::string dst, bool need_mkdir = false, bool force_write = false)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         EC rc = exists(src);
         if (rc != EC::PassCheck)
         {
@@ -2010,6 +2028,7 @@ public:
 
     EC copy(std::string src, std::string dst, bool need_mkdir = false)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         EC rc = exists(src);
         switch (rc)
         {
@@ -2066,6 +2085,7 @@ public:
 
     EC rename(std::string src, std::string dst, bool need_mkdir = false, bool force_write = false)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         EC rc = exists(src);
         std::string dst_dir;
         if (rc != EC::PassCheck)
@@ -2122,6 +2142,7 @@ public:
 
     WR walk(std::string path)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         // get all files and deepest folders
         WRV result = {};
         EC rc;
@@ -2143,6 +2164,7 @@ public:
 
     ErrorInfo get_last_error_info()
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         if (error_info_buffer.empty())
         {
             return ErrorInfo(EC::Success, "", "", "", "");
@@ -2152,16 +2174,19 @@ public:
 
     std::vector<ErrorInfo> get_all_error_info()
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return error_info_buffer.toVector();
     }
 
     void set_trash_dir(std::string trash_dir)
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         this->trash_dir = trash_dir;
     }
 
     std::string get_trash_dir()
     {
+        std::lock_guard<std::mutex> lock(mutex_);
         return this->trash_dir;
     }
 };
@@ -2263,12 +2288,6 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("FILE", PathType::FILE)
         .value("SYMLINK", PathType::SYMLINK);
 
-    py::enum_<TransferType>(m, "TransferType")
-        .value("LocalToLocal", TransferType::LocalToLocal)
-        .value("LocalToRemote", TransferType::LocalToRemote)
-        .value("RemoteToLocal", TransferType::RemoteToLocal)
-        .value("RemoteToRemote", TransferType::RemoteToRemote);
-
     py::class_<ConRequst>(m, "ConRequst")
         .def(py::init<std::string, std::string, std::string, int, bool, size_t, std::string>(), py::arg("hostname"), py::arg("username"), py::arg("password"), py::arg("port"), py::arg("compression"), py::arg("timeout_s") = 3, py::arg("trash_dir") = "")
         .def_readwrite("hostname", &ConRequst::hostname)
@@ -2278,11 +2297,6 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("compression", &ConRequst::compression)
         .def_readwrite("timeout_s", &ConRequst::timeout_s)
         .def_readwrite("trash_dir", &ConRequst::trash_dir);
-
-    py::class_<TransferSet>(m, "TransferSet")
-        .def(py::init<TransferType, bool>(), py::arg("transfer_type"), py::arg("force_write"))
-        .def_readwrite("transfer_type", &TransferSet::transfer_type)
-        .def_readwrite("force_write", &TransferSet::force_write);
 
     py::class_<TransferCallback>(m, "TransferCallback")
         .def(py::init<py::function, py::function, py::function, float, uint64_t, bool, bool, bool>(), py::arg("error_cb"), py::arg("progress_cb"), py::arg("filename_cb"), py::arg("cb_interval_s"), py::arg("total_bytes"), py::arg("need_error_cb"), py::arg("need_progress_cb"), py::arg("need_filename_cb"))
@@ -2296,11 +2310,9 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("need_filename_cb", &TransferCallback::need_filename_cb);
 
     py::class_<TransferTask>(m, "TransferTask")
-        .def(py::init<std::string, std::string, PathType, uint64_t>(), py::arg("src"), py::arg("dst"), py::arg("path_type"), py::arg("size"))
+        .def(py::init<std::string, std::string>(), py::arg("src"), py::arg("dst"))
         .def_readwrite("src", &TransferTask::src)
-        .def_readwrite("dst", &TransferTask::dst)
-        .def_readwrite("path_type", &TransferTask::path_type)
-        .def_readwrite("size", &TransferTask::size);
+        .def_readwrite("dst", &TransferTask::dst);
 
     py::class_<PathInfo>(m, "PathInfo")
         .def(py::init<std::string, std::string, std::string, uint64_t, uint64_t, uint64_t, PathType>(), py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("size"), py::arg("atime"), py::arg("mtime"), py::arg("path_type"))
@@ -2321,7 +2333,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def(py::init<std::vector<BufferSizePair>, uint64_t>(), py::arg("buffer_sizes"), py::arg("min_buffer_size"));
 
     py::class_<AMSFTPWorker>(m, "AMSFTPWorker")
-        .def(py::init<uint64_t, std::vector<std::string>, ConRequst, TransferSet, TransferCallback, TASKS, ConRequst>(), py::arg("ID"), py::arg("private_keys"), py::arg("request"), py::arg("set"), py::arg("callback"), py::arg("tasks"), py::arg("extra_request") = ConRequst())
+        .def(py::init<uint64_t, std::vector<std::string>, TransferCallback, TASKS, ConRequst, ConRequst>(), py::arg("ID"), py::arg("private_keys"), py::arg("callback"), py::arg("tasks"), py::arg("src_request") = ConRequst(), py::arg("dst_request") = ConRequst())
         .def("set_buffersize", &AMSFTPWorker::set_buffersize, py::arg("buffer_set"))
         .def("terminate", &AMSFTPWorker::terminate)
         .def("pause", &AMSFTPWorker::pause)
