@@ -96,9 +96,11 @@ class TarSystemType(Enum):
 
 class PathType(Enum):
     DIR = 0,
-    FILE = 1
+    FILE = 1,
+    SYMLINK = 2
 
 class TransferType(Enum):
+    LocalToLocal = -2,
     RemoteToLocal = -1,
     LocalToRemote = 1,
     RemoteToRemote = 0,
@@ -110,8 +112,8 @@ class ConRequst:
     password: str
     port: int
     compression: bool
-    trash_dir: str
-    test_path: str
+    timeout_s: int = 3
+    trash_dir: str = ""
 
 @dataclass
 class TransferSet:
@@ -123,7 +125,7 @@ class TransferCallback:
     progress_cb: Callable[[int, int], None]
     filename_cb: Callable[[str], None]
     error_cb: Callable[[str, TransferErrorCode], None]
-    cb_interval_ms: int
+    cb_interval_s: float
     total_bytes: int
     need_error_cb: bool
     need_progress_cb: bool
@@ -136,7 +138,6 @@ class TransferTask:
     path_type: PathType
     size: int
     
-
 @dataclass
 class PathInfo:
     name: str
@@ -164,12 +165,11 @@ class ErrorInfo:
     msg: str
 
 class AMSFTPWorker:
-    def __init__(self, ID:int, private_keys:list[str], request: ConRequst, set: TransferSet, callback: TransferCallback, tasks:list[TransferTask]):
+    def __init__(self, ID:int, private_keys:list[str], request: ConRequst, set: TransferSet, callback: TransferCallback, tasks:list[TransferTask], extra_request: ConRequst = ConRequst()):
         ...
     
     def set_buffersize(self, buffer_set: BufferSet)->None:
         ...
-
 
     def terminate(self)->None:
         ...
@@ -183,8 +183,11 @@ class AMSFTPWorker:
     def start(self)->dict[str, TransferErrorCode]|TransferErrorCode:
         ...
 
+    def GetID(self)->int:
+        ...
+
 class AMSFTPClient:
-    def __init__(self, ID:int, private_keys:list[str], request: ConRequst, set: TransferSet, callback: TransferCallback, tasks:list[TransferTask]):
+    def __init__(self, request: ConRequst, private_keys:list[str], error_info_buffer_size:int=10):
         ...
 
     def check(self)->TransferErrorCode:
@@ -220,19 +223,13 @@ class AMSFTPClient:
     def mkdir(self, path: str)->TransferErrorCode:
         ...
     
-    def mkdir_p(self, path: str)->TransferErrorCode:
+    def mkdirs(self, path: str)->TransferErrorCode:
         ...
     
     def rmfile(self, path: str)->TransferErrorCode:
         ...
     
     def rmdir(self, path: str)->TransferErrorCode:
-        ...
-    
-    def rmdir(self, path: str)->TransferErrorCode:
-        ...
-    
-    def rm_trash(self, path: str)->TransferErrorCode:
         ...
     
     def safe_rm(self, path: str)->TransferErrorCode:
@@ -256,6 +253,11 @@ class AMSFTPClient:
     def get_all_error_info(self)->list[ErrorInfo]:
         ...
     
+    def get_trash_dir(self)->str:
+        ...
+    
+    def set_trash_dir(self, trash_dir: str)->None:
+        ...
 
 
 
