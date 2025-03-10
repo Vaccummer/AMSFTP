@@ -1,5 +1,4 @@
 #include <libssh2.h>
-#include <fmt/core.h>
 #include <libssh2_sftp.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
@@ -16,6 +15,7 @@
 #include <unordered_map>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <shared_mutex>
 #include <filesystem>
 #include <algorithm>
 #include <chrono>
@@ -30,71 +30,11 @@ constexpr uint64_t AMKB = 1024;
 constexpr uint64_t AMMB = 1024 * 1024;
 constexpr uint64_t AMGB = 1024 * 1024 * 1024;
 
-constexpr char *LEVEL = "LEVEL";
-constexpr char *ERRORNAME = "ERRORNAME";
-constexpr char *TARGET = "TARGET";
-constexpr char *ACTION = "ACTION";
-constexpr char *MSG = "MSG";
-
-constexpr char *CRITICAL = "CRITICAL";
-constexpr char *WARNING = "WARNING";
-constexpr char *INFO = "INFO";
-constexpr char *DEBUG = "DEBUG";
-
-std::string sftp_error_code_cast(unsigned long errcode)
-{
-    switch (errcode)
-    {
-    case LIBSSH2_FX_OK:
-        return "Success";
-    case LIBSSH2_FX_EOF:
-        return "End of file";
-    case LIBSSH2_FX_NO_SUCH_FILE:
-        return "File does not exist";
-    case LIBSSH2_FX_PERMISSION_DENIED:
-        return "Permission denied";
-    case LIBSSH2_FX_FAILURE:
-        return "Generic failure";
-    case LIBSSH2_FX_BAD_MESSAGE:
-        return "Bad protocol message";
-    case LIBSSH2_FX_NO_CONNECTION:
-        return "No connection";
-    case LIBSSH2_FX_CONNECTION_LOST:
-        return "Connection lost";
-    case LIBSSH2_FX_OP_UNSUPPORTED:
-        return "Operation not supported";
-    case LIBSSH2_FX_INVALID_HANDLE:
-        return "Invalid handle";
-    case LIBSSH2_FX_NO_SUCH_PATH:
-        return "No such path";
-    case LIBSSH2_FX_FILE_ALREADY_EXISTS:
-        return "File already exists";
-    case LIBSSH2_FX_WRITE_PROTECT:
-        return "Write protected filesystem";
-    case LIBSSH2_FX_NO_MEDIA:
-        return "No media in drive";
-    default:
-        return "Unknown error";
-    }
-}
-
-std::vector<std::string> make_py_error(std::string errorname, std::string tar, std::string act)
-{
-    return {errorname, tar, act};
-}
-
 std::wstring Wstring(const std::string &narrowStr)
 {
     int length = MultiByteToWideChar(CP_UTF8, 0, narrowStr.c_str(), -1, nullptr, 0);
     std::wstring wideStr(length, 0);
     MultiByteToWideChar(CP_UTF8, 0, narrowStr.c_str(), -1, &wideStr[0], length);
-    for (auto &c : wideStr)
-    {
-        if (c == L'/')
-        {
-            c = L'\\';
-        }
-    }
     return wideStr;
 }
 
@@ -114,7 +54,7 @@ std::string basename(const std::string &path)
     return p.filename().string();
 }
 
-void lmkdirs(const std::string &path)
+void mkdirs(const std::string &path)
 {
     try
     {
@@ -126,13 +66,6 @@ void lmkdirs(const std::string &path)
     {
         return;
     }
-}
-
-double timenow()
-{
-    return std::chrono::duration<double>(
-               std::chrono::system_clock::now().time_since_epoch())
-        .count();
 }
 
 template <typename... Args>
@@ -171,13 +104,6 @@ std::string join_path(Args &&...args)
     }
     return combined.lexically_normal().generic_string();
 }
-
-enum class TransferType
-{
-    Upload = 0,
-    Download = 1,
-    ToAnotherHost = 2,
-};
 
 enum class TransferErrorCode
 {
@@ -267,7 +193,6 @@ enum class TransferErrorCode
     SessionNotInitialized = -81,
     DirAlreadyExists = -82,
     SocketCreateError = -83,
-    PathAlreadyExists = -84,
 };
 
 enum class TarSystemType
@@ -311,51 +236,13 @@ struct TransferCallback
     bool need_error_cb;
     bool need_progress_cb;
     bool need_filename_cb;
-    py::function error_cb;
     py::function progress_cb;
     py::function filename_cb;
-
+    py::function error_cb;
     TransferCallback()
-        : cb_interval_s(0.5), need_error_cb(false), need_progress_cb(false), need_filename_cb(false), error_cb(py::function()), progress_cb(py::function()), filename_cb(py::function()) {}
-    TransferCallback(
-        float interval,
-        py::object error = py::none(),
-        py::object progress = py::none(),
-        py::object filename = py::none()) : cb_interval_s(interval)
-    {
-        if (error.is_none())
-        {
-            need_error_cb = false;
-            error_cb = py::function();
-        }
-        else
-        {
-            need_error_cb = true;
-            error_cb = error.cast<py::function>();
-        }
-
-        if (progress.is_none())
-        {
-            need_progress_cb = false;
-            progress_cb = py::function();
-        }
-        else
-        {
-            need_progress_cb = true;
-            progress_cb = progress.cast<py::function>();
-        }
-
-        if (filename.is_none())
-        {
-            need_filename_cb = false;
-            filename_cb = py::function();
-        }
-        else
-        {
-            need_filename_cb = true;
-            filename_cb = filename.cast<py::function>();
-        }
-    }
+        : progress_cb(py::function()), filename_cb(py::function()), error_cb(py::function()), cb_interval_s(0.5), need_progress_cb(false), need_filename_cb(false), need_error_cb(false) {}
+    TransferCallback(py::function error_cb, py::function progress_cb, py::function filename_cb, float cb_interval_s, bool need_error_cb, bool need_progress_cb, bool need_filename_cb)
+        : progress_cb(progress_cb), filename_cb(filename_cb), error_cb(error_cb), cb_interval_s(cb_interval_s), need_progress_cb(need_progress_cb), need_filename_cb(need_filename_cb), need_error_cb(need_error_cb) {}
 };
 
 struct TransferTask
@@ -394,22 +281,18 @@ struct BufferSet
 {
     std::vector<BufferSizePair> buffer_sizes;
     uint64_t min_buffer_size;
-    BufferSet(std::vector<BufferSizePair> buffer_sizes = {}, uint64_t min_buffer_size = 64 * AMKB)
+    BufferSet()
+        : buffer_sizes({BufferSizePair{16 * AMGB, 16 * AMMB},
+                        BufferSizePair{4 * AMGB, 8 * AMMB},
+                        BufferSizePair{AMGB, 4 * AMMB},
+                        BufferSizePair{512 * AMMB, AMMB},
+                        BufferSizePair{50 * AMMB, 256 * AMKB},
+                        BufferSizePair{10 * AMMB, 128 * AMKB},
+                        BufferSizePair{0, 64 * AMKB}}),
+          min_buffer_size(64 * AMKB) {}
+    BufferSet(std::vector<BufferSizePair> buffer_sizes, uint64_t min_buffer_size = 64 * AMKB)
         : buffer_sizes(buffer_sizes), min_buffer_size(min_buffer_size)
     {
-        if (buffer_sizes.empty())
-        {
-            this->buffer_sizes = {BufferSizePair{16 * AMGB, 8 * AMMB},
-                                  BufferSizePair{4 * AMGB, 6 * AMMB},
-                                  BufferSizePair{AMGB, 4 * AMMB},
-                                  BufferSizePair{512 * AMMB, 3 * AMMB},
-                                  BufferSizePair{256 * AMMB, 2 * AMMB},
-                                  BufferSizePair{128 * AMMB, 1 * AMMB},
-                                  BufferSizePair{64 * AMMB, 512 * AMKB},
-                                  BufferSizePair{32 * AMMB, 256 * AMKB},
-                                  BufferSizePair{16 * AMMB, 128 * AMKB},
-                                  BufferSizePair{0, 64 * AMKB}};
-        }
         this->buffer_sizes.push_back(BufferSizePair{0, min_buffer_size});
         std::sort(this->buffer_sizes.begin(), this->buffer_sizes.end(), [](BufferSizePair a, BufferSizePair b)
                   { return a.threshold > b.threshold; });
@@ -429,13 +312,14 @@ public:
     uint64_t file_size;
     ~FileMapper()
     {
-
         UnmapViewOfFile(addr);
-
         CloseHandle(hMap);
-
         CloseHandle(hFile);
+        addr = nullptr;
+        hMap = nullptr;
+        hFile = nullptr;
         file_ptr = nullptr;
+        file_size = 0;
     }
     FileMapper()
     {
@@ -444,83 +328,45 @@ public:
         this->addr = nullptr;
         this->file_ptr = nullptr;
     }
-
-    FileMapper(std::wstring &file_path, MapType map_type, std::string &error_msg, uint64_t file_size = 0)
+    FileMapper(std::wstring &file_path, MapType map_type, uint64_t file_size = 0)
     {
-        LARGE_INTEGER li;
-        li.QuadPart = file_size;
-        bool is_ok = false;
-
         if (map_type == MapType::Read)
         {
             this->hFile = CreateFileW(file_path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-            if (this->hFile == INVALID_HANDLE_VALUE)
-            {
-                goto DONE;
-            }
-
-            GetFileSizeEx(this->hFile, &file_size_ptr);
+            GetFileSizeEx(hFile, &file_size_ptr);
             this->file_size = file_size_ptr.QuadPart;
-            this->hMap = CreateFileMapping(this->hFile, NULL, PAGE_READONLY, 0, 0, NULL);
-            if (!this->hMap)
-            {
-                goto DONE;
-            }
-            this->addr = MapViewOfFile(this->hMap, FILE_MAP_READ, 0, 0, 0);
-            if (!this->addr)
-            {
-                goto DONE;
-            }
-            this->file_ptr = (char *)this->addr;
-            is_ok = true;
-            goto DONE;
+            this->hMap = CreateFileMapping(hFile, NULL, PAGE_READONLY, 0, 0, NULL);
+            this->addr = MapViewOfFile(hMap, FILE_MAP_READ, 0, 0, 0);
+            this->file_ptr = (char *)addr;
+            return;
         }
-
-        this->hFile = CreateFileW(file_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL,
+        this->hFile = CreateFileW(file_path.c_str(), GENERIC_WRITE | GENERIC_READ, 0, NULL,
                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-
-        if (this->hFile == INVALID_HANDLE_VALUE)
+        if (this->hFile == nullptr)
         {
-            goto DONE;
-        }
-
-        if (!SetFilePointerEx(this->hFile, li, NULL, FILE_BEGIN))
-        {
-            goto DONE;
-        }
-
-        if (!SetEndOfFile(this->hFile))
-        {
-            goto DONE;
-        }
-        this->hMap = CreateFileMapping(this->hFile, NULL, PAGE_READWRITE, li.HighPart, li.LowPart, NULL);
-
-        if (!this->hMap)
-        {
-            goto DONE;
-        }
-        this->addr = MapViewOfFile(this->hMap, FILE_MAP_WRITE, 0, 0, 0);
-
-        if (!this->addr)
-        {
-            goto DONE;
-        }
-        this->file_ptr = (char *)this->addr;
-        is_ok = true;
-    DONE:
-        if (!is_ok)
-        {
-            DWORD err = GetLastError();
-            LPSTR errMsg = nullptr;
-            FormatMessageA(
-                FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-                NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                (LPSTR)&errMsg, 0, NULL);
-            error_msg = errMsg;
-            LocalFree(errMsg);
             this->file_ptr = nullptr;
             return;
         }
+        LARGE_INTEGER li;
+        li.QuadPart = file_size;
+        if (!SetFilePointerEx(hFile, li, NULL, FILE_BEGIN))
+        {
+            this->file_ptr = nullptr;
+            return;
+        }
+        if (!SetEndOfFile(hFile))
+        {
+            this->file_ptr = nullptr;
+            return;
+        }
+        this->hMap = CreateFileMapping(hFile, NULL, PAGE_READWRITE, li.HighPart, li.LowPart, NULL);
+        if (!this->hMap)
+        {
+            this->file_ptr = nullptr;
+            return;
+        }
+        this->addr = MapViewOfFile(this->hMap, FILE_MAP_WRITE, 0, 0, 0);
+        this->file_ptr = (char *)addr;
     }
 };
 
@@ -564,14 +410,13 @@ using TASKS = std::vector<TransferTask>;
 using int_ptr = std::shared_ptr<uint64_t>;
 using safe_int_ptr = std::shared_ptr<std::atomic<uint64_t>>;
 using EC = TransferErrorCode;
-using TRM = std::vector<std::pair<std::pair<std::string, std::string>, TransferErrorCode>>;
+using TRM = std::unordered_map<std::string, TransferErrorCode>;
 using TR = std::variant<TRM, EC>;
 using SR = std::variant<PathInfo, EC>;
 using LR = std::variant<std::vector<PathInfo>, EC>;
 using WRV = std::vector<PathInfo>;
 using WR = std::variant<WRV, EC>;
 using ED = std::pair<EC, std::string>;
-using SIZER = std::variant<uint64_t, EC>;
 
 void _walk(std::string path, WRV &result)
 {
@@ -740,7 +585,7 @@ EC cast_libssh2_error(int error_code)
 class CircularBuffer
 {
 private:
-    std::vector<ErrorInfo> buffer = {};
+    std::vector<ErrorInfo> buffer;
     size_t capacity;
     size_t head = 0;
     size_t tail = 0;
@@ -748,7 +593,6 @@ private:
 
 public:
     CircularBuffer() : capacity(10) {}
-
     CircularBuffer(size_t size) : capacity(size)
     {
         buffer.resize(size);
@@ -798,30 +642,26 @@ public:
 class AMSession
 {
 public:
-    LIBSSH2_SESSION *session = nullptr;
-    LIBSSH2_SFTP *sftp = nullptr;
+    std::recursive_mutex r_mtx;
+    LIBSSH2_SESSION *session;
+    LIBSSH2_SFTP *sftp;
     std::vector<std::string> private_keys;
     ConRequst request;
     SOCKET sock = INVALID_SOCKET;
     LIBSSH2_CHANNEL *channel = nullptr;
-    py::function trace_cb = py::function();
-    std::atomic<bool> is_trace = false;
     EC init()
     {
-        std::string msg = "";
         EC rc = TransferErrorCode::Success;
         WSADATA wsaData;
 
         if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0)
         {
-            pytrace(CRITICAL, "SocketInitError", request.nickname, "WSAStartup", "Windows Sockets API initialization failed");
             return TransferErrorCode::NetworkError;
         }
 
         sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (sock == INVALID_SOCKET)
         {
-            pytrace(CRITICAL, "SocketCreateError", request.nickname, "CreateSocket", "Create but get invalid socket");
             return TransferErrorCode::SocketCreateError;
         }
 
@@ -841,18 +681,10 @@ public:
         fd_set writeSet;
         FD_ZERO(&writeSet);
         FD_SET(sock, &writeSet);
+
         int selectRet = select(sock + 1, nullptr, &writeSet, nullptr, &timeout);
         if (selectRet <= 0)
         {
-            if (selectRet == 0)
-            {
-                pytrace(CRITICAL, "SocketConnectError", request.nickname, "ConnectSocket", "Connect Timeout");
-            }
-            else
-            {
-                pytrace(CRITICAL, "SocketConnectError", request.nickname, "ConnectSocket", "Connect Failed");
-            }
-
             return TransferErrorCode::NetworkTimeout;
         }
 
@@ -860,7 +692,6 @@ public:
 
         if (!session)
         {
-            pytrace(CRITICAL, "SessionCreateError", request.nickname, "SessionInit", "Session initialization failed");
             return TransferErrorCode::SessionCreateError;
         }
 
@@ -874,12 +705,12 @@ public:
 
         int rc_handshake;
         {
+            std::lock_guard<std::recursive_mutex> lock(r_mtx);
             rc_handshake = libssh2_session_handshake(session, sock);
         }
 
         if (rc_handshake != 0)
         {
-            pytrace(CRITICAL, "HandshakeEstablishError", request.nickname, "SessionHandshake", "Session handshake failed");
             return TransferErrorCode::SessionEstablishError;
         }
 
@@ -888,31 +719,24 @@ public:
         if (!request.password.empty())
         {
             {
-
-                rca = libssh2_userauth_password(session, request.username.c_str(), request.password.c_str());
-
+                {
+                    std::lock_guard<std::recursive_mutex> lock(r_mtx);
+                    rca = libssh2_userauth_password(session, request.username.c_str(), request.password.c_str());
+                }
                 if (rca == 0)
                 {
                     rc = TransferErrorCode::Success;
-                    pytrace(INFO, "AuthorizeSuccess", request.nickname, "PasswordAuthorize", "Password authorize success");
                     goto OK;
-                }
-                else
-                {
-                    msg = fmt::format("Password \"{}\" authorize failed", request.password);
-                    pytrace(WARNING, "AuthorizeError", request.nickname, "PasswordAuthorize", msg);
                 }
             }
             for (auto &private_key : private_keys)
             {
-                msg = fmt::format("Public key \"{}\" authorize failed", private_key);
-                pytrace(WARNING, "AuthorizeError", request.nickname, "PublicKeyAuthorize", msg);
-                rca = libssh2_userauth_publickey_fromfile(session, request.username.c_str(), nullptr, private_key.c_str(), nullptr);
-
+                {
+                    std::lock_guard<std::recursive_mutex> lock(r_mtx);
+                    rca = libssh2_userauth_publickey_fromfile(session, request.username.c_str(), nullptr, private_key.c_str(), nullptr);
+                }
                 if (rca == 0)
                 {
-                    msg = fmt::format("Public key \"{}\" authorize success", private_key);
-                    pytrace(INFO, "", request.nickname, "PublicKeyAuthorize", msg);
                     rc = TransferErrorCode::Success;
                     goto OK;
                 }
@@ -920,10 +744,10 @@ public:
         OK:
             if (rc != TransferErrorCode::Success)
             {
-                pytrace(CRITICAL, "AuthorizeError", request.nickname, "FinalAuthorize", "Authorize failed");
                 return rc;
             }
             {
+                std::lock_guard<std::recursive_mutex> lock(r_mtx);
                 sftp = libssh2_sftp_init(session);
             }
             if (!sftp)
@@ -931,6 +755,7 @@ public:
                 return TransferErrorCode::SftpCreateError;
             }
             {
+                std::lock_guard<std::recursive_mutex> lock(r_mtx);
                 channel = libssh2_channel_open_ex(session,
                                                   "session",
                                                   sizeof("session") - 1,
@@ -942,7 +767,6 @@ public:
 
             if (!channel)
             {
-                pytrace(CRITICAL, "ChannelCreateError", request.nickname, "ChannelCreate", "Channel creation failed");
                 return TransferErrorCode::ChannelCreateError;
             }
             char path_t[1024];
@@ -951,8 +775,10 @@ public:
             if (request.trash_dir.empty())
             {
                 int rcr;
-                rcr = libssh2_sftp_realpath(sftp, ".", path_t, sizeof(path_t));
-
+                {
+                    std::lock_guard<std::recursive_mutex> lock(r_mtx);
+                    rcr = libssh2_sftp_realpath(sftp, ".", path_t, sizeof(path_t));
+                }
                 if (rcr <= 0)
                 {
                     trash_dir_t = ".amsftp_trash";
@@ -962,8 +788,6 @@ public:
                     trash_dir_t = join_path(std::string(path_t), ".amsftp_trash");
                 }
                 request.trash_dir = trash_dir_t;
-                msg = fmt::format("Trash directory set to default: \"{}\"", trash_dir_t);
-                pytrace(INFO, "", "TrashDir", "DefaultTrashDir", msg);
             }
             return TransferErrorCode::Success;
         }
@@ -973,38 +797,35 @@ public:
     {
         if (!sftp)
         {
-            pytrace(CRITICAL, "SftpNotInitialized", "Sftp", "SFTPCheck", "SFTP not initialized");
             return EC::SftpNotInitialized;
         }
 
         if (!session)
         {
-            pytrace(CRITICAL, "SessionNotInitialized", "Session", "SessionCheck", "Session not initialized");
             return EC::SessionNotInitialized;
         }
 
         LIBSSH2_SFTP_ATTRIBUTES attrs;
-        std::string test_path = "amtrial";
+        std::string test_path = "/amsftp_test/sample";
         int rct;
         {
+            std::lock_guard<std::recursive_mutex> lock(r_mtx);
             rct = libssh2_sftp_stat(sftp, test_path.c_str(), &attrs);
         }
 
-        std::string target = fmt::format("{}@{}", request.nickname, request.port);
         if (rct != 0)
         {
             EC rc;
-            rc = cast_libssh2_error(libssh2_sftp_last_error(sftp));
-
+            {
+                std::lock_guard<std::recursive_mutex> lock(r_mtx);
+                rc = cast_libssh2_error(libssh2_session_last_errno(session));
+            }
             if (rc == EC::PathNotExist)
             {
                 return EC::Success;
             }
-            std::string msg = sftp_error_code_cast(libssh2_sftp_last_error(sftp));
-            pytrace(CRITICAL, "SftpCheckFailed", target, "TrialPathStatCheck", msg);
             return rc;
         }
-        pytrace(INFO, "", request.nickname, "SessionCheck", "Success");
         return EC::Success;
     }
 
@@ -1054,22 +875,6 @@ public:
     ~AMSession()
     {
         clean();
-    }
-
-    void pytrace(std::string level, std::string error_name = "", std::string target = "", std::string action = "", std::string msg = "")
-    {
-        if (is_trace)
-        {
-            std::unordered_map<std::string, std::string> level_map = {
-                {LEVEL, level},
-                {ERRORNAME, error_name},
-                {TARGET, target},
-                {ACTION, action},
-                {MSG, msg},
-            };
-            trace_cb(level_map);
-            // trace_cb(error_info);
-        }
     }
 };
 
@@ -1160,113 +965,20 @@ private:
         }
     }
 
-    void _get_size(std::string path, uint64_t &size, EC &error, bool exclude_dir = false, bool exclude_symlink = false)
-    {
-        SR info = stat(path);
-        if (std::holds_alternative<EC>(info))
-        {
-            error = std::get<EC>(info);
-            return;
-        }
-        if (!std::holds_alternative<PathInfo>(info))
-        {
-            error = EC::UnknownError;
-            return;
-        }
-        PathInfo path_info = std::get<PathInfo>(info);
-        switch (path_info.path_type)
-        {
-        case PathType::FILE:
-            size = path_info.size;
-            return;
-        case PathType::SYMLINK:
-            if (exclude_symlink)
-            {
-                size = 0;
-            }
-            else
-            {
-                size = path_info.size;
-            }
-        case PathType::DIR:
-            break;
-        default:
-            error = EC::UnknownError;
-            return;
-        }
-
-        if (!exclude_dir)
-        {
-            size += path_info.size;
-        }
-        LR list = listdir(path);
-        if (std::holds_alternative<EC>(list))
-        {
-            error = std::get<EC>(list);
-            return;
-        }
-        if (!std::holds_alternative<WRV>(list))
-        {
-            error = EC::UnknownError;
-            return;
-        }
-
-        for (auto &item : std::get<WRV>(list))
-        {
-            _get_size(item.path, size, error, exclude_dir, exclude_symlink);
-        }
-    }
-
 public:
     std::string nickname;
     ConRequst request;
     AMSession *amsession;
     std::string trash_dir;
-    py::function trace_cb = py::function();
-    std::atomic<bool> is_trace = false;
-
-    void pytrace(std::string level, std::string error_name = "", std::string target = "", std::string action = "", std::string msg = "")
-    {
-        if (is_trace)
-        {
-            std::unordered_map<std::string, std::string> level_map = {
-                {LEVEL, level},
-                {ERRORNAME, error_name},
-                {TARGET, target},
-                {ACTION, action},
-                {MSG, msg},
-            };
-            trace_cb(level_map);
-            // trace_cb(error_info);
-        }
-    }
-
-    void record_error(ErrorInfo error_info)
-    {
-        error_info_buffer.push(error_info);
-    }
-
     EC get_session_last_error()
     {
+
         return cast_libssh2_error(libssh2_session_last_errno(amsession->session));
     }
 
     EC get_sftp_last_error()
     {
         return cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
-    }
-
-    std::string get_session_error_msg()
-    {
-        char *errmsg = NULL;
-        int errmsg_len;
-        int errcode = libssh2_session_last_error(amsession->session, &errmsg, &errmsg_len, 0);
-        return std::string(errmsg);
-    }
-
-    std::string get_sftp_error_msg()
-    {
-        return sftp_error_code_cast(libssh2_sftp_last_error(amsession->sftp));
     }
 
     ~AMSFTPClient()
@@ -1288,21 +1000,20 @@ public:
         EC rc = EC::Success;
         if (!amsession)
         {
-            rc = EC::SessionNotInitialized;
-            pytrace(CRITICAL, "SessionBroken", "AMSFTPClient", "check", "Session is not initialized");
-            record_error(ErrorInfo(TransferErrorCode::SessionNotInitialized, "", "", "AMSFTPClient::check", "Session is not initialized"));
+            rc = EC::SessionBroken;
+            error_info_buffer.push(ErrorInfo(TransferErrorCode::SessionBroken, "", "", "AMSFTPClient::check", "Session is not initialized"));
             return rc;
         }
         else
         {
+
             rc = amsession->check();
+
             if (rc != EC::Success)
             {
-                record_error(ErrorInfo(rc, "", "", "AMSFTPClient::check", "Session is broken"));
-                return rc;
+                error_info_buffer.push(ErrorInfo(rc, "", "", "AMSFTPClient::check", "Session is broken"));
             }
         }
-        pytrace(INFO, "ClientCheckSuccess", request.nickname, "check", "");
         return rc;
     }
 
@@ -1314,7 +1025,7 @@ public:
         EC rc = amsession->init();
         if (rc != EC::Success)
         {
-            record_error(ErrorInfo(rc, "", "", "AMSFTPClient::reconnect", "Session Reconnect failed"));
+            error_info_buffer.push(ErrorInfo(rc, "", "", "AMSFTPClient::reconnect", "Session init failed"));
         }
         return rc;
     }
@@ -1327,7 +1038,7 @@ public:
             rc = reconnect();
             if (rc != EC::Success)
             {
-                record_error(ErrorInfo(rc, "", "", "AMSFTPClient::ensure", "Session reconnect failed"));
+                error_info_buffer.push(ErrorInfo(rc, "", "", "AMSFTPClient::ensure", "Session reconnect failed"));
                 return rc;
             }
         }
@@ -1343,7 +1054,7 @@ public:
             rc = std::get<EC>(info);
             if (rc != EC::PathNotExist)
             {
-                record_error(ErrorInfo(rc, "", "", "AMSFTPClient::ensure_trash_dir", "Trash dir initializes failed"));
+                error_info_buffer.push(ErrorInfo(rc, "", "", "AMSFTPClient::ensure_trash_dir", "Trash dir initializes failed"));
                 return rc;
             }
         }
@@ -1356,15 +1067,13 @@ public:
             }
             else
             {
-                record_error(ErrorInfo(EC::TargetNotADirectory, request.trash_dir, "", "AMSFTPClient::ensure_trash_dir", "trash_dir is not a directory"));
+                error_info_buffer.push(ErrorInfo(EC::TargetNotADirectory, request.trash_dir, "", "AMSFTPClient::ensure_trash_dir", "trash_dir is not a directory"));
                 return EC::TargetNotADirectory;
             }
         }
         rc = mkdirs(trash_dir);
         if (rc != EC::Success)
         {
-            std::string target = fmt::format("{}@{}", request.nickname, request.port);
-            pytrace(WARNING, "TrashDirCreateFailed", target, "EnsureTrashDir", "Failed");
             return rc;
         }
         return EC::Success;
@@ -1372,54 +1081,38 @@ public:
 
     EC init()
     {
-
         EC rc = amsession->init();
         if (rc != EC::Success)
         {
-            record_error(ErrorInfo(rc, "", "", "AMSFTPClient::init", "Session init failed"));
+            error_info_buffer.push(ErrorInfo(rc, "", "", "AMSFTPClient::init", "Session init failed"));
             return rc;
         }
         trash_dir = amsession->request.trash_dir;
-
+        std::cout << "trash_dir: " << trash_dir << std::endl;
         rc = check();
         if (rc != EC::Success)
         {
-            record_error(ErrorInfo(rc, "", "", "AMSFTPClient::init", "Session check failed"));
+            error_info_buffer.push(ErrorInfo(rc, "", "", "AMSFTPClient::init", "Session check failed"));
             return rc;
         }
         return rc;
     }
 
-    SIZER get_size(std::string path, bool exclude_dir = false, bool exclude_symlink = false)
-    {
-        uint64_t size = 0;
-        EC error = EC::Success;
-        _get_size(path, size, error, exclude_dir, exclude_symlink);
-        if (error != EC::Success)
-        {
-            record_error(ErrorInfo(error, path, "", "AMSFTPClient::get_size", "get size failed"));
-            return error;
-        }
-        return size;
-    }
-
     SR stat(std::string path)
     {
+
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         EC rc;
         int rct;
         {
-
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rct = libssh2_sftp_stat(amsession->sftp, path.c_str(), &attrs);
         }
         if (rct != 0)
         {
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rc = get_sftp_last_error();
-            record_error(ErrorInfo(rc, path, "", "AMSFTPClient::stat", "stat failed"));
-            if (rc != EC::PathNotExist && rc != EC::PermissionDenied)
-            {
-                pytrace(WARNING, "StatFailed", fmt::format("{}@{}", request.nickname, path), "Stat", get_sftp_error_msg());
-            }
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::stat", "stat failed"));
             return rc;
         }
         return format_stat(path, attrs);
@@ -1443,7 +1136,7 @@ public:
         {
             return EC::PassCheck;
         }
-        record_error(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::exists", "Value Type Error"));
+        error_info_buffer.push(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::exists", "Value Type Error"));
         return EC::UnknownError;
     }
 
@@ -1461,7 +1154,7 @@ public:
         {
             return std::get<PathInfo>(info).path_type == PathType::FILE ? EC::PassCheck : EC::FailedCheck;
         }
-        record_error(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::is_file", "Value Type Error"));
+        error_info_buffer.push(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::is_file", "Value Type Error"));
         return EC::UnknownError;
     }
 
@@ -1479,7 +1172,7 @@ public:
         {
             return std::get<PathInfo>(info).path_type == PathType::DIR ? EC::PassCheck : EC::FailedCheck;
         }
-        record_error(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::is_dir", "Value Type Error"));
+        error_info_buffer.push(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::is_dir", "Value Type Error"));
         return EC::UnknownError;
     }
 
@@ -1497,7 +1190,7 @@ public:
         {
             return std::get<PathInfo>(info).path_type == PathType::SYMLINK ? EC::PassCheck : EC::FailedCheck;
         }
-        record_error(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::is_symlink", "Value Type Error"));
+        error_info_buffer.push(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::is_symlink", "Value Type Error"));
         return EC::UnknownError;
     }
 
@@ -1522,65 +1215,66 @@ public:
         case EC::PassCheck:
             break;
         case EC::FailedCheck:
-            record_error(ErrorInfo(EC::NotDirectory, path, "", "AMSFTPClient::listdir", "Path is not a directory"));
+            error_info_buffer.push(ErrorInfo(EC::NotDirectory, path, "", "AMSFTPClient::listdir", "Path is not a directory"));
             return EC::NotDirectory;
         default:
-            record_error(ErrorInfo(rc, path, "", "AMSFTPClient::listdir", "Path check failed"));
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::listdir", "Path check failed"));
             return rc;
         }
 
-        sftp_handle = libssh2_sftp_open_ex(
-            amsession->sftp,
-            normalized_path.c_str(),
-            normalized_path.size(),
-            0,
-            LIBSSH2_SFTP_OPENDIR,
-            LIBSSH2_FXF_READ);
-
-        if (!sftp_handle)
         {
-            pytrace(WARNING, "HandleOpenFailed", fmt::format("{}@{}", request.nickname, path), "ListDir", get_sftp_error_msg());
-            goto clean;
-        }
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
+            sftp_handle = libssh2_sftp_open_ex(
+                amsession->sftp,
+                normalized_path.c_str(),
+                normalized_path.size(),
+                0,
+                LIBSSH2_SFTP_OPENDIR,
+                LIBSSH2_FXF_READ);
 
-        // Use a reasonably sized buffer for filenames
-
-        // Read directory entries
-        while (true)
-        {
-            rct = libssh2_sftp_readdir_ex(
-                sftp_handle,
-                filename_buffer.data(),
-                buffer_size,
-                nullptr, 0,
-                &attrs);
-
-            if (rct < 0)
+            if (!sftp_handle)
             {
                 goto clean;
             }
-            else if (rct == 0)
+
+            // Use a reasonably sized buffer for filenames
+
+            // Read directory entries
+            while (true)
             {
-                is_sucess = true;
-                break;
+                rct = libssh2_sftp_readdir_ex(
+                    sftp_handle,
+                    filename_buffer.data(),
+                    buffer_size,
+                    nullptr, 0,
+                    &attrs);
+
+                if (rct < 0)
+                {
+                    goto clean;
+                }
+                else if (rct == 0)
+                {
+                    is_sucess = true;
+                    break;
+                }
+
+                // Process the entry
+                name.assign(filename_buffer.data(), rct);
+
+                // Skip "." and ".." entries
+                if (name == "." || name == "..")
+                {
+                    continue;
+                }
+
+                // Construct the full path based on target system
+                path_i = join_path(normalized_path, name);
+                // Create PathInfo object and add to list
+                info = format_stat(path_i, attrs);
+                file_list.push_back(info);
             }
-
-            // Process the entry
-            name.assign(filename_buffer.data(), rct);
-
-            // Skip "." and ".." entries
-            if (name == "." || name == "..")
-            {
-                continue;
-            }
-
-            // Construct the full path based on target system
-            path_i = join_path(normalized_path, name);
-            // Create PathInfo object and add to list
-            info = format_stat(path_i, attrs);
-            file_list.push_back(info);
         }
-
     clean:
         if (sftp_handle)
         {
@@ -1592,9 +1286,9 @@ public:
         }
         else
         {
-
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rc = get_sftp_last_error();
-            record_error(ErrorInfo(rc, path, "", "AMSFTPClient::listdir", "Handle open failed"));
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::listdir", "Handle open failed"));
             return rc;
         }
     }
@@ -1609,7 +1303,7 @@ public:
         case EC::PassCheck:
             return EC::Success;
         case EC::FailedCheck:
-            record_error(ErrorInfo(EC::RemoteFileExists, path, "", "AMSFTPClient::mkdir", "Path exists and is not a directory"));
+            error_info_buffer.push(ErrorInfo(EC::RemoteFileExists, path, "", "AMSFTPClient::mkdir", "Path exists and is not a directory"));
             return EC::RemoteFileExists;
         case EC::PathNotExist:
             break;
@@ -1619,17 +1313,14 @@ public:
 
         int rcr;
         {
-
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rcr = libssh2_sftp_mkdir_ex(amsession->sftp, path.c_str(), path.size(), 0740);
         }
         if (rcr != 0)
         {
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rc = get_sftp_last_error();
-            record_error(ErrorInfo(rc, path, "", "AMSFTPClient::mkdir", "Mkdir failed"));
-            if (rc != EC::PermissionDenied && rc != EC::PathNotExist)
-            {
-                pytrace(WARNING, "MkdirFailed", fmt::format("{}@{}", request.nickname, path), "Mkdir", get_sftp_error_msg());
-            }
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::mkdir", "Mkdir failed"));
             return rc;
         }
         return EC::Success;
@@ -1722,29 +1413,26 @@ public:
             }
             else
             {
-                record_error(ErrorInfo(EC::TargetNotAFile, path, "", "AMSFTPClient::rmfile", "Path is not a file"));
+                error_info_buffer.push(ErrorInfo(EC::TargetNotAFile, path, "", "AMSFTPClient::rmfile", "Path is not a file"));
                 return EC::TargetNotAFile;
             }
         }
         else
         {
-            record_error(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::rmfile", "Value Type Error"));
+            error_info_buffer.push(ErrorInfo(EC::UnknownError, path, "", "AMSFTPClient::rmfile", "Value Type Error"));
             return EC::UnknownError;
         }
 
         int rcr;
         {
-
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rcr = libssh2_sftp_unlink(amsession->sftp, path.c_str());
         }
         if (rcr != 0)
         {
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rc = get_sftp_last_error();
-            record_error(ErrorInfo(rc, path, "", "AMSFTPClient::rmfile", "Rmfile failed"));
-            if (rc != EC::PermissionDenied && rc != EC::PathNotExist)
-            {
-                pytrace(WARNING, "RmfileFailed", fmt::format("{}@{}", request.nickname, path), "Rmfile", get_sftp_error_msg());
-            }
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::rmfile", "Rmfile failed"));
             return rc;
         }
         return EC::Success;
@@ -1760,23 +1448,20 @@ public:
         case EC::FailedCheck:
             return EC::TargetNotADirectory;
         default:
-            record_error(ErrorInfo(rc, path, "", "AMSFTPClient::rmdir", "Path check failed"));
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::rmdir", "Path check failed"));
             return rc;
         }
 
         int rcr;
         {
-
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rcr = libssh2_sftp_rmdir(amsession->sftp, path.c_str());
         }
         if (rcr < 0)
         {
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rc = get_sftp_last_error();
-            record_error(ErrorInfo(rc, path, "", "AMSFTPClient::rmdir", "Rmdir failed"));
-            if (rc != EC::PermissionDenied && rc != EC::PathNotExist)
-            {
-                pytrace(WARNING, "RmdirFailed", fmt::format("{}@{}", request.nickname, path), "Rmdir", get_sftp_error_msg());
-            }
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::rmdir", "Rmdir failed"));
             return rc;
         }
         return EC::Success;
@@ -1796,7 +1481,7 @@ public:
             path_type = 0;
             break;
         default:
-            record_error(ErrorInfo(rc, path, "", "AMSFTPClient::rm", "path check failed"));
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::rm", "path check failed"));
             return rc;
         }
 
@@ -1833,7 +1518,7 @@ public:
         EC rc = exists(path);
         if (rc != EC::PassCheck)
         {
-            record_error(ErrorInfo(rc, path, trash_dir, "AMSFTPClient::saferm", "Src path not exists"));
+            error_info_buffer.push(ErrorInfo(rc, path, trash_dir, "AMSFTPClient::saferm", "Src path not exists"));
             return rc;
         }
         rc = is_dir(trash_dir);
@@ -1842,8 +1527,7 @@ public:
             rc = mkdirs(trash_dir);
             if (rc != EC::Success)
             {
-                pytrace(WARNING, "SafeRmFailed", fmt::format("{}@{}", request.nickname, path), "SafeRm", "Trash dir not exists");
-                record_error(ErrorInfo(rc, path, trash_dir, "AMSFTPClient::saferm", "Trash dir mkdir failed"));
+                error_info_buffer.push(ErrorInfo(rc, path, trash_dir, "AMSFTPClient::saferm", "Trash dir mkdir failed"));
                 return rc;
             }
         }
@@ -1867,13 +1551,14 @@ public:
         }
         int rcr;
         {
-
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rcr = libssh2_sftp_rename(amsession->sftp, path.c_str(), target_path.c_str());
         }
         if (rcr != 0)
         {
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rc = get_sftp_last_error();
-            record_error(ErrorInfo(rc, path, trash_dir, "AMSFTPClient::saferm", "Rename failed"));
+            error_info_buffer.push(ErrorInfo(rc, path, trash_dir, "AMSFTPClient::saferm", "Rename failed"));
             return rc;
         }
         return EC::Success;
@@ -1884,7 +1569,7 @@ public:
         EC rc = exists(src);
         if (rc != EC::PassCheck)
         {
-            record_error(ErrorInfo(rc, src, dst, "AMSFTPClient::move", "Src not exists"));
+            error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::move", "Src not exists"));
             return rc;
         }
 
@@ -1899,13 +1584,13 @@ public:
                 rc = mkdirs(dst_dir);
                 if (rc != EC::Success)
                 {
-                    record_error(ErrorInfo(rc, src, dst_dir, "AMSFTPClient::move", "Dst dir mkdir failed"));
+                    error_info_buffer.push(ErrorInfo(rc, src, dst_dir, "AMSFTPClient::move", "Dst dir mkdir failed"));
                     return rc;
                 }
             }
             else
             {
-                record_error(ErrorInfo(EC::ParentDirectoryNotExist, src, dst_dir, "AMSFTPClient::move", "Dst dir not exists"));
+                error_info_buffer.push(ErrorInfo(EC::ParentDirectoryNotExist, src, dst_dir, "AMSFTPClient::move", "Dst dir not exists"));
                 return EC::ParentDirectoryNotExist;
             }
         }
@@ -1913,25 +1598,22 @@ public:
         {
             if (!force_write)
             {
-                record_error(ErrorInfo(EC::TargetExists, src, dst_path, "AMSFTPClient::move", "Dst path already exists"));
+                error_info_buffer.push(ErrorInfo(EC::TargetExists, src, dst_path, "AMSFTPClient::move", "Dst path already exists"));
                 return EC::TargetExists;
             }
         }
 
         int rcr;
         {
-
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rcr = libssh2_sftp_rename_ex(amsession->sftp, src.c_str(), src.size(), dst_path.c_str(), dst_path.size(), force_write ? LIBSSH2_SFTP_RENAME_OVERWRITE : 0);
         }
 
         if (rcr != 0)
         {
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rc = get_sftp_last_error();
-            record_error(ErrorInfo(rc, src, dst_path, "AMSFTPClient::move", "Rename failed"));
-            if (rc != EC::PermissionDenied && rc != EC::PathNotExist && rc != EC::TargetExists)
-            {
-                pytrace(WARNING, "MoveFailed", fmt::format("{}@{}->{}", request.nickname, src, dst_path), "Move", get_sftp_error_msg());
-            }
+            error_info_buffer.push(ErrorInfo(rc, src, dst_path, "AMSFTPClient::move", "Rename failed"));
             return rc;
         }
 
@@ -1946,10 +1628,10 @@ public:
         case EC::PassCheck:
             break;
         case EC::FailedCheck:
-            record_error(ErrorInfo(rc, src, dst, "AMSFTPClient::copy", "Src not exists"));
+            error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::copy", "Src not exists"));
             return EC::PathNotExist;
         default:
-            record_error(ErrorInfo(rc, src, dst, "AMSFTPClient::copy", "Src check failed"));
+            error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::copy", "Src check failed"));
             return rc;
         }
 
@@ -1967,13 +1649,13 @@ public:
                 rc = mkdirs(dst);
                 if (rc != EC::Success)
                 {
-                    record_error(ErrorInfo(rc, src, dst, "AMSFTPClient::copy", "Dst dir mkdir failed"));
+                    error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::copy", "Dst dir mkdir failed"));
                     return rc;
                 }
             }
             else
             {
-                record_error(ErrorInfo(EC::ParentDirectoryNotExist, src, dst, "AMSFTPClient::copy", "Dst parent dir not exists"));
+                error_info_buffer.push(ErrorInfo(EC::ParentDirectoryNotExist, src, dst, "AMSFTPClient::copy", "Dst parent dir not exists"));
                 return EC::ParentDirectoryNotExist;
             }
         }
@@ -1982,7 +1664,7 @@ public:
 
         int rcr;
         {
-
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rcr = libssh2_channel_exec(amsession->channel, command.c_str());
         }
 
@@ -1990,13 +1672,13 @@ public:
         {
             int exit_code;
             {
-
+                std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
                 exit_code = libssh2_channel_get_exit_status(amsession->channel);
             }
             if (exit_code != 0)
             {
-                pytrace(WARNING, "CopyFailed", fmt::format("{}@{}->{}", request.nickname, src, dst), "Copy", "Copy cmd conducted failed");
-                record_error(ErrorInfo(get_session_last_error(), src, dst, "AMSFTPClient::copy", "Cmd exec failed"));
+                std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
+                error_info_buffer.push(ErrorInfo(get_session_last_error(), src, dst, "AMSFTPClient::copy", "Cmd exec failed"));
                 return EC::CopyError;
             }
         }
@@ -2009,7 +1691,7 @@ public:
         std::string dst_dir;
         if (rc != EC::PassCheck)
         {
-            record_error(ErrorInfo(rc, src, dst, "AMSFTPClient::rename", "Src not exists"));
+            error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::rename", "Src not exists"));
             return EC::PathNotExist;
         }
         rc = exists(dst);
@@ -2018,18 +1700,18 @@ public:
         case EC::PassCheck:
             if (!force_write)
             {
-                record_error(ErrorInfo(EC::TargetExists, src, dst, "AMSFTPClient::rename", "Dst exists"));
+                error_info_buffer.push(ErrorInfo(EC::TargetExists, src, dst, "AMSFTPClient::rename", "Dst exists"));
                 return EC::TargetExists;
             }
             break;
         case EC::FailedCheck:
             break;
         default:
-            record_error(ErrorInfo(rc, src, dst, "AMSFTPClient::rename", "Dst check failed"));
+            error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::rename", "Dst check failed"));
             return rc;
         }
         dst_dir = dirname(dst);
-
+        std::cout << "dst_dir: " << dst_dir << std::endl;
         rc = exists(dst_dir);
         if (rc != EC::PassCheck)
         {
@@ -2038,29 +1720,26 @@ public:
                 rc = mkdirs(dst_dir);
                 if (rc != EC::Success)
                 {
-                    record_error(ErrorInfo(rc, src, dst_dir, "AMSFTPClient::rename", "Dst dir mkdir failed"));
+                    error_info_buffer.push(ErrorInfo(rc, src, dst_dir, "AMSFTPClient::rename", "Dst dir mkdir failed"));
                     return rc;
                 }
             }
             else
             {
-                record_error(ErrorInfo(EC::ParentDirectoryNotExist, src, dst_dir, "AMSFTPClient::rename", "Dst dir not exists"));
+                error_info_buffer.push(ErrorInfo(EC::ParentDirectoryNotExist, src, dst_dir, "AMSFTPClient::rename", "Dst dir not exists"));
                 return EC::ParentDirectoryNotExist;
             }
         }
         int rcr;
         {
-
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rcr = libssh2_sftp_rename_ex(amsession->sftp, src.c_str(), src.size(), dst.c_str(), dst.size(), force_write ? LIBSSH2_SFTP_RENAME_OVERWRITE : 0);
         }
         if (rcr != 0)
         {
+            std::lock_guard<std::recursive_mutex> lock(amsession->r_mtx);
             rc = get_sftp_last_error();
-            record_error(ErrorInfo(rc, src, dst, "AMSFTPClient::rename", "Rename failed"));
-            if (rc != EC::PermissionDenied && rc != EC::PathNotExist && rc != EC::TargetExists)
-            {
-                pytrace(WARNING, "RenameFailed", fmt::format("{}@{}->{}", request.nickname, src, dst), "Rename", get_sftp_error_msg());
-            }
+            error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::rename", "Rename failed"));
             return rc;
         }
         return EC::Success;
@@ -2074,21 +1753,26 @@ public:
         rc = exists(path);
         if (rc != EC::PassCheck)
         {
-            record_error(ErrorInfo(rc, path, "", "AMSFTPClient::walk", "Path not exists"));
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::walk", "Path not exists"));
             return rc;
         }
         rc = is_dir(path);
         if (rc != EC::PassCheck)
         {
-            record_error(ErrorInfo(rc, path, "", "AMSFTPClient::walk", "Path is not a directory"));
+            error_info_buffer.push(ErrorInfo(rc, path, "", "AMSFTPClient::walk", "Path is not a directory"));
             return rc;
         }
         _walk(path, result);
         return result;
     }
 
+    EC upload(std::string src, std::string dst) {
+
+    };
+
     ErrorInfo get_last_error_info()
     {
+
         if (error_info_buffer.empty())
         {
             return ErrorInfo(EC::Success, "", "", "", "");
@@ -2113,37 +1797,30 @@ public:
 
         return this->trash_dir;
     }
-
-    std::string get_nickname()
-    {
-        return this->nickname;
-    }
 };
 
-class AMSFTPWorker : public AMSFTPClient
+class AMSFTPWorker
 {
 private:
     TransferCallback callback;
+    ConRequst src_request;
+    ConRequst dst_request;
+    AMSFTPClient *src_client = nullptr;
+    AMSFTPClient *dst_client = nullptr;
+    TASKS tasks;
     std::atomic<bool> is_terminate = false;
     std::atomic<bool> is_pause = false;
-    uint64_t current_size = 0;
-    uint64_t total_size = 100;
+    std::atomic<uint64_t> current_size = 0;
+    std::atomic<uint64_t> total_size = 100;
+
+    std::mutex mutex_c;
     std::string current_filename = "";
-    double cb_time = timenow();
-    BufferSet buffer_set = BufferSet();
-    uint64_t adjust_interval = 10;
+    double cb_time = std::chrono::duration<double>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
 
-    void reset()
-    {
-        cb_time = timenow();
-        current_size = 0;
-        total_size = 0;
-        current_filename = "";
-        is_terminate = false;
-        is_pause = false;
-    }
-
-    uint64_t calculate_buffer_size(uint64_t file_size, double speed)
+    uint64_t
+    calculate_buffer_size(uint64_t file_size, double speed)
     {
         double f_s = speed / 50;
         uint64_t speed_limit_uint = static_cast<uint64_t>(f_s);
@@ -2164,21 +1841,20 @@ private:
 
     EC Local2Remote(std::string src, std::string dst)
     {
-
+        std::lock_guard<std::recursive_mutex> lock(dst_client->amsession->r_mtx);
         TransferErrorCode rc_r = EC::Success;
         long rct;
         LIBSSH2_SFTP_HANDLE *sftpFile;
-        std::string error_msg = "Error to create FileMapper";
 
-        sftpFile = libssh2_sftp_open(amsession->sftp, dst.c_str(), LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
+        sftpFile = libssh2_sftp_open(dst_client->amsession->sftp, dst.c_str(), LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
 
         if (!sftpFile)
         {
-            rct = libssh2_sftp_last_error(amsession->sftp);
+            rct = libssh2_sftp_last_error(dst_client->amsession->sftp);
             if (rct == LIBSSH2_FX_NO_SUCH_FILE)
             {
-                libssh2_sftp_mkdir(amsession->sftp, dirname(dst).c_str(), 0744);
-                sftpFile = libssh2_sftp_open(amsession->sftp, dst.c_str(), LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
+                libssh2_sftp_mkdir(dst_client->amsession->sftp, dirname(dst).c_str(), 0744);
+                sftpFile = libssh2_sftp_open(dst_client->amsession->sftp, dst.c_str(), LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
                 if (!sftpFile)
                 {
                     return EC::RemoteFileOpenError;
@@ -2190,14 +1866,12 @@ private:
             }
         }
 
-        FileMapper l_file_m(Wstring(src), MapType::Read, error_msg);
+        FileMapper l_file_m(Wstring(src), MapType::Read);
         if (!l_file_m.file_ptr)
         {
             libssh2_sftp_close_handle(sftpFile);
-            record_error(ErrorInfo(EC::LocalFileMapError, src, "", "FileMapper", error_msg));
-            return EC::LocalFileMapError;
+            return dst_client->get_sftp_last_error();
         }
-
         double speed = AMGB * 1024;
         uint64_t buffer_size = calculate_buffer_size(l_file_m.file_size, speed);
         uint64_t offset = 0;
@@ -2244,7 +1918,7 @@ private:
                     cb_time = time_end;
                     {
                         py::gil_scoped_acquire acquire;
-                        callback.progress_cb(current_size, total_size);
+                        callback.progress_cb(current_size, callback.total_bytes);
                     }
                 }
 
@@ -2261,7 +1935,7 @@ private:
             }
             else
             {
-                rc_r = get_sftp_last_error();
+                rc_r = dst_client->get_sftp_last_error();
                 goto clean;
             }
         }
@@ -2275,12 +1949,10 @@ private:
 
     EC Remote2Local(std::string src, std::string dst)
     {
-
+        std::lock_guard<std::recursive_mutex> lock(src_client->amsession->r_mtx);
         TransferErrorCode rc_r = EC::Success;
         LIBSSH2_SFTP_HANDLE *sftpFile;
-        std::string error_msg = "Error to create FileMapper";
-
-        sftpFile = libssh2_sftp_open(amsession->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
+        sftpFile = libssh2_sftp_open(src_client->amsession->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
         if (!sftpFile)
         {
             return EC::RemoteFileOpenError;
@@ -2288,19 +1960,13 @@ private:
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         libssh2_sftp_fstat(sftpFile, &attrs);
         uint64_t file_size = attrs.filesize;
-        if (file_size == 0)
-        {
-            libssh2_sftp_close_handle(sftpFile);
-            return EC::PathNotExist;
-        }
 
-        lmkdirs(dirname(dst));
-        FileMapper l_file_m(Wstring(dst), MapType::Write, error_msg, file_size);
+        mkdirs(dirname(dst));
 
+        FileMapper l_file_m = FileMapper(Wstring(dst), MapType::Write, file_size);
         if (!l_file_m.file_ptr)
         {
             libssh2_sftp_close_handle(sftpFile);
-            record_error(ErrorInfo(EC::LocalFileMapError, dst, "", "FileMapper", error_msg));
             return EC::LocalFileMapError;
         }
 
@@ -2357,7 +2023,7 @@ private:
                     current_size += chunk_size;
                     {
                         py::gil_scoped_acquire acquire;
-                        callback.progress_cb(current_size, total_size);
+                        callback.progress_cb(current_size, callback.total_bytes);
                     }
                 }
                 speed_interval_cout++;
@@ -2368,7 +2034,7 @@ private:
             }
             else
             {
-                rc_r = get_sftp_last_error();
+                rc_r = src_client->get_sftp_last_error();
                 goto clean;
             }
         }
@@ -2381,28 +2047,30 @@ private:
         return rc_r;
     }
 
-    EC Remote2Remote(std::string src, std::string dst, std::shared_ptr<AMSFTPWorker> another_worker)
+    EC Remote2Remote(std::string src, std::string dst)
     {
+        std::lock_guard<std::recursive_mutex> lock_src(src_client->amsession->r_mtx);
+        std::lock_guard<std::recursive_mutex> lock_dst(dst_client->amsession->r_mtx);
         TransferErrorCode rc_final = EC::Success;
         long rct;
         LIBSSH2_SFTP_HANDLE *srcFile;
         LIBSSH2_SFTP_HANDLE *dstFile;
         char *buffer = nullptr;
-        srcFile = libssh2_sftp_open(amsession->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
+        srcFile = libssh2_sftp_open(src_client->amsession->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
 
-        dstFile = libssh2_sftp_open(another_worker->amsession->sftp, dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
+        dstFile = libssh2_sftp_open(dst_client->amsession->sftp, dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
 
         if (!srcFile)
         {
-            return get_sftp_last_error();
+            return src_client->get_sftp_last_error();
         }
         if (!dstFile)
         {
-            rct = libssh2_sftp_last_error(another_worker->amsession->sftp);
+            rct = libssh2_sftp_last_error(dst_client->amsession->sftp);
             if (rct == LIBSSH2_FX_NO_SUCH_FILE)
             {
-                libssh2_sftp_mkdir(another_worker->amsession->sftp, dirname(dst).c_str(), 0744);
-                dstFile = libssh2_sftp_open(another_worker->amsession->sftp, dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
+                libssh2_sftp_mkdir(dst_client->amsession->sftp, dirname(dst).c_str(), 0744);
+                dstFile = libssh2_sftp_open(dst_client->amsession->sftp, dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
                 if (!dstFile)
                 {
                     return EC::RemoteFileOpenError;
@@ -2451,7 +2119,7 @@ private:
                                  std::chrono::system_clock::now().time_since_epoch())
                                  .count();
             }
-            chunk_size = std::min<uint64_t>(buffer_size_ori, file_size - offset);
+            chunk_size = std::min<uint64_t>(AMMB, file_size - offset);
             local_read = 0;
             local_write = 0;
 
@@ -2468,7 +2136,7 @@ private:
                 }
                 else
                 {
-                    rc_final = cast_libssh2_error(libssh2_sftp_last_error(amsession->sftp));
+                    rc_final = cast_libssh2_error(libssh2_sftp_last_error(src_client->amsession->sftp));
                     goto clean;
                 }
             }
@@ -2504,7 +2172,7 @@ private:
                 }
                 else
                 {
-                    rc_final = cast_libssh2_error(libssh2_sftp_last_error(another_worker->amsession->sftp));
+                    rc_final = cast_libssh2_error(libssh2_sftp_last_error(dst_client->amsession->sftp));
                     goto clean;
                 }
             }
@@ -2530,7 +2198,7 @@ private:
                 current_size += rc_write;
                 {
                     py::gil_scoped_acquire acquire;
-                    callback.progress_cb(current_size, total_size);
+                    callback.progress_cb(current_size, callback.total_bytes);
                 }
             }
         }
@@ -2551,13 +2219,79 @@ private:
     }
 
 public:
+    uint64_t ID;
+    BufferSet buffer_set = BufferSet();
+    uint64_t adjust_interval = 10;
+
     ~AMSFTPWorker()
     {
+        if (src_client)
+        {
+            delete src_client;
+            src_client = nullptr;
+        }
+        if (dst_client)
+        {
+            delete dst_client;
+            dst_client = nullptr;
+        }
     }
 
-    AMSFTPWorker(std::vector<std::string> private_keys, ConRequst request, uint64_t error_info_buffer_size = 16)
-        : AMSFTPClient(request, private_keys, error_info_buffer_size)
+    AMSFTPWorker(uint64_t ID, std::vector<std::string> private_keys, TransferCallback callback, ConRequst src_request = ConRequst(), ConRequst dst_request = ConRequst())
+        : ID(ID), src_request(src_request), dst_request(dst_request), callback(callback), tasks(tasks)
     {
+        if (!src_request.hostname.empty())
+        {
+            this->src_client = new AMSFTPClient(src_request, private_keys);
+        }
+        if (!dst_request.hostname.empty())
+        {
+            this->dst_client = new AMSFTPClient(dst_request, private_keys);
+        }
+    }
+
+    EC init()
+    {
+        EC rc = EC::NoSFTPConnection;
+        if (src_client)
+        {
+            rc = src_client->init();
+            if (rc != EC::Success)
+            {
+                return rc;
+            }
+        }
+        if (dst_client)
+        {
+            rc = dst_client->init();
+            if (rc != EC::Success)
+            {
+                return rc;
+            }
+        }
+        return rc;
+    }
+
+    EC check_client()
+    {
+        EC rc = EC::ConnectionCheckFailed;
+        if (src_client)
+        {
+            rc = src_client->check();
+            if (rc != EC::Success)
+            {
+                return rc;
+            }
+        }
+        if (dst_client)
+        {
+            rc = dst_client->check();
+            if (rc != EC::Success)
+            {
+                return rc;
+            }
+        }
+        return rc;
     }
 
     void terminate()
@@ -2575,140 +2309,657 @@ public:
         is_pause = false;
     }
 
-    TR upload(TASKS tasks, TransferCallback cb_set = TransferCallback(), BufferSet buffer_set = BufferSet())
+    EC _transfer_file(std::string src, std::string dst)
     {
-
-        EC rc = check();
-        if (rc != EC::Success)
-        {
-            return rc;
-        }
-        reset();
-        this->callback = cb_set;
-        this->buffer_set = buffer_set;
-        total_size = std::accumulate(tasks.begin(), tasks.end(), 0, [](uint64_t sum, const TransferTask &task)
-                                     { return sum + task.size; });
-
-        TRM result = {};
-        for (auto &task : tasks)
-        {
-            current_filename = task.src;
-            if (callback.need_filename_cb)
-            {
-                py::gil_scoped_acquire acquire;
-                callback.filename_cb(current_filename);
-            }
-            result.push_back(std::pair(std::pair(task.src, task.dst), Local2Remote(task.src, task.dst)));
-            if (rc != EC::Success && callback.need_error_cb)
-            {
-                py::gil_scoped_acquire acquire;
-                callback.error_cb(current_filename, rc);
-            }
-        }
-        return result;
     }
 
-    TR download(TASKS tasks, TransferCallback cb_set = TransferCallback(), BufferSet buffer_set = BufferSet())
+    TRM transfer(TASKS tasks)
     {
-
-        EC rc = check();
-        if (rc != EC::Success)
-        {
-            return rc;
-        }
-
-        reset();
-        this->callback = cb_set;
-        this->buffer_set = buffer_set;
+        EC rc = check_client();
+        TRM result = {};
         total_size = std::accumulate(tasks.begin(), tasks.end(), 0, [](uint64_t sum, const TransferTask &task)
                                      { return sum + task.size; });
-
-        TRM result = {};
-
-        for (auto &task : tasks)
-        {
-            current_filename = task.src;
-            if (callback.need_filename_cb)
-            {
-                py::gil_scoped_acquire acquire;
-                callback.filename_cb(current_filename);
-            }
-            result.push_back(std::pair(std::pair(task.src, task.dst), Remote2Local(task.src, task.dst)));
-            if (rc != EC::Success && callback.need_error_cb)
-            {
-                py::gil_scoped_acquire acquire;
-                callback.error_cb(current_filename, rc);
-            }
-        }
-
-        return result;
-    }
-
-    TR toAnotherHost(TASKS tasks, std::shared_ptr<AMSFTPWorker> another_worker, TransferCallback cb_set = TransferCallback(), BufferSet buffer_set = BufferSet())
-    {
-
-        reset();
-        this->callback = cb_set;
-        this->buffer_set = buffer_set;
-        TRM result = {};
-        EC rc = check();
         if (rc != EC::Success)
         {
-            return rc;
+            result[""] = rc;
+            return result;
         }
-        rc = another_worker->check();
-        if (rc != EC::Success)
-        {
-            return rc;
-        }
-        total_size = std::accumulate(tasks.begin(), tasks.end(), 0, [](uint64_t sum, const TransferTask &task)
-                                     { return sum + task.size; });
-        for (auto &task : tasks)
-        {
-            current_filename = task.src;
 
-            if (callback.need_filename_cb)
+        if (!src_client && dst_client)
+        {
+
+            for (auto &task : tasks)
             {
-                py::gil_scoped_acquire acquire;
-                callback.filename_cb(current_filename);
+                current_filename = task.src;
+                if (callback.need_filename_cb)
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.filename_cb(current_filename);
+                }
+                EC our_i = Local2Remote(task.src, task.dst);
+                result[task.dst] = our_i;
+                if (our_i != EC::Success && callback.need_error_cb)
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.error_cb(current_filename, our_i);
+                }
             }
-            result.push_back(std::pair(std::pair(task.src, task.dst), Remote2Remote(task.src, task.dst, another_worker)));
-            if (rc != EC::Success && callback.need_error_cb)
+        }
+        else if (src_client && !dst_client)
+        {
+            for (auto &task : tasks)
             {
-                py::gil_scoped_acquire acquire;
-                callback.error_cb(current_filename, rc);
+                current_filename = task.src;
+                if (callback.need_filename_cb)
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.filename_cb(current_filename);
+                }
+                EC our_i = Remote2Local(task.src, task.dst);
+                result[task.dst] = our_i;
+                if (our_i != EC::Success && callback.need_error_cb)
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.error_cb(current_filename, our_i);
+                }
+            }
+        }
+        else if (src_client && dst_client)
+        {
+            for (auto &task : tasks)
+            {
+                current_filename = task.src;
+                if (callback.need_filename_cb)
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.filename_cb(current_filename);
+                }
+                EC our_i = Remote2Remote(task.src, task.dst);
+                result[task.dst] = our_i;
+                if (our_i != EC::Success && callback.need_error_cb)
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.error_cb(current_filename, our_i);
+                }
             }
         }
 
         return result;
     }
 
-    void SetWorkerPyTrace(py::object trace_cb)
+    void set_buffersize(BufferSet buffer_set)
     {
-        if (py::isinstance<py::function>(trace_cb))
+        this->buffer_set = buffer_set;
+    }
+
+    uint64_t GetID()
+    {
+        return this->ID;
+    }
+};
+
+class AMSFTPWorker : public AMSFTPClient
+{
+private:
+    TransferCallback callback;
+    std::atomic<bool> is_terminate = false;
+    std::atomic<bool> is_pause = false;
+    uint64_t current_size = 0;
+    uint64_t total_size = 100;
+    std::string current_filename = "";
+    double cb_time = std::chrono::duration<double>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
+
+    uint64_t calculate_buffer_size(uint64_t file_size, double speed)
+    {
+        double f_s = speed / 50;
+        uint64_t speed_limit_uint = static_cast<uint64_t>(f_s);
+        speed_limit_uint = (speed_limit_uint + 4096 - 1) / 4096 * 4096;
+        uint64_t buffer_size_out = 64 * AMKB;
+        for (auto &buffer_size : buffer_set.buffer_sizes)
         {
-            this->trace_cb = py::cast<py::function>(trace_cb);
-            this->is_trace = true;
+            if (file_size > buffer_size.threshold || file_size == buffer_size.threshold)
+            {
+                buffer_size_out = buffer_size.buffer;
+                break;
+            }
         }
-        else
+        buffer_size_out = buffer_size_out > speed_limit_uint ? speed_limit_uint : buffer_size_out;
+        buffer_size_out = buffer_size_out < buffer_set.min_buffer_size ? buffer_set.min_buffer_size : buffer_size_out;
+        return buffer_size_out;
+    }
+
+    EC Local2Remote(std::string src, std::string dst)
+    {
+        std::lock_guard<std::recursive_mutex> lock(dst_client->amsession->r_mtx);
+        TransferErrorCode rc_r = EC::Success;
+        long rct;
+        LIBSSH2_SFTP_HANDLE *sftpFile;
+
+        sftpFile = libssh2_sftp_open(dst_client->amsession->sftp, dst.c_str(), LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
+
+        if (!sftpFile)
         {
-            this->is_trace = false;
-            this->trace_cb = py::function();
+            rct = libssh2_sftp_last_error(dst_client->amsession->sftp);
+            if (rct == LIBSSH2_FX_NO_SUCH_FILE)
+            {
+                libssh2_sftp_mkdir(dst_client->amsession->sftp, dirname(dst).c_str(), 0744);
+                sftpFile = libssh2_sftp_open(dst_client->amsession->sftp, dst.c_str(), LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
+                if (!sftpFile)
+                {
+                    return EC::RemoteFileOpenError;
+                }
+            }
+            else
+            {
+                return EC::RemoteFileOpenError;
+            }
+        }
+
+        FileMapper l_file_m(Wstring(src), MapType::Read);
+        if (!l_file_m.file_ptr)
+        {
+            libssh2_sftp_close_handle(sftpFile);
+            return dst_client->get_sftp_last_error();
+        }
+        double speed = AMGB * 1024;
+        uint64_t buffer_size = calculate_buffer_size(l_file_m.file_size, speed);
+        uint64_t offset = 0;
+        uint64_t remaining = l_file_m.file_size;
+        double time_start = std::chrono::duration<double>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count();
+        double time_end = std::chrono::duration<double>(
+                              std::chrono::system_clock::now().time_since_epoch())
+                              .count();
+        uint64_t chunk_size = std::min<uint64_t>(buffer_size, remaining);
+        uint64_t speed_interval_cout = 0;
+        while (remaining > 0)
+        {
+            if (speed_interval_cout % adjust_interval == 0)
+            {
+                time_start = std::chrono::duration<double>(
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count();
+            }
+            chunk_size = std::min<uint64_t>(buffer_size, remaining);
+            long rc = libssh2_sftp_write(sftpFile, l_file_m.file_ptr + offset, chunk_size);
+            if (is_terminate.load())
+            {
+                rc_r = EC::Terminate;
+                goto clean;
+            }
+            while (is_pause.load() && !is_terminate.load())
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            }
+            if (rc > 0)
+            {
+                remaining -= rc;
+                offset += rc;
+                current_size += rc;
+                time_end = std::chrono::duration<double>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+
+                if (callback.need_progress_cb && ((time_end - cb_time) > callback.cb_interval_s))
+                {
+                    current_size += rc;
+                    cb_time = time_end;
+                    {
+                        py::gil_scoped_acquire acquire;
+                        callback.progress_cb(current_size, callback.total_bytes);
+                    }
+                }
+
+                if (speed_interval_cout % adjust_interval == 0)
+                {
+                    speed = static_cast<double>(rc) / (time_end - time_start > 0 ? time_end - time_start : 1E-7);
+                    buffer_size = calculate_buffer_size(remaining, speed);
+                }
+                speed_interval_cout++;
+            }
+            else if (rc == 0)
+            {
+                break;
+            }
+            else
+            {
+                rc_r = dst_client->get_sftp_last_error();
+                goto clean;
+            }
+        }
+    clean:
+        if (sftpFile)
+        {
+            libssh2_sftp_close_handle(sftpFile);
+        }
+        return rc_r;
+    }
+
+    EC Remote2Local(std::string src, std::string dst)
+    {
+        std::lock_guard<std::recursive_mutex> lock(src_client->amsession->r_mtx);
+        TransferErrorCode rc_r = EC::Success;
+        LIBSSH2_SFTP_HANDLE *sftpFile;
+        sftpFile = libssh2_sftp_open(src_client->amsession->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
+        if (!sftpFile)
+        {
+            return EC::RemoteFileOpenError;
+        }
+        LIBSSH2_SFTP_ATTRIBUTES attrs;
+        libssh2_sftp_fstat(sftpFile, &attrs);
+        uint64_t file_size = attrs.filesize;
+
+        mkdirs(dirname(dst));
+
+        FileMapper l_file_m = FileMapper(Wstring(dst), MapType::Write, file_size);
+        if (!l_file_m.file_ptr)
+        {
+            libssh2_sftp_close_handle(sftpFile);
+            return EC::LocalFileMapError;
+        }
+
+        double speed = 32 * AMGB;
+        uint64_t buffer_size = calculate_buffer_size(l_file_m.file_size, speed);
+        uint64_t offset = 0;
+
+        uint64_t chunk_size = 0;
+        uint64_t speed_interval_cout = 0;
+        double time_start = std::chrono::duration<double>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count();
+        double time_end = std::chrono::duration<double>(
+                              std::chrono::system_clock::now().time_since_epoch())
+                              .count();
+        double interval_time = 0.001;
+        while (offset < file_size)
+        {
+            if (speed_interval_cout % adjust_interval == 0)
+            {
+                time_start = std::chrono::duration<double>(
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count();
+            }
+
+            chunk_size = std::min<uint64_t>(buffer_size, file_size - offset);
+            long rc = libssh2_sftp_read(sftpFile, l_file_m.file_ptr + offset, chunk_size);
+            if (is_terminate.load())
+            {
+                rc_r = EC::Terminate;
+                goto clean;
+            }
+            while (is_pause.load() && !is_terminate.load())
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            }
+            if (rc > 0)
+            {
+                offset += rc;
+                current_size += rc;
+                time_end = std::chrono::duration<double>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+
+                if (speed_interval_cout % adjust_interval == 0)
+                {
+                    speed = static_cast<double>(rc) / (time_end - time_start > 0 ? time_end - time_start : 1E-7);
+                    buffer_size = calculate_buffer_size(file_size - offset, speed);
+                }
+
+                if (callback.need_progress_cb && (time_end - cb_time > callback.cb_interval_s))
+                {
+                    cb_time = time_end;
+                    current_size += chunk_size;
+                    {
+                        py::gil_scoped_acquire acquire;
+                        callback.progress_cb(current_size, callback.total_bytes);
+                    }
+                }
+                speed_interval_cout++;
+            }
+            else if (rc == 0)
+            {
+                break;
+            }
+            else
+            {
+                rc_r = src_client->get_sftp_last_error();
+                goto clean;
+            }
+        }
+
+    clean:
+        if (sftpFile)
+        {
+            libssh2_sftp_close_handle(sftpFile);
+        }
+        return rc_r;
+    }
+
+    EC Remote2Remote(std::string src, std::string dst)
+    {
+        std::lock_guard<std::recursive_mutex> lock_src(src_client->amsession->r_mtx);
+        std::lock_guard<std::recursive_mutex> lock_dst(dst_client->amsession->r_mtx);
+        TransferErrorCode rc_final = EC::Success;
+        long rct;
+        LIBSSH2_SFTP_HANDLE *srcFile;
+        LIBSSH2_SFTP_HANDLE *dstFile;
+        char *buffer = nullptr;
+        srcFile = libssh2_sftp_open(src_client->amsession->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
+
+        dstFile = libssh2_sftp_open(dst_client->amsession->sftp, dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
+
+        if (!srcFile)
+        {
+            return src_client->get_sftp_last_error();
+        }
+        if (!dstFile)
+        {
+            rct = libssh2_sftp_last_error(dst_client->amsession->sftp);
+            if (rct == LIBSSH2_FX_NO_SUCH_FILE)
+            {
+                libssh2_sftp_mkdir(dst_client->amsession->sftp, dirname(dst).c_str(), 0744);
+                dstFile = libssh2_sftp_open(dst_client->amsession->sftp, dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
+                if (!dstFile)
+                {
+                    return EC::RemoteFileOpenError;
+                }
+            }
+            else
+            {
+                return EC::RemoteFileOpenError;
+            }
+        }
+        LIBSSH2_SFTP_ATTRIBUTES attrs;
+        libssh2_sftp_fstat(srcFile, &attrs);
+        uint64_t file_size = attrs.filesize;
+
+        double speed = 32 * AMGB;
+        double speed_ori = 64 * AMMB;
+
+        uint64_t buffer_size_ori = calculate_buffer_size(file_size, speed);
+        uint64_t buffer_size = buffer_size_ori;
+        buffer = new char[buffer_size_ori];
+        uint64_t write_buffer = 0;
+        uint64_t offset = 0;
+
+        long rc_read = 0;
+        long rc_write = 0;
+
+        double time_start = std::chrono::duration<double>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count();
+        double time_middle = time_start;
+        double time_end = std::chrono::duration<double>(
+                              std::chrono::system_clock::now().time_since_epoch())
+                              .count();
+        double interval_time = 0;
+
+        uint64_t count = 0;
+        uint64_t local_write = 0;
+        uint64_t local_read = 0;
+        uint64_t chunk_size = 0;
+
+        while (offset < file_size)
+        {
+            if (count % adjust_interval == 0)
+            {
+                time_start = std::chrono::duration<double>(
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count();
+            }
+            chunk_size = std::min<uint64_t>(AMMB, file_size - offset);
+            local_read = 0;
+            local_write = 0;
+
+            while (local_read < chunk_size)
+            {
+                rc_read = libssh2_sftp_read(srcFile, buffer + local_read, chunk_size - local_read);
+                if (rc_read > 0)
+                {
+                    local_read += rc_read;
+                }
+                else if (rc_read == 0)
+                {
+                    break;
+                }
+                else
+                {
+                    rc_final = cast_libssh2_error(libssh2_sftp_last_error(src_client->amsession->sftp));
+                    goto clean;
+                }
+            }
+
+            if (is_terminate.load())
+            {
+                rc_final = EC::Terminate;
+                goto clean;
+            }
+
+            while (is_pause.load() && !is_terminate.load())
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            }
+
+            if (count % adjust_interval == 0)
+            {
+                time_middle = std::chrono::duration<double>(
+                                  std::chrono::system_clock::now().time_since_epoch())
+                                  .count();
+            }
+
+            while (local_write < chunk_size)
+            {
+                rc_write = libssh2_sftp_write(dstFile, buffer + local_write, chunk_size - local_write);
+                if (rc_write > 0)
+                {
+                    local_write += rc_write;
+                }
+                else if (rc_write == 0)
+                {
+                    break;
+                }
+                else
+                {
+                    rc_final = cast_libssh2_error(libssh2_sftp_last_error(dst_client->amsession->sftp));
+                    goto clean;
+                }
+            }
+
+            offset += chunk_size;
+            current_size += chunk_size;
+            time_end = std::chrono::duration<double>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count();
+            if (count % adjust_interval == 0)
+            {
+                interval_time = std::max<double>(time_end - time_middle, time_middle - time_start);
+                speed = (chunk_size / (interval_time > 0 ? interval_time : 1E-7) / AMMB) * 0.7 + speed_ori * 0.3;
+                speed_ori = speed;
+                buffer_size = calculate_buffer_size(file_size - offset, speed);
+                buffer_size = buffer_size > buffer_size_ori ? buffer_size_ori : buffer_size;
+            }
+            count++;
+
+            if (callback.need_progress_cb && (time_end - cb_time > callback.cb_interval_s))
+            {
+                cb_time = time_end;
+                current_size += rc_write;
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.progress_cb(current_size, callback.total_bytes);
+                }
+            }
+        }
+    clean:
+        if (srcFile)
+        {
+            libssh2_sftp_close_handle(srcFile);
+        }
+        if (dstFile)
+        {
+            libssh2_sftp_close_handle(dstFile);
+        }
+        if (buffer)
+        {
+            delete[] buffer;
+        }
+        return rc_final;
+    }
+
+public:
+    BufferSet buffer_set = BufferSet();
+    uint64_t adjust_interval = 10;
+
+    ~AMSFTPWorker()
+    {
+        if (src_client)
+        {
+            delete src_client;
+            src_client = nullptr;
+        }
+        if (dst_client)
+        {
+            delete dst_client;
+            dst_client = nullptr;
         }
     }
 
-    void SetSessionPyTrace(py::object trace_cb)
+    AMSFTPWorker(std::vector<std::string> private_keys, ConRequst request, uint64_t error_info_buffer_size = 16)
+        : AMSFTPClient(request, private_keys, error_info_buffer_size)
     {
-        if (py::isinstance<py::function>(trace_cb))
+    }
+
+    EC init()
+    {
+        return client->init();
+    }
+
+    EC check_client()
+    {
+        EC rc = EC::ConnectionCheckFailed;
+        if (src_client)
         {
-            this->amsession->trace_cb = py::cast<py::function>(trace_cb);
-            this->amsession->is_trace = true;
+            rc = src_client->check();
+            if (rc != EC::Success)
+            {
+                return rc;
+            }
         }
-        else
+        if (dst_client)
         {
-            this->amsession->is_trace = false;
-            this->amsession->trace_cb = py::function();
+            rc = dst_client->check();
+            if (rc != EC::Success)
+            {
+                return rc;
+            }
         }
+        return rc;
+    }
+
+    void terminate()
+    {
+        is_terminate = true;
+    }
+
+    void pause()
+    {
+        is_pause = true;
+    }
+
+    void resume()
+    {
+        is_pause = false;
+    }
+
+    EC _transfer_file(std::string src, std::string dst)
+    {
+    }
+
+    TRM transfer(TASKS tasks)
+    {
+        EC rc = check_client();
+        TRM result = {};
+        total_size = std::accumulate(tasks.begin(), tasks.end(), 0, [](uint64_t sum, const TransferTask &task)
+                                     { return sum + task.size; });
+        if (rc != EC::Success)
+        {
+            result[""] = rc;
+            return result;
+        }
+
+        if (!src_client && dst_client)
+        {
+
+            for (auto &task : tasks)
+            {
+                current_filename = task.src;
+                if (callback.need_filename_cb)
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.filename_cb(current_filename);
+                }
+                EC our_i = Local2Remote(task.src, task.dst);
+                result[task.dst] = our_i;
+                if (our_i != EC::Success && callback.need_error_cb)
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.error_cb(current_filename, our_i);
+                }
+            }
+        }
+        else if (src_client && !dst_client)
+        {
+            for (auto &task : tasks)
+            {
+                current_filename = task.src;
+                if (callback.need_filename_cb)
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.filename_cb(current_filename);
+                }
+                EC our_i = Remote2Local(task.src, task.dst);
+                result[task.dst] = our_i;
+                if (our_i != EC::Success && callback.need_error_cb)
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.error_cb(current_filename, our_i);
+                }
+            }
+        }
+        else if (src_client && dst_client)
+        {
+            for (auto &task : tasks)
+            {
+                current_filename = task.src;
+                if (callback.need_filename_cb)
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.filename_cb(current_filename);
+                }
+                EC our_i = Remote2Remote(task.src, task.dst);
+                result[task.dst] = our_i;
+                if (our_i != EC::Success && callback.need_error_cb)
+                {
+                    py::gil_scoped_acquire acquire;
+                    callback.error_cb(current_filename, our_i);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    void set_buffersize(BufferSet buffer_set)
+    {
+        this->buffer_set = buffer_set;
+    }
+
+    std::string GetNickname()
+    {
+        return this->nickname;
     }
 };
 
@@ -2810,8 +3061,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("SYMLINK", PathType::SYMLINK);
 
     py::class_<ConRequst>(m, "ConRequst")
-        .def(py::init<std::string, std::string, std::string, std::string, int, bool, size_t, std::string>(), py::arg("nickname"), py::arg("hostname"), py::arg("username"), py::arg("password"), py::arg("port"), py::arg("compression"), py::arg("timeout_s") = 3, py::arg("trash_dir") = "")
-        .def_readwrite("nickname", &ConRequst::nickname)
+        .def(py::init<std::string, std::string, std::string, int, bool, size_t, std::string>(), py::arg("hostname"), py::arg("username"), py::arg("password"), py::arg("port"), py::arg("compression"), py::arg("timeout_s") = 3, py::arg("trash_dir") = "")
         .def_readwrite("hostname", &ConRequst::hostname)
         .def_readwrite("username", &ConRequst::username)
         .def_readwrite("password", &ConRequst::password)
@@ -2821,24 +3071,20 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("trash_dir", &ConRequst::trash_dir);
 
     py::class_<TransferCallback>(m, "TransferCallback")
-        .def(py::init<float, py::object, py::object, py::object>(),
-             py::arg("cb_interval_s") = 0.5,
-             py::arg("error_cb") = py::none(),
-             py::arg("progress_cb") = py::none(),
-             py::arg("filename_cb") = py::none())
+        .def(py::init<py::function, py::function, py::function, float, uint64_t, bool, bool, bool>(), py::arg("error_cb"), py::arg("progress_cb"), py::arg("filename_cb"), py::arg("cb_interval_s"), py::arg("total_bytes"), py::arg("need_error_cb"), py::arg("need_progress_cb"), py::arg("need_filename_cb"))
         .def_readwrite("error_cb", &TransferCallback::error_cb)
         .def_readwrite("progress_cb", &TransferCallback::progress_cb)
         .def_readwrite("filename_cb", &TransferCallback::filename_cb)
         .def_readwrite("cb_interval_s", &TransferCallback::cb_interval_s)
+        .def_readwrite("total_bytes", &TransferCallback::total_bytes)
         .def_readwrite("need_error_cb", &TransferCallback::need_error_cb)
         .def_readwrite("need_progress_cb", &TransferCallback::need_progress_cb)
         .def_readwrite("need_filename_cb", &TransferCallback::need_filename_cb);
 
     py::class_<TransferTask>(m, "TransferTask")
-        .def(py::init<std::string, std::string, uint64_t>(), py::arg("src"), py::arg("dst"), py::arg("size"))
+        .def(py::init<std::string, std::string>(), py::arg("src"), py::arg("dst"))
         .def_readwrite("src", &TransferTask::src)
-        .def_readwrite("dst", &TransferTask::dst)
-        .def_readwrite("size", &TransferTask::size);
+        .def_readwrite("dst", &TransferTask::dst);
 
     py::class_<PathInfo>(m, "PathInfo")
         .def(py::init<std::string, std::string, std::string, uint64_t, uint64_t, uint64_t, PathType>(), py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("size"), py::arg("atime"), py::arg("mtime"), py::arg("path_type"))
@@ -2856,9 +3102,15 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("buffer", &BufferSizePair::buffer);
 
     py::class_<BufferSet>(m, "BufferSet")
-        .def(py::init<std::vector<BufferSizePair>, uint64_t>(),
-             py::arg("buffer_sizes") = std::vector<BufferSizePair>(),
-             py::arg("min_buffer_size") = 64 * AMKB);
+        .def(py::init<std::vector<BufferSizePair>, uint64_t>(), py::arg("buffer_sizes"), py::arg("min_buffer_size"));
+
+    py::class_<AMSFTPWorker>(m, "AMSFTPWorker")
+        .def(py::init<uint64_t, std::vector<std::string>, TransferCallback, TASKS, ConRequst, ConRequst>(), py::arg("ID"), py::arg("private_keys"), py::arg("callback"), py::arg("tasks"), py::arg("src_request") = ConRequst(), py::arg("dst_request") = ConRequst())
+        .def("set_buffersize", &AMSFTPWorker::set_buffersize, py::arg("buffer_set"))
+        .def("terminate", &AMSFTPWorker::terminate)
+        .def("pause", &AMSFTPWorker::pause)
+        .def("resume", &AMSFTPWorker::resume)
+        .def("GetID", &AMSFTPWorker::GetID);
 
     py::class_<ErrorInfo>(m, "ErrorInfo")
         .def(py::init<TransferErrorCode, std::string, std::string, std::string, std::string>(), py::arg("error_code"), py::arg("src"), py::arg("dst"), py::arg("function_name"), py::arg("msg"))
@@ -2868,14 +3120,13 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("function_name", &ErrorInfo::function_name)
         .def_readwrite("msg", &ErrorInfo::msg);
 
-    py::class_<AMSFTPWorker, std::shared_ptr<AMSFTPWorker>>(m, "AMSFTPWorker")
-        .def(py::init<std::vector<std::string>, ConRequst, uint64_t>(), py::arg("private_keys"), py::arg("request"), py::arg("error_info_buffer_size") = 10)
+    py::class_<AMSFTPClient>(m, "AMSFTPClient")
+        .def(py::init<ConRequst, std::vector<std::string>>(), py::arg("request"), py::arg("private_keys"))
         .def("check", &AMSFTPClient::check)
         .def("reconnect", &AMSFTPClient::reconnect)
         .def("ensure", &AMSFTPClient::ensure)
         .def("ensure_trash_dir", &AMSFTPClient::ensure_trash_dir)
         .def("init", &AMSFTPClient::init)
-        .def("get_size", &AMSFTPClient::get_size, py::arg("path"), py::arg("exclude_dir") = false, py::arg("exclude_symlink") = false)
         .def("stat", &AMSFTPClient::stat, py::arg("path"))
         .def("exists", &AMSFTPClient::exists, py::arg("path"))
         .def("is_file", &AMSFTPClient::is_file, py::arg("path"))
@@ -2895,12 +3146,5 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("get_last_error_info", &AMSFTPClient::get_last_error_info)
         .def("get_all_error_info", &AMSFTPClient::get_all_error_info)
         .def("set_trash_dir", &AMSFTPClient::set_trash_dir, py::arg("trash_dir"))
-        .def("get_trash_dir", &AMSFTPClient::get_trash_dir)
-        .def("get_nickname", &AMSFTPClient::get_nickname)
-        .def("terminate", &AMSFTPWorker::terminate)
-        .def("pause", &AMSFTPWorker::pause)
-        .def("resume", &AMSFTPWorker::resume)
-        .def("upload", &AMSFTPWorker::upload, py::arg("tasks"), py::arg("cb_set") = TransferCallback(), py::arg("buffer_set") = BufferSet())
-        .def("download", &AMSFTPWorker::download, py::arg("tasks"), py::arg("cb_set") = TransferCallback(), py::arg("buffer_set") = BufferSet())
-        .def("toAnotherHost", &AMSFTPWorker::toAnotherHost, py::arg("tasks"), py::arg("another_worker"), py::arg("cb_set") = TransferCallback(), py::arg("buffer_set") = BufferSet());
+        .def("get_trash_dir", &AMSFTPClient::get_trash_dir);
 }
