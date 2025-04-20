@@ -1,5 +1,8 @@
 {
     "files.associations": {
+        "*.sqlbook": "sql",
+        "*.ndjson": "jsonl",
+        "*.dbclient-js": "javascript",
         "iostream": "cpp",
         "array": "cpp",
         "atomic": "cpp",
@@ -90,7 +93,10 @@
         "chrono": "cpp",
         "shared_mutex": "cpp",
         "filesystem": "cpp",
-        "coroutine": "cpp"
+        "coroutine": "cpp",
+        "span": "cpp",
+        "bitset": "cpp",
+        "ranges": "cpp"
     },
     "cmake.ignoreCMakeListsMissing": true
 }

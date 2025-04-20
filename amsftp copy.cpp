@@ -30,7 +30,7 @@ constexpr uint64_t AMKB = 1024;
 constexpr uint64_t AMMB = 1024 * 1024;
 constexpr uint64_t AMGB = 1024 * 1024 * 1024;
 
-std::wstring Wstring(const std::string &narrowStr)
+std::wstring Wstring(const std::wstring &narrowStr)
 {
     int length = MultiByteToWideChar(CP_UTF8, 0, narrowStr.c_str(), -1, nullptr, 0);
     std::wstring wideStr(length, 0);
@@ -38,7 +38,7 @@ std::wstring Wstring(const std::string &narrowStr)
     return wideStr;
 }
 
-std::string dirname(const std::string &path)
+std::wstring dirname(const std::wstring &path)
 {
     fs::path p(path);
     if (p.parent_path().empty())
@@ -48,13 +48,13 @@ std::string dirname(const std::string &path)
     return p.parent_path().string();
 }
 
-std::string basename(const std::string &path)
+std::wstring basename(const std::wstring &path)
 {
     fs::path p(path);
     return p.filename().string();
 }
 
-void mkdirs(const std::string &path)
+void mkdirs(const std::wstring &path)
 {
     try
     {
@@ -69,16 +69,16 @@ void mkdirs(const std::string &path)
 }
 
 template <typename... Args>
-std::string join_path(Args &&...args)
+std::wstring join_path(Args &&...args)
 {
     namespace fs = std::filesystem;
 
-    std::vector<std::string> segments;
+    std::vector<std::wstring> segments;
     fs::path combined;
 
     auto process_arg = [&](auto &&arg)
     {
-        std::string s = std::forward<decltype(arg)>(arg);
+        std::wstring s = std::forward<decltype(arg)>(arg);
         if (s.empty())
         {
             return;
@@ -216,17 +216,17 @@ enum class MapType
 
 struct ConRequst
 {
-    std::string nickname;
-    std::string hostname;
-    std::string username;
-    std::string password;
+    std::wstring nickname;
+    std::wstring hostname;
+    std::wstring username;
+    std::wstring password;
     bool compression;
     int port;
     size_t timeout_s;
-    std::string trash_dir = "";
+    std::wstring trash_dir = "";
     ConRequst()
         : nickname(""), hostname(""), username(""), password(""), port(22), compression(false), timeout_s(3), trash_dir("") {}
-    ConRequst(std::string nickname, std::string hostname, std::string username, std::string password, int port, bool compression, size_t timeout_s = 3, std::string trash_dir = "")
+    ConRequst(std::wstring nickname, std::wstring hostname, std::wstring username, std::wstring password, int port, bool compression, size_t timeout_s = 3, std::wstring trash_dir = "")
         : nickname(nickname), hostname(hostname), username(username), password(password), port(port), compression(compression), timeout_s(timeout_s), trash_dir(trash_dir) {}
 };
 
@@ -247,25 +247,25 @@ struct TransferCallback
 
 struct TransferTask
 {
-    std::string src;
-    std::string dst;
+    std::wstring src;
+    std::wstring dst;
     uint64_t size;
-    TransferTask(std::string src, std::string dst, uint64_t size)
+    TransferTask(std::wstring src, std::wstring dst, uint64_t size)
         : src(src), dst(dst), size(size) {}
 };
 
 struct PathInfo
 {
-    std::string name;
-    std::string path;
-    std::string dir;
+    std::wstring name;
+    std::wstring path;
+    std::wstring dir;
     uint64_t size = -1;
     uint64_t atime = -1;
     uint64_t mtime = -1;
     PathType path_type = PathType::FILE;
     PathInfo()
         : name(""), path(""), dir(""), size(-1), atime(-1), mtime(-1), path_type(PathType::FILE) {}
-    PathInfo(std::string name, std::string path, std::string dir, uint64_t size, uint64_t atime, uint64_t mtime, PathType path_type)
+    PathInfo(std::wstring name, std::wstring path, std::wstring dir, uint64_t size, uint64_t atime, uint64_t mtime, PathType path_type)
         : name(name), path(path), dir(dir), size(size), atime(atime), mtime(mtime), path_type(path_type) {}
 };
 
@@ -373,18 +373,18 @@ public:
 struct ErrorInfo
 {
     TransferErrorCode error_code;
-    std::string src;
-    std::string dst;
-    std::string function_name;
-    std::string msg;
+    std::wstring src;
+    std::wstring dst;
+    std::wstring function_name;
+    std::wstring msg;
 
     ErrorInfo()
         : error_code(TransferErrorCode::UnknownError), src(""), dst(""), function_name(""), msg("") {}
 
-    ErrorInfo(TransferErrorCode error_code, std::string src, std::string dst, std::string function_name, std::string msg)
+    ErrorInfo(TransferErrorCode error_code, std::wstring src, std::wstring dst, std::wstring function_name, std::wstring msg)
         : error_code(error_code), src(src), dst(dst), function_name(function_name), msg(msg) {}
 
-    std::string toString()
+    std::wstring toString()
     {
         return "ErrorInfo(error_code=" + std::to_string(static_cast<int>(error_code)) + ", src=" + src + ", dst=" + dst + ", function_name=" + function_name + ", msg=" + msg + ")";
     }
@@ -405,20 +405,20 @@ struct TransferContext
     TransferContext(size_t buffer_size) : buf_a(std::make_unique<char[]>(buffer_size)),
                                           buf_b(std::make_unique<char[]>(buffer_size)) {}
 };
-using result_map = std::unordered_map<std::string, TransferErrorCode>;
+using result_map = std::unordered_map<std::wstring, TransferErrorCode>;
 using TASKS = std::vector<TransferTask>;
 using int_ptr = std::shared_ptr<uint64_t>;
 using safe_int_ptr = std::shared_ptr<std::atomic<uint64_t>>;
 using EC = TransferErrorCode;
-using TRM = std::unordered_map<std::string, TransferErrorCode>;
+using TRM = std::unordered_map<std::wstring, TransferErrorCode>;
 using TR = std::variant<TRM, EC>;
 using SR = std::variant<PathInfo, EC>;
 using LR = std::variant<std::vector<PathInfo>, EC>;
 using WRV = std::vector<PathInfo>;
 using WR = std::variant<WRV, EC>;
-using ED = std::pair<EC, std::string>;
+using ED = std::pair<EC, std::wstring>;
 
-void _walk(std::string path, WRV &result)
+void _walk(std::wstring path, WRV &result)
 {
     fs::path p(path);
     fs::file_status status;
@@ -434,15 +434,15 @@ void _walk(std::string path, WRV &result)
     {
         return;
     }
-    std::string filename = p.filename().string();
-    std::string dir = p.parent_path().string();
+    std::wstring filename = p.filename().string();
+    std::wstring dir = p.parent_path().string();
     uint64_t size = fs::file_size(p);
     auto ftime = fs::last_write_time(p);
     auto duration = ftime.time_since_epoch();
     uint64_t atime = std::chrono::duration_cast<std::chrono::seconds>(duration).count();
     uint64_t mtime = atime;
-    std::vector<std::string> subdirs = {};
-    std::vector<std::string> files = {};
+    std::vector<std::wstring> subdirs = {};
+    std::vector<std::wstring> files = {};
     switch (status.type())
     {
     case fs::file_type::directory:
@@ -478,7 +478,7 @@ void _walk(std::string path, WRV &result)
     }
 }
 
-WRV local_walk(std::string path)
+WRV local_walk(std::wstring path)
 {
     std::vector<PathInfo> result = {};
 
@@ -645,7 +645,7 @@ public:
     std::recursive_mutex r_mtx;
     LIBSSH2_SESSION *session;
     LIBSSH2_SFTP *sftp;
-    std::vector<std::string> private_keys;
+    std::vector<std::wstring> private_keys;
     ConRequst request;
     SOCKET sock = INVALID_SOCKET;
     LIBSSH2_CHANNEL *channel = nullptr;
@@ -770,7 +770,7 @@ public:
                 return TransferErrorCode::ChannelCreateError;
             }
             char path_t[1024];
-            std::string trash_dir_t = "";
+            std::wstring trash_dir_t = "";
 
             if (request.trash_dir.empty())
             {
@@ -785,7 +785,7 @@ public:
                 }
                 else
                 {
-                    trash_dir_t = join_path(std::string(path_t), ".amsftp_trash");
+                    trash_dir_t = join_path(std::wstring(path_t), ".amsftp_trash");
                 }
                 request.trash_dir = trash_dir_t;
             }
@@ -806,7 +806,7 @@ public:
         }
 
         LIBSSH2_SFTP_ATTRIBUTES attrs;
-        std::string test_path = "/amsftp_test/sample";
+        std::wstring test_path = "/amsftp_test/sample";
         int rct;
         {
             std::lock_guard<std::recursive_mutex> lock(r_mtx);
@@ -867,7 +867,7 @@ public:
         this->private_keys = {};
     }
 
-    AMSession(ConRequst request, std::vector<std::string> private_keys)
+    AMSession(ConRequst request, std::vector<std::wstring> private_keys)
         : request(request), private_keys(private_keys)
     {
     }
@@ -881,10 +881,10 @@ public:
 class AMSFTPClient
 {
 private:
-    std::vector<std::string> private_keys;
+    std::vector<std::wstring> private_keys;
     CircularBuffer error_info_buffer;
 
-    PathInfo format_stat(std::string path, LIBSSH2_SFTP_ATTRIBUTES &attrs)
+    PathInfo format_stat(std::wstring path, LIBSSH2_SFTP_ATTRIBUTES &attrs)
     {
         PathInfo info;
         info.path = path;
@@ -921,7 +921,7 @@ private:
         return info;
     }
 
-    void _walk(std::string path, WRV &result)
+    void _walk(std::wstring path, WRV &result)
     {
         LR list = listdir(path);
         std::vector<PathInfo> list_info = {};
@@ -966,10 +966,10 @@ private:
     }
 
 public:
-    std::string nickname;
+    std::wstring nickname;
     ConRequst request;
     AMSession *amsession;
-    std::string trash_dir;
+    std::wstring trash_dir;
     EC get_session_last_error()
     {
 
@@ -987,7 +987,7 @@ public:
         amsession = nullptr;
     }
 
-    AMSFTPClient(ConRequst request, std::vector<std::string> private_keys, size_t error_info_buffer_size = 10)
+    AMSFTPClient(ConRequst request, std::vector<std::wstring> private_keys, size_t error_info_buffer_size = 10)
         : request(request), private_keys(private_keys)
     {
         this->amsession = new AMSession(request, private_keys);
@@ -1098,7 +1098,7 @@ public:
         return rc;
     }
 
-    SR stat(std::string path)
+    SR stat(std::wstring path)
     {
 
         LIBSSH2_SFTP_ATTRIBUTES attrs;
@@ -1118,7 +1118,7 @@ public:
         return format_stat(path, attrs);
     }
 
-    EC exists(std::string path)
+    EC exists(std::wstring path)
     {
 
         SR info = stat(path);
@@ -1140,7 +1140,7 @@ public:
         return EC::UnknownError;
     }
 
-    EC is_file(std::string path)
+    EC is_file(std::wstring path)
     {
 
         SR info = stat(path);
@@ -1158,7 +1158,7 @@ public:
         return EC::UnknownError;
     }
 
-    EC is_dir(std::string path)
+    EC is_dir(std::wstring path)
     {
 
         SR info = stat(path);
@@ -1176,7 +1176,7 @@ public:
         return EC::UnknownError;
     }
 
-    EC is_symlink(std::string path)
+    EC is_symlink(std::wstring path)
     {
 
         SR info = stat(path);
@@ -1194,16 +1194,16 @@ public:
         return EC::UnknownError;
     }
 
-    LR listdir(std::string path)
+    LR listdir(std::wstring path)
     {
 
         std::vector<PathInfo> file_list = {};
         EC rc = is_dir(path);
-        std::string normalized_path = path;
+        std::wstring normalized_path = path;
         LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
         LIBSSH2_SFTP_ATTRIBUTES attrs;
-        std::string name;
-        std::string path_i;
+        std::wstring name;
+        std::wstring path_i;
         const size_t buffer_size = 4096;
         std::vector<char> filename_buffer(buffer_size);
         int rct;
@@ -1293,7 +1293,7 @@ public:
         }
     }
 
-    EC mkdir(std::string path)
+    EC mkdir(std::wstring path)
     {
 
         EC rc = is_dir(path);
@@ -1326,7 +1326,7 @@ public:
         return EC::Success;
     }
 
-    EC mkdirs(std::string path)
+    EC mkdirs(std::wstring path)
     {
 
         if (path.empty())
@@ -1336,12 +1336,12 @@ public:
 
         std::replace(path.begin(), path.end(), '\\', '/');
 
-        std::vector<std::string> parts;
+        std::vector<std::wstring> parts;
         size_t start = 0;
         size_t end = 0;
 
         bool is_absolute = (path[0] == '/');
-        std::string root;
+        std::wstring root;
 
         if (is_absolute)
         {
@@ -1358,19 +1358,19 @@ public:
         while (start < path.size())
         {
             end = path.find('/', start);
-            if (end == std::string::npos)
+            if (end == std::wstring::npos)
             {
                 end = path.size();
             }
             if (end != start)
             {
-                std::string part = path.substr(start, end - start);
+                std::wstring part = path.substr(start, end - start);
                 parts.push_back(part);
             }
             start = end + 1;
         }
 
-        std::string current_path = root;
+        std::wstring current_path = root;
         for (const auto &part : parts)
         {
             if (current_path.empty())
@@ -1397,7 +1397,7 @@ public:
         return EC::Success;
     }
 
-    EC rmfile(std::string path)
+    EC rmfile(std::wstring path)
     {
 
         SR info = stat(path);
@@ -1438,7 +1438,7 @@ public:
         return EC::Success;
     }
 
-    EC rmdir(std::string path)
+    EC rmdir(std::wstring path)
     {
         EC rc = is_dir(path);
         switch (rc)
@@ -1467,7 +1467,7 @@ public:
         return EC::Success;
     }
 
-    EC rm(std::string path)
+    EC rm(std::wstring path)
     {
 
         EC rc = is_dir(path);
@@ -1513,7 +1513,7 @@ public:
         }
     }
 
-    EC saferm(std::string path)
+    EC saferm(std::wstring path)
     {
         EC rc = exists(path);
         if (rc != EC::PassCheck)
@@ -1531,12 +1531,12 @@ public:
                 return rc;
             }
         }
-        std::string base = basename(path);
-        std::string target_path;
-        std::string base_name = base;
-        std::string base_ext = "";
+        std::wstring base = basename(path);
+        std::wstring target_path;
+        std::wstring base_name = base;
+        std::wstring base_ext = "";
         size_t dot_pos = base.find_last_of('.');
-        if (dot_pos != std::string::npos)
+        if (dot_pos != std::wstring::npos)
         {
             base_name = base.substr(0, dot_pos);
             base_ext = base.substr(dot_pos);
@@ -1564,7 +1564,7 @@ public:
         return EC::Success;
     }
 
-    EC move(std::string src, std::string dst, bool need_mkdir = false, bool force_write = false)
+    EC move(std::wstring src, std::wstring dst, bool need_mkdir = false, bool force_write = false)
     {
         EC rc = exists(src);
         if (rc != EC::PassCheck)
@@ -1573,9 +1573,9 @@ public:
             return rc;
         }
 
-        std::string src_base = basename(src);
-        std::string dst_dir = dst;
-        std::string dst_path = join_path(dst_dir, src_base);
+        std::wstring src_base = basename(src);
+        std::wstring dst_dir = dst;
+        std::wstring dst_path = join_path(dst_dir, src_base);
         rc = exists(dst_dir);
         if (rc != EC::PassCheck)
         {
@@ -1620,7 +1620,7 @@ public:
         return EC::Success;
     };
 
-    EC copy(std::string src, std::string dst, bool need_mkdir = false)
+    EC copy(std::wstring src, std::wstring dst, bool need_mkdir = false)
     {
         EC rc = exists(src);
         switch (rc)
@@ -1660,7 +1660,7 @@ public:
             }
         }
 
-        std::string command = "cp -r \"" + src + "\" \"" + dst + "\"";
+        std::wstring command = "cp -r \"" + src + "\" \"" + dst + "\"";
 
         int rcr;
         {
@@ -1685,10 +1685,10 @@ public:
         return EC::Success;
     };
 
-    EC rename(std::string src, std::string dst, bool need_mkdir = false, bool force_write = false)
+    EC rename(std::wstring src, std::wstring dst, bool need_mkdir = false, bool force_write = false)
     {
         EC rc = exists(src);
-        std::string dst_dir;
+        std::wstring dst_dir;
         if (rc != EC::PassCheck)
         {
             error_info_buffer.push(ErrorInfo(rc, src, dst, "AMSFTPClient::rename", "Src not exists"));
@@ -1745,7 +1745,7 @@ public:
         return EC::Success;
     }
 
-    WR walk(std::string path)
+    WR walk(std::wstring path)
     {
         // get all files and deepest folders
         WRV result = {};
@@ -1766,7 +1766,7 @@ public:
         return result;
     }
 
-    EC upload(std::string src, std::string dst) {
+    EC upload(std::wstring src, std::wstring dst) {
 
     };
 
@@ -1786,13 +1786,13 @@ public:
         return error_info_buffer.toVector();
     }
 
-    void set_trash_dir(std::string trash_dir)
+    void set_trash_dir(std::wstring trash_dir)
     {
 
         this->trash_dir = trash_dir;
     }
 
-    std::string get_trash_dir()
+    std::wstring get_trash_dir()
     {
 
         return this->trash_dir;
@@ -1814,7 +1814,7 @@ private:
     std::atomic<uint64_t> total_size = 100;
 
     std::mutex mutex_c;
-    std::string current_filename = "";
+    std::wstring current_filename = "";
     double cb_time = std::chrono::duration<double>(
                          std::chrono::system_clock::now().time_since_epoch())
                          .count();
@@ -1839,7 +1839,7 @@ private:
         return buffer_size_out;
     }
 
-    EC Local2Remote(std::string src, std::string dst)
+    EC Local2Remote(std::wstring src, std::wstring dst)
     {
         std::lock_guard<std::recursive_mutex> lock(dst_client->amsession->r_mtx);
         TransferErrorCode rc_r = EC::Success;
@@ -1947,7 +1947,7 @@ private:
         return rc_r;
     }
 
-    EC Remote2Local(std::string src, std::string dst)
+    EC Remote2Local(std::wstring src, std::wstring dst)
     {
         std::lock_guard<std::recursive_mutex> lock(src_client->amsession->r_mtx);
         TransferErrorCode rc_r = EC::Success;
@@ -2047,7 +2047,7 @@ private:
         return rc_r;
     }
 
-    EC Remote2Remote(std::string src, std::string dst)
+    EC Remote2Remote(std::wstring src, std::wstring dst)
     {
         std::lock_guard<std::recursive_mutex> lock_src(src_client->amsession->r_mtx);
         std::lock_guard<std::recursive_mutex> lock_dst(dst_client->amsession->r_mtx);
@@ -2237,7 +2237,7 @@ public:
         }
     }
 
-    AMSFTPWorker(uint64_t ID, std::vector<std::string> private_keys, TransferCallback callback, ConRequst src_request = ConRequst(), ConRequst dst_request = ConRequst())
+    AMSFTPWorker(uint64_t ID, std::vector<std::wstring> private_keys, TransferCallback callback, ConRequst src_request = ConRequst(), ConRequst dst_request = ConRequst())
         : ID(ID), src_request(src_request), dst_request(dst_request), callback(callback), tasks(tasks)
     {
         if (!src_request.hostname.empty())
@@ -2309,7 +2309,7 @@ public:
         is_pause = false;
     }
 
-    EC _transfer_file(std::string src, std::string dst)
+    EC _transfer_file(std::wstring src, std::wstring dst)
     {
     }
 
@@ -2406,7 +2406,7 @@ private:
     std::atomic<bool> is_pause = false;
     uint64_t current_size = 0;
     uint64_t total_size = 100;
-    std::string current_filename = "";
+    std::wstring current_filename = "";
     double cb_time = std::chrono::duration<double>(
                          std::chrono::system_clock::now().time_since_epoch())
                          .count();
@@ -2430,7 +2430,7 @@ private:
         return buffer_size_out;
     }
 
-    EC Local2Remote(std::string src, std::string dst)
+    EC Local2Remote(std::wstring src, std::wstring dst)
     {
         std::lock_guard<std::recursive_mutex> lock(dst_client->amsession->r_mtx);
         TransferErrorCode rc_r = EC::Success;
@@ -2538,7 +2538,7 @@ private:
         return rc_r;
     }
 
-    EC Remote2Local(std::string src, std::string dst)
+    EC Remote2Local(std::wstring src, std::wstring dst)
     {
         std::lock_guard<std::recursive_mutex> lock(src_client->amsession->r_mtx);
         TransferErrorCode rc_r = EC::Success;
@@ -2638,7 +2638,7 @@ private:
         return rc_r;
     }
 
-    EC Remote2Remote(std::string src, std::string dst)
+    EC Remote2Remote(std::wstring src, std::wstring dst)
     {
         std::lock_guard<std::recursive_mutex> lock_src(src_client->amsession->r_mtx);
         std::lock_guard<std::recursive_mutex> lock_dst(dst_client->amsession->r_mtx);
@@ -2827,7 +2827,7 @@ public:
         }
     }
 
-    AMSFTPWorker(std::vector<std::string> private_keys, ConRequst request, uint64_t error_info_buffer_size = 16)
+    AMSFTPWorker(std::vector<std::wstring> private_keys, ConRequst request, uint64_t error_info_buffer_size = 16)
         : AMSFTPClient(request, private_keys, error_info_buffer_size)
     {
     }
@@ -2874,7 +2874,7 @@ public:
         is_pause = false;
     }
 
-    EC _transfer_file(std::string src, std::string dst)
+    EC _transfer_file(std::wstring src, std::wstring dst)
     {
     }
 
@@ -2957,7 +2957,7 @@ public:
         this->buffer_set = buffer_set;
     }
 
-    std::string GetNickname()
+    std::wstring GetNickname()
     {
         return this->nickname;
     }
@@ -3061,7 +3061,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("SYMLINK", PathType::SYMLINK);
 
     py::class_<ConRequst>(m, "ConRequst")
-        .def(py::init<std::string, std::string, std::string, int, bool, size_t, std::string>(), py::arg("hostname"), py::arg("username"), py::arg("password"), py::arg("port"), py::arg("compression"), py::arg("timeout_s") = 3, py::arg("trash_dir") = "")
+        .def(py::init<std::wstring, std::wstring, std::wstring, int, bool, size_t, std::wstring>(), py::arg("hostname"), py::arg("username"), py::arg("password"), py::arg("port"), py::arg("compression"), py::arg("timeout_s") = 3, py::arg("trash_dir") = "")
         .def_readwrite("hostname", &ConRequst::hostname)
         .def_readwrite("username", &ConRequst::username)
         .def_readwrite("password", &ConRequst::password)
@@ -3082,12 +3082,12 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("need_filename_cb", &TransferCallback::need_filename_cb);
 
     py::class_<TransferTask>(m, "TransferTask")
-        .def(py::init<std::string, std::string>(), py::arg("src"), py::arg("dst"))
+        .def(py::init<std::wstring, std::wstring>(), py::arg("src"), py::arg("dst"))
         .def_readwrite("src", &TransferTask::src)
         .def_readwrite("dst", &TransferTask::dst);
 
     py::class_<PathInfo>(m, "PathInfo")
-        .def(py::init<std::string, std::string, std::string, uint64_t, uint64_t, uint64_t, PathType>(), py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("size"), py::arg("atime"), py::arg("mtime"), py::arg("path_type"))
+        .def(py::init<std::wstring, std::wstring, std::wstring, uint64_t, uint64_t, uint64_t, PathType>(), py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("size"), py::arg("atime"), py::arg("mtime"), py::arg("path_type"))
         .def_readwrite("name", &PathInfo::name)
         .def_readwrite("path", &PathInfo::path)
         .def_readwrite("dir", &PathInfo::dir)
@@ -3105,7 +3105,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def(py::init<std::vector<BufferSizePair>, uint64_t>(), py::arg("buffer_sizes"), py::arg("min_buffer_size"));
 
     py::class_<AMSFTPWorker>(m, "AMSFTPWorker")
-        .def(py::init<uint64_t, std::vector<std::string>, TransferCallback, TASKS, ConRequst, ConRequst>(), py::arg("ID"), py::arg("private_keys"), py::arg("callback"), py::arg("tasks"), py::arg("src_request") = ConRequst(), py::arg("dst_request") = ConRequst())
+        .def(py::init<uint64_t, std::vector<std::wstring>, TransferCallback, TASKS, ConRequst, ConRequst>(), py::arg("ID"), py::arg("private_keys"), py::arg("callback"), py::arg("tasks"), py::arg("src_request") = ConRequst(), py::arg("dst_request") = ConRequst())
         .def("set_buffersize", &AMSFTPWorker::set_buffersize, py::arg("buffer_set"))
         .def("terminate", &AMSFTPWorker::terminate)
         .def("pause", &AMSFTPWorker::pause)
@@ -3113,7 +3113,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("GetID", &AMSFTPWorker::GetID);
 
     py::class_<ErrorInfo>(m, "ErrorInfo")
-        .def(py::init<TransferErrorCode, std::string, std::string, std::string, std::string>(), py::arg("error_code"), py::arg("src"), py::arg("dst"), py::arg("function_name"), py::arg("msg"))
+        .def(py::init<TransferErrorCode, std::wstring, std::wstring, std::wstring, std::wstring>(), py::arg("error_code"), py::arg("src"), py::arg("dst"), py::arg("function_name"), py::arg("msg"))
         .def_readwrite("error_code", &ErrorInfo::error_code)
         .def_readwrite("src", &ErrorInfo::src)
         .def_readwrite("dst", &ErrorInfo::dst)
@@ -3121,7 +3121,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("msg", &ErrorInfo::msg);
 
     py::class_<AMSFTPClient>(m, "AMSFTPClient")
-        .def(py::init<ConRequst, std::vector<std::string>>(), py::arg("request"), py::arg("private_keys"))
+        .def(py::init<ConRequst, std::vector<std::wstring>>(), py::arg("request"), py::arg("private_keys"))
         .def("check", &AMSFTPClient::check)
         .def("reconnect", &AMSFTPClient::reconnect)
         .def("ensure", &AMSFTPClient::ensure)
