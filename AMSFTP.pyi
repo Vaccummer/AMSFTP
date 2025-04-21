@@ -2,25 +2,27 @@ from __future__ import annotations
 import typing
 __all__ = ['AMSFTPWorker', 'ConRequst', 'ErrorInfo', 'PathInfo', 'PathType', 'TransferCallback', 'TransferErrorCode', 'TransferTask']
 class AMSFTPWorker:
-    def SetPyTrace(self, arg0: typing.Any) -> None:
+    def SetPyTrace(self, trace_cb: typing.Any = None) -> None:
         ...
-    def SetSessionPyTrace(self, arg0: typing.Any) -> None:
+    def SetSessionPyTrace(self, trace_cb: typing.Any = None) -> None:
         ...
-    def SetWorkerPyTrace(self, arg0: typing.Any) -> None:
+    def SetWorkerPyTrace(self, trace_cb: typing.Any = None) -> None:
         ...
     def __init__(self, private_keys: list[str], request: ConRequst, error_info_buffer_size: int = 10) -> None:
         ...
-    def check(self) -> TransferErrorCode:
+    def check(self) -> tuple[TransferErrorCode, str]:
         ...
-    def copy(self, src: str, dst: str, need_mkdir: bool = False) -> TransferErrorCode:
+    def copy(self, src: str, dst: str, need_mkdir: bool = False) -> tuple[TransferErrorCode, str]:
         ...
-    def download(self, tasks: list[TransferTask], cb_set: TransferCallback = ..., chunk_size: int = 262144) -> list[tuple[tuple[str, str], TransferErrorCode]] | TransferErrorCode:
+    def download(self, tasks: list[TransferTask], cb_set: TransferCallback = ..., chunk_size: int = 262144) -> list[tuple[tuple[str, str], tuple[TransferErrorCode, str]]] | tuple[TransferErrorCode, str]:
         ...
-    def ensure(self) -> TransferErrorCode:
+    def ensure(self) -> tuple[TransferErrorCode, str]:
         ...
-    def ensure_trash_dir(self) -> TransferErrorCode:
+    def ensure_trash_dir(self) -> tuple[TransferErrorCode, str]:
         ...
-    def exists(self, path: str) -> TransferErrorCode:
+    def exists(self, path: str) -> bool | tuple[TransferErrorCode, str]:
+        ...
+    def get(self, src: str, dst: str, cb_set: TransferCallback = ..., ignore_link: bool = True, chunk_size: int = 262144) -> list[tuple[tuple[str, str], tuple[TransferErrorCode, str]]] | tuple[TransferErrorCode, str]:
         ...
     def get_all_error_info(self) -> list[ErrorInfo]:
         ...
@@ -28,64 +30,73 @@ class AMSFTPWorker:
         ...
     def get_nickname(self) -> str:
         ...
-    def get_size(self, path: str, exclude_dir: bool = False, exclude_symlink: bool = False) -> int | TransferErrorCode:
+    def get_size(self, path: str) -> int | tuple[TransferErrorCode, str]:
         ...
     def get_trash_dir(self) -> str:
         ...
-    def init(self, pycb: typing.Any = None) -> TransferErrorCode:
+    def init(self, pycb: typing.Any = None) -> tuple[TransferErrorCode, str]:
         ...
-    def is_dir(self, path: str) -> TransferErrorCode:
+    def is_dir(self, path: str) -> bool | tuple[TransferErrorCode, str]:
         ...
-    def is_file(self, path: str) -> TransferErrorCode:
+    def is_file(self, path: str) -> bool | tuple[TransferErrorCode, str]:
         ...
-    def is_symlink(self, path: str) -> TransferErrorCode:
+    def is_running(self) -> bool:
         ...
-    def listdir(self, path: str) -> list[PathInfo] | TransferErrorCode:
+    def is_symlink(self, path: str) -> bool | tuple[TransferErrorCode, str]:
         ...
-    def mkdir(self, path: str) -> TransferErrorCode:
+    def listdir(self, path: str, max_num: int = -1) -> list[PathInfo] | tuple[TransferErrorCode, str]:
         ...
-    def mkdirs(self, path: str) -> TransferErrorCode:
+    def mkdir(self, path: str) -> tuple[TransferErrorCode, str]:
         ...
-    def move(self, src: str, dst: str, need_mkdir: bool = False, force_write: bool = False) -> TransferErrorCode:
+    def mkdirs(self, path: str) -> tuple[TransferErrorCode, str]:
+        ...
+    def move(self, src: str, dst: str, need_mkdir: bool = False, force_write: bool = False) -> tuple[TransferErrorCode, str]:
         ...
     def pause(self) -> None:
         ...
-    def reconnect(self) -> TransferErrorCode:
+    def put(self, src: str, dst: str, cb_set: TransferCallback = ..., ignore_link: bool = True, chunk_size: int = 262144) -> list[tuple[tuple[str, str], tuple[TransferErrorCode, str]]] | tuple[TransferErrorCode, str]:
         ...
-    def rename(self, src: str, dst: str, need_mkdir: bool = False, force_write: bool = False) -> TransferErrorCode:
+    def realpath(self, path: str) -> str | tuple[TransferErrorCode, str]:
+        ...
+    def reconnect(self) -> tuple[TransferErrorCode, str]:
+        ...
+    def rename(self, src: str, newname: str) -> tuple[TransferErrorCode, str]:
         ...
     def resume(self) -> None:
         ...
-    def rm(self, path: str) -> TransferErrorCode:
+    def rm(self, path: str) -> list[tuple[str, tuple[TransferErrorCode, str]]]:
         ...
-    def rmdir(self, path: str) -> TransferErrorCode:
+    def rmdir(self, path: str) -> tuple[TransferErrorCode, str]:
         ...
-    def rmfile(self, path: str) -> TransferErrorCode:
+    def rmfile(self, path: str) -> tuple[TransferErrorCode, str]:
         ...
-    def saferm(self, path: str) -> TransferErrorCode:
+    def saferm(self, path: str) -> tuple[TransferErrorCode, str]:
         ...
-    def set_trash_dir(self, trash_dir: str) -> None:
+    def set_trash_dir(self, trash_dir_f: str = '') -> tuple[TransferErrorCode, str]:
         ...
-    def stat(self, path: str) -> PathInfo | TransferErrorCode:
+    def stat(self, path: str) -> PathInfo | tuple[TransferErrorCode, str]:
         ...
     def terminate(self) -> None:
         ...
-    def toAnotherHost(self, tasks: list[TransferTask], another_worker: AMSFTPWorker, cb_set: TransferCallback = ..., chunk_size: int = 262144) -> list[tuple[tuple[str, str], TransferErrorCode]] | TransferErrorCode:
+    def toAnotherHost(self, tasks: list[TransferTask], another_worker: AMSFTPWorker, cb_set: TransferCallback = ..., chunk_size: int = 262144) -> list[tuple[tuple[str, str], tuple[TransferErrorCode, str]]] | tuple[TransferErrorCode, str]:
         ...
-    def upload(self, tasks: list[TransferTask], cb_set: TransferCallback = ..., chunk_size: int = 262144) -> list[tuple[tuple[str, str], TransferErrorCode]] | TransferErrorCode:
+    def transmit(self, src: str, dst: str, another_worker: AMSFTPWorker, cb_set: TransferCallback = ..., ignore_link: bool = True, chunk_size: int = 262144) -> list[tuple[tuple[str, str], tuple[TransferErrorCode, str]]] | tuple[TransferErrorCode, str]:
         ...
-    def walk(self, path: str) -> list[PathInfo] | TransferErrorCode:
+    def upload(self, tasks: list[TransferTask], cb_set: TransferCallback = ..., chunk_size: int = 262144) -> list[tuple[tuple[str, str], tuple[TransferErrorCode, str]]] | tuple[TransferErrorCode, str]:
+        ...
+    def walk(self, path: str) -> list[PathInfo]:
         ...
 class ConRequst:
     compression: bool
     hostname: str
+    keyfile: str
     nickname: str
     password: str
     port: int
     timeout_s: int
     trash_dir: str
     username: str
-    def __init__(self, nickname: str, hostname: str, username: str, password: str, port: int, compression: bool, timeout_s: int = 3, trash_dir: str = '') -> None:
+    def __init__(self, nickname: str, hostname: str, username: str, port: int, password: str = '', keyfile: str = '', compression: bool = False, timeout_s: int = 3, trash_dir: str = '') -> None:
         ...
 class ErrorInfo:
     dst: str
@@ -102,8 +113,10 @@ class PathInfo:
     name: str
     path: str
     path_type: PathType
+    permission: int
     size: int
-    def __init__(self, name: str, path: str, dir: str, size: int, atime: int, mtime: int, path_type: PathType) -> None:
+    uname: str
+    def __init__(self, name: str, path: str, dir: str, uname: str, size: int, atime: int, mtime: int, path_type: PathType = ..., permission: int = 0) -> None:
         ...
 class PathType:
     """
@@ -146,14 +159,7 @@ class PathType:
     def value(self) -> int:
         ...
 class TransferCallback:
-    cb_interval_s: float
-    error_cb: typing.Callable
-    filename_cb: typing.Callable
-    need_error_cb: bool
-    need_filename_cb: bool
-    need_progress_cb: bool
-    progress_cb: typing.Callable
-    def __init__(self, cb_interval_s: float = 0.5, error_cb: typing.Any = None, progress_cb: typing.Any = None, filename_cb: typing.Any = None) -> None:
+    def __init__(self, interval: float, total_size: typing.Any = None, error: typing.Any = None, progress: typing.Any = None) -> None:
         ...
 class TransferErrorCode:
     """
@@ -446,8 +452,9 @@ class TransferErrorCode:
         ...
 class TransferTask:
     dst: str
+    path_type: PathType
     size: int
     src: str
-    def __init__(self, src: str, dst: str, size: int) -> None:
+    def __init__(self, src: str, dst: str, size: int, path_type: PathType = ...) -> None:
         ...
 _cleanup: typing.Any  # value = <capsule object>
