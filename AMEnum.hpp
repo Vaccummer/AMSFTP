@@ -1,9 +1,8 @@
 #pragma once
 #include <libssh2.h>
-#include <unordered_map>
 #include <string>
+#include <unordered_map>
 
-// 常量定义
 constexpr uint64_t AMKB = 1024;
 constexpr uint64_t AMMB = 1024 * 1024;
 constexpr uint64_t AMGB = 1024 * 1024 * 1024;
@@ -20,7 +19,7 @@ constexpr char *AMWARNING = "WARNING";
 constexpr char *AMDEBUG = "DEBUG";
 constexpr char *AMINFO = "INFO";
 
-enum class TransferErrorCode2
+enum class ErrorCode2
 {
     Success = 0,
     SessionCreateError = -1,
@@ -110,7 +109,7 @@ enum class TransferErrorCode2
     UnexpectedEOF = -85,
 };
 
-enum class TransferErrorCode
+enum class ErrorCode
 {
     Success = 0,
     // negative code represent libssh2 session error
@@ -202,10 +201,18 @@ enum class TransferErrorCode
     LocalFileMapError = 32,
     UnexpectedEOF = 33,
     Terminate = 34,
+    UnImplentedMethod = 35,
+    NoPermissionAttribute = 36,
+    LocalStatError = 37,
 };
 
 enum class PathType
 {
+    BlockDevice = -1,
+    CharacterDevice = -2,
+    Socket = -3,
+    FIFO = -4,
+    Unknown = -5,
     DIR = 0,
     FILE = 1,
     SYMLINK = 2
@@ -219,10 +226,13 @@ enum class MapType
 
 enum class OS_TYPE
 {
-    Windows = 0,
+    Windows = -1,
+    Unknown = -2,
+    Uncertain = 0,
     Linux = 1,
     MacOS = 2,
-    Unknown = 3
+    FreeBSD = 3,
+    Unix = 4
 };
 
 enum class BufferStatus
@@ -233,8 +243,8 @@ enum class BufferStatus
     write_done = 3
 };
 
-// 外部声明
 extern const std::unordered_map<int, std::string> SFTPMessage;
-extern const std::unordered_map<int, TransferErrorCode> Int2EC;
+extern const std::unordered_map<int, ErrorCode> Int2EC;
+extern const std::vector<std::pair<uint64_t, size_t>> GLOBAL_PERMISSIONS_MASK;
 
-std::string GetECName(TransferErrorCode ec);
+std::string GetECName(ErrorCode ec);

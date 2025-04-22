@@ -1,9 +1,9 @@
 #include "AMEnum.hpp"
 #include <libssh2.h>
 #include <libssh2_sftp.h>
-#include <unordered_map>
-#include <string>
 #include <magic_enum/magic_enum.hpp>
+#include <string>
+#include <unordered_map>
 
 const std::unordered_map<int, std::string> SFTPMessage = {
     {LIBSSH2_FX_EOF, "End of file"},
@@ -28,17 +28,17 @@ const std::unordered_map<int, std::string> SFTPMessage = {
     {LIBSSH2_FX_INVALID_FILENAME, "Filename is invalid"},
     {LIBSSH2_FX_LINK_LOOP, "Symbolic link loop"}};
 
-const std::unordered_map<int, TransferErrorCode> Int2EC = []
+const std::unordered_map<int, ErrorCode> Int2EC = []
 {
-    std::unordered_map<int, TransferErrorCode> map;
-    for (auto [val, name] : magic_enum::enum_entries<TransferErrorCode>())
+    std::unordered_map<int, ErrorCode> map;
+    for (auto [val, name] : magic_enum::enum_entries<ErrorCode>())
     {
         map[static_cast<int>(val)] = val;
     }
     return map;
 }();
 
-std::string GetECName(TransferErrorCode ec)
+std::string GetECName(ErrorCode ec)
 {
     return std::string(magic_enum::enum_name(ec));
 }
