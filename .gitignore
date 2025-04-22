@@ -1,4 +1,5 @@
 trial*
-./.history/*
-.vscode
+test*
+.history/
+.vscode/
 build/*
