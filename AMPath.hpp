@@ -1,6 +1,7 @@
 #pragma once
 #include "AMEnum.hpp"
 #include <filesystem>
+#include <regex>
 #include <string>
 #include <variant>
 #include <vector>
@@ -8,14 +9,22 @@
 
 using EC = ErrorCode;
 using ECM = std::pair<EC, std::string>;
+extern const std::vector<std::pair<uint64_t, size_t>> GLOBAL_PERMISSIONS_MASK;
+extern const std::regex MODE_STR_PATTERN_RE;
 
-std::wstring str2wstr(const std::string &narrowStr);
+std::wstring str2wstr(const std::string &str);
+
+std::string wstr2str(const std::wstring &wstr);
 
 std::string ModeTrans(uint64_t mode_int);
 
 uint64_t ModeTrans(std::string mode_str);
 
 std::string MergeModeStr(std::string base_mode_str, std::string new_mode_str);
+
+bool IsModeValid(std::string mode_str);
+
+bool IsModeValid(uint64_t mode_int);
 
 struct PathInfo
 {
@@ -32,6 +41,7 @@ public:
     std::string mode_str = "rwxrwxrwx";
     PathInfo();
     PathInfo(std::string name, std::string path, std::string dir, std::string uname, uint64_t size = 0, uint64_t atime = 0, uint64_t mtime = 0, PathType type = PathType::FILE, uint64_t mode_int = 0777, std::string mode_str = "rwxrwxrwx");
+    std::string FormatTime(const uint64_t &time, const std::string &format = "%Y-%m-%d %H:%M:%S") const;
 };
 
 namespace AMFS
@@ -42,7 +52,9 @@ namespace AMFS
 
     std::string realpath(const std::string &path);
 
-    bool mkdirs(const std::string &path);
+    ECM mkdirs(const std::string &path);
+
+    std::vector<PathInfo> listdir(const std::string &path);
 
     template <typename... Args>
     std::string join(Args &&...args)
@@ -89,9 +101,9 @@ namespace AMFS
 
     std::variant<PathInfo, ECM> stat(const std::string &path);
 
-    std::vector<PathInfo> walk(std::string path, bool ignore_sepcial_file = true);
+    std::vector<PathInfo> walk(const std::string &path, bool ignore_sepcial_file = true);
 
-    std::vector<std::string> split(std::string path);
+    std::vector<std::string> split(const std::string &path);
 
-    std::vector<std::string> split(std::filesystem::path path);
+    std::vector<std::string> split(const std::filesystem::path &path);
 }

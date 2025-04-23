@@ -1,12 +1,16 @@
 #include "AMPath.hpp"
 #include "AMEnum.hpp"
 #include <aclapi.h>
+#include <chrono>
+#include <ctime>
 #include <filesystem>
 #include <fmt/format.h>
+#include <iomanip>
 #include <iostream>
 #include <regex>
 #include <sddl.h>
 #include <shlwapi.h>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -15,8 +19,11 @@
 namespace fs = std::filesystem;
 using EC = ErrorCode;
 using ECM = std::pair<EC, std::string>;
+
 const std::vector<std::pair<uint64_t, size_t>> GLOBAL_PERMISSIONS_MASK = {
     {0400, 0}, {0200, 1}, {0100, 2}, {0040, 3}, {0020, 4}, {0010, 5}, {0004, 6}, {0002, 7}, {0001, 8}};
+
+const std::regex MODE_STR_PATTERN_RE("^[r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-]$");
 
 PathInfo::PathInfo()
     : name(""), path(""), dir(""), uname("") {}
@@ -24,83 +31,106 @@ PathInfo::PathInfo()
 PathInfo::PathInfo(std::string name, std::string path, std::string dir, std::string uname, uint64_t size, uint64_t atime, uint64_t mtime, PathType type, uint64_t mode_int, std::string mode_str)
     : name(name), path(path), dir(dir), uname(uname), size(size), atime(atime), mtime(mtime), type(type), mode_int(mode_int), mode_str(mode_str) {}
 
-std::wstring str2wstr(const std::string &narrowStr)
+std::string PathInfo::FormatTime(const uint64_t &time, const std::string &format) const
 {
-    int length = MultiByteToWideChar(CP_UTF8, 0, narrowStr.c_str(), -1, nullptr, 0);
-    std::wstring wideStr(length, 0);
-    MultiByteToWideChar(CP_UTF8, 0, narrowStr.c_str(), -1, &wideStr[0], length);
-    for (auto &c : wideStr)
-    {
-        if (c == L'/')
-        {
-            c = L'\\';
-        }
-    }
-    return wideStr;
+    time_t timeT = static_cast<time_t>(time);
+
+    struct tm timeInfo;
+
+#ifdef _WIN32
+
+    localtime_s(&timeInfo, &timeT);
+#else
+    localtime_r(&timeT, &timeInfo);
+#endif
+
+    std::ostringstream oss;
+    oss << std::put_time(&timeInfo, format.c_str());
+
+    return oss.str();
 }
 
-std::string wstr2str(const std::wstring &wideStr)
+std::string wstr2str(const std::wstring &wstr)
 {
-    int length = WideCharToMultiByte(CP_UTF8, 0, wideStr.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::string narrowStr(length, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wideStr.c_str(), -1, &narrowStr[0], length, nullptr, nullptr);
-    return narrowStr;
+    int bufferSize = WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (bufferSize == 0)
+        return "";
+
+    std::string result(bufferSize, 0);
+    WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, &result[0], bufferSize, nullptr, nullptr);
+    result.resize(bufferSize - 1); // 去除末尾的'\0'
+    return result;
+}
+
+std::wstring str2wstr(const std::string &str)
+{
+    int bufferSize = MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, nullptr, 0);
+    if (bufferSize == 0)
+        return L"";
+
+    std::wstring result(bufferSize, 0);
+    MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, &result[0], bufferSize);
+    result.resize(bufferSize - 1); // 去除末尾的L'\0'
+    return result;
 }
 
 std::string ModeTrans(uint64_t mode_int)
 {
-    std::string mode_str = "";
-    int mode_v;
-    for (int i = 0; i < 3; i++)
+    // 把mode_int转换为8进制字符串, 长度为9
+    if (mode_int > 0777 || mode_int == 0777)
     {
-        mode_v = mode_int & (8 ^ (3 - i) - 1);
-        switch (mode_v)
+        return "rwxrwxrwx";
+    }
+    std::string out = "";
+    uint64_t tmp_int;
+    uint64_t start = 8 * 8 * 8;
+    for (int i = 3; i > 0; i--)
+    {
+        tmp_int = (mode_int % start) / (start / 8);
+        start /= 8;
+        switch (tmp_int)
         {
-        case 0:
-            mode_str += "---";
-            break;
         case 1:
-            mode_str += "--x";
+            out += "--x";
             break;
         case 2:
-            mode_str += "r--";
+            out += "-w-";
             break;
         case 3:
-            mode_str += "r-x";
+            out += "-wx";
             break;
         case 4:
-            mode_str += "rw-";
+            out += "r--";
             break;
         case 5:
-            mode_str += "-wx";
+            out += "r-x";
             break;
         case 6:
-            mode_str += "rw-";
+            out += "rw-";
             break;
         case 7:
-            mode_str += "rwx";
+            out += "rwx";
             break;
+        default:
+            out += "---";
         }
     }
-    return mode_str;
+    return out;
 }
 
 uint64_t ModeTrans(std::string mode_str)
 {
-    uint64_t mode_int = 0;
-    for (size_t i = mode_str.size() - 1; i >= 0; i--)
+    std::regex pattern("^[r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-]$");
+    if (!std::regex_match(mode_str, pattern))
     {
-        switch (mode_str[i])
+        throw std::invalid_argument(fmt::format("Invalid mode string: {}", mode_str));
+    }
+    uint64_t mode_int = 0;
+    for (int i = 0; i < 9; i++)
+    {
+        if (mode_str[i] != '?' && mode_str[i] != '-')
         {
-        case 'r':
-            mode_int += 2 * (8 ^ (i / 3));
-            break;
-        case 'w':
-            mode_int += 4 * (8 ^ (i / 3));
-            break;
-        case 'x':
-            mode_int += 1 * (8 ^ (i / 3));
-            break;
+            mode_int += (1ULL << (8 - i));
         }
     }
     return mode_int;
@@ -108,25 +138,35 @@ uint64_t ModeTrans(std::string mode_str)
 
 std::string MergeModeStr(std::string base_mode_str, std::string new_mode_str)
 {
-    std::string pattern_f = "^[r-\\?][w-\\?][x-\\?][r-\\?][w-\\?][x-\\?][r-\\?][w-\\?][x-\\?]$";
+    std::string pattern_f = "^[r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-]$";
     std::regex pattern(pattern_f);
 
     if (!std::regex_match(base_mode_str, pattern))
     {
-        throw std::invalid_argument("Invalid base mode string");
+        throw std::invalid_argument(fmt::format("Invalid base mode string: {}", base_mode_str));
     }
 
     if (!std::regex_match(new_mode_str, pattern))
     {
-        throw std::invalid_argument("Invalid new mode string");
+        throw std::invalid_argument(fmt::format("Invalid new mode string: {}", new_mode_str));
     }
 
     std::string mode_str = "";
-    for (size_t i = 0; i < 9; i++)
+    for (int i = 0; i < 9; i++)
     {
-        mode_str += (base_mode_str[i] == '?' ? new_mode_str[i] : base_mode_str[i]);
+        mode_str += (new_mode_str[i] == '?' ? base_mode_str[i] : new_mode_str[i]);
     }
     return mode_str;
+}
+
+bool IsModeValid(std::string mode_str)
+{
+    return std::regex_match(mode_str, MODE_STR_PATTERN_RE);
+}
+
+bool IsModeValid(uint64_t mode_int)
+{
+    return mode_int <= 0777;
 }
 
 namespace WinTool
@@ -238,17 +278,17 @@ namespace AMFS
         return p.lexically_normal().generic_string();
     }
 
-    bool mkdirs(const std::string &path)
+    ECM mkdirs(const std::string &path)
     {
         try
         {
             fs::path p(path);
             fs::create_directories(p);
-            return true;
+            return ECM(EC::Success, "");
         }
-        catch (const fs::filesystem_error)
+        catch (const std::exception &e)
         {
-            return false;
+            return ECM(EC::LocalFileError, e.what());
         }
     }
 
@@ -256,21 +296,16 @@ namespace AMFS
     {
         PathInfo info;
 
-        // 检查路径是否存在
         WIN32_FILE_ATTRIBUTE_DATA fileData;
         if (!GetFileAttributesExW(str2wstr(path).c_str(), GetFileExInfoStandard, &fileData))
         {
-            return ECM(EC::PathNotExist, fmt::format("Path not found: {}", path));
-        }
-        wchar_t fullPath[MAX_PATH];
-        if (!GetFullPathNameW(str2wstr(path).c_str(), MAX_PATH, fullPath, NULL))
-        {
-            return ECM(EC::PathNotExist, fmt::format("Can't get full path: {}", path));
+            return ECM(EC::PathNotExist, fmt::format("Local path not found: {}", path));
         }
 
         std::filesystem::path fsPath(path);
+        fsPath = fs::absolute(fsPath);
         info.name = fsPath.filename().string();
-        info.path = wstr2str(fullPath);
+        info.path = fsPath.generic_string();
         info.dir = fsPath.parent_path().string();
 
         if (fileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
@@ -350,7 +385,7 @@ namespace AMFS
         }
     }
 
-    std::vector<PathInfo> walk(std::string path, bool ignore_sepcial_file)
+    std::vector<PathInfo> walk(const std::string &path, bool ignore_sepcial_file)
     {
         std::vector<PathInfo> result = {};
 
@@ -359,7 +394,23 @@ namespace AMFS
         return result;
     }
 
-    std::vector<std::string> split(std::string path)
+    std::vector<PathInfo> listdir(const std::string &path)
+    {
+        std::vector<PathInfo> result = {};
+        fs::path p(path);
+        std::variant<PathInfo, ECM> sr;
+        for (const auto &entry : fs::directory_iterator(p))
+        {
+            sr = stat(entry.path().string());
+            if (std::holds_alternative<PathInfo>(sr))
+            {
+                result.push_back(std::get<PathInfo>(sr));
+            }
+        }
+        return result;
+    }
+
+    std::vector<std::string> split(const std::string &path)
     {
         std::vector<std::string> segments;
         fs::path p(path);
@@ -370,7 +421,7 @@ namespace AMFS
         return segments;
     }
 
-    std::vector<std::string> split(fs::path path)
+    std::vector<std::string> split(const fs::path &path)
     {
         std::vector<std::string> segments;
         for (const auto &seg : path)

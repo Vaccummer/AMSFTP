@@ -84,7 +84,7 @@ struct TransferCallback
     bool need_progress_cb;
     bool need_total_size_cb;
     py::function error_cb;      // Callable[[EC, str, str, str], None] error_code, msg, src, dst
-    py::function progress_cb;   // Callable[[str, str, int, int, int, int], None] src, dst, this_size, file_size, accumulated_size, total_size
+    py::function progress_cb;   // Callable[[str, str, int, int, int, int], bool] src, dst, this_size, file_size, accumulated_size, total_size
     py::function total_size_cb; // Callable[[int], None]
     TransferCallback()
         : cb_interval_s(0.5), need_error_cb(false), need_progress_cb(false), need_total_size_cb(false), error_cb(py::function()), progress_cb(py::function()), total_size_cb(py::function()) {}
@@ -373,6 +373,7 @@ using WR = std::variant<WRV, ECM>;
 using ED = std::pair<EC, std::string>;
 using SIZER = std::variant<uint64_t, ECM>;
 using ErrorInfo = std::unordered_map<std::string, std::variant<std::string, EC>>;
+using CR = std::variant<std::pair<std::string, int>, ECM>;
 
 bool isok(ECM &ecm)
 {
@@ -542,59 +543,32 @@ public:
     py::function auth_cb = py::function(); // Callable[[int, ConRequst, int], str]
     bool password_auth_cb = false;
 
-    EC GetLastEC()
+    bool IsValidKey(const std::string &key)
     {
-        int ori_code = libssh2_session_last_errno(session);
-        if (Int2EC.find(ori_code) != Int2EC.end())
-        {
-            return Int2EC.at(ori_code);
-        }
-        return EC::UnknownError;
-    }
-
-    std::string GetLastErrorMsg()
-    {
-        char *errmsg = NULL;
-        int errmsg_len;
-        int errcode = libssh2_session_last_error(session, &errmsg, &errmsg_len, 0);
-        return std::string(errmsg);
-    }
-
-    bool IsValidKey(std::string key)
-    {
-        FILE *fp = nullptr;
-        errno_t err = fopen_s(&fp, key.c_str(), "r");
-        if (err != 0)
-        {
+        FILE *fp = fopen(key.c_str(), "r");
+        if (!fp)
             return false;
-        }
 
-        RSA *rsa = PEM_read_RSAPrivateKey(fp, NULL, NULL, NULL);
+        EVP_PKEY *pkey = PEM_read_PrivateKey(fp, NULL, NULL, NULL);
         fclose(fp);
 
-        if (rsa)
+        if (!pkey)
+            return false;
+
+        int type = EVP_PKEY_id(pkey);
+        EVP_PKEY_free(pkey);
+
+        switch (type)
         {
-            RSA_free(rsa);
+        case EVP_PKEY_NONE:
+            return false;
+        default:
             return true;
         }
-        return false;
     }
 
-    void LoadPrivateKeys()
+    void LoadDefaultPrivateKeys()
     {
-        std::vector<std::string> keys;
-        for (auto &key : this->private_keys)
-        {
-            if (IsValidKey(key))
-            {
-                keys.push_back(key);
-            }
-        }
-        if (!keys.empty())
-        {
-            this->private_keys = keys;
-            return;
-        }
         std::string default_key_dir = AMFS::realpath("~/.ssh");
         for (auto &entry : fs::directory_iterator(default_key_dir))
         {
@@ -602,15 +576,18 @@ public:
             {
                 if (IsValidKey(entry.path().string()))
                 {
-                    keys.push_back(entry.path().string());
+                    this->private_keys.push_back(entry.path().string());
                 }
             }
         }
-        this->private_keys = keys;
     }
 
     ECM Connect()
     {
+        if (Check().first == EC::Success)
+        {
+            return {EC::Success, ""};
+        }
         std::string msg = "";
         EC rc = EC::Success;
         int rcr;
@@ -756,6 +733,10 @@ public:
             }
         }
 
+        if (private_keys.empty())
+        {
+            LoadDefaultPrivateKeys();
+        }
         for (auto &private_key : private_keys)
         {
             rcr = libssh2_userauth_publickey_fromfile(session, request.username.c_str(), nullptr, private_key.c_str(), nullptr);
@@ -808,27 +789,70 @@ public:
         }
 
         LIBSSH2_SFTP_ATTRIBUTES attrs;
-        std::string test_path = "amtrial";
-        int rct;
-
-        rct = libssh2_sftp_stat(sftp, test_path.c_str(), &attrs);
-
+        int rct = libssh2_sftp_stat(sftp, "./amtrial", &attrs);
+        EC rc;
         if (rct != 0)
         {
-            EC rc;
             rc = GetLastEC();
-
-            if (rc == EC::PathNotExist)
+            if (rc != EC::PathNotExist && rc != EC::FileNotExist)
             {
-                return {EC::Success, ""};
+                std::string msg = fmt::format("Session check failed: {}", GetLastErrorMsg());
+                trace(AMCRITICAL, rc, "Session", "SessionCheck", msg);
+                return {rc, msg};
             }
-            std::string msg = GetLastErrorMsg();
-            trace(AMCRITICAL, rc, fmt::format("{}@{}", request.nickname, request.port), "TrialPathStatCheck", msg);
-            return {rc, msg};
         }
-
         trace(AMINFO, EC::Success, fmt::format("{}@{}", request.nickname, "SSHSeesion"), "Check", "");
         return {EC::Success, ""};
+    }
+
+    EC GetLastEC()
+    {
+        if (!session)
+        {
+            return EC::NoSession;
+        }
+        int ori_code = libssh2_session_last_errno(session);
+        if (ori_code != LIBSSH2_ERROR_SFTP_PROTOCOL)
+        {
+            return Int2EC.at(ori_code);
+        }
+        else
+        {
+            if (!sftp)
+            {
+                return EC::NoConnection;
+            }
+            return Int2EC.at(libssh2_sftp_last_error(sftp));
+        }
+    }
+
+    std::string GetLastErrorMsg()
+    {
+        if (!session)
+        {
+            return "Session not initialized";
+        }
+        int ori_code = libssh2_session_last_errno(session);
+        if (ori_code != LIBSSH2_ERROR_SFTP_PROTOCOL)
+        {
+            char *errmsg = NULL;
+            int errmsg_len;
+            int errcode = libssh2_session_last_error(session, &errmsg, &errmsg_len, 0);
+            return std::string(errmsg);
+        }
+        else
+        {
+            if (!sftp)
+            {
+                return "SFTP not initialized";
+            }
+            ori_code = libssh2_sftp_last_error(sftp);
+            if (SFTPMessage.find(ori_code) != SFTPMessage.end())
+            {
+                return SFTPMessage.at(ori_code);
+            }
+            return "Unknown SFTP error";
+        }
     }
 
     void clean()
@@ -836,15 +860,18 @@ public:
         if (sftp)
         {
             libssh2_sftp_shutdown(sftp);
+            sftp = nullptr;
         }
         if (session)
         {
             libssh2_session_disconnect(session, "Normal Shutdown");
             libssh2_session_free(session);
+            session = nullptr;
         }
         if (sock != INVALID_SOCKET)
         {
             closesocket(sock);
+            sock = INVALID_SOCKET;
         }
     }
 
@@ -919,7 +946,7 @@ public:
         }
     }
 
-    std::variant<std::pair<std::string, int>, ECM> ConductCmd(std::string cmd)
+    CR ConductCmd(std::string cmd)
     {
         if (!channel)
         {
@@ -944,6 +971,10 @@ public:
 
         int exit_status = libssh2_channel_get_exit_status(channel);
         std::string output(cmd_out, nbytes);
+        output.erase(std::find_if(output.rbegin(), output.rend(), [](char c)
+                                  { return c != '\n' && c != '\r'; })
+                         .base(),
+                     output.end());
         return std::make_pair(output, exit_status);
     }
 };
@@ -959,6 +990,7 @@ public:
     std::vector<std::string> private_keys;
     ConRequst request;
     std::shared_ptr<AMSession> amsession;
+    std::mutex mtx;
 
     BaseSFTPClient()
     {
@@ -970,7 +1002,15 @@ public:
 
     BaseSFTPClient(ConRequst request, std::vector<std::string> keys, unsigned int error_num = 10, py::object trace_cb = py::none())
     {
-        this->trash_dir = "";
+        if (request.trash_dir.empty())
+        {
+            this->trash_dir = "./.AMSFTP_Trash";
+        }
+        else
+        {
+            this->trash_dir = request.trash_dir;
+        }
+
         this->private_keys = keys;
         this->request = request;
         this->amtracer = std::make_shared<AMTracer>(error_num, trace_cb);
@@ -1012,6 +1052,11 @@ public:
         return this->request.nickname;
     }
 
+    bool IsValidKey(const std::string &key)
+    {
+        return amsession->IsValidKey(key);
+    }
+
     void SetAuthCallback(py::object auth_cb = py::none())
     {
         if (auth_cb.is_none())
@@ -1033,61 +1078,37 @@ public:
 
     EC GetLastEC()
     {
-        int session_err = libssh2_session_last_errno(amsession->session);
-        if (session_err == LIBSSH2_ERROR_SFTP_PROTOCOL)
-        {
-            session_err = libssh2_sftp_last_error(amsession->sftp);
-        }
-        if (Int2EC.find(session_err) != Int2EC.end())
-        {
-            return Int2EC.at(session_err);
-        }
-        return EC::UnknownError;
+        return amsession->GetLastEC();
     }
 
     std::string GetLastErrorMsg()
     {
-        int session_err = libssh2_session_last_errno(amsession->session);
-        if (session_err == LIBSSH2_ERROR_EAGAIN)
-        {
-            return "";
-        }
-        else if (session_err == LIBSSH2_ERROR_SFTP_PROTOCOL)
-        {
-            int sftp_err = libssh2_sftp_last_error(amsession->sftp);
-            // 检查sftp_err是否在SFTPMessage中
-            if (SFTPMessage.find(sftp_err) != SFTPMessage.end())
-            {
-                return SFTPMessage.at(sftp_err);
-            }
-            return "Unknown SFTP error";
-        }
-        char *errmsg = NULL;
-        int errmsg_len;
-        int errcode = libssh2_session_last_error(amsession->session, &errmsg, &errmsg_len, 0);
-        return std::string(errmsg);
+        // int session_err = libssh2_session_last_errno(amsession->session);
+        // if (session_err == LIBSSH2_ERROR_EAGAIN)
+        // {
+        //     return "EAGAIN";
+        // }
+        // else if (session_err == LIBSSH2_ERROR_SFTP_PROTOCOL)
+        // {
+        //     int sftp_err = libssh2_sftp_last_error(amsession->sftp);
+
+        //     if (SFTPMessage.find(sftp_err) != SFTPMessage.end())
+        //     {
+        //         return SFTPMessage.at(sftp_err);
+        //     }
+        //     return "Unknown SFTP error";
+        // }
+
+        // char *errmsg = NULL;
+        // int errmsg_len;
+        // int errcode = libssh2_session_last_error(amsession->session, &errmsg, &errmsg_len, 0);
+        // return std::string(errmsg);
+        return amsession->GetLastErrorMsg();
     }
 
     ECM Check()
     {
-        EC rc = EC::Success;
-        std::string msg = "";
-        if (!amsession)
-        {
-            rc = EC::NoSession;
-            msg = "Session is not initialized";
-            trace(AMCRITICAL, rc, "AMSFTPClient", "Check", msg);
-            return {rc, msg};
-        }
-        else
-        {
-            ECM ecm = amsession->Check();
-            if (!isok(ecm))
-            {
-                return ecm;
-            }
-        }
-        return {rc, msg};
+        return amsession->Check();
     }
 
     ECM Connect()
@@ -1104,8 +1125,13 @@ public:
         {
             return ecm;
         }
-        EnsureTrashDir();
+
         return {EC::Success, ""};
+    }
+
+    void Disconnect()
+    {
+        amsession->clean();
     }
 
     ECM Reconnect()
@@ -1359,6 +1385,7 @@ private:
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         EC rc;
         std::string msg = "";
+
         int rct = libssh2_sftp_stat(amsession->sftp, path.c_str(), &attrs);
 
         if (rct != 0)
@@ -1374,15 +1401,72 @@ private:
             errors[path] = {EC::NoPermissionAttribute, msg};
             return;
         }
+
         std::string new_mode = MergeModeStr(ModeTrans(attrs.permissions & 0777), mode);
+
         uint64_t new_mode_int = ModeTrans(new_mode);
-        // 保留文件类型, 但修改权限
+
         uint64_t file_type = attrs.permissions & LIBSSH2_SFTP_S_IFMT;
         new_mode_int = (new_mode_int & ~LIBSSH2_SFTP_S_IFMT) | file_type;
 
         attrs.permissions = new_mode_int;
+
         int rcr = libssh2_sftp_setstat(amsession->sftp, path.c_str(), &attrs);
-        if (rcr != 0)
+
+        if (rcr < 0)
+        {
+            rc = GetLastEC();
+            msg = fmt::format("chmod {} failed: {}", path, GetLastErrorMsg());
+            errors[path] = {rc, msg};
+        }
+
+        if (recursive && file_type == LIBSSH2_SFTP_S_IFDIR)
+        {
+            LR list = listdir(path);
+            if (std::holds_alternative<WRV>(list))
+            {
+                for (auto &item : std::get<WRV>(list))
+                {
+                    _chmod(item.path, mode, recursive, errors);
+                }
+            }
+            else
+            {
+                errors[path] = std::get<ECM>(list);
+            }
+        }
+    }
+
+    void _chmod(std::string path, uint64_t mode, bool recursive, std::map<std::string, ECM> &errors)
+    {
+        LIBSSH2_SFTP_ATTRIBUTES attrs;
+        EC rc;
+        std::string msg = "";
+
+        int rct = libssh2_sftp_stat(amsession->sftp, path.c_str(), &attrs);
+
+        if (rct != 0)
+        {
+            rc = GetLastEC();
+            msg = fmt::format("stat {} failed: {}", path, GetLastErrorMsg());
+            errors[path] = {rc, msg};
+            return;
+        }
+        if (!(attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS))
+        {
+            msg = fmt::format("stat {} does not have permission attribute", path);
+            errors[path] = {EC::NoPermissionAttribute, msg};
+            return;
+        }
+
+        uint64_t file_type = attrs.permissions & LIBSSH2_SFTP_S_IFMT;
+        uint64_t new_mode_int = (mode & ~LIBSSH2_SFTP_S_IFMT) | file_type;
+
+        attrs.permissions = new_mode_int;
+
+        int rcr = libssh2_sftp_setstat(amsession->sftp, path.c_str(), &attrs);
+
+        if (rcr < 0)
         {
             rc = GetLastEC();
             msg = fmt::format("chmod {} failed: {}", path, GetLastErrorMsg());
@@ -1465,7 +1549,7 @@ private:
                 info.type = PathType::Unknown;
                 break;
             }
-            info.mode_int = attrs.permissions & 0777;
+            info.mode_int = mode & 0777;
             info.mode_str = ModeTrans(info.mode_int);
         }
 
@@ -1487,28 +1571,27 @@ public:
         {
             return user_id_map[uid];
         }
-        char uname[64];
+        char uname[128];
         SafeChannel channel(amsession);
         if (!channel.channel)
         {
             return "";
         }
         std::string cmd = fmt::format("id -un {}", uid);
-        int out = libssh2_channel_exec(channel.channel, cmd.c_str());
-        if (out < 0)
+        CR cr = channel.ConductCmd(cmd);
+        if (std::holds_alternative<ECM>(cr))
         {
-            return "";
+            return "unkown";
         }
-        int nbytes = libssh2_channel_read(channel.channel, uname, sizeof(uname) - 1);
-        if (nbytes > 0)
+        std::pair<std::string, int> resp = std::get<std::pair<std::string, int>>(cr);
+        if (resp.second != 0)
         {
-            uname[nbytes] = '\0';
-            user_id_map[uid] = std::string(uname);
-            return std::string(uname);
+            return "unkown";
         }
         else
         {
-            return "";
+            user_id_map[uid] = resp.first;
+            return resp.first;
         }
     }
 
@@ -1585,18 +1668,16 @@ public:
         return {EC::Success, ""};
     }
 
-    std::variant<std::map<std::string, ECM>, ECM> chmod(std::string path, std::string mode, bool recursive = false)
+    std::variant<std::map<std::string, ECM>, ECM> chmod(std::string path, std::variant<std::string, uint64_t> mode, bool recursive = false)
     {
         if (static_cast<int>(GetOSType()) <= 0)
         {
             return ECM{EC::UnImplentedMethod, "Chmod only supported on Unix System"};
         }
 
-        std::string re_pattern = "^[r-\\?][w-\\?][x-\\?][r-\\?][w-\\?][x-\\?][r-\\?][w-\\?][x-\\?]$";
-
-        if (!std::regex_match(mode, std::regex(re_pattern)))
+        if (!amsession->sftp)
         {
-            return ECM{EC::InvalidArg, fmt::format("Invalid mode: {}", mode)};
+            return ECM{EC::NoConnection, "SFTP not initialized"};
         }
 
         BR br = exists(path);
@@ -1608,14 +1689,37 @@ public:
         {
             return ECM{EC::PathNotExist, fmt::format("Path does not exist: {}", path)};
         }
-
         std::map<std::string, ECM> ecm_map;
-        _chmod(path, mode, recursive, ecm_map);
+
+        if (std::holds_alternative<std::string>(mode))
+        {
+            if (!IsModeValid(std::get<std::string>(mode)))
+            {
+                return ECM{EC::InvalidArg, fmt::format("Invalid mode: {}", std::get<std::string>(mode))};
+            }
+            _chmod(path, std::get<std::string>(mode), recursive, ecm_map);
+        }
+        else if (std::holds_alternative<uint64_t>(mode))
+        {
+            if (!IsModeValid(std::get<uint64_t>(mode)))
+            {
+                return ECM{EC::InvalidArg, fmt::format("Invalid mode: {}", std::get<uint64_t>(mode))};
+            }
+            _chmod(path, std::get<uint64_t>(mode), recursive, ecm_map);
+        }
+        else
+        {
+            return ECM{EC::InvalidArg, fmt::format("Invalid mode data type")};
+        }
         return ecm_map;
     }
 
     RR realpath(std::string path)
     {
+        if (!amsession->sftp)
+        {
+            return std::make_pair(EC::NoConnection, "SFTP not initialized");
+        }
         char path_t[1024];
         int rcr = libssh2_sftp_realpath(amsession->sftp, path.c_str(), path_t, sizeof(path_t));
         if (rcr < 0)
@@ -1633,19 +1737,26 @@ public:
 
     SR stat(std::string path)
     {
+        if (!amsession->sftp)
+        {
+            return std::make_pair(EC::NoConnection, "SFTP not initialized");
+        }
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         EC rc;
         std::string msg = "";
-        int rct;
-        {
-            rct = libssh2_sftp_stat(amsession->sftp, path.c_str(), &attrs);
-        }
+        int rct = libssh2_sftp_stat(amsession->sftp, path.c_str(), &attrs);
+
         if (rct != 0)
         {
             rc = GetLastEC();
             msg = fmt::format("stat {} failed: {}", path, GetLastErrorMsg());
             trace(AMWARNING, rc, fmt::format("{}@{}", request.nickname, path), "Stat", msg);
             return std::make_pair(rc, msg);
+        }
+        RR rp = realpath(path);
+        if (std::holds_alternative<std::string>(rp))
+        {
+            path = std::get<std::string>(rp);
         }
         return FormatStat(path, attrs);
     }
@@ -1665,6 +1776,10 @@ public:
 
     BR exists(std::string path)
     {
+        if (!amsession->sftp)
+        {
+            return std::make_pair(EC::NoConnection, "SFTP not initialized");
+        }
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         EC rc;
         int rct;
@@ -1689,14 +1804,17 @@ public:
         return true;
     }
 
-    BR is_regular_file(std::string path)
+    BR is_regular(std::string path)
     {
-        std::variant<PathType, ECM> path_type = get_path_type(path);
-        if (std::holds_alternative<ECM>(path_type))
+        SR info = stat(path);
+        if (std::holds_alternative<PathInfo>(info))
         {
-            return std::get<ECM>(path_type);
+            return std::get<PathInfo>(info).type == PathType::FILE ? true : false;
         }
-        return std::get<PathType>(path_type) == PathType::FILE ? true : false;
+        else
+        {
+            return std::get<ECM>(info);
+        }
     }
 
     BR is_dir(std::string path)
@@ -1727,6 +1845,10 @@ public:
 
     LR listdir(std::string path, long max_time_ms = -1)
     {
+        if (!amsession->sftp)
+        {
+            return std::make_pair(EC::NoConnection, "SFTP not initialized");
+        }
         std::string msg = "";
         std::vector<PathInfo> file_list = {};
         BR br = is_dir(path);
@@ -1835,6 +1957,10 @@ public:
 
     ECM mkdir(std::string path)
     {
+        if (!amsession->sftp)
+        {
+            return std::make_pair(EC::NoConnection, "SFTP not initialized");
+        }
         std::string msg = "";
         BR br = is_dir(path);
         if (std::holds_alternative<ECM>(br))
@@ -1872,6 +1998,10 @@ public:
 
     ECM mkdirs(std::string path)
     {
+        if (!amsession->sftp)
+        {
+            return std::make_pair(EC::NoConnection, "SFTP not initialized");
+        }
         if (path.empty())
         {
             return {EC::InvalidArg, "path parameter can't be an empty string"};
@@ -1911,6 +2041,10 @@ public:
 
     ECM rmfile(std::string path)
     {
+        if (!amsession->sftp)
+        {
+            return std::make_pair(EC::NoConnection, "SFTP not initialized");
+        }
         SR info = stat(path);
         ECM ecm;
         EC rc;
@@ -1956,6 +2090,10 @@ public:
 
     ECM rmdir(std::string path)
     {
+        if (!amsession->sftp)
+        {
+            return std::make_pair(EC::NoConnection, "SFTP not initialized");
+        }
         LR lr = listdir(path, 1);
         std::string msg = "";
         EC rc;
@@ -1989,8 +2127,12 @@ public:
         return {EC::Success, ""};
     }
 
-    RMR remove(std::string path)
+    std::variant<RMR, ECM> remove(std::string path)
     {
+        if (!amsession->sftp)
+        {
+            return ECM{EC::NoConnection, "SFTP not initialized"};
+        }
         RMR errors = {};
         _rm(path, errors);
         return errors;
@@ -1998,6 +2140,10 @@ public:
 
     ECM saferm(std::string path)
     {
+        if (!amsession->sftp)
+        {
+            return ECM{EC::NoConnection, "SFTP not initialized"};
+        }
         BR br = exists(path);
         if (std::holds_alternative<ECM>(br))
         {
@@ -2061,6 +2207,10 @@ public:
 
     ECM move(std::string src, std::string dst, bool need_mkdir = false, bool force_write = false)
     {
+        if (!amsession->sftp)
+        {
+            return ECM{EC::NoConnection, "SFTP not initialized"};
+        }
         SR sr = stat(src);
         ECM ecm;
 
@@ -2140,6 +2290,10 @@ public:
 
     ECM copy(std::string src, std::string dst, bool need_mkdir = false)
     {
+        if (!amsession->sftp)
+        {
+            return ECM{EC::NoConnection, "SFTP not initialized"};
+        }
         BR br = exists(src);
         if (std::holds_alternative<ECM>(br))
         {
@@ -2185,30 +2339,30 @@ public:
             trace(AMCRITICAL, channel.error_code, fmt::format("{}@{}", request.nickname, src), "Copy", msg);
             return {channel.error_code, msg};
         }
-        int rcr;
-        {
-            rcr = libssh2_channel_exec(channel.channel, command.c_str());
-        }
+        CR cr = channel.ConductCmd(command);
 
-        if (rcr != 0)
+        if (std::holds_alternative<ECM>(cr))
         {
-            std::string msg = fmt::format("Copy cmd conducted failed: {}", GetLastErrorMsg());
-            trace(AMWARNING, GetLastEC(), fmt::format("{}@{}->{}@{}", request.nickname, src, request.nickname, dst), "Copy", msg);
-            return {GetLastEC(), msg};
+            return std::get<ECM>(cr);
         }
-        int exit_code = libssh2_channel_get_exit_status(channel.channel);
+        std::pair<std::string, int> resp = std::get<std::pair<std::string, int>>(cr);
 
-        if (exit_code != 0)
+        if (resp.second != 0)
         {
-            std::string msg = fmt::format("Copy cmd conducted failed with exit code: {}", exit_code);
+            std::string msg = fmt::format("Copy cmd conducted failed with exit code: {}, error: {}", resp.second, resp.first);
             trace(AMWARNING, EC::InhostCopyFailed, fmt::format("{}@{}->{}", request.nickname, src, dst), "Copy", msg);
             return {EC::InhostCopyFailed, msg};
         }
+
         return {EC::Success, ""};
     }
 
-    WRV walk(std::string path, bool ignore_sepcial_file = true)
+    std::variant<WRV, ECM> walk(std::string path, bool ignore_sepcial_file = true)
     {
+        if (!amsession->sftp)
+        {
+            return ECM{EC::NoConnection, "SFTP not initialized"};
+        }
         // get all files and deepest folders
         WRV result = {};
         _walk(path, result, ignore_sepcial_file);
@@ -2217,6 +2371,10 @@ public:
 
     SIZER getsize(std::string path, bool ignore_sepcial_file = true)
     {
+        if (!amsession->sftp)
+        {
+            return ECM{EC::NoConnection, "SFTP not initialized"};
+        }
         BR br = exists(path);
         if (std::holds_alternative<ECM>(br))
         {
@@ -2312,6 +2470,7 @@ private:
         uint64_t remaining = l_file_m.file_size;
         uint64_t buffer_size;
         uint64_t local_size = 0;
+        py::object result;
 
         long rc;
         double time_end = timenow();
@@ -2356,23 +2515,40 @@ private:
                 cb_time = time_end;
                 {
                     py::gil_scoped_acquire acquire;
-                    callback.progress_cb(src, dst, offset, l_file_m.file_size, current_size, total_size);
+                    result = callback.progress_cb(src, dst, offset, l_file_m.file_size, current_size, total_size);
+                    if (!result.is_none())
+                    {
+                        if (py::isinstance<EC>(result))
+                        {
+                            switch (result.cast<EC>())
+                            {
+                            case EC::Terminate:
+                                rc_r = EC::Terminate;
+                                error_msg = "Transfer cancelled";
+                                goto clean;
+                            case EC::TransferPause:
+                                is_pause.store(TRUE);
+                                break;
+                            default:
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (is_terminate.load())
+                {
+                    rc_r = EC::Terminate;
+                    error_msg = "Transfer cancelled";
+                    goto clean;
+                }
+
+                while (is_pause.load() && !is_terminate.load())
+                {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(300));
                 }
             }
-
-            if (is_terminate.load())
-            {
-                rc_r = EC::Terminate;
-                error_msg = "Transfer cancelled";
-                goto clean;
-            }
-
-            while (is_pause.load() && !is_terminate.load())
-            {
-                std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            }
         }
-
     clean:
         if (callback.need_progress_cb)
         {
@@ -2446,6 +2622,7 @@ private:
         uint64_t local_size = 0;
         double time_end = timenow();
         long bytes;
+        py::object result;
 
         while (offset < file_size)
         {
@@ -2483,7 +2660,25 @@ private:
                 cb_time = time_end;
                 {
                     py::gil_scoped_acquire acquire;
-                    callback.progress_cb(src, dst, offset, file_size, current_size, total_size);
+                    result = callback.progress_cb(src, dst, offset, file_size, current_size, total_size);
+                    if (!result.is_none())
+                    {
+                        if (py::isinstance<EC>(result))
+                        {
+                            switch (result.cast<EC>())
+                            {
+                            case EC::Terminate:
+                                rc_r = EC::Terminate;
+                                error_msg = "Transfer cancelled";
+                                goto clean;
+                            case EC::TransferPause:
+                                is_pause.store(TRUE);
+                                break;
+                            default:
+                                break;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -2596,6 +2791,7 @@ private:
         libssh2_session_set_blocking(another_worker->amsession->session, 0);
         uint64_t read_eagain_count = 0;
         uint64_t write_eagain_count = 0;
+        py::object result;
 
         while (all_write < file_size)
         {
@@ -2673,7 +2869,25 @@ private:
                         cb_time = time_end;
                         {
                             py::gil_scoped_acquire acquire;
-                            callback.progress_cb(src, dst, all_write, file_size, current_size, total_size);
+                            result = callback.progress_cb(src, dst, all_write, file_size, current_size, total_size);
+                            if (!result.is_none())
+                            {
+                                if (py::isinstance<EC>(result))
+                                {
+                                    switch (result.cast<EC>())
+                                    {
+                                    case EC::Terminate:
+                                        rc_final = EC::Terminate;
+                                        error_msg = "Transfer cancelled";
+                                        goto clean;
+                                    case EC::TransferPause:
+                                        is_pause.store(TRUE);
+                                        break;
+                                    default:
+                                        break;
+                                    }
+                                }
+                            }
                         }
                     }
                     ctx.finish_write(wbuffer, write_order++);
@@ -2787,7 +3001,6 @@ public:
             result = std::get<WRV>(res);
         }
 
-        std::cout << "result size: " << result.size() << std::endl;
         for (auto &item : result)
         {
             if (ignore_link && (item.type == PathType::SYMLINK))
@@ -2802,7 +3015,7 @@ public:
 
     TR upload(TASKS &tasks, TransferCallback cb_set = TransferCallback(), uint64_t chunk_size = 2 * AMMB)
     {
-
+        std::lock_guard<std::mutex> lock(mtx);
         ECM rc = Check();
         if (rc.first != EC::Success)
         {
@@ -2853,6 +3066,7 @@ public:
 
     TR download(TASKS &tasks, TransferCallback cb_set = TransferCallback(), uint64_t chunk_size = 2 * AMMB)
     {
+        std::lock_guard<std::mutex> lock(mtx);
         reset();
         ECM rc = Check();
         if (!isok(rc))
@@ -2893,15 +3107,17 @@ public:
 
     TR toAnotherHost(TASKS &tasks, std::shared_ptr<AMSFTPClient> another_worker, TransferCallback cb_set = TransferCallback(), uint64_t chunk_size = 256 * AMKB)
     {
+        std::lock_guard<std::mutex> lock(mtx);
+        std::lock_guard<std::mutex> lock_another(another_worker->mtx);
         ECM rc = Check();
         if (rc.first != EC::Success)
         {
-            return ECM{rc.first, fmt::format("Src Client Check failed: {}", rc.second)};
+            return rc;
         }
-        ECM rc_another = another_worker->Check();
-        if (rc_another.first != EC::Success)
+        rc = another_worker->Check();
+        if (rc.first != EC::Success)
         {
-            return ECM{rc_another.first, fmt::format("Dst Client Check failed: {}", rc_another.second)};
+            return rc;
         }
         reset();
 
@@ -3092,7 +3308,8 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("Terminate", ErrorCode::Terminate)
         .value("UnImplentedMethod", ErrorCode::UnImplentedMethod)
         .value("NoPermissionAttribute", ErrorCode::NoPermissionAttribute)
-        .value("LocalStatError", ErrorCode::LocalStatError);
+        .value("LocalStatError", ErrorCode::LocalStatError)
+        .value("TransferPause", ErrorCode::TransferPause);
 
     py::enum_<PathType>(m, "PathType")
         .value("DIR", PathType::DIR)
@@ -3103,6 +3320,14 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("SOCKET", PathType::Socket)
         .value("FIFO", PathType::FIFO)
         .value("UNKNOWN", PathType::Unknown);
+    py::enum_<OS_TYPE>(m, "OS_TYPE")
+        .value("Windows", OS_TYPE::Windows)
+        .value("Linux", OS_TYPE::Linux)
+        .value("MacOS", OS_TYPE::MacOS)
+        .value("FreeBSD", OS_TYPE::FreeBSD)
+        .value("Unix", OS_TYPE::Unix)
+        .value("Unknown", OS_TYPE::Unknown)
+        .value("Uncertain", OS_TYPE::Uncertain);
 
     py::class_<ConRequst>(m, "ConRequst")
         .def(py::init<std::string, std::string, std::string, int, std::string, std::string, bool, size_t, std::string>(), py::arg("nickname"), py::arg("hostname"), py::arg("username"), py::arg("port"), py::arg("password") = "", py::arg("keyfile") = "", py::arg("compression") = false, py::arg("timeout_s") = 3, py::arg("trash_dir") = "")
@@ -3132,6 +3357,7 @@ PYBIND11_MODULE(AMSFTP, m)
 
     py::class_<PathInfo>(m, "PathInfo")
         .def(py::init<std::string, std::string, std::string, std::string, uint64_t, uint64_t, uint64_t, PathType, uint64_t, std::string>(), py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("uname"), py::arg("size"), py::arg("atime"), py::arg("mtime"), py::arg("path_type") = PathType::FILE, py::arg("mode_int") = 0777, py::arg("mode_str") = "rwxrwxrwx")
+        .def("FormatTime", &PathInfo::FormatTime, py::arg("time"), py::arg("format") = "%Y-%m-%d %H:%M:%S")
         .def_readwrite("name", &PathInfo::name)
         .def_readwrite("path", &PathInfo::path)
         .def_readwrite("dir", &PathInfo::dir)
@@ -3145,6 +3371,7 @@ PYBIND11_MODULE(AMSFTP, m)
 
     py::class_<BaseSFTPClient, std::shared_ptr<BaseSFTPClient>>(m, "BaseSFTPClient")
         .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object>(), py::arg("request"), py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none())
+        .def("IsValidKey", &BaseSFTPClient::IsValidKey, py::arg("key"))
         .def("LastTraceError", &BaseSFTPClient::LastTraceError)
         .def("GetAllTraceErrors", &BaseSFTPClient::GetAllTraceErrors)
         .def("GetTraceNum", &BaseSFTPClient::GetTraceNum)
@@ -3155,6 +3382,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("SetAuthCallback", &BaseSFTPClient::SetAuthCallback, py::arg("auth_cb") = py::none())
         .def("Check", &BaseSFTPClient::Check)
         .def("Connect", &BaseSFTPClient::Connect)
+        .def("Disconnect", &BaseSFTPClient::Disconnect)
         .def("EnsureConnect", &BaseSFTPClient::EnsureConnect)
         .def("GetOSType", &BaseSFTPClient::GetOSType);
 
@@ -3167,7 +3395,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("stat", &AMSFTPClient::stat, py::arg("path"))
         .def("get_path_type", &AMSFTPClient::get_path_type, py::arg("path"))
         .def("exists", &AMSFTPClient::exists, py::arg("path"))
-        .def("is_regular_file", &AMSFTPClient::is_regular_file, py::arg("path"))
+        .def("is_regular", &AMSFTPClient::is_regular, py::arg("path"))
         .def("is_dir", &AMSFTPClient::is_dir, py::arg("path"))
         .def("is_symlink", &AMSFTPClient::is_symlink, py::arg("path"))
         .def("listdir", &AMSFTPClient::listdir, py::arg("path"), py::arg("max_time_ms") = -1)
@@ -3204,5 +3432,6 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("realpath", &AMFS::realpath, py::arg("path"))
         .def("mkdirs", &AMFS::mkdirs, py::arg("path"))
         .def("stat", &AMFS::stat, py::arg("path"))
+        .def("listdir", &AMFS::listdir, py::arg("path"))
         .def("walk", &AMFS::walk, py::arg("path"), py::arg("ignore_sepcial_file") = true);
 }
