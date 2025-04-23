@@ -204,6 +204,7 @@ enum class ErrorCode
     UnImplentedMethod = 35,
     NoPermissionAttribute = 36,
     LocalStatError = 37,
+    TransferPause = 38,
 };
 
 enum class PathType
