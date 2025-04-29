@@ -7,108 +7,6 @@ constexpr uint64_t AMKB = 1024;
 constexpr uint64_t AMMB = 1024 * 1024;
 constexpr uint64_t AMGB = 1024 * 1024 * 1024;
 
-constexpr char *AMLEVEL = "LEVEL";
-constexpr char *AMERRORCODE = "ERRORCODE";
-constexpr char *AMERRORNAME = "ERRORNAME";
-constexpr char *AMTARGET = "TARGET";
-constexpr char *AMACTION = "ACTION";
-constexpr char *AMMESSAGE = "MESSAGE";
-constexpr char *AMCRITICAL = "CRITICAL";
-constexpr char *AMERROR = "ERROR";
-constexpr char *AMWARNING = "WARNING";
-constexpr char *AMDEBUG = "DEBUG";
-constexpr char *AMINFO = "INFO";
-
-enum class ErrorCode2
-{
-    Success = 0,
-    SessionCreateError = -1,
-    SftpCreateError = -2,
-    SessionEstablishError = -3,
-    SftpEstablishError = -4,
-    ConnectionAuthorizeError = -5,
-    LocalFileMapError = -6,
-    RemoteFileOpenError = -7,
-    RemoteFileStatError = -8,
-    LocalFileCreateError = -9,
-    LocalFileAllocError = -10,
-    NetworkError = -11,
-    NetworkDisconnect = -12,
-    NetworkTimeout = -13,
-    LocalFileFlushError = -14,
-    SegmentationFault = -15,
-    SessionBroken = -16,
-    SftpBroken = -17,
-    ChannelCreateError = -18,
-    ConnectionCheckFailed = -19,
-    RemoteFileWriteError = -20,
-    RemoteFileReadError = -21,
-    Terminate = -22,
-    LocalFileExists = -23,
-    RemoteFileExists = -24,
-    PathNotExist = -25,
-    PermissionDenied = -26,
-    RemotePathOpenError = -27,
-    NotDirectory = -28,
-    ParentDirectoryNotExist = -29,
-    TargetNotAFile = -30,
-    RemoteFileDeleteError = -31,
-    RemoteDirDeleteError = -32,
-    UnknownError = -33,
-    DirNotEmpty = -34,
-    EmptyDirRemoveError = -35,
-    TargetNotADirectory = -36,
-    InvalidTrashDir = -37,
-    MoveError = -38,
-    TargetExists = -39,
-    CopyError = -40,
-    EndOfFile = -41,
-    EAgain = -42,
-    SocketNone = -43,
-    SocketSend = -44,
-    SocketTimeout = -45,
-    SocketRecv = -46,
-    SocketAccept = -47,
-    WriteProtected = -48,
-    UnenoughSpace = -49,
-    UserSpaceQuotaExceeded = -50,
-    BannerRecvError = -51,
-    BannerSendError = -52,
-    SocketSendError = -53,
-    SocketDisconnect = -54,
-    AuthFailed = -55,
-    PublicKeyAuthFailed = -56,
-    PasswordExpired = -57,
-    KeyfileAuthFailed = -58,
-    ChannelFailure = -59,
-    ChannelWindowFull = -60,
-    ChannelWindowExceeded = -61,
-    MACAuthFailed = -62,
-    KexFailure = -63,
-    AlgoUnsupported = -64,
-    MemoryAllocError = -65,
-    FileOperationError = -66,
-    ScpProtocolError = -67,
-    SftpProtocolError = -68,
-    KnownHostAuthFailed = -69,
-    InvalidParameter = -70,
-    NoSFTPConnection = -71,
-    SFTPConnectionLost = -72,
-    SFTPBadMessage = -73,
-    InvalidHandle = -74,
-    SFTPLockConflict = -75,
-    SymlinkLoop = -76,
-    InvalidFilename = -77,
-    UnsupportedSFTPOperation = -78,
-    MediaUnavailable = -79,
-    SftpNotInitialized = -80,
-    SessionNotInitialized = -81,
-    DirAlreadyExists = -82,
-    SocketCreateError = -83,
-    PathAlreadyExists = -84,
-    UnexpectedEOF = -85,
-};
-
 enum class ErrorCode
 {
     Success = 0,
@@ -205,6 +103,8 @@ enum class ErrorCode
     NoPermissionAttribute = 36,
     LocalStatError = 37,
     TransferPause = 38,
+    TransferResume = 39,
+    PyTraceError = 40
 };
 
 enum class PathType

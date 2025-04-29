@@ -7,8 +7,6 @@
 #include <vector>
 #include <windows.h>
 
-using EC = ErrorCode;
-using ECM = std::pair<EC, std::string>;
 extern const std::vector<std::pair<uint64_t, size_t>> GLOBAL_PERMISSIONS_MASK;
 extern const std::regex MODE_STR_PATTERN_RE;
 
@@ -50,9 +48,9 @@ namespace AMFS
 
     std::string basename(const std::string &path);
 
-    std::string realpath(const std::string &path);
+    std::string realpath(const std::string &path, bool already_absolute = false);
 
-    ECM mkdirs(const std::string &path);
+    std::pair<ErrorCode, std::string> mkdirs(const std::string &path);
 
     std::vector<PathInfo> listdir(const std::string &path);
 
@@ -69,7 +67,7 @@ namespace AMFS
             {
                 segments.push_back(arg.string());
             }
-            else
+            else if constexpr (std::is_same_v<T, std::string>)
             {
                 std::string s = std::forward<decltype(arg)>(arg);
                 if (s.empty())
@@ -77,6 +75,10 @@ namespace AMFS
                     return;
                 }
                 segments.push_back(s);
+            }
+            else if constexpr (std::is_same_v<T, std::vector<std::string>>)
+            {
+                segments.insert(segments.end(), arg.begin(), arg.end());
             }
         };
 
@@ -99,11 +101,13 @@ namespace AMFS
         return combined.lexically_normal().generic_string();
     }
 
-    std::variant<PathInfo, ECM> stat(const std::string &path);
+    std::variant<PathInfo, std::pair<ErrorCode, std::string>> stat(const std::string &path, bool trace_link = false);
 
-    std::vector<PathInfo> walk(const std::string &path, bool ignore_sepcial_file = true);
+    std::vector<PathInfo> walk(const std::string &path, bool ignore_sepcial_file = true, bool trace_link = false);
 
     std::vector<std::string> split(const std::string &path);
 
     std::vector<std::string> split(const std::filesystem::path &path);
+
+    uint64_t getsize(const std::string &path, bool trace_link = false);
 }
