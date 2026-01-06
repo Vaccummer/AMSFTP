@@ -17,6 +17,8 @@
 #include <windows.h>
 
 namespace fs = std::filesystem;
+using EC = ErrorCode;
+using ECM = std::pair<EC, std::string>;
 
 const std::vector<std::pair<uint64_t, size_t>> GLOBAL_PERMISSIONS_MASK = {
     {0400, 0}, {0200, 1}, {0100, 2}, {0040, 3}, {0020, 4}, {0010, 5}, {0004, 6}, {0002, 7}, {0001, 8}};
@@ -48,48 +50,6 @@ std::string PathInfo::FormatTime(const uint64_t &time, const std::string &format
     return oss.str();
 }
 
-std::wstring ansi_to_wstring(const std::string &str)
-{
-    int len = MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, nullptr, 0);
-    if (len <= 0)
-        return L"";
-    std::wstring result(len - 1, 0); // 去掉结尾的null字符
-    MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, &result[0], len);
-    return result;
-}
-
-// wstring → ANSI (如GBK)
-std::string wstring_to_ansi(const std::wstring &wstr)
-{
-    int len = WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (len <= 0)
-        return "";
-    std::string result(len - 1, 0); // 去掉结尾的null字符
-    WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, &result[0], len, nullptr, nullptr);
-    return result;
-}
-
-std::wstring utf8_to_wstring(const std::string &str)
-{
-    int len = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
-    if (len <= 0)
-        return L"";
-    std::wstring result(len - 1, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &result[0], len);
-    return result;
-}
-
-// wstring → UTF-8
-std::string wstring_to_utf8(const std::wstring &wstr)
-{
-    int len = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (len <= 0)
-        return "";
-    std::string result(len - 1, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &result[0], len, nullptr, nullptr);
-    return result;
-}
-
 std::string wstr2str(const std::wstring &wstr)
 {
     int bufferSize = WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
@@ -98,45 +58,20 @@ std::string wstr2str(const std::wstring &wstr)
 
     std::string result(bufferSize, 0);
     WideCharToMultiByte(CP_ACP, 0, wstr.c_str(), -1, &result[0], bufferSize, nullptr, nullptr);
-    result.resize(bufferSize - 1);
+    result.resize(bufferSize - 1); // 去除末尾的'\0'
     return result;
-}
-
-bool is_valid_utf8(const std::string &str)
-{
-    int remaining = 0;
-    for (unsigned char c : str)
-    {
-        if (remaining > 0)
-        {
-            if ((c & 0xC0) != 0x80)
-                return false;
-            --remaining;
-        }
-        else
-        {
-            if ((c & 0x80) == 0x00)
-                continue; // 单字节 0xxxxxxx
-            else if ((c & 0xE0) == 0xC0)
-                remaining = 1; // 双字节 110xxxxx
-            else if ((c & 0xF0) == 0xE0)
-                remaining = 2; // 三字节 1110xxxx
-            else if ((c & 0xF8) == 0xF0)
-                remaining = 3; // 四字节 11110xxx
-            else
-                return false;
-        }
-    }
-    return (remaining == 0);
 }
 
 std::wstring str2wstr(const std::string &str)
 {
-    if (is_valid_utf8(str))
-    {
-        return utf8_to_wstring(str);
-    }
-    return ansi_to_wstring(str);
+    int bufferSize = MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, nullptr, 0);
+    if (bufferSize == 0)
+        return L"";
+
+    std::wstring result(bufferSize, 0);
+    MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, &result[0], bufferSize);
+    result.resize(bufferSize - 1); // 去除末尾的L'\0'
+    return result;
 }
 
 std::string ModeTrans(uint64_t mode_int)
@@ -288,42 +223,33 @@ namespace WinTool
         return wstr2str(owner);
     }
 
-    void GetTime(const std::wstring &path, PathInfo &info)
+    void GetFilePermissions(const std::string &path, uint64_t &mode_int, std::string &mode_str)
     {
-        HANDLE hFile = CreateFileW(
-            path.c_str(),
-            GENERIC_READ,
-            FILE_SHARE_READ,
-            NULL,
-            OPEN_EXISTING,
-            FILE_FLAG_BACKUP_SEMANTICS,
-            NULL);
-        if (hFile == INVALID_HANDLE_VALUE)
+        mode_int = 0;
+        mode_str = "";
+
+        DWORD attributes = GetFileAttributesA(path.c_str());
+        if (attributes == INVALID_FILE_ATTRIBUTES)
         {
             return;
         }
-        FILETIME ftAccess, ftModify;
-        GetFileTime(hFile, NULL, &ftAccess, &ftModify);
-        CloseHandle(hFile); // 立即释放句柄
-        ULARGE_INTEGER uliAccess{
-            ftAccess.dwLowDateTime,
-            ftAccess.dwHighDateTime};
-        ULARGE_INTEGER uliModify{
-            ftModify.dwLowDateTime,
-            ftModify.dwHighDateTime};
-        info.atime = (uliAccess.QuadPart - 116444736000000000ULL) / 1e7;
-        info.mtime = (uliModify.QuadPart - 116444736000000000ULL) / 1e7;
+
+        bool canRead = true;
+        bool canWrite = !(attributes & FILE_ATTRIBUTE_READONLY);
+
+        if (canRead)
+            mode_int += 0444;
+        if (canWrite)
+            mode_int += 0222;
+
+        mode_int += 0111;
+
+        mode_str += canRead ? 'r' : '-';
+        mode_str += canWrite ? 'w' : '-';
+        mode_str += 'x';
+        mode_str = mode_str + mode_str + mode_str;
     }
 
-    bool is_readonly(const std::wstring &path)
-    {
-        DWORD attributes = GetFileAttributesW(path.c_str());
-        if (attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_READONLY)
-        {
-            return true;
-        }
-        return false;
-    }
 }
 
 namespace WT = WinTool;
@@ -332,7 +258,7 @@ namespace AMFS
 {
     std::string dirname(const std::string &path)
     {
-        fs::path p(realpath(path));
+        fs::path p(path);
         if (p.parent_path().empty())
         {
             return "";
@@ -346,144 +272,71 @@ namespace AMFS
         return p.filename().string();
     }
 
-    bool is_absolute(const std::string &path)
+    std::string realpath(const std::string &path)
     {
-        std::regex regex1("^[A-Za-z]:[/\\]");
-        std::regex regex2("^/");
-        return std::regex_match(path, regex1) || std::regex_match(path, regex2);
+        fs::path p(path);
+        return p.lexically_normal().generic_string();
     }
 
-    std::string realpath(const std::string &path, bool force_absolute)
-    {
-        std::string cwd = fs::current_path().string();
-        std::vector<std::string> parts = AMFS::split(path);
-        if (parts[0] == "." || parts[0] == "~")
-        {
-            parts.erase(parts.begin());
-            std::vector<std::string> parts_t = AMFS::split(cwd);
-            parts.insert(parts.begin(), parts_t.begin(), parts_t.end());
-        }
-        else if (!is_absolute(path))
-        {
-            std::vector<std::string> parts_t = AMFS::split(cwd);
-            parts.insert(parts.begin(), parts_t.begin(), parts_t.end());
-        }
-        std::vector<std::string> new_parts;
-        for (const auto &part : parts)
-        {
-            if (part == ".")
-            {
-                continue;
-            }
-            else if (part == "..")
-            {
-                if (!new_parts.empty())
-                {
-                    new_parts.pop_back();
-                }
-            }
-            else
-            {
-                new_parts.push_back(part);
-            }
-        }
-        return AMFS::join(new_parts);
-    }
-
-    std::pair<ErrorCode, std::string> mkdirs(const std::string &path)
+    ECM mkdirs(const std::string &path)
     {
         try
         {
             fs::path p(path);
             fs::create_directories(p);
-            return std::make_pair(ErrorCode::Success, "");
+            return ECM(EC::Success, "");
         }
         catch (const std::exception &e)
         {
-            return std::make_pair(ErrorCode::LocalFileError, e.what());
+            return ECM(EC::LocalFileError, e.what());
         }
     }
 
-    std::variant<PathInfo, std::pair<ErrorCode, std::string>> stat(const std::string &path, bool trace_link)
+    std::variant<PathInfo, ECM> stat(const std::string &path)
     {
         PathInfo info;
-        fs::path p(path);
-        std::wstring wpath = str2wstr(path);
-        info.name = p.filename().string();
-        info.path = realpath(path);
-        info.dir = p.parent_path().string();
-        if (!fs::exists(p))
+
+        WIN32_FILE_ATTRIBUTE_DATA fileData;
+        if (!GetFileAttributesExW(str2wstr(path).c_str(), GetFileExInfoStandard, &fileData))
         {
-            return std::make_pair(ErrorCode::PathNotExist, fmt::format("Local path not found: {}", path));
+            return ECM(EC::PathNotExist, fmt::format("Local path not found: {}", path));
         }
-        fs::file_status status;
-        if (trace_link)
+
+        std::filesystem::path fsPath(path);
+        fsPath = fs::absolute(fsPath);
+        info.name = fsPath.filename().string();
+        info.path = fsPath.generic_string();
+        info.dir = fsPath.parent_path().string();
+
+        if (fileData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
         {
-            status = fs::status(p);
+            info.type = PathType::DIR;
         }
         else
         {
-            status = fs::symlink_status(p);
-        }
-        switch (status.type())
-        {
-        case fs::file_type::directory:
-            info.type = PathType::DIR;
-            break;
-        case fs::file_type::symlink:
-            info.type = PathType::SYMLINK;
-            break;
-        case fs::file_type::regular:
             info.type = PathType::FILE;
-            break;
-        case fs::file_type::block:
-            info.type = PathType::BlockDevice;
-            break;
-        case fs::file_type::character:
-            info.type = PathType::CharacterDevice;
-            break;
-        case fs::file_type::fifo:
-            info.type = PathType::FIFO;
-            break;
-        case fs::file_type::socket:
-            info.type = PathType::Socket;
-            break;
-        case fs::file_type::unknown:
-            info.type = PathType::Unknown;
-            break;
-        default:
-            info.type = PathType::Unknown;
-            break;
         }
 
         if (info.type == PathType::FILE)
         {
-            try
+            ULARGE_INTEGER fileSize;
+            fileSize.LowPart = fileData.nFileSizeLow;
+            fileSize.HighPart = fileData.nFileSizeHigh;
+            info.size = fileSize.QuadPart;
+            DWORD attributes = GetFileAttributesW(str2wstr(path).c_str());
+            if (attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_READONLY)
             {
-                info.size = fs::file_size(p);
-            }
-            catch (const std::exception)
-            {
+                info.mode_int = 0333;
+                info.mode_str = "r-xr-xr-x";
             }
         }
-
-        if (WT::is_readonly(str2wstr(path)))
-        {
-            info.mode_int = 0333;
-            info.mode_str = "r-xr-xr-x";
-        }
-        else
-        {
-            info.mode_int = 0666;
-            info.mode_str = "rwxrwxrwx";
-        }
-
-        WT::GetTime(wpath, info);
-        info.uname = WT::GetFileOwner(wpath);
+        info.atime = WT::FileTimeToUnixTime(fileData.ftLastAccessTime);
+        info.mtime = WT::FileTimeToUnixTime(fileData.ftLastWriteTime);
+        info.uname = WT::GetFileOwner(str2wstr(path));
         return info;
     }
 
-    void _walk(std::string path, std::vector<PathInfo> &result, bool ignore_sepcial_file, bool trace_link)
+    void _iwalk(std::string path, std::vector<PathInfo> &result, bool ignore_sepcial_file)
     {
         fs::path p(path);
         fs::file_status status;
@@ -491,18 +344,142 @@ namespace AMFS
         {
             return;
         }
-        auto sr = stat(path, trace_link);
-        if (std::holds_alternative<PathInfo>(sr))
+        try
         {
-            result.push_back(std::get<PathInfo>(sr));
+            status = fs::status(p);
+        }
+        catch (const std::exception)
+        {
+            return;
+        }
+        std::string filename = p.filename().string();
+        std::string dir = p.parent_path().string();
+        auto ftime = fs::last_write_time(p);
+        auto duration = ftime.time_since_epoch();
+        uint64_t atime = std::chrono::duration_cast<std::chrono::seconds>(duration).count();
+        uint64_t mtime = atime;
+        bool end_dir = true;
+
+        switch (status.type())
+        {
+        case fs::file_type::directory:
+            try
+            {
+                for (const auto &entry : fs::directory_iterator(p))
+                {
+                    if (fs::is_directory(entry.status()))
+                    {
+                        end_dir = false;
+                    }
+                    _iwalk(entry.path().string(), result, ignore_sepcial_file);
+                }
+                if (end_dir)
+                {
+                    result.push_back(PathInfo(filename, path, dir, "", 0, atime, mtime, PathType::DIR));
+                }
+            }
+            catch (const std::exception)
+            {
+            }
+            break;
+        case fs::file_type::symlink:
+            result.push_back(PathInfo(filename, path, dir, "", 0, atime, mtime, PathType::SYMLINK));
+            break;
+        default:
+            result.push_back(PathInfo(filename, path, dir, "", fs::file_size(p), atime, mtime, PathType::FILE));
+            break;
         }
     }
 
-    std::vector<PathInfo> walk(const std::string &path, bool ignore_sepcial_file, bool trace_link)
+    void _walk(std::vector<std::string> parts, std::vector<std::pair<std::vector<std::string>, PathInfo>> &result, int cur_depth, int max_depth, bool ignore_sepcial_file)
+    {
+        if (max_depth > 0 && cur_depth > max_depth)
+        {
+            return;
+        }
+        std::string path = join(parts);
+        fs::path p(path);
+        fs::file_status status;
+        if (!fs::exists(p))
+        {
+            return;
+        }
+        try
+        {
+            status = fs::status(p);
+        }
+        catch (const std::exception)
+        {
+            return;
+        }
+        std::string filename = p.filename().string();
+        std::string dir = p.parent_path().string();
+        auto ftime = fs::last_write_time(p);
+        auto duration = ftime.time_since_epoch();
+        uint64_t atime = std::chrono::duration_cast<std::chrono::seconds>(duration).count();
+        uint64_t mtime = atime;
+
+        switch (status.type())
+        {
+        case fs::file_type::directory:
+        {
+            try
+            {
+                bool empty_dir = true;
+                for (const auto &entry : fs::directory_iterator(p))
+                {
+                    empty_dir = false;
+                    auto n_parts = parts;
+                    n_parts.push_back(entry.path().filename().string());
+                    _walk(n_parts, result, cur_depth + 1, max_depth, ignore_sepcial_file);
+                }
+                if (empty_dir)
+                {
+                    auto b_parts = parts;
+                    std::string dir_name = b_parts.back();
+                    b_parts.pop_back();
+                    result.push_back(std::make_pair(b_parts, PathInfo(dir_name, join(b_parts), join(b_parts), "", 0, atime, mtime, PathType::DIR)));
+                }
+            }
+            catch (const std::exception)
+            {
+            }
+            break;
+        }
+        case fs::file_type::symlink:
+        {
+            std::vector<std::string> c_parts = parts;
+            std::string link_name = c_parts.back();
+            c_parts.pop_back();
+            result.push_back(std::make_pair(c_parts, PathInfo(link_name, join(c_parts), join(c_parts), "", 0, atime, mtime, PathType::SYMLINK)));
+            break;
+        }
+        default:
+        {
+            auto d_parts = parts;
+            std::string file_name = d_parts.back();
+            d_parts.pop_back();
+            result.push_back(std::make_pair(d_parts, PathInfo(file_name, join(d_parts), join(d_parts), "", fs::file_size(p), atime, mtime, PathType::FILE)));
+            break;
+        }
+        }
+    }
+
+    std::vector<PathInfo> iwalk(const std::string &path, bool ignore_sepcial_file)
     {
         std::vector<PathInfo> result = {};
 
-        _walk(path, result, ignore_sepcial_file, trace_link);
+        _iwalk(path, result, ignore_sepcial_file);
+
+        return result;
+    }
+
+    std::vector<std::pair<std::vector<std::string>, PathInfo>> walk(const std::string &path, int max_depth, bool ignore_sepcial_file)
+    {
+        std::vector<std::pair<std::vector<std::string>, PathInfo>> result = {};
+        std::vector<std::string> parts = {path};
+
+        _walk(parts, result, 0, max_depth, ignore_sepcial_file);
 
         return result;
     }
@@ -511,18 +488,10 @@ namespace AMFS
     {
         std::vector<PathInfo> result = {};
         fs::path p(path);
-        if (!fs::exists(p))
-        {
-            return result;
-        }
-        if (!fs::is_directory(p))
-        {
-            return result;
-        }
-        std::variant<PathInfo, std::pair<ErrorCode, std::string>> sr;
+        std::variant<PathInfo, ECM> sr;
         for (const auto &entry : fs::directory_iterator(p))
         {
-            sr = stat(entry.path().string(), false);
+            sr = stat(entry.path().string());
             if (std::holds_alternative<PathInfo>(sr))
             {
                 result.push_back(std::get<PathInfo>(sr));
@@ -551,39 +520,4 @@ namespace AMFS
         }
         return segments;
     }
-
-    void _getsize(const std::string &path, uint64_t &result, bool trace_link)
-    {
-        fs::path p(path);
-        if (!fs::exists(p))
-        {
-            return;
-        }
-        if (fs::is_directory(p))
-        {
-            for (const auto &entry : fs::directory_iterator(p))
-            {
-                _getsize(entry.path().string(), result, trace_link);
-            }
-        }
-        else if (fs::is_symlink(p))
-        {
-            if (trace_link)
-            {
-                _getsize(fs::read_symlink(p).string(), result, trace_link);
-            }
-        }
-        else if (fs::is_regular_file(p))
-        {
-            result += fs::file_size(p);
-        }
-    }
-
-    uint64_t getsize(const std::string &path, bool trace_link)
-    {
-        uint64_t result = 0;
-        _getsize(path, result, trace_link);
-        return result;
-    }
-
 }

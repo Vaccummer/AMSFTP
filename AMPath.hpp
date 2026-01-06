@@ -7,6 +7,8 @@
 #include <vector>
 #include <windows.h>
 
+using EC = ErrorCode;
+using ECM = std::pair<EC, std::string>;
 extern const std::vector<std::pair<uint64_t, size_t>> GLOBAL_PERMISSIONS_MASK;
 extern const std::regex MODE_STR_PATTERN_RE;
 
@@ -48,9 +50,9 @@ namespace AMFS
 
     std::string basename(const std::string &path);
 
-    std::string realpath(const std::string &path, bool already_absolute = false);
+    std::string realpath(const std::string &path);
 
-    std::pair<ErrorCode, std::string> mkdirs(const std::string &path);
+    ECM mkdirs(const std::string &path);
 
     std::vector<PathInfo> listdir(const std::string &path);
 
@@ -67,18 +69,33 @@ namespace AMFS
             {
                 segments.push_back(arg.string());
             }
-            else if constexpr (std::is_same_v<T, std::string>)
-            {
-                std::string s = std::forward<decltype(arg)>(arg);
-                if (s.empty())
-                {
-                    return;
-                }
-                segments.push_back(s);
-            }
             else if constexpr (std::is_same_v<T, std::vector<std::string>>)
             {
-                segments.insert(segments.end(), arg.begin(), arg.end());
+                // 处理vector<string>类型，将每个元素作为单独的段
+                for (auto &item : arg)
+                {
+                    if (!item.empty())
+                    {
+                        segments.push_back(item);
+                    }
+                }
+            }
+            else
+            {
+                // 尝试将其他类型转换为string
+                try
+                {
+                    std::string s = std::forward<decltype(arg)>(arg);
+                    if (!s.empty())
+                    {
+                        segments.push_back(s);
+                    }
+                }
+                catch (const std::exception &)
+                {
+                    // 如果转换失败，忽略该参数
+                    return;
+                }
             }
         };
 
@@ -101,13 +118,13 @@ namespace AMFS
         return combined.lexically_normal().generic_string();
     }
 
-    std::variant<PathInfo, std::pair<ErrorCode, std::string>> stat(const std::string &path, bool trace_link = false);
+    std::variant<PathInfo, ECM> stat(const std::string &path);
 
-    std::vector<PathInfo> walk(const std::string &path, bool ignore_sepcial_file = true, bool trace_link = false);
+    std::vector<PathInfo> iwalk(const std::string &path, bool ignore_sepcial_file = true);
+
+    std::vector<std::pair<std::vector<std::string>, PathInfo>> walk(const std::string &path, int max_depth = -1, bool ignore_sepcial_file = true);
 
     std::vector<std::string> split(const std::string &path);
 
     std::vector<std::string> split(const std::filesystem::path &path);
-
-    uint64_t getsize(const std::string &path, bool trace_link = false);
 }
