@@ -1,5 +1,5 @@
-#include "AMPath.hpp"
 #include "AMEnum.hpp"
+#include "AMPath.hpp"
 #include <aclapi.h>
 #include <chrono>
 #include <ctime>
@@ -520,4 +520,40 @@ namespace AMFS
         }
         return segments;
     }
+
+    std::string extname(const std::string &path)
+    {
+        fs::path p(path);
+        return p.extension().string();
+    }
+
+    std::string format(const std::string &path)
+    {
+        int pop1num = 0;
+        int pop2num = 0;
+        for (int i = 0; i < path.size(); i++)
+        {
+            if (path[i] == '/')
+            {
+                pop1num++;
+            }
+            else if (path[i] == '\\')
+            {
+                pop2num++;
+            }
+        }
+        std::string pos = pop1num > pop2num ? "/" : "\\";
+        auto parts = split(path);
+        std::string result = "";
+        for (int i = 0; i < parts.size(); i++)
+        {
+            if (!parts[i].empty())
+            {
+                result += parts[i];
+                result += pos;
+            }
+        }
+        return result;
+    }
+
 }
