@@ -2,6 +2,7 @@
 // 标准库头文件（跨平台，无需条件编译）
 #include <chrono>
 #include <codecvt>
+#include <cstdlib>
 #include <ctime>
 #include <filesystem>
 #include <functional>
@@ -19,15 +20,19 @@
 
 // Windows 特有头文件（仅在 Windows 平台包含）
 #ifdef _WIN32
-#include <aclapi.h>  // Windows ACL API
-#include <sddl.h>    // Windows SDDL API
+#include <aclapi.h> // Windows ACL API
+#include <sddl.h>   // Windows SDDL API
+#include <shlobj.h>
 #include <shlwapi.h> // Windows Shell 轻量级 API
+#include <windows.h>
 #include <windows.h> // Windows 核心 API
 #endif
 
 // Unix-like 特有头文件（仅在 Linux/macOS 等 Unix 平台包含）
 #if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
+#include <pwd.h>
 #include <sys/stat.h> // Unix 文件状态 API（stat 函数等）
+#include <unistd.h>
 #endif
 
 namespace AMFS
@@ -41,192 +46,9 @@ namespace AMFS
     constexpr char *exc5 = "amtessixhxch";
     constexpr char *exc6 = "amtasdmpexsch";
 
-#ifdef _WIN32
-    struct FileTimes
-    {
-        double creation_time; // 创建时间
-        double modify_time;   // 修改时间
-        double access_time;   // 最近访问时间
-    };
-
-    bool is_valid_utf8(const std::string &str)
-    {
-        int remaining = 0;
-        for (unsigned char c : str)
-        {
-            if (remaining > 0)
-            {
-                if ((c & 0xC0) != 0x80)
-                    return false;
-                --remaining;
-            }
-            else
-            {
-                if ((c & 0x80) == 0x00)
-                    continue; // 单字节 0xxxxxxx
-                else if ((c & 0xE0) == 0xC0)
-                    remaining = 1; // 双字节 110xxxxx
-                else if ((c & 0xF0) == 0xE0)
-                    remaining = 2; // 三字节 1110xxxx
-                else if ((c & 0xF8) == 0xF0)
-                    remaining = 3; // 四字节 11110xxx
-                else
-                    return false;
-            }
-        }
-        return (remaining == 0);
-    }
-
-    std::string AMstr(const std::wstring &wstr)
-    {
-        int codePage = GetACP();
-        int len = WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        if (len <= 0)
-            return "";
-        std::string result(len - 1, 0);
-        WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, &result[0], len, nullptr, nullptr);
-        return result;
-    };
-
-    std::string AMstr(const wchar_t *wstr)
-    {
-        int codePage = GetACP();
-        int len = WideCharToMultiByte(codePage, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
-        if (len <= 0)
-            return "";
-        std::string result(len - 1, 0);
-        WideCharToMultiByte(codePage, 0, wstr, -1, &result[0], len, nullptr, nullptr);
-        return result;
-    }
-
-    std::wstring AMstr(const std::string &str)
-    {
-        int codePage = CP_ACP;
-        if (is_valid_utf8(str))
-        {
-            codePage = CP_UTF8;
-        }
-        int len = MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, nullptr, 0);
-        if (len <= 0)
-            return L"";
-        std::wstring result(len - 1, 0);
-        MultiByteToWideChar(codePage, 0, str.c_str(), -1, &result[0], len);
-        return result;
-    };
-
-    std::wstring AMstr(const char *str)
-    {
-        int codePage = CP_ACP;
-        if (is_valid_utf8(str))
-        {
-            codePage = CP_UTF8;
-        }
-        int len = MultiByteToWideChar(CP_ACP, 0, str, -1, nullptr, 0);
-        if (len <= 0)
-            return L"";
-        std::wstring result(len - 1, 0);
-        MultiByteToWideChar(codePage, 0, str, -1, &result[0], len);
-        return result;
-    }
-
-    double FileTimeToUnixTime(const FILETIME &ft)
-    {
-        const int64_t UNIX_EPOCH_DIFF = 11644473600LL; // 1601-01-01 到 1970-01-01 的秒数
-        int64_t filetime_100ns = (static_cast<int64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
-        return static_cast<double>(filetime_100ns) / 1e7 - UNIX_EPOCH_DIFF;
-    }
-
-    std::string GetFileOwner(const std::wstring &path)
-    {
-        PSID pSidOwner = NULL;
-        PSECURITY_DESCRIPTOR pSD = NULL;
-        DWORD dwRtnCode = GetNamedSecurityInfoW(
-            path.c_str(),
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION,
-            &pSidOwner,
-            NULL,
-            NULL,
-            NULL,
-            &pSD);
-
-        std::wstring owner = L"";
-        if (dwRtnCode == ERROR_SUCCESS)
-        {
-            wchar_t szOwnerName[256];
-            wchar_t szDomainName[256];
-            DWORD dwNameLen = 256;
-            DWORD dwDomainLen = 256;
-            SID_NAME_USE eUse;
-
-            if (LookupAccountSidW(
-                    NULL,
-                    pSidOwner,
-                    szOwnerName,
-                    &dwNameLen,
-                    szDomainName,
-                    &dwDomainLen,
-                    &eUse))
-            {
-                owner = szOwnerName;
-            }
-            else
-            {
-                wchar_t username[257];
-                DWORD username_len = 257;
-                if (GetUserNameW(username, &username_len))
-                {
-                    owner = std::wstring(username, username_len - 1);
-                }
-            }
-        }
-
-        if (pSD)
-        {
-            LocalFree(pSD);
-        }
-
-        return AMstr(owner);
-    }
-
-    std::tuple<double, double, double> GetTime(const std::wstring &path)
-    {
-        std::wstring wpath(path.begin(), path.end());
-
-        // 使用 FindFirstFile 获取文件信息（支持文件和目录）
-        WIN32_FIND_DATAW find_data;
-        HANDLE hFind = FindFirstFileW(wpath.c_str(), &find_data);
-        if (hFind == INVALID_HANDLE_VALUE)
-        {
-            return {0, 0, 0};
-        }
-        FindClose(hFind);
-        return std::make_tuple(
-            FileTimeToUnixTime(find_data.ftCreationTime),
-            FileTimeToUnixTime(find_data.ftLastWriteTime),
-            FileTimeToUnixTime(find_data.ftLastAccessTime));
-    }
-
-    bool is_readonly(const std::wstring &path)
-    {
-        DWORD attributes = GetFileAttributesW(path.c_str());
-        if (attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_READONLY)
-        {
-            return true;
-        }
-        return false;
-    }
-#else
-    // 时间戳转换为 double (秒数，带小数，纳秒精度)
-    double timespec_to_double(const struct timespec &ts)
-    {
-        return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
-    }
-
-#endif
     namespace Str
     {
-        std::wstring AMStr2(const std::string &str)
+        std::wstring AMStr(const std::string &str)
         {
             std::wstring_convert<std::codecvt_utf8<wchar_t>, wchar_t> converter;
             try
@@ -239,7 +61,7 @@ namespace AMFS
             }
         }
 
-        std::string AMStr2(const std::wstring &wstr)
+        std::string AMStr(const std::wstring &wstr)
         {
             std::wstring_convert<std::codecvt_utf8<wchar_t>, wchar_t> converter;
             try
@@ -250,6 +72,16 @@ namespace AMFS
             {
                 return "";
             }
+        }
+
+        std::string AMStr(wchar_t *wstr)
+        {
+            return AMStr(std::wstring(wstr));
+        }
+
+        std::wstring AMStr(char *str)
+        {
+            return AMStr(std::string(str));
         }
 
         std::pair<bool, std::string> isPatternsValid(const std::vector<std::string> &patterns)
@@ -470,9 +302,9 @@ namespace AMFS
                 pattern = RegexEscape(pattern);
                 pattern = std::regex_replace(pattern, std::regex(exc1), ".*");
 
-                std::wstring p_w = AMStr2(pattern);
+                std::wstring p_w = AMStr(pattern);
 
-                std::wstring n_w = AMStr2(name);
+                std::wstring n_w = AMStr(name);
                 try
                 {
                     return std::regex_search(n_w, std::wregex(p_w));
@@ -485,10 +317,10 @@ namespace AMFS
             else
             {
                 pattern = pattern.substr(1);
-                std::wregex pattern_f(AMStr2(pattern));
+                std::wregex pattern_f(AMStr(pattern));
                 try
                 {
-                    bool result = std::regex_search(AMStr2(name), pattern_f);
+                    bool result = std::regex_search(AMStr(name), pattern_f);
                     return result;
                 }
                 catch (const std::exception &e)
@@ -498,6 +330,189 @@ namespace AMFS
             }
         }
     }
+
+#ifdef _WIN32
+    struct FileTimes
+    {
+        double creation_time; // 创建时间
+        double modify_time;   // 修改时间
+        double access_time;   // 最近访问时间
+    };
+
+    bool is_valid_utf8(const std::string &str)
+    {
+        int remaining = 0;
+        for (unsigned char c : str)
+        {
+            if (remaining > 0)
+            {
+                if ((c & 0xC0) != 0x80)
+                    return false;
+                --remaining;
+            }
+            else
+            {
+                if ((c & 0x80) == 0x00)
+                    continue; // 单字节 0xxxxxxx
+                else if ((c & 0xE0) == 0xC0)
+                    remaining = 1; // 双字节 110xxxxx
+                else if ((c & 0xF0) == 0xE0)
+                    remaining = 2; // 三字节 1110xxxx
+                else if ((c & 0xF8) == 0xF0)
+                    remaining = 3; // 四字节 11110xxx
+                else
+                    return false;
+            }
+        }
+        return (remaining == 0);
+    }
+
+    // std::string AMStr(const std::wstring &wstr)
+    // {
+    //     int codePage = GetACP();
+    //     int len = WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    //     if (len <= 0)
+    //         return "";
+    //     std::string result(len - 1, 0);
+    //     WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, &result[0], len, nullptr, nullptr);
+    //     return result;
+    // };
+
+    // std::string AMStr(const wchar_t *wstr)
+    // {
+    //     int codePage = GetACP();
+    //     int len = WideCharToMultiByte(codePage, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
+    //     if (len <= 0)
+    //         return "";
+    //     std::string result(len - 1, 0);
+    //     WideCharToMultiByte(codePage, 0, wstr, -1, &result[0], len, nullptr, nullptr);
+    //     return result;
+    // }
+
+    // std::wstring AMStr(const std::string &str)
+    // {
+    //     int codePage = CP_ACP;
+    //     if (is_valid_utf8(str))
+    //     {
+    //         codePage = CP_UTF8;
+    //     }
+    //     int len = MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, nullptr, 0);
+    //     if (len <= 0)
+    //         return L"";
+    //     std::wstring result(len - 1, 0);
+    //     MultiByteToWideChar(codePage, 0, str.c_str(), -1, &result[0], len);
+    //     return result;
+    // };
+
+    // std::wstring AMStr(const char *str)
+    // {
+    //     int codePage = CP_ACP;
+    //     if (is_valid_utf8(str))
+    //     {
+    //         codePage = CP_UTF8;
+    //     }
+    //     int len = MultiByteToWideChar(CP_ACP, 0, str, -1, nullptr, 0);
+    //     if (len <= 0)
+    //         return L"";
+    //     std::wstring result(len - 1, 0);
+    //     MultiByteToWideChar(codePage, 0, str, -1, &result[0], len);
+    //     return result;
+    // }
+
+    double FileTimeToUnixTime(const FILETIME &ft)
+    {
+        const int64_t UNIX_EPOCH_DIFF = 11644473600LL; // 1601-01-01 到 1970-01-01 的秒数
+        int64_t filetime_100ns = (static_cast<int64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
+        return static_cast<double>(filetime_100ns) / 1e7 - UNIX_EPOCH_DIFF;
+    }
+
+    std::string GetFileOwner(const std::wstring &path)
+    {
+        PSID pSidOwner = NULL;
+        PSECURITY_DESCRIPTOR pSD = NULL;
+        DWORD dwRtnCode = GetNamedSecurityInfoW(
+            path.c_str(),
+            SE_FILE_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &pSidOwner,
+            NULL,
+            NULL,
+            NULL,
+            &pSD);
+
+        std::wstring owner = L"";
+        if (dwRtnCode == ERROR_SUCCESS)
+        {
+            wchar_t szOwnerName[256];
+            wchar_t szDomainName[256];
+            DWORD dwNameLen = 256;
+            DWORD dwDomainLen = 256;
+            SID_NAME_USE eUse;
+
+            if (LookupAccountSidW(
+                    NULL,
+                    pSidOwner,
+                    szOwnerName,
+                    &dwNameLen,
+                    szDomainName,
+                    &dwDomainLen,
+                    &eUse))
+            {
+                owner = szOwnerName;
+            }
+            else
+            {
+                wchar_t username[257];
+                DWORD username_len = 257;
+                if (GetUserNameW(username, &username_len))
+                {
+                    owner = std::wstring(username, username_len - 1);
+                }
+            }
+        }
+
+        if (pSD)
+        {
+            LocalFree(pSD);
+        }
+
+        return Str::AMStr(owner);
+    }
+
+    std::tuple<double, double, double> GetTime(const std::wstring &path)
+    {
+        std::wstring wpath(path.begin(), path.end());
+
+        // 使用 FindFirstFile 获取文件信息（支持文件和目录）
+        WIN32_FIND_DATAW find_data;
+        HANDLE hFind = FindFirstFileW(wpath.c_str(), &find_data);
+        if (hFind == INVALID_HANDLE_VALUE)
+        {
+            return {0, 0, 0};
+        }
+        FindClose(hFind);
+        return std::make_tuple(
+            FileTimeToUnixTime(find_data.ftCreationTime),
+            FileTimeToUnixTime(find_data.ftLastWriteTime),
+            FileTimeToUnixTime(find_data.ftLastAccessTime));
+    }
+
+    bool is_readonly(const std::wstring &path)
+    {
+        DWORD attributes = GetFileAttributesW(path.c_str());
+        if (attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_READONLY)
+        {
+            return true;
+        }
+        return false;
+    }
+#else
+    // 时间戳转换为 double (秒数，带小数，纳秒精度)
+    double timespec_to_double(const struct timespec &ts)
+    {
+        return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
+    }
+#endif
 
     struct PathInfo
     {
@@ -563,19 +578,37 @@ namespace AMFS
         Directory = 2
     };
 
-    bool is_absolute(const std::string &path)
+    bool IsAbs(const std::string &path, const std::string &sep = "")
     {
-        std::regex merged_regex("^(?:[A-Za-z]:[/\\\\]?|/|\\\\\\\\|~[\\\\/])");
-        return std::regex_search(path, merged_regex);
+        return std::regex_search(UnifyPathSep(path, sep), std::regex("^(?:[A-Za-z]:[/\\\\]?|/|[\\\\/]{2}|~[\\\\/])"));
     }
 
     std::string HomePath()
     {
 #ifdef _WIN32
-        return std::getenv("USERPROFILE");
+        // Windows: 优先使用API
+        wchar_t path[MAX_PATH];
+        if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_PROFILE, NULL, 0, path)))
+        {
+            return Str::AMStr(path);
+        }
+        // 备选环境变量
+        const char *userprofile = std::getenv("USERPROFILE");
+        if (userprofile)
+            return std::string(userprofile);
 #else
-        return std::getenv("HOME");
+        // Linux/macOS
+        const char *home = std::getenv("HOME");
+        if (home)
+            return std::string(home);
+
+        // 备选: 读取/etc/passwd
+
+        struct passwd *pw = getpwuid(getuid());
+        if (pw && pw->pw_dir)
+            return std::string(pw->pw_dir);
 #endif
+        return "";
     }
 
     std::string extname(const std::string &path)
@@ -594,15 +627,18 @@ namespace AMFS
         path = Str::Strip(path);
         if (path.size() < 2)
             return path;
-        if (sep.empty())
-        {
-            sep = Str::GetPathSep(path);
-        }
+        sep = sep.empty() ? Str::GetPathSep(path) : sep;
         std::string head = path.substr(0, 2);
-
-        std::regex slash_pt("[\\\\/]+");
-        path = head + std::regex_replace(path.substr(2), slash_pt, sep);
-        return path;
+        if (head == "//" || head == "\\\\")
+        {
+            path = path.substr(2);
+        }
+        else
+        {
+            head.clear();
+        }
+        path = std::regex_replace(path, std::regex("[\\\\/]+"), sep);
+        return head + path;
     }
 
     std::vector<std::string> split(std::string path)
@@ -616,7 +652,15 @@ namespace AMFS
         std::string head = path.substr(0, 2);
         if (head == "//" || head == "\\\\")
         {
+            // 匹配网络路径
             path = path.substr(2);
+        }
+        else if (head[0] == '/')
+        {
+            // 匹配unix根目录
+            result.push_back("/");
+            path = path.substr(1);
+            head.clear();
         }
         else
         {
@@ -643,6 +687,7 @@ namespace AMFS
         {
             result.push_back(cur);
         }
+
         if (!head.empty())
         {
             result[0] = head + result[0];
@@ -787,22 +832,24 @@ namespace AMFS
         return result;
     }
 
-    std::string realpath(std::string path, bool force_absolute = false, std::string cwd = "", std::string sep = "")
+    std::string realpath(const std::string &path, bool force_absolute = false, const std::string &cwd = "", const std::string &sep = "")
     {
-        path = UnifyPathSep(path, sep);
-        if (path.size() < 2)
+        std::string new_path = UnifyPathSep(path, sep);
+
+        if (new_path.size() < 4 || IsAbs(new_path, sep))
         {
             return path;
         }
 
         std::string new_sep = sep.empty() ? Str::GetPathSep(path) : sep;
 
-        if (!is_absolute(path) && !force_absolute)
+        if (!IsAbs(new_path, new_sep) && !force_absolute)
         {
-            path = cwd.empty() ? CWD() + path : cwd + path;
+            new_path = cwd.empty() ? CWD() + new_sep + new_path : cwd + new_sep + new_path;
         }
 
-        std::vector<std::string> parts = split(path);
+        std::vector<std::string> parts = split(new_path);
+
         if (parts.empty())
         {
             return "";
@@ -845,15 +892,12 @@ namespace AMFS
         {
             result += part + new_sep;
         }
-
-        if (result.size() > 3)
+        if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
         {
-            result.pop_back(); // 删除最后的分隔符
+            result.pop_back();
         }
-
         return result;
     }
-
 
     std::string dirname(const std::string &path)
     {
@@ -958,7 +1002,7 @@ namespace AMFS
         }
 
 #ifdef _WIN32
-        if (is_readonly(AMstr(path)))
+        if (is_readonly(Str::AMStr(path)))
         {
             info.mode_int = 0333;
             info.mode_str = "r-xr-xr-x";
@@ -969,11 +1013,11 @@ namespace AMFS
             info.mode_str = "rwxrwxrwx";
         }
 
-        auto [create_time, access_time, modify_time] = GetTime(AMstr(path));
+        auto [create_time, access_time, modify_time] = GetTime(Str::AMStr(path));
         info.create_time = create_time;
         info.access_time = access_time;
         info.modify_time = modify_time;
-        info.owner = GetFileOwner(AMstr(path));
+        info.owner = GetFileOwner(Str::AMStr(path));
 #else
         struct stat file_stat;
         // 调用 stat 获取文件元数据（支持符号链接，若需跟随链接用 stat 而非 lstat）
@@ -1178,7 +1222,7 @@ namespace AMFS
 
         std::string sep = Str::GetPathSep(path);
 
-        if (!is_absolute(path))
+        if (!IsAbs(path, sep))
         {
             path = HomePath() + sep + path;
         }
