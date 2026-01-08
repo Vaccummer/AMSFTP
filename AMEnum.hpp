@@ -205,18 +205,8 @@ enum class ErrorCode
     NoPermissionAttribute = 36,
     LocalStatError = 37,
     TransferPause = 38,
-};
+    DNSResolveError = 39
 
-enum class PathType
-{
-    BlockDevice = -1,
-    CharacterDevice = -2,
-    Socket = -3,
-    FIFO = -4,
-    Unknown = -5,
-    DIR = 0,
-    FILE = 1,
-    SYMLINK = 2
 };
 
 enum class MapType
@@ -242,6 +232,12 @@ enum class BufferStatus
     is_reading = 1,
     read_done = 2,
     write_done = 3
+};
+
+enum class TransferControl
+{
+    Pause = 0,
+    Terminate = 1
 };
 
 extern const std::unordered_map<int, std::string> SFTPMessage;
