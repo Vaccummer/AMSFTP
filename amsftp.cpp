@@ -24,14 +24,24 @@
 #include <time.h>
 #include <unordered_map>
 #include <vector>
+#ifdef _WIN32
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#else
+#include <sys/mman.h>
+#include <sys/stat.h>
+#endif
 
 #define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR // in case mutex constructor is not supported
 
 namespace py = pybind11;
 namespace fs = std::filesystem;
+using PathInfo = AMFS::PathInfo;
+using PathType = AMFS::PathType;
+using EC = ErrorCode;
+using result_map = std::unordered_map<std::string, ErrorCode>;
+using ECM = std::pair<EC, std::string>;
 static std::atomic<bool> is_wsa_initialized(false);
 
 static void cleanup_wsa()
@@ -93,12 +103,12 @@ struct ProgressCBInfo
 
 struct ErrorCBInfo
 {
-    ECM ecm;
+    std::pair<ErrorCode, std::string> ecm;
     std::string src;
     std::string dst;
     std::string src_host;
     std::string dst_host;
-    ErrorCBInfo(ECM ecm, std::string src, std::string dst, std::string src_host, std::string dst_host)
+    ErrorCBInfo(std::pair<ErrorCode, std::string> ecm, std::string src, std::string dst, std::string src_host, std::string dst_host)
         : ecm(ecm), src(src), dst(dst), src_host(src_host), dst_host(dst_host) {}
 };
 
@@ -167,25 +177,31 @@ struct TransferTask
     std::string dst;
     std::string dst_host;
     uint64_t size;
-    PathType path_type = PathType::FILE;
+    AMFS::PathType path_type = PathType::FILE;
     bool IsSuccess = false;
     ECM rc = ECM(EC::Success, "");
     TransferTask(std::string src, std::string src_host, std::string dst, std::string dst_host, uint64_t size, PathType path_type = PathType::FILE)
         : src(src), src_host(src_host), dst(dst), dst_host(dst_host), size(size), path_type(path_type) {}
 };
 
-class FileMapper
+class BaseFileMapper
 {
-private:
+public:
+    char *file_ptr = nullptr;
+    uint64_t file_size = 0;
+    virtual ~BaseFileMapper() = default; // 虚析构函数，确保派生类析构被调用
+};
+
+#ifdef _WIN32
+class WindowsFileMapper : public BaseFileMapper
+{
+public:
     HANDLE hFile;
     HANDLE hMap;
     LPVOID addr;
     LARGE_INTEGER file_size_ptr;
 
-public:
-    char *file_ptr;
-    uint64_t file_size;
-    ~FileMapper()
+    ~WindowsFileMapper()
     {
 
         UnmapViewOfFile(addr);
@@ -195,7 +211,8 @@ public:
         CloseHandle(hFile);
         file_ptr = nullptr;
     }
-    FileMapper()
+
+    WindowsFileMapper()
     {
         this->hFile = nullptr;
         this->hMap = nullptr;
@@ -203,7 +220,7 @@ public:
         this->file_ptr = nullptr;
     }
 
-    FileMapper(std::wstring &file_path, MapType map_type, std::string &error_msg, uint64_t file_size = 0)
+    WindowsFileMapper(const std::string &file_path, MapType map_type, std::string &error_msg, uint64_t file_size = 0)
     {
         LARGE_INTEGER li;
         li.QuadPart = file_size;
@@ -211,7 +228,7 @@ public:
 
         if (map_type == MapType::Read)
         {
-            this->hFile = CreateFileW(file_path.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+            this->hFile = CreateFileW(AMFS::Str::AMStr(file_path).c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
             if (this->hFile == INVALID_HANDLE_VALUE)
             {
                 goto DONE;
@@ -234,7 +251,7 @@ public:
             goto DONE;
         }
 
-        this->hFile = CreateFileW(file_path.c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL,
+        this->hFile = CreateFileW(AMFS::Str::AMStr(file_path).c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL,
                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
         if (this->hFile == INVALID_HANDLE_VALUE)
@@ -280,6 +297,164 @@ public:
             return;
         }
     }
+};
+#else
+class UnixFileMapper : public BaseFileMapper
+{
+private:
+    int fd;                // 文件描述符
+    void *addr;            // 映射内存地址
+    struct stat file_stat; // 文件状态信息
+
+public:
+    ~UnixFileMapper()
+    {
+        // 解除内存映射
+        if (addr != MAP_FAILED && addr != nullptr)
+        {
+            munmap(addr, file_size);
+        }
+
+        // 关闭文件描述符
+        if (fd != -1)
+        {
+            close(fd);
+        }
+
+        file_ptr = nullptr;
+    }
+
+    UnixFileMapper() : fd(-1), addr(nullptr), file_ptr(nullptr), file_size(0) {}
+
+    UnixFileMapper(const std::string &file_path, MapType map_type, std::string &error_msg, uint64_t file_size = 0)
+        : fd(-1), addr(nullptr), file_ptr(nullptr), file_size(0)
+    {
+
+        bool is_ok = false;
+        int open_flags = 0;
+        int prot_flags = 0;
+        int map_flags = MAP_SHARED;
+
+        try
+        {
+            if (map_type == MapType::Read)
+            {
+                // 只读模式
+                open_flags = O_RDONLY;
+                prot_flags = PROT_READ;
+
+                // 打开文件
+                fd = open(file_path.c_str(), open_flags);
+                if (fd == -1)
+                {
+                    throw std::string("Failed to open file: ") + strerror(errno);
+                }
+
+                // 获取文件大小
+                if (fstat(fd, &file_stat) == -1)
+                {
+                    throw std::string("Failed to get file status: ") + strerror(errno);
+                }
+                this->file_size = file_stat.st_size;
+
+                // 映射文件到内存
+                addr = mmap(nullptr, this->file_size, prot_flags, map_flags, fd, 0);
+                if (addr == MAP_FAILED)
+                {
+                    throw std::string("Failed to map file to memory: ") + strerror(errno);
+                }
+
+                file_ptr = static_cast<char *>(addr);
+                is_ok = true;
+            }
+            else
+            {
+                // 写入模式
+                open_flags = O_RDWR | O_CREAT | O_TRUNC; // 创建并截断文件
+                prot_flags = PROT_READ | PROT_WRITE;
+                mode_t file_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH; // 权限: 644
+
+                // 打开文件
+                fd = open(file_path.c_str(), open_flags, file_mode);
+                if (fd == -1)
+                {
+                    throw std::string("Failed to create/open file: ") + strerror(errno);
+                }
+
+                // 设置文件大小
+                this->file_size = file_size;
+                if (ftruncate(fd, this->file_size) == -1)
+                {
+                    throw std::string("Failed to set file size: ") + strerror(errno);
+                }
+
+                // 映射文件到内存
+                addr = mmap(nullptr, this->file_size, prot_flags, map_flags, fd, 0);
+                if (addr == MAP_FAILED)
+                {
+                    throw std::string("Failed to map file to memory: ") + strerror(errno);
+                }
+
+                file_ptr = static_cast<char *>(addr);
+                is_ok = true;
+            }
+        }
+        catch (const std::string &err)
+        {
+            error_msg = err;
+
+            // 清理已分配的资源
+            if (addr != MAP_FAILED && addr != nullptr)
+            {
+                munmap(addr, file_size);
+                addr = nullptr;
+            }
+            if (fd != -1)
+            {
+                close(fd);
+                fd = -1;
+            }
+            file_ptr = nullptr;
+            file_size = 0;
+        }
+    }
+
+    // 同步内存映射到文件
+    bool sync()
+    {
+        if (addr == nullptr || addr == MAP_FAILED || file_size == 0)
+        {
+            return false;
+        }
+        return msync(addr, file_size, MS_SYNC) == 0;
+    }
+};
+#endif
+
+class FileMapper
+{
+private:
+    std::shared_ptr<BaseFileMapper> ori_mapper;
+
+public:
+    char *file_ptr;     // 映射文件数据指针
+    uint64_t file_size; // 文件大小
+    FileMapper() : file_ptr(nullptr), file_size(0) {}
+    FileMapper(const std::string &file_path, MapType map_type, std::string &error_msg, uint64_t file_size = 0)
+    {
+#ifdef _WIN32
+        this->ori_mapper = std::make_shared<WindowsFileMapper>(file_path, map_type, error_msg, file_size);
+        this->file_ptr = this->ori_mapper->file_ptr;
+        this->file_size = this->ori_mapper->file_size;
+#else
+        this->ori_mapper = std::make_shared<UnixFileMapper>(file_path, map_type, error_msg, file_size);
+        this->file_ptr = unix_mapper->file_ptr;
+        this->file_size = unix_mapper->file_size;
+#endif
+    }
+    // 禁止拷贝构造和赋值
+    FileMapper(const FileMapper &) = delete;
+    FileMapper &operator=(const FileMapper &) = delete;
 };
 
 struct SingleBuffer
@@ -390,14 +565,9 @@ struct TransferContext
     }
 };
 
-using PathInfo = AMFS::PathInfo;
-using PathType = AMFS::PathType;
-using EC = ErrorCode;
-using result_map = std::unordered_map<std::string, ErrorCode>;
 using TASKS = std::vector<TransferTask>;
 using int_ptr = std::shared_ptr<uint64_t>;
 using safe_int_ptr = std::shared_ptr<std::atomic<uint64_t>>;
-using ECM = std::pair<EC, std::string>;
 using RMR = std::vector<std::pair<std::string, ECM>>;
 using TRM = std::vector<std::pair<std::pair<std::string, std::string>, ECM>>;
 using RR = std::variant<std::string, ECM>;
@@ -584,6 +754,7 @@ public:
 
     bool IsValidKey(const std::string &key)
     {
+        return true;
         // 换用fopen_s
         FILE *fp = nullptr;
         fopen_s(&fp, key.c_str(), "r");
@@ -629,30 +800,50 @@ public:
         EC rc = EC::Success;
         int rcr;
 
-        sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (sock == INVALID_SOCKET)
-        {
-            trace(AMCRITICAL, EC::SocketCreateError, request.nickname, "CreateSocket", "Create but get invalid socket");
-            return {EC::SocketCreateError, "Create but get invalid socket"};
-        }
+        // sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
 
-        unsigned long nonblocking = 1;
-        ioctlsocket(sock, FIONBIO, &nonblocking);
+        // if (sock == INVALID_SOCKET)
+        // {
+        //     trace(AMCRITICAL, EC::SocketCreateError, request.nickname, "CreateSocket", "Create but get invalid socket");
+        //     return {EC::SocketCreateError, "Create but get invalid socket"};
+        // }
 
-        sockaddr_in sin = {0};
-        sin.sin_family = AF_INET;
-        sin.sin_port = htons(request.port);
-        inet_pton(AF_INET, request.hostname.c_str(), &sin.sin_addr);
-        rcr = connect(sock, (sockaddr *)&sin, sizeof(sin));
+        // uint64_t timeout_ms = request.timeout_s * 1000;
+        // if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms)) == SOCKET_ERROR)
+        // {
+        //     closesocket(sock);
+        //     return {EC::SocketOperationTimeout, "Fail to Set Socket Send Timeout"};
+        // }
+        // addrinfo *result = nullptr;
+        // addrinfo hints = {0};
+        // hints.ai_family = AF_INET;       // IPv4
+        // hints.ai_socktype = SOCK_STREAM; // TCP
+        // hints.ai_protocol = IPPROTO_TCP;
 
-        timeval timeout;
-        timeout.tv_sec = request.timeout_s;
-        timeout.tv_usec = 0;
+        // int dns_err = getaddrinfo(request.hostname.c_str(), nullptr, &hints, &result);
+        // if (dns_err != 0)
+        // {
+        //     std::string msg = "域名解析失败: " + std::string(gai_strerror(dns_err)) + " (hostname=" + request.hostname + ")";
+        //     trace(AMCRITICAL, EC::DNSResolveError, request.nickname, "ConnectSocket", msg);
+        //     closesocket(sock);
+        //     WSACleanup();
+        //     return {EC::DNSResolveError, msg};
+        // }
 
-        fd_set writeSet;
-        FD_ZERO(&writeSet);
-        FD_SET(sock, &writeSet);
-        int selectRet = select(sock + 1, nullptr, &writeSet, nullptr, &timeout);
+        // sockaddr_in sin = {0};
+        // sin.sin_family = AF_INET;
+        // sin.sin_port = htons(request.port);
+        // inet_pton(AF_INET, request.hostname.c_str(), &sin.sin_addr);
+        // rcr = connect(sock, (sockaddr *)&sin, sizeof(sin));
+
+        // timeval timeout;
+        // timeout.tv_sec = request.timeout_s;
+        // timeout.tv_usec = 0;
+
+        // fd_set writeSet;
+        // FD_ZERO(&writeSet);
+        // FD_SET(sock, &writeSet);
+        // int selectRet = select(sock + 1, nullptr, &writeSet, nullptr, &timeout);
 
         if (selectRet == 0)
         {
@@ -2674,14 +2865,14 @@ private:
     {
         ErrorCode rc_r = EC::Success;
         std::string error_msg = "";
-        FileMapper srcm(AMFS::AMstr(src), MapType::Read, error_msg);
+        FileMapper srcm(src, MapType::Read, error_msg);
         if (!srcm.file_ptr)
         {
             EC rc = EC::LocalFileMapError;
             return {rc, error_msg};
         }
         AMFS::mkdirs(AMFS::dirname(dst));
-        FileMapper dstm(AMFS::AMstr(dst), MapType::Write, error_msg);
+        FileMapper dstm(dst, MapType::Write, error_msg);
         if (!dstm.file_ptr)
         {
             EC rc = EC::LocalFileMapError;
@@ -2770,7 +2961,7 @@ private:
             }
         }
 
-        FileMapper l_file_m(AMFS::AMstr(src), MapType::Read, error_msg);
+        FileMapper l_file_m(src, MapType::Read, error_msg);
         if (!l_file_m.file_ptr)
         {
             libssh2_sftp_close_handle(sftpFile);
@@ -2877,7 +3068,7 @@ private:
         }
 
         AMFS::mkdirs(AMFS::dirname(dst));
-        FileMapper l_file_m(AMFS::AMstr(dst), MapType::Write, error_msg, file_size);
+        FileMapper l_file_m(dst, MapType::Write, error_msg, file_size);
 
         if (!l_file_m.file_ptr)
         {
@@ -3507,6 +3698,8 @@ PYBIND11_MODULE(AMSFTP, m)
         m.add_object("_cleanup", py::capsule(cleanup_wsa));
     }
 
+    auto sub = m.def_submodule("AMFS");
+
     py::enum_<ErrorCode>(m, "ErrorCode")
         .value("Success", ErrorCode::Success)
         .value("SessionCreateError", ErrorCode::SessionGenericError)
@@ -3602,16 +3795,6 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("LocalStatError", ErrorCode::LocalStatError)
         .value("TransferPause", ErrorCode::TransferPause);
 
-    py::enum_<PathType>(m, "PathType")
-        .value("DIR", PathType::DIR)
-        .value("FILE", PathType::FILE)
-        .value("SYMLINK", PathType::SYMLINK)
-        .value("BLOCK_DEVICE", PathType::BlockDevice)
-        .value("CHARACTER_DEVICE", PathType::CharacterDevice)
-        .value("SOCKET", PathType::Socket)
-        .value("FIFO", PathType::FIFO)
-        .value("UNKNOWN", PathType::Unknown);
-
     py::enum_<OS_TYPE>(m, "OS_TYPE")
         .value("Windows", OS_TYPE::Windows)
         .value("Linux", OS_TYPE::Linux)
@@ -3620,6 +3803,16 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("Unix", OS_TYPE::Unix)
         .value("Unknown", OS_TYPE::Unknown)
         .value("Uncertain", OS_TYPE::Uncertain);
+
+    py::enum_<PathType>(sub, "PathType")
+        .value("DIR", PathType::DIR)
+        .value("FILE", PathType::FILE)
+        .value("SYMLINK", PathType::SYMLINK)
+        .value("BLOCK_DEVICE", PathType::BlockDevice)
+        .value("CHARACTER_DEVICE", PathType::CharacterDevice)
+        .value("SOCKET", PathType::Socket)
+        .value("FIFO", PathType::FIFO)
+        .value("UNKNOWN", PathType::Unknown);
 
     py::enum_<TransferControl>(m, "TransferControl")
         .value("Pause", TransferControl::Pause)
@@ -3676,21 +3869,6 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("dst_host", &TransferTask::dst_host)
         .def_readwrite("size", &TransferTask::size)
         .def_readwrite("path_type", &TransferTask::path_type);
-
-    py::class_<PathInfo>(m, "PathInfo")
-        .def(py::init<std::string, std::string, std::string, std::string, uint64_t, uint64_t, uint64_t, PathType, uint64_t, std::string>(), py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("uname"), py::arg("size"), py::arg("atime"), py::arg("mtime"), py::arg("path_type") = PathType::FILE, py::arg("mode_int") = 0777, py::arg("mode_str") = "rwxrwxrwx")
-        .def("FormatTime", &PathInfo::FormatTime, py::arg("time"), py::arg("format") = "%Y-%m-%d %H:%M:%S")
-        .def_readwrite("name", &PathInfo::name)
-        .def_readwrite("path", &PathInfo::path)
-        .def_readwrite("dir", &PathInfo::dir)
-        .def_readwrite("owner", &PathInfo::owner)
-        .def_readwrite("size", &PathInfo::size)
-        .def_readwrite("create_time", &PathInfo::create_time)
-        .def_readwrite("access_time", &PathInfo::access_time)
-        .def_readwrite("modify_time", &PathInfo::modify_time)
-        .def_readwrite("type", &PathInfo::type)
-        .def_readwrite("mode_int", &PathInfo::mode_int)
-        .def_readwrite("mode_str", &PathInfo::mode_str);
 
     py::class_<BaseSFTPClient, std::shared_ptr<BaseSFTPClient>>(m, "BaseSFTPClient")
         .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"), py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
@@ -3757,15 +3935,36 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("load_tasks", &AMSFTPWorker::load_tasks, py::arg("src"), py::arg("dst"), py::arg("hostd"), py::arg("src_hostname") = "", py::arg("dst_hostname") = "", py::arg("overwrite") = false, py::arg("ignore_sepcial_file") = true)
         .def("transfer", &AMSFTPWorker::transfer, py::arg("tasks"), py::arg("hostd"), py::arg("chunk_large") = 16 * AMMB, py::arg("chunk_middle") = 2 * AMMB, py::arg("chunk_small") = 256 * AMKB);
 
-    auto sub = m.def_submodule("AMFS");
-    sub.def("dirname", &AMFS::dirname, py::arg("path"))
+    sub.def("IsAbs", &AMFS::IsAbs, py::arg("path"), py::arg("sep") = "")
+        .def("HomePath", &AMFS::HomePath)
+        .def("extname", &AMFS::extname, py::arg("path"))
+        .def("CWD", &AMFS::CWD)
+        .def("UnifyPathSep", &AMFS::UnifyPathSep, py::arg("path"), py::arg("sep") = "")
+        .def("split", &AMFS::split, py::arg("path"))
+        .def("resplit", &AMFS::resplit, py::arg("path"), py::arg("front_esc"), py::arg("back_esc"), py::arg("head") = "")
+        .def("realpath", &AMFS::realpath, py::arg("path"), py::arg("force_absolute") = false, py::arg("cwd") = "", py::arg("sep") = "")
+        .def("dirname", &AMFS::dirname, py::arg("path"))
         .def("basename", &AMFS::basename, py::arg("path"))
-        .def("realpath", &AMFS::realpath, py::arg("path"))
         .def("mkdirs", &AMFS::mkdirs, py::arg("path"))
-        .def("stat", &AMFS::stat, py::arg("path"))
+        .def("stat", &AMFS::stat, py::arg("path"), py::arg("trace_link") = false)
         .def("listdir", &AMFS::listdir, py::arg("path"))
         .def("iwalk", &AMFS::iwalk, py::arg("path"), py::arg("ignore_sepcial_file") = true)
         .def("walk", &AMFS::walk, py::arg("path"), py::arg("max_depth") = -1, py::arg("ignore_sepcial_file") = true)
         .def("extname", &AMFS::extname, py::arg("path"))
-        .def("getsize", &AMFS::getsize, py::arg("path"));
+        .def("getsize", &AMFS::getsize, py::arg("path"), py::arg("trace_link") = false);
+
+    py::class_<PathInfo>(sub, "PathInfo")
+        .def(py::init<std::string, std::string, std::string, std::string, uint64_t, double, double, double, PathType, uint64_t, std::string>(), py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("owner"), py::arg("size"), py::arg("create_time"), py::arg("access_time"), py::arg("modify_time"), py::arg("path_type") = PathType::FILE, py::arg("mode_int") = 0777, py::arg("mode_str") = "rwxrwxrwx")
+        .def("FormatTime", &PathInfo::FormatTime, py::arg("time"), py::arg("format") = "%Y-%m-%d %H:%M:%S")
+        .def_readwrite("name", &PathInfo::name)
+        .def_readwrite("path", &PathInfo::path)
+        .def_readwrite("dir", &PathInfo::dir)
+        .def_readwrite("owner", &PathInfo::owner)
+        .def_readwrite("size", &PathInfo::size)
+        .def_readwrite("create_time", &PathInfo::create_time)
+        .def_readwrite("access_time", &PathInfo::access_time)
+        .def_readwrite("modify_time", &PathInfo::modify_time)
+        .def_readwrite("type", &PathInfo::type)
+        .def_readwrite("mode_int", &PathInfo::mode_int)
+        .def_readwrite("mode_str", &PathInfo::mode_str);
 }
