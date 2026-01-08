@@ -1435,10 +1435,11 @@ public:
 class BaseSFTPClient
 {
 private:
-    OS_TYPE os_type = OS_TYPE::Uncertain;
     std::shared_ptr<AMTracer> amtracer;
 
 public:
+    OS_TYPE os_type = OS_TYPE::Uncertain;
+    std::string home_dir = "";
     std::string trash_dir;
     std::vector<std::string> private_keys;
     ConRequst request;
@@ -1571,7 +1572,8 @@ public:
         {
             return ecm;
         }
-        trash_dir = this->request.trash_dir;
+        this->trash_dir = this->request.trash_dir;
+        EnsureTrashDir();
         return {EC::Success, ""};
     }
 
@@ -1839,7 +1841,7 @@ private:
         }
     }
 
-    void _rm(std::string path, RMR &errors)
+    void _rm(const std::string &path, RMR &errors)
     {
         BR rc = is_dir(path);
         bool is_dir;
@@ -2178,7 +2180,7 @@ public:
             is_trash_dir_ensure = true;
             return res;
         }
-        std::string trash_dir_t = "./.AMSFTP_Trash";
+        std::string trash_dir_t = AMFS::abspath("~/.AMSFTP_Trash", true, GetHomeDir());
         ECM res2 = mkdirs(trash_dir_t);
         if (!isok(res2))
         {
@@ -2189,6 +2191,70 @@ public:
         this->trash_dir = trash_dir_t;
         trace(AMINFO, EC::Success, fmt::format("{}@{}", request.nickname, "TrashDir"), "EnsureTrashDir", fmt::format("Trash directory was set to default: \"{}\"", this->trash_dir));
         return {EC::Success, ""};
+    }
+
+    RR base_realpath(std::string path)
+    {
+        if (!amsession->sftp)
+        {
+            return std::make_pair(EC::NoConnection, "SFTP not initialized");
+        }
+        char path_t[1024];
+        int rcr;
+        {
+            std::lock_guard<std::recursive_mutex> lock(amsession->mtx);
+            rcr = libssh2_sftp_realpath(amsession->sftp, path.c_str(), path_t, sizeof(path_t));
+        }
+        if (rcr < 0)
+        {
+            EC rc = GetLastEC();
+            std::string msg = fmt::format("realpath {} failed: {}", path, GetLastErrorMsg());
+            trace(AMERROR, rc, fmt::format("{}@{}", request.nickname, path), "Realpath", msg);
+            return std::make_pair(rc, msg);
+        }
+        else
+        {
+            if (GetOSType() == OS_TYPE::Windows)
+            {
+                // windows server返回的路径会在前面加个/或\，需要去掉
+                return std::string(path_t).substr(1);
+            }
+            return std::string(path_t);
+        }
+    }
+
+    std::string GetHomeDir()
+    {
+        if (!home_dir.empty())
+        {
+            return home_dir;
+        }
+        auto path_obj = realpath("");
+        if (std::holds_alternative<std::string>(path_obj))
+        {
+            home_dir = std::get<std::string>(path_obj);
+            return home_dir;
+        }
+        switch (GetOSType())
+        {
+        case OS_TYPE::Windows:
+            home_dir = "C:\\Users\\" + request.username;
+            return home_dir;
+        case OS_TYPE::Linux:
+            home_dir = "/home/" + request.username;
+            return home_dir;
+        case OS_TYPE::MacOS:
+            home_dir = "/Users/" + request.username;
+            return home_dir;
+        case OS_TYPE::FreeBSD:
+            home_dir = "/usr/home/" + request.username;
+            return home_dir;
+        case OS_TYPE::Unix:
+            home_dir = "/home/" + request.username;
+            return home_dir;
+        default:
+            return "C:\\Users\\" + request.username;
+        }
     }
 
     std::variant<std::map<std::string, ECM>, ECM> chmod(std::string path, std::variant<std::string, uint64_t> mode, bool recursive = false)
@@ -2237,37 +2303,38 @@ public:
         return ecm_map;
     }
 
-    RR realpath(std::string path)
+    // 解析并返回绝对路径，需要路径真实存在，自带AMFS::abspath
+    RR realpath(const std::string &path)
     {
         if (!amsession->sftp)
         {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
-        char path_t[1024];
-        int rcr;
+        // sftp的realpath不能解析~符号，需要自己处理
+        auto pathn = AMFS::abspath(path, false, GetHomeDir());
+        if (pathn.empty())
         {
-            std::lock_guard<std::recursive_mutex> lock(amsession->mtx);
-            rcr = libssh2_sftp_realpath(amsession->sftp, path.c_str(), path_t, sizeof(path_t));
+            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", path));
         }
-        if (rcr < 0)
-        {
-            EC rc = GetLastEC();
-            std::string msg = fmt::format("realpath {} failed: {}", path, GetLastErrorMsg());
-            trace(AMERROR, rc, fmt::format("{}@{}", request.nickname, path), "Realpath", msg);
-            return std::make_pair(rc, msg);
-        }
-        else
-        {
-            return std::string(path_t);
-        }
+
+        return base_realpath(pathn);
     }
 
-    SR stat(std::string path)
+    // 获取路径信息，自带AMFS::abspath
+    SR stat(const std::string &pathf)
     {
+        std::string path = AMFS::abspath(pathf, true, GetHomeDir());
+
+        if (path.empty())
+        {
+            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", pathf));
+        }
+
         if (!amsession->sftp)
         {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
+
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         EC rc;
         std::string msg = "";
@@ -2280,21 +2347,17 @@ public:
         if (rct != 0)
         {
             rc = GetLastEC();
-            msg = fmt::format("stat {} failed: {}", path, GetLastErrorMsg());
-            trace(AMWARNING, rc, fmt::format("{}@{}", request.nickname, path), "Stat", msg);
+            msg = fmt::format("stat {} failed: {}", pathf, GetLastErrorMsg());
+            trace(AMWARNING, rc, fmt::format("{}@{}", request.nickname, pathf), "stat", msg);
             return std::make_pair(rc, msg);
         }
-        RR rp = realpath(path);
-        if (std::holds_alternative<std::string>(rp))
-        {
-            path = std::get<std::string>(rp);
-        }
+
         return FormatStat(path, attrs);
     }
 
-    std::variant<PathType, ECM> get_path_type(std::string path)
+    std::variant<PathType, ECM> get_path_type(const std::string &pathf)
     {
-        SR info = stat(path);
+        SR info = stat(pathf);
         if (std::holds_alternative<PathInfo>(info))
         {
             return std::get<PathInfo>(info).type;
@@ -2305,12 +2368,20 @@ public:
         }
     }
 
-    BR exists(std::string path)
+    // 判断路径是否存在，自带AMFS::abspath
+    BR exists(const std::string &pathf)
     {
+        std::string path = AMFS::abspath(pathf, true, GetHomeDir());
+        if (path.empty())
+        {
+            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", pathf));
+        }
+
         if (!amsession->sftp)
         {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
+
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         EC rc;
         int rct;
@@ -2336,9 +2407,9 @@ public:
         return true;
     }
 
-    BR is_regular(std::string path)
+    BR is_regular(const std::string &pathf)
     {
-        SR info = stat(path);
+        SR info = stat(pathf);
         if (std::holds_alternative<PathInfo>(info))
         {
             return std::get<PathInfo>(info).type == PathType::FILE ? true : false;
@@ -2349,9 +2420,9 @@ public:
         }
     }
 
-    BR is_dir(std::string path)
+    BR is_dir(const std::string &pathf)
     {
-        SR info = stat(path);
+        SR info = stat(pathf);
         if (std::holds_alternative<PathInfo>(info))
         {
             return std::get<PathInfo>(info).type == PathType::DIR ? true : false;
@@ -2362,9 +2433,9 @@ public:
         }
     }
 
-    BR is_symlink(std::string path)
+    BR is_symlink(const std::string &pathf)
     {
-        SR info = stat(path);
+        SR info = stat(pathf);
         if (std::holds_alternative<PathInfo>(info))
         {
             return std::get<PathInfo>(info).type == PathType::SYMLINK ? true : false;
@@ -2375,8 +2446,14 @@ public:
         }
     }
 
-    LR listdir(std::string path, long max_time_ms = -1)
+    LR listdir(const std::string &pathf, long max_time_ms = -1)
     {
+        auto path = AMFS::abspath(pathf, true, GetHomeDir());
+        if (path.empty())
+        {
+            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", pathf));
+        }
+
         if (!amsession->sftp)
         {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
@@ -2392,7 +2469,7 @@ public:
         {
             if (!std::get<bool>(br))
             {
-                return std::make_pair(EC::NotADirectory, fmt::format("Path is not a directory: {}", path));
+                return std::make_pair(EC::NotADirectory, fmt::format("Path is not a directory: {}", pathf));
             }
         }
         else
@@ -2425,7 +2502,7 @@ public:
         {
             std::string tmp_msg = GetLastErrorMsg();
             trace(AMWARNING, EC::InvalidHandle, fmt::format("{}@{}", request.nickname, path), "ListDir", tmp_msg);
-            msg = fmt::format("Path: {} handle open failed: {}", path, tmp_msg);
+            msg = fmt::format("Path: {} handle open failed: {}", pathf, tmp_msg);
             rc = EC::InvalidHandle;
             goto clean;
         }
@@ -2453,7 +2530,7 @@ public:
                 rc = GetLastEC();
                 std::string tmp_msg = GetLastErrorMsg();
                 trace(AMWARNING, rc, fmt::format("{}@{}", request.nickname, path), "ListDir", tmp_msg);
-                msg = fmt::format("Path: {} readdir failed: {}", path, tmp_msg);
+                msg = fmt::format("Path: {} readdir failed: {}", pathf, tmp_msg);
                 goto clean;
             }
             else if (rct == 0)
@@ -2488,8 +2565,15 @@ public:
         }
     }
 
-    ECM mkdir(std::string path)
+    // 创建一级目录，自带AMFS::abspath
+    ECM mkdir(const std::string &pathf)
     {
+        std::string path = AMFS::abspath(pathf, true, GetHomeDir());
+        if (path.empty())
+        {
+            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", pathf));
+        }
+
         if (!amsession->sftp)
         {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
@@ -2501,7 +2585,7 @@ public:
 
             if (!std::get<bool>(br))
             {
-                return {EC::FileAlreadyExists, fmt::format("Path exists and is not a directory: {}", path)};
+                return {EC::FileAlreadyExists, fmt::format("Path exists and is not a directory: {}", pathf)};
             }
             else
             {
@@ -2518,62 +2602,58 @@ public:
         {
             EC rc = GetLastEC();
             std::string msg_tmp = GetLastErrorMsg();
-            msg = fmt::format("Path: {} mkdir failed: {}", path, msg_tmp);
-            trace(AMWARNING, rc, fmt::format("{}@{}", request.nickname, path), "Mkdir", msg_tmp);
+            msg = fmt::format("Path: {} mkdir failed: {}", pathf, msg_tmp);
+            trace(AMWARNING, rc, fmt::format("{}@{}", request.nickname, pathf), "Mkdir", msg_tmp);
             return {rc, msg};
         }
         return {EC::Success, ""};
     }
 
-    ECM mkdirs(std::string path)
+    // 递归创建多级目录，直到报错为止，自带AMFS::abspath
+    ECM mkdirs(const std::string &pathf)
     {
+        std::string path = AMFS::abspath(pathf, true, GetHomeDir());
+        if (path.empty())
+        {
+            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", pathf));
+        }
+
         if (!amsession->sftp)
         {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
-        if (path.empty())
-        {
-            return {EC::InvalidArg, "path parameter can't be an empty string"};
-        }
 
-        std::replace(path.begin(), path.end(), '\\', '/');
         std::vector<std::string> parts = AMFS::split(path);
-        std::string root = ".";
-        if (parts[0] == "/")
+        if (parts.empty())
         {
-            root = "/";
-            parts.erase(parts.begin());
-        }
-        else if (parts.size() == 2 && parts[0][1] == ':')
-        {
-            root = parts[0];
-            parts.erase(parts.begin());
+            return {EC::InvalidArg, fmt::format("Path split failed, get empty parts: {}", pathf)};
         }
 
-        std::string current_path = root;
-        for (const auto &part : parts)
+        std::string current_path = parts.front();
+        for (size_t i = 1; i < parts.size(); i++)
         {
-            current_path = AMFS::join(current_path, part);
-
+            current_path = AMFS::join(current_path, parts[i], AMFS::SepType::Unix);
             ECM rc = mkdir(current_path);
-            if (isok(rc))
-            {
-                continue;
-            }
-            else
+            if (!isok(rc))
             {
                 return rc;
             }
+            return {EC::Success, ""};
         }
-        return {EC::Success, ""};
     }
 
-    ECM rmfile(std::string path)
+    ECM rmfile(const std::string &path)
     {
+        if (path.empty())
+        {
+            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", path));
+        }
+
         if (!amsession->sftp)
         {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
+
         SR info = stat(path);
         ECM ecm;
         EC rc;
@@ -2620,28 +2700,15 @@ public:
         return {EC::Success, ""};
     }
 
-    ECM rmdir(std::string path)
+    ECM rmdir(const std::string &path)
     {
+
         if (!amsession->sftp)
         {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
-        LR lr = listdir(path, 1);
         std::string msg = "";
         EC rc;
-        if (std::holds_alternative<std::vector<PathInfo>>(lr))
-        {
-            std::vector<PathInfo> file_list = std::get<std::vector<PathInfo>>(lr);
-            if (!file_list.empty())
-            {
-                msg = fmt::format("Directory is not empty: {}", path);
-                return {EC::DirNotEmpty, msg};
-            }
-        }
-        else
-        {
-            return std::get<ECM>(lr);
-        }
 
         int rcr;
         {
@@ -2659,23 +2726,110 @@ public:
         return {EC::Success, ""};
     }
 
-    std::variant<RMR, ECM> remove(std::string path)
+    // 删除文件或目录，自带AMFS::abspath
+    std::variant<RMR, ECM> remove(const std::string &path)
     {
         if (!amsession->sftp)
         {
             return ECM{EC::NoConnection, "SFTP not initialized"};
         }
         RMR errors = {};
-        _rm(path, errors);
+        std::string pathn = AMFS::abspath(path, true, GetHomeDir());
+        if (pathn.empty())
+        {
+            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", path));
+        }
+        _rm(pathn, errors);
         return errors;
     }
 
-    ECM saferm(std::string path)
+    // 不带路径检查的基础rename
+    ECM _rename(const std::string &src, const std::string &dst, bool overwrite = false)
     {
         if (!amsession->sftp)
         {
             return ECM{EC::NoConnection, "SFTP not initialized"};
         }
+        int rcr;
+        if (!overwrite)
+        {
+            std::lock_guard<std::recursive_mutex> lock(amsession->mtx);
+            rcr = libssh2_sftp_rename(amsession->sftp, src.c_str(), dst.c_str());
+        }
+        else
+        {
+            std::lock_guard<std::recursive_mutex> lock(amsession->mtx);
+            rcr = libssh2_sftp_rename_ex(amsession->sftp, src.c_str(), src.size(), dst.c_str(), dst.size(), LIBSSH2_SFTP_RENAME_OVERWRITE);
+        }
+        if (rcr != 0)
+        {
+            EC rc = GetLastEC();
+            std::string msg = GetLastErrorMsg();
+            return {rc, fmt::format("Rename {} to {} failed: {}", src, dst, msg)};
+        }
+        return {EC::Success, ""};
+    }
+
+    // 将原路径变成新路径，自带AMFS::abspath
+    ECM rename(const std::string &src_path, const std::string &dst_path, bool overwrite = false)
+    {
+        if (!amsession->sftp)
+        {
+            return ECM{EC::NoConnection, "SFTP not initialized"};
+        }
+        std::string src = AMFS::abspath(src_path, true, GetHomeDir());
+        std::string dst = AMFS::abspath(dst_path, true, GetHomeDir());
+        if (src.empty() || dst.empty())
+        {
+            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {} or {}", src_path, dst_path));
+        }
+        BR sbr = exists(src);
+        if (std::holds_alternative<ECM>(sbr))
+        {
+            return std::get<ECM>(sbr);
+        }
+        else if (!std::get<bool>(sbr))
+        {
+            return {EC::PathNotExist, fmt::format("Src not exists: {}", src_path)};
+        }
+        BR dbr = exists(dst);
+        if (std::holds_alternative<ECM>(dbr))
+        {
+            return std::get<ECM>(dbr);
+        }
+        else if (std::get<bool>(dbr) && !overwrite)
+        {
+            return {EC::FileAlreadyExists, fmt::format("Dst already exists: {} and overwrite is false", dst_path)};
+        }
+
+        int rcr;
+        if (!overwrite)
+        {
+            std::lock_guard<std::recursive_mutex> lock(amsession->mtx);
+            rcr = libssh2_sftp_rename(amsession->sftp, src.c_str(), dst.c_str());
+        }
+        else
+        {
+            std::lock_guard<std::recursive_mutex> lock(amsession->mtx);
+            rcr = libssh2_sftp_rename_ex(amsession->sftp, src.c_str(), src.size(), dst.c_str(), dst.size(), LIBSSH2_SFTP_RENAME_OVERWRITE);
+        }
+        if (rcr != 0)
+        {
+            EC rc = GetLastEC();
+            std::string msg = GetLastErrorMsg();
+            return {rc, fmt::format("Rename {} to {} failed: {}", src, dst, msg)};
+        }
+        return {EC::Success, ""};
+    }
+
+    // 安全删除文件或目录，将目录移动到trash_dir中，自带AMFS::abspath
+    ECM saferm(const std::string &pathf)
+    {
+        if (!amsession->sftp)
+        {
+            return ECM{EC::NoConnection, "SFTP not initialized"};
+        }
+        std::string path = AMFS::abspath(pathf, true, GetHomeDir());
         BR br = exists(path);
         if (std::holds_alternative<ECM>(br))
         {
@@ -2691,6 +2845,7 @@ public:
         {
             return {EC::NotADirectory, fmt::format("Trash dir not ready: {}", this->trash_dir)};
         }
+
         std::string base = AMFS::basename(path);
         std::string target_path;
         std::string base_name = base;
@@ -2702,19 +2857,30 @@ public:
             base_ext = base.substr(dot_pos);
         }
 
-        target_path = AMFS::join(trash_dir, base);
+        // 获取当前时间，以2026-01-01-19-06格式
+        std::string current_time = AMFS::FormatTime(std::time(nullptr), "%Y-%m-%d-%H-%M-%S");
+
+        target_path = AMFS::join(trash_dir, current_time + base);
         size_t i = 1;
-        br = exists(target_path);
-        if (std::holds_alternative<ECM>(br))
+        std::string base_name_tmp = base_name;
+
+        while (true)
         {
-            return std::get<ECM>(br);
-        }
-        while (std::holds_alternative<bool>(br) && std::get<bool>(br))
-        {
-            target_path = AMFS::join(trash_dir, base_name + std::string("_") + std::to_string(i) + base_ext);
-            i++;
             br = exists(target_path);
+            if (std::holds_alternative<ECM>(br))
+            {
+                return std::get<ECM>(br);
+            }
+            else if (!std::get<bool>(br))
+            {
+                break;
+            }
+            base_name_tmp = base_name + std::string("_") + std::to_string(i);
+            target_path = AMFS::join(trash_dir, current_time, base_name_tmp + base_ext);
+            i++;
         }
+
+        mkdirs(AMFS::join(trash_dir, current_time));
         int rcr;
         {
             std::lock_guard<std::recursive_mutex> lock(amsession->mtx);
@@ -2725,111 +2891,62 @@ public:
         {
             rc = GetLastEC();
             std::string msg = GetLastErrorMsg();
-
             return {rc, fmt::format("Rename {} to {} failed: {}", path, target_path, msg)};
         }
         return {EC::Success, ""};
     }
 
-    ECM rename(std::string src, std::string newname)
-    {
-        std::string src_dir = AMFS::dirname(src);
-        std::string dst_path = AMFS::join(src_dir, newname);
-        return move(src, dst_path);
-    }
-
-    ECM move(std::string src, std::string dst, bool need_mkdir = false, bool force_write = false)
+    // 将源路径移动到目标文件夹，自带AMFS::abspath
+    ECM move(const std::string &srcf, const std::string &dstf, bool need_mkdir = false, bool force_write = false)
     {
         if (!amsession->sftp)
         {
             return ECM{EC::NoConnection, "SFTP not initialized"};
         }
-        SR sr = stat(src);
-        ECM ecm;
+        std::string src = AMFS::abspath(srcf, true, GetHomeDir());
+        std::string dst = AMFS::abspath(dstf, true, GetHomeDir());
 
-        if (std::holds_alternative<ECM>(sr))
+        SR dsr = stat(dst);
+        if (std::holds_alternative<ECM>(dsr))
         {
-            return std::get<ECM>(sr);
-        }
-        PathInfo src_stat = std::get<PathInfo>(sr);
-
-        std::string src_base = AMFS::basename(src);
-        std::string dst_dir = dst;
-        std::string dst_path = AMFS::join(dst_dir, src_base);
-        BR br = is_dir(dst_dir);
-        if (std::holds_alternative<ECM>(br))
-        {
-            ecm = std::get<ECM>(br);
-            if (ecm.first == EC::PathNotExist)
+            EC rc = std::get<ECM>(dsr).first;
+            if ((rc == EC::PathNotExist || rc == EC::FileNotExist) && need_mkdir)
             {
-                if (need_mkdir)
+                ECM ecm = mkdirs(dst);
+                if (!isok(ecm))
                 {
-                    ecm = mkdirs(dst_dir);
-                    if (!isok(ecm))
-                    {
-                        return ecm;
-                    }
-                }
-                else
-                {
-                    return {EC::ParentDirectoryNotExist, fmt::format("Dst dir not exists: {}", dst_dir)};
+                    return ecm;
                 }
             }
             else
             {
-                return ecm;
+                return std::get<ECM>(dsr);
             }
         }
         else
         {
-            if (!std::get<bool>(br))
+            if (std::get<PathInfo>(dsr).type != PathType::DIR)
             {
-                return {EC::FileAlreadyExists, fmt::format("Dst already exists: {} but not a directory", dst_dir)};
+                return {EC::NotADirectory, fmt::format("Dst is not a directory: {}", dst)};
             }
         }
+        std::string dst_path = AMFS::join(dst, AMFS::basename(src));
 
-        SR dst_stat = stat(dst_path);
-        if (std::holds_alternative<PathInfo>(dst_stat))
-        {
-            PathInfo dst_stat_info = std::get<PathInfo>(dst_stat);
-            if (!force_write)
-            {
-                return {EC::FileAlreadyExists, fmt::format("Dst already exists: {}", dst_path)};
-            }
-            if ((dst_stat_info.type == PathType::DIR) != (src_stat.type == PathType::DIR))
-            {
-                return {EC::FileAlreadyExists, fmt::format("Dst already exists and has different type with src: {}", dst_path)};
-            }
-        }
-
-        int rcr;
-        {
-            std::lock_guard<std::recursive_mutex> lock(amsession->mtx);
-            rcr = libssh2_sftp_rename_ex(amsession->sftp, src.c_str(), src.size(), dst_path.c_str(), dst_path.size(), LIBSSH2_SFTP_RENAME_OVERWRITE);
-        }
-
-        EC rc;
-        std::string msg = "";
-        if (rcr != 0)
-        {
-            rc = GetLastEC();
-            std::string msg_tmp = GetLastErrorMsg();
-            msg = fmt::format("Move {} to {} failed: {}", src, dst_path, msg_tmp);
-            if (rc != EC::PermissionDenied && rc != EC::PathNotExist && rc != EC::FileAlreadyExists)
-            {
-                trace(AMWARNING, rc, fmt::format("{}@{}->{}", request.nickname, src, dst_path), "Move", msg_tmp);
-            }
-            return {rc, msg};
-        }
-
-        return {EC::Success, ""};
+        return _rename(src, dst_path, force_write);
     }
 
-    ECM copy(std::string src, std::string dst, bool need_mkdir = false)
+    // 在服务器内将源路径复制到目标文件夹，自带AMFS::abspath, 使用的时shell指令，不稳定
+    ECM copy(const std::string &srcf, const std::string &dstf, bool need_mkdir = false)
     {
         if (!amsession->sftp)
         {
             return ECM{EC::NoConnection, "SFTP not initialized"};
+        }
+        std::string src = AMFS::abspath(srcf, true, GetHomeDir());
+        std::string dst = AMFS::abspath(dstf, true, GetHomeDir());
+        if (src.empty() || dst.empty())
+        {
+            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {} or {}", srcf, dstf));
         }
         BR br = exists(src);
         if (std::holds_alternative<ECM>(br))
@@ -3329,7 +3446,6 @@ private:
 
         ErrorCode rc_final = EC::Success;
         std::string error_msg = "";
-        long rct;
         LIBSSH2_SFTP_HANDLE *srcFile = nullptr;
         LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
         std::lock_guard<std::recursive_mutex> lock(src_session->mtx);
@@ -4091,6 +4207,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("HomePath", &AMFS::HomePath)
         .def("extname", &AMFS::extname, py::arg("path"))
         .def("CWD", &AMFS::CWD)
+        .def("FormatTime", &AMFS::FormatTime, py::arg("time"), py::arg("format") = "%Y-%m-%d %H:%M:%S")
         .def("UnifyPathSep", &AMFS::UnifyPathSep, py::arg("path"), py::arg("sep") = "")
         .def("split", &AMFS::split, py::arg("path"))
         .def("resplit", &AMFS::resplit, py::arg("path"), py::arg("front_esc"), py::arg("back_esc"), py::arg("head") = "")
@@ -4107,7 +4224,6 @@ PYBIND11_MODULE(AMSFTP, m)
 
     py::class_<PathInfo>(sub, "PathInfo")
         .def(py::init<std::string, std::string, std::string, std::string, uint64_t, double, double, double, PathType, uint64_t, std::string>(), py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("owner"), py::arg("size"), py::arg("create_time"), py::arg("access_time"), py::arg("modify_time"), py::arg("path_type") = PathType::FILE, py::arg("mode_int") = 0777, py::arg("mode_str") = "rwxrwxrwx")
-        .def("FormatTime", &PathInfo::FormatTime, py::arg("time"), py::arg("format") = "%Y-%m-%d %H:%M:%S")
         .def_readwrite("name", &PathInfo::name)
         .def_readwrite("path", &PathInfo::path)
         .def_readwrite("dir", &PathInfo::dir)
