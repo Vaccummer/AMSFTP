@@ -29,8 +29,19 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
 #include <sys/mman.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#define SOCKET int
+#define INVALID_SOCKET -1
+#define SOCKET_ERROR -1
+#define closesocket close
 #endif
 
 #define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR // in case mutex constructor is not supported
@@ -42,16 +53,179 @@ using PathType = AMFS::PathType;
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
+
 static std::atomic<bool> is_wsa_initialized(false);
 
 static void cleanup_wsa()
 {
+#ifdef _WIN32
     if (is_wsa_initialized)
     {
         WSACleanup();
         is_wsa_initialized = false;
     }
+#endif
 }
+
+// 跨平台Socket连接器
+class SocketConnector
+{
+public:
+    SOCKET sock = INVALID_SOCKET;
+    std::string error_msg = "";
+    EC error_code = EC::Success;
+
+    SocketConnector() = default;
+
+    ~SocketConnector()
+    {
+    }
+
+    // 连接到指定主机，返回是否成功
+
+    bool Connect(const std::string &hostname, int port, size_t timeout_s)
+    {
+        // 1. DNS解析
+        addrinfo hints{}, *result = nullptr;
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        hints.ai_protocol = IPPROTO_TCP;
+
+        int dns_err = getaddrinfo(hostname.c_str(), std::to_string(port).c_str(), &hints, &result);
+        if (dns_err != 0)
+        {
+#ifdef _WIN32
+            error_msg = fmt::format("DNS resolve failed: {} (hostname={})", gai_strerrorA(dns_err), hostname);
+#else
+            error_msg = fmt::format("DNS resolve failed: {} (hostname={})", gai_strerror(dns_err), hostname);
+#endif
+            error_code = EC::DNSResolveError;
+            return false;
+        }
+
+        // 2. 创建socket
+        sock = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
+        if (sock == INVALID_SOCKET)
+        {
+            freeaddrinfo(result);
+            error_msg = "Failed to create socket";
+            error_code = EC::SocketCreateError;
+            return false;
+        }
+
+        // 3. 设置非阻塞模式
+        if (!SetNonBlocking(true))
+        {
+            freeaddrinfo(result);
+            closesocket(sock);
+            sock = INVALID_SOCKET;
+            return false;
+        }
+
+        // 4. 发起连接
+        int conn_result = connect(sock, result->ai_addr, (int)result->ai_addrlen);
+        freeaddrinfo(result);
+
+#ifdef _WIN32
+        bool in_progress = (conn_result == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK);
+#else
+        bool in_progress = (conn_result == -1 && errno == EINPROGRESS);
+#endif
+
+        if (conn_result == 0)
+        {
+            // 立即成功（本地连接可能发生）
+            SetNonBlocking(false);
+            return true;
+        }
+
+        if (!in_progress)
+        {
+            error_msg = "Socket connect failed immediately";
+            error_code = EC::SocketConnectFailed;
+            closesocket(sock);
+            sock = INVALID_SOCKET;
+            return false;
+        }
+
+        // 5. 使用select等待连接完成
+        fd_set write_fds, error_fds;
+        FD_ZERO(&write_fds);
+        FD_ZERO(&error_fds);
+        FD_SET(sock, &write_fds);
+        FD_SET(sock, &error_fds);
+
+        timeval timeout;
+        timeout.tv_sec = (long)timeout_s;
+        timeout.tv_usec = 0;
+
+        int select_result = select((int)sock + 1, nullptr, &write_fds, &error_fds, &timeout);
+
+        if (select_result == 0)
+        {
+            error_msg = "Socket connection timeout";
+            error_code = EC::SocketConnectTimeout;
+            closesocket(sock);
+            sock = INVALID_SOCKET;
+            return false;
+        }
+
+        if (select_result < 0 || FD_ISSET(sock, &error_fds))
+        {
+            error_msg = "Socket connection failed";
+            error_code = EC::SocketConnectFailed;
+            closesocket(sock);
+            sock = INVALID_SOCKET;
+            return false;
+        }
+
+        // 6. 检查socket错误
+        int sock_error = 0;
+        socklen_t len = sizeof(sock_error);
+        if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&sock_error, &len) < 0 || sock_error != 0)
+        {
+            error_msg = fmt::format("Socket error after connect: {}", sock_error);
+            error_code = EC::SocketConnectFailed;
+            closesocket(sock);
+            sock = INVALID_SOCKET;
+            return false;
+        }
+
+        // 7. 恢复阻塞模式
+        SetNonBlocking(false);
+        return true;
+    }
+
+private:
+    bool SetNonBlocking(bool non_blocking)
+    {
+#ifdef _WIN32
+        u_long mode = non_blocking ? 1 : 0;
+        if (ioctlsocket(sock, FIONBIO, &mode) != 0)
+        {
+            error_msg = "Failed to set socket non-blocking mode";
+            error_code = EC::SocketCreateError;
+            return false;
+        }
+#else
+        int flags = fcntl(sock, F_GETFL, 0);
+        if (flags < 0)
+        {
+            error_msg = "Failed to get socket flags";
+            error_code = EC::SocketCreateError;
+            return false;
+        }
+        flags = non_blocking ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+        if (fcntl(sock, F_SETFL, flags) < 0)
+        {
+            error_msg = "Failed to set socket non-blocking mode";
+            error_code = EC::SocketCreateError;
+            return false;
+        }
+#endif
+        return true;
+    }
+};
 
 inline double timenow()
 {
@@ -800,61 +974,14 @@ public:
         EC rc = EC::Success;
         int rcr;
 
-        // sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-
-        // if (sock == INVALID_SOCKET)
-        // {
-        //     trace(AMCRITICAL, EC::SocketCreateError, request.nickname, "CreateSocket", "Create but get invalid socket");
-        //     return {EC::SocketCreateError, "Create but get invalid socket"};
-        // }
-
-        // uint64_t timeout_ms = request.timeout_s * 1000;
-        // if (setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&timeout_ms, sizeof(timeout_ms)) == SOCKET_ERROR)
-        // {
-        //     closesocket(sock);
-        //     return {EC::SocketOperationTimeout, "Fail to Set Socket Send Timeout"};
-        // }
-        // addrinfo *result = nullptr;
-        // addrinfo hints = {0};
-        // hints.ai_family = AF_INET;       // IPv4
-        // hints.ai_socktype = SOCK_STREAM; // TCP
-        // hints.ai_protocol = IPPROTO_TCP;
-
-        // int dns_err = getaddrinfo(request.hostname.c_str(), nullptr, &hints, &result);
-        // if (dns_err != 0)
-        // {
-        //     std::string msg = "域名解析失败: " + std::string(gai_strerror(dns_err)) + " (hostname=" + request.hostname + ")";
-        //     trace(AMCRITICAL, EC::DNSResolveError, request.nickname, "ConnectSocket", msg);
-        //     closesocket(sock);
-        //     WSACleanup();
-        //     return {EC::DNSResolveError, msg};
-        // }
-
-        // sockaddr_in sin = {0};
-        // sin.sin_family = AF_INET;
-        // sin.sin_port = htons(request.port);
-        // inet_pton(AF_INET, request.hostname.c_str(), &sin.sin_addr);
-        // rcr = connect(sock, (sockaddr *)&sin, sizeof(sin));
-
-        // timeval timeout;
-        // timeout.tv_sec = request.timeout_s;
-        // timeout.tv_usec = 0;
-
-        // fd_set writeSet;
-        // FD_ZERO(&writeSet);
-        // FD_SET(sock, &writeSet);
-        // int selectRet = select(sock + 1, nullptr, &writeSet, nullptr, &timeout);
-
-        if (selectRet == 0)
+        // 使用SocketConnector建立连接
+        SocketConnector connector;
+        if (!connector.Connect(request.hostname, request.port, request.timeout_s))
         {
-            trace(AMCRITICAL, EC::SocketConnectTimeout, request.nickname, "ConnectSocket", "Socket Connection Establish Timeout");
-            return {EC::SocketConnectTimeout, "Socket Connection Establish Timeout"};
+            trace(AMCRITICAL, connector.error_code, request.nickname, "ConnectSocket", connector.error_msg);
+            return {connector.error_code, connector.error_msg};
         }
-        else if (selectRet < 0)
-        {
-            trace(AMCRITICAL, EC::SocketConnectFailed, request.nickname, "ConnectSocket", "Socket Connection Establish Failed");
-            return {EC::SocketConnectFailed, "Socket Connection Establish Failed"};
-        }
+        sock = connector.sock;
 
         session = libssh2_session_init();
 
@@ -1103,7 +1230,11 @@ public:
         }
         if (sock != INVALID_SOCKET)
         {
+#ifdef _WIN32
             closesocket(sock);
+#else
+            close(sock);
+#endif
             sock = INVALID_SOCKET;
         }
     }
@@ -3793,7 +3924,8 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("UnImplentedMethod", ErrorCode::UnImplentedMethod)
         .value("NoPermissionAttribute", ErrorCode::NoPermissionAttribute)
         .value("LocalStatError", ErrorCode::LocalStatError)
-        .value("TransferPause", ErrorCode::TransferPause);
+        .value("TransferPause", ErrorCode::TransferPause)
+        .value("DNSResolveError", ErrorCode::DNSResolveError);
 
     py::enum_<OS_TYPE>(m, "OS_TYPE")
         .value("Windows", OS_TYPE::Windows)
