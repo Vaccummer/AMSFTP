@@ -25,6 +25,7 @@
 #include <time.h>
 #include <unordered_map>
 #include <vector>
+
 #ifdef _WIN32
 #include <windows.h>
 #include <winsock2.h>
@@ -59,13 +60,11 @@ static std::atomic<bool> is_wsa_initialized(false);
 
 static void cleanup_wsa()
 {
-#ifdef _WIN32
     if (is_wsa_initialized)
     {
         WSACleanup();
         is_wsa_initialized = false;
     }
-#endif
 }
 
 // 跨平台Socket连接器
@@ -1020,16 +1019,23 @@ public:
 
     void LoadDefaultPrivateKeys()
     {
-        std::string default_key_dir = AMFS::realpath("~/.ssh");
-        for (auto &entry : fs::directory_iterator(default_key_dir))
+        std::string default_key_dir = AMFS::realpath("~/.ssh", true);
+        try
         {
-            if (fs::is_regular_file(entry))
+            for (auto &entry : fs::directory_iterator(default_key_dir))
             {
-                if (IsValidKey(entry.path().string()))
+                if (fs::is_regular_file(entry))
                 {
-                    this->private_keys.push_back(entry.path().string());
+                    if (IsValidKey(entry.path().string()))
+                    {
+                        this->private_keys.push_back(entry.path().string());
+                    }
                 }
             }
+        }
+        catch (const fs::filesystem_error &e)
+        {
+            trace(AMWARNING, EC::LocalStatError, default_key_dir, "LoadDefaultPrivateKeys", fmt::format("Failed to load default private keys : {} ", e.what()));
         }
     }
 
@@ -4120,7 +4126,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("UnifyPathSep", &AMFS::UnifyPathSep, py::arg("path"), py::arg("sep") = "")
         .def("split", &AMFS::split, py::arg("path"))
         .def("resplit", &AMFS::resplit, py::arg("path"), py::arg("front_esc"), py::arg("back_esc"), py::arg("head") = "")
-        .def("realpath", &AMFS::realpath, py::arg("path"), py::arg("force_absolute") = false, py::arg("cwd") = "", py::arg("sep") = "")
+        .def("realpath", &AMFS::realpath, py::arg("path"), py::arg("force_parsing") = false, py::arg("cwd") = "", py::arg("sep") = "")
         .def("dirname", &AMFS::dirname, py::arg("path"))
         .def("basename", &AMFS::basename, py::arg("path"))
         .def("mkdirs", &AMFS::mkdirs, py::arg("path"))

@@ -26,10 +26,7 @@
 #include <shlwapi.h> // Windows Shell 轻量级 API
 #include <windows.h>
 #include <windows.h> // Windows 核心 API
-#endif
-
-// Unix-like 特有头文件（仅在 Linux/macOS 等 Unix 平台包含）
-#if defined(__linux__) || defined(__APPLE__) || defined(__unix__)
+#else
 #include <pwd.h>
 #include <sys/stat.h> // Unix 文件状态 API（stat 函数等）
 #include <unistd.h>
@@ -81,7 +78,7 @@ namespace AMFS
             {
                 return converter.from_bytes(str);
             }
-            catch (const std::range_error &e)
+            catch (const std::range_error)
             {
                 return L"";
             }
@@ -349,7 +346,7 @@ namespace AMFS
                     bool result = std::regex_search(AMStr(name), pattern_f);
                     return result;
                 }
-                catch (const std::exception &e)
+                catch (const std::regex_error)
                 {
                     return false;
                 }
@@ -393,57 +390,57 @@ namespace AMFS
         return (remaining == 0);
     }
 
-    // std::string AMStr(const std::wstring &wstr)
-    // {
-    //     int codePage = GetACP();
-    //     int len = WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    //     if (len <= 0)
-    //         return "";
-    //     std::string result(len - 1, 0);
-    //     WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, &result[0], len, nullptr, nullptr);
-    //     return result;
-    // };
+    std::string AMStr(const std::wstring &wstr)
+    {
+        int codePage = GetACP();
+        int len = WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
+        if (len <= 0)
+            return "";
+        std::string result(len - 1, 0);
+        WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, &result[0], len, nullptr, nullptr);
+        return result;
+    };
 
-    // std::string AMStr(const wchar_t *wstr)
-    // {
-    //     int codePage = GetACP();
-    //     int len = WideCharToMultiByte(codePage, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
-    //     if (len <= 0)
-    //         return "";
-    //     std::string result(len - 1, 0);
-    //     WideCharToMultiByte(codePage, 0, wstr, -1, &result[0], len, nullptr, nullptr);
-    //     return result;
-    // }
+    std::string AMStr(const wchar_t *wstr)
+    {
+        int codePage = GetACP();
+        int len = WideCharToMultiByte(codePage, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
+        if (len <= 0)
+            return "";
+        std::string result(len - 1, 0);
+        WideCharToMultiByte(codePage, 0, wstr, -1, &result[0], len, nullptr, nullptr);
+        return result;
+    }
 
-    // std::wstring AMStr(const std::string &str)
-    // {
-    //     int codePage = CP_ACP;
-    //     if (is_valid_utf8(str))
-    //     {
-    //         codePage = CP_UTF8;
-    //     }
-    //     int len = MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, nullptr, 0);
-    //     if (len <= 0)
-    //         return L"";
-    //     std::wstring result(len - 1, 0);
-    //     MultiByteToWideChar(codePage, 0, str.c_str(), -1, &result[0], len);
-    //     return result;
-    // };
+    std::wstring AMStr(const std::string &str)
+    {
+        int codePage = CP_ACP;
+        if (is_valid_utf8(str))
+        {
+            codePage = CP_UTF8;
+        }
+        int len = MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, nullptr, 0);
+        if (len <= 0)
+            return L"";
+        std::wstring result(len - 1, 0);
+        MultiByteToWideChar(codePage, 0, str.c_str(), -1, &result[0], len);
+        return result;
+    };
 
-    // std::wstring AMStr(const char *str)
-    // {
-    //     int codePage = CP_ACP;
-    //     if (is_valid_utf8(str))
-    //     {
-    //         codePage = CP_UTF8;
-    //     }
-    //     int len = MultiByteToWideChar(CP_ACP, 0, str, -1, nullptr, 0);
-    //     if (len <= 0)
-    //         return L"";
-    //     std::wstring result(len - 1, 0);
-    //     MultiByteToWideChar(codePage, 0, str, -1, &result[0], len);
-    //     return result;
-    // }
+    std::wstring AMStr(const char *str)
+    {
+        int codePage = CP_ACP;
+        if (is_valid_utf8(str))
+        {
+            codePage = CP_UTF8;
+        }
+        int len = MultiByteToWideChar(CP_ACP, 0, str, -1, nullptr, 0);
+        if (len <= 0)
+            return L"";
+        std::wstring result(len - 1, 0);
+        MultiByteToWideChar(codePage, 0, str, -1, &result[0], len);
+        return result;
+    }
 
     double FileTimeToUnixTime(const FILETIME &ft)
     {
@@ -502,7 +499,7 @@ namespace AMFS
             LocalFree(pSD);
         }
 
-        return Str::AMStr(owner);
+        return AMStr(owner);
     }
 
     std::tuple<double, double, double> GetTime(const std::wstring &path)
@@ -532,13 +529,12 @@ namespace AMFS
         }
         return false;
     }
-#else
-    // 时间戳转换为 double (秒数，带小数，纳秒精度)
+#endif
+
     double timespec_to_double(const struct timespec &ts)
     {
         return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
     }
-#endif
 
     class PathInfo
     {
@@ -609,7 +605,7 @@ namespace AMFS
         wchar_t path[MAX_PATH];
         if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_PROFILE, NULL, 0, path)))
         {
-            return Str::AMStr(path);
+            return AMStr(path);
         }
         // 备选环境变量
         const char *userprofile = std::getenv("USERPROFILE");
@@ -832,18 +828,18 @@ namespace AMFS
         return result;
     }
 
-    std::string realpath(const std::string &path, bool force_absolute = false, const std::string &cwd = "", const std::string &sep = "")
+    std::string realpath(const std::string &path, bool force_parsing = false, const std::string &cwd = "", const std::string &sep = "")
     {
         std::string new_path = UnifyPathSep(path, sep);
 
-        if (new_path.size() < 4 || IsAbs(new_path, sep))
+        if ((new_path.size() < 4 || IsAbs(new_path, sep)) && !force_parsing)
         {
             return path;
         }
 
         std::string new_sep = sep.empty() ? Str::GetPathSep(path) : sep;
 
-        if (!IsAbs(new_path, new_sep) && !force_absolute)
+        if (!IsAbs(new_path, new_sep))
         {
             new_path = cwd.empty() ? CWD() + new_sep + new_path : cwd + new_sep + new_path;
         }
