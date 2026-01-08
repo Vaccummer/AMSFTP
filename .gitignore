@@ -3,3 +3,5 @@ test*
 .history/
 .vscode/
 build/*
+debug*
+*.dll
