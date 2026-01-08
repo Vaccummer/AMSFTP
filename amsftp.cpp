@@ -21,6 +21,7 @@
 #include <regex>
 #include <stdio.h>
 #include <string>
+#include <thread>
 #include <time.h>
 #include <unordered_map>
 #include <vector>
@@ -843,6 +844,70 @@ public:
             capacity = size;
         }
     }
+};
+
+class StreamRingBuffer
+{
+private:
+    std::unique_ptr<char[]> buffer;
+    size_t capacity;
+    std::atomic<size_t> head{0}; // 消费者读取位置
+    std::atomic<size_t> tail{0}; // 生产者写入位置
+
+public:
+    StreamRingBuffer(size_t size) : capacity(size), buffer(std::make_unique<char[]>(size)) {}
+
+    // 获取可读数据量
+    size_t available() const
+    {
+        return tail.load(std::memory_order_acquire) - head.load(std::memory_order_relaxed);
+    }
+
+    // 获取可写空间
+    size_t writable() const
+    {
+        return capacity - available();
+    }
+
+    // 获取写入指针和最大连续可写长度
+    std::pair<char *, size_t> get_write_ptr()
+    {
+        size_t t = tail.load(std::memory_order_relaxed);
+        size_t h = head.load(std::memory_order_acquire);
+        size_t pos = t % capacity;
+        size_t used = t - h;
+        size_t free_space = capacity - used;
+        // 连续可写 = min(到末尾的距离, 空闲空间)
+        size_t contig = capacity - pos > free_space ? free_space : capacity - pos;
+        return {buffer.get() + pos, contig};
+    }
+
+    // 提交写入的数据量
+    void commit_write(size_t len)
+    {
+        tail.fetch_add(len, std::memory_order_release);
+    }
+
+    // 获取读取指针和最大连续可读长度
+    std::pair<char *, size_t> get_read_ptr()
+    {
+        size_t h = head.load(std::memory_order_relaxed);
+        size_t t = tail.load(std::memory_order_acquire);
+        size_t pos = h % capacity;
+        size_t avail = t - h;
+        // 连续可读 = min(到末尾的距离, 可用数据)
+        size_t contig = capacity - pos > avail ? avail : capacity - pos;
+        return {buffer.get() + pos, contig};
+    }
+
+    // 提交读取消费的数据量
+    void commit_read(size_t len)
+    {
+        head.fetch_add(len, std::memory_order_release);
+    }
+
+    bool empty() const { return available() == 0; }
+    bool full() const { return writable() == 0; }
 };
 
 class AMTracer : public CircularBuffer
@@ -3275,14 +3340,14 @@ private:
 
     ECM Bridge(const std::string &src, const std::string &dst, std::shared_ptr<AMSFTPClient> src_worker, std::shared_ptr<AMSFTPClient> dst_worker, uint64_t chunk_size = 256 * AMKB)
     {
-        std::shared_ptr<AMSession> src_session;
-        std::shared_ptr<AMSession> dst_session;
+        std::shared_ptr<AMSession> src_session = src_worker->amsession;
+        std::shared_ptr<AMSession> dst_session = dst_worker->amsession;
 
         ErrorCode rc_final = EC::Success;
         std::string error_msg = "";
         long rct;
-        LIBSSH2_SFTP_HANDLE *srcFile;
-        LIBSSH2_SFTP_HANDLE *dstFile;
+        LIBSSH2_SFTP_HANDLE *srcFile = nullptr;
+        LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
         std::lock_guard<std::recursive_mutex> lock(src_session->mtx);
         std::lock_guard<std::recursive_mutex> lock2(dst_session->mtx);
         srcFile = libssh2_sftp_open(src_session->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
@@ -3325,116 +3390,97 @@ private:
         uint64_t file_size = attrs.filesize;
 
         // uint64_t buffer_size_ori = calculate_buffer_size(file_size, 32 * AMGB);
-        TransferContext ctx(chunk_size);
-        uint64_t offset = 0;
-
-        long rc_read = 0;
-        long rc_write = 0;
-
-        uint64_t rchunk_size = std::min<uint64_t>(chunk_size, file_size);
+        StreamRingBuffer ring(chunk_size);
         uint64_t all_read = 0;
         uint64_t all_write = 0;
-        int wbuffer = -1;
-        int rbuffer = -1;
-        double time_end = timenow();
-
-        uint64_t read_order = 0;
-        uint64_t write_order = 0;
+        uint64_t last_callback_write = 0;
+        long rc_read, rc_write;
+        uint64_t idle_count = 0;
 
         libssh2_session_set_blocking(src_session->session, 0);
         libssh2_session_set_blocking(dst_session->session, 0);
-        uint64_t read_eagain_count = 0;
-        uint64_t write_eagain_count = 0;
-        py::object result;
 
         while (all_write < file_size)
         {
-            rbuffer = ctx.get_read_buffer();
+            bool did_work = false;
 
-            if (rbuffer != -1 && all_read < file_size)
+            // === 生产者：从源读取数据写入缓冲区 ===
+            if (all_read < file_size && ring.writable() > 0)
             {
-                do
+                auto [write_ptr, max_write] = ring.get_write_ptr();
+                size_t to_read = std::min<size_t>(max_write, file_size - all_read);
+
+                if (to_read > 0)
                 {
-                    rc_read = libssh2_sftp_read(srcFile, ctx.bufferd[rbuffer].bufferptr + ctx.bufferd[rbuffer].read, rchunk_size - ctx.bufferd[rbuffer].read);
+                    rc_read = libssh2_sftp_read(srcFile, write_ptr, to_read);
                     if (rc_read > 0)
                     {
-                        read_eagain_count = 0;
+                        ring.commit_write(rc_read);
                         all_read += rc_read;
-                        ctx.bufferd[rbuffer].read += rc_read;
+                        did_work = true;
+                        idle_count = 0;
                     }
-                    else if (rc_read == LIBSSH2_ERROR_EAGAIN)
-                    {
-                        read_eagain_count++;
-                        if (read_eagain_count > 1000 && read_eagain_count % 50 == 0)
-                        {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                        }
-                        break;
-                    }
-                    else if (rc_read < 0)
+                    else if (rc_read < 0 && rc_read != LIBSSH2_ERROR_EAGAIN)
                     {
                         rc_final = src_worker->GetLastEC();
                         error_msg = fmt::format("Sftp read error: {}", src_worker->GetLastErrorMsg());
                         goto clean;
                     }
-                } while (rc_read > 0 && ctx.bufferd[rbuffer].read < rchunk_size);
-                if (ctx.bufferd[rbuffer].read == rchunk_size)
-                {
-                    ctx.finish_read(rbuffer, read_order++);
-                    rchunk_size = std::min<uint64_t>(chunk_size, file_size - all_read);
                 }
             }
 
-            wbuffer = ctx.get_write_buffer();
-
-            if (wbuffer != -1 && all_write < file_size)
+            // === 消费者：从缓冲区读取数据写入目标 ===
+            if (ring.available() > 0)
             {
-                do
+                auto [read_ptr, max_read] = ring.get_read_ptr();
+
+                if (max_read > 0)
                 {
-                    rc_write = libssh2_sftp_write(dstFile, ctx.bufferd[wbuffer].bufferptr + ctx.bufferd[wbuffer].written, ctx.bufferd[wbuffer].read - ctx.bufferd[wbuffer].written);
+                    rc_write = libssh2_sftp_write(dstFile, read_ptr, max_read);
                     if (rc_write > 0)
                     {
-                        write_eagain_count = 0;
-                        ctx.bufferd[wbuffer].written += rc_write;
+                        ring.commit_read(rc_write);
                         all_write += rc_write;
+                        did_work = true;
+                        idle_count = 0;
                     }
-                    else if (rc_write == LIBSSH2_ERROR_EAGAIN)
-                    {
-                        write_eagain_count++;
-                        if (write_eagain_count > 1000 && write_eagain_count % 50 == 0)
-                        {
-                            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-                        }
-                        break;
-                    }
-                    else if (rc_write < 0)
+                    else if (rc_write < 0 && rc_write != LIBSSH2_ERROR_EAGAIN)
                     {
                         rc_final = dst_worker->GetLastEC();
                         error_msg = fmt::format("Sftp write error: {}", dst_worker->GetLastErrorMsg());
                         goto clean;
                     }
-                } while (rc_write > 0 && ctx.bufferd[wbuffer].written < ctx.bufferd[wbuffer].read);
+                }
+            }
 
-                if (ctx.bufferd[wbuffer].written == ctx.bufferd[wbuffer].read)
+            // === 进度回调（每写入buffer_size或完成时触发）===
+            if (all_write - last_callback_write >= chunk_size || all_write == file_size)
+            {
+                current_size += (all_write - last_callback_write);
+                last_callback_write = all_write;
+                InnerCallback(src, dst, src_worker->Nickname(), dst_worker->Nickname(), all_write, file_size, current_size, total_size);
+
+                // 暂停/终止检查
+                while (IsPause() && !IsTerminate())
                 {
-                    time_end = timenow();
-                    current_size += ctx.bufferd[wbuffer].written;
-                    InnerCallback(src, dst, src_worker->Nickname(), dst_worker->Nickname(), all_write, file_size, current_size, total_size);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                if (IsTerminate())
+                {
+                    rc_final = EC::Terminate;
+                    error_msg = "Transfer cancelled";
+                    goto clean;
+                }
+            }
 
-                    while (IsPause() && !IsTerminate())
-                    {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-                    }
-
-                    if (IsTerminate())
-                    {
-                        rc_final = EC::Terminate;
-                        error_msg = "Transfer cancelled";
-                        goto clean;
-                    }
-
-                    ctx.finish_write(wbuffer, write_order++);
-                    break;
+            // === 空闲时让出CPU ===
+            if (!did_work)
+            {
+                idle_count++;
+                if (idle_count > 10)
+                {
+                    std::this_thread::sleep_for(std::chrono::microseconds(20));
+                    idle_count = 0;
                 }
             }
         }
