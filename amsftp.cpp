@@ -2496,16 +2496,9 @@ public:
         }
         std::string msg = "";
         BR br = is_dir(path);
-        if (std::holds_alternative<ECM>(br))
+        if (std::holds_alternative<bool>(br))
         {
-            ECM ecm = std::get<ECM>(br);
-            if (ecm.first != EC::PathNotExist)
-            {
-                return ecm;
-            }
-        }
-        else
-        {
+
             if (!std::get<bool>(br))
             {
                 return {EC::FileAlreadyExists, fmt::format("Path exists and is not a directory: {}", path)};
@@ -3138,29 +3131,14 @@ private:
         LIBSSH2_SFTP_HANDLE *sftpFile;
         std::string error_msg = "Error to create FileMapper";
         std::lock_guard<std::recursive_mutex> lock(client->amsession->mtx);
-
+        client->mkdirs(AMFS::dirname(dst));
         sftpFile = libssh2_sftp_open(client->amsession->sftp, dst.c_str(), LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
         if (!sftpFile)
         {
-            rct = libssh2_sftp_last_error(client->amsession->sftp);
-            if (rct == LIBSSH2_FX_NO_SUCH_FILE)
-            {
-                client->mkdirs(AMFS::dirname(dst));
-                sftpFile = libssh2_sftp_open(client->amsession->sftp, dst.c_str(), LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
-                if (!sftpFile)
-                {
-                    std::string msg = fmt::format("Failed to open remote file: {}, cause {}", dst, client->GetLastErrorMsg());
-                    client->trace(AMERROR, client->GetLastEC(), fmt::format("{}@{}", client->request.nickname, dst), "Remote2Local", msg);
-                    return {client->GetLastEC(), msg};
-                }
-            }
-            else
-            {
-                std::string msg = fmt::format("Failed to open remote file: {}, cause {}", dst, client->GetLastErrorMsg());
-                rc_r = client->GetLastEC();
-                client->trace(AMERROR, rc_r, fmt::format("{}@{}", client->request.nickname, dst), "Remote2Local", msg);
-                return {rc_r, msg};
-            }
+            std::string msg = fmt::format("Failed to open remote file: {}, cause {}", dst, client->GetLastErrorMsg());
+            rc_r = client->GetLastEC();
+            client->trace(AMERROR, rc_r, fmt::format("{}@{}", client->request.nickname, dst), "Remote2Local", msg);
+            return {rc_r, msg};
         }
 
         FileMapper l_file_m(src, MapType::Read, error_msg);
@@ -3356,6 +3334,7 @@ private:
         LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
         std::lock_guard<std::recursive_mutex> lock(src_session->mtx);
         std::lock_guard<std::recursive_mutex> lock2(dst_session->mtx);
+        dst_worker->mkdir(AMFS::dirname(dst));
         srcFile = libssh2_sftp_open(src_session->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
         dstFile = libssh2_sftp_open(dst_session->sftp, dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
 
@@ -3369,26 +3348,13 @@ private:
 
         if (!dstFile)
         {
-            rct = libssh2_sftp_last_error(dst_session->sftp);
-            if (rct == LIBSSH2_FX_NO_SUCH_FILE)
-            {
-                ECM tmp_rc = dst_worker->Check();
-                dstFile = libssh2_sftp_open(dst_session->sftp, dst.c_str(), LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
-                if (!dstFile)
-                {
-                    rc_final = dst_worker->GetLastEC();
-                    error_msg = fmt::format("Failed to open dst remote file: {}, cause {}", dst, dst_worker->GetLastErrorMsg());
-                    dst_worker->trace(AMERROR, rc_final, fmt::format("{}@{}", dst_worker->request.nickname, dst), "Remote2Remote", error_msg);
-                    return {rc_final, error_msg};
-                }
-            }
-            else
-            {
-                rc_final = dst_worker->GetLastEC();
-                error_msg = fmt::format("Failed to open dst remote file: {}, cause {}", dst, dst_worker->GetLastErrorMsg());
-                dst_worker->trace(AMERROR, rc_final, fmt::format("{}@{}", dst_worker->request.nickname, dst), "Remote2Remote", error_msg);
-                return {rc_final, error_msg};
-            }
+            // 获取错误代码
+            int errcode = libssh2_sftp_last_error(dst_session->sftp);
+            std::cout << "errcode: " << errcode << std::endl;
+            rc_final = dst_worker->GetLastEC();
+            error_msg = fmt::format("Failed to open dst remote file: {}, cause {}", dst, dst_worker->GetLastErrorMsg());
+            dst_worker->trace(AMERROR, rc_final, fmt::format("{}@{}", dst_worker->request.nickname, dst), "Remote2Remote", error_msg);
+            return {rc_final, error_msg};
         }
 
         LIBSSH2_SFTP_ATTRIBUTES attrs;
@@ -4052,7 +4018,9 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("dst", &TransferTask::dst)
         .def_readwrite("dst_host", &TransferTask::dst_host)
         .def_readwrite("size", &TransferTask::size)
-        .def_readwrite("path_type", &TransferTask::path_type);
+        .def_readwrite("path_type", &TransferTask::path_type)
+        .def_readwrite("IsSuccess", &TransferTask::IsSuccess)
+        .def_readwrite("rc", &TransferTask::rc);
 
     py::class_<BaseSFTPClient, std::shared_ptr<BaseSFTPClient>>(m, "BaseSFTPClient")
         .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"), py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
