@@ -46,6 +46,32 @@ namespace AMFS
     constexpr char *exc5 = "amtessixhxch";
     constexpr char *exc6 = "amtasdmpexsch";
 
+    enum class PathType
+    {
+        BlockDevice = -1,
+        CharacterDevice = -2,
+        Socket = -3,
+        FIFO = -4,
+        Unknown = -5,
+        DIR = 0,
+        FILE = 1,
+        SYMLINK = 2
+    };
+
+    enum class PathFormat
+    {
+        Absolute = 1,
+        Relative = 2,
+        User = 3
+    };
+
+    enum class SearchType
+    {
+        All = 0,
+        File = 1,
+        Directory = 2
+    };
+
     namespace Str
     {
         std::wstring AMStr(const std::string &str)
@@ -68,7 +94,7 @@ namespace AMFS
             {
                 return converter.to_bytes(wstr);
             }
-            catch (const std::range_error &e)
+            catch (const std::range_error)
             {
                 return "";
             }
@@ -329,7 +355,7 @@ namespace AMFS
                 }
             }
         }
-    }
+    };
 
 #ifdef _WIN32
     struct FileTimes
@@ -514,7 +540,7 @@ namespace AMFS
     }
 #endif
 
-    struct PathInfo
+    class PathInfo
     {
     public:
         std::string name;
@@ -528,7 +554,7 @@ namespace AMFS
         PathType type = PathType::FILE;
         uint64_t mode_int = 0777;
         std::string mode_str = "rwxrwxrwx";
-        PathInfo();
+        PathInfo() : name(""), path(""), dir(""), owner("") {}
 
         PathInfo(std::string name, std::string path, std::string dir, std::string owner, uint64_t size, double create_time, double access_time, double modify_time, PathType type, uint64_t mode_int, std::string mode_str) : name(name), path(path), dir(dir), owner(owner), size(size), create_time(create_time), access_time(access_time), modify_time(modify_time), type(type), mode_int(mode_int), mode_str(mode_str) {}
 
@@ -552,31 +578,24 @@ namespace AMFS
         }
     };
 
-    enum class PathType
+    std::string UnifyPathSep(std::string path, std::string sep = "")
     {
-        BlockDevice = -1,
-        CharacterDevice = -2,
-        Socket = -3,
-        FIFO = -4,
-        Unknown = -5,
-        DIR = 0,
-        FILE = 1,
-        SYMLINK = 2
-    };
-
-    enum class PathFormat
-    {
-        Absolute = 1,
-        Relative = 2,
-        User = 3
-    };
-
-    enum class SearchType
-    {
-        All = 0,
-        File = 1,
-        Directory = 2
-    };
+        path = Str::Strip(path);
+        if (path.size() < 2)
+            return path;
+        sep = sep.empty() ? Str::GetPathSep(path) : sep;
+        std::string head = path.substr(0, 2);
+        if (head == "//" || head == "\\\\")
+        {
+            path = path.substr(2);
+        }
+        else
+        {
+            head.clear();
+        }
+        path = std::regex_replace(path, std::regex("[\\\\/]+"), sep);
+        return head + path;
+    }
 
     bool IsAbs(const std::string &path, const std::string &sep = "")
     {
@@ -620,25 +639,6 @@ namespace AMFS
     std::string CWD()
     {
         return fs::current_path().string();
-    }
-
-    std::string UnifyPathSep(std::string path, std::string sep = "")
-    {
-        path = Str::Strip(path);
-        if (path.size() < 2)
-            return path;
-        sep = sep.empty() ? Str::GetPathSep(path) : sep;
-        std::string head = path.substr(0, 2);
-        if (head == "//" || head == "\\\\")
-        {
-            path = path.substr(2);
-        }
-        else
-        {
-            head.clear();
-        }
-        path = std::regex_replace(path, std::regex("[\\\\/]+"), sep);
-        return head + path;
     }
 
     std::vector<std::string> split(std::string path)
@@ -823,7 +823,7 @@ namespace AMFS
         }
 
         std::string result;
-        std::string sep = GetPathSep(ori_str);
+        std::string sep = Str::GetPathSep(ori_str);
         for (auto seg : segments)
         {
             result += seg + sep;
@@ -953,7 +953,7 @@ namespace AMFS
                 status = fs::symlink_status(p);
             }
         }
-        catch (const std::exception &e)
+        catch (const fs::filesystem_error)
         {
             return std::make_pair("Stat error: " + path, PathInfo());
         }
