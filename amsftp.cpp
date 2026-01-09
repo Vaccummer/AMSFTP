@@ -2732,7 +2732,7 @@ public:
         return {EC::Success, ""};
     }
 
-    // 删除文件或目录，自带AMFS::abspath
+    // 递归删除文件或目录，自带AMFS::abspath, 返回ECM或者路径与ECM pair的vector
     std::variant<RMR, ECM> remove(const std::string &path)
     {
         if (!amsession->sftp)
