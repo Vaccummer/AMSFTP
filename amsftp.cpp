@@ -2372,7 +2372,7 @@ public:
     // 获取路径信息，自带AMFS::abspath
     SR stat(const std::string &path)
     {
-        std::string pathf = AMFS::abspath(path, true, GetHomeDir());
+        std::string pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
 
         if (pathf.empty())
         {
