@@ -2326,16 +2326,11 @@ public:
     std::variant<std::map<std::string, ECM>, ECM>
     chmod(const std::string &path, std::variant<std::string, uint64_t> mode, bool recursive = false)
     {
-        auto pathf = AMFS::abspath(path, true, GetHomeDir());
         if (static_cast<int>(GetOSType()) <= 0)
         {
             return ECM{EC::UnImplentedMethod, "Chmod only supported on Unix System"};
         }
-
-        if (!amsession->sftp)
-        {
-            return ECM{EC::NoConnection, "SFTP not initialized"};
-        }
+        auto pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
 
         BR br = exists(pathf);
         if (!std::holds_alternative<bool>(br))
