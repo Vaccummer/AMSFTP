@@ -1028,22 +1028,19 @@ namespace AMFS
         }
         else if (parts.size() == 1)
         {
-            return parts[0];
+            return new_path;
         }
+
         std::vector<std::string> new_parts{};
         std::string tmp_part;
         std::string result;
 
-        if (parts.size() == 1)
-        {
-            return parts.front();
-        }
-        else if (parts.front() == "/")
+        if (parts[0] == "/")
         {
             new_parts.push_back("/");
             new_sep = "/";
         }
-        else if (parts.front() == "~" && parsing_home)
+        else if (parts[0] == "~" && parsing_home)
         {
             std::string hm = home.empty() ? HomePath() : home;
             for (const auto &seg : split(hm))
