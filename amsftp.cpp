@@ -1202,9 +1202,7 @@ public:
         sftp = libssh2_sftp_init(session);
         if (!sftp)
         {
-
             rc = GetLastEC();
-
             msg = fmt::format("SFTP initialization failed: {}", GetLastErrorMsg());
             trace(AMCRITICAL, rc, request.nickname, "SFTPInitialization", msg);
 
