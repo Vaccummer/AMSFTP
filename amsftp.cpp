@@ -2086,7 +2086,6 @@ private:
 
         if (rcr != 0)
         {
-            std::cout << "rcr: " << rcr << std::endl;
             rc = GetLastEC();
             msg = fmt::format("chmod {} failed: {}", path, GetLastErrorMsg());
             errors[path] = {rc, msg};
@@ -2150,7 +2149,6 @@ private:
 
         if (rcr != 0)
         {
-            std::cout << "rcr: " << rcr << std::endl;
             rc = GetLastEC();
             msg = fmt::format("chmod {} failed: {}", path, GetLastErrorMsg());
             errors[path] = {rc, msg};
