@@ -1026,17 +1026,15 @@ namespace AMFS
         {
             return "";
         }
-
+        else if (parts.size() == 1)
+        {
+            return parts[0];
+        }
         std::vector<std::string> new_parts{};
-
         std::string tmp_part;
         std::string result;
-        if (parts.empty())
-        {
 
-            return "";
-        }
-        else if (parts.size() == 1)
+        if (parts.size() == 1)
         {
             return parts.front();
         }
