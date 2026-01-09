@@ -1633,7 +1633,6 @@ namespace AMFS
             }
             catch (const std::exception e)
             {
-                std::cout << "error: " << e.what() << std::endl;
                 if (!silence && callback)
                 {
                     (*callback)(root.string(), "IterdirFailed", e.what());
