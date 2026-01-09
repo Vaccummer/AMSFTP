@@ -1085,9 +1085,17 @@ namespace AMFS
             }
         }
 
-        for (const auto part : new_parts)
+        if (new_parts.size() == 0)
         {
-            result += part + new_sep;
+            return "";
+        }
+        else if (new_parts.size() == 1)
+        {
+            return new_parts.front();
+        }
+        for (int i = 1; i < new_parts.size(); i++)
+        {
+            result += new_parts[i] + new_sep;
         }
 
         if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
