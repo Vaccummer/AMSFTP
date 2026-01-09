@@ -620,7 +620,7 @@ namespace AMFS
 
     bool IsAbs(const std::string &path, const std::string &sep = "")
     {
-        return std::regex_search(UnifyPathSep(path, sep), std::regex("^(?:[A-Za-z]:[/\\\\]?|/|[\\\\/]{2}|~[\\\\/])"));
+        return std::regex_search(UnifyPathSep(path, sep), std::regex("^(?:[A-Za-z]:[/\\\\]?|/|[\\\\/]{2}|~[\\\\/])")) || path == "~";
     }
 
     std::string HomePath()
