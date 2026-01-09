@@ -1016,6 +1016,7 @@ namespace AMFS
         if (!IsAbs(new_path, new_sep))
         {
             new_path = cwd.empty() ? CWD() + new_sep + new_path : cwd + new_sep + new_path;
+            std::cout << "after: " << new_path << std::endl;
         }
 
         std::vector<std::string> parts = split(new_path);
