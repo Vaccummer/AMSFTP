@@ -1081,7 +1081,16 @@ namespace AMFS
             return new_parts[0];
         }
 
-        for (int i = 0; i < new_parts.size() - 1; i++)
+        if (new_parts[0] == "/")
+        {
+            result = "/";
+        }
+        else
+        {
+            result = new_parts[0] + new_sep;
+        }
+
+        for (int i = 1; i < new_parts.size() - 1; i++)
         {
             result += new_parts[i] + new_sep;
         }
