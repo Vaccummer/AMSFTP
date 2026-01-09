@@ -10,7 +10,7 @@ in_path = os.path.dirname(sys.executable)
 
 module = Extension(
     "AMSFTP",
-    sources=["amsftp.cpp", "AMEnum.cpp"],
+    sources=["amsftp.cpp"],
     language="c++",
     extra_compile_args=["/std:c++17", "/utf-8", "/Zc:__cplusplus"],
     # library_dirs=["E:\\vcpkg\\installed\\x64-windows\\lib", r'E:\Softwares\Anaconda\envs\Launcher\libs'],

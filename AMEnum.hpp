@@ -1,5 +1,7 @@
 #pragma once
 #include <libssh2.h>
+#include <libssh2_sftp.h>
+#include <magic_enum/magic_enum.hpp>
 #include <string>
 #include <unordered_map>
 
@@ -19,95 +21,95 @@ constexpr char *AMWARNING = "WARNING";
 constexpr char *AMDEBUG = "DEBUG";
 constexpr char *AMINFO = "INFO";
 
-enum class ErrorCode2
-{
-    Success = 0,
-    SessionCreateError = -1,
-    SftpCreateError = -2,
-    SessionEstablishError = -3,
-    SftpEstablishError = -4,
-    ConnectionAuthorizeError = -5,
-    LocalFileMapError = -6,
-    RemoteFileOpenError = -7,
-    RemoteFileStatError = -8,
-    LocalFileCreateError = -9,
-    LocalFileAllocError = -10,
-    NetworkError = -11,
-    NetworkDisconnect = -12,
-    NetworkTimeout = -13,
-    LocalFileFlushError = -14,
-    SegmentationFault = -15,
-    SessionBroken = -16,
-    SftpBroken = -17,
-    ChannelCreateError = -18,
-    ConnectionCheckFailed = -19,
-    RemoteFileWriteError = -20,
-    RemoteFileReadError = -21,
-    Terminate = -22,
-    LocalFileExists = -23,
-    RemoteFileExists = -24,
-    PathNotExist = -25,
-    PermissionDenied = -26,
-    RemotePathOpenError = -27,
-    NotDirectory = -28,
-    ParentDirectoryNotExist = -29,
-    TargetNotAFile = -30,
-    RemoteFileDeleteError = -31,
-    RemoteDirDeleteError = -32,
-    UnknownError = -33,
-    DirNotEmpty = -34,
-    EmptyDirRemoveError = -35,
-    TargetNotADirectory = -36,
-    InvalidTrashDir = -37,
-    MoveError = -38,
-    TargetExists = -39,
-    CopyError = -40,
-    EndOfFile = -41,
-    EAgain = -42,
-    SocketNone = -43,
-    SocketSend = -44,
-    SocketTimeout = -45,
-    SocketRecv = -46,
-    SocketAccept = -47,
-    WriteProtected = -48,
-    UnenoughSpace = -49,
-    UserSpaceQuotaExceeded = -50,
-    BannerRecvError = -51,
-    BannerSendError = -52,
-    SocketSendError = -53,
-    SocketDisconnect = -54,
-    AuthFailed = -55,
-    PublicKeyAuthFailed = -56,
-    PasswordExpired = -57,
-    KeyfileAuthFailed = -58,
-    ChannelFailure = -59,
-    ChannelWindowFull = -60,
-    ChannelWindowExceeded = -61,
-    MACAuthFailed = -62,
-    KexFailure = -63,
-    AlgoUnsupported = -64,
-    MemoryAllocError = -65,
-    FileOperationError = -66,
-    ScpProtocolError = -67,
-    SftpProtocolError = -68,
-    KnownHostAuthFailed = -69,
-    InvalidParameter = -70,
-    NoSFTPConnection = -71,
-    SFTPConnectionLost = -72,
-    SFTPBadMessage = -73,
-    InvalidHandle = -74,
-    SFTPLockConflict = -75,
-    SymlinkLoop = -76,
-    InvalidFilename = -77,
-    UnsupportedSFTPOperation = -78,
-    MediaUnavailable = -79,
-    SftpNotInitialized = -80,
-    SessionNotInitialized = -81,
-    DirAlreadyExists = -82,
-    SocketCreateError = -83,
-    PathAlreadyExists = -84,
-    UnexpectedEOF = -85,
-};
+// enum class ErrorCode2
+// {
+//     Success = 0,
+//     SessionCreateError = -1,
+//     SftpCreateError = -2,
+//     SessionEstablishError = -3,
+//     SftpEstablishError = -4,
+//     ConnectionAuthorizeError = -5,
+//     LocalFileMapError = -6,
+//     RemoteFileOpenError = -7,
+//     RemoteFileStatError = -8,
+//     LocalFileCreateError = -9,
+//     LocalFileAllocError = -10,
+//     NetworkError = -11,
+//     NetworkDisconnect = -12,
+//     NetworkTimeout = -13,
+//     LocalFileFlushError = -14,
+//     SegmentationFault = -15,
+//     SessionBroken = -16,
+//     SftpBroken = -17,
+//     ChannelCreateError = -18,
+//     ConnectionCheckFailed = -19,
+//     RemoteFileWriteError = -20,
+//     RemoteFileReadError = -21,
+//     Terminate = -22,
+//     LocalFileExists = -23,
+//     RemoteFileExists = -24,
+//     PathNotExist = -25,
+//     PermissionDenied = -26,
+//     RemotePathOpenError = -27,
+//     NotDirectory = -28,
+//     ParentDirectoryNotExist = -29,
+//     TargetNotAFile = -30,
+//     RemoteFileDeleteError = -31,
+//     RemoteDirDeleteError = -32,
+//     UnknownError = -33,
+//     DirNotEmpty = -34,
+//     EmptyDirRemoveError = -35,
+//     TargetNotADirectory = -36,
+//     InvalidTrashDir = -37,
+//     MoveError = -38,
+//     TargetExists = -39,
+//     CopyError = -40,
+//     EndOfFile = -41,
+//     EAgain = -42,
+//     SocketNone = -43,
+//     SocketSend = -44,
+//     SocketTimeout = -45,
+//     SocketRecv = -46,
+//     SocketAccept = -47,
+//     WriteProtected = -48,
+//     UnenoughSpace = -49,
+//     UserSpaceQuotaExceeded = -50,
+//     BannerRecvError = -51,
+//     BannerSendError = -52,
+//     SocketSendError = -53,
+//     SocketDisconnect = -54,
+//     AuthFailed = -55,
+//     PublicKeyAuthFailed = -56,
+//     PasswordExpired = -57,
+//     KeyfileAuthFailed = -58,
+//     ChannelFailure = -59,
+//     ChannelWindowFull = -60,
+//     ChannelWindowExceeded = -61,
+//     MACAuthFailed = -62,
+//     KexFailure = -63,
+//     AlgoUnsupported = -64,
+//     MemoryAllocError = -65,
+//     FileOperationError = -66,
+//     ScpProtocolError = -67,
+//     SftpProtocolError = -68,
+//     KnownHostAuthFailed = -69,
+//     InvalidParameter = -70,
+//     NoSFTPConnection = -71,
+//     SFTPConnectionLost = -72,
+//     SFTPBadMessage = -73,
+//     InvalidHandle = -74,
+//     SFTPLockConflict = -75,
+//     SymlinkLoop = -76,
+//     InvalidFilename = -77,
+//     UnsupportedSFTPOperation = -78,
+//     MediaUnavailable = -79,
+//     SftpNotInitialized = -80,
+//     SessionNotInitialized = -81,
+//     DirAlreadyExists = -82,
+//     SocketCreateError = -83,
+//     PathAlreadyExists = -84,
+//     UnexpectedEOF = -85,
+// };
 
 enum class ErrorCode
 {
@@ -176,7 +178,7 @@ enum class ErrorCode
     OperationUnsupported = 8,
     InvalidHandle = 9,
     PathNotExist = 10,
-    FileAlreadyExists = 11,
+    PathAlreadyExists = 11,
     FileWriteProtected = 12,
     StorageMediaUnavailable = 13,
     FilesystemNoSpace = 14,
@@ -240,8 +242,42 @@ enum class TransferControl
     Terminate = 1
 };
 
-extern const std::unordered_map<int, std::string> SFTPMessage;
-extern const std::unordered_map<int, ErrorCode> Int2EC;
-extern const std::vector<std::pair<uint64_t, size_t>> GLOBAL_PERMISSIONS_MASK;
+// 将libssh2错误码映射为错误消息
+const std::unordered_map<int, std::string> SFTPMessage = {
+    {LIBSSH2_FX_EOF, "End of file"},
+    {LIBSSH2_FX_NO_SUCH_FILE, "File does not exist"},
+    {LIBSSH2_FX_PERMISSION_DENIED, "Permission denied"},
+    {LIBSSH2_FX_FAILURE, "Generic failure"},
+    {LIBSSH2_FX_BAD_MESSAGE, "Bad message format"},
+    {LIBSSH2_FX_NO_CONNECTION, "No connection exists"},
+    {LIBSSH2_FX_CONNECTION_LOST, "Connection lost"},
+    {LIBSSH2_FX_OP_UNSUPPORTED, "Operation not supported"},
+    {LIBSSH2_FX_INVALID_HANDLE, "Invalid handle"},
+    {LIBSSH2_FX_NO_SUCH_PATH, "No such path"},
+    {LIBSSH2_FX_FILE_ALREADY_EXISTS, "File already exists"},
+    {LIBSSH2_FX_WRITE_PROTECT, "Target is write protected"},
+    {LIBSSH2_FX_NO_MEDIA, "Target Storage Media is not available"},
+    {LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM, "No space on filesystem"},
+    {LIBSSH2_FX_QUOTA_EXCEEDED, "Space quota exceeded"},
+    {LIBSSH2_FX_UNKNOWN_PRINCIPAL, "User not found in host"},
+    {LIBSSH2_FX_LOCK_CONFLICT, "Path is locked by another process"},
+    {LIBSSH2_FX_DIR_NOT_EMPTY, "Directory is not empty"},
+    {LIBSSH2_FX_NOT_A_DIRECTORY, "Target is not a directory"},
+    {LIBSSH2_FX_INVALID_FILENAME, "Filename is invalid"},
+    {LIBSSH2_FX_LINK_LOOP, "Symbolic link loop"}};
 
-std::string GetECName(ErrorCode ec);
+// 将ErrorCode枚举值映射为int
+const std::unordered_map<int, ErrorCode> Int2EC = []
+{
+    std::unordered_map<int, ErrorCode> map;
+    for (auto [val, name] : magic_enum::enum_entries<ErrorCode>())
+    {
+        map[static_cast<int>(val)] = val;
+    }
+    return map;
+}();
+
+std::string GetECName(ErrorCode ec)
+{
+    return std::string(magic_enum::enum_name(ec));
+}
