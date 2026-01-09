@@ -1026,6 +1026,10 @@ namespace AMFS
         }
         else if (parts.size() == 1)
         {
+            if (parts[0] == "~" && parsing_home)
+            {
+                return home.empty() ? HomePath() : home;
+            }
             return new_path;
         }
 
