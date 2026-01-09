@@ -1042,16 +1042,16 @@ namespace AMFS
         }
         else if (parts[0] == "~" && parsing_home)
         {
+
             std::string hm = home.empty() ? HomePath() : home;
             for (const auto &seg : split(hm))
             {
                 new_parts.push_back(seg);
             }
-            parts.erase(parts.begin());
         }
         else
         {
-            result = parts.front() + new_sep;
+            new_parts.push_back(parts[0]);
         }
 
         for (int i = 1; i < parts.size(); i++)
@@ -1080,8 +1080,9 @@ namespace AMFS
         }
         else if (new_parts.size() == 1)
         {
-            return new_parts.front();
+            return new_parts[0];
         }
+
         for (int i = 1; i < new_parts.size(); i++)
         {
             result += new_parts[i] + new_sep;
