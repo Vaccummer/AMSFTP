@@ -2085,8 +2085,9 @@ private:
             rcr = libssh2_sftp_setstat(amsession->sftp, path.c_str(), &attrs);
         }
 
-        if (rcr < 0)
+        if (rcr != 0)
         {
+            std::cout << "rcr: " << rcr << std::endl;
             rc = GetLastEC();
             msg = fmt::format("chmod {} failed: {}", path, GetLastErrorMsg());
             errors[path] = {rc, msg};
@@ -2128,6 +2129,7 @@ private:
             errors[path] = {rc, msg};
             return;
         }
+
         if (!(attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS))
         {
             msg = fmt::format("stat {} does not have permission attribute", path);
@@ -2146,7 +2148,7 @@ private:
             rcr = libssh2_sftp_setstat(amsession->sftp, path.c_str(), &attrs);
         }
 
-        if (rcr < 0)
+        if (rcr != 0)
         {
             std::cout << "rcr: " << rcr << std::endl;
             rc = GetLastEC();
@@ -2342,7 +2344,7 @@ public:
         {
             return ECM{EC::PathNotExist, fmt::format("Path does not exist: {}", pathf)};
         }
-        std::map<std::string, ECM> ecm_map;
+        std::map<std::string, ECM> ecm_map{};
 
         if (std::holds_alternative<std::string>(mode))
         {
@@ -2813,7 +2815,6 @@ public:
         // 获取当前时间，以2026-01-01-19-06格式
         std::string current_time = AMFS::FormatTime(std::time(nullptr), "%Y-%m-%d-%H-%M-%S");
 
-        std::cout << "base_ext: " << base_ext << std::endl;
         target_path = AMFS::join(trash_dir, current_time, base_name + "." + base_ext);
         size_t i = 1;
         std::string base_name_tmp = base_name;
@@ -2836,7 +2837,6 @@ public:
         }
 
         mkdirs(AMFS::join(trash_dir, current_time));
-        std::cout << "target_path: " << target_path << std::endl;
         return lib_rename(path, target_path, false);
     }
 
