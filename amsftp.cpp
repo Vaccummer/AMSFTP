@@ -2044,7 +2044,7 @@ private:
         }
     }
 
-    void _chmod(const std::string &path, std::string mode, bool recursive, std::map<std::string, ECM> &errors)
+    void _chmod(const std::string &path, const std::string &mode, bool recursive, std::map<std::string, ECM> &errors)
     {
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         EC rc;
@@ -2078,6 +2078,7 @@ private:
         new_mode_int = (new_mode_int & ~LIBSSH2_SFTP_S_IFMT) | file_type;
 
         attrs.permissions = new_mode_int;
+        attrs.flags = LIBSSH2_SFTP_ATTR_PERMISSIONS;
 
         int rcr;
         {
@@ -2110,7 +2111,7 @@ private:
         }
     }
 
-    void _chmod(const std::string &path, uint64_t mode, bool recursive, std::map<std::string, ECM> &errors)
+    void _chmod(const std::string &path, const uint64_t &mode, bool recursive, std::map<std::string, ECM> &errors)
     {
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         EC rc;
@@ -2141,6 +2142,7 @@ private:
         uint64_t new_mode_int = (mode & ~LIBSSH2_SFTP_S_IFMT) | file_type;
 
         attrs.permissions = new_mode_int;
+        attrs.flags = LIBSSH2_SFTP_ATTR_PERMISSIONS;
 
         int rcr;
         {
