@@ -1035,16 +1035,6 @@ namespace AMFS
 
         std::vector<std::string> new_parts{};
 
-        if (parts.front() == "~" && parsing_home)
-        {
-            std::string hm = home.empty() ? HomePath() : home;
-            for (const auto &seg : split(hm))
-            {
-                new_parts.push_back(seg);
-            }
-            parts.erase(parts.begin());
-        }
-
         std::string tmp_part;
         std::string result;
         if (parts.empty())
@@ -1058,8 +1048,17 @@ namespace AMFS
         }
         else if (parts.front() == "/")
         {
-            result = "/";
+            new_parts.push_back("/");
             new_sep = "/";
+        }
+        else if (parts.front() == "~" && parsing_home)
+        {
+            std::string hm = home.empty() ? HomePath() : home;
+            for (const auto &seg : split(hm))
+            {
+                new_parts.push_back(seg);
+            }
+            parts.erase(parts.begin());
         }
         else
         {
@@ -1090,6 +1089,7 @@ namespace AMFS
         {
             result += part + new_sep;
         }
+
         if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
         {
             result.pop_back();
