@@ -1006,13 +1006,14 @@ namespace AMFS
                         const std::string &sep = "")
     {
         std::string new_path = UnifyPathSep(path, sep);
-
+        std::cout << "new_path: " << new_path << std::endl;
         if (IsAbs(new_path, sep) && !parsing_home)
         {
             return new_path;
         }
 
         std::string new_sep = sep.empty() ? Str::GetPathSep(path) : sep;
+        std::cout << "new_sep: " << new_sep << std::endl;
 
         if (!IsAbs(new_path, new_sep))
         {
