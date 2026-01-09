@@ -998,10 +998,7 @@ namespace AMFS
         {
             result += part + new_sep;
         }
-        if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
-        {
-            result.pop_back();
-        }
+
         return result;
     }
 
@@ -1098,10 +1095,6 @@ namespace AMFS
             result += new_parts[i] + new_sep;
         }
 
-        if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
-        {
-            result.pop_back();
-        }
         return result;
     }
 
