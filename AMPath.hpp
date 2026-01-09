@@ -1083,11 +1083,11 @@ namespace AMFS
             return new_parts[0];
         }
 
-        for (int i = 1; i < new_parts.size(); i++)
+        for (int i = 1; i < new_parts.size() - 1; i++)
         {
             result += new_parts[i] + new_sep;
         }
-
+        result += new_parts.back();
         return result;
     }
 
