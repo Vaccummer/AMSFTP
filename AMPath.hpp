@@ -929,11 +929,7 @@ namespace AMFS
         }
 
         result = UnifyPathSep(result, sep);
-        if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
-        {
-            // 保留windows磁盘驱动号的slash
-            result.pop_back();
-        }
+
         return result;
     };
 
