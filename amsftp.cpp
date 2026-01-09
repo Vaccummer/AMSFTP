@@ -2179,7 +2179,7 @@ public:
     {
     }
 
-    std::string StrUid(long uid)
+    std::string StrUid(const long &uid)
     {
         if (user_id_map.find(uid) != user_id_map.end())
         {
@@ -2210,58 +2210,8 @@ public:
 
     ECM SetTrashDir(std::string trash_dir_f = "")
     {
-        if (!trash_dir_f.empty())
-        {
-            ECM res = mkdirs(trash_dir_f);
-            if (!isok(res))
-            {
-                return res;
-            }
-            this->trash_dir = trash_dir_f;
-            return {EC::Success, ""};
-        }
-        if (!request.trash_dir.empty())
-        {
-            ECM res = mkdirs(request.trash_dir);
-            if (!isok(res))
-            {
-                return res;
-            }
-            this->trash_dir = request.trash_dir;
-            return {EC::Success, ""};
-        }
-        char path_t[1024];
-        std::string trash_dir_t = "";
-        std::string cwd = "";
-        int rcr;
-        {
-            std::lock_guard<std::recursive_mutex> lock(amsession->mtx);
-            rcr = libssh2_sftp_realpath(amsession->sftp, ".", path_t, sizeof(path_t));
-        }
-        if (rcr > 0)
-        {
-            cwd = std::string(path_t);
-        }
-        else
-        {
-            trace(AMERROR, EC::UnknownError, fmt::format("{}@{}", request.nickname, "CWD"), "SetTrashDir", "Can't get current working directory");
-        }
-
-        if (cwd.empty())
-        {
-            this->trash_dir = ".amsftp_trash";
-        }
-        else
-        {
-            this->trash_dir = AMFS::join(cwd, ".amsftp_trash");
-        }
-        trace(AMINFO, EC::Success, "TrashDir", "DefaultTrashDir", fmt::format("Trash directory set to default: \"{}\"", this->trash_dir));
-        ECM res = mkdirs(this->trash_dir);
-        if (!isok(res))
-        {
-            return res;
-        }
-        return {EC::Success, ""};
+        this->trash_dir = trash_dir_f;
+        return EnsureTrashDir();
     }
 
     ECM EnsureTrashDir()
@@ -2373,7 +2323,8 @@ public:
         }
     }
 
-    std::variant<std::map<std::string, ECM>, ECM> chmod(const std::string &path, std::variant<std::string, uint64_t> mode, bool recursive = false)
+    std::variant<std::map<std::string, ECM>, ECM>
+    chmod(const std::string &path, std::variant<std::string, uint64_t> mode, bool recursive = false)
     {
         auto pathf = AMFS::abspath(path, true, GetHomeDir());
         if (static_cast<int>(GetOSType()) <= 0)
