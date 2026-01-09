@@ -113,6 +113,15 @@ namespace AMFS
             return AMStr(std::string(str));
         }
 
+        std::pair<bool, int> endswith(const std::string &str, const std::string &suffix)
+        {
+            if (suffix.empty())
+                return std::make_pair(true, str.size());
+            if (str.size() < suffix.size())
+                return std::make_pair(false, 0);
+            return std::make_pair(str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0, str.size() - suffix.size());
+        }
+
         std::pair<bool, std::string> isPatternsValid(const std::vector<std::string> &patterns)
         {
             std::regex pattern_f;
@@ -306,6 +315,14 @@ namespace AMFS
 
         std::string GetPathSep(const std::string &path)
         {
+            if (path[0] == '/')
+            {
+                return "/";
+            }
+            else if (path[0] == '\\')
+            {
+                return "\\";
+            }
             int slash_count = 0;
             int anti_slash_count = 0;
             for (auto &c : path)
@@ -319,7 +336,7 @@ namespace AMFS
                     anti_slash_count++;
                 }
             }
-            return slash_count > anti_slash_count ? "/" : "\\";
+            return slash_count < anti_slash_count ? "\\" : "/";
         }
 
         bool _match(const std::string &name, const std::string &pattern_f, const bool &use_regex)
@@ -636,8 +653,52 @@ namespace AMFS
 
     std::string extname(const std::string &path)
     {
-        fs::path p(path);
-        return p.extension().string();
+        std::string base = Str::Strip(path);
+        std::string ext = "";
+        size_t dot_pos = path.find_last_of('.');
+        if (dot_pos != std::string::npos)
+        {
+            ext = path.substr(dot_pos + 1);
+            std::string test_ext = ".tar." + ext;
+            if (Str::endswith(base, test_ext).first)
+            {
+                return test_ext.substr(1);
+            }
+            else
+            {
+                return ext;
+            }
+        }
+        else
+        {
+            return "";
+        }
+    }
+
+    std::pair<std::string, std::string> split_basename(const std::string &basename)
+    {
+        std::string base = Str::Strip(basename);
+        std::string ext = "";
+        size_t dot_pos = base.find_last_of('.');
+        if (dot_pos != std::string::npos)
+        {
+            ext = base.substr(dot_pos + 1);
+            std::string test_ext = ".tar." + ext;
+            // 检测base是否已test_ext结尾
+            auto [check, pos] = Str::endswith(base, test_ext);
+            if (check)
+            {
+                return {base.substr(0, pos), test_ext.substr(1)};
+            }
+            else
+            {
+                return {base.substr(0, dot_pos), ext};
+            }
+        }
+        else
+        {
+            return {base, ""};
+        }
     }
 
     std::string CWD()
@@ -840,12 +901,39 @@ namespace AMFS
         }
 
         std::string result;
-        sep = sep.empty() ? Str::GetPathSep(ori_str) : sep;
-        for (auto seg : segments)
+
+        if (segments[0] == "/")
         {
-            result += seg + sep;
+            result = "/";
+            sep = "/";
         }
-        result.pop_back();
+        else if (segments[0] == "//")
+        {
+            result = "//";
+            sep = "/";
+        }
+        else if (segments[0] == "\\\\")
+        {
+            result = "\\\\";
+            sep = "\\";
+        }
+        else
+        {
+            sep = sep.empty() ? Str::GetPathSep(ori_str) : sep;
+            result = segments[0] + sep;
+        }
+
+        for (int i = 1; i < segments.size(); i++)
+        {
+            result += segments[i] + sep;
+        }
+
+        result = UnifyPathSep(result, sep);
+        if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
+        {
+            // 保留windows磁盘驱动号的slash
+            result.pop_back();
+        }
         return result;
     };
 
@@ -926,7 +1014,7 @@ namespace AMFS
     {
         std::string new_path = UnifyPathSep(path, sep);
 
-        if ((new_path.size() < 4 || IsAbs(new_path, sep)) && !parsing_home)
+        if (IsAbs(new_path, sep) && !parsing_home)
         {
             return new_path;
         }
@@ -958,8 +1046,29 @@ namespace AMFS
         }
 
         std::string tmp_part;
-        for (auto tmp_part : parts)
+        std::string result;
+        if (parts.empty())
         {
+
+            return "";
+        }
+        else if (parts.size() == 1)
+        {
+            return parts.front();
+        }
+        else if (parts.front() == "/")
+        {
+            result = "/";
+            new_sep = "/";
+        }
+        else
+        {
+            result = parts.front() + new_sep;
+        }
+
+        for (int i = 1; i < parts.size(); i++)
+        {
+            tmp_part = parts[i];
             if (tmp_part == ".")
             {
                 continue;
@@ -977,7 +1086,6 @@ namespace AMFS
             }
         }
 
-        std::string result;
         for (const auto part : new_parts)
         {
             result += part + new_sep;
