@@ -2222,7 +2222,7 @@ public:
     ECM EnsureTrashDir()
     {
         std::string tmp_trash_dir = this->trash_dir.empty() ? ".AMSFTP_Trash" : this->trash_dir;
-        tmp_trash_dir = AMFS::abspath(tmp_trash_dir, false, GetHomeDir(), GetHomeDir());
+        tmp_trash_dir = AMFS::abspath(tmp_trash_dir, true, GetHomeDir(), GetHomeDir());
         this->trash_dir = tmp_trash_dir;
         BR br = is_dir(tmp_trash_dir);
         if (std::holds_alternative<bool>(br))
