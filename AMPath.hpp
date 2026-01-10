@@ -13,6 +13,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <unicode/unistr.h>
 #include <variant>
 
 // 第三方库头文件（跨平台，需链接 fmt 库）
@@ -111,6 +112,18 @@ namespace AMFS
         std::wstring AMStr(char *str)
         {
             return AMStr(std::string(str));
+        }
+
+        size_t CharNum(const std::string &utf8_str)
+        {
+            try
+            {
+                return icu::UnicodeString::fromUTF8(utf8_str).length();
+            }
+            catch (const std::exception &e)
+            {
+                return utf8_str.size();
+            }
         }
 
         std::pair<bool, int> endswith(const std::string &str, const std::string &suffix)
@@ -602,7 +615,7 @@ namespace AMFS
     std::string UnifyPathSep(std::string path, std::string sep = "")
     {
         path = Str::Strip(path);
-        if (path.size() < 2)
+        if (Str::CharNum(path) < 2)
             return path;
         sep = sep.empty() ? Str::GetPathSep(path) : sep;
         std::string head = path.substr(0, 2);
@@ -620,7 +633,7 @@ namespace AMFS
 
     bool IsAbs(const std::string &path, const std::string &sep = "")
     {
-        return std::regex_search(UnifyPathSep(path, sep), std::regex("^(?:[A-Za-z]:[/\\\\]?|/|[\\\\/]{2}|~[\\\\/])")) || path == "~";
+        return std::regex_search(UnifyPathSep(path, sep), std::regex("^(?:[A-Za-z]:[/\\\\]?|/|[\\\\/]{2}|~[\\\\/])"));
     }
 
     std::string HomePath()
@@ -708,7 +721,7 @@ namespace AMFS
 
     std::vector<std::string> split(std::string path)
     {
-        if (path.size() < 2)
+        if (Str::CharNum(path) < 2)
         {
             return {path};
         }
@@ -763,7 +776,7 @@ namespace AMFS
 
     std::vector<std::string> resplit(std::string path, char front_esc, char back_esc, std::string head = "")
     {
-        if (path.size() < 3)
+        if (Str::CharNum(path) < 3)
         {
             return {path};
         }
@@ -929,74 +942,81 @@ namespace AMFS
         }
 
         result = UnifyPathSep(result, sep);
-
+        if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
+        {
+            // 保留windows磁盘驱动号的slash
+            result.pop_back();
+        }
         return result;
     };
 
     // 解析真实存在的路径，返回绝对路径
-    std::string realpath(const std::string &path, bool force_parsing = false, const std::string &cwd = "", const std::string &sep = "")
-    {
-        std::string new_path = UnifyPathSep(path, sep);
+    // std::string realpath(const std::string &path, bool force_parsing = false, const std::string &cwd = "", const std::string &sep = "")
+    // {
+    //     std::string new_path = UnifyPathSep(path, sep);
 
-        if ((new_path.size() < 4 || IsAbs(new_path, sep)) && !force_parsing)
-        {
-            return path;
-        }
+    //     if ((Str::CharNum(new_path) < 4 || IsAbs(new_path, sep)) && !force_parsing)
+    //     {
+    //         return path;
+    //     }
 
-        std::string new_sep = sep.empty() ? Str::GetPathSep(path) : sep;
+    //     std::string new_sep = sep.empty() ? Str::GetPathSep(path) : sep;
 
-        if (!IsAbs(new_path, new_sep))
-        {
-            new_path = cwd.empty() ? CWD() + new_sep + new_path : cwd + new_sep + new_path;
-        }
+    //     if (!IsAbs(new_path, new_sep))
+    //     {
+    //         new_path = cwd.empty() ? CWD() + new_sep + new_path : cwd + new_sep + new_path;
+    //     }
 
-        std::vector<std::string> parts = split(new_path);
+    //     std::vector<std::string> parts = split(new_path);
 
-        if (parts.empty())
-        {
-            return "";
-        }
+    //     if (parts.empty())
+    //     {
+    //         return "";
+    //     }
 
-        std::vector<std::string> new_parts{};
+    //     std::vector<std::string> new_parts{};
 
-        if (parts.front() == "~")
-        {
-            std::string hm = HomePath();
-            for (const auto &seg : split(hm))
-            {
-                new_parts.push_back(seg);
-            }
-            parts.erase(parts.begin());
-        }
+    //     if (parts.front() == "~")
+    //     {
+    //         std::string hm = HomePath();
+    //         for (const auto &seg : split(hm))
+    //         {
+    //             new_parts.push_back(seg);
+    //         }
+    //         parts.erase(parts.begin());
+    //     }
 
-        std::string tmp_part;
-        for (auto tmp_part : parts)
-        {
-            if (tmp_part == ".")
-            {
-                continue;
-            }
-            else if (tmp_part == "..")
-            {
-                if (!new_parts.empty())
-                {
-                    new_parts.pop_back();
-                }
-            }
-            else
-            {
-                new_parts.push_back(tmp_part);
-            }
-        }
+    //     std::string tmp_part;
+    //     for (auto tmp_part : parts)
+    //     {
+    //         if (tmp_part == ".")
+    //         {
+    //             continue;
+    //         }
+    //         else if (tmp_part == "..")
+    //         {
+    //             if (!new_parts.empty())
+    //             {
+    //                 new_parts.pop_back();
+    //             }
+    //         }
+    //         else
+    //         {
+    //             new_parts.push_back(tmp_part);
+    //         }
+    //     }
 
-        std::string result;
-        for (const auto part : new_parts)
-        {
-            result += part + new_sep;
-        }
-
-        return result;
-    }
+    //     std::string result;
+    //     for (const auto part : new_parts)
+    //     {
+    //         result += part + new_sep;
+    //     }
+    //     if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
+    //     {
+    //         result.pop_back();
+    //     }
+    //     return result;
+    // }
 
     // 将路径转换为绝对路径，支持解析~ . ..符号， 不要求路径存在
     std::string abspath(const std::string &path,
@@ -1006,6 +1026,7 @@ namespace AMFS
                         const std::string &sep = "")
     {
         std::string new_path = UnifyPathSep(path, sep);
+
         if (IsAbs(new_path, sep) && !parsing_home)
         {
             return new_path;
@@ -1024,35 +1045,37 @@ namespace AMFS
         {
             return "";
         }
-        else if (parts.size() == 1)
-        {
-            if (parts[0] == "~" && parsing_home)
-            {
-                return home.empty() ? HomePath() : home;
-            }
-            return new_path;
-        }
 
         std::vector<std::string> new_parts{};
+
         std::string tmp_part;
         std::string result;
+        if (parts.empty())
+        {
 
-        if (parts[0] == "/")
+            return "";
+        }
+        else if (parts.size() == 1)
+        {
+            return parts.front();
+        }
+        else if (parts.front() == "/")
         {
             new_parts.push_back("/");
             new_sep = "/";
         }
-        else if (parts[0] == "~" && parsing_home)
+        else if (parts.front() == "~" && parsing_home)
         {
             std::string hm = home.empty() ? HomePath() : home;
             for (const auto &seg : split(hm))
             {
                 new_parts.push_back(seg);
             }
+            parts.erase(parts.begin());
         }
         else
         {
-            new_parts.push_back(parts[0]);
+            result = parts.front() + new_sep;
         }
 
         for (int i = 1; i < parts.size(); i++)
@@ -1081,23 +1104,17 @@ namespace AMFS
         }
         else if (new_parts.size() == 1)
         {
-            return new_parts[0];
+            return new_parts.front();
         }
-
-        if (new_parts[0] == "/")
-        {
-            result = "/";
-        }
-        else
-        {
-            result = new_parts[0] + new_sep;
-        }
-
-        for (int i = 1; i < new_parts.size() - 1; i++)
+        for (int i = 1; i < new_parts.size(); i++)
         {
             result += new_parts[i] + new_sep;
         }
-        result += new_parts.back();
+
+        if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
+        {
+            result.pop_back();
+        }
         return result;
     }
 
@@ -1111,13 +1128,14 @@ namespace AMFS
         return p.parent_path().string();
     }
 
-    std::string basename(std::string path)
+    std::string basename(const std::string &path)
     {
-        while ((path.back() == '/' || path.back() == '\\') && path.size() > 1)
+        std::string pathf = Str::Strip(path);
+        while ((pathf.back() == '/' || pathf.back() == '\\') && path.size() > 1)
         {
-            path.pop_back();
+            pathf.pop_back();
         }
-        fs::path p(path);
+        fs::path p(pathf);
         return p.filename().string();
     }
 
@@ -1135,13 +1153,13 @@ namespace AMFS
         }
     }
 
-    std::pair<std::string, PathInfo> stat(std::string path, bool trace_link = false)
+    std::pair<std::string, PathInfo> stat(const std::string &path, bool trace_link = false)
     {
         PathInfo info;
-        path = realpath(path);
-        fs::path p(path);
+        std::string pathf = abspath(path);
+        fs::path p(pathf);
         info.name = p.filename().string();
-        info.path = realpath(path);
+        info.path = pathf;
         info.dir = p.parent_path().string();
         fs::file_status status;
         try
@@ -1155,9 +1173,9 @@ namespace AMFS
                 status = fs::symlink_status(p);
             }
         }
-        catch (const fs::filesystem_error)
+        catch (const fs::filesystem_error &e)
         {
-            return std::make_pair("Stat error: " + path, PathInfo());
+            return std::make_pair(fmt::format("Stat {} failed: {}", pathf, e.what()), PathInfo());
         }
 
         switch (status.type())
@@ -1204,7 +1222,7 @@ namespace AMFS
         }
 
 #ifdef _WIN32
-        if (is_readonly(Str::AMStr(path)))
+        if (is_readonly(Str::AMStr(pathf)))
         {
             info.mode_int = 0333;
             info.mode_str = "r-xr-xr-x";
@@ -1249,8 +1267,9 @@ namespace AMFS
 
     std::vector<PathInfo> listdir(const std::string &path)
     {
+        std::string pathf = abspath(path);
         std::vector<PathInfo> result = {};
-        fs::path p(path);
+        fs::path p(pathf);
         if (!fs::exists(p))
         {
             return result;
@@ -1272,7 +1291,7 @@ namespace AMFS
         return result;
     }
 
-    void _iwalk(std::string path, std::vector<PathInfo> &result, bool ignore_sepcial_file)
+    void _iwalk(const std::string &path, std::vector<PathInfo> &result, bool ignore_sepcial_file)
     {
         auto [error, info] = stat(path);
         if (!error.empty())
@@ -1364,7 +1383,7 @@ namespace AMFS
         }
     }
 
-    std::vector<PathInfo> iwalk(const std::string &path, bool ignore_sepcial_file)
+    std::vector<PathInfo> iwalk(const std::string &path, bool ignore_sepcial_file = true)
     {
         std::vector<PathInfo> result = {};
 
@@ -1501,7 +1520,7 @@ namespace AMFS
             }
         }
 
-        return std::make_tuple(match_parts, realpath(join(root_parts), false, "\\"), is_recursive);
+        return std::make_tuple(match_parts, abspath(join(root_parts), false, "\\"), is_recursive);
     }
 
     void search(std::vector<std::string> &results, fs::path root, std::string name, std::vector<std::string> remains, SearchType type, bool use_regex, bool silence, CB callback)
@@ -1645,6 +1664,7 @@ namespace AMFS
             }
             catch (const std::exception e)
             {
+                std::cout << "error: " << e.what() << std::endl;
                 if (!silence && callback)
                 {
                     (*callback)(root.string(), "IterdirFailed", e.what());
