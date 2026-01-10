@@ -8,7 +8,6 @@
 constexpr uint64_t AMKB = 1024;
 constexpr uint64_t AMMB = 1024 * 1024;
 constexpr uint64_t AMGB = 1024 * 1024 * 1024;
-
 constexpr char *AMLEVEL = "LEVEL";
 constexpr char *AMERRORCODE = "ERRORCODE";
 constexpr char *AMERRORNAME = "ERRORNAME";
@@ -152,6 +151,16 @@ enum class TransferControl
     Terminate = 1
 };
 
+enum class TraceLevel
+{
+    Info = 2,
+    Debug = 1,
+    Warning = 0,
+    Error = -1,
+    Critical = 2,
+
+};
+
 // 将libssh2错误码映射为错误消息
 const std::unordered_map<int, std::string> SFTPMessage = {
     {LIBSSH2_FX_EOF, "End of file"},
@@ -187,7 +196,7 @@ const std::unordered_map<int, ErrorCode> Int2EC = []
     return map;
 }();
 
-std::string GetECName(ErrorCode ec)
+inline std::string GetECName(ErrorCode ec)
 {
     return std::string(magic_enum::enum_name(ec));
 }

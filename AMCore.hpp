@@ -1,24 +1,15 @@
-#include "AMEnum.hpp"
-#include "AMPath.hpp"
+#pragma once
+// 标准库
 #include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <fcntl.h>
 #include <filesystem>
-#include <fmt/core.h>
 #include <fstream>
 #include <iostream>
-#include <libssh2.h>
-#include <libssh2_sftp.h>
-#include <magic_enum/magic_enum.hpp>
 #include <memory>
 #include <numeric>
-#include <openssl/pem.h>
-#include <openssl/rsa.h>
-#include <pybind11/functional.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 #include <regex>
 #include <stdio.h>
 #include <string>
@@ -26,6 +17,25 @@
 #include <time.h>
 #include <unordered_map>
 #include <vector>
+// 标准库
+
+// 自身依赖
+#include "AMDataClass.hpp"
+#include "AMEnum.hpp"
+#include "AMPath.hpp"
+// 自身依赖
+
+// 第三方库
+#include <fmt/core.h>
+#include <libssh2.h>
+#include <libssh2_sftp.h>
+#include <magic_enum/magic_enum.hpp>
+#include <openssl/pem.h>
+#include <openssl/rsa.h>
+#include <pybind11/functional.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+// 第三方库
 
 #ifdef _WIN32
 #include <windows.h>
@@ -49,865 +59,30 @@
 
 #define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR // in case mutex constructor is not supported
 
+extern std::atomic<bool> is_wsa_initialized;
+
+void cleanup_wsa();
+
+inline bool isok(ECM &ecm)
+{
+    return ecm.first == EC::Success;
+}
+
 namespace py = pybind11;
 namespace fs = std::filesystem;
 using PathInfo = AMFS::PathInfo;
 using PathType = AMFS::PathType;
 using EC = ErrorCode;
-using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
-
-static std::atomic<bool> is_wsa_initialized(false);
-
-static void cleanup_wsa()
-{
-    if (is_wsa_initialized)
-    {
-        WSACleanup();
-        is_wsa_initialized = false;
-    }
-}
-
-// 跨平台Socket连接器
-class SocketConnector
-{
-public:
-    SOCKET sock = INVALID_SOCKET;
-    std::string error_msg = "";
-    EC error_code = EC::Success;
-
-    SocketConnector() = default;
-
-    ~SocketConnector()
-    {
-    }
-
-    // 连接到指定主机，返回是否成功
-
-    bool Connect(const std::string &hostname, int port, size_t timeout_s)
-    {
-        // 1. DNS解析
-        addrinfo hints{}, *result = nullptr;
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_STREAM;
-        hints.ai_protocol = IPPROTO_TCP;
-
-        int dns_err = getaddrinfo(hostname.c_str(), std::to_string(port).c_str(), &hints, &result);
-        if (dns_err != 0)
-        {
-#ifdef _WIN32
-            error_msg = fmt::format("DNS resolve failed: {} (hostname={})", gai_strerrorA(dns_err), hostname);
-#else
-            error_msg = fmt::format("DNS resolve failed: {} (hostname={})", gai_strerror(dns_err), hostname);
-#endif
-            error_code = EC::DNSResolveError;
-            return false;
-        }
-
-        // 2. 创建socket
-        sock = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-        if (sock == INVALID_SOCKET)
-        {
-            freeaddrinfo(result);
-            error_msg = "Failed to create socket";
-            error_code = EC::SocketCreateError;
-            return false;
-        }
-
-        // 3. 设置非阻塞模式
-        if (!SetNonBlocking(true))
-        {
-            freeaddrinfo(result);
-            closesocket(sock);
-            sock = INVALID_SOCKET;
-            return false;
-        }
-
-        // 4. 发起连接
-        int conn_result = connect(sock, result->ai_addr, (int)result->ai_addrlen);
-        freeaddrinfo(result);
-
-#ifdef _WIN32
-        bool in_progress = (conn_result == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK);
-#else
-        bool in_progress = (conn_result == -1 && errno == EINPROGRESS);
-#endif
-
-        if (conn_result == 0)
-        {
-            // 立即成功（本地连接可能发生）
-            SetNonBlocking(false);
-            return true;
-        }
-
-        if (!in_progress)
-        {
-            error_msg = "Socket connect failed immediately";
-            error_code = EC::SocketConnectFailed;
-            closesocket(sock);
-            sock = INVALID_SOCKET;
-            return false;
-        }
-
-        // 5. 使用select等待连接完成
-        fd_set write_fds, error_fds;
-        FD_ZERO(&write_fds);
-        FD_ZERO(&error_fds);
-        FD_SET(sock, &write_fds);
-        FD_SET(sock, &error_fds);
-
-        timeval timeout;
-        timeout.tv_sec = (long)timeout_s;
-        timeout.tv_usec = 0;
-
-        int select_result = select((int)sock + 1, nullptr, &write_fds, &error_fds, &timeout);
-
-        if (select_result == 0)
-        {
-            error_msg = "Socket connection timeout";
-            error_code = EC::SocketConnectTimeout;
-            closesocket(sock);
-            sock = INVALID_SOCKET;
-            return false;
-        }
-
-        if (select_result < 0 || FD_ISSET(sock, &error_fds))
-        {
-            error_msg = "Socket connection failed";
-            error_code = EC::SocketConnectFailed;
-            closesocket(sock);
-            sock = INVALID_SOCKET;
-            return false;
-        }
-
-        // 6. 检查socket错误
-        int sock_error = 0;
-        socklen_t len = sizeof(sock_error);
-        if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&sock_error, &len) < 0 || sock_error != 0)
-        {
-            error_msg = fmt::format("Socket error after connect: {}", sock_error);
-            error_code = EC::SocketConnectFailed;
-            closesocket(sock);
-            sock = INVALID_SOCKET;
-            return false;
-        }
-
-        // 7. 恢复阻塞模式
-        SetNonBlocking(false);
-        return true;
-    }
-
-private:
-    bool SetNonBlocking(bool non_blocking)
-    {
-#ifdef _WIN32
-        u_long mode = non_blocking ? 1 : 0;
-        if (ioctlsocket(sock, FIONBIO, &mode) != 0)
-        {
-            error_msg = "Failed to set socket non-blocking mode";
-            error_code = EC::SocketCreateError;
-            return false;
-        }
-#else
-        int flags = fcntl(sock, F_GETFL, 0);
-        if (flags < 0)
-        {
-            error_msg = "Failed to get socket flags";
-            error_code = EC::SocketCreateError;
-            return false;
-        }
-        flags = non_blocking ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
-        if (fcntl(sock, F_SETFL, flags) < 0)
-        {
-            error_msg = "Failed to set socket non-blocking mode";
-            error_code = EC::SocketCreateError;
-            return false;
-        }
-#endif
-        return true;
-    }
-};
-
-inline double timenow()
-{
-    return std::chrono::duration<double>(
-               std::chrono::system_clock::now().time_since_epoch())
-        .count();
-}
-
-struct ConRequst
-{
-    std::string nickname;
-    std::string hostname;
-    std::string username;
-    std::string password;
-    std::string keyfile;
-    bool compression;
-    int port;
-    size_t timeout_s;
-    std::string trash_dir = "";
-    ConRequst()
-        : nickname(""), hostname(""), username(""), password(""), port(22), compression(false), timeout_s(3), trash_dir("") {}
-    ConRequst(std::string nickname,
-              std::string hostname,
-              std::string username,
-              int port,
-              std::string password = "",
-              std::string keyfile = "",
-              bool compression = false,
-              size_t timeout_s = 3,
-              std::string trash_dir = "")
-        : nickname(nickname), hostname(hostname), username(username), password(password), keyfile(keyfile), compression(compression), port(port), timeout_s(timeout_s), trash_dir(trash_dir)
-    {
-    }
-};
-
-struct ProgressCBInfo
-{
-    std::string src;
-    std::string dst;
-    std::string src_host;
-    std::string dst_host;
-    uint64_t this_size;
-    uint64_t file_size;
-    uint64_t accumulated_size;
-    uint64_t total_size;
-    ProgressCBInfo(std::string src, std::string dst, std::string src_host, std::string dst_host, uint64_t this_size, uint64_t file_size, uint64_t accumulated_size, uint64_t total_size)
-        : src(src), dst(dst), src_host(src_host), dst_host(dst_host), this_size(this_size), file_size(file_size), accumulated_size(accumulated_size), total_size(total_size) {}
-};
-
-struct ErrorCBInfo
-{
-    std::pair<ErrorCode, std::string> ecm;
-    std::string src;
-    std::string dst;
-    std::string src_host;
-    std::string dst_host;
-    ErrorCBInfo(std::pair<ErrorCode, std::string> ecm, std::string src, std::string dst, std::string src_host, std::string dst_host)
-        : ecm(ecm), src(src), dst(dst), src_host(src_host), dst_host(dst_host) {}
-};
-
-struct AuthCBInfo
-{
-    bool NeedPassword; // if true, python password callback need to return password, if false, callback function just tells you the password is wrong
-    ConRequst request;
-    int trial_times;
-    AuthCBInfo(bool NeedPassword, ConRequst request, int trial_times)
-        : NeedPassword(NeedPassword), request(request), trial_times(trial_times) {}
-};
-
-struct TransferCallback
-{
-    bool need_error_cb;
-    bool need_progress_cb;
-    bool need_total_size_cb;
-    py::function error_cb;      // Callable[[ErrorCBInfo], None]
-    py::function progress_cb;   // Callable[[ProgressCBInfo], EC]
-    py::function total_size_cb; // Callable[[int], None]
-
-    TransferCallback(
-        py::object total_size = py::none(),
-        py::object error = py::none(),
-        py::object progress = py::none())
-    {
-        if (total_size.is_none())
-        {
-            need_total_size_cb = false;
-            total_size_cb = py::function();
-        }
-        else
-        {
-            need_total_size_cb = true;
-            total_size_cb = py::cast<py::function>(total_size);
-        }
-
-        if (error.is_none())
-        {
-            need_error_cb = false;
-            error_cb = py::function();
-        }
-        else
-        {
-            need_error_cb = true;
-            error_cb = error.cast<py::function>();
-        }
-
-        if (progress.is_none())
-        {
-            need_progress_cb = false;
-            progress_cb = py::function();
-        }
-        else
-        {
-            need_progress_cb = true;
-            progress_cb = progress.cast<py::function>();
-        }
-    }
-};
-
-struct TransferTask
-{
-    std::string src;
-    std::string src_host;
-    std::string dst;
-    std::string dst_host;
-    uint64_t size;
-    AMFS::PathType path_type = PathType::FILE;
-    bool IsSuccess = false;
-    ECM rc = ECM(EC::Success, "");
-    bool overwrite = false;
-    TransferTask(std::string src, std::string src_host, std::string dst, std::string dst_host, uint64_t size, PathType path_type = PathType::FILE, bool overwrite = false)
-        : src(src), src_host(src_host), dst(dst), dst_host(dst_host), size(size), path_type(path_type), overwrite(overwrite) {}
-};
-
-class BaseFileMapper
-{
-public:
-    char *file_ptr = nullptr;
-    uint64_t file_size = 0;
-    virtual ~BaseFileMapper() = default; // 虚析构函数，确保派生类析构被调用
-};
-
-#ifdef _WIN32
-class WindowsFileMapper : public BaseFileMapper
-{
-public:
-    HANDLE hFile;
-    HANDLE hMap;
-    LPVOID addr;
-    LARGE_INTEGER file_size_ptr;
-
-    ~WindowsFileMapper()
-    {
-
-        UnmapViewOfFile(addr);
-
-        CloseHandle(hMap);
-
-        CloseHandle(hFile);
-        file_ptr = nullptr;
-    }
-
-    WindowsFileMapper()
-    {
-        this->hFile = nullptr;
-        this->hMap = nullptr;
-        this->addr = nullptr;
-        this->file_ptr = nullptr;
-    }
-
-    WindowsFileMapper(const std::string &file_path, MapType map_type, std::string &error_msg, uint64_t file_size = 0)
-    {
-        LARGE_INTEGER li;
-        li.QuadPart = file_size;
-        bool is_ok = false;
-
-        if (map_type == MapType::Read)
-        {
-            this->hFile = CreateFileW(AMFS::Str::AMStr(file_path).c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-            if (this->hFile == INVALID_HANDLE_VALUE)
-            {
-                goto DONE;
-            }
-
-            GetFileSizeEx(this->hFile, &file_size_ptr);
-            this->file_size = file_size_ptr.QuadPart;
-            this->hMap = CreateFileMapping(this->hFile, NULL, PAGE_READONLY, 0, 0, NULL);
-            if (!this->hMap)
-            {
-                goto DONE;
-            }
-            this->addr = MapViewOfFile(this->hMap, FILE_MAP_READ, 0, 0, 0);
-            if (!this->addr)
-            {
-                goto DONE;
-            }
-            this->file_ptr = (char *)this->addr;
-            is_ok = true;
-            goto DONE;
-        }
-
-        this->hFile = CreateFileW(AMFS::Str::AMStr(file_path).c_str(), GENERIC_READ | GENERIC_WRITE, 0, NULL,
-                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-
-        if (this->hFile == INVALID_HANDLE_VALUE)
-        {
-            goto DONE;
-        }
-
-        if (!SetFilePointerEx(this->hFile, li, NULL, FILE_BEGIN))
-        {
-            goto DONE;
-        }
-
-        if (!SetEndOfFile(this->hFile))
-        {
-            goto DONE;
-        }
-        this->hMap = CreateFileMapping(this->hFile, NULL, PAGE_READWRITE, li.HighPart, li.LowPart, NULL);
-
-        if (!this->hMap)
-        {
-            goto DONE;
-        }
-        this->addr = MapViewOfFile(this->hMap, FILE_MAP_WRITE, 0, 0, 0);
-
-        if (!this->addr)
-        {
-            goto DONE;
-        }
-        this->file_ptr = (char *)this->addr;
-        is_ok = true;
-    DONE:
-        if (!is_ok)
-        {
-            DWORD err = GetLastError();
-            LPSTR errMsg = nullptr;
-            FormatMessageA(
-                FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM,
-                NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
-                (LPSTR)&errMsg, 0, NULL);
-            error_msg = errMsg;
-            LocalFree(errMsg);
-            this->file_ptr = nullptr;
-            return;
-        }
-    }
-};
-#else
-class UnixFileMapper : public BaseFileMapper
-{
-private:
-    int fd;                // 文件描述符
-    void *addr;            // 映射内存地址
-    struct stat file_stat; // 文件状态信息
-
-public:
-    ~UnixFileMapper()
-    {
-        // 解除内存映射
-        if (addr != MAP_FAILED && addr != nullptr)
-        {
-            munmap(addr, file_size);
-        }
-
-        // 关闭文件描述符
-        if (fd != -1)
-        {
-            close(fd);
-        }
-
-        file_ptr = nullptr;
-    }
-
-    UnixFileMapper() : fd(-1), addr(nullptr), file_ptr(nullptr), file_size(0) {}
-
-    UnixFileMapper(const std::string &file_path, MapType map_type, std::string &error_msg, uint64_t file_size = 0)
-        : fd(-1), addr(nullptr), file_ptr(nullptr), file_size(0)
-    {
-
-        bool is_ok = false;
-        int open_flags = 0;
-        int prot_flags = 0;
-        int map_flags = MAP_SHARED;
-
-        try
-        {
-            if (map_type == MapType::Read)
-            {
-                // 只读模式
-                open_flags = O_RDONLY;
-                prot_flags = PROT_READ;
-
-                // 打开文件
-                fd = open(file_path.c_str(), open_flags);
-                if (fd == -1)
-                {
-                    throw std::string("Failed to open file: ") + strerror(errno);
-                }
-
-                // 获取文件大小
-                if (fstat(fd, &file_stat) == -1)
-                {
-                    throw std::string("Failed to get file status: ") + strerror(errno);
-                }
-                this->file_size = file_stat.st_size;
-
-                // 映射文件到内存
-                addr = mmap(nullptr, this->file_size, prot_flags, map_flags, fd, 0);
-                if (addr == MAP_FAILED)
-                {
-                    throw std::string("Failed to map file to memory: ") + strerror(errno);
-                }
-
-                file_ptr = static_cast<char *>(addr);
-                is_ok = true;
-            }
-            else
-            {
-                // 写入模式
-                open_flags = O_RDWR | O_CREAT | O_TRUNC; // 创建并截断文件
-                prot_flags = PROT_READ | PROT_WRITE;
-                mode_t file_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH; // 权限: 644
-
-                // 打开文件
-                fd = open(file_path.c_str(), open_flags, file_mode);
-                if (fd == -1)
-                {
-                    throw std::string("Failed to create/open file: ") + strerror(errno);
-                }
-
-                // 设置文件大小
-                this->file_size = file_size;
-                if (ftruncate(fd, this->file_size) == -1)
-                {
-                    throw std::string("Failed to set file size: ") + strerror(errno);
-                }
-
-                // 映射文件到内存
-                addr = mmap(nullptr, this->file_size, prot_flags, map_flags, fd, 0);
-                if (addr == MAP_FAILED)
-                {
-                    throw std::string("Failed to map file to memory: ") + strerror(errno);
-                }
-
-                file_ptr = static_cast<char *>(addr);
-                is_ok = true;
-            }
-        }
-        catch (const std::string &err)
-        {
-            error_msg = err;
-
-            // 清理已分配的资源
-            if (addr != MAP_FAILED && addr != nullptr)
-            {
-                munmap(addr, file_size);
-                addr = nullptr;
-            }
-            if (fd != -1)
-            {
-                close(fd);
-                fd = -1;
-            }
-            file_ptr = nullptr;
-            file_size = 0;
-        }
-    }
-
-    // 同步内存映射到文件
-    bool sync()
-    {
-        if (addr == nullptr || addr == MAP_FAILED || file_size == 0)
-        {
-            return false;
-        }
-        return msync(addr, file_size, MS_SYNC) == 0;
-    }
-};
-#endif
-
-class FileMapper
-{
-private:
-    std::shared_ptr<BaseFileMapper> ori_mapper;
-
-public:
-    char *file_ptr;     // 映射文件数据指针
-    uint64_t file_size; // 文件大小
-    FileMapper() : file_ptr(nullptr), file_size(0) {}
-    FileMapper(const std::string &file_path, MapType map_type, std::string &error_msg, uint64_t file_size = 0)
-    {
-#ifdef _WIN32
-        this->ori_mapper = std::make_shared<WindowsFileMapper>(file_path, map_type, error_msg, file_size);
-        this->file_ptr = this->ori_mapper->file_ptr;
-        this->file_size = this->ori_mapper->file_size;
-#else
-        this->ori_mapper = std::make_shared<UnixFileMapper>(file_path, map_type, error_msg, file_size);
-        this->file_ptr = unix_mapper->file_ptr;
-        this->file_size = unix_mapper->file_size;
-#endif
-    }
-    // 禁止拷贝构造和赋值
-    FileMapper(const FileMapper &) = delete;
-    FileMapper &operator=(const FileMapper &) = delete;
-};
-
-struct SingleBuffer
-{
-    std::shared_ptr<char[]> bufferptr_origin;
-    char *bufferptr = nullptr;
-    BufferStatus status = BufferStatus::write_done;
-    uint64_t written = 0;
-    uint64_t read = 0;
-    uint64_t write_order = 0;
-    uint64_t read_order = 0;
-    SingleBuffer() {}
-    SingleBuffer(size_t buffer_size) : bufferptr_origin(new char[buffer_size], std::default_delete<char[]>()),
-                                       bufferptr(bufferptr_origin.get()) {}
-};
-
-struct TransferContext
-{
-    std::unordered_map<int, SingleBuffer> bufferd;
-    TransferContext(size_t buffer_size)
-    {
-        bufferd[0] = SingleBuffer(buffer_size);
-        bufferd[1] = SingleBuffer(buffer_size);
-    }
-
-    int get_write_buffer()
-    {
-        if (bufferd[0].status == BufferStatus::is_writing)
-        {
-            return 0;
-        }
-        else if (bufferd[1].status == BufferStatus::is_writing)
-        {
-            return 1;
-        }
-        else if (bufferd[0].status == BufferStatus::read_done)
-        {
-            if (bufferd[1].status == BufferStatus::read_done && bufferd[0].read_order > bufferd[1].read_order)
-            {
-                bufferd[1].status = BufferStatus::is_writing;
-                return 1;
-            }
-            else
-            {
-                bufferd[0].status = BufferStatus::is_writing;
-                return 0;
-            }
-        }
-
-        else if (bufferd[1].status == BufferStatus::read_done)
-        {
-            bufferd[1].status = BufferStatus::is_writing;
-            return 1;
-        }
-        else
-        {
-            return -1;
-        }
-    }
-
-    int get_read_buffer()
-    {
-        if (bufferd[0].status == BufferStatus::is_reading)
-        {
-            return 0;
-        }
-        else if (bufferd[1].status == BufferStatus::is_reading)
-        {
-            return 1;
-        }
-        else if (bufferd[0].status == BufferStatus::write_done)
-        {
-            if (bufferd[1].status == BufferStatus::write_done && bufferd[0].write_order > bufferd[1].write_order)
-            {
-                bufferd[1].status = BufferStatus::is_reading;
-                return 1;
-            }
-            else
-            {
-                bufferd[0].status = BufferStatus::is_reading;
-                return 0;
-            }
-        }
-        else if (bufferd[1].status == BufferStatus::write_done)
-        {
-            bufferd[1].status = BufferStatus::is_reading;
-            return 1;
-        }
-        else
-        {
-            return -1;
-        }
-    }
-
-    void finish_write(int buffer_name, uint64_t order)
-    {
-        bufferd[buffer_name].status = BufferStatus::write_done;
-        bufferd[buffer_name].written = 0;
-        bufferd[buffer_name].read = 0;
-        bufferd[buffer_name].write_order = order;
-    }
-
-    void finish_read(int buffer_name, uint64_t order)
-    {
-        bufferd[buffer_name].status = BufferStatus::read_done;
-        bufferd[buffer_name].written = 0;
-        bufferd[buffer_name].read_order = order;
-    }
-};
-
-using TASKS = std::vector<TransferTask>;
-using int_ptr = std::shared_ptr<uint64_t>;
-using safe_int_ptr = std::shared_ptr<std::atomic<uint64_t>>;
-using RMR = std::vector<std::pair<std::string, ECM>>;
-using TRM = std::vector<std::pair<std::pair<std::string, std::string>, ECM>>;
-using BR = std::pair<bool, ECM>;
-using SR = std::pair<ECM, PathInfo>;
-using LR = std::pair<std::vector<PathInfo>, ECM>;
-using WRV = std::vector<PathInfo>;
-using WRD = std::vector<std::pair<std::vector<std::string>, PathInfo>>;
-using WR = std::pair<ECM, WRV>;
-using ED = std::pair<EC, std::string>;
-using SIZER = std::variant<uint64_t, ECM>;
-using ErrorInfo = std::unordered_map<std::string, std::variant<std::string, EC>>;
-using CR = std::variant<std::pair<std::string, int>, ECM>;
-
-bool isok(ECM &ecm)
-{
-    return ecm.first == EC::Success;
-}
-
-class CircularBuffer
-{
-private:
-    std::vector<ErrorInfo> buffer = {};
-    size_t capacity = 10;
-
-public:
-    CircularBuffer() {}
-
-    CircularBuffer(unsigned int buffer_capacity)
-    {
-        if (buffer_capacity <= 0)
-        {
-            capacity = 10;
-        }
-        else
-        {
-            capacity = buffer_capacity;
-        }
-    }
-
-    void push(const ErrorInfo value)
-    {
-        if (buffer.size() < capacity)
-        {
-            buffer.push_back(value);
-        }
-        else
-        {
-            buffer.erase(buffer.begin());
-            buffer.push_back(value);
-        }
-    }
-
-    size_t GetSize() const { return buffer.size(); }
-
-    size_t GetCapacity() const { return capacity; }
-
-    std::variant<py::object, ErrorInfo> LastTraceError()
-    {
-        if (buffer.size() == 0)
-        {
-            return py::none();
-        }
-        return buffer[buffer.size() - 1];
-    }
-
-    std::vector<ErrorInfo> GetAllErrors()
-    {
-        std::vector<ErrorInfo> result;
-        for (auto &item : buffer)
-        {
-            result.push_back(item);
-        }
-        return result;
-    }
-
-    bool IsEmpty() const { return buffer.size() == 0; }
-
-    void Clear()
-    {
-        buffer.clear();
-    }
-
-    void SetCapacity(unsigned int size)
-    {
-        if (size <= 0)
-        {
-            return;
-        }
-
-        if (size > capacity)
-        {
-            capacity = size;
-        }
-        else
-        {
-            buffer.resize(size);
-            capacity = size;
-        }
-    }
-};
-
-class StreamRingBuffer
-{
-private:
-    std::unique_ptr<char[]> buffer;
-    size_t capacity;
-    std::atomic<size_t> head{0}; // 消费者读取位置
-    std::atomic<size_t> tail{0}; // 生产者写入位置
-
-public:
-    StreamRingBuffer(size_t size) : capacity(size), buffer(std::make_unique<char[]>(size)) {}
-
-    // 获取可读数据量
-    size_t available() const
-    {
-        return tail.load(std::memory_order_acquire) - head.load(std::memory_order_relaxed);
-    }
-
-    // 获取可写空间
-    size_t writable() const
-    {
-        return capacity - available();
-    }
-
-    // 获取写入指针和最大连续可写长度
-    std::pair<char *, size_t> get_write_ptr()
-    {
-        size_t t = tail.load(std::memory_order_relaxed);
-        size_t h = head.load(std::memory_order_acquire);
-        size_t pos = t % capacity;
-        size_t used = t - h;
-        size_t free_space = capacity - used;
-        // 连续可写 = min(到末尾的距离, 空闲空间)
-        size_t contig = capacity - pos > free_space ? free_space : capacity - pos;
-        return {buffer.get() + pos, contig};
-    }
-
-    // 提交写入的数据量
-    void commit_write(size_t len)
-    {
-        tail.fetch_add(len, std::memory_order_release);
-    }
-
-    // 获取读取指针和最大连续可读长度
-    std::pair<char *, size_t> get_read_ptr()
-    {
-        size_t h = head.load(std::memory_order_relaxed);
-        size_t t = tail.load(std::memory_order_acquire);
-        size_t pos = h % capacity;
-        size_t avail = t - h;
-        // 连续可读 = min(到末尾的距离, 可用数据)
-        size_t contig = capacity - pos > avail ? avail : capacity - pos;
-        return {buffer.get() + pos, contig};
-    }
-
-    // 提交读取消费的数据量
-    void commit_read(size_t len)
-    {
-        head.fetch_add(len, std::memory_order_release);
-    }
-
-    bool empty() const { return available() == 0; }
-    bool full() const { return writable() == 0; }
-};
+using TASKS = std::vector<TransferTask>;                                // load_task返回类型
+using RMR = std::vector<std::pair<std::string, ECM>>;                   // rm函数的返回类型
+using BR = std::pair<bool, ECM>;                                        // is_dir函数返回类型
+using SR = std::pair<ECM, PathInfo>;                                    // stat函数返回类型
+using WRV = std::vector<PathInfo>;                                      // iwalk函数返回类型
+using WRD = std::vector<std::pair<std::vector<std::string>, PathInfo>>; // walk函数返回类型
+using WR = std::pair<ECM, WRV>;                                         // iwalk函数返回类型
+using SIZER = std::pair<ECM, uint64_t>;                                 // getsize函数返回类型
+using CR = std::pair<ECM, std::pair<std::string, int>>;                 // ConductCmd函数返回类型
 
 class AMTracer : public CircularBuffer
 {
@@ -936,19 +111,35 @@ public:
         {
             return;
         }
-        ErrorInfo level_map = {
-            {AMLEVEL, level},
-            {AMERRORCODE, error_code},
-            {AMTARGET, target},
-            {AMACTION, action},
-            {AMMESSAGE, msg},
-        };
+        TraceLevel level_2 = TraceLevel::Info;
+        if (level == AMCRITICAL)
+        {
+            level_2 = TraceLevel::Critical;
+        }
+        else if (level == AMERROR)
+        {
+            level_2 = TraceLevel::Error;
+        }
+        else if (level == AMWARNING)
+        {
+            level_2 = TraceLevel::Warning;
+        }
+        else if (level == AMDEBUG)
+        {
+            level_2 = TraceLevel::Debug;
+        }
+        else if (level == AMINFO)
+        {
+            level_2 = TraceLevel::Info;
+        }
+        TraceInfo trace_info(level_2, error_code, target, action, msg);
+        this->push(trace_info);
         if (is_py_trace.load())
         {
             py::gil_scoped_acquire acquire;
-            trace_cb(level_map);
+            trace_cb(trace_info);
         }
-        this->push(level_map);
+        this->push(trace_info);
     }
 
     void pause()
@@ -1387,7 +578,7 @@ public:
     {
         if (!channel)
         {
-            return ECM{error_code, error_msg};
+            return {ECM{EC::NoConnection, "Channel not initialized"}, std::pair<std::string, int>("", -1)};
         }
 
         int out;
@@ -1400,7 +591,7 @@ public:
         {
             error_code = session_t->GetLastEC();
             error_msg = fmt::format("{} Host channel operation failed: {}", session_t->request.nickname, session_t->GetLastErrorMsg());
-            return ECM{error_code, error_msg};
+            return {ECM{error_code, error_msg}, std::pair<std::string, int>("", -1)};
         }
         char cmd_out[4096];
         int nbytes;
@@ -1413,7 +604,7 @@ public:
         {
             error_code = session_t->GetLastEC();
             error_msg = fmt::format("{} Host channel output read failed: {}", session_t->request.nickname, session_t->GetLastErrorMsg());
-            return ECM{error_code, error_msg};
+            return {ECM{error_code, error_msg}, std::pair<std::string, int>("", -1)};
         }
 
         int exit_status;
@@ -1426,7 +617,7 @@ public:
                                   { return c != '\n' && c != '\r'; })
                          .base(),
                      output.end());
-        return std::make_pair(output, exit_status);
+        return {ECM{EC::Success, ""}, std::pair<std::string, int>(output, exit_status)};
     }
 };
 
@@ -1474,12 +665,12 @@ public:
         amtracer->trace(level, error_code, target, action, msg);
     }
 
-    std::variant<py::object, ErrorInfo> LastTraceError()
+    std::variant<py::object, TraceInfo> LastTraceError()
     {
         return amtracer->LastTraceError();
     }
 
-    inline std::vector<ErrorInfo> GetAllTraceErrors()
+    inline std::vector<TraceInfo> GetAllTraceErrors()
     {
         return amtracer->GetAllErrors();
     }
@@ -1612,16 +803,16 @@ public:
             return os_type;
         }
         SafeChannel channel(amsession);
-        auto out = channel.ConductCmd("uname -s");
-        if (!std::holds_alternative<std::pair<std::string, int>>(out))
+        auto [rcm, out] = channel.ConductCmd("uname -s");
+        if (rcm.first != EC::Success)
         {
             os_type = OS_TYPE::Uncertain;
             return os_type;
         }
-        int code = std::get<std::pair<std::string, int>>(out).second;
+        int code = out.second;
         if (code == 0)
         {
-            std::string out_str = std::get<std::pair<std::string, int>>(out).first;
+            std::string out_str = out.first;
             // 将out_str转换为小写
             std::transform(out_str.begin(), out_str.end(), out_str.begin(), ::tolower);
             if (out_str.find("linux") != std::string::npos)
@@ -1648,20 +839,20 @@ public:
         }
 
         SafeChannel channel2(amsession);
-        auto out2 = channel2.ConductCmd("systeminfo | findstr /i \"OS Name\"");
-        if (!std::holds_alternative<std::pair<std::string, int>>(out2))
+        auto [rcm2, out2] = channel2.ConductCmd("systeminfo | findstr /i \"OS Name\"");
+        if (rcm2.first != EC::Success)
         {
             os_type = OS_TYPE::Uncertain;
             return os_type;
         }
 
-        code = std::get<std::pair<std::string, int>>(out2).second;
+        code = out2.second;
         if (code != 0)
         {
             os_type = OS_TYPE::Unknown;
             return os_type;
         }
-        std::string out_str2 = std::get<std::pair<std::string, int>>(out2).first;
+        std::string out_str2 = out2.first;
         if (out_str2.find("Windows") != std::string::npos)
         {
             os_type = OS_TYPE::Windows;
@@ -2142,20 +1333,19 @@ public:
             return "";
         }
         std::string cmd = fmt::format("id -un {}", uid);
-        CR cr = channel.ConductCmd(cmd);
-        if (std::holds_alternative<ECM>(cr))
+        auto [rcm, cr] = channel.ConductCmd(cmd);
+        if (rcm.first != EC::Success)
         {
             return "unkown";
         }
-        std::pair<std::string, int> resp = std::get<std::pair<std::string, int>>(cr);
-        if (resp.second != 0)
+        if (cr.second != 0)
         {
             return "unkown";
         }
         else
         {
-            user_id_map[uid] = resp.first;
-            return resp.first;
+            user_id_map[uid] = cr.first;
+            return cr.first;
         }
     }
 
@@ -2685,35 +1875,35 @@ public:
     }
 
     // 将原路径变成新路径，自带AMFS::abspath
-    ECM rename(const std::string &src_path, const std::string &dst_path, bool overwrite = false)
+    ECM rename(const std::string &src, const std::string &dst, bool overwrite = false)
     {
         if (!amsession->sftp)
         {
             return ECM{EC::NoConnection, "SFTP not initialized"};
         }
-        std::string src = AMFS::abspath(src_path, true, GetHomeDir());
-        std::string dst = AMFS::abspath(dst_path, true, GetHomeDir());
-        if (src.empty() || dst.empty())
+        std::string srcf = AMFS::abspath(src, true, GetHomeDir());
+        std::string dstf = AMFS::abspath(dst, true, GetHomeDir());
+        if (srcf.empty() || dstf.empty())
         {
-            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {} or {}", src_path, dst_path));
+            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {} or {}", srcf, dstf));
         }
-        auto [rcm, sbr] = exists(src);
+        auto [rcm, sbr] = exists(srcf);
         if (rcm.first != EC::Success)
         {
             return rcm;
         }
         if (!sbr)
         {
-            return {EC::PathNotExist, fmt::format("Src not exists: {}", src_path)};
+            return {EC::PathNotExist, fmt::format("Src not exists: {}", srcf)};
         }
-        auto [rcm2, dbr] = exists(dst);
+        auto [rcm2, dbr] = exists(dstf);
         if (rcm2.first != EC::Success)
         {
             return rcm2;
         }
         if (dbr && !overwrite)
         {
-            return {EC::PathAlreadyExists, fmt::format("Dst already exists: {} and overwrite is false", dst_path)};
+            return {EC::PathAlreadyExists, fmt::format("Dst already exists: {} and overwrite is false", dstf)};
         }
 
         return lib_rename(src, dst, overwrite);
@@ -2876,13 +2066,12 @@ public:
             trace(AMCRITICAL, channel.error_code, fmt::format("{}@{}", request.nickname, srcf), "Copy", msg);
             return {channel.error_code, msg};
         }
-        CR cr = channel.ConductCmd(command);
+        auto [rcm3, resp] = channel.ConductCmd(command);
 
-        if (std::holds_alternative<ECM>(cr))
+        if (rcm3.first != EC::Success)
         {
-            return std::get<ECM>(cr);
+            return rcm3;
         }
-        std::pair<std::string, int> resp = std::get<std::pair<std::string, int>>(cr);
 
         if (resp.second != 0)
         {
@@ -2926,7 +2115,7 @@ public:
     }
 
     // 获取某一路径下的所有文件和底层目录的总大小
-    SIZER getsize(const std::string &path, bool ignore_sepcial_file = true)
+    uint64_t getsize(const std::string &path, bool ignore_sepcial_file = true)
     {
         WRV list = iwalk(path, ignore_sepcial_file);
         uint64_t size = 0;
@@ -3930,295 +3119,3 @@ public:
         return {ECM(EC::Success, ""), tasks};
     };
 };
-
-PYBIND11_MODULE(AMSFTP, m)
-{
-    bool expected = false;
-    if (std::atomic_compare_exchange_strong(&is_wsa_initialized, &expected, true))
-    {
-        WSADATA wsaData;
-        int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
-        if (result != 0)
-        {
-            throw std::runtime_error("WSAStartup failed");
-        }
-        is_wsa_initialized = true;
-        m.add_object("_cleanup", py::capsule(cleanup_wsa));
-    }
-
-    auto sub = m.def_submodule("AMFS");
-
-    py::enum_<ErrorCode>(m, "ErrorCode")
-        .value("Success", ErrorCode::Success)
-        .value("SessionCreateError", ErrorCode::SessionGenericError)
-        .value("NoBannerRecv", ErrorCode::NoBannerRecv)
-        .value("BannerSendError", ErrorCode::BannerSendError)
-        .value("InvalidMacAdress", ErrorCode::InvalidMacAdress)
-        .value("KeyExchangeMethodNegotiationFailed", ErrorCode::KeyExchangeMethodNegotiationFailed)
-        .value("MemAllocError", ErrorCode::MemAllocError)
-        .value("SocketSendError", ErrorCode::SocketSendError)
-        .value("KeyExchangeFailed", ErrorCode::KeyExchangeFailed)
-        .value("OperationTimeout", ErrorCode::OperationTimeout)
-        .value("HostkeyInitFailed", ErrorCode::HostkeyInitFailed)
-        .value("HostkeySignFailed", ErrorCode::HostkeySignFailed)
-        .value("DataDecryptError", ErrorCode::DataDecryptError)
-        .value("SocketDisconnect", ErrorCode::SocketDisconnect)
-        .value("SSHProtocolError", ErrorCode::SSHProtocolError)
-        .value("PasswordExpired", ErrorCode::PasswordExpired)
-        .value("LocalFileError", ErrorCode::LocalFileError)
-        .value("NoAuthMethod", ErrorCode::NoAuthMethod)
-        .value("AuthFailed", ErrorCode::AuthFailed)
-        .value("PublickeyAuthFailed", ErrorCode::PublickeyAuthFailed)
-        .value("ChannelOrderError", ErrorCode::ChannelOrderError)
-        .value("ChannelOperationError", ErrorCode::ChannelOperationError)
-        .value("ChannelRequestDenied", ErrorCode::ChannelRequestDenied)
-        .value("ChannelWindowExceeded", ErrorCode::ChannelWindowExceeded)
-        .value("ChannelPacketOversize", ErrorCode::ChannelPacketOversize)
-        .value("ChannelClosed", ErrorCode::ChannelClosed)
-        .value("ChannelAlreadySendEOF", ErrorCode::ChannelAlreadySendEOF)
-        .value("SCPProtocolError", ErrorCode::SCPProtocolError)
-        .value("ZlibCompressError", ErrorCode::ZlibCompressError)
-        .value("SocketOperationTimeout", ErrorCode::SocketOperationTimeout)
-        .value("SftpProtocolError", ErrorCode::SftpProtocolError)
-        .value("RequestDenied", ErrorCode::RequestDenied)
-        .value("InvalidArg", ErrorCode::InvalidArg)
-        .value("InvalidPollType", ErrorCode::InvalidPollType)
-        .value("PublicKeyProtocolError", ErrorCode::PublicKeyProtocolError)
-        .value("SSHEAGAIN", ErrorCode::SSHEAGAIN)
-        .value("BufferTooSmall", ErrorCode::BufferTooSmall)
-        .value("BadOperationOrder", ErrorCode::BadOperationOrder)
-        .value("CompressionError", ErrorCode::CompressionError)
-        .value("PointerOverflow", ErrorCode::PointerOverflow)
-        .value("SSHAgentProtocolError", ErrorCode::SSHAgentProtocolError)
-        .value("SocketRecvError", ErrorCode::SocketRecvError)
-        .value("DataEncryptError", ErrorCode::DataEncryptError)
-        .value("InvalidSocketType", ErrorCode::InvalidSocketType)
-        .value("HostFingerprintMismatch", ErrorCode::HostFingerprintMismatch)
-        .value("ChannelWindowFull", ErrorCode::ChannelWindowFull)
-        .value("PrivateKeyAuthFailed", ErrorCode::PrivateKeyAuthFailed)
-        .value("RandomGenError", ErrorCode::RandomGenError)
-        .value("MissingUserAuthBanner", ErrorCode::MissingUserAuthBanner)
-        .value("AlgorithmUnsupported", ErrorCode::AlgorithmUnsupported)
-        .value("MacAuthFailed", ErrorCode::MacAuthFailed)
-        .value("HashInitError", ErrorCode::HashInitError)
-        .value("HashCalculateError", ErrorCode::HashCalculateError)
-        // positive code represent libssh2 sftp error
-        .value("EndOfFile", ErrorCode::EndOfFile)
-        .value("FileNotExist", ErrorCode::FileNotExist)
-        .value("PermissionDenied", ErrorCode::PermissionDenied)
-        .value("CommonFailure", ErrorCode::CommonFailure)
-        .value("BadMessageFormat", ErrorCode::BadMessageFormat)
-        .value("NoConnection", ErrorCode::NoConnection)
-        .value("ConnectionLost", ErrorCode::ConnectionLost)
-        .value("OperationUnsupported", ErrorCode::OperationUnsupported)
-        .value("InvalidHandle", ErrorCode::InvalidHandle)
-        .value("PathNotExist", ErrorCode::PathNotExist)
-        .value("PathAlreadyExists", ErrorCode::PathAlreadyExists)
-        .value("FileWriteProtected", ErrorCode::FileWriteProtected)
-        .value("StorageMediaUnavailable", ErrorCode::StorageMediaUnavailable)
-        .value("FilesystemNoSpace", ErrorCode::FilesystemNoSpace)
-        .value("SpaceQuotaExceed", ErrorCode::SpaceQuotaExceed)
-        .value("UsernameNotExists", ErrorCode::UsernameNotExists)
-        .value("PathUsingByOthers", ErrorCode::PathUsingByOthers)
-        .value("DirNotEmpty", ErrorCode::DirNotEmpty)
-        .value("NotADirectory", ErrorCode::NotADirectory)
-        .value("InvalidFilename", ErrorCode::InvalidFilename)
-        .value("SymlinkLoop", ErrorCode::SymlinkLoop)
-        // following codes are AM Custom Error
-        .value("UnknownError", ErrorCode::UnknownError)
-        .value("SocketCreateError", ErrorCode::SocketCreateError)
-        .value("SocketConnectTimeout", ErrorCode::SocketConnectTimeout)
-        .value("SocketConnectFailed", ErrorCode::SocketConnectFailed)
-        .value("SessionCreateFailed", ErrorCode::SessionCreateFailed)
-        .value("SessionHandshakeFailed", ErrorCode::SessionHandshakeFailed)
-        .value("NoSession", ErrorCode::NoSession)
-        .value("NotAFile", ErrorCode::NotAFile)
-        .value("ParentDirectoryNotExist", ErrorCode::ParentDirectoryNotExist)
-        .value("InhostCopyFailed", ErrorCode::InhostCopyFailed)
-        .value("LocalFileMapError", ErrorCode::LocalFileMapError)
-        .value("UnexpectedEOF", ErrorCode::UnexpectedEOF)
-        .value("Terminate", ErrorCode::Terminate)
-        .value("UnImplentedMethod", ErrorCode::UnImplentedMethod)
-        .value("NoPermissionAttribute", ErrorCode::NoPermissionAttribute)
-        .value("LocalStatError", ErrorCode::LocalStatError)
-        .value("TransferPause", ErrorCode::TransferPause)
-        .value("DNSResolveError", ErrorCode::DNSResolveError);
-
-    py::enum_<OS_TYPE>(m, "OS_TYPE")
-        .value("Windows", OS_TYPE::Windows)
-        .value("Linux", OS_TYPE::Linux)
-        .value("MacOS", OS_TYPE::MacOS)
-        .value("FreeBSD", OS_TYPE::FreeBSD)
-        .value("Unix", OS_TYPE::Unix)
-        .value("Unknown", OS_TYPE::Unknown)
-        .value("Uncertain", OS_TYPE::Uncertain);
-
-    py::enum_<PathType>(sub, "PathType")
-        .value("DIR", PathType::DIR)
-        .value("FILE", PathType::FILE)
-        .value("SYMLINK", PathType::SYMLINK)
-        .value("BLOCK_DEVICE", PathType::BlockDevice)
-        .value("CHARACTER_DEVICE", PathType::CharacterDevice)
-        .value("SOCKET", PathType::Socket)
-        .value("FIFO", PathType::FIFO)
-        .value("UNKNOWN", PathType::Unknown);
-
-    py::enum_<TransferControl>(m, "TransferControl")
-        .value("Pause", TransferControl::Pause)
-        .value("Terminate", TransferControl::Terminate);
-
-    py::class_<ConRequst>(m, "ConRequst")
-        .def(py::init<std::string, std::string, std::string, int, std::string, std::string, bool, size_t, std::string>(), py::arg("nickname"), py::arg("hostname"), py::arg("username"), py::arg("port"), py::arg("password") = "", py::arg("keyfile") = "", py::arg("compression") = false, py::arg("timeout_s") = 3, py::arg("trash_dir") = "")
-        .def_readwrite("nickname", &ConRequst::nickname)
-        .def_readwrite("hostname", &ConRequst::hostname)
-        .def_readwrite("username", &ConRequst::username)
-        .def_readwrite("password", &ConRequst::password)
-        .def_readwrite("port", &ConRequst::port)
-        .def_readwrite("compression", &ConRequst::compression)
-        .def_readwrite("timeout_s", &ConRequst::timeout_s)
-        .def_readwrite("trash_dir", &ConRequst::trash_dir)
-        .def_readwrite("keyfile", &ConRequst::keyfile);
-
-    py::class_<TransferCallback>(m, "TransferCallback")
-        .def(py::init<py::object, py::object, py::object>(),
-             py::arg("total_size") = py::none(),
-             py::arg("error") = py::none(),
-             py::arg("progress") = py::none());
-
-    py::class_<ProgressCBInfo>(m, "ProgressCBInfo")
-        .def(py::init<std::string, std::string, std::string, std::string, uint64_t, uint64_t, uint64_t, uint64_t>(), py::arg("src"), py::arg("dst"), py::arg("src_host"), py::arg("dst_host"), py::arg("this_size"), py::arg("file_size"), py::arg("accumulated_size"), py::arg("total_size"))
-        .def_readwrite("src", &ProgressCBInfo::src)
-        .def_readwrite("dst", &ProgressCBInfo::dst)
-        .def_readwrite("src_host", &ProgressCBInfo::src_host)
-        .def_readwrite("dst_host", &ProgressCBInfo::dst_host)
-        .def_readwrite("this_size", &ProgressCBInfo::this_size)
-        .def_readwrite("file_size", &ProgressCBInfo::file_size)
-        .def_readwrite("accumulated_size", &ProgressCBInfo::accumulated_size)
-        .def_readwrite("total_size", &ProgressCBInfo::total_size);
-
-    py::class_<ErrorCBInfo>(m, "ErrorCBInfo")
-        .def(py::init<ECM, std::string, std::string, std::string, std::string>(), py::arg("ecm"), py::arg("src"), py::arg("dst"), py::arg("src_host"), py::arg("dst_host"))
-        .def_readwrite("ecm", &ErrorCBInfo::ecm)
-        .def_readwrite("src", &ErrorCBInfo::src)
-        .def_readwrite("dst", &ErrorCBInfo::dst)
-        .def_readwrite("src_host", &ErrorCBInfo::src_host)
-        .def_readwrite("dst_host", &ErrorCBInfo::dst_host);
-
-    py::class_<AuthCBInfo>(m, "AuthCBInfo")
-        .def(py::init<bool, ConRequst, int>(), py::arg("NeedPassword"), py::arg("request"), py::arg("trial_times"))
-        .def_readwrite("NeedPassword", &AuthCBInfo::NeedPassword)
-        .def_readwrite("request", &AuthCBInfo::request)
-        .def_readwrite("trial_times", &AuthCBInfo::trial_times);
-
-    py::class_<TransferTask>(m, "TransferTask")
-        .def(py::init<std::string, std::string, std::string, std::string, uint64_t, PathType, bool>(), py::arg("src"), py::arg("src_host"), py::arg("dst"), py::arg("dst_host"), py::arg("size"), py::arg("path_type") = PathType::FILE, py::arg("overwrite") = false)
-        .def_readwrite("src", &TransferTask::src)
-        .def_readwrite("src_host", &TransferTask::src_host)
-        .def_readwrite("dst", &TransferTask::dst)
-        .def_readwrite("dst_host", &TransferTask::dst_host)
-        .def_readwrite("size", &TransferTask::size)
-        .def_readwrite("path_type", &TransferTask::path_type)
-        .def_readwrite("IsSuccess", &TransferTask::IsSuccess)
-        .def_readwrite("rc", &TransferTask::rc)
-        .def_readwrite("overwrite", &TransferTask::overwrite);
-
-    py::class_<BaseSFTPClient, std::shared_ptr<BaseSFTPClient>>(m, "BaseSFTPClient")
-        .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"), py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
-        .def("IsValidKey", &BaseSFTPClient::IsValidKey, py::arg("key"))
-        .def("LastTraceError", &BaseSFTPClient::LastTraceError)
-        .def("GetAllTraceErrors", &BaseSFTPClient::GetAllTraceErrors)
-        .def("GetTraceNum", &BaseSFTPClient::GetTraceNum)
-        .def("GetTraceCapacity", &BaseSFTPClient::GetTraceCapacity)
-        .def("GetTrashDir", &BaseSFTPClient::GetTrashDir)
-        .def("Nickname", &BaseSFTPClient::Nickname)
-        .def("SetPyTrace", &BaseSFTPClient::SetPyTrace, py::arg("trace_cb") = py::none())
-        .def("SetAuthCallback", &BaseSFTPClient::SetAuthCallback, py::arg("auth_cb") = py::none())
-        .def("Check", &BaseSFTPClient::Check)
-        .def("Connect", &BaseSFTPClient::Connect)
-        .def("Disconnect", &BaseSFTPClient::Disconnect)
-        .def("EnsureConnect", &BaseSFTPClient::EnsureConnect)
-        .def("GetOSType", &BaseSFTPClient::GetOSType, py::arg("update") = false);
-
-    py::class_<AMSFTPClient, BaseSFTPClient, std::shared_ptr<AMSFTPClient>>(m, "AMSFTPClient")
-        .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"), py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
-        .def("SetTrashDir", &AMSFTPClient::SetTrashDir, py::arg("trash_dir") = "")
-        .def("EnsureTrashDir", &AMSFTPClient::EnsureTrashDir)
-        .def("chmod", &AMSFTPClient::chmod, py::arg("path"), py::arg("mode"), py::arg("recursive") = false)
-        .def("realpath", &AMSFTPClient::realpath, py::arg("path"))
-        .def("GetHomeDir", &AMSFTPClient::GetHomeDir)
-        .def("stat", &AMSFTPClient::stat, py::arg("path"))
-        .def("get_path_type", &AMSFTPClient::get_path_type, py::arg("path"))
-        .def("exists", &AMSFTPClient::exists, py::arg("path"))
-        .def("is_regular", &AMSFTPClient::is_regular, py::arg("path"))
-        .def("is_dir", &AMSFTPClient::is_dir, py::arg("path"))
-        .def("is_symlink", &AMSFTPClient::is_symlink, py::arg("path"))
-        .def("listdir", &AMSFTPClient::listdir, py::arg("path"), py::arg("max_time_ms") = -1)
-        .def("mkdir", &AMSFTPClient::mkdir, py::arg("path"))
-        .def("mkdirs", &AMSFTPClient::mkdirs, py::arg("path"))
-        .def("rmfile", &AMSFTPClient::rmfile, py::arg("path"))
-        .def("rmdir", &AMSFTPClient::rmdir, py::arg("path"))
-        .def("remove", &AMSFTPClient::remove, py::arg("path"))
-        .def("saferm", &AMSFTPClient::saferm, py::arg("path"))
-        .def("rename", &AMSFTPClient::rename, py::arg("src"), py::arg("new_name"), py::arg("overwrite") = false)
-        .def("move", &AMSFTPClient::move, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false, py::arg("force_write") = false)
-        .def("copy", &AMSFTPClient::copy, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false)
-        .def("iwalk", &AMSFTPClient::iwalk, py::arg("path"), py::arg("ignore_sepcial_file") = true)
-        .def("walk", &AMSFTPClient::walk, py::arg("path"), py::arg("max_depth") = -1, py::arg("ignore_sepcial_file") = true)
-        .def("getsize", &AMSFTPClient::getsize, py::arg("path"), py::arg("ignore_sepcial_file") = true);
-
-    py::class_<Hostd>(m, "Hostd")
-        .def(py::init<>())
-        .def("reset", &Hostd::reset)
-        .def("add_host", &Hostd::add_host, py::arg("hostname"), py::arg("client"), py::arg("overwrite") = false)
-        .def("remove_host", &Hostd::remove_host, py::arg("hostname"))
-        .def("get_host", &Hostd::get_host, py::arg("hostname"))
-        .def("get_hosts", &Hostd::get_hosts)
-        .def("test_host", &Hostd::test_host, py::arg("hostname"));
-
-    py::class_<AMSFTPWorker>(m, "AMSFTPWorker")
-        .def(py::init<TransferCallback, float>(), py::arg("callback") = TransferCallback(), py::arg("cb_interval_s") = 0.1)
-        .def("terminate", &AMSFTPWorker::terminate)
-        .def("pause", &AMSFTPWorker::pause)
-        .def("resume", &AMSFTPWorker::resume)
-        .def("IsTerminate", &AMSFTPWorker::IsTerminate)
-        .def("IsPause", &AMSFTPWorker::IsPause)
-        .def("IsRunning", &AMSFTPWorker::IsRunning)
-        .def("reset", &AMSFTPWorker::reset)
-        .def("set_cb_interval", &AMSFTPWorker::set_cb_interval, py::arg("interval_s"))
-        .def("load_tasks", &AMSFTPWorker::load_tasks, py::arg("src"), py::arg("dst"), py::arg("hostd"), py::arg("src_hostname") = "", py::arg("dst_hostname") = "", py::arg("overwrite") = false, py::arg("mkdir") = true, py::arg("ignore_sepcial_file") = true)
-        .def("transfer", &AMSFTPWorker::transfer, py::arg("tasks"), py::arg("hostd"), py::arg("chunk_large") = 16 * AMMB, py::arg("chunk_middle") = 2 * AMMB, py::arg("chunk_small") = 256 * AMKB);
-
-    sub.def("IsAbs", &AMFS::IsAbs, py::arg("path"), py::arg("sep") = "")
-        .def("HomePath", &AMFS::HomePath)
-        .def("extname", &AMFS::extname, py::arg("path"))
-        .def("split_basename", &AMFS::split_basename, py::arg("basename"))
-        .def("CWD", &AMFS::CWD)
-        .def("FormatTime", &AMFS::FormatTime, py::arg("time"), py::arg("format") = "%Y-%m-%d %H:%M:%S")
-        .def("UnifyPathSep", &AMFS::UnifyPathSep, py::arg("path"), py::arg("sep") = "")
-        .def("split", &AMFS::split, py::arg("path"))
-        .def("resplit", &AMFS::resplit, py::arg("path"), py::arg("front_esc"), py::arg("back_esc"), py::arg("head") = "")
-        .def("abspath", &AMFS::abspath, py::arg("path"), py::arg("parsing_home") = true, py::arg("home") = "", py::arg("cwd") = "", py::arg("sep") = "")
-        .def("dirname", &AMFS::dirname, py::arg("path"))
-        .def("basename", &AMFS::basename, py::arg("path"))
-        .def("mkdirs", &AMFS::mkdirs, py::arg("path"))
-        .def("stat", &AMFS::stat, py::arg("path"), py::arg("trace_link") = false)
-        .def("listdir", &AMFS::listdir, py::arg("path"))
-        .def("iwalk", &AMFS::iwalk, py::arg("path"), py::arg("ignore_sepcial_file") = true)
-        .def("walk", &AMFS::walk, py::arg("path"), py::arg("max_depth") = -1, py::arg("ignore_sepcial_file") = true)
-        .def("extname", &AMFS::extname, py::arg("path"))
-        .def("getsize", &AMFS::getsize, py::arg("path"), py::arg("trace_link") = false);
-
-    py::class_<PathInfo>(sub, "PathInfo")
-        .def(py::init<std::string, std::string, std::string, std::string, uint64_t, double, double, double, PathType, uint64_t, std::string>(), py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("owner"), py::arg("size"), py::arg("create_time"), py::arg("access_time"), py::arg("modify_time"), py::arg("path_type") = PathType::FILE, py::arg("mode_int") = 0777, py::arg("mode_str") = "rwxrwxrwx")
-        .def_readwrite("name", &PathInfo::name)
-        .def_readwrite("path", &PathInfo::path)
-        .def_readwrite("dir", &PathInfo::dir)
-        .def_readwrite("owner", &PathInfo::owner)
-        .def_readwrite("size", &PathInfo::size)
-        .def_readwrite("create_time", &PathInfo::create_time)
-        .def_readwrite("access_time", &PathInfo::access_time)
-        .def_readwrite("modify_time", &PathInfo::modify_time)
-        .def_readwrite("type", &PathInfo::type)
-        .def_readwrite("mode_int", &PathInfo::mode_int)
-        .def_readwrite("mode_str", &PathInfo::mode_str);
-}
