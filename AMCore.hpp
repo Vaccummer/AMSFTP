@@ -90,9 +90,10 @@ private:
     py::function trace_cb;
     std::atomic<bool> is_py_trace = false;
     std::atomic<bool> is_pause = false;
+    std::string nickname;
 
 public:
-    AMTracer(unsigned int buffer_capacity = 10, py::object trace_cb = py::none()) : CircularBuffer(buffer_capacity)
+    AMTracer(unsigned int buffer_capacity = 10, py::object trace_cb = py::none(), std::string nickname = "") : CircularBuffer(buffer_capacity), nickname(nickname)
     {
         if (!trace_cb.is_none())
         {
@@ -132,7 +133,7 @@ public:
         {
             level_2 = TraceLevel::Info;
         }
-        TraceInfo trace_info(level_2, error_code, target, action, msg);
+        TraceInfo trace_info(level_2, error_code, nickname, target, action, msg);
         this->push(trace_info);
         if (is_py_trace.load())
         {
@@ -656,7 +657,7 @@ public:
 
         this->private_keys = keys;
         this->request = request;
-        this->amtracer = std::make_shared<AMTracer>(error_num, trace_cb);
+        this->amtracer = std::make_shared<AMTracer>(error_num, trace_cb, request.nickname);
         this->amsession = std::make_shared<AMSession>(request, keys, amtracer, auth_cb);
     }
 
@@ -1588,7 +1589,7 @@ public:
             return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
         }
 
-        auto pathf = AMFS::abspath(path, true, GetHomeDir());
+        auto pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
         if (pathf.empty())
         {
             return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
@@ -1705,7 +1706,7 @@ public:
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
 
-        std::string pathf = AMFS::abspath(path, true, GetHomeDir());
+        std::string pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
         if (pathf.empty())
         {
             return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", path));
@@ -1744,8 +1745,7 @@ public:
     }
 
     // 递归创建多级目录，直到报错为止，自带AMFS::abspath
-    ECM
-    mkdirs(const std::string &path)
+    ECM mkdirs(const std::string &path)
     {
         std::string pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
         if (pathf.empty())
@@ -1792,7 +1792,7 @@ public:
         {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
-        auto pathf = AMFS::abspath(path, true, GetHomeDir());
+        auto pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
         auto [rcm, info] = stat(pathf);
         ECM ecm;
         std::string msg = "";
@@ -1832,7 +1832,7 @@ public:
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
 
-        std::string pathf = AMFS::abspath(path, true, GetHomeDir());
+        std::string pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
         if (pathf.empty())
         {
             return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", path));
@@ -1881,8 +1881,8 @@ public:
         {
             return ECM{EC::NoConnection, "SFTP not initialized"};
         }
-        std::string srcf = AMFS::abspath(src, true, GetHomeDir());
-        std::string dstf = AMFS::abspath(dst, true, GetHomeDir());
+        std::string srcf = AMFS::abspath(src, true, GetHomeDir(), GetHomeDir());
+        std::string dstf = AMFS::abspath(dst, true, GetHomeDir(), GetHomeDir());
         if (srcf.empty() || dstf.empty())
         {
             return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {} or {}", srcf, dstf));
@@ -1969,8 +1969,8 @@ public:
         {
             return ECM{EC::NoConnection, "SFTP not initialized"};
         }
-        std::string srcf = AMFS::abspath(src, true, GetHomeDir());
-        std::string dstf = AMFS::abspath(dst, true, GetHomeDir());
+        std::string srcf = AMFS::abspath(src, true, GetHomeDir(), GetHomeDir());
+        std::string dstf = AMFS::abspath(dst, true, GetHomeDir(), GetHomeDir());
         auto [rcm, ssr] = stat(srcf);
         // src不存在就直接退出
         if (rcm.first != EC::Success)
@@ -2015,8 +2015,8 @@ public:
         {
             return ECM{EC::NoConnection, "SFTP not initialized"};
         }
-        std::string srcf = AMFS::abspath(src, true, GetHomeDir());
-        std::string dstf = AMFS::abspath(dst, true, GetHomeDir());
+        std::string srcf = AMFS::abspath(src, true, GetHomeDir(), GetHomeDir());
+        std::string dstf = AMFS::abspath(dst, true, GetHomeDir(), GetHomeDir());
         if (srcf.empty() || dstf.empty())
         {
             return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {} or {}", srcf, dstf));
@@ -2093,7 +2093,7 @@ public:
         }
         // get all files and deepest folders
         WRV result = {};
-        auto path_n = AMFS::abspath(path, true, GetHomeDir());
+        auto path_n = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
         _iwalk(path_n, result, ignore_sepcial_file);
         return result;
     }
@@ -2101,7 +2101,7 @@ public:
     // 真实的walk函数，返回([root_path, part1, part2, ...], PathInfo)的vector
     std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1, bool ignore_special_file = true)
     {
-        auto pathf = AMFS::abspath(path, true, GetHomeDir());
+        auto pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
         auto [rcm, br] = stat(pathf);
         if (rcm.first != EC::Success)
         {
