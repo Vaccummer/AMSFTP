@@ -632,12 +632,16 @@ namespace AMFS
             head.clear();
         }
         path = std::regex_replace(path, std::regex("[\\\\/]+"), sep);
+        if (path.back() == sep[0])
+        {
+            path.pop_back();
+        }
         return head + path;
     }
 
     inline bool IsAbs(const std::string &path, const std::string &sep = "")
     {
-        return std::regex_search(UnifyPathSep(path, sep), std::regex("^(?:[A-Za-z]:[/\\\\]?|/|[\\\\/]{2}|~[\\\\/])"));
+        return std::regex_search(UnifyPathSep(path, sep), std::regex("^(?:[a-zA-Z]:$)|(?:~$)|(?:[A-Za-z]:[/\\\\]|/|[\\\\/]{2}|~[\\\\/])"));
     }
 
     inline std::string HomePath()
@@ -944,13 +948,8 @@ namespace AMFS
         {
             result += segments[i] + sep;
         }
-
         result = UnifyPathSep(result, sep);
-        if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
-        {
-            // 保留windows磁盘驱动号的slash
-            result.pop_back();
-        }
+        result.pop_back();
         return result;
     };
 
@@ -1061,14 +1060,18 @@ namespace AMFS
         }
         else if (parts.size() == 1)
         {
+            if (parts[0] == "~" && parsing_home)
+            {
+                return home.empty() ? HomePath() : home;
+            }
             return parts.front();
         }
-        else if (parts.front() == "/")
+        else if (parts[0] == "/")
         {
-            new_parts.push_back("/");
+            result = "/";
             new_sep = "/";
         }
-        else if (parts.front() == "~" && parsing_home)
+        else if (parts[0] == "~" && parsing_home)
         {
             std::string hm = home.empty() ? HomePath() : home;
             for (const auto &seg : split(hm))
@@ -1079,7 +1082,7 @@ namespace AMFS
         }
         else
         {
-            result = parts.front() + new_sep;
+            result = parts[0] + new_sep;
         }
 
         for (int i = 1; i < parts.size(); i++)
@@ -1110,15 +1113,13 @@ namespace AMFS
         {
             return new_parts.front();
         }
-        for (int i = 1; i < new_parts.size(); i++)
+
+        for (int i = 0; i < new_parts.size(); i++)
         {
             result += new_parts[i] + new_sep;
         }
 
-        if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
-        {
-            result.pop_back();
-        }
+        result.pop_back();
         return result;
     }
 
@@ -1730,4 +1731,231 @@ namespace AMFS
         search(results, fs::path(root_path), name_first, match_parts, type, use_regex, silence, callback);
         return results;
     }
+
+    class BasePathMatch
+    {
+    private:
+        virtual std::pair<bool, PathInfo> istat(const std::string &path) = 0;
+        virtual std::vector<PathInfo> ilistdir(const std::string &path) = 0;
+        virtual std::vector<PathInfo> iiwalk(const std::string &path) = 0;
+        std::string star_rep = "amspecial1123exchange2123for1233star4123dd";
+        std::string less_rep = "amspecial4123exchange3332for2less131aa";
+        std::string greater_rep = "amspecial721exchange623for511greater422ff";
+
+        void _find(std::vector<PathInfo> &results, const PathInfo &path, const std::vector<std::string> &match_parts, const SearchType &type, const std::string &sep)
+        {
+            if (match_parts.empty())
+            {
+                if (type == SearchType::All || (type == SearchType::Directory && path.type == PathType::DIR) || (type == SearchType::File && path.type == PathType::FILE))
+                {
+                    results.push_back(path);
+                }
+                return;
+            }
+
+            if (path.type != PathType::DIR)
+            {
+                // 当前路径已经是文件，无法继续匹配
+                return;
+            }
+
+            std::string cur_pattern = match_parts[0];
+
+            if (std::regex_search(cur_pattern, std::regex("^\\*\\*+$")))
+            {
+                std::vector<std::string> relative_parts;
+                for (auto &sub : iiwalk(path.path))
+                {
+                    if ((sub.type == PathType::DIR && type == SearchType::File) || (sub.type != PathType::DIR && type == SearchType::Directory))
+                    {
+                        continue;
+                    }
+                    // sub.path relative to path.path
+                    relative_parts = AMFS::split(sub.path.substr(path.path.size()));
+                    if (walk_match(relative_parts, match_parts))
+                    {
+                        results.push_back(sub);
+                    }
+                }
+                return;
+            }
+            // 处理不匹配模式
+            else if (cur_pattern.find("*") == std::string::npos && (cur_pattern.find("<") == std::string::npos || cur_pattern.find(">") == std::string::npos))
+            {
+                auto new_parts2 = match_parts;
+                new_parts2.erase(new_parts2.begin());
+                for (auto &sub : ilistdir(path.path))
+                {
+                    if (sub.name == cur_pattern)
+                    {
+                        _find(results, sub, new_parts2, type, sep);
+                    }
+                }
+            }
+            // 进入匹配模式
+            else
+            {
+                auto new_parts3 = match_parts;
+                new_parts3.erase(new_parts3.begin());
+                for (auto &sub : ilistdir(path.path))
+                {
+                    if (name_match(sub.name, cur_pattern))
+                    {
+                        std::cout << "sucess match pattern: " << cur_pattern << " name: " << sub.name << std::endl;
+                        _find(results, sub, new_parts3, type, sep);
+                    }
+                    std::cout << "failed match pattern: " << cur_pattern << " name: " << sub.name << std::endl;
+                }
+            }
+
+            return;
+        }
+
+    public:
+        bool str_match(const std::string &name, const std::string &pattern)
+        {
+            std::string patternf = "^" + pattern + "$";
+            std::wstring w_pattern = Str::AMStr(patternf);
+            std::wstring w_name = Str::AMStr(name);
+            try
+            {
+                bool res = std::regex_search(w_name, std::wregex(w_pattern));
+                std::wcout << "str_match pattern: " << w_pattern << " name: " << w_name << " result: " << res << std::endl;
+                return res;
+            }
+            catch (const std::regex_error &e)
+            {
+                std::wcout << "str_match pattern: " << w_pattern << " name: " << w_name << " error: " << e.what() << std::endl;
+                return false;
+            }
+        }
+
+        std::string _rep(const std::string &str, const std::string &from, const std::string &to)
+        {
+            std::string result = str;
+            if (from.empty())
+                return result; // 避免空字符串导致无限循环
+            size_t pos = 0;
+            while ((pos = result.find(from, pos)) != std::string::npos)
+            {
+                result.replace(pos, from.length(), to);
+                pos += to.length(); // 跳过替换后的内容，防止重复替换（比如from是to的子串）
+            }
+            return result;
+        }
+
+        bool name_match(const std::string &name, const std::string &pattern)
+        {
+            // 将pattern中的*换成star_rep，<换成less_rep，>换成greater_rep
+            std::string pattern_new = pattern;
+            pattern_new = _rep(pattern_new, "*", star_rep);
+            pattern_new = _rep(pattern_new, "<", less_rep);
+            pattern_new = _rep(pattern_new, ">", greater_rep);
+            pattern_new = Str::RegexEscape(pattern_new);
+            // 将path中的star_rep换成.*，less_rep换成[，greater_rep换成], 不要用正则替换
+            pattern_new = _rep(pattern_new, star_rep, ".*");
+            pattern_new = _rep(pattern_new, less_rep, "[");
+            pattern_new = _rep(pattern_new, greater_rep, "]");
+            return str_match(name, pattern_new);
+        };
+
+        bool walk_match(const std::vector<std::string> &parts, const std::vector<std::string> &match_parts)
+        {
+            if (match_parts.size() > parts.size())
+            {
+                return false;
+            }
+            int pos = 0;
+            bool is_match;
+            for (auto &part : match_parts)
+            {
+                is_match = false;
+                for (int i = pos; i < parts.size(); i++)
+                {
+                    if (name_match(parts[i], part))
+                    {
+                        is_match = true;
+                        pos = i + 1;
+                        break;
+                    }
+                }
+                if (!is_match)
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        std::vector<PathInfo> find(const std::string &path, SearchType type = SearchType::All)
+        {
+            std::vector<PathInfo> results = {};
+            auto parts = split(path);
+            if (parts.empty())
+            {
+                return results;
+            }
+            else if (parts.size() == 1)
+            {
+                auto [success, info] = istat(parts[0]);
+                if (success && (type == SearchType::All || (type == SearchType::Directory && info.type == PathType::DIR) || (type == SearchType::File && info.type == PathType::FILE)))
+                {
+                    results.push_back(info);
+                }
+                return results;
+            }
+
+            std::string sep = Str::GetPathSep(path);
+            std::string cur_path = parts[0];
+            bool is_stop = false;
+            std::vector<std::string> match_parts = {};
+
+            for (int i = 1; i < parts.size(); i++)
+            {
+                // 没有* < >时，链接到cur_path
+                if (parts[i].find("*") == std::string::npos && parts[i].find("<") == std::string::npos && parts[i].find(">") == std::string::npos && !is_stop)
+                {
+                    cur_path = cur_path + sep + parts[i];
+                }
+                else
+                {
+                    is_stop = true;
+                    match_parts.push_back(parts[i]);
+                }
+            }
+
+            // 检查cur_path是否存在
+            auto [success, info] = istat(cur_path);
+            if (!success)
+            {
+                return {};
+            }
+            _find(results, info, match_parts, type, sep);
+            return results;
+        }
+    };
+
+    class PathMatch : public BasePathMatch
+    {
+    private:
+        std::pair<bool, PathInfo> istat(const std::string &path) override
+        {
+            auto [error, info] = stat(path);
+            if (error.empty())
+            {
+                return std::make_pair(true, info);
+            }
+            return std::make_pair(false, PathInfo());
+        }
+
+        std::vector<PathInfo> ilistdir(const std::string &path) override
+        {
+            return listdir(path);
+        }
+
+        std::vector<PathInfo> iiwalk(const std::string &path) override
+        {
+            return iwalk(path);
+        }
+    };
 }

@@ -149,6 +149,11 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("Pause", TransferControl::Pause)
         .value("Terminate", TransferControl::Terminate);
 
+    py::enum_<AMFS::SearchType>(em, "SearchType", "Search Type Enum")
+        .value("All", AMFS::SearchType::All)
+        .value("File", AMFS::SearchType::File)
+        .value("Directory", AMFS::SearchType::Directory);
+
     py::class_<ConRequst>(data, "ConRequst", "Connection Request DataClass")
         .def(py::init<std::string, std::string, std::string, int, std::string, std::string, bool, size_t, std::string>(), py::arg("nickname"), py::arg("hostname"), py::arg("username"), py::arg("port"), py::arg("password") = "", py::arg("keyfile") = "", py::arg("compression") = false, py::arg("timeout_s") = 3, py::arg("trash_dir") = "")
         .def_readwrite("nickname", &ConRequst::nickname, "Unique nickname for the host and connection")
@@ -208,9 +213,10 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("overwrite", &TransferTask::overwrite);
 
     py::class_<TraceInfo>(data, "TraceInfo", "Trace Information DataClass")
-        .def(py::init<TraceLevel, ErrorCode, std::string, std::string, std::string>(), py::arg("level"), py::arg("error_code"), py::arg("target"), py::arg("action"), py::arg("message"))
+        .def(py::init<TraceLevel, ErrorCode, std::string, std::string, std::string, std::string>(), py::arg("level"), py::arg("error_code"), py::arg("nickname"), py::arg("target"), py::arg("action"), py::arg("message"))
         .def_readwrite("level", &TraceInfo::level)
         .def_readwrite("error_code", &TraceInfo::error_code)
+        .def_readwrite("nickname", &TraceInfo::nickname)
         .def_readwrite("target", &TraceInfo::target)
         .def_readwrite("action", &TraceInfo::action)
         .def_readwrite("message", &TraceInfo::message)
@@ -315,4 +321,13 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("extname", &AMFS::extname, py::arg("path"))
         .def("getsize", &AMFS::getsize, py::arg("path"), py::arg("trace_link") = false)
         .def("resplit", &AMFS::resplit, py::arg("path"), py::arg("front_esc"), py::arg("back_esc"), py::arg("head") = "");
-}
+
+    py::class_<AMFS::BasePathMatch>(fs, "BasePathMatch", "Base Path Match Class")
+        .def("str_match", &AMFS::BasePathMatch::str_match, py::arg("name"), py::arg("pattern"))
+        .def("name_match", &AMFS::BasePathMatch::name_match, py::arg("name"), py::arg("pattern"))
+        .def("walk_match", &AMFS::BasePathMatch::walk_match, py::arg("parts"), py::arg("match_parts"))
+        .def("find", &AMFS::BasePathMatch::find, py::arg("path"), py::arg("type") = AMFS::SearchType::All);
+
+    py::class_<AMFS::PathMatch, AMFS::BasePathMatch>(fs, "PathMatch", "Path Match Class")
+        .def(py::init<>());
+};

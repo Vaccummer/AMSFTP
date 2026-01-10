@@ -300,10 +300,11 @@ struct TraceInfo
     std::string action;
     std::string message;
     double timestamp;
+    std::string nickname;
     TraceInfo()
-        : level(TraceLevel::Info), error_code(EC::Success), target(""), action(""), message("") {}
-    TraceInfo(TraceLevel level, ErrorCode error_code, std::string target, std::string action, std::string message)
-        : level(level), error_code(error_code), target(target), action(action), message(message), timestamp(timenow()) {}
+        : level(TraceLevel::Info), error_code(EC::Success), nickname(""), target(""), action(""), message("") {}
+    TraceInfo(TraceLevel level, ErrorCode error_code, std::string nickname, std::string target, std::string action, std::string message)
+        : level(level), error_code(error_code), nickname(nickname), target(target), action(action), message(message), timestamp(timenow()) {}
 };
 
 struct TransferCallback

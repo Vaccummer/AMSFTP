@@ -157,7 +157,7 @@ enum class TraceLevel
     Debug = 1,
     Warning = 0,
     Error = -1,
-    Critical = 2,
+    Critical = -2,
 
 };
 
