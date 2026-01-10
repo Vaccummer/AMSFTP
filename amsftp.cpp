@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <fmt/core.h>
+#include <fstream>
 #include <iostream>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -354,8 +355,9 @@ struct TransferTask
     AMFS::PathType path_type = PathType::FILE;
     bool IsSuccess = false;
     ECM rc = ECM(EC::Success, "");
-    TransferTask(std::string src, std::string src_host, std::string dst, std::string dst_host, uint64_t size, PathType path_type = PathType::FILE)
-        : src(src), src_host(src_host), dst(dst), dst_host(dst_host), size(size), path_type(path_type) {}
+    bool overwrite = false;
+    TransferTask(std::string src, std::string src_host, std::string dst, std::string dst_host, uint64_t size, PathType path_type = PathType::FILE, bool overwrite = false)
+        : src(src), src_host(src_host), dst(dst), dst_host(dst_host), size(size), path_type(path_type), overwrite(overwrite) {}
 };
 
 class BaseFileMapper
@@ -744,14 +746,12 @@ using int_ptr = std::shared_ptr<uint64_t>;
 using safe_int_ptr = std::shared_ptr<std::atomic<uint64_t>>;
 using RMR = std::vector<std::pair<std::string, ECM>>;
 using TRM = std::vector<std::pair<std::pair<std::string, std::string>, ECM>>;
-using RR = std::variant<std::string, ECM>;
-using TR = std::variant<TRM, ECM>;
-using BR = std::variant<bool, ECM>;
-using SR = std::variant<PathInfo, ECM>;
-using LR = std::variant<std::vector<PathInfo>, ECM>;
+using BR = std::pair<bool, ECM>;
+using SR = std::pair<ECM, PathInfo>;
+using LR = std::pair<std::vector<PathInfo>, ECM>;
 using WRV = std::vector<PathInfo>;
 using WRD = std::vector<std::pair<std::vector<std::string>, PathInfo>>;
-using WR = std::variant<WRV, ECM>;
+using WR = std::pair<ECM, WRV>;
 using ED = std::pair<EC, std::string>;
 using SIZER = std::variant<uint64_t, ECM>;
 using ErrorInfo = std::unordered_map<std::string, std::variant<std::string, EC>>;
@@ -993,50 +993,41 @@ public:
 
     bool IsValidKey(const std::string &key)
     {
-        return true;
-        // 换用fopen_s
-        FILE *fp = nullptr;
-        fopen_s(&fp, key.c_str(), "r");
-        if (!fp)
+        std::ifstream file(key);
+        if (!file.is_open())
             return false;
 
-        EVP_PKEY *pkey = PEM_read_PrivateKey(fp, NULL, NULL, NULL);
-        fclose(fp);
+        std::string line;
+        std::getline(file, line);
 
-        if (!pkey)
-            return false;
-
-        int type = EVP_PKEY_id(pkey);
-        EVP_PKEY_free(pkey);
-
-        switch (type)
+        // 匹配所有SSH私钥的标准开头标记
+        const std::vector<std::string> private_key_headers = {
+            "-----BEGIN OPENSSH PRIVATE KEY-----",
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "-----BEGIN EC PRIVATE KEY-----",
+            "-----BEGIN DSA PRIVATE KEY-----"};
+        for (const auto &header : private_key_headers)
         {
-        case EVP_PKEY_NONE:
-            return false;
-        default:
-            return true;
+            if (line.find(header) == 0)
+            { // 开头匹配
+                return true;
+            }
         }
+        return false;
     }
 
     void LoadDefaultPrivateKeys()
     {
-        std::string default_key_dir = AMFS::realpath("~/.ssh", true);
-        try
+        auto listd = AMFS::listdir("~/.ssh");
+        for (auto &info : listd)
         {
-            for (auto &entry : fs::directory_iterator(default_key_dir))
+            if (info.type == PathType::FILE)
             {
-                if (fs::is_regular_file(entry))
+                if (IsValidKey(info.path))
                 {
-                    if (IsValidKey(entry.path().string()))
-                    {
-                        this->private_keys.push_back(entry.path().string());
-                    }
+                    this->private_keys.push_back(info.path);
                 }
             }
-        }
-        catch (const fs::filesystem_error &e)
-        {
-            trace(AMWARNING, EC::LocalStatError, default_key_dir, "LoadDefaultPrivateKeys", fmt::format("Failed to load default private keys : {} ", e.what()));
         }
     }
 
@@ -1226,23 +1217,19 @@ public:
             return {EC::NoSession, "Session not initialized"};
         }
 
-        LIBSSH2_SFTP_ATTRIBUTES attrs;
-        int rct;
+        char path_t[1024];
+        int rcr;
         {
             std::lock_guard<std::recursive_mutex> lock(mtx);
-            rct = libssh2_sftp_stat(sftp, "./amtrial", &attrs);
+            rcr = libssh2_sftp_realpath(sftp, ".", path_t, sizeof(path_t));
         }
-        EC rc;
-        if (rct != 0)
+        if (rcr < 0)
         {
-            rc = GetLastEC();
-            if (rc != EC::PathNotExist && rc != EC::FileNotExist)
-            {
-                std::string msg = fmt::format("Session check failed: {}", GetLastErrorMsg());
-                trace(AMCRITICAL, rc, "Session", "SessionCheck", msg);
-                return {rc, msg};
-            }
+            EC rc = GetLastEC();
+            trace(AMERROR, rc, "home_path", "Check", "Sftp status check failed");
+            return std::make_pair(rc, "Sftp status check failed");
         }
+
         trace(AMINFO, EC::Success, fmt::format("{}@{}", request.nickname, "SSHSeesion"), "Check", "");
         return {EC::Success, ""};
     }
@@ -1618,9 +1605,9 @@ public:
         return {EC::Success, ""};
     }
 
-    OS_TYPE GetOSType()
+    OS_TYPE GetOSType(bool update = false)
     {
-        if (os_type != OS_TYPE::Uncertain)
+        if (os_type != OS_TYPE::Uncertain && !update)
         {
             return os_type;
         }
@@ -1766,7 +1753,7 @@ private:
     {
         if (!amsession->sftp)
         {
-            return std::make_pair(EC::NoConnection, "SFTP not initialized");
+            return {ECM{EC::NoConnection, "SFTP not initialized"}, PathInfo()};
         }
 
         LIBSSH2_SFTP_ATTRIBUTES attrs;
@@ -1783,10 +1770,10 @@ private:
             rc = GetLastEC();
             msg = fmt::format("stat {} failed: {}", path, GetLastErrorMsg());
             trace(AMWARNING, rc, fmt::format("{}@{}", request.nickname, path), "stat", msg);
-            return std::make_pair(rc, msg);
+            return {ECM{rc, msg}, PathInfo()};
         }
 
-        return FormatStat(path, attrs);
+        return {ECM{EC::Success, ""}, FormatStat(path, attrs)};
     }
 
     ECM lib_rmfile(const std::string &path)
@@ -1843,60 +1830,34 @@ private:
     void _iwalk(const std::string &path, WRV &result, bool ignore_sepcial_file = true)
     {
         // 搜索目录下所有最深层的路径, 用于递归传输路径
-        SR info = stat(path);
-        if (!std::holds_alternative<PathInfo>(info))
+        auto [rcm, info_path] = stat(path);
+        if (rcm.first != EC::Success)
         {
             return;
         }
-        PathInfo info_path = std::get<PathInfo>(info);
+
         if (info_path.type != PathType::DIR)
         {
+            // 非目录直接加入
             result.push_back(info_path);
             return;
         }
-        LR list = listdir(path);
-        std::vector<PathInfo> list_info = {};
-        if (!std::holds_alternative<std::vector<PathInfo>>(list))
+
+        auto [rcm2, list_info] = listdir(path);
+        if (rcm2.first != EC::Success)
         {
             return;
         }
-        list_info = std::get<std::vector<PathInfo>>(list);
+
         if (list_info.empty())
         {
-            SR info = stat(path);
-            if (!std::holds_alternative<PathInfo>(info))
-            {
-                return;
-            }
-            result.push_back(std::get<PathInfo>(info));
+            // 末级空目录直接加入
+            result.push_back(info_path);
             return;
         }
-        bool all_file = true;
         for (auto &info : list_info)
         {
-            if (info.type == PathType::DIR)
-            {
-                _iwalk(info.path, result, ignore_sepcial_file);
-                all_file = false;
-            }
-            else
-            {
-                if (ignore_sepcial_file && static_cast<int>(info.type) < 0)
-                {
-                    continue;
-                }
-                result.push_back(info);
-            }
-        }
-        if (all_file)
-        {
-            SR info = stat(path);
-            if (!std::holds_alternative<PathInfo>(info))
-            {
-                return;
-            }
-            result.push_back(std::get<PathInfo>(info));
-            return;
+            _iwalk(info.path, result, ignore_sepcial_file);
         }
     }
 
@@ -1907,23 +1868,20 @@ private:
             return;
         }
         std::string path = AMFS::join(parts);
-        SR info = stat(path);
-        if (!std::holds_alternative<PathInfo>(info))
+        auto [rcm, info_path] = stat(path);
+        if (rcm.first != EC::Success)
         {
             return;
         }
-        PathInfo info_path = std::get<PathInfo>(info);
         if (info_path.type != PathType::DIR)
         {
             return;
         }
-        LR list = listdir(path);
-        std::vector<PathInfo> list_info = {};
-        if (!std::holds_alternative<std::vector<PathInfo>>(list))
+        auto [rcm2, list_info] = listdir(path);
+        if (rcm2.first != EC::Success)
         {
             return;
         }
-        list_info = std::get<std::vector<PathInfo>>(list);
         if (list_info.empty())
         {
             if (parts.size() == 1)
@@ -1935,7 +1893,7 @@ private:
             result.push_back(std::make_pair(ta, info_path));
             return;
         }
-        bool all_file = true;
+
         for (auto &info : list_info)
         {
             if (info.type == PathType::DIR)
@@ -1959,12 +1917,12 @@ private:
 
     void _GetSize(const std::string &path, uint64_t &size, bool ignore_sepcial_file = true)
     {
-        SR info = stat(path);
-        if (!std::holds_alternative<PathInfo>(info))
+        auto [rcm, path_info] = stat(path);
+        if (rcm.first != EC::Success)
         {
             return;
         }
-        PathInfo path_info = std::get<PathInfo>(info);
+
         switch (path_info.type)
         {
         case PathType::FILE:
@@ -1985,13 +1943,14 @@ private:
             }
         }
 
-        LR list = listdir(path);
-        if (!std::holds_alternative<WRV>(list))
+        auto [rcm2, list_info] = listdir(path);
+
+        if (rcm2.first != EC::Success)
         {
             return;
         }
 
-        for (auto &item : std::get<WRV>(list))
+        for (auto &item : list_info)
         {
             _GetSize(item.path, size);
         }
@@ -1999,46 +1958,39 @@ private:
 
     void _rm(const std::string &path, RMR &errors)
     {
-        BR rc = is_dir(path);
-        bool is_dir;
-        if (std::holds_alternative<bool>(rc))
+        auto [rcm, br] = is_dir(path);
+        if (rcm.first != EC::Success)
         {
-            is_dir = std::get<bool>(rc);
-        }
-        else
-        {
-            errors.push_back(std::make_pair(path, std::get<ECM>(rc)));
+            errors.push_back(std::make_pair(path, rcm));
             return;
         }
 
-        if (!is_dir)
+        if (!br)
         {
             ECM ecm = lib_rmfile(path);
-            if (!isok(ecm))
+            if (ecm.first != EC::Success)
             {
                 errors.push_back(std::make_pair(path, ecm));
             }
             return;
         }
 
-        LR file_list = listdir(path);
-        if (std::holds_alternative<std::vector<PathInfo>>(file_list))
+        auto [rcm2, file_list] = listdir(path);
+        if (rcm2.first != EC::Success)
         {
-            std::vector<PathInfo> file_list_f = std::get<std::vector<PathInfo>>(file_list);
-            for (auto &file : file_list_f)
-            {
-                _rm(file.path, errors);
-            }
-            ECM ecm = rmdir(path);
-            if (!isok(ecm))
-            {
-                errors.push_back(std::make_pair(path, ecm));
-            }
+            errors.push_back(std::make_pair(path, rcm));
             return;
         }
-        else
+
+        for (auto &file : file_list)
         {
-            errors.push_back(std::make_pair(path, std::get<ECM>(file_list)));
+            _rm(file.path, errors);
+        }
+
+        ECM ecm = rmdir(path);
+        if (ecm.first != EC::Success)
+        {
+            errors.push_back(std::make_pair(path, ecm));
         }
     }
 
@@ -2086,6 +2038,7 @@ private:
 
         if (rcr != 0)
         {
+            std::cout << "rcr: " << rcr << std::endl;
             rc = GetLastEC();
             msg = fmt::format("chmod {} failed: {}", path, GetLastErrorMsg());
             errors[path] = {rc, msg};
@@ -2093,17 +2046,15 @@ private:
 
         if (recursive && file_type == LIBSSH2_SFTP_S_IFDIR)
         {
-            LR list = listdir(path);
-            if (std::holds_alternative<WRV>(list))
+            auto [rcm, list] = listdir(path);
+            if (rcm.first != EC::Success)
             {
-                for (auto &item : std::get<WRV>(list))
-                {
-                    _chmod(item.path, mode, recursive, errors);
-                }
+                errors[path] = rcm;
+                return;
             }
-            else
+            for (auto &item : list)
             {
-                errors[path] = std::get<ECM>(list);
+                _chmod(item.path, mode, recursive, errors);
             }
         }
     }
@@ -2149,6 +2100,7 @@ private:
 
         if (rcr != 0)
         {
+            std::cout << "rcr: " << rcr << std::endl;
             rc = GetLastEC();
             msg = fmt::format("chmod {} failed: {}", path, GetLastErrorMsg());
             errors[path] = {rc, msg};
@@ -2156,17 +2108,15 @@ private:
 
         if (recursive && file_type == LIBSSH2_SFTP_S_IFDIR)
         {
-            LR list = listdir(path);
-            if (std::holds_alternative<WRV>(list))
+            auto [rcm, list] = listdir(path);
+            if (rcm.first != EC::Success)
             {
-                for (auto &item : std::get<WRV>(list))
-                {
-                    _chmod(item.path, mode, recursive, errors);
-                }
+                errors[path] = rcm;
+                return;
             }
-            else
+            for (auto &item : list)
             {
-                errors[path] = std::get<ECM>(list);
+                _chmod(item.path, mode, recursive, errors);
             }
         }
     }
@@ -2220,23 +2170,26 @@ public:
         std::string tmp_trash_dir = this->trash_dir.empty() ? ".AMSFTP_Trash" : this->trash_dir;
         tmp_trash_dir = AMFS::abspath(tmp_trash_dir, true, GetHomeDir(), GetHomeDir());
         this->trash_dir = tmp_trash_dir;
-        BR br = is_dir(tmp_trash_dir);
-        if (std::holds_alternative<bool>(br))
+        auto [rcm, br] = is_dir(tmp_trash_dir);
+        if (rcm.first != EC::Success)
         {
-            if (std::get<bool>(br))
-            {
-                is_trash_dir_ensure = true;
-                return {EC::Success, ""};
-            }
-            else
-            {
-                is_trash_dir_ensure = false;
-                return {EC::NotADirectory, fmt::format("Trash directory path exists but is not a directory: {}", tmp_trash_dir)};
-            }
+            return rcm;
+        }
+        if (br)
+        {
+            // 是目录说明创建成功
+            is_trash_dir_ensure = true;
+            return {EC::Success, ""};
+        }
+        else
+        {
+            // 不是目录，说明路径中已经有文件存在，冲突报错
+            is_trash_dir_ensure = false;
+            return {EC::NotADirectory, fmt::format("Trash directory path exists but is not a directory: {}", tmp_trash_dir)};
         }
 
         ECM res = mkdirs(tmp_trash_dir);
-        if (!isok(res))
+        if (res.first != EC::Success)
         {
             is_trash_dir_ensure = false;
             trace(AMINFO, EC::Success, fmt::format("{}@{}", request.nickname, "TrashDir"), "EnsureTrashDir", fmt::format("Fail to set trash_dir to: \"{}\"", tmp_trash_dir));
@@ -2250,7 +2203,7 @@ public:
     }
 
     // 解析并返回绝对路径, ~在client中解析，..和.其他由服务器解析，有这些符号时需要路径真实存在
-    RR realpath(const std::string &path)
+    std::pair<ECM, std::string> realpath(const std::string &path)
     {
         std::string pathf = path;
         if (std::regex_search(path, std::regex("^~[\\\\/]")))
@@ -2260,11 +2213,11 @@ public:
         }
         else if (pathf == "~")
         {
-            return GetHomeDir();
+            return {ECM{EC::Success, ""}, GetHomeDir()};
         }
         if (!amsession->sftp)
         {
-            return std::make_pair(EC::NoConnection, "SFTP not initialized");
+            return {ECM{EC::NoConnection, "SFTP not initialized"}, ""};
         }
         char path_t[1024];
         int rcr;
@@ -2277,16 +2230,16 @@ public:
             EC rc = GetLastEC();
             std::string msg = fmt::format("realpath {} failed: {}", pathf, GetLastErrorMsg());
             trace(AMERROR, rc, fmt::format("{}@{}", request.nickname, pathf), "Realpath", msg);
-            return std::make_pair(rc, msg);
+            return {ECM{rc, msg}, ""};
         }
         else
         {
             if (GetOSType() == OS_TYPE::Windows)
             {
                 // windows server返回的路径会在前面加个/或\，需要去掉
-                return std::string(path_t).substr(1);
+                return {ECM{EC::Success, ""}, std::string(path_t).substr(1)};
             }
-            return std::string(path_t);
+            return {ECM{EC::Success, ""}, std::string(path_t)};
         }
     }
 
@@ -2296,10 +2249,10 @@ public:
         {
             return home_dir;
         }
-        auto path_obj = realpath("");
-        if (std::holds_alternative<std::string>(path_obj))
+        auto [rcm, path_obj] = realpath("");
+        if (rcm.first == EC::Success)
         {
-            home_dir = std::get<std::string>(path_obj);
+            home_dir = path_obj;
             return home_dir;
         }
         switch (GetOSType())
@@ -2333,12 +2286,12 @@ public:
         }
         auto pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
 
-        BR br = exists(pathf);
-        if (!std::holds_alternative<bool>(br))
+        auto [rcm, br] = exists(pathf);
+        if (rcm.first != EC::Success)
         {
-            return std::get<ECM>(br);
+            return rcm;
         }
-        else if (!std::get<bool>(br))
+        if (!br)
         {
             return ECM{EC::PathNotExist, fmt::format("Path does not exist: {}", pathf)};
         }
@@ -2370,121 +2323,102 @@ public:
     // 获取路径信息，自带AMFS::abspath
     SR stat(const std::string &path)
     {
-        std::string pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
+        std::string pathf = AMFS::abspath(path, true, GetHomeDir());
 
         if (pathf.empty())
         {
-            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", path));
+            return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, PathInfo()};
         }
 
         return lib_stat(pathf);
     }
 
-    std::variant<PathType, ECM> get_path_type(const std::string &path)
+    std::pair<ECM, PathType> get_path_type(const std::string &path)
     {
-        SR info = stat(path);
-        if (std::holds_alternative<PathInfo>(info))
+        auto [rcm, path_info] = stat(path);
+        if (rcm.first != EC::Success)
         {
-            return std::get<PathInfo>(info).type;
+            return {ECM{rcm.first, rcm.second}, PathType::Unknown};
         }
-        else
-        {
-            return std::get<ECM>(info);
-        }
+        return {rcm, path_info.type};
     }
 
     // 判断路径是否存在，自带AMFS::abspath
-    BR exists(const std::string &path)
+    std::pair<ECM, bool> exists(const std::string &path)
     {
-        SR info = stat(path);
-        if (std::holds_alternative<PathInfo>(info))
+        auto [rcm, path_info] = stat(path);
+        if (rcm.first == EC::Success)
         {
-            return true;
+            return {rcm, true};
+        }
+        else if (rcm.first == EC::PathNotExist || rcm.first == EC::FileNotExist)
+        {
+            return {rcm, false};
         }
         else
         {
-            ECM ecm = std::get<ECM>(info);
-            if (ecm.first == EC::PathNotExist || ecm.first == EC::FileNotExist)
-            {
-                return false;
-            }
-            else
-            {
-                return std::make_pair(ecm.first, ecm.second);
-            }
+            return {rcm, false};
         }
     }
 
-    BR is_regular(const std::string &path)
+    std::pair<ECM, bool> is_regular(const std::string &path)
     {
-        SR info = stat(path);
-        if (std::holds_alternative<PathInfo>(info))
+        auto [rcm, path_info] = stat(path);
+        if (rcm.first != EC::Success)
         {
-            return std::get<PathInfo>(info).type == PathType::FILE ? true : false;
+            return {rcm, false};
         }
-        else
-        {
-            return std::get<ECM>(info);
-        }
+        return {ECM{EC::Success, ""}, path_info.type == PathType::FILE ? true : false};
     }
 
-    BR is_dir(const std::string &path)
+    std::pair<ECM, bool> is_dir(const std::string &path)
     {
-        SR info = stat(path);
-        if (std::holds_alternative<PathInfo>(info))
+        auto [rcm, path_info] = stat(path);
+        if (rcm.first != EC::Success)
         {
-            return std::get<PathInfo>(info).type == PathType::DIR ? true : false;
+            return {rcm, false};
         }
-        else
-        {
-            return std::get<ECM>(info);
-        }
+        return {ECM{EC::Success, ""}, path_info.type == PathType::DIR ? true : false};
     }
 
-    BR is_symlink(const std::string &path)
+    std::pair<ECM, bool> is_symlink(const std::string &path)
     {
-        SR info = stat(path);
-        if (std::holds_alternative<PathInfo>(info))
+        auto [rcm, path_info] = stat(path);
+        if (rcm.first != EC::Success)
         {
-            return std::get<PathInfo>(info).type == PathType::SYMLINK ? true : false;
+            return {rcm, false};
         }
-        else
-        {
-            return std::get<ECM>(info);
-        }
+        return {ECM{EC::Success, ""}, path_info.type == PathType::SYMLINK ? true : false};
     }
 
-    LR listdir(const std::string &path, long max_time_ms = -1)
+    std::pair<ECM, std::vector<PathInfo>> listdir(const std::string &path, long max_time_ms = -1)
     {
         if (!amsession->sftp)
         {
-            return std::make_pair(EC::NoConnection, "SFTP not initialized");
+            return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
         }
 
         auto pathf = AMFS::abspath(path, true, GetHomeDir());
         if (pathf.empty())
         {
-            return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", path));
+            return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
         }
 
         std::string msg = "";
         std::vector<PathInfo> file_list = {};
-        BR br = is_dir(path);
+        auto [rcm, br] = is_dir(path);
+        if (rcm.first != EC::Success)
+        {
+            return {rcm, file_list};
+        }
+        else if (!br)
+        {
+            return {ECM{EC::NotADirectory, fmt::format("Path is not a directory: {}", pathf)}, file_list};
+        }
+
         double start_time = timenow();
         double end_time = start_time;
         double max_time = max_time_ms / 1000.0;
-
-        if (std::holds_alternative<bool>(br))
-        {
-            if (!std::get<bool>(br))
-            {
-                return std::make_pair(EC::NotADirectory, fmt::format("Path is not a directory: {}", pathf));
-            }
-        }
-        else
-        {
-            return std::get<ECM>(br);
-        }
 
         LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
         LIBSSH2_SFTP_ATTRIBUTES attrs;
@@ -2565,11 +2499,11 @@ public:
         }
         if (is_sucess)
         {
-            return file_list;
+            return {ECM{EC::Success, ""}, file_list};
         }
         else
         {
-            return std::make_pair(rc, msg);
+            return {ECM{rc, msg}, {}};
         }
     }
 
@@ -2588,18 +2522,20 @@ public:
         }
 
         std::string msg = "";
-        BR br = is_dir(pathf);
-        if (std::holds_alternative<bool>(br))
+        auto [rcm, br] = is_dir(pathf);
+        if (rcm.first != EC::Success)
         {
-            if (!std::get<bool>(br))
-            {
-                return {EC::PathAlreadyExists, fmt::format("Path exists and is not a directory: {}", pathf)};
-            }
-            else
-            {
-                return {EC::Success, ""};
-            }
+            return rcm;
         }
+        if (!br)
+        {
+            return {EC::PathAlreadyExists, fmt::format("Path exists and is not a directory: {}", pathf)};
+        }
+        else
+        {
+            return {EC::Success, ""};
+        }
+
         int rcr;
         {
             std::lock_guard<std::recursive_mutex> lock(amsession->mtx);
@@ -2618,7 +2554,8 @@ public:
     }
 
     // 递归创建多级目录，直到报错为止，自带AMFS::abspath
-    ECM mkdirs(const std::string &path)
+    ECM
+    mkdirs(const std::string &path)
     {
         std::string pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
         if (pathf.empty())
@@ -2666,16 +2603,16 @@ public:
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
         auto pathf = AMFS::abspath(path, true, GetHomeDir());
-        SR info = stat(pathf);
+        auto [rcm, info] = stat(pathf);
         ECM ecm;
         std::string msg = "";
-        if (std::holds_alternative<ECM>(info))
+        if (rcm.first != EC::Success)
         {
-            return std::get<ECM>(info);
+            return rcm;
         }
         else
         {
-            PathType type = std::get<PathInfo>(info).type;
+            PathType type = info.type;
             switch (type)
             {
             case PathType::DIR:
@@ -2730,7 +2667,7 @@ public:
         return {EC::Success, ""};
     }
 
-    // 递归删除文件或目录，自带AMFS::abspath, 返回ECM或者路径与ECM pair的vector
+    // 删除文件或目录，自带AMFS::abspath
     std::variant<RMR, ECM> remove(const std::string &path)
     {
         if (!amsession->sftp)
@@ -2760,21 +2697,21 @@ public:
         {
             return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {} or {}", src_path, dst_path));
         }
-        BR sbr = exists(src);
-        if (std::holds_alternative<ECM>(sbr))
+        auto [rcm, sbr] = exists(src);
+        if (rcm.first != EC::Success)
         {
-            return std::get<ECM>(sbr);
+            return rcm;
         }
-        else if (!std::get<bool>(sbr))
+        if (!sbr)
         {
             return {EC::PathNotExist, fmt::format("Src not exists: {}", src_path)};
         }
-        BR dbr = exists(dst);
-        if (std::holds_alternative<ECM>(dbr))
+        auto [rcm2, dbr] = exists(dst);
+        if (rcm2.first != EC::Success)
         {
-            return std::get<ECM>(dbr);
+            return rcm2;
         }
-        else if (std::get<bool>(dbr) && !overwrite)
+        if (dbr && !overwrite)
         {
             return {EC::PathAlreadyExists, fmt::format("Dst already exists: {} and overwrite is false", dst_path)};
         }
@@ -2785,13 +2722,11 @@ public:
     // 安全删除文件或目录，将目录移动到trash_dir中，自带AMFS::abspath
     ECM saferm(const std::string &path)
     {
-        SR info_ori = stat(path);
-        if (std::holds_alternative<ECM>(info_ori))
+        auto [rcm, info] = stat(path);
+        if (rcm.first != EC::Success)
         {
-            return std::get<ECM>(info_ori);
+            return rcm;
         }
-        auto info = std::get<PathInfo>(info_ori);
-
         std::string pathf = info.path;
         if (!is_trash_dir_ensure)
         {
@@ -2817,15 +2752,14 @@ public:
         size_t i = 1;
         std::string base_name_tmp = base_name;
 
-        BR br;
         while (true)
         {
-            br = exists(target_path);
-            if (std::holds_alternative<ECM>(br))
+            auto [rcm, br] = exists(target_path);
+            if (rcm.first != EC::Success)
             {
-                return std::get<ECM>(br);
+                return rcm;
             }
-            else if (!std::get<bool>(br))
+            if (!br)
             {
                 break;
             }
@@ -2847,33 +2781,33 @@ public:
         }
         std::string srcf = AMFS::abspath(src, true, GetHomeDir());
         std::string dstf = AMFS::abspath(dst, true, GetHomeDir());
-        SR dsr = stat(srcf);
+        auto [rcm, ssr] = stat(srcf);
         // src不存在就直接退出
-        if (std::holds_alternative<ECM>(dsr))
+        if (rcm.first != EC::Success)
         {
-            return std::get<ECM>(dsr);
+            return rcm;
         }
 
-        dsr = stat(dstf);
-        if (std::holds_alternative<ECM>(dsr))
+        auto [rcm2, dsr] = stat(dstf);
+        if (rcm2.first != EC::Success)
         {
-            EC rc = std::get<ECM>(dsr).first;
+            EC rc = rcm.first;
             if ((rc == EC::PathNotExist || rc == EC::FileNotExist) && need_mkdir)
             {
                 ECM ecm = mkdirs(dstf);
-                if (!isok(ecm))
+                if (ecm.first != EC::Success)
                 {
                     return ecm;
                 }
             }
             else
             {
-                return std::get<ECM>(dsr);
+                return rcm2;
             }
         }
         else
         {
-            if (std::get<PathInfo>(dsr).type != PathType::DIR)
+            if (dsr.type != PathType::DIR)
             {
                 return {EC::NotADirectory, fmt::format("Dst is not a directory: {}", dstf)};
             }
@@ -2897,26 +2831,26 @@ public:
         {
             return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {} or {}", srcf, dstf));
         }
-        BR br = exists(srcf);
-        if (std::holds_alternative<ECM>(br))
+        auto [rcm, br] = exists(srcf);
+        if (rcm.first != EC::Success)
         {
-            return std::get<ECM>(br);
+            return rcm;
         }
-        else if (!std::get<bool>(br))
+        if (!br)
         {
 
             return {EC::PathNotExist, fmt::format("Src not exists: {}", srcf)};
         }
 
-        br = is_dir(dstf);
-        if (std::holds_alternative<ECM>(br))
+        auto [rcm2, br2] = is_dir(dstf);
+        if (rcm2.first != EC::Success)
         {
-            if (std::get<ECM>(br).first == EC::PathNotExist)
+            if (rcm2.first == EC::PathNotExist)
             {
                 if (need_mkdir)
                 {
                     ECM ecm = mkdirs(dstf);
-                    if (!isok(ecm))
+                    if (ecm.first != EC::Success)
                     {
                         return ecm;
                     }
@@ -2928,7 +2862,7 @@ public:
                 }
             }
         }
-        else if (!std::get<bool>(br))
+        else if (!br2)
         {
 
             return {EC::PathNotExist, fmt::format("Dst exists but not a directory: {}", dstf)};
@@ -2976,23 +2910,19 @@ public:
     }
 
     // 真实的walk函数，返回([root_path, part1, part2, ...], PathInfo)的vector
-    std::variant<WRD, ECM> walk(const std::string &path, int max_depth = -1, bool ignore_special_file = true)
+    std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1, bool ignore_special_file = true)
     {
         auto pathf = AMFS::abspath(path, true, GetHomeDir());
-        BR br = exists(pathf);
-        if (!std::holds_alternative<bool>(br))
+        auto [rcm, br] = stat(pathf);
+        if (rcm.first != EC::Success)
         {
-            return std::get<ECM>(br);
-        }
-        else if (!std::get<bool>(br))
-        {
-            return ECM{EC::NotADirectory, fmt::format("Path is not a directory: {}", pathf)};
+            return {rcm, {}};
         }
         WRD result_dict = {};
         std::vector<std::string> parts = {pathf};
         _walk(parts, result_dict, 0, max_depth, ignore_special_file);
         // 打印result_dict的类型
-        return result_dict;
+        return {ECM{EC::Success, ""}, result_dict};
     }
 
     // 获取某一路径下的所有文件和底层目录的总大小
@@ -3059,8 +2989,12 @@ public:
         return hosts[host];
     }
 
-    ECM test_host(std::string host)
+    ECM test_host(const std::string &host)
     {
+        if (host.empty())
+        {
+            return ECM{EC::Success, ""};
+        }
         if (hosts.find(host) == hosts.end())
         {
             return ECM{EC::NoSession, "Client not found"};
@@ -3537,6 +3471,45 @@ private:
         return {rc_final, error_msg};
     }
 
+    std::pair<ECM, PathInfo> Ustat(const std::string &path, Hostd &hostd, std::string nickname = "")
+    {
+        if (nickname.empty())
+        {
+            auto res = AMFS::stat(path);
+            return {ECM{EC::CommonFailure, res.first}, res.second};
+        }
+        ECM rc = hostd.test_host(nickname);
+        if (rc.first != EC::Success)
+        {
+            return {rc, PathInfo()};
+        }
+        auto client = hostd.get_host(nickname);
+        if (!client)
+        {
+            return {ECM{EC::NoSession, "Client not found"}, PathInfo()};
+        }
+        return client->stat(path);
+    }
+
+    std::vector<PathInfo> Uiwalk(const std::string &path, Hostd &hostd, std::string nickname = "", bool ignore_special_file = true)
+    {
+        if (nickname.empty())
+        {
+            return AMFS::iwalk(path, ignore_special_file);
+        }
+        ECM rc = hostd.test_host(nickname);
+        if (rc.first != EC::Success)
+        {
+            return {};
+        }
+        auto client = hostd.get_host(nickname);
+        if (!client)
+        {
+            return {};
+        }
+        return client->iwalk(path, ignore_special_file);
+    }
+
 public:
     TransferCallback callback;
     float cb_interval_s;
@@ -3637,7 +3610,11 @@ public:
         return result;
     }
 
-    TASKS transfer(TASKS tasks, Hostd hostd, uint64_t chunk_large = 16 * AMMB, uint64_t chunk_middle = 2 * AMMB, uint64_t chunk_small = 256 * AMKB)
+    TASKS transfer(TASKS tasks,
+                   Hostd hostd,
+                   uint64_t chunk_large = 16 * AMMB,
+                   uint64_t chunk_middle = 2 * AMMB,
+                   uint64_t chunk_small = 256 * AMKB)
     {
         if (tasks.empty())
         {
@@ -3718,6 +3695,11 @@ public:
             if (src_host.empty() && dst_host.empty())
             {
                 // local2local
+                if (fs::exists(task.dst) && !task.overwrite)
+                {
+                    rc = ECM{EC::PathAlreadyExists, fmt::format("Dst already exists: {}", task.dst)};
+                    goto check;
+                }
                 rc = Local2Local(task.src, task.dst, chunk_large);
             }
             else if (src_host.empty() && !dst_host.empty())
@@ -3734,11 +3716,27 @@ public:
                     rc = ECM(EC::NoSession, "Destination SFTP Client not found");
                     goto check;
                 }
+                auto [rcmt, br] = dst_client->exists(task.dst);
+                if (rcmt.first != EC::Success)
+                {
+                    rc = rcmt;
+                    goto check;
+                }
+                else if (br && !task.overwrite)
+                {
+                    rc = ECM{EC::PathAlreadyExists, fmt::format("Dst already exists: {}", task.dst)};
+                    goto check;
+                }
                 rc = Local2Remote(task.src, task.dst, dst_client, chunk_middle);
             }
             else if (!src_host.empty() && dst_host.empty())
             {
                 // remote2local
+                if (fs::exists(task.dst) && !task.overwrite)
+                {
+                    rc = ECM{EC::PathAlreadyExists, fmt::format("Dst already exists: {}", task.dst)};
+                    goto check;
+                }
                 rc = hostd.test_host(src_host);
                 if (rc.first != EC::Success)
                 {
@@ -3777,6 +3775,17 @@ public:
                     rc = ECM(EC::NoSession, "Destination SFTP Client not found");
                     goto check;
                 }
+                auto [rcmp, br2] = dst_client->exists(task.dst);
+                if (rcmp.first != EC::Success)
+                {
+                    rc = rcmp;
+                    goto check;
+                }
+                else if (br2 && !task.overwrite)
+                {
+                    rc = ECM{EC::PathAlreadyExists, fmt::format("Dst already exists: {}", task.dst)};
+                    goto check;
+                }
                 rc = Bridge(task.src, task.dst, src_client, dst_client, chunk_small);
             }
         check:
@@ -3798,94 +3807,127 @@ public:
         return tasks;
     }
 
-    std::pair<TASKS, ECM> load_tasks(std::string src, std::string dst, Hostd hostd, std::string src_hostname = "", std::string dst_hostname = "", bool overwrite = false, bool ignore_sepcial_file = true)
+    std::pair<ECM, TASKS> load_tasks(const std::string &src,
+                                     const std::string &dst,
+                                     Hostd hostd,
+                                     std::string src_hostname = "",
+                                     std::string dst_hostname = "",
+                                     bool overwrite = false,
+                                     bool mkdir = true,
+                                     bool ignore_sepcial_file = true)
     {
         WRV result = {};
         TASKS tasks = {};
         ECM rc;
-        PathInfo src_stat;
         std::shared_ptr<AMSFTPClient> src_client;
         // 去除src的dst左右端的空格
         hostd.reset();
-        if (src_hostname.empty())
+        rc = hostd.test_host(src_hostname);
+        if (rc.first != EC::Success)
         {
-            auto [error, src_stat] = AMFS::stat(src);
-            if (!error.empty())
-            {
-                return {tasks, ECM(EC::LocalStatError, error)};
-            }
+            return {rc, tasks};
+        }
+        rc = hostd.test_host(dst_hostname);
+        if (rc.first != EC::Success)
+        {
+            return {rc, tasks};
+        }
+
+        auto [rcm, src_stat] = Ustat(src, hostd, src_hostname);
+
+        if (rcm.first != EC::Success)
+        {
+            return {rcm, tasks};
+        }
+
+        std::string srcf = src_stat.path;
+        std::string dstf;
+        if (dst_hostname.empty())
+        {
+            dstf = AMFS::abspath(dst);
         }
         else
         {
-            rc = hostd.test_host(src_hostname);
-            if (rc.first != EC::Success)
+            auto client = hostd.get_host(dst_hostname);
+            if (!client)
             {
-                return {tasks, rc};
+                return {ECM(EC::NoSession, fmt::format("Destination SFTP Client: {} not found", dst_hostname)), tasks};
             }
-            src_client = hostd.get_host(src_hostname);
-            if (!src_client)
-            {
-                return {tasks, ECM(EC::NoSession, "Source SFTP Client not found")};
-            }
-            auto ori_stat = src_client->stat(src);
-            if (std::holds_alternative<ECM>(ori_stat))
-            {
-                return {tasks, std::get<ECM>(ori_stat)};
-            }
-            src_stat = std::get<PathInfo>(ori_stat);
+            dstf = AMFS::abspath(dst, true, client->GetHomeDir(), client->GetHomeDir());
         }
 
+        // 检查是否为 src_file -> dst_file 的传输
         bool is_dst_file = false;
         if (src_stat.type == PathType::FILE)
         {
             // 检查dst的扩展名和src扩展名是否相同
-            std::string src_ext = AMFS::extname(src);
-            std::string dst_ext = AMFS::extname(dst);
-            if (src_ext == dst_ext && !dst_ext.empty())
+            std::string dst_ext = AMFS::extname(dstf);
+            if (AMFS::extname(srcf) == dst_ext && !dst_ext.empty())
             {
                 is_dst_file = true;
             }
         }
 
+        auto [rcm2, dst_info] = Ustat(dstf, hostd, dst_hostname);
+
         if (src_stat.type != PathType::DIR)
         {
-            if (ignore_sepcial_file && src_stat.type != PathType::FILE)
+            if (ignore_sepcial_file && src_stat.type != PathType::FILE && src_stat.type != PathType::SYMLINK)
             {
-                return {tasks, ECM(EC::NotAFile, "Target is not a common file and ignore_sepcial_file is true")};
+                return {ECM{EC::NotAFile, fmt::format("Src is not a common file and ignore_sepcial_file is true: {}", srcf)}, {}};
             }
+
             if (!is_dst_file)
             {
-                dst = AMFS::join(dst, AMFS::basename(src));
+                dstf = AMFS::join(dstf, AMFS::basename(srcf));
             }
-            tasks.push_back(TransferTask(src, src_hostname, dst, dst_hostname, src_stat.size, src_stat.type));
-            return {tasks, ECM(EC::Success, "")};
-        }
 
-        result = src_client ? src_client->iwalk(src, ignore_sepcial_file) : AMFS::iwalk(src, ignore_sepcial_file);
-        std::string dst_n;
-        for (auto &item : result)
-        {
-            dst_n = AMFS::join(dst, fs::relative(item.path, AMFS::dirname(src)));
-            tasks.push_back(TransferTask(item.path, src_hostname, dst_n, dst_hostname, item.size, item.type));
-        }
-        if (!overwrite)
-        {
-            auto dst_client = hostd.get_host(dst_hostname);
-            if (dst_client && hostd.test_host(dst_hostname).first == EC::Success)
+            // 检验目标路径是否存在
+            if (rcm2.first == EC::Success)
             {
-                for (auto &task : tasks)
+                if (dst_info.type == PathType::DIR)
                 {
-                    auto is_exist = dst_client->exists(task.dst);
-                    if (std::holds_alternative<bool>(is_exist) && std::get<bool>(is_exist))
-                    {
-                        // 如果dst存在，则修改rc
-                        task.rc = ECM(EC::PathAlreadyExists, "Destination file already exists");
-                        task.IsSuccess = true;
-                    }
+                    return {ECM(EC::NotADirectory, fmt::format("Dst already exists and is a directory: {}", dstf)), tasks};
+                }
+                else if (!overwrite)
+                {
+                    return {ECM{EC::PathAlreadyExists, fmt::format("Dst already exists: {}", dstf)}, tasks};
                 }
             }
+
+            // 检测dst的父级目录是否存在
+            auto [rcm3, dst_parent_info] = Ustat(AMFS::dirname(dstf), hostd, dst_hostname);
+            if (rcm3.first != EC::Success && !mkdir)
+            {
+                return {ECM{EC::ParentDirectoryNotExist, fmt::format("Dst parent path not exists: {}", AMFS::dirname(dstf))}, tasks};
+            }
+            else if (dst_parent_info.type != PathType::DIR)
+            {
+                return {ECM(EC::NotADirectory, fmt::format("Dst parent path is not a directory: {}", dst_parent_info.path)), tasks};
+            }
+
+            tasks.push_back(TransferTask(srcf, src_hostname, dstf, dst_hostname, src_stat.size, src_stat.type, overwrite));
+            return {ECM(EC::Success, ""), tasks};
         }
-        return {tasks, ECM(EC::Success, "")};
+
+        if (rcm2.first != EC::Success && !mkdir)
+        {
+            return {ECM{EC::ParentDirectoryNotExist, fmt::format("Dst parent path not exists: {}", dstf)}, tasks};
+        }
+        else if (rcm2.first == EC::Success && dst_info.type != PathType::DIR)
+        {
+            return {ECM(EC::NotADirectory, fmt::format("Dst already exists and is not a directory: {}", dstf)), tasks};
+        }
+
+        auto result2 = Uiwalk(srcf, hostd, src_hostname, ignore_sepcial_file);
+
+        std::string dst_n;
+        for (auto &item : result2)
+        {
+            dst_n = AMFS::join(dstf, fs::relative(item.path, AMFS::dirname(srcf)));
+            tasks.push_back(TransferTask(item.path, src_hostname, dst_n, dst_hostname, item.size, item.type, overwrite));
+        }
+        return {ECM(EC::Success, ""), tasks};
     };
 };
 
@@ -4069,7 +4111,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("trial_times", &AuthCBInfo::trial_times);
 
     py::class_<TransferTask>(m, "TransferTask")
-        .def(py::init<std::string, std::string, std::string, std::string, uint64_t, PathType>(), py::arg("src"), py::arg("src_host"), py::arg("dst"), py::arg("dst_host"), py::arg("size"), py::arg("path_type") = PathType::FILE)
+        .def(py::init<std::string, std::string, std::string, std::string, uint64_t, PathType, bool>(), py::arg("src"), py::arg("src_host"), py::arg("dst"), py::arg("dst_host"), py::arg("size"), py::arg("path_type") = PathType::FILE, py::arg("overwrite") = false)
         .def_readwrite("src", &TransferTask::src)
         .def_readwrite("src_host", &TransferTask::src_host)
         .def_readwrite("dst", &TransferTask::dst)
@@ -4077,7 +4119,8 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("size", &TransferTask::size)
         .def_readwrite("path_type", &TransferTask::path_type)
         .def_readwrite("IsSuccess", &TransferTask::IsSuccess)
-        .def_readwrite("rc", &TransferTask::rc);
+        .def_readwrite("rc", &TransferTask::rc)
+        .def_readwrite("overwrite", &TransferTask::overwrite);
 
     py::class_<BaseSFTPClient, std::shared_ptr<BaseSFTPClient>>(m, "BaseSFTPClient")
         .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"), py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
@@ -4094,7 +4137,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("Connect", &BaseSFTPClient::Connect)
         .def("Disconnect", &BaseSFTPClient::Disconnect)
         .def("EnsureConnect", &BaseSFTPClient::EnsureConnect)
-        .def("GetOSType", &BaseSFTPClient::GetOSType);
+        .def("GetOSType", &BaseSFTPClient::GetOSType, py::arg("update") = false);
 
     py::class_<AMSFTPClient, BaseSFTPClient, std::shared_ptr<AMSFTPClient>>(m, "AMSFTPClient")
         .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"), py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
@@ -4142,7 +4185,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("IsRunning", &AMSFTPWorker::IsRunning)
         .def("reset", &AMSFTPWorker::reset)
         .def("set_cb_interval", &AMSFTPWorker::set_cb_interval, py::arg("interval_s"))
-        .def("load_tasks", &AMSFTPWorker::load_tasks, py::arg("src"), py::arg("dst"), py::arg("hostd"), py::arg("src_hostname") = "", py::arg("dst_hostname") = "", py::arg("overwrite") = false, py::arg("ignore_sepcial_file") = true)
+        .def("load_tasks", &AMSFTPWorker::load_tasks, py::arg("src"), py::arg("dst"), py::arg("hostd"), py::arg("src_hostname") = "", py::arg("dst_hostname") = "", py::arg("overwrite") = false, py::arg("mkdir") = true, py::arg("ignore_sepcial_file") = true)
         .def("transfer", &AMSFTPWorker::transfer, py::arg("tasks"), py::arg("hostd"), py::arg("chunk_large") = 16 * AMMB, py::arg("chunk_middle") = 2 * AMMB, py::arg("chunk_small") = 256 * AMKB);
 
     sub.def("IsAbs", &AMFS::IsAbs, py::arg("path"), py::arg("sep") = "")
@@ -4154,7 +4197,6 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("UnifyPathSep", &AMFS::UnifyPathSep, py::arg("path"), py::arg("sep") = "")
         .def("split", &AMFS::split, py::arg("path"))
         .def("resplit", &AMFS::resplit, py::arg("path"), py::arg("front_esc"), py::arg("back_esc"), py::arg("head") = "")
-        .def("realpath", &AMFS::realpath, py::arg("path"), py::arg("force_parsing") = false, py::arg("cwd") = "", py::arg("sep") = "")
         .def("abspath", &AMFS::abspath, py::arg("path"), py::arg("parsing_home") = true, py::arg("home") = "", py::arg("cwd") = "", py::arg("sep") = "")
         .def("dirname", &AMFS::dirname, py::arg("path"))
         .def("basename", &AMFS::basename, py::arg("path"))

@@ -13,7 +13,12 @@ module = Extension(
     sources=["amsftp.cpp"],
     language="c++",
     extra_compile_args=["/std:c++17", "/utf-8", "/Zc:__cplusplus"],
-    # library_dirs=["E:\\vcpkg\\installed\\x64-windows\\lib", r'E:\Softwares\Anaconda\envs\Launcher\libs'],
+    include_dirs=[
+        "D:\\Compiler\\vcpkg\\installed\\x64-windows\\include",
+    ],
+    library_dirs=[
+        "D:\\Compiler\\vcpkg\\installed\\x64-windows\\lib",
+    ],
     libraries=[
         "libssh2",
         "libcrypto",
@@ -23,6 +28,10 @@ module = Extension(
         "ws2_32",
         "fmt",
         "Advapi32",
+        "icuuc",
+        "icudt",
+        "icuin",
+        "icutu",
     ],
 )
 
