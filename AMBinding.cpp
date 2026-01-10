@@ -1,0 +1,318 @@
+#include "AMCore.hpp"
+#include "AMDataClass.hpp"
+#include "AMEnum.hpp"
+#include "AMPath.hpp"
+
+PYBIND11_MODULE(AMSFTP, m)
+{
+    m.doc() = "A SFTP Client Module Based on libssh2";
+    auto em = m.def_submodule("AMEnum", "Enum Classes");
+    auto data = m.def_submodule("AMData", "Data Classes");
+    auto fs = m.def_submodule("AMFS", "Local Filesystem Operations");
+
+    bool expected = false;
+    if (std::atomic_compare_exchange_strong(&is_wsa_initialized, &expected, true))
+    {
+        WSADATA wsaData;
+        int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+        if (result != 0)
+        {
+            throw std::runtime_error("WSAStartup failed");
+        }
+        is_wsa_initialized = true;
+        m.add_object("_cleanup", py::capsule(cleanup_wsa));
+    }
+
+    py::enum_<ErrorCode>(em, "ErrorCode", "Uniform Error Code for the whole module")
+        .value("Success", ErrorCode::Success)
+        .value("SessionCreateError", ErrorCode::SessionGenericError, "Negative code represent libssh2 session error")
+        .value("NoBannerRecv", ErrorCode::NoBannerRecv)
+        .value("BannerSendError", ErrorCode::BannerSendError)
+        .value("InvalidMacAdress", ErrorCode::InvalidMacAdress)
+        .value("KeyExchangeMethodNegotiationFailed", ErrorCode::KeyExchangeMethodNegotiationFailed)
+        .value("MemAllocError", ErrorCode::MemAllocError)
+        .value("SocketSendError", ErrorCode::SocketSendError)
+        .value("KeyExchangeFailed", ErrorCode::KeyExchangeFailed)
+        .value("OperationTimeout", ErrorCode::OperationTimeout)
+        .value("HostkeyInitFailed", ErrorCode::HostkeyInitFailed)
+        .value("HostkeySignFailed", ErrorCode::HostkeySignFailed)
+        .value("DataDecryptError", ErrorCode::DataDecryptError)
+        .value("SocketDisconnect", ErrorCode::SocketDisconnect)
+        .value("SSHProtocolError", ErrorCode::SSHProtocolError)
+        .value("PasswordExpired", ErrorCode::PasswordExpired)
+        .value("LocalFileError", ErrorCode::LocalFileError)
+        .value("NoAuthMethod", ErrorCode::NoAuthMethod)
+        .value("AuthFailed", ErrorCode::AuthFailed)
+        .value("PublickeyAuthFailed", ErrorCode::PublickeyAuthFailed)
+        .value("ChannelOrderError", ErrorCode::ChannelOrderError)
+        .value("ChannelOperationError", ErrorCode::ChannelOperationError)
+        .value("ChannelRequestDenied", ErrorCode::ChannelRequestDenied)
+        .value("ChannelWindowExceeded", ErrorCode::ChannelWindowExceeded)
+        .value("ChannelPacketOversize", ErrorCode::ChannelPacketOversize)
+        .value("ChannelClosed", ErrorCode::ChannelClosed)
+        .value("ChannelAlreadySendEOF", ErrorCode::ChannelAlreadySendEOF)
+        .value("SCPProtocolError", ErrorCode::SCPProtocolError)
+        .value("ZlibCompressError", ErrorCode::ZlibCompressError)
+        .value("SocketOperationTimeout", ErrorCode::SocketOperationTimeout)
+        .value("SftpProtocolError", ErrorCode::SftpProtocolError)
+        .value("RequestDenied", ErrorCode::RequestDenied)
+        .value("InvalidArg", ErrorCode::InvalidArg)
+        .value("InvalidPollType", ErrorCode::InvalidPollType)
+        .value("PublicKeyProtocolError", ErrorCode::PublicKeyProtocolError)
+        .value("SSHEAGAIN", ErrorCode::SSHEAGAIN)
+        .value("BufferTooSmall", ErrorCode::BufferTooSmall)
+        .value("BadOperationOrder", ErrorCode::BadOperationOrder)
+        .value("CompressionError", ErrorCode::CompressionError)
+        .value("PointerOverflow", ErrorCode::PointerOverflow)
+        .value("SSHAgentProtocolError", ErrorCode::SSHAgentProtocolError)
+        .value("SocketRecvError", ErrorCode::SocketRecvError)
+        .value("DataEncryptError", ErrorCode::DataEncryptError)
+        .value("InvalidSocketType", ErrorCode::InvalidSocketType)
+        .value("HostFingerprintMismatch", ErrorCode::HostFingerprintMismatch)
+        .value("ChannelWindowFull", ErrorCode::ChannelWindowFull)
+        .value("PrivateKeyAuthFailed", ErrorCode::PrivateKeyAuthFailed)
+        .value("RandomGenError", ErrorCode::RandomGenError)
+        .value("MissingUserAuthBanner", ErrorCode::MissingUserAuthBanner)
+        .value("AlgorithmUnsupported", ErrorCode::AlgorithmUnsupported)
+        .value("MacAuthFailed", ErrorCode::MacAuthFailed)
+        .value("HashInitError", ErrorCode::HashInitError)
+        .value("HashCalculateError", ErrorCode::HashCalculateError)
+        // positive code represent libssh2 sftp error
+        .value("EndOfFile", ErrorCode::EndOfFile, "Positive code represent libssh2 sftp error")
+        .value("FileNotExist", ErrorCode::FileNotExist)
+        .value("PermissionDenied", ErrorCode::PermissionDenied)
+        .value("CommonFailure", ErrorCode::CommonFailure)
+        .value("BadMessageFormat", ErrorCode::BadMessageFormat)
+        .value("NoConnection", ErrorCode::NoConnection)
+        .value("ConnectionLost", ErrorCode::ConnectionLost)
+        .value("OperationUnsupported", ErrorCode::OperationUnsupported)
+        .value("InvalidHandle", ErrorCode::InvalidHandle)
+        .value("PathNotExist", ErrorCode::PathNotExist)
+        .value("PathAlreadyExists", ErrorCode::PathAlreadyExists)
+        .value("FileWriteProtected", ErrorCode::FileWriteProtected)
+        .value("StorageMediaUnavailable", ErrorCode::StorageMediaUnavailable)
+        .value("FilesystemNoSpace", ErrorCode::FilesystemNoSpace)
+        .value("SpaceQuotaExceed", ErrorCode::SpaceQuotaExceed)
+        .value("UsernameNotExists", ErrorCode::UsernameNotExists)
+        .value("PathUsingByOthers", ErrorCode::PathUsingByOthers)
+        .value("DirNotEmpty", ErrorCode::DirNotEmpty)
+        .value("NotADirectory", ErrorCode::NotADirectory)
+        .value("InvalidFilename", ErrorCode::InvalidFilename)
+        .value("SymlinkLoop", ErrorCode::SymlinkLoop)
+        // following codes are AM Custom Error
+        .value("UnknownError", ErrorCode::UnknownError, "Code greater than 22 are AM Custom Error")
+        .value("SocketCreateError", ErrorCode::SocketCreateError)
+        .value("SocketConnectTimeout", ErrorCode::SocketConnectTimeout)
+        .value("SocketConnectFailed", ErrorCode::SocketConnectFailed)
+        .value("SessionCreateFailed", ErrorCode::SessionCreateFailed)
+        .value("SessionHandshakeFailed", ErrorCode::SessionHandshakeFailed)
+        .value("NoSession", ErrorCode::NoSession)
+        .value("NotAFile", ErrorCode::NotAFile)
+        .value("ParentDirectoryNotExist", ErrorCode::ParentDirectoryNotExist)
+        .value("InhostCopyFailed", ErrorCode::InhostCopyFailed)
+        .value("LocalFileMapError", ErrorCode::LocalFileMapError)
+        .value("UnexpectedEOF", ErrorCode::UnexpectedEOF)
+        .value("Terminate", ErrorCode::Terminate)
+        .value("UnImplentedMethod", ErrorCode::UnImplentedMethod)
+        .value("NoPermissionAttribute", ErrorCode::NoPermissionAttribute)
+        .value("LocalStatError", ErrorCode::LocalStatError)
+        .value("TransferPause", ErrorCode::TransferPause)
+        .value("DNSResolveError", ErrorCode::DNSResolveError);
+
+    py::enum_<OS_TYPE>(em, "OS_TYPE", "System OS Type Enum")
+        .value("Windows", OS_TYPE::Windows)
+        .value("Linux", OS_TYPE::Linux)
+        .value("MacOS", OS_TYPE::MacOS)
+        .value("FreeBSD", OS_TYPE::FreeBSD)
+        .value("Unix", OS_TYPE::Unix)
+        .value("Unknown", OS_TYPE::Unknown)
+        .value("Uncertain", OS_TYPE::Uncertain, "Set when get OS type failed");
+
+    py::enum_<TraceLevel>(em, "TraceLevel")
+        .value("Info", TraceLevel::Info)
+        .value("Debug", TraceLevel::Debug)
+        .value("Warning", TraceLevel::Warning)
+        .value("Error", TraceLevel::Error)
+        .value("Critical", TraceLevel::Critical);
+
+    py::enum_<PathType>(em, "PathType")
+        .value("DIR", PathType::DIR)
+        .value("FILE", PathType::FILE)
+        .value("SYMLINK", PathType::SYMLINK)
+        .value("BLOCK_DEVICE", PathType::BlockDevice)
+        .value("CHARACTER_DEVICE", PathType::CharacterDevice)
+        .value("SOCKET", PathType::Socket)
+        .value("FIFO", PathType::FIFO)
+        .value("UNKNOWN", PathType::Unknown);
+
+    py::enum_<TransferControl>(em, "TransferControl", "Using in progress callback to control the transfer task")
+        .value("Pause", TransferControl::Pause)
+        .value("Terminate", TransferControl::Terminate);
+
+    py::class_<ConRequst>(data, "ConRequst", "Connection Request DataClass")
+        .def(py::init<std::string, std::string, std::string, int, std::string, std::string, bool, size_t, std::string>(), py::arg("nickname"), py::arg("hostname"), py::arg("username"), py::arg("port"), py::arg("password") = "", py::arg("keyfile") = "", py::arg("compression") = false, py::arg("timeout_s") = 3, py::arg("trash_dir") = "")
+        .def_readwrite("nickname", &ConRequst::nickname, "Unique nickname for the host and connection")
+        .def_readwrite("hostname", &ConRequst::hostname, "Hostname or IP address of the remote server")
+        .def_readwrite("username", &ConRequst::username, "Username for authentication")
+        .def_readwrite("password", &ConRequst::password, "Password for authentication, if not provided, public key authentication will be used")
+        .def_readwrite("port", &ConRequst::port, "Port number of the remote server, default is 22")
+        .def_readwrite("compression", &ConRequst::compression, "Whether to use compression, default is false")
+        .def_readwrite("timeout_s", &ConRequst::timeout_s, "Timeout in seconds, default is 3")
+        .def_readwrite("trash_dir", &ConRequst::trash_dir, "Trash directory for failed transfers, default is empty")
+        .def_readwrite("keyfile", &ConRequst::keyfile, "Dedicated key file for this host");
+
+    py::class_<TransferCallback>(data, "TransferCallback", "Callback function Gather")
+        .def(py::init<py::object, py::object, py::object>(),
+             py::arg("total_size") = py::none(),
+             py::arg("error") = py::none(),
+             py::arg("progress") = py::none())
+        .def("SetErrorCB", &TransferCallback::SetErrorCB, py::arg("error") = py::none(), "callable[[ErrorCBInfo], None]")
+        .def("SetProgressCB", &TransferCallback::SetProgressCB, py::arg("progress") = py::none(), "callable[[ProgressCBInfo], Optional[TransferControl]]")
+        .def("SetTotalSizeCB", &TransferCallback::SetTotalSizeCB, py::arg("total_size") = py::none(), "callable[[int], None]");
+
+    py::class_<ProgressCBInfo>(data, "ProgressCBInfo", "Progress Callback Info DataClass")
+        .def(py::init<std::string, std::string, std::string, std::string, uint64_t, uint64_t, uint64_t, uint64_t>(), py::arg("src"), py::arg("dst"), py::arg("src_host"), py::arg("dst_host"), py::arg("this_size"), py::arg("file_size"), py::arg("accumulated_size"), py::arg("total_size"))
+        .def_readwrite("src", &ProgressCBInfo::src)
+        .def_readwrite("dst", &ProgressCBInfo::dst)
+        .def_readwrite("src_host", &ProgressCBInfo::src_host)
+        .def_readwrite("dst_host", &ProgressCBInfo::dst_host)
+        .def_readwrite("this_size", &ProgressCBInfo::this_size, "Size of the current file transfered")
+        .def_readwrite("file_size", &ProgressCBInfo::file_size)
+        .def_readwrite("accumulated_size", &ProgressCBInfo::accumulated_size, "Size of the total files transfered")
+        .def_readwrite("total_size", &ProgressCBInfo::total_size);
+
+    py::class_<ErrorCBInfo>(data, "ErrorCBInfo")
+        .def(py::init<ECM, std::string, std::string, std::string, std::string>(), py::arg("ecm"), py::arg("src"), py::arg("dst"), py::arg("src_host"), py::arg("dst_host"))
+        .def_readwrite("ecm", &ErrorCBInfo::ecm)
+        .def_readwrite("src", &ErrorCBInfo::src)
+        .def_readwrite("dst", &ErrorCBInfo::dst)
+        .def_readwrite("src_host", &ErrorCBInfo::src_host)
+        .def_readwrite("dst_host", &ErrorCBInfo::dst_host);
+
+    py::class_<AuthCBInfo>(data, "AuthCBInfo")
+        .def(py::init<bool, ConRequst, int>(), py::arg("NeedPassword"), py::arg("request"), py::arg("trial_times"))
+        .def_readwrite("NeedPassword", &AuthCBInfo::NeedPassword, "If true, python password callback need to return password, if false, callback function just tells you the password is wrong")
+        .def_readwrite("request", &AuthCBInfo::request, "Connection request data")
+        .def_readwrite("trial_times", &AuthCBInfo::trial_times, "Number of times the password has been tried");
+
+    py::class_<TransferTask>(data, "TransferTask")
+        .def(py::init<std::string, std::string, std::string, std::string, uint64_t, PathType, bool>(), py::arg("src"), py::arg("src_host"), py::arg("dst"), py::arg("dst_host"), py::arg("size"), py::arg("path_type") = PathType::FILE, py::arg("overwrite") = false)
+        .def_readwrite("src", &TransferTask::src)
+        .def_readwrite("src_host", &TransferTask::src_host)
+        .def_readwrite("dst", &TransferTask::dst)
+        .def_readwrite("dst_host", &TransferTask::dst_host)
+        .def_readwrite("size", &TransferTask::size)
+        .def_readwrite("path_type", &TransferTask::path_type)
+        .def_readwrite("IsSuccess", &TransferTask::IsSuccess)
+        .def_readwrite("rc", &TransferTask::rc)
+        .def_readwrite("overwrite", &TransferTask::overwrite);
+
+    py::class_<TraceInfo>(data, "TraceInfo", "Trace Information DataClass")
+        .def(py::init<TraceLevel, ErrorCode, std::string, std::string, std::string>(), py::arg("level"), py::arg("error_code"), py::arg("target"), py::arg("action"), py::arg("message"))
+        .def_readwrite("level", &TraceInfo::level)
+        .def_readwrite("error_code", &TraceInfo::error_code)
+        .def_readwrite("target", &TraceInfo::target)
+        .def_readwrite("action", &TraceInfo::action)
+        .def_readwrite("message", &TraceInfo::message)
+        .def_readwrite("timestamp", &TraceInfo::timestamp);
+
+    py::class_<PathInfo>(data, "PathInfo", "Path Information DataClass")
+        .def(py::init<std::string, std::string, std::string, std::string, uint64_t, double, double, double, PathType, uint64_t, std::string>(), py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("owner"), py::arg("size"), py::arg("create_time"), py::arg("access_time"), py::arg("modify_time"), py::arg("path_type") = PathType::FILE, py::arg("mode_int") = 0777, py::arg("mode_str") = "rwxrwxrwx")
+        .def_readwrite("name", &PathInfo::name)
+        .def_readwrite("path", &PathInfo::path)
+        .def_readwrite("dir", &PathInfo::dir)
+        .def_readwrite("owner", &PathInfo::owner)
+        .def_readwrite("size", &PathInfo::size)
+        .def_readwrite("create_time", &PathInfo::create_time, "Only Windows and MacOS has this attribute")
+        .def_readwrite("access_time", &PathInfo::access_time)
+        .def_readwrite("modify_time", &PathInfo::modify_time)
+        .def_readwrite("type", &PathInfo::type)
+        .def_readwrite("mode_int", &PathInfo::mode_int)
+        .def_readwrite("mode_str", &PathInfo::mode_str, "The mode of the path, like [rwxrwxrwx], [onwer、group、others]");
+
+    py::class_<BaseSFTPClient, std::shared_ptr<BaseSFTPClient>>(m, "BaseSFTPClient")
+        .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"), py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
+        .def("IsValidKey", &BaseSFTPClient::IsValidKey, py::arg("key"), "Check whether a file is a valid private key file")
+        .def("LastTraceError", &BaseSFTPClient::LastTraceError, "Get the last trace error, return Optional[TraceInfo]")
+        .def("GetAllTraceErrors", &BaseSFTPClient::GetAllTraceErrors, "Get all trace errors, return list[TraceInfo]")
+        .def("GetTraceNum", &BaseSFTPClient::GetTraceNum)
+        .def("GetTraceCapacity", &BaseSFTPClient::GetTraceCapacity, "Get the capacity of the trace buffer")
+        .def("GetTrashDir", &BaseSFTPClient::GetTrashDir)
+        .def("Nickname", &BaseSFTPClient::Nickname, "Get the nickname of the client")
+        .def("SetPyTrace", &BaseSFTPClient::SetPyTrace, py::arg("trace_cb") = py::none(), "Set the python trace callback, callable[TraceInfo, None]")
+        .def("SetAuthCallback", &BaseSFTPClient::SetAuthCallback, py::arg("auth_cb") = py::none(), "When password authentication is needed, this callback will be called, callable[[AuthCBInfo], bool]")
+        .def("Check", &BaseSFTPClient::Check)
+        .def("Connect", &BaseSFTPClient::Connect)
+        .def("Disconnect", &BaseSFTPClient::Disconnect)
+        .def("EnsureConnect", &BaseSFTPClient::EnsureConnect)
+        .def("GetOSType", &BaseSFTPClient::GetOSType, py::arg("update") = false, "Update will force to re-detect the OS type");
+
+    py::class_<AMSFTPClient, BaseSFTPClient, std::shared_ptr<AMSFTPClient>>(m, "AMSFTPClient", "Core SFTP Client Class")
+        .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"), py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
+        .def("SetTrashDir", &AMSFTPClient::SetTrashDir, py::arg("trash_dir") = "", "Set the trash directory and create it if it doesn't exist")
+        .def("EnsureTrashDir", &AMSFTPClient::EnsureTrashDir)
+        .def("chmod", &AMSFTPClient::chmod, py::arg("path"), py::arg("mode"), py::arg("recursive") = false)
+        .def("realpath", &AMSFTPClient::realpath, py::arg("path"), "Parse and return the absolute path, ~ in client will be parsed, .. and . will be parsed by server, if there are these symbols, the path must exist")
+        .def("GetHomeDir", &AMSFTPClient::GetHomeDir)
+        .def("stat", &AMSFTPClient::stat, py::arg("path"))
+        .def("get_path_type", &AMSFTPClient::get_path_type, py::arg("path"))
+        .def("exists", &AMSFTPClient::exists, py::arg("path"))
+        .def("is_regular", &AMSFTPClient::is_regular, py::arg("path"))
+        .def("is_dir", &AMSFTPClient::is_dir, py::arg("path"))
+        .def("is_symlink", &AMSFTPClient::is_symlink, py::arg("path"))
+        .def("listdir", &AMSFTPClient::listdir, py::arg("path"), py::arg("max_time_ms") = -1)
+        .def("mkdir", &AMSFTPClient::mkdir, py::arg("path"))
+        .def("mkdirs", &AMSFTPClient::mkdirs, py::arg("path"))
+        .def("rmfile", &AMSFTPClient::rmfile, py::arg("path"))
+        .def("rmdir", &AMSFTPClient::rmdir, py::arg("path"))
+        .def("remove", &AMSFTPClient::remove, py::arg("path"), "Permanently remove a file or directory, if return (ErrorCode, str), the whole operation failed, otherwise return list[tuple[str, tuple[ErrorCode, str]]], means some paths failed to remove")
+        .def("saferm", &AMSFTPClient::saferm, py::arg("path"), "Not real remove, just move it to {trash_dir}/{year-month-day-hour-minute-second}/{pathname}")
+        .def("rename", &AMSFTPClient::rename, py::arg("src"), py::arg("dst"), py::arg("overwrite") = false, "Turn src_path into dst_path, if overwrite is true, the dst_path will be overwritten")
+        .def("move", &AMSFTPClient::move, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false, py::arg("force_write") = false, "Move source path src to Destination Directory dst")
+        .def("copy", &AMSFTPClient::copy, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false, "Unstable, using shell command to copy")
+        .def("iwalk", &AMSFTPClient::iwalk, py::arg("path"), py::arg("ignore_sepcial_file") = true, "Recursive walk the path, ignore path structure, just return list[PathInfo]")
+        .def("walk", &AMSFTPClient::walk, py::arg("path"), py::arg("max_depth") = -1, py::arg("ignore_sepcial_file") = true, "Recursive walk the path, record parent dir, return list[tuple[list[str],PathInfo]]")
+        .def("getsize", &AMSFTPClient::getsize, py::arg("path"), py::arg("ignore_sepcial_file") = true);
+
+    py::class_<Hostd>(data, "Hostd", "A dictionary for storing clients")
+        .def(py::init<>())
+        .def("reset", &Hostd::reset, "Clear ths host status record")
+        .def("add_host", &Hostd::add_host, py::arg("hostname"), py::arg("client"), py::arg("overwrite") = false)
+        .def("remove_host", &Hostd::remove_host, py::arg("hostname"))
+        .def("get_host", &Hostd::get_host, py::arg("hostname"))
+        .def("get_hosts", &Hostd::get_hosts, "Just return all hostnames")
+        .def("test_host", &Hostd::test_host, py::arg("hostname"), "Test the host connection, return (ErrorCode, str)");
+
+    py::class_<AMSFTPWorker>(m, "AMSFTPWorker", "A worker for transferring files")
+        .def(py::init<TransferCallback, float>(), py::arg("callback") = TransferCallback(), py::arg("cb_interval_s") = 0.1)
+        .def("terminate", &AMSFTPWorker::terminate)
+        .def("pause", &AMSFTPWorker::pause)
+        .def("resume", &AMSFTPWorker::resume)
+        .def("IsTerminate", &AMSFTPWorker::IsTerminate)
+        .def("IsPause", &AMSFTPWorker::IsPause)
+        .def("IsRunning", &AMSFTPWorker::IsRunning)
+        .def("reset", &AMSFTPWorker::reset, "Rset Internal Status like is_terminate, is_pause, current_size, total_size")
+        .def("set_cb_interval", &AMSFTPWorker::set_cb_interval, py::arg("interval_s"), "Set the interval of the callback in seconds, default is 0.1s")
+        .def("load_tasks", &AMSFTPWorker::load_tasks, py::arg("src"), py::arg("dst"), py::arg("hostd"), py::arg("src_hostname") = "", py::arg("dst_hostname") = "", py::arg("overwrite") = false, py::arg("mkdir") = true, py::arg("ignore_sepcial_file") = true)
+        .def("transfer", &AMSFTPWorker::transfer, py::arg("tasks"), py::arg("hostd"), py::arg("chunk_large") = 16 * AMMB, py::arg("chunk_middle") = 2 * AMMB, py::arg("chunk_small") = 256 * AMKB);
+
+    fs.def("IsAbs", &AMFS::IsAbs, py::arg("path"), py::arg("sep") = "")
+        .def("HomePath", &AMFS::HomePath)
+        .def("extname", &AMFS::extname, py::arg("path"))
+        .def("split_basename", &AMFS::split_basename, py::arg("basename"), "return tuple[str, str], the first is the basename without extension, the second is the extension(no .)")
+        .def("CWD", &AMFS::CWD)
+        .def("FormatTime", &AMFS::FormatTime, py::arg("time"), py::arg("format") = "%Y-%m-%d %H:%M:%S")
+        .def("UnifyPathSep", &AMFS::UnifyPathSep, py::arg("path"), py::arg("sep") = "")
+        .def("split", &AMFS::split, py::arg("path"), "return list[str], the path is split by separator")
+        .def("abspath", &AMFS::abspath, py::arg("path"), py::arg("parsing_home") = true, py::arg("home") = "", py::arg("cwd") = "", py::arg("sep") = "")
+        .def("dirname", &AMFS::dirname, py::arg("path"))
+        .def("basename", &AMFS::basename, py::arg("path"))
+        .def("mkdirs", &AMFS::mkdirs, py::arg("path"))
+        .def("stat", &AMFS::stat, py::arg("path"), py::arg("trace_link") = false)
+        .def("listdir", &AMFS::listdir, py::arg("path"))
+        .def("iwalk", &AMFS::iwalk, py::arg("path"), py::arg("ignore_sepcial_file") = true)
+        .def("walk", &AMFS::walk, py::arg("path"), py::arg("max_depth") = -1, py::arg("ignore_sepcial_file") = true)
+        .def("extname", &AMFS::extname, py::arg("path"))
+        .def("getsize", &AMFS::getsize, py::arg("path"), py::arg("trace_link") = false)
+        .def("resplit", &AMFS::resplit, py::arg("path"), py::arg("front_esc"), py::arg("back_esc"), py::arg("head") = "");
+}

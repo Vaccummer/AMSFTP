@@ -13,7 +13,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <unicode/unistr.h>
 #include <variant>
 
 // 第三方库头文件（跨平台，需链接 fmt 库）
@@ -76,9 +75,10 @@ namespace AMFS
         Windows = 1
     };
 
-    namespace Str
+    class Str
     {
-        std::wstring AMStr(const std::string &str)
+    public:
+        static std::wstring AMStr(const std::string &str)
         {
             std::wstring_convert<std::codecvt_utf8<wchar_t>, wchar_t> converter;
             try
@@ -91,7 +91,7 @@ namespace AMFS
             }
         }
 
-        std::string AMStr(const std::wstring &wstr)
+        static std::string AMStr(const std::wstring &wstr)
         {
             std::wstring_convert<std::codecvt_utf8<wchar_t>, wchar_t> converter;
             try
@@ -104,29 +104,85 @@ namespace AMFS
             }
         }
 
-        std::string AMStr(wchar_t *wstr)
+        static std::string AMStr(wchar_t *wstr)
         {
             return AMStr(std::wstring(wstr));
         }
 
-        std::wstring AMStr(char *str)
+        static std::wstring AMStr(char *str)
         {
             return AMStr(std::string(str));
         }
 
-        size_t CharNum(const std::string &utf8_str)
+        static size_t CharNum(const std::string &utf8_str)
         {
-            try
+            const size_t str_len = utf8_str.size();
+            size_t char_count = 0;
+            size_t idx = 0;
+
+            while (idx < str_len)
             {
-                return icu::UnicodeString::fromUTF8(utf8_str).length();
+                const uint8_t current = static_cast<uint8_t>(utf8_str[idx]);
+
+                if ((current & 0x80) == 0)
+                {
+                    ++char_count;
+                    ++idx;
+                }
+                else if ((current & 0xE0) == 0xC0 && idx + 1 < str_len)
+                {
+                    // 尝试匹配2字节字符，无效则按单字节计数
+                    const uint8_t next = static_cast<uint8_t>(utf8_str[idx + 1]);
+                    if ((next & 0xC0) == 0x80)
+                    {
+                        ++char_count;
+                        idx += 2;
+                        continue;
+                    }
+                    ++char_count;
+                    ++idx;
+                }
+                else if ((current & 0xF0) == 0xE0 && idx + 2 < str_len)
+                {
+                    // 尝试匹配3字节字符
+                    const uint8_t next1 = static_cast<uint8_t>(utf8_str[idx + 1]);
+                    const uint8_t next2 = static_cast<uint8_t>(utf8_str[idx + 2]);
+                    if ((next1 & 0xC0) == 0x80 && (next2 & 0xC0) == 0x80)
+                    {
+                        ++char_count;
+                        idx += 3;
+                        continue;
+                    }
+                    ++char_count;
+                    ++idx;
+                }
+                else if ((current & 0xF8) == 0xF0 && idx + 3 < str_len)
+                {
+                    // 尝试匹配4字节字符
+                    const uint8_t next1 = static_cast<uint8_t>(utf8_str[idx + 1]);
+                    const uint8_t next2 = static_cast<uint8_t>(utf8_str[idx + 2]);
+                    const uint8_t next3 = static_cast<uint8_t>(utf8_str[idx + 3]);
+                    if ((next1 & 0xC0) == 0x80 && (next2 & 0xC0) == 0x80 && (next3 & 0xC0) == 0x80)
+                    {
+                        ++char_count;
+                        idx += 4;
+                        continue;
+                    }
+                    ++char_count;
+                    ++idx;
+                }
+                else
+                {
+                    // 无效字节，按单字符计数
+                    ++char_count;
+                    ++idx;
+                }
             }
-            catch (const std::exception &e)
-            {
-                return utf8_str.size();
-            }
+
+            return char_count;
         }
 
-        std::pair<bool, int> endswith(const std::string &str, const std::string &suffix)
+        static std::pair<bool, int> endswith(const std::string &str, const std::string &suffix)
         {
             if (suffix.empty())
                 return std::make_pair(true, str.size());
@@ -135,7 +191,7 @@ namespace AMFS
             return std::make_pair(str.compare(str.size() - suffix.size(), suffix.size(), suffix) == 0, str.size() - suffix.size());
         }
 
-        std::pair<bool, std::string> isPatternsValid(const std::vector<std::string> &patterns)
+        static std::pair<bool, std::string> isPatternsValid(const std::vector<std::string> &patterns)
         {
             std::regex pattern_f;
             for (auto pattern : patterns)
@@ -167,7 +223,7 @@ namespace AMFS
             return std::make_pair(true, "");
         }
 
-        std::string ModeTrans(uint64_t mode_int)
+        static std::string ModeTrans(uint64_t mode_int)
         {
             // 把mode_int转换为8进制字符串, 长度为9
             if (mode_int > 0777 || mode_int == 0777)
@@ -211,7 +267,7 @@ namespace AMFS
             return out;
         }
 
-        uint64_t ModeTrans(std::string mode_str)
+        static uint64_t ModeTrans(std::string mode_str)
         {
             std::regex pattern("^[r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-]$");
             if (!std::regex_match(mode_str, pattern))
@@ -229,7 +285,7 @@ namespace AMFS
             return mode_int;
         }
 
-        std::string MergeModeStr(const std::string &base_mode_str, const std::string &new_mode_str)
+        static std::string MergeModeStr(const std::string &base_mode_str, const std::string &new_mode_str)
         {
             std::string pattern_f = "^[r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-]$";
             std::regex pattern(pattern_f);
@@ -252,17 +308,17 @@ namespace AMFS
             return mode_str;
         }
 
-        bool IsModeValid(std::string mode_str)
+        static bool IsModeValid(std::string mode_str)
         {
             return std::regex_match(mode_str, std::regex("^[r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-]$"));
         }
 
-        bool IsModeValid(uint64_t mode_int)
+        static bool IsModeValid(uint64_t mode_int)
         {
             return mode_int <= 0777;
         }
 
-        std::string RegexEscape(const std::string &input)
+        static std::string RegexEscape(const std::string &input)
         {
             std::string escaped;
             escaped.reserve(input.size() * 2); // 预分配内存优化性能
@@ -297,7 +353,7 @@ namespace AMFS
             return escaped;
         }
 
-        std::string Strip(std::string path)
+        static std::string Strip(std::string path)
         {
             const std::string trim_chars = " \t\n\r\"'";
 
@@ -312,7 +368,7 @@ namespace AMFS
             return path.substr(start, end - start + 1);
         }
 
-        void VStrip(std::string &path)
+        static void VStrip(std::string &path)
         {
             const std::string trim_chars = " \t\n\r\"'";
 
@@ -326,7 +382,7 @@ namespace AMFS
             path = path.substr(start, end - start + 1);
         }
 
-        std::string GetPathSep(const std::string &path)
+        static std::string GetPathSep(const std::string &path)
         {
             if (path[0] == '/')
             {
@@ -352,7 +408,7 @@ namespace AMFS
             return slash_count < anti_slash_count ? "\\" : "/";
         }
 
-        bool _match(const std::string &name, const std::string &pattern_f, const bool &use_regex)
+        static bool _match(const std::string &name, const std::string &pattern_f, const bool &use_regex)
         {
             std::string pattern = pattern_f;
             if (!use_regex || pattern.front() != '<')
@@ -398,7 +454,7 @@ namespace AMFS
         double access_time;   // 最近访问时间
     };
 
-    bool is_valid_utf8(const std::string &str)
+    inline bool is_valid_utf8(const std::string &str)
     {
         int remaining = 0;
         for (unsigned char c : str)
@@ -426,66 +482,14 @@ namespace AMFS
         return (remaining == 0);
     }
 
-    std::string AMStr(const std::wstring &wstr)
-    {
-        int codePage = GetACP();
-        int len = WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
-        if (len <= 0)
-            return "";
-        std::string result(len - 1, 0);
-        WideCharToMultiByte(codePage, 0, wstr.c_str(), -1, &result[0], len, nullptr, nullptr);
-        return result;
-    };
-
-    std::string AMStr(const wchar_t *wstr)
-    {
-        int codePage = GetACP();
-        int len = WideCharToMultiByte(codePage, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
-        if (len <= 0)
-            return "";
-        std::string result(len - 1, 0);
-        WideCharToMultiByte(codePage, 0, wstr, -1, &result[0], len, nullptr, nullptr);
-        return result;
-    }
-
-    std::wstring AMStr(const std::string &str)
-    {
-        int codePage = CP_ACP;
-        if (is_valid_utf8(str))
-        {
-            codePage = CP_UTF8;
-        }
-        int len = MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, nullptr, 0);
-        if (len <= 0)
-            return L"";
-        std::wstring result(len - 1, 0);
-        MultiByteToWideChar(codePage, 0, str.c_str(), -1, &result[0], len);
-        return result;
-    };
-
-    std::wstring AMStr(const char *str)
-    {
-        int codePage = CP_ACP;
-        if (is_valid_utf8(str))
-        {
-            codePage = CP_UTF8;
-        }
-        int len = MultiByteToWideChar(CP_ACP, 0, str, -1, nullptr, 0);
-        if (len <= 0)
-            return L"";
-        std::wstring result(len - 1, 0);
-        MultiByteToWideChar(codePage, 0, str, -1, &result[0], len);
-        return result;
-    }
-
-    double FileTimeToUnixTime(const FILETIME &ft)
+    inline double FileTimeToUnixTime(const FILETIME &ft)
     {
         const int64_t UNIX_EPOCH_DIFF = 11644473600LL; // 1601-01-01 到 1970-01-01 的秒数
         int64_t filetime_100ns = (static_cast<int64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
         return static_cast<double>(filetime_100ns) / 1e7 - UNIX_EPOCH_DIFF;
     }
 
-    std::string GetFileOwner(const std::wstring &path)
+    inline std::string GetFileOwner(const std::wstring &path)
     {
         PSID pSidOwner = NULL;
         PSECURITY_DESCRIPTOR pSD = NULL;
@@ -535,10 +539,10 @@ namespace AMFS
             LocalFree(pSD);
         }
 
-        return AMStr(owner);
+        return Str::AMStr(owner);
     }
 
-    std::tuple<double, double, double> GetTime(const std::wstring &path)
+    inline std::tuple<double, double, double> GetTime(const std::wstring &path)
     {
         std::wstring wpath(path.begin(), path.end());
 
@@ -556,7 +560,7 @@ namespace AMFS
             FileTimeToUnixTime(find_data.ftLastAccessTime));
     }
 
-    bool is_readonly(const std::wstring &path)
+    inline bool is_readonly(const std::wstring &path)
     {
         DWORD attributes = GetFileAttributesW(path.c_str());
         if (attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_READONLY)
@@ -567,7 +571,7 @@ namespace AMFS
     }
 #endif
 
-    double timespec_to_double(const struct timespec &ts)
+    inline double timespec_to_double(const struct timespec &ts)
     {
         return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
     }
@@ -591,7 +595,7 @@ namespace AMFS
         PathInfo(std::string name, std::string path, std::string dir, std::string owner, uint64_t size, double create_time, double access_time, double modify_time, PathType type, uint64_t mode_int, std::string mode_str) : name(name), path(path), dir(dir), owner(owner), size(size), create_time(create_time), access_time(access_time), modify_time(modify_time), type(type), mode_int(mode_int), mode_str(mode_str) {}
     };
 
-    std::string FormatTime(const uint64_t &time, const std::string &format = "%Y-%m-%d %H:%M:%S")
+    inline std::string FormatTime(const uint64_t &time, const std::string &format = "%Y-%m-%d %H:%M:%S")
     {
         time_t timeT = static_cast<time_t>(time);
 
@@ -612,7 +616,7 @@ namespace AMFS
         };
     }
 
-    std::string UnifyPathSep(std::string path, std::string sep = "")
+    inline std::string UnifyPathSep(std::string path, std::string sep = "")
     {
         path = Str::Strip(path);
         if (Str::CharNum(path) < 2)
@@ -631,19 +635,19 @@ namespace AMFS
         return head + path;
     }
 
-    bool IsAbs(const std::string &path, const std::string &sep = "")
+    inline bool IsAbs(const std::string &path, const std::string &sep = "")
     {
         return std::regex_search(UnifyPathSep(path, sep), std::regex("^(?:[A-Za-z]:[/\\\\]?|/|[\\\\/]{2}|~[\\\\/])"));
     }
 
-    std::string HomePath()
+    inline std::string HomePath()
     {
 #ifdef _WIN32
         // Windows: 优先使用API
         wchar_t path[MAX_PATH];
         if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_PROFILE, NULL, 0, path)))
         {
-            return AMStr(path);
+            return Str::AMStr(path);
         }
         // 备选环境变量
         const char *userprofile = std::getenv("USERPROFILE");
@@ -664,7 +668,7 @@ namespace AMFS
         return "";
     }
 
-    std::string extname(const std::string &path)
+    inline std::string extname(const std::string &path)
     {
         std::string base = Str::Strip(path);
         std::string ext = "";
@@ -688,7 +692,7 @@ namespace AMFS
         }
     }
 
-    std::pair<std::string, std::string> split_basename(const std::string &basename)
+    inline std::pair<std::string, std::string> split_basename(const std::string &basename)
     {
         std::string base = Str::Strip(basename);
         std::string ext = "";
@@ -714,12 +718,12 @@ namespace AMFS
         }
     }
 
-    std::string CWD()
+    inline std::string CWD()
     {
         return fs::current_path().string();
     }
 
-    std::vector<std::string> split(std::string path)
+    inline std::vector<std::string> split(std::string path)
     {
         if (Str::CharNum(path) < 2)
         {
@@ -774,7 +778,7 @@ namespace AMFS
         return result;
     }
 
-    std::vector<std::string> resplit(std::string path, char front_esc, char back_esc, std::string head = "")
+    inline std::vector<std::string> resplit(std::string path, char front_esc, char back_esc, std::string head = "")
     {
         if (Str::CharNum(path) < 3)
         {
@@ -1019,11 +1023,11 @@ namespace AMFS
     // }
 
     // 将路径转换为绝对路径，支持解析~ . ..符号， 不要求路径存在
-    std::string abspath(const std::string &path,
-                        const bool parsing_home = true,
-                        const std::string &home = "",
-                        const std::string &cwd = "",
-                        const std::string &sep = "")
+    inline std::string abspath(const std::string &path,
+                               const bool parsing_home = true,
+                               const std::string &home = "",
+                               const std::string &cwd = "",
+                               const std::string &sep = "")
     {
         std::string new_path = UnifyPathSep(path, sep);
 
@@ -1118,7 +1122,7 @@ namespace AMFS
         return result;
     }
 
-    std::string dirname(const std::string &path)
+    inline std::string dirname(const std::string &path)
     {
         fs::path p(path);
         if (p.parent_path().empty())
@@ -1128,7 +1132,7 @@ namespace AMFS
         return p.parent_path().string();
     }
 
-    std::string basename(const std::string &path)
+    inline std::string basename(const std::string &path)
     {
         std::string pathf = Str::Strip(path);
         while ((pathf.back() == '/' || pathf.back() == '\\') && path.size() > 1)
@@ -1139,7 +1143,7 @@ namespace AMFS
         return p.filename().string();
     }
 
-    std::string mkdirs(const std::string &path)
+    inline std::string mkdirs(const std::string &path)
     {
         try
         {
@@ -1153,7 +1157,7 @@ namespace AMFS
         }
     }
 
-    std::pair<std::string, PathInfo> stat(const std::string &path, bool trace_link = false)
+    inline std::pair<std::string, PathInfo> stat(const std::string &path, bool trace_link = false)
     {
         PathInfo info;
         std::string pathf = abspath(path);
@@ -1265,7 +1269,7 @@ namespace AMFS
         return std::make_pair("", info);
     }
 
-    std::vector<PathInfo> listdir(const std::string &path)
+    inline std::vector<PathInfo> listdir(const std::string &path)
     {
         std::string pathf = abspath(path);
         std::vector<PathInfo> result = {};
@@ -1291,7 +1295,7 @@ namespace AMFS
         return result;
     }
 
-    void _iwalk(const std::string &path, std::vector<PathInfo> &result, bool ignore_sepcial_file)
+    inline void _iwalk(const std::string &path, std::vector<PathInfo> &result, bool ignore_sepcial_file)
     {
         auto [error, info] = stat(path);
         if (!error.empty())
@@ -1327,7 +1331,7 @@ namespace AMFS
         }
     }
 
-    void _walk(std::vector<std::string> parts, std::vector<std::pair<std::vector<std::string>, PathInfo>> &result, int cur_depth, int max_depth, bool ignore_sepcial_file)
+    inline void _walk(std::vector<std::string> parts, std::vector<std::pair<std::vector<std::string>, PathInfo>> &result, int cur_depth, int max_depth, bool ignore_sepcial_file)
     {
         if (max_depth > 0 && cur_depth > max_depth)
         {
@@ -1383,7 +1387,7 @@ namespace AMFS
         }
     }
 
-    std::vector<PathInfo> iwalk(const std::string &path, bool ignore_sepcial_file = true)
+    inline std::vector<PathInfo> iwalk(const std::string &path, bool ignore_sepcial_file = true)
     {
         std::vector<PathInfo> result = {};
 
@@ -1392,7 +1396,7 @@ namespace AMFS
         return result;
     }
 
-    std::vector<std::pair<std::vector<std::string>, PathInfo>> walk(const std::string &path, int max_depth, bool ignore_sepcial_file)
+    inline std::vector<std::pair<std::vector<std::string>, PathInfo>> walk(const std::string &path, int max_depth, bool ignore_sepcial_file)
     {
         std::vector<std::pair<std::vector<std::string>, PathInfo>> result = {};
         std::vector<std::string> parts = {path};
@@ -1402,7 +1406,7 @@ namespace AMFS
         return result;
     }
 
-    void _getsize(const std::string &path, uint64_t &result, bool trace_link)
+    inline void _getsize(const std::string &path, uint64_t &result, bool trace_link)
     {
         fs::path p(path);
         if (!fs::exists(p))
@@ -1429,14 +1433,14 @@ namespace AMFS
         }
     }
 
-    uint64_t getsize(const std::string &path, bool trace_link = false)
+    inline uint64_t getsize(const std::string &path, bool trace_link = false)
     {
         uint64_t result = 0;
         _getsize(path, result, trace_link);
         return result;
     }
 
-    std::tuple<std::vector<std::string>, std::string, bool> preprocess(std::string path, bool use_regex)
+    inline std::tuple<std::vector<std::string>, std::string, bool> preprocess(std::string path, bool use_regex)
     {
 
         Str::VStrip(path);
@@ -1523,7 +1527,7 @@ namespace AMFS
         return std::make_tuple(match_parts, abspath(join(root_parts), false, "\\"), is_recursive);
     }
 
-    void search(std::vector<std::string> &results, fs::path root, std::string name, std::vector<std::string> remains, SearchType type, bool use_regex, bool silence, CB callback)
+    inline void search(std::vector<std::string> &results, fs::path root, std::string name, std::vector<std::string> remains, SearchType type, bool use_regex, bool silence, CB callback)
     {
         if (!remains.empty())
         {
@@ -1673,7 +1677,7 @@ namespace AMFS
         }
     }
 
-    std::vector<std::string> find(const std::string &path_f, SearchType type = SearchType::All, bool use_regex = false, bool silence = false, CB callback = nullptr)
+    inline std::vector<std::string> find(const std::string &path_f, SearchType type = SearchType::All, bool use_regex = false, bool silence = false, CB callback = nullptr)
     {
 
         std::string path = path_f;
