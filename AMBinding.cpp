@@ -154,7 +154,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("File", AMFS::SearchType::File)
         .value("Directory", AMFS::SearchType::Directory);
 
-    py::class_<ConRequst>(data, "ConRequst", "Connection Request DataClass")
+    py::class_<ConRequst, std::shared_ptr<ConRequst>>(data, "ConRequst", "Connection Request DataClass")
         .def(py::init<std::string, std::string, std::string, int, std::string, std::string, bool, size_t, std::string>(), py::arg("nickname"), py::arg("hostname"), py::arg("username"), py::arg("port"), py::arg("password") = "", py::arg("keyfile") = "", py::arg("compression") = false, py::arg("timeout_s") = 3, py::arg("trash_dir") = "")
         .def_readwrite("nickname", &ConRequst::nickname, "Unique nickname for the host and connection")
         .def_readwrite("hostname", &ConRequst::hostname, "Hostname or IP address of the remote server")
@@ -166,7 +166,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("trash_dir", &ConRequst::trash_dir, "Trash directory for failed transfers, default is empty")
         .def_readwrite("keyfile", &ConRequst::keyfile, "Dedicated key file for this host");
 
-    py::class_<TransferCallback>(data, "TransferCallback", "Callback function Gather")
+    py::class_<TransferCallback, std::shared_ptr<TransferCallback>>(data, "TransferCallback", "Callback function Gather")
         .def(py::init<py::object, py::object, py::object>(),
              py::arg("total_size") = py::none(),
              py::arg("error") = py::none(),
@@ -175,7 +175,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("SetProgressCB", &TransferCallback::SetProgressCB, py::arg("progress") = py::none(), "callable[[ProgressCBInfo], Optional[TransferControl]]")
         .def("SetTotalSizeCB", &TransferCallback::SetTotalSizeCB, py::arg("total_size") = py::none(), "callable[[int], None]");
 
-    py::class_<ProgressCBInfo>(data, "ProgressCBInfo", "Progress Callback Info DataClass")
+    py::class_<ProgressCBInfo, std::shared_ptr<ProgressCBInfo>>(data, "ProgressCBInfo", "Progress Callback Info DataClass")
         .def(py::init<std::string, std::string, std::string, std::string, uint64_t, uint64_t, uint64_t, uint64_t>(), py::arg("src"), py::arg("dst"), py::arg("src_host"), py::arg("dst_host"), py::arg("this_size"), py::arg("file_size"), py::arg("accumulated_size"), py::arg("total_size"))
         .def_readwrite("src", &ProgressCBInfo::src)
         .def_readwrite("dst", &ProgressCBInfo::dst)
@@ -186,7 +186,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("accumulated_size", &ProgressCBInfo::accumulated_size, "Size of the total files transfered")
         .def_readwrite("total_size", &ProgressCBInfo::total_size);
 
-    py::class_<ErrorCBInfo>(data, "ErrorCBInfo")
+    py::class_<ErrorCBInfo, std::shared_ptr<ErrorCBInfo>>(data, "ErrorCBInfo")
         .def(py::init<ECM, std::string, std::string, std::string, std::string>(), py::arg("ecm"), py::arg("src"), py::arg("dst"), py::arg("src_host"), py::arg("dst_host"))
         .def_readwrite("ecm", &ErrorCBInfo::ecm)
         .def_readwrite("src", &ErrorCBInfo::src)
@@ -194,13 +194,13 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("src_host", &ErrorCBInfo::src_host)
         .def_readwrite("dst_host", &ErrorCBInfo::dst_host);
 
-    py::class_<AuthCBInfo>(data, "AuthCBInfo")
+    py::class_<AuthCBInfo, std::shared_ptr<AuthCBInfo>>(data, "AuthCBInfo")
         .def(py::init<bool, ConRequst, int>(), py::arg("NeedPassword"), py::arg("request"), py::arg("trial_times"))
         .def_readwrite("NeedPassword", &AuthCBInfo::NeedPassword, "If true, python password callback need to return password, if false, callback function just tells you the password is wrong")
         .def_readwrite("request", &AuthCBInfo::request, "Connection request data")
         .def_readwrite("trial_times", &AuthCBInfo::trial_times, "Number of times the password has been tried");
 
-    py::class_<TransferTask>(data, "TransferTask")
+    py::class_<TransferTask, std::shared_ptr<TransferTask>>(data, "TransferTask")
         .def(py::init<std::string, std::string, std::string, std::string, uint64_t, PathType, bool>(), py::arg("src"), py::arg("src_host"), py::arg("dst"), py::arg("dst_host"), py::arg("size"), py::arg("path_type") = PathType::FILE, py::arg("overwrite") = false)
         .def_readwrite("src", &TransferTask::src)
         .def_readwrite("src_host", &TransferTask::src_host)
@@ -212,7 +212,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("rc", &TransferTask::rc)
         .def_readwrite("overwrite", &TransferTask::overwrite);
 
-    py::class_<TraceInfo>(data, "TraceInfo", "Trace Information DataClass")
+    py::class_<TraceInfo, std::shared_ptr<TraceInfo>>(data, "TraceInfo", "Trace Information DataClass")
         .def(py::init<TraceLevel, ErrorCode, std::string, std::string, std::string, std::string>(), py::arg("level"), py::arg("error_code"), py::arg("nickname"), py::arg("target"), py::arg("action"), py::arg("message"))
         .def_readwrite("level", &TraceInfo::level)
         .def_readwrite("error_code", &TraceInfo::error_code)
@@ -222,7 +222,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("message", &TraceInfo::message)
         .def_readwrite("timestamp", &TraceInfo::timestamp);
 
-    py::class_<PathInfo>(data, "PathInfo", "Path Information DataClass")
+    py::class_<PathInfo, std::shared_ptr<PathInfo>>(data, "PathInfo", "Path Information DataClass")
         .def(py::init<std::string, std::string, std::string, std::string, uint64_t, double, double, double, PathType, uint64_t, std::string>(), py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("owner"), py::arg("size"), py::arg("create_time"), py::arg("access_time"), py::arg("modify_time"), py::arg("path_type") = PathType::FILE, py::arg("mode_int") = 0777, py::arg("mode_str") = "rwxrwxrwx")
         .def_readwrite("name", &PathInfo::name)
         .def_readwrite("path", &PathInfo::path)
@@ -253,7 +253,16 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("EnsureConnect", &BaseSFTPClient::EnsureConnect)
         .def("GetOSType", &BaseSFTPClient::GetOSType, py::arg("update") = false, "Update will force to re-detect the OS type");
 
-    py::class_<AMSFTPClient, BaseSFTPClient, std::shared_ptr<AMSFTPClient>>(m, "AMSFTPClient", "Core SFTP Client Class")
+    py::class_<AMFS::BasePathMatch, std::shared_ptr<AMFS::BasePathMatch>>(fs, "BasePathMatch", "Base Path Match Class")
+        .def("str_match", &AMFS::BasePathMatch::str_match, py::arg("name"), py::arg("pattern"))
+        .def("name_match", &AMFS::BasePathMatch::name_match, py::arg("name"), py::arg("pattern"))
+        .def("walk_match", &AMFS::BasePathMatch::walk_match, py::arg("parts"), py::arg("match_parts"))
+        .def("find", &AMFS::BasePathMatch::find, py::arg("path"), py::arg("type") = AMFS::SearchType::All);
+
+    py::class_<AMFS::PathMatch, std::shared_ptr<AMFS::PathMatch>, AMFS::BasePathMatch>(fs, "PathMatch", "Path Match Class")
+        .def(py::init<>());
+
+    py::class_<AMSFTPClient, std::shared_ptr<AMSFTPClient>, BaseSFTPClient, AMFS::BasePathMatch>(m, "AMSFTPClient", "Core SFTP Client Class")
         .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"), py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
         .def("SetTrashDir", &AMSFTPClient::SetTrashDir, py::arg("trash_dir") = "", "Set the trash directory and create it if it doesn't exist")
         .def("EnsureTrashDir", &AMSFTPClient::EnsureTrashDir)
@@ -280,7 +289,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("walk", &AMSFTPClient::walk, py::arg("path"), py::arg("max_depth") = -1, py::arg("ignore_sepcial_file") = true, "Recursive walk the path, record parent dir, return list[tuple[list[str],PathInfo]]")
         .def("getsize", &AMSFTPClient::getsize, py::arg("path"), py::arg("ignore_sepcial_file") = true);
 
-    py::class_<Hostd>(data, "Hostd", "A dictionary for storing clients")
+    py::class_<Hostd, std::shared_ptr<Hostd>>(data, "Hostd", "A dictionary for storing clients")
         .def(py::init<>())
         .def("reset", &Hostd::reset, "Clear ths host status record")
         .def("add_host", &Hostd::add_host, py::arg("hostname"), py::arg("client"), py::arg("overwrite") = false)
@@ -289,7 +298,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("get_hosts", &Hostd::get_hosts, "Just return all hostnames")
         .def("test_host", &Hostd::test_host, py::arg("hostname"), "Test the host connection, return (ErrorCode, str)");
 
-    py::class_<AMSFTPWorker>(m, "AMSFTPWorker", "A worker for transferring files")
+    py::class_<AMSFTPWorker, std::shared_ptr<AMSFTPWorker>>(m, "AMSFTPWorker", "A worker for transferring files")
         .def(py::init<TransferCallback, float>(), py::arg("callback") = TransferCallback(), py::arg("cb_interval_s") = 0.1)
         .def("terminate", &AMSFTPWorker::terminate)
         .def("pause", &AMSFTPWorker::pause)
@@ -321,13 +330,4 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("extname", &AMFS::extname, py::arg("path"))
         .def("getsize", &AMFS::getsize, py::arg("path"), py::arg("trace_link") = false)
         .def("resplit", &AMFS::resplit, py::arg("path"), py::arg("front_esc"), py::arg("back_esc"), py::arg("head") = "");
-
-    py::class_<AMFS::BasePathMatch>(fs, "BasePathMatch", "Base Path Match Class")
-        .def("str_match", &AMFS::BasePathMatch::str_match, py::arg("name"), py::arg("pattern"))
-        .def("name_match", &AMFS::BasePathMatch::name_match, py::arg("name"), py::arg("pattern"))
-        .def("walk_match", &AMFS::BasePathMatch::walk_match, py::arg("parts"), py::arg("match_parts"))
-        .def("find", &AMFS::BasePathMatch::find, py::arg("path"), py::arg("type") = AMFS::SearchType::All);
-
-    py::class_<AMFS::PathMatch, AMFS::BasePathMatch>(fs, "PathMatch", "Path Match Class")
-        .def(py::init<>());
 };

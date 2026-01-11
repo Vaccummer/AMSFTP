@@ -2166,11 +2166,16 @@ public:
         return host_list;
     }
 
-    void add_host(std::string host, std::shared_ptr<AMSFTPClient> client, bool overwrite = false)
+    void add_host(const std::string &host, std::shared_ptr<AMSFTPClient> client, bool overwrite = false)
     {
-        if (hosts.find(host) != hosts.end() && !overwrite)
+        if (hosts.find(host) != hosts.end())
         {
-            return;
+            if (!overwrite)
+            {
+                return;
+            }
+            hosts.erase(host);
+            host_status.erase(host);
         }
         hosts[host] = client;
     }
@@ -2204,7 +2209,7 @@ public:
         }
         if (hosts.find(host) == hosts.end())
         {
-            return ECM{EC::NoSession, "Client not found"};
+            return ECM{EC::NoSession, fmt::format("Client not found: {}", host)};
         }
         if (host_status.find(host) != host_status.end())
         {
