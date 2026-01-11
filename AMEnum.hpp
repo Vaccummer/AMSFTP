@@ -153,8 +153,8 @@ enum class TransferControl
 
 enum class TraceLevel
 {
-    Info = 2,
-    Debug = 1,
+    Debug = 2,
+    Info = 1,
     Warning = 0,
     Error = -1,
     Critical = -2,

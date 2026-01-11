@@ -106,34 +106,13 @@ public:
         }
     }
 
-    void trace(std::string level, EC error_code, std::string target = "", std::string action = "", std::string msg = "")
+    void trace(const TraceLevel &level, const EC &error_code, const std::string &target = "", const std::string &action = "", const std::string &msg = "")
     {
         if (is_pause.load())
         {
             return;
         }
-        TraceLevel level_2 = TraceLevel::Info;
-        if (level == AMCRITICAL)
-        {
-            level_2 = TraceLevel::Critical;
-        }
-        else if (level == AMERROR)
-        {
-            level_2 = TraceLevel::Error;
-        }
-        else if (level == AMWARNING)
-        {
-            level_2 = TraceLevel::Warning;
-        }
-        else if (level == AMDEBUG)
-        {
-            level_2 = TraceLevel::Debug;
-        }
-        else if (level == AMINFO)
-        {
-            level_2 = TraceLevel::Info;
-        }
-        TraceInfo trace_info(level_2, error_code, nickname, target, action, msg);
+        TraceInfo trace_info(level, error_code, nickname, target, action, msg);
         this->push(trace_info);
         if (is_py_trace.load())
         {
@@ -210,6 +189,7 @@ public:
 
     void LoadDefaultPrivateKeys()
     {
+        trace(TraceLevel::Debug, EC::Success, request.nickname, "LoadDefaultPrivateKeys", "Shared private keys not provided, loading default private keys from ~/.ssh");
         auto listd = AMFS::listdir("~/.ssh");
         for (auto &info : listd)
         {
@@ -239,7 +219,7 @@ public:
 
         if (!connector.Connect(request.hostname, request.port, request.timeout_s))
         {
-            trace(AMCRITICAL, connector.error_code, request.nickname, "ConnectSocket", connector.error_msg);
+            trace(TraceLevel::Critical, connector.error_code, request.nickname, "ConnectSocket", connector.error_msg);
             return {connector.error_code, connector.error_msg};
         }
         sock = connector.sock;
@@ -248,7 +228,7 @@ public:
         has_connected = true;
         if (!session)
         {
-            trace(AMCRITICAL, EC::SessionCreateFailed, request.nickname, "SessionInit", "Session initialization failed");
+            trace(TraceLevel::Critical, EC::SessionCreateFailed, request.nickname, "SessionInit", "Session initialization failed");
             return {EC::SessionCreateFailed, "Libssh2 Session initialization failed"};
         }
 
@@ -266,7 +246,7 @@ public:
         {
             msg = fmt::format("Session handshake failed: {}", GetLastErrorMsg());
             rc = GetLastEC();
-            trace(AMCRITICAL, rc, request.nickname, "SessionHandshake", msg);
+            trace(TraceLevel::Critical, rc, request.nickname, "SessionHandshake", msg);
             return {rc, msg};
         }
 
@@ -276,9 +256,10 @@ public:
         {
             msg = fmt::format("Fail to negotiate authentication method: {}", GetLastErrorMsg());
             rc = GetLastEC();
-            trace(AMCRITICAL, rc, request.nickname, "GetAuthList", msg);
+            trace(TraceLevel::Critical, rc, request.nickname, "GetAuthList", msg);
             return {rc, msg};
         }
+        trace(TraceLevel::Debug, EC::Success, request.nickname, "GetAuthList", fmt::format("Authentication methods: {}", auth_list));
 
         bool password_auth = false;
         if (strstr(auth_list, "password") != NULL)
@@ -291,59 +272,68 @@ public:
         std::string password_tmp;
         if (!request.keyfile.empty())
         {
+            trace(TraceLevel::Debug, EC::Success, request.nickname, "PrivateKeyAuthorize", fmt::format("Using dedicated private key: {}", request.keyfile));
             rcr = libssh2_userauth_publickey_fromfile(session, request.username.c_str(), nullptr, request.keyfile.c_str(), nullptr);
             if (rcr == 0)
             {
                 rc = EC::Success;
                 msg = "";
-                trace(AMINFO, EC::Success, request.nickname, "PublicKeyAuthorize", fmt::format("Public key \"{}\" authorize success", request.keyfile));
+                trace(TraceLevel::Info, EC::Success, request.nickname, "PrivateKeyAuthorize", fmt::format("Dedicated private key \"{}\" authorize success", request.keyfile));
                 goto OK;
             }
             else
             {
-                msg = fmt::format("Public key \"{}\" authorize failed: {}", request.keyfile, GetLastErrorMsg());
+                msg = fmt::format("Dedicated private key \"{}\" authorize failed: {}", request.keyfile, GetLastErrorMsg());
                 rc = GetLastEC();
-                trace(AMWARNING, rc, request.nickname, "PublicKeyAuthorize", msg);
+                trace(TraceLevel::Debug, rc, request.nickname, "PrivateKeyAuthorize", msg);
             }
         }
         if (!request.password.empty() && password_auth)
         {
+            trace(TraceLevel::Debug, EC::Success, request.nickname, "PasswordAuthorize", fmt::format("Using  password to authorize: {}", request.password));
             rcr = libssh2_userauth_password(session, request.username.c_str(), request.password.c_str());
             if (rcr == 0)
             {
                 rc = EC::Success;
                 msg = "";
-                trace(AMINFO, EC::Success, request.nickname, "PasswordAuthorize", "Password authorize success");
+                trace(TraceLevel::Info, EC::Success, request.nickname, "PasswordAuthorize", "Password authorize success");
                 goto OK;
             }
             else
             {
                 rc = EC::AuthFailed;
-                trace(AMWARNING, EC::AuthFailed, request.nickname, "PasswordAuthorize", "Wrong Password");
+                trace(TraceLevel::Debug, EC::AuthFailed, request.nickname, "PasswordAuthorize", fmt::format("Wrong Password: {}", request.password));
             }
         }
         if (!private_keys.empty())
         {
+            trace(TraceLevel::Debug, EC::Success, request.nickname, "PrivateKeyAuthorize", fmt::format("Using shared private keys to authorize"));
             for (auto private_key : private_keys)
             {
+                if (private_key == request.keyfile)
+                {
+                    continue;
+                }
+
                 rcr = libssh2_userauth_publickey_fromfile(session, request.username.c_str(), nullptr, private_key.c_str(), nullptr);
                 if (rcr == 0)
                 {
-                    msg = fmt::format("Public key \"{}\" authorize success", private_key);
-                    trace(AMINFO, EC::Success, request.nickname, "PublicKeyAuthorize", msg);
+                    msg = fmt::format("Shared private key \"{}\" authorize success", private_key);
+                    trace(TraceLevel::Info, EC::Success, request.nickname, "PrivateKeyAuthorize", msg);
                     rc = EC::Success;
                     goto OK;
                 }
                 else
                 {
-                    msg = fmt::format("Public key \"{}\" authorize failed", private_key);
-                    trace(AMWARNING, EC::PrivateKeyAuthFailed, request.nickname, "PublicKeyAuthorize", msg);
+                    msg = fmt::format("Shared private key \"{}\" authorize failed", private_key);
+                    trace(TraceLevel::Debug, EC::PrivateKeyAuthFailed, request.nickname, "PrivateKeyAuthorize", msg);
                 }
             }
         }
 
         if (password_auth_cb && password_auth)
         {
+            trace(TraceLevel::Debug, EC::Success, request.nickname, "PasswordAuthorize", "Using password authentication callback to get another password");
             int trial_times = 0;
             while (trial_times < 2)
             {
@@ -361,12 +351,12 @@ public:
                 {
                     rc = EC::Success;
                     msg = "";
-                    trace(AMINFO, EC::Success, request.nickname, "PasswordAuthorize", "Password authorize success");
+                    trace(TraceLevel::Info, EC::Success, request.nickname, "PasswordAuthorize", "Password authorize success");
                     goto OK;
                 }
                 else
                 {
-                    trace(AMWARNING, EC::AuthFailed, request.nickname, "PasswordAuthorize", "Wrong Password");
+                    trace(TraceLevel::Debug, EC::AuthFailed, request.nickname, "PasswordAuthorize", fmt::format("Wrong Password: {}", password_tmp));
                     {
                         py::gil_scoped_acquire acquire;
                         auth_cb(false, request, trial_times);
@@ -378,7 +368,7 @@ public:
     OK:
         if (rc != EC::Success)
         {
-            trace(AMCRITICAL, EC::AuthFailed, request.nickname, "FinalAuthorizeState", "All authorize methods failed");
+            trace(TraceLevel::Critical, EC::AuthFailed, request.nickname, "FinalAuthorizeState", "All authorize methods failed");
             return {rc, "All authorize methods failed"};
         }
 
@@ -387,7 +377,7 @@ public:
         {
             rc = GetLastEC();
             msg = fmt::format("SFTP initialization failed: {}", GetLastErrorMsg());
-            trace(AMCRITICAL, rc, request.nickname, "SFTPInitialization", msg);
+            trace(TraceLevel::Critical, rc, request.nickname, "SFTPInitialization", msg);
 
             return {rc, msg};
         }
@@ -399,13 +389,13 @@ public:
     {
         if (!sftp)
         {
-            trace(AMCRITICAL, EC::NoConnection, "Sftp", "SFTPCheck", "SFTP not initialized");
+            trace(TraceLevel::Critical, EC::NoConnection, "Sftp", "SFTPCheck", "SFTP not initialized");
             return {EC::NoConnection, "SFTP not initialized"};
         }
 
         if (!session)
         {
-            trace(AMCRITICAL, EC::NoSession, "Session", "SessionCheck", "Session not initialized");
+            trace(TraceLevel::Critical, EC::NoSession, "Session", "SessionCheck", "Session not initialized");
             return {EC::NoSession, "Session not initialized"};
         }
 
@@ -418,11 +408,11 @@ public:
         if (rcr < 0)
         {
             EC rc = GetLastEC();
-            trace(AMERROR, rc, "home_path", "Check", "Sftp status check failed");
+            trace(TraceLevel::Error, rc, "home_path", "Check", "Sftp status check failed");
             return std::make_pair(rc, "Sftp status check failed");
         }
 
-        trace(AMINFO, EC::Success, fmt::format("{}@{}", request.nickname, "SSHSeesion"), "Check", "");
+        trace(TraceLevel::Info, EC::Success, fmt::format("{}@{}", request.nickname, "SSHSeesion"), "Check", "Session status check success");
         return {EC::Success, ""};
     }
 
@@ -536,7 +526,7 @@ public:
         clean();
     }
 
-    void trace(std::string level, EC error_code, std::string target = "", std::string action = "", std::string msg = "")
+    void trace(const TraceLevel &level, const EC &error_code, const std::string &target = "", const std::string &action = "", const std::string &msg = "")
     {
         amtracer->trace(level, error_code, target, action, msg);
     }
@@ -661,7 +651,7 @@ public:
         this->amsession = std::make_shared<AMSession>(request, keys, amtracer, auth_cb);
     }
 
-    void trace(std::string level, EC error_code, std::string target = "", std::string action = "", std::string msg = "")
+    void trace(TraceLevel level, EC error_code, std::string target = "", std::string action = "", std::string msg = "")
     {
         amtracer->trace(level, error_code, target, action, msg);
     }
@@ -868,7 +858,7 @@ public:
     virtual ECM EnsureTrashDir() { return {EC::Success, ""}; };
 };
 
-class AMSFTPClient : public BaseSFTPClient
+class AMSFTPClient : public BaseSFTPClient, public AMFS::BasePathMatch
 {
 private:
     std::map<long, std::string> user_id_map;
@@ -961,7 +951,7 @@ private:
         {
             rc = GetLastEC();
             msg = fmt::format("stat {} failed: {}", path, GetLastErrorMsg());
-            trace(AMWARNING, rc, fmt::format("{}@{}", request.nickname, path), "stat", msg);
+            trace(TraceLevel::Error, rc, fmt::format("{}@{}", request.nickname, path), "stat", msg);
             return {ECM{rc, msg}, PathInfo()};
         }
 
@@ -986,9 +976,10 @@ private:
             EC rc = GetLastEC();
             std::string msg_tmp = GetLastErrorMsg();
             std::string msg = fmt::format("Path: {} rmfile failed: {}", path, msg_tmp);
-            trace(AMWARNING, rc, fmt::format("{}@{}", request.nickname, path), "Rmfile", msg_tmp);
+            trace(TraceLevel::Error, rc, fmt::format("{}@{}", request.nickname, path), "Rmfile", msg_tmp);
             return {rc, msg};
         }
+        trace(TraceLevel::Warning, EC::Success, fmt::format("{}@{}", request.nickname, path), "Rmfile", fmt::format("Permanently remove file: {}", path));
         return {EC::Success, ""};
     }
 
@@ -1313,12 +1304,36 @@ private:
         }
     }
 
+    // 用于AMFS::BasePathMatch
+    std::pair<bool, PathInfo> istat(const std::string &path) override
+    {
+        auto [rcm, sr] = stat(path);
+        if (rcm.first != EC::Success)
+        {
+            return std::make_pair(false, PathInfo());
+        }
+        return std::make_pair(true, sr);
+    }
+    std::vector<PathInfo> ilistdir(const std::string &path) override
+    {
+        auto [rcm, sr] = listdir(path);
+        if (rcm.first != EC::Success)
+        {
+            return std::vector<PathInfo>();
+        }
+        return sr;
+    }
+    std::vector<PathInfo> iiwalk(const std::string &path) override
+    {
+        return iwalk(path);
+    }
+
 public:
     ~AMSFTPClient()
     {
     }
 
-    AMSFTPClient(ConRequst request, std::vector<std::string> keys, unsigned int error_num = 10, py::object trace_cb = py::none(), py::object auth_cb = py::none()) : BaseSFTPClient(request, keys, error_num, trace_cb, auth_cb)
+    AMSFTPClient(ConRequst request, std::vector<std::string> keys, unsigned int error_num = 10, py::object trace_cb = py::none(), py::object auth_cb = py::none()) : BaseSFTPClient(request, keys, error_num, trace_cb, auth_cb), AMFS::BasePathMatch()
     {
     }
 
@@ -1383,7 +1398,7 @@ public:
         if (res.first != EC::Success)
         {
             is_trash_dir_ensure = false;
-            trace(AMINFO, EC::Success, fmt::format("{}@{}", request.nickname, "TrashDir"), "EnsureTrashDir", fmt::format("Fail to set trash_dir to: \"{}\"", tmp_trash_dir));
+            trace(TraceLevel::Critical, EC::Success, fmt::format("{}@{}", request.nickname, "TrashDir"), "EnsureTrashDir", fmt::format("Fail to set trash_dir to: \"{}\"", tmp_trash_dir));
             return res;
         }
         else
@@ -1420,7 +1435,7 @@ public:
         {
             EC rc = GetLastEC();
             std::string msg = fmt::format("realpath {} failed: {}", pathf, GetLastErrorMsg());
-            trace(AMERROR, rc, fmt::format("{}@{}", request.nickname, pathf), "Realpath", msg);
+            trace(TraceLevel::Error, rc, fmt::format("{}@{}", request.nickname, pathf), "Realpath", msg);
             return {ECM{rc, msg}, ""};
         }
         else
@@ -1634,7 +1649,7 @@ public:
         if (!sftp_handle)
         {
             std::string tmp_msg = GetLastErrorMsg();
-            trace(AMWARNING, EC::InvalidHandle, fmt::format("{}@{}", request.nickname, path), "ListDir", tmp_msg);
+            trace(TraceLevel::Error, EC::InvalidHandle, fmt::format("{}@{}", request.nickname, path), "ListDir", tmp_msg);
             msg = fmt::format("Path: {} handle open failed: {}", pathf, tmp_msg);
             rc = EC::InvalidHandle;
             goto clean;
@@ -1662,7 +1677,7 @@ public:
             {
                 rc = GetLastEC();
                 std::string tmp_msg = GetLastErrorMsg();
-                trace(AMWARNING, rc, fmt::format("{}@{}", request.nickname, path), "ListDir", tmp_msg);
+                trace(TraceLevel::Error, rc, fmt::format("{}@{}", request.nickname, path), "ListDir", tmp_msg);
                 msg = fmt::format("Path: {} readdir failed: {}", pathf, tmp_msg);
                 goto clean;
             }
@@ -1738,7 +1753,7 @@ public:
             EC rc = GetLastEC();
             std::string msg_tmp = GetLastErrorMsg();
             msg = fmt::format("Path: {} mkdir failed: {}", pathf, msg_tmp);
-            trace(AMWARNING, rc, fmt::format("{}@{}", request.nickname, pathf), "Mkdir", msg_tmp);
+            trace(TraceLevel::Error, rc, fmt::format("{}@{}", request.nickname, pathf), "Mkdir", msg_tmp);
             return {rc, msg};
         }
         return {EC::Success, ""};
@@ -1798,6 +1813,7 @@ public:
         std::string msg = "";
         if (rcm.first != EC::Success)
         {
+            trace(TraceLevel::Error, rcm.first, fmt::format("{}@{}", request.nickname, path), "rmfile", rcm.second);
             return rcm;
         }
         else
@@ -1806,7 +1822,8 @@ public:
             switch (type)
             {
             case PathType::DIR:
-                msg = fmt::format("Path is not a file: {}", path);
+                msg = fmt::format("Path is not a dir but use rmfile: {}", path);
+                trace(TraceLevel::Warning, EC::NotAFile, fmt::format("{}@{}", request.nickname, path), "rmfile", msg);
                 return {EC::NotAFile, msg};
             case PathType::SYMLINK:
             {
@@ -1851,9 +1868,10 @@ public:
             rc = GetLastEC();
             std::string tmp_msg = GetLastErrorMsg();
             msg = fmt::format("Path: {} rmdir failed: {}", path, tmp_msg);
-            trace(AMWARNING, rc, fmt::format("{}@{}", request.nickname, path), "Rmdir", tmp_msg);
+            trace(TraceLevel::Error, rc, fmt::format("{}@{}", request.nickname, path), "Rmdir", tmp_msg);
             return {rc, msg};
         }
+        trace(TraceLevel::Warning, EC::Success, fmt::format("{}@{}", request.nickname, path), "rmdir", fmt::format("Permanently remove directory: {}", path));
         return {EC::Success, ""};
     }
 
@@ -2063,7 +2081,7 @@ public:
         if (!channel.channel)
         {
             std::string msg = fmt::format("Channel creation failed: {}", channel.error_msg);
-            trace(AMCRITICAL, channel.error_code, fmt::format("{}@{}", request.nickname, srcf), "Copy", msg);
+            trace(TraceLevel::Error, channel.error_code, fmt::format("{}@{}", request.nickname, srcf), "Copy", msg);
             return {channel.error_code, msg};
         }
         auto [rcm3, resp] = channel.ConductCmd(command);
@@ -2076,7 +2094,7 @@ public:
         if (resp.second != 0)
         {
             std::string msg = fmt::format("Copy cmd conducted failed with exit code: {}, error: {}", resp.second, resp.first);
-            trace(AMWARNING, EC::InhostCopyFailed, fmt::format("{}@{}->{}", request.nickname, srcf, dstf), "Copy", msg);
+            trace(TraceLevel::Error, EC::InhostCopyFailed, fmt::format("{}@{}->{}", request.nickname, srcf, dstf), "Copy", msg);
             return {EC::InhostCopyFailed, msg};
         }
 
@@ -2319,7 +2337,7 @@ private:
         {
             std::string msg = fmt::format("Failed to open remote file: {}, cause {}", dst, client->GetLastErrorMsg());
             rc_r = client->GetLastEC();
-            client->trace(AMERROR, rc_r, fmt::format("{}@{}", client->request.nickname, dst), "Remote2Local", msg);
+            client->trace(TraceLevel::Error, rc_r, fmt::format("{}@{}", client->request.nickname, dst), "Remote2Local", msg);
             return {rc_r, msg};
         }
 
@@ -2413,7 +2431,7 @@ private:
         {
             rc_r = client->GetLastEC();
             std::string msg = fmt::format("Failed to open remote file: {}, cause {}", src, client->GetLastErrorMsg());
-            client->trace(AMERROR, rc_r, fmt::format("{}@{}", client->request.nickname, src), "Remote2Local", msg);
+            client->trace(TraceLevel::Error, rc_r, fmt::format("{}@{}", client->request.nickname, src), "Remote2Local", msg);
             return {rc_r, msg};
         }
 
@@ -2425,7 +2443,7 @@ private:
             rc_r = client->GetLastEC();
             error_msg = fmt::format("Failed to get remote file size, cause {}", src, client->GetLastErrorMsg());
             libssh2_sftp_close_handle(sftpFile);
-            client->trace(AMERROR, rc_r, fmt::format("{}@{}", client->request.nickname, src), "Remote2Local", error_msg);
+            client->trace(TraceLevel::Error, rc_r, fmt::format("{}@{}", client->request.nickname, src), "Remote2Local", error_msg);
             return {rc_r, error_msg};
         }
 
@@ -2436,7 +2454,7 @@ private:
         {
             rc_r = EC::LocalFileMapError;
             libssh2_sftp_close_handle(sftpFile);
-            client->trace(AMERROR, rc_r, fmt::format("Local@{}", dst), "Remote2Local", error_msg);
+            client->trace(TraceLevel::Error, rc_r, fmt::format("Local@{}", dst), "Remote2Local", error_msg);
             return {rc_r, error_msg};
         }
 
@@ -2523,7 +2541,7 @@ private:
         {
             rc_final = src_worker->GetLastEC();
             error_msg = fmt::format("Failed to open src remote file: {}, cause {}", src, src_worker->GetLastErrorMsg());
-            src_worker->trace(AMERROR, rc_final, fmt::format("{}@{}", src_worker->request.nickname, src), "Remote2Remote", error_msg);
+            src_worker->trace(TraceLevel::Error, rc_final, fmt::format("{}@{}", src_worker->request.nickname, src), "Remote2Remote", error_msg);
             return {rc_final, error_msg};
         }
 
@@ -2533,7 +2551,7 @@ private:
             int errcode = libssh2_sftp_last_error(dst_session->sftp);
             rc_final = dst_worker->GetLastEC();
             error_msg = fmt::format("Failed to open dst remote file: {}, cause {}", dst, dst_worker->GetLastErrorMsg());
-            dst_worker->trace(AMERROR, rc_final, fmt::format("{}@{}", dst_worker->request.nickname, dst), "Remote2Remote", error_msg);
+            dst_worker->trace(TraceLevel::Error, rc_final, fmt::format("{}@{}", dst_worker->request.nickname, dst), "Remote2Remote", error_msg);
             return {rc_final, error_msg};
         }
 
