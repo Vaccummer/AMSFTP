@@ -8,17 +8,6 @@
 constexpr uint64_t AMKB = 1024;
 constexpr uint64_t AMMB = 1024 * 1024;
 constexpr uint64_t AMGB = 1024 * 1024 * 1024;
-constexpr char *AMLEVEL = "LEVEL";
-constexpr char *AMERRORCODE = "ERRORCODE";
-constexpr char *AMERRORNAME = "ERRORNAME";
-constexpr char *AMTARGET = "TARGET";
-constexpr char *AMACTION = "ACTION";
-constexpr char *AMMESSAGE = "MESSAGE";
-constexpr char *AMCRITICAL = "CRITICAL";
-constexpr char *AMERROR = "ERROR";
-constexpr char *AMWARNING = "WARNING";
-constexpr char *AMDEBUG = "DEBUG";
-constexpr char *AMINFO = "INFO";
 
 enum class ErrorCode
 {
