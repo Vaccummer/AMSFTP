@@ -1109,10 +1109,6 @@ namespace AMFS
         {
             return "";
         }
-        else if (new_parts.size() == 1)
-        {
-            return new_parts.front();
-        }
 
         for (int i = 0; i < new_parts.size(); i++)
         {
@@ -1248,7 +1244,7 @@ namespace AMFS
         // 调用 stat 获取文件元数据（支持符号链接，若需跟随链接用 stat 而非 lstat）
         if (stat(path.c_str(), &file_stat) == -1)
         {
-            return std::make_pair("", info);
+            return std::make_pair("Fail to stat file: " + std::string(strerror(errno)), info);
         }
 
         // 1. 拥有者和组（通过 UID/GID 转换）
@@ -1284,9 +1280,20 @@ namespace AMFS
             return result;
         }
         std::variant<PathInfo, std::pair<std::string, std::exception>> sr;
-        for (const auto &entry : fs::directory_iterator(p))
+        std::vector<std::string> dir_paths = {};
+        try
         {
-            auto [error, info] = stat(entry.path().string(), false);
+            for (const auto &entry : fs::directory_iterator(p))
+            {
+                dir_paths.push_back(entry.path().string());
+            }
+        }
+        catch (const fs::filesystem_error)
+        {
+        }
+        for (const auto &dir_path : dir_paths)
+        {
+            auto [error, info] = stat(dir_path, false);
             if (!error.empty())
             {
                 continue;
@@ -1669,7 +1676,6 @@ namespace AMFS
             }
             catch (const std::exception e)
             {
-                std::cout << "error: " << e.what() << std::endl;
                 if (!silence && callback)
                 {
                     (*callback)(root.string(), "IterdirFailed", e.what());
@@ -1801,14 +1807,26 @@ namespace AMFS
                 {
                     if (name_match(sub.name, cur_pattern))
                     {
-                        std::cout << "sucess match pattern: " << cur_pattern << " name: " << sub.name << std::endl;
                         _find(results, sub, new_parts3, type, sep);
                     }
-                    std::cout << "failed match pattern: " << cur_pattern << " name: " << sub.name << std::endl;
                 }
             }
 
             return;
+        }
+
+        std::string _rep(const std::string &str, const std::string &from, const std::string &to)
+        {
+            std::string result = str;
+            if (from.empty())
+                return result; // 避免空字符串导致无限循环
+            size_t pos = 0;
+            while ((pos = result.find(from, pos)) != std::string::npos)
+            {
+                result.replace(pos, from.length(), to);
+                pos += to.length(); // 跳过替换后的内容，防止重复替换（比如from是to的子串）
+            }
+            return result;
         }
 
     public:
@@ -1828,20 +1846,6 @@ namespace AMFS
                 std::wcout << "str_match pattern: " << w_pattern << " name: " << w_name << " error: " << e.what() << std::endl;
                 return false;
             }
-        }
-
-        std::string _rep(const std::string &str, const std::string &from, const std::string &to)
-        {
-            std::string result = str;
-            if (from.empty())
-                return result; // 避免空字符串导致无限循环
-            size_t pos = 0;
-            while ((pos = result.find(from, pos)) != std::string::npos)
-            {
-                result.replace(pos, from.length(), to);
-                pos += to.length(); // 跳过替换后的内容，防止重复替换（比如from是to的子串）
-            }
-            return result;
         }
 
         bool name_match(const std::string &name, const std::string &pattern)
