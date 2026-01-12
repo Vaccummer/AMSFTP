@@ -237,21 +237,59 @@ PYBIND11_MODULE(AMSFTP, m)
         .def_readwrite("mode_int", &PathInfo::mode_int)
         .def_readwrite("mode_str", &PathInfo::mode_str, "The mode of the path, like [rwxrwxrwx], [onwer、group、others]");
 
+    py::class_<AMTracer, std::shared_ptr<AMTracer>>(data, "AMTracer", "Trace Buffer Class")
+        .def(py::init<unsigned int, py::object, std::string>(), py::arg("buffer_capacity") = 10, py::arg("trace_cb") = py::none(), py::arg("nickname") = "")
+        .def("GetTracerSize", &AMTracer::GetTracerSize, "Get the size of the tracer")
+        .def("GetTracerCapacity", &AMTracer::GetTracerCapacity, "Get the capacity of the tracer")
+        .def("LastTrace", &AMTracer::LastTrace, "Get the last trace error, return Optional[TraceInfo]")
+        .def("GetAllTraces", &AMTracer::GetAllTraces, "Get all trace errors, return list[TraceInfo]")
+        .def("IsTracerEmpty", &AMTracer::IsTracerEmpty, "Check if the tracer is empty")
+        .def("ClearTracer", &AMTracer::ClearTracer, "Clear the tracer")
+        .def("SetTracerCapacity", &AMTracer::SetTracerCapacity, py::arg("capacity"), "Set the capacity of the tracer")
+        .def("trace", py::overload_cast<const TraceLevel &, const ErrorCode &, const std::string &, const std::string &, const std::string &>(&AMTracer::trace),
+             py::arg("trace_info"),
+             py::arg("error_code"),
+             py::arg("target"),
+             py::arg("action"),
+             py::arg("msg"),
+             "Trace a message")
+        .def("trace", py::overload_cast<const TraceInfo &>(&AMTracer::trace),
+             py::arg("trace_info"),
+             "Trace a message")
+        .def("PauseTrace", &AMTracer::PauseTrace, "Pause the trace")
+        .def("ResumeTrace", &AMTracer::ResumeTrace, "Resume the trace")
+        .def("SetPyTrace", &AMTracer::SetPyTrace, py::arg("trace_cb") = py::none(), "Set the python trace callback, callable[TraceInfo, None]");
+
+    py::class_<AMSession, std::shared_ptr<AMSession>, AMTracer>(m, "AMSession", "Session Class")
+        .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object, int>(),
+             py::arg("request"),
+             py::arg("keys"),
+             py::arg("error_num") = 10,
+             py::arg("trace_cb") = py::none(),
+             py::arg("auth_cb") = py::none(),
+             py::arg("heartbeat_interval_s") = 60)
+        .def("GetNickname", &AMSession::GetNickname, "Get the nickname of the session")
+        .def("GetRequest", &AMSession::GetRequest, "Get the request data")
+        .def("IsValidKey", &AMSession::IsValidKey, py::arg("key"), "Check whether a file is a valid private key file")
+        .def("AddKeys", &AMSession::AddKeys, py::arg("keys"), "Add private keys to the session")
+        .def("GetState", &AMSession::GetState, "Get the current state of the session")
+        .def("Check", &AMSession::Check, "Realtime check the session status and update the state")
+        .def("Connect", &AMSession::Connect, py::arg("force") = false, "Connect to the session, force will force to reconnect even if the session is already connected")
+        .def("GetLastEC", &AMSession::GetLastEC, "Get the last error code of the session")
+        .def("GetLastErrorMsg", &AMSession::GetLastErrorMsg, "Get the last error message of the session")
+        .def("Disconnect", &AMSession::Disconnect, "Disconnect the session")
+        .def("SetAuthCallback", &AMSession::SetAuthCallback, py::arg("auth_cb") = py::none(), "When password authentication is needed, this callback will be called, callable[[AuthCBInfo], bool]");
+
     py::class_<BaseSFTPClient, std::shared_ptr<BaseSFTPClient>>(m, "BaseSFTPClient")
-        .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"), py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
-        .def("IsValidKey", &BaseSFTPClient::IsValidKey, py::arg("key"), "Check whether a file is a valid private key file")
-        .def("LastTraceError", &BaseSFTPClient::LastTraceError, "Get the last trace error, return Optional[TraceInfo]")
-        .def("GetAllTraceErrors", &BaseSFTPClient::GetAllTraceErrors, "Get all trace errors, return list[TraceInfo]")
-        .def("GetTraceNum", &BaseSFTPClient::GetTraceNum)
-        .def("GetTraceCapacity", &BaseSFTPClient::GetTraceCapacity, "Get the capacity of the trace buffer")
-        .def("GetTrashDir", &BaseSFTPClient::GetTrashDir)
-        .def("Nickname", &BaseSFTPClient::Nickname, "Get the nickname of the client")
-        .def("SetPyTrace", &BaseSFTPClient::SetPyTrace, py::arg("trace_cb") = py::none(), "Set the python trace callback, callable[TraceInfo, None]")
-        .def("SetAuthCallback", &BaseSFTPClient::SetAuthCallback, py::arg("auth_cb") = py::none(), "When password authentication is needed, this callback will be called, callable[[AuthCBInfo], bool]")
-        .def("Check", &BaseSFTPClient::Check)
-        .def("Connect", &BaseSFTPClient::Connect)
-        .def("Disconnect", &BaseSFTPClient::Disconnect)
-        .def("EnsureConnect", &BaseSFTPClient::EnsureConnect)
+        .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object, int>(),
+             py::arg("request"),
+             py::arg("keys"),
+             py::arg("error_num") = 10,
+             py::arg("trace_cb") = py::none(),
+             py::arg("auth_cb") = py::none(),
+             py::arg("heartbeat_interval_s") = 60)
+        .def("GetRTT", &BaseSFTPClient::GetRTT, py::arg("times") = 5, "Get the round-trip time of the session")
+        .def("ConductCmd", &BaseSFTPClient::ConductCmd, py::arg("cmd"), "Conduct a command and return the result")
         .def("GetOSType", &BaseSFTPClient::GetOSType, py::arg("update") = false, "Update will force to re-detect the OS type");
 
     py::class_<AMFS::BasePathMatch, std::shared_ptr<AMFS::BasePathMatch>>(fs, "BasePathMatch", "Base Path Match Class")
@@ -264,12 +302,19 @@ PYBIND11_MODULE(AMSFTP, m)
         .def(py::init<>());
 
     py::class_<AMSFTPClient, std::shared_ptr<AMSFTPClient>, BaseSFTPClient, AMFS::BasePathMatch>(m, "AMSFTPClient", "Core SFTP Client Class")
-        .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"), py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
+        .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"),
+             py::arg("keys"),
+             py::arg("error_num") = 10,
+             py::arg("trace_cb") = py::none(),
+             py::arg("auth_cb") = py::none(),
+             py::arg("heartbeat_interval_s") = 60)
+        .def("StrUid", &AMSFTPClient::StrUid, py::arg("uid"), "Convert a uid to a string")
+        .def("GetHomeDir", &AMSFTPClient::GetHomeDir, "Get the home directory")
+        .def("GetTrashDir", &AMSFTPClient::GetTrashDir, "Get the trash directory")
         .def("SetTrashDir", &AMSFTPClient::SetTrashDir, py::arg("trash_dir") = "", "Set the trash directory and create it if it doesn't exist")
         .def("EnsureTrashDir", &AMSFTPClient::EnsureTrashDir)
-        .def("chmod", &AMSFTPClient::chmod, py::arg("path"), py::arg("mode"), py::arg("recursive") = false)
         .def("realpath", &AMSFTPClient::realpath, py::arg("path"), "Parse and return the absolute path, ~ in client will be parsed, .. and . will be parsed by server, if there are these symbols, the path must exist")
-        .def("GetHomeDir", &AMSFTPClient::GetHomeDir)
+        .def("chmod", &AMSFTPClient::chmod, py::arg("path"), py::arg("mode"), py::arg("recursive") = false)
         .def("stat", &AMSFTPClient::stat, py::arg("path"))
         .def("get_path_type", &AMSFTPClient::get_path_type, py::arg("path"))
         .def("exists", &AMSFTPClient::exists, py::arg("path"))
@@ -282,8 +327,8 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("rmfile", &AMSFTPClient::rmfile, py::arg("path"))
         .def("rmdir", &AMSFTPClient::rmdir, py::arg("path"))
         .def("remove", &AMSFTPClient::remove, py::arg("path"), "Permanently remove a file or directory, if return (ErrorCode, str), the whole operation failed, otherwise return list[tuple[str, tuple[ErrorCode, str]]], means some paths failed to remove")
-        .def("saferm", &AMSFTPClient::saferm, py::arg("path"), "Not real remove, just move it to {trash_dir}/{year-month-day-hour-minute-second}/{pathname}")
         .def("rename", &AMSFTPClient::rename, py::arg("src"), py::arg("dst"), py::arg("overwrite") = false, "Turn src_path into dst_path, if overwrite is true, the dst_path will be overwritten")
+        .def("saferm", &AMSFTPClient::saferm, py::arg("path"), "Not real remove, just move it to {trash_dir}/{year-month-day-hour-minute-second}/{pathname}")
         .def("move", &AMSFTPClient::move, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false, py::arg("force_write") = false, "Move source path src to Destination Directory dst")
         .def("copy", &AMSFTPClient::copy, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false, "Unstable, using shell command to copy")
         .def("iwalk", &AMSFTPClient::iwalk, py::arg("path"), py::arg("ignore_sepcial_file") = true, "Recursive walk the path, ignore path structure, just return list[PathInfo]")
