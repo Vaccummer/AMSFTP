@@ -117,7 +117,8 @@ PYBIND11_MODULE(AMSFTP, m)
         .value("NoPermissionAttribute", ErrorCode::NoPermissionAttribute)
         .value("LocalStatError", ErrorCode::LocalStatError)
         .value("TransferPause", ErrorCode::TransferPause)
-        .value("DNSResolveError", ErrorCode::DNSResolveError);
+        .value("DNSResolveError", ErrorCode::DNSResolveError)
+        .value("ClientNotFound", ErrorCode::ClientNotFound);
 
     py::enum_<OS_TYPE>(em, "OS_TYPE", "System OS Type Enum")
         .value("Windows", OS_TYPE::Windows)
@@ -296,7 +297,7 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("remove_host", &Hostd::remove_host, py::arg("hostname"))
         .def("get_host", &Hostd::get_host, py::arg("hostname"))
         .def("get_hosts", &Hostd::get_hosts, "Just return all hostnames")
-        .def("test_host", &Hostd::test_host, py::arg("hostname"), "Test the host connection, return (ErrorCode, str)");
+        .def("test_host", &Hostd::test_host, py::arg("hostname"), py::arg("update") = false, "Test the host connection, return (ErrorCode, str)");
 
     py::class_<AMSFTPWorker, std::shared_ptr<AMSFTPWorker>>(m, "AMSFTPWorker", "A worker for transferring files")
         .def(py::init<TransferCallback, float>(), py::arg("callback") = TransferCallback(), py::arg("cb_interval_s") = 0.1)

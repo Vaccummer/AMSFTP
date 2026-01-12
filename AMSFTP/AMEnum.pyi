@@ -479,11 +479,11 @@ class TraceLevel:
       Critical
     """
     Critical: typing.ClassVar[TraceLevel]  # value = <TraceLevel.Critical: -2>
-    Debug: typing.ClassVar[TraceLevel]  # value = <TraceLevel.Debug: 1>
+    Debug: typing.ClassVar[TraceLevel]  # value = <TraceLevel.Debug: 2>
     Error: typing.ClassVar[TraceLevel]  # value = <TraceLevel.Error: -1>
-    Info: typing.ClassVar[TraceLevel]  # value = <TraceLevel.Info: 2>
+    Info: typing.ClassVar[TraceLevel]  # value = <TraceLevel.Info: 1>
     Warning: typing.ClassVar[TraceLevel]  # value = <TraceLevel.Warning: 0>
-    __members__: typing.ClassVar[dict[str, TraceLevel]]  # value = {'Info': <TraceLevel.Info: 2>, 'Debug': <TraceLevel.Debug: 1>, 'Warning': <TraceLevel.Warning: 0>, 'Error': <TraceLevel.Error: -1>, 'Critical': <TraceLevel.Critical: -2>}
+    __members__: typing.ClassVar[dict[str, TraceLevel]]  # value = {'Info': <TraceLevel.Info: 1>, 'Debug': <TraceLevel.Debug: 2>, 'Warning': <TraceLevel.Warning: 0>, 'Error': <TraceLevel.Error: -1>, 'Critical': <TraceLevel.Critical: -2>}
     def __eq__(self, other: typing.Any) -> bool:
         ...
     def __getstate__(self) -> int:
