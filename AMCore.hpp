@@ -149,6 +149,41 @@ public:
 
 class AMSession
 {
+private:
+    bool has_connected = false;
+    ECM CurError = {EC::NoConnection, "Connection not established"};
+    std::mutex state_mtx;
+    int heartbeat_interval_s;
+    std::atomic<bool> is_heartbeat = false;
+    std::thread heartbeat_thread;
+
+    ECM BaseCheck()
+    {
+        if (!sftp)
+        {
+            return {EC::NoConnection, "SFTP not initialized"};
+        }
+
+        if (!session)
+        {
+            return {EC::NoSession, "Session not initialized"};
+        }
+
+        char path_t[1024];
+        int rcr;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mtx);
+            rcr = libssh2_sftp_realpath(sftp, ".", path_t, sizeof(path_t));
+        }
+        if (rcr < 0)
+        {
+            EC rc = GetLastEC();
+            return std::make_pair(rc, "Sftp status check failed");
+        }
+
+        return {EC::Success, ""};
+    }
+
 public:
     LIBSSH2_SESSION *session = nullptr;
     LIBSSH2_SFTP *sftp = nullptr;
@@ -156,8 +191,7 @@ public:
     std::vector<std::string> private_keys;
     std::shared_ptr<AMTracer> amtracer;
     ConRequst request;
-    std::string cwd = "";
-    bool has_connected = false;
+
     py::function auth_cb = py::function(); // Callable[[IsPasswordDemand:bool, ConRequst, TrialTimes:int], str]
     std::recursive_mutex mtx;
     bool password_auth_cb = false;
@@ -203,12 +237,48 @@ public:
         }
     }
 
+    void SetState(const ECM &state)
+    {
+        std::lock_guard<std::mutex> lock(state_mtx);
+        CurError = state;
+    }
+
+    ECM GetState()
+    {
+        std::lock_guard<std::mutex> lock(state_mtx);
+        return CurError;
+    }
+
+    void HeartbeatAct(int interval_s)
+    {
+        int millsecond = 0;
+        while (true)
+        {
+            while (millsecond < interval_s * 1000)
+            {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                millsecond += 100;
+                if (!is_heartbeat.load())
+                {
+                    return;
+                }
+            }
+            millsecond = 0;
+            SetState(Check());
+        }
+    }
+
     ECM Connect()
     {
+        std::lock_guard<std::recursive_mutex> lock(mtx);
         if (has_connected)
         {
-            // 已经连接过，需要先进行清理
-            clean();
+            if (Check(true).first == EC::Success)
+            {
+                return {EC::Success, ""};
+            }
+            Disconnect();
+            has_connected = false;
         }
         std::string msg = "";
         EC rc = EC::Success;
@@ -225,7 +295,6 @@ public:
         sock = connector.sock;
 
         session = libssh2_session_init();
-        has_connected = true;
         if (!session)
         {
             trace(TraceLevel::Critical, EC::SessionCreateFailed, request.nickname, "SessionInit", "Session initialization failed");
@@ -378,42 +447,36 @@ public:
             rc = GetLastEC();
             msg = fmt::format("SFTP initialization failed: {}", GetLastErrorMsg());
             trace(TraceLevel::Critical, rc, request.nickname, "SFTPInitialization", msg);
-
+            Disconnect();
             return {rc, msg};
         }
 
+        // Start Heartbeat Thread
+        has_connected = true;
+        is_heartbeat.store(true);
+        heartbeat_thread = std::thread([this]()
+                                       { HeartbeatAct(this->heartbeat_interval_s); });
         return {EC::Success, ""};
     }
 
-    ECM Check()
+    ECM Check(bool update = false)
     {
-        if (!sftp)
+        if (!update)
         {
-            trace(TraceLevel::Critical, EC::NoConnection, "Sftp", "SFTPCheck", "SFTP not initialized");
-            return {EC::NoConnection, "SFTP not initialized"};
+            return GetState();
         }
 
-        if (!session)
+        ECM rc = BaseCheck();
+        SetState(rc);
+        if (rc.first != EC::Success)
         {
-            trace(TraceLevel::Critical, EC::NoSession, "Session", "SessionCheck", "Session not initialized");
-            return {EC::NoSession, "Session not initialized"};
+            trace(TraceLevel::Critical, rc.first, "home_path", "Check", "Sftp status check failed");
         }
-
-        char path_t[1024];
-        int rcr;
+        else
         {
-            std::lock_guard<std::recursive_mutex> lock(mtx);
-            rcr = libssh2_sftp_realpath(sftp, ".", path_t, sizeof(path_t));
+            trace(TraceLevel::Info, EC::Success, fmt::format("{}@{}", request.nickname, "SSHSeesion"), "Check", "Session status check success");
         }
-        if (rcr < 0)
-        {
-            EC rc = GetLastEC();
-            trace(TraceLevel::Error, rc, "home_path", "Check", "Sftp status check failed");
-            return std::make_pair(rc, "Sftp status check failed");
-        }
-
-        trace(TraceLevel::Info, EC::Success, fmt::format("{}@{}", request.nickname, "SSHSeesion"), "Check", "Session status check success");
-        return {EC::Success, ""};
+        return rc;
     }
 
     EC GetLastEC()
@@ -422,7 +485,11 @@ public:
         {
             return EC::NoSession;
         }
-        int ori_code = libssh2_session_last_errno(session);
+        int ori_code;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mtx);
+            ori_code = libssh2_session_last_errno(session);
+        }
         if (ori_code != LIBSSH2_ERROR_SFTP_PROTOCOL)
         {
             return Int2EC.at(ori_code);
@@ -433,7 +500,12 @@ public:
             {
                 return EC::NoConnection;
             }
-            return Int2EC.at(libssh2_sftp_last_error(sftp));
+            int ori_code2;
+            {
+                std::lock_guard<std::recursive_mutex> lock(mtx);
+                ori_code2 = libssh2_sftp_last_error(sftp);
+            }
+            return Int2EC.at(ori_code2);
         }
     }
 
@@ -443,12 +515,19 @@ public:
         {
             return "Session not initialized";
         }
-        int ori_code = libssh2_session_last_errno(session);
+        int ori_code;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mtx);
+            ori_code = libssh2_session_last_errno(session);
+        }
         if (ori_code != LIBSSH2_ERROR_SFTP_PROTOCOL)
         {
             char *errmsg = NULL;
             int errmsg_len;
-            int errcode = libssh2_session_last_error(session, &errmsg, &errmsg_len, 0);
+            {
+                std::lock_guard<std::recursive_mutex> lock(mtx);
+                int errcode = libssh2_session_last_error(session, &errmsg, &errmsg_len, 0);
+            }
             return std::string(errmsg);
         }
         else
@@ -457,16 +536,20 @@ public:
             {
                 return "SFTP not initialized";
             }
-            ori_code = libssh2_sftp_last_error(sftp);
-            if (SFTPMessage.find(ori_code) != SFTPMessage.end())
+            int ori_code2;
             {
-                return SFTPMessage.at(ori_code);
+                std::lock_guard<std::recursive_mutex> lock(mtx);
+                ori_code2 = libssh2_sftp_last_error(sftp);
+            }
+            if (SFTPMessage.find(ori_code2) != SFTPMessage.end())
+            {
+                return SFTPMessage.at(ori_code2);
             }
             return "Unknown SFTP error";
         }
     }
 
-    void clean()
+    void Disconnect()
     {
         if (sftp)
         {
@@ -488,11 +571,18 @@ public:
 #endif
             sock = INVALID_SOCKET;
         }
+
+        // 检查并joinheartbeat_thread
+        is_heartbeat.store(false);
+        if (heartbeat_thread.joinable())
+        {
+            heartbeat_thread.join();
+        }
     }
 
     ECM Reconnect()
     {
-        clean();
+        Disconnect();
         return Connect();
     }
 
@@ -505,9 +595,10 @@ public:
         this->request = ConRequst();
         this->private_keys = {};
         this->amtracer = nullptr;
+        this->is_heartbeat.store(false);
     }
 
-    AMSession(ConRequst request, std::vector<std::string> private_keys, std::shared_ptr<AMTracer> amtracer = nullptr, py::object auth_cb = py::none())
+    AMSession(ConRequst request, std::vector<std::string> private_keys, std::shared_ptr<AMTracer> amtracer = nullptr, py::object auth_cb = py::none(), int heartbeat_interval_s = 60)
         : request(request), private_keys(private_keys), amtracer(amtracer)
     {
         if (!auth_cb.is_none())
@@ -519,11 +610,12 @@ public:
         {
             LoadDefaultPrivateKeys();
         }
+        this->heartbeat_interval_s = heartbeat_interval_s;
     }
 
     ~AMSession()
     {
-        clean();
+        Disconnect();
     }
 
     void trace(const TraceLevel &level, const EC &error_code, const std::string &target = "", const std::string &action = "", const std::string &msg = "")
@@ -634,7 +726,7 @@ public:
         this->amtracer = nullptr;
     }
 
-    BaseSFTPClient(ConRequst request, std::vector<std::string> keys, unsigned int error_num = 10, py::object trace_cb = py::none(), py::object auth_cb = py::none())
+    BaseSFTPClient(ConRequst request, std::vector<std::string> keys, unsigned int error_num = 10, py::object trace_cb = py::none(), py::object auth_cb = py::none(), int heartbeat_interval_s = 60)
     {
         if (request.trash_dir.empty())
         {
@@ -648,7 +740,7 @@ public:
         this->private_keys = keys;
         this->request = request;
         this->amtracer = std::make_shared<AMTracer>(error_num, trace_cb, request.nickname);
-        this->amsession = std::make_shared<AMSession>(request, keys, amtracer, auth_cb);
+        this->amsession = std::make_shared<AMSession>(request, keys, amtracer, auth_cb, heartbeat_interval_s);
     }
 
     void trace(TraceLevel level, EC error_code, std::string target = "", std::string action = "", std::string msg = "")
@@ -717,26 +809,6 @@ public:
 
     std::string GetLastErrorMsg()
     {
-        // int session_err = libssh2_session_last_errno(amsession->session);
-        // if (session_err == LIBSSH2_ERROR_EAGAIN)
-        // {
-        //     return "EAGAIN";
-        // }
-        // else if (session_err == LIBSSH2_ERROR_SFTP_PROTOCOL)
-        // {
-        //     int sftp_err = libssh2_sftp_last_error(amsession->sftp);
-
-        //     if (SFTPMessage.find(sftp_err) != SFTPMessage.end())
-        //     {
-        //         return SFTPMessage.at(sftp_err);
-        //     }
-        //     return "Unknown SFTP error";
-        // }
-
-        // char *errmsg = NULL;
-        // int errmsg_len;
-        // int errcode = libssh2_session_last_error(amsession->session, &errmsg, &errmsg_len, 0);
-        // return std::string(errmsg);
         return amsession->GetLastErrorMsg();
     }
 
@@ -759,7 +831,7 @@ public:
 
     void Disconnect()
     {
-        amsession->clean();
+        amsession->Disconnect();
     }
 
     ECM Reconnect()
@@ -1333,7 +1405,7 @@ public:
     {
     }
 
-    AMSFTPClient(ConRequst request, std::vector<std::string> keys, unsigned int error_num = 10, py::object trace_cb = py::none(), py::object auth_cb = py::none()) : BaseSFTPClient(request, keys, error_num, trace_cb, auth_cb), AMFS::BasePathMatch()
+    AMSFTPClient(ConRequst request, std::vector<std::string> keys, unsigned int error_num = 10, py::object trace_cb = py::none(), py::object auth_cb = py::none(), int heartbeat_interval_s = 60) : BaseSFTPClient(request, keys, error_num, trace_cb, auth_cb, heartbeat_interval_s), AMFS::BasePathMatch()
     {
     }
 
@@ -2201,17 +2273,17 @@ public:
         return hosts[host];
     }
 
-    ECM test_host(const std::string &host)
+    ECM test_host(const std::string &host, bool update = false)
     {
         if (host.empty())
         {
-            return ECM{EC::Success, ""};
+            return ECM{EC::InvalidArg, "Host nickname is empty"};
         }
         if (hosts.find(host) == hosts.end())
         {
-            return ECM{EC::NoSession, fmt::format("Client not found: {}", host)};
+            return ECM{EC::ClientNotFound, fmt::format("Client not found: {}", host)};
         }
-        if (host_status.find(host) != host_status.end())
+        if (!update && host_status.find(host) != host_status.end())
         {
             return host_status[host];
         }
@@ -2688,7 +2760,11 @@ private:
         if (nickname.empty())
         {
             auto res = AMFS::stat(path);
-            return {ECM{EC::CommonFailure, res.first}, res.second};
+            if (!res.first.empty())
+            {
+                return {ECM{EC::LocalStatError, res.first}, res.second};
+            }
+            return {ECM{EC::Success, ""}, res.second};
         }
         ECM rc = hostd.test_host(nickname);
         if (rc.first != EC::Success)

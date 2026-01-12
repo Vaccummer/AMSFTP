@@ -105,7 +105,9 @@ enum class ErrorCode
     NoPermissionAttribute = 36,
     LocalStatError = 37,
     TransferPause = 38,
-    DNSResolveError = 39
+    DNSResolveError = 39,
+    ClientNotFound = 40,
+    ConnectionAlreadyExists = 41
 
 };
 

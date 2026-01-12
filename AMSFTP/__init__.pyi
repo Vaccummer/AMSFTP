@@ -7,7 +7,7 @@ from . import AMData
 from . import AMEnum
 from . import AMFS
 __all__ = ['AMData', 'AMEnum', 'AMFS', 'AMSFTPClient', 'AMSFTPWorker', 'BaseSFTPClient']
-class AMSFTPClient(BaseSFTPClient):
+class AMSFTPClient(BaseSFTPClient, AMFS.BasePathMatch):
     """
     Core SFTP Client Class
     """

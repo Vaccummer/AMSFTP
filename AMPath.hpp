@@ -949,7 +949,6 @@ namespace AMFS
             result += segments[i] + sep;
         }
         result = UnifyPathSep(result, sep);
-        result.pop_back();
         return result;
     };
 
@@ -1919,7 +1918,7 @@ namespace AMFS
                 // 没有* < >时，链接到cur_path
                 if (parts[i].find("*") == std::string::npos && parts[i].find("<") == std::string::npos && parts[i].find(">") == std::string::npos && !is_stop)
                 {
-                    cur_path = cur_path + sep + parts[i];
+                    cur_path = AMFS::join(cur_path, parts[i]);
                 }
                 else
                 {
