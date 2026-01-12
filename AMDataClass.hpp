@@ -296,11 +296,12 @@ struct TraceInfo
 {
     TraceLevel level;
     ErrorCode error_code;
+    std::string nickname;
     std::string target;
     std::string action;
     std::string message;
     double timestamp;
-    std::string nickname;
+
     TraceInfo()
         : level(TraceLevel::Info), error_code(EC::Success), nickname(""), target(""), action(""), message("") {}
     TraceInfo(TraceLevel level, ErrorCode error_code, std::string nickname, std::string target, std::string action, std::string message)
@@ -828,9 +829,9 @@ public:
         }
     }
 
-    size_t GetSize() const { return buffer.size(); }
+    size_t GetTracerSize() const { return buffer.size(); }
 
-    size_t GetCapacity() const { return capacity; }
+    size_t GetTracerCapacity() const { return capacity; }
 
     std::variant<py::object, TraceInfo> LastTraceError()
     {
@@ -841,7 +842,7 @@ public:
         return buffer[buffer.size() - 1];
     }
 
-    std::vector<TraceInfo> GetAllErrors()
+    std::vector<TraceInfo> GetAllTraces()
     {
         std::vector<TraceInfo> result;
         for (auto &item : buffer)
@@ -851,14 +852,14 @@ public:
         return result;
     }
 
-    bool IsEmpty() const { return buffer.size() == 0; }
+    bool IsTracerEmpty() const { return buffer.size() == 0; }
 
-    void Clear()
+    void ClearTracer()
     {
         buffer.clear();
     }
 
-    void SetCapacity(unsigned int size)
+    void SetTracerCapacity(unsigned int size)
     {
         if (size <= 0)
         {

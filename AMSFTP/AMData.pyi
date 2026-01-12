@@ -139,7 +139,7 @@ class Hostd:
         """
         Clear ths host status record
         """
-    def test_host(self, hostname: str) -> tuple[AMSFTP.AMEnum.ErrorCode, str]:
+    def test_host(self, hostname: str, update: bool = False) -> tuple[AMSFTP.AMEnum.ErrorCode, str]:
         """
         Test the host connection, return (ErrorCode, str)
         """
