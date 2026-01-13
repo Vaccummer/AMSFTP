@@ -4,8 +4,7 @@ Local Filesystem Operations
 import AMSFTP.AMData
 import AMSFTP.AMEnum
 from __future__ import annotations
-import typing
-__all__ = ['BasePathMatch', 'CWD', 'FormatTime', 'HomePath', 'IsAbs', 'PathMatch', 'UnifyPathSep', 'abspath', 'basename', 'dirname', 'extname', 'getsize', 'iwalk', 'listdir', 'mkdirs', 'resplit', 'split', 'split_basename', 'stat', 'walk']
+__all__ = ['BasePathMatch', 'CWD', 'FormatTime', 'HomePath', 'IsAbs', 'PathMatch', 'UnifyPathSep', 'abspath', 'basename', 'dirname', 'extname', 'getsize', 'iwalk', 'listdir', 'mkdirs', 'split', 'split_basename', 'stat', 'walk']
 class BasePathMatch:
     """
     Base Path Match Class
@@ -40,10 +39,6 @@ def basename(path: str) -> str:
     ...
 def dirname(path: str) -> str:
     ...
-@typing.overload
-def extname(path: str) -> str:
-    ...
-@typing.overload
 def extname(path: str) -> str:
     ...
 def getsize(path: str, trace_link: bool = False) -> int:
@@ -53,8 +48,6 @@ def iwalk(path: str, ignore_sepcial_file: bool = True) -> list[AMSFTP.AMData.Pat
 def listdir(path: str) -> list[AMSFTP.AMData.PathInfo]:
     ...
 def mkdirs(path: str) -> str:
-    ...
-def resplit(path: str, front_esc: str, back_esc: str, head: str = '') -> list[str]:
     ...
 def split(path: str) -> list[str]:
     """

@@ -1,11 +1,66 @@
 """
 Data Classes
 """
-import AMSFTP
 import AMSFTP.AMEnum
 from __future__ import annotations
 import typing
-__all__ = ['AuthCBInfo', 'ConRequst', 'ErrorCBInfo', 'Hostd', 'PathInfo', 'ProgressCBInfo', 'TraceInfo', 'TransferCallback', 'TransferTask']
+__all__ = ['AMTracer', 'AuthCBInfo', 'ConRequst', 'ErrorCBInfo', 'PathInfo', 'ProgressCBInfo', 'TraceInfo', 'TransferCallback', 'TransferTask']
+class AMTracer:
+    """
+    Trace Buffer Class
+    """
+    def ClearTracer(self) -> None:
+        """
+        Clear the tracer
+        """
+    def GetAllTraces(self) -> list[TraceInfo]:
+        """
+        Get all trace errors, return list[TraceInfo]
+        """
+    def GetTracerCapacity(self) -> int:
+        """
+        Get the capacity of the tracer
+        """
+    def GetTracerSize(self) -> int:
+        """
+        Get the size of the tracer
+        """
+    def IsTracerEmpty(self) -> bool:
+        """
+        Check if the tracer is empty
+        """
+    def LastTrace(self) -> typing.Any | TraceInfo:
+        """
+        Get the last trace error, return Optional[TraceInfo]
+        """
+    def PauseTrace(self) -> None:
+        """
+        Pause the trace
+        """
+    def ResumeTrace(self) -> None:
+        """
+        Resume the trace
+        """
+    def SetPyTrace(self, trace_cb: typing.Any = None) -> None:
+        """
+        Set the python trace callback, callable[TraceInfo, None]
+        """
+    def SetTracerCapacity(self, capacity: int) -> None:
+        """
+        Set the capacity of the tracer
+        """
+    def __init__(self, buffer_capacity: int = 10, trace_cb: typing.Any = None, nickname: str = '') -> None:
+        ...
+    @typing.overload
+    def trace(self, trace_info: AMSFTP.AMEnum.TraceLevel, error_code: AMSFTP.AMEnum.ErrorCode, target: str, action: str, msg: str) -> None:
+        """
+        Trace a message
+        """
+    @typing.overload
+    def trace(self, trace_info: TraceInfo) -> None:
+        """
+        Trace a message
+        """
 class AuthCBInfo:
     def __init__(self, NeedPassword: bool, request: ConRequst, trial_times: int) -> None:
         ...
@@ -119,30 +174,6 @@ class ErrorCBInfo:
     src_host: str
     def __init__(self, ecm: tuple[AMSFTP.AMEnum.ErrorCode, str], src: str, dst: str, src_host: str, dst_host: str) -> None:
         ...
-class Hostd:
-    """
-    A dictionary for storing clients
-    """
-    def __init__(self) -> None:
-        ...
-    def add_host(self, hostname: str, client: AMSFTP.AMSFTPClient, overwrite: bool = False) -> None:
-        ...
-    def get_host(self, hostname: str) -> AMSFTP.AMSFTPClient:
-        ...
-    def get_hosts(self) -> list[str]:
-        """
-        Just return all hostnames
-        """
-    def remove_host(self, hostname: str) -> None:
-        ...
-    def reset(self) -> None:
-        """
-        Clear ths host status record
-        """
-    def test_host(self, hostname: str, update: bool = False) -> tuple[AMSFTP.AMEnum.ErrorCode, str]:
-        """
-        Test the host connection, return (ErrorCode, str)
-        """
 class PathInfo:
     """
     Path Information DataClass
