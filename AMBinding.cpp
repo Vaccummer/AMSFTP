@@ -347,9 +347,9 @@ PYBIND11_MODULE(AMSFTP, m) {
            "Set shared private keys")
       .def("GetState", &AMSession::GetState,
            "Get the current state of the session")
-      .def("Check", &AMSession::Check,
+      .def("Check", &AMSession::Check, py::arg("need_trace") = false,
            "Realtime check the session status and update the state")
-      .def("Connect", &AMSession::Connect, py::arg("force") = false,
+      .def("BaseConnect", &AMSession::BaseConnect, py::arg("force") = false,
            "Connect to the session, force will force to reconnect even if the "
            "session is already connected")
       .def("GetLastEC", &AMSession::GetLastEC,
@@ -414,6 +414,9 @@ PYBIND11_MODULE(AMSFTP, m) {
       .def("StrUid", &AMSFTPClient::StrUid, py::arg("uid"),
            "Convert a uid to a string")
       .def("GetHomeDir", &AMSFTPClient::GetHomeDir, "Get the home directory")
+      .def("Connect", &AMSFTPClient::Connect, py::arg("force") = false,
+           "Wrapper of BaseConnect, will get OS type and home directory if "
+           "conducted the first time")
       .def("GetTrashDir", &AMSFTPClient::GetTrashDir, "Get the trash directory")
       .def("SetTrashDir", &AMSFTPClient::SetTrashDir, py::arg("trash_dir") = "",
            "Set the trash directory and create it if it doesn't exist")
@@ -475,7 +478,10 @@ PYBIND11_MODULE(AMSFTP, m) {
            py::arg("client"), py::arg("overwrite") = false)
       .def("remove_host", &HostMaintainer::remove_host, py::arg("nickname"))
       .def("get_host", &HostMaintainer::get_host, py::arg("nickname"))
-      .def("get_hosts", &HostMaintainer::get_hosts, "Just return all hostnames")
+      .def("get_hosts", &HostMaintainer::get_hosts,
+           "Just return all hostnames, return list[str]")
+      .def("get_clients", &HostMaintainer::get_clients,
+           "Just return all clients, list[AMSFTPClient]")
       .def("test_host", &HostMaintainer::test_host, py::arg("nickname"),
            py::arg("update") = false,
            "Test the host connection, return (ErrorCode, str)");

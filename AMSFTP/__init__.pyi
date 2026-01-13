@@ -15,6 +15,10 @@ class AMSFTPClient(BaseSFTPClient, AMFS.BasePathMatch):
         """
         Clear all stored Python objects
         """
+    def Connect(self, force: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Wrapper of BaseConnect, will get OS type and home directory if conducted the first time
+        """
     def DelPublicVar(self, key: str) -> bool:
         """
         Delete a stored Python object, returns True if deleted
@@ -25,7 +29,7 @@ class AMSFTPClient(BaseSFTPClient, AMFS.BasePathMatch):
         """
         Get all stored Python objects as a dictionary with deep copies
         """
-    def GetHomeDir(self) -> str:
+    def GetHomeDir(self, arg0: bool) -> str:
         """
         Get the home directory
         """
@@ -147,13 +151,13 @@ class AMSession(AMData.AMTracer):
     """
     Session Class
     """
-    def Check(self, arg0: bool) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Realtime check the session status and update the state
-        """
-    def Connect(self, force: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+    def BaseConnect(self, force: bool = False) -> tuple[AMEnum.ErrorCode, str]:
         """
         Connect to the session, force will force to reconnect even if the session is already connected
+        """
+    def Check(self, need_trace: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Realtime check the session status and update the state
         """
     def Disconnect(self) -> None:
         """
@@ -222,11 +226,15 @@ class HostMaintainer:
         """
     def add_host(self, nickname: str, client: AMSFTPClient, overwrite: bool = False) -> None:
         ...
+    def get_clients(self) -> list[AMSFTPClient]:
+        """
+        Just return all clients, list[AMSFTPClient]
+        """
     def get_host(self, nickname: str) -> AMSFTPClient:
         ...
     def get_hosts(self) -> list[str]:
         """
-        Just return all hostnames
+        Just return all hostnames, return list[str]
         """
     def remove_host(self, nickname: str) -> None:
         ...

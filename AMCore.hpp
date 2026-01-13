@@ -204,8 +204,10 @@ public:
 };
 
 class AMSession : public AMTracer {
-private:
+protected:
   std::atomic<bool> has_connected;
+
+private:
   ECM CurError = {EC::NoConnection, "Connection not established"};
   std::mutex state_mtx;
   SOCKET sock = INVALID_SOCKET;
@@ -316,10 +318,10 @@ public:
     return CurError;
   }
 
-  ECM Check(bool no_trace = false) {
+  ECM Check(bool need_trace = false) {
     ECM rc = BaseCheck();
     SetState(rc);
-    if (no_trace) {
+    if (!need_trace) {
       return rc;
     }
     if (rc.first != EC::Success) {
@@ -333,7 +335,7 @@ public:
     return rc;
   }
 
-  ECM Connect(bool force = false) {
+  ECM BaseConnect(bool force = false) {
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (has_connected.load()) {
       if (!force) {
@@ -533,6 +535,7 @@ public:
     //                                {
     //                                HeartbeatAct(this->heartbeat_interval_s);
     //                                });
+
     return {EC::Success, ""};
   }
 
@@ -653,17 +656,6 @@ public:
     return total_time / times;
   }
 
-  // ECM Connect()
-  // {
-  //     ECM ecm = amsession->Connect();
-  //     if (!isok(ecm))
-  //     {
-  //         return ecm;
-  //     }
-  //     this->trash_dir = this->request.trash_dir;
-  //     EnsureTrashDir();
-  //     return {EC::Success, ""};
-  // }
   CR ConductCmd(const std::string &cmd) {
     SafeChannel sf(session);
     if (!sf.channel) {
@@ -713,7 +705,7 @@ public:
             std::pair<std::string, int>(output, exit_status)};
   }
 
-  OS_TYPE GetOSType(bool update = false) {
+  OS_TYPE GetOSType(const bool &update = false) {
     if (os_type != OS_TYPE::Uncertain && !update) {
       return os_type;
     }
@@ -758,7 +750,7 @@ public:
       os_type = OS_TYPE::Windows;
       return os_type;
     }
-    os_type = OS_TYPE::Unix;
+    os_type = OS_TYPE::Unknown;
     return os_type;
   }
 };
@@ -1298,8 +1290,8 @@ public:
     }
   }
 
-  std::string GetHomeDir() {
-    if (!home_dir.empty()) {
+  std::string GetHomeDir(const bool &update = false) {
+    if (!home_dir.empty() && !update) {
       return home_dir;
     }
     auto [rcm, path_obj] = realpath("");
@@ -1309,23 +1301,28 @@ public:
     }
     switch (GetOSType()) {
     case OS_TYPE::Windows:
-      home_dir = "C:\\Users\\" + res_data.username;
-      return home_dir;
-    case OS_TYPE::Linux:
-      home_dir = "/home/" + res_data.username;
-      return home_dir;
-    case OS_TYPE::MacOS:
-      home_dir = "/Users/" + res_data.username;
-      return home_dir;
-    case OS_TYPE::FreeBSD:
-      home_dir = "/usr/home/" + res_data.username;
-      return home_dir;
-    case OS_TYPE::Unix:
-      home_dir = "/home/" + res_data.username;
-      return home_dir;
-    default:
       return "C:\\Users\\" + res_data.username;
+    case OS_TYPE::Linux:
+      return "/home/" + res_data.username;
+    case OS_TYPE::MacOS:
+      return "/Users/" + res_data.username;
+    case OS_TYPE::FreeBSD:
+      return "/usr/home/" + res_data.username;
+    case OS_TYPE::Unix:
+      return "/home/" + res_data.username;
+    default:
+      return "";
     }
+  }
+
+  ECM Connect(bool force = false) {
+    bool not_init = has_connected;
+    ECM ecm = BaseConnect(force);
+    if (!not_init && isok(ecm)) {
+      GetOSType();
+      GetHomeDir();
+    }
+    return ecm;
   }
 
   inline std::string GetTrashDir() { return this->trash_dir; }
@@ -1992,7 +1989,7 @@ private:
     while (true) {
       // 遍历hosts字典
       for (auto &host : hosts) {
-        rcm = host.second->Check(true);
+        rcm = host.second->Check();
         if (rcm.first != EC::Success) {
           if (is_disconnect_cb) {
             py::gil_scoped_acquire acquire;
@@ -2038,6 +2035,14 @@ public:
     return host_list;
   }
 
+  std::vector<std::shared_ptr<AMSFTPClient>> get_clients() {
+    std::vector<std::shared_ptr<AMSFTPClient>> client_list;
+    for (auto &host : hosts) {
+      client_list.push_back(host.second);
+    }
+    return client_list;
+  }
+
   void add_host(const std::string &nickname,
                 std::shared_ptr<AMSFTPClient> client, bool overwrite = false) {
     if (hosts.find(nickname) != hosts.end()) {
@@ -2072,7 +2077,7 @@ public:
     if (!update) {
       ECM rcm = hosts[nickname]->GetState();
       if (rcm.first != EC::Success) {
-        return hosts[nickname]->Check(true);
+        return hosts[nickname]->Check();
       } else {
         return rcm;
       }
