@@ -107,7 +107,10 @@ enum class ErrorCode
     TransferPause = 38,
     DNSResolveError = 39,
     ClientNotFound = 40,
-    ConnectionAlreadyExists = 41
+    ConnectionAlreadyExists = 41,
+    DeepcopyFunctionNotAvailable = 42,
+    KeyAlreadyExists = 43,
+    DeepcopyFailed = 44,
 
 };
 

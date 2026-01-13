@@ -6,18 +6,52 @@ import typing
 from . import AMData
 from . import AMEnum
 from . import AMFS
-__all__ = ['AMData', 'AMEnum', 'AMFS', 'AMSFTPClient', 'AMSFTPWorker', 'BaseSFTPClient']
+__all__ = ['AMData', 'AMEnum', 'AMFS', 'AMSFTPClient', 'AMSFTPWorker', 'AMSession', 'BaseSFTPClient', 'HostMaintainer']
 class AMSFTPClient(BaseSFTPClient, AMFS.BasePathMatch):
     """
     Core SFTP Client Class
     """
+    def ClearPublicVar(self) -> None:
+        """
+        Clear all stored Python objects
+        """
+    def DelPublicVar(self, key: str) -> bool:
+        """
+        Delete a stored Python object, returns True if deleted
+        """
     def EnsureTrashDir(self) -> tuple[AMEnum.ErrorCode, str]:
         ...
+    def GetAllPublicVars(self) -> dict:
+        """
+        Get all stored Python objects as a dictionary with deep copies
+        """
     def GetHomeDir(self) -> str:
-        ...
+        """
+        Get the home directory
+        """
+    def GetPublicVar(self, key: str, default: typing.Any = None) -> typing.Any:
+        """
+        Get a stored Python object, returns a deep copy
+        """
+    def GetTrashDir(self) -> str:
+        """
+        Get the trash directory
+        """
+    def HasPublicVar(self, key: str) -> bool:
+        """
+        Check if a key exists in the public variable dictionary
+        """
+    def SetPublicVar(self, key: str, value: typing.Any, overwrite: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Store a Python object in C++ side with deep copy, C++ owns the copy
+        """
     def SetTrashDir(self, trash_dir: str = '') -> tuple[AMEnum.ErrorCode, str]:
         """
         Set the trash directory and create it if it doesn't exist
+        """
+    def StrUid(self, uid: int) -> str:
+        """
+        Convert a uid to a string
         """
     def __init__(self, request: AMData.ConRequst, keys: list[str], error_num: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
         ...
@@ -91,7 +125,7 @@ class AMSFTPWorker:
         ...
     def __init__(self, callback: AMData.TransferCallback = ..., cb_interval_s: float = 0.1) -> None:
         ...
-    def load_tasks(self, src: str, dst: str, hostd: AMData.Hostd, src_hostname: str = '', dst_hostname: str = '', overwrite: bool = False, mkdir: bool = True, ignore_sepcial_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.TransferTask]]:
+    def load_tasks(self, src: str, dst: str, hostd: HostMaintainer, src_hostname: str = '', dst_hostname: str = '', overwrite: bool = False, mkdir: bool = True, ignore_sepcial_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.TransferTask]]:
         ...
     def pause(self) -> None:
         ...
@@ -107,53 +141,97 @@ class AMSFTPWorker:
         """
     def terminate(self) -> None:
         ...
-    def transfer(self, tasks: list[AMData.TransferTask], hostd: AMData.Hostd, chunk_large: int = 16777216, chunk_middle: int = 2097152, chunk_small: int = 262144) -> list[AMData.TransferTask]:
+    def transfer(self, tasks: list[AMData.TransferTask], hostd: HostMaintainer, chunk_large: int = 16777216, chunk_middle: int = 2097152, chunk_small: int = 262144) -> list[AMData.TransferTask]:
         ...
-class BaseSFTPClient:
-    def Check(self) -> tuple[AMEnum.ErrorCode, str]:
-        ...
-    def Connect(self) -> tuple[AMEnum.ErrorCode, str]:
-        ...
+class AMSession(AMData.AMTracer):
+    """
+    Session Class
+    """
+    def Check(self, arg0: bool) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Realtime check the session status and update the state
+        """
+    def Connect(self, force: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Connect to the session, force will force to reconnect even if the session is already connected
+        """
     def Disconnect(self) -> None:
-        ...
-    def EnsureConnect(self) -> tuple[AMEnum.ErrorCode, str]:
-        ...
-    def GetAllTraceErrors(self) -> list[AMData.TraceInfo]:
         """
-        Get all trace errors, return list[TraceInfo]
+        Disconnect the session
         """
-    def GetOSType(self, update: bool = False) -> AMEnum.OS_TYPE:
+    def GetKeys(self) -> list[str]:
         """
-        Update will force to re-detect the OS type
+        Get all shared private keys of the session
         """
-    def GetTraceCapacity(self) -> int:
+    def GetLastEC(self) -> AMEnum.ErrorCode:
         """
-        Get the capacity of the trace buffer
+        Get the last error code of the session
         """
-    def GetTraceNum(self) -> int:
-        ...
-    def GetTrashDir(self) -> str:
-        ...
+    def GetLastErrorMsg(self) -> str:
+        """
+        Get the last error message of the session
+        """
+    def GetNickname(self) -> str:
+        """
+        Get the nickname of the session
+        """
+    def GetRequest(self) -> AMData.ConRequst:
+        """
+        Get the request data
+        """
+    def GetState(self) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Get the current state of the session
+        """
     def IsValidKey(self, key: str) -> bool:
         """
         Check whether a file is a valid private key file
-        """
-    def LastTraceError(self) -> typing.Any | AMData.TraceInfo:
-        """
-        Get the last trace error, return Optional[TraceInfo]
-        """
-    def Nickname(self) -> str:
-        """
-        Get the nickname of the client
         """
     def SetAuthCallback(self, auth_cb: typing.Any = None) -> None:
         """
         When password authentication is needed, this callback will be called, callable[[AuthCBInfo], bool]
         """
-    def SetPyTrace(self, trace_cb: typing.Any = None) -> None:
+    def SetKeys(self, keys: list[str]) -> None:
         """
-        Set the python trace callback, callable[TraceInfo, None]
+        Set shared private keys
         """
     def __init__(self, request: AMData.ConRequst, keys: list[str], error_num: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
         ...
+class BaseSFTPClient(AMSession):
+    def ConductCmd(self, cmd: str) -> tuple[tuple[AMEnum.ErrorCode, str], tuple[str, int]]:
+        """
+        Conduct a command and return the result
+        """
+    def GetOSType(self, update: bool = False) -> AMEnum.OS_TYPE:
+        """
+        Update will force to re-detect the OS type
+        """
+    def GetRTT(self, times: int = 5) -> float:
+        """
+        Get the round-trip time of the session
+        """
+    def __init__(self, request: AMData.ConRequst, keys: list[str], error_num: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
+        ...
+class HostMaintainer:
+    """
+    The Client Maintainer Class, Check clients status all the time
+    """
+    def __init__(self, heartbeat_interval_s: int = 60, disconnect_cb: typing.Any = None) -> None:
+        """
+        callable[[AMSFTPClient, tuple[ErrorCode, str]], None], default None means no callback
+        """
+    def add_host(self, nickname: str, client: AMSFTPClient, overwrite: bool = False) -> None:
+        ...
+    def get_host(self, nickname: str) -> AMSFTPClient:
+        ...
+    def get_hosts(self) -> list[str]:
+        """
+        Just return all hostnames
+        """
+    def remove_host(self, nickname: str) -> None:
+        ...
+    def test_host(self, nickname: str, update: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Test the host connection, return (ErrorCode, str)
+        """
 _cleanup: typing.Any  # value = <capsule object>

@@ -9,3 +9,5 @@ debug*
 dll
 experience.md
 autosave
+*.md
+*.pdb
