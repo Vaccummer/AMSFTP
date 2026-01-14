@@ -6,6 +6,7 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -1092,10 +1093,10 @@ inline void _iwalk(const std::string &path, std::vector<PathInfo> &result,
   }
 }
 
-inline void
-_walk(std::vector<std::string> parts,
-      std::vector<std::pair<std::vector<std::string>, PathInfo>> &result,
-      int cur_depth, int max_depth, bool ignore_sepcial_file) {
+using WALK_RESULT =
+    std::vector<std::pair<std::vector<std::string>, std::vector<PathInfo>>>;
+inline void _walk(std::vector<std::string> parts, WALK_RESULT &result,
+                  int cur_depth, int max_depth, bool ignore_sepcial_file) {
   if (max_depth > 0 && cur_depth > max_depth) {
     return;
   }
@@ -1108,20 +1109,23 @@ _walk(std::vector<std::string> parts,
   case PathType::DIR: {
     try {
       bool empty_dir = true;
+      std::vector<PathInfo> path_info_list = {};
       for (const auto &entry : listdir(path)) {
         empty_dir = false;
-        auto n_parts = parts;
-        n_parts.push_back(entry.name);
-        _walk(n_parts, result, cur_depth + 1, max_depth, ignore_sepcial_file);
+        if (entry.type == PathType::DIR) {
+          auto n_parts = parts;
+          n_parts.push_back(entry.name);
+          _walk(n_parts, result, cur_depth + 1, max_depth, ignore_sepcial_file);
+          continue;
+        }
+        path_info_list.push_back(entry);
       }
       if (empty_dir) {
         if (parts.size() > 1) {
-          // 如果是末级目录， 则加入此目录
-          auto b_parts = parts;
-          b_parts.pop_back();
-          result.push_back(std::make_pair(b_parts, info));
+          result.push_back({parts, {}});
         }
       }
+      result.push_back({parts, path_info_list});
     } catch (const std::exception) {
     }
     break;
@@ -1130,9 +1134,7 @@ _walk(std::vector<std::string> parts,
     if (ignore_sepcial_file && static_cast<int>(info.type) < 0) {
       return;
     }
-    auto d_parts = parts;
-    d_parts.pop_back();
-    result.push_back(std::make_pair(d_parts, info));
+    result.push_back({parts, {}});
     break;
   }
   }
@@ -1147,13 +1149,12 @@ inline std::vector<PathInfo> iwalk(const std::string &path,
   return result;
 }
 
-inline std::vector<std::pair<std::vector<std::string>, PathInfo>>
-walk(const std::string &path, int max_depth, bool ignore_sepcial_file) {
-  std::vector<std::pair<std::vector<std::string>, PathInfo>> result = {};
+inline WALK_RESULT walk(const std::string &path, int max_depth,
+                        bool ignore_sepcial_file) {
+  WALK_RESULT result = {};
   std::vector<std::string> parts = {path};
 
   _walk(parts, result, 0, max_depth, ignore_sepcial_file);
-
   return result;
 }
 
