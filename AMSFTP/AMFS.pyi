@@ -59,5 +59,5 @@ def split_basename(basename: str) -> tuple[str, str]:
     """
 def stat(path: str, trace_link: bool = False) -> tuple[str, AMSFTP.AMData.PathInfo]:
     ...
-def walk(path: str, max_depth: int = -1, ignore_sepcial_file: bool = True) -> list[tuple[list[str], AMSFTP.AMData.PathInfo]]:
+def walk(path: str, max_depth: int = -1, ignore_sepcial_file: bool = True) -> list[tuple[list[str], list[AMSFTP.AMData.PathInfo]]]:
     ...

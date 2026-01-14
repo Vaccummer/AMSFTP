@@ -1,11 +1,10 @@
 """
 Data Classes
 """
-import AMSFTP
 import AMSFTP.AMEnum
 from __future__ import annotations
 import typing
-__all__ = ['AMTracer', 'AuthCBInfo', 'ConRequst', 'ErrorCBInfo', 'HostMaintainer', 'PathInfo', 'ProgressCBInfo', 'TraceInfo', 'TransferCallback', 'TransferTask']
+__all__ = ['AMTracer', 'AuthCBInfo', 'ConRequst', 'ErrorCBInfo', 'PathInfo', 'ProgressCBInfo', 'TraceInfo', 'TransferCallback', 'TransferTask']
 class AMTracer:
     """
     Trace Buffer Class
@@ -175,26 +174,6 @@ class ErrorCBInfo:
     src_host: str
     def __init__(self, ecm: tuple[AMSFTP.AMEnum.ErrorCode, str], src: str, dst: str, src_host: str, dst_host: str) -> None:
         ...
-class HostMaintainer:
-    """
-    The Client Maintainer Class, Check clients status all the time
-    """
-    def __init__(self, heartbeat_interval_s: int) -> None:
-        ...
-    def add_host(self, nickname: str, client: AMSFTP.AMSFTPClient, overwrite: bool = False) -> None:
-        ...
-    def get_host(self, nickname: str) -> AMSFTP.AMSFTPClient:
-        ...
-    def get_hosts(self) -> list[str]:
-        """
-        Just return all hostnames
-        """
-    def remove_host(self, nickname: str) -> None:
-        ...
-    def test_host(self, nickname: str, update: bool = False) -> tuple[AMSFTP.AMEnum.ErrorCode, str]:
-        """
-        Test the host connection, return (ErrorCode, str)
-        """
 class PathInfo:
     """
     Path Information DataClass

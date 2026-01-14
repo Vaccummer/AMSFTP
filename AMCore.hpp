@@ -624,7 +624,7 @@ public:
     //     EnsureTrashDir();
     //     return {EC::Success, ""};
     // }
-    CR ConductCmd(const std::string& cmd) {
+    CR ConductCmd(const std::string& cmd, float time_limit_s = -1) {
         SafeChannel sf(session);
         if (!sf.channel) {
             return {ECM{EC::NoConnection, "Channel not initialized"}, std::pair<std::string, int>("", -1)};
@@ -632,6 +632,7 @@ public:
 
         int out;
         {
+            std::lock_guard<std::recursive_mutex> lock(mtx);
             out = libssh2_channel_exec(sf.channel, cmd.c_str());
         }
         EC error_code;
@@ -1437,6 +1438,7 @@ public:
         double start_time = timenow();
         double end_time = start_time;
         double max_time = max_time_ms / 1000.0;
+        bool is_truncated = false;
 
         LIBSSH2_SFTP_HANDLE* sftp_handle = nullptr;
         LIBSSH2_SFTP_ATTRIBUTES attrs;
@@ -1468,6 +1470,7 @@ public:
                 end_time = timenow();
                 if (end_time - start_time > max_time) {
                     is_sucess = true;
+                    is_truncated = true;
                     break;
                 }
             }
@@ -1498,7 +1501,8 @@ public:
             libssh2_sftp_close_handle(sftp_handle);
         }
         if (is_sucess) {
-            return {ECM{EC::Success, ""}, file_list};
+            // EC is Success, but message is not empty if truncated
+            return {ECM{EC::Success, is_truncated ? "truncate" : ""}, file_list};
         } else {
             return {ECM{rc, msg}, {}};
         }
@@ -1793,6 +1797,16 @@ public:
             }
         } else if (!br2) {
             return {EC::PathNotExist, fmt::format("Dst exists but not a directory: {}", dstf)};
+        }
+
+        std::string dst_path = AMFS::join(dstf, AMFS::basename(srcf));
+        auto [rcm0, sbr0] = exists(dst_path);
+
+        if (rcm0.first != EC::Success) {
+            return rcm0;
+        }
+        if (sbr0) {
+            return {EC::PathAlreadyExists, fmt::format("Dst {} already has path named {}", dstf, AMFS::basename(srcf))};
         }
 
         std::string command = "cp -r \"" + srcf + "\" \"" + dstf + "\"";
@@ -2356,6 +2370,138 @@ private:
         return {rc_final, error_msg};
     }
 
+    ECM InHostCopy(const std::string& src, const std::string& dst, const std::shared_ptr<AMSFTPClient>& worker,
+                   uint64_t chunk_size = 256 * AMKB) {
+        ErrorCode rc_final = EC::Success;
+        std::string error_msg = "";
+        LIBSSH2_SFTP_HANDLE* srcFile = nullptr;
+        LIBSSH2_SFTP_HANDLE* dstFile = nullptr;
+        std::lock_guard<std::recursive_mutex> lock(worker->mtx);
+        worker->mkdir(AMFS::dirname(dst));
+        srcFile = libssh2_sftp_open(worker->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
+
+        if (!srcFile) {
+            rc_final = worker->GetLastEC();
+            error_msg = fmt::format("Failed to open src remote file: {}, cause {}", src, worker->GetLastErrorMsg());
+            worker->trace(TraceLevel::Error, rc_final, fmt::format("{}@{}", worker->res_data.nickname, src),
+                          "Remote2Remote", error_msg);
+            return {rc_final, error_msg};
+        }
+        dstFile = libssh2_sftp_open(worker->sftp, dst.c_str(),
+                                    LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
+        if (!dstFile) {
+            // 获取错误代码
+            rc_final = worker->GetLastEC();
+            error_msg = fmt::format("Failed to open dst remote file: {}, cause {}", dst, worker->GetLastErrorMsg());
+            worker->trace(TraceLevel::Error, rc_final, fmt::format("{}@{}", worker->res_data.nickname, dst),
+                          "Remote2Remote", error_msg);
+            return {rc_final, error_msg};
+        }
+
+        LIBSSH2_SFTP_ATTRIBUTES attrs;
+        libssh2_sftp_fstat(srcFile, &attrs);
+        uint64_t file_size = attrs.filesize;
+
+        // uint64_t buffer_size_ori = calculate_buffer_size(file_size, 32 * AMGB);
+        StreamRingBuffer ring(chunk_size);
+        uint64_t all_read = 0;
+        uint64_t all_write = 0;
+        uint64_t last_callback_write = 0;
+        long rc_read, rc_write;
+        uint64_t idle_count = 0;
+
+        libssh2_session_set_blocking(worker->session, 0);
+
+        while (all_write < file_size) {
+            bool did_work = false;
+
+            // === 生产者：从源读取数据写入缓冲区 ===
+            if (all_read < file_size && ring.writable() > 0) {
+                auto [write_ptr, max_write] = ring.get_write_ptr();
+                size_t to_read = std::min<size_t>(max_write, file_size - all_read);
+
+                if (to_read > 0) {
+                    rc_read = libssh2_sftp_read(srcFile, write_ptr, to_read);
+                    if (rc_read > 0) {
+                        ring.commit_write(rc_read);
+                        all_read += rc_read;
+                        did_work = true;
+                        idle_count = 0;
+                    } else if (rc_read < 0 && rc_read != LIBSSH2_ERROR_EAGAIN) {
+                        rc_final = worker->GetLastEC();
+                        error_msg = fmt::format("Sftp read error: {}", worker->GetLastErrorMsg());
+                        goto clean;
+                    }
+                }
+            }
+
+            // === 消费者：从缓冲区读取数据写入目标 ===
+            if (ring.available() > 0) {
+                auto [read_ptr, max_read] = ring.get_read_ptr();
+
+                if (max_read > 0) {
+                    rc_write = libssh2_sftp_write(dstFile, read_ptr, max_read);
+                    if (rc_write > 0) {
+                        ring.commit_read(rc_write);
+                        all_write += rc_write;
+                        did_work = true;
+                        idle_count = 0;
+                    } else if (rc_write < 0 && rc_write != LIBSSH2_ERROR_EAGAIN) {
+                        rc_final = worker->GetLastEC();
+                        error_msg = fmt::format("Sftp write error: {}", worker->GetLastErrorMsg());
+                        goto clean;
+                    }
+                }
+            }
+
+            // === 进度回调（每写入buffer_size或完成时触发）===
+            if (all_write - last_callback_write >= chunk_size || all_write == file_size) {
+                current_size += (all_write - last_callback_write);
+                last_callback_write = all_write;
+                InnerCallback(src, dst, worker->GetNickname(), worker->GetNickname(), all_write, file_size,
+                              current_size, total_size);
+
+                // 暂停/终止检查
+                while (IsPause() && !IsTerminate()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                if (IsTerminate()) {
+                    rc_final = EC::Terminate;
+                    error_msg = "Transfer cancelled";
+                    goto clean;
+                }
+            }
+
+            // === 空闲时让出CPU ===
+            if (!did_work) {
+                idle_count++;
+                if (idle_count > 10) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(20));
+                    idle_count = 0;
+                }
+            }
+        }
+
+    clean:
+        libssh2_session_set_blocking(worker->session, 1);
+
+        if (callback.need_progress_cb) {
+            py::gil_scoped_acquire acquire;
+            callback.progress_cb(ProgressCBInfo(src, dst, worker->GetNickname(), worker->GetNickname(), all_write,
+                                                file_size, current_size, total_size));
+        }
+
+        if (srcFile) {
+            libssh2_sftp_close_handle(srcFile);
+        }
+
+        if (dstFile) {
+            libssh2_sftp_close_handle(dstFile);
+        }
+
+        return {rc_final, error_msg};
+    }
+
     std::pair<ECM, PathInfo> Ustat(const std::string& path, const std::shared_ptr<HostMaintainer>& hostm,
                                    const std::string& nickname = "") {
         if (nickname.empty()) {
@@ -2554,6 +2700,29 @@ public:
                     goto check;
                 }
                 rc = Remote2Local(task.src, task.dst, src_client, chunk_middle);
+            } else if (!src_host.empty() && src_host == dst_host) {
+                rc = hostm->test_host(src_host);
+                if (rc.first != EC::Success) {
+                    goto check;
+                }
+                rc = hostm->test_host(dst_host);
+                if (rc.first != EC::Success) {
+                    goto check;
+                }
+                src_client = hostm->get_host(src_host);
+                if (!src_client) {
+                    rc = ECM(EC::NoSession, "Source SFTP Client not found");
+                    goto check;
+                }
+                auto [rcmp, br9] = src_client->exists(task.dst);
+                if (rcmp.first != EC::Success) {
+                    rc = rcmp;
+                    goto check;
+                } else if (br9 && !task.overwrite) {
+                    rc = ECM{EC::PathAlreadyExists, fmt::format("Dst already exists: {}", task.dst)};
+                    goto check;
+                }
+                rc = InHostCopy(task.src, task.dst, src_client, chunk_small);
             } else {
                 // remote2remote
                 rc = hostm->test_host(src_host);
