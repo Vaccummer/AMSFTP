@@ -290,8 +290,9 @@ PYBIND11_MODULE(AMSFTP, m) {
         .def("SetKeys", &AMSession::SetKeys, py::arg("keys"), "Set shared private keys")
         .def("GetState", &AMSession::GetState, "Get the current state of the session")
         .def("Check", &AMSession::Check, "Realtime check the session status and update the state")
-        .def("Connect", &AMSession::Connect, py::arg("force") = false,
-             "Connect to the session, force will force to reconnect even if the session is already connected")
+        .def("BaseConnect", &AMSession::BaseConnect, py::arg("force") = false,
+             "Connect to the session, force will force to reconnect even if the "
+             "session is already connected")
         .def("GetLastEC", &AMSession::GetLastEC, "Get the last error code of the session")
         .def("GetLastErrorMsg", &AMSession::GetLastErrorMsg, "Get the last error message of the session")
         .def("Disconnect", &AMSession::Disconnect, "Disconnect the session")
@@ -335,6 +336,9 @@ PYBIND11_MODULE(AMSFTP, m) {
              "Get all stored Python objects as a dictionary with deep copies")
         .def("StrUid", &AMSFTPClient::StrUid, py::arg("uid"), "Convert a uid to a string")
         .def("GetHomeDir", &AMSFTPClient::GetHomeDir, "Get the home directory")
+        .def("Connect", &AMSFTPClient::Connect, py::arg("force") = false,
+             "Wrapper of BaseConnect, will get OS type and home directory if "
+             "conducted the first time")
         .def("GetTrashDir", &AMSFTPClient::GetTrashDir, "Get the trash directory")
         .def("SetTrashDir", &AMSFTPClient::SetTrashDir, py::arg("trash_dir") = "",
              "Set the trash directory and create it if it doesn't exist")

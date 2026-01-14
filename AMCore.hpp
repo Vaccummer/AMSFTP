@@ -204,8 +204,10 @@ public:
 };
 
 class AMSession : public AMTracer {
-private:
+protected:
     std::atomic<bool> has_connected;
+
+private:
     ECM CurError = {EC::NoConnection, "Connection not established"};
     std::mutex state_mtx;
     SOCKET sock = INVALID_SOCKET;
@@ -323,7 +325,7 @@ public:
         return rc;
     }
 
-    ECM Connect(bool force = false) {
+    ECM BaseConnect(bool force = false) {
         std::lock_guard<std::recursive_mutex> lock(mtx);
         if (has_connected.load()) {
             if (!force) {
@@ -495,7 +497,10 @@ public:
         has_connected.store(true);
         // is_heartbeat.store(true);
         // heartbeat_thread = std::thread([this]()
-        //                                { HeartbeatAct(this->heartbeat_interval_s); });
+        //                                {
+        //                                HeartbeatAct(this->heartbeat_interval_s);
+        //                                });
+
         return {EC::Success, ""};
     }
 
@@ -1242,6 +1247,16 @@ public:
         }
     }
 
+    ECM Connect(bool force = false) {
+        bool not_init = has_connected;
+        ECM ecm = BaseConnect(force);
+        if (!not_init && isok(ecm)) {
+            GetOSType();
+            GetHomeDir();
+        }
+        return ecm;
+    }
+
     inline std::string GetTrashDir() { return this->trash_dir; }
 
     ECM SetTrashDir(const std::string& trash_dir = "") {
@@ -1842,13 +1857,22 @@ private:
     std::unordered_map<std::string, std::shared_ptr<AMSFTPClient>> hosts;
     std::atomic<bool> is_heartbeat;
     std::thread heartbeat_thread;
+    py::function disconnect_cb;
+    bool is_disconnect_cb = false;
 
     void HeartbeatAct(int interval_s) {
         int millsecond = 0;
+        ECM rcm;
         while (true) {
             // 遍历hosts字典
             for (auto& host : hosts) {
-                host.second->Check(true);
+                rcm = host.second->Check();
+                if (rcm.first != EC::Success) {
+                    if (is_disconnect_cb) {
+                        py::gil_scoped_acquire acquire;
+                        disconnect_cb(host.second, rcm);
+                    }
+                }
             }
             while (millsecond < interval_s * 1000) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -1869,21 +1893,32 @@ public:
         }
     }
 
-    HostMaintainer(int heartbeat_interval_s) {
+    HostMaintainer(int heartbeat_interval_s = 60, py::object disconnect_cb = py::none()) {
         this->is_heartbeat.store(true);
         heartbeat_thread = std::thread([this, heartbeat_interval_s]() { HeartbeatAct(heartbeat_interval_s); });
+        if (!disconnect_cb.is_none()) {
+            this->disconnect_cb = py::cast<py::function>(disconnect_cb);
+            this->is_disconnect_cb = true;
+        }
     }
 
     std::vector<std::string> get_hosts() {
         std::vector<std::string> host_list;
-        host_list.reserve(hosts.size());
         for (auto& host : hosts) {
             host_list.push_back(host.first);
         }
         return host_list;
     }
 
-    void add_host(const std::string& nickname, const std::shared_ptr<AMSFTPClient>& client, bool overwrite = false) {
+    std::vector<std::shared_ptr<AMSFTPClient>> get_clients() {
+        std::vector<std::shared_ptr<AMSFTPClient>> client_list;
+        for (auto& host : hosts) {
+            client_list.push_back(host.second);
+        }
+        return client_list;
+    }
+
+    void add_host(const std::string& nickname, std::shared_ptr<AMSFTPClient> client, bool overwrite = false) {
         if (hosts.find(nickname) != hosts.end()) {
             if (!overwrite) {
                 return;
@@ -1915,7 +1950,7 @@ public:
         if (!update) {
             ECM rcm = hosts[nickname]->GetState();
             if (rcm.first != EC::Success) {
-                return hosts[nickname]->Check(true);
+                return hosts[nickname]->Check();
             } else {
                 return rcm;
             }
