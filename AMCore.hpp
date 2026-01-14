@@ -579,6 +579,9 @@ public:
 };
 
 class BaseSFTPClient : public AMSession {
+private:
+    std::atomic<bool> terminate_cmd = false;
+
 public:
     OS_TYPE os_type = OS_TYPE::Uncertain;
     std::string home_dir = "";
@@ -624,48 +627,104 @@ public:
     //     EnsureTrashDir();
     //     return {EC::Success, ""};
     // }
-    CR ConductCmd(const std::string& cmd, float time_limit_s = -1) {
+    CR ConductCmd(const std::string& cmd, double max_time_s = -1) {
+        std::lock_guard<std::recursive_mutex> lock(mtx);
+        terminate_cmd.store(false);
+        bool time_out = false;
         SafeChannel sf(session);
         if (!sf.channel) {
             return {ECM{EC::NoConnection, "Channel not initialized"}, std::pair<std::string, int>("", -1)};
         }
-
+        double time_start = timenow();
         int out;
         {
-            std::lock_guard<std::recursive_mutex> lock(mtx);
-            out = libssh2_channel_exec(sf.channel, cmd.c_str());
+            // 设置不阻塞
+            libssh2_session_set_blocking(session, 0);
+            while (true) {
+                out = libssh2_channel_exec(sf.channel, cmd.c_str());
+                if (out != LIBSSH2_ERROR_EAGAIN) {
+                    break;
+                }
+                if (max_time_s > 0 && timenow() - time_start > max_time_s) {
+                    time_out = true;
+
+                    break;
+                }
+                if (terminate_cmd) {
+                    terminate_cmd.store(true);
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
         }
+
+        if (terminate_cmd.load()) {
+            libssh2_session_set_blocking(session, 1);
+            return {ECM{EC::Terminate, "Command terminated"}, std::pair<std::string, int>("", -1)};
+        } else if (time_out) {
+            libssh2_session_set_blocking(session, 1);
+            return {ECM{EC::OperationTimeout, "Command timed out"}, std::pair<std::string, int>("", -1)};
+        }
+
         EC error_code;
         std::string error_msg;
-
         if (out < 0) {
             error_code = GetLastEC();
             error_msg = fmt::format("{} Host channel operation failed: {}", res_data.nickname, GetLastErrorMsg());
             return {ECM{error_code, error_msg}, std::pair<std::string, int>("", -1)};
         }
 
+        std::string output;
         std::array<char, 4096> cmd_out;
-        int nbytes;
-        {
-            std::lock_guard<std::recursive_mutex> lock(mtx);
-            nbytes = libssh2_channel_read(sf.channel, cmd_out.data(), sizeof(cmd_out) - 1);
+        bool output_time_out = false;
+        while (true) {
+            int nbytes = -1;
+            {
+                nbytes = libssh2_channel_read(sf.channel, cmd_out.data(), sizeof(cmd_out) - 1);
+            }
+
+            if (nbytes < 0) {
+                if (libssh2_session_last_errno(session) == LIBSSH2_ERROR_EAGAIN) {
+                    // 读取超时检查
+                    if (max_time_s > 0 && timenow() - time_start > max_time_s) {
+                        output_time_out = true;
+                        break;
+                    }
+                    if (terminate_cmd.load()) {
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+                EC error_code = GetLastEC();
+                std::string error_msg
+                    = fmt::format("{} Host channel output read failed: {}", res_data.nickname, GetLastErrorMsg());
+                libssh2_session_set_blocking(session, 1);
+                return {ECM{error_code, error_msg}, std::make_pair(std::string(), -1)};
+            }
+            if (nbytes == 0) {
+                break;  // 输出读取完成
+            }
+            output.append(cmd_out.data(), nbytes);
+        }
+        libssh2_session_set_blocking(session, 1);
+        // 读取过程中检查终止信号
+        if (terminate_cmd.load()) {
+            return {ECM{EC::Terminate, "Command terminated"}, std::make_pair(output, -1)};
         }
 
-        if (nbytes < 0) {
-            error_code = GetLastEC();
-            error_msg = fmt::format("{} Host channel output read failed: {}", res_data.nickname, GetLastErrorMsg());
-            return {ECM{error_code, error_msg}, std::pair<std::string, int>("", -1)};
+        if (output_time_out) {
+            return {ECM{EC::OperationTimeout, "Output read timed out"}, std::make_pair(output, -1)};
         }
 
-        int exit_status;
-        {
-            std::lock_guard<std::recursive_mutex> lock(mtx);
-            exit_status = libssh2_channel_get_exit_status(sf.channel);
-        }
-        std::string output(cmd_out.data(), nbytes);
+        // 7. 获取退出状态并清理资源
+        int exit_status = libssh2_channel_get_exit_status(sf.channel);
+
+        // 8. 清理输出的末尾空白字符
         output.erase(std::find_if(output.rbegin(), output.rend(), [](char c) { return c != '\n' && c != '\r'; }).base(),
                      output.end());
-        return {ECM{EC::Success, ""}, std::pair<std::string, int>(output, exit_status)};
+
+        return {ECM{EC::Success, ""}, std::make_pair(output, exit_status)};
     }
 
     OS_TYPE GetOSType(bool update = false) {
@@ -2764,7 +2823,6 @@ public:
                 task.IsSuccess = true;
             }
         }
-
         return tasks;
     }
 
@@ -2849,8 +2907,7 @@ public:
                     tasks};
             }
 
-            tasks.push_back(
-                TransferTask(srcf, src_hostname, dstf, dst_hostname, src_stat.size, src_stat.type, overwrite));
+            tasks.emplace_back(srcf, src_hostname, dstf, dst_hostname, src_stat.size, src_stat.type, overwrite);
             return {ECM(EC::Success, ""), tasks};
         }
 
@@ -2865,8 +2922,7 @@ public:
         std::string dst_n;
         for (auto& item : result2) {
             dst_n = AMFS::join(dstf, fs::relative(item.path, AMFS::dirname(srcf)));
-            tasks.push_back(
-                TransferTask(item.path, src_hostname, dst_n, dst_hostname, item.size, item.type, overwrite));
+            tasks.emplace_back(item.path, src_hostname, dst_n, dst_hostname, item.size, item.type, overwrite);
         }
         return {ECM(EC::Success, ""), tasks};
     };
