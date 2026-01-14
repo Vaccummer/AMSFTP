@@ -1,5 +1,6 @@
 #pragma once
 // 标准库头文件（跨平台，无需条件编译）
+#include <cstddef>
 #include <cstdlib>
 #include <ctime>
 #include <filesystem>
@@ -83,55 +84,46 @@ public:
         size_t char_count = 0;
         size_t idx = 0;
 
-        while (idx < str_len)
-        {
+        while (idx < str_len) {
             const uint8_t current = static_cast<uint8_t>(utf8_str[idx]);
 
-            if ((current & 0x80) == 0)
-            {
+            if ((current & 0x80) == 0) {
                 ++char_count;
                 ++idx;
-            } else if ((current & 0xE0) == 0xC0 && idx + 1 < str_len)
-            {
+            } else if ((current & 0xE0) == 0xC0 && idx + 1 < str_len) {
                 // 尝试匹配2字节字符，无效则按单字节计数
                 const uint8_t next = static_cast<uint8_t>(utf8_str[idx + 1]);
-                if ((next & 0xC0) == 0x80)
-                {
+                if ((next & 0xC0) == 0x80) {
                     ++char_count;
                     idx += 2;
                     continue;
                 }
                 ++char_count;
                 ++idx;
-            } else if ((current & 0xF0) == 0xE0 && idx + 2 < str_len)
-            {
+            } else if ((current & 0xF0) == 0xE0 && idx + 2 < str_len) {
                 // 尝试匹配3字节字符
                 const uint8_t next1 = static_cast<uint8_t>(utf8_str[idx + 1]);
                 const uint8_t next2 = static_cast<uint8_t>(utf8_str[idx + 2]);
-                if ((next1 & 0xC0) == 0x80 && (next2 & 0xC0) == 0x80)
-                {
+                if ((next1 & 0xC0) == 0x80 && (next2 & 0xC0) == 0x80) {
                     ++char_count;
                     idx += 3;
                     continue;
                 }
                 ++char_count;
                 ++idx;
-            } else if ((current & 0xF8) == 0xF0 && idx + 3 < str_len)
-            {
+            } else if ((current & 0xF8) == 0xF0 && idx + 3 < str_len) {
                 // 尝试匹配4字节字符
                 const uint8_t next1 = static_cast<uint8_t>(utf8_str[idx + 1]);
                 const uint8_t next2 = static_cast<uint8_t>(utf8_str[idx + 2]);
                 const uint8_t next3 = static_cast<uint8_t>(utf8_str[idx + 3]);
-                if ((next1 & 0xC0) == 0x80 && (next2 & 0xC0) == 0x80 && (next3 & 0xC0) == 0x80)
-                {
+                if ((next1 & 0xC0) == 0x80 && (next2 & 0xC0) == 0x80 && (next3 & 0xC0) == 0x80) {
                     ++char_count;
                     idx += 4;
                     continue;
                 }
                 ++char_count;
                 ++idx;
-            } else
-            {
+            } else {
                 // 无效字节，按单字符计数
                 ++char_count;
                 ++idx;
@@ -152,19 +144,16 @@ public:
 
     static std::string ModeTrans(uint64_t mode_int) {
         // 把mode_int转换为8进制字符串, 长度为9
-        if (mode_int > 0777 || mode_int == 0777)
-        {
+        if (mode_int > 0777 || mode_int == 0777) {
             return "rwxrwxrwx";
         }
         std::string out = "";
         uint64_t tmp_int;
         uint64_t start = 8 * 8 * 8;
-        for (int i = 3; i > 0; i--)
-        {
+        for (int i = 3; i > 0; i--) {
             tmp_int = (mode_int % start) / (start / 8);
             start /= 8;
-            switch (tmp_int)
-            {
+            switch (tmp_int) {
                 case 1:
                     out += "--x";
                     break;
@@ -195,15 +184,12 @@ public:
 
     static uint64_t ModeTrans(std::string mode_str) {
         std::regex pattern("^[r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-]$");
-        if (!std::regex_match(mode_str, pattern))
-        {
+        if (!std::regex_match(mode_str, pattern)) {
             throw std::invalid_argument(fmt::format("Invalid mode string: {}", mode_str));
         }
         uint64_t mode_int = 0;
-        for (int i = 0; i < 9; i++)
-        {
-            if (mode_str[i] != '?' && mode_str[i] != '-')
-            {
+        for (int i = 0; i < 9; i++) {
+            if (mode_str[i] != '?' && mode_str[i] != '-') {
                 mode_int += (1ULL << (8 - i));
             }
         }
@@ -214,19 +200,16 @@ public:
         std::string pattern_f = "^[r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-]$";
         std::regex pattern(pattern_f);
 
-        if (!std::regex_match(base_mode_str, pattern))
-        {
+        if (!std::regex_match(base_mode_str, pattern)) {
             throw std::invalid_argument(fmt::format("Invalid base mode string: {}", base_mode_str));
         }
 
-        if (!std::regex_match(new_mode_str, pattern))
-        {
+        if (!std::regex_match(new_mode_str, pattern)) {
             throw std::invalid_argument(fmt::format("Invalid new mode string: {}", new_mode_str));
         }
 
         std::string mode_str = "";
-        for (int i = 0; i < 9; i++)
-        {
+        for (int i = 0; i < 9; i++) {
             mode_str += (new_mode_str[i] == '?' ? base_mode_str[i] : new_mode_str[i]);
         }
         return mode_str;
@@ -243,11 +226,9 @@ public:
         std::string escaped;
         escaped.reserve(input.size() * 2);  // 预分配内存优化性能
 
-        for (char c : input)
-        {
+        for (char c : input) {
             // 匹配需要转义的正则元字符
-            switch (c)
-            {
+            switch (c) {
                 case '\\':
                 case '^':
                 case '$':
@@ -278,8 +259,7 @@ public:
 
         size_t start = path.find_first_not_of(trim_chars);
 
-        if (start == std::string::npos || start > path.size() - 2)
-        {
+        if (start == std::string::npos || start > path.size() - 2) {
             return "";
         }
 
@@ -291,8 +271,7 @@ public:
         const std::string trim_chars = " \t\n\r\"'";
 
         size_t start = path.find_first_not_of(trim_chars);
-        if (start == std::string::npos)
-        {
+        if (start == std::string::npos) {
             path = "";
         }
 
@@ -301,20 +280,19 @@ public:
     }
 
     static std::string GetPathSep(const std::string& path) {
-        if (path[0] == '/')
-        {
+        if (path[0] == '/') {
             return "/";
-        } else if (path[0] == '\\')
-        { return "\\"; }
+        } else if (path[0] == '\\') {
+            return "\\";
+        }
         int slash_count = 0;
         int anti_slash_count = 0;
-        for (auto& c : path)
-        {
-            if (c == '/')
-            {
+        for (auto& c : path) {
+            if (c == '/') {
                 slash_count++;
-            } else if (c == '\\')
-            { anti_slash_count++; }
+            } else if (c == '\\') {
+                anti_slash_count++;
+            }
         }
         return slash_count < anti_slash_count ? "\\" : "/";
     }
@@ -330,15 +308,12 @@ struct FileTimes
 
 inline bool is_valid_utf8(const std::string& str) {
     int remaining = 0;
-    for (unsigned char c : str)
-    {
-        if (remaining > 0)
-        {
+    for (unsigned char c : str) {
+        if (remaining > 0) {
             if ((c & 0xC0) != 0x80)
                 return false;
             --remaining;
-        } else
-        {
+        } else {
             if ((c & 0x80) == 0x00)
                 continue;  // 单字节 0xxxxxxx
             else if ((c & 0xE0) == 0xC0)
@@ -367,30 +342,25 @@ inline std::string GetFileOwner(const std::wstring& path) {
                                             NULL, NULL, &pSD);
 
     std::wstring owner = L"";
-    if (dwRtnCode == ERROR_SUCCESS)
-    {
+    if (dwRtnCode == ERROR_SUCCESS) {
         wchar_t szOwnerName[256];
         wchar_t szDomainName[256];
         DWORD dwNameLen = 256;
         DWORD dwDomainLen = 256;
         SID_NAME_USE eUse;
 
-        if (LookupAccountSidW(NULL, pSidOwner, szOwnerName, &dwNameLen, szDomainName, &dwDomainLen, &eUse))
-        {
+        if (LookupAccountSidW(NULL, pSidOwner, szOwnerName, &dwNameLen, szDomainName, &dwDomainLen, &eUse)) {
             owner = szOwnerName;
-        } else
-        {
+        } else {
             wchar_t username[257];
             DWORD username_len = 257;
-            if (GetUserNameW(username, &username_len))
-            {
+            if (GetUserNameW(username, &username_len)) {
                 owner = std::wstring(username, username_len - 1);
             }
         }
     }
 
-    if (pSD)
-    {
+    if (pSD) {
         LocalFree(pSD);
     }
 
@@ -403,8 +373,7 @@ inline std::tuple<double, double, double> GetTime(const std::wstring& path) {
     // 使用 FindFirstFile 获取文件信息（支持文件和目录）
     WIN32_FIND_DATAW find_data;
     HANDLE hFind = FindFirstFileW(wpath.c_str(), &find_data);
-    if (hFind == INVALID_HANDLE_VALUE)
-    {
+    if (hFind == INVALID_HANDLE_VALUE) {
         return {0, 0, 0};
     }
     FindClose(hFind);
@@ -414,8 +383,7 @@ inline std::tuple<double, double, double> GetTime(const std::wstring& path) {
 
 inline bool is_readonly(const std::wstring& path) {
     DWORD attributes = GetFileAttributesW(path.c_str());
-    if (attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_READONLY)
-    {
+    if (attributes != INVALID_FILE_ATTRIBUTES && attributes & FILE_ATTRIBUTE_READONLY) {
         return true;
     }
     return false;
@@ -481,16 +449,13 @@ inline std::string UnifyPathSep(std::string path, std::string sep = "") {
         return path;
     sep = sep.empty() ? Str::GetPathSep(path) : sep;
     std::string head = path.substr(0, 2);
-    if (head == "//" || head == "\\\\")
-    {
+    if (head == "//" || head == "\\\\") {
         path = path.substr(2);
-    } else
-    {
+    } else {
         head.clear();
     }
     path = std::regex_replace(path, std::regex("[\\\\/]+"), sep);
-    if (path.back() == sep[0])
-    {
+    if (path.back() == sep[0]) {
         path.pop_back();
     }
     return head + path;
@@ -505,8 +470,7 @@ inline std::string HomePath() {
 #ifdef _WIN32
     // Windows: 优先使用API
     wchar_t path[MAX_PATH];
-    if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_PROFILE, NULL, 0, path)))
-    {
+    if (SUCCEEDED(SHGetFolderPathW(NULL, CSIDL_PROFILE, NULL, 0, path))) {
         return Str::AMStr(path);
     }
     // 备选环境变量
@@ -532,19 +496,15 @@ inline std::string extname(const std::string& path) {
     std::string base = Str::Strip(path);
     std::string ext = "";
     size_t dot_pos = path.find_last_of('.');
-    if (dot_pos != std::string::npos)
-    {
+    if (dot_pos != std::string::npos) {
         ext = path.substr(dot_pos + 1);
         std::string test_ext = ".tar." + ext;
-        if (Str::endswith(base, test_ext).first)
-        {
+        if (Str::endswith(base, test_ext).first) {
             return test_ext.substr(1);
-        } else
-        {
+        } else {
             return ext;
         }
-    } else
-    {
+    } else {
         return "";
     }
 }
@@ -553,21 +513,17 @@ inline std::pair<std::string, std::string> split_basename(const std::string& bas
     std::string base = Str::Strip(basename);
     std::string ext = "";
     size_t dot_pos = base.find_last_of('.');
-    if (dot_pos != std::string::npos)
-    {
+    if (dot_pos != std::string::npos) {
         ext = base.substr(dot_pos + 1);
         std::string test_ext = ".tar." + ext;
         // 检测base是否已test_ext结尾
         auto [check, pos] = Str::endswith(base, test_ext);
-        if (check)
-        {
+        if (check) {
             return {base.substr(0, pos), test_ext.substr(1)};
-        } else
-        {
+        } else {
             return {base.substr(0, dot_pos), ext};
         }
-    } else
-    {
+    } else {
         return {base, ""};
     }
 }
@@ -577,50 +533,40 @@ inline std::string CWD() {
 }
 
 inline std::vector<std::string> split(std::string path) {
-    if (Str::CharNum(path) < 2)
-    {
+    if (Str::CharNum(path) < 2) {
         return {path};
     }
 
     std::vector<std::string> result{};
     std::string head = path.substr(0, 2);
-    if (head == "//" || head == "\\\\")
-    {
+    if (head == "//" || head == "\\\\") {
         // 匹配网络路径
         path = path.substr(2);
-    } else if (head[0] == '/')
-    {
+    } else if (head[0] == '/') {
         // 匹配unix根目录
         result.push_back("/");
         path = path.substr(1);
         head.clear();
-    } else
-    {
+    } else {
         head.clear();
     }
 
     std::string cur = "";
-    for (auto c : path)
-    {
-        if (c == '\\' || c == '/')
-        {
-            if (!cur.empty())
-            {
+    for (auto c : path) {
+        if (c == '\\' || c == '/') {
+            if (!cur.empty()) {
                 result.push_back(cur);
                 cur = "";
             }
-        } else
-        {
+        } else {
             cur += c;
         }
     }
-    if (!cur.empty())
-    {
+    if (!cur.empty()) {
         result.push_back(cur);
     }
 
-    if (!head.empty())
-    {
+    if (!head.empty()) {
         result[0] = head + result[0];
     }
 
@@ -629,44 +575,33 @@ inline std::vector<std::string> split(std::string path) {
 
 inline std::vector<std::string> resplit(const std::string& path, char front_esc, char back_esc,
                                         const std::string& head = "") {
-    if (Str::CharNum(path) < 3)
-    {
+    if (Str::CharNum(path) < 3) {
         return {path};
     }
     std::vector<std::string> parts{};
     std::string tmp_str = "";
     bool in_brackets = false;
     std::string bracket_str = "";
-    for (auto& sig : path)
-    {
-        if (in_brackets)
-        {
-            if (sig == back_esc)
-            {
+    for (auto& sig : path) {
+        if (in_brackets) {
+            if (sig == back_esc) {
                 in_brackets = false;
-                if (!bracket_str.empty())
-                {
+                if (!bracket_str.empty()) {
                     parts.push_back(head + bracket_str);
                     bracket_str.clear();
                 }
-            } else
-            {
+            } else {
                 bracket_str += sig;
             }
-        } else
-        {
-            if (sig == front_esc)
-            {
+        } else {
+            if (sig == front_esc) {
                 in_brackets = true;
-            } else if (sig == '/' || sig == '\\')
-            {
-                if (!tmp_str.empty())
-                {
+            } else if (sig == '/' || sig == '\\') {
+                if (!tmp_str.empty()) {
                     parts.push_back(tmp_str);
                     tmp_str.clear();
                 }
-            } else
-            {
+            } else {
                 tmp_str += sig;
             }
         }
@@ -683,59 +618,44 @@ std::string join(Args&&... args) {
 
     auto process_arg = [&](auto&& arg) {
         using T = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<T, std::filesystem::path>)
-        {
-            if (!arg.empty())
-            {
+        if constexpr (std::is_same_v<T, std::filesystem::path>) {
+            if (!arg.empty()) {
                 segments.push_back(arg.string());
                 ori_str += arg.string();
             }
-        } else if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, const std::string>)
-        {
-            if (!arg.empty())
-            {
+        } else if constexpr (std::is_same_v<T, std::string> || std::is_same_v<T, const std::string>) {
+            if (!arg.empty()) {
                 segments.push_back(arg);
                 ori_str += arg;
             }
-        } else if constexpr (std::is_same_v<T, std::vector<std::string>> ||
-                             std::is_same_v<T, const std::vector<std::string>>)
-        {
-            for (auto& seg : arg)
-            {
-                if (!seg.empty())
-                {
+        } else if constexpr (std::is_same_v<T, std::vector<std::string>>
+                             || std::is_same_v<T, const std::vector<std::string>>) {
+            for (auto& seg : arg) {
+                if (!seg.empty()) {
                     segments.push_back(seg);
                     ori_str += seg;
                 }
             }
-        } else if constexpr (std::is_same_v<T, std::wstring> || std::is_same_v<T, const std::wstring>)
-        {
+        } else if constexpr (std::is_same_v<T, std::wstring> || std::is_same_v<T, const std::wstring>) {
             std::string s = Str::AMStr(arg);
-            if (!s.empty())
-            {
+            if (!s.empty()) {
                 segments.push_back(s);
                 ori_str += s;
             }
-        } else if constexpr (std::is_same_v<T, const char*> || std::is_same_v<T, char*>)
-        {
+        } else if constexpr (std::is_same_v<T, const char*> || std::is_same_v<T, char*>) {
             std::string s = std::string(arg);
-            if (!s.empty())
-            {
+            if (!s.empty()) {
                 segments.push_back(s);
                 ori_str += s;
             }
-        } else if constexpr (std::is_same_v<T, const wchar_t*> || std::is_same_v<T, wchar_t*>)
-        {
+        } else if constexpr (std::is_same_v<T, const wchar_t*> || std::is_same_v<T, wchar_t*>) {
             std::string s = Str::AMStr(arg);
-            if (!s.empty())
-            {
+            if (!s.empty()) {
                 segments.push_back(s);
                 ori_str += s;
             }
-        } else if constexpr (std::is_same_v<T, SepType>)
-        {
-            switch (arg)
-            {
+        } else if constexpr (std::is_same_v<T, SepType>) {
+            switch (arg) {
                 case SepType::Unix:
                     sep = "/";
                     break;
@@ -750,33 +670,27 @@ std::string join(Args&&... args) {
 
     if (segments.empty())
         return "";
-    else if (segments.size() == 1)
-    {
+    else if (segments.size() == 1) {
         return segments.front();
     }
 
     std::string result;
 
-    if (segments[0] == "/")
-    {
+    if (segments[0] == "/") {
         result = "/";
         sep = "/";
-    } else if (segments[0] == "//")
-    {
+    } else if (segments[0] == "//") {
         result = "//";
         sep = "/";
-    } else if (segments[0] == "\\\\")
-    {
+    } else if (segments[0] == "\\\\") {
         result = "\\\\";
         sep = "\\";
-    } else
-    {
+    } else {
         sep = sep.empty() ? Str::GetPathSep(ori_str) : sep;
         result = segments[0] + sep;
     }
 
-    for (int i = 1; i < segments.size(); i++)
-    {
+    for (size_t i = 1; i < segments.size(); i++) {
         result += segments[i] + sep;
     }
     result = UnifyPathSep(result, sep);
@@ -857,22 +771,19 @@ inline std::string abspath(const std::string& path, const bool parsing_home = tr
                            const std::string& cwd = "", const std::string& sep = "") {
     std::string new_path = UnifyPathSep(path, sep);
 
-    if (IsAbs(new_path, sep) && !parsing_home)
-    {
+    if (IsAbs(new_path, sep) && !parsing_home) {
         return new_path;
     }
 
     std::string new_sep = sep.empty() ? Str::GetPathSep(path) : sep;
 
-    if (!IsAbs(new_path, new_sep))
-    {
+    if (!IsAbs(new_path, new_sep)) {
         new_path = cwd.empty() ? CWD() + new_sep + new_path : cwd + new_sep + new_path;
     }
 
     std::vector<std::string> parts = split(new_path);
 
-    if (parts.empty())
-    {
+    if (parts.empty()) {
         return "";
     }
 
@@ -880,69 +791,54 @@ inline std::string abspath(const std::string& path, const bool parsing_home = tr
 
     std::string tmp_part;
     std::string result;
-    if (parts.empty())
-    {
+    if (parts.empty()) {
         return "";
-    } else if (parts.size() == 1)
-    {
-        if (parts[0] == "~" && parsing_home)
-        {
+    } else if (parts.size() == 1) {
+        if (parts[0] == "~" && parsing_home) {
             return home.empty() ? HomePath() : home;
         }
         return parts.front();
-    } else if (parts[0] == "/")
-    {
+    } else if (parts[0] == "/") {
         result = "/";
         new_sep = "/";
-    } else if (parts[0] == "~" && parsing_home)
-    {
+    } else if (parts[0] == "~" && parsing_home) {
         std::string hm = home.empty() ? HomePath() : home;
-        for (const auto& seg : split(hm))
-        {
+        for (const auto& seg : split(hm)) {
             new_parts.push_back(seg);
         }
         parts.erase(parts.begin());
-    } else
-    {
+    } else {
         result = parts[0] + new_sep;
     }
 
-    for (int i = 1; i < parts.size(); i++)
-    {
+    for (size_t i = 1; i < parts.size(); i++) {
         tmp_part = parts[i];
-        if (tmp_part == ".")
-        {
+        if (tmp_part == ".") {
             continue;
-        } else if (tmp_part == "..")
-        {
-            if (!new_parts.empty())
-            {
+        } else if (tmp_part == "..") {
+            if (!new_parts.empty()) {
                 new_parts.pop_back();
             }
-        } else
-        {
+        } else {
             new_parts.push_back(tmp_part);
         }
     }
 
-    if (new_parts.size() == 0)
-    {
+    if (new_parts.size() == 0) {
         return "";
     }
-
-    for (int i = 0; i < new_parts.size(); i++)
-    {
-        result += new_parts[i] + new_sep;
+    for (auto& part : new_parts) {
+        result += part + new_sep;
     }
-
-    result.pop_back();
+    if (!result.empty()) {
+        result.pop_back();
+    }
     return result;
 }
 
 inline std::string dirname(const std::string& path) {
     fs::path p(path);
-    if (p.parent_path().empty())
-    {
+    if (p.parent_path().empty()) {
         return "";
     }
     return p.parent_path().string();
@@ -950,8 +846,7 @@ inline std::string dirname(const std::string& path) {
 
 inline std::string basename(const std::string& path) {
     std::string pathf = Str::Strip(path);
-    while ((pathf.back() == '/' || pathf.back() == '\\') && path.size() > 1)
-    {
+    while ((pathf.back() == '/' || pathf.back() == '\\') && path.size() > 1) {
         pathf.pop_back();
     }
     fs::path p(pathf);
@@ -959,13 +854,13 @@ inline std::string basename(const std::string& path) {
 }
 
 inline std::string mkdirs(const std::string& path) {
-    try
-    {
+    try {
         fs::path p(path);
         fs::create_directories(p);
         return "";
-    } catch (const std::exception& e)
-    { return fmt::format("Mkdir error: {}", e.what()); }
+    } catch (const std::exception& e) {
+        return fmt::format("Mkdir error: {}", e.what());
+    }
 }
 
 inline std::pair<std::string, PathInfo> stat(const std::string& path, bool trace_link = false) {
@@ -976,20 +871,17 @@ inline std::pair<std::string, PathInfo> stat(const std::string& path, bool trace
     info.path = pathf;
     info.dir = p.parent_path().string();
     fs::file_status status;
-    try
-    {
-        if (trace_link)
-        {
+    try {
+        if (trace_link) {
             status = fs::status(p);
-        } else
-        {
+        } else {
             status = fs::symlink_status(p);
         }
-    } catch (const fs::filesystem_error& e)
-    { return std::make_pair(fmt::format("Stat {} failed: {}", pathf, e.what()), PathInfo()); }
+    } catch (const fs::filesystem_error& e) {
+        return std::make_pair(fmt::format("Stat {} failed: {}", pathf, e.what()), PathInfo());
+    }
 
-    switch (status.type())
-    {
+    switch (status.type()) {
         case fs::file_type::directory:
             info.type = PathType::DIR;
             break;
@@ -1019,20 +911,19 @@ inline std::pair<std::string, PathInfo> stat(const std::string& path, bool trace
             break;
     }
 
-    if (info.type == PathType::FILE)
-    {
-        try
-        { info.size = fs::file_size(p); } catch (const std::exception& e)
-        { return std::make_pair(fmt::format("Fail to get file size: {}", e.what()), PathInfo()); }
+    if (info.type == PathType::FILE) {
+        try {
+            info.size = fs::file_size(p);
+        } catch (const std::exception& e) {
+            return std::make_pair(fmt::format("Fail to get file size: {}", e.what()), PathInfo());
+        }
     }
 
 #ifdef _WIN32
-    if (is_readonly(Str::AMStr(pathf)))
-    {
+    if (is_readonly(Str::AMStr(pathf))) {
         info.mode_int = 0333;
         info.mode_str = "r-xr-xr-x";
-    } else
-    {
+    } else {
         info.mode_int = 0666;
         info.mode_str = "rwxrwxrwx";
     }
@@ -1045,8 +936,7 @@ inline std::pair<std::string, PathInfo> stat(const std::string& path, bool trace
 #else
     struct stat file_stat;
     // 调用 stat 获取文件元数据（支持符号链接，若需跟随链接用 stat 而非 lstat）
-    if (stat(path.c_str(), &file_stat) == -1)
-    {
+    if (stat(path.c_str(), &file_stat) == -1) {
         return std::make_pair("Fail to stat file: " + std::string(strerror(errno)), info);
     }
 
@@ -1073,29 +963,23 @@ inline std::vector<PathInfo> listdir(const std::string& path) {
     std::string pathf = abspath(path);
     std::vector<PathInfo> result = {};
     fs::path p(pathf);
-    if (!fs::exists(p))
-    {
+    if (!fs::exists(p)) {
         return result;
     }
-    if (!fs::is_directory(p))
-    {
+    if (!fs::is_directory(p)) {
         return result;
     }
     std::variant<PathInfo, std::pair<std::string, std::exception>> sr;
     std::vector<std::string> dir_paths = {};
-    try
-    {
-        for (const auto& entry : fs::directory_iterator(p))
-        {
+    try {
+        for (const auto& entry : fs::directory_iterator(p)) {
             dir_paths.push_back(entry.path().string());
         }
-    } catch (const fs::filesystem_error)
-    {}
-    for (const auto& dir_path : dir_paths)
-    {
+    } catch (const fs::filesystem_error) {
+    }
+    for (const auto& dir_path : dir_paths) {
         auto [error, info] = stat(dir_path, false);
-        if (!error.empty())
-        {
+        if (!error.empty()) {
             continue;
         }
         result.push_back(info);
@@ -1105,32 +989,26 @@ inline std::vector<PathInfo> listdir(const std::string& path) {
 
 inline void _iwalk(const std::string& path, std::vector<PathInfo>& result, bool ignore_sepcial_file) {
     auto [error, info] = stat(path);
-    if (!error.empty())
-    {
+    if (!error.empty()) {
         return;
     }
     bool end_dir = true;
 
-    switch (info.type)
-    {
+    switch (info.type) {
         case PathType::DIR:
 
-            for (const auto& entry : listdir(path))
-            {
-                if (entry.type == PathType::DIR)
-                {
+            for (const auto& entry : listdir(path)) {
+                if (entry.type == PathType::DIR) {
                     end_dir = false;
                 }
                 _iwalk(entry.path, result, ignore_sepcial_file);
             }
-            if (end_dir)
-            {
+            if (end_dir) {
                 result.push_back(info);
             }
             break;
         default:
-            if (ignore_sepcial_file && static_cast<int>(info.type) < 0)
-            {
+            if (ignore_sepcial_file && static_cast<int>(info.type) < 0) {
                 return;
             }
             result.push_back(info);
@@ -1138,56 +1016,31 @@ inline void _iwalk(const std::string& path, std::vector<PathInfo>& result, bool 
     }
 }
 
-inline void _walk(std::vector<std::string> parts, std::vector<std::pair<std::vector<std::string>, PathInfo>>& result,
-                  int cur_depth, int max_depth, bool ignore_sepcial_file) {
-    if (max_depth > 0 && cur_depth > max_depth)
-    {
+using WRD = std::vector<std::pair<std::vector<std::string>, std::vector<PathInfo>>>;
+
+inline void _walk(std::vector<std::string> parts, WRD& result, int cur_depth, int max_depth, bool ignore_sepcial_file) {
+    if (max_depth > 0 && cur_depth > max_depth) {
         return;
     }
-    std::string path = join(parts);
-    auto [error, info] = stat(path);
-    if (!error.empty())
-    {
+    std::string pathf = join(parts);
+    std::vector<PathInfo> files_info = {};
+    bool empty_dir = true;
+    for (const auto& entry : listdir(pathf)) {
+        empty_dir = false;
+        if (entry.type == PathType::DIR) {
+            auto n_parts = parts;
+            n_parts.push_back(entry.name);
+            _walk(n_parts, result, cur_depth + 1, max_depth, ignore_sepcial_file);
+        } else if (static_cast<int>(entry.type) < 0 && ignore_sepcial_file) {
+            continue;
+        } else {
+            files_info.push_back(entry);
+        }
+    }
+    if (!empty_dir && files_info.empty()) {
         return;
     }
-    switch (info.type)
-    {
-        case PathType::DIR: {
-            try
-            {
-                bool empty_dir = true;
-                for (const auto& entry : listdir(path))
-                {
-                    empty_dir = false;
-                    auto n_parts = parts;
-                    n_parts.push_back(entry.name);
-                    _walk(n_parts, result, cur_depth + 1, max_depth, ignore_sepcial_file);
-                }
-                if (empty_dir)
-                {
-                    if (parts.size() > 1)
-                    {
-                        // 如果是末级目录， 则加入此目录
-                        auto b_parts = parts;
-                        b_parts.pop_back();
-                        result.push_back(std::make_pair(b_parts, info));
-                    }
-                }
-            } catch (const std::exception)
-            {}
-            break;
-        }
-        default: {
-            if (ignore_sepcial_file && static_cast<int>(info.type) < 0)
-            {
-                return;
-            }
-            auto d_parts = parts;
-            d_parts.pop_back();
-            result.push_back(std::make_pair(d_parts, info));
-            break;
-        }
-    }
+    result.push_back(std::make_pair(parts, files_info));
 }
 
 inline std::vector<PathInfo> iwalk(const std::string& path, bool ignore_sepcial_file = true) {
@@ -1198,36 +1051,36 @@ inline std::vector<PathInfo> iwalk(const std::string& path, bool ignore_sepcial_
     return result;
 }
 
-inline std::vector<std::pair<std::vector<std::string>, PathInfo>> walk(const std::string& path, int max_depth,
-                                                                       bool ignore_sepcial_file) {
-    std::vector<std::pair<std::vector<std::string>, PathInfo>> result = {};
-    std::vector<std::string> parts = {path};
+inline WRD walk(const std::string& path, int max_depth, bool ignore_sepcial_file) {
+    WRD result = {};
+    auto [error, info] = stat(path);
+    if (!error.empty()) {
+        return result;
+    } else if (info.type != PathType::DIR) {
+        return result;
+    }
 
-    _walk(parts, result, 0, max_depth, ignore_sepcial_file);
+    _walk({path}, result, 0, max_depth, ignore_sepcial_file);
 
     return result;
 }
 
 inline void _getsize(const std::string& path, uint64_t& result, bool trace_link) {
     fs::path p(path);
-    if (!fs::exists(p))
-    {
+    if (!fs::exists(p)) {
         return;
     }
-    if (fs::is_directory(p))
-    {
-        for (const auto& entry : fs::directory_iterator(p))
-        {
+    if (fs::is_directory(p)) {
+        for (const auto& entry : fs::directory_iterator(p)) {
             _getsize(entry.path().string(), result, trace_link);
         }
-    } else if (fs::is_symlink(p))
-    {
-        if (trace_link)
-        {
+    } else if (fs::is_symlink(p)) {
+        if (trace_link) {
             _getsize(fs::read_symlink(p).string(), result, trace_link);
         }
-    } else if (fs::is_regular_file(p))
-    { result += fs::file_size(p); }
+    } else if (fs::is_regular_file(p)) {
+        result += fs::file_size(p);
+    }
 }
 
 inline uint64_t getsize(const std::string& path, bool trace_link = false) {
@@ -1539,66 +1392,53 @@ private:
 
     void _find(std::vector<PathInfo>& results, const PathInfo& path, const std::vector<std::string>& match_parts,
                const SearchType& type, const std::string& sep) {
-        if (match_parts.empty())
-        {
-            if (type == SearchType::All || (type == SearchType::Directory && path.type == PathType::DIR) ||
-                (type == SearchType::File && path.type == PathType::FILE))
-            {
+        if (match_parts.empty()) {
+            if (type == SearchType::All || (type == SearchType::Directory && path.type == PathType::DIR)
+                || (type == SearchType::File && path.type == PathType::FILE)) {
                 results.push_back(path);
             }
             return;
         }
 
-        if (path.type != PathType::DIR)
-        {
+        if (path.type != PathType::DIR) {
             // 当前路径已经是文件，无法继续匹配
             return;
         }
 
         std::string cur_pattern = match_parts[0];
 
-        if (std::regex_search(cur_pattern, std::regex("^\\*\\*+$")))
-        {
+        if (std::regex_search(cur_pattern, std::regex("^\\*\\*+$"))) {
             std::vector<std::string> relative_parts;
-            for (auto& sub : iiwalk(path.path))
-            {
-                if ((sub.type == PathType::DIR && type == SearchType::File) ||
-                    (sub.type != PathType::DIR && type == SearchType::Directory))
-                {
+            for (auto& sub : iiwalk(path.path)) {
+                if ((sub.type == PathType::DIR && type == SearchType::File)
+                    || (sub.type != PathType::DIR && type == SearchType::Directory)) {
                     continue;
                 }
                 // sub.path relative to path.path
                 relative_parts = AMFS::split(sub.path.substr(path.path.size()));
-                if (walk_match(relative_parts, match_parts))
-                {
+                if (walk_match(relative_parts, match_parts)) {
                     results.push_back(sub);
                 }
             }
             return;
         }
         // 处理不匹配模式
-        else if (cur_pattern.find("*") == std::string::npos &&
-                 (cur_pattern.find("<") == std::string::npos || cur_pattern.find(">") == std::string::npos))
-        {
+        else if (cur_pattern.find("*") == std::string::npos
+                 && (cur_pattern.find("<") == std::string::npos || cur_pattern.find(">") == std::string::npos)) {
             auto new_parts2 = match_parts;
             new_parts2.erase(new_parts2.begin());
-            for (auto& sub : ilistdir(path.path))
-            {
-                if (sub.name == cur_pattern)
-                {
+            for (auto& sub : ilistdir(path.path)) {
+                if (sub.name == cur_pattern) {
                     _find(results, sub, new_parts2, type, sep);
                 }
             }
         }
         // 进入匹配模式
-        else
-        {
+        else {
             auto new_parts3 = match_parts;
             new_parts3.erase(new_parts3.begin());
-            for (auto& sub : ilistdir(path.path))
-            {
-                if (name_match(sub.name, cur_pattern))
-                {
+            for (auto& sub : ilistdir(path.path)) {
+                if (name_match(sub.name, cur_pattern)) {
                     _find(results, sub, new_parts3, type, sep);
                 }
             }
@@ -1612,8 +1452,7 @@ private:
         if (from.empty())
             return result;  // 避免空字符串导致无限循环
         size_t pos = 0;
-        while ((pos = result.find(from, pos)) != std::string::npos)
-        {
+        while ((pos = result.find(from, pos)) != std::string::npos) {
             result.replace(pos, from.length(), to);
             pos += to.length();  // 跳过替换后的内容，防止重复替换（比如from是to的子串）
         }
@@ -1625,13 +1464,11 @@ public:
         std::string patternf = "^" + pattern + "$";
         std::wstring w_pattern = Str::AMStr(patternf);
         std::wstring w_name = Str::AMStr(name);
-        try
-        {
+        try {
             bool res = std::regex_search(w_name, std::wregex(w_pattern));
             std::wcout << "str_match pattern: " << w_pattern << " name: " << w_name << " result: " << res << std::endl;
             return res;
-        } catch (const std::regex_error& e)
-        {
+        } catch (const std::regex_error& e) {
             std::wcout << "str_match pattern: " << w_pattern << " name: " << w_name << " error: " << e.what()
                        << std::endl;
             return false;
@@ -1653,26 +1490,21 @@ public:
     };
 
     bool walk_match(const std::vector<std::string>& parts, const std::vector<std::string>& match_parts) {
-        if (match_parts.size() > parts.size())
-        {
+        if (match_parts.size() > parts.size()) {
             return false;
         }
         int pos = 0;
         bool is_match;
-        for (auto& part : match_parts)
-        {
+        for (auto& part : match_parts) {
             is_match = false;
-            for (int i = pos; i < parts.size(); i++)
-            {
-                if (name_match(parts[i], part))
-                {
+            for (size_t i = pos; i < parts.size(); i++) {
+                if (name_match(parts[i], part)) {
                     is_match = true;
                     pos = i + 1;
                     break;
                 }
             }
-            if (!is_match)
-            {
+            if (!is_match) {
                 return false;
             }
         }
@@ -1682,15 +1514,13 @@ public:
     std::vector<PathInfo> find(const std::string& path, SearchType type = SearchType::All) {
         std::vector<PathInfo> results = {};
         auto parts = split(path);
-        if (parts.empty())
-        {
+        if (parts.empty()) {
             return results;
-        } else if (parts.size() == 1)
-        {
+        } else if (parts.size() == 1) {
             auto [success, info] = istat(parts[0]);
-            if (success && (type == SearchType::All || (type == SearchType::Directory && info.type == PathType::DIR) ||
-                            (type == SearchType::File && info.type == PathType::FILE)))
-            {
+            if (success
+                && (type == SearchType::All || (type == SearchType::Directory && info.type == PathType::DIR)
+                    || (type == SearchType::File && info.type == PathType::FILE))) {
                 results.push_back(info);
             }
             return results;
@@ -1701,15 +1531,12 @@ public:
         bool is_stop = false;
         std::vector<std::string> match_parts = {};
 
-        for (int i = 1; i < parts.size(); i++)
-        {
+        for (size_t i = 1; i < parts.size(); i++) {
             // 没有* < >时，链接到cur_path
-            if (parts[i].find("*") == std::string::npos && parts[i].find("<") == std::string::npos &&
-                parts[i].find(">") == std::string::npos && !is_stop)
-            {
+            if (parts[i].find("*") == std::string::npos && parts[i].find("<") == std::string::npos
+                && parts[i].find(">") == std::string::npos && !is_stop) {
                 cur_path = AMFS::join(cur_path, parts[i]);
-            } else
-            {
+            } else {
                 is_stop = true;
                 match_parts.push_back(parts[i]);
             }
@@ -1717,8 +1544,7 @@ public:
 
         // 检查cur_path是否存在
         auto [success, info] = istat(cur_path);
-        if (!success)
-        {
+        if (!success) {
             return {};
         }
         _find(results, info, match_parts, type, sep);
@@ -1730,8 +1556,7 @@ class PathMatch : public BasePathMatch {
 private:
     std::pair<bool, PathInfo> istat(const std::string& path) override {
         auto [error, info] = stat(path);
-        if (error.empty())
-        {
+        if (error.empty()) {
             return std::make_pair(true, info);
         }
         return std::make_pair(false, PathInfo());
