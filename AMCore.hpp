@@ -1573,6 +1573,118 @@ class AMSFTPClient : public BaseSFTPClient, public AMFS::BasePathMatch {
         }
     }
 
+    // Iterator version that yields PathInfo one by one using Python generator
+    py::object iterator_listdir(const std::string &path) {
+        if (!sftp) {
+            throw std::runtime_error("SFTP not initialized");
+        }
+
+        auto pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
+        if (pathf.empty()) {
+            throw std::invalid_argument(fmt::format("Invalid path: {}", path));
+        }
+
+        auto [rcm, br] = is_dir(path);
+        if (rcm.first != EC::Success) {
+            throw std::runtime_error(rcm.second);
+        } else if (!br) {
+            throw std::runtime_error(fmt::format("Path is not a directory: {}", pathf));
+        }
+
+        // State holder for the generator
+        struct IteratorState {
+            AMSFTPClient *client;
+            std::string pathf;
+            LIBSSH2_SFTP_HANDLE *sftp_handle;
+            bool finished;
+
+            IteratorState(AMSFTPClient *cli, const std::string &p)
+                : client(cli), pathf(p), sftp_handle(nullptr), finished(false) {
+                std::lock_guard<std::recursive_mutex> lock(client->mtx);
+                sftp_handle = libssh2_sftp_open_ex(client->sftp, pathf.c_str(), pathf.size(), 0, LIBSSH2_SFTP_OPENDIR,
+                                                   LIBSSH2_FXF_READ);
+                if (!sftp_handle) {
+                    finished = true;
+                    throw std::runtime_error(fmt::format("Failed to open directory: {}", pathf));
+                }
+            }
+
+            ~IteratorState() {
+                if (sftp_handle) {
+                    std::lock_guard<std::recursive_mutex> lock(client->mtx);
+                    libssh2_sftp_close_handle(sftp_handle);
+                    sftp_handle = nullptr;
+                }
+            }
+
+            py::object next() {
+                if (finished) {
+                    throw py::stop_iteration();
+                }
+
+                std::lock_guard<std::recursive_mutex> lock(client->mtx);
+                LIBSSH2_SFTP_ATTRIBUTES attrs;
+                const size_t buffer_size = 4096;
+                std::vector<char> filename_buffer(buffer_size);
+                std::string name;
+                std::string path_i;
+
+                while (true) {
+                    int rct =
+                        libssh2_sftp_readdir_ex(sftp_handle, filename_buffer.data(), buffer_size, nullptr, 0, &attrs);
+
+                    if (rct < 0) {
+                        finished = true;
+                        throw std::runtime_error(
+                            fmt::format("Failed to read directory: {}", client->GetLastErrorMsg()));
+                    } else if (rct == 0) {
+                        finished = true;
+                        throw py::stop_iteration();
+                    }
+
+                    name.assign(filename_buffer.data(), rct);
+                    if (name == "." || name == "..") {
+                        continue;
+                    }
+
+                    path_i = AMFS::join(pathf, name);
+                    PathInfo info = client->FormatStat(path_i, attrs);
+                    return py::cast(info);
+                }
+            }
+        };
+
+        // Create the generator state
+        auto state = std::make_shared<IteratorState>(this, pathf);
+
+        // Create a generator using Python's compile and exec
+        py::gil_scoped_acquire gil;
+
+        // Get builtins module
+        py::module_ builtins = py::module_::import("builtins");
+
+        // Compile and execute the generator function
+        std::string code = R"(
+def _amsftp_gen(next_func):
+    while True:
+        try:
+            yield next_func()
+        except StopIteration:
+            break
+)";
+
+        py::dict local_ns;
+        py::object compiled = builtins.attr("compile")(code, "<string>", "exec");
+        builtins.attr("exec")(compiled, py::globals(), local_ns);
+
+        // Create the next function wrapper
+        py::object next_func = py::cpp_function([state]() -> py::object { return state->next(); });
+
+        // Call the generator function
+        py::object gen_func = local_ns["_amsftp_gen"];
+        return gen_func(next_func);
+    }
+
     // 创建一级目录，自带AMFS::abspath
     ECM mkdir(const std::string &path) {
         if (!sftp) {

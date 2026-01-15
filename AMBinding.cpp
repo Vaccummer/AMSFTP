@@ -364,6 +364,8 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("is_dir", &AMSFTPClient::is_dir, py::arg("path"))
         .def("is_symlink", &AMSFTPClient::is_symlink, py::arg("path"))
         .def("listdir", &AMSFTPClient::listdir, py::arg("path"), py::arg("max_time_ms") = -1)
+        .def("iterator_listdir", &AMSFTPClient::iterator_listdir, py::arg("path"),
+             "Return an iterator that yields PathInfo one by one, useful for large directories")
         .def("mkdir", &AMSFTPClient::mkdir, py::arg("path"))
         .def("mkdirs", &AMSFTPClient::mkdirs, py::arg("path"))
         .def("rmfile", &AMSFTPClient::rmfile, py::arg("path"))
