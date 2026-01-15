@@ -47,10 +47,10 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 
-#define SOCKET         int
+#define SOCKET int
 #define INVALID_SOCKET -1
-#define SOCKET_ERROR   -1
-#define closesocket    close
+#define SOCKET_ERROR -1
+#define closesocket close
 #endif
 
 namespace py = pybind11;
@@ -66,7 +66,7 @@ inline double timenow() {
 
 // 跨平台Socket连接器
 class SocketConnector {
-public:
+  public:
     SOCKET sock = INVALID_SOCKET;
     std::string error_msg = "";
     EC error_code = EC::Success;
@@ -77,7 +77,7 @@ public:
 
     // 连接到指定主机，返回是否成功
 
-    bool Connect(const std::string& hostname, int port, size_t timeout_s) {
+    bool Connect(const std::string &hostname, int port, size_t timeout_s) {
         // 1. DNS解析
         addrinfo hints{}, *result = nullptr;
         hints.ai_family = AF_INET;
@@ -168,7 +168,7 @@ public:
         // 6. 检查socket错误
         int sock_error = 0;
         socklen_t len = sizeof(sock_error);
-        if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char*)&sock_error, &len) < 0 || sock_error != 0) {
+        if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&sock_error, &len) < 0 || sock_error != 0) {
             error_msg = fmt::format("Socket error after connect: {}", sock_error);
             error_code = EC::SocketConnectFailed;
             closesocket(sock);
@@ -181,7 +181,7 @@ public:
         return true;
     }
 
-private:
+  private:
     bool SetNonBlocking(bool non_blocking) {
 #ifdef _WIN32
         u_long mode = non_blocking ? 1 : 0;
@@ -208,8 +208,7 @@ private:
     }
 };
 
-struct ConRequst
-{
+struct ConRequst {
     std::string nickname;
     std::string hostname;
     std::string username;
@@ -220,30 +219,15 @@ struct ConRequst
     size_t timeout_s;
     std::string trash_dir = "";
     ConRequst()
-        : nickname(""),
-          hostname(""),
-          username(""),
-          password(""),
-          keyfile(""),
-          compression(false),
-          port(22),
-          timeout_s(3),
-          trash_dir("") {}
+        : nickname(""), hostname(""), username(""), password(""), keyfile(""), compression(false), port(22),
+          timeout_s(3), trash_dir("") {}
     ConRequst(std::string nickname, std::string hostname, std::string username, int port, std::string password = "",
               std::string keyfile = "", bool compression = false, size_t timeout_s = 3, std::string trash_dir = "")
-        : nickname(nickname),
-          hostname(hostname),
-          username(username),
-          password(password),
-          keyfile(keyfile),
-          compression(compression),
-          port(port),
-          timeout_s(timeout_s),
-          trash_dir(trash_dir) {}
+        : nickname(nickname), hostname(hostname), username(username), password(password), keyfile(keyfile),
+          compression(compression), port(port), timeout_s(timeout_s), trash_dir(trash_dir) {}
 };
 
-struct ProgressCBInfo
-{
+struct ProgressCBInfo {
     std::string src;
     std::string dst;
     std::string src_host;
@@ -254,18 +238,11 @@ struct ProgressCBInfo
     uint64_t total_size;
     ProgressCBInfo(std::string src, std::string dst, std::string src_host, std::string dst_host, uint64_t this_size,
                    uint64_t file_size, uint64_t accumulated_size, uint64_t total_size)
-        : src(src),
-          dst(dst),
-          src_host(src_host),
-          dst_host(dst_host),
-          this_size(this_size),
-          file_size(file_size),
-          accumulated_size(accumulated_size),
-          total_size(total_size) {}
+        : src(src), dst(dst), src_host(src_host), dst_host(dst_host), this_size(this_size), file_size(file_size),
+          accumulated_size(accumulated_size), total_size(total_size) {}
 };
 
-struct ErrorCBInfo
-{
+struct ErrorCBInfo {
     std::pair<ErrorCode, std::string> ecm;
     std::string src;
     std::string dst;
@@ -276,19 +253,17 @@ struct ErrorCBInfo
         : ecm(ecm), src(src), dst(dst), src_host(src_host), dst_host(dst_host) {}
 };
 
-struct AuthCBInfo
-{
-    bool NeedPassword;  // if true, python password callback need to return
-                        // password, if false, callback function just tells you the
-                        // password is wrong
+struct AuthCBInfo {
+    bool NeedPassword; // if true, python password callback need to return
+                       // password, if false, callback function just tells you the
+                       // password is wrong
     ConRequst request;
     int trial_times;
     AuthCBInfo(bool NeedPassword, ConRequst request, int trial_times)
         : NeedPassword(NeedPassword), request(request), trial_times(trial_times) {}
 };
 
-struct TraceInfo
-{
+struct TraceInfo {
     TraceLevel level;
     ErrorCode error_code;
     std::string nickname;
@@ -300,23 +275,17 @@ struct TraceInfo
     TraceInfo() : level(TraceLevel::Info), error_code(EC::Success), nickname(""), target(""), action(""), message("") {}
     TraceInfo(TraceLevel level, ErrorCode error_code, std::string nickname, std::string target, std::string action,
               std::string message)
-        : level(level),
-          error_code(error_code),
-          nickname(nickname),
-          target(target),
-          action(action),
-          message(message),
+        : level(level), error_code(error_code), nickname(nickname), target(target), action(action), message(message),
           timestamp(timenow()) {}
 };
 
-struct TransferCallback
-{
+struct TransferCallback {
     bool need_error_cb;
     bool need_progress_cb;
     bool need_total_size_cb;
-    py::function error_cb;       // Callable[[ErrorCBInfo], None]
-    py::function progress_cb;    // Callable[[ProgressCBInfo], EC]
-    py::function total_size_cb;  // Callable[[int], None]
+    py::function error_cb;      // Callable[[ErrorCBInfo], None]
+    py::function progress_cb;   // Callable[[ProgressCBInfo], EC]
+    py::function total_size_cb; // Callable[[int], None]
 
     TransferCallback(py::object total_size = py::none(), py::object error = py::none(),
                      py::object progress = py::none()) {
@@ -376,8 +345,7 @@ struct TransferCallback
     }
 };
 
-struct TransferTask
-{
+struct TransferTask {
     std::string src;
     std::string src_host;
     std::string dst;
@@ -389,25 +357,20 @@ struct TransferTask
     bool overwrite = false;
     TransferTask(std::string src, std::string src_host, std::string dst, std::string dst_host, uint64_t size,
                  PathType path_type = PathType::FILE, bool overwrite = false)
-        : src(src),
-          src_host(src_host),
-          dst(dst),
-          dst_host(dst_host),
-          size(size),
-          path_type(path_type),
+        : src(src), src_host(src_host), dst(dst), dst_host(dst_host), size(size), path_type(path_type),
           overwrite(overwrite) {}
 };
 
 class BaseFileMapper {
-public:
-    char* file_ptr = nullptr;
+  public:
+    char *file_ptr = nullptr;
     uint64_t file_size = 0;
-    virtual ~BaseFileMapper() = default;  // 虚析构函数，确保派生类析构被调用
+    virtual ~BaseFileMapper() = default; // 虚析构函数，确保派生类析构被调用
 };
 
 #ifdef _WIN32
 class WindowsFileMapper : public BaseFileMapper {
-public:
+  public:
     HANDLE hFile;
     HANDLE hMap;
     LPVOID addr;
@@ -429,7 +392,7 @@ public:
         this->file_ptr = nullptr;
     }
 
-    WindowsFileMapper(const std::string& file_path, MapType map_type, std::string& error_msg, uint64_t file_size = 0) {
+    WindowsFileMapper(const std::string &file_path, MapType map_type, std::string &error_msg, uint64_t file_size = 0) {
         LARGE_INTEGER li;
         li.QuadPart = file_size;
         bool is_ok = false;
@@ -451,7 +414,7 @@ public:
             if (!this->addr) {
                 goto DONE;
             }
-            this->file_ptr = (char*)this->addr;
+            this->file_ptr = (char *)this->addr;
             is_ok = true;
             goto DONE;
         }
@@ -480,7 +443,7 @@ public:
         if (!this->addr) {
             goto DONE;
         }
-        this->file_ptr = (char*)this->addr;
+        this->file_ptr = (char *)this->addr;
         is_ok = true;
     DONE:
         if (!is_ok) {
@@ -497,12 +460,12 @@ public:
 };
 #else
 class UnixFileMapper : public BaseFileMapper {
-private:
-    int fd;                 // 文件描述符
-    void* addr;             // 映射内存地址
-    struct stat file_stat;  // 文件状态信息
+  private:
+    int fd;                // 文件描述符
+    void *addr;            // 映射内存地址
+    struct stat file_stat; // 文件状态信息
 
-public:
+  public:
     ~UnixFileMapper() {
         // 解除内存映射
         if (addr != MAP_FAILED && addr != nullptr) {
@@ -519,7 +482,7 @@ public:
 
     UnixFileMapper() : fd(-1), addr(nullptr), file_ptr(nullptr), file_size(0) {}
 
-    UnixFileMapper(const std::string& file_path, MapType map_type, std::string& error_msg, uint64_t file_size = 0)
+    UnixFileMapper(const std::string &file_path, MapType map_type, std::string &error_msg, uint64_t file_size = 0)
         : fd(-1), addr(nullptr), file_ptr(nullptr), file_size(0) {
         bool is_ok = false;
         int open_flags = 0;
@@ -550,13 +513,13 @@ public:
                     throw std::string("Failed to map file to memory: ") + strerror(errno);
                 }
 
-                file_ptr = static_cast<char*>(addr);
+                file_ptr = static_cast<char *>(addr);
                 is_ok = true;
             } else {
                 // 写入模式
-                open_flags = O_RDWR | O_CREAT | O_TRUNC;  // 创建并截断文件
+                open_flags = O_RDWR | O_CREAT | O_TRUNC; // 创建并截断文件
                 prot_flags = PROT_READ | PROT_WRITE;
-                mode_t file_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;  // 权限: 644
+                mode_t file_mode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH; // 权限: 644
 
                 // 打开文件
                 fd = open(file_path.c_str(), open_flags, file_mode);
@@ -576,10 +539,10 @@ public:
                     throw std::string("Failed to map file to memory: ") + strerror(errno);
                 }
 
-                file_ptr = static_cast<char*>(addr);
+                file_ptr = static_cast<char *>(addr);
                 is_ok = true;
             }
-        } catch (const std::string& err) {
+        } catch (const std::string &err) {
             error_msg = err;
 
             // 清理已分配的资源
@@ -607,14 +570,14 @@ public:
 #endif
 
 class FileMapper {
-private:
+  private:
     std::shared_ptr<BaseFileMapper> ori_mapper;
 
-public:
-    char* file_ptr;      // 映射文件数据指针
-    uint64_t file_size;  // 文件大小
+  public:
+    char *file_ptr;     // 映射文件数据指针
+    uint64_t file_size; // 文件大小
     FileMapper() : file_ptr(nullptr), file_size(0) {}
-    FileMapper(const std::string& file_path, MapType map_type, std::string& error_msg, uint64_t file_size = 0) {
+    FileMapper(const std::string &file_path, MapType map_type, std::string &error_msg, uint64_t file_size = 0) {
 #ifdef _WIN32
         this->ori_mapper = std::make_shared<WindowsFileMapper>(file_path, map_type, error_msg, file_size);
         this->file_ptr = this->ori_mapper->file_ptr;
@@ -626,14 +589,13 @@ public:
 #endif
     }
     // 禁止拷贝构造和赋值
-    FileMapper(const FileMapper&) = delete;
-    FileMapper& operator=(const FileMapper&) = delete;
+    FileMapper(const FileMapper &) = delete;
+    FileMapper &operator=(const FileMapper &) = delete;
 };
 
-struct SingleBuffer
-{
+struct SingleBuffer {
     std::shared_ptr<char[]> bufferptr_origin;
-    char* bufferptr = nullptr;
+    char *bufferptr = nullptr;
     BufferStatus status = BufferStatus::write_done;
     uint64_t written = 0;
     uint64_t read = 0;
@@ -644,8 +606,7 @@ struct SingleBuffer
         : bufferptr_origin(new char[buffer_size], std::default_delete<char[]>()), bufferptr(bufferptr_origin.get()) {}
 };
 
-struct TransferContext
-{
+struct TransferContext {
     std::unordered_map<int, SingleBuffer> bufferd;
     TransferContext(size_t buffer_size) {
         bufferd[0] = SingleBuffer(buffer_size);
@@ -711,11 +672,11 @@ struct TransferContext
 };
 
 class CircularBuffer {
-private:
+  private:
     std::vector<TraceInfo> buffer = {};
     size_t capacity = 10;
 
-public:
+  public:
     CircularBuffer() {}
 
     CircularBuffer(unsigned int buffer_capacity) {
@@ -748,7 +709,7 @@ public:
 
     std::vector<TraceInfo> GetAllTraces() {
         std::vector<TraceInfo> result;
-        for (auto& item : buffer) {
+        for (auto &item : buffer) {
             result.push_back(item);
         }
         return result;
@@ -773,13 +734,13 @@ public:
 };
 
 class StreamRingBuffer {
-private:
+  private:
     std::unique_ptr<char[]> buffer;
     size_t capacity;
-    std::atomic<size_t> head{0};  // 消费者读取位置
-    std::atomic<size_t> tail{0};  // 生产者写入位置
+    std::atomic<size_t> head{0}; // 消费者读取位置
+    std::atomic<size_t> tail{0}; // 生产者写入位置
 
-public:
+  public:
     StreamRingBuffer(size_t size) : buffer(std::make_unique<char[]>(size)), capacity(size) {}
 
     // 获取可读数据量
@@ -789,7 +750,7 @@ public:
     size_t writable() const { return capacity - available(); }
 
     // 获取写入指针和最大连续可写长度
-    std::pair<char*, size_t> get_write_ptr() {
+    std::pair<char *, size_t> get_write_ptr() {
         size_t t = tail.load(std::memory_order_relaxed);
         size_t h = head.load(std::memory_order_acquire);
         size_t pos = t % capacity;
@@ -804,7 +765,7 @@ public:
     void commit_write(size_t len) { tail.fetch_add(len, std::memory_order_release); }
 
     // 获取读取指针和最大连续可读长度
-    std::pair<char*, size_t> get_read_ptr() {
+    std::pair<char *, size_t> get_read_ptr() {
         size_t h = head.load(std::memory_order_relaxed);
         size_t t = tail.load(std::memory_order_acquire);
         size_t pos = h % capacity;

@@ -50,21 +50,20 @@
 #include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#define SOCKET         int
+#define SOCKET int
 #define INVALID_SOCKET -1
-#define SOCKET_ERROR   -1
-#define closesocket    close
+#define SOCKET_ERROR -1
+#define closesocket close
 #endif
 
-#define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR  // in case mutex constructor is not supported
+#define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR // in case mutex constructor is not
+                                             // supported
 
 extern std::atomic<bool> is_wsa_initialized;
 
 void cleanup_wsa();
 
-inline bool isok(ECM& ecm) {
-    return ecm.first == EC::Success;
-}
+inline bool isok(ECM &ecm) { return ecm.first == EC::Success; }
 
 namespace py = pybind11;
 namespace fs = std::filesystem;
@@ -72,25 +71,25 @@ using PathInfo = AMFS::PathInfo;
 using PathType = AMFS::PathType;
 using EC = ErrorCode;
 using ECM = std::pair<EC, std::string>;
-using TASKS = std::vector<TransferTask>;                 // load_task返回类型
-using RMR = std::vector<std::pair<std::string, ECM>>;    // rm函数的返回类型
-using BR = std::pair<bool, ECM>;                         // is_dir函数返回类型
-using SR = std::pair<ECM, PathInfo>;                     // stat函数返回类型
-using WRV = std::vector<PathInfo>;                       // iwalk函数返回类型
-using WRD = AMFS::WRD;                                   // walk函数返回类型
-using WR = std::pair<ECM, WRV>;                          // iwalk函数返回类型
-using SIZER = std::pair<ECM, uint64_t>;                  // getsize函数返回类型
-using CR = std::pair<ECM, std::pair<std::string, int>>;  // ConductCmd函数返回类型
+using TASKS = std::vector<TransferTask>;                // load_task返回类型
+using RMR = std::vector<std::pair<std::string, ECM>>;   // rm函数的返回类型
+using BR = std::pair<bool, ECM>;                        // is_dir函数返回类型
+using SR = std::pair<ECM, PathInfo>;                    // stat函数返回类型
+using WRV = std::vector<PathInfo>;                      // iwalk函数返回类型
+using WRD = AMFS::WRD;                                  // walk函数返回类型
+using WR = std::pair<ECM, WRV>;                         // iwalk函数返回类型
+using SIZER = std::pair<ECM, uint64_t>;                 // getsize函数返回类型
+using CR = std::pair<ECM, std::pair<std::string, int>>; // ConductCmd函数返回类型
 
 class AMTracer {
-private:
+  private:
     py::function trace_cb;
     std::vector<TraceInfo> buffer = {};
     size_t capacity = 10;
     std::atomic<bool> is_py_trace = false;
     std::atomic<bool> is_trace_pause = false;
 
-    void push(const TraceInfo& value) {
+    void push(const TraceInfo &value) {
         if (buffer.size() < capacity) {
             buffer.push_back(value);
         } else {
@@ -99,10 +98,10 @@ private:
         }
     }
 
-public:
+  public:
     std::string nickname;
 
-    AMTracer(unsigned int buffer_capacity = 10, const py::object& trace_cb = py::none(), std::string nickname = "")
+    AMTracer(unsigned int buffer_capacity = 10, const py::object &trace_cb = py::none(), std::string nickname = "")
         : nickname(std::move(nickname)) {
         if (buffer_capacity <= 0) {
             capacity = 10;
@@ -131,7 +130,7 @@ public:
     std::vector<TraceInfo> GetAllTraces() {
         std::vector<TraceInfo> result;
         result.reserve(buffer.size());
-        for (auto& item : buffer) {
+        for (auto &item : buffer) {
             result.push_back(item);
         }
         return result;
@@ -154,13 +153,13 @@ public:
         }
     }
 
-    void trace(const TraceLevel& level, const EC& error_code, const std::string& target = "",
-               const std::string& action = "", const std::string& msg = "") {
+    void trace(const TraceLevel &level, const EC &error_code, const std::string &target = "",
+               const std::string &action = "", const std::string &msg = "") {
         TraceInfo trace_info(level, error_code, nickname, target, action, msg);
         this->trace(trace_info);
     }
 
-    void trace(const TraceInfo& trace_info) {
+    void trace(const TraceInfo &trace_info) {
         if (is_trace_pause.load()) {
             return;
         }
@@ -176,7 +175,7 @@ public:
 
     void ResumeTrace() { is_trace_pause.store(false); }
 
-    void SetPyTrace(const py::object& trace = py::none()) {
+    void SetPyTrace(const py::object &trace = py::none()) {
         if (trace.is_none()) {
             is_py_trace.store(false);
             trace_cb = py::function();
@@ -188,8 +187,8 @@ public:
 };
 
 class SafeChannel {
-public:
-    LIBSSH2_CHANNEL* channel = nullptr;
+  public:
+    LIBSSH2_CHANNEL *channel = nullptr;
     ~SafeChannel() {
         if (channel) {
             libssh2_channel_close(channel);
@@ -197,29 +196,31 @@ public:
         }
     }
 
-    SafeChannel(LIBSSH2_SESSION* session) {
-        this->channel
-            = libssh2_channel_open_ex(session, "session", sizeof("session") - 1, 4 * AMMB, 32 * AMKB, nullptr, 0);
+    SafeChannel(LIBSSH2_SESSION *session) {
+        this->channel =
+            libssh2_channel_open_ex(session, "session", sizeof("session") - 1, 4 * AMMB, 32 * AMKB, nullptr, 0);
     }
 };
 
 class AMSession : public AMTracer {
-protected:
+  protected:
     std::atomic<bool> has_connected;
 
-private:
+  private:
     ECM CurError = {EC::NoConnection, "Connection not established"};
     std::mutex state_mtx;
     SOCKET sock = INVALID_SOCKET;
     bool password_auth_cb = false;
     std::vector<std::string> private_keys;
-    py::function auth_cb = py::function();  // Callable[[IsPasswordDemand:bool, ConRequst, TrialTimes:int], str]
+    py::function auth_cb = py::function(); // Callable[[IsPasswordDemand:bool,
+                                           // ConRequst, TrialTimes:int], str]
 
     void LoadDefaultPrivateKeys() {
         trace(TraceLevel::Debug, EC::Success, res_data.nickname, "LoadDefaultPrivateKeys",
-              "Shared private keys not provided, loading default private keys from ~/.ssh");
+              "Shared private keys not provided, loading default private keys from "
+              "~/.ssh");
         auto listd = AMFS::listdir("~/.ssh");
-        for (auto& info : listd) {
+        for (auto &info : listd) {
             if (info.type == PathType::FILE) {
                 if (IsValidKey(info.path)) {
                     this->private_keys.push_back(info.path);
@@ -228,7 +229,7 @@ private:
         }
     }
 
-    void SetState(const ECM& state) {
+    void SetState(const ECM &state) {
         std::lock_guard<std::mutex> lock(state_mtx);
         CurError = state;
     }
@@ -256,16 +257,16 @@ private:
         return {EC::Success, ""};
     }
 
-public:
-    LIBSSH2_SESSION* session = nullptr;
-    LIBSSH2_SFTP* sftp = nullptr;
+  public:
+    LIBSSH2_SESSION *session = nullptr;
+    LIBSSH2_SFTP *sftp = nullptr;
     ConRequst res_data;
-    std::recursive_mutex mtx;  // lock of the session and sftp
+    std::recursive_mutex mtx; // lock of the session and sftp
 
     ~AMSession() { Disconnect(); }
 
-    AMSession(const ConRequst& request, const std::vector<std::string>& private_keys, unsigned int error_num = 10,
-              const py::object& trace_cb = py::none(), const py::object& auth_cb = py::none())
+    AMSession(const ConRequst &request, const std::vector<std::string> &private_keys, unsigned int error_num = 10,
+              const py::object &trace_cb = py::none(), const py::object &auth_cb = py::none())
         : AMTracer(error_num, trace_cb, request.nickname), private_keys(private_keys), res_data(request) {
         if (!auth_cb.is_none()) {
             this->auth_cb = py::cast<py::function>(auth_cb);
@@ -281,7 +282,7 @@ public:
 
     ConRequst GetRequest() { return this->res_data; }
 
-    bool IsValidKey(const std::string& key) {
+    bool IsValidKey(const std::string &key) {
         std::ifstream file(key);
         if (!file.is_open())
             return false;
@@ -290,11 +291,11 @@ public:
         std::getline(file, line);
 
         // 匹配所有SSH私钥的标准开头标记
-        const std::vector<std::string> private_key_headers
-            = {"-----BEGIN OPENSSH PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----",
-               "-----BEGIN EC PRIVATE KEY-----", "-----BEGIN DSA PRIVATE KEY-----"};
-        for (const auto& header : private_key_headers) {
-            if (line.find(header) == 0) {  // 开头匹配
+        const std::vector<std::string> private_key_headers = {
+            "-----BEGIN OPENSSH PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN EC PRIVATE KEY-----",
+            "-----BEGIN DSA PRIVATE KEY-----"};
+        for (const auto &header : private_key_headers) {
+            if (line.find(header) == 0) { // 开头匹配
                 return true;
             }
         }
@@ -303,17 +304,17 @@ public:
 
     std::vector<std::string> GetKeys() { return this->private_keys; }
 
-    void SetKeys(const std::vector<std::string>& keys) { this->private_keys = keys; }
+    void SetKeys(const std::vector<std::string> &keys) { this->private_keys = keys; }
 
     ECM GetState() {
         std::lock_guard<std::mutex> lock(state_mtx);
         return CurError;
     }
 
-    ECM Check(bool no_trace = false) {
+    ECM Check(bool need_trace = false) {
         ECM rc = BaseCheck();
         SetState(rc);
-        if (no_trace) {
+        if (!need_trace) {
             return rc;
         }
         if (rc.first != EC::Success) {
@@ -371,7 +372,7 @@ public:
             return {rc, msg};
         }
 
-        const char* auth_list = libssh2_userauth_list(session, res_data.username.c_str(), res_data.username.length());
+        const char *auth_list = libssh2_userauth_list(session, res_data.username.c_str(), res_data.username.length());
 
         if (auth_list == nullptr) {
             msg = fmt::format("Fail to negotiate authentication method: {}", GetLastErrorMsg());
@@ -528,7 +529,7 @@ public:
         std::lock_guard<std::recursive_mutex> lock(mtx);
         int ori_code = libssh2_session_last_errno(session);
         if (ori_code != LIBSSH2_ERROR_SFTP_PROTOCOL) {
-            char* errmsg = nullptr;
+            char *errmsg = nullptr;
             int errmsg_len;
             libssh2_session_last_error(session, &errmsg, &errmsg_len, 0);
             return std::string(errmsg);
@@ -567,7 +568,7 @@ public:
         }
     }
 
-    void SetAuthCallback(const py::object& auth_cb = py::none()) {
+    void SetAuthCallback(const py::object &auth_cb = py::none()) {
         if (auth_cb.is_none()) {
             this->password_auth_cb = false;
             this->auth_cb = py::function();
@@ -579,24 +580,18 @@ public:
 };
 
 class BaseSFTPClient : public AMSession {
-private:
+  private:
     std::atomic<bool> terminate_cmd = false;
 
-public:
+  public:
     OS_TYPE os_type = OS_TYPE::Uncertain;
     std::string home_dir = "";
     std::string trash_dir = "";
     // std::lock_guard<std::recursive_mutex> lock(mtx);
 
-    BaseSFTPClient(const ConRequst& request, const std::vector<std::string>& keys, unsigned int error_num = 10,
-                   const py::object& trace_cb = py::none(), const py::object& auth_cb = py::none())
-        : AMSession(request, keys, error_num, trace_cb, auth_cb) {
-        if (request.trash_dir.empty()) {
-            this->trash_dir = "./.AMSFTP_Trash";
-        } else {
-            this->trash_dir = request.trash_dir;
-        }
-    }
+    BaseSFTPClient(const ConRequst &request, const std::vector<std::string> &keys, unsigned int error_num = 10,
+                   const py::object &trace_cb = py::none(), const py::object &auth_cb = py::none())
+        : AMSession(request, keys, error_num, trace_cb, auth_cb) {}
 
     double GetRTT(uint64_t times = 5) {
         double total_time = 0;
@@ -618,7 +613,7 @@ public:
 
     void TerminateCmd() { terminate_cmd.store(true); }
 
-    CR ConductCmd(const std::string& cmd, double max_time_s = -1) {
+    CR ConductCmd(const std::string &cmd, double max_time_s = -1) {
         std::lock_guard<std::recursive_mutex> lock(mtx);
         terminate_cmd.store(false);
         bool time_out = false;
@@ -688,13 +683,13 @@ public:
                     continue;
                 }
                 EC error_code = GetLastEC();
-                std::string error_msg
-                    = fmt::format("{} Host channel output read failed: {}", res_data.nickname, GetLastErrorMsg());
+                std::string error_msg =
+                    fmt::format("{} Host channel output read failed: {}", res_data.nickname, GetLastErrorMsg());
                 libssh2_session_set_blocking(session, 1);
                 return {ECM{error_code, error_msg}, std::make_pair(std::string(), -1)};
             }
             if (nbytes == 0) {
-                break;  // 输出读取完成
+                break; // 输出读取完成
             }
             output.append(cmd_out.data(), nbytes);
         }
@@ -768,14 +763,14 @@ public:
 };
 
 class AMSFTPClient : public BaseSFTPClient, public AMFS::BasePathMatch {
-private:
+  private:
     std::map<long, std::string> user_id_map;
     bool is_trash_dir_ensure = false;
     std::unordered_map<std::string, py::object> public_var_dict;
-    std::mutex public_var_mutex;  // 专门用于保护 public_var_dict 的锁
-    py::object deepcopy_func;     // 缓存的 deepcopy 函数
+    std::mutex public_var_mutex; // 专门用于保护 public_var_dict 的锁
+    py::object deepcopy_func;    // 缓存的 deepcopy 函数
 
-    PathInfo FormatStat(const std::string& path, LIBSSH2_SFTP_ATTRIBUTES& attrs) {
+    PathInfo FormatStat(const std::string &path, LIBSSH2_SFTP_ATTRIBUTES &attrs) {
         PathInfo info;
         info.path = path;
         info.name = AMFS::basename(path);
@@ -801,30 +796,30 @@ private:
             const uint32_t mode = attrs.permissions;
             const uint32_t file_type = mode & LIBSSH2_SFTP_S_IFMT;
             switch (file_type) {
-                case LIBSSH2_SFTP_S_IFDIR:
-                    info.type = PathType::DIR;
-                    break;
-                case LIBSSH2_SFTP_S_IFLNK:
-                    info.type = PathType::SYMLINK;
-                    break;
-                case LIBSSH2_SFTP_S_IFREG:
-                    info.type = PathType::FILE;
-                    break;
-                case LIBSSH2_SFTP_S_IFBLK:
-                    info.type = PathType::BlockDevice;
-                    break;
-                case LIBSSH2_SFTP_S_IFCHR:
-                    info.type = PathType::CharacterDevice;
-                    break;
-                case LIBSSH2_SFTP_S_IFSOCK:
-                    info.type = PathType::Socket;
-                    break;
-                case LIBSSH2_SFTP_S_IFIFO:
-                    info.type = PathType::FIFO;
-                    break;
-                default:
-                    info.type = PathType::Unknown;
-                    break;
+            case LIBSSH2_SFTP_S_IFDIR:
+                info.type = PathType::DIR;
+                break;
+            case LIBSSH2_SFTP_S_IFLNK:
+                info.type = PathType::SYMLINK;
+                break;
+            case LIBSSH2_SFTP_S_IFREG:
+                info.type = PathType::FILE;
+                break;
+            case LIBSSH2_SFTP_S_IFBLK:
+                info.type = PathType::BlockDevice;
+                break;
+            case LIBSSH2_SFTP_S_IFCHR:
+                info.type = PathType::CharacterDevice;
+                break;
+            case LIBSSH2_SFTP_S_IFSOCK:
+                info.type = PathType::Socket;
+                break;
+            case LIBSSH2_SFTP_S_IFIFO:
+                info.type = PathType::FIFO;
+                break;
+            default:
+                info.type = PathType::Unknown;
+                break;
             }
             info.mode_int = mode & 0777;
             info.mode_str = AMFS::Str::ModeTrans(info.mode_int);
@@ -834,7 +829,7 @@ private:
     }
 
     // 无任何检查的stat， 只是封装了返回值格式化和错误格式化
-    SR lib_stat(const std::string& path) {
+    SR lib_stat(const std::string &path) {
         if (!sftp) {
             return {ECM{EC::NoConnection, "SFTP not initialized"}, PathInfo()};
         }
@@ -858,7 +853,7 @@ private:
         return {ECM{EC::Success, ""}, FormatStat(path, attrs)};
     }
 
-    ECM lib_rmfile(const std::string& path) {
+    ECM lib_rmfile(const std::string &path) {
         if (!sftp) {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
@@ -881,7 +876,7 @@ private:
         return {EC::Success, ""};
     }
 
-    ECM lib_rename(const std::string& src, const std::string& dst, const bool& overwrite) {
+    ECM lib_rename(const std::string &src, const std::string &dst, const bool &overwrite) {
         if (!sftp) {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
@@ -904,7 +899,7 @@ private:
         return {EC::Success, ""};
     }
 
-    void _iwalk(const std::string& path, WRV& result, bool ignore_sepcial_file = true) {
+    void _iwalk(const std::string &path, WRV &result, bool ignore_sepcial_file = true) {
         // 搜索目录下所有最深层的路径, 用于递归传输路径
         auto [rcm, info_path] = stat(path);
         if (rcm.first != EC::Success) {
@@ -927,12 +922,12 @@ private:
             result.push_back(info_path);
             return;
         }
-        for (auto& info : list_info) {
+        for (auto &info : list_info) {
             _iwalk(info.path, result, ignore_sepcial_file);
         }
     }
 
-    void _walk(const std::vector<std::string>& parts, WRD& result, int cur_depth = 0, int max_depth = -1,
+    void _walk(const std::vector<std::string> &parts, WRD &result, int cur_depth = 0, int max_depth = -1,
                bool ignore_sepcial_file = true) {
         if (max_depth != -1 && cur_depth > max_depth) {
             return;
@@ -948,7 +943,7 @@ private:
         }
 
         std::vector<PathInfo> files_info = {};
-        for (auto& info : list_info) {
+        for (auto &info : list_info) {
             if (info.type == PathType::DIR) {
                 auto new_parts = parts;
                 new_parts.push_back(info.name);
@@ -966,26 +961,26 @@ private:
         result.emplace_back(parts, files_info);
     }
 
-    void _GetSize(const std::string& path, uint64_t& size, bool ignore_sepcial_file = true) {
+    void _GetSize(const std::string &path, uint64_t &size, bool ignore_sepcial_file = true) {
         auto [rcm, path_info] = stat(path);
         if (rcm.first != EC::Success) {
             return;
         }
 
         switch (path_info.type) {
-            case PathType::FILE:
+        case PathType::FILE:
+            size += path_info.size;
+            return;
+        case PathType::SYMLINK:
+            return;
+        case PathType::DIR:
+            break;
+        default:
+            if (ignore_sepcial_file && static_cast<int>(path_info.type) < 0) {
+                return;
+            } else {
                 size += path_info.size;
-                return;
-            case PathType::SYMLINK:
-                return;
-            case PathType::DIR:
-                break;
-            default:
-                if (ignore_sepcial_file && static_cast<int>(path_info.type) < 0) {
-                    return;
-                } else {
-                    size += path_info.size;
-                }
+            }
         }
 
         auto [rcm2, list_info] = listdir(path);
@@ -994,12 +989,12 @@ private:
             return;
         }
 
-        for (auto& item : list_info) {
+        for (auto &item : list_info) {
             _GetSize(item.path, size);
         }
     }
 
-    void _rm(const std::string& path, RMR& errors) {
+    void _rm(const std::string &path, RMR &errors) {
         auto [rcm, br] = is_dir(path);
         if (rcm.first != EC::Success) {
             errors.push_back(std::make_pair(path, rcm));
@@ -1020,7 +1015,7 @@ private:
             return;
         }
 
-        for (auto& file : file_list) {
+        for (auto &file : file_list) {
             _rm(file.path, errors);
         }
 
@@ -1030,7 +1025,8 @@ private:
         }
     }
 
-    void _chmod(const std::string& path, const std::string& mode, bool recursive, std::map<std::string, ECM>& errors) {
+    void _chmod(const std::string &path, const std::string &mode, bool recursive,
+                std::unordered_map<std::string, ECM> &errors) {
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         EC rc;
         std::string msg = "";
@@ -1081,13 +1077,14 @@ private:
                 errors[path] = rcm;
                 return;
             }
-            for (auto& item : list) {
+            for (auto &item : list) {
                 _chmod(item.path, mode, recursive, errors);
             }
         }
     }
 
-    void _chmod(const std::string& path, const uint64_t& mode, bool recursive, std::map<std::string, ECM>& errors) {
+    void _chmod(const std::string &path, const uint64_t &mode, bool recursive,
+                std::unordered_map<std::string, ECM> &errors) {
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         EC rc;
         std::string msg = "";
@@ -1135,49 +1132,58 @@ private:
                 errors[path] = rcm;
                 return;
             }
-            for (auto& item : list) {
+            for (auto &item : list) {
                 _chmod(item.path, mode, recursive, errors);
             }
         }
     }
 
     // 用于AMFS::BasePathMatch
-    std::pair<bool, PathInfo> istat(const std::string& path) override {
+    std::pair<bool, PathInfo> istat(const std::string &path) override {
         auto [rcm, sr] = stat(path);
         if (rcm.first != EC::Success) {
             return std::make_pair(false, PathInfo());
         }
         return std::make_pair(true, sr);
     }
-    std::vector<PathInfo> ilistdir(const std::string& path) override {
+    std::vector<PathInfo> ilistdir(const std::string &path) override {
         auto [rcm, sr] = listdir(path);
         if (rcm.first != EC::Success) {
             return std::vector<PathInfo>();
         }
         return sr;
     }
-    std::vector<PathInfo> iiwalk(const std::string& path) override { return iwalk(path); }
+    std::vector<PathInfo> iiwalk(const std::string &path) override { return iwalk(path); }
 
-public:
+  public:
     ~AMSFTPClient() {}
 
-    AMSFTPClient(const ConRequst& request, const std::vector<std::string>& keys, unsigned int error_num = 10,
-                 const py::object& trace_cb = py::none(), const py::object& auth_cb = py::none())
+    AMSFTPClient(const ConRequst &request, const std::vector<std::string> &keys, unsigned int error_num = 10,
+                 const py::object &trace_cb = py::none(), const py::object &auth_cb = py::none())
         : BaseSFTPClient(request, keys, error_num, trace_cb, auth_cb), AMFS::BasePathMatch() {
         // 初始化时导入 deepcopy 函数并缓存
         try {
             py::gil_scoped_acquire gil;
             py::module_ copy_module = py::module_::import("copy");
             deepcopy_func = copy_module.attr("deepcopy");
-        } catch (const py::error_already_set& e) {
+        } catch (const py::error_already_set &e) {
             // 如果导入失败，deepcopy_func 保持为 none
             deepcopy_func = py::none();
             trace(TraceLevel::Error, EC::DeepcopyFunctionNotAvailable, "Deepcopy Function", "Initialize",
                   "Failed to import copy module");
         }
+
+        if (request.trash_dir.empty()) {
+            this->trash_dir = AMFS::join(GetHomeDir(), ".AMSFTP_Trash");
+        } else {
+            this->trash_dir = AMFS::abspath(request.trash_dir, true, GetHomeDir(), GetHomeDir());
+        }
+        if (this->trash_dir.empty()) {
+            this->trash_dir = AMFS::join(GetHomeDir(), ".AMSFTP_Trash");
+        }
     }
 
-    ECM SetPublicVar(const std::string& key, py::object value, bool overwrite = false) {
+    ECM SetPublicVar(const std::string &key, py::object value, bool overwrite = false) {
         std::lock_guard<std::mutex> lock(public_var_mutex);
 
         if (!overwrite && public_var_dict.find(key) != public_var_dict.end()) {
@@ -1191,7 +1197,7 @@ public:
                 py::gil_scoped_acquire gil;
                 public_var_dict[key] = deepcopy_func(value);
                 return {EC::Success, ""};
-            } catch (const py::error_already_set& e) {
+            } catch (const py::error_already_set &e) {
                 // 如果深拷贝失败（某些对象不支持深拷贝）
                 return {EC::DeepcopyFailed,
                         fmt::format("Deepcopy failed, object is not supported to be stored: {}: {}", key, e.what())};
@@ -1201,7 +1207,7 @@ public:
         }
     }
 
-    py::object GetPublicVar(const std::string& key, py::object default_value = py::none()) {
+    py::object GetPublicVar(const std::string &key, py::object default_value = py::none()) {
         std::lock_guard<std::mutex> lock(public_var_mutex);
 
         auto it = public_var_dict.find(key);
@@ -1213,14 +1219,14 @@ public:
         return default_value;
     }
 
-    bool DelPublicVar(const std::string& key) {
+    bool DelPublicVar(const std::string &key) {
         // 确保持有 GIL，因为要操作 py::object
         py::gil_scoped_acquire gil;
         std::lock_guard<std::mutex> lock(public_var_mutex);
         return public_var_dict.erase(key) > 0;
     }
 
-    bool HasPublicVar(const std::string& key) {
+    bool HasPublicVar(const std::string &key) {
         std::lock_guard<std::mutex> lock(public_var_mutex);
         return public_var_dict.find(key) != public_var_dict.end();
     }
@@ -1238,10 +1244,10 @@ public:
         py::dict result;
         if (!deepcopy_func.is_none()) {
             // 使用缓存的 deepcopy 函数
-            for (const auto& [key, value] : public_var_dict) {
+            for (const auto &[key, value] : public_var_dict) {
                 try {
                     result[py::str(key)] = deepcopy_func(value);
-                } catch (const py::error_already_set& e) {
+                } catch (const py::error_already_set &e) {
                     // 深拷贝失败，使用原始引用
                     continue;
                 }
@@ -1250,7 +1256,7 @@ public:
         return result;
     }
 
-    std::string StrUid(const long& uid) {
+    std::string StrUid(const long &uid) {
         if (user_id_map.find(uid) != user_id_map.end()) {
             return user_id_map[uid];
         }
@@ -1278,23 +1284,23 @@ public:
             return home_dir;
         }
         switch (GetOSType()) {
-            case OS_TYPE::Windows:
-                home_dir = "C:\\Users\\" + res_data.username;
-                return home_dir;
-            case OS_TYPE::Linux:
-                home_dir = "/home/" + res_data.username;
-                return home_dir;
-            case OS_TYPE::MacOS:
-                home_dir = "/Users/" + res_data.username;
-                return home_dir;
-            case OS_TYPE::FreeBSD:
-                home_dir = "/usr/home/" + res_data.username;
-                return home_dir;
-            case OS_TYPE::Unix:
-                home_dir = "/home/" + res_data.username;
-                return home_dir;
-            default:
-                return "C:\\Users\\" + res_data.username;
+        case OS_TYPE::Windows:
+            home_dir = "C:\\Users\\" + res_data.username;
+            return home_dir;
+        case OS_TYPE::Linux:
+            home_dir = "/home/" + res_data.username;
+            return home_dir;
+        case OS_TYPE::MacOS:
+            home_dir = "/Users/" + res_data.username;
+            return home_dir;
+        case OS_TYPE::FreeBSD:
+            home_dir = "/usr/home/" + res_data.username;
+            return home_dir;
+        case OS_TYPE::Unix:
+            home_dir = "/home/" + res_data.username;
+            return home_dir;
+        default:
+            return "C:\\Users\\" + res_data.username;
         }
     }
 
@@ -1310,44 +1316,54 @@ public:
 
     inline std::string GetTrashDir() { return this->trash_dir; }
 
-    ECM SetTrashDir(const std::string& trash_dir = "") {
-        this->trash_dir = trash_dir;
-        return EnsureTrashDir();
+    ECM SetTrashDir(const std::string &trash_dir = "") {
+        auto pathf = AMFS::abspath(trash_dir, true, GetHomeDir(), GetHomeDir());
+        if (pathf.empty()) {
+            return {EC::InvalidArg, fmt::format("Invalid path: {}", trash_dir)};
+        }
+        ECM rcm = mkdirs(pathf);
+        if (rcm.first == EC::Success) {
+            this->trash_dir = pathf;
+        }
+        return rcm;
+    }
+
+    std::string GetAvailableTrashDir() {
+        std::string trash_dir = AMFS::join(GetHomeDir(), ".AMSFTP_Trash");
+        int count = 1;
+        while (true) {
+            if (mkdirs(trash_dir).first == EC::Success) {
+                return trash_dir;
+            }
+            trash_dir = AMFS::join(GetHomeDir(), fmt::format(".AMSFTP_Trash({})", rand() % 1000000));
+            count++;
+            if (count > 3) {
+                return "";
+            }
+        }
     }
 
     ECM EnsureTrashDir() {
-        std::string tmp_trash_dir = this->trash_dir.empty() ? ".AMSFTP_Trash" : this->trash_dir;
-        tmp_trash_dir = AMFS::abspath(tmp_trash_dir, true, GetHomeDir(), GetHomeDir());
-        this->trash_dir = tmp_trash_dir;
-        auto [rcm, br] = is_dir(tmp_trash_dir);
+        ECM rcm = Check();
         if (rcm.first != EC::Success) {
             return rcm;
         }
-        if (br) {
-            // 是目录说明创建成功
-            is_trash_dir_ensure = true;
-            return {EC::Success, ""};
-        } else {
-            // 不是目录，说明路径中已经有文件存在，冲突报错
-            is_trash_dir_ensure = false;
-            return {EC::NotADirectory,
-                    fmt::format("Trash directory path exists but is not a directory: {}", tmp_trash_dir)};
-        }
 
-        ECM res = mkdirs(tmp_trash_dir);
-        if (res.first != EC::Success) {
-            is_trash_dir_ensure = false;
-            trace(TraceLevel::Critical, EC::Success, fmt::format("{}@{}", res_data.nickname, "TrashDir"),
-                  "EnsureTrashDir", fmt::format("Fail to set trash_dir to: \"{}\"", tmp_trash_dir));
-            return res;
-        } else {
-            is_trash_dir_ensure = true;
-            return {EC::Success, ""};
+        if (trash_dir.empty() || mkdirs(trash_dir).first != EC::Success) {
+            trash_dir = GetAvailableTrashDir();
+            if (trash_dir.empty()) {
+                trace(TraceLevel::Error, EC::UnknownError, fmt::format("{}@{}", res_data.nickname, "TrashDir"),
+                      "EnsureTrashDir", "Can't automatically find a available trash directory");
+                return {EC::UnknownError, "Can't automatically find a available trash directory"};
+            }
+            trace(TraceLevel::Info, EC::Success, fmt::format("{}@{}", res_data.nickname, "TrashDir"), "EnsureTrashDir",
+                  fmt::format("Set trash_dir to: \"{}\"", trash_dir));
         }
+        return {EC::Success, ""};
     }
-
-    // 解析并返回绝对路径, ~在client中解析，..和.其他由服务器解析，有这些符号时需要路径真实存在
-    std::pair<ECM, std::string> realpath(const std::string& path) {
+    // 解析并返回绝对路径,
+    // ~在client中解析，..和.其他由服务器解析，有这些符号时需要路径真实存在
+    std::pair<ECM, std::string> realpath(const std::string &path) {
         std::string pathf = path;
         if (std::regex_search(path, std::regex("^~[\\\\/]"))) {
             // 解析~符号
@@ -1358,11 +1374,11 @@ public:
         if (!sftp) {
             return {ECM{EC::NoConnection, "SFTP not initialized"}, ""};
         }
-        char path_t[1024];
+        std::array<char, 1024> path_t;
         int rcr;
         {
             std::lock_guard<std::recursive_mutex> lock(mtx);
-            rcr = libssh2_sftp_realpath(sftp, pathf.c_str(), path_t, sizeof(path_t));
+            rcr = libssh2_sftp_realpath(sftp, pathf.c_str(), path_t.data(), sizeof(path_t));
         }
         if (rcr < 0) {
             EC rc = GetLastEC();
@@ -1372,15 +1388,14 @@ public:
         } else {
             if (GetOSType() == OS_TYPE::Windows) {
                 // windows server返回的路径会在前面加个/或\，需要去掉
-                return {ECM{EC::Success, ""}, std::string(path_t).substr(1)};
+                return {ECM{EC::Success, ""}, std::string(path_t.data()).substr(1)};
             }
-            return {ECM{EC::Success, ""}, std::string(path_t)};
+            return {ECM{EC::Success, ""}, std::string(path_t.data())};
         }
     }
 
-    std::variant<std::map<std::string, ECM>, ECM> chmod(const std::string& path,
-                                                        std::variant<std::string, uint64_t> mode,
-                                                        bool recursive = false) {
+    std::variant<std::unordered_map<std::string, ECM>, ECM>
+    chmod(const std::string &path, std::variant<std::string, uint64_t> mode, bool recursive = false) {
         if (static_cast<int>(GetOSType()) <= 0) {
             return ECM{EC::UnImplentedMethod, "Chmod only supported on Unix System"};
         }
@@ -1393,7 +1408,7 @@ public:
         if (!br) {
             return ECM{EC::PathNotExist, fmt::format("Path does not exist: {}", pathf)};
         }
-        std::map<std::string, ECM> ecm_map{};
+        std::unordered_map<std::string, ECM> ecm_map{};
 
         if (std::holds_alternative<std::string>(mode)) {
             if (!AMFS::Str::IsModeValid(std::get<std::string>(mode))) {
@@ -1412,7 +1427,7 @@ public:
     }
 
     // 获取路径信息，自带AMFS::abspath
-    SR stat(const std::string& path) {
+    SR stat(const std::string &path) {
         std::string pathf = AMFS::abspath(path, true, GetHomeDir());
 
         if (pathf.empty()) {
@@ -1422,7 +1437,7 @@ public:
         return lib_stat(pathf);
     }
 
-    std::pair<ECM, PathType> get_path_type(const std::string& path) {
+    std::pair<ECM, PathType> get_path_type(const std::string &path) {
         auto [rcm, path_info] = stat(path);
         if (rcm.first != EC::Success) {
             return {ECM{rcm.first, rcm.second}, PathType::Unknown};
@@ -1431,18 +1446,18 @@ public:
     }
 
     // 判断路径是否存在，自带AMFS::abspath
-    std::pair<ECM, bool> exists(const std::string& path) {
+    std::pair<ECM, bool> exists(const std::string &path) {
         auto [rcm, path_info] = stat(path);
         if (rcm.first == EC::Success) {
             return {rcm, true};
         } else if (rcm.first == EC::PathNotExist || rcm.first == EC::FileNotExist) {
-            return {rcm, false};
+            return {{EC::Success, ""}, false};
         } else {
             return {rcm, false};
         }
     }
 
-    std::pair<ECM, bool> is_regular(const std::string& path) {
+    std::pair<ECM, bool> is_regular(const std::string &path) {
         auto [rcm, path_info] = stat(path);
         if (rcm.first != EC::Success) {
             return {rcm, false};
@@ -1450,7 +1465,7 @@ public:
         return {ECM{EC::Success, ""}, path_info.type == PathType::FILE ? true : false};
     }
 
-    std::pair<ECM, bool> is_dir(const std::string& path) {
+    std::pair<ECM, bool> is_dir(const std::string &path) {
         auto [rcm, path_info] = stat(path);
         if (rcm.first != EC::Success) {
             return {rcm, false};
@@ -1458,7 +1473,7 @@ public:
         return {ECM{EC::Success, ""}, path_info.type == PathType::DIR ? true : false};
     }
 
-    std::pair<ECM, bool> is_symlink(const std::string& path) {
+    std::pair<ECM, bool> is_symlink(const std::string &path) {
         auto [rcm, path_info] = stat(path);
         if (rcm.first != EC::Success) {
             return {rcm, false};
@@ -1466,7 +1481,7 @@ public:
         return {ECM{EC::Success, ""}, path_info.type == PathType::SYMLINK ? true : false};
     }
 
-    std::pair<ECM, std::vector<PathInfo>> listdir(const std::string& path, long max_time_ms = -1) {
+    std::pair<ECM, std::vector<PathInfo>> listdir(const std::string &path, long max_time_ms = -1) {
         if (!sftp) {
             return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
         }
@@ -1490,7 +1505,7 @@ public:
         double max_time = max_time_ms / 1000.0;
         bool is_truncated = false;
 
-        LIBSSH2_SFTP_HANDLE* sftp_handle = nullptr;
+        LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
         LIBSSH2_SFTP_ATTRIBUTES attrs;
         std::string name;
         std::string path_i;
@@ -1502,8 +1517,8 @@ public:
         bool is_sucess = false;
 
         std::lock_guard<std::recursive_mutex> lock(mtx);
-        sftp_handle
-            = libssh2_sftp_open_ex(sftp, pathf.c_str(), pathf.size(), 0, LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
+        sftp_handle =
+            libssh2_sftp_open_ex(sftp, pathf.c_str(), pathf.size(), 0, LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
 
         if (!sftp_handle) {
             std::string tmp_msg = GetLastErrorMsg();
@@ -1559,7 +1574,7 @@ public:
     }
 
     // 创建一级目录，自带AMFS::abspath
-    ECM mkdir(const std::string& path) {
+    ECM mkdir(const std::string &path) {
         if (!sftp) {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
@@ -1570,14 +1585,14 @@ public:
         }
 
         std::string msg = "";
-        auto [rcm, br] = is_dir(pathf);
-        if (rcm.first != EC::Success) {
-            return rcm;
-        }
-        if (!br) {
-            return {EC::PathAlreadyExists, fmt::format("Path exists and is not a directory: {}", pathf)};
-        } else {
-            return {EC::Success, ""};
+        auto [rcm, info] = stat(pathf);
+        if (rcm.first == EC::Success) {
+
+            if (info.type == PathType::DIR) {
+                return {EC::Success, ""};
+            } else {
+                return {EC::PathAlreadyExists, fmt::format("Path exists and is not a directory: {}", pathf)};
+            }
         }
 
         int rcr;
@@ -1597,7 +1612,7 @@ public:
     }
 
     // 递归创建多级目录，直到报错为止，自带AMFS::abspath
-    ECM mkdirs(const std::string& path) {
+    ECM mkdirs(const std::string &path) {
         std::string pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
         if (pathf.empty()) {
             return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", path));
@@ -1625,7 +1640,7 @@ public:
         return {EC::Success, ""};
     }
 
-    ECM rmfile(const std::string& path) {
+    ECM rmfile(const std::string &path) {
         if (path.empty()) {
             return std::make_pair(EC::InvalidArg, fmt::format("Invalid path: {}", path));
         }
@@ -1643,26 +1658,25 @@ public:
         } else {
             PathType type = info.type;
             switch (type) {
-                case PathType::DIR:
-                    msg = fmt::format("Path is not a dir but use rmfile: {}", path);
-                    trace(TraceLevel::Warning, EC::NotAFile, fmt::format("{}@{}", res_data.nickname, path), "rmfile",
-                          msg);
-                    return {EC::NotAFile, msg};
-                case PathType::SYMLINK: {
-                }
-                case PathType::FILE: {
-                }
-                default: {
-                    msg = fmt::format("Path is special file: {}", path);
-                    return {EC::OperationUnsupported, msg};
-                }
+            case PathType::DIR:
+                msg = fmt::format("Path is not a dir but use rmfile: {}", path);
+                trace(TraceLevel::Warning, EC::NotAFile, fmt::format("{}@{}", res_data.nickname, path), "rmfile", msg);
+                return {EC::NotAFile, msg};
+            case PathType::SYMLINK: {
+            }
+            case PathType::FILE: {
+            }
+            default: {
+                msg = fmt::format("Path is special file: {}", path);
+                return {EC::OperationUnsupported, msg};
+            }
             }
         }
 
         return lib_rmfile(pathf);
     }
 
-    ECM rmdir(const std::string& path) {
+    ECM rmdir(const std::string &path) {
         if (!sftp) {
             return std::make_pair(EC::NoConnection, "SFTP not initialized");
         }
@@ -1693,7 +1707,7 @@ public:
     }
 
     // 删除文件或目录，自带AMFS::abspath
-    std::variant<RMR, ECM> remove(const std::string& path) {
+    std::variant<RMR, ECM> remove(const std::string &path) {
         if (!sftp) {
             return ECM{EC::NoConnection, "SFTP not initialized"};
         }
@@ -1707,7 +1721,7 @@ public:
     }
 
     // 将原路径变成新路径，自带AMFS::abspath
-    ECM rename(const std::string& src, const std::string& dst, bool overwrite = false) {
+    ECM rename(const std::string &src, const std::string &dst, bool overwrite = false) {
         if (!sftp) {
             return ECM{EC::NoConnection, "SFTP not initialized"};
         }
@@ -1735,7 +1749,7 @@ public:
     }
 
     // 安全删除文件或目录，将目录移动到trash_dir中，自带AMFS::abspath
-    ECM saferm(const std::string& path) {
+    ECM saferm(const std::string &path) {
         auto [rcm, info] = stat(path);
         if (rcm.first != EC::Success) {
             return rcm;
@@ -1781,7 +1795,7 @@ public:
     }
 
     // 将源路径移动到目标文件夹，自带AMFS::abspath
-    ECM move(const std::string& src, const std::string& dst, bool need_mkdir = false, bool force_write = false) {
+    ECM move(const std::string &src, const std::string &dst, bool need_mkdir = false, bool force_write = false) {
         if (!sftp) {
             return ECM{EC::NoConnection, "SFTP not initialized"};
         }
@@ -1815,8 +1829,9 @@ public:
         return lib_rename(srcf, dst_path, force_write);
     }
 
-    // 在服务器内将源路径复制到目标文件夹，自带AMFS::abspath, 使用的时shell指令，不稳定
-    ECM copy(const std::string& src, const std::string& dst, bool need_mkdir = false) {
+    // 在服务器内将源路径复制到目标文件夹，自带AMFS::abspath,
+    // 使用的时shell指令，不稳定
+    ECM copy(const std::string &src, const std::string &dst, bool need_mkdir = false) {
         if (!sftp) {
             return ECM{EC::NoConnection, "SFTP not initialized"};
         }
@@ -1868,8 +1883,8 @@ public:
         }
 
         if (resp.second != 0) {
-            std::string msg
-                = fmt::format("Copy cmd conducted failed with exit code: {}, error: {}", resp.second, resp.first);
+            std::string msg =
+                fmt::format("Copy cmd conducted failed with exit code: {}, error: {}", resp.second, resp.first);
             trace(TraceLevel::Error, EC::InhostCopyFailed, fmt::format("{}@{}->{}", res_data.nickname, srcf, dstf),
                   "Copy", msg);
             return {EC::InhostCopyFailed, msg};
@@ -1879,7 +1894,7 @@ public:
     }
 
     // 递归遍历某一路径下的所有文件和底层目录，返回PathInfo的vector
-    WRV iwalk(const std::string& path, bool ignore_sepcial_file = true) {
+    WRV iwalk(const std::string &path, bool ignore_sepcial_file = true) {
         // 搜索某一路径下的所有文件, 返回pathinfo的vector
         if (!sftp) {
             return {};
@@ -1892,7 +1907,7 @@ public:
     }
 
     // 真实的walk函数，返回([root_path, part1, part2, ...], PathInfo)的vector
-    std::pair<ECM, WRD> walk(const std::string& path, int max_depth = -1, bool ignore_special_file = true) {
+    std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1, bool ignore_special_file = true) {
         auto pathf = AMFS::abspath(path, true, GetHomeDir(), GetHomeDir());
         auto [rcm, br] = stat(pathf);
         if (rcm.first != EC::Success) {
@@ -1906,10 +1921,10 @@ public:
     }
 
     // 获取某一路径下的所有文件和底层目录的总大小
-    uint64_t getsize(const std::string& path, bool ignore_sepcial_file = true) {
+    uint64_t getsize(const std::string &path, bool ignore_sepcial_file = true) {
         WRV list = iwalk(path, ignore_sepcial_file);
         uint64_t size = 0;
-        for (auto& item : list) {
+        for (auto &item : list) {
             size += item.size;
         }
         return size;
@@ -1917,7 +1932,7 @@ public:
 };
 
 class HostMaintainer {
-private:
+  private:
     std::unordered_map<std::string, std::shared_ptr<AMSFTPClient>> hosts;
     std::atomic<bool> is_heartbeat;
     std::thread heartbeat_thread;
@@ -1929,7 +1944,7 @@ private:
         ECM rcm;
         while (true) {
             // 遍历hosts字典
-            for (auto& host : hosts) {
+            for (auto &host : hosts) {
                 rcm = host.second->Check();
                 if (rcm.first != EC::Success) {
                     if (is_disconnect_cb) {
@@ -1949,7 +1964,7 @@ private:
         }
     }
 
-public:
+  public:
     ~HostMaintainer() {
         is_heartbeat.store(false);
         if (heartbeat_thread.joinable()) {
@@ -1968,7 +1983,7 @@ public:
 
     std::vector<std::string> get_hosts() {
         std::vector<std::string> host_list;
-        for (auto& host : hosts) {
+        for (auto &host : hosts) {
             host_list.push_back(host.first);
         }
         return host_list;
@@ -1976,13 +1991,13 @@ public:
 
     std::vector<std::shared_ptr<AMSFTPClient>> get_clients() {
         std::vector<std::shared_ptr<AMSFTPClient>> client_list;
-        for (auto& host : hosts) {
+        for (auto &host : hosts) {
             client_list.push_back(host.second);
         }
         return client_list;
     }
 
-    void add_host(const std::string& nickname, std::shared_ptr<AMSFTPClient> client, bool overwrite = false) {
+    void add_host(const std::string &nickname, std::shared_ptr<AMSFTPClient> client, bool overwrite = false) {
         if (hosts.find(nickname) != hosts.end()) {
             if (!overwrite) {
                 return;
@@ -1992,20 +2007,20 @@ public:
         hosts[nickname] = client;
     }
 
-    void remove_host(const std::string& nickname) {
+    void remove_host(const std::string &nickname) {
         if (hosts.find(nickname) != hosts.end()) {
             hosts.erase(nickname);
         }
     }
 
-    std::shared_ptr<AMSFTPClient> get_host(const std::string& nickname) {
+    std::shared_ptr<AMSFTPClient> get_host(const std::string &nickname) {
         if (hosts.find(nickname) == hosts.end()) {
             return nullptr;
         }
         return hosts[nickname];
     }
 
-    ECM test_host(const std::string& nickname, bool update = false) {
+    ECM test_host(const std::string &nickname, bool update = false) {
         if (nickname.empty()) {
             return ECM{EC::InvalidArg, "Host nickname is empty"};
         } else if (hosts.find(nickname) == hosts.end()) {
@@ -2025,9 +2040,9 @@ public:
 };
 
 class AMSFTPWorker {
-private:
-    inline void InnerCallback(const std::string& src, const std::string& dst, const std::string& src_host,
-                              const std::string& dst_host, uint64_t this_size, uint64_t file_size,
+  private:
+    inline void InnerCallback(const std::string &src, const std::string &dst, const std::string &src_host,
+                              const std::string &dst_host, uint64_t this_size, uint64_t file_size,
                               uint64_t accumulated_size, uint64_t total_size) {
         if (callback.need_progress_cb) {
             auto time_now = timenow();
@@ -2040,14 +2055,14 @@ private:
                     if (py::isinstance<TransferControl>(result)) {
                         auto control = result.cast<TransferControl>();
                         switch (control) {
-                            case TransferControl::Pause:
-                                pause();
-                                break;
-                            case TransferControl::Terminate:
-                                terminate();
-                                break;
-                            default:
-                                break;
+                        case TransferControl::Pause:
+                            pause();
+                            break;
+                        case TransferControl::Terminate:
+                            terminate();
+                            break;
+                        default:
+                            break;
                         }
                     }
                 }
@@ -2055,43 +2070,123 @@ private:
         }
     }
 
-    ECM Local2Local(const std::string& src, const std::string& dst, uint64_t chunk_size) {
+    ECM Local2Local(const std::string &src, const std::string &dst, uint64_t chunk_size) {
         ErrorCode rc_r = EC::Success;
         std::string error_msg = "";
-        FileMapper srcm(src, MapType::Read, error_msg);
-        if (!srcm.file_ptr) {
-            EC rc = EC::LocalFileMapError;
-            return {rc, error_msg};
+
+        // Get source file size
+        uint64_t file_size = 0;
+#ifdef _WIN32
+        HANDLE hFile = CreateFileW(AMFS::Str::AMStr(src).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                   FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hFile == INVALID_HANDLE_VALUE) {
+            return {EC::LocalFileMapError, "Failed to open source file"};
         }
+        LARGE_INTEGER li;
+        if (!GetFileSizeEx(hFile, &li)) {
+            CloseHandle(hFile);
+            return {EC::LocalFileMapError, "Failed to get file size"};
+        }
+        file_size = li.QuadPart;
+        CloseHandle(hFile);
+#else
+        struct stat file_stat;
+        if (stat(src.c_str(), &file_stat) == -1) {
+            return {EC::LocalFileMapError, "Failed to stat source file"};
+        }
+        file_size = file_stat.st_size;
+#endif
+        // Create destination directory
         AMFS::mkdirs(AMFS::dirname(dst));
-        FileMapper dstm(dst, MapType::Write, error_msg);
-        if (!dstm.file_ptr) {
-            EC rc = EC::LocalFileMapError;
-            return {rc, error_msg};
+
+        // Create ring buffer (2x chunk_size for overlapping read/write)
+        StreamRingBuffer ring_buffer(chunk_size * 2);
+
+        // Open source file for reading
+#ifdef _WIN32
+        HANDLE hSrcFile = CreateFileW(AMFS::Str::AMStr(src).c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                      FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+        if (hSrcFile == INVALID_HANDLE_VALUE) {
+            return {EC::LocalFileMapError, "Failed to open source file for reading"};
         }
+#else
+        int src_fd = open(src.c_str(), O_RDONLY);
+        if (src_fd == -1) {
+            return {EC::LocalFileMapError, "Failed to open source file for reading"};
+        }
+#endif
+
+        // Open destination file for writing
+#ifdef _WIN32
+        HANDLE hDstFile = CreateFileW(AMFS::Str::AMStr(dst).c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                                      FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hDstFile == INVALID_HANDLE_VALUE) {
+            CloseHandle(hSrcFile);
+            return {EC::LocalFileMapError, "Failed to create destination file"};
+        }
+#else
+        int dst_fd = open(dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+        if (dst_fd == -1) {
+            close(src_fd);
+            return {EC::LocalFileMapError, "Failed to create destination file"};
+        }
+#endif
 
         uint64_t offset = 0;
-        uint64_t remaining = srcm.file_size;
-        uint64_t buffer_size;
-        uint64_t local_size = 0;
-        py::object result;
-        char* src_ptr = static_cast<char*>(srcm.file_ptr);
-        char* dst_ptr = static_cast<char*>(dstm.file_ptr);
+        uint64_t total_read = 0;
+        std::atomic<bool> read_finished(false);
+        std::atomic<bool> read_error(false);
+        std::string read_error_msg = "";
 
-        while (remaining > 0) {
-            local_size = 0;
-            buffer_size = std::min<uint64_t>(chunk_size, remaining);
+        // Async read thread
+        std::thread read_thread([&]() {
+            uint64_t remaining = file_size;
+            while (remaining > 0 && !IsTerminate() && !read_error) {
+                // Wait for writable space
+                while (ring_buffer.writable() == 0 && !IsTerminate()) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
 
-            while (local_size < buffer_size) {
-                // 使用两个文件映射进行读写
-                CopyMemory(dst_ptr + offset, src_ptr + offset, static_cast<SIZE_T>(buffer_size));
+                if (IsTerminate())
+                    break;
+
+                auto [write_ptr, write_len] = ring_buffer.get_write_ptr();
+                uint64_t to_read = std::min<uint64_t>(write_len, std::min<uint64_t>(chunk_size, remaining));
+
+                if (to_read > 0) {
+#ifdef _WIN32
+                    DWORD bytes_read = 0;
+                    if (!ReadFile(hSrcFile, write_ptr, static_cast<DWORD>(to_read), &bytes_read, NULL)) {
+                        read_error = true;
+                        read_error_msg = "Failed to read from source file";
+                        break;
+                    }
+                    if (bytes_read == 0)
+                        break;
+                    ring_buffer.commit_write(bytes_read);
+                    remaining -= bytes_read;
+                    total_read += bytes_read;
+#else
+                    ssize_t bytes_read = read(src_fd, write_ptr, to_read);
+                    if (bytes_read < 0) {
+                        read_error = true;
+                        read_error_msg = "Failed to read from source file";
+                        break;
+                    }
+                    if (bytes_read == 0)
+                        break;
+                    ring_buffer.commit_write(bytes_read);
+                    remaining -= bytes_read;
+                    total_read += bytes_read;
+#endif
+                }
             }
+            read_finished = true;
+        });
 
-            remaining -= buffer_size;
-            offset += buffer_size;
-            current_size += buffer_size;
-            InnerCallback(src, dst, "", "", offset, srcm.file_size, current_size, total_size);
-
+        // Main write thread (current thread)
+        while ((!read_finished || ring_buffer.available() > 0) && !IsTerminate()) {
+            // Handle pause
             while (IsPause() && !IsTerminate()) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(300));
             }
@@ -2099,23 +2194,82 @@ private:
             if (IsTerminate()) {
                 rc_r = EC::Terminate;
                 error_msg = "Transfer cancelled";
-                goto clean;
+                break;
+            }
+
+            // Wait for readable data
+            while (ring_buffer.available() == 0 && !read_finished && !read_error && !IsTerminate()) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+
+            if (read_error) {
+                rc_r = EC::LocalFileMapError;
+                error_msg = read_error_msg;
+                break;
+            }
+
+            if (ring_buffer.available() == 0)
+                break;
+
+            auto [read_ptr, read_len] = ring_buffer.get_read_ptr();
+            if (read_len > 0) {
+#ifdef _WIN32
+                DWORD bytes_written = 0;
+                if (!WriteFile(hDstFile, read_ptr, static_cast<DWORD>(read_len), &bytes_written, nullptr)) {
+                    rc_r = EC::LocalFileMapError;
+                    error_msg = "Failed to write to destination file";
+                    break;
+                }
+                ring_buffer.commit_read(bytes_written);
+                offset += bytes_written;
+                current_size += bytes_written;
+#else
+                ssize_t bytes_written = write(dst_fd, read_ptr, read_len);
+                if (bytes_written < 0) {
+                    rc_r = EC::LocalFileWriteError;
+                    error_msg = "Failed to write to destination file";
+                    break;
+                }
+                ring_buffer.commit_read(bytes_written);
+                offset += bytes_written;
+                current_size += bytes_written;
+#endif
+
+                InnerCallback(src, dst, "", "", offset, file_size, current_size, total_size);
             }
         }
 
-    clean:
+        // Wait for read thread to finish
+        read_thread.join();
+
+        // Close files
+#ifdef _WIN32
+        CloseHandle(hSrcFile);
+        if (rc_r == EC::Success) {
+            FlushFileBuffers(hDstFile);
+        }
+        CloseHandle(hDstFile);
+#else
+        close(src_fd);
+        if (rc_r == EC::Success) {
+            fsync(dst_fd);
+        }
+        close(dst_fd);
+#endif
+
+        // Final callback
         if (callback.need_progress_cb) {
             py::gil_scoped_acquire acquire;
-            callback.progress_cb(ProgressCBInfo(src, dst, "", "", offset, srcm.file_size, current_size, total_size));
+            callback.progress_cb(ProgressCBInfo(src, dst, "", "", offset, file_size, current_size, total_size));
         }
 
         return {rc_r, error_msg};
     }
 
-    ECM Local2Remote(const std::string& src, const std::string& dst, const std::shared_ptr<AMSFTPClient>& client,
+    ECM Local2Remote(const std::string &src, const std::string &dst, const std::shared_ptr<AMSFTPClient> &client,
                      uint64_t chunk_size) {
         ErrorCode rc_r = EC::Success;
-        LIBSSH2_SFTP_HANDLE* sftpFile;
+        LIBSSH2_SFTP_HANDLE *sftpFile;
         std::string error_msg = "Error to create FileMapper";
         std::lock_guard<std::recursive_mutex> lock(client->mtx);
         client->mkdirs(AMFS::dirname(dst));
@@ -2194,10 +2348,10 @@ private:
         return {rc_r, error_msg};
     }
 
-    ECM Remote2Local(const std::string& src, const std::string& dst, const std::shared_ptr<AMSFTPClient>& client,
+    ECM Remote2Local(const std::string &src, const std::string &dst, const std::shared_ptr<AMSFTPClient> &client,
                      uint64_t chunk_size) {
         EC rc_r = EC::Success;
-        LIBSSH2_SFTP_HANDLE* sftpFile;
+        LIBSSH2_SFTP_HANDLE *sftpFile;
         std::string error_msg = "";
         std::lock_guard<std::recursive_mutex> lock(client->mtx);
         sftpFile = libssh2_sftp_open(client->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
@@ -2284,12 +2438,12 @@ private:
         return {rc_r, error_msg};
     }
 
-    ECM Bridge(const std::string& src, const std::string& dst, const std::shared_ptr<AMSFTPClient>& src_worker,
-               const std::shared_ptr<AMSFTPClient>& dst_worker, uint64_t chunk_size = 256 * AMKB) {
+    ECM Bridge(const std::string &src, const std::string &dst, const std::shared_ptr<AMSFTPClient> &src_worker,
+               const std::shared_ptr<AMSFTPClient> &dst_worker, uint64_t chunk_size = 256 * AMKB) {
         ErrorCode rc_final = EC::Success;
         std::string error_msg = "";
-        LIBSSH2_SFTP_HANDLE* srcFile = nullptr;
-        LIBSSH2_SFTP_HANDLE* dstFile = nullptr;
+        LIBSSH2_SFTP_HANDLE *srcFile = nullptr;
+        LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
         std::lock_guard<std::recursive_mutex> lock(src_worker->mtx);
         std::lock_guard<std::recursive_mutex> lock2(dst_worker->mtx);
         dst_worker->mkdir(AMFS::dirname(dst));
@@ -2420,14 +2574,14 @@ private:
         return {rc_final, error_msg};
     }
 
-    ECM InHostCopy(const std::string& src, const std::string& dst, const std::shared_ptr<AMSFTPClient>& worker,
+    ECM InHostCopy(const std::string &src, const std::string &dst, const std::shared_ptr<AMSFTPClient> &worker,
                    uint64_t chunk_size = 256 * AMKB) {
         ErrorCode rc_final = EC::Success;
         std::string error_msg = "";
-        LIBSSH2_SFTP_HANDLE* srcFile = nullptr;
-        LIBSSH2_SFTP_HANDLE* dstFile = nullptr;
+        LIBSSH2_SFTP_HANDLE *srcFile = nullptr;
+        LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
         std::lock_guard<std::recursive_mutex> lock(worker->mtx);
-        worker->mkdir(AMFS::dirname(dst));
+        worker->mkdirs(AMFS::dirname(dst));
         srcFile = libssh2_sftp_open(worker->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
 
         if (!srcFile) {
@@ -2552,8 +2706,8 @@ private:
         return {rc_final, error_msg};
     }
 
-    std::pair<ECM, PathInfo> Ustat(const std::string& path, const std::shared_ptr<HostMaintainer>& hostm,
-                                   const std::string& nickname = "") {
+    std::pair<ECM, PathInfo> Ustat(const std::string &path, const std::shared_ptr<HostMaintainer> &hostm,
+                                   const std::string &nickname = "") {
         if (nickname.empty()) {
             auto res = AMFS::stat(path);
             if (!res.first.empty()) {
@@ -2572,8 +2726,8 @@ private:
         return client->stat(path);
     }
 
-    std::vector<PathInfo> Uiwalk(const std::string& path, const std::shared_ptr<HostMaintainer>& hostm,
-                                 const std::string& nickname = "", bool ignore_special_file = true) {
+    std::vector<PathInfo> Uiwalk(const std::string &path, const std::shared_ptr<HostMaintainer> &hostm,
+                                 const std::string &nickname = "", bool ignore_special_file = true) {
         if (nickname.empty()) {
             return AMFS::iwalk(path, ignore_special_file);
         }
@@ -2588,7 +2742,7 @@ private:
         return client->iwalk(path, ignore_special_file);
     }
 
-public:
+  public:
     TransferCallback callback;
     float cb_interval_s;
     std::atomic<bool> is_terminate = false;
@@ -2598,8 +2752,8 @@ public:
     std::string current_filename = "";
     double cb_time = timenow();
 
-    AMSFTPWorker(const TransferCallback& callback, float cb_interval_s = 0.2)
-        : callback(callback), cb_interval_s(cb_interval_s) {}
+    AMSFTPWorker(TransferCallback callback, float cb_interval_s = 0.2)
+        : callback(std::move(callback)), cb_interval_s(cb_interval_s) {}
 
     inline void reset() {
         cb_time = timenow();
@@ -2626,11 +2780,11 @@ public:
 
     inline void set_cb_interval(float interval_s) { this->cb_interval_s = interval_s; }
 
-    TASKS EraseOverlapTasks(TASKS& tasks) {
+    TASKS EraseOverlapTasks(TASKS &tasks) {
         std::unordered_set<std::string> dst_set{};
         TASKS result{};
         std::string task_id;
-        for (auto& task : tasks) {
+        for (auto &task : tasks) {
             task_id = task.src + task.src_host + task.dst + task.dst_host;
             if (dst_set.count(task_id) == 0) {
                 dst_set.insert(task_id);
@@ -2640,8 +2794,8 @@ public:
         return result;
     }
 
-    TASKS transfer(TASKS tasks, const std::shared_ptr<HostMaintainer>& hostm, uint64_t chunk_large = 16 * AMMB,
-                   uint64_t chunk_middle = 2 * AMMB, uint64_t chunk_small = 256 * AMKB) {
+    TASKS transfer(TASKS tasks, const std::shared_ptr<HostMaintainer> &hostm, uint64_t chunk_large = 16 * AMMB,
+                   uint64_t chunk_middle = 2 * AMMB, uint64_t chunk_small = 2 * AMMB) {
         if (tasks.empty()) {
             return {};
         }
@@ -2651,7 +2805,7 @@ public:
 
         if (callback.need_total_size_cb) {
             uint64_t total_size = 0;
-            for (auto& task : tasks) {
+            for (auto &task : tasks) {
                 total_size += task.size;
             }
             py::gil_scoped_acquire acquire;
@@ -2666,7 +2820,7 @@ public:
         ECM rc;
 
         tasks = EraseOverlapTasks(tasks);
-        for (auto& task : tasks) {
+        for (auto &task : tasks) {
             if (task.IsSuccess) {
                 // 跳过在load_tasks中，未设置overlap且dst已经存在的任务
                 continue;
@@ -2689,7 +2843,7 @@ public:
                 if (dst_host.empty()) {
                     std::string errors = AMFS::mkdirs(task.dst);
                     if (!errors.empty()) {
-                        rc = ECM(EC::UnknownError, errors);
+                        rc = ECM(EC::LocalFileError, errors);
                         goto check;
                     }
                     goto check;
@@ -2755,20 +2909,13 @@ public:
                 if (rc.first != EC::Success) {
                     goto check;
                 }
-                rc = hostm->test_host(dst_host);
-                if (rc.first != EC::Success) {
-                    goto check;
-                }
                 src_client = hostm->get_host(src_host);
                 if (!src_client) {
                     rc = ECM(EC::NoSession, "Source SFTP Client not found");
                     goto check;
                 }
                 auto [rcmp, br9] = src_client->exists(task.dst);
-                if (rcmp.first != EC::Success) {
-                    rc = rcmp;
-                    goto check;
-                } else if (br9 && !task.overwrite) {
+                if (br9 && !task.overwrite) {
                     rc = ECM{EC::PathAlreadyExists, fmt::format("Dst already exists: {}", task.dst)};
                     goto check;
                 }
@@ -2817,22 +2964,26 @@ public:
         return tasks;
     }
 
-    std::pair<ECM, TASKS> load_tasks(const std::string& src, const std::string& dst,
-                                     const std::shared_ptr<HostMaintainer>& hostm, const std::string& src_hostname = "",
-                                     const std::string& dst_hostname = "", bool overwrite = false, bool mkdir = true,
+    std::pair<ECM, TASKS> load_tasks(const std::string &src, const std::string &dst,
+                                     const std::shared_ptr<HostMaintainer> &hostm, const std::string &src_hostname = "",
+                                     const std::string &dst_hostname = "", bool overwrite = false, bool mkdir = true,
                                      bool ignore_sepcial_file = true) {
         WRV result = {};
         TASKS tasks = {};
         ECM rc;
         std::shared_ptr<AMSFTPClient> src_client;
         // 去除src的dst左右端的空格
-        rc = hostm->test_host(src_hostname);
-        if (rc.first != EC::Success) {
-            return {rc, tasks};
+        if (!src_hostname.empty()) {
+            rc = hostm->test_host(src_hostname);
+            if (rc.first != EC::Success) {
+                return {rc, tasks};
+            }
         }
-        rc = hostm->test_host(dst_hostname);
-        if (rc.first != EC::Success) {
-            return {rc, tasks};
+        if (!dst_hostname.empty()) {
+            rc = hostm->test_host(dst_hostname);
+            if (rc.first != EC::Success) {
+                return {rc, tasks};
+            }
         }
 
         auto [rcm, src_stat] = Ustat(src, hostm, src_hostname);
@@ -2863,23 +3014,23 @@ public:
             }
         }
 
-        auto [rcm2, dst_info] = Ustat(dstf, hostm, dst_hostname);
-
         if (src_stat.type != PathType::DIR) {
             if (ignore_sepcial_file && src_stat.type != PathType::FILE && src_stat.type != PathType::SYMLINK) {
-                return {ECM{EC::NotAFile,
-                            fmt::format("Src is not a common file and ignore_sepcial_file is true: {}", srcf)},
+                return {ECM{EC::NotAFile, fmt::format("Src is not a common file and "
+                                                      "ignore_sepcial_file is true: {}",
+                                                      srcf)},
                         {}};
             }
 
             if (!is_dst_file) {
                 dstf = AMFS::join(dstf, AMFS::basename(srcf));
             }
+            auto [rcm7, dst_info4] = Ustat(dstf, hostm, dst_hostname);
 
             // 检验目标路径是否存在
-            if (rcm2.first == EC::Success) {
-                if (dst_info.type == PathType::DIR) {
-                    return {ECM(EC::NotADirectory, fmt::format("Dst already exists and is a directory: {}", dstf)),
+            if (rcm7.first == EC::Success) {
+                if (dst_info4.type == PathType::DIR) {
+                    return {ECM(EC::NotADirectory, fmt::format("Dst already exists and is not a directory: {}", dstf)),
                             tasks};
                 } else if (!overwrite) {
                     return {ECM{EC::PathAlreadyExists, fmt::format("Dst already exists: {}", dstf)}, tasks};
@@ -2902,6 +3053,8 @@ public:
             return {ECM(EC::Success, ""), tasks};
         }
 
+        auto [rcm2, dst_info] = Ustat(dstf, hostm, dst_hostname);
+
         if (rcm2.first != EC::Success && !mkdir) {
             return {ECM{EC::ParentDirectoryNotExist, fmt::format("Dst parent path not exists: {}", dstf)}, tasks};
         } else if (rcm2.first == EC::Success && dst_info.type != PathType::DIR) {
@@ -2911,7 +3064,7 @@ public:
         auto result2 = Uiwalk(srcf, hostm, src_hostname, ignore_sepcial_file);
 
         std::string dst_n;
-        for (auto& item : result2) {
+        for (auto &item : result2) {
             dst_n = AMFS::join(dstf, fs::relative(item.path, AMFS::dirname(srcf)));
             tasks.emplace_back(item.path, src_hostname, dst_n, dst_hostname, item.size, item.type, overwrite);
         }

@@ -191,7 +191,7 @@ class AMSession(AMData.AMTracer):
         """
         Connect to the session, force will force to reconnect even if the session is already connected
         """
-    def Check(self, arg0: bool) -> tuple[AMEnum.ErrorCode, str]:
+    def Check(self, need_trace: bool = False) -> tuple[AMEnum.ErrorCode, str]:
         """
         Realtime check the session status and update the state
         """
@@ -238,7 +238,7 @@ class AMSession(AMData.AMTracer):
     def __init__(self, request: AMData.ConRequst, keys: list[str], error_num: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
         ...
 class BaseSFTPClient(AMSession):
-    def ConductCmd(self, cmd: str) -> tuple[tuple[AMEnum.ErrorCode, str], tuple[str, int]]:
+    def ConductCmd(self, cmd: str, max_time_s: float = -1) -> tuple[tuple[AMEnum.ErrorCode, str], tuple[str, int]]:
         """
         Conduct a command and return the result
         """
@@ -250,13 +250,17 @@ class BaseSFTPClient(AMSession):
         """
         Get the round-trip time of the session
         """
+    def TerminateCmd(self) -> None:
+        """
+        Terminate the current command
+        """
     def __init__(self, request: AMData.ConRequst, keys: list[str], error_num: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
         ...
 class HostMaintainer:
     """
     The Client Maintainer Class, Check clients status all the time
     """
-    def __init__(self, heartbeat_interval_s: int) -> None:
+    def __init__(self, heartbeat_interval_s: int, disconnect_cb: typing.Any = None) -> None:
         ...
     def add_host(self, nickname: str, client: AMSFTPClient, overwrite: bool = False) -> None:
         ...

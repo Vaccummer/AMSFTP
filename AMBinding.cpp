@@ -3,17 +3,20 @@
 #include "AMEnum.hpp"
 #include "AMPath.hpp"
 
-PYBIND11_MODULE(AMSFTP, m) {
+PYBIND11_MODULE(AMSFTP, m)
+{
     m.doc() = "A SFTP Client Module Based on libssh2";
     auto em = m.def_submodule("AMEnum", "Enum Classes");
     auto data = m.def_submodule("AMData", "Data Classes");
     auto fs = m.def_submodule("AMFS", "Local Filesystem Operations");
 
     bool expected = false;
-    if (std::atomic_compare_exchange_strong(&is_wsa_initialized, &expected, true)) {
+    if (std::atomic_compare_exchange_strong(&is_wsa_initialized, &expected, true))
+    {
         WSADATA wsaData;
         int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
-        if (result != 0) {
+        if (result != 0)
+        {
             throw std::runtime_error("WSAStartup failed");
         }
         is_wsa_initialized = true;
@@ -165,7 +168,8 @@ PYBIND11_MODULE(AMSFTP, m) {
         .def_readwrite("hostname", &ConRequst::hostname, "Hostname or IP address of the remote server")
         .def_readwrite("username", &ConRequst::username, "Username for authentication")
         .def_readwrite("password", &ConRequst::password,
-                       "Password for authentication, if not provided, public key authentication will be used")
+                       "Password for authentication, if not provided, public key "
+                       "authentication will be used")
         .def_readwrite("port", &ConRequst::port, "Port number of the remote server, default is 22")
         .def_readwrite("compression", &ConRequst::compression, "Whether to use compression, default is false")
         .def_readwrite("timeout_s", &ConRequst::timeout_s, "Timeout in seconds, default is 3")
@@ -209,7 +213,8 @@ PYBIND11_MODULE(AMSFTP, m) {
     py::class_<AuthCBInfo, std::shared_ptr<AuthCBInfo>>(data, "AuthCBInfo")
         .def(py::init<bool, ConRequst, int>(), py::arg("NeedPassword"), py::arg("request"), py::arg("trial_times"))
         .def_readwrite("NeedPassword", &AuthCBInfo::NeedPassword,
-                       "If true, python password callback need to return password, if false, callback function just "
+                       "If true, python password callback need to return "
+                       "password, if false, callback function just "
                        "tells you the password is wrong")
         .def_readwrite("request", &AuthCBInfo::request, "Connection request data")
         .def_readwrite("trial_times", &AuthCBInfo::trial_times, "Number of times the password has been tried");
@@ -269,11 +274,11 @@ PYBIND11_MODULE(AMSFTP, m) {
         .def("ClearTracer", &AMTracer::ClearTracer, "Clear the tracer")
         .def("SetTracerCapacity", &AMTracer::SetTracerCapacity, py::arg("capacity"), "Set the capacity of the tracer")
         .def("trace",
-             py::overload_cast<const TraceLevel&, const ErrorCode&, const std::string&, const std::string&,
-                               const std::string&>(&AMTracer::trace),
+             py::overload_cast<const TraceLevel &, const ErrorCode &, const std::string &, const std::string &,
+                               const std::string &>(&AMTracer::trace),
              py::arg("trace_info"), py::arg("error_code"), py::arg("target"), py::arg("action"), py::arg("msg"),
              "Trace a message")
-        .def("trace", py::overload_cast<const TraceInfo&>(&AMTracer::trace), py::arg("trace_info"), "Trace a message")
+        .def("trace", py::overload_cast<const TraceInfo &>(&AMTracer::trace), py::arg("trace_info"), "Trace a message")
         .def("PauseTrace", &AMTracer::PauseTrace, "Pause the trace")
         .def("ResumeTrace", &AMTracer::ResumeTrace, "Resume the trace")
         .def("SetPyTrace", &AMTracer::SetPyTrace, py::arg("trace_cb") = py::none(),
@@ -289,7 +294,8 @@ PYBIND11_MODULE(AMSFTP, m) {
         .def("GetKeys", &AMSession::GetKeys, "Get all shared private keys of the session")
         .def("SetKeys", &AMSession::SetKeys, py::arg("keys"), "Set shared private keys")
         .def("GetState", &AMSession::GetState, "Get the current state of the session")
-        .def("Check", &AMSession::Check, "Realtime check the session status and update the state")
+        .def("Check", &AMSession::Check, "Realtime check the session status and update the state",
+             py::arg("need_trace") = false)
         .def("BaseConnect", &AMSession::BaseConnect, py::arg("force") = false,
              "Connect to the session, force will force to reconnect even if the "
              "session is already connected")
@@ -297,7 +303,8 @@ PYBIND11_MODULE(AMSFTP, m) {
         .def("GetLastErrorMsg", &AMSession::GetLastErrorMsg, "Get the last error message of the session")
         .def("Disconnect", &AMSession::Disconnect, "Disconnect the session")
         .def("SetAuthCallback", &AMSession::SetAuthCallback, py::arg("auth_cb") = py::none(),
-             "When password authentication is needed, this callback will be called, callable[[AuthCBInfo], bool]");
+             "When password authentication is needed, this callback will be "
+             "called, callable[[AuthCBInfo], bool]");
 
     py::class_<BaseSFTPClient, std::shared_ptr<BaseSFTPClient>, AMSession>(m, "BaseSFTPClient")
         .def(py::init<ConRequst, std::vector<std::string>, unsigned int, py::object, py::object>(), py::arg("request"),
@@ -346,7 +353,8 @@ PYBIND11_MODULE(AMSFTP, m) {
              "Set the trash directory and create it if it doesn't exist")
         .def("EnsureTrashDir", &AMSFTPClient::EnsureTrashDir)
         .def("realpath", &AMSFTPClient::realpath, py::arg("path"),
-             "Parse and return the absolute path, ~ in client will be parsed, .. and . will be parsed by server, if "
+             "Parse and return the absolute path, ~ in client will be parsed, .. "
+             "and . will be parsed by server, if "
              "there are these symbols, the path must exist")
         .def("chmod", &AMSFTPClient::chmod, py::arg("path"), py::arg("mode"), py::arg("recursive") = false)
         .def("stat", &AMSFTPClient::stat, py::arg("path"))
@@ -361,21 +369,27 @@ PYBIND11_MODULE(AMSFTP, m) {
         .def("rmfile", &AMSFTPClient::rmfile, py::arg("path"))
         .def("rmdir", &AMSFTPClient::rmdir, py::arg("path"))
         .def("remove", &AMSFTPClient::remove, py::arg("path"),
-             "Permanently remove a file or directory, if return (ErrorCode, str), the whole operation failed, "
-             "otherwise return list[tuple[str, tuple[ErrorCode, str]]], means some paths failed to remove")
+             "Permanently remove a file or directory, if return (ErrorCode, "
+             "str), the whole operation failed, "
+             "otherwise return list[tuple[str, tuple[ErrorCode, str]]], means "
+             "some paths failed to remove")
         .def("rename", &AMSFTPClient::rename, py::arg("src"), py::arg("dst"), py::arg("overwrite") = false,
-             "Turn src_path into dst_path, if overwrite is true, the dst_path will be overwritten")
+             "Turn src_path into dst_path, if overwrite is true, the dst_path "
+             "will be overwritten")
         .def("saferm", &AMSFTPClient::saferm, py::arg("path"),
-             "Not real remove, just move it to {trash_dir}/{year-month-day-hour-minute-second}/{pathname}")
+             "Not real remove, just move it to "
+             "{trash_dir}/{year-month-day-hour-minute-second}/{pathname}")
         .def("move", &AMSFTPClient::move, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false,
              py::arg("force_write") = false, "Move source path src to Destination Directory dst")
         .def("copy", &AMSFTPClient::copy, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false,
              "Unstable, using shell command to copy")
         .def("iwalk", &AMSFTPClient::iwalk, py::arg("path"), py::arg("ignore_sepcial_file") = true,
-             "Recursive walk the path, ignore path structure, just return list[PathInfo]")
+             "Recursive walk the path, ignore path structure, just return "
+             "list[PathInfo]")
         .def("walk", &AMSFTPClient::walk, py::arg("path"), py::arg("max_depth") = -1,
              py::arg("ignore_sepcial_file") = true,
-             "Recursive walk the path, record parent dir, return list[tuple[list[str],PathInfo]]")
+             "Recursive walk the path, record parent dir, return "
+             "list[tuple[list[str],PathInfo]]")
         .def("getsize", &AMSFTPClient::getsize, py::arg("path"), py::arg("ignore_sepcial_file") = true)
         .def("SetPublicVar", &AMSFTPClient::SetPublicVar, py::arg("key"), py::arg("value"),
              py::arg("overwrite") = false, "Store a Python object in C++ side with deep copy, C++ owns the copy")
@@ -391,7 +405,7 @@ PYBIND11_MODULE(AMSFTP, m) {
 
     py::class_<HostMaintainer, std::shared_ptr<HostMaintainer>>(
         m, "HostMaintainer", "The Client Maintainer Class, Check clients status all the time")
-        .def(py::init<int>(), py::arg("heartbeat_interval_s"))
+        .def(py::init<int, py::object>(), py::arg("heartbeat_interval_s"), py::arg("disconnect_cb") = py::none())
         .def("add_host", &HostMaintainer::add_host, py::arg("nickname"), py::arg("client"),
              py::arg("overwrite") = false)
         .def("remove_host", &HostMaintainer::remove_host, py::arg("nickname"))
@@ -410,7 +424,8 @@ PYBIND11_MODULE(AMSFTP, m) {
         .def("IsPause", &AMSFTPWorker::IsPause)
         .def("IsRunning", &AMSFTPWorker::IsRunning)
         .def("reset", &AMSFTPWorker::reset,
-             "Rset Internal Status like is_terminate, is_pause, current_size, total_size")
+             "Rset Internal Status like is_terminate, is_pause, current_size, "
+             "total_size")
         .def("set_cb_interval", &AMSFTPWorker::set_cb_interval, py::arg("interval_s"),
              "Set the interval of the callback in seconds, default is 0.1s")
         .def("load_tasks", &AMSFTPWorker::load_tasks, py::arg("src"), py::arg("dst"), py::arg("hostd"),
@@ -424,7 +439,8 @@ PYBIND11_MODULE(AMSFTP, m) {
         .def("HomePath", &AMFS::HomePath)
         .def("extname", &AMFS::extname, py::arg("path"))
         .def("split_basename", &AMFS::split_basename, py::arg("basename"),
-             "return tuple[str, str], the first is the basename without extension, the second is the extension(no .)")
+             "return tuple[str, str], the first is the basename without "
+             "extension, the second is the extension(no .)")
         .def("CWD", &AMFS::CWD)
         .def("FormatTime", &AMFS::FormatTime, py::arg("time"), py::arg("format") = "%Y-%m-%d %H:%M:%S")
         .def("UnifyPathSep", &AMFS::UnifyPathSep, py::arg("path"), py::arg("sep") = "")
@@ -435,7 +451,7 @@ PYBIND11_MODULE(AMSFTP, m) {
         .def("basename", &AMFS::basename, py::arg("path"))
         .def("mkdirs", &AMFS::mkdirs, py::arg("path"))
         .def("stat", &AMFS::stat, py::arg("path"), py::arg("trace_link") = false)
-        .def("listdir", &AMFS::listdir, py::arg("path"))
+        .def("listdir", &AMFS::listdir, py::arg("path"), py::arg("max_time_s") = -1)
         .def("iwalk", &AMFS::iwalk, py::arg("path"), py::arg("ignore_sepcial_file") = true)
         .def("walk", &AMFS::walk, py::arg("path"), py::arg("max_depth") = -1, py::arg("ignore_sepcial_file") = true)
         .def("getsize", &AMFS::getsize, py::arg("path"), py::arg("trace_link") = false);
