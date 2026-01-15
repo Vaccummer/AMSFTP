@@ -616,17 +616,8 @@ public:
         return total_time / times;
     }
 
-    // ECM Connect()
-    // {
-    //     ECM ecm = amsession->Connect();
-    //     if (!isok(ecm))
-    //     {
-    //         return ecm;
-    //     }
-    //     this->trash_dir = this->request.trash_dir;
-    //     EnsureTrashDir();
-    //     return {EC::Success, ""};
-    // }
+    void TerminateCmd() { terminate_cmd.store(true); }
+
     CR ConductCmd(const std::string& cmd, double max_time_s = -1) {
         std::lock_guard<std::recursive_mutex> lock(mtx);
         terminate_cmd.store(false);
