@@ -304,7 +304,9 @@ PYBIND11_MODULE(AMSFTP, m) {
              py::arg("keys"), py::arg("error_num") = 10, py::arg("trace_cb") = py::none(),
              py::arg("auth_cb") = py::none())
         .def("GetRTT", &BaseSFTPClient::GetRTT, py::arg("times") = 5, "Get the round-trip time of the session")
-        .def("ConductCmd", &BaseSFTPClient::ConductCmd, py::arg("cmd"), "Conduct a command and return the result")
+        .def("ConductCmd", &BaseSFTPClient::ConductCmd, py::arg("cmd"), py::arg("max_time_s") = -1,
+             "Conduct a command and return the result")
+        .def("TerminateCmd", &BaseSFTPClient::TerminateCmd, "Terminate the current command")
         .def("GetOSType", &BaseSFTPClient::GetOSType, py::arg("update") = false,
              "Update will force to re-detect the OS type");
 
