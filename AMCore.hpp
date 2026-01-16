@@ -309,7 +309,7 @@ public:
   }
 };
 
-class BaseSFTPClient : public AMTracer, public AMFS::BasePathMatch {
+class BaseClient : public AMTracer, public AMFS::BasePathMatch {
 protected:
   std::atomic<bool> terminate_cmd = false;
   ClientProtocol PROTOCOL = ClientProtocol::Base;
@@ -335,8 +335,8 @@ public:
       return "ftp";
     }
   }
-  BaseSFTPClient(ConRequst request, size_t buffer_capacity = 10,
-                 const py::object &trace_cb = py::none())
+  BaseClient(ConRequst request, size_t buffer_capacity = 10,
+             const py::object &trace_cb = py::none())
       : AMTracer(request, buffer_capacity, trace_cb), AMFS::BasePathMatch() {}
   virtual ECM GetState() {
     throw UnimplementedMethodException(fmt::format(
@@ -507,7 +507,7 @@ public:
   }
 };
 
-class AMSession : public BaseSFTPClient {
+class AMSession : public BaseClient {
 protected:
   std::atomic<bool> has_connected;
   void SetState(const ECM &state) override {
@@ -551,8 +551,8 @@ public:
             unsigned int error_num = 10,
             const py::object &trace_cb = py::none(),
             const py::object &auth_cb = py::none())
-      : BaseSFTPClient(request, error_num, trace_cb),
-        private_keys(private_keys), res_data(request) {
+      : BaseClient(request, error_num, trace_cb), private_keys(private_keys),
+        res_data(request) {
     if (!auth_cb.is_none()) {
       this->auth_cb = py::cast<py::function>(auth_cb);
       this->password_auth_cb = true;
@@ -2359,1312 +2359,6 @@ def _amsftp_gen(next_func):
   }
 };
 
-class HostMaintainer {
-private:
-  std::unordered_map<std::string, std::shared_ptr<BaseSFTPClient>> hosts;
-  std::atomic<bool> is_heartbeat;
-  std::thread heartbeat_thread;
-  py::function disconnect_cb;
-  bool is_disconnect_cb = false;
-
-  void HeartbeatAct(int interval_s) {
-    int millsecond = 0;
-    ECM rcm;
-    while (true) {
-      // 遍历hosts字典
-      for (auto &host : hosts) {
-        rcm = host.second->Check();
-        if (rcm.first != EC::Success) {
-          if (is_disconnect_cb) {
-            py::gil_scoped_acquire acquire;
-            disconnect_cb(host.second, rcm);
-          }
-        }
-      }
-      while (millsecond < interval_s * 1000) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        millsecond += 100;
-        if (!is_heartbeat.load()) {
-          return;
-        }
-      }
-      millsecond = 0;
-    }
-  }
-
-public:
-  ~HostMaintainer() {
-    is_heartbeat.store(false);
-    if (heartbeat_thread.joinable()) {
-      heartbeat_thread.join();
-    }
-  }
-
-  HostMaintainer(int heartbeat_interval_s = 60,
-                 py::object disconnect_cb = py::none()) {
-    this->is_heartbeat.store(true);
-    heartbeat_thread = std::thread(
-        [this, heartbeat_interval_s]() { HeartbeatAct(heartbeat_interval_s); });
-    if (!disconnect_cb.is_none()) {
-      this->disconnect_cb = py::cast<py::function>(disconnect_cb);
-      this->is_disconnect_cb = true;
-    }
-  }
-
-  std::vector<std::string> get_hosts() {
-    std::vector<std::string> host_list;
-    for (auto &host : hosts) {
-      host_list.push_back(host.first);
-    }
-    return host_list;
-  }
-
-  std::vector<std::shared_ptr<BaseSFTPClient>> get_clients() {
-    std::vector<std::shared_ptr<BaseSFTPClient>> client_list;
-    for (auto &host : hosts) {
-      client_list.push_back(host.second);
-    }
-    return client_list;
-  }
-
-  void add_host(const std::string &nickname,
-                std::shared_ptr<BaseSFTPClient> client,
-                bool overwrite = false) {
-    if (hosts.find(nickname) != hosts.end()) {
-      if (!overwrite) {
-        return;
-      }
-      hosts.erase(nickname);
-    }
-    hosts[nickname] = client;
-  }
-
-  void remove_host(const std::string &nickname) {
-    if (hosts.find(nickname) != hosts.end()) {
-      hosts.erase(nickname);
-    }
-  }
-
-  std::shared_ptr<BaseSFTPClient> get_host(const std::string &nickname) {
-    if (hosts.find(nickname) == hosts.end()) {
-      return nullptr;
-    }
-    return hosts[nickname];
-  }
-
-  ECM test_host(const std::string &nickname, bool update = false) {
-    if (nickname.empty()) {
-      return ECM{EC::InvalidArg, "Host nickname is empty"};
-    } else if (hosts.find(nickname) == hosts.end()) {
-      return ECM{EC::ClientNotFound,
-                 fmt::format("Client not found: {}", nickname)};
-    }
-    if (!update) {
-      ECM rcm = hosts[nickname]->GetState();
-      if (rcm.first != EC::Success) {
-        return hosts[nickname]->Check();
-      } else {
-        return rcm;
-      }
-    } else {
-      return hosts[nickname]->Connect();
-    }
-  }
-};
-
-class AMSFTPWorker {
-private:
-  ECM Local2Local(const std::string &src, const std::string &dst,
-                  uint64_t chunk_size) {
-    ErrorCode rc_r = EC::Success;
-    std::string error_msg = "";
-
-    // Get source file size
-    uint64_t file_size = 0;
-#ifdef _WIN32
-    HANDLE hFile = CreateFileW(AMFS::Str::AMStr(src).c_str(), GENERIC_READ,
-                               FILE_SHARE_READ, nullptr, OPEN_EXISTING,
-                               FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hFile == INVALID_HANDLE_VALUE) {
-      return {EC::LocalFileMapError, "Failed to open source file"};
-    }
-    LARGE_INTEGER li;
-    if (!GetFileSizeEx(hFile, &li)) {
-      CloseHandle(hFile);
-      return {EC::LocalFileMapError, "Failed to get file size"};
-    }
-    file_size = li.QuadPart;
-    CloseHandle(hFile);
-#else
-    struct stat file_stat;
-    if (stat(src.c_str(), &file_stat) == -1) {
-      return {EC::LocalFileMapError, "Failed to stat source file"};
-    }
-    file_size = file_stat.st_size;
-#endif
-    // Create destination directory
-    AMFS::mkdirs(AMFS::dirname(dst));
-
-    // Create ring buffer (2x chunk_size for overlapping read/write)
-    StreamRingBuffer ring_buffer(chunk_size * 2);
-
-    // Open source file for reading
-#ifdef _WIN32
-    HANDLE hSrcFile = CreateFileW(AMFS::Str::AMStr(src).c_str(), GENERIC_READ,
-                                  FILE_SHARE_READ, NULL, OPEN_EXISTING,
-                                  FILE_FLAG_SEQUENTIAL_SCAN, NULL);
-    if (hSrcFile == INVALID_HANDLE_VALUE) {
-      return {EC::LocalFileMapError, "Failed to open source file for reading"};
-    }
-#else
-    int src_fd = open(src.c_str(), O_RDONLY);
-    if (src_fd == -1) {
-      return {EC::LocalFileMapError, "Failed to open source file for reading"};
-    }
-#endif
-
-    // Open destination file for writing
-#ifdef _WIN32
-    HANDLE hDstFile =
-        CreateFileW(AMFS::Str::AMStr(dst).c_str(), GENERIC_WRITE, 0, NULL,
-                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hDstFile == INVALID_HANDLE_VALUE) {
-      CloseHandle(hSrcFile);
-      return {EC::LocalFileMapError, "Failed to create destination file"};
-    }
-#else
-    int dst_fd = open(dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
-    if (dst_fd == -1) {
-      close(src_fd);
-      return {EC::LocalFileMapError, "Failed to create destination file"};
-    }
-#endif
-
-    uint64_t offset = 0;
-    uint64_t total_read = 0;
-    std::atomic<bool> read_finished(false);
-    std::atomic<bool> read_error(false);
-    std::string read_error_msg = "";
-
-    // Async read thread
-    std::thread read_thread([&]() {
-      uint64_t remaining = file_size;
-      while (remaining > 0 && !pd.is_terminate.load() && !read_error) {
-        // Wait for writable space
-        while (ring_buffer.writable() == 0 && !pd.is_terminate.load()) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-
-        if (pd.is_terminate.load())
-          break;
-
-        auto [write_ptr, write_len] = ring_buffer.get_write_ptr();
-        uint64_t to_read = std::min<uint64_t>(
-            write_len, std::min<uint64_t>(chunk_size, remaining));
-
-        if (to_read > 0) {
-#ifdef _WIN32
-          DWORD bytes_read = 0;
-          if (!ReadFile(hSrcFile, write_ptr, static_cast<DWORD>(to_read),
-                        &bytes_read, NULL)) {
-            read_error = true;
-            read_error_msg = "Failed to read from source file";
-            break;
-          }
-          if (bytes_read == 0)
-            break;
-          ring_buffer.commit_write(bytes_read);
-          remaining -= bytes_read;
-          total_read += bytes_read;
-#else
-          ssize_t bytes_read = read(src_fd, write_ptr, to_read);
-          if (bytes_read < 0) {
-            read_error = true;
-            read_error_msg = "Failed to read from source file";
-            break;
-          }
-          if (bytes_read == 0)
-            break;
-          ring_buffer.commit_write(bytes_read);
-          remaining -= bytes_read;
-          total_read += bytes_read;
-#endif
-        }
-      }
-      read_finished = true;
-    });
-
-    // Main write thread (current thread)
-    while ((!read_finished || ring_buffer.available() > 0) &&
-           !pd.is_terminate.load()) {
-      // Handle pause
-      while (pd.is_pause.load() && !pd.is_terminate.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(300));
-      }
-
-      if (pd.is_terminate.load()) {
-        rc_r = EC::Terminate;
-        error_msg = "Transfer cancelled";
-        break;
-      }
-
-      // Wait for readable data
-      while (ring_buffer.available() == 0 && !read_finished && !read_error &&
-             !pd.is_terminate.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-
-      if (read_error) {
-        rc_r = EC::LocalFileMapError;
-        error_msg = read_error_msg;
-        break;
-      }
-
-      if (ring_buffer.available() == 0)
-        break;
-
-      auto [read_ptr, read_len] = ring_buffer.get_read_ptr();
-      if (read_len > 0) {
-#ifdef _WIN32
-        DWORD bytes_written = 0;
-        if (!WriteFile(hDstFile, read_ptr, static_cast<DWORD>(read_len),
-                       &bytes_written, nullptr)) {
-          rc_r = EC::LocalFileMapError;
-          error_msg = "Failed to write to destination file";
-          break;
-        }
-        ring_buffer.commit_read(bytes_written);
-        offset += bytes_written;
-        pd.accumulated_size += bytes_written;
-        pd.this_size = offset;
-#else
-        ssize_t bytes_written = write(dst_fd, read_ptr, read_len);
-        if (bytes_written < 0) {
-          rc_r = EC::LocalFileWriteError;
-          error_msg = "Failed to write to destination file";
-          break;
-        }
-        ring_buffer.commit_read(bytes_written);
-        offset += bytes_written;
-        current_size += bytes_written;
-#endif
-        InnerCallback();
-      }
-    }
-
-    // Wait for read thread to finish
-    read_thread.join();
-
-    // Close files
-#ifdef _WIN32
-    CloseHandle(hSrcFile);
-    if (rc_r == EC::Success) {
-      FlushFileBuffers(hDstFile);
-    }
-    CloseHandle(hDstFile);
-#else
-    close(src_fd);
-    if (rc_r == EC::Success) {
-      fsync(dst_fd);
-    }
-    close(dst_fd);
-#endif
-
-    // Final callback
-    InnerCallback(true);
-
-    return {rc_r, error_msg};
-  }
-
-  ECM Local2Remote(const std::string &src, const std::string &dst,
-                   const std::shared_ptr<AMSFTPClient> &client,
-                   uint64_t chunk_size) {
-    ErrorCode rc_r = EC::Success;
-    LIBSSH2_SFTP_HANDLE *sftpFile;
-    std::string error_msg = "Error to create FileMapper";
-    std::lock_guard<std::recursive_mutex> lock(client->mtx);
-    client->mkdirs(AMFS::dirname(dst));
-    sftpFile = libssh2_sftp_open(
-        client->sftp, dst.c_str(),
-        LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
-    if (!sftpFile) {
-      std::string msg = fmt::format("Failed to open remote file: {}, cause {}",
-                                    dst, client->GetLastErrorMsg());
-      rc_r = client->GetLastEC();
-      client->trace(TraceLevel::Error, rc_r,
-                    fmt::format("{}@{}", client->res_data.nickname, dst),
-                    "Remote2Local", msg);
-      return {rc_r, msg};
-    }
-
-    FileMapper l_file_m(src, MapType::Read, error_msg);
-    if (!l_file_m.file_ptr) {
-      libssh2_sftp_close_handle(sftpFile);
-      EC rc = EC::LocalFileMapError;
-      return {rc, error_msg};
-    }
-
-    uint64_t offset = 0;
-    uint64_t remaining = l_file_m.file_size;
-    uint64_t buffer_size;
-    uint64_t local_size = 0;
-    py::object result;
-
-    long rc;
-
-    while (remaining > 0) {
-      local_size = 0;
-      buffer_size = std::min<uint64_t>(chunk_size, remaining);
-
-      while (local_size < buffer_size) {
-        rc = libssh2_sftp_write(sftpFile,
-                                l_file_m.file_ptr + offset + local_size,
-                                buffer_size - local_size);
-
-        if (rc > 0) {
-          local_size += rc;
-        } else if (rc == 0) {
-          if (local_size < buffer_size) {
-            rc_r = EC::UnexpectedEOF;
-          }
-          goto clean;
-        } else {
-          rc_r = EC::ConnectionLost;
-          error_msg =
-              fmt::format("Sftp write error: {}", client->GetLastErrorMsg());
-          goto clean;
-        }
-      }
-
-      remaining -= buffer_size;
-      offset += buffer_size;
-      pd.accumulated_size += buffer_size;
-      pd.this_size = offset;
-      InnerCallback();
-
-      while (pd.is_pause.load() && !pd.is_terminate.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-      }
-
-      if (pd.is_terminate.load()) {
-        rc_r = EC::Terminate;
-        error_msg = "Transfer cancelled";
-        goto clean;
-      }
-    }
-  clean:
-    InnerCallback(true);
-
-    if (sftpFile) {
-      libssh2_sftp_close_handle(sftpFile);
-    }
-
-    return {rc_r, error_msg};
-  }
-
-  ECM Remote2Local(const std::string &src, const std::string &dst,
-                   const std::shared_ptr<AMSFTPClient> &client,
-                   uint64_t chunk_size) {
-    EC rc_r = EC::Success;
-    LIBSSH2_SFTP_HANDLE *sftpFile;
-    std::string error_msg = "";
-    std::lock_guard<std::recursive_mutex> lock(client->mtx);
-    sftpFile =
-        libssh2_sftp_open(client->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
-    if (!sftpFile) {
-      rc_r = client->GetLastEC();
-      std::string msg = fmt::format("Failed to open remote file: {}, cause {}",
-                                    src, client->GetLastErrorMsg());
-      client->trace(TraceLevel::Error, rc_r,
-                    fmt::format("{}@{}", client->res_data.nickname, src),
-                    "Remote2Local", msg);
-      return {rc_r, msg};
-    }
-
-    LIBSSH2_SFTP_ATTRIBUTES attrs;
-    libssh2_sftp_fstat(sftpFile, &attrs);
-    uint64_t file_size = attrs.filesize;
-    if (file_size == 0) {
-      rc_r = client->GetLastEC();
-      error_msg = fmt::format("Failed to get remote file size, cause {}", src,
-                              client->GetLastErrorMsg());
-      libssh2_sftp_close_handle(sftpFile);
-      client->trace(TraceLevel::Error, rc_r,
-                    fmt::format("{}@{}", client->res_data.nickname, src),
-                    "Remote2Local", error_msg);
-      return {rc_r, error_msg};
-    }
-
-    AMFS::mkdirs(AMFS::dirname(dst));
-    FileMapper l_file_m(dst, MapType::Write, error_msg, file_size);
-
-    if (!l_file_m.file_ptr) {
-      rc_r = EC::LocalFileMapError;
-      libssh2_sftp_close_handle(sftpFile);
-      client->trace(TraceLevel::Error, rc_r, fmt::format("Local@{}", dst),
-                    "Remote2Local", error_msg);
-      return {rc_r, error_msg};
-    }
-
-    uint64_t buffer_size;
-    uint64_t offset = 0;
-    uint64_t local_size = 0;
-    long bytes;
-    py::object result;
-
-    while (offset < file_size) {
-      buffer_size = std::min<uint64_t>(chunk_size, file_size - offset);
-      local_size = 0;
-      while (local_size < buffer_size) {
-        bytes =
-            libssh2_sftp_read(sftpFile, l_file_m.file_ptr + offset + local_size,
-                              buffer_size - local_size);
-        if (bytes > 0) {
-          local_size += bytes;
-        }
-
-        else if (bytes == 0) {
-          if (offset < file_size) {
-            rc_r = EC::UnexpectedEOF;
-          }
-          goto clean;
-        } else {
-          rc_r = EC::ConnectionLost;
-          error_msg =
-              fmt::format("Sftp read error: {}", client->GetLastErrorMsg());
-          goto clean;
-        }
-      }
-      offset += buffer_size;
-      pd.accumulated_size += buffer_size;
-      pd.this_size = offset;
-      InnerCallback();
-
-      while (pd.is_pause.load() && !pd.is_terminate.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-      }
-
-      if (pd.is_terminate.load()) {
-        rc_r = EC::Terminate;
-        error_msg = "Transfer cancelled";
-        goto clean;
-      }
-    }
-
-  clean:
-    InnerCallback(true);
-    if (sftpFile) {
-      libssh2_sftp_close_handle(sftpFile);
-    }
-    return {rc_r, error_msg};
-  }
-
-  ECM Bridge(const std::string &src, const std::string &dst,
-             const std::shared_ptr<AMSFTPClient> &src_worker,
-             const std::shared_ptr<AMSFTPClient> &dst_worker,
-             uint64_t chunk_size = 256 * AMKB) {
-    ErrorCode rc_final = EC::Success;
-    std::string error_msg = "";
-    LIBSSH2_SFTP_HANDLE *srcFile = nullptr;
-    LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
-    std::lock_guard<std::recursive_mutex> lock(src_worker->mtx);
-    std::lock_guard<std::recursive_mutex> lock2(dst_worker->mtx);
-    dst_worker->mkdir(AMFS::dirname(dst));
-    srcFile = libssh2_sftp_open(src_worker->sftp, src.c_str(), LIBSSH2_FXF_READ,
-                                0400);
-    dstFile = libssh2_sftp_open(
-        dst_worker->sftp, dst.c_str(),
-        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
-
-    if (!srcFile) {
-      rc_final = src_worker->GetLastEC();
-      error_msg = fmt::format("Failed to open src remote file: {}, cause {}",
-                              src, src_worker->GetLastErrorMsg());
-      src_worker->trace(
-          TraceLevel::Error, rc_final,
-          fmt::format("{}@{}", src_worker->res_data.nickname, src),
-          "Remote2Remote", error_msg);
-      return {rc_final, error_msg};
-    }
-
-    if (!dstFile) {
-      // 获取错误代码
-      rc_final = dst_worker->GetLastEC();
-      error_msg = fmt::format("Failed to open dst remote file: {}, cause {}",
-                              dst, dst_worker->GetLastErrorMsg());
-      dst_worker->trace(
-          TraceLevel::Error, rc_final,
-          fmt::format("{}@{}", dst_worker->res_data.nickname, dst),
-          "Remote2Remote", error_msg);
-      return {rc_final, error_msg};
-    }
-
-    LIBSSH2_SFTP_ATTRIBUTES attrs;
-    libssh2_sftp_fstat(srcFile, &attrs);
-    uint64_t file_size = attrs.filesize;
-
-    // uint64_t buffer_size_ori = calculate_buffer_size(file_size, 32 * AMGB);
-    StreamRingBuffer ring(chunk_size);
-    uint64_t all_read = 0;
-    uint64_t all_write = 0;
-    uint64_t last_callback_write = 0;
-    long rc_read, rc_write;
-    uint64_t idle_count = 0;
-
-    libssh2_session_set_blocking(src_worker->session, 0);
-    libssh2_session_set_blocking(dst_worker->session, 0);
-
-    while (all_write < file_size) {
-      bool did_work = false;
-
-      // === 生产者：从源读取数据写入缓冲区 ===
-      if (all_read < file_size && ring.writable() > 0) {
-        auto [write_ptr, max_write] = ring.get_write_ptr();
-        size_t to_read = std::min<size_t>(max_write, file_size - all_read);
-
-        if (to_read > 0) {
-          rc_read = libssh2_sftp_read(srcFile, write_ptr, to_read);
-          if (rc_read > 0) {
-            ring.commit_write(rc_read);
-            all_read += rc_read;
-            did_work = true;
-            idle_count = 0;
-          } else if (rc_read < 0 && rc_read != LIBSSH2_ERROR_EAGAIN) {
-            rc_final = src_worker->GetLastEC();
-            error_msg = fmt::format("Sftp read error: {}",
-                                    src_worker->GetLastErrorMsg());
-            goto clean;
-          }
-        }
-      }
-
-      // === 消费者：从缓冲区读取数据写入目标 ===
-      if (ring.available() > 0) {
-        auto [read_ptr, max_read] = ring.get_read_ptr();
-
-        if (max_read > 0) {
-          rc_write = libssh2_sftp_write(dstFile, read_ptr, max_read);
-          if (rc_write > 0) {
-            ring.commit_read(rc_write);
-            all_write += rc_write;
-            did_work = true;
-            idle_count = 0;
-          } else if (rc_write < 0 && rc_write != LIBSSH2_ERROR_EAGAIN) {
-            rc_final = dst_worker->GetLastEC();
-            error_msg = fmt::format("Sftp write error: {}",
-                                    dst_worker->GetLastErrorMsg());
-            goto clean;
-          }
-        }
-      }
-
-      // === 进度回调（每写入buffer_size或完成时触发）===
-      if (all_write - last_callback_write >= chunk_size ||
-          all_write == file_size) {
-        last_callback_write = all_write;
-        pd.this_size = all_write;
-        pd.accumulated_size += (all_write - last_callback_write);
-        InnerCallback();
-
-        // 暂停/终止检查
-        while (pd.is_pause.load() && !pd.is_terminate.load()) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        if (pd.is_terminate.load()) {
-          rc_final = EC::Terminate;
-          error_msg = "Transfer cancelled";
-          goto clean;
-        }
-      }
-
-      // === 空闲时让出CPU ===
-      if (!did_work) {
-        idle_count++;
-        if (idle_count > 10) {
-          std::this_thread::sleep_for(std::chrono::microseconds(20));
-          idle_count = 0;
-        }
-      }
-    }
-
-  clean:
-    libssh2_session_set_blocking(src_worker->session, 1);
-    libssh2_session_set_blocking(dst_worker->session, 1);
-
-    InnerCallback(true);
-
-    if (srcFile) {
-      libssh2_sftp_close_handle(srcFile);
-    }
-
-    if (dstFile) {
-      libssh2_sftp_close_handle(dstFile);
-    }
-
-    return {rc_final, error_msg};
-  }
-
-  ECM InHostCopy(const std::string &src, const std::string &dst,
-                 const std::shared_ptr<AMSFTPClient> &worker,
-                 uint64_t chunk_size = 256 * AMKB) {
-    ErrorCode rc_final = EC::Success;
-    std::string error_msg = "";
-    LIBSSH2_SFTP_HANDLE *srcFile = nullptr;
-    LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
-    std::lock_guard<std::recursive_mutex> lock(worker->mtx);
-    worker->mkdirs(AMFS::dirname(dst));
-    srcFile =
-        libssh2_sftp_open(worker->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
-
-    if (!srcFile) {
-      rc_final = worker->GetLastEC();
-      error_msg = fmt::format("Failed to open src remote file: {}, cause {}",
-                              src, worker->GetLastErrorMsg());
-      worker->trace(TraceLevel::Error, rc_final,
-                    fmt::format("{}@{}", worker->res_data.nickname, src),
-                    "Remote2Remote", error_msg);
-      return {rc_final, error_msg};
-    }
-    dstFile = libssh2_sftp_open(
-        worker->sftp, dst.c_str(),
-        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
-    if (!dstFile) {
-      // 获取错误代码
-      rc_final = worker->GetLastEC();
-      error_msg = fmt::format("Failed to open dst remote file: {}, cause {}",
-                              dst, worker->GetLastErrorMsg());
-      worker->trace(TraceLevel::Error, rc_final,
-                    fmt::format("{}@{}", worker->res_data.nickname, dst),
-                    "Remote2Remote", error_msg);
-      return {rc_final, error_msg};
-    }
-
-    LIBSSH2_SFTP_ATTRIBUTES attrs;
-    libssh2_sftp_fstat(srcFile, &attrs);
-    uint64_t file_size = attrs.filesize;
-
-    // uint64_t buffer_size_ori = calculate_buffer_size(file_size, 32 * AMGB);
-    StreamRingBuffer ring(chunk_size);
-    uint64_t all_read = 0;
-    uint64_t all_write = 0;
-    uint64_t last_callback_write = 0;
-    long rc_read, rc_write;
-    uint64_t idle_count = 0;
-
-    libssh2_session_set_blocking(worker->session, 0);
-
-    while (all_write < file_size) {
-      bool did_work = false;
-
-      // === 生产者：从源读取数据写入缓冲区 ===
-      if (all_read < file_size && ring.writable() > 0) {
-        auto [write_ptr, max_write] = ring.get_write_ptr();
-        size_t to_read = std::min<size_t>(max_write, file_size - all_read);
-
-        if (to_read > 0) {
-          rc_read = libssh2_sftp_read(srcFile, write_ptr, to_read);
-          if (rc_read > 0) {
-            ring.commit_write(rc_read);
-            all_read += rc_read;
-            did_work = true;
-            idle_count = 0;
-          } else if (rc_read < 0 && rc_read != LIBSSH2_ERROR_EAGAIN) {
-            rc_final = worker->GetLastEC();
-            error_msg =
-                fmt::format("Sftp read error: {}", worker->GetLastErrorMsg());
-            goto clean;
-          }
-        }
-      }
-
-      // === 消费者：从缓冲区读取数据写入目标 ===
-      if (ring.available() > 0) {
-        auto [read_ptr, max_read] = ring.get_read_ptr();
-
-        if (max_read > 0) {
-          rc_write = libssh2_sftp_write(dstFile, read_ptr, max_read);
-          if (rc_write > 0) {
-            ring.commit_read(rc_write);
-            all_write += rc_write;
-            did_work = true;
-            idle_count = 0;
-          } else if (rc_write < 0 && rc_write != LIBSSH2_ERROR_EAGAIN) {
-            rc_final = worker->GetLastEC();
-            error_msg =
-                fmt::format("Sftp write error: {}", worker->GetLastErrorMsg());
-            goto clean;
-          }
-        }
-      }
-
-      // === 进度回调（每写入buffer_size或完成时触发）===
-      if (all_write - last_callback_write >= chunk_size ||
-          all_write == file_size) {
-
-        last_callback_write = all_write;
-        pd.accumulated_size += (all_write - last_callback_write);
-        pd.this_size = all_write;
-        InnerCallback();
-
-        // 暂停/终止检查
-        while (pd.is_pause.load() && !pd.is_terminate.load()) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        if (pd.is_terminate.load()) {
-          rc_final = EC::Terminate;
-          error_msg = "Transfer cancelled";
-          goto clean;
-        }
-      }
-
-      // === 空闲时让出CPU ===
-      if (!did_work) {
-        idle_count++;
-        if (idle_count > 10) {
-          std::this_thread::sleep_for(std::chrono::microseconds(20));
-          idle_count = 0;
-        }
-      }
-    }
-
-  clean:
-    libssh2_session_set_blocking(worker->session, 1);
-
-    InnerCallback(true);
-
-    if (srcFile) {
-      libssh2_sftp_close_handle(srcFile);
-    }
-
-    if (dstFile) {
-      libssh2_sftp_close_handle(dstFile);
-    }
-
-    return {rc_final, error_msg};
-  }
-
-  ECM ToFTPServer(const std::string &src, const std::string &dst,
-                std::shared_ptr<BaseSFTPClient> dst_client,
-                  std::shared_ptr<BaseSFTPClient> src_client,
-                  uint64_t chunk_size = 256 * AMKB) {
-        
-  }
-
-  std::pair<ECM, PathInfo> Ustat(const std::string &path,
-                                 const std::shared_ptr<HostMaintainer> &hostm,
-                                 const std::string &nickname = "") {
-    if (nickname.empty()) {
-      auto res = AMFS::stat(path);
-      if (!res.first.empty()) {
-        return {ECM{EC::LocalStatError, res.first}, res.second};
-      }
-      return {ECM{EC::Success, ""}, res.second};
-    }
-    ECM rc = hostm->test_host(nickname);
-    if (rc.first != EC::Success) {
-      return {rc, PathInfo()};
-    }
-    auto client = hostm->get_host(nickname);
-    if (!client) {
-      return {ECM{EC::NoSession, "Client not found"}, PathInfo()};
-    }
-    return client->stat(path);
-  }
-
-  std::vector<PathInfo> Uiwalk(const std::string &path,
-                               const std::shared_ptr<HostMaintainer> &hostm,
-                               const std::string &nickname = "",
-                               bool ignore_special_file = true) {
-    if (nickname.empty()) {
-      return AMFS::iwalk(path, ignore_special_file);
-    }
-    ECM rc = hostm->test_host(nickname);
-    if (rc.first != EC::Success) {
-      return {};
-    }
-    auto client = hostm->get_host(nickname);
-    if (!client) {
-      return {};
-    }
-    return client->iwalk(path, ignore_special_file);
-  }
-
-public:
-  TransferCallback callback;
-  ProgressData pd;
-
-  inline void InnerCallback(bool force = false) {
-    if (callback.need_progress_cb) {
-      auto time_now = timenow();
-      if (force || ((time_now - pd.cb_time) > pd.cb_interval_s)) {
-        pd.cb_time = time_now;
-        py::gil_scoped_acquire acquire;
-        py::object result = callback.progress_cb(ProgressCBInfo(
-            pd.src, pd.dst, pd.src_host, pd.dst_host, pd.this_size,
-            pd.file_size, pd.accumulated_size, pd.total_size));
-        if (!result.is_none()) {
-          if (py::isinstance<TransferControl>(result)) {
-            SetState(py::cast<TransferControl>(result));
-          }
-        }
-      }
-    }
-  }
-  AMSFTPWorker(TransferCallback callback, float cb_interval_s = 0.2)
-      : callback(std::move(callback)) {
-    this->pd.cb_interval_s = cb_interval_s;
-    this->pd.progress_cb = [this](bool force) { InnerCallback(force); };
-  }
-
-  static size_t FTPNeedData(char *ptr, size_t size, size_t nmemb,
-                            void *userdata) {
-    // size指块数，但这个值往往是1
-    auto *pd = static_cast<ProgressData *>(userdata);
-    while (pd->is_pause.load() && !pd->is_terminate.load()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-    if (pd->is_terminate.load()) {
-      return CURL_READFUNC_ABORT;
-    }
-    if (pd->src_ptr.first) {
-      try {
-        memcpy(ptr, pd->src_ptr.first, size * nmemb);
-        pd->this_size += size * nmemb;
-        pd->accumulated_size += size * nmemb;
-        pd->progress_cb(false);
-        return size * nmemb;
-      } catch (const std::exception &e) {
-        pd->is_error = true;
-        pd->error_msg = e.what();
-        return CURL_READFUNC_ABORT;
-      }
-      return size * nmemb;
-    } else if (pd->src_ptr.second) {
-      int bytes_read = libssh2_sftp_read(pd->src_ptr.second, ptr, size * nmemb);
-      if (bytes_read > 0 || bytes_read == 0) {
-        pd->this_size += bytes_read;
-        pd->accumulated_size += bytes_read;
-        pd->progress_cb(false);
-        return bytes_read;
-      } else {
-        pd->is_error = true;
-        return CURL_READFUNC_ABORT;
-      }
-    } else if (pd->ring_buffer) {
-      while (pd->ring_buffer->available() == 0 && !pd->is_terminate.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-      }
-      auto [read_ptr, read_len] = pd->ring_buffer->get_read_ptr();
-      size_t to_read = read_len > size * nmemb ? size * nmemb : read_len;
-      if (to_read > 0) {
-        memcpy(ptr, read_ptr, to_read);
-        pd->ring_buffer->commit_read(to_read);
-        pd->this_size += to_read;
-        pd->accumulated_size += to_read;
-        pd->progress_cb(false);
-        return to_read;
-      }
-      return 0;
-    }
-    pd->is_error = true;
-    pd->error_msg = "No data source";
-    return CURL_READFUNC_ABORT;
-  }
-
-  static size_t FTPGiveData(char *ptr, size_t size, size_t nmemb,
-                            void *userdata) {
-    auto *pd = static_cast<ProgressData *>(userdata);
-    if (pd->src_ptr.first) {
-      try {
-        memcpy(ptr, pd->src_ptr.first, size * nmemb);
-        pd->this_size += size * nmemb;
-        pd->accumulated_size += size * nmemb;
-        pd->progress_cb();
-        return size * nmemb;
-      } catch (const std::exception &e) {
-        pd->is_error = true;
-        pd->error_msg = e.what();
-        return CURL_READFUNC_ABORT;
-      }
-    } else if (pd->src_ptr.second) {
-      int bytes_read =
-          libssh2_sftp_write(pd->src_ptr.second, ptr, size * nmemb);
-      if (bytes_read > 0 || bytes_read == 0) {
-        pd->this_size += bytes_read;
-        pd->accumulated_size += bytes_read;
-        pd->progress_cb(false);
-        return bytes_read;
-      } else {
-        pd->is_error = true;
-        return CURL_READFUNC_ABORT;
-      }
-    } else if (pd->ring_buffer) {
-      while (pd->ring_buffer->writable() == 0 && !pd->is_terminate.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-      }
-      auto [write_ptr, write_len] = pd->ring_buffer->get_write_ptr();
-      size_t to_read = write_len > size * nmemb ? size * nmemb : write_len;
-      if (to_read > 0) {
-        memcpy(ptr, write_ptr, to_read);
-        pd->ring_buffer->commit_write(to_read);
-        pd->this_size += to_read;
-        pd->accumulated_size += to_read;
-        pd->progress_cb(false);
-        return to_read;
-      }
-      return 0;
-    }
-
-    pd->is_error = true;
-    pd->error_msg = "No data source";
-    return CURL_READFUNC_ABORT;
-  }
-
-  inline void SetState(TransferControl state) {
-    switch (state) {
-    case TransferControl::Running:
-      this->pd.is_pause.store(false);
-      break;
-    case TransferControl::Pause:
-      this->pd.is_pause.store(true);
-      break;
-    case TransferControl::Terminate:
-      this->pd.is_terminate.store(true);
-      break;
-    default:
-      break;
-    }
-  }
-
-  inline TransferControl GetState() {
-    if (pd.is_terminate.load()) {
-      return TransferControl::Terminate;
-    } else if (pd.is_pause.load()) {
-      return TransferControl::Pause;
-    } else {
-      return TransferControl::Running;
-    }
-  }
-
-  TASKS EraseOverlapTasks(TASKS &tasks) {
-    std::unordered_set<std::string> dst_set{};
-    TASKS result{};
-    std::string task_id;
-    for (auto &task : tasks) {
-      task_id = task.src + task.src_host + task.dst + task.dst_host;
-      if (dst_set.count(task_id) == 0) {
-        dst_set.insert(task_id);
-        result.push_back(task);
-      }
-    }
-    return result;
-  }
-
-  TASKS transfer(TASKS tasks, const std::shared_ptr<HostMaintainer> &hostm,
-                 uint64_t chunk_large = 16 * AMMB,
-                 uint64_t chunk_middle = 2 * AMMB,
-                 uint64_t chunk_small = 2 * AMMB) {
-    if (tasks.empty()) {
-      return {};
-    }
-
-    std::unordered_map<std::string, std::string> host_status{};
-    this->pd.reset();
-
-    if (callback.need_total_size_cb) {
-      uint64_t total_size = 0;
-      for (auto &task : tasks) {
-        total_size += task.size;
-      }
-      py::gil_scoped_acquire acquire;
-      callback.total_size_cb(total_size);
-    }
-    std::string src_path;
-    std::string dst_path;
-    std::string src_host;
-    std::string dst_host;
-    std::shared_ptr<AMSFTPClient> src_client;
-    std::shared_ptr<AMSFTPClient> dst_client;
-    ECM rc;
-
-    tasks = EraseOverlapTasks(tasks);
-    for (auto &task : tasks) {
-      if (task.IsSuccess) {
-        // 跳过在load_tasks中，未设置overlap且dst已经存在的任务
-        continue;
-      }
-
-      InnerCallback(true);
-
-      if (pd.is_terminate.load()) {
-        rc = ECM(EC::Terminate, "Transfer cancelled");
-        goto check;
-      }
-      src_host = task.src_host;
-      dst_host = task.dst_host;
-
-      if (task.path_type == PathType::DIR) {
-        if (dst_host.empty()) {
-          std::string errors = AMFS::mkdirs(task.dst);
-          if (!errors.empty()) {
-            rc = ECM(EC::LocalFileError, errors);
-            goto check;
-          }
-          goto check;
-        }
-        rc = hostm->test_host(dst_host);
-        if (rc.first != EC::Success) {
-          goto check;
-        }
-        dst_client = hostm->get_host(dst_host);
-        if (!dst_client) {
-          rc = ECM(EC::NoSession, "Destination SFTP Client not found");
-          goto check;
-        }
-        rc = dst_client->mkdirs(task.dst);
-        goto check;
-      }
-
-      if (src_host.empty() && dst_host.empty()) {
-        // local2local
-        if (fs::exists(task.dst) && !task.overwrite) {
-          rc = ECM{EC::PathAlreadyExists,
-                   fmt::format("Dst already exists: {}", task.dst)};
-          goto check;
-        }
-        rc = Local2Local(task.src, task.dst, chunk_large);
-      } else if (src_host.empty() && !dst_host.empty()) {
-        // local2remote
-        rc = hostm->test_host(dst_host);
-        if (rc.first != EC::Success) {
-          goto check;
-        }
-        dst_client = hostm->get_host(dst_host);
-        if (!dst_client) {
-          rc = ECM(EC::NoSession, "Destination SFTP Client not found");
-          goto check;
-        }
-        auto [rcmt, br] = dst_client->exists(task.dst);
-        if (rcmt.first != EC::Success) {
-          rc = rcmt;
-          goto check;
-        } else if (br && !task.overwrite) {
-          rc = ECM{EC::PathAlreadyExists,
-                   fmt::format("Dst already exists: {}", task.dst)};
-          goto check;
-        }
-        rc = Local2Remote(task.src, task.dst, dst_client, chunk_middle);
-      } else if (!src_host.empty() && dst_host.empty()) {
-        // remote2local
-        if (fs::exists(task.dst) && !task.overwrite) {
-          rc = ECM{EC::PathAlreadyExists,
-                   fmt::format("Dst already exists: {}", task.dst)};
-          goto check;
-        }
-        rc = hostm->test_host(src_host);
-        if (rc.first != EC::Success) {
-          goto check;
-        }
-        src_client = hostm->get_host(src_host);
-        if (!src_client) {
-          rc = ECM(EC::NoSession, "Source SFTP Client not found");
-          goto check;
-        }
-        rc = Remote2Local(task.src, task.dst, src_client, chunk_middle);
-      } else if (!src_host.empty() && src_host == dst_host) {
-        rc = hostm->test_host(src_host);
-        if (rc.first != EC::Success) {
-          goto check;
-        }
-        src_client = hostm->get_host(src_host);
-        if (!src_client) {
-          rc = ECM(EC::NoSession, "Source SFTP Client not found");
-          goto check;
-        }
-        auto [rcmp, br9] = src_client->exists(task.dst);
-        if (br9 && !task.overwrite) {
-          rc = ECM{EC::PathAlreadyExists,
-                   fmt::format("Dst already exists: {}", task.dst)};
-          goto check;
-        }
-        rc = InHostCopy(task.src, task.dst, src_client, chunk_small);
-      } else {
-        // remote2remote
-        rc = hostm->test_host(src_host);
-        if (rc.first != EC::Success) {
-          goto check;
-        }
-        rc = hostm->test_host(dst_host);
-        if (rc.first != EC::Success) {
-          goto check;
-        }
-        src_client = hostm->get_host(src_host);
-        if (!src_client) {
-          rc = ECM(EC::NoSession, "Source SFTP Client not found");
-          goto check;
-        }
-        dst_client = hostm->get_host(dst_host);
-        if (!dst_client) {
-          rc = ECM(EC::NoSession, "Destination SFTP Client not found");
-          goto check;
-        }
-        auto [rcmp, br2] = dst_client->exists(task.dst);
-        if (rcmp.first != EC::Success) {
-          rc = rcmp;
-          goto check;
-        } else if (br2 && !task.overwrite) {
-          rc = ECM{EC::PathAlreadyExists,
-                   fmt::format("Dst already exists: {}", task.dst)};
-          goto check;
-        }
-        rc = Bridge(task.src, task.dst, src_client, dst_client, chunk_small);
-      }
-    check:
-      task.rc = rc;
-      if (rc.first != EC::Success) {
-        if (callback.need_error_cb && rc.first != EC::Terminate) {
-          py::gil_scoped_acquire acquire;
-          callback.error_cb(
-              ErrorCBInfo(rc, src_path, dst_path, src_host, dst_host));
-        }
-      } else {
-        task.IsSuccess = true;
-      }
-    }
-    return tasks;
-  }
-
-  std::pair<ECM, TASKS> load_tasks(const std::string &src,
-                                   const std::string &dst,
-                                   const std::shared_ptr<HostMaintainer> &hostm,
-                                   const std::string &src_hostname = "",
-                                   const std::string &dst_hostname = "",
-                                   bool overwrite = false, bool mkdir = true,
-                                   bool ignore_sepcial_file = true) {
-    WRV result = {};
-    TASKS tasks = {};
-    ECM rc;
-    std::shared_ptr<AMSFTPClient> src_client;
-    // 去除src的dst左右端的空格
-    if (!src_hostname.empty()) {
-      rc = hostm->test_host(src_hostname);
-      if (rc.first != EC::Success) {
-        return {rc, tasks};
-      }
-    }
-    if (!dst_hostname.empty()) {
-      rc = hostm->test_host(dst_hostname);
-      if (rc.first != EC::Success) {
-        return {rc, tasks};
-      }
-    }
-
-    auto [rcm, src_stat] = Ustat(src, hostm, src_hostname);
-
-    if (rcm.first != EC::Success) {
-      return {rcm, tasks};
-    }
-
-    std::string srcf = src_stat.path;
-    std::string dstf;
-    if (dst_hostname.empty()) {
-      dstf = AMFS::abspath(dst);
-    } else {
-      auto client = hostm->get_host(dst_hostname);
-      if (!client) {
-        return {ECM(EC::NoSession,
-                    fmt::format("Destination SFTP Client: {} not found",
-                                dst_hostname)),
-                tasks};
-      }
-      dstf =
-          AMFS::abspath(dst, true, client->GetHomeDir(), client->GetHomeDir());
-    }
-
-    // 检查是否为 src_file -> dst_file 的传输
-    bool is_dst_file = false;
-    if (src_stat.type == PathType::FILE) {
-      // 检查dst的扩展名和src扩展名是否相同
-      std::string dst_ext = AMFS::extname(dstf);
-      if (AMFS::extname(srcf) == dst_ext && !dst_ext.empty()) {
-        is_dst_file = true;
-      }
-    }
-
-    if (src_stat.type != PathType::DIR) {
-      if (ignore_sepcial_file && src_stat.type != PathType::FILE &&
-          src_stat.type != PathType::SYMLINK) {
-        return {ECM{EC::NotAFile, fmt::format("Src is not a common file and "
-                                              "ignore_sepcial_file is true: {}",
-                                              srcf)},
-                {}};
-      }
-
-      if (!is_dst_file) {
-        dstf = AMFS::join(dstf, AMFS::basename(srcf));
-      }
-      auto [rcm7, dst_info4] = Ustat(dstf, hostm, dst_hostname);
-
-      // 检验目标路径是否存在
-      if (rcm7.first == EC::Success) {
-        if (dst_info4.type == PathType::DIR) {
-          return {
-              ECM(EC::NotADirectory,
-                  fmt::format("Dst already exists and is not a directory: {}",
-                              dstf)),
-              tasks};
-        } else if (!overwrite) {
-          return {ECM{EC::PathAlreadyExists,
-                      fmt::format("Dst already exists: {}", dstf)},
-                  tasks};
-        }
-      }
-
-      // 检测dst的父级目录是否存在
-      auto [rcm3, dst_parent_info] =
-          Ustat(AMFS::dirname(dstf), hostm, dst_hostname);
-      if (rcm3.first != EC::Success && !mkdir) {
-        return {ECM{EC::ParentDirectoryNotExist,
-                    fmt::format("Dst parent path not exists: {}",
-                                AMFS::dirname(dstf))},
-                tasks};
-      } else if (dst_parent_info.type != PathType::DIR) {
-        return {ECM(EC::NotADirectory,
-                    fmt::format("Dst parent path is not a directory: {}",
-                                dst_parent_info.path)),
-                tasks};
-      }
-
-      tasks.emplace_back(srcf, src_hostname, dstf, dst_hostname, src_stat.size,
-                         src_stat.type, overwrite);
-      return {ECM(EC::Success, ""), tasks};
-    }
-
-    auto [rcm2, dst_info] = Ustat(dstf, hostm, dst_hostname);
-
-    if (rcm2.first != EC::Success && !mkdir) {
-      return {ECM{EC::ParentDirectoryNotExist,
-                  fmt::format("Dst parent path not exists: {}", dstf)},
-              tasks};
-    } else if (rcm2.first == EC::Success && dst_info.type != PathType::DIR) {
-      return {ECM(EC::NotADirectory,
-                  fmt::format("Dst already exists and is not a directory: {}",
-                              dstf)),
-              tasks};
-    }
-
-    auto result2 = Uiwalk(srcf, hostm, src_hostname, ignore_sepcial_file);
-
-    std::string dst_n;
-    for (auto &item : result2) {
-      dst_n = AMFS::join(dstf, fs::relative(item.path, AMFS::dirname(srcf)));
-      tasks.emplace_back(item.path, src_hostname, dst_n, dst_hostname,
-                         item.size, item.type, overwrite);
-    }
-    return {ECM(EC::Success, ""), tasks};
-  };
-};
-
 // FTP File Handle - 模拟 LIBSSH2_SFTP_HANDLE 的接口
 class AMFTPFileHandle {
 private:
@@ -3822,7 +2516,7 @@ public:
 };
 
 // FTP Client using libcurl
-class AMFTPClient : public BaseSFTPClient {
+class AMFTPClient : public BaseClient {
 protected:
   void SetState(const ECM &state) override {
     std::lock_guard<std::mutex> lock(state_mtx);
@@ -4043,7 +2737,7 @@ public:
 public:
   AMFTPClient(ConRequst request, size_t buffer_capacity = 10,
               const py::object &trace_cb = py::none())
-      : BaseSFTPClient(request, buffer_capacity, trace_cb), request(request) {
+      : BaseClient(request, buffer_capacity, trace_cb), request(request) {
     this->PROTOCOL = ClientProtocol::FTP;
 
     if (username.empty()) {
@@ -4928,6 +3622,20 @@ public:
     return {EC::Success, ""};
   }
 
+  ECM Upload(const std::string &dst, curl_write_callback write_callback,
+             ProgressData *pd) {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    std::string dst_path = AMFS::abspath(dst, true, home_dir, home_dir);
+    std::string url = BuildUrl(dst_path);
+    ECM ecm = SetupCurl(url);
+    if (ecm.first != EC::Success) {
+      return ecm;
+    }
+    curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, pd);
+  }
+
   // 内存中介传输：下载 FTP，写入回调
   // 用于 FTP -> SFTP 或 FTP -> 其他协议的传输
   ECM download_to_callback(
@@ -5116,4 +3824,1697 @@ public:
   //     delete handle;
   //     return success;
   //   }
+};
+using BaseSFTPClient = AMSFTPClient;
+class HostMaintainer {
+private:
+  std::unordered_map<std::string, std::shared_ptr<BaseSFTPClient>> hosts;
+  std::atomic<bool> is_heartbeat;
+  std::thread heartbeat_thread;
+  py::function disconnect_cb;
+  bool is_disconnect_cb = false;
+
+  void HeartbeatAct(int interval_s) {
+    int millsecond = 0;
+    ECM rcm;
+    while (true) {
+      // 遍历hosts字典
+      for (auto &host : hosts) {
+        rcm = host.second->Check();
+        if (rcm.first != EC::Success) {
+          if (is_disconnect_cb) {
+            py::gil_scoped_acquire acquire;
+            disconnect_cb(host.second, rcm);
+          }
+        }
+      }
+      while (millsecond < interval_s * 1000) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        millsecond += 100;
+        if (!is_heartbeat.load()) {
+          return;
+        }
+      }
+      millsecond = 0;
+    }
+  }
+
+public:
+  ~HostMaintainer() {
+    is_heartbeat.store(false);
+    if (heartbeat_thread.joinable()) {
+      heartbeat_thread.join();
+    }
+  }
+
+  HostMaintainer(int heartbeat_interval_s = 60,
+                 py::object disconnect_cb = py::none()) {
+    this->is_heartbeat.store(true);
+    heartbeat_thread = std::thread(
+        [this, heartbeat_interval_s]() { HeartbeatAct(heartbeat_interval_s); });
+    if (!disconnect_cb.is_none()) {
+      this->disconnect_cb = py::cast<py::function>(disconnect_cb);
+      this->is_disconnect_cb = true;
+    }
+  }
+
+  std::vector<std::string> get_hosts() {
+    std::vector<std::string> host_list;
+    for (auto &host : hosts) {
+      host_list.push_back(host.first);
+    }
+    return host_list;
+  }
+
+  std::vector<std::shared_ptr<BaseSFTPClient>> get_clients() {
+    std::vector<std::shared_ptr<BaseSFTPClient>> client_list;
+    for (auto &host : hosts) {
+      client_list.push_back(host.second);
+    }
+    return client_list;
+  }
+
+  void add_host(const std::string &nickname,
+                std::shared_ptr<BaseSFTPClient> client,
+                bool overwrite = false) {
+    if (hosts.find(nickname) != hosts.end()) {
+      if (!overwrite) {
+        return;
+      }
+      hosts.erase(nickname);
+    }
+    hosts[nickname] = client;
+  }
+
+  void remove_host(const std::string &nickname) {
+    if (hosts.find(nickname) != hosts.end()) {
+      hosts.erase(nickname);
+    }
+  }
+
+  std::shared_ptr<BaseSFTPClient> get_host(const std::string &nickname) {
+    if (hosts.find(nickname) == hosts.end()) {
+      return nullptr;
+    }
+    return hosts[nickname];
+  }
+
+  ECM test_host(const std::string &nickname, bool update = false) {
+    if (nickname.empty()) {
+      return ECM{EC::InvalidArg, "Host nickname is empty"};
+    } else if (hosts.find(nickname) == hosts.end()) {
+      return ECM{EC::ClientNotFound,
+                 fmt::format("Client not found: {}", nickname)};
+    }
+    if (!update) {
+      ECM rcm = hosts[nickname]->GetState();
+      if (rcm.first != EC::Success) {
+        return hosts[nickname]->Check();
+      } else {
+        return rcm;
+      }
+    } else {
+      return hosts[nickname]->Connect();
+    }
+  }
+};
+
+class AMSFTPWorker {
+private:
+  // Optimized memory-mapped file copy
+  // Key optimizations:
+  // 1. Large view size (512MB) to minimize map/unmap overhead
+  // 2. NO flush inside loop - only flush once at end
+  // 3. FILE_FLAG_SEQUENTIAL_SCAN for better OS prefetch
+  // 4. Small chunk memcpy inside large view for progress reporting
+  ECM Local2LocalMMap(const std::string &src, const std::string &dst,
+                      uint64_t chunk_size) {
+    ErrorCode rc_r = EC::Success;
+    std::string error_msg = "";
+
+    // Get source file size
+    uint64_t file_size = 0;
+#ifdef _WIN32
+    HANDLE hSrcFile = CreateFileW(
+        AMFS::Str::AMStr(src).c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+        OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr); // 添加顺序访问标志
+    if (hSrcFile == INVALID_HANDLE_VALUE) {
+      return {EC::LocalFileMapError, "Failed to open source file"};
+    }
+    LARGE_INTEGER li;
+    if (!GetFileSizeEx(hSrcFile, &li)) {
+      CloseHandle(hSrcFile);
+      return {EC::LocalFileMapError, "Failed to get file size"};
+    }
+    file_size = li.QuadPart;
+#else
+    struct stat file_stat;
+    if (stat(src.c_str(), &file_stat) == -1) {
+      return {EC::LocalFileMapError, "Failed to stat source file"};
+    }
+    file_size = file_stat.st_size;
+#endif
+
+    // Handle empty file
+    if (file_size == 0) {
+      AMFS::mkdirs(AMFS::dirname(dst));
+#ifdef _WIN32
+      CloseHandle(hSrcFile);
+      HANDLE hDstFile =
+          CreateFileW(AMFS::Str::AMStr(dst).c_str(), GENERIC_WRITE, 0, nullptr,
+                      CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+      if (hDstFile == INVALID_HANDLE_VALUE) {
+        return {EC::LocalFileMapError, "Failed to create destination file"};
+      }
+      CloseHandle(hDstFile);
+#else
+      int dst_fd = open(dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+      if (dst_fd == -1) {
+        return {EC::LocalFileMapError, "Failed to create destination file"};
+      }
+      close(dst_fd);
+#endif
+      pd.accumulated_size += 0;
+      pd.this_size = 0;
+      InnerCallback(true);
+      return {EC::Success, ""};
+    }
+
+    // Create destination directory
+    AMFS::mkdirs(AMFS::dirname(dst));
+
+#ifdef _WIN32
+    // Create file mapping for source
+    HANDLE hSrcMapping =
+        CreateFileMappingW(hSrcFile, nullptr, PAGE_READONLY, 0, 0, nullptr);
+    if (hSrcMapping == nullptr) {
+      CloseHandle(hSrcFile);
+      return {EC::LocalFileMapError, "Failed to create source file mapping"};
+    }
+
+    // Create destination file with sequential scan hint
+    HANDLE hDstFile = CreateFileW(
+        AMFS::Str::AMStr(dst).c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr,
+        CREATE_ALWAYS, FILE_FLAG_SEQUENTIAL_SCAN, nullptr); // 添加顺序访问标志
+    if (hDstFile == INVALID_HANDLE_VALUE) {
+      CloseHandle(hSrcMapping);
+      CloseHandle(hSrcFile);
+      return {EC::LocalFileMapError, "Failed to create destination file"};
+    }
+
+    // Set destination file size
+    LARGE_INTEGER dst_size;
+    dst_size.QuadPart = file_size;
+    if (!SetFilePointerEx(hDstFile, dst_size, nullptr, FILE_BEGIN)) {
+      CloseHandle(hDstFile);
+      CloseHandle(hSrcMapping);
+      CloseHandle(hSrcFile);
+      return {EC::LocalFileMapError, "Failed to set destination file size"};
+    }
+    if (!SetEndOfFile(hDstFile)) {
+      CloseHandle(hDstFile);
+      CloseHandle(hSrcMapping);
+      CloseHandle(hSrcFile);
+      return {EC::LocalFileMapError, "Failed to allocate destination file"};
+    }
+
+    // Create file mapping for destination
+    HANDLE hDstMapping =
+        CreateFileMappingW(hDstFile, nullptr, PAGE_READWRITE, dst_size.HighPart,
+                           dst_size.LowPart, nullptr);
+    if (hDstMapping == nullptr) {
+      CloseHandle(hDstFile);
+      CloseHandle(hSrcMapping);
+      CloseHandle(hSrcFile);
+      return {EC::LocalFileMapError,
+              "Failed to create destination file mapping"};
+    }
+
+    // Optimized: Use large views (512MB) to minimize map/unmap overhead
+    uint64_t offset = 0;
+    const uint64_t MAX_VIEW_SIZE = 512ULL * 1024 * 1024; // 512MB per view
+
+    while (offset < file_size && !pd.is_terminate.load()) {
+      // Handle pause
+      while (pd.is_pause.load() && !pd.is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+
+      if (pd.is_terminate.load()) {
+        rc_r = EC::Terminate;
+        error_msg = "Transfer cancelled";
+        break;
+      }
+
+      uint64_t remaining = file_size - offset;
+      auto view_size = std::min<uint64_t>(remaining, MAX_VIEW_SIZE);
+
+      DWORD offset_high = static_cast<DWORD>(offset >> 32);
+      DWORD offset_low = static_cast<DWORD>(offset & 0xFFFFFFFF);
+
+      // Map large view once
+      void *src_view =
+          MapViewOfFile(hSrcMapping, FILE_MAP_READ, offset_high, offset_low,
+                        static_cast<SIZE_T>(view_size));
+      if (src_view == nullptr) {
+        rc_r = EC::LocalFileMapError;
+        error_msg = "Failed to map source file view";
+        break;
+      }
+
+      void *dst_view =
+          MapViewOfFile(hDstMapping, FILE_MAP_WRITE, offset_high, offset_low,
+                        static_cast<SIZE_T>(view_size));
+      if (dst_view == nullptr) {
+        UnmapViewOfFile(src_view);
+        rc_r = EC::LocalFileMapError;
+        error_msg = "Failed to map destination file view";
+        break;
+      }
+
+      // Copy in small chunks within the view for progress reporting
+      uint64_t view_offset = 0;
+      while (view_offset < view_size && !pd.is_terminate.load()) {
+        uint64_t copy_size =
+            std::min<uint64_t>(chunk_size, view_size - view_offset);
+
+        // Direct memory copy
+        memcpy(static_cast<char *>(dst_view) + view_offset,
+               static_cast<const char *>(src_view) + view_offset,
+               static_cast<size_t>(copy_size));
+
+        view_offset += copy_size;
+        offset += copy_size;
+        pd.accumulated_size += copy_size;
+        pd.this_size = offset;
+        InnerCallback();
+      }
+
+      // Unmap views - NO flush here! Let OS handle writeback asynchronously
+      UnmapViewOfFile(dst_view);
+      UnmapViewOfFile(src_view);
+    }
+
+    // Cleanup - only flush ONCE at the end for maximum performance
+    CloseHandle(hDstMapping);
+    if (rc_r == EC::Success) {
+      FlushFileBuffers(hDstFile); // Single flush at end, not per chunk!
+    }
+    CloseHandle(hDstFile);
+    CloseHandle(hSrcMapping);
+    CloseHandle(hSrcFile);
+
+#else
+    // Linux: use mmap
+    int src_fd = open(src.c_str(), O_RDONLY);
+    if (src_fd == -1) {
+      return {EC::LocalFileMapError, "Failed to open source file"};
+    }
+
+    // Create destination file with target size
+    int dst_fd = open(dst.c_str(), O_RDWR | O_CREAT | O_TRUNC, 0644);
+    if (dst_fd == -1) {
+      close(src_fd);
+      return {EC::LocalFileMapError, "Failed to create destination file"};
+    }
+
+    // Set destination file size
+    if (ftruncate(dst_fd, file_size) == -1) {
+      close(dst_fd);
+      close(src_fd);
+      return {EC::LocalFileMapError, "Failed to set destination file size"};
+    }
+
+    // Optimized: Large view size (1GB), remove msync per chunk
+    uint64_t offset = 0;
+    const uint64_t MAX_VIEW_SIZE = 1ULL * 1024 * 1024 * 1024; // 1GB per mmap
+
+    while (offset < file_size && !pd.is_terminate.load()) {
+      while (pd.is_pause.load() && !pd.is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      }
+
+      if (pd.is_terminate.load()) {
+        rc_r = EC::Terminate;
+        error_msg = "Transfer cancelled";
+        break;
+      }
+
+      uint64_t remaining = file_size - offset;
+      uint64_t view_size = std::min(remaining, MAX_VIEW_SIZE);
+
+      // Map large view once
+      void *src_map =
+          mmap(nullptr, view_size, PROT_READ, MAP_SHARED, src_fd, offset);
+      if (src_map == MAP_FAILED) {
+        rc_r = EC::LocalFileMapError;
+        error_msg = "Failed to mmap source file";
+        break;
+      }
+
+      // Tell kernel: sequential access for better prefetch
+      madvise(src_map, view_size, MADV_SEQUENTIAL);
+
+      void *dst_map =
+          mmap(nullptr, view_size, PROT_WRITE, MAP_SHARED, dst_fd, offset);
+      if (dst_map == MAP_FAILED) {
+        munmap(src_map, view_size);
+        rc_r = EC::LocalFileMapError;
+        error_msg = "Failed to mmap destination file";
+        break;
+      }
+
+      // Copy in small chunks within view for progress reporting
+      uint64_t view_offset = 0;
+      while (view_offset < view_size && !pd.is_terminate.load()) {
+        uint64_t copy_size = std::min(chunk_size, view_size - view_offset);
+
+        memcpy(static_cast<char *>(dst_map) + view_offset,
+               static_cast<const char *>(src_map) + view_offset, copy_size);
+
+        view_offset += copy_size;
+        offset += copy_size;
+        pd.accumulated_size += copy_size;
+        pd.this_size = offset;
+        InnerCallback();
+      }
+
+      // Unmap - NO msync here! Let kernel handle writeback asynchronously
+      munmap(dst_map, view_size);
+      munmap(src_map, view_size);
+    }
+
+    // Cleanup - only fsync ONCE at the end for maximum performance
+    if (rc_r == EC::Success) {
+      fsync(dst_fd); // Single sync at end, not per chunk!
+    }
+    close(dst_fd);
+    close(src_fd);
+#endif
+
+    // Final callback
+    InnerCallback(true);
+
+    return {rc_r, error_msg};
+  }
+
+  ECM Local2Local(const std::string &src, const std::string &dst,
+                  uint64_t chunk_size) {
+    ErrorCode rc_r = EC::Success;
+    std::string error_msg = "";
+
+    // Get source file size
+    uint64_t file_size = 0;
+#ifdef _WIN32
+    HANDLE hFile = CreateFileW(AMFS::Str::AMStr(src).c_str(), GENERIC_READ,
+                               FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hFile == INVALID_HANDLE_VALUE) {
+      return {EC::LocalFileMapError, "Failed to open source file"};
+    }
+    LARGE_INTEGER li;
+    if (!GetFileSizeEx(hFile, &li)) {
+      CloseHandle(hFile);
+      return {EC::LocalFileMapError, "Failed to get file size"};
+    }
+    file_size = li.QuadPart;
+    CloseHandle(hFile);
+#else
+    struct stat file_stat;
+    if (stat(src.c_str(), &file_stat) == -1) {
+      return {EC::LocalFileMapError, "Failed to stat source file"};
+    }
+    file_size = file_stat.st_size;
+#endif
+    // Create destination directory
+    AMFS::mkdirs(AMFS::dirname(dst));
+
+    // Create ring buffer (2x chunk_size for overlapping read/write)
+    StreamRingBuffer ring_buffer(chunk_size * 2);
+
+    // Open source file for reading
+#ifdef _WIN32
+    HANDLE hSrcFile = CreateFileW(AMFS::Str::AMStr(src).c_str(), GENERIC_READ,
+                                  FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                  FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
+    if (hSrcFile == INVALID_HANDLE_VALUE) {
+      return {EC::LocalFileMapError, "Failed to open source file for reading"};
+    }
+#else
+    int src_fd = open(src.c_str(), O_RDONLY);
+    if (src_fd == -1) {
+      return {EC::LocalFileMapError, "Failed to open source file for reading"};
+    }
+#endif
+
+    // Open destination file for writing
+#ifdef _WIN32
+    HANDLE hDstFile =
+        CreateFileW(AMFS::Str::AMStr(dst).c_str(), GENERIC_WRITE, 0, nullptr,
+                    CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (hDstFile == INVALID_HANDLE_VALUE) {
+      CloseHandle(hSrcFile);
+      return {EC::LocalFileMapError, "Failed to create destination file"};
+    }
+#else
+    int dst_fd = open(dst.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (dst_fd == -1) {
+      close(src_fd);
+      return {EC::LocalFileMapError, "Failed to create destination file"};
+    }
+#endif
+
+    uint64_t offset = 0;
+    uint64_t total_read = 0;
+    std::atomic<bool> read_finished(false);
+    std::atomic<bool> read_error(false);
+    std::string read_error_msg = "";
+
+    // Async read thread
+    std::thread read_thread([&]() {
+      uint64_t remaining = file_size;
+      while (remaining > 0 && !pd.is_terminate.load() && !read_error) {
+        // Wait for writable space
+        while (ring_buffer.writable() == 0 && !pd.is_terminate.load()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        if (pd.is_terminate.load())
+          break;
+
+        auto [write_ptr, write_len] = ring_buffer.get_write_ptr();
+        uint64_t to_read = std::min<uint64_t>(
+            write_len, std::min<uint64_t>(chunk_size, remaining));
+
+        if (to_read > 0) {
+#ifdef _WIN32
+          DWORD bytes_read = 0;
+          if (!ReadFile(hSrcFile, write_ptr, static_cast<DWORD>(to_read),
+                        &bytes_read, nullptr)) {
+            read_error = true;
+            read_error_msg = "Failed to read from source file";
+            break;
+          }
+          if (bytes_read == 0)
+            break;
+          ring_buffer.commit_write(bytes_read);
+          remaining -= bytes_read;
+          total_read += bytes_read;
+#else
+          ssize_t bytes_read = read(src_fd, write_ptr, to_read);
+          if (bytes_read < 0) {
+            read_error = true;
+            read_error_msg = "Failed to read from source file";
+            break;
+          }
+          if (bytes_read == 0)
+            break;
+          ring_buffer.commit_write(bytes_read);
+          remaining -= bytes_read;
+          total_read += bytes_read;
+#endif
+        }
+      }
+      read_finished = true;
+    });
+
+    // Main write thread (current thread)
+    while ((!read_finished || ring_buffer.available() > 0) &&
+           !pd.is_terminate.load()) {
+      // Handle pause
+      while (pd.is_pause.load() && !pd.is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+      }
+
+      if (pd.is_terminate.load()) {
+        rc_r = EC::Terminate;
+        error_msg = "Transfer cancelled";
+        break;
+      }
+
+      // Wait for readable data
+      while (ring_buffer.available() == 0 && !read_finished && !read_error &&
+             !pd.is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+
+      if (read_error) {
+        rc_r = EC::LocalFileMapError;
+        error_msg = read_error_msg;
+        break;
+      }
+
+      if (ring_buffer.available() == 0)
+        break;
+
+      auto [read_ptr, read_len] = ring_buffer.get_read_ptr();
+      if (read_len > 0) {
+#ifdef _WIN32
+        DWORD bytes_written = 0;
+        if (!WriteFile(hDstFile, read_ptr, static_cast<DWORD>(read_len),
+                       &bytes_written, nullptr)) {
+          rc_r = EC::LocalFileMapError;
+          error_msg = "Failed to write to destination file";
+          break;
+        }
+        ring_buffer.commit_read(bytes_written);
+        offset += bytes_written;
+        pd.accumulated_size += bytes_written;
+        pd.this_size = offset;
+#else
+        ssize_t bytes_written = write(dst_fd, read_ptr, read_len);
+        if (bytes_written < 0) {
+          rc_r = EC::LocalFileWriteError;
+          error_msg = "Failed to write to destination file";
+          break;
+        }
+        ring_buffer.commit_read(bytes_written);
+        offset += bytes_written;
+        current_size += bytes_written;
+#endif
+        InnerCallback();
+      }
+    }
+
+    // Wait for read thread to finish
+    read_thread.join();
+
+    // Close files
+#ifdef _WIN32
+    CloseHandle(hSrcFile);
+    if (rc_r == EC::Success) {
+      FlushFileBuffers(hDstFile);
+    }
+    CloseHandle(hDstFile);
+#else
+    close(src_fd);
+    if (rc_r == EC::Success) {
+      fsync(dst_fd);
+    }
+    close(dst_fd);
+#endif
+
+    // Final callback
+    InnerCallback(true);
+
+    return {rc_r, error_msg};
+  }
+
+  ECM Local2Remote(const std::string &src, const std::string &dst,
+                   const std::shared_ptr<AMSFTPClient> &client,
+                   uint64_t chunk_size) {
+    ErrorCode rc_r = EC::Success;
+    LIBSSH2_SFTP_HANDLE *sftpFile;
+    std::string error_msg = "Error to create FileMapper";
+    std::lock_guard<std::recursive_mutex> lock(client->mtx);
+    client->mkdirs(AMFS::dirname(dst));
+    sftpFile = libssh2_sftp_open(
+        client->sftp, dst.c_str(),
+        LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
+    if (!sftpFile) {
+      std::string msg = fmt::format("Failed to open remote file: {}, cause {}",
+                                    dst, client->GetLastErrorMsg());
+      rc_r = client->GetLastEC();
+      client->trace(TraceLevel::Error, rc_r,
+                    fmt::format("{}@{}", client->res_data.nickname, dst),
+                    "Remote2Local", msg);
+      return {rc_r, msg};
+    }
+
+    FileMapper l_file_m(src, MapType::Read, error_msg);
+    if (!l_file_m.file_ptr) {
+      libssh2_sftp_close_handle(sftpFile);
+      EC rc = EC::LocalFileMapError;
+      return {rc, error_msg};
+    }
+
+    uint64_t offset = 0;
+    uint64_t remaining = l_file_m.file_size;
+    uint64_t buffer_size;
+    uint64_t local_size = 0;
+    py::object result;
+
+    long rc;
+
+    while (remaining > 0) {
+      local_size = 0;
+      buffer_size = std::min<uint64_t>(chunk_size, remaining);
+
+      while (local_size < buffer_size) {
+        rc = libssh2_sftp_write(sftpFile,
+                                l_file_m.file_ptr + offset + local_size,
+                                buffer_size - local_size);
+
+        if (rc > 0) {
+          local_size += rc;
+        } else if (rc == 0) {
+          if (local_size < buffer_size) {
+            rc_r = EC::UnexpectedEOF;
+          }
+          goto clean;
+        } else {
+          rc_r = EC::ConnectionLost;
+          error_msg =
+              fmt::format("Sftp write error: {}", client->GetLastErrorMsg());
+          goto clean;
+        }
+      }
+
+      remaining -= buffer_size;
+      offset += buffer_size;
+      pd.accumulated_size += buffer_size;
+      pd.this_size = offset;
+      InnerCallback();
+
+      while (pd.is_pause.load() && !pd.is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      }
+
+      if (pd.is_terminate.load()) {
+        rc_r = EC::Terminate;
+        error_msg = "Transfer cancelled";
+        goto clean;
+      }
+    }
+  clean:
+    InnerCallback(true);
+
+    if (sftpFile) {
+      libssh2_sftp_close_handle(sftpFile);
+    }
+
+    return {rc_r, error_msg};
+  }
+
+  ECM Remote2Local(const std::string &src, const std::string &dst,
+                   const std::shared_ptr<AMSFTPClient> &client,
+                   uint64_t chunk_size) {
+    EC rc_r = EC::Success;
+    LIBSSH2_SFTP_HANDLE *sftpFile;
+    std::string error_msg = "";
+    std::lock_guard<std::recursive_mutex> lock(client->mtx);
+    sftpFile =
+        libssh2_sftp_open(client->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
+    if (!sftpFile) {
+      rc_r = client->GetLastEC();
+      std::string msg = fmt::format("Failed to open remote file: {}, cause {}",
+                                    src, client->GetLastErrorMsg());
+      client->trace(TraceLevel::Error, rc_r,
+                    fmt::format("{}@{}", client->res_data.nickname, src),
+                    "Remote2Local", msg);
+      return {rc_r, msg};
+    }
+
+    LIBSSH2_SFTP_ATTRIBUTES attrs;
+    libssh2_sftp_fstat(sftpFile, &attrs);
+    uint64_t file_size = attrs.filesize;
+    if (file_size == 0) {
+      rc_r = client->GetLastEC();
+      error_msg = fmt::format("Failed to get remote file size, cause {}", src,
+                              client->GetLastErrorMsg());
+      libssh2_sftp_close_handle(sftpFile);
+      client->trace(TraceLevel::Error, rc_r,
+                    fmt::format("{}@{}", client->res_data.nickname, src),
+                    "Remote2Local", error_msg);
+      return {rc_r, error_msg};
+    }
+
+    AMFS::mkdirs(AMFS::dirname(dst));
+    FileMapper l_file_m(dst, MapType::Write, error_msg, file_size);
+
+    if (!l_file_m.file_ptr) {
+      rc_r = EC::LocalFileMapError;
+      libssh2_sftp_close_handle(sftpFile);
+      client->trace(TraceLevel::Error, rc_r, fmt::format("Local@{}", dst),
+                    "Remote2Local", error_msg);
+      return {rc_r, error_msg};
+    }
+
+    uint64_t buffer_size;
+    uint64_t offset = 0;
+    uint64_t local_size = 0;
+    long bytes;
+    py::object result;
+
+    while (offset < file_size) {
+      buffer_size = std::min<uint64_t>(chunk_size, file_size - offset);
+      local_size = 0;
+      while (local_size < buffer_size) {
+        bytes =
+            libssh2_sftp_read(sftpFile, l_file_m.file_ptr + offset + local_size,
+                              buffer_size - local_size);
+        if (bytes > 0) {
+          local_size += bytes;
+        }
+
+        else if (bytes == 0) {
+          if (offset < file_size) {
+            rc_r = EC::UnexpectedEOF;
+          }
+          goto clean;
+        } else {
+          rc_r = EC::ConnectionLost;
+          error_msg =
+              fmt::format("Sftp read error: {}", client->GetLastErrorMsg());
+          goto clean;
+        }
+      }
+      offset += buffer_size;
+      pd.accumulated_size += buffer_size;
+      pd.this_size = offset;
+      InnerCallback();
+
+      while (pd.is_pause.load() && !pd.is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+      }
+
+      if (pd.is_terminate.load()) {
+        rc_r = EC::Terminate;
+        error_msg = "Transfer cancelled";
+        goto clean;
+      }
+    }
+
+  clean:
+    InnerCallback(true);
+    if (sftpFile) {
+      libssh2_sftp_close_handle(sftpFile);
+    }
+    return {rc_r, error_msg};
+  }
+
+  ECM Bridge(const std::string &src, const std::string &dst,
+             const std::shared_ptr<AMSFTPClient> &src_worker,
+             const std::shared_ptr<AMSFTPClient> &dst_worker,
+             uint64_t chunk_size = 256 * AMKB) {
+    ErrorCode rc_final = EC::Success;
+    std::string error_msg = "";
+    LIBSSH2_SFTP_HANDLE *srcFile = nullptr;
+    LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
+    std::lock_guard<std::recursive_mutex> lock(src_worker->mtx);
+    std::lock_guard<std::recursive_mutex> lock2(dst_worker->mtx);
+    dst_worker->mkdir(AMFS::dirname(dst));
+    srcFile = libssh2_sftp_open(src_worker->sftp, src.c_str(), LIBSSH2_FXF_READ,
+                                0400);
+    dstFile = libssh2_sftp_open(
+        dst_worker->sftp, dst.c_str(),
+        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
+
+    if (!srcFile) {
+      rc_final = src_worker->GetLastEC();
+      error_msg = fmt::format("Failed to open src remote file: {}, cause {}",
+                              src, src_worker->GetLastErrorMsg());
+      src_worker->trace(
+          TraceLevel::Error, rc_final,
+          fmt::format("{}@{}", src_worker->res_data.nickname, src),
+          "Remote2Remote", error_msg);
+      return {rc_final, error_msg};
+    }
+
+    if (!dstFile) {
+      // 获取错误代码
+      rc_final = dst_worker->GetLastEC();
+      error_msg = fmt::format("Failed to open dst remote file: {}, cause {}",
+                              dst, dst_worker->GetLastErrorMsg());
+      dst_worker->trace(
+          TraceLevel::Error, rc_final,
+          fmt::format("{}@{}", dst_worker->res_data.nickname, dst),
+          "Remote2Remote", error_msg);
+      return {rc_final, error_msg};
+    }
+
+    LIBSSH2_SFTP_ATTRIBUTES attrs;
+    libssh2_sftp_fstat(srcFile, &attrs);
+    uint64_t file_size = attrs.filesize;
+
+    // uint64_t buffer_size_ori = calculate_buffer_size(file_size, 32 * AMGB);
+    StreamRingBuffer ring(chunk_size);
+    uint64_t all_read = 0;
+    uint64_t all_write = 0;
+    uint64_t last_callback_write = 0;
+    long rc_read, rc_write;
+    uint64_t idle_count = 0;
+
+    libssh2_session_set_blocking(src_worker->session, 0);
+    libssh2_session_set_blocking(dst_worker->session, 0);
+
+    while (all_write < file_size) {
+      bool did_work = false;
+
+      // === 生产者：从源读取数据写入缓冲区 ===
+      if (all_read < file_size && ring.writable() > 0) {
+        auto [write_ptr, max_write] = ring.get_write_ptr();
+        size_t to_read = std::min<size_t>(max_write, file_size - all_read);
+
+        if (to_read > 0) {
+          rc_read = libssh2_sftp_read(srcFile, write_ptr, to_read);
+          if (rc_read > 0) {
+            ring.commit_write(rc_read);
+            all_read += rc_read;
+            did_work = true;
+            idle_count = 0;
+          } else if (rc_read < 0 && rc_read != LIBSSH2_ERROR_EAGAIN) {
+            rc_final = src_worker->GetLastEC();
+            error_msg = fmt::format("Sftp read error: {}",
+                                    src_worker->GetLastErrorMsg());
+            goto clean;
+          }
+        }
+      }
+
+      // === 消费者：从缓冲区读取数据写入目标 ===
+      if (ring.available() > 0) {
+        auto [read_ptr, max_read] = ring.get_read_ptr();
+
+        if (max_read > 0) {
+          rc_write = libssh2_sftp_write(dstFile, read_ptr, max_read);
+          if (rc_write > 0) {
+            ring.commit_read(rc_write);
+            all_write += rc_write;
+            did_work = true;
+            idle_count = 0;
+          } else if (rc_write < 0 && rc_write != LIBSSH2_ERROR_EAGAIN) {
+            rc_final = dst_worker->GetLastEC();
+            error_msg = fmt::format("Sftp write error: {}",
+                                    dst_worker->GetLastErrorMsg());
+            goto clean;
+          }
+        }
+      }
+
+      // === 进度回调（每写入buffer_size或完成时触发）===
+      if (all_write - last_callback_write >= chunk_size ||
+          all_write == file_size) {
+        last_callback_write = all_write;
+        pd.this_size = all_write;
+        pd.accumulated_size += (all_write - last_callback_write);
+        InnerCallback();
+
+        // 暂停/终止检查
+        while (pd.is_pause.load() && !pd.is_terminate.load()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        if (pd.is_terminate.load()) {
+          rc_final = EC::Terminate;
+          error_msg = "Transfer cancelled";
+          goto clean;
+        }
+      }
+
+      // === 空闲时让出CPU ===
+      if (!did_work) {
+        idle_count++;
+        if (idle_count > 10) {
+          std::this_thread::sleep_for(std::chrono::microseconds(20));
+          idle_count = 0;
+        }
+      }
+    }
+
+  clean:
+    libssh2_session_set_blocking(src_worker->session, 1);
+    libssh2_session_set_blocking(dst_worker->session, 1);
+
+    InnerCallback(true);
+
+    if (srcFile) {
+      libssh2_sftp_close_handle(srcFile);
+    }
+
+    if (dstFile) {
+      libssh2_sftp_close_handle(dstFile);
+    }
+
+    return {rc_final, error_msg};
+  }
+
+  ECM InHostCopy(const std::string &src, const std::string &dst,
+                 const std::shared_ptr<AMSFTPClient> &worker,
+                 uint64_t chunk_size = 256 * AMKB) {
+    ErrorCode rc_final = EC::Success;
+    std::string error_msg = "";
+    LIBSSH2_SFTP_HANDLE *srcFile = nullptr;
+    LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
+    std::lock_guard<std::recursive_mutex> lock(worker->mtx);
+    worker->mkdirs(AMFS::dirname(dst));
+    srcFile =
+        libssh2_sftp_open(worker->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
+
+    if (!srcFile) {
+      rc_final = worker->GetLastEC();
+      error_msg = fmt::format("Failed to open src remote file: {}, cause {}",
+                              src, worker->GetLastErrorMsg());
+      worker->trace(TraceLevel::Error, rc_final,
+                    fmt::format("{}@{}", worker->res_data.nickname, src),
+                    "Remote2Remote", error_msg);
+      return {rc_final, error_msg};
+    }
+    dstFile = libssh2_sftp_open(
+        worker->sftp, dst.c_str(),
+        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
+    if (!dstFile) {
+      // 获取错误代码
+      rc_final = worker->GetLastEC();
+      error_msg = fmt::format("Failed to open dst remote file: {}, cause {}",
+                              dst, worker->GetLastErrorMsg());
+      worker->trace(TraceLevel::Error, rc_final,
+                    fmt::format("{}@{}", worker->res_data.nickname, dst),
+                    "Remote2Remote", error_msg);
+      return {rc_final, error_msg};
+    }
+
+    LIBSSH2_SFTP_ATTRIBUTES attrs;
+    libssh2_sftp_fstat(srcFile, &attrs);
+    uint64_t file_size = attrs.filesize;
+
+    // uint64_t buffer_size_ori = calculate_buffer_size(file_size, 32 * AMGB);
+    StreamRingBuffer ring(chunk_size);
+    uint64_t all_read = 0;
+    uint64_t all_write = 0;
+    uint64_t last_callback_write = 0;
+    long rc_read, rc_write;
+    uint64_t idle_count = 0;
+
+    libssh2_session_set_blocking(worker->session, 0);
+
+    while (all_write < file_size) {
+      bool did_work = false;
+
+      // === 生产者：从源读取数据写入缓冲区 ===
+      if (all_read < file_size && ring.writable() > 0) {
+        auto [write_ptr, max_write] = ring.get_write_ptr();
+        size_t to_read = std::min<size_t>(max_write, file_size - all_read);
+
+        if (to_read > 0) {
+          rc_read = libssh2_sftp_read(srcFile, write_ptr, to_read);
+          if (rc_read > 0) {
+            ring.commit_write(rc_read);
+            all_read += rc_read;
+            did_work = true;
+            idle_count = 0;
+          } else if (rc_read < 0 && rc_read != LIBSSH2_ERROR_EAGAIN) {
+            rc_final = worker->GetLastEC();
+            error_msg =
+                fmt::format("Sftp read error: {}", worker->GetLastErrorMsg());
+            goto clean;
+          }
+        }
+      }
+
+      // === 消费者：从缓冲区读取数据写入目标 ===
+      if (ring.available() > 0) {
+        auto [read_ptr, max_read] = ring.get_read_ptr();
+
+        if (max_read > 0) {
+          rc_write = libssh2_sftp_write(dstFile, read_ptr, max_read);
+          if (rc_write > 0) {
+            ring.commit_read(rc_write);
+            all_write += rc_write;
+            did_work = true;
+            idle_count = 0;
+          } else if (rc_write < 0 && rc_write != LIBSSH2_ERROR_EAGAIN) {
+            rc_final = worker->GetLastEC();
+            error_msg =
+                fmt::format("Sftp write error: {}", worker->GetLastErrorMsg());
+            goto clean;
+          }
+        }
+      }
+
+      // === 进度回调（每写入buffer_size或完成时触发）===
+      if (all_write - last_callback_write >= chunk_size ||
+          all_write == file_size) {
+
+        last_callback_write = all_write;
+        pd.accumulated_size += (all_write - last_callback_write);
+        pd.this_size = all_write;
+        InnerCallback();
+
+        // 暂停/终止检查
+        while (pd.is_pause.load() && !pd.is_terminate.load()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        if (pd.is_terminate.load()) {
+          rc_final = EC::Terminate;
+          error_msg = "Transfer cancelled";
+          goto clean;
+        }
+      }
+
+      // === 空闲时让出CPU ===
+      if (!did_work) {
+        idle_count++;
+        if (idle_count > 10) {
+          std::this_thread::sleep_for(std::chrono::microseconds(20));
+          idle_count = 0;
+        }
+      }
+    }
+
+  clean:
+    libssh2_session_set_blocking(worker->session, 1);
+
+    InnerCallback(true);
+
+    if (srcFile) {
+      libssh2_sftp_close_handle(srcFile);
+    }
+
+    if (dstFile) {
+      libssh2_sftp_close_handle(dstFile);
+    }
+
+    return {rc_final, error_msg};
+  }
+
+  void Reading(std::variant<char *, LIBSSH2_SFTP_HANDLE *> &src_ptr,
+               std::shared_ptr<StreamRingBuffer> ring_buffer) {
+    size_t offset = 0;
+    while (offset < pd.file_size) {
+      while (ring_buffer->writable() == 0 && !pd.is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+
+      while (pd.is_pause.load() && !pd.is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+
+      if (pd.is_terminate.load()) {
+        return;
+      }
+
+      auto [write_ptr, write_len] = ring_buffer->get_write_ptr();
+      if (write_len > 0) {
+        size_t to_read = write_len > pd.file_size - offset
+                             ? pd.file_size - offset
+                             : write_len;
+        if (to_read > 0) {
+          if (std::holds_alternative<char *>(src_ptr)) {
+            try {
+              memcpy(write_ptr, std::get<char *>(src_ptr), to_read);
+              offset += to_read;
+            } catch (const std::exception &e) {
+              pd.is_error = true;
+              pd.error_msg = e.what();
+              this->SetState(TransferControl::Terminate);
+              return;
+            }
+          } else {
+            int bytes_read = libssh2_sftp_read(
+                std::get<LIBSSH2_SFTP_HANDLE *>(src_ptr), write_ptr, to_read);
+            if (bytes_read > 0) {
+              offset += bytes_read;
+            } else {
+              pd.is_error = true;
+              this->SetState(TransferControl::Terminate);
+              return;
+            }
+          }
+          ring_buffer->commit_write(to_read);
+        } else {
+          continue;
+        }
+      }
+    }
+  }
+
+  // void Writing(std::variant<char *, LIBSSH2_SFTP_HANDLE *> &dst_ptr,
+  //              std::shared_ptr<StreamRingBuffer> ring_buffer) {
+  //   size_t offset = 0;
+  //   while (offset < pd.file_size) {
+  //     while (ring_buffer->available() == 0 && !pd.is_terminate.load()) {
+  //       std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  //     }
+  //     while (pd.is_pause.load() && !pd.is_terminate.load()) {
+  //       std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  //     }
+  //     if (pd.is_terminate.load()) {
+  //       return;
+  //     }
+  //     auto [read_ptr, read_len] = ring_buffer->get_read_ptr();
+  //     if (read_len > 0) {
+  //       size_t to_write =
+  //           read_len > pd.file_size - offset ? pd.file_size - offset :
+  //           read_len;
+  //       if (to_write > 0) {
+  //         if (std::holds_alternative<char *>(dst_ptr)) {
+  //           try {
+  //             memcpy(std::get<char *>(dst_ptr), read_ptr, to_write);
+  //             offset += to_write;
+  //           } catch (const std::exception &e) {
+  //             pd.is_error = true;
+  //             pd.error_msg = e.what();
+  //             this->SetState(TransferControl::Terminate);
+  //             return;
+  //           }
+  //         } else {
+  //           int bytes_written = libssh2_sftp_write(
+  //               std::get<LIBSSH2_SFTP_HANDLE *>(dst_ptr), read_ptr,
+  //               to_write);
+  //           if (bytes_written > 0) {
+  //             offset += bytes_written;
+  //           }
+  //         }
+  //       }
+  //     }
+
+  ECM ToFTPServer(const std::string &src, const std::string &dst,
+                  std::shared_ptr<AMSFTPClient> src_client,
+                  std::shared_ptr<AMFTPClient> dst_client) {
+    std::string error_msg = "";
+    ECM rcm;
+    if (src_client) {
+      std::lock_guard<std::recursive_mutex> lock(src_client->mtx);
+      LIBSSH2_SFTP_HANDLE *srcFile;
+      srcFile = libssh2_sftp_open(src_client->sftp, src.c_str(),
+                                  LIBSSH2_FXF_READ, 0400);
+      if (!srcFile) {
+        return {src_client->GetLastEC(),
+                fmt::format("Failed to open src remote file: {}, cause {}", src,
+                            src_client->GetLastErrorMsg())};
+      }
+      pd.src_ptr = std::pair<char *, LIBSSH2_SFTP_HANDLE *>(nullptr, srcFile);
+      return dst_client->Upload(dst, FTPGiveData, &pd);
+
+    } else {
+      FileMapper src_mapper(src, MapType::Read, error_msg);
+      if (src_mapper.file_ptr == nullptr) {
+        return {EC::LocalFileMapError, error_msg};
+      }
+      pd.src_ptr = std::pair<char *, LIBSSH2_SFTP_HANDLE *>(src_mapper.file_ptr,
+                                                            nullptr);
+      return dst_client->Upload(dst, FTPGiveData, &pd);
+    }
+  }
+
+  std::pair<ECM, PathInfo> Ustat(const std::string &path,
+                                 const std::shared_ptr<HostMaintainer> &hostm,
+                                 const std::string &nickname = "") {
+    if (nickname.empty()) {
+      auto res = AMFS::stat(path);
+      if (!res.first.empty()) {
+        return {ECM{EC::LocalStatError, res.first}, res.second};
+      }
+      return {ECM{EC::Success, ""}, res.second};
+    }
+    ECM rc = hostm->test_host(nickname);
+    if (rc.first != EC::Success) {
+      return {rc, PathInfo()};
+    }
+    auto client = hostm->get_host(nickname);
+    if (!client) {
+      return {ECM{EC::NoSession, "Client not found"}, PathInfo()};
+    }
+    return client->stat(path);
+  }
+
+  std::vector<PathInfo> Uiwalk(const std::string &path,
+                               const std::shared_ptr<HostMaintainer> &hostm,
+                               const std::string &nickname = "",
+                               bool ignore_special_file = true) {
+    if (nickname.empty()) {
+      return AMFS::iwalk(path, ignore_special_file);
+    }
+    ECM rc = hostm->test_host(nickname);
+    if (rc.first != EC::Success) {
+      return {};
+    }
+    auto client = hostm->get_host(nickname);
+    if (!client) {
+      return {};
+    }
+    return client->iwalk(path, ignore_special_file);
+  }
+
+public:
+  TransferCallback callback;
+  ProgressData pd;
+
+  inline void InnerCallback(bool force = false) {
+    if (callback.need_progress_cb) {
+      auto time_now = timenow();
+      if (force || ((time_now - pd.cb_time) > pd.cb_interval_s)) {
+        pd.cb_time = time_now;
+        py::gil_scoped_acquire acquire;
+        py::object result = callback.progress_cb(ProgressCBInfo(
+            pd.src, pd.dst, pd.src_host, pd.dst_host, pd.this_size,
+            pd.file_size, pd.accumulated_size, pd.total_size));
+        if (!result.is_none()) {
+          if (py::isinstance<TransferControl>(result)) {
+            SetState(py::cast<TransferControl>(result));
+          }
+        }
+      }
+    }
+  }
+  AMSFTPWorker(TransferCallback callback, float cb_interval_s = 0.2)
+      : callback(std::move(callback)) {
+    this->pd.cb_interval_s = cb_interval_s;
+    this->pd.progress_cb = [this](bool force) { InnerCallback(force); };
+  }
+
+  static size_t FTPNeedData(char *ptr, size_t size, size_t nmemb,
+                            void *userdata) {
+    // size指块数，但这个值往往是1
+    auto *pd = static_cast<ProgressData *>(userdata);
+    while (pd->is_pause.load() && !pd->is_terminate.load()) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (pd->is_terminate.load()) {
+      return CURL_READFUNC_ABORT;
+    }
+    if (pd->src_ptr.first) {
+      try {
+        memcpy(ptr, pd->src_ptr.first, size * nmemb);
+        pd->this_size += size * nmemb;
+        pd->accumulated_size += size * nmemb;
+        pd->progress_cb(false);
+        return size * nmemb;
+      } catch (const std::exception &e) {
+        pd->is_error = true;
+        pd->error_msg = e.what();
+        return CURL_READFUNC_ABORT;
+      }
+      return size * nmemb;
+    } else if (pd->src_ptr.second) {
+      int bytes_read = libssh2_sftp_read(pd->src_ptr.second, ptr, size * nmemb);
+      if (bytes_read > 0 || bytes_read == 0) {
+        pd->this_size += bytes_read;
+        pd->accumulated_size += bytes_read;
+        pd->progress_cb(false);
+        return bytes_read;
+      } else {
+        pd->is_error = true;
+        return CURL_READFUNC_ABORT;
+      }
+    } else if (pd->ring_buffer) {
+      while (pd->ring_buffer->available() == 0 && !pd->is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      auto [read_ptr, read_len] = pd->ring_buffer->get_read_ptr();
+      size_t to_read = read_len > size * nmemb ? size * nmemb : read_len;
+      if (to_read > 0) {
+        memcpy(ptr, read_ptr, to_read);
+        pd->ring_buffer->commit_read(to_read);
+        pd->this_size += to_read;
+        pd->accumulated_size += to_read;
+        pd->progress_cb(false);
+        return to_read;
+      }
+      return 0;
+    }
+    pd->is_error = true;
+    pd->error_msg = "No data source";
+    return CURL_READFUNC_ABORT;
+  }
+
+  static size_t FTPGiveData(char *ptr, size_t size, size_t nmemb,
+                            void *userdata) {
+    auto *pd = static_cast<ProgressData *>(userdata);
+    if (pd->src_ptr.first) {
+      try {
+        memcpy(ptr, pd->src_ptr.first, size * nmemb);
+        pd->this_size += size * nmemb;
+        pd->accumulated_size += size * nmemb;
+        pd->progress_cb(false);
+        return size * nmemb;
+      } catch (const std::exception &e) {
+        pd->is_error = true;
+        pd->error_msg = e.what();
+        return CURL_READFUNC_ABORT;
+      }
+    } else if (pd->src_ptr.second) {
+      int bytes_read =
+          libssh2_sftp_write(pd->src_ptr.second, ptr, size * nmemb);
+      if (bytes_read > 0 || bytes_read == 0) {
+        pd->this_size += bytes_read;
+        pd->accumulated_size += bytes_read;
+        pd->progress_cb(false);
+        return bytes_read;
+      } else {
+        pd->is_error = true;
+        return CURL_READFUNC_ABORT;
+      }
+    } else if (pd->ring_buffer) {
+      while (pd->ring_buffer->writable() == 0 && !pd->is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      auto [write_ptr, write_len] = pd->ring_buffer->get_write_ptr();
+      size_t to_read = write_len > size * nmemb ? size * nmemb : write_len;
+      if (to_read > 0) {
+        memcpy(ptr, write_ptr, to_read);
+        pd->ring_buffer->commit_write(to_read);
+        return to_read;
+      }
+      return 0;
+    }
+
+    pd->is_error = true;
+    pd->error_msg = "No data source";
+    return CURL_READFUNC_ABORT;
+  }
+
+  inline void SetState(TransferControl state) {
+    switch (state) {
+    case TransferControl::Running:
+      this->pd.is_pause.store(false);
+      break;
+    case TransferControl::Pause:
+      this->pd.is_pause.store(true);
+      break;
+    case TransferControl::Terminate:
+      this->pd.is_terminate.store(true);
+      break;
+    default:
+      break;
+    }
+  }
+
+  inline TransferControl GetState() {
+    if (pd.is_terminate.load()) {
+      return TransferControl::Terminate;
+    } else if (pd.is_pause.load()) {
+      return TransferControl::Pause;
+    } else {
+      return TransferControl::Running;
+    }
+  }
+
+  TASKS EraseOverlapTasks(TASKS &tasks) {
+    std::unordered_set<std::string> dst_set{};
+    TASKS result{};
+    std::string task_id;
+    for (auto &task : tasks) {
+      task_id = task.src + task.src_host + task.dst + task.dst_host;
+      if (dst_set.count(task_id) == 0) {
+        dst_set.insert(task_id);
+        result.push_back(task);
+      }
+    }
+    return result;
+  }
+
+  TASKS transfer(TASKS tasks, const std::shared_ptr<HostMaintainer> &hostm,
+                 uint64_t chunk_large = 16 * AMMB,
+                 uint64_t chunk_middle = 2 * AMMB,
+                 uint64_t chunk_small = 2 * AMMB) {
+    if (tasks.empty()) {
+      return {};
+    }
+
+    std::unordered_map<std::string, std::string> host_status{};
+    this->pd.reset();
+
+    if (callback.need_total_size_cb) {
+      uint64_t total_size = 0;
+      for (auto &task : tasks) {
+        total_size += task.size;
+      }
+      py::gil_scoped_acquire acquire;
+      callback.total_size_cb(total_size);
+    }
+    std::string src_path;
+    std::string dst_path;
+    std::string src_host;
+    std::string dst_host;
+    std::shared_ptr<AMSFTPClient> src_client;
+    std::shared_ptr<AMSFTPClient> dst_client;
+    ECM rc;
+
+    tasks = EraseOverlapTasks(tasks);
+    for (auto &task : tasks) {
+      if (task.IsSuccess) {
+        // 跳过在load_tasks中，未设置overlap且dst已经存在的任务
+        continue;
+      }
+
+      InnerCallback(true);
+
+      if (pd.is_terminate.load()) {
+        rc = ECM(EC::Terminate, "Transfer cancelled");
+        goto check;
+      }
+      src_host = task.src_host;
+      dst_host = task.dst_host;
+
+      if (task.path_type == PathType::DIR) {
+        if (dst_host.empty()) {
+          std::string errors = AMFS::mkdirs(task.dst);
+          if (!errors.empty()) {
+            rc = ECM(EC::LocalFileError, errors);
+            goto check;
+          }
+          goto check;
+        }
+        rc = hostm->test_host(dst_host);
+        if (rc.first != EC::Success) {
+          goto check;
+        }
+        dst_client = hostm->get_host(dst_host);
+        if (!dst_client) {
+          rc = ECM(EC::NoSession, "Destination SFTP Client not found");
+          goto check;
+        }
+        rc = dst_client->mkdirs(task.dst);
+        goto check;
+      }
+
+      if (src_host.empty() && dst_host.empty()) {
+        // local2local
+        if (fs::exists(task.dst) && !task.overwrite) {
+          rc = ECM{EC::PathAlreadyExists,
+                   fmt::format("Dst already exists: {}", task.dst)};
+          goto check;
+        }
+        rc = Local2LocalMMap(task.src, task.dst, chunk_large);
+      } else if (src_host.empty() && !dst_host.empty()) {
+        // local2remote
+        rc = hostm->test_host(dst_host);
+        if (rc.first != EC::Success) {
+          goto check;
+        }
+        dst_client = hostm->get_host(dst_host);
+        if (!dst_client) {
+          rc = ECM(EC::NoSession, "Destination SFTP Client not found");
+          goto check;
+        }
+        auto [rcmt, br] = dst_client->exists(task.dst);
+        if (rcmt.first != EC::Success) {
+          rc = rcmt;
+          goto check;
+        } else if (br && !task.overwrite) {
+          rc = ECM{EC::PathAlreadyExists,
+                   fmt::format("Dst already exists: {}", task.dst)};
+          goto check;
+        }
+        rc = Local2Remote(task.src, task.dst, dst_client, chunk_middle);
+      } else if (!src_host.empty() && dst_host.empty()) {
+        // remote2local
+        if (fs::exists(task.dst) && !task.overwrite) {
+          rc = ECM{EC::PathAlreadyExists,
+                   fmt::format("Dst already exists: {}", task.dst)};
+          goto check;
+        }
+        rc = hostm->test_host(src_host);
+        if (rc.first != EC::Success) {
+          goto check;
+        }
+        src_client = hostm->get_host(src_host);
+        if (!src_client) {
+          rc = ECM(EC::NoSession, "Source SFTP Client not found");
+          goto check;
+        }
+        rc = Remote2Local(task.src, task.dst, src_client, chunk_middle);
+      } else if (!src_host.empty() && src_host == dst_host) {
+        rc = hostm->test_host(src_host);
+        if (rc.first != EC::Success) {
+          goto check;
+        }
+        src_client = hostm->get_host(src_host);
+        if (!src_client) {
+          rc = ECM(EC::NoSession, "Source SFTP Client not found");
+          goto check;
+        }
+        auto [rcmp, br9] = src_client->exists(task.dst);
+        if (br9 && !task.overwrite) {
+          rc = ECM{EC::PathAlreadyExists,
+                   fmt::format("Dst already exists: {}", task.dst)};
+          goto check;
+        }
+        rc = InHostCopy(task.src, task.dst, src_client, chunk_small);
+      } else {
+        // remote2remote
+        rc = hostm->test_host(src_host);
+        if (rc.first != EC::Success) {
+          goto check;
+        }
+        rc = hostm->test_host(dst_host);
+        if (rc.first != EC::Success) {
+          goto check;
+        }
+        src_client = hostm->get_host(src_host);
+        if (!src_client) {
+          rc = ECM(EC::NoSession, "Source SFTP Client not found");
+          goto check;
+        }
+        dst_client = hostm->get_host(dst_host);
+        if (!dst_client) {
+          rc = ECM(EC::NoSession, "Destination SFTP Client not found");
+          goto check;
+        }
+        auto [rcmp, br2] = dst_client->exists(task.dst);
+        if (rcmp.first != EC::Success) {
+          rc = rcmp;
+          goto check;
+        } else if (br2 && !task.overwrite) {
+          rc = ECM{EC::PathAlreadyExists,
+                   fmt::format("Dst already exists: {}", task.dst)};
+          goto check;
+        }
+        rc = Bridge(task.src, task.dst, src_client, dst_client, chunk_small);
+      }
+    check:
+      task.rc = rc;
+      if (rc.first != EC::Success) {
+        if (callback.need_error_cb && rc.first != EC::Terminate) {
+          py::gil_scoped_acquire acquire;
+          callback.error_cb(
+              ErrorCBInfo(rc, src_path, dst_path, src_host, dst_host));
+        }
+      } else {
+        task.IsSuccess = true;
+      }
+    }
+    return tasks;
+  }
+
+  std::pair<ECM, TASKS> load_tasks(const std::string &src,
+                                   const std::string &dst,
+                                   const std::shared_ptr<HostMaintainer> &hostm,
+                                   const std::string &src_hostname = "",
+                                   const std::string &dst_hostname = "",
+                                   bool overwrite = false, bool mkdir = true,
+                                   bool ignore_sepcial_file = true) {
+    WRV result = {};
+    TASKS tasks = {};
+    ECM rc;
+    std::shared_ptr<AMSFTPClient> src_client;
+    // 去除src的dst左右端的空格
+    if (!src_hostname.empty()) {
+      rc = hostm->test_host(src_hostname);
+      if (rc.first != EC::Success) {
+        return {rc, tasks};
+      }
+    }
+    if (!dst_hostname.empty()) {
+      rc = hostm->test_host(dst_hostname);
+      if (rc.first != EC::Success) {
+        return {rc, tasks};
+      }
+    }
+
+    auto [rcm, src_stat] = Ustat(src, hostm, src_hostname);
+
+    if (rcm.first != EC::Success) {
+      return {rcm, tasks};
+    }
+
+    std::string srcf = src_stat.path;
+    std::string dstf;
+    if (dst_hostname.empty()) {
+      dstf = AMFS::abspath(dst);
+    } else {
+      auto client = hostm->get_host(dst_hostname);
+      if (!client) {
+        return {ECM(EC::NoSession,
+                    fmt::format("Destination SFTP Client: {} not found",
+                                dst_hostname)),
+                tasks};
+      }
+      dstf =
+          AMFS::abspath(dst, true, client->GetHomeDir(), client->GetHomeDir());
+    }
+
+    // 检查是否为 src_file -> dst_file 的传输
+    bool is_dst_file = false;
+    if (src_stat.type == PathType::FILE) {
+      // 检查dst的扩展名和src扩展名是否相同
+      std::string dst_ext = AMFS::extname(dstf);
+      if (AMFS::extname(srcf) == dst_ext && !dst_ext.empty()) {
+        is_dst_file = true;
+      }
+    }
+
+    if (src_stat.type != PathType::DIR) {
+      if (ignore_sepcial_file && src_stat.type != PathType::FILE &&
+          src_stat.type != PathType::SYMLINK) {
+        return {ECM{EC::NotAFile, fmt::format("Src is not a common file and "
+                                              "ignore_sepcial_file is true: {}",
+                                              srcf)},
+                {}};
+      }
+
+      if (!is_dst_file) {
+        dstf = AMFS::join(dstf, AMFS::basename(srcf));
+      }
+      auto [rcm7, dst_info4] = Ustat(dstf, hostm, dst_hostname);
+
+      // 检验目标路径是否存在
+      if (rcm7.first == EC::Success) {
+        if (dst_info4.type == PathType::DIR) {
+          return {
+              ECM(EC::NotADirectory,
+                  fmt::format("Dst already exists and is not a directory: {}",
+                              dstf)),
+              tasks};
+        } else if (!overwrite) {
+          return {ECM{EC::PathAlreadyExists,
+                      fmt::format("Dst already exists: {}", dstf)},
+                  tasks};
+        }
+      }
+
+      // 检测dst的父级目录是否存在
+      auto [rcm3, dst_parent_info] =
+          Ustat(AMFS::dirname(dstf), hostm, dst_hostname);
+      if (rcm3.first != EC::Success && !mkdir) {
+        return {ECM{EC::ParentDirectoryNotExist,
+                    fmt::format("Dst parent path not exists: {}",
+                                AMFS::dirname(dstf))},
+                tasks};
+      } else if (dst_parent_info.type != PathType::DIR) {
+        return {ECM(EC::NotADirectory,
+                    fmt::format("Dst parent path is not a directory: {}",
+                                dst_parent_info.path)),
+                tasks};
+      }
+
+      tasks.emplace_back(srcf, src_hostname, dstf, dst_hostname, src_stat.size,
+                         src_stat.type, overwrite);
+      return {ECM(EC::Success, ""), tasks};
+    }
+
+    auto [rcm2, dst_info] = Ustat(dstf, hostm, dst_hostname);
+
+    if (rcm2.first != EC::Success && !mkdir) {
+      return {ECM{EC::ParentDirectoryNotExist,
+                  fmt::format("Dst parent path not exists: {}", dstf)},
+              tasks};
+    } else if (rcm2.first == EC::Success && dst_info.type != PathType::DIR) {
+      return {ECM(EC::NotADirectory,
+                  fmt::format("Dst already exists and is not a directory: {}",
+                              dstf)),
+              tasks};
+    }
+
+    auto result2 = Uiwalk(srcf, hostm, src_hostname, ignore_sepcial_file);
+
+    std::string dst_n;
+    for (auto &item : result2) {
+      dst_n = AMFS::join(dstf, fs::relative(item.path, AMFS::dirname(srcf)));
+      tasks.emplace_back(item.path, src_hostname, dst_n, dst_hostname,
+                         item.size, item.type, overwrite);
+    }
+    return {ECM(EC::Success, ""), tasks};
+  };
 };
