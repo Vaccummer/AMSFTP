@@ -11,6 +11,7 @@
 #include <fstream>
 #include <memory>
 #include <regex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -26,6 +27,7 @@
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 
+#include <curl/curl.h>
 #include <fmt/core.h>
 #include <magic_enum/magic_enum.hpp>
 #include <openssl/pem.h>
@@ -88,6 +90,9 @@ class AMTracer {
     size_t capacity = 10;
     std::atomic<bool> is_py_trace = false;
     std::atomic<bool> is_trace_pause = false;
+    std::unordered_map<std::string, py::object> public_var_dict;
+    std::mutex public_var_mutex; // 专门用于保护 public_var_dict 的锁
+    py::object deepcopy_func;    // 缓存的 deepcopy 函数
 
     void push(const TraceInfo &value) {
         if (buffer.size() < capacity) {
@@ -101,7 +106,7 @@ class AMTracer {
   public:
     std::string nickname;
 
-    AMTracer(unsigned int buffer_capacity = 10, const py::object &trace_cb = py::none(), std::string nickname = "")
+    AMTracer(size_t buffer_capacity = 10, const py::object &trace_cb = py::none(), std::string nickname = "")
         : nickname(std::move(nickname)) {
         if (buffer_capacity <= 0) {
             capacity = 10;
@@ -114,8 +119,90 @@ class AMTracer {
         } else {
             this->is_py_trace = false;
         }
+        // 初始化时导入 deepcopy 函数并缓存
+        try {
+            py::gil_scoped_acquire gil;
+            py::module_ copy_module = py::module_::import("copy");
+            deepcopy_func = copy_module.attr("deepcopy");
+        } catch (const py::error_already_set &e) {
+            // 如果导入失败，deepcopy_func 保持为 none
+            deepcopy_func = py::none();
+            trace(TraceLevel::Error, EC::DeepcopyFunctionNotAvailable, "Deepcopy Function", "Initialize",
+                  "Failed to import copy module");
+        }
+    }
+    ECM SetPublicVar(const std::string &key, py::object value, bool overwrite = false) {
+        std::lock_guard<std::mutex> lock(public_var_mutex);
+
+        if (!overwrite && public_var_dict.find(key) != public_var_dict.end()) {
+            return {EC::KeyAlreadyExists, fmt::format("Key already exists and overwrite is false: {}", key)};
+        }
+
+        // 使用缓存的 deepcopy 函数来创建深拷贝
+        // 这样 C++ 拥有对象的完整副本，不受 Python 端修改影响
+        if (!deepcopy_func.is_none()) {
+            try {
+                py::gil_scoped_acquire gil;
+                public_var_dict[key] = deepcopy_func(value);
+                return {EC::Success, ""};
+            } catch (const py::error_already_set &e) {
+                // 如果深拷贝失败（某些对象不支持深拷贝）
+                return {EC::DeepcopyFailed,
+                        fmt::format("Deepcopy failed, object is not supported to be stored: {}: {}", key, e.what())};
+            }
+        } else {
+            return {EC::DeepcopyFunctionNotAvailable, "Deepcopy function not available"};
+        }
     }
 
+    py::object GetPublicVar(const std::string &key, py::object default_value = py::none()) {
+        std::lock_guard<std::mutex> lock(public_var_mutex);
+
+        auto it = public_var_dict.find(key);
+        if (it != public_var_dict.end()) {
+            return it->second;
+        }
+
+        // 键不存在，返回默认值
+        return default_value;
+    }
+
+    bool DelPublicVar(const std::string &key) {
+        // 确保持有 GIL，因为要操作 py::object
+        py::gil_scoped_acquire gil;
+        std::lock_guard<std::mutex> lock(public_var_mutex);
+        return public_var_dict.erase(key) > 0;
+    }
+
+    bool HasPublicVar(const std::string &key) {
+        std::lock_guard<std::mutex> lock(public_var_mutex);
+        return public_var_dict.find(key) != public_var_dict.end();
+    }
+
+    void ClearPublicVar() {
+        // 确保持有 GIL，因为要销毁 py::object
+        py::gil_scoped_acquire gil;
+        std::lock_guard<std::mutex> lock(public_var_mutex);
+        public_var_dict.clear();
+    }
+
+    py::dict GetAllPublicVars() {
+        std::lock_guard<std::mutex> lock(public_var_mutex);
+        py::gil_scoped_acquire gil;
+        py::dict result;
+        if (!deepcopy_func.is_none()) {
+            // 使用缓存的 deepcopy 函数
+            for (const auto &[key, value] : public_var_dict) {
+                try {
+                    result[py::str(key)] = deepcopy_func(value);
+                } catch (const py::error_already_set &e) {
+                    // 深拷贝失败，使用原始引用
+                    continue;
+                }
+            }
+        }
+        return result;
+    }
     size_t GetTracerSize() const { return buffer.size(); }
 
     size_t GetTracerCapacity() const { return capacity; }
@@ -766,9 +853,6 @@ class AMSFTPClient : public BaseSFTPClient, public AMFS::BasePathMatch {
   private:
     std::map<long, std::string> user_id_map;
     bool is_trash_dir_ensure = false;
-    std::unordered_map<std::string, py::object> public_var_dict;
-    std::mutex public_var_mutex; // 专门用于保护 public_var_dict 的锁
-    py::object deepcopy_func;    // 缓存的 deepcopy 函数
 
     PathInfo FormatStat(const std::string &path, LIBSSH2_SFTP_ATTRIBUTES &attrs) {
         PathInfo info;
@@ -1161,17 +1245,6 @@ class AMSFTPClient : public BaseSFTPClient, public AMFS::BasePathMatch {
     AMSFTPClient(const ConRequst &request, const std::vector<std::string> &keys, unsigned int error_num = 10,
                  const py::object &trace_cb = py::none(), const py::object &auth_cb = py::none())
         : BaseSFTPClient(request, keys, error_num, trace_cb, auth_cb), AMFS::BasePathMatch() {
-        // 初始化时导入 deepcopy 函数并缓存
-        try {
-            py::gil_scoped_acquire gil;
-            py::module_ copy_module = py::module_::import("copy");
-            deepcopy_func = copy_module.attr("deepcopy");
-        } catch (const py::error_already_set &e) {
-            // 如果导入失败，deepcopy_func 保持为 none
-            deepcopy_func = py::none();
-            trace(TraceLevel::Error, EC::DeepcopyFunctionNotAvailable, "Deepcopy Function", "Initialize",
-                  "Failed to import copy module");
-        }
 
         if (request.trash_dir.empty()) {
             this->trash_dir = AMFS::join(GetHomeDir(), ".AMSFTP_Trash");
@@ -1181,79 +1254,6 @@ class AMSFTPClient : public BaseSFTPClient, public AMFS::BasePathMatch {
         if (this->trash_dir.empty()) {
             this->trash_dir = AMFS::join(GetHomeDir(), ".AMSFTP_Trash");
         }
-    }
-
-    ECM SetPublicVar(const std::string &key, py::object value, bool overwrite = false) {
-        std::lock_guard<std::mutex> lock(public_var_mutex);
-
-        if (!overwrite && public_var_dict.find(key) != public_var_dict.end()) {
-            return {EC::KeyAlreadyExists, fmt::format("Key already exists and overwrite is false: {}", key)};
-        }
-
-        // 使用缓存的 deepcopy 函数来创建深拷贝
-        // 这样 C++ 拥有对象的完整副本，不受 Python 端修改影响
-        if (!deepcopy_func.is_none()) {
-            try {
-                py::gil_scoped_acquire gil;
-                public_var_dict[key] = deepcopy_func(value);
-                return {EC::Success, ""};
-            } catch (const py::error_already_set &e) {
-                // 如果深拷贝失败（某些对象不支持深拷贝）
-                return {EC::DeepcopyFailed,
-                        fmt::format("Deepcopy failed, object is not supported to be stored: {}: {}", key, e.what())};
-            }
-        } else {
-            return {EC::DeepcopyFunctionNotAvailable, "Deepcopy function not available"};
-        }
-    }
-
-    py::object GetPublicVar(const std::string &key, py::object default_value = py::none()) {
-        std::lock_guard<std::mutex> lock(public_var_mutex);
-
-        auto it = public_var_dict.find(key);
-        if (it != public_var_dict.end()) {
-            return it->second;
-        }
-
-        // 键不存在，返回默认值
-        return default_value;
-    }
-
-    bool DelPublicVar(const std::string &key) {
-        // 确保持有 GIL，因为要操作 py::object
-        py::gil_scoped_acquire gil;
-        std::lock_guard<std::mutex> lock(public_var_mutex);
-        return public_var_dict.erase(key) > 0;
-    }
-
-    bool HasPublicVar(const std::string &key) {
-        std::lock_guard<std::mutex> lock(public_var_mutex);
-        return public_var_dict.find(key) != public_var_dict.end();
-    }
-
-    void ClearPublicVar() {
-        // 确保持有 GIL，因为要销毁 py::object
-        py::gil_scoped_acquire gil;
-        std::lock_guard<std::mutex> lock(public_var_mutex);
-        public_var_dict.clear();
-    }
-
-    py::dict GetAllPublicVars() {
-        std::lock_guard<std::mutex> lock(public_var_mutex);
-        py::gil_scoped_acquire gil;
-        py::dict result;
-        if (!deepcopy_func.is_none()) {
-            // 使用缓存的 deepcopy 函数
-            for (const auto &[key, value] : public_var_dict) {
-                try {
-                    result[py::str(key)] = deepcopy_func(value);
-                } catch (const py::error_already_set &e) {
-                    // 深拷贝失败，使用原始引用
-                    continue;
-                }
-            }
-        }
-        return result;
     }
 
     std::string StrUid(const long &uid) {
@@ -3182,4 +3182,646 @@ class AMSFTPWorker {
         }
         return {ECM(EC::Success, ""), tasks};
     };
+};
+
+// FTP Client using libcurl
+class AMFTPClient : public AMFS::BasePathMatch, public AMTracer {
+  private:
+    CURL *curl = nullptr;
+    std::string host;
+    int port = 21;
+    std::string username;
+    std::string password;
+    std::string home_dir = "";
+    bool connected = false;
+    std::regex ftp_url_pattern = std::regex("^ftp://.*$");
+
+  public:
+    ConRequst request;
+    std::recursive_mutex mtx;
+
+    struct MemoryStruct {
+        char *memory;
+        size_t size;
+    };
+
+    static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
+        size_t realsize = size * nmemb;
+        auto *mem = (struct MemoryStruct *)userp;
+
+        char *ptr = (char *)realloc(mem->memory, mem->size + realsize + 1);
+        if (!ptr) {
+            return 0;
+        }
+
+        mem->memory = ptr;
+        memcpy(&(mem->memory[mem->size]), contents, realsize);
+        mem->size += realsize;
+        mem->memory[mem->size] = 0;
+
+        return realsize;
+    }
+
+    std::string BuildUrl(const std::string &path) {
+        std::string url = fmt::format("ftp://{}:{}", host, port);
+        if (!path.empty()) {
+            if (path[0] != '/') {
+                url += "/";
+            }
+            url += path;
+        }
+        return url;
+    }
+
+    ECM SetupCurl(const std::string &url) {
+        if (!curl) {
+            return {EC::NoConnection, "CURL not initialized"};
+        }
+
+        curl_easy_reset(curl);
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_USERNAME, username.c_str());
+        curl_easy_setopt(curl, CURLOPT_PASSWORD, password.c_str());
+        curl_easy_setopt(curl, CURLOPT_FTP_RESPONSE_TIMEOUT, 30L);
+
+        return {EC::Success, ""};
+    }
+
+    PathInfo ParseListLine(const std::string &line, const std::string &dir_path) {
+        PathInfo info;
+
+        // Parse FTP LIST format: -rw-r--r-- 1 owner group size month day time filename
+        // or drwxr-xr-x 1 owner group size month day time filename
+        std::istringstream iss(line);
+        std::string perms, links, owner, group, size_str, month, day, time_or_year, name;
+
+        if (!(iss >> perms >> links >> owner >> group >> size_str >> month >> day >> time_or_year)) {
+            info.type = PathType::Unknown;
+            return info;
+        }
+
+        // Get filename (rest of line)
+        std::getline(iss >> std::ws, name);
+
+        info.name = name;
+        info.path = AMFS::join(dir_path, name, AMFS::SepType::Unix);
+        info.dir = dir_path;
+        info.owner = owner;
+
+        // Parse type
+        if (perms[0] == 'd') {
+            info.type = PathType::DIR;
+        } else if (perms[0] == 'l') {
+            info.type = PathType::SYMLINK;
+        } else if (perms[0] == '-') {
+            info.type = PathType::FILE;
+        } else {
+            info.type = PathType::Unknown;
+        }
+
+        // Parse size
+        try {
+            info.size = std::stoull(size_str);
+        } catch (...) {
+            info.size = 0;
+        }
+
+        // Parse permissions (skip first char which is type)
+        info.mode_str = perms.substr(1);
+
+        return info;
+    }
+
+    std::pair<bool, PathInfo> istat(const std::string &path) override {
+        auto [rcm, sr] = stat(path);
+        if (rcm.first != EC::Success) {
+            return std::make_pair(false, PathInfo());
+        }
+        return std::make_pair(true, sr);
+    }
+
+    std::vector<PathInfo> ilistdir(const std::string &path) override {
+        auto [rcm, sr] = listdir(path);
+        if (rcm.first != EC::Success) {
+            return {};
+        }
+        return sr;
+    }
+
+    std::vector<PathInfo> iiwalk(const std::string &path) override { return iwalk(path); }
+
+    void _iwalk(const std::string &path, WRV &result, bool ignore_special_file = true) {
+        auto [rcm, info_path] = stat(path);
+        if (rcm.first != EC::Success) {
+            return;
+        }
+
+        if (info_path.type != PathType::DIR) {
+            result.push_back(info_path);
+            return;
+        }
+
+        auto [rcm2, list_info] = listdir(path);
+        if (rcm2.first != EC::Success) {
+            return;
+        }
+
+        if (list_info.empty()) {
+            result.push_back(info_path);
+            return;
+        }
+
+        for (auto &info : list_info) {
+            _iwalk(info.path, result, ignore_special_file);
+        }
+    }
+
+    void _walk(const std::vector<std::string> &parts, WRD &result, int cur_depth = 0, int max_depth = -1,
+               bool ignore_special_file = true) {
+        if (max_depth != -1 && cur_depth > max_depth) {
+            return;
+        }
+        std::string pathf = AMFS::join(parts);
+        auto [rcm2, list_info] = listdir(pathf);
+        if (rcm2.first != EC::Success) {
+            return;
+        }
+        if (list_info.empty()) {
+            result.push_back({parts, {}});
+            return;
+        }
+
+        std::vector<PathInfo> files_info = {};
+        for (auto &info : list_info) {
+            if (info.type == PathType::DIR) {
+                auto new_parts = parts;
+                new_parts.push_back(info.name);
+                _walk(new_parts, result, cur_depth + 1, max_depth, ignore_special_file);
+            } else {
+                if (ignore_special_file && static_cast<int>(info.type) < 0) {
+                    continue;
+                }
+                files_info.push_back(info);
+            }
+        }
+        if (!files_info.empty()) {
+            result.emplace_back(parts, files_info);
+        }
+    }
+
+    std::pair<ECM, std::string> GetPWD() {
+        std::lock_guard<std::recursive_mutex> lock(mtx);
+
+        if (!curl) {
+            return {ECM{EC::NoConnection, "CURL not initialized"}, ""};
+        }
+
+        std::string url = fmt::format("ftp://{}:{}/", host, port);
+        curl_easy_reset(curl);
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_USERNAME, username.c_str());
+        curl_easy_setopt(curl, CURLOPT_PASSWORD, password.c_str());
+        curl_easy_setopt(curl, CURLOPT_FTP_RESPONSE_TIMEOUT, 10L);
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+
+        struct curl_slist *headerlist = nullptr;
+        headerlist = curl_slist_append(headerlist, "PWD");
+        curl_easy_setopt(curl, CURLOPT_QUOTE, headerlist);
+
+        struct MemoryStruct chunk;
+        chunk.memory = (char *)malloc(1);
+        chunk.size = 0;
+
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, WriteMemoryCallback);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)&chunk);
+
+        CURLcode res = curl_easy_perform(curl);
+        curl_slist_free_all(headerlist);
+
+        std::string pwd_path = "/";
+        if (res == CURLE_OK && chunk.size > 0) {
+            std::string response(chunk.memory, chunk.size);
+            // Parse PWD response: 257 "/path" is current directory
+            size_t start = response.find('"');
+            if (start != std::string::npos) {
+                size_t end = response.find('"', start + 1);
+                if (end != std::string::npos) {
+                    pwd_path = response.substr(start + 1, end - start - 1);
+                }
+            }
+        }
+
+        free(chunk.memory);
+
+        if (res != CURLE_OK) {
+            return {ECM{EC::FTPGetPWDFailed, fmt::format("PWD failed: {}", curl_easy_strerror(res))}, "/"};
+        }
+
+        return {ECM{EC::Success, ""}, pwd_path};
+    }
+
+  public:
+    AMFTPClient(ConRequst request, size_t buffer_capacity = 10, const py::object &trace_cb = py::none())
+        : AMFS::BasePathMatch(), AMTracer(buffer_capacity, trace_cb, request.nickname), request(request) {
+        // 处理匿名 FTP：如果用户名为空，使用 anonymous
+        if (username.empty()) {
+            this->username = "anonymous";
+            this->password = request.password.empty() ? "anonymous@example.com" : request.password;
+        }
+        if (!std::regex_match(request.hostname, ftp_url_pattern)) {
+            this->host = fmt::format("ftp://{}:{}", request.hostname, request.port);
+        } else {
+            this->host = request.hostname;
+        }
+        this->port = request.port;
+
+        curl = curl_easy_init();
+        if (!curl) {
+            throw std::runtime_error("Failed to initialize CURL");
+        }
+    }
+
+    ~AMFTPClient() {
+        if (curl) {
+            curl_easy_cleanup(curl);
+        }
+    }
+
+    ECM Connect(bool force = false) {
+        std::lock_guard<std::recursive_mutex> lock(mtx);
+
+        if (connected && !force) {
+            return {EC::Success, ""};
+        }
+
+        if (connected && force) {
+            connected = false;
+        }
+
+        if (!curl) {
+            return {EC::NoConnection, "CURL not initialized"};
+        }
+
+        // Test connection by getting home directory
+        std::string test_url = host + "/";
+        ECM ecm = SetupCurl(test_url);
+        if (ecm.first != EC::Success) {
+            connected = false;
+            return ecm;
+        }
+
+        struct MemoryStruct chunk;
+        chunk.memory = (char *)malloc(1);
+        chunk.size = 0;
+
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+
+        CURLcode res = curl_easy_perform(curl);
+        free(chunk.memory);
+
+        if (res != CURLE_OK) {
+            connected = false;
+            return {EC::FTPConnectFailed, fmt::format("Connect failed: {}", curl_easy_strerror(res))};
+        }
+
+        connected = true;
+
+        // Get home directory using PWD command
+        auto [rcm, path] = GetPWD();
+        if (rcm.first == EC::Success) {
+            home_dir = path;
+        } else {
+            home_dir = "/";
+        }
+
+        return {EC::Success, ""};
+    }
+
+    ECM Check() {
+        if (!curl) {
+            connected = false;
+            return {EC::NoConnection, "CURL not initialized"};
+        }
+
+        if (!connected) {
+            return {EC::NoConnection, "Not connected"};
+        }
+
+        // Test connection by executing PWD command
+        auto [ecm, pwd] = GetPWD();
+        if (ecm.first != EC::Success) {
+            connected = false;
+            return ecm;
+        }
+
+        return {EC::Success, ""};
+    }
+
+    bool IsConnected() const { return connected; }
+
+    std::string GetHomeDir() const { return home_dir; }
+
+    SR stat(const std::string &path) {
+        std::lock_guard<std::recursive_mutex> lock(mtx);
+
+        std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
+        if (pathf.empty()) {
+            return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, PathInfo()};
+        }
+
+        // Try to use SIZE and MDTM commands for files, or LIST for detailed info
+        std::string url = BuildUrl(pathf);
+        ECM ecm = SetupCurl(url);
+        if (ecm.first != EC::Success) {
+            return {ecm, PathInfo()};
+        }
+
+        // First try to check if it's a directory by trying to list it
+        curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+        curl_easy_setopt(curl, CURLOPT_FILETIME, 1L);
+
+        struct MemoryStruct chunk;
+        chunk.memory = (char *)malloc(1);
+        chunk.size = 0;
+
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+
+        CURLcode res = curl_easy_perform(curl);
+
+        if (res == CURLE_OK) {
+            // It's likely a directory or file
+            PathInfo info;
+            info.path = pathf;
+            info.name = AMFS::basename(pathf);
+            info.dir = AMFS::dirname(pathf);
+
+            // Get file size
+            double filesize = 0;
+            res = curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &filesize);
+            if (res == CURLE_OK && filesize >= 0) {
+                info.size = static_cast<uint64_t>(filesize);
+                info.type = PathType::FILE;
+            } else {
+                // No size means it's likely a directory
+                info.type = PathType::DIR;
+                info.size = 0;
+            }
+
+            // Get modification time
+            long filetime = 0;
+            res = curl_easy_getinfo(curl, CURLINFO_FILETIME, &filetime);
+            if (res == CURLE_OK && filetime >= 0) {
+                info.modify_time = filetime;
+            }
+
+            free(chunk.memory);
+            return {ECM{EC::Success, ""}, info};
+        }
+
+        free(chunk.memory);
+
+        // If HEAD request failed, try listing parent directory as fallback
+        std::string parent = AMFS::dirname(pathf);
+        std::string filename = AMFS::basename(pathf);
+
+        auto [rcm, files] = listdir(parent);
+        if (rcm.first != EC::Success) {
+            return {ECM{EC::PathNotExist, fmt::format("Path not found: {}", pathf)}, PathInfo()};
+        }
+
+        for (const auto &file : files) {
+            if (file.name == filename) {
+                return {ECM{EC::Success, ""}, file};
+            }
+        }
+
+        return {ECM{EC::PathNotExist, fmt::format("Path not found: {}", pathf)}, PathInfo()};
+    }
+
+    std::pair<ECM, bool> exists(const std::string &path) {
+        auto [rcm, path_info] = stat(path);
+        if (rcm.first == EC::Success) {
+            return {rcm, true};
+        } else if (rcm.first == EC::PathNotExist || rcm.first == EC::FileNotExist) {
+            return {{EC::Success, ""}, false};
+        } else {
+            return {rcm, false};
+        }
+    }
+
+    std::pair<ECM, bool> is_dir(const std::string &path) {
+        auto [rcm, path_info] = stat(path);
+        if (rcm.first != EC::Success) {
+            return {rcm, false};
+        }
+        return {ECM{EC::Success, ""}, path_info.type == PathType::DIR};
+    }
+
+    std::pair<ECM, std::vector<PathInfo>> listdir(const std::string &path) {
+        std::lock_guard<std::recursive_mutex> lock(mtx);
+
+        std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
+        if (pathf.empty()) {
+            return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
+        }
+
+        std::string url = BuildUrl(pathf + "/");
+        ECM ecm = SetupCurl(url);
+        if (ecm.first != EC::Success) {
+            return {ecm, {}};
+        }
+
+        struct MemoryStruct chunk;
+        chunk.memory = (char *)malloc(1);
+        chunk.size = 0;
+
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+
+        CURLcode res = curl_easy_perform(curl);
+
+        if (res != CURLE_OK) {
+            free(chunk.memory);
+            return {ECM{EC::FTPListFailed, fmt::format("List failed: {}", curl_easy_strerror(res))}, {}};
+        }
+
+        std::string listing(chunk.memory, chunk.size);
+        free(chunk.memory);
+
+        std::vector<PathInfo> file_list;
+        std::istringstream iss(listing);
+        std::string line;
+
+        while (std::getline(iss, line)) {
+            if (line.empty())
+                continue;
+
+            PathInfo info = ParseListLine(line, pathf);
+            if (info.type != PathType::Unknown && info.name != "." && info.name != "..") {
+                file_list.push_back(info);
+            }
+        }
+
+        return {ECM{EC::Success, ""}, file_list};
+    }
+
+    WRV iwalk(const std::string &path, bool ignore_special_file = true) {
+        WRV result;
+        std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
+        _iwalk(pathf, result, ignore_special_file);
+        return result;
+    }
+
+    std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1, bool ignore_special_file = true) {
+        std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
+        auto [rcm, br] = stat(pathf);
+        if (rcm.first != EC::Success) {
+            return {rcm, {}};
+        }
+        WRD result_dict = {};
+        std::vector<std::string> parts = {pathf};
+        _walk(parts, result_dict, 0, max_depth, ignore_special_file);
+        return {ECM{EC::Success, ""}, result_dict};
+    }
+
+    ECM mkdir(const std::string &path) {
+        std::lock_guard<std::recursive_mutex> lock(mtx);
+
+        std::string pathf = AMFS::abspath(path, true, home_dir, home_dir, "/");
+        if (pathf.empty()) {
+            return {EC::InvalidArg, fmt::format("Invalid path: {}", path)};
+        }
+
+        // Check if already exists
+        auto [rcm, info] = stat(pathf);
+        if (rcm.first == EC::Success) {
+            if (info.type == PathType::DIR) {
+                return {EC::Success, ""};
+            } else {
+                return {EC::PathAlreadyExists, fmt::format("Path exists and is not a directory: {}", pathf)};
+            }
+        }
+
+        std::string url = BuildUrl(pathf + "/");
+        ECM ecm = SetupCurl(url);
+        if (ecm.first != EC::Success) {
+            return ecm;
+        }
+
+        curl_easy_setopt(curl, CURLOPT_FTP_CREATE_MISSING_DIRS, CURLFTP_CREATE_DIR);
+
+        CURLcode res = curl_easy_perform(curl);
+
+        if (res != CURLE_OK) {
+            return {EC::FTPMkdirFailed, fmt::format("mkdir failed: {}", curl_easy_strerror(res))};
+        }
+
+        return {EC::Success, ""};
+    }
+
+    ECM mkdirs(const std::string &path) {
+        std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
+        if (pathf.empty()) {
+            return {EC::InvalidArg, fmt::format("Invalid path: {}", path)};
+        }
+
+        std::vector<std::string> parts = AMFS::split(pathf);
+        if (parts.empty()) {
+            return {EC::InvalidArg, fmt::format("Path split failed: {}", pathf)};
+        }
+
+        std::string current_path = parts.front();
+        for (size_t i = 1; i < parts.size(); i++) {
+            current_path = AMFS::join(current_path, parts[i], AMFS::SepType::Unix);
+            ECM rc = mkdir(current_path);
+            if (rc.first != EC::Success) {
+                return rc;
+            }
+        }
+
+        return {EC::Success, ""};
+    }
+
+    ECM rename(const std::string &src, const std::string &dst, bool overwrite = false) {
+        std::lock_guard<std::recursive_mutex> lock(mtx);
+
+        std::string srcf = AMFS::abspath(src, true, home_dir, home_dir);
+        std::string dstf = AMFS::abspath(dst, true, home_dir, home_dir);
+        if (srcf.empty() || dstf.empty()) {
+            return {EC::InvalidArg, fmt::format("Invalid path: {} or {}", srcf, dstf)};
+        }
+
+        // Check source exists
+        auto [rcm, sbr] = stat(srcf);
+        if (rcm.first != EC::Success) {
+            return rcm;
+        }
+
+        // Check destination
+        auto [rcm2, sbr2] = stat(dstf);
+        if (rcm2.first != EC::Success) {
+            return rcm2;
+        } else if (!overwrite) {
+            return {EC::PathAlreadyExists, fmt::format("Dst already exists: {} and overwrite is false", dstf)};
+        } else if (sbr2.type != sbr.type) {
+            return {EC::PathAlreadyExists,
+                    fmt::format("Dst already exists and is not the same type as src: {} ", dstf)};
+        }
+
+        // Use RNFR and RNTO commands
+        std::string url = BuildUrl("/");
+        ECM ecm = SetupCurl(url);
+        if (ecm.first != EC::Success) {
+            return ecm;
+        }
+
+        struct curl_slist *headerlist = nullptr;
+        std::string rnfr_cmd = "RNFR " + srcf;
+        std::string rnto_cmd = "RNTO " + dstf;
+        headerlist = curl_slist_append(headerlist, rnfr_cmd.c_str());
+        headerlist = curl_slist_append(headerlist, rnto_cmd.c_str());
+
+        curl_easy_setopt(curl, CURLOPT_QUOTE, headerlist);
+
+        CURLcode res = curl_easy_perform(curl);
+        curl_slist_free_all(headerlist);
+
+        if (res != CURLE_OK) {
+            return {EC::FTPRenameFailed, fmt::format("Rename failed: {}", curl_easy_strerror(res))};
+        }
+
+        return {EC::Success, ""};
+    }
+
+    ECM move(const std::string &src, const std::string &dst, bool need_mkdir = false, bool force_write = false) {
+        std::string srcf = AMFS::abspath(src, true, home_dir, home_dir);
+        std::string dstf = AMFS::abspath(dst, true, home_dir, home_dir);
+
+        auto [rcm, ssr] = stat(srcf);
+        if (rcm.first != EC::Success) {
+            return rcm;
+        }
+
+        auto [rcm2, dsr] = stat(dstf);
+        if (rcm2.first != EC::Success) {
+            EC rc = rcm2.first;
+            if ((rc == EC::PathNotExist || rc == EC::FileNotExist) && need_mkdir) {
+                ECM ecm = mkdirs(dstf);
+                if (ecm.first != EC::Success) {
+                    return ecm;
+                }
+            } else {
+                return rcm2;
+            }
+        } else {
+            if (dsr.type != PathType::DIR) {
+                return {EC::NotADirectory, fmt::format("Dst is not a directory: {}", dstf)};
+            }
+        }
+
+        std::string dst_path = AMFS::join(dstf, AMFS::basename(srcf));
+        return rename(srcf, dst_path, force_write);
+    }
 };

@@ -28,6 +28,7 @@ module = Extension(
         "ws2_32",
         "fmt",
         "Advapi32",
+        "libcurl",
     ],
 )
 

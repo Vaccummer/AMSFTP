@@ -9,8 +9,7 @@ constexpr uint64_t AMKB = 1024;
 constexpr uint64_t AMMB = 1024 * 1024;
 constexpr uint64_t AMGB = 1024 * 1024 * 1024;
 
-enum class ErrorCode
-{
+enum class ErrorCode {
     Success = 0,
     // negative code represent libssh2 session error
     SessionGenericError = -1,
@@ -112,41 +111,25 @@ enum class ErrorCode
     KeyAlreadyExists = 43,
     DeepcopyFailed = 44,
 
+    // Following are FTP/curl Errors
+    CurlNotInitialized = 45,
+    FTPConnectFailed = 46,
+    FTPListFailed = 47,
+    FTPMkdirFailed = 48,
+    FTPGetPWDFailed = 49,
+    FTPRenameFailed = 50,
+
 };
 
-enum class MapType
-{
-    Read = 0,
-    Write = 1
-};
+enum class MapType { Read = 0, Write = 1 };
 
-enum class OS_TYPE
-{
-    Windows = -1,
-    Unknown = -2,
-    Uncertain = 0,
-    Linux = 1,
-    MacOS = 2,
-    FreeBSD = 3,
-    Unix = 4
-};
+enum class OS_TYPE { Windows = -1, Unknown = -2, Uncertain = 0, Linux = 1, MacOS = 2, FreeBSD = 3, Unix = 4 };
 
-enum class BufferStatus
-{
-    is_writing = 0,
-    is_reading = 1,
-    read_done = 2,
-    write_done = 3
-};
+enum class BufferStatus { is_writing = 0, is_reading = 1, read_done = 2, write_done = 3 };
 
-enum class TransferControl
-{
-    Pause = 0,
-    Terminate = 1
-};
+enum class TransferControl { Pause = 0, Terminate = 1 };
 
-enum class TraceLevel
-{
+enum class TraceLevel {
     Debug = 2,
     Info = 1,
     Warning = 0,
@@ -180,17 +163,12 @@ const std::unordered_map<int, std::string> SFTPMessage = {
     {LIBSSH2_FX_LINK_LOOP, "Symbolic link loop"}};
 
 // 将ErrorCode枚举值映射为int
-const std::unordered_map<int, ErrorCode> Int2EC = []
-{
+const std::unordered_map<int, ErrorCode> Int2EC = [] {
     std::unordered_map<int, ErrorCode> map;
-    for (auto [val, name] : magic_enum::enum_entries<ErrorCode>())
-    {
+    for (auto [val, name] : magic_enum::enum_entries<ErrorCode>()) {
         map[static_cast<int>(val)] = val;
     }
     return map;
 }();
 
-inline std::string GetECName(ErrorCode ec)
-{
-    return std::string(magic_enum::enum_name(ec));
-}
+inline std::string GetECName(ErrorCode ec) { return std::string(magic_enum::enum_name(ec)); }

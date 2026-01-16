@@ -3,20 +3,17 @@
 #include "AMEnum.hpp"
 #include "AMPath.hpp"
 
-PYBIND11_MODULE(AMSFTP, m)
-{
+PYBIND11_MODULE(AMSFTP, m) {
     m.doc() = "A SFTP Client Module Based on libssh2";
     auto em = m.def_submodule("AMEnum", "Enum Classes");
     auto data = m.def_submodule("AMData", "Data Classes");
     auto fs = m.def_submodule("AMFS", "Local Filesystem Operations");
 
     bool expected = false;
-    if (std::atomic_compare_exchange_strong(&is_wsa_initialized, &expected, true))
-    {
+    if (std::atomic_compare_exchange_strong(&is_wsa_initialized, &expected, true)) {
         WSADATA wsaData;
         int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
-        if (result != 0)
-        {
+        if (result != 0) {
             throw std::runtime_error("WSAStartup failed");
         }
         is_wsa_initialized = true;
@@ -404,6 +401,31 @@ PYBIND11_MODULE(AMSFTP, m)
         .def("ClearPublicVar", &AMSFTPClient::ClearPublicVar, "Clear all stored Python objects")
         .def("GetAllPublicVars", &AMSFTPClient::GetAllPublicVars,
              "Get all stored Python objects as a dictionary with deep copies");
+
+    py::class_<AMFTPClient, std::shared_ptr<AMFTPClient>, AMFS::BasePathMatch>(m, "AMFTPClient",
+                                                                               "FTP Client Class Based on libcurl")
+        .def(py::init<ConRequst, size_t, py::object>(), py::arg("request"), py::arg("buffer_capacity") = 10,
+             py::arg("trace_cb") = py::none(), "Create an FTP client instance")
+        .def("Connect", &AMFTPClient::Connect, py::arg("force") = false,
+             "Connect to FTP server, if force=True, will disconnect and reconnect")
+        .def("Check", &AMFTPClient::Check, "Check if the connection is still valid using PWD command")
+        .def("IsConnected", &AMFTPClient::IsConnected, "Return True if connected to the server")
+        .def("GetHomeDir", &AMFTPClient::GetHomeDir, "Get the home directory path")
+        .def("stat", &AMFTPClient::stat, py::arg("path"), "Get detailed information about a path (file or directory)")
+        .def("exists", &AMFTPClient::exists, py::arg("path"), "Check if a path exists")
+        .def("is_dir", &AMFTPClient::is_dir, py::arg("path"), "Check if a path is a directory")
+        .def("listdir", &AMFTPClient::listdir, py::arg("path"), "List all files and directories in the specified path")
+        .def("iwalk", &AMFTPClient::iwalk, py::arg("path"), py::arg("ignore_special_file") = true,
+             "Recursively walk the path, return list of leaf nodes (files and empty directories)")
+        .def("walk", &AMFTPClient::walk, py::arg("path"), py::arg("max_depth") = -1,
+             py::arg("ignore_special_file") = true,
+             "Recursively walk the path with structure, return list[tuple[list[str], list[PathInfo]]]")
+        .def("mkdir", &AMFTPClient::mkdir, py::arg("path"), "Create a single directory")
+        .def("mkdirs", &AMFTPClient::mkdirs, py::arg("path"), "Create multiple nested directories (like mkdir -p)")
+        .def("rename", &AMFTPClient::rename, py::arg("src"), py::arg("dst"), py::arg("overwrite") = false,
+             "Rename or move a file/directory from src to dst")
+        .def("move", &AMFTPClient::move, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false,
+             py::arg("force_write") = false, "Move source path to destination directory");
 
     py::class_<HostMaintainer, std::shared_ptr<HostMaintainer>>(
         m, "HostMaintainer", "The Client Maintainer Class, Check clients status all the time")
