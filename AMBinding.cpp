@@ -422,10 +422,42 @@ PYBIND11_MODULE(AMSFTP, m) {
              "Recursively walk the path with structure, return list[tuple[list[str], list[PathInfo]]]")
         .def("mkdir", &AMFTPClient::mkdir, py::arg("path"), "Create a single directory")
         .def("mkdirs", &AMFTPClient::mkdirs, py::arg("path"), "Create multiple nested directories (like mkdir -p)")
+        .def("rmfile", &AMFTPClient::rmfile, py::arg("path"), "Delete a single file")
+        .def("rmdir", &AMFTPClient::rmdir, py::arg("path"), "Delete an empty directory")
+        .def("remove", &AMFTPClient::remove, py::arg("path"),
+             "Recursively delete a file or directory. Returns list of errors if any occurred")
         .def("rename", &AMFTPClient::rename, py::arg("src"), py::arg("dst"), py::arg("overwrite") = false,
              "Rename or move a file/directory from src to dst")
         .def("move", &AMFTPClient::move, py::arg("src"), py::arg("dst"), py::arg("need_mkdir") = false,
-             py::arg("force_write") = false, "Move source path to destination directory");
+             py::arg("force_write") = false, "Move source path to destination directory")
+        .def("upload",
+             [](AMFTPClient &self, const std::string &local_path, const std::string &remote_path,
+                py::object progress_cb) {
+                 std::function<void(uint64_t, uint64_t)> callback = nullptr;
+                 if (!progress_cb.is_none()) {
+                     callback = [progress_cb](uint64_t current, uint64_t total) {
+                         py::gil_scoped_acquire gil;
+                         progress_cb(current, total);
+                     };
+                 }
+                 return self.upload(local_path, remote_path, callback);
+             },
+             py::arg("local_path"), py::arg("remote_path"), py::arg("progress_callback") = py::none(),
+             "Upload a file from local to remote FTP server")
+        .def("download",
+             [](AMFTPClient &self, const std::string &remote_path, const std::string &local_path,
+                py::object progress_cb) {
+                 std::function<void(uint64_t, uint64_t)> callback = nullptr;
+                 if (!progress_cb.is_none()) {
+                     callback = [progress_cb](uint64_t current, uint64_t total) {
+                         py::gil_scoped_acquire gil;
+                         progress_cb(current, total);
+                     };
+                 }
+                 return self.download(remote_path, local_path, callback);
+             },
+             py::arg("remote_path"), py::arg("local_path"), py::arg("progress_callback") = py::none(),
+             "Download a file from remote FTP server to local");
 
     py::class_<HostMaintainer, std::shared_ptr<HostMaintainer>>(
         m, "HostMaintainer", "The Client Maintainer Class, Check clients status all the time")
