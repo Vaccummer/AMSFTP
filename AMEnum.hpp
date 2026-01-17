@@ -5,9 +5,13 @@
 #include <string>
 #include <unordered_map>
 
-constexpr uint64_t AMKB = 1024;
-constexpr uint64_t AMMB = 1024 * 1024;
-constexpr uint64_t AMGB = 1024 * 1024 * 1024;
+constexpr ssize_t AMKB = 1024;
+constexpr ssize_t AMMB = 1024 * 1024;
+constexpr ssize_t AMGB = 1024 * 1024 * 1024;
+constexpr ssize_t AMDefaultLocalBufferSize = 1024 * 1024 * 16;
+constexpr ssize_t AMDefaultRemoteBufferSize = 1024 * 1024 * 8;
+constexpr ssize_t AMMinBufferSize = 1024 * 512;
+constexpr ssize_t AMMaxBufferSize = 1024 * 1024 * 64;
 
 enum class ErrorCode {
   Success = 0,
@@ -98,27 +102,31 @@ enum class ErrorCode {
   ParentDirectoryNotExist = 30,
   InhostCopyFailed = 31,
   LocalFileMapError = 32,
-  UnexpectedEOF = 33,
-  Terminate = 34,
-  UnImplentedMethod = 35,
-  NoPermissionAttribute = 36,
-  LocalStatError = 37,
-  TransferPause = 38,
-  DNSResolveError = 39,
-  ClientNotFound = 40,
-  ConnectionAlreadyExists = 41,
-  DeepcopyFunctionNotAvailable = 42,
-  KeyAlreadyExists = 43,
-  DeepcopyFailed = 44,
+  LocalFileOpenError = 33,
+  LocalFileReadError = 34,
+  LocalFileWriteError = 35,
+  UnexpectedEOF = 36,
+  Terminate = 37,
+  UnImplentedMethod = 38,
+  NoPermissionAttribute = 39,
+  LocalStatError = 40,
+  TransferPause = 41,
+  DNSResolveError = 42,
+  ClientNotFound = 43,
+  ConnectionAlreadyExists = 44,
+  DeepcopyFunctionNotAvailable = 45,
+  KeyAlreadyExists = 46,
+  DeepcopyFailed = 47,
+  BufferWriteError = 70,
+  BufferReadError = 71,
 
-  // Following are FTP/curl Errors
-  CurlNotInitialized = 45,
-  FTPConnectFailed = 46,
-  FTPListFailed = 47,
-  FTPMkdirFailed = 48,
-  FTPGetPWDFailed = 49,
+  // FTP Server Error
+  FTPConnectFailed = 48,
+  FTPMkdirFailed = 49,
   FTPRenameFailed = 50,
-
+  FTPUploadFailed = 51,
+  FTPDownloadFailed = 52,
+  FTPListFailed = 53,
 };
 
 enum class MapType { Read = 0, Write = 1 };

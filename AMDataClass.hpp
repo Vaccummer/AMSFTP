@@ -230,8 +230,9 @@ struct ConRequst {
   ConRequst()
       : nickname(""), hostname(""), username(""), password(""), keyfile(""),
         compression(false), port(22), timeout_s(3), trash_dir("") {}
-  ConRequst(std::string nickname, std::string hostname, std::string username,
-            int port, std::string password = "", std::string keyfile = "",
+  ConRequst(const std::string &nickname, const std::string &hostname,
+            const std::string &username, int port = 22,
+            std::string password = "", std::string keyfile = "",
             bool compression = false, size_t timeout_s = 3,
             std::string trash_dir = "")
       : nickname(nickname), hostname(hostname), username(username),
@@ -312,63 +313,7 @@ public:
 
   bool empty() const { return available() == 0; }
   bool full() const { return writable() == 0; }
-};
-
-struct ProgressData {
-  std::string src = "";
-  std::string dst = "";
-  std::string src_host = "";
-  std::string dst_host = "";
-  std::atomic<bool> is_terminate = false;
-  std::atomic<bool> is_pause = false;
-  std::string current_filename = "";
-  size_t this_size = 0;
-  size_t file_size = 0;
-  size_t accumulated_size = 0;
-  float cb_interval_s = 0.1;
-  long long total_size = 0;
-  double cb_time = timenow();
-  bool is_error = false;
-  std::string error_msg = "";
-  std::pair<char *, LIBSSH2_SFTP_HANDLE *> src_ptr =
-      std::pair<char *, LIBSSH2_SFTP_HANDLE *>(nullptr, nullptr);
-  std::pair<char *, LIBSSH2_SFTP_HANDLE *> dst_ptr =
-      std::pair<char *, LIBSSH2_SFTP_HANDLE *>(nullptr, nullptr);
-  std::function<void(bool)> progress_cb;
-  std::shared_ptr<StreamRingBuffer> ring_buffer = nullptr;
-
-  void reset() {
-    src = "";
-    dst = "";
-    src_host = "";
-    dst_host = "";
-    is_terminate = false;
-    is_pause = false;
-    current_filename = "";
-    this_size = 0;
-    file_size = 0;
-    accumulated_size = 0;
-    total_size = 0;
-    cb_time = timenow();
-    src_ptr = std::pair<char *, LIBSSH2_SFTP_HANDLE *>(nullptr, nullptr);
-    dst_ptr = std::pair<char *, LIBSSH2_SFTP_HANDLE *>(nullptr, nullptr);
-    ring_buffer = nullptr;
-  }
-
-  void next_file(const std::string &src, const std::string &dst,
-                 const std::string &src_host, const std::string &dst_host,
-                 const size_t &file_size) {
-    this->src = src;
-    this->dst = dst;
-    this->src_host = src_host;
-    this->dst_host = dst_host;
-    this->file_size = file_size;
-    is_error = false;
-    error_msg = "";
-    src_ptr = std::pair<char *, LIBSSH2_SFTP_HANDLE *>(nullptr, nullptr);
-    dst_ptr = std::pair<char *, LIBSSH2_SFTP_HANDLE *>(nullptr, nullptr);
-    ring_buffer = nullptr;
-  }
+  size_t get_capacity() const { return capacity; }
 };
 
 struct ErrorCBInfo {
@@ -488,12 +433,62 @@ struct TransferTask {
   AMFS::PathType path_type = PathType::FILE;
   bool IsSuccess = false;
   ECM rc = ECM(EC::Success, "");
-  bool overwrite = false;
-  TransferTask(std::string src, std::string src_host, std::string dst,
-               std::string dst_host, uint64_t size,
-               PathType path_type = PathType::FILE, bool overwrite = false)
+  TransferTask() : src(""), src_host(""), dst(""), dst_host(""), size(0) {}
+  TransferTask(const std::string &src, const std::string &dst,
+               const std::string &src_host, const std::string &dst_host,
+               uint64_t size, PathType path_type = PathType::FILE)
       : src(src), src_host(src_host), dst(dst), dst_host(dst_host), size(size),
-        path_type(path_type), overwrite(overwrite) {}
+        path_type(path_type) {}
+};
+
+struct ProgressData {
+  std::string src = "";
+  std::string dst = "";
+  std::string src_host = "";
+  std::string dst_host = "";
+  std::atomic<bool> is_terminate = false;
+  std::atomic<bool> is_pause = false;
+  std::string current_filename = "";
+  size_t this_size = 0;
+  size_t file_size = 0;
+  size_t accumulated_size = 0;
+  size_t total_size = 0;
+  float cb_interval_s = 0.1;
+  double cb_time = timenow();
+  ECM rcm = ECM(EC::Success, "");
+  std::function<void(bool)> progress_cb;
+  std::shared_ptr<StreamRingBuffer> ring_buffer = nullptr;
+  std::tuple<size_t, size_t, size_t> buffer_size = {
+      1024 * 1024 * 16, 1024 * 1024 * 16, 1024 * 1024 * 16};
+
+  ProgressData(float cb_interval_s = 0.1) : cb_interval_s(cb_interval_s) {}
+
+  void reset() {
+    src = "";
+    dst = "";
+    src_host = "";
+    dst_host = "";
+    is_terminate = false;
+    is_pause = false;
+    current_filename = "";
+    this_size = 0;
+    file_size = 0;
+    accumulated_size = 0;
+    total_size = 0;
+    cb_time = timenow();
+    ring_buffer = nullptr;
+    rcm = ECM(EC::Success, "");
+  }
+
+  void next_file(const TransferTask &task, const size_t &buffer_size) {
+    this->src = task.src;
+    this->dst = task.dst;
+    this->src_host = task.src_host;
+    this->dst_host = task.dst_host;
+    this->file_size = task.size;
+    rcm = ECM(EC::Success, "");
+    ring_buffer = std::make_shared<StreamRingBuffer>(buffer_size);
+  }
 };
 
 class BaseFileMapper {

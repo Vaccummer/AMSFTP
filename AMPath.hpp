@@ -48,8 +48,6 @@ enum class PathType {
   SYMLINK = 2
 };
 
-enum class PathFormat { Absolute = 1, Relative = 2, User = 3 };
-
 enum class SearchType { All = 0, File = 1, Directory = 2 };
 
 enum class SepType { Unix = 0, Windows = 1 };
@@ -289,6 +287,9 @@ public:
   }
 
   static std::string GetPathSep(const std::string &path) {
+#ifdef AMForceUsingUnixSep
+    return "/";
+#endif
     if (path[0] == '/') {
       return "/";
     } else if (path[0] == '\\') {
