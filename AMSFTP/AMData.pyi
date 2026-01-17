@@ -25,21 +25,9 @@ class AMTracer:
         """
         Get the size of the tracer
         """
-    def IsTracerEmpty(self) -> bool:
-        """
-        Check if the tracer is empty
-        """
     def LastTrace(self) -> typing.Any | TraceInfo:
         """
         Get the last trace error, return Optional[TraceInfo]
-        """
-    def PauseTrace(self) -> None:
-        """
-        Pause the trace
-        """
-    def ResumeTrace(self) -> None:
-        """
-        Resume the trace
         """
     def SetPyTrace(self, trace_cb: typing.Any = None) -> None:
         """
@@ -49,7 +37,7 @@ class AMTracer:
         """
         Set the capacity of the tracer
         """
-    def __init__(self, buffer_capacity: int = 10, trace_cb: typing.Any = None, nickname: str = '') -> None:
+    def __init__(self, request: ConRequst, buffer_capacity: int = 10, trace_cb: typing.Any = None) -> None:
         ...
     @typing.overload
     def trace(self, trace_info: AMSFTP.AMEnum.TraceLevel, error_code: AMSFTP.AMEnum.ErrorCode, target: str, action: str, msg: str) -> None:

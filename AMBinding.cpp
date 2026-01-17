@@ -1,603 +1,479 @@
+#include "AMBindingTools.hpp"
 #include "AMCore.hpp"
 #include "AMDataClass.hpp"
 #include "AMEnum.hpp"
 #include "AMPath.hpp"
 
+namespace AMBIDINGS {
+void BindEnum(py::module &m) {
+  bind_enum_auto<ErrorCode>(m, "ErrorCode");
+  bind_enum_auto<OS_TYPE>(m, "OS_TYPE");
+  bind_enum_auto<PathType>(m, "PathType");
+
+  bind_enum_auto<TraceLevel>(m, "TraceLevel");
+  bind_enum_auto<TransferControl>(m, "TransferControl");
+  bind_enum_auto<AMFS::SepType>(m, "SepType");
+  bind_enum_auto<AMFS::SearchType>(m, "SearchType");
+}
+void BindConRequest(py::module &m) {
+  auto cls = py::class_<ConRequst, std::shared_ptr<ConRequst>>(m, "ConRequst")
+                 .def_readwrite("nickname", &ConRequst::nickname,
+                                "Unique nickname for the host and connection")
+                 .def_readwrite("hostname", &ConRequst::hostname,
+                                "Hostname or IP address of the remote server")
+                 .def_readwrite("username", &ConRequst::username)
+                 .def_readwrite("port", &ConRequst::port)
+                 .def_readwrite("password", &ConRequst::password)
+                 .def_readwrite("keyfile", &ConRequst::keyfile,
+                                "Dedicated key file for this authentication")
+                 .def_readwrite("compression", &ConRequst::compression,
+                                "Enable compression")
+                 .def_readwrite("timeout_s", &ConRequst::timeout_s)
+                 .def_readwrite("trash_dir", &ConRequst::trash_dir,
+                                "Trash directory for saferm function");
+  cls.def(py::init<const std::string &, const std::string &, const std::string &,
+                   int, std::string, std::string, bool, size_t, std::string>(),
+          py::arg("nickname") = "", py::arg("hostname") = "",
+          py::arg("username") = "", py::arg("port") = 22,
+          py::arg("password") = "", py::arg("keyfile") = "",
+          py::arg("compression") = false, py::arg("timeout_s") = 3,
+          py::arg("trash_dir") = "");
+}
+void BindTransferCallback(py::module &m) {
+  auto cls =
+      py::class_<TransferCallback, std::shared_ptr<TransferCallback>>(
+          m, "TransferCallback", "Callback function Gather")
+          .def(py::init<py::object, py::object, py::object>(),
+               py::arg("total_size") = py::none(),
+               py::arg("error") = py::none(), py::arg("progress") = py::none())
+          .def("SetErrorCB", &TransferCallback::SetErrorCB,
+               py::arg("error") = py::none())
+          .def("SetProgressCB", &TransferCallback::SetProgressCB,
+               py::arg("progress") = py::none())
+          .def("SetTotalSizeCB", &TransferCallback::SetTotalSizeCB,
+               py::arg("total_size") = py::none());
+}
+void BindProgressCBInfo(py::module &m) {
+  auto cls =
+      py::class_<ProgressCBInfo, std::shared_ptr<ProgressCBInfo>>(
+          m, "ProgressCBInfo", "Progress Callback Information")
+          .def_readwrite("src", &ProgressCBInfo::src, "Source path")
+          .def_readwrite("dst", &ProgressCBInfo::dst, "Destination path")
+          .def_readwrite("src_host", &ProgressCBInfo::src_host, "Source host")
+          .def_readwrite("dst_host", &ProgressCBInfo::dst_host,
+                         "Destination host")
+          .def_readwrite("this_size", &ProgressCBInfo::this_size,
+                         "Size of the current file transfered")
+          .def_readwrite("file_size", &ProgressCBInfo::file_size,
+                         "This file size")
+          .def_readwrite("accumulated_size", &ProgressCBInfo::accumulated_size,
+                         "Size of the total files transfered")
+          .def_readwrite("total_size", &ProgressCBInfo::total_size,
+                         "Total size of the transfer");
+  cls.def(py::init<const std::string &, const std::string &, const std::string &,
+                   const std::string &, uint64_t, uint64_t, const uint64_t &,
+                   const uint64_t &>(),
+          py::arg("src") = "", py::arg("dst") = "", py::arg("src_host") = "",
+          py::arg("dst_host") = "", py::arg("this_size") = 0,
+          py::arg("file_size") = 0, py::arg("accumulated_size") = 0,
+          py::arg("total_size") = 0);
+}
+void BindErrorCBInfo(py::module &m) {
+  auto cls =
+      py::class_<ErrorCBInfo, std::shared_ptr<ErrorCBInfo>>(
+          m, "ErrorCBInfo", "Error Callback Information")
+          .def_readwrite("ecm", &ErrorCBInfo::ecm, "Error Code and Message")
+          .def_readwrite("src", &ErrorCBInfo::src, "Source path")
+          .def_readwrite("dst", &ErrorCBInfo::dst, "Destination path")
+          .def_readwrite("src_host", &ErrorCBInfo::src_host, "Source host")
+          .def_readwrite("dst_host", &ErrorCBInfo::dst_host,
+                         "Destination host");
+  cls.def(py::init<std::pair<ErrorCode, std::string>, std::string, std::string,
+                   std::string, std::string>(),
+          py::arg("ecm") = ECM(EC::Success, ""), py::arg("src") = "",
+          py::arg("dst") = "", py::arg("src_host") = "",
+          py::arg("dst_host") = "");
+}
+void BindAuthCBInfo(py::module &m) {
+  auto cls =
+      py::class_<AuthCBInfo, std::shared_ptr<AuthCBInfo>>(
+          m, "AuthCBInfo", "Authentication Callback Information")
+          .def_readwrite("NeedPassword", &AuthCBInfo::NeedPassword,
+                         "If true, python password callback need to return "
+                         "password, if false, callback function just "
+                         "tells you the password is wrong")
+          .def_readwrite("request", &AuthCBInfo::request)
+          .def_readwrite("trial_times", &AuthCBInfo::trial_times,
+                         "Number of times the password has been tried");
+  cls.def(py::init<bool, ConRequst, int>(), py::arg("NeedPassword") = false,
+          py::arg("request") = ConRequst(), py::arg("trial_times") = 0);
+}
+void BindTransferTask(py::module &m) {
+  auto cls =
+      py::class_<TransferTask, std::shared_ptr<TransferTask>>(m, "TransferTask",
+                                                              "Transfer Task")
+          .def_readwrite("src", &TransferTask::src, "Source path")
+          .def_readwrite("dst", &TransferTask::dst, "Destination path")
+          .def_readwrite("src_host", &TransferTask::src_host, "Source host")
+          .def_readwrite("dst_host", &TransferTask::dst_host,
+                         "Destination host")
+          .def_readwrite("size", &TransferTask::size, "Size of the src");
+  cls.def(py::init<const std::string &, const std::string &, const std::string &,
+                   const std::string &, uint64_t, PathType>(),
+          py::arg("src"), py::arg("dst"), py::arg("src_host"),
+          py::arg("dst_host"), py::arg("size"),
+          py::arg("path_type") = PathType::FILE);
+}
+void BindTraceInfo(py::module &m) {
+  auto cls = py::class_<TraceInfo, std::shared_ptr<TraceInfo>>(
+                 m, "TraceInfo", "Trace Information")
+                 .def_readwrite("level", &TraceInfo::level)
+                 .def_readwrite("error_code", &TraceInfo::error_code)
+                 .def_readwrite("nickname", &TraceInfo::nickname,
+                                "Nickname of the connection client")
+                 .def_readwrite("target", &TraceInfo::target,
+                                "Target of the operation")
+                 .def_readwrite("action", &TraceInfo::action,
+                                "Name of the action function")
+                 .def_readwrite("message", &TraceInfo::message,
+                                "Inform message or Error message");
+  cls.def(py::init<TraceLevel, ErrorCode, std::string, std::string, std::string,
+                   std::string>(),
+          py::arg("level"), py::arg("error_code"), py::arg("nickname"),
+          py::arg("target"), py::arg("action"), py::arg("message"));
+}
+void BindPathInfo(py::module &m) {
+  auto cls =
+      py::class_<PathInfo, std::shared_ptr<PathInfo>>(
+          m, "PathInfo", "Path Information DataClass")
+          .def_readwrite("name", &PathInfo::name, "Basename of the path")
+          .def_readwrite("path", &PathInfo::path, "Full path")
+          .def_readwrite("dir", &PathInfo::dir, "Parent directory of the path")
+          .def_readwrite("owner", &PathInfo::owner, "Owner of the path")
+          .def_readwrite("size", &PathInfo::size, "Size of the path")
+          .def_readwrite("create_time", &PathInfo::create_time,
+                         "Create time of the path")
+          .def_readwrite("access_time", &PathInfo::access_time,
+                         "Access time of the path")
+          .def_readwrite("modify_time", &PathInfo::modify_time,
+                         "Modify time of the path")
+          .def_readwrite("mode_int", &PathInfo::mode_int,
+                         "Mode of the path as integer")
+          .def_readwrite("mode_str", &PathInfo::mode_str,
+                         "Mode of the path as string")
+          .def_readwrite("type", &PathInfo::type, "Type of the path");
+  cls.def(py::init<std::string, std::string, std::string, std::string, uint64_t,
+                   double, double, double, PathType, uint64_t, std::string>(),
+          py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("owner"),
+          py::arg("size"), py::arg("create_time"), py::arg("access_time"),
+          py::arg("modify_time"), py::arg("type"), py::arg("mode_int"),
+          py::arg("mode_str"));
+}
+
+void BindAMTracer(py::module &m) {
+  auto cls = py::class_<AMTracer, std::shared_ptr<AMTracer>>(
+      m, "AMTracer", "Base of the Client, Manage Trace action and record");
+  cls.def(py::init<ConRequst, int, py::object>(), py::arg("request"),
+          py::arg("buffer_capacity") = 10, py::arg("trace_cb") = py::none());
+  cls.def("SetPublicVar", &AMTracer::SetPublicVar, py::arg("key"),
+          py::arg("value"), py::arg("overwrite") = false);
+  cls.def("GetPublicVar", &AMTracer::GetPublicVar, py::arg("key"),
+          py::arg("default_value") = py::none());
+  auto_def(cls, "DelPublicVar", &AMTracer::DelPublicVar).arg("key");
+  auto_def(cls, "ClearPublicVar", &AMTracer::ClearPublicVar);
+  auto_def(cls, "GetAllPublicVars", &AMTracer::GetAllPublicVars);
+  auto_def(cls, "GetTraceNum", &AMTracer::GetTraceNum);
+  auto_def(cls, "LastTrace", &AMTracer::LastTrace);
+  auto_def(cls, "GetAllTraces", &AMTracer::GetAllTraces);
+  auto_def(cls, "ClearTracer", &AMTracer::ClearTracer);
+  auto_def(cls, "TracerCapacity", &AMTracer::TracerCapacity)
+      .arg("size", -1)
+      .doc("Give Negative Number to Get Capacity, Give Positive Number to Set "
+           "Capacity");
+  auto_def(
+      cls, "trace",
+      py::overload_cast<const TraceLevel &, const EC &, const std::string &,
+                        const std::string &, const std::string &>(
+          &AMTracer::trace))
+      .arg("level")
+      .arg("error_code")
+      .arg("target")
+      .arg("action")
+      .arg("msg");
+  auto_def(cls, "trace", py::overload_cast<const TraceInfo &>(&AMTracer::trace))
+      .arg("trace_info");
+  auto_def(cls, "SetTraceState", &AMTracer::SetTraceState).arg("is_pause");
+  cls.def("SetPyTrace", &AMTracer::SetPyTrace, py::arg("trace_cb") = py::none(),
+          "callable[TraceInfo, None], if none, disable py trace");
+  auto_def(cls, "GetNickname", &AMTracer::GetNickname);
+  auto_def(cls, "GetRequest", &AMTracer::GetRequest);
+}
+
+void BindBaseClient(py::module &m) {
+  auto cls = py::class_<BaseClient, std::shared_ptr<BaseClient>, AMTracer,
+                        AMFS::BasePathMatch>(
+      m, "BaseClient",
+      "Abstract Base Client Class, Implement by FTP, SFTP Client");
+  auto_def(cls, "GetProtocol", &BaseClient::GetProtocol)
+      .doc("Get the protocol of the client, Base and Unknown are not valid");
+  auto_def(cls, "GetProtocolName", &BaseClient::GetProtocolName)
+      .doc("Get the string name of the protocol of the client");
+  auto_def(cls, "BufferSize", &BaseClient::TransferRingBufferSize)
+      .arg("size", -1,
+           "Give Negative Number to Get Buffer Size, Give Positive Number to "
+           "Set Buffer Size")
+      .doc(fmt::format("Buffer Size is restricted between {} and {}",
+                       AMMinBufferSize, AMMaxBufferSize)
+               .c_str());
+}
+
+void BindAMSession(py::module &m) {
+  auto cls = py::class_<AMSession, std::shared_ptr<AMSession>, BaseClient>(
+      m, "AMSession",
+      "An intermediate class between BaseClient and SFTP Client, Manage SSH "
+      "Connection and Session");
+  cls.def(py::init<const ConRequst &, const std::vector<std::string> &,
+                   unsigned int, py::object, py::object>(),
+          py::arg("request"), py::arg("keys"), py::arg("tracer_capacity") = 10,
+          py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none());
+  auto_def(cls, "GetLibssh2Version", &AMSession::GetLibssh2Version)
+      .doc("Get the version of the libssh2 library");
+  auto_def(cls, "IsValidKey", &AMSession::IsValidKey)
+      .arg("key")
+      .doc("Check if the keyfile is valid");
+  auto_def(cls, "GetKeys", &AMSession::GetKeys).doc("Get the list of the keys");
+  auto_def(cls, "SetKeys", &AMSession::SetKeys)
+      .arg("keys")
+      .doc("Set the list of the keys");
+  auto_def(cls, "GetState", &AMSession::GetState)
+      .doc("Get the cached state of the session");
+  auto_def(cls, "BaseCheck", &AMSession::BaseCheck)
+      .doc("Attemp to stat home path to test the connection");
+  auto_def(cls, "BaseConnect", &AMSession::BaseConnect)
+      .doc("Establish ssh ssesion and sftp");
+  auto_def(cls, "GetLastEC", &AMSession::GetLastEC)
+      .doc("Get the last error code of the session");
+  auto_def(cls, "GetLastErrorMsg", &AMSession::GetLastErrorMsg)
+      .doc("Get the last error message of the session");
+  cls.def("SetAuthCallback", &AMSession::SetAuthCallback,
+          py::arg("auth_cb") = py::none());
+}
+
+void BindAMSFTPClient(py::module &m) {
+  auto cls = py::class_<AMSFTPClient, std::shared_ptr<AMSFTPClient>, AMSession>(
+      m, "AMSFTPClient", "An SFTP Client Class Based on libssh2");
+  cls.def(py::init<const ConRequst &, const std::vector<std::string> &,
+                   unsigned int, py::object, py::object>(),
+          py::arg("request"), py::arg("keys"), py::arg("tracer_capacity") = 10,
+          py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none());
+  auto_def(cls, "GetOSType", &AMSFTPClient::GetOSType)
+      .doc("Get the OS type of the server");
+  auto_def(cls, "GetHomeDir", &AMSFTPClient::GetHomeDir);
+  auto_def(cls, "Check", &AMSFTPClient::Check)
+      .arg("need_trace", false)
+      .doc("Check will force to update state, use GetState to get the cached "
+           "state");
+  auto_def(cls, "Connect", &AMSFTPClient::Connect)
+      .arg("force", false)
+      .doc("if force=True, will disconnect and reconnect, else will check "
+           "first, if wrong then reconnect");
+  auto_def(cls, "GetTrashDir", &AMSFTPClient::GetTrashDir);
+  auto_def(cls, "SetTrashDir", &AMSFTPClient::SetTrashDir)
+      .arg("trash_dir", "")
+      .doc("Set the trash directory and create it if it doesn't exist, if "
+           "wrong, will return error");
+
+  auto_def(cls, "EnsureTrashDir", &AMSFTPClient::EnsureTrashDir)
+      .doc("Ensure the trash directory exists, if not, create it. If path is "
+           "empty, will use default trash directory");
+  auto_def(cls, "realpath", &AMSFTPClient::realpath)
+      .arg("path", "")
+      .doc("Use server to parse the path, ~ parsed in local, symlink parsed in "
+           "server");
+  auto_def(cls, "chmod", &AMSFTPClient::chmod)
+      .arg("path", "")
+      .arg("mode")
+      .doc("Recursive change the mode of the file");
+  auto_def(cls, "stat", &AMSFTPClient::stat)
+      .arg("path")
+      .doc("Get the detailed information about the file");
+  auto_def(cls, "listdir", &AMSFTPClient::listdir)
+      .arg("path")
+      .arg("max_time_ms", -1)
+      .doc("List directory contents");
+  auto_def(cls, "exists", &AMSFTPClient::exists)
+      .arg("path")
+      .doc("Check if path exists");
+  auto_def(cls, "is_regular", &AMSFTPClient::is_regular)
+      .arg("path")
+      .doc("Check if path is a regular file");
+  auto_def(cls, "is_dir", &AMSFTPClient::is_dir)
+      .arg("path")
+      .doc("Check if path is a directory");
+  auto_def(cls, "is_symlink", &AMSFTPClient::is_symlink)
+      .arg("path")
+      .doc("Check if path is a symlink");
+  auto_def(cls, "get_path_type", &AMSFTPClient::get_path_type)
+      .arg("path")
+      .doc("Get the type of the path");
+  auto_def(cls, "mkdir", &AMSFTPClient::mkdir)
+      .arg("path")
+      .doc("Create a directory");
+  auto_def(cls, "mkdirs", &AMSFTPClient::mkdirs)
+      .arg("path")
+      .doc("Create directories recursively");
+  auto_def(cls, "rmdir", &AMSFTPClient::rmdir)
+      .arg("path")
+      .doc("Remove an empty directory");
+  auto_def(cls, "rmfile", &AMSFTPClient::rmfile)
+      .arg("path")
+      .doc("Remove a file permanently");
+  auto_def(cls, "remove", &AMSFTPClient::remove)
+      .arg("path")
+      .doc("Remove file or directory recursively");
+  auto_def(cls, "saferm", &AMSFTPClient::saferm)
+      .arg("path")
+      .doc("Safely remove by moving to trash");
+  auto_def(cls, "rename", &AMSFTPClient::rename)
+      .arg("src")
+      .arg("dst")
+      .arg("overwrite", false)
+      .doc("Rename file/directory");
+  auto_def(cls, "move", &AMSFTPClient::move)
+      .arg("src")
+      .arg("dst")
+      .arg("need_mkdir", false)
+      .arg("force_write", false)
+      .doc("Move file/directory to destination folder");
+  auto_def(cls, "copy", &AMSFTPClient::copy)
+      .arg("src")
+      .arg("dst")
+      .arg("need_mkdir", false)
+      .doc("Copy file/directory on remote server using shell command");
+  auto_def(cls, "getsize", &AMSFTPClient::getsize)
+      .arg("path")
+      .arg("ignore_special_file", true)
+      .doc("Get total size of file or directory");
+  auto_def(cls, "walk", &AMSFTPClient::walk)
+      .arg("path")
+      .arg("max_depth", -1)
+      .arg("ignore_special_file", true)
+      .doc("Walk directory tree, returns list of (dirpath, files) tuples");
+  auto_def(cls, "iwalk", &AMSFTPClient::iwalk)
+      .arg("path")
+      .arg("ignore_special_file", true)
+      .doc("Deep walk to get all leaf paths");
+  auto_def(cls, "ConductCmd", &AMSFTPClient::ConductCmd)
+      .arg("cmd")
+      .arg("max_time_s", -1)
+      .doc("Execute shell command on remote server");
+  auto_def(cls, "TerminateCmd", &AMSFTPClient::TerminateCmd)
+      .doc("Terminate currently running command");
+  auto_def(cls, "GetRTT", &AMSFTPClient::GetRTT)
+      .arg("times", 5)
+      .doc("Get round-trip time to server");
+}
+
+void BindAMFTPClient(py::module &m) {
+  auto cls = py::class_<AMFTPClient, std::shared_ptr<AMFTPClient>, BaseClient>(
+      m, "AMFTPClient", "An FTP Client Class Based on libcurl");
+  cls.def(py::init<ConRequst, size_t, py::object>(), py::arg("request"),
+          py::arg("buffer_capacity") = 10, py::arg("trace_cb") = py::none());
+
+  auto_def(cls, "Check", &AMFTPClient::Check)
+      .arg("need_trace", false)
+      .doc("Check FTP connection status");
+  auto_def(cls, "Connect", &AMFTPClient::Connect)
+      .arg("force", false)
+      .doc("Connect to FTP server");
+  auto_def(cls, "listdir", &AMFTPClient::listdir)
+      .arg("path")
+      .arg("max_time_ms", -1)
+      .doc("List directory contents");
+  auto_def(cls, "stat", &AMFTPClient::stat)
+      .arg("path")
+      .doc("Get file information");
+  auto_def(cls, "exists", &AMFTPClient::exists)
+      .arg("path")
+      .doc("Check if path exists");
+  auto_def(cls, "is_dir", &AMFTPClient::is_dir)
+      .arg("path")
+      .doc("Check if path is a directory");
+  auto_def(cls, "mkdir", &AMFTPClient::mkdir)
+      .arg("path")
+      .doc("Create a directory");
+  auto_def(cls, "mkdirs", &AMFTPClient::mkdirs)
+      .arg("path")
+      .doc("Create directories recursively");
+  auto_def(cls, "rmdir", &AMFTPClient::rmdir)
+      .arg("path")
+      .doc("Remove an empty directory");
+}
+
+void BindHostMaintainer(py::module &m) {
+  auto cls = py::class_<HostMaintainer, std::shared_ptr<HostMaintainer>>(
+      m, "HostMaintainer", "Host Connection Manager with Heartbeat");
+  cls.def(py::init<int, py::object>(), py::arg("heartbeat_interval_s") = 60,
+          py::arg("disconnect_cb") = py::none(),
+          "Create host maintainer with heartbeat monitoring");
+
+  cls.def("get_hosts", &HostMaintainer::get_hosts,
+          "Get list of all registered host nicknames");
+  cls.def("get_clients", &HostMaintainer::get_clients,
+          "Get list of all registered clients");
+  cls.def("add_host", &HostMaintainer::add_host, py::arg("nickname"),
+          py::arg("client"), py::arg("overwrite") = false,
+          "Add a host client to the maintainer");
+  cls.def("remove_host", &HostMaintainer::remove_host, py::arg("nickname"),
+          "Remove a host from the maintainer");
+  cls.def("get_host", &HostMaintainer::get_host, py::arg("nickname"),
+          "Get a host client by nickname");
+  cls.def("test_host", &HostMaintainer::test_host, py::arg("nickname"),
+          py::arg("update") = false, "Test host connection status");
+}
+
+void BindAMSFTPWorker(py::module &m) {
+  auto cls = py::class_<AMSFTPWorker, std::shared_ptr<AMSFTPWorker>>(
+      m, "AMSFTPWorker", "High-performance file transfer worker");
+  cls.def(py::init<const TransferCallback &, float>(), py::arg("callback"),
+          py::arg("cb_interval_s") = 0.2f,
+          "Create transfer worker with callback");
+
+  cls.def("SetState", &AMSFTPWorker::SetState, py::arg("state"),
+          "Set transfer state");
+  cls.def("GetState", &AMSFTPWorker::GetState, "Get current transfer state");
+  cls.def("EraseOverlapTasks", &AMSFTPWorker::EraseOverlapTasks,
+          py::arg("tasks"), "Remove duplicate tasks from list");
+  cls.def("transfer", &AMSFTPWorker::transfer, py::arg("tasks"),
+          py::arg("hostm"), py::arg("buffer_size") = -1,
+          "Execute batch file transfers");
+
+  // Public members
+  cls.def_readwrite("callback", &AMSFTPWorker::callback,
+                    "Transfer callback object");
+  // pd is not bound because ProgressData cannot be copied
+}
+
+} // namespace AMBIDINGS
 PYBIND11_MODULE(AMSFTP, m) {
   m.doc() = "A SFTP Client Module Based on libssh2";
   auto em = m.def_submodule("AMEnum", "Enum Classes");
   auto data = m.def_submodule("AMData", "Data Classes");
-  auto fs = m.def_submodule("AMFS", "Local Filesystem Operations");
-
-  bool expected = false;
-  if (std::atomic_compare_exchange_strong(&is_wsa_initialized, &expected,
-                                          true)) {
-    WSADATA wsaData;
-    int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
-    if (result != 0) {
-      throw std::runtime_error("WSAStartup failed");
-    }
-    is_wsa_initialized = true;
-    m.add_object("_cleanup", py::capsule(cleanup_wsa));
-  }
-
-  py::enum_<ErrorCode>(em, "ErrorCode",
-                       "Uniform Error Code for the whole module")
-      .value("Success", ErrorCode::Success)
-      .value("SessionCreateError", ErrorCode::SessionGenericError,
-             "Negative code represent libssh2 session error")
-      .value("NoBannerRecv", ErrorCode::NoBannerRecv)
-      .value("BannerSendError", ErrorCode::BannerSendError)
-      .value("InvalidMacAdress", ErrorCode::InvalidMacAdress)
-      .value("KeyExchangeMethodNegotiationFailed",
-             ErrorCode::KeyExchangeMethodNegotiationFailed)
-      .value("MemAllocError", ErrorCode::MemAllocError)
-      .value("SocketSendError", ErrorCode::SocketSendError)
-      .value("KeyExchangeFailed", ErrorCode::KeyExchangeFailed)
-      .value("OperationTimeout", ErrorCode::OperationTimeout)
-      .value("HostkeyInitFailed", ErrorCode::HostkeyInitFailed)
-      .value("HostkeySignFailed", ErrorCode::HostkeySignFailed)
-      .value("DataDecryptError", ErrorCode::DataDecryptError)
-      .value("SocketDisconnect", ErrorCode::SocketDisconnect)
-      .value("SSHProtocolError", ErrorCode::SSHProtocolError)
-      .value("PasswordExpired", ErrorCode::PasswordExpired)
-      .value("LocalFileError", ErrorCode::LocalFileError)
-      .value("NoAuthMethod", ErrorCode::NoAuthMethod)
-      .value("AuthFailed", ErrorCode::AuthFailed)
-      .value("PublickeyAuthFailed", ErrorCode::PublickeyAuthFailed)
-      .value("ChannelOrderError", ErrorCode::ChannelOrderError)
-      .value("ChannelOperationError", ErrorCode::ChannelOperationError)
-      .value("ChannelRequestDenied", ErrorCode::ChannelRequestDenied)
-      .value("ChannelWindowExceeded", ErrorCode::ChannelWindowExceeded)
-      .value("ChannelPacketOversize", ErrorCode::ChannelPacketOversize)
-      .value("ChannelClosed", ErrorCode::ChannelClosed)
-      .value("ChannelAlreadySendEOF", ErrorCode::ChannelAlreadySendEOF)
-      .value("SCPProtocolError", ErrorCode::SCPProtocolError)
-      .value("ZlibCompressError", ErrorCode::ZlibCompressError)
-      .value("SocketOperationTimeout", ErrorCode::SocketOperationTimeout)
-      .value("SftpProtocolError", ErrorCode::SftpProtocolError)
-      .value("RequestDenied", ErrorCode::RequestDenied)
-      .value("InvalidArg", ErrorCode::InvalidArg)
-      .value("InvalidPollType", ErrorCode::InvalidPollType)
-      .value("PublicKeyProtocolError", ErrorCode::PublicKeyProtocolError)
-      .value("SSHEAGAIN", ErrorCode::SSHEAGAIN)
-      .value("BufferTooSmall", ErrorCode::BufferTooSmall)
-      .value("BadOperationOrder", ErrorCode::BadOperationOrder)
-      .value("CompressionError", ErrorCode::CompressionError)
-      .value("PointerOverflow", ErrorCode::PointerOverflow)
-      .value("SSHAgentProtocolError", ErrorCode::SSHAgentProtocolError)
-      .value("SocketRecvError", ErrorCode::SocketRecvError)
-      .value("DataEncryptError", ErrorCode::DataEncryptError)
-      .value("InvalidSocketType", ErrorCode::InvalidSocketType)
-      .value("HostFingerprintMismatch", ErrorCode::HostFingerprintMismatch)
-      .value("ChannelWindowFull", ErrorCode::ChannelWindowFull)
-      .value("PrivateKeyAuthFailed", ErrorCode::PrivateKeyAuthFailed)
-      .value("RandomGenError", ErrorCode::RandomGenError)
-      .value("MissingUserAuthBanner", ErrorCode::MissingUserAuthBanner)
-      .value("AlgorithmUnsupported", ErrorCode::AlgorithmUnsupported)
-      .value("MacAuthFailed", ErrorCode::MacAuthFailed)
-      .value("HashInitError", ErrorCode::HashInitError)
-      .value("HashCalculateError", ErrorCode::HashCalculateError)
-      // positive code represent libssh2 sftp error
-      .value("EndOfFile", ErrorCode::EndOfFile,
-             "Positive code represent libssh2 sftp error")
-      .value("FileNotExist", ErrorCode::FileNotExist)
-      .value("PermissionDenied", ErrorCode::PermissionDenied)
-      .value("CommonFailure", ErrorCode::CommonFailure)
-      .value("BadMessageFormat", ErrorCode::BadMessageFormat)
-      .value("NoConnection", ErrorCode::NoConnection)
-      .value("ConnectionLost", ErrorCode::ConnectionLost)
-      .value("OperationUnsupported", ErrorCode::OperationUnsupported)
-      .value("InvalidHandle", ErrorCode::InvalidHandle)
-      .value("PathNotExist", ErrorCode::PathNotExist)
-      .value("PathAlreadyExists", ErrorCode::PathAlreadyExists)
-      .value("FileWriteProtected", ErrorCode::FileWriteProtected)
-      .value("StorageMediaUnavailable", ErrorCode::StorageMediaUnavailable)
-      .value("FilesystemNoSpace", ErrorCode::FilesystemNoSpace)
-      .value("SpaceQuotaExceed", ErrorCode::SpaceQuotaExceed)
-      .value("UsernameNotExists", ErrorCode::UsernameNotExists)
-      .value("PathUsingByOthers", ErrorCode::PathUsingByOthers)
-      .value("DirNotEmpty", ErrorCode::DirNotEmpty)
-      .value("NotADirectory", ErrorCode::NotADirectory)
-      .value("InvalidFilename", ErrorCode::InvalidFilename)
-      .value("SymlinkLoop", ErrorCode::SymlinkLoop)
-      // following codes are AM Custom Error
-      .value("UnknownError", ErrorCode::UnknownError,
-             "Code greater than 22 are AM Custom Error")
-      .value("SocketCreateError", ErrorCode::SocketCreateError)
-      .value("SocketConnectTimeout", ErrorCode::SocketConnectTimeout)
-      .value("SocketConnectFailed", ErrorCode::SocketConnectFailed)
-      .value("SessionCreateFailed", ErrorCode::SessionCreateFailed)
-      .value("SessionHandshakeFailed", ErrorCode::SessionHandshakeFailed)
-      .value("NoSession", ErrorCode::NoSession)
-      .value("NotAFile", ErrorCode::NotAFile)
-      .value("ParentDirectoryNotExist", ErrorCode::ParentDirectoryNotExist)
-      .value("InhostCopyFailed", ErrorCode::InhostCopyFailed)
-      .value("LocalFileMapError", ErrorCode::LocalFileMapError)
-      .value("UnexpectedEOF", ErrorCode::UnexpectedEOF)
-      .value("Terminate", ErrorCode::Terminate)
-      .value("UnImplentedMethod", ErrorCode::UnImplentedMethod)
-      .value("NoPermissionAttribute", ErrorCode::NoPermissionAttribute)
-      .value("LocalStatError", ErrorCode::LocalStatError)
-      .value("TransferPause", ErrorCode::TransferPause)
-      .value("DNSResolveError", ErrorCode::DNSResolveError)
-      .value("ClientNotFound", ErrorCode::ClientNotFound)
-      .value("DeepcopyFunctionNotAvailable",
-             ErrorCode::DeepcopyFunctionNotAvailable)
-      .value("KeyAlreadyExists", ErrorCode::KeyAlreadyExists)
-      .value("DeepcopyFailed", ErrorCode::DeepcopyFailed);
-
-  py::enum_<OS_TYPE>(em, "OS_TYPE", "System OS Type Enum")
-      .value("Windows", OS_TYPE::Windows)
-      .value("Linux", OS_TYPE::Linux)
-      .value("MacOS", OS_TYPE::MacOS)
-      .value("FreeBSD", OS_TYPE::FreeBSD)
-      .value("Unix", OS_TYPE::Unix)
-      .value("Unknown", OS_TYPE::Unknown)
-      .value("Uncertain", OS_TYPE::Uncertain, "Set when get OS type failed");
-
-  py::enum_<TraceLevel>(em, "TraceLevel")
-      .value("Info", TraceLevel::Info)
-      .value("Debug", TraceLevel::Debug)
-      .value("Warning", TraceLevel::Warning)
-      .value("Error", TraceLevel::Error)
-      .value("Critical", TraceLevel::Critical);
-
-  py::enum_<PathType>(em, "PathType")
-      .value("DIR", PathType::DIR)
-      .value("FILE", PathType::FILE)
-      .value("SYMLINK", PathType::SYMLINK)
-      .value("BLOCK_DEVICE", PathType::BlockDevice)
-      .value("CHARACTER_DEVICE", PathType::CharacterDevice)
-      .value("SOCKET", PathType::Socket)
-      .value("FIFO", PathType::FIFO)
-      .value("UNKNOWN", PathType::Unknown);
-
-  py::enum_<TransferControl>(
-      em, "TransferControl",
-      "Using in progress callback to control the transfer task")
-      .value("Pause", TransferControl::Pause)
-      .value("Terminate", TransferControl::Terminate);
-
-  py::enum_<AMFS::SearchType>(em, "SearchType", "Search Type Enum")
-      .value("All", AMFS::SearchType::All)
-      .value("File", AMFS::SearchType::File)
-      .value("Directory", AMFS::SearchType::Directory);
-
-  py::class_<ConRequst, std::shared_ptr<ConRequst>>(
-      data, "ConRequst", "Connection Request DataClass")
-      .def(py::init<std::string, std::string, std::string, int, std::string,
-                    std::string, bool, size_t, std::string>(),
-           py::arg("nickname"), py::arg("hostname"), py::arg("username"),
-           py::arg("port"), py::arg("password") = "", py::arg("keyfile") = "",
-           py::arg("compression") = false, py::arg("timeout_s") = 3,
-           py::arg("trash_dir") = "")
-      .def_readwrite("nickname", &ConRequst::nickname,
-                     "Unique nickname for the host and connection")
-      .def_readwrite("hostname", &ConRequst::hostname,
-                     "Hostname or IP address of the remote server")
-      .def_readwrite("username", &ConRequst::username,
-                     "Username for authentication")
-      .def_readwrite("password", &ConRequst::password,
-                     "Password for authentication, if not provided, public key "
-                     "authentication will be used")
-      .def_readwrite("port", &ConRequst::port,
-                     "Port number of the remote server, default is 22")
-      .def_readwrite("compression", &ConRequst::compression,
-                     "Whether to use compression, default is false")
-      .def_readwrite("timeout_s", &ConRequst::timeout_s,
-                     "Timeout in seconds, default is 3")
-      .def_readwrite("trash_dir", &ConRequst::trash_dir,
-                     "Trash directory for failed transfers, default is empty")
-      .def_readwrite("keyfile", &ConRequst::keyfile,
-                     "Dedicated key file for this host");
-
-  py::class_<TransferCallback, std::shared_ptr<TransferCallback>>(
-      data, "TransferCallback", "Callback function Gather")
-      .def(py::init<py::object, py::object, py::object>(),
-           py::arg("total_size") = py::none(), py::arg("error") = py::none(),
-           py::arg("progress") = py::none())
-      .def("SetErrorCB", &TransferCallback::SetErrorCB,
-           py::arg("error") = py::none(), "callable[[ErrorCBInfo], None]")
-      .def("SetProgressCB", &TransferCallback::SetProgressCB,
-           py::arg("progress") = py::none(),
-           "callable[[ProgressCBInfo], Optional[TransferControl]]")
-      .def("SetTotalSizeCB", &TransferCallback::SetTotalSizeCB,
-           py::arg("total_size") = py::none(), "callable[[int], None]");
-
-  py::class_<ProgressCBInfo, std::shared_ptr<ProgressCBInfo>>(
-      data, "ProgressCBInfo", "Progress Callback Info DataClass")
-      .def(py::init<std::string, std::string, std::string, std::string,
-                    uint64_t, uint64_t, uint64_t, uint64_t>(),
-           py::arg("src"), py::arg("dst"), py::arg("src_host"),
-           py::arg("dst_host"), py::arg("this_size"), py::arg("file_size"),
-           py::arg("accumulated_size"), py::arg("total_size"))
-      .def_readwrite("src", &ProgressCBInfo::src)
-      .def_readwrite("dst", &ProgressCBInfo::dst)
-      .def_readwrite("src_host", &ProgressCBInfo::src_host)
-      .def_readwrite("dst_host", &ProgressCBInfo::dst_host)
-      .def_readwrite("this_size", &ProgressCBInfo::this_size,
-                     "Size of the current file transfered")
-      .def_readwrite("file_size", &ProgressCBInfo::file_size)
-      .def_readwrite("accumulated_size", &ProgressCBInfo::accumulated_size,
-                     "Size of the total files transfered")
-      .def_readwrite("total_size", &ProgressCBInfo::total_size);
-
-  py::class_<ErrorCBInfo, std::shared_ptr<ErrorCBInfo>>(data, "ErrorCBInfo")
-      .def(py::init<ECM, std::string, std::string, std::string, std::string>(),
-           py::arg("ecm"), py::arg("src"), py::arg("dst"), py::arg("src_host"),
-           py::arg("dst_host"))
-      .def_readwrite("ecm", &ErrorCBInfo::ecm)
-      .def_readwrite("src", &ErrorCBInfo::src)
-      .def_readwrite("dst", &ErrorCBInfo::dst)
-      .def_readwrite("src_host", &ErrorCBInfo::src_host)
-      .def_readwrite("dst_host", &ErrorCBInfo::dst_host);
-
-  py::class_<AuthCBInfo, std::shared_ptr<AuthCBInfo>>(data, "AuthCBInfo")
-      .def(py::init<bool, ConRequst, int>(), py::arg("NeedPassword"),
-           py::arg("request"), py::arg("trial_times"))
-      .def_readwrite("NeedPassword", &AuthCBInfo::NeedPassword,
-                     "If true, python password callback need to return "
-                     "password, if false, callback function just "
-                     "tells you the password is wrong")
-      .def_readwrite("request", &AuthCBInfo::request, "Connection request data")
-      .def_readwrite("trial_times", &AuthCBInfo::trial_times,
-                     "Number of times the password has been tried");
-
-  py::class_<TransferTask, std::shared_ptr<TransferTask>>(data, "TransferTask")
-      .def(py::init<std::string, std::string, std::string, std::string,
-                    uint64_t, PathType, bool>(),
-           py::arg("src"), py::arg("src_host"), py::arg("dst"),
-           py::arg("dst_host"), py::arg("size"),
-           py::arg("path_type") = PathType::FILE, py::arg("overwrite") = false)
-      .def_readwrite("src", &TransferTask::src)
-      .def_readwrite("src_host", &TransferTask::src_host)
-      .def_readwrite("dst", &TransferTask::dst)
-      .def_readwrite("dst_host", &TransferTask::dst_host)
-      .def_readwrite("size", &TransferTask::size)
-      .def_readwrite("path_type", &TransferTask::path_type)
-      .def_readwrite("IsSuccess", &TransferTask::IsSuccess)
-      .def_readwrite("rc", &TransferTask::rc)
-      .def_readwrite("overwrite", &TransferTask::overwrite);
-
-  py::class_<TraceInfo, std::shared_ptr<TraceInfo>>(
-      data, "TraceInfo", "Trace Information DataClass")
-      .def(py::init<TraceLevel, ErrorCode, std::string, std::string,
-                    std::string, std::string>(),
-           py::arg("level"), py::arg("error_code"), py::arg("nickname"),
-           py::arg("target"), py::arg("action"), py::arg("message"))
-      .def_readwrite("level", &TraceInfo::level)
-      .def_readwrite("error_code", &TraceInfo::error_code)
-      .def_readwrite("nickname", &TraceInfo::nickname)
-      .def_readwrite("target", &TraceInfo::target)
-      .def_readwrite("action", &TraceInfo::action)
-      .def_readwrite("message", &TraceInfo::message)
-      .def_readwrite("timestamp", &TraceInfo::timestamp);
-
-  py::class_<PathInfo, std::shared_ptr<PathInfo>>(data, "PathInfo",
-                                                  "Path Information DataClass")
-      .def(
-          py::init<std::string, std::string, std::string, std::string, uint64_t,
-                   double, double, double, PathType, uint64_t, std::string>(),
-          py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("owner"),
-          py::arg("size"), py::arg("create_time"), py::arg("access_time"),
-          py::arg("modify_time"), py::arg("path_type") = PathType::FILE,
-          py::arg("mode_int") = 0777, py::arg("mode_str") = "rwxrwxrwx")
-      .def_readwrite("name", &PathInfo::name)
-      .def_readwrite("path", &PathInfo::path)
-      .def_readwrite("dir", &PathInfo::dir)
-      .def_readwrite("owner", &PathInfo::owner)
-      .def_readwrite("size", &PathInfo::size)
-      .def_readwrite("create_time", &PathInfo::create_time,
-                     "Only Windows and MacOS has this attribute")
-      .def_readwrite("access_time", &PathInfo::access_time)
-      .def_readwrite("modify_time", &PathInfo::modify_time)
-      .def_readwrite("type", &PathInfo::type)
-      .def_readwrite("mode_int", &PathInfo::mode_int)
-      .def_readwrite(
-          "mode_str", &PathInfo::mode_str,
-          "The mode of the path, like [rwxrwxrwx], [onwer、group、others]");
-
-  py::class_<AMTracer, std::shared_ptr<AMTracer>>(data, "AMTracer",
-                                                  "Trace Buffer Class")
-      .def(py::init<ConRequst, size_t, py::object>(), py::arg("request"),
-           py::arg("buffer_capacity") = 10, py::arg("trace_cb") = py::none())
-      .def("GetTracerSize", &AMTracer::GetTracerSize,
-           "Get the size of the tracer")
-      .def("GetTracerCapacity", &AMTracer::GetTracerCapacity,
-           "Get the capacity of the tracer")
-      .def("LastTrace", &AMTracer::LastTrace,
-           "Get the last trace error, return Optional[TraceInfo]")
-      .def("GetAllTraces", &AMTracer::GetAllTraces,
-           "Get all trace errors, return list[TraceInfo]")
-      .def("ClearTracer", &AMTracer::ClearTracer, "Clear the tracer")
-      .def("SetTracerCapacity", &AMTracer::SetTracerCapacity,
-           py::arg("capacity"), "Set the capacity of the tracer")
-      .def("trace",
-           py::overload_cast<const TraceLevel &, const ErrorCode &,
-                             const std::string &, const std::string &,
-                             const std::string &>(&AMTracer::trace),
-           py::arg("trace_info"), py::arg("error_code"), py::arg("target"),
-           py::arg("action"), py::arg("msg"), "Trace a message")
-      .def("trace", py::overload_cast<const TraceInfo &>(&AMTracer::trace),
-           py::arg("trace_info"), "Trace a message")
-      .def("SetPyTrace", &AMTracer::SetPyTrace,
-           py::arg("trace_cb") = py::none(),
-           "Set the python trace callback, callable[TraceInfo, None]");
-  py::class_<BaseClient, std::shared_ptr<BaseClient>, AMTracer>(m, "BaseClient")
-      .def(py::init<ConRequst, size_t, py::object>(), py::arg("request"),
-           py::arg("buffer_capacity") = 10, py::arg("trace_cb") = py::none());
-
-  py::class_<AMSession, std::shared_ptr<AMSession>, BaseClient>(m, "AMSession",
-                                                                "Session Class")
-      .def(py::init<ConRequst, std::vector<std::string>, unsigned int,
-                    py::object, py::object>(),
-           py::arg("request"), py::arg("keys"), py::arg("error_num") = 10,
-           py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
-      .def("GetNickname", &AMSession::GetNickname,
-           "Get the nickname of the session")
-      .def("GetRequest", &AMSession::GetRequest, "Get the request data")
-      .def("IsValidKey", &AMSession::IsValidKey, py::arg("key"),
-           "Check whether a file is a valid private key file")
-      .def("GetKeys", &AMSession::GetKeys,
-           "Get all shared private keys of the session")
-      .def("SetKeys", &AMSession::SetKeys, py::arg("keys"),
-           "Set shared private keys")
-      .def("GetState", &AMSession::GetState,
-           "Get the current state of the session")
-      .def("Check", &AMSession::Check,
-           "Realtime check the session status and update the state",
-           py::arg("need_trace") = false)
-      .def("BaseConnect", &AMSession::BaseConnect, py::arg("force") = false,
-           "Connect to the session, force will force to reconnect even if the "
-           "session is already connected")
-      .def("GetLastEC", &AMSession::GetLastEC,
-           "Get the last error code of the session")
-      .def("GetLastErrorMsg", &AMSession::GetLastErrorMsg,
-           "Get the last error message of the session")
-      .def("Disconnect", &AMSession::Disconnect, "Disconnect the session")
-      .def("SetAuthCallback", &AMSession::SetAuthCallback,
-           py::arg("auth_cb") = py::none(),
-           "When password authentication is needed, this callback will be "
-           "called, callable[[AuthCBInfo], bool]");
-
-  py::class_<AMFS::BasePathMatch, std::shared_ptr<AMFS::BasePathMatch>>(
-      fs, "BasePathMatch", "Base Path Match Class")
-      .def("str_match", &AMFS::BasePathMatch::str_match, py::arg("name"),
-           py::arg("pattern"))
-      .def("name_match", &AMFS::BasePathMatch::name_match, py::arg("name"),
-           py::arg("pattern"))
-      .def("walk_match", &AMFS::BasePathMatch::walk_match, py::arg("parts"),
-           py::arg("match_parts"))
-      .def("find", &AMFS::BasePathMatch::find, py::arg("path"),
-           py::arg("type") = AMFS::SearchType::All);
-
-  py::class_<AMFS::PathMatch, std::shared_ptr<AMFS::PathMatch>,
-             AMFS::BasePathMatch>(fs, "PathMatch", "Path Match Class")
-      .def(py::init<>());
-
-  py::class_<AMSFTPClient, std::shared_ptr<AMSFTPClient>, BaseClient,
-             AMFS::BasePathMatch>(m, "AMSFTPClient", "Core SFTP Client Class")
-      .def(py::init<ConRequst, std::vector<std::string>, unsigned int,
-                    py::object, py::object>(),
-           py::arg("request"), py::arg("keys"), py::arg("error_num") = 10,
-           py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none())
-      .def(
-          "SetPublicVar", &AMSFTPClient::SetPublicVar, py::arg("key"),
-          py::arg("value"), py::arg("overwrite") = false,
-          "Store a Python object in C++ side with deep copy, C++ owns the copy")
-      .def("GetPublicVar", &AMSFTPClient::GetPublicVar, py::arg("key"),
-           py::arg("default") = py::none(),
-           "Get a stored Python object, returns a deep copy")
-      .def("DelPublicVar", &AMSFTPClient::DelPublicVar, py::arg("key"),
-           "Delete a stored Python object, returns True if deleted")
-      .def("ClearPublicVar", &AMSFTPClient::ClearPublicVar,
-           "Clear all stored Python objects")
-      .def("GetAllPublicVars", &AMSFTPClient::GetAllPublicVars,
-           "Get all stored Python objects as a dictionary with deep copies")
-      .def("StrUid", &AMSFTPClient::StrUid, py::arg("uid"),
-           "Convert a uid to a string")
-      .def("GetHomeDir", &AMSFTPClient::GetHomeDir, "Get the home directory")
-      .def("Connect", &AMSFTPClient::Connect, py::arg("force") = false,
-           "Wrapper of BaseConnect, will get OS type and home directory if "
-           "conducted the first time")
-      .def("GetTrashDir", &AMSFTPClient::GetTrashDir, "Get the trash directory")
-      .def("SetTrashDir", &AMSFTPClient::SetTrashDir, py::arg("trash_dir") = "",
-           "Set the trash directory and create it if it doesn't exist")
-      .def("EnsureTrashDir", &AMSFTPClient::EnsureTrashDir)
-      .def("realpath", &AMSFTPClient::realpath, py::arg("path"),
-           "Parse and return the absolute path, ~ in client will be parsed, .. "
-           "and . will be parsed by server, if "
-           "there are these symbols, the path must exist")
-      .def("chmod", &AMSFTPClient::chmod, py::arg("path"), py::arg("mode"),
-           py::arg("recursive") = false)
-      .def("stat", &AMSFTPClient::stat, py::arg("path"))
-      .def("get_path_type", &AMSFTPClient::get_path_type, py::arg("path"))
-      .def("exists", &AMSFTPClient::exists, py::arg("path"))
-      .def("is_regular", &AMSFTPClient::is_regular, py::arg("path"))
-      .def("is_dir", &AMSFTPClient::is_dir, py::arg("path"))
-      .def("is_symlink", &AMSFTPClient::is_symlink, py::arg("path"))
-      .def("listdir", &AMSFTPClient::listdir, py::arg("path"),
-           py::arg("max_time_ms") = -1)
-      .def("iterator_listdir", &AMSFTPClient::iterator_listdir, py::arg("path"),
-           "Return an iterator that yields PathInfo one by one, useful for "
-           "large directories")
-      .def("mkdir", &AMSFTPClient::mkdir, py::arg("path"))
-      .def("mkdirs", &AMSFTPClient::mkdirs, py::arg("path"))
-      .def("rmfile", &AMSFTPClient::rmfile, py::arg("path"))
-      .def("rmdir", &AMSFTPClient::rmdir, py::arg("path"))
-      .def("remove", &AMSFTPClient::remove, py::arg("path"),
-           "Permanently remove a file or directory, if return (ErrorCode, "
-           "str), the whole operation failed, "
-           "otherwise return list[tuple[str, tuple[ErrorCode, str]]], means "
-           "some paths failed to remove")
-      .def("rename", &AMSFTPClient::rename, py::arg("src"), py::arg("dst"),
-           py::arg("overwrite") = false,
-           "Turn src_path into dst_path, if overwrite is true, the dst_path "
-           "will be overwritten")
-      .def("saferm", &AMSFTPClient::saferm, py::arg("path"),
-           "Not real remove, just move it to "
-           "{trash_dir}/{year-month-day-hour-minute-second}/{pathname}")
-      .def("move", &AMSFTPClient::move, py::arg("src"), py::arg("dst"),
-           py::arg("need_mkdir") = false, py::arg("force_write") = false,
-           "Move source path src to Destination Directory dst")
-      .def("copy", &AMSFTPClient::copy, py::arg("src"), py::arg("dst"),
-           py::arg("need_mkdir") = false,
-           "Unstable, using shell command to copy")
-      .def("iwalk", &AMSFTPClient::iwalk, py::arg("path"),
-           py::arg("ignore_sepcial_file") = true,
-           "Recursive walk the path, ignore path structure, just return "
-           "list[PathInfo]")
-      .def("walk", &AMSFTPClient::walk, py::arg("path"),
-           py::arg("max_depth") = -1, py::arg("ignore_sepcial_file") = true,
-           "Recursive walk the path, record parent dir, return "
-           "list[tuple[list[str],PathInfo]]")
-      .def("getsize", &AMSFTPClient::getsize, py::arg("path"),
-           py::arg("ignore_sepcial_file") = true)
-      .def(
-          "SetPublicVar", &AMSFTPClient::SetPublicVar, py::arg("key"),
-          py::arg("value"), py::arg("overwrite") = false,
-          "Store a Python object in C++ side with deep copy, C++ owns the copy")
-      .def("GetPublicVar", &AMSFTPClient::GetPublicVar, py::arg("key"),
-           py::arg("default_value") = py::none(),
-           "Get a stored Python object, returns a deep copy")
-      .def("DelPublicVar", &AMSFTPClient::DelPublicVar, py::arg("key"),
-           "Delete a stored Python object, returns True if deleted")
-      .def("ClearPublicVar", &AMSFTPClient::ClearPublicVar,
-           "Clear all stored Python objects")
-      .def("GetAllPublicVars", &AMSFTPClient::GetAllPublicVars,
-           "Get all stored Python objects as a dictionary with deep copies");
-
-  py::class_<AMFTPClient, std::shared_ptr<AMFTPClient>, AMFS::BasePathMatch>(
-      m, "AMFTPClient", "FTP Client Class Based on libcurl")
-      .def(py::init<ConRequst, size_t, py::object>(), py::arg("request"),
-           py::arg("buffer_capacity") = 10, py::arg("trace_cb") = py::none(),
-           "Create an FTP client instance")
-      .def(
-          "Connect", &AMFTPClient::Connect, py::arg("force") = false,
-          "Connect to FTP server, if force=True, will disconnect and reconnect")
-      .def("Check", &AMFTPClient::Check,
-           "Check if the connection is still valid using PWD command")
-      .def("GetHomeDir", &AMFTPClient::GetHomeDir,
-           "Get the home directory path")
-      .def("stat", &AMFTPClient::stat, py::arg("path"),
-           "Get detailed information about a path (file or directory)")
-      .def("exists", &AMFTPClient::exists, py::arg("path"),
-           "Check if a path exists")
-      .def("is_dir", &AMFTPClient::is_dir, py::arg("path"),
-           "Check if a path is a directory")
-      .def("iwalk", &AMFTPClient::iwalk, py::arg("path"),
-           py::arg("ignore_special_file") = true,
-           "Recursively walk the path, return list of leaf nodes (files and "
-           "empty directories)")
-      .def("walk", &AMFTPClient::walk, py::arg("path"),
-           py::arg("max_depth") = -1, py::arg("ignore_special_file") = true,
-           "Recursively walk the path with structure, return "
-           "list[tuple[list[str], list[PathInfo]]]")
-      .def("mkdir", &AMFTPClient::mkdir, py::arg("path"),
-           "Create a single directory")
-      .def("mkdirs", &AMFTPClient::mkdirs, py::arg("path"),
-           "Create multiple nested directories (like mkdir -p)")
-      .def("rmfile", &AMFTPClient::rmfile, py::arg("path"),
-           "Delete a single file")
-      .def("rmdir", &AMFTPClient::rmdir, py::arg("path"),
-           "Delete an empty directory")
-      .def("remove", &AMFTPClient::remove, py::arg("path"),
-           "Recursively delete a file or directory. Returns list of errors if "
-           "any occurred")
-      .def("rename", &AMFTPClient::rename, py::arg("src"), py::arg("dst"),
-           py::arg("overwrite") = false,
-           "Rename or move a file/directory from src to dst")
-      .def("move", &AMFTPClient::move, py::arg("src"), py::arg("dst"),
-           py::arg("need_mkdir") = false, py::arg("force_write") = false,
-           "Move source path to destination directory")
-      .def(
-          "upload",
-          [](AMFTPClient &self, const std::string &local_path,
-             const std::string &remote_path, py::object progress_cb) {
-            std::function<void(uint64_t, uint64_t)> callback = nullptr;
-            if (!progress_cb.is_none()) {
-              callback = [progress_cb](uint64_t current, uint64_t total) {
-                py::gil_scoped_acquire gil;
-                progress_cb(current, total);
-              };
-            }
-            return self.upload(local_path, remote_path, callback);
-          },
-          py::arg("local_path"), py::arg("remote_path"),
-          py::arg("progress_callback") = py::none(),
-          "Upload a file from local to remote FTP server")
-      .def(
-          "download",
-          [](AMFTPClient &self, const std::string &remote_path,
-             const std::string &local_path, py::object progress_cb) {
-            std::function<void(uint64_t, uint64_t)> callback = nullptr;
-            if (!progress_cb.is_none()) {
-              callback = [progress_cb](uint64_t current, uint64_t total) {
-                py::gil_scoped_acquire gil;
-                progress_cb(current, total);
-              };
-            }
-            return self.download(remote_path, local_path, callback);
-          },
-          py::arg("remote_path"), py::arg("local_path"),
-          py::arg("progress_callback") = py::none(),
-          "Download a file from remote FTP server to local");
-
-  py::class_<HostMaintainer, std::shared_ptr<HostMaintainer>>(
-      m, "HostMaintainer",
-      "The Client Maintainer Class, Check clients status all the time")
-      .def(py::init<int, py::object>(), py::arg("heartbeat_interval_s"),
-           py::arg("disconnect_cb") = py::none())
-      .def("add_host", &HostMaintainer::add_host, py::arg("nickname"),
-           py::arg("client"), py::arg("overwrite") = false)
-      .def("remove_host", &HostMaintainer::remove_host, py::arg("nickname"))
-      .def("get_host", &HostMaintainer::get_host, py::arg("nickname"))
-      .def("get_hosts", &HostMaintainer::get_hosts, "Just return all hostnames")
-      .def("test_host", &HostMaintainer::test_host, py::arg("nickname"),
-           py::arg("update") = false,
-           "Test the host connection, return (ErrorCode, str)");
-
-  py::class_<AMSFTPWorker, std::shared_ptr<AMSFTPWorker>>(
-      m, "AMSFTPWorker", "A worker for transferring files")
-      .def(py::init<TransferCallback, float>(),
-           py::arg("callback") = TransferCallback(),
-           py::arg("cb_interval_s") = 0.1)
-      .def("load_tasks", &AMSFTPWorker::load_tasks, py::arg("src"),
-           py::arg("dst"), py::arg("hostd"), py::arg("src_hostname") = "",
-           py::arg("dst_hostname") = "", py::arg("overwrite") = false,
-           py::arg("mkdir") = true, py::arg("ignore_sepcial_file") = true)
-      .def("transfer", &AMSFTPWorker::transfer, py::arg("tasks"),
-           py::arg("hostd"), py::arg("chunk_large") = 16 * AMMB,
-           py::arg("chunk_middle") = 2 * AMMB,
-           py::arg("chunk_small") = 256 * AMKB);
-
-  fs.def("IsAbs", &AMFS::IsAbs, py::arg("path"), py::arg("sep") = "")
-      .def("HomePath", &AMFS::HomePath)
-      .def("extname", &AMFS::extname, py::arg("path"))
-      .def("split_basename", &AMFS::split_basename, py::arg("basename"),
-           "return tuple[str, str], the first is the basename without "
-           "extension, the second is the extension(no .)")
-      .def("CWD", &AMFS::CWD)
-      .def("FormatTime", &AMFS::FormatTime, py::arg("time"),
-           py::arg("format") = "%Y-%m-%d %H:%M:%S")
-      .def("UnifyPathSep", &AMFS::UnifyPathSep, py::arg("path"),
-           py::arg("sep") = "")
-      .def("split", &AMFS::split, py::arg("path"),
-           "return list[str], the path is split by separator")
-      .def("abspath", &AMFS::abspath, py::arg("path"),
-           py::arg("parsing_home") = true, py::arg("home") = "",
-           py::arg("cwd") = "", py::arg("sep") = "")
-      .def("dirname", &AMFS::dirname, py::arg("path"))
-      .def("basename", &AMFS::basename, py::arg("path"))
-      .def("mkdirs", &AMFS::mkdirs, py::arg("path"))
-      .def("stat", &AMFS::stat, py::arg("path"), py::arg("trace_link") = false)
-      .def("listdir", &AMFS::listdir, py::arg("path"),
-           py::arg("max_time_s") = -1)
-      .def("iwalk", &AMFS::iwalk, py::arg("path"),
-           py::arg("ignore_sepcial_file") = true)
-      .def("walk", &AMFS::walk, py::arg("path"), py::arg("max_depth") = -1,
-           py::arg("ignore_sepcial_file") = true)
-      .def("getsize", &AMFS::getsize, py::arg("path"),
-           py::arg("trace_link") = false);
-};
+  // auto fs = m.def_submodule("AMFS", "Local Filesystem Operations");
+  AMBIDINGS::BindEnum(em);
+  AMBIDINGS::BindConRequest(data);
+  AMBIDINGS::BindTransferCallback(data);
+  AMBIDINGS::BindProgressCBInfo(data);
+  AMBIDINGS::BindErrorCBInfo(data);
+  AMBIDINGS::BindAuthCBInfo(data);
+  AMBIDINGS::BindTransferTask(data);
+  AMBIDINGS::BindTraceInfo(data);
+  AMBIDINGS::BindPathInfo(data);
+  AMBIDINGS::BindAMTracer(m);
+  AMBIDINGS::BindBaseClient(m);
+  AMBIDINGS::BindAMSession(m);
+  AMBIDINGS::BindAMSFTPClient(m);
+  AMBIDINGS::BindAMFTPClient(m);
+  AMBIDINGS::BindHostMaintainer(m);
+  AMBIDINGS::BindAMSFTPWorker(m);
+}

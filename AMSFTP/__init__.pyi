@@ -6,8 +6,84 @@ import typing
 from . import AMData
 from . import AMEnum
 from . import AMFS
-__all__ = ['AMData', 'AMEnum', 'AMFS', 'AMSFTPClient', 'AMSFTPWorker', 'AMSession', 'BaseSFTPClient', 'HostMaintainer']
-class AMSFTPClient(BaseSFTPClient, AMFS.BasePathMatch):
+__all__ = ['AMData', 'AMEnum', 'AMFS', 'AMFTPClient', 'AMSFTPClient', 'AMSFTPWorker', 'AMSession', 'BaseClient', 'HostMaintainer']
+class AMFTPClient(AMFS.BasePathMatch):
+    """
+    FTP Client Class Based on libcurl
+    """
+    def Check(self, arg0: bool) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Check if the connection is still valid using PWD command
+        """
+    def Connect(self, force: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Connect to FTP server, if force=True, will disconnect and reconnect
+        """
+    def GetHomeDir(self) -> str:
+        """
+        Get the home directory path
+        """
+    def __init__(self, request: AMData.ConRequst, buffer_capacity: int = 10, trace_cb: typing.Any = None) -> None:
+        """
+        Create an FTP client instance
+        """
+    def download(self, remote_path: str, local_path: str, progress_callback: typing.Any = None) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Download a file from remote FTP server to local
+        """
+    def exists(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+        """
+        Check if a path exists
+        """
+    def is_dir(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+        """
+        Check if a path is a directory
+        """
+    def iwalk(self, path: str, ignore_special_file: bool = True) -> list[AMData.PathInfo]:
+        """
+        Recursively walk the path, return list of leaf nodes (files and empty directories)
+        """
+    def mkdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Create a single directory
+        """
+    def mkdirs(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Create multiple nested directories (like mkdir -p)
+        """
+    def move(self, src: str, dst: str, need_mkdir: bool = False, force_write: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Move source path to destination directory
+        """
+    def remove(self, path: str) -> list[tuple[str, tuple[AMEnum.ErrorCode, str]]] | tuple[AMEnum.ErrorCode, str]:
+        """
+        Recursively delete a file or directory. Returns list of errors if any occurred
+        """
+    def rename(self, src: str, dst: str, overwrite: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Rename or move a file/directory from src to dst
+        """
+    def rmdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Delete an empty directory
+        """
+    def rmfile(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Delete a single file
+        """
+    def stat(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], AMData.PathInfo]:
+        """
+        Get detailed information about a path (file or directory)
+        """
+    def upload(self, local_path: str, remote_path: str, progress_callback: typing.Any = None) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Upload a file from local to remote FTP server
+        """
+    def walk(self, path: str, max_depth: int = -1, ignore_special_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[list[str], list[AMData.PathInfo]]]]:
+        """
+        Recursively walk the path with structure, return list[tuple[list[str], list[PathInfo]]]
+        """
+class AMSFTPClient(BaseClient, AMFS.BasePathMatch):
     """
     Core SFTP Client Class
     """
@@ -66,16 +142,6 @@ class AMSFTPClient(BaseSFTPClient, AMFS.BasePathMatch):
         Get the trash directory
         """
     @typing.overload
-    def HasPublicVar(self, key: str) -> bool:
-        """
-        Check if a key exists in the public variable dictionary
-        """
-    @typing.overload
-    def HasPublicVar(self, key: str) -> bool:
-        """
-        Check if a key exists in the public variable dictionary
-        """
-    @typing.overload
     def SetPublicVar(self, key: str, value: typing.Any, overwrite: bool = False) -> tuple[AMEnum.ErrorCode, str]:
         """
         Store a Python object in C++ side with deep copy, C++ owns the copy
@@ -113,6 +179,10 @@ class AMSFTPClient(BaseSFTPClient, AMFS.BasePathMatch):
         ...
     def is_symlink(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
         ...
+    def iterator_listdir(self, path: str) -> typing.Any:
+        """
+        Return an iterator that yields PathInfo one by one, useful for large directories
+        """
     def iwalk(self, path: str, ignore_sepcial_file: bool = True) -> list[AMData.PathInfo]:
         """
         Recursive walk the path, ignore path structure, just return list[PathInfo]
@@ -157,33 +227,15 @@ class AMSFTPWorker:
     """
     A worker for transferring files
     """
-    def IsPause(self) -> bool:
-        ...
-    def IsRunning(self) -> bool:
-        ...
-    def IsTerminate(self) -> bool:
+    def UnionTransfer(self, task: AMData.TransferTask, src_client: BaseClient = None, dst_client: BaseClient = None) -> tuple[AMEnum.ErrorCode, str]:
         ...
     def __init__(self, callback: AMData.TransferCallback = ..., cb_interval_s: float = 0.1) -> None:
         ...
     def load_tasks(self, src: str, dst: str, hostd: HostMaintainer, src_hostname: str = '', dst_hostname: str = '', overwrite: bool = False, mkdir: bool = True, ignore_sepcial_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.TransferTask]]:
         ...
-    def pause(self) -> None:
-        ...
-    def reset(self) -> None:
-        """
-        Rset Internal Status like is_terminate, is_pause, current_size, total_size
-        """
-    def resume(self) -> None:
-        ...
-    def set_cb_interval(self, interval_s: float) -> None:
-        """
-        Set the interval of the callback in seconds, default is 0.1s
-        """
-    def terminate(self) -> None:
-        ...
     def transfer(self, tasks: list[AMData.TransferTask], hostd: HostMaintainer, chunk_large: int = 16777216, chunk_middle: int = 2097152, chunk_small: int = 262144) -> list[AMData.TransferTask]:
         ...
-class AMSession(AMData.AMTracer):
+class AMSession(BaseClient):
     """
     Session Class
     """
@@ -237,24 +289,8 @@ class AMSession(AMData.AMTracer):
         """
     def __init__(self, request: AMData.ConRequst, keys: list[str], error_num: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
         ...
-class BaseSFTPClient(AMSession):
-    def ConductCmd(self, cmd: str, max_time_s: float = -1) -> tuple[tuple[AMEnum.ErrorCode, str], tuple[str, int]]:
-        """
-        Conduct a command and return the result
-        """
-    def GetOSType(self, update: bool = False) -> AMEnum.OS_TYPE:
-        """
-        Update will force to re-detect the OS type
-        """
-    def GetRTT(self, times: int = 5) -> float:
-        """
-        Get the round-trip time of the session
-        """
-    def TerminateCmd(self) -> None:
-        """
-        Terminate the current command
-        """
-    def __init__(self, request: AMData.ConRequst, keys: list[str], error_num: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
+class BaseClient(AMData.AMTracer):
+    def __init__(self, request: AMData.ConRequst, buffer_capacity: int = 10, trace_cb: typing.Any = None) -> None:
         ...
 class HostMaintainer:
     """
