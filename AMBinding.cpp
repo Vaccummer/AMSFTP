@@ -25,6 +25,7 @@ void BindEnum(py::module &m) {
   bind_enum_auto<TransferControl>(m, "TransferControl");
   bind_enum_auto<AMFS::SepType>(m, "SepType");
   bind_enum_auto<AMFS::SearchType>(m, "SearchType");
+  bind_enum_auto<ClientProtocol>(m, "ClientProtocol");
 }
 void BindConRequest(py::module &m) {
   auto cls = py::class_<ConRequst, std::shared_ptr<ConRequst>>(m, "ConRequst")
@@ -315,8 +316,9 @@ void BindAMSFTPClient(py::module &m) {
       m, "AMSFTPClient", "An SFTP Client Class Based on libssh2");
   cls.def(py::init<const ConRequst &, const std::vector<std::string> &,
                    unsigned int, py::object, py::object>(),
-          py::arg("request"), py::arg("keys"), py::arg("tracer_capacity") = 10,
-          py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none());
+          py::arg("request"), py::arg("keys") = std::vector<std::string>{},
+          py::arg("tracer_capacity") = 10, py::arg("trace_cb") = py::none(),
+          py::arg("auth_cb") = py::none());
   auto_def(cls, "GetOSType", &AMSFTPClient::GetOSType)
       .arg("update", false)
       .doc("Get the OS type of the server");
@@ -343,7 +345,7 @@ void BindAMSFTPClient(py::module &m) {
       .doc("Use server to parse the path, ~ parsed in local, symlink parsed in "
            "server");
   auto_def(cls, "chmod", &AMSFTPClient::chmod)
-      .arg("path", "")
+      .arg("path")
       .arg("mode")
       .arg("recursive", false)
       .doc("Recursive change the mode of the file");
@@ -432,17 +434,14 @@ void BindAMFTPClient(py::module &m) {
       m, "AMFTPClient", "An FTP Client Class Based on libcurl");
   cls.def(py::init<ConRequst, size_t, py::object>(), py::arg("request"),
           py::arg("buffer_capacity") = 10, py::arg("trace_cb") = py::none());
-
-  auto_def(cls, "Check", &AMFTPClient::Check)
-      .arg("need_trace", false)
-      .doc("Check FTP connection status");
   auto_def(cls, "Connect", &AMFTPClient::Connect)
       .arg("force", false)
       .doc("Connect to FTP server");
-  auto_def(cls, "listdir", &AMFTPClient::listdir)
-      .arg("path")
-      .arg("max_time_ms", -1)
-      .doc("List directory contents");
+  auto_def(cls, "GetState", &AMFTPClient::GetState);
+  auto_def(cls, "Check", &AMFTPClient::Check)
+      .arg("need_trace", false)
+      .doc("Check FTP connection status");
+  auto_def(cls, "GetHomeDir", &AMFTPClient::GetHomeDir);
   auto_def(cls, "stat", &AMFTPClient::stat)
       .arg("path")
       .doc("Get file information");
@@ -452,15 +451,45 @@ void BindAMFTPClient(py::module &m) {
   auto_def(cls, "is_dir", &AMFTPClient::is_dir)
       .arg("path")
       .doc("Check if path is a directory");
+  auto_def(cls, "listdir", &AMFTPClient::listdir)
+      .arg("path")
+      .arg("max_time_ms", -1)
+      .doc("List directory contents");
+  auto_def(cls, "iwalk", &AMFTPClient::iwalk)
+      .arg("path")
+      .arg("ignore_special_file", true)
+      .doc("Deep walk to get all leaf paths");
+  auto_def(cls, "walk", &AMFTPClient::walk)
+      .arg("path")
+      .arg("max_depth", -1)
+      .arg("ignore_special_file", true)
+      .doc(
+          "Walk directory tree, returns list of (dirparts, [PathInfo]) tuples");
   auto_def(cls, "mkdir", &AMFTPClient::mkdir)
       .arg("path")
       .doc("Create a directory");
   auto_def(cls, "mkdirs", &AMFTPClient::mkdirs)
       .arg("path")
       .doc("Create directories recursively");
+  auto_def(cls, "rmfile", &AMFTPClient::rmfile)
+      .arg("path")
+      .doc("Remove a file permanently");
   auto_def(cls, "rmdir", &AMFTPClient::rmdir)
       .arg("path")
       .doc("Remove an empty directory");
+  auto_def(cls, "remove", &AMFTPClient::remove)
+      .arg("path")
+      .doc("Remove file or directory recursively");
+  auto_def(cls, "rename", &AMFTPClient::rename)
+      .arg("src")
+      .arg("dst")
+      .arg("overwrite", false);
+  auto_def(cls, "move", &AMFTPClient::move)
+      .arg("src")
+      .arg("dst")
+      .arg("need_mkdir", false)
+      .arg("force_write", false)
+      .doc("Move file/directory to destination folder");
 }
 
 void BindHostMaintainer(py::module &m) {
@@ -655,23 +684,23 @@ PYBIND11_MODULE(AMSFTP, m) {
 
   auto em = m.def_submodule("AMEnum", "Enum Classes");
   auto data = m.def_submodule("AMData", "Data Classes");
-  // auto fs = m.def_submodule("AMFS", "Local Filesystem Operations");
+  auto fs = m.def_submodule("AMFS", "Local Filesystem Operations");
   AMBIDINGS::BindEnum(em);
   AMBIDINGS::BindConRequest(data);
-  //   AMBIDINGS::BindTransferCallback(data);
-  //   AMBIDINGS::BindProgressCBInfo(data);
-  //   AMBIDINGS::BindErrorCBInfo(data);
-  //   AMBIDINGS::BindAuthCBInfo(data);
-  //   AMBIDINGS::BindTransferTask(data);
-  //   AMBIDINGS::BindTraceInfo(data);
-  //   AMBIDINGS::BindPathInfo(data);
-  //   AMBIDINGS::BindBasePathMatch(m);
+  AMBIDINGS::BindTransferCallback(data);
+  AMBIDINGS::BindProgressCBInfo(data);
+  AMBIDINGS::BindErrorCBInfo(data);
+  AMBIDINGS::BindAuthCBInfo(data);
+  AMBIDINGS::BindTransferTask(data);
+  AMBIDINGS::BindTraceInfo(data);
+  AMBIDINGS::BindPathInfo(data);
+  AMBIDINGS::BindBasePathMatch(m);
   AMBIDINGS::BindAMTracer(m);
-  //   AMBIDINGS::BindBaseClient(m);
-  //   AMBIDINGS::BindAMSession(m);
-  //   AMBIDINGS::BindAMSFTPClient(m);
-  //   AMBIDINGS::BindAMFTPClient(m);
-  //   AMBIDINGS::BindHostMaintainer(m);
-  //   AMBIDINGS::BindAMSFTPWorker(m);
-  AMBIDINGS::BindAMFS(m);
+  AMBIDINGS::BindBaseClient(m);
+  AMBIDINGS::BindAMSession(m);
+  AMBIDINGS::BindAMSFTPClient(m);
+  AMBIDINGS::BindAMFTPClient(m);
+  AMBIDINGS::BindHostMaintainer(m);
+  AMBIDINGS::BindAMSFTPWorker(m);
+  AMBIDINGS::BindAMFS(fs);
 }

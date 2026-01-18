@@ -10,15 +10,16 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <regex>
 #include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
+
 // 标准库
 
-#define AMForceUsingUnixSep
 // 自身依赖
 #include "AMDataClass.hpp"
 #include "AMEnum.hpp"
@@ -84,14 +85,14 @@ using WRD = AMFS::WRD;                                // walk函数返回类型
 using WR = std::pair<ECM, WRV>;                       // iwalk函数返回类型
 using SIZER = std::pair<ECM, uint64_t>;               // getsize函数返回类型
 using CR =
-    std::pair<ECM, std::pair<std::string, int>>; // ConductCmd函数返回类型
+    std::pair<ECM, std::pair<std::string, size_t>>; // ConductCmd函数返回类型
 
 class AMTracer {
 private:
   py::function trace_cb;
   std::vector<TraceInfo> buffer = {};
   std::mutex buffer_mutex;
-  int capacity = 10;
+  ssize_t capacity = 10;
   std::atomic<bool> is_py_trace = false;
   std::atomic<bool> is_trace_pause = false;
   std::unordered_map<std::string, py::object> public_var_dict;
@@ -101,7 +102,7 @@ protected:
   ConRequst res_data;
   void push(const TraceInfo &value) {
     std::lock_guard<std::mutex> lock(buffer_mutex);
-    if (buffer.size() < capacity) {
+    if (buffer.size() < static_cast<size_t>(capacity)) {
       buffer.push_back(value);
     } else {
       buffer.erase(buffer.begin());
@@ -111,7 +112,7 @@ protected:
   std::string nickname;
 
 public:
-  AMTracer(ConRequst request, int buffer_capacity = 10,
+  AMTracer(const ConRequst &request, int buffer_capacity = 10,
            const py::object &trace_cb = py::none())
       : res_data(request), nickname(request.nickname) {
     if (buffer_capacity > 0) {
@@ -239,7 +240,7 @@ public:
     buffer.clear();
   }
 
-  int TracerCapacity(int size = -1) {
+  int TracerCapacity(ssize_t size = 0) {
     if (size <= 0) {
       return capacity;
     }
@@ -329,7 +330,7 @@ public:
   ClientProtocol GetProtocol() { return PROTOCOL; }
 
   ssize_t TransferRingBufferSize(ssize_t buffer_size = -1) {
-    if (buffer_size < 0) {
+    if (buffer_size <= 0) {
       return this->buffer_size;
     }
     this->buffer_size = buffer_size;
@@ -348,7 +349,7 @@ public:
       return "Unknown";
     }
   }
-  BaseClient(ConRequst request, size_t buffer_capacity = 10,
+  BaseClient(const ConRequst &request, int buffer_capacity = 10,
              const py::object &trace_cb = py::none())
       : AMTracer(request, buffer_capacity, trace_cb), AMFS::BasePathMatch() {}
   virtual ECM GetState() {
@@ -369,7 +370,7 @@ public:
         "{} Client doesn't implement funtion: GetOSType", GetProtocolName()));
   }
 
-  virtual double GetRTT(size_t times = 5) {
+  virtual double GetRTT(ssize_t times = 5) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: GetRTT", GetProtocolName()));
   }
@@ -1307,12 +1308,15 @@ private:
 
 public:
   ~AMSFTPClient() {}
-  double GetRTT(size_t times = 5) override {
+  double GetRTT(ssize_t times = 5) override {
+    if (times <= 0) {
+      times = 1;
+    }
     double total_time = 0;
     double time_start;
     double time_end;
     int rc;
-    for (size_t i = 0; i < times; i++) {
+    for (ssize_t i = 0; i < times; i++) {
       SafeChannel channel(session);
       time_start = timenow();
       rc = libssh2_channel_exec(channel.channel, "echo amsftp");
@@ -1486,7 +1490,8 @@ public:
     return os_type;
   }
 
-  AMSFTPClient(const ConRequst &request, const std::vector<std::string> &keys,
+  AMSFTPClient(const ConRequst &request,
+               const std::vector<std::string> &keys = {},
                unsigned int tracer_capacity = 10,
                const py::object &trace_cb = py::none(),
                const py::object &auth_cb = py::none())
@@ -2376,10 +2381,6 @@ protected:
 
 private:
   CURL *curl = nullptr;
-  std::string host;
-  int port = 21;
-  std::string username;
-  std::string password;
   std::string home_dir = "";
   std::atomic<bool> connected = false;
   std::regex ftp_url_pattern = std::regex("^ftp://.*$");
@@ -2448,7 +2449,6 @@ private:
   }
 
 public:
-  ConRequst request;
   std::recursive_mutex mtx;
 
   struct MemoryStruct {
@@ -2475,7 +2475,8 @@ public:
   }
 
   std::string BuildUrl(const std::string &path) {
-    std::string url = fmt::format("ftp://{}:{}", host, port);
+    std::string url =
+        fmt::format("ftp://{}:{}", res_data.hostname, res_data.port);
     if (!path.empty()) {
       if (path[0] != '/') {
         url += "/";
@@ -2492,8 +2493,8 @@ public:
 
     curl_easy_reset(curl);
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_USERNAME, username.c_str());
-    curl_easy_setopt(curl, CURLOPT_PASSWORD, password.c_str());
+    curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
+    curl_easy_setopt(curl, CURLOPT_PASSWORD, res_data.password.c_str());
     curl_easy_setopt(curl, CURLOPT_FTP_RESPONSE_TIMEOUT, 30L);
 
     return {EC::Success, ""};
@@ -2586,20 +2587,16 @@ public:
   }
 
 public:
-  AMFTPClient(ConRequst request, size_t buffer_capacity = 10,
+  AMFTPClient(const ConRequst &request, ssize_t buffer_capacity = 10,
               const py::object &trace_cb = py::none())
-      : BaseClient(request, buffer_capacity, trace_cb), request(request) {
+      : BaseClient(request, buffer_capacity, trace_cb) {
     this->PROTOCOL = ClientProtocol::FTP;
 
-    if (username.empty()) {
-      this->username = "anonymous";
-      this->password =
-          request.password.empty() ? "anonymous@example.com" : request.password;
+    if (res_data.username.empty()) {
+      res_data.username = "anonymous";
+      res_data.password = res_data.password.empty() ? "anonymous@example.com"
+                                                    : res_data.password;
     }
-
-    this->host = request.hostname;
-
-    this->port = request.port;
   }
 
   ~AMFTPClient() {
@@ -2625,7 +2622,8 @@ public:
     }
 
     // Test connection by getting home directory
-    std::string test_url = fmt::format("ftp://{}:{}/", host, port);
+    std::string test_url =
+        fmt::format("ftp://{}:{}/", res_data.hostname, res_data.port);
     ECM ecm = SetupCurl(test_url);
     if (ecm.first != EC::Success) {
       connected = false;
@@ -2695,11 +2693,12 @@ public:
       return "";
     }
 
-    std::string url = fmt::format("ftp://{}:{}/", host, port);
+    std::string url =
+        fmt::format("ftp://{}:{}/", res_data.hostname, res_data.port);
     curl_easy_reset(curl);
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_USERNAME, username.c_str());
-    curl_easy_setopt(curl, CURLOPT_PASSWORD, password.c_str());
+    curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
+    curl_easy_setopt(curl, CURLOPT_PASSWORD, res_data.password.c_str());
     curl_easy_setopt(curl, CURLOPT_FTP_RESPONSE_TIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
@@ -2845,20 +2844,23 @@ public:
 
   std::pair<ECM, std::vector<PathInfo>> listdir(const std::string &path,
                                                 int max_time_ms = -1) override {
-
+    std::cout << "1" << "\n";
     double start_time = timenow();
-
+    std::cout << "2" << "\n";
     std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
     if (pathf.empty()) {
       return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
     }
-
+    std::cout << "3" << "\n";
     std::lock_guard<std::recursive_mutex> lock(mtx);
     std::string url = BuildUrl(pathf + "/");
+    std::cout << "4" << "\n";
     ECM ecm = SetupCurl(url);
+    std::cout << "5" << "\n";
     if (ecm.first != EC::Success) {
       return {ecm, {}};
     }
+    std::cout << "6" << "\n";
 
     struct MemoryStruct chunk;
     chunk.memory = (char *)malloc(1);
@@ -2868,35 +2870,35 @@ public:
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
     CURLcode res = curl_easy_perform(curl);
-
+    std::cout << "7" << "\n";
     if (res != CURLE_OK) {
       free(chunk.memory);
       return {ECM{EC::FTPListFailed,
                   fmt::format("List failed: {}", curl_easy_strerror(res))},
               {}};
     }
-
+    std::cout << "8" << "\n";
     std::string listing(chunk.memory, chunk.size);
     free(chunk.memory);
-
+    std::cout << "9" << "\n";
     std::vector<PathInfo> file_list;
     std::istringstream iss(listing);
     std::string line;
-
+    std::cout << "10" << "\n";
     while (std::getline(iss, line)) {
       if (max_time_ms > 0 && timenow() - start_time > max_time_ms) {
         return {ECM{EC::Success, "Timeout"}, file_list};
       }
       if (line.empty())
         continue;
-
+      std::cout << "line: " << line << "\n";
       PathInfo info = ParseListLine(line, pathf);
       if (info.type != PathType::Unknown && info.name != "." &&
           info.name != "..") {
         file_list.push_back(info);
       }
     }
-
+    std::cout << "11" << "\n";
     return {ECM{EC::Success, ""}, file_list};
   }
 

@@ -344,6 +344,14 @@ class TransferTask:
     def __init__(self, src: str, dst: str, src_host: str, dst_host: str, size: int, path_type: AMSFTP.AMEnum.PathType = ...) -> None:
         ...
     @property
+    def IsSuccess(self) -> bool:
+        """
+        If the transfer is successful
+        """
+    @IsSuccess.setter
+    def IsSuccess(self, arg0: bool) -> None:
+        ...
+    @property
     def dst(self) -> str:
         """
         Destination path
@@ -358,6 +366,22 @@ class TransferTask:
         """
     @dst_host.setter
     def dst_host(self, arg0: str) -> None:
+        ...
+    @property
+    def path_type(self) -> AMSFTP.AMEnum.PathType:
+        """
+        Type of the path
+        """
+    @path_type.setter
+    def path_type(self, arg0: AMSFTP.AMEnum.PathType) -> None:
+        ...
+    @property
+    def rc(self) -> tuple[AMSFTP.AMEnum.ErrorCode, str]:
+        """
+        Error code and message
+        """
+    @rc.setter
+    def rc(self, arg0: tuple[AMSFTP.AMEnum.ErrorCode, str]) -> None:
         ...
     @property
     def size(self) -> int:
