@@ -583,8 +583,7 @@ public:
 
   AMSession(const ConRequst &request,
             const std::vector<std::string> &private_keys,
-            unsigned int error_num = 10,
-            const py::object &trace_cb = py::none(),
+            ssize_t error_num = 10, const py::object &trace_cb = py::none(),
             const py::object &auth_cb = py::none())
       : BaseClient(request, error_num, trace_cb), private_keys(private_keys),
         res_data(request) {
@@ -5303,7 +5302,7 @@ public:
     }
   }
 
-  TASKS EraseOverlapTasks(TASKS &tasks) {
+  TASKS EraseOverlapTasks(const TASKS &tasks) {
     std::unordered_set<std::string> dst_set{};
     TASKS result{};
     std::string task_id;
@@ -5317,19 +5316,20 @@ public:
     return result;
   }
 
-  TASKS transfer(TASKS tasks, const std::shared_ptr<HostMaintainer> &hostm,
+  TASKS transfer(const TASKS &tasks,
+                 const std::shared_ptr<HostMaintainer> &hostm,
                  ssize_t buffer_size = -1) {
     if (tasks.empty()) {
       return {};
     }
-    tasks = EraseOverlapTasks(tasks);
+    auto tasksf = EraseOverlapTasks(tasks);
     this->pd.reset();
     ECM rcm = ECM{EC::Success, ""};
     std::shared_ptr<BaseClient> src_client = nullptr;
     std::shared_ptr<BaseClient> dst_client = nullptr;
     std::tuple<ECM, std::shared_ptr<BaseClient>, std::shared_ptr<BaseClient>>
         test_res;
-    for (auto &task : tasks) {
+    for (auto &task : tasksf) {
       pd.total_size += task.size;
     }
 
@@ -5338,7 +5338,7 @@ public:
       callback.total_size_cb(pd.total_size);
     }
 
-    for (auto &task : tasks) {
+    for (auto &task : tasksf) {
       if (task.IsSuccess) {
         // 跳过在load_tasks中，未设置overlap且dst已经存在的任务
         continue;
@@ -5378,14 +5378,14 @@ public:
         task.IsSuccess = true;
       }
     }
-    return tasks;
+    return tasksf;
   }
 
   std::pair<ECM, TASKS> load_tasks(const std::string &src,
                                    const std::string &dst,
                                    const std::shared_ptr<HostMaintainer> &hostm,
-                                   const std::string &src_hostname = "",
-                                   const std::string &dst_hostname = "",
+                                   const std::string &src_host = "",
+                                   const std::string &dst_host = "",
                                    bool overwrite = false, bool mkdir = true,
                                    bool ignore_sepcial_file = true) {
     WRV result = {};
@@ -5393,20 +5393,20 @@ public:
     ECM rc;
     std::shared_ptr<AMSFTPClient> src_client;
     // 去除src的dst左右端的空格
-    if (!src_hostname.empty()) {
-      rc = hostm->test_host(src_hostname);
+    if (!src_host.empty()) {
+      rc = hostm->test_host(src_host);
       if (rc.first != EC::Success) {
         return {rc, tasks};
       }
     }
-    if (!dst_hostname.empty()) {
-      rc = hostm->test_host(dst_hostname);
+    if (!dst_host.empty()) {
+      rc = hostm->test_host(dst_host);
       if (rc.first != EC::Success) {
         return {rc, tasks};
       }
     }
 
-    auto [rcm, src_stat] = Ustat(src, hostm, src_hostname);
+    auto [rcm, src_stat] = Ustat(src, hostm, src_host);
 
     if (rcm.first != EC::Success) {
       return {rcm, tasks};
@@ -5414,15 +5414,15 @@ public:
 
     std::string srcf = src_stat.path;
     std::string dstf;
-    if (dst_hostname.empty()) {
+    if (dst_host.empty()) {
       dstf = AMFS::abspath(dst);
     } else {
-      auto client = hostm->get_host(dst_hostname);
+      auto client = hostm->get_host(dst_host);
       if (!client) {
-        return {ECM(EC::NoSession,
-                    fmt::format("Destination SFTP Client: {} not found",
-                                dst_hostname)),
-                tasks};
+        return {
+            ECM(EC::NoSession,
+                fmt::format("Destination SFTP Client: {} not found", dst_host)),
+            tasks};
       }
       dstf =
           AMFS::abspath(dst, true, client->GetHomeDir(), client->GetHomeDir());
@@ -5450,7 +5450,7 @@ public:
       if (!is_dst_file) {
         dstf = AMFS::join(dstf, AMFS::basename(srcf));
       }
-      auto [rcm7, dst_info4] = Ustat(dstf, hostm, dst_hostname);
+      auto [rcm7, dst_info4] = Ustat(dstf, hostm, dst_host);
 
       // 检验目标路径是否存在
       if (rcm7.first == EC::Success) {
@@ -5469,7 +5469,7 @@ public:
 
       // 检测dst的父级目录是否存在
       auto [rcm3, dst_parent_info] =
-          Ustat(AMFS::dirname(dstf), hostm, dst_hostname);
+          Ustat(AMFS::dirname(dstf), hostm, dst_host);
       if (rcm3.first != EC::Success && !mkdir) {
         return {ECM{EC::ParentDirectoryNotExist,
                     fmt::format("Dst parent path not exists: {}",
@@ -5482,12 +5482,12 @@ public:
                 tasks};
       }
 
-      tasks.emplace_back(srcf, src_hostname, dstf, dst_hostname, src_stat.size,
+      tasks.emplace_back(srcf, dstf, src_host, dst_host, src_stat.size,
                          src_stat.type);
       return {ECM(EC::Success, ""), tasks};
     }
 
-    auto [rcm2, dst_info] = Ustat(dstf, hostm, dst_hostname);
+    auto [rcm2, dst_info] = Ustat(dstf, hostm, dst_host);
 
     if (rcm2.first != EC::Success && !mkdir) {
       return {ECM{EC::ParentDirectoryNotExist,
@@ -5500,13 +5500,13 @@ public:
               tasks};
     }
 
-    auto result2 = Uiwalk(srcf, hostm, src_hostname, ignore_sepcial_file);
+    auto result2 = Uiwalk(srcf, hostm, src_host, ignore_sepcial_file);
 
     std::string dst_n;
     for (auto &item : result2) {
       dst_n = AMFS::join(dstf, fs::relative(item.path, AMFS::dirname(srcf)));
-      tasks.emplace_back(item.path, src_hostname, dst_n, dst_hostname,
-                         item.size, item.type);
+      tasks.emplace_back(item.path, dst_n, src_host, dst_host, item.size,
+                         item.type);
     }
     return {ECM(EC::Success, ""), tasks};
   };

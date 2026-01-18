@@ -184,7 +184,7 @@ public:
 
   static uint64_t ModeTrans(std::string mode_str) {
     std::regex pattern(
-        "^[r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-]$");
+        R"(^[r?\-][w?\-][x?\-][r?\-][w?\-][x?\-][r?\-][w?\-][x?\-]$)");
     if (!std::regex_match(mode_str, pattern)) {
       throw std::invalid_argument(
           fmt::format("Invalid mode string: {}", mode_str));
@@ -306,7 +306,7 @@ public:
     }
     return slash_count < anti_slash_count ? "\\" : "/";
   }
-};
+}; // namespace Str
 
 #ifdef _WIN32
 struct FileTimes {
@@ -1524,12 +1524,8 @@ public:
     std::wstring w_name = Str::AMStr(name);
     try {
       bool res = std::regex_search(w_name, std::wregex(w_pattern));
-      std::wcout << "str_match pattern: " << w_pattern << " name: " << w_name
-                 << " result: " << res << std::endl;
       return res;
     } catch (const std::regex_error &e) {
-      std::wcout << "str_match pattern: " << w_pattern << " name: " << w_name
-                 << " error: " << e.what() << std::endl;
       return false;
     }
   }
