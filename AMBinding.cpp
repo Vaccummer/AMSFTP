@@ -4,6 +4,17 @@
 #include "AMEnum.hpp"
 #include "AMPath.hpp"
 
+#ifdef _WIN32
+#include <winsock2.h>
+static std::atomic<bool> is_wsa_initialized{false};
+static void cleanup_wsa() {
+  if (is_wsa_initialized.load()) {
+    WSACleanup();
+    is_wsa_initialized.store(false);
+  }
+}
+#endif
+
 namespace AMBIDINGS {
 void BindEnum(py::module &m) {
   bind_enum_auto<ErrorCode>(m, "ErrorCode");
@@ -31,13 +42,13 @@ void BindConRequest(py::module &m) {
                  .def_readwrite("timeout_s", &ConRequst::timeout_s)
                  .def_readwrite("trash_dir", &ConRequst::trash_dir,
                                 "Trash directory for saferm function");
-  cls.def(py::init<const std::string &, const std::string &, const std::string &,
-                   int, std::string, std::string, bool, size_t, std::string>(),
-          py::arg("nickname") = "", py::arg("hostname") = "",
-          py::arg("username") = "", py::arg("port") = 22,
-          py::arg("password") = "", py::arg("keyfile") = "",
-          py::arg("compression") = false, py::arg("timeout_s") = 3,
-          py::arg("trash_dir") = "");
+  cls.def(
+      py::init<const std::string &, const std::string &, const std::string &,
+               int, std::string, std::string, bool, size_t, std::string>(),
+      py::arg("nickname") = "", py::arg("hostname") = "",
+      py::arg("username") = "", py::arg("port") = 22, py::arg("password") = "",
+      py::arg("keyfile") = "", py::arg("compression") = false,
+      py::arg("timeout_s") = 3, py::arg("trash_dir") = "");
 }
 void BindTransferCallback(py::module &m) {
   auto cls =
@@ -70,9 +81,9 @@ void BindProgressCBInfo(py::module &m) {
                          "Size of the total files transfered")
           .def_readwrite("total_size", &ProgressCBInfo::total_size,
                          "Total size of the transfer");
-  cls.def(py::init<const std::string &, const std::string &, const std::string &,
-                   const std::string &, uint64_t, uint64_t, const uint64_t &,
-                   const uint64_t &>(),
+  cls.def(py::init<const std::string &, const std::string &,
+                   const std::string &, const std::string &, uint64_t, uint64_t,
+                   const uint64_t &, const uint64_t &>(),
           py::arg("src") = "", py::arg("dst") = "", py::arg("src_host") = "",
           py::arg("dst_host") = "", py::arg("this_size") = 0,
           py::arg("file_size") = 0, py::arg("accumulated_size") = 0,
@@ -117,12 +128,18 @@ void BindTransferTask(py::module &m) {
           .def_readwrite("src_host", &TransferTask::src_host, "Source host")
           .def_readwrite("dst_host", &TransferTask::dst_host,
                          "Destination host")
-          .def_readwrite("size", &TransferTask::size, "Size of the src");
-  cls.def(py::init<const std::string &, const std::string &, const std::string &,
-                   const std::string &, uint64_t, PathType>(),
-          py::arg("src"), py::arg("dst"), py::arg("src_host"),
-          py::arg("dst_host"), py::arg("size"),
-          py::arg("path_type") = PathType::FILE);
+          .def_readwrite("size", &TransferTask::size, "Size of the src")
+          .def_readwrite("path_type", &TransferTask::path_type,
+                         "Type of the path")
+          .def_readwrite("IsSuccess", &TransferTask::IsSuccess,
+                         "If the transfer is successful")
+          .def_readwrite("rc", &TransferTask::rc, "Error code and message")
+          .def(py::init<const std::string &, const std::string &,
+                        const std::string &, const std::string &, uint64_t,
+                        PathType>(),
+               py::arg("src"), py::arg("dst"), py::arg("src_host"),
+               py::arg("dst_host"), py::arg("size"),
+               py::arg("path_type") = PathType::FILE);
 }
 void BindTraceInfo(py::module &m) {
   auto cls = py::class_<TraceInfo, std::shared_ptr<TraceInfo>>(
@@ -168,6 +185,34 @@ void BindPathInfo(py::module &m) {
           py::arg("size"), py::arg("create_time"), py::arg("access_time"),
           py::arg("modify_time"), py::arg("type"), py::arg("mode_int"),
           py::arg("mode_str"));
+}
+
+void BindBasePathMatch(py::module &m) {
+  auto cls =
+      py::class_<AMFS::BasePathMatch, std::shared_ptr<AMFS::BasePathMatch>>(
+          m, "BasePathMatch", "Base Path Match Class");
+  auto_def(cls, "find", &AMFS::BasePathMatch::find)
+      .arg("path")
+      .arg("type", AMFS::SearchType::All)
+      .doc("Path Match Function, support * and <> , greater and less sign "
+           "equal to [] in regex");
+  auto_def(cls, "str_match", &AMFS::BasePathMatch::str_match)
+      .arg("name")
+      .arg("pattern")
+      .doc("Internal Function, use wregex to match the string");
+  auto_def(cls, "name_match", &AMFS::BasePathMatch::name_match)
+      .arg("name")
+      .arg("pattern")
+      .doc("Internal Function, preprocess the pattern and match the name");
+  auto_def(cls, "walk_match", &AMFS::BasePathMatch::walk_match)
+      .arg("parts")
+      .arg("match_parts")
+      .doc("Internal Function, directly decides whether two paths match");
+  auto cls2 = py::class_<AMFS::PathMatch, std::shared_ptr<AMFS::PathMatch>,
+                         AMFS::BasePathMatch>(
+      m, "PathMatch",
+      "Local Path Match Class, using AMFS IO function to override "
+      "Core Function");
 }
 
 void BindAMTracer(py::module &m) {
@@ -219,9 +264,7 @@ void BindBaseClient(py::module &m) {
   auto_def(cls, "GetProtocolName", &BaseClient::GetProtocolName)
       .doc("Get the string name of the protocol of the client");
   auto_def(cls, "BufferSize", &BaseClient::TransferRingBufferSize)
-      .arg("size", -1,
-           "Give Negative Number to Get Buffer Size, Give Positive Number to "
-           "Set Buffer Size")
+      .arg("size", -1)
       .doc(fmt::format("Buffer Size is restricted between {} and {}",
                        AMMinBufferSize, AMMaxBufferSize)
                .c_str());
@@ -232,10 +275,12 @@ void BindAMSession(py::module &m) {
       m, "AMSession",
       "An intermediate class between BaseClient and SFTP Client, Manage SSH "
       "Connection and Session");
-  cls.def(py::init<const ConRequst &, const std::vector<std::string> &,
-                   unsigned int, py::object, py::object>(),
-          py::arg("request"), py::arg("keys"), py::arg("tracer_capacity") = 10,
+  cls.def(py::init<const ConRequst &, const std::vector<std::string> &, ssize_t,
+                   const py::object &, const py::object &>(),
+          py::arg("request"), py::arg("keys"), py::arg("error_num") = 10,
           py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none());
+  // 暂时注释掉其他绑定来定位问题
+
   auto_def(cls, "GetLibssh2Version", &AMSession::GetLibssh2Version)
       .doc("Get the version of the libssh2 library");
   auto_def(cls, "IsValidKey", &AMSession::IsValidKey)
@@ -245,18 +290,24 @@ void BindAMSession(py::module &m) {
   auto_def(cls, "SetKeys", &AMSession::SetKeys)
       .arg("keys")
       .doc("Set the list of the keys");
+
   auto_def(cls, "GetState", &AMSession::GetState)
       .doc("Get the cached state of the session");
   auto_def(cls, "BaseCheck", &AMSession::BaseCheck)
       .doc("Attemp to stat home path to test the connection");
   auto_def(cls, "BaseConnect", &AMSession::BaseConnect)
-      .doc("Establish ssh ssesion and sftp");
+      .arg("force", false)
+      .doc("Establish ssh ssesion and sftp, if force=True, will disconnect and "
+           "reconnect, else will check first, if wrong then reconnect");
+
   auto_def(cls, "GetLastEC", &AMSession::GetLastEC)
       .doc("Get the last error code of the session");
   auto_def(cls, "GetLastErrorMsg", &AMSession::GetLastErrorMsg)
       .doc("Get the last error message of the session");
-  cls.def("SetAuthCallback", &AMSession::SetAuthCallback,
-          py::arg("auth_cb") = py::none());
+  auto_def(cls, "SetAuthCallback", &AMSession::SetAuthCallback)
+      .arg("auth_cb")
+      .doc("Set the authentication callback function, callable[AuthCBInfo, "
+           "None], if none, won't callback to python");
 }
 
 void BindAMSFTPClient(py::module &m) {
@@ -267,6 +318,7 @@ void BindAMSFTPClient(py::module &m) {
           py::arg("request"), py::arg("keys"), py::arg("tracer_capacity") = 10,
           py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none());
   auto_def(cls, "GetOSType", &AMSFTPClient::GetOSType)
+      .arg("update", false)
       .doc("Get the OS type of the server");
   auto_def(cls, "GetHomeDir", &AMSFTPClient::GetHomeDir);
   auto_def(cls, "Check", &AMSFTPClient::Check)
@@ -293,6 +345,7 @@ void BindAMSFTPClient(py::module &m) {
   auto_def(cls, "chmod", &AMSFTPClient::chmod)
       .arg("path", "")
       .arg("mode")
+      .arg("recursive", false)
       .doc("Recursive change the mode of the file");
   auto_def(cls, "stat", &AMSFTPClient::stat)
       .arg("path")
@@ -439,14 +492,31 @@ void BindAMSFTPWorker(py::module &m) {
           py::arg("cb_interval_s") = 0.2f,
           "Create transfer worker with callback");
 
-  cls.def("SetState", &AMSFTPWorker::SetState, py::arg("state"),
-          "Set transfer state");
-  cls.def("GetState", &AMSFTPWorker::GetState, "Get current transfer state");
-  cls.def("EraseOverlapTasks", &AMSFTPWorker::EraseOverlapTasks,
-          py::arg("tasks"), "Remove duplicate tasks from list");
-  cls.def("transfer", &AMSFTPWorker::transfer, py::arg("tasks"),
-          py::arg("hostm"), py::arg("buffer_size") = -1,
-          "Execute batch file transfers");
+  auto_def(cls, "SetState", &AMSFTPWorker::SetState)
+      .arg("state")
+      .doc("Set transfer state");
+  auto_def(cls, "GetState", &AMSFTPWorker::GetState)
+      .doc("Get current transfer state");
+  auto_def(cls, "EraseOverlapTasks", &AMSFTPWorker::EraseOverlapTasks)
+      .arg("tasks")
+      .doc("Remove duplicate tasks from list");
+
+  auto_def(cls, "transfer", &AMSFTPWorker::transfer)
+      .arg("tasks")
+      .arg("hostm")
+      .arg("buffer_size", -1)
+      .doc("Execute batch file transfers");
+
+  auto_def(cls, "load_tasks", &AMSFTPWorker::load_tasks)
+      .arg("src")
+      .arg("dst")
+      .arg("hostm")
+      .arg("src_host", "")
+      .arg("dst_host", "")
+      .arg("overwrite", false)
+      .arg("mkdir", true)
+      .arg("ignore_special_file", true)
+      .doc("Load tasks from source and destination");
 
   // Public members
   cls.def_readwrite("callback", &AMSFTPWorker::callback,
@@ -454,9 +524,137 @@ void BindAMSFTPWorker(py::module &m) {
   // pd is not bound because ProgressData cannot be copied
 }
 
+void BindAMFS(py::module &m) {
+  auto_def_func(m, "timenow", &AMFS::timenow)
+      .doc("Get the current time in seconds");
+
+  auto_def_func(m, "ModeTrans",
+                static_cast<std::string (*)(uint64_t)>(&AMFS::Str::ModeTrans))
+      .arg("mode_int")
+      .doc("Translate the mode int to string");
+
+  auto_def_func(m, "ModeTrans",
+                py::overload_cast<std::string>(&AMFS::Str::ModeTrans))
+      .arg("mode_str")
+      .doc("Translate the mode string to int");
+  auto_def_func(m, "MergeModeStr", &AMFS::Str::MergeModeStr)
+      .arg("base_mode_str")
+      .arg("new_mode_str")
+      .doc("Merge the mode string");
+  auto_def_func(m, "IsModeValid",
+                py::overload_cast<std::string>(&AMFS::Str::IsModeValid))
+      .arg("mode_str")
+      .doc("Check if the mode string is valid");
+
+  auto_def_func(m, "IsModeValidH",
+                py::overload_cast<uint64_t>(&AMFS::Str::IsModeValid))
+      .arg("mode_int")
+      .doc("Check if the mode int is valid");
+  auto_def_func(m, "GetPathSep", &AMFS::Str::GetPathSep)
+      .arg("path")
+      .doc("Get the path separator of the path, if def #AMForceUsingUnixSep "
+           "during compile, "
+           "will return \"/\" all the time");
+  auto_def_func(m, "UnifyPathSep", &AMFS::UnifyPathSep)
+      .arg("path")
+      .arg("sep", "")
+      .doc("Unify the path separator of the path, if sep is empty, will use "
+           "GetPathSep to get the path separator");
+  auto_def_func(m, "IsAbs", &AMFS::IsAbs)
+      .arg("path")
+      .arg("sep", "")
+      .doc("Check if the path is an absolute path, unify the path separator "
+           "first");
+  auto_def_func(m, "HomePath", &AMFS::HomePath)
+      .doc("Get the home path of the current user");
+  auto_def_func(m, "extname", &AMFS::extname)
+      .arg("path")
+      .doc(
+          "Just string seperation, return the extension of the path without .");
+  auto_def_func(m, "split_basename", &AMFS::split_basename)
+      .arg("basename")
+      .doc("Split the basename of the path, return tuple[str, str], the first "
+           "is the basename without extension, the second is the extension(no "
+           ".)");
+  auto_def_func(m, "CWD", &AMFS::CWD).doc("Get the current working directory");
+  auto_def_func(m, "split", &AMFS::split)
+      .arg("path")
+      .doc("Split the path, return list[str], the path is split by separator");
+  m.def(
+      "join",
+      [](const std::vector<std::string> &parts,
+         std::optional<AMFS::SepType> sep) {
+        if (sep.has_value()) {
+          return AMFS::join(parts, sep.value());
+        }
+        return AMFS::join(parts);
+      },
+      py::arg("parts"), py::arg("sep") = py::none(),
+      "Join path segments into a single path");
+  auto_def_func(m, "abspath", &AMFS::abspath)
+      .arg("path")
+      .arg("parsing_home", true)
+      .arg("home", "")
+      .arg("cwd", "")
+      .arg("sep", "")
+      .doc("Convert path to absolute path(won't check if path exists), support "
+           "parsing ~ . .. symbol, "
+           "unify the path separator first");
+
+  auto_def_func(m, "dirname", &AMFS::dirname)
+      .arg("path")
+      .doc("Get the directory name of the path");
+  auto_def_func(m, "basename", &AMFS::basename)
+      .arg("path")
+      .doc("Get the base name of the path");
+  auto_def_func(m, "mkdirs", &AMFS::mkdirs)
+      .arg("path")
+      .doc("Create directories recursively. If error, will return the "
+           "error message");
+  auto_def_func(m, "stat", &AMFS::stat)
+      .arg("path")
+      .arg("trace_link", false)
+      .doc("Get the detailed information about the file, if error, the firt "
+           "string is error message");
+  auto_def_func(m, "listdir", &AMFS::listdir)
+      .arg("path")
+      .arg("max_time_s", -1)
+      .doc("List directory contents, if max_time_s >0 ,will end action and "
+           "directly return after max_time_s seconds");
+  auto_def_func(m, "iwalk", &AMFS::iwalk)
+      .arg("path")
+      .arg("ignore_special_file", true)
+      .doc("Deep walk to get all leaf paths, return list[PathInfo]");
+  auto_def_func(m, "walk", &AMFS::walk)
+      .arg("path")
+      .arg("max_depth", -1)
+      .arg("ignore_special_file", true)
+      .doc("Walk directory tree, returns list of (list[path parts], "
+           "[PathInfo]) tuples");
+  auto_def_func(m, "getsize", &AMFS::getsize)
+      .arg("path")
+      .arg("trace_link", false)
+      .doc("Get total size of file or directory");
+}
+
 } // namespace AMBIDINGS
 PYBIND11_MODULE(AMSFTP, m) {
   m.doc() = "A SFTP Client Module Based on libssh2";
+
+#ifdef _WIN32
+  // Initialize WinSock
+  bool expected = false;
+  if (std::atomic_compare_exchange_strong(&is_wsa_initialized, &expected,
+                                          true)) {
+    WSADATA wsaData;
+    int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+    if (result != 0) {
+      throw std::runtime_error("WSAStartup failed");
+    }
+    m.add_object("_cleanup", py::capsule(cleanup_wsa));
+  }
+#endif
+
   auto em = m.def_submodule("AMEnum", "Enum Classes");
   auto data = m.def_submodule("AMData", "Data Classes");
   // auto fs = m.def_submodule("AMFS", "Local Filesystem Operations");
@@ -469,6 +667,7 @@ PYBIND11_MODULE(AMSFTP, m) {
   AMBIDINGS::BindTransferTask(data);
   AMBIDINGS::BindTraceInfo(data);
   AMBIDINGS::BindPathInfo(data);
+  AMBIDINGS::BindBasePathMatch(m);
   AMBIDINGS::BindAMTracer(m);
   AMBIDINGS::BindBaseClient(m);
   AMBIDINGS::BindAMSession(m);
@@ -476,4 +675,5 @@ PYBIND11_MODULE(AMSFTP, m) {
   AMBIDINGS::BindAMFTPClient(m);
   AMBIDINGS::BindHostMaintainer(m);
   AMBIDINGS::BindAMSFTPWorker(m);
+  AMBIDINGS::BindAMFS(m);
 }

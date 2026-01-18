@@ -5,255 +5,226 @@ from __future__ import annotations
 import typing
 from . import AMData
 from . import AMEnum
-from . import AMFS
-__all__ = ['AMData', 'AMEnum', 'AMFS', 'AMFTPClient', 'AMSFTPClient', 'AMSFTPWorker', 'AMSession', 'BaseClient', 'HostMaintainer']
-class AMFTPClient(AMFS.BasePathMatch):
+__all__ = ['AMData', 'AMEnum', 'AMFTPClient', 'AMSFTPClient', 'AMSFTPWorker', 'AMSession', 'AMTracer', 'BaseClient', 'BasePathMatch', 'HostMaintainer', 'ModeTrans', 'PathMatch', 'timenow']
+class AMFTPClient(BaseClient):
     """
-    FTP Client Class Based on libcurl
+    An FTP Client Class Based on libcurl
     """
-    def Check(self, arg0: bool) -> tuple[AMEnum.ErrorCode, str]:
+    def Check(self, need_trace: bool = False) -> tuple[AMEnum.ErrorCode, str]:
         """
-        Check if the connection is still valid using PWD command
+        Check FTP connection status
         """
     def Connect(self, force: bool = False) -> tuple[AMEnum.ErrorCode, str]:
         """
-        Connect to FTP server, if force=True, will disconnect and reconnect
-        """
-    def GetHomeDir(self) -> str:
-        """
-        Get the home directory path
+        Connect to FTP server
         """
     def __init__(self, request: AMData.ConRequst, buffer_capacity: int = 10, trace_cb: typing.Any = None) -> None:
-        """
-        Create an FTP client instance
-        """
-    def download(self, remote_path: str, local_path: str, progress_callback: typing.Any = None) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Download a file from remote FTP server to local
-        """
+        ...
     def exists(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
         """
-        Check if a path exists
+        Check if path exists
         """
     def is_dir(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
         """
-        Check if a path is a directory
+        Check if path is a directory
+        """
+    def listdir(self, path: str, max_time_ms: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.PathInfo]]:
+        """
+        List directory contents
+        """
+    def mkdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Create a directory
+        """
+    def mkdirs(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Create directories recursively
+        """
+    def rmdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Remove an empty directory
+        """
+    def stat(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], AMData.PathInfo]:
+        """
+        Get file information
+        """
+class AMSFTPClient(AMSession):
+    """
+    An SFTP Client Class Based on libssh2
+    """
+    def Check(self, need_trace: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Check will force to update state, use GetState to get the cached state
+        """
+    def ConductCmd(self, cmd: str, max_time_s: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], tuple[str, int]]:
+        """
+        Execute shell command on remote server
+        """
+    def Connect(self, force: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        if force=True, will disconnect and reconnect, else will check first, if wrong then reconnect
+        """
+    def EnsureTrashDir(self) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Ensure the trash directory exists, if not, create it. If path is empty, will use default trash directory
+        """
+    def GetHomeDir(self) -> str:
+        ...
+    def GetOSType(self, update: bool = False) -> AMEnum.OS_TYPE:
+        """
+        Get the OS type of the server
+        """
+    def GetRTT(self, times: int = 5) -> float:
+        """
+        Get round-trip time to server
+        """
+    def GetTrashDir(self) -> str:
+        ...
+    def SetTrashDir(self, trash_dir: str = '') -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Set the trash directory and create it if it doesn't exist, if wrong, will return error
+        """
+    def TerminateCmd(self) -> None:
+        """
+        Terminate currently running command
+        """
+    def __init__(self, request: AMData.ConRequst, keys: list[str], tracer_capacity: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
+        ...
+    def chmod(self, path: str = '', mode: str | int, recursive: bool = False) -> dict[str, tuple[AMEnum.ErrorCode, str]] | tuple[AMEnum.ErrorCode, str]:
+        """
+        Recursive change the mode of the file
+        """
+    def copy(self, src: str, dst: str, need_mkdir: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Copy file/directory on remote server using shell command
+        """
+    def exists(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+        """
+        Check if path exists
+        """
+    def get_path_type(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], AMEnum.PathType]:
+        """
+        Get the type of the path
+        """
+    def getsize(self, path: str, ignore_special_file: bool = True) -> int:
+        """
+        Get total size of file or directory
+        """
+    def is_dir(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+        """
+        Check if path is a directory
+        """
+    def is_regular(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+        """
+        Check if path is a regular file
+        """
+    def is_symlink(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+        """
+        Check if path is a symlink
         """
     def iwalk(self, path: str, ignore_special_file: bool = True) -> list[AMData.PathInfo]:
         """
-        Recursively walk the path, return list of leaf nodes (files and empty directories)
+        Deep walk to get all leaf paths
+        """
+    def listdir(self, path: str, max_time_ms: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.PathInfo]]:
+        """
+        List directory contents
         """
     def mkdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
         """
-        Create a single directory
+        Create a directory
         """
     def mkdirs(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
         """
-        Create multiple nested directories (like mkdir -p)
+        Create directories recursively
         """
-    def move(self, src: str, dst: str, need_mkdir: bool = False, force_write: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+    def move(self, src: str, dst: str, need_mkdir: bool, force_write: bool) -> tuple[AMEnum.ErrorCode, str]:
         """
-        Move source path to destination directory
+        Move file/directory to destination folder
+        """
+    def realpath(self, path: str = '') -> tuple[tuple[AMEnum.ErrorCode, str], str]:
+        """
+        Use server to parse the path, ~ parsed in local, symlink parsed in server
         """
     def remove(self, path: str) -> list[tuple[str, tuple[AMEnum.ErrorCode, str]]] | tuple[AMEnum.ErrorCode, str]:
         """
-        Recursively delete a file or directory. Returns list of errors if any occurred
+        Remove file or directory recursively
         """
     def rename(self, src: str, dst: str, overwrite: bool = False) -> tuple[AMEnum.ErrorCode, str]:
         """
-        Rename or move a file/directory from src to dst
+        Rename file/directory
         """
     def rmdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
         """
-        Delete an empty directory
+        Remove an empty directory
         """
     def rmfile(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
         """
-        Delete a single file
+        Remove a file permanently
+        """
+    def saferm(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Safely remove by moving to trash
         """
     def stat(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], AMData.PathInfo]:
         """
-        Get detailed information about a path (file or directory)
-        """
-    def upload(self, local_path: str, remote_path: str, progress_callback: typing.Any = None) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Upload a file from local to remote FTP server
+        Get the detailed information about the file
         """
     def walk(self, path: str, max_depth: int = -1, ignore_special_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[list[str], list[AMData.PathInfo]]]]:
         """
-        Recursively walk the path with structure, return list[tuple[list[str], list[PathInfo]]]
-        """
-class AMSFTPClient(BaseClient, AMFS.BasePathMatch):
-    """
-    Core SFTP Client Class
-    """
-    @typing.overload
-    def ClearPublicVar(self) -> None:
-        """
-        Clear all stored Python objects
-        """
-    @typing.overload
-    def ClearPublicVar(self) -> None:
-        """
-        Clear all stored Python objects
-        """
-    def Connect(self, force: bool = False) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Wrapper of BaseConnect, will get OS type and home directory if conducted the first time
-        """
-    @typing.overload
-    def DelPublicVar(self, key: str) -> bool:
-        """
-        Delete a stored Python object, returns True if deleted
-        """
-    @typing.overload
-    def DelPublicVar(self, key: str) -> bool:
-        """
-        Delete a stored Python object, returns True if deleted
-        """
-    def EnsureTrashDir(self) -> tuple[AMEnum.ErrorCode, str]:
-        ...
-    @typing.overload
-    def GetAllPublicVars(self) -> dict:
-        """
-        Get all stored Python objects as a dictionary with deep copies
-        """
-    @typing.overload
-    def GetAllPublicVars(self) -> dict:
-        """
-        Get all stored Python objects as a dictionary with deep copies
-        """
-    def GetHomeDir(self) -> str:
-        """
-        Get the home directory
-        """
-    @typing.overload
-    def GetPublicVar(self, key: str, default: typing.Any = None) -> typing.Any:
-        """
-        Get a stored Python object, returns a deep copy
-        """
-    @typing.overload
-    def GetPublicVar(self, key: str, default_value: typing.Any = None) -> typing.Any:
-        """
-        Get a stored Python object, returns a deep copy
-        """
-    def GetTrashDir(self) -> str:
-        """
-        Get the trash directory
-        """
-    @typing.overload
-    def SetPublicVar(self, key: str, value: typing.Any, overwrite: bool = False) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Store a Python object in C++ side with deep copy, C++ owns the copy
-        """
-    @typing.overload
-    def SetPublicVar(self, key: str, value: typing.Any, overwrite: bool = False) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Store a Python object in C++ side with deep copy, C++ owns the copy
-        """
-    def SetTrashDir(self, trash_dir: str = '') -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Set the trash directory and create it if it doesn't exist
-        """
-    def StrUid(self, uid: int) -> str:
-        """
-        Convert a uid to a string
-        """
-    def __init__(self, request: AMData.ConRequst, keys: list[str], error_num: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
-        ...
-    def chmod(self, path: str, mode: str | int, recursive: bool = False) -> dict[str, tuple[AMEnum.ErrorCode, str]] | tuple[AMEnum.ErrorCode, str]:
-        ...
-    def copy(self, src: str, dst: str, need_mkdir: bool = False) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Unstable, using shell command to copy
-        """
-    def exists(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
-        ...
-    def get_path_type(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], AMEnum.PathType]:
-        ...
-    def getsize(self, path: str, ignore_sepcial_file: bool = True) -> int:
-        ...
-    def is_dir(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
-        ...
-    def is_regular(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
-        ...
-    def is_symlink(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
-        ...
-    def iterator_listdir(self, path: str) -> typing.Any:
-        """
-        Return an iterator that yields PathInfo one by one, useful for large directories
-        """
-    def iwalk(self, path: str, ignore_sepcial_file: bool = True) -> list[AMData.PathInfo]:
-        """
-        Recursive walk the path, ignore path structure, just return list[PathInfo]
-        """
-    def listdir(self, path: str, max_time_ms: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.PathInfo]]:
-        ...
-    def mkdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
-        ...
-    def mkdirs(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
-        ...
-    def move(self, src: str, dst: str, need_mkdir: bool = False, force_write: bool = False) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Move source path src to Destination Directory dst
-        """
-    def realpath(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], str]:
-        """
-        Parse and return the absolute path, ~ in client will be parsed, .. and . will be parsed by server, if there are these symbols, the path must exist
-        """
-    def remove(self, path: str) -> list[tuple[str, tuple[AMEnum.ErrorCode, str]]] | tuple[AMEnum.ErrorCode, str]:
-        """
-        Permanently remove a file or directory, if return (ErrorCode, str), the whole operation failed, otherwise return list[tuple[str, tuple[ErrorCode, str]]], means some paths failed to remove
-        """
-    def rename(self, src: str, dst: str, overwrite: bool = False) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Turn src_path into dst_path, if overwrite is true, the dst_path will be overwritten
-        """
-    def rmdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
-        ...
-    def rmfile(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
-        ...
-    def saferm(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Not real remove, just move it to {trash_dir}/{year-month-day-hour-minute-second}/{pathname}
-        """
-    def stat(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], AMData.PathInfo]:
-        ...
-    def walk(self, path: str, max_depth: int = -1, ignore_sepcial_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[list[str], list[AMData.PathInfo]]]]:
-        """
-        Recursive walk the path, record parent dir, return list[tuple[list[str],PathInfo]]
+        Walk directory tree, returns list of (dirpath, files) tuples
         """
 class AMSFTPWorker:
     """
-    A worker for transferring files
+    High-performance file transfer worker
     """
-    def UnionTransfer(self, task: AMData.TransferTask, src_client: BaseClient = None, dst_client: BaseClient = None) -> tuple[AMEnum.ErrorCode, str]:
-        ...
-    def __init__(self, callback: AMData.TransferCallback = ..., cb_interval_s: float = 0.1) -> None:
-        ...
-    def load_tasks(self, src: str, dst: str, hostd: HostMaintainer, src_hostname: str = '', dst_hostname: str = '', overwrite: bool = False, mkdir: bool = True, ignore_sepcial_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.TransferTask]]:
-        ...
-    def transfer(self, tasks: list[AMData.TransferTask], hostd: HostMaintainer, chunk_large: int = 16777216, chunk_middle: int = 2097152, chunk_small: int = 262144) -> list[AMData.TransferTask]:
+    def EraseOverlapTasks(self, tasks: list[AMData.TransferTask]) -> list[AMData.TransferTask]:
+        """
+        Remove duplicate tasks from list
+        """
+    def GetState(self) -> AMEnum.TransferControl:
+        """
+        Get current transfer state
+        """
+    def SetState(self, state: AMEnum.TransferControl) -> None:
+        """
+        Set transfer state
+        """
+    def __init__(self, callback: AMData.TransferCallback, cb_interval_s: float = 0.20000000298023224) -> None:
+        """
+        Create transfer worker with callback
+        """
+    def load_tasks(self, arg0: str, arg1: str, arg2: HostMaintainer, arg3: str, arg4: str, arg5: bool, arg6: bool, arg7: bool) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.TransferTask]]:
+        """
+        Load tasks from source and destination
+        """
+    def transfer(self, tasks: list[AMData.TransferTask], hostm: HostMaintainer, buffer_size: int = -1) -> list[AMData.TransferTask]:
+        """
+        Execute batch file transfers
+        """
+    @property
+    def callback(self) -> AMData.TransferCallback:
+        """
+        Transfer callback object
+        """
+    @callback.setter
+    def callback(self, arg0: AMData.TransferCallback) -> None:
         ...
 class AMSession(BaseClient):
     """
-    Session Class
+    An intermediate class between BaseClient and SFTP Client, Manage SSH Connection and Session
     """
+    def BaseCheck(self) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Attemp to stat home path to test the connection
+        """
     def BaseConnect(self, force: bool = False) -> tuple[AMEnum.ErrorCode, str]:
         """
-        Connect to the session, force will force to reconnect even if the session is already connected
-        """
-    def Check(self, need_trace: bool = False) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Realtime check the session status and update the state
-        """
-    def Disconnect(self) -> None:
-        """
-        Disconnect the session
+        Establish ssh ssesion and sftp, if force=True, will disconnect and reconnect, else will check first, if wrong then reconnect
         """
     def GetKeys(self) -> list[str]:
         """
-        Get all shared private keys of the session
+        Get the list of the keys
         """
     def GetLastEC(self) -> AMEnum.ErrorCode:
         """
@@ -263,53 +234,150 @@ class AMSession(BaseClient):
         """
         Get the last error message of the session
         """
-    def GetNickname(self) -> str:
+    def GetLibssh2Version(self) -> str:
         """
-        Get the nickname of the session
-        """
-    def GetRequest(self) -> AMData.ConRequst:
-        """
-        Get the request data
+        Get the version of the libssh2 library
         """
     def GetState(self) -> tuple[AMEnum.ErrorCode, str]:
         """
-        Get the current state of the session
+        Get the cached state of the session
         """
     def IsValidKey(self, key: str) -> bool:
         """
-        Check whether a file is a valid private key file
+        Check if the keyfile is valid
         """
-    def SetAuthCallback(self, auth_cb: typing.Any = None) -> None:
+    def SetAuthCallback(self, auth_cb: typing.Any) -> None:
         """
-        When password authentication is needed, this callback will be called, callable[[AuthCBInfo], bool]
+        Set the authentication callback function, callable[AuthCBInfo, None], if none, won't callback to python
         """
     def SetKeys(self, keys: list[str]) -> None:
         """
-        Set shared private keys
+        Set the list of the keys
         """
     def __init__(self, request: AMData.ConRequst, keys: list[str], error_num: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
         ...
-class BaseClient(AMData.AMTracer):
+class AMTracer:
+    """
+    Base of the Client, Manage Trace action and record
+    """
+    def ClearPublicVar(self) -> None:
+        ...
+    def ClearTracer(self) -> None:
+        ...
+    def DelPublicVar(self, key: str) -> bool:
+        ...
+    def GetAllPublicVars(self) -> dict:
+        ...
+    def GetAllTraces(self) -> list[AMData.TraceInfo]:
+        ...
+    def GetNickname(self) -> str:
+        ...
+    def GetPublicVar(self, key: str, default_value: typing.Any = None) -> typing.Any:
+        ...
+    def GetRequest(self) -> AMData.ConRequst:
+        ...
+    def GetTraceNum(self) -> int:
+        ...
+    def LastTrace(self) -> AMData.TraceInfo:
+        ...
+    def SetPublicVar(self, key: str, value: typing.Any, overwrite: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        ...
+    def SetPyTrace(self, trace_cb: typing.Any = None) -> None:
+        """
+        callable[TraceInfo, None], if none, disable py trace
+        """
+    def SetTraceState(self, is_pause: bool) -> None:
+        ...
+    def TracerCapacity(self, size: int = -1) -> int:
+        """
+        Give Negative Number to Get Capacity, Give Positive Number to Set Capacity
+        """
     def __init__(self, request: AMData.ConRequst, buffer_capacity: int = 10, trace_cb: typing.Any = None) -> None:
         ...
+    @typing.overload
+    def trace(self, level: AMEnum.TraceLevel, error_code: AMEnum.ErrorCode, target: str, action: str, msg: str) -> None:
+        ...
+    @typing.overload
+    def trace(self, trace_info: AMData.TraceInfo) -> None:
+        ...
+class BaseClient(AMTracer, BasePathMatch):
+    """
+    Abstract Base Client Class, Implement by FTP, SFTP Client
+    """
+    def BufferSize(self, size: int = -1) -> int:
+        """
+        Buffer Size is restricted between 524288 and 67108864
+        """
+    def GetProtocol(self) -> ClientProtocol:
+        """
+        Get the protocol of the client, Base and Unknown are not valid
+        """
+    def GetProtocolName(self) -> str:
+        """
+        Get the string name of the protocol of the client
+        """
+class BasePathMatch:
+    """
+    Base Path Match Class
+    """
+    def find(self, path: str, type: AMEnum.SearchType = ...) -> list[AMData.PathInfo]:
+        """
+        Path Match Function, support * and <> , greater and less sign equal to [] in regex
+        """
+    def name_match(self, name: str, pattern: str) -> bool:
+        """
+        Internal Function, preprocess the pattern and match the name
+        """
+    def str_match(self, name: str, pattern: str) -> bool:
+        """
+        Internal Function, use wregex to match the string
+        """
+    def walk_match(self, parts: list[str], match_parts: list[str]) -> bool:
+        """
+        Internal Function, directly decides whether two paths match
+        """
 class HostMaintainer:
     """
-    The Client Maintainer Class, Check clients status all the time
+    Host Connection Manager with Heartbeat
     """
-    def __init__(self, heartbeat_interval_s: int, disconnect_cb: typing.Any = None) -> None:
-        ...
-    def add_host(self, nickname: str, client: AMSFTPClient, overwrite: bool = False) -> None:
-        ...
-    def get_host(self, nickname: str) -> AMSFTPClient:
-        ...
+    def __init__(self, heartbeat_interval_s: int = 60, disconnect_cb: typing.Any = None) -> None:
+        """
+        Create host maintainer with heartbeat monitoring
+        """
+    def add_host(self, nickname: str, client: BaseClient, overwrite: bool = False) -> None:
+        """
+        Add a host client to the maintainer
+        """
+    def get_clients(self) -> list[BaseClient]:
+        """
+        Get list of all registered clients
+        """
+    def get_host(self, nickname: str) -> BaseClient:
+        """
+        Get a host client by nickname
+        """
     def get_hosts(self) -> list[str]:
         """
-        Just return all hostnames
+        Get list of all registered host nicknames
         """
     def remove_host(self, nickname: str) -> None:
-        ...
+        """
+        Remove a host from the maintainer
+        """
     def test_host(self, nickname: str, update: bool = False) -> tuple[AMEnum.ErrorCode, str]:
         """
-        Test the host connection, return (ErrorCode, str)
+        Test host connection status
         """
+class PathMatch(BasePathMatch):
+    """
+    Local Path Match Class, using AMFS IO function to override Core Function
+    """
+def ModeTrans(mode_int: int) -> str:
+    """
+    Translate the mode int to string
+    """
+def timenow() -> float:
+    """
+    Get the current time in seconds
+    """
 _cleanup: typing.Any  # value = <capsule object>
