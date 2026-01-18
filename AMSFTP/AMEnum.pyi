@@ -3,7 +3,52 @@ Enum Classes
 """
 from __future__ import annotations
 import typing
-__all__ = ['ErrorCode', 'OS_TYPE', 'PathType', 'SearchType', 'SepType', 'TraceLevel', 'TransferControl']
+__all__ = ['ClientProtocol', 'ErrorCode', 'OS_TYPE', 'PathType', 'SearchType', 'SepType', 'TraceLevel', 'TransferControl']
+class ClientProtocol:
+    """
+    
+    
+    Members:
+    
+      Unknown
+    
+      Base
+    
+      SFTP
+    
+      FTP
+    """
+    Base: typing.ClassVar[ClientProtocol]  # value = <ClientProtocol.Base: 0>
+    FTP: typing.ClassVar[ClientProtocol]  # value = <ClientProtocol.FTP: 2>
+    SFTP: typing.ClassVar[ClientProtocol]  # value = <ClientProtocol.SFTP: 1>
+    Unknown: typing.ClassVar[ClientProtocol]  # value = <ClientProtocol.Unknown: -1>
+    __members__: typing.ClassVar[dict[str, ClientProtocol]]  # value = {'Unknown': <ClientProtocol.Unknown: -1>, 'Base': <ClientProtocol.Base: 0>, 'SFTP': <ClientProtocol.SFTP: 1>, 'FTP': <ClientProtocol.FTP: 2>}
+    def __eq__(self, other: typing.Any) -> bool:
+        ...
+    def __getstate__(self) -> int:
+        ...
+    def __hash__(self) -> int:
+        ...
+    def __index__(self) -> int:
+        ...
+    def __init__(self, value: int) -> None:
+        ...
+    def __int__(self) -> int:
+        ...
+    def __ne__(self, other: typing.Any) -> bool:
+        ...
+    def __repr__(self) -> str:
+        ...
+    def __setstate__(self, state: int) -> None:
+        ...
+    def __str__(self) -> str:
+        ...
+    @property
+    def name(self) -> str:
+        ...
+    @property
+    def value(self) -> int:
+        ...
 class ErrorCode:
     """
     

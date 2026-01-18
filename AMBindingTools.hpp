@@ -969,65 +969,86 @@ private:
     }
   }
 
-  void bind_5_args() {
-    bool all_default = true, none_default = true;
-    for (int i = 0; i < 5; i++) {
-      if (args_info[i].has_default)
-        none_default = false;
-      else
-        all_default = false;
-    }
+  // Macros for 5/6 args (will be undefined after use)
+#define A5(i) py::arg(args_info[i].name.c_str())
+#define AD5(i) py::arg(args_info[i].name.c_str()) = args_info[i].default_value
 
-    if (all_default) {
-      mod_ptr->def(
-          func_name, func_ptr,
-          py::arg(args_info[0].name.c_str()) = args_info[0].default_value,
-          py::arg(args_info[1].name.c_str()) = args_info[1].default_value,
-          py::arg(args_info[2].name.c_str()) = args_info[2].default_value,
-          py::arg(args_info[3].name.c_str()) = args_info[3].default_value,
-          py::arg(args_info[4].name.c_str()) = args_info[4].default_value,
-          func_doc.c_str());
-    } else if (none_default) {
-      mod_ptr->def(func_name, func_ptr, py::arg(args_info[0].name.c_str()),
-                   py::arg(args_info[1].name.c_str()),
-                   py::arg(args_info[2].name.c_str()),
-                   py::arg(args_info[3].name.c_str()),
-                   py::arg(args_info[4].name.c_str()), func_doc.c_str());
-    } else {
-      mod_ptr->def(func_name, func_ptr, func_doc.c_str());
+  void bind_5_args() {
+    if (!is_trailing_defaults_pattern(5)) {
+      mod_ptr->def(func_name, func_ptr, A5(0), A5(1), A5(2), A5(3), A5(4),
+                   func_doc.c_str());
+      return;
+    }
+    int k = first_default_index(5);
+    switch (k) {
+    case 0:
+      mod_ptr->def(func_name, func_ptr, AD5(0), AD5(1), AD5(2), AD5(3), AD5(4),
+                   func_doc.c_str());
+      break;
+    case 1:
+      mod_ptr->def(func_name, func_ptr, A5(0), AD5(1), AD5(2), AD5(3), AD5(4),
+                   func_doc.c_str());
+      break;
+    case 2:
+      mod_ptr->def(func_name, func_ptr, A5(0), A5(1), AD5(2), AD5(3), AD5(4),
+                   func_doc.c_str());
+      break;
+    case 3:
+      mod_ptr->def(func_name, func_ptr, A5(0), A5(1), A5(2), AD5(3), AD5(4),
+                   func_doc.c_str());
+      break;
+    case 4:
+      mod_ptr->def(func_name, func_ptr, A5(0), A5(1), A5(2), A5(3), AD5(4),
+                   func_doc.c_str());
+      break;
+    case 5:
+      mod_ptr->def(func_name, func_ptr, A5(0), A5(1), A5(2), A5(3), A5(4),
+                   func_doc.c_str());
+      break;
     }
   }
 
   void bind_6_args() {
-    bool all_default = true, none_default = true;
-    for (int i = 0; i < 6; i++) {
-      if (args_info[i].has_default)
-        none_default = false;
-      else
-        all_default = false;
+    if (!is_trailing_defaults_pattern(6)) {
+      mod_ptr->def(func_name, func_ptr, A5(0), A5(1), A5(2), A5(3), A5(4),
+                   A5(5), func_doc.c_str());
+      return;
     }
-
-    if (all_default) {
-      mod_ptr->def(
-          func_name, func_ptr,
-          py::arg(args_info[0].name.c_str()) = args_info[0].default_value,
-          py::arg(args_info[1].name.c_str()) = args_info[1].default_value,
-          py::arg(args_info[2].name.c_str()) = args_info[2].default_value,
-          py::arg(args_info[3].name.c_str()) = args_info[3].default_value,
-          py::arg(args_info[4].name.c_str()) = args_info[4].default_value,
-          py::arg(args_info[5].name.c_str()) = args_info[5].default_value,
-          func_doc.c_str());
-    } else if (none_default) {
-      mod_ptr->def(func_name, func_ptr, py::arg(args_info[0].name.c_str()),
-                   py::arg(args_info[1].name.c_str()),
-                   py::arg(args_info[2].name.c_str()),
-                   py::arg(args_info[3].name.c_str()),
-                   py::arg(args_info[4].name.c_str()),
-                   py::arg(args_info[5].name.c_str()), func_doc.c_str());
-    } else {
-      mod_ptr->def(func_name, func_ptr, func_doc.c_str());
+    int k = first_default_index(6);
+    switch (k) {
+    case 0:
+      mod_ptr->def(func_name, func_ptr, AD5(0), AD5(1), AD5(2), AD5(3), AD5(4),
+                   AD5(5), func_doc.c_str());
+      break;
+    case 1:
+      mod_ptr->def(func_name, func_ptr, A5(0), AD5(1), AD5(2), AD5(3), AD5(4),
+                   AD5(5), func_doc.c_str());
+      break;
+    case 2:
+      mod_ptr->def(func_name, func_ptr, A5(0), A5(1), AD5(2), AD5(3), AD5(4),
+                   AD5(5), func_doc.c_str());
+      break;
+    case 3:
+      mod_ptr->def(func_name, func_ptr, A5(0), A5(1), A5(2), AD5(3), AD5(4),
+                   AD5(5), func_doc.c_str());
+      break;
+    case 4:
+      mod_ptr->def(func_name, func_ptr, A5(0), A5(1), A5(2), A5(3), AD5(4),
+                   AD5(5), func_doc.c_str());
+      break;
+    case 5:
+      mod_ptr->def(func_name, func_ptr, A5(0), A5(1), A5(2), A5(3), A5(4),
+                   AD5(5), func_doc.c_str());
+      break;
+    case 6:
+      mod_ptr->def(func_name, func_ptr, A5(0), A5(1), A5(2), A5(3), A5(4),
+                   A5(5), func_doc.c_str());
+      break;
     }
   }
+
+#undef A5
+#undef AD5
 
   // Helper: find first index with default (returns N if none have defaults)
   int first_default_index(int N) {

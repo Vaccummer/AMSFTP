@@ -5,7 +5,8 @@ from __future__ import annotations
 import typing
 from . import AMData
 from . import AMEnum
-__all__ = ['AMData', 'AMEnum', 'AMFTPClient', 'AMSFTPClient', 'AMSFTPWorker', 'AMSession', 'AMTracer', 'BaseClient', 'BasePathMatch', 'HostMaintainer', 'ModeTrans', 'PathMatch', 'timenow']
+from . import AMFS
+__all__ = ['AMData', 'AMEnum', 'AMFS', 'AMFTPClient', 'AMSFTPClient', 'AMSFTPWorker', 'AMSession', 'AMTracer', 'BaseClient', 'BasePathMatch', 'HostMaintainer', 'PathMatch']
 class AMFTPClient(BaseClient):
     """
     An FTP Client Class Based on libcurl
@@ -18,6 +19,10 @@ class AMFTPClient(BaseClient):
         """
         Connect to FTP server
         """
+    def GetHomeDir(self) -> str:
+        ...
+    def GetState(self) -> tuple[AMEnum.ErrorCode, str]:
+        ...
     def __init__(self, request: AMData.ConRequst, buffer_capacity: int = 10, trace_cb: typing.Any = None) -> None:
         ...
     def exists(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
@@ -27,6 +32,10 @@ class AMFTPClient(BaseClient):
     def is_dir(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
         """
         Check if path is a directory
+        """
+    def iwalk(self, path: str, ignore_special_file: bool = True) -> list[AMData.PathInfo]:
+        """
+        Deep walk to get all leaf paths
         """
     def listdir(self, path: str, max_time_ms: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.PathInfo]]:
         """
@@ -40,13 +49,31 @@ class AMFTPClient(BaseClient):
         """
         Create directories recursively
         """
+    def move(self, src: str, dst: str, need_mkdir: bool, force_write: bool) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Move file/directory to destination folder
+        """
+    def remove(self, path: str) -> list[tuple[str, tuple[AMEnum.ErrorCode, str]]] | tuple[AMEnum.ErrorCode, str]:
+        """
+        Remove file or directory recursively
+        """
+    def rename(self, src: str, dst: str, overwrite: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+        ...
     def rmdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
         """
         Remove an empty directory
         """
+    def rmfile(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Remove a file permanently
+        """
     def stat(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], AMData.PathInfo]:
         """
         Get file information
+        """
+    def walk(self, path: str, max_depth: int = -1, ignore_special_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[list[str], list[AMData.PathInfo]]]]:
+        """
+        Walk directory tree, returns list of (dirparts, [PathInfo]) tuples
         """
 class AMSFTPClient(AMSession):
     """
@@ -88,9 +115,9 @@ class AMSFTPClient(AMSession):
         """
         Terminate currently running command
         """
-    def __init__(self, request: AMData.ConRequst, keys: list[str], tracer_capacity: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
+    def __init__(self, request: AMData.ConRequst, keys: list[str] = [], tracer_capacity: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
         ...
-    def chmod(self, path: str = '', mode: str | int, recursive: bool = False) -> dict[str, tuple[AMEnum.ErrorCode, str]] | tuple[AMEnum.ErrorCode, str]:
+    def chmod(self, path: str, mode: str | int, recursive: bool = False) -> dict[str, tuple[AMEnum.ErrorCode, str]] | tuple[AMEnum.ErrorCode, str]:
         """
         Recursive change the mode of the file
         """
@@ -194,7 +221,7 @@ class AMSFTPWorker:
         """
         Create transfer worker with callback
         """
-    def load_tasks(self, arg0: str, arg1: str, arg2: HostMaintainer, arg3: str, arg4: str, arg5: bool, arg6: bool, arg7: bool) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.TransferTask]]:
+    def load_tasks(self, src: str, dst: str, hostm: HostMaintainer, src_host: str = '', dst_host: str = '', overwrite: bool = False, mkdir: bool = True, ignore_special_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.TransferTask]]:
         """
         Load tasks from source and destination
         """
@@ -308,7 +335,7 @@ class BaseClient(AMTracer, BasePathMatch):
         """
         Buffer Size is restricted between 524288 and 67108864
         """
-    def GetProtocol(self) -> ClientProtocol:
+    def GetProtocol(self) -> AMEnum.ClientProtocol:
         """
         Get the protocol of the client, Base and Unknown are not valid
         """
@@ -371,13 +398,5 @@ class HostMaintainer:
 class PathMatch(BasePathMatch):
     """
     Local Path Match Class, using AMFS IO function to override Core Function
-    """
-def ModeTrans(mode_int: int) -> str:
-    """
-    Translate the mode int to string
-    """
-def timenow() -> float:
-    """
-    Get the current time in seconds
     """
 _cleanup: typing.Any  # value = <capsule object>

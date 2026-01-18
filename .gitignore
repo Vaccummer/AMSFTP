@@ -12,3 +12,5 @@ autosave
 *.md
 *.pdb
 .*
+md/
+test/
