@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <functional>
 #include <iomanip>
-#include <iostream>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -476,7 +475,7 @@ inline bool IsAbs(const std::string &path, const std::string &sep = "") {
   return std::regex_search(
       UnifyPathSep(path, sep),
       std::regex(
-          "^(?:[a-zA-Z]:$)|(?:~$)|(?:[A-Za-z]:[/\\\\]|/|[\\\\/]{2}|~[\\\\/])"));
+          R"am(^(?:[a-zA-Z]:$)|(?:~$)|(?:[A-Za-z]:[/\\]|/|[\\/]{2}|~[\\/]))am"));
 }
 
 inline std::string HomePath() {
