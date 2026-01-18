@@ -410,7 +410,7 @@ public:
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: realpath", GetProtocolName()));
   }
-  virtual std::variant<std::unordered_map<std::string, ECM>, ECM>
+  virtual std::pair<ECM, std::unordered_map<std::string, ECM>>
   chmod(const std::string &path, std::variant<std::string, uint64_t> mode,
         bool recursive = false) {
     throw UnimplementedMethodException(fmt::format(
@@ -467,7 +467,7 @@ public:
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: rename", GetProtocolName()));
   }
-  virtual std::variant<RMR, ECM> remove(const std::string &path) {
+  virtual std::pair<ECM, RMR> remove(const std::string &path) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: remove", GetProtocolName()));
   };
@@ -1499,11 +1499,6 @@ public:
     this->PROTOCOL = ClientProtocol::SFTP;
     if (request.trash_dir.empty()) {
       this->trash_dir = AMFS::join(GetHomeDir(), ".AMSFTP_Trash");
-    } else {
-      this->trash_dir = AMFS::UnifyPathSep(this->trash_dir, "/");
-    }
-    if (this->trash_dir.empty()) {
-      this->trash_dir = AMFS::join(GetHomeDir(), ".AMSFTP_Trash");
     }
   }
 
@@ -1584,7 +1579,7 @@ public:
   inline std::string GetTrashDir() override { return this->trash_dir; }
 
   ECM SetTrashDir(const std::string &trash_dir = "") override {
-    auto pathf = AMFS::UnifyPathSep(trash_dir, "/");
+    auto pathf = trash_dir;
     if (pathf.empty()) {
       return {EC::InvalidArg, fmt::format("Invalid path: {}", trash_dir)};
     }
@@ -1670,45 +1665,49 @@ public:
     }
   }
 
-  std::variant<std::unordered_map<std::string, ECM>, ECM>
+  std::pair<ECM, std::unordered_map<std::string, ECM>>
   chmod(const std::string &path, std::variant<std::string, uint64_t> mode,
         bool recursive = false) override {
     if (static_cast<int>(GetOSType()) <= 0) {
-      return ECM{EC::UnImplentedMethod, "Chmod only supported on Unix System"};
+      return {ECM{EC::UnImplentedMethod, "Chmod only supported on Unix System"},
+              {}};
     }
-    auto pathf = AMFS::UnifyPathSep(path, "/");
+    auto pathf = path;
 
     auto [rcm, br] = exists(pathf);
     if (rcm.first != EC::Success) {
-      return rcm;
+      return {rcm, {}};
     }
     if (!br) {
-      return ECM{EC::PathNotExist,
-                 fmt::format("Path does not exist: {}", pathf)};
+      return {
+          ECM{EC::PathNotExist, fmt::format("Path does not exist: {}", pathf)},
+          {}};
     }
     std::unordered_map<std::string, ECM> ecm_map{};
 
     if (std::holds_alternative<std::string>(mode)) {
       if (!AMFS::Str::IsModeValid(std::get<std::string>(mode))) {
-        return ECM{EC::InvalidArg, fmt::format("Invalid mode: {}",
-                                               std::get<std::string>(mode))};
+        return {ECM{EC::InvalidArg, fmt::format("Invalid mode: {}",
+                                                std::get<std::string>(mode))},
+                {}};
       }
       _chmod(path, std::get<std::string>(mode), recursive, ecm_map);
     } else if (std::holds_alternative<uint64_t>(mode)) {
       if (!AMFS::Str::IsModeValid(std::get<uint64_t>(mode))) {
-        return ECM{EC::InvalidArg,
-                   fmt::format("Invalid mode: {}", std::get<uint64_t>(mode))};
+        return {ECM{EC::InvalidArg,
+                    fmt::format("Invalid mode: {}", std::get<uint64_t>(mode))},
+                {}};
       }
       _chmod(path, std::get<uint64_t>(mode), recursive, ecm_map);
     } else {
-      return ECM{EC::InvalidArg, fmt::format("Invalid mode data type")};
+      return {ECM{EC::InvalidArg, fmt::format("Invalid mode data type")}, {}};
     }
-    return ecm_map;
+    return {ECM{EC::Success, ""}, ecm_map};
   }
 
   // 获取路径信息，自带AMFS::abspath
   SR stat(const std::string &path) override {
-    std::string pathf = AMFS::UnifyPathSep(path, "/");
+    std::string pathf = path;
 
     if (pathf.empty()) {
       return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)},
@@ -1771,7 +1770,7 @@ public:
       return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
     }
 
-    auto pathf = AMFS::UnifyPathSep(path, "/");
+    auto pathf = path;
     if (pathf.empty()) {
       return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
     }
@@ -1869,7 +1868,7 @@ public:
       throw std::runtime_error("SFTP not initialized");
     }
 
-    auto pathf = AMFS::UnifyPathSep(path, "/");
+    auto pathf = path;
     if (pathf.empty()) {
       throw std::invalid_argument(fmt::format("Invalid path: {}", path));
     }
@@ -1985,7 +1984,7 @@ def _amsftp_gen(next_func):
       return std::make_pair(EC::NoConnection, "SFTP not initialized");
     }
 
-    std::string pathf = AMFS::UnifyPathSep(path, "/");
+    std::string pathf = path;
     if (pathf.empty()) {
       return std::make_pair(EC::InvalidArg,
                             fmt::format("Invalid path: {}", path));
@@ -2022,7 +2021,7 @@ def _amsftp_gen(next_func):
 
   // 递归创建多级目录，直到报错为止，自带AMFS::abspath
   ECM mkdirs(const std::string &path) override {
-    std::string pathf = AMFS::UnifyPathSep(path, "/");
+    std::string pathf = path;
     if (pathf.empty()) {
       return std::make_pair(EC::InvalidArg,
                             fmt::format("Invalid path: {}", path));
@@ -2060,7 +2059,7 @@ def _amsftp_gen(next_func):
     if (!sftp) {
       return std::make_pair(EC::NoConnection, "SFTP not initialized");
     }
-    auto pathf = AMFS::UnifyPathSep(path, "/");
+    auto pathf = path;
     auto [rcm, info] = stat(pathf);
     ECM ecm;
     std::string msg = "";
@@ -2096,7 +2095,7 @@ def _amsftp_gen(next_func):
       return std::make_pair(EC::NoConnection, "SFTP not initialized");
     }
 
-    std::string pathf = AMFS::UnifyPathSep(path, "/");
+    std::string pathf = path;
     if (pathf.empty()) {
       return std::make_pair(EC::InvalidArg,
                             fmt::format("Invalid path: {}", path));
@@ -2125,18 +2124,17 @@ def _amsftp_gen(next_func):
   }
 
   // 删除文件或目录，自带AMFS::abspath
-  std::variant<RMR, ECM> remove(const std::string &path) override {
+  std::pair<ECM, RMR> remove(const std::string &path) override {
     if (!sftp) {
-      return ECM{EC::NoConnection, "SFTP not initialized"};
+      return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
     }
     RMR errors = {};
-    std::string pathn = AMFS::UnifyPathSep(path, "/");
+    std::string pathn = path;
     if (pathn.empty()) {
-      return std::make_pair(EC::InvalidArg,
-                            fmt::format("Invalid path: {}", path));
+      return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
     }
     _rm(pathn, errors);
-    return errors;
+    return {ECM{EC::Success, ""}, errors};
   }
 
   // 将原路径变成新路径，自带AMFS::abspath
@@ -2145,8 +2143,8 @@ def _amsftp_gen(next_func):
     if (!sftp) {
       return ECM{EC::NoConnection, "SFTP not initialized"};
     }
-    std::string srcf = AMFS::UnifyPathSep(src, "/");
-    std::string dstf = AMFS::UnifyPathSep(dst, "/");
+    std::string srcf = src;
+    std::string dstf = dst;
     if (srcf.empty() || dstf.empty()) {
       return std::make_pair(EC::InvalidArg,
                             fmt::format("Invalid path: {} or {}", srcf, dstf));
@@ -2227,8 +2225,8 @@ def _amsftp_gen(next_func):
     if (!sftp) {
       return ECM{EC::NoConnection, "SFTP not initialized"};
     }
-    std::string srcf = AMFS::UnifyPathSep(src, "/");
-    std::string dstf = AMFS::UnifyPathSep(dst, "/");
+    std::string srcf = src;
+    std::string dstf = dst;
     auto [rcm, ssr] = stat(srcf);
     // src不存在就直接退出
     if (rcm.first != EC::Success) {
@@ -2265,8 +2263,8 @@ def _amsftp_gen(next_func):
     if (!sftp) {
       return ECM{EC::NoConnection, "SFTP not initialized"};
     }
-    std::string srcf = AMFS::UnifyPathSep(src, "/");
-    std::string dstf = AMFS::UnifyPathSep(dst, "/");
+    std::string srcf = src;
+    std::string dstf = dst;
     if (srcf.empty() || dstf.empty()) {
       return std::make_pair(EC::InvalidArg,
                             fmt::format("Invalid path: {} or {}", srcf, dstf));
@@ -2338,7 +2336,7 @@ def _amsftp_gen(next_func):
     }
     // get all files and deepest folders
     WRV result = {};
-    auto path_n = AMFS::UnifyPathSep(path, "/");
+    auto path_n = path;
     _iwalk(path_n, result, ignore_sepcial_file);
     return result;
   }
@@ -2346,7 +2344,7 @@ def _amsftp_gen(next_func):
   // 真实的walk函数，返回([root_path, part1, part2, ...], PathInfo)的vector
   std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1,
                            bool ignore_special_file = true) override {
-    auto pathf = AMFS::UnifyPathSep(path, "/");
+    auto pathf = path;
     auto [rcm, br] = stat(pathf);
     if (rcm.first != EC::Success) {
       return {rcm, {}};
@@ -2386,30 +2384,26 @@ private:
   ECM state = {EC::NoConnection, "Client Not Initialized"};
   std::mutex state_mtx;
 
-  void _iwalk(const std::string &path, WRV &result,
+  void _iwalk(const PathInfo &info, WRV &result,
               bool ignore_special_file = true) {
-    auto [rcm, info_path] = stat(path);
-    if (rcm.first != EC::Success) {
+
+    if (info.type != PathType::DIR) {
+      result.push_back(info);
       return;
     }
 
-    if (info_path.type != PathType::DIR) {
-      result.push_back(info_path);
-      return;
-    }
-
-    auto [rcm2, list_info] = listdir(path);
+    auto [rcm2, list_info] = listdir(info.path);
     if (rcm2.first != EC::Success) {
       return;
     }
 
     if (list_info.empty()) {
-      result.push_back(info_path);
+      result.push_back(info);
       return;
     }
 
-    for (auto &info : list_info) {
-      _iwalk(info.path, result, ignore_special_file);
+    for (auto &item : list_info) {
+      _iwalk(item, result, ignore_special_file);
     }
   }
 
@@ -2516,6 +2510,10 @@ public:
 
     // Get filename (rest of line)
     std::getline(iss >> std::ws, name);
+    // Remove trailing \r if present (FTP uses CRLF)
+    if (!name.empty() && name.back() == '\r') {
+      name.pop_back();
+    }
 
     info.name = name;
     info.path = AMFS::join(dir_path, name, AMFS::SepType::Unix);
@@ -2546,43 +2544,85 @@ public:
     return info;
   }
 
-  void _rm(const std::string &path, RMR &errors) {
-    auto [rcm, info] = stat(path);
-    if (rcm.first != EC::Success) {
-      errors.emplace_back(path, rcm);
-      return;
-    }
-
-    if (info.type == PathType::FILE || info.type == PathType::SYMLINK) {
-      ECM rc = rmfile(path);
+  void _rm(const PathInfo &info, RMR &errors) {
+    if (info.type != PathType::DIR) {
+      ECM rc = _librmfile(info.path);
       if (rc.first != EC::Success) {
-        errors.emplace_back(path, rc);
+        errors.emplace_back(info.path, rc);
       }
       return;
     }
-
-    if (info.type == PathType::DIR) {
-      // List directory
-      auto [rcm2, file_list] = listdir(path);
-      if (rcm2.first != EC::Success) {
-        errors.emplace_back(path, rcm2);
-        return;
-      }
-
-      // Recursively delete contents
-      for (const auto &item : file_list) {
-        if (item.name == "." || item.name == "..")
-          continue;
-        std::string sub_path = AMFS::join(path, item.name, AMFS::SepType::Unix);
-        _rm(sub_path, errors);
-      }
-
-      // Delete the empty directory
-      ECM rc = rmdir(path);
-      if (rc.first != EC::Success) {
-        errors.emplace_back(path, rc);
-      }
+    auto [rcm2, file_list] = listdir(info.path);
+    if (rcm2.first != EC::Success) {
+      errors.emplace_back(info.path, rcm2);
+      return;
     }
+    for (const auto &itemf : file_list) {
+      _rm(itemf, errors);
+    }
+    // Delete directory after removing all contents
+    ECM rc = _librmdir(info.path);
+    if (rc.first != EC::Success) {
+      errors.emplace_back(info.path, rc);
+    }
+  }
+
+  ECM _librmfile(const std::string &path) {
+    if (!curl) {
+      return {EC::NoConnection, "CURL not initialized"};
+    }
+    std::string url = BuildUrl("/");
+    ECM ecm = SetupCurl(url);
+    if (ecm.first != EC::Success) {
+      return ecm;
+    }
+
+    struct curl_slist *commands = nullptr;
+    commands =
+        curl_slist_append(commands, fmt::format("DELE {}", path).c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+
+    CURLcode res = curl_easy_perform(curl);
+
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
+    curl_slist_free_all(commands);
+
+    if (res != CURLE_OK) {
+      return {EC::CommonFailure,
+              fmt::format("rmfile failed: {}", curl_easy_strerror(res))};
+    }
+
+    return {EC::Success, ""};
+  }
+
+  ECM _librmdir(const std::string &path) {
+    if (!curl) {
+      return {EC::NoConnection, "CURL not initialized"};
+    }
+    std::string url = BuildUrl("/");
+    ECM ecm = SetupCurl(url);
+    if (ecm.first != EC::Success) {
+      return ecm;
+    }
+
+    struct curl_slist *commands = nullptr;
+    commands = curl_slist_append(commands, fmt::format("RMD {}", path).c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+
+    CURLcode res = curl_easy_perform(curl);
+
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
+    curl_slist_free_all(commands);
+
+    if (res != CURLE_OK) {
+      return {EC::DirNotEmpty,
+              fmt::format("rmdir failed: {}", curl_easy_strerror(res))};
+    }
+    return {EC::Success, ""};
   }
 
 public:
@@ -2743,56 +2783,76 @@ public:
       return {ECM{EC::NoConnection, "CURL not initialized"}, PathInfo()};
     }
 
-    std::string pathf = AMFS::UnifyPathSep(path, "/");
+    std::string pathf = path;
     if (pathf.empty()) {
       return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)},
               PathInfo()};
     }
 
-    // Try to use SIZE and MDTM commands for files, or LIST for detailed info
-    std::string url = BuildUrl(pathf);
-    ECM ecm = SetupCurl(url);
+    // First try to list as directory (append / to path)
+    std::string dir_url = BuildUrl(pathf + "/");
+    ECM ecm = SetupCurl(dir_url);
     if (ecm.first != EC::Success) {
       return {ecm, PathInfo()};
     }
-
-    // First try to check if it's a directory by trying to list it
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-    curl_easy_setopt(curl, CURLOPT_FILETIME, 1L);
 
     struct MemoryStruct chunk;
     chunk.memory = (char *)malloc(1);
     chunk.size = 0;
 
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
     CURLcode res = curl_easy_perform(curl);
 
     if (res == CURLE_OK) {
-      // It's likely a directory or file
+      // It's a directory
+      free(chunk.memory);
       PathInfo info;
       info.path = pathf;
       info.name = AMFS::basename(pathf);
       info.dir = AMFS::dirname(pathf);
+      info.type = PathType::DIR;
+      info.size = 0;
+      return {ECM{EC::Success, ""}, info};
+    }
+
+    free(chunk.memory);
+
+    // Not a directory, try as file using SIZE command
+    std::string file_url = BuildUrl(pathf);
+    ecm = SetupCurl(file_url);
+    if (ecm.first != EC::Success) {
+      return {ecm, PathInfo()};
+    }
+
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(curl, CURLOPT_FILETIME, 1L);
+
+    chunk.memory = (char *)malloc(1);
+    chunk.size = 0;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+
+    res = curl_easy_perform(curl);
+
+    if (res == CURLE_OK) {
+      PathInfo info;
+      info.path = pathf;
+      info.name = AMFS::basename(pathf);
+      info.dir = AMFS::dirname(pathf);
+      info.type = PathType::FILE;
 
       // Get file size
       double filesize = 0;
-      res =
-          curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &filesize);
-      if (res == CURLE_OK && filesize >= 0) {
-        info.size = static_cast<uint64_t>(filesize);
-        info.type = PathType::FILE;
-      } else {
-        // No size means it's likely a directory
-        info.type = PathType::DIR;
-        info.size = 0;
-      }
+      curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &filesize);
+      info.size = filesize >= 0 ? static_cast<uint64_t>(filesize) : 0;
 
       // Get modification time
       long filetime = 0;
-      res = curl_easy_getinfo(curl, CURLINFO_FILETIME, &filetime);
-      if (res == CURLE_OK && filetime >= 0) {
+      curl_easy_getinfo(curl, CURLINFO_FILETIME, &filetime);
+      if (filetime >= 0) {
         info.modify_time = filetime;
       }
 
@@ -2802,7 +2862,7 @@ public:
 
     free(chunk.memory);
 
-    // If HEAD request failed, try listing parent directory as fallback
+    // Fallback: try listing parent directory
     std::string parent = AMFS::dirname(pathf);
     std::string filename = AMFS::basename(pathf);
 
@@ -2843,23 +2903,19 @@ public:
 
   std::pair<ECM, std::vector<PathInfo>> listdir(const std::string &path,
                                                 int max_time_ms = -1) override {
-    std::cout << "1" << "\n";
     double start_time = timenow();
-    std::cout << "2" << "\n";
-    std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
+    std::string pathf = path;
     if (pathf.empty()) {
       return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
     }
-    std::cout << "3" << "\n";
     std::lock_guard<std::recursive_mutex> lock(mtx);
     std::string url = BuildUrl(pathf + "/");
-    std::cout << "4" << "\n";
+
     ECM ecm = SetupCurl(url);
-    std::cout << "5" << "\n";
+
     if (ecm.first != EC::Success) {
       return {ecm, {}};
     }
-    std::cout << "6" << "\n";
 
     struct MemoryStruct chunk;
     chunk.memory = (char *)malloc(1);
@@ -2869,54 +2925,64 @@ public:
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
     CURLcode res = curl_easy_perform(curl);
-    std::cout << "7" << "\n";
+
     if (res != CURLE_OK) {
       free(chunk.memory);
       return {ECM{EC::FTPListFailed,
                   fmt::format("List failed: {}", curl_easy_strerror(res))},
               {}};
     }
-    std::cout << "8" << "\n";
+
     std::string listing(chunk.memory, chunk.size);
     free(chunk.memory);
-    std::cout << "9" << "\n";
+
     std::vector<PathInfo> file_list;
     std::istringstream iss(listing);
     std::string line;
-    std::cout << "10" << "\n";
+
     while (std::getline(iss, line)) {
       if (max_time_ms > 0 && timenow() - start_time > max_time_ms) {
         return {ECM{EC::Success, "Timeout"}, file_list};
       }
+      // Remove trailing \r (FTP uses CRLF)
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
       if (line.empty())
         continue;
-      std::cout << "line: " << line << "\n";
       PathInfo info = ParseListLine(line, pathf);
       if (info.type != PathType::Unknown && info.name != "." &&
           info.name != "..") {
         file_list.push_back(info);
       }
     }
-    std::cout << "11" << "\n";
+
     return {ECM{EC::Success, ""}, file_list};
   }
 
   WRV iwalk(const std::string &path, bool ignore_special_file = true) override {
-    WRV result;
-    std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
-    _iwalk(pathf, result, ignore_special_file);
+    WRV result = {};
+    if (path.empty()) {
+      return result;
+    }
+    auto [rcm, info] = stat(path);
+    if (rcm.first != EC::Success) {
+      return result;
+    } else if (info.type != PathType::DIR) {
+      return {info};
+    }
+    _iwalk(info, result, ignore_special_file);
     return result;
   }
 
   std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1,
                            bool ignore_special_file = true) override {
-    std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
-    auto [rcm, br] = stat(pathf);
+    auto [rcm, br] = stat(path);
     if (rcm.first != EC::Success) {
       return {rcm, {}};
     }
     WRD result_dict = {};
-    std::vector<std::string> parts = {pathf};
+    std::vector<std::string> parts = {path};
     _walk(parts, result_dict, 0, max_depth, ignore_special_file);
     return {ECM{EC::Success, ""}, result_dict};
   }
@@ -2924,23 +2990,22 @@ public:
   ECM mkdir(const std::string &path) override {
     std::lock_guard<std::recursive_mutex> lock(mtx);
 
-    std::string pathf = AMFS::abspath(path, true, home_dir, home_dir, "/");
-    if (pathf.empty()) {
+    if (path.empty()) {
       return {EC::InvalidArg, fmt::format("Invalid path: {}", path)};
     }
 
     // Check if already exists
-    auto [rcm, info] = stat(pathf);
+    auto [rcm, info] = stat(path);
     if (rcm.first == EC::Success) {
       if (info.type == PathType::DIR) {
         return {EC::Success, ""};
       } else {
         return {EC::PathAlreadyExists,
-                fmt::format("Path exists and is not a directory: {}", pathf)};
+                fmt::format("Path exists and is not a directory: {}", path)};
       }
     }
 
-    std::string url = BuildUrl(pathf + "/");
+    std::string url = BuildUrl(path + "/");
     ECM ecm = SetupCurl(url);
     if (ecm.first != EC::Success) {
       return ecm;
@@ -2958,112 +3023,52 @@ public:
     return {EC::Success, ""};
   }
 
-  ECM mkdirs(const std::string &path) override {
-    std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
-    if (pathf.empty()) {
-      return {EC::InvalidArg, fmt::format("Invalid path: {}", path)};
-    }
-
-    std::vector<std::string> parts = AMFS::split(pathf);
-    if (parts.empty()) {
-      return {EC::InvalidArg, fmt::format("Path split failed: {}", pathf)};
-    }
-
-    std::string current_path = parts.front();
-    for (size_t i = 1; i < parts.size(); i++) {
-      current_path = AMFS::join(current_path, parts[i], AMFS::SepType::Unix);
-      ECM rc = mkdir(current_path);
-      if (rc.first != EC::Success) {
-        return rc;
-      }
-    }
-
-    return {EC::Success, ""};
-  }
+  ECM mkdirs(const std::string &path) override { return mkdir(path); }
 
   ECM rmfile(const std::string &path) override {
     std::lock_guard<std::recursive_mutex> lock(mtx);
-
-    std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
-    if (pathf.empty()) {
-      return {EC::InvalidArg, fmt::format("Invalid path: {}", path)};
+    if (path.empty()) {
+      return {EC::InvalidArg, "Invalid empty path"};
     }
-
-    // Check if it's a file
-    auto [rcm, info] = stat(pathf);
+    auto [rcm, info] = stat(path);
     if (rcm.first != EC::Success) {
       return rcm;
     }
-
-    if (info.type == PathType::DIR) {
-      return {EC::NotAFile,
-              fmt::format("Path is a directory, use rmdir: {}", path)};
+    if (info.type != PathType::FILE) {
+      return {EC::NotAFile, fmt::format("Path is not a file: {}", path)};
     }
-
-    // Delete using FTP DELE command
-    std::string url = BuildUrl(pathf);
-    ECM ecm = SetupCurl(url);
-    if (ecm.first != EC::Success) {
-      return ecm;
-    }
-
-    // DELE is default for curl when uploading with CURLOPT_UPLOAD and no read
-    // data
-    struct curl_slist *commands = nullptr;
-    commands =
-        curl_slist_append(commands, fmt::format("DELE {}", pathf).c_str());
-    curl_easy_setopt(curl, CURLOPT_QUOTE, commands);
-
-    CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(commands);
-
-    if (res != CURLE_OK) {
-      return {EC::CommonFailure,
-              fmt::format("rmfile failed: {}", curl_easy_strerror(res))};
-    }
-
-    return {EC::Success, ""};
+    return _librmfile(path);
   }
 
   ECM rmdir(const std::string &path) override {
     std::lock_guard<std::recursive_mutex> lock(mtx);
 
-    std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
-    if (pathf.empty()) {
-      return {EC::InvalidArg, fmt::format("Invalid path: {}", path)};
+    if (path.empty()) {
+      return {EC::InvalidArg, "Invalid empty path"};
     }
-
-    // Delete directory using FTP RMD command
-    std::string url = BuildUrl(pathf);
-    ECM ecm = SetupCurl(url);
-    if (ecm.first != EC::Success) {
-      return ecm;
+    auto [rcm, info] = stat(path);
+    if (rcm.first != EC::Success) {
+      return rcm;
     }
-
-    struct curl_slist *commands = nullptr;
-    commands =
-        curl_slist_append(commands, fmt::format("RMD {}", pathf).c_str());
-    curl_easy_setopt(curl, CURLOPT_QUOTE, commands);
-
-    CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(commands);
-
-    if (res != CURLE_OK) {
-      return {EC::DirNotEmpty,
-              fmt::format("rmdir failed: {}", curl_easy_strerror(res))};
+    if (info.type != PathType::DIR) {
+      return {EC::NotADirectory,
+              fmt::format("Path is not a directory: {}", path)};
     }
-
-    return {EC::Success, ""};
+    return _librmdir(path);
   }
 
-  std::variant<RMR, ECM> remove(const std::string &path) override {
+  std::pair<ECM, RMR> remove(const std::string &path) override {
     RMR errors = {};
-    std::string pathf = AMFS::abspath(path, true, home_dir, home_dir);
-    if (pathf.empty()) {
-      return ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)};
+    if (path.empty()) {
+      return {ECM{EC::InvalidArg, "Invalid empty path"}, {}};
     }
-    _rm(pathf, errors);
-    return errors;
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    auto [rcm, info] = stat(path);
+    if (rcm.first != EC::Success) {
+      return {rcm, {}};
+    }
+    _rm(info, errors);
+    return {ECM{EC::Success, ""}, errors};
   }
 
   ECM rename(const std::string &src, const std::string &dst,
@@ -3085,20 +3090,21 @@ public:
 
     // Check destination
     auto [rcm2, sbr2] = stat(dstf);
-    if (rcm2.first != EC::Success) {
-      return rcm2;
-    } else if (!overwrite) {
-      return {
-          EC::PathAlreadyExists,
-          fmt::format("Dst already exists: {} and overwrite is false", dstf)};
-    } else if (sbr2.type != sbr.type) {
-      return {
-          EC::PathAlreadyExists,
-          fmt::format("Dst already exists and is not the same type as src: {} ",
-                      dstf)};
+    if (rcm2.first == EC::Success) {
+      if (sbr2.type != sbr.type) {
+        return {EC::PathAlreadyExists,
+                fmt::format(
+                    "Dst already exists and is not the same type as src: {} ",
+                    dstf)};
+      }
+      if (!overwrite) {
+        return {
+            EC::PathAlreadyExists,
+            fmt::format("Dst already exists: {} and overwrite is false", dstf)};
+      }
     }
 
-    // Use RNFR and RNTO commands
+    // Use RNFR and RNTO commands via QUOTE
     std::string url = BuildUrl("/");
     ECM ecm = SetupCurl(url);
     if (ecm.first != EC::Success) {
@@ -3111,9 +3117,15 @@ public:
     headerlist = curl_slist_append(headerlist, rnfr_cmd.c_str());
     headerlist = curl_slist_append(headerlist, rnto_cmd.c_str());
 
-    curl_easy_setopt(curl, CURLOPT_QUOTE, headerlist);
+    // Use POSTQUOTE instead of QUOTE - commands run after the transfer
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, headerlist);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
     CURLcode res = curl_easy_perform(curl);
+
+    // Clean up
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
     curl_slist_free_all(headerlist);
 
     if (res != CURLE_OK) {
@@ -3126,8 +3138,8 @@ public:
 
   ECM move(const std::string &src, const std::string &dst,
            bool need_mkdir = false, bool force_write = false) override {
-    std::string srcf = AMFS::abspath(src, true, home_dir, home_dir);
-    std::string dstf = AMFS::abspath(dst, true, home_dir, home_dir);
+    std::string srcf = src;
+    std::string dstf = dst;
 
     auto [rcm, ssr] = stat(srcf);
     if (rcm.first != EC::Success) {
@@ -4331,8 +4343,7 @@ public:
                 fmt::format("Destination SFTP Client: {} not found", dst_host)),
             tasks};
       }
-      dstf =
-          AMFS::abspath(dst, true, client->GetHomeDir(), client->GetHomeDir());
+      dstf = dst;
     }
 
     // 检查是否为 src_file -> dst_file 的传输

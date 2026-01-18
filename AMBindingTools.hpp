@@ -942,15 +942,16 @@ private:
   }
 
   void bind_4_args() {
-    bool all_default = true, none_default = true;
-    for (int i = 0; i < 4; i++) {
-      if (args_info[i].has_default)
-        none_default = false;
-      else
-        all_default = false;
+    if (!is_trailing_defaults_pattern(4)) {
+      mod_ptr->def(func_name, func_ptr, py::arg(args_info[0].name.c_str()),
+                   py::arg(args_info[1].name.c_str()),
+                   py::arg(args_info[2].name.c_str()),
+                   py::arg(args_info[3].name.c_str()), func_doc.c_str());
+      return;
     }
-
-    if (all_default) {
+    int k = first_default_index(4);
+    switch (k) {
+    case 0:
       mod_ptr->def(
           func_name, func_ptr,
           py::arg(args_info[0].name.c_str()) = args_info[0].default_value,
@@ -958,14 +959,36 @@ private:
           py::arg(args_info[2].name.c_str()) = args_info[2].default_value,
           py::arg(args_info[3].name.c_str()) = args_info[3].default_value,
           func_doc.c_str());
-    } else if (none_default) {
+      break;
+    case 1:
+      mod_ptr->def(
+          func_name, func_ptr, py::arg(args_info[0].name.c_str()),
+          py::arg(args_info[1].name.c_str()) = args_info[1].default_value,
+          py::arg(args_info[2].name.c_str()) = args_info[2].default_value,
+          py::arg(args_info[3].name.c_str()) = args_info[3].default_value,
+          func_doc.c_str());
+      break;
+    case 2:
+      mod_ptr->def(
+          func_name, func_ptr, py::arg(args_info[0].name.c_str()),
+          py::arg(args_info[1].name.c_str()),
+          py::arg(args_info[2].name.c_str()) = args_info[2].default_value,
+          py::arg(args_info[3].name.c_str()) = args_info[3].default_value,
+          func_doc.c_str());
+      break;
+    case 3:
+      mod_ptr->def(
+          func_name, func_ptr, py::arg(args_info[0].name.c_str()),
+          py::arg(args_info[1].name.c_str()), py::arg(args_info[2].name.c_str()),
+          py::arg(args_info[3].name.c_str()) = args_info[3].default_value,
+          func_doc.c_str());
+      break;
+    case 4:
       mod_ptr->def(func_name, func_ptr, py::arg(args_info[0].name.c_str()),
                    py::arg(args_info[1].name.c_str()),
                    py::arg(args_info[2].name.c_str()),
                    py::arg(args_info[3].name.c_str()), func_doc.c_str());
-    } else {
-      // Fallback - no arg names
-      mod_ptr->def(func_name, func_ptr, func_doc.c_str());
+      break;
     }
   }
 
@@ -1075,7 +1098,8 @@ private:
 
   void bind_7_args() {
     if (!is_trailing_defaults_pattern(7)) {
-      mod_ptr->def(func_name, func_ptr, func_doc.c_str());
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6),
+                   func_doc.c_str());
       return;
     }
     int k = first_default_index(7);
@@ -1117,7 +1141,8 @@ private:
 
   void bind_8_args() {
     if (!is_trailing_defaults_pattern(8)) {
-      mod_ptr->def(func_name, func_ptr, func_doc.c_str());
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6),
+                   A(7), func_doc.c_str());
       return;
     }
     int k = first_default_index(8);
@@ -1163,7 +1188,8 @@ private:
 
   void bind_9_args() {
     if (!is_trailing_defaults_pattern(9)) {
-      mod_ptr->def(func_name, func_ptr, func_doc.c_str());
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6),
+                   A(7), A(8), func_doc.c_str());
       return;
     }
     int k = first_default_index(9);
@@ -1213,7 +1239,8 @@ private:
 
   void bind_10_args() {
     if (!is_trailing_defaults_pattern(10)) {
-      mod_ptr->def(func_name, func_ptr, func_doc.c_str());
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6),
+                   A(7), A(8), A(9), func_doc.c_str());
       return;
     }
     int k = first_default_index(10);
@@ -1267,7 +1294,8 @@ private:
 
   void bind_11_args() {
     if (!is_trailing_defaults_pattern(11)) {
-      mod_ptr->def(func_name, func_ptr, func_doc.c_str());
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6),
+                   A(7), A(8), A(9), A(10), func_doc.c_str());
       return;
     }
     int k = first_default_index(11);
@@ -1325,7 +1353,8 @@ private:
 
   void bind_12_args() {
     if (!is_trailing_defaults_pattern(12)) {
-      mod_ptr->def(func_name, func_ptr, func_doc.c_str());
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6),
+                   A(7), A(8), A(9), A(10), A(11), func_doc.c_str());
       return;
     }
     int k = first_default_index(12);
