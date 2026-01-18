@@ -4,7 +4,6 @@
 #include <iostream>
 #include <magic_enum/magic_enum.hpp>
 #include <pybind11/pybind11.h>
-#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -387,7 +386,8 @@ private:
   // Helper: find first index with default (returns N if none have defaults)
   int first_default_index(int N) {
     for (int i = 0; i < N; i++) {
-      if (args_info[i].has_default) return i;
+      if (args_info[i].has_default)
+        return i;
     }
     return N;
   }
@@ -396,7 +396,8 @@ private:
   bool is_trailing_defaults_pattern(int N) {
     int first_def = first_default_index(N);
     for (int i = first_def; i < N; i++) {
-      if (!args_info[i].has_default) return false;
+      if (!args_info[i].has_default)
+        return false;
     }
     return true;
   }
@@ -412,14 +413,38 @@ private:
     }
     int k = first_default_index(7);
     switch (k) {
-    case 0: cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), func_doc.c_str()); break;
-    case 1: cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), func_doc.c_str()); break;
-    case 2: cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5), AD(6), func_doc.c_str()); break;
-    case 3: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5), AD(6), func_doc.c_str()); break;
-    case 4: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5), AD(6), func_doc.c_str()); break;
-    case 5: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5), AD(6), func_doc.c_str()); break;
-    case 6: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), AD(6), func_doc.c_str()); break;
-    case 7: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), func_doc.c_str()); break;
+    case 0:
+      cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), AD(6), func_doc.c_str());
+      break;
+    case 1:
+      cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), func_doc.c_str());
+      break;
+    case 2:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), func_doc.c_str());
+      break;
+    case 3:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   AD(6), func_doc.c_str());
+      break;
+    case 4:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   AD(6), func_doc.c_str());
+      break;
+    case 5:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   AD(6), func_doc.c_str());
+      break;
+    case 6:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   AD(6), func_doc.c_str());
+      break;
+    case 7:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), func_doc.c_str());
+      break;
     }
   }
 
@@ -430,15 +455,42 @@ private:
     }
     int k = first_default_index(8);
     switch (k) {
-    case 0: cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 1: cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 2: cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 3: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 4: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 5: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 6: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 7: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), AD(7), func_doc.c_str()); break;
-    case 8: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), func_doc.c_str()); break;
+    case 0:
+      cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), AD(6), AD(7), func_doc.c_str());
+      break;
+    case 1:
+      cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), func_doc.c_str());
+      break;
+    case 2:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), func_doc.c_str());
+      break;
+    case 3:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), func_doc.c_str());
+      break;
+    case 4:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   AD(6), AD(7), func_doc.c_str());
+      break;
+    case 5:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   AD(6), AD(7), func_doc.c_str());
+      break;
+    case 6:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   AD(6), AD(7), func_doc.c_str());
+      break;
+    case 7:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), AD(7), func_doc.c_str());
+      break;
+    case 8:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), func_doc.c_str());
+      break;
     }
   }
 
@@ -449,16 +501,46 @@ private:
     }
     int k = first_default_index(9);
     switch (k) {
-    case 0: cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 1: cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 2: cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 3: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 4: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 5: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 6: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 7: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 8: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), AD(8), func_doc.c_str()); break;
-    case 9: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), func_doc.c_str()); break;
+    case 0:
+      cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 1:
+      cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 2:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 3:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 4:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 5:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 6:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 7:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 8:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), AD(8), func_doc.c_str());
+      break;
+    case 9:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), func_doc.c_str());
+      break;
     }
   }
 
@@ -469,17 +551,50 @@ private:
     }
     int k = first_default_index(10);
     switch (k) {
-    case 0: cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 1: cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 2: cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 3: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 4: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 5: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 6: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 7: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 8: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 9: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), AD(9), func_doc.c_str()); break;
-    case 10: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), func_doc.c_str()); break;
+    case 0:
+      cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 1:
+      cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 2:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 3:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 4:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 5:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 6:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 7:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 8:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 9:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), AD(9), func_doc.c_str());
+      break;
+    case 10:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), A(9), func_doc.c_str());
+      break;
     }
   }
 
@@ -490,18 +605,54 @@ private:
     }
     int k = first_default_index(11);
     switch (k) {
-    case 0: cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 1: cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 2: cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 3: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 4: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 5: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 6: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 7: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 8: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 9: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 10: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), AD(10), func_doc.c_str()); break;
-    case 11: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), func_doc.c_str()); break;
+    case 0:
+      cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 1:
+      cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 2:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 3:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 4:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 5:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 6:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 7:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 8:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 9:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 10:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), A(9), AD(10), func_doc.c_str());
+      break;
+    case 11:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), A(9), A(10), func_doc.c_str());
+      break;
     }
   }
 
@@ -512,19 +663,65 @@ private:
     }
     int k = first_default_index(12);
     switch (k) {
-    case 0: cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 1: cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 2: cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 3: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 4: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 5: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 6: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 7: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 8: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 9: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 10: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 11: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), AD(11), func_doc.c_str()); break;
-    case 12: cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), func_doc.c_str()); break;
+    case 0:
+      cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 1:
+      cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 2:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 3:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 4:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 5:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 6:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 7:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str());
+      break;
+    case 8:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str());
+      break;
+    case 9:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), AD(9), AD(10), AD(11), func_doc.c_str());
+      break;
+    case 10:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), A(9), AD(10), AD(11), func_doc.c_str());
+      break;
+    case 11:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), A(9), A(10), AD(11), func_doc.c_str());
+      break;
+    case 12:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), A(9), A(10), A(11), func_doc.c_str());
+      break;
     }
   }
 
@@ -577,26 +774,12 @@ public:
     return *this;
   }
 
-  // Add argument with documentation only (required parameter + doc)
-  AutoDefFuncHelper &arg(const char *name, const std::string &doc) {
-    args_info.push_back({name, py::none(), false});
-    return *this;
-  }
-
   // Add argument with default value only (including const char*)
   template <typename T, typename = typename std::enable_if<
                             !std::is_convertible<T, std::string>::value ||
                             std::is_same<typename std::decay<T>::type,
                                          const char *>::value>::type>
   AutoDefFuncHelper &arg(const char *name, T &&default_val) {
-    args_info.push_back({name, py::cast(std::forward<T>(default_val)), true});
-    return *this;
-  }
-
-  // Add argument with default value and documentation
-  template <typename T>
-  AutoDefFuncHelper &arg(const char *name, T &&default_val,
-                         const std::string &doc) {
     args_info.push_back({name, py::cast(std::forward<T>(default_val)), true});
     return *this;
   }
@@ -849,7 +1032,8 @@ private:
   // Helper: find first index with default (returns N if none have defaults)
   int first_default_index(int N) {
     for (int i = 0; i < N; i++) {
-      if (args_info[i].has_default) return i;
+      if (args_info[i].has_default)
+        return i;
     }
     return N;
   }
@@ -858,7 +1042,8 @@ private:
   bool is_trailing_defaults_pattern(int N) {
     int first_def = first_default_index(N);
     for (int i = first_def; i < N; i++) {
-      if (!args_info[i].has_default) return false;
+      if (!args_info[i].has_default)
+        return false;
     }
     return true;
   }
@@ -874,14 +1059,38 @@ private:
     }
     int k = first_default_index(7);
     switch (k) {
-    case 0: mod_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), func_doc.c_str()); break;
-    case 1: mod_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), func_doc.c_str()); break;
-    case 2: mod_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5), AD(6), func_doc.c_str()); break;
-    case 3: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5), AD(6), func_doc.c_str()); break;
-    case 4: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5), AD(6), func_doc.c_str()); break;
-    case 5: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5), AD(6), func_doc.c_str()); break;
-    case 6: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), AD(6), func_doc.c_str()); break;
-    case 7: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), func_doc.c_str()); break;
+    case 0:
+      mod_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), AD(6), func_doc.c_str());
+      break;
+    case 1:
+      mod_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), func_doc.c_str());
+      break;
+    case 2:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), func_doc.c_str());
+      break;
+    case 3:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   AD(6), func_doc.c_str());
+      break;
+    case 4:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   AD(6), func_doc.c_str());
+      break;
+    case 5:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   AD(6), func_doc.c_str());
+      break;
+    case 6:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   AD(6), func_doc.c_str());
+      break;
+    case 7:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), func_doc.c_str());
+      break;
     }
   }
 
@@ -892,15 +1101,42 @@ private:
     }
     int k = first_default_index(8);
     switch (k) {
-    case 0: mod_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 1: mod_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 2: mod_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 3: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 4: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 5: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 6: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), AD(6), AD(7), func_doc.c_str()); break;
-    case 7: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), AD(7), func_doc.c_str()); break;
-    case 8: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), func_doc.c_str()); break;
+    case 0:
+      mod_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), AD(6), AD(7), func_doc.c_str());
+      break;
+    case 1:
+      mod_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), func_doc.c_str());
+      break;
+    case 2:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), func_doc.c_str());
+      break;
+    case 3:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), func_doc.c_str());
+      break;
+    case 4:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   AD(6), AD(7), func_doc.c_str());
+      break;
+    case 5:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   AD(6), AD(7), func_doc.c_str());
+      break;
+    case 6:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   AD(6), AD(7), func_doc.c_str());
+      break;
+    case 7:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), AD(7), func_doc.c_str());
+      break;
+    case 8:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), func_doc.c_str());
+      break;
     }
   }
 
@@ -911,16 +1147,46 @@ private:
     }
     int k = first_default_index(9);
     switch (k) {
-    case 0: mod_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 1: mod_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 2: mod_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 3: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 4: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 5: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 6: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), AD(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 7: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), AD(7), AD(8), func_doc.c_str()); break;
-    case 8: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), AD(8), func_doc.c_str()); break;
-    case 9: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), func_doc.c_str()); break;
+    case 0:
+      mod_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 1:
+      mod_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 2:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 3:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 4:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 5:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 6:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   AD(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 7:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), AD(7), AD(8), func_doc.c_str());
+      break;
+    case 8:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), AD(8), func_doc.c_str());
+      break;
+    case 9:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), func_doc.c_str());
+      break;
     }
   }
 
@@ -931,17 +1197,50 @@ private:
     }
     int k = first_default_index(10);
     switch (k) {
-    case 0: mod_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 1: mod_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 2: mod_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 3: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 4: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 5: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 6: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 7: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), AD(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 8: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), AD(8), AD(9), func_doc.c_str()); break;
-    case 9: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), AD(9), func_doc.c_str()); break;
-    case 10: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), func_doc.c_str()); break;
+    case 0:
+      mod_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 1:
+      mod_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 2:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 3:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 4:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 5:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 6:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   AD(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 7:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), AD(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 8:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), AD(8), AD(9), func_doc.c_str());
+      break;
+    case 9:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), AD(9), func_doc.c_str());
+      break;
+    case 10:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), A(9), func_doc.c_str());
+      break;
     }
   }
 
@@ -952,18 +1251,54 @@ private:
     }
     int k = first_default_index(11);
     switch (k) {
-    case 0: mod_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 1: mod_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 2: mod_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 3: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 4: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 5: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 6: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 7: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 8: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), AD(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 9: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), AD(9), AD(10), func_doc.c_str()); break;
-    case 10: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), AD(10), func_doc.c_str()); break;
-    case 11: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), func_doc.c_str()); break;
+    case 0:
+      mod_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 1:
+      mod_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 2:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 3:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 4:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 5:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 6:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 7:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), AD(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 8:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), AD(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 9:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), AD(9), AD(10), func_doc.c_str());
+      break;
+    case 10:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), A(9), AD(10), func_doc.c_str());
+      break;
+    case 11:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), A(9), A(10), func_doc.c_str());
+      break;
     }
   }
 
@@ -974,19 +1309,65 @@ private:
     }
     int k = first_default_index(12);
     switch (k) {
-    case 0: mod_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 1: mod_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 2: mod_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 3: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 4: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 5: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 6: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 7: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 8: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 9: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), AD(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 10: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), AD(10), AD(11), func_doc.c_str()); break;
-    case 11: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), AD(11), func_doc.c_str()); break;
-    case 12: mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6), A(7), A(8), A(9), A(10), A(11), func_doc.c_str()); break;
+    case 0:
+      mod_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 1:
+      mod_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 2:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 3:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 4:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 5:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 6:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   AD(6), AD(7), AD(8), AD(9), AD(10), AD(11),
+                   func_doc.c_str());
+      break;
+    case 7:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), AD(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str());
+      break;
+    case 8:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), AD(8), AD(9), AD(10), AD(11), func_doc.c_str());
+      break;
+    case 9:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), AD(9), AD(10), AD(11), func_doc.c_str());
+      break;
+    case 10:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), A(9), AD(10), AD(11), func_doc.c_str());
+      break;
+    case 11:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), A(9), A(10), AD(11), func_doc.c_str());
+      break;
+    case 12:
+      mod_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   A(6), A(7), A(8), A(9), A(10), A(11), func_doc.c_str());
+      break;
     }
   }
 

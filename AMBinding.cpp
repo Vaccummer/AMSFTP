@@ -569,19 +569,18 @@ void BindAMFS(py::module &m) {
       .doc("Get the home path of the current user");
   auto_def_func(m, "extname", &AMFS::extname)
       .arg("path")
-      .doc(
-          "Just string seperation, return the extension of the path without .");
+      .doc("Just string seperation, return the extension of the path without.");
   auto_def_func(m, "split_basename", &AMFS::split_basename)
       .arg("basename")
       .doc("Split the basename of the path, return tuple[str, str], the first "
            "is the basename without extension, the second is the extension(no "
            ".)");
-  auto_def_func(m, "CWD", &AMFS::CWD).doc("Get the current working directory");
+  auto_def_func(m, "CWD", &AMFS::CWD).doc("Get the current working directory ");
   auto_def_func(m, "split", &AMFS::split)
       .arg("path")
-      .doc("Split the path, return list[str], the path is split by separator");
+      .doc("Split the path, return list[str], the path is split by separator ");
   m.def(
-      "join",
+      " join ",
       [](const std::vector<std::string> &parts,
          std::optional<AMFS::SepType> sep) {
         if (sep.has_value()) {
@@ -600,7 +599,6 @@ void BindAMFS(py::module &m) {
       .doc("Convert path to absolute path(won't check if path exists), support "
            "parsing ~ . .. symbol, "
            "unify the path separator first");
-
   auto_def_func(m, "dirname", &AMFS::dirname)
       .arg("path")
       .doc("Get the directory name of the path");
@@ -660,20 +658,20 @@ PYBIND11_MODULE(AMSFTP, m) {
   // auto fs = m.def_submodule("AMFS", "Local Filesystem Operations");
   AMBIDINGS::BindEnum(em);
   AMBIDINGS::BindConRequest(data);
-  AMBIDINGS::BindTransferCallback(data);
-  AMBIDINGS::BindProgressCBInfo(data);
-  AMBIDINGS::BindErrorCBInfo(data);
-  AMBIDINGS::BindAuthCBInfo(data);
-  AMBIDINGS::BindTransferTask(data);
-  AMBIDINGS::BindTraceInfo(data);
-  AMBIDINGS::BindPathInfo(data);
-  AMBIDINGS::BindBasePathMatch(m);
+  //   AMBIDINGS::BindTransferCallback(data);
+  //   AMBIDINGS::BindProgressCBInfo(data);
+  //   AMBIDINGS::BindErrorCBInfo(data);
+  //   AMBIDINGS::BindAuthCBInfo(data);
+  //   AMBIDINGS::BindTransferTask(data);
+  //   AMBIDINGS::BindTraceInfo(data);
+  //   AMBIDINGS::BindPathInfo(data);
+  //   AMBIDINGS::BindBasePathMatch(m);
   AMBIDINGS::BindAMTracer(m);
-  AMBIDINGS::BindBaseClient(m);
-  AMBIDINGS::BindAMSession(m);
-  AMBIDINGS::BindAMSFTPClient(m);
-  AMBIDINGS::BindAMFTPClient(m);
-  AMBIDINGS::BindHostMaintainer(m);
-  AMBIDINGS::BindAMSFTPWorker(m);
+  //   AMBIDINGS::BindBaseClient(m);
+  //   AMBIDINGS::BindAMSession(m);
+  //   AMBIDINGS::BindAMSFTPClient(m);
+  //   AMBIDINGS::BindAMFTPClient(m);
+  //   AMBIDINGS::BindHostMaintainer(m);
+  //   AMBIDINGS::BindAMSFTPWorker(m);
   AMBIDINGS::BindAMFS(m);
 }
