@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <functional>
 #include <iomanip>
+#include <iostream>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -287,6 +288,7 @@ public:
 
   static std::string GetPathSep(const std::string &path) {
 #ifdef AMForceUsingUnixSep
+    // force to use unix path separator
     return "/";
 #endif
     if (path[0] == '/') {
@@ -543,31 +545,35 @@ split_basename(const std::string &basename) {
 
 inline std::string CWD() { return fs::current_path().string(); }
 
-inline std::vector<std::string> split(std::string path) {
-  if (Str::CharNum(path) < 2) {
-    return {path};
+inline std::vector<std::string> split(const std::string &path) {
+  std::string pathf = Str::Strip(path);
+  if (Str::CharNum(pathf) < 3) {
+    return {pathf};
   }
-
   std::vector<std::string> result{};
-  std::string head = path.substr(0, 2);
+  // Str::CharNum(pathf) >= 3, 防止substr越界
+  std::string head = pathf.substr(0, 2);
   if (head == "//" || head == "\\\\") {
     // 匹配网络路径
-    path = path.substr(2);
+    pathf = pathf.substr(2);
   } else if (head[0] == '/') {
     // 匹配unix根目录
-    result.push_back("/");
-    path = path.substr(1);
+    result.emplace_back("/");
+    pathf = pathf.substr(1);
     head.clear();
   } else {
     head.clear();
   }
-
   std::string cur = "";
-  for (auto c : path) {
+  for (auto c : pathf) {
     if (c == '\\' || c == '/') {
       if (!cur.empty()) {
         result.push_back(cur);
         cur = "";
+      }
+    } else if (c == ' ') {
+      if (cur.empty()) {
+        continue;
       }
     } else {
       cur += c;
@@ -578,9 +584,14 @@ inline std::vector<std::string> split(std::string path) {
   }
 
   if (!head.empty()) {
+    if (result.empty()) {
+      return {head};
+    }
     result[0] = head + result[0];
   }
-
+  for (auto &part : result) {
+    Str::VStrip(part);
+  }
   return result;
 }
 
@@ -712,77 +723,6 @@ template <typename... Args> std::string join(Args &&...args) {
   return result;
 };
 
-// 解析真实存在的路径，返回绝对路径
-// std::string realpath(const std::string &path, bool force_parsing = false,
-// const std::string &cwd = "", const std::string &sep = "")
-// {
-//     std::string new_path = UnifyPathSep(path, sep);
-
-//     if ((Str::CharNum(new_path) < 4 || IsAbs(new_path, sep)) &&
-//     !force_parsing)
-//     {
-//         return path;
-//     }
-
-//     std::string new_sep = sep.empty() ? Str::GetPathSep(path) : sep;
-
-//     if (!IsAbs(new_path, new_sep))
-//     {
-//         new_path = cwd.empty() ? CWD() + new_sep + new_path : cwd + new_sep +
-//         new_path;
-//     }
-
-//     std::vector<std::string> parts = split(new_path);
-
-//     if (parts.empty())
-//     {
-//         return "";
-//     }
-
-//     std::vector<std::string> new_parts{};
-
-//     if (parts.front() == "~")
-//     {
-//         std::string hm = HomePath();
-//         for (const auto &seg : split(hm))
-//         {
-//             new_parts.push_back(seg);
-//         }
-//         parts.erase(parts.begin());
-//     }
-
-//     std::string tmp_part;
-//     for (auto tmp_part : parts)
-//     {
-//         if (tmp_part == ".")
-//         {
-//             continue;
-//         }
-//         else if (tmp_part == "..")
-//         {
-//             if (!new_parts.empty())
-//             {
-//                 new_parts.pop_back();
-//             }
-//         }
-//         else
-//         {
-//             new_parts.push_back(tmp_part);
-//         }
-//     }
-
-//     std::string result;
-//     for (const auto part : new_parts)
-//     {
-//         result += part + new_sep;
-//     }
-//     if (!std::regex_search(result, std::regex("^[a-zA-Z]:[\\\\/]$")))
-//     {
-//         result.pop_back();
-//     }
-//     return result;
-// }
-
 // 将路径转换为绝对路径，支持解析~ . ..符号， 不要求路径存在
 inline std::string abspath(const std::string &path,
                            const bool parsing_home = true,
@@ -790,26 +730,19 @@ inline std::string abspath(const std::string &path,
                            const std::string &cwd = "",
                            const std::string &sep = "") {
   std::string new_path = UnifyPathSep(path, sep);
-
   if (IsAbs(new_path, sep) && !parsing_home) {
     return new_path;
   }
-
   std::string new_sep = sep.empty() ? Str::GetPathSep(path) : sep;
-
   if (!IsAbs(new_path, new_sep)) {
     new_path =
         cwd.empty() ? CWD() + new_sep + new_path : cwd + new_sep + new_path;
   }
-
   std::vector<std::string> parts = split(new_path);
-
   if (parts.empty()) {
     return "";
   }
-
   std::vector<std::string> new_parts{};
-
   std::string tmp_part;
   std::string result;
   if (parts.empty()) {
@@ -840,7 +773,6 @@ inline std::string abspath(const std::string &path,
       new_parts.push_back(tmp_part);
     }
   }
-
   if (new_parts.size() == 0) {
     return "";
   }
@@ -848,7 +780,6 @@ inline std::string abspath(const std::string &path,
     result = "/";
     new_parts.erase(new_parts.begin());
   }
-
   for (auto &part : new_parts) {
     result += part + new_sep;
   }
