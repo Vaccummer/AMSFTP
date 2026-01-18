@@ -819,7 +819,7 @@ inline std::string mkdirs(const std::string &path) {
 inline std::pair<std::string, PathInfo> stat(const std::string &path,
                                              bool trace_link = false) {
   PathInfo info;
-  std::string pathf = abspath(path);
+  std::string pathf = path;
   fs::path p(pathf);
   info.name = p.filename().string();
   info.path = pathf;
@@ -920,7 +920,7 @@ inline std::pair<std::string, PathInfo> stat(const std::string &path,
 
 inline std::vector<PathInfo> listdir(const std::string &path,
                                      float max_time_s = -1) {
-  std::string pathf = abspath(path);
+  std::string pathf = path;
   std::vector<PathInfo> result = {};
   fs::path p(pathf);
   if (!fs::exists(p)) {
