@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <functional>
 #include <iomanip>
-#include <iostream>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -409,6 +408,16 @@ inline bool is_readonly(const std::wstring &path) {
 inline double timespec_to_double(const struct timespec &ts) {
   return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
 }
+
+class InterruptFlag {
+private:
+  std::atomic<bool> is_interrupted = false;
+
+public:
+  inline bool check() { return is_interrupted.load(); }
+  inline void set(bool value) { is_interrupted.store(value); }
+  inline void reset() { is_interrupted.store(false); }
+};
 
 class PathInfo {
 public:
@@ -1455,7 +1464,7 @@ public:
     try {
       bool res = std::regex_search(w_name, std::wregex(w_pattern));
       return res;
-    } catch (const std::regex_error &e) {
+    } catch (const std::regex_error) {
       return false;
     }
   }
@@ -1479,7 +1488,7 @@ public:
     if (match_parts.size() > parts.size()) {
       return false;
     }
-    int pos = 0;
+    size_t pos = 0;
     bool is_match;
     for (auto &part : match_parts) {
       is_match = false;

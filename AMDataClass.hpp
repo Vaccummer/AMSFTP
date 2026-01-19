@@ -225,19 +225,17 @@ struct ConRequst {
   std::string keyfile;
   bool compression;
   int port;
-  size_t timeout_s;
   std::string trash_dir = "";
   ConRequst()
       : nickname(""), hostname(""), username(""), password(""), keyfile(""),
-        compression(false), port(22), timeout_s(3), trash_dir("") {}
-  ConRequst(const std::string &nickname, const std::string &hostname,
-            const std::string &username, int port = 22,
-            std::string password = "", std::string keyfile = "",
-            bool compression = false, size_t timeout_s = 3,
-            std::string trash_dir = "")
-      : nickname(nickname), hostname(hostname), username(username),
-        password(password), keyfile(keyfile), compression(compression),
-        port(port), timeout_s(timeout_s), trash_dir(trash_dir) {}
+        compression(false), port(22), trash_dir("") {}
+  ConRequst(std::string nickname, std::string hostname, std::string username,
+            int port = 22, std::string password = "", std::string keyfile = "",
+            bool compression = false, std::string trash_dir = "")
+      : nickname(std::move(nickname)), hostname(std::move(hostname)),
+        username(std::move(username)), password(std::move(password)),
+        keyfile(std::move(keyfile)), compression(compression), port(port),
+        trash_dir(std::move(trash_dir)) {}
 };
 
 struct ProgressCBInfo {
@@ -453,7 +451,7 @@ struct ProgressData {
   size_t file_size = 0;
   size_t accumulated_size = 0;
   size_t total_size = 0;
-  float cb_interval_s = 0.1;
+  float cb_interval_s = static_cast<float>(0.1);
   double cb_time = timenow();
   ECM rcm = ECM(EC::Success, "");
   std::function<void(bool)> progress_cb;

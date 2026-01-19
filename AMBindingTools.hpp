@@ -90,12 +90,21 @@ public:
   }
 
   // Add argument with default value only (including const char*)
-  template <typename T, typename = typename std::enable_if<
-                            !std::is_convertible<T, std::string>::value ||
-                            std::is_same<typename std::decay<T>::type,
-                                         const char *>::value>::type>
+  // Excludes py::object derived types
+  template <typename T, typename = std::enable_if_t<
+                            (!std::is_convertible_v<T, std::string> ||
+                             std::is_same_v<std::decay_t<T>, const char *>) &&
+                            !std::is_base_of_v<py::object, std::decay_t<T>>>>
   AutoDefHelper &arg(const char *name, T &&default_val) {
     args_info.push_back({name, py::cast(std::forward<T>(default_val)), true});
+    return *this;
+  }
+
+  // Overload for py::object types (py::none(), py::list(), etc.)
+  template <typename T,
+            std::enable_if_t<std::is_base_of_v<py::object, std::decay_t<T>>, int> = 0>
+  AutoDefHelper &arg(const char *name, T &&default_val) {
+    args_info.push_back({name, py::object(std::forward<T>(default_val)), true});
     return *this;
   }
 
@@ -775,12 +784,21 @@ public:
   }
 
   // Add argument with default value only (including const char*)
-  template <typename T, typename = typename std::enable_if<
-                            !std::is_convertible<T, std::string>::value ||
-                            std::is_same<typename std::decay<T>::type,
-                                         const char *>::value>::type>
+  // Excludes py::object derived types
+  template <typename T, typename = std::enable_if_t<
+                            (!std::is_convertible_v<T, std::string> ||
+                             std::is_same_v<std::decay_t<T>, const char *>) &&
+                            !std::is_base_of_v<py::object, std::decay_t<T>>>>
   AutoDefFuncHelper &arg(const char *name, T &&default_val) {
     args_info.push_back({name, py::cast(std::forward<T>(default_val)), true});
+    return *this;
+  }
+
+  // Overload for py::object types (py::none(), py::list(), etc.)
+  template <typename T,
+            std::enable_if_t<std::is_base_of_v<py::object, std::decay_t<T>>, int> = 0>
+  AutoDefFuncHelper &arg(const char *name, T &&default_val) {
+    args_info.push_back({name, py::object(std::forward<T>(default_val)), true});
     return *this;
   }
 

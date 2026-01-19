@@ -492,26 +492,44 @@ void BindAMFTPClient(py::module &m) {
       .doc("Move file/directory to destination folder");
 }
 
-void BindHostMaintainer(py::module &m) {
-  auto cls = py::class_<HostMaintainer, std::shared_ptr<HostMaintainer>>(
-      m, "HostMaintainer", "Host Connection Manager with Heartbeat");
+void BindCreateFunc(py::module &m) {
+  auto_def_func(m, "CreateClient", &CreateClient)
+      .arg("request")
+      .arg("protocol")
+      .arg("trace_num")
+      .arg("trace_cb", py::none())
+      .arg("buffer_size", 8 * AMMB)
+      .arg("keys", py::list())
+      .arg("auth_cb", py::none());
+}
+
+void BindClientMaintainer(py::module &m) {
+  auto cls = py::class_<ClientMaintainer, std::shared_ptr<ClientMaintainer>>(
+      m, "ClientMaintainer", "Client Connection Manager with Heartbeat");
   cls.def(py::init<int, py::object>(), py::arg("heartbeat_interval_s") = 60,
           py::arg("disconnect_cb") = py::none(),
-          "Create host maintainer with heartbeat monitoring");
+          "Create client maintainer with heartbeat monitoring");
 
-  cls.def("get_hosts", &HostMaintainer::get_hosts,
-          "Get list of all registered host nicknames");
-  cls.def("get_clients", &HostMaintainer::get_clients,
+  cls.def("get_nicknames", &ClientMaintainer::get_nicknames,
+          "Get list of all registered client nicknames");
+  cls.def("get_clients", &ClientMaintainer::get_clients,
           "Get list of all registered clients");
-  cls.def("add_host", &HostMaintainer::add_host, py::arg("nickname"),
-          py::arg("client"), py::arg("overwrite") = false,
-          "Add a host client to the maintainer");
-  cls.def("remove_host", &HostMaintainer::remove_host, py::arg("nickname"),
-          "Remove a host from the maintainer");
-  cls.def("get_host", &HostMaintainer::get_host, py::arg("nickname"),
-          "Get a host client by nickname");
-  cls.def("test_host", &HostMaintainer::test_host, py::arg("nickname"),
-          py::arg("update") = false, "Test host connection status");
+  cls.def("add_client",
+          py::overload_cast<const std::string &, std::shared_ptr<AMSFTPClient>,
+                            bool>(&ClientMaintainer::add_client),
+          py::arg("nickname"), py::arg("client"), py::arg("overwrite") = false,
+          "Add a SFTP client to the maintainer");
+  cls.def("add_client",
+          py::overload_cast<const std::string &, std::shared_ptr<AMFTPClient>,
+                            bool>(&ClientMaintainer::add_client),
+          py::arg("nickname"), py::arg("client"), py::arg("overwrite") = false,
+          "Add a FTP client to the maintainer");
+  cls.def("remove_client", &ClientMaintainer::remove_client,
+          py::arg("nickname"), "Remove a client from the maintainer");
+  cls.def("get_client", &ClientMaintainer::get_client, py::arg("nickname"),
+          "Get a client by nickname");
+  cls.def("test_client", &ClientMaintainer::test_client, py::arg("nickname"),
+          py::arg("update") = false, "Test client connection status");
 }
 
 void BindAMSFTPWorker(py::module &m) {
@@ -700,7 +718,7 @@ PYBIND11_MODULE(AMSFTP, m) {
   AMBIDINGS::BindAMSession(m);
   AMBIDINGS::BindAMSFTPClient(m);
   AMBIDINGS::BindAMFTPClient(m);
-  AMBIDINGS::BindHostMaintainer(m);
+  AMBIDINGS::BindClientMaintainer(m);
   AMBIDINGS::BindAMSFTPWorker(m);
   AMBIDINGS::BindAMFS(fs);
 }
