@@ -404,7 +404,7 @@ public:
         "{} Client doesn't implement funtion: GetState", GetProtocolName()));
   };
   // NOLINTBEGIN
-  virtual ECM Check(bool need_trace = false) {
+  virtual ECM Check() {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: Check", GetProtocolName()));
   }
@@ -781,6 +781,107 @@ public:
     }
   }
 
+  // 非阻塞调用结果
+  template <typename T> struct NBResult {
+    T value;           // 函数返回值
+    WaitResult status; // 等待状态
+
+    bool ok() const { return status == WaitResult::Ready; }
+    bool is_timeout() const { return status == WaitResult::Timeout; }
+    bool is_interrupted() const { return status == WaitResult::Interrupted; }
+    bool is_error() const { return status == WaitResult::Error; }
+  };
+
+  // 非阻塞执行 libssh2 函数（返回 int 类型，EAGAIN 表示需要等待）
+  // 用法: auto result = nb_exec(flag, timeout_ms, libssh2_sftp_unlink, sftp,
+  // path);
+  template <typename Func, typename... Args>
+  auto nb_exec(const amf &interrupt_flag, int64_t timeout_ms, Func &&func,
+               Args &&...args)
+      -> NBResult<decltype(func(std::forward<Args>(args)...))> {
+    using RetType = decltype(func(std::forward<Args>(args)...));
+
+    auto time_start = std::chrono::steady_clock::now();
+    libssh2_session_set_blocking(session, 0);
+
+    RetType rc;
+    WaitResult wr = WaitResult::Ready;
+
+    while (true) {
+      rc = func(std::forward<Args>(args)...);
+
+      // 对于返回 int 的函数，EAGAIN 表示需要等待
+      if constexpr (std::is_same_v<RetType, int> ||
+                    std::is_same_v<RetType, ssize_t>) {
+        if (rc != LIBSSH2_ERROR_EAGAIN) {
+          break;
+        }
+      }
+      // 对于返回指针的函数，nullptr + EAGAIN 表示需要等待
+      else if constexpr (std::is_pointer_v<RetType>) {
+        if (rc != nullptr ||
+            libssh2_session_last_errno(session) != LIBSSH2_ERROR_EAGAIN) {
+          break;
+        }
+      } else {
+        break; // 其他类型直接返回
+      }
+
+      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
+                           timeout_ms);
+      if (wr != WaitResult::Ready) {
+        libssh2_session_set_blocking(session, 1);
+        return {rc, wr};
+      }
+    }
+
+    libssh2_session_set_blocking(session, 1);
+    return {rc, WaitResult::Ready};
+  }
+
+  // 便捷宏/lambda 版本，用于更简洁的调用
+  // 用法: auto result = nb_call(flag, timeout, [&]{ return
+  // libssh2_sftp_unlink(sftp, path); });
+  template <typename Func>
+  auto nb_call(const amf &interrupt_flag, int64_t timeout_ms, Func &&func,
+               int64_t poll_interval_ms = 20) -> NBResult<decltype(func())> {
+    using RetType = decltype(func());
+
+    auto time_start = std::chrono::steady_clock::now();
+    libssh2_session_set_blocking(session, 0);
+
+    RetType rc;
+    WaitResult wr = WaitResult::Ready;
+
+    while (true) {
+      rc = func();
+
+      if constexpr (std::is_same_v<RetType, int> ||
+                    std::is_same_v<RetType, ssize_t>) {
+        if (rc != LIBSSH2_ERROR_EAGAIN) {
+          break;
+        }
+      } else if constexpr (std::is_pointer_v<RetType>) {
+        if (rc != nullptr ||
+            libssh2_session_last_errno(session) != LIBSSH2_ERROR_EAGAIN) {
+          break;
+        }
+      } else {
+        break;
+      }
+
+      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
+                           timeout_ms, poll_interval_ms);
+      if (wr != WaitResult::Ready) {
+        libssh2_session_set_blocking(session, 1);
+        return {rc, wr};
+      }
+    }
+
+    libssh2_session_set_blocking(session, 1);
+    return {rc, WaitResult::Ready};
+  }
+
   auto GetLibssh2Version() { return libssh2_version(LIBSSH2_VERSION_NUM); }
 
   bool IsValidKey(const std::string &key) {
@@ -815,7 +916,7 @@ public:
     return CurError;
   }
 
-  ECM BaseCheck() {
+  ECM Check(int timeout_ms = -1, amf interrupt_flag = nullptr) override {
     if (!sftp) {
       return {EC::NoConnection, "SFTP not initialized"};
     }
@@ -823,19 +924,14 @@ public:
     if (!session) {
       return {EC::NoSession, "Session not initialized"};
     }
-
+    std::lock_guard<std::recursive_mutex> lock(mtx);
     char path_t[1024];
-    int rcr;
-    {
-      std::lock_guard<std::recursive_mutex> lock(mtx);
-      rcr = libssh2_sftp_realpath(sftp, ".", path_t, sizeof(path_t));
-    }
-    if (rcr < 0) {
-      EC rc = GetLastEC();
-      return std::make_pair(rc, "Sftp status check failed");
-    }
-
-    return {EC::Success, ""};
+    ECM rcm =
+        ErrorRecord(libssh2_sftp_realpath(sftp, ".", path_t, sizeof(path_t)),
+                    TraceLevel::Debug, ".", "BaseCheck",
+                    "Sftp status check failed: {error}");
+    SetState(rcm);
+    return rcm;
   }
 
   ECM BaseConnect(bool force = false, int timeout_ms = -1,
@@ -1751,22 +1847,6 @@ public:
     }
   }
 
-  ECM Check(bool need_trace = false) override {
-    ECM rc = BaseCheck();
-    SetState(rc);
-    if (!need_trace) {
-      return rc;
-    }
-    if (rc.first != EC::Success) {
-      trace(TraceLevel::Debug, rc.first, "home_path", "Check",
-            "Sftp status check failed");
-    } else {
-      trace(TraceLevel::Debug, EC::Success, "Connection Status", "Check",
-            "Session status check success");
-    }
-    return rc;
-  }
-
   ECM Connect(bool force = false, int timeout_ms = -1,
               amf interrupt_flag = nullptr) override {
     bool not_init = has_connected;
@@ -2491,6 +2571,7 @@ private:
   std::atomic<bool> connected = false;
   std::regex ftp_url_pattern = std::regex("^ftp://.*$");
   ECM state = {EC::NoConnection, "Client Not Initialized"};
+  std::string url = "";
   std::mutex state_mtx;
 
   void _iwalk(const PathInfo &info, WRV &result,
@@ -2576,31 +2657,21 @@ public:
     return realsize;
   }
 
-  std::string BuildUrl(const std::string &path) {
-    std::string url =
-        fmt::format("ftp://{}:{}", res_data.hostname, res_data.port);
-    if (!path.empty()) {
-      if (path[0] != '/') {
-        url += "/";
-      }
-      url += path;
-    }
-    return url;
-  }
-
-  ECM SetupCurl(const std::string &url) {
+  ECM SetupAuth(const std::string &path) {
     if (!curl) {
       return {EC::NoConnection, "CURL not initialized"};
     }
+    std::string f_path = path;
+    // 清除path开头的所有/ 与
+    while (!f_path.empty() && (f_path[0] == '/' || f_path[0] == '\\')) {
+      f_path = f_path.substr(1);
+    }
 
     curl_easy_reset(curl);
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_URL,
+                     fmt::format("{}/{}", this->url, f_path).c_str());
     curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
     curl_easy_setopt(curl, CURLOPT_PASSWORD, res_data.password.c_str());
-    curl_easy_setopt(curl, CURLOPT_FTP_RESPONSE_TIMEOUT,
-                     static_cast<long>(res_data.timeout_s));
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
-                     static_cast<long>(res_data.timeout_s));
     return {EC::Success, ""};
   }
 
@@ -2747,6 +2818,7 @@ public:
       res_data.password = res_data.password.empty() ? "anonymous@example.com"
                                                     : res_data.password;
     }
+    this->url = fmt::format("ftp://{}:{}", res_data.hostname, res_data.port);
   }
 
   ~AMFTPClient() {
@@ -2755,7 +2827,8 @@ public:
     }
   }
 
-  ECM Connect(bool force = false) override {
+  ECM Connect(bool force = false, int timeout_ms = -1,
+              amf interrupt_flag = nullptr) override {
     std::lock_guard<std::recursive_mutex> lock(mtx);
 
     if (connected && !force && GetState().first == EC::Success) {
@@ -2772,12 +2845,9 @@ public:
     }
 
     // Test connection by getting home directory
-    std::string test_url =
-        fmt::format("ftp://{}:{}/", res_data.hostname, res_data.port);
-    ECM ecm = SetupCurl(test_url);
-    if (ecm.first != EC::Success) {
-      connected = false;
-      return ecm;
+    SetupAuth("");
+    if (timeout_ms > 0) {
+      curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout_ms));
     }
     ECM rcm = Check(true);
     if (rcm.first != EC::Success) {
@@ -2797,7 +2867,7 @@ public:
     return state;
   }
 
-  ECM Check(bool need_trace = false) override {
+  ECM Check(int timeout_ms = -1) override {
     if (!curl) {
       connected = false;
       return {EC::NoConnection, "CURL not initialized"};
@@ -2811,6 +2881,7 @@ public:
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
     CURLcode res = curl_easy_perform(curl);
+
     free(chunk.memory);
 
     std::string error_msg = "";
@@ -2830,6 +2901,7 @@ public:
       trace(TraceLevel::Info, EC::Success, nickname, "Check",
             "Check connection success");
     }
+    curl_easy_reset(curl);
     return {EC::Success, ""};
   }
 
