@@ -262,11 +262,9 @@ public:
     }
   }
 
-  void trace(const TraceLevel &level, const EC &error_code,
-             const std::string &target = "", const std::string &action = "",
-             const std::string &msg = "") {
-    TraceInfo trace_info(level, error_code, nickname, target, action, msg);
-    this->trace(trace_info);
+  void trace(TraceLevel level, EC error_code, const std::string &target = "",
+             const std::string &action = "", const std::string &msg = "") {
+    this->trace(TraceInfo(level, error_code, nickname, target, action, msg));
   }
 
   void trace(const TraceInfo &trace_info) {
@@ -536,20 +534,23 @@ public:
         "{} Client doesn't implement funtion: move", GetProtocolName()));
   }
   virtual ECM copy(const std::string &src, const std::string &dst,
-                   bool need_mkdir = false) {
+                   bool need_mkdir = false, amf interrupt_flag = nullptr) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: copy", GetProtocolName()));
   }
-  virtual WRV iwalk(const std::string &path, bool ignore_sepcial_file = true) {
+  virtual WRV iwalk(const std::string &path, amf interrupt_flag = nullptr,
+                    bool ignore_sepcial_file = true) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: iwalk", GetProtocolName()));
   }
   virtual std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1,
+                                   amf interrupt_flag = nullptr,
                                    bool ignore_sepcial_file = true) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: walk", GetProtocolName()));
   }
   virtual uint64_t getsize(const std::string &path,
+                           amf interrupt_flag = nullptr,
                            bool ignore_sepcial_file = true) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: getsize", GetProtocolName()));
@@ -584,6 +585,24 @@ protected:
   void SetState(const ECM &state) override {
     std::lock_guard<std::mutex> lock(state_mtx);
     CurError = state;
+  }
+
+  ECM ErrorRecord(int code, TraceLevel level, const std::string &taregt,
+                  const std::string &action, std::string prompt = "") {
+    if (code < 0) {
+      return {EC::Success, ""};
+    }
+    auto ec = GetLastEC();
+    auto msg = GetLastErrorMsg();
+    if (prompt.empty()) {
+      prompt = fmt::format("{} on {} error:{}", action, taregt, msg);
+    } else {
+      AMFS::Str::vreplace(prompt, "{action}", action);
+      AMFS::Str::vreplace(prompt, "{target}", taregt);
+      AMFS::Str::vreplace(prompt, "{error}", msg);
+    }
+    trace(level, ec, taregt, action, prompt);
+    return {ec, prompt};
   }
 
 private:
@@ -830,17 +849,18 @@ public:
       has_connected.store(false);
     }
 
-    std::string msg = "";
-    EC rc = EC::Success;
+    ECM rcm = {EC::Success, ""};
     int rcr;
     auto time_start = std::chrono::steady_clock::now();
     WaitResult wr = WaitResult::Ready;
+    bool password_auth;
+    std::string password_tmp;
+    const char *auth_list = nullptr;
 
     // 使用SocketConnector建立连接
     SocketConnector connector;
 
-    if (!connector.Connect(res_data.hostname, res_data.port,
-                           res_data.timeout_s)) {
+    if (!connector.Connect(res_data.hostname, res_data.port, timeout_ms)) {
       trace(TraceLevel::Critical, connector.error_code,
             fmt::format("{}", connector.sock), "SocketConnector.Connect",
             connector.error_msg);
@@ -883,212 +903,174 @@ public:
       wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
                            timeout_ms);
       if (wr != WaitResult::Ready) {
-        goto connect_failed;
+        goto interrupted_or_sock_error;
       }
     }
-
-    if (rcr != 0) {
-      msg = fmt::format("Session handshake failed: {}", GetLastErrorMsg());
-      rc = GetLastEC();
-      trace(TraceLevel::Critical, rc,
-            fmt::format("session_code:{}, socket:{}", rcr, sock),
-            "libssh2_session_handshake", msg);
-      libssh2_session_set_blocking(session, 1);
-      return {rc, msg};
+    rcm = ErrorRecord(rcr, TraceLevel::Critical, fmt::format("socket {}", sock),
+                      "libssh2_session_handshake");
+    if (rcm.first != EC::Success) {
+      goto interrupted_or_sock_error;
     }
 
     // 获取认证列表（非阻塞）
-    {
-      const char *auth_list = nullptr;
-      while ((auth_list = libssh2_userauth_list(
-                  session, res_data.username.c_str(),
-                  res_data.username.length())) == nullptr &&
-             libssh2_session_last_errno(session) == LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
-                             timeout_ms);
-        if (wr != WaitResult::Ready) {
-          goto connect_failed;
-        }
+    while ((auth_list =
+                libssh2_userauth_list(session, res_data.username.c_str(),
+                                      res_data.username.length())) == nullptr &&
+           libssh2_session_last_errno(session) == LIBSSH2_ERROR_EAGAIN) {
+      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
+                           timeout_ms);
+      if (wr != WaitResult::Ready) {
+        goto interrupted_or_sock_error;
       }
+    }
 
-      if (auth_list == nullptr) {
-        msg = fmt::format("Fail to negotiate authentication method: {}",
-                          GetLastErrorMsg());
-        rc = GetLastEC();
-        trace(TraceLevel::Critical, rc, res_data.nickname, "GetAuthList", msg);
-        libssh2_session_set_blocking(session, 1);
-        return {rc, msg};
+    if (auth_list == nullptr) {
+      rcm = ErrorRecord(-1, TraceLevel::Critical, "", "GetAuthList",
+                        "Fail to {action} : {error}");
+      goto interrupted_or_sock_error;
+    }
+
+    trace(TraceLevel::Debug, EC::Success, res_data.username,
+          "libssh2_userauth_list",
+          fmt::format("Authentication methods: {}", auth_list));
+
+    // ========== 进入认证阶段，不再检测 timeout ==========
+    // 切换到阻塞模式，简化认证流程（认证可能涉及用户交互）
+    libssh2_session_set_blocking(session, 1);
+
+    password_auth = (strstr(auth_list, "password") != nullptr);
+
+    // 专用私钥认证
+    if (!res_data.keyfile.empty()) {
+      // 检查中断（不检查超时）
+      if (interrupt_flag && interrupt_flag->check()) {
+        return {EC::Terminate, "Authentication interrupted"};
       }
+      rcr = libssh2_userauth_publickey_fromfile(
+          session, res_data.username.c_str(), nullptr, res_data.keyfile.c_str(),
+          nullptr);
+      if (rcr == 0) {
+        trace(TraceLevel::Info, EC::Success, "Success",
+              "PrivatedKeyAuthorizeResult",
+              fmt::format("Dedicated private key \"{}\" authorize success",
+                          res_data.keyfile));
+        goto OK;
+      } else {
+        trace(TraceLevel::Debug, EC::PublickeyAuthFailed, res_data.keyfile,
+              "DedicatedPrivateKeyAuthorizeResult",
+              fmt::format("Dedicated private key \"{}\" authorize success",
+                          res_data.keyfile));
+      }
+    }
 
-      trace(TraceLevel::Debug, EC::Success, res_data.username,
-            "libssh2_userauth_list",
-            fmt::format("Authentication methods: {}", auth_list));
+    // 密码认证
+    if (!res_data.password.empty() && password_auth) {
+      if (interrupt_flag && interrupt_flag->check()) {
+        return {EC::Terminate, "Authentication interrupted"};
+      }
+      rcr = libssh2_userauth_password(session, res_data.username.c_str(),
+                                      res_data.password.c_str());
+      if (rcr == 0) {
+        trace(TraceLevel::Info, EC::Success, "Success",
+              "PasswordAuthorizeResult", "Password authorize success");
+        goto OK;
+      } else {
+        trace(TraceLevel::Debug, EC::AuthFailed, res_data.password,
+              "PasswordAuth",
+              fmt::format("Wrong Password: {}", res_data.password));
+      }
+    }
 
-      // ========== 进入认证阶段，不再检测 timeout ==========
-      // 切换到阻塞模式，简化认证流程（认证可能涉及用户交互）
-      libssh2_session_set_blocking(session, 1);
-
-      bool password_auth = (strstr(auth_list, "password") != nullptr);
-      rc = EC::AuthFailed;
-      std::string password_tmp;
-
-      // 专用私钥认证
-      if (!res_data.keyfile.empty()) {
-        // 检查中断（不检查超时）
+    // 共享私钥认证
+    if (!private_keys.empty()) {
+      for (auto private_key : private_keys) {
         if (interrupt_flag && interrupt_flag->check()) {
           return {EC::Terminate, "Authentication interrupted"};
         }
-        trace(TraceLevel::Debug, EC::Success, "PrivateKey", "Authorize",
-              fmt::format("Using dedicated private key: {}", res_data.keyfile));
+        if (private_key == res_data.keyfile) {
+          continue;
+        }
         rcr = libssh2_userauth_publickey_fromfile(
-            session, res_data.username.c_str(), nullptr,
-            res_data.keyfile.c_str(), nullptr);
+            session, res_data.username.c_str(), nullptr, private_key.c_str(),
+            nullptr);
         if (rcr == 0) {
-          rc = EC::Success;
-          msg = "";
-          trace(TraceLevel::Info, EC::Success, "Success",
+          trace(TraceLevel::Info, EC::Success, private_key,
                 "PrivatedKeyAuthorizeResult",
-                fmt::format("Dedicated private key \"{}\" authorize success",
-                            res_data.keyfile));
+                fmt::format("Shared private key \"{}\" authorize success",
+                            private_key));
           goto OK;
         } else {
-          msg = fmt::format("Dedicated private key \"{}\" authorize failed: {}",
-                            res_data.keyfile, GetLastErrorMsg());
-          rc = GetLastEC();
-          trace(TraceLevel::Debug, rc, "Failed", "PrivatedKeyAuthorizeResult",
-                msg);
+          trace(TraceLevel::Debug, EC::PrivateKeyAuthFailed, "Failed",
+                "PrivatedKeyAuthorizeResult", rcm.second);
         }
       }
+    }
 
-      // 密码认证
-      if (!res_data.password.empty() && password_auth) {
+    // 交互式密码认证回调
+    if (password_auth_cb && password_auth) {
+      trace(TraceLevel::Info, EC::Success, "Interactive", "PasswordAuthorize",
+            "Using password authentication callback to get another password");
+      int trial_times = 0;
+      while (trial_times < 2) {
         if (interrupt_flag && interrupt_flag->check()) {
           return {EC::Terminate, "Authentication interrupted"};
         }
-        trace(
-            TraceLevel::Debug, EC::Success, res_data.password,
-            "PasswordAuthorize",
-            fmt::format("Using password to authorize: {}", res_data.password));
+        {
+          py::gil_scoped_acquire acquire;
+          try {
+            password_tmp = py::cast<std::string>(
+                auth_cb(AuthCBInfo(true, res_data, trial_times)));
+          } catch (const std::exception &e) {
+            trace(TraceLevel::Error, EC::PyCBError, "AuthCB", "Call",
+                  fmt::format("Password authentication callback error: {}",
+                              e.what()));
+            break;
+          }
+        }
+        if (password_tmp.empty()) {
+          break;
+        }
         rcr = libssh2_userauth_password(session, res_data.username.c_str(),
-                                        res_data.password.c_str());
+                                        password_tmp.c_str());
+        trial_times++;
         if (rcr == 0) {
-          rc = EC::Success;
-          msg = "";
           trace(TraceLevel::Info, EC::Success, "Success",
                 "PasswordAuthorizeResult", "Password authorize success");
           goto OK;
         } else {
-          rc = EC::AuthFailed;
           trace(TraceLevel::Debug, EC::AuthFailed, "Failed",
                 "PasswordAuthorizeResult",
-                fmt::format("Wrong Password: {}", res_data.password));
-        }
-      }
-
-      // 共享私钥认证
-      if (!private_keys.empty()) {
-        trace(TraceLevel::Debug, EC::Success, "SharedPrivateKey", "Authorize",
-              fmt::format("Using shared private keys to authorize"));
-        for (auto private_key : private_keys) {
-          if (interrupt_flag && interrupt_flag->check()) {
-            return {EC::Terminate, "Authentication interrupted"};
-          }
-          if (private_key == res_data.keyfile) {
-            continue;
-          }
-          rcr = libssh2_userauth_publickey_fromfile(
-              session, res_data.username.c_str(), nullptr, private_key.c_str(),
-              nullptr);
-          if (rcr == 0) {
-            msg = fmt::format("Shared private key \"{}\" authorize success",
-                              private_key);
-            trace(TraceLevel::Info, EC::Success, "Success",
-                  "PrivatedKeyAuthorizeResult", msg);
-            rc = EC::Success;
-            goto OK;
-          } else {
-            msg = fmt::format("Shared private key \"{}\" authorize failed",
-                              private_key);
-            trace(TraceLevel::Debug, EC::PrivateKeyAuthFailed, "Failed",
-                  "PrivatedKeyAuthorizeResult", msg);
-          }
-        }
-      }
-
-      // 交互式密码认证回调
-      if (password_auth_cb && password_auth) {
-        trace(TraceLevel::Debug, EC::Success, "Interactive",
-              "PasswordAuthorize",
-              "Using password authentication callback to get another password");
-        int trial_times = 0;
-        while (trial_times < 2) {
-          if (interrupt_flag && interrupt_flag->check()) {
-            return {EC::Terminate, "Authentication interrupted"};
-          }
+                fmt::format("Wrong Password: {}", password_tmp));
           {
             py::gil_scoped_acquire acquire;
-            try {
-              password_tmp = py::cast<std::string>(
-                  auth_cb(AuthCBInfo(true, res_data, trial_times)));
-            } catch (const std::exception &e) {
-              trace(TraceLevel::Error, EC::AuthFailed, "Failed",
-                    "PasswordAuthorizeResult",
-                    fmt::format("Password authentication callback error: {}",
-                                e.what()));
-              break;
-            }
-          }
-          if (password_tmp.empty()) {
-            break;
-          }
-          rcr = libssh2_userauth_password(session, res_data.username.c_str(),
-                                          password_tmp.c_str());
-          trial_times++;
-          if (rcr == 0) {
-            rc = EC::Success;
-            msg = "";
-            trace(TraceLevel::Info, EC::Success, "Success",
-                  "PasswordAuthorizeResult", "Password authorize success");
-            goto OK;
-          } else {
-            trace(TraceLevel::Debug, EC::AuthFailed, "Failed",
-                  "PasswordAuthorizeResult",
-                  fmt::format("Wrong Password: {}", password_tmp));
-            {
-              py::gil_scoped_acquire acquire;
-              auth_cb(false, res_data, trial_times);
-            }
+            auth_cb(false, res_data, trial_times);
           }
         }
       }
     }
+    rcm.first = EC::AuthFailed;
+    rcm.second = "All authorize methods failed";
 
   OK:
-    if (rc != EC::Success) {
-      trace(TraceLevel::Critical, EC::AuthFailed, "Failed",
-            "FinalAuthorizeState", "All authorize methods failed");
-      return {rc, "All authorize methods failed"};
-    }
-
     // 检查中断
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (rcm.first != EC::Success) {
       Disconnect();
-      return {EC::Terminate, "Connection interrupted after authentication"};
+      return rcm;
     }
 
     sftp = libssh2_sftp_init(session);
-    if (!sftp) {
-      rc = GetLastEC();
-      msg = fmt::format("SFTP initialization failed: {}", GetLastErrorMsg());
-      trace(TraceLevel::Critical, rc, "Failed", "libssh2_sftp_init", msg);
+    rcm =
+        ErrorRecord(sftp ? 0 : -1, TraceLevel::Critical, "",
+                    "libssh2_sftp_init", "SFTP initialization failed: {error}");
+    if (rcm.first != EC::Success) {
       Disconnect();
-      return {rc, msg};
+      return rcm;
     }
 
     has_connected.store(true);
     return {EC::Success, ""};
 
-  connect_failed:
+  interrupted_or_sock_error:
     libssh2_session_set_blocking(session, 1);
     Disconnect();
     switch (wr) {
@@ -1131,7 +1113,7 @@ public:
       char *errmsg = nullptr;
       int errmsg_len;
       libssh2_session_last_error(session, &errmsg, &errmsg_len, 0);
-      return std::string(errmsg);
+      return errmsg;
     } else {
       if (!sftp) {
         return "SFTP not initialized";
@@ -1219,58 +1201,6 @@ private:
     return info;
   }
 
-  // 无任何检查的stat， 只是封装了返回值格式化和错误格式化
-  SR lib_stat(const std::string &path) {
-    if (!sftp) {
-      return {ECM{EC::NoConnection, "SFTP not initialized"}, PathInfo()};
-    }
-
-    LIBSSH2_SFTP_ATTRIBUTES attrs;
-    EC rc;
-    std::string msg = "";
-    int rct;
-    {
-      std::lock_guard<std::recursive_mutex> lock(mtx);
-      rct = libssh2_sftp_stat(sftp, path.c_str(), &attrs);
-    }
-
-    if (rct != 0) {
-      rc = GetLastEC();
-      msg = fmt::format("stat {} failed: {}", path, GetLastErrorMsg());
-      trace(TraceLevel::Error, rc,
-            fmt::format("{}@{}", res_data.nickname, path), "stat", msg);
-      return {ECM{rc, msg}, PathInfo()};
-    }
-
-    return {ECM{EC::Success, ""}, FormatStat(path, attrs)};
-  }
-
-  ECM lib_rmfile(const std::string &path) {
-    if (!sftp) {
-      return std::make_pair(EC::NoConnection, "SFTP not initialized");
-    }
-
-    int rcr;
-    {
-      std::lock_guard<std::recursive_mutex> lock(mtx);
-      rcr = libssh2_sftp_unlink(sftp, path.c_str());
-    }
-
-    if (rcr != 0) {
-      EC rc = GetLastEC();
-      std::string msg_tmp = GetLastErrorMsg();
-      std::string msg =
-          fmt::format("Path: {} rmfile failed: {}", path, msg_tmp);
-      trace(TraceLevel::Error, rc,
-            fmt::format("{}@{}", res_data.nickname, path), "Rmfile", msg_tmp);
-      return {rc, msg};
-    }
-    trace(TraceLevel::Warning, EC::Success,
-          fmt::format("{}@{}", res_data.nickname, path), "Rmfile",
-          fmt::format("Permanently remove file: {}", path));
-    return {EC::Success, ""};
-  }
-
   ECM lib_rename(const std::string &src, const std::string &dst,
                  const bool &overwrite) {
     if (!sftp) {
@@ -1279,26 +1209,28 @@ private:
 
     int rcr;
     if (!overwrite) {
-      std::lock_guard<std::recursive_mutex> lock(mtx);
       rcr = libssh2_sftp_rename_ex(sftp, src.c_str(), src.size(), dst.c_str(),
                                    dst.size(), LIBSSH2_SFTP_RENAME_NATIVE);
     } else {
-      std::lock_guard<std::recursive_mutex> lock(mtx);
       rcr = libssh2_sftp_rename_ex(
           sftp, src.c_str(), src.size(), dst.c_str(), dst.size(),
           LIBSSH2_SFTP_RENAME_OVERWRITE | LIBSSH2_SFTP_RENAME_NATIVE);
     }
-    if (rcr != 0) {
-      EC rc = GetLastEC();
-      std::string msg = GetLastErrorMsg();
-      return {rc, fmt::format("Rename {} to {} failed: {}", src, dst, msg)};
+    ECM rcm = ErrorRecord(
+        rcr, TraceLevel::Debug, fmt::format("{} -> {}", src, dst),
+        "libssh2_sftp_rename_ex", "Rename {target} failed: {error}");
+    if (rcm.first != EC::Success) {
+      return rcm;
     }
-    return {EC::Success, ""};
+    return rcm;
   }
 
   void _iwalk(const std::string &path, WRV &result,
-              bool ignore_sepcial_file = true) {
+              amf interrupt_flag = nullptr, bool ignore_sepcial_file = true) {
     // 搜索目录下所有最深层的路径, 用于递归传输路径
+    if (interrupt_flag && interrupt_flag->check()) {
+      return;
+    }
     auto [rcm, info_path] = stat(path);
     if (rcm.first != EC::Success) {
       return;
@@ -1310,7 +1242,11 @@ private:
       return;
     }
 
-    auto [rcm2, list_info] = listdir(path);
+    auto [rcm2, list_info] = listdir(path, -1, interrupt_flag);
+    if (interrupt_flag && interrupt_flag->check()) {
+      return;
+    }
+
     if (rcm2.first != EC::Success) {
       return;
     }
@@ -1321,18 +1257,27 @@ private:
       return;
     }
     for (auto &info : list_info) {
-      _iwalk(info.path, result, ignore_sepcial_file);
+      if (interrupt_flag && interrupt_flag->check()) {
+        return;
+      }
+      _iwalk(info.path, result, interrupt_flag, ignore_sepcial_file);
     }
   }
 
   void _walk(const std::vector<std::string> &parts, WRD &result,
              int cur_depth = 0, int max_depth = -1,
-             bool ignore_sepcial_file = true) {
+             amf interrupt_flag = nullptr, bool ignore_sepcial_file = true) {
     if (max_depth != -1 && cur_depth > max_depth) {
       return;
     }
+    if (interrupt_flag && interrupt_flag->check()) {
+      return;
+    }
     std::string pathf = AMFS::join(parts);
-    auto [rcm2, list_info] = listdir(pathf);
+    auto [rcm2, list_info] = listdir(pathf, -1, interrupt_flag);
+    if (interrupt_flag && interrupt_flag->check()) {
+      return;
+    }
     if (rcm2.first != EC::Success) {
       return;
     }
@@ -1343,10 +1288,14 @@ private:
 
     std::vector<PathInfo> files_info = {};
     for (auto &info : list_info) {
+      if (interrupt_flag && interrupt_flag->check()) {
+        return;
+      }
       if (info.type == PathType::DIR) {
         auto new_parts = parts;
         new_parts.push_back(info.name);
-        _walk(new_parts, result, cur_depth + 1, max_depth, ignore_sepcial_file);
+        _walk(new_parts, result, cur_depth + 1, max_depth, interrupt_flag,
+              ignore_sepcial_file);
       } else {
         if (ignore_sepcial_file && static_cast<int>(info.type) < 0) {
           continue;
@@ -1360,46 +1309,12 @@ private:
     result.emplace_back(parts, files_info);
   }
 
-  void _GetSize(const std::string &path, uint64_t &size,
-                bool ignore_sepcial_file = true) {
-    auto [rcm, path_info] = stat(path);
-    if (rcm.first != EC::Success) {
-      return;
-    }
-
-    switch (path_info.type) {
-    case PathType::FILE:
-      size += path_info.size;
-      return;
-    case PathType::SYMLINK:
-      return;
-    case PathType::DIR:
-      break;
-    default:
-      if (ignore_sepcial_file && static_cast<int>(path_info.type) < 0) {
-        return;
-      } else {
-        size += path_info.size;
-      }
-    }
-
-    auto [rcm2, list_info] = listdir(path);
-
-    if (rcm2.first != EC::Success) {
-      return;
-    }
-
-    for (auto &item : list_info) {
-      _GetSize(item.path, size);
-    }
-  }
-
   void _rm(const PathInfo &info, RMR &errors, amf interrupt_flag = nullptr) {
     if (interrupt_flag && interrupt_flag->check()) {
       return;
     }
     if (info.type != PathType::DIR) {
-      ECM ecm = lib_rmfile(info.path);
+      ECM ecm = rmfile(info.path);
       if (ecm.first != EC::Success) {
         errors.emplace_back(info.path, ecm);
       }
@@ -1423,7 +1338,7 @@ private:
       _rm(file, errors);
     }
 
-    ECM ecm = rmdir(path);
+    ECM ecm = rmdir(info.path);
     if (ecm.first != EC::Success) {
       errors.emplace_back(info.path, ecm);
     }
@@ -1547,6 +1462,16 @@ private:
         _chmod(item.path, mode, recursive, errors);
       }
     }
+  }
+
+  ECM _precheck(const std::string &path) {
+    if (path.empty()) {
+      return {EC::InvalidArg, fmt::format("Invalid path: {}", path)};
+    }
+    if (!sftp) {
+      return {EC::NoConnection, "SFTP not initialized"};
+    }
+    return {EC::Success, ""};
   }
 
   // 用于AMFS::BasePathMatch
@@ -1833,10 +1758,10 @@ public:
       return rc;
     }
     if (rc.first != EC::Success) {
-      trace(TraceLevel::Critical, rc.first, "home_path", "Check",
+      trace(TraceLevel::Debug, rc.first, "home_path", "Check",
             "Sftp status check failed");
     } else {
-      trace(TraceLevel::Info, EC::Success, "Connection Status", "Check",
+      trace(TraceLevel::Debug, EC::Success, "Connection Status", "Check",
             "Session status check success");
     }
     return rc;
@@ -1856,15 +1781,12 @@ public:
   inline std::string GetTrashDir() override { return this->trash_dir; }
 
   ECM SetTrashDir(const std::string &trash_dir = "") override {
-    auto pathf = trash_dir;
-    if (pathf.empty()) {
-      return {EC::InvalidArg, fmt::format("Invalid path: {}", trash_dir)};
+    ECM rcm = mkdirs(trash_dir);
+    if (rcm.first != EC::Success) {
+      return rcm;
     }
-    ECM rcm = mkdirs(pathf);
-    if (rcm.first == EC::Success) {
-      this->trash_dir = pathf;
-    }
-    return rcm;
+    this->trash_dir = trash_dir;
+    return {EC::Success, ""};
   }
 
   std::string GetAvailableTrashDir() override {
@@ -1892,16 +1814,13 @@ public:
     if (trash_dir.empty() || mkdirs(trash_dir).first != EC::Success) {
       trash_dir = GetAvailableTrashDir();
       if (trash_dir.empty()) {
-        trace(TraceLevel::Error, EC::UnknownError,
-              fmt::format("{}@{}", res_data.nickname, "TrashDir"),
-              "EnsureTrashDir",
+        trace(TraceLevel::Warning, EC::UnknownError,
+              fmt::format("{}@{}", "", "TrashDir"), "EnsureTrashDir",
               "Can't automatically find a available trash directory");
         return {EC::UnknownError,
                 "Can't automatically find a available trash directory"};
       }
-      trace(TraceLevel::Info, EC::Success,
-            fmt::format("{}@{}", res_data.nickname, "TrashDir"),
-            "EnsureTrashDir",
+      trace(TraceLevel::Info, EC::Success, trash_dir, "EnsureTrashDir",
             fmt::format("Set trash_dir to: \"{}\"", trash_dir));
     }
     return {EC::Success, ""};
@@ -1909,37 +1828,31 @@ public:
   // 解析并返回绝对路径,
   // ~在client中解析，..和.其他由服务器解析，有这些符号时需要路径真实存在
   std::pair<ECM, std::string> realpath(const std::string &path) override {
-    std::string pathf = path;
+    ECM rcm = _precheck(path);
+    if (rcm.first != EC::Success) {
+      return {rcm, ""};
+    }
     if (std::regex_search(path, std::regex("^~[\\\\/]"))) {
       // 解析~符号
       pathf = AMFS::join(GetHomeDir(), pathf.substr(1), AMFS::SepType::Unix);
-    } else if (pathf == "~") {
+    } else if (path == "~") {
       return {ECM{EC::Success, ""}, GetHomeDir()};
     }
-    if (!sftp) {
-      return {ECM{EC::NoConnection, "SFTP not initialized"}, ""};
-    }
+
     std::array<char, 1024> path_t;
-    int rcr;
-    {
-      std::lock_guard<std::recursive_mutex> lock(mtx);
-      rcr = libssh2_sftp_realpath(sftp, pathf.c_str(), path_t.data(),
-                                  sizeof(path_t));
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    rcm = ErrorRecord(libssh2_sftp_realpath(sftp, path.c_str(), path_t.data(),
+                                            sizeof(path_t)),
+                      TraceLevel::Debug, path, "libssh2_sftp_realpath");
+
+    if (rcm.first != EC::Success) {
+      return {rcm, ""};
     }
-    if (rcr < 0) {
-      EC rc = GetLastEC();
-      std::string msg =
-          fmt::format("realpath {} failed: {}", pathf, GetLastErrorMsg());
-      trace(TraceLevel::Error, rc,
-            fmt::format("{}@{}", res_data.nickname, pathf), "Realpath", msg);
-      return {ECM{rc, msg}, ""};
-    } else {
-      if (GetOSType() == OS_TYPE::Windows) {
-        // windows server返回的路径会在前面加个/或\，需要去掉
-        return {ECM{EC::Success, ""}, std::string(path_t.data()).substr(1)};
-      }
-      return {ECM{EC::Success, ""}, std::string(path_t.data())};
+    if (GetOSType() == OS_TYPE::Windows) {
+      // windows server返回的路径会在前面加个/或\，需要去掉
+      return {rcm, std::string(path_t.data()).substr(1)};
     }
+    return {rcm, std::string(path_t.data())};
   }
 
   std::pair<ECM, std::unordered_map<std::string, ECM>>
@@ -1949,9 +1862,7 @@ public:
       return {ECM{EC::UnImplentedMethod, "Chmod only supported on Unix System"},
               {}};
     }
-    auto pathf = path;
-
-    auto [rcm, br] = exists(pathf);
+    auto [rcm, br] = exists(path);
     if (rcm.first != EC::Success) {
       return {rcm, {}};
     }
@@ -1996,14 +1907,20 @@ public:
 
   // 获取路径信息，自带AMFS::abspath
   SR stat(const std::string &path) override {
-    std::string pathf = path;
-
-    if (pathf.empty()) {
-      return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)},
-              PathInfo()};
+    ECM rcm = _precheck(path);
+    if (rcm.first != EC::Success) {
+      return {rcm, PathInfo()};
     }
 
-    return lib_stat(pathf);
+    LIBSSH2_SFTP_ATTRIBUTES attrs;
+    std::string msg = "";
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    rcm = ErrorRecord(libssh2_sftp_stat(sftp, path.c_str(), &attrs),
+                      TraceLevel::Debug, path, "libssh2_sftp_stat");
+    if (rcm.first != EC::Success) {
+      return {rcm, PathInfo()};
+    }
+    return {rcm, FormatStat(path, attrs)};
   }
 
   std::pair<ECM, PathType> get_path_type(const std::string &path) override {
@@ -2056,50 +1973,31 @@ public:
   std::pair<ECM, std::vector<PathInfo>>
   listdir(const std::string &path, int max_time_ms = -1,
           amf interrupt_flag = nullptr) override {
-    if (!sftp) {
-      return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
-    }
-
-    auto pathf = path;
-    if (pathf.empty()) {
-      return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
-    }
-
-    std::string msg = "";
-    std::vector<PathInfo> file_list = {};
-    auto [rcm, br] = is_dir(path);
+    ECM rcm = _precheck(path);
     if (rcm.first != EC::Success) {
-      return {rcm, file_list};
-    } else if (!br) {
-      return {ECM{EC::NotADirectory,
-                  fmt::format("Path is not a directory: {}", pathf)},
-              file_list};
+      return {rcm, {}};
     }
+    std::vector<PathInfo> file_list = {};
     auto start_time = std::chrono::steady_clock::now();
     LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     std::string name;
-    std::string path_i;
     const size_t buffer_size = 4096;
     std::vector<char> filename_buffer(buffer_size);
-    EC rc;
     int rct;
     PathInfo info;
 
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    sftp_handle = libssh2_sftp_open_ex(sftp, pathf.c_str(), pathf.size(), 0,
+    sftp_handle = libssh2_sftp_open_ex(sftp, path.c_str(), path.size(), 0,
                                        LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
     if (interrupt_flag && interrupt_flag->check()) {
       return {ECM{EC::Terminate, "Interrupted by user"}, {}};
     }
-
-    if (!sftp_handle) {
-      std::string tmp_msg = GetLastErrorMsg();
-      trace(TraceLevel::Error, EC::InvalidHandle,
-            fmt::format("{}@{}", res_data.nickname, path), "ListDir", tmp_msg);
-      msg = fmt::format("Path: {} handle open failed: {}", pathf, tmp_msg);
-      rc = EC::InvalidHandle;
-      goto clean;
+    rcm = ErrorRecord(sftp_handle ? 0 : -1, TraceLevel::Debug, path,
+                      "libssh2_sftp_open_ex",
+                      "Open directory {path} failed: {error}");
+    if (rcm.first != EC::Success) {
+      return {rcm, {}};
     }
 
     while (true) {
@@ -2107,25 +2005,23 @@ public:
                                     buffer_size, nullptr, 0, &attrs);
       if (max_time_ms > 0 && std::chrono::steady_clock::now() - start_time >
                                  std::chrono::milliseconds(max_time_ms)) {
-        rc = EC::OperationTimeout;
-        msg = fmt::format("Path: {} readdir timeout", pathf);
+        rcm = ECM{EC::OperationTimeout,
+                  fmt::format("Path: {} readdir timeout", path)};
         break;
       }
-
       if (interrupt_flag && interrupt_flag->check()) {
-        rc = EC::Terminate;
-        msg = fmt::format("Path: {} readdir interrupted by user", pathf);
+        rcm = ECM{EC::Terminate,
+                  fmt::format("Path: {} readdir interrupted by user", path)};
         break;
       }
-
       if (rct < 0) {
-        rc = GetLastEC();
-        std::string tmp_msg = GetLastErrorMsg();
-        trace(TraceLevel::Error, rc,
-              fmt::format("{}@{}", res_data.nickname, path), "ListDir",
-              tmp_msg);
-        msg = fmt::format("Path: {} readdir failed: {}", pathf, tmp_msg);
-        goto clean;
+        rcm =
+            ErrorRecord(rct, TraceLevel::Debug, path, "libssh2_sftp_readdir_ex",
+                        "Path: {} readdir failed: {error}");
+        if (rcm.first == EC::PermissionDenied) {
+          continue;
+        }
+        break;
       } else if (rct == 0) {
         break;
       }
@@ -2134,17 +2030,13 @@ public:
       if (name == "." || name == "..") {
         continue;
       }
-
-      path_i = AMFS::join(pathf, name);
-      info = FormatStat(path_i, attrs);
-      file_list.push_back(info);
+      file_list.push_back(FormatStat(AMFS::join(path, name), attrs));
     }
 
-  clean:
     if (sftp_handle) {
       libssh2_sftp_close_handle(sftp_handle);
     }
-    return {ECM{rc, msg}, file_list};
+    return {rcm, file_list};
   }
 
   // Iterator version that yields PathInfo one by one using Python generator
@@ -2265,70 +2157,36 @@ def _amsftp_gen(next_func):
 
   // 创建一级目录，自带AMFS::abspath
   ECM mkdir(const std::string &path) override {
-    if (!sftp) {
-      return std::make_pair(EC::NoConnection, "SFTP not initialized");
+    ECM rcm = _precheck(path);
+    if (rcm.first != EC::Success) {
+      return rcm;
     }
-
-    std::string pathf = path;
-    if (pathf.empty()) {
-      return std::make_pair(EC::InvalidArg,
-                            fmt::format("Invalid path: {}", path));
-    }
-
-    std::string msg = "";
-    auto [rcm, info] = stat(pathf);
-    if (rcm.first == EC::Success) {
-
-      if (info.type == PathType::DIR) {
-        return {EC::Success, ""};
-      } else {
-        return {EC::PathAlreadyExists,
-                fmt::format("Path exists and is not a directory: {}", pathf)};
-      }
-    }
-
-    int rcr;
-    {
-      std::lock_guard<std::recursive_mutex> lock(mtx);
-      rcr = libssh2_sftp_mkdir_ex(sftp, path.c_str(), path.size(), 0740);
-    }
-
-    if (rcr != 0) {
-      EC rc = GetLastEC();
-      std::string msg_tmp = GetLastErrorMsg();
-      msg = fmt::format("Path: {} mkdir failed: {}", pathf, msg_tmp);
-      trace(TraceLevel::Error, rc,
-            fmt::format("{}@{}", res_data.nickname, pathf), "Mkdir", msg_tmp);
-      return {rc, msg};
-    }
-    return {EC::Success, ""};
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    return ErrorRecord(
+        libssh2_sftp_mkdir_ex(sftp, path.c_str(), path.size(), 0740),
+        TraceLevel::Debug, path, "libssh2_sftp_mkdir_ex");
   }
 
   // 递归创建多级目录，直到报错为止，自带AMFS::abspath
   ECM mkdirs(const std::string &path) override {
-    std::string pathf = path;
-    if (pathf.empty()) {
-      return std::make_pair(EC::InvalidArg,
-                            fmt::format("Invalid path: {}", path));
+    ECM rcm = _precheck(path);
+    if (rcm.first != EC::Success) {
+      return rcm;
     }
 
-    if (!sftp) {
-      return std::make_pair(EC::NoConnection, "SFTP not initialized");
-    }
-
-    std::vector<std::string> parts = AMFS::split(pathf);
+    std::vector<std::string> parts = AMFS::split(path);
     if (parts.empty()) {
       return {EC::InvalidArg,
-              fmt::format("Path split failed, get empty parts: {}", pathf)};
+              fmt::format("Path split failed, get empty parts: {}", path)};
     } else if (parts.size() == 1) {
-      return mkdir(pathf);
+      return mkdir(path);
     }
 
     std::string current_path = parts.front();
     for (size_t i = 1; i < parts.size(); i++) {
       current_path = AMFS::join(current_path, parts[i], AMFS::SepType::Unix);
-      ECM rc = mkdir(current_path);
-      if (!isok(rc)) {
+      rcm = mkdir(current_path);
+      if (rcm.first != EC::Success) {
         return rc;
       }
     }
@@ -2336,90 +2194,42 @@ def _amsftp_gen(next_func):
   }
 
   ECM rmfile(const std::string &path) override {
-    if (path.empty()) {
-      return std::make_pair(EC::InvalidArg,
-                            fmt::format("Invalid path: {}", path));
-    }
-
-    if (!sftp) {
-      return std::make_pair(EC::NoConnection, "SFTP not initialized");
-    }
-    auto pathf = path;
-    auto [rcm, info] = stat(pathf);
-    ECM ecm;
-    std::string msg = "";
+    ECM rcm = _precheck(path);
     if (rcm.first != EC::Success) {
-      trace(TraceLevel::Error, rcm.first,
-            fmt::format("{}@{}", res_data.nickname, path), "rmfile",
-            rcm.second);
       return rcm;
-    } else {
-      PathType type = info.type;
-      switch (type) {
-      case PathType::DIR:
-        msg = fmt::format("Path is not a dir but use rmfile: {}", path);
-        trace(TraceLevel::Warning, EC::NotAFile,
-              fmt::format("{}@{}", res_data.nickname, path), "rmfile", msg);
-        return {EC::NotAFile, msg};
-      case PathType::SYMLINK: {
-      }
-      case PathType::FILE: {
-      }
-      default: {
-        msg = fmt::format("Path is special file: {}", path);
-        return {EC::OperationUnsupported, msg};
-      }
-      }
     }
-
-    return lib_rmfile(pathf);
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    rcm = ErrorRecord(libssh2_sftp_unlink(sftp, path.c_str()),
+                      TraceLevel::Debug, path, "libssh2_sftp_unlink");
+    if (rcm.first == EC::Success) {
+      trace(TraceLevel::Info, EC::Success, path, "rmfile",
+            fmt::format("Permanently remove file: {}", path));
+    }
+    return rcm;
   }
 
   ECM rmdir(const std::string &path) override {
-    if (!sftp) {
-      return std::make_pair(EC::NoConnection, "SFTP not initialized");
+    ECM rcm = _precheck(path);
+    if (rcm.first != EC::Success) {
+      return rcm;
     }
 
-    std::string pathf = path;
-    if (pathf.empty()) {
-      return std::make_pair(EC::InvalidArg,
-                            fmt::format("Invalid path: {}", path));
-    }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    rcm = ErrorRecord(libssh2_sftp_rmdir(sftp, path.c_str()), TraceLevel::Debug,
+                      path, "libssh2_sftp_rmdir");
 
-    std::string msg = "";
-    EC rc;
-
-    int rcr;
-    {
-      std::lock_guard<std::recursive_mutex> lock(mtx);
-      rcr = libssh2_sftp_rmdir(sftp, pathf.c_str());
+    if (rcm.first == EC::Success) {
+      trace(TraceLevel::Info, EC::Success, path, "rmdir",
+            fmt::format("Permanently remove directory: {}", path));
     }
-    if (rcr < 0) {
-      rc = GetLastEC();
-      std::string tmp_msg = GetLastErrorMsg();
-      msg = fmt::format("Path: {} rmdir failed: {}", path, tmp_msg);
-      trace(TraceLevel::Error, rc,
-            fmt::format("{}@{}", res_data.nickname, path), "Rmdir", tmp_msg);
-      return {rc, msg};
-    }
-    trace(TraceLevel::Warning, EC::Success,
-          fmt::format("{}@{}", res_data.nickname, path), "rmdir",
-          fmt::format("Permanently remove directory: {}", path));
-    return {EC::Success, ""};
+    return rcm;
   }
 
   // 删除文件或目录，自带AMFS::abspath
   std::pair<ECM, RMR> remove(const std::string &path,
                              amf interrupt_flag = nullptr) override {
-    if (!sftp) {
-      return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
-    }
     RMR errors = {};
-    std::string pathn = path;
-    if (pathn.empty()) {
-      return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
-    }
-    auto [rcm, sr] = stat(pathn);
+    auto [rcm, sr] = stat(path);
     if (interrupt_flag && interrupt_flag->check()) {
       return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
               {}};
@@ -2436,32 +2246,28 @@ def _amsftp_gen(next_func):
   // 将原路径变成新路径，自带AMFS::abspath
   ECM rename(const std::string &src, const std::string &dst,
              bool overwrite = false) override {
-    if (!sftp) {
-      return ECM{EC::NoConnection, "SFTP not initialized"};
-    }
-    std::string srcf = src;
-    std::string dstf = dst;
-    if (srcf.empty() || dstf.empty()) {
-      return std::make_pair(EC::InvalidArg,
-                            fmt::format("Invalid path: {} or {}", srcf, dstf));
-    }
-    auto [rcm, sbr] = exists(srcf);
+    auto [rcm, sr1] = stat(src);
     if (rcm.first != EC::Success) {
       return rcm;
     }
-    if (!sbr) {
-      return {EC::PathNotExist, fmt::format("Src not exists: {}", srcf)};
-    }
-    auto [rcm2, dbr] = exists(dstf);
+    auto [rcm2, sr2] = stat(dst);
     if (rcm2.first != EC::Success) {
       return rcm2;
     }
-    if (dbr && !overwrite) {
-      return {
-          EC::PathAlreadyExists,
-          fmt::format("Dst already exists: {} and overwrite is false", dstf)};
+    if ((sr1.type != sr2.type) &&
+        (sr1.type == PathType::DIR || sr2.type == PathType::DIR)) {
+      trace(TraceLevel::Debug, EC::PathAlreadyExists,
+            fmt::format("{} -> {}", src, dst), "rename",
+            "Dst exists but is not the same type as src");
+      return {EC::PathAlreadyExists,
+              "Dst exists but is not the same type as src"};
+    } else if (!overwrite) {
+      trace(TraceLevel::Debug, EC::PathAlreadyExists,
+            fmt::format("{} -> {}", src, dst), "rename",
+            "Dst already exists and overwrite is not allowed");
+      return {EC::PathAlreadyExists,
+              "Dst already exists and overwrite is not allowed"};
     }
-
     return lib_rename(src, dst, overwrite);
   }
 
@@ -2474,7 +2280,7 @@ def _amsftp_gen(next_func):
     std::string pathf = info.path;
     if (!is_trash_dir_ensure) {
       return {EC::NotADirectory,
-              fmt::format("Trash dir not ready: {}", this->trash_dir)};
+              fmt::format("Trash dir not exists: {}", this->trash_dir)};
     }
 
     std::string base = AMFS::basename(pathf);
@@ -2518,22 +2324,18 @@ def _amsftp_gen(next_func):
   // 将源路径移动到目标文件夹，自带AMFS::abspath
   ECM move(const std::string &src, const std::string &dst,
            bool need_mkdir = false, bool force_write = false) override {
-    if (!sftp) {
-      return ECM{EC::NoConnection, "SFTP not initialized"};
-    }
-    std::string srcf = src;
-    std::string dstf = dst;
-    auto [rcm, ssr] = stat(srcf);
+
+    auto [rcm, ssr] = stat(src);
     // src不存在就直接退出
     if (rcm.first != EC::Success) {
       return rcm;
     }
 
-    auto [rcm2, dsr] = stat(dstf);
+    auto [rcm2, dsr] = stat(dst);
     if (rcm2.first != EC::Success) {
       EC rc = rcm.first;
       if ((rc == EC::PathNotExist || rc == EC::FileNotExist) && need_mkdir) {
-        ECM ecm = mkdirs(dstf);
+        ECM ecm = mkdirs(dst);
         if (ecm.first != EC::Success) {
           return ecm;
         }
@@ -2542,20 +2344,20 @@ def _amsftp_gen(next_func):
       }
     } else {
       if (dsr.type != PathType::DIR) {
+        trace(TraceLevel::Debug, EC::NotADirectory, dst, "move",
+              fmt::format("Dst is not a directory: {}", dst));
         return {EC::NotADirectory,
-                fmt::format("Dst is not a directory: {}", dstf)};
+                fmt::format("Dst is not a directory: {}", dst)};
       }
     }
-    std::string dst_path = AMFS::join(dstf, AMFS::basename(srcf));
 
     // 使用不带检查的_rename
-    return lib_rename(srcf, dst_path, force_write);
+    return lib_rename(src, AMFS::join(dst, AMFS::basename(src)), force_write);
   }
 
-  // 在服务器内将源路径复制到目标文件夹，自带AMFS::abspath,
-  // 使用的时shell指令，不稳定
+  // 废弃，复制使用桥接模式或者直接执行指令
   ECM copy(const std::string &src, const std::string &dst,
-           bool need_mkdir = false) override {
+           bool need_mkdir = false, amf interrupt_flag = nullptr) override {
     if (!sftp) {
       return ECM{EC::NoConnection, "SFTP not initialized"};
     }
@@ -2587,7 +2389,7 @@ def _amsftp_gen(next_func):
         }
       }
     } else if (!br2) {
-      return {EC::PathNotExist,
+      return {EC::NotADirectory,
               fmt::format("Dst exists but not a directory: {}", dstf)};
     }
 
@@ -2625,37 +2427,48 @@ def _amsftp_gen(next_func):
   }
 
   // 递归遍历某一路径下的所有文件和底层目录，返回PathInfo的vector
-  WRV iwalk(const std::string &path, bool ignore_sepcial_file = true) override {
-    // 搜索某一路径下的所有文件, 返回pathinfo的vector
-    if (!sftp) {
+  WRV iwalk(const std::string &path, amf interrupt_flag = nullptr,
+            bool ignore_sepcial_file = true) override {
+    ECM rcm = _precheck(path);
+    if (rcm.first != EC::Success) {
       return {};
     }
     // get all files and deepest folders
     WRV result = {};
-    auto path_n = path;
-    _iwalk(path_n, result, ignore_sepcial_file);
+    _iwalk(path, result, interrupt_flag, ignore_sepcial_file);
     return result;
   }
 
   // 真实的walk函数，返回([root_path, part1, part2, ...], PathInfo)的vector
   std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1,
+                           amf interrupt_flag = nullptr,
                            bool ignore_special_file = true) override {
-    auto pathf = path;
-    auto [rcm, br] = stat(pathf);
+    auto [rcm, br] = stat(path);
     if (rcm.first != EC::Success) {
       return {rcm, {}};
+    } else if (br.type != PathType::DIR) {
+      return {{EC::NotADirectory, "Path is not a directory"}, {}};
     }
     WRD result_dict = {};
-    std::vector<std::string> parts = {pathf};
-    _walk(parts, result_dict, 0, max_depth, ignore_special_file);
+    std::vector<std::string> parts = {path};
+    _walk(parts, result_dict, 0, max_depth, interrupt_flag,
+          ignore_special_file);
     // 打印result_dict的类型
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
+              result_dict};
+    }
     return {ECM{EC::Success, ""}, result_dict};
   }
 
-  // 获取某一路径下的所有文件和底层目录的总大小
-  uint64_t getsize(const std::string &path,
+  // 获取某一路径下的所有文件和底层目录的总大小,
+  // 但是在读取时遇到错误不会throw，也不会记录其大小，可能存在偏差
+  uint64_t getsize(const std::string &path, amf interrupt_flag = nullptr,
                    bool ignore_sepcial_file = true) override {
-    WRV list = iwalk(path, ignore_sepcial_file);
+    WRV list = iwalk(path, interrupt_flag, ignore_sepcial_file);
+    if (interrupt_flag && interrupt_flag->check()) {
+      return -1;
+    }
     uint64_t size = 0;
     for (auto &item : list) {
       size += item.size;
@@ -3263,7 +3076,8 @@ public:
     return {ECM{EC::Success, ""}, file_list};
   }
 
-  WRV iwalk(const std::string &path, bool ignore_special_file = true) override {
+  WRV iwalk(const std::string &path, amf interrupt_flag = nullptr,
+            bool ignore_special_file = true) override {
     WRV result = {};
     if (path.empty()) {
       return result;
@@ -3279,6 +3093,7 @@ public:
   }
 
   std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1,
+                           amf interrupt_flag = nullptr,
                            bool ignore_special_file = true) override {
     auto [rcm, br] = stat(path);
     if (rcm.first != EC::Success) {

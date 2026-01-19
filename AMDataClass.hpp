@@ -80,7 +80,7 @@ public:
 
   // 连接到指定主机，返回是否成功
 
-  bool Connect(const std::string &hostname, int port, size_t timeout_s) {
+  bool Connect(const std::string &hostname, int port, size_t timeout_ms) {
     // 1. DNS解析
     addrinfo hints{}, *result = nullptr;
     hints.ai_family = AF_INET;
@@ -151,8 +151,8 @@ public:
     FD_SET(sock, &error_fds);
 
     timeval timeout;
-    timeout.tv_sec = (long)timeout_s;
-    timeout.tv_usec = 0;
+    timeout.tv_sec = 0;
+    timeout.tv_usec = (long)timeout_ms * 1000;
 
     int select_result =
         select((int)sock + 1, nullptr, &write_fds, &error_fds, &timeout);

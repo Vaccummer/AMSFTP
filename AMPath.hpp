@@ -306,6 +306,47 @@ public:
     }
     return slash_count < anti_slash_count ? "\\" : "/";
   }
+
+  static void vreplace(std::string &str, const std::string &from,
+                       const std::string &to) {
+    size_t pos = 0;
+    while ((pos = str.find(from, pos)) != std::string::npos) {
+      str.replace(pos, from.length(), to);
+      pos += to.length();
+    }
+  }
+  static std::string replace(std::string str, const std::string &from,
+                             const std::string &to) {
+    size_t pos = 0;
+    while ((pos = str.find(from, pos)) != std::string::npos) {
+      str.replace(pos, from.length(), to);
+      pos += to.length();
+    }
+    return str;
+  }
+
+  static void vreplace_all(std::string &str, const std::string &old_sub,
+                           const std::string &new_sub) {
+    size_t pos = 0;
+    while ((pos = str.find(old_sub, pos)) != std::string::npos) {
+      str.replace(pos, old_sub.size(), new_sub);
+      // 跳过替换后的内容，避免重复替换（如old_sub是new_sub的子串）
+      pos += new_sub.size();
+      // 如果允许重复替换（比如把"a"换成"aa"），则pos不移动，保持pos不变
+    }
+  }
+
+  static std::string replace_all(std::string str, const std::string &old_sub,
+                                 const std::string &new_sub) {
+    size_t pos = 0;
+    while ((pos = str.find(old_sub, pos)) != std::string::npos) {
+      str.replace(pos, old_sub.size(), new_sub);
+      // 跳过替换后的内容，避免重复替换（如old_sub是new_sub的子串）
+      pos += new_sub.size();
+      // 如果允许重复替换（比如把"a"换成"aa"），则pos不移动，保持pos不变
+    }
+    return str;
+  }
 }; // namespace Str
 
 #ifdef _WIN32
