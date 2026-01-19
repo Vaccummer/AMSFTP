@@ -134,6 +134,7 @@ enum class ErrorCode {
   DeepcopyFailed = 47,
   BufferWriteError = 70,
   BufferReadError = 71,
+  PyCBError = 72,
 
   // FTP Server Error
   FTPConnectFailed = 48,
