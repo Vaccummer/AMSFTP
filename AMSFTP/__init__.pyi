@@ -6,7 +6,7 @@ import typing
 from . import AMData
 from . import AMEnum
 from . import AMFS
-__all__ = ['AMData', 'AMEnum', 'AMFS', 'AMFTPClient', 'AMSFTPClient', 'AMSFTPWorker', 'AMSession', 'AMTracer', 'BaseClient', 'BasePathMatch', 'HostMaintainer', 'PathMatch']
+__all__ = ['AMData', 'AMEnum', 'AMFS', 'AMFTPClient', 'AMSFTPClient', 'AMSFTPWorker', 'AMSession', 'AMTracer', 'BaseClient', 'BasePathMatch', 'ClientMaintainer', 'PathMatch']
 class AMFTPClient(BaseClient):
     """
     An FTP Client Class Based on libcurl
@@ -53,7 +53,7 @@ class AMFTPClient(BaseClient):
         """
         Move file/directory to destination folder
         """
-    def remove(self, path: str) -> list[tuple[str, tuple[AMEnum.ErrorCode, str]]] | tuple[AMEnum.ErrorCode, str]:
+    def remove(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[str, tuple[AMEnum.ErrorCode, str]]]]:
         """
         Remove file or directory recursively
         """
@@ -117,7 +117,7 @@ class AMSFTPClient(AMSession):
         """
     def __init__(self, request: AMData.ConRequst, keys: list[str] = [], tracer_capacity: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
         ...
-    def chmod(self, path: str, mode: str | int, recursive: bool = False) -> dict[str, tuple[AMEnum.ErrorCode, str]] | tuple[AMEnum.ErrorCode, str]:
+    def chmod(self, path: str, mode: str | int, recursive: bool = False) -> tuple[tuple[AMEnum.ErrorCode, str], dict[str, tuple[AMEnum.ErrorCode, str]]]:
         """
         Recursive change the mode of the file
         """
@@ -173,7 +173,7 @@ class AMSFTPClient(AMSession):
         """
         Use server to parse the path, ~ parsed in local, symlink parsed in server
         """
-    def remove(self, path: str) -> list[tuple[str, tuple[AMEnum.ErrorCode, str]]] | tuple[AMEnum.ErrorCode, str]:
+    def remove(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[str, tuple[AMEnum.ErrorCode, str]]]]:
         """
         Remove file or directory recursively
         """
@@ -221,11 +221,11 @@ class AMSFTPWorker:
         """
         Create transfer worker with callback
         """
-    def load_tasks(self, src: str, dst: str, hostm: HostMaintainer, src_host: str = '', dst_host: str = '', overwrite: bool = False, mkdir: bool = True, ignore_special_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.TransferTask]]:
+    def load_tasks(self, src: str, dst: str, hostm: ClientMaintainer, src_host: str = '', dst_host: str = '', overwrite: bool = False, mkdir: bool = True, ignore_special_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.TransferTask]]:
         """
         Load tasks from source and destination
         """
-    def transfer(self, tasks: list[AMData.TransferTask], hostm: HostMaintainer, buffer_size: int = -1) -> list[AMData.TransferTask]:
+    def transfer(self, tasks: list[AMData.TransferTask], hostm: ClientMaintainer, buffer_size: int = -1) -> list[AMData.TransferTask]:
         """
         Execute batch file transfers
         """
@@ -363,37 +363,43 @@ class BasePathMatch:
         """
         Internal Function, directly decides whether two paths match
         """
-class HostMaintainer:
+class ClientMaintainer:
     """
-    Host Connection Manager with Heartbeat
+    Client Connection Manager with Heartbeat
     """
     def __init__(self, heartbeat_interval_s: int = 60, disconnect_cb: typing.Any = None) -> None:
         """
-        Create host maintainer with heartbeat monitoring
+        Create client maintainer with heartbeat monitoring
         """
-    def add_host(self, nickname: str, client: BaseClient, overwrite: bool = False) -> None:
+    @typing.overload
+    def add_client(self, nickname: str, client: AMSFTPClient, overwrite: bool = False) -> None:
         """
-        Add a host client to the maintainer
+        Add a SFTP client to the maintainer
         """
-    def get_clients(self) -> list[BaseClient]:
+    @typing.overload
+    def add_client(self, nickname: str, client: AMFTPClient, overwrite: bool = False) -> None:
+        """
+        Add a FTP client to the maintainer
+        """
+    def get_client(self, nickname: str) -> AMSFTPClient | AMFTPClient | None:
+        """
+        Get a client by nickname
+        """
+    def get_clients(self) -> list[AMSFTPClient | AMFTPClient]:
         """
         Get list of all registered clients
         """
-    def get_host(self, nickname: str) -> BaseClient:
+    def get_nicknames(self) -> list[str]:
         """
-        Get a host client by nickname
+        Get list of all registered client nicknames
         """
-    def get_hosts(self) -> list[str]:
+    def remove_client(self, nickname: str) -> None:
         """
-        Get list of all registered host nicknames
+        Remove a client from the maintainer
         """
-    def remove_host(self, nickname: str) -> None:
+    def test_client(self, nickname: str, update: bool = False) -> tuple[AMEnum.ErrorCode, str]:
         """
-        Remove a host from the maintainer
-        """
-    def test_host(self, nickname: str, update: bool = False) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Test host connection status
+        Test client connection status
         """
 class PathMatch(BasePathMatch):
     """

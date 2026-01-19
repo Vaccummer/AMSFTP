@@ -12,6 +12,8 @@
 #include <fstream>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <pybind11/pytypes.h>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -72,6 +74,7 @@ inline bool isok(ECM &ecm) { return ecm.first == EC::Success; }
 
 namespace py = pybind11;
 namespace fs = std::filesystem;
+using amf = std::shared_ptr<AMFS::InterruptFlag>;
 using PathInfo = AMFS::PathInfo;
 using PathType = AMFS::PathType;
 using EC = ErrorCode;
@@ -86,6 +89,8 @@ using WR = std::pair<ECM, WRV>;                       // iwalk函数返回类型
 using SIZER = std::pair<ECM, uint64_t>;               // getsize函数返回类型
 using CR =
     std::pair<ECM, std::pair<std::string, size_t>>; // ConductCmd函数返回类型
+
+// Wait result for non-blocking socket operations
 
 class AMTracer {
 private:
@@ -134,7 +139,8 @@ public:
       // 如果导入失败，deepcopy_func 保持为 none
       deepcopy_func = py::none();
       trace(TraceLevel::Error, EC::DeepcopyFunctionNotAvailable,
-            "Deepcopy Function", "Initialize", "Failed to import copy module");
+            "Deepcopy Function", "Initialize",
+            fmt::format("Failed to import copy module: {}", e.what()));
     }
   }
   ECM SetPublicVar(const std::string &key, py::object value,
@@ -204,7 +210,7 @@ public:
       for (const auto &[key, value] : public_var_dict) {
         try {
           result[py::str(key)] = deepcopy_func(value);
-        } catch (const py::error_already_set &e) {
+        } catch (const py::error_already_set) {
           // 深拷贝失败，使用原始引用
           continue;
         }
@@ -213,7 +219,7 @@ public:
     return result;
   }
 
-  int GetTraceNum() {
+  size_t GetTraceNum() {
     std::lock_guard<std::mutex> lock(buffer_mutex);
     return buffer.size();
   }
@@ -240,7 +246,7 @@ public:
     buffer.clear();
   }
 
-  int TracerCapacity(ssize_t size = 0) {
+  size_t TracerCapacity(ssize_t size = 0) {
     if (size <= 0) {
       return capacity;
     }
@@ -295,11 +301,52 @@ public:
 class SafeChannel {
 public:
   LIBSSH2_CHANNEL *channel = nullptr;
+  bool closed = false; // 标记是否已正常关闭
+
   ~SafeChannel() {
     if (channel) {
-      libssh2_channel_close(channel);
+      if (!closed) {
+        // 未正常关闭，需要发信号终止远程进程
+        libssh2_channel_send_eof(channel);
+        libssh2_channel_signal(channel, "TERM");
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        libssh2_channel_signal(channel, "KILL");
+        libssh2_channel_close(channel);
+      }
       libssh2_channel_free(channel);
+      channel = nullptr;
     }
+  }
+
+  // 正常关闭 channel（阻塞模式）
+  // 成功返回 true，失败返回 false
+  bool close() {
+    if (!channel || closed) {
+      return closed;
+    }
+    if (libssh2_channel_close(channel) == 0 &&
+        libssh2_channel_wait_closed(channel) == 0) {
+      closed = true;
+    }
+    return closed;
+  }
+
+  // 非阻塞关闭，需配合 wait_for_socket 使用
+  // 返回值: 0=成功, EAGAIN=需等待, <0=错误
+  int close_nonblock() {
+    if (!channel)
+      return -1;
+    if (closed)
+      return 0;
+
+    int rc = libssh2_channel_close(channel);
+    if (rc == 0) {
+      rc = libssh2_channel_wait_closed(channel);
+      if (rc == 0) {
+        closed = true;
+      }
+    }
+    return rc;
   }
 
   SafeChannel(LIBSSH2_SESSION *session) {
@@ -316,6 +363,7 @@ private:
 protected:
   std::atomic<bool> terminate_cmd = false;
   ClientProtocol PROTOCOL = ClientProtocol::Base;
+  // NOLINTNEXTLINE
   virtual void SetState(const ECM &state) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: SetState", GetProtocolName()));
@@ -349,6 +397,7 @@ public:
       return "Unknown";
     }
   }
+  virtual ~BaseClient() = default;
   BaseClient(const ConRequst &request, int buffer_capacity = 10,
              const py::object &trace_cb = py::none())
       : AMTracer(request, buffer_capacity, trace_cb), AMFS::BasePathMatch() {}
@@ -356,11 +405,14 @@ public:
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: GetState", GetProtocolName()));
   };
+  // NOLINTBEGIN
   virtual ECM Check(bool need_trace = false) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: Check", GetProtocolName()));
   }
-  virtual ECM Connect(bool force = false) {
+
+  virtual ECM Connect(bool force = false, int timeout_ms = -1,
+                      amf interrupt_flag = nullptr) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: Connect", GetProtocolName()));
   }
@@ -370,12 +422,13 @@ public:
         "{} Client doesn't implement funtion: GetOSType", GetProtocolName()));
   }
 
-  virtual double GetRTT(ssize_t times = 5) {
+  virtual double GetRTT(ssize_t times = 5, amf interrupt_flag = nullptr) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: GetRTT", GetProtocolName()));
   }
 
-  virtual CR ConductCmd(const std::string &cmd, int max_time_s = -1) {
+  virtual CR ConductCmd(const std::string &cmd, int max_time_s = -1,
+                        amf interrupt_flag = nullptr) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: ConductCmd", GetProtocolName()));
   }
@@ -412,7 +465,7 @@ public:
   }
   virtual std::pair<ECM, std::unordered_map<std::string, ECM>>
   chmod(const std::string &path, std::variant<std::string, uint64_t> mode,
-        bool recursive = false) {
+        bool recursive = false, amf interrupt_flag = nullptr) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: chmod", GetProtocolName()));
   }
@@ -441,8 +494,9 @@ public:
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: is_symlink", GetProtocolName()));
   }
-  virtual std::pair<ECM, std::vector<PathInfo>> listdir(const std::string &path,
-                                                        int max_time_ms = -1) {
+  virtual std::pair<ECM, std::vector<PathInfo>>
+  listdir(const std::string &path, int max_time_ms = -1,
+          amf interrupt_flag = nullptr) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: listdir", GetProtocolName()));
   }
@@ -467,7 +521,8 @@ public:
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: rename", GetProtocolName()));
   }
-  virtual std::pair<ECM, RMR> remove(const std::string &path) {
+  virtual std::pair<ECM, RMR> remove(const std::string &path,
+                                     amf interrupt_flag = nullptr) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: remove", GetProtocolName()));
   };
@@ -499,6 +554,7 @@ public:
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: getsize", GetProtocolName()));
   }
+  // NOLINTEND
 
   std::pair<bool, PathInfo> istat(const std::string &path) override {
     auto [rcm, sr] = stat(path);
@@ -524,6 +580,7 @@ public:
 class AMSession : public BaseClient {
 protected:
   std::atomic<bool> has_connected;
+  SOCKET sock = INVALID_SOCKET;
   void SetState(const ECM &state) override {
     std::lock_guard<std::mutex> lock(state_mtx);
     CurError = state;
@@ -532,7 +589,7 @@ protected:
 private:
   ECM CurError = {EC::NoConnection, "Connection not established"};
   std::mutex state_mtx;
-  SOCKET sock = INVALID_SOCKET;
+
   bool password_auth_cb = false;
   std::vector<std::string> private_keys;
   py::function auth_cb = py::function(); // Callable[[IsPasswordDemand:bool,
@@ -598,6 +655,113 @@ public:
     has_connected.store(false);
   }
 
+  // Optimized wait_for_socket: reduces overhead from frequent calls
+  inline WaitResult
+  wait_for_socket(SocketWaitType wait_dir, const amf &flag = nullptr,
+                  std::chrono::steady_clock::time_point start_time =
+                      std::chrono::steady_clock::now(),
+                  int64_t timeout_ms = -1, int poll_interval_ms = 50) {
+    // Fast path: check if socket is already ready without select
+    if (wait_dir == SocketWaitType::Auto) {
+      int dir = libssh2_session_block_directions(session);
+      if (dir == 0) {
+        return WaitResult::Ready;
+      }
+    }
+
+    // Pre-check interrupt and timeout before entering select
+    if (flag && flag->check()) {
+      return WaitResult::Interrupted;
+    }
+    if (timeout_ms > 0) {
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - start_time)
+                         .count();
+      if (elapsed >= timeout_ms) {
+        return WaitResult::Timeout;
+      }
+    }
+
+    // Pre-compute wait directions (avoid repeated switch in loop)
+    bool wait_read = false;
+    bool wait_write = false;
+    bool is_auto = (wait_dir == SocketWaitType::Auto);
+
+    if (!is_auto) {
+      switch (wait_dir) {
+      case SocketWaitType::Read:
+        wait_read = true;
+        break;
+      case SocketWaitType::Write:
+        wait_write = true;
+        break;
+      case SocketWaitType::ReadWrite:
+        wait_read = true;
+        wait_write = true;
+        break;
+      default:
+        break;
+      }
+    }
+
+    // Pre-compute timeval (reuse in loop)
+    struct timeval tv;
+    tv.tv_sec = poll_interval_ms / 1000;
+    tv.tv_usec = (poll_interval_ms % 1000) * 1000;
+
+    while (true) {
+      fd_set readfds, writefds;
+      FD_ZERO(&readfds);
+      FD_ZERO(&writefds);
+
+      if (is_auto) {
+        int dir = libssh2_session_block_directions(session);
+        if (dir == 0) {
+          return WaitResult::Ready;
+        }
+        if (dir & LIBSSH2_SESSION_BLOCK_INBOUND) {
+          FD_SET(sock, &readfds);
+        }
+        if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) {
+          FD_SET(sock, &writefds);
+        }
+      } else {
+        if (wait_read) {
+          FD_SET(sock, &readfds);
+        }
+        if (wait_write) {
+          FD_SET(sock, &writefds);
+        }
+      }
+
+#ifdef _WIN32
+      int rc = select(0, &readfds, &writefds, nullptr, &tv);
+#else
+      int rc = select(sock + 1, &readfds, &writefds, nullptr, &tv);
+#endif
+
+      if (rc > 0) {
+        return WaitResult::Ready;
+      }
+      if (rc < 0) {
+        return WaitResult::Error;
+      }
+
+      // rc == 0: select timeout, check interrupt and timeout
+      if (flag && flag->check()) {
+        return WaitResult::Interrupted;
+      }
+      if (timeout_ms > 0) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - start_time)
+                           .count();
+        if (elapsed >= timeout_ms) {
+          return WaitResult::Timeout;
+        }
+      }
+    }
+  }
+
   auto GetLibssh2Version() { return libssh2_version(LIBSSH2_VERSION_NUM); }
 
   bool IsValidKey(const std::string &key) {
@@ -655,7 +819,8 @@ public:
     return {EC::Success, ""};
   }
 
-  ECM BaseConnect(bool force = false) {
+  ECM BaseConnect(bool force = false, int timeout_ms = -1,
+                  amf interrupt_flag = nullptr) {
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (has_connected.load()) {
       if (!force) {
@@ -668,6 +833,8 @@ public:
     std::string msg = "";
     EC rc = EC::Success;
     int rcr;
+    auto time_start = std::chrono::steady_clock::now();
+    WaitResult wr = WaitResult::Ready;
 
     // 使用SocketConnector建立连接
     SocketConnector connector;
@@ -681,6 +848,19 @@ public:
     }
     sock = connector.sock;
 
+    // 检查中断/超时
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {EC::Terminate, "Connection interrupted"};
+    }
+    if (timeout_ms > 0) {
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - time_start)
+                         .count();
+      if (elapsed >= timeout_ms) {
+        return {EC::OperationTimeout, "Connection timed out"};
+      }
+    }
+
     session = libssh2_session_init();
     if (!session) {
       trace(TraceLevel::Critical, EC::SessionCreateFailed, "",
@@ -688,7 +868,8 @@ public:
       return {EC::SessionCreateFailed, "Libssh2 Session initialization failed"};
     }
 
-    libssh2_session_set_blocking(session, 1);
+    // 设置非阻塞模式进行握手
+    libssh2_session_set_blocking(session, 0);
 
     if (res_data.compression) {
       libssh2_session_flag(session, LIBSSH2_FLAG_COMPRESS, 1);
@@ -696,7 +877,15 @@ public:
                                   "zlib@openssh.com,zlib,none");
     }
 
-    rcr = libssh2_session_handshake(session, sock);
+    // 非阻塞握手
+    while ((rcr = libssh2_session_handshake(session, sock)) ==
+           LIBSSH2_ERROR_EAGAIN) {
+      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
+                           timeout_ms);
+      if (wr != WaitResult::Ready) {
+        goto connect_failed;
+      }
+    }
 
     if (rcr != 0) {
       msg = fmt::format("Session handshake failed: {}", GetLastErrorMsg());
@@ -704,116 +893,84 @@ public:
       trace(TraceLevel::Critical, rc,
             fmt::format("session_code:{}, socket:{}", rcr, sock),
             "libssh2_session_handshake", msg);
+      libssh2_session_set_blocking(session, 1);
       return {rc, msg};
     }
 
-    const char *auth_list = libssh2_userauth_list(
-        session, res_data.username.c_str(), res_data.username.length());
-
-    if (auth_list == nullptr) {
-      msg = fmt::format("Fail to negotiate authentication method: {}",
-                        GetLastErrorMsg());
-      rc = GetLastEC();
-      trace(TraceLevel::Critical, rc, res_data.nickname, "GetAuthList", msg);
-      return {rc, msg};
-    }
-
-    trace(TraceLevel::Debug, EC::Success, res_data.username,
-          "libssh2_userauth_list",
-          fmt::format("Authentication methods: {}", auth_list));
-
-    bool password_auth = false;
-    if (strstr(auth_list, "password") != nullptr) {
-      password_auth = true;
-    }
-
-    rc = EC::AuthFailed;
-
-    std::string password_tmp;
-    if (!res_data.keyfile.empty()) {
-      trace(TraceLevel::Debug, EC::Success, "PrivateKey", "Authorize",
-            fmt::format("Using dedicated private key: {}", res_data.keyfile));
-      rcr = libssh2_userauth_publickey_fromfile(
-          session, res_data.username.c_str(), nullptr, res_data.keyfile.c_str(),
-          nullptr);
-      if (rcr == 0) {
-        rc = EC::Success;
-        msg = "";
-        trace(TraceLevel::Info, EC::Success, "Success",
-              "PrivatedKeyAuthorizeResult",
-              fmt::format("Dedicated private key \"{}\" authorize success",
-                          res_data.keyfile));
-        goto OK;
-      } else {
-        msg = fmt::format("Dedicated private key \"{}\" authorize failed: {}",
-                          res_data.keyfile, GetLastErrorMsg());
-        rc = GetLastEC();
-        trace(TraceLevel::Debug, rc, "Failed", "PrivatedKeyAuthorizeResult",
-              msg);
-      }
-    }
-    if (!res_data.password.empty() && password_auth) {
-      trace(TraceLevel::Debug, EC::Success, res_data.password,
-            "PasswordAuthorize",
-            fmt::format("Using  password to authorize: {}", res_data.password));
-      rcr = libssh2_userauth_password(session, res_data.username.c_str(),
-                                      res_data.password.c_str());
-      if (rcr == 0) {
-        rc = EC::Success;
-        msg = "";
-        trace(TraceLevel::Info, EC::Success, "Success",
-              "PasswordAuthorizeResult", "Password authorize success");
-        goto OK;
-      } else {
-        rc = EC::AuthFailed;
-        trace(TraceLevel::Debug, EC::AuthFailed, "Failed",
-              "PasswordAuthorizeResult",
-              fmt::format("Wrong Password: {}", res_data.password));
-      }
-    }
-    if (!private_keys.empty()) {
-      trace(TraceLevel::Debug, EC::Success, "SharedPrivateKey", "Authorize",
-            fmt::format("Using shared private keys to authorize"));
-      for (auto private_key : private_keys) {
-        if (private_key == res_data.keyfile) {
-          continue;
+    // 获取认证列表（非阻塞）
+    {
+      const char *auth_list = nullptr;
+      while ((auth_list = libssh2_userauth_list(
+                  session, res_data.username.c_str(),
+                  res_data.username.length())) == nullptr &&
+             libssh2_session_last_errno(session) == LIBSSH2_ERROR_EAGAIN) {
+        wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
+                             timeout_ms);
+        if (wr != WaitResult::Ready) {
+          goto connect_failed;
         }
+      }
 
+      if (auth_list == nullptr) {
+        msg = fmt::format("Fail to negotiate authentication method: {}",
+                          GetLastErrorMsg());
+        rc = GetLastEC();
+        trace(TraceLevel::Critical, rc, res_data.nickname, "GetAuthList", msg);
+        libssh2_session_set_blocking(session, 1);
+        return {rc, msg};
+      }
+
+      trace(TraceLevel::Debug, EC::Success, res_data.username,
+            "libssh2_userauth_list",
+            fmt::format("Authentication methods: {}", auth_list));
+
+      // ========== 进入认证阶段，不再检测 timeout ==========
+      // 切换到阻塞模式，简化认证流程（认证可能涉及用户交互）
+      libssh2_session_set_blocking(session, 1);
+
+      bool password_auth = (strstr(auth_list, "password") != nullptr);
+      rc = EC::AuthFailed;
+      std::string password_tmp;
+
+      // 专用私钥认证
+      if (!res_data.keyfile.empty()) {
+        // 检查中断（不检查超时）
+        if (interrupt_flag && interrupt_flag->check()) {
+          return {EC::Terminate, "Authentication interrupted"};
+        }
+        trace(TraceLevel::Debug, EC::Success, "PrivateKey", "Authorize",
+              fmt::format("Using dedicated private key: {}", res_data.keyfile));
         rcr = libssh2_userauth_publickey_fromfile(
-            session, res_data.username.c_str(), nullptr, private_key.c_str(),
-            nullptr);
+            session, res_data.username.c_str(), nullptr,
+            res_data.keyfile.c_str(), nullptr);
         if (rcr == 0) {
-          msg = fmt::format("Shared private key \"{}\" authorize success",
-                            private_key);
-          trace(TraceLevel::Info, EC::Success, "Success",
-                "PrivatedKeyAuthorizeResult", msg);
           rc = EC::Success;
+          msg = "";
+          trace(TraceLevel::Info, EC::Success, "Success",
+                "PrivatedKeyAuthorizeResult",
+                fmt::format("Dedicated private key \"{}\" authorize success",
+                            res_data.keyfile));
           goto OK;
         } else {
-          msg = fmt::format("Shared private key \"{}\" authorize failed",
-                            private_key);
-          trace(TraceLevel::Debug, EC::PrivateKeyAuthFailed, "Failed",
-                "PrivatedKeyAuthorizeResult", msg);
+          msg = fmt::format("Dedicated private key \"{}\" authorize failed: {}",
+                            res_data.keyfile, GetLastErrorMsg());
+          rc = GetLastEC();
+          trace(TraceLevel::Debug, rc, "Failed", "PrivatedKeyAuthorizeResult",
+                msg);
         }
       }
-    }
 
-    if (password_auth_cb && password_auth) {
-      trace(TraceLevel::Debug, EC::Success, "Interactive", "PasswordAuthorize",
-            "Using password authentication callback to get another password");
-      int trial_times = 0;
-      while (trial_times < 2) {
-        {
-          py::gil_scoped_acquire acquire;
-          password_tmp = py::cast<std::string>(
-              auth_cb(AuthCBInfo(true, res_data, trial_times)));
+      // 密码认证
+      if (!res_data.password.empty() && password_auth) {
+        if (interrupt_flag && interrupt_flag->check()) {
+          return {EC::Terminate, "Authentication interrupted"};
         }
-        if (password_tmp.empty()) {
-          break;
-        }
+        trace(
+            TraceLevel::Debug, EC::Success, res_data.password,
+            "PasswordAuthorize",
+            fmt::format("Using password to authorize: {}", res_data.password));
         rcr = libssh2_userauth_password(session, res_data.username.c_str(),
-                                        password_tmp.c_str());
-        trial_times++;
+                                        res_data.password.c_str());
         if (rcr == 0) {
           rc = EC::Success;
           msg = "";
@@ -821,12 +978,86 @@ public:
                 "PasswordAuthorizeResult", "Password authorize success");
           goto OK;
         } else {
+          rc = EC::AuthFailed;
           trace(TraceLevel::Debug, EC::AuthFailed, "Failed",
                 "PasswordAuthorizeResult",
-                fmt::format("Wrong Password: {}", password_tmp));
+                fmt::format("Wrong Password: {}", res_data.password));
+        }
+      }
+
+      // 共享私钥认证
+      if (!private_keys.empty()) {
+        trace(TraceLevel::Debug, EC::Success, "SharedPrivateKey", "Authorize",
+              fmt::format("Using shared private keys to authorize"));
+        for (auto private_key : private_keys) {
+          if (interrupt_flag && interrupt_flag->check()) {
+            return {EC::Terminate, "Authentication interrupted"};
+          }
+          if (private_key == res_data.keyfile) {
+            continue;
+          }
+          rcr = libssh2_userauth_publickey_fromfile(
+              session, res_data.username.c_str(), nullptr, private_key.c_str(),
+              nullptr);
+          if (rcr == 0) {
+            msg = fmt::format("Shared private key \"{}\" authorize success",
+                              private_key);
+            trace(TraceLevel::Info, EC::Success, "Success",
+                  "PrivatedKeyAuthorizeResult", msg);
+            rc = EC::Success;
+            goto OK;
+          } else {
+            msg = fmt::format("Shared private key \"{}\" authorize failed",
+                              private_key);
+            trace(TraceLevel::Debug, EC::PrivateKeyAuthFailed, "Failed",
+                  "PrivatedKeyAuthorizeResult", msg);
+          }
+        }
+      }
+
+      // 交互式密码认证回调
+      if (password_auth_cb && password_auth) {
+        trace(TraceLevel::Debug, EC::Success, "Interactive",
+              "PasswordAuthorize",
+              "Using password authentication callback to get another password");
+        int trial_times = 0;
+        while (trial_times < 2) {
+          if (interrupt_flag && interrupt_flag->check()) {
+            return {EC::Terminate, "Authentication interrupted"};
+          }
           {
             py::gil_scoped_acquire acquire;
-            auth_cb(false, res_data, trial_times);
+            try {
+              password_tmp = py::cast<std::string>(
+                  auth_cb(AuthCBInfo(true, res_data, trial_times)));
+            } catch (const std::exception &e) {
+              trace(TraceLevel::Error, EC::AuthFailed, "Failed",
+                    "PasswordAuthorizeResult",
+                    fmt::format("Password authentication callback error: {}",
+                                e.what()));
+              break;
+            }
+          }
+          if (password_tmp.empty()) {
+            break;
+          }
+          rcr = libssh2_userauth_password(session, res_data.username.c_str(),
+                                          password_tmp.c_str());
+          trial_times++;
+          if (rcr == 0) {
+            rc = EC::Success;
+            msg = "";
+            trace(TraceLevel::Info, EC::Success, "Success",
+                  "PasswordAuthorizeResult", "Password authorize success");
+            goto OK;
+          } else {
+            trace(TraceLevel::Debug, EC::AuthFailed, "Failed",
+                  "PasswordAuthorizeResult",
+                  fmt::format("Wrong Password: {}", password_tmp));
+            {
+              py::gil_scoped_acquire acquire;
+              auth_cb(false, res_data, trial_times);
+            }
           }
         }
       }
@@ -837,6 +1068,12 @@ public:
       trace(TraceLevel::Critical, EC::AuthFailed, "Failed",
             "FinalAuthorizeState", "All authorize methods failed");
       return {rc, "All authorize methods failed"};
+    }
+
+    // 检查中断
+    if (interrupt_flag && interrupt_flag->check()) {
+      Disconnect();
+      return {EC::Terminate, "Connection interrupted after authentication"};
     }
 
     sftp = libssh2_sftp_init(session);
@@ -850,6 +1087,21 @@ public:
 
     has_connected.store(true);
     return {EC::Success, ""};
+
+  connect_failed:
+    libssh2_session_set_blocking(session, 1);
+    Disconnect();
+    switch (wr) {
+    case WaitResult::Timeout:
+      return {EC::OperationTimeout, "Connection timed out during handshake"};
+    case WaitResult::Interrupted:
+      return {EC::Terminate, "Connection interrupted during handshake"};
+    case WaitResult::Error:
+      return {EC::SocketRecvError, "Socket error during handshake"};
+    default:
+      return {EC::UnknownError,
+              "Logic error, waitresult is ok but enter fail branch"};
+    }
   }
 
   EC GetLastEC() {
@@ -1142,48 +1394,52 @@ private:
     }
   }
 
-  void _rm(const std::string &path, RMR &errors) {
-    auto [rcm, br] = is_dir(path);
-    if (rcm.first != EC::Success) {
-      errors.push_back(std::make_pair(path, rcm));
+  void _rm(const PathInfo &info, RMR &errors, amf interrupt_flag = nullptr) {
+    if (interrupt_flag && interrupt_flag->check()) {
       return;
     }
-
-    if (!br) {
-      ECM ecm = lib_rmfile(path);
+    if (info.type != PathType::DIR) {
+      ECM ecm = lib_rmfile(info.path);
       if (ecm.first != EC::Success) {
-        errors.push_back(std::make_pair(path, ecm));
+        errors.emplace_back(info.path, ecm);
       }
       return;
     }
 
-    auto [rcm2, file_list] = listdir(path);
+    auto [rcm2, file_list] = listdir(info.path);
     if (rcm2.first != EC::Success) {
-      errors.push_back(std::make_pair(path, rcm));
+      errors.emplace_back(info.path, rcm2);
+      return;
+    }
+
+    if (interrupt_flag && interrupt_flag->check()) {
       return;
     }
 
     for (auto &file : file_list) {
-      _rm(file.path, errors);
+      if (interrupt_flag && interrupt_flag->check()) {
+        return;
+      }
+      _rm(file, errors);
     }
 
     ECM ecm = rmdir(path);
     if (ecm.first != EC::Success) {
-      errors.push_back(std::make_pair(path, ecm));
+      errors.emplace_back(info.path, ecm);
     }
   }
 
   void _chmod(const std::string &path, const std::string &mode, bool recursive,
-              std::unordered_map<std::string, ECM> &errors) {
+              std::unordered_map<std::string, ECM> &errors,
+              amf interrupt_flag = nullptr) {
+    if (interrupt_flag && interrupt_flag->check()) {
+      return;
+    }
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     EC rc;
     std::string msg = "";
 
-    int rct;
-    {
-      std::lock_guard<std::recursive_mutex> lock(mtx);
-      rct = libssh2_sftp_stat(sftp, path.c_str(), &attrs);
-    }
+    int rct = libssh2_sftp_stat(sftp, path.c_str(), &attrs);
 
     if (rct != 0) {
       rc = GetLastEC();
@@ -1208,11 +1464,7 @@ private:
     attrs.permissions = new_mode_int;
     attrs.flags = LIBSSH2_SFTP_ATTR_PERMISSIONS;
 
-    int rcr;
-    {
-      std::lock_guard<std::recursive_mutex> lock(mtx);
-      rcr = libssh2_sftp_setstat(sftp, path.c_str(), &attrs);
-    }
+    int rcr = libssh2_sftp_setstat(sftp, path.c_str(), &attrs);
 
     if (rcr != 0) {
       rc = GetLastEC();
@@ -1227,13 +1479,20 @@ private:
         return;
       }
       for (auto &item : list) {
-        _chmod(item.path, mode, recursive, errors);
+        if (interrupt_flag && interrupt_flag->check()) {
+          return;
+        }
+        _chmod(item.path, mode, recursive, errors, interrupt_flag);
       }
     }
   }
 
   void _chmod(const std::string &path, const uint64_t &mode, bool recursive,
-              std::unordered_map<std::string, ECM> &errors) {
+              std::unordered_map<std::string, ECM> &errors,
+              amf interrupt_flag = nullptr) {
+    if (interrupt_flag && interrupt_flag->check()) {
+      return;
+    }
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     EC rc;
     std::string msg = "";
@@ -1282,6 +1541,9 @@ private:
         return;
       }
       for (auto &item : list) {
+        if (interrupt_flag && interrupt_flag->check()) {
+          return;
+        }
         _chmod(item.path, mode, recursive, errors);
       }
     }
@@ -1298,7 +1560,7 @@ private:
   std::vector<PathInfo> ilistdir(const std::string &path) override {
     auto [rcm, sr] = listdir(path);
     if (rcm.first != EC::Success) {
-      return std::vector<PathInfo>();
+      return {};
     }
     return sr;
   }
@@ -1308,137 +1570,151 @@ private:
 
 public:
   ~AMSFTPClient() {}
-  double GetRTT(ssize_t times = 5) override {
-    if (times <= 0) {
+  // 获取 RTT (Round Trip Time)，返回平均值（毫秒）
+  // 通过执行简单的 SFTP 操作来测量
+  double GetRTT(ssize_t times = 5, amf interrupt_flag = nullptr) override {
+    if (times <= 0)
       times = 1;
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+
+    if (!session || !sftp) {
+      return -1.0;
     }
-    double total_time = 0;
-    double time_start;
-    double time_end;
-    int rc;
+
+    std::vector<double> rtts;
+    rtts.reserve(times);
+
+    // 使用 libssh2_sftp_stat 测量 RTT（最小开销的 SFTP 操作）
+    LIBSSH2_SFTP_ATTRIBUTES attrs;
+
     for (ssize_t i = 0; i < times; i++) {
-      SafeChannel channel(session);
-      time_start = timenow();
-      rc = libssh2_channel_exec(channel.channel, "echo amsftp");
-      if (rc != 0) {
-        return -1;
+      if (interrupt_flag && interrupt_flag->check()) {
+        break;
       }
-      time_end = timenow();
-      total_time += (time_end - time_start);
+
+      auto start = std::chrono::steady_clock::now();
+
+      // stat "/" 是最轻量的操作
+      int rc = libssh2_sftp_stat(sftp, "/", &attrs);
+
+      auto end = std::chrono::steady_clock::now();
+
+      if (rc == 0) {
+        double rtt_ms =
+            std::chrono::duration<double, std::milli>(end - start).count();
+        rtts.push_back(rtt_ms);
+      }
     }
-    return total_time / times;
+
+    if (rtts.empty()) {
+      return -1.0;
+    }
+
+    // 计算平均值
+    double sum = 0.0;
+    for (double rtt : rtts) {
+      sum += rtt;
+    }
+    return sum / rtts.size();
   }
 
-  void TerminateCmd() { terminate_cmd.store(true); }
-
-  CR ConductCmd(const std::string &cmd, int max_time_s = -1) override {
+  CR ConductCmd(const std::string &cmd, int max_time_ms = -1,
+                amf interrupt_flag = nullptr) override {
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    terminate_cmd.store(false);
-    bool time_out = false;
     SafeChannel sf(session);
     if (!sf.channel) {
-      return {ECM{EC::NoConnection, "Channel not initialized"},
-              std::pair<std::string, int>("", -1)};
-    }
-    double time_start = timenow();
-    int out;
-    {
-      // 设置不阻塞
-      libssh2_session_set_blocking(session, 0);
-      while (true) {
-        out = libssh2_channel_exec(sf.channel, cmd.c_str());
-        if (out != LIBSSH2_ERROR_EAGAIN) {
-          break;
-        }
-        if (max_time_s > 0 && timenow() - time_start > max_time_s) {
-          time_out = true;
-
-          break;
-        }
-        if (terminate_cmd) {
-          terminate_cmd.store(true);
-          break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      }
+      return {ECM{EC::NoConnection, "Channel not initialized"}, {"", -1}};
     }
 
-    if (terminate_cmd.load()) {
-      libssh2_session_set_blocking(session, 1);
-      return {ECM{EC::Terminate, "Command terminated"},
-              std::pair<std::string, int>("", -1)};
-    } else if (time_out) {
-      libssh2_session_set_blocking(session, 1);
-      return {ECM{EC::OperationTimeout, "Command timed out"},
-              std::pair<std::string, int>("", -1)};
-    }
-
-    EC error_code;
-    std::string error_msg;
-    if (out < 0) {
-      error_code = GetLastEC();
-      error_msg = fmt::format("{} Host channel operation failed: {}",
-                              res_data.nickname, GetLastErrorMsg());
-      return {ECM{error_code, error_msg}, std::pair<std::string, int>("", -1)};
-    }
-
+    auto time_start = std::chrono::steady_clock::now();
+    int exit_status = -1;
     std::string output;
-    std::array<char, 4096> cmd_out;
-    bool output_time_out = false;
+    std::array<char, 4096> buffer;
+    WaitResult wr = WaitResult::Ready;
+    int rc;
+
+    // 设置非阻塞模式
+    libssh2_session_set_blocking(session, 0);
+
+    // 1. 执行命令
+    while ((rc = libssh2_channel_exec(sf.channel, cmd.c_str())) ==
+           LIBSSH2_ERROR_EAGAIN) {
+      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
+                           max_time_ms);
+      if (wr != WaitResult::Ready) {
+        goto cleanup;
+      }
+    }
+    if (rc < 0) {
+      libssh2_session_set_blocking(session, 1);
+      return {ECM{GetLastEC(),
+                  fmt::format("Channel exec failed: {}", GetLastErrorMsg())},
+              {"", -1}};
+    }
+
+    // 2. 读取输出
     while (true) {
-      int nbytes = -1;
-      {
-        nbytes = libssh2_channel_read(sf.channel, cmd_out.data(),
-                                      sizeof(cmd_out) - 1);
-      }
+      ssize_t nbytes =
+          libssh2_channel_read(sf.channel, buffer.data(), buffer.size() - 1);
 
-      if (nbytes < 0) {
-        if (libssh2_session_last_errno(session) == LIBSSH2_ERROR_EAGAIN) {
-          // 读取超时检查
-          if (max_time_s > 0 && timenow() - time_start > max_time_s) {
-            output_time_out = true;
-            break;
-          }
-          if (terminate_cmd.load()) {
-            break;
-          }
-          std::this_thread::sleep_for(std::chrono::milliseconds(100));
-          continue;
+      if (nbytes > 0) {
+        output.append(buffer.data(), nbytes);
+      } else if (nbytes == 0) {
+        break; // EOF
+      } else if (nbytes == LIBSSH2_ERROR_EAGAIN) {
+        wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
+                             max_time_ms);
+        if (wr != WaitResult::Ready) {
+          goto cleanup;
         }
-        EC error_code = GetLastEC();
-        std::string error_msg =
-            fmt::format("{} Host channel output read failed: {}",
-                        res_data.nickname, GetLastErrorMsg());
+      } else {
         libssh2_session_set_blocking(session, 1);
-        return {ECM{error_code, error_msg}, std::make_pair(std::string(), -1)};
+        return {ECM{GetLastEC(),
+                    fmt::format("Channel read failed: {}", GetLastErrorMsg())},
+                {"", -1}};
       }
-      if (nbytes == 0) {
-        break; // 输出读取完成
-      }
-      output.append(cmd_out.data(), nbytes);
     }
+
+    // 3. 清理输出末尾空白
+    while (!output.empty() &&
+           (output.back() == '\n' || output.back() == '\r')) {
+      output.pop_back();
+    }
+
+    // 4. 非阻塞关闭通道
+    while ((rc = sf.close_nonblock()) == LIBSSH2_ERROR_EAGAIN) {
+      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
+                           max_time_ms);
+      if (wr != WaitResult::Ready) {
+        goto cleanup;
+      }
+    }
+
+    // 5. 获取退出状态
+    exit_status = libssh2_channel_get_exit_status(sf.channel);
+
     libssh2_session_set_blocking(session, 1);
-    // 读取过程中检查终止信号
-    if (terminate_cmd.load()) {
-      return {ECM{EC::Terminate, "Command terminated"},
-              std::make_pair(output, -1)};
+    return {ECM{EC::Success, ""}, {output, exit_status}};
+
+  cleanup:
+    // sf.closed == false，析构时会自动发送 TERM/KILL 信号
+    libssh2_session_set_blocking(session, 1);
+    switch (wr) {
+    case WaitResult::Timeout:
+      return {ECM{EC::OperationTimeout,
+                  fmt::format("Command timed out (killed): {}", cmd)},
+              {output, -1}};
+    case WaitResult::Interrupted:
+      return {ECM{EC::Terminate,
+                  fmt::format("Command interrupted (killed): {}", cmd)},
+              {output, -1}};
+    case WaitResult::Error:
+      return {ECM{EC::SocketRecvError,
+                  fmt::format("Socket error during command: {}", cmd)},
+              {output, -1}};
+    case WaitResult::Ready:
+      return {ECM{EC::Success, ""}, {output, exit_status}};
     }
-
-    if (output_time_out) {
-      return {ECM{EC::OperationTimeout, "Output read timed out"},
-              std::make_pair(output, -1)};
-    }
-
-    // 7. 获取退出状态并清理资源
-    int exit_status = libssh2_channel_get_exit_status(sf.channel);
-
-    // 8. 清理输出的末尾空白字符
-    output.erase(std::find_if(output.rbegin(), output.rend(),
-                              [](char c) { return c != '\n' && c != '\r'; })
-                     .base(),
-                 output.end());
-
-    return {ECM{EC::Success, ""}, std::make_pair(output, exit_status)};
   }
 
   OS_TYPE GetOSType(bool update = false) override {
@@ -1508,7 +1784,7 @@ public:
     }
 
     std::string cmd = fmt::format("id -un {}", uid);
-    auto [rcm, cr] = ConductCmd(cmd);
+    auto [rcm, cr] = ConductCmd(cmd, 3000);
     if (rcm.first != EC::Success) {
       return "unkown";
     }
@@ -1566,9 +1842,10 @@ public:
     return rc;
   }
 
-  ECM Connect(bool force = false) override {
+  ECM Connect(bool force = false, int timeout_ms = -1,
+              amf interrupt_flag = nullptr) override {
     bool not_init = has_connected;
-    ECM ecm = BaseConnect(force);
+    ECM ecm = BaseConnect(force, timeout_ms, interrupt_flag);
     if (!not_init && isok(ecm)) {
       GetOSType();
       GetHomeDir();
@@ -1667,7 +1944,7 @@ public:
 
   std::pair<ECM, std::unordered_map<std::string, ECM>>
   chmod(const std::string &path, std::variant<std::string, uint64_t> mode,
-        bool recursive = false) override {
+        bool recursive = false, amf interrupt_flag = nullptr) override {
     if (static_cast<int>(GetOSType()) <= 0) {
       return {ECM{EC::UnImplentedMethod, "Chmod only supported on Unix System"},
               {}};
@@ -1683,7 +1960,14 @@ public:
           ECM{EC::PathNotExist, fmt::format("Path does not exist: {}", pathf)},
           {}};
     }
+
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
+              {}};
+    }
+
     std::unordered_map<std::string, ECM> ecm_map{};
+    std::lock_guard<std::recursive_mutex> lock(mtx);
 
     if (std::holds_alternative<std::string>(mode)) {
       if (!AMFS::Str::IsModeValid(std::get<std::string>(mode))) {
@@ -1691,16 +1975,21 @@ public:
                                                 std::get<std::string>(mode))},
                 {}};
       }
-      _chmod(path, std::get<std::string>(mode), recursive, ecm_map);
+      _chmod(path, std::get<std::string>(mode), recursive, ecm_map,
+             interrupt_flag);
     } else if (std::holds_alternative<uint64_t>(mode)) {
       if (!AMFS::Str::IsModeValid(std::get<uint64_t>(mode))) {
         return {ECM{EC::InvalidArg,
                     fmt::format("Invalid mode: {}", std::get<uint64_t>(mode))},
                 {}};
       }
-      _chmod(path, std::get<uint64_t>(mode), recursive, ecm_map);
+      _chmod(path, std::get<uint64_t>(mode), recursive, ecm_map,
+             interrupt_flag);
     } else {
       return {ECM{EC::InvalidArg, fmt::format("Invalid mode data type")}, {}};
+    }
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {ECM{EC::Terminate, "Interrupted by user"}, ecm_map};
     }
     return {ECM{EC::Success, ""}, ecm_map};
   }
@@ -1764,8 +2053,9 @@ public:
             path_info.type == PathType::SYMLINK ? true : false};
   }
 
-  std::pair<ECM, std::vector<PathInfo>> listdir(const std::string &path,
-                                                int max_time_ms = -1) override {
+  std::pair<ECM, std::vector<PathInfo>>
+  listdir(const std::string &path, int max_time_ms = -1,
+          amf interrupt_flag = nullptr) override {
     if (!sftp) {
       return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
     }
@@ -1785,12 +2075,7 @@ public:
                   fmt::format("Path is not a directory: {}", pathf)},
               file_list};
     }
-
-    double start_time = timenow();
-    double end_time = start_time;
-    double max_time = max_time_ms / 1000.0;
-    bool is_truncated = false;
-
+    auto start_time = std::chrono::steady_clock::now();
     LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     std::string name;
@@ -1800,11 +2085,13 @@ public:
     EC rc;
     int rct;
     PathInfo info;
-    bool is_sucess = false;
 
     std::lock_guard<std::recursive_mutex> lock(mtx);
     sftp_handle = libssh2_sftp_open_ex(sftp, pathf.c_str(), pathf.size(), 0,
                                        LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {ECM{EC::Terminate, "Interrupted by user"}, {}};
+    }
 
     if (!sftp_handle) {
       std::string tmp_msg = GetLastErrorMsg();
@@ -1818,13 +2105,17 @@ public:
     while (true) {
       rct = libssh2_sftp_readdir_ex(sftp_handle, filename_buffer.data(),
                                     buffer_size, nullptr, 0, &attrs);
-      if (max_time_ms > 0) {
-        end_time = timenow();
-        if (end_time - start_time > max_time) {
-          is_sucess = true;
-          is_truncated = true;
-          break;
-        }
+      if (max_time_ms > 0 && std::chrono::steady_clock::now() - start_time >
+                                 std::chrono::milliseconds(max_time_ms)) {
+        rc = EC::OperationTimeout;
+        msg = fmt::format("Path: {} readdir timeout", pathf);
+        break;
+      }
+
+      if (interrupt_flag && interrupt_flag->check()) {
+        rc = EC::Terminate;
+        msg = fmt::format("Path: {} readdir interrupted by user", pathf);
+        break;
       }
 
       if (rct < 0) {
@@ -1836,7 +2127,6 @@ public:
         msg = fmt::format("Path: {} readdir failed: {}", pathf, tmp_msg);
         goto clean;
       } else if (rct == 0) {
-        is_sucess = true;
         break;
       }
       name.assign(filename_buffer.data(), rct);
@@ -1854,12 +2144,7 @@ public:
     if (sftp_handle) {
       libssh2_sftp_close_handle(sftp_handle);
     }
-    if (is_sucess) {
-      // EC is Success, but message is not empty if truncated
-      return {ECM{EC::Success, is_truncated ? "truncate" : ""}, file_list};
-    } else {
-      return {ECM{rc, msg}, {}};
-    }
+    return {ECM{rc, msg}, file_list};
   }
 
   // Iterator version that yields PathInfo one by one using Python generator
@@ -2124,7 +2409,8 @@ def _amsftp_gen(next_func):
   }
 
   // 删除文件或目录，自带AMFS::abspath
-  std::pair<ECM, RMR> remove(const std::string &path) override {
+  std::pair<ECM, RMR> remove(const std::string &path,
+                             amf interrupt_flag = nullptr) override {
     if (!sftp) {
       return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
     }
@@ -2133,7 +2419,17 @@ def _amsftp_gen(next_func):
     if (pathn.empty()) {
       return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
     }
-    _rm(pathn, errors);
+    auto [rcm, sr] = stat(pathn);
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
+              {}};
+    }
+
+    if (rcm.first != EC::Success) {
+      return {rcm, {}};
+    }
+
+    _rm(sr, errors);
     return {ECM{EC::Success, ""}, errors};
   }
 
@@ -2488,8 +2784,10 @@ public:
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
     curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
     curl_easy_setopt(curl, CURLOPT_PASSWORD, res_data.password.c_str());
-    curl_easy_setopt(curl, CURLOPT_FTP_RESPONSE_TIMEOUT, 30L);
-
+    curl_easy_setopt(curl, CURLOPT_FTP_RESPONSE_TIMEOUT,
+                     static_cast<long>(res_data.timeout_s));
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
+                     static_cast<long>(res_data.timeout_s));
     return {EC::Success, ""};
   }
 
@@ -2903,7 +3201,6 @@ public:
 
   std::pair<ECM, std::vector<PathInfo>> listdir(const std::string &path,
                                                 int max_time_ms = -1) override {
-    double start_time = timenow();
     std::string pathf = path;
     if (pathf.empty()) {
       return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
@@ -2923,10 +3220,19 @@ public:
 
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-
+    // 修复核心1：为curl设置全局超时，覆盖网络请求的全阶段（连接、响应、传输）
+    if (max_time_ms > 0) {
+      // CURLOPT_TIMEOUT_MS：整个curl操作的最大允许时间（毫秒），到时间自动终止请求
+      curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS,
+                       static_cast<long>(max_time_ms));
+    }
     CURLcode res = curl_easy_perform(curl);
-
-    if (res != CURLE_OK) {
+    if (res == CURLE_OPERATION_TIMEDOUT) {
+      free(chunk.memory);
+      return {ECM{EC::OperationTimeout,
+                  fmt::format("Curl Operation timeout: {}ms", max_time_ms)},
+              {}};
+    } else if (res != CURLE_OK) {
       free(chunk.memory);
       return {ECM{EC::FTPListFailed,
                   fmt::format("List failed: {}", curl_easy_strerror(res))},
@@ -2941,9 +3247,6 @@ public:
     std::string line;
 
     while (std::getline(iss, line)) {
-      if (max_time_ms > 0 && timenow() - start_time > max_time_ms) {
-        return {ECM{EC::Success, "Timeout"}, file_list};
-      }
       // Remove trailing \r (FTP uses CRLF)
       if (!line.empty() && line.back() == '\r') {
         line.pop_back();
@@ -3459,25 +3762,37 @@ public:
   }
 };
 
-class HostMaintainer {
+using AMCilent =
+    std::variant<std::shared_ptr<AMSFTPClient>, std::shared_ptr<AMFTPClient>>;
+std::optional<AMCilent>
+CreateClient(const ConRequst &requeset, ClientProtocol protocol,
+             ssize_t trace_num = 10, py::object trace_cb = py::none(),
+             ssize_t buffer_size = 8 * AMMB, std::vector<std::string> keys = {},
+             py::object auth_cb = py::none());
+
+class ClientMaintainer {
 private:
   std::unordered_map<std::string, std::shared_ptr<BaseClient>> hosts;
   std::atomic<bool> is_heartbeat;
   std::thread heartbeat_thread;
   py::function disconnect_cb;
   bool is_disconnect_cb = false;
+  std::recursive_mutex beat_mtx;
 
   void HeartbeatAct(int interval_s) {
     int millsecond = 0;
     ECM rcm;
     while (true) {
       // 遍历hosts字典
-      for (auto &host : hosts) {
-        rcm = host.second->Check();
-        if (rcm.first != EC::Success) {
-          if (is_disconnect_cb) {
-            py::gil_scoped_acquire acquire;
-            disconnect_cb(host.second, rcm);
+      {
+        std::lock_guard<std::recursive_mutex> lock(beat_mtx);
+        for (auto &host : hosts) {
+          rcm = host.second->Check();
+          if (rcm.first != EC::Success) {
+            if (is_disconnect_cb) {
+              py::gil_scoped_acquire acquire;
+              disconnect_cb(host.second, rcm);
+            }
           }
         }
       }
@@ -3493,15 +3808,22 @@ private:
   }
 
 public:
-  ~HostMaintainer() {
+  ~ClientMaintainer() {
     is_heartbeat.store(false);
     if (heartbeat_thread.joinable()) {
       heartbeat_thread.join();
     }
   }
 
-  HostMaintainer(int heartbeat_interval_s = 60,
-                 py::object disconnect_cb = py::none()) {
+  std::shared_ptr<BaseClient> GetHost(const std::string &nickname) {
+    if (hosts.find(nickname) == hosts.end()) {
+      return nullptr;
+    }
+    return hosts[nickname];
+  }
+
+  ClientMaintainer(int heartbeat_interval_s = 60,
+                   py::object disconnect_cb = py::none()) {
     this->is_heartbeat.store(true);
     heartbeat_thread = std::thread(
         [this, heartbeat_interval_s]() { HeartbeatAct(heartbeat_interval_s); });
@@ -3511,7 +3833,7 @@ public:
     }
   }
 
-  std::vector<std::string> get_hosts() {
+  std::vector<std::string> get_nicknames() {
     std::vector<std::string> host_list;
     for (auto &host : hosts) {
       host_list.push_back(host.first);
@@ -3519,39 +3841,66 @@ public:
     return host_list;
   }
 
-  std::vector<std::shared_ptr<BaseClient>> get_clients() {
-    std::vector<std::shared_ptr<BaseClient>> client_list;
+  std::optional<AMCilent> get_client(const std::string &nickname) {
+    if (hosts.find(nickname) == hosts.end()) {
+      return std::nullopt;
+    }
+    auto client = hosts[nickname];
+    if (client->GetProtocol() == ClientProtocol::SFTP) {
+      return std::dynamic_pointer_cast<AMSFTPClient>(client);
+    } else if (client->GetProtocol() == ClientProtocol::FTP) {
+      return std::dynamic_pointer_cast<AMFTPClient>(client);
+    }
+    return std::nullopt;
+  }
+
+  std::vector<AMCilent> get_clients() {
+    std::vector<AMCilent> client_list;
     for (auto &host : hosts) {
-      client_list.push_back(host.second);
+      if (host.second->GetProtocol() == ClientProtocol::SFTP) {
+        client_list.emplace_back(
+            std::dynamic_pointer_cast<AMSFTPClient>(host.second));
+      } else if (host.second->GetProtocol() == ClientProtocol::FTP) {
+        client_list.emplace_back(
+            std::dynamic_pointer_cast<AMFTPClient>(host.second));
+      }
     }
     return client_list;
   }
 
-  void add_host(const std::string &nickname, std::shared_ptr<BaseClient> client,
-                bool overwrite = false) {
+  void add_client(const std::string &nickname,
+                  std::shared_ptr<AMSFTPClient> client,
+                  bool overwrite = false) {
+    std::lock_guard<std::recursive_mutex> lock(beat_mtx);
     if (hosts.find(nickname) != hosts.end()) {
       if (!overwrite) {
         return;
       }
       hosts.erase(nickname);
     }
-    hosts[nickname] = client;
+
+    hosts[nickname] = std::dynamic_pointer_cast<BaseClient>(client);
+  }
+  void add_client(const std::string &nickname,
+                  std::shared_ptr<AMFTPClient> client, bool overwrite = false) {
+    std::lock_guard<std::recursive_mutex> lock(beat_mtx);
+    if (hosts.find(nickname) != hosts.end()) {
+      if (!overwrite) {
+        return;
+      }
+      hosts.erase(nickname);
+    }
+    hosts[nickname] = std::dynamic_pointer_cast<BaseClient>(client);
   }
 
-  void remove_host(const std::string &nickname) {
+  void remove_client(const std::string &nickname) {
+    std::lock_guard<std::recursive_mutex> lock(beat_mtx);
     if (hosts.find(nickname) != hosts.end()) {
       hosts.erase(nickname);
     }
   }
 
-  std::shared_ptr<BaseClient> get_host(const std::string &nickname) {
-    if (hosts.find(nickname) == hosts.end()) {
-      return nullptr;
-    }
-    return hosts[nickname];
-  }
-
-  ECM test_host(const std::string &nickname, bool update = false) {
+  ECM test_client(const std::string &nickname, bool update = false) {
     if (nickname.empty()) {
       return ECM{EC::InvalidArg, "Host nickname is empty"};
     } else if (hosts.find(nickname) == hosts.end()) {
@@ -3569,6 +3918,17 @@ public:
       return hosts[nickname]->Connect();
     }
   }
+
+  void SetDisconnectCallback(py::object callback = py::none()) {
+    std::lock_guard<std::recursive_mutex> lock(beat_mtx);
+    if (callback.is_none()) {
+      is_disconnect_cb = false;
+      disconnect_cb = py::function();
+    } else {
+      is_disconnect_cb = true;
+      disconnect_cb = py::cast<py::function>(callback);
+    }
+  };
 };
 
 class AMSFTPWorker {
@@ -3957,7 +4317,7 @@ private:
   }
 
   std::pair<ECM, PathInfo> Ustat(const std::string &path,
-                                 const std::shared_ptr<HostMaintainer> &hostm,
+                                 const std::shared_ptr<ClientMaintainer> &hostm,
                                  const std::string &nickname = "") {
     if (nickname.empty()) {
       auto res = AMFS::stat(path);
@@ -3966,11 +4326,11 @@ private:
       }
       return {ECM{EC::Success, ""}, res.second};
     }
-    ECM rc = hostm->test_host(nickname);
+    ECM rc = hostm->test_client(nickname);
     if (rc.first != EC::Success) {
       return {rc, PathInfo()};
     }
-    auto client = hostm->get_host(nickname);
+    auto client = hostm->GetHost(nickname);
     if (!client) {
       return {ECM{EC::NoSession, "Client not found"}, PathInfo()};
     }
@@ -3978,17 +4338,17 @@ private:
   }
 
   std::vector<PathInfo> Uiwalk(const std::string &path,
-                               const std::shared_ptr<HostMaintainer> &hostm,
+                               const std::shared_ptr<ClientMaintainer> &hostm,
                                const std::string &nickname = "",
                                bool ignore_special_file = true) {
     if (nickname.empty()) {
       return AMFS::iwalk(path, ignore_special_file);
     }
-    ECM rc = hostm->test_host(nickname);
+    ECM rc = hostm->test_client(nickname);
     if (rc.first != EC::Success) {
       return {};
     }
-    auto client = hostm->get_host(nickname);
+    auto client = hostm->GetHost(nickname);
     if (!client) {
       return {};
     }
@@ -4057,12 +4417,12 @@ private:
 
   std::tuple<ECM, std::shared_ptr<BaseClient>, std::shared_ptr<BaseClient>>
   TestHost(const TransferTask &task,
-           const std::shared_ptr<HostMaintainer> &hostm) {
+           const std::shared_ptr<ClientMaintainer> &hostm) {
     std::shared_ptr<BaseClient> src_client = nullptr;
     std::shared_ptr<BaseClient> dst_client = nullptr;
     ECM rcm = ECM{EC::Success, ""};
     if (!task.src_host.empty()) {
-      src_client = hostm->get_host(task.src_host);
+      src_client = hostm->GetHost(task.src_host);
       if (!src_client) {
         return {ECM{EC::NoSession,
                     fmt::format("Source host \"{}\" not found", task.src_host)},
@@ -4077,7 +4437,7 @@ private:
       }
     }
     if (!task.dst_host.empty()) {
-      dst_client = hostm->get_host(task.dst_host);
+      dst_client = hostm->GetHost(task.dst_host);
       if (!dst_client) {
         return {
             ECM{EC::NoSession, fmt::format("Destination host \"{}\" not found",
@@ -4236,7 +4596,7 @@ public:
   }
 
   TASKS transfer(const TASKS &tasks,
-                 const std::shared_ptr<HostMaintainer> &hostm,
+                 const std::shared_ptr<ClientMaintainer> &hostm,
                  ssize_t buffer_size = -1) {
     if (tasks.empty()) {
       return {};
@@ -4300,26 +4660,25 @@ public:
     return tasksf;
   }
 
-  std::pair<ECM, TASKS> load_tasks(const std::string &src,
-                                   const std::string &dst,
-                                   const std::shared_ptr<HostMaintainer> &hostm,
-                                   const std::string &src_host = "",
-                                   const std::string &dst_host = "",
-                                   bool overwrite = false, bool mkdir = true,
-                                   bool ignore_sepcial_file = true) {
+  std::pair<ECM, TASKS>
+  load_tasks(const std::string &src, const std::string &dst,
+             const std::shared_ptr<ClientMaintainer> &hostm,
+             const std::string &src_host = "", const std::string &dst_host = "",
+             bool overwrite = false, bool mkdir = true,
+             bool ignore_sepcial_file = true) {
     WRV result = {};
     TASKS tasks = {};
     ECM rc;
     std::shared_ptr<AMSFTPClient> src_client;
     // 去除src的dst左右端的空格
     if (!src_host.empty()) {
-      rc = hostm->test_host(src_host);
+      rc = hostm->test_client(src_host);
       if (rc.first != EC::Success) {
         return {rc, tasks};
       }
     }
     if (!dst_host.empty()) {
-      rc = hostm->test_host(dst_host);
+      rc = hostm->test_client(dst_host);
       if (rc.first != EC::Success) {
         return {rc, tasks};
       }
@@ -4336,7 +4695,7 @@ public:
     if (dst_host.empty()) {
       dstf = AMFS::abspath(dst);
     } else {
-      auto client = hostm->get_host(dst_host);
+      auto client = hostm->GetHost(dst_host);
       if (!client) {
         return {
             ECM(EC::NoSession,

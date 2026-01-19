@@ -13,6 +13,21 @@ constexpr ssize_t AMDefaultRemoteBufferSize = 1024 * 1024 * 8;
 constexpr ssize_t AMMinBufferSize = 1024 * 512;
 constexpr ssize_t AMMaxBufferSize = 1024 * 1024 * 64;
 
+// Socket wait direction
+enum class SocketWaitType {
+  Read,      // Wait for socket readable
+  Write,     // Wait for socket writable
+  ReadWrite, // Wait for both readable and writable
+  Auto       // Determine from libssh2_session_block_directions
+};
+
+enum class WaitResult {
+  Ready,       // Socket is ready for read/write
+  Timeout,     // Operation timed out
+  Interrupted, // Operation was interrupted by flag
+  Error        // Socket error occurred
+};
+
 enum class ErrorCode {
   Success = 0,
   // negative code represent libssh2 session error
