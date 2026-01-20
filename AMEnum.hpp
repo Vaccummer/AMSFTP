@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
@@ -145,6 +146,31 @@ enum class ErrorCode {
   FTPListFailed = 53,
 };
 
+enum class PathType {
+  BlockDevice = -1,
+  CharacterDevice = -2,
+  Socket = -3,
+  FIFO = -4,
+  Unknown = -5,
+  DIR = 0,
+  FILE = 1,
+  SYMLINK = 2
+};
+
+enum class SearchType { All = 0, File = 1, Directory = 2 };
+
+enum class SepType { Unix = 0, Windows = 1 };
+
+class InterruptFlag {
+private:
+  std::atomic<bool> is_interrupted = false;
+
+public:
+  inline bool check() { return is_interrupted.load(); }
+  inline void set(bool value) { is_interrupted.store(value); }
+  inline void reset() { is_interrupted.store(false); }
+};
+
 enum class MapType { Read = 0, Write = 1 };
 
 enum class OS_TYPE {
@@ -162,6 +188,7 @@ enum class ClientProtocol {
   Base = 0,
   SFTP = 1,
   FTP = 2,
+  LOCAL = 3
 };
 
 enum class BufferStatus {

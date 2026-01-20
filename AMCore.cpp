@@ -1,13 +1,6 @@
 #include "AMCore.hpp"
 using AMCilent =
     std::variant<std::shared_ptr<AMSFTPClient>, std::shared_ptr<AMFTPClient>>;
-std::atomic<bool> is_wsa_initialized(false);
-void cleanup_wsa() {
-  if (is_wsa_initialized) {
-    WSACleanup();
-    is_wsa_initialized = false;
-  }
-}
 std::optional<AMCilent> CreateClient(const ConRequst &requeset,
                                      ClientProtocol protocol, ssize_t trace_num,
                                      py::object trace_cb, ssize_t buffer_size,
