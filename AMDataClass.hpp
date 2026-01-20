@@ -6,9 +6,7 @@
 #include <cstdint>
 #include <fcntl.h>
 #include <memory>
-#include <stdio.h>
 #include <string>
-#include <time.h>
 #include <unordered_map>
 #include <vector>
 // 标准库
@@ -55,8 +53,6 @@
 #endif
 
 namespace py = pybind11;
-using PathInfo = AMFS::PathInfo;
-using PathType = AMFS::PathType;
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
@@ -66,6 +62,22 @@ inline double timenow() {
              std::chrono::system_clock::now().time_since_epoch())
       .count();
 }
+
+// 非阻塞调用结果
+template <typename T> struct NBResult {
+  T value;           // 函数返回值
+  WaitResult status; // 等待状态
+
+  bool ok() const { return status == WaitResult::Ready; }
+  bool is_timeout() const { return status == WaitResult::Timeout; }
+  bool is_interrupted() const { return status == WaitResult::Interrupted; }
+  bool is_error() const { return status == WaitResult::Error; }
+};
+
+struct MemoryStruct {
+  char *memory;
+  size_t size;
+};
 
 // 跨平台Socket连接器
 class SocketConnector {
@@ -428,7 +440,7 @@ struct TransferTask {
   std::string dst;
   std::string dst_host;
   uint64_t size;
-  AMFS::PathType path_type = PathType::FILE;
+  PathType path_type = PathType::FILE;
   bool IsSuccess = false;
   ECM rc = ECM(EC::Success, "");
   TransferTask() : src(""), src_host(""), dst(""), dst_host(""), size(0) {}
@@ -527,9 +539,9 @@ public:
     bool is_ok = false;
 
     if (map_type == MapType::Read) {
-      this->hFile = CreateFileW(AMFS::Str::AMStr(file_path).c_str(),
-                                GENERIC_READ, FILE_SHARE_READ, NULL,
-                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+      this->hFile = CreateFileW(AMStr::wstr(file_path).c_str(), GENERIC_READ,
+                                FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                FILE_ATTRIBUTE_NORMAL, NULL);
       if (this->hFile == INVALID_HANDLE_VALUE) {
         goto DONE;
       }
@@ -550,7 +562,7 @@ public:
       goto DONE;
     }
 
-    this->hFile = CreateFileW(AMFS::Str::AMStr(file_path).c_str(),
+    this->hFile = CreateFileW(AMStr::wstr(file_path).c_str(),
                               GENERIC_READ | GENERIC_WRITE, 0, NULL,
                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
 
