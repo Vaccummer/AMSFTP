@@ -1,6 +1,5 @@
 #pragma once
 // 标准库
-#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <ctime>
@@ -58,22 +57,19 @@
 // Wait result for non-blocking socket operations
 class AMLocalClient : public BaseClient {
 public:
-  AMLocalClient(ConRequst request, size_t buffer_capacity = 10,
+  AMLocalClient(ConRequst request, int buffer_capacity = 10,
                 const py::object &trace_cb = py::none())
       : BaseClient(request, buffer_capacity, trace_cb) {
     this->PROTOCOL = ClientProtocol::LOCAL;
   }
 
   ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
-            std::chrono::steady_clock::time_point start_time =
-                std::chrono::steady_clock::now()) override {
+            int64_t start_time = -1) override {
     return {EC::Success, ""};
   }
 
   ECM Connect(bool force = false, amf interrupt_flag = nullptr,
-              int timeout_ms = -1,
-              std::chrono::steady_clock::time_point start_time =
-                  std::chrono::steady_clock::now()) override {
+              int timeout_ms = -1, int64_t start_time = -1) override {
     return {EC::Success, ""};
   }
 
@@ -108,11 +104,12 @@ public:
 
   SR stat(const std::string &path, bool trace_link = false,
           amf interrupt_flag = nullptr, int timeout_ms = -1,
-          std::chrono::steady_clock::time_point start_time =
-              std::chrono::steady_clock::now()) override {
+          int64_t start_time = -1) override {
+    std::cout << "stat1: " << std::endl;
     if (path.empty()) {
       return {ECM{EC::InvalidArg, "Invalid empty path"}, PathInfo()};
     }
+    std::cout << "stat2: " << std::endl;
     PathInfo info;
     std::string pathf = path;
     fs::path p(pathf);
@@ -121,24 +118,28 @@ public:
     info.dir = p.parent_path().string();
     fs::file_status status;
     std::error_code ec;
+    std::cout << "stat3: " << std::endl;
     if (trace_link) {
       status = fs::status(p, ec);
     } else {
       status = fs::symlink_status(p, ec);
     }
+    std::cout << "stat4: " << std::endl;
     if (ec) {
       auto rcm =
           ECM{fec(ec), fmt::format("Stat {} failed: {}", pathf, ec.message())};
       trace(TraceLevel::Debug, rcm.first, pathf, "stat", rcm.second);
       return {rcm, info};
     }
+    std::cout << "stat5: " << std::endl;
     info.type = cast_fs_type(status.type());
-
+    std::cout << "stat6: " << std::endl;
     auto size_f = fs::file_size(p, ec);
+    std::cout << "stat7: " << std::endl;
     if (!ec) {
       info.size = size_f;
     }
-
+    std::cout << "stat8: " << std::endl;
 #ifdef _WIN32
     if (AMFS::is_readonly(AMStr::wstr(pathf))) {
       info.mode_int = 0333;
@@ -178,78 +179,16 @@ public:
     info.modify_time =
         timespec_to_double(file_stat.st_mtim); // st_mtim 是 timespec 类型
 #endif
+
 #ifdef __APPLE__
     info.create_time = timespec_to_double(file_stat.st_birthtimespec);
 #endif
     return {{EC::Success, ""}, info};
   }
 
-  std::pair<ECM, PathType>
-  get_path_type(const std::string &path, amf interrupt_flag = nullptr,
-                int timeout_ms = -1,
-                std::chrono::steady_clock::time_point start_time =
-                    std::chrono::steady_clock::now()) override {
-    if (path.empty()) {
-      return {ECM{EC::InvalidArg, "Invalid empty path"}, PathType::Unknown};
-    }
-    std::string pathf = path;
-    fs::path p(pathf);
-    fs::file_status status;
-    std::error_code ec;
-    status = fs::status(p, ec);
-    if (ec) {
-      return {ECM{fec(ec), fmt::format("Get path type {} failed: {}", pathf,
-                                       ec.message())},
-              PathType::Unknown};
-    }
-    return {ECM{EC::Success, ""}, cast_fs_type(status.type())};
-  }
-
-  std::pair<ECM, bool> exists(const std::string &path,
-                              amf interrupt_flag = nullptr, int timeout_ms = -1,
-                              std::chrono::steady_clock::time_point start_time =
-                                  std::chrono::steady_clock::now()) override {
-    if (path.empty()) {
-      return {ECM{EC::InvalidArg, "Invalid empty path"}, false};
-    }
-    return {ECM{EC::Success, ""}, fs::exists(fs::path(path))};
-  }
-  std::pair<ECM, bool>
-  is_regular(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) override {
-    if (path.empty()) {
-      return {ECM{EC::InvalidArg, "Invalid empty path"}, false};
-    }
-    return {ECM{EC::Success, ""}, fs::is_regular_file(fs::path(path))};
-  }
-  std::pair<ECM, bool> is_dir(const std::string &path,
-                              amf interrupt_flag = nullptr, int timeout_ms = -1,
-                              std::chrono::steady_clock::time_point start_time =
-                                  std::chrono::steady_clock::now()) override {
-    if (path.empty()) {
-      return {ECM{EC::InvalidArg, "Invalid empty path"}, false};
-    }
-    return {ECM{EC::Success, ""}, fs::is_directory(fs::path(path))};
-  }
-
-  std::pair<ECM, bool>
-  is_symlink(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) override {
-    if (path.empty()) {
-      return {ECM{EC::InvalidArg, "Invalid empty path"}, false};
-    }
-    return {ECM{EC::Success, ""}, fs::is_symlink(fs::path(path))};
-  }
-
   std::pair<ECM, std::vector<PathInfo>>
   listdir(const std::string &path, amf interrupt_flag = nullptr,
-          int timeout_ms = -1,
-          std::chrono::steady_clock::time_point start_time =
-              std::chrono::steady_clock::now()) override {
+          int timeout_ms = -1, int64_t start_time = -1) override {
     std::string pathf = path;
     std::vector<PathInfo> result = {};
     fs::path p(pathf);
@@ -268,20 +207,20 @@ public:
     std::variant<PathInfo, std::pair<std::string, std::exception>> sr;
     std::vector<std::string> dir_paths = {};
     std::error_code ec;
-    auto dir_iter = fs::directory_iterator(p, ec);
-    if (ec) {
-      return {ECM{fec(ec),
-                  fmt::format("Listdir {} failed: {}", pathf, ec.message())},
-              result};
-    }
-    for (const auto &entry : dir_iter) {
+
+    for (const auto &entry : fs::directory_iterator(p, ec)) {
       if (interrupt_flag && interrupt_flag->check()) {
         return {ECM{EC::Terminate, "Listdir interrupted by user"}, result};
       }
-      if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
-                                std::chrono::milliseconds(timeout_ms)) {
+      if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
         return {ECM{EC::OperationTimeout, "Listdir timeout"}, result};
       }
+      // 如果出现错误，则跳过当前文件
+      if (ec) {
+        ec.clear();
+        continue;
+      }
+
       auto [error, info] = stat(entry.path().string(), false);
       if (error.first != EC::Success) {
         continue;
@@ -291,77 +230,64 @@ public:
     return {ECM{EC::Success, ""}, result};
   }
 
-  inline void _iwalk(const std::string &path, std::vector<PathInfo> &result,
-                     bool ignore_sepcial_file, amf interrupt_flag = nullptr,
-                     int timeout_ms = -1,
-                     std::chrono::steady_clock::time_point start_time =
-                         std::chrono::steady_clock::now()) {
-    std::error_code ec;
-    auto iter = fs::directory_iterator(path, ec);
-    if (ec) {
-      return;
-    }
-    bool end_dir = true;
-    PathType type = PathType::Unknown;
-    for (const auto &entry : iter) {
-      if (interrupt_flag && interrupt_flag->check()) {
-        return;
-      }
-      if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
-                                std::chrono::milliseconds(timeout_ms)) {
-        return;
-      }
-      type = cast_fs_type(entry.status().type());
-      if (type == PathType::DIR) {
-        end_dir = false;
-        _iwalk(entry.path().string(), result, ignore_sepcial_file,
-               interrupt_flag, timeout_ms, start_time);
-      }
-      if (ignore_sepcial_file && type != PathType::FILE) {
-        continue;
-      }
-      auto [error, info] = stat(entry.path().string(), false);
-      if (error.first != EC::Success) {
-        continue;
-      }
-      result.push_back(info);
-    }
-    if (end_dir) {
-      auto [error2, info2] = stat(path, false);
-      if (error2.first != EC::Success) {
-        return;
-      }
-      result.push_back(info2);
-    }
-  }
-
   inline std::pair<ECM, std::vector<PathInfo>>
   iwalk(const std::string &path, bool ignore_sepcial_file = true,
         amf interrupt_flag = nullptr, int timeout_ms = -1,
-        std::chrono::steady_clock::time_point start_time =
-            std::chrono::steady_clock::now()) override {
+        int64_t start_time = -1) override {
     std::vector<PathInfo> result = {};
     auto [error, info] = stat(path);
     if (error.first != EC::Success) {
       return {error, result};
     }
     if (info.type != PathType::DIR) {
-      trace(TraceLevel::Debug, EC::NotADirectory, path, "iwalk",
-            fmt::format("Path is not a directory: {}", path));
-      return {ECM{EC::NotADirectory,
-                  fmt::format("Path is not a directory: {}", path)},
-              result};
+      return {error, {info}};
     }
-    _iwalk(path, result, ignore_sepcial_file, interrupt_flag, timeout_ms,
-           start_time);
+    std::unordered_set<std::string> all_dirs;   // 存储所有目录
+    std::unordered_set<std::string> has_subdir; // 存储有子目录的目录（非末级）
+    std::error_code ec;
+    // 取消其追踪symlink
+    for (const auto &entry : fs::recursive_directory_iterator(path, ec)) {
+      if (interrupt_flag && interrupt_flag->check()) {
+        return {ECM{EC::Terminate, "iwalk interrupted by user"}, result};
+      }
+      if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
+        return {ECM{EC::OperationTimeout, "iwalk timeout"}, result};
+      }
+      if (ec) {
+        ec.clear();
+        continue;
+      }
+      if (entry.is_regular_file()) {
+        auto [error, info] = stat(entry.path().string(), false);
+        if (error.first == EC::Success) {
+          result.push_back(info);
+        }
+        continue;
+      }
+      if (!entry.is_directory() && ignore_sepcial_file) {
+        continue;
+      }
+      all_dirs.insert(entry.path().string());
+      if (entry.path().parent_path() != entry.path()) {
+        has_subdir.insert(entry.path().parent_path().string());
+      }
+    }
+    result.reserve(result.size() + all_dirs.size() - has_subdir.size());
+    for (const auto &dir : all_dirs) {
+      if (has_subdir.find(dir) == has_subdir.end()) {
+        auto [error, info] = stat(dir, false);
+        if (error.first == EC::Success) {
+          result.push_back(info);
+        }
+      }
+    }
     return {ECM{EC::Success, ""}, result};
   }
 
   inline void _walk(std::vector<std::string> parts, WRD &result, int cur_depth,
                     int max_depth, bool ignore_sepcial_file = true,
                     amf interrupt_flag = nullptr, int timeout_ms = -1,
-                    std::chrono::steady_clock::time_point start_time =
-                        std::chrono::steady_clock::now()) {
+                    int64_t start_time = -1) {
     if (max_depth > 0 && cur_depth > max_depth) {
       return;
     }
@@ -390,11 +316,11 @@ public:
     result.push_back(std::make_pair(parts, files_info));
   }
 
-  inline std::pair<ECM, WRD>
-  walk(const std::string &path, int max_depth, bool ignore_sepcial_file = true,
-       amf interrupt_flag = nullptr, int timeout_ms = -1,
-       std::chrono::steady_clock::time_point start_time =
-           std::chrono::steady_clock::now()) override {
+  inline std::pair<ECM, WRD> walk(const std::string &path, int max_depth,
+                                  bool ignore_sepcial_file = true,
+                                  amf interrupt_flag = nullptr,
+                                  int timeout_ms = -1,
+                                  int64_t start_time = -1) override {
     WRD result = {};
     auto [error, info] = stat(path);
     if (error.first != EC::Success) {
@@ -412,10 +338,9 @@ public:
 
     return {{EC::Success, ""}, result};
   }
+
   ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
-            int timeout_ms = -1,
-            std::chrono::steady_clock::time_point start_time =
-                std::chrono::steady_clock::now()) override {
+            int timeout_ms = -1, int64_t start_time = -1) override {
     if (path.empty()) {
       return ECM{EC::InvalidArg, "Invalid empty path"};
     }
@@ -431,9 +356,7 @@ public:
   }
 
   ECM mkdirs(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) override {
+             int timeout_ms = -1, int64_t start_time = -1) override {
     if (path.empty()) {
       return ECM{EC::InvalidArg, "Invalid empty path"};
     }
@@ -450,9 +373,7 @@ public:
 
   ECM rename(const std::string &src, const std::string &dst, bool mkdir = true,
              bool overwrite = false, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) override {
+             int timeout_ms = -1, int64_t start_time = -1) override {
     if (src.empty() || dst.empty()) {
       return ECM{EC::InvalidArg, "Invalid empty path"};
     }
@@ -502,9 +423,7 @@ public:
   }
 
   ECM rmdir(const std::string &path, amf interrupt_flag = nullptr,
-            int timeout_ms = -1,
-            std::chrono::steady_clock::time_point start_time =
-                std::chrono::steady_clock::now()) override {
+            int timeout_ms = -1, int64_t start_time = -1) override {
     if (path.empty()) {
       return ECM{EC::InvalidArg, "Invalid empty path"};
     }
@@ -525,9 +444,7 @@ public:
   }
 
   ECM rmfile(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) override {
+             int timeout_ms = -1, int64_t start_time = -1) override {
     if (path.empty()) {
       return ECM{EC::InvalidArg, "Invalid empty path"};
     }
@@ -549,8 +466,7 @@ public:
 
   void _remove(const std::string &path, RMR &errors,
                amf interrupt_flag = nullptr, int timeout_ms = -1,
-               std::chrono::steady_clock::time_point start_time =
-                   std::chrono::steady_clock::now()) {
+               int64_t start_time = -1) {
     std::error_code ec;
     auto [error, listing] =
         listdir(path, interrupt_flag, timeout_ms, start_time);
@@ -578,8 +494,7 @@ public:
   }
   std::pair<ECM, RMR> remove(const std::string &path,
                              amf interrupt_flag = nullptr, int timeout_ms = -1,
-                             std::chrono::steady_clock::time_point start_time =
-                                 std::chrono::steady_clock::now()) override {
+                             int64_t start_time = -1) override {
     if (path.empty()) {
       return {ECM{EC::InvalidArg, "Invalid empty path"}, RMR{}};
     }
@@ -603,9 +518,7 @@ public:
   }
 
   ECM saferm(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) override {
+             int timeout_ms = -1, int64_t start_time = -1) override {
     if (path.empty()) {
       return ECM{EC::InvalidArg, "Invalid empty path"};
     }

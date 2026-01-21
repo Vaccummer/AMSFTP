@@ -80,11 +80,11 @@ protected:
   std::atomic<bool> has_connected;
   SOCKET sock = INVALID_SOCKET;
   // Optimized wait_for_socket: reduces overhead from frequent calls
-  inline WaitResult
-  wait_for_socket(SocketWaitType wait_dir, const amf &flag = nullptr,
-                  std::chrono::steady_clock::time_point start_time =
-                      std::chrono::steady_clock::now(),
-                  int64_t timeout_ms = -1, int poll_interval_ms = 20) {
+  inline WaitResult wait_for_socket(SocketWaitType wait_dir,
+                                    const amf &flag = nullptr,
+                                    int64_t start_time = -1,
+                                    int64_t timeout_ms = -1,
+                                    int poll_interval_ms = 20) {
     // Fast path: check if socket is already ready without select
     if (wait_dir == SocketWaitType::Auto) {
       int dir = libssh2_session_block_directions(session);
@@ -98,10 +98,7 @@ protected:
       return WaitResult::Interrupted;
     }
     if (timeout_ms > 0) {
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         std::chrono::steady_clock::now() - start_time)
-                         .count();
-      if (elapsed >= timeout_ms) {
+      if (am_ms() - start_time >= timeout_ms) {
         return WaitResult::Timeout;
       }
     }
@@ -176,66 +173,16 @@ protected:
         return WaitResult::Interrupted;
       }
       if (timeout_ms > 0) {
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::steady_clock::now() - start_time)
-                           .count();
-        if (elapsed >= timeout_ms) {
+        if (am_ms() - start_time >= timeout_ms) {
           return WaitResult::Timeout;
         }
       }
     }
   }
 
-  // 非阻塞执行 libssh2 函数（返回 int 类型，EAGAIN 表示需要等待）
-  // 用法: auto result = nb_exec(flag, timeout_ms, libssh2_sftp_unlink, sftp,
-  // path);
-  template <typename Func, typename... Args>
-  auto nb_exec(const amf &interrupt_flag, int64_t timeout_ms, Func &&func,
-               Args &&...args)
-      -> NBResult<decltype(func(std::forward<Args>(args)...))> {
-    using RetType = decltype(func(std::forward<Args>(args)...));
-
-    auto time_start = std::chrono::steady_clock::now();
-    libssh2_session_set_blocking(session, 0);
-
-    RetType rc;
-    WaitResult wr = WaitResult::Ready;
-
-    while (true) {
-      rc = func(std::forward<Args>(args)...);
-
-      // 对于返回 int 的函数，EAGAIN 表示需要等待
-      if constexpr (std::is_same_v<RetType, int> ||
-                    std::is_same_v<RetType, ssize_t>) {
-        if (rc != LIBSSH2_ERROR_EAGAIN) {
-          break;
-        }
-      }
-      // 对于返回指针的函数，nullptr + EAGAIN 表示需要等待
-      else if constexpr (std::is_pointer_v<RetType>) {
-        if (rc != nullptr ||
-            libssh2_session_last_errno(session) != LIBSSH2_ERROR_EAGAIN) {
-          break;
-        }
-      } else {
-        break; // 其他类型直接返回
-      }
-
-      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
-                           timeout_ms);
-      if (wr != WaitResult::Ready) {
-        libssh2_session_set_blocking(session, 1);
-        return {rc, wr};
-      }
-    }
-
-    libssh2_session_set_blocking(session, 1);
-    return {rc, WaitResult::Ready};
-  }
-
   ECM ErrorRecord(int code, TraceLevel level, const std::string &taregt,
                   const std::string &action, std::string prompt = "") {
-    if (code < 0) {
+    if (code >= 0) {
       return {EC::Success, ""};
     }
     auto ec = GetLastEC();
@@ -317,10 +264,50 @@ protected:
     return {EC::Success, ""};
   }
 
+  // 便捷宏/lambda 版本，用于更简洁的调用
+  // 用法: auto result = nb_call(flag, timeout, [&]{ return
+  // libssh2_sftp_unlink(sftp, path); });
+  template <typename Func>
+  auto nb_call(const amf interrupt_flag, int64_t timeout_ms, int64_t start_time,
+               Func &&func) -> NBResult<decltype(func())> {
+    using RetType = decltype(func());
+
+    libssh2_session_set_blocking(session, 0);
+
+    RetType rc;
+    WaitResult wr = WaitResult::Ready;
+
+    while (true) {
+      rc = func();
+
+      if constexpr (std::is_same_v<RetType, int> ||
+                    std::is_same_v<RetType, ssize_t>) {
+        if (rc != LIBSSH2_ERROR_EAGAIN) {
+          break;
+        }
+      } else if constexpr (std::is_pointer_v<RetType>) {
+        if (rc != nullptr ||
+            libssh2_session_last_errno(session) != LIBSSH2_ERROR_EAGAIN) {
+          break;
+        }
+      } else {
+        break;
+      }
+
+      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, start_time,
+                           timeout_ms, poll_interval_ms);
+      if (wr != WaitResult::Ready) {
+        libssh2_session_set_blocking(session, 1);
+        return {rc, wr};
+      }
+    }
+
+    libssh2_session_set_blocking(session, 1);
+    return {rc, WaitResult::Ready};
+  }
+
 private:
   ECM CurError = {EC::NoConnection, "Connection not established"};
-  std::mutex state_mtx;
-
   bool password_auth_cb = false;
   std::vector<std::string> private_keys;
   py::function auth_cb = py::function(); // Callable[[IsPasswordDemand:bool,
@@ -366,8 +353,6 @@ public:
   LIBSSH2_SESSION *session = nullptr;
   LIBSSH2_SFTP *sftp = nullptr;
   ConRequst res_data;
-  std::recursive_mutex mtx; // lock of the session and sftp
-
   virtual ~AMSession() { Disconnect(); }
 
   AMSession(const ConRequst &request,
@@ -386,49 +371,6 @@ public:
     has_connected.store(false);
   }
 
-  // 便捷宏/lambda 版本，用于更简洁的调用
-  // 用法: auto result = nb_call(flag, timeout, [&]{ return
-  // libssh2_sftp_unlink(sftp, path); });
-  template <typename Func>
-  auto nb_call(const amf interrupt_flag, int64_t timeout_ms,
-               std::chrono::steady_clock::time_point start_time, Func &&func)
-      -> NBResult<decltype(func())> {
-    using RetType = decltype(func());
-
-    libssh2_session_set_blocking(session, 0);
-
-    RetType rc;
-    WaitResult wr = WaitResult::Ready;
-
-    while (true) {
-      rc = func();
-
-      if constexpr (std::is_same_v<RetType, int> ||
-                    std::is_same_v<RetType, ssize_t>) {
-        if (rc != LIBSSH2_ERROR_EAGAIN) {
-          break;
-        }
-      } else if constexpr (std::is_pointer_v<RetType>) {
-        if (rc != nullptr ||
-            libssh2_session_last_errno(session) != LIBSSH2_ERROR_EAGAIN) {
-          break;
-        }
-      } else {
-        break;
-      }
-
-      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, start_time,
-                           timeout_ms, poll_interval_ms);
-      if (wr != WaitResult::Ready) {
-        libssh2_session_set_blocking(session, 1);
-        return {rc, wr};
-      }
-    }
-
-    libssh2_session_set_blocking(session, 1);
-    return {rc, WaitResult::Ready};
-  }
-
   std::vector<std::string> GetKeys() { return this->private_keys; }
 
   void SetKeys(const std::vector<std::string> &keys) {
@@ -436,19 +378,19 @@ public:
   }
 
   ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
-            std::chrono::steady_clock::time_point start_time =
-                std::chrono::steady_clock::now()) override {
+            int64_t start_time = -1) override {
     auto rcm = stat(".", false, interrupt_flag, timeout_ms, start_time).first;
     SetState(rcm);
     return rcm;
   }
 
   ECM BaseConnect(bool force = false, amf interrupt_flag = nullptr,
-                  std::chrono::steady_clock::time_point start_time =
-                      std::chrono::steady_clock::now(),
-                  int timeout_ms = -1) {
+                  int64_t start_time = -1, int timeout_ms = -1) {
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    start_time = start_time == -1 ? am_ms() : start_time;
+    std::cout << "baseconnect start_time: " << start_time << std::endl;
+    std::cout << "baseconnect timeout_ms: " << timeout_ms << std::endl;
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (has_connected.load()) {
       if (!force) {
@@ -481,10 +423,7 @@ public:
       return {EC::Terminate, "Connection interrupted"};
     }
     if (timeout_ms > 0) {
-      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                         std::chrono::steady_clock::now() - start_time)
-                         .count();
-      if (elapsed >= timeout_ms) {
+      if (am_ms() - start_time >= timeout_ms) {
         return {EC::OperationTimeout, "Connection timed out"};
       }
     }
@@ -506,14 +445,19 @@ public:
     }
 
     // 非阻塞握手
-    while ((rcr = libssh2_session_handshake(session, sock)) ==
-           LIBSSH2_ERROR_EAGAIN) {
+    while (true) {
+      rcr = libssh2_session_handshake(session, sock);
       wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, start_time,
                            timeout_ms);
       if (wr != WaitResult::Ready) {
         goto interrupted_or_sock_error;
       }
+      if (rcr != LIBSSH2_ERROR_EAGAIN) {
+        break;
+      }
+      std::cout << "libssh2_session_handshake: " << rcr << std::endl;
     }
+    std::cout << "libssh2_session_handshake2: " << rcr << std::endl;
     rcm = ErrorRecord(rcr, TraceLevel::Critical, fmt::format("socket {}", sock),
                       "libssh2_session_handshake");
     if (rcm.first != EC::Success) {
@@ -690,8 +634,7 @@ public:
     case WaitResult::Error:
       return {EC::SocketRecvError, "Socket error during handshake"};
     default:
-      return {EC::UnknownError,
-              "Logic error, waitresult is ok but enter fail branch"};
+      return rcm;
     }
   }
 
@@ -810,16 +753,12 @@ private:
     return info;
   }
 
-  std::pair<ECM, std::string>
-  lib_realpath(const std::string &path, amf interrupt_flag = nullptr,
-               int timeout_ms = -1,
-               std::chrono::steady_clock::time_point start_time =
-                   std::chrono::steady_clock::now()) {
+  std::pair<ECM, std::string> lib_realpath(const std::string &path,
+                                           amf interrupt_flag = nullptr,
+                                           int timeout_ms = -1,
+                                           int64_t start_time = -1) {
     if (!sftp) {
       return {ECM{EC::NoConnection, "SFTP not initialized"}, ""};
-    }
-    if (interrupt_flag && interrupt_flag->check()) {
-      return {ECM{EC::Terminate, "Interrupted by user"}, ""};
     }
     char path_t[1024] = {0};
     auto nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
@@ -833,9 +772,7 @@ private:
 
   ECM lib_rename(const std::string &src, const std::string &dst,
                  const bool &overwrite, amf interrupt_flag = nullptr,
-                 int timeout_ms = -1,
-                 std::chrono::steady_clock::time_point start_time =
-                     std::chrono::steady_clock::now()) {
+                 int timeout_ms = -1, int64_t start_time = -1) {
     if (!sftp) {
       return std::make_pair(EC::NoConnection, "SFTP not initialized");
     }
@@ -864,14 +801,9 @@ private:
   std::pair<ECM, LIBSSH2_SFTP_ATTRIBUTES>
   lib_getstat(const std::string &path, bool trace_link = false,
               amf interrupt_flag = nullptr, int timeout_ms = -1,
-              std::chrono::steady_clock::time_point start_time =
-                  std::chrono::steady_clock::now()) {
+              int64_t start_time = -1) {
     if (!sftp) {
       return {ECM{EC::NoConnection, "SFTP not initialized"},
-              LIBSSH2_SFTP_ATTRIBUTES()};
-    }
-    if (interrupt_flag && interrupt_flag->check()) {
-      return {ECM{EC::Terminate, "Interrupted by user"},
               LIBSSH2_SFTP_ATTRIBUTES()};
     }
     LIBSSH2_SFTP_ATTRIBUTES attrs;
@@ -892,14 +824,11 @@ private:
 
   ECM lib_setstat(const std::string &path, LIBSSH2_SFTP_ATTRIBUTES &attrs,
                   amf interrupt_flag = nullptr, int timeout_ms = -1,
-                  std::chrono::steady_clock::time_point start_time =
-                      std::chrono::steady_clock::now()) {
+                  int64_t start_time = -1) {
     if (!sftp) {
       return {EC::NoConnection, "SFTP not initialized"};
     }
-    if (interrupt_flag && interrupt_flag->check()) {
-      return {EC::Terminate, "Interrupted by user"};
-    }
+
     auto nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
       return libssh2_sftp_setstat(sftp, path.c_str(), &attrs);
     });
@@ -908,14 +837,9 @@ private:
   }
 
   ECM lib_unlink(const std::string &path, amf interrupt_flag = nullptr,
-                 int timeout_ms = -1,
-                 std::chrono::steady_clock::time_point start_time =
-                     std::chrono::steady_clock::now()) {
+                 int timeout_ms = -1, int64_t start_time = -1) {
     if (!sftp) {
       return {EC::NoConnection, "SFTP not initialized"};
-    }
-    if (interrupt_flag && interrupt_flag->check()) {
-      return {EC::Terminate, "Interrupted by user"};
     }
 
     auto nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
@@ -926,14 +850,9 @@ private:
   }
 
   ECM lib_rmdir(const std::string &path, amf interrupt_flag = nullptr,
-                int timeout_ms = -1,
-                std::chrono::steady_clock::time_point start_time =
-                    std::chrono::steady_clock::now()) {
+                int timeout_ms = -1, int64_t start_time = -1) {
     if (!sftp) {
       return {EC::NoConnection, "SFTP not initialized"};
-    }
-    if (interrupt_flag && interrupt_flag->check()) {
-      return {EC::Terminate, "Interrupted by user"};
     }
 
     auto nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
@@ -944,14 +863,9 @@ private:
   }
 
   ECM lib_mkdir(const std::string &path, amf interrupt_flag = nullptr,
-                int timeout_ms = -1,
-                std::chrono::steady_clock::time_point start_time =
-                    std::chrono::steady_clock::now()) {
+                int timeout_ms = -1, int64_t start_time = -1) {
     if (!sftp) {
       return {EC::NoConnection, "SFTP not initialized"};
-    }
-    if (interrupt_flag && interrupt_flag->check()) {
-      return {EC::Terminate, "Interrupted by user"};
     }
 
     auto nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
@@ -963,14 +877,9 @@ private:
 
   std::pair<ECM, std::vector<std::pair<std::string, LIBSSH2_SFTP_ATTRIBUTES>>>
   lib_listdir(const std::string &path, amf interrupt_flag = nullptr,
-              int timeout_ms = -1,
-              std::chrono::steady_clock::time_point start_time =
-                  std::chrono::steady_clock::now()) {
+              int timeout_ms = -1, int64_t start_time = -1) {
     if (!sftp) {
       return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
-    }
-    if (interrupt_flag && interrupt_flag->check()) {
-      return {ECM{EC::Terminate, "Interrupted by user"}, {}};
     }
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     std::vector<std::pair<std::string, LIBSSH2_SFTP_ATTRIBUTES>> file_list = {};
@@ -991,8 +900,7 @@ private:
     NBResult<int> read_res;
 
     while (true) {
-      if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
-                                std::chrono::milliseconds(timeout_ms)) {
+      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
         rcm = ECM{EC::OperationTimeout,
                   fmt::format("Path: {} readdir timeout", path)};
         break;
@@ -1037,8 +945,7 @@ protected:
   void _iwalk(const std::string &path, const LIBSSH2_SFTP_ATTRIBUTES &attrs,
               WRV &result, bool ignore_sepcial_file = true,
               amf interrupt_flag = nullptr, int timeout_ms = -1,
-              std::chrono::steady_clock::time_point start_time =
-                  std::chrono::steady_clock::now()) {
+              int64_t start_time = -1) {
     // 搜索目录下所有最深层的路径, 用于递归传输路径
     if (interrupt_flag && interrupt_flag->check()) {
       return;
@@ -1068,8 +975,7 @@ protected:
       if (interrupt_flag && interrupt_flag->check()) {
         return;
       }
-      if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
-                                std::chrono::milliseconds(timeout_ms)) {
+      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
         return;
       }
       _iwalk(attrs.first, attrs.second, result, ignore_sepcial_file,
@@ -1080,9 +986,7 @@ protected:
   void _walk(const std::vector<std::string> &parts, WRD &result,
              int cur_depth = 0, int max_depth = -1,
              bool ignore_sepcial_file = true, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) {
+             int timeout_ms = -1, int64_t start_time = -1) {
     if (max_depth != -1 && cur_depth > max_depth) {
       return;
     }
@@ -1106,8 +1010,7 @@ protected:
       if (interrupt_flag && interrupt_flag->check()) {
         return;
       }
-      if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
-                                std::chrono::milliseconds(timeout_ms)) {
+      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
         return;
       }
       if (isdir(attrs)) {
@@ -1130,8 +1033,7 @@ protected:
 
   void _rm(const std::string &path, const LIBSSH2_SFTP_ATTRIBUTES &attrs,
            RMR &errors, amf interrupt_flag = nullptr, int timeout_ms = -1,
-           std::chrono::steady_clock::time_point start_time =
-               std::chrono::steady_clock::now()) {
+           int64_t start_time = -1) {
     if (interrupt_flag && interrupt_flag->check()) {
       return;
     }
@@ -1171,9 +1073,7 @@ protected:
   void _chmod(const std::string &path, uint64_t mode, bool recursive,
               std::unordered_map<std::string, ECM> &errors,
               LIBSSH2_SFTP_ATTRIBUTES attrs, amf interrupt_flag = nullptr,
-              int timeout_ms = -1,
-              std::chrono::steady_clock::time_point start_time =
-                  std::chrono::steady_clock::now()) {
+              int timeout_ms = -1, int64_t start_time = -1) {
     if (interrupt_flag && interrupt_flag->check()) {
       return;
     }
@@ -1215,8 +1115,7 @@ protected:
         if (interrupt_flag && interrupt_flag->check()) {
           return;
         }
-        if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
-                                  std::chrono::milliseconds(timeout_ms)) {
+        if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
           return;
         }
         _chmod(item.first, mode, recursive, errors, item.second, interrupt_flag,
@@ -1270,12 +1169,12 @@ public:
         break;
       }
 
-      auto start = std::chrono::steady_clock::now();
+      auto start = -1;
 
       // stat "/" 是最轻量的操作
       int rc = libssh2_sftp_stat(sftp, "/", &attrs);
 
-      auto end = std::chrono::steady_clock::now();
+      auto end = -1;
 
       if (rc == 0) {
         double rtt_ms =
@@ -1304,7 +1203,7 @@ public:
       return {ECM{EC::NoConnection, "Channel not initialized"}, {"", -1}};
     }
 
-    auto time_start = std::chrono::steady_clock::now();
+    auto time_start = -1;
     int exit_status = -1;
     std::string output;
     std::array<char, 4096> buffer;
@@ -1466,8 +1365,7 @@ public:
     if (!home_dir.empty()) {
       return home_dir;
     }
-    auto [rcm, path_obj] =
-        realpath("", nullptr, 3000, std::chrono::steady_clock::now());
+    auto [rcm, path_obj] = realpath("", nullptr, 3000, -1);
     if (rcm.first == EC::Success) {
       home_dir = path_obj;
       return home_dir;
@@ -1494,10 +1392,10 @@ public:
   }
 
   ECM Connect(bool force = false, amf interrupt_flag = nullptr,
-              int timeout_ms = -1,
-              std::chrono::steady_clock::time_point start_time =
-                  std::chrono::steady_clock::now()) override {
+              int timeout_ms = -1, int64_t start_time = -1) override {
     bool not_init = has_connected;
+    std::cout << "connect start_time: " << start_time << std::endl;
+    std::cout << "connect timeout_ms: " << timeout_ms << std::endl;
     ECM ecm = BaseConnect(force, interrupt_flag, start_time, timeout_ms);
     if (!not_init && isok(ecm)) {
       GetOSType();
@@ -1508,11 +1406,10 @@ public:
 
   // 解析并返回绝对路径,
   // ~在client中解析，..和.其他由服务器解析，有这些符号时需要路径真实存在
-  std::pair<ECM, std::string>
-  realpath(const std::string &path, amf interrupt_flag = nullptr,
-           int timeout_ms = -1,
-           std::chrono::steady_clock::time_point start_time =
-               std::chrono::steady_clock::now()) override {
+  std::pair<ECM, std::string> realpath(const std::string &path,
+                                       amf interrupt_flag = nullptr,
+                                       int timeout_ms = -1,
+                                       int64_t start_time = -1) override {
     auto pathf = path;
     ECM rcm = _precheck(path);
     if (rcm.first != EC::Success) {
@@ -1526,8 +1423,7 @@ public:
     }
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    interrupt_flag =
-        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    start_time = start_time == -1 ? am_ms() : start_time;
 
     auto [rcm2, path_t] =
         lib_realpath(path, interrupt_flag, timeout_ms, start_time);
@@ -1544,15 +1440,14 @@ public:
   std::pair<ECM, std::unordered_map<std::string, ECM>>
   chmod(const std::string &path, std::variant<std::string, uint64_t> mode,
         bool recursive = false, amf interrupt_flag = nullptr,
-        int timeout_ms = -1,
-        std::chrono::steady_clock::time_point start_time =
-            std::chrono::steady_clock::now()) override {
+        int timeout_ms = -1, int64_t start_time = -1) override {
     if (static_cast<int>(GetOSType()) <= 0) {
       return {ECM{EC::UnImplentedMethod, "Chmod only supported on Unix System"},
               {}};
     }
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    start_time = start_time == -1 ? am_ms() : start_time;
     std::lock_guard<std::recursive_mutex> lock(mtx);
     auto [rcm, attrs] =
         lib_getstat(path, false, interrupt_flag, timeout_ms, start_time);
@@ -1596,14 +1491,15 @@ public:
   // 获取路径信息，自带AMFS::abspath
   SR stat(const std::string &path, bool trace_link = false,
           amf interrupt_flag = nullptr, int timeout_ms = -1,
-          std::chrono::steady_clock::time_point start_time =
-              std::chrono::steady_clock::now()) override {
+          int64_t start_time = -1) override {
     ECM rcm = _precheck(path);
     if (rcm.first != EC::Success) {
       return {rcm, PathInfo()};
     }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    start_time = start_time == -1 ? am_ms() : start_time;
     auto [rcm2, attrs] =
         lib_getstat(path, trace_link, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
@@ -1612,88 +1508,19 @@ public:
     return {rcm, FormatStat(path, attrs)};
   }
 
-  std::pair<ECM, PathType>
-  get_path_type(const std::string &path, amf interrupt_flag = nullptr,
-                int timeout_ms = -1,
-                std::chrono::steady_clock::time_point start_time =
-                    std::chrono::steady_clock::now()) override {
-    auto [rcm, path_info] =
-        stat(path, false, interrupt_flag, timeout_ms, start_time);
-    if (rcm.first != EC::Success) {
-      return {ECM{rcm.first, rcm.second}, PathType::Unknown};
-    }
-    return {rcm, path_info.type};
-  }
-
-  // 判断路径是否存在，自带AMFS::abspath
-  std::pair<ECM, bool> exists(const std::string &path,
-                              amf interrupt_flag = nullptr, int timeout_ms = -1,
-                              std::chrono::steady_clock::time_point start_time =
-                                  std::chrono::steady_clock::now()) override {
-    auto [rcm, path_info] =
-        stat(path, false, interrupt_flag, timeout_ms, start_time);
-    if (rcm.first == EC::Success) {
-      return {rcm, true};
-    } else if (rcm.first == EC::PathNotExist || rcm.first == EC::FileNotExist) {
-      return {{EC::Success, ""}, false};
-    } else {
-      return {rcm, false};
-    }
-  }
-
-  std::pair<ECM, bool>
-  is_regular(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) override {
-    auto [rcm, path_info] =
-        stat(path, false, interrupt_flag, timeout_ms, start_time);
-    if (rcm.first != EC::Success) {
-      return {rcm, false};
-    }
-    return {ECM{EC::Success, ""},
-            path_info.type == PathType::FILE ? true : false};
-  }
-
-  std::pair<ECM, bool> is_dir(const std::string &path,
-                              amf interrupt_flag = nullptr, int timeout_ms = -1,
-                              std::chrono::steady_clock::time_point start_time =
-                                  std::chrono::steady_clock::now()) override {
-    auto [rcm, path_info] =
-        stat(path, false, interrupt_flag, timeout_ms, start_time);
-    if (rcm.first != EC::Success) {
-      return {rcm, false};
-    }
-    return {ECM{EC::Success, ""},
-            path_info.type == PathType::DIR ? true : false};
-  }
-
-  std::pair<ECM, bool>
-  is_symlink(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) override {
-    auto [rcm, path_info] =
-        stat(path, false, interrupt_flag, timeout_ms, start_time);
-    if (rcm.first != EC::Success) {
-      return {rcm, false};
-    }
-    return {ECM{EC::Success, ""},
-            path_info.type == PathType::SYMLINK ? true : false};
-  }
-
   std::pair<ECM, std::vector<PathInfo>>
   listdir(const std::string &path, amf interrupt_flag = nullptr,
-          int timeout_ms = -1,
-          std::chrono::steady_clock::time_point start_time =
-              std::chrono::steady_clock::now()) override {
+          int timeout_ms = -1, int64_t start_time = -1) override {
+
     ECM rcm = _precheck(path);
+
     if (rcm.first != EC::Success) {
       return {rcm, {}};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    start_time = start_time == -1 ? am_ms() : start_time;
     auto [rcm2, attr_list] =
         lib_listdir(path, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
@@ -1824,24 +1651,21 @@ def _amsftp_gen(next_func):
 
   // 创建一级目录，自带AMFS::abspath
   ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
-            int timeout_ms = -1,
-            std::chrono::steady_clock::time_point start_time =
-                std::chrono::steady_clock::now()) override {
+            int timeout_ms = -1, int64_t start_time = -1) override {
     ECM rcm = _precheck(path);
     if (rcm.first != EC::Success) {
       return rcm;
     }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    std::lock_guard<std::recursive_mutex> lock(mtx);
+    start_time = start_time == -1 ? am_ms() : start_time;
     return lib_mkdir(path, interrupt_flag, timeout_ms, start_time);
   }
 
   // 递归创建多级目录，直到报错为止，自带AMFS::abspath
   ECM mkdirs(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) override {
+             int timeout_ms = -1, int64_t start_time = -1) override {
     ECM rcm = _precheck(path);
     if (rcm.first != EC::Success) {
       return rcm;
@@ -1849,6 +1673,7 @@ def _amsftp_gen(next_func):
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    start_time = start_time == -1 ? am_ms() : start_time;
     std::vector<std::string> parts = AMPathStr::split(path);
     if (parts.empty()) {
       return {EC::InvalidArg,
@@ -1869,34 +1694,35 @@ def _amsftp_gen(next_func):
   }
 
   ECM rmfile(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) override {
+             int timeout_ms = -1, int64_t start_time = -1) override {
     ECM rcm = _precheck(path);
     if (rcm.first != EC::Success) {
       return rcm;
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    start_time = start_time == -1 ? am_ms() : start_time;
     return lib_unlink(path, interrupt_flag, timeout_ms, start_time);
   }
 
   ECM rmdir(const std::string &path, amf interrupt_flag = nullptr,
-            int timeout_ms = -1,
-            std::chrono::steady_clock::time_point start_time =
-                std::chrono::steady_clock::now()) override {
+            int timeout_ms = -1, int64_t start_time = -1) override {
     ECM rcm = _precheck(path);
     if (rcm.first != EC::Success) {
       return rcm;
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    start_time = start_time == -1 ? am_ms() : start_time;
     return lib_rmdir(path, interrupt_flag, timeout_ms, start_time);
   }
 
   // 删除文件或目录，自带AMFS::abspath
   std::pair<ECM, RMR> remove(const std::string &path,
                              amf interrupt_flag = nullptr, int timeout_ms = -1,
-                             std::chrono::steady_clock::time_point start_time =
-                                 std::chrono::steady_clock::now()) override {
+                             int64_t start_time = -1) override {
     ECM rcm0 = _precheck(path);
     if (rcm0.first != EC::Success) {
       return {rcm0, {}};
@@ -1915,9 +1741,7 @@ def _amsftp_gen(next_func):
   // 将原路径变成新路径，自带AMFS::abspath
   ECM rename(const std::string &src, const std::string &dst, bool mkdir = true,
              bool overwrite = false, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) override {
+             int timeout_ms = -1, int64_t start_time = -1) override {
     ECM rcm0 = _precheck(src);
     if (rcm0.first != EC::Success) {
       return rcm0;
@@ -1927,6 +1751,9 @@ def _amsftp_gen(next_func):
       return rcm1;
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    start_time = start_time == -1 ? am_ms() : start_time;
     if (mkdir) {
       rcm0 = mkdirs(AMPathStr::dirname(dst), interrupt_flag, timeout_ms,
                     start_time);
@@ -1940,14 +1767,15 @@ def _amsftp_gen(next_func):
 
   // 安全删除文件或目录，将目录移动到trash_dir中
   ECM saferm(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) override {
+             int timeout_ms = -1, int64_t start_time = -1) override {
     ECM rcm0 = _precheck(path);
     if (rcm0.first != EC::Success) {
       return rcm0;
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    start_time = start_time == -1 ? am_ms() : start_time;
     if (trash_dir.empty()) {
       return {EC::InvalidArg, "Trash directory not set"};
     }
@@ -2072,21 +1900,21 @@ def _amsftp_gen(next_func):
     }
 
     return {EC::Success, ""};
-  }
+  }*/
 
   // 递归遍历某一路径下的所有文件和底层目录，返回PathInfo的vector
   std::pair<ECM, WRV> iwalk(const std::string &path,
                             bool ignore_sepcial_file = true,
                             amf interrupt_flag = nullptr, int timeout_ms = -1,
-                            std::chrono::steady_clock::time_point start_time =
-                                std::chrono::steady_clock::now()) override {
+                            int64_t start_time = -1) override {
     ECM rcm = _precheck(path);
     if (rcm.first != EC::Success) {
       return {};
     }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    std::lock_guard<std::recursive_mutex> lock(mtx);
+    start_time = start_time == -1 ? am_ms() : start_time;
     auto [rcm2, attrs] =
         lib_getstat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
@@ -2103,21 +1931,21 @@ def _amsftp_gen(next_func):
     _iwalk(path, attrs, result, ignore_sepcial_file, interrupt_flag, timeout_ms,
            start_time);
     return {ECM{EC::Success, ""}, result};
-  }*/
+  }
 
   // 真实的walk函数，返回([root_path, part1, part2, ...], PathInfo)的vector
   std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1,
                            bool ignore_special_file = false,
                            amf interrupt_flag = nullptr, int timeout_ms = -1,
-                           std::chrono::steady_clock::time_point start_time =
-                               std::chrono::steady_clock::now()) override {
+                           int64_t start_time = -1) override {
     ECM rcm0 = _precheck(path);
     if (rcm0.first != EC::Success) {
       return {rcm0, {}};
     }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    std::lock_guard<std::recursive_mutex> lock(mtx);
+    start_time = start_time == -1 ? am_ms() : start_time;
     auto [rcm, br] = stat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm.first != EC::Success) {
       return {rcm, {}};

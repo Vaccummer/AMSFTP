@@ -41,20 +41,20 @@ class DebugBuildExt(build_ext):
 
 module = Extension(
     "AMSFTP",
-    sources=["AMBinding.cpp", "AMCore.cpp"],
+    sources=["AMBinding.cpp"],
     language="c++",
     extra_compile_args=[
         "/std:c++17",
         "/utf-8",
         "/Zc:__cplusplus",
-        "/Zi",      # 生成调试信息（PDB文件）- 可以打断点
-        "/Od",      # 禁用优化 - 变量不会被优化掉，调试更清晰
-        "/RTC1",    # 运行时检查（检测栈溢出、未初始化变量等）
-        "/GS",      # 缓冲区安全检查
-        "/W3",      # 警告级别
+        "/Zi",  # 生成调试信息（PDB文件）- 可以打断点
+        "/Od",  # 禁用优化 - 变量不会被优化掉，调试更清晰
+        "/RTC1",  # 运行时检查（检测栈溢出、未初始化变量等）
+        "/GS",  # 缓冲区安全检查
+        "/W3",  # 警告级别
     ],
     extra_link_args=[
-        "/DEBUG:FULL",      # 生成完整调试信息
+        "/DEBUG:FULL",  # 生成完整调试信息
         "/INCREMENTAL:NO",  # 禁用增量链接
     ],
     include_dirs=[
@@ -72,6 +72,7 @@ module = Extension(
         "ws2_32",
         "fmt",
         "Advapi32",
+        "libcurl",
     ],
 )
 

@@ -59,10 +59,17 @@
 
 #define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR // in case mutex constructor is not
                                              // supported
-
+#ifdef _WIN32
 extern std::atomic<bool> is_wsa_initialized;
+inline void cleanup_wsa() {
+  // 清理wsa，如果wsa已经初始化，则清理wsa
+  if (is_wsa_initialized.load()) {
+    WSACleanup();
+    is_wsa_initialized.store(false);
+  }
+}
+#endif
 
-void cleanup_wsa();
 inline bool isok(ECM &ecm) { return ecm.first == EC::Success; }
 inline bool isdir(const LIBSSH2_SFTP_ATTRIBUTES &attrs);
 inline bool isreg(const LIBSSH2_SFTP_ATTRIBUTES &attrs);
@@ -92,17 +99,17 @@ class AMTracer {
 private:
   py::function trace_cb;
   std::vector<TraceInfo> buffer = {};
-  std::mutex buffer_mutex;
+  std::recursive_mutex buffer_mutex;
+  std::recursive_mutex public_var_mutex; // 专门用于保护 public_var_dict 的锁
   ssize_t capacity = 10;
   std::atomic<bool> is_py_trace = false;
   std::atomic<bool> is_trace_pause = false;
   std::unordered_map<std::string, py::object> public_var_dict;
-  std::mutex public_var_mutex; // 专门用于保护 public_var_dict 的锁
-  py::object deepcopy_func;    // 缓存的 deepcopy 函数
+
+  py::object deepcopy_func; // 缓存的 deepcopy 函数
 protected:
   ConRequst res_data;
   void push(const TraceInfo &value) {
-    std::lock_guard<std::mutex> lock(buffer_mutex);
     if (buffer.size() < static_cast<size_t>(capacity)) {
       buffer.push_back(value);
     } else {
@@ -141,7 +148,7 @@ public:
   }
   ECM SetPublicVar(const std::string &key, py::object value,
                    bool overwrite = false) {
-    std::lock_guard<std::mutex> lock(public_var_mutex);
+    std::lock_guard<std::recursive_mutex> lock(public_var_mutex);
 
     if (!overwrite && public_var_dict.find(key) != public_var_dict.end()) {
       return {
@@ -158,11 +165,10 @@ public:
         return {EC::Success, ""};
       } catch (const py::error_already_set &e) {
         // 如果深拷贝失败（某些对象不支持深拷贝）
-        return {
-            EC::DeepcopyFailed,
-            fmt::format(
-                "Deepcopy failed, object is not supported to be stored: {}: {}",
-                key, e.what())};
+        return {EC::DeepcopyFailed,
+                fmt::format("Deepcopy failed, object is not supported to be "
+                            "stored: {}: {}",
+                            key, e.what())};
       }
     } else {
       return {EC::DeepcopyFunctionNotAvailable,
@@ -172,7 +178,7 @@ public:
 
   py::object GetPublicVar(const std::string &key,
                           py::object default_value = py::none()) {
-    std::lock_guard<std::mutex> lock(public_var_mutex);
+    std::lock_guard<std::recursive_mutex> lock(public_var_mutex);
 
     auto it = public_var_dict.find(key);
     if (it != public_var_dict.end()) {
@@ -186,19 +192,19 @@ public:
   bool DelPublicVar(const std::string &key) {
     // 确保持有 GIL，因为要操作 py::object
     py::gil_scoped_acquire gil;
-    std::lock_guard<std::mutex> lock(public_var_mutex);
+    std::lock_guard<std::recursive_mutex> lock(public_var_mutex);
     return public_var_dict.erase(key) > 0;
   }
 
   void ClearPublicVar() {
     // 确保持有 GIL，因为要销毁 py::object
     py::gil_scoped_acquire gil;
-    std::lock_guard<std::mutex> lock(public_var_mutex);
+    std::lock_guard<std::recursive_mutex> lock(public_var_mutex);
     public_var_dict.clear();
   }
 
   py::dict GetAllPublicVars() {
-    std::lock_guard<std::mutex> lock(public_var_mutex);
+    std::lock_guard<std::recursive_mutex> lock(public_var_mutex);
     py::gil_scoped_acquire gil;
     py::dict result;
     if (!deepcopy_func.is_none()) {
@@ -216,12 +222,12 @@ public:
   }
 
   size_t GetTraceNum() {
-    std::lock_guard<std::mutex> lock(buffer_mutex);
+    std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
     return buffer.size();
   }
 
   std::shared_ptr<TraceInfo> LastTrace() {
-    std::lock_guard<std::mutex> lock(buffer_mutex);
+    std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
     if (buffer.size() == 0) {
       return nullptr;
     }
@@ -238,7 +244,7 @@ public:
   }
 
   void ClearTracer() {
-    std::lock_guard<std::mutex> lock(buffer_mutex);
+    std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
     buffer.clear();
   }
 
@@ -251,7 +257,7 @@ public:
       capacity = size;
       return capacity;
     } else {
-      std::lock_guard<std::mutex> lock(buffer_mutex);
+      std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
       buffer.resize(size);
       capacity = size;
       return capacity;
@@ -264,7 +270,7 @@ public:
   }
 
   void trace(const TraceInfo &trace_info) {
-    std::lock_guard<std::mutex> lock(buffer_mutex);
+    std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
     if (is_trace_pause.load()) {
       return;
     }
@@ -373,6 +379,7 @@ protected:
   }
 
 public:
+  std::recursive_mutex mtx;
   OS_TYPE os_type = OS_TYPE::Uncertain;
   std::string home_dir = "";
   std::string trash_dir = "";
@@ -404,11 +411,10 @@ public:
     }
   }
 
-  std::variant<ECM, std::string>
-  TrashDir(const std::string &trash_dir = "", amf interrupt_flag = nullptr,
-           int timeout_ms = -1,
-           std::chrono::steady_clock::time_point start_time =
-               std::chrono::steady_clock::now()) {
+  std::variant<ECM, std::string> TrashDir(const std::string &trash_dir = "",
+                                          amf interrupt_flag = nullptr,
+                                          int timeout_ms = -1,
+                                          int64_t start_time = -1) {
     if (trash_dir.empty()) {
       return this->trash_dir;
     }
@@ -426,8 +432,7 @@ public:
   ECM move(const std::string &src, const std::string &dst,
            bool need_mkdir = false, bool force_write = false,
            amf interrupt_flag = nullptr, int timeout_ms = -1,
-           std::chrono::steady_clock::time_point start_time =
-               std::chrono::steady_clock::now()) {
+           int64_t start_time = -1) {
 
     return rename(src, AMPathStr::join(dst, AMPathStr::basename(src)),
                   need_mkdir, force_write, interrupt_flag, timeout_ms,
@@ -438,8 +443,7 @@ public:
   // 但是在读取时遇到错误不会throw，也不会记录其大小，可能存在偏差
   int64_t getsize(const std::string &path, bool ignore_sepcial_file = true,
                   amf interrupt_flag = nullptr, int timeout_ms = -1,
-                  std::chrono::steady_clock::time_point start_time =
-                      std::chrono::steady_clock::now()) {
+                  int64_t start_time = -1) {
     auto [rcm, list] = iwalk(path, ignore_sepcial_file, interrupt_flag,
                              timeout_ms, start_time);
     if (rcm.first != EC::Success) {
@@ -454,19 +458,80 @@ public:
     }
     return size;
   }
+  std::pair<ECM, PathType> get_path_type(const std::string &path,
+                                         amf interrupt_flag = nullptr,
+                                         int timeout_ms = -1,
+                                         int64_t start_time = -1) {
+    auto [rcm, path_info] =
+        stat(path, false, interrupt_flag, timeout_ms, start_time);
+    if (rcm.first != EC::Success) {
+      return {ECM{rcm.first, rcm.second}, PathType::Unknown};
+    }
+    return {rcm, path_info.type};
+  }
+
+  // 判断路径是否存在，自带AMFS::abspath
+  std::pair<ECM, bool> exists(const std::string &path,
+                              amf interrupt_flag = nullptr, int timeout_ms = -1,
+                              int64_t start_time = -1) {
+    auto [rcm, path_info] =
+        stat(path, false, interrupt_flag, timeout_ms, start_time);
+    if (rcm.first == EC::Success) {
+      return {rcm, true};
+    } else if (rcm.first == EC::PathNotExist || rcm.first == EC::FileNotExist) {
+      return {{EC::Success, ""}, false};
+    } else {
+      return {rcm, false};
+    }
+  }
+
+  std::pair<ECM, bool> is_regular(const std::string &path,
+                                  amf interrupt_flag = nullptr,
+                                  int timeout_ms = -1,
+                                  int64_t start_time = -1) {
+    auto [rcm, path_info] =
+        stat(path, false, interrupt_flag, timeout_ms, start_time);
+    if (rcm.first != EC::Success) {
+      return {rcm, false};
+    }
+    return {ECM{EC::Success, ""},
+            path_info.type == PathType::FILE ? true : false};
+  }
+
+  std::pair<ECM, bool> is_dir(const std::string &path,
+                              amf interrupt_flag = nullptr, int timeout_ms = -1,
+                              int64_t start_time = -1) {
+    auto [rcm, path_info] =
+        stat(path, false, interrupt_flag, timeout_ms, start_time);
+    if (rcm.first != EC::Success) {
+      return {rcm, false};
+    }
+    return {ECM{EC::Success, ""},
+            path_info.type == PathType::DIR ? true : false};
+  }
+
+  std::pair<ECM, bool> is_symlink(const std::string &path,
+                                  amf interrupt_flag = nullptr,
+                                  int timeout_ms = -1,
+                                  int64_t start_time = -1) {
+    auto [rcm, path_info] =
+        stat(path, false, interrupt_flag, timeout_ms, start_time);
+    if (rcm.first != EC::Success) {
+      return {rcm, false};
+    }
+    return {ECM{EC::Success, ""},
+            path_info.type == PathType::SYMLINK ? true : false};
+  }
 
   // NOLINTBEGIN
   virtual ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
-                    std::chrono::steady_clock::time_point start_time =
-                        std::chrono::steady_clock::now()) {
+                    int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: Check", GetProtocolName()));
   }
 
   virtual ECM Connect(bool force = false, amf interrupt_flag = nullptr,
-                      int timeout_ms = -1,
-                      std::chrono::steady_clock::time_point start_time =
-                          std::chrono::steady_clock::now()) {
+                      int timeout_ms = -1, int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: Connect", GetProtocolName()));
   }
@@ -497,128 +562,70 @@ public:
         "{} Client doesn't implement funtion: GetHomeDir", GetProtocolName()));
   }
 
-  virtual std::pair<ECM, std::string>
-  realpath(const std::string &path, amf interrupt_flag = nullptr,
-           int timeout_ms = -1,
-           std::chrono::steady_clock::time_point start_time =
-               std::chrono::steady_clock::now()) {
+  virtual std::pair<ECM, std::string> realpath(const std::string &path,
+                                               amf interrupt_flag = nullptr,
+                                               int timeout_ms = -1,
+                                               int64_t start_time = -1) {
+
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: realpath", GetProtocolName()));
   }
   virtual std::pair<ECM, std::unordered_map<std::string, ECM>>
   chmod(const std::string &path, std::variant<std::string, uint64_t> mode,
         bool recursive = false, amf interrupt_flag = nullptr,
-        int timeout_ms = -1,
-        std::chrono::steady_clock::time_point start_time =
-            std::chrono::steady_clock::now()) {
+        int timeout_ms = -1, int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: chmod", GetProtocolName()));
   }
   virtual SR stat(const std::string &path, bool trace_link = false,
                   amf interrupt_flag = nullptr, int timeout_ms = -1,
-                  std::chrono::steady_clock::time_point start_time =
-                      std::chrono::steady_clock::now()) {
+                  int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: stat", GetProtocolName()));
   }
-  virtual std::pair<ECM, PathType>
-  get_path_type(const std::string &path, amf interrupt_flag = nullptr,
-                int timeout_ms = -1,
-                std::chrono::steady_clock::time_point start_time =
-                    std::chrono::steady_clock::now()) {
-    throw UnimplementedMethodException(
-        fmt::format("{} Client doesn't implement funtion: get_path_type",
-                    GetProtocolName()));
-  }
-  virtual std::pair<ECM, bool>
-  exists(const std::string &path, amf interrupt_flag = nullptr,
-         int timeout_ms = -1,
-         std::chrono::steady_clock::time_point start_time =
-             std::chrono::steady_clock::now()) {
-    throw UnimplementedMethodException(fmt::format(
-        "{} Client doesn't implement funtion: exists", GetProtocolName()));
-  }
-  virtual std::pair<ECM, bool>
-  is_regular(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) {
-    throw UnimplementedMethodException(fmt::format(
-        "{} Client doesn't implement funtion: is_regular", GetProtocolName()));
-  }
-  virtual std::pair<ECM, bool>
-  is_dir(const std::string &path, amf interrupt_flag = nullptr,
-         int timeout_ms = -1,
-         std::chrono::steady_clock::time_point start_time =
-             std::chrono::steady_clock::now()) {
-    throw UnimplementedMethodException(fmt::format(
-        "{} Client doesn't implement funtion: is_dir", GetProtocolName()));
-  }
-  virtual std::pair<ECM, bool>
-  is_symlink(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) {
-    throw UnimplementedMethodException(fmt::format(
-        "{} Client doesn't implement funtion: is_symlink", GetProtocolName()));
-  }
   virtual std::pair<ECM, std::vector<PathInfo>>
   listdir(const std::string &path, amf interrupt_flag = nullptr,
-          int timeout_ms = -1,
-          std::chrono::steady_clock::time_point start_time =
-              std::chrono::steady_clock::now()) {
+          int timeout_ms = -1, int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: listdir", GetProtocolName()));
   }
   virtual ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
-                    int timeout_ms = -1,
-                    std::chrono::steady_clock::time_point start_time =
-                        std::chrono::steady_clock::now()) {
+                    int timeout_ms = -1, int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: mkdir", GetProtocolName()));
   }
   virtual ECM mkdirs(const std::string &path, amf interrupt_flag = nullptr,
-                     int timeout_ms = -1,
-                     std::chrono::steady_clock::time_point start_time =
-                         std::chrono::steady_clock::now()) {
+                     int timeout_ms = -1, int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: mkdirs", GetProtocolName()));
   };
 
   virtual ECM rmdir(const std::string &path, amf interrupt_flag = nullptr,
-                    int timeout_ms = -1,
-                    std::chrono::steady_clock::time_point start_time =
-                        std::chrono::steady_clock::now()) {
+                    int timeout_ms = -1, int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: rmdir", GetProtocolName()));
   }
   virtual ECM rmfile(const std::string &path, amf interrupt_flag = nullptr,
-                     int timeout_ms = -1,
-                     std::chrono::steady_clock::time_point start_time =
-                         std::chrono::steady_clock::now()) {
+                     int timeout_ms = -1, int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: rmfile", GetProtocolName()));
   }
   virtual ECM rename(const std::string &src, const std::string &dst,
                      bool mkdir = true, bool overwrite = false,
                      amf interrupt_flag = nullptr, int timeout_ms = -1,
-                     std::chrono::steady_clock::time_point start_time =
-                         std::chrono::steady_clock::now()) {
+                     int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: rename", GetProtocolName()));
   }
-  virtual std::pair<ECM, RMR>
-  remove(const std::string &path, amf interrupt_flag = nullptr,
-         int timeout_ms = -1,
-         std::chrono::steady_clock::time_point start_time =
-             std::chrono::steady_clock::now()) {
+  virtual std::pair<ECM, RMR> remove(const std::string &path,
+                                     amf interrupt_flag = nullptr,
+                                     int timeout_ms = -1,
+                                     int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: remove", GetProtocolName()));
   };
   virtual ECM saferm(const std::string &path, amf interrupt_flag = nullptr,
-                     int timeout_ms = -1,
-                     std::chrono::steady_clock::time_point start_time =
-                         std::chrono::steady_clock::now()) {
+                     int timeout_ms = -1, int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: saferm", GetProtocolName()));
   }
@@ -629,20 +636,19 @@ public:
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: copy", GetProtocolName()));
   }
-  virtual std::pair<ECM, WRV>
-  iwalk(const std::string &path, bool ignore_sepcial_file = true,
-        amf interrupt_flag = nullptr, int timeout_ms = -1,
-        std::chrono::steady_clock::time_point start_time =
-            std::chrono::steady_clock::now()) {
+  virtual std::pair<ECM, WRV> iwalk(const std::string &path,
+                                    bool ignore_sepcial_file = true,
+                                    amf interrupt_flag = nullptr,
+                                    int timeout_ms = -1,
+                                    int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: iwalk", GetProtocolName()));
   }
-  virtual std::pair<ECM, WRD>
-  walk(const std::string &path, int max_depth = -1,
-       bool ignore_special_file = false, amf interrupt_flag = nullptr,
-       int timeout_ms = -1,
-       std::chrono::steady_clock::time_point start_time =
-           std::chrono::steady_clock::now()) {
+  virtual std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1,
+                                   bool ignore_special_file = false,
+                                   amf interrupt_flag = nullptr,
+                                   int timeout_ms = -1,
+                                   int64_t start_time = -1) {
     throw UnimplementedMethodException(fmt::format(
         "{} Client doesn't implement funtion: walk", GetProtocolName()));
   }

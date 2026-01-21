@@ -1,19 +1,10 @@
+
+#include "AMBaseClient.hpp"
 #include "AMBindingTools.hpp"
 #include "AMCore.hpp"
 #include "AMDataClass.hpp"
 #include "AMEnum.hpp"
 #include "AMPath.hpp"
-
-#ifdef _WIN32
-#include <winsock2.h>
-static std::atomic<bool> is_wsa_initialized{false};
-static void cleanup_wsa() {
-  if (is_wsa_initialized.load()) {
-    WSACleanup();
-    is_wsa_initialized.store(false);
-  }
-}
-#endif
 
 namespace AMBIDINGS {
 void BindEnum(py::module &m) {
@@ -23,8 +14,8 @@ void BindEnum(py::module &m) {
 
   bind_enum_auto<TraceLevel>(m, "TraceLevel");
   bind_enum_auto<TransferControl>(m, "TransferControl");
-  bind_enum_auto<AMFS::SepType>(m, "SepType");
-  bind_enum_auto<AMFS::SearchType>(m, "SearchType");
+  bind_enum_auto<SepType>(m, "SepType");
+  bind_enum_auto<SearchType>(m, "SearchType");
   bind_enum_auto<ClientProtocol>(m, "ClientProtocol");
 }
 void BindConRequest(py::module &m) {
@@ -40,16 +31,15 @@ void BindConRequest(py::module &m) {
                                 "Dedicated key file for this authentication")
                  .def_readwrite("compression", &ConRequst::compression,
                                 "Enable compression")
-                 .def_readwrite("timeout_s", &ConRequst::timeout_s)
                  .def_readwrite("trash_dir", &ConRequst::trash_dir,
                                 "Trash directory for saferm function");
   cls.def(
       py::init<const std::string &, const std::string &, const std::string &,
-               int, std::string, std::string, bool, size_t, std::string>(),
+               int, std::string, std::string, bool, std::string>(),
       py::arg("nickname") = "", py::arg("hostname") = "",
       py::arg("username") = "", py::arg("port") = 22, py::arg("password") = "",
       py::arg("keyfile") = "", py::arg("compression") = false,
-      py::arg("timeout_s") = 3, py::arg("trash_dir") = "");
+      py::arg("trash_dir") = "");
 }
 void BindTransferCallback(py::module &m) {
   auto cls =
@@ -132,9 +122,9 @@ void BindTransferTask(py::module &m) {
           .def_readwrite("size", &TransferTask::size, "Size of the src")
           .def_readwrite("path_type", &TransferTask::path_type,
                          "Type of the path")
-          .def_readwrite("IsSuccess", &TransferTask::IsSuccess,
-                         "If the transfer is successful")
-          .def_readwrite("rc", &TransferTask::rc, "Error code and message")
+          .def_readwrite("IsFinished", &TransferTask::IsFinished,
+                         "If the transfer is finished")
+          .def_readwrite("rcm", &TransferTask::rcm, "Error code and message")
           .def(py::init<const std::string &, const std::string &,
                         const std::string &, const std::string &, uint64_t,
                         PathType>(),
@@ -187,35 +177,46 @@ void BindPathInfo(py::module &m) {
           py::arg("modify_time"), py::arg("type"), py::arg("mode_int"),
           py::arg("mode_str"));
 }
-
+void BindInterruptFlag(py::module &m) {
+  auto cls = py::class_<InterruptFlag, std::shared_ptr<InterruptFlag>>(
+      m, "InterruptFlag", "Interrupt Flag Class");
+  cls.def(py::init<>());
+  cls.def("set", &InterruptFlag::set, py::arg("is_interrupted") = true);
+  cls.def("reset", &InterruptFlag::reset);
+  cls.def("check", &InterruptFlag::check);
+}
 void BindBasePathMatch(py::module &m) {
-  auto cls =
-      py::class_<AMFS::BasePathMatch, std::shared_ptr<AMFS::BasePathMatch>>(
-          m, "BasePathMatch", "Base Path Match Class");
-  auto_def(cls, "find", &AMFS::BasePathMatch::find)
-      .arg("path")
-      .arg("type", AMFS::SearchType::All)
-      .doc("Path Match Function, support * and <> , greater and less sign "
-           "equal to [] in regex");
-  auto_def(cls, "str_match", &AMFS::BasePathMatch::str_match)
+  auto cls = py::class_<BasePathMatch, std::shared_ptr<BasePathMatch>>(
+      m, "BasePathMatch", "Base Path Match Class");
+  //   auto_def(cls, "find", &BasePathMatch::find)
+  //       .arg("path")
+  //       .arg("type", SearchType::All)
+  //       .doc("Path Match Function, support * and <> , greater and less sign "
+  //            "equal to [] in regex");
+  auto_def(cls, "str_match", &BasePathMatch::str_match)
       .arg("name")
       .arg("pattern")
       .doc("Internal Function, use wregex to match the string");
-  auto_def(cls, "name_match", &AMFS::BasePathMatch::name_match)
+  auto_def(cls, "name_match", &BasePathMatch::name_match)
       .arg("name")
       .arg("pattern")
       .doc("Internal Function, preprocess the pattern and match the name");
-  auto_def(cls, "walk_match", &AMFS::BasePathMatch::walk_match)
+  auto_def(cls, "walk_match", &BasePathMatch::walk_match)
       .arg("parts")
       .arg("match_parts")
       .doc("Internal Function, directly decides whether two paths match");
-  auto cls2 = py::class_<AMFS::PathMatch, std::shared_ptr<AMFS::PathMatch>,
-                         AMFS::BasePathMatch>(
-      m, "PathMatch",
-      "Local Path Match Class, using AMFS IO function to override "
-      "Core Function");
 }
-
+void BindSimpleFuncs(py::module &m) {
+  auto_def_func(m, "am_ms", &am_ms)
+      .doc("Get the current time according to steady clock in milliseconds");
+  auto_def_func(m, "am_s", &am_s)
+      .doc("Get the current time according to steady clock in seconds");
+  auto_def_func(m, "IsValidKey", &IsValidKey)
+      .arg("key")
+      .doc("Check if the keyfile is a valid ssh keyfile");
+  auto_def_func(m, "GetLibssh2Version", &GetLibssh2Version)
+      .doc("Get the version of the libssh2 library in string");
+}
 void BindAMTracer(py::module &m) {
   auto cls = py::class_<AMTracer, std::shared_ptr<AMTracer>>(
       m, "AMTracer", "Base of the Client, Manage Trace action and record");
@@ -236,11 +237,10 @@ void BindAMTracer(py::module &m) {
       .arg("size", -1)
       .doc("Give Negative Number to Get Capacity, Give Positive Number to Set "
            "Capacity");
-  auto_def(
-      cls, "trace",
-      py::overload_cast<const TraceLevel &, const EC &, const std::string &,
-                        const std::string &, const std::string &>(
-          &AMTracer::trace))
+  auto_def(cls, "trace",
+           py::overload_cast<TraceLevel, EC, const std::string &,
+                             const std::string &, const std::string &>(
+               &AMTracer::trace))
       .arg("level")
       .arg("error_code")
       .arg("target")
@@ -254,10 +254,9 @@ void BindAMTracer(py::module &m) {
   auto_def(cls, "GetNickname", &AMTracer::GetNickname);
   auto_def(cls, "GetRequest", &AMTracer::GetRequest);
 }
-
 void BindBaseClient(py::module &m) {
   auto cls = py::class_<BaseClient, std::shared_ptr<BaseClient>, AMTracer,
-                        AMFS::BasePathMatch>(
+                        BasePathMatch>(
       m, "BaseClient",
       "Abstract Base Client Class, Implement by FTP, SFTP Client");
   auto_def(cls, "GetProtocol", &BaseClient::GetProtocol)
@@ -269,37 +268,57 @@ void BindBaseClient(py::module &m) {
       .doc(fmt::format("Buffer Size is restricted between {} and {}",
                        AMMinBufferSize, AMMaxBufferSize)
                .c_str());
+  auto_def(cls, "GetState", &AMSession::GetState)
+      .doc("Get the cached state of the session");
+  auto_def(cls, "is_regular", &AMSFTPClient::is_regular)
+      .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Check if path is a regular file");
+  auto_def(cls, "is_dir", &AMSFTPClient::is_dir)
+      .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Check if path is a directory");
+  auto_def(cls, "is_symlink", &AMSFTPClient::is_symlink)
+      .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Check if path is a symlink");
+  auto_def(cls, "get_path_type", &AMSFTPClient::get_path_type)
+      .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Get the type of the path");
+  auto_def(cls, "getsize", &AMSFTPClient::getsize)
+      .arg("path")
+      .arg("ignore_special_file", true)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Get total size of file or directory");
 }
-
 void BindAMSession(py::module &m) {
   auto cls = py::class_<AMSession, std::shared_ptr<AMSession>, BaseClient>(
       m, "AMSession",
       "An intermediate class between BaseClient and SFTP Client, Manage SSH "
       "Connection and Session");
-  cls.def(py::init<const ConRequst &, const std::vector<std::string> &, ssize_t,
-                   const py::object &, const py::object &>(),
-          py::arg("request"), py::arg("keys"), py::arg("error_num") = 10,
-          py::arg("trace_cb") = py::none(), py::arg("auth_cb") = py::none());
   // 暂时注释掉其他绑定来定位问题
 
-  auto_def(cls, "GetLibssh2Version", &AMSession::GetLibssh2Version)
-      .doc("Get the version of the libssh2 library");
-  auto_def(cls, "IsValidKey", &AMSession::IsValidKey)
-      .arg("key")
-      .doc("Check if the keyfile is valid");
   auto_def(cls, "GetKeys", &AMSession::GetKeys).doc("Get the list of the keys");
   auto_def(cls, "SetKeys", &AMSession::SetKeys)
       .arg("keys")
       .doc("Set the list of the keys");
 
-  auto_def(cls, "GetState", &AMSession::GetState)
-      .doc("Get the cached state of the session");
-  auto_def(cls, "BaseCheck", &AMSession::BaseCheck)
-      .doc("Attemp to stat home path to test the connection");
-  auto_def(cls, "BaseConnect", &AMSession::BaseConnect)
-      .arg("force", false)
-      .doc("Establish ssh ssesion and sftp, if force=True, will disconnect and "
-           "reconnect, else will check first, if wrong then reconnect");
+  //   auto_def(cls, "BaseConnect", &AMSession::BaseConnect)
+  //       .arg("force", false)
+  //       .doc("Establish ssh ssesion and sftp, if force=True, will disconnect
+  //       and "
+  //            "reconnect, else will check first, if wrong then reconnect");
 
   auto_def(cls, "GetLastEC", &AMSession::GetLastEC)
       .doc("Get the last error code of the session");
@@ -310,7 +329,133 @@ void BindAMSession(py::module &m) {
       .doc("Set the authentication callback function, callable[AuthCBInfo, "
            "None], if none, won't callback to python");
 }
+void BindAMLocalClient(py::module &m) {
+  auto cls =
+      py::class_<AMLocalClient, std::shared_ptr<AMLocalClient>, BaseClient>(
+          m, "AMLocalClient",
+          "An Local Client Class Based on local filesystem");
+  cls.def(py::init<ConRequst, int, py::object>(), py::arg("request"),
+          py::arg("tracer_capacity") = 10, py::arg("trace_cb") = py::none());
+  auto_def(cls, "GetOSType", &AMLocalClient::GetOSType)
+      .arg("update", false)
+      .doc("Get the OS type of the server");
+  auto_def(cls, "GetHomeDir", &AMLocalClient::GetHomeDir);
+  auto_def(cls, "Check", &AMLocalClient::Check)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Check will force to update state, use GetState to get the cached "
+           "state");
+  //   auto_def(cls, "Connect", &AMSFTPClient::Connect)
+  //       .arg("force", false)
+  //       .doc("if force=True, will disconnect and reconnect, else will check
+  //       "
+  //            "first, if wrong then reconnect");
+  //   auto_def(cls, "GetTrashDir", &AMSFTPClient::GetTrashDir);
+  //   auto_def(cls, "SetTrashDir", &AMSFTPClient::SetTrashDir)
+  //       .arg("trash_dir", "")
+  //       .doc("Set the trash directory and create it if it doesn't exist, if
+  //       "
+  //            "wrong, will return error");
 
+  //   auto_def(cls, "chmod", &AMLocalClient::chmod)
+  //       .arg("path")
+  //       .arg("mode")
+  //       .arg("recursive", false)
+  //       .arg("interrupt_flag", py::none())
+  //       .arg("timeout_ms", -1)
+  //       .arg("start_time", -1)
+  //       .doc("Recursive change the mode of the file");
+  auto_def(cls, "stat", &AMLocalClient::stat)
+      .arg("path")
+      .arg("trace_link", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Get the detailed information about the file");
+  auto_def(cls, "listdir", &AMLocalClient::listdir)
+      .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("List directory contents");
+  auto_def(cls, "exists", &AMLocalClient::exists)
+      .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Check if path exists");
+  auto_def(cls, "mkdir", &AMLocalClient::mkdir)
+      .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Create a directory");
+  auto_def(cls, "mkdirs", &AMLocalClient::mkdirs)
+      .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Create directories recursively");
+  auto_def(cls, "rmdir", &AMLocalClient::rmdir)
+      .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Remove an empty directory");
+  auto_def(cls, "rmfile", &AMLocalClient::rmfile)
+      .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Remove a file permanently");
+  auto_def(cls, "remove", &AMLocalClient::remove)
+      .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Remove file or directory recursively");
+  auto_def(cls, "saferm", &AMLocalClient::saferm)
+      .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Safely remove by moving to trash");
+  auto_def(cls, "rename", &AMLocalClient::rename)
+      .arg("src")
+      .arg("dst")
+      .arg("mkdir", true)
+      .arg("overwrite", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Rename file/directory");
+  auto_def(cls, "move", &AMLocalClient::move)
+      .arg("src")
+      .arg("dst")
+      .arg("mkdir", false)
+      .arg("overwrite", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Move file/directory to destination folder");
+
+  auto_def(cls, "walk", &AMLocalClient::walk)
+      .arg("path")
+      .arg("max_depth", -1)
+      .arg("ignore_special_file", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Walk directory tree, returns list of (dirpath, files) tuples");
+  auto_def(cls, "iwalk", &AMLocalClient::iwalk)
+      .arg("path")
+      .arg("ignore_special_file", true)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Deep walk to get all leaf paths");
+}
 void BindAMSFTPClient(py::module &m) {
   auto cls = py::class_<AMSFTPClient, std::shared_ptr<AMSFTPClient>, AMSession>(
       m, "AMSFTPClient", "An SFTP Client Class Based on libssh2");
@@ -324,171 +469,244 @@ void BindAMSFTPClient(py::module &m) {
       .doc("Get the OS type of the server");
   auto_def(cls, "GetHomeDir", &AMSFTPClient::GetHomeDir);
   auto_def(cls, "Check", &AMSFTPClient::Check)
-      .arg("need_trace", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Check will force to update state, use GetState to get the cached "
            "state");
   auto_def(cls, "Connect", &AMSFTPClient::Connect)
       .arg("force", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("if force=True, will disconnect and reconnect, else will check "
            "first, if wrong then reconnect");
-  auto_def(cls, "GetTrashDir", &AMSFTPClient::GetTrashDir);
-  auto_def(cls, "SetTrashDir", &AMSFTPClient::SetTrashDir)
-      .arg("trash_dir", "")
-      .doc("Set the trash directory and create it if it doesn't exist, if "
-           "wrong, will return error");
+  //   auto_def(cls, "GetTrashDir", &AMSFTPClient::GetTrashDir);
+  //   auto_def(cls, "SetTrashDir", &AMSFTPClient::SetTrashDir)
+  //       .arg("trash_dir", "")
+  //       .doc("Set the trash directory and create it if it doesn't exist, if
+  //       "
+  //            "wrong, will return error");
 
-  auto_def(cls, "EnsureTrashDir", &AMSFTPClient::EnsureTrashDir)
-      .doc("Ensure the trash directory exists, if not, create it. If path is "
-           "empty, will use default trash directory");
   auto_def(cls, "realpath", &AMSFTPClient::realpath)
       .arg("path", "")
-      .doc("Use server to parse the path, ~ parsed in local, symlink parsed in "
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Use server to parse the path, ~ parsed in local, symlink parsed "
+           "in "
            "server");
   auto_def(cls, "chmod", &AMSFTPClient::chmod)
       .arg("path")
       .arg("mode")
       .arg("recursive", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Recursive change the mode of the file");
   auto_def(cls, "stat", &AMSFTPClient::stat)
       .arg("path")
+      .arg("trace_link", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Get the detailed information about the file");
   auto_def(cls, "listdir", &AMSFTPClient::listdir)
       .arg("path")
-      .arg("max_time_ms", -1)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("List directory contents");
   auto_def(cls, "exists", &AMSFTPClient::exists)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Check if path exists");
-  auto_def(cls, "is_regular", &AMSFTPClient::is_regular)
-      .arg("path")
-      .doc("Check if path is a regular file");
-  auto_def(cls, "is_dir", &AMSFTPClient::is_dir)
-      .arg("path")
-      .doc("Check if path is a directory");
-  auto_def(cls, "is_symlink", &AMSFTPClient::is_symlink)
-      .arg("path")
-      .doc("Check if path is a symlink");
-  auto_def(cls, "get_path_type", &AMSFTPClient::get_path_type)
-      .arg("path")
-      .doc("Get the type of the path");
   auto_def(cls, "mkdir", &AMSFTPClient::mkdir)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Create a directory");
   auto_def(cls, "mkdirs", &AMSFTPClient::mkdirs)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Create directories recursively");
   auto_def(cls, "rmdir", &AMSFTPClient::rmdir)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Remove an empty directory");
   auto_def(cls, "rmfile", &AMSFTPClient::rmfile)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Remove a file permanently");
   auto_def(cls, "remove", &AMSFTPClient::remove)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Remove file or directory recursively");
   auto_def(cls, "saferm", &AMSFTPClient::saferm)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Safely remove by moving to trash");
   auto_def(cls, "rename", &AMSFTPClient::rename)
       .arg("src")
       .arg("dst")
+      .arg("mkdir", true)
       .arg("overwrite", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Rename file/directory");
   auto_def(cls, "move", &AMSFTPClient::move)
       .arg("src")
       .arg("dst")
-      .arg("need_mkdir", false)
-      .arg("force_write", false)
+      .arg("mkdir", false)
+      .arg("overwrite", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Move file/directory to destination folder");
-  auto_def(cls, "copy", &AMSFTPClient::copy)
-      .arg("src")
-      .arg("dst")
-      .arg("need_mkdir", false)
-      .doc("Copy file/directory on remote server using shell command");
-  auto_def(cls, "getsize", &AMSFTPClient::getsize)
-      .arg("path")
-      .arg("ignore_special_file", true)
-      .doc("Get total size of file or directory");
+
   auto_def(cls, "walk", &AMSFTPClient::walk)
       .arg("path")
       .arg("max_depth", -1)
-      .arg("ignore_special_file", true)
+      .arg("ignore_special_file", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Walk directory tree, returns list of (dirpath, files) tuples");
   auto_def(cls, "iwalk", &AMSFTPClient::iwalk)
       .arg("path")
       .arg("ignore_special_file", true)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Deep walk to get all leaf paths");
-  auto_def(cls, "ConductCmd", &AMSFTPClient::ConductCmd)
-      .arg("cmd")
-      .arg("max_time_s", -1)
-      .doc("Execute shell command on remote server");
-  auto_def(cls, "TerminateCmd", &AMSFTPClient::TerminateCmd)
-      .doc("Terminate currently running command");
-  auto_def(cls, "GetRTT", &AMSFTPClient::GetRTT)
-      .arg("times", 5)
-      .doc("Get round-trip time to server");
+  //   auto_def(cls, "ConductCmd", &AMSFTPClient::ConductCmd)
+  //       .arg("cmd")
+  //       .arg("max_time_s", -1)
+  //       .doc("Execute shell command on remote server");
+  //   auto_def(cls, "GetRTT", &AMSFTPClient::GetRTT)
+  //       .arg("times", 5)
+  //       .doc("Get round-trip time to server");
 }
-
 void BindAMFTPClient(py::module &m) {
   auto cls = py::class_<AMFTPClient, std::shared_ptr<AMFTPClient>, BaseClient>(
       m, "AMFTPClient", "An FTP Client Class Based on libcurl");
-  cls.def(py::init<ConRequst, size_t, py::object>(), py::arg("request"),
+  cls.def(py::init<ConRequst, ssize_t, py::object>(), py::arg("request"),
           py::arg("buffer_capacity") = 10, py::arg("trace_cb") = py::none());
   auto_def(cls, "Connect", &AMFTPClient::Connect)
       .arg("force", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Connect to FTP server");
   auto_def(cls, "GetState", &AMFTPClient::GetState);
   auto_def(cls, "Check", &AMFTPClient::Check)
-      .arg("need_trace", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Check FTP connection status");
   auto_def(cls, "GetHomeDir", &AMFTPClient::GetHomeDir);
   auto_def(cls, "stat", &AMFTPClient::stat)
       .arg("path")
+      .arg("trace_link", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Get file information");
   auto_def(cls, "exists", &AMFTPClient::exists)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Check if path exists");
   auto_def(cls, "is_dir", &AMFTPClient::is_dir)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Check if path is a directory");
   auto_def(cls, "listdir", &AMFTPClient::listdir)
       .arg("path")
+      .arg("interrupt_flag", py::none())
       .arg("max_time_ms", -1)
+      .arg("start_time", -1)
       .doc("List directory contents");
   auto_def(cls, "iwalk", &AMFTPClient::iwalk)
       .arg("path")
       .arg("ignore_special_file", true)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Deep walk to get all leaf paths");
   auto_def(cls, "walk", &AMFTPClient::walk)
       .arg("path")
       .arg("max_depth", -1)
       .arg("ignore_special_file", true)
-      .doc(
-          "Walk directory tree, returns list of (dirparts, [PathInfo]) tuples");
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Walk directory tree, returns list of (dirparts, [PathInfo]) "
+           "tuples");
   auto_def(cls, "mkdir", &AMFTPClient::mkdir)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Create a directory");
   auto_def(cls, "mkdirs", &AMFTPClient::mkdirs)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Create directories recursively");
   auto_def(cls, "rmfile", &AMFTPClient::rmfile)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Remove a file permanently");
   auto_def(cls, "rmdir", &AMFTPClient::rmdir)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Remove an empty directory");
   auto_def(cls, "remove", &AMFTPClient::remove)
       .arg("path")
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Remove file or directory recursively");
   auto_def(cls, "rename", &AMFTPClient::rename)
       .arg("src")
       .arg("dst")
-      .arg("overwrite", false);
+      .arg("mkdir", true)
+      .arg("overwrite", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1);
+
   auto_def(cls, "move", &AMFTPClient::move)
       .arg("src")
       .arg("dst")
-      .arg("need_mkdir", false)
-      .arg("force_write", false)
+      .arg("need_mkdir", true)
+      .arg("overwrite", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Move file/directory to destination folder");
 }
 
@@ -502,36 +720,35 @@ void BindCreateFunc(py::module &m) {
       .arg("keys", py::list())
       .arg("auth_cb", py::none());
 }
-
 void BindClientMaintainer(py::module &m) {
   auto cls = py::class_<ClientMaintainer, std::shared_ptr<ClientMaintainer>>(
       m, "ClientMaintainer", "Client Connection Manager with Heartbeat");
   cls.def(py::init<int, py::object>(), py::arg("heartbeat_interval_s") = 60,
           py::arg("disconnect_cb") = py::none(),
           "Create client maintainer with heartbeat monitoring");
-
-  cls.def("get_nicknames", &ClientMaintainer::get_nicknames,
-          "Get list of all registered client nicknames");
-  cls.def("get_clients", &ClientMaintainer::get_clients,
-          "Get list of all registered clients");
-  cls.def("add_client",
-          py::overload_cast<const std::string &, std::shared_ptr<AMSFTPClient>,
-                            bool>(&ClientMaintainer::add_client),
-          py::arg("nickname"), py::arg("client"), py::arg("overwrite") = false,
-          "Add a SFTP client to the maintainer");
-  cls.def("add_client",
-          py::overload_cast<const std::string &, std::shared_ptr<AMFTPClient>,
-                            bool>(&ClientMaintainer::add_client),
-          py::arg("nickname"), py::arg("client"), py::arg("overwrite") = false,
-          "Add a FTP client to the maintainer");
-  cls.def("remove_client", &ClientMaintainer::remove_client,
-          py::arg("nickname"), "Remove a client from the maintainer");
-  cls.def("get_client", &ClientMaintainer::get_client, py::arg("nickname"),
-          "Get a client by nickname");
-  cls.def("test_client", &ClientMaintainer::test_client, py::arg("nickname"),
-          py::arg("update") = false, "Test client connection status");
+  auto_def(cls, "get_nicknames", &ClientMaintainer::get_nicknames)
+      .doc("Get list of all registered client nicknames");
+  auto_def(cls, "get_clients", &ClientMaintainer::get_clients)
+      .doc("Get list of all registered clients");
+  auto_def(cls, "add_client", &ClientMaintainer::add_client)
+      .arg("nickname")
+      .arg("client")
+      .arg("overwrite", false)
+      .doc("Add a client to the maintainer");
+  auto_def(cls, "remove_client", &ClientMaintainer::remove_client)
+      .arg("nickname")
+      .doc("Remove a client from the maintainer");
+  auto_def(cls, "get_client", &ClientMaintainer::get_client)
+      .arg("nickname")
+      .doc("Get a client by nickname");
+  auto_def(cls, "test_client", &ClientMaintainer::test_client)
+      .arg("nickname")
+      .arg("update", false)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
+      .doc("Test client connection status");
 }
-
 void BindAMSFTPWorker(py::module &m) {
   auto cls = py::class_<AMSFTPWorker, std::shared_ptr<AMSFTPWorker>>(
       m, "AMSFTPWorker", "High-performance file transfer worker");
@@ -563,6 +780,9 @@ void BindAMSFTPWorker(py::module &m) {
       .arg("overwrite", false)
       .arg("mkdir", true)
       .arg("ignore_special_file", true)
+      .arg("interrupt_flag", py::none())
+      .arg("timeout_ms", -1)
+      .arg("start_time", -1)
       .doc("Load tasks from source and destination");
 
   // Public members
@@ -570,70 +790,67 @@ void BindAMSFTPWorker(py::module &m) {
                     "Transfer callback object");
   // pd is not bound because ProgressData cannot be copied
 }
-
 void BindAMFS(py::module &m) {
-  auto_def_func(m, "timenow", &AMFS::timenow)
-      .doc("Get the current time in seconds");
-
   auto_def_func(m, "ModeTrans",
-                static_cast<std::string (*)(uint64_t)>(&AMFS::Str::ModeTrans))
+                static_cast<std::string (*)(uint64_t)>(&AMStr::ModeTrans))
       .arg("mode_int")
       .doc("Translate the mode int to string");
 
   auto_def_func(m, "ModeTrans",
-                py::overload_cast<std::string>(&AMFS::Str::ModeTrans))
+                py::overload_cast<std::string>(&AMStr::ModeTrans))
       .arg("mode_str")
       .doc("Translate the mode string to int");
-  auto_def_func(m, "MergeModeStr", &AMFS::Str::MergeModeStr)
+  auto_def_func(m, "MergeModeStr", &AMStr::MergeModeStr)
       .arg("base_mode_str")
       .arg("new_mode_str")
       .doc("Merge the mode string");
   auto_def_func(m, "IsModeValid",
-                py::overload_cast<std::string>(&AMFS::Str::IsModeValid))
+                py::overload_cast<std::string>(&AMStr::IsModeValid))
       .arg("mode_str")
       .doc("Check if the mode string is valid");
 
   auto_def_func(m, "IsModeValidH",
-                py::overload_cast<uint64_t>(&AMFS::Str::IsModeValid))
+                py::overload_cast<uint64_t>(&AMStr::IsModeValid))
       .arg("mode_int")
       .doc("Check if the mode int is valid");
-  auto_def_func(m, "GetPathSep", &AMFS::Str::GetPathSep)
+  auto_def_func(m, "GetPathSep", &AMPathStr::GetPathSep)
       .arg("path")
       .doc("Get the path separator of the path, if def #AMForceUsingUnixSep "
            "during compile, "
            "will return \"/\" all the time");
-  auto_def_func(m, "UnifyPathSep", &AMFS::UnifyPathSep)
+  auto_def_func(m, "UnifyPathSep", &AMPathStr::UnifyPathSep)
       .arg("path")
       .arg("sep", "")
       .doc("Unify the path separator of the path, if sep is empty, will use "
            "GetPathSep to get the path separator");
-  auto_def_func(m, "IsAbs", &AMFS::IsAbs)
+  auto_def_func(m, "IsAbs", &AMPathStr::IsAbs)
       .arg("path")
       .arg("sep", "")
       .doc("Check if the path is an absolute path, unify the path separator "
            "first");
   auto_def_func(m, "HomePath", &AMFS::HomePath)
       .doc("Get the home path of the current user");
-  auto_def_func(m, "extname", &AMFS::extname)
+  auto_def_func(m, "extname", &AMPathStr::extname)
       .arg("path")
-      .doc("Just string seperation, return the extension of the path without.");
-  auto_def_func(m, "split_basename", &AMFS::split_basename)
+      .doc("Just string seperation, return the extension of the path "
+           "without.");
+  auto_def_func(m, "split_basename", &AMPathStr::split_basename)
       .arg("basename")
       .doc("Split the basename of the path, return tuple[str, str], the first "
            "is the basename without extension, the second is the extension(no "
            ".)");
   auto_def_func(m, "CWD", &AMFS::CWD).doc("Get the current working directory ");
-  auto_def_func(m, "split", &AMFS::split)
+  auto_def_func(m, "split", &AMPathStr::split)
       .arg("path")
-      .doc("Split the path, return list[str], the path is split by separator ");
+      .doc("Split the path, return list[str], the path is split by "
+           "separator ");
   m.def(
       " join ",
-      [](const std::vector<std::string> &parts,
-         std::optional<AMFS::SepType> sep) {
+      [](const std::vector<std::string> &parts, std::optional<SepType> sep) {
         if (sep.has_value()) {
-          return AMFS::join(parts, sep.value());
+          return AMPathStr::join(parts, sep.value());
         }
-        return AMFS::join(parts);
+        return AMPathStr::join(parts);
       },
       py::arg("parts"), py::arg("sep") = py::none(),
       "Join path segments into a single path");
@@ -643,49 +860,37 @@ void BindAMFS(py::module &m) {
       .arg("home", "")
       .arg("cwd", "")
       .arg("sep", "")
-      .doc("Convert path to absolute path(won't check if path exists), support "
+      .doc("Convert path to absolute path(won't check if path exists), "
+           "support "
            "parsing ~ . .. symbol, "
            "unify the path separator first");
-  auto_def_func(m, "dirname", &AMFS::dirname)
+  auto_def_func(m, "dirname", &AMPathStr::dirname)
       .arg("path")
       .doc("Get the directory name of the path");
-  auto_def_func(m, "basename", &AMFS::basename)
+  auto_def_func(m, "basename", &AMPathStr::basename)
       .arg("path")
       .doc("Get the base name of the path");
-  auto_def_func(m, "mkdirs", &AMFS::mkdirs)
-      .arg("path")
-      .doc("Create directories recursively. If error, will return the "
-           "error message");
-  auto_def_func(m, "stat", &AMFS::stat)
-      .arg("path")
-      .arg("trace_link", false)
-      .doc("Get the detailed information about the file, if error, the firt "
-           "string is error message");
-  auto_def_func(m, "listdir", &AMFS::listdir)
-      .arg("path")
-      .arg("max_time_s", -1)
-      .doc("List directory contents, if max_time_s >0 ,will end action and "
-           "directly return after max_time_s seconds");
-  auto_def_func(m, "iwalk", &AMFS::iwalk)
-      .arg("path")
-      .arg("ignore_special_file", true)
-      .doc("Deep walk to get all leaf paths, return list[PathInfo]");
-  auto_def_func(m, "walk", &AMFS::walk)
-      .arg("path")
-      .arg("max_depth", -1)
-      .arg("ignore_special_file", true)
-      .doc("Walk directory tree, returns list of (list[path parts], "
-           "[PathInfo]) tuples");
-  auto_def_func(m, "getsize", &AMFS::getsize)
-      .arg("path")
-      .arg("trace_link", false)
-      .doc("Get total size of file or directory");
+  //   auto_def_func(m, "mkdirs", &AMFS::mkdirs)
+  //       .arg("path")
+  //       .doc("Create directories recursively. If error, will return the "
+  //            "error message");
+  //   auto_def_func(m, "stat", &AMFS::stat)
+  //       .arg("path")
+  //       .arg("trace_link", false)
+  //       .doc("Get the detailed information about the file, if error, the firt
+  //       "
+  //            "string is error message");
+  //   auto_def_func(m, "listdir", &AMFS::listdir)
+  //       .arg("path")
+  //       .arg("max_time_s", -1)
+  //       .doc("List directory contents, if max_time_s >0 ,will end action and
+  //       "
+  //            "directly return after max_time_s seconds");
 }
 
 } // namespace AMBIDINGS
 PYBIND11_MODULE(AMSFTP, m) {
   m.doc() = "A SFTP Client Module Based on libssh2";
-
 #ifdef _WIN32
   // Initialize WinSock
   bool expected = false;
@@ -699,10 +904,10 @@ PYBIND11_MODULE(AMSFTP, m) {
     m.add_object("_cleanup", py::capsule(cleanup_wsa));
   }
 #endif
-
   auto em = m.def_submodule("AMEnum", "Enum Classes");
   auto data = m.def_submodule("AMData", "Data Classes");
   auto fs = m.def_submodule("AMFS", "Local Filesystem Operations");
+  py::class_<std::chrono::steady_clock::time_point>(m, "SteadyTimePoint");
   AMBIDINGS::BindEnum(em);
   AMBIDINGS::BindConRequest(data);
   AMBIDINGS::BindTransferCallback(data);
@@ -712,10 +917,13 @@ PYBIND11_MODULE(AMSFTP, m) {
   AMBIDINGS::BindTransferTask(data);
   AMBIDINGS::BindTraceInfo(data);
   AMBIDINGS::BindPathInfo(data);
+  AMBIDINGS::BindInterruptFlag(data);
   AMBIDINGS::BindBasePathMatch(m);
+  AMBIDINGS::BindSimpleFuncs(m);
   AMBIDINGS::BindAMTracer(m);
   AMBIDINGS::BindBaseClient(m);
   AMBIDINGS::BindAMSession(m);
+  AMBIDINGS::BindAMLocalClient(m);
   AMBIDINGS::BindAMSFTPClient(m);
   AMBIDINGS::BindAMFTPClient(m);
   AMBIDINGS::BindClientMaintainer(m);

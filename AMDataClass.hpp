@@ -4,16 +4,18 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdint> // 用于int64_t类型
 #include <fcntl.h>
+#include <iostream>
 #include <memory>
 #include <string>
 #include <unordered_map>
-#include <vector>
+
 // 标准库
 
 // 自身依赖
 #include "AMEnum.hpp"
-#include "AMPath.hpp"
+// #include "AMPath.hpp"
 // 自身依赖
 
 // 第三方库
@@ -58,8 +60,24 @@ using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
 
 inline double timenow() {
+  // 获取unix参考时间，以秒为单位返回double
   return std::chrono::duration<double>(
              std::chrono::system_clock::now().time_since_epoch())
+      .count();
+  return std::chrono::duration<double>(
+             std::chrono::system_clock::now().time_since_epoch())
+      .count();
+}
+
+// 获取从steady_clock纪元到当前的毫秒数（整数）
+inline std::int64_t am_ms() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
+}
+inline double am_s() {
+  return std::chrono::duration<double>(
+             std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
 
@@ -79,6 +97,31 @@ struct MemoryStruct {
   size_t size;
 };
 
+class PathInfo {
+public:
+  std::string name;
+  std::string path;
+  std::string dir;
+  std::string owner;
+  uint64_t size = 0;
+  double create_time = 0;
+  double access_time = 0;
+  double modify_time = 0;
+  PathType type = PathType::FILE;
+  uint64_t mode_int = 0777;
+  std::string mode_str = "r--------";
+  PathInfo() : name(""), path(""), dir(""), owner("") {}
+
+  PathInfo(std::string name, std::string path, std::string dir,
+           std::string owner, uint64_t size, double create_time,
+           double access_time, double modify_time, PathType type,
+           uint64_t mode_int, std::string mode_str)
+      : name(name), path(path), dir(dir), owner(owner), size(size),
+        create_time(create_time), access_time(access_time),
+        modify_time(modify_time), type(type), mode_int(mode_int),
+        mode_str(mode_str) {}
+};
+
 // 跨平台Socket连接器
 class SocketConnector {
 public:
@@ -92,7 +135,7 @@ public:
 
   // 连接到指定主机，返回是否成功
 
-  bool Connect(const std::string &hostname, int port, size_t timeout_ms) {
+  bool Connect(const std::string &hostname, int port, int timeout_ms) {
     // 1. DNS解析
     addrinfo hints{}, *result = nullptr;
     hints.ai_family = AF_INET;
@@ -163,8 +206,13 @@ public:
     FD_SET(sock, &error_fds);
 
     timeval timeout;
-    timeout.tv_sec = 0;
-    timeout.tv_usec = (long)timeout_ms * 1000;
+    if (timeout_ms > 0) {
+      timeout.tv_sec = 0;
+      timeout.tv_usec = (long)timeout_ms * 1000;
+    } else {
+      timeout.tv_sec = 10;
+      timeout.tv_usec = 0;
+    }
 
     int select_result =
         select((int)sock + 1, nullptr, &write_fds, &error_fds, &timeout);
@@ -441,14 +489,14 @@ struct TransferTask {
   std::string dst_host;
   uint64_t size;
   PathType path_type = PathType::FILE;
-  bool IsSuccess = false;
-  ECM rc = ECM(EC::Success, "");
+  bool IsFinished = false;
+  ECM rcm = ECM(EC::Success, "");
   TransferTask() : src(""), src_host(""), dst(""), dst_host(""), size(0) {}
-  TransferTask(const std::string &src, const std::string &dst,
-               const std::string &src_host, const std::string &dst_host,
-               uint64_t size, PathType path_type = PathType::FILE)
-      : src(src), src_host(src_host), dst(dst), dst_host(dst_host), size(size),
-        path_type(path_type) {}
+  TransferTask(std::string src, std::string dst, std::string src_host,
+               std::string dst_host, uint64_t size,
+               PathType path_type = PathType::FILE)
+      : src(std::move(src)), src_host(std::move(src_host)), dst(std::move(dst)),
+        dst_host(std::move(dst_host)), size(size), path_type(path_type) {}
 };
 
 struct ProgressData {
@@ -501,6 +549,16 @@ struct ProgressData {
   }
 };
 
+class UnimplementedMethodException : public std::exception {
+public:
+  UnimplementedMethodException(const std::string &message) : message(message) {}
+  const char *what() const noexcept override { return message.c_str(); }
+
+private:
+  std::string message;
+};
+
+/*
 class BaseFileMapper {
 public:
   char *file_ptr = nullptr;
@@ -886,12 +944,4 @@ public:
     }
   }
 };
-
-class UnimplementedMethodException : public std::exception {
-public:
-  UnimplementedMethodException(const std::string &message) : message(message) {}
-  const char *what() const noexcept override { return message.c_str(); }
-
-private:
-  std::string message;
-};
+*/

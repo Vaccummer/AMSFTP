@@ -1,5 +1,6 @@
 #pragma once
 // 自身依赖
+#include "AMDataClass.hpp"
 #include "AMEnum.hpp"
 // 标准库头文件（跨平台，无需条件编译）
 #include <cstddef>
@@ -111,49 +112,53 @@ inline ECM fecm(const std::error_code &ec) { return {fec(ec), ec.message()}; }
 #include <sys/stat.h> // Unix 文件状态 API（stat 函数等）
 #endif
 
-class PathInfo {
-public:
-  std::string name;
-  std::string path;
-  std::string dir;
-  std::string owner;
-  uint64_t size = 0;
-  double create_time = 0;
-  double access_time = 0;
-  double modify_time = 0;
-  PathType type = PathType::FILE;
-  uint64_t mode_int = 0777;
-  std::string mode_str = "rwxrwxrwx";
-  PathInfo() : name(""), path(""), dir(""), owner("") {}
-
-  PathInfo(std::string name, std::string path, std::string dir,
-           std::string owner, uint64_t size, double create_time,
-           double access_time, double modify_time, PathType type,
-           uint64_t mode_int, std::string mode_str)
-      : name(name), path(path), dir(dir), owner(owner), size(size),
-        create_time(create_time), access_time(access_time),
-        modify_time(modify_time), type(type), mode_int(mode_int),
-        mode_str(mode_str) {}
-};
-
 namespace AMStr {
-std::wstring wstr(const std::string &str) {
+inline void lowercase(std::string &str) {
+  for (char &c : str) {
+    if (c >= 'a' && c <= 'z') {
+      c -= 32;
+    }
+  }
+}
+
+inline void uppercase(std::string &str) {
+  for (char &c : str) {
+    if (c >= 'a' && c <= 'z') {
+      c += 32;
+    }
+  }
+}
+
+inline std::string lowercase(const std::string &str) {
+  // 遍历字符串（C++98兼容的迭代器写法）
+  std::string str_f = str;
+  lowercase(str_f);
+  return str_f;
+}
+
+inline std::string uppercase(const std::string &str) {
+  std::string str_f = str;
+  uppercase(str_f);
+  return str_f;
+}
+
+inline std::wstring wstr(const std::string &str) {
   return boost::locale::conv::utf_to_utf<wchar_t>(str);
 }
 
-std::string wstr(const std::wstring &wstr) {
+inline std::string wstr(const std::wstring &wstr) {
   return boost::locale::conv::utf_to_utf<char>(wstr);
 }
 
-std::string wstr(wchar_t *wstr) {
+inline std::string wstr(wchar_t *wstr) {
   return boost::locale::conv::utf_to_utf<char>(wstr);
 }
 
-std::wstring wstr(char *str) {
+inline std::wstring wstr(char *str) {
   return boost::locale::conv::utf_to_utf<wchar_t>(str);
 }
 
-size_t CharNum(const std::string &utf8_str) {
+inline size_t CharNum(const std::string &utf8_str) {
   const size_t str_len = utf8_str.size();
   size_t char_count = 0;
   size_t idx = 0;
@@ -208,8 +213,8 @@ size_t CharNum(const std::string &utf8_str) {
   return char_count;
 }
 
-std::pair<bool, int> endswith(const std::string &str,
-                              const std::string &suffix) {
+inline std::pair<bool, int> endswith(const std::string &str,
+                                     const std::string &suffix) {
   if (suffix.empty())
     return std::make_pair(true, str.size());
   if (str.size() < suffix.size())
@@ -219,7 +224,7 @@ std::pair<bool, int> endswith(const std::string &str,
       str.size() - suffix.size());
 }
 
-std::string ModeTrans(uint64_t mode_int) {
+inline std::string ModeTrans(uint64_t mode_int) {
   // 把mode_int转换为8进制字符串, 长度为9
   if (mode_int > 0777 || mode_int == 0777) {
     return "rwxrwxrwx";
@@ -259,7 +264,7 @@ std::string ModeTrans(uint64_t mode_int) {
   return out;
 }
 
-uint64_t ModeTrans(std::string mode_str) {
+inline uint64_t ModeTrans(std::string mode_str) {
   std::regex pattern(
       R"(^[r?\-][w?\-][x?\-][r?\-][w?\-][x?\-][r?\-][w?\-][x?\-]$)");
   if (!std::regex_match(mode_str, pattern)) {
@@ -275,8 +280,8 @@ uint64_t ModeTrans(std::string mode_str) {
   return mode_int;
 }
 
-std::string MergeModeStr(const std::string &base_mode_str,
-                         const std::string &new_mode_str) {
+inline std::string MergeModeStr(const std::string &base_mode_str,
+                                const std::string &new_mode_str) {
   std::string pattern_f =
       "^[r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?\\-]$";
   std::regex pattern(pattern_f);
@@ -298,15 +303,15 @@ std::string MergeModeStr(const std::string &base_mode_str,
   return mode_str;
 }
 
-bool IsModeValid(std::string mode_str) {
+inline bool IsModeValid(std::string mode_str) {
   return std::regex_match(mode_str,
                           std::regex("^[r?\\-][w?\\-][x?\\-][r?\\-][w?\\-][x?"
                                      "\\-][r?\\-][w?\\-][x?\\-]$"));
 }
 
-bool IsModeValid(uint64_t mode_int) { return mode_int <= 0777; }
+inline bool IsModeValid(uint64_t mode_int) { return mode_int <= 0777; }
 
-std::string Strip(std::string path) {
+inline std::string Strip(std::string path) {
   const std::string trim_chars = " \t\n\r\"'";
 
   size_t start = path.find_first_not_of(trim_chars);
@@ -319,7 +324,7 @@ std::string Strip(std::string path) {
   return path.substr(start, end - start + 1);
 }
 
-void VStrip(std::string &path) {
+inline void VStrip(std::string &path) {
   const std::string trim_chars = " \t\n\r\"'";
 
   size_t start = path.find_first_not_of(trim_chars);
@@ -331,16 +336,16 @@ void VStrip(std::string &path) {
   path = path.substr(start, end - start + 1);
 }
 
-void vreplace(std::string &str, const std::string &from,
-              const std::string &to) {
+inline void vreplace(std::string &str, const std::string &from,
+                     const std::string &to) {
   size_t pos = 0;
   while ((pos = str.find(from, pos)) != std::string::npos) {
     str.replace(pos, from.length(), to);
     pos += to.length();
   }
 }
-std::string replace(std::string str, const std::string &from,
-                    const std::string &to) {
+inline std::string replace(std::string str, const std::string &from,
+                           const std::string &to) {
   size_t pos = 0;
   while ((pos = str.find(from, pos)) != std::string::npos) {
     str.replace(pos, from.length(), to);
@@ -349,8 +354,8 @@ std::string replace(std::string str, const std::string &from,
   return str;
 }
 
-void vreplace_all(std::string &str, const std::string &old_sub,
-                  const std::string &new_sub) {
+inline void vreplace_all(std::string &str, const std::string &old_sub,
+                         const std::string &new_sub) {
   size_t pos = 0;
   while ((pos = str.find(old_sub, pos)) != std::string::npos) {
     str.replace(pos, old_sub.size(), new_sub);
@@ -360,8 +365,8 @@ void vreplace_all(std::string &str, const std::string &old_sub,
   }
 }
 
-std::string replace_all(std::string str, const std::string &old_sub,
-                        const std::string &new_sub) {
+inline std::string replace_all(std::string str, const std::string &old_sub,
+                               const std::string &new_sub) {
   size_t pos = 0;
   while ((pos = str.find(old_sub, pos)) != std::string::npos) {
     str.replace(pos, old_sub.size(), new_sub);
@@ -375,7 +380,7 @@ std::string replace_all(std::string str, const std::string &old_sub,
 } // namespace AMStr
 
 namespace AMPathStr {
-std::string GetPathSep(const std::string &path) {
+inline std::string GetPathSep(const std::string &path) {
 #ifdef AMForceUsingUnixSep
   // force to use unix path separator
   return "/";
@@ -397,7 +402,7 @@ std::string GetPathSep(const std::string &path) {
   return slash_count < anti_slash_count ? "\\" : "/";
 }
 
-std::string RegexEscape(const std::string &input) {
+inline std::string RegexEscape(const std::string &input) {
   // 返回转义
   std::string escaped;
   escaped.reserve(input.size() * 2); // 预分配内存优化性能
@@ -456,7 +461,7 @@ inline bool IsAbs(const std::string &path, const std::string &sep = "") {
 }
 
 inline std::string extname(const std::string &path) {
-  std::string base = AMStr::Strip(path);
+  std::string base = AMStr::lowercase(AMStr::Strip(path));
   std::string ext = "";
   size_t dot_pos = path.find_last_of('.');
   if (dot_pos != std::string::npos) {
@@ -1034,21 +1039,18 @@ listdir(const std::string &path, amf interrupt_flag = nullptr,
 
 class BasePathMatch {
 private:
-  virtual std::pair<ECM, PathInfo>
-  stat(const std::string &path, bool trace_link = false,
-       amf interrupt_flag = nullptr, int timeout_ms = -1,
-       std::chrono::steady_clock::time_point start_time =
-           std::chrono::steady_clock::now()) = 0;
+  virtual std::pair<ECM, PathInfo> stat(const std::string &path,
+                                        bool trace_link = false,
+                                        amf interrupt_flag = nullptr,
+                                        int timeout_ms = -1,
+                                        int64_t start_time = -1) = 0;
   virtual std::pair<ECM, std::vector<PathInfo>>
   listdir(const std::string &path, amf interrupt_flag = nullptr,
-          int timeout_ms = -1,
-          std::chrono::steady_clock::time_point start_time =
-              std::chrono::steady_clock::now()) = 0;
+          int timeout_ms = -1, int64_t start_time = -1) = 0;
   virtual std::pair<ECM, std::vector<PathInfo>>
   iwalk(const std::string &path, bool ignore_sepcial_file = true,
         amf interrupt_flag = nullptr, int timeout_ms = -1,
-        std::chrono::steady_clock::time_point start_time =
-            std::chrono::steady_clock::now()) = 0;
+        int64_t start_time = -1) = 0;
   std::string star_rep = "amspecial1123exchange2123for1233star4123dd";
   std::string less_rep = "amspecial4123exchange3332for2less131aa";
   std::string greater_rep = "amspecial721exchange623for511greater422ff";
@@ -1057,8 +1059,7 @@ private:
              const std::vector<std::string> &match_parts,
              const SearchType &type, const std::string &sep,
              amf interrupt_flag = nullptr, int timeout_ms = -1,
-             std::chrono::steady_clock::time_point start_time =
-                 std::chrono::steady_clock::now()) {
+             int64_t start_time = -1) {
     if (match_parts.empty()) {
       if (type == SearchType::All ||
           (type == SearchType::Directory && path.type == PathType::DIR) ||
@@ -1086,8 +1087,7 @@ private:
         if (interrupt_flag && interrupt_flag->check()) {
           return;
         }
-        if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
-                                  std::chrono::milliseconds(timeout_ms)) {
+        if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
           return;
         }
         if ((sub.type == PathType::DIR && type == SearchType::File) ||
@@ -1117,8 +1117,7 @@ private:
         if (interrupt_flag && interrupt_flag->check()) {
           return;
         }
-        if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
-                                  std::chrono::milliseconds(timeout_ms)) {
+        if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
           return;
         }
         if (sub.name == cur_pattern) {
@@ -1140,8 +1139,7 @@ private:
         if (interrupt_flag && interrupt_flag->check()) {
           return;
         }
-        if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
-                                  std::chrono::milliseconds(timeout_ms)) {
+        if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
           return;
         }
         if (name_match(sub.name, cur_pattern)) {
@@ -1220,8 +1218,7 @@ public:
   std::vector<PathInfo> find(const std::string &path,
                              SearchType type = SearchType::All,
                              amf interrupt_flag = nullptr, int timeout_ms = -1,
-                             std::chrono::steady_clock::time_point start_time =
-                                 std::chrono::steady_clock::now()) {
+                             int64_t start_time = -1) {
     std::vector<PathInfo> results = {};
     auto parts = AMPathStr::split(path);
     if (parts.empty()) {

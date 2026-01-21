@@ -138,7 +138,7 @@ public:
       DWORD flags =
           sequential ? FILE_FLAG_SEQUENTIAL_SCAN : FILE_ATTRIBUTE_NORMAL;
 
-      file_handle = CreateFileW(AMFS::Str::AMStr(path).c_str(), access, share,
+      file_handle = CreateFileW(AMStr::wstr(path).c_str(), access, share,
                                 nullptr, creation, flags, nullptr);
 
       if (file_handle == INVALID_HANDLE_VALUE) {
@@ -305,13 +305,29 @@ public:
 };
 
 using AMCilent =
-    std::variant<std::shared_ptr<AMSFTPClient>, std::shared_ptr<AMFTPClient>>;
-std::optional<AMCilent>
+    std::variant<std::shared_ptr<AMSFTPClient>, std::shared_ptr<AMFTPClient>,
+                 std::shared_ptr<AMLocalClient>>;
+using ECM = std::pair<ErrorCode, std::string>;
+using EC = ErrorCode;
+
+inline std::optional<AMCilent>
 CreateClient(const ConRequst &requeset, ClientProtocol protocol,
              ssize_t trace_num = 10, py::object trace_cb = py::none(),
              ssize_t buffer_size = 8 * AMMB, std::vector<std::string> keys = {},
-             py::object auth_cb = py::none());
-
+             py::object auth_cb = py::none()) {
+  if (protocol == ClientProtocol::SFTP) {
+    auto client = std::make_shared<AMSFTPClient>(requeset, keys, trace_num,
+                                                 trace_cb, auth_cb);
+    client->TransferRingBufferSize(buffer_size);
+    return client;
+  } else if (protocol == ClientProtocol::FTP) {
+    auto client = std::make_shared<AMFTPClient>(requeset, trace_num, trace_cb);
+    client->TransferRingBufferSize(buffer_size);
+    return client;
+  } else {
+    return std::nullopt;
+  }
+}
 class ClientMaintainer {
 private:
   std::unordered_map<std::string, std::shared_ptr<BaseClient>> hosts;
@@ -350,6 +366,7 @@ private:
   }
 
 public:
+  std::shared_ptr<AMLocalClient> local_client;
   ~ClientMaintainer() {
     is_heartbeat.store(false);
     if (heartbeat_thread.joinable()) {
@@ -358,6 +375,10 @@ public:
   }
 
   std::shared_ptr<BaseClient> GetHost(const std::string &nickname) {
+    if (nickname.empty()) {
+      return local_client;
+    }
+
     if (hosts.find(nickname) == hosts.end()) {
       return nullptr;
     }
@@ -366,6 +387,9 @@ public:
 
   ClientMaintainer(int heartbeat_interval_s = 60,
                    py::object disconnect_cb = py::none()) {
+    // 初始化本地客户端
+    this->local_client =
+        std::make_shared<AMLocalClient>(ConRequst("local", "", ""));
     this->is_heartbeat.store(true);
     heartbeat_thread = std::thread(
         [this, heartbeat_interval_s]() { HeartbeatAct(heartbeat_interval_s); });
@@ -384,6 +408,9 @@ public:
   }
 
   std::optional<AMCilent> get_client(const std::string &nickname) {
+    if (nickname.empty()) {
+      return local_client;
+    }
     if (hosts.find(nickname) == hosts.end()) {
       return std::nullopt;
     }
@@ -392,6 +419,8 @@ public:
       return std::dynamic_pointer_cast<AMSFTPClient>(client);
     } else if (client->GetProtocol() == ClientProtocol::FTP) {
       return std::dynamic_pointer_cast<AMFTPClient>(client);
+    } else if (client->GetProtocol() == ClientProtocol::LOCAL) {
+      return std::dynamic_pointer_cast<AMLocalClient>(client);
     }
     return std::nullopt;
   }
@@ -411,8 +440,10 @@ public:
   }
 
   void add_client(const std::string &nickname,
-                  std::shared_ptr<AMSFTPClient> client,
-                  bool overwrite = false) {
+                  std::shared_ptr<BaseClient> client, bool overwrite = false) {
+    if (nickname.empty()) {
+      return;
+    }
     std::lock_guard<std::recursive_mutex> lock(beat_mtx);
     if (hosts.find(nickname) != hosts.end()) {
       if (!overwrite) {
@@ -420,44 +451,58 @@ public:
       }
       hosts.erase(nickname);
     }
+    hosts[nickname] = std::dynamic_pointer_cast<BaseClient>(client);
+  }
 
-    hosts[nickname] = std::dynamic_pointer_cast<BaseClient>(client);
-  }
-  void add_client(const std::string &nickname,
-                  std::shared_ptr<AMFTPClient> client, bool overwrite = false) {
-    std::lock_guard<std::recursive_mutex> lock(beat_mtx);
-    if (hosts.find(nickname) != hosts.end()) {
-      if (!overwrite) {
-        return;
-      }
-      hosts.erase(nickname);
-    }
-    hosts[nickname] = std::dynamic_pointer_cast<BaseClient>(client);
-  }
+  // void add_client(const std::string &nickname,
+  //                 std::shared_ptr<AMFTPClient> client, bool overwrite =
+  //                 false) {
+  //   std::lock_guard<std::recursive_mutex> lock(beat_mtx);
+  //   if (hosts.find(nickname) != hosts.end()) {
+  //     if (!overwrite) {
+  //       return;
+  //     }
+  //     hosts.erase(nickname);
+  //   }
+  //   hosts[nickname] = std::dynamic_pointer_cast<BaseClient>(client);
+  // }
 
   void remove_client(const std::string &nickname) {
+    if (nickname.empty()) {
+      // 不允许删除默认本地客户端
+      return;
+    }
     std::lock_guard<std::recursive_mutex> lock(beat_mtx);
     if (hosts.find(nickname) != hosts.end()) {
       hosts.erase(nickname);
     }
   }
 
-  ECM test_client(const std::string &nickname, bool update = false) {
+  std::pair<ECM, std::shared_ptr<BaseClient>>
+  test_client(const std::string &nickname, bool update = false,
+              amf interrupt_flag = nullptr, int timeout_ms = -1,
+              int64_t start_time = -1) {
     if (nickname.empty()) {
-      return ECM{EC::InvalidArg, "Host nickname is empty"};
-    } else if (hosts.find(nickname) == hosts.end()) {
-      return ECM{EC::ClientNotFound,
-                 fmt::format("Client not found: {}", nickname)};
+      return {ECM{EC::Success, ""}, local_client};
+    }
+    start_time = start_time == -1 ? am_ms() : start_time;
+    ;
+    if (hosts.find(nickname) == hosts.end()) {
+      return {ECM{EC::ClientNotFound,
+                  fmt::format("Client not found: {}", nickname)},
+              nullptr};
     }
     if (!update) {
       ECM rcm = hosts[nickname]->GetState();
       if (rcm.first != EC::Success) {
-        return hosts[nickname]->Check();
+        return {hosts[nickname]->Check(interrupt_flag, timeout_ms, start_time),
+                hosts[nickname]};
       } else {
-        return rcm;
+        return {rcm, hosts[nickname]};
       }
     } else {
-      return hosts[nickname]->Connect();
+      return {hosts[nickname]->Check(interrupt_flag, timeout_ms, start_time),
+              hosts[nickname]};
     }
   }
 
@@ -475,6 +520,7 @@ public:
 
 class AMSFTPWorker {
 private:
+  amf worker_interrupt_flag = std::make_shared<InterruptFlag>();
   ECM Transit(const std::string &src, const std::string &dst,
               const std::shared_ptr<AMSFTPClient> &src_worker,
               const std::shared_ptr<AMSFTPClient> &dst_worker) {
@@ -484,7 +530,7 @@ private:
     LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
     std::lock_guard<std::recursive_mutex> lock(src_worker->mtx);
     std::lock_guard<std::recursive_mutex> lock2(dst_worker->mtx);
-    dst_worker->mkdir(AMFS::dirname(dst));
+    dst_worker->mkdir(AMPathStr::dirname(dst));
     srcFile = libssh2_sftp_open(src_worker->sftp, src.c_str(), LIBSSH2_FXF_READ,
                                 0400);
     dstFile = libssh2_sftp_open(
@@ -626,7 +672,7 @@ private:
     LIBSSH2_SFTP_HANDLE *srcFile = nullptr;
     LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
     std::lock_guard<std::recursive_mutex> lock(worker->mtx);
-    worker->mkdirs(AMFS::dirname(dst));
+    worker->mkdirs(AMPathStr::dirname(dst));
     srcFile =
         libssh2_sftp_open(worker->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
 
@@ -759,11 +805,11 @@ private:
 
   void Reading(const TransferTask &task, std::shared_ptr<BaseClient> client,
                ConRequst request = ConRequst()) {
-    if ((client && client->GetProtocol() == ClientProtocol::SFTP) ||
-        (!client && request.nickname.empty())) {
+    if ((client->GetProtocol() == ClientProtocol::SFTP) ||
+        (client->GetProtocol() == ClientProtocol::LOCAL)) {
       UnionFileHandle file_handle;
       std::shared_ptr<AMSFTPClient> clientf = nullptr;
-      if (client) {
+      if (client->GetProtocol() == ClientProtocol::SFTP) {
         clientf = std::static_pointer_cast<AMSFTPClient>(client);
       }
       ECM rcm = file_handle.Init(task.src, task.size, clientf, false, true);
@@ -790,16 +836,16 @@ private:
           return;
         }
       }
-    } else if (!client && !request.nickname.empty()) {
-      auto client_ftp = std::make_shared<AMFTPClient>(request);
-      ECM ecm = client_ftp->Connect();
-      if (ecm.first != EC::Success) {
-        pd.is_terminate.store(true);
-        pd.rcm = ecm;
-        return;
-      }
-      client_ftp->Download(task.src, FTPGiveData, &pd);
-    } else if (client && client->GetProtocol() == ClientProtocol::FTP) {
+      // } else if (!client && !request.nickname.empty()) {
+      //   auto client_ftp = std::make_shared<AMFTPClient>(request);
+      //   ECM ecm = client_ftp->Connect();
+      //   if (ecm.first != EC::Success) {
+      //     pd.is_terminate.store(true);
+      //     pd.rcm = ecm;
+      //     return;
+      //   }
+      //   client_ftp->Download(task.src, FTPGiveData, &pd);
+    } else if (client->GetProtocol() == ClientProtocol::FTP) {
       // 读取FTP文件，而且需要创建额外的ftp客户端
       auto client_ftp = std::static_pointer_cast<AMFTPClient>(client);
       client_ftp->Download(task.src, FTPGiveData, &pd);
@@ -808,11 +854,11 @@ private:
 
   void Writing(const TransferTask &task, std::shared_ptr<BaseClient> client,
                ConRequst request = ConRequst()) {
-    if ((client && client->GetProtocol() == ClientProtocol::SFTP) ||
-        (!client && request.nickname.empty())) {
+    if ((client->GetProtocol() == ClientProtocol::SFTP) ||
+        (client->GetProtocol() == ClientProtocol::LOCAL)) {
       UnionFileHandle file_handle;
       std::shared_ptr<AMSFTPClient> clientf = nullptr;
-      if (client) {
+      if (client->GetProtocol() == ClientProtocol::SFTP) {
         clientf = std::static_pointer_cast<AMSFTPClient>(client);
       }
       ECM rcm = file_handle.Init(task.dst, task.size, clientf, true, true);
@@ -842,29 +888,30 @@ private:
         pd.this_size = file_handle.offset;
         InnerCallback();
       }
-    } else if (!client && !request.nickname.empty()) {
-      auto client_ftp = std::make_shared<AMFTPClient>(request);
-      ECM ecm = client_ftp->Connect();
-      if (ecm.first != EC::Success) {
-        pd.is_terminate.store(true);
-        pd.rcm = ecm;
-        return;
-      }
-      client_ftp->Upload(task.dst, FTPGiveData, &pd);
-    } else if (client && client->GetProtocol() == ClientProtocol::FTP) {
+      // } else if (!client && !request.nickname.empty()) {
+      //   auto client_ftp = std::make_shared<AMFTPClient>(request);
+      //   ECM ecm = client_ftp->Connect();
+      //   if (ecm.first != EC::Success) {
+      //     pd.is_terminate.store(true);
+      //     pd.rcm = ecm;
+      //     return;
+      //   }
+      //   client_ftp->Upload(task.dst, FTPGiveData, &pd);
+    } else if (client->GetProtocol() == ClientProtocol::FTP) {
       // 读取FTP文件，而且需要创建额外的ftp客户端
       auto client_ftp = std::static_pointer_cast<AMFTPClient>(client);
-      client_ftp->Upload(task.dst, FTPGiveData, &pd);
+      client_ftp->Upload(task.dst, FTPNeedData, &pd);
     }
   }
 
+  /*
   std::pair<ECM, PathInfo> Ustat(const std::string &path,
                                  const std::shared_ptr<ClientMaintainer> &hostm,
                                  const std::string &nickname = "") {
     if (nickname.empty()) {
       auto res = AMFS::stat(path);
-      if (!res.first.empty()) {
-        return {ECM{EC::LocalStatError, res.first}, res.second};
+      if (res.first.first != EC::Success) {
+        return {ECM{EC::LocalStatError, res.first.second}, res.second};
       }
       return {ECM{EC::Success, ""}, res.second};
     }
@@ -884,7 +931,7 @@ private:
                                const std::string &nickname = "",
                                bool ignore_special_file = true) {
     if (nickname.empty()) {
-      return AMFS::iwalk(path, ignore_special_file);
+      return {};
     }
     ECM rc = hostm->test_client(nickname);
     if (rc.first != EC::Success) {
@@ -894,31 +941,38 @@ private:
     if (!client) {
       return {};
     }
-    return client->iwalk(path, ignore_special_file);
+    return client->iwalk(path, ignore_special_file).second;
   }
+*/
+
   ECM _UnionTransfer(const TransferTask &task,
                      std::shared_ptr<BaseClient> src_client = nullptr,
                      std::shared_ptr<BaseClient> dst_client = nullptr) {
     ConRequst request;
-    if (src_client && src_client->GetProtocol() == ClientProtocol::SFTP &&
-        dst_client && dst_client->GetProtocol() == ClientProtocol::SFTP) {
+    if (src_client->GetProtocol() == ClientProtocol::SFTP &&
+        dst_client->GetProtocol() == ClientProtocol::SFTP) {
       // 走SFTP非阻塞模式
       return this->Transit(task.src, task.dst,
                            std::static_pointer_cast<AMSFTPClient>(src_client),
                            std::static_pointer_cast<AMSFTPClient>(dst_client));
-    } else if (src_client && src_client->GetProtocol() == ClientProtocol::FTP &&
-               dst_client && dst_client->GetProtocol() == ClientProtocol::FTP) {
-      // 双FTP模式
-      request = src_client->GetRequest();
     }
+    // } else if (src_client->GetProtocol() == ClientProtocol::FTP &&
+    //             dst_client->GetProtocol() == ClientProtocol::FTP) {
+    //   // 双FTP模式
+    //   request = src_client->GetRequest();
+
+    // }
     // 启动一个thread执行Reading
+    std::cout << "init_reading" << std::endl;
     std::thread reading_thread(
         [&]() { this->Reading(task, src_client, request); });
-
+    std::cout << "init_writing" << std::endl;
     this->Writing(task, dst_client, request);
+    std::cout << "Writing done" << std::endl;
     if (reading_thread.joinable()) {
       reading_thread.join();
     }
+    std::cout << "Reading done" << std::endl;
     if (pd.rcm.first == EC::Success) {
       if (pd.is_terminate.load()) {
         return {EC::Terminate, "Transfer terminated by user"};
@@ -929,6 +983,7 @@ private:
       return pd.rcm;
     }
   }
+
   ssize_t CalculateBufferSize(std::shared_ptr<BaseClient> src_client,
                               std::shared_ptr<BaseClient> dst_client,
                               ssize_t provided_size) {
@@ -977,6 +1032,9 @@ private:
                                        task.src_host)},
             nullptr, nullptr};
       }
+    } else {
+      // src_host 为空时使用本地客户端
+      src_client = hostm->local_client;
     }
     if (!task.dst_host.empty()) {
       dst_client = hostm->GetHost(task.dst_host);
@@ -993,6 +1051,9 @@ private:
                                 task.dst_host)},
                 nullptr, nullptr};
       }
+    } else {
+      // dst_host 为空时使用本地客户端
+      dst_client = hostm->local_client;
     }
     return {rcm, src_client, dst_client};
   }
@@ -1001,6 +1062,10 @@ public:
   TransferCallback callback;
   ProgressData pd;
 
+  AMSFTPWorker(TransferCallback callback, float cb_interval_s = 0.2)
+      : callback(std::move(callback)), pd(cb_interval_s) {
+    this->pd.progress_cb = [this](bool force) { InnerCallback(force); };
+  }
   inline void InnerCallback(bool force = false) {
     if (callback.need_progress_cb) {
       auto time_now = timenow();
@@ -1018,16 +1083,14 @@ public:
       }
     }
   }
-  AMSFTPWorker(const TransferCallback &callback, float cb_interval_s = 0.2)
-      : callback(callback), pd(cb_interval_s) {
-    this->pd.progress_cb = [this](bool force) { InnerCallback(force); };
-  }
 
   static size_t FTPNeedData(char *ptr, size_t size, size_t nmemb,
                             void *userdata) {
     // size指块数，但这个值往往是1
     auto *pd = static_cast<ProgressData *>(userdata);
-    while (pd->ring_buffer->available() == 0 && !pd->is_terminate.load()) {
+
+    while (pd->ring_buffer->available() == 0 && !pd->is_terminate.load() &&
+           pd->this_size < pd->file_size) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     while (pd->is_pause.load() && !pd->is_terminate.load()) {
@@ -1036,7 +1099,6 @@ public:
     if (pd->is_terminate.load()) {
       return CURL_READFUNC_ABORT;
     }
-
     auto [read_ptr, read_len] = pd->ring_buffer->get_read_ptr();
     ssize_t to_read = read_len > size * nmemb ? size * nmemb : read_len;
     if (to_read > 0) {
@@ -1134,6 +1196,12 @@ public:
         result.push_back(task);
       }
     }
+    // 排序，讲task中type为DIR的task放在前面，type为FILE的task放在后面
+    std::sort(result.begin(), result.end(),
+              [](const TransferTask &a, const TransferTask &b) {
+                return a.path_type == PathType::DIR &&
+                       b.path_type != PathType::DIR;
+              });
     return result;
   }
 
@@ -1160,43 +1228,42 @@ public:
     }
 
     for (auto &task : tasksf) {
-      if (task.IsSuccess) {
+      if (task.IsFinished) {
         // 跳过在load_tasks中，未设置overlap且dst已经存在的任务
-        continue;
-      }
-
-      if (pd.is_terminate.load()) {
-        task.rc = ECM(EC::Terminate, "Transfer cancelled by user");
         goto check;
       }
 
+      if (pd.is_terminate.load()) {
+        task.rcm = ECM(EC::Terminate, "Transfer cancelled by user");
+        goto check;
+      }
       test_res = TestHost(task, hostm);
       rcm = std::get<0>(test_res);
 
       if (rcm.first != EC::Success) {
-        task.rc = rcm;
+        task.rcm = rcm;
         goto check;
       }
 
       src_client = std::get<1>(test_res);
       dst_client = std::get<2>(test_res);
       if (task.path_type == PathType::DIR) {
-        task.rc = dst_client->mkdirs(task.dst);
+        task.rcm = dst_client->mkdirs(task.dst);
+        goto check;
       }
       pd.next_file(task,
                    CalculateBufferSize(src_client, dst_client, buffer_size));
-      task.rc = _UnionTransfer(task, src_client, dst_client);
+      task.rcm = _UnionTransfer(task, src_client, dst_client);
       InnerCallback(true);
 
     check:
-      if (task.rc.first != EC::Success) {
-        if (callback.need_error_cb && task.rc.first != EC::Terminate) {
+      task.IsFinished = true;
+      if (task.rcm.first != EC::Success) {
+        if (callback.need_error_cb && task.rcm.first != EC::Terminate) {
           py::gil_scoped_acquire acquire;
-          callback.error_cb(ErrorCBInfo(task.rc, task.src, task.dst,
+          callback.error_cb(ErrorCBInfo(task.rcm, task.src, task.dst,
                                         task.src_host, task.dst_host));
         }
-      } else {
-        task.IsSuccess = true;
       }
     }
     return tasksf;
@@ -1207,98 +1274,94 @@ public:
              const std::shared_ptr<ClientMaintainer> &hostm,
              const std::string &src_host = "", const std::string &dst_host = "",
              bool overwrite = false, bool mkdir = true,
-             bool ignore_sepcial_file = true) {
+             bool ignore_sepcial_file = true, amf interrupt_flag = nullptr,
+             int timeout_ms = -1, int64_t start_time = -1) {
+    start_time = start_time == -1 ? am_ms() : start_time;
+    interrupt_flag = interrupt_flag ? interrupt_flag : worker_interrupt_flag;
     WRV result = {};
     TASKS tasks = {};
-    ECM rc;
-    std::shared_ptr<AMSFTPClient> src_client;
     // 去除src的dst左右端的空格
-    if (!src_host.empty()) {
-      rc = hostm->test_client(src_host);
-      if (rc.first != EC::Success) {
-        return {rc, tasks};
-      }
+    std::cout << "src: " << src << std::endl;
+    auto [rc1, src_client] = hostm->test_client(src_host, false, interrupt_flag,
+                                                timeout_ms, start_time);
+    std::cout << "rc1: " << std::endl;
+    if (rc1.first != EC::Success) {
+      return {rc1, tasks};
     }
-    if (!dst_host.empty()) {
-      rc = hostm->test_client(dst_host);
-      if (rc.first != EC::Success) {
-        return {rc, tasks};
-      }
+    auto [rc2, dst_client] = hostm->test_client(dst_host, false, interrupt_flag,
+                                                timeout_ms, start_time);
+    std::cout << "rc2: " << std::endl;
+    if (rc2.first != EC::Success) {
+      return {rc2, tasks};
     }
-
-    auto [rcm, src_stat] = Ustat(src, hostm, src_host);
-
-    if (rcm.first != EC::Success) {
-      return {rcm, tasks};
+    auto [rc3, src_stat] =
+        src_client->stat(src, false, interrupt_flag, timeout_ms, start_time);
+    std::cout << "rc3: " << std::endl;
+    if (rc3.first != EC::Success) {
+      return {rc3, tasks};
     }
-
-    std::string srcf = src_stat.path;
-    std::string dstf;
-    if (dst_host.empty()) {
-      dstf = AMFS::abspath(dst);
-    } else {
-      auto client = hostm->GetHost(dst_host);
-      if (!client) {
-        return {
-            ECM(EC::NoSession,
-                fmt::format("Destination SFTP Client: {} not found", dst_host)),
-            tasks};
-      }
-      dstf = dst;
-    }
-
+    std::cout << "rc4: " << std::endl;
     // 检查是否为 src_file -> dst_file 的传输
+    auto dstf = dst;
+    auto srcf = src;
     bool is_dst_file = false;
     if (src_stat.type == PathType::FILE) {
       // 检查dst的扩展名和src扩展名是否相同
-      std::string dst_ext = AMFS::extname(dstf);
-      if (AMFS::extname(srcf) == dst_ext && !dst_ext.empty()) {
+      std::cout << "rc5: " << std::endl;
+      std::string dst_ext = AMPathStr::extname(dstf);
+      if (AMPathStr::extname(srcf) == dst_ext && !dst_ext.empty()) {
         is_dst_file = true;
       }
     }
 
     if (src_stat.type != PathType::DIR) {
-      if (ignore_sepcial_file && src_stat.type != PathType::FILE &&
-          src_stat.type != PathType::SYMLINK) {
+      std::cout << "rc6: " << std::endl;
+      if (ignore_sepcial_file && src_stat.type != PathType::FILE) {
         return {ECM{EC::NotAFile, fmt::format("Src is not a common file and "
                                               "ignore_sepcial_file is true: {}",
                                               srcf)},
                 {}};
       }
-
+      std::cout << "rc7: " << std::endl;
       if (!is_dst_file) {
-        dstf = AMFS::join(dstf, AMFS::basename(srcf));
+        dstf = AMPathStr::join(dstf, AMPathStr::basename(srcf));
       }
-      auto [rcm7, dst_info4] = Ustat(dstf, hostm, dst_host);
-
-      // 检验目标路径是否存在
-      if (rcm7.first == EC::Success) {
-        if (dst_info4.type == PathType::DIR) {
-          return {
-              ECM(EC::NotADirectory,
-                  fmt::format("Dst already exists and is not a directory: {}",
-                              dstf)),
-              tasks};
-        } else if (!overwrite) {
-          return {ECM{EC::PathAlreadyExists,
-                      fmt::format("Dst already exists: {}", dstf)},
-                  tasks};
-        }
-      }
-
+      std::cout << "rc8: " << std::endl;
+      std::cout << "dirname: " << AMPathStr::dirname(dstf) << std::endl;
       // 检测dst的父级目录是否存在
-      auto [rcm3, dst_parent_info] =
-          Ustat(AMFS::dirname(dstf), hostm, dst_host);
-      if (rcm3.first != EC::Success && !mkdir) {
+      auto [rcm4, dst_parent_info] =
+          dst_client->stat(AMPathStr::dirname(dstf), false, interrupt_flag,
+                           timeout_ms, start_time);
+      std::cout << "rc9: " << std::endl;
+      if (rcm4.first != EC::Success && !mkdir) {
         return {ECM{EC::ParentDirectoryNotExist,
                     fmt::format("Dst parent path not exists: {}",
-                                AMFS::dirname(dstf))},
+                                AMPathStr::dirname(dstf))},
                 tasks};
-      } else if (dst_parent_info.type != PathType::DIR) {
+      } else if (rcm4.first == EC::Success &&
+                 dst_parent_info.type != PathType::DIR) {
         return {ECM(EC::NotADirectory,
                     fmt::format("Dst parent path is not a directory: {}",
                                 dst_parent_info.path)),
                 tasks};
+      }
+      std::cout << "rc10: " << std::endl;
+      if (rcm4.first == EC::Success) {
+        auto [rcm5, dst_info] = dst_client->stat(dstf, false, interrupt_flag,
+                                                 timeout_ms, start_time);
+        // 检验目标路径是否存在
+        if (rcm4.first == EC::Success) {
+          if (dst_info.type == PathType::DIR) {
+            return {ECM(EC::NotAFile,
+                        fmt::format("Dst already exists and is a directory: {}",
+                                    dstf)),
+                    tasks};
+          } else if (!overwrite) {
+            return {ECM{EC::PathAlreadyExists,
+                        fmt::format("Dst already exists: {}", dstf)},
+                    tasks};
+          }
+        }
       }
 
       tasks.emplace_back(srcf, dstf, src_host, dst_host, src_stat.size,
@@ -1306,24 +1369,59 @@ public:
       return {ECM(EC::Success, ""), tasks};
     }
 
-    auto [rcm2, dst_info] = Ustat(dstf, hostm, dst_host);
+    auto [rcm6, dst_info] =
+        dst_client->stat(dstf, false, interrupt_flag, timeout_ms, start_time);
 
-    if (rcm2.first != EC::Success && !mkdir) {
+    if (rcm6.first != EC::Success && !mkdir) {
       return {ECM{EC::ParentDirectoryNotExist,
                   fmt::format("Dst parent path not exists: {}", dstf)},
               tasks};
-    } else if (rcm2.first == EC::Success && dst_info.type != PathType::DIR) {
+    } else if (rcm6.first == EC::Success && dst_info.type != PathType::DIR) {
       return {ECM(EC::NotADirectory,
                   fmt::format("Dst already exists and is not a directory: {}",
                               dstf)),
               tasks};
     }
 
-    auto result2 = Uiwalk(srcf, hostm, src_host, ignore_sepcial_file);
+    auto [rcm7, src_paths] =
+        src_client->iwalk(srcf, false, interrupt_flag, timeout_ms, start_time);
+    if (rcm7.first != EC::Success) {
+      return {rcm7, tasks};
+    }
+    tasks.reserve(src_paths.size());
 
+    TransferTask taskt;
     std::string dst_n;
-    for (auto &item : result2) {
-      dst_n = AMFS::join(dstf, fs::relative(item.path, AMFS::dirname(srcf)));
+    for (auto &item : src_paths) {
+      if (interrupt_flag && interrupt_flag->check()) {
+        return {ECM{EC::Terminate, "Load tasks interrupted by user"}, tasks};
+      }
+      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+        return {ECM{EC::OperationTimeout, "Load tasks timeout"}, tasks};
+      }
+      dst_n = AMPathStr::join(
+          dstf, fs::relative(item.path, AMPathStr::dirname(srcf)));
+      auto [rcm8, dst_info2] = dst_client->stat(dst_n, false, interrupt_flag,
+                                                timeout_ms, start_time);
+      if (rcm8.first == EC::Success) {
+        if (dst_info2.type == PathType::DIR) {
+          taskt = TransferTask(item.path, dst_n, src_host, dst_host, item.size,
+                               item.type);
+          taskt.IsFinished = true;
+          taskt.rcm =
+              ECM{EC::NotAFile, "Dst already exists and is a directory"};
+        } else if (!overwrite) {
+          taskt = TransferTask(item.path, dst_n, src_host, dst_host, item.size,
+                               item.type);
+          taskt.IsFinished = true;
+          taskt.rcm = ECM{EC::PathAlreadyExists, "Dst already exists"};
+        } else {
+          taskt = TransferTask(item.path, dst_n, src_host, dst_host, item.size,
+                               item.type);
+        }
+        tasks.push_back(taskt);
+        continue;
+      }
       tasks.emplace_back(item.path, dst_n, src_host, dst_host, item.size,
                          item.type);
     }

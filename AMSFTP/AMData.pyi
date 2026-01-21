@@ -4,7 +4,7 @@ Data Classes
 import AMSFTP.AMEnum
 from __future__ import annotations
 import typing
-__all__ = ['AuthCBInfo', 'ConRequst', 'ErrorCBInfo', 'PathInfo', 'ProgressCBInfo', 'TraceInfo', 'TransferCallback', 'TransferTask']
+__all__ = ['AuthCBInfo', 'ConRequst', 'ErrorCBInfo', 'InterruptFlag', 'PathInfo', 'ProgressCBInfo', 'TraceInfo', 'TransferCallback', 'TransferTask']
 class AuthCBInfo:
     """
     Authentication Callback Information
@@ -31,9 +31,8 @@ class AuthCBInfo:
 class ConRequst:
     password: str
     port: int
-    timeout_s: int
     username: str
-    def __init__(self, nickname: str = '', hostname: str = '', username: str = '', port: int = 22, password: str = '', keyfile: str = '', compression: bool = False, timeout_s: int = 3, trash_dir: str = '') -> None:
+    def __init__(self, nickname: str = '', hostname: str = '', username: str = '', port: int = 22, password: str = '', keyfile: str = '', compression: bool = False, trash_dir: str = '') -> None:
         ...
     @property
     def compression(self) -> bool:
@@ -120,6 +119,18 @@ class ErrorCBInfo:
         """
     @src_host.setter
     def src_host(self, arg0: str) -> None:
+        ...
+class InterruptFlag:
+    """
+    Interrupt Flag Class
+    """
+    def __init__(self) -> None:
+        ...
+    def check(self) -> bool:
+        ...
+    def reset(self) -> None:
+        ...
+    def set(self, is_interrupted: bool = True) -> None:
         ...
 class PathInfo:
     """
@@ -344,12 +355,12 @@ class TransferTask:
     def __init__(self, src: str, dst: str, src_host: str, dst_host: str, size: int, path_type: AMSFTP.AMEnum.PathType = ...) -> None:
         ...
     @property
-    def IsSuccess(self) -> bool:
+    def IsFinished(self) -> bool:
         """
-        If the transfer is successful
+        If the transfer is finished
         """
-    @IsSuccess.setter
-    def IsSuccess(self, arg0: bool) -> None:
+    @IsFinished.setter
+    def IsFinished(self, arg0: bool) -> None:
         ...
     @property
     def dst(self) -> str:
@@ -376,12 +387,12 @@ class TransferTask:
     def path_type(self, arg0: AMSFTP.AMEnum.PathType) -> None:
         ...
     @property
-    def rc(self) -> tuple[AMSFTP.AMEnum.ErrorCode, str]:
+    def rcm(self) -> tuple[AMSFTP.AMEnum.ErrorCode, str]:
         """
         Error code and message
         """
-    @rc.setter
-    def rc(self, arg0: tuple[AMSFTP.AMEnum.ErrorCode, str]) -> None:
+    @rcm.setter
+    def rcm(self, arg0: tuple[AMSFTP.AMEnum.ErrorCode, str]) -> None:
         ...
     @property
     def size(self) -> int:
