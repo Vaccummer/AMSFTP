@@ -6,16 +6,16 @@ import typing
 from . import AMData
 from . import AMEnum
 from . import AMFS
-__all__ = ['AMData', 'AMEnum', 'AMFS', 'AMFTPClient', 'AMSFTPClient', 'AMSFTPWorker', 'AMSession', 'AMTracer', 'BaseClient', 'BasePathMatch', 'ClientMaintainer', 'PathMatch']
+__all__ = ['AMData', 'AMEnum', 'AMFS', 'AMFTPClient', 'AMLocalClient', 'AMSFTPClient', 'AMSFTPWorker', 'AMSession', 'AMTracer', 'BaseClient', 'BasePathMatch', 'ClientMaintainer', 'GetLibssh2Version', 'IsValidKey', 'SteadyTimePoint', 'am_ms', 'am_s']
 class AMFTPClient(BaseClient):
     """
     An FTP Client Class Based on libcurl
     """
-    def Check(self, need_trace: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+    def Check(self, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[AMEnum.ErrorCode, str]:
         """
         Check FTP connection status
         """
-    def Connect(self, force: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+    def Connect(self, force: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[AMEnum.ErrorCode, str]:
         """
         Connect to FTP server
         """
@@ -25,75 +25,63 @@ class AMFTPClient(BaseClient):
         ...
     def __init__(self, request: AMData.ConRequst, buffer_capacity: int = 10, trace_cb: typing.Any = None) -> None:
         ...
-    def exists(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+    def exists(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
         """
         Check if path exists
         """
-    def is_dir(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+    def is_dir(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
         """
         Check if path is a directory
         """
-    def iwalk(self, path: str, ignore_special_file: bool = True) -> list[AMData.PathInfo]:
+    def iwalk(self, path: str, ignore_special_file: bool = True, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.PathInfo]]:
         """
         Deep walk to get all leaf paths
         """
-    def listdir(self, path: str, max_time_ms: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.PathInfo]]:
+    def listdir(self, path: str, interrupt_flag: AMData.InterruptFlag, max_time_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.PathInfo]]:
         """
         List directory contents
         """
-    def mkdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+    def mkdir(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
         """
         Create a directory
         """
-    def mkdirs(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+    def mkdirs(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
         """
         Create directories recursively
         """
-    def move(self, src: str, dst: str, need_mkdir: bool, force_write: bool) -> tuple[AMEnum.ErrorCode, str]:
+    def move(self, src: str, dst: str, need_mkdir: bool = True, overwrite: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[AMEnum.ErrorCode, str]:
         """
         Move file/directory to destination folder
         """
-    def remove(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[str, tuple[AMEnum.ErrorCode, str]]]]:
+    def remove(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[str, tuple[AMEnum.ErrorCode, str]]]]:
         """
         Remove file or directory recursively
         """
-    def rename(self, src: str, dst: str, overwrite: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+    def rename(self, src: str, dst: str, mkdir: bool = True, overwrite: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[AMEnum.ErrorCode, str]:
         ...
-    def rmdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+    def rmdir(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
         """
         Remove an empty directory
         """
-    def rmfile(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+    def rmfile(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
         """
         Remove a file permanently
         """
-    def stat(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], AMData.PathInfo]:
+    def stat(self, path: str, trace_link: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], AMData.PathInfo]:
         """
         Get file information
         """
-    def walk(self, path: str, max_depth: int = -1, ignore_special_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[list[str], list[AMData.PathInfo]]]]:
+    def walk(self, path: str, max_depth: int = -1, ignore_special_file: bool = True, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[list[str], list[AMData.PathInfo]]]]:
         """
         Walk directory tree, returns list of (dirparts, [PathInfo]) tuples
         """
-class AMSFTPClient(AMSession):
+class AMLocalClient(BaseClient):
     """
-    An SFTP Client Class Based on libssh2
+    An Local Client Class Based on local filesystem
     """
-    def Check(self, need_trace: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+    def Check(self, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[AMEnum.ErrorCode, str]:
         """
         Check will force to update state, use GetState to get the cached state
-        """
-    def ConductCmd(self, cmd: str, max_time_s: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], tuple[str, int]]:
-        """
-        Execute shell command on remote server
-        """
-    def Connect(self, force: bool = False) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        if force=True, will disconnect and reconnect, else will check first, if wrong then reconnect
-        """
-    def EnsureTrashDir(self) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Ensure the trash directory exists, if not, create it. If path is empty, will use default trash directory
         """
     def GetHomeDir(self) -> str:
         ...
@@ -101,103 +89,137 @@ class AMSFTPClient(AMSession):
         """
         Get the OS type of the server
         """
-    def GetRTT(self, times: int = 5) -> float:
-        """
-        Get round-trip time to server
-        """
-    def GetTrashDir(self) -> str:
+    def __init__(self, request: AMData.ConRequst, tracer_capacity: int = 10, trace_cb: typing.Any = None) -> None:
         ...
-    def SetTrashDir(self, trash_dir: str = '') -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Set the trash directory and create it if it doesn't exist, if wrong, will return error
-        """
-    def TerminateCmd(self) -> None:
-        """
-        Terminate currently running command
-        """
-    def __init__(self, request: AMData.ConRequst, keys: list[str] = [], tracer_capacity: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
-        ...
-    def chmod(self, path: str, mode: str | int, recursive: bool = False) -> tuple[tuple[AMEnum.ErrorCode, str], dict[str, tuple[AMEnum.ErrorCode, str]]]:
-        """
-        Recursive change the mode of the file
-        """
-    def copy(self, src: str, dst: str, need_mkdir: bool = False) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Copy file/directory on remote server using shell command
-        """
-    def exists(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+    def exists(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
         """
         Check if path exists
         """
-    def get_path_type(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], AMEnum.PathType]:
-        """
-        Get the type of the path
-        """
-    def getsize(self, path: str, ignore_special_file: bool = True) -> int:
-        """
-        Get total size of file or directory
-        """
-    def is_dir(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
-        """
-        Check if path is a directory
-        """
-    def is_regular(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
-        """
-        Check if path is a regular file
-        """
-    def is_symlink(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
-        """
-        Check if path is a symlink
-        """
-    def iwalk(self, path: str, ignore_special_file: bool = True) -> list[AMData.PathInfo]:
+    def iwalk(self, path: str, ignore_special_file: bool = True, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.PathInfo]]:
         """
         Deep walk to get all leaf paths
         """
-    def listdir(self, path: str, max_time_ms: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.PathInfo]]:
+    def listdir(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.PathInfo]]:
         """
         List directory contents
         """
-    def mkdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+    def mkdir(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
         """
         Create a directory
         """
-    def mkdirs(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+    def mkdirs(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
         """
         Create directories recursively
         """
-    def move(self, src: str, dst: str, need_mkdir: bool, force_write: bool) -> tuple[AMEnum.ErrorCode, str]:
+    def move(self, src: str, dst: str, mkdir: bool = False, overwrite: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[AMEnum.ErrorCode, str]:
         """
         Move file/directory to destination folder
         """
-    def realpath(self, path: str = '') -> tuple[tuple[AMEnum.ErrorCode, str], str]:
-        """
-        Use server to parse the path, ~ parsed in local, symlink parsed in server
-        """
-    def remove(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[str, tuple[AMEnum.ErrorCode, str]]]]:
+    def remove(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[str, tuple[AMEnum.ErrorCode, str]]]]:
         """
         Remove file or directory recursively
         """
-    def rename(self, src: str, dst: str, overwrite: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+    def rename(self, src: str, dst: str, mkdir: bool = True, overwrite: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[AMEnum.ErrorCode, str]:
         """
         Rename file/directory
         """
-    def rmdir(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+    def rmdir(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
         """
         Remove an empty directory
         """
-    def rmfile(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+    def rmfile(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
         """
         Remove a file permanently
         """
-    def saferm(self, path: str) -> tuple[AMEnum.ErrorCode, str]:
+    def saferm(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
         """
         Safely remove by moving to trash
         """
-    def stat(self, path: str) -> tuple[tuple[AMEnum.ErrorCode, str], AMData.PathInfo]:
+    def stat(self, path: str, trace_link: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], AMData.PathInfo]:
         """
         Get the detailed information about the file
         """
-    def walk(self, path: str, max_depth: int = -1, ignore_special_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[list[str], list[AMData.PathInfo]]]]:
+    def walk(self, path: str, max_depth: int = -1, ignore_special_file: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[list[str], list[AMData.PathInfo]]]]:
+        """
+        Walk directory tree, returns list of (dirpath, files) tuples
+        """
+class AMSFTPClient(AMSession):
+    """
+    An SFTP Client Class Based on libssh2
+    """
+    def Check(self, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Check will force to update state, use GetState to get the cached state
+        """
+    def Connect(self, force: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        if force=True, will disconnect and reconnect, else will check first, if wrong then reconnect
+        """
+    def GetHomeDir(self) -> str:
+        ...
+    def GetOSType(self, update: bool = False) -> AMEnum.OS_TYPE:
+        """
+        Get the OS type of the server
+        """
+    def __init__(self, request: AMData.ConRequst, keys: list[str] = [], tracer_capacity: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
+        ...
+    def chmod(self, path: str, mode: str | int, recursive: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], dict[str, tuple[AMEnum.ErrorCode, str]]]:
+        """
+        Recursive change the mode of the file
+        """
+    def exists(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+        """
+        Check if path exists
+        """
+    def iwalk(self, path: str, ignore_special_file: bool = True, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.PathInfo]]:
+        """
+        Deep walk to get all leaf paths
+        """
+    def listdir(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.PathInfo]]:
+        """
+        List directory contents
+        """
+    def mkdir(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Create a directory
+        """
+    def mkdirs(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Create directories recursively
+        """
+    def move(self, src: str, dst: str, mkdir: bool = False, overwrite: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Move file/directory to destination folder
+        """
+    def realpath(self, path: str = '', interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], str]:
+        """
+        Use server to parse the path, ~ parsed in local, symlink parsed in server
+        """
+    def remove(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[str, tuple[AMEnum.ErrorCode, str]]]]:
+        """
+        Remove file or directory recursively
+        """
+    def rename(self, src: str, dst: str, mkdir: bool = True, overwrite: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Rename file/directory
+        """
+    def rmdir(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Remove an empty directory
+        """
+    def rmfile(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Remove a file permanently
+        """
+    def saferm(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Safely remove by moving to trash
+        """
+    def stat(self, path: str, trace_link: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], AMData.PathInfo]:
+        """
+        Get the detailed information about the file
+        """
+    def walk(self, path: str, max_depth: int = -1, ignore_special_file: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[tuple[list[str], list[AMData.PathInfo]]]]:
         """
         Walk directory tree, returns list of (dirpath, files) tuples
         """
@@ -221,7 +243,7 @@ class AMSFTPWorker:
         """
         Create transfer worker with callback
         """
-    def load_tasks(self, src: str, dst: str, hostm: ClientMaintainer, src_host: str = '', dst_host: str = '', overwrite: bool = False, mkdir: bool = True, ignore_special_file: bool = True) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.TransferTask]]:
+    def load_tasks(self, src: str, dst: str, hostm: ClientMaintainer, src_host: str = '', dst_host: str = '', overwrite: bool = False, mkdir: bool = True, ignore_special_file: bool = True, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], list[AMData.TransferTask]]:
         """
         Load tasks from source and destination
         """
@@ -241,14 +263,6 @@ class AMSession(BaseClient):
     """
     An intermediate class between BaseClient and SFTP Client, Manage SSH Connection and Session
     """
-    def BaseCheck(self) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Attemp to stat home path to test the connection
-        """
-    def BaseConnect(self, force: bool = False) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Establish ssh ssesion and sftp, if force=True, will disconnect and reconnect, else will check first, if wrong then reconnect
-        """
     def GetKeys(self) -> list[str]:
         """
         Get the list of the keys
@@ -261,18 +275,6 @@ class AMSession(BaseClient):
         """
         Get the last error message of the session
         """
-    def GetLibssh2Version(self) -> str:
-        """
-        Get the version of the libssh2 library
-        """
-    def GetState(self) -> tuple[AMEnum.ErrorCode, str]:
-        """
-        Get the cached state of the session
-        """
-    def IsValidKey(self, key: str) -> bool:
-        """
-        Check if the keyfile is valid
-        """
     def SetAuthCallback(self, auth_cb: typing.Any) -> None:
         """
         Set the authentication callback function, callable[AuthCBInfo, None], if none, won't callback to python
@@ -281,8 +283,6 @@ class AMSession(BaseClient):
         """
         Set the list of the keys
         """
-    def __init__(self, request: AMData.ConRequst, keys: list[str], error_num: int = 10, trace_cb: typing.Any = None, auth_cb: typing.Any = None) -> None:
-        ...
 class AMTracer:
     """
     Base of the Client, Manage Trace action and record
@@ -343,14 +343,34 @@ class BaseClient(AMTracer, BasePathMatch):
         """
         Get the string name of the protocol of the client
         """
+    def GetState(self) -> tuple[AMEnum.ErrorCode, str]:
+        """
+        Get the cached state of the session
+        """
+    def get_path_type(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], AMEnum.PathType]:
+        """
+        Get the type of the path
+        """
+    def getsize(self, path: str, ignore_special_file: bool = True, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> int:
+        """
+        Get total size of file or directory
+        """
+    def is_dir(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+        """
+        Check if path is a directory
+        """
+    def is_regular(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+        """
+        Check if path is a regular file
+        """
+    def is_symlink(self, path: str, interrupt_flag: AMData.InterruptFlag, timeout_ms: int, start_time: int) -> tuple[tuple[AMEnum.ErrorCode, str], bool]:
+        """
+        Check if path is a symlink
+        """
 class BasePathMatch:
     """
     Base Path Match Class
     """
-    def find(self, path: str, type: AMEnum.SearchType = ...) -> list[AMData.PathInfo]:
-        """
-        Path Match Function, support * and <> , greater and less sign equal to [] in regex
-        """
     def name_match(self, name: str, pattern: str) -> bool:
         """
         Internal Function, preprocess the pattern and match the name
@@ -371,21 +391,15 @@ class ClientMaintainer:
         """
         Create client maintainer with heartbeat monitoring
         """
-    @typing.overload
-    def add_client(self, nickname: str, client: AMSFTPClient, overwrite: bool = False) -> None:
+    def add_client(self, nickname: str, client: BaseClient, overwrite: bool = False) -> None:
         """
-        Add a SFTP client to the maintainer
+        Add a client to the maintainer
         """
-    @typing.overload
-    def add_client(self, nickname: str, client: AMFTPClient, overwrite: bool = False) -> None:
-        """
-        Add a FTP client to the maintainer
-        """
-    def get_client(self, nickname: str) -> AMSFTPClient | AMFTPClient | None:
+    def get_client(self, nickname: str) -> AMSFTPClient | AMFTPClient | AMLocalClient | None:
         """
         Get a client by nickname
         """
-    def get_clients(self) -> list[AMSFTPClient | AMFTPClient]:
+    def get_clients(self) -> list[AMSFTPClient | AMFTPClient | AMLocalClient]:
         """
         Get list of all registered clients
         """
@@ -397,12 +411,26 @@ class ClientMaintainer:
         """
         Remove a client from the maintainer
         """
-    def test_client(self, nickname: str, update: bool = False) -> tuple[AMEnum.ErrorCode, str]:
+    def test_client(self, nickname: str, update: bool = False, interrupt_flag: AMData.InterruptFlag = None, timeout_ms: int = -1, start_time: int = -1) -> tuple[tuple[AMEnum.ErrorCode, str], BaseClient]:
         """
         Test client connection status
         """
-class PathMatch(BasePathMatch):
+class SteadyTimePoint:
+    pass
+def GetLibssh2Version() -> str:
     """
-    Local Path Match Class, using AMFS IO function to override Core Function
+    Get the version of the libssh2 library in string
+    """
+def IsValidKey(key: str) -> bool:
+    """
+    Check if the keyfile is a valid ssh keyfile
+    """
+def am_ms() -> int:
+    """
+    Get the current time according to steady clock in milliseconds
+    """
+def am_s() -> float:
+    """
+    Get the current time according to steady clock in seconds
     """
 _cleanup: typing.Any  # value = <capsule object>

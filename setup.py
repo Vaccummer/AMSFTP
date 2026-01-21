@@ -10,7 +10,7 @@ in_path = os.path.dirname(sys.executable)
 
 module = Extension(
     "AMSFTP",
-    sources=["AMBinding.cpp", "AMCore.cpp"],
+    sources=["AMBinding.cpp"],
     language="c++",
     extra_compile_args=["/std:c++17", "/utf-8", "/Zc:__cplusplus"],
     include_dirs=[

@@ -138,7 +138,16 @@ enum class ErrorCode {
   PyCBError = 72,
 
   // FTP Server Error
+  UnsupportFTPProtocol = 47,
+  IllegealURLFormat = 81,
+  NetworkError = 82,
   FTPConnectFailed = 48,
+  FTPWriteError = 81,
+  FTPReadError = 96,
+
+  FTPSendError = 91,
+  FTPRecvError = 92,
+  IllegealSeverReply,
   FTPMkdirFailed = 49,
   FTPRenameFailed = 50,
   FTPUploadFailed = 51,

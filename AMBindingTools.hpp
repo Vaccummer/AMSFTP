@@ -331,64 +331,81 @@ private:
     }
   }
 
-  void bind_5_args() {
-    bool all_default = true, none_default = true;
-    for (int i = 0; i < 5; i++) {
-      if (args_info[i].has_default)
-        none_default = false;
-      else
-        all_default = false;
-    }
+// Macros for generating arg expressions (moved before bind_5_args)
+#define A(i) py::arg(args_info[i].name.c_str())
+#define AD(i) py::arg(args_info[i].name.c_str()) = args_info[i].default_value
 
-    if (all_default) {
-      cls_ptr->def(
-          func_name, func_ptr,
-          py::arg(args_info[0].name.c_str()) = args_info[0].default_value,
-          py::arg(args_info[1].name.c_str()) = args_info[1].default_value,
-          py::arg(args_info[2].name.c_str()) = args_info[2].default_value,
-          py::arg(args_info[3].name.c_str()) = args_info[3].default_value,
-          py::arg(args_info[4].name.c_str()) = args_info[4].default_value,
-          func_doc.c_str());
-    } else if (none_default) {
-      cls_ptr->def(func_name, func_ptr, py::arg(args_info[0].name.c_str()),
-                   py::arg(args_info[1].name.c_str()),
-                   py::arg(args_info[2].name.c_str()),
-                   py::arg(args_info[3].name.c_str()),
-                   py::arg(args_info[4].name.c_str()), func_doc.c_str());
-    } else {
-      // Fallback
-      cls_ptr->def(func_name, func_ptr, func_doc.c_str());
+  void bind_5_args() {
+    if (!is_trailing_defaults_pattern(5)) {
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4),
+                   func_doc.c_str());
+      return;
+    }
+    int k = first_default_index(5);
+    switch (k) {
+    case 0:
+      cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   func_doc.c_str());
+      break;
+    case 1:
+      cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4),
+                   func_doc.c_str());
+      break;
+    case 2:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4),
+                   func_doc.c_str());
+      break;
+    case 3:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4),
+                   func_doc.c_str());
+      break;
+    case 4:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4),
+                   func_doc.c_str());
+      break;
+    case 5:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4),
+                   func_doc.c_str());
+      break;
     }
   }
 
   void bind_6_args() {
-    bool all_default = true, none_default = true;
-    for (int i = 0; i < 6; i++) {
-      if (args_info[i].has_default)
-        none_default = false;
-      else
-        all_default = false;
+    if (!is_trailing_defaults_pattern(6)) {
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   func_doc.c_str());
+      return;
     }
-
-    if (all_default) {
-      cls_ptr->def(
-          func_name, func_ptr,
-          py::arg(args_info[0].name.c_str()) = args_info[0].default_value,
-          py::arg(args_info[1].name.c_str()) = args_info[1].default_value,
-          py::arg(args_info[2].name.c_str()) = args_info[2].default_value,
-          py::arg(args_info[3].name.c_str()) = args_info[3].default_value,
-          py::arg(args_info[4].name.c_str()) = args_info[4].default_value,
-          py::arg(args_info[5].name.c_str()) = args_info[5].default_value,
-          func_doc.c_str());
-    } else if (none_default) {
-      cls_ptr->def(func_name, func_ptr, py::arg(args_info[0].name.c_str()),
-                   py::arg(args_info[1].name.c_str()),
-                   py::arg(args_info[2].name.c_str()),
-                   py::arg(args_info[3].name.c_str()),
-                   py::arg(args_info[4].name.c_str()),
-                   py::arg(args_info[5].name.c_str()), func_doc.c_str());
-    } else {
-      cls_ptr->def(func_name, func_ptr, func_doc.c_str());
+    int k = first_default_index(6);
+    switch (k) {
+    case 0:
+      cls_ptr->def(func_name, func_ptr, AD(0), AD(1), AD(2), AD(3), AD(4),
+                   AD(5), func_doc.c_str());
+      break;
+    case 1:
+      cls_ptr->def(func_name, func_ptr, A(0), AD(1), AD(2), AD(3), AD(4), AD(5),
+                   func_doc.c_str());
+      break;
+    case 2:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), AD(2), AD(3), AD(4), AD(5),
+                   func_doc.c_str());
+      break;
+    case 3:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), AD(3), AD(4), AD(5),
+                   func_doc.c_str());
+      break;
+    case 4:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), AD(4), AD(5),
+                   func_doc.c_str());
+      break;
+    case 5:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), AD(5),
+                   func_doc.c_str());
+      break;
+    case 6:
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5),
+                   func_doc.c_str());
+      break;
     }
   }
 
@@ -411,13 +428,10 @@ private:
     return true;
   }
 
-// Macros for generating arg expressions
-#define A(i) py::arg(args_info[i].name.c_str())
-#define AD(i) py::arg(args_info[i].name.c_str()) = args_info[i].default_value
-
   void bind_7_args() {
     if (!is_trailing_defaults_pattern(7)) {
-      cls_ptr->def(func_name, func_ptr, func_doc.c_str());
+      cls_ptr->def(func_name, func_ptr, A(0), A(1), A(2), A(3), A(4), A(5), A(6),
+                   func_doc.c_str());
       return;
     }
     int k = first_default_index(7);

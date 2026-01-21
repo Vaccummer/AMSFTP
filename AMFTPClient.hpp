@@ -2,12 +2,12 @@
 // 标准库
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
 #include <fcntl.h>
+#include <fmt/format.h>
 #include <iostream>
 #include <mutex>
 #include <pybind11/pytypes.h>
@@ -60,7 +60,306 @@
 #define closesocket close
 #endif
 
-// Wait result for non-blocking socket operations
+using EC = ErrorCode;
+using ECM = std::pair<EC, std::string>;
+
+inline PathInfo ParseListLine(const std::string &line,
+                              const std::string &dir_path) {
+  PathInfo info;
+
+  // Parse FTP LIST format: -rw-r--r-- 1 owner group size month day time
+  // filename or drwxr-xr-x 1 owner group size month day time filename
+  std::istringstream iss(line);
+  std::string perms, links, owner, group, size_str, month, day, time_or_year,
+      name;
+
+  if (!(iss >> perms >> links >> owner >> group >> size_str >> month >> day >>
+        time_or_year)) {
+    info.type = PathType::Unknown;
+    return info;
+  }
+
+  // Get filename (rest of line)
+  std::getline(iss >> std::ws, name);
+  // Remove trailing \r if present (FTP uses CRLF)
+  if (!name.empty() && name.back() == '\r') {
+    name.pop_back();
+  }
+
+  info.name = name;
+  info.path = AMPathStr::join(dir_path, name, SepType::Unix);
+  info.dir = dir_path;
+  info.owner = owner;
+
+  // Parse type
+  if (perms[0] == 'd') {
+    info.type = PathType::DIR;
+  } else if (perms[0] == 'l') {
+    info.type = PathType::SYMLINK;
+  } else if (perms[0] == '-') {
+    info.type = PathType::FILE;
+  } else {
+    info.type = PathType::Unknown;
+  }
+
+  // Parse size
+  try {
+    info.size = std::stoull(size_str);
+  } catch (...) {
+    info.size = 0;
+  }
+
+  // Parse permissions (skip first char which is type)
+  info.mode_str = perms.substr(1);
+
+  return info;
+}
+// 解析 MLSD 行（目录列表）
+// 格式: type=file;size=1024;modify=20210315120000;perm=rwx; filename
+// 与 MLST 不同，MLSD 每行包含文件名，需要从行中提取
+inline PathInfo ParseMLSDLine(const std::string &line,
+                              const std::string &dir_path) {
+  PathInfo info;
+
+  // 查找 facts 和 filename 的分隔（最后一个空格后是文件名）
+  size_t space_pos = line.rfind(' ');
+  if (space_pos == std::string::npos) {
+    info.type = PathType::Unknown;
+    return info;
+  }
+
+  std::string facts = line.substr(0, space_pos);
+  std::string filename = line.substr(space_pos + 1);
+
+  // 去除文件名的回车
+  if (!filename.empty() && filename.back() == '\r') {
+    filename.pop_back();
+  }
+
+  info.name = filename;
+  info.dir = dir_path;
+  info.path = AMPathStr::join(dir_path, filename, SepType::Unix);
+
+  // 解析 facts (;分隔的 key=value)
+  std::istringstream ss(facts);
+  std::string fact;
+  while (std::getline(ss, fact, ';')) {
+    if (fact.empty())
+      continue;
+
+    size_t eq_pos = fact.find('=');
+    if (eq_pos == std::string::npos)
+      continue;
+
+    std::string key = fact.substr(0, eq_pos);
+    std::string value = fact.substr(eq_pos + 1);
+
+    // 转小写比较
+    std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+
+    if (key == "type") {
+      std::transform(value.begin(), value.end(), value.begin(), ::tolower);
+      if (value == "file") {
+        info.type = PathType::FILE;
+      } else if (value == "dir") {
+        info.type = PathType::DIR;
+      } else if (value == "cdir" || value == "pdir") {
+        // 当前目录和父目录，跳过
+        info.type = PathType::Unknown;
+      } else if (value == "os.unix=symlink" || value == "os.unix=slink") {
+        info.type = PathType::SYMLINK;
+      } else {
+        info.type = PathType::Unknown;
+      }
+    } else if (key == "size") {
+      try {
+        info.size = std::stoull(value);
+      } catch (...) {
+        info.size = 0;
+      }
+    } else if (key == "modify") {
+      if (value.length() >= 14) {
+        struct tm tm = {};
+        tm.tm_year = std::stoi(value.substr(0, 4)) - 1900;
+        tm.tm_mon = std::stoi(value.substr(4, 2)) - 1;
+        tm.tm_mday = std::stoi(value.substr(6, 2));
+        tm.tm_hour = std::stoi(value.substr(8, 2));
+        tm.tm_min = std::stoi(value.substr(10, 2));
+        tm.tm_sec = std::stoi(value.substr(12, 2));
+        info.modify_time = static_cast<double>(mktime(&tm));
+      }
+    } else if (key == "create") {
+      if (value.length() >= 14) {
+        struct tm tm = {};
+        tm.tm_year = std::stoi(value.substr(0, 4)) - 1900;
+        tm.tm_mon = std::stoi(value.substr(4, 2)) - 1;
+        tm.tm_mday = std::stoi(value.substr(6, 2));
+        tm.tm_hour = std::stoi(value.substr(8, 2));
+        tm.tm_min = std::stoi(value.substr(10, 2));
+        tm.tm_sec = std::stoi(value.substr(12, 2));
+        info.create_time = static_cast<double>(mktime(&tm));
+      }
+    } else if (key == "perm") {
+      info.mode_str = value;
+    } else if (key == "unix.mode") {
+      try {
+        info.mode_int = std::stoul(value, nullptr, 8);
+        info.mode_str = AMStr::ModeTrans(info.mode_int);
+      } catch (...) {
+      }
+    } else if (key == "unix.owner") {
+      info.owner = value;
+    }
+  }
+
+  return info;
+}
+
+// 解析 MLST 响应格式
+// 格式: type=file;size=1024;modify=20210315120000;perm=rwx; filename
+inline PathInfo ParseMLSTLine(const std::string &line,
+                              const std::string &path) {
+  PathInfo info;
+  info.path = path;
+  info.name = AMPathStr::basename(path);
+  info.dir = AMPathStr::dirname(path);
+
+  // 查找 facts 和 filename 的分隔（最后一个空格后是文件名）
+  size_t space_pos = line.rfind(' ');
+  if (space_pos == std::string::npos) {
+    info.type = PathType::Unknown;
+    return info;
+  }
+
+  std::string facts = line.substr(0, space_pos);
+
+  // 解析 facts (;分隔的 key=value)
+  std::istringstream ss(facts);
+  std::string fact;
+  while (std::getline(ss, fact, ';')) {
+    if (fact.empty())
+      continue;
+
+    size_t eq_pos = fact.find('=');
+    if (eq_pos == std::string::npos)
+      continue;
+
+    std::string key = fact.substr(0, eq_pos);
+    std::string value = fact.substr(eq_pos + 1);
+
+    // 转小写比较
+    std::transform(key.begin(), key.end(), key.begin(), ::tolower);
+
+    if (key == "type") {
+      std::transform(value.begin(), value.end(), value.begin(), ::tolower);
+      if (value == "file") {
+        info.type = PathType::FILE;
+      } else if (value == "dir" || value == "cdir" || value == "pdir") {
+        info.type = PathType::DIR;
+      } else if (value == "os.unix=symlink" || value == "os.unix=slink") {
+        info.type = PathType::SYMLINK;
+      } else {
+        info.type = PathType::Unknown;
+      }
+    } else if (key == "size") {
+      try {
+        info.size = std::stoull(value);
+      } catch (...) {
+        info.size = 0;
+      }
+    } else if (key == "modify") {
+      // 格式: YYYYMMDDHHMMSS 或 YYYYMMDDHHMMSS.sss
+      if (value.length() >= 14) {
+        struct tm tm = {};
+        tm.tm_year = std::stoi(value.substr(0, 4)) - 1900;
+        tm.tm_mon = std::stoi(value.substr(4, 2)) - 1;
+        tm.tm_mday = std::stoi(value.substr(6, 2));
+        tm.tm_hour = std::stoi(value.substr(8, 2));
+        tm.tm_min = std::stoi(value.substr(10, 2));
+        tm.tm_sec = std::stoi(value.substr(12, 2));
+        info.modify_time = static_cast<double>(mktime(&tm));
+      }
+    } else if (key == "create") {
+      if (value.length() >= 14) {
+        struct tm tm = {};
+        tm.tm_year = std::stoi(value.substr(0, 4)) - 1900;
+        tm.tm_mon = std::stoi(value.substr(4, 2)) - 1;
+        tm.tm_mday = std::stoi(value.substr(6, 2));
+        tm.tm_hour = std::stoi(value.substr(8, 2));
+        tm.tm_min = std::stoi(value.substr(10, 2));
+        tm.tm_sec = std::stoi(value.substr(12, 2));
+        info.create_time = static_cast<double>(mktime(&tm));
+      }
+    } else if (key == "perm") {
+      info.mode_str = value;
+    } else if (key == "unix.mode") {
+      try {
+        info.mode_int = std::stoul(value, nullptr, 8);
+        info.mode_str = AMStr::ModeTrans(info.mode_int);
+      } catch (...) {
+      }
+    } else if (key == "unix.owner") {
+      info.owner = value;
+    }
+  }
+
+  return info;
+}
+
+inline std::string MlistPath(const std::string &path, bool is_dir = false) {
+  std::string pathf = AMPathStr::UnifyPathSep(path, "/");
+  // 替换空格为%20
+  AMStr::vreplace_all(pathf, " ", "%20");
+  while (!pathf.empty() && (pathf.back() == '/' || pathf.back() == '\\')) {
+    pathf.pop_back();
+  }
+  if (!pathf.empty() && is_dir) {
+    pathf += "/";
+  }
+  if (!pathf.empty() && pathf.front() != '/') {
+    pathf = "/" + pathf;
+  }
+  return pathf;
+}
+
+inline EC GetFTPErrorCode(CURLcode curl_code) {
+  switch (curl_code) {
+  case CURLE_OK:
+    return EC::Success;
+  case CURLE_UNSUPPORTED_PROTOCOL:
+    return EC::UnsupportFTPProtocol;
+  case CURLE_URL_MALFORMAT:
+    return EC::IllegealURLFormat;
+  case CURLE_COULDNT_RESOLVE_HOST:
+    return EC::NetworkError;
+  case CURLE_COULDNT_CONNECT:
+    return EC::FTPConnectFailed;
+  case CURLE_OPERATION_TIMEDOUT:
+    return EC::OperationTimeout;
+  case CURLE_GOT_NOTHING:
+  case CURLE_FTP_CANT_RECONNECT:
+    return EC::ConnectionLost;
+  case CURLE_SEND_ERROR:
+    return EC::FTPSendError;
+  case CURLE_RECV_ERROR:
+    return EC::FTPRecvError;
+  case CURLE_FTP_WEIRD_SERVER_REPLY:
+    return EC::IllegealSeverReply;
+  case CURLE_FTP_ACCESS_DENIED:
+    return EC::PermissionDenied;
+  case CURLE_FTP_USER_PASSWORD_INCORRECT:
+    return EC::AuthFailed;
+  case CURLE_FTP_QUOTE_ERROR:
+  case CURLE_FTP_PRET_FAILED:
+    return EC::OperationUnsupported;
+  case CURLE_FTP_COULDNT_RETR_FILE:
+    return EC::FileNotExist;
+  case CURLE_FTP_WRITE_ERROR:
+    return EC::FTPWriteError;
+  default:
+    return EC::CommonFailure;
+  }
+}
 
 // FTP Client using libcurl
 class AMFTPClient : public BaseClient {
@@ -68,420 +367,15 @@ private:
   CURL *curl = nullptr;
   CURLM *multi = nullptr; // 复用的 multi handle
   std::atomic<bool> connected = false;
+  std::atomic<bool> mlst_supported = true; // 是否支持 MLST，默认先尝试
+  std::atomic<bool> mlst_checked = false;  // 是否已检测过 MLST 支持
   std::regex ftp_url_pattern = std::regex("^ftp://.*$");
   std::string url = "";
-
-  void _iwalk(const PathInfo &info, WRV &result,
-              bool ignore_special_file = true) {
-
-    if (info.type != PathType::DIR) {
-      result.push_back(info);
-      return;
-    }
-
-    auto [rcm2, list_info] = listdir(info.path);
-    if (rcm2.first != EC::Success) {
-      return;
-    }
-
-    if (list_info.empty()) {
-      result.push_back(info);
-      return;
-    }
-
-    for (auto &item : list_info) {
-      _iwalk(item, result, ignore_special_file);
-    }
-  }
-
-  void _walk(const std::vector<std::string> &parts, WRD &result,
-             int cur_depth = 0, int max_depth = -1,
-             bool ignore_special_file = true) {
-    if (max_depth != -1 && cur_depth > max_depth) {
-      return;
-    }
-    std::string pathf = AMPathStr::join(parts);
-    auto [rcm2, list_info] = listdir(pathf);
-    if (rcm2.first != EC::Success) {
-      return;
-    }
-    if (list_info.empty()) {
-      result.push_back({parts, {}});
-      return;
-    }
-
-    std::vector<PathInfo> files_info = {};
-    for (auto &info : list_info) {
-      if (info.type == PathType::DIR) {
-        auto new_parts = parts;
-        new_parts.push_back(info.name);
-        _walk(new_parts, result, cur_depth + 1, max_depth, ignore_special_file);
-      } else {
-        if (ignore_special_file && static_cast<int>(info.type) < 0) {
-          continue;
-        }
-        files_info.push_back(info);
-      }
-    }
-    if (!files_info.empty()) {
-      result.emplace_back(parts, files_info);
-    }
-  }
-
-public:
-  std::recursive_mutex mtx;
-
-  static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb,
-                                    void *userp) {
-    size_t realsize = size * nmemb;
-    auto *mem = (struct MemoryStruct *)userp;
-
-    char *ptr = (char *)realloc(mem->memory, mem->size + realsize + 1);
-    if (!ptr) {
-      return 0;
-    }
-
-    mem->memory = ptr;
-    memcpy(&(mem->memory[mem->size]), contents, realsize);
-    mem->size += realsize;
-    mem->memory[mem->size] = 0;
-
-    return realsize;
-  }
-
-  ECM SetupPath(const std::string &path) {
-    if (!curl) {
-      return {EC::NoConnection, "CURL not initialized"};
-    }
-    std::string f_path = path;
-    // 清除path开头的所有/ 与
-    while (!f_path.empty() && (f_path[0] == '/' || f_path[0] == '\\')) {
-      f_path = f_path.substr(1);
-    }
-
-    curl_easy_reset(curl);
-    curl_easy_setopt(curl, CURLOPT_URL,
-                     fmt::format("{}/{}", this->url, f_path).c_str());
-    curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
-    curl_easy_setopt(curl, CURLOPT_PASSWORD, res_data.password.c_str());
-    return {EC::Success, ""};
-  }
-
-  PathInfo ParseListLine(const std::string &line, const std::string &dir_path) {
-    PathInfo info;
-
-    // Parse FTP LIST format: -rw-r--r-- 1 owner group size month day time
-    // filename or drwxr-xr-x 1 owner group size month day time filename
-    std::istringstream iss(line);
-    std::string perms, links, owner, group, size_str, month, day, time_or_year,
-        name;
-
-    if (!(iss >> perms >> links >> owner >> group >> size_str >> month >> day >>
-          time_or_year)) {
-      info.type = PathType::Unknown;
-      return info;
-    }
-
-    // Get filename (rest of line)
-    std::getline(iss >> std::ws, name);
-    // Remove trailing \r if present (FTP uses CRLF)
-    if (!name.empty() && name.back() == '\r') {
-      name.pop_back();
-    }
-
-    info.name = name;
-    info.path = AMPathStr::join(dir_path, name, SepType::Unix);
-    info.dir = dir_path;
-    info.owner = owner;
-
-    // Parse type
-    if (perms[0] == 'd') {
-      info.type = PathType::DIR;
-    } else if (perms[0] == 'l') {
-      info.type = PathType::SYMLINK;
-    } else if (perms[0] == '-') {
-      info.type = PathType::FILE;
-    } else {
-      info.type = PathType::Unknown;
-    }
-
-    // Parse size
-    try {
-      info.size = std::stoull(size_str);
-    } catch (...) {
-      info.size = 0;
-    }
-
-    // Parse permissions (skip first char which is type)
-    info.mode_str = perms.substr(1);
-
-    return info;
-  }
-
-  void _rm(const PathInfo &info, RMR &errors) {
-    if (info.type != PathType::DIR) {
-      ECM rc = _librmfile(info.path);
-      if (rc.first != EC::Success) {
-        errors.emplace_back(info.path, rc);
-      }
-      return;
-    }
-    auto [rcm2, file_list] = listdir(info.path);
-    if (rcm2.first != EC::Success) {
-      errors.emplace_back(info.path, rcm2);
-      return;
-    }
-    for (const auto &itemf : file_list) {
-      _rm(itemf, errors);
-    }
-    // Delete directory after removing all contents
-    ECM rc = _librmdir(info.path);
-    if (rc.first != EC::Success) {
-      errors.emplace_back(info.path, rc);
-    }
-  }
-
-  ECM _librmfile(const std::string &path) {
-    if (!curl) {
-      return {EC::NoConnection, "CURL not initialized"};
-    }
-    ECM ecm = SetupPath(path);
-    if (ecm.first != EC::Success) {
-      return ecm;
-    }
-
-    struct curl_slist *commands = nullptr;
-    commands =
-        curl_slist_append(commands, fmt::format("DELE {}", path).c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-
-    CURLcode res = curl_easy_perform(curl);
-
-    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
-    curl_slist_free_all(commands);
-
-    if (res != CURLE_OK) {
-      return {EC::CommonFailure,
-              fmt::format("rmfile failed: {}", curl_easy_strerror(res))};
-    }
-
-    return {EC::Success, ""};
-  }
-
-  ECM _librmdir(const std::string &path) {
-    if (!curl) {
-      return {EC::NoConnection, "CURL not initialized"};
-    }
-    std::string url = BuildUrl("/");
-    ECM ecm = SetupCurl(url);
-    if (ecm.first != EC::Success) {
-      return ecm;
-    }
-
-    struct curl_slist *commands = nullptr;
-    commands = curl_slist_append(commands, fmt::format("RMD {}", path).c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-
-    CURLcode res = curl_easy_perform(curl);
-
-    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
-    curl_slist_free_all(commands);
-
-    if (res != CURLE_OK) {
-      return {EC::DirNotEmpty,
-              fmt::format("rmdir failed: {}", curl_easy_strerror(res))};
-    }
-    return {EC::Success, ""};
-  }
-
-public:
-  AMFTPClient(const ConRequst &request, ssize_t buffer_capacity = 10,
-              const py::object &trace_cb = py::none())
-      : BaseClient(request, buffer_capacity, trace_cb) {
-    this->PROTOCOL = ClientProtocol::FTP;
-
-    if (res_data.username.empty()) {
-      res_data.username = "anonymous";
-      res_data.password = res_data.password.empty() ? "anonymous@example.com"
-                                                    : res_data.password;
-    }
-    this->url = fmt::format("ftp://{}:{}", res_data.hostname, res_data.port);
-  }
-
-  ~AMFTPClient() {
-    if (multi) {
-      if (curl) {
-        curl_multi_remove_handle(multi, curl);
-      }
-      curl_multi_cleanup(multi);
-    }
-    if (curl) {
-      curl_easy_cleanup(curl);
-    }
-  }
-
-  ECM Connect(bool force = false, int timeout_ms = -1,
-              amf interrupt_flag = nullptr) override {
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-
-    if (connected && !force && GetState().first == EC::Success) {
-      return {EC::Success, ""};
-    }
-
-    if (connected && force) {
-      connected = false;
-      // 清理旧的 handles
-      if (multi) {
-        if (curl) {
-          curl_multi_remove_handle(multi, curl);
-        }
-        curl_multi_cleanup(multi);
-        multi = nullptr;
-      }
-      if (curl) {
-        curl_easy_cleanup(curl);
-        curl = nullptr;
-      }
-    }
-
-    curl = curl_easy_init();
-    if (!curl) {
-      return {EC::NoConnection, "CURL easy init failed"};
-    }
-
-    multi = curl_multi_init();
-    if (!multi) {
-      curl_easy_cleanup(curl);
-      curl = nullptr;
-      return {EC::NoConnection, "CURL multi init failed"};
-    }
-
-    // Test connection by getting home directory
-    SetupAuth("");
-    if (timeout_ms > 0) {
-      curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout_ms));
-    }
-    ECM rcm = Check(true);
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-    // Get home directory using PWD command
-    home_dir = GetHomeDir();
-    SetState({EC::Success, ""});
-    trace(TraceLevel::Info, EC::Success, nickname, "Connect",
-          "Connect success");
-    connected.store(true);
-    return {EC::Success, ""};
-  }
-
-  ECM GetState() override {
-    std::lock_guard<std::mutex> lock(state_mtx);
-    return state;
-  }
-
-  ECM Check(int timeout_ms = -1) override {
-    if (!curl) {
-      connected = false;
-      return {EC::NoConnection, "CURL not initialized"};
-    }
-
-    struct MemoryStruct chunk;
-    chunk.memory = (char *)malloc(1);
-    chunk.size = 0;
-
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-
-    CURLcode res = curl_easy_perform(curl);
-
-    free(chunk.memory);
-
-    std::string error_msg = "";
-
-    if (res != CURLE_OK) {
-      connected = false;
-      error_msg = fmt::format("Connect failed: {}", curl_easy_strerror(res));
-      SetState({EC::FTPConnectFailed, error_msg});
-      if (need_trace) {
-        trace(TraceLevel::Critical, EC::FTPConnectFailed, nickname, "Connect",
-              error_msg);
-      }
-      return {EC::FTPConnectFailed, error_msg};
-    }
-
-    if (need_trace) {
-      trace(TraceLevel::Info, EC::Success, nickname, "Check",
-            "Check connection success");
-    }
-    curl_easy_reset(curl);
-    return {EC::Success, ""};
-  }
-
-  std::string GetHomeDir() override {
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    if (!home_dir.empty()) {
-      return home_dir;
-    }
-
-    if (!curl) {
-      return "";
-    }
-
-    std::string url =
-        fmt::format("ftp://{}:{}/", res_data.hostname, res_data.port);
-    curl_easy_reset(curl);
-    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
-    curl_easy_setopt(curl, CURLOPT_PASSWORD, res_data.password.c_str());
-    curl_easy_setopt(curl, CURLOPT_FTP_RESPONSE_TIMEOUT, 10L);
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
-
-    struct curl_slist *headerlist = nullptr;
-    headerlist = curl_slist_append(headerlist, "PWD");
-    curl_easy_setopt(curl, CURLOPT_QUOTE, headerlist);
-
-    struct MemoryStruct chunk;
-    chunk.memory = (char *)malloc(1);
-    chunk.size = 0;
-
-    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, WriteMemoryCallback);
-    curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)&chunk);
-
-    CURLcode res = curl_easy_perform(curl);
-    curl_slist_free_all(headerlist);
-
-    std::string pwd_path = "/";
-    if (res == CURLE_OK && chunk.size > 0) {
-      std::string response(chunk.memory, chunk.size);
-      // Parse PWD response: 257 "/path" is current directory
-      size_t start = response.find('"');
-      if (start != std::string::npos) {
-        size_t end = response.find('"', start + 1);
-        if (end != std::string::npos) {
-          pwd_path = response.substr(start + 1, end - start - 1);
-        }
-      }
-    }
-
-    free(chunk.memory);
-
-    if (res != CURLE_OK) {
-      return "";
-    }
-    this->home_dir = pwd_path;
-    return pwd_path;
-  }
-
-private:
   // 非阻塞执行 curl 请求，支持中断和超时
   // poll_interval_ms: 每次轮询间隔，越小响应越快，但 CPU 占用越高
-  NBResult<CURLcode>
-  nb_perform(amf interrupt_flag, int timeout_ms,
-             std::chrono::steady_clock::time_point start_time) {
+
+  NBResult<CURLcode> nb_perform(amf interrupt_flag, int timeout_ms,
+                                int64_t start_time) {
     if (!multi) {
       return {CURLE_FAILED_INIT, WaitResult::Error};
     }
@@ -511,10 +405,7 @@ private:
 
       // 检查超时
       if (timeout_ms > 0) {
-        auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::steady_clock::now() - start_time)
-                           .count();
-        if (elapsed >= timeout_ms) {
+        if (am_ms() - start_time >= timeout_ms) {
           wait_result = WaitResult::Timeout;
           break;
         }
@@ -565,31 +456,131 @@ private:
     return {EC::CommonFailure, curl_easy_strerror(nb_res.value)};
   }
 
-public:
-  SR stat(const std::string &path, bool trace_link = false,
-          amf interrupt_flag = nullptr, int timeout_ms = -1,
-          std::chrono::steady_clock::time_point start_time =
-              std::chrono::steady_clock::now()) override {
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    interrupt_flag =
-        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+  static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb,
+                                    void *userp) {
+    size_t realsize = size * nmemb;
+    auto *mem = (struct MemoryStruct *)userp;
 
+    char *ptr = (char *)realloc(mem->memory, mem->size + realsize + 1);
+    if (!ptr) {
+      return 0;
+    }
+
+    mem->memory = ptr;
+    memcpy(&(mem->memory[mem->size]), contents, realsize);
+    mem->size += realsize;
+    mem->memory[mem->size] = 0;
+
+    return realsize;
+  }
+
+  ECM SetupPath(const std::string &path, bool is_dir = false) {
     if (!curl) {
+      return {EC::NoConnection, "CURL not initialized"};
+    }
+    std::string path_f = path;
+    if (!path_f.empty()) {
+      path_f = MlistPath(path, is_dir);
+    }
+    curl_easy_reset(curl);
+    curl_easy_setopt(curl, CURLOPT_URL,
+                     fmt::format("{}{}", this->url, path_f).c_str());
+    curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
+    curl_easy_setopt(curl, CURLOPT_PASSWORD, res_data.password.c_str());
+    return {EC::Success, ""};
+  }
+
+  // 使用 MLST 命令获取文件信息（现代方法）
+  SR try_mlst(const std::string &path, amf interrupt_flag, int timeout_ms,
+              int64_t start_time) {
+    if (!curl || !multi) {
       return {ECM{EC::NoConnection, "CURL not initialized"}, PathInfo()};
     }
 
-    std::string pathf = path;
-    if (pathf.empty()) {
-      return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)},
+    // 重置 curl 选项
+    SetupPath(path);
+
+    // 设置 MLST 命令
+    struct curl_slist *commands = nullptr;
+    commands = curl_slist_append(
+        commands, fmt::format("MLST {}", MlistPath(path)).c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+
+    // 捕获 header（MLST 响应在 header 中）
+    struct MemoryStruct header_chunk;
+    header_chunk.memory = (char *)malloc(1);
+    header_chunk.size = 0;
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)&header_chunk);
+
+    auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
+
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
+    curl_slist_free_all(commands);
+
+    if (!nb_res.ok()) {
+      free(header_chunk.memory);
+      return {NBResultToECM(nb_res), PathInfo()};
+    }
+
+    if (nb_res.value != CURLE_OK) {
+      free(header_chunk.memory);
+      ECM rcm = {GetFTPErrorCode(nb_res.value),
+                 fmt::format("MLST {} error: {}", path,
+                             curl_easy_strerror(nb_res.value))};
+      trace(TraceLevel::Error, rcm.first, path, "MLST", rcm.second);
+      return {rcm, PathInfo()};
+    }
+
+    // 解析响应
+    std::string response(header_chunk.memory, header_chunk.size);
+    free(header_chunk.memory);
+
+    // 查找 250- 开头的行（MLST 数据行）或直接的 facts 行
+    // 格式:
+    // 250- Listing path
+    //  type=file;size=123; filename    <- 注意开头有空格
+    // 250 End
+    PathInfo info;
+    std::istringstream iss(response);
+    std::string line;
+    bool found = false;
+
+    while (std::getline(iss, line)) {
+      // 去掉 \r
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      std::cout << "line:" << line << "\n";
+
+      // MLST 数据行以空格开头
+      if (!line.empty() && (line[0] == ' ' || line[0] == '\t')) {
+        line = line.substr(1); // 去掉开头空格
+        info = ParseMLSTLine(line, path);
+        found = true;
+        break;
+      }
+    }
+
+    if (!found || info.type == PathType::Unknown) {
+      return {ECM{EC::CommonFailure, "Failed to parse MLST response"},
               PathInfo()};
     }
 
-    // First try to list as directory (append / to path)
-    ECM ecm = SetupPath(pathf + "/");
+    return {ECM{EC::Success, ""}, info};
+  }
+
+  // 传统 stat 方法（回退用）
+  SR stat_legacy(const std::string &path, amf interrupt_flag, int timeout_ms,
+                 int64_t start_time) {
+    std::cout << "stat_legacy1" << std::endl;
+    // 先尝试作为目录
+    ECM ecm = SetupPath(path, true);
     if (ecm.first != EC::Success) {
       return {ecm, PathInfo()};
     }
-
+    std::cout << "stat_legacy2" << std::endl;
     struct MemoryStruct chunk;
     chunk.memory = (char *)malloc(1);
     chunk.size = 0;
@@ -599,28 +590,26 @@ public:
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
     auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
-
+    free(chunk.memory);
     if (nb_res.ok() && nb_res.value == CURLE_OK) {
-      // It's a directory
-      free(chunk.memory);
+
       PathInfo info;
-      info.path = pathf;
-      info.name = AMPathStr::basename(pathf);
-      info.dir = AMPathStr::dirname(pathf);
+      info.path = path;
+      info.name = AMPathStr::basename(path);
+      info.dir = AMPathStr::dirname(path);
       info.type = PathType::DIR;
       info.size = 0;
       return {ECM{EC::Success, ""}, info};
     }
 
-    free(chunk.memory);
-
-    // Check if interrupted or timed out
+    std::cout << "stat_legacy3" << std::endl;
     if (!nb_res.ok()) {
       return {NBResultToECM(nb_res), PathInfo()};
     }
 
-    // Not a directory, try as file using SIZE command
-    ecm = SetupPath(pathf);
+    std::cout << "stat_legacy4" << std::endl;
+    // 尝试作为文件
+    ecm = SetupPath(path);
     if (ecm.first != EC::Success) {
       return {ecm, PathInfo()};
     }
@@ -637,17 +626,15 @@ public:
 
     if (nb_res.ok() && nb_res.value == CURLE_OK) {
       PathInfo info;
-      info.path = pathf;
-      info.name = AMPathStr::basename(pathf);
-      info.dir = AMPathStr::dirname(pathf);
+      info.path = path;
+      info.name = AMPathStr::basename(path);
+      info.dir = AMPathStr::dirname(path);
       info.type = PathType::FILE;
 
-      // Get file size
       curl_off_t filesize = 0;
       curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &filesize);
       info.size = filesize >= 0 ? static_cast<uint64_t>(filesize) : 0;
 
-      // Get modification time
       long filetime = 0;
       curl_easy_getinfo(curl, CURLINFO_FILETIME, &filetime);
       if (filetime >= 0) {
@@ -660,18 +647,17 @@ public:
 
     free(chunk.memory);
 
-    // Check if interrupted or timed out
     if (!nb_res.ok()) {
       return {NBResultToECM(nb_res), PathInfo()};
     }
 
-    // Fallback: try listing parent directory
-    std::string parent = AMPathStr::dirname(pathf);
-    std::string filename = AMPathStr::basename(pathf);
+    // 最后回退：列出父目录查找
+    std::string parent = AMPathStr::dirname(path);
+    std::string filename = AMPathStr::basename(path);
 
-    auto [rcm, files] = listdir(parent, timeout_ms, interrupt_flag, start_time);
+    auto [rcm, files] = listdir(parent, interrupt_flag, timeout_ms, start_time);
     if (rcm.first != EC::Success) {
-      return {ECM{EC::PathNotExist, fmt::format("Path not found: {}", pathf)},
+      return {ECM{EC::PathNotExist, fmt::format("Path not found: {}", path)},
               PathInfo()};
     }
 
@@ -681,65 +667,34 @@ public:
       }
     }
 
-    return {ECM{EC::PathNotExist, fmt::format("Path not found: {}", pathf)},
+    return {ECM{EC::PathNotExist, fmt::format("Path not found: {}", path)},
             PathInfo()};
   }
 
-  std::pair<ECM, bool> exists(const std::string &path,
-                              amf interrupt_flag = nullptr, int timeout_ms = -1,
-                              std::chrono::steady_clock::time_point start_time =
-                                  std::chrono::steady_clock::now()) override {
-    auto [rcm, path_info] = stat(path, interrupt_flag, timeout_ms, start_time);
-    if (rcm.first == EC::Success) {
-      return {rcm, true};
-    } else if (rcm.first == EC::PathNotExist || rcm.first == EC::FileNotExist) {
-      return {{EC::Success, ""}, false};
-    } else {
-      return {rcm, false};
+  // 使用 MLSD 命令列出目录（现代方法）
+  std::pair<ECM, std::vector<PathInfo>> try_mlsd(const std::string &path,
+                                                 amf interrupt_flag,
+                                                 int timeout_ms,
+                                                 int64_t start_time) {
+    if (!curl || !multi) {
+      return {ECM{EC::NoConnection, "CURL not initialized"}, {}};
     }
-  }
+    // 使用 MLSD URL 格式
+    SetupPath(path, true);
 
-  std::pair<ECM, bool> is_dir(const std::string &path,
-                              amf interrupt_flag = nullptr, int timeout_ms = -1,
-                              std::chrono::steady_clock::time_point start_time =
-                                  std::chrono::steady_clock::now()) override {
-    auto [rcm, path_info] = stat(path, interrupt_flag, timeout_ms, start_time);
-    if (rcm.first != EC::Success) {
-      return {rcm, false};
-    }
-    return {ECM{EC::Success, ""}, path_info.type == PathType::DIR};
-  }
-
-  std::pair<ECM, std::vector<PathInfo>>
-  listdir(const std::string &path, int max_time_ms = -1,
-          amf interrupt_flag = nullptr,
-          std::chrono::steady_clock::time_point start_time =
-              std::chrono::steady_clock::now()) override {
-    std::string pathf = path;
-    if (pathf.empty()) {
-      return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    interrupt_flag =
-        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-
-    if (interrupt_flag && interrupt_flag->check()) {
-      return {ECM{EC::Terminate, "Interrupted by user"}, {}};
-    }
-
-    ECM ecm = SetupPath(pathf + "/");
-    if (ecm.first != EC::Success) {
-      return {ecm, {}};
-    }
+    // 使用 MLSD 自定义请求
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "MLSD");
 
     struct MemoryStruct chunk;
     chunk.memory = (char *)malloc(1);
     chunk.size = 0;
-
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
-    auto nb_res = nb_perform(interrupt_flag, max_time_ms, start_time);
+    auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
+
+    // 重置自定义请求
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, nullptr);
 
     if (!nb_res.ok()) {
       free(chunk.memory);
@@ -748,10 +703,373 @@ public:
 
     if (nb_res.value != CURLE_OK) {
       free(chunk.memory);
-      return {
-          ECM{EC::FTPListFailed,
-              fmt::format("List failed: {}", curl_easy_strerror(nb_res.value))},
-          {}};
+      long response_code = 0;
+      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+
+      // 500/502 = 命令不支持, 550 = 目录不存在
+      if (response_code == 500 || response_code == 502 ||
+          nb_res.value == CURLE_QUOTE_ERROR ||
+          nb_res.value == CURLE_FTP_COULDNT_RETR_FILE) {
+        std::cout << "Not Supported" << "\n";
+        return {ECM{EC::OperationUnsupported, "MLSD not supported"}, {}};
+      }
+      if (response_code == 550) {
+        std::cout << "Path not ex" << "\n";
+        return {ECM{EC::PathNotExist, fmt::format("Path not found: {}", path)},
+                {}};
+      }
+
+      std::cout << "Others: " << response_code << "\n";
+      std::cout << "result_value: " << nb_res.value << "\n";
+      return {ECM{EC::FTPListFailed, curl_easy_strerror(nb_res.value)}, {}};
+    }
+
+    // 解析 MLSD 响应
+    std::string listing(chunk.memory, chunk.size);
+    free(chunk.memory);
+
+    std::vector<PathInfo> file_list;
+    std::istringstream iss(listing);
+    std::string line;
+
+    // 去除路径末尾的 /
+    std::string dir_path = path;
+    if (!dir_path.empty() && dir_path.back() == '/') {
+      dir_path.pop_back();
+    }
+
+    while (std::getline(iss, line)) {
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      if (line.empty())
+        continue;
+      std::cout << "line: " << line << std::endl;
+
+      PathInfo info = ParseMLSDLine(line, dir_path);
+      // 过滤掉无效项和 . ..
+      if (info.type != PathType::Unknown && info.name != "." &&
+          info.name != "..") {
+        file_list.push_back(info);
+      }
+    }
+
+    return {ECM{EC::Success, ""}, file_list};
+  }
+
+  ECM _librmfile(const std::string &path, amf interrupt_flag = nullptr,
+                 int timeout_ms = -1, int64_t start_time = -1) {
+    ECM ecm = SetupPath(path);
+    if (ecm.first != EC::Success) {
+      return ecm;
+    }
+
+    struct curl_slist *commands = nullptr;
+    commands =
+        curl_slist_append(commands, fmt::format("DELE {}", path).c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+
+    auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
+
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
+    curl_slist_free_all(commands);
+
+    if (!nb_res.ok()) {
+      return NBResultToECM(nb_res);
+    }
+    if (nb_res.value != CURLE_OK) {
+      ECM ecm = {GetFTPErrorCode(nb_res.value),
+                 fmt::format("rmfile {} failed: {}", path,
+                             curl_easy_strerror(nb_res.value))};
+      trace(TraceLevel::Error, ecm.first, path, "rmfile", ecm.second);
+      return ecm;
+    }
+    return {EC::Success, ""};
+  }
+
+  ECM _librmdir(const std::string &path, amf interrupt_flag = nullptr,
+                int timeout_ms = -1, int64_t start_time = -1) {
+
+    ECM ecm = SetupPath(url, true);
+    if (ecm.first != EC::Success) {
+      return ecm;
+    }
+
+    struct curl_slist *commands = nullptr;
+    commands = curl_slist_append(commands, fmt::format("RMD {}", path).c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+
+    auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
+
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
+    curl_slist_free_all(commands);
+
+    if (!nb_res.ok()) {
+      return NBResultToECM(nb_res);
+    }
+    if (nb_res.value != CURLE_OK) {
+      ECM ecm = {GetFTPErrorCode(nb_res.value),
+                 fmt::format("rmdir {} failed: {}", path,
+                             curl_easy_strerror(nb_res.value))};
+      trace(TraceLevel::Error, ecm.first, path, "rmdir", ecm.second);
+      return ecm;
+    }
+    return {EC::Success, ""};
+  }
+
+public:
+  AMFTPClient(const ConRequst &request, ssize_t buffer_capacity = 10,
+              const py::object &trace_cb = py::none())
+      : BaseClient(request, buffer_capacity, trace_cb) {
+    this->PROTOCOL = ClientProtocol::FTP;
+
+    if (res_data.username.empty()) {
+      res_data.username = "anonymous";
+      res_data.password = res_data.password.empty() ? "anonymous@example.com"
+                                                    : res_data.password;
+    }
+    this->url = fmt::format("ftp://{}:{}", res_data.hostname, res_data.port);
+  }
+
+  ~AMFTPClient() {
+    if (multi) {
+      if (curl) {
+        curl_multi_remove_handle(multi, curl);
+      }
+      curl_multi_cleanup(multi);
+    }
+    if (curl) {
+      curl_easy_cleanup(curl);
+    }
+  }
+
+  ECM Connect(bool force = false, amf interrupt_flag = nullptr,
+              int timeout_ms = -1, int64_t start_time = -1) override {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+
+    if (connected && !force && Check().first == EC::Success) {
+      return {EC::Success, ""};
+    }
+
+    if (connected && force) {
+      connected = false;
+      // 清理旧的 handles
+      if (multi) {
+        if (curl) {
+          curl_multi_remove_handle(multi, curl);
+        }
+        curl_multi_cleanup(multi);
+        multi = nullptr;
+      }
+      if (curl) {
+        curl_easy_cleanup(curl);
+        curl = nullptr;
+      }
+    }
+
+    curl = curl_easy_init();
+    if (!curl) {
+      return {EC::NoConnection, "CURL easy init failed"};
+    }
+    multi = curl_multi_init();
+    if (!multi) {
+      curl_easy_cleanup(curl);
+      curl = nullptr;
+      return {EC::NoConnection, "CURL multi init failed"};
+    }
+
+    ECM rcm = Check(interrupt_flag, timeout_ms, start_time);
+
+    if (rcm.first != EC::Success) {
+      return rcm;
+    }
+    // Get home directory using PWD command
+    home_dir = "/";
+    SetState({EC::Success, ""});
+    trace(TraceLevel::Info, EC::Success, nickname, "Connect",
+          "Connect success");
+    connected.store(true);
+    return rcm;
+  }
+
+  ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
+            int64_t start_time = -1) override {
+    start_time = start_time == -1 ? am_ms() : start_time;
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    ECM ecm = SetupPath("", true);
+    if (ecm.first != EC::Success) {
+      return ecm;
+    }
+    struct MemoryStruct chunk;
+    chunk.memory = (char *)malloc(1);
+    chunk.size = 0;
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+    auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
+    free(chunk.memory);
+    if (!nb_res.ok()) {
+      return NBResultToECM(nb_res);
+    }
+
+    if (nb_res.ok() && nb_res.value == CURLE_OK) {
+      return {EC::Success, ""};
+    }
+    ecm = {GetFTPErrorCode(nb_res.value),
+           fmt::format("Check error: {}", curl_easy_strerror(nb_res.value))};
+    trace(TraceLevel::Error, ecm.first, "/", "Check", ecm.second);
+    return ecm;
+  }
+
+  SR stat(const std::string &path, bool trace_link = false,
+          amf interrupt_flag = nullptr, int timeout_ms = -1,
+          int64_t start_time = -1) override {
+    start_time = start_time == -1 ? am_ms() : start_time;
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    std::cout << "fstat1" << std::endl;
+    if (!curl) {
+      return {ECM{EC::NoConnection, "CURL not initialized"}, PathInfo()};
+    }
+    std::cout << "fstat2" << std::endl;
+    if (trace_link) {
+      return {ECM{EC::UnImplentedMethod,
+                  "Trace link is not supported in FTP Client"},
+              PathInfo()};
+    }
+    std::cout << "fstat3" << std::endl;
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {ECM{EC::Terminate, "Interrupted by user"}, PathInfo()};
+    }
+    std::cout << "fstat4" << std::endl;
+    std::string pathf = path;
+    if (pathf.empty()) {
+      return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)},
+              PathInfo()};
+    }
+    std::cout << "fstat5" << std::endl;
+
+    // 优先使用 MLST（现代方法）
+    if (mlst_supported.load()) {
+      auto [ecm, info] =
+          try_mlst(pathf, interrupt_flag, timeout_ms, start_time);
+
+      if (ecm.first == EC::Success) {
+        mlst_checked.store(true);
+        return {ecm, info};
+      }
+
+      // MLST 不支持，标记并回退
+      if (ecm.first == EC::OperationUnsupported) {
+        mlst_supported.store(false);
+        mlst_checked.store(true);
+        // 继续使用传统方法
+      } else if (ecm.first == EC::Terminate ||
+                 ecm.first == EC::OperationTimeout) {
+        // 中断或超时，直接返回
+        return {ecm, PathInfo()};
+      } else if (ecm.first == EC::PathNotExist) {
+        // 路径不存在
+        return {ecm, PathInfo()};
+      }
+      // 其他错误也回退到传统方法
+    }
+    std::cout << "fstat6" << std::endl;
+    // 传统方法
+    return stat_legacy(pathf, interrupt_flag, timeout_ms, start_time);
+  }
+
+  std::pair<ECM, std::vector<PathInfo>>
+  listdir_combine(const std::string &path, amf interrupt_flag = nullptr,
+                  int max_time_ms = -1, int64_t start_time = -1) {
+    if (start_time == -1) {
+      start_time = am_ms();
+    }
+    std::string pathf = path;
+    if (pathf.empty()) {
+      return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
+    }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+
+    if (!curl) {
+      return {ECM{EC::NoConnection, "CURL not initialized"}, {}};
+    }
+
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {ECM{EC::Terminate, "Interrupted by user"}, {}};
+    }
+
+    // 优先使用 MLSD（现代方法）
+    if (false) {
+      auto [ecm, file_list] =
+          try_mlsd(pathf, interrupt_flag, max_time_ms, start_time);
+
+      if (ecm.first == EC::Success) {
+        mlst_checked.store(true);
+        return {ecm, file_list};
+      }
+
+      // MLSD 不支持，标记并回退
+      if (ecm.first == EC::OperationUnsupported) {
+        mlst_supported.store(false);
+        mlst_checked.store(true);
+        // 继续使用传统方法
+      } else if (ecm.first == EC::Terminate ||
+                 ecm.first == EC::OperationTimeout) {
+        // 中断或超时，直接返回
+        return {ecm, {}};
+      } else if (ecm.first == EC::PathNotExist) {
+        // 路径不存在
+        return {ecm, {}};
+      }
+      // 其他错误也回退到传统方法
+    }
+
+    // 传统方法
+    return listdir(pathf, interrupt_flag, max_time_ms, start_time);
+  }
+
+  // 传统 LIST 方法（回退用）
+  std::pair<ECM, std::vector<PathInfo>>
+  listdir(const std::string &path, amf interrupt_flag = nullptr,
+          int timeout_ms = -1, int64_t start_time = -1) override {
+    ECM ecm = SetupPath(path, true);
+    if (ecm.first != EC::Success) {
+      return {ecm, {}};
+    }
+    start_time = start_time == -1 ? am_ms() : start_time;
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    struct MemoryStruct chunk;
+    chunk.memory = (char *)malloc(1);
+    chunk.size = 0;
+
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+
+    auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
+
+    if (!nb_res.ok()) {
+      free(chunk.memory);
+      return {NBResultToECM(nb_res), {}};
+    }
+
+    if (nb_res.value != CURLE_OK) {
+      free(chunk.memory);
+      ECM rcm =
+          ECM{GetFTPErrorCode(nb_res.value),
+              fmt::format("List failed: {}", curl_easy_strerror(nb_res.value))};
+      trace(TraceLevel::Error, rcm.first, path, "listdir", rcm.second);
+      return {rcm, {}};
     }
 
     std::string listing(chunk.memory, chunk.size);
@@ -762,13 +1080,12 @@ public:
     std::string line;
 
     while (std::getline(iss, line)) {
-      // Remove trailing \r (FTP uses CRLF)
       if (!line.empty() && line.back() == '\r') {
         line.pop_back();
       }
       if (line.empty())
         continue;
-      PathInfo info = ParseListLine(line, pathf);
+      PathInfo info = ParseListLine(line, path);
       if (info.type != PathType::Unknown && info.name != "." &&
           info.name != "..") {
         file_list.push_back(info);
@@ -778,25 +1095,115 @@ public:
     return {ECM{EC::Success, ""}, file_list};
   }
 
-  WRV iwalk(const std::string &path, amf interrupt_flag = nullptr,
-            bool ignore_special_file = true) override {
-    WRV result = {};
-    if (path.empty()) {
-      return result;
+  void _iwalk(const PathInfo &info, WRV &result,
+              bool ignore_special_file = true, amf interrupt_flag = nullptr,
+              int timeout_ms = -1, int64_t start_time = -1) {
+
+    auto [rcm2, list_info] =
+        listdir(info.path, interrupt_flag, timeout_ms, start_time);
+    if (rcm2.first != EC::Success) {
+      return;
     }
+
+    bool no_subdir = true;
+    for (auto &item : list_info) {
+      if (interrupt_flag && interrupt_flag->check()) {
+        return;
+      }
+      if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
+        return;
+      }
+      if ((item.type != PathType::DIR)) {
+        result.push_back(item);
+        continue;
+      }
+      no_subdir = false;
+      _iwalk(item, result, ignore_special_file);
+    }
+
+    if (no_subdir) {
+      result.push_back(info);
+      return;
+    }
+  }
+
+  std::pair<ECM, std::vector<PathInfo>>
+  iwalk(const std::string &path, bool ignore_special_file = true,
+        amf interrupt_flag = nullptr, int timeout_ms = -1,
+        int64_t start_time = -1) override {
+    if (start_time == -1) {
+      start_time = am_ms();
+    }
+
+    if (path.empty()) {
+      return {ECM{EC::InvalidArg, "Invalid empty path"}, {}};
+    }
+    WRV result = {};
+    start_time = start_time == -1 ? am_ms() : start_time;
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    std::lock_guard<std::recursive_mutex> lock(mtx);
     auto [rcm, info] = stat(path);
     if (rcm.first != EC::Success) {
-      return result;
+      return {rcm, {}};
     } else if (info.type != PathType::DIR) {
-      return {info};
+      return {{EC::Success, ""}, {info}};
     }
     _iwalk(info, result, ignore_special_file);
-    return result;
+    return {ECM{EC::Success, ""}, result};
+  }
+
+  void _walk(const std::vector<std::string> &parts, WRD &result,
+             int cur_depth = 0, int max_depth = -1,
+             bool ignore_special_file = true, amf interrupt_flag = nullptr,
+             int timeout_ms = -1, int64_t start_time = -1) {
+    if (max_depth != -1 && cur_depth > max_depth) {
+      return;
+    }
+    std::string pathf = AMPathStr::join(parts);
+    auto [rcm2, list_info] =
+        listdir(pathf, interrupt_flag, timeout_ms, start_time);
+    if (rcm2.first != EC::Success) {
+      return;
+    }
+    if (list_info.empty()) {
+      result.push_back({parts, {}});
+      return;
+    }
+
+    std::vector<PathInfo> files_info = {};
+    for (auto &info : list_info) {
+      if (interrupt_flag && interrupt_flag->check()) {
+        return;
+      }
+      if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
+        return;
+      }
+      if (info.type == PathType::DIR) {
+        auto new_parts = parts;
+        new_parts.push_back(info.name);
+        _walk(new_parts, result, cur_depth + 1, max_depth, ignore_special_file,
+              interrupt_flag, timeout_ms, start_time);
+      } else {
+        if (ignore_special_file && static_cast<int>(info.type) < 0) {
+          continue;
+        }
+        files_info.push_back(info);
+      }
+    }
+    if (!files_info.empty()) {
+      result.emplace_back(parts, files_info);
+    }
   }
 
   std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1,
-                           amf interrupt_flag = nullptr,
-                           bool ignore_special_file = true) override {
+                           bool ignore_special_file = true,
+                           amf interrupt_flag = nullptr, int timeout_ms = -1,
+                           int64_t start_time = -1) override {
+    start_time = start_time == -1 ? am_ms() : start_time;
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    std::lock_guard<std::recursive_mutex> lock(mtx);
     auto [rcm, br] = stat(path);
     if (rcm.first != EC::Success) {
       return {rcm, {}};
@@ -807,15 +1214,15 @@ public:
     return {ECM{EC::Success, ""}, result_dict};
   }
 
-  ECM mkdir(const std::string &path) override {
+  ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
+            int timeout_ms = -1, int64_t start_time = -1) override {
+    start_time = start_time == -1 ? am_ms() : start_time;
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
-
-    if (path.empty()) {
-      return {EC::InvalidArg, fmt::format("Invalid path: {}", path)};
-    }
-
     // Check if already exists
-    auto [rcm, info] = stat(path);
+    auto [rcm, info] =
+        stat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm.first == EC::Success) {
       if (info.type == PathType::DIR) {
         return {EC::Success, ""};
@@ -825,32 +1232,39 @@ public:
       }
     }
 
-    std::string url = BuildUrl(path + "/");
-    ECM ecm = SetupCurl(url);
+    ECM ecm = SetupPath(url, true);
     if (ecm.first != EC::Success) {
       return ecm;
     }
 
     curl_easy_setopt(curl, CURLOPT_FTP_CREATE_MISSING_DIRS, CURLFTP_CREATE_DIR);
 
-    CURLcode res = curl_easy_perform(curl);
-
-    if (res != CURLE_OK) {
-      return {EC::FTPMkdirFailed,
-              fmt::format("mkdir failed: {}", curl_easy_strerror(res))};
+    auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
+    if (!nb_res.ok()) {
+      return NBResultToECM(nb_res);
     }
-
-    return {EC::Success, ""};
+    if (nb_res.value != CURLE_OK) {
+      ecm = {GetFTPErrorCode(nb_res.value),
+             fmt::format("mkdir {} failed: {}", path,
+                         curl_easy_strerror(nb_res.value))};
+      trace(TraceLevel::Error, ecm.first, path, "mkdir", ecm.second);
+    }
+    return ecm;
   }
 
-  ECM mkdirs(const std::string &path) override { return mkdir(path); }
+  ECM mkdirs(const std::string &path, amf interrupt_flag = nullptr,
+             int timeout_ms = -1, int64_t start_time = -1) override {
+    return mkdir(path, interrupt_flag, timeout_ms, start_time);
+  }
 
-  ECM rmfile(const std::string &path) override {
+  ECM rmfile(const std::string &path, amf interrupt_flag = nullptr,
+             int timeout_ms = -1, int64_t start_time = -1) override {
+    start_time = start_time == -1 ? am_ms() : start_time;
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    if (path.empty()) {
-      return {EC::InvalidArg, "Invalid empty path"};
-    }
-    auto [rcm, info] = stat(path);
+    auto [rcm, info] =
+        stat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm.first != EC::Success) {
       return rcm;
     }
@@ -860,7 +1274,11 @@ public:
     return _librmfile(path);
   }
 
-  ECM rmdir(const std::string &path) override {
+  ECM rmdir(const std::string &path, amf interrupt_flag = nullptr,
+            int timeout_ms = -1, int64_t start_time = -1) override {
+    if (start_time == -1) {
+      start_time = am_ms();
+    }
     std::lock_guard<std::recursive_mutex> lock(mtx);
 
     if (path.empty()) {
@@ -874,25 +1292,63 @@ public:
       return {EC::NotADirectory,
               fmt::format("Path is not a directory: {}", path)};
     }
-    return _librmdir(path);
+    return _librmdir(path, interrupt_flag, timeout_ms, start_time);
   }
 
-  std::pair<ECM, RMR> remove(const std::string &path) override {
-    RMR errors = {};
-    if (path.empty()) {
-      return {ECM{EC::InvalidArg, "Invalid empty path"}, {}};
+  void _rm(const PathInfo &info, RMR &errors, amf interrupt_flag = nullptr,
+           int timeout_ms = -1, int64_t start_time = -1) {
+    if (info.type != PathType::DIR) {
+      ECM rc = _librmfile(info.path, interrupt_flag, timeout_ms, start_time);
+      if (rc.first != EC::Success) {
+        errors.emplace_back(info.path, rc);
+      }
+      return;
     }
+    auto [rcm2, file_list] =
+        listdir(info.path, interrupt_flag, timeout_ms, start_time);
+    if (rcm2.first != EC::Success) {
+      errors.emplace_back(info.path, rcm2);
+      return;
+    }
+    for (const auto &itemf : file_list) {
+      if (interrupt_flag && interrupt_flag->check()) {
+        return;
+      }
+      if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
+        return;
+      }
+      _rm(itemf, errors, interrupt_flag, timeout_ms, start_time);
+    }
+    // Delete directory after removing all contents
+    ECM rc = _librmdir(info.path, interrupt_flag, timeout_ms, start_time);
+    if (rc.first != EC::Success) {
+      errors.emplace_back(info.path, rc);
+    }
+  }
+
+  std::pair<ECM, RMR> remove(const std::string &path,
+                             amf interrupt_flag = nullptr, int timeout_ms = -1,
+                             int64_t start_time = -1) override {
+    start_time = start_time == -1 ? am_ms() : start_time;
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    auto [rcm, info] = stat(path);
+    RMR errors = {};
+    auto [rcm, info] =
+        stat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm.first != EC::Success) {
       return {rcm, {}};
     }
-    _rm(info, errors);
+    _rm(info, errors, interrupt_flag, timeout_ms, start_time);
     return {ECM{EC::Success, ""}, errors};
   }
 
-  ECM rename(const std::string &src, const std::string &dst,
-             bool overwrite = false) override {
+  ECM rename(const std::string &src, const std::string &dst, bool mkdir = true,
+             bool overwrite = false, amf interrupt_flag = nullptr,
+             int timeout_ms = -1, int64_t start_time = -1) override {
+    if (start_time == -1) {
+      start_time = am_ms();
+    }
     std::lock_guard<std::recursive_mutex> lock(mtx);
 
     std::string srcf = AMFS::abspath(src, true, home_dir, home_dir);
@@ -925,8 +1381,8 @@ public:
     }
 
     // Use RNFR and RNTO commands via QUOTE
-    std::string url = BuildUrl("/");
-    ECM ecm = SetupCurl(url);
+    std::string url = fmt::format("{}{}", this->url, "/");
+    ECM ecm = SetupPath(url);
     if (ecm.first != EC::Success) {
       return ecm;
     }
@@ -956,44 +1412,10 @@ public:
     return {EC::Success, ""};
   }
 
-  ECM move(const std::string &src, const std::string &dst,
-           bool need_mkdir = false, bool force_write = false) override {
-    std::string srcf = src;
-    std::string dstf = dst;
-
-    auto [rcm, ssr] = stat(srcf);
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-
-    auto [rcm2, dsr] = stat(dstf);
-    if (rcm2.first != EC::Success) {
-      EC rc = rcm2.first;
-      if ((rc == EC::PathNotExist || rc == EC::FileNotExist) && need_mkdir) {
-        ECM ecm = mkdirs(dstf);
-        if (ecm.first != EC::Success) {
-          return ecm;
-        }
-      } else {
-        return rcm2;
-      }
-    } else {
-      if (dsr.type != PathType::DIR) {
-        return {EC::NotADirectory,
-                fmt::format("Dst is not a directory: {}", dstf)};
-      }
-    }
-
-    std::string dst_path = AMFS::join(dstf, AMFS::basename(srcf));
-    return rename(srcf, dst_path, force_write);
-  }
-
   void Upload(const std::string &dst, curl_read_callback read_callback,
               ProgressData *pd) {
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    std::string dst_path = AMFS::abspath(dst, true, home_dir, home_dir);
-    std::string url = BuildUrl(dst_path);
-    ECM ecm = SetupCurl(url);
+    ECM ecm = SetupPath(dst, false);
     if (ecm.first != EC::Success) {
       pd->rcm = ecm;
       pd->is_terminate.store(true);
@@ -1015,9 +1437,7 @@ public:
   void Download(const std::string &src, curl_write_callback write_callback,
                 ProgressData *pd) {
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    std::string src_path = AMFS::abspath(src, true, home_dir, home_dir);
-    std::string url = BuildUrl(src_path);
-    ECM ecm = SetupCurl(url);
+    ECM ecm = SetupPath(src, false);
     if (ecm.first != EC::Success) {
       pd->rcm = ecm;
       pd->is_terminate.store(true);
