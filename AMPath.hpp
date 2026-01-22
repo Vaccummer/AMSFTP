@@ -8,9 +8,7 @@
 #include <ctime>
 #include <filesystem>
 #include <functional>
-#include <iomanip>
 #include <regex>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -113,7 +111,7 @@ inline ECM fecm(const std::error_code &ec) { return {fec(ec), ec.message()}; }
 #endif
 
 namespace AMStr {
-inline void lowercase(std::string &str) {
+inline void vlowercase(std::string &str) {
   for (char &c : str) {
     if (c >= 'a' && c <= 'z') {
       c -= 32;
@@ -121,7 +119,7 @@ inline void lowercase(std::string &str) {
   }
 }
 
-inline void uppercase(std::string &str) {
+inline void vuppercase(std::string &str) {
   for (char &c : str) {
     if (c >= 'a' && c <= 'z') {
       c += 32;
@@ -132,13 +130,13 @@ inline void uppercase(std::string &str) {
 inline std::string lowercase(const std::string &str) {
   // 遍历字符串（C++98兼容的迭代器写法）
   std::string str_f = str;
-  lowercase(str_f);
+  vlowercase(str_f);
   return str_f;
 }
 
 inline std::string uppercase(const std::string &str) {
   std::string str_f = str;
-  uppercase(str_f);
+  vuppercase(str_f);
   return str_f;
 }
 
@@ -460,14 +458,15 @@ inline bool IsAbs(const std::string &path, const std::string &sep = "") {
           R"am(^(?:[a-zA-Z]:$)|(?:~$)|(?:[A-Za-z]:[/\\]|/|[\\/]{2}|~[\\/]))am"));
 }
 
-inline std::string extname(const std::string &path) {
-  std::string base = AMStr::lowercase(AMStr::Strip(path));
+inline std::string extname(std::string path) {
+  AMStr::VStrip(path);
+  AMStr::vlowercase(path);
   std::string ext = "";
   size_t dot_pos = path.find_last_of('.');
   if (dot_pos != std::string::npos) {
     ext = path.substr(dot_pos + 1);
     std::string test_ext = ".tar." + ext;
-    if (AMStr::endswith(base, test_ext).first) {
+    if (AMStr::endswith(path, test_ext).first) {
       return test_ext.substr(1);
     } else {
       return ext;
@@ -692,26 +691,6 @@ inline std::string basename(const std::string &path) {
   return p.filename().string();
 }
 } // namespace AMPathStr
-
-inline std::string FormatTime(const uint64_t &time,
-                              const std::string &format = "%Y-%m-%d %H:%M:%S") {
-  time_t timeT = static_cast<time_t>(time);
-
-  struct tm timeInfo;
-  {
-#ifdef _WIN32
-
-    localtime_s(&timeInfo, &timeT);
-#else
-    localtime_r(&timeT, &timeInfo);
-#endif
-
-    std::ostringstream oss;
-    oss << std::put_time(&timeInfo, format.c_str());
-
-    return oss.str();
-  };
-}
 
 namespace AMFS {
 

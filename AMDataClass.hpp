@@ -6,8 +6,10 @@
 #include <cstdint>
 #include <cstdint> // 用于int64_t类型
 #include <fcntl.h>
+#include <iomanip>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <unordered_map>
 
@@ -80,7 +82,25 @@ inline double am_s() {
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
+inline std::string FormatTime(const uint64_t &time,
+                              const std::string &format = "%Y-%m-%d %H:%M:%S") {
+  time_t timeT = static_cast<time_t>(time);
 
+  struct tm timeInfo;
+  {
+#ifdef _WIN32
+
+    localtime_s(&timeInfo, &timeT);
+#else
+    localtime_r(&timeT, &timeInfo);
+#endif
+
+    std::ostringstream oss;
+    oss << std::put_time(&timeInfo, format.c_str());
+
+    return oss.str();
+  };
+}
 // 非阻塞调用结果
 template <typename T> struct NBResult {
   T value;           // 函数返回值
@@ -120,6 +140,14 @@ public:
         create_time(create_time), access_time(access_time),
         modify_time(modify_time), type(type), mode_int(mode_int),
         mode_str(mode_str) {}
+  std::string repr() {
+    return fmt::format(
+        "PathInfo(name={}, path={}, dir={}, owner={}, size={}, create_time={}, "
+        "access_time={}, modify_time={}, type={}, mode_int={}, mode_str={})",
+        name, path, dir, owner, size, FormatTime(create_time),
+        FormatTime(access_time), FormatTime(modify_time),
+        magic_enum::enum_name(type), mode_int, mode_str);
+  }
 };
 
 // 跨平台Socket连接器
@@ -136,9 +164,9 @@ public:
   // 连接到指定主机，返回是否成功
 
   bool Connect(const std::string &hostname, int port, int timeout_ms) {
-    // 1. DNS解析
+    // 1. DNS解析 - 使用 AF_UNSPEC 支持 IPv4 和 IPv6
     addrinfo hints{}, *result = nullptr;
-    hints.ai_family = AF_INET;
+    hints.ai_family = AF_UNSPEC; // 支持 IPv4 和 IPv6
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
@@ -156,98 +184,91 @@ public:
       return false;
     }
 
-    // 2. 创建socket
-    sock = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-    if (sock == INVALID_SOCKET) {
-      freeaddrinfo(result);
-      error_msg = "Failed to create socket";
-      error_code = EC::SocketCreateError;
-      return false;
-    }
+    // 2. 遍历所有地址尝试连接（支持 IPv4/IPv6 双栈）
+    addrinfo *rp = nullptr;
+    for (rp = result; rp != nullptr; rp = rp->ai_next) {
+      sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+      if (sock == INVALID_SOCKET) {
+        continue; // 尝试下一个地址
+      }
 
-    // 3. 设置非阻塞模式
-    if (!SetNonBlocking(true)) {
-      freeaddrinfo(result);
-      closesocket(sock);
-      sock = INVALID_SOCKET;
-      return false;
-    }
+      // 3. 设置非阻塞模式
+      if (!SetNonBlocking(true)) {
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+        continue;
+      }
 
-    // 4. 发起连接
-    int conn_result = connect(sock, result->ai_addr, (int)result->ai_addrlen);
-    freeaddrinfo(result);
+      // 4. 发起连接
+      int conn_result = connect(sock, rp->ai_addr, (int)rp->ai_addrlen);
 
 #ifdef _WIN32
-    bool in_progress =
-        (conn_result == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK);
+      bool in_progress =
+          (conn_result == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK);
 #else
-    bool in_progress = (conn_result == -1 && errno == EINPROGRESS);
+      bool in_progress = (conn_result == -1 && errno == EINPROGRESS);
 #endif
 
-    if (conn_result == 0) {
-      // 立即成功（本地连接可能发生）
+      if (conn_result == 0) {
+        // 立即成功（本地连接可能发生）
+        SetNonBlocking(false);
+        freeaddrinfo(result);
+        return true;
+      }
+
+      if (!in_progress) {
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+        continue; // 尝试下一个地址
+      }
+
+      // 5. 使用select等待连接完成
+      fd_set write_fds, error_fds;
+      FD_ZERO(&write_fds);
+      FD_ZERO(&error_fds);
+      FD_SET(sock, &write_fds);
+      FD_SET(sock, &error_fds);
+
+      timeval timeout;
+      if (timeout_ms > 0) {
+        timeout.tv_sec = timeout_ms / 1000;
+        timeout.tv_usec = (timeout_ms % 1000) * 1000;
+      } else {
+        timeout.tv_sec = 6;
+        timeout.tv_usec = 0;
+      }
+
+      int select_result =
+          select((int)sock + 1, nullptr, &write_fds, &error_fds, &timeout);
+
+      if (select_result <= 0 || FD_ISSET(sock, &error_fds)) {
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+        continue; // 尝试下一个地址
+      }
+
+      // 6. 检查socket错误
+      int sock_error = 0;
+      socklen_t len = sizeof(sock_error);
+      if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&sock_error, &len) <
+              0 ||
+          sock_error != 0) {
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+        continue; // 尝试下一个地址
+      }
+
+      // 7. 恢复阻塞模式，连接成功
       SetNonBlocking(false);
+      freeaddrinfo(result);
       return true;
     }
 
-    if (!in_progress) {
-      error_msg = "Socket connect failed immediately";
-      error_code = EC::SocketConnectFailed;
-      closesocket(sock);
-      sock = INVALID_SOCKET;
-      return false;
-    }
-
-    // 5. 使用select等待连接完成
-    fd_set write_fds, error_fds;
-    FD_ZERO(&write_fds);
-    FD_ZERO(&error_fds);
-    FD_SET(sock, &write_fds);
-    FD_SET(sock, &error_fds);
-
-    timeval timeout;
-    if (timeout_ms > 0) {
-      timeout.tv_sec = 0;
-      timeout.tv_usec = (long)timeout_ms * 1000;
-    } else {
-      timeout.tv_sec = 10;
-      timeout.tv_usec = 0;
-    }
-
-    int select_result =
-        select((int)sock + 1, nullptr, &write_fds, &error_fds, &timeout);
-
-    if (select_result == 0) {
-      error_msg = "Socket connection timeout";
-      error_code = EC::SocketConnectTimeout;
-      closesocket(sock);
-      sock = INVALID_SOCKET;
-      return false;
-    }
-
-    if (select_result < 0 || FD_ISSET(sock, &error_fds)) {
-      error_msg = "Socket connection failed";
-      error_code = EC::SocketConnectFailed;
-      closesocket(sock);
-      sock = INVALID_SOCKET;
-      return false;
-    }
-
-    // 6. 检查socket错误
-    int sock_error = 0;
-    socklen_t len = sizeof(sock_error);
-    if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&sock_error, &len) < 0 ||
-        sock_error != 0) {
-      error_msg = fmt::format("Socket error after connect: {}", sock_error);
-      error_code = EC::SocketConnectFailed;
-      closesocket(sock);
-      sock = INVALID_SOCKET;
-      return false;
-    }
-
-    // 7. 恢复阻塞模式
-    SetNonBlocking(false);
-    return true;
+    // 所有地址都尝试失败
+    freeaddrinfo(result);
+    error_msg = "Socket connect failed for all addresses";
+    error_code = EC::SocketConnectFailed;
+    return false;
   }
 
 private:
@@ -387,8 +408,8 @@ struct ErrorCBInfo {
 
 struct AuthCBInfo {
   bool NeedPassword; // if true, python password callback need to return
-                     // password, if false, callback function just tells you the
-                     // password is wrong
+                     // password, if false, callback function just tells you
+                     // the password is wrong
   ConRequst request;
   int trial_times;
   AuthCBInfo(bool NeedPassword, ConRequst request, int trial_times)
@@ -516,8 +537,6 @@ struct ProgressData {
   ECM rcm = ECM(EC::Success, "");
   std::function<void(bool)> progress_cb;
   std::shared_ptr<StreamRingBuffer> ring_buffer = nullptr;
-  std::tuple<size_t, size_t, size_t> buffer_size = {
-      1024 * 1024 * 16, 1024 * 1024 * 16, 1024 * 1024 * 16};
 
   ProgressData(float cb_interval_s = 0.1) : cb_interval_s(cb_interval_s) {}
 
@@ -543,6 +562,7 @@ struct ProgressData {
     this->dst = task.dst;
     this->src_host = task.src_host;
     this->dst_host = task.dst_host;
+    this->this_size = 0;
     this->file_size = task.size;
     rcm = ECM(EC::Success, "");
     ring_buffer = std::make_shared<StreamRingBuffer>(buffer_size);
@@ -551,7 +571,8 @@ struct ProgressData {
 
 class UnimplementedMethodException : public std::exception {
 public:
-  UnimplementedMethodException(const std::string &message) : message(message) {}
+  UnimplementedMethodException(std::string message)
+      : message(std::move(message)) {}
   const char *what() const noexcept override { return message.c_str(); }
 
 private:
@@ -716,7 +737,8 @@ public:
         // 映射文件到内存
         addr = mmap(nullptr, this->file_size, prot_flags, map_flags, fd, 0);
         if (addr == MAP_FAILED) {
-          throw std::string("Failed to map file to memory: ") + strerror(errno);
+          throw std::string("Failed to map file to memory: ") +
+strerror(errno);
         }
 
         file_ptr = static_cast<char *>(addr);
@@ -742,7 +764,8 @@ public:
         // 映射文件到内存
         addr = mmap(nullptr, this->file_size, prot_flags, map_flags, fd, 0);
         if (addr == MAP_FAILED) {
-          throw std::string("Failed to map file to memory: ") + strerror(errno);
+          throw std::string("Failed to map file to memory: ") +
+strerror(errno);
         }
 
         file_ptr = static_cast<char *>(addr);
@@ -812,8 +835,8 @@ struct SingleBuffer {
   uint64_t read_order = 0;
   SingleBuffer() {}
   SingleBuffer(size_t buffer_size)
-      : bufferptr_origin(new char[buffer_size], std::default_delete<char[]>()),
-        bufferptr(bufferptr_origin.get()) {}
+      : bufferptr_origin(new char[buffer_size],
+std::default_delete<char[]>()), bufferptr(bufferptr_origin.get()) {}
 };
 
 struct TransferContext {

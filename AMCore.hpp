@@ -803,10 +803,11 @@ private:
     return {rc_final, error_msg};
   }
 
-  void Reading(const TransferTask &task, std::shared_ptr<BaseClient> client,
-               ConRequst request = ConRequst()) {
+  void XToBuffer(const TransferTask &task, std::shared_ptr<BaseClient> client,
+                 ConRequst request = ConRequst()) {
     if ((client->GetProtocol() == ClientProtocol::SFTP) ||
         (client->GetProtocol() == ClientProtocol::LOCAL)) {
+      std::cout << "SFTP/LOCAL Reading" << std::endl;
       UnionFileHandle file_handle;
       std::shared_ptr<AMSFTPClient> clientf = nullptr;
       if (client->GetProtocol() == ClientProtocol::SFTP) {
@@ -814,13 +815,15 @@ private:
       }
       ECM rcm = file_handle.Init(task.src, task.size, clientf, false, true);
       if (rcm.first != EC::Success) {
+        std::cout << "Init failed" << std::endl;
         pd.is_terminate.store(true);
         pd.rcm = rcm;
         return;
       }
       while (file_handle.offset < file_handle.file_size &&
              !pd.is_terminate.load()) {
-        while (pd.ring_buffer->writable() == 0 && !pd.is_terminate.load()) {
+        while (pd.ring_buffer->writable() == 0 && !pd.is_terminate.load() &&
+               file_handle.offset < file_handle.file_size) {
           std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
         while (pd.is_pause.load() && !pd.is_terminate.load()) {
@@ -844,18 +847,19 @@ private:
       //     pd.rcm = ecm;
       //     return;
       //   }
-      //   client_ftp->Download(task.src, FTPGiveData, &pd);
+      //   client_ftp->Download(task.src, FTPToBuffer, &pd);
     } else if (client->GetProtocol() == ClientProtocol::FTP) {
       // 读取FTP文件，而且需要创建额外的ftp客户端
       auto client_ftp = std::static_pointer_cast<AMFTPClient>(client);
-      client_ftp->Download(task.src, FTPGiveData, &pd);
+      client_ftp->Download(task.src, FTPToBuffer, &pd);
     }
   }
 
-  void Writing(const TransferTask &task, std::shared_ptr<BaseClient> client,
-               ConRequst request = ConRequst()) {
+  void BufferToX(const TransferTask &task, std::shared_ptr<BaseClient> client,
+                 ConRequst request = ConRequst()) {
     if ((client->GetProtocol() == ClientProtocol::SFTP) ||
         (client->GetProtocol() == ClientProtocol::LOCAL)) {
+      std::cout << "SFTP/LOCAL Writing" << std::endl;
       UnionFileHandle file_handle;
       std::shared_ptr<AMSFTPClient> clientf = nullptr;
       if (client->GetProtocol() == ClientProtocol::SFTP) {
@@ -896,11 +900,11 @@ private:
       //     pd.rcm = ecm;
       //     return;
       //   }
-      //   client_ftp->Upload(task.dst, FTPGiveData, &pd);
+      //   client_ftp->Upload(task.dst, FTPToBuffer, &pd);
     } else if (client->GetProtocol() == ClientProtocol::FTP) {
       // 读取FTP文件，而且需要创建额外的ftp客户端
       auto client_ftp = std::static_pointer_cast<AMFTPClient>(client);
-      client_ftp->Upload(task.dst, FTPNeedData, &pd);
+      client_ftp->Upload(task.dst, BufferToFTP, &pd);
     }
   }
 
@@ -963,16 +967,28 @@ private:
 
     // }
     // 启动一个thread执行Reading
-    std::cout << "init_reading" << std::endl;
+
+    std::cout << "start Reading" << std::endl;
     std::thread reading_thread(
-        [&]() { this->Reading(task, src_client, request); });
-    std::cout << "init_writing" << std::endl;
-    this->Writing(task, dst_client, request);
+        [&]() { this->XToBuffer(task, src_client, request); });
+
+    std::cout << "start Writing" << std::endl;
+    std::cout << "this_size: " << pd.this_size << std::endl;
+    std::cout << "file_size: " << pd.file_size << std::endl;
+    std::cout << "accumulated_size: " << pd.accumulated_size << std::endl;
+    std::cout << "total_size: " << pd.total_size << std::endl;
+    this->BufferToX(task, dst_client, request);
+    std::cout << "this_size: " << pd.this_size << std::endl;
+    std::cout << "file_size: " << pd.file_size << std::endl;
+    std::cout << "is_terminate: " << pd.is_terminate.load() << std::endl;
+    pd.is_terminate.store(true);
     std::cout << "Writing done" << std::endl;
+
     if (reading_thread.joinable()) {
       reading_thread.join();
     }
     std::cout << "Reading done" << std::endl;
+
     if (pd.rcm.first == EC::Success) {
       if (pd.is_terminate.load()) {
         return {EC::Terminate, "Transfer terminated by user"};
@@ -1084,49 +1100,64 @@ public:
     }
   }
 
-  static size_t FTPNeedData(char *ptr, size_t size, size_t nmemb,
+  static size_t BufferToFTP(char *ptr, size_t size, size_t nmemb,
                             void *userdata) {
     // size指块数，但这个值往往是1
     auto *pd = static_cast<ProgressData *>(userdata);
-
-    while (pd->ring_buffer->available() == 0 && !pd->is_terminate.load() &&
-           pd->this_size < pd->file_size) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-    while (pd->is_pause.load() && !pd->is_terminate.load()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-    if (pd->is_terminate.load()) {
-      return CURL_READFUNC_ABORT;
-    }
-    auto [read_ptr, read_len] = pd->ring_buffer->get_read_ptr();
-    ssize_t to_read = read_len > size * nmemb ? size * nmemb : read_len;
-    if (to_read > 0) {
-      try {
-        memcpy(ptr, read_ptr, to_read);
-        pd->ring_buffer->commit_read(to_read);
-        pd->this_size += to_read;
-        pd->accumulated_size += to_read;
-        pd->progress_cb(false);
-        return to_read;
-      } catch (const std::exception &e) {
-        pd->is_terminate.store(true);
-        pd->rcm = ECM{EC::BufferReadError, e.what()};
+    static int wait_count = 0; // 等待计数
+    // 持续等待直到有数据可读并成功获取
+    while (true) {
+      // 检查中断
+      if (pd->is_terminate.load()) {
+        std::cout << "[BufferToFTP] Terminated, this_size=" << pd->this_size
+                  << std::endl;
         return CURL_READFUNC_ABORT;
       }
-    } else if (to_read == 0) {
-      return 0;
-    } else {
-      pd->is_terminate.store(true);
-      pd->rcm = ECM{EC::BufferReadError, "Get Negativate value for data size"};
-      return CURL_READFUNC_ABORT;
+      // 检查暂停
+      while (pd->is_pause.load() && !pd->is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      // 检查是否传输完成
+      if (pd->this_size >= pd->file_size) {
+        return 0; // 只有真正传输完成才返回 0 (EOF)
+      }
+      // 等待有数据可读
+      if (pd->ring_buffer->available() == 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        continue;
+      }
+      // 尝试获取数据
+      auto [read_ptr, read_len] = pd->ring_buffer->get_read_ptr();
+      ssize_t to_read = read_len > size * nmemb ? size * nmemb : read_len;
+
+      if (to_read > 0) {
+        try {
+          memcpy(ptr, read_ptr, to_read);
+          pd->ring_buffer->commit_read(to_read);
+          pd->this_size += to_read;
+          pd->accumulated_size += to_read;
+          pd->progress_cb(false);
+          return to_read;
+        } catch (const std::exception &e) {
+          pd->is_terminate.store(true);
+          pd->rcm = ECM{EC::BufferReadError, e.what()};
+          return CURL_READFUNC_ABORT;
+        }
+      } else if (to_read < 0) {
+        pd->is_terminate.store(true);
+        pd->rcm = ECM{EC::BufferReadError, "Get negative value for data size"};
+        return CURL_READFUNC_ABORT;
+      }
+      // to_read == 0: 竞态条件，available() > 0 但实际获取不到数据
+      // 继续循环重试，而不是返回 0
     }
   }
 
-  static size_t FTPGiveData(char *ptr, size_t size, size_t nmemb,
+  static size_t FTPToBuffer(char *ptr, size_t size, size_t nmemb,
                             void *userdata) {
     auto *pd = static_cast<ProgressData *>(userdata);
-    while (pd->ring_buffer->writable() == 0 && !pd->is_terminate.load()) {
+    while (pd->ring_buffer->writable() == 0 && !pd->is_terminate.load() &&
+           pd->this_size < pd->file_size) {
       std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
     while (pd->is_pause.load() && !pd->is_terminate.load()) {
@@ -1139,11 +1170,8 @@ public:
     ssize_t to_read = write_len > size * nmemb ? size * nmemb : write_len;
     if (to_read > 0) {
       try {
-        memcpy(ptr, write_ptr, to_read);
+        memcpy(write_ptr, ptr, to_read);
         pd->ring_buffer->commit_write(to_read);
-        pd->this_size += to_read;
-        pd->accumulated_size += to_read;
-        pd->progress_cb(false);
         return to_read;
       } catch (const std::exception &e) {
         pd->is_terminate.store(true);
@@ -1281,58 +1309,59 @@ public:
     WRV result = {};
     TASKS tasks = {};
     // 去除src的dst左右端的空格
-    std::cout << "src: " << src << std::endl;
+
     auto [rc1, src_client] = hostm->test_client(src_host, false, interrupt_flag,
                                                 timeout_ms, start_time);
-    std::cout << "rc1: " << std::endl;
+
     if (rc1.first != EC::Success) {
       return {rc1, tasks};
     }
     auto [rc2, dst_client] = hostm->test_client(dst_host, false, interrupt_flag,
                                                 timeout_ms, start_time);
-    std::cout << "rc2: " << std::endl;
+
     if (rc2.first != EC::Success) {
       return {rc2, tasks};
     }
     auto [rc3, src_stat] =
         src_client->stat(src, false, interrupt_flag, timeout_ms, start_time);
-    std::cout << "rc3: " << std::endl;
+
     if (rc3.first != EC::Success) {
       return {rc3, tasks};
     }
-    std::cout << "rc4: " << std::endl;
+
     // 检查是否为 src_file -> dst_file 的传输
     auto dstf = dst;
     auto srcf = src;
     bool is_dst_file = false;
     if (src_stat.type == PathType::FILE) {
       // 检查dst的扩展名和src扩展名是否相同
-      std::cout << "rc5: " << std::endl;
+
       std::string dst_ext = AMPathStr::extname(dstf);
+      std::cout << "dst_ext: " << dst_ext << std::endl;
+      std::cout << "src_ext: " << AMPathStr::extname(srcf) << std::endl;
       if (AMPathStr::extname(srcf) == dst_ext && !dst_ext.empty()) {
         is_dst_file = true;
       }
     }
 
     if (src_stat.type != PathType::DIR) {
-      std::cout << "rc6: " << std::endl;
+
       if (ignore_sepcial_file && src_stat.type != PathType::FILE) {
         return {ECM{EC::NotAFile, fmt::format("Src is not a common file and "
                                               "ignore_sepcial_file is true: {}",
                                               srcf)},
                 {}};
       }
-      std::cout << "rc7: " << std::endl;
+
       if (!is_dst_file) {
         dstf = AMPathStr::join(dstf, AMPathStr::basename(srcf));
       }
-      std::cout << "rc8: " << std::endl;
-      std::cout << "dirname: " << AMPathStr::dirname(dstf) << std::endl;
+
       // 检测dst的父级目录是否存在
       auto [rcm4, dst_parent_info] =
           dst_client->stat(AMPathStr::dirname(dstf), false, interrupt_flag,
                            timeout_ms, start_time);
-      std::cout << "rc9: " << std::endl;
+
       if (rcm4.first != EC::Success && !mkdir) {
         return {ECM{EC::ParentDirectoryNotExist,
                     fmt::format("Dst parent path not exists: {}",
@@ -1345,7 +1374,7 @@ public:
                                 dst_parent_info.path)),
                 tasks};
       }
-      std::cout << "rc10: " << std::endl;
+
       if (rcm4.first == EC::Success) {
         auto [rcm5, dst_info] = dst_client->stat(dstf, false, interrupt_flag,
                                                  timeout_ms, start_time);
