@@ -80,105 +80,6 @@ protected:
   std::atomic<bool> has_connected;
   SOCKET sock = INVALID_SOCKET;
   // Optimized wait_for_socket: reduces overhead from frequent calls
-  inline WaitResult wait_for_socket(SocketWaitType wait_dir,
-                                    const amf &flag = nullptr,
-                                    int64_t start_time = -1,
-                                    int64_t timeout_ms = -1,
-                                    int poll_interval_ms = 20) {
-    // Fast path: check if socket is already ready without select
-    if (wait_dir == SocketWaitType::Auto) {
-      int dir = libssh2_session_block_directions(session);
-      if (dir == 0) {
-        return WaitResult::Ready;
-      }
-    }
-
-    // Pre-check interrupt and timeout before entering select
-    if (flag && flag->check()) {
-      return WaitResult::Interrupted;
-    }
-    if (timeout_ms > 0) {
-      if (am_ms() - start_time >= timeout_ms) {
-        return WaitResult::Timeout;
-      }
-    }
-
-    // Pre-compute wait directions (avoid repeated switch in loop)
-    bool wait_read = false;
-    bool wait_write = false;
-    bool is_auto = (wait_dir == SocketWaitType::Auto);
-
-    if (!is_auto) {
-      switch (wait_dir) {
-      case SocketWaitType::Read:
-        wait_read = true;
-        break;
-      case SocketWaitType::Write:
-        wait_write = true;
-        break;
-      case SocketWaitType::ReadWrite:
-        wait_read = true;
-        wait_write = true;
-        break;
-      default:
-        break;
-      }
-    }
-
-    // Pre-compute timeval (reuse in loop)
-    struct timeval tv;
-    tv.tv_sec = poll_interval_ms / 1000;
-    tv.tv_usec = (poll_interval_ms % 1000) * 1000;
-
-    while (true) {
-      fd_set readfds, writefds;
-      FD_ZERO(&readfds);
-      FD_ZERO(&writefds);
-
-      if (is_auto) {
-        int dir = libssh2_session_block_directions(session);
-        if (dir == 0) {
-          return WaitResult::Ready;
-        }
-        if (dir & LIBSSH2_SESSION_BLOCK_INBOUND) {
-          FD_SET(sock, &readfds);
-        }
-        if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) {
-          FD_SET(sock, &writefds);
-        }
-      } else {
-        if (wait_read) {
-          FD_SET(sock, &readfds);
-        }
-        if (wait_write) {
-          FD_SET(sock, &writefds);
-        }
-      }
-
-#ifdef _WIN32
-      int rc = select(0, &readfds, &writefds, nullptr, &tv);
-#else
-      int rc = select(sock + 1, &readfds, &writefds, nullptr, &tv);
-#endif
-
-      if (rc > 0) {
-        return WaitResult::Ready;
-      }
-      if (rc < 0) {
-        return WaitResult::Error;
-      }
-
-      // rc == 0: select timeout, check interrupt and timeout
-      if (flag && flag->check()) {
-        return WaitResult::Interrupted;
-      }
-      if (timeout_ms > 0) {
-        if (am_ms() - start_time >= timeout_ms) {
-          return WaitResult::Timeout;
-        }
-      }
-    }
-  }
 
   ECM ErrorRecord(int code, TraceLevel level, const std::string &taregt,
                   const std::string &action, std::string prompt = "") {
@@ -369,6 +270,106 @@ public:
       LoadDefaultPrivateKeys();
     }
     has_connected.store(false);
+  }
+
+  inline WaitResult wait_for_socket(SocketWaitType wait_dir,
+                                    const amf &flag = nullptr,
+                                    int64_t start_time = -1,
+                                    int64_t timeout_ms = -1,
+                                    int poll_interval_ms = 20) {
+    // Fast path: check if socket is already ready without select
+    if (wait_dir == SocketWaitType::Auto) {
+      int dir = libssh2_session_block_directions(session);
+      if (dir == 0) {
+        return WaitResult::Ready;
+      }
+    }
+
+    // Pre-check interrupt and timeout before entering select
+    if (flag && flag->check()) {
+      return WaitResult::Interrupted;
+    }
+    if (timeout_ms > 0) {
+      if (am_ms() - start_time >= timeout_ms) {
+        return WaitResult::Timeout;
+      }
+    }
+
+    // Pre-compute wait directions (avoid repeated switch in loop)
+    bool wait_read = false;
+    bool wait_write = false;
+    bool is_auto = (wait_dir == SocketWaitType::Auto);
+
+    if (!is_auto) {
+      switch (wait_dir) {
+      case SocketWaitType::Read:
+        wait_read = true;
+        break;
+      case SocketWaitType::Write:
+        wait_write = true;
+        break;
+      case SocketWaitType::ReadWrite:
+        wait_read = true;
+        wait_write = true;
+        break;
+      default:
+        break;
+      }
+    }
+
+    // Pre-compute timeval (reuse in loop)
+    struct timeval tv;
+    tv.tv_sec = poll_interval_ms / 1000;
+    tv.tv_usec = (poll_interval_ms % 1000) * 1000;
+
+    while (true) {
+      fd_set readfds, writefds;
+      FD_ZERO(&readfds);
+      FD_ZERO(&writefds);
+
+      if (is_auto) {
+        int dir = libssh2_session_block_directions(session);
+        if (dir == 0) {
+          return WaitResult::Ready;
+        }
+        if (dir & LIBSSH2_SESSION_BLOCK_INBOUND) {
+          FD_SET(sock, &readfds);
+        }
+        if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) {
+          FD_SET(sock, &writefds);
+        }
+      } else {
+        if (wait_read) {
+          FD_SET(sock, &readfds);
+        }
+        if (wait_write) {
+          FD_SET(sock, &writefds);
+        }
+      }
+
+#ifdef _WIN32
+      int rc = select(0, &readfds, &writefds, nullptr, &tv);
+#else
+      int rc = select(sock + 1, &readfds, &writefds, nullptr, &tv);
+#endif
+
+      if (rc > 0) {
+        return WaitResult::Ready;
+      }
+      if (rc < 0) {
+        return WaitResult::Error;
+      }
+
+      // rc == 0: select timeout, check interrupt and timeout
+      if (flag && flag->check()) {
+        return WaitResult::Interrupted;
+      }
+      if (timeout_ms > 0) {
+        if (am_ms() - start_time >= timeout_ms) {
+          return WaitResult::Timeout;
+        }
+      }
+    }
   }
 
   std::vector<std::string> GetKeys() { return this->private_keys; }

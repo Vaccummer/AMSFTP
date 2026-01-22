@@ -8,6 +8,8 @@
 #include <fcntl.h>
 #include <iomanip>
 #include <iostream>
+#include <random>
+
 #include <memory>
 #include <sstream>
 #include <string>
@@ -21,10 +23,9 @@
 // 自身依赖
 
 // 第三方库
+#include <fmt/core.h>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
-
-#include <fmt/core.h>
 #include <magic_enum/magic_enum.hpp>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
@@ -60,6 +61,11 @@ namespace py = pybind11;
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
+
+inline static std::mt19937_64 engine = std::mt19937_64(std::random_device{}());
+inline static std::uniform_int_distribution<uint64_t> distribution =
+    std::uniform_int_distribution<uint64_t>(0, UINT64_MAX);
+inline uint64_t GenerateUID() { return distribution(engine); }
 
 inline double timenow() {
   // 获取unix参考时间，以秒为单位返回double

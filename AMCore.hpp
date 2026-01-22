@@ -185,7 +185,6 @@ public:
     if (to_read > 0) {
       if (is_sftp) {
         // SFTP read
-        std::lock_guard<std::recursive_mutex> lock(client->mtx);
         bytes_read = libssh2_sftp_read(sftp_handle, write_ptr, to_read);
         if (bytes_read > 0) {
           ring_buffer->commit_write(bytes_read);
@@ -193,6 +192,8 @@ public:
           return {bytes_read, {EC::Success, ""}};
         } else if (bytes_read == 0) {
           return {0, {EC::EndOfFile, "End of file"}};
+        } else if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
+          return {LIBSSH2_ERROR_EAGAIN, {EC::SSHEAGAIN, "SSH EAGAIN"}};
         } else {
           EC rc = client->GetLastEC();
           std::string msg = client->GetLastErrorMsg();
@@ -524,39 +525,42 @@ private:
   ECM Transit(const std::string &src, const std::string &dst,
               const std::shared_ptr<AMSFTPClient> &src_worker,
               const std::shared_ptr<AMSFTPClient> &dst_worker) {
+    ECM rcm = ECM{EC::Success, ""};
     ErrorCode rc_final = EC::Success;
     std::string error_msg = "";
     LIBSSH2_SFTP_HANDLE *srcFile = nullptr;
     LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
     std::lock_guard<std::recursive_mutex> lock(src_worker->mtx);
     std::lock_guard<std::recursive_mutex> lock2(dst_worker->mtx);
-    dst_worker->mkdir(AMPathStr::dirname(dst));
+    rcm = dst_worker->mkdir(AMPathStr::dirname(dst));
+    if (rcm.first != EC::Success) {
+      return rcm;
+    }
+
     srcFile = libssh2_sftp_open(src_worker->sftp, src.c_str(), LIBSSH2_FXF_READ,
                                 0400);
     dstFile = libssh2_sftp_open(
-        dst_worker->sftp, dst.c_str(),
+        client->sftp, dst.c_str(),
         LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
 
     if (!srcFile) {
-      rc_final = src_worker->GetLastEC();
+      rc_final = client->GetLastEC();
       error_msg = fmt::format("Failed to open src remote file: {}, cause {}",
-                              src, src_worker->GetLastErrorMsg());
-      src_worker->trace(
-          TraceLevel::Error, rc_final,
-          fmt::format("{}@{}", src_worker->res_data.nickname, src),
-          "Remote2Remote", error_msg);
+                              src, client->GetLastErrorMsg());
+      client->trace(TraceLevel::Error, rc_final,
+                    fmt::format("{}@{}", client->res_data.nickname, src),
+                    "Remote2Remote", error_msg);
       return {rc_final, error_msg};
     }
 
     if (!dstFile) {
       // 获取错误代码
-      rc_final = dst_worker->GetLastEC();
+      rc_final = client->GetLastEC();
       error_msg = fmt::format("Failed to open dst remote file: {}, cause {}",
-                              dst, dst_worker->GetLastErrorMsg());
-      dst_worker->trace(
-          TraceLevel::Error, rc_final,
-          fmt::format("{}@{}", dst_worker->res_data.nickname, dst),
-          "Remote2Remote", error_msg);
+                              dst, client->GetLastErrorMsg());
+      client->trace(TraceLevel::Error, rc_final,
+                    fmt::format("{}@{}", dst_worker->res_data.nickname, dst),
+                    "Remote2Remote", error_msg);
       return {rc_final, error_msg};
     }
 
@@ -662,6 +666,59 @@ private:
     }
 
     return {rc_final, error_msg};
+  }
+
+  ECM Transit2(TransferTask &task, std::shared_ptr<AMSFTPClient> client) {
+    ECM rcm = ECM{EC::Success, ""};
+    std::string error_msg = "";
+    std::lock_guard<std::recursive_mutex> lock(client->mtx);
+    rcm = client->mkdir(AMPathStr::dirname(task.dst));
+    if (rcm.first != EC::Success) {
+      return rcm;
+    }
+
+    UnionFileHandle src_handle;
+    rcm = src_handle.Init(task.src, task.size, client, false, true);
+    if (rcm.first != EC::Success) {
+      return rcm;
+    }
+    UnionFileHandle dst_handle;
+    rcm = dst_handle.Init(task.dst, task.size, client, true, true);
+    if (rcm.first != EC::Success) {
+      return rcm;
+    }
+    libssh2_session_set_blocking(client->session, 0);
+    libssh2_session_set_blocking(client->session, 0);
+    std::pair<ssize_t, ECM> data_rc;
+    WaitResult wr = WaitResult::Ready;
+
+    while (pd.this_size < pd.file_size) {
+      data_rc = src_handle.Read(pd.ring_buffer);
+
+      if (data_rc.first != LIBSSH2_ERROR_EAGAIN && data_rc.first < 0) {
+        rcm = data_rc.second;
+        goto clean;
+      }
+
+      data_rc = dst_handle.Write(pd.ring_buffer);
+      if (data_rc.first > 0) {
+        pd.accumulated_size += data_rc.first;
+        pd.this_size = src_handle.offset;
+        InnerCallback();
+      } else if (data_rc.first == 0) {
+        goto clean;
+      } else if (data_rc.first != LIBSSH2_ERROR_EAGAIN) {
+        rcm = data_rc.second;
+        goto clean;
+      }
+      // 等待sock可读或可写
+      client->wait_for_socket(SocketWaitType::Auto, worker_interrupt_flag);
+    }
+
+  clean:
+    libssh2_session_set_blocking(client->session, 1);
+    InnerCallback(true);
+    return rcm;
   }
 
   ECM InHostCopy(const std::string &src, const std::string &dst,
@@ -910,12 +967,10 @@ private:
 
   /*
   std::pair<ECM, PathInfo> Ustat(const std::string &path,
-                                 const std::shared_ptr<ClientMaintainer> &hostm,
-                                 const std::string &nickname = "") {
-    if (nickname.empty()) {
-      auto res = AMFS::stat(path);
-      if (res.first.first != EC::Success) {
-        return {ECM{EC::LocalStatError, res.first.second}, res.second};
+                                 const std::shared_ptr<ClientMaintainer>
+  &hostm, const std::string &nickname = "") { if (nickname.empty()) { auto res
+  = AMFS::stat(path); if (res.first.first != EC::Success) { return
+  {ECM{EC::LocalStatError, res.first.second}, res.second};
       }
       return {ECM{EC::Success, ""}, res.second};
     }
