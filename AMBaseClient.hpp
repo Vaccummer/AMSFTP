@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <pybind11/pytypes.h>
+
 #include <string>
 #include <thread>
 #include <vector>
@@ -379,6 +380,7 @@ protected:
   }
 
 public:
+  uint64_t uid;
   std::recursive_mutex mtx;
   OS_TYPE os_type = OS_TYPE::Uncertain;
   std::string home_dir = "";
@@ -386,7 +388,13 @@ public:
   virtual ~BaseClient() = default;
   BaseClient(const ConRequst &request, int buffer_capacity = 10,
              const py::object &trace_cb = py::none())
-      : AMTracer(request, buffer_capacity, trace_cb), BasePathMatch() {}
+      : AMTracer(request, buffer_capacity, trace_cb), BasePathMatch() {
+    // 生成一个随机uid
+    this->uid = GenerateUID();
+  }
+
+  uint64_t GetUID() { return this->uid; }
+
   ClientProtocol GetProtocol() { return PROTOCOL; }
   ssize_t TransferRingBufferSize(ssize_t buffer_size = -1) {
     if (buffer_size <= 0) {
