@@ -175,7 +175,8 @@ void BindPathInfo(py::module &m) {
           py::arg("name"), py::arg("path"), py::arg("dir"), py::arg("owner"),
           py::arg("size"), py::arg("create_time"), py::arg("access_time"),
           py::arg("modify_time"), py::arg("type"), py::arg("mode_int"),
-          py::arg("mode_str"));
+          py::arg("mode_str"))
+      .def("__repr__", &PathInfo::repr);
 }
 void BindInterruptFlag(py::module &m) {
   auto cls = py::class_<InterruptFlag, std::shared_ptr<InterruptFlag>>(
