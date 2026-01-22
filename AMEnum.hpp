@@ -16,14 +16,17 @@ constexpr ssize_t AMMaxBufferSize = 1024 * 1024 * 64;
 
 // Socket wait direction
 enum class SocketWaitType {
-  Read,      // Wait for socket readable
-  Write,     // Wait for socket writable
-  ReadWrite, // Wait for both readable and writable
-  Auto       // Determine from libssh2_session_block_directions
+  Read,        // Wait for socket readable
+  Write,       // Wait for socket writable
+  ReadWrite,   // Wait for both readable and writable
+  ReadOrWrite, // Wait for readable or writable, 返回 ReadReady/WriteReady
+  Auto         // Determine from libssh2_session_block_directions
 };
 
 enum class WaitResult {
   Ready,       // Socket is ready for read/write
+  ReadReady,   // Socket is ready for read (仅 ReadOrWrite 模式)
+  WriteReady,  // Socket is ready for write (仅 ReadOrWrite 模式)
   Timeout,     // Operation timed out
   Interrupted, // Operation was interrupted by flag
   Error        // Socket error occurred
@@ -155,6 +158,22 @@ enum class ErrorCode {
   FTPListFailed = 53,
 };
 
+ErrorCode wait_result_to_error_code(WaitResult wr) {
+  switch (wr) {
+  case WaitResult::Ready:
+    return ErrorCode::Success;
+  case WaitResult::ReadReady:
+    return ErrorCode::Success;
+  case WaitResult::WriteReady:
+    return ErrorCode::Success;
+  case WaitResult::Timeout:
+    return ErrorCode::OperationTimeout;
+  case WaitResult::Interrupted:
+    return ErrorCode::Terminate;
+  case WaitResult::Error:
+    return ErrorCode::SocketRecvError;
+  }
+}
 enum class PathType {
   BlockDevice = -1,
   CharacterDevice = -2,

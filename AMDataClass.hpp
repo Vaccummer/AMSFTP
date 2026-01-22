@@ -571,6 +571,7 @@ struct ProgressData {
     this->this_size = 0;
     this->file_size = task.size;
     rcm = ECM(EC::Success, "");
+    // 释放上一个buffer
     ring_buffer = std::make_shared<StreamRingBuffer>(buffer_size);
   }
 };

@@ -996,6 +996,8 @@ private:
   }
 
 public:
+  std::shared_ptr<AMFTPClient> mirror_client = nullptr;
+
   AMFTPClient(const ConRequst &request, ssize_t buffer_capacity = 10,
               const py::object &trace_cb = py::none())
       : BaseClient(request, buffer_capacity, trace_cb) {
@@ -1621,10 +1623,10 @@ public:
     curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t)pd->file_size);
     curl_easy_setopt(curl, CURLOPT_FTP_CREATE_MISSING_DIRS, CURLFTP_CREATE_DIR);
     // 禁用低速限制超时，防止等待数据时被误判为超时
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 0L);
-    curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 0L);
+    // curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 0L);
+    // curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 0L);
     // 启用 verbose 模式查看 FTP 通信详情
-    curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+    // curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
 
     std::cout << "[Upload] Starting curl_easy_perform..." << std::endl;
     CURLcode res = curl_easy_perform(curl);

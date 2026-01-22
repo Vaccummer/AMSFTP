@@ -295,10 +295,11 @@ public:
       }
     }
 
-    // Pre-compute wait directions (avoid repeated switch in loop)
+    // Pre-compute wait directions
     bool wait_read = false;
     bool wait_write = false;
     bool is_auto = (wait_dir == SocketWaitType::Auto);
+    bool is_read_or_write = (wait_dir == SocketWaitType::ReadOrWrite);
 
     if (!is_auto) {
       switch (wait_dir) {
@@ -309,6 +310,7 @@ public:
         wait_write = true;
         break;
       case SocketWaitType::ReadWrite:
+      case SocketWaitType::ReadOrWrite:
         wait_read = true;
         wait_write = true;
         break;
@@ -354,6 +356,13 @@ public:
 #endif
 
       if (rc > 0) {
+        // ReadOrWrite 模式下返回具体的读写状态
+        if (is_read_or_write) {
+          if (FD_ISSET(sock, &readfds)) {
+            return WaitResult::ReadReady;
+          }
+          return WaitResult::WriteReady;
+        }
         return WaitResult::Ready;
       }
       if (rc < 0) {
@@ -869,7 +878,7 @@ private:
       return {EC::NoConnection, "SFTP not initialized"};
     }
 
-    auto nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
+    NBResult<int> nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
       return libssh2_sftp_mkdir_ex(sftp, path.c_str(), path.size(), 0740);
     });
     return ErrorRecord(nb_res, TraceLevel::Debug, path, "libssh2_sftp_mkdir_ex",
@@ -1290,7 +1299,7 @@ public:
       return {ECM{EC::SocketRecvError,
                   fmt::format("Socket error during command: {}", cmd)},
               {output, -1}};
-    case WaitResult::Ready:
+    default:
       return {ECM{EC::Success, ""}, {output, exit_status}};
     }
   }
@@ -1661,6 +1670,16 @@ def _amsftp_gen(next_func):
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     start_time = start_time == -1 ? am_ms() : start_time;
+    auto [rcm2, attrs] =
+        lib_getstat(path, false, interrupt_flag, timeout_ms, start_time);
+    if (rcm2.first == EC::Success) {
+      if (isdir(attrs)) {
+        return {EC::Success, ""};
+      } else {
+        return {EC::PathAlreadyExists,
+                fmt::format("Path exists and is not a directory: {}", path)};
+      }
+    }
     return lib_mkdir(path, interrupt_flag, timeout_ms, start_time);
   }
 

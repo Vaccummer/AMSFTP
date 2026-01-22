@@ -259,6 +259,8 @@ public:
           return {bytes_written, {EC::Success, ""}};
         } else if (bytes_written == 0) {
           return {0, {EC::EndOfFile, "End of file"}};
+        } else if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
+          return {LIBSSH2_ERROR_EAGAIN, {EC::SSHEAGAIN, "SSH EAGAIN"}};
         } else {
           EC rc = client->GetLastEC();
           std::string msg = client->GetLastErrorMsg();
@@ -329,6 +331,7 @@ CreateClient(const ConRequst &requeset, ClientProtocol protocol,
     return std::nullopt;
   }
 }
+
 class ClientMaintainer {
 private:
   std::unordered_map<std::string, std::shared_ptr<BaseClient>> hosts;
@@ -521,10 +524,13 @@ public:
 
 class AMSFTPWorker {
 private:
+  size_t chunk_size = 256 * AMKB;
   amf worker_interrupt_flag = std::make_shared<InterruptFlag>();
-  ECM Transit(const std::string &src, const std::string &dst,
-              const std::shared_ptr<AMSFTPClient> &src_worker,
-              const std::shared_ptr<AMSFTPClient> &dst_worker) {
+
+  /*
+  ECM Transit2(const std::string &src, const std::string &dst,
+               const std::shared_ptr<AMSFTPClient> &src_worker,
+               const std::shared_ptr<AMSFTPClient> &dst_worker) {
     ECM rcm = ECM{EC::Success, ""};
     ErrorCode rc_final = EC::Success;
     std::string error_msg = "";
@@ -540,27 +546,29 @@ private:
     srcFile = libssh2_sftp_open(src_worker->sftp, src.c_str(), LIBSSH2_FXF_READ,
                                 0400);
     dstFile = libssh2_sftp_open(
-        client->sftp, dst.c_str(),
+        dst_worker->sftp, dst.c_str(),
         LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
 
     if (!srcFile) {
-      rc_final = client->GetLastEC();
+      rc_final = src_worker->GetLastEC();
       error_msg = fmt::format("Failed to open src remote file: {}, cause {}",
-                              src, client->GetLastErrorMsg());
-      client->trace(TraceLevel::Error, rc_final,
-                    fmt::format("{}@{}", client->res_data.nickname, src),
-                    "Remote2Remote", error_msg);
+                              src, src_worker->GetLastErrorMsg());
+      src_worker->trace(
+          TraceLevel::Error, rc_final,
+          fmt::format("{}@{}", src_worker->res_data.nickname, src),
+          "Remote2Remote", error_msg);
       return {rc_final, error_msg};
     }
 
     if (!dstFile) {
       // 获取错误代码
-      rc_final = client->GetLastEC();
+      rc_final = dst_worker->GetLastEC();
       error_msg = fmt::format("Failed to open dst remote file: {}, cause {}",
-                              dst, client->GetLastErrorMsg());
-      client->trace(TraceLevel::Error, rc_final,
-                    fmt::format("{}@{}", dst_worker->res_data.nickname, dst),
-                    "Remote2Remote", error_msg);
+                              dst, dst_worker->GetLastErrorMsg());
+      dst_worker->trace(
+          TraceLevel::Error, rc_final,
+          fmt::format("{}@{}", dst_worker->res_data.nickname, dst),
+          "Remote2Remote", error_msg);
       return {rc_final, error_msg};
     }
 
@@ -667,61 +675,7 @@ private:
 
     return {rc_final, error_msg};
   }
-
-  ECM Transit2(TransferTask &task, std::shared_ptr<AMSFTPClient> client) {
-    ECM rcm = ECM{EC::Success, ""};
-    std::string error_msg = "";
-    std::lock_guard<std::recursive_mutex> lock(client->mtx);
-    rcm = client->mkdir(AMPathStr::dirname(task.dst));
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-
-    UnionFileHandle src_handle;
-    rcm = src_handle.Init(task.src, task.size, client, false, true);
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-    UnionFileHandle dst_handle;
-    rcm = dst_handle.Init(task.dst, task.size, client, true, true);
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-    libssh2_session_set_blocking(client->session, 0);
-    libssh2_session_set_blocking(client->session, 0);
-    std::pair<ssize_t, ECM> data_rc;
-    WaitResult wr = WaitResult::Ready;
-
-    while (pd.this_size < pd.file_size) {
-      data_rc = src_handle.Read(pd.ring_buffer);
-
-      if (data_rc.first != LIBSSH2_ERROR_EAGAIN && data_rc.first < 0) {
-        rcm = data_rc.second;
-        goto clean;
-      }
-
-      data_rc = dst_handle.Write(pd.ring_buffer);
-      if (data_rc.first > 0) {
-        pd.accumulated_size += data_rc.first;
-        pd.this_size = src_handle.offset;
-        InnerCallback();
-      } else if (data_rc.first == 0) {
-        goto clean;
-      } else if (data_rc.first != LIBSSH2_ERROR_EAGAIN) {
-        rcm = data_rc.second;
-        goto clean;
-      }
-      // 等待sock可读或可写
-      client->wait_for_socket(SocketWaitType::Auto, worker_interrupt_flag);
-    }
-
-  clean:
-    libssh2_session_set_blocking(client->session, 1);
-    InnerCallback(true);
-    return rcm;
-  }
-
-  ECM InHostCopy(const std::string &src, const std::string &dst,
+      ECM InHostCopy(const std::string &src, const std::string &dst,
                  const std::shared_ptr<AMSFTPClient> &worker,
                  uint64_t chunk_size = 256 * AMKB) {
     ErrorCode rc_final = EC::Success;
@@ -859,9 +813,119 @@ private:
 
     return {rc_final, error_msg};
   }
+  */
 
-  void XToBuffer(const TransferTask &task, std::shared_ptr<BaseClient> client,
-                 ConRequst request = ConRequst()) {
+  ECM Transit(const TransferTask &task, std::shared_ptr<AMSFTPClient> client) {
+    ECM rcm = ECM{EC::Success, ""};
+    std::lock_guard<std::recursive_mutex> lock(client->mtx);
+    rcm = client->mkdir(AMPathStr::dirname(task.dst));
+    if (rcm.first != EC::Success) {
+      return rcm;
+    }
+
+    // 打开源文件和目标文件
+    LIBSSH2_SFTP_HANDLE *srcFile = libssh2_sftp_open(
+        client->sftp, task.src.c_str(), LIBSSH2_FXF_READ, 0400);
+    if (!srcFile) {
+      EC rc = client->GetLastEC();
+      std::string msg = client->GetLastErrorMsg();
+      return {rc,
+              fmt::format("Failed to open src file \"{}\": {}", task.src, msg)};
+    }
+
+    LIBSSH2_SFTP_HANDLE *dstFile = libssh2_sftp_open(
+        client->sftp, task.dst.c_str(),
+        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
+    if (!dstFile) {
+      libssh2_sftp_close_handle(srcFile);
+      EC rc = client->GetLastEC();
+      std::string msg = client->GetLastErrorMsg();
+      return {rc,
+              fmt::format("Failed to open dst file \"{}\": {}", task.dst, msg)};
+    }
+
+    // 使用阻塞模式
+    libssh2_session_set_blocking(client->session, 1);
+
+    // 创建缓冲区
+    std::vector<char> buffer(chunk_size);
+    uint64_t total_written = 0;
+    ssize_t bytes_read, bytes_written;
+
+    while (total_written < task.size) {
+      // 检查外部中断
+      if (pd.is_terminate.load()) {
+        rcm = {EC::Terminate, "Transfer interrupted by user"};
+        goto clean;
+      }
+
+      // 检查暂停
+      while (pd.is_pause.load() && !pd.is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+
+      // 计算本次要读取的大小
+      size_t to_read = std::min<size_t>(chunk_size, task.size - total_written);
+
+      // 阻塞读取，读满 buffer 或到达文件末尾
+      size_t buffer_filled = 0;
+      while (buffer_filled < to_read) {
+        bytes_read = libssh2_sftp_read(srcFile, buffer.data() + buffer_filled,
+                                       to_read - buffer_filled);
+        if (bytes_read > 0) {
+          buffer_filled += bytes_read;
+        } else if (bytes_read == 0) {
+          // EOF
+          break;
+        } else {
+          EC rc = client->GetLastEC();
+          std::string msg = client->GetLastErrorMsg();
+          rcm = {rc, fmt::format("Read error: {}", msg)};
+          goto clean;
+        }
+      }
+
+      if (buffer_filled == 0) {
+        // 没有更多数据
+        break;
+      }
+
+      // 阻塞写入，写完 buffer 中所有数据
+      size_t buffer_written = 0;
+      while (buffer_written < buffer_filled) {
+        bytes_written =
+            libssh2_sftp_write(dstFile, buffer.data() + buffer_written,
+                               buffer_filled - buffer_written);
+        if (bytes_written > 0) {
+          buffer_written += bytes_written;
+          total_written += bytes_written;
+          pd.accumulated_size += bytes_written;
+          pd.this_size = total_written;
+          InnerCallback();
+        } else if (bytes_written == 0) {
+          // 不应该发生
+          break;
+        } else {
+          EC rc = client->GetLastEC();
+          std::string msg = client->GetLastErrorMsg();
+          rcm = {rc, fmt::format("Write error: {}", msg)};
+          goto clean;
+        }
+      }
+    }
+
+  clean:
+    if (srcFile) {
+      libssh2_sftp_close_handle(srcFile);
+    }
+    if (dstFile) {
+      libssh2_sftp_close_handle(dstFile);
+    }
+    InnerCallback(true);
+    return rcm;
+  }
+
+  void XToBuffer(const TransferTask &task, std::shared_ptr<BaseClient> client) {
     if ((client->GetProtocol() == ClientProtocol::SFTP) ||
         (client->GetProtocol() == ClientProtocol::LOCAL)) {
       std::cout << "SFTP/LOCAL Reading" << std::endl;
@@ -912,8 +976,7 @@ private:
     }
   }
 
-  void BufferToX(const TransferTask &task, std::shared_ptr<BaseClient> client,
-                 ConRequst request = ConRequst()) {
+  void BufferToX(const TransferTask &task, std::shared_ptr<BaseClient> client) {
     if ((client->GetProtocol() == ClientProtocol::SFTP) ||
         (client->GetProtocol() == ClientProtocol::LOCAL)) {
       std::cout << "SFTP/LOCAL Writing" << std::endl;
@@ -1008,51 +1071,56 @@ private:
                      std::shared_ptr<BaseClient> src_client = nullptr,
                      std::shared_ptr<BaseClient> dst_client = nullptr) {
     ConRequst request;
-    if (src_client->GetProtocol() == ClientProtocol::SFTP &&
-        dst_client->GetProtocol() == ClientProtocol::SFTP) {
-      // 走SFTP非阻塞模式
-      return this->Transit(task.src, task.dst,
-                           std::static_pointer_cast<AMSFTPClient>(src_client),
-                           std::static_pointer_cast<AMSFTPClient>(dst_client));
+    if (src_client->GetUID() == dst_client->GetUID()) {
+      if (src_client->GetProtocol() == ClientProtocol::SFTP) {
+        // 走SFTP非阻塞模式
+        return this->Transit(
+            task, std::static_pointer_cast<AMSFTPClient>(src_client));
+      } else if (src_client->GetProtocol() == ClientProtocol::FTP) {
+        auto client_ftp = std::static_pointer_cast<AMFTPClient>(src_client);
+        if (!client_ftp->mirror_client) {
+          client_ftp->mirror_client =
+              std::make_shared<AMFTPClient>(src_client->GetRequest());
+        }
+        ECM ecm = client_ftp->mirror_client->Connect();
+        if (ecm.first != EC::Success) {
+          return ecm;
+        }
+        dst_client = client_ftp->mirror_client;
+      }
     }
-    // } else if (src_client->GetProtocol() == ClientProtocol::FTP &&
-    //             dst_client->GetProtocol() == ClientProtocol::FTP) {
-    //   // 双FTP模式
-    //   request = src_client->GetRequest();
 
-    // }
-    // 启动一个thread执行Reading
+    // 记录传输前是否已被用户中断
+    bool was_terminated_by_user = pd.is_terminate.load();
 
-    std::cout << "start Reading" << std::endl;
-    std::thread reading_thread(
-        [&]() { this->XToBuffer(task, src_client, request); });
+    std::thread reading_thread([&]() { this->XToBuffer(task, src_client); });
 
-    std::cout << "start Writing" << std::endl;
-    std::cout << "this_size: " << pd.this_size << std::endl;
-    std::cout << "file_size: " << pd.file_size << std::endl;
-    std::cout << "accumulated_size: " << pd.accumulated_size << std::endl;
-    std::cout << "total_size: " << pd.total_size << std::endl;
-    this->BufferToX(task, dst_client, request);
-    std::cout << "this_size: " << pd.this_size << std::endl;
-    std::cout << "file_size: " << pd.file_size << std::endl;
-    std::cout << "is_terminate: " << pd.is_terminate.load() << std::endl;
+    this->BufferToX(task, dst_client);
+
+    // 传输完成后，通知读线程停止（但不改变 was_terminated_by_user）
     pd.is_terminate.store(true);
-    std::cout << "Writing done" << std::endl;
 
     if (reading_thread.joinable()) {
       reading_thread.join();
     }
-    std::cout << "Reading done" << std::endl;
 
-    if (pd.rcm.first == EC::Success) {
-      if (pd.is_terminate.load()) {
-        return {EC::Terminate, "Transfer terminated by user"};
-      } else {
-        return {EC::Success, ""};
-      }
-    } else {
+    // 检查是否有错误
+    if (pd.rcm.first != EC::Success) {
       return pd.rcm;
     }
+
+    // 检查是否被用户主动中断（传输前就被设置了 is_terminate）
+    if (was_terminated_by_user) {
+      return {EC::Terminate, "Transfer terminated by user"};
+    }
+
+    // 检查是否传输完成
+    if (pd.this_size >= pd.file_size) {
+      return {EC::Success, ""};
+    }
+
+    // 其他情况：传输未完成但也没报错，可能是中途被中断
+    return {EC::Terminate, "Transfer incomplete"};
   }
 
   ssize_t CalculateBufferSize(std::shared_ptr<BaseClient> src_client,
@@ -1133,6 +1201,15 @@ public:
   TransferCallback callback;
   ProgressData pd;
 
+  size_t ChunkSize(int64_t size = -1) {
+    if (size < 32 * AMKB) {
+      return chunk_size;
+    } else {
+      this->chunk_size = std::min<size_t>(size, AMMaxBufferSize);
+      return this->chunk_size;
+    }
+  }
+
   AMSFTPWorker(TransferCallback callback, float cb_interval_s = 0.2)
       : callback(std::move(callback)), pd(cb_interval_s) {
     this->pd.progress_cb = [this](bool force) { InnerCallback(force); };
@@ -1159,7 +1236,6 @@ public:
                             void *userdata) {
     // size指块数，但这个值往往是1
     auto *pd = static_cast<ProgressData *>(userdata);
-    static int wait_count = 0; // 等待计数
     // 持续等待直到有数据可读并成功获取
     while (true) {
       // 检查中断
@@ -1208,38 +1284,54 @@ public:
     }
   }
 
+  // FTP 下载回调：将数据写入 ring buffer
+  // 注意：curl WRITE 回调必须返回和传入完全相同的字节数，否则 curl 会中止传输
   static size_t FTPToBuffer(char *ptr, size_t size, size_t nmemb,
                             void *userdata) {
     auto *pd = static_cast<ProgressData *>(userdata);
-    while (pd->ring_buffer->writable() == 0 && !pd->is_terminate.load() &&
-           pd->this_size < pd->file_size) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-    while (pd->is_pause.load() && !pd->is_terminate.load()) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-    if (pd->is_terminate.load()) {
-      return CURL_READFUNC_ABORT;
-    }
-    auto [write_ptr, write_len] = pd->ring_buffer->get_write_ptr();
-    ssize_t to_read = write_len > size * nmemb ? size * nmemb : write_len;
-    if (to_read > 0) {
-      try {
-        memcpy(write_ptr, ptr, to_read);
-        pd->ring_buffer->commit_write(to_read);
-        return to_read;
-      } catch (const std::exception &e) {
-        pd->is_terminate.store(true);
-        pd->rcm = ECM{EC::BufferWriteError, e.what()};
-        return CURL_READFUNC_ABORT;
+    size_t total = size * nmemb;
+    size_t written = 0;
+
+    // 必须写入所有数据才能返回，否则 curl 会认为出错
+    while (written < total) {
+      // 检查中断
+      if (pd->is_terminate.load()) {
+        return 0; // 中止传输
       }
-    } else if (to_read == 0) {
-      return 0;
-    } else {
-      pd->is_terminate.store(true);
-      pd->rcm = ECM{EC::BufferWriteError, "Get Negativate value for data size"};
-      return CURL_READFUNC_ABORT;
+
+      // 检查暂停
+      while (pd->is_pause.load() && !pd->is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+
+      // 等待 ring buffer 有空间
+      while (pd->ring_buffer->writable() == 0 && !pd->is_terminate.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+
+      if (pd->is_terminate.load()) {
+        return 0;
+      }
+
+      // 获取写入位置，写入尽可能多的数据
+      auto [write_ptr, write_len] = pd->ring_buffer->get_write_ptr();
+      size_t remaining = total - written;
+      size_t to_write = std::min<size_t>(write_len, remaining);
+
+      if (to_write > 0) {
+        try {
+          memcpy(write_ptr, ptr + written, to_write);
+          pd->ring_buffer->commit_write(to_write);
+          written += to_write;
+        } catch (const std::exception &e) {
+          pd->is_terminate.store(true);
+          pd->rcm = ECM{EC::BufferWriteError, e.what()};
+          return 0;
+        }
+      }
     }
+
+    return total; // 必须返回 total，否则 curl 会中止
   }
 
   inline void SetState(TransferControl state) {
