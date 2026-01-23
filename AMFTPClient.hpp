@@ -661,22 +661,6 @@ private:
     return realsize;
   }
 
-  ECM SetupPath(const std::string &path, bool is_dir = false) {
-    if (!curl) {
-      return {EC::NoConnection, "CURL not initialized"};
-    }
-    std::string path_f = path;
-    if (!path_f.empty()) {
-      path_f = MlistPath(path, is_dir);
-    }
-    curl_easy_reset(curl);
-    current_url = fmt::format("{}{}", this->url, path_f);
-    curl_easy_setopt(curl, CURLOPT_URL, current_url.c_str());
-    curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
-    curl_easy_setopt(curl, CURLOPT_PASSWORD, res_data.password.c_str());
-    return {EC::Success, ""};
-  }
-
   // 使用 MLST 命令获取文件信息（现代方法）
   SR try_mlst(const std::string &path, amf interrupt_flag, int timeout_ms,
               int64_t start_time) {
@@ -1023,6 +1007,24 @@ public:
     }
   }
 
+  ECM SetupPath(const std::string &path, bool is_dir = false) {
+    if (!curl) {
+      return {EC::NoConnection, "CURL not initialized"};
+    }
+    std::string path_f = path;
+    if (!path_f.empty()) {
+      path_f = MlistPath(path, is_dir);
+    }
+    curl_easy_reset(curl);
+    current_url = fmt::format("{}{}", this->url, path_f);
+    curl_easy_setopt(curl, CURLOPT_URL, current_url.c_str());
+    curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
+    curl_easy_setopt(curl, CURLOPT_PASSWORD, res_data.password.c_str());
+    return {EC::Success, ""};
+  }
+
+  CURL *GetCURL() { return curl; }
+
   ECM Connect(bool force = false, amf interrupt_flag = nullptr,
               int timeout_ms = -1, int64_t start_time = -1) override {
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1321,13 +1323,15 @@ public:
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    auto [rcm, info] = stat(path);
+    auto [rcm, info] =
+        stat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm.first != EC::Success) {
       return {rcm, {}};
     } else if (info.type != PathType::DIR) {
       return {{EC::Success, ""}, {info}};
     }
-    _iwalk(info, result, ignore_special_file);
+    _iwalk(info, result, ignore_special_file, interrupt_flag, timeout_ms,
+           start_time);
     return {ECM{EC::Success, ""}, result};
   }
 
@@ -1382,13 +1386,14 @@ public:
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    auto [rcm, br] = stat(path);
+    auto [rcm, br] = stat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm.first != EC::Success) {
       return {rcm, {}};
     }
     WRD result_dict = {};
     std::vector<std::string> parts = {path};
-    _walk(parts, result_dict, 0, max_depth, ignore_special_file);
+    _walk(parts, result_dict, 0, max_depth, ignore_special_file, interrupt_flag,
+          timeout_ms, start_time);
     return {ECM{EC::Success, ""}, result_dict};
   }
 
@@ -1408,7 +1413,7 @@ public:
 
     struct curl_slist *commands = nullptr;
     commands = curl_slist_append(
-        commands, fmt::format("MKD {}", MlistPath(path)).c_str());
+        commands, fmt::format("MKD {}", MlistPath(path, true)).c_str());
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
@@ -1442,7 +1447,7 @@ public:
     }
     std::string current_path = parts.front();
     for (size_t i = 1; i < parts.size(); i++) {
-      current_path = MlistPath(AMPathStr::join(current_path, parts[i], "/"));
+      current_path = AMPathStr::join(current_path, parts[i]);
       ECM ecm = mkdir(current_path, interrupt_flag, timeout_ms, start_time);
       if (ecm.first != EC::Success) {
         return ecm;
@@ -1553,13 +1558,14 @@ public:
     }
 
     // Check source exists
-    auto [rcm, sbr] = stat(srcf);
+    auto [rcm, sbr] = stat(srcf, false, interrupt_flag, timeout_ms, start_time);
     if (rcm.first != EC::Success) {
       return rcm;
     }
 
     // Check destination
-    auto [rcm2, sbr2] = stat(dstf);
+    auto [rcm2, sbr2] =
+        stat(dstf, false, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first == EC::Success) {
       if (sbr2.type != sbr.type) {
         return {EC::PathAlreadyExists,
@@ -1572,18 +1578,26 @@ public:
             EC::PathAlreadyExists,
             fmt::format("Dst already exists: {} and overwrite is false", dstf)};
       }
+    } else {
+      if (mkdir) {
+        ECM ecm = mkdirs(AMPathStr::dirname(dstf), interrupt_flag, timeout_ms,
+                         start_time);
+        if (ecm.first != EC::Success) {
+          return ecm;
+        }
+      }
     }
 
     // Use RNFR and RNTO commands via QUOTE
     std::string url = fmt::format("{}{}", this->url, "/");
-    ECM ecm = SetupPath(url);
+    ECM ecm = SetupPath(url, sbr.type == PathType::DIR);
     if (ecm.first != EC::Success) {
       return ecm;
     }
 
     struct curl_slist *headerlist = nullptr;
-    std::string rnfr_cmd = "RNFR " + srcf;
-    std::string rnto_cmd = "RNTO " + dstf;
+    std::string rnfr_cmd = "RNFR " + MlistPath(srcf, sbr.type == PathType::DIR);
+    std::string rnto_cmd = "RNTO " + MlistPath(dstf, sbr.type == PathType::DIR);
     headerlist = curl_slist_append(headerlist, rnfr_cmd.c_str());
     headerlist = curl_slist_append(headerlist, rnto_cmd.c_str());
 
@@ -1591,7 +1605,11 @@ public:
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, headerlist);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
-    CURLcode res = curl_easy_perform(curl);
+    auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
+    if (!nb_res.ok()) {
+      return NBResultToECM(nb_res);
+    }
+    CURLcode res = nb_res.value;
 
     // Clean up
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
@@ -1606,63 +1624,57 @@ public:
     return {EC::Success, ""};
   }
 
-  void Upload(const std::string &dst, curl_read_callback read_callback,
-              ProgressData *pd) {
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    ECM ecm = SetupPath(dst, false);
-    if (ecm.first != EC::Success) {
-      pd->rcm = ecm;
-      pd->is_terminate.store(true);
-      return;
-    }
+  // // Upload with ProgressData (legacy - for AMSFTPWorker)
+  // void Upload(const std::string &dst, WkProgressData *pd,
+  //             curl_read_callback read_callback) {
+  //   std::lock_guard<std::recursive_mutex> lock(mtx);
+  //   ECM ecm = SetupPath(dst, false);
+  //   if (ecm.first != EC::Success) {
+  //     pd->task_info.lock()->cur_task->rcm = ecm;
+  //     pd->set_terminate();
+  //     return;
+  //   }
 
-    // SetupPath 已经调用了 curl_easy_reset 并设置了 URL，不要再 reset
-    curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
-    curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
-    curl_easy_setopt(curl, CURLOPT_READDATA, pd);
-    curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t)pd->file_size);
-    curl_easy_setopt(curl, CURLOPT_FTP_CREATE_MISSING_DIRS, CURLFTP_CREATE_DIR);
-    // 禁用低速限制超时，防止等待数据时被误判为超时
-    // curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 0L);
-    // curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 0L);
-    // 启用 verbose 模式查看 FTP 通信详情
-    // curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+  //   curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+  //   curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
+  //   curl_easy_setopt(curl, CURLOPT_READDATA, pd);
+  //   curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE,
+  //                    (curl_off_t)pd->task_info.lock()->cur_task->size);
+  //   curl_easy_setopt(curl, CURLOPT_FTP_CREATE_MISSING_DIRS,
+  //   CURLFTP_CREATE_DIR);
 
-    std::cout << "[Upload] Starting curl_easy_perform..." << std::endl;
-    CURLcode res = curl_easy_perform(curl);
-    std::cout << "[Upload] curl_easy_perform returned: " << res << " ("
-              << curl_easy_strerror(res) << ")"
-              << ", this_size: " << pd->this_size
-              << ", file_size: " << pd->file_size << std::endl;
+  //   CURLcode res = curl_easy_perform(curl);
 
-    if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
-      pd->is_terminate.store(true);
-    } else if (res != CURLE_OK) {
-      pd->rcm = ECM{EC::FTPUploadFailed,
-                    fmt::format("Upload failed: {}", curl_easy_strerror(res))};
-      pd->is_terminate.store(true);
-    }
-  }
+  //   if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
+  //     pd->set_terminate();
+  //   } else if (res != CURLE_OK) {
+  //     pd->task_info.lock()->cur_task->rcm =
+  //         ECM{EC::FTPUploadFailed,
+  //             fmt::format("Upload failed: {}", curl_easy_strerror(res))};
+  //     pd->set_terminate();
+  //   }
+  // }
 
-  void Download(const std::string &src, curl_write_callback write_callback,
-                ProgressData *pd) {
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    ECM ecm = SetupPath(src, false);
-    if (ecm.first != EC::Success) {
-      pd->rcm = ecm;
-      pd->is_terminate.store(true);
-      return;
-    }
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, pd);
-    CURLcode res = curl_easy_perform(curl);
-    if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
-      pd->is_terminate.store(true);
-    } else if (res != CURLE_OK) {
-      pd->rcm =
-          ECM{EC::FTPDownloadFailed,
-              fmt::format("Download failed: {}", curl_easy_strerror(res))};
-      pd->is_terminate.store(true);
-    }
-  }
+  // // Download with ProgressData (legacy - for AMSFTPWorker)
+  // void Download(const std::string &src, curl_write_callback write_callback,
+  //               WkProgressData *pd) {
+  //   std::lock_guard<std::recursive_mutex> lock(mtx);
+  //   ECM ecm = SetupPath(src, false);
+  //   if (ecm.first != EC::Success) {
+  //     pd->task_info.lock()->cur_task->rcm = ecm;
+  //     pd->set_terminate();
+  //     return;
+  //   }
+  //   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+  //   curl_easy_setopt(curl, CURLOPT_WRITEDATA, pd);
+  //   CURLcode res = curl_easy_perform(curl);
+  //   if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
+  //     pd->set_terminate();
+  //   } else if (res != CURLE_OK) {
+  //     pd->task_info.lock()->cur_task->rcm =
+  //         ECM{EC::FTPDownloadFailed,
+  //             fmt::format("Download failed: {}", curl_easy_strerror(res))};
+  //     pd->set_terminate();
+  //   }
+  // }
 };

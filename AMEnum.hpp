@@ -189,6 +189,10 @@ enum class SearchType { All = 0, File = 1, Directory = 2 };
 
 enum class SepType { Unix = 0, Windows = 1 };
 
+enum class ControlSignal : int { Running = 0, Pause = 1, Terminate = 2 };
+
+enum class TaskStatus { Pending, Conducting, Finished };
+
 class InterruptFlag {
 private:
   std::atomic<bool> is_interrupted = false;

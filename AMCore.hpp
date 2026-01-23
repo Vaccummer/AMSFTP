@@ -3,14 +3,17 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
+#include <deque>
 #include <fcntl.h>
 #include <filesystem>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <pybind11/pytypes.h>
 #include <string>
 #include <thread>
@@ -522,605 +525,74 @@ public:
   };
 };
 
-class AMSFTPWorker {
+// ============================================================================
+// AMWorkManager - Enhanced worker with task queue and async transfer support
+// ============================================================================
+class AMWorkManager {
 private:
+  std::thread worker_thread;
+  std::atomic<bool> running{true};
+  std::mutex queue_mtx;
+  std::condition_variable queue_cv;
+  std::deque<std::shared_ptr<TaskInfo>> task_queue;
+  std::mutex result_mtx;
+  std::unordered_map<uint64_t, std::shared_ptr<TaskInfo>> results;
+  std::mutex conducting_mtx;
+  std::shared_ptr<TaskInfo> conducting_task; // Currently executing task
   size_t chunk_size = 256 * AMKB;
-  amf worker_interrupt_flag = std::make_shared<InterruptFlag>();
 
-  /*
-  ECM Transit2(const std::string &src, const std::string &dst,
-               const std::shared_ptr<AMSFTPClient> &src_worker,
-               const std::shared_ptr<AMSFTPClient> &dst_worker) {
-    ECM rcm = ECM{EC::Success, ""};
-    ErrorCode rc_final = EC::Success;
-    std::string error_msg = "";
-    LIBSSH2_SFTP_HANDLE *srcFile = nullptr;
-    LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
-    std::lock_guard<std::recursive_mutex> lock(src_worker->mtx);
-    std::lock_guard<std::recursive_mutex> lock2(dst_worker->mtx);
-    rcm = dst_worker->mkdir(AMPathStr::dirname(dst));
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-
-    srcFile = libssh2_sftp_open(src_worker->sftp, src.c_str(), LIBSSH2_FXF_READ,
-                                0400);
-    dstFile = libssh2_sftp_open(
-        dst_worker->sftp, dst.c_str(),
-        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
-
-    if (!srcFile) {
-      rc_final = src_worker->GetLastEC();
-      error_msg = fmt::format("Failed to open src remote file: {}, cause {}",
-                              src, src_worker->GetLastErrorMsg());
-      src_worker->trace(
-          TraceLevel::Error, rc_final,
-          fmt::format("{}@{}", src_worker->res_data.nickname, src),
-          "Remote2Remote", error_msg);
-      return {rc_final, error_msg};
-    }
-
-    if (!dstFile) {
-      // 获取错误代码
-      rc_final = dst_worker->GetLastEC();
-      error_msg = fmt::format("Failed to open dst remote file: {}, cause {}",
-                              dst, dst_worker->GetLastErrorMsg());
-      dst_worker->trace(
-          TraceLevel::Error, rc_final,
-          fmt::format("{}@{}", dst_worker->res_data.nickname, dst),
-          "Remote2Remote", error_msg);
-      return {rc_final, error_msg};
-    }
-
-    LIBSSH2_SFTP_ATTRIBUTES attrs;
-    libssh2_sftp_fstat(srcFile, &attrs);
-    uint64_t file_size = attrs.filesize;
-
-    // uint64_t buffer_size_ori = calculate_buffer_size(file_size, 32 * AMGB);
-    uint64_t all_read = 0;
-    uint64_t all_write = 0;
-    uint64_t last_callback_write = 0;
-    long rc_read, rc_write;
-    uint64_t idle_count = 0;
-
-    libssh2_session_set_blocking(src_worker->session, 0);
-    libssh2_session_set_blocking(dst_worker->session, 0);
-
-    while (all_write < file_size) {
-      bool did_work = false;
-
-      // === 生产者：从源读取数据写入缓冲区 ===
-      if (all_read < file_size && pd.ring_buffer->writable() > 0) {
-        auto [write_ptr, max_write] = pd.ring_buffer->get_write_ptr();
-        size_t to_read = std::min<size_t>(max_write, file_size - all_read);
-
-        if (to_read > 0) {
-          rc_read = libssh2_sftp_read(srcFile, write_ptr, to_read);
-          if (rc_read > 0) {
-            pd.ring_buffer->commit_write(rc_read);
-            all_read += rc_read;
-            did_work = true;
-            idle_count = 0;
-          } else if (rc_read < 0 && rc_read != LIBSSH2_ERROR_EAGAIN) {
-            rc_final = src_worker->GetLastEC();
-            error_msg = fmt::format("Sftp read error: {}",
-                                    src_worker->GetLastErrorMsg());
-            goto clean;
+  // Internal progress callback wrapper
+  void InnerCallback(std::shared_ptr<TaskInfo> task_info, WkProgressData &pd,
+                     bool force = false) {
+    if (task_info->callback.need_progress_cb && task_info->cur_task) {
+      auto time_now = timenow();
+      if (force ||
+          ((time_now - pd.cb_time) > task_info->callback.cb_interval_s)) {
+        pd.cb_time = time_now;
+        ECM cb_error = {EC::Success, ""};
+        auto ctrl_opt = task_info->callback.CallProgress(
+            ProgressCBInfo(task_info->cur_task->src, task_info->cur_task->dst,
+                           task_info->cur_task->src_host,
+                           task_info->cur_task->dst_host,
+                           task_info->cur_task->transferred,
+                           task_info->cur_task->size,
+                           task_info->total_transferred_size,
+                           task_info->total_size),
+            &cb_error);
+        if (cb_error.first != EC::Success &&
+            task_info->callback.need_error_cb) {
+          task_info->callback.error_cb(ErrorCBInfo(
+              cb_error, task_info->cur_task->src, task_info->cur_task->dst,
+              task_info->cur_task->src_host, task_info->cur_task->dst_host));
+        }
+        if (ctrl_opt.has_value()) {
+          switch (*ctrl_opt) {
+          case TransferControl::Running:
+            pd.set_running();
+            break;
+          case TransferControl::Pause:
+            pd.set_pause();
+            break;
+          case TransferControl::Terminate:
+            pd.set_terminate();
+            break;
+          default:
+            break;
           }
         }
       }
-
-      // === 消费者：从缓冲区读取数据写入目标 ===
-      if (pd.ring_buffer->available() > 0) {
-        auto [read_ptr, max_read] = pd.ring_buffer->get_read_ptr();
-
-        if (max_read > 0) {
-          rc_write = libssh2_sftp_write(dstFile, read_ptr, max_read);
-          if (rc_write > 0) {
-            pd.ring_buffer->commit_read(rc_write);
-            all_write += rc_write;
-            did_work = true;
-            idle_count = 0;
-          } else if (rc_write < 0 && rc_write != LIBSSH2_ERROR_EAGAIN) {
-            rc_final = dst_worker->GetLastEC();
-            error_msg = fmt::format("Sftp write error: {}",
-                                    dst_worker->GetLastErrorMsg());
-            goto clean;
-          }
-        }
-      }
-
-      // === 进度回调（每写入buffer_size或完成时触发）===
-      if (all_write - last_callback_write >= pd.ring_buffer->get_capacity() ||
-          all_write == file_size) {
-        last_callback_write = all_write;
-        pd.this_size = all_write;
-        pd.accumulated_size += (all_write - last_callback_write);
-        InnerCallback();
-
-        // 暂停/终止检查
-        while (pd.is_pause.load() && !pd.is_terminate.load()) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        if (pd.is_terminate.load()) {
-          rc_final = EC::Terminate;
-          error_msg = "Transfer cancelled";
-          goto clean;
-        }
-      }
-
-      // === 空闲时让出CPU ===
-      if (!did_work) {
-        idle_count++;
-        if (idle_count > 10) {
-          std::this_thread::sleep_for(std::chrono::microseconds(20));
-          idle_count = 0;
-        }
-      }
-    }
-
-  clean:
-    libssh2_session_set_blocking(src_worker->session, 1);
-    libssh2_session_set_blocking(dst_worker->session, 1);
-
-    InnerCallback(true);
-
-    if (srcFile) {
-      libssh2_sftp_close_handle(srcFile);
-    }
-
-    if (dstFile) {
-      libssh2_sftp_close_handle(dstFile);
-    }
-
-    return {rc_final, error_msg};
-  }
-      ECM InHostCopy(const std::string &src, const std::string &dst,
-                 const std::shared_ptr<AMSFTPClient> &worker,
-                 uint64_t chunk_size = 256 * AMKB) {
-    ErrorCode rc_final = EC::Success;
-    std::string error_msg = "";
-    LIBSSH2_SFTP_HANDLE *srcFile = nullptr;
-    LIBSSH2_SFTP_HANDLE *dstFile = nullptr;
-    std::lock_guard<std::recursive_mutex> lock(worker->mtx);
-    worker->mkdirs(AMPathStr::dirname(dst));
-    srcFile =
-        libssh2_sftp_open(worker->sftp, src.c_str(), LIBSSH2_FXF_READ, 0400);
-
-    if (!srcFile) {
-      rc_final = worker->GetLastEC();
-      error_msg = fmt::format("Failed to open src remote file: {}, cause {}",
-                              src, worker->GetLastErrorMsg());
-      worker->trace(TraceLevel::Error, rc_final,
-                    fmt::format("{}@{}", worker->res_data.nickname, src),
-                    "Remote2Remote", error_msg);
-      return {rc_final, error_msg};
-    }
-    dstFile = libssh2_sftp_open(
-        worker->sftp, dst.c_str(),
-        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
-    if (!dstFile) {
-      // 获取错误代码
-      rc_final = worker->GetLastEC();
-      error_msg = fmt::format("Failed to open dst remote file: {}, cause {}",
-                              dst, worker->GetLastErrorMsg());
-      worker->trace(TraceLevel::Error, rc_final,
-                    fmt::format("{}@{}", worker->res_data.nickname, dst),
-                    "Remote2Remote", error_msg);
-      return {rc_final, error_msg};
-    }
-
-    LIBSSH2_SFTP_ATTRIBUTES attrs;
-    libssh2_sftp_fstat(srcFile, &attrs);
-    uint64_t file_size = attrs.filesize;
-
-    // uint64_t buffer_size_ori = calculate_buffer_size(file_size, 32 * AMGB);
-    StreamRingBuffer ring(chunk_size);
-    uint64_t all_read = 0;
-    uint64_t all_write = 0;
-    uint64_t last_callback_write = 0;
-    long rc_read, rc_write;
-    uint64_t idle_count = 0;
-
-    libssh2_session_set_blocking(worker->session, 0);
-
-    while (all_write < file_size) {
-      bool did_work = false;
-
-      // === 生产者：从源读取数据写入缓冲区 ===
-      if (all_read < file_size && ring.writable() > 0) {
-        auto [write_ptr, max_write] = ring.get_write_ptr();
-        size_t to_read = std::min<size_t>(max_write, file_size - all_read);
-
-        if (to_read > 0) {
-          rc_read = libssh2_sftp_read(srcFile, write_ptr, to_read);
-          if (rc_read > 0) {
-            ring.commit_write(rc_read);
-            all_read += rc_read;
-            did_work = true;
-            idle_count = 0;
-          } else if (rc_read < 0 && rc_read != LIBSSH2_ERROR_EAGAIN) {
-            rc_final = worker->GetLastEC();
-            error_msg =
-                fmt::format("Sftp read error: {}", worker->GetLastErrorMsg());
-            goto clean;
-          }
-        }
-      }
-
-      // === 消费者：从缓冲区读取数据写入目标 ===
-      if (ring.available() > 0) {
-        auto [read_ptr, max_read] = ring.get_read_ptr();
-
-        if (max_read > 0) {
-          rc_write = libssh2_sftp_write(dstFile, read_ptr, max_read);
-          if (rc_write > 0) {
-            ring.commit_read(rc_write);
-            all_write += rc_write;
-            did_work = true;
-            idle_count = 0;
-          } else if (rc_write < 0 && rc_write != LIBSSH2_ERROR_EAGAIN) {
-            rc_final = worker->GetLastEC();
-            error_msg =
-                fmt::format("Sftp write error: {}", worker->GetLastErrorMsg());
-            goto clean;
-          }
-        }
-      }
-
-      // === 进度回调（每写入buffer_size或完成时触发）===
-      if (all_write - last_callback_write >= chunk_size ||
-          all_write == file_size) {
-
-        last_callback_write = all_write;
-        pd.accumulated_size += (all_write - last_callback_write);
-        pd.this_size = all_write;
-        InnerCallback();
-
-        // 暂停/终止检查
-        while (pd.is_pause.load() && !pd.is_terminate.load()) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
-        if (pd.is_terminate.load()) {
-          rc_final = EC::Terminate;
-          error_msg = "Transfer cancelled";
-          goto clean;
-        }
-      }
-
-      // === 空闲时让出CPU ===
-      if (!did_work) {
-        idle_count++;
-        if (idle_count > 10) {
-          std::this_thread::sleep_for(std::chrono::microseconds(20));
-          idle_count = 0;
-        }
-      }
-    }
-
-  clean:
-    libssh2_session_set_blocking(worker->session, 1);
-
-    InnerCallback(true);
-
-    if (srcFile) {
-      libssh2_sftp_close_handle(srcFile);
-    }
-
-    if (dstFile) {
-      libssh2_sftp_close_handle(dstFile);
-    }
-
-    return {rc_final, error_msg};
-  }
-  */
-
-  ECM Transit(const TransferTask &task, std::shared_ptr<AMSFTPClient> client) {
-    ECM rcm = ECM{EC::Success, ""};
-    std::lock_guard<std::recursive_mutex> lock(client->mtx);
-    rcm = client->mkdir(AMPathStr::dirname(task.dst));
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-
-    // 打开源文件和目标文件
-    LIBSSH2_SFTP_HANDLE *srcFile = libssh2_sftp_open(
-        client->sftp, task.src.c_str(), LIBSSH2_FXF_READ, 0400);
-    if (!srcFile) {
-      EC rc = client->GetLastEC();
-      std::string msg = client->GetLastErrorMsg();
-      return {rc,
-              fmt::format("Failed to open src file \"{}\": {}", task.src, msg)};
-    }
-
-    LIBSSH2_SFTP_HANDLE *dstFile = libssh2_sftp_open(
-        client->sftp, task.dst.c_str(),
-        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
-    if (!dstFile) {
-      libssh2_sftp_close_handle(srcFile);
-      EC rc = client->GetLastEC();
-      std::string msg = client->GetLastErrorMsg();
-      return {rc,
-              fmt::format("Failed to open dst file \"{}\": {}", task.dst, msg)};
-    }
-
-    // 使用阻塞模式
-    libssh2_session_set_blocking(client->session, 1);
-
-    // 创建缓冲区
-    std::vector<char> buffer(chunk_size);
-    uint64_t total_written = 0;
-    ssize_t bytes_read, bytes_written;
-
-    while (total_written < task.size) {
-      // 检查外部中断
-      if (pd.is_terminate.load()) {
-        rcm = {EC::Terminate, "Transfer interrupted by user"};
-        goto clean;
-      }
-
-      // 检查暂停
-      while (pd.is_pause.load() && !pd.is_terminate.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-      }
-
-      // 计算本次要读取的大小
-      size_t to_read = std::min<size_t>(chunk_size, task.size - total_written);
-
-      // 阻塞读取，读满 buffer 或到达文件末尾
-      size_t buffer_filled = 0;
-      while (buffer_filled < to_read) {
-        bytes_read = libssh2_sftp_read(srcFile, buffer.data() + buffer_filled,
-                                       to_read - buffer_filled);
-        if (bytes_read > 0) {
-          buffer_filled += bytes_read;
-        } else if (bytes_read == 0) {
-          // EOF
-          break;
-        } else {
-          EC rc = client->GetLastEC();
-          std::string msg = client->GetLastErrorMsg();
-          rcm = {rc, fmt::format("Read error: {}", msg)};
-          goto clean;
-        }
-      }
-
-      if (buffer_filled == 0) {
-        // 没有更多数据
-        break;
-      }
-
-      // 阻塞写入，写完 buffer 中所有数据
-      size_t buffer_written = 0;
-      while (buffer_written < buffer_filled) {
-        bytes_written =
-            libssh2_sftp_write(dstFile, buffer.data() + buffer_written,
-                               buffer_filled - buffer_written);
-        if (bytes_written > 0) {
-          buffer_written += bytes_written;
-          total_written += bytes_written;
-          pd.accumulated_size += bytes_written;
-          pd.this_size = total_written;
-          InnerCallback();
-        } else if (bytes_written == 0) {
-          // 不应该发生
-          break;
-        } else {
-          EC rc = client->GetLastEC();
-          std::string msg = client->GetLastErrorMsg();
-          rcm = {rc, fmt::format("Write error: {}", msg)};
-          goto clean;
-        }
-      }
-    }
-
-  clean:
-    if (srcFile) {
-      libssh2_sftp_close_handle(srcFile);
-    }
-    if (dstFile) {
-      libssh2_sftp_close_handle(dstFile);
-    }
-    InnerCallback(true);
-    return rcm;
-  }
-
-  void XToBuffer(const TransferTask &task, std::shared_ptr<BaseClient> client) {
-    if ((client->GetProtocol() == ClientProtocol::SFTP) ||
-        (client->GetProtocol() == ClientProtocol::LOCAL)) {
-      std::cout << "SFTP/LOCAL Reading" << std::endl;
-      UnionFileHandle file_handle;
-      std::shared_ptr<AMSFTPClient> clientf = nullptr;
-      if (client->GetProtocol() == ClientProtocol::SFTP) {
-        clientf = std::static_pointer_cast<AMSFTPClient>(client);
-      }
-      ECM rcm = file_handle.Init(task.src, task.size, clientf, false, true);
-      if (rcm.first != EC::Success) {
-        std::cout << "Init failed" << std::endl;
-        pd.is_terminate.store(true);
-        pd.rcm = rcm;
-        return;
-      }
-      while (file_handle.offset < file_handle.file_size &&
-             !pd.is_terminate.load()) {
-        while (pd.ring_buffer->writable() == 0 && !pd.is_terminate.load() &&
-               file_handle.offset < file_handle.file_size) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
-        while (pd.is_pause.load() && !pd.is_terminate.load()) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
-        if (pd.is_terminate.load()) {
-          return;
-        }
-        auto [bytes_read, ecm] = file_handle.Read(pd.ring_buffer);
-        if (ecm.first != EC::Success) {
-          pd.is_terminate.store(true);
-          pd.rcm = ecm;
-          return;
-        }
-      }
-      // } else if (!client && !request.nickname.empty()) {
-      //   auto client_ftp = std::make_shared<AMFTPClient>(request);
-      //   ECM ecm = client_ftp->Connect();
-      //   if (ecm.first != EC::Success) {
-      //     pd.is_terminate.store(true);
-      //     pd.rcm = ecm;
-      //     return;
-      //   }
-      //   client_ftp->Download(task.src, FTPToBuffer, &pd);
-    } else if (client->GetProtocol() == ClientProtocol::FTP) {
-      // 读取FTP文件，而且需要创建额外的ftp客户端
-      auto client_ftp = std::static_pointer_cast<AMFTPClient>(client);
-      client_ftp->Download(task.src, FTPToBuffer, &pd);
     }
   }
 
-  void BufferToX(const TransferTask &task, std::shared_ptr<BaseClient> client) {
-    if ((client->GetProtocol() == ClientProtocol::SFTP) ||
-        (client->GetProtocol() == ClientProtocol::LOCAL)) {
-      std::cout << "SFTP/LOCAL Writing" << std::endl;
-      UnionFileHandle file_handle;
-      std::shared_ptr<AMSFTPClient> clientf = nullptr;
-      if (client->GetProtocol() == ClientProtocol::SFTP) {
-        clientf = std::static_pointer_cast<AMSFTPClient>(client);
-      }
-      ECM rcm = file_handle.Init(task.dst, task.size, clientf, true, true);
-      if (rcm.first != EC::Success) {
-        pd.is_terminate.store(true);
-        pd.rcm = rcm;
-        return;
-      }
-      while (file_handle.offset < file_handle.file_size &&
-             !pd.is_terminate.load()) {
-        while (pd.ring_buffer->available() == 0 && !pd.is_terminate.load()) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
-        while (pd.is_pause.load() && !pd.is_terminate.load()) {
-          std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
-        if (pd.is_terminate.load()) {
-          return;
-        }
-        auto [bytes_write, ecm] = file_handle.Write(pd.ring_buffer);
-        if (ecm.first != EC::Success) {
-          pd.is_terminate.store(true);
-          pd.rcm = ecm;
-          return;
-        }
-        pd.accumulated_size += bytes_write;
-        pd.this_size = file_handle.offset;
-        InnerCallback();
-      }
-      // } else if (!client && !request.nickname.empty()) {
-      //   auto client_ftp = std::make_shared<AMFTPClient>(request);
-      //   ECM ecm = client_ftp->Connect();
-      //   if (ecm.first != EC::Success) {
-      //     pd.is_terminate.store(true);
-      //     pd.rcm = ecm;
-      //     return;
-      //   }
-      //   client_ftp->Upload(task.dst, FTPToBuffer, &pd);
-    } else if (client->GetProtocol() == ClientProtocol::FTP) {
-      // 读取FTP文件，而且需要创建额外的ftp客户端
-      auto client_ftp = std::static_pointer_cast<AMFTPClient>(client);
-      client_ftp->Upload(task.dst, BufferToFTP, &pd);
+  // Check if task should be skipped (terminated before conducting)
+  bool ShouldSkipTask(std::shared_ptr<TaskInfo> task_info) {
+    if (task_info->pd && task_info->pd->is_terminate()) {
+      task_info->rcm = {EC::Terminate, "Task terminated before start"};
+      task_info->status = TaskStatus::Finished;
+      task_info->finished_time = timenow();
+      return true;
     }
-  }
-
-  /*
-  std::pair<ECM, PathInfo> Ustat(const std::string &path,
-                                 const std::shared_ptr<ClientMaintainer>
-  &hostm, const std::string &nickname = "") { if (nickname.empty()) { auto res
-  = AMFS::stat(path); if (res.first.first != EC::Success) { return
-  {ECM{EC::LocalStatError, res.first.second}, res.second};
-      }
-      return {ECM{EC::Success, ""}, res.second};
-    }
-    ECM rc = hostm->test_client(nickname);
-    if (rc.first != EC::Success) {
-      return {rc, PathInfo()};
-    }
-    auto client = hostm->GetHost(nickname);
-    if (!client) {
-      return {ECM{EC::NoSession, "Client not found"}, PathInfo()};
-    }
-    return client->stat(path);
-  }
-
-  std::vector<PathInfo> Uiwalk(const std::string &path,
-                               const std::shared_ptr<ClientMaintainer> &hostm,
-                               const std::string &nickname = "",
-                               bool ignore_special_file = true) {
-    if (nickname.empty()) {
-      return {};
-    }
-    ECM rc = hostm->test_client(nickname);
-    if (rc.first != EC::Success) {
-      return {};
-    }
-    auto client = hostm->GetHost(nickname);
-    if (!client) {
-      return {};
-    }
-    return client->iwalk(path, ignore_special_file).second;
-  }
-*/
-
-  ECM _UnionTransfer(const TransferTask &task,
-                     std::shared_ptr<BaseClient> src_client = nullptr,
-                     std::shared_ptr<BaseClient> dst_client = nullptr) {
-    ConRequst request;
-    if (src_client->GetUID() == dst_client->GetUID()) {
-      if (src_client->GetProtocol() == ClientProtocol::SFTP) {
-        // 走SFTP非阻塞模式
-        return this->Transit(
-            task, std::static_pointer_cast<AMSFTPClient>(src_client));
-      } else if (src_client->GetProtocol() == ClientProtocol::FTP) {
-        auto client_ftp = std::static_pointer_cast<AMFTPClient>(src_client);
-        if (!client_ftp->mirror_client) {
-          client_ftp->mirror_client =
-              std::make_shared<AMFTPClient>(src_client->GetRequest());
-        }
-        ECM ecm = client_ftp->mirror_client->Connect();
-        if (ecm.first != EC::Success) {
-          return ecm;
-        }
-        dst_client = client_ftp->mirror_client;
-      }
-    }
-
-    // 记录传输前是否已被用户中断
-    bool was_terminated_by_user = pd.is_terminate.load();
-
-    std::thread reading_thread([&]() { this->XToBuffer(task, src_client); });
-
-    this->BufferToX(task, dst_client);
-
-    // 传输完成后，通知读线程停止（但不改变 was_terminated_by_user）
-    pd.is_terminate.store(true);
-
-    if (reading_thread.joinable()) {
-      reading_thread.join();
-    }
-
-    // 检查是否有错误
-    if (pd.rcm.first != EC::Success) {
-      return pd.rcm;
-    }
-
-    // 检查是否被用户主动中断（传输前就被设置了 is_terminate）
-    if (was_terminated_by_user) {
-      return {EC::Terminate, "Transfer terminated by user"};
-    }
-
-    // 检查是否传输完成
-    if (pd.this_size >= pd.file_size) {
-      return {EC::Success, ""};
-    }
-
-    // 其他情况：传输未完成但也没报错，可能是中途被中断
-    return {EC::Terminate, "Transfer incomplete"};
+    return false;
   }
 
   ssize_t CalculateBufferSize(std::shared_ptr<BaseClient> src_client,
@@ -1130,7 +602,6 @@ private:
     ssize_t dst_size = dst_client ? dst_client->TransferRingBufferSize() : -1;
     bool is_local = !src_client && !dst_client;
     if (provided_size > AMMinBufferSize && provided_size < AMMaxBufferSize) {
-      // 优先使用用户提供的缓冲区大小
       return provided_size;
     } else if (src_size < 0 && dst_size < 0) {
       if (is_local) {
@@ -1172,7 +643,6 @@ private:
             nullptr, nullptr};
       }
     } else {
-      // src_host 为空时使用本地客户端
       src_client = hostm->local_client;
     }
     if (!task.dst_host.empty()) {
@@ -1191,16 +661,586 @@ private:
                 nullptr, nullptr};
       }
     } else {
-      // dst_host 为空时使用本地客户端
       dst_client = hostm->local_client;
     }
     return {rcm, src_client, dst_client};
   }
 
-public:
-  TransferCallback callback;
-  ProgressData pd;
+  // Transit for SFTP same-host copy (blocking mode)
+  ECM Transit(std::shared_ptr<AMSFTPClient> client,
+              std::shared_ptr<TaskInfo> task_info) {
+    auto &pd = *(task_info->pd);
+    auto *task = task_info->cur_task;
+    ECM rcm = ECM{EC::Success, ""};
+    std::lock_guard<std::recursive_mutex> lock(client->mtx);
+    rcm = client->mkdir(AMPathStr::dirname(task->dst));
+    if (rcm.first != EC::Success) {
+      return rcm;
+    }
 
+    LIBSSH2_SFTP_HANDLE *srcFile = libssh2_sftp_open(
+        client->sftp, task->src.c_str(), LIBSSH2_FXF_READ, 0400);
+    if (!srcFile) {
+      EC rc = client->GetLastEC();
+      std::string msg = client->GetLastErrorMsg();
+      return {rc, fmt::format("Failed to open src file \"{}\": {}", task->src,
+                              msg)};
+    }
+
+    LIBSSH2_SFTP_HANDLE *dstFile = libssh2_sftp_open(
+        client->sftp, task->dst.c_str(),
+        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
+    if (!dstFile) {
+      libssh2_sftp_close_handle(srcFile);
+      EC rc = client->GetLastEC();
+      std::string msg = client->GetLastErrorMsg();
+      return {rc, fmt::format("Failed to open dst file \"{}\": {}", task->dst,
+                              msg)};
+    }
+
+    libssh2_session_set_blocking(client->session, 1);
+    std::vector<char> buffer(chunk_size);
+    uint64_t total_written = 0;
+    ssize_t bytes_read, bytes_written;
+
+    while (total_written < task->size) {
+      if (pd.is_terminate()) {
+        rcm = {EC::Terminate, "Transfer interrupted by user"};
+        goto clean;
+      }
+      while (pd.is_pause() && !pd.is_terminate()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+
+      size_t to_read = std::min<size_t>(chunk_size, task->size - total_written);
+      size_t buffer_filled = 0;
+      while (buffer_filled < to_read) {
+        bytes_read = libssh2_sftp_read(srcFile, buffer.data() + buffer_filled,
+                                       to_read - buffer_filled);
+        if (bytes_read > 0) {
+          buffer_filled += bytes_read;
+        } else if (bytes_read == 0) {
+          break;
+        } else {
+          EC rc = client->GetLastEC();
+          std::string msg = client->GetLastErrorMsg();
+          rcm = {rc, fmt::format("Read error: {}", msg)};
+          goto clean;
+        }
+      }
+
+      if (buffer_filled == 0) {
+        break;
+      }
+
+      size_t buffer_written = 0;
+      while (buffer_written < buffer_filled) {
+        bytes_written =
+            libssh2_sftp_write(dstFile, buffer.data() + buffer_written,
+                               buffer_filled - buffer_written);
+        if (bytes_written > 0) {
+          buffer_written += bytes_written;
+          total_written += bytes_written;
+          task_info->total_transferred_size += bytes_written;
+          task->transferred = total_written;
+          InnerCallback(task_info, pd, false);
+        } else if (bytes_written == 0) {
+          break;
+        } else {
+          EC rc = client->GetLastEC();
+          std::string msg = client->GetLastErrorMsg();
+          rcm = {rc, fmt::format("Write error: {}", msg)};
+          goto clean;
+        }
+      }
+    }
+
+  clean:
+    if (srcFile) {
+      libssh2_sftp_close_handle(srcFile);
+    }
+    if (dstFile) {
+      libssh2_sftp_close_handle(dstFile);
+    }
+    InnerCallback(task_info, pd, true);
+    return rcm;
+  }
+
+  // XToBuffer - read from source to ring buffer
+  void XToBuffer(std::shared_ptr<BaseClient> client,
+                 std::shared_ptr<TaskInfo> task_info) {
+    auto &pd = *(task_info->pd);
+    auto *task = task_info->cur_task;
+    if (client->GetProtocol() == ClientProtocol::SFTP) {
+      UnionFileHandle file_handle;
+      auto clientf = std::static_pointer_cast<AMSFTPClient>(client);
+      ECM rcm = file_handle.Init(task->src, task->size, clientf, false, true);
+      if (rcm.first != EC::Success) {
+        pd.set_terminate();
+        task->rcm = rcm;
+        return;
+      }
+      std::lock_guard<std::recursive_mutex> lock(clientf->mtx);
+      while (file_handle.offset < file_handle.file_size && !pd.is_terminate()) {
+        while (pd.ring_buffer->writable() == 0 && !pd.is_terminate() &&
+               file_handle.offset < file_handle.file_size) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        while (pd.is_pause() && !pd.is_terminate()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if (pd.is_terminate()) {
+          return;
+        }
+        auto [bytes_read, ecm] = file_handle.Read(pd.ring_buffer);
+        if (ecm.first != EC::Success && ecm.first != EC::EndOfFile) {
+          pd.set_terminate();
+          task->rcm = ecm;
+          return;
+        }
+      }
+    } else if (client->GetProtocol() == ClientProtocol::LOCAL) {
+      UnionFileHandle file_handle;
+      ECM rcm = file_handle.Init(task->src, task->size, nullptr, false, true);
+      if (rcm.first != EC::Success) {
+        pd.set_terminate();
+        task->rcm = rcm;
+        return;
+      }
+      while (file_handle.offset < file_handle.file_size && !pd.is_terminate()) {
+        while (pd.ring_buffer->writable() == 0 && !pd.is_terminate() &&
+               file_handle.offset < file_handle.file_size) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        while (pd.is_pause() && !pd.is_terminate()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if (pd.is_terminate()) {
+          return;
+        }
+        auto [bytes_read, ecm] = file_handle.Read(pd.ring_buffer);
+        if (ecm.first != EC::Success && ecm.first != EC::EndOfFile) {
+          pd.set_terminate();
+          task->rcm = ecm;
+          return;
+        }
+      }
+    } else if (client->GetProtocol() == ClientProtocol::FTP) {
+      auto client_ftp = std::static_pointer_cast<AMFTPClient>(client);
+      ECM out_rcm;
+      FTPDownloadSet(client_ftp, task->src, FTPToBufferWk, &pd);
+      if (out_rcm.first != EC::Success) {
+        pd.set_terminate();
+        task->rcm = out_rcm;
+      }
+    }
+  }
+
+  // BufferToX - write from ring buffer to destination
+  void BufferToX(std::shared_ptr<BaseClient> client,
+                 std::shared_ptr<TaskInfo> task_info) {
+    auto &pd = *(task_info->pd);
+    auto *task = task_info->cur_task;
+    if (client->GetProtocol() == ClientProtocol::SFTP) {
+      UnionFileHandle file_handle;
+      auto clientf = std::static_pointer_cast<AMSFTPClient>(client);
+      ECM rcm = file_handle.Init(task->dst, task->size, clientf, true, true);
+      if (rcm.first != EC::Success) {
+        pd.set_terminate();
+        task->rcm = rcm;
+        return;
+      }
+      while (file_handle.offset < file_handle.file_size && !pd.is_terminate()) {
+        while (pd.ring_buffer->available() == 0 && !pd.is_terminate()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        while (pd.is_pause() && !pd.is_terminate()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if (pd.is_terminate()) {
+          return;
+        }
+        auto [bytes_write, ecm] = file_handle.Write(pd.ring_buffer);
+        if (ecm.first != EC::Success && ecm.first != EC::EndOfFile) {
+          pd.set_terminate();
+          task->rcm = ecm;
+          return;
+        }
+        task_info->total_transferred_size += bytes_write;
+        task->transferred = file_handle.offset;
+        InnerCallback(task_info, pd, false);
+      }
+    } else if (client->GetProtocol() == ClientProtocol::LOCAL) {
+      UnionFileHandle file_handle;
+      ECM rcm = file_handle.Init(task->dst, task->size, nullptr, true, true);
+      if (rcm.first != EC::Success) {
+        pd.set_terminate();
+        task->rcm = rcm;
+        return;
+      }
+      while (file_handle.offset < file_handle.file_size && !pd.is_terminate()) {
+        while (pd.ring_buffer->available() == 0 && !pd.is_terminate()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        while (pd.is_pause() && !pd.is_terminate()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if (pd.is_terminate()) {
+          return;
+        }
+        auto [bytes_write, ecm] = file_handle.Write(pd.ring_buffer);
+        if (ecm.first != EC::Success && ecm.first != EC::EndOfFile) {
+          pd.set_terminate();
+          task->rcm = ecm;
+          return;
+        }
+        task_info->total_transferred_size += bytes_write;
+        task->transferred = file_handle.offset;
+        InnerCallback(task_info, pd, false);
+      }
+    } else if (client->GetProtocol() == ClientProtocol::FTP) {
+      auto client_ftp = std::static_pointer_cast<AMFTPClient>(client);
+      ECM out_rcm;
+      FTPUploadSet(client_ftp, task->dst, task_info->pd.get(), BufferToFTPWk);
+      if (out_rcm.first != EC::Success) {
+        pd.set_terminate(); 
+        task->rcm = out_rcm;
+      }
+    }
+  }
+
+  // Static callbacks for FTP using WkProgressData
+  static size_t BufferToFTPWk(char *ptr, size_t size, size_t nmemb,
+                              void *userdata) {
+    auto *pd = static_cast<WkProgressData *>(userdata);
+    while (true) {
+      if (pd->is_terminate()) {
+        return CURL_READFUNC_ABORT;
+      }
+      while (pd->is_pause() && !pd->is_terminate()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      // Check if transfer complete
+      auto ti = pd->task_info.lock();
+      if (ti && ti->cur_task &&
+          ti->cur_task->transferred >= ti->cur_task->size) {
+        return 0;
+      }
+      if (pd->ring_buffer->available() == 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        continue;
+      }
+      auto [read_ptr, read_len] = pd->ring_buffer->get_read_ptr();
+      ssize_t to_read = read_len > size * nmemb ? size * nmemb : read_len;
+      if (to_read > 0) {
+        try {
+          memcpy(ptr, read_ptr, to_read);
+          pd->ring_buffer->commit_read(to_read);
+          if (ti && ti->cur_task) {
+            ti->cur_task->transferred += to_read;
+            ti->total_transferred_size += to_read;
+          }
+          return to_read;
+        } catch (const std::exception &e) {
+          pd->set_terminate();
+          if (ti && ti->cur_task)
+            ti->cur_task->rcm = ECM{EC::BufferReadError, e.what()};
+          return CURL_READFUNC_ABORT;
+        }
+      } else if (to_read < 0) {
+        pd->set_terminate();
+        if (ti && ti->cur_task)
+          ti->cur_task->rcm =
+              ECM{EC::BufferReadError, "Get negative value for data size"};
+        return CURL_READFUNC_ABORT;
+      }
+    }
+  }
+
+  static size_t FTPToBufferWk(char *ptr, size_t size, size_t nmemb,
+                              void *userdata) {
+    auto *pd = static_cast<WkProgressData *>(userdata);
+    size_t total = size * nmemb;
+    size_t written = 0;
+    while (written < total) {
+      if (pd->is_terminate()) {
+        return 0;
+      }
+      while (pd->is_pause() && !pd->is_terminate()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      while (pd->ring_buffer->writable() == 0 && !pd->is_terminate()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      if (pd->is_terminate()) {
+        return 0;
+      }
+      auto [write_ptr, write_len] = pd->ring_buffer->get_write_ptr();
+      size_t remaining = total - written;
+      size_t to_write = std::min<size_t>(write_len, remaining);
+      if (to_write > 0) {
+        try {
+          memcpy(write_ptr, ptr + written, to_write);
+          pd->ring_buffer->commit_write(to_write);
+          written += to_write;
+        } catch (const std::exception &e) {
+          pd->set_terminate();
+          auto ti = pd->task_info.lock();
+          if (ti && ti->cur_task)
+            ti->cur_task->rcm = ECM{EC::BufferWriteError, e.what()};
+          return 0;
+        }
+      }
+    }
+    return total;
+  }
+
+  // Upload with ProgressData (legacy - for AMSFTPWorker)
+  static void FTPUploadSet(std::shared_ptr<AMFTPClient> client,
+                           const std::string &dst, WkProgressData *pd,
+                           curl_read_callback read_callback) {
+    std::lock_guard<std::recursive_mutex> lock(client->mtx);
+    ECM ecm = client->SetupPath(dst, false);
+    if (ecm.first != EC::Success) {
+      pd->task_info.lock()->cur_task->rcm = ecm;
+      pd->set_terminate();
+      return;
+    }
+    CURL *curl = client->GetCURL();
+    curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
+    curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
+    curl_easy_setopt(curl, CURLOPT_READDATA, pd);
+    curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE,
+                     (curl_off_t)pd->task_info.lock()->cur_task->size);
+    curl_easy_setopt(curl, CURLOPT_FTP_CREATE_MISSING_DIRS, CURLFTP_CREATE_DIR);
+
+    CURLcode res = curl_easy_perform(curl);
+
+    if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
+      pd->set_terminate();
+    } else if (res != CURLE_OK) {
+      pd->task_info.lock()->cur_task->rcm =
+          ECM{EC::FTPUploadFailed,
+              fmt::format("Upload failed: {}", curl_easy_strerror(res))};
+      pd->set_terminate();
+    }
+  }
+
+  // Download with ProgressData (legacy - for AMSFTPWorker)
+  static void FTPDownloadSet(std::shared_ptr<AMFTPClient> client,
+                             const std::string &src,
+                             curl_write_callback write_callback,
+                             WkProgressData *pd) {
+    std::lock_guard<std::recursive_mutex> lock(client->mtx);
+    ECM ecm = client->SetupPath(src, false);
+    if (ecm.first != EC::Success) {
+      pd->task_info.lock()->cur_task->rcm = ecm;
+      pd->set_terminate();
+      return;
+    }
+    auto curl = client->GetCURL();
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, pd);
+    CURLcode res = curl_easy_perform(curl);
+    if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
+      pd->set_terminate();
+    } else if (res != CURLE_OK) {
+      pd->task_info.lock()->cur_task->rcm =
+          ECM{EC::FTPDownloadFailed,
+              fmt::format("Download failed: {}", curl_easy_strerror(res))};
+      pd->set_terminate();
+    }
+  }
+
+  // Single file transfer
+  ECM TransferSingleFile(std::shared_ptr<BaseClient> src_client,
+                         std::shared_ptr<BaseClient> dst_client,
+                         std::shared_ptr<TaskInfo> task_info) {
+    auto &pd = *(task_info->pd);
+    auto *task = task_info->cur_task;
+    if (src_client->GetUID() == dst_client->GetUID()) {
+      if (src_client->GetProtocol() == ClientProtocol::SFTP) {
+        return this->Transit(std::static_pointer_cast<AMSFTPClient>(src_client),
+                             task_info);
+      } else if (src_client->GetProtocol() == ClientProtocol::FTP) {
+        auto client_ftp = std::static_pointer_cast<AMFTPClient>(src_client);
+        if (!client_ftp->mirror_client) {
+          client_ftp->mirror_client =
+              std::make_shared<AMFTPClient>(src_client->GetRequest());
+        }
+        ECM ecm = client_ftp->mirror_client->Connect(false, nullptr, 5000);
+        if (ecm.first != EC::Success) {
+          return ecm;
+        }
+        dst_client = client_ftp->mirror_client;
+      }
+    }
+
+    std::thread reading_thread(
+        [&]() { this->XToBuffer(src_client, task_info); });
+    this->BufferToX(dst_client, task_info);
+    pd.set_terminate();
+
+    if (reading_thread.joinable()) {
+      reading_thread.join();
+    }
+
+    if (task->rcm.first != EC::Success) {
+      return task->rcm;
+    }
+    if (task->transferred >= task->size) {
+      return task->rcm;
+    }
+    return {EC::UnknownError, "Task not finished but exited unexpectedly"};
+  }
+
+  // Execute a single TaskInfo
+  void ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
+    task_info->status = TaskStatus::Conducting;
+    task_info->start_time = timenow();
+
+    if (task_info->callback.need_total_size_cb) {
+      task_info->callback.total_size_cb(task_info->total_size);
+    }
+
+    // Create or use existing WkProgressData
+    if (!task_info->pd) {
+      task_info->pd = std::make_shared<WkProgressData>(task_info);
+    }
+    auto &pd = *(task_info->pd);
+    pd.task_info = task_info;
+
+    for (auto &task : task_info->tasks) {
+      // Check terminate before each file
+      if (pd.is_terminate()) {
+        task.rcm = {EC::Terminate, "Task terminated by user"};
+        task.IsFinished = true;
+        continue;
+      }
+
+      if (task.IsFinished) {
+        continue;
+      }
+
+      auto test_res = TestHost(task, task_info->hostm);
+      ECM rcm = std::get<0>(test_res);
+      if (rcm.first != EC::Success) {
+        task.rcm = rcm;
+        task.IsFinished = true;
+        if (task_info->callback.need_error_cb) {
+          task_info->callback.error_cb(ErrorCBInfo(
+              task.rcm, task.src, task.dst, task.src_host, task.dst_host));
+        }
+        continue;
+      }
+
+      auto src_client = std::get<1>(test_res);
+      auto dst_client = std::get<2>(test_res);
+
+      if (task.path_type == PathType::DIR) {
+        task.rcm = dst_client->mkdirs(task.dst);
+        task.IsFinished = true;
+        continue;
+      }
+
+      // Setup cur_task pointer to this task in tasks vector
+      task_info->cur_task = &task;
+      task.transferred = 0;
+      task.rcm = ECM(EC::Success, "");
+      pd.ring_buffer = std::make_shared<StreamRingBuffer>(
+          CalculateBufferSize(src_client, dst_client, task_info->buffer_size));
+
+      task.rcm = TransferSingleFile(src_client, dst_client, task_info);
+      task.IsFinished = true;
+
+      if (task.rcm.first != EC::Success && task_info->callback.need_error_cb &&
+          task.rcm.first != EC::Terminate) {
+        task_info->callback.error_cb(ErrorCBInfo(task.rcm, task.src, task.dst,
+                                                 task.src_host, task.dst_host));
+      }
+
+      InnerCallback(task_info, pd, true);
+    }
+
+    // bool any_error = false;
+    // for (auto &task : task_info->tasks) {
+    //   if (task.rcm.first != EC::Success) {
+    //     any_error = true;
+    //     task_info->rcm = task.rcm; // Last error
+    //   }
+    // }
+    // if (!any_error) {
+    //   task_info->rcm = {EC::Success, ""};
+    // }
+
+    task_info->status = TaskStatus::Finished;
+    task_info->finished_time = timenow();
+  }
+
+  // Worker thread function
+  void WorkerLoop() {
+    while (running.load()) {
+      std::shared_ptr<TaskInfo> task_info;
+      {
+        std::unique_lock<std::mutex> lock(queue_mtx);
+        queue_cv.wait(
+            lock, [this]() { return !running.load() || !task_queue.empty(); });
+        if (!running.load() && task_queue.empty()) {
+          break;
+        }
+        if (task_queue.empty()) {
+          continue;
+        }
+        task_info = std::move(task_queue.front());
+        task_queue.pop_front();
+      }
+
+      // Set as conducting task
+      {
+        std::lock_guard<std::mutex> lock(conducting_mtx);
+        conducting_task = task_info;
+      }
+
+      // Check if should skip
+      if (ShouldSkipTask(task_info)) {
+        std::lock_guard<std::mutex> lock(result_mtx);
+        results[task_info->id] = task_info;
+        {
+          std::lock_guard<std::mutex> lock2(conducting_mtx);
+          conducting_task = nullptr;
+        }
+        continue;
+      }
+
+      // Execute task
+      ExecuteTask(task_info);
+
+      // Store result and clear conducting
+      {
+        std::lock_guard<std::mutex> lock(result_mtx);
+        results[task_info->id] = task_info;
+      }
+      {
+        std::lock_guard<std::mutex> lock(conducting_mtx);
+        conducting_task = nullptr;
+      }
+    }
+  }
+
+public:
+  AMWorkManager() {
+    worker_thread = std::thread([this]() { WorkerLoop(); });
+  }
+
+  ~AMWorkManager() {
+    running.store(false);
+    queue_cv.notify_all();
+    if (worker_thread.joinable()) {
+      worker_thread.join();
+    }
+  }
+
+  // Set chunk size
   size_t ChunkSize(int64_t size = -1) {
     if (size < 32 * AMKB) {
       return chunk_size;
@@ -1210,397 +1250,241 @@ public:
     }
   }
 
-  AMSFTPWorker(TransferCallback callback, float cb_interval_s = 0.2)
-      : callback(std::move(callback)), pd(cb_interval_s) {
-    this->pd.progress_cb = [this](bool force) { InnerCallback(force); };
+  // Non-blocking transfer - returns task ID immediately
+  // Control (pause/resume/terminate) via wk control functions
+  uint64_t transfer(const TASKS &tasks,
+                    const std::shared_ptr<ClientMaintainer> &hostm,
+                    TransferCallback callback = TransferCallback(),
+                    ssize_t buffer_size = -1) {
+    auto task_info = std::make_shared<TaskInfo>();
+    task_info->id = GenerateUID();
+    task_info->submit_time = timenow();
+    task_info->status = TaskStatus::Pending;
+    task_info->tasks = tasks;
+    task_info->hostm = hostm;
+    task_info->callback = callback;
+    task_info->buffer_size = buffer_size;
+
+    // Create shared progress data for control
+    task_info->pd = std::make_shared<WkProgressData>(task_info);
+
+    // Calculate total size
+    for (auto &task : task_info->tasks) {
+      task_info->total_size += task.size;
+    }
+
+    uint64_t id = task_info->id;
+    {
+      std::lock_guard<std::mutex> lock(queue_mtx);
+      task_queue.push_back(task_info);
+    }
+    queue_cv.notify_one();
+    return id;
   }
-  inline void InnerCallback(bool force = false) {
-    if (callback.need_progress_cb) {
-      auto time_now = timenow();
-      if (force || ((time_now - pd.cb_time) > pd.cb_interval_s)) {
-        pd.cb_time = time_now;
-        py::gil_scoped_acquire acquire;
-        py::object result = callback.progress_cb(ProgressCBInfo(
-            pd.src, pd.dst, pd.src_host, pd.dst_host, pd.this_size,
-            pd.file_size, pd.accumulated_size, pd.total_size));
-        if (!result.is_none()) {
-          if (py::isinstance<TransferControl>(result)) {
-            SetState(py::cast<TransferControl>(result));
+
+  // Query task status
+  std::optional<TaskStatus> get_status(uint64_t id) {
+    {
+      std::lock_guard<std::mutex> lock(queue_mtx);
+      for (const auto &task : task_queue) {
+        if (task->id == id) {
+          return task->status;
+        }
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(conducting_mtx);
+      if (conducting_task && conducting_task->id == id) {
+        return conducting_task->status;
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(result_mtx);
+      auto it = results.find(id);
+      if (it != results.end()) {
+        return it->second->status;
+      }
+    }
+    return std::nullopt;
+  }
+
+  // Query task result (full info) - returns copy and removes from results
+  std::optional<TaskInfo> get_result(uint64_t id) {
+    std::lock_guard<std::mutex> lock(result_mtx);
+    auto it = results.find(id);
+    if (it != results.end()) {
+      TaskInfo result = *(it->second);
+      results.erase(it);
+      return result;
+    }
+    return std::nullopt;
+  }
+
+  // Get task info (from queue, conducting, or results)
+  std::optional<TaskInfo> get_task(uint64_t id) {
+    {
+      std::lock_guard<std::mutex> lock(queue_mtx);
+      for (const auto &task : task_queue) {
+        if (task->id == id) {
+          return *task;
+        }
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(conducting_mtx);
+      if (conducting_task && conducting_task->id == id) {
+        return *conducting_task;
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(result_mtx);
+      auto it = results.find(id);
+      if (it != results.end()) {
+        return *(it->second);
+      }
+    }
+    return std::nullopt;
+  }
+
+  // Pause a task by ID
+  bool pause(uint64_t id) {
+    {
+      std::lock_guard<std::mutex> lock(queue_mtx);
+      for (auto &task : task_queue) {
+        if (task->id == id && task->pd) {
+          task->pd->set_pause();
+          return true;
+        }
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(conducting_mtx);
+      if (conducting_task && conducting_task->id == id && conducting_task->pd) {
+        conducting_task->pd->set_pause();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Resume a task by ID
+  bool resume(uint64_t id) {
+    {
+      std::lock_guard<std::mutex> lock(queue_mtx);
+      for (auto &task : task_queue) {
+        if (task->id == id && task->pd) {
+          task->pd->set_running();
+          return true;
+        }
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(conducting_mtx);
+      if (conducting_task && conducting_task->id == id && conducting_task->pd) {
+        conducting_task->pd->set_running();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // Terminate a task by ID and return task info
+  // For pending tasks, moves them to results immediately
+  // For conducting tasks, waits for completion
+  std::optional<TaskInfo> terminate(uint64_t id, int timeout_ms = 5000) {
+    bool found_in_conducting = false;
+    // Check pending tasks first
+    {
+      std::lock_guard<std::mutex> lock(queue_mtx);
+      for (auto it = task_queue.begin(); it != task_queue.end(); ++it) {
+        if ((*it)->id == id) {
+          auto task = *it;
+          if (task->pd) {
+            task->pd->set_terminate();
           }
-        }
-      }
-    }
-  }
-
-  static size_t BufferToFTP(char *ptr, size_t size, size_t nmemb,
-                            void *userdata) {
-    // size指块数，但这个值往往是1
-    auto *pd = static_cast<ProgressData *>(userdata);
-    // 持续等待直到有数据可读并成功获取
-    while (true) {
-      // 检查中断
-      if (pd->is_terminate.load()) {
-        std::cout << "[BufferToFTP] Terminated, this_size=" << pd->this_size
-                  << std::endl;
-        return CURL_READFUNC_ABORT;
-      }
-      // 检查暂停
-      while (pd->is_pause.load() && !pd->is_terminate.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-      }
-      // 检查是否传输完成
-      if (pd->this_size >= pd->file_size) {
-        return 0; // 只有真正传输完成才返回 0 (EOF)
-      }
-      // 等待有数据可读
-      if (pd->ring_buffer->available() == 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        continue;
-      }
-      // 尝试获取数据
-      auto [read_ptr, read_len] = pd->ring_buffer->get_read_ptr();
-      ssize_t to_read = read_len > size * nmemb ? size * nmemb : read_len;
-
-      if (to_read > 0) {
-        try {
-          memcpy(ptr, read_ptr, to_read);
-          pd->ring_buffer->commit_read(to_read);
-          pd->this_size += to_read;
-          pd->accumulated_size += to_read;
-          pd->progress_cb(false);
-          return to_read;
-        } catch (const std::exception &e) {
-          pd->is_terminate.store(true);
-          pd->rcm = ECM{EC::BufferReadError, e.what()};
-          return CURL_READFUNC_ABORT;
-        }
-      } else if (to_read < 0) {
-        pd->is_terminate.store(true);
-        pd->rcm = ECM{EC::BufferReadError, "Get negative value for data size"};
-        return CURL_READFUNC_ABORT;
-      }
-      // to_read == 0: 竞态条件，available() > 0 但实际获取不到数据
-      // 继续循环重试，而不是返回 0
-    }
-  }
-
-  // FTP 下载回调：将数据写入 ring buffer
-  // 注意：curl WRITE 回调必须返回和传入完全相同的字节数，否则 curl 会中止传输
-  static size_t FTPToBuffer(char *ptr, size_t size, size_t nmemb,
-                            void *userdata) {
-    auto *pd = static_cast<ProgressData *>(userdata);
-    size_t total = size * nmemb;
-    size_t written = 0;
-
-    // 必须写入所有数据才能返回，否则 curl 会认为出错
-    while (written < total) {
-      // 检查中断
-      if (pd->is_terminate.load()) {
-        return 0; // 中止传输
-      }
-
-      // 检查暂停
-      while (pd->is_pause.load() && !pd->is_terminate.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-      }
-
-      // 等待 ring buffer 有空间
-      while (pd->ring_buffer->writable() == 0 && !pd->is_terminate.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-
-      if (pd->is_terminate.load()) {
-        return 0;
-      }
-
-      // 获取写入位置，写入尽可能多的数据
-      auto [write_ptr, write_len] = pd->ring_buffer->get_write_ptr();
-      size_t remaining = total - written;
-      size_t to_write = std::min<size_t>(write_len, remaining);
-
-      if (to_write > 0) {
-        try {
-          memcpy(write_ptr, ptr + written, to_write);
-          pd->ring_buffer->commit_write(to_write);
-          written += to_write;
-        } catch (const std::exception &e) {
-          pd->is_terminate.store(true);
-          pd->rcm = ECM{EC::BufferWriteError, e.what()};
-          return 0;
-        }
-      }
-    }
-
-    return total; // 必须返回 total，否则 curl 会中止
-  }
-
-  inline void SetState(TransferControl state) {
-    switch (state) {
-    case TransferControl::Running:
-      this->pd.is_pause.store(false);
-      break;
-    case TransferControl::Pause:
-      this->pd.is_pause.store(true);
-      break;
-    case TransferControl::Terminate:
-      this->pd.is_terminate.store(true);
-      break;
-    default:
-      break;
-    }
-  }
-
-  inline TransferControl GetState() {
-    if (pd.is_terminate.load()) {
-      return TransferControl::Terminate;
-    } else if (pd.is_pause.load()) {
-      return TransferControl::Pause;
-    } else {
-      return TransferControl::Running;
-    }
-  }
-
-  TASKS EraseOverlapTasks(const TASKS &tasks) {
-    std::unordered_set<std::string> dst_set{};
-    TASKS result{};
-    std::string task_id;
-    for (auto &task : tasks) {
-      task_id = task.src + task.src_host + task.dst + task.dst_host;
-      if (dst_set.count(task_id) == 0) {
-        dst_set.insert(task_id);
-        result.push_back(task);
-      }
-    }
-    // 排序，讲task中type为DIR的task放在前面，type为FILE的task放在后面
-    std::sort(result.begin(), result.end(),
-              [](const TransferTask &a, const TransferTask &b) {
-                return a.path_type == PathType::DIR &&
-                       b.path_type != PathType::DIR;
-              });
-    return result;
-  }
-
-  TASKS transfer(const TASKS &tasks,
-                 const std::shared_ptr<ClientMaintainer> &hostm,
-                 ssize_t buffer_size = -1) {
-    if (tasks.empty()) {
-      return {};
-    }
-    auto tasksf = EraseOverlapTasks(tasks);
-    this->pd.reset();
-    ECM rcm = ECM{EC::Success, ""};
-    std::shared_ptr<BaseClient> src_client = nullptr;
-    std::shared_ptr<BaseClient> dst_client = nullptr;
-    std::tuple<ECM, std::shared_ptr<BaseClient>, std::shared_ptr<BaseClient>>
-        test_res;
-    for (auto &task : tasksf) {
-      pd.total_size += task.size;
-    }
-
-    if (callback.need_total_size_cb) {
-      py::gil_scoped_acquire acquire;
-      callback.total_size_cb(pd.total_size);
-    }
-
-    for (auto &task : tasksf) {
-      if (task.IsFinished) {
-        // 跳过在load_tasks中，未设置overlap且dst已经存在的任务
-        goto check;
-      }
-
-      if (pd.is_terminate.load()) {
-        task.rcm = ECM(EC::Terminate, "Transfer cancelled by user");
-        goto check;
-      }
-      test_res = TestHost(task, hostm);
-      rcm = std::get<0>(test_res);
-
-      if (rcm.first != EC::Success) {
-        task.rcm = rcm;
-        goto check;
-      }
-
-      src_client = std::get<1>(test_res);
-      dst_client = std::get<2>(test_res);
-      if (task.path_type == PathType::DIR) {
-        task.rcm = dst_client->mkdirs(task.dst);
-        goto check;
-      }
-      pd.next_file(task,
-                   CalculateBufferSize(src_client, dst_client, buffer_size));
-      task.rcm = _UnionTransfer(task, src_client, dst_client);
-      InnerCallback(true);
-
-    check:
-      task.IsFinished = true;
-      if (task.rcm.first != EC::Success) {
-        if (callback.need_error_cb && task.rcm.first != EC::Terminate) {
-          py::gil_scoped_acquire acquire;
-          callback.error_cb(ErrorCBInfo(task.rcm, task.src, task.dst,
-                                        task.src_host, task.dst_host));
-        }
-      }
-    }
-    return tasksf;
-  }
-
-  std::pair<ECM, TASKS>
-  load_tasks(const std::string &src, const std::string &dst,
-             const std::shared_ptr<ClientMaintainer> &hostm,
-             const std::string &src_host = "", const std::string &dst_host = "",
-             bool overwrite = false, bool mkdir = true,
-             bool ignore_sepcial_file = true, amf interrupt_flag = nullptr,
-             int timeout_ms = -1, int64_t start_time = -1) {
-    start_time = start_time == -1 ? am_ms() : start_time;
-    interrupt_flag = interrupt_flag ? interrupt_flag : worker_interrupt_flag;
-    WRV result = {};
-    TASKS tasks = {};
-    // 去除src的dst左右端的空格
-
-    auto [rc1, src_client] = hostm->test_client(src_host, false, interrupt_flag,
-                                                timeout_ms, start_time);
-
-    if (rc1.first != EC::Success) {
-      return {rc1, tasks};
-    }
-    auto [rc2, dst_client] = hostm->test_client(dst_host, false, interrupt_flag,
-                                                timeout_ms, start_time);
-
-    if (rc2.first != EC::Success) {
-      return {rc2, tasks};
-    }
-    auto [rc3, src_stat] =
-        src_client->stat(src, false, interrupt_flag, timeout_ms, start_time);
-
-    if (rc3.first != EC::Success) {
-      return {rc3, tasks};
-    }
-
-    // 检查是否为 src_file -> dst_file 的传输
-    auto dstf = dst;
-    auto srcf = src;
-    bool is_dst_file = false;
-    if (src_stat.type == PathType::FILE) {
-      // 检查dst的扩展名和src扩展名是否相同
-
-      std::string dst_ext = AMPathStr::extname(dstf);
-      std::cout << "dst_ext: " << dst_ext << std::endl;
-      std::cout << "src_ext: " << AMPathStr::extname(srcf) << std::endl;
-      if (AMPathStr::extname(srcf) == dst_ext && !dst_ext.empty()) {
-        is_dst_file = true;
-      }
-    }
-
-    if (src_stat.type != PathType::DIR) {
-
-      if (ignore_sepcial_file && src_stat.type != PathType::FILE) {
-        return {ECM{EC::NotAFile, fmt::format("Src is not a common file and "
-                                              "ignore_sepcial_file is true: {}",
-                                              srcf)},
-                {}};
-      }
-
-      if (!is_dst_file) {
-        dstf = AMPathStr::join(dstf, AMPathStr::basename(srcf));
-      }
-
-      // 检测dst的父级目录是否存在
-      auto [rcm4, dst_parent_info] =
-          dst_client->stat(AMPathStr::dirname(dstf), false, interrupt_flag,
-                           timeout_ms, start_time);
-
-      if (rcm4.first != EC::Success && !mkdir) {
-        return {ECM{EC::ParentDirectoryNotExist,
-                    fmt::format("Dst parent path not exists: {}",
-                                AMPathStr::dirname(dstf))},
-                tasks};
-      } else if (rcm4.first == EC::Success &&
-                 dst_parent_info.type != PathType::DIR) {
-        return {ECM(EC::NotADirectory,
-                    fmt::format("Dst parent path is not a directory: {}",
-                                dst_parent_info.path)),
-                tasks};
-      }
-
-      if (rcm4.first == EC::Success) {
-        auto [rcm5, dst_info] = dst_client->stat(dstf, false, interrupt_flag,
-                                                 timeout_ms, start_time);
-        // 检验目标路径是否存在
-        if (rcm4.first == EC::Success) {
-          if (dst_info.type == PathType::DIR) {
-            return {ECM(EC::NotAFile,
-                        fmt::format("Dst already exists and is a directory: {}",
-                                    dstf)),
-                    tasks};
-          } else if (!overwrite) {
-            return {ECM{EC::PathAlreadyExists,
-                        fmt::format("Dst already exists: {}", dstf)},
-                    tasks};
+          task->rcm = {EC::Terminate, "Task terminated before start"};
+          task->status = TaskStatus::Finished;
+          task->finished_time = timenow();
+          TaskInfo result = *task;
+          // Move to results
+          {
+            std::lock_guard<std::mutex> rlock(result_mtx);
+            results[task->id] = task;
           }
+          task_queue.erase(it);
+          return result;
         }
       }
-
-      tasks.emplace_back(srcf, dstf, src_host, dst_host, src_stat.size,
-                         src_stat.type);
-      return {ECM(EC::Success, ""), tasks};
     }
-
-    auto [rcm6, dst_info] =
-        dst_client->stat(dstf, false, interrupt_flag, timeout_ms, start_time);
-
-    if (rcm6.first != EC::Success && !mkdir) {
-      return {ECM{EC::ParentDirectoryNotExist,
-                  fmt::format("Dst parent path not exists: {}", dstf)},
-              tasks};
-    } else if (rcm6.first == EC::Success && dst_info.type != PathType::DIR) {
-      return {ECM(EC::NotADirectory,
-                  fmt::format("Dst already exists and is not a directory: {}",
-                              dstf)),
-              tasks};
-    }
-
-    auto [rcm7, src_paths] =
-        src_client->iwalk(srcf, false, interrupt_flag, timeout_ms, start_time);
-    if (rcm7.first != EC::Success) {
-      return {rcm7, tasks};
-    }
-    tasks.reserve(src_paths.size());
-
-    TransferTask taskt;
-    std::string dst_n;
-    for (auto &item : src_paths) {
-      if (interrupt_flag && interrupt_flag->check()) {
-        return {ECM{EC::Terminate, "Load tasks interrupted by user"}, tasks};
-      }
-      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
-        return {ECM{EC::OperationTimeout, "Load tasks timeout"}, tasks};
-      }
-      dst_n = AMPathStr::join(
-          dstf, fs::relative(item.path, AMPathStr::dirname(srcf)));
-      auto [rcm8, dst_info2] = dst_client->stat(dst_n, false, interrupt_flag,
-                                                timeout_ms, start_time);
-      if (rcm8.first == EC::Success) {
-        if (dst_info2.type == PathType::DIR) {
-          taskt = TransferTask(item.path, dst_n, src_host, dst_host, item.size,
-                               item.type);
-          taskt.IsFinished = true;
-          taskt.rcm =
-              ECM{EC::NotAFile, "Dst already exists and is a directory"};
-        } else if (!overwrite) {
-          taskt = TransferTask(item.path, dst_n, src_host, dst_host, item.size,
-                               item.type);
-          taskt.IsFinished = true;
-          taskt.rcm = ECM{EC::PathAlreadyExists, "Dst already exists"};
-        } else {
-          taskt = TransferTask(item.path, dst_n, src_host, dst_host, item.size,
-                               item.type);
+    // Check conducting task
+    {
+      std::lock_guard<std::mutex> lock(conducting_mtx);
+      if (conducting_task && conducting_task->id == id) {
+        if (conducting_task->pd) {
+          conducting_task->pd->set_terminate();
         }
-        tasks.push_back(taskt);
-        continue;
+        found_in_conducting = true;
       }
-      tasks.emplace_back(item.path, dst_n, src_host, dst_host, item.size,
-                         item.type);
     }
-    return {ECM(EC::Success, ""), tasks};
-  };
+    // If not found anywhere, return immediately
+    if (!found_in_conducting) {
+      return std::nullopt;
+    }
+    // Wait for conducting task to finish
+    int64_t start = am_ms();
+    while (timeout_ms < 0 || (am_ms() - start) < timeout_ms) {
+      {
+        std::lock_guard<std::mutex> lock(result_mtx);
+        auto it = results.find(id);
+        if (it != results.end()) {
+          TaskInfo result = *(it->second);
+          results.erase(it);
+          return result;
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return std::nullopt;
+  }
+
+  // Get number of pending tasks
+  size_t pending_count() {
+    std::lock_guard<std::mutex> lock(queue_mtx);
+    return task_queue.size();
+  }
+
+  // Check if any task is currently conducting
+  bool is_conducting() {
+    std::lock_guard<std::mutex> lock(conducting_mtx);
+    return conducting_task != nullptr;
+  }
+
+  // Get currently conducting task ID (0 if none)
+  uint64_t get_conducting_id() {
+    std::lock_guard<std::mutex> lock(conducting_mtx);
+    return conducting_task ? conducting_task->id : 0;
+  }
+
+  // Clear finished results
+  void clear_results() {
+    std::lock_guard<std::mutex> lock(result_mtx);
+    results.clear();
+  }
+
+  // Remove a specific result
+  bool remove_result(uint64_t id) {
+    std::lock_guard<std::mutex> lock(result_mtx);
+    return results.erase(id) > 0;
+  }
+
+  // Get all result IDs
+  std::vector<uint64_t> get_result_ids() {
+    std::lock_guard<std::mutex> lock(result_mtx);
+    std::vector<uint64_t> ids;
+    ids.reserve(results.size());
+    for (const auto &[id, _] : results) {
+      ids.push_back(id);
+    }
+    return ids;
+  }
 };
