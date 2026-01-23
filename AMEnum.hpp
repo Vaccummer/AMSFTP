@@ -6,6 +6,35 @@
 #include <string>
 #include <unordered_map>
 
+// clang-format off
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <aclapi.h> // Windows ACL API
+#include <sddl.h>   // Windows SDDL API
+#include <shlobj.h>
+#include <shlwapi.h> // Windows Shell 轻量级 API
+#include <windows.h>
+// clang-format on
+
+#else
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <pwd.h>
+#include <sys/mman.h>
+#include <sys/socket.h>
+#include <sys/stat.h> // Unix 文件状态 API（stat 函数等）
+#include <sys/stat.h>
+#include <unistd.h>
+#define SOCKET int
+#define INVALID_SOCKET -1
+#define SOCKET_ERROR -1
+#define closesocket close
+#endif
+
 constexpr ssize_t AMKB = 1024;
 constexpr ssize_t AMMB = 1024 * 1024;
 constexpr ssize_t AMGB = 1024 * 1024 * 1024;

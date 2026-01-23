@@ -34,28 +34,6 @@
 
 // 第三方库
 
-#ifdef _WIN32
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <unistd.h>
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/mman.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-
-#define SOCKET int
-#define INVALID_SOCKET -1
-#define SOCKET_ERROR -1
-#define closesocket close
-#endif
-
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
@@ -76,8 +54,7 @@ inline ECM CallCallbackSafe(const Fn &fn, Args &&...args) {
 }
 
 template <typename Ret, typename Fn, typename... Args>
-inline std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn,
-                                               Args &&...args) {
+inline std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn, Args &&...args) {
   if (!fn) {
     return {Ret{}, {EC::Success, ""}};
   }
@@ -90,11 +67,25 @@ inline std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn,
   }
 }
 
+inline std::array<char, 32> AMcharset = {'2', '3', '4', '5', '6', '7', '8', '9',
+                                         'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+                                         'J', 'K', 'M', 'N', 'P', 'Q', 'R', 'S',
+                                         'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
+constexpr size_t AMbase = sizeof(AMcharset) - 1;
+
 inline uint64_t GenerateUID() {
-  std::mt19937_64 engine = std::mt19937_64(std::random_device{}());
-  std::uniform_int_distribution<uint64_t> distribution =
-      std::uniform_int_distribution<uint64_t>(0, UINT64_MAX);
-  return distribution(engine);
+  try {
+    std::random_device rd;
+    std::mt19937_64 eng(rd());
+    std::uniform_int_distribution<uint64_t> dist(0, UINT64_MAX);
+    return dist(eng);
+  } catch (...) {
+    // fallback: time + counter
+    static std::atomic<uint64_t> counter{0};
+    uint64_t t = static_cast<uint64_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    return t ^ (++counter * 0x9e3779b97f4a7c15ULL);
+  }
 }
 
 inline double timenow() {
@@ -178,7 +169,8 @@ public:
         mode_str(mode_str) {}
   std::string repr() {
     return fmt::format(
-        "PathInfo(name={}, path={}, dir={}, owner={}, size={}, create_time={}, "
+        "PathInfo(name={}, path={}, dir={}, owner={}, size={}, "
+        "create_time={}, "
         "access_time={}, modify_time={}, type={}, mode_int={}, mode_str={})",
         name, path, dir, owner, size, FormatTime(create_time),
         FormatTime(access_time), FormatTime(modify_time),
@@ -616,7 +608,7 @@ struct WkProgressData {
   }
 };
 struct TaskInfo {
-  uint64_t id = 0;
+  std::string id = "";
   double submit_time = 0;
   double start_time = 0;
   TaskStatus status = TaskStatus::Pending;

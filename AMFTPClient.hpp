@@ -25,36 +25,14 @@
 // 自身依赖
 
 // 第三方库
-#include <libssh2.h>
-#include <libssh2_sftp.h>
-
 #include <curl/curl.h>
 #include <fmt/core.h>
+#include <libssh2.h>
+#include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
-// 第三方库
 
-#ifdef _WIN32
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <unistd.h>
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/mman.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#define SOCKET int
-#define INVALID_SOCKET -1
-#define SOCKET_ERROR -1
-#define closesocket close
-#endif
 
 using EC = ErrorCode;
 using ECM = std::pair<EC, std::string>;

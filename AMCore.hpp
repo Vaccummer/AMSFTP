@@ -1,24 +1,8 @@
 #pragma once
 // 标准库
-#include <algorithm>
-#include <atomic>
-#include <chrono>
-#include <condition_variable>
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
 #include <ctime>
 #include <deque>
 #include <fcntl.h>
-#include <filesystem>
-#include <memory>
-#include <mutex>
-#include <optional>
-#include <string>
-#include <thread>
-#include <vector>
-
-// 标准库
 
 // 自身依赖
 #include "AMBaseClient.hpp"
@@ -29,38 +13,6 @@
 #include "AMLocalClient.hpp"
 #include "AMPath.hpp"
 #include "AMSFTPClient.hpp"
-
-// 第三方库
-#include <libssh2.h>
-#include <libssh2_sftp.h>
-
-#include <curl/curl.h>
-#include <fmt/core.h>
-#include <magic_enum/magic_enum.hpp>
-#include <openssl/pem.h>
-#include <openssl/rsa.h>
-// 第三方库
-
-#ifdef _WIN32
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <unistd.h>
-
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/mman.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#define SOCKET int
-#define INVALID_SOCKET -1
-#define SOCKET_ERROR -1
-#define closesocket close
-#endif
 
 class UnionFileHandle {
 public:
@@ -528,7 +480,7 @@ private:
   std::condition_variable queue_cv;
   std::deque<std::shared_ptr<TaskInfo>> task_queue;
   std::mutex result_mtx;
-  std::unordered_map<uint64_t, std::shared_ptr<TaskInfo>> results;
+  std::unordered_map<std::string, std::shared_ptr<TaskInfo>> results;
   std::mutex conducting_mtx;
   std::shared_ptr<TaskInfo> conducting_task; // Currently executing task
   size_t chunk_size = 256 * AMKB;
@@ -1273,10 +1225,10 @@ public:
 
   // Non-blocking transfer - returns task ID immediately
   // Control (pause/resume/terminate) via wk control functions
-  uint64_t transfer(const TASKS &tasks,
-                    const std::shared_ptr<ClientMaintainer> &hostm,
-                    TransferCallback callback = TransferCallback(),
-                    ssize_t buffer_size = -1) {
+  std::string transfer(const TASKS &tasks,
+                       const std::shared_ptr<ClientMaintainer> &hostm,
+                       TransferCallback callback = TransferCallback(),
+                       ssize_t buffer_size = -1) {
     auto task_info = std::make_shared<TaskInfo>();
     task_info->id = GenerateUID();
     task_info->submit_time = timenow();
@@ -1306,17 +1258,16 @@ public:
       task_info->total_size += task.size;
     }
 
-    uint64_t id = task_info->id;
     {
       std::lock_guard<std::mutex> lock(queue_mtx);
       task_queue.push_back(task_info);
     }
     queue_cv.notify_one();
-    return id;
+    return task_info->id;
   }
 
   // Query task status
-  std::optional<TaskStatus> get_status(uint64_t id) {
+  std::optional<TaskStatus> get_status(std::string id) {
     {
       std::lock_guard<std::mutex> lock(queue_mtx);
       for (const auto &task : task_queue) {
@@ -1342,7 +1293,7 @@ public:
   }
 
   // Query task result (full info) - returns copy and removes from results
-  std::optional<TaskInfo> get_result(uint64_t id) {
+  std::optional<TaskInfo> get_result(std::string id) {
     std::lock_guard<std::mutex> lock(result_mtx);
     auto it = results.find(id);
     if (it != results.end()) {
@@ -1354,7 +1305,7 @@ public:
   }
 
   // Get task info (from queue, conducting, or results)
-  std::optional<TaskInfo> get_task(uint64_t id) {
+  std::optional<TaskInfo> get_task(std::string id) {
     {
       std::lock_guard<std::mutex> lock(queue_mtx);
       for (const auto &task : task_queue) {
@@ -1380,7 +1331,7 @@ public:
   }
 
   // Pause a task by ID
-  bool pause(uint64_t id) {
+  bool pause(std::string id) {
     {
       std::lock_guard<std::mutex> lock(queue_mtx);
       for (auto &task : task_queue) {
@@ -1401,7 +1352,7 @@ public:
   }
 
   // Resume a task by ID
-  bool resume(uint64_t id) {
+  bool resume(std::string id) {
     {
       std::lock_guard<std::mutex> lock(queue_mtx);
       for (auto &task : task_queue) {
@@ -1424,7 +1375,7 @@ public:
   // Terminate a task by ID and return task info
   // For pending tasks, moves them to results immediately
   // For conducting tasks, waits for completion
-  std::optional<TaskInfo> terminate(uint64_t id, int timeout_ms = 5000) {
+  std::optional<TaskInfo> terminate(std::string id, int timeout_ms = 5000) {
     bool found_in_conducting = false;
     // Check pending tasks first
     {
@@ -1493,7 +1444,7 @@ public:
   }
 
   // Get currently conducting task ID (0 if none)
-  uint64_t get_conducting_id() {
+  std::string get_conducting_id() {
     std::lock_guard<std::mutex> lock(conducting_mtx);
     return conducting_task ? conducting_task->id : 0;
   }
@@ -1505,15 +1456,15 @@ public:
   }
 
   // Remove a specific result
-  bool remove_result(uint64_t id) {
+  bool remove_result(std::string id) {
     std::lock_guard<std::mutex> lock(result_mtx);
     return results.erase(id) > 0;
   }
 
   // Get all result IDs
-  std::vector<uint64_t> get_result_ids() {
+  std::vector<std::string> get_result_ids() {
     std::lock_guard<std::mutex> lock(result_mtx);
-    std::vector<uint64_t> ids;
+    std::vector<std::string> ids;
     ids.reserve(results.size());
     for (const auto &[id, _] : results) {
       ids.push_back(id);
