@@ -7,7 +7,6 @@
 #include <cstdint> // 用于int64_t类型
 #include <fcntl.h>
 #include <iomanip>
-#include <iostream>
 #include <optional>
 #include <random>
 
@@ -17,12 +16,12 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <utility>
 
 // 标准库
 
 // 自身依赖
 #include "AMEnum.hpp"
-// #include "AMPath.hpp"
 // 自身依赖
 
 // 第三方库
@@ -32,9 +31,6 @@
 #include <magic_enum/magic_enum.hpp>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
-#include <pybind11/functional.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 
 // 第三方库
 
@@ -60,15 +56,46 @@
 #define closesocket close
 #endif
 
-namespace py = pybind11;
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
 
-inline static std::mt19937_64 engine = std::mt19937_64(std::random_device{}());
-inline static std::uniform_int_distribution<uint64_t> distribution =
-    std::uniform_int_distribution<uint64_t>(0, UINT64_MAX);
-inline uint64_t GenerateUID() { return distribution(engine); }
+template <typename Fn, typename... Args>
+inline ECM CallCallbackSafe(const Fn &fn, Args &&...args) {
+  if (!fn) {
+    return {EC::Success, ""};
+  }
+  try {
+    fn(std::forward<Args>(args)...);
+    return {EC::Success, ""};
+  } catch (const std::exception &e) {
+    return {EC::PyCBError, e.what()};
+  } catch (...) {
+    return {EC::PyCBError, "Unknown callback error"};
+  }
+}
+
+template <typename Ret, typename Fn, typename... Args>
+inline std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn,
+                                               Args &&...args) {
+  if (!fn) {
+    return {Ret{}, {EC::Success, ""}};
+  }
+  try {
+    return {fn(std::forward<Args>(args)...), {EC::Success, ""}};
+  } catch (const std::exception &e) {
+    return {Ret{}, {EC::PyCBError, e.what()}};
+  } catch (...) {
+    return {Ret{}, {EC::PyCBError, "Unknown callback error"}};
+  }
+}
+
+inline uint64_t GenerateUID() {
+  std::mt19937_64 engine = std::mt19937_64(std::random_device{}());
+  std::uniform_int_distribution<uint64_t> distribution =
+      std::uniform_int_distribution<uint64_t>(0, UINT64_MAX);
+  return distribution(engine);
+}
 
 inline double timenow() {
   // 获取unix参考时间，以秒为单位返回double
@@ -484,6 +511,14 @@ struct TransferCallback {
     need_total_size_cb = static_cast<bool>(total_size_cb);
   }
 
+  ECM CallError(const ErrorCBInfo &info) const {
+    return CallCallbackSafe(error_cb, info);
+  }
+
+  ECM CallTotalSize(uint64_t total_size) const {
+    return CallCallbackSafe(total_size_cb, total_size);
+  }
+
   std::optional<TransferControl> CallProgress(const ProgressCBInfo &info,
                                               ECM *cb_error = nullptr) const {
     if (cb_error) {
@@ -548,6 +583,7 @@ struct WkProgressData {
   std::atomic<int> control_sign{0}; // 0=Running, 1=Pause, 2=Terminate
   double cb_time = timenow();
   std::shared_ptr<StreamRingBuffer> ring_buffer = nullptr;
+  std::function<void(bool)> inner_callback = {};
 
   WkProgressData() = default;
   explicit WkProgressData(std::shared_ptr<TaskInfo> ti) : task_info(ti) {}
@@ -572,6 +608,12 @@ struct WkProgressData {
   void set_running() {
     control_sign.store(static_cast<int>(ControlSignal::Running));
   }
+
+  void CallInnerCallback(bool force = false) {
+    if (inner_callback) {
+      inner_callback(force);
+    }
+  }
 };
 struct TaskInfo {
   uint64_t id = 0;
@@ -593,7 +635,7 @@ struct TaskInfo {
 
   // Configuration
   TransferCallback callback;
-  std::shared_ptr<ClientMaintainer> hostm;
+  std::weak_ptr<ClientMaintainer> hostm;
   ssize_t buffer_size = -1;
 
   // Control - managed by WkProgressData's control_sign
@@ -956,9 +998,9 @@ public:
 
   size_t GetTracerCapacity() const { return capacity; }
 
-  std::variant<py::object, TraceInfo> LastTraceError() {
-    if (buffer.size() == 0) {
-      return py::none();
+  std::optional<TraceInfo> LastTraceError() {
+    if (buffer.empty()) {
+      return std::nullopt;
     }
     return buffer[buffer.size() - 1];
   }

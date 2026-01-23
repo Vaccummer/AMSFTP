@@ -1,3 +1,4 @@
+#pragma once
 #include <chrono>
 #include <cmath>
 #include <iomanip>
@@ -7,7 +8,6 @@
 #include <string>
 #include <type_traits>
 #include <typeinfo>
-
 
 class ProgressBar {
 public:
@@ -155,69 +155,4 @@ private:
   ProgressBar &operator=(const ProgressBar &) = delete;
 };
 
-// === 1. 检测类型是否支持 operator<< (SFINAE) ===
-template <typename T, typename = void>
-struct is_streamable : std::false_type {};
-
-template <typename T>
-struct is_streamable<T, std::void_t<decltype(std::declval<std::ostream &>()
-                                             << std::declval<T>())>>
-    : std::true_type {};
-
-// === 2. 获取可读的类型名（demangle）===
-#ifdef __GNUG__
-#include <cstdlib>
-#include <cxxabi.h>
-
-std::string demangle(const char *name) {
-  int status = -1;
-  std::unique_ptr<char, void (*)(void *)> res{
-      abi::__cxa_demangle(name, nullptr, nullptr, &status), std::free};
-  return (status == 0) ? std::string(res.get()) : name;
-}
-#else
-// MSVC / Clang on Windows: typeid.name() is already readable
-std::string demangle(const char *name) { return name; }
-#endif
-
-template <typename T> std::string type_name() {
-  return demangle(typeid(T).name());
-}
-
-// === 3. 安全打印单个值 ===
-template <typename T> void safe_print_value(std::ostream &os, const T &value) {
-  if constexpr (is_streamable<T>::value) {
-    os << value;
-  } else {
-    os << "<" << type_name<T>() << " object>";
-  }
-}
-
-// === 4. 主 print 函数（支持 sep, end）===
-template <typename Sep = const char *, typename End = const char *,
-          typename... Args>
-void print(Args &&...args, Sep sep = " ", End end = "\n") {
-  // 处理空参数
-  if constexpr (sizeof...(args) == 0) {
-    std::cout << end;
-    return;
-  }
-
-  // 转为 tuple 以便按索引访问（C++17 可用）
-  auto args_tuple = std::forward_as_tuple(args...);
-  constexpr size_t N = sizeof...(args);
-
-  // 打印第一个参数
-  safe_print_value(std::cout, std::get<0>(args_tuple));
-
-  // 打印剩余参数（带 sep）
-  [&]<size_t... I>(std::index_sequence<I...>) {
-    (([&](size_t i) {
-       std::cout << sep;
-       safe_print_value(std::cout, std::get<I + 1>(args_tuple));
-     }(I)),
-     ...);
-  }(std::make_index_sequence<N - 1>{});
-
-  std::cout << end;
-}
+void print(const std::string &str) { std::cout << str << std::endl; }

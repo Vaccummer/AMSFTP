@@ -5,10 +5,12 @@
 #include <ctime>
 #include <fcntl.h>
 #include <filesystem>
+#include <iostream>
 #include <memory>
-#include <pybind11/pytypes.h>
 #include <string>
+#include <unordered_set>
 #include <vector>
+
 
 // 标准库
 
@@ -27,9 +29,6 @@
 #include <magic_enum/magic_enum.hpp>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
-#include <pybind11/functional.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 
 // 第三方库
 
@@ -58,8 +57,8 @@
 class AMLocalClient : public BaseClient {
 public:
   AMLocalClient(ConRequst request, int buffer_capacity = 10,
-                const py::object &trace_cb = py::none())
-      : BaseClient(request, buffer_capacity, trace_cb) {
+                TraceCallback trace_cb = {})
+      : BaseClient(request, buffer_capacity, std::move(trace_cb)) {
     this->PROTOCOL = ClientProtocol::LOCAL;
   }
 

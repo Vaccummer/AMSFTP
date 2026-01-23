@@ -10,7 +10,6 @@
 #include <fmt/format.h>
 #include <iostream>
 #include <mutex>
-#include <pybind11/pytypes.h>
 #include <regex>
 #include <sstream>
 #include <string>
@@ -34,9 +33,6 @@
 #include <magic_enum/magic_enum.hpp>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
-#include <pybind11/functional.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 // 第三方库
 
 #ifdef _WIN32
@@ -983,8 +979,8 @@ public:
   std::shared_ptr<AMFTPClient> mirror_client = nullptr;
 
   AMFTPClient(const ConRequst &request, ssize_t buffer_capacity = 10,
-              const py::object &trace_cb = py::none())
-      : BaseClient(request, buffer_capacity, trace_cb) {
+              TraceCallback trace_cb = {})
+      : BaseClient(request, buffer_capacity, std::move(trace_cb)) {
     this->PROTOCOL = ClientProtocol::FTP;
 
     if (res_data.username.empty()) {

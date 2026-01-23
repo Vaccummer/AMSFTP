@@ -161,9 +161,7 @@ enum class ErrorCode {
 ErrorCode wait_result_to_error_code(WaitResult wr) {
   switch (wr) {
   case WaitResult::Ready:
-    return ErrorCode::Success;
   case WaitResult::ReadReady:
-    return ErrorCode::Success;
   case WaitResult::WriteReady:
     return ErrorCode::Success;
   case WaitResult::Timeout:
@@ -172,6 +170,8 @@ ErrorCode wait_result_to_error_code(WaitResult wr) {
     return ErrorCode::Terminate;
   case WaitResult::Error:
     return ErrorCode::SocketRecvError;
+  default:
+    return ErrorCode::UnknownError;
   }
 }
 enum class PathType {

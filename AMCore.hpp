@@ -14,7 +14,6 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <pybind11/pytypes.h>
 #include <string>
 #include <thread>
 #include <vector>
@@ -23,6 +22,7 @@
 
 // 自身依赖
 #include "AMBaseClient.hpp"
+#include "AMCommonTools.hpp"
 #include "AMDataClass.hpp"
 #include "AMEnum.hpp"
 #include "AMFTPClient.hpp"
@@ -39,9 +39,6 @@
 #include <magic_enum/magic_enum.hpp>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
-#include <pybind11/functional.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 // 第三方库
 
 #ifdef _WIN32
@@ -318,16 +315,17 @@ using EC = ErrorCode;
 
 inline std::optional<AMCilent>
 CreateClient(const ConRequst &requeset, ClientProtocol protocol,
-             ssize_t trace_num = 10, py::object trace_cb = py::none(),
+             ssize_t trace_num = 10, TraceCallback trace_cb = {},
              ssize_t buffer_size = 8 * AMMB, std::vector<std::string> keys = {},
-             py::object auth_cb = py::none()) {
+             AuthCallback auth_cb = {}) {
   if (protocol == ClientProtocol::SFTP) {
-    auto client = std::make_shared<AMSFTPClient>(requeset, keys, trace_num,
-                                                 trace_cb, auth_cb);
+    auto client = std::make_shared<AMSFTPClient>(
+        requeset, keys, trace_num, std::move(trace_cb), std::move(auth_cb));
     client->TransferRingBufferSize(buffer_size);
     return client;
   } else if (protocol == ClientProtocol::FTP) {
-    auto client = std::make_shared<AMFTPClient>(requeset, trace_num, trace_cb);
+    auto client =
+        std::make_shared<AMFTPClient>(requeset, trace_num, std::move(trace_cb));
     client->TransferRingBufferSize(buffer_size);
     return client;
   } else {
@@ -340,7 +338,9 @@ private:
   std::unordered_map<std::string, std::shared_ptr<BaseClient>> hosts;
   std::atomic<bool> is_heartbeat;
   std::thread heartbeat_thread;
-  py::function disconnect_cb;
+  using DisconnectCallback =
+      std::function<void(const std::shared_ptr<BaseClient> &, const ECM &)>;
+  DisconnectCallback disconnect_cb;
   bool is_disconnect_cb = false;
   std::recursive_mutex beat_mtx;
 
@@ -355,8 +355,7 @@ private:
           rcm = host.second->Check();
           if (rcm.first != EC::Success) {
             if (is_disconnect_cb) {
-              py::gil_scoped_acquire acquire;
-              disconnect_cb(host.second, rcm);
+              CallCallbackSafe(disconnect_cb, host.second, rcm);
             }
           }
         }
@@ -393,17 +392,15 @@ public:
   }
 
   ClientMaintainer(int heartbeat_interval_s = 60,
-                   py::object disconnect_cb = py::none()) {
+                   DisconnectCallback disconnect_cb = {}) {
     // 初始化本地客户端
     this->local_client =
         std::make_shared<AMLocalClient>(ConRequst("local", "", ""));
     this->is_heartbeat.store(true);
     heartbeat_thread = std::thread(
         [this, heartbeat_interval_s]() { HeartbeatAct(heartbeat_interval_s); });
-    if (!disconnect_cb.is_none()) {
-      this->disconnect_cb = py::cast<py::function>(disconnect_cb);
-      this->is_disconnect_cb = true;
-    }
+    this->disconnect_cb = std::move(disconnect_cb);
+    this->is_disconnect_cb = static_cast<bool>(this->disconnect_cb);
   }
 
   std::vector<std::string> get_nicknames() {
@@ -513,15 +510,10 @@ public:
     }
   }
 
-  void SetDisconnectCallback(py::object callback = py::none()) {
+  void SetDisconnectCallback(DisconnectCallback callback = {}) {
     std::lock_guard<std::recursive_mutex> lock(beat_mtx);
-    if (callback.is_none()) {
-      is_disconnect_cb = false;
-      disconnect_cb = py::function();
-    } else {
-      is_disconnect_cb = true;
-      disconnect_cb = py::cast<py::function>(callback);
-    }
+    disconnect_cb = std::move(callback);
+    is_disconnect_cb = static_cast<bool>(disconnect_cb);
   };
 };
 
@@ -551,17 +543,15 @@ private:
         pd.cb_time = time_now;
         ECM cb_error = {EC::Success, ""};
         auto ctrl_opt = task_info->callback.CallProgress(
-            ProgressCBInfo(task_info->cur_task->src, task_info->cur_task->dst,
-                           task_info->cur_task->src_host,
-                           task_info->cur_task->dst_host,
-                           task_info->cur_task->transferred,
-                           task_info->cur_task->size,
-                           task_info->total_transferred_size,
-                           task_info->total_size),
+            ProgressCBInfo(
+                task_info->cur_task->src, task_info->cur_task->dst,
+                task_info->cur_task->src_host, task_info->cur_task->dst_host,
+                task_info->cur_task->transferred, task_info->cur_task->size,
+                task_info->total_transferred_size, task_info->total_size),
             &cb_error);
         if (cb_error.first != EC::Success &&
             task_info->callback.need_error_cb) {
-          task_info->callback.error_cb(ErrorCBInfo(
+          task_info->callback.CallError(ErrorCBInfo(
               cb_error, task_info->cur_task->src, task_info->cur_task->dst,
               task_info->cur_task->src_host, task_info->cur_task->dst_host));
         }
@@ -903,7 +893,7 @@ private:
       ECM out_rcm;
       FTPUploadSet(client_ftp, task->dst, task_info->pd.get(), BufferToFTPWk);
       if (out_rcm.first != EC::Success) {
-        pd.set_terminate(); 
+        pd.set_terminate();
         task->rcm = out_rcm;
       }
     }
@@ -940,6 +930,7 @@ private:
             ti->cur_task->transferred += to_read;
             ti->total_transferred_size += to_read;
           }
+          pd->CallInnerCallback(false);
           return to_read;
         } catch (const std::exception &e) {
           pd->set_terminate();
@@ -1075,16 +1066,18 @@ private:
         dst_client = client_ftp->mirror_client;
       }
     }
-
+    print("start reading");
     std::thread reading_thread(
         [&]() { this->XToBuffer(src_client, task_info); });
+    print("start writing");
     this->BufferToX(dst_client, task_info);
+    print("set terminate");
     pd.set_terminate();
 
     if (reading_thread.joinable()) {
       reading_thread.join();
     }
-
+    print("join reading thread");
     if (task->rcm.first != EC::Success) {
       return task->rcm;
     }
@@ -1100,12 +1093,24 @@ private:
     task_info->start_time = timenow();
 
     if (task_info->callback.need_total_size_cb) {
-      task_info->callback.total_size_cb(task_info->total_size);
+      task_info->callback.CallTotalSize(task_info->total_size);
     }
 
     // Create or use existing WkProgressData
     if (!task_info->pd) {
       task_info->pd = std::make_shared<WkProgressData>(task_info);
+    }
+    if (!task_info->pd->inner_callback) {
+      std::weak_ptr<TaskInfo> ti_w = task_info;
+      std::weak_ptr<WkProgressData> pd_w = task_info->pd;
+      task_info->pd->inner_callback = [this, ti_w, pd_w](bool force) {
+        auto ti_s = ti_w.lock();
+        auto pd_s = pd_w.lock();
+        if (!ti_s || !pd_s) {
+          return;
+        }
+        this->InnerCallback(ti_s, *pd_s, force);
+      };
     }
     auto &pd = *(task_info->pd);
     pd.task_info = task_info;
@@ -1122,13 +1127,23 @@ private:
         continue;
       }
 
-      auto test_res = TestHost(task, task_info->hostm);
+      auto hostm_locked = task_info->hostm.lock();
+      if (!hostm_locked) {
+        task.rcm = {EC::ClientNotFound, "ClientMaintainer expired"};
+        task.IsFinished = true;
+        if (task_info->callback.need_error_cb) {
+          task_info->callback.CallError(ErrorCBInfo(
+              task.rcm, task.src, task.dst, task.src_host, task.dst_host));
+        }
+        continue;
+      }
+      auto test_res = TestHost(task, hostm_locked);
       ECM rcm = std::get<0>(test_res);
       if (rcm.first != EC::Success) {
         task.rcm = rcm;
         task.IsFinished = true;
         if (task_info->callback.need_error_cb) {
-          task_info->callback.error_cb(ErrorCBInfo(
+          task_info->callback.CallError(ErrorCBInfo(
               task.rcm, task.src, task.dst, task.src_host, task.dst_host));
         }
         continue;
@@ -1155,11 +1170,14 @@ private:
 
       if (task.rcm.first != EC::Success && task_info->callback.need_error_cb &&
           task.rcm.first != EC::Terminate) {
-        task_info->callback.error_cb(ErrorCBInfo(task.rcm, task.src, task.dst,
-                                                 task.src_host, task.dst_host));
+        print("call error");
+        task_info->callback.CallError(ErrorCBInfo(
+            task.rcm, task.src, task.dst, task.src_host, task.dst_host));
+        print("call error done");
       }
-
+      print("call inner callback");
       InnerCallback(task_info, pd, true);
+      print("inner callback done");
     }
 
     // bool any_error = false;
@@ -1191,6 +1209,7 @@ private:
         if (task_queue.empty()) {
           continue;
         }
+        print("get task from queue");
         task_info = std::move(task_queue.front());
         task_queue.pop_front();
       }
@@ -1213,11 +1232,13 @@ private:
       }
 
       // Execute task
+      print("execute task");
       ExecuteTask(task_info);
-
+      print("execute task done");
       // Store result and clear conducting
       {
         std::lock_guard<std::mutex> lock(result_mtx);
+        print("store result");
         results[task_info->id] = task_info;
       }
       {
@@ -1267,6 +1288,18 @@ public:
 
     // Create shared progress data for control
     task_info->pd = std::make_shared<WkProgressData>(task_info);
+    {
+      std::weak_ptr<TaskInfo> ti_w = task_info;
+      std::weak_ptr<WkProgressData> pd_w = task_info->pd;
+      task_info->pd->inner_callback = [this, ti_w, pd_w](bool force) {
+        auto ti_s = ti_w.lock();
+        auto pd_s = pd_w.lock();
+        if (!ti_s || !pd_s) {
+          return;
+        }
+        this->InnerCallback(ti_s, *pd_s, force);
+      };
+    }
 
     // Calculate total size
     for (auto &task : task_info->tasks) {
@@ -1487,4 +1520,163 @@ public:
     }
     return ids;
   }
+
+  std::pair<ECM, TASKS>
+  load_tasks(const std::string &src, const std::string &dst,
+             const std::shared_ptr<ClientMaintainer> &hostm,
+             const std::string &src_host = "", const std::string &dst_host = "",
+             bool overwrite = false, bool mkdir = true,
+             bool ignore_sepcial_file = true, amf interrupt_flag = nullptr,
+             int timeout_ms = -1, int64_t start_time = -1) {
+    start_time = start_time == -1 ? am_ms() : start_time;
+    WRV result = {};
+    TASKS tasks = {};
+    // 去除src的dst左右端的空格
+
+    auto [rc1, src_client] = hostm->test_client(src_host, false, interrupt_flag,
+                                                timeout_ms, start_time);
+
+    if (rc1.first != EC::Success) {
+      return {rc1, tasks};
+    }
+    auto [rc2, dst_client] = hostm->test_client(dst_host, false, interrupt_flag,
+                                                timeout_ms, start_time);
+
+    if (rc2.first != EC::Success) {
+      return {rc2, tasks};
+    }
+    auto [rc3, src_stat] =
+        src_client->stat(src, false, interrupt_flag, timeout_ms, start_time);
+
+    if (rc3.first != EC::Success) {
+      return {rc3, tasks};
+    }
+
+    // 检查是否为 src_file -> dst_file 的传输
+    auto dstf = dst;
+    auto srcf = src;
+    bool is_dst_file = false;
+    if (src_stat.type == PathType::FILE) {
+      // 检查dst的扩展名和src扩展名是否相同
+
+      std::string dst_ext = AMPathStr::extname(dstf);
+      std::cout << "dst_ext: " << dst_ext << std::endl;
+      std::cout << "src_ext: " << AMPathStr::extname(srcf) << std::endl;
+      if (AMPathStr::extname(srcf) == dst_ext && !dst_ext.empty()) {
+        is_dst_file = true;
+      }
+    }
+
+    if (src_stat.type != PathType::DIR) {
+
+      if (ignore_sepcial_file && src_stat.type != PathType::FILE) {
+        return {ECM{EC::NotAFile, fmt::format("Src is not a common file and "
+                                              "ignore_sepcial_file is true: {}",
+                                              srcf)},
+                {}};
+      }
+
+      if (!is_dst_file) {
+        dstf = AMPathStr::join(dstf, AMPathStr::basename(srcf));
+      }
+
+      // 检测dst的父级目录是否存在
+      auto [rcm4, dst_parent_info] =
+          dst_client->stat(AMPathStr::dirname(dstf), false, interrupt_flag,
+                           timeout_ms, start_time);
+
+      if (rcm4.first != EC::Success && !mkdir) {
+        return {ECM{EC::ParentDirectoryNotExist,
+                    fmt::format("Dst parent path not exists: {}",
+                                AMPathStr::dirname(dstf))},
+                tasks};
+      } else if (rcm4.first == EC::Success &&
+                 dst_parent_info.type != PathType::DIR) {
+        return {ECM(EC::NotADirectory,
+                    fmt::format("Dst parent path is not a directory: {}",
+                                dst_parent_info.path)),
+                tasks};
+      }
+
+      if (rcm4.first == EC::Success) {
+        auto [rcm5, dst_info] = dst_client->stat(dstf, false, interrupt_flag,
+                                                 timeout_ms, start_time);
+        // 检验目标路径是否存在
+        if (rcm4.first == EC::Success) {
+          if (dst_info.type == PathType::DIR) {
+            return {ECM(EC::NotAFile,
+                        fmt::format("Dst already exists and is a directory: {}",
+                                    dstf)),
+                    tasks};
+          } else if (!overwrite) {
+            return {ECM{EC::PathAlreadyExists,
+                        fmt::format("Dst already exists: {}", dstf)},
+                    tasks};
+          }
+        }
+      }
+
+      tasks.emplace_back(srcf, dstf, src_host, dst_host, src_stat.size,
+                         src_stat.type);
+      return {ECM(EC::Success, ""), tasks};
+    }
+
+    auto [rcm6, dst_info] =
+        dst_client->stat(dstf, false, interrupt_flag, timeout_ms, start_time);
+
+    if (rcm6.first != EC::Success && !mkdir) {
+      return {ECM{EC::ParentDirectoryNotExist,
+                  fmt::format("Dst parent path not exists: {}", dstf)},
+              tasks};
+    } else if (rcm6.first == EC::Success && dst_info.type != PathType::DIR) {
+      return {ECM(EC::NotADirectory,
+                  fmt::format("Dst already exists and is not a directory: {}",
+                              dstf)),
+              tasks};
+    }
+
+    auto [rcm7, src_paths] =
+        src_client->iwalk(srcf, false, interrupt_flag, timeout_ms, start_time);
+    if (rcm7.first != EC::Success) {
+      return {rcm7, tasks};
+    }
+    tasks.reserve(src_paths.size());
+
+    TransferTask taskt;
+    std::string dst_n;
+    for (auto &item : src_paths) {
+      if (interrupt_flag && interrupt_flag->check()) {
+        return {ECM{EC::Terminate, "Load tasks interrupted by user"}, tasks};
+      }
+      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+        return {ECM{EC::OperationTimeout, "Load tasks timeout"}, tasks};
+      }
+      dst_n = AMPathStr::join(
+          dstf, fs::relative(item.path, AMPathStr::dirname(srcf)));
+      auto [rcm8, dst_info2] = dst_client->stat(dst_n, false, interrupt_flag,
+                                                timeout_ms, start_time);
+      if (rcm8.first == EC::Success) {
+        if (dst_info2.type == PathType::DIR) {
+          taskt = TransferTask(item.path, dst_n, src_host, dst_host, item.size,
+                               item.type);
+          taskt.IsFinished = true;
+          taskt.rcm =
+              ECM{EC::NotAFile, "Dst already exists and is a directory"};
+        } else if (!overwrite) {
+          taskt = TransferTask(item.path, dst_n, src_host, dst_host, item.size,
+                               item.type);
+          taskt.IsFinished = true;
+          taskt.rcm = ECM{EC::PathAlreadyExists, "Dst already exists"};
+        } else {
+          taskt = TransferTask(item.path, dst_n, src_host, dst_host, item.size,
+                               item.type);
+        }
+        tasks.push_back(taskt);
+        continue;
+      }
+      tasks.emplace_back(item.path, dst_n, src_host, dst_host, item.size,
+                         item.type);
+    }
+    return {ECM(EC::Success, ""), tasks};
+  };
 };

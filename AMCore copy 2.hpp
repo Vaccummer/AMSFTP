@@ -1,6 +1,7 @@
 #pragma once
 // 标准库
 #include <algorithm>
+#include <any>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -13,11 +14,12 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <pybind11/pytypes.h>
 #include <regex>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 // 标准库
@@ -37,9 +39,6 @@
 #include <magic_enum/magic_enum.hpp>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
-#include <pybind11/functional.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
 // 第三方库
 
 #ifdef _WIN32
@@ -72,7 +71,6 @@ void cleanup_wsa();
 
 inline bool isok(ECM &ecm) { return ecm.first == EC::Success; }
 
-namespace py = pybind11;
 namespace fs = std::filesystem;
 using amf = std::shared_ptr<InterruptFlag>;
 using PathInfo = PathInfo;
@@ -92,20 +90,21 @@ using CR =
 inline bool isdir(const LIBSSH2_SFTP_ATTRIBUTES &attrs);
 inline bool isreg(const LIBSSH2_SFTP_ATTRIBUTES &attrs);
 inline bool IsValidKey(const std::string &key);
+using TraceCallback = std::function<void(const TraceInfo &)>;
+using AuthCallback = std::function<std::optional<std::string>(const AuthCBInfo &)>;
 
 // Wait result for non-blocking socket operations
 
 class AMTracer {
 private:
-  py::function trace_cb;
+  TraceCallback trace_cb;
   std::vector<TraceInfo> buffer = {};
   std::mutex buffer_mutex;
   ssize_t capacity = 10;
-  std::atomic<bool> is_py_trace = false;
+  std::atomic<bool> is_trace_cb = false;
   std::atomic<bool> is_trace_pause = false;
-  std::unordered_map<std::string, py::object> public_var_dict;
+  std::unordered_map<std::string, std::any> public_var_dict;
   std::mutex public_var_mutex; // 专门用于保护 public_var_dict 的锁
-  py::object deepcopy_func;    // 缓存的 deepcopy 函数
 protected:
   ConRequst res_data;
   void push(const TraceInfo &value) {
@@ -121,32 +120,16 @@ protected:
 
 public:
   AMTracer(const ConRequst &request, int buffer_capacity = 10,
-           const py::object &trace_cb = py::none())
-      : res_data(request), nickname(request.nickname) {
+           TraceCallback trace_cb = {})
+      : trace_cb(std::move(trace_cb)), res_data(request),
+        nickname(request.nickname) {
     if (buffer_capacity > 0) {
       capacity = buffer_capacity;
     }
     buffer.reserve(capacity);
-    if (!trace_cb.is_none()) {
-      this->trace_cb = py::cast<py::function>(trace_cb);
-      this->is_py_trace = true;
-    } else {
-      this->is_py_trace = false;
-    }
-    // 初始化时导入 deepcopy 函数并缓存
-    try {
-      py::gil_scoped_acquire gil;
-      py::module_ copy_module = py::module_::import("copy");
-      deepcopy_func = copy_module.attr("deepcopy");
-    } catch (const py::error_already_set &e) {
-      // 如果导入失败，deepcopy_func 保持为 none
-      deepcopy_func = py::none();
-      trace(TraceLevel::Error, EC::DeepcopyFunctionNotAvailable,
-            "Deepcopy Function", "Initialize",
-            fmt::format("Failed to import copy module: {}", e.what()));
-    }
+    this->is_trace_cb = static_cast<bool>(this->trace_cb);
   }
-  ECM SetPublicVar(const std::string &key, py::object value,
+  ECM SetPublicVar(const std::string &key, std::any value,
                    bool overwrite = false) {
     std::lock_guard<std::mutex> lock(public_var_mutex);
 
@@ -156,29 +139,12 @@ public:
           fmt::format("Key already exists and overwrite is false: {}", key)};
     }
 
-    // 使用缓存的 deepcopy 函数来创建深拷贝
-    // 这样 C++ 拥有对象的完整副本，不受 Python 端修改影响
-    if (!deepcopy_func.is_none()) {
-      try {
-        py::gil_scoped_acquire gil;
-        public_var_dict[key] = deepcopy_func(value);
-        return {EC::Success, ""};
-      } catch (const py::error_already_set &e) {
-        // 如果深拷贝失败（某些对象不支持深拷贝）
-        return {
-            EC::DeepcopyFailed,
-            fmt::format(
-                "Deepcopy failed, object is not supported to be stored: {}: {}",
-                key, e.what())};
-      }
-    } else {
-      return {EC::DeepcopyFunctionNotAvailable,
-              "Deepcopy function not available"};
-    }
+    public_var_dict[key] = std::move(value);
+    return {EC::Success, ""};
   }
 
-  py::object GetPublicVar(const std::string &key,
-                          py::object default_value = py::none()) {
+  std::any GetPublicVar(const std::string &key,
+                        std::any default_value = {}) {
     std::lock_guard<std::mutex> lock(public_var_mutex);
 
     auto it = public_var_dict.find(key);
@@ -186,40 +152,22 @@ public:
       return it->second;
     }
 
-    // 键不存在，返回默认值
     return default_value;
   }
 
   bool DelPublicVar(const std::string &key) {
-    // 确保持有 GIL，因为要操作 py::object
-    py::gil_scoped_acquire gil;
     std::lock_guard<std::mutex> lock(public_var_mutex);
     return public_var_dict.erase(key) > 0;
   }
 
   void ClearPublicVar() {
-    // 确保持有 GIL，因为要销毁 py::object
-    py::gil_scoped_acquire gil;
     std::lock_guard<std::mutex> lock(public_var_mutex);
     public_var_dict.clear();
   }
 
-  py::dict GetAllPublicVars() {
+  std::unordered_map<std::string, std::any> GetAllPublicVars() {
     std::lock_guard<std::mutex> lock(public_var_mutex);
-    py::gil_scoped_acquire gil;
-    py::dict result;
-    if (!deepcopy_func.is_none()) {
-      // 使用缓存的 deepcopy 函数
-      for (const auto &[key, value] : public_var_dict) {
-        try {
-          result[py::str(key)] = deepcopy_func(value);
-        } catch (const py::error_already_set) {
-          // 深拷贝失败，使用原始引用
-          continue;
-        }
-      }
-    }
-    return result;
+    return public_var_dict;
   }
 
   size_t GetTraceNum() {
@@ -276,29 +224,20 @@ public:
       return;
     }
     this->push(trace_info);
-    if (is_py_trace.load()) {
-      try {
-        py::gil_scoped_acquire acquire;
-        trace_cb(trace_info);
-      } catch (const py::error_already_set &e) {
-        // 如果trace_cb抛出异常，忽略
-        return;
-      }
+    if (is_trace_cb.load()) {
+      CallCallbackSafe(trace_cb, trace_info);
     }
     this->push(trace_info);
   }
 
   void SetTraceState(bool is_pause) { is_trace_pause.store(is_pause); }
 
-  void SetPyTrace(const py::object &trace = py::none()) {
-    if (trace.is_none()) {
-      is_py_trace.store(false);
-      trace_cb = py::function();
-    } else {
-      trace_cb = py::cast<py::function>(trace);
-      is_py_trace.store(true);
-    }
+  void SetTraceCallback(TraceCallback trace = {}) {
+    trace_cb = std::move(trace);
+    is_trace_cb.store(static_cast<bool>(trace_cb));
   }
+
+  void SetPyTrace(TraceCallback trace = {}) { SetTraceCallback(trace); }
 
   inline std::string GetNickname() { return this->nickname; }
 
@@ -383,8 +322,9 @@ public:
   std::string trash_dir = "";
   virtual ~BaseClient() = default;
   BaseClient(const ConRequst &request, int buffer_capacity = 10,
-             const py::object &trace_cb = py::none())
-      : AMTracer(request, buffer_capacity, trace_cb), BasePathMatch() {}
+             TraceCallback trace_cb = {})
+      : AMTracer(request, buffer_capacity, std::move(trace_cb)),
+        BasePathMatch() {}
   ClientProtocol GetProtocol() { return PROTOCOL; }
   ssize_t TransferRingBufferSize(ssize_t buffer_size = -1) {
     if (buffer_size <= 0) {
@@ -920,8 +860,7 @@ private:
 
   bool password_auth_cb = false;
   std::vector<std::string> private_keys;
-  py::function auth_cb = py::function(); // Callable[[IsPasswordDemand:bool,
-                                         // ConRequst, TrialTimes:int], str]
+  AuthCallback auth_cb = {}; // optional<string>(AuthCBInfo)
 
   void LoadDefaultPrivateKeys() {
     trace(TraceLevel::Debug, EC::Success, "~/.ssh", "LoadDefaultPrivateKeys",
@@ -969,12 +908,12 @@ public:
 
   AMSession(const ConRequst &request,
             const std::vector<std::string> &private_keys,
-            ssize_t error_num = 10, const py::object &trace_cb = py::none(),
-            const py::object &auth_cb = py::none())
-      : BaseClient(request, error_num, trace_cb), private_keys(private_keys),
+            ssize_t error_num = 10, TraceCallback trace_cb = {},
+            AuthCallback auth_cb = {})
+      : BaseClient(request, error_num, std::move(trace_cb)),
+        private_keys(private_keys), auth_cb(std::move(auth_cb)),
         res_data(request) {
-    if (!auth_cb.is_none()) {
-      this->auth_cb = py::cast<py::function>(auth_cb);
+    if (this->auth_cb) {
       this->password_auth_cb = true;
     }
     if (private_keys.empty()) {
@@ -1251,17 +1190,17 @@ public:
         if (interrupt_flag && interrupt_flag->check()) {
           return {EC::Terminate, "Authentication interrupted"};
         }
-        {
-          py::gil_scoped_acquire acquire;
-          try {
-            password_tmp = py::cast<std::string>(
-                auth_cb(AuthCBInfo(true, res_data, trial_times)));
-          } catch (const std::exception &e) {
-            trace(TraceLevel::Error, EC::PyCBError, "AuthCB", "Call",
-                  fmt::format("Password authentication callback error: {}",
-                              e.what()));
-            break;
-          }
+        auto [password_opt, cb_ecm] =
+            CallCallbackSafeRet<std::optional<std::string>>(
+                auth_cb, AuthCBInfo(true, res_data, trial_times));
+        if (cb_ecm.first != EC::Success) {
+          trace(TraceLevel::Error, cb_ecm.first, "AuthCB", "Call", cb_ecm.second);
+          break;
+        }
+        if (password_opt.has_value()) {
+          password_tmp = *password_opt;
+        } else {
+          password_tmp.clear();
         }
         if (password_tmp.empty()) {
           break;
@@ -1277,10 +1216,7 @@ public:
           trace(TraceLevel::Debug, EC::AuthFailed, "Failed",
                 "PasswordAuthorizeResult",
                 fmt::format("Wrong Password: {}", password_tmp));
-          {
-            py::gil_scoped_acquire acquire;
-            auth_cb(false, res_data, trial_times);
-          }
+          CallCallbackSafe(auth_cb, AuthCBInfo(false, res_data, trial_times));
         }
       }
     }
@@ -1363,14 +1299,9 @@ public:
     }
   }
 
-  void SetAuthCallback(const py::object &auth_cb = py::none()) {
-    if (auth_cb.is_none()) {
-      this->password_auth_cb = false;
-      this->auth_cb = py::function();
-    } else {
-      this->auth_cb = py::cast<py::function>(auth_cb);
-      this->password_auth_cb = true;
-    }
+  void SetAuthCallback(AuthCallback auth_cb = {}) {
+    this->auth_cb = std::move(auth_cb);
+    this->password_auth_cb = static_cast<bool>(this->auth_cb);
   }
 };
 
@@ -1892,9 +1823,9 @@ public:
   AMSFTPClient(const ConRequst &request,
                const std::vector<std::string> &keys = {},
                unsigned int tracer_capacity = 10,
-               const py::object &trace_cb = py::none(),
-               const py::object &auth_cb = py::none())
-      : AMSession(request, keys, tracer_capacity, trace_cb, auth_cb) {
+               TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
+      : AMSession(request, keys, tracer_capacity, std::move(trace_cb),
+                  std::move(auth_cb)) {
     this->PROTOCOL = ClientProtocol::SFTP;
     if (request.trash_dir.empty()) {
       this->trash_dir = AMFS::join(GetHomeDir(), ".AMSFTP_Trash");
@@ -2397,122 +2328,6 @@ public:
     return {rcm2, file_list};
   }
 
-  // Iterator version that yields PathInfo one by one using Python generator
-  py::object iterator_listdir(const std::string &path) {
-    if (!sftp) {
-      throw std::runtime_error("SFTP not initialized");
-    }
-
-    auto pathf = path;
-    if (pathf.empty()) {
-      throw std::invalid_argument(fmt::format("Invalid path: {}", path));
-    }
-
-    auto [rcm, br] = is_dir(path);
-    if (rcm.first != EC::Success) {
-      throw std::runtime_error(rcm.second);
-    } else if (!br) {
-      throw std::runtime_error(
-          fmt::format("Path is not a directory: {}", pathf));
-    }
-
-    // State holder for the generator
-    struct IteratorState {
-      AMSFTPClient *client;
-      std::string pathf;
-      LIBSSH2_SFTP_HANDLE *sftp_handle;
-      bool finished;
-
-      IteratorState(AMSFTPClient *cli, const std::string &p)
-          : client(cli), pathf(p), sftp_handle(nullptr), finished(false) {
-        std::lock_guard<std::recursive_mutex> lock(client->mtx);
-        sftp_handle =
-            libssh2_sftp_open_ex(client->sftp, pathf.c_str(), pathf.size(), 0,
-                                 LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
-        if (!sftp_handle) {
-          finished = true;
-          throw std::runtime_error(
-              fmt::format("Failed to open directory: {}", pathf));
-        }
-      }
-
-      ~IteratorState() {
-        if (sftp_handle) {
-          std::lock_guard<std::recursive_mutex> lock(client->mtx);
-          libssh2_sftp_close_handle(sftp_handle);
-          sftp_handle = nullptr;
-        }
-      }
-
-      py::object next() {
-        if (finished) {
-          throw py::stop_iteration();
-        }
-
-        std::lock_guard<std::recursive_mutex> lock(client->mtx);
-        LIBSSH2_SFTP_ATTRIBUTES attrs;
-        const size_t buffer_size = 4096;
-        std::vector<char> filename_buffer(buffer_size);
-        std::string name;
-        std::string path_i;
-
-        while (true) {
-          int rct = libssh2_sftp_readdir_ex(sftp_handle, filename_buffer.data(),
-                                            buffer_size, nullptr, 0, &attrs);
-
-          if (rct < 0) {
-            finished = true;
-            throw std::runtime_error(fmt::format("Failed to read directory: {}",
-                                                 client->GetLastErrorMsg()));
-          } else if (rct == 0) {
-            finished = true;
-            throw py::stop_iteration();
-          }
-
-          name.assign(filename_buffer.data(), rct);
-          if (name == "." || name == "..") {
-            continue;
-          }
-
-          path_i = AMFS::join(pathf, name);
-          PathInfo info = client->FormatStat(path_i, attrs);
-          return py::cast(info);
-        }
-      }
-    };
-
-    // Create the generator state
-    auto state = std::make_shared<IteratorState>(this, pathf);
-
-    // Create a generator using Python's compile and exec
-    py::gil_scoped_acquire gil;
-
-    // Get builtins module
-    py::module_ builtins = py::module_::import("builtins");
-
-    // Compile and execute the generator function
-    std::string code = R"(
-def _amsftp_gen(next_func):
-    while True:
-        try:
-            yield next_func()
-        except StopIteration:
-            break
-)";
-
-    py::dict local_ns;
-    py::object compiled = builtins.attr("compile")(code, "<string>", "exec");
-    builtins.attr("exec")(compiled, py::globals(), local_ns);
-
-    // Create the next function wrapper
-    py::object next_func =
-        py::cpp_function([state]() -> py::object { return state->next(); });
-
-    // Call the generator function
-    py::object gen_func = local_ns["_amsftp_gen"];
-    return gen_func(next_func);
-  }
-
   // 创建一级目录，自带AMFS::abspath
   ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
             int timeout_ms = -1,
@@ -2856,8 +2671,8 @@ def _amsftp_gen(next_func):
 class AMLocalClient : public BaseClient {
 public:
   AMLocalClient(ConRequst request, size_t buffer_capacity = 10,
-                const py::object &trace_cb = py::none())
-      : BaseClient(request, buffer_capacity, trace_cb) {
+                TraceCallback trace_cb = {})
+      : BaseClient(request, buffer_capacity, std::move(trace_cb)) {
     this->PROTOCOL = ClientProtocol::LOCAL;
   }
   ECM GetState() override { return {EC::Success, ""}; };
@@ -3477,8 +3292,8 @@ public:
 
 public:
   AMFTPClient(const ConRequst &request, ssize_t buffer_capacity = 10,
-              const py::object &trace_cb = py::none())
-      : BaseClient(request, buffer_capacity, trace_cb) {
+              TraceCallback trace_cb = {})
+      : BaseClient(request, buffer_capacity, std::move(trace_cb)) {
     this->PROTOCOL = ClientProtocol::FTP;
 
     if (res_data.username.empty()) {
@@ -4321,16 +4136,18 @@ using AMCilent =
     std::variant<std::shared_ptr<AMSFTPClient>, std::shared_ptr<AMFTPClient>>;
 std::optional<AMCilent>
 CreateClient(const ConRequst &requeset, ClientProtocol protocol,
-             ssize_t trace_num = 10, py::object trace_cb = py::none(),
+             ssize_t trace_num = 10, TraceCallback trace_cb = {},
              ssize_t buffer_size = 8 * AMMB, std::vector<std::string> keys = {},
-             py::object auth_cb = py::none());
+             AuthCallback auth_cb = {});
 
 class ClientMaintainer {
 private:
   std::unordered_map<std::string, std::shared_ptr<BaseClient>> hosts;
   std::atomic<bool> is_heartbeat;
   std::thread heartbeat_thread;
-  py::function disconnect_cb;
+  using DisconnectCallback =
+      std::function<void(const std::shared_ptr<BaseClient> &, const ECM &)>;
+  DisconnectCallback disconnect_cb;
   bool is_disconnect_cb = false;
   std::recursive_mutex beat_mtx;
 
@@ -4345,8 +4162,7 @@ private:
           rcm = host.second->Check();
           if (rcm.first != EC::Success) {
             if (is_disconnect_cb) {
-              py::gil_scoped_acquire acquire;
-              disconnect_cb(host.second, rcm);
+              CallCallbackSafe(disconnect_cb, host.second, rcm);
             }
           }
         }
@@ -4378,14 +4194,12 @@ public:
   }
 
   ClientMaintainer(int heartbeat_interval_s = 60,
-                   py::object disconnect_cb = py::none()) {
+                   DisconnectCallback disconnect_cb = {}) {
     this->is_heartbeat.store(true);
     heartbeat_thread = std::thread(
         [this, heartbeat_interval_s]() { HeartbeatAct(heartbeat_interval_s); });
-    if (!disconnect_cb.is_none()) {
-      this->disconnect_cb = py::cast<py::function>(disconnect_cb);
-      this->is_disconnect_cb = true;
-    }
+    this->disconnect_cb = std::move(disconnect_cb);
+    this->is_disconnect_cb = static_cast<bool>(this->disconnect_cb);
   }
 
   std::vector<std::string> get_nicknames() {
@@ -4474,15 +4288,10 @@ public:
     }
   }
 
-  void SetDisconnectCallback(py::object callback = py::none()) {
+  void SetDisconnectCallback(DisconnectCallback callback = {}) {
     std::lock_guard<std::recursive_mutex> lock(beat_mtx);
-    if (callback.is_none()) {
-      is_disconnect_cb = false;
-      disconnect_cb = py::function();
-    } else {
-      is_disconnect_cb = true;
-      disconnect_cb = py::cast<py::function>(callback);
-    }
+    disconnect_cb = std::move(callback);
+    is_disconnect_cb = static_cast<bool>(disconnect_cb);
   };
 };
 
@@ -5026,8 +4835,8 @@ public:
                            pd.total_size),
             &cb_error);
         if (cb_error.first != EC::Success && callback.need_error_cb) {
-          callback.error_cb(ErrorCBInfo(cb_error, pd.src, pd.dst, pd.src_host,
-                                        pd.dst_host));
+          callback.CallError(
+              ErrorCBInfo(cb_error, pd.src, pd.dst, pd.src_host, pd.dst_host));
         }
         if (ctrl_opt.has_value()) {
           SetState(*ctrl_opt);
@@ -5172,7 +4981,7 @@ public:
     }
 
     if (callback.need_total_size_cb) {
-      callback.total_size_cb(pd.total_size);
+      callback.CallTotalSize(pd.total_size);
     }
 
     for (auto &task : tasksf) {
@@ -5207,8 +5016,8 @@ public:
     check:
       if (task.rc.first != EC::Success) {
         if (callback.need_error_cb && task.rc.first != EC::Terminate) {
-          callback.error_cb(ErrorCBInfo(task.rc, task.src, task.dst,
-                                        task.src_host, task.dst_host));
+          callback.CallError(ErrorCBInfo(task.rc, task.src, task.dst,
+                                         task.src_host, task.dst_host));
         }
       } else {
         task.IsSuccess = true;
