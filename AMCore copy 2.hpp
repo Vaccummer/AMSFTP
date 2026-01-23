@@ -42,9 +42,15 @@
 // 第三方库
 
 #ifdef _WIN32
-#include <windows.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef _WINSOCKAPI_
+#define _WINSOCKAPI_
+#endif
 #include <winsock2.h>
 #include <ws2tcpip.h>
+// #include <windows.h>
 #else
 #include <errno.h>
 #include <fcntl.h>
@@ -91,7 +97,8 @@ inline bool isdir(const LIBSSH2_SFTP_ATTRIBUTES &attrs);
 inline bool isreg(const LIBSSH2_SFTP_ATTRIBUTES &attrs);
 inline bool IsValidKey(const std::string &key);
 using TraceCallback = std::function<void(const TraceInfo &)>;
-using AuthCallback = std::function<std::optional<std::string>(const AuthCBInfo &)>;
+using AuthCallback =
+    std::function<std::optional<std::string>(const AuthCBInfo &)>;
 
 // Wait result for non-blocking socket operations
 
@@ -143,8 +150,7 @@ public:
     return {EC::Success, ""};
   }
 
-  std::any GetPublicVar(const std::string &key,
-                        std::any default_value = {}) {
+  std::any GetPublicVar(const std::string &key, std::any default_value = {}) {
     std::lock_guard<std::mutex> lock(public_var_mutex);
 
     auto it = public_var_dict.find(key);
@@ -1194,7 +1200,8 @@ public:
             CallCallbackSafeRet<std::optional<std::string>>(
                 auth_cb, AuthCBInfo(true, res_data, trial_times));
         if (cb_ecm.first != EC::Success) {
-          trace(TraceLevel::Error, cb_ecm.first, "AuthCB", "Call", cb_ecm.second);
+          trace(TraceLevel::Error, cb_ecm.first, "AuthCB", "Call",
+                cb_ecm.second);
           break;
         }
         if (password_opt.has_value()) {
@@ -1822,8 +1829,8 @@ protected:
 public:
   AMSFTPClient(const ConRequst &request,
                const std::vector<std::string> &keys = {},
-               unsigned int tracer_capacity = 10,
-               TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
+               unsigned int tracer_capacity = 10, TraceCallback trace_cb = {},
+               AuthCallback auth_cb = {})
       : AMSession(request, keys, tracer_capacity, std::move(trace_cb),
                   std::move(auth_cb)) {
     this->PROTOCOL = ClientProtocol::SFTP;

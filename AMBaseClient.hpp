@@ -8,7 +8,9 @@
 #include <cstdio>
 #include <ctime>
 #include <fcntl.h>
+
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -17,8 +19,6 @@
 #include <utility>
 #include <vector>
 
-// 标准库
-
 // 自身依赖
 #include "AMDataClass.hpp"
 #include "AMEnum.hpp"
@@ -26,39 +26,18 @@
 // 自身依赖
 
 // 第三方库
-#include <libssh2.h>
-#include <libssh2_sftp.h>
-
 #include <curl/curl.h>
 #include <fmt/core.h>
+#include <libssh2.h>
+#include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
-// 第三方库
 
-#ifdef _WIN32
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <unistd.h>
+// #define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR // in case mutex constructor is
+// not
+//                                              // supported
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/mman.h>
-#include <sys/socket.h>
-#include <sys/stat.h>
-#define SOCKET int
-#define INVALID_SOCKET -1
-#define SOCKET_ERROR -1
-#define closesocket close
-#endif
-
-#define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR // in case mutex constructor is not
-                                             // supported
 #ifdef _WIN32
 extern std::atomic<bool> is_wsa_initialized;
 inline void cleanup_wsa() {
@@ -92,8 +71,8 @@ using SIZER = std::pair<ECM, uint64_t>;               // getsize函数返回类�
 using TraceCallback = std::function<void(const TraceInfo &)>;
 using CR =
     std::pair<ECM, std::pair<std::string, size_t>>; // ConductCmd函数返回类型
-
 // Wait result for non-blocking socket operations
+inline std::mutex AMlog_mutex;
 
 class AMTracer {
 private:
@@ -111,6 +90,7 @@ private:
       {TraceLevel::Critical, "☠️"},
   };
   void WriteLog(const TraceInfo &trace_info) {
+    std::lock_guard<std::mutex> lock(AMlog_mutex);
     std::ofstream file("AMSFTP.log", std::ios::app);
     if (!file.is_open()) {
       return;
@@ -341,7 +321,7 @@ protected:
   }
 
 public:
-  uint64_t uid;
+  std::string uid;
   std::recursive_mutex mtx;
   OS_TYPE os_type = OS_TYPE::Uncertain;
   std::string home_dir = "";
@@ -355,7 +335,7 @@ public:
     this->uid = GenerateUID();
   }
 
-  uint64_t GetUID() { return this->uid; }
+  std::string GetUID() { return this->uid; }
 
   ClientProtocol GetProtocol() { return PROTOCOL; }
   ssize_t TransferRingBufferSize(ssize_t buffer_size = -1) {

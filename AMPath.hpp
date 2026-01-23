@@ -96,19 +96,6 @@ inline EC fec(const std::error_code &ec) {
 inline ECM fecm(const std::error_code &ec) { return {fec(ec), ec.message()}; }
 
 // Windows 特有头文件（仅在 Windows 平台包含）
-#ifdef _WIN32
-#include <aclapi.h> // Windows ACL API
-#include <sddl.h>   // Windows SDDL API
-#include <shlobj.h>
-#include <shlwapi.h> // Windows Shell 轻量级 API
-#include <windows.h>
-#include <windows.h> // Windows 核心 API
-#else
-#include <pwd.h>
-#include <unistd.h>
-
-#include <sys/stat.h> // Unix 文件状态 API（stat 函数等）
-#endif
 
 namespace AMStr {
 inline void vlowercase(std::string &str) {

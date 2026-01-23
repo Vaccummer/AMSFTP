@@ -1,13 +1,10 @@
 #pragma once
 #include <chrono>
-#include <cmath>
+#define _WINSOCKAPI_
+#include <indicators/progress_bar.hpp> // win 平台上该库会包含 windows.h
 #include <iomanip>
 #include <iostream>
-#include <memory>
 #include <sstream>
-#include <string>
-#include <type_traits>
-#include <typeinfo>
 
 class ProgressBar {
 public:
@@ -155,4 +152,43 @@ private:
   ProgressBar &operator=(const ProgressBar &) = delete;
 };
 
-void print(const std::string &str) { std::cout << str << std::endl; }
+class AMProgressBar : public indicators::ProgressBar {
+public:
+  AMProgressBar(uint64_t total_size = 0, std::string prefix = "",
+                std::string unit = "B", size_t bar_width = 50,
+                bool show_eta = true,
+                indicators::Color color = indicators::Color::green)
+      : indicators::ProgressBar(
+            indicators::option::BarWidth{bar_width},
+            indicators::option::Start{"["}, indicators::option::Fill{"█"},
+            indicators::option::Lead{"█"}, indicators::option::End{"]"},
+            indicators::option::PostfixText{prefix},
+            indicators::option::MaxProgress{total_size},
+            indicators::option::ShowElapsedTime{show_eta},
+            indicators::option::ShowRemainingTime{show_eta},
+            // indicators::option::ShowRate{true},
+            // indicators::option::SampleCount{10},
+            indicators::option::ForegroundColor{color}) {}
+  void setTotoalSize(uint64_t total_size) {
+    this->set_option(indicators::option::MaxProgress{total_size});
+  }
+  void setPrefix(std::string prefix) {
+    this->set_option(indicators::option::PostfixText{prefix});
+  }
+  void setColor(indicators::Color color) {
+    this->set_option(indicators::option::ForegroundColor{color});
+  }
+  void setPostfix(std::string prefix) {
+    this->set_option(indicators::option::PostfixText{prefix});
+  }
+  void taskDone() {
+    this->set_option(indicators::option::Completed{true});
+    this->print_progress();
+  }
+  void updateProgress(uint64_t current) {
+    this->set_progress(current);
+    this->print_progress();
+  }
+};
+
+inline void print(const std::string &str) { std::cout << str << std::endl; }
