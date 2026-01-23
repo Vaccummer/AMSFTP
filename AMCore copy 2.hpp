@@ -5019,14 +5019,18 @@ public:
       auto time_now = timenow();
       if (force || ((time_now - pd.cb_time) > pd.cb_interval_s)) {
         pd.cb_time = time_now;
-        py::gil_scoped_acquire acquire;
-        py::object result = callback.progress_cb(ProgressCBInfo(
-            pd.src, pd.dst, pd.src_host, pd.dst_host, pd.this_size,
-            pd.file_size, pd.accumulated_size, pd.total_size));
-        if (!result.is_none()) {
-          if (py::isinstance<TransferControl>(result)) {
-            SetState(py::cast<TransferControl>(result));
-          }
+        ECM cb_error = {EC::Success, ""};
+        auto ctrl_opt = callback.CallProgress(
+            ProgressCBInfo(pd.src, pd.dst, pd.src_host, pd.dst_host,
+                           pd.this_size, pd.file_size, pd.accumulated_size,
+                           pd.total_size),
+            &cb_error);
+        if (cb_error.first != EC::Success && callback.need_error_cb) {
+          callback.error_cb(ErrorCBInfo(cb_error, pd.src, pd.dst, pd.src_host,
+                                        pd.dst_host));
+        }
+        if (ctrl_opt.has_value()) {
+          SetState(*ctrl_opt);
         }
       }
     }
@@ -5168,7 +5172,6 @@ public:
     }
 
     if (callback.need_total_size_cb) {
-      py::gil_scoped_acquire acquire;
       callback.total_size_cb(pd.total_size);
     }
 
@@ -5204,7 +5207,6 @@ public:
     check:
       if (task.rc.first != EC::Success) {
         if (callback.need_error_cb && task.rc.first != EC::Terminate) {
-          py::gil_scoped_acquire acquire;
           callback.error_cb(ErrorCBInfo(task.rc, task.src, task.dst,
                                         task.src_host, task.dst_host));
         }

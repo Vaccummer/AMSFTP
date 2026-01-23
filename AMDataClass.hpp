@@ -8,8 +8,11 @@
 #include <fcntl.h>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <random>
 
+#include <exception>
+#include <functional>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -443,68 +446,64 @@ struct TraceInfo {
 };
 
 struct TransferCallback {
-  bool need_error_cb;
-  bool need_progress_cb;
-  bool need_total_size_cb;
-  py::function error_cb;      // Callable[[ErrorCBInfo], None]
-  py::function progress_cb;   // Callable[[ProgressCBInfo], EC]
-  py::function total_size_cb; // Callable[[int], None]
+  using ErrorCallback = std::function<void(const ErrorCBInfo &)>;
+  using ProgressCallback =
+      std::function<std::optional<TransferControl>(const ProgressCBInfo &)>;
+  using TotalSizeCallback = std::function<void(uint64_t)>;
 
-  TransferCallback(py::object total_size = py::none(),
-                   py::object error = py::none(),
-                   py::object progress = py::none()) {
-    if (total_size.is_none()) {
-      need_total_size_cb = false;
-      total_size_cb = py::function();
-    } else {
-      need_total_size_cb = true;
-      total_size_cb = py::cast<py::function>(total_size);
-    }
+  bool need_error_cb = false;
+  bool need_progress_cb = false;
+  bool need_total_size_cb = false;
+  ErrorCallback error_cb = {}; // void(ErrorCBInfo)
+  ProgressCallback progress_cb =
+      {}; // optional<TransferControl>(ProgressCBInfo)
+  TotalSizeCallback total_size_cb = {}; // void(uint64_t)
+  float cb_interval_s = 0.1f;           // Callback interval in seconds
 
-    if (error.is_none()) {
-      need_error_cb = false;
-      error_cb = py::function();
-    } else {
-      need_error_cb = true;
-      error_cb = error.cast<py::function>();
-    }
-
-    if (progress.is_none()) {
-      need_progress_cb = false;
-      progress_cb = py::function();
-    } else {
-      need_progress_cb = true;
-      progress_cb = progress.cast<py::function>();
-    }
+  TransferCallback(TotalSizeCallback total_size = {}, ErrorCallback error = {},
+                   ProgressCallback progress = {}, float cb_interval_s = 0.1f)
+      : error_cb(std::move(error)), progress_cb(std::move(progress)),
+        total_size_cb(std::move(total_size)), cb_interval_s(cb_interval_s) {
+    need_total_size_cb = static_cast<bool>(total_size_cb);
+    need_error_cb = static_cast<bool>(error_cb);
+    need_progress_cb = static_cast<bool>(progress_cb);
   }
 
-  void SetErrorCB(py::object cb = py::none()) {
-    if (cb.is_none()) {
-      need_error_cb = false;
-      error_cb = py::function();
-    } else {
-      need_error_cb = true;
-      error_cb = cb.cast<py::function>();
-    }
+  void SetErrorCB(ErrorCallback cb = {}) {
+    error_cb = std::move(cb);
+    need_error_cb = static_cast<bool>(error_cb);
   }
 
-  void SetProgressCB(py::object cb = py::none()) {
-    if (cb.is_none()) {
-      need_progress_cb = false;
-      progress_cb = py::function();
-    } else {
-      need_progress_cb = true;
-      progress_cb = cb.cast<py::function>();
-    }
+  void SetProgressCB(ProgressCallback cb = {}) {
+    progress_cb = std::move(cb);
+    need_progress_cb = static_cast<bool>(progress_cb);
   };
 
-  void SetTotalSizeCB(py::object cb = py::none()) {
-    if (cb.is_none()) {
-      need_total_size_cb = false;
-      total_size_cb = py::function();
-    } else {
-      need_total_size_cb = true;
-      total_size_cb = cb.cast<py::function>();
+  void SetTotalSizeCB(TotalSizeCallback cb = {}) {
+    total_size_cb = std::move(cb);
+    need_total_size_cb = static_cast<bool>(total_size_cb);
+  }
+
+  std::optional<TransferControl> CallProgress(const ProgressCBInfo &info,
+                                              ECM *cb_error = nullptr) const {
+    if (cb_error) {
+      *cb_error = {EC::Success, ""};
+    }
+    if (!progress_cb) {
+      return std::nullopt;
+    }
+    try {
+      return progress_cb(info);
+    } catch (const std::exception &e) {
+      if (cb_error) {
+        *cb_error = {EC::PyCBError, e.what()};
+      }
+      return TransferControl::Terminate;
+    } catch (...) {
+      if (cb_error) {
+        *cb_error = {EC::PyCBError, "Unknown progress callback error"};
+      }
+      return TransferControl::Terminate;
     }
   }
 };
@@ -518,6 +517,7 @@ struct TransferTask {
   PathType path_type = PathType::FILE;
   bool IsFinished = false;
   ECM rcm = ECM(EC::Success, "");
+  uint64_t transferred = 0; // Current file transferred size
   TransferTask() : src(""), src_host(""), dst(""), dst_host(""), size(0) {}
   TransferTask(std::string src, std::string dst, std::string src_host,
                std::string dst_host, uint64_t size,
@@ -526,55 +526,8 @@ struct TransferTask {
         dst_host(std::move(dst_host)), size(size), path_type(path_type) {}
 };
 
-struct ProgressData {
-  std::string src = "";
-  std::string dst = "";
-  std::string src_host = "";
-  std::string dst_host = "";
-  std::atomic<bool> is_terminate = false;
-  std::atomic<bool> is_pause = false;
-  std::string current_filename = "";
-  size_t this_size = 0;
-  size_t file_size = 0;
-  size_t accumulated_size = 0;
-  size_t total_size = 0;
-  float cb_interval_s = static_cast<float>(0.1);
-  double cb_time = timenow();
-  ECM rcm = ECM(EC::Success, "");
-  std::function<void(bool)> progress_cb;
-  std::shared_ptr<StreamRingBuffer> ring_buffer = nullptr;
-
-  ProgressData(float cb_interval_s = 0.1) : cb_interval_s(cb_interval_s) {}
-
-  void reset() {
-    src = "";
-    dst = "";
-    src_host = "";
-    dst_host = "";
-    is_terminate = false;
-    is_pause = false;
-    current_filename = "";
-    this_size = 0;
-    file_size = 0;
-    accumulated_size = 0;
-    total_size = 0;
-    cb_time = timenow();
-    ring_buffer = nullptr;
-    rcm = ECM(EC::Success, "");
-  }
-
-  void next_file(const TransferTask &task, const size_t &buffer_size) {
-    this->src = task.src;
-    this->dst = task.dst;
-    this->src_host = task.src_host;
-    this->dst_host = task.dst_host;
-    this->this_size = 0;
-    this->file_size = task.size;
-    rcm = ECM(EC::Success, "");
-    // 释放上一个buffer
-    ring_buffer = std::make_shared<StreamRingBuffer>(buffer_size);
-  }
-};
+// Control signal values for transfer control
+// 0 = Running, 1 = Pause, 2 = Terminate
 
 class UnimplementedMethodException : public std::exception {
 public:
@@ -584,6 +537,67 @@ public:
 
 private:
   std::string message;
+};
+
+struct TaskInfo;        // Forward declaration
+class ClientMaintainer; // Forward declaration
+// New ProgressData that holds weak_ptr to TaskInfo to avoid cycle reference
+// Reads/writes directly on TaskInfo for progress tracking
+struct WkProgressData {
+  std::weak_ptr<TaskInfo> task_info;
+  std::atomic<int> control_sign{0}; // 0=Running, 1=Pause, 2=Terminate
+  double cb_time = timenow();
+  std::shared_ptr<StreamRingBuffer> ring_buffer = nullptr;
+
+  WkProgressData() = default;
+  explicit WkProgressData(std::shared_ptr<TaskInfo> ti) : task_info(ti) {}
+
+  // Control signal helpers
+  bool is_terminate() const {
+    return control_sign.load() == static_cast<int>(ControlSignal::Terminate);
+  }
+  bool is_pause() const {
+    return control_sign.load() == static_cast<int>(ControlSignal::Pause);
+  }
+  bool is_running() const {
+    return control_sign.load() == static_cast<int>(ControlSignal::Running);
+  }
+
+  void set_terminate() {
+    control_sign.store(static_cast<int>(ControlSignal::Terminate));
+  }
+  void set_pause() {
+    control_sign.store(static_cast<int>(ControlSignal::Pause));
+  }
+  void set_running() {
+    control_sign.store(static_cast<int>(ControlSignal::Running));
+  }
+};
+struct TaskInfo {
+  uint64_t id = 0;
+  double submit_time = 0;
+  double start_time = 0;
+  TaskStatus status = TaskStatus::Pending;
+  double finished_time = 0;
+  ECM rcm = {EC::Success, ""};
+
+  // Current task being transferred - weak pointer to task in tasks vector
+  TransferTask *cur_task = nullptr;
+
+  // Progress tracking (directly in TaskInfo)
+  uint64_t total_transferred_size = 0;
+  uint64_t total_size = 0;
+
+  // Task list
+  std::vector<TransferTask> tasks;
+
+  // Configuration
+  TransferCallback callback;
+  std::shared_ptr<ClientMaintainer> hostm;
+  ssize_t buffer_size = -1;
+
+  // Control - managed by WkProgressData's control_sign
+  std::shared_ptr<WkProgressData> pd; // Shared progress data for control
 };
 
 /*
