@@ -11,7 +11,6 @@
 
 // 第三方库
 #include <curl/curl.h>
-#include <fmt/core.h>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
@@ -27,13 +26,16 @@ public:
     this->PROTOCOL = ClientProtocol::LOCAL;
   }
 
-  ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
-            int64_t start_time = -1) override {
+  ECM Check([[maybe_unused]] amf interrupt_flag = nullptr,
+            [[maybe_unused]] int timeout_ms = -1,
+            [[maybe_unused]] int64_t start_time = -1) override {
     return {EC::Success, ""};
   }
 
-  ECM Connect(bool force = false, amf interrupt_flag = nullptr,
-              int timeout_ms = -1, int64_t start_time = -1) override {
+  ECM Connect([[maybe_unused]] bool force = false,
+              [[maybe_unused]] amf interrupt_flag = nullptr,
+              [[maybe_unused]] int timeout_ms = -1,
+              [[maybe_unused]] int64_t start_time = -1) override {
     return {EC::Success, ""};
   }
 
@@ -67,8 +69,9 @@ public:
   }
 
   SR stat(const std::string &path, bool trace_link = false,
-          amf interrupt_flag = nullptr, int timeout_ms = -1,
-          int64_t start_time = -1) override {
+          [[maybe_unused]] amf interrupt_flag = nullptr,
+          [[maybe_unused]] int timeout_ms = -1,
+          [[maybe_unused]] int64_t start_time = -1) override {
     std::cout << "stat1: " << std::endl;
     if (path.empty()) {
       return {ECM{EC::InvalidArg, "Invalid empty path"}, PathInfo()};
@@ -91,7 +94,7 @@ public:
     std::cout << "stat4: " << std::endl;
     if (ec) {
       auto rcm =
-          ECM{fec(ec), fmt::format("Stat {} failed: {}", pathf, ec.message())};
+          ECM{fec(ec), AMStr::amfmt("Stat {} failed: {}", pathf, ec.message())};
       trace(TraceLevel::Debug, rcm.first, pathf, "stat", rcm.second);
       return {rcm, info};
     }
@@ -158,13 +161,13 @@ public:
     fs::path p(pathf);
     if (!fs::exists(p)) {
       auto rcm =
-          ECM{EC::PathNotExist, fmt::format("Path not found: {}", pathf)};
+          ECM{EC::PathNotExist, AMStr::amfmt("Path not found: {}", pathf)};
       trace(TraceLevel::Debug, EC::PathNotExist, pathf, "listdir", rcm.second);
       return {rcm, result};
     }
     if (!fs::is_directory(p)) {
       auto rcm = ECM{EC::NotADirectory,
-                     fmt::format("Path is not a directory: {}", pathf)};
+                     AMStr::amfmt("Path is not a directory: {}", pathf)};
       trace(TraceLevel::Debug, EC::NotADirectory, pathf, "listdir", rcm.second);
       return {rcm, result};
     }
@@ -291,9 +294,9 @@ public:
       return {error, result};
     } else if (info.type != PathType::DIR) {
       trace(TraceLevel::Debug, EC::NotADirectory, path, "walk",
-            fmt::format("Path is not a directory: {}", path));
+            AMStr::amfmt("Path is not a directory: {}", path));
       return {ECM{EC::NotADirectory,
-                  fmt::format("Path is not a directory: {}", path)},
+                  AMStr::amfmt("Path is not a directory: {}", path)},
               result};
     }
 
@@ -303,8 +306,10 @@ public:
     return {{EC::Success, ""}, result};
   }
 
-  ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
-            int timeout_ms = -1, int64_t start_time = -1) override {
+  ECM mkdir(const std::string &path,
+            [[maybe_unused]] amf interrupt_flag = nullptr,
+            [[maybe_unused]] int timeout_ms = -1,
+            [[maybe_unused]] int64_t start_time = -1) override {
     if (path.empty()) {
       return ECM{EC::InvalidArg, "Invalid empty path"};
     }
@@ -312,23 +317,25 @@ public:
     fs::create_directory(fs::path(path), ec);
     if (ec) {
       ECM rcm =
-          ECM{fec(ec), fmt::format("mkdir {} failed: {}", path, ec.message())};
+          ECM{fec(ec), AMStr::amfmt("mkdir {} failed: {}", path, ec.message())};
       trace(TraceLevel::Debug, rcm.first, path, "mkdir", rcm.second);
       return rcm;
     }
     return ECM{EC::Success, ""};
   }
 
-  ECM mkdirs(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1, int64_t start_time = -1) override {
+  ECM mkdirs(const std::string &path,
+             [[maybe_unused]] amf interrupt_flag = nullptr,
+             [[maybe_unused]] int timeout_ms = -1,
+             [[maybe_unused]] int64_t start_time = -1) override {
     if (path.empty()) {
       return ECM{EC::InvalidArg, "Invalid empty path"};
     }
     std::error_code ec;
     fs::create_directories(fs::path(path), ec);
     if (ec) {
-      ECM rcm =
-          ECM{fec(ec), fmt::format("mkdirs {} failed: {}", path, ec.message())};
+      ECM rcm = ECM{fec(ec),
+                    AMStr::amfmt("mkdirs {} failed: {}", path, ec.message())};
       trace(TraceLevel::Debug, rcm.first, path, "mkdir", rcm.second);
       return rcm;
     }
@@ -336,8 +343,10 @@ public:
   }
 
   ECM rename(const std::string &src, const std::string &dst, bool mkdir = true,
-             bool overwrite = false, amf interrupt_flag = nullptr,
-             int timeout_ms = -1, int64_t start_time = -1) override {
+             bool overwrite = false,
+             [[maybe_unused]] amf interrupt_flag = nullptr,
+             [[maybe_unused]] int timeout_ms = -1,
+             [[maybe_unused]] int64_t start_time = -1) override {
     if (src.empty() || dst.empty()) {
       return ECM{EC::InvalidArg, "Invalid empty path"};
     }
@@ -345,14 +354,14 @@ public:
     auto [error, info] = stat(src);
     auto [error1, info1] = stat(dst);
     if (error.first != EC::Success) {
-      return ECM{error.first, fmt::format("src {} not exist", src)};
+      return ECM{error.first, AMStr::amfmt("src {} not exist", src)};
     } else if (error1.first == EC::Success) {
       if ((info.type == PathType::DIR && info1.type != PathType::DIR) ||
           (info.type != PathType::DIR && info1.type == PathType::DIR)) {
         return ECM{EC::NotADirectory, "src and dst are not the same type"};
       } else if (!overwrite) {
         return ECM{EC::PathAlreadyExists,
-                   fmt::format("dst {} already exists", dst)};
+                   AMStr::amfmt("dst {} already exists", dst)};
       }
     }
 
@@ -380,14 +389,16 @@ public:
       }
     }
     if (ec) {
-      return ECM{fec(ec), fmt::format("rename {} to {} failed: {}", src, dst,
-                                      ec.message())};
+      return ECM{fec(ec), AMStr::amfmt("rename {} to {} failed: {}", src, dst,
+                                       ec.message())};
     }
     return ECM{EC::Success, ""};
   }
 
-  ECM rmdir(const std::string &path, amf interrupt_flag = nullptr,
-            int timeout_ms = -1, int64_t start_time = -1) override {
+  ECM rmdir(const std::string &path,
+            [[maybe_unused]] amf interrupt_flag = nullptr,
+            [[maybe_unused]] int timeout_ms = -1,
+            [[maybe_unused]] int64_t start_time = -1) override {
     if (path.empty()) {
       return ECM{EC::InvalidArg, "Invalid empty path"};
     }
@@ -402,13 +413,15 @@ public:
     fs::remove(fs::path(path), ec);
     if (ec) {
       return ECM{fec(ec),
-                 fmt::format("rmdir {} failed: {}", path, ec.message())};
+                 AMStr::amfmt("rmdir {} failed: {}", path, ec.message())};
     }
     return ECM{EC::Success, ""};
   }
 
-  ECM rmfile(const std::string &path, amf interrupt_flag = nullptr,
-             int timeout_ms = -1, int64_t start_time = -1) override {
+  ECM rmfile(const std::string &path,
+             [[maybe_unused]] amf interrupt_flag = nullptr,
+             [[maybe_unused]] int timeout_ms = -1,
+             [[maybe_unused]] int64_t start_time = -1) override {
     if (path.empty()) {
       return ECM{EC::InvalidArg, "Invalid empty path"};
     }
@@ -423,7 +436,7 @@ public:
     fs::remove(fs::path(path), ec);
     if (ec) {
       return ECM{fec(ec),
-                 fmt::format("rmdir {} failed: {}", path, ec.message())};
+                 AMStr::amfmt("rmdir {} failed: {}", path, ec.message())};
     }
     return ECM{EC::Success, ""};
   }
@@ -445,15 +458,16 @@ public:
         fs::remove(entry.path, ec);
         if (ec) {
           errors.emplace_back(
-              entry.path, ECM{fec(ec), fmt::format("remove {} failed: {}",
-                                                   entry.path, ec.message())});
+              entry.path, ECM{fec(ec), AMStr::amfmt("remove {} failed: {}",
+                                                    entry.path, ec.message())});
         }
       }
     }
     fs::remove(fs::path(path), ec);
     if (ec) {
-      errors.emplace_back(path, ECM{fec(ec), fmt::format("remove {} failed: {}",
-                                                         path, ec.message())});
+      errors.emplace_back(
+          path, ECM{fec(ec),
+                    AMStr::amfmt("remove {} failed: {}", path, ec.message())});
     }
   }
   std::pair<ECM, RMR> remove(const std::string &path,
@@ -474,7 +488,7 @@ public:
       fs::remove(fs::path(path), ec);
       if (ec) {
         return {ECM{fec(ec),
-                    fmt::format("remove {} failed: {}", path, ec.message())},
+                    AMStr::amfmt("remove {} failed: {}", path, ec.message())},
                 errors};
       }
     }

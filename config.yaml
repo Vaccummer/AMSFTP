@@ -1,0 +1,40 @@
+private_keys:
+- C:\Users\am\.ssh\id_rsa
+- C:\Users\am\.ssh\id_ed25519
+
+hosts:
+  example:
+    username: David(host的昵称只允许中英文字符, 不允许使用example或local)
+    hostname: 127.0.0.1(ip或者域名均可)
+    port: 22(端口, 默认22, 需要数字)
+    keyfile: C:\Example\id_rsa(可选，如果使用密码登录，则不需要)
+    password: 1234(可选，如果使用密钥登录，则不需要, 建议用密钥登入)
+    banner: Welcome to the server(可选，显示在登录前的欢迎信息)
+    trash_dir: /home/David/trash(垃圾桶地址, saferm函数需要)
+    yesy:
+      hahah:
+        wuho
+  wsl:
+    username: am
+    hostname: 172.26.36.83
+    port: 22
+    password: '1984'
+    trash_dir: /home/am/trash
+styles:
+  default: ''
+  commonfile: ''
+  directory: ''
+  syslink: ''
+  otherspecial: ''
+
+  error: red
+  warning: yellow
+  success: green
+  info: blue
+  debug: gray
+  trace: gray
+  fatal: red
+  critical: red
+Vars:
+  local_trash_dir: D:\Document\Desktop\22
+  local_default_work_dir: C:\Users\am
