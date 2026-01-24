@@ -21,11 +21,12 @@
 // 标准库
 
 // 自身依赖
+#include "AMCommonTools.hpp"
 #include "AMEnum.hpp"
+
 // 自身依赖
 
 // 第三方库
-#include <fmt/core.h>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
@@ -73,7 +74,7 @@ inline std::array<char, 32> AMcharset = {'2', '3', '4', '5', '6', '7', '8', '9',
                                          'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
 constexpr size_t AMbase = sizeof(AMcharset) - 1;
 
-inline uint64_t GenerateUID() {
+inline uint64_t GenerateUIDInt() {
   try {
     std::random_device rd;
     std::mt19937_64 eng(rd());
@@ -86,6 +87,21 @@ inline uint64_t GenerateUID() {
         std::chrono::steady_clock::now().time_since_epoch().count());
     return t ^ (++counter * 0x9e3779b97f4a7c15ULL);
   }
+}
+
+inline std::string GenerateUID(int length = 10) {
+  length = length < 1 ? 1 : length;
+  length = length > 32 ? 32 : length;
+  uint64_t uid = GenerateUIDInt();
+  // 用AMcharset生成一个字符串
+  std::string uid_str;
+  uid_str.reserve(static_cast<size_t>(length));
+  for (int i = 0; i < length; i++) {
+    uid_str += AMcharset[static_cast<size_t>(uid % AMbase)];
+    uid /= AMbase;
+  }
+  std::reverse(uid_str.begin(), uid_str.end());
+  return uid_str;
 }
 
 inline double timenow() {
@@ -167,15 +183,6 @@ public:
         create_time(create_time), access_time(access_time),
         modify_time(modify_time), type(type), mode_int(mode_int),
         mode_str(mode_str) {}
-  std::string repr() {
-    return fmt::format(
-        "PathInfo(name={}, path={}, dir={}, owner={}, size={}, "
-        "create_time={}, "
-        "access_time={}, modify_time={}, type={}, mode_int={}, mode_str={})",
-        name, path, dir, owner, size, FormatTime(create_time),
-        FormatTime(access_time), FormatTime(modify_time),
-        magic_enum::enum_name(type), mode_int, mode_str);
-  }
 };
 
 // 跨平台Socket连接器
@@ -202,11 +209,13 @@ public:
                               &hints, &result);
     if (dns_err != 0) {
 #ifdef _WIN32
-      error_msg = fmt::format("DNS resolve failed: {} (hostname={})",
-                              gai_strerrorA(dns_err), hostname);
+      auto dns_err_str = gai_strerrorA(dns_err);
+      error_msg = AMStr::amfmt("DNS resolve failed: {} (hostname={})",
+                               dns_err_str, hostname);
 #else
-      error_msg = fmt::format("DNS resolve failed: {} (hostname={})",
-                              gai_strerror(dns_err), hostname);
+      auto dns_err_str = gai_strerror(dns_err);
+      error_msg = AMStr::amfmt("DNS resolve failed: {} (hostname={})",
+                               dns_err_str, hostname);
 #endif
       error_code = EC::DNSResolveError;
       return false;

@@ -1,0 +1,30 @@
+{
+    "version": 6,
+    "configurePresets": [
+        {
+            "name": "win-clang-debug",
+            "displayName": "Windows clang Debug (Ninja)",
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_C_COMPILER": "clang",
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "AMSFTP_BUILD_TESTS": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "win-clang-debug",
+            "configurePreset": "win-clang-debug"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "win-clang-debug",
+            "configurePreset": "win-clang-debug"
+        }
+    ]
+}

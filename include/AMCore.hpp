@@ -5,14 +5,14 @@
 #include <fcntl.h>
 
 // 自身依赖
-#include "AMBaseClient.hpp"
+#include "AMClient/AMBaseClient.hpp"
+#include "AMClient/AMFTPClient.hpp"
+#include "AMClient/AMLocalClient.hpp"
+#include "AMClient/AMSFTPClient.hpp"
 #include "AMCommonTools.hpp"
 #include "AMDataClass.hpp"
 #include "AMEnum.hpp"
-#include "AMFTPClient.hpp"
-#include "AMLocalClient.hpp"
 #include "AMPath.hpp"
-#include "AMSFTPClient.hpp"
 
 class UnionFileHandle {
 public:
@@ -79,7 +79,8 @@ public:
       if (!sftp_handle) {
         EC rc = client->GetLastEC();
         std::string msg = client->GetLastErrorMsg();
-        return {rc, fmt::format("Open sftp file \"{}\" failed: {}", path, msg)};
+        return {rc,
+                AMStr::amfmt("Open sftp file \"{}\" failed: {}", path, msg)};
       }
     } else {
       // Local file
@@ -95,8 +96,8 @@ public:
 
       if (file_handle == INVALID_HANDLE_VALUE) {
         return {EC::LocalFileOpenError,
-                fmt::format("Failed to open local file \"{}\": error code {}",
-                            path, GetLastError())};
+                AMStr::amfmt("Failed to open local file \"{}\": error code {}",
+                             path, GetLastError())};
       }
 #else
       int flags = is_write ? (O_RDWR | O_CREAT | O_TRUNC) : O_RDONLY;
@@ -104,8 +105,8 @@ public:
 
       if (file_handle == -1) {
         return {EC::LocalFileOpenError,
-                fmt::format("Failed to open local file \"{}\": {}", path,
-                            strerror(errno))};
+                AMStr::amfmt("Failed to open local file \"{}\": {}", path,
+                             strerror(errno))};
       }
 #endif
     }
@@ -149,9 +150,9 @@ public:
         } else {
           EC rc = client->GetLastEC();
           std::string msg = client->GetLastErrorMsg();
-          return {
-              bytes_read,
-              {rc, fmt::format("Read sftp file \"{}\" failed: {}", path, msg)}};
+          return {bytes_read,
+                  {rc, AMStr::amfmt("Read sftp file \"{}\" failed: {}", path,
+                                    msg)}};
         }
       } else {
         // Local file read
@@ -161,8 +162,8 @@ public:
                       &bytes_read, nullptr)) {
           return {-1,
                   {EC::LocalFileReadError,
-                   fmt::format("Read local file \"{}\" failed: error code {}",
-                               path, GetLastError())}};
+                   AMStr::amfmt("Read local file \"{}\" failed: error code {}",
+                                path, GetLastError())}};
         }
         if (bytes_read > 0) {
           ring_buffer->commit_write(bytes_read);
@@ -182,8 +183,8 @@ public:
         } else {
           return {-1,
                   {EC::LocalFileReadError,
-                   fmt::format("Read local file \"{}\" failed: {}", path,
-                               strerror(errno))}};
+                   AMStr::amfmt("Read local file \"{}\" failed: {}", path,
+                                strerror(errno))}};
         }
 #endif
       }
@@ -217,8 +218,8 @@ public:
           EC rc = client->GetLastEC();
           std::string msg = client->GetLastErrorMsg();
           return {bytes_written,
-                  {rc, fmt::format("Write sftp file \"{}\" failed: {}", path,
-                                   msg)}};
+                  {rc, AMStr::amfmt("Write sftp file \"{}\" failed: {}", path,
+                                    msg)}};
         }
       } else {
         // Local file write
@@ -228,8 +229,8 @@ public:
                        &bytes_written, nullptr)) {
           return {-1,
                   {EC::LocalFileWriteError,
-                   fmt::format("Write local file \"{}\" failed: error code {}",
-                               path, GetLastError())}};
+                   AMStr::amfmt("Write local file \"{}\" failed: error code {}",
+                                path, GetLastError())}};
         }
         if (bytes_written > 0) {
           ring_buffer->commit_read(bytes_written);
@@ -249,8 +250,8 @@ public:
         } else {
           return {-1,
                   {EC::LocalFileWriteError,
-                   fmt::format("Write local file \"{}\" failed: {}", path,
-                               strerror(errno))}};
+                   AMStr::amfmt("Write local file \"{}\" failed: {}", path,
+                                strerror(errno))}};
         }
 #endif
       }
@@ -445,7 +446,7 @@ public:
     ;
     if (hosts.find(nickname) == hosts.end()) {
       return {ECM{EC::ClientNotFound,
-                  fmt::format("Client not found: {}", nickname)},
+                  AMStr::amfmt("Client not found: {}", nickname)},
               nullptr};
     }
     if (!update) {
@@ -573,15 +574,15 @@ private:
     if (!task.src_host.empty()) {
       src_client = hostm->GetHost(task.src_host);
       if (!src_client) {
-        return {ECM{EC::NoSession,
-                    fmt::format("Source host \"{}\" not found", task.src_host)},
+        return {ECM{EC::NoSession, AMStr::amfmt("Source host \"{}\" not found",
+                                                task.src_host)},
                 nullptr, nullptr};
       }
       rcm = src_client->Check();
       if (rcm.first != EC::Success) {
         return {
-            ECM{rcm.first, fmt::format("Source host \"{}\" connection error",
-                                       task.src_host)},
+            ECM{rcm.first, AMStr::amfmt("Source host \"{}\" connection error",
+                                        task.src_host)},
             nullptr, nullptr};
       }
     } else {
@@ -591,15 +592,15 @@ private:
       dst_client = hostm->GetHost(task.dst_host);
       if (!dst_client) {
         return {
-            ECM{EC::NoSession, fmt::format("Destination host \"{}\" not found",
-                                           task.dst_host)},
+            ECM{EC::NoSession, AMStr::amfmt("Destination host \"{}\" not found",
+                                            task.dst_host)},
             nullptr, nullptr};
       }
       rcm = dst_client->Check();
       if (rcm.first != EC::Success) {
         return {ECM{rcm.first,
-                    fmt::format("Destination host \"{}\" connection error",
-                                task.dst_host)},
+                    AMStr::amfmt("Destination host \"{}\" connection error",
+                                 task.dst_host)},
                 nullptr, nullptr};
       }
     } else {
@@ -625,8 +626,8 @@ private:
     if (!srcFile) {
       EC rc = client->GetLastEC();
       std::string msg = client->GetLastErrorMsg();
-      return {rc, fmt::format("Failed to open src file \"{}\": {}", task->src,
-                              msg)};
+      return {rc, AMStr::amfmt("Failed to open src file \"{}\": {}", task->src,
+                               msg)};
     }
 
     LIBSSH2_SFTP_HANDLE *dstFile = libssh2_sftp_open(
@@ -636,8 +637,8 @@ private:
       libssh2_sftp_close_handle(srcFile);
       EC rc = client->GetLastEC();
       std::string msg = client->GetLastErrorMsg();
-      return {rc, fmt::format("Failed to open dst file \"{}\": {}", task->dst,
-                              msg)};
+      return {rc, AMStr::amfmt("Failed to open dst file \"{}\": {}", task->dst,
+                               msg)};
     }
 
     libssh2_session_set_blocking(client->session, 1);
@@ -666,7 +667,7 @@ private:
         } else {
           EC rc = client->GetLastEC();
           std::string msg = client->GetLastErrorMsg();
-          rcm = {rc, fmt::format("Read error: {}", msg)};
+          rcm = {rc, AMStr::amfmt("Read error: {}", msg)};
           goto clean;
         }
       }
@@ -691,7 +692,7 @@ private:
         } else {
           EC rc = client->GetLastEC();
           std::string msg = client->GetLastErrorMsg();
-          rcm = {rc, fmt::format("Write error: {}", msg)};
+          rcm = {rc, AMStr::amfmt("Write error: {}", msg)};
           goto clean;
         }
       }
@@ -964,7 +965,7 @@ private:
     } else if (res != CURLE_OK) {
       pd->task_info.lock()->cur_task->rcm =
           ECM{EC::FTPUploadFailed,
-              fmt::format("Upload failed: {}", curl_easy_strerror(res))};
+              AMStr::amfmt("Upload failed: {}", curl_easy_strerror(res))};
       pd->set_terminate();
     }
   }
@@ -990,7 +991,7 @@ private:
     } else if (res != CURLE_OK) {
       pd->task_info.lock()->cur_task->rcm =
           ECM{EC::FTPDownloadFailed,
-              fmt::format("Download failed: {}", curl_easy_strerror(res))};
+              AMStr::amfmt("Download failed: {}", curl_easy_strerror(res))};
       pd->set_terminate();
     }
   }
@@ -1521,10 +1522,11 @@ public:
     if (src_stat.type != PathType::DIR) {
 
       if (ignore_sepcial_file && src_stat.type != PathType::FILE) {
-        return {ECM{EC::NotAFile, fmt::format("Src is not a common file and "
-                                              "ignore_sepcial_file is true: {}",
-                                              srcf)},
-                {}};
+        return {
+            ECM{EC::NotAFile, AMStr::amfmt("Src is not a common file and "
+                                           "ignore_sepcial_file is true: {}",
+                                           srcf)},
+            {}};
       }
 
       if (!is_dst_file) {
@@ -1538,14 +1540,14 @@ public:
 
       if (rcm4.first != EC::Success && !mkdir) {
         return {ECM{EC::ParentDirectoryNotExist,
-                    fmt::format("Dst parent path not exists: {}",
-                                AMPathStr::dirname(dstf))},
+                    AMStr::amfmt("Dst parent path not exists: {}",
+                                 AMPathStr::dirname(dstf))},
                 tasks};
       } else if (rcm4.first == EC::Success &&
                  dst_parent_info.type != PathType::DIR) {
         return {ECM(EC::NotADirectory,
-                    fmt::format("Dst parent path is not a directory: {}",
-                                dst_parent_info.path)),
+                    AMStr::amfmt("Dst parent path is not a directory: {}",
+                                 dst_parent_info.path)),
                 tasks};
       }
 
@@ -1556,12 +1558,12 @@ public:
         if (rcm4.first == EC::Success) {
           if (dst_info.type == PathType::DIR) {
             return {ECM(EC::NotAFile,
-                        fmt::format("Dst already exists and is a directory: {}",
-                                    dstf)),
+                        AMStr::amfmt(
+                            "Dst already exists and is a directory: {}", dstf)),
                     tasks};
           } else if (!overwrite) {
             return {ECM{EC::PathAlreadyExists,
-                        fmt::format("Dst already exists: {}", dstf)},
+                        AMStr::amfmt("Dst already exists: {}", dstf)},
                     tasks};
           }
         }
@@ -1577,12 +1579,12 @@ public:
 
     if (rcm6.first != EC::Success && !mkdir) {
       return {ECM{EC::ParentDirectoryNotExist,
-                  fmt::format("Dst parent path not exists: {}", dstf)},
+                  AMStr::amfmt("Dst parent path not exists: {}", dstf)},
               tasks};
     } else if (rcm6.first == EC::Success && dst_info.type != PathType::DIR) {
       return {ECM(EC::NotADirectory,
-                  fmt::format("Dst already exists and is not a directory: {}",
-                              dstf)),
+                  AMStr::amfmt("Dst already exists and is not a directory: {}",
+                               dstf)),
               tasks};
     }
 

@@ -7,7 +7,6 @@
 #include <cstdio>
 #include <ctime>
 #include <fcntl.h>
-#include <fmt/format.h>
 #include <iostream>
 #include <mutex>
 #include <regex>
@@ -26,13 +25,11 @@
 
 // 第三方库
 #include <curl/curl.h>
-#include <fmt/core.h>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
-
 
 using EC = ErrorCode;
 using ECM = std::pair<EC, std::string>;
@@ -647,7 +644,7 @@ private:
 
     // 设置 MLST 命令
     struct curl_slist *commands = nullptr;
-    std::string command = fmt::format("MLST {}", MlistPath(path));
+    std::string command = AMStr::amfmt("MLST {}", MlistPath(path));
     commands = curl_slist_append(commands, command.c_str());
 
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
@@ -673,8 +670,8 @@ private:
     if (nb_res.value != CURLE_OK) {
       free(header_chunk.memory);
       ECM rcm = {GetFTPErrorCode(nb_res.value),
-                 fmt::format("MLST {} error: {}", path,
-                             curl_easy_strerror(nb_res.value))};
+                 AMStr::amfmt("MLST {} error: {}", path,
+                              curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, rcm.first, path, "MLST", rcm.second);
       return {rcm, PathInfo()};
     }
@@ -798,8 +795,8 @@ private:
 
     // SIZE 失败 → 路径不存在
     return {ECM{GetFTPErrorCode(nb_res.value),
-                fmt::format("legacy_stat {} error: {}", path,
-                            curl_easy_strerror(nb_res.value))},
+                AMStr::amfmt("legacy_stat {} error: {}", path,
+                             curl_easy_strerror(nb_res.value))},
             {}};
   }
 
@@ -847,7 +844,7 @@ private:
       }
       if (response_code == 550) {
         std::cout << "Path not ex" << "\n";
-        return {ECM{EC::PathNotExist, fmt::format("Path not found: {}", path)},
+        return {ECM{EC::PathNotExist, AMStr::amfmt("Path not found: {}", path)},
                 {}};
       }
 
@@ -897,7 +894,7 @@ private:
 
     struct curl_slist *commands = nullptr;
     commands =
-        curl_slist_append(commands, fmt::format("DELE {}", path).c_str());
+        curl_slist_append(commands, AMStr::amfmt("DELE {}", path).c_str());
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
@@ -912,8 +909,8 @@ private:
     }
     if (nb_res.value != CURLE_OK) {
       ECM ecm = {GetFTPErrorCode(nb_res.value),
-                 fmt::format("rmfile {} failed: {}", path,
-                             curl_easy_strerror(nb_res.value))};
+                 AMStr::amfmt("rmfile {} failed: {}", path,
+                              curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, ecm.first, path, "rmfile", ecm.second);
       return ecm;
     }
@@ -929,7 +926,7 @@ private:
     }
 
     struct curl_slist *commands = nullptr;
-    std::string rmd_cmd = fmt::format("RMD {}", MlistPath(path));
+    std::string rmd_cmd = AMStr::amfmt("RMD {}", MlistPath(path));
     commands = curl_slist_append(commands, rmd_cmd.c_str());
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
@@ -945,8 +942,8 @@ private:
     }
     if (nb_res.value != CURLE_OK) {
       ECM ecm = {GetFTPErrorCode(nb_res.value),
-                 fmt::format("rmdir {} failed: {}", path,
-                             curl_easy_strerror(nb_res.value))};
+                 AMStr::amfmt("rmdir {} failed: {}", path,
+                              curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, ecm.first, path, "rmdir", ecm.second);
       return ecm;
     }
@@ -966,7 +963,8 @@ public:
       res_data.password = res_data.password.empty() ? "anonymous@example.com"
                                                     : res_data.password;
     }
-    this->url = fmt::format("ftp://{}:{}", res_data.hostname, res_data.port);
+    this->url = AMStr::amfmt("ftp://{}:{}", res_data.hostname,
+                             std::to_string(res_data.port));
   }
 
   ~AMFTPClient() {
@@ -990,7 +988,7 @@ public:
       path_f = MlistPath(path, is_dir);
     }
     curl_easy_reset(curl);
-    current_url = fmt::format("{}{}", this->url, path_f);
+    current_url = AMStr::amfmt("{}{}", this->url, path_f);
     curl_easy_setopt(curl, CURLOPT_URL, current_url.c_str());
     curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
     curl_easy_setopt(curl, CURLOPT_PASSWORD, res_data.password.c_str());
@@ -1074,7 +1072,7 @@ public:
       return {EC::Success, ""};
     }
     ecm = {GetFTPErrorCode(nb_res.value),
-           fmt::format("Check error: {}", curl_easy_strerror(nb_res.value))};
+           AMStr::amfmt("Check error: {}", curl_easy_strerror(nb_res.value))};
     trace(TraceLevel::Error, ecm.first, "/", "Check", ecm.second);
     return ecm;
   }
@@ -1145,7 +1143,7 @@ public:
     }
     std::string pathf = path;
     if (pathf.empty()) {
-      return {ECM{EC::InvalidArg, fmt::format("Invalid path: {}", path)}, {}};
+      return {ECM{EC::InvalidArg, AMStr::amfmt("Invalid path: {}", path)}, {}};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
@@ -1218,9 +1216,9 @@ public:
 
     if (nb_res.value != CURLE_OK) {
       free(chunk.memory);
-      ECM rcm =
-          ECM{GetFTPErrorCode(nb_res.value),
-              fmt::format("List failed: {}", curl_easy_strerror(nb_res.value))};
+      ECM rcm = ECM{
+          GetFTPErrorCode(nb_res.value),
+          AMStr::amfmt("List failed: {}", curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, rcm.first, path, "listdir", rcm.second);
       return {rcm, {}};
     }
@@ -1387,7 +1385,7 @@ public:
 
     struct curl_slist *commands = nullptr;
     commands = curl_slist_append(
-        commands, fmt::format("MKD {}", MlistPath(path, true)).c_str());
+        commands, AMStr::amfmt("MKD {}", MlistPath(path, true)).c_str());
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
@@ -1402,8 +1400,8 @@ public:
     }
     if (nb_res.value != CURLE_OK) {
       ecm = {GetFTPErrorCode(nb_res.value),
-             fmt::format("mkdir {} failed: {}", path,
-                         curl_easy_strerror(nb_res.value))};
+             AMStr::amfmt("mkdir {} failed: {}", path,
+                          curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, ecm.first, path, "mkdir", ecm.second);
       return ecm;
     }
@@ -1442,7 +1440,7 @@ public:
       return rcm;
     }
     if (info.type != PathType::FILE) {
-      return {EC::NotAFile, fmt::format("Path is not a file: {}", path)};
+      return {EC::NotAFile, AMStr::amfmt("Path is not a file: {}", path)};
     }
     return _librmfile(path);
   }
@@ -1463,7 +1461,7 @@ public:
     }
     if (info.type != PathType::DIR) {
       return {EC::NotADirectory,
-              fmt::format("Path is not a directory: {}", path)};
+              AMStr::amfmt("Path is not a directory: {}", path)};
     }
     return _librmdir(path, interrupt_flag, timeout_ms, start_time);
   }
@@ -1528,7 +1526,7 @@ public:
     std::string dstf = AMFS::abspath(dst, true, home_dir, home_dir);
     if (srcf.empty() || dstf.empty()) {
       return {EC::InvalidArg,
-              fmt::format("Invalid path: {} or {}", srcf, dstf)};
+              AMStr::amfmt("Invalid path: {} or {}", srcf, dstf)};
     }
 
     // Check source exists
@@ -1543,14 +1541,14 @@ public:
     if (rcm2.first == EC::Success) {
       if (sbr2.type != sbr.type) {
         return {EC::PathAlreadyExists,
-                fmt::format(
+                AMStr::amfmt(
                     "Dst already exists and is not the same type as src: {} ",
                     dstf)};
       }
       if (!overwrite) {
-        return {
-            EC::PathAlreadyExists,
-            fmt::format("Dst already exists: {} and overwrite is false", dstf)};
+        return {EC::PathAlreadyExists,
+                AMStr::amfmt("Dst already exists: {} and overwrite is false",
+                             dstf)};
       }
     } else {
       if (mkdir) {
@@ -1563,7 +1561,7 @@ public:
     }
 
     // Use RNFR and RNTO commands via QUOTE
-    std::string url = fmt::format("{}{}", this->url, "/");
+    std::string url = AMStr::amfmt("{}{}", this->url, "/");
     ECM ecm = SetupPath(url, sbr.type == PathType::DIR);
     if (ecm.first != EC::Success) {
       return ecm;
@@ -1592,7 +1590,7 @@ public:
 
     if (res != CURLE_OK) {
       return {EC::FTPRenameFailed,
-              fmt::format("Rename failed: {}", curl_easy_strerror(res))};
+              AMStr::amfmt("Rename failed: {}", curl_easy_strerror(res))};
     }
 
     return {EC::Success, ""};
@@ -1624,7 +1622,7 @@ public:
   //   } else if (res != CURLE_OK) {
   //     pd->task_info.lock()->cur_task->rcm =
   //         ECM{EC::FTPUploadFailed,
-  //             fmt::format("Upload failed: {}", curl_easy_strerror(res))};
+  //             AMStr::amfmt("Upload failed: {}", curl_easy_strerror(res))};
   //     pd->set_terminate();
   //   }
   // }
@@ -1647,7 +1645,7 @@ public:
   //   } else if (res != CURLE_OK) {
   //     pd->task_info.lock()->cur_task->rcm =
   //         ECM{EC::FTPDownloadFailed,
-  //             fmt::format("Download failed: {}", curl_easy_strerror(res))};
+  //             AMStr::amfmt("Download failed: {}", curl_easy_strerror(res))};
   //     pd->set_terminate();
   //   }
   // }

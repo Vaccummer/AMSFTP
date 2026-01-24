@@ -28,7 +28,6 @@
 
 // 第三方库
 #include <curl/curl.h>
-#include <fmt/core.h>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
@@ -89,7 +88,7 @@ protected:
     auto ec = GetLastEC();
     auto msg = GetLastErrorMsg();
     if (prompt.empty()) {
-      prompt = fmt::format("{} on {} error:{}", action, taregt, msg);
+      prompt = action + " on " + taregt + " error:" + msg;
     } else {
       AMStr::vreplace(prompt, "{action}", action);
       AMStr::vreplace(prompt, "{target}", taregt);
@@ -108,7 +107,7 @@ protected:
                   std::string prompt = "") {
     // 1. 超时
     if (result.is_timeout()) {
-      std::string msg = fmt::format("{} on {} timeout", action, target);
+      std::string msg = AMStr::amfmt("{} on {} timeout", action, target);
       trace(level, EC::OperationTimeout, target, action, msg);
       return {EC::OperationTimeout, msg};
     }
@@ -116,15 +115,15 @@ protected:
     // 2. 终止
     if (result.is_interrupted()) {
       std::string msg =
-          fmt::format("{} on {} interrupted by user", action, target);
+          AMStr::amfmt("{} on {} interrupted by user", action, target);
       trace(level, EC::Terminate, target, action, msg);
       return {EC::Terminate, msg};
     }
 
     // 3. Socket error
     if (result.is_error()) {
-      std::string msg = fmt::format("Encountered socket error during {} on {}",
-                                    action, target);
+      std::string msg = AMStr::amfmt("Encountered socket error during {} on {}",
+                                     action, target);
       trace(level, EC::SocketRecvError, target, action, msg);
       return {EC::SocketRecvError, msg};
     }
@@ -137,8 +136,8 @@ protected:
         // 执行完成但报错
         auto ec = GetLastEC();
         auto errmsg = GetLastErrorMsg();
-        std::string msg = prompt.empty() ? fmt::format("{} on {} error: {}",
-                                                       action, target, errmsg)
+        std::string msg = prompt.empty() ? AMStr::amfmt("{} on {} error: {}",
+                                                        action, target, errmsg)
                                          : prompt;
         AMStr::vreplace(msg, "{action}", action);
         AMStr::vreplace(msg, "{target}", target);
@@ -150,8 +149,8 @@ protected:
       if (result.value == nullptr) {
         auto ec = GetLastEC();
         auto errmsg = GetLastErrorMsg();
-        std::string msg = prompt.empty() ? fmt::format("{} on {} error: {}",
-                                                       action, target, errmsg)
+        std::string msg = prompt.empty() ? AMStr::amfmt("{} on {} error: {}",
+                                                        action, target, errmsg)
                                          : prompt;
         AMStr::vreplace(msg, "{action}", action);
         AMStr::vreplace(msg, "{target}", target);
@@ -210,14 +209,14 @@ protected:
 private:
   ECM CurError = {EC::NoConnection, "Connection not established"};
   bool password_auth_cb = false;
-  std::vector<std::string> private_keys;
+  std::vector<std::string> private_keys = {};
   AuthCallback auth_cb = {}; // optional<string>(AuthCBInfo)
 
   void LoadDefaultPrivateKeys() {
     trace(TraceLevel::Debug, EC::Success, "~/.ssh", "LoadDefaultPrivateKeys",
           "Shared private keys not provided, loading default private keys from "
           "~/.ssh");
-    auto [error, listd] = AMFS::listdir("~/.ssh");
+    auto [error, listd] = AMFS::listdir(AMFS::abspath("~/.ssh"));
     for (auto &info : listd) {
       if (info.type == PathType::FILE) {
         if (IsValidKey(info.path)) {
@@ -421,8 +420,8 @@ public:
 
     if (!connector.Connect(res_data.hostname, res_data.port, timeout_ms)) {
       trace(TraceLevel::Critical, connector.error_code,
-            fmt::format("{}", connector.sock), "SocketConnector.Connect",
-            connector.error_msg);
+            AMStr::amfmt("{}", std::to_string(connector.sock)),
+            "SocketConnector.Connect", connector.error_msg);
       return {connector.error_code, connector.error_msg};
     }
     sock = connector.sock;
@@ -466,9 +465,10 @@ public:
       }
       std::cout << "libssh2_session_handshake: " << rcr << std::endl;
     }
-    std::cout << "libssh2_session_handshake2: " << rcr << std::endl;
-    rcm = ErrorRecord(rcr, TraceLevel::Critical, fmt::format("socket {}", sock),
-                      "libssh2_session_handshake");
+    rcm = ErrorRecord(
+        rcr, TraceLevel::Critical,
+        AMStr::amfmt("socket {}", std::to_string(static_cast<uint64_t>(sock))),
+        "libssh2_session_handshake");
     if (rcm.first != EC::Success) {
       goto interrupted_or_sock_error;
     }
@@ -494,7 +494,7 @@ public:
 
     trace(TraceLevel::Debug, EC::Success, res_data.username,
           "libssh2_userauth_list",
-          fmt::format("Authentication methods: {}", auth_list));
+          AMStr::amfmt("Authentication methods: {}", auth_list));
 
     // ========== 进入认证阶段，不再检测 timeout ==========
     // 切换到阻塞模式，简化认证流程（认证可能涉及用户交互）
@@ -514,14 +514,14 @@ public:
       if (rcr == 0) {
         trace(TraceLevel::Info, EC::Success, "Success",
               "PrivatedKeyAuthorizeResult",
-              fmt::format("Dedicated private key \"{}\" authorize success",
-                          res_data.keyfile));
+              AMStr::amfmt("Dedicated private key \"{}\" authorize success",
+                           res_data.keyfile));
         goto OK;
       } else {
         trace(TraceLevel::Debug, EC::PublickeyAuthFailed, res_data.keyfile,
               "DedicatedPrivateKeyAuthorizeResult",
-              fmt::format("Dedicated private key \"{}\" authorize success",
-                          res_data.keyfile));
+              AMStr::amfmt("Dedicated private key \"{}\" authorize success",
+                           res_data.keyfile));
       }
     }
 
@@ -539,7 +539,7 @@ public:
       } else {
         trace(TraceLevel::Debug, EC::AuthFailed, res_data.password,
               "PasswordAuth",
-              fmt::format("Wrong Password: {}", res_data.password));
+              AMStr::amfmt("Wrong Password: {}", res_data.password));
       }
     }
 
@@ -558,8 +558,8 @@ public:
         if (rcr == 0) {
           trace(TraceLevel::Info, EC::Success, private_key,
                 "PrivatedKeyAuthorizeResult",
-                fmt::format("Shared private key \"{}\" authorize success",
-                            private_key));
+                AMStr::amfmt("Shared private key \"{}\" authorize success",
+                             private_key));
           goto OK;
         } else {
           trace(TraceLevel::Debug, EC::PrivateKeyAuthFailed, "Failed",
@@ -603,7 +603,7 @@ public:
         } else {
           trace(TraceLevel::Debug, EC::AuthFailed, "Failed",
                 "PasswordAuthorizeResult",
-                fmt::format("Wrong Password: {}", password_tmp));
+                AMStr::amfmt("Wrong Password: {}", password_tmp));
           CallCallbackSafe(auth_cb, AuthCBInfo(false, res_data, trial_times));
         }
       }
@@ -672,7 +672,10 @@ public:
       char *errmsg = nullptr;
       int errmsg_len;
       libssh2_session_last_error(session, &errmsg, &errmsg_len, 0);
-      return errmsg;
+      if (!errmsg || errmsg_len <= 0) {
+        return "Unknown SSH error";
+      }
+      return std::string(errmsg, static_cast<size_t>(errmsg_len));
     } else {
       if (!sftp) {
         return "SFTP not initialized";
@@ -786,7 +789,7 @@ private:
                                       LIBSSH2_SFTP_RENAME_NATIVE);
       });
       return ErrorRecord(
-          nb_res, TraceLevel::Debug, fmt::format("{} -> {}", src, dst),
+          nb_res, TraceLevel::Debug, AMStr::amfmt("{} -> {}", src, dst),
           "libssh2_sftp_rename_ex", "Rename {target} failed: {error}");
     } else {
       auto nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
@@ -795,7 +798,7 @@ private:
             LIBSSH2_SFTP_RENAME_OVERWRITE | LIBSSH2_SFTP_RENAME_NATIVE);
       });
       return ErrorRecord(
-          nb_res, TraceLevel::Debug, fmt::format("{} -> {}", src, dst),
+          nb_res, TraceLevel::Debug, AMStr::amfmt("{} -> {}", src, dst),
           "libssh2_sftp_rename_ex", "Rename {target} failed: {error}");
     }
   }
@@ -904,12 +907,12 @@ private:
     while (true) {
       if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
         rcm = ECM{EC::OperationTimeout,
-                  fmt::format("Path: {} readdir timeout", path)};
+                  AMStr::amfmt("Path: {} readdir timeout", path)};
         break;
       }
       if (interrupt_flag && interrupt_flag->check()) {
         rcm = ECM{EC::Terminate,
-                  fmt::format("Path: {} readdir interrupted by user", path)};
+                  AMStr::amfmt("Path: {} readdir interrupted by user", path)};
         break;
       }
       read_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
@@ -1128,7 +1131,7 @@ protected:
 
   ECM _precheck(const std::string &path) {
     if (path.empty()) {
-      return {EC::InvalidArg, fmt::format("Invalid path: {}", path)};
+      return {EC::InvalidArg, AMStr::amfmt("Invalid path: {}", path)};
     }
     if (!sftp) {
       return {EC::NoConnection, "SFTP not initialized"};
@@ -1145,7 +1148,7 @@ public:
                   std::move(auth_cb)) {
     this->PROTOCOL = ClientProtocol::SFTP;
     if (request.trash_dir.empty()) {
-      this->trash_dir = AMPathStr::join(GetHomeDir(), ".AMSFTP_Trash");
+      this->trash_dir = ".AMSFTP_Trash";
     }
   }
 
@@ -1227,7 +1230,7 @@ public:
     if (rc < 0) {
       libssh2_session_set_blocking(session, 1);
       return {ECM{GetLastEC(),
-                  fmt::format("Channel exec failed: {}", GetLastErrorMsg())},
+                  AMStr::amfmt("Channel exec failed: {}", GetLastErrorMsg())},
               {"", -1}};
     }
 
@@ -1249,7 +1252,7 @@ public:
       } else {
         libssh2_session_set_blocking(session, 1);
         return {ECM{GetLastEC(),
-                    fmt::format("Channel read failed: {}", GetLastErrorMsg())},
+                    AMStr::amfmt("Channel read failed: {}", GetLastErrorMsg())},
                 {"", -1}};
       }
     }
@@ -1281,15 +1284,15 @@ public:
     switch (wr) {
     case WaitResult::Timeout:
       return {ECM{EC::OperationTimeout,
-                  fmt::format("Command timed out (killed): {}", cmd)},
+                  AMStr::amfmt("Command timed out (killed): {}", cmd)},
               {output, -1}};
     case WaitResult::Interrupted:
       return {ECM{EC::Terminate,
-                  fmt::format("Command interrupted (killed): {}", cmd)},
+                  AMStr::amfmt("Command interrupted (killed): {}", cmd)},
               {output, -1}};
     case WaitResult::Error:
       return {ECM{EC::SocketRecvError,
-                  fmt::format("Socket error during command: {}", cmd)},
+                  AMStr::amfmt("Socket error during command: {}", cmd)},
               {output, -1}};
     default:
       return {ECM{EC::Success, ""}, {output, exit_status}};
@@ -1350,7 +1353,7 @@ public:
       return user_id_map[uid];
     }
 
-    std::string cmd = fmt::format("id -un {}", uid);
+    std::string cmd = AMStr::amfmt("id -un {}", std::to_string(uid));
     auto [rcm, cr] = ConductCmd(cmd, 3000);
     if (rcm.first != EC::Success) {
       return "unkown";
@@ -1470,20 +1473,21 @@ public:
     uint64_t mode_int;
     if (std::holds_alternative<std::string>(mode)) {
       if (!AMStr::IsModeValid(std::get<std::string>(mode))) {
-        return {ECM{EC::InvalidArg, fmt::format("Invalid mode: {}",
-                                                std::get<std::string>(mode))},
+        return {ECM{EC::InvalidArg, AMStr::amfmt("Invalid mode: {}",
+                                                 std::get<std::string>(mode))},
                 {}};
       }
       mode_int = AMStr::ModeTrans(std::get<std::string>(mode));
     } else if (std::holds_alternative<uint64_t>(mode)) {
       if (!AMStr::IsModeValid(std::get<uint64_t>(mode))) {
         return {ECM{EC::InvalidArg,
-                    fmt::format("Invalid mode: {}", std::get<uint64_t>(mode))},
+                    AMStr::amfmt("Invalid mode: {}",
+                                 std::to_string(std::get<uint64_t>(mode)))},
                 {}};
       }
       mode_int = std::get<uint64_t>(mode);
     } else {
-      return {ECM{EC::InvalidArg, fmt::format("Invalid mode data type")}, {}};
+      return {ECM{EC::InvalidArg, AMStr::amfmt("Invalid mode data type")}, {}};
     }
     _chmod(path, mode_int, recursive, ecm_map, attrs, interrupt_flag,
            timeout_ms, start_time);
@@ -1553,7 +1557,7 @@ public:
         return {EC::Success, ""};
       } else {
         return {EC::PathAlreadyExists,
-                fmt::format("Path exists and is not a directory: {}", path)};
+                AMStr::amfmt("Path exists and is not a directory: {}", path)};
       }
     }
     return lib_mkdir(path, interrupt_flag, timeout_ms, start_time);
@@ -1573,7 +1577,7 @@ public:
     std::vector<std::string> parts = AMPathStr::split(path);
     if (parts.empty()) {
       return {EC::InvalidArg,
-              fmt::format("Path split failed, get empty parts: {}", path)};
+              AMStr::amfmt("Path split failed, get empty parts: {}", path)};
     } else if (parts.size() == 1) {
       return lib_mkdir(path, interrupt_flag, timeout_ms, start_time);
     }
@@ -1737,14 +1741,14 @@ public:
     std::string dstf = dst;
     if (srcf.empty() || dstf.empty()) {
       return std::make_pair(EC::InvalidArg,
-                            fmt::format("Invalid path: {} or {}", srcf, dstf));
+                            AMStr::amfmt("Invalid path: {} or {}", srcf, dstf));
     }
     auto [rcm, br] = exists(srcf);
     if (rcm.first != EC::Success) {
       return rcm;
     }
     if (!br) {
-      return {EC::PathNotExist, fmt::format("Src not exists: {}", srcf)};
+      return {EC::PathNotExist, AMStr::amfmt("Src not exists: {}", srcf)};
     }
 
     auto [rcm2, br2] = is_dir(dstf);
@@ -1757,12 +1761,12 @@ public:
           }
         } else {
           return {EC::ParentDirectoryNotExist,
-                  fmt::format("Dst dir not exists: {}", dstf)};
+                  AMStr::amfmt("Dst dir not exists: {}", dstf)};
         }
       }
     } else if (!br2) {
       return {EC::NotADirectory,
-              fmt::format("Dst exists but not a directory: {}", dstf)};
+              AMStr::amfmt("Dst exists but not a directory: {}", dstf)};
     }
 
     std::string dst_path = AMPathStr::join(dstf, AMPathStr::basename(srcf));
@@ -1773,7 +1777,7 @@ public:
     }
     if (sbr0) {
       return {EC::PathAlreadyExists,
-              fmt::format("Dst {} already has path named {}", dstf,
+              AMStr::amfmt("Dst {} already has path named {}", dstf,
                           AMPathStr::basename(srcf))};
     }
 
@@ -1787,10 +1791,9 @@ public:
 
     if (resp.second != 0) {
       std::string msg =
-          fmt::format("Copy cmd conducted failed with exit code: {}, error: {}",
-                      resp.second, resp.first);
-      trace(TraceLevel::Error, EC::InhostCopyFailed,
-            fmt::format("{}@{}->{}", res_data.nickname, srcf, dstf), "Copy",
+          AMStr::amfmt("Copy cmd conducted failed with exit code: {}, error:
+  {}", resp.second, resp.first); trace(TraceLevel::Error, EC::InhostCopyFailed,
+            AMStr::amfmt("{}@{}->{}", res_data.nickname, srcf, dstf), "Copy",
             msg);
       return {EC::InhostCopyFailed, msg};
     }
