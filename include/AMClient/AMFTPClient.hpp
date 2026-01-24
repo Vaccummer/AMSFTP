@@ -1247,6 +1247,7 @@ public:
     return {ECM{EC::Success, ""}, file_list};
   }
 
+  // 将iwalk定义在基类，因为几乎所有iwalk都是基于listdir的
   void _iwalk(const PathInfo &info, WRV &result,
               bool ignore_special_file = true, amf interrupt_flag = nullptr,
               int timeout_ms = -1, int64_t start_time = -1) {
@@ -1368,7 +1369,6 @@ public:
           timeout_ms, start_time);
     return {ECM{EC::Success, ""}, result_dict};
   }
-
   ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
             int timeout_ms = -1, int64_t start_time = -1) override {
     start_time = start_time == -1 ? am_ms() : start_time;
@@ -1417,6 +1417,7 @@ public:
     if (parts.size() == 1) {
       return mkdir(path, interrupt_flag, timeout_ms, start_time);
     }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
     std::string current_path = parts.front();
     for (size_t i = 1; i < parts.size(); i++) {
       current_path = AMPathStr::join(current_path, parts[i]);

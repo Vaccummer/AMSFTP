@@ -1,8 +1,10 @@
 #pragma once
 // 标准库
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -397,8 +399,6 @@ public:
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     start_time = start_time == -1 ? am_ms() : start_time;
-    std::cout << "baseconnect start_time: " << start_time << std::endl;
-    std::cout << "baseconnect timeout_ms: " << timeout_ms << std::endl;
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (has_connected.load()) {
       if (!force) {
@@ -695,9 +695,623 @@ public:
   }
 };
 
+class AMBaseTerminal {
+public:
+  using TerminalOutputCallback = std::function<void(const std::string &)>;
+  virtual ~AMBaseTerminal() = default;
+
+  virtual ECM Connect(bool force = false, amf interrupt_flag = nullptr,
+                      int timeout_ms = -1, int64_t start_time = -1) = 0;
+  virtual ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
+                    int64_t start_time = -1) = 0;
+  virtual void PauseReading() = 0;
+  virtual void ResumeReading() = 0;
+  virtual void
+  SetTerminalOutputCallback(TerminalOutputCallback output_cb = {}) = 0;
+  virtual ECM SetTerminalWindowInfo(const TerminalWindowInfo &window,
+                                    amf interrupt_flag = nullptr,
+                                    int timeout_ms = -1,
+                                    int64_t start_time = -1) = 0;
+  virtual ECM TerminalWrite(const std::string &msg,
+                            amf interrupt_flag = nullptr,
+                            int timeout_ms = -1,
+                            int64_t start_time = -1) = 0;
+  virtual ECM TerminalClose() = 0;
+  virtual void SetReaderWaitTimeoutMs(int timeout_ms) = 0;
+};
+
+class AMSFTPTerminal : public AMSession, public AMBaseTerminal {
+public:
+  using TerminalOutputCallback = AMBaseTerminal::TerminalOutputCallback;
+
+private:
+  std::unique_ptr<SafeChannel> terminal_channel;
+  std::atomic<bool> reader_running{false};
+  std::atomic<bool> reader_paused{false};
+  std::atomic<int> reader_wait_timeout_ms{200};
+  std::thread reader_thread;
+  std::condition_variable reader_cv;
+  std::mutex reader_cv_mtx;
+  std::mutex terminal_cb_mtx;
+
+  void StartReader() {
+    if (reader_running.load()) {
+      return;
+    }
+    bool has_cb = false;
+    {
+      std::lock_guard<std::mutex> lock(terminal_cb_mtx);
+      has_cb = static_cast<bool>(terminal_output_cb);
+    }
+    reader_running.store(true);
+    reader_paused.store(!has_cb);
+    reader_thread = std::thread([this]() { ReaderLoop(); });
+  }
+
+  void StopReader() {
+    if (!reader_running.load() && !reader_thread.joinable()) {
+      return;
+    }
+    reader_running.store(false);
+    reader_paused.store(false);
+    reader_cv.notify_all();
+    if (reader_thread.joinable()) {
+      reader_thread.join();
+    }
+  }
+
+  bool IsTerminalAlive() {
+    if (!terminal_channel || !terminal_channel->channel) {
+      return false;
+    }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (libssh2_channel_eof(terminal_channel->channel) != 0) {
+      return false;
+    }
+    return true;
+  }
+
+  void ReaderLoop() {
+    std::array<char, 4096> buffer;
+    while (reader_running.load()) {
+      if (reader_paused.load()) {
+        std::unique_lock<std::mutex> lock(reader_cv_mtx);
+        reader_cv.wait(lock, [this]() {
+          return !reader_paused.load() || !reader_running.load();
+        });
+        continue;
+      }
+
+      if (terminal_interrupt_flag && terminal_interrupt_flag->check()) {
+        reader_running.store(false);
+        break;
+      }
+
+      if (!terminal_channel || !terminal_channel->channel || !session) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        continue;
+      }
+
+      int64_t start_time = am_ms();
+      int wait_timeout = reader_wait_timeout_ms.load();
+      WaitResult wr = wait_for_socket(SocketWaitType::Read,
+                                      terminal_interrupt_flag, start_time,
+                                      wait_timeout);
+      if (wr == WaitResult::Timeout) {
+        continue;
+      }
+      if (wr == WaitResult::Interrupted) {
+        reader_running.store(false);
+        break;
+      }
+      if (wr == WaitResult::Error) {
+        continue;
+      }
+
+      std::string output;
+      {
+        std::lock_guard<std::recursive_mutex> lock(mtx);
+        libssh2_session_set_blocking(session, 0);
+        while (true) {
+          ssize_t nbytes = libssh2_channel_read(
+              terminal_channel->channel, buffer.data(),
+              static_cast<size_t>(buffer.size()));
+          if (nbytes > 0) {
+            output.append(buffer.data(), static_cast<size_t>(nbytes));
+            continue;
+          }
+          if (nbytes == 0) {
+            terminal_channel->close();
+            terminal_channel.reset();
+            reader_running.store(false);
+            break;
+          }
+          if (nbytes == LIBSSH2_ERROR_EAGAIN) {
+            break;
+          }
+          terminal_channel->close();
+          terminal_channel.reset();
+          reader_running.store(false);
+          break;
+        }
+      }
+
+      if (!output.empty()) {
+        TerminalOutputCallback cb;
+        {
+          std::lock_guard<std::mutex> lock(terminal_cb_mtx);
+          cb = terminal_output_cb;
+        }
+        if (cb) {
+          CallCallbackSafe(cb, output);
+        }
+      }
+    }
+  }
+
+  ECM TerminalInitInternal(const TerminalWindowInfo &window,
+                           TerminalOutputCallback output_cb = {},
+                           amf interrupt_flag = nullptr,
+                           int timeout_ms = -1, int64_t start_time = -1) {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!session) {
+      return {EC::NoSession, "Session not initialized"};
+    }
+
+    terminal_window = window;
+    if (output_cb) {
+      std::lock_guard<std::mutex> cb_lock(terminal_cb_mtx);
+      terminal_output_cb = std::move(output_cb);
+    }
+
+    amf flag = interrupt_flag ? interrupt_flag : terminal_interrupt_flag;
+    start_time = start_time == -1 ? am_ms() : start_time;
+    if (flag && flag->check()) {
+      terminal_channel.reset();
+      return {EC::Terminate, "Terminal init interrupted"};
+    }
+
+    terminal_channel.reset();
+    terminal_channel = std::make_unique<SafeChannel>(session);
+    if (!terminal_channel->channel) {
+      terminal_channel.reset();
+      return {EC::NoConnection, "Terminal channel not initialized"};
+    }
+
+    libssh2_session_set_blocking(session, 0);
+
+    int rc = 0;
+    WaitResult wr = WaitResult::Ready;
+    while ((rc = libssh2_channel_request_pty_ex(
+                terminal_channel->channel, terminal_window.term.c_str(),
+                static_cast<unsigned int>(terminal_window.term.size()), nullptr,
+                0, terminal_window.cols, terminal_window.rows,
+                terminal_window.width, terminal_window.height)) ==
+           LIBSSH2_ERROR_EAGAIN) {
+      wr = wait_for_socket(SocketWaitType::Auto, flag, start_time, timeout_ms);
+      if (wr != WaitResult::Ready) {
+        goto cleanup;
+      }
+    }
+    if (rc != 0) {
+      terminal_channel.reset();
+      return {GetLastEC(), AMStr::amfmt("Terminal request pty failed: {}",
+                                        GetLastErrorMsg())};
+    }
+
+    while ((rc = libssh2_channel_shell(terminal_channel->channel)) ==
+           LIBSSH2_ERROR_EAGAIN) {
+      wr = wait_for_socket(SocketWaitType::Auto, flag, start_time, timeout_ms);
+      if (wr != WaitResult::Ready) {
+        goto cleanup;
+      }
+    }
+    if (rc != 0) {
+      terminal_channel.reset();
+      return {GetLastEC(), AMStr::amfmt("Terminal start shell failed: {}",
+                                        GetLastErrorMsg())};
+    }
+
+    libssh2_session_set_blocking(session, 0);
+    return {EC::Success, ""};
+
+  cleanup:
+    terminal_channel.reset();
+    switch (wr) {
+    case WaitResult::Timeout:
+      return {EC::OperationTimeout, "Terminal init timed out"};
+    case WaitResult::Interrupted:
+      return {EC::Terminate, "Terminal init interrupted"};
+    case WaitResult::Error:
+      return {EC::SocketRecvError, "Socket error during terminal init"};
+    default:
+      return {EC::UnknownError, "Terminal init failed"};
+    }
+  }
+
+public:
+  TerminalWindowInfo terminal_window = {};
+  amf terminal_interrupt_flag = std::make_shared<InterruptFlag>();
+  TerminalOutputCallback terminal_output_cb = {};
+
+  AMSFTPTerminal(const ConRequst &request,
+                 const std::vector<std::string> &keys = {},
+                 unsigned int tracer_capacity = 10,
+                 TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
+      : AMSession(request, keys, tracer_capacity, std::move(trace_cb),
+                  std::move(auth_cb)) {
+    this->PROTOCOL = ClientProtocol::Base;
+  }
+
+  ~AMSFTPTerminal() override {
+    StopReader();
+    TerminalClose();
+  }
+
+  ECM Connect(bool force = false, amf interrupt_flag = nullptr,
+              int timeout_ms = -1, int64_t start_time = -1) override {
+    interrupt_flag =
+        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    start_time = start_time == -1 ? am_ms() : start_time;
+
+    if (has_connected.load() && session && !force) {
+      ECM chk = Check(interrupt_flag, timeout_ms, start_time);
+      if (chk.first == EC::Success) {
+        return chk;
+      }
+      if (session && !IsTerminalAlive()) {
+        TerminalOutputCallback cb;
+        {
+          std::lock_guard<std::mutex> lock(terminal_cb_mtx);
+          cb = terminal_output_cb;
+        }
+        ECM term_rcm = TerminalInitInternal(terminal_window, cb,
+                                            interrupt_flag, timeout_ms,
+                                            start_time);
+        if (term_rcm.first == EC::Success) {
+          StartReader();
+        }
+        return term_rcm;
+      }
+    }
+
+    StopReader();
+    TerminalClose();
+    ECM ecm = BaseConnect(true, interrupt_flag, start_time, timeout_ms);
+    if (ecm.first != EC::Success) {
+      return ecm;
+    }
+    TerminalOutputCallback cb;
+    {
+      std::lock_guard<std::mutex> lock(terminal_cb_mtx);
+      cb = terminal_output_cb;
+    }
+    ECM term_rcm = TerminalInitInternal(terminal_window, cb,
+                                        interrupt_flag, timeout_ms, start_time);
+    if (term_rcm.first == EC::Success) {
+      StartReader();
+    }
+    return term_rcm;
+  }
+
+  ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
+            int64_t start_time = -1) override {
+    amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    if (flag && flag->check()) {
+      ECM rcm = {EC::Terminate, "Check interrupted"};
+      SetState(rcm);
+      return rcm;
+    }
+    (void)timeout_ms;
+    (void)start_time;
+    if (!session || sock == INVALID_SOCKET || !has_connected.load()) {
+      ECM rcm = {EC::NoConnection, "Session not connected"};
+      SetState(rcm);
+      return rcm;
+    }
+
+    if (!IsTerminalAlive()) {
+      ECM rcm = {EC::NoConnection, "Terminal not initialized"};
+      SetState(rcm);
+      return rcm;
+    }
+
+    SetState({EC::Success, ""});
+    return {EC::Success, ""};
+  }
+
+  void PauseReading() override { reader_paused.store(true); }
+
+  void ResumeReading() override {
+    reader_paused.store(false);
+    reader_cv.notify_all();
+  }
+
+  void SetTerminalOutputCallback(TerminalOutputCallback output_cb = {})
+      override {
+    {
+      std::lock_guard<std::mutex> lock(terminal_cb_mtx);
+      terminal_output_cb = std::move(output_cb);
+    }
+    if (terminal_output_cb) {
+      ResumeReading();
+    } else {
+      PauseReading();
+    }
+  }
+
+  void SetReaderWaitTimeoutMs(int timeout_ms) override {
+    if (timeout_ms < 1) {
+      timeout_ms = 1;
+    }
+    reader_wait_timeout_ms.store(timeout_ms);
+  }
+
+  ECM SetTerminalWindowInfo(const TerminalWindowInfo &window,
+                            amf interrupt_flag = nullptr,
+                            int timeout_ms = -1,
+                            int64_t start_time = -1) override {
+    terminal_window = window;
+    if (!terminal_channel || !terminal_channel->channel) {
+      return {EC::Success, ""};
+    }
+
+    amf flag = interrupt_flag ? interrupt_flag : terminal_interrupt_flag;
+    start_time = start_time == -1 ? am_ms() : start_time;
+    int rc = 0;
+    WaitResult wr = WaitResult::Ready;
+
+    PauseReading();
+    {
+      std::lock_guard<std::recursive_mutex> lock(mtx);
+      libssh2_session_set_blocking(session, 0);
+      while ((rc = libssh2_channel_request_pty_size_ex(
+                  terminal_channel->channel, terminal_window.cols,
+                  terminal_window.rows, terminal_window.width,
+                  terminal_window.height)) == LIBSSH2_ERROR_EAGAIN) {
+        wr = wait_for_socket(SocketWaitType::Auto, flag, start_time, timeout_ms);
+        if (wr != WaitResult::Ready) {
+          goto cleanup;
+        }
+      }
+    }
+
+    ResumeReading();
+    if (rc != 0) {
+      return {GetLastEC(),
+              AMStr::amfmt("Terminal resize failed: {}", GetLastErrorMsg())};
+    }
+    return {EC::Success, ""};
+
+  cleanup:
+    ResumeReading();
+    switch (wr) {
+    case WaitResult::Timeout:
+      return {EC::OperationTimeout, "Terminal resize timed out"};
+    case WaitResult::Interrupted:
+      return {EC::Terminate, "Terminal resize interrupted"};
+    case WaitResult::Error:
+      return {EC::SocketRecvError, "Socket error during terminal resize"};
+    default:
+      return {EC::UnknownError, "Terminal resize failed"};
+    }
+  }
+
+  ECM TerminalWrite(const std::string &msg, amf interrupt_flag = nullptr,
+                    int timeout_ms = -1, int64_t start_time = -1) override {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!terminal_channel || !terminal_channel->channel) {
+      return {EC::NoConnection, "Terminal not initialized"};
+    }
+
+    amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
+    start_time = start_time == -1 ? am_ms() : start_time;
+    if (flag && flag->check()) {
+      return {EC::Terminate, "Terminal interrupted"};
+    }
+
+    libssh2_session_set_blocking(session, 0);
+    size_t offset = 0;
+    WaitResult wr = WaitResult::Ready;
+    while (offset < msg.size()) {
+      if (flag && flag->check()) {
+        wr = WaitResult::Interrupted;
+        goto cleanup;
+      }
+      ssize_t rc =
+          libssh2_channel_write(terminal_channel->channel, msg.data() + offset,
+                                static_cast<int>(msg.size() - offset));
+      if (rc > 0) {
+        offset += static_cast<size_t>(rc);
+        continue;
+      }
+      if (rc == LIBSSH2_ERROR_EAGAIN) {
+        wr = wait_for_socket(SocketWaitType::Write, flag, start_time,
+                             timeout_ms);
+        if (wr != WaitResult::Ready) {
+          goto cleanup;
+        }
+        continue;
+      }
+      return {GetLastEC(),
+              AMStr::amfmt("Terminal write failed: {}", GetLastErrorMsg())};
+    }
+
+    return {EC::Success, ""};
+
+  cleanup:
+    switch (wr) {
+    case WaitResult::Timeout:
+      return {EC::OperationTimeout, "Terminal write timed out"};
+    case WaitResult::Interrupted:
+      return {EC::Terminate, "Terminal interrupted"};
+    case WaitResult::Error:
+      return {EC::SocketRecvError, "Socket error during terminal write"};
+    default:
+      return {EC::UnknownError, "Terminal write failed"};
+    }
+  }
+
+  ECM TerminalClose() override {
+    StopReader();
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!terminal_channel || !terminal_channel->channel) {
+      return {EC::Success, ""};
+    }
+    libssh2_session_set_blocking(session, 1);
+    terminal_channel->close();
+    terminal_channel.reset();
+    libssh2_session_set_blocking(session, 0);
+    return {EC::Success, ""};
+  }
+};
+
+class LocalTerminal : public AMBaseTerminal {
+public:
+  using TerminalOutputCallback = AMBaseTerminal::TerminalOutputCallback;
+
+private:
+  std::atomic<bool> paused{false};
+  std::atomic<bool> closed{false};
+  std::atomic<int> reader_wait_timeout_ms{200};
+  TerminalOutputCallback terminal_output_cb = {};
+  std::mutex terminal_cb_mtx;
+
+#ifdef _WIN32
+  static FILE *OpenPipe(const std::string &cmd) {
+    return _popen(cmd.c_str(), "r");
+  }
+  static int ClosePipe(FILE *pipe) { return _pclose(pipe); }
+#else
+  static FILE *OpenPipe(const std::string &cmd) {
+    return popen(cmd.c_str(), "r");
+  }
+  static int ClosePipe(FILE *pipe) { return pclose(pipe); }
+#endif
+
+public:
+  ECM Connect(bool force = false, amf interrupt_flag = nullptr,
+              int timeout_ms = -1, int64_t start_time = -1) override {
+    (void)force;
+    (void)interrupt_flag;
+    (void)timeout_ms;
+    (void)start_time;
+    closed.store(false);
+    return {EC::Success, ""};
+  }
+
+  ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
+            int64_t start_time = -1) override {
+    (void)timeout_ms;
+    (void)start_time;
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {EC::Terminate, "Check interrupted"};
+    }
+    if (closed.load()) {
+      return {EC::NoConnection, "Terminal closed"};
+    }
+    return {EC::Success, ""};
+  }
+
+  void PauseReading() override { paused.store(true); }
+
+  void ResumeReading() override { paused.store(false); }
+
+  void SetTerminalOutputCallback(TerminalOutputCallback output_cb = {})
+      override {
+    std::lock_guard<std::mutex> lock(terminal_cb_mtx);
+    terminal_output_cb = std::move(output_cb);
+  }
+
+  ECM SetTerminalWindowInfo(const TerminalWindowInfo &window,
+                            amf interrupt_flag = nullptr,
+                            int timeout_ms = -1,
+                            int64_t start_time = -1) override {
+    (void)window;
+    (void)interrupt_flag;
+    (void)timeout_ms;
+    (void)start_time;
+    return {EC::Success, ""};
+  }
+
+  void SetReaderWaitTimeoutMs(int timeout_ms) override {
+    if (timeout_ms < 1) {
+      timeout_ms = 1;
+    }
+    reader_wait_timeout_ms.store(timeout_ms);
+  }
+
+  ECM TerminalWrite(const std::string &msg, amf interrupt_flag = nullptr,
+                    int timeout_ms = -1, int64_t start_time = -1) override {
+    if (closed.load()) {
+      return {EC::NoConnection, "Terminal closed"};
+    }
+    if (msg.empty()) {
+      return {EC::InvalidArg, "Empty command"};
+    }
+
+    std::string cmd = msg;
+    while (!cmd.empty() && (cmd.back() == '\n' || cmd.back() == '\r')) {
+      cmd.pop_back();
+    }
+    if (cmd.empty()) {
+      return {EC::InvalidArg, "Empty command"};
+    }
+
+    if (timeout_ms <= 0) {
+      timeout_ms = reader_wait_timeout_ms.load();
+    }
+    start_time = start_time == -1 ? am_ms() : start_time;
+
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {EC::Terminate, "Terminal interrupted"};
+    }
+
+    FILE *pipe = OpenPipe(cmd);
+    if (!pipe) {
+      return {EC::LocalFileOpenError, "Local terminal pipe open failed"};
+    }
+
+    std::array<char, 4096> buffer;
+    while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
+      if (interrupt_flag && interrupt_flag->check()) {
+        ClosePipe(pipe);
+        return {EC::Terminate, "Terminal interrupted"};
+      }
+      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+        ClosePipe(pipe);
+        return {EC::OperationTimeout, "Terminal write timed out"};
+      }
+
+      if (!paused.load()) {
+        TerminalOutputCallback cb;
+        {
+          std::lock_guard<std::mutex> lock(terminal_cb_mtx);
+          cb = terminal_output_cb;
+        }
+        if (cb) {
+          CallCallbackSafe(cb, std::string(buffer.data()));
+        }
+      }
+    }
+
+    int rc = ClosePipe(pipe);
+    if (rc != 0) {
+      return {EC::UnknownError, "Local command failed"};
+    }
+    return {EC::Success, ""};
+  }
+
+  ECM TerminalClose() override {
+    closed.store(true);
+    return {EC::Success, ""};
+  }
+};
+
 class AMSFTPClient : public AMSession {
 private:
   std::unordered_map<long, std::string> user_id_map;
+  std::unique_ptr<SafeChannel> terminal_channel;
 
   PathInfo FormatStat(const std::string &path,
                       const LIBSSH2_SFTP_ATTRIBUTES &attrs) {
@@ -1140,6 +1754,12 @@ protected:
   }
 
 public:
+  using TerminalOutputCallback = std::function<void(const std::string &)>;
+
+  TerminalWindowInfo terminal_window = {};
+  amf terminal_interrupt_flag = std::make_shared<InterruptFlag>();
+  TerminalOutputCallback terminal_output_cb = {};
+
   AMSFTPClient(const ConRequst &request,
                const std::vector<std::string> &keys = {},
                unsigned int tracer_capacity = 10, TraceCallback trace_cb = {},
@@ -1299,6 +1919,405 @@ public:
     }
   }
 
+  ECM TerminalInit(const TerminalWindowInfo &window = {},
+                   TerminalOutputCallback output_cb = {},
+                   amf interrupt_flag = nullptr, int timeout_ms = -1,
+                   int64_t start_time = -1) {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!session) {
+      return {EC::NoSession, "Session not initialized"};
+    }
+
+    terminal_window = window;
+    if (output_cb) {
+      terminal_output_cb = std::move(output_cb);
+    }
+
+    amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
+    start_time = start_time == -1 ? am_ms() : start_time;
+    if (flag && flag->check()) {
+      terminal_channel.reset();
+      return {EC::Terminate, "Terminal init interrupted"};
+    }
+
+    terminal_channel.reset();
+    terminal_channel = std::make_unique<SafeChannel>(session);
+    if (!terminal_channel->channel) {
+      terminal_channel.reset();
+      return {EC::NoConnection, "Terminal channel not initialized"};
+    }
+
+    libssh2_session_set_blocking(session, 0);
+
+    int rc = 0;
+    WaitResult wr = WaitResult::Ready;
+    while ((rc = libssh2_channel_request_pty_ex(
+                terminal_channel->channel, terminal_window.term.c_str(),
+                static_cast<unsigned int>(terminal_window.term.size()), nullptr,
+                0, terminal_window.cols, terminal_window.rows,
+                terminal_window.width, terminal_window.height)) ==
+           LIBSSH2_ERROR_EAGAIN) {
+      wr = wait_for_socket(SocketWaitType::Auto, flag, start_time, timeout_ms);
+      if (wr != WaitResult::Ready) {
+        goto cleanup;
+      }
+    }
+    if (rc != 0) {
+      libssh2_session_set_blocking(session, 1);
+      terminal_channel.reset();
+      return {GetLastEC(), AMStr::amfmt("Terminal request pty failed: {}",
+                                        GetLastErrorMsg())};
+    }
+
+    while ((rc = libssh2_channel_shell(terminal_channel->channel)) ==
+           LIBSSH2_ERROR_EAGAIN) {
+      wr = wait_for_socket(SocketWaitType::Auto, flag, start_time, timeout_ms);
+      if (wr != WaitResult::Ready) {
+        goto cleanup;
+      }
+    }
+    if (rc != 0) {
+      libssh2_session_set_blocking(session, 1);
+      terminal_channel.reset();
+      return {GetLastEC(), AMStr::amfmt("Terminal start shell failed: {}",
+                                        GetLastErrorMsg())};
+    }
+
+    libssh2_session_set_blocking(session, 1);
+    return {EC::Success, ""};
+
+  cleanup:
+    libssh2_session_set_blocking(session, 1);
+    terminal_channel.reset();
+    switch (wr) {
+    case WaitResult::Timeout:
+      return {EC::OperationTimeout, "Terminal init timed out"};
+    case WaitResult::Interrupted:
+      return {EC::Terminate, "Terminal init interrupted"};
+    case WaitResult::Error:
+      return {EC::SocketRecvError, "Socket error during terminal init"};
+    default:
+      return {EC::UnknownError, "Terminal init failed"};
+    }
+  }
+
+  ECM TerminalWrite(const std::string &msg, amf interrupt_flag = nullptr,
+                    int timeout_ms = -1, int64_t start_time = -1) {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!terminal_channel || !terminal_channel->channel) {
+      return {EC::NoConnection, "Terminal not initialized"};
+    }
+
+    amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
+    start_time = start_time == -1 ? am_ms() : start_time;
+    if (flag && flag->check()) {
+      terminal_channel.reset();
+      return {EC::Terminate, "Terminal interrupted"};
+    }
+
+    libssh2_session_set_blocking(session, 0);
+    size_t offset = 0;
+    WaitResult wr = WaitResult::Ready;
+    while (offset < msg.size()) {
+      if (flag && flag->check()) {
+        wr = WaitResult::Interrupted;
+        goto cleanup;
+      }
+      ssize_t rc =
+          libssh2_channel_write(terminal_channel->channel, msg.data() + offset,
+                                static_cast<int>(msg.size() - offset));
+      if (rc > 0) {
+        offset += static_cast<size_t>(rc);
+        continue;
+      }
+      if (rc == LIBSSH2_ERROR_EAGAIN) {
+        wr = wait_for_socket(SocketWaitType::Write, flag, start_time,
+                             timeout_ms);
+        if (wr != WaitResult::Ready) {
+          goto cleanup;
+        }
+        continue;
+      }
+      libssh2_session_set_blocking(session, 1);
+      return {GetLastEC(),
+              AMStr::amfmt("Terminal write failed: {}", GetLastErrorMsg())};
+    }
+
+    libssh2_session_set_blocking(session, 1);
+    return {EC::Success, ""};
+
+  cleanup:
+    libssh2_session_set_blocking(session, 1);
+    terminal_channel.reset();
+    switch (wr) {
+    case WaitResult::Timeout:
+      return {EC::OperationTimeout, "Terminal write timed out"};
+    case WaitResult::Interrupted:
+      return {EC::Terminate, "Terminal interrupted"};
+    case WaitResult::Error:
+      return {EC::SocketRecvError, "Socket error during terminal write"};
+    default:
+      return {EC::UnknownError, "Terminal write failed"};
+    }
+  }
+
+  std::pair<ECM, std::string>
+  TerminalRead(amf interrupt_flag = nullptr, int timeout_ms = -1,
+               int64_t start_time = -1, bool wait_for_data = true) {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!terminal_channel || !terminal_channel->channel) {
+      return {ECM{EC::NoConnection, "Terminal not initialized"}, ""};
+    }
+
+    amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
+    start_time = start_time == -1 ? am_ms() : start_time;
+    if (flag && flag->check()) {
+      terminal_channel.reset();
+      return {ECM{EC::Terminate, "Terminal interrupted"}, ""};
+    }
+
+    libssh2_session_set_blocking(session, 0);
+
+    std::string output;
+    std::array<char, 4096> buffer;
+    WaitResult wr = WaitResult::Ready;
+
+    if (wait_for_data) {
+      wr = wait_for_socket(SocketWaitType::Read, flag, start_time, timeout_ms);
+      if (wr != WaitResult::Ready) {
+        goto cleanup;
+      }
+    }
+
+    while (true) {
+      if (flag && flag->check()) {
+        wr = WaitResult::Interrupted;
+        goto cleanup;
+      }
+      ssize_t nbytes = libssh2_channel_read(terminal_channel->channel,
+                                            buffer.data(), buffer.size());
+      if (nbytes > 0) {
+        std::string chunk(buffer.data(), static_cast<size_t>(nbytes));
+        output += chunk;
+        if (terminal_output_cb) {
+          CallCallbackSafe(terminal_output_cb, chunk);
+        }
+        continue;
+      }
+      if (nbytes == 0) {
+        terminal_channel->close();
+        terminal_channel.reset();
+        libssh2_session_set_blocking(session, 1);
+        return {ECM{EC::ChannelClosed, "Terminal closed by remote"}, output};
+      }
+      if (nbytes == LIBSSH2_ERROR_EAGAIN) {
+        break;
+      }
+      libssh2_session_set_blocking(session, 1);
+      return {ECM{GetLastEC(),
+                  AMStr::amfmt("Terminal read failed: {}",
+                               GetLastErrorMsg())},
+              output};
+    }
+
+    libssh2_session_set_blocking(session, 1);
+    return {ECM{EC::Success, ""}, output};
+
+  cleanup:
+    libssh2_session_set_blocking(session, 1);
+    switch (wr) {
+    case WaitResult::Timeout:
+      return {ECM{EC::OperationTimeout, "Terminal read timed out"}, ""};
+    case WaitResult::Interrupted:
+      terminal_channel.reset();
+      return {ECM{EC::Terminate, "Terminal interrupted"}, ""};
+    case WaitResult::Error:
+      terminal_channel.reset();
+      return {ECM{EC::SocketRecvError, "Socket error during terminal read"},
+              ""};
+    default:
+      terminal_channel.reset();
+      return {ECM{EC::UnknownError, "Terminal read failed"}, ""};
+    }
+  }
+
+  std::pair<ECM, std::pair<std::string, int>>
+  TerminalExec(const std::string &cmd, amf interrupt_flag = nullptr,
+               int timeout_ms = -1, int64_t start_time = -1) {
+    if (cmd.empty()) {
+      return {ECM{EC::InvalidArg, "Empty command"}, {"", -1}};
+    }
+    amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
+    start_time = start_time == -1 ? am_ms() : start_time;
+
+    static std::atomic<uint64_t> marker_seq{0};
+    const uint64_t seq = ++marker_seq;
+    const std::string marker =
+        AMStr::amfmt("__AMSFTP_DONE__{}__", std::to_string(seq));
+
+    std::string cmd_line = cmd;
+    while (!cmd_line.empty() &&
+           (cmd_line.back() == '\n' || cmd_line.back() == '\r')) {
+      cmd_line.pop_back();
+    }
+    cmd_line += AMStr::amfmt("; echo {}:$?\n", marker);
+
+    ECM wrc = TerminalWrite(cmd_line, flag, timeout_ms, start_time);
+    if (wrc.first != EC::Success) {
+      return {wrc, {"", -1}};
+    }
+
+    std::string output;
+    while (true) {
+      auto [rcm, chunk] = TerminalRead(flag, timeout_ms, start_time, true);
+      if (rcm.first != EC::Success) {
+        return {rcm, {output, -1}};
+      }
+      if (!chunk.empty()) {
+        output += chunk;
+      }
+      auto pos = output.find(marker);
+      if (pos == std::string::npos) {
+        if (flag && flag->check()) {
+          return {ECM{EC::Terminate, "Terminal interrupted"}, {output, -1}};
+        }
+        if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+          return {ECM{EC::OperationTimeout, "Terminal exec timed out"},
+                  {output, -1}};
+        }
+        continue;
+      }
+
+      int exit_code = -1;
+      size_t code_pos = pos + marker.size();
+      if (code_pos < output.size() && output[code_pos] == ':') {
+        ++code_pos;
+        size_t end = code_pos;
+        while (end < output.size() &&
+               (output[end] == '-' ||
+                (output[end] >= '0' && output[end] <= '9'))) {
+          ++end;
+        }
+        try {
+          exit_code = std::stoi(output.substr(code_pos, end - code_pos));
+        } catch (...) {
+          exit_code = -1;
+        }
+      }
+
+      std::string out_only = output.substr(0, pos);
+      return {ECM{EC::Success, ""}, {out_only, exit_code}};
+    }
+  }
+
+  std::pair<ECM, std::string> TerminalInput(const std::string &msg,
+                                            amf interrupt_flag = nullptr,
+                                            int timeout_ms = -1,
+                                            int64_t start_time = -1) {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!terminal_channel || !terminal_channel->channel) {
+      return {ECM{EC::NoConnection, "Terminal not initialized"}, ""};
+    }
+
+    amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
+    start_time = start_time == -1 ? am_ms() : start_time;
+    if (flag && flag->check()) {
+      terminal_channel.reset();
+      return {ECM{EC::Terminate, "Terminal interrupted"}, ""};
+    }
+
+    libssh2_session_set_blocking(session, 0);
+
+    size_t offset = 0;
+    WaitResult wr = WaitResult::Ready;
+    while (offset < msg.size()) {
+      if (flag && flag->check()) {
+        wr = WaitResult::Interrupted;
+        goto cleanup;
+      }
+      ssize_t rc =
+          libssh2_channel_write(terminal_channel->channel, msg.data() + offset,
+                                static_cast<int>(msg.size() - offset));
+      if (rc > 0) {
+        offset += static_cast<size_t>(rc);
+        continue;
+      }
+      if (rc == LIBSSH2_ERROR_EAGAIN) {
+        wr = wait_for_socket(SocketWaitType::Write, flag, start_time,
+                             timeout_ms);
+        if (wr != WaitResult::Ready) {
+          goto cleanup;
+        }
+        continue;
+      }
+      libssh2_session_set_blocking(session, 1);
+      return {ECM{GetLastEC(),
+                  AMStr::amfmt("Terminal write failed: {}", GetLastErrorMsg())},
+              ""};
+    }
+
+    std::string output;
+    std::array<char, 4096> buffer;
+    while (true) {
+      if (flag && flag->check()) {
+        wr = WaitResult::Interrupted;
+        goto cleanup;
+      }
+      ssize_t nbytes = libssh2_channel_read(terminal_channel->channel,
+                                            buffer.data(), buffer.size());
+      if (nbytes > 0) {
+        std::string chunk(buffer.data(), static_cast<size_t>(nbytes));
+        output += chunk;
+        if (terminal_output_cb) {
+          CallCallbackSafe(terminal_output_cb, chunk);
+        }
+        continue;
+      }
+      if (nbytes == 0) {
+        terminal_channel->close();
+        terminal_channel.reset();
+        libssh2_session_set_blocking(session, 1);
+        return {ECM{EC::ChannelClosed, "Terminal closed by remote"}, output};
+      }
+      if (nbytes == LIBSSH2_ERROR_EAGAIN) {
+        break;
+      }
+      libssh2_session_set_blocking(session, 1);
+      return {ECM{GetLastEC(),
+                  AMStr::amfmt("Terminal read failed: {}", GetLastErrorMsg())},
+              output};
+    }
+
+    libssh2_session_set_blocking(session, 1);
+    return {ECM{EC::Success, ""}, output};
+
+  cleanup:
+    libssh2_session_set_blocking(session, 1);
+    terminal_channel.reset();
+    switch (wr) {
+    case WaitResult::Timeout:
+      return {ECM{EC::OperationTimeout, "Terminal write timed out"}, ""};
+    case WaitResult::Interrupted:
+      return {ECM{EC::Terminate, "Terminal interrupted"}, ""};
+    case WaitResult::Error:
+      return {ECM{EC::SocketRecvError, "Socket error during terminal write"},
+              ""};
+    default:
+      return {ECM{EC::UnknownError, "Terminal write failed"}, ""};
+    }
+  }
+
+  ECM TerminalClose() {
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!terminal_channel || !terminal_channel->channel) {
+      return {EC::Success, ""};
+    }
+    libssh2_session_set_blocking(session, 1);
+    terminal_channel->close();
+    terminal_channel.reset();
+    return {EC::Success, ""};
+  }
+
   OS_TYPE GetOSType(bool update = false) override {
     if (os_type != OS_TYPE::Uncertain && !update) {
       return os_type;
@@ -1399,8 +2418,6 @@ public:
   ECM Connect(bool force = false, amf interrupt_flag = nullptr,
               int timeout_ms = -1, int64_t start_time = -1) override {
     bool not_init = has_connected;
-    std::cout << "connect start_time: " << start_time << std::endl;
-    std::cout << "connect timeout_ms: " << timeout_ms << std::endl;
     ECM ecm = BaseConnect(force, interrupt_flag, start_time, timeout_ms);
     if (!not_init && isok(ecm)) {
       GetOSType();

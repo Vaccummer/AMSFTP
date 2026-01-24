@@ -1,5 +1,7 @@
+#include "AMClient/AMCore.hpp"
 #include "AMCommonTools.hpp"
-#include "AMCore.hpp"
+#include <atomic>
+#include <thread>
 #pragma comment(lib, "libssh2.lib")
 #pragma comment(lib, "libcrypto.lib")
 #pragma comment(lib, "zlib.lib")
@@ -30,42 +32,61 @@ int main() {
   }
   is_wsa_initialized.store(true);
 #endif
-  std::cout << GenerateUID() << std::endl;
   auto wsl_con = ConRequst("wsl", "172.26.36.83", "am", 22, "1984");
-
   auto wsl = std::make_shared<AMSFTPClient>(wsl_con);
 
   auto rcm = wsl->Connect();
-
-  auto me_con = ConRequst("me", "10.163.174.210", "am", 21, "1984");
-  auto me = std::make_shared<AMFTPClient>(me_con);
-  rcm = me->Connect();
-
-  auto host_m = std::make_shared<ClientMaintainer>();
-  host_m->add_client("wsl", wsl);
-  host_m->add_client("me", me);
-  auto cb_set = TransferCallback(total_cb, error_cb, progress_cb);
-  auto worker = AMWorkManager();
-  auto [ecm, tasks] =
-      worker.load_tasks("/home/am/250414/250414.mp4", "/yes.mp4", host_m, "wsl",
-                        "me", true, true, true);
-
-  for (auto &task : tasks) {
-    print(AMStr::amfmt("src: {}, dst: {}, size: {}", task.src, task.dst,
-                       std::to_string(task.size)));
+  if (rcm.first != EC::Success) {
+    std::cerr << "Connect failed: " << rcm.second << std::endl;
+    return 1;
   }
-  auto id = worker.transfer(tasks, host_m, cb_set, 32 * AMMB);
 
+  TerminalWindowInfo win;
+  win.cols = 120;
+  win.rows = 30;
+
+  auto term_rcm = wsl->TerminalInit(
+      win, [](const std::string &chunk) { std::cout << chunk; });
+  if (term_rcm.first != EC::Success) {
+    std::cerr << "Terminal init failed: " << term_rcm.second << std::endl;
+    return 1;
+  }
+
+  std::atomic<bool> running{true};
+  std::thread reader([&] {
+    while (running.load()) {
+      auto [rcm_read, _] = wsl->TerminalRead(nullptr, 50, -1, true);
+      if (rcm_read.first == EC::OperationTimeout) {
+        continue;
+      }
+      if (rcm_read.first != EC::Success) {
+        std::cerr << "Terminal read failed: " << rcm_read.second << std::endl;
+        break;
+      }
+    }
+  });
+
+  std::string cmd;
   while (true) {
-    auto status = worker.get_status(id);
-    if (status && (*status) == TaskStatus::Finished) {
+    if (!std::getline(std::cin, cmd)) {
       break;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (cmd == "exit" || cmd == "quit") {
+      break;
+    }
+    cmd += "\n";
+    auto wrc = wsl->TerminalWrite(cmd);
+    if (wrc.first != EC::Success) {
+      std::cerr << "Terminal write failed: " << wrc.second << std::endl;
+      break;
+    }
   }
-  auto result2 = worker.get_result(id);
-  if (result2) {
 
-  } else {
+  running.store(false);
+  if (reader.joinable()) {
+    reader.join();
   }
+
+  wsl->TerminalClose();
+  return 0;
 }
