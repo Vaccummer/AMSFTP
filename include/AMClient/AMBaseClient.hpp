@@ -387,9 +387,10 @@ public:
 
   // 获取某一路径下的所有文件和底层目录的总大小,
   // 但是在读取时遇到错误不会throw，也不会记录其大小，可能存在偏差
-  int64_t getsize(const std::string &path, bool ignore_sepcial_file = true,
-                  amf interrupt_flag = nullptr, int timeout_ms = -1,
-                  int64_t start_time = -1) {
+  virtual int64_t getsize(const std::string &path,
+                          bool ignore_sepcial_file = true,
+                          amf interrupt_flag = nullptr, int timeout_ms = -1,
+                          int64_t start_time = -1) {
     auto [rcm, list] = iwalk(path, ignore_sepcial_file, interrupt_flag,
                              timeout_ms, start_time);
     if (rcm.first != EC::Success) {
@@ -404,6 +405,7 @@ public:
     }
     return size;
   }
+
   std::pair<ECM, PathType> get_path_type(const std::string &path,
                                          amf interrupt_flag = nullptr,
                                          int timeout_ms = -1,
@@ -469,36 +471,40 @@ public:
             path_info.type == PathType::SYMLINK ? true : false};
   }
 
-  // NOLINTBEGIN
-  virtual ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
-                    int64_t start_time = -1) {
+  virtual ECM Check([[maybe_unused]] amf interrupt_flag = nullptr,
+                    [[maybe_unused]] int timeout_ms = -1,
+                    [[maybe_unused]] int64_t start_time = -1) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: Check", GetProtocolName()));
   }
 
-  virtual ECM Connect(bool force = false, amf interrupt_flag = nullptr,
-                      int timeout_ms = -1, int64_t start_time = -1) {
+  virtual ECM Connect([[maybe_unused]] bool force = false,
+                      [[maybe_unused]] amf interrupt_flag = nullptr,
+                      [[maybe_unused]] int timeout_ms = -1,
+                      [[maybe_unused]] int64_t start_time = -1) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: Connect", GetProtocolName()));
   }
 
-  virtual OS_TYPE GetOSType(bool update = false) {
+  virtual OS_TYPE GetOSType([[maybe_unused]] bool update = false) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: GetOSType", GetProtocolName()));
   }
 
-  virtual double GetRTT(ssize_t times = 5, amf interrupt_flag = nullptr) {
+  virtual double GetRTT([[maybe_unused]] ssize_t times = 5,
+                        [[maybe_unused]] amf interrupt_flag = nullptr) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: GetRTT", GetProtocolName()));
   }
 
-  virtual CR ConductCmd(const std::string &cmd, int max_time_s = -1,
-                        amf interrupt_flag = nullptr) {
+  virtual CR ConductCmd([[maybe_unused]] const std::string &cmd,
+                        [[maybe_unused]] int max_time_s = -1,
+                        [[maybe_unused]] amf interrupt_flag = nullptr) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: ConductCmd", GetProtocolName()));
   }
 
-  virtual std::string StrUid(const long &uid) {
+  virtual std::string StrUid([[maybe_unused]] const long &uid) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: StrUid", GetProtocolName()));
   }
@@ -508,95 +514,124 @@ public:
         "{} Client doesn't implement funtion: GetHomeDir", GetProtocolName()));
   }
 
-  virtual std::pair<ECM, std::string> realpath(const std::string &path,
-                                               amf interrupt_flag = nullptr,
-                                               int timeout_ms = -1,
-                                               int64_t start_time = -1) {
+  virtual std::pair<ECM, std::string>
+  realpath([[maybe_unused]] const std::string &path,
+           [[maybe_unused]] amf interrupt_flag = nullptr,
+           [[maybe_unused]] int timeout_ms = -1,
+           [[maybe_unused]] int64_t start_time = -1) {
 
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: realpath", GetProtocolName()));
   }
   virtual std::pair<ECM, std::unordered_map<std::string, ECM>>
-  chmod(const std::string &path, std::variant<std::string, uint64_t> mode,
-        bool recursive = false, amf interrupt_flag = nullptr,
-        int timeout_ms = -1, int64_t start_time = -1) {
+  chmod([[maybe_unused]] const std::string &path,
+        [[maybe_unused]] std::variant<std::string, uint64_t> mode,
+        [[maybe_unused]] bool recursive = false,
+        [[maybe_unused]] amf interrupt_flag = nullptr,
+        [[maybe_unused]] int timeout_ms = -1,
+        [[maybe_unused]] int64_t start_time = -1) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: chmod", GetProtocolName()));
   }
-  virtual SR stat(const std::string &path, bool trace_link = false,
-                  amf interrupt_flag = nullptr, int timeout_ms = -1,
-                  int64_t start_time = -1) {
+  SR stat([[maybe_unused]] const std::string &path,
+          [[maybe_unused]] bool trace_link = false,
+          [[maybe_unused]] amf interrupt_flag = nullptr,
+          [[maybe_unused]] int timeout_ms = -1,
+          [[maybe_unused]] int64_t start_time = -1) override {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: stat", GetProtocolName()));
   }
-  virtual std::pair<ECM, std::vector<PathInfo>>
-  listdir(const std::string &path, amf interrupt_flag = nullptr,
-          int timeout_ms = -1, int64_t start_time = -1) {
+  std::pair<ECM, std::vector<PathInfo>>
+  listdir([[maybe_unused]] const std::string &path,
+          [[maybe_unused]] amf interrupt_flag = nullptr,
+          [[maybe_unused]] int timeout_ms = -1,
+          [[maybe_unused]] int64_t start_time = -1) override {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: listdir", GetProtocolName()));
   }
-  virtual ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
-                    int timeout_ms = -1, int64_t start_time = -1) {
+  virtual ECM mkdir([[maybe_unused]] const std::string &path,
+                    [[maybe_unused]] amf interrupt_flag = nullptr,
+                    [[maybe_unused]] int timeout_ms = -1,
+                    [[maybe_unused]] int64_t start_time = -1) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: mkdir", GetProtocolName()));
   }
-  virtual ECM mkdirs(const std::string &path, amf interrupt_flag = nullptr,
-                     int timeout_ms = -1, int64_t start_time = -1) {
+  virtual ECM mkdirs([[maybe_unused]] const std::string &path,
+                     [[maybe_unused]] amf interrupt_flag = nullptr,
+                     [[maybe_unused]] int timeout_ms = -1,
+                     [[maybe_unused]] int64_t start_time = -1) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: mkdirs", GetProtocolName()));
   };
 
-  virtual ECM rmdir(const std::string &path, amf interrupt_flag = nullptr,
-                    int timeout_ms = -1, int64_t start_time = -1) {
+  virtual ECM rmdir([[maybe_unused]] const std::string &path,
+                    [[maybe_unused]] amf interrupt_flag = nullptr,
+                    [[maybe_unused]] int timeout_ms = -1,
+                    [[maybe_unused]] int64_t start_time = -1) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: rmdir", GetProtocolName()));
   }
-  virtual ECM rmfile(const std::string &path, amf interrupt_flag = nullptr,
-                     int timeout_ms = -1, int64_t start_time = -1) {
+  virtual ECM rmfile([[maybe_unused]] const std::string &path,
+                     [[maybe_unused]] amf interrupt_flag = nullptr,
+                     [[maybe_unused]] int timeout_ms = -1,
+                     [[maybe_unused]] int64_t start_time = -1) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: rmfile", GetProtocolName()));
   }
-  virtual ECM rename(const std::string &src, const std::string &dst,
-                     bool mkdir = true, bool overwrite = false,
-                     amf interrupt_flag = nullptr, int timeout_ms = -1,
-                     int64_t start_time = -1) {
+  virtual ECM rename([[maybe_unused]] const std::string &src,
+                     [[maybe_unused]] const std::string &dst,
+                     [[maybe_unused]] bool mkdir = true,
+                     [[maybe_unused]] bool overwrite = false,
+                     [[maybe_unused]] amf interrupt_flag = nullptr,
+                     [[maybe_unused]] int timeout_ms = -1,
+                     [[maybe_unused]] int64_t start_time = -1) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: rename", GetProtocolName()));
   }
-  virtual std::pair<ECM, RMR> remove(const std::string &path,
-                                     amf interrupt_flag = nullptr,
-                                     int timeout_ms = -1,
-                                     int64_t start_time = -1) {
+
+  virtual std::pair<ECM, RMR>
+  remove([[maybe_unused]] const std::string &path,
+         [[maybe_unused]] amf interrupt_flag = nullptr,
+         [[maybe_unused]] int timeout_ms = -1,
+         [[maybe_unused]] int64_t start_time = -1) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: remove", GetProtocolName()));
   };
-  virtual ECM saferm(const std::string &path, amf interrupt_flag = nullptr,
-                     int timeout_ms = -1, int64_t start_time = -1) {
+  virtual ECM saferm([[maybe_unused]] const std::string &path,
+                     [[maybe_unused]] amf interrupt_flag = nullptr,
+                     [[maybe_unused]] int timeout_ms = -1,
+                     [[maybe_unused]] int64_t start_time = -1) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: saferm", GetProtocolName()));
   }
 
-  virtual ECM copy(const std::string &src, const std::string &dst,
-                   bool need_mkdir = false, int timeout_ms = -1,
-                   amf interrupt_flag = nullptr) {
+  virtual ECM copy([[maybe_unused]] const std::string &src,
+                   [[maybe_unused]] const std::string &dst,
+                   [[maybe_unused]] bool need_mkdir = false,
+                   [[maybe_unused]] int timeout_ms = -1,
+                   [[maybe_unused]] amf interrupt_flag = nullptr) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: copy", GetProtocolName()));
   }
-  virtual std::pair<ECM, WRV> iwalk(const std::string &path,
-                                    bool ignore_sepcial_file = true,
-                                    amf interrupt_flag = nullptr,
-                                    int timeout_ms = -1,
-                                    int64_t start_time = -1) {
+
+  std::pair<ECM, std::vector<PathInfo>>
+  iwalk([[maybe_unused]] const std::string &path,
+        [[maybe_unused]] bool ignore_special_file = true,
+        [[maybe_unused]] amf interrupt_flag = nullptr,
+        [[maybe_unused]] int timeout_ms = -1,
+        [[maybe_unused]] int64_t start_time = -1) override {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: iwalk", GetProtocolName()));
   }
-  virtual std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1,
-                                   bool ignore_special_file = false,
-                                   amf interrupt_flag = nullptr,
-                                   int timeout_ms = -1,
-                                   int64_t start_time = -1) {
+
+  virtual std::pair<ECM, WRD>
+  walk([[maybe_unused]] const std::string &path,
+       [[maybe_unused]] int max_depth = -1,
+       [[maybe_unused]] bool ignore_special_file = false,
+       [[maybe_unused]] amf interrupt_flag = nullptr,
+       [[maybe_unused]] int timeout_ms = -1,
+       [[maybe_unused]] int64_t start_time = -1) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: walk", GetProtocolName()));
   }
-  // NOLINTEND
 };

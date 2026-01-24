@@ -19,6 +19,12 @@ target_include_directories(amsftp PRIVATE
   "${PROJECT_SOURCE_DIR}/include"
 )
 
+add_executable(amtest ${PROJECT_SOURCE_DIR}/amsimpletest/test.cpp)
+
+target_include_directories(amtest PRIVATE
+  "${PROJECT_SOURCE_DIR}/include"
+)
+
 # 调试更稳定：Debug + -g + -O0（大多数情况下 Debug 会自动带，但这里兜底）
 target_compile_options(amsftp PRIVATE
   $<$<CXX_COMPILER_ID:Clang>:-g -O0 -Wall -Wextra -Wpedantic>
@@ -27,19 +33,19 @@ target_compile_options(amsftp PRIVATE
 )
 
 # test（如果 test/ 下有 cpp）
-option(AMSFTP_BUILD_TESTS "Build tests" ON)
-if (AMSFTP_BUILD_TESTS)
-  enable_testing()
-  file(GLOB_RECURSE AMSFTP_TEST_SOURCES CONFIGURE_DEPENDS
-    "${PROJECT_SOURCE_DIR}/test/*.cpp"
-    "${PROJECT_SOURCE_DIR}/test/*.cc"
-    "${PROJECT_SOURCE_DIR}/test/*.cxx"
-  )
-  if (AMSFTP_TEST_SOURCES)
-    add_executable(amsftp_tests ${AMSFTP_TEST_SOURCES})
-    target_include_directories(amsftp_tests PRIVATE "${PROJECT_SOURCE_DIR}/include")
-    add_test(NAME amsftp_tests COMMAND amsftp_tests)
-  endif()
-endif()
+# option(AMSFTP_BUILD_TESTS "Build tests" ON)
+# if (AMSFTP_BUILD_TESTS)
+#   enable_testing()
+#   file(GLOB_RECURSE AMSFTP_TEST_SOURCES CONFIGURE_DEPENDS
+#     "${PROJECT_SOURCE_DIR}/test/*.cpp"
+#     "${PROJECT_SOURCE_DIR}/test/*.cc"
+#     "${PROJECT_SOURCE_DIR}/test/*.cxx"
+#   )
+#   if (AMSFTP_TEST_SOURCES)
+#     add_executable(amsftp_tests ${AMSFTP_TEST_SOURCES})
+#     target_include_directories(amsftp_tests PRIVATE "${PROJECT_SOURCE_DIR}/include")
+#     add_test(NAME amsftp_tests COMMAND amsftp_tests)
+#   endif()
+# endif()
 
 # add_executable(amsimpletest/amscratch.cpp)

@@ -470,9 +470,6 @@ public:
   };
 };
 
-// ============================================================================
-// AMWorkManager - Enhanced worker with task queue and async transfer support
-// ============================================================================
 class AMWorkManager {
 private:
   std::thread worker_thread;

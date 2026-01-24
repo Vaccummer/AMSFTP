@@ -1,18 +1,14 @@
-# Config Processor
+# config manager
 
-config format is defined in config.yaml
+intro: a class to manage config.yaml(store host information for establish connections) and settings.yaml(store variables for internal use)
 
-processor main function
+## Funtions
 
-1. read config.yaml, ouput a flattened std::map type
-2. you have to return a value like {{key1, key2, key3}, value}
-   for example {{"hosts", "wsl", "username"}, "am"}, {{"private_keys"}, {"C:\Users\am\.ssh\id_rsa", "C:\Users\am\.ssh\id_ed25519"}}, the value type can be int, bool, str, vector `<string>`
+### Init
 
-improve
-
-1. add a filter function to filter illegal keys, I provide some format like
-   {"hosts","*", "username"}, {"private_keys"}, any key has different length will be aborted,
-   any key not match the format will be aborted, if a string in format has ^or$, it means use regex
-2. add a query function to get value of certain key
-3. add a modify function to change certain value
-4. add a dump function to write the map back to yaml file
+1. ✅list 打印所有config信息()
+2. ✅src 获取config文件路径
+3. ✅query 获取指定昵称的host信息
+4. ✅delete 删除指定host
+5. ✅add 增加一个host
+6. ✅modify 修改指定host的信息
