@@ -49,9 +49,3 @@
 7. ✅size
 8. ✅stat
 9. ✅find
-
-### 4、传输函数
-
-1. ✅get （可设置为transfer的宏）
-2. ✅put（可设置为transfer的宏）
-3. ✅transfer

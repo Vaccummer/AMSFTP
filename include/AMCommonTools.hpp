@@ -2,7 +2,10 @@
 #include <chrono>
 #define _WINSOCKAPI_
 #include <algorithm>
+#include <boost/locale/encoding.hpp>
 #include <cctype>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <indicators/progress_bar.hpp> // win 平台上该库会包含 windows.h
 #include <initializer_list>
@@ -14,11 +17,10 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 #include <yaml-cpp/yaml.h>
-
-#include <boost/locale/encoding.hpp>
 
 class ProgressBar {
 public:
@@ -208,34 +210,6 @@ public:
 
 inline void print(const std::string &str) { std::cout << str << std::endl; }
 
-// inline void amfmt_append(std::string &out, const std::string &value) {
-//   out += value;
-// }
-// inline void amfmt_append(std::string &out, const char *value) {
-//   if (value) {
-//     out += value;
-//   } else {
-//     out += "(null)";
-//   }
-// }
-// inline void amfmt_append(std::string &out, char *value) {
-//   if (value) {
-//     out += value;
-//   } else {
-//     out += "(null)";
-//   }
-// }
-// template <typename T,
-//           typename std::enable_if<std::is_integral<T>::value, int>::type = 0>
-// inline void amfmt_append(std::string &out, T value) {
-//   out += std::to_string(static_cast<long long>(value));
-// }
-// template <typename... Args> inline std::string amfmt(Args &&...args) {
-//   std::string out;
-//   (amfmt_append(out, std::forward<Args>(args)), ...);
-//   return out;
-// }
-// } // namespace AMStr
 namespace AMStr {
 inline void amfmt_append(std::string &out, const std::string &value) {
   out += value;
@@ -257,15 +231,28 @@ inline void amfmt_append(std::string &out, char *value) {
 template <typename T,
           typename std::enable_if<std::is_integral<T>::value, int>::type = 0>
 inline void amfmt_append(std::string &out, T value) {
-  out += std::to_string(static_cast<long long>(value));
+  if constexpr (std::is_signed<T>::value) {
+    out += std::to_string(static_cast<long long>(value));
+  } else {
+    out += std::to_string(static_cast<unsigned long long>(value));
+  }
+}
+
+template <typename T, typename std::enable_if<std::is_floating_point<T>::value,
+                                              int>::type = 0>
+inline void amfmt_append(std::string &out, T value) {
+  std::ostringstream oss;
+  oss << value;
+  out += oss.str();
 }
 
 template <typename T>
 struct amfmt_allowed
-    : std::bool_constant<std::disjunction_v<
-          std::is_integral<T>, std::is_same<std::decay_t<T>, std::string>,
-          std::is_same<std::decay_t<T>, const char *>,
-          std::is_same<std::decay_t<T>, char *>>> {};
+    : std::bool_constant<
+          std::disjunction_v<std::is_arithmetic<std::decay_t<T>>,
+                             std::is_same<std::decay_t<T>, std::string>,
+                             std::is_same<std::decay_t<T>, const char *>,
+                             std::is_same<std::decay_t<T>, char *>>> {};
 
 template <typename T> inline std::string amfmt_to_string(T &&value) {
   static_assert(amfmt_allowed<T>::value,
@@ -580,8 +567,8 @@ inline void VStrip(std::string &path) {
   size_t start = path.find_first_not_of(trim_chars);
   if (start == std::string::npos) {
     path = "";
+    return;
   }
-
   size_t end = path.find_last_not_of(trim_chars);
   path = path.substr(start, end - start + 1);
 }
@@ -633,6 +620,9 @@ inline std::string replace_all(std::string str, const std::string &old_sub,
 class AMConfigProcessor {
 public:
   using Path = std::vector<std::string>;
+  using Match =
+      std::variant<std::string, std::regex, std::unordered_set<std::string>>;
+  using FormatPath = std::vector<Match>;
   using Value =
       std::variant<int64_t, bool, std::string, std::vector<std::string>>;
 
@@ -647,16 +637,41 @@ public:
 
   static FlatMap ParseFile(const std::string &path) {
     FlatMap out;
-    YAML::Node root = YAML::LoadFile(path);
-    if (!root)
-      return out;
-
-    Path base;
-    FlattenNode(root, base, out);
+    try {
+      if (path.empty()) {
+        throw std::runtime_error("empty yaml path");
+      }
+      YAML::Node root = YAML::LoadFile(path);
+      if (!root)
+        return out;
+      Path base;
+      FlattenNode(root, base, out);
+    } catch (const std::exception &e) {
+      throw std::runtime_error(
+          AMStr::amfmt("Failed to parse yaml \"{}\": {}", path, e.what()));
+    } catch (...) {
+      throw std::runtime_error(
+          AMStr::amfmt("Failed to parse yaml \"{}\": unknown error", path));
+    }
     return out;
   }
 
   static void FilterKeys(FlatMap &data, const std::vector<Path> &formats) {
+    std::vector<FormatPath> converted;
+    converted.reserve(formats.size());
+    for (const auto &fmt : formats) {
+      FormatPath fmt_path;
+      fmt_path.reserve(fmt.size());
+      for (const auto &seg : fmt) {
+        fmt_path.emplace_back(seg);
+      }
+      converted.push_back(std::move(fmt_path));
+    }
+    FilterKeys(data, converted);
+  }
+
+  static void FilterKeys(FlatMap &data,
+                         const std::vector<FormatPath> &formats) {
     if (formats.empty())
       return;
 
@@ -676,6 +691,16 @@ public:
     return &it->second;
   }
 
+  static const Value *Query(FlatMap &data, const Path &key,
+                            Value default_value) {
+    auto it = data.find(key);
+    if (it == data.end()) {
+      auto inserted = data.emplace(key, std::move(default_value));
+      return &inserted.first->second;
+    }
+    return &it->second;
+  }
+
   static bool Modify(FlatMap &data, const Path &key, const Value &value) {
     auto it = data.find(key);
     if (it == data.end())
@@ -686,7 +711,7 @@ public:
 
   static bool DumpToFile(const FlatMap &data, const std::string &path,
                          std::string *error = nullptr) {
-    YAML::Node root;
+    YAML::Node root = YAML::Node(YAML::NodeType::Map);
     for (const auto &item : data) {
       if (!SetNodeValue(root, item.first, item.second, error))
         return false;
@@ -698,13 +723,132 @@ public:
         *error = "failed to open output file";
       return false;
     }
-    out << root;
+    YAML::Emitter emitter;
+    emitter << root;
+    if (!emitter.good()) {
+      if (error)
+        *error = "failed to emit yaml";
+      return false;
+    }
+    out << emitter.c_str();
     return static_cast<bool>(out);
   }
 
 private:
+  static bool SetNodeValue(YAML::Node &root, const Path &path,
+                           const Value &value, std::string *error) {
+    if (path.empty()) {
+      if (error)
+        *error = "empty path not allowed";
+      return false;
+    }
+
+    // 确保 root 是 Map
+    if (!root || root.IsNull())
+      root = YAML::Node(YAML::NodeType::Map);
+    if (!root.IsMap()) {
+      if (error)
+        *error = "root is not a map";
+      return false;
+    }
+
+    YAML::Node current;
+    current.reset(root);
+
+    std::string cur_path; // 用 -> 连接
+
+    auto append_path = [&](const std::string &seg) {
+      if (!cur_path.empty())
+        cur_path += "->";
+      cur_path += seg;
+    };
+
+    auto set_err = [&](const std::string &msg) {
+      if (!error)
+        return;
+      if (!cur_path.empty())
+        *error = msg + " at path: " + cur_path;
+      else
+        *error = msg;
+    };
+
+    for (size_t i = 0; i < path.size(); ++i) {
+      const std::string &seg = path[i];
+      const bool is_leaf = (i + 1 == path.size());
+
+      // current 必须是 map 才能用 key
+      if (!current.IsMap()) {
+        set_err("expected map node");
+        return false;
+      }
+
+      if (is_leaf) {
+        // ---- 叶子写入前：检查是否会覆盖已有深结构（map/seq）----
+        const YAML::Node &ccur = current; // const 视图：不创建 key
+        YAML::Node existing = ccur[seg];
+
+        // 拼出完整路径（包含 leaf）
+        append_path(seg);
+
+        if (existing && (existing.IsMap() || existing.IsSequence())) {
+          set_err("leaf assignment conflicts with existing structured node");
+          return false;
+        }
+
+        // ---- 正常写 leaf ----
+        if (std::holds_alternative<int64_t>(value)) {
+          current[seg] = std::get<int64_t>(value);
+          return true;
+        }
+        if (std::holds_alternative<bool>(value)) {
+          current[seg] = std::get<bool>(value);
+          return true;
+        }
+        if (std::holds_alternative<std::string>(value)) {
+          current[seg] = std::get<std::string>(value);
+          return true;
+        }
+        if (std::holds_alternative<std::vector<std::string>>(value)) {
+          YAML::Node seq(YAML::NodeType::Sequence);
+          for (const auto &item : std::get<std::vector<std::string>>(value))
+            seq.push_back(item);
+          current[seg] = seq;
+          return true;
+        }
+
+        set_err("unsupported value type");
+        return false;
+      }
+
+      // ---- 非叶子：要下钻到 seg ----
+      // 这里用 const 视图先查，不要“查一下就创建”
+      const YAML::Node &ccur = current;
+      YAML::Node existing = ccur[seg];
+
+      append_path(seg);
+
+      if (existing) {
+        // key 存在：必须是 map 才能继续下钻
+        if (!existing.IsMap()) {
+          set_err("path conflict: cannot descend into non-map node");
+          return false;
+        }
+        // reset 下钻（千万别用 =）
+        current.reset(existing);
+        continue;
+      }
+
+      // key 不存在：创建一个 map，再下钻
+      current[seg] = YAML::Node(YAML::NodeType::Map);
+      current.reset(current[seg]);
+    }
+
+    // 理论不可达
+    set_err("unexpected traversal end");
+    return false;
+  }
   static bool MatchesAnyFormat(const Path &key,
-                               const std::vector<Path> &formats) {
+                               const std::vector<FormatPath> &formats) {
     for (const auto &fmt : formats) {
       if (key.size() != fmt.size())
         continue;
@@ -714,7 +858,7 @@ private:
     return false;
   }
 
-  static bool PathMatchesFormat(const Path &key, const Path &fmt) {
+  static bool PathMatchesFormat(const Path &key, const FormatPath &fmt) {
     for (size_t i = 0; i < key.size(); ++i) {
       if (!SegmentMatchesFormat(key[i], fmt[i]))
         return false;
@@ -723,65 +867,27 @@ private:
   }
 
   static bool SegmentMatchesFormat(const std::string &segment,
-                                   const std::string &format) {
-    if (format == "*")
-      return true;
-    if (format.find('^') != std::string::npos ||
-        format.find('$') != std::string::npos) {
-      try {
-        std::regex re(format);
-        return std::regex_match(segment, re);
-      } catch (const std::regex_error &e) {
-        (void)e;
-        return false;
+                                   const Match &format) {
+    if (std::holds_alternative<std::string>(format)) {
+      const std::string &fmt = std::get<std::string>(format);
+      if (fmt == "*")
+        return true;
+      if (fmt.size() >= 2 && fmt.front() == '^' && fmt.back() == '$') {
+        try {
+          std::regex re(fmt);
+          return std::regex_match(segment, re);
+        } catch (const std::regex_error &e) {
+          (void)e;
+          return false;
+        }
       }
+      return segment == fmt;
     }
-    return segment == format;
-  }
-
-  static bool SetNodeValue(YAML::Node &root, const Path &path,
-                           const Value &value, std::string *error) {
-    if (path.empty()) {
-      if (error)
-        *error = "empty path not allowed";
-      return false;
+    if (std::holds_alternative<std::regex>(format)) {
+      return std::regex_match(segment, std::get<std::regex>(format));
     }
-
-    if (!root || root.IsNull())
-      root = YAML::Node(YAML::NodeType::Map);
-
-    YAML::Node current = root;
-    for (size_t i = 0; i + 1 < path.size(); ++i) {
-      const std::string &key = path[i];
-      if (!current[key])
-        current[key] = YAML::Node(YAML::NodeType::Map);
-      current = current[key];
-    }
-
-    const std::string &leaf = path.back();
-    if (std::holds_alternative<int64_t>(value)) {
-      current[leaf] = std::get<int64_t>(value);
-      return true;
-    }
-    if (std::holds_alternative<bool>(value)) {
-      current[leaf] = std::get<bool>(value);
-      return true;
-    }
-    if (std::holds_alternative<std::string>(value)) {
-      current[leaf] = std::get<std::string>(value);
-      return true;
-    }
-    if (std::holds_alternative<std::vector<std::string>>(value)) {
-      YAML::Node seq(YAML::NodeType::Sequence);
-      for (const auto &item : std::get<std::vector<std::string>>(value))
-        seq.push_back(item);
-      current[leaf] = seq;
-      return true;
-    }
-
-    if (error)
-      *error = "unsupported value type";
-    return false;
+    const auto &set = std::get<std::unordered_set<std::string>>(format);
+    return set.find(segment) != set.end();
   }
 
   static bool IsInteger(const std::string &s) {

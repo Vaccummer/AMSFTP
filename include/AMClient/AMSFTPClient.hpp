@@ -713,8 +713,7 @@ public:
                                     int timeout_ms = -1,
                                     int64_t start_time = -1) = 0;
   virtual ECM TerminalWrite(const std::string &msg,
-                            amf interrupt_flag = nullptr,
-                            int timeout_ms = -1,
+                            amf interrupt_flag = nullptr, int timeout_ms = -1,
                             int64_t start_time = -1) = 0;
   virtual ECM TerminalClose() = 0;
   virtual void SetReaderWaitTimeoutMs(int timeout_ms) = 0;
@@ -794,9 +793,9 @@ private:
 
       int64_t start_time = am_ms();
       int wait_timeout = reader_wait_timeout_ms.load();
-      WaitResult wr = wait_for_socket(SocketWaitType::Read,
-                                      terminal_interrupt_flag, start_time,
-                                      wait_timeout);
+      WaitResult wr =
+          wait_for_socket(SocketWaitType::Read, terminal_interrupt_flag,
+                          start_time, wait_timeout);
       if (wr == WaitResult::Timeout) {
         continue;
       }
@@ -813,9 +812,9 @@ private:
         std::lock_guard<std::recursive_mutex> lock(mtx);
         libssh2_session_set_blocking(session, 0);
         while (true) {
-          ssize_t nbytes = libssh2_channel_read(
-              terminal_channel->channel, buffer.data(),
-              static_cast<size_t>(buffer.size()));
+          ssize_t nbytes =
+              libssh2_channel_read(terminal_channel->channel, buffer.data(),
+                                   static_cast<size_t>(buffer.size()));
           if (nbytes > 0) {
             output.append(buffer.data(), static_cast<size_t>(nbytes));
             continue;
@@ -851,8 +850,8 @@ private:
 
   ECM TerminalInitInternal(const TerminalWindowInfo &window,
                            TerminalOutputCallback output_cb = {},
-                           amf interrupt_flag = nullptr,
-                           int timeout_ms = -1, int64_t start_time = -1) {
+                           amf interrupt_flag = nullptr, int timeout_ms = -1,
+                           int64_t start_time = -1) {
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!session) {
       return {EC::NoSession, "Session not initialized"};
@@ -936,8 +935,8 @@ public:
 
   AMSFTPTerminal(const ConRequst &request,
                  const std::vector<std::string> &keys = {},
-                 unsigned int tracer_capacity = 10,
-                 TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
+                 unsigned int tracer_capacity = 10, TraceCallback trace_cb = {},
+                 AuthCallback auth_cb = {})
       : AMSession(request, keys, tracer_capacity, std::move(trace_cb),
                   std::move(auth_cb)) {
     this->PROTOCOL = ClientProtocol::Base;
@@ -965,9 +964,8 @@ public:
           std::lock_guard<std::mutex> lock(terminal_cb_mtx);
           cb = terminal_output_cb;
         }
-        ECM term_rcm = TerminalInitInternal(terminal_window, cb,
-                                            interrupt_flag, timeout_ms,
-                                            start_time);
+        ECM term_rcm = TerminalInitInternal(terminal_window, cb, interrupt_flag,
+                                            timeout_ms, start_time);
         if (term_rcm.first == EC::Success) {
           StartReader();
         }
@@ -986,8 +984,8 @@ public:
       std::lock_guard<std::mutex> lock(terminal_cb_mtx);
       cb = terminal_output_cb;
     }
-    ECM term_rcm = TerminalInitInternal(terminal_window, cb,
-                                        interrupt_flag, timeout_ms, start_time);
+    ECM term_rcm = TerminalInitInternal(terminal_window, cb, interrupt_flag,
+                                        timeout_ms, start_time);
     if (term_rcm.first == EC::Success) {
       StartReader();
     }
@@ -1027,8 +1025,8 @@ public:
     reader_cv.notify_all();
   }
 
-  void SetTerminalOutputCallback(TerminalOutputCallback output_cb = {})
-      override {
+  void
+  SetTerminalOutputCallback(TerminalOutputCallback output_cb = {}) override {
     {
       std::lock_guard<std::mutex> lock(terminal_cb_mtx);
       terminal_output_cb = std::move(output_cb);
@@ -1048,8 +1046,7 @@ public:
   }
 
   ECM SetTerminalWindowInfo(const TerminalWindowInfo &window,
-                            amf interrupt_flag = nullptr,
-                            int timeout_ms = -1,
+                            amf interrupt_flag = nullptr, int timeout_ms = -1,
                             int64_t start_time = -1) override {
     terminal_window = window;
     if (!terminal_channel || !terminal_channel->channel) {
@@ -1069,7 +1066,8 @@ public:
                   terminal_channel->channel, terminal_window.cols,
                   terminal_window.rows, terminal_window.width,
                   terminal_window.height)) == LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Auto, flag, start_time, timeout_ms);
+        wr =
+            wait_for_socket(SocketWaitType::Auto, flag, start_time, timeout_ms);
         if (wr != WaitResult::Ready) {
           goto cleanup;
         }
@@ -1217,15 +1215,14 @@ public:
 
   void ResumeReading() override { paused.store(false); }
 
-  void SetTerminalOutputCallback(TerminalOutputCallback output_cb = {})
-      override {
+  void
+  SetTerminalOutputCallback(TerminalOutputCallback output_cb = {}) override {
     std::lock_guard<std::mutex> lock(terminal_cb_mtx);
     terminal_output_cb = std::move(output_cb);
   }
 
   ECM SetTerminalWindowInfo(const TerminalWindowInfo &window,
-                            amf interrupt_flag = nullptr,
-                            int timeout_ms = -1,
+                            amf interrupt_flag = nullptr, int timeout_ms = -1,
                             int64_t start_time = -1) override {
     (void)window;
     (void)interrupt_flag;
@@ -1919,10 +1916,12 @@ public:
     }
   }
 
-  ECM TerminalInit(const TerminalWindowInfo &window = {},
-                   TerminalOutputCallback output_cb = {},
-                   amf interrupt_flag = nullptr, int timeout_ms = -1,
-                   int64_t start_time = -1) {
+  // Terminal Deprecated Funtions
+  /*
+      ECM TerminalInit(const TerminalWindowInfo &window = {},
+                       TerminalOutputCallback output_cb = {},
+                       amf interrupt_flag = nullptr, int timeout_ms = -1,
+                       int64_t start_time = -1) {
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!session) {
       return {EC::NoSession, "Session not initialized"};
@@ -2317,6 +2316,7 @@ public:
     terminal_channel.reset();
     return {EC::Success, ""};
   }
+  */
 
   OS_TYPE GetOSType(bool update = false) override {
     if (os_type != OS_TYPE::Uncertain && !update) {
