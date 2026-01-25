@@ -187,7 +187,7 @@ enum class ErrorCode {
   FTPListFailed = 53,
 };
 
-ErrorCode wait_result_to_error_code(WaitResult wr) {
+inline ErrorCode wait_result_to_error_code(WaitResult wr) {
   switch (wr) {
   case WaitResult::Ready:
   case WaitResult::ReadReady:

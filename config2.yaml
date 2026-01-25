@@ -1,0 +1,12 @@
+hosts:
+  example:
+    hostname: 127.0.0.1
+    port: 22
+    protocol: sftp
+    username: David
+  wsl:
+    hostname: 172.26.36.83
+    username: am
+private_keys:
+  - C:\Users\am\.ssh\id_rsa
+  - C:\Users\am\.ssh\id_ed25519

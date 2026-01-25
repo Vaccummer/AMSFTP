@@ -8,14 +8,15 @@ style: # string to store style of some string
   otherspecial: "[#033415 bold]"
   username: "[#033415 bold]"
   cwd: "[#033415 bold]"
-  error: red
-  warning: yellow
-  success: green
-  info: blue
-  debug: gray
-  trace: gray
-  fatal: red
-  critical: red
+  number: "[#033415]"
+  error: ""
+  warning: ""
+  success: ""
+  info: ""
+  debug: ""
+  trace: ""
+  fatal: ""
+  critical: ""
 InternalVars:
   local_trash_dir: D:\Document\Desktop\22
   local_default_work_dir: C:\Users\am
