@@ -1,0 +1,84 @@
+#pragma once
+#include <iostream>
+#include <mutex>
+#include <replxx.h>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <vector>
+
+namespace AMPromptDetail {
+template <typename T> struct IsStringLike : std::false_type {};
+template <> struct IsStringLike<std::string> : std::true_type {};
+template <> struct IsStringLike<std::string_view> : std::true_type {};
+template <> struct IsStringLike<const char *> : std::true_type {};
+template <> struct IsStringLike<char *> : std::true_type {};
+
+template <typename T>
+inline constexpr bool IsStringLikeV = IsStringLike<std::decay_t<T>>::value;
+
+inline std::string ToString(const std::string &value) { return value; }
+inline std::string ToString(std::string_view value) {
+  return std::string(value);
+}
+inline std::string ToString(const char *value) {
+  return value ? std::string(value) : std::string();
+}
+inline std::string ToString(char *value) {
+  return value ? std::string(value) : std::string();
+}
+} // namespace AMPromptDetail
+
+class AMPromptManager {
+public:
+  static AMPromptManager &Instance();
+
+  AMPromptManager(const AMPromptManager &) = delete;
+  AMPromptManager &operator=(const AMPromptManager &) = delete;
+  AMPromptManager(AMPromptManager &&) = delete;
+  AMPromptManager &operator=(AMPromptManager &&) = delete;
+  ~AMPromptManager();
+  static ReplxxActionResult esc_abort_handler(Replxx *rx, unsigned int code,
+                                              void *ud) {
+    (void)code;
+    (void)ud;
+    // 触发内置动作：abort line
+    return replxx_invoke(rx, REPLXX_ACTION_ABORT_LINE, 0);
+  }
+
+  void Print(const std::vector<std::string> &items,
+             const std::string &sep = " ", const std::string &end = "\n");
+
+  template <typename... Args,
+            typename std::enable_if_t<
+                (AMPromptDetail::IsStringLikeV<Args> && ...), int> = 0>
+  void Print(Args &&...args) {
+    std::vector<std::string> items;
+    items.reserve(sizeof...(Args));
+    (items.emplace_back(AMPromptDetail::ToString(std::forward<Args>(args))),
+     ...);
+    Print(items);
+  }
+
+  template <typename... Args,
+            typename std::enable_if_t<
+                (AMPromptDetail::IsStringLikeV<Args> && ...), int> = 0>
+  void PrintWith(const std::string &sep, const std::string &end,
+                 Args &&...args) {
+    std::vector<std::string> items;
+    items.reserve(sizeof...(Args));
+    (items.emplace_back(AMPromptDetail::ToString(std::forward<Args>(args))),
+     ...);
+    Print(items, sep, end);
+  }
+
+  bool Prompt(const std::string &prompt, const std::string &placeholder,
+              std::string *out_input);
+  bool esc_pressed_ = false;
+
+private:
+  AMPromptManager();
+  std::mutex print_mutex_;
+  Replxx *replxx_ = nullptr;
+};

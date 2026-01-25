@@ -2,36 +2,20 @@
 #include "AMEnum.hpp"
 #include <algorithm>
 #include <cctype>
-#include <csignal>
 #include <cstdlib>
 #include <iomanip>
-#include <iostream>
 #include <regex>
 #include <sstream>
-
-#if __has_include(<replxx.hxx>)
-#include <replxx.hxx>
-#define AM_HAS_REPLXX 1
-#else
-#define AM_HAS_REPLXX 0
-#endif
 
 namespace {
 using Status = AMConfigManager::Status;
 
-std::atomic<bool> g_interrupted{false};
-
-void SigIntHandler(int) { g_interrupted.store(true); }
-
-struct ScopedSigIntHandler {
-  using Handler = void (*)(int);
-  Handler old_handler = nullptr;
-  ScopedSigIntHandler() { old_handler = std::signal(SIGINT, SigIntHandler); }
-  ~ScopedSigIntHandler() { std::signal(SIGINT, old_handler); }
-};
-
 Status Ok() { return {"", 0}; }
 Status Err(const std::string &msg, int code = 1) { return {msg, code}; }
+
+void PrintLine(const std::string &value) {
+  AMPromptManager::Instance().Print(value);
+}
 
 std::string TrimCopy(const std::string &value) {
   std::string tmp = value;
@@ -236,7 +220,7 @@ AMConfigManager::Status AMConfigManager::List() const {
 
   auto hosts = CollectHosts();
   if (hosts.empty()) {
-    std::cout << "No hosts found." << std::endl;
+    PrintLine("No hosts found.");
     return Ok();
   }
 
@@ -244,7 +228,7 @@ AMConfigManager::Status AMConfigManager::List() const {
     auto print_status = PrintHost(item.first, item.second);
     if (print_status.second != 0)
       return print_status;
-    std::cout << std::endl;
+    PrintLine("");
   }
   return Ok();
 }
@@ -264,10 +248,18 @@ AMConfigManager::Status AMConfigManager::Src() const {
   std::string styled_config = StyledValue(config_path, "dir");
   std::string styled_settings = StyledValue(settings_path, "dir");
 
-  std::cout << std::left << std::setw(static_cast<int>(width)) << config_label
-            << " = " << styled_config << std::endl;
-  std::cout << std::left << std::setw(static_cast<int>(width)) << settings_label
-            << " = " << styled_settings << std::endl;
+  {
+    std::ostringstream line;
+    line << std::left << std::setw(static_cast<int>(width)) << config_label
+         << " = " << styled_config;
+    PrintLine(line.str());
+  }
+  {
+    std::ostringstream line;
+    line << std::left << std::setw(static_cast<int>(width)) << settings_label
+         << " = " << styled_settings;
+    PrintLine(line.str());
+  }
   return Ok();
 }
 
@@ -277,8 +269,7 @@ AMConfigManager::Status AMConfigManager::Delete(const std::string &nickname) {
     return status;
 
   if (!HostExists(nickname)) {
-    std::cout << MaybeStyle("Host not found: " + nickname, "error")
-              << std::endl;
+    PrintLine(MaybeStyle("Host not found: " + nickname, "error"));
     return Err("host not found", 2);
   }
 
@@ -286,7 +277,7 @@ AMConfigManager::Status AMConfigManager::Delete(const std::string &nickname) {
   if (rm_status.second != 0)
     return rm_status;
 
-  std::cout << MaybeStyle("Deleted host: " + nickname, "success") << std::endl;
+  PrintLine(MaybeStyle("Deleted host: " + nickname, "success"));
   return Ok();
 }
 
@@ -299,8 +290,7 @@ AMConfigManager::Query(const std::string &nickname) const {
   auto hosts = CollectHosts();
   auto it = hosts.find(nickname);
   if (it == hosts.end()) {
-    std::cout << MaybeStyle("Host not found: " + nickname, "error")
-              << std::endl;
+    PrintLine(MaybeStyle("Host not found: " + nickname, "error"));
     return Err("host not found", 2);
   }
 
@@ -312,9 +302,6 @@ AMConfigManager::Status AMConfigManager::Add() {
   if (status.second != 0)
     return status;
 
-  ScopedSigIntHandler guard;
-  g_interrupted.store(false);
-
   std::string nickname;
   HostEntry entry;
   auto prompt_status = PromptAddFields(&nickname, &entry);
@@ -323,7 +310,7 @@ AMConfigManager::Status AMConfigManager::Add() {
 
   bool canceled = false;
   if (!PromptYesNo("Save host? (y/N): ", &canceled) || canceled) {
-    std::cout << "Add canceled." << std::endl;
+    PrintLine("Add canceled.");
     return Err("add canceled", 3);
   }
 
@@ -333,7 +320,7 @@ AMConfigManager::Status AMConfigManager::Add() {
       return up_status;
   }
 
-  std::cout << MaybeStyle("Added host: " + nickname, "success") << std::endl;
+  PrintLine(MaybeStyle("Added host: " + nickname, "success"));
   return Ok();
 }
 
@@ -343,13 +330,9 @@ AMConfigManager::Status AMConfigManager::Modify(const std::string &nickname) {
     return status;
 
   if (!HostExists(nickname)) {
-    std::cout << MaybeStyle("Host not found: " + nickname, "error")
-              << std::endl;
+    PrintLine(MaybeStyle("Host not found: " + nickname, "error"));
     return Err("host not found", 2);
   }
-
-  ScopedSigIntHandler guard;
-  g_interrupted.store(false);
 
   HostEntry entry;
   auto prompt_status = PromptModifyFields(nickname, &entry);
@@ -358,7 +341,7 @@ AMConfigManager::Status AMConfigManager::Modify(const std::string &nickname) {
 
   bool canceled = false;
   if (!PromptYesNo("Apply changes? (y/N): ", &canceled) || canceled) {
-    std::cout << "Modify canceled." << std::endl;
+    PrintLine("Modify canceled.");
     return Err("modify canceled", 3);
   }
 
@@ -368,13 +351,13 @@ AMConfigManager::Status AMConfigManager::Modify(const std::string &nickname) {
       return up_status;
   }
 
-  std::cout << MaybeStyle("Modified host: " + nickname, "success") << std::endl;
+  PrintLine(MaybeStyle("Modified host: " + nickname, "success"));
   return Ok();
 }
 
 void AMConfigManager::OnExit() {
   try {
-    // (void)AMConfigManager::Instance().Dump();
+    (void)AMConfigManager::Instance().Dump();
   } catch (const std::exception &e) {
     std::cerr << "Config dump failed: " << e.what() << std::endl;
     std::terminate();
@@ -441,7 +424,7 @@ AMConfigManager::CollectHosts() const {
 AMConfigManager::Status
 AMConfigManager::PrintHost(const std::string &nickname,
                            const HostEntry &entry) const {
-  std::cout << "[" << nickname << "]" << std::endl;
+  PrintLine("[" + nickname + "]");
   size_t width = 0;
   for (const auto &field : kHostFields)
     width = std::max(width, field.size());
@@ -452,8 +435,10 @@ AMConfigManager::PrintHost(const std::string &nickname,
       continue;
     std::string value = ValueToString(it->second);
     std::string styled_value = StyledValue(value, field);
-    std::cout << std::left << std::setw(static_cast<int>(width)) << field
-              << " :   " << styled_value << std::endl;
+    std::ostringstream line;
+    line << std::left << std::setw(static_cast<int>(width)) << field
+         << " :   " << styled_value;
+    PrintLine(line.str());
   }
   return Ok();
 }
@@ -494,13 +479,9 @@ AMConfigManager::Status AMConfigManager::PromptAddFields(std::string *nickname,
   std::string error;
   bool canceled = false;
   while (true) {
-    if (g_interrupted.load()) {
-      std::cout << "Add canceled." << std::endl;
-      return Err("add canceled", 3);
-    }
     if (!PromptLine("Nickname: ", nickname, "", true, &canceled)) {
-      if (canceled || g_interrupted.load()) {
-        std::cout << "Add canceled." << std::endl;
+      if (canceled) {
+        PrintLine("Add canceled.");
         return Err("add canceled", 3);
       }
       return Err("failed to read nickname", 4);
@@ -508,81 +489,78 @@ AMConfigManager::Status AMConfigManager::PromptAddFields(std::string *nickname,
     error.clear();
     if (ValidateNickname(*nickname, &error))
       break;
-    std::cout << MaybeStyle(error, "error") << std::endl;
+    PrintLine(MaybeStyle(error, "error"));
   }
 
   std::string username;
   while (true) {
     if (!PromptLine("Username: ", &username, "", true, &canceled)) {
-      std::cout << "Add canceled." << std::endl;
+      PrintLine("Add canceled.");
       return Err("add canceled", 3);
     }
     if (!username.empty())
       break;
-    std::cout << MaybeStyle("Username cannot be empty.", "error") << std::endl;
+    PrintLine(MaybeStyle("Username cannot be empty.", "error"));
   }
 
   std::string hostname;
   while (true) {
     if (!PromptLine("Hostname: ", &hostname, "", true, &canceled)) {
-      std::cout << "Add canceled." << std::endl;
+      PrintLine("Add canceled.");
       return Err("add canceled", 3);
     }
     if (!hostname.empty())
       break;
-    std::cout << MaybeStyle("Hostname cannot be empty.", "error") << std::endl;
+    PrintLine(MaybeStyle("Hostname cannot be empty.", "error"));
   }
 
   std::string protocol;
   while (true) {
     if (!PromptLine("Protocol (sftp/ftp): ", &protocol, "", true, &canceled)) {
-      std::cout << "Add canceled." << std::endl;
+      PrintLine("Add canceled.");
       return Err("add canceled", 3);
     }
     if (protocol.empty()) {
-      std::cout << MaybeStyle("Protocol cannot be empty.", "error")
-                << std::endl;
+      PrintLine(MaybeStyle("Protocol cannot be empty.", "error"));
       continue;
     }
     protocol = ToLowerCopy(protocol);
     if (protocol == "sftp" || protocol == "ftp")
       break;
-    std::cout << MaybeStyle("Protocol must be sftp or ftp.", "error")
-              << std::endl;
+    PrintLine(MaybeStyle("Protocol must be sftp or ftp.", "error"));
   }
 
   std::string port_input;
   int64_t port = 22;
   while (true) {
     if (!PromptLine("Port (default 22): ", &port_input, "", true, &canceled)) {
-      std::cout << "Add canceled." << std::endl;
+      PrintLine("Add canceled.");
       return Err("add canceled", 3);
     }
     if (port_input.empty()) {
-      std::cout << "Using default port 22." << std::endl;
+      PrintLine("Using default port 22.");
       break;
     }
     if (ParsePositiveInt(port_input, &port))
       break;
-    std::cout << MaybeStyle("Port must be a positive integer.", "error")
-              << std::endl;
+    PrintLine(MaybeStyle("Port must be a positive integer.", "error"));
   }
 
   std::string keyfile;
   if (!PromptLine("Keyfile (optional): ", &keyfile, "", true, &canceled)) {
-    std::cout << "Add canceled." << std::endl;
+    PrintLine("Add canceled.");
     return Err("add canceled", 3);
   }
 
   std::string password;
   if (!PromptLine("Password (optional): ", &password, "", true, &canceled)) {
-    std::cout << "Add canceled." << std::endl;
+    PrintLine("Add canceled.");
     return Err("add canceled", 3);
   }
 
   std::string trash_dir;
   if (!PromptLine("Trash dir (optional): ", &trash_dir, "", true, &canceled)) {
-    std::cout << "Add canceled." << std::endl;
+    PrintLine("Add canceled.");
     return Err("add canceled", 3);
   }
 
@@ -591,7 +569,7 @@ AMConfigManager::Status AMConfigManager::PromptAddFields(std::string *nickname,
   while (true) {
     if (!PromptLine("Buffer size(Default 24MB): ", &buffer_input, "", true,
                     &canceled)) {
-      std::cout << "Add canceled." << std::endl;
+      PrintLine("Add canceled.");
       return Err("add canceled", 3);
     }
     if (buffer_input.empty()) {
@@ -599,8 +577,7 @@ AMConfigManager::Status AMConfigManager::PromptAddFields(std::string *nickname,
     }
     if (ParsePositiveInt(buffer_input, &buffer_size))
       break;
-    std::cout << MaybeStyle("Buffer size must be a positive integer.", "error")
-              << std::endl;
+    PrintLine(MaybeStyle("Buffer size must be a positive integer.", "error"));
   }
 
   entry->fields.clear();
@@ -634,29 +611,28 @@ AMConfigManager::PromptModifyFields(const std::string &nickname,
   };
 
   std::string username = get_value("username");
-  if (!PromptLine("Username: ", &username, username, false, &canceled)) {
-    std::cout << "Modify canceled." << std::endl;
+  if (!PromptLine("Username: ", &username, username, false, &canceled, false)) {
+    PrintLine("Modify canceled.");
     return Err("modify canceled", 3);
   }
 
   std::string hostname = get_value("hostname");
-  if (!PromptLine("Hostname: ", &hostname, hostname, false, &canceled)) {
-    std::cout << "Modify canceled." << std::endl;
+  if (!PromptLine("Hostname: ", &hostname, hostname, false, &canceled, false)) {
+    PrintLine("Modify canceled.");
     return Err("modify canceled", 3);
   }
 
   std::string protocol = get_value("protocol");
   while (true) {
     if (!PromptLine("Protocol (sftp/ftp): ", &protocol, protocol, false,
-                    &canceled)) {
-      std::cout << "Modify canceled." << std::endl;
+                    &canceled, false)) {
+      PrintLine("Modify canceled.");
       return Err("modify canceled", 3);
     }
     protocol = ToLowerCopy(protocol);
     if (protocol == "sftp" || protocol == "ftp")
       break;
-    std::cout << MaybeStyle("Protocol must be sftp or ftp.", "error")
-              << std::endl;
+    PrintLine(MaybeStyle("Protocol must be sftp or ftp.", "error"));
   }
 
   std::string port_input = get_value("port");
@@ -665,37 +641,37 @@ AMConfigManager::PromptModifyFields(const std::string &nickname,
     ParsePositiveInt(port_input, &port);
   while (true) {
     if (!PromptLine("Port (default 22): ", &port_input, port_input, true,
-                    &canceled)) {
-      std::cout << "Modify canceled." << std::endl;
+                    &canceled, false)) {
+      PrintLine("Modify canceled.");
       return Err("modify canceled", 3);
     }
     if (port_input.empty())
       break;
     if (ParsePositiveInt(port_input, &port))
       break;
-    std::cout << MaybeStyle("Port must be a positive integer.", "error")
-              << std::endl;
+    PrintLine(MaybeStyle("Port must be a positive integer.", "error"));
   }
   if (!port_input.empty())
     port = std::stoll(port_input);
 
   std::string keyfile = get_value("keyfile");
-  if (!PromptLine("Keyfile (optional): ", &keyfile, keyfile, true, &canceled)) {
-    std::cout << "Modify canceled." << std::endl;
+  if (!PromptLine("Keyfile (optional): ", &keyfile, keyfile, true, &canceled,
+                  false)) {
+    PrintLine("Modify canceled.");
     return Err("modify canceled", 3);
   }
 
   std::string password = get_value("password");
-  if (!PromptLine("Password (optional): ", &password, password, true,
-                  &canceled)) {
-    std::cout << "Modify canceled." << std::endl;
+  if (!PromptLine("Password (optional): ", &password, password, true, &canceled,
+                  false)) {
+    PrintLine("Modify canceled.");
     return Err("modify canceled", 3);
   }
 
   std::string trash_dir = get_value("trash_dir");
   if (!PromptLine("Trash dir (optional): ", &trash_dir, trash_dir, true,
-                  &canceled)) {
-    std::cout << "Modify canceled." << std::endl;
+                  &canceled, false)) {
+    PrintLine("Modify canceled.");
     return Err("modify canceled", 3);
   }
 
@@ -705,16 +681,15 @@ AMConfigManager::PromptModifyFields(const std::string &nickname,
     ParsePositiveInt(buffer_input, &buffer_size);
   while (true) {
     if (!PromptLine("Buffer size: ", &buffer_input, buffer_input, false,
-                    &canceled)) {
-      std::cout << "Modify canceled." << std::endl;
+                    &canceled, false)) {
+      PrintLine("Modify canceled.");
       return Err("modify canceled", 3);
     }
     if (buffer_input.empty())
       break;
     if (ParsePositiveInt(buffer_input, &buffer_size))
       break;
-    std::cout << MaybeStyle("Buffer size must be a positive integer.", "error")
-              << std::endl;
+    PrintLine(MaybeStyle("Buffer size must be a positive integer.", "error"));
   }
 
   entry->fields.clear();
@@ -736,36 +711,19 @@ bool AMConfigManager::PromptLine(const std::string &prompt, std::string *out,
   if (canceled)
     *canceled = false;
 
-  if (g_interrupted.load()) {
-    if (canceled)
-      *canceled = true;
-    return false;
-  }
-
   std::string display_prompt = prompt;
   if (show_default && !default_value.empty()) {
     display_prompt = AMStr::amfmt("{}[{}] ", prompt, default_value);
   }
 
-#if AM_HAS_REPLXX
-  replxx::Replxx rx;
-  const char *line = rx.input(display_prompt.c_str());
-  if (!line) {
-    if (canceled)
-      *canceled = true;
-    return false;
+  std::string placeholder_value;
+  if (!show_default && !default_value.empty()) {
+    placeholder_value = default_value;
   }
-  *out = std::string(line);
-#else
-  std::cout << display_prompt;
-  if (!std::getline(std::cin, *out)) {
-    if (canceled)
-      *canceled = true;
-    return false;
-  }
-#endif
 
-  if (g_interrupted.load()) {
+  const bool was_canceled =
+      AMPromptManager::Instance().Prompt(display_prompt, placeholder_value, out);
+  if (was_canceled) {
     if (canceled)
       *canceled = true;
     return false;
