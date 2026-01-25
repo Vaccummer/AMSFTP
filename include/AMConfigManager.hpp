@@ -1,5 +1,6 @@
 #pragma once
 #include "AMCommonTools.hpp"
+#include "AMPromptManager.hpp"
 #include <filesystem>
 #include <map>
 #include <string>
