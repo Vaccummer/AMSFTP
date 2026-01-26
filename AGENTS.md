@@ -1,36 +1,58 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
-- Core C++ sources and headers live in the repo root (e.g., `AMBinding.cpp`, `AMCore.hpp`, `AMFTPClient.hpp`).
-- Python extension stubs are in `AMSFTP/` (`.pyi` files).
-- Tests are in `test/` (`.py` and `.cpp` files).
-- Build artifacts are in `build/` (e.g., `lib.win-amd64-cpython-310`) and the compiled module appears as `AMSFTP.cp310-win_amd64.pyd`.
-- Notes/working docs appear as `*.md` in the root (e.g., `AMSFTPWorker.md`).
+## Project Overview
 
-## Build, Test, and Development Commands
-- `python setup.py build_ext --inplace` — build the C++ extension (Windows/MSVC, C++17).
-- `python -m pybind11_stubgen AMSFTP --ignore-all-errors -o .` — regenerate Python stub files in `AMSFTP/`.
-- `python test/test_ftp_simple.py` — run a specific Python test file directly.
-- For C++ test files (e.g., `test/test_ftp.cpp`), compile with your local toolchain as needed.
+**This is a command-line file management tool, conceptually similar to an integrated combination of OpenSSH's **`sftp` and `ssh`, featuring the following capabilities:
+
+1. **Perform basic I/O operations (e.g., copy, delete, move, create) on both local and remote servers.**
+2. **Store multiple client configurations—supporting FTP, SFTP, or local clients—and seamlessly switch between them.**
+3. **Launch interactive terminal sessions directly from SFTP or local clients, providing full terminal functionality.**
+
+**Key Features:**
+
+* **All I/O operations are executed asynchronously and can be interrupted via **`Ctrl+C`.
+* **Richly formatted output with colors, styling, and visual emphasis to highlight important information.**
+* **Comprehensive auto-completion support in non-terminal mode, including:**
+
+  * **Command completion**
+  * **Host nickname completion**
+  * **Path completion**
+
+  **Two completion mechanisms are provided:**
+
+  * **Pressing **`Tab` once completes uniquely matched entries; pressing `Tab` twice lists all possible matches.
+  * **Candidate suggestions appear vertically below the cursor in the input line, allowing selection via the up/down arrow keys.**
+
+**IMPORTANT INFORMATION:** The above description serves only as a high-level preview of the entire project. During implementation, you should design your code with compatibility and extensibility in mind to support these features. However, unless explicitly instructed by the user, you should not implement these features at this stage.
+
+## Project Structure & Module Organization
+
+- Pure C++ project, include in "./include", source files in "./src", "main.cpp" in root, and "test.cpp" in "./test"
+- using "mvsc" compiler currently, but codes had better to be platform independent
 
 ## Coding Style & Naming Conventions
+
 - C++ style is enforced by `.clang-format` (LLVM base, 4-space indent, 120 column limit, no tabs, C++17).
 - Keep file and type naming consistent with existing patterns (e.g., `AM*` prefixes for library components).
 - Prefer one class per header where practical; keep public API headers tidy and stable.
-
-## Testing Guidelines
-- Python tests live under `test/` and are runnable directly with `python`.
-- C++ tests are standalone compile/run checks in `test/*.cpp`.
-- No explicit coverage tooling is configured; add tests alongside changes to public APIs or transfer logic.
-
-## Commit & Pull Request Guidelines
-- Recent commits use short, imperative sentences without ticket prefixes (e.g., “add uid to BaseClient”).
-- Keep commit messages single-line and focused on the primary change.
-- For PRs, include: summary, test commands run, and any external dependencies (e.g., vcpkg libs or DLLs).
-
-## Security & Configuration Notes
-- `setup.py` references vcpkg include/lib paths and links to `libssh2`, `libssl`, `libcrypto`, `libcurl`, `zlib`, etc.; ensure these are installed and on PATH where required.
-- The project targets Windows (see `.pyd` and MSVC flags). If adding cross‑platform support, document toolchain changes.
+- Write detailed comment on every function, use /**/ to wrap it
 
 ## Library Docmentation Lookup
+
 - use "context7" to look up the use of certain library
+- If context7 doesn't return info,  vcpkg root is "D:\Compiler\vcpkg", and packages are installed in
+- "D:\Compiler\vcpkg\installed\x64-windows"
+- If you need source code of certain library, query user in the command line, he will give you the path.
+
+## Helper Functions
+
++ The termianl uses powershell7, you can use built in functions
++ Quick Commit function **fcommit**, use it when you make big changes"
+
+function  fcommit { param([string]$message)"...}
+
++ File Search Function **find** ,  use like  "find test.cpp"
+
+## What you should do
+
+**User instructions will be placed in a file named **`action.md`. The file path remains unchanged, but the user will modify its content before each execution. If the user simply requests "execute my instruction," you should read and carry out the task specified in `action.md`. If the user provides explicit, concrete instructions instead, follow those instructions directly.
