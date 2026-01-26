@@ -5,7 +5,6 @@
 #include <boost/locale/encoding.hpp>
 #include <cctype>
 #include <cstdlib>
-#include <filesystem>
 #include <fstream>
 #include <indicators/progress_bar.hpp> // win 平台上该库会包含 windows.h
 #include <initializer_list>
@@ -16,11 +15,11 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <toml++/toml.h>
 #include <type_traits>
 #include <unordered_set>
 #include <variant>
 #include <vector>
-#include <toml++/toml.h>
 
 class ProgressBar {
 public:
@@ -718,8 +717,7 @@ public:
     return WriteTomlToFile(root, path, error);
   }
 
-  static toml::table ToToml(const FlatMap &data,
-                            std::string *error = nullptr) {
+  static toml::table ToToml(const FlatMap &data, std::string *error = nullptr) {
     toml::table root;
     for (const auto &item : data) {
       if (!SetNodeValue(root, item.first, item.second, error))
@@ -728,8 +726,7 @@ public:
     return root;
   }
 
-  static bool WriteTomlToFile(const toml::table &node,
-                              const std::string &path,
+  static bool WriteTomlToFile(const toml::table &node, const std::string &path,
                               std::string *error = nullptr) {
     std::ofstream out(path);
     if (!out.is_open()) {

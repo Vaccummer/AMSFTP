@@ -69,7 +69,7 @@ using WR = std::pair<ECM, WRV>;                       // iwalk函数返回类型
 using SIZER = std::pair<ECM, uint64_t>;               // getsize函数返回类型
 using TraceCallback = std::function<void(const TraceInfo &)>;
 using CR =
-    std::pair<ECM, std::pair<std::string, size_t>>; // ConductCmd函数返回类型
+    std::pair<ECM, std::pair<std::string, int>>; // ConductCmd函数返回类型
 // Wait result for non-blocking socket operations
 inline std::mutex AMlog_mutex;
 
@@ -273,6 +273,27 @@ public:
       closed = true;
     }
     return closed;
+  }
+
+  // 发送退出信号（不等待关闭）
+  void request_exit() {
+    if (!channel) {
+      return;
+    }
+    libssh2_channel_send_eof(channel);
+    libssh2_channel_signal(channel, "TERM");
+  }
+
+  // 强制终止并关闭（阻塞模式）
+  bool terminate_and_close(int wait_ms = 50) {
+    if (!channel || closed) {
+      return closed;
+    }
+    libssh2_channel_send_eof(channel);
+    libssh2_channel_signal(channel, "TERM");
+    std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
+    libssh2_channel_signal(channel, "KILL");
+    return close();
   }
 
   // 非阻塞关闭，需配合 wait_for_socket 使用

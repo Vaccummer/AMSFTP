@@ -1,5 +1,4 @@
 #pragma once
-#include <atomic>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
@@ -221,16 +220,6 @@ enum class SepType { Unix = 0, Windows = 1 };
 enum class ControlSignal : int { Running = 0, Pause = 1, Terminate = 2 };
 
 enum class TaskStatus { Pending, Conducting, Finished };
-
-class InterruptFlag {
-private:
-  std::atomic<bool> is_interrupted = false;
-
-public:
-  inline bool check() { return is_interrupted.load(); }
-  inline void set(bool value) { is_interrupted.store(value); }
-  inline void reset() { is_interrupted.store(false); }
-};
 
 enum class MapType { Read = 0, Write = 1 };
 

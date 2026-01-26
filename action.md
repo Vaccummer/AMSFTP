@@ -1,16 +1,11 @@
-# New Config format and manage method
+# Adjust the function calls in **`AMConfigManager` according to the updated `AMConfigProcessor`.
 
-@include/AMCommonTools.hpp
+@include/`AMConfigManager`.hpp
 
-@include/AMConfigManager.hpp
+@src/`AMConfigManager`.cpp
 
-@D:\Compiler\vcpkg\installed\x64-windows\include\toml++
+`AMConfigManager` will no longer use `FlatMap` as the storage object for configuration data. Instead, `FlatMap` will only be used during initial loading for filtering out invalid keys. After this filtering step, the data must be converted into the standard TOML data format.
 
-**I need to switch the configuration file format to TOML and use the **`toml++` library to handle the source files. The library has already been installed via vcpkg.
+**Consequently, all operations that read configuration data also need to be updated accordingly.**
 
-**The **`AMConfigProcessor` class should retain its current function interface, but its supported format will change from YAML to TOML.
-
-**Additionally, **`AMConfigProcessor` needs to implement two new features:
-
-* **A function to convert its internal data type **`FlatMap` back into a TOML node.
-* **A function to directly write a TOML node to a file.**
+**You may add helper functions to **`AMConfigProcessor` as needed to facilitate these operations in the config manager.
