@@ -2,6 +2,7 @@
 
 #include "AMClient/AMCore.hpp"
 #include "AMConfigManager.hpp"
+#include "AMLogManager.hpp"
 #include <optional>
 #include <utility>
 #include <variant>
@@ -33,7 +34,7 @@ public:
 
   /** Initialize client manager with heartbeat interval from config. */
   explicit AMClientManager(AMConfigManager &cfg)
-      : config_(cfg),
+      : config_(cfg), log_manager_(AMLogManager::Instance(cfg)),
         transfer_clients_(ResolveHeartbeatInterval(cfg),
                           [this](const auto &client, const ECM &ecm) {
                             OnDisconnect(PoolKind::Transfer, client, ecm);
@@ -83,6 +84,9 @@ public:
             ssize_t trace_num = 10, TraceCallback trace_cb = {},
             amf interrupt_flag = nullptr) {
     amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+    if (!trace_cb) {
+      trace_cb = log_manager_.TraceCallbackFunc();
+    }
     if (nickname.empty() || nickname == "local") {
       return {ECM{EC::Success, ""}, ClientPool(pool).GetHost("")};
     }
@@ -157,6 +161,7 @@ public:
 
 private:
   AMConfigManager &config_;
+  AMLogManager &log_manager_;
   ClientMaintainerRef transfer_clients_;
   ClientMaintainerRef op_clients_;
   PasswordCallback password_cb_ = {};

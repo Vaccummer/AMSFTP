@@ -43,6 +43,8 @@ public:
   [[nodiscard]] Status ListName() const;
   [[nodiscard]] std::pair<Status, std::vector<std::string>>
   PrivateKeys(bool print_sign = false) const;
+  /** Return the project root directory path. */
+  [[nodiscard]] std::filesystem::path ProjectRoot() const { return root_dir_; }
   [[nodiscard]] std::pair<Status, ClientConfig>
   GetClientConfig(const std::string &nickname,
                   bool use_compression = false) const;
