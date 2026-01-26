@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -1309,6 +1310,42 @@ class AMSFTPClient : public AMSession {
 private:
   std::unordered_map<long, std::string> user_id_map;
   std::unique_ptr<SafeChannel> terminal_channel;
+  std::vector<std::string> forbidden_cmd_tokens = {
+      "rm -rf /", "mkfs", "dd if=", "shutdown", "reboot",
+      "poweroff", "init 0", "halt", ":(){:|:&};:"};
+
+  static std::string TrimCopy(std::string value) {
+    AMStr::VStrip(value);
+    return value;
+  }
+
+  static std::string ToLowerCopy(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+  }
+
+  bool IsCommandAllowed(const std::string &cmd,
+                        std::string *reason = nullptr) const {
+    std::string trimmed = TrimCopy(cmd);
+    if (trimmed.empty()) {
+      if (reason)
+        *reason = "Command is empty";
+      return false;
+    }
+
+    std::string lower = ToLowerCopy(trimmed);
+    for (const auto &token : forbidden_cmd_tokens) {
+      if (token.empty())
+        continue;
+      if (lower.find(token) != std::string::npos) {
+        if (reason)
+          *reason = AMStr::amfmt("Command blocked by policy: {}", token);
+        return false;
+      }
+    }
+    return true;
+  }
 
   PathInfo FormatStat(const std::string &path,
                       const LIBSSH2_SFTP_ATTRIBUTES &attrs) {
@@ -1820,17 +1857,40 @@ public:
   CR ConductCmd(const std::string &cmd, int max_time_ms = -1,
                 amf interrupt_flag = nullptr) override {
     std::lock_guard<std::recursive_mutex> lock(mtx);
+    amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    std::string reason;
+    if (!IsCommandAllowed(cmd, &reason)) {
+      return {ECM{EC::InvalidArg, reason}, {"", -1}};
+    }
+    if (flag && flag->check()) {
+      return {ECM{EC::Terminate, "Operation aborted before command sent"},
+              {"", -1}};
+    }
+
     SafeChannel sf(session);
     if (!sf.channel) {
       return {ECM{EC::NoConnection, "Channel not initialized"}, {"", -1}};
     }
 
-    auto time_start = -1;
+    enum class CmdStage { BeforeSend, AwaitOutput, ReadingOutput, AwaitExit };
+    CmdStage stage = CmdStage::BeforeSend;
+
+    int64_t time_start = am_ms();
     int exit_status = -1;
+    bool has_output = false;
     std::string output;
     std::array<char, 4096> buffer;
     WaitResult wr = WaitResult::Ready;
-    int rc;
+    int rc = 0;
+
+    auto terminate_and_close = [&](bool send_exit) {
+      libssh2_session_set_blocking(session, 1);
+      if (send_exit) {
+        sf.terminate_and_close();
+      } else {
+        sf.close();
+      }
+    };
 
     // 设置非阻塞模式
     libssh2_session_set_blocking(session, 0);
@@ -1838,8 +1898,7 @@ public:
     // 1. 执行命令
     while ((rc = libssh2_channel_exec(sf.channel, cmd.c_str())) ==
            LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
-                           max_time_ms);
+      wr = wait_for_socket(SocketWaitType::Auto, flag, time_start, max_time_ms);
       if (wr != WaitResult::Ready) {
         goto cleanup;
       }
@@ -1850,6 +1909,7 @@ public:
                   AMStr::amfmt("Channel exec failed: {}", GetLastErrorMsg())},
               {"", -1}};
     }
+    stage = CmdStage::AwaitOutput;
 
     // 2. 读取输出
     while (true) {
@@ -1857,11 +1917,14 @@ public:
           libssh2_channel_read(sf.channel, buffer.data(), buffer.size() - 1);
 
       if (nbytes > 0) {
-        output.append(buffer.data(), nbytes);
+        output.append(buffer.data(), static_cast<size_t>(nbytes));
+        has_output = true;
+        stage = CmdStage::ReadingOutput;
       } else if (nbytes == 0) {
+        stage = CmdStage::AwaitExit;
         break; // EOF
       } else if (nbytes == LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
+        wr = wait_for_socket(SocketWaitType::Auto, flag, time_start,
                              max_time_ms);
         if (wr != WaitResult::Ready) {
           goto cleanup;
@@ -1882,8 +1945,7 @@ public:
 
     // 4. 非阻塞关闭通道
     while ((rc = sf.close_nonblock()) == LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, time_start,
-                           max_time_ms);
+      wr = wait_for_socket(SocketWaitType::Auto, flag, time_start, max_time_ms);
       if (wr != WaitResult::Ready) {
         goto cleanup;
       }
@@ -1896,23 +1958,39 @@ public:
     return {ECM{EC::Success, ""}, {output, exit_status}};
 
   cleanup:
-    // sf.closed == false，析构时会自动发送 TERM/KILL 信号
-    libssh2_session_set_blocking(session, 1);
     switch (wr) {
+    case WaitResult::Interrupted:
+      if (stage == CmdStage::BeforeSend) {
+        terminate_and_close(false);
+        return {ECM{EC::Terminate, "Operation aborted before command sent"},
+                {output, -1}};
+      }
+      if (stage == CmdStage::AwaitOutput && !has_output) {
+        terminate_and_close(true);
+        return {ECM{EC::Terminate,
+                    AMStr::amfmt("Command canceled before output: {}", cmd)},
+                {output, -1}};
+      }
+      terminate_and_close(true);
+      return {ECM{EC::Terminate,
+                  AMStr::amfmt("Command interrupted before exit status: {}",
+                               cmd)},
+              {output, -1}};
     case WaitResult::Timeout:
+      terminate_and_close(true);
       return {ECM{EC::OperationTimeout,
                   AMStr::amfmt("Command timed out (killed): {}", cmd)},
               {output, -1}};
-    case WaitResult::Interrupted:
-      return {ECM{EC::Terminate,
-                  AMStr::amfmt("Command interrupted (killed): {}", cmd)},
-              {output, -1}};
     case WaitResult::Error:
+      terminate_and_close(true);
       return {ECM{EC::SocketRecvError,
                   AMStr::amfmt("Socket error during command: {}", cmd)},
               {output, -1}};
     default:
-      return {ECM{EC::Success, ""}, {output, exit_status}};
+      terminate_and_close(true);
+      return {ECM{EC::UnknownError,
+                  AMStr::amfmt("Command aborted: {}", cmd)},
+              {output, -1}};
     }
   }
 

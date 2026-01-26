@@ -1,8 +1,6 @@
 #pragma once
-#include <iostream>
 #include <mutex>
 #include <replxx.h>
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -73,6 +71,10 @@ public:
     Print(items, sep, end);
   }
 
+  void ErrorFormat(const std::string &error_name, const std::string &error_msg,
+                   bool is_exit = false, int exit_code = 0,
+                   const char *caller = "unknown");
+
   bool Prompt(const std::string &prompt, const std::string &placeholder,
               std::string *out_input);
   bool esc_pressed_ = false;
@@ -82,3 +84,7 @@ private:
   std::mutex print_mutex_;
   Replxx *replxx_ = nullptr;
 };
+
+#define AM_PROMPT_ERROR(error_name, error_msg, is_exit, exit_code)             \
+  AMPromptManager::Instance().ErrorFormat((error_name), (error_msg),           \
+                                          (is_exit), (exit_code), __func__)

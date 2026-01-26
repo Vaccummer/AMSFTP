@@ -144,6 +144,17 @@ inline std::string FormatTime(const uint64_t &time,
     return oss.str();
   };
 }
+
+class InterruptFlag {
+private:
+  std::atomic<bool> is_interrupted = false;
+
+public:
+  inline bool check() { return is_interrupted.load(); }
+  inline void set(bool value) { is_interrupted.store(value); }
+  inline void reset() { is_interrupted.store(false); }
+};
+
 // 非阻塞调用结果
 template <typename T> struct NBResult {
   T value;           // 函数返回值

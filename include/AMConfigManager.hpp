@@ -74,8 +74,8 @@ private:
   std::filesystem::path config_path_;
   std::filesystem::path settings_path_;
 
-  FlatMap config_map_;
-  FlatMap settings_map_;
+  toml::table config_table_;
+  toml::table settings_table_;
 
   std::vector<FormatPath> config_filters_;
   std::vector<FormatPath> settings_filters_;

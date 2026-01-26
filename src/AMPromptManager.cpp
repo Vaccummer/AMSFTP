@@ -1,4 +1,5 @@
 #include "AMPromptManager.hpp"
+#include <cstdlib>
 #include <iostream>
 #include <replxx.h>
 #include <string>
@@ -45,6 +46,24 @@ void AMPromptManager::Print(const std::vector<std::string> &items,
   std::lock_guard<std::mutex> lock(print_mutex_);
   std::cout << output;
   std::cout.flush();
+}
+
+void AMPromptManager::ErrorFormat(const std::string &error_name,
+                                  const std::string &error_msg, bool is_exit,
+                                  int exit_code, const char *caller) {
+  std::ostringstream header;
+  header << "[Error Call from Function " << (caller ? caller : "unknown")
+         << "]";
+  Print(header.str());
+
+  std::ostringstream body;
+  body << "❌  " << error_name << "  :  " << error_msg;
+  Print(body.str());
+
+  if (is_exit) {
+    std::cout.flush();
+    std::exit(exit_code);
+  }
 }
 
 bool AMPromptManager::Prompt(const std::string &prompt,

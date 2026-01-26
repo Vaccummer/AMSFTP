@@ -9,6 +9,8 @@
 
 namespace {
 using Status = AMConfigManager::Status;
+using Path = AMConfigManager::Path;
+using Value = AMConfigManager::Value;
 
 Status Ok() { return {"", 0}; }
 Status Err(const std::string &msg, int code = 1) { return {msg, code}; }
@@ -54,6 +56,97 @@ const std::vector<std::string> kHostFields = {
     "password", "trash_dir", "protocol", "buffer_size",
 };
 
+bool ParseIndex(const std::string &value, std::size_t *out) {
+  if (value.empty())
+    return false;
+  std::size_t idx = 0;
+  for (char c : value) {
+    if (!std::isdigit(static_cast<unsigned char>(c)))
+      return false;
+    idx = idx * 10 + static_cast<std::size_t>(c - '0');
+  }
+  if (out)
+    *out = idx;
+  return true;
+}
+
+const toml::node *FindNode(const toml::table &root, const Path &path) {
+  const toml::node *current = &root;
+  for (const auto &seg : path) {
+    if (current->is_table()) {
+      const toml::table &tbl = *current->as_table();
+      current = tbl.get(seg);
+    } else if (current->is_array()) {
+      std::size_t index = 0;
+      if (!ParseIndex(seg, &index))
+        return nullptr;
+      const toml::array &arr = *current->as_array();
+      if (index >= arr.size())
+        return nullptr;
+      current = &arr[index];
+    } else {
+      return nullptr;
+    }
+    if (!current)
+      return nullptr;
+  }
+  return current;
+}
+
+bool NodeToValue(const toml::node &node, Value *out) {
+  if (!out)
+    return false;
+  if (auto v = node.value<int64_t>()) {
+    *out = *v;
+    return true;
+  }
+  if (auto v = node.value<bool>()) {
+    *out = *v;
+    return true;
+  }
+  if (auto v = node.value<std::string>()) {
+    *out = *v;
+    return true;
+  }
+  if (auto v = node.value<double>()) {
+    std::ostringstream oss;
+    oss << *v;
+    *out = oss.str();
+    return true;
+  }
+  if (node.is_array()) {
+    const toml::array &arr = *node.as_array();
+    std::vector<std::string> items;
+    items.reserve(arr.size());
+    for (const auto &child : arr) {
+      if (!child.is_value())
+        return false;
+      if (auto s = child.value<std::string>()) {
+        items.push_back(*s);
+        continue;
+      }
+      if (auto i = child.value<int64_t>()) {
+        items.push_back(std::to_string(*i));
+        continue;
+      }
+      if (auto b = child.value<bool>()) {
+        items.push_back(*b ? "true" : "false");
+        continue;
+      }
+      if (auto d = child.value<double>()) {
+        std::ostringstream oss;
+        oss << *d;
+        items.push_back(oss.str());
+        continue;
+      }
+      return false;
+    }
+    *out = std::move(items);
+    return true;
+  }
+  return false;
+}
+
 } // namespace
 
 AMConfigManager &AMConfigManager::Instance() {
@@ -76,8 +169,9 @@ AMConfigManager::SetSettingsFilters(const std::vector<FormatPath> &filters) {
 AMConfigManager::Status AMConfigManager::Init() {
   const char *root_env = std::getenv("AMSFTP_ROOT");
   if (!root_env || std::string(root_env).empty()) {
-    throw std::runtime_error("$AMSFTP_ROOT environment variable is not set");
-    // return Err("AMSFTP_ROOT environment variable is not set");
+    AM_PROMPT_ERROR("ConfigInit",
+                    "$AMSFTP_ROOT environment variable is not set", true, 2);
+    return Err("AMSFTP_ROOT environment variable is not set", 2);
   }
 
   root_dir_ = std::filesystem::path(root_env);
@@ -85,27 +179,47 @@ AMConfigManager::Status AMConfigManager::Init() {
   std::error_code ec;
   std::filesystem::create_directories(root_dir_, ec);
   if (ec) {
-    throw std::runtime_error("failed to create root directory " +
-                             root_dir_.string() + ": " + ec.message());
+    AM_PROMPT_ERROR("ConfigInit",
+                    "failed to create root directory " + root_dir_.string() +
+                        ": " + ec.message(),
+                    true, 2);
+    return Err("failed to create root directory " + root_dir_.string() + ": " +
+                   ec.message(),
+               2);
   }
 
   config_path_ = root_dir_ / "config" / "config.toml";
   settings_path_ = root_dir_ / "config" / "settings.toml";
 
   if (std::filesystem::exists(config_path_)) {
-    config_map_ = AMConfigProcessor::ParseFile(config_path_.string());
+    FlatMap config_flat = AMConfigProcessor::ParseFile(config_path_.string());
     if (!config_filters_.empty())
-      AMConfigProcessor::FilterKeys(config_map_, config_filters_);
+      AMConfigProcessor::FilterKeys(config_flat, config_filters_);
+    std::string error;
+    config_table_ = AMConfigProcessor::ToToml(config_flat, &error);
+    if (!error.empty()) {
+      AM_PROMPT_ERROR("ConfigInit", "failed to build config table: " + error,
+                      true, 2);
+      return Err("failed to build config table: " + error, 2);
+    }
   } else {
-    config_map_.clear();
+    config_table_.clear();
   }
 
   if (std::filesystem::exists(settings_path_)) {
-    settings_map_ = AMConfigProcessor::ParseFile(settings_path_.string());
+    FlatMap settings_flat =
+        AMConfigProcessor::ParseFile(settings_path_.string());
     if (!settings_filters_.empty())
-      AMConfigProcessor::FilterKeys(settings_map_, settings_filters_);
+      AMConfigProcessor::FilterKeys(settings_flat, settings_filters_);
+    std::string error;
+    settings_table_ = AMConfigProcessor::ToToml(settings_flat, &error);
+    if (!error.empty()) {
+      AM_PROMPT_ERROR("ConfigInit", "failed to build settings table: " + error,
+                      true, 2);
+      return Err("failed to build settings table: " + error, 2);
+    }
   } else {
-    settings_map_.clear();
+    settings_table_.clear();
   }
 
   initialized_ = true;
@@ -126,17 +240,19 @@ AMConfigManager::Status AMConfigManager::Dump() {
   std::error_code ec;
   std::filesystem::create_directories(config_dir, ec);
   if (ec) {
-    throw std::runtime_error("failed to create config directory: " +
-                             ec.message());
+    AM_PROMPT_ERROR("ConfigDumpError",
+                    "failed to create config directory: " + ec.message(), true,
+                    2);
+    return Err("failed to create config directory: " + ec.message(), 2);
   }
 
   std::string error;
-  if (!AMConfigProcessor::DumpToFile(config_map_, config_path_.string(),
-                                     &error)) {
+  if (!AMConfigProcessor::WriteTomlToFile(config_table_, config_path_.string(),
+                                          &error)) {
     return Err("failed to dump config.toml: " + error);
   }
-  if (!AMConfigProcessor::DumpToFile(settings_map_, settings_path_.string(),
-                                     &error)) {
+  if (!AMConfigProcessor::WriteTomlToFile(settings_table_,
+                                          settings_path_.string(), &error)) {
     return Err("failed to dump settings.toml: " + error);
   }
 
@@ -150,11 +266,14 @@ std::string AMConfigManager::Format(const std::string &ori_str,
     return ori_str;
 
   Path key = {"style", style_name};
-  const Value *value = AMConfigProcessor::Query(settings_map_, key);
-  if (!value || !std::holds_alternative<std::string>(*value))
+  const toml::node *node = FindNode(settings_table_, key);
+  if (!node)
+    return ori_str;
+  auto value = node->value<std::string>();
+  if (!value)
     return ori_str;
 
-  std::string raw = TrimCopy(std::get<std::string>(*value));
+  std::string raw = TrimCopy(*value);
   if (raw.empty())
     return "";
   if (raw.front() != '[' || raw.back() != ']')
@@ -411,12 +530,20 @@ std::string AMConfigManager::MaybeStyle(const std::string &value,
 std::map<std::string, AMConfigManager::HostEntry>
 AMConfigManager::CollectHosts() const {
   std::map<std::string, HostEntry> hosts;
-  for (const auto &item : config_map_) {
-    if (item.first.size() != 2)
+  for (const auto &item : config_table_) {
+    if (!item.second.is_table())
       continue;
-    const std::string &nickname = item.first[0];
-    const std::string &field = item.first[1];
-    hosts[nickname].fields[field] = item.second;
+    std::string nickname = std::string(item.first.str());
+    const toml::table &host = *item.second.as_table();
+    HostEntry entry;
+    for (const auto &field : host) {
+      Value value;
+      if (!NodeToValue(field.second, &value))
+        continue;
+      entry.fields[std::string(field.first.str())] = std::move(value);
+    }
+    if (!entry.fields.empty())
+      hosts[nickname] = std::move(entry);
   }
   return hosts;
 }
@@ -444,33 +571,52 @@ AMConfigManager::PrintHost(const std::string &nickname,
 }
 
 bool AMConfigManager::HostExists(const std::string &nickname) const {
-  for (const auto &item : config_map_) {
-    if (item.first.size() == 2 && item.first[0] == nickname) {
-      return true;
-    }
-  }
-  return false;
+  const toml::node *node = config_table_.get(nickname);
+  return node && node->is_table();
 }
 
 AMConfigManager::Status
 AMConfigManager::UpsertHostField(const std::string &nickname,
                                  const std::string &field, Value value) {
-  Path key = {nickname, field};
-  auto result = config_map_.emplace(key, std::move(value));
-  if (!result.second)
-    result.first->second = std::move(value);
+  toml::table *host_table = nullptr;
+  if (toml::node *node = config_table_.get(nickname)) {
+    if (!node->is_table()) {
+      config_table_.insert_or_assign(nickname, toml::table{});
+      node = config_table_.get(nickname);
+    }
+    host_table = node ? node->as_table() : nullptr;
+  } else {
+    auto inserted = config_table_.insert(nickname, toml::table{});
+    host_table = inserted.first->second.as_table();
+  }
+  if (!host_table)
+    return Err("invalid host table", 2);
+
+  if (std::holds_alternative<int64_t>(value)) {
+    host_table->insert_or_assign(field, std::get<int64_t>(value));
+    return Ok();
+  }
+  if (std::holds_alternative<bool>(value)) {
+    host_table->insert_or_assign(field, std::get<bool>(value));
+    return Ok();
+  }
+  if (std::holds_alternative<std::string>(value)) {
+    host_table->insert_or_assign(field, std::get<std::string>(value));
+    return Ok();
+  }
+  if (std::holds_alternative<std::vector<std::string>>(value)) {
+    toml::array arr;
+    for (const auto &item : std::get<std::vector<std::string>>(value))
+      arr.push_back(item);
+    host_table->insert_or_assign(field, std::move(arr));
+    return Ok();
+  }
   return Ok();
 }
 
 AMConfigManager::Status
 AMConfigManager::RemoveHost(const std::string &nickname) {
-  for (auto it = config_map_.begin(); it != config_map_.end();) {
-    if (it->first.size() == 2 && it->first[0] == nickname) {
-      it = config_map_.erase(it);
-    } else {
-      ++it;
-    }
-  }
+  config_table_.erase(nickname);
   return Ok();
 }
 
