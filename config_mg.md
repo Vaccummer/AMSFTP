@@ -3,10 +3,10 @@
 
 **A utility class for managing configuration files. There are two configuration files:**
 
-* `config.yaml`: stores connection-related information for hosts.
-* `settings.yaml`: stores application-specific settings.
+* `config.toml`: stores connection-related information for hosts.
+* `settings.toml`: stores application-specific settings.
 
-**In **`AMCommonTools.hpp`, there is a utility class `AMConfigProcessor` for reading YAML files. However, its current `Query` function is insufficient. I would like to enhance it so that when querying a key, a default value can be provided:
+**In **`AMCommonTools.hpp`, there is a utility class `AMConfigProcessor` for reading TOML files. However, its current `Query` function is insufficient. I would like to enhance it so that when querying a key, a default value can be provided:
 
 * **If the key exists, return a pointer to the queried value.**
 * **If the key does not exist, set the key to the given default value in the configuration and then return a pointer to it.**
@@ -23,7 +23,7 @@
 
 *(Note: This is not the class constructor—just named “Init”)*
 
-1. **Read the environment variable **`$AMSFTP_ROOT` to obtain the project root directory. Configuration files are expected at `{root}/config/config.yaml` and `{root}/config/settings.yaml`.
+1. **Read the environment variable **`$AMSFTP_ROOT` to obtain the project root directory. Configuration files are expected at `{root}/config/config.toml` and `{root}/config/settings.toml`.
 2. **If the files exist, process them using **`AMConfigProcessor` (from `AMCommonTools.hpp`) and apply user-provided key filters.
 3. **If a file does not exist, initialize the corresponding internal **`result_map` as empty.
 4. **Store the loaded configurations as class member attributes.**
@@ -33,7 +33,7 @@
 *(Automatically called on program exit)*
 
 1. **Create the **`{root}/config` directory. If creation fails (except for "already exists"), throw an error and terminate the program immediately (to avoid recursive dump attempts).
-2. **Write the internal **`result_map` back to the YAML files using `AMConfigProcessor::DumpToFile`.
+2. **Write the internal **`result_map` back to the TOML files using `AMConfigProcessor::DumpToFile`.
 
 ### `Format()` Function
 
@@ -41,7 +41,7 @@
 
 std::string format(const std::string& ori_str, const std::string& style_name);
 
-* `style_name` corresponds to an entry under the `style` section in `settings.yaml`.
+* `style_name` corresponds to an entry under the `style` section in `settings.toml`.
 * **First, look up the style key in **`result_map`. If the key is missing, return `ori_str` unchanged.
 * **If the key exists, parse its value (e.g., **`"[#033415 bold]"`), which specifies:
   * **A hexadecimal color code (**`#033415`)
@@ -59,14 +59,14 @@ port            :   xx
 ...
 
 * **Left-align all field names (e.g., **`username`, `port`).
-* **Apply the corresponding **`style` (from `settings.yaml`) to each value via the `Format()` function.
+* **Apply the corresponding **`style` (from `settings.toml`) to each value via the `Format()` function.
 
 ### `Src()` Function
 
  **Purpose** **: Print the absolute paths of the config and settings files:**
 
-[Config]  = /absolute/path/to/config.yaml
-[Setting] = /absolute/path/to/settings.yaml
+[Config]  = /absolute/path/to/config.toml
+[Setting] = /absolute/path/to/settings.toml
 
 * **Left-align the labels (**`[Config]`, `[Setting]`).
 * **Style the right-hand path values using **`Format()`.

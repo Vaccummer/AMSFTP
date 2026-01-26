@@ -20,7 +20,7 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
-#include <yaml-cpp/yaml.h>
+#include <toml++/toml.h>
 
 class ProgressBar {
 public:
@@ -639,21 +639,22 @@ public:
     FlatMap out;
     try {
       if (path.empty()) {
-        throw std::runtime_error("empty yaml path");
+        throw std::runtime_error("empty toml path");
       }
-      YAML::Node root = YAML::LoadFile(path);
-      if (!root)
-        return out;
+      toml::table root = toml::parse_file(path);
       Path base;
       FlattenNode(root, base, out);
+      return out;
+    } catch (const toml::parse_error &e) {
+      throw std::runtime_error(
+          AMStr::amfmt("Failed to parse toml \"{}\": {}", path, e.what()));
     } catch (const std::exception &e) {
       throw std::runtime_error(
-          AMStr::amfmt("Failed to parse yaml \"{}\": {}", path, e.what()));
+          AMStr::amfmt("Failed to parse toml \"{}\": {}", path, e.what()));
     } catch (...) {
       throw std::runtime_error(
-          AMStr::amfmt("Failed to parse yaml \"{}\": unknown error", path));
+          AMStr::amfmt("Failed to parse toml \"{}\": unknown error", path));
     }
-    return out;
   }
 
   static void FilterKeys(FlatMap &data, const std::vector<Path> &formats) {
@@ -711,31 +712,42 @@ public:
 
   static bool DumpToFile(const FlatMap &data, const std::string &path,
                          std::string *error = nullptr) {
-    YAML::Node root = YAML::Node(YAML::NodeType::Map);
+    toml::table root = ToToml(data, error);
+    if (error && !error->empty())
+      return false;
+    return WriteTomlToFile(root, path, error);
+  }
+
+  static toml::table ToToml(const FlatMap &data,
+                            std::string *error = nullptr) {
+    toml::table root;
     for (const auto &item : data) {
       if (!SetNodeValue(root, item.first, item.second, error))
-        return false;
+        return toml::table{};
     }
+    return root;
+  }
 
+  static bool WriteTomlToFile(const toml::table &node,
+                              const std::string &path,
+                              std::string *error = nullptr) {
     std::ofstream out(path);
     if (!out.is_open()) {
       if (error)
         *error = "failed to open output file";
       return false;
     }
-    YAML::Emitter emitter;
-    emitter << root;
-    if (!emitter.good()) {
+    out << node;
+    if (!out.good()) {
       if (error)
-        *error = "failed to emit yaml";
+        *error = "failed to write toml";
       return false;
     }
-    out << emitter.c_str();
     return static_cast<bool>(out);
   }
 
 private:
-  static bool SetNodeValue(YAML::Node &root, const Path &path,
+  static bool SetNodeValue(toml::table &root, const Path &path,
                            const Value &value, std::string *error) {
     if (path.empty()) {
       if (error)
@@ -743,17 +755,7 @@ private:
       return false;
     }
 
-    // 确保 root 是 Map
-    if (!root || root.IsNull())
-      root = YAML::Node(YAML::NodeType::Map);
-    if (!root.IsMap()) {
-      if (error)
-        *error = "root is not a map";
-      return false;
-    }
-
-    YAML::Node current;
-    current.reset(root);
+    toml::table *current = &root;
 
     std::string cur_path; // 用 -> 连接
 
@@ -776,43 +778,36 @@ private:
       const std::string &seg = path[i];
       const bool is_leaf = (i + 1 == path.size());
 
-      // current 必须是 map 才能用 key
-      if (!current.IsMap()) {
-        set_err("expected map node");
-        return false;
-      }
-
       if (is_leaf) {
-        // ---- 叶子写入前：检查是否会覆盖已有深结构（map/seq）----
-        const YAML::Node &ccur = current; // const 视图：不创建 key
-        YAML::Node existing = ccur[seg];
+        // ---- 叶子写入前：检查是否会覆盖已有深结构（table/array）----
+        toml::node *existing = current->get(seg);
 
         // 拼出完整路径（包含 leaf）
         append_path(seg);
 
-        if (existing && (existing.IsMap() || existing.IsSequence())) {
+        if (existing && (existing->is_table() || existing->is_array())) {
           set_err("leaf assignment conflicts with existing structured node");
           return false;
         }
 
         // ---- 正常写 leaf ----
         if (std::holds_alternative<int64_t>(value)) {
-          current[seg] = std::get<int64_t>(value);
+          current->insert_or_assign(seg, std::get<int64_t>(value));
           return true;
         }
         if (std::holds_alternative<bool>(value)) {
-          current[seg] = std::get<bool>(value);
+          current->insert_or_assign(seg, std::get<bool>(value));
           return true;
         }
         if (std::holds_alternative<std::string>(value)) {
-          current[seg] = std::get<std::string>(value);
+          current->insert_or_assign(seg, std::get<std::string>(value));
           return true;
         }
         if (std::holds_alternative<std::vector<std::string>>(value)) {
-          YAML::Node seq(YAML::NodeType::Sequence);
+          toml::array seq;
           for (const auto &item : std::get<std::vector<std::string>>(value))
             seq.push_back(item);
-          current[seg] = seq;
+          current->insert_or_assign(seg, std::move(seq));
           return true;
         }
 
@@ -821,26 +816,28 @@ private:
       }
 
       // ---- 非叶子：要下钻到 seg ----
-      // 这里用 const 视图先查，不要“查一下就创建”
-      const YAML::Node &ccur = current;
-      YAML::Node existing = ccur[seg];
-
       append_path(seg);
 
+      toml::node *existing = current->get(seg);
       if (existing) {
         // key 存在：必须是 map 才能继续下钻
-        if (!existing.IsMap()) {
-          set_err("path conflict: cannot descend into non-map node");
+        if (!existing->is_table()) {
+          set_err("path conflict: cannot descend into non-table node");
           return false;
         }
-        // reset 下钻（千万别用 =）
-        current.reset(existing);
+        current = existing->as_table();
         continue;
       }
 
       // key 不存在：创建一个 map，再下钻
-      current[seg] = YAML::Node(YAML::NodeType::Map);
-      current.reset(current[seg]);
+      auto inserted = current->insert(seg, toml::table{});
+      toml::node &node = inserted.first->second;
+      toml::table *next = node.as_table();
+      if (!next) {
+        set_err("failed to create table node");
+        return false;
+      }
+      current = next;
     }
 
     // 理论不可达
@@ -905,56 +902,103 @@ private:
     return true;
   }
 
-  static Value ParseScalar(const YAML::Node &node) {
-    std::string v = node.as<std::string>();
-    std::string lower = v;
-    std::transform(
-        lower.begin(), lower.end(), lower.begin(),
-        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (lower == "true")
-      return true;
-    if (lower == "false")
-      return false;
-    if (IsInteger(v))
-      return static_cast<int64_t>(std::stoll(v));
-    return v;
+  static Value ParseScalar(const toml::node &node) {
+    if (auto v = node.value<int64_t>())
+      return *v;
+    if (auto v = node.value<bool>())
+      return *v;
+    if (auto v = node.value<std::string>())
+      return *v;
+    if (auto v = node.value<double>()) {
+      std::ostringstream oss;
+      oss << *v;
+      return oss.str();
+    }
+    if (auto v = node.as_date()) {
+      std::ostringstream oss;
+      oss << *v;
+      return oss.str();
+    }
+    if (auto v = node.as_time()) {
+      std::ostringstream oss;
+      oss << *v;
+      return oss.str();
+    }
+    if (auto v = node.as_date_time()) {
+      std::ostringstream oss;
+      oss << *v;
+      return oss.str();
+    }
+    return std::string{};
   }
 
-  static void FlattenNode(const YAML::Node &node, Path &path, FlatMap &out) {
-    if (node.IsMap()) {
-      for (auto it = node.begin(); it != node.end(); ++it) {
-        std::string key = it->first.as<std::string>();
+  static std::string ScalarToString(const toml::node &node) {
+    if (auto v = node.value<std::string>())
+      return *v;
+    if (auto v = node.value<int64_t>())
+      return std::to_string(*v);
+    if (auto v = node.value<bool>())
+      return *v ? "true" : "false";
+    if (auto v = node.value<double>()) {
+      std::ostringstream oss;
+      oss << *v;
+      return oss.str();
+    }
+    if (auto v = node.as_date()) {
+      std::ostringstream oss;
+      oss << *v;
+      return oss.str();
+    }
+    if (auto v = node.as_time()) {
+      std::ostringstream oss;
+      oss << *v;
+      return oss.str();
+    }
+    if (auto v = node.as_date_time()) {
+      std::ostringstream oss;
+      oss << *v;
+      return oss.str();
+    }
+    return {};
+  }
+
+  static void FlattenNode(const toml::node &node, Path &path, FlatMap &out) {
+    if (node.is_table()) {
+      const toml::table &tbl = *node.as_table();
+      for (const auto &item : tbl) {
+        std::string key = std::string(item.first.str());
         path.push_back(key);
-        FlattenNode(it->second, path, out);
+        FlattenNode(item.second, path, out);
         path.pop_back();
       }
       return;
     }
 
-    if (node.IsSequence()) {
+    if (node.is_array()) {
+      const toml::array &arr = *node.as_array();
       bool all_scalar = true;
       std::vector<std::string> items;
-      items.reserve(node.size());
-      for (const auto &child : node) {
-        if (!child.IsScalar()) {
+      items.reserve(arr.size());
+      for (const auto &child : arr) {
+        if (!child.is_value()) {
           all_scalar = false;
           break;
         }
-        items.push_back(child.as<std::string>());
+        items.push_back(ScalarToString(child));
       }
       if (all_scalar) {
         out[path] = std::move(items);
         return;
       }
-      for (std::size_t i = 0; i < node.size(); ++i) {
+      for (std::size_t i = 0; i < arr.size(); ++i) {
         path.push_back(std::to_string(i));
-        FlattenNode(node[i], path, out);
+        FlattenNode(arr[i], path, out);
         path.pop_back();
       }
       return;
     }
 
-    if (node.IsScalar()) {
+    if (node.is_value()) {
       out[path] = ParseScalar(node);
       return;
     }

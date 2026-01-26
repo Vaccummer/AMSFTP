@@ -89,8 +89,8 @@ AMConfigManager::Status AMConfigManager::Init() {
                              root_dir_.string() + ": " + ec.message());
   }
 
-  config_path_ = root_dir_ / "config" / "config.yaml";
-  settings_path_ = root_dir_ / "config" / "settings.yaml";
+  config_path_ = root_dir_ / "config" / "config.toml";
+  settings_path_ = root_dir_ / "config" / "settings.toml";
 
   if (std::filesystem::exists(config_path_)) {
     config_map_ = AMConfigProcessor::ParseFile(config_path_.string());
@@ -133,11 +133,11 @@ AMConfigManager::Status AMConfigManager::Dump() {
   std::string error;
   if (!AMConfigProcessor::DumpToFile(config_map_, config_path_.string(),
                                      &error)) {
-    return Err("failed to dump config.yaml: " + error);
+    return Err("failed to dump config.toml: " + error);
   }
   if (!AMConfigProcessor::DumpToFile(settings_map_, settings_path_.string(),
                                      &error)) {
-    return Err("failed to dump settings.yaml: " + error);
+    return Err("failed to dump settings.toml: " + error);
   }
 
   return Ok();
@@ -436,8 +436,8 @@ AMConfigManager::PrintHost(const std::string &nickname,
     std::string value = ValueToString(it->second);
     std::string styled_value = StyledValue(value, field);
     std::ostringstream line;
-    line << std::left << std::setw(static_cast<int>(width)) << field
-         << " :   " << styled_value;
+    line << std::left << std::setw(static_cast<int>(width)) << field << " :   "
+         << styled_value;
     PrintLine(line.str());
   }
   return Ok();
@@ -721,8 +721,8 @@ bool AMConfigManager::PromptLine(const std::string &prompt, std::string *out,
     placeholder_value = default_value;
   }
 
-  const bool was_canceled =
-      AMPromptManager::Instance().Prompt(display_prompt, placeholder_value, out);
+  const bool was_canceled = AMPromptManager::Instance().Prompt(
+      display_prompt, placeholder_value, out);
   if (was_canceled) {
     if (canceled)
       *canceled = true;
