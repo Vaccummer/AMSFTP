@@ -167,6 +167,7 @@ enum class ErrorCode {
   BufferWriteError = 70,
   BufferReadError = 71,
   PyCBError = 72,
+  HostConfigNotFound = 100,
 
   // FTP Server Error
   UnsupportFTPProtocol = 47,
@@ -251,12 +252,11 @@ enum class BufferStatus {
 enum class TransferControl { Running = 1, Pause = 0, Terminate = -1 };
 
 enum class TraceLevel {
-  Debug = 2,
-  Info = 1,
-  Warning = 0,
-  Error = -1,
-  Critical = -2,
-
+  Critical = 0,
+  Error = 1,
+  Warning = 2,
+  Info = 3,
+  Debug = 4
 };
 
 // 将libssh2错误码映射为错误消息

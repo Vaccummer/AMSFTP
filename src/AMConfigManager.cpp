@@ -4,6 +4,7 @@
 #include <cctype>
 #include <cstdlib>
 #include <iomanip>
+#include <optional>
 #include <regex>
 #include <sstream>
 
@@ -11,6 +12,8 @@ namespace {
 using Status = AMConfigManager::Status;
 using Path = AMConfigManager::Path;
 using Value = AMConfigManager::Value;
+using ClientConfig = AMConfigManager::ClientConfig;
+using EC = ErrorCode;
 
 Status Ok() { return {"", 0}; }
 Status Err(const std::string &msg, int code = 1) { return {msg, code}; }
@@ -145,6 +148,53 @@ bool NodeToValue(const toml::node &node, Value *out) {
     return true;
   }
   return false;
+}
+
+std::optional<std::string> GetStringField(const toml::table &tbl,
+                                          const std::string &key) {
+  const toml::node *node = tbl.get(key);
+  if (!node)
+    return std::nullopt;
+  if (auto value = node->value<std::string>()) {
+    return *value;
+  }
+  if (auto value = node->value<int64_t>()) {
+    return std::to_string(*value);
+  }
+  if (auto value = node->value<bool>()) {
+    return *value ? "true" : "false";
+  }
+  return std::nullopt;
+}
+
+std::optional<int64_t> GetIntField(const toml::table &tbl,
+                                  const std::string &key) {
+  const toml::node *node = tbl.get(key);
+  if (!node)
+    return std::nullopt;
+  if (auto value = node->value<int64_t>())
+    return *value;
+  if (auto value = node->value<std::string>()) {
+    try {
+      return std::stoll(*value);
+    } catch (...) {
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
+}
+
+ClientProtocol ProtocolFromString(const std::string &value) {
+  std::string lower = value;
+  std::transform(lower.begin(), lower.end(), lower.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  if (lower == "sftp")
+    return ClientProtocol::SFTP;
+  if (lower == "ftp")
+    return ClientProtocol::FTP;
+  if (lower == "local")
+    return ClientProtocol::LOCAL;
+  return ClientProtocol::Unknown;
 }
 
 } // namespace
@@ -352,6 +402,130 @@ AMConfigManager::Status AMConfigManager::List() const {
   return Ok();
 }
 
+AMConfigManager::Status AMConfigManager::ListName() const {
+  auto status = EnsureInitialized("ListName");
+  if (status.second != 0)
+    return status;
+
+  auto hosts = CollectHosts();
+  if (hosts.empty()) {
+    PrintLine("No hosts found.");
+    return Ok();
+  }
+
+  const size_t max_width = 80;
+  size_t current_width = 0;
+  std::ostringstream line;
+
+  for (auto it = hosts.begin(); it != hosts.end(); ++it) {
+    const std::string &name = it->first;
+    const std::string styled = StyledValue(name, "regular");
+    size_t name_len = name.size();
+    size_t extra = current_width == 0 ? 0 : 1;
+
+    if (current_width + extra + name_len > max_width && current_width > 0) {
+      PrintLine(line.str());
+      line.str(std::string());
+      line.clear();
+      current_width = 0;
+    }
+
+    if (current_width > 0) {
+      line << ' ';
+      current_width += 1;
+    }
+    line << styled;
+    current_width += name_len;
+  }
+
+  if (current_width > 0) {
+    PrintLine(line.str());
+  }
+  return Ok();
+}
+
+std::pair<AMConfigManager::Status, std::vector<std::string>>
+AMConfigManager::PrivateKeys(bool print_sign) const {
+  auto status = EnsureInitialized("PrivateKeys");
+  if (status.second != 0)
+    return {status, {}};
+
+  std::vector<std::string> keys;
+  const toml::node *node = config_table_.get("private_keys");
+  if (node && node->is_array()) {
+    const toml::array &arr = *node->as_array();
+    keys.reserve(arr.size());
+    for (const auto &item : arr) {
+      if (auto value = item.value<std::string>()) {
+        keys.push_back(*value);
+      }
+    }
+  }
+
+  if (print_sign) {
+    PrintLine("[Private_keys]");
+    for (const auto &path : keys) {
+      PrintLine(StyledValue(path, "dir"));
+    }
+  }
+
+  return {Ok(), keys};
+}
+
+std::pair<AMConfigManager::Status, AMConfigManager::ClientConfig>
+AMConfigManager::GetClientConfig(const std::string &nickname,
+                                 bool use_compression) const {
+  auto status = EnsureInitialized("GetClientConfig");
+  if (status.second != 0)
+    return {status, ClientConfig{}};
+
+  const toml::node *node = config_table_.get(nickname);
+  if (!node || !node->is_table()) {
+    return {Err("client config not found", static_cast<int>(EC::HostConfigNotFound)),
+            ClientConfig{}};
+  }
+
+  const toml::table &tbl = *node->as_table();
+  ClientConfig config;
+
+  std::string hostname = GetStringField(tbl, "hostname").value_or("");
+  std::string username = GetStringField(tbl, "username").value_or("");
+  std::string password = GetStringField(tbl, "password").value_or("");
+  std::string keyfile = GetStringField(tbl, "keyfile").value_or("");
+  std::string trash_dir = GetStringField(tbl, "trash_dir").value_or("");
+  int64_t port = GetIntField(tbl, "port").value_or(22);
+
+  config.request = ConRequst(nickname, hostname, username,
+                             static_cast<int>(port), password, keyfile,
+                             use_compression, trash_dir);
+
+  std::string protocol_str = GetStringField(tbl, "protocol").value_or("sftp");
+  config.protocol = ProtocolFromString(protocol_str);
+  config.buffer_size = GetIntField(tbl, "buffer_size").value_or(-1);
+
+  return {Ok(), config};
+}
+
+int AMConfigManager::GetSettingInt(const Path &path,
+                                   int default_value) const {
+  auto status = EnsureInitialized("GetSettingInt");
+  if (status.second != 0)
+    return default_value;
+  const toml::node *node = FindNode(settings_table_, path);
+  if (!node)
+    return default_value;
+  if (auto value = node->value<int64_t>())
+    return static_cast<int>(*value);
+  if (auto value = node->value<std::string>()) {
+    try {
+      return std::stoi(*value);
+    } catch (...) {
+      return default_value;
+    }
+  }
+  return default_value;
+}
+
 AMConfigManager::Status AMConfigManager::Src() const {
   auto status = EnsureInitialized("Src");
   if (status.second != 0)
@@ -397,6 +571,46 @@ AMConfigManager::Status AMConfigManager::Delete(const std::string &nickname) {
     return rm_status;
 
   PrintLine(MaybeStyle("Deleted host: " + nickname, "success"));
+  return Ok();
+}
+
+AMConfigManager::Status
+AMConfigManager::Rename(const std::string &old_nickname,
+                        const std::string &new_nickname) {
+  auto status = EnsureInitialized("Rename");
+  if (status.second != 0)
+    return status;
+
+  if (old_nickname == new_nickname) {
+    return Ok();
+  }
+
+  if (!HostExists(old_nickname)) {
+    PrintLine(MaybeStyle("Host not found: " + old_nickname, "error"));
+    return Err("host not found", 2);
+  }
+
+  std::string error;
+  std::regex pattern("^[A-Za-z0-9_]+$");
+  if (new_nickname.empty() || !std::regex_match(new_nickname, pattern)) {
+    return Err("new nickname must contain only letters, numbers, and underscore",
+               3);
+  }
+  if (HostExists(new_nickname)) {
+    return Err("new nickname already exists", 3);
+  }
+
+  toml::node *node = config_table_.get(old_nickname);
+  if (!node || !node->is_table()) {
+    return Err("invalid host entry", 4);
+  }
+
+  toml::table moved = *node->as_table();
+  config_table_.erase(old_nickname);
+  config_table_.insert_or_assign(new_nickname, std::move(moved));
+
+  PrintLine(MaybeStyle("Renamed host: " + old_nickname + " -> " + new_nickname,
+                       "success"));
   return Ok();
 }
 
