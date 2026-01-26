@@ -72,11 +72,11 @@ public:
           [[maybe_unused]] amf interrupt_flag = nullptr,
           [[maybe_unused]] int timeout_ms = -1,
           [[maybe_unused]] int64_t start_time = -1) override {
-    std::cout << "stat1: " << std::endl;
+
     if (path.empty()) {
       return {ECM{EC::InvalidArg, "Invalid empty path"}, PathInfo()};
     }
-    std::cout << "stat2: " << std::endl;
+
     PathInfo info;
     std::string pathf = path;
     fs::path p(pathf);
@@ -85,28 +85,28 @@ public:
     info.dir = p.parent_path().string();
     fs::file_status status;
     std::error_code ec;
-    std::cout << "stat3: " << std::endl;
+
     if (trace_link) {
       status = fs::status(p, ec);
     } else {
       status = fs::symlink_status(p, ec);
     }
-    std::cout << "stat4: " << std::endl;
+
     if (ec) {
       auto rcm =
           ECM{fec(ec), AMStr::amfmt("Stat {} failed: {}", pathf, ec.message())};
       trace(TraceLevel::Debug, rcm.first, pathf, "stat", rcm.second);
       return {rcm, info};
     }
-    std::cout << "stat5: " << std::endl;
+
     info.type = cast_fs_type(status.type());
-    std::cout << "stat6: " << std::endl;
+
     auto size_f = fs::file_size(p, ec);
-    std::cout << "stat7: " << std::endl;
+
     if (!ec) {
       info.size = size_f;
     }
-    std::cout << "stat8: " << std::endl;
+
 #ifdef _WIN32
     if (AMFS::is_readonly(AMStr::wstr(pathf))) {
       info.mode_int = 0333;

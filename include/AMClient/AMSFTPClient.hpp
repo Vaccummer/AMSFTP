@@ -3,16 +3,15 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <condition_variable>
-#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
 #include <fcntl.h>
 #include <fstream>
-#include <iostream>
 #include <memory>
 #include <mutex>
 #include <regex>
@@ -464,7 +463,6 @@ public:
       if (rcr != LIBSSH2_ERROR_EAGAIN) {
         break;
       }
-      std::cout << "libssh2_session_handshake: " << rcr << std::endl;
     }
     rcm = ErrorRecord(
         rcr, TraceLevel::Critical,
@@ -1311,8 +1309,8 @@ private:
   std::unordered_map<long, std::string> user_id_map;
   std::unique_ptr<SafeChannel> terminal_channel;
   std::vector<std::string> forbidden_cmd_tokens = {
-      "rm -rf /", "mkfs", "dd if=", "shutdown", "reboot",
-      "poweroff", "init 0", "halt", ":(){:|:&};:"};
+      "rm -rf /", "mkfs",   "dd if=", "shutdown",   "reboot",
+      "poweroff", "init 0", "halt",   ":(){:|:&};:"};
 
   static std::string TrimCopy(std::string value) {
     AMStr::VStrip(value);
@@ -1320,8 +1318,9 @@ private:
   }
 
   static std::string ToLowerCopy(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::transform(
+        value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return value;
   }
 
@@ -1550,6 +1549,7 @@ private:
     if (rcm.first != EC::Success) {
       return {rcm, {}};
     }
+    sftp_handle = oepn_res.value;
     NBResult<int> read_res;
 
     while (true) {
@@ -1972,10 +1972,10 @@ public:
                 {output, -1}};
       }
       terminate_and_close(true);
-      return {ECM{EC::Terminate,
-                  AMStr::amfmt("Command interrupted before exit status: {}",
-                               cmd)},
-              {output, -1}};
+      return {
+          ECM{EC::Terminate,
+              AMStr::amfmt("Command interrupted before exit status: {}", cmd)},
+          {output, -1}};
     case WaitResult::Timeout:
       terminate_and_close(true);
       return {ECM{EC::OperationTimeout,
@@ -1988,8 +1988,7 @@ public:
               {output, -1}};
     default:
       terminate_and_close(true);
-      return {ECM{EC::UnknownError,
-                  AMStr::amfmt("Command aborted: {}", cmd)},
+      return {ECM{EC::UnknownError, AMStr::amfmt("Command aborted: {}", cmd)},
               {output, -1}};
     }
   }

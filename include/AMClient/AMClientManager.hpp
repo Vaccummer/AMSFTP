@@ -11,10 +11,27 @@ public:
   enum class PoolKind { Transfer, Operation };
   using ClientMaintainerRef = ClientMaintainer;
   using PasswordCallback = AuthCallback;
-  using DisconnectCallback =
-      std::function<void(PoolKind, const std::shared_ptr<BaseClient> &,
-                         const ECM &)>;
+  using DisconnectCallback = std::function<void(
+      PoolKind, const std::shared_ptr<BaseClient> &, const ECM &)>;
+  /** Global interrupt flag used when no flag is provided. */
+  inline static amf global_interrupt_flag = std::make_shared<InterruptFlag>();
 
+  /** Return the singleton instance (requires a valid config manager). */
+  static AMClientManager &Instance(AMConfigManager &cfg) {
+    static AMClientManager instance(cfg);
+    return instance;
+  }
+
+  /** Disable copy construction. */
+  AMClientManager(const AMClientManager &) = delete;
+  /** Disable copy assignment. */
+  AMClientManager &operator=(const AMClientManager &) = delete;
+  /** Disable move construction. */
+  AMClientManager(AMClientManager &&) = delete;
+  /** Disable move assignment. */
+  AMClientManager &operator=(AMClientManager &&) = delete;
+
+  /** Initialize client manager with heartbeat interval from config. */
   explicit AMClientManager(AMConfigManager &cfg)
       : config_(cfg),
         transfer_clients_(ResolveHeartbeatInterval(cfg),
@@ -27,46 +44,60 @@ public:
                     }) {
     LOCAL = transfer_clients_.GetHost("");
     CLIENT = LOCAL;
+    InitClientWorkdir(LOCAL);
   }
 
+  /** Current active client (public, managed by callers). */
   std::shared_ptr<BaseClient> CLIENT;
+  /** Local client instance (public). */
   std::shared_ptr<BaseClient> LOCAL;
 
+  /** Set password callback for new clients. */
   void SetPasswordCallback(PasswordCallback cb = {}) {
     password_cb_ = std::move(cb);
   }
 
+  /** Set disconnect callback for both pools. */
   void SetDisconnectCallback(DisconnectCallback cb = {}) {
     disconnect_cb_ = std::move(cb);
   }
 
+  /** Access transfer client pool. */
   ClientMaintainerRef &TransferClients() { return transfer_clients_; }
+  /** Access operation client pool. */
   ClientMaintainerRef &OperationClients() { return op_clients_; }
 
+  /** Return client nicknames for a pool. */
   std::vector<std::string> GetClientNames(PoolKind pool) {
     return ClientPool(pool).get_nicknames();
   }
 
+  /** Return typed client list for a pool. */
   std::vector<AMCilent> GetClients(PoolKind pool) {
     return ClientPool(pool).get_clients();
   }
 
+  /** Create or reuse a client and connect it immediately. */
   std::pair<ECM, std::shared_ptr<BaseClient>>
-  AddClient(const std::string &nickname, PoolKind pool, bool overwrite = false,
-            bool connect = true, bool use_compression = false,
-            ssize_t trace_num = 10, TraceCallback trace_cb = {}) {
+  AddClient(const std::string &nickname, PoolKind pool, bool force = false,
+            ssize_t trace_num = 10, TraceCallback trace_cb = {},
+            amf interrupt_flag = nullptr) {
+    amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
     if (nickname.empty() || nickname == "local") {
       return {ECM{EC::Success, ""}, ClientPool(pool).GetHost("")};
     }
 
-    if (!overwrite) {
-      auto existing = ClientPool(pool).GetHost(nickname);
-      if (existing) {
-        return {ECM{EC::Success, ""}, existing};
+    auto existing = ClientPool(pool).GetHost(nickname);
+    if (existing) {
+      ECM rcm = existing->Connect(force, flag);
+      if (rcm.first != EC::Success) {
+        return {rcm, existing};
       }
+      InitClientWorkdir(existing);
+      return {ECM{EC::Success, ""}, existing};
     }
 
-    auto client_config = config_.GetClientConfig(nickname, use_compression);
+    auto client_config = config_.GetClientConfig(nickname);
     if (client_config.first.second != 0) {
       EC ec = static_cast<EC>(client_config.first.second);
       return {ECM{ec, client_config.first.first}, nullptr};
@@ -78,11 +109,10 @@ public:
       return {ECM{ec, keys_result.first.first}, nullptr};
     }
 
-    auto created = CreateClient(client_config.second.request,
-                                client_config.second.protocol, trace_num,
-                                std::move(trace_cb),
-                                client_config.second.buffer_size,
-                                keys_result.second, password_cb_);
+    auto created = CreateClient(
+        client_config.second.request, client_config.second.protocol, trace_num,
+        std::move(trace_cb), client_config.second.buffer_size,
+        keys_result.second, password_cb_);
     if (!created.has_value()) {
       return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
     }
@@ -92,17 +122,16 @@ public:
       return {ECM{EC::UnknownError, "Failed to create client"}, nullptr};
     }
 
-    if (connect) {
-      ECM rcm = base_client->Connect();
-      if (rcm.first != EC::Success) {
-        return {rcm, base_client};
-      }
+    ECM rcm = base_client->Connect(force, flag);
+    if (rcm.first != EC::Success) {
+      return {rcm, base_client};
     }
-
+    InitClientWorkdir(base_client);
     ClientPool(pool).add_client(nickname, base_client, true);
     return {ECM{EC::Success, ""}, base_client};
   }
 
+  /** Remove a client from the pool without editing config. */
   ECM RemoveClient(const std::string &nickname, PoolKind pool) {
     if (nickname.empty() || nickname == "local") {
       return {EC::InvalidArg, "Local client cannot be removed"};
@@ -115,13 +144,14 @@ public:
     return {EC::Success, ""};
   }
 
+  /** Check client status; optionally force update. */
   std::pair<ECM, std::shared_ptr<BaseClient>>
   CheckClient(const std::string &nickname, PoolKind pool, bool update = false,
               amf interrupt_flag = nullptr, int timeout_ms = -1,
               int64_t start_time = -1) {
-    auto result =
-        ClientPool(pool).test_client(nickname, update, interrupt_flag,
-                                     timeout_ms, start_time);
+    amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+    auto result = ClientPool(pool).test_client(nickname, update, flag,
+                                               timeout_ms, start_time);
     return result;
   }
 
@@ -132,18 +162,22 @@ private:
   PasswordCallback password_cb_ = {};
   DisconnectCallback disconnect_cb_ = {};
 
+  /** Read heartbeat interval from settings; fallback to 60 seconds. */
   static int ResolveHeartbeatInterval(AMConfigManager &cfg) {
-    int value = cfg.GetSettingInt({"client_manager", "heartbeat_interval_s"}, 60);
+    int value =
+        cfg.GetSettingInt({"client_manager", "heartbeat_interval_s"}, 60);
     if (value <= 0) {
       value = cfg.GetSettingInt({"ClientManager", "heartbeat_interval_s"}, 60);
     }
     return value > 0 ? value : 60;
   }
 
+  /** Select pool by kind. */
   ClientMaintainerRef &ClientPool(PoolKind pool) {
     return pool == PoolKind::Transfer ? transfer_clients_ : op_clients_;
   }
 
+  /** Convert variant client to BaseClient pointer. */
   static std::shared_ptr<BaseClient> ToBaseClient(const AMCilent &client) {
     return std::visit(
         [](const auto &ptr) -> std::shared_ptr<BaseClient> {
@@ -152,6 +186,19 @@ private:
         client);
   }
 
+  /** Initialize client workdir in public map if missing. */
+  void InitClientWorkdir(const std::shared_ptr<BaseClient> &client) {
+    if (!client) {
+      return;
+    }
+    std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
+    if (client->public_kv.find("workdir") == client->public_kv.end()) {
+      client->public_kv["workdir"] =
+          AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+    }
+  }
+
+  /** Forward disconnect notifications with pool kind. */
   void OnDisconnect(PoolKind pool, const std::shared_ptr<BaseClient> &client,
                     const ECM &ecm) {
     if (disconnect_cb_) {

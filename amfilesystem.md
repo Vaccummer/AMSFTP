@@ -1,75 +1,73 @@
 # AMFileSystem
 
-可以持有client manager
+`AMFileSystem` (amfsm) is one of the core modules of the entire project. It primarily wraps client operations further and serves as the interface for user interaction.
 
-AMFileSystem(amfsm) 是整个项目的核心模块之一, 主要负责将client的操作进行进一步包装, 与用于进行交互
+Therefore, these functions must include extensive validation and informative output operations.
 
-所以这些函数中, 需要很多检查与信息打印的操作
+---
 
-input format
+### Input Format
 
-1. 路径格式: {client_name}@{path}
-   1. 部分路径本身存在@, 可以通过检测分隔出的nickname是否存在来区分
-   2. local路径可写为@{path}, 算作语法糖
-   3. local@{path}也是本地路径
-   4. 直接使用{path}代表当前client的路径
-   5. nickname在检测时不区分大小写
+1. **Path format**: `{client_name}@{path}`
+   1. Some paths may inherently contain `@`. To disambiguate, check whether the extracted nickname exists in the client registry.
+   2. Local paths can be written as `@{path}`—this is syntactic sugar.
+   3. `local@{path}` also denotes a local path.
+   4. A bare `{path}` (without `@`) refers to the current client’s path.
+   5. Nickname matching is **case-insensitive**.
 
-output Format
+---
 
-1. client打印格式
+### Output Format
 
-✅  {client_name}@{work_dir} (正常情况)
+1. **Client status printing**:
 
-❌  {client_name}@{work_dir}  {EC_name} : {EC_msg}
+   - ✅ `{client_name}@{work_dir}` (normal case)
+   - ❌ `{client_name}@{work_dir}  {EC_name} : {EC_msg}` (error case)
+2. **Size information**: Must be converted into human-readable units (KB, MB, GB, etc.).
+3. **Path info (`stat`) template**:
 
-2. size信息: 必须转化为人类可读的MB/GB/KB单位
-3. pathinfo打印模板(stat)
-
+```
 [path]
 
-type : {pathtype_name}
+type     : {pathtype_name}
+owner    : am
+mode     : rwxrwx---
+size     : 12KB
 
-owner :  am
+create_time : 2025/01/26 15:46:32
+modify_time : 2025/01/26 15:46:32
+access_time : 2025/01/26 15:46:32
+```
 
-mode :  rwxrwx---
+> **Note**: Left-align the keywords (`type`, `owner`, `mode`, `size`) in the first block. The timestamp lines form a separate aligned block below.
 
-size:  12KB
+4. **`ls -l` style listing** (each field must be properly aligned):
 
-(ps: 左对齐上述几行的关键字, 与下面几行分开对齐)
+```
+drwxrwx---  am   0B   2025/01/26 15:46:32   item_name
+```
 
-create_time:  2025/01/26  15:46:32
+---
 
-modify_time:  "同上"
+### Functions (return `ECM`)
 
-access_time:  "同上"
-
-4. ls -l型打印(每项都需要对其)
-
-drwxrwx---  am   0B  2025/01/26  15:46:32   item_name
-
-Function(返回ECM)
-
-1. check: 接收昵称即可
-2. connect 对应add client
-3. change_client 改变当前client, 不存在时创建
-4. remove_client: 用于删除client, 注意, 只是从clientmanager里删除, 不能动config, 删除时二次确认
-5. cd 函数
-   1. cd 支持 cd {path}
-   2. 也支持解析 cd {hostname}@{path}
-   3. cd的目标client不存在时, 可询问用户是否创建
-   4. cd 保留最近一次历史位置, 以字符串保存{nickname}@{path}, 用于cd -
-   5. cd - 使用后清空历史位置,  直到下次cd 到其他位置
-   6. cd 到空目标时不做操作, 但cd {nickname}@时等效于chang client
-6. print_clients: 打印当前所有client信息(使用update=true方法检测状态) 依照上方定义的格式
-7. stat :可接收{nickname}@{path}格式, path信息参考上方
-8. getsize 可接收{nickname}@{path}格式   简单打印"12KB"类似即可
-9. find 可接收{nickname}@{path}格式  每行打印一个路径即可, 注意style化
-10. mkdir 可接收{nickname}@{path}格式  可递归创建
-11. rm 可接收{nickname}@{path}格式  不提供permanent用saferm方法, 提供用remove方法
-
-## AMTransfer
-
-AMTransfer
-
-需要实现的功能类似于@core_func.py 的CliTransfer.copy
+1. **`check`**: Accepts only a nickname; verifies client existence/status.
+2. **`connect`**: Equivalent to adding a client.
+3. **`change_client`**: Switches the current client; creates it if it doesn’t exist.
+4. **`remove_client`**: Removes a client from the `ClientManager` (does **not** modify config). Requires user confirmation before deletion.
+5. **`cd`**:
+   1. Supports `cd {path}` (relative to current client).
+   2. Also supports `cd {hostname}@{path}`.
+   3. If the target client doesn’t exist, prompt the user whether to create it.
+   4. Maintains a single history entry as a string `{nickname}@{path}` for `cd -`.
+   5. After `cd -` is executed, clear the history until the next `cd` to a different location.
+   6. `cd` with no argument does nothing. However, `cd {nickname}@` is equivalent to `change_client`.
+6. **`print_clients`**: Lists all clients with real-time status (calls underlying method with `update=true`), formatted as defined above.
+7. **`stat`**: Accepts `{nickname}@{path}`; outputs path info using the template above.
+8. **`getsize`**: Accepts `{nickname}@{path}`; prints size in human-readable format (e.g., `"12KB"`).
+9. **`find`**: Accepts `{nickname}@{path}`; prints one matching path per line, with styled formatting.
+10. **`mkdir`**: Accepts `{nickname}@{path}`; supports recursive directory creation.
+11. **`rm`**: Accepts `{nickname}@{path}`.
+    - Does **not** provide a "permanent delete" option.
+    - Use `saferm` for safe removal (e.g., move to trash or confirm).
+    - Use `remove` for direct deletion (if explicitly provided).
