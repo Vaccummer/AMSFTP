@@ -1016,18 +1016,18 @@ private:
         dst_client = client_ftp->mirror_client;
       }
     }
-    print("start reading");
+
     std::thread reading_thread(
         [&]() { this->XToBuffer(src_client, task_info); });
-    print("start writing");
+
     this->BufferToX(dst_client, task_info);
-    print("set terminate");
+
     pd.set_terminate();
 
     if (reading_thread.joinable()) {
       reading_thread.join();
     }
-    print("join reading thread");
+
     if (task->rcm.first != EC::Success) {
       return task->rcm;
     }
@@ -1112,6 +1112,10 @@ private:
       task_info->cur_task = &task;
       task.transferred = 0;
       task.rcm = ECM(EC::Success, "");
+      if (src_client->GetUID() == dst_client->GetUID() &&
+          src_client->GetProtocol() == ClientProtocol::SFTP) {
+        pd.ring_buffer = nullptr;
+      }
       pd.ring_buffer = std::make_shared<StreamRingBuffer>(
           CalculateBufferSize(src_client, dst_client, task_info->buffer_size));
 
@@ -1120,14 +1124,12 @@ private:
 
       if (task.rcm.first != EC::Success && task_info->callback.need_error_cb &&
           task.rcm.first != EC::Terminate) {
-        print("call error");
+
         task_info->callback.CallError(ErrorCBInfo(
             task.rcm, task.src, task.dst, task.src_host, task.dst_host));
-        print("call error done");
       }
-      print("call inner callback");
+
       InnerCallback(task_info, pd, true);
-      print("inner callback done");
     }
 
     // bool any_error = false;
@@ -1159,7 +1161,7 @@ private:
         if (task_queue.empty()) {
           continue;
         }
-        print("get task from queue");
+
         task_info = std::move(task_queue.front());
         task_queue.pop_front();
       }
@@ -1182,13 +1184,14 @@ private:
       }
 
       // Execute task
-      print("execute task");
+
       ExecuteTask(task_info);
-      print("execute task done");
+      task_info->pd = nullptr; // clear progress data
+
       // Store result and clear conducting
       {
         std::lock_guard<std::mutex> lock(result_mtx);
-        print("store result");
+
         results[task_info->id] = task_info;
       }
       {

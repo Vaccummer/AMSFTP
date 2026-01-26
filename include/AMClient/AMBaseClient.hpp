@@ -1,6 +1,5 @@
 #pragma once
 // 标准库
-#include <any>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -78,11 +77,9 @@ private:
   TraceCallback trace_cb;
   std::vector<TraceInfo> buffer = {};
   std::recursive_mutex buffer_mutex;
-  std::recursive_mutex public_var_mutex; // 专门用于保护 public_var_dict 的锁
   ssize_t capacity = 10;
   std::atomic<bool> is_trace_cb = false;
   std::atomic<bool> is_trace_pause = false;
-  std::unordered_map<std::string, std::any> public_var_dict;
   std::unordered_map<TraceLevel, std::string> trace_level_str = {
       {TraceLevel::Debug, "🐛"},   {TraceLevel::Info, "ℹ️"},
       {TraceLevel::Warning, "⚠️"},  {TraceLevel::Error, "❌"},
@@ -120,6 +117,10 @@ protected:
   std::string nickname;
 
 public:
+  /** Thread-safe public key/value map for client metadata (lock with public_kv_mtx). */
+  std::recursive_mutex public_kv_mtx;
+  std::unordered_map<std::string, std::string> public_kv;
+
   AMTracer(const ConRequst &request, int buffer_capacity = 10,
            TraceCallback trace_cb = {})
       : trace_cb(std::move(trace_cb)), res_data(request),
@@ -128,45 +129,6 @@ public:
     buffer.reserve(capacity);
     this->is_trace_cb = static_cast<bool>(this->trace_cb);
   }
-  ECM SetPublicVar(const std::string &key, std::any value,
-                   bool overwrite = false) {
-    std::lock_guard<std::recursive_mutex> lock(public_var_mutex);
-
-    if (!overwrite && public_var_dict.find(key) != public_var_dict.end()) {
-      return {EC::KeyAlreadyExists,
-              "Key already exists and overwrite is false: " + key};
-    }
-
-    public_var_dict[key] = std::move(value);
-    return {EC::Success, ""};
-  }
-
-  std::any GetPublicVar(const std::string &key, std::any default_value = {}) {
-    std::lock_guard<std::recursive_mutex> lock(public_var_mutex);
-
-    auto it = public_var_dict.find(key);
-    if (it != public_var_dict.end()) {
-      return it->second;
-    }
-
-    return default_value;
-  }
-
-  bool DelPublicVar(const std::string &key) {
-    std::lock_guard<std::recursive_mutex> lock(public_var_mutex);
-    return public_var_dict.erase(key) > 0;
-  }
-
-  void ClearPublicVar() {
-    std::lock_guard<std::recursive_mutex> lock(public_var_mutex);
-    public_var_dict.clear();
-  }
-
-  std::unordered_map<std::string, std::any> GetAllPublicVars() {
-    std::lock_guard<std::recursive_mutex> lock(public_var_mutex);
-    return public_var_dict;
-  }
-
   size_t GetTraceNum() {
     std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
     return buffer.size();

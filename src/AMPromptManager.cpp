@@ -1,6 +1,7 @@
 #include "AMPromptManager.hpp"
 #include <cstdlib>
 #include <iostream>
+#include <sstream>
 #include <replxx.h>
 #include <string>
 

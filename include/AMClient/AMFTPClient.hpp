@@ -695,7 +695,6 @@ private:
       if (!line.empty() && line.back() == '\r') {
         line.pop_back();
       }
-      std::cout << "line:" << line << "\n";
 
       // MLST 数据行以空格开头
       if (!line.empty() && (line[0] == ' ' || line[0] == '\t')) {
@@ -839,17 +838,15 @@ private:
       if (response_code == 500 || response_code == 502 ||
           nb_res.value == CURLE_QUOTE_ERROR ||
           nb_res.value == CURLE_FTP_COULDNT_RETR_FILE) {
-        std::cout << "Not Supported" << "\n";
+
         return {ECM{EC::OperationUnsupported, "MLSD not supported"}, {}};
       }
       if (response_code == 550) {
-        std::cout << "Path not ex" << "\n";
+
         return {ECM{EC::PathNotExist, AMStr::amfmt("Path not found: {}", path)},
                 {}};
       }
 
-      std::cout << "Others: " << response_code << "\n";
-      std::cout << "result_value: " << nb_res.value << "\n";
       return {ECM{EC::FTPListFailed, curl_easy_strerror(nb_res.value)}, {}};
     }
 
@@ -1234,7 +1231,7 @@ public:
       if (!line.empty() && line.back() == '\r') {
         line.pop_back();
       }
-      std::cout << "line=" << line << std::endl;
+
       if (line.empty())
         continue;
       PathInfo info = ParseListLine(line, path);
