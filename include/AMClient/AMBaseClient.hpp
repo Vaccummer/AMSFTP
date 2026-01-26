@@ -185,8 +185,9 @@ public:
     this->push(trace_info);
     if (is_trace_cb.load()) {
       CallCallbackSafe(trace_cb, trace_info);
+    } else {
+      this->WriteLog(trace_info);
     }
-    this->WriteLog(trace_info);
     this->push(trace_info);
   }
 

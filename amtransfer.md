@@ -16,7 +16,11 @@ AMWorkManager的回调需要经过AMTransferManager包装, 实现线程安全
 
 TransferManager 负责文件的传输, 是面向用户的对AMWorkManager进一步封装
 
-TransferManager
+TransferManager 持有两种client存储(都不进行heartbeat检验)
+
+一个是AMClient的Transfer pool, 一种是闲置pool
+
+AMClientManager的AddClient新加一种重载, poolkind参数换为hostmanager
 
 ### 基础transfer函数
 
@@ -26,6 +30,6 @@ TransferManager
 
 ### 非阻塞transfer
 
-1. 提交任务后, 打印任务信息, 就立刻返回
-2. 该函数会集中管理保存任务信息, 供用户查询
-3. 任务完成后会进行回调通知执行结果(可以考虑在AMWorkManager中添加结果回调实现)
+流程
+
+1. 分析所需要的client, 先从TransferManager的公有池取, 再从
