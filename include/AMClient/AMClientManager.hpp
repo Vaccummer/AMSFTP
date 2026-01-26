@@ -38,11 +38,13 @@ public:
         transfer_clients_(ResolveHeartbeatInterval(cfg),
                           [this](const auto &client, const ECM &ecm) {
                             OnDisconnect(PoolKind::Transfer, client, ecm);
-                          }),
+                          },
+                          cfg.LocalClient()),
         op_clients_(ResolveHeartbeatInterval(cfg),
                     [this](const auto &client, const ECM &ecm) {
                       OnDisconnect(PoolKind::Operation, client, ecm);
-                    }) {
+                    },
+                    cfg.LocalClient()) {
     LOCAL = transfer_clients_.GetHost("");
     CLIENT = LOCAL;
     InitClientWorkdir(LOCAL);
@@ -81,7 +83,7 @@ public:
   /** Create or reuse a client and connect it immediately. */
   std::pair<ECM, std::shared_ptr<BaseClient>>
   AddClient(const std::string &nickname, PoolKind pool, bool force = false,
-            ssize_t trace_num = 10, TraceCallback trace_cb = {},
+            ssize_t trace_num = 5, TraceCallback trace_cb = {},
             amf interrupt_flag = nullptr) {
     amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
     if (!trace_cb) {
