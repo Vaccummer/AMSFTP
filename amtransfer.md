@@ -32,4 +32,4 @@ AMClientManager的AddClient新加一种重载, poolkind参数换为hostmanager
 
 流程
 
-1. 分析所需要的client, 先从TransferManager的公有池取, 再从
+1. 分析所需要的client, 先从TransferManager的公有池找, 找不到自行创建,  任意一个client

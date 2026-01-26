@@ -1,5 +1,8 @@
 #include "AMConfigManager.hpp"
+#include "AMClient/AMLocalClient.hpp"
 #include "AMEnum.hpp"
+#include "AMLogManager.hpp"
+#include "AMPath.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -7,6 +10,7 @@
 #include <optional>
 #include <regex>
 #include <sstream>
+#include <variant>
 
 namespace {
 using Status = AMConfigManager::Status;
@@ -273,6 +277,7 @@ AMConfigManager::Status AMConfigManager::Init() {
   }
 
   initialized_ = true;
+  InitLocalClient();
   if (!exit_hook_installed_) {
     std::atexit(&AMConfigManager::OnExit);
     exit_hook_installed_ = true;
@@ -507,7 +512,7 @@ AMConfigManager::GetClientConfig(const std::string &nickname,
 }
 
 int AMConfigManager::GetSettingInt(const Path &path,
-                                   int default_value) const {
+                                  int default_value) const {
   auto status = EnsureInitialized("GetSettingInt");
   if (status.second != 0)
     return default_value;
@@ -524,6 +529,87 @@ int AMConfigManager::GetSettingInt(const Path &path,
     }
   }
   return default_value;
+}
+
+/** Return a string setting value or the provided default. */
+std::string AMConfigManager::GetSettingString(
+    const Path &path, const std::string &default_value) const {
+  auto status = EnsureInitialized("GetSettingString");
+  if (status.second != 0)
+    return default_value;
+  const toml::node *node = FindNode(settings_table_, path);
+  if (!node)
+    return default_value;
+  if (auto value = node->value<std::string>()) {
+    return *value;
+  }
+  if (auto value = node->value<int64_t>()) {
+    return std::to_string(*value);
+  }
+  if (auto value = node->value<bool>()) {
+    return *value ? "true" : "false";
+  }
+  if (auto value = node->value<double>()) {
+    std::ostringstream oss;
+    oss << *value;
+    return oss.str();
+  }
+  return default_value;
+}
+
+/** Return the shared local client instance, creating it if needed. */
+std::shared_ptr<AMLocalClient> AMConfigManager::LocalClient() {
+  if (!local_client_) {
+    if (initialized_) {
+      InitLocalClient();
+    }
+  }
+  if (!local_client_) {
+    local_client_ = std::make_shared<AMLocalClient>(ConRequst("local", "", ""));
+  }
+  return local_client_;
+}
+
+/** Return the shared local client instance without initialization. */
+std::shared_ptr<AMLocalClient> AMConfigManager::LocalClient() const {
+  return local_client_;
+}
+
+/** Initialize the local client from settings and bind trace callback. */
+void AMConfigManager::InitLocalClient() {
+  if (local_client_) {
+    return;
+  }
+  auto trace_cb = AMLogManager::Instance(*this).TraceCallbackFunc();
+  auto client =
+      std::make_shared<AMLocalClient>(ConRequst("local", "", ""), 10, trace_cb);
+
+  std::string work_dir = GetSettingString({"LocalClient", "work_dir"}, "");
+  if (!work_dir.empty()) {
+    client->home_dir = AMPathStr::UnifyPathSep(work_dir, "/");
+    {
+      std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
+      client->public_kv["workdir"] = client->home_dir;
+    }
+  }
+
+  std::string trash_dir = GetSettingString({"LocalClient", "trash_dir"}, "");
+  if (!trash_dir.empty()) {
+    auto result = client->TrashDir(trash_dir);
+    if (std::holds_alternative<ECM>(result)) {
+      const auto &ecm = std::get<ECM>(result);
+      if (ecm.first != EC::Success) {
+        AM_PROMPT_ERROR("LocalClient", ecm.second, false, 0);
+      }
+    }
+  }
+
+  int buffer_size = GetSettingInt({"LocalClient", "buffer_size"}, -1);
+  if (buffer_size > 0) {
+    client->TransferRingBufferSize(buffer_size);
+  }
+
+  local_client_ = client;
 }
 
 AMConfigManager::Status AMConfigManager::Src() const {

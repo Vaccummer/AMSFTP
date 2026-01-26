@@ -345,10 +345,15 @@ public:
   }
 
   ClientMaintainer(int heartbeat_interval_s = 60,
-                   DisconnectCallback disconnect_cb = {}) {
+                   DisconnectCallback disconnect_cb = {},
+                   std::shared_ptr<AMLocalClient> local_client = nullptr) {
     // 初始化本地客户端
-    this->local_client =
-        std::make_shared<AMLocalClient>(ConRequst("local", "", ""));
+    if (local_client) {
+      this->local_client = std::move(local_client);
+    } else {
+      this->local_client =
+          std::make_shared<AMLocalClient>(ConRequst("local", "", ""));
+    }
     this->is_heartbeat.store(true);
     heartbeat_thread = std::thread(
         [this, heartbeat_interval_s]() { HeartbeatAct(heartbeat_interval_s); });

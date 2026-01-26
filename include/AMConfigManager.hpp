@@ -5,9 +5,12 @@
 #include "AMEnum.hpp"
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
+
+class AMLocalClient;
 
 class AMConfigManager {
 public:
@@ -50,6 +53,14 @@ public:
                   bool use_compression = false) const;
   [[nodiscard]] int GetSettingInt(const Path &path,
                                   int default_value) const;
+  /** Return a string setting value or the provided default. */
+  [[nodiscard]] std::string GetSettingString(const Path &path,
+                                             const std::string &default_value)
+      const;
+  /** Return the shared local client instance. */
+  [[nodiscard]] std::shared_ptr<AMLocalClient> LocalClient();
+  /** Return the shared local client instance without initialization. */
+  [[nodiscard]] std::shared_ptr<AMLocalClient> LocalClient() const;
   [[nodiscard]] Status Src() const;
   [[nodiscard]] Status Delete(const std::string &nickname);
   [[nodiscard]] Status Rename(const std::string &old_nickname,
@@ -80,6 +91,8 @@ private:
                          Value value);
   Status RemoveHost(const std::string &nickname);
 
+  /** Initialize the local client from settings. */
+  void InitLocalClient();
   Status PromptAddFields(std::string *nickname, HostEntry *entry);
   Status PromptModifyFields(const std::string &nickname, HostEntry *entry);
 
@@ -93,6 +106,7 @@ private:
   std::filesystem::path root_dir_;
   std::filesystem::path config_path_;
   std::filesystem::path settings_path_;
+  std::shared_ptr<AMLocalClient> local_client_;
 
   toml::table config_table_;
   toml::table settings_table_;

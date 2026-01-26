@@ -40,6 +40,7 @@ public:
   }
 
   OS_TYPE GetOSType(bool update = false) override {
+    std::lock_guard<std::recursive_mutex> lock(this->mtx);
     if (!update && this->os_type != OS_TYPE::Uncertain) {
       return this->os_type;
     }
@@ -61,6 +62,7 @@ public:
   }
 
   std::string GetHomeDir() override {
+    std::lock_guard<std::recursive_mutex> lock(this->mtx);
     if (!this->home_dir.empty()) {
       return this->home_dir;
     }
