@@ -1,6 +1,8 @@
 #pragma once
 #include "AMCommonTools.hpp"
 #include "AMPromptManager.hpp"
+#include "AMDataClass.hpp"
+#include "AMEnum.hpp"
 #include <filesystem>
 #include <map>
 #include <string>
@@ -14,6 +16,12 @@ public:
   using Value = AMConfigProcessor::Value;
   using FlatMap = AMConfigProcessor::FlatMap;
   using FormatPath = AMConfigProcessor::FormatPath;
+
+  struct ClientConfig {
+    ConRequst request;
+    ClientProtocol protocol = ClientProtocol::SFTP;
+    int64_t buffer_size = -1;
+  };
 
   static AMConfigManager &Instance();
 
@@ -32,8 +40,18 @@ public:
                                    const std::string &style_name) const;
 
   [[nodiscard]] Status List() const;
+  [[nodiscard]] Status ListName() const;
+  [[nodiscard]] std::pair<Status, std::vector<std::string>>
+  PrivateKeys(bool print_sign = false) const;
+  [[nodiscard]] std::pair<Status, ClientConfig>
+  GetClientConfig(const std::string &nickname,
+                  bool use_compression = false) const;
+  [[nodiscard]] int GetSettingInt(const Path &path,
+                                  int default_value) const;
   [[nodiscard]] Status Src() const;
   [[nodiscard]] Status Delete(const std::string &nickname);
+  [[nodiscard]] Status Rename(const std::string &old_nickname,
+                              const std::string &new_nickname);
   [[nodiscard]] Status Query(const std::string &nickname) const;
   [[nodiscard]] Status Add();
   [[nodiscard]] Status Modify(const std::string &nickname);
