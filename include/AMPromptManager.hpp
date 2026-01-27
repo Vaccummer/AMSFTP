@@ -1,5 +1,6 @@
 #pragma once
 #include <mutex>
+#include <memory>
 #include <replxx.h>
 #include <string>
 #include <string_view>
@@ -27,6 +28,8 @@ inline std::string ToString(char *value) {
   return value ? std::string(value) : std::string();
 }
 } // namespace AMPromptDetail
+
+struct TaskInfo;
 
 class AMPromptManager {
 public:
@@ -74,6 +77,8 @@ public:
   void ErrorFormat(const std::string &error_name, const std::string &error_msg,
                    bool is_exit = false, int exit_code = 0,
                    const char *caller = "unknown");
+
+  void PrintTaskResult(const std::shared_ptr<TaskInfo> &task_info);
 
   bool Prompt(const std::string &prompt, const std::string &placeholder,
               std::string *out_input);

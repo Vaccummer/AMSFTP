@@ -1,5 +1,6 @@
 #pragma once
 // 标准库
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -7,6 +8,7 @@
 #include <cstdint> // 用于int64_t类型
 #include <fcntl.h>
 #include <iomanip>
+#include <mutex>
 #include <optional>
 #include <random>
 
@@ -17,6 +19,7 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 // 标准库
 
@@ -387,60 +390,132 @@ struct ProgressCBInfo {
 
 class StreamRingBuffer {
 private:
-  std::unique_ptr<char[]> buffer;
-  size_t capacity;
-  std::atomic<size_t> head{0}; // 消费者读取位置
-  std::atomic<size_t> tail{0}; // 生产者写入位置
+  /**
+   * @brief Backing storage for the ring buffer.
+   *
+   * This uses std::array to replace the raw char[] buffer. The effective
+   * capacity is clamped to the requested size at construction time.
+   */
+  std::array<char, static_cast<size_t>(AMMaxBufferSize)> buffer_{};
+  size_t capacity_ = 0;
+  std::atomic<size_t> head_{0}; // 消费者读取位置
+  std::atomic<size_t> tail_{0}; // 生产者写入位置
 
 public:
-  StreamRingBuffer(size_t size)
-      : buffer(std::make_unique<char[]>(size)), capacity(size) {}
+  /**
+   * @brief Construct a ring buffer with a requested capacity.
+   *
+   * @param size Requested buffer size in bytes. The actual capacity is clamped
+   *             to the maximum std::array size.
+   */
+  explicit StreamRingBuffer(size_t size)
+      : capacity_(std::min<size_t>(size, buffer_.size())) {}
 
-  // 获取可读数据量
+  /**
+   * @brief Get the amount of readable data in the buffer.
+   */
   size_t available() const {
-    return tail.load(std::memory_order_acquire) -
-           head.load(std::memory_order_relaxed);
+    return tail_.load(std::memory_order_acquire) -
+           head_.load(std::memory_order_relaxed);
   }
 
-  // 获取可写空间
-  size_t writable() const { return capacity - available(); }
+  /**
+   * @brief Get the amount of writable space remaining in the buffer.
+   */
+  size_t writable() const { return capacity_ - available(); }
 
-  // 获取写入指针和最大连续可写长度
+  /**
+   * @brief Get the write pointer and maximum contiguous writable length.
+   */
   std::pair<char *, size_t> get_write_ptr() {
-    size_t t = tail.load(std::memory_order_relaxed);
-    size_t h = head.load(std::memory_order_acquire);
-    size_t pos = t % capacity;
+    size_t t = tail_.load(std::memory_order_relaxed);
+    size_t h = head_.load(std::memory_order_acquire);
+    size_t pos = t % capacity_;
     size_t used = t - h;
-    size_t free_space = capacity - used;
+    size_t free_space = capacity_ - used;
     // 连续可写 = min(到末尾的距离, 空闲空间)
-    size_t contig = capacity - pos > free_space ? free_space : capacity - pos;
-    return {buffer.get() + pos, contig};
+    size_t contig =
+        capacity_ - pos > free_space ? free_space : capacity_ - pos;
+    return {buffer_.data() + pos, contig};
   }
 
-  // 提交写入的数据量
+  /**
+   * @brief Commit a number of bytes as written to the buffer.
+   */
   void commit_write(size_t len) {
-    tail.fetch_add(len, std::memory_order_release);
+    tail_.fetch_add(len, std::memory_order_release);
   }
 
-  // 获取读取指针和最大连续可读长度
+  /**
+   * @brief Get the read pointer and maximum contiguous readable length.
+   */
   std::pair<char *, size_t> get_read_ptr() {
-    size_t h = head.load(std::memory_order_relaxed);
-    size_t t = tail.load(std::memory_order_acquire);
-    size_t pos = h % capacity;
+    size_t h = head_.load(std::memory_order_relaxed);
+    size_t t = tail_.load(std::memory_order_acquire);
+    size_t pos = h % capacity_;
     size_t avail = t - h;
     // 连续可读 = min(到末尾的距离, 可用数据)
-    size_t contig = capacity - pos > avail ? avail : capacity - pos;
-    return {buffer.get() + pos, contig};
+    size_t contig = capacity_ - pos > avail ? avail : capacity_ - pos;
+    return {buffer_.data() + pos, contig};
   }
 
-  // 提交读取消费的数据量
+  /**
+   * @brief Commit a number of bytes as consumed from the buffer.
+   */
   void commit_read(size_t len) {
-    head.fetch_add(len, std::memory_order_release);
+    head_.fetch_add(len, std::memory_order_release);
   }
 
+  /**
+   * @brief Check whether the buffer has no readable data.
+   */
   bool empty() const { return available() == 0; }
+
+  /**
+   * @brief Check whether the buffer has no writable space.
+   */
   bool full() const { return writable() == 0; }
-  size_t get_capacity() const { return capacity; }
+
+  /**
+   * @brief Get the effective capacity of the buffer.
+   */
+  size_t get_capacity() const { return capacity_; }
+};
+
+class UserTransferSet {
+public:
+  /**
+   * @brief The list of user-provided transfer pairs.
+   */
+  std::vector<std::pair<std::string, std::string>> transfers;
+
+  /**
+   * @brief Whether to create missing destination directories.
+   */
+  bool mkdir = true;
+
+  /**
+   * @brief Whether to overwrite existing targets.
+   */
+  bool overwrite = false;
+
+  /**
+   * @brief Whether to ignore special files during traversal.
+   */
+  bool ignore_special_file = true;
+
+  /**
+   * @brief Construct an empty transfer set with default flags.
+   */
+  UserTransferSet() = default;
+
+  /**
+   * @brief Construct a transfer set from pairs and flags.
+   */
+  UserTransferSet(std::vector<std::pair<std::string, std::string>> pairs,
+                  bool mkdir, bool overwrite, bool ignore_special_file)
+      : transfers(std::move(pairs)), mkdir(mkdir), overwrite(overwrite),
+        ignore_special_file(ignore_special_file) {}
 };
 
 struct ErrorCBInfo {
@@ -633,28 +708,155 @@ struct WkProgressData {
   }
 };
 struct TaskInfo {
+  /**
+   * @brief Callback invoked when the task completes.
+   */
+  using ResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
+
+  /**
+   * @brief Internal mutex guarding non-atomic state changes.
+   */
+  mutable std::mutex mtx;
+
+  /**
+   * @brief Unique task identifier.
+   */
   std::string id = "";
-  double submit_time = 0;
-  double start_time = 0;
-  TaskStatus status = TaskStatus::Pending;
-  double finished_time = 0;
+
+  /**
+   * @brief Submission timestamp.
+   */
+  std::atomic<double> submit_time{0};
+
+  /**
+   * @brief Start timestamp.
+   */
+  std::atomic<double> start_time{0};
+
+  /**
+   * @brief Current task status.
+   */
+  std::atomic<TaskStatus> status{TaskStatus::Pending};
+
+  /**
+   * @brief Finished timestamp.
+   */
+  std::atomic<double> finished_time{0};
+
+  /**
+   * @brief Result code and message.
+   */
   ECM rcm = {EC::Success, ""};
 
-  // Current task being transferred - weak pointer to task in tasks vector
+  /**
+   * @brief Current task being transferred.
+   */
   TransferTask *cur_task = nullptr;
 
-  // Progress tracking (directly in TaskInfo)
-  uint64_t total_transferred_size = 0;
-  uint64_t total_size = 0;
+  /**
+   * @brief Progress tracking: accumulated transferred bytes.
+   */
+  std::atomic<uint64_t> total_transferred_size{0};
 
-  // Task list
+  /**
+   * @brief Progress tracking: total bytes planned.
+   */
+  std::atomic<uint64_t> total_size{0};
+
+  /**
+   * @brief Task list.
+   */
   std::vector<TransferTask> tasks;
 
-  // Configuration
-  TransferCallback callback;
-  std::weak_ptr<ClientMaintainer> hostm;
-  ssize_t buffer_size = -1;
+  /**
+   * @brief Original user transfer configurations.
+   */
+  std::vector<UserTransferSet> transfer_sets;
 
-  // Control - managed by WkProgressData's control_sign
-  std::shared_ptr<WkProgressData> pd; // Shared progress data for control
+  /**
+   * @brief Whether to suppress output (immutable after construction).
+   */
+  bool quiet = false;
+
+  /**
+   * @brief Completion callback (if provided).
+   */
+  ResultCallback result_callback = {};
+
+  /**
+   * @brief Requested thread affinity ID.
+   */
+  std::atomic<size_t> thread_id{0};
+
+  /**
+   * @brief Transfer callbacks.
+   */
+  TransferCallback callback;
+
+  /**
+   * @brief Host maintainer reference.
+   */
+  std::weak_ptr<ClientMaintainer> hostm;
+
+  /**
+   * @brief Requested ring buffer size.
+   */
+  std::atomic<ssize_t> buffer_size{-1};
+
+  /**
+   * @brief Shared progress data for control signals.
+   */
+  std::shared_ptr<WkProgressData> pd;
+
+  /**
+   * @brief Construct a task info with optional quiet flag.
+   */
+  explicit TaskInfo(bool quiet_mode = false) : quiet(quiet_mode) {}
+
+  TaskInfo(const TaskInfo &) = delete;
+  TaskInfo &operator=(const TaskInfo &) = delete;
+  TaskInfo(TaskInfo &&) = delete;
+  TaskInfo &operator=(TaskInfo &&) = delete;
+
+  /**
+   * @brief Safely update the task status.
+   */
+  void SetStatus(TaskStatus new_status) { status.store(new_status); }
+
+  /**
+   * @brief Safely read the task status.
+   */
+  TaskStatus GetStatus() const { return status.load(); }
+
+  /**
+   * @brief Safely set the current task pointer.
+   */
+  void SetCurrentTask(TransferTask *task_ptr) {
+    std::lock_guard<std::mutex> lock(mtx);
+    cur_task = task_ptr;
+  }
+
+  /**
+   * @brief Safely read the current task pointer.
+   */
+  TransferTask *GetCurrentTask() const {
+    std::lock_guard<std::mutex> lock(mtx);
+    return cur_task;
+  }
+
+  /**
+   * @brief Safely update the result code and message.
+   */
+  void SetResult(const ECM &result) {
+    std::lock_guard<std::mutex> lock(mtx);
+    rcm = result;
+  }
+
+  /**
+   * @brief Safely read the result code and message.
+   */
+  ECM GetResult() const {
+    std::lock_guard<std::mutex> lock(mtx);
+    return rcm;
+  }
 };
