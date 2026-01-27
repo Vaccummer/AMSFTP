@@ -28,7 +28,7 @@ class CliTransfer:
         self.mg: ConfigManager = self.cm.mg
         self.wm: SFTPWorker = worker_manager
 
-    def copy(
+    def transfer(
         self,
         srcs: list[str],
         dst: str,

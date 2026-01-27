@@ -1027,8 +1027,6 @@ private:
 
     this->BufferToX(dst_client, task_info);
 
-    pd.set_terminate();
-
     if (reading_thread.joinable()) {
       reading_thread.join();
     }
@@ -1038,6 +1036,8 @@ private:
     }
     if (task->transferred >= task->size) {
       return task->rcm;
+    } else if (pd.is_terminate()) {
+      return {EC::Terminate, "Task terminated by user"};
     }
     return {EC::UnknownError, "Task not finished but exited unexpectedly"};
   }
@@ -1478,7 +1478,7 @@ public:
     return ids;
   }
 
-  std::pair<ECM, TASKS>
+  static std::pair<ECM, TASKS>
   load_tasks(const std::string &src, const std::string &dst,
              const std::shared_ptr<ClientMaintainer> &hostm,
              const std::string &src_host = "", const std::string &dst_host = "",
