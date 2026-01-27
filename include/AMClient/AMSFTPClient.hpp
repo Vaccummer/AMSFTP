@@ -505,19 +505,15 @@ public:
     /**
      * @brief Notify authentication callbacks in a unified manner.
      */
-    auto NotifyAuth = [&](bool need_password, bool is_password_auth,
-                          const std::string &password_enc,
-                          bool password_success) {
+    auto NotifyAuth = [&](bool need_password, const std::string &password_enc,
+                          bool password_correct) {
       if (!auth_cb) {
         return;
       }
       ConRequst request = res_data;
-      if (is_password_auth) {
-        request.password = password_success ? password_enc : "";
-      }
-      CallCallbackSafe(auth_cb,
-                       AuthCBInfo(need_password, std::move(request),
-                                  is_password_auth));
+      request.password = password_correct ? password_enc : "";
+      CallCallbackSafe(auth_cb, AuthCBInfo(need_password, std::move(request),
+                                           password_enc, password_correct));
     };
 
     // 专用私钥认证
@@ -534,14 +530,14 @@ public:
               "PrivatedKeyAuthorizeResult",
               AMStr::amfmt("Dedicated private key \"{}\" authorize success",
                            res_data.keyfile));
-        NotifyAuth(false, false, "", true);
+        NotifyAuth(false, "", true);
         goto OK;
       } else {
         trace(TraceLevel::Debug, EC::PublickeyAuthFailed, res_data.keyfile,
               "DedicatedPrivateKeyAuthorizeResult",
               AMStr::amfmt("Dedicated private key \"{}\" authorize failed",
                            res_data.keyfile));
-        NotifyAuth(false, false, "", false);
+        NotifyAuth(false, "", false);
       }
     }
 
@@ -559,12 +555,12 @@ public:
         trace(TraceLevel::Info, EC::Success, "Success",
               "PasswordAuthorizeResult", "Password authorize success");
         res_data.password = stored_password_enc;
-        NotifyAuth(false, true, stored_password_enc, true);
+        NotifyAuth(false, stored_password_enc, true);
         goto OK;
       } else {
         trace(TraceLevel::Debug, EC::AuthFailed, "password", "PasswordAuth",
               "Password authentication failed");
-        NotifyAuth(false, true, stored_password_enc, false);
+        NotifyAuth(false, stored_password_enc, false);
       }
     }
 
@@ -585,12 +581,12 @@ public:
                 "PrivatedKeyAuthorizeResult",
                 AMStr::amfmt("Shared private key \"{}\" authorize success",
                              private_key));
-          NotifyAuth(false, false, "", true);
+          NotifyAuth(false, "", true);
           goto OK;
         } else {
           trace(TraceLevel::Debug, EC::PrivateKeyAuthFailed, "Failed",
                 "PrivatedKeyAuthorizeResult", rcm.second);
-          NotifyAuth(false, false, "", false);
+          NotifyAuth(false, "", false);
         }
       }
     }
@@ -604,10 +600,9 @@ public:
         if (interrupt_flag && interrupt_flag->check()) {
           return {EC::Terminate, "Authentication interrupted"};
         }
-        NotifyAuth(true, true, "", false);
         auto [password_opt, cb_ecm] =
             CallCallbackSafeRet<std::optional<std::string>>(
-                auth_cb, AuthCBInfo(true, res_data, true));
+                auth_cb, AuthCBInfo(true, res_data, "", false));
         if (cb_ecm.first != EC::Success) {
           trace(TraceLevel::Error, cb_ecm.first, "AuthCB", "Call",
                 cb_ecm.second);
@@ -630,12 +625,12 @@ public:
           trace(TraceLevel::Info, EC::Success, "Success",
                 "PasswordAuthorizeResult", "Password authorize success");
           res_data.password = password_enc;
-          NotifyAuth(false, true, password_enc, true);
+          NotifyAuth(false, password_enc, true);
           goto OK;
         } else {
           trace(TraceLevel::Debug, EC::AuthFailed, "Failed",
                 "PasswordAuthorizeResult", "Wrong password");
-          NotifyAuth(false, true, password_enc, false);
+          NotifyAuth(false, password_enc, false);
         }
       }
     }

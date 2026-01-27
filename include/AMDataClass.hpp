@@ -663,16 +663,22 @@ struct AuthCBInfo {
   ConRequst request;
 
   /**
-   * @brief true for password auth, false for key-based auth.
+   * @brief The password being used in this authentication step (encrypted).
    */
-  bool isPass = true;
+  std::string password_n;
+
+  /**
+   * @brief Whether the provided password is correct.
+   */
+  bool iscorrect = false;
 
   /**
    * @brief Construct a callback info payload.
    */
-  AuthCBInfo(bool need_password, ConRequst request, bool is_password_auth)
+  AuthCBInfo(bool need_password, ConRequst request, std::string password_n,
+             bool iscorrect)
       : NeedPassword(need_password), request(std::move(request)),
-        isPass(is_password_auth) {}
+        password_n(std::move(password_n)), iscorrect(iscorrect) {}
 };
 
 struct TraceInfo {

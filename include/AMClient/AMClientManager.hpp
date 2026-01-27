@@ -298,11 +298,10 @@ private:
       return ReadMaskedPassword(prompt);
     }
 
-    if (!info.isPass) {
-      return std::nullopt;
-    }
-
-    if (info.request.password.empty()) {
+    if (!info.iscorrect) {
+      if (info.password_n.empty()) {
+        return std::nullopt;
+      }
       AMPromptManager::Instance().Print(
           AMStr::amfmt("❌ [{}] Wrong Password!", client_name));
       return std::nullopt;
@@ -310,8 +309,7 @@ private:
 
     AMPromptManager::Instance().Print(AMStr::amfmt(
         "✅ [{}] Password authorization successful!", client_name));
-    (void)config_.SetClientPasswordEncrypted(client_name, info.request.password,
-                                             true);
+    (void)config_.SetClientPasswordEncrypted(client_name, info.password_n, true);
     return std::nullopt;
   }
 };
