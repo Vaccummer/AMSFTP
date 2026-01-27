@@ -33,6 +33,8 @@
 
 using EC = ErrorCode;
 using ECM = std::pair<EC, std::string>;
+using AuthCallback =
+    std::function<std::optional<std::string>(const AuthCBInfo &)>;
 
 // 解析 IIS/DOS 格式的目录列表行
 // 格式: 03-03-25  11:27AM                90624 zlib1.dll
@@ -1066,16 +1068,15 @@ public:
                                             password_enc, password_correct));
     };
 
-    auto attempt_check = [&]() { return Check(interrupt_flag, timeout_ms, start_time); };
-
-    ECM rcm = attempt_check();
+    ECM rcm = Check(interrupt_flag, timeout_ms, start_time);
 
     if (rcm.first == EC::AuthFailed && auth_cb_enabled_) {
       int trials = 0;
       while (trials < 2 && rcm.first == EC::AuthFailed) {
-        auto password_opt = CallCallbackSafeRet(
-            password_cb_, auth_cb_, AuthCBInfo(true, res_data, "", false));
-        if (!password_opt.has_value()) {
+        auto [password_opt, rcm2] =
+            CallCallbackSafeRet<std::optional<std::string>>(
+                auth_cb_, AuthCBInfo(true, res_data, "", false));
+        if (!password_opt.has_value() || rcm2.first != EC::Success) {
           break;
         }
 
@@ -1084,7 +1085,7 @@ public:
         res_data.password = password_enc;
         session_password_plain_ = std::move(password_plain);
 
-        rcm = attempt_check();
+        rcm = Check(interrupt_flag, timeout_ms, start_time);
         if (rcm.first == EC::Success) {
           NotifyAuth(false, password_enc, true);
           break;
