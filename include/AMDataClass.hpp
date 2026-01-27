@@ -789,6 +789,7 @@ struct TransferTask {
         dst_host(std::move(dst_host)), size(size), path_type(path_type) {}
 };
 
+using TASKS = std::vector<TransferTask>;
 class UnimplementedMethodException : public std::exception {
 public:
   UnimplementedMethodException(std::string message)
@@ -848,6 +849,12 @@ struct WkProgressData {
     }
   }
 };
+
+/**
+ * @brief Task assignment type for scheduler bookkeeping.
+ */
+enum class TaskAssignType { Affinity, Public };
+
 struct TaskInfo {
   /**
    * @brief Callback invoked when the task completes.
@@ -907,12 +914,13 @@ struct TaskInfo {
   /**
    * @brief Task list.
    */
-  std::vector<TransferTask> tasks;
+  std::shared_ptr<TASKS> tasks = std::make_shared<TASKS>();
 
   /**
    * @brief Original user transfer configurations.
    */
-  std::vector<UserTransferSet> transfer_sets;
+  std::shared_ptr<std::vector<UserTransferSet>> transfer_sets =
+      std::make_shared<std::vector<UserTransferSet>>();
 
   /**
    * @brief Whether to suppress output (immutable after construction).
@@ -929,7 +937,17 @@ struct TaskInfo {
    *
    * Thread 0 is intrinsic and cannot be removed.
    */
-  std::atomic<int> thread_id{-1};
+  std::atomic<int> affinity_thread{-1};
+
+  /**
+   * @brief Scheduler assignment type (public queue or affinity queue).
+   */
+  std::atomic<TaskAssignType> assign_type{TaskAssignType::Public};
+
+  /**
+   * @brief Logical thread ID currently executing this task (-1 otherwise).
+   */
+  std::atomic<int> OnWhichThread{-1};
 
   /**
    * @brief Transfer callbacks.
