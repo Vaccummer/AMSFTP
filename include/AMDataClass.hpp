@@ -914,13 +914,12 @@ struct TaskInfo {
   /**
    * @brief Task list.
    */
-  std::shared_ptr<TASKS> tasks = std::make_shared<TASKS>();
+  std::shared_ptr<TASKS> tasks = nullptr;
 
   /**
    * @brief Original user transfer configurations.
    */
-  std::shared_ptr<std::vector<UserTransferSet>> transfer_sets =
-      std::make_shared<std::vector<UserTransferSet>>();
+  std::shared_ptr<std::vector<UserTransferSet>> transfer_sets = nullptr;
 
   /**
    * @brief Whether to suppress output (immutable after construction).
