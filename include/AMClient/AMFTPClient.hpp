@@ -521,6 +521,7 @@ private:
   std::regex ftp_url_pattern = std::regex("^ftp://.*$");
   std::string url = "";
   std::string current_url = ""; // 保持 CURLOPT_URL 字符串的生命周期
+  std::string session_password_plain_;
   // 非阻塞执行 curl 请求，支持中断和超时
   // poll_interval_ms: 每次轮询间隔，越小响应越快，但 CPU 占用越高
 
@@ -974,11 +975,15 @@ public:
     if (curl) {
       curl_easy_cleanup(curl);
     }
+    AMAuth::SecureZero(session_password_plain_);
   }
 
   ECM SetupPath(const std::string &path, bool is_dir = false) {
     if (!curl) {
       return {EC::NoConnection, "CURL not initialized"};
+    }
+    if (session_password_plain_.empty() && !res_data.password.empty()) {
+      session_password_plain_ = AMAuth::DecryptPassword(res_data.password);
     }
     std::string path_f = path;
     if (!path_f.empty()) {
@@ -988,7 +993,10 @@ public:
     current_url = AMStr::amfmt("{}{}", this->url, path_f);
     curl_easy_setopt(curl, CURLOPT_URL, current_url.c_str());
     curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
-    curl_easy_setopt(curl, CURLOPT_PASSWORD, res_data.password.c_str());
+    const std::string &password_to_use =
+        session_password_plain_.empty() ? res_data.password
+                                        : session_password_plain_;
+    curl_easy_setopt(curl, CURLOPT_PASSWORD, password_to_use.c_str());
     return {EC::Success, ""};
   }
 
@@ -1004,6 +1012,7 @@ public:
 
     if (connected && force) {
       connected = false;
+      AMAuth::SecureZero(session_password_plain_);
       // 清理旧的 handles
       if (multi) {
         if (curl) {
@@ -1016,6 +1025,10 @@ public:
         curl_easy_cleanup(curl);
         curl = nullptr;
       }
+    }
+
+    if (session_password_plain_.empty() && !res_data.password.empty()) {
+      session_password_plain_ = AMAuth::DecryptPassword(res_data.password);
     }
 
     curl = curl_easy_init();

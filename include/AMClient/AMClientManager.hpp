@@ -3,9 +3,17 @@
 #include "AMClient/AMCore.hpp"
 #include "AMConfigManager.hpp"
 #include "AMLogManager.hpp"
+#include <cstdio>
+#include <iostream>
 #include <optional>
 #include <utility>
 #include <variant>
+#ifdef _WIN32
+#include <conio.h>
+#else
+#include <termios.h>
+#include <unistd.h>
+#endif
 
 class AMClientManager {
 public:
@@ -35,16 +43,23 @@ public:
   /** Initialize client manager with heartbeat interval from config. */
   explicit AMClientManager(AMConfigManager &cfg)
       : config_(cfg), log_manager_(AMLogManager::Instance(cfg)),
-        transfer_clients_(ResolveHeartbeatInterval(cfg),
-                          [this](const auto &client, const ECM &ecm) {
-                            OnDisconnect(PoolKind::Transfer, client, ecm);
-                          },
-                          cfg.LocalClient()),
-        op_clients_(ResolveHeartbeatInterval(cfg),
-                    [this](const auto &client, const ECM &ecm) {
-                      OnDisconnect(PoolKind::Operation, client, ecm);
-                    },
-                    cfg.LocalClient()) {
+        transfer_clients_(
+            ResolveHeartbeatInterval(cfg),
+            [this](const auto &client, const ECM &ecm) {
+              OnDisconnect(PoolKind::Transfer, client, ecm);
+            },
+            cfg.LocalClient()),
+        op_clients_(
+            ResolveHeartbeatInterval(cfg),
+            [this](const auto &client, const ECM &ecm) {
+              OnDisconnect(PoolKind::Operation, client, ecm);
+            },
+            cfg.LocalClient()) {
+    if (!password_cb_) {
+      password_cb_ = [this](const AuthCBInfo &info) {
+        return DefaultPasswordCallback(info);
+      };
+    }
     LOCAL = transfer_clients_.GetHost("");
     CLIENT = LOCAL;
     InitClientWorkdir(LOCAL);
@@ -168,6 +183,7 @@ private:
   ClientMaintainerRef op_clients_;
   PasswordCallback password_cb_ = {};
   DisconnectCallback disconnect_cb_ = {};
+  std::mutex auth_io_mtx_;
 
   /** Read heartbeat interval from settings; fallback to 60 seconds. */
   static int ResolveHeartbeatInterval(AMConfigManager &cfg) {
@@ -211,5 +227,91 @@ private:
     if (disconnect_cb_) {
       CallCallbackSafe(disconnect_cb_, pool, client, ecm);
     }
+  }
+
+  /**
+   * @brief Read a password from the console with masked input.
+   */
+  static std::string ReadMaskedPassword(const std::string &prompt) {
+    std::string password;
+    std::cout << prompt << std::flush;
+#ifdef _WIN32
+    while (true) {
+      int ch = _getch();
+      if (ch == '\r' || ch == '\n') {
+        break;
+      }
+      if (ch == '\b') {
+        if (!password.empty()) {
+          password.pop_back();
+          std::cout << "\b \b" << std::flush;
+        }
+        continue;
+      }
+      if (ch == 0 || ch == 224) {
+        (void)_getch();
+        continue;
+      }
+      password.push_back(static_cast<char>(ch));
+      std::cout << "•" << std::flush;
+    }
+#else
+    termios oldt {};
+    termios newt {};
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= static_cast<unsigned long>(~(ECHO | ICANON));
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    while (true) {
+      int ch = ::getchar();
+      if (ch == '\n' || ch == '\r' || ch == EOF) {
+        break;
+      }
+      if (ch == 127 || ch == 8) {
+        if (!password.empty()) {
+          password.pop_back();
+          std::cout << "\b \b" << std::flush;
+        }
+        continue;
+      }
+      password.push_back(static_cast<char>(ch));
+      std::cout << "•" << std::flush;
+    }
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+#endif
+    std::cout << std::endl;
+    return password;
+  }
+
+  /**
+   * @brief Default password callback with thread-safe, privacy-aware IO.
+   */
+  std::optional<std::string> DefaultPasswordCallback(const AuthCBInfo &info) {
+    std::lock_guard<std::mutex> lock(auth_io_mtx_);
+
+    const std::string client_name =
+        info.request.nickname.empty() ? "unknown" : info.request.nickname;
+
+    if (info.NeedPassword) {
+      const std::string prompt =
+          AMStr::amfmt("❔ [{}] Require Password: ", client_name);
+      return ReadMaskedPassword(prompt);
+    }
+
+    if (!info.isPass) {
+      return std::nullopt;
+    }
+
+    if (info.request.password.empty()) {
+      AMPromptManager::Instance().Print(
+          AMStr::amfmt("❌ [{}] Wrong Password!", client_name));
+      return std::nullopt;
+    }
+
+    AMPromptManager::Instance().Print(AMStr::amfmt(
+        "✅ [{}] Password authorization successful!", client_name));
+    (void)config_.SetClientPasswordEncrypted(client_name, info.request.password,
+                                             true);
+    return std::nullopt;
   }
 };

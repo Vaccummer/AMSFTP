@@ -2,7 +2,6 @@
 // 标准库
 #include <condition_variable>
 #include <ctime>
-#include <deque>
 #include <fcntl.h>
 #include <list>
 #include <mutex>
@@ -495,7 +494,7 @@ private:
   struct TaskRecord {
     std::shared_ptr<TaskInfo> task_info;
     AssignType assign_type = AssignType::Public;
-    size_t affinity_id = 0;
+    int affinity_id = -1;
   };
 
   std::atomic<bool> running_{true};
@@ -532,8 +531,10 @@ private:
   /**
    * @brief Check whether a thread ID is valid for affinity scheduling.
    */
-  bool IsValidThreadId(size_t thread_id) const {
-    return thread_id < affinity_queues_.size();
+  bool IsValidThreadId(int thread_id) const {
+    const size_t active_count = desired_thread_count_.load();
+    return thread_id >= 0 && static_cast<size_t>(thread_id) < active_count &&
+           static_cast<size_t>(thread_id) < affinity_queues_.size();
   }
 
   /**
@@ -579,14 +580,14 @@ private:
    * @brief Register a task and enqueue it into the appropriate queue.
    */
   void RegisterTask(const std::shared_ptr<TaskInfo> &task_info,
-                    AssignType assign_type, size_t affinity_id) {
+                    AssignType assign_type, int affinity_id) {
     std::scoped_lock<std::mutex, std::mutex> lock(registry_mtx_, queue_mtx_);
     std::list<TaskId> *target_queue = nullptr;
     if (assign_type == AssignType::Affinity && IsValidThreadId(affinity_id)) {
-      target_queue = &affinity_queues_[affinity_id];
+      target_queue = &affinity_queues_[static_cast<size_t>(affinity_id)];
     } else {
       assign_type = AssignType::Public;
-      affinity_id = 0;
+      affinity_id = -1;
       target_queue = &public_queue_;
     }
 
@@ -614,9 +615,8 @@ private:
         }
 
         if (thread_index >= desired_thread_count_.load()) {
-          const bool has_affinity =
-              thread_index < affinity_queues_.size() &&
-              !affinity_queues_[thread_index].empty();
+          const bool has_affinity = thread_index < affinity_queues_.size() &&
+                                    !affinity_queues_[thread_index].empty();
           if (!has_affinity) {
             return std::nullopt;
           }
@@ -700,7 +700,8 @@ private:
     }
 
     auto time_now = timenow();
-    if (!force && ((time_now - pd.cb_time) <= task_info->callback.cb_interval_s)) {
+    if (!force &&
+        ((time_now - pd.cb_time) <= task_info->callback.cb_interval_s)) {
       return;
     }
 
@@ -709,15 +710,14 @@ private:
     auto ctrl_opt = task_info->callback.CallProgress(
         ProgressCBInfo(cur_task->src, cur_task->dst, cur_task->src_host,
                        cur_task->dst_host, cur_task->transferred,
-                       cur_task->size,
-                       task_info->total_transferred_size.load(),
+                       cur_task->size, task_info->total_transferred_size.load(),
                        task_info->total_size.load()),
         &cb_error);
 
     if (cb_error.first != EC::Success && task_info->callback.need_error_cb) {
-      task_info->callback.CallError(ErrorCBInfo(
-          cb_error, cur_task->src, cur_task->dst, cur_task->src_host,
-          cur_task->dst_host));
+      task_info->callback.CallError(
+          ErrorCBInfo(cb_error, cur_task->src, cur_task->dst,
+                      cur_task->src_host, cur_task->dst_host));
     }
 
     if (!ctrl_opt.has_value()) {
@@ -1206,9 +1206,9 @@ private:
     if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
       pd->set_terminate();
     } else if (res != CURLE_OK) {
-      cur_task->rcm = ECM{EC::FTPUploadFailed,
-                          AMStr::amfmt("Upload failed: {}",
-                                       curl_easy_strerror(res))};
+      cur_task->rcm =
+          ECM{EC::FTPUploadFailed,
+              AMStr::amfmt("Upload failed: {}", curl_easy_strerror(res))};
       pd->set_terminate();
     }
   }
@@ -1242,9 +1242,9 @@ private:
     if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
       pd->set_terminate();
     } else if (res != CURLE_OK) {
-      cur_task->rcm = ECM{EC::FTPDownloadFailed,
-                          AMStr::amfmt("Download failed: {}",
-                                       curl_easy_strerror(res))};
+      cur_task->rcm =
+          ECM{EC::FTPDownloadFailed,
+              AMStr::amfmt("Download failed: {}", curl_easy_strerror(res))};
       pd->set_terminate();
     }
   }
@@ -1357,9 +1357,8 @@ private:
           src_client->GetProtocol() == ClientProtocol::SFTP) {
         pd.ring_buffer = nullptr;
       }
-      pd.ring_buffer = std::make_shared<StreamRingBuffer>(
-          CalculateBufferSize(src_client, dst_client,
-                              task_info->buffer_size.load()));
+      pd.ring_buffer = std::make_shared<StreamRingBuffer>(CalculateBufferSize(
+          src_client, dst_client, task_info->buffer_size.load()));
 
       task.rcm = TransferSingleFile(src_client, dst_client, task_info);
       task.IsFinished = true;
@@ -1396,9 +1395,8 @@ private:
     while (running_.load()) {
       if (thread_index >= desired_thread_count_.load()) {
         std::lock_guard<std::mutex> lock(queue_mtx_);
-        const bool has_affinity =
-            thread_index < affinity_queues_.size() &&
-            !affinity_queues_[thread_index].empty();
+        const bool has_affinity = thread_index < affinity_queues_.size() &&
+                                  !affinity_queues_[thread_index].empty();
         if (!has_affinity) {
           break;
         }
@@ -1483,16 +1481,21 @@ public:
     if (new_count > current) {
       {
         std::lock_guard<std::mutex> lock(queue_mtx_);
-        affinity_queues_.resize(new_count);
+        if (new_count > affinity_queues_.size()) {
+          affinity_queues_.resize(new_count);
+        }
       }
       {
         std::lock_guard<std::mutex> lock(conducting_mtx_);
-        conducting_tasks_.resize(new_count);
-        conducting_infos_.resize(new_count);
+        if (new_count > conducting_tasks_.size()) {
+          conducting_tasks_.resize(new_count);
+          conducting_infos_.resize(new_count);
+        }
       }
 
       desired_thread_count_.store(new_count);
-      for (size_t idx = current; idx < new_count; ++idx) {
+      const size_t existing_threads = worker_threads_.size();
+      for (size_t idx = existing_threads; idx < new_count; ++idx) {
         worker_threads_.emplace_back([this, idx]() { WorkerLoop(idx); });
       }
       queue_cv_.notify_all();
@@ -1501,50 +1504,6 @@ public:
 
     desired_thread_count_.store(new_count);
     queue_cv_.notify_all();
-
-    while (true) {
-      bool extra_idle = true;
-      {
-        std::lock_guard<std::mutex> qlock(queue_mtx_);
-        for (size_t idx = new_count; idx < affinity_queues_.size(); ++idx) {
-          if (!affinity_queues_[idx].empty()) {
-            extra_idle = false;
-            break;
-          }
-        }
-      }
-      {
-        std::lock_guard<std::mutex> clock(conducting_mtx_);
-        for (size_t idx = new_count; idx < conducting_tasks_.size(); ++idx) {
-          if (!conducting_tasks_[idx].empty()) {
-            extra_idle = false;
-            break;
-          }
-        }
-      }
-      if (extra_idle) {
-        break;
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    }
-
-    for (size_t idx = new_count; idx < worker_threads_.size(); ++idx) {
-      if (worker_threads_[idx].joinable()) {
-        worker_threads_[idx].join();
-      }
-    }
-    worker_threads_.resize(new_count);
-
-    {
-      std::lock_guard<std::mutex> lock(queue_mtx_);
-      affinity_queues_.resize(new_count);
-    }
-    {
-      std::lock_guard<std::mutex> lock(conducting_mtx_);
-      conducting_tasks_.resize(new_count);
-      conducting_infos_.resize(new_count);
-    }
-
     return new_count;
   }
 
@@ -1583,15 +1542,11 @@ public:
     task_info->total_size.store(total_size);
     task_info->total_transferred_size.store(0);
 
-    const size_t requested_thread_id = task_info->thread_id.load();
-    bool affinity_valid = false;
-    {
-      std::lock_guard<std::mutex> lock(queue_mtx_);
-      affinity_valid = IsValidThreadId(requested_thread_id);
-    }
+    const int requested_thread_id = task_info->thread_id.load();
+    const bool affinity_valid = IsValidThreadId(requested_thread_id);
     const AssignType assign_type =
         affinity_valid ? AssignType::Affinity : AssignType::Public;
-    const size_t affinity_id = affinity_valid ? requested_thread_id : 0;
+    const int affinity_id = affinity_valid ? requested_thread_id : -1;
 
     RegisterTask(task_info, assign_type, affinity_id);
     queue_cv_.notify_all();
@@ -1604,8 +1559,7 @@ public:
   std::shared_ptr<TaskInfo>
   transfer(const TASKS &tasks, const std::shared_ptr<ClientMaintainer> &hostm,
            TransferCallback callback = TransferCallback(),
-           ssize_t buffer_size = -1, bool quiet = false,
-           size_t thread_id = 0) {
+           ssize_t buffer_size = -1, bool quiet = false, int thread_id = -1) {
     auto task_info = std::make_shared<TaskInfo>(quiet);
     task_info->tasks = tasks;
     task_info->hostm = hostm;
@@ -1647,8 +1601,7 @@ public:
   /**
    * @brief Query task result and optionally remove it from the cache.
    */
-  std::shared_ptr<TaskInfo> get_result(const TaskId &id,
-                                       bool remove = true) {
+  std::shared_ptr<TaskInfo> get_result(const TaskId &id, bool remove = true) {
     std::lock_guard<std::mutex> lock(result_mtx_);
     auto it = results_.find(id);
     if (it == results_.end()) {
@@ -1717,8 +1670,7 @@ public:
   /**
    * @brief Terminate a task by ID and optionally wait for completion.
    */
-  std::shared_ptr<TaskInfo> terminate(const TaskId &id,
-                                      int timeout_ms = 5000) {
+  std::shared_ptr<TaskInfo> terminate(const TaskId &id, int timeout_ms = 5000) {
     std::shared_ptr<TaskInfo> pending_task = nullptr;
     {
       std::scoped_lock<std::mutex, std::mutex> lock(registry_mtx_, queue_mtx_);
@@ -1726,13 +1678,15 @@ public:
       if (it != task_registry_.end() && it->second.task_info) {
         bool in_queue = false;
         if (it->second.assign_type == AssignType::Affinity &&
-            it->second.affinity_id < affinity_queues_.size()) {
-          const auto &queue = affinity_queues_[it->second.affinity_id];
+            it->second.affinity_id >= 0 &&
+            static_cast<size_t>(it->second.affinity_id) <
+                affinity_queues_.size()) {
+          const auto &queue =
+              affinity_queues_[static_cast<size_t>(it->second.affinity_id)];
           in_queue = std::find(queue.begin(), queue.end(), id) != queue.end();
         } else {
-          in_queue =
-              std::find(public_queue_.begin(), public_queue_.end(), id) !=
-              public_queue_.end();
+          in_queue = std::find(public_queue_.begin(), public_queue_.end(),
+                               id) != public_queue_.end();
         }
         if (in_queue) {
           auto task_info = it->second.task_info;
@@ -1744,8 +1698,11 @@ public:
           task_info->finished_time.store(timenow());
 
           if (it->second.assign_type == AssignType::Affinity &&
-              it->second.affinity_id < affinity_queues_.size()) {
-            affinity_queues_[it->second.affinity_id].remove(id);
+              it->second.affinity_id >= 0 &&
+              static_cast<size_t>(it->second.affinity_id) <
+                  affinity_queues_.size()) {
+            affinity_queues_[static_cast<size_t>(it->second.affinity_id)]
+                .remove(id);
           } else {
             public_queue_.remove(id);
           }

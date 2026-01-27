@@ -68,6 +68,12 @@ public:
   [[nodiscard]] Status Query(const std::string &nickname) const;
   [[nodiscard]] Status Add();
   [[nodiscard]] Status Modify(const std::string &nickname);
+  /**
+   * @brief Persist an encrypted password for a given client nickname.
+   */
+  Status SetClientPasswordEncrypted(const std::string &nickname,
+                                    const std::string &encrypted_password,
+                                    bool dump_now = true);
 
 private:
   AMConfigManager() = default;
