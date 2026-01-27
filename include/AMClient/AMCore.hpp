@@ -1,11 +1,23 @@
 #pragma once
 // 标准库
+#include <algorithm>
+#include <atomic>
+#include <cctype>
+#include <chrono>
 #include <condition_variable>
 #include <ctime>
 #include <fcntl.h>
+#include <functional>
+#include <iostream>
 #include <list>
+#include <map>
 #include <mutex>
+#include <string>
 #include <thread>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
 
 // 自身依赖
 #include "AMClient/AMBaseClient.hpp"
@@ -348,11 +360,11 @@ public:
     return hosts[nickname];
   }
 
-  ClientMaintainer(
-      int heartbeat_interval_s = 60, DisconnectCallback disconnect_cb = {},
-      std::shared_ptr<AMLocalClient> local_client = nullptr,
-      std::unordered_map<std::string, std::shared_ptr<BaseClient>> init_hosts =
-          {}) {
+  ClientMaintainer(int heartbeat_interval_s = 60,
+                   DisconnectCallback disconnect_cb = {},
+                   std::shared_ptr<AMLocalClient> local_client = nullptr,
+                   std::unordered_map<std::string, std::shared_ptr<BaseClient>>
+                       init_hosts = {}) {
     // 初始化本地客户端
     if (local_client) {
       this->local_client = std::move(local_client);
@@ -488,6 +500,9 @@ public:
   };
 };
 
+class AMConfigManager;
+class AMClientManager;
+
 class AMWorkManager {
 private:
   using TaskId = std::string;
@@ -509,7 +524,8 @@ private:
   std::unordered_map<TaskId, std::shared_ptr<TaskInfo>> results_;
 
   std::mutex conducting_mtx_;
-  std::vector<TaskId> conducting_tasks_;
+  std::unordered_set<TaskId> conducting_tasks_;
+  std::vector<TaskId> conducting_by_thread_;
   std::vector<std::shared_ptr<TaskInfo>> conducting_infos_;
 
   size_t chunk_size_ = 256 * AMKB;
@@ -665,12 +681,13 @@ private:
   void SetConducting(size_t thread_index, const TaskId &task_id,
                      const std::shared_ptr<TaskInfo> &task_info) {
     std::lock_guard<std::mutex> lock(conducting_mtx_);
-    if (thread_index >= conducting_tasks_.size()) {
-      conducting_tasks_.resize(thread_index + 1);
+    if (thread_index >= conducting_by_thread_.size()) {
+      conducting_by_thread_.resize(thread_index + 1);
       conducting_infos_.resize(thread_index + 1);
     }
-    conducting_tasks_[thread_index] = task_id;
+    conducting_by_thread_[thread_index] = task_id;
     conducting_infos_[thread_index] = task_info;
+    conducting_tasks_.insert(task_id);
   }
 
   /**
@@ -678,8 +695,12 @@ private:
    */
   void ClearConducting(size_t thread_index) {
     std::lock_guard<std::mutex> lock(conducting_mtx_);
-    if (thread_index < conducting_tasks_.size()) {
-      conducting_tasks_[thread_index].clear();
+    if (thread_index < conducting_by_thread_.size()) {
+      const TaskId id = conducting_by_thread_[thread_index];
+      if (!id.empty()) {
+        conducting_tasks_.erase(id);
+      }
+      conducting_by_thread_[thread_index].clear();
       conducting_infos_[thread_index] = nullptr;
     }
   }
@@ -1293,6 +1314,7 @@ private:
 
   // Execute a single TaskInfo
   void ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
+    EnsureProgressData(task_info);
     task_info->SetStatus(TaskStatus::Conducting);
     task_info->start_time.store(timenow());
 
@@ -1300,16 +1322,16 @@ private:
       task_info->callback.CallTotalSize(task_info->total_size.load());
     }
 
-    EnsureProgressData(task_info);
     auto &pd = *(task_info->pd);
     pd.task_info = task_info;
 
     if (!task_info->tasks) {
-      task_info->tasks = std::make_shared<TASKS>();
+      task_info->SetStatus(TaskStatus::Finished);
+      task_info->finished_time.store(timenow());
+      return;
     }
-    auto &tasks = *(task_info->tasks);
 
-    for (auto &task : tasks) {
+    for (auto &task : *(task_info->tasks)) {
       // Check terminate before each file
       if (pd.is_terminate()) {
         task.rcm = {EC::Terminate, "Task terminated by user"};
@@ -1443,7 +1465,7 @@ public:
    */
   AMWorkManager() {
     affinity_queues_.resize(1);
-    conducting_tasks_.resize(1);
+    conducting_by_thread_.resize(1);
     conducting_infos_.resize(1);
     worker_threads_.emplace_back([this]() { WorkerLoop(0); });
   }
@@ -1495,8 +1517,8 @@ public:
       }
       {
         std::lock_guard<std::mutex> lock(conducting_mtx_);
-        if (new_count > conducting_tasks_.size()) {
-          conducting_tasks_.resize(new_count);
+        if (new_count > conducting_by_thread_.size()) {
+          conducting_by_thread_.resize(new_count);
           conducting_infos_.resize(new_count);
         }
       }
@@ -1515,24 +1537,35 @@ public:
     return new_count;
   }
 
-  /**
-   * @brief Retrieve all currently active thread IDs.
-   */
-  std::vector<size_t> get_active_thread_ids() const {
+  // former is occupied, latter is idle
+  std::pair<std::vector<size_t>, std::vector<size_t>> get_thread_ids() {
+    std::vector<size_t> occupied;
+    std::vector<size_t> idle;
     const size_t count = desired_thread_count_.load();
-    std::vector<size_t> ids(count);
-    for (size_t idx = 0; idx < count; ++idx) {
-      ids[idx] = idx;
+    occupied.reserve(count);
+    idle.reserve(count);
+    std::lock_guard<std::mutex> lock(conducting_mtx_);
+    for (size_t i = 0; i < count; ++i) {
+      const bool busy =
+          i < conducting_by_thread_.size() && !conducting_by_thread_[i].empty();
+      if (busy) {
+        occupied.push_back(i);
+      } else {
+        idle.push_back(i);
+      }
     }
-    return ids;
+    return {occupied, idle};
   }
 
   /**
    * @brief Submit an already-constructed TaskInfo object.
    */
-  std::shared_ptr<TaskInfo> submit(const std::shared_ptr<TaskInfo> &task_info) {
+  ECM submit(std::shared_ptr<TaskInfo> task_info) {
     if (!task_info) {
-      return nullptr;
+      return {EC::InvalidArg, "TaskInfo is nullptr"};
+    }
+    if (!task_info->tasks || task_info->tasks->empty()) {
+      return {EC::InvalidArg, "Tasks is nullptr or empty"};
     }
 
     if (task_info->id.empty()) {
@@ -1540,9 +1573,6 @@ public:
     }
     task_info->submit_time.store(timenow());
     task_info->SetStatus(TaskStatus::Pending);
-
-    EnsureProgressData(task_info);
-    AMPromptManager::Instance().taskprint(task_info);
 
     uint64_t total_size = 0;
     if (!task_info->tasks) {
@@ -1563,23 +1593,24 @@ public:
 
     RegisterTask(task_info, assign_type, affinity_id);
     queue_cv_.notify_all();
-    return task_info;
+    return {EC::Success, ""};
   }
 
   /**
    * @brief Compatibility overload that builds a TaskInfo and submits it.
    */
   std::shared_ptr<TaskInfo>
-  transfer(const TASKS &tasks, const std::shared_ptr<ClientMaintainer> &hostm,
+  transfer(std::shared_ptr<TASKS> tasks,
+           const std::shared_ptr<ClientMaintainer> &hostm,
            TransferCallback callback = TransferCallback(),
            ssize_t buffer_size = -1, bool quiet = false, int thread_id = -1) {
     auto task_info = std::make_shared<TaskInfo>(quiet);
-    task_info->tasks = std::make_shared<TASKS>(tasks);
+    task_info->tasks = tasks;
     task_info->hostm = hostm;
     task_info->callback = callback;
     task_info->buffer_size.store(buffer_size);
     task_info->affinity_thread.store(thread_id);
-    return submit(task_info);
+    return task_info;
   }
 
   /**
@@ -1593,14 +1624,14 @@ public:
         return it->second->GetStatus();
       }
     }
-    {
-      std::lock_guard<std::mutex> lock(conducting_mtx_);
-      for (size_t idx = 0; idx < conducting_tasks_.size(); ++idx) {
-        if (conducting_tasks_[idx] == id && conducting_infos_[idx]) {
-          return conducting_infos_[idx]->GetStatus();
-        }
-      }
-    }
+    // {
+    //   std::lock_guard<std::mutex> lock(conducting_mtx_);
+    //   for (size_t idx = 0; idx < conducting_tasks_.size(); ++idx) {
+    //     if (conducting_tasks_[idx] == id && conducting_infos_[idx]) {
+    //       return conducting_infos_[idx]->GetStatus();
+    //     }
+    //   }
+    // }
     {
       std::lock_guard<std::mutex> lock(result_mtx_);
       auto it = results_.find(id);
@@ -1640,8 +1671,8 @@ public:
     }
     {
       std::lock_guard<std::mutex> lock(conducting_mtx_);
-      for (size_t idx = 0; idx < conducting_tasks_.size(); ++idx) {
-        if (conducting_tasks_[idx] == id) {
+      for (size_t idx = 0; idx < conducting_by_thread_.size(); ++idx) {
+        if (conducting_by_thread_[idx] == id) {
           return conducting_infos_[idx];
         }
       }
@@ -1732,8 +1763,8 @@ public:
     std::shared_ptr<TaskInfo> conducting_task = nullptr;
     {
       std::lock_guard<std::mutex> lock(conducting_mtx_);
-      for (size_t idx = 0; idx < conducting_tasks_.size(); ++idx) {
-        if (conducting_tasks_[idx] == id) {
+      for (size_t idx = 0; idx < conducting_by_thread_.size(); ++idx) {
+        if (conducting_by_thread_[idx] == id) {
           conducting_task = conducting_infos_[idx];
           break;
         }
@@ -1780,25 +1811,15 @@ public:
    */
   bool is_conducting() {
     std::lock_guard<std::mutex> lock(conducting_mtx_);
-    for (const auto &task_id : conducting_tasks_) {
-      if (!task_id.empty()) {
-        return true;
-      }
-    }
-    return false;
+    return !conducting_tasks_.empty();
   }
 
   /**
-   * @brief Get the first currently conducting task ID, if any.
+   * @brief Get a copy of currently conducting task IDs.
    */
-  std::string get_conducting_id() {
+  std::unordered_set<TaskId> get_conducting_ids() {
     std::lock_guard<std::mutex> lock(conducting_mtx_);
-    for (const auto &task_id : conducting_tasks_) {
-      if (!task_id.empty()) {
-        return task_id;
-      }
-    }
-    return "";
+    return conducting_tasks_;
   }
 
   /**
@@ -1989,4 +2010,58 @@ public:
     }
     return {ECM(EC::Success, ""), tasks};
   };
+};
+
+class AMTransferManager {
+public:
+  using ID = std::string;
+  using ResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
+
+  AMTransferManager(AMConfigManager &cfg, AMClientManager &client_manager);
+
+  void SetResultCallback(ResultCallback cb = {});
+  std::list<std::shared_ptr<TaskInfo>> GetHistory() const;
+
+  ECM transfer(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
+               std::atomic<bool> *interrupt_flag = nullptr);
+  ECM transfer_async(const std::vector<UserTransferSet> &transfer_sets,
+                     bool quiet, std::atomic<bool> *interrupt_flag = nullptr);
+
+private:
+  struct PreparedTasks;
+
+  int ResolveRefreshIntervalMs_() const;
+  static std::pair<std::string, std::string>
+  ParseAddress_(const std::string &input);
+  static bool HasWildcard_(const std::string &path);
+  bool ConfirmWildcard_(const std::vector<PathInfo> &matches);
+  std::pair<ECM, std::shared_ptr<BaseClient>>
+  AcquireClient_(const std::string &nickname,
+                 const std::shared_ptr<InterruptFlag> &flag,
+                 std::atomic<bool> *interrupt_flag);
+  void
+  ReturnClientsToIdle_(const std::vector<std::shared_ptr<BaseClient>> &clients,
+                       const std::vector<std::string> &keys);
+  ResultCallback
+  BuildResultCallback_(std::atomic<int> &remaining,
+                       std::condition_variable &done_cv, std::mutex &done_mtx,
+                       std::atomic<bool> &terminated,
+                       std::vector<std::shared_ptr<BaseClient>> clients,
+                       std::vector<std::string> client_keys);
+  std::pair<ECM, PreparedTasks>
+  PrepareTasks_(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
+                const std::shared_ptr<InterruptFlag> &flag,
+                std::atomic<bool> *interrupt_flag);
+
+private:
+  AMConfigManager &config_;
+  AMClientManager &client_manager_;
+  AMPromptManager &prompt_;
+  AMWorkManager worker_;
+  mutable std::mutex idle_mtx_;
+  std::unordered_map<ID, std::list<std::shared_ptr<BaseClient>>> idle_pool_;
+  mutable std::mutex history_mtx_;
+  std::list<std::shared_ptr<TaskInfo>> history_;
+  mutable std::mutex callback_mtx_;
+  ResultCallback user_result_cb_ = {};
 };
