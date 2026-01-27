@@ -1,11 +1,40 @@
-# Adjust the function calls in **`AMConfigManager` according to the updated `AMConfigProcessor`.
+## AMTracer
 
-@include/`AMConfigManager`.hpp
+Replace `std::vector<TraceInfo>` with `std::list<TraceInfo>`.
 
-@src/`AMConfigManager`.cpp
+## TaskInfo
 
-`AMConfigManager` will no longer use `FlatMap` as the storage object for configuration data. Instead, `FlatMap` will only be used during initial loading for filtering out invalid keys. After this filtering step, the data must be converted into the standard TOML data format.
+- Introduce a new field `OnWhichThread`:
+  - Set to the executing thread's ID during task execution
+  - Set to `-1` in all other states (pending, completed, etc.)
+- Eliminate `TaskRecord`; migrate its remaining properties into `TaskInfo`
+- Rename `affinity_id` to `affinity_thread` and replace `thread_id` with this field
+- Convert memory-intensive members (e.g., `TASKS` and other large variables) to `std::shared_ptr` to reduce memory footprint
 
-**Consequently, all operations that read configuration data also need to be updated accordingly.**
+## ClientMaintainer
 
-**You may add helper functions to **`AMConfigProcessor` as needed to facilitate these operations in the config manager.
+- Support initialization via `std::unordered_map<std::string, std::shared_ptr<BaseClient>>`
+- Allow `heartbeat_interval_s` to accept negative values, indicating heartbeat is disabled
+
+## ClientManager
+
+- Remove `trace_num` as a function parameter; instead:
+  - Read from settings as a class member attribute
+  - Default value: `10`
+  - Minimum allowed value: `5`
+- Introduce a basic `CreClient()` function:
+  - **Parameters**: `nickname`, `interrupt_flag`
+  - **Returns**: `std::pair<ECM, std::shared_ptr<BaseClient>>`
+  - Binds Python tracer to the client's logger
+  - Binds authentication callback to `ClientManager`'s global `authcb`
+
+## PromptManager (PM)
+
+1. **`resultprint()`**:
+
+   - Accepts `std::shared_ptr<TaskInfo>`
+   - Prints task execution results (placeholder implementation; format TBD for future refinement)
+2. **`taskprint()`**:
+
+   - Accepts `std::shared_ptr<TaskInfo>`
+   - Prints submitted task metadata (placeholder implementation; format TBD for future refinement)

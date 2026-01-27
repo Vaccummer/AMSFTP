@@ -55,6 +55,7 @@ public:
               OnDisconnect(PoolKind::Operation, client, ecm);
             },
             cfg.LocalClient()) {
+    trace_num_ = ResolveTraceNum(cfg);
     if (!password_cb_) {
       password_cb_ = [this](const AuthCBInfo &info) {
         return DefaultPasswordCallback(info);
@@ -95,11 +96,55 @@ public:
     return ClientPool(pool).get_clients();
   }
 
+  /**
+   * @brief Create a client instance without adding it to a pool.
+   *
+   * This binds the Python tracer to the global log manager callback and
+   * binds the authentication callback to the manager's auth callback.
+   */
+  std::pair<ECM, std::shared_ptr<BaseClient>>
+  CreClient(const std::string &nickname, amf interrupt_flag = nullptr) {
+    (void)interrupt_flag;
+    if (nickname.empty() || nickname == "local") {
+      return {ECM{EC::Success, ""}, config_.LocalClient()};
+    }
+
+    auto client_config = config_.GetClientConfig(nickname);
+    if (client_config.first.second != 0) {
+      EC ec = static_cast<EC>(client_config.first.second);
+      return {ECM{ec, client_config.first.first}, nullptr};
+    }
+
+    auto keys_result = config_.PrivateKeys(false);
+    if (keys_result.first.second != 0) {
+      EC ec = static_cast<EC>(keys_result.first.second);
+      return {ECM{ec, keys_result.first.first}, nullptr};
+    }
+
+    auto trace_cb = log_manager_.TraceCallbackFunc();
+    auto created = CreateClient(
+        client_config.second.request, client_config.second.protocol, trace_num_,
+        std::move(trace_cb), client_config.second.buffer_size,
+        keys_result.second, password_cb_);
+    if (!created.has_value()) {
+      return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
+    }
+
+    auto base_client = ToBaseClient(*created);
+    if (!base_client) {
+      return {ECM{EC::UnknownError, "Failed to create client"}, nullptr};
+    }
+
+    // Ensure Python tracer is bound to the logger callback.
+    base_client->SetPyTrace(log_manager_.TraceCallbackFunc());
+    InitClientWorkdir(base_client);
+    return {ECM{EC::Success, ""}, base_client};
+  }
+
   /** Create or reuse a client and connect it immediately. */
   std::pair<ECM, std::shared_ptr<BaseClient>>
   AddClient(const std::string &nickname, PoolKind pool, bool force = false,
-            ssize_t trace_num = 5, TraceCallback trace_cb = {},
-            amf interrupt_flag = nullptr) {
+            TraceCallback trace_cb = {}, amf interrupt_flag = nullptr) {
     amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
     if (!trace_cb) {
       trace_cb = log_manager_.TraceCallbackFunc();
@@ -131,7 +176,7 @@ public:
     }
 
     auto created = CreateClient(
-        client_config.second.request, client_config.second.protocol, trace_num,
+        client_config.second.request, client_config.second.protocol, trace_num_,
         std::move(trace_cb), client_config.second.buffer_size,
         keys_result.second, password_cb_);
     if (!created.has_value()) {
@@ -184,6 +229,7 @@ private:
   PasswordCallback password_cb_ = {};
   DisconnectCallback disconnect_cb_ = {};
   std::mutex auth_io_mtx_;
+  ssize_t trace_num_ = 10;
 
   /** Read heartbeat interval from settings; fallback to 60 seconds. */
   static int ResolveHeartbeatInterval(AMConfigManager &cfg) {
@@ -193,6 +239,18 @@ private:
       value = cfg.GetSettingInt({"ClientManager", "heartbeat_interval_s"}, 60);
     }
     return value > 0 ? value : 60;
+  }
+
+  /** Read trace buffer size from settings; default 10 and minimum 5. */
+  static ssize_t ResolveTraceNum(AMConfigManager &cfg) {
+    int value = cfg.GetSettingInt({"client_manager", "trace_num"}, 10);
+    if (value <= 0) {
+      value = cfg.GetSettingInt({"ClientManager", "trace_num"}, 10);
+    }
+    if (value < 5) {
+      value = 5;
+    }
+    return static_cast<ssize_t>(value);
   }
 
   /** Select pool by kind. */
@@ -256,8 +314,8 @@ private:
       std::cout << "•" << std::flush;
     }
 #else
-    termios oldt {};
-    termios newt {};
+    termios oldt{};
+    termios newt{};
     tcgetattr(STDIN_FILENO, &oldt);
     newt = oldt;
     newt.c_lflag &= static_cast<unsigned long>(~(ECHO | ICANON));
@@ -309,7 +367,8 @@ private:
 
     AMPromptManager::Instance().Print(AMStr::amfmt(
         "✅ [{}] Password authorization successful!", client_name));
-    (void)config_.SetClientPasswordEncrypted(client_name, info.password_n, true);
+    (void)config_.SetClientPasswordEncrypted(client_name, info.password_n,
+                                             true);
     return std::nullopt;
   }
 };

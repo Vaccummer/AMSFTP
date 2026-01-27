@@ -69,10 +69,17 @@ void AMPromptManager::ErrorFormat(const std::string &error_name,
 }
 
 /**
- * @brief Print a standardized task result summary in a thread-safe manner.
+ * @brief Placeholder result printer entry; delegates to resultprint().
  */
 void AMPromptManager::PrintTaskResult(
     const std::shared_ptr<TaskInfo> &task_info) {
+  resultprint(task_info);
+}
+
+/**
+ * @brief Placeholder implementation that prints task execution results.
+ */
+void AMPromptManager::resultprint(const std::shared_ptr<TaskInfo> &task_info) {
   if (!task_info || task_info->quiet) {
     return;
   }
@@ -108,16 +115,19 @@ void AMPromptManager::PrintTaskResult(
 
   {
     std::lock_guard<std::mutex> lock(task_info->mtx);
-    total = task_info->tasks.size();
-    for (const auto &task : task_info->tasks) {
-      if (task.rcm.first == EC::Success) {
-        ++success;
-      } else if (task.rcm.first == EC::Terminate) {
-        ++terminated;
-        last_error = task.rcm;
-      } else {
-        ++failed;
-        last_error = task.rcm;
+    auto tasks_ptr = task_info->tasks;
+    if (tasks_ptr) {
+      total = tasks_ptr->size();
+      for (const auto &task : *tasks_ptr) {
+        if (task.rcm.first == EC::Success) {
+          ++success;
+        } else if (task.rcm.first == EC::Terminate) {
+          ++terminated;
+          last_error = task.rcm;
+        } else {
+          ++failed;
+          last_error = task.rcm;
+        }
       }
     }
   }
@@ -136,6 +146,20 @@ void AMPromptManager::PrintTaskResult(
     oss << " last_error=\"" << last_error.second << "\"";
   }
 
+  Print(oss.str());
+}
+
+/**
+ * @brief Placeholder implementation that prints submitted task metadata.
+ */
+void AMPromptManager::taskprint(const std::shared_ptr<TaskInfo> &task_info) {
+  if (!task_info || task_info->quiet) {
+    return;
+  }
+  std::ostringstream oss;
+  oss << "[TaskSubmit] id=" << task_info->id
+      << " affinity_thread=" << task_info->affinity_thread.load()
+      << " status=" << static_cast<int>(task_info->GetStatus());
   Print(oss.str());
 }
 

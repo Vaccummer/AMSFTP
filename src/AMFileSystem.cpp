@@ -39,7 +39,7 @@ AMFileSystem::ECM AMFileSystem::connect(const std::string &nickname,
                                         amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   auto result = client_manager_.AddClient(
-      nickname, AMClientManager::PoolKind::Operation, false, 10, {}, flag);
+      nickname, AMClientManager::PoolKind::Operation, false, {}, flag);
   if (result.first.first != EC::Success) {
     return result.first;
   }
@@ -60,7 +60,7 @@ AMFileSystem::ECM AMFileSystem::change_client(const std::string &nickname,
       return {EC::Terminate, "Operation aborted"};
     }
     auto added = client_manager_.AddClient(
-        nickname, AMClientManager::PoolKind::Operation, false, 10, {}, flag);
+        nickname, AMClientManager::PoolKind::Operation, false, {}, flag);
     if (added.first.first != EC::Success) {
       return added.first;
     }
@@ -528,7 +528,7 @@ AMFileSystem::ResolveOrCreateClient(const std::string &nickname,
     return {};
   }
   auto created = client_manager_.AddClient(
-      nickname, AMClientManager::PoolKind::Operation, false, 10, {}, flag);
+      nickname, AMClientManager::PoolKind::Operation, false, {}, flag);
   if (created.first.first != EC::Success || !created.second) {
     return {};
   }

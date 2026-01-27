@@ -10,6 +10,7 @@
 
 #include <fstream>
 #include <iostream>
+#include <list>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -75,7 +76,7 @@ inline std::mutex AMlog_mutex;
 class AMTracer {
 private:
   TraceCallback trace_cb;
-  std::vector<TraceInfo> buffer = {};
+  std::list<TraceInfo> buffer = {};
   std::recursive_mutex buffer_mutex;
   ssize_t capacity = 10;
   std::atomic<bool> is_trace_cb = false;
@@ -107,12 +108,10 @@ private:
 protected:
   ConRequst res_data;
   void push(const TraceInfo &value) {
-    if (buffer.size() < static_cast<size_t>(capacity)) {
-      buffer.push_back(value);
-    } else {
-      buffer.erase(buffer.begin());
-      buffer.push_back(value);
+    if (buffer.size() >= static_cast<size_t>(capacity)) {
+      buffer.pop_front();
     }
+    buffer.push_back(value);
   }
   std::string nickname;
 
@@ -126,7 +125,6 @@ public:
       : trace_cb(std::move(trace_cb)), res_data(request),
         nickname(request.nickname) {
     capacity = buffer_capacity > 0 ? buffer_capacity : 10;
-    buffer.reserve(capacity);
     this->is_trace_cb = static_cast<bool>(this->trace_cb);
   }
   size_t GetTraceNum() {
@@ -136,10 +134,10 @@ public:
 
   std::shared_ptr<TraceInfo> LastTrace() {
     std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
-    if (buffer.size() == 0) {
+    if (buffer.empty()) {
       return nullptr;
     }
-    return std::make_shared<TraceInfo>(buffer[buffer.size() - 1]);
+    return std::make_shared<TraceInfo>(buffer.back());
   }
 
   std::vector<TraceInfo> GetAllTraces() {
@@ -166,7 +164,9 @@ public:
       return capacity;
     } else {
       std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
-      buffer.resize(size);
+      while (buffer.size() > static_cast<size_t>(size)) {
+        buffer.pop_front();
+      }
       capacity = size;
       return capacity;
     }

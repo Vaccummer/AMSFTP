@@ -78,6 +78,11 @@ public:
                    bool is_exit = false, int exit_code = 0,
                    const char *caller = "unknown");
 
+  /** Placeholder task result printer; format TBD. */
+  void resultprint(const std::shared_ptr<TaskInfo> &task_info);
+  /** Placeholder task metadata printer; format TBD. */
+  void taskprint(const std::shared_ptr<TaskInfo> &task_info);
+
   void PrintTaskResult(const std::shared_ptr<TaskInfo> &task_info);
 
   bool Prompt(const std::string &prompt, const std::string &placeholder,

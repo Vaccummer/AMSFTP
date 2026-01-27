@@ -348,9 +348,11 @@ public:
     return hosts[nickname];
   }
 
-  ClientMaintainer(int heartbeat_interval_s = 60,
-                   DisconnectCallback disconnect_cb = {},
-                   std::shared_ptr<AMLocalClient> local_client = nullptr) {
+  ClientMaintainer(
+      int heartbeat_interval_s = 60, DisconnectCallback disconnect_cb = {},
+      std::shared_ptr<AMLocalClient> local_client = nullptr,
+      std::unordered_map<std::string, std::shared_ptr<BaseClient>> init_hosts =
+          {}) {
     // 初始化本地客户端
     if (local_client) {
       this->local_client = std::move(local_client);
@@ -358,11 +360,18 @@ public:
       this->local_client =
           std::make_shared<AMLocalClient>(ConRequst("local", "", ""));
     }
+    hosts = std::move(init_hosts);
+    this->disconnect_cb = std::move(disconnect_cb);
+    this->is_disconnect_cb = static_cast<bool>(this->disconnect_cb);
+
+    if (heartbeat_interval_s < 0) {
+      this->is_heartbeat.store(false);
+      return;
+    }
+
     this->is_heartbeat.store(true);
     heartbeat_thread = std::thread(
         [this, heartbeat_interval_s]() { HeartbeatAct(heartbeat_interval_s); });
-    this->disconnect_cb = std::move(disconnect_cb);
-    this->is_disconnect_cb = static_cast<bool>(this->disconnect_cb);
   }
 
   std::vector<std::string> get_nicknames() {
@@ -483,20 +492,6 @@ class AMWorkManager {
 private:
   using TaskId = std::string;
 
-  /**
-   * @brief Task assignment type for scheduling.
-   */
-  enum class AssignType { Affinity, Public };
-
-  /**
-   * @brief Task record stored in the global registry.
-   */
-  struct TaskRecord {
-    std::shared_ptr<TaskInfo> task_info;
-    AssignType assign_type = AssignType::Public;
-    int affinity_id = -1;
-  };
-
   std::atomic<bool> running_{true};
   std::atomic<size_t> desired_thread_count_{1};
 
@@ -508,7 +503,7 @@ private:
   std::list<TaskId> public_queue_;
 
   std::mutex registry_mtx_;
-  std::unordered_map<TaskId, TaskRecord> task_registry_;
+  std::unordered_map<TaskId, std::shared_ptr<TaskInfo>> task_registry_;
 
   std::mutex result_mtx_;
   std::unordered_map<TaskId, std::shared_ptr<TaskInfo>> results_;
@@ -580,21 +575,24 @@ private:
    * @brief Register a task and enqueue it into the appropriate queue.
    */
   void RegisterTask(const std::shared_ptr<TaskInfo> &task_info,
-                    AssignType assign_type, int affinity_id) {
+                    TaskAssignType assign_type, int affinity_thread) {
     std::scoped_lock<std::mutex, std::mutex> lock(registry_mtx_, queue_mtx_);
     std::list<TaskId> *target_queue = nullptr;
-    if (assign_type == AssignType::Affinity && IsValidThreadId(affinity_id)) {
-      target_queue = &affinity_queues_[static_cast<size_t>(affinity_id)];
+    if (assign_type == TaskAssignType::Affinity &&
+        IsValidThreadId(affinity_thread)) {
+      target_queue = &affinity_queues_[static_cast<size_t>(affinity_thread)];
     } else {
-      assign_type = AssignType::Public;
-      affinity_id = -1;
+      assign_type = TaskAssignType::Public;
+      affinity_thread = -1;
       target_queue = &public_queue_;
     }
 
     target_queue->push_back(task_info->id);
 
-    task_registry_[task_info->id] =
-        TaskRecord{task_info, assign_type, affinity_id};
+    task_info->assign_type.store(assign_type);
+    task_info->affinity_thread.store(affinity_thread);
+    task_info->OnWhichThread.store(-1);
+    task_registry_[task_info->id] = task_info;
   }
 
   /**
@@ -641,7 +639,7 @@ private:
         if (it == task_registry_.end()) {
           continue;
         }
-        auto task_info = it->second.task_info;
+        auto task_info = it->second;
         task_registry_.erase(it);
         return std::make_optional(std::make_pair(task_id, task_info));
       }
@@ -1306,7 +1304,12 @@ private:
     auto &pd = *(task_info->pd);
     pd.task_info = task_info;
 
-    for (auto &task : task_info->tasks) {
+    if (!task_info->tasks) {
+      task_info->tasks = std::make_shared<TASKS>();
+    }
+    auto &tasks = *(task_info->tasks);
+
+    for (auto &task : tasks) {
       // Check terminate before each file
       if (pd.is_terminate()) {
         task.rcm = {EC::Terminate, "Task terminated by user"};
@@ -1374,7 +1377,7 @@ private:
     }
 
     // bool any_error = false;
-    // for (auto &task : task_info->tasks) {
+    // for (auto &task : tasks) {
     //   if (task.rcm.first != EC::Success) {
     //     any_error = true;
     //     task_info->rcm = task.rcm; // Last error
@@ -1409,11 +1412,13 @@ private:
 
       const auto &[task_id, task_info] = *task_opt;
       SetConducting(thread_index, task_id, task_info);
+      task_info->OnWhichThread.store(static_cast<int>(thread_index));
 
       EnsureProgressData(task_info);
 
       if (ShouldSkipTask(task_info)) {
         task_info->pd.reset();
+        task_info->OnWhichThread.store(-1);
         HandleCompletedTask(task_info);
         ClearConducting(thread_index);
         continue;
@@ -1421,11 +1426,14 @@ private:
 
       ExecuteTask(task_info);
       task_info->pd.reset();
+      task_info->OnWhichThread.store(-1);
 
       HandleCompletedTask(task_info);
       ClearConducting(thread_index);
     }
 
+    // Ensure this worker is not reported as executing any task.
+    // The task clears OnWhichThread on exit paths above.
     ClearConducting(thread_index);
   }
 
@@ -1534,18 +1542,23 @@ public:
     task_info->SetStatus(TaskStatus::Pending);
 
     EnsureProgressData(task_info);
+    AMPromptManager::Instance().taskprint(task_info);
 
     uint64_t total_size = 0;
-    for (const auto &task : task_info->tasks) {
+    if (!task_info->tasks) {
+      task_info->tasks = std::make_shared<TASKS>();
+    }
+    for (const auto &task : *(task_info->tasks)) {
       total_size += task.size;
     }
     task_info->total_size.store(total_size);
     task_info->total_transferred_size.store(0);
+    task_info->OnWhichThread.store(-1);
 
-    const int requested_thread_id = task_info->thread_id.load();
+    const int requested_thread_id = task_info->affinity_thread.load();
     const bool affinity_valid = IsValidThreadId(requested_thread_id);
-    const AssignType assign_type =
-        affinity_valid ? AssignType::Affinity : AssignType::Public;
+    const TaskAssignType assign_type =
+        affinity_valid ? TaskAssignType::Affinity : TaskAssignType::Public;
     const int affinity_id = affinity_valid ? requested_thread_id : -1;
 
     RegisterTask(task_info, assign_type, affinity_id);
@@ -1561,11 +1574,11 @@ public:
            TransferCallback callback = TransferCallback(),
            ssize_t buffer_size = -1, bool quiet = false, int thread_id = -1) {
     auto task_info = std::make_shared<TaskInfo>(quiet);
-    task_info->tasks = tasks;
+    task_info->tasks = std::make_shared<TASKS>(tasks);
     task_info->hostm = hostm;
     task_info->callback = callback;
     task_info->buffer_size.store(buffer_size);
-    task_info->thread_id.store(thread_id);
+    task_info->affinity_thread.store(thread_id);
     return submit(task_info);
   }
 
@@ -1576,8 +1589,8 @@ public:
     {
       std::lock_guard<std::mutex> lock(registry_mtx_);
       auto it = task_registry_.find(id);
-      if (it != task_registry_.end() && it->second.task_info) {
-        return it->second.task_info->GetStatus();
+      if (it != task_registry_.end() && it->second) {
+        return it->second->GetStatus();
       }
     }
     {
@@ -1622,7 +1635,7 @@ public:
       std::lock_guard<std::mutex> lock(registry_mtx_);
       auto it = task_registry_.find(id);
       if (it != task_registry_.end()) {
-        return it->second.task_info;
+        return it->second;
       }
     }
     {
@@ -1675,34 +1688,32 @@ public:
     {
       std::scoped_lock<std::mutex, std::mutex> lock(registry_mtx_, queue_mtx_);
       auto it = task_registry_.find(id);
-      if (it != task_registry_.end() && it->second.task_info) {
+      if (it != task_registry_.end() && it->second) {
         bool in_queue = false;
-        if (it->second.assign_type == AssignType::Affinity &&
-            it->second.affinity_id >= 0 &&
-            static_cast<size_t>(it->second.affinity_id) <
-                affinity_queues_.size()) {
+        const auto &task_info = it->second;
+        const int affinity_thread = task_info->affinity_thread.load();
+        const TaskAssignType assign_type = task_info->assign_type.load();
+        if (assign_type == TaskAssignType::Affinity && affinity_thread >= 0 &&
+            static_cast<size_t>(affinity_thread) < affinity_queues_.size()) {
           const auto &queue =
-              affinity_queues_[static_cast<size_t>(it->second.affinity_id)];
+              affinity_queues_[static_cast<size_t>(affinity_thread)];
           in_queue = std::find(queue.begin(), queue.end(), id) != queue.end();
         } else {
           in_queue = std::find(public_queue_.begin(), public_queue_.end(),
                                id) != public_queue_.end();
         }
         if (in_queue) {
-          auto task_info = it->second.task_info;
           if (task_info->pd) {
             task_info->pd->set_terminate();
           }
           task_info->SetResult({EC::Terminate, "Task terminated before start"});
           task_info->SetStatus(TaskStatus::Finished);
           task_info->finished_time.store(timenow());
+          task_info->OnWhichThread.store(-1);
 
-          if (it->second.assign_type == AssignType::Affinity &&
-              it->second.affinity_id >= 0 &&
-              static_cast<size_t>(it->second.affinity_id) <
-                  affinity_queues_.size()) {
-            affinity_queues_[static_cast<size_t>(it->second.affinity_id)]
-                .remove(id);
+          if (assign_type == TaskAssignType::Affinity && affinity_thread >= 0 &&
+              static_cast<size_t>(affinity_thread) < affinity_queues_.size()) {
+            affinity_queues_[static_cast<size_t>(affinity_thread)].remove(id);
           } else {
             public_queue_.remove(id);
           }
