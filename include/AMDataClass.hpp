@@ -982,9 +982,10 @@ struct TaskInfo {
   /**
    * @brief Safely read the current task pointer.
    */
-  TransferTask *GetCurrentTask() const {
+  TransferTask GetCurrentTask() const {
     std::lock_guard<std::mutex> lock(mtx);
-    return cur_task;
+    auto task_copy = *cur_task;
+    return task_copy;
   }
 
   /**
