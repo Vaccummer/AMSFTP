@@ -281,8 +281,9 @@ CreateClient(const ConRequst &requeset, ClientProtocol protocol,
     client->TransferRingBufferSize(buffer_size);
     return client;
   } else if (protocol == ClientProtocol::FTP) {
-    auto client =
-        std::make_shared<AMFTPClient>(requeset, trace_num, std::move(trace_cb));
+    auto client = std::make_shared<AMFTPClient>(requeset, trace_num,
+                                                std::move(trace_cb),
+                                                std::move(auth_cb));
     client->TransferRingBufferSize(buffer_size);
     return client;
   } else {

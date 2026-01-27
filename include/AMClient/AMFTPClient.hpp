@@ -522,6 +522,8 @@ private:
   std::string url = "";
   std::string current_url = ""; // 保持 CURLOPT_URL 字符串的生命周期
   std::string session_password_plain_;
+  AuthCallback auth_cb_ = {};
+  bool auth_cb_enabled_ = false;
   // 非阻塞执行 curl 请求，支持中断和超时
   // poll_interval_ms: 每次轮询间隔，越小响应越快，但 CPU 占用越高
 
@@ -608,6 +610,15 @@ private:
     }
     if (nb_res.value == CURLE_OK) {
       return {EC::Success, ""};
+    }
+    if (nb_res.value == CURLE_FTP_USER_PASSWORD_INCORRECT) {
+      return {EC::AuthFailed, curl_easy_strerror(nb_res.value)};
+    }
+    long response_code = 0;
+    if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code) ==
+            CURLE_OK &&
+        response_code == 530) {
+      return {EC::AuthFailed, "FTP authentication failed (530)"};
     }
     if (nb_res.value == CURLE_OPERATION_TIMEDOUT) {
       return {EC::OperationTimeout, curl_easy_strerror(nb_res.value)};
@@ -952,9 +963,11 @@ public:
   std::shared_ptr<AMFTPClient> mirror_client = nullptr;
 
   AMFTPClient(const ConRequst &request, ssize_t buffer_capacity = 10,
-              TraceCallback trace_cb = {})
-      : BaseClient(request, buffer_capacity, std::move(trace_cb)) {
+              TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
+      : BaseClient(request, buffer_capacity, std::move(trace_cb)),
+        auth_cb_(std::move(auth_cb)) {
     this->PROTOCOL = ClientProtocol::FTP;
+    auth_cb_enabled_ = static_cast<bool>(auth_cb_);
 
     if (res_data.username.empty()) {
       res_data.username = "anonymous";
@@ -993,9 +1006,9 @@ public:
     current_url = AMStr::amfmt("{}{}", this->url, path_f);
     curl_easy_setopt(curl, CURLOPT_URL, current_url.c_str());
     curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
-    const std::string &password_to_use =
-        session_password_plain_.empty() ? res_data.password
-                                        : session_password_plain_;
+    const std::string &password_to_use = session_password_plain_.empty()
+                                             ? res_data.password
+                                             : session_password_plain_;
     curl_easy_setopt(curl, CURLOPT_PASSWORD, password_to_use.c_str());
     return {EC::Success, ""};
   }
@@ -1042,7 +1055,49 @@ public:
       return {EC::NoConnection, "CURL multi init failed"};
     }
 
-    ECM rcm = Check(interrupt_flag, timeout_ms, start_time);
+    auto NotifyAuth = [&](bool need_password, const std::string &password_enc,
+                          bool password_correct) {
+      if (!auth_cb_enabled_) {
+        return;
+      }
+      ConRequst request = res_data;
+      request.password = password_correct ? password_enc : "";
+      CallCallbackSafe(auth_cb_, AuthCBInfo(need_password, std::move(request),
+                                            password_enc, password_correct));
+    };
+
+    auto attempt_check = [&]() { return Check(interrupt_flag, timeout_ms, start_time); };
+
+    ECM rcm = attempt_check();
+
+    if (rcm.first == EC::AuthFailed && auth_cb_enabled_) {
+      int trials = 0;
+      while (trials < 2 && rcm.first == EC::AuthFailed) {
+        auto password_opt = CallCallbackSafeRet(
+            password_cb_, auth_cb_, AuthCBInfo(true, res_data, "", false));
+        if (!password_opt.has_value()) {
+          break;
+        }
+
+        std::string password_plain = std::move(*password_opt);
+        std::string password_enc = AMAuth::EncryptPassword(password_plain);
+        res_data.password = password_enc;
+        session_password_plain_ = std::move(password_plain);
+
+        rcm = attempt_check();
+        if (rcm.first == EC::Success) {
+          NotifyAuth(false, password_enc, true);
+          break;
+        }
+        NotifyAuth(false, password_enc, false);
+        AMAuth::SecureZero(session_password_plain_);
+        session_password_plain_.clear();
+        trials++;
+      }
+    } else if (rcm.first == EC::Success && auth_cb_enabled_ &&
+               !res_data.password.empty()) {
+      NotifyAuth(false, res_data.password, true);
+    }
 
     if (rcm.first != EC::Success) {
       return rcm;
