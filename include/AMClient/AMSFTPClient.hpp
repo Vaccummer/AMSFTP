@@ -413,6 +413,7 @@ public:
     WaitResult wr = WaitResult::Ready;
     bool password_auth;
     std::string password_tmp;
+    std::string stored_password_enc = res_data.password;
     const char *auth_list = nullptr;
 
     // 使用SocketConnector建立连接
@@ -501,6 +502,24 @@ public:
 
     password_auth = (strstr(auth_list, "password") != nullptr);
 
+    /**
+     * @brief Notify authentication callbacks in a unified manner.
+     */
+    auto NotifyAuth = [&](bool need_password, bool is_password_auth,
+                          const std::string &password_enc,
+                          bool password_success) {
+      if (!auth_cb) {
+        return;
+      }
+      ConRequst request = res_data;
+      if (is_password_auth) {
+        request.password = password_success ? password_enc : "";
+      }
+      CallCallbackSafe(auth_cb,
+                       AuthCBInfo(need_password, std::move(request),
+                                  is_password_auth));
+    };
+
     // 专用私钥认证
     if (!res_data.keyfile.empty()) {
       // 检查中断（不检查超时）
@@ -515,30 +534,37 @@ public:
               "PrivatedKeyAuthorizeResult",
               AMStr::amfmt("Dedicated private key \"{}\" authorize success",
                            res_data.keyfile));
+        NotifyAuth(false, false, "", true);
         goto OK;
       } else {
         trace(TraceLevel::Debug, EC::PublickeyAuthFailed, res_data.keyfile,
               "DedicatedPrivateKeyAuthorizeResult",
-              AMStr::amfmt("Dedicated private key \"{}\" authorize success",
+              AMStr::amfmt("Dedicated private key \"{}\" authorize failed",
                            res_data.keyfile));
+        NotifyAuth(false, false, "", false);
       }
     }
 
     // 密码认证
-    if (!res_data.password.empty() && password_auth) {
+    if (!stored_password_enc.empty() && password_auth) {
       if (interrupt_flag && interrupt_flag->check()) {
         return {EC::Terminate, "Authentication interrupted"};
       }
+      std::string plain_password =
+          AMAuth::DecryptPassword(stored_password_enc);
       rcr = libssh2_userauth_password(session, res_data.username.c_str(),
-                                      res_data.password.c_str());
+                                      plain_password.c_str());
+      AMAuth::SecureZero(plain_password);
       if (rcr == 0) {
         trace(TraceLevel::Info, EC::Success, "Success",
               "PasswordAuthorizeResult", "Password authorize success");
+        res_data.password = stored_password_enc;
+        NotifyAuth(false, true, stored_password_enc, true);
         goto OK;
       } else {
-        trace(TraceLevel::Debug, EC::AuthFailed, res_data.password,
-              "PasswordAuth",
-              AMStr::amfmt("Wrong Password: {}", res_data.password));
+        trace(TraceLevel::Debug, EC::AuthFailed, "password", "PasswordAuth",
+              "Password authentication failed");
+        NotifyAuth(false, true, stored_password_enc, false);
       }
     }
 
@@ -559,10 +585,12 @@ public:
                 "PrivatedKeyAuthorizeResult",
                 AMStr::amfmt("Shared private key \"{}\" authorize success",
                              private_key));
+          NotifyAuth(false, false, "", true);
           goto OK;
         } else {
           trace(TraceLevel::Debug, EC::PrivateKeyAuthFailed, "Failed",
                 "PrivatedKeyAuthorizeResult", rcm.second);
+          NotifyAuth(false, false, "", false);
         }
       }
     }
@@ -576,9 +604,10 @@ public:
         if (interrupt_flag && interrupt_flag->check()) {
           return {EC::Terminate, "Authentication interrupted"};
         }
+        NotifyAuth(true, true, "", false);
         auto [password_opt, cb_ecm] =
             CallCallbackSafeRet<std::optional<std::string>>(
-                auth_cb, AuthCBInfo(true, res_data, trial_times));
+                auth_cb, AuthCBInfo(true, res_data, true));
         if (cb_ecm.first != EC::Success) {
           trace(TraceLevel::Error, cb_ecm.first, "AuthCB", "Call",
                 cb_ecm.second);
@@ -592,18 +621,21 @@ public:
         if (password_tmp.empty()) {
           break;
         }
+        const std::string password_enc = AMAuth::EncryptPassword(password_tmp);
         rcr = libssh2_userauth_password(session, res_data.username.c_str(),
                                         password_tmp.c_str());
+        AMAuth::SecureZero(password_tmp);
         trial_times++;
         if (rcr == 0) {
           trace(TraceLevel::Info, EC::Success, "Success",
                 "PasswordAuthorizeResult", "Password authorize success");
+          res_data.password = password_enc;
+          NotifyAuth(false, true, password_enc, true);
           goto OK;
         } else {
           trace(TraceLevel::Debug, EC::AuthFailed, "Failed",
-                "PasswordAuthorizeResult",
-                AMStr::amfmt("Wrong Password: {}", password_tmp));
-          CallCallbackSafe(auth_cb, AuthCBInfo(false, res_data, trial_times));
+                "PasswordAuthorizeResult", "Wrong password");
+          NotifyAuth(false, true, password_enc, false);
         }
       }
     }

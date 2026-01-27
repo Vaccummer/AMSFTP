@@ -774,6 +774,35 @@ AMConfigManager::Status AMConfigManager::Modify(const std::string &nickname) {
   return Ok();
 }
 
+/**
+ * @brief Persist an encrypted password for a given client nickname.
+ */
+AMConfigManager::Status AMConfigManager::SetClientPasswordEncrypted(
+    const std::string &nickname, const std::string &encrypted_password,
+    bool dump_now) {
+  auto status = EnsureInitialized("SetClientPasswordEncrypted");
+  if (status.second != 0) {
+    return status;
+  }
+  if (!HostExists(nickname)) {
+    return Err("host not found", static_cast<int>(EC::HostConfigNotFound));
+  }
+
+  std::string stored = encrypted_password;
+  if (!stored.empty() && !AMAuth::IsEncrypted(stored)) {
+    stored = AMAuth::EncryptPassword(stored);
+  }
+
+  auto up_status = UpsertHostField(nickname, "password", stored);
+  if (up_status.second != 0) {
+    return up_status;
+  }
+  if (dump_now) {
+    return Dump();
+  }
+  return Ok();
+}
+
 void AMConfigManager::OnExit() {
   try {
     (void)AMConfigManager::Instance().Dump();
@@ -901,7 +930,12 @@ AMConfigManager::UpsertHostField(const std::string &nickname,
     return Ok();
   }
   if (std::holds_alternative<std::string>(value)) {
-    host_table->insert_or_assign(field, std::get<std::string>(value));
+    std::string str_value = std::get<std::string>(value);
+    if (field == "password" && !str_value.empty() &&
+        !AMAuth::IsEncrypted(str_value)) {
+      str_value = AMAuth::EncryptPassword(str_value);
+    }
+    host_table->insert_or_assign(field, str_value);
     return Ok();
   }
   if (std::holds_alternative<std::vector<std::string>>(value)) {
@@ -1031,10 +1065,11 @@ AMConfigManager::Status AMConfigManager::PromptAddFields(std::string *nickname,
   entry->fields["hostname"] = hostname;
   entry->fields["port"] = port;
   entry->fields["keyfile"] = keyfile;
-  entry->fields["password"] = password;
+  entry->fields["password"] = AMAuth::EncryptPassword(password);
   entry->fields["trash_dir"] = trash_dir;
   entry->fields["protocol"] = protocol;
   entry->fields["buffer_size"] = buffer_size;
+  AMAuth::SecureZero(password);
   return Ok();
 }
 
@@ -1108,7 +1143,10 @@ AMConfigManager::PromptModifyFields(const std::string &nickname,
   }
 
   std::string password = get_value("password");
-  if (!PromptLine("Password (optional): ", &password, password, true, &canceled,
+  if (AMAuth::IsEncrypted(password)) {
+    password.clear();
+  }
+  if (!PromptLine("Password (optional): ", &password, "", true, &canceled,
                   false)) {
     PrintLine("Modify canceled.");
     return Err("modify canceled", 3);
@@ -1143,10 +1181,11 @@ AMConfigManager::PromptModifyFields(const std::string &nickname,
   entry->fields["hostname"] = hostname;
   entry->fields["port"] = port;
   entry->fields["keyfile"] = keyfile;
-  entry->fields["password"] = password;
+  entry->fields["password"] = AMAuth::EncryptPassword(password);
   entry->fields["trash_dir"] = trash_dir;
   entry->fields["protocol"] = protocol;
   entry->fields["buffer_size"] = buffer_size;
+  AMAuth::SecureZero(password);
   return Ok();
 }
 

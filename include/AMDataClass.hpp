@@ -17,6 +17,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -434,8 +435,7 @@ public:
     size_t used = t - h;
     size_t free_space = capacity_ - used;
     // 连续可写 = min(到末尾的距离, 空闲空间)
-    size_t contig =
-        capacity_ - pos > free_space ? free_space : capacity_ - pos;
+    size_t contig = capacity_ - pos > free_space ? free_space : capacity_ - pos;
     return {buffer_.data() + pos, contig};
   }
 
@@ -529,15 +529,150 @@ struct ErrorCBInfo {
       : ecm(ecm), src(src), dst(dst), src_host(src_host), dst_host(dst_host) {}
 };
 
-struct AuthCBInfo {
-  bool NeedPassword; // if true, python password callback need to return
-                     // password, if false, callback function just tells you
-                     // the password is wrong
-  ConRequst request;
-  int trial_times;
-  AuthCBInfo(bool NeedPassword, ConRequst request, int trial_times)
-      : NeedPassword(NeedPassword), request(request), trial_times(trial_times) {
+namespace AMAuth {
+/**
+ * @brief Fixed compile-time key used for password obfuscation at rest.
+ */
+inline constexpr std::string_view kPasswordKey =
+    "AMSFTP::FixedCompileTimeKey::DoNotReuse";
+
+/**
+ * @brief Prefix marking encrypted password payloads.
+ */
+inline constexpr std::string_view kEncryptedPrefix = "enc:";
+
+/**
+ * @brief Securely zero a string's underlying storage.
+ */
+inline void SecureZero(std::string &value) {
+  std::fill(value.begin(), value.end(), '\0');
+  value.clear();
+  value.shrink_to_fit();
+}
+
+/**
+ * @brief Check whether a password string is already encrypted.
+ */
+inline bool IsEncrypted(const std::string &value) {
+  return value.rfind(std::string(kEncryptedPrefix), 0) == 0;
+}
+
+/**
+ * @brief Hex-encode a byte buffer.
+ */
+inline std::string HexEncode(const std::string &bytes) {
+  static constexpr char kHex[] = "0123456789ABCDEF";
+  std::string out;
+  out.resize(bytes.size() * 2);
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    const unsigned char b = static_cast<unsigned char>(bytes[i]);
+    out[i * 2] = kHex[(b >> 4) & 0x0F];
+    out[i * 2 + 1] = kHex[b & 0x0F];
   }
+  return out;
+}
+
+/**
+ * @brief Decode a hex string into raw bytes. Returns empty on invalid input.
+ */
+inline std::string HexDecode(const std::string &hex) {
+  auto hex_to_val = [](char c) -> int {
+    if (c >= '0' && c <= '9')
+      return c - '0';
+    if (c >= 'A' && c <= 'F')
+      return 10 + (c - 'A');
+    if (c >= 'a' && c <= 'f')
+      return 10 + (c - 'a');
+    return -1;
+  };
+
+  if (hex.size() % 2 != 0) {
+    return {};
+  }
+
+  std::string out;
+  out.resize(hex.size() / 2);
+  for (size_t i = 0; i < hex.size(); i += 2) {
+    const int hi = hex_to_val(hex[i]);
+    const int lo = hex_to_val(hex[i + 1]);
+    if (hi < 0 || lo < 0) {
+      return {};
+    }
+    out[i / 2] = static_cast<char>((hi << 4) | lo);
+  }
+  return out;
+}
+
+/**
+ * @brief XOR-obfuscate bytes using the fixed compile-time key.
+ */
+inline std::string XorWithKey(const std::string &input) {
+  if (input.empty()) {
+    return {};
+  }
+  std::string out = input;
+  for (size_t i = 0; i < out.size(); ++i) {
+    const char key_ch = kPasswordKey[i % kPasswordKey.size()];
+    out[i] = static_cast<char>(out[i] ^ key_ch);
+  }
+  return out;
+}
+
+/**
+ * @brief Encrypt a plaintext password for storage.
+ */
+inline std::string EncryptPassword(const std::string &plain) {
+  if (plain.empty()) {
+    return {};
+  }
+  if (IsEncrypted(plain)) {
+    return plain;
+  }
+  const std::string xored = XorWithKey(plain);
+  const std::string encoded = HexEncode(xored);
+  return std::string(kEncryptedPrefix) + encoded;
+}
+
+/**
+ * @brief Decrypt a stored password. Returns input if not encrypted.
+ */
+inline std::string DecryptPassword(const std::string &stored) {
+  if (stored.empty() || !IsEncrypted(stored)) {
+    return stored;
+  }
+  const std::string payload =
+      stored.substr(std::string(kEncryptedPrefix).size());
+  std::string decoded = HexDecode(payload);
+  if (decoded.empty() && !payload.empty()) {
+    return {};
+  }
+  decoded = XorWithKey(decoded);
+  return decoded;
+}
+} // namespace AMAuth
+
+struct AuthCBInfo {
+  /**
+   * @brief Whether a password is required for authentication.
+   */
+  bool NeedPassword = false;
+
+  /**
+   * @brief Connection request context for the callback.
+   */
+  ConRequst request;
+
+  /**
+   * @brief true for password auth, false for key-based auth.
+   */
+  bool isPass = true;
+
+  /**
+   * @brief Construct a callback info payload.
+   */
+  AuthCBInfo(bool need_password, ConRequst request, bool is_password_auth)
+      : NeedPassword(need_password), request(std::move(request)),
+        isPass(is_password_auth) {}
 };
 
 struct TraceInfo {
@@ -784,9 +919,11 @@ struct TaskInfo {
   ResultCallback result_callback = {};
 
   /**
-   * @brief Requested thread affinity ID.
+   * @brief Requested logical thread affinity ID (-1 means public/unassigned).
+   *
+   * Thread 0 is intrinsic and cannot be removed.
    */
-  std::atomic<size_t> thread_id{0};
+  std::atomic<int> thread_id{-1};
 
   /**
    * @brief Transfer callbacks.
