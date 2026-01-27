@@ -1,4 +1,5 @@
 #include "AMPromptManager.hpp"
+#include "AMDataClass.hpp"
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -65,6 +66,77 @@ void AMPromptManager::ErrorFormat(const std::string &error_name,
     std::cout.flush();
     std::exit(exit_code);
   }
+}
+
+/**
+ * @brief Print a standardized task result summary in a thread-safe manner.
+ */
+void AMPromptManager::PrintTaskResult(
+    const std::shared_ptr<TaskInfo> &task_info) {
+  if (!task_info || task_info->quiet) {
+    return;
+  }
+
+  TaskStatus status = task_info->GetStatus();
+  const char *status_str = "Unknown";
+  switch (status) {
+  case TaskStatus::Pending:
+    status_str = "Pending";
+    break;
+  case TaskStatus::Conducting:
+    status_str = "Conducting";
+    break;
+  case TaskStatus::Finished:
+    status_str = "Finished";
+    break;
+  default:
+    break;
+  }
+
+  const double submit_time = task_info->submit_time.load();
+  const double start_time = task_info->start_time.load();
+  const double finished_time = task_info->finished_time.load();
+  const double duration_s = (start_time > 0 && finished_time >= start_time)
+                                ? (finished_time - start_time)
+                                : 0.0;
+
+  size_t total = 0;
+  size_t success = 0;
+  size_t failed = 0;
+  size_t terminated = 0;
+  ECM last_error = {EC::Success, ""};
+
+  {
+    std::lock_guard<std::mutex> lock(task_info->mtx);
+    total = task_info->tasks.size();
+    for (const auto &task : task_info->tasks) {
+      if (task.rcm.first == EC::Success) {
+        ++success;
+      } else if (task.rcm.first == EC::Terminate) {
+        ++terminated;
+        last_error = task.rcm;
+      } else {
+        ++failed;
+        last_error = task.rcm;
+      }
+    }
+  }
+
+  std::ostringstream oss;
+  oss << "[TaskResult] id=" << task_info->id << " status=" << status_str
+      << " total=" << total << " success=" << success << " failed=" << failed
+      << " terminated=" << terminated;
+  if (duration_s > 0.0) {
+    oss << " duration_s=" << duration_s;
+  }
+  if (submit_time > 0.0) {
+    oss << " submit_time=" << submit_time;
+  }
+  if (last_error.first != EC::Success && !last_error.second.empty()) {
+    oss << " last_error=\"" << last_error.second << "\"";
+  }
+
+  Print(oss.str());
 }
 
 bool AMPromptManager::Prompt(const std::string &prompt,

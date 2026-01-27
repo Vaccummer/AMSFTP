@@ -1,8 +1,12 @@
 #pragma once
 // 标准库
+#include <condition_variable>
 #include <ctime>
 #include <deque>
 #include <fcntl.h>
+#include <list>
+#include <mutex>
+#include <thread>
 
 // 自身依赖
 #include "AMClient/AMBaseClient.hpp"
@@ -13,6 +17,7 @@
 #include "AMDataClass.hpp"
 #include "AMEnum.hpp"
 #include "AMPath.hpp"
+#include "AMPromptManager.hpp"
 
 class UnionFileHandle {
 public:
@@ -477,64 +482,269 @@ public:
 
 class AMWorkManager {
 private:
-  std::thread worker_thread;
-  std::atomic<bool> running{true};
-  std::mutex queue_mtx;
-  std::condition_variable queue_cv;
-  std::deque<std::shared_ptr<TaskInfo>> task_queue;
-  std::mutex result_mtx;
-  std::unordered_map<std::string, std::shared_ptr<TaskInfo>> results;
-  std::mutex conducting_mtx;
-  std::shared_ptr<TaskInfo> conducting_task; // Currently executing task
-  size_t chunk_size = 256 * AMKB;
+  using TaskId = std::string;
+
+  /**
+   * @brief Task assignment type for scheduling.
+   */
+  enum class AssignType { Affinity, Public };
+
+  /**
+   * @brief Task record stored in the global registry.
+   */
+  struct TaskRecord {
+    std::shared_ptr<TaskInfo> task_info;
+    AssignType assign_type = AssignType::Public;
+    size_t affinity_id = 0;
+  };
+
+  std::atomic<bool> running_{true};
+  std::atomic<size_t> desired_thread_count_{1};
+
+  std::vector<std::thread> worker_threads_;
+
+  std::mutex queue_mtx_;
+  std::condition_variable queue_cv_;
+  std::vector<std::list<TaskId>> affinity_queues_;
+  std::list<TaskId> public_queue_;
+
+  std::mutex registry_mtx_;
+  std::unordered_map<TaskId, TaskRecord> task_registry_;
+
+  std::mutex result_mtx_;
+  std::unordered_map<TaskId, std::shared_ptr<TaskInfo>> results_;
+
+  std::mutex conducting_mtx_;
+  std::vector<TaskId> conducting_tasks_;
+  std::vector<std::shared_ptr<TaskInfo>> conducting_infos_;
+
+  size_t chunk_size_ = 256 * AMKB;
+
+  /**
+   * @brief Clamp thread count to the supported range [1, 64].
+   */
+  static size_t ClampThreadCount(size_t count) {
+    constexpr size_t kMinThreads = 1;
+    constexpr size_t kMaxThreads = 64;
+    return std::max(kMinThreads, std::min(count, kMaxThreads));
+  }
+
+  /**
+   * @brief Check whether a thread ID is valid for affinity scheduling.
+   */
+  bool IsValidThreadId(size_t thread_id) const {
+    return thread_id < affinity_queues_.size();
+  }
+
+  /**
+   * @brief Determine whether any pending tasks exist.
+   *
+   * This function assumes queue_mtx_ is already held.
+   */
+  bool HasPendingTasksLocked() const {
+    if (!public_queue_.empty()) {
+      return true;
+    }
+    for (const auto &queue : affinity_queues_) {
+      if (!queue.empty()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * @brief Ensure progress data and inner callback are prepared.
+   */
+  void EnsureProgressData(const std::shared_ptr<TaskInfo> &task_info) {
+    if (!task_info->pd) {
+      task_info->pd = std::make_shared<WkProgressData>(task_info);
+    }
+    if (!task_info->pd->inner_callback) {
+      std::weak_ptr<TaskInfo> ti_w = task_info;
+      std::weak_ptr<WkProgressData> pd_w = task_info->pd;
+      task_info->pd->inner_callback = [this, ti_w, pd_w](bool force) {
+        auto ti_s = ti_w.lock();
+        auto pd_s = pd_w.lock();
+        if (!ti_s || !pd_s) {
+          return;
+        }
+        this->InnerCallback(ti_s, *pd_s, force);
+      };
+    }
+    task_info->pd->task_info = task_info;
+  }
+
+  /**
+   * @brief Register a task and enqueue it into the appropriate queue.
+   */
+  void RegisterTask(const std::shared_ptr<TaskInfo> &task_info,
+                    AssignType assign_type, size_t affinity_id) {
+    std::scoped_lock<std::mutex, std::mutex> lock(registry_mtx_, queue_mtx_);
+    std::list<TaskId> *target_queue = nullptr;
+    if (assign_type == AssignType::Affinity && IsValidThreadId(affinity_id)) {
+      target_queue = &affinity_queues_[affinity_id];
+    } else {
+      assign_type = AssignType::Public;
+      affinity_id = 0;
+      target_queue = &public_queue_;
+    }
+
+    target_queue->push_back(task_info->id);
+
+    task_registry_[task_info->id] =
+        TaskRecord{task_info, assign_type, affinity_id};
+  }
+
+  /**
+   * @brief Dequeue a task for a specific worker thread.
+   */
+  std::optional<std::pair<TaskId, std::shared_ptr<TaskInfo>>>
+  DequeueTask(size_t thread_index) {
+    while (true) {
+      {
+        std::unique_lock<std::mutex> lock(queue_mtx_);
+        queue_cv_.wait(lock, [this, thread_index]() {
+          return !running_.load() || HasPendingTasksLocked() ||
+                 thread_index >= desired_thread_count_.load();
+        });
+
+        if (!running_.load() && !HasPendingTasksLocked()) {
+          return std::nullopt;
+        }
+
+        if (thread_index >= desired_thread_count_.load()) {
+          const bool has_affinity =
+              thread_index < affinity_queues_.size() &&
+              !affinity_queues_[thread_index].empty();
+          if (!has_affinity) {
+            return std::nullopt;
+          }
+        }
+
+        TaskId task_id;
+        if (thread_index < affinity_queues_.size() &&
+            !affinity_queues_[thread_index].empty()) {
+          task_id = affinity_queues_[thread_index].front();
+          affinity_queues_[thread_index].pop_front();
+        } else if (!public_queue_.empty()) {
+          task_id = public_queue_.front();
+          public_queue_.pop_front();
+        } else {
+          continue;
+        }
+
+        lock.unlock();
+
+        std::lock_guard<std::mutex> registry_lock(registry_mtx_);
+        auto it = task_registry_.find(task_id);
+        if (it == task_registry_.end()) {
+          continue;
+        }
+        auto task_info = it->second.task_info;
+        task_registry_.erase(it);
+        return std::make_optional(std::make_pair(task_id, task_info));
+      }
+    }
+  }
+
+  /**
+   * @brief Store a completed task or invoke its result callback.
+   */
+  void HandleCompletedTask(const std::shared_ptr<TaskInfo> &task_info) {
+    AMPromptManager::Instance().PrintTaskResult(task_info);
+    if (task_info->result_callback) {
+      CallCallbackSafe(task_info->result_callback, task_info);
+      return;
+    }
+    std::lock_guard<std::mutex> lock(result_mtx_);
+    results_[task_info->id] = task_info;
+  }
+
+  /**
+   * @brief Mark a task as currently conducting on a worker thread.
+   */
+  void SetConducting(size_t thread_index, const TaskId &task_id,
+                     const std::shared_ptr<TaskInfo> &task_info) {
+    std::lock_guard<std::mutex> lock(conducting_mtx_);
+    if (thread_index >= conducting_tasks_.size()) {
+      conducting_tasks_.resize(thread_index + 1);
+      conducting_infos_.resize(thread_index + 1);
+    }
+    conducting_tasks_[thread_index] = task_id;
+    conducting_infos_[thread_index] = task_info;
+  }
+
+  /**
+   * @brief Clear conducting state for a worker thread.
+   */
+  void ClearConducting(size_t thread_index) {
+    std::lock_guard<std::mutex> lock(conducting_mtx_);
+    if (thread_index < conducting_tasks_.size()) {
+      conducting_tasks_[thread_index].clear();
+      conducting_infos_[thread_index] = nullptr;
+    }
+  }
 
   // Internal progress callback wrapper
   void InnerCallback(std::shared_ptr<TaskInfo> task_info, WkProgressData &pd,
                      bool force = false) {
-    if (task_info->callback.need_progress_cb && task_info->cur_task) {
-      auto time_now = timenow();
-      if (force ||
-          ((time_now - pd.cb_time) > task_info->callback.cb_interval_s)) {
-        pd.cb_time = time_now;
-        ECM cb_error = {EC::Success, ""};
-        auto ctrl_opt = task_info->callback.CallProgress(
-            ProgressCBInfo(
-                task_info->cur_task->src, task_info->cur_task->dst,
-                task_info->cur_task->src_host, task_info->cur_task->dst_host,
-                task_info->cur_task->transferred, task_info->cur_task->size,
-                task_info->total_transferred_size, task_info->total_size),
-            &cb_error);
-        if (cb_error.first != EC::Success &&
-            task_info->callback.need_error_cb) {
-          task_info->callback.CallError(ErrorCBInfo(
-              cb_error, task_info->cur_task->src, task_info->cur_task->dst,
-              task_info->cur_task->src_host, task_info->cur_task->dst_host));
-        }
-        if (ctrl_opt.has_value()) {
-          switch (*ctrl_opt) {
-          case TransferControl::Running:
-            pd.set_running();
-            break;
-          case TransferControl::Pause:
-            pd.set_pause();
-            break;
-          case TransferControl::Terminate:
-            pd.set_terminate();
-            break;
-          default:
-            break;
-          }
-        }
-      }
+    TransferTask *cur_task = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(task_info->mtx);
+      cur_task = task_info->cur_task;
+    }
+
+    if (!task_info->callback.need_progress_cb || !cur_task) {
+      return;
+    }
+
+    auto time_now = timenow();
+    if (!force && ((time_now - pd.cb_time) <= task_info->callback.cb_interval_s)) {
+      return;
+    }
+
+    pd.cb_time = time_now;
+    ECM cb_error = {EC::Success, ""};
+    auto ctrl_opt = task_info->callback.CallProgress(
+        ProgressCBInfo(cur_task->src, cur_task->dst, cur_task->src_host,
+                       cur_task->dst_host, cur_task->transferred,
+                       cur_task->size,
+                       task_info->total_transferred_size.load(),
+                       task_info->total_size.load()),
+        &cb_error);
+
+    if (cb_error.first != EC::Success && task_info->callback.need_error_cb) {
+      task_info->callback.CallError(ErrorCBInfo(
+          cb_error, cur_task->src, cur_task->dst, cur_task->src_host,
+          cur_task->dst_host));
+    }
+
+    if (!ctrl_opt.has_value()) {
+      return;
+    }
+
+    switch (*ctrl_opt) {
+    case TransferControl::Running:
+      pd.set_running();
+      break;
+    case TransferControl::Pause:
+      pd.set_pause();
+      break;
+    case TransferControl::Terminate:
+      pd.set_terminate();
+      break;
+    default:
+      break;
     }
   }
 
   // Check if task should be skipped (terminated before conducting)
   bool ShouldSkipTask(std::shared_ptr<TaskInfo> task_info) {
     if (task_info->pd && task_info->pd->is_terminate()) {
-      task_info->rcm = {EC::Terminate, "Task terminated before start"};
-      task_info->status = TaskStatus::Finished;
-      task_info->finished_time = timenow();
+      task_info->SetResult({EC::Terminate, "Task terminated before start"});
+      task_info->SetStatus(TaskStatus::Finished);
+      task_info->finished_time.store(timenow());
       return true;
     }
     return false;
@@ -644,7 +854,7 @@ private:
     }
 
     libssh2_session_set_blocking(client->session, 1);
-    std::vector<char> buffer(chunk_size);
+    std::vector<char> buffer(chunk_size_);
     uint64_t total_written = 0;
     ssize_t bytes_read, bytes_written;
 
@@ -657,7 +867,8 @@ private:
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
       }
 
-      size_t to_read = std::min<size_t>(chunk_size, task->size - total_written);
+      size_t to_read =
+          std::min<size_t>(chunk_size_, task->size - total_written);
       size_t buffer_filled = 0;
       while (buffer_filled < to_read) {
         bytes_read = libssh2_sftp_read(srcFile, buffer.data() + buffer_filled,
@@ -686,7 +897,8 @@ private:
         if (bytes_written > 0) {
           buffer_written += bytes_written;
           total_written += bytes_written;
-          task_info->total_transferred_size += bytes_written;
+          task_info->total_transferred_size.fetch_add(
+              static_cast<uint64_t>(bytes_written));
           task->transferred = total_written;
           InnerCallback(task_info, pd, false);
         } else if (bytes_written == 0) {
@@ -811,7 +1023,10 @@ private:
           task->rcm = ecm;
           return;
         }
-        task_info->total_transferred_size += bytes_write;
+        if (bytes_write > 0) {
+          task_info->total_transferred_size.fetch_add(
+              static_cast<uint64_t>(bytes_write));
+        }
         task->transferred = file_handle.offset;
         InnerCallback(task_info, pd, false);
       }
@@ -839,7 +1054,10 @@ private:
           task->rcm = ecm;
           return;
         }
-        task_info->total_transferred_size += bytes_write;
+        if (bytes_write > 0) {
+          task_info->total_transferred_size.fetch_add(
+              static_cast<uint64_t>(bytes_write));
+        }
         task->transferred = file_handle.offset;
         InnerCallback(task_info, pd, false);
       }
@@ -867,8 +1085,12 @@ private:
       }
       // Check if transfer complete
       auto ti = pd->task_info.lock();
-      if (ti && ti->cur_task &&
-          ti->cur_task->transferred >= ti->cur_task->size) {
+      TransferTask *cur_task = nullptr;
+      if (ti) {
+        std::lock_guard<std::mutex> lock(ti->mtx);
+        cur_task = ti->cur_task;
+      }
+      if (cur_task && cur_task->transferred >= cur_task->size) {
         return 0;
       }
       if (pd->ring_buffer->available() == 0) {
@@ -881,23 +1103,26 @@ private:
         try {
           memcpy(ptr, read_ptr, to_read);
           pd->ring_buffer->commit_read(to_read);
-          if (ti && ti->cur_task) {
-            ti->cur_task->transferred += to_read;
-            ti->total_transferred_size += to_read;
+          if (cur_task) {
+            cur_task->transferred += static_cast<uint64_t>(to_read);
+            ti->total_transferred_size.fetch_add(
+                static_cast<uint64_t>(to_read));
           }
           pd->CallInnerCallback(false);
           return to_read;
         } catch (const std::exception &e) {
           pd->set_terminate();
-          if (ti && ti->cur_task)
-            ti->cur_task->rcm = ECM{EC::BufferReadError, e.what()};
+          if (cur_task) {
+            cur_task->rcm = ECM{EC::BufferReadError, e.what()};
+          }
           return CURL_READFUNC_ABORT;
         }
       } else if (to_read < 0) {
         pd->set_terminate();
-        if (ti && ti->cur_task)
-          ti->cur_task->rcm =
+        if (cur_task) {
+          cur_task->rcm =
               ECM{EC::BufferReadError, "Get negative value for data size"};
+        }
         return CURL_READFUNC_ABORT;
       }
     }
@@ -932,8 +1157,14 @@ private:
         } catch (const std::exception &e) {
           pd->set_terminate();
           auto ti = pd->task_info.lock();
-          if (ti && ti->cur_task)
-            ti->cur_task->rcm = ECM{EC::BufferWriteError, e.what()};
+          TransferTask *cur_task = nullptr;
+          if (ti) {
+            std::lock_guard<std::mutex> lock(ti->mtx);
+            cur_task = ti->cur_task;
+          }
+          if (cur_task) {
+            cur_task->rcm = ECM{EC::BufferWriteError, e.what()};
+          }
           return 0;
         }
       }
@@ -946,9 +1177,19 @@ private:
                            const std::string &dst, WkProgressData *pd,
                            curl_read_callback read_callback) {
     std::lock_guard<std::recursive_mutex> lock(client->mtx);
+    auto ti = pd->task_info.lock();
+    TransferTask *cur_task = nullptr;
+    if (ti) {
+      std::lock_guard<std::mutex> tlock(ti->mtx);
+      cur_task = ti->cur_task;
+    }
+    if (!cur_task) {
+      pd->set_terminate();
+      return;
+    }
     ECM ecm = client->SetupPath(dst, false);
     if (ecm.first != EC::Success) {
-      pd->task_info.lock()->cur_task->rcm = ecm;
+      cur_task->rcm = ecm;
       pd->set_terminate();
       return;
     }
@@ -957,7 +1198,7 @@ private:
     curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
     curl_easy_setopt(curl, CURLOPT_READDATA, pd);
     curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE,
-                     (curl_off_t)pd->task_info.lock()->cur_task->size);
+                     static_cast<curl_off_t>(cur_task->size));
     curl_easy_setopt(curl, CURLOPT_FTP_CREATE_MISSING_DIRS, CURLFTP_CREATE_DIR);
 
     CURLcode res = curl_easy_perform(curl);
@@ -965,9 +1206,9 @@ private:
     if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
       pd->set_terminate();
     } else if (res != CURLE_OK) {
-      pd->task_info.lock()->cur_task->rcm =
-          ECM{EC::FTPUploadFailed,
-              AMStr::amfmt("Upload failed: {}", curl_easy_strerror(res))};
+      cur_task->rcm = ECM{EC::FTPUploadFailed,
+                          AMStr::amfmt("Upload failed: {}",
+                                       curl_easy_strerror(res))};
       pd->set_terminate();
     }
   }
@@ -978,9 +1219,19 @@ private:
                              curl_write_callback write_callback,
                              WkProgressData *pd) {
     std::lock_guard<std::recursive_mutex> lock(client->mtx);
+    auto ti = pd->task_info.lock();
+    TransferTask *cur_task = nullptr;
+    if (ti) {
+      std::lock_guard<std::mutex> tlock(ti->mtx);
+      cur_task = ti->cur_task;
+    }
+    if (!cur_task) {
+      pd->set_terminate();
+      return;
+    }
     ECM ecm = client->SetupPath(src, false);
     if (ecm.first != EC::Success) {
-      pd->task_info.lock()->cur_task->rcm = ecm;
+      cur_task->rcm = ecm;
       pd->set_terminate();
       return;
     }
@@ -991,9 +1242,9 @@ private:
     if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
       pd->set_terminate();
     } else if (res != CURLE_OK) {
-      pd->task_info.lock()->cur_task->rcm =
-          ECM{EC::FTPDownloadFailed,
-              AMStr::amfmt("Download failed: {}", curl_easy_strerror(res))};
+      cur_task->rcm = ECM{EC::FTPDownloadFailed,
+                          AMStr::amfmt("Download failed: {}",
+                                       curl_easy_strerror(res))};
       pd->set_terminate();
     }
   }
@@ -1044,29 +1295,14 @@ private:
 
   // Execute a single TaskInfo
   void ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
-    task_info->status = TaskStatus::Conducting;
-    task_info->start_time = timenow();
+    task_info->SetStatus(TaskStatus::Conducting);
+    task_info->start_time.store(timenow());
 
     if (task_info->callback.need_total_size_cb) {
-      task_info->callback.CallTotalSize(task_info->total_size);
+      task_info->callback.CallTotalSize(task_info->total_size.load());
     }
 
-    // Create or use existing WkProgressData
-    if (!task_info->pd) {
-      task_info->pd = std::make_shared<WkProgressData>(task_info);
-    }
-    if (!task_info->pd->inner_callback) {
-      std::weak_ptr<TaskInfo> ti_w = task_info;
-      std::weak_ptr<WkProgressData> pd_w = task_info->pd;
-      task_info->pd->inner_callback = [this, ti_w, pd_w](bool force) {
-        auto ti_s = ti_w.lock();
-        auto pd_s = pd_w.lock();
-        if (!ti_s || !pd_s) {
-          return;
-        }
-        this->InnerCallback(ti_s, *pd_s, force);
-      };
-    }
+    EnsureProgressData(task_info);
     auto &pd = *(task_info->pd);
     pd.task_info = task_info;
 
@@ -1114,7 +1350,7 @@ private:
       }
 
       // Setup cur_task pointer to this task in tasks vector
-      task_info->cur_task = &task;
+      task_info->SetCurrentTask(&task);
       task.transferred = 0;
       task.rcm = ECM(EC::Success, "");
       if (src_client->GetUID() == dst_client->GetUID() &&
@@ -1122,7 +1358,8 @@ private:
         pd.ring_buffer = nullptr;
       }
       pd.ring_buffer = std::make_shared<StreamRingBuffer>(
-          CalculateBufferSize(src_client, dst_client, task_info->buffer_size));
+          CalculateBufferSize(src_client, dst_client,
+                              task_info->buffer_size.load()));
 
       task.rcm = TransferSingleFile(src_client, dst_client, task_info);
       task.IsFinished = true;
@@ -1148,331 +1385,478 @@ private:
     //   task_info->rcm = {EC::Success, ""};
     // }
 
-    task_info->status = TaskStatus::Finished;
-    task_info->finished_time = timenow();
+    task_info->SetStatus(TaskStatus::Finished);
+    task_info->finished_time.store(timenow());
   }
 
-  // Worker thread function
-  void WorkerLoop() {
-    while (running.load()) {
-      std::shared_ptr<TaskInfo> task_info;
-      {
-        std::unique_lock<std::mutex> lock(queue_mtx);
-        queue_cv.wait(
-            lock, [this]() { return !running.load() || !task_queue.empty(); });
-        if (!running.load() && task_queue.empty()) {
+  /**
+   * @brief Worker thread function with affinity-aware scheduling.
+   */
+  void WorkerLoop(size_t thread_index) {
+    while (running_.load()) {
+      if (thread_index >= desired_thread_count_.load()) {
+        std::lock_guard<std::mutex> lock(queue_mtx_);
+        const bool has_affinity =
+            thread_index < affinity_queues_.size() &&
+            !affinity_queues_[thread_index].empty();
+        if (!has_affinity) {
           break;
         }
-        if (task_queue.empty()) {
-          continue;
-        }
-
-        task_info = std::move(task_queue.front());
-        task_queue.pop_front();
       }
 
-      // Set as conducting task
-      {
-        std::lock_guard<std::mutex> lock(conducting_mtx);
-        conducting_task = task_info;
+      auto task_opt = DequeueTask(thread_index);
+      if (!task_opt.has_value()) {
+        break;
       }
 
-      // Check if should skip
+      const auto &[task_id, task_info] = *task_opt;
+      SetConducting(thread_index, task_id, task_info);
+
+      EnsureProgressData(task_info);
+
       if (ShouldSkipTask(task_info)) {
-        std::lock_guard<std::mutex> lock(result_mtx);
-        results[task_info->id] = task_info;
-        {
-          std::lock_guard<std::mutex> lock2(conducting_mtx);
-          conducting_task = nullptr;
-        }
+        task_info->pd.reset();
+        HandleCompletedTask(task_info);
+        ClearConducting(thread_index);
         continue;
       }
 
-      // Execute task
-
       ExecuteTask(task_info);
-      task_info->pd = nullptr; // clear progress data
+      task_info->pd.reset();
 
-      // Store result and clear conducting
-      {
-        std::lock_guard<std::mutex> lock(result_mtx);
-
-        results[task_info->id] = task_info;
-      }
-      {
-        std::lock_guard<std::mutex> lock(conducting_mtx);
-        conducting_task = nullptr;
-      }
+      HandleCompletedTask(task_info);
+      ClearConducting(thread_index);
     }
+
+    ClearConducting(thread_index);
   }
 
 public:
+  /**
+   * @brief Construct a work manager with a default single worker thread.
+   */
   AMWorkManager() {
-    worker_thread = std::thread([this]() { WorkerLoop(); });
+    affinity_queues_.resize(1);
+    conducting_tasks_.resize(1);
+    conducting_infos_.resize(1);
+    worker_threads_.emplace_back([this]() { WorkerLoop(0); });
   }
 
+  /**
+   * @brief Stop all workers and join their threads.
+   */
   ~AMWorkManager() {
-    running.store(false);
-    queue_cv.notify_all();
-    if (worker_thread.joinable()) {
-      worker_thread.join();
+    running_.store(false);
+    queue_cv_.notify_all();
+    for (auto &thread : worker_threads_) {
+      if (thread.joinable()) {
+        thread.join();
+      }
     }
   }
 
-  // Set chunk size
+  /**
+   * @brief Set or get the chunk size used by transit transfers.
+   */
   size_t ChunkSize(int64_t size = -1) {
     if (size < 32 * AMKB) {
-      return chunk_size;
-    } else {
-      this->chunk_size = std::min<size_t>(size, AMMaxBufferSize);
-      return this->chunk_size;
+      return chunk_size_;
     }
+    chunk_size_ = std::min<size_t>(static_cast<size_t>(size), AMMaxBufferSize);
+    return chunk_size_;
   }
 
-  // Non-blocking transfer - returns task ID immediately
-  // Control (pause/resume/terminate) via wk control functions
-  std::string transfer(const TASKS &tasks,
-                       const std::shared_ptr<ClientMaintainer> &hostm,
-                       TransferCallback callback = TransferCallback(),
-                       ssize_t buffer_size = -1) {
-    auto task_info = std::make_shared<TaskInfo>();
-    task_info->id = GenerateUID();
-    task_info->submit_time = timenow();
-    task_info->status = TaskStatus::Pending;
+  /**
+   * @brief Adjust or query the worker thread count.
+   */
+  size_t ThreadCount(size_t new_count = 0) {
+    if (new_count == 0) {
+      return desired_thread_count_.load();
+    }
+
+    new_count = ClampThreadCount(new_count);
+    const size_t current = desired_thread_count_.load();
+    if (new_count == current) {
+      return current;
+    }
+
+    if (new_count > current) {
+      {
+        std::lock_guard<std::mutex> lock(queue_mtx_);
+        affinity_queues_.resize(new_count);
+      }
+      {
+        std::lock_guard<std::mutex> lock(conducting_mtx_);
+        conducting_tasks_.resize(new_count);
+        conducting_infos_.resize(new_count);
+      }
+
+      desired_thread_count_.store(new_count);
+      for (size_t idx = current; idx < new_count; ++idx) {
+        worker_threads_.emplace_back([this, idx]() { WorkerLoop(idx); });
+      }
+      queue_cv_.notify_all();
+      return new_count;
+    }
+
+    desired_thread_count_.store(new_count);
+    queue_cv_.notify_all();
+
+    while (true) {
+      bool extra_idle = true;
+      {
+        std::lock_guard<std::mutex> qlock(queue_mtx_);
+        for (size_t idx = new_count; idx < affinity_queues_.size(); ++idx) {
+          if (!affinity_queues_[idx].empty()) {
+            extra_idle = false;
+            break;
+          }
+        }
+      }
+      {
+        std::lock_guard<std::mutex> clock(conducting_mtx_);
+        for (size_t idx = new_count; idx < conducting_tasks_.size(); ++idx) {
+          if (!conducting_tasks_[idx].empty()) {
+            extra_idle = false;
+            break;
+          }
+        }
+      }
+      if (extra_idle) {
+        break;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+
+    for (size_t idx = new_count; idx < worker_threads_.size(); ++idx) {
+      if (worker_threads_[idx].joinable()) {
+        worker_threads_[idx].join();
+      }
+    }
+    worker_threads_.resize(new_count);
+
+    {
+      std::lock_guard<std::mutex> lock(queue_mtx_);
+      affinity_queues_.resize(new_count);
+    }
+    {
+      std::lock_guard<std::mutex> lock(conducting_mtx_);
+      conducting_tasks_.resize(new_count);
+      conducting_infos_.resize(new_count);
+    }
+
+    return new_count;
+  }
+
+  /**
+   * @brief Retrieve all currently active thread IDs.
+   */
+  std::vector<size_t> get_active_thread_ids() const {
+    const size_t count = desired_thread_count_.load();
+    std::vector<size_t> ids(count);
+    for (size_t idx = 0; idx < count; ++idx) {
+      ids[idx] = idx;
+    }
+    return ids;
+  }
+
+  /**
+   * @brief Submit an already-constructed TaskInfo object.
+   */
+  std::shared_ptr<TaskInfo> submit(const std::shared_ptr<TaskInfo> &task_info) {
+    if (!task_info) {
+      return nullptr;
+    }
+
+    if (task_info->id.empty()) {
+      task_info->id = GenerateUID();
+    }
+    task_info->submit_time.store(timenow());
+    task_info->SetStatus(TaskStatus::Pending);
+
+    EnsureProgressData(task_info);
+
+    uint64_t total_size = 0;
+    for (const auto &task : task_info->tasks) {
+      total_size += task.size;
+    }
+    task_info->total_size.store(total_size);
+    task_info->total_transferred_size.store(0);
+
+    const size_t requested_thread_id = task_info->thread_id.load();
+    bool affinity_valid = false;
+    {
+      std::lock_guard<std::mutex> lock(queue_mtx_);
+      affinity_valid = IsValidThreadId(requested_thread_id);
+    }
+    const AssignType assign_type =
+        affinity_valid ? AssignType::Affinity : AssignType::Public;
+    const size_t affinity_id = affinity_valid ? requested_thread_id : 0;
+
+    RegisterTask(task_info, assign_type, affinity_id);
+    queue_cv_.notify_all();
+    return task_info;
+  }
+
+  /**
+   * @brief Compatibility overload that builds a TaskInfo and submits it.
+   */
+  std::shared_ptr<TaskInfo>
+  transfer(const TASKS &tasks, const std::shared_ptr<ClientMaintainer> &hostm,
+           TransferCallback callback = TransferCallback(),
+           ssize_t buffer_size = -1, bool quiet = false,
+           size_t thread_id = 0) {
+    auto task_info = std::make_shared<TaskInfo>(quiet);
     task_info->tasks = tasks;
     task_info->hostm = hostm;
     task_info->callback = callback;
-    task_info->buffer_size = buffer_size;
-
-    // Create shared progress data for control
-    task_info->pd = std::make_shared<WkProgressData>(task_info);
-    {
-      std::weak_ptr<TaskInfo> ti_w = task_info;
-      std::weak_ptr<WkProgressData> pd_w = task_info->pd;
-      task_info->pd->inner_callback = [this, ti_w, pd_w](bool force) {
-        auto ti_s = ti_w.lock();
-        auto pd_s = pd_w.lock();
-        if (!ti_s || !pd_s) {
-          return;
-        }
-        this->InnerCallback(ti_s, *pd_s, force);
-      };
-    }
-
-    // Calculate total size
-    for (auto &task : task_info->tasks) {
-      task_info->total_size += task.size;
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(queue_mtx);
-      task_queue.push_back(task_info);
-    }
-    queue_cv.notify_one();
-    return task_info->id;
+    task_info->buffer_size.store(buffer_size);
+    task_info->thread_id.store(thread_id);
+    return submit(task_info);
   }
 
-  // Query task status
-  std::optional<TaskStatus> get_status(std::string id) {
+  /**
+   * @brief Query task status by ID.
+   */
+  std::optional<TaskStatus> get_status(const TaskId &id) {
     {
-      std::lock_guard<std::mutex> lock(queue_mtx);
-      for (const auto &task : task_queue) {
-        if (task->id == id) {
-          return task->status;
+      std::lock_guard<std::mutex> lock(registry_mtx_);
+      auto it = task_registry_.find(id);
+      if (it != task_registry_.end() && it->second.task_info) {
+        return it->second.task_info->GetStatus();
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(conducting_mtx_);
+      for (size_t idx = 0; idx < conducting_tasks_.size(); ++idx) {
+        if (conducting_tasks_[idx] == id && conducting_infos_[idx]) {
+          return conducting_infos_[idx]->GetStatus();
         }
       }
     }
     {
-      std::lock_guard<std::mutex> lock(conducting_mtx);
-      if (conducting_task && conducting_task->id == id) {
-        return conducting_task->status;
-      }
-    }
-    {
-      std::lock_guard<std::mutex> lock(result_mtx);
-      auto it = results.find(id);
-      if (it != results.end()) {
-        return it->second->status;
+      std::lock_guard<std::mutex> lock(result_mtx_);
+      auto it = results_.find(id);
+      if (it != results_.end() && it->second) {
+        return it->second->GetStatus();
       }
     }
     return std::nullopt;
   }
 
-  // Query task result (full info) - returns copy and removes from results
-  std::optional<TaskInfo> get_result(std::string id) {
-    std::lock_guard<std::mutex> lock(result_mtx);
-    auto it = results.find(id);
-    if (it != results.end()) {
-      TaskInfo result = *(it->second);
-      results.erase(it);
-      return result;
+  /**
+   * @brief Query task result and optionally remove it from the cache.
+   */
+  std::shared_ptr<TaskInfo> get_result(const TaskId &id,
+                                       bool remove = true) {
+    std::lock_guard<std::mutex> lock(result_mtx_);
+    auto it = results_.find(id);
+    if (it == results_.end()) {
+      return nullptr;
     }
-    return std::nullopt;
+    auto task_info = it->second;
+    if (remove) {
+      results_.erase(it);
+    }
+    return task_info;
   }
 
-  // Get task info (from queue, conducting, or results)
-  std::optional<TaskInfo> get_task(std::string id) {
+  /**
+   * @brief Get task info from registry, conducting set, or results cache.
+   */
+  std::shared_ptr<TaskInfo> get_task(const TaskId &id) {
     {
-      std::lock_guard<std::mutex> lock(queue_mtx);
-      for (const auto &task : task_queue) {
-        if (task->id == id) {
-          return *task;
+      std::lock_guard<std::mutex> lock(registry_mtx_);
+      auto it = task_registry_.find(id);
+      if (it != task_registry_.end()) {
+        return it->second.task_info;
+      }
+    }
+    {
+      std::lock_guard<std::mutex> lock(conducting_mtx_);
+      for (size_t idx = 0; idx < conducting_tasks_.size(); ++idx) {
+        if (conducting_tasks_[idx] == id) {
+          return conducting_infos_[idx];
         }
       }
     }
     {
-      std::lock_guard<std::mutex> lock(conducting_mtx);
-      if (conducting_task && conducting_task->id == id) {
-        return *conducting_task;
+      std::lock_guard<std::mutex> lock(result_mtx_);
+      auto it = results_.find(id);
+      if (it != results_.end()) {
+        return it->second;
       }
     }
-    {
-      std::lock_guard<std::mutex> lock(result_mtx);
-      auto it = results.find(id);
-      if (it != results.end()) {
-        return *(it->second);
-      }
-    }
-    return std::nullopt;
+    return nullptr;
   }
 
-  // Pause a task by ID
-  bool pause(std::string id) {
+  /**
+   * @brief Pause a task by ID.
+   */
+  bool pause(const TaskId &id) {
+    auto task_info = get_task(id);
+    if (!task_info || !task_info->pd) {
+      return false;
+    }
+    task_info->pd->set_pause();
+    return true;
+  }
+
+  /**
+   * @brief Resume a task by ID.
+   */
+  bool resume(const TaskId &id) {
+    auto task_info = get_task(id);
+    if (!task_info || !task_info->pd) {
+      return false;
+    }
+    task_info->pd->set_running();
+    return true;
+  }
+
+  /**
+   * @brief Terminate a task by ID and optionally wait for completion.
+   */
+  std::shared_ptr<TaskInfo> terminate(const TaskId &id,
+                                      int timeout_ms = 5000) {
+    std::shared_ptr<TaskInfo> pending_task = nullptr;
     {
-      std::lock_guard<std::mutex> lock(queue_mtx);
-      for (auto &task : task_queue) {
-        if (task->id == id && task->pd) {
-          task->pd->set_pause();
-          return true;
+      std::scoped_lock<std::mutex, std::mutex> lock(registry_mtx_, queue_mtx_);
+      auto it = task_registry_.find(id);
+      if (it != task_registry_.end() && it->second.task_info) {
+        bool in_queue = false;
+        if (it->second.assign_type == AssignType::Affinity &&
+            it->second.affinity_id < affinity_queues_.size()) {
+          const auto &queue = affinity_queues_[it->second.affinity_id];
+          in_queue = std::find(queue.begin(), queue.end(), id) != queue.end();
+        } else {
+          in_queue =
+              std::find(public_queue_.begin(), public_queue_.end(), id) !=
+              public_queue_.end();
         }
-      }
-    }
-    {
-      std::lock_guard<std::mutex> lock(conducting_mtx);
-      if (conducting_task && conducting_task->id == id && conducting_task->pd) {
-        conducting_task->pd->set_pause();
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // Resume a task by ID
-  bool resume(std::string id) {
-    {
-      std::lock_guard<std::mutex> lock(queue_mtx);
-      for (auto &task : task_queue) {
-        if (task->id == id && task->pd) {
-          task->pd->set_running();
-          return true;
-        }
-      }
-    }
-    {
-      std::lock_guard<std::mutex> lock(conducting_mtx);
-      if (conducting_task && conducting_task->id == id && conducting_task->pd) {
-        conducting_task->pd->set_running();
-        return true;
-      }
-    }
-    return false;
-  }
-
-  // Terminate a task by ID and return task info
-  // For pending tasks, moves them to results immediately
-  // For conducting tasks, waits for completion
-  std::optional<TaskInfo> terminate(std::string id, int timeout_ms = 5000) {
-    bool found_in_conducting = false;
-    // Check pending tasks first
-    {
-      std::lock_guard<std::mutex> lock(queue_mtx);
-      for (auto it = task_queue.begin(); it != task_queue.end(); ++it) {
-        if ((*it)->id == id) {
-          auto task = *it;
-          if (task->pd) {
-            task->pd->set_terminate();
+        if (in_queue) {
+          auto task_info = it->second.task_info;
+          if (task_info->pd) {
+            task_info->pd->set_terminate();
           }
-          task->rcm = {EC::Terminate, "Task terminated before start"};
-          task->status = TaskStatus::Finished;
-          task->finished_time = timenow();
-          TaskInfo result = *task;
-          // Move to results
-          {
-            std::lock_guard<std::mutex> rlock(result_mtx);
-            results[task->id] = task;
+          task_info->SetResult({EC::Terminate, "Task terminated before start"});
+          task_info->SetStatus(TaskStatus::Finished);
+          task_info->finished_time.store(timenow());
+
+          if (it->second.assign_type == AssignType::Affinity &&
+              it->second.affinity_id < affinity_queues_.size()) {
+            affinity_queues_[it->second.affinity_id].remove(id);
+          } else {
+            public_queue_.remove(id);
           }
-          task_queue.erase(it);
-          return result;
+          task_registry_.erase(it);
+          queue_cv_.notify_all();
+          pending_task = task_info;
         }
       }
     }
-    // Check conducting task
+
+    if (pending_task) {
+      HandleCompletedTask(pending_task);
+      return pending_task;
+    }
+
+    std::shared_ptr<TaskInfo> conducting_task = nullptr;
     {
-      std::lock_guard<std::mutex> lock(conducting_mtx);
-      if (conducting_task && conducting_task->id == id) {
-        if (conducting_task->pd) {
-          conducting_task->pd->set_terminate();
+      std::lock_guard<std::mutex> lock(conducting_mtx_);
+      for (size_t idx = 0; idx < conducting_tasks_.size(); ++idx) {
+        if (conducting_tasks_[idx] == id) {
+          conducting_task = conducting_infos_[idx];
+          break;
         }
-        found_in_conducting = true;
       }
     }
-    // If not found anywhere, return immediately
-    if (!found_in_conducting) {
-      return std::nullopt;
+
+    if (!conducting_task) {
+      return nullptr;
     }
-    // Wait for conducting task to finish
-    int64_t start = am_ms();
+
+    if (conducting_task->pd) {
+      conducting_task->pd->set_terminate();
+    }
+
+    const int64_t start = am_ms();
     while (timeout_ms < 0 || (am_ms() - start) < timeout_ms) {
-      {
-        std::lock_guard<std::mutex> lock(result_mtx);
-        auto it = results.find(id);
-        if (it != results.end()) {
-          TaskInfo result = *(it->second);
-          results.erase(it);
-          return result;
-        }
+      auto result = get_result(id, true);
+      if (result) {
+        return result;
+      }
+      if (conducting_task->GetStatus() == TaskStatus::Finished &&
+          conducting_task->result_callback) {
+        return conducting_task;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    return std::nullopt;
+    return nullptr;
   }
 
-  // Get number of pending tasks
+  /**
+   * @brief Get the total number of pending tasks across all queues.
+   */
   size_t pending_count() {
-    std::lock_guard<std::mutex> lock(queue_mtx);
-    return task_queue.size();
+    std::lock_guard<std::mutex> lock(queue_mtx_);
+    size_t count = public_queue_.size();
+    for (const auto &queue : affinity_queues_) {
+      count += queue.size();
+    }
+    return count;
   }
 
-  // Check if any task is currently conducting
+  /**
+   * @brief Check whether any task is currently conducting.
+   */
   bool is_conducting() {
-    std::lock_guard<std::mutex> lock(conducting_mtx);
-    return conducting_task != nullptr;
+    std::lock_guard<std::mutex> lock(conducting_mtx_);
+    for (const auto &task_id : conducting_tasks_) {
+      if (!task_id.empty()) {
+        return true;
+      }
+    }
+    return false;
   }
 
-  // Get currently conducting task ID (0 if none)
+  /**
+   * @brief Get the first currently conducting task ID, if any.
+   */
   std::string get_conducting_id() {
-    std::lock_guard<std::mutex> lock(conducting_mtx);
-    return conducting_task ? conducting_task->id : 0;
+    std::lock_guard<std::mutex> lock(conducting_mtx_);
+    for (const auto &task_id : conducting_tasks_) {
+      if (!task_id.empty()) {
+        return task_id;
+      }
+    }
+    return "";
   }
 
-  // Clear finished results
+  /**
+   * @brief Clear all finished results from the cache.
+   */
   void clear_results() {
-    std::lock_guard<std::mutex> lock(result_mtx);
-    results.clear();
+    std::lock_guard<std::mutex> lock(result_mtx_);
+    results_.clear();
   }
 
-  // Remove a specific result
-  bool remove_result(std::string id) {
-    std::lock_guard<std::mutex> lock(result_mtx);
-    return results.erase(id) > 0;
+  /**
+   * @brief Remove a specific result from the cache.
+   */
+  bool remove_result(const TaskId &id) {
+    std::lock_guard<std::mutex> lock(result_mtx_);
+    return results_.erase(id) > 0;
   }
 
-  // Get all result IDs
+  /**
+   * @brief Get all result IDs currently cached.
+   */
   std::vector<std::string> get_result_ids() {
-    std::lock_guard<std::mutex> lock(result_mtx);
+    std::lock_guard<std::mutex> lock(result_mtx_);
     std::vector<std::string> ids;
-    ids.reserve(results.size());
-    for (const auto &[id, _] : results) {
+    ids.reserve(results_.size());
+    for (const auto &[id, _] : results_) {
       ids.push_back(id);
     }
     return ids;
