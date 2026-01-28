@@ -12,19 +12,30 @@
 class AMTransferManager {
 public:
   using ID = std::string;
-  using ResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
+  using UserResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
+  using PublicResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
+  using ResultCallbackFn = std::function<void(
+      std::shared_ptr<TaskInfo>, PublicResultCallback, UserResultCallback)>;
 
   AMTransferManager(AMConfigManager &cfg, AMClientManager &client_manager);
 
-  void SetResultCallback(ResultCallback cb = {});
+  /**
+   * @brief Set the public result callback wrapper for all task completions.
+   */
+  void SetPublicResultCallback(PublicResultCallback cb = {});
+  void SetResultCallback(UserResultCallback cb = {});
+  [[nodiscard]] TaskInfo::ResultCallback
+  BindResultCallback(UserResultCallback user_cb);
   std::list<std::shared_ptr<TaskInfo>> GetHistory() const;
+  void ResultCallback(std::shared_ptr<TaskInfo> task_info,
+                      PublicResultCallback public_cb,
+                      UserResultCallback user_cb);
 
   ECM transfer(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
                const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
-  ECM transfer_async(const std::vector<UserTransferSet> &transfer_sets,
-                     bool quiet,
-                     const std::shared_ptr<InterruptFlag> &interrupt_flag =
-                         nullptr);
+  ECM transfer_async(
+      const std::vector<UserTransferSet> &transfer_sets, bool quiet,
+      const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
 
 private:
   struct PreparedTasks;
@@ -40,7 +51,7 @@ private:
   void
   ReturnClientsToIdle_(const std::vector<std::shared_ptr<BaseClient>> &clients,
                        const std::vector<std::string> &keys);
-  ResultCallback
+  TaskInfo::ResultCallback
   BuildResultCallback_(std::atomic<int> &remaining,
                        std::condition_variable &done_cv, std::mutex &done_mtx,
                        std::atomic<bool> &terminated,
@@ -60,5 +71,6 @@ private:
   mutable std::mutex history_mtx_;
   std::list<std::shared_ptr<TaskInfo>> history_;
   mutable std::mutex callback_mtx_;
-  ResultCallback user_result_cb_ = {};
+  PublicResultCallback public_result_cb_ = {};
+  UserResultCallback user_result_cb_ = {};
 };
