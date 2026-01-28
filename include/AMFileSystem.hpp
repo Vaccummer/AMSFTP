@@ -1,9 +1,8 @@
 #pragma once
-
-#include "AMClient/AMClientManager.hpp"
+#include "AMClientManager.hpp"
 #include "AMConfigManager.hpp"
-#include "AMEnum.hpp"
 #include "AMPromptManager.hpp"
+#include "base/AMEnum.hpp"
 #include <string>
 #include <utility>
 #include <vector>
@@ -41,9 +40,10 @@ public:
   ECM print_clients(amf interrupt_flag = nullptr);
   /** Print stat info for a path. */
   ECM stat(const std::string &path, amf interrupt_flag = nullptr);
-  /** List directory entries; list_like enables long format, show_all shows dot entries. */
-  ECM ls(const std::string &path, bool list_like = false,
-         bool show_all = false, amf interrupt_flag = nullptr);
+  /** List directory entries; list_like enables long format, show_all shows dot
+   * entries. */
+  ECM ls(const std::string &path, bool list_like = false, bool show_all = false,
+         amf interrupt_flag = nullptr);
   /** Print total size of a path. */
   ECM getsize(const std::string &path, amf interrupt_flag = nullptr);
   /** Find paths matching the pattern. */

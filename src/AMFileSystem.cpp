@@ -1,8 +1,8 @@
 #include "AMFileSystem.hpp"
 #include "AMCommonTools.hpp"
-#include "AMDataClass.hpp"
-#include "AMEnum.hpp"
-#include "AMPath.hpp"
+#include "base/AMDataClass.hpp"
+#include "base/AMEnum.hpp"
+#include "base/AMPath.hpp"
 #include <algorithm>
 #include <cctype>
 #include <iomanip>
@@ -106,8 +106,7 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
     last_cd_.clear();
     from_history = true;
     std::string resolved_path;
-    ClientRef client =
-        ResolveClientForPath(target, &resolved_path, true, flag);
+    ClientRef client = ResolveClientForPath(target, &resolved_path, true, flag);
     if (!client.is_valid()) {
       return {EC::ClientNotFound, "Client not found"};
     }
@@ -622,8 +621,8 @@ AMFileSystem::ECM AMFileSystem::PrintClientStatus(const ClientRef &client,
                                                   bool update,
                                                   amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  ECM rcm = update ? client.client->Check(flag, -1, -1)
-                   : client.client->GetState();
+  ECM rcm =
+      update ? client.client->Check(flag, -1, -1) : client.client->GetState();
   std::string cwd = GetOrInitWorkdir(client.client);
   std::string prefix =
       (rcm.first == EC::Success ? "✅ " : "❌ ") + client.nickname + "@" + cwd;

@@ -2,7 +2,6 @@
 // 标准库
 #include <algorithm>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <ctime>
@@ -10,14 +9,13 @@
 #include <functional>
 #include <iostream>
 #include <list>
-#include <map>
 #include <mutex>
+#include <numeric>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-
 
 // 自身依赖
 #include "AMClient/AMBaseClient.hpp"
@@ -25,9 +23,6 @@
 #include "AMClient/AMLocalClient.hpp"
 #include "AMClient/AMSFTPClient.hpp"
 #include "AMCommonTools.hpp"
-#include "AMDataClass.hpp"
-#include "AMEnum.hpp"
-#include "AMPath.hpp"
 #include "AMPromptManager.hpp"
 
 class UnionFileHandle {
@@ -282,7 +277,7 @@ using AMCilent =
 using ECM = std::pair<ErrorCode, std::string>;
 using EC = ErrorCode;
 
-inline std::optional<AMCilent>
+inline std::shared_ptr<BaseClient>
 CreateClient(const ConRequst &requeset, ClientProtocol protocol,
              ssize_t trace_num = 10, TraceCallback trace_cb = {},
              ssize_t buffer_size = 8 * AMMB, std::vector<std::string> keys = {},
@@ -291,15 +286,14 @@ CreateClient(const ConRequst &requeset, ClientProtocol protocol,
     auto client = std::make_shared<AMSFTPClient>(
         requeset, keys, trace_num, std::move(trace_cb), std::move(auth_cb));
     client->TransferRingBufferSize(buffer_size);
-    return client;
+    return std::dynamic_pointer_cast<BaseClient>(client);
   } else if (protocol == ClientProtocol::FTP) {
     auto client = std::make_shared<AMFTPClient>(
         requeset, trace_num, std::move(trace_cb), std::move(auth_cb));
     client->TransferRingBufferSize(buffer_size);
-    return client;
-  } else {
-    return std::nullopt;
+    return std::dynamic_pointer_cast<BaseClient>(client);
   }
+  return nullptr;
 }
 
 class ClientMaintainer {
@@ -307,10 +301,7 @@ private:
   std::unordered_map<std::string, std::shared_ptr<BaseClient>> hosts;
   std::atomic<bool> is_heartbeat;
   std::thread heartbeat_thread;
-  using DisconnectCallback =
-      std::function<void(const std::shared_ptr<BaseClient> &, const ECM &)>;
-  DisconnectCallback disconnect_cb;
-  bool is_disconnect_cb = false;
+
   std::recursive_mutex beat_mtx;
 
   void HeartbeatAct(int interval_s) {
@@ -341,6 +332,10 @@ private:
   }
 
 public:
+  using DisconnectCallback =
+      std::function<void(const std::shared_ptr<BaseClient> &, const ECM &)>;
+  DisconnectCallback disconnect_cb;
+  bool is_disconnect_cb = false;
   std::shared_ptr<AMLocalClient> local_client;
   ~ClientMaintainer() {
     is_heartbeat.store(false);
@@ -366,7 +361,7 @@ public:
                    std::unordered_map<std::string, std::shared_ptr<BaseClient>>
                        init_hosts = {}) {
     // 初始化本地客户端
-    if (local_client) {
+    if (local_client && local_client->GetProtocol() == ClientProtocol::LOCAL) {
       this->local_client = std::move(local_client);
     } else {
       this->local_client =
@@ -1574,14 +1569,13 @@ public:
     task_info->submit_time.store(timenow());
     task_info->SetStatus(TaskStatus::Pending);
 
-    uint64_t total_size = 0;
-    if (!task_info->tasks) {
-      task_info->tasks = std::make_shared<TASKS>();
+    if (task_info->total_size.load() == 0) {
+      task_info->total_size.store(
+          std::accumulate(task_info->tasks->begin(), task_info->tasks->end(), 0,
+                          [](uint64_t sum, const TransferTask &task) {
+                            return sum + task.size;
+                          }));
     }
-    for (const auto &task : *(task_info->tasks)) {
-      total_size += task.size;
-    }
-    task_info->total_size.store(total_size);
     task_info->total_transferred_size.store(0);
     task_info->OnWhichThread.store(-1);
 
@@ -1600,12 +1594,19 @@ public:
    * @brief Compatibility overload that builds a TaskInfo and submits it.
    */
   std::shared_ptr<TaskInfo>
-  transfer(std::shared_ptr<TASKS> tasks,
-           const std::shared_ptr<ClientMaintainer> &hostm,
-           TransferCallback callback = TransferCallback(),
-           ssize_t buffer_size = -1, bool quiet = false, int thread_id = -1) {
+  cre_taskinfo(std::shared_ptr<TASKS> tasks,
+               const std::shared_ptr<ClientMaintainer> &hostm,
+               TransferCallback callback = TransferCallback(),
+               ssize_t buffer_size = -1, bool quiet = false,
+               int thread_id = -1) {
     auto task_info = std::make_shared<TaskInfo>(quiet);
+    task_info->id = GenerateUID();
     task_info->tasks = tasks;
+    task_info->total_size.store(
+        std::accumulate(tasks->begin(), tasks->end(), 0,
+                        [](uint64_t sum, const TransferTask &task) {
+                          return sum + task.size;
+                        }));
     task_info->hostm = hostm;
     task_info->callback = callback;
     task_info->buffer_size.store(buffer_size);
@@ -2010,58 +2011,4 @@ public:
     }
     return {ECM(EC::Success, ""), tasks};
   };
-};
-
-class AMTransferManager {
-public:
-  using ID = std::string;
-  using ResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
-
-  AMTransferManager(AMConfigManager &cfg, AMClientManager &client_manager);
-
-  void SetResultCallback(ResultCallback cb = {});
-  std::list<std::shared_ptr<TaskInfo>> GetHistory() const;
-
-  ECM transfer(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-               std::atomic<bool> *interrupt_flag = nullptr);
-  ECM transfer_async(const std::vector<UserTransferSet> &transfer_sets,
-                     bool quiet, std::atomic<bool> *interrupt_flag = nullptr);
-
-private:
-  struct PreparedTasks;
-
-  int ResolveRefreshIntervalMs_() const;
-  static std::pair<std::string, std::string>
-  ParseAddress_(const std::string &input);
-  static bool HasWildcard_(const std::string &path);
-  bool ConfirmWildcard_(const std::vector<PathInfo> &matches);
-  std::pair<ECM, std::shared_ptr<BaseClient>>
-  AcquireClient_(const std::string &nickname,
-                 const std::shared_ptr<InterruptFlag> &flag,
-                 std::atomic<bool> *interrupt_flag);
-  void
-  ReturnClientsToIdle_(const std::vector<std::shared_ptr<BaseClient>> &clients,
-                       const std::vector<std::string> &keys);
-  ResultCallback
-  BuildResultCallback_(std::atomic<int> &remaining,
-                       std::condition_variable &done_cv, std::mutex &done_mtx,
-                       std::atomic<bool> &terminated,
-                       std::vector<std::shared_ptr<BaseClient>> clients,
-                       std::vector<std::string> client_keys);
-  std::pair<ECM, PreparedTasks>
-  PrepareTasks_(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-                const std::shared_ptr<InterruptFlag> &flag,
-                std::atomic<bool> *interrupt_flag);
-
-private:
-  AMConfigManager &config_;
-  AMClientManager &client_manager_;
-  AMPromptManager &prompt_;
-  AMWorkManager worker_;
-  mutable std::mutex idle_mtx_;
-  std::unordered_map<ID, std::list<std::shared_ptr<BaseClient>>> idle_pool_;
-  mutable std::mutex history_mtx_;
-  std::list<std::shared_ptr<TaskInfo>> history_;
-  mutable std::mutex callback_mtx_;
-  ResultCallback user_result_cb_ = {};
 };
