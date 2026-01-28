@@ -1,6 +1,6 @@
 #pragma once
-#include "AMClient/AMCore.hpp"
 #include "AMConfigManager.hpp"
+#include "AMIOCore.hpp"
 #include "AMLogManager.hpp"
 #include <iostream>
 #include <optional>
@@ -254,11 +254,11 @@ private:
   static std::shared_ptr<AMLocalClient>
   CreateLocalClient_(AMConfigManager &cfg, AMLogManager &log_manager) {
     auto trace_cb = log_manager.TraceCallbackFunc();
-    auto client =
-        std::make_shared<AMLocalClient>(ConRequst("local", "", ""), 10,
-                                        std::move(trace_cb));
+    auto client = std::make_shared<AMLocalClient>(ConRequst("local", "", ""),
+                                                  10, std::move(trace_cb));
 
-    std::string work_dir = cfg.GetSettingString({"LocalClient", "work_dir"}, "");
+    std::string work_dir =
+        cfg.GetSettingString({"LocalClient", "work_dir"}, "");
     if (!work_dir.empty()) {
       client->home_dir = AMPathStr::UnifyPathSep(work_dir, "/");
       std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);

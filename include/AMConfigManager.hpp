@@ -1,6 +1,6 @@
 #pragma once
-#include "AMCommonTools.hpp"
 #include "AMPromptManager.hpp"
+#include "base/AMCommonTools.hpp"
 #include "base/AMDataClass.hpp"
 #include "base/AMEnum.hpp"
 #include <filesystem>
@@ -102,6 +102,10 @@ private:
   std::filesystem::path root_dir_;
   std::filesystem::path config_path_;
   std::filesystem::path settings_path_;
+  /** JSON schema path for config.toml filtering. */
+  std::filesystem::path config_schema_path_;
+  /** JSON schema path for settings.toml filtering. */
+  std::filesystem::path settings_schema_path_;
   toml::table config_table_;
   toml::table settings_table_;
 

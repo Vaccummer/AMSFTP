@@ -22,8 +22,9 @@
 #include "AMClient/AMFTPClient.hpp"
 #include "AMClient/AMLocalClient.hpp"
 #include "AMClient/AMSFTPClient.hpp"
-#include "AMCommonTools.hpp"
 #include "AMPromptManager.hpp"
+#include "base/AMCommonTools.hpp"
+
 
 class UnionFileHandle {
 public:
