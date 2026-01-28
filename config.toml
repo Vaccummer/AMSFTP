@@ -2,14 +2,15 @@
 
 [[HOSTS]]
 nickname = 'example'
+protocol = 'sftp'
+trash_dir = '/home/David/trash'
+username = 'ls'
 buffer_size = 20000000
 hostname = 'ss'
 keyfile = ''
 password = '5987'
 port = 23
-protocol = 'sftp'
-trash_dir = '/home/David/trash'
-username = 'ls'
+
 
 [[HOSTS]]
 nickname = 'wsl'

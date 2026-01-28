@@ -75,6 +75,7 @@ private:
   };
 
   static void OnExit();
+  void CloseHandles();
   Status EnsureInitialized(const char *caller) const;
   [[nodiscard]] std::string ValueToString(const Value &value) const;
   [[nodiscard]] std::string StyledValue(const std::string &value,
@@ -108,6 +109,10 @@ private:
   std::filesystem::path settings_schema_path_;
   toml::table config_table_;
   toml::table settings_table_;
+  nlohmann::ordered_json config_json_;
+  nlohmann::ordered_json settings_json_;
+  ConfigHandle *config_handle_ = nullptr;
+  ConfigHandle *settings_handle_ = nullptr;
 
   std::vector<FormatPath> config_filters_;
   std::vector<FormatPath> settings_filters_;

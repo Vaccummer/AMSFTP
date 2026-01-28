@@ -26,6 +26,9 @@ CFGFFI_API ConfigHandle *cfgffi_read(const char *path, const char *schema_json,
 // 获取过滤后的 JSON（UTF-8）。返回内存由 Rust 分配，需 cfgffi_free_string 释放
 CFGFFI_API char *cfgffi_get_json(const ConfigHandle *h);
 
+// 获取过滤后的 TOML（UTF-8）。返回内存由 Rust 分配，需 cfgffi_free_string 释放
+CFGFFI_API char *cfgffi_get_toml(const ConfigHandle *h);
+
 // 写回 TOML：
 // - new_json 是 UTF-8 JSON 字符串（会按 schema 再过滤一次）
 // - 原有 key 顺序不变；新增 key 追加到末尾
@@ -35,6 +38,12 @@ CFGFFI_API int cfgffi_write(ConfigHandle *h, const char *out_path,
 
 // 可选：直接写回到 read 的原路径
 CFGFFI_API int cfgffi_write_inplace(ConfigHandle *h, const char *new_json,
+                                    char **out_err);
+
+// 调试：比较 Rust 侧过滤后的 TOML key 顺序与生成 JSON 的 key 顺序
+// 返回 JSON 字符串：{"same":bool,"before":[...],"after":[...]}
+// 返回内存由 Rust 分配，需 cfgffi_free_string 释放
+CFGFFI_API char *cfgffi_debug_order(const char *path, const char *schema_json,
                                     char **out_err);
 
 // 释放

@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <fstream>
 #include <iomanip>
+#include <limits>
 #include <optional>
 #include <regex>
 #include <sstream>
@@ -16,9 +18,39 @@ using Path = AMConfigManager::Path;
 using Value = AMConfigManager::Value;
 using ClientConfig = AMConfigManager::ClientConfig;
 using EC = ErrorCode;
+using Json = nlohmann::ordered_json;
 
 Status Ok() { return {"", 0}; }
 Status Err(const std::string &msg, int code = 1) { return {msg, code}; }
+
+bool JsonArrayAllScalar(const Json &arr) {
+  for (const auto &child : arr) {
+    if (!(child.is_null() || child.is_boolean() || child.is_number() ||
+          child.is_string())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+std::string JsonScalarToString(const Json &value) {
+  if (value.is_string())
+    return value.get<std::string>();
+  if (value.is_boolean())
+    return value.get<bool>() ? "true" : "false";
+  if (value.is_number_integer())
+    return std::to_string(value.get<int64_t>());
+  if (value.is_number_unsigned())
+    return std::to_string(value.get<uint64_t>());
+  if (value.is_number_float()) {
+    std::ostringstream oss;
+    oss << value.get<double>();
+    return oss.str();
+  }
+  if (value.is_null())
+    return "null";
+  return value.dump();
+}
 
 void PrintLine(const std::string &value) {
   AMPromptManager::Instance().Print(value);
@@ -56,25 +88,25 @@ std::string ToLowerCopy(const std::string &value) {
   return out;
 }
 
-std::optional<std::string> GetStringField(const toml::table &tbl,
+std::optional<std::string> GetStringField(const Json &obj,
                                           const std::string &key);
-std::optional<int64_t> GetIntField(const toml::table &tbl,
-                                   const std::string &key);
+std::optional<int64_t> GetIntField(const Json &obj, const std::string &key);
 
 const std::vector<std::string> kHostFields = {
     "username", "hostname",  "port",     "keyfile",
     "password", "trash_dir", "protocol", "buffer_size",
 };
 
-const toml::array *GetHostsArray(const toml::table &root) {
-  const toml::node *node = root.get("HOSTS");
-  if (!node || !node->is_array()) {
+const Json *GetHostsArray(const Json &root) {
+  if (!root.is_object())
     return nullptr;
-  }
-  return node->as_array();
+  auto it = root.find("HOSTS");
+  if (it == root.end() || !it->is_array())
+    return nullptr;
+  return &(*it);
 }
 
-bool IsHostValid(const toml::table &tbl) {
+bool IsHostValid(const Json &tbl) {
   auto nickname = GetStringField(tbl, "nickname");
   if (!nickname || nickname->empty())
     return false;
@@ -82,64 +114,6 @@ bool IsHostValid(const toml::table &tbl) {
   if (!hostname || hostname->empty())
     return false;
   return true;
-}
-
-toml::array *EnsureHostsArray(toml::table &root) {
-  toml::node *node = root.get("HOSTS");
-  if (node) {
-    if (node->is_array()) {
-      return node->as_array();
-    }
-    root.erase("HOSTS");
-  }
-  auto inserted = root.insert("HOSTS", toml::array{});
-  return inserted.first->second.as_array();
-}
-
-const toml::table *FindHostTable(const toml::table &root,
-                                 const std::string &nickname,
-                                 std::size_t *out_index = nullptr) {
-  const toml::array *arr = GetHostsArray(root);
-  if (!arr)
-    return nullptr;
-
-  for (std::size_t i = 0; i < arr->size(); ++i) {
-    const toml::node &node = (*arr)[i];
-    if (!node.is_table())
-      continue;
-    const toml::table &tbl = *node.as_table();
-    if (!IsHostValid(tbl))
-      continue;
-    auto name = GetStringField(tbl, "nickname");
-    if (name && *name == nickname) {
-      if (out_index)
-        *out_index = i;
-      return &tbl;
-    }
-  }
-  return nullptr;
-}
-
-toml::table *FindHostTableMutable(toml::table &root,
-                                  const std::string &nickname,
-                                  std::size_t *out_index = nullptr) {
-  toml::array *arr = EnsureHostsArray(root);
-  if (!arr)
-    return nullptr;
-
-  for (std::size_t i = 0; i < arr->size(); ++i) {
-    toml::node &node = (*arr)[i];
-    if (!node.is_table())
-      continue;
-    toml::table &tbl = *node.as_table();
-    auto name = GetStringField(tbl, "nickname");
-    if (name && *name == nickname) {
-      if (out_index)
-        *out_index = i;
-      return &tbl;
-    }
-  }
-  return nullptr;
 }
 
 bool ParseIndex(const std::string &value, std::size_t *out) {
@@ -156,76 +130,132 @@ bool ParseIndex(const std::string &value, std::size_t *out) {
   return true;
 }
 
-const toml::node *FindNode(const toml::table &root, const Path &path) {
-  const toml::node *current = &root;
-  for (const auto &seg : path) {
-    if (current->is_table()) {
-      const toml::table &tbl = *current->as_table();
-      current = tbl.get(seg);
-    } else if (current->is_array()) {
-      std::size_t index = 0;
-      if (!ParseIndex(seg, &index))
-        return nullptr;
-      const toml::array &arr = *current->as_array();
-      if (index >= arr.size())
-        return nullptr;
-      current = &arr[index];
-    } else {
-      return nullptr;
-    }
-    if (!current)
-      return nullptr;
+bool ReadTextFile(const std::filesystem::path &path, std::string *out,
+                  std::string *error) {
+  if (!out) {
+    if (error)
+      *error = "null output buffer";
+    return false;
   }
-  return current;
+  std::ifstream in(path, std::ios::in | std::ios::binary);
+  if (!in.is_open()) {
+    if (error)
+      *error = "failed to open file";
+    return false;
+  }
+  std::ostringstream oss;
+  oss << in.rdbuf();
+  if (!in.good() && !in.eof()) {
+    if (error)
+      *error = "failed to read file";
+    return false;
+  }
+  *out = oss.str();
+  return true;
 }
 
-bool NodeToValue(const toml::node &node, Value *out) {
+std::string LoadSchemaJson(const std::filesystem::path &schema_path,
+                           std::string *error) {
+  if (schema_path.empty())
+    return "{}";
+  std::string json;
+  std::string read_error;
+  if (!ReadTextFile(schema_path, &json, &read_error)) {
+    if (error)
+      *error = "failed to read schema: " + read_error;
+    return "{}";
+  }
+  if (json.empty())
+    return "{}";
+  return json;
+}
+
+bool EnsureFileExists(const std::filesystem::path &path, std::string *error) {
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(), ec);
+  if (ec) {
+    if (error)
+      *error = ec.message();
+    return false;
+  }
+  if (!std::filesystem::exists(path, ec)) {
+    std::ofstream out(path);
+    if (!out.is_open()) {
+      if (error)
+        *error = "failed to create file";
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ParseJsonString(const std::string &text, Json *out, std::string *error) {
+  if (!out) {
+    if (error)
+      *error = "null json output";
+    return false;
+  }
+  try {
+    *out = Json::parse(text);
+    return true;
+  } catch (const std::exception &e) {
+    if (error)
+      *error = e.what();
+    return false;
+  }
+}
+
+const Json *FindJsonNode(const Json &root, const Path &path) {
+  const Json *node = &root;
+  for (const auto &seg : path) {
+    if (node->is_object()) {
+      auto it = node->find(seg);
+      if (it == node->end())
+        return nullptr;
+      node = &(*it);
+      continue;
+    }
+    if (node->is_array()) {
+      std::size_t idx = 0;
+      if (!ParseIndex(seg, &idx) || idx >= node->size())
+        return nullptr;
+      node = &(*node)[idx];
+      continue;
+    }
+    return nullptr;
+  }
+  return node;
+}
+
+bool NodeToValue(const Json &node, Value *out) {
   if (!out)
     return false;
-  if (auto v = node.value<int64_t>()) {
-    *out = *v;
+  if (node.is_number_integer()) {
+    *out = node.get<int64_t>();
     return true;
   }
-  if (auto v = node.value<bool>()) {
-    *out = *v;
+  if (node.is_boolean()) {
+    *out = node.get<bool>();
     return true;
   }
-  if (auto v = node.value<std::string>()) {
-    *out = *v;
+  if (node.is_string()) {
+    *out = node.get<std::string>();
     return true;
   }
-  if (auto v = node.value<double>()) {
+  if (node.is_number_float()) {
     std::ostringstream oss;
-    oss << *v;
+    oss << node.get<double>();
     *out = oss.str();
     return true;
   }
   if (node.is_array()) {
-    const toml::array &arr = *node.as_array();
+    const Json &arr = node;
+    if (!JsonArrayAllScalar(arr))
+      return false;
     std::vector<std::string> items;
     items.reserve(arr.size());
     for (const auto &child : arr) {
-      if (!child.is_value())
-        return false;
-      if (auto s = child.value<std::string>()) {
-        items.push_back(*s);
-        continue;
-      }
-      if (auto i = child.value<int64_t>()) {
-        items.push_back(std::to_string(*i));
-        continue;
-      }
-      if (auto b = child.value<bool>()) {
-        items.push_back(*b ? "true" : "false");
-        continue;
-      }
-      if (auto d = child.value<double>()) {
-        std::ostringstream oss;
-        oss << *d;
-        items.push_back(oss.str());
-        continue;
-      }
-      return false;
+      items.push_back(JsonScalarToString(child));
     }
     *out = std::move(items);
     return true;
@@ -233,38 +263,96 @@ bool NodeToValue(const toml::node &node, Value *out) {
   return false;
 }
 
-std::optional<std::string> GetStringField(const toml::table &tbl,
+std::optional<std::string> GetStringField(const Json &obj,
                                           const std::string &key) {
-  const toml::node *node = tbl.get(key);
-  if (!node)
+  if (!obj.is_object())
     return std::nullopt;
-  if (auto value = node->value<std::string>()) {
-    return *value;
-  }
-  if (auto value = node->value<int64_t>()) {
-    return std::to_string(*value);
-  }
-  if (auto value = node->value<bool>()) {
-    return *value ? "true" : "false";
-  }
+  auto it = obj.find(key);
+  if (it == obj.end())
+    return std::nullopt;
+  if (it->is_string())
+    return it->get<std::string>();
+  if (it->is_number_integer())
+    return std::to_string(it->get<int64_t>());
+  if (it->is_number_unsigned())
+    return std::to_string(it->get<uint64_t>());
+  if (it->is_boolean())
+    return it->get<bool>() ? "true" : "false";
   return std::nullopt;
 }
 
-std::optional<int64_t> GetIntField(const toml::table &tbl,
-                                   const std::string &key) {
-  const toml::node *node = tbl.get(key);
-  if (!node)
+std::optional<int64_t> GetIntField(const Json &obj, const std::string &key) {
+  if (!obj.is_object())
     return std::nullopt;
-  if (auto value = node->value<int64_t>())
-    return *value;
-  if (auto value = node->value<std::string>()) {
+  auto it = obj.find(key);
+  if (it == obj.end())
+    return std::nullopt;
+  if (it->is_number_integer())
+    return it->get<int64_t>();
+  if (it->is_number_unsigned()) {
+    auto value = it->get<uint64_t>();
+    if (value <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+      return static_cast<int64_t>(value);
+    return std::nullopt;
+  }
+  if (it->is_string()) {
     try {
-      return std::stoll(*value);
+      return std::stoll(it->get<std::string>());
     } catch (...) {
       return std::nullopt;
     }
   }
   return std::nullopt;
+}
+
+Json *EnsureHostsArray(Json &root) {
+  if (!root.is_object())
+    root = Json::object();
+  auto it = root.find("HOSTS");
+  if (it == root.end() || !it->is_array()) {
+    root["HOSTS"] = Json::array();
+  }
+  return &root["HOSTS"];
+}
+
+const Json *FindHostJson(const Json &root, const std::string &nickname,
+                         std::size_t *out_index = nullptr) {
+  const Json *arr = GetHostsArray(root);
+  if (!arr)
+    return nullptr;
+  for (std::size_t i = 0; i < arr->size(); ++i) {
+    const Json &item = (*arr)[i];
+    if (!item.is_object())
+      continue;
+    if (!IsHostValid(item))
+      continue;
+    auto name = GetStringField(item, "nickname");
+    if (name && *name == nickname) {
+      if (out_index)
+        *out_index = i;
+      return &item;
+    }
+  }
+  return nullptr;
+}
+
+Json *FindHostJsonMutable(Json &root, const std::string &nickname,
+                          std::size_t *out_index = nullptr) {
+  Json *arr = EnsureHostsArray(root);
+  if (!arr)
+    return nullptr;
+  for (std::size_t i = 0; i < arr->size(); ++i) {
+    Json &item = (*arr)[i];
+    if (!item.is_object())
+      continue;
+    auto name = GetStringField(item, "nickname");
+    if (name && *name == nickname) {
+      if (out_index)
+        *out_index = i;
+      return &item;
+    }
+  }
+  return nullptr;
 }
 
 ClientProtocol ProtocolFromString(const std::string &value) {
@@ -327,34 +415,73 @@ AMConfigManager::Status AMConfigManager::Init() {
   config_schema_path_ = root_dir_ / "config" / "config.schema.json";
   settings_schema_path_ = root_dir_ / "config" / "settings.schema.json";
 
-  if (std::filesystem::exists(config_path_)) {
+  CloseHandles();
+  config_json_ = Json::object();
+  settings_json_ = Json::object();
+
+  {
     std::string error;
-    toml::table table;
-    if (!AMConfigProcessor::ReadTomlTableViaRust(config_path_.string(),
-                                                 config_schema_path_.string(),
-                                                 &table, &error)) {
-      AM_PROMPT_ERROR("ConfigInit", "failed to parse config.toml: " + error,
+    if (!EnsureFileExists(config_path_, &error)) {
+      AM_PROMPT_ERROR("ConfigInit", "failed to create config file: " + error,
                       true, 2);
-      return Err("failed to parse config.toml: " + error, 2);
+      return Err("failed to create config file: " + error, 2);
     }
-    config_table_ = std::move(table);
-  } else {
-    config_table_.clear();
+    const std::string schema_json = LoadSchemaJson(config_schema_path_, &error);
+    char *err = nullptr;
+    config_handle_ =
+        cfgffi_read(config_path_.string().c_str(), schema_json.c_str(), &err);
+    if (!config_handle_) {
+      std::string msg = err ? err : "cfgffi_read failed";
+      if (err)
+        cfgffi_free_string(err);
+      AM_PROMPT_ERROR("ConfigInit", "failed to parse config.toml: " + msg, true,
+                      2);
+      return Err("failed to parse config.toml: " + msg, 2);
+    }
+    if (err)
+      cfgffi_free_string(err);
+    char *json_c = cfgffi_get_json(config_handle_);
+    if (!json_c) {
+      return Err("failed to read config json", 2);
+    }
+    std::string json_str(json_c);
+    cfgffi_free_string(json_c);
+    if (!ParseJsonString(json_str, &config_json_, &error)) {
+      return Err("failed to parse config json: " + error, 2);
+    }
   }
 
-  if (std::filesystem::exists(settings_path_)) {
+  {
     std::string error;
-    toml::table table;
-    if (!AMConfigProcessor::ReadTomlTableViaRust(settings_path_.string(),
-                                                 settings_schema_path_.string(),
-                                                 &table, &error)) {
-      AM_PROMPT_ERROR("ConfigInit", "failed to parse settings.toml: " + error,
+    if (!EnsureFileExists(settings_path_, &error)) {
+      AM_PROMPT_ERROR("ConfigInit", "failed to create settings file: " + error,
                       true, 2);
-      return Err("failed to parse settings.toml: " + error, 2);
+      return Err("failed to create settings file: " + error, 2);
     }
-    settings_table_ = std::move(table);
-  } else {
-    settings_table_.clear();
+    const std::string schema_json =
+        LoadSchemaJson(settings_schema_path_, &error);
+    char *err = nullptr;
+    settings_handle_ =
+        cfgffi_read(settings_path_.string().c_str(), schema_json.c_str(), &err);
+    if (!settings_handle_) {
+      std::string msg = err ? err : "cfgffi_read failed";
+      if (err)
+        cfgffi_free_string(err);
+      AM_PROMPT_ERROR("ConfigInit", "failed to parse settings.toml: " + msg,
+                      true, 2);
+      return Err("failed to parse settings.toml: " + msg, 2);
+    }
+    if (err)
+      cfgffi_free_string(err);
+    char *json_c = cfgffi_get_json(settings_handle_);
+    if (!json_c) {
+      return Err("failed to read settings json", 2);
+    }
+    std::string json_str(json_c);
+    cfgffi_free_string(json_c);
+    if (!ParseJsonString(json_str, &settings_json_, &error)) {
+      return Err("failed to parse settings json: " + error, 2);
+    }
   }
 
   initialized_ = true;
@@ -382,15 +509,49 @@ AMConfigManager::Status AMConfigManager::Dump() {
   }
 
   std::string error;
-  if (!AMConfigProcessor::WriteTomlToFile(config_table_, config_path_.string(),
-                                          config_schema_path_.string(),
-                                          &error)) {
-    return Err("failed to dump config.toml: " + error);
+  if (!config_handle_) {
+    return Err("config handle not initialized", 2);
   }
-  if (!AMConfigProcessor::WriteTomlToFile(
-          settings_table_, settings_path_.string(),
-          settings_schema_path_.string(), &error)) {
-    return Err("failed to dump settings.toml: " + error);
+  if (!settings_handle_) {
+    return Err("settings handle not initialized", 2);
+  }
+  {
+    std::string json = config_json_.dump(2);
+    char *err = nullptr;
+    int rc = cfgffi_write_inplace(config_handle_, json.c_str(), &err);
+    if (rc != 0) {
+      std::string msg = err ? err : "cfgffi_write_inplace failed";
+      if (err)
+        cfgffi_free_string(err);
+      return Err("failed to dump config.toml: " + msg);
+    }
+    if (err)
+      cfgffi_free_string(err);
+    char *json_c = cfgffi_get_json(config_handle_);
+    if (json_c) {
+      std::string json_str(json_c);
+      cfgffi_free_string(json_c);
+      (void)ParseJsonString(json_str, &config_json_, nullptr);
+    }
+  }
+  {
+    std::string json = settings_json_.dump(2);
+    char *err = nullptr;
+    int rc = cfgffi_write_inplace(settings_handle_, json.c_str(), &err);
+    if (rc != 0) {
+      std::string msg = err ? err : "cfgffi_write_inplace failed";
+      if (err)
+        cfgffi_free_string(err);
+      return Err("failed to dump settings.toml: " + msg);
+    }
+    if (err)
+      cfgffi_free_string(err);
+    char *json_c = cfgffi_get_json(settings_handle_);
+    if (json_c) {
+      std::string json_str(json_c);
+      cfgffi_free_string(json_c);
+      (void)ParseJsonString(json_str, &settings_json_, nullptr);
+    }
   }
 
   return Ok();
@@ -403,14 +564,11 @@ std::string AMConfigManager::Format(const std::string &ori_str,
     return ori_str;
 
   Path key = {"style", style_name};
-  const toml::node *node = FindNode(settings_table_, key);
-  if (!node)
-    return ori_str;
-  auto value = node->value<std::string>();
-  if (!value)
+  const Json *node = FindJsonNode(settings_json_, key);
+  if (!node || !node->is_string())
     return ori_str;
 
-  std::string raw = TrimCopy(*value);
+  std::string raw = TrimCopy(node->get<std::string>());
   if (raw.empty())
     return "";
   if (raw.front() != '[' || raw.back() != ']')
@@ -538,13 +696,18 @@ AMConfigManager::PrivateKeys(bool print_sign) const {
     return {status, {}};
 
   std::vector<std::string> keys;
-  const toml::node *node = config_table_.get("private_keys");
+  const Json *node = nullptr;
+  if (config_json_.is_object()) {
+    auto it = config_json_.find("private_keys");
+    if (it != config_json_.end()) {
+      node = &(*it);
+    }
+  }
   if (node && node->is_array()) {
-    const toml::array &arr = *node->as_array();
-    keys.reserve(arr.size());
-    for (const auto &item : arr) {
-      if (auto value = item.value<std::string>()) {
-        keys.push_back(*value);
+    keys.reserve(node->size());
+    for (const auto &item : *node) {
+      if (item.is_string()) {
+        keys.push_back(item.get<std::string>());
       }
     }
   }
@@ -566,34 +729,34 @@ AMConfigManager::GetClientConfig(const std::string &nickname,
   if (status.second != 0)
     return {status, ClientConfig{}};
 
-  const toml::table *tbl = FindHostTable(config_table_, nickname);
-  if (!tbl) {
+  const Json *host = FindHostJson(config_json_, nickname);
+  if (!host) {
     return {Err("client config not found",
                 static_cast<int>(EC::HostConfigNotFound)),
             ClientConfig{}};
   }
 
-  if (!IsHostValid(*tbl)) {
+  if (!IsHostValid(*host)) {
     return {Err("invalid host entry", static_cast<int>(EC::HostConfigNotFound)),
             ClientConfig{}};
   }
 
   ClientConfig config;
 
-  std::string hostname = GetStringField(*tbl, "hostname").value_or("");
-  std::string username = GetStringField(*tbl, "username").value_or("");
-  std::string password = GetStringField(*tbl, "password").value_or("");
-  std::string keyfile = GetStringField(*tbl, "keyfile").value_or("");
-  std::string trash_dir = GetStringField(*tbl, "trash_dir").value_or("");
-  int64_t port = GetIntField(*tbl, "port").value_or(22);
+  std::string hostname = GetStringField(*host, "hostname").value_or("");
+  std::string username = GetStringField(*host, "username").value_or("");
+  std::string password = GetStringField(*host, "password").value_or("");
+  std::string keyfile = GetStringField(*host, "keyfile").value_or("");
+  std::string trash_dir = GetStringField(*host, "trash_dir").value_or("");
+  int64_t port = GetIntField(*host, "port").value_or(22);
 
   config.request =
       ConRequst(nickname, hostname, username, static_cast<int>(port), password,
                 keyfile, use_compression, trash_dir);
 
-  std::string protocol_str = GetStringField(*tbl, "protocol").value_or("sftp");
+  std::string protocol_str = GetStringField(*host, "protocol").value_or("sftp");
   config.protocol = ProtocolFromString(protocol_str);
-  config.buffer_size = GetIntField(*tbl, "buffer_size").value_or(-1);
+  config.buffer_size = GetIntField(*host, "buffer_size").value_or(-1);
 
   return {Ok(), config};
 }
@@ -602,14 +765,19 @@ int AMConfigManager::GetSettingInt(const Path &path, int default_value) const {
   auto status = EnsureInitialized("GetSettingInt");
   if (status.second != 0)
     return default_value;
-  const toml::node *node = FindNode(settings_table_, path);
+  const Json *node = FindJsonNode(settings_json_, path);
   if (!node)
     return default_value;
-  if (auto value = node->value<int64_t>())
-    return static_cast<int>(*value);
-  if (auto value = node->value<std::string>()) {
+  if (node->is_number_integer())
+    return static_cast<int>(node->get<int64_t>());
+  if (node->is_number_unsigned()) {
+    auto value = node->get<uint64_t>();
+    if (value <= static_cast<uint64_t>(std::numeric_limits<int>::max()))
+      return static_cast<int>(value);
+  }
+  if (node->is_string()) {
     try {
-      return std::stoi(*value);
+      return std::stoi(node->get<std::string>());
     } catch (...) {
       return default_value;
     }
@@ -624,21 +792,20 @@ AMConfigManager::GetSettingString(const Path &path,
   auto status = EnsureInitialized("GetSettingString");
   if (status.second != 0)
     return default_value;
-  const toml::node *node = FindNode(settings_table_, path);
+  const Json *node = FindJsonNode(settings_json_, path);
   if (!node)
     return default_value;
-  if (auto value = node->value<std::string>()) {
-    return *value;
-  }
-  if (auto value = node->value<int64_t>()) {
-    return std::to_string(*value);
-  }
-  if (auto value = node->value<bool>()) {
-    return *value ? "true" : "false";
-  }
-  if (auto value = node->value<double>()) {
+  if (node->is_string())
+    return node->get<std::string>();
+  if (node->is_number_integer())
+    return std::to_string(node->get<int64_t>());
+  if (node->is_number_unsigned())
+    return std::to_string(node->get<uint64_t>());
+  if (node->is_boolean())
+    return node->get<bool>() ? "true" : "false";
+  if (node->is_number_float()) {
     std::ostringstream oss;
-    oss << *value;
+    oss << node->get<double>();
     return oss.str();
   }
   return default_value;
@@ -718,11 +885,11 @@ AMConfigManager::Rename(const std::string &old_nickname,
     return Err("new nickname already exists", 3);
   }
 
-  toml::table *host_table = FindHostTableMutable(config_table_, old_nickname);
-  if (!host_table) {
+  Json *host = FindHostJsonMutable(config_json_, old_nickname);
+  if (!host) {
     return Err("invalid host entry", 4);
   }
-  host_table->insert_or_assign("nickname", new_nickname);
+  (*host)["nickname"] = new_nickname;
 
   PrintLine(MaybeStyle("Renamed host: " + old_nickname + " -> " + new_nickname,
                        "success"));
@@ -835,9 +1002,21 @@ AMConfigManager::Status AMConfigManager::SetClientPasswordEncrypted(
 void AMConfigManager::OnExit() {
   try {
     (void)AMConfigManager::Instance().Dump();
+    AMConfigManager::Instance().CloseHandles();
   } catch (const std::exception &e) {
     std::cerr << "Config dump failed: " << e.what() << std::endl;
     std::terminate();
+  }
+}
+
+void AMConfigManager::CloseHandles() {
+  if (config_handle_) {
+    cfgffi_free_handle(config_handle_);
+    config_handle_ = nullptr;
+  }
+  if (settings_handle_) {
+    cfgffi_free_handle(settings_handle_);
+    settings_handle_ = nullptr;
   }
 }
 
@@ -888,22 +1067,22 @@ std::string AMConfigManager::MaybeStyle(const std::string &value,
 std::map<std::string, AMConfigManager::HostEntry>
 AMConfigManager::CollectHosts() const {
   std::map<std::string, HostEntry> hosts;
-  const toml::array *arr = GetHostsArray(config_table_);
+  const Json *arr = GetHostsArray(config_json_);
   if (!arr)
     return hosts;
   for (const auto &node : *arr) {
-    if (!node.is_table())
+    if (!node.is_object())
       continue;
-    const toml::table &host = *node.as_table();
+    const Json &host = node;
     if (!IsHostValid(host))
       continue;
     auto nickname = GetStringField(host, "nickname");
     HostEntry entry;
-    for (const auto &field : host) {
+    for (auto it = host.begin(); it != host.end(); ++it) {
       Value value;
-      if (!NodeToValue(field.second, &value))
+      if (!NodeToValue(it.value(), &value))
         continue;
-      entry.fields[std::string(field.first.str())] = std::move(value);
+      entry.fields[it.key()] = std::move(value);
     }
     if (!entry.fields.empty())
       hosts[*nickname] = std::move(entry);
@@ -934,33 +1113,33 @@ AMConfigManager::PrintHost(const std::string &nickname,
 }
 
 bool AMConfigManager::HostExists(const std::string &nickname) const {
-  return FindHostTable(config_table_, nickname) != nullptr;
+  return FindHostJson(config_json_, nickname) != nullptr;
 }
 
 AMConfigManager::Status
 AMConfigManager::UpsertHostField(const std::string &nickname,
                                  const std::string &field, Value value) {
-  toml::table *host_table = FindHostTableMutable(config_table_, nickname);
-  if (!host_table) {
-    toml::array *arr = EnsureHostsArray(config_table_);
+  Json *host = FindHostJsonMutable(config_json_, nickname);
+  if (!host) {
+    Json *arr = EnsureHostsArray(config_json_);
     if (!arr)
       return Err("invalid host list", 2);
-    toml::table new_host;
-    new_host.insert_or_assign("nickname", nickname);
+    Json new_host = Json::object();
+    new_host["nickname"] = nickname;
     arr->push_back(std::move(new_host));
-    host_table = FindHostTableMutable(config_table_, nickname);
+    host = FindHostJsonMutable(config_json_, nickname);
   }
-  if (!host_table)
+  if (!host)
     return Err("invalid host table", 2);
 
-  host_table->insert_or_assign("nickname", nickname);
+  (*host)["nickname"] = nickname;
 
   if (std::holds_alternative<int64_t>(value)) {
-    host_table->insert_or_assign(field, std::get<int64_t>(value));
+    (*host)[field] = std::get<int64_t>(value);
     return Ok();
   }
   if (std::holds_alternative<bool>(value)) {
-    host_table->insert_or_assign(field, std::get<bool>(value));
+    (*host)[field] = std::get<bool>(value);
     return Ok();
   }
   if (std::holds_alternative<std::string>(value)) {
@@ -969,14 +1148,14 @@ AMConfigManager::UpsertHostField(const std::string &nickname,
         !AMAuth::IsEncrypted(str_value)) {
       str_value = AMAuth::EncryptPassword(str_value);
     }
-    host_table->insert_or_assign(field, str_value);
+    (*host)[field] = str_value;
     return Ok();
   }
   if (std::holds_alternative<std::vector<std::string>>(value)) {
-    toml::array arr;
+    Json arr = Json::array();
     for (const auto &item : std::get<std::vector<std::string>>(value))
       arr.push_back(item);
-    host_table->insert_or_assign(field, std::move(arr));
+    (*host)[field] = std::move(arr);
     return Ok();
   }
   return Ok();
@@ -985,9 +1164,9 @@ AMConfigManager::UpsertHostField(const std::string &nickname,
 AMConfigManager::Status
 AMConfigManager::RemoveHost(const std::string &nickname) {
   std::size_t index = 0;
-  if (!FindHostTable(config_table_, nickname, &index))
+  if (!FindHostJson(config_json_, nickname, &index))
     return Ok();
-  toml::array *arr = EnsureHostsArray(config_table_);
+  Json *arr = EnsureHostsArray(config_json_);
   if (!arr || index >= arr->size())
     return Ok();
   arr->erase(arr->begin() + static_cast<std::ptrdiff_t>(index));
