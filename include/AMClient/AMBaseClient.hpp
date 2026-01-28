@@ -20,9 +20,9 @@
 #include <vector>
 
 // 自身依赖
-#include "AMDataClass.hpp"
-#include "AMEnum.hpp"
-#include "AMPath.hpp"
+#include "base/AMDataClass.hpp"
+#include "base/AMEnum.hpp"
+#include "base/AMPath.hpp"
 // 自身依赖
 
 // 第三方库
@@ -116,7 +116,8 @@ protected:
   std::string nickname;
 
 public:
-  /** Thread-safe public key/value map for client metadata (lock with public_kv_mtx). */
+  /** Thread-safe public key/value map for client metadata (lock with
+   * public_kv_mtx). */
   std::recursive_mutex public_kv_mtx;
   std::unordered_map<std::string, std::string> public_kv;
 

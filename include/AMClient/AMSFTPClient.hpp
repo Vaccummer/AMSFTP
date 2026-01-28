@@ -22,9 +22,6 @@
 
 // 自身依赖
 #include "AMBaseClient.hpp"
-#include "AMDataClass.hpp"
-#include "AMEnum.hpp"
-#include "AMPath.hpp"
 
 // 自身依赖
 
@@ -416,6 +413,20 @@ public:
     std::string stored_password_enc = res_data.password;
     const char *auth_list = nullptr;
 
+    /**
+     * @brief Notify authentication callbacks in a unified manner.
+     */
+    auto NotifyAuth = [&](bool need_password, const std::string &password_enc,
+                          bool password_correct) {
+      if (!auth_cb) {
+        return;
+      }
+      ConRequst request = res_data;
+      request.password = password_correct ? password_enc : "";
+      CallCallbackSafe(auth_cb, AuthCBInfo(need_password, std::move(request),
+                                           password_enc, password_correct));
+    };
+
     // 使用SocketConnector建立连接
     SocketConnector connector;
 
@@ -502,20 +513,6 @@ public:
 
     password_auth = (strstr(auth_list, "password") != nullptr);
 
-    /**
-     * @brief Notify authentication callbacks in a unified manner.
-     */
-    auto NotifyAuth = [&](bool need_password, const std::string &password_enc,
-                          bool password_correct) {
-      if (!auth_cb) {
-        return;
-      }
-      ConRequst request = res_data;
-      request.password = password_correct ? password_enc : "";
-      CallCallbackSafe(auth_cb, AuthCBInfo(need_password, std::move(request),
-                                           password_enc, password_correct));
-    };
-
     // 专用私钥认证
     if (!res_data.keyfile.empty()) {
       // 检查中断（不检查超时）
@@ -546,8 +543,7 @@ public:
       if (interrupt_flag && interrupt_flag->check()) {
         return {EC::Terminate, "Authentication interrupted"};
       }
-      std::string plain_password =
-          AMAuth::DecryptPassword(stored_password_enc);
+      std::string plain_password = AMAuth::DecryptPassword(stored_password_enc);
       rcr = libssh2_userauth_password(session, res_data.username.c_str(),
                                       plain_password.c_str());
       AMAuth::SecureZero(plain_password);

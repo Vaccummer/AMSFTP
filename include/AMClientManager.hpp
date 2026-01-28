@@ -1,9 +1,7 @@
 #pragma once
-
 #include "AMClient/AMCore.hpp"
 #include "AMConfigManager.hpp"
 #include "AMLogManager.hpp"
-#include <cstdio>
 #include <iostream>
 #include <optional>
 #include <utility>
@@ -43,18 +41,19 @@ public:
   /** Initialize client manager with heartbeat interval from config. */
   explicit AMClientManager(AMConfigManager &cfg)
       : config_(cfg), log_manager_(AMLogManager::Instance(cfg)),
+        local_client_(CreateLocalClient_(cfg, log_manager_)),
         transfer_clients_(
             ResolveHeartbeatInterval(cfg),
             [this](const auto &client, const ECM &ecm) {
               OnDisconnect(PoolKind::Transfer, client, ecm);
             },
-            cfg.LocalClient()),
+            local_client_),
         op_clients_(
             ResolveHeartbeatInterval(cfg),
             [this](const auto &client, const ECM &ecm) {
               OnDisconnect(PoolKind::Operation, client, ecm);
             },
-            cfg.LocalClient()) {
+            local_client_) {
     trace_num_ = ResolveTraceNum(cfg);
     if (!password_cb_) {
       password_cb_ = [this](const AuthCBInfo &info) {
@@ -70,6 +69,11 @@ public:
   std::shared_ptr<BaseClient> CLIENT;
   /** Local client instance (public). */
   std::shared_ptr<BaseClient> LOCAL;
+
+  /** Return the shared local client instance. */
+  [[nodiscard]] std::shared_ptr<AMLocalClient> LocalClient() const {
+    return local_client_;
+  }
 
   /** Set password callback for new clients. */
   void SetPasswordCallback(PasswordCallback cb = {}) {
@@ -106,7 +110,7 @@ public:
   CreClient(const std::string &nickname, amf interrupt_flag = nullptr) {
     (void)interrupt_flag;
     if (nickname.empty() || nickname == "local") {
-      return {ECM{EC::Success, ""}, config_.LocalClient()};
+      return {ECM{EC::Success, ""}, local_client_};
     }
 
     auto client_config = config_.GetClientConfig(nickname);
@@ -122,17 +126,12 @@ public:
     }
 
     auto trace_cb = log_manager_.TraceCallbackFunc();
-    auto created = CreateClient(
+    auto base_client = CreateClient(
         client_config.second.request, client_config.second.protocol, trace_num_,
         std::move(trace_cb), client_config.second.buffer_size,
         keys_result.second, password_cb_);
-    if (!created.has_value()) {
-      return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
-    }
-
-    auto base_client = ToBaseClient(*created);
     if (!base_client) {
-      return {ECM{EC::UnknownError, "Failed to create client"}, nullptr};
+      return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
     }
 
     // Ensure Python tracer is bound to the logger callback.
@@ -175,17 +174,12 @@ public:
       return {ECM{ec, keys_result.first.first}, nullptr};
     }
 
-    auto created = CreateClient(
+    auto base_client = CreateClient(
         client_config.second.request, client_config.second.protocol, trace_num_,
         std::move(trace_cb), client_config.second.buffer_size,
         keys_result.second, password_cb_);
-    if (!created.has_value()) {
-      return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
-    }
-
-    auto base_client = ToBaseClient(*created);
     if (!base_client) {
-      return {ECM{EC::UnknownError, "Failed to create client"}, nullptr};
+      return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
     }
 
     ECM rcm = base_client->Connect(force, flag);
@@ -224,6 +218,7 @@ public:
 private:
   AMConfigManager &config_;
   AMLogManager &log_manager_;
+  std::shared_ptr<AMLocalClient> local_client_;
   ClientMaintainerRef transfer_clients_;
   ClientMaintainerRef op_clients_;
   PasswordCallback password_cb_ = {};
@@ -253,18 +248,46 @@ private:
     return static_cast<ssize_t>(value);
   }
 
+  /**
+   * @brief Create the shared local client using config settings.
+   */
+  static std::shared_ptr<AMLocalClient>
+  CreateLocalClient_(AMConfigManager &cfg, AMLogManager &log_manager) {
+    auto trace_cb = log_manager.TraceCallbackFunc();
+    auto client =
+        std::make_shared<AMLocalClient>(ConRequst("local", "", ""), 10,
+                                        std::move(trace_cb));
+
+    std::string work_dir = cfg.GetSettingString({"LocalClient", "work_dir"}, "");
+    if (!work_dir.empty()) {
+      client->home_dir = AMPathStr::UnifyPathSep(work_dir, "/");
+      std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
+      client->public_kv["workdir"] = client->home_dir;
+    }
+
+    std::string trash_dir =
+        cfg.GetSettingString({"LocalClient", "trash_dir"}, "");
+    if (!trash_dir.empty()) {
+      auto result = client->TrashDir(trash_dir);
+      if (std::holds_alternative<ECM>(result)) {
+        const auto &ecm = std::get<ECM>(result);
+        if (ecm.first != EC::Success) {
+          AM_PROMPT_ERROR("LocalClient", ecm.second, false, 0);
+        }
+      }
+    }
+
+    int buffer_size = cfg.GetSettingInt({"LocalClient", "buffer_size"}, -1);
+    if (buffer_size > 0) {
+      client->TransferRingBufferSize(buffer_size);
+    }
+
+    return client;
+  }
+
   /** Select pool by kind. */
   ClientMaintainerRef &ClientPool(PoolKind pool) {
     return pool == PoolKind::Transfer ? transfer_clients_ : op_clients_;
-  }
-
-  /** Convert variant client to BaseClient pointer. */
-  static std::shared_ptr<BaseClient> ToBaseClient(const AMCilent &client) {
-    return std::visit(
-        [](const auto &ptr) -> std::shared_ptr<BaseClient> {
-          return std::static_pointer_cast<BaseClient>(ptr);
-        },
-        client);
   }
 
   /** Initialize client workdir in public map if missing. */

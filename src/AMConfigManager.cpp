@@ -1,8 +1,6 @@
 #include "AMConfigManager.hpp"
-#include "AMClient/AMLocalClient.hpp"
-#include "AMEnum.hpp"
-#include "AMLogManager.hpp"
-#include "AMPath.hpp"
+#include "base/AMEnum.hpp"
+#include "base/AMPath.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -172,7 +170,7 @@ std::optional<std::string> GetStringField(const toml::table &tbl,
 }
 
 std::optional<int64_t> GetIntField(const toml::table &tbl,
-                                  const std::string &key) {
+                                   const std::string &key) {
   const toml::node *node = tbl.get(key);
   if (!node)
     return std::nullopt;
@@ -190,8 +188,9 @@ std::optional<int64_t> GetIntField(const toml::table &tbl,
 
 ClientProtocol ProtocolFromString(const std::string &value) {
   std::string lower = value;
-  std::transform(lower.begin(), lower.end(), lower.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  std::transform(
+      lower.begin(), lower.end(), lower.begin(),
+      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   if (lower == "sftp")
     return ClientProtocol::SFTP;
   if (lower == "ftp")
@@ -277,7 +276,6 @@ AMConfigManager::Status AMConfigManager::Init() {
   }
 
   initialized_ = true;
-  InitLocalClient();
   if (!exit_hook_installed_) {
     std::atexit(&AMConfigManager::OnExit);
     exit_hook_installed_ = true;
@@ -486,7 +484,8 @@ AMConfigManager::GetClientConfig(const std::string &nickname,
 
   const toml::node *node = config_table_.get(nickname);
   if (!node || !node->is_table()) {
-    return {Err("client config not found", static_cast<int>(EC::HostConfigNotFound)),
+    return {Err("client config not found",
+                static_cast<int>(EC::HostConfigNotFound)),
             ClientConfig{}};
   }
 
@@ -500,9 +499,9 @@ AMConfigManager::GetClientConfig(const std::string &nickname,
   std::string trash_dir = GetStringField(tbl, "trash_dir").value_or("");
   int64_t port = GetIntField(tbl, "port").value_or(22);
 
-  config.request = ConRequst(nickname, hostname, username,
-                             static_cast<int>(port), password, keyfile,
-                             use_compression, trash_dir);
+  config.request =
+      ConRequst(nickname, hostname, username, static_cast<int>(port), password,
+                keyfile, use_compression, trash_dir);
 
   std::string protocol_str = GetStringField(tbl, "protocol").value_or("sftp");
   config.protocol = ProtocolFromString(protocol_str);
@@ -511,8 +510,7 @@ AMConfigManager::GetClientConfig(const std::string &nickname,
   return {Ok(), config};
 }
 
-int AMConfigManager::GetSettingInt(const Path &path,
-                                  int default_value) const {
+int AMConfigManager::GetSettingInt(const Path &path, int default_value) const {
   auto status = EnsureInitialized("GetSettingInt");
   if (status.second != 0)
     return default_value;
@@ -532,8 +530,9 @@ int AMConfigManager::GetSettingInt(const Path &path,
 }
 
 /** Return a string setting value or the provided default. */
-std::string AMConfigManager::GetSettingString(
-    const Path &path, const std::string &default_value) const {
+std::string
+AMConfigManager::GetSettingString(const Path &path,
+                                  const std::string &default_value) const {
   auto status = EnsureInitialized("GetSettingString");
   if (status.second != 0)
     return default_value;
@@ -555,61 +554,6 @@ std::string AMConfigManager::GetSettingString(
     return oss.str();
   }
   return default_value;
-}
-
-/** Return the shared local client instance, creating it if needed. */
-std::shared_ptr<AMLocalClient> AMConfigManager::LocalClient() {
-  if (!local_client_) {
-    if (initialized_) {
-      InitLocalClient();
-    }
-  }
-  if (!local_client_) {
-    local_client_ = std::make_shared<AMLocalClient>(ConRequst("local", "", ""));
-  }
-  return local_client_;
-}
-
-/** Return the shared local client instance without initialization. */
-std::shared_ptr<AMLocalClient> AMConfigManager::LocalClient() const {
-  return local_client_;
-}
-
-/** Initialize the local client from settings and bind trace callback. */
-void AMConfigManager::InitLocalClient() {
-  if (local_client_) {
-    return;
-  }
-  auto trace_cb = AMLogManager::Instance(*this).TraceCallbackFunc();
-  auto client =
-      std::make_shared<AMLocalClient>(ConRequst("local", "", ""), 10, trace_cb);
-
-  std::string work_dir = GetSettingString({"LocalClient", "work_dir"}, "");
-  if (!work_dir.empty()) {
-    client->home_dir = AMPathStr::UnifyPathSep(work_dir, "/");
-    {
-      std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
-      client->public_kv["workdir"] = client->home_dir;
-    }
-  }
-
-  std::string trash_dir = GetSettingString({"LocalClient", "trash_dir"}, "");
-  if (!trash_dir.empty()) {
-    auto result = client->TrashDir(trash_dir);
-    if (std::holds_alternative<ECM>(result)) {
-      const auto &ecm = std::get<ECM>(result);
-      if (ecm.first != EC::Success) {
-        AM_PROMPT_ERROR("LocalClient", ecm.second, false, 0);
-      }
-    }
-  }
-
-  int buffer_size = GetSettingInt({"LocalClient", "buffer_size"}, -1);
-  if (buffer_size > 0) {
-    client->TransferRingBufferSize(buffer_size);
-  }
-
-  local_client_ = client;
 }
 
 AMConfigManager::Status AMConfigManager::Src() const {
@@ -679,8 +623,8 @@ AMConfigManager::Rename(const std::string &old_nickname,
   std::string error;
   std::regex pattern("^[A-Za-z0-9_]+$");
   if (new_nickname.empty() || !std::regex_match(new_nickname, pattern)) {
-    return Err("new nickname must contain only letters, numbers, and underscore",
-               3);
+    return Err(
+        "new nickname must contain only letters, numbers, and underscore", 3);
   }
   if (HostExists(new_nickname)) {
     return Err("new nickname already exists", 3);

@@ -1,8 +1,8 @@
 #pragma once
 
 #include "AMConfigManager.hpp"
-#include "AMDataClass.hpp"
 #include "AMPromptManager.hpp"
+#include "base/AMDataClass.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <deque>

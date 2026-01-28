@@ -4,9 +4,6 @@
 
 // 自身依赖
 #include "AMBaseClient.hpp"
-#include "AMDataClass.hpp"
-#include "AMEnum.hpp"
-#include "AMPath.hpp"
 // 自身依赖
 
 // 第三方库
