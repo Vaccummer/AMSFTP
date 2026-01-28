@@ -9,6 +9,99 @@
 #include <string>
 #include <unordered_map>
 
+class TaskInfoPrint {
+public:
+  /**
+   * @brief Construct a task info printer bound to a prompt manager.
+   *
+   * @param prompt Prompt manager used for formatted output.
+   */
+  explicit TaskInfoPrint(AMPromptManager &prompt = AMPromptManager::Instance());
+
+  /**
+   * @brief Print submit information for transfer_async.
+   *
+   * Format: "Submit ID: [{taskid}] FileNum: {num} TotalSize: {size} Clients:
+   * {nicknames}".
+   *
+   * @param task_info Task info to print.
+   * @param client_maintainer Host maintainer used to retrieve nicknames.
+   */
+  void TaskSubmitPrint(const std::shared_ptr<TaskInfo> &task_info,
+                       const ClientMaintainer &client_maintainer) const;
+
+  /**
+   * @brief Print task result information after completion.
+   *
+   * Do not print if task_info->quiet is true. Use a success/failure marker
+   * followed by the task id and progress details. If the task succeeded, omit
+   * the result code/message segment.
+   *
+   * @param task_info Task info to print.
+   */
+  void TaskResultPrint(const std::shared_ptr<TaskInfo> &task_info) const;
+
+  /**
+   * @brief Show task status for quick queries.
+   *
+   * Pending tasks print basic metadata, finished tasks include transferred
+   * sizes and elapsed time, and conducting tasks render a progress bar that
+   * refreshes until the interrupt flag is set.
+   *
+   * @param task_info Task info to show.
+   * @param interrupt_flag Optional flag to stop progress rendering.
+   */
+  void Show(const std::shared_ptr<TaskInfo> &task_info,
+            const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+
+  /**
+   * @brief Print multiple tasks in batch.
+   *
+   * Pending and finished tasks are printed via Show(), while conducting tasks
+   * create multiple progress bars for ongoing updates.
+   *
+   * @param pending Pending tasks to print.
+   * @param finished Finished tasks to print.
+   * @param conducting Conducting tasks to print with progress bars.
+   * @param interrupt_flag Optional flag to stop progress rendering.
+   */
+  void List(const std::vector<std::shared_ptr<TaskInfo>> &pending,
+            const std::vector<std::shared_ptr<TaskInfo>> &finished,
+            const std::vector<std::shared_ptr<TaskInfo>> &conducting,
+            const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+
+  /**
+   * @brief Print detailed task information.
+   *
+   * This prints one attribute per line with aligned names. Use the optional
+   * flags to also print task entries or transfer set details.
+   *
+   * @param task_info Task info to inspect.
+   * @param show_task_entries Whether to print the task list.
+   * @param show_transfer_sets Whether to print transfer set details.
+   */
+  void Inspect(const std::shared_ptr<TaskInfo> &task_info,
+               bool show_task_entries = false,
+               bool show_transfer_sets = false) const;
+
+  /**
+   * @brief Print individual task entries inside task_info.
+   *
+   * @param task_info Task info holding transfer tasks.
+   */
+  void InspectTaskEntries(const std::shared_ptr<TaskInfo> &task_info) const;
+
+  /**
+   * @brief Print original UserTransferSet settings for the task.
+   *
+   * @param task_info Task info holding transfer set configurations.
+   */
+  void InspectTransferSets(const std::shared_ptr<TaskInfo> &task_info) const;
+
+private:
+  AMPromptManager &prompt_;
+};
+
 class AMTransferManager {
 public:
   using ID = std::string;

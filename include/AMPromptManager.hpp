@@ -1,6 +1,6 @@
 #pragma once
-#include <mutex>
 #include <memory>
+#include <mutex>
 #include <replxx.h>
 #include <string>
 #include <string_view>

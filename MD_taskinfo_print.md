@@ -1,81 +1,81 @@
-用于打印任务信息, 可以单设一个类TaskInfoPrint
+
+Used to print task information. You can create a dedicated class `TaskInfoPrint`.
 
 ## TaskSubmitPrint
 
-用于在transfer_async提交时报告
+Used to report when submitting in `transfer_async`.
 
-格式:
+Format:
 
-+ Sumbmit  ID: [{taskid}]  FileNum: {num}  TotalSize: {size}  Clients: {nicknames}
-+ 用client_mantainer的get_nicknames()获取nicknames
+* `Submit ID: [{taskid}] FileNum: {num} TotalSize: {size} Clients: {nicknames}`
+* Get `nicknames` via `client_maintainer.get_nicknames()`.
 
 ## TaskResultPrint
 
-用于在任务执行完成后打印
+Used to print after a task finishes executing.
 
-taskinfo.queit 设置时不打印
+Do not print if `taskinfo.quiet` is set.
 
-格式
+Format:
 
-+ ✅/❌  [{taskid}]  {transferred_size}/{total_size}  TheadID: {}   {rcm}
-+ ✅/❌看rcm,   ✅时后面也不需要打印rcm
+* `✅/❌ [{taskid}] {transferred_size}/{total_size} ThreadID: {} {rcm}`
+* Choose ✅/❌ based on `rcm`.
+  * If ✅, you don’t need to print `rcm` afterward.
 
 ## Show
 
-用于简单查询任务情况的函数, 但遇到不同状态的任务, 进行不同格式打印
+A function for quick task status queries. It prints in different formats depending on the task state.
 
-### 1. show pending_task
+### 1. Show `pending_task`
 
-[{taskid}]  Status: {}  TotalSize: {}  AffinityThread: {}   SubmitTime: {}
+`[{taskid}] Status: {} TotalSize: {} AffinityThread: {} SubmitTime: {}`
 
-+ 时刻为 16:02格式
+* Time format: `16:02`.
 
-### 2. show finished_task
+### 2. Show `finished_task`
 
-[{taskid}]  Status: {}  {transferred_size}/{total_size}  ThreadID: {}   ElapsedTime: {}
+`[{taskid}] Status: {} {transferred_size}/{total_size} ThreadID: {} ElapsedTime: {}`
 
-+ ElapsedTime用1m30s格式
+* `ElapsedTime` format: `1m30s`.
 
-### 3. show conducting_task
+### 3. Show `conducting_task`
 
-使用进度条
+Use a progress bar.
 
-prefix设置为{src_hostname}@{src_filename}  -> {dst_hostname}@{dst_filename}
-
-循环读取taskinfo进行刷新
-
-show函数设置一个interrupt_flag用于终止进度条
+* Set `prefix` as: `{src_hostname}@{src_filename} -> {dst_hostname}@{dst_filename}`
+* Continuously read `taskinfo` and refresh.
+* Add an `interrupt_flag` in `show()` to terminate the progress bar.
 
 ## List
 
-用于批量打印任务信息
+Used to print task information in batch.
 
-### History/Pending
+### History / Pending
 
-对每个任务使用show即可
+Call `show()` for each task.
 
 ### Conducting
 
-创建多个进度条输出进度信息
+Create multiple progress bars to output progress information.
 
 ## Inspect
 
-用于打印任务的详细信息
+Used to print detailed task information.
 
-包括id, status, submit_time, start_time,finished_time,rcm,total_transferred_size,total_size, files_num, quiet, affinity_thread, OnWhichThread, 
+Include:
+`id, status, submit_time, start_time, finished_time, rcm, total_transferred_size, total_size, files_num, quiet, affinity_thread, on_which_thread, buffer_size, client_names`
 
-buffer_size, client_names
+* Print one attribute per line.
+* Attribute names can be slightly adjusted for readability.
+* Align attribute names.
 
-每行打印一个属性, 属性名称可以略作修改, 方便人类理解
+### `task` subcommand
 
-属性名称需要对齐
+Used to print all task entries inside `taskinfo`.
 
-### task子命令
+Format:
 
-用于打印taskinfo中所有task信息
-
-格式为
-
+```
 [order]
 
 src: {nickname}@{path}
@@ -86,26 +86,33 @@ size: {}
 
 transferred: {}
 
-rcm: (IsFinished为true才打印该属性)
+rcm: (print only when IsFinished is true)
+```
 
-### set子命令
+### `set` subcommand
 
-用于打印任务的原始指令设置(UserTransferSet)
+Used to print the original command settings of the task (`UserTransferSet`).
+
+Format:
+
+```
+[order]
+
+- If there is only one UserTransferSet, omit the index.
+
+{src1}
+{src2}
+{src3}
+...
+
+ ->  {dst}
+
+clone =
+mkdir =
+overwrite =
+no special =
 
 [order]
 
-+ 只有一个UserTransferSet的话不用index
-
-{src1} -> {dst1}
-
-{src2} -> {dst2}
-
 ...
-
-mkdir = 
-
-overwrite = 
-
-ignore_special_file = 
-
-(不用对齐)
+```

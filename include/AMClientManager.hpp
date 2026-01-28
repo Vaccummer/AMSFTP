@@ -135,7 +135,6 @@ public:
     }
 
     // Ensure Python tracer is bound to the logger callback.
-    base_client->SetPyTrace(log_manager_.TraceCallbackFunc());
     InitClientWorkdir(base_client);
     return {ECM{EC::Success, ""}, base_client};
   }

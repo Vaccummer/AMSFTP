@@ -25,7 +25,6 @@
 #include "AMPromptManager.hpp"
 #include "base/AMCommonTools.hpp"
 
-
 class UnionFileHandle {
 public:
   // Local file handle
@@ -704,13 +703,15 @@ private:
   // Internal progress callback wrapper
   void InnerCallback(std::shared_ptr<TaskInfo> task_info, WkProgressData &pd,
                      bool force = false) {
+    if (!task_info->callback.need_progress_cb) {
+      return;
+    }
     TransferTask *cur_task = nullptr;
     {
       std::lock_guard<std::mutex> lock(task_info->mtx);
       cur_task = task_info->cur_task;
     }
-
-    if (!task_info->callback.need_progress_cb || !cur_task) {
+    if (!cur_task) {
       return;
     }
 
@@ -1308,6 +1309,53 @@ private:
     return {EC::UnknownError, "Task not finished but exited unexpectedly"};
   }
 
+  /**
+   * @brief Worker thread function with affinity-aware scheduling.
+   */
+  void WorkerLoop(size_t thread_index) {
+    while (running_.load()) {
+      if (thread_index >= desired_thread_count_.load()) {
+        std::lock_guard<std::mutex> lock(queue_mtx_);
+        const bool has_affinity = thread_index < affinity_queues_.size() &&
+                                  !affinity_queues_[thread_index].empty();
+        if (!has_affinity) {
+          break;
+        }
+      }
+
+      auto task_opt = DequeueTask(thread_index);
+      if (!task_opt.has_value()) {
+        break;
+      }
+
+      const auto &[task_id, task_info] = *task_opt;
+      SetConducting(thread_index, task_id, task_info);
+      task_info->OnWhichThread.store(static_cast<int>(thread_index));
+
+      EnsureProgressData(task_info);
+
+      if (ShouldSkipTask(task_info)) {
+        task_info->pd.reset();
+        task_info->OnWhichThread.store(-1);
+        HandleCompletedTask(task_info);
+        ClearConducting(thread_index);
+        continue;
+      }
+
+      ExecuteTask(task_info);
+      task_info->pd.reset();
+      task_info->OnWhichThread.store(-1);
+
+      HandleCompletedTask(task_info);
+      ClearConducting(thread_index);
+    }
+
+    // Ensure this worker is not reported as executing any task.
+    // The task clears OnWhichThread on exit paths above.
+    ClearConducting(thread_index);
+  }
+
+public:
   // Execute a single TaskInfo
   void ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
     EnsureProgressData(task_info);
@@ -1408,54 +1456,6 @@ private:
     task_info->SetStatus(TaskStatus::Finished);
     task_info->finished_time.store(timenow());
   }
-
-  /**
-   * @brief Worker thread function with affinity-aware scheduling.
-   */
-  void WorkerLoop(size_t thread_index) {
-    while (running_.load()) {
-      if (thread_index >= desired_thread_count_.load()) {
-        std::lock_guard<std::mutex> lock(queue_mtx_);
-        const bool has_affinity = thread_index < affinity_queues_.size() &&
-                                  !affinity_queues_[thread_index].empty();
-        if (!has_affinity) {
-          break;
-        }
-      }
-
-      auto task_opt = DequeueTask(thread_index);
-      if (!task_opt.has_value()) {
-        break;
-      }
-
-      const auto &[task_id, task_info] = *task_opt;
-      SetConducting(thread_index, task_id, task_info);
-      task_info->OnWhichThread.store(static_cast<int>(thread_index));
-
-      EnsureProgressData(task_info);
-
-      if (ShouldSkipTask(task_info)) {
-        task_info->pd.reset();
-        task_info->OnWhichThread.store(-1);
-        HandleCompletedTask(task_info);
-        ClearConducting(thread_index);
-        continue;
-      }
-
-      ExecuteTask(task_info);
-      task_info->pd.reset();
-      task_info->OnWhichThread.store(-1);
-
-      HandleCompletedTask(task_info);
-      ClearConducting(thread_index);
-    }
-
-    // Ensure this worker is not reported as executing any task.
-    // The task clears OnWhichThread on exit paths above.
-    ClearConducting(thread_index);
-  }
-
-public:
   /**
    * @brief Construct a work manager with a default single worker thread.
    */
@@ -1857,7 +1857,7 @@ public:
   load_tasks(const std::string &src, const std::string &dst,
              const std::shared_ptr<ClientMaintainer> &hostm,
              const std::string &src_host = "", const std::string &dst_host = "",
-             bool overwrite = false, bool mkdir = true,
+             bool clone = false, bool overwrite = false, bool mkdir = true,
              bool ignore_sepcial_file = true, amf interrupt_flag = nullptr,
              int timeout_ms = -1, int64_t start_time = -1) {
     start_time = start_time == -1 ? am_ms() : start_time;
@@ -1888,7 +1888,9 @@ public:
     auto dstf = dst;
     auto srcf = src;
     bool is_dst_file = false;
-    if (src_stat.type == PathType::FILE) {
+    if (clone) {
+      is_dst_file = true;
+    } else if (src_stat.type == PathType::FILE) {
       // 检查dst的扩展名和src扩展名是否相同
 
       std::string dst_ext = AMPathStr::extname(dstf);
@@ -1984,8 +1986,8 @@ public:
       if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
         return {ECM{EC::OperationTimeout, "Load tasks timeout"}, tasks};
       }
-      dst_n = AMPathStr::join(
-          dstf, fs::relative(item.path, AMPathStr::dirname(srcf)));
+      const std::string base_path = clone ? srcf : AMPathStr::dirname(srcf);
+      dst_n = AMPathStr::join(dstf, fs::relative(item.path, base_path));
       auto [rcm8, dst_info2] = dst_client->stat(dst_n, false, interrupt_flag,
                                                 timeout_ms, start_time);
       if (rcm8.first == EC::Success) {
