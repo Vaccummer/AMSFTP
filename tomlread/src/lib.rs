@@ -57,6 +57,15 @@ pub extern "C" fn cfgffi_get_json(h: *const ConfigHandle) -> *mut c_char {
 }
 
 #[no_mangle]
+pub extern "C" fn cfgffi_get_toml(h: *const ConfigHandle) -> *mut c_char {
+    if h.is_null() {
+        return ptr::null_mut();
+    }
+    let h = unsafe { &*h };
+    to_c_string(h.doc.to_string())
+}
+
+#[no_mangle]
 pub extern "C" fn cfgffi_read(
     path: *const c_char,
     schema_json: *const c_char,
@@ -182,14 +191,8 @@ pub extern "C" fn cfgffi_write(
         return 5;
     }
 
-    let toml_val: toml::Value = match toml::from_str(&h.doc.to_string()) {
-        Ok(v) => v,
-        Err(e) => {
-            set_err(format!("post-write toml parse error: {e}"));
-            return 6;
-        }
-    };
-    h.json = serde_json::to_string_pretty(&toml_val).unwrap_or_else(|_| "{}".into());
+    let json_val = toml_item_to_json(h.doc.as_item());
+    h.json = serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| "{}".into());
 
     0
 }
@@ -212,6 +215,75 @@ pub extern "C" fn cfgffi_write_inplace(
     };
     let c_out_path = CString::new(out_path).unwrap();
     cfgffi_write(h, c_out_path.as_ptr(), new_json, out_err)
+}
+
+#[no_mangle]
+pub extern "C" fn cfgffi_debug_order(
+    path: *const c_char,
+    schema_json: *const c_char,
+    out_err: *mut *mut c_char,
+) -> *mut c_char {
+    let set_err = |msg: String| {
+        if !out_err.is_null() {
+            unsafe { *out_err = to_c_string(msg) };
+        }
+    };
+
+    let path = match cstr_to_str(path) {
+        Ok(s) => s,
+        Err(e) => {
+            set_err(e);
+            return ptr::null_mut();
+        }
+    };
+
+    let schema_str = match cstr_to_str(schema_json) {
+        Ok(s) => s,
+        Err(e) => {
+            set_err(e);
+            return ptr::null_mut();
+        }
+    };
+
+    let schema: J = match serde_json::from_str(schema_str) {
+        Ok(v) => v,
+        Err(e) => {
+            set_err(format!("schema json parse error: {e}"));
+            return ptr::null_mut();
+        }
+    };
+
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            set_err(format!("read file error: {e}"));
+            return ptr::null_mut();
+        }
+    };
+
+    let mut doc: DocumentMut = match text.parse() {
+        Ok(d) => d,
+        Err(e) => {
+            set_err(format!("toml parse error: {e}"));
+            return ptr::null_mut();
+        }
+    };
+
+    filter_toml_item_by_schema(doc.as_item_mut(), &schema);
+
+    let before_keys = toml_item_key_order(doc.as_item());
+    let json_val = toml_item_to_json(doc.as_item());
+    let after_keys = json_key_order(&json_val);
+
+    let same = before_keys == after_keys;
+    let msg = serde_json::json!({
+        "same": same,
+        "before": before_keys,
+        "after": after_keys
+    })
+    .to_string();
+
+    to_c_string(msg)
 }
 
 fn write_atomic(path: &str, content: String) -> std::io::Result<()> {
@@ -483,6 +555,20 @@ fn toml_item_to_json(item: &Item) -> J {
         Item::ArrayOfTables(aot) => toml_aot_to_json(aot),
         Item::Value(v) => toml_value_to_json(v),
         _ => J::Null,
+    }
+}
+
+fn toml_item_key_order(item: &Item) -> Vec<String> {
+    match item {
+        Item::Table(t) => t.iter().map(|(k, _)| k.to_string()).collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn json_key_order(j: &J) -> Vec<String> {
+    match j {
+        J::Object(obj) => obj.keys().cloned().collect(),
+        _ => Vec::new(),
     }
 }
 

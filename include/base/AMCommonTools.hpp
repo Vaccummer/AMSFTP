@@ -1258,6 +1258,7 @@ inline void AMProgressBar::RequestRefreshLocked_() const {
 }
 
 inline void print(const std::string &str) { std::cout << str << std::endl; }
+using Json = nlohmann::ordered_json;
 
 class AMConfigProcessor {
 public:
@@ -1329,7 +1330,7 @@ public:
             "Failed to read schema \"{}\": {}", schema_path, read_error));
       }
 
-      nlohmann::json root_json;
+      Json root_json;
       if (!ReadTomlViaRust(path, schema_json, &root_json, &read_error)) {
         throw std::runtime_error(
             AMStr::amfmt("Failed to read toml \"{}\": {}", path, read_error));
@@ -1530,17 +1531,10 @@ public:
       return false;
     }
 
-    nlohmann::json root_json;
-    if (!ReadTomlViaRust(path, schema_json, &root_json, &read_error)) {
+    toml::table root;
+    if (!ReadTomlTableViaRustString(path, schema_json, &root, &read_error)) {
       if (error)
         *error = read_error;
-      return false;
-    }
-
-    toml::table root;
-    if (!JsonToTomlTable(root_json, &root)) {
-      if (error)
-        *error = "failed to convert json to toml table";
       return false;
     }
 
@@ -1589,8 +1583,8 @@ private:
    * @return True on success.
    */
   static bool ReadTomlViaRust(const std::string &path,
-                              const std::string &schema_json,
-                              nlohmann::json *out_json, std::string *error) {
+                              const std::string &schema_json, Json *out_json,
+                              std::string *error) {
     if (!out_json) {
       if (error)
         *error = "null json output";
@@ -1618,7 +1612,7 @@ private:
     cfgffi_free_handle(handle);
 
     try {
-      *out_json = nlohmann::json::parse(json_str);
+      *out_json = Json::parse(json_str);
     } catch (const std::exception &e) {
       if (error)
         *error = e.what();
@@ -1638,7 +1632,7 @@ private:
   static bool WriteTomlViaRust(const toml::table &node, const std::string &path,
                                const std::string &schema_json,
                                std::string *error) {
-    nlohmann::json json_root;
+    Json json_root;
     if (!TomlNodeToJson(node, &json_root)) {
       if (error)
         *error = "failed to convert toml to json";
@@ -1690,15 +1684,15 @@ private:
    * @param out_json Output JSON value.
    * @return True when conversion succeeds.
    */
-  static bool TomlNodeToJson(const toml::node &node, nlohmann::json *out_json) {
+  static bool TomlNodeToJson(const toml::node &node, Json *out_json) {
     if (!out_json)
       return false;
 
     if (node.is_table()) {
-      nlohmann::json obj = nlohmann::json::object();
+      Json obj = Json::object();
       const toml::table &tbl = *node.as_table();
       for (const auto &item : tbl) {
-        nlohmann::json child;
+        Json child;
         if (!TomlNodeToJson(item.second, &child))
           return false;
         obj[std::string(item.first.str())] = std::move(child);
@@ -1708,10 +1702,10 @@ private:
     }
 
     if (node.is_array()) {
-      nlohmann::json arr = nlohmann::json::array();
+      Json arr = Json::array();
       const toml::array &vec = *node.as_array();
       for (const auto &child : vec) {
-        nlohmann::json child_json;
+        Json child_json;
         if (!TomlNodeToJson(child, &child_json))
           return false;
         arr.push_back(std::move(child_json));
@@ -1764,8 +1758,7 @@ private:
    * @param out_table Output toml table.
    * @return True when conversion succeeds.
    */
-  static bool JsonToTomlTable(const nlohmann::json &node,
-                              toml::table *out_table) {
+  static bool JsonToTomlTable(const Json &node, toml::table *out_table) {
     if (!out_table)
       return false;
     if (!node.is_object())
@@ -1773,7 +1766,7 @@ private:
 
     toml::table tbl;
     for (auto it = node.begin(); it != node.end(); ++it) {
-      const nlohmann::json &child = it.value();
+      const Json &child = it.value();
       if (child.is_null()) {
         continue;
       }
@@ -1824,13 +1817,60 @@ private:
   }
 
   /**
+   * @brief Read TOML via Rust cfgffi and parse returned TOML string.
+   * @param path TOML file path.
+   * @param schema_json JSON schema string.
+   * @param out_table Output TOML table.
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  static bool ReadTomlTableViaRustString(const std::string &path,
+                                         const std::string &schema_json,
+                                         toml::table *out_table,
+                                         std::string *error) {
+    if (!out_table) {
+      if (error)
+        *error = "null output table";
+      return false;
+    }
+    char *err = nullptr;
+    ConfigHandle *handle = cfgffi_read(path.c_str(), schema_json.c_str(), &err);
+    if (!handle) {
+      std::string msg = err ? err : "unknown cfgffi_read error";
+      if (err)
+        cfgffi_free_string(err);
+      if (error)
+        *error = msg;
+      return false;
+    }
+    char *toml_c = cfgffi_get_toml(handle);
+    if (!toml_c) {
+      cfgffi_free_handle(handle);
+      if (error)
+        *error = "cfgffi_get_toml returned null";
+      return false;
+    }
+    std::string toml_str(toml_c);
+    cfgffi_free_string(toml_c);
+    cfgffi_free_handle(handle);
+
+    try {
+      *out_table = toml::parse(toml_str);
+    } catch (const std::exception &e) {
+      if (error)
+        *error = e.what();
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * @brief Convert JSON array into a toml++ array.
    * @param node JSON node (must be array).
    * @param out_array Output toml array.
    * @return True when conversion succeeds.
    */
-  static bool JsonToTomlArray(const nlohmann::json &node,
-                              toml::array *out_array) {
+  static bool JsonToTomlArray(const Json &node, toml::array *out_array) {
     if (!out_array)
       return false;
     if (!node.is_array())
@@ -1893,8 +1933,7 @@ private:
    * @param path Current path stack.
    * @param out Flattened map output.
    */
-  static void FlattenJsonNode(const nlohmann::json &node, Path &path,
-                              FlatMap &out) {
+  static void FlattenJsonNode(const Json &node, Path &path, FlatMap &out) {
     if (node.is_object()) {
       for (auto it = node.begin(); it != node.end(); ++it) {
         path.push_back(it.key());
@@ -1954,7 +1993,7 @@ private:
    * @param arr JSON array.
    * @return True when all elements are scalar.
    */
-  static bool JsonArrayAllScalar(const nlohmann::json &arr) {
+  static bool JsonArrayAllScalar(const Json &arr) {
     for (const auto &child : arr) {
       if (!(child.is_null() || child.is_boolean() || child.is_number() ||
             child.is_string())) {
@@ -1969,7 +2008,7 @@ private:
    * @param value JSON value.
    * @return String form of the scalar.
    */
-  static std::string JsonScalarToString(const nlohmann::json &value) {
+  static std::string JsonScalarToString(const Json &value) {
     if (value.is_string())
       return value.get<std::string>();
     if (value.is_boolean())
@@ -2244,4 +2283,458 @@ private:
       return;
     }
   }
+};
+
+/**
+ * @brief Rust-backed config processor that preserves TOML order and comments.
+ */
+class AMConfigProcessorRust {
+public:
+  using Path = std::vector<std::string>;
+  /**
+   * @brief Create an empty Rust processor.
+   */
+  AMConfigProcessorRust() = default;
+
+  /**
+   * @brief Destroy the processor and free the Rust handle.
+   */
+  ~AMConfigProcessorRust() { Close(); }
+
+  /**
+   * @brief Disable copy to avoid double-free of the Rust handle.
+   */
+  AMConfigProcessorRust(const AMConfigProcessorRust &) = delete;
+  /**
+   * @brief Disable copy assignment to avoid double-free of the Rust handle.
+   */
+  AMConfigProcessorRust &operator=(const AMConfigProcessorRust &) = delete;
+
+  /**
+   * @brief Move constructor.
+   */
+  AMConfigProcessorRust(AMConfigProcessorRust &&other) noexcept {
+    handle_ = other.handle_;
+    other.handle_ = nullptr;
+  }
+
+  /**
+   * @brief Move assignment.
+   */
+  AMConfigProcessorRust &operator=(AMConfigProcessorRust &&other) noexcept {
+    if (this != &other) {
+      Close();
+      handle_ = other.handle_;
+      other.handle_ = nullptr;
+    }
+    return *this;
+  }
+
+  /**
+   * @brief Open a TOML file with a JSON schema for filtering.
+   * @param path TOML file path.
+   * @param schema_path JSON schema path.
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  bool Open(const std::string &path, const std::string &schema_path,
+            std::string *error = nullptr) {
+    Close();
+    std::string schema_json = "{}";
+    if (!schema_path.empty()) {
+      std::string read_error;
+      if (!ReadTextFile_(schema_path, &schema_json, &read_error)) {
+        if (error)
+          *error = AMStr::amfmt("Failed to read schema \"{}\": {}", schema_path,
+                                read_error);
+        return false;
+      }
+    }
+
+    char *err = nullptr;
+    handle_ = cfgffi_read(path.c_str(), schema_json.c_str(), &err);
+    if (!handle_) {
+      std::string msg = err ? err : "cfgffi_read failed";
+      if (err)
+        cfgffi_free_string(err);
+      if (error)
+        *error = msg;
+      return false;
+    }
+    if (err)
+      cfgffi_free_string(err);
+    return true;
+  }
+
+  /**
+   * @brief Close the current handle if open.
+   */
+  void Close() {
+    if (handle_) {
+      cfgffi_free_handle(handle_);
+      handle_ = nullptr;
+    }
+  }
+
+  /**
+   * @brief Check whether the handle is open.
+   * @return True if open.
+   */
+  bool IsOpen() const { return handle_ != nullptr; }
+
+  /**
+   * @brief Get filtered JSON from Rust.
+   * @param error Optional error output.
+   * @return JSON string or empty on error.
+   */
+  std::string GetJson(std::string *error = nullptr) const {
+    if (!handle_) {
+      if (error)
+        *error = "null handle";
+      return "";
+    }
+    char *json_c = cfgffi_get_json(handle_);
+    if (!json_c) {
+      if (error)
+        *error = "cfgffi_get_json returned null";
+      return "";
+    }
+    std::string out(json_c);
+    cfgffi_free_string(json_c);
+    return out;
+  }
+
+  /**
+   * @brief Query a string value by JSON path.
+   * @param path JSON path segments.
+   * @param out Output string.
+   * @return True on success and string value present.
+   */
+  bool QueryString(const Path &path, std::string *out) const {
+    if (!out)
+      return false;
+    Json root;
+    if (!GetJsonParsed(&root))
+      return false;
+    const Json *node = ResolvePath_(root, path);
+    if (!node || !node->is_string())
+      return false;
+    *out = node->get<std::string>();
+    return true;
+  }
+
+  /**
+   * @brief Query an integer value by JSON path.
+   * @param path JSON path segments.
+   * @param out Output integer.
+   * @return True on success and integer value present.
+   */
+  bool QueryInt(const Path &path, int64_t *out) const {
+    if (!out)
+      return false;
+    Json root;
+    if (!GetJsonParsed(&root))
+      return false;
+    const Json *node = ResolvePath_(root, path);
+    if (!node)
+      return false;
+    if (node->is_number_integer()) {
+      *out = node->get<int64_t>();
+      return true;
+    }
+    if (node->is_number_unsigned()) {
+      auto value = node->get<uint64_t>();
+      if (value <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+        *out = static_cast<int64_t>(value);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * @brief Modify or create a string value at JSON path and write in-place.
+   * @param path JSON path segments.
+   * @param value New string value.
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  bool SetString(const Path &path, const std::string &value,
+                 std::string *error = nullptr) {
+    Json root;
+    if (!GetJsonParsed(&root)) {
+      if (error)
+        *error = "failed to parse current json";
+      return false;
+    }
+    Json *node = ResolvePathMutable_(root, path, true);
+    if (!node) {
+      if (error)
+        *error = "failed to resolve path";
+      return false;
+    }
+    *node = value;
+    return WriteJsonInplace(root.dump(2), error);
+  }
+
+  /**
+   * @brief Modify or create an integer value at JSON path and write in-place.
+   * @param path JSON path segments.
+   * @param value New integer value.
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  bool SetInt(const Path &path, int64_t value, std::string *error = nullptr) {
+    Json root;
+    if (!GetJsonParsed(&root)) {
+      if (error)
+        *error = "failed to parse current json";
+      return false;
+    }
+    Json *node = ResolvePathMutable_(root, path, true);
+    if (!node) {
+      if (error)
+        *error = "failed to resolve path";
+      return false;
+    }
+    *node = value;
+    return WriteJsonInplace(root.dump(2), error);
+  }
+
+  /**
+   * @brief Remove a value at JSON path and write in-place.
+   * @param path JSON path segments.
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  bool DeletePath(const Path &path, std::string *error = nullptr) {
+    if (path.empty()) {
+      if (error)
+        *error = "empty path";
+      return false;
+    }
+    Json root;
+    if (!GetJsonParsed(&root)) {
+      if (error)
+        *error = "failed to parse current json";
+      return false;
+    }
+    if (!RemovePath_(root, path)) {
+      if (error)
+        *error = "path not found";
+      return false;
+    }
+    return WriteJsonInplace(root.dump(2), error);
+  }
+
+  /**
+   * @brief Write TOML to a target path using Rust (schema enforced).
+   * @param out_path Output path.
+   * @param json JSON payload.
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  bool WriteJson(const std::string &out_path, const std::string &json,
+                 std::string *error = nullptr) {
+    if (!handle_) {
+      if (error)
+        *error = "null handle";
+      return false;
+    }
+    char *err = nullptr;
+    int rc = cfgffi_write(handle_, out_path.c_str(), json.c_str(), &err);
+    if (rc != 0) {
+      std::string msg = err ? err : "cfgffi_write failed";
+      if (err)
+        cfgffi_free_string(err);
+      if (error)
+        *error = msg;
+      return false;
+    }
+    if (err)
+      cfgffi_free_string(err);
+    return true;
+  }
+
+  /**
+   * @brief Write TOML in-place using Rust (schema enforced).
+   * @param json JSON payload.
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  bool WriteJsonInplace(const std::string &json, std::string *error = nullptr) {
+    if (!handle_) {
+      if (error)
+        *error = "null handle";
+      return false;
+    }
+    char *err = nullptr;
+    int rc = cfgffi_write_inplace(handle_, json.c_str(), &err);
+    if (rc != 0) {
+      std::string msg = err ? err : "cfgffi_write_inplace failed";
+      if (err)
+        cfgffi_free_string(err);
+      if (error)
+        *error = msg;
+      return false;
+    }
+    if (err)
+      cfgffi_free_string(err);
+    return true;
+  }
+
+private:
+  bool GetJsonParsed(Json *out) const {
+    if (!out)
+      return false;
+    std::string json = GetJson();
+    if (json.empty())
+      return false;
+    try {
+      *out = Json::parse(json);
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  static const Json *ResolvePath_(const Json &root, const Path &path) {
+    const Json *node = &root;
+    for (const auto &seg : path) {
+      if (node->is_object()) {
+        auto it = node->find(seg);
+        if (it == node->end())
+          return nullptr;
+        node = &(*it);
+        continue;
+      }
+      if (node->is_array()) {
+        std::size_t idx = 0;
+        if (!ParseIndex_(seg, &idx) || idx >= node->size())
+          return nullptr;
+        node = &(*node)[idx];
+        continue;
+      }
+      return nullptr;
+    }
+    return node;
+  }
+
+  static Json *ResolvePathMutable_(Json &root, const Path &path,
+                                   bool create_missing) {
+    Json *node = &root;
+    for (std::size_t i = 0; i < path.size(); ++i) {
+      const std::string &seg = path[i];
+      const bool is_last = (i + 1 == path.size());
+      if (node->is_object()) {
+        if (!node->contains(seg)) {
+          if (!create_missing)
+            return nullptr;
+          (*node)[seg] = is_last ? Json{} : Json::object();
+        }
+        node = &(*node)[seg];
+        continue;
+      }
+      if (node->is_array()) {
+        std::size_t idx = 0;
+        if (!ParseIndex_(seg, &idx))
+          return nullptr;
+        if (idx >= node->size()) {
+          if (!create_missing)
+            return nullptr;
+          node->push_back(Json::array());
+        }
+        node = &(*node)[idx];
+        if (!is_last && (node->is_null())) {
+          (*node) = Json::object();
+        }
+        continue;
+      }
+      return nullptr;
+    }
+    return node;
+  }
+
+  static bool RemovePath_(Json &root, const Path &path) {
+    if (path.empty())
+      return false;
+    Json *node = &root;
+    for (std::size_t i = 0; i + 1 < path.size(); ++i) {
+      const std::string &seg = path[i];
+      if (node->is_object()) {
+        auto it = node->find(seg);
+        if (it == node->end())
+          return false;
+        node = &(*it);
+        continue;
+      }
+      if (node->is_array()) {
+        std::size_t idx = 0;
+        if (!ParseIndex_(seg, &idx) || idx >= node->size())
+          return false;
+        node = &(*node)[idx];
+        continue;
+      }
+      return false;
+    }
+    const std::string &leaf = path.back();
+    if (node->is_object()) {
+      return node->erase(leaf) > 0;
+    }
+    if (node->is_array()) {
+      std::size_t idx = 0;
+      if (!ParseIndex_(leaf, &idx) || idx >= node->size())
+        return false;
+      node->erase(node->begin() + static_cast<std::ptrdiff_t>(idx));
+      return true;
+    }
+    return false;
+  }
+
+  static bool ParseIndex_(const std::string &value, std::size_t *out) {
+    if (!out || value.empty())
+      return false;
+    std::size_t idx = 0;
+    for (char c : value) {
+      if (!std::isdigit(static_cast<unsigned char>(c)))
+        return false;
+      idx = idx * 10 + static_cast<std::size_t>(c - '0');
+    }
+    *out = idx;
+    return true;
+  }
+
+  /**
+   * @brief Read a UTF-8 text file into memory.
+   * @param path File path.
+   * @param out Output string.
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  static bool ReadTextFile_(const std::string &path, std::string *out,
+                            std::string *error) {
+    if (!out) {
+      if (error)
+        *error = "null output buffer";
+      return false;
+    }
+    std::ifstream in(path, std::ios::in | std::ios::binary);
+    if (!in.is_open()) {
+      if (error)
+        *error = "failed to open file";
+      return false;
+    }
+    std::ostringstream oss;
+    oss << in.rdbuf();
+    if (!in.good() && !in.eof()) {
+      if (error)
+        *error = "failed to read file";
+      return false;
+    }
+    *out = oss.str();
+    return true;
+  }
+
+private:
+  ConfigHandle *handle_ = nullptr;
 };

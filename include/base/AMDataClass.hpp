@@ -488,6 +488,8 @@ public:
    * @brief The list of user-provided transfer pairs.
    */
   std::vector<std::pair<std::string, std::string>> transfers;
+  std::vector<std::string> srcs;
+  std::string dst;
 
   /**
    * @brief Whether to create missing destination directories.
@@ -498,6 +500,8 @@ public:
    * @brief Whether to overwrite existing targets.
    */
   bool overwrite = false;
+
+  bool clone = false;
 
   /**
    * @brief Whether to ignore special files during traversal.
