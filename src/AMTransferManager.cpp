@@ -26,9 +26,17 @@ AMTransferManager::AMTransferManager(AMConfigManager &cfg,
       prompt_(AMPromptManager::Instance()) {}
 
 /**
+ * @brief Set the public result callback wrapper for all task completions.
+ */
+void AMTransferManager::SetPublicResultCallback(PublicResultCallback cb) {
+  std::lock_guard<std::mutex> lock(callback_mtx_);
+  public_result_cb_ = std::move(cb);
+}
+
+/**
  * @brief Set a custom result callback invoked after the default callback.
  */
-void AMTransferManager::SetResultCallback(ResultCallback cb) {
+void AMTransferManager::SetResultCallback(UserResultCallback cb) {
   std::lock_guard<std::mutex> lock(callback_mtx_);
   user_result_cb_ = std::move(cb);
 }
@@ -149,7 +157,7 @@ void AMTransferManager::ReturnClientsToIdle_(
 /**
  * @brief Build the default+user callback wrapper for task completion.
  */
-AMTransferManager::ResultCallback AMTransferManager::BuildResultCallback_(
+TaskInfo::ResultCallback AMTransferManager::BuildResultCallback_(
     std::atomic<int> &remaining, std::condition_variable &done_cv,
     std::mutex &done_mtx, std::atomic<bool> &terminated,
     std::vector<std::shared_ptr<BaseClient>> clients,
@@ -158,19 +166,16 @@ AMTransferManager::ResultCallback AMTransferManager::BuildResultCallback_(
           client_keys](std::shared_ptr<TaskInfo> task_info) mutable {
     if (task_info) {
       prompt_.resultprint(task_info);
-      {
-        std::lock_guard<std::mutex> lock(history_mtx_);
-        history_.push_front(task_info);
-      }
     }
 
-    ResultCallback user_cb;
+    UserResultCallback user_cb;
     {
       std::lock_guard<std::mutex> lock(callback_mtx_);
       user_cb = user_result_cb_;
     }
-    if (user_cb) {
-      CallCallbackSafe(user_cb, task_info);
+    auto bound_cb = BindResultCallback(std::move(user_cb));
+    if (bound_cb) {
+      CallCallbackSafe(bound_cb, task_info);
     }
 
     const int left = --remaining;
@@ -181,6 +186,40 @@ AMTransferManager::ResultCallback AMTransferManager::BuildResultCallback_(
     std::lock_guard<std::mutex> lock(done_mtx);
     done_cv.notify_all();
   };
+}
+
+TaskInfo::ResultCallback
+AMTransferManager::BindResultCallback(UserResultCallback user_cb) {
+  PublicResultCallback public_cb;
+  {
+    std::lock_guard<std::mutex> lock(callback_mtx_);
+    public_cb = public_result_cb_;
+  }
+
+  if (public_cb || user_cb) {
+    return [this, public_cb, user_cb](std::shared_ptr<TaskInfo> task_info) {
+      this->ResultCallback(task_info, public_cb, user_cb);
+    };
+  }
+  return {};
+}
+
+void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
+                                       PublicResultCallback public_cb,
+                                       UserResultCallback user_cb) {
+  if (!task_info) {
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(history_mtx_);
+    history_.push_front(task_info);
+  }
+  if (user_cb) {
+    CallCallbackSafe(user_cb, task_info);
+  }
+  if (public_cb) {
+    CallCallbackSafe(public_cb, task_info);
+  }
 }
 
 /**
