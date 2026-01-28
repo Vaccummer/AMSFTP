@@ -35,7 +35,17 @@
 
 // 第三方库
 
+#ifdef _WIN32
 inline std::atomic<bool> is_wsa_initialized(false);
+inline void AMInitWSA() {
+  WSADATA wsaData;
+  int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+  if (result != 0) {
+    throw std::runtime_error("WSAStartup failed");
+  }
+  is_wsa_initialized.store(true);
+}
+#endif
 
 inline std::string GetLibssh2Version() {
   return libssh2_version(LIBSSH2_VERSION_NUM);

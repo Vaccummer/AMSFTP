@@ -6,7 +6,6 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ========= vcpkg 包（MSVC / x64-windows） =========
-find_package(tomlplusplus CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(CURL CONFIG REQUIRED)
@@ -38,7 +37,6 @@ target_include_directories(amsftp PRIVATE
 
 # ========= 链接（全部用 vcpkg target） =========
 target_link_libraries(amsftp PRIVATE
-  tomlplusplus::tomlplusplus
   OpenSSL::SSL
   OpenSSL::Crypto
   ZLIB::ZLIB
@@ -68,7 +66,6 @@ target_include_directories(amtest PRIVATE
 )
 
 target_link_libraries(amtest PRIVATE
-  tomlplusplus::tomlplusplus
   OpenSSL::SSL
   OpenSSL::Crypto
   ZLIB::ZLIB

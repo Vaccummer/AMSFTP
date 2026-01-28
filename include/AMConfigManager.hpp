@@ -107,8 +107,6 @@ private:
   std::filesystem::path config_schema_path_;
   /** JSON schema path for settings.toml filtering. */
   std::filesystem::path settings_schema_path_;
-  toml::table config_table_;
-  toml::table settings_table_;
   nlohmann::ordered_json config_json_;
   nlohmann::ordered_json settings_json_;
   ConfigHandle *config_handle_ = nullptr;

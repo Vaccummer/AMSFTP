@@ -261,14 +261,14 @@ AMTransferManager::PrepareTasks_(
 
   std::unordered_set<std::string> nicknames;
   for (const auto &set : transfer_sets) {
-    for (const auto &pair : set.transfers) {
-      auto [src_host, _src_path] = ParseAddress_(pair.first);
-      auto [dst_host, _dst_path] = ParseAddress_(pair.second);
+    auto [dst_host, _dst_path] = ParseAddress_(set.dst);
+    if (!dst_host.empty()) {
+      nicknames.insert(dst_host);
+    }
+    for (const auto &src : set.srcs) {
+      auto [src_host, _src_path] = ParseAddress_(src);
       if (!src_host.empty()) {
         nicknames.insert(src_host);
-      }
-      if (!dst_host.empty()) {
-        nicknames.insert(dst_host);
       }
     }
   }
@@ -293,15 +293,15 @@ AMTransferManager::PrepareTasks_(
       host_map);
 
   for (const auto &set : transfer_sets) {
-    for (const auto &pair : set.transfers) {
+    auto [dst_host, dst_path] = ParseAddress_(set.dst);
+    for (const auto &src : set.srcs) {
       if (flag && flag->check()) {
         ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
         return {ECM{EC::Terminate, "Interrupted before task generation"},
                 prepared};
       }
 
-      auto [src_host, src_path] = ParseAddress_(pair.first);
-      auto [dst_host, dst_path] = ParseAddress_(pair.second);
+      auto [src_host, src_path] = ParseAddress_(src);
 
       std::vector<std::string> src_paths = {src_path};
       if (HasWildcard_(src_path)) {
@@ -323,11 +323,12 @@ AMTransferManager::PrepareTasks_(
                   prepared};
         }
       }
-
+      prepared.tasks = std::make_shared<TASKS>();
       for (const auto &resolved_src : src_paths) {
         auto [rcm, tasks] = AMWorkManager::load_tasks(
             resolved_src, dst_path, prepared.hostm, src_host, dst_host,
-            set.overwrite, set.mkdir, set.ignore_special_file, flag, 10000);
+            set.clone, set.overwrite, set.mkdir, set.ignore_special_file, flag,
+            10000);
         if (rcm.first != EC::Success) {
           prompt_.ErrorFormat("LoadTasks", rcm.second, false, 0, __func__);
           continue;
@@ -381,33 +382,31 @@ ECM AMTransferManager::transfer(
     return submit_rcm;
   }
 
-  AMProgressBarGroup progress_group;
-  progress_group.Start();
-  auto bar = std::make_shared<AMProgressBar>(
-      static_cast<int64_t>(task_info->total_size.load()), "transfer");
-  progress_group.AddBar(bar);
+  // AMProgressBarGroup progress_group;
+  // progress_group.Start();
+  // auto bar = std::make_shared<AMProgressBar>(
+  //     static_cast<int64_t>(task_info->total_size.load()), "transfer");
+  // progress_group.AddBar(bar);
 
-  bool all_finished = false;
-  while (!all_finished) {
-    if (flag && flag->check()) {
-      terminated.store(true);
-      worker_.terminate(task_info->id, 1000);
-      progress_group.Stop();
-      return {EC::Terminate, "Transfer interrupted during progress polling"};
-    }
-    all_finished = task_info->GetStatus() == TaskStatus::Finished;
-    bar->SetProgress(
-        static_cast<int64_t>(task_info->total_transferred_size.load()));
-    progress_group.Refresh(true);
-    std::this_thread::sleep_for(std::chrono::milliseconds(refresh_interval_ms));
-  }
+  // bool all_finished = false;
+  // while (!all_finished) {
+  //   if (flag && flag->check()) {
+  //     terminated.store(true);
+  //     worker_.terminate(task_info->id, 1000);
+  //     progress_group.Stop();
+  //     return {EC::Terminate, "Transfer interrupted during progress polling"};
+  //   }
+  //   all_finished = task_info->GetStatus() == TaskStatus::Finished;
+  //   bar->SetProgress(
+  //       static_cast<int64_t>(task_info->total_transferred_size.load()));
+  //   progress_group.Refresh(true);
+  //   std::this_thread::sleep_for(std::chrono::milliseconds(refresh_interval_ms));
+  // }
 
   {
     std::unique_lock<std::mutex> lock(done_mtx);
     done_cv.wait(lock, [&]() { return remaining.load() <= 0; });
   }
-
-  progress_group.Stop();
   return task_info->GetResult();
 }
 

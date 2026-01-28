@@ -319,6 +319,7 @@ public:
   std::string GetUID() { return this->uid; }
 
   ClientProtocol GetProtocol() { return PROTOCOL; }
+
   ssize_t TransferRingBufferSize(ssize_t buffer_size = -1) {
     if (buffer_size <= 0) {
       return this->buffer_size;

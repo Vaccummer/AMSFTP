@@ -485,10 +485,12 @@ public:
 class UserTransferSet {
 public:
   /**
-   * @brief The list of user-provided transfer pairs.
+   * @brief The list of user-provided source paths.
    */
-  std::vector<std::pair<std::string, std::string>> transfers;
   std::vector<std::string> srcs;
+  /**
+   * @brief The destination path for all sources in this set.
+   */
   std::string dst;
 
   /**
@@ -514,12 +516,12 @@ public:
   UserTransferSet() = default;
 
   /**
-   * @brief Construct a transfer set from pairs and flags.
+   * @brief Construct a transfer set from sources, destination, and flags.
    */
-  UserTransferSet(std::vector<std::pair<std::string, std::string>> pairs,
-                  bool mkdir, bool overwrite, bool ignore_special_file)
-      : transfers(std::move(pairs)), mkdir(mkdir), overwrite(overwrite),
-        ignore_special_file(ignore_special_file) {}
+  UserTransferSet(std::vector<std::string> srcs, std::string dst, bool mkdir,
+                  bool overwrite, bool ignore_special_file)
+      : srcs(std::move(srcs)), dst(std::move(dst)), mkdir(mkdir),
+        overwrite(overwrite), ignore_special_file(ignore_special_file) {}
 };
 
 struct ErrorCBInfo {
