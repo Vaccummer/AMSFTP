@@ -1,10 +1,9 @@
 #include "AMTransferManager.hpp"
-#include "AMClient/AMCore.hpp"
 #include "AMClientManager.hpp"
 #include "AMConfigManager.hpp"
+#include "AMIOCore.hpp"
 #include <algorithm>
 #include <cctype>
-#include <iostream>
 #include <unordered_set>
 
 /**
@@ -80,28 +79,54 @@ AMTransferManager::ParseAddress_(const std::string &input) {
  * @brief Check whether a path contains wildcard tokens.
  */
 bool AMTransferManager::HasWildcard_(const std::string &path) {
-  return path.find('*') != std::string::npos;
+  return path.find('*') != std::string::npos ||
+         path.find('<') != std::string::npos ||
+         path.find('>') != std::string::npos;
 }
 
 /**
  * @brief Prompt the user to confirm matched wildcard results.
  */
-bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches) {
+bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
+                                         const std::string &src_host,
+                                         const std::string &dst_host) {
   if (matches.empty()) {
     return false;
   }
-  prompt_.Print("Wildcard matches:");
-  for (const auto &m : matches) {
-    prompt_.Print("  ", m.path);
+  std::string host_name = src_host.empty() ? "local" : src_host;
+  std::string dst_name = dst_host.empty() ? "local" : dst_host;
+  prompt_.Print(AMStr::amfmt("Found {} paths to transfer",
+                             std::to_string(matches.size())));
+
+  std::vector<PathInfo> sorted = matches;
+  std::sort(sorted.begin(), sorted.end(),
+            [](const PathInfo &lhs, const PathInfo &rhs) {
+              return lhs.type == PathType::DIR && rhs.type != PathType::DIR;
+            });
+
+  for (const auto &path : sorted) {
+    if (path.type == PathType::DIR) {
+      prompt_.Print(AMStr::amfmt("📁   {}@{}", host_name, path.path));
+    } else {
+      prompt_.Print(AMStr::amfmt("📑   {}@{}", host_name, path.path));
+    }
   }
-  std::cout << "Proceed with these matches? (y/N): " << std::flush;
+
   std::string input;
-  std::getline(std::cin, input);
+  const std::string prompt = AMStr::amfmt(
+      "Are you sure to transfer these paths to {}? (y/n): ", dst_name);
+  if (!prompt_.Prompt(prompt, "", &input)) {
+    return false;
+  }
   std::string lowered = input;
   std::transform(
       lowered.begin(), lowered.end(), lowered.begin(),
       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return lowered == "y" || lowered == "yes";
+  if (lowered != "y") {
+    prompt_.Print("Transfer cancelled");
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -292,7 +317,7 @@ AMTransferManager::PrepareTasks_(
         for (const auto &m : matches) {
           src_paths.push_back(m.path);
         }
-        if (!quiet && !ConfirmWildcard_(matches)) {
+        if (!quiet && !ConfirmWildcard_(matches, src_host, dst_host)) {
           ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
           return {ECM{EC::Terminate, "Wildcard transfer canceled by user"},
                   prepared};

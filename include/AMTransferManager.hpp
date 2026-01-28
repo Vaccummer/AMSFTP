@@ -1,6 +1,6 @@
-#include "AMClient/AMCore.hpp"
 #include "AMClientManager.hpp"
 #include "AMConfigManager.hpp"
+#include "AMIOCore.hpp"
 #include "AMPromptManager.hpp"
 #include <condition_variable>
 #include <functional>
@@ -44,7 +44,9 @@ private:
   static std::pair<std::string, std::string>
   ParseAddress_(const std::string &input);
   static bool HasWildcard_(const std::string &path);
-  bool ConfirmWildcard_(const std::vector<PathInfo> &matches);
+  bool ConfirmWildcard_(const std::vector<PathInfo> &matches,
+                        const std::string &src_host,
+                        const std::string &dst_host);
   std::pair<ECM, std::shared_ptr<BaseClient>>
   AcquireClient_(const std::string &nickname,
                  const std::shared_ptr<InterruptFlag> &flag);

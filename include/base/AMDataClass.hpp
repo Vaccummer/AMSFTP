@@ -882,14 +882,14 @@ struct TaskInfo {
   std::atomic<double> start_time{0};
 
   /**
-   * @brief Current task status.
-   */
-  std::atomic<TaskStatus> status{TaskStatus::Pending};
-
-  /**
    * @brief Finished timestamp.
    */
   std::atomic<double> finished_time{0};
+
+  /**
+   * @brief Current task status.
+   */
+  std::atomic<TaskStatus> status{TaskStatus::Pending};
 
   /**
    * @brief Result code and message.

@@ -1,6 +1,7 @@
 #pragma once
 #include <chrono>
 #define _WINSOCKAPI_
+#include "base/cfgffi.h"
 #include <algorithm>
 #include <array>
 #include <boost/locale/encoding.hpp>
@@ -8,14 +9,17 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <indicators/progress_bar.hpp> // win 平台上该库会包含 windows.h
 #include <initializer_list>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <nlohmann/json.hpp>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -27,6 +31,7 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
+
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -1152,7 +1157,8 @@ private:
    * @return Width in characters.
    */
   size_t ComputeOtherFieldsWidth_() const {
-    // Format: "{prefix}    {percentage} | {acc}/{total}     [ {elapse}<{remain}  {speed} ]"
+    // Format: "{prefix}    {percentage} | {acc}/{total}     [ {elapse}<{remain}
+    // {speed} ]"
     const size_t separators_width =
         4 + 3 + 1 + 5 + 3 + 1 + 2 + 2; // spaces and symbols between fields
     return percent_width_ + (2 * size_width_) + (2 * time_width_) +
@@ -1271,6 +1277,11 @@ public:
 
   using FlatMap = std::map<Path, Value, PathLess>;
 
+  /**
+   * @brief Parse TOML with toml++ and return a flattened key/value map.
+   * @param path TOML file path to parse.
+   * @return Flattened map of TOML data.
+   */
   static FlatMap ParseFile(const std::string &path) {
     FlatMap out;
     try {
@@ -1293,6 +1304,61 @@ public:
     }
   }
 
+  /**
+   * @brief Parse TOML with the Rust cfgffi library using a JSON schema filter.
+   * @param path TOML file path to parse.
+   * @param schema_path JSON schema file path (UTF-8).
+   * @param error Optional error output; set when parsing fails.
+   * @return Flattened map of TOML data (empty on error when error is provided).
+   */
+  static FlatMap ParseFile(const std::string &path,
+                           const std::string &schema_path,
+                           std::string *error = nullptr) {
+    try {
+      if (path.empty()) {
+        throw std::runtime_error("empty toml path");
+      }
+      if (schema_path.empty()) {
+        return ParseFile(path);
+      }
+
+      std::string schema_json;
+      std::string read_error;
+      if (!ReadTextFile(schema_path, &schema_json, &read_error)) {
+        throw std::runtime_error(AMStr::amfmt(
+            "Failed to read schema \"{}\": {}", schema_path, read_error));
+      }
+
+      nlohmann::json root_json;
+      if (!ReadTomlViaRust(path, schema_json, &root_json, &read_error)) {
+        throw std::runtime_error(
+            AMStr::amfmt("Failed to read toml \"{}\": {}", path, read_error));
+      }
+
+      FlatMap out;
+      Path base;
+      FlattenJsonNode(root_json, base, out);
+      return out;
+    } catch (const std::exception &e) {
+      if (error) {
+        *error = e.what();
+        return FlatMap{};
+      }
+      throw;
+    } catch (...) {
+      if (error) {
+        *error = "unknown error";
+        return FlatMap{};
+      }
+      throw;
+    }
+  }
+
+  /**
+   * @brief Filter the flattened map using raw path strings as formats.
+   * @param data Flattened TOML map to filter in place.
+   * @param formats Paths to keep.
+   */
   static void FilterKeys(FlatMap &data, const std::vector<Path> &formats) {
     std::vector<FormatPath> converted;
     converted.reserve(formats.size());
@@ -1346,6 +1412,13 @@ public:
     return true;
   }
 
+  /**
+   * @brief Dump the flattened map to TOML on disk (toml++).
+   * @param data Flattened TOML map to serialize.
+   * @param path Output path.
+   * @param error Optional error output.
+   * @return True on success.
+   */
   static bool DumpToFile(const FlatMap &data, const std::string &path,
                          std::string *error = nullptr) {
     toml::table root = ToToml(data, error);
@@ -1363,6 +1436,13 @@ public:
     return root;
   }
 
+  /**
+   * @brief Write TOML data to file with toml++.
+   * @param node TOML root table.
+   * @param path Output path.
+   * @param error Optional error output.
+   * @return True on success.
+   */
   static bool WriteTomlToFile(const toml::table &node, const std::string &path,
                               std::string *error = nullptr) {
     std::ofstream out(path);
@@ -1380,7 +1460,534 @@ public:
     return static_cast<bool>(out);
   }
 
+  /**
+   * @brief Write TOML via Rust cfgffi using a JSON schema filter.
+   * @param node TOML root table.
+   * @param path Output path.
+   * @param schema_path JSON schema file path (UTF-8).
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  static bool WriteTomlToFile(const toml::table &node, const std::string &path,
+                              const std::string &schema_path,
+                              std::string *error = nullptr) {
+    if (schema_path.empty()) {
+      return WriteTomlToFile(node, path, error);
+    }
+
+    std::string schema_json;
+    std::string read_error;
+    if (!ReadTextFile(schema_path, &schema_json, &read_error)) {
+      if (error)
+        *error = AMStr::amfmt("Failed to read schema \"{}\": {}", schema_path,
+                              read_error);
+      return false;
+    }
+
+    std::string write_error;
+    if (!WriteTomlViaRust(node, path, schema_json, &write_error)) {
+      if (error)
+        *error = write_error;
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * @brief Read TOML via Rust cfgffi and return a toml++ table.
+   * @param path TOML file path.
+   * @param schema_path JSON schema path (UTF-8).
+   * @param out_table Output TOML table.
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  static bool ReadTomlTableViaRust(const std::string &path,
+                                   const std::string &schema_path,
+                                   toml::table *out_table,
+                                   std::string *error = nullptr) {
+    if (!out_table) {
+      if (error)
+        *error = "null output table";
+      return false;
+    }
+    if (schema_path.empty()) {
+      try {
+        *out_table = toml::parse_file(path);
+        return true;
+      } catch (const std::exception &e) {
+        if (error)
+          *error = e.what();
+        return false;
+      }
+    }
+
+    std::string schema_json;
+    std::string read_error;
+    if (!ReadTextFile(schema_path, &schema_json, &read_error)) {
+      if (error)
+        *error = AMStr::amfmt("Failed to read schema \"{}\": {}", schema_path,
+                              read_error);
+      return false;
+    }
+
+    nlohmann::json root_json;
+    if (!ReadTomlViaRust(path, schema_json, &root_json, &read_error)) {
+      if (error)
+        *error = read_error;
+      return false;
+    }
+
+    toml::table root;
+    if (!JsonToTomlTable(root_json, &root)) {
+      if (error)
+        *error = "failed to convert json to toml table";
+      return false;
+    }
+
+    *out_table = std::move(root);
+    return true;
+  }
+
 private:
+  /**
+   * @brief Read a UTF-8 text file into memory.
+   * @param path File path.
+   * @param out Output string.
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  static bool ReadTextFile(const std::string &path, std::string *out,
+                           std::string *error) {
+    if (!out) {
+      if (error)
+        *error = "null output buffer";
+      return false;
+    }
+    std::ifstream in(path, std::ios::in | std::ios::binary);
+    if (!in.is_open()) {
+      if (error)
+        *error = "failed to open file";
+      return false;
+    }
+    std::ostringstream oss;
+    oss << in.rdbuf();
+    if (!in.good() && !in.eof()) {
+      if (error)
+        *error = "failed to read file";
+      return false;
+    }
+    *out = oss.str();
+    return true;
+  }
+
+  /**
+   * @brief Read TOML via Rust cfgffi and parse the returned JSON.
+   * @param path TOML file path.
+   * @param schema_json JSON schema string.
+   * @param out_json Output JSON root.
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  static bool ReadTomlViaRust(const std::string &path,
+                              const std::string &schema_json,
+                              nlohmann::json *out_json, std::string *error) {
+    if (!out_json) {
+      if (error)
+        *error = "null json output";
+      return false;
+    }
+    char *err = nullptr;
+    ConfigHandle *handle = cfgffi_read(path.c_str(), schema_json.c_str(), &err);
+    if (!handle) {
+      std::string msg = err ? err : "unknown cfgffi_read error";
+      if (err)
+        cfgffi_free_string(err);
+      if (error)
+        *error = msg;
+      return false;
+    }
+    char *json_c = cfgffi_get_json(handle);
+    if (!json_c) {
+      cfgffi_free_handle(handle);
+      if (error)
+        *error = "cfgffi_get_json returned null";
+      return false;
+    }
+    std::string json_str(json_c);
+    cfgffi_free_string(json_c);
+    cfgffi_free_handle(handle);
+
+    try {
+      *out_json = nlohmann::json::parse(json_str);
+    } catch (const std::exception &e) {
+      if (error)
+        *error = e.what();
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * @brief Write TOML via Rust cfgffi using a JSON payload.
+   * @param node TOML root table.
+   * @param path Output path.
+   * @param schema_json JSON schema string.
+   * @param error Optional error output.
+   * @return True on success.
+   */
+  static bool WriteTomlViaRust(const toml::table &node, const std::string &path,
+                               const std::string &schema_json,
+                               std::string *error) {
+    nlohmann::json json_root;
+    if (!TomlNodeToJson(node, &json_root)) {
+      if (error)
+        *error = "failed to convert toml to json";
+      return false;
+    }
+
+    std::string json_str = json_root.dump(2);
+
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) {
+      std::ofstream out(path);
+      if (!out.is_open()) {
+        if (error)
+          *error = "failed to create output file";
+        return false;
+      }
+    }
+
+    char *err = nullptr;
+    ConfigHandle *handle = cfgffi_read(path.c_str(), schema_json.c_str(), &err);
+    if (!handle) {
+      std::string msg = err ? err : "unknown cfgffi_read error";
+      if (err)
+        cfgffi_free_string(err);
+      if (error)
+        *error = msg;
+      return false;
+    }
+
+    int rc = cfgffi_write(handle, path.c_str(), json_str.c_str(), &err);
+    if (rc != 0) {
+      std::string msg = err ? err : "unknown cfgffi_write error";
+      if (err)
+        cfgffi_free_string(err);
+      cfgffi_free_handle(handle);
+      if (error)
+        *error = msg;
+      return false;
+    }
+    if (err)
+      cfgffi_free_string(err);
+    cfgffi_free_handle(handle);
+    return true;
+  }
+
+  /**
+   * @brief Convert a toml++ node into JSON recursively.
+   * @param node TOML node.
+   * @param out_json Output JSON value.
+   * @return True when conversion succeeds.
+   */
+  static bool TomlNodeToJson(const toml::node &node, nlohmann::json *out_json) {
+    if (!out_json)
+      return false;
+
+    if (node.is_table()) {
+      nlohmann::json obj = nlohmann::json::object();
+      const toml::table &tbl = *node.as_table();
+      for (const auto &item : tbl) {
+        nlohmann::json child;
+        if (!TomlNodeToJson(item.second, &child))
+          return false;
+        obj[std::string(item.first.str())] = std::move(child);
+      }
+      *out_json = std::move(obj);
+      return true;
+    }
+
+    if (node.is_array()) {
+      nlohmann::json arr = nlohmann::json::array();
+      const toml::array &vec = *node.as_array();
+      for (const auto &child : vec) {
+        nlohmann::json child_json;
+        if (!TomlNodeToJson(child, &child_json))
+          return false;
+        arr.push_back(std::move(child_json));
+      }
+      *out_json = std::move(arr);
+      return true;
+    }
+
+    if (auto v = node.value<std::string>()) {
+      *out_json = *v;
+      return true;
+    }
+    if (auto v = node.value<int64_t>()) {
+      *out_json = *v;
+      return true;
+    }
+    if (auto v = node.value<bool>()) {
+      *out_json = *v;
+      return true;
+    }
+    if (auto v = node.value<double>()) {
+      *out_json = *v;
+      return true;
+    }
+    if (auto v = node.as_date()) {
+      std::ostringstream oss;
+      oss << *v;
+      *out_json = oss.str();
+      return true;
+    }
+    if (auto v = node.as_time()) {
+      std::ostringstream oss;
+      oss << *v;
+      *out_json = oss.str();
+      return true;
+    }
+    if (auto v = node.as_date_time()) {
+      std::ostringstream oss;
+      oss << *v;
+      *out_json = oss.str();
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * @brief Convert JSON object into a toml++ table.
+   * @param node JSON node (must be object).
+   * @param out_table Output toml table.
+   * @return True when conversion succeeds.
+   */
+  static bool JsonToTomlTable(const nlohmann::json &node,
+                              toml::table *out_table) {
+    if (!out_table)
+      return false;
+    if (!node.is_object())
+      return false;
+
+    toml::table tbl;
+    for (auto it = node.begin(); it != node.end(); ++it) {
+      const nlohmann::json &child = it.value();
+      if (child.is_null()) {
+        continue;
+      }
+      if (child.is_object()) {
+        toml::table child_tbl;
+        if (!JsonToTomlTable(child, &child_tbl))
+          return false;
+        tbl.insert(it.key(), std::move(child_tbl));
+        continue;
+      }
+      if (child.is_array()) {
+        toml::array child_arr;
+        if (!JsonToTomlArray(child, &child_arr))
+          return false;
+        tbl.insert(it.key(), std::move(child_arr));
+        continue;
+      }
+      if (child.is_boolean()) {
+        tbl.insert(it.key(), child.get<bool>());
+        continue;
+      }
+      if (child.is_number_integer()) {
+        tbl.insert(it.key(), child.get<int64_t>());
+        continue;
+      }
+      if (child.is_number_unsigned()) {
+        auto value = child.get<uint64_t>();
+        if (value <=
+            static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+          tbl.insert(it.key(), static_cast<int64_t>(value));
+        } else {
+          tbl.insert(it.key(), std::to_string(value));
+        }
+        continue;
+      }
+      if (child.is_number_float()) {
+        tbl.insert(it.key(), child.get<double>());
+        continue;
+      }
+      if (child.is_string()) {
+        tbl.insert(it.key(), child.get<std::string>());
+        continue;
+      }
+    }
+
+    *out_table = std::move(tbl);
+    return true;
+  }
+
+  /**
+   * @brief Convert JSON array into a toml++ array.
+   * @param node JSON node (must be array).
+   * @param out_array Output toml array.
+   * @return True when conversion succeeds.
+   */
+  static bool JsonToTomlArray(const nlohmann::json &node,
+                              toml::array *out_array) {
+    if (!out_array)
+      return false;
+    if (!node.is_array())
+      return false;
+
+    toml::array arr;
+    for (const auto &child : node) {
+      if (child.is_null()) {
+        continue;
+      }
+      if (child.is_object()) {
+        toml::table child_tbl;
+        if (!JsonToTomlTable(child, &child_tbl))
+          return false;
+        arr.push_back(std::move(child_tbl));
+        continue;
+      }
+      if (child.is_array()) {
+        toml::array child_arr;
+        if (!JsonToTomlArray(child, &child_arr))
+          return false;
+        arr.push_back(std::move(child_arr));
+        continue;
+      }
+      if (child.is_boolean()) {
+        arr.push_back(child.get<bool>());
+        continue;
+      }
+      if (child.is_number_integer()) {
+        arr.push_back(child.get<int64_t>());
+        continue;
+      }
+      if (child.is_number_unsigned()) {
+        auto value = child.get<uint64_t>();
+        if (value <=
+            static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+          arr.push_back(static_cast<int64_t>(value));
+        } else {
+          arr.push_back(std::to_string(value));
+        }
+        continue;
+      }
+      if (child.is_number_float()) {
+        arr.push_back(child.get<double>());
+        continue;
+      }
+      if (child.is_string()) {
+        arr.push_back(child.get<std::string>());
+        continue;
+      }
+    }
+
+    *out_array = std::move(arr);
+    return true;
+  }
+
+  /**
+   * @brief Flatten JSON node into the config flat map format.
+   * @param node JSON node to flatten.
+   * @param path Current path stack.
+   * @param out Flattened map output.
+   */
+  static void FlattenJsonNode(const nlohmann::json &node, Path &path,
+                              FlatMap &out) {
+    if (node.is_object()) {
+      for (auto it = node.begin(); it != node.end(); ++it) {
+        path.push_back(it.key());
+        FlattenJsonNode(it.value(), path, out);
+        path.pop_back();
+      }
+      return;
+    }
+
+    if (node.is_array()) {
+      if (JsonArrayAllScalar(node)) {
+        std::vector<std::string> items;
+        items.reserve(node.size());
+        for (const auto &child : node) {
+          items.push_back(JsonScalarToString(child));
+        }
+        out[path] = std::move(items);
+        return;
+      }
+      for (size_t i = 0; i < node.size(); ++i) {
+        path.push_back(std::to_string(i));
+        FlattenJsonNode(node[i], path, out);
+        path.pop_back();
+      }
+      return;
+    }
+
+    if (node.is_boolean()) {
+      out[path] = node.get<bool>();
+      return;
+    }
+    if (node.is_number_integer()) {
+      out[path] = node.get<int64_t>();
+      return;
+    }
+    if (node.is_number_unsigned()) {
+      auto value = node.get<uint64_t>();
+      if (value <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+        out[path] = static_cast<int64_t>(value);
+      } else {
+        out[path] = std::to_string(value);
+      }
+      return;
+    }
+    if (node.is_number_float()) {
+      out[path] = JsonScalarToString(node);
+      return;
+    }
+    if (node.is_string()) {
+      out[path] = node.get<std::string>();
+      return;
+    }
+  }
+
+  /**
+   * @brief Determine whether all JSON array elements are scalar values.
+   * @param arr JSON array.
+   * @return True when all elements are scalar.
+   */
+  static bool JsonArrayAllScalar(const nlohmann::json &arr) {
+    for (const auto &child : arr) {
+      if (!(child.is_null() || child.is_boolean() || child.is_number() ||
+            child.is_string())) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * @brief Convert a JSON scalar into a string representation.
+   * @param value JSON value.
+   * @return String form of the scalar.
+   */
+  static std::string JsonScalarToString(const nlohmann::json &value) {
+    if (value.is_string())
+      return value.get<std::string>();
+    if (value.is_boolean())
+      return value.get<bool>() ? "true" : "false";
+    if (value.is_number_integer())
+      return std::to_string(value.get<int64_t>());
+    if (value.is_number_unsigned())
+      return std::to_string(value.get<uint64_t>());
+    if (value.is_number_float()) {
+      std::ostringstream oss;
+      oss << value.get<double>();
+      return oss.str();
+    }
+    if (value.is_null())
+      return "null";
+    return value.dump();
+  }
+
   static bool SetNodeValue(toml::table &root, const Path &path,
                            const Value &value, std::string *error) {
     if (path.empty()) {

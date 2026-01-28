@@ -11,6 +11,7 @@ find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(CURL CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
+find_package(nlohmann_json CONFIG REQUIRED)
 find_package(replxx CONFIG REQUIRED)
 find_package(libssh2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
@@ -43,6 +44,7 @@ target_link_libraries(amsftp PRIVATE
   ZLIB::ZLIB
   CURL::libcurl
   fmt::fmt
+  nlohmann_json::nlohmann_json
   replxx::replxx
   libssh2::libssh2
   shell32
@@ -72,12 +74,28 @@ target_link_libraries(amtest PRIVATE
   ZLIB::ZLIB
   CURL::libcurl
   fmt::fmt
+  nlohmann_json::nlohmann_json
   replxx::replxx
   libssh2::libssh2
   shell32
   ws2_32
   Advapi32
 )
+
+# ========= Rust cfgffi library (optional discovery) =========
+find_library(CFGFFI_LIB NAMES cfgffi
+  PATHS
+    "${PROJECT_SOURCE_DIR}/tomlread/target/release"
+    "${PROJECT_SOURCE_DIR}/tomlread/target/debug"
+  NO_DEFAULT_PATH
+)
+
+if (CFGFFI_LIB)
+  target_link_libraries(amsftp PRIVATE ${CFGFFI_LIB})
+  target_link_libraries(amtest PRIVATE ${CFGFFI_LIB})
+else()
+  message(WARNING "cfgffi library not found; build may fail if not linked elsewhere.")
+endif()
 
 # ========= 编译选项 =========
 target_compile_options(amsftp PRIVATE

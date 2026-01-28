@@ -56,10 +56,91 @@ std::string ToLowerCopy(const std::string &value) {
   return out;
 }
 
+std::optional<std::string> GetStringField(const toml::table &tbl,
+                                          const std::string &key);
+std::optional<int64_t> GetIntField(const toml::table &tbl,
+                                   const std::string &key);
+
 const std::vector<std::string> kHostFields = {
     "username", "hostname",  "port",     "keyfile",
     "password", "trash_dir", "protocol", "buffer_size",
 };
+
+const toml::array *GetHostsArray(const toml::table &root) {
+  const toml::node *node = root.get("HOSTS");
+  if (!node || !node->is_array()) {
+    return nullptr;
+  }
+  return node->as_array();
+}
+
+bool IsHostValid(const toml::table &tbl) {
+  auto nickname = GetStringField(tbl, "nickname");
+  if (!nickname || nickname->empty())
+    return false;
+  auto hostname = GetStringField(tbl, "hostname");
+  if (!hostname || hostname->empty())
+    return false;
+  return true;
+}
+
+toml::array *EnsureHostsArray(toml::table &root) {
+  toml::node *node = root.get("HOSTS");
+  if (node) {
+    if (node->is_array()) {
+      return node->as_array();
+    }
+    root.erase("HOSTS");
+  }
+  auto inserted = root.insert("HOSTS", toml::array{});
+  return inserted.first->second.as_array();
+}
+
+const toml::table *FindHostTable(const toml::table &root,
+                                 const std::string &nickname,
+                                 std::size_t *out_index = nullptr) {
+  const toml::array *arr = GetHostsArray(root);
+  if (!arr)
+    return nullptr;
+
+  for (std::size_t i = 0; i < arr->size(); ++i) {
+    const toml::node &node = (*arr)[i];
+    if (!node.is_table())
+      continue;
+    const toml::table &tbl = *node.as_table();
+    if (!IsHostValid(tbl))
+      continue;
+    auto name = GetStringField(tbl, "nickname");
+    if (name && *name == nickname) {
+      if (out_index)
+        *out_index = i;
+      return &tbl;
+    }
+  }
+  return nullptr;
+}
+
+toml::table *FindHostTableMutable(toml::table &root,
+                                  const std::string &nickname,
+                                  std::size_t *out_index = nullptr) {
+  toml::array *arr = EnsureHostsArray(root);
+  if (!arr)
+    return nullptr;
+
+  for (std::size_t i = 0; i < arr->size(); ++i) {
+    toml::node &node = (*arr)[i];
+    if (!node.is_table())
+      continue;
+    toml::table &tbl = *node.as_table();
+    auto name = GetStringField(tbl, "nickname");
+    if (name && *name == nickname) {
+      if (out_index)
+        *out_index = i;
+      return &tbl;
+    }
+  }
+  return nullptr;
+}
 
 bool ParseIndex(const std::string &value, std::size_t *out) {
   if (value.empty())
@@ -243,34 +324,35 @@ AMConfigManager::Status AMConfigManager::Init() {
 
   config_path_ = root_dir_ / "config" / "config.toml";
   settings_path_ = root_dir_ / "config" / "settings.toml";
+  config_schema_path_ = root_dir_ / "config" / "config.schema.json";
+  settings_schema_path_ = root_dir_ / "config" / "settings.schema.json";
 
   if (std::filesystem::exists(config_path_)) {
-    FlatMap config_flat = AMConfigProcessor::ParseFile(config_path_.string());
-    if (!config_filters_.empty())
-      AMConfigProcessor::FilterKeys(config_flat, config_filters_);
     std::string error;
-    config_table_ = AMConfigProcessor::ToToml(config_flat, &error);
-    if (!error.empty()) {
-      AM_PROMPT_ERROR("ConfigInit", "failed to build config table: " + error,
+    toml::table table;
+    if (!AMConfigProcessor::ReadTomlTableViaRust(config_path_.string(),
+                                                 config_schema_path_.string(),
+                                                 &table, &error)) {
+      AM_PROMPT_ERROR("ConfigInit", "failed to parse config.toml: " + error,
                       true, 2);
-      return Err("failed to build config table: " + error, 2);
+      return Err("failed to parse config.toml: " + error, 2);
     }
+    config_table_ = std::move(table);
   } else {
     config_table_.clear();
   }
 
   if (std::filesystem::exists(settings_path_)) {
-    FlatMap settings_flat =
-        AMConfigProcessor::ParseFile(settings_path_.string());
-    if (!settings_filters_.empty())
-      AMConfigProcessor::FilterKeys(settings_flat, settings_filters_);
     std::string error;
-    settings_table_ = AMConfigProcessor::ToToml(settings_flat, &error);
-    if (!error.empty()) {
-      AM_PROMPT_ERROR("ConfigInit", "failed to build settings table: " + error,
+    toml::table table;
+    if (!AMConfigProcessor::ReadTomlTableViaRust(settings_path_.string(),
+                                                 settings_schema_path_.string(),
+                                                 &table, &error)) {
+      AM_PROMPT_ERROR("ConfigInit", "failed to parse settings.toml: " + error,
                       true, 2);
-      return Err("failed to build settings table: " + error, 2);
+      return Err("failed to parse settings.toml: " + error, 2);
     }
+    settings_table_ = std::move(table);
   } else {
     settings_table_.clear();
   }
@@ -301,11 +383,13 @@ AMConfigManager::Status AMConfigManager::Dump() {
 
   std::string error;
   if (!AMConfigProcessor::WriteTomlToFile(config_table_, config_path_.string(),
+                                          config_schema_path_.string(),
                                           &error)) {
     return Err("failed to dump config.toml: " + error);
   }
-  if (!AMConfigProcessor::WriteTomlToFile(settings_table_,
-                                          settings_path_.string(), &error)) {
+  if (!AMConfigProcessor::WriteTomlToFile(
+          settings_table_, settings_path_.string(),
+          settings_schema_path_.string(), &error)) {
     return Err("failed to dump settings.toml: " + error);
   }
 
@@ -482,30 +566,34 @@ AMConfigManager::GetClientConfig(const std::string &nickname,
   if (status.second != 0)
     return {status, ClientConfig{}};
 
-  const toml::node *node = config_table_.get(nickname);
-  if (!node || !node->is_table()) {
+  const toml::table *tbl = FindHostTable(config_table_, nickname);
+  if (!tbl) {
     return {Err("client config not found",
                 static_cast<int>(EC::HostConfigNotFound)),
             ClientConfig{}};
   }
 
-  const toml::table &tbl = *node->as_table();
+  if (!IsHostValid(*tbl)) {
+    return {Err("invalid host entry", static_cast<int>(EC::HostConfigNotFound)),
+            ClientConfig{}};
+  }
+
   ClientConfig config;
 
-  std::string hostname = GetStringField(tbl, "hostname").value_or("");
-  std::string username = GetStringField(tbl, "username").value_or("");
-  std::string password = GetStringField(tbl, "password").value_or("");
-  std::string keyfile = GetStringField(tbl, "keyfile").value_or("");
-  std::string trash_dir = GetStringField(tbl, "trash_dir").value_or("");
-  int64_t port = GetIntField(tbl, "port").value_or(22);
+  std::string hostname = GetStringField(*tbl, "hostname").value_or("");
+  std::string username = GetStringField(*tbl, "username").value_or("");
+  std::string password = GetStringField(*tbl, "password").value_or("");
+  std::string keyfile = GetStringField(*tbl, "keyfile").value_or("");
+  std::string trash_dir = GetStringField(*tbl, "trash_dir").value_or("");
+  int64_t port = GetIntField(*tbl, "port").value_or(22);
 
   config.request =
       ConRequst(nickname, hostname, username, static_cast<int>(port), password,
                 keyfile, use_compression, trash_dir);
 
-  std::string protocol_str = GetStringField(tbl, "protocol").value_or("sftp");
+  std::string protocol_str = GetStringField(*tbl, "protocol").value_or("sftp");
   config.protocol = ProtocolFromString(protocol_str);
-  config.buffer_size = GetIntField(tbl, "buffer_size").value_or(-1);
+  config.buffer_size = GetIntField(*tbl, "buffer_size").value_or(-1);
 
   return {Ok(), config};
 }
@@ -630,14 +718,11 @@ AMConfigManager::Rename(const std::string &old_nickname,
     return Err("new nickname already exists", 3);
   }
 
-  toml::node *node = config_table_.get(old_nickname);
-  if (!node || !node->is_table()) {
+  toml::table *host_table = FindHostTableMutable(config_table_, old_nickname);
+  if (!host_table) {
     return Err("invalid host entry", 4);
   }
-
-  toml::table moved = *node->as_table();
-  config_table_.erase(old_nickname);
-  config_table_.insert_or_assign(new_nickname, std::move(moved));
+  host_table->insert_or_assign("nickname", new_nickname);
 
   PrintLine(MaybeStyle("Renamed host: " + old_nickname + " -> " + new_nickname,
                        "success"));
@@ -803,11 +888,16 @@ std::string AMConfigManager::MaybeStyle(const std::string &value,
 std::map<std::string, AMConfigManager::HostEntry>
 AMConfigManager::CollectHosts() const {
   std::map<std::string, HostEntry> hosts;
-  for (const auto &item : config_table_) {
-    if (!item.second.is_table())
+  const toml::array *arr = GetHostsArray(config_table_);
+  if (!arr)
+    return hosts;
+  for (const auto &node : *arr) {
+    if (!node.is_table())
       continue;
-    std::string nickname = std::string(item.first.str());
-    const toml::table &host = *item.second.as_table();
+    const toml::table &host = *node.as_table();
+    if (!IsHostValid(host))
+      continue;
+    auto nickname = GetStringField(host, "nickname");
     HostEntry entry;
     for (const auto &field : host) {
       Value value;
@@ -816,7 +906,7 @@ AMConfigManager::CollectHosts() const {
       entry.fields[std::string(field.first.str())] = std::move(value);
     }
     if (!entry.fields.empty())
-      hosts[nickname] = std::move(entry);
+      hosts[*nickname] = std::move(entry);
   }
   return hosts;
 }
@@ -844,26 +934,26 @@ AMConfigManager::PrintHost(const std::string &nickname,
 }
 
 bool AMConfigManager::HostExists(const std::string &nickname) const {
-  const toml::node *node = config_table_.get(nickname);
-  return node && node->is_table();
+  return FindHostTable(config_table_, nickname) != nullptr;
 }
 
 AMConfigManager::Status
 AMConfigManager::UpsertHostField(const std::string &nickname,
                                  const std::string &field, Value value) {
-  toml::table *host_table = nullptr;
-  if (toml::node *node = config_table_.get(nickname)) {
-    if (!node->is_table()) {
-      config_table_.insert_or_assign(nickname, toml::table{});
-      node = config_table_.get(nickname);
-    }
-    host_table = node ? node->as_table() : nullptr;
-  } else {
-    auto inserted = config_table_.insert(nickname, toml::table{});
-    host_table = inserted.first->second.as_table();
+  toml::table *host_table = FindHostTableMutable(config_table_, nickname);
+  if (!host_table) {
+    toml::array *arr = EnsureHostsArray(config_table_);
+    if (!arr)
+      return Err("invalid host list", 2);
+    toml::table new_host;
+    new_host.insert_or_assign("nickname", nickname);
+    arr->push_back(std::move(new_host));
+    host_table = FindHostTableMutable(config_table_, nickname);
   }
   if (!host_table)
     return Err("invalid host table", 2);
+
+  host_table->insert_or_assign("nickname", nickname);
 
   if (std::holds_alternative<int64_t>(value)) {
     host_table->insert_or_assign(field, std::get<int64_t>(value));
@@ -894,7 +984,13 @@ AMConfigManager::UpsertHostField(const std::string &nickname,
 
 AMConfigManager::Status
 AMConfigManager::RemoveHost(const std::string &nickname) {
-  config_table_.erase(nickname);
+  std::size_t index = 0;
+  if (!FindHostTable(config_table_, nickname, &index))
+    return Ok();
+  toml::array *arr = EnsureHostsArray(config_table_);
+  if (!arr || index >= arr->size())
+    return Ok();
+  arr->erase(arr->begin() + static_cast<std::ptrdiff_t>(index));
   return Ok();
 }
 

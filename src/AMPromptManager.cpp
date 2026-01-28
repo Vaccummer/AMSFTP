@@ -1,9 +1,9 @@
 #include "AMPromptManager.hpp"
-#include "AMDataClass.hpp"
+#include "base/AMDataClass.hpp"
 #include <cstdlib>
 #include <iostream>
-#include <sstream>
 #include <replxx.h>
+#include <sstream>
 #include <string>
 
 namespace {

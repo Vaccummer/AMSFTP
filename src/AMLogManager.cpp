@@ -1,5 +1,5 @@
 #include "AMLogManager.hpp"
-#include "AMEnum.hpp"
+#include "base/AMEnum.hpp"
 #include <magic_enum/magic_enum.hpp>
 #include <sstream>
 
