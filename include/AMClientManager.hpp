@@ -2,8 +2,12 @@
 #include "AMConfigManager.hpp"
 #include "AMIOCore.hpp"
 #include "AMLogManager.hpp"
+#include <atomic>
+#include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <optional>
+#include <thread>
 #include <utility>
 #include <variant>
 #ifdef _WIN32
@@ -15,11 +19,11 @@
 
 class AMClientManager {
 public:
-  enum class PoolKind { Transfer, Operation };
   using ClientMaintainerRef = ClientMaintainer;
+  using ClientMaintainerPtr = std::shared_ptr<ClientMaintainer>;
   using PasswordCallback = AuthCallback;
-  using DisconnectCallback = std::function<void(
-      PoolKind, const std::shared_ptr<BaseClient> &, const ECM &)>;
+  using DisconnectCallback =
+      std::function<void(const std::shared_ptr<BaseClient> &, const ECM &)>;
   /** Global interrupt flag used when no flag is provided. */
   inline static amf global_interrupt_flag = std::make_shared<InterruptFlag>();
 
@@ -40,29 +44,29 @@ public:
 
   /** Initialize client manager with heartbeat interval from config. */
   explicit AMClientManager(AMConfigManager &cfg)
-      : config_(cfg), log_manager_(AMLogManager::Instance(cfg)),
-        local_client_(CreateLocalClient_(cfg, log_manager_)),
-        transfer_clients_(
-            ResolveHeartbeatInterval(cfg),
-            [this](const auto &client, const ECM &ecm) {
-              OnDisconnect(PoolKind::Transfer, client, ecm);
-            },
-            local_client_),
-        op_clients_(
-            ResolveHeartbeatInterval(cfg),
-            [this](const auto &client, const ECM &ecm) {
-              OnDisconnect(PoolKind::Operation, client, ecm);
-            },
-            local_client_) {
+      : config_(cfg), log_manager_(AMLogManager::Instance(cfg)) {
     trace_num_ = ResolveTraceNum(cfg);
     if (!password_cb_) {
       password_cb_ = [this](const AuthCBInfo &info) {
         return DefaultPasswordCallback(info);
       };
     }
-    LOCAL = transfer_clients_.GetHost("");
+    local_client_ = CreateLocalClient_(cfg, log_manager_);
+    clients_ = std::make_shared<ClientMaintainer>(
+        ResolveHeartbeatInterval(cfg),
+        [this](const auto &client, const ECM &ecm) {
+          OnDisconnect(client, ecm);
+        },
+        local_client_);
+    LOCAL = clients_->GetHost("");
     CLIENT = LOCAL;
-    InitClientWorkdir(LOCAL);
+    auto local_cfg = config_.GetClientConfig("local");
+    if (local_cfg.first.first == EC::Success) {
+      ApplyLoginDir_("local", LOCAL, local_cfg.second.login_dir,
+                     global_interrupt_flag);
+    } else {
+      InitClientWorkdir(LOCAL);
+    }
   }
 
   /** Current active client (public, managed by callers). */
@@ -80,137 +84,261 @@ public:
     password_cb_ = std::move(cb);
   }
 
-  /** Set disconnect callback for both pools. */
+  /** Set disconnect callback for the client maintainer. */
   void SetDisconnectCallback(DisconnectCallback cb = {}) {
     disconnect_cb_ = std::move(cb);
   }
 
-  /** Access transfer client pool. */
-  ClientMaintainerRef &TransferClients() { return transfer_clients_; }
-  /** Access operation client pool. */
-  ClientMaintainerRef &OperationClients() { return op_clients_; }
+  /** Access the default client maintainer. */
+  ClientMaintainerRef &Clients() { return *clients_; }
 
-  /** Return client nicknames for a pool. */
-  std::vector<std::string> GetClientNames(PoolKind pool) {
-    return ClientPool(pool).get_nicknames();
+  /** Return client nicknames. */
+  std::vector<std::string> GetClientNames() {
+    return clients_ ? clients_->get_nicknames() : std::vector<std::string>{};
   }
 
-  /** Return typed client list for a pool. */
-  std::vector<AMCilent> GetClients(PoolKind pool) {
-    return ClientPool(pool).get_clients();
-  }
-
-  /**
-   * @brief Create a client instance without adding it to a pool.
-   *
-   * This binds the Python tracer to the global log manager callback and
-   * binds the authentication callback to the manager's auth callback.
-   */
-  std::pair<ECM, std::shared_ptr<BaseClient>>
-  CreClient(const std::string &nickname, amf interrupt_flag = nullptr) {
-    (void)interrupt_flag;
-    if (nickname.empty() || nickname == "local") {
-      return {ECM{EC::Success, ""}, local_client_};
-    }
-
-    auto client_config = config_.GetClientConfig(nickname);
-    if (client_config.first.second != 0) {
-      EC ec = static_cast<EC>(client_config.first.second);
-      return {ECM{ec, client_config.first.first}, nullptr};
-    }
-
-    auto keys_result = config_.PrivateKeys(false);
-    if (keys_result.first.second != 0) {
-      EC ec = static_cast<EC>(keys_result.first.second);
-      return {ECM{ec, keys_result.first.first}, nullptr};
-    }
-
-    auto trace_cb = log_manager_.TraceCallbackFunc();
-    auto base_client = CreateClient(
-        client_config.second.request, client_config.second.protocol, trace_num_,
-        std::move(trace_cb), client_config.second.buffer_size,
-        keys_result.second, password_cb_);
-    if (!base_client) {
-      return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
-    }
-
-    // Ensure Python tracer is bound to the logger callback.
-    InitClientWorkdir(base_client);
-    return {ECM{EC::Success, ""}, base_client};
+  /** Return typed client list. */
+  std::vector<AMCilent> GetClients() {
+    return clients_ ? clients_->get_clients() : std::vector<AMCilent>{};
   }
 
   /** Create or reuse a client and connect it immediately. */
   std::pair<ECM, std::shared_ptr<BaseClient>>
-  AddClient(const std::string &nickname, PoolKind pool, bool force = false,
-            TraceCallback trace_cb = {}, amf interrupt_flag = nullptr) {
+  AddClient(const std::string &nickname,
+            ClientMaintainerPtr maintainer = nullptr, bool force = false,
+            bool quiet = false, TraceCallback trace_cb = {},
+            amf interrupt_flag = nullptr) {
     amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+    ClientMaintainerRef &target = maintainer ? *maintainer : *clients_;
+
     if (!trace_cb) {
       trace_cb = log_manager_.TraceCallbackFunc();
     }
     if (nickname.empty() || nickname == "local") {
-      return {ECM{EC::Success, ""}, ClientPool(pool).GetHost("")};
+      return {ECM{EC::Success, ""}, target.GetHost("")};
     }
 
-    auto existing = ClientPool(pool).GetHost(nickname);
+    auto existing = target.GetHost(nickname);
     if (existing) {
       ECM rcm = existing->Connect(force, flag);
       if (rcm.first != EC::Success) {
         return {rcm, existing};
       }
-      InitClientWorkdir(existing);
+      auto existing_cfg = config_.GetClientConfig(nickname);
+      if (existing_cfg.first.first == EC::Success) {
+        ApplyLoginDir_(nickname, existing, existing_cfg.second.login_dir, flag);
+      } else {
+        InitClientWorkdir(existing);
+      }
       return {ECM{EC::Success, ""}, existing};
     }
 
     auto client_config = config_.GetClientConfig(nickname);
-    if (client_config.first.second != 0) {
-      EC ec = static_cast<EC>(client_config.first.second);
-      return {ECM{ec, client_config.first.first}, nullptr};
+    if (client_config.first.first != EC::Success) {
+      return {client_config.first, nullptr};
     }
 
     auto keys_result = config_.PrivateKeys(false);
-    if (keys_result.first.second != 0) {
-      EC ec = static_cast<EC>(keys_result.first.second);
-      return {ECM{ec, keys_result.first.first}, nullptr};
+    if (keys_result.first.first != EC::Success) {
+      return {keys_result.first, nullptr};
     }
 
+    std::atomic<bool> spinner_running(false);
+    auto auth_cb = BuildAuthCallback_(password_cb_, quiet, &spinner_running);
     auto base_client = CreateClient(
         client_config.second.request, client_config.second.protocol, trace_num_,
         std::move(trace_cb), client_config.second.buffer_size,
-        keys_result.second, password_cb_);
+        keys_result.second, std::move(auth_cb));
     if (!base_client) {
       return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
     }
 
+    std::thread spinner_thread;
+    std::string spinner_line;
+    size_t spinner_line_len = 0;
+    if (!quiet) {
+      const std::string protocol_label =
+          ProtocolLabel_(base_client->GetProtocol());
+      spinner_line = AMStr::amfmt("Connecting to {} Server   [{}]",
+                                  protocol_label, nickname);
+      spinner_line_len = spinner_line.size() + 3;
+      spinner_running.store(true);
+      spinner_thread = std::thread([&spinner_running, spinner_line]() {
+        const char frames[] = {'|', '/', '-', '\\'};
+        size_t idx = 0;
+        while (spinner_running.load()) {
+          char indicator = frames[idx % (sizeof(frames) / sizeof(frames[0]))];
+          std::cout << '\r' << indicator << "  " << spinner_line << std::flush;
+          idx++;
+          std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        }
+      });
+    }
+
     ECM rcm = base_client->Connect(force, flag);
+    spinner_running.store(false);
+    if (spinner_thread.joinable()) {
+      spinner_thread.join();
+      if (spinner_line_len > 0) {
+        std::cout << '\r' << std::string(spinner_line_len, ' ') << '\r'
+                  << std::flush;
+      }
+    }
     if (rcm.first != EC::Success) {
       return {rcm, base_client};
     }
-    InitClientWorkdir(base_client);
-    ClientPool(pool).add_client(nickname, base_client, true);
+    ApplyLoginDir_(nickname, base_client, client_config.second.login_dir, flag);
+    target.add_client(nickname, base_client, true);
+    return {ECM{EC::Success, ""}, base_client};
+  }
+
+  /**
+   * @brief Connect to an unknown host, validate nickname, and persist on
+   * success.
+   */
+  std::pair<ECM, std::shared_ptr<BaseClient>>
+  Connect(const std::string &nickname, const std::string &hostname,
+          const std::string &username, ClientProtocol protocol, int64_t port,
+          const std::string &password, const std::string &keyfile,
+          ClientMaintainerPtr maintainer = nullptr, bool quiet = false,
+          TraceCallback trace_cb = {}, amf interrupt_flag = nullptr) {
+    amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+    ClientMaintainerRef &target = maintainer ? *maintainer : *clients_;
+
+    if (protocol == ClientProtocol::LOCAL ||
+        protocol == ClientProtocol::Unknown) {
+      return {ECM{EC::InvalidArg, "Unsupported protocol for remote connect"},
+              nullptr};
+    }
+
+    AMPromptManager &prompt = AMPromptManager::Instance();
+    std::string resolved_nickname = nickname;
+    std::string error;
+    bool canceled = false;
+    while (true) {
+      error.clear();
+      if (resolved_nickname == "local") {
+        error = "Nickname cannot be 'local'.";
+      }
+      if (error.empty() &&
+          config_.ValidateNickname(resolved_nickname, &error)) {
+        break;
+      }
+      if (!error.empty()) {
+        prompt.Print(AMStr::amfmt("Invalid nickname: {}", error));
+      }
+      const bool ok = prompt.PromptLine(
+          "Enter a legal nickname: ", &resolved_nickname, "", false, &canceled,
+          false);
+      if (!ok && canceled) {
+        return {ECM{EC::ConfigCanceled, "Nickname input canceled"}, nullptr};
+      }
+      if (!ok) {
+        continue;
+      }
+    }
+
+    std::vector<std::string> keys;
+    if (keyfile.empty()) {
+      auto keys_result = config_.PrivateKeys(false);
+      if (keys_result.first.first != EC::Success) {
+        return {keys_result.first, nullptr};
+      }
+      keys = std::move(keys_result.second);
+    } else {
+      keys.push_back(keyfile);
+    }
+
+    const std::string password_enc = AMAuth::EncryptPassword(password);
+    ConRequst request(resolved_nickname, hostname, username,
+                      static_cast<int>(port), password_enc, keyfile, false, "");
+    if (!trace_cb) {
+      trace_cb = log_manager_.TraceCallbackFunc();
+    }
+
+    auto auth_cb = BuildAuthCallback_(password_cb_, quiet, nullptr);
+    auto base_client =
+        CreateClient(request, protocol, trace_num_, std::move(trace_cb), -1,
+                     std::move(keys), std::move(auth_cb));
+    if (!base_client) {
+      return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
+    }
+
+    ECM rcm = base_client->Connect(false, flag);
+    if (rcm.first != EC::Success) {
+      return {rcm, base_client};
+    }
+
+    ECM save_rcm =
+        config_.SetHostField(resolved_nickname, "hostname", hostname, false);
+    if (save_rcm.first != EC::Success) {
+      return {save_rcm, base_client};
+    }
+    save_rcm =
+        config_.SetHostField(resolved_nickname, "username", username, false);
+    if (save_rcm.first != EC::Success) {
+      return {save_rcm, base_client};
+    }
+    save_rcm = config_.SetHostField(resolved_nickname, "port", port, false);
+    if (save_rcm.first != EC::Success) {
+      return {save_rcm, base_client};
+    }
+    save_rcm =
+        config_.SetHostField(resolved_nickname, "keyfile", keyfile, false);
+    if (save_rcm.first != EC::Success) {
+      return {save_rcm, base_client};
+    }
+    save_rcm = config_.SetHostField(
+        resolved_nickname, "protocol", ProtocolConfigValue_(protocol), false);
+    if (save_rcm.first != EC::Success) {
+      return {save_rcm, base_client};
+    }
+    save_rcm = config_.SetHostField(resolved_nickname, "buffer_size",
+                                    int64_t(-1), false);
+    if (save_rcm.first != EC::Success) {
+      return {save_rcm, base_client};
+    }
+    save_rcm = config_.SetClientPasswordEncrypted(resolved_nickname,
+                                                  password_enc, false);
+    if (save_rcm.first != EC::Success) {
+      return {save_rcm, base_client};
+    }
+    save_rcm = config_.SetHostField(resolved_nickname, "login_dir",
+                                    std::string(""), true);
+    if (save_rcm.first != EC::Success) {
+      return {save_rcm, base_client};
+    }
+
+    ApplyLoginDir_(resolved_nickname, base_client, "", flag);
+    target.add_client(resolved_nickname, base_client, true);
     return {ECM{EC::Success, ""}, base_client};
   }
 
   /** Remove a client from the pool without editing config. */
-  ECM RemoveClient(const std::string &nickname, PoolKind pool) {
+  ECM RemoveClient(const std::string &nickname,
+                   ClientMaintainerPtr maintainer = nullptr) {
     if (nickname.empty() || nickname == "local") {
       return {EC::InvalidArg, "Local client cannot be removed"};
     }
-    auto existing = ClientPool(pool).GetHost(nickname);
+    ClientMaintainerRef &target = maintainer ? *maintainer : *clients_;
+    auto existing = target.GetHost(nickname);
     if (!existing) {
       return {EC::ClientNotFound, "Client not found"};
     }
-    ClientPool(pool).remove_client(nickname);
+    target.remove_client(nickname);
     return {EC::Success, ""};
   }
 
   /** Check client status; optionally force update. */
   std::pair<ECM, std::shared_ptr<BaseClient>>
-  CheckClient(const std::string &nickname, PoolKind pool, bool update = false,
-              amf interrupt_flag = nullptr, int timeout_ms = -1,
-              int64_t start_time = -1) {
+  CheckClient(const std::string &nickname,
+              const ClientMaintainerPtr &maintainer = nullptr,
+              bool update = false, amf interrupt_flag = nullptr,
+              int timeout_ms = -1, int64_t start_time = -1) {
     amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-    auto result = ClientPool(pool).test_client(nickname, update, flag,
-                                               timeout_ms, start_time);
+    ClientMaintainerRef &target = maintainer ? *maintainer : *clients_;
+    auto result =
+        target.test_client(nickname, update, flag, timeout_ms, start_time);
     return result;
   }
 
@@ -218,12 +346,73 @@ private:
   AMConfigManager &config_;
   AMLogManager &log_manager_;
   std::shared_ptr<AMLocalClient> local_client_;
-  ClientMaintainerRef transfer_clients_;
-  ClientMaintainerRef op_clients_;
+  ClientMaintainerPtr clients_;
   PasswordCallback password_cb_ = {};
   DisconnectCallback disconnect_cb_ = {};
   std::mutex auth_io_mtx_;
   ssize_t trace_num_ = 10;
+
+  /**
+   * @brief Build an auth callback wrapper with optional log suppression and
+   *        spinner canceling.
+   */
+  AuthCallback BuildAuthCallback_(const AuthCallback &auth_cb, bool quiet,
+                                  std::atomic<bool> *spinner_running) {
+    if (!auth_cb) {
+      return {};
+    }
+    return [this, auth_cb, quiet, spinner_running](const AuthCBInfo &info) {
+      if (spinner_running) {
+        spinner_running->store(false);
+      }
+      int prev_level = -99999;
+      if (quiet) {
+        prev_level = log_manager_.TraceLevel();
+        log_manager_.TraceLevel(-1);
+      }
+      std::optional<std::string> result;
+      if (auth_cb) {
+        result = auth_cb(info);
+      }
+      if (quiet) {
+        log_manager_.TraceLevel(prev_level);
+      }
+      return result;
+    };
+  }
+
+  /**
+   * @brief Convert protocol enum into a user-facing label for connection
+   * status.
+   */
+  static std::string ProtocolLabel_(ClientProtocol protocol) {
+    switch (protocol) {
+    case ClientProtocol::SFTP:
+      return "SFTP";
+    case ClientProtocol::FTP:
+      return "FTP";
+    case ClientProtocol::LOCAL:
+      return "LOCAL";
+    default:
+      return "Remote";
+    }
+  }
+
+  /**
+   * @brief Convert protocol enum into config protocol field text.
+   */
+  static std::string ProtocolConfigValue_(ClientProtocol protocol) {
+    switch (protocol) {
+    case ClientProtocol::SFTP:
+      return "sftp";
+    case ClientProtocol::FTP:
+      return "ftp";
+    case ClientProtocol::LOCAL:
+      return "local";
+    default:
+      return "unknown";
+    }
+  }
 
   /** Read heartbeat interval from settings; fallback to 60 seconds. */
   static int ResolveHeartbeatInterval(AMConfigManager &cfg) {
@@ -253,21 +442,30 @@ private:
   static std::shared_ptr<AMLocalClient>
   CreateLocalClient_(AMConfigManager &cfg, AMLogManager &log_manager) {
     auto trace_cb = log_manager.TraceCallbackFunc();
-    auto client = std::make_shared<AMLocalClient>(ConRequst("local", "", ""),
-                                                  10, std::move(trace_cb));
-
-    std::string work_dir =
-        cfg.GetSettingString({"LocalClient", "work_dir"}, "");
-    if (!work_dir.empty()) {
-      client->home_dir = AMPathStr::UnifyPathSep(work_dir, "/");
-      std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
-      client->public_kv["workdir"] = client->home_dir;
+    ECM cfg_status = cfg.Init();
+    if (cfg_status.first != EC::Success) {
+      auto client = std::make_shared<AMLocalClient>(ConRequst("local", "", ""),
+                                                    10, std::move(trace_cb));
+      return client;
     }
 
-    std::string trash_dir =
-        cfg.GetSettingString({"LocalClient", "trash_dir"}, "");
-    if (!trash_dir.empty()) {
-      auto result = client->TrashDir(trash_dir);
+    auto cfg_result = cfg.GetClientConfig("local");
+    if (cfg_result.first.first != EC::Success) {
+      (void)cfg.SetHostField("local", "hostname", std::string("localhost"),
+                             false);
+      (void)cfg.SetHostField("local", "protocol", std::string("local"), false);
+      (void)cfg.SetHostField("local", "port", int64_t(22), false);
+      (void)cfg.SetHostField("local", "buffer_size", int64_t(-1), false);
+      (void)cfg.SetHostField("local", "login_dir", std::string(""), true);
+      cfg_result = cfg.GetClientConfig("local");
+    }
+
+    ConRequst request = cfg_result.second.request;
+    auto client =
+        std::make_shared<AMLocalClient>(request, 10, std::move(trace_cb));
+
+    if (!request.trash_dir.empty()) {
+      auto result = client->TrashDir(request.trash_dir);
       if (std::holds_alternative<ECM>(result)) {
         const auto &ecm = std::get<ECM>(result);
         if (ecm.first != EC::Success) {
@@ -276,17 +474,11 @@ private:
       }
     }
 
-    int buffer_size = cfg.GetSettingInt({"LocalClient", "buffer_size"}, -1);
-    if (buffer_size > 0) {
-      client->TransferRingBufferSize(buffer_size);
+    if (cfg_result.second.buffer_size > 0) {
+      client->TransferRingBufferSize(cfg_result.second.buffer_size);
     }
 
     return client;
-  }
-
-  /** Select pool by kind. */
-  ClientMaintainerRef &ClientPool(PoolKind pool) {
-    return pool == PoolKind::Transfer ? transfer_clients_ : op_clients_;
   }
 
   /** Initialize client workdir in public map if missing. */
@@ -301,11 +493,48 @@ private:
     }
   }
 
-  /** Forward disconnect notifications with pool kind. */
-  void OnDisconnect(PoolKind pool, const std::shared_ptr<BaseClient> &client,
-                    const ECM &ecm) {
+  /** Resolve workdir from login_dir/home_dir and persist if needed. */
+  void ApplyLoginDir_(const std::string &nickname,
+                      const std::shared_ptr<BaseClient> &client,
+                      const std::string &login_dir, const amf &flag) {
+    if (!client) {
+      return;
+    }
+
+    std::string resolved = login_dir;
+    bool need_persist = false;
+    if (resolved.empty()) {
+      resolved = client->GetHomeDir();
+      need_persist = true;
+    } else {
+      bool exists = false;
+      if (client->GetProtocol() == ClientProtocol::LOCAL) {
+        std::error_code ec;
+        exists = std::filesystem::exists(resolved, ec);
+      } else {
+        auto [rcm, info] = client->stat(resolved, false, flag);
+        exists = rcm.first == EC::Success && info.type == PathType::DIR;
+      }
+      if (!exists) {
+        resolved = client->GetHomeDir();
+        need_persist = true;
+      }
+    }
+
+    {
+      std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
+      client->public_kv["workdir"] = AMPathStr::UnifyPathSep(resolved, "/");
+    }
+
+    if (need_persist) {
+      (void)config_.SetHostField(nickname, "login_dir", resolved, true);
+    }
+  }
+
+  /** Forward disconnect notifications. */
+  void OnDisconnect(const std::shared_ptr<BaseClient> &client, const ECM &ecm) {
     if (disconnect_cb_) {
-      CallCallbackSafe(disconnect_cb_, pool, client, ecm);
+      CallCallbackSafe(disconnect_cb_, client, ecm);
     }
   }
 

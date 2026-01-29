@@ -13,15 +13,14 @@
 #include <variant>
 
 namespace {
-using Status = AMConfigManager::Status;
 using Path = AMConfigManager::Path;
 using Value = AMConfigManager::Value;
 using ClientConfig = AMConfigManager::ClientConfig;
 using EC = ErrorCode;
 using Json = nlohmann::ordered_json;
 
-Status Ok() { return {"", 0}; }
-Status Err(const std::string &msg, int code = 1) { return {msg, code}; }
+ECM Ok() { return {EC::Success, ""}; }
+ECM Err(EC code, const std::string &msg) { return {code, msg}; }
 
 bool JsonArrayAllScalar(const Json &arr) {
   for (const auto &child : arr) {
@@ -93,8 +92,8 @@ std::optional<std::string> GetStringField(const Json &obj,
 std::optional<int64_t> GetIntField(const Json &obj, const std::string &key);
 
 const std::vector<std::string> kHostFields = {
-    "username", "hostname",  "port",     "keyfile",
-    "password", "trash_dir", "protocol", "buffer_size",
+    "username",  "hostname", "port",        "keyfile",   "password",
+    "trash_dir", "protocol", "buffer_size", "login_dir",
 };
 
 const Json *GetHostsArray(const Json &root) {
@@ -376,24 +375,13 @@ AMConfigManager &AMConfigManager::Instance() {
   return instance;
 }
 
-AMConfigManager::Status
-AMConfigManager::SetConfigFilters(const std::vector<FormatPath> &filters) {
-  config_filters_ = filters;
-  return Ok();
-}
-
-AMConfigManager::Status
-AMConfigManager::SetSettingsFilters(const std::vector<FormatPath> &filters) {
-  settings_filters_ = filters;
-  return Ok();
-}
-
-AMConfigManager::Status AMConfigManager::Init() {
+ECM AMConfigManager::Init() {
   const char *root_env = std::getenv("AMSFTP_ROOT");
   if (!root_env || std::string(root_env).empty()) {
     AM_PROMPT_ERROR("ConfigInit",
                     "$AMSFTP_ROOT environment variable is not set", true, 2);
-    return Err("AMSFTP_ROOT environment variable is not set", 2);
+    return Err(EC::ConfigInvalid,
+               "AMSFTP_ROOT environment variable is not set");
   }
 
   root_dir_ = std::filesystem::path(root_env);
@@ -405,9 +393,9 @@ AMConfigManager::Status AMConfigManager::Init() {
                     "failed to create root directory " + root_dir_.string() +
                         ": " + ec.message(),
                     true, 2);
-    return Err("failed to create root directory " + root_dir_.string() + ": " +
-                   ec.message(),
-               2);
+    return Err(EC::ConfigLoadFailed, "failed to create root directory " +
+                                         root_dir_.string() + ": " +
+                                         ec.message());
   }
 
   config_path_ = root_dir_ / "config" / "config.toml";
@@ -424,7 +412,8 @@ AMConfigManager::Status AMConfigManager::Init() {
     if (!EnsureFileExists(config_path_, &error)) {
       AM_PROMPT_ERROR("ConfigInit", "failed to create config file: " + error,
                       true, 2);
-      return Err("failed to create config file: " + error, 2);
+      return Err(EC::ConfigLoadFailed,
+                 "failed to create config file: " + error);
     }
     const std::string schema_json = LoadSchemaJson(config_schema_path_, &error);
     char *err = nullptr;
@@ -436,18 +425,18 @@ AMConfigManager::Status AMConfigManager::Init() {
         cfgffi_free_string(err);
       AM_PROMPT_ERROR("ConfigInit", "failed to parse config.toml: " + msg, true,
                       2);
-      return Err("failed to parse config.toml: " + msg, 2);
+      return Err(EC::ConfigLoadFailed, "failed to parse config.toml: " + msg);
     }
     if (err)
       cfgffi_free_string(err);
     char *json_c = cfgffi_get_json(config_handle_);
     if (!json_c) {
-      return Err("failed to read config json", 2);
+      return Err(EC::ConfigLoadFailed, "failed to read config json");
     }
     std::string json_str(json_c);
     cfgffi_free_string(json_c);
     if (!ParseJsonString(json_str, &config_json_, &error)) {
-      return Err("failed to parse config json: " + error, 2);
+      return Err(EC::ConfigLoadFailed, "failed to parse config json: " + error);
     }
   }
 
@@ -456,7 +445,8 @@ AMConfigManager::Status AMConfigManager::Init() {
     if (!EnsureFileExists(settings_path_, &error)) {
       AM_PROMPT_ERROR("ConfigInit", "failed to create settings file: " + error,
                       true, 2);
-      return Err("failed to create settings file: " + error, 2);
+      return Err(EC::ConfigLoadFailed,
+                 "failed to create settings file: " + error);
     }
     const std::string schema_json =
         LoadSchemaJson(settings_schema_path_, &error);
@@ -469,18 +459,19 @@ AMConfigManager::Status AMConfigManager::Init() {
         cfgffi_free_string(err);
       AM_PROMPT_ERROR("ConfigInit", "failed to parse settings.toml: " + msg,
                       true, 2);
-      return Err("failed to parse settings.toml: " + msg, 2);
+      return Err(EC::ConfigLoadFailed, "failed to parse settings.toml: " + msg);
     }
     if (err)
       cfgffi_free_string(err);
     char *json_c = cfgffi_get_json(settings_handle_);
     if (!json_c) {
-      return Err("failed to read settings json", 2);
+      return Err(EC::ConfigLoadFailed, "failed to read settings json");
     }
     std::string json_str(json_c);
     cfgffi_free_string(json_c);
     if (!ParseJsonString(json_str, &settings_json_, &error)) {
-      return Err("failed to parse settings json: " + error, 2);
+      return Err(EC::ConfigLoadFailed,
+                 "failed to parse settings json: " + error);
     }
   }
 
@@ -493,9 +484,9 @@ AMConfigManager::Status AMConfigManager::Init() {
   return Ok();
 }
 
-AMConfigManager::Status AMConfigManager::Dump() {
+ECM AMConfigManager::Dump() {
   auto status = EnsureInitialized("Dump");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return status;
 
   std::filesystem::path config_dir = root_dir_ / "config";
@@ -505,15 +496,16 @@ AMConfigManager::Status AMConfigManager::Dump() {
     AM_PROMPT_ERROR("ConfigDumpError",
                     "failed to create config directory: " + ec.message(), true,
                     2);
-    return Err("failed to create config directory: " + ec.message(), 2);
+    return Err(EC::ConfigDumpFailed,
+               "failed to create config directory: " + ec.message());
   }
 
   std::string error;
   if (!config_handle_) {
-    return Err("config handle not initialized", 2);
+    return Err(EC::ConfigNotInitialized, "config handle not initialized");
   }
   if (!settings_handle_) {
-    return Err("settings handle not initialized", 2);
+    return Err(EC::ConfigNotInitialized, "settings handle not initialized");
   }
   {
     std::string json = config_json_.dump(2);
@@ -523,7 +515,7 @@ AMConfigManager::Status AMConfigManager::Dump() {
       std::string msg = err ? err : "cfgffi_write_inplace failed";
       if (err)
         cfgffi_free_string(err);
-      return Err("failed to dump config.toml: " + msg);
+      return Err(EC::ConfigDumpFailed, "failed to dump config.toml: " + msg);
     }
     if (err)
       cfgffi_free_string(err);
@@ -542,7 +534,7 @@ AMConfigManager::Status AMConfigManager::Dump() {
       std::string msg = err ? err : "cfgffi_write_inplace failed";
       if (err)
         cfgffi_free_string(err);
-      return Err("failed to dump settings.toml: " + msg);
+      return Err(EC::ConfigDumpFailed, "failed to dump settings.toml: " + msg);
     }
     if (err)
       cfgffi_free_string(err);
@@ -560,7 +552,7 @@ AMConfigManager::Status AMConfigManager::Dump() {
 std::string AMConfigManager::Format(const std::string &ori_str,
                                     const std::string &style_name) const {
   auto status = EnsureInitialized("Format");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return ori_str;
 
   Path key = {"style", style_name};
@@ -627,9 +619,9 @@ std::string AMConfigManager::Format(const std::string &ori_str,
   return AMStr::amfmt("\033[{}m{}\033[0m", oss.str(), ori_str);
 }
 
-AMConfigManager::Status AMConfigManager::List() const {
+ECM AMConfigManager::List() const {
   auto status = EnsureInitialized("List");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return status;
 
   auto hosts = CollectHosts();
@@ -640,16 +632,16 @@ AMConfigManager::Status AMConfigManager::List() const {
 
   for (const auto &item : hosts) {
     auto print_status = PrintHost(item.first, item.second);
-    if (print_status.second != 0)
+    if (print_status.first != EC::Success)
       return print_status;
     PrintLine("");
   }
   return Ok();
 }
 
-AMConfigManager::Status AMConfigManager::ListName() const {
+ECM AMConfigManager::ListName() const {
   auto status = EnsureInitialized("ListName");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return status;
 
   auto hosts = CollectHosts();
@@ -664,7 +656,7 @@ AMConfigManager::Status AMConfigManager::ListName() const {
 
   for (auto it = hosts.begin(); it != hosts.end(); ++it) {
     const std::string &name = it->first;
-    const std::string styled = StyledValue(name, "regular");
+    const std::string styled = Format(name, "regular");
     size_t name_len = name.size();
     size_t extra = current_width == 0 ? 0 : 1;
 
@@ -689,10 +681,10 @@ AMConfigManager::Status AMConfigManager::ListName() const {
   return Ok();
 }
 
-std::pair<AMConfigManager::Status, std::vector<std::string>>
+std::pair<ECM, std::vector<std::string>>
 AMConfigManager::PrivateKeys(bool print_sign) const {
   auto status = EnsureInitialized("PrivateKeys");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return {status, {}};
 
   std::vector<std::string> keys;
@@ -715,55 +707,83 @@ AMConfigManager::PrivateKeys(bool print_sign) const {
   if (print_sign) {
     PrintLine("[Private_keys]");
     for (const auto &path : keys) {
-      PrintLine(StyledValue(path, "dir"));
+      PrintLine(Format(path, "dir"));
     }
   }
 
   return {Ok(), keys};
 }
 
-std::pair<AMConfigManager::Status, AMConfigManager::ClientConfig>
+std::pair<ECM, AMConfigManager::ClientConfig>
 AMConfigManager::GetClientConfig(const std::string &nickname,
-                                 bool use_compression) const {
+                                 bool use_compression) {
   auto status = EnsureInitialized("GetClientConfig");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return {status, ClientConfig{}};
 
-  const Json *host = FindHostJson(config_json_, nickname);
+  Json *host = FindHostJsonMutable(config_json_, nickname);
   if (!host) {
-    return {Err("client config not found",
-                static_cast<int>(EC::HostConfigNotFound)),
+    return {Err(EC::HostConfigNotFound, "client config not found"),
             ClientConfig{}};
   }
 
   if (!IsHostValid(*host)) {
-    return {Err("invalid host entry", static_cast<int>(EC::HostConfigNotFound)),
-            ClientConfig{}};
+    return {Err(EC::HostConfigNotFound, "invalid host entry"), ClientConfig{}};
   }
 
   ClientConfig config;
+  bool updated = false;
 
-  std::string hostname = GetStringField(*host, "hostname").value_or("");
-  std::string username = GetStringField(*host, "username").value_or("");
-  std::string password = GetStringField(*host, "password").value_or("");
-  std::string keyfile = GetStringField(*host, "keyfile").value_or("");
-  std::string trash_dir = GetStringField(*host, "trash_dir").value_or("");
-  int64_t port = GetIntField(*host, "port").value_or(22);
+  auto get_string = [&](const std::string &key,
+                        const std::string &default_value) {
+    auto value = GetStringField(*host, key);
+    if (value) {
+      return *value;
+    }
+    (*host)[key] = default_value;
+    updated = true;
+    return default_value;
+  };
+
+  auto get_int = [&](const std::string &key, int64_t default_value) {
+    auto value = GetIntField(*host, key);
+    if (value.has_value()) {
+      return *value;
+    }
+    (*host)[key] = default_value;
+    updated = true;
+    return default_value;
+  };
+
+  (*host)["nickname"] = nickname;
+
+  std::string hostname = get_string("hostname", "");
+  std::string username = get_string("username", "");
+  std::string password = get_string("password", "");
+  std::string keyfile = get_string("keyfile", "");
+  std::string trash_dir = get_string("trash_dir", "");
+  std::string login_dir = get_string("login_dir", "");
+  int64_t port = get_int("port", 22);
 
   config.request =
       ConRequst(nickname, hostname, username, static_cast<int>(port), password,
                 keyfile, use_compression, trash_dir);
 
-  std::string protocol_str = GetStringField(*host, "protocol").value_or("sftp");
+  std::string protocol_str = get_string("protocol", "sftp");
   config.protocol = ProtocolFromString(protocol_str);
-  config.buffer_size = GetIntField(*host, "buffer_size").value_or(-1);
+  config.buffer_size = get_int("buffer_size", -1);
+  config.login_dir = login_dir;
+
+  if (updated) {
+    (void)Dump();
+  }
 
   return {Ok(), config};
 }
 
 int AMConfigManager::GetSettingInt(const Path &path, int default_value) const {
   auto status = EnsureInitialized("GetSettingInt");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return default_value;
   const Json *node = FindJsonNode(settings_json_, path);
   if (!node)
@@ -790,7 +810,7 @@ std::string
 AMConfigManager::GetSettingString(const Path &path,
                                   const std::string &default_value) const {
   auto status = EnsureInitialized("GetSettingString");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return default_value;
   const Json *node = FindJsonNode(settings_json_, path);
   if (!node)
@@ -811,9 +831,18 @@ AMConfigManager::GetSettingString(const Path &path,
   return default_value;
 }
 
-AMConfigManager::Status AMConfigManager::Src() const {
+bool AMConfigManager::QueryKey(const Json &root, const Path &path,
+                               Value *value) const {
+  const Json *node = FindJsonNode(root, path);
+  if (!node) {
+    return false;
+  }
+  return NodeToValue(*node, value);
+}
+
+ECM AMConfigManager::Src() const {
   auto status = EnsureInitialized("Src");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return status;
 
   const std::string config_label = "[Config]";
@@ -823,8 +852,8 @@ AMConfigManager::Status AMConfigManager::Src() const {
   std::string config_path = config_path_.string();
   std::string settings_path = settings_path_.string();
 
-  std::string styled_config = StyledValue(config_path, "dir");
-  std::string styled_settings = StyledValue(settings_path, "dir");
+  std::string styled_config = Format(config_path, "dir");
+  std::string styled_settings = Format(settings_path, "dir");
 
   {
     std::ostringstream line;
@@ -841,29 +870,41 @@ AMConfigManager::Status AMConfigManager::Src() const {
   return Ok();
 }
 
-AMConfigManager::Status AMConfigManager::Delete(const std::string &nickname) {
+ECM AMConfigManager::Delete(const std::string &targets) {
   auto status = EnsureInitialized("Delete");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return status;
 
-  if (!HostExists(nickname)) {
-    PrintLine(MaybeStyle("Host not found: " + nickname, "error"));
-    return Err("host not found", 2);
+  std::istringstream iss(targets);
+  std::string nickname;
+  ECM last = Ok();
+  bool found_any = false;
+  while (iss >> nickname) {
+    found_any = true;
+    if (!HostExists(nickname)) {
+      PrintLine(Format("Host not found: " + nickname, "error"));
+      last = Err(EC::HostNotFound, "host not found");
+      continue;
+    }
+
+    auto rm_status = RemoveHost(nickname);
+    if (rm_status.first != EC::Success) {
+      last = rm_status;
+      continue;
+    }
+    PrintLine(Format("Deleted host: " + nickname, "success"));
   }
 
-  auto rm_status = RemoveHost(nickname);
-  if (rm_status.second != 0)
-    return rm_status;
-
-  PrintLine(MaybeStyle("Deleted host: " + nickname, "success"));
-  return Ok();
+  if (!found_any) {
+    return Err(EC::InvalidArg, "empty delete targets");
+  }
+  return last;
 }
 
-AMConfigManager::Status
-AMConfigManager::Rename(const std::string &old_nickname,
-                        const std::string &new_nickname) {
+ECM AMConfigManager::Rename(const std::string &old_nickname,
+                            const std::string &new_nickname) {
   auto status = EnsureInitialized("Rename");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return status;
 
   if (old_nickname == new_nickname) {
@@ -871,117 +912,136 @@ AMConfigManager::Rename(const std::string &old_nickname,
   }
 
   if (!HostExists(old_nickname)) {
-    PrintLine(MaybeStyle("Host not found: " + old_nickname, "error"));
-    return Err("host not found", 2);
+    PrintLine(Format("Host not found: " + old_nickname, "error"));
+    return Err(EC::HostNotFound, "host not found");
   }
 
   std::string error;
   std::regex pattern("^[A-Za-z0-9_]+$");
   if (new_nickname.empty() || !std::regex_match(new_nickname, pattern)) {
     return Err(
-        "new nickname must contain only letters, numbers, and underscore", 3);
+        EC::InvalidArg,
+        "new nickname must contain only letters, numbers, and underscore");
   }
   if (HostExists(new_nickname)) {
-    return Err("new nickname already exists", 3);
+    return Err(EC::KeyAlreadyExists, "new nickname already exists");
   }
 
   Json *host = FindHostJsonMutable(config_json_, old_nickname);
   if (!host) {
-    return Err("invalid host entry", 4);
+    return Err(EC::ConfigInvalid, "invalid host entry");
   }
   (*host)["nickname"] = new_nickname;
 
-  PrintLine(MaybeStyle("Renamed host: " + old_nickname + " -> " + new_nickname,
-                       "success"));
+  PrintLine(Format("Renamed host: " + old_nickname + " -> " + new_nickname,
+                   "success"));
   return Ok();
 }
 
-AMConfigManager::Status
-AMConfigManager::Query(const std::string &nickname) const {
+ECM AMConfigManager::Query(const std::string &targets) const {
   auto status = EnsureInitialized("Query");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return status;
 
   auto hosts = CollectHosts();
-  auto it = hosts.find(nickname);
-  if (it == hosts.end()) {
-    PrintLine(MaybeStyle("Host not found: " + nickname, "error"));
-    return Err("host not found", 2);
+  std::istringstream iss(targets);
+  std::string nickname;
+  ECM last = Ok();
+  bool found_any = false;
+  while (iss >> nickname) {
+    found_any = true;
+    auto it = hosts.find(nickname);
+    if (it == hosts.end()) {
+      PrintLine(Format("Host not found: " + nickname, "error"));
+      last = Err(EC::HostNotFound, "host not found");
+      continue;
+    }
+    auto rcm = PrintHost(it->first, it->second);
+    if (rcm.first != EC::Success) {
+      last = rcm;
+    }
   }
 
-  return PrintHost(it->first, it->second);
+  if (!found_any) {
+    return Err(EC::InvalidArg, "empty query targets");
+  }
+  return last;
 }
 
-AMConfigManager::Status AMConfigManager::Add() {
+ECM AMConfigManager::Add() {
   auto status = EnsureInitialized("Add");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return status;
 
   std::string nickname;
   HostEntry entry;
   auto prompt_status = PromptAddFields(&nickname, &entry);
-  if (prompt_status.second != 0)
+  if (prompt_status.first != EC::Success)
     return prompt_status;
 
   bool canceled = false;
-  if (!PromptYesNo("Save host? (y/N): ", &canceled) || canceled) {
+  if (!AMPromptManager::Instance().PromptYesNo("Save host? (y/N): ",
+                                               &canceled) ||
+      canceled) {
     PrintLine("Add canceled.");
-    return Err("add canceled", 3);
+    return Err(EC::ConfigCanceled, "add canceled");
   }
 
   for (const auto &field : entry.fields) {
     auto up_status = UpsertHostField(nickname, field.first, field.second);
-    if (up_status.second != 0)
+    if (up_status.first != EC::Success)
       return up_status;
   }
 
-  PrintLine(MaybeStyle("Added host: " + nickname, "success"));
+  PrintLine(Format("Added host: " + nickname, "success"));
   return Ok();
 }
 
-AMConfigManager::Status AMConfigManager::Modify(const std::string &nickname) {
+ECM AMConfigManager::Modify(const std::string &nickname) {
   auto status = EnsureInitialized("Modify");
-  if (status.second != 0)
+  if (status.first != EC::Success)
     return status;
 
   if (!HostExists(nickname)) {
-    PrintLine(MaybeStyle("Host not found: " + nickname, "error"));
-    return Err("host not found", 2);
+    PrintLine(Format("Host not found: " + nickname, "error"));
+    return Err(EC::HostNotFound, "host not found");
   }
 
   HostEntry entry;
   auto prompt_status = PromptModifyFields(nickname, &entry);
-  if (prompt_status.second != 0)
+  if (prompt_status.first != EC::Success)
     return prompt_status;
 
   bool canceled = false;
-  if (!PromptYesNo("Apply changes? (y/N): ", &canceled) || canceled) {
+  if (!AMPromptManager::Instance().PromptYesNo("Apply changes? (y/N): ",
+                                               &canceled) ||
+      canceled) {
     PrintLine("Modify canceled.");
-    return Err("modify canceled", 3);
+    return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   for (const auto &field : entry.fields) {
     auto up_status = UpsertHostField(nickname, field.first, field.second);
-    if (up_status.second != 0)
+    if (up_status.first != EC::Success)
       return up_status;
   }
 
-  PrintLine(MaybeStyle("Modified host: " + nickname, "success"));
+  PrintLine(Format("Modified host: " + nickname, "success"));
   return Ok();
 }
 
 /**
  * @brief Persist an encrypted password for a given client nickname.
  */
-AMConfigManager::Status AMConfigManager::SetClientPasswordEncrypted(
+ECM AMConfigManager::SetClientPasswordEncrypted(
     const std::string &nickname, const std::string &encrypted_password,
     bool dump_now) {
   auto status = EnsureInitialized("SetClientPasswordEncrypted");
-  if (status.second != 0) {
+  if (status.first != EC::Success) {
     return status;
   }
   if (!HostExists(nickname)) {
-    return Err("host not found", static_cast<int>(EC::HostConfigNotFound));
+    return Err(EC::HostConfigNotFound, "host not found");
   }
 
   std::string stored = encrypted_password;
@@ -990,7 +1050,7 @@ AMConfigManager::Status AMConfigManager::SetClientPasswordEncrypted(
   }
 
   auto up_status = UpsertHostField(nickname, "password", stored);
-  if (up_status.second != 0) {
+  if (up_status.first != EC::Success) {
     return up_status;
   }
   if (dump_now) {
@@ -1020,10 +1080,27 @@ void AMConfigManager::CloseHandles() {
   }
 }
 
-AMConfigManager::Status
-AMConfigManager::EnsureInitialized(const char *caller) const {
+ECM AMConfigManager::EnsureInitialized(const char *caller) const {
   if (!initialized_) {
-    return Err(AMStr::amfmt("{} called before Init()", caller), 2);
+    return Err(EC::ConfigNotInitialized,
+               AMStr::amfmt("{} called before Init()", caller));
+  }
+  return Ok();
+}
+
+ECM AMConfigManager::SetHostField(const std::string &nickname,
+                                  const std::string &field, const Value &value,
+                                  bool dump_now) {
+  auto status = EnsureInitialized("SetHostField");
+  if (status.first != EC::Success) {
+    return status;
+  }
+  auto up_status = UpsertHostField(nickname, field, value);
+  if (up_status.first != EC::Success) {
+    return up_status;
+  }
+  if (dump_now) {
+    return Dump();
   }
   return Ok();
 }
@@ -1049,19 +1126,6 @@ std::string AMConfigManager::ValueToString(const Value &value) const {
     return oss.str();
   }
   return "";
-}
-
-std::string AMConfigManager::StyledValue(const std::string &value,
-                                         const std::string &style_name) const {
-  return Format(value, style_name);
-}
-
-std::string AMConfigManager::MaybeStyle(const std::string &value,
-                                        const std::string &style_name) const {
-  std::string styled = Format(value, style_name);
-  if (styled.empty())
-    return value;
-  return styled;
 }
 
 std::map<std::string, AMConfigManager::HostEntry>
@@ -1090,9 +1154,8 @@ AMConfigManager::CollectHosts() const {
   return hosts;
 }
 
-AMConfigManager::Status
-AMConfigManager::PrintHost(const std::string &nickname,
-                           const HostEntry &entry) const {
+ECM AMConfigManager::PrintHost(const std::string &nickname,
+                               const HostEntry &entry) const {
   PrintLine("[" + nickname + "]");
   size_t width = 0;
   for (const auto &field : kHostFields)
@@ -1103,7 +1166,7 @@ AMConfigManager::PrintHost(const std::string &nickname,
     if (it == entry.fields.end())
       continue;
     std::string value = ValueToString(it->second);
-    std::string styled_value = StyledValue(value, field);
+    std::string styled_value = Format(value, field);
     std::ostringstream line;
     line << std::left << std::setw(static_cast<int>(width)) << field << " :   "
          << styled_value;
@@ -1116,21 +1179,20 @@ bool AMConfigManager::HostExists(const std::string &nickname) const {
   return FindHostJson(config_json_, nickname) != nullptr;
 }
 
-AMConfigManager::Status
-AMConfigManager::UpsertHostField(const std::string &nickname,
-                                 const std::string &field, Value value) {
+ECM AMConfigManager::UpsertHostField(const std::string &nickname,
+                                     const std::string &field, Value value) {
   Json *host = FindHostJsonMutable(config_json_, nickname);
   if (!host) {
     Json *arr = EnsureHostsArray(config_json_);
     if (!arr)
-      return Err("invalid host list", 2);
+      return Err(EC::ConfigInvalid, "invalid host list");
     Json new_host = Json::object();
     new_host["nickname"] = nickname;
     arr->push_back(std::move(new_host));
     host = FindHostJsonMutable(config_json_, nickname);
   }
   if (!host)
-    return Err("invalid host table", 2);
+    return Err(EC::ConfigInvalid, "invalid host table");
 
   (*host)["nickname"] = nickname;
 
@@ -1161,8 +1223,7 @@ AMConfigManager::UpsertHostField(const std::string &nickname,
   return Ok();
 }
 
-AMConfigManager::Status
-AMConfigManager::RemoveHost(const std::string &nickname) {
+ECM AMConfigManager::RemoveHost(const std::string &nickname) {
   std::size_t index = 0;
   if (!FindHostJson(config_json_, nickname, &index))
     return Ok();
@@ -1173,68 +1234,72 @@ AMConfigManager::RemoveHost(const std::string &nickname) {
   return Ok();
 }
 
-AMConfigManager::Status AMConfigManager::PromptAddFields(std::string *nickname,
-                                                         HostEntry *entry) {
+ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   std::string error;
   bool canceled = false;
   while (true) {
-    if (!PromptLine("Nickname: ", nickname, "", true, &canceled)) {
+    if (!AMPromptManager::Instance().PromptLine("Nickname: ", nickname, "",
+                                                true, &canceled)) {
       if (canceled) {
         PrintLine("Add canceled.");
-        return Err("add canceled", 3);
+        return Err(EC::ConfigCanceled, "add canceled");
       }
-      return Err("failed to read nickname", 4);
+      return Err(EC::ConfigInvalid, "failed to read nickname");
     }
     error.clear();
     if (ValidateNickname(*nickname, &error))
       break;
-    PrintLine(MaybeStyle(error, "error"));
+    PrintLine(Format(error, "error"));
   }
 
   std::string username;
   while (true) {
-    if (!PromptLine("Username: ", &username, "", true, &canceled)) {
+    if (!AMPromptManager::Instance().PromptLine("Username: ", &username, "",
+                                                true, &canceled)) {
       PrintLine("Add canceled.");
-      return Err("add canceled", 3);
+      return Err(EC::ConfigCanceled, "add canceled");
     }
     if (!username.empty())
       break;
-    PrintLine(MaybeStyle("Username cannot be empty.", "error"));
+    PrintLine(Format("Username cannot be empty.", "error"));
   }
 
   std::string hostname;
   while (true) {
-    if (!PromptLine("Hostname: ", &hostname, "", true, &canceled)) {
+    if (!AMPromptManager::Instance().PromptLine("Hostname: ", &hostname, "",
+                                                true, &canceled)) {
       PrintLine("Add canceled.");
-      return Err("add canceled", 3);
+      return Err(EC::ConfigCanceled, "add canceled");
     }
     if (!hostname.empty())
       break;
-    PrintLine(MaybeStyle("Hostname cannot be empty.", "error"));
+    PrintLine(Format("Hostname cannot be empty.", "error"));
   }
 
   std::string protocol;
   while (true) {
-    if (!PromptLine("Protocol (sftp/ftp): ", &protocol, "", true, &canceled)) {
+    if (!AMPromptManager::Instance().PromptLine(
+            "Protocol (sftp/ftp): ", &protocol, "", true, &canceled)) {
       PrintLine("Add canceled.");
-      return Err("add canceled", 3);
+      return Err(EC::ConfigCanceled, "add canceled");
     }
     if (protocol.empty()) {
-      PrintLine(MaybeStyle("Protocol cannot be empty.", "error"));
+      PrintLine(Format("Protocol cannot be empty.", "error"));
       continue;
     }
     protocol = ToLowerCopy(protocol);
     if (protocol == "sftp" || protocol == "ftp")
       break;
-    PrintLine(MaybeStyle("Protocol must be sftp or ftp.", "error"));
+    PrintLine(Format("Protocol must be sftp or ftp.", "error"));
   }
 
   std::string port_input;
   int64_t port = 22;
   while (true) {
-    if (!PromptLine("Port (default 22): ", &port_input, "", true, &canceled)) {
+    if (!AMPromptManager::Instance().PromptLine(
+            "Port (default 22): ", &port_input, "", true, &canceled)) {
       PrintLine("Add canceled.");
-      return Err("add canceled", 3);
+      return Err(EC::ConfigCanceled, "add canceled");
     }
     if (port_input.empty()) {
       PrintLine("Using default port 22.");
@@ -1242,41 +1307,52 @@ AMConfigManager::Status AMConfigManager::PromptAddFields(std::string *nickname,
     }
     if (ParsePositiveInt(port_input, &port))
       break;
-    PrintLine(MaybeStyle("Port must be a positive integer.", "error"));
+    PrintLine(Format("Port must be a positive integer.", "error"));
   }
 
   std::string keyfile;
-  if (!PromptLine("Keyfile (optional): ", &keyfile, "", true, &canceled)) {
+  if (!AMPromptManager::Instance().PromptLine("Keyfile (optional): ", &keyfile,
+                                              "", true, &canceled)) {
     PrintLine("Add canceled.");
-    return Err("add canceled", 3);
+    return Err(EC::ConfigCanceled, "add canceled");
   }
 
   std::string password;
-  if (!PromptLine("Password (optional): ", &password, "", true, &canceled)) {
+  if (!AMPromptManager::Instance().PromptLine(
+          "Password (optional): ", &password, "", true, &canceled)) {
     PrintLine("Add canceled.");
-    return Err("add canceled", 3);
+    return Err(EC::ConfigCanceled, "add canceled");
   }
 
   std::string trash_dir;
-  if (!PromptLine("Trash dir (optional): ", &trash_dir, "", true, &canceled)) {
+  if (!AMPromptManager::Instance().PromptLine(
+          "Trash dir (optional): ", &trash_dir, "", true, &canceled)) {
     PrintLine("Add canceled.");
-    return Err("add canceled", 3);
+    return Err(EC::ConfigCanceled, "add canceled");
+  }
+
+  std::string login_dir;
+  if (!AMPromptManager::Instance().PromptLine(
+          "Login dir (optional): ", &login_dir, "", true, &canceled)) {
+    PrintLine("Add canceled.");
+    return Err(EC::ConfigCanceled, "add canceled");
   }
 
   std::string buffer_input;
   int64_t buffer_size = 24 * AMMB;
   while (true) {
-    if (!PromptLine("Buffer size(Default 24MB): ", &buffer_input, "", true,
-                    &canceled)) {
+    if (!AMPromptManager::Instance().PromptLine(
+            "Buffer size(Default 24MB): ", &buffer_input, "", true,
+            &canceled)) {
       PrintLine("Add canceled.");
-      return Err("add canceled", 3);
+      return Err(EC::ConfigCanceled, "add canceled");
     }
     if (buffer_input.empty()) {
       break;
     }
     if (ParsePositiveInt(buffer_input, &buffer_size))
       break;
-    PrintLine(MaybeStyle("Buffer size must be a positive integer.", "error"));
+    PrintLine(Format("Buffer size must be a positive integer.", "error"));
   }
 
   entry->fields.clear();
@@ -1288,17 +1364,17 @@ AMConfigManager::Status AMConfigManager::PromptAddFields(std::string *nickname,
   entry->fields["trash_dir"] = trash_dir;
   entry->fields["protocol"] = protocol;
   entry->fields["buffer_size"] = buffer_size;
+  entry->fields["login_dir"] = login_dir;
   AMAuth::SecureZero(password);
   return Ok();
 }
 
-AMConfigManager::Status
-AMConfigManager::PromptModifyFields(const std::string &nickname,
-                                    HostEntry *entry) {
+ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
+                                        HostEntry *entry) {
   auto hosts = CollectHosts();
   auto it = hosts.find(nickname);
   if (it == hosts.end())
-    return Err("host not found", 2);
+    return Err(EC::HostNotFound, "host not found");
 
   bool canceled = false;
   HostEntry updated = it->second;
@@ -1311,28 +1387,31 @@ AMConfigManager::PromptModifyFields(const std::string &nickname,
   };
 
   std::string username = get_value("username");
-  if (!PromptLine("Username: ", &username, username, false, &canceled, false)) {
+  if (!AMPromptManager::Instance().PromptLine("Username: ", &username, username,
+                                              false, &canceled, false)) {
     PrintLine("Modify canceled.");
-    return Err("modify canceled", 3);
+    return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string hostname = get_value("hostname");
-  if (!PromptLine("Hostname: ", &hostname, hostname, false, &canceled, false)) {
+  if (!AMPromptManager::Instance().PromptLine("Hostname: ", &hostname, hostname,
+                                              false, &canceled, false)) {
     PrintLine("Modify canceled.");
-    return Err("modify canceled", 3);
+    return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string protocol = get_value("protocol");
   while (true) {
-    if (!PromptLine("Protocol (sftp/ftp): ", &protocol, protocol, false,
-                    &canceled, false)) {
+    if (!AMPromptManager::Instance().PromptLine(
+            "Protocol (sftp/ftp): ", &protocol, protocol, false, &canceled,
+            false)) {
       PrintLine("Modify canceled.");
-      return Err("modify canceled", 3);
+      return Err(EC::ConfigCanceled, "modify canceled");
     }
     protocol = ToLowerCopy(protocol);
     if (protocol == "sftp" || protocol == "ftp")
       break;
-    PrintLine(MaybeStyle("Protocol must be sftp or ftp.", "error"));
+    PrintLine(Format("Protocol must be sftp or ftp.", "error"));
   }
 
   std::string port_input = get_value("port");
@@ -1340,42 +1419,52 @@ AMConfigManager::PromptModifyFields(const std::string &nickname,
   if (!port_input.empty())
     ParsePositiveInt(port_input, &port);
   while (true) {
-    if (!PromptLine("Port (default 22): ", &port_input, port_input, true,
-                    &canceled, false)) {
+    if (!AMPromptManager::Instance().PromptLine(
+            "Port (default 22): ", &port_input, port_input, true, &canceled,
+            false)) {
       PrintLine("Modify canceled.");
-      return Err("modify canceled", 3);
+      return Err(EC::ConfigCanceled, "modify canceled");
     }
     if (port_input.empty())
       break;
     if (ParsePositiveInt(port_input, &port))
       break;
-    PrintLine(MaybeStyle("Port must be a positive integer.", "error"));
+    PrintLine(Format("Port must be a positive integer.", "error"));
   }
   if (!port_input.empty())
     port = std::stoll(port_input);
 
   std::string keyfile = get_value("keyfile");
-  if (!PromptLine("Keyfile (optional): ", &keyfile, keyfile, true, &canceled,
-                  false)) {
+  if (!AMPromptManager::Instance().PromptLine(
+          "Keyfile (optional): ", &keyfile, keyfile, true, &canceled, false)) {
     PrintLine("Modify canceled.");
-    return Err("modify canceled", 3);
+    return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string password = get_value("password");
   if (AMAuth::IsEncrypted(password)) {
     password.clear();
   }
-  if (!PromptLine("Password (optional): ", &password, "", true, &canceled,
-                  false)) {
+  if (!AMPromptManager::Instance().PromptLine(
+          "Password (optional): ", &password, "", true, &canceled, false)) {
     PrintLine("Modify canceled.");
-    return Err("modify canceled", 3);
+    return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string trash_dir = get_value("trash_dir");
-  if (!PromptLine("Trash dir (optional): ", &trash_dir, trash_dir, true,
-                  &canceled, false)) {
+  if (!AMPromptManager::Instance().PromptLine(
+          "Trash dir (optional): ", &trash_dir, trash_dir, true, &canceled,
+          false)) {
     PrintLine("Modify canceled.");
-    return Err("modify canceled", 3);
+    return Err(EC::ConfigCanceled, "modify canceled");
+  }
+
+  std::string login_dir = get_value("login_dir");
+  if (!AMPromptManager::Instance().PromptLine(
+          "Login dir (optional): ", &login_dir, login_dir, true, &canceled,
+          false)) {
+    PrintLine("Modify canceled.");
+    return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string buffer_input = get_value("buffer_size");
@@ -1383,16 +1472,17 @@ AMConfigManager::PromptModifyFields(const std::string &nickname,
   if (!buffer_input.empty())
     ParsePositiveInt(buffer_input, &buffer_size);
   while (true) {
-    if (!PromptLine("Buffer size: ", &buffer_input, buffer_input, false,
-                    &canceled, false)) {
+    if (!AMPromptManager::Instance().PromptLine("Buffer size: ", &buffer_input,
+                                                buffer_input, false, &canceled,
+                                                false)) {
       PrintLine("Modify canceled.");
-      return Err("modify canceled", 3);
+      return Err(EC::ConfigCanceled, "modify canceled");
     }
     if (buffer_input.empty())
       break;
     if (ParsePositiveInt(buffer_input, &buffer_size))
       break;
-    PrintLine(MaybeStyle("Buffer size must be a positive integer.", "error"));
+    PrintLine(Format("Buffer size must be a positive integer.", "error"));
   }
 
   entry->fields.clear();
@@ -1404,51 +1494,9 @@ AMConfigManager::PromptModifyFields(const std::string &nickname,
   entry->fields["trash_dir"] = trash_dir;
   entry->fields["protocol"] = protocol;
   entry->fields["buffer_size"] = buffer_size;
+  entry->fields["login_dir"] = login_dir;
   AMAuth::SecureZero(password);
   return Ok();
-}
-
-bool AMConfigManager::PromptLine(const std::string &prompt, std::string *out,
-                                 const std::string &default_value,
-                                 bool allow_empty, bool *canceled,
-                                 bool show_default) const {
-  if (canceled)
-    *canceled = false;
-
-  std::string display_prompt = prompt;
-  if (show_default && !default_value.empty()) {
-    display_prompt = AMStr::amfmt("{}[{}] ", prompt, default_value);
-  }
-
-  std::string placeholder_value;
-  if (!show_default && !default_value.empty()) {
-    placeholder_value = default_value;
-  }
-
-  const bool was_canceled = AMPromptManager::Instance().Prompt(
-      display_prompt, placeholder_value, out);
-  if (was_canceled) {
-    if (canceled)
-      *canceled = true;
-    return false;
-  }
-
-  if (out->empty() && !default_value.empty()) {
-    *out = default_value;
-  }
-
-  if (!allow_empty && out->empty())
-    return false;
-  return true;
-}
-
-bool AMConfigManager::PromptYesNo(const std::string &prompt,
-                                  bool *canceled) const {
-  std::string answer;
-  if (!PromptLine(prompt, &answer, "", true, canceled, false))
-    return false;
-  std::string lower = ToLowerCopy(answer);
-  return lower == "y" || lower == "yes";
 }
 
 bool AMConfigManager::ParsePositiveInt(const std::string &input,
@@ -1481,7 +1529,7 @@ bool AMConfigManager::ValidateNickname(const std::string &nickname,
   std::regex pattern("^[A-Za-z0-9_]+$");
   if (!std::regex_match(nickname, pattern)) {
     if (error)
-      *error = "Nickname must contain only letters, numbers, and underscore.";
+      *error = "Nickname must contain only letters, numbers, and _ -.";
     return false;
   }
   if (HostExists(nickname)) {

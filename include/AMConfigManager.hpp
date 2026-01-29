@@ -12,7 +12,6 @@
 
 class AMConfigManager {
 public:
-  using Status = std::pair<std::string, int>;
   using Path = AMConfigProcessor::Path;
   using Value = AMConfigProcessor::Value;
   using FlatMap = AMConfigProcessor::FlatMap;
@@ -22,6 +21,7 @@ public:
     ConRequst request;
     ClientProtocol protocol = ClientProtocol::SFTP;
     int64_t buffer_size = -1;
+    std::string login_dir = "";
   };
 
   static AMConfigManager &Instance();
@@ -31,41 +31,69 @@ public:
   AMConfigManager(AMConfigManager &&) = delete;
   AMConfigManager &operator=(AMConfigManager &&) = delete;
 
-  Status SetConfigFilters(const std::vector<FormatPath> &filters);
-  Status SetSettingsFilters(const std::vector<FormatPath> &filters);
-
-  Status Init();
-  Status Dump();
+  ECM Init();
+  ECM Dump();
 
   [[nodiscard]] std::string Format(const std::string &ori_str,
                                    const std::string &style_name) const;
 
-  [[nodiscard]] Status List() const;
-  [[nodiscard]] Status ListName() const;
-  [[nodiscard]] std::pair<Status, std::vector<std::string>>
+  [[nodiscard]] ECM List() const;
+  [[nodiscard]] ECM ListName() const;
+  [[nodiscard]] std::pair<ECM, std::vector<std::string>>
   PrivateKeys(bool print_sign = false) const;
   /** Return the project root directory path. */
   [[nodiscard]] std::filesystem::path ProjectRoot() const { return root_dir_; }
-  [[nodiscard]] std::pair<Status, ClientConfig>
+  [[nodiscard]] std::pair<ECM, ClientConfig>
   GetClientConfig(const std::string &nickname,
-                  bool use_compression = false) const;
+                  bool use_compression = false);
   [[nodiscard]] int GetSettingInt(const Path &path, int default_value) const;
   /** Return a string setting value or the provided default. */
   [[nodiscard]] std::string
   GetSettingString(const Path &path, const std::string &default_value) const;
-  [[nodiscard]] Status Src() const;
-  [[nodiscard]] Status Delete(const std::string &nickname);
-  [[nodiscard]] Status Rename(const std::string &old_nickname,
-                              const std::string &new_nickname);
-  [[nodiscard]] Status Query(const std::string &nickname) const;
-  [[nodiscard]] Status Add();
-  [[nodiscard]] Status Modify(const std::string &nickname);
+  [[nodiscard]] ECM Src() const;
+  [[nodiscard]] ECM Delete(const std::string &targets);
+  [[nodiscard]] ECM Rename(const std::string &old_nickname,
+                           const std::string &new_nickname);
+  [[nodiscard]] ECM Query(const std::string &targets) const;
+  [[nodiscard]] ECM Add();
+  [[nodiscard]] ECM Modify(const std::string &nickname);
+  /**
+   * @brief Validate whether a nickname is legal and not already used.
+   */
+  bool ValidateNickname(const std::string &nickname, std::string *error) const;
   /**
    * @brief Persist an encrypted password for a given client nickname.
    */
-  Status SetClientPasswordEncrypted(const std::string &nickname,
-                                    const std::string &encrypted_password,
-                                    bool dump_now = true);
+  ECM SetClientPasswordEncrypted(const std::string &nickname,
+                                 const std::string &encrypted_password,
+                                 bool dump_now = true);
+  /** Set a host field and optionally dump config. */
+  ECM SetHostField(const std::string &nickname, const std::string &field,
+                   const Value &value, bool dump_now = true);
+
+  /** Query a value at path for config/settings JSON. */
+  bool QueryKey(const nlohmann::ordered_json &root, const Path &path,
+                Value *value) const;
+  /** Set or create a value at path for config/settings JSON. */
+  template <typename T>
+  bool SetKey(nlohmann::ordered_json &root, const Path &path, T value) {
+    nlohmann::ordered_json *node = &root;
+    for (size_t i = 0; i < path.size(); ++i) {
+      const std::string &seg = path[i];
+      if (i + 1 == path.size()) {
+        (*node)[seg] = value;
+        return true;
+      }
+      if (!node->is_object()) {
+        *node = nlohmann::ordered_json::object();
+      }
+      if (!node->contains(seg) || !(*node)[seg].is_object()) {
+        (*node)[seg] = nlohmann::ordered_json::object();
+      }
+      node = &(*node)[seg];
+    }
+    return false;
+  }
 
 private:
   AMConfigManager() = default;
@@ -76,29 +104,19 @@ private:
 
   static void OnExit();
   void CloseHandles();
-  Status EnsureInitialized(const char *caller) const;
+  ECM EnsureInitialized(const char *caller) const;
   [[nodiscard]] std::string ValueToString(const Value &value) const;
-  [[nodiscard]] std::string StyledValue(const std::string &value,
-                                        const std::string &style_name) const;
-  [[nodiscard]] std::string MaybeStyle(const std::string &value,
-                                       const std::string &style_name) const;
   [[nodiscard]] std::map<std::string, HostEntry> CollectHosts() const;
-  [[nodiscard]] Status PrintHost(const std::string &nickname,
-                                 const HostEntry &entry) const;
+  [[nodiscard]] ECM PrintHost(const std::string &nickname,
+                              const HostEntry &entry) const;
   [[nodiscard]] bool HostExists(const std::string &nickname) const;
-  Status UpsertHostField(const std::string &nickname, const std::string &field,
-                         Value value);
-  Status RemoveHost(const std::string &nickname);
+  ECM UpsertHostField(const std::string &nickname, const std::string &field,
+                      Value value);
+  ECM RemoveHost(const std::string &nickname);
 
-  Status PromptAddFields(std::string *nickname, HostEntry *entry);
-  Status PromptModifyFields(const std::string &nickname, HostEntry *entry);
-
-  bool PromptLine(const std::string &prompt, std::string *out,
-                  const std::string &default_value, bool allow_empty,
-                  bool *canceled, bool show_default = true) const;
-  bool PromptYesNo(const std::string &prompt, bool *canceled) const;
+  ECM PromptAddFields(std::string *nickname, HostEntry *entry);
+  ECM PromptModifyFields(const std::string &nickname, HostEntry *entry);
   bool ParsePositiveInt(const std::string &input, int64_t *value) const;
-  bool ValidateNickname(const std::string &nickname, std::string *error) const;
 
   std::filesystem::path root_dir_;
   std::filesystem::path config_path_;

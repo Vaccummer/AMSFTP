@@ -168,6 +168,12 @@ enum class ErrorCode {
   BufferReadError = 71,
   PyCBError = 72,
   HostConfigNotFound = 100,
+  ConfigNotInitialized = 101,
+  ConfigLoadFailed = 102,
+  ConfigDumpFailed = 103,
+  ConfigInvalid = 104,
+  ConfigCanceled = 105,
+  HostNotFound = 106,
 
   // FTP Server Error
   UnsupportFTPProtocol = 47,

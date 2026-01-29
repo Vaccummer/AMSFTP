@@ -22,6 +22,7 @@
 
 // 自身依赖
 #include "AMBaseClient.hpp"
+#include "base/AMCommonTools.hpp"
 
 // 自身依赖
 
@@ -1341,32 +1342,19 @@ class AMSFTPClient : public AMSession {
 private:
   std::unordered_map<long, std::string> user_id_map;
   std::unique_ptr<SafeChannel> terminal_channel;
-  std::vector<std::string> forbidden_cmd_tokens = {
-      "rm -rf /", "mkfs",   "dd if=", "shutdown",   "reboot",
-      "poweroff", "init 0", "halt",   ":(){:|:&};:"};
-
-  static std::string TrimCopy(std::string value) {
-    AMStr::VStrip(value);
-    return value;
-  }
-
-  static std::string ToLowerCopy(std::string value) {
-    std::transform(
-        value.begin(), value.end(), value.begin(),
-        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return value;
-  }
+  std::vector<std::string> forbidden_cmd_tokens = {"mkfs",
+                                                   "dd if=", ":(){:|:&};:"};
 
   bool IsCommandAllowed(const std::string &cmd,
                         std::string *reason = nullptr) const {
-    std::string trimmed = TrimCopy(cmd);
+    std::string trimmed = AMStr::Strip(cmd);
     if (trimmed.empty()) {
       if (reason)
         *reason = "Command is empty";
       return false;
     }
 
-    std::string lower = ToLowerCopy(trimmed);
+    std::string lower = AMStr::lowercase(trimmed);
     for (const auto &token : forbidden_cmd_tokens) {
       if (token.empty())
         continue;
@@ -1892,9 +1880,9 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::string reason;
-    if (!IsCommandAllowed(cmd, &reason)) {
-      return {ECM{EC::InvalidArg, reason}, {"", -1}};
-    }
+    // if (!IsCommandAllowed(cmd, &reason)) {
+    //   return {ECM{EC::InvalidArg, reason}, {"", -1}};
+    // }
     if (flag && flag->check()) {
       return {ECM{EC::Terminate, "Operation aborted before command sent"},
               {"", -1}};

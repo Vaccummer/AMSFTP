@@ -1355,7 +1355,6 @@ private:
     ClearConducting(thread_index);
   }
 
-public:
   // Execute a single TaskInfo
   void ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
     EnsureProgressData(task_info);
@@ -1456,6 +1455,8 @@ public:
     task_info->SetStatus(TaskStatus::Finished);
     task_info->finished_time.store(timenow());
   }
+
+public:
   /**
    * @brief Construct a work manager with a default single worker thread.
    */
