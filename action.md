@@ -1,15 +1,14 @@
-# Improve ClientManager
 
-@include\AMClientManager.hpp
+## Improve AMFilesystem
 
-- Treat `LocalClient` the same as other regular clients: initialize it by reading the config entry with nickname `"local"`.
-- Change `AMClientManager::client_maintainer` to be held by a **shared pointer** (`std::shared_ptr`).
-- Remove the `ClientMaintainerRef& ResolveMaintainer_()` function.Replace its usage sites with a ternary operator (`condition ? a : b`).
-- When a `Client` is created:
-
-  1. Read the `login_dir` field from the client's config.
-  2. If the value is missing **or** the path does not exist:
-     - Fall back to `home_dir`
-     - Persist this fallback value back to the config file
-  3. Store the resolved directory path in `client->public_kv["workdir"]`.
-- Remove the `CreClient()` function.
+- `AMFileSystem::check` should accept multiple clients as input.
+- Add a new function `AMFileSystem::sftp`, corresponding to `ClientManager::Connect` but with the protocol fixed to SFTP. Upon successful connection, automatically switch to the newly created client.
+- Add a new function `AMFileSystem::ftp`, with the same behavior as above but with the protocol fixed to FTP.
+- `remove_client` should accept multiple target clients, but prompt for confirmation only once collectively.
+- `AMFileSystem::stat` should accept multiple targets and print their status information one by one.
+- `AMFileSystem::getsize` should accept multiple targets and print each target's size on a separate line.
+- General-purpose functions related to `treeNode` creation and printing in `AMFileSystem::tree` should be moved to `CommonTools` for reuse.
+- `mkdir` and `rm` should support multiple target paths for batch operations.
+- Remove `AMFileSystem::NormalizeNickname`; replace all usages with `AMStr::lowercase()`.
+- Remove `AMFileSystem::PromptYesNo`; use the confirmation prompt functionality provided by `PromptManager` instead.
+- Replace `AMFileSystem::IsAbsolutePath` with `AMPathStr::IsAbs`.

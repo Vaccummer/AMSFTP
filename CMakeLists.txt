@@ -14,6 +14,8 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(replxx CONFIG REQUIRED)
 find_package(libssh2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
+find_package(indicators CONFIG REQUIRED)
+find_package(CLI11 CONFIG REQUIRED)
 
 # ========= MSVC 运行库（/MD /MDd） =========
 if (MSVC)
@@ -48,6 +50,7 @@ target_link_libraries(amsftp PRIVATE
   shell32
   ws2_32
   Advapi32
+  CLI11::CLI11
 )
 
 # ========= 测试程序 =========
@@ -74,6 +77,7 @@ target_link_libraries(amtest PRIVATE
   nlohmann_json::nlohmann_json
   replxx::replxx
   libssh2::libssh2
+  CLI11::CLI11
   shell32
   ws2_32
   Advapi32
