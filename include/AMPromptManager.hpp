@@ -78,6 +78,13 @@ public:
                    bool is_exit = false, int exit_code = 0,
                    const char *caller = "unknown");
 
+  /** Prompt for a line of input with optional defaults. */
+  bool PromptLine(const std::string &prompt, std::string *out,
+                  const std::string &default_value, bool allow_empty,
+                  bool *canceled, bool show_default = true);
+  /** Prompt for a yes/no response. */
+  bool PromptYesNo(const std::string &prompt, bool *canceled);
+
   /** Placeholder task result printer; format TBD. */
   void resultprint(const std::shared_ptr<TaskInfo> &task_info);
   /** Placeholder task metadata printer; format TBD. */

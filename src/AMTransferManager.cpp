@@ -151,16 +151,12 @@ AMTransferManager::AcquireClient_(const std::string &nickname,
     }
   }
 
-  auto created = client_manager_.CreClient(nickname, flag);
+  auto created = client_manager_.AddClient(nickname, nullptr, false, true, {},
+                                           flag);
   if (created.first.first != EC::Success || !created.second) {
     return created;
   }
-  auto client = created.second;
-  ECM rcm = client->Connect(false, flag);
-  if (rcm.first != EC::Success) {
-    return {rcm, client};
-  }
-  return {ECM{EC::Success, ""}, client};
+  return {ECM{EC::Success, ""}, created.second};
 }
 
 /**
@@ -382,26 +378,26 @@ ECM AMTransferManager::transfer(
     return submit_rcm;
   }
 
-  // AMProgressBarGroup progress_group;
-  // progress_group.Start();
-  // auto bar = std::make_shared<AMProgressBar>(
-  //     static_cast<int64_t>(task_info->total_size.load()), "transfer");
-  // progress_group.AddBar(bar);
+  AMProgressBarGroup progress_group;
+  progress_group.Start();
+  auto bar = std::make_shared<AMProgressBar>(
+      static_cast<int64_t>(task_info->total_size.load()), "transfer");
+  progress_group.AddBar(bar);
 
-  // bool all_finished = false;
-  // while (!all_finished) {
-  //   if (flag && flag->check()) {
-  //     terminated.store(true);
-  //     worker_.terminate(task_info->id, 1000);
-  //     progress_group.Stop();
-  //     return {EC::Terminate, "Transfer interrupted during progress polling"};
-  //   }
-  //   all_finished = task_info->GetStatus() == TaskStatus::Finished;
-  //   bar->SetProgress(
-  //       static_cast<int64_t>(task_info->total_transferred_size.load()));
-  //   progress_group.Refresh(true);
-  //   std::this_thread::sleep_for(std::chrono::milliseconds(refresh_interval_ms));
-  // }
+  bool all_finished = false;
+  while (!all_finished) {
+    if (flag && flag->check()) {
+      terminated.store(true);
+      worker_.terminate(task_info->id, 1000);
+      progress_group.Stop();
+      return {EC::Terminate, "Transfer interrupted during progress polling"};
+    }
+    all_finished = task_info->GetStatus() == TaskStatus::Finished;
+    bar->SetProgress(
+        static_cast<int64_t>(task_info->total_transferred_size.load()));
+    progress_group.Refresh(true);
+    std::this_thread::sleep_for(std::chrono::milliseconds(refresh_interval_ms));
+  }
 
   {
     std::unique_lock<std::mutex> lock(done_mtx);

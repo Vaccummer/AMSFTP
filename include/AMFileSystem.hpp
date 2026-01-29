@@ -3,6 +3,7 @@
 #include "AMConfigManager.hpp"
 #include "AMPromptManager.hpp"
 #include "base/AMEnum.hpp"
+#include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,19 +40,59 @@ public:
   /** Print all clients with real-time status. */
   ECM print_clients(amf interrupt_flag = nullptr);
   /** Print stat info for a path. */
-  ECM stat(const std::string &path, amf interrupt_flag = nullptr);
+  ECM stat(const std::string &path, amf interrupt_flag = nullptr,
+           int timeout_ms = -1);
   /** List directory entries; list_like enables long format, show_all shows dot
    * entries. */
   ECM ls(const std::string &path, bool list_like = false, bool show_all = false,
-         amf interrupt_flag = nullptr);
+         amf interrupt_flag = nullptr, int timeout_ms = -1);
   /** Print total size of a path. */
-  ECM getsize(const std::string &path, amf interrupt_flag = nullptr);
+  ECM getsize(const std::string &path, amf interrupt_flag = nullptr,
+              int timeout_ms = -1);
   /** Find paths matching the pattern. */
-  ECM find(const std::string &path, amf interrupt_flag = nullptr);
+  ECM find(const std::string &path, SearchType type = SearchType::All,
+           amf interrupt_flag = nullptr, int timeout_ms = -1);
   /** Create directory (recursive). */
-  ECM mkdir(const std::string &path, amf interrupt_flag = nullptr);
+  ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
+            int timeout_ms = -1);
   /** Remove a path using safe removal. */
-  ECM rm(const std::string &path, amf interrupt_flag = nullptr);
+  ECM rm(const std::string &path, amf interrupt_flag = nullptr,
+         int timeout_ms = -1);
+  /** Move multiple sources into destination without cross-client moves. */
+  ECM move(const std::vector<std::string> &srcs, const std::string &dst,
+           bool mkdir = false, bool overwrite = false,
+           amf interrupt_flag = nullptr, int timeout_ms = -1);
+  /** Rename a single source to destination without cross-client moves. */
+  ECM rename(const std::string &src, const std::string &dst, bool mkdir = false,
+             bool overwrite = false, amf interrupt_flag = nullptr,
+             int timeout_ms = -1);
+  /** Walk a path and print entries; only_file/only_dir controls filtering. */
+  ECM walk(const std::string &path, bool only_file = false,
+           bool only_dir = false, bool ignore_special_file = true,
+           amf interrupt_flag = nullptr, int timeout_ms = -1);
+  /** Print a directory tree like unix tree using walk output. */
+  ECM tree(const std::string &path, int max_depth = -1,
+           bool ignore_special_file = true, amf interrupt_flag = nullptr,
+           int timeout_ms = -1);
+  /** Print the absolute path resolved by client home/workdir. */
+  ECM realpath(const std::string &path, amf interrupt_flag = nullptr,
+               int timeout_ms = -1);
+  /** Print the protocol name for a client (defaults to current). */
+  ECM GetProtocol(const std::string &nickname = "",
+                  amf interrupt_flag = nullptr);
+  /** Print the trash directory for a client (defaults to current). */
+  ECM TrashDir(const std::string &nickname = "", amf interrupt_flag = nullptr,
+               int timeout_ms = -1);
+  /** Print the home directory for a client (defaults to current). */
+  ECM HomeDir(const std::string &nickname = "", amf interrupt_flag = nullptr,
+              int timeout_ms = -1);
+  /** Update the trash directory and persist it in config. */
+  ECM SetTrashDir(const std::string &trash_dir,
+                  const std::string &nickname = "",
+                  amf interrupt_flag = nullptr, int timeout_ms = -1);
+  /** Update transfer buffer size and persist it in config. */
+  ECM SetBufferSize(int64_t buffer_size, const std::string &nickname = "",
+                    amf interrupt_flag = nullptr);
 
 private:
   /** Construct with required managers. */
@@ -62,14 +103,13 @@ private:
   struct ClientRef {
     std::string nickname;
     std::shared_ptr<BaseClient> client;
-    AMClientManager::PoolKind pool = AMClientManager::PoolKind::Operation;
     /** Return true if client is valid. */
     [[nodiscard]] bool is_valid() const { return static_cast<bool>(client); }
   };
 
-  /** Resolve client by nickname and pool (case-insensitive). */
-  ClientRef ResolveClientByName(const std::string &nickname,
-                                AMClientManager::PoolKind pool) const;
+  /** Resolve client by nickname (case-insensitive). */
+  [[nodiscard]] ClientRef
+  ResolveClientByName(const std::string &nickname) const;
   /** Resolve client and raw path from input. */
   ClientRef ResolveClientForPath(const std::string &input,
                                  std::string *out_path,
@@ -79,11 +119,14 @@ private:
   ClientRef ResolveOrCreateClient(const std::string &nickname,
                                   amf interrupt_flag = nullptr);
   /** Normalize nickname to lowercase for comparisons. */
-  std::string NormalizeNickname(const std::string &nickname) const;
+  [[nodiscard]] std::string
+  NormalizeNickname(const std::string &nickname) const;
   /** Build absolute path using AMFS::abspath and workdir. */
-  std::string BuildPath(const ClientRef &client, const std::string &path) const;
+  [[nodiscard]] std::string BuildPath(const ClientRef &client,
+                                      const std::string &path) const;
   /** Get client workdir from public map or fallback to home dir. */
-  std::string GetClientWorkdir(const std::shared_ptr<BaseClient> &client) const;
+  [[nodiscard]] std::string
+  GetClientWorkdir(const std::shared_ptr<BaseClient> &client) const;
   /** Set client workdir in public map. */
   void SetClientWorkdir(const std::shared_ptr<BaseClient> &client,
                         const std::string &path);

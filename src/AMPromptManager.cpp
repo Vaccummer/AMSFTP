@@ -1,5 +1,8 @@
 #include "AMPromptManager.hpp"
+#include "base/AMCommonTools.hpp"
 #include "base/AMDataClass.hpp"
+#include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <iostream>
 #include <replxx.h>
@@ -66,6 +69,56 @@ void AMPromptManager::ErrorFormat(const std::string &error_name,
     std::cout.flush();
     std::exit(exit_code);
   }
+}
+
+/** Prompt for a line of input with optional defaults. */
+bool AMPromptManager::PromptLine(const std::string &prompt, std::string *out,
+                                 const std::string &default_value,
+                                 bool allow_empty, bool *canceled,
+                                 bool show_default) {
+  if (canceled)
+    *canceled = false;
+  if (!out)
+    return false;
+
+  std::string display_prompt = prompt;
+  if (show_default && !default_value.empty()) {
+    display_prompt = AMStr::amfmt("{}[{}] ", prompt, default_value);
+  }
+
+  std::string placeholder_value;
+  if (!show_default && !default_value.empty()) {
+    placeholder_value = default_value;
+  }
+
+  const bool was_canceled =
+      Prompt(display_prompt, placeholder_value, out);
+  if (was_canceled) {
+    if (canceled)
+      *canceled = true;
+    return false;
+  }
+
+  if (out->empty() && !default_value.empty()) {
+    *out = default_value;
+  }
+
+  if (!allow_empty && out->empty())
+    return false;
+  return true;
+}
+
+/** Prompt for a yes/no response. */
+bool AMPromptManager::PromptYesNo(const std::string &prompt, bool *canceled) {
+  std::string answer;
+  if (!PromptLine(prompt, &answer, "", true, canceled, false))
+    return false;
+  AMStr::VStrip(answer);
+  std::string lower = answer;
+  std::transform(
+      lower.begin(), lower.end(), lower.begin(),
+      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return lower == "y" || lower == "yes";
 }
 
 /**
