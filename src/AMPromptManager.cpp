@@ -91,8 +91,7 @@ bool AMPromptManager::PromptLine(const std::string &prompt, std::string *out,
     placeholder_value = default_value;
   }
 
-  const bool was_canceled =
-      Prompt(display_prompt, placeholder_value, out);
+  const bool was_canceled = Prompt(display_prompt, placeholder_value, out);
   if (was_canceled) {
     if (canceled)
       *canceled = true;

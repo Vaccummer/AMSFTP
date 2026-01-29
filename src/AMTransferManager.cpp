@@ -151,8 +151,8 @@ AMTransferManager::AcquireClient_(const std::string &nickname,
     }
   }
 
-  auto created = client_manager_.AddClient(nickname, nullptr, false, true, {},
-                                           flag);
+  auto created =
+      client_manager_.AddClient(nickname, nullptr, false, true, {}, flag);
   if (created.first.first != EC::Success || !created.second) {
     return created;
   }

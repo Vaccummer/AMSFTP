@@ -227,9 +227,9 @@ public:
       if (!error.empty()) {
         prompt.Print(AMStr::amfmt("Invalid nickname: {}", error));
       }
-      const bool ok = prompt.PromptLine(
-          "Enter a legal nickname: ", &resolved_nickname, "", false, &canceled,
-          false);
+      const bool ok =
+          prompt.PromptLine("Enter a legal nickname: ", &resolved_nickname, "",
+                            false, &canceled, false);
       if (!ok && canceled) {
         return {ECM{EC::ConfigCanceled, "Nickname input canceled"}, nullptr};
       }
@@ -288,8 +288,8 @@ public:
     if (save_rcm.first != EC::Success) {
       return {save_rcm, base_client};
     }
-    save_rcm = config_.SetHostField(
-        resolved_nickname, "protocol", ProtocolConfigValue_(protocol), false);
+    save_rcm = config_.SetHostField(resolved_nickname, "protocol",
+                                    ProtocolConfigValue_(protocol), false);
     if (save_rcm.first != EC::Success) {
       return {save_rcm, base_client};
     }

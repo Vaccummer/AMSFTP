@@ -14,12 +14,12 @@
 namespace fs = std::filesystem;
 
 /** Global interrupt flag for CLI operations. */
-static amf g_cli_interrupt_flag = std::make_shared<InterruptFlag>();
+static amf gif = std::make_shared<InterruptFlag>();
 
 /** Handle Ctrl-C to signal interruption. */
 static void HandleCliSignal([[maybe_unused]] int signum) {
-  if (g_cli_interrupt_flag) {
-    g_cli_interrupt_flag->set(true);
+  if (gif) {
+    gif->set(true);
   }
 }
 
@@ -138,8 +138,8 @@ int main(int argc, char **argv) {
 
     auto &client_manager = AMClientManager::Instance(config_manager);
     auto &filesystem = AMFileSystem::Instance(client_manager, config_manager);
-    AMClientManager::global_interrupt_flag = g_cli_interrupt_flag;
-    AMFileSystem::global_interrupt_flag = g_cli_interrupt_flag;
+    AMClientManager::global_interrupt_flag = gif;
+    AMFileSystem::global_interrupt_flag = gif;
 
     const int timeout_ms = ResolveTimeoutMs(config_manager);
 
@@ -268,8 +268,7 @@ int main(int argc, char **argv) {
           continue;
         }
         seen.insert(nickname);
-        auto [rcm, _client] =
-            EnsureClient(client_manager, nickname, g_cli_interrupt_flag);
+        auto [rcm, _client] = EnsureClient(client_manager, nickname, gif);
         if (rcm.first != EC::Success) {
           return rcm;
         }
@@ -288,7 +287,7 @@ int main(int argc, char **argv) {
       }
       int exit_code = 0;
       for (const auto &path : stat_paths) {
-        rcm = filesystem.stat(path, g_cli_interrupt_flag, timeout_ms);
+        rcm = filesystem.stat(path, gif, timeout_ms);
         if (rcm.first != EC::Success) {
           std::cerr << rcm.second << std::endl;
           exit_code = static_cast<int>(rcm.first);
@@ -303,8 +302,7 @@ int main(int argc, char **argv) {
         std::cerr << rcm.second << std::endl;
         return static_cast<int>(rcm.first);
       }
-      rcm = filesystem.ls(ls_path, ls_long, ls_all, g_cli_interrupt_flag,
-                          timeout_ms);
+      rcm = filesystem.ls(ls_path, ls_long, ls_all, gif, timeout_ms);
       if (rcm.first != EC::Success) {
         std::cerr << rcm.second << std::endl;
       }
@@ -324,8 +322,7 @@ int main(int argc, char **argv) {
             nickname.empty() ? client_manager.CLIENT
                              : client_manager.Clients().GetHost(nickname);
         if (!client) {
-          auto [rcm2, created] =
-              EnsureClient(client_manager, nickname, g_cli_interrupt_flag);
+          auto [rcm2, created] = EnsureClient(client_manager, nickname, gif);
           if (rcm2.first != EC::Success) {
             std::cerr << rcm2.second << std::endl;
             exit_code = static_cast<int>(rcm2.first);
@@ -336,8 +333,8 @@ int main(int argc, char **argv) {
         std::string abs_path =
             BuildPath(client, subpath.empty() ? input : subpath);
         int64_t start_time = am_ms();
-        int64_t size = client->getsize(abs_path, true, g_cli_interrupt_flag,
-                                       timeout_ms, start_time);
+        int64_t size =
+            client->getsize(abs_path, true, gif, timeout_ms, start_time);
         if (size < 0) {
           std::cerr << "Failed to get size: " << input << std::endl;
           exit_code = static_cast<int>(EC::UnknownError);
@@ -355,8 +352,7 @@ int main(int argc, char **argv) {
         std::cerr << rcm.second << std::endl;
         return static_cast<int>(rcm.first);
       }
-      rcm = filesystem.find(find_path, SearchType::All, g_cli_interrupt_flag,
-                            timeout_ms);
+      rcm = filesystem.find(find_path, SearchType::All, gif, timeout_ms);
       if (rcm.first != EC::Success) {
         std::cerr << rcm.second << std::endl;
       }
@@ -371,7 +367,7 @@ int main(int argc, char **argv) {
       }
       int exit_code = 0;
       for (const auto &path : mkdir_paths) {
-        rcm = filesystem.mkdir(path, g_cli_interrupt_flag, timeout_ms);
+        rcm = filesystem.mkdir(path, gif, timeout_ms);
         if (rcm.first != EC::Success) {
           std::cout << "❌ " << static_cast<int>(rcm.first)
                     << ": Fail to mkdir " << path << " , " << rcm.second
@@ -397,8 +393,7 @@ int main(int argc, char **argv) {
             nickname.empty() ? client_manager.CLIENT
                              : client_manager.Clients().GetHost(nickname);
         if (!client) {
-          auto [rcm2, created] =
-              EnsureClient(client_manager, nickname, g_cli_interrupt_flag);
+          auto [rcm2, created] = EnsureClient(client_manager, nickname, gif);
           if (rcm2.first != EC::Success) {
             std::cout << "❌ " << static_cast<int>(rcm2.first)
                       << ": Fail to rm " << input << " , " << rcm2.second
@@ -412,12 +407,10 @@ int main(int argc, char **argv) {
             BuildPath(client, subpath.empty() ? input : subpath);
         int64_t start_time = am_ms();
         if (rm_permanent) {
-          auto result = client->remove(abs_path, g_cli_interrupt_flag,
-                                       timeout_ms, start_time);
+          auto result = client->remove(abs_path, gif, timeout_ms, start_time);
           rcm = result.first;
         } else {
-          rcm = client->saferm(abs_path, g_cli_interrupt_flag, timeout_ms,
-                               start_time);
+          rcm = client->saferm(abs_path, gif, timeout_ms, start_time);
         }
         if (rcm.first != EC::Success) {
           std::cout << "❌ " << static_cast<int>(rcm.first) << ": Fail to rm "

@@ -786,7 +786,7 @@ struct TransferTask {
   PathType path_type = PathType::FILE;
   bool IsFinished = false;
   ECM rcm = ECM(EC::Success, "");
-  uint64_t transferred = 0; // Current file transferred size
+  uint64_t transferred{0}; // Current file transferred size
   TransferTask() : src(""), src_host(""), dst(""), dst_host(""), size(0) {}
   TransferTask(std::string src, std::string dst, std::string src_host,
                std::string dst_host, uint64_t size,
@@ -1027,3 +1027,145 @@ struct TaskInfo {
     return rcm;
   }
 };
+
+namespace AMTree {
+struct TreeNode {
+  std::vector<std::string> children;
+  std::vector<PathInfo> files;
+};
+
+using TreeNodeMap = std::unordered_map<std::string, TreeNode>;
+using JoinPartsFn =
+    std::function<std::string(const std::vector<std::string> &)>;
+using JoinPairFn =
+    std::function<std::string(const std::string &, const std::string &)>;
+
+/**
+ * @brief Build tree nodes from walk structure data.
+ */
+inline void BuildTreeNodes(
+    const std::string &root,
+    const std::vector<
+        std::pair<std::vector<std::string>, std::vector<PathInfo>>> &structure,
+    TreeNodeMap *nodes, const JoinPartsFn &join_parts,
+    const JoinPairFn &join_pair) {
+  (void)join_pair;
+  if (!nodes) {
+    return;
+  }
+  nodes->clear();
+  std::unordered_set<std::string> child_set;
+
+  auto ensure_node = [&](const std::string &dir_path) {
+    if (nodes->find(dir_path) == nodes->end()) {
+      (*nodes)[dir_path] = TreeNode{};
+    }
+  };
+
+  auto add_child = [&](const std::string &parent, const std::string &name) {
+    std::string key = parent + "\n" + name;
+    if (child_set.find(key) != child_set.end()) {
+      return;
+    }
+    child_set.insert(key);
+    (*nodes)[parent].children.push_back(name);
+  };
+
+  ensure_node(root);
+  for (const auto &entry : structure) {
+    const auto &parts = entry.first;
+    const auto &files = entry.second;
+    if (parts.empty()) {
+      continue;
+    }
+    std::string dir_path = join_parts ? join_parts(parts) : root;
+    ensure_node(dir_path);
+    if (!files.empty()) {
+      auto &list = (*nodes)[dir_path].files;
+      list.insert(list.end(), files.begin(), files.end());
+    }
+    if (parts.size() > 1) {
+      std::vector<std::string> parent_parts(parts.begin(), parts.end() - 1);
+      std::string parent_path = join_parts ? join_parts(parent_parts) : root;
+      ensure_node(parent_path);
+      add_child(parent_path, parts.back());
+    }
+  }
+}
+
+/**
+ * @brief Sort tree node children and files by case-insensitive name.
+ */
+inline void SortTreeNodes(TreeNodeMap *nodes) {
+  if (!nodes) {
+    return;
+  }
+  for (auto &[dir, node] : *nodes) {
+    (void)dir;
+    std::sort(node.children.begin(), node.children.end(),
+              [&](const std::string &a, const std::string &b) {
+                return AMStr::lowercase(a) < AMStr::lowercase(b);
+              });
+    std::sort(node.files.begin(), node.files.end(),
+              [&](const PathInfo &a, const PathInfo &b) {
+                return AMStr::lowercase(a.name) < AMStr::lowercase(b.name);
+              });
+  }
+}
+
+/**
+ * @brief Print a tree using a style callback and line printer.
+ */
+inline void PrintTree(
+    const std::string &root, const TreeNodeMap &nodes,
+    const std::function<std::string(const PathInfo &, const std::string &)>
+        &style_path,
+    const std::function<void(const std::string &)> &print_line,
+    const JoinPairFn &join_pair) {
+  if (!print_line) {
+    return;
+  }
+  PathInfo dir_info;
+  dir_info.type = PathType::DIR;
+  const std::string root_line = style_path ? style_path(dir_info, root) : root;
+  print_line(root_line);
+
+  std::function<void(const std::string &, const std::string &)> walk_tree =
+      [&](const std::string &dir_path, const std::string &prefix) {
+        auto it = nodes.find(dir_path);
+        if (it == nodes.end()) {
+          return;
+        }
+        const auto &children = it->second.children;
+        const auto &files = it->second.files;
+        const size_t dir_count = children.size();
+        const size_t file_count = files.size();
+
+        for (size_t i = 0; i < dir_count; ++i) {
+          const bool last = (i + 1 == dir_count && file_count == 0);
+          const std::string connector = last ? "`-- " : "|-- ";
+          const std::string next_prefix = prefix + (last ? "    " : "|   ");
+          const std::string child_name = children[i];
+          const std::string styled =
+              style_path ? style_path(dir_info, child_name) : child_name;
+          print_line(prefix + connector + styled);
+          if (join_pair) {
+            const std::string child_path = join_pair(dir_path, child_name);
+            walk_tree(child_path, next_prefix);
+          }
+        }
+
+        for (size_t i = 0; i < file_count; ++i) {
+          const bool last = (i + 1 == file_count);
+          (void)last;
+          const std::string connector = (i + 1 == file_count) ? "`-- " : "|-- ";
+          const auto &info = files[i];
+          const std::string styled =
+              style_path ? style_path(info, info.name) : info.name;
+          print_line(prefix + connector + styled);
+        }
+      };
+
+  walk_tree(root, "");
+}
+} // namespace AMTree

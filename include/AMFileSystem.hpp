@@ -27,10 +27,20 @@ public:
   static AMFileSystem &Instance(AMClientManager &client_manager,
                                 AMConfigManager &config_manager);
 
-  /** Check whether a client exists and print status. */
+  /** Check whether clients exist and print status. */
   ECM check(const std::string &nickname, amf interrupt_flag = nullptr);
   /** Create/connect a client by nickname. */
   ECM connect(const std::string &nickname, amf interrupt_flag = nullptr);
+  /** Create/connect an SFTP client by connection info. */
+  ECM sftp(const std::string &nickname, const std::string &hostname,
+           const std::string &username, int64_t port,
+           const std::string &password, const std::string &keyfile,
+           amf interrupt_flag = nullptr);
+  /** Create/connect an FTP client by connection info. */
+  ECM ftp(const std::string &nickname, const std::string &hostname,
+          const std::string &username, int64_t port,
+          const std::string &password, const std::string &keyfile,
+          amf interrupt_flag = nullptr);
   /** Switch current client, optionally creating it. */
   ECM change_client(const std::string &nickname, amf interrupt_flag = nullptr);
   /** Remove a client from the manager with confirmation. */
@@ -118,9 +128,9 @@ private:
   /** Resolve client or prompt to create it. */
   ClientRef ResolveOrCreateClient(const std::string &nickname,
                                   amf interrupt_flag = nullptr);
-  /** Normalize nickname to lowercase for comparisons. */
-  [[nodiscard]] std::string
-  NormalizeNickname(const std::string &nickname) const;
+  /** Split a whitespace separated target list. */
+  [[nodiscard]] std::vector<std::string>
+  SplitTargets(const std::string &input) const;
   /** Build absolute path using AMFS::abspath and workdir. */
   [[nodiscard]] std::string BuildPath(const ClientRef &client,
                                       const std::string &path) const;
@@ -149,10 +159,6 @@ private:
   std::string FormatStatOutput(const PathInfo &info) const;
   /** Apply styling for a path based on type. */
   std::string StylePath(const PathInfo &info, const std::string &path) const;
-  /** Prompt for yes/no. */
-  bool PromptYesNo(const std::string &prompt, bool default_no = true) const;
-  /** Return true when path is absolute. */
-  bool IsAbsolutePath(const std::string &path) const;
 
   AMClientManager &client_manager_;
   AMConfigManager &config_manager_;
