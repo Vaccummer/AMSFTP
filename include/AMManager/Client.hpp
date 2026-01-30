@@ -1,10 +1,10 @@
 #pragma once
-#include "AMConfigManager.hpp"
-#include "AMIOCore.hpp"
-#include "AMLogManager.hpp"
-#include "AMPromptManager.hpp"
-#include "base/AMCommonTools.hpp"
-#include "base/AMPath.hpp"
+#include "AMManager/Config.hpp"
+#include "AMClient/IOCore.hpp"
+#include "AMManager/Logger.hpp"
+#include "AMManager/Prompt.hpp"
+#include "AMBase/CommonTools.hpp"
+#include "AMBase/Path.hpp"
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -818,3 +818,5 @@ private:
     return std::nullopt;
   }
 };
+
+

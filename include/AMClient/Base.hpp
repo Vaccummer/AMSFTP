@@ -20,9 +20,9 @@
 #include <vector>
 
 // 自身依赖
-#include "base/AMDataClass.hpp"
-#include "base/AMEnum.hpp"
-#include "base/AMPath.hpp"
+#include "AMBase/DataClass.hpp"
+#include "AMBase/Enum.hpp"
+#include "AMBase/Path.hpp"
 // 自身依赖
 
 // 第三方库
@@ -621,3 +621,5 @@ public:
         "{} Client doesn't implement funtion: walk", GetProtocolName()));
   }
 };
+
+

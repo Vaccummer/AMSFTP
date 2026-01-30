@@ -1,8 +1,8 @@
 #pragma once
 
-#include "AMConfigManager.hpp"
-#include "AMPromptManager.hpp"
-#include "base/AMDataClass.hpp"
+#include "AMManager/Config.hpp"
+#include "AMManager/Prompt.hpp"
+#include "AMBase/DataClass.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -67,3 +67,5 @@ private:
   std::atomic<bool> running_{false};
   std::atomic<int> trace_level_{4};
 };
+
+

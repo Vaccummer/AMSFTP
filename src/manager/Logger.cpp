@@ -1,5 +1,5 @@
-#include "AMLogManager.hpp"
-#include "base/AMEnum.hpp"
+#include "AMManager/Logger.hpp"
+#include "AMBase/Enum.hpp"
 #include <magic_enum/magic_enum.hpp>
 #include <sstream>
 
@@ -140,3 +140,5 @@ int AMLogManager::ClampTraceLevel(int value) {
 int AMLogManager::ToLevelInt(enum TraceLevel level) {
   return static_cast<int>(level);
 }
+
+

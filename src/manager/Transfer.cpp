@@ -1,7 +1,7 @@
-#include "AMTransferManager.hpp"
-#include "AMClientManager.hpp"
-#include "AMConfigManager.hpp"
-#include "AMIOCore.hpp"
+#include "AMManager/Transfer.hpp"
+#include "AMManager/Client.hpp"
+#include "AMManager/Config.hpp"
+#include "AMClient/IOCore.hpp"
 #include <algorithm>
 #include <cctype>
 #include <unordered_set>
@@ -445,3 +445,5 @@ ECM AMTransferManager::transfer_async(
   }
   return {EC::Success, ""};
 }
+
+

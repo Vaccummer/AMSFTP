@@ -1,7 +1,7 @@
-#include "AMClientManager.hpp"
-#include "AMConfigManager.hpp"
-#include "AMIOCore.hpp"
-#include "AMPromptManager.hpp"
+#include "AMManager/Client.hpp"
+#include "AMManager/Config.hpp"
+#include "AMClient/IOCore.hpp"
+#include "AMManager/Prompt.hpp"
 #include <condition_variable>
 #include <functional>
 #include <list>
@@ -169,3 +169,5 @@ private:
   PublicResultCallback public_result_cb_ = {};
   UserResultCallback user_result_cb_ = {};
 };
+
+

@@ -21,8 +21,8 @@
 // 标准库
 
 // 自身依赖
-#include "AMBaseClient.hpp"
-#include "base/AMCommonTools.hpp"
+#include "AMClient/Base.hpp"
+#include "AMBase/CommonTools.hpp"
 
 // 自身依赖
 
@@ -2978,3 +2978,5 @@ public:
     return {ECM{EC::Success, ""}, result_dict};
   }
 };
+
+
