@@ -369,8 +369,8 @@ inline std::string amfmt(const char *templ, Args &&...args) {
 
 inline void vlowercase(std::string &str) {
   for (char &c : str) {
-    if (c >= 'a' && c <= 'z') {
-      c -= 32;
+    if (c >= 'A' && c <= 'Z') {
+      c += 32;
     }
   }
 }
@@ -378,7 +378,7 @@ inline void vlowercase(std::string &str) {
 inline void vuppercase(std::string &str) {
   for (char &c : str) {
     if (c >= 'a' && c <= 'z') {
-      c += 32;
+      c -= 32;
     }
   }
 }
@@ -1257,7 +1257,16 @@ inline void AMProgressBar::RequestRefreshLocked_() const {
   }
 }
 
-inline void print(const std::string &str) { std::cout << str << std::endl; }
+inline void print(const std::string &str) { std::cout << str << "\n"; }
+
+template <typename... Args>
+inline void print(Args &&...args) {
+  if constexpr (sizeof...(Args) >= 2) {
+    std::cout << AMStr::amfmt(std::forward<Args>(args)...) << "\n";
+  } else {
+    (std::cout << ... << std::forward<Args>(args)) << "\n";
+  }
+}
 using Json = nlohmann::ordered_json;
 
 class AMConfigProcessor {

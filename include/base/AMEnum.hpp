@@ -173,7 +173,6 @@ enum class ErrorCode {
   ConfigDumpFailed = 103,
   ConfigInvalid = 104,
   ConfigCanceled = 105,
-  HostNotFound = 106,
 
   // FTP Server Error
   UnsupportFTPProtocol = 47,
