@@ -1,8 +1,8 @@
 #pragma once
-#include "AMClientManager.hpp"
-#include "AMConfigManager.hpp"
-#include "AMPromptManager.hpp"
-#include "base/AMEnum.hpp"
+#include "AMManager/Client.hpp"
+#include "AMManager/Config.hpp"
+#include "AMManager/Prompt.hpp"
+#include "AMBase/Enum.hpp"
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -180,3 +180,5 @@ private:
   AMPromptManager &prompt_manager_;
   std::string last_cd_;
 };
+
+

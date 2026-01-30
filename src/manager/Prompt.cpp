@@ -1,7 +1,7 @@
-#include "AMPromptManager.hpp"
-#include "base/AMCliSignalMonitor.hpp"
-#include "base/AMCommonTools.hpp"
-#include "base/AMDataClass.hpp"
+#include "AMManager/Prompt.hpp"
+#include "AMManager/SignalMonitor.hpp"
+#include "AMBase/CommonTools.hpp"
+#include "AMBase/DataClass.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -276,3 +276,5 @@ bool AMPromptManager::Prompt(const std::string &prompt,
   *out_input = std::string(line);
   return esc_pressed_;
 }
+
+

@@ -25,8 +25,8 @@
 // 标准库
 
 // 自身依赖
-#include "AMCommonTools.hpp"
-#include "AMEnum.hpp"
+#include "AMBase/CommonTools.hpp"
+#include "AMBase/Enum.hpp"
 
 // 自身依赖
 
@@ -1174,3 +1174,5 @@ inline void PrintTree(
   walk_tree(root, "");
 }
 } // namespace AMTree
+
+

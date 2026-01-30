@@ -1,7 +1,7 @@
-#include "AMCLIBind.hpp"
-#include "AMClient/AMSFTPClient.hpp"
-#include "AMIOCore.hpp"
-#include "base/AMCliSignalMonitor.hpp"
+#include "AMCLI/CLIBind.hpp"
+#include "AMClient/SFTP.hpp"
+#include "AMClient/IOCore.hpp"
+#include "AMManager/SignalMonitor.hpp"
 #include <atomic>
 #include <filesystem>
 #include <iostream>
@@ -104,3 +104,5 @@ int main(int argc, char **argv) {
     return -13;
   }
 }
+
+

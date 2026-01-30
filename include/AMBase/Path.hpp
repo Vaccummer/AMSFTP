@@ -1,8 +1,8 @@
 #pragma once
 // 自身依赖
-#include "AMCommonTools.hpp"
-#include "AMDataClass.hpp"
-#include "AMEnum.hpp"
+#include "AMBase/CommonTools.hpp"
+#include "AMBase/DataClass.hpp"
+#include "AMBase/Enum.hpp"
 
 // 标准库头文件（跨平台，无需条件编译）
 #include <cstddef>
@@ -1253,3 +1253,4 @@ private:
     return iwalk(path);
   }
 };*/
+

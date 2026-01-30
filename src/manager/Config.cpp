@@ -1,6 +1,6 @@
-#include "AMConfigManager.hpp"
-#include "base/AMEnum.hpp"
-#include "base/AMPath.hpp"
+#include "AMManager/Config.hpp"
+#include "AMBase/Enum.hpp"
+#include "AMBase/Path.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -1574,3 +1574,5 @@ bool AMConfigManager::ValidateNickname(const std::string &nickname,
   }
   return true;
 }
+
+

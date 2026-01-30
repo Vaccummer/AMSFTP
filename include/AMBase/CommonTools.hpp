@@ -1,7 +1,7 @@
 #pragma once
 #include <chrono>
 #define _WINSOCKAPI_
-#include "base/cfgffi.h"
+#include "AMBase/cfgffi.h"
 #include <algorithm>
 #include <array>
 #include <boost/locale/encoding.hpp>
@@ -1384,3 +1384,5 @@ private:
     return set.find(segment) != set.end();
   }
 };
+
+

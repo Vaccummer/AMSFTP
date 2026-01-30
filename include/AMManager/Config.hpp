@@ -1,8 +1,8 @@
 #pragma once
-#include "AMPromptManager.hpp"
-#include "base/AMCommonTools.hpp"
-#include "base/AMDataClass.hpp"
-#include "base/AMEnum.hpp"
+#include "AMManager/Prompt.hpp"
+#include "AMBase/CommonTools.hpp"
+#include "AMBase/DataClass.hpp"
+#include "AMBase/Enum.hpp"
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -148,3 +148,5 @@ private:
   bool initialized_ = false;
   bool exit_hook_installed_ = false;
 };
+
+

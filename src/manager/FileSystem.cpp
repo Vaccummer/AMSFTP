@@ -1,8 +1,8 @@
-#include "AMFileSystem.hpp"
-#include "base/AMCommonTools.hpp"
-#include "base/AMDataClass.hpp"
-#include "base/AMEnum.hpp"
-#include "base/AMPath.hpp"
+#include "AMManager/FileSystem.hpp"
+#include "AMBase/CommonTools.hpp"
+#include "AMBase/DataClass.hpp"
+#include "AMBase/Enum.hpp"
+#include "AMBase/Path.hpp"
 #include <algorithm>
 #include <cctype>
 #include <functional>
@@ -1003,3 +1003,5 @@ std::string AMFileSystem::StylePath(const PathInfo &info,
 //   }
 //   return false;
 // }
+
+

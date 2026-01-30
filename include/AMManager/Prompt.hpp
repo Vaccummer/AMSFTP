@@ -105,3 +105,5 @@ private:
 #define AM_PROMPT_ERROR(error_name, error_msg, is_exit, exit_code)             \
   AMPromptManager::Instance().ErrorFormat((error_name), (error_msg),           \
                                           (is_exit), (exit_code), __func__)
+
+

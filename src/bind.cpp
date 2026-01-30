@@ -1,5 +1,5 @@
-#include "AMCLIBind.hpp"
-#include "base/AMCliSignalMonitor.hpp"
+#include "AMCLI/CLIBind.hpp"
+#include "AMManager/SignalMonitor.hpp"
 #include <filesystem>
 #include <iostream>
 
@@ -58,3 +58,5 @@ int main2(int argc, char **argv) {
     return -13;
   }
 }
+
+

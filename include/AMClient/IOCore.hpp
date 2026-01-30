@@ -18,12 +18,12 @@
 #include <vector>
 
 // 自身依赖
-#include "AMClient/AMBaseClient.hpp"
-#include "AMClient/AMFTPClient.hpp"
-#include "AMClient/AMLocalClient.hpp"
-#include "AMClient/AMSFTPClient.hpp"
-#include "AMPromptManager.hpp"
-#include "base/AMCommonTools.hpp"
+#include "AMClient/Base.hpp"
+#include "AMClient/FTP.hpp"
+#include "AMClient/Local.hpp"
+#include "AMClient/SFTP.hpp"
+#include "AMManager/Prompt.hpp"
+#include "AMBase/CommonTools.hpp"
 
 class UnionFileHandle {
 public:
@@ -2016,3 +2016,5 @@ public:
     return {ECM(EC::Success, ""), tasks};
   };
 };
+
+

@@ -1,9 +1,9 @@
 #pragma once
-#include "AMClientManager.hpp"
-#include "AMConfigManager.hpp"
-#include "AMFileSystem.hpp"
+#include "AMManager/Client.hpp"
+#include "AMManager/Config.hpp"
+#include "AMManager/FileSystem.hpp"
 #include "CLI/CLI.hpp"
-#include "base/AMCliSignalMonitor.hpp"
+#include "AMManager/SignalMonitor.hpp"
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -467,3 +467,5 @@ inline void DispatchCliCommands(const CliCommands &cli_commands,
   std::cerr << "No valid command provided" << std::endl;
   SetCliExitCode(static_cast<int>(EC::InvalidArg));
 }
+
+
