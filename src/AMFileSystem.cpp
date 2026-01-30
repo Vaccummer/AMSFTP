@@ -44,12 +44,31 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
     targets.push_back(current.empty() ? "local" : current);
   }
 
+  auto resolve_by_name = [&](const std::string &nickname) -> ClientRef {
+    ClientRef result;
+    std::string lowered = AMStr::lowercase(nickname);
+    if (lowered.empty() || lowered == "local") {
+      result.nickname = "local";
+      result.client = client_manager_.LOCAL;
+      return result;
+    }
+    auto names = client_manager_.Clients().get_nicknames();
+    for (const auto &name : names) {
+      if (AMStr::lowercase(name) == lowered) {
+        result.nickname = name;
+        result.client = client_manager_.Clients().GetHost(name);
+        return result;
+      }
+    }
+    return result;
+  };
+
   ECM last = {EC::Success, ""};
   for (const auto &name : targets) {
     if (flag && flag->check()) {
       return {EC::Terminate, "Interrupted by user"};
     }
-    ClientRef client = ResolveClientByName(name);
+    ClientRef client = resolve_by_name(name);
     if (!client.is_valid()) {
       last = {EC::ClientNotFound, AMStr::amfmt("Client not found: {}", name)};
       continue;
@@ -92,6 +111,21 @@ AMFileSystem::ECM AMFileSystem::sftp(const std::string &nickname,
   return {EC::Success, ""};
 }
 
+AMFileSystem::ECM AMFileSystem::sftp(const std::string &nickname,
+                                     const std::string &user_at_host,
+                                     int64_t port, const std::string &password,
+                                     const std::string &keyfile,
+                                     amf interrupt_flag) {
+  auto pos = user_at_host.find('@');
+  if (pos == std::string::npos || pos == 0 || pos + 1 >= user_at_host.size()) {
+    return {EC::InvalidArg, "Invalid user@host format"};
+  }
+  std::string username = user_at_host.substr(0, pos);
+  std::string hostname = user_at_host.substr(pos + 1);
+  return sftp(nickname, hostname, username, port, password, keyfile,
+              interrupt_flag);
+}
+
 AMFileSystem::ECM AMFileSystem::ftp(const std::string &nickname,
                                     const std::string &hostname,
                                     const std::string &username, int64_t port,
@@ -110,13 +144,41 @@ AMFileSystem::ECM AMFileSystem::ftp(const std::string &nickname,
   return {EC::Success, ""};
 }
 
+AMFileSystem::ECM AMFileSystem::ftp(const std::string &nickname,
+                                    const std::string &user_at_host,
+                                    int64_t port, const std::string &password,
+                                    const std::string &keyfile,
+                                    amf interrupt_flag) {
+  auto pos = user_at_host.find('@');
+  if (pos == std::string::npos || pos == 0 || pos + 1 >= user_at_host.size()) {
+    return {EC::InvalidArg, "Invalid user@host format"};
+  }
+  std::string username = user_at_host.substr(0, pos);
+  std::string hostname = user_at_host.substr(pos + 1);
+  return ftp(nickname, hostname, username, port, password, keyfile,
+             interrupt_flag);
+}
 AMFileSystem::ECM AMFileSystem::change_client(const std::string &nickname,
                                               amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   if (nickname.empty()) {
     return {EC::InvalidArg, "Empty nickname"};
   }
-  ClientRef client = ResolveClientByName(nickname);
+  std::string lowered = AMStr::lowercase(nickname);
+  ClientRef client;
+  if (lowered.empty() || lowered == "local") {
+    client.nickname = "local";
+    client.client = client_manager_.LOCAL;
+  } else {
+    auto names = client_manager_.Clients().get_nicknames();
+    for (const auto &name : names) {
+      if (AMStr::lowercase(name) == lowered) {
+        client.nickname = name;
+        client.client = client_manager_.Clients().GetHost(name);
+        break;
+      }
+    }
+  }
   if (!client.is_valid()) {
     bool canceled = false;
     if (!prompt_manager_.PromptYesNo("Client not found. Create it? (y/N): ",
@@ -184,18 +246,21 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
     std::string target = last_cd_;
     last_cd_.clear();
     from_history = true;
-    std::string resolved_path;
-    ClientRef client = ResolveClientForPath(target, &resolved_path, true, flag);
-    if (!client.is_valid()) {
-      return {EC::ClientNotFound, "Client not found"};
+    auto [nickname, resolved_path, client_ptr, rcm] =
+        client_manager_.ParsePath(target, flag);
+    if (rcm.first != EC::Success || !client_ptr) {
+      return rcm.first == EC::Success
+                 ? ECM{EC::ClientNotFound, "Client not found"}
+                 : rcm;
     }
+    ClientRef client{nickname, client_ptr};
     if (resolved_path.empty()) {
       return change_client(client.nickname, flag);
     }
     std::string abs_path = BuildPath(client, resolved_path);
-    auto [rcm, info] = client.client->stat(abs_path, false, flag);
+    auto [rcm2, info] = client.client->stat(abs_path, false, flag);
     if (rcm.first != EC::Success) {
-      return rcm;
+      return rcm2;
     }
     if (info.type != PathType::DIR) {
       return {EC::NotADirectory, "Path is not a directory"};
@@ -205,20 +270,23 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
     return {EC::Success, ""};
   }
 
-  std::string resolved_path;
-  ClientRef client = ResolveClientForPath(path, &resolved_path, true, flag);
-  if (!client.is_valid()) {
-    return {EC::ClientNotFound, "Client not found"};
+  auto [nickname, resolved_path, client_ptr, rcm] =
+      client_manager_.ParsePath(path, flag);
+  if (rcm.first != EC::Success || !client_ptr) {
+    return rcm.first == EC::Success
+               ? ECM{EC::ClientNotFound, "Client not found"}
+               : rcm;
   }
+  ClientRef client{nickname, client_ptr};
 
   if (resolved_path.empty()) {
     return change_client(client.nickname, flag);
   }
 
   std::string abs_path = BuildPath(client, resolved_path);
-  auto [rcm, info] = client.client->stat(abs_path, false, flag);
-  if (rcm.first != EC::Success) {
-    return rcm;
+  auto [rcm2, info] = client.client->stat(abs_path, false, flag);
+  if (rcm2.first != EC::Success) {
+    return rcm2;
   }
   if (info.type != PathType::DIR) {
     return {EC::NotADirectory, "Path is not a directory"};
@@ -244,7 +312,20 @@ AMFileSystem::ECM AMFileSystem::print_clients(amf interrupt_flag) {
       return;
     }
     seen.push_back(lowered);
-    ClientRef client = ResolveClientByName(name);
+    ClientRef client;
+    if (lowered.empty() || lowered == "local") {
+      client.nickname = "local";
+      client.client = client_manager_.LOCAL;
+    } else {
+      auto names = client_manager_.Clients().get_nicknames();
+      for (const auto &item : names) {
+        if (AMStr::lowercase(item) == lowered) {
+          client.nickname = item;
+          client.client = client_manager_.Clients().GetHost(item);
+          break;
+        }
+      }
+    }
     if (client.is_valid()) {
       PrintClientStatus(client, true, flag);
     }
@@ -277,23 +358,25 @@ AMFileSystem::ECM AMFileSystem::stat(const std::vector<std::string> &paths,
     if (flag && flag->check()) {
       return {EC::Terminate, "Interrupted by user"};
     }
-    std::string resolved_path;
-    ClientRef client =
-        ResolveClientForPath(target, &resolved_path, false, flag);
-    if (!client.is_valid()) {
-      last = {EC::ClientNotFound, "Client not found"};
+    auto [nickname, resolved_path, client_ptr, rcm] =
+        client_manager_.ParsePath(target, flag);
+    if (rcm.first != EC::Success || !client_ptr) {
+      last = rcm.first == EC::Success
+                 ? ECM{EC::ClientNotFound, "Client not found"}
+                 : rcm;
       continue;
     }
     if (resolved_path.empty()) {
       last = {EC::InvalidArg, "Empty path"};
       continue;
     }
+    ClientRef client{nickname, client_ptr};
     std::string abs_path = BuildPath(client, resolved_path);
     int64_t start_time = am_ms();
-    auto [rcm, info] =
+    auto [rcm2, info] =
         client.client->stat(abs_path, false, flag, timeout_ms, start_time);
-    if (rcm.first != EC::Success) {
-      last = rcm;
+    if (rcm2.first != EC::Success) {
+      last = rcm2;
       continue;
     }
     prompt_manager_.Print(FormatStatOutput(info));
@@ -305,18 +388,21 @@ AMFileSystem::ECM AMFileSystem::ls(const std::string &path, bool list_like,
                                    bool show_all, amf interrupt_flag,
                                    int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  std::string resolved_path;
-  ClientRef client = ResolveClientForPath(path, &resolved_path, false, flag);
-  if (!client.is_valid()) {
-    return {EC::ClientNotFound, "Client not found"};
+  auto [nickname, resolved_path, client_ptr, rcm] =
+      client_manager_.ParsePath(path, flag);
+  if (rcm.first != EC::Success || !client_ptr) {
+    return rcm.first == EC::Success
+               ? ECM{EC::ClientNotFound, "Client not found"}
+               : rcm;
   }
+  ClientRef client{nickname, client_ptr};
   std::string target_path = resolved_path.empty() ? "." : resolved_path;
   std::string abs_path = BuildPath(client, target_path);
   int64_t start_time = am_ms();
-  auto [rcm, list] =
+  auto [rcm2, list] =
       client.client->listdir(abs_path, flag, timeout_ms, start_time);
-  if (rcm.first != EC::Success) {
-    return rcm;
+  if (rcm2.first != EC::Success) {
+    return rcm2;
   }
 
   std::vector<PathInfo> entries;
@@ -465,17 +551,19 @@ AMFileSystem::ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
     if (flag && flag->check()) {
       return {EC::Terminate, "Interrupted by user"};
     }
-    std::string resolved_path;
-    ClientRef client =
-        ResolveClientForPath(target, &resolved_path, false, flag);
-    if (!client.is_valid()) {
-      last = {EC::ClientNotFound, "Client not found"};
+    auto [nickname, resolved_path, client_ptr, rcm] =
+        client_manager_.ParsePath(target, flag);
+    if (rcm.first != EC::Success || !client_ptr) {
+      last = rcm.first == EC::Success
+                 ? ECM{EC::ClientNotFound, "Client not found"}
+                 : rcm;
       continue;
     }
     if (resolved_path.empty()) {
       last = {EC::InvalidArg, "Empty path"};
       continue;
     }
+    ClientRef client{nickname, client_ptr};
     std::string abs_path = BuildPath(client, resolved_path);
     int64_t start_time = am_ms();
     int64_t size =
@@ -493,14 +581,17 @@ AMFileSystem::ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
 AMFileSystem::ECM AMFileSystem::find(const std::string &path, SearchType type,
                                      amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  std::string resolved_path;
-  ClientRef client = ResolveClientForPath(path, &resolved_path, false, flag);
-  if (!client.is_valid()) {
-    return {EC::ClientNotFound, "Client not found"};
+  auto [nickname, resolved_path, client_ptr, rcm] =
+      client_manager_.ParsePath(path, flag);
+  if (rcm.first != EC::Success || !client_ptr) {
+    return rcm.first == EC::Success
+               ? ECM{EC::ClientNotFound, "Client not found"}
+               : rcm;
   }
   if (resolved_path.empty()) {
     return {EC::InvalidArg, "Empty path"};
   }
+  ClientRef client{nickname, client_ptr};
   std::string abs_path = BuildPath(client, resolved_path);
   int64_t start_time = am_ms();
   auto results =
@@ -519,20 +610,23 @@ AMFileSystem::ECM AMFileSystem::walk(const std::string &path, bool only_file,
     return {EC::InvalidArg, "Conflicting filters: both file and dir"};
   }
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  std::string resolved_path;
-  ClientRef client = ResolveClientForPath(path, &resolved_path, false, flag);
-  if (!client.is_valid()) {
-    return {EC::ClientNotFound, "Client not found"};
+  auto [nickname, resolved_path, client_ptr, rcm] =
+      client_manager_.ParsePath(path, flag);
+  if (rcm.first != EC::Success || !client_ptr) {
+    return rcm.first == EC::Success
+               ? ECM{EC::ClientNotFound, "Client not found"}
+               : rcm;
   }
   if (resolved_path.empty()) {
     return {EC::InvalidArg, "Empty path"};
   }
+  ClientRef client{nickname, client_ptr};
   std::string abs_path = BuildPath(client, resolved_path);
   int64_t start_time = am_ms();
-  auto [rcm, list] = client.client->iwalk(abs_path, ignore_special_file, flag,
-                                          timeout_ms, start_time);
-  if (rcm.first != EC::Success) {
-    return rcm;
+  auto [rcm2, list] = client.client->iwalk(abs_path, ignore_special_file, flag,
+                                           timeout_ms, start_time);
+  if (rcm2.first != EC::Success) {
+    return rcm2;
   }
   for (const auto &info : list) {
     if (only_file && info.type == PathType::DIR) {
@@ -551,20 +645,23 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
                                      bool ignore_special_file,
                                      amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  std::string resolved_path;
-  ClientRef client = ResolveClientForPath(path, &resolved_path, false, flag);
-  if (!client.is_valid()) {
-    return {EC::ClientNotFound, "Client not found"};
+  auto [nickname, resolved_path, client_ptr, rcm] =
+      client_manager_.ParsePath(path, flag);
+  if (rcm.first != EC::Success || !client_ptr) {
+    return rcm.first == EC::Success
+               ? ECM{EC::ClientNotFound, "Client not found"}
+               : rcm;
   }
   if (resolved_path.empty()) {
     return {EC::InvalidArg, "Empty path"};
   }
+  ClientRef client{nickname, client_ptr};
   std::string abs_path = BuildPath(client, resolved_path);
   int64_t start_time = am_ms();
-  auto [rcm, structure] = client.client->walk(
+  auto [rcm2, structure] = client.client->walk(
       abs_path, max_depth, ignore_special_file, flag, timeout_ms, start_time);
-  if (rcm.first != EC::Success) {
-    return rcm;
+  if (rcm2.first != EC::Success) {
+    return rcm2;
   }
 
   AMTree::TreeNodeMap nodes;
@@ -604,22 +701,22 @@ AMFileSystem::ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
     if (flag && flag->check()) {
       return {EC::Terminate, "Interrupted by user"};
     }
-    std::string resolved_path;
-    ClientRef client =
-        ResolveClientForPath(target, &resolved_path, false, flag);
-    if (!client.is_valid()) {
-      last = {EC::ClientNotFound, "Client not found"};
+    auto [nickname, resolved_path, client_ptr, rcm] =
+        client_manager_.ParsePath(target, flag);
+    if (rcm.first != EC::Success || !client_ptr) {
+      last = rcm;
       continue;
     }
     if (resolved_path.empty()) {
       last = {EC::InvalidArg, "Empty path"};
       continue;
     }
+    ClientRef client{nickname, client_ptr};
     std::string abs_path = BuildPath(client, resolved_path);
     int64_t start_time = am_ms();
-    ECM rcm = client.client->mkdirs(abs_path, flag, timeout_ms, start_time);
-    if (rcm.first != EC::Success) {
-      last = rcm;
+    ECM rcm2 = client.client->mkdirs(abs_path, flag, timeout_ms, start_time);
+    if (rcm2.first != EC::Success) {
+      last = rcm2;
     }
   }
   return last;
@@ -661,11 +758,12 @@ AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
         continue;
       }
     }
-    std::string resolved_path;
-    ClientRef client =
-        ResolveClientForPath(target, &resolved_path, false, flag);
-    if (!client.is_valid()) {
-      last = {EC::ClientNotFound, "Client not found"};
+    auto [nickname, resolved_path, client_ptr, rcm] =
+        client_manager_.ParsePath(target, flag);
+    if (rcm.first != EC::Success || !client_ptr) {
+      last = rcm.first == EC::Success
+                 ? ECM{EC::ClientNotFound, "Client not found"}
+                 : rcm;
       prompt_manager_.Print(AMStr::amfmt("❌ {} : {}", target, last.second));
       continue;
     }
@@ -674,6 +772,7 @@ AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
       prompt_manager_.Print(AMStr::amfmt("❌ {} : {}", target, last.second));
       continue;
     }
+    ClientRef client{nickname, client_ptr};
     std::string abs_path = BuildPath(client, resolved_path);
     try {
       int64_t start_time = am_ms();
@@ -702,106 +801,6 @@ AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
     }
   }
   return last;
-}
-
-AMFileSystem::ClientRef
-AMFileSystem::ResolveClientByName(const std::string &nickname) const {
-  ClientRef result;
-  std::string lowered = AMStr::lowercase(nickname);
-  if (lowered.empty() || lowered == "local") {
-    result.nickname = "local";
-    result.client = client_manager_.LOCAL;
-    return result;
-  }
-
-  auto names = client_manager_.Clients().get_nicknames();
-  for (const auto &name : names) {
-    if (AMStr::lowercase(name) == lowered) {
-      result.nickname = name;
-      result.client = client_manager_.Clients().GetHost(name);
-      return result;
-    }
-  }
-  return result;
-}
-
-AMFileSystem::ClientRef AMFileSystem::ResolveClientForPath(
-    const std::string &input, std::string *out_path, bool allow_config_probe,
-    amf interrupt_flag) {
-  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  if (out_path) {
-    out_path->clear();
-  }
-
-  std::string current_nickname =
-      client_manager_.CLIENT ? client_manager_.CLIENT->GetNickname() : "local";
-  ClientRef current = ResolveClientByName(current_nickname);
-
-  auto at_pos = input.find('@');
-  if (at_pos == std::string::npos) {
-    if (out_path) {
-      *out_path = input;
-    }
-    return current;
-  }
-
-  std::string prefix = input.substr(0, at_pos);
-  std::string rest = input.substr(at_pos + 1);
-  std::string lowered = AMStr::lowercase(prefix);
-
-  if (prefix.empty() || lowered == "local") {
-    if (out_path) {
-      *out_path = rest;
-    }
-    return ResolveClientByName("local");
-  }
-
-  ClientRef matched = ResolveClientByName(prefix);
-  if (matched.is_valid()) {
-    if (out_path) {
-      *out_path = rest;
-    }
-    return matched;
-  }
-
-  bool probe_config = allow_config_probe || !AMIsInBash;
-  if (probe_config) {
-    auto cfg = config_manager_.GetClientConfig(prefix, false);
-    if (cfg.first.first == EC::Success) {
-      if (out_path) {
-        *out_path = rest;
-      }
-      return ResolveOrCreateClient(prefix, flag);
-    }
-  }
-
-  if (out_path) {
-    *out_path = input;
-  }
-  return current;
-}
-
-AMFileSystem::ClientRef
-AMFileSystem::ResolveOrCreateClient(const std::string &nickname,
-                                    amf interrupt_flag) {
-  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  ClientRef existing = ResolveClientByName(nickname);
-  if (existing.is_valid()) {
-    return existing;
-  }
-  if (AMIsInBash) {
-    bool canceled = false;
-    if (!prompt_manager_.PromptYesNo("Client not found. Create it? (y/N): ",
-                                     &canceled)) {
-      return {};
-    }
-  }
-  auto created =
-      client_manager_.AddClient(nickname, nullptr, false, false, {}, flag);
-  if (created.first.first != EC::Success || !created.second) {
-    return {};
-  }
-  return {nickname, created.second};
 }
 
 std::vector<std::string>

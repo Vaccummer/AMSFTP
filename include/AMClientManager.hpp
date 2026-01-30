@@ -2,6 +2,8 @@
 #include "AMConfigManager.hpp"
 #include "AMIOCore.hpp"
 #include "AMLogManager.hpp"
+#include "AMPromptManager.hpp"
+#include "base/AMCommonTools.hpp"
 #include "base/AMPath.hpp"
 #include <atomic>
 #include <chrono>
@@ -11,6 +13,7 @@
 #include <optional>
 #include <sstream>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <variant>
 
@@ -20,6 +23,8 @@
 #include <termios.h>
 #include <unistd.h>
 #endif
+
+inline std::atomic<bool> AMIsInteractive = false;
 
 class AMClientManager {
 public:
@@ -138,6 +143,10 @@ public:
     }
 
     auto client_config = config_.GetClientConfig(nickname);
+    print(AMStr::amfmt("hostname: {}", client_config.second.request.hostname));
+    print(AMStr::amfmt("username: {}", client_config.second.request.username));
+    print(AMStr::amfmt("port: {}", client_config.second.request.port));
+    print(AMStr::amfmt("password: {}", client_config.second.request.password));
     if (client_config.first.first != EC::Success) {
       return {client_config.first, nullptr};
     }
@@ -259,7 +268,6 @@ public:
     if (!trace_cb) {
       trace_cb = log_manager_.TraceCallbackFunc();
     }
-
     auto auth_cb = BuildAuthCallback_(password_cb_, quiet, nullptr);
     auto base_client =
         CreateClient(request, protocol, trace_num_, std::move(trace_cb), -1,
@@ -356,6 +364,94 @@ public:
       return {"", input};
     }
     return {input.substr(0, pos), input.substr(pos + 1)};
+  }
+
+  /**
+   * @brief Parse input into nickname, path, client pointer, and status.
+   */
+  std::tuple<std::string, std::string, std::shared_ptr<BaseClient>, ECM>
+  ParsePath(const std::string &input) {
+    if (!input.empty() && input.front() == '@') {
+      std::string path = input.substr(1);
+      return {"local", path, LOCAL, ECM{EC::Success, ""}};
+    }
+
+    auto pos = input.find('@');
+    if (pos == std::string::npos || pos + 1 >= input.size()) {
+      std::shared_ptr<BaseClient> current = CLIENT ? CLIENT : LOCAL;
+      std::string nickname = current ? current->GetNickname() : "local";
+      return {nickname, input, current, ECM{EC::Success, ""}};
+    }
+
+    std::string prefix = input.substr(0, pos);
+    std::string path = input.substr(pos + 1);
+    std::string lowered = AMStr::lowercase(prefix);
+    if (prefix.empty() || lowered == "local") {
+      return {"local", path, LOCAL, ECM{EC::Success, ""}};
+    }
+
+    auto cfg = config_.GetClientConfig(prefix, false);
+    if (cfg.first.first != EC::Success) {
+      return {prefix, path, nullptr,
+              ECM{EC::HostConfigNotFound, "Host config not found"}};
+    }
+
+    auto existing = Clients().GetHost(prefix);
+    if (!existing) {
+      return {prefix, path, nullptr,
+              ECM{EC::ClientNotFound, "Client not found"}};
+    }
+    return {prefix, path, existing, ECM{EC::Success, ""}};
+  }
+
+  /**
+   * @brief Parse input into nickname, path, client pointer, and status.
+   */
+  std::tuple<std::string, std::string, std::shared_ptr<BaseClient>, ECM>
+  ParsePath(const std::string &input, amf interrupt_flag) {
+    if (!input.empty() && input.front() == '@') {
+      std::string path = input.substr(1);
+      return {"local", path, LOCAL, ECM{EC::Success, ""}};
+    }
+
+    auto pos = input.find('@');
+    if (pos == std::string::npos || pos + 1 >= input.size()) {
+      std::shared_ptr<BaseClient> current = CLIENT ? CLIENT : LOCAL;
+      std::string nickname = current ? current->GetNickname() : "local";
+      return {nickname, input, current, ECM{EC::Success, ""}};
+    }
+
+    std::string prefix = input.substr(0, pos);
+    std::string path = input.substr(pos + 1);
+    std::string lowered = AMStr::lowercase(prefix);
+    if (prefix.empty() || lowered == "local") {
+      return {"local", path, LOCAL, ECM{EC::Success, ""}};
+    }
+
+    auto cfg = config_.GetClientConfig(prefix, false);
+    if (cfg.first.first != EC::Success) {
+      return {prefix, path, nullptr,
+              ECM{EC::HostConfigNotFound, "Host config not found"}};
+    }
+
+    auto existing = Clients().GetHost(prefix);
+    if (!existing) {
+      if (AMIsInteractive.load()) {
+        bool canceled = false;
+        if (!AMPromptManager::Instance().PromptYesNo(
+                "Client not found. Create it? (y/N): ", &canceled)) {
+          return {prefix, path, nullptr,
+                  ECM{EC::Terminate, "Operation aborted"}};
+        }
+      }
+      auto created =
+          AddClient(prefix, nullptr, false, false, {}, interrupt_flag);
+      if (created.first.first != EC::Success) {
+        return {prefix, path, created.second, created.first};
+      }
+      return {prefix, path, created.second, ECM{EC::Success, ""}};
+    }
+    return {prefix, path, existing, ECM{EC::Success, ""}};
   }
 
   /**

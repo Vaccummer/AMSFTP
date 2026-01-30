@@ -909,7 +909,7 @@ ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
     }
     if (!HostExists(nickname)) {
       PrintLine(Format("Host not found: " + nickname, "error"));
-      last = Err(EC::HostNotFound, "host not found");
+      last = Err(EC::HostConfigNotFound, "host not found");
       continue;
     }
 
@@ -936,7 +936,7 @@ ECM AMConfigManager::Rename(const std::string &old_nickname,
 
   if (!HostExists(old_nickname)) {
     PrintLine(Format("Host not found: " + old_nickname, "error"));
-    return Err(EC::HostNotFound, "host not found");
+    return Err(EC::HostConfigNotFound, "host not found");
   }
 
   std::string error;
@@ -991,7 +991,7 @@ ECM AMConfigManager::Query(const std::vector<std::string> &targets) const {
     auto it = hosts.find(nickname);
     if (it == hosts.end()) {
       PrintLine(Format("Host not found: " + nickname, "error"));
-      last = Err(EC::HostNotFound, "host not found");
+      last = Err(EC::HostConfigNotFound, "host not found");
       continue;
     }
     auto rcm = PrintHost(it->first, it->second);
@@ -1039,7 +1039,7 @@ ECM AMConfigManager::Modify(const std::string &nickname) {
 
   if (!HostExists(nickname)) {
     PrintLine(Format("Host not found: " + nickname, "error"));
-    return Err(EC::HostNotFound, "host not found");
+    return Err(EC::HostConfigNotFound, "host not found");
   }
 
   HostEntry entry;
@@ -1409,7 +1409,7 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   auto hosts = CollectHosts();
   auto it = hosts.find(nickname);
   if (it == hosts.end())
-    return Err(EC::HostNotFound, "host not found");
+    return Err(EC::HostConfigNotFound, "host not found");
 
   bool canceled = false;
   HostEntry updated = it->second;

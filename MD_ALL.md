@@ -291,3 +291,26 @@ AMFileSystem::cd
 - Remove `AMFileSystem::NormalizeNickname`; replace all usages with `AMStr::lowercase()`.
 - Remove `AMFileSystem::PromptYesNo`; use the confirmation prompt functionality provided by `PromptManager` instead.
 - Replace `AMFileSystem::IsAbsolutePath` with `AMPathStr::IsAbs`.
+## 优化AMSFTPCli.cpp
+
+每个函数拥有自己的参数的struct
+
+CliOptions 换为CliArgsPool, 存储所有的函数的参数struct
+
+CliArgsPool{
+
+auto ls = ConfiglsArg{
+
+path =
+list_like
+show_all
+interrupt_flag(不包括, 因为本质上interrupt_flag用于内部控制, 不是操作的参数)
+
+timeout_ms(也不包括, 因为可以随时终止, timeout_ms意义不大了)
+
+}
+
+}
+
+将绑定参数的操作独立出来成一个新文件AMCLIBind.hpp
+封装一个函数: 参数为cli_commands, 以及一个存储各个manager的共享指针的struct, 在函数中根据指令执行操作, 返回值暂时设置为void

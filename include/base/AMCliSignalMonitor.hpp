@@ -15,8 +15,7 @@
  * @brief Global signal code observed by the CLI signal monitor.
  */
 inline volatile sig_atomic_t GlobalSignalInt = 0;
-inline const std::shared_ptr<InterruptFlag> amgif =
-    std::make_shared<InterruptFlag>();
+inline std::shared_ptr<InterruptFlag> amgif = std::make_shared<InterruptFlag>();
 
 /**
  * @brief Signal monitor that safely transfers signal events to a worker thread.
@@ -208,7 +207,7 @@ private:
         }
 #ifdef SIGTERM
         if (signum == SIGTERM && amgif) {
-          amgif->kill();
+          amgif->set(true);
         }
 #endif
       }

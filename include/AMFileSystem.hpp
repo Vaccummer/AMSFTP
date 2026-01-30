@@ -13,8 +13,6 @@ public:
   using ECM = std::pair<ErrorCode, std::string>;
   /** Global interrupt flag used when no flag is provided. */
   inline static amf global_interrupt_flag = std::make_shared<InterruptFlag>();
-  /** When false, auto-create clients without confirmation prompts. */
-  inline static bool AMIsInBash = true;
 
   /** Disable copy construction. */
   AMFileSystem(const AMFileSystem &) = delete;
@@ -41,10 +39,18 @@ public:
            const std::string &username, int64_t port,
            const std::string &password, const std::string &keyfile,
            amf interrupt_flag = nullptr);
+  /** Create/connect an SFTP client by user@host string. */
+  ECM sftp(const std::string &nickname, const std::string &user_at_host,
+           int64_t port, const std::string &password,
+           const std::string &keyfile, amf interrupt_flag = nullptr);
   /** Create/connect an FTP client by connection info. */
   ECM ftp(const std::string &nickname, const std::string &hostname,
           const std::string &username, int64_t port,
           const std::string &password, const std::string &keyfile,
+          amf interrupt_flag = nullptr);
+  /** Create/connect an FTP client by user@host string. */
+  ECM ftp(const std::string &nickname, const std::string &user_at_host,
+          int64_t port, const std::string &password, const std::string &keyfile,
           amf interrupt_flag = nullptr);
   /** Switch current client, optionally creating it. */
   ECM change_client(const std::string &nickname, amf interrupt_flag = nullptr);
@@ -58,8 +64,8 @@ public:
   ECM stat(const std::string &path, amf interrupt_flag = nullptr,
            int timeout_ms = -1);
   /** Print stat info for multiple paths. */
-  ECM stat(const std::vector<std::string> &paths,
-           amf interrupt_flag = nullptr, int timeout_ms = -1);
+  ECM stat(const std::vector<std::string> &paths, amf interrupt_flag = nullptr,
+           int timeout_ms = -1);
   /** List directory entries; list_like enables long format, show_all shows dot
    * entries. */
   ECM ls(const std::string &path, bool list_like = false, bool show_all = false,
@@ -77,8 +83,8 @@ public:
   ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
             int timeout_ms = -1);
   /** Create directories (recursive) for multiple paths. */
-  ECM mkdir(const std::vector<std::string> &paths,
-            amf interrupt_flag = nullptr, int timeout_ms = -1);
+  ECM mkdir(const std::vector<std::string> &paths, amf interrupt_flag = nullptr,
+            int timeout_ms = -1);
   /** Remove a path using safe removal. */
   ECM rm(const std::string &path, amf interrupt_flag = nullptr,
          int timeout_ms = -1);
@@ -137,17 +143,6 @@ private:
     [[nodiscard]] bool is_valid() const { return static_cast<bool>(client); }
   };
 
-  /** Resolve client by nickname (case-insensitive). */
-  [[nodiscard]] ClientRef
-  ResolveClientByName(const std::string &nickname) const;
-  /** Resolve client and raw path from input. */
-  ClientRef ResolveClientForPath(const std::string &input,
-                                 std::string *out_path,
-                                 bool allow_config_probe = false,
-                                 amf interrupt_flag = nullptr);
-  /** Resolve client or prompt to create it. */
-  ClientRef ResolveOrCreateClient(const std::string &nickname,
-                                  amf interrupt_flag = nullptr);
   /** Split a whitespace separated target list. */
   [[nodiscard]] std::vector<std::string>
   SplitTargets(const std::string &input) const;
