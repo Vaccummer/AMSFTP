@@ -152,11 +152,16 @@ inline std::string FormatTime(const uint64_t &time,
 class InterruptFlag {
 private:
   std::atomic<bool> is_interrupted = false;
+  std::atomic<bool> is_killed = false;
 
 public:
   inline bool check() { return is_interrupted.load(); }
   inline void set(bool value) { is_interrupted.store(value); }
   inline void reset() { is_interrupted.store(false); }
+  inline void kill() {
+    is_interrupted.store(true);
+    is_killed.store(true);
+  }
 };
 
 // 非阻塞调用结果

@@ -12,7 +12,7 @@ progress_cb([[maybe_unused]] const ProgressCBInfo &info) {
 void error_cb(const ErrorCBInfo &info) {
   std::cerr << "Error: " << info.ecm.second << std::endl;
 }
-int main3() { return 0; }
+int main() { return 0; }
 
 int main2() {
 #ifdef _WIN32

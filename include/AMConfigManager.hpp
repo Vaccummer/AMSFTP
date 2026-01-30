@@ -47,14 +47,26 @@ public:
   GetClientConfig(const std::string &nickname,
                   bool use_compression = false);
   [[nodiscard]] int GetSettingInt(const Path &path, int default_value) const;
+  /**
+   * @brief Resolve network timeout from settings with a default fallback.
+   */
+  [[nodiscard]] int ResolveTimeoutMs(int default_timeout_ms = 5000) const;
   /** Return a string setting value or the provided default. */
   [[nodiscard]] std::string
   GetSettingString(const Path &path, const std::string &default_value) const;
   [[nodiscard]] ECM Src() const;
   [[nodiscard]] ECM Delete(const std::string &targets);
+  /**
+   * @brief Delete hosts by nickname list without parsing input.
+   */
+  [[nodiscard]] ECM Delete(const std::vector<std::string> &targets);
   [[nodiscard]] ECM Rename(const std::string &old_nickname,
                            const std::string &new_nickname);
   [[nodiscard]] ECM Query(const std::string &targets) const;
+  /**
+   * @brief Query hosts by nickname list without parsing input.
+   */
+  [[nodiscard]] ECM Query(const std::vector<std::string> &targets) const;
   [[nodiscard]] ECM Add();
   [[nodiscard]] ECM Modify(const std::string &nickname);
   /**

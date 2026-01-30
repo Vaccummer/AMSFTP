@@ -29,8 +29,15 @@ AMFileSystem::AMFileSystem(AMClientManager &client_manager,
 
 AMFileSystem::ECM AMFileSystem::check(const std::string &nickname,
                                       amf interrupt_flag) {
-  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   std::vector<std::string> targets = SplitTargets(nickname);
+  return check(targets, interrupt_flag);
+}
+
+/** Check whether clients exist from nickname list. */
+AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
+                                      amf interrupt_flag) {
+  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+  std::vector<std::string> targets = nicknames;
   if (targets.empty()) {
     const std::string current =
         client_manager_.CLIENT ? client_manager_.CLIENT->GetNickname() : "";
@@ -39,6 +46,9 @@ AMFileSystem::ECM AMFileSystem::check(const std::string &nickname,
 
   ECM last = {EC::Success, ""};
   for (const auto &name : targets) {
+    if (flag && flag->check()) {
+      return {EC::Terminate, "Interrupted by user"};
+    }
     ClientRef client = ResolveClientByName(name);
     if (!client.is_valid()) {
       last = {EC::ClientNotFound, AMStr::amfmt("Client not found: {}", name)};
@@ -251,13 +261,22 @@ AMFileSystem::ECM AMFileSystem::print_clients(amf interrupt_flag) {
 
 AMFileSystem::ECM AMFileSystem::stat(const std::string &path,
                                      amf interrupt_flag, int timeout_ms) {
-  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   std::vector<std::string> targets = SplitTargets(path);
-  if (targets.empty()) {
+  return stat(targets, interrupt_flag, timeout_ms);
+}
+
+/** Print stat info for multiple paths. */
+AMFileSystem::ECM AMFileSystem::stat(const std::vector<std::string> &paths,
+                                     amf interrupt_flag, int timeout_ms) {
+  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+  if (paths.empty()) {
     return {EC::InvalidArg, "Empty path"};
   }
   ECM last = {EC::Success, ""};
-  for (const auto &target : targets) {
+  for (const auto &target : paths) {
+    if (flag && flag->check()) {
+      return {EC::Terminate, "Interrupted by user"};
+    }
     std::string resolved_path;
     ClientRef client =
         ResolveClientForPath(target, &resolved_path, false, flag);
@@ -430,13 +449,22 @@ AMFileSystem::ECM AMFileSystem::ls(const std::string &path, bool list_like,
 
 AMFileSystem::ECM AMFileSystem::getsize(const std::string &path,
                                         amf interrupt_flag, int timeout_ms) {
-  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   std::vector<std::string> targets = SplitTargets(path);
-  if (targets.empty()) {
+  return getsize(targets, interrupt_flag, timeout_ms);
+}
+
+/** Print total size for multiple paths. */
+AMFileSystem::ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
+                                        amf interrupt_flag, int timeout_ms) {
+  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+  if (paths.empty()) {
     return {EC::InvalidArg, "Empty path"};
   }
   ECM last = {EC::Success, ""};
-  for (const auto &target : targets) {
+  for (const auto &target : paths) {
+    if (flag && flag->check()) {
+      return {EC::Terminate, "Interrupted by user"};
+    }
     std::string resolved_path;
     ClientRef client =
         ResolveClientForPath(target, &resolved_path, false, flag);
@@ -560,13 +588,22 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
 
 AMFileSystem::ECM AMFileSystem::mkdir(const std::string &path,
                                       amf interrupt_flag, int timeout_ms) {
-  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   std::vector<std::string> targets = SplitTargets(path);
-  if (targets.empty()) {
+  return mkdir(targets, interrupt_flag, timeout_ms);
+}
+
+/** Create directories (recursive) for multiple paths. */
+AMFileSystem::ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
+                                      amf interrupt_flag, int timeout_ms) {
+  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+  if (paths.empty()) {
     return {EC::InvalidArg, "Empty path"};
   }
   ECM last = {EC::Success, ""};
-  for (const auto &target : targets) {
+  for (const auto &target : paths) {
+    if (flag && flag->check()) {
+      return {EC::Terminate, "Interrupted by user"};
+    }
     std::string resolved_path;
     ClientRef client =
         ResolveClientForPath(target, &resolved_path, false, flag);
@@ -590,37 +627,78 @@ AMFileSystem::ECM AMFileSystem::mkdir(const std::string &path,
 
 AMFileSystem::ECM AMFileSystem::rm(const std::string &path, amf interrupt_flag,
                                    int timeout_ms) {
-  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   std::vector<std::string> targets = SplitTargets(path);
-  if (targets.empty()) {
+  return rm(targets, false, false, interrupt_flag, timeout_ms);
+}
+
+/** Remove paths using safe removal. */
+AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
+                                   amf interrupt_flag, int timeout_ms) {
+  return rm(paths, false, false, interrupt_flag, timeout_ms);
+}
+
+/** Remove paths using safe or permanent removal with optional force. */
+AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
+                                   bool permanent, bool force,
+                                   amf interrupt_flag, int timeout_ms) {
+  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+  if (paths.empty()) {
     return {EC::InvalidArg, "Empty path"};
   }
-  bool canceled = false;
-  if (!prompt_manager_.PromptYesNo("Remove path(s)? (y/N): ", &canceled)) {
-    return {EC::Terminate, "Remove canceled"};
-  }
   ECM last = {EC::Success, ""};
-  for (const auto &target : targets) {
+  for (const auto &target : paths) {
+    if (flag && flag->check()) {
+      return {EC::Terminate, "Interrupted by user"};
+    }
+    if (permanent || !force) {
+      bool canceled = false;
+      std::string prompt =
+          permanent
+              ? AMStr::amfmt("Remove path permanently? [{}] (y/N): ", target)
+              : AMStr::amfmt("Remove path? [{}] (y/N): ", target);
+      if (!prompt_manager_.PromptYesNo(prompt, &canceled)) {
+        last = {EC::Terminate, "Remove canceled"};
+        continue;
+      }
+    }
     std::string resolved_path;
     ClientRef client =
         ResolveClientForPath(target, &resolved_path, false, flag);
     if (!client.is_valid()) {
       last = {EC::ClientNotFound, "Client not found"};
+      prompt_manager_.Print(AMStr::amfmt("❌ {} : {}", target, last.second));
       continue;
     }
     if (resolved_path.empty()) {
       last = {EC::InvalidArg, "Empty path"};
+      prompt_manager_.Print(AMStr::amfmt("❌ {} : {}", target, last.second));
       continue;
     }
     std::string abs_path = BuildPath(client, resolved_path);
     try {
       int64_t start_time = am_ms();
-      ECM rcm = client.client->saferm(abs_path, flag, timeout_ms, start_time);
+      ECM rcm;
+      RMR errors = {};
+      if (permanent) {
+        auto tmp_res =
+            client.client->remove(abs_path, flag, timeout_ms, start_time);
+        rcm = tmp_res.first;
+        errors = tmp_res.second;
+      } else {
+        rcm = client.client->saferm(abs_path, flag, timeout_ms, start_time);
+      }
       if (rcm.first != EC::Success) {
         last = rcm;
+        for (const auto &error : errors) {
+          last = {EC::UnknownError, error.second.second};
+        }
+        prompt_manager_.Print(AMStr::amfmt("❌ {} : {}", target, last.second));
+      } else {
+        prompt_manager_.Print(AMStr::amfmt("✅ {}", target));
       }
     } catch (const std::exception &ex) {
       last = {EC::UnImplentedMethod, ex.what()};
+      prompt_manager_.Print(AMStr::amfmt("❌ {} : {}", target, last.second));
     }
   }
   return last;
@@ -686,7 +764,8 @@ AMFileSystem::ClientRef AMFileSystem::ResolveClientForPath(
     return matched;
   }
 
-  if (allow_config_probe) {
+  bool probe_config = allow_config_probe || !AMIsInBash;
+  if (probe_config) {
     auto cfg = config_manager_.GetClientConfig(prefix, false);
     if (cfg.first.first == EC::Success) {
       if (out_path) {
@@ -710,10 +789,12 @@ AMFileSystem::ResolveOrCreateClient(const std::string &nickname,
   if (existing.is_valid()) {
     return existing;
   }
-  bool canceled = false;
-  if (!prompt_manager_.PromptYesNo("Client not found. Create it? (y/N): ",
-                                   &canceled)) {
-    return {};
+  if (AMIsInBash) {
+    bool canceled = false;
+    if (!prompt_manager_.PromptYesNo("Client not found. Create it? (y/N): ",
+                                     &canceled)) {
+      return {};
+    }
   }
   auto created =
       client_manager_.AddClient(nickname, nullptr, false, false, {}, flag);

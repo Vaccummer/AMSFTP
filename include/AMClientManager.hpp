@@ -2,14 +2,18 @@
 #include "AMConfigManager.hpp"
 #include "AMIOCore.hpp"
 #include "AMLogManager.hpp"
+#include "base/AMPath.hpp"
 #include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <thread>
 #include <utility>
 #include <variant>
+
 #ifdef _WIN32
 #include <conio.h>
 #else
@@ -340,6 +344,101 @@ public:
     auto result =
         target.test_client(nickname, update, flag, timeout_ms, start_time);
     return result;
+  }
+
+  /**
+   * @brief Parse an input in the form "nickname@path" into nickname and path.
+   */
+  static std::pair<std::string, std::string>
+  ParseAddress(const std::string &input) {
+    auto pos = input.find('@');
+    if (pos == std::string::npos) {
+      return {"", input};
+    }
+    return {input.substr(0, pos), input.substr(pos + 1)};
+  }
+
+  /**
+   * @brief Ensure a client exists and is connected; create it if missing.
+   */
+  std::pair<ECM, std::shared_ptr<BaseClient>>
+  EnsureClient(const std::string &nickname, amf interrupt_flag = nullptr) {
+    amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+    if (nickname.empty() || nickname == "local") {
+      return {ECM{EC::Success, ""}, LOCAL};
+    }
+
+    auto existing = Clients().GetHost(nickname);
+    if (!existing) {
+      std::cout << "Connecting to " << nickname << "..." << std::endl;
+      return AddClient(nickname, nullptr, false, true, {}, flag);
+    }
+
+    ECM rcm = existing->Connect(false, flag);
+    if (rcm.first != EC::Success) {
+      return {rcm, existing};
+    }
+    return {ECM{EC::Success, ""}, existing};
+  }
+
+  /**
+   * @brief Get workdir for a client, initializing it from home if missing.
+   */
+  [[nodiscard]] std::string
+  GetOrInitWorkdir(const std::shared_ptr<BaseClient> &client) const {
+    if (!client) {
+      return "";
+    }
+    {
+      std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
+      auto it = client->public_kv.find("workdir");
+      if (it != client->public_kv.end()) {
+        return it->second;
+      }
+    }
+    std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+    {
+      std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
+      client->public_kv["workdir"] = home;
+    }
+    return home;
+  }
+
+  /**
+   * @brief Build an absolute path based on the client's home/workdir.
+   */
+  [[nodiscard]] std::string BuildPath(const std::shared_ptr<BaseClient> &client,
+                                      const std::string &path) const {
+    if (!client) {
+      return path;
+    }
+    if (path.empty()) {
+      return GetOrInitWorkdir(client);
+    }
+    std::string cwd = GetOrInitWorkdir(client);
+    std::string home = client->GetHomeDir();
+    return AMFS::abspath(path, true, home, cwd, "/");
+  }
+
+  /**
+   * @brief Format a size value to a human-readable string.
+   */
+  static std::string FormatSize(uint64_t size) {
+    const char *units[] = {"B", "KB", "MB", "GB", "TB"};
+    double value = static_cast<double>(size);
+    size_t idx = 0;
+    while (value >= 1024.0 && idx < 4) {
+      value /= 1024.0;
+      ++idx;
+    }
+    std::ostringstream oss;
+    if (value == static_cast<uint64_t>(value)) {
+      oss << static_cast<uint64_t>(value);
+    } else {
+      oss << std::fixed << std::setprecision(1) << value;
+    }
+    oss << units[idx];
+    return oss.str();
   }
 
 private:

@@ -805,6 +805,17 @@ int AMConfigManager::GetSettingInt(const Path &path, int default_value) const {
   return default_value;
 }
 
+/**
+ * @brief Resolve network timeout from settings with a default fallback.
+ */
+int AMConfigManager::ResolveTimeoutMs(int default_timeout_ms) const {
+  int timeout_ms = GetSettingInt({"client_manager", "timeout_ms"}, -1);
+  if (timeout_ms <= 0) {
+    timeout_ms = default_timeout_ms;
+  }
+  return timeout_ms;
+}
+
 /** Return a string setting value or the provided default. */
 std::string
 AMConfigManager::GetSettingString(const Path &path,
@@ -871,16 +882,31 @@ ECM AMConfigManager::Src() const {
 }
 
 ECM AMConfigManager::Delete(const std::string &targets) {
+  std::istringstream iss(targets);
+  std::vector<std::string> names;
+  std::string nickname;
+  while (iss >> nickname) {
+    names.push_back(nickname);
+  }
+  return Delete(names);
+}
+
+/** Delete hosts by nickname list without parsing input. */
+ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
   auto status = EnsureInitialized("Delete");
   if (status.first != EC::Success)
     return status;
 
-  std::istringstream iss(targets);
-  std::string nickname;
+  if (targets.empty()) {
+    return Err(EC::InvalidArg, "empty delete targets");
+  }
+
   ECM last = Ok();
-  bool found_any = false;
-  while (iss >> nickname) {
-    found_any = true;
+  for (const auto &nickname : targets) {
+    if (nickname.empty()) {
+      last = Err(EC::InvalidArg, "empty delete target");
+      continue;
+    }
     if (!HostExists(nickname)) {
       PrintLine(Format("Host not found: " + nickname, "error"));
       last = Err(EC::HostNotFound, "host not found");
@@ -895,9 +921,6 @@ ECM AMConfigManager::Delete(const std::string &targets) {
     PrintLine(Format("Deleted host: " + nickname, "success"));
   }
 
-  if (!found_any) {
-    return Err(EC::InvalidArg, "empty delete targets");
-  }
   return last;
 }
 
@@ -939,17 +962,32 @@ ECM AMConfigManager::Rename(const std::string &old_nickname,
 }
 
 ECM AMConfigManager::Query(const std::string &targets) const {
+  std::istringstream iss(targets);
+  std::vector<std::string> names;
+  std::string nickname;
+  while (iss >> nickname) {
+    names.push_back(nickname);
+  }
+  return Query(names);
+}
+
+/** Query hosts by nickname list without parsing input. */
+ECM AMConfigManager::Query(const std::vector<std::string> &targets) const {
   auto status = EnsureInitialized("Query");
   if (status.first != EC::Success)
     return status;
 
+  if (targets.empty()) {
+    return Err(EC::InvalidArg, "empty query targets");
+  }
+
   auto hosts = CollectHosts();
-  std::istringstream iss(targets);
-  std::string nickname;
   ECM last = Ok();
-  bool found_any = false;
-  while (iss >> nickname) {
-    found_any = true;
+  for (const auto &nickname : targets) {
+    if (nickname.empty()) {
+      last = Err(EC::InvalidArg, "empty query target");
+      continue;
+    }
     auto it = hosts.find(nickname);
     if (it == hosts.end()) {
       PrintLine(Format("Host not found: " + nickname, "error"));
@@ -962,9 +1000,6 @@ ECM AMConfigManager::Query(const std::string &targets) const {
     }
   }
 
-  if (!found_any) {
-    return Err(EC::InvalidArg, "empty query targets");
-  }
   return last;
 }
 
