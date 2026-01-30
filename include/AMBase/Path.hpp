@@ -510,10 +510,6 @@ inline std::vector<std::string> split(const std::string &path) {
         result.push_back(cur);
         cur = "";
       }
-    } else if (c == ' ') {
-      if (cur.empty()) {
-        continue;
-      }
     } else {
       cur += c;
     }

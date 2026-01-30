@@ -477,7 +477,7 @@ ECM AMConfigManager::Init() {
 
   initialized_ = true;
   if (!exit_hook_installed_) {
-    std::atexit(&AMConfigManager::OnExit);
+    // std::atexit(&AMConfigManager::OnExit);
     exit_hook_installed_ = true;
   }
 
@@ -1574,5 +1574,3 @@ bool AMConfigManager::ValidateNickname(const std::string &nickname,
   }
   return true;
 }
-
-

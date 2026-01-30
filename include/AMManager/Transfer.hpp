@@ -134,8 +134,6 @@ private:
   struct PreparedTasks;
 
   int ResolveRefreshIntervalMs_() const;
-  static std::pair<std::string, std::string>
-  ParseAddress_(const std::string &input);
   static bool HasWildcard_(const std::string &path);
   bool ConfirmWildcard_(const std::vector<PathInfo> &matches,
                         const std::string &src_host,

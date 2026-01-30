@@ -232,5 +232,3 @@ private:
   mutable std::mutex hooks_mtx_;
   std::unordered_map<std::string, SignalHook> hooks_;
 };
-
-
