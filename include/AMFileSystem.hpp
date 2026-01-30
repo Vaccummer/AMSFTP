@@ -13,6 +13,8 @@ public:
   using ECM = std::pair<ErrorCode, std::string>;
   /** Global interrupt flag used when no flag is provided. */
   inline static amf global_interrupt_flag = std::make_shared<InterruptFlag>();
+  /** When false, auto-create clients without confirmation prompts. */
+  inline static bool AMIsInBash = true;
 
   /** Disable copy construction. */
   AMFileSystem(const AMFileSystem &) = delete;
@@ -29,6 +31,9 @@ public:
 
   /** Check whether clients exist and print status. */
   ECM check(const std::string &nickname, amf interrupt_flag = nullptr);
+  /** Check whether clients exist from nickname list. */
+  ECM check(const std::vector<std::string> &nicknames,
+            amf interrupt_flag = nullptr);
   /** Create/connect a client by nickname. */
   ECM connect(const std::string &nickname, amf interrupt_flag = nullptr);
   /** Create/connect an SFTP client by connection info. */
@@ -52,6 +57,9 @@ public:
   /** Print stat info for a path. */
   ECM stat(const std::string &path, amf interrupt_flag = nullptr,
            int timeout_ms = -1);
+  /** Print stat info for multiple paths. */
+  ECM stat(const std::vector<std::string> &paths,
+           amf interrupt_flag = nullptr, int timeout_ms = -1);
   /** List directory entries; list_like enables long format, show_all shows dot
    * entries. */
   ECM ls(const std::string &path, bool list_like = false, bool show_all = false,
@@ -59,15 +67,27 @@ public:
   /** Print total size of a path. */
   ECM getsize(const std::string &path, amf interrupt_flag = nullptr,
               int timeout_ms = -1);
+  /** Print total size for multiple paths. */
+  ECM getsize(const std::vector<std::string> &paths,
+              amf interrupt_flag = nullptr, int timeout_ms = -1);
   /** Find paths matching the pattern. */
   ECM find(const std::string &path, SearchType type = SearchType::All,
            amf interrupt_flag = nullptr, int timeout_ms = -1);
   /** Create directory (recursive). */
   ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
             int timeout_ms = -1);
+  /** Create directories (recursive) for multiple paths. */
+  ECM mkdir(const std::vector<std::string> &paths,
+            amf interrupt_flag = nullptr, int timeout_ms = -1);
   /** Remove a path using safe removal. */
   ECM rm(const std::string &path, amf interrupt_flag = nullptr,
          int timeout_ms = -1);
+  /** Remove paths using safe removal. */
+  ECM rm(const std::vector<std::string> &paths, amf interrupt_flag = nullptr,
+         int timeout_ms = -1);
+  /** Remove paths using safe or permanent removal with optional force. */
+  ECM rm(const std::vector<std::string> &paths, bool permanent, bool force,
+         amf interrupt_flag = nullptr, int timeout_ms = -1);
   /** Move multiple sources into destination without cross-client moves. */
   ECM move(const std::vector<std::string> &srcs, const std::string &dst,
            bool mkdir = false, bool overwrite = false,

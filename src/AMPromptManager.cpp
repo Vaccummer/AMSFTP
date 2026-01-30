@@ -1,4 +1,5 @@
 #include "AMPromptManager.hpp"
+#include "base/AMCliSignalMonitor.hpp"
 #include "base/AMCommonTools.hpp"
 #include "base/AMDataClass.hpp"
 #include <algorithm>
@@ -27,7 +28,20 @@ AMPromptManager &AMPromptManager::Instance() {
   return instance;
 }
 
-AMPromptManager::AMPromptManager() { replxx_ = replxx_init(); }
+AMPromptManager::AMPromptManager() {
+  replxx_ = replxx_init();
+
+  AMCliSignalMonitor::SignalHook hook;
+  hook.interrupt_flag = nullptr;
+  hook.callback = [this]([[maybe_unused]] int signum) {
+    if (replxx_) {
+      replxx_emulate_key_press(replxx_, REPLXX_KEY_CONTROL('D'));
+    }
+  };
+  hook.is_silenced = true;
+  hook.priority = 0;
+  AMCliSignalMonitor::Instance().RegisterHook("PROMPT", hook);
+}
 
 AMPromptManager::~AMPromptManager() {
   if (replxx_) {
@@ -218,6 +232,22 @@ void AMPromptManager::taskprint(const std::shared_ptr<TaskInfo> &task_info) {
 bool AMPromptManager::Prompt(const std::string &prompt,
                              const std::string &placeholder,
                              std::string *out_input) {
+  /** Guard to toggle signal hooks around input. */
+  struct PromptHookGuard {
+    AMCliSignalMonitor &monitor;
+    /** Activate prompt hook and silence global. */
+    explicit PromptHookGuard(AMCliSignalMonitor &monitor_ref)
+        : monitor(monitor_ref) {
+      monitor.SilenceHook("GLOBAL");
+      monitor.ResumeHook("PROMPT");
+    }
+    /** Restore global hook and silence prompt. */
+    ~PromptHookGuard() {
+      monitor.ResumeHook("GLOBAL");
+      monitor.SilenceHook("PROMPT");
+    }
+  };
+
   if (!out_input) {
     return true;
   }
@@ -227,6 +257,8 @@ bool AMPromptManager::Prompt(const std::string &prompt,
   if (!replxx_) {
     return true;
   }
+
+  PromptHookGuard hook_guard(AMCliSignalMonitor::Instance());
 
   if (!placeholder.empty()) {
     replxx_set_preload_buffer(replxx_, placeholder.c_str());

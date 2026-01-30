@@ -2,132 +2,152 @@
 #include "AMConfigManager.hpp"
 #include "AMFileSystem.hpp"
 #include "CLI/CLI.hpp"
-#include "base/AMPath.hpp"
-#include <csignal>
+#include "base/AMCliSignalMonitor.hpp"
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
 #include <string>
-#include <unordered_set>
 
 namespace fs = std::filesystem;
 
-/** Global interrupt flag for CLI operations. */
-static amf gif = std::make_shared<InterruptFlag>();
+/** Bind CLI subcommands/options to the provided option storage. */
+struct CliOptions {
+  bool config_detail = false;
+  std::string config_get_name;
+  std::string config_edit_name;
+  std::string config_rn_old;
+  std::string config_rn_new;
+  std::vector<std::string> config_rm_names;
 
-/** Handle Ctrl-C to signal interruption. */
-static void HandleCliSignal([[maybe_unused]] int signum) {
-  if (gif) {
-    gif->set(true);
-  }
-}
+  std::vector<std::string> stat_paths;
+  std::string ls_path;
+  bool ls_long = false;
+  bool ls_all = false;
+  std::vector<std::string> size_paths;
+  std::string find_path;
+  std::vector<std::string> mkdir_paths;
+  std::vector<std::string> rm_paths;
+  bool rm_permanent = false;
+  std::string walk_path;
+  bool walk_only_file = false;
+  bool walk_only_dir = false;
+  bool walk_include_special = false;
+  std::string tree_path;
+  int tree_depth = -1;
+  bool tree_include_special = false;
+};
 
-/** Install signal handlers for graceful termination. */
-static void InstallCliSignalHandlers() {
-  std::signal(SIGINT, HandleCliSignal);
-#ifdef SIGTERM
-  std::signal(SIGTERM, HandleCliSignal);
-#endif
-}
+/** Hold CLI subcommand pointers so parsed state can be queried. */
+struct CliCommands {
+  CLI::App *config_cmd = nullptr;
+  CLI::App *config_ls = nullptr;
+  CLI::App *config_keys = nullptr;
+  CLI::App *config_data = nullptr;
+  CLI::App *config_get = nullptr;
+  CLI::App *config_add = nullptr;
+  CLI::App *config_edit = nullptr;
+  CLI::App *config_rn = nullptr;
+  CLI::App *config_rm = nullptr;
+  CLI::App *stat_cmd = nullptr;
+  CLI::App *ls_cmd = nullptr;
+  CLI::App *size_cmd = nullptr;
+  CLI::App *find_cmd = nullptr;
+  CLI::App *mkdir_cmd = nullptr;
+  CLI::App *rm_cmd = nullptr;
+  CLI::App *walk_cmd = nullptr;
+  CLI::App *tree_cmd = nullptr;
+};
 
-/** Resolve network timeout from settings with a 5-second default. */
-static int ResolveTimeoutMs(AMConfigManager &cfg) {
-  int timeout_ms = cfg.GetSettingInt({"client_manager", "timeout_ms"}, -1);
-  if (timeout_ms <= 0) {
-    timeout_ms = 5000;
-  }
-  return timeout_ms;
-}
+/** Bind all CLI actions (commands/options) in one place. */
+static CliCommands BindCliOptions(CLI::App &app, CliOptions &options) {
+  CliCommands commands;
+  commands.config_cmd = app.add_subcommand("config", "Config manager");
+  commands.config_ls =
+      commands.config_cmd->add_subcommand("ls", "List configs");
+  commands.config_ls->add_flag("-d,--detail", options.config_detail,
+                               "Show detailed list");
+  commands.config_keys =
+      commands.config_cmd->add_subcommand("keys", "List keys");
+  commands.config_data =
+      commands.config_cmd->add_subcommand("data", "Show config");
+  commands.config_get =
+      commands.config_cmd->add_subcommand("get", "Query host");
+  commands.config_add = commands.config_cmd->add_subcommand("add", "Add host");
+  commands.config_edit =
+      commands.config_cmd->add_subcommand("edit", "Edit host");
+  commands.config_rn = commands.config_cmd->add_subcommand("rn", "Rename host");
+  commands.config_rm = commands.config_cmd->add_subcommand("rm", "Remove host");
 
-/** Parse nickname@path into nickname and path. */
-static std::pair<std::string, std::string>
-ParseAddress(const std::string &input) {
-  auto pos = input.find('@');
-  if (pos == std::string::npos) {
-    return {"", input};
-  }
-  return {input.substr(0, pos), input.substr(pos + 1)};
-}
+  commands.config_get
+      ->add_option("nickname", options.config_get_name, "Host nickname")
+      ->required();
+  commands.config_edit
+      ->add_option("nickname", options.config_edit_name, "Host nickname")
+      ->required();
+  commands.config_rn->add_option("old", options.config_rn_old, "Old nickname")
+      ->required();
+  commands.config_rn->add_option("new", options.config_rn_new, "New nickname")
+      ->required();
+  commands.config_rm
+      ->add_option("nicknames", options.config_rm_names,
+                   "Host nicknames to remove")
+      ->expected(1, -1);
 
-/** Ensure a client exists and is connected; creates it if missing. */
-static std::pair<ECM, std::shared_ptr<BaseClient>>
-EnsureClient(AMClientManager &manager, const std::string &nickname,
-             const amf &flag) {
-  if (nickname.empty() || nickname == "local") {
-    return {ECM{EC::Success, ""}, manager.LOCAL};
-  }
+  commands.stat_cmd = app.add_subcommand("stat", "Print path info");
+  commands.stat_cmd->add_option("paths", options.stat_paths, "Paths to stat")
+      ->expected(1, -1);
 
-  auto existing = manager.Clients().GetHost(nickname);
-  if (!existing) {
-    std::cout << "Connecting to " << nickname << "..." << std::endl;
-    return manager.AddClient(nickname, nullptr, false, true, {}, flag);
-  }
+  commands.ls_cmd = app.add_subcommand("ls", "List directory");
+  commands.ls_cmd->add_option("path", options.ls_path, "Path to list")
+      ->required();
+  commands.ls_cmd->add_flag("-l", options.ls_long, "List like");
+  commands.ls_cmd->add_flag("-a", options.ls_all, "Show all entries");
 
-  ECM rcm = existing->Connect(false, flag);
-  if (rcm.first != EC::Success) {
-    return {rcm, existing};
-  }
-  return {ECM{EC::Success, ""}, existing};
-}
+  commands.size_cmd = app.add_subcommand("size", "Get total size");
+  commands.size_cmd->add_option("paths", options.size_paths, "Paths to size")
+      ->expected(1, -1);
 
-/** Get or initialize the client workdir. */
-static std::string GetOrInitWorkdir(const std::shared_ptr<BaseClient> &client) {
-  if (!client) {
-    return "";
-  }
-  {
-    std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
-    auto it = client->public_kv.find("workdir");
-    if (it != client->public_kv.end()) {
-      return it->second;
-    }
-  }
-  std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
-  {
-    std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
-    client->public_kv["workdir"] = home;
-  }
-  return home;
-}
+  commands.find_cmd = app.add_subcommand("find", "Find paths");
+  commands.find_cmd->add_option("path", options.find_path, "Path to find")
+      ->required();
 
-/** Build an absolute path based on client home/workdir. */
-static std::string BuildPath(const std::shared_ptr<BaseClient> &client,
-                             const std::string &path) {
-  if (!client) {
-    return path;
-  }
-  if (path.empty()) {
-    return GetOrInitWorkdir(client);
-  }
-  std::string cwd = GetOrInitWorkdir(client);
-  std::string home = client->GetHomeDir();
-  return AMFS::abspath(path, true, home, cwd, "/");
-}
+  commands.mkdir_cmd = app.add_subcommand("mkdir", "Create directories");
+  commands.mkdir_cmd
+      ->add_option("paths", options.mkdir_paths, "Paths to create")
+      ->expected(1, -1);
 
-/** Format a size value to a human-readable string. */
-static std::string FormatSize(uint64_t size) {
-  const char *units[] = {"B", "KB", "MB", "GB", "TB"};
-  double value = static_cast<double>(size);
-  size_t idx = 0;
-  while (value >= 1024.0 && idx < 4) {
-    value /= 1024.0;
-    ++idx;
-  }
-  std::ostringstream oss;
-  if (value == static_cast<uint64_t>(value)) {
-    oss << static_cast<uint64_t>(value);
-  } else {
-    oss << std::fixed << std::setprecision(1) << value;
-  }
-  oss << units[idx];
-  return oss.str();
+  commands.rm_cmd = app.add_subcommand("rm", "Remove paths");
+  commands.rm_cmd->add_option("paths", options.rm_paths, "Paths to remove")
+      ->expected(1, -1);
+  commands.rm_cmd->add_flag("-p,--permanent", options.rm_permanent,
+                            "Delete permanently");
+
+  commands.walk_cmd = app.add_subcommand("walk", "Walk paths");
+  commands.walk_cmd->add_option("path", options.walk_path, "Path to walk")
+      ->required();
+  commands.walk_cmd->add_flag("-f,--file", options.walk_only_file,
+                              "Only show files");
+  commands.walk_cmd->add_flag("-d,--dir", options.walk_only_dir,
+                              "Only show directories");
+  commands.walk_cmd->add_flag("-s,--special", options.walk_include_special,
+                              "Include special files");
+
+  commands.tree_cmd = app.add_subcommand("tree", "Print directory tree");
+  commands.tree_cmd->add_option("path", options.tree_path, "Path to tree")
+      ->required();
+  commands.tree_cmd->add_option("--depth", options.tree_depth,
+                                "Max depth (default: -1)");
+  commands.tree_cmd->add_flag("-s,--special", options.tree_include_special,
+                              "Include special files");
+
+  return commands;
 }
 
 /** Entry point for AMSFTP CLI (non-interactive). */
-int main(int argc, char **argv) {
+int main2(int argc, char **argv) {
   try {
-    InstallCliSignalHandlers();
+    auto &signal_monitor = AMCliSignalMonitor::Instance();
+    signal_monitor.InstallHandlers();
+    signal_monitor.Start();
 
     auto &config_manager = AMConfigManager::Instance();
     auto init_status = config_manager.Init();
@@ -138,74 +158,16 @@ int main(int argc, char **argv) {
 
     auto &client_manager = AMClientManager::Instance(config_manager);
     auto &filesystem = AMFileSystem::Instance(client_manager, config_manager);
-    AMClientManager::global_interrupt_flag = gif;
-    AMFileSystem::global_interrupt_flag = gif;
-
-    const int timeout_ms = ResolveTimeoutMs(config_manager);
+    AMClientManager::global_interrupt_flag = amgif;
+    AMFileSystem::global_interrupt_flag = amgif;
+    AMFileSystem::AMIsInBash = false;
 
     const std::string app_name =
         fs::path(argc > 0 ? argv[0] : "amsftp").filename().string();
     CLI::App app{"AMSFTP CLI", app_name};
 
-    bool config_detail = false;
-    std::string config_get_name;
-    std::string config_edit_name;
-    std::string config_rn_old;
-    std::string config_rn_new;
-    std::vector<std::string> config_rm_names;
-
-    CLI::App *config_cmd = app.add_subcommand("config", "Config manager");
-    CLI::App *config_ls = config_cmd->add_subcommand("ls", "List configs");
-    config_ls->add_flag("-d,--detail", config_detail, "Show detailed list");
-    CLI::App *config_keys = config_cmd->add_subcommand("keys", "List keys");
-    CLI::App *config_data = config_cmd->add_subcommand("data", "Show config");
-    CLI::App *config_get = config_cmd->add_subcommand("get", "Query host");
-    CLI::App *config_add = config_cmd->add_subcommand("add", "Add host");
-    CLI::App *config_edit = config_cmd->add_subcommand("edit", "Edit host");
-    CLI::App *config_rn = config_cmd->add_subcommand("rn", "Rename host");
-    CLI::App *config_rm = config_cmd->add_subcommand("rm", "Remove host");
-
-    config_get->add_option("nickname", config_get_name, "Host nickname")
-        ->required();
-    config_edit->add_option("nickname", config_edit_name, "Host nickname")
-        ->required();
-    config_rn->add_option("old", config_rn_old, "Old nickname")->required();
-    config_rn->add_option("new", config_rn_new, "New nickname")->required();
-    config_rm
-        ->add_option("nicknames", config_rm_names, "Host nicknames to remove")
-        ->expected(1, -1);
-
-    std::vector<std::string> stat_paths;
-    std::string ls_path;
-    bool ls_long = false;
-    bool ls_all = false;
-    std::vector<std::string> size_paths;
-    std::string find_path;
-    std::vector<std::string> mkdir_paths;
-    std::vector<std::string> rm_paths;
-    bool rm_permanent = false;
-
-    CLI::App *stat_cmd = app.add_subcommand("stat", "Print path info");
-    stat_cmd->add_option("paths", stat_paths, "Paths to stat")->expected(1, -1);
-
-    CLI::App *ls_cmd = app.add_subcommand("ls", "List directory");
-    ls_cmd->add_option("path", ls_path, "Path to list")->required();
-    ls_cmd->add_flag("-l", ls_long, "List like");
-    ls_cmd->add_flag("-a", ls_all, "Show all entries");
-
-    CLI::App *size_cmd = app.add_subcommand("size", "Get total size");
-    size_cmd->add_option("paths", size_paths, "Paths to size")->expected(1, -1);
-
-    CLI::App *find_cmd = app.add_subcommand("find", "Find paths");
-    find_cmd->add_option("path", find_path, "Path to find")->required();
-
-    CLI::App *mkdir_cmd = app.add_subcommand("mkdir", "Create directories");
-    mkdir_cmd->add_option("paths", mkdir_paths, "Paths to create")
-        ->expected(1, -1);
-
-    CLI::App *rm_cmd = app.add_subcommand("rm", "Remove paths");
-    rm_cmd->add_option("paths", rm_paths, "Paths to remove")->expected(1, -1);
-    rm_cmd->add_flag("-p,--permanent", rm_permanent, "Delete permanently");
+    CliOptions cli_options;
+    CliCommands cli_commands = BindCliOptions(app, cli_options);
 
     try {
       CLI11_PARSE(app, argc, argv);
@@ -213,214 +175,112 @@ int main(int argc, char **argv) {
       return app.exit(e);
     }
 
-    if (config_cmd->parsed()) {
-      if (config_ls->parsed()) {
-        auto status =
-            config_detail ? config_manager.List() : config_manager.ListName();
+    if (cli_commands.config_cmd->parsed()) {
+      if (cli_commands.config_ls->parsed()) {
+        auto status = cli_options.config_detail ? config_manager.List()
+                                                : config_manager.ListName();
         return static_cast<int>(status.first);
       }
-      if (config_keys->parsed()) {
+      if (cli_commands.config_keys->parsed()) {
         auto result = config_manager.PrivateKeys(true);
         return static_cast<int>(result.first.first);
       }
-      if (config_data->parsed()) {
+      if (cli_commands.config_data->parsed()) {
         auto status = config_manager.Src();
         return static_cast<int>(status.first);
       }
-      if (config_get->parsed()) {
-        auto status = config_manager.Query(config_get_name);
+      if (cli_commands.config_get->parsed()) {
+        auto status = config_manager.Query(cli_options.config_get_name);
         return static_cast<int>(status.first);
       }
-      if (config_add->parsed()) {
+      if (cli_commands.config_add->parsed()) {
         auto status = config_manager.Add();
         return static_cast<int>(status.first);
       }
-      if (config_edit->parsed()) {
-        auto status = config_manager.Modify(config_edit_name);
+      if (cli_commands.config_edit->parsed()) {
+        auto status = config_manager.Modify(cli_options.config_edit_name);
         return static_cast<int>(status.first);
       }
-      if (config_rn->parsed()) {
-        auto status = config_manager.Rename(config_rn_old, config_rn_new);
+      if (cli_commands.config_rn->parsed()) {
+        auto status = config_manager.Rename(cli_options.config_rn_old,
+                                            cli_options.config_rn_new);
         return static_cast<int>(status.first);
       }
-      if (config_rm->parsed()) {
-        int exit_code = 0;
-        for (const auto &name : config_rm_names) {
-          auto status = config_manager.Delete(name);
-          if (status.first != EC::Success) {
-            exit_code = static_cast<int>(status.first);
-          }
-        }
-        return exit_code;
+      if (cli_commands.config_rm->parsed()) {
+        auto status = config_manager.Delete(cli_options.config_rm_names);
+        return static_cast<int>(status.first);
       }
       std::cerr << "Invalid config command" << std::endl;
       return static_cast<int>(EC::InvalidArg);
     }
 
-    auto ensure_clients = [&](const std::vector<std::string> &paths) -> ECM {
-      std::unordered_set<std::string> seen;
-      for (const auto &input : paths) {
-        auto [nickname, subpath] = ParseAddress(input);
-        if (nickname.empty()) {
-          continue;
-        }
-        if (seen.find(nickname) != seen.end()) {
-          continue;
-        }
-        seen.insert(nickname);
-        auto [rcm, _client] = EnsureClient(client_manager, nickname, gif);
-        if (rcm.first != EC::Success) {
-          return rcm;
-        }
-        if (subpath.empty()) {
-          return {EC::InvalidArg, "Empty path after nickname"};
-        }
-      }
-      return {EC::Success, ""};
-    };
-
-    if (stat_cmd->parsed()) {
-      ECM rcm = ensure_clients(stat_paths);
-      if (rcm.first != EC::Success) {
-        std::cerr << rcm.second << std::endl;
-        return static_cast<int>(rcm.first);
-      }
-      int exit_code = 0;
-      for (const auto &path : stat_paths) {
-        rcm = filesystem.stat(path, gif, timeout_ms);
-        if (rcm.first != EC::Success) {
-          std::cerr << rcm.second << std::endl;
-          exit_code = static_cast<int>(rcm.first);
-        }
-      }
-      return exit_code;
-    }
-
-    if (ls_cmd->parsed()) {
-      ECM rcm = ensure_clients({ls_path});
-      if (rcm.first != EC::Success) {
-        std::cerr << rcm.second << std::endl;
-        return static_cast<int>(rcm.first);
-      }
-      rcm = filesystem.ls(ls_path, ls_long, ls_all, gif, timeout_ms);
+    if (cli_commands.stat_cmd->parsed()) {
+      ECM rcm = filesystem.stat(cli_options.stat_paths, amgif);
       if (rcm.first != EC::Success) {
         std::cerr << rcm.second << std::endl;
       }
       return static_cast<int>(rcm.first);
     }
 
-    if (size_cmd->parsed()) {
-      ECM rcm = ensure_clients(size_paths);
-      if (rcm.first != EC::Success) {
-        std::cerr << rcm.second << std::endl;
-        return static_cast<int>(rcm.first);
-      }
-      int exit_code = 0;
-      for (const auto &input : size_paths) {
-        auto [nickname, subpath] = ParseAddress(input);
-        std::shared_ptr<BaseClient> client =
-            nickname.empty() ? client_manager.CLIENT
-                             : client_manager.Clients().GetHost(nickname);
-        if (!client) {
-          auto [rcm2, created] = EnsureClient(client_manager, nickname, gif);
-          if (rcm2.first != EC::Success) {
-            std::cerr << rcm2.second << std::endl;
-            exit_code = static_cast<int>(rcm2.first);
-            continue;
-          }
-          client = created;
-        }
-        std::string abs_path =
-            BuildPath(client, subpath.empty() ? input : subpath);
-        int64_t start_time = am_ms();
-        int64_t size =
-            client->getsize(abs_path, true, gif, timeout_ms, start_time);
-        if (size < 0) {
-          std::cerr << "Failed to get size: " << input << std::endl;
-          exit_code = static_cast<int>(EC::UnknownError);
-          continue;
-        }
-        std::cout << input << ": " << FormatSize(static_cast<uint64_t>(size))
-                  << std::endl;
-      }
-      return exit_code;
-    }
-
-    if (find_cmd->parsed()) {
-      ECM rcm = ensure_clients({find_path});
-      if (rcm.first != EC::Success) {
-        std::cerr << rcm.second << std::endl;
-        return static_cast<int>(rcm.first);
-      }
-      rcm = filesystem.find(find_path, SearchType::All, gif, timeout_ms);
+    if (cli_commands.ls_cmd->parsed()) {
+      ECM rcm = filesystem.ls(cli_options.ls_path, cli_options.ls_long,
+                              cli_options.ls_all, amgif);
       if (rcm.first != EC::Success) {
         std::cerr << rcm.second << std::endl;
       }
       return static_cast<int>(rcm.first);
     }
 
-    if (mkdir_cmd->parsed()) {
-      ECM rcm = ensure_clients(mkdir_paths);
+    if (cli_commands.size_cmd->parsed()) {
+      ECM rcm = filesystem.getsize(cli_options.size_paths, amgif);
       if (rcm.first != EC::Success) {
         std::cerr << rcm.second << std::endl;
-        return static_cast<int>(rcm.first);
       }
-      int exit_code = 0;
-      for (const auto &path : mkdir_paths) {
-        rcm = filesystem.mkdir(path, gif, timeout_ms);
-        if (rcm.first != EC::Success) {
-          std::cout << "❌ " << static_cast<int>(rcm.first)
-                    << ": Fail to mkdir " << path << " , " << rcm.second
-                    << std::endl;
-          exit_code = static_cast<int>(rcm.first);
-        } else {
-          std::cout << "✅ Success to mkdir " << path << std::endl;
-        }
-      }
-      return exit_code;
+      return static_cast<int>(rcm.first);
     }
 
-    if (rm_cmd->parsed()) {
-      ECM rcm = ensure_clients(rm_paths);
+    if (cli_commands.find_cmd->parsed()) {
+      ECM rcm = filesystem.find(cli_options.find_path, SearchType::All, amgif);
       if (rcm.first != EC::Success) {
         std::cerr << rcm.second << std::endl;
-        return static_cast<int>(rcm.first);
       }
-      int exit_code = 0;
-      for (const auto &input : rm_paths) {
-        auto [nickname, subpath] = ParseAddress(input);
-        std::shared_ptr<BaseClient> client =
-            nickname.empty() ? client_manager.CLIENT
-                             : client_manager.Clients().GetHost(nickname);
-        if (!client) {
-          auto [rcm2, created] = EnsureClient(client_manager, nickname, gif);
-          if (rcm2.first != EC::Success) {
-            std::cout << "❌ " << static_cast<int>(rcm2.first)
-                      << ": Fail to rm " << input << " , " << rcm2.second
-                      << std::endl;
-            exit_code = static_cast<int>(rcm2.first);
-            continue;
-          }
-          client = created;
-        }
-        std::string abs_path =
-            BuildPath(client, subpath.empty() ? input : subpath);
-        int64_t start_time = am_ms();
-        if (rm_permanent) {
-          auto result = client->remove(abs_path, gif, timeout_ms, start_time);
-          rcm = result.first;
-        } else {
-          rcm = client->saferm(abs_path, gif, timeout_ms, start_time);
-        }
-        if (rcm.first != EC::Success) {
-          std::cout << "❌ " << static_cast<int>(rcm.first) << ": Fail to rm "
-                    << input << " , " << rcm.second << std::endl;
-          exit_code = static_cast<int>(rcm.first);
-        } else {
-          std::cout << "✅ Success to rm " << input << std::endl;
-        }
+      return static_cast<int>(rcm.first);
+    }
+
+    if (cli_commands.mkdir_cmd->parsed()) {
+      ECM rcm = filesystem.mkdir(cli_options.mkdir_paths, amgif);
+      if (rcm.first != EC::Success) {
+        std::cerr << rcm.second << std::endl;
       }
-      return exit_code;
+      return static_cast<int>(rcm.first);
+    }
+
+    if (cli_commands.rm_cmd->parsed()) {
+      ECM rcm = filesystem.rm(cli_options.rm_paths, cli_options.rm_permanent,
+                              false, amgif);
+      if (rcm.first != EC::Success) {
+        std::cerr << rcm.second << std::endl;
+      }
+      return static_cast<int>(rcm.first);
+    }
+
+    if (cli_commands.walk_cmd->parsed()) {
+      ECM rcm = filesystem.walk(
+          cli_options.walk_path, cli_options.walk_only_file,
+          cli_options.walk_only_dir, !cli_options.walk_include_special, amgif);
+      if (rcm.first != EC::Success) {
+        std::cerr << rcm.second << std::endl;
+      }
+      return static_cast<int>(rcm.first);
+    }
+
+    if (cli_commands.tree_cmd->parsed()) {
+      ECM rcm = filesystem.tree(cli_options.tree_path, cli_options.tree_depth,
+                                !cli_options.tree_include_special, amgif);
+      if (rcm.first != EC::Success) {
+        std::cerr << rcm.second << std::endl;
+      }
+      return static_cast<int>(rcm.first);
     }
 
     std::cerr << "No valid command provided" << std::endl;
