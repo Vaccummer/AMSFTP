@@ -2,8 +2,9 @@
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/FileSystem.hpp"
-#include "CLI/CLI.hpp"
 #include "AMManager/SignalMonitor.hpp"
+#include "AMManager/Transfer.hpp"
+#include "CLI/CLI.hpp"
 #include <cstdint>
 #include <iostream>
 #include <memory>
@@ -111,6 +112,19 @@ struct TreeArgs {
 };
 
 /**
+ * @brief CLI argument container for cp (transfer).
+ */
+struct CpArgs {
+  std::vector<std::string> srcs;
+  std::string output;
+  bool overwrite = false;
+  bool no_mkdir = false;
+  bool clone = false;
+  bool include_special = false;
+  bool quiet = false;
+};
+
+/**
  * @brief CLI argument container for sftp.
  */
 struct SftpArgs {
@@ -149,6 +163,7 @@ struct CliArgsPool {
   RmArgs rm;
   WalkArgs walk;
   TreeArgs tree;
+  CpArgs cp;
   SftpArgs sftp;
   FtpArgs ftp;
 };
@@ -174,6 +189,7 @@ struct CliCommands {
   CLI::App *rm_cmd = nullptr;
   CLI::App *walk_cmd = nullptr;
   CLI::App *tree_cmd = nullptr;
+  CLI::App *cp_cmd = nullptr;
   CLI::App *sftp_cmd = nullptr;
   CLI::App *ftp_cmd = nullptr;
   const CliArgsPool *args = nullptr;
@@ -210,14 +226,11 @@ inline CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
       commands.config_cmd->add_subcommand("data", "Show config");
   commands.config_get =
       commands.config_cmd->add_subcommand("get", "Query host");
-  commands.config_add =
-      commands.config_cmd->add_subcommand("add", "Add host");
+  commands.config_add = commands.config_cmd->add_subcommand("add", "Add host");
   commands.config_edit =
       commands.config_cmd->add_subcommand("edit", "Edit host");
-  commands.config_rn =
-      commands.config_cmd->add_subcommand("rn", "Rename host");
-  commands.config_rm =
-      commands.config_cmd->add_subcommand("rm", "Remove host");
+  commands.config_rn = commands.config_cmd->add_subcommand("rn", "Rename host");
+  commands.config_rm = commands.config_cmd->add_subcommand("rm", "Remove host");
 
   commands.config_get
       ->add_option("nickname", args.config_get.nickname, "Host nickname")
@@ -239,7 +252,9 @@ inline CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
       ->expected(1, -1);
 
   commands.ls_cmd = app.add_subcommand("ls", "List directory");
-  commands.ls_cmd->add_option("path", args.ls.path, "Path to list")->required();
+  commands.ls_cmd->add_option("path", args.ls.path, "Path to list")
+      ->required()
+      ->expected(1);
   commands.ls_cmd->add_flag("-l", args.ls.list_like, "List like");
   commands.ls_cmd->add_flag("-a", args.ls.show_all, "Show all entries");
 
@@ -249,7 +264,8 @@ inline CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
 
   commands.find_cmd = app.add_subcommand("find", "Find paths");
   commands.find_cmd->add_option("path", args.find.path, "Path to find")
-      ->required();
+      ->required()
+      ->expected(1, 1);
 
   commands.mkdir_cmd = app.add_subcommand("mkdir", "Create directories");
   commands.mkdir_cmd->add_option("paths", args.mkdir.paths, "Paths to create")
@@ -263,7 +279,8 @@ inline CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
 
   commands.walk_cmd = app.add_subcommand("walk", "Walk paths");
   commands.walk_cmd->add_option("path", args.walk.path, "Path to walk")
-      ->required();
+      ->required()
+      ->expected(1, 1);
   commands.walk_cmd->add_flag("-f,--file", args.walk.only_file,
                               "Only show files");
   commands.walk_cmd->add_flag("-d,--dir", args.walk.only_dir,
@@ -273,17 +290,35 @@ inline CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
 
   commands.tree_cmd = app.add_subcommand("tree", "Print directory tree");
   commands.tree_cmd->add_option("path", args.tree.path, "Path to tree")
-      ->required();
+      ->required()
+      ->expected(1, 1);
   commands.tree_cmd->add_option("--depth", args.tree.depth,
                                 "Max depth (default: -1)");
   commands.tree_cmd->add_flag("-s,--special", args.tree.include_special,
                               "Include special files");
 
+  commands.cp_cmd = app.add_subcommand("cp", "Transfer files/directories");
+  commands.cp_cmd->add_option("src", args.cp.srcs, "Source paths")
+      ->expected(1, -1);
+  commands.cp_cmd->add_option("-o,--output", args.cp.output,
+                              "Destination path (optional)");
+  commands.cp_cmd->add_flag("-f,--force", args.cp.overwrite,
+                            "Overwrite existing targets");
+  commands.cp_cmd->add_flag("-n,--no-mkdir", args.cp.no_mkdir,
+                            "Do not create missing directories");
+  commands.cp_cmd->add_flag("-c,--clone", args.cp.clone,
+                            "Clone instead of transfer");
+  commands.cp_cmd->add_flag("-s,--special", args.cp.include_special,
+                            "Include special files");
+  commands.cp_cmd->add_flag("-q,--quiet", args.cp.quiet,
+                            "Suppress transfer output");
+
   commands.sftp_cmd = app.add_subcommand("sftp", "Connect to SFTP host");
   commands.sftp_cmd
       ->add_option("user_at_host", args.sftp.user_at_host,
                    "User and host (user@host)")
-      ->required();
+      ->required()
+      ->expected(1, 1);
   commands.sftp_cmd->add_option("nickname", args.sftp.nickname,
                                 "Host nickname");
   commands.sftp_cmd->add_option("-p,--port", args.sftp.port, "Port");
@@ -294,7 +329,8 @@ inline CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
   commands.ftp_cmd
       ->add_option("user_at_host", args.ftp.user_at_host,
                    "User and host (user@host)")
-      ->required();
+      ->required()
+      ->expected(1, 1);
   commands.ftp_cmd->add_option("nickname", args.ftp.nickname, "Host nickname");
   commands.ftp_cmd->add_option("-p,--port", args.ftp.port, "Port");
   commands.ftp_cmd->add_option("--password", args.ftp.password, "Password");
@@ -320,8 +356,8 @@ inline void DispatchCliCommands(const CliCommands &cli_commands,
 
   if (cli_commands.config_cmd->parsed()) {
     if (cli_commands.config_ls->parsed()) {
-      auto status =
-          args.config_ls.detail ? config_manager.List() : config_manager.ListName();
+      auto status = args.config_ls.detail ? config_manager.List()
+                                          : config_manager.ListName();
       SetCliExitCode(static_cast<int>(status.first));
       return;
     }
@@ -351,8 +387,8 @@ inline void DispatchCliCommands(const CliCommands &cli_commands,
       return;
     }
     if (cli_commands.config_rn->parsed()) {
-      auto status =
-          config_manager.Rename(args.config_rn.old_name, args.config_rn.new_name);
+      auto status = config_manager.Rename(args.config_rn.old_name,
+                                          args.config_rn.new_name);
       SetCliExitCode(static_cast<int>(status.first));
       return;
     }
@@ -368,16 +404,13 @@ inline void DispatchCliCommands(const CliCommands &cli_commands,
 
   if (cli_commands.stat_cmd->parsed()) {
     ECM rcm = filesystem.stat(args.stat.paths, flag);
-    if (rcm.first != EC::Success) {
-      std::cerr << rcm.second << std::endl;
-    }
     SetCliExitCode(static_cast<int>(rcm.first));
     return;
   }
 
   if (cli_commands.ls_cmd->parsed()) {
-    ECM rcm = filesystem.ls(args.ls.path, args.ls.list_like, args.ls.show_all,
-                            flag);
+    ECM rcm =
+        filesystem.ls(args.ls.path, args.ls.list_like, args.ls.show_all, flag);
     if (rcm.first != EC::Success) {
       std::cerr << rcm.second << std::endl;
     }
@@ -422,9 +455,9 @@ inline void DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.walk_cmd->parsed()) {
-    ECM rcm = filesystem.walk(args.walk.path, args.walk.only_file,
-                              args.walk.only_dir, !args.walk.include_special,
-                              flag);
+    ECM rcm =
+        filesystem.walk(args.walk.path, args.walk.only_file, args.walk.only_dir,
+                        !args.walk.include_special, flag);
     if (rcm.first != EC::Success) {
       std::cerr << rcm.second << std::endl;
     }
@@ -435,6 +468,46 @@ inline void DispatchCliCommands(const CliCommands &cli_commands,
   if (cli_commands.tree_cmd->parsed()) {
     ECM rcm = filesystem.tree(args.tree.path, args.tree.depth,
                               !args.tree.include_special, flag);
+    if (rcm.first != EC::Success) {
+      std::cerr << rcm.second << std::endl;
+    }
+    SetCliExitCode(static_cast<int>(rcm.first));
+    return;
+  }
+
+  if (cli_commands.cp_cmd->parsed()) {
+    if (args.cp.srcs.empty()) {
+      std::cerr << "cp requires at least one source" << std::endl;
+      SetCliExitCode(static_cast<int>(EC::InvalidArg));
+      return;
+    }
+    std::vector<std::string> srcs;
+    std::string dst;
+    if (args.cp.output.empty()) {
+      if (args.cp.srcs.size() != 2) {
+        std::cerr << "cp requires exactly 2 paths when --output is omitted"
+                  << std::endl;
+        SetCliExitCode(static_cast<int>(EC::InvalidArg));
+        return;
+      }
+      srcs = {args.cp.srcs.front()};
+      dst = args.cp.srcs.back();
+    } else {
+      srcs = args.cp.srcs;
+      dst = args.cp.output;
+    }
+    UserTransferSet transfer_set;
+    transfer_set.srcs = std::move(srcs);
+    transfer_set.dst = std::move(dst);
+    transfer_set.mkdir = !args.cp.no_mkdir;
+    transfer_set.overwrite = args.cp.overwrite;
+    transfer_set.clone = args.cp.clone;
+    transfer_set.ignore_special_file = !args.cp.include_special;
+
+    AMTransferManager transfer_manager(*managers.config_manager,
+                                        *managers.client_manager);
+    ECM rcm =
+        transfer_manager.transfer({transfer_set}, args.cp.quiet, flag);
     if (rcm.first != EC::Success) {
       std::cerr << rcm.second << std::endl;
     }
@@ -454,9 +527,9 @@ inline void DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.ftp_cmd->parsed()) {
-    ECM rcm = filesystem.ftp(args.ftp.nickname, args.ftp.user_at_host,
-                             args.ftp.port, args.ftp.password,
-                             args.ftp.keyfile, flag);
+    ECM rcm =
+        filesystem.ftp(args.ftp.nickname, args.ftp.user_at_host, args.ftp.port,
+                       args.ftp.password, args.ftp.keyfile, flag);
     if (rcm.first != EC::Success) {
       std::cerr << rcm.second << std::endl;
     }
@@ -467,5 +540,3 @@ inline void DispatchCliCommands(const CliCommands &cli_commands,
   std::cerr << "No valid command provided" << std::endl;
   SetCliExitCode(static_cast<int>(EC::InvalidArg));
 }
-
-

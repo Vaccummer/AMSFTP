@@ -364,10 +364,12 @@ AMFileSystem::ECM AMFileSystem::stat(const std::vector<std::string> &paths,
       last = rcm.first == EC::Success
                  ? ECM{EC::ClientNotFound, "Client not found"}
                  : rcm;
+      prompt_manager_.ErrorFormat(AM_ENUM_NAME(last.first), last.second);
       continue;
     }
     if (resolved_path.empty()) {
       last = {EC::InvalidArg, "Empty path"};
+      prompt_manager_.ErrorFormat(AM_ENUM_NAME(last.first), last.second);
       continue;
     }
     ClientRef client{nickname, client_ptr};
@@ -377,6 +379,8 @@ AMFileSystem::ECM AMFileSystem::stat(const std::vector<std::string> &paths,
         client.client->stat(abs_path, false, flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
       last = rcm2;
+      AM_PROMPT_ERROR(AM_ENUM_NAME(last.first), last.second, false,
+                      static_cast<int>(last.first));
       continue;
     }
     prompt_manager_.Print(FormatStatOutput(info));
@@ -1003,5 +1007,3 @@ std::string AMFileSystem::StylePath(const PathInfo &info,
 //   }
 //   return false;
 // }
-
-

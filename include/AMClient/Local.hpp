@@ -75,6 +75,9 @@ public:
     if (path.empty()) {
       return {ECM{EC::InvalidArg, "Invalid empty path"}, PathInfo()};
     }
+    if (!fs::exists(fs::path(path))) {
+      return {ECM{EC::PathNotExist, "Path not found: " + path}, PathInfo()};
+    }
 
     PathInfo info;
     std::string pathf = path;
@@ -550,5 +553,3 @@ public:
                   start_time);
   }
 };
-
-

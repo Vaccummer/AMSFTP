@@ -1,7 +1,7 @@
 #include "AMManager/Prompt.hpp"
-#include "AMManager/SignalMonitor.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
+#include "AMManager/SignalMonitor.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -9,6 +9,7 @@
 #include <replxx.h>
 #include <sstream>
 #include <string>
+
 
 namespace {
 ReplxxActionResult EscAbortHandler(Replxx *rx, unsigned int, void *ud) {
@@ -276,5 +277,3 @@ bool AMPromptManager::Prompt(const std::string &prompt,
   *out_input = std::string(line);
   return esc_pressed_;
 }
-
-

@@ -1,10 +1,38 @@
 #include "AMManager/Transfer.hpp"
+#include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
-#include "AMClient/IOCore.hpp"
 #include <algorithm>
 #include <cctype>
 #include <unordered_set>
+
+/**
+ * @brief Parse a transfer path into nickname and path using client manager.
+ *
+ * Host config not found is treated as an error; missing clients are allowed
+ * so that transfer can create them later.
+ */
+static ECM ParseTransferPath(AMClientManager &client_manager,
+                             const std::string &input,
+                             const std::shared_ptr<BaseClient> &client,
+                             std::string *nickname, std::string *path) {
+  auto [parsed_name, parsed_path, _client, rcm] =
+      client_manager.ParsePath(input);
+  if (rcm.first == EC::HostConfigNotFound) {
+    return rcm;
+  }
+  std::string resolved_path = parsed_path;
+  if (client) {
+    resolved_path = client_manager.AbsPath(parsed_path, client);
+  }
+  if (nickname) {
+    *nickname = parsed_name;
+  }
+  if (path) {
+    *path = resolved_path;
+  }
+  return {EC::Success, ""};
+}
 
 /**
  * @brief Prepared task bundle used during transfer setup.
@@ -61,18 +89,6 @@ int AMTransferManager::ResolveRefreshIntervalMs_() const {
     value = 30;
   }
   return value;
-}
-
-/**
- * @brief Parse "nickname@path" into components.
- */
-std::pair<std::string, std::string>
-AMTransferManager::ParseAddress_(const std::string &input) {
-  const auto pos = input.find('@');
-  if (pos == std::string::npos) {
-    return {"", input};
-  }
-  return {input.substr(0, pos), input.substr(pos + 1)};
 }
 
 /**
@@ -152,7 +168,7 @@ AMTransferManager::AcquireClient_(const std::string &nickname,
   }
 
   auto created =
-      client_manager_.AddClient(nickname, nullptr, false, true, {}, flag);
+      client_manager_.AddClient(nickname, false, true, {}, flag, false);
   if (created.first.first != EC::Success || !created.second) {
     return created;
   }
@@ -257,12 +273,24 @@ AMTransferManager::PrepareTasks_(
 
   std::unordered_set<std::string> nicknames;
   for (const auto &set : transfer_sets) {
-    auto [dst_host, _dst_path] = ParseAddress_(set.dst);
+    std::string dst_host;
+    std::string dst_path;
+    auto dst_rcm = ParseTransferPath(client_manager_, set.dst, nullptr,
+                                     &dst_host, &dst_path);
+    if (dst_rcm.first != EC::Success) {
+      return {dst_rcm, prepared};
+    }
     if (!dst_host.empty()) {
       nicknames.insert(dst_host);
     }
     for (const auto &src : set.srcs) {
-      auto [src_host, _src_path] = ParseAddress_(src);
+      std::string src_host;
+      std::string src_path;
+      auto src_rcm = ParseTransferPath(client_manager_, src, nullptr, &src_host,
+                                       &src_path);
+      if (src_rcm.first != EC::Success) {
+        return {src_rcm, prepared};
+      }
       if (!src_host.empty()) {
         nicknames.insert(src_host);
       }
@@ -289,7 +317,27 @@ AMTransferManager::PrepareTasks_(
       host_map);
 
   for (const auto &set : transfer_sets) {
-    auto [dst_host, dst_path] = ParseAddress_(set.dst);
+    std::string dst_host;
+    std::string dst_path;
+    auto dst_parse = ParseTransferPath(client_manager_, set.dst, nullptr,
+                                       &dst_host, &dst_path);
+    if (dst_parse.first != EC::Success) {
+      ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
+      return {dst_parse, prepared};
+    }
+    auto dst_client = dst_host.empty() ? prepared.hostm->local_client
+                                       : prepared.hostm->GetHost(dst_host);
+    if (!dst_client) {
+      ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
+      return {ECM{EC::ClientNotFound, "Destination client not available"},
+              prepared};
+    }
+    auto dst_rcm = ParseTransferPath(client_manager_, set.dst, dst_client,
+                                     &dst_host, &dst_path);
+    if (dst_rcm.first != EC::Success) {
+      ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
+      return {dst_rcm, prepared};
+    }
     for (const auto &src : set.srcs) {
       if (flag && flag->check()) {
         ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
@@ -297,7 +345,27 @@ AMTransferManager::PrepareTasks_(
                 prepared};
       }
 
-      auto [src_host, src_path] = ParseAddress_(src);
+      std::string src_host;
+      std::string src_path;
+      auto src_parse = ParseTransferPath(client_manager_, src, nullptr,
+                                         &src_host, &src_path);
+      if (src_parse.first != EC::Success) {
+        ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
+        return {src_parse, prepared};
+      }
+      auto src_client = src_host.empty() ? prepared.hostm->local_client
+                                         : prepared.hostm->GetHost(src_host);
+      if (!src_client) {
+        ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
+        return {ECM{EC::ClientNotFound, "Source client not available"},
+                prepared};
+      }
+      auto src_rcm = ParseTransferPath(client_manager_, src, src_client,
+                                       &src_host, &src_path);
+      if (src_rcm.first != EC::Success) {
+        ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
+        return {src_rcm, prepared};
+      }
 
       std::vector<std::string> src_paths = {src_path};
       if (HasWildcard_(src_path)) {
@@ -378,24 +446,25 @@ ECM AMTransferManager::transfer(
     return submit_rcm;
   }
 
-  AMProgressBarGroup progress_group;
-  progress_group.Start();
-  auto bar = std::make_shared<AMProgressBar>(
-      static_cast<int64_t>(task_info->total_size.load()), "transfer");
-  progress_group.AddBar(bar);
+  // TODO: Bar has problem
+  // AMProgressBarGroup progress_group;
+  // progress_group.Start();
+  // auto bar = std::make_shared<AMProgressBar>(
+  //     static_cast<int64_t>(task_info->total_size.load()), "transfer");
+  // progress_group.AddBar(bar);
 
   bool all_finished = false;
   while (!all_finished) {
     if (flag && flag->check()) {
       terminated.store(true);
       worker_.terminate(task_info->id, 1000);
-      progress_group.Stop();
+      // progress_group.Stop();
       return {EC::Terminate, "Transfer interrupted during progress polling"};
     }
     all_finished = task_info->GetStatus() == TaskStatus::Finished;
-    bar->SetProgress(
-        static_cast<int64_t>(task_info->total_transferred_size.load()));
-    progress_group.Refresh(true);
+    // bar->SetProgress(
+    //     static_cast<int64_t>(task_info->total_transferred_size.load()));
+    // progress_group.Refresh(true);
     std::this_thread::sleep_for(std::chrono::milliseconds(refresh_interval_ms));
   }
 
@@ -445,5 +514,3 @@ ECM AMTransferManager::transfer_async(
   }
   return {EC::Success, ""};
 }
-
-

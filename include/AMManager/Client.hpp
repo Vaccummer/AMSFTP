@@ -206,6 +206,85 @@ public:
   }
 
   /**
+   * @brief Create a client and connect it without registering to maintainer.
+   */
+  std::pair<ECM, std::shared_ptr<BaseClient>>
+  AddClient(const std::string &nickname, bool force, bool quiet,
+            TraceCallback trace_cb = {}, amf interrupt_flag = nullptr,
+            bool register_to_manager = true) {
+    if (register_to_manager) {
+      return AddClient(nickname, nullptr, force, quiet, std::move(trace_cb),
+                       interrupt_flag);
+    }
+
+    amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+    if (nickname.empty() || nickname == "local") {
+      return {ECM{EC::Success, ""}, LOCAL};
+    }
+
+    if (!trace_cb) {
+      trace_cb = log_manager_.TraceCallbackFunc();
+    }
+
+    auto client_config = config_.GetClientConfig(nickname);
+    if (client_config.first.first != EC::Success) {
+      return {client_config.first, nullptr};
+    }
+
+    auto keys_result = config_.PrivateKeys(false);
+    if (keys_result.first.first != EC::Success) {
+      return {keys_result.first, nullptr};
+    }
+
+    std::atomic<bool> spinner_running(false);
+    auto auth_cb = BuildAuthCallback_(password_cb_, quiet, &spinner_running);
+    auto base_client = CreateClient(
+        client_config.second.request, client_config.second.protocol, trace_num_,
+        std::move(trace_cb), client_config.second.buffer_size,
+        keys_result.second, std::move(auth_cb));
+    if (!base_client) {
+      return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
+    }
+
+    std::thread spinner_thread;
+    std::string spinner_line;
+    size_t spinner_line_len = 0;
+    if (!quiet) {
+      const std::string protocol_label =
+          ProtocolLabel_(base_client->GetProtocol());
+      spinner_line = AMStr::amfmt("Connecting to {} Server   [{}]",
+                                  protocol_label, nickname);
+      spinner_line_len = spinner_line.size() + 3;
+      spinner_running.store(true);
+      spinner_thread = std::thread([&spinner_running, spinner_line]() {
+        const char frames[] = {'|', '/', '-', '\\'};
+        size_t idx = 0;
+        while (spinner_running.load()) {
+          char indicator = frames[idx % (sizeof(frames) / sizeof(frames[0]))];
+          std::cout << '\r' << indicator << "  " << spinner_line << std::flush;
+          idx++;
+          std::this_thread::sleep_for(std::chrono::milliseconds(120));
+        }
+      });
+    }
+
+    ECM rcm = base_client->Connect(force, flag);
+    spinner_running.store(false);
+    if (spinner_thread.joinable()) {
+      spinner_thread.join();
+      if (spinner_line_len > 0) {
+        std::cout << '\r' << std::string(spinner_line_len, ' ') << '\r'
+                  << std::flush;
+      }
+    }
+    if (rcm.first != EC::Success) {
+      return {rcm, base_client};
+    }
+    ApplyLoginDir_(nickname, base_client, client_config.second.login_dir, flag);
+    return {ECM{EC::Success, ""}, base_client};
+  }
+
+  /**
    * @brief Connect to an unknown host, validate nickname, and persist on
    * success.
    */
@@ -452,6 +531,23 @@ public:
       return {prefix, path, created.second, ECM{EC::Success, ""}};
     }
     return {prefix, path, existing, ECM{EC::Success, ""}};
+  }
+
+  /**
+   * @brief Build an absolute path based on client home/workdir (or passthrough).
+   */
+  [[nodiscard]] std::string
+  AbsPath(const std::string &path,
+          const std::shared_ptr<BaseClient> &client = nullptr) const {
+    if (!client) {
+      return path;
+    }
+    if (path.empty()) {
+      return GetOrInitWorkdir(client);
+    }
+    std::string cwd = GetOrInitWorkdir(client);
+    std::string home = client->GetHomeDir();
+    return AMFS::abspath(path, true, home, cwd, "/");
   }
 
   /**

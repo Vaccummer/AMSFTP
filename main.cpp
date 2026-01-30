@@ -1,6 +1,6 @@
 #include "AMCLI/CLIBind.hpp"
-#include "AMClient/SFTP.hpp"
 #include "AMClient/IOCore.hpp"
+#include "AMClient/SFTP.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include <atomic>
 #include <filesystem>
@@ -50,26 +50,14 @@ int main(int argc, char **argv) {
     CliCommands cli_commands = BindCliOptions(app, args_pool);
 
     try {
-      std::cout << "Parse CLI arguments start" << std::endl;
       app.parse(argc, argv);
     } catch (const CLI::ParseError &e) {
-      auto time_end = std::chrono::steady_clock::now();
-      std::cout << "Parse CLI arguments time: "
-                << std::chrono::duration_cast<std::chrono::milliseconds>(
-                       time_end - time_start)
-                       .count()
-                << "ms" << std::endl;
-      // return app.exit(e);
+      return app.exit(e);
     }
     time_start = std::chrono::steady_clock::now();
     auto &signal_monitor = AMCliSignalMonitor::Instance();
     signal_monitor.InstallHandlers();
     signal_monitor.Start();
-    struct SignalMonitorGuard {
-      AMCliSignalMonitor &monitor;
-      explicit SignalMonitorGuard(AMCliSignalMonitor &ref) : monitor(ref) {}
-      ~SignalMonitorGuard() { monitor.Stop(); }
-    } guard(signal_monitor);
 
     auto &config_manager = AMConfigManager::Instance();
     auto init_status = config_manager.Init();
@@ -98,11 +86,22 @@ int main(int argc, char **argv) {
               << "ms" << std::endl;
     AMInitWSA();
     DispatchCliCommands(cli_commands, managers);
+    time_end = std::chrono::steady_clock::now();
+    std::cout << "alltime: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                     time_end - time_start)
+                     .count()
+              << "ms" << std::endl;
     return g_cli_exit_code;
   } catch (const std::exception &e) {
     std::cerr << "Unexpected error: " << e.what() << std::endl;
     return -13;
   }
 }
-
-
+int main224(int argc, char **argv) {
+  auto &signal_monitor = AMCliSignalMonitor::Instance();
+  signal_monitor.InstallHandlers();
+  signal_monitor.Start();
+  std::string tmp_test = "";
+  std::cin >> tmp_test;
+}

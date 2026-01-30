@@ -632,7 +632,7 @@ inline std::string replace_all(std::string str, const std::string &old_sub,
 
 } // namespace AMStr
 // 导出amfmt函数
-
+#define AM_ENUM_NAME(x) std::string(magic_enum::enum_name(x))
 class AMProgressBarGroup;
 
 /**
@@ -1259,8 +1259,7 @@ inline void AMProgressBar::RequestRefreshLocked_() const {
 
 inline void print(const std::string &str) { std::cout << str << "\n"; }
 
-template <typename... Args>
-inline void print(Args &&...args) {
+template <typename... Args> inline void print(Args &&...args) {
   if constexpr (sizeof...(Args) >= 2) {
     std::cout << AMStr::amfmt(std::forward<Args>(args)...) << "\n";
   } else {
@@ -1384,5 +1383,3 @@ private:
     return set.find(segment) != set.end();
   }
 };
-
-

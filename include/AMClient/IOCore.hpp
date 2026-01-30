@@ -18,12 +18,12 @@
 #include <vector>
 
 // 自身依赖
+#include "AMBase/CommonTools.hpp"
 #include "AMClient/Base.hpp"
 #include "AMClient/FTP.hpp"
 #include "AMClient/Local.hpp"
 #include "AMClient/SFTP.hpp"
 #include "AMManager/Prompt.hpp"
-#include "AMBase/CommonTools.hpp"
 
 class UnionFileHandle {
 public:
@@ -1895,8 +1895,6 @@ public:
       // 检查dst的扩展名和src扩展名是否相同
 
       std::string dst_ext = AMPathStr::extname(dstf);
-      std::cout << "dst_ext: " << dst_ext << std::endl;
-      std::cout << "src_ext: " << AMPathStr::extname(srcf) << std::endl;
       if (AMPathStr::extname(srcf) == dst_ext && !dst_ext.empty()) {
         is_dst_file = true;
       }
@@ -1938,7 +1936,7 @@ public:
         auto [rcm5, dst_info] = dst_client->stat(dstf, false, interrupt_flag,
                                                  timeout_ms, start_time);
         // 检验目标路径是否存在
-        if (rcm4.first == EC::Success) {
+        if (rcm5.first == EC::Success) {
           if (dst_info.type == PathType::DIR) {
             return {ECM(EC::NotAFile,
                         AMStr::amfmt(
@@ -2016,5 +2014,3 @@ public:
     return {ECM(EC::Success, ""), tasks};
   };
 };
-
-
