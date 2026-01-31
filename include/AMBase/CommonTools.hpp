@@ -564,6 +564,31 @@ inline bool IsModeValid(std::string mode_str) {
 
 inline bool IsModeValid(uint64_t mode_int) { return mode_int <= 0777; }
 
+/**
+ * @brief Return true when a character is treated as whitespace for parsing.
+ */
+inline bool IsWhitespace(char c) {
+  return std::isspace(static_cast<unsigned char>(c)) != 0;
+}
+
+/**
+ * @brief Trim leading and trailing whitespace only and return a copy.
+ */
+inline std::string TrimWhitespaceCopy(const std::string &input) {
+  size_t start = 0;
+  while (start < input.size() && IsWhitespace(input[start])) {
+    ++start;
+  }
+  if (start >= input.size()) {
+    return "";
+  }
+  size_t end = input.size();
+  while (end > start && IsWhitespace(input[end - 1])) {
+    --end;
+  }
+  return input.substr(start, end - start);
+}
+
 inline std::string Strip(std::string path) {
   const std::string trim_chars = " \t\n\r\"'";
 

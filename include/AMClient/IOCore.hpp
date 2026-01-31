@@ -381,9 +381,23 @@ public:
         [this, heartbeat_interval_s]() { HeartbeatAct(heartbeat_interval_s); });
   }
 
+  /**
+   * @brief Get nickname list of managed hosts.
+   */
   std::vector<std::string> get_nicknames() {
     std::vector<std::string> host_list;
     for (auto &host : hosts) {
+      host_list.push_back(host.first);
+    }
+    return host_list;
+  }
+
+  /**
+   * @brief Get nickname list of managed hosts (const overload).
+   */
+  std::vector<std::string> get_nicknames() const {
+    std::vector<std::string> host_list;
+    for (const auto &host : hosts) {
       host_list.push_back(host.first);
     }
     return host_list;
@@ -512,13 +526,13 @@ private:
   std::vector<std::list<TaskId>> affinity_queues_;
   std::list<TaskId> public_queue_;
 
-  std::mutex registry_mtx_;
+  mutable std::mutex registry_mtx_;
   std::unordered_map<TaskId, std::shared_ptr<TaskInfo>> task_registry_;
 
-  std::mutex result_mtx_;
+  mutable std::mutex result_mtx_;
   std::unordered_map<TaskId, std::shared_ptr<TaskInfo>> results_;
 
-  std::mutex conducting_mtx_;
+  mutable std::mutex conducting_mtx_;
   std::unordered_set<TaskId> conducting_tasks_;
   std::vector<TaskId> conducting_by_thread_;
   std::vector<std::shared_ptr<TaskInfo>> conducting_infos_;
@@ -1663,20 +1677,22 @@ public:
 
   /**
    * @brief Get task info from registry, conducting set, or results cache.
+   *
+   * @return Pair of task info and active flag (true if not finished).
    */
-  std::shared_ptr<TaskInfo> get_task(const TaskId &id) {
+  std::pair<std::shared_ptr<TaskInfo>, bool> get_task(const TaskId &id) const {
     {
       std::lock_guard<std::mutex> lock(registry_mtx_);
       auto it = task_registry_.find(id);
       if (it != task_registry_.end()) {
-        return it->second;
+        return {it->second, true};
       }
     }
     {
       std::lock_guard<std::mutex> lock(conducting_mtx_);
       for (size_t idx = 0; idx < conducting_by_thread_.size(); ++idx) {
         if (conducting_by_thread_[idx] == id) {
-          return conducting_infos_[idx];
+          return {conducting_infos_[idx], true};
         }
       }
     }
@@ -1684,18 +1700,18 @@ public:
       std::lock_guard<std::mutex> lock(result_mtx_);
       auto it = results_.find(id);
       if (it != results_.end()) {
-        return it->second;
+        return {it->second, false};
       }
     }
-    return nullptr;
+    return {nullptr, false};
   }
 
   /**
    * @brief Pause a task by ID.
    */
   bool pause(const TaskId &id) {
-    auto task_info = get_task(id);
-    if (!task_info || !task_info->pd) {
+    auto [task_info, active] = get_task(id);
+    if (!task_info || !active || !task_info->pd) {
       return false;
     }
     task_info->pd->set_pause();
@@ -1706,8 +1722,8 @@ public:
    * @brief Resume a task by ID.
    */
   bool resume(const TaskId &id) {
-    auto task_info = get_task(id);
-    if (!task_info || !task_info->pd) {
+    auto [task_info, active] = get_task(id);
+    if (!task_info || !active || !task_info->pd) {
       return false;
     }
     task_info->pd->set_running();
@@ -1716,15 +1732,31 @@ public:
 
   /**
    * @brief Terminate a task by ID and optionally wait for completion.
+   *
+   * @return Pair of task info and termination success flag.
    */
-  std::shared_ptr<TaskInfo> terminate(const TaskId &id, int timeout_ms = 5000) {
+  std::pair<std::shared_ptr<TaskInfo>, bool>
+  terminate(const TaskId &id, int timeout_ms = 5000) {
+    auto [existing, active] = get_task(id);
+    if (!existing) {
+      return {nullptr, false};
+    }
+    if (!active) {
+      return {existing, false};
+    }
+
     std::shared_ptr<TaskInfo> pending_task = nullptr;
+    bool terminated = false;
     {
       std::scoped_lock<std::mutex, std::mutex> lock(registry_mtx_, queue_mtx_);
       auto it = task_registry_.find(id);
       if (it != task_registry_.end() && it->second) {
         bool in_queue = false;
         const auto &task_info = it->second;
+        if (task_info->GetStatus() == TaskStatus::Finished) {
+          pending_task = task_info;
+          terminated = false;
+        }
         const int affinity_thread = task_info->affinity_thread.load();
         const TaskAssignType assign_type = task_info->assign_type.load();
         if (assign_type == TaskAssignType::Affinity && affinity_thread >= 0 &&
@@ -1754,13 +1786,14 @@ public:
           task_registry_.erase(it);
           queue_cv_.notify_all();
           pending_task = task_info;
+          terminated = true;
         }
       }
     }
 
     if (pending_task) {
       HandleCompletedTask(pending_task);
-      return pending_task;
+      return {pending_task, terminated};
     }
 
     std::shared_ptr<TaskInfo> conducting_task = nullptr;
@@ -1775,26 +1808,35 @@ public:
     }
 
     if (!conducting_task) {
-      return nullptr;
+      auto result = get_result(id, false);
+      if (result) {
+        return {result, false};
+      }
+      return {nullptr, false};
+    }
+
+    if (conducting_task->GetStatus() == TaskStatus::Finished) {
+      return {conducting_task, false};
     }
 
     if (conducting_task->pd) {
       conducting_task->pd->set_terminate();
     }
+    terminated = true;
 
     const int64_t start = am_ms();
     while (timeout_ms < 0 || (am_ms() - start) < timeout_ms) {
       auto result = get_result(id, true);
       if (result) {
-        return result;
+        return {result, terminated};
       }
       if (conducting_task->GetStatus() == TaskStatus::Finished &&
           conducting_task->result_callback) {
-        return conducting_task;
+        return {conducting_task, terminated};
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    return nullptr;
+    return {conducting_task, terminated};
   }
 
   /**
@@ -1852,6 +1894,36 @@ public:
       ids.push_back(id);
     }
     return ids;
+  }
+
+  /**
+   * @brief Snapshot all pending tasks that have not started yet.
+   */
+  std::vector<std::shared_ptr<TaskInfo>> get_pending_tasks() {
+    std::vector<std::shared_ptr<TaskInfo>> tasks;
+    std::lock_guard<std::mutex> lock(registry_mtx_);
+    tasks.reserve(task_registry_.size());
+    for (const auto &pair : task_registry_) {
+      if (pair.second) {
+        tasks.push_back(pair.second);
+      }
+    }
+    return tasks;
+  }
+
+  /**
+   * @brief Snapshot all currently conducting tasks.
+   */
+  std::vector<std::shared_ptr<TaskInfo>> get_conducting_tasks() {
+    std::vector<std::shared_ptr<TaskInfo>> tasks;
+    std::lock_guard<std::mutex> lock(conducting_mtx_);
+    tasks.reserve(conducting_infos_.size());
+    for (const auto &info : conducting_infos_) {
+      if (info) {
+        tasks.push_back(info);
+      }
+    }
+    return tasks;
   }
 
   static std::pair<ECM, TASKS>

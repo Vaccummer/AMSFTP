@@ -842,6 +842,102 @@ AMConfigManager::GetSettingString(const Path &path,
   return default_value;
 }
 
+/**
+ * @brief Query a UserPaths entry by name.
+ */
+bool AMConfigManager::GetUserPath(const std::string &name,
+                                  std::string *value) const {
+  auto status = EnsureInitialized("GetUserPath");
+  if (status.first != EC::Success)
+    return false;
+  if (name.empty())
+    return false;
+
+  const Json *node = FindJsonNode(settings_json_, {"UserPaths", name});
+  if (!node)
+    return false;
+
+  if (value) {
+    if (node->is_string()) {
+      *value = node->get<std::string>();
+    } else {
+      *value = GetSettingString({"UserPaths", name}, "");
+    }
+  }
+  return true;
+}
+
+/**
+ * @brief List all UserPaths entries.
+ */
+std::vector<std::pair<std::string, std::string>>
+AMConfigManager::ListUserPaths() const {
+  std::vector<std::pair<std::string, std::string>> entries;
+  auto status = EnsureInitialized("ListUserPaths");
+  if (status.first != EC::Success)
+    return entries;
+
+  const Json *node = FindJsonNode(settings_json_, {"UserPaths"});
+  if (!node || !node->is_object())
+    return entries;
+
+  entries.reserve(node->size());
+  for (auto it = node->begin(); it != node->end(); ++it) {
+    if (it.value().is_string()) {
+      entries.emplace_back(it.key(), it.value().get<std::string>());
+    } else {
+      entries.emplace_back(it.key(),
+                           GetSettingString({"UserPaths", it.key()}, ""));
+    }
+  }
+  return entries;
+}
+
+/**
+ * @brief Set a UserPaths entry and optionally persist to settings.
+ */
+ECM AMConfigManager::SetUserPath(const std::string &name,
+                                 const std::string &value, bool dump_now) {
+  auto status = EnsureInitialized("SetUserPath");
+  if (status.first != EC::Success)
+    return status;
+  if (name.empty())
+    return Err(EC::InvalidArg, "Empty variable name");
+
+  SetKey(settings_json_, {"UserPaths", name}, value);
+  if (dump_now) {
+    return Dump();
+  }
+  return Ok();
+}
+
+/**
+ * @brief Remove a UserPaths entry and optionally persist to settings.
+ */
+ECM AMConfigManager::RemoveUserPath(const std::string &name, bool dump_now) {
+  auto status = EnsureInitialized("RemoveUserPath");
+  if (status.first != EC::Success)
+    return status;
+  if (name.empty())
+    return Err(EC::InvalidArg, "Empty variable name");
+
+  Json *node = nullptr;
+  if (settings_json_.contains("UserPaths") &&
+      settings_json_["UserPaths"].is_object()) {
+    node = &settings_json_["UserPaths"];
+  }
+
+  if (!node || !node->contains(name)) {
+    return Err(EC::InvalidArg, "Variable not found");
+  }
+
+  node->erase(name);
+  if (dump_now) {
+    return Dump();
+  }
+  return Ok();
+}
+
 bool AMConfigManager::QueryKey(const Json &root, const Path &path,
                                Value *value) const {
   const Json *node = FindJsonNode(root, path);
@@ -1099,7 +1195,7 @@ void AMConfigManager::OnExit() {
     (void)AMConfigManager::Instance().Dump();
     AMConfigManager::Instance().CloseHandles();
   } catch (const std::exception &e) {
-    std::cerr << "Config dump failed: " << e.what() << std::endl;
+    std::cerr << "❌ Config dump failed: " << e.what() << "\n";
     std::terminate();
   }
 }
