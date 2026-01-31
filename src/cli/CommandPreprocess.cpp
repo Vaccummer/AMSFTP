@@ -174,34 +174,32 @@ static AMCommandPreprocessor::ECM ParseMemoryDefinition(const std::string &text,
     return {EC::Success, ""};
   }
 
+  const size_t eq_pos = text.find('=');
+  if (eq_pos == std::string::npos) {
+    return {EC::Success, ""};
+  }
+
   size_t pos = 1;
   size_t start = pos;
-  while (pos < text.size() && IsVarNameChar(text[pos])) {
+  while (pos < eq_pos && IsVarNameChar(text[pos])) {
     ++pos;
   }
 
   if (start == pos) {
-    size_t scan = pos;
-    while (scan < text.size() && AMStr::IsWhitespace(text[scan])) {
-      ++scan;
-    }
-    if (scan < text.size() && text[scan] == '=') {
+    *is_definition = true;
+    return {EC::InvalidArg,
+            "Invalid variable name: only letters, digits, and _ are allowed"};
+  }
+
+  for (size_t scan = pos; scan < eq_pos; ++scan) {
+    if (!AMStr::IsWhitespace(text[scan])) {
       *is_definition = true;
       return {EC::InvalidArg,
               "Invalid variable name: only letters, digits, and _ are allowed"};
     }
-    return {EC::Success, ""};
   }
 
   std::string name_part = text.substr(start, pos - start);
-  size_t eq_pos = pos;
-  while (eq_pos < text.size() && AMStr::IsWhitespace(text[eq_pos])) {
-    ++eq_pos;
-  }
-  if (eq_pos >= text.size() || text[eq_pos] != '=') {
-    return {EC::Success, ""};
-  }
-
   *is_definition = true;
   AMCommandPreprocessor::ECM rcm = ParseValue(text.substr(eq_pos + 1), value);
   if (rcm.first != EC::Success) {

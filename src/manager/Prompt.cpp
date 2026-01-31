@@ -1,6 +1,8 @@
 #include "AMManager/Prompt.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
+#include "AMCLI/TokenTypeAnalyzer.hpp"
+#include "AMManager/Config.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include <algorithm>
 #include <cctype>
@@ -22,6 +24,22 @@ ReplxxActionResult EscAbortHandler(Replxx *rx, unsigned int, void *ud) {
   }
   return REPLXX_ACTION_RESULT_BAIL;
 }
+
+void HighlightCallback(const char *input, ReplxxColor *colors, int size,
+                       void *ud) {
+  auto *self = static_cast<AMPromptManager *>(ud);
+  if (!self) {
+    return;
+  }
+  if (!self->token_analyzer_) {
+    return;
+  }
+  if (!input || size <= 0) {
+    return;
+  }
+  self->token_analyzer_->Highlight(std::string(input, static_cast<size_t>(size)),
+                                   colors, size);
+}
 } // namespace
 
 AMPromptManager &AMPromptManager::Instance() {
@@ -31,6 +49,15 @@ AMPromptManager &AMPromptManager::Instance() {
 
 AMPromptManager::AMPromptManager() {
   replxx_ = replxx_init();
+  core_replxx_ = replxx_init();
+  token_analyzer_ =
+      std::make_unique<AMTokenTypeAnalyzer>(AMConfigManager::Instance());
+  if (replxx_) {
+    replxx_set_highlighter_callback(replxx_, HighlightCallback, this);
+  }
+  if (core_replxx_) {
+    replxx_set_highlighter_callback(core_replxx_, HighlightCallback, this);
+  }
 
   AMCliSignalMonitor::SignalHook hook;
   hook.interrupt_flag = nullptr;
@@ -42,12 +69,27 @@ AMPromptManager::AMPromptManager() {
   hook.is_silenced = true;
   hook.priority = 0;
   AMCliSignalMonitor::Instance().RegisterHook("PROMPT", hook);
+
+  AMCliSignalMonitor::SignalHook core_hook;
+  core_hook.interrupt_flag = amgif;
+  core_hook.callback = [this]([[maybe_unused]] int signum) {
+    if (core_replxx_) {
+      replxx_emulate_key_press(core_replxx_, REPLXX_KEY_CONTROL('D'));
+    }
+  };
+  core_hook.is_silenced = true;
+  core_hook.priority = 0;
+  AMCliSignalMonitor::Instance().RegisterHook("COREPROMPT", core_hook);
 }
 
 AMPromptManager::~AMPromptManager() {
   if (replxx_) {
     replxx_end(replxx_);
     replxx_ = nullptr;
+  }
+  if (core_replxx_) {
+    replxx_end(core_replxx_);
+    core_replxx_ = nullptr;
   }
 }
 
@@ -268,6 +310,34 @@ bool AMPromptManager::Prompt(const std::string &prompt,
   }
 
   const char *line = replxx_input(replxx_, prompt.c_str());
+  if (esc_pressed_) {
+    return true;
+  }
+  if (!line) {
+    return true;
+  }
+  *out_input = std::string(line);
+  return esc_pressed_;
+}
+
+/**
+ * @brief Prompt for a command line using the core replxx handle.
+ */
+bool AMPromptManager::PromptCore(const std::string &prompt,
+                                 std::string *out_input) {
+  if (!out_input) {
+    return true;
+  }
+
+  esc_pressed_ = false;
+
+  if (!core_replxx_) {
+    return true;
+  }
+
+  replxx_set_preload_buffer(core_replxx_, "");
+
+  const char *line = replxx_input(core_replxx_, prompt.c_str());
   if (esc_pressed_) {
     return true;
   }

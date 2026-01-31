@@ -1,4 +1,5 @@
 #include "AMCLI/CLIBind.hpp"
+#include "AMCLI/InteractiveLoop.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include <filesystem>
 #include <iostream>
@@ -51,7 +52,10 @@ int main2(int argc, char **argv) {
     managers.filesystem =
         std::shared_ptr<AMFileSystem>(&filesystem, [](auto *) {});
 
-    (void)DispatchCliCommands(cli_commands, managers);
+    DispatchResult dispatch = DispatchCliCommands(cli_commands, managers);
+    if (dispatch.enter_interactive) {
+      RunInteractiveLoop(app_name, managers);
+    }
     return g_cli_exit_code;
   } catch (const std::exception &e) {
     std::cerr << "Unexpected error: " << e.what() << std::endl;

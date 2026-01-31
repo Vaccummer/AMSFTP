@@ -545,7 +545,7 @@ private:
   static size_t ClampThreadCount(size_t count) {
     constexpr size_t kMinThreads = 1;
     constexpr size_t kMaxThreads = 64;
-    return std::max(kMinThreads, std::min(count, kMaxThreads));
+    return std::max<size_t>(kMinThreads, std::min<size_t>(count, kMaxThreads));
   }
 
   /**
@@ -1735,8 +1735,8 @@ public:
    *
    * @return Pair of task info and termination success flag.
    */
-  std::pair<std::shared_ptr<TaskInfo>, bool>
-  terminate(const TaskId &id, int timeout_ms = 5000) {
+  std::pair<std::shared_ptr<TaskInfo>, bool> terminate(const TaskId &id,
+                                                       int timeout_ms = 5000) {
     auto [existing, active] = get_task(id);
     if (!existing) {
       return {nullptr, false};

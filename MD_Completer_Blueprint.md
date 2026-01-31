@@ -1,120 +1,96 @@
- Below is a blueprint for implementing the completer described in MD_Completer.md, plus improvement suggestions based on your
-  design goals (human-friendly, rich menu, async for remote). I’ll keep it practical and aligned with your existing architecture
-  (Prompt/Replxx, Client/Config/Transfer managers, async transfer I/O).
 
-  Blueprint
+## 蓝图（Blueprint）
 
-1) High-level architecture
+### 1) 高层架构
 
-- Completer pipeline: Input -> ParseContext -> BuildQuery -> FetchCandidates (sync/async) -> Rank/Format -> Render ->
-  ApplySelection.
-- Core types:
-  - CompletionContext (cursor pos, current token, full line, parse state, mode)
-  - CompletionCandidate (display, insert_text, kind, help, score, metadata)
-  - CompletionResult (vector candidates + match strategy + latency info)
-- Completion sources (pluggable):
-  - CommandSource (commands/subcommands/options)
-  - InternalSource (task IDs, client names, host config nicknames)
-  - PathSource (local/remote paths)
-- Coordinator:
-  - A Completer that dispatches to sources based on context and merges results.
+- **补全流水线**：输入 → 解析上下文 → 构建查询 → 获取候选（同步/异步） → 排序/格式化 → 渲染 → 应用选择
+- **核心类型**：
+  - `CompletionContext`（光标位置、当前令牌、完整行、解析状态、模式）
+  - `CompletionCandidate`（显示文本、插入文本、类型、帮助信息、评分、元数据）
+  - `CompletionResult`（候选列表 + 匹配策略 + 延迟信息）
+- **补全源（可选择开启与关闭）**：
+  - `CommandSource`（命令/子命令/选项）
+  - `InternalSource`（任务ID、客户端名称、主机配置昵称、变量名）
+  - `PathSource`（本地/远程路径）
+- **协调器（Coordinator）**：
+  - 一个根据上下文分发请求至各补全源并合并结果的 `Completer`
+  - **统一补全流程**：即使命令补全很快，也使用相同的 `CompletionRequest`流水线，确保UI行为一致，简化系统并提升可扩展性
 
-2) Context parsing
+### 2) 上下文解析
 
-- Tokenize with awareness of quotes, escapes, and nickname@path.
-- Determine target type:
-  - Starts with / or known command prefix => command completion
-  - Starts with - => option completion
-  - Contains @ => nickname + path (split into nickname/path)
-  - Otherwise treat as path unless command grammar says internal IDs
-- Identify command scope: command -> subcommand -> option for smarter completions.
+- 支持引号、转义符和 `nickname@path`语法的令牌化
+- **目标类型判定**（含消歧规则）：
+  - 以已知命令前缀开头 → 命令补全
+  - 以!开头, 屏蔽补全
+  - 以 `-`开头 → 选项补全
+  - 包含 `@` → 昵称+路径（拆分为昵称/路径两段）
+  - 以 `$`开头 → 变量名补全
+  - 出现路径的明显特征 如以/ ~开头, token中出现命令分隔符
+  - 最好是根据当前所用的指令进行匹配补全目标
+  - 默认补全尽量不要补全路径, 因为补全路径比较耗时
+- **命令作用域识别**：命令 → 子命令 → 选项，实现更智能的补全
+- **类型化解析器**：基于基础命令语法，使选项补全更精准（例如仅在子命令支持时建议 `--overwrite`）
+- **状态感知补全**：例如 `task inspect`命令优先推荐任务ID而非路径
 
-3) Candidate model
+### 3) 候选模型
 
-- kind: Command, Option, ClientName, HostConfig, TaskId, PathLocal, PathRemote.
-- insert_text: actual insert; display: shown in menu; help: brief usage (especially for commands).
-- score: base + prefix match + fuzzy match + recency + usage frequency.
+- **类型（kind）**：Command、Option、ClientName、HostConfigNickname、TaskId、PathLocal、PathRemote
+- **字段**：
+  - `insert_text`：实际插入内容
+  - `display`：菜单中显示文本
+  - `help`：简要用法说明（命令尤为重要）
+  - `score`：基础分 + 前缀匹配 + 模糊匹配 + 最近使用 + 使用频率
+- **排序策略**：
+  - 前缀匹配优先，其次模糊匹配
+  - 按命令使用频率、最近使用时间、上下文相关性（如当前命令期望任务ID）二次排序
+  - **高级用户体验**：支持模糊匹配（如 `gst` → `getsize`），单次Tab填充公共前缀，双击Tab列出全部候选
 
-4) Async model
+### 4) 异步模型
 
-- Use a request token or incremental query_id so outdated async results are dropped.
-- Maintain CompletionCache keyed by (source_type, key, cwd, client, prefix).
-- For remote path, send async query to the client; if pending, return stale cache or show “loading” placeholder.
+- 使用请求令牌或增量 `query_id`，自动丢弃过期的异步结果
+- **增量结果返回**：优先返回本地/缓存的快速结果，远程结果返回后动态更新
+- **补全缓存**：以 `(source_type, key, cwd, client, prefix)`为键的 `CompletionCache`
+- **远程路径处理**：向客户端发送异步查询；若请求中，返回缓存结果或显示"加载中"占位符
+- **错误弹性**：
+  - 远程路径超时时显示带"过期"标记的缓存结果
+  - 连接未建立时推荐主机昵称并提示"未连接"
 
-5) UI behaviors
+### 5) UI行为
 
-- Tab:
-  - single match => insert
-  - multiple => if double‑tab, show list; if in menu mode, keep menu
-- Menu:
-  - Vertical list, highlight selection, show full entry string
-  - For commands: show usage in a side line or inline help
-  - For paths: format (dir/file, maybe style)
-- Non‑terminal mode: attach menu below input, allow up/down selection.
+- **Tab键行为**：
+  - 单一匹配 → 直接插入
+  - 多个匹配 → 双击Tab显示列表；菜单模式下保持菜单打开
+- **菜单设计**：
+  - 垂直列表，高亮选中项，显示完整条目
+  - 命令：侧边行或内联显示用法说明
+  - 路径：格式化显示（目录/文件，可选图标或样式）
+  - **增强型菜单**：路径可选显示文件大小/修改时间；命令显示完整语法
+- **非终端模式**：菜单附着于输入框下方，支持上下键选择
 
-6) Command completion data
+### 6) 命令补全数据
 
-- Define a static command tree:
-  - command -> subcommands -> options -> positional kinds
-- Each node includes usage/help string.
-- Source uses current node to suggest relevant subcommands/options only.
+- 定义静态命令树：命令 → 子命令 → 选项 → 位置参数类型
+- 每个节点包含用法/帮助字符串
+- 补全源根据当前节点仅推荐相关子命令/选项
 
-7) Path completion details
+### 7) 路径补全细节
 
-- For nickname@path:
-  - complete nickname before @, then remote path
-  - If nickname not resolved yet, offer nicknames first
-- For local path:
-  - ./.. expansion, ~ home support
-  - add trailing / for directories
-- Format path output (icons or color tags if your prompt supports styling).
+- **nickname@path处理**：
+  - `@`前补全昵称，`@`后补全远程路径
+  - 昵称未解析时优先推荐昵称列表
+- **本地路径**：
+  - 支持 `./..`展开和 `~`家目录
+  - 目录自动添加尾部 `/`
+- **格式化输出**：支持图标或颜色标签（若提示符支持样式）
 
-8) Internal values
+### 8) 内部值来源
 
-- Task IDs from AMWorkManager (pending/ conducting/ history).
-- Client names from ClientMaintainer.
-- Host config nicknames from ConfigManager (even if not connected).
+- 任务ID：来自 `AMWorkManager`（进行中/执行中/历史）
+- 客户端名称：来自 `ClientMaintainer`
+- 主机配置昵称：来自 `ConfigManager`（即使未连接也提供）
 
-9) Ranking
+### 9) 缓存策略
 
-- Prefix matches first, then fuzzy.
-- Then by:
-  - command usage frequency
-  - recency (last used)
-  - “current context” relevance (e.g., current command expects a task id).
-
-10) Caching
-
-- LRU caches for path results.
-- Separate TTL for remote (short) and local (medium).
-- Async: update cache and signal UI to re-render.
-
-  ———
-
-  Suggestions to improve your design
-
-1. Unified completion flow
-   - Even if command completion is fast, use the same CompletionRequest pipeline so UI behavior is consistent. This keeps the
-     system simpler and extensible.
-2. Typed parser for correctness
-   - Basic command grammar makes option completion much smarter (e.g., only suggest --overwrite if it’s valid for that
-     subcommand).
-3. Incremental results
-   - Return partial results quickly (local or cached) and update once async remote returns.
-4. Disambiguation rules
-   - For strings without @, default to local path unless the command expects an internal ID.
-   - If command expects both (e.g., task ID or path), show both, but separate in menu.
-5. Helpful menu
-   - Show display as full path or full command syntax
-   - Provide usage text for commands (your spec wants this)
-   - For paths, include file size or modified time optionally
-6. “Power user” UX
-   - Support fuzzy matching (e.g., gst -> getsize).
-   - Add Tab to fill “common prefix” and Tab twice to list all.
-7. State‑aware completion
-   - Example: if command is task inspect, prefer task IDs over paths.
-8. Error resilience
-   - If remote path completion times out, show cached results with a “stale” mark.
-   - If connection not established, suggest host nicknames and show a hint (“not connected”).
-
-  ———
+- 路径结果使用LRU缓存
+- 本地路径（中等TTL）与远程路径（短TTL）采用不同过期策略
+- 异步更新缓存后通知UI重新渲染
