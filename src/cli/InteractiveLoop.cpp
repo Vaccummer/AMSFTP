@@ -1,10 +1,12 @@
 #include "AMCLI/InteractiveLoop.hpp"
-#include "AMCLI/CommandPreprocess.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/Path.hpp"
+#include "AMCLI/CommandPreprocess.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include <chrono>
+#include <cctype>
 #include <cstdlib>
+#include <sstream>
 #include <magic_enum/magic_enum.hpp>
 
 namespace {
@@ -17,6 +19,56 @@ struct PromptState {
   std::string cached_prefix;
   std::string last_nickname;
 };
+
+/**
+ * @brief Convert a tagged icon string like "[#RRGGBB]text[/]" into ANSI color.
+ *
+ * @param tagged Tagged icon string.
+ * @param converted Output string with ANSI escape sequences.
+ * @return True if conversion succeeded; false if format is invalid.
+ */
+bool TryConvertTaggedIconToAnsi_(const std::string &tagged,
+                                 std::string *converted) {
+  if (!converted) {
+    return false;
+  }
+
+  if (tagged.size() < 10) {
+    return false;
+  }
+  if (tagged[0] != '[' || tagged[1] != '#') {
+    return false;
+  }
+
+  const size_t close = tagged.find(']');
+  if (close != 8) {
+    return false;
+  }
+
+  const size_t suffix_pos = tagged.size() - 3;
+  if (tagged.compare(suffix_pos, 3, "[/]") != 0) {
+    return false;
+  }
+
+  const std::string hex = tagged.substr(2, 6);
+  for (char c : hex) {
+    if (!std::isxdigit(static_cast<unsigned char>(c))) {
+      return false;
+    }
+  }
+
+  const std::string content =
+      tagged.substr(close + 1, suffix_pos - (close + 1));
+  const int r = std::stoi(hex.substr(0, 2), nullptr, 16);
+  const int g = std::stoi(hex.substr(2, 2), nullptr, 16);
+  const int b = std::stoi(hex.substr(4, 2), nullptr, 16);
+
+  std::ostringstream oss;
+  oss << "\x1b[38;2;" << r << ";" << g << ";" << b << "m" << content
+      << "\x1b[0m";
+  *converted = oss.str();
+  return true;
+}
 
 /**
  * @brief Return the active client or the local client fallback.
@@ -62,7 +114,7 @@ ResolveUserHost_(const std::shared_ptr<BaseClient> &client) {
     username = "user";
   }
   if (hostname.empty()) {
-    hostname = "host";
+    hostname = "localhost";
   }
   return {username, hostname};
 }
@@ -89,10 +141,14 @@ std::string ResolveSysIcon_(AMConfigManager &config_manager, OS_TYPE os_type) {
 
   std::string icon =
       config_manager.GetSettingString({"style", "Icons", key}, "");
-  if (!icon.empty()) {
-    return icon;
+  if (icon.empty()) {
+    icon = "💻";
   }
-  return config_manager.GetSettingString({"style", "Icons", "windows"}, "*");
+  std::string converted;
+  if (TryConvertTaggedIconToAnsi_(icon, &converted)) {
+    return converted;
+  }
+  return icon;
 }
 
 /**
@@ -101,8 +157,7 @@ std::string ResolveSysIcon_(AMConfigManager &config_manager, OS_TYPE os_type) {
 std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
                          AMConfigManager &config_manager) {
   auto client = ResolveActiveClient_(client_manager);
-  std::string nickname =
-      client ? client->GetNickname() : std::string("local");
+  std::string nickname = client ? client->GetNickname() : std::string("local");
   if (nickname.empty()) {
     nickname = "local";
   }
@@ -118,8 +173,7 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
     }
     std::string sysicon = ResolveSysIcon_(config_manager, os_type);
     auto [username, hostname] = ResolveUserHost_(client);
-    state.cached_prefix =
-        AMStr::amfmt("{} {}@{}", sysicon, username, hostname);
+    state.cached_prefix = AMStr::amfmt("{} {}@{}", sysicon, username, hostname);
     state.last_nickname = nickname;
   }
 
@@ -160,77 +214,23 @@ void PrintECM_(AMPromptManager &prompt, const ECM &rcm) {
 }
 
 /**
- * @brief Split a command line into argv tokens with simple quoting support.
+ * @brief Execute a shell command via ConductCmd and return the raw result.
  */
-bool SplitCommandLine_(const std::string &line,
-                       std::vector<std::string> *tokens,
-                       std::string *error) {
-  if (!tokens) {
-    return false;
-  }
-  tokens->clear();
-
-  std::string current;
-  bool in_single = false;
-  bool in_double = false;
-
-  for (char c : line) {
-    if (!in_double && c == '\'') {
-      in_single = !in_single;
-      continue;
-    }
-    if (!in_single && c == '"') {
-      in_double = !in_double;
-      continue;
-    }
-    if (!in_single && !in_double && AMStr::IsWhitespace(c)) {
-      if (!current.empty()) {
-        tokens->push_back(current);
-        current.clear();
-      }
-      continue;
-    }
-    current.push_back(c);
-  }
-
-  if (in_single || in_double) {
-    if (error) {
-      *error = "Unclosed quote in command line";
-    }
-    return false;
-  }
-
-  if (!current.empty()) {
-    tokens->push_back(current);
-  }
-  return true;
-}
-
-/**
- * @brief Execute a shell command via ConductCmd on the current client.
- */
-ECM ExecuteShellCommand_(AMPromptManager &prompt,
-                         AMClientManager &client_manager,
-                         AMConfigManager &config_manager,
-                         const std::string &command) {
+CR ExecuteShellCommand_(AMClientManager &client_manager,
+                        AMConfigManager &config_manager,
+                        const std::string &command) {
   auto client = ResolveActiveClient_(client_manager);
   if (!client) {
-    return {EC::ClientNotFound, "No active client"};
+    return {ECM{EC::ClientNotFound, "No active client"}, {"", -1}};
   }
   if (client->GetProtocol() != ClientProtocol::SFTP) {
-    return {EC::OperationUnsupported,
-            "Shell command only supported by SFTP client"};
+    return {ECM{EC::OperationUnsupported,
+                "Shell command only supported by SFTP client"},
+            {"", -1}};
   }
 
   const int timeout_ms = config_manager.ResolveTimeoutMs(5000);
-  auto result = client->ConductCmd(command, timeout_ms, amgif);
-  if (result.first.first != EC::Success) {
-    return result.first;
-  }
-  if (!result.second.first.empty()) {
-    prompt.Print(result.second.first);
-  }
-  return result.first;
+  return client->ConductCmd(command, timeout_ms, amgif);
 }
 
 /**
@@ -294,44 +294,53 @@ int RunInteractiveLoop(const std::string &app_name,
       continue;
     }
 
+    const auto input_confirmed = std::chrono::steady_clock::now();
+
     std::string trimmed = AMStr::TrimWhitespaceCopy(line);
     if (trimmed.empty()) {
       continue;
     }
 
-    std::string lowered = AMStr::lowercase(trimmed);
-    if (lowered == "exit") {
+    if (AMStr::lowercase(trimmed) == "exit") {
       break;
     }
 
-    const auto pre_start = std::chrono::steady_clock::now();
-    AMCommandPreprocessor::Result pre_result =
-        preprocessor.Preprocess(trimmed);
-    const auto pre_end = std::chrono::steady_clock::now();
+    AMCommandPreprocessor::Result pre_result = preprocessor.Preprocess(trimmed);
 
     if (pre_result.rcm.first != EC::Success) {
       PrintECM_(prompt, pre_result.rcm);
       SetCliExitCode(static_cast<int>(pre_result.rcm.first));
-      UpdatePromptState_(prompt_state, pre_result.rcm, pre_end - pre_start);
+      const auto iter_end = std::chrono::steady_clock::now();
+      UpdatePromptState_(prompt_state, pre_result.rcm,
+                         iter_end - input_confirmed);
       continue;
     }
 
     if (pre_result.action == AMCommandPreprocessor::Action::Handled) {
       SetCliExitCode(static_cast<int>(pre_result.rcm.first));
-      UpdatePromptState_(prompt_state, pre_result.rcm, pre_end - pre_start);
+      const auto iter_end = std::chrono::steady_clock::now();
+      UpdatePromptState_(prompt_state, pre_result.rcm,
+                         iter_end - input_confirmed);
       continue;
     }
 
     if (pre_result.action == AMCommandPreprocessor::Action::Shell) {
-      const auto shell_start = std::chrono::steady_clock::now();
-      ECM rcm = ExecuteShellCommand_(prompt, client_manager, config_manager,
-                                     pre_result.command);
-      const auto shell_end = std::chrono::steady_clock::now();
-      if (rcm.first != EC::Success) {
-        PrintECM_(prompt, rcm);
+      CR shell_result = ExecuteShellCommand_(client_manager, config_manager,
+                                             pre_result.command);
+      if (shell_result.first.first == EC::Success) {
+        const std::string &msg = shell_result.second.first;
+        if (!msg.empty()) {
+          prompt.Print(msg);
+        }
+        prompt.Print(AMStr::amfmt("\nCommand exit with code {}",
+                                  shell_result.second.second));
+      } else {
+        PrintECM_(prompt, shell_result.first);
       }
-      SetCliExitCode(static_cast<int>(rcm.first));
-      UpdatePromptState_(prompt_state, rcm, shell_end - shell_start);
+      SetCliExitCode(static_cast<int>(shell_result.first.first));
+      const auto shell_end = std::chrono::steady_clock::now();
+      UpdatePromptState_(prompt_state, shell_result.first,
+                         shell_end - input_confirmed);
       continue;
     }
 
@@ -343,34 +352,26 @@ int RunInteractiveLoop(const std::string &app_name,
       continue;
     }
 
-    std::vector<std::string> argv;
-    std::string parse_error;
-    if (!SplitCommandLine_(pre_result.command, &argv, &parse_error)) {
-      prompt.Print(parse_error);
-      continue;
-    }
-    if (argv.empty()) {
-      continue;
-    }
-    argv.insert(argv.begin(), app_name);
-
-    CLI::App app{"AMSFTP CLI", app_name};
+    CLI::App app{"AMSFTP Interactive", app_name};
     CliArgsPool args_pool;
     CliCommands cli_commands = BindCliOptions(app, args_pool);
 
     try {
-      app.parse(argv);
+      app.parse(pre_result.command, false);
     } catch (const CLI::ParseError &e) {
-      prompt.Print(e.what());
+      const std::string parse_msg = e.what();
+      prompt.Print(parse_msg);
+      ECM parse_rcm = {EC::InvalidArg, parse_msg};
+      SetCliExitCode(static_cast<int>(parse_rcm.first));
+      const auto iter_end = std::chrono::steady_clock::now();
+      UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
       continue;
     }
 
-    const auto exec_start = std::chrono::steady_clock::now();
     DispatchResult dispatch =
         DispatchCliCommands(cli_commands, managers, pre_result.async, true);
     const auto exec_end = std::chrono::steady_clock::now();
-
-    UpdatePromptState_(prompt_state, dispatch.rcm, exec_end - exec_start);
+    UpdatePromptState_(prompt_state, dispatch.rcm, exec_end - input_confirmed);
   }
 
   AMIsInteractive.store(false);

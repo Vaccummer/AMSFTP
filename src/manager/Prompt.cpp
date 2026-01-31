@@ -12,7 +12,6 @@
 #include <sstream>
 #include <string>
 
-
 namespace {
 ReplxxActionResult EscAbortHandler(Replxx *rx, unsigned int, void *ud) {
   auto *self = static_cast<AMPromptManager *>(ud);
@@ -37,8 +36,8 @@ void HighlightCallback(const char *input, ReplxxColor *colors, int size,
   if (!input || size <= 0) {
     return;
   }
-  self->token_analyzer_->Highlight(std::string(input, static_cast<size_t>(size)),
-                                   colors, size);
+  self->token_analyzer_->Highlight(
+      std::string(input, static_cast<size_t>(size)), colors, size);
 }
 } // namespace
 
@@ -52,9 +51,9 @@ AMPromptManager::AMPromptManager() {
   core_replxx_ = replxx_init();
   token_analyzer_ =
       std::make_unique<AMTokenTypeAnalyzer>(AMConfigManager::Instance());
-  if (replxx_) {
-    replxx_set_highlighter_callback(replxx_, HighlightCallback, this);
-  }
+  // if (replxx_) {
+  //   replxx_set_highlighter_callback(replxx_, HighlightCallback, this);
+  // }
   if (core_replxx_) {
     replxx_set_highlighter_callback(core_replxx_, HighlightCallback, this);
   }

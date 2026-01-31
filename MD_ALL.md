@@ -709,3 +709,58 @@ dollarsign(`不包括转义的$, 且在后面跟着的变量名合法时生效, 
      3.2 如果amgif的is_interrupted触发, 则打印信息告诉用户如何退出(输入exit), 然后continue
   7. 获取input后需要沉默COREPROMPT
   8. 如果用户输入内容为空或者全是空字符, continue
+@InteractiveLoop.cpp
+
+line 276 monitor.ResumeHook("COREPROMPT");
+
+COREPROMPT这个钩子注册了吗?
+
+ECMrcm = ExecuteShellCommand_(prompt, client_manager, config_manager,
+
+    pre_result.command);
+
+这个函数返回类型为ConducCmd的CR
+
+返回后先检测EC是否success,
+
+是success的话需要打印msg, 然后换行打印
+Command exit with code {code}
+
+elapsed_time时从用户确认输入的时间, 到命令执行完, 进入下一个循环前的时间
+
+修复这些问题,然后在main.cpp中生成主函数入口
+@InteractiveLoop.cpp
+
+@main.cpp
+
+Line 276: `monitor.ResumeHook("COREPROMPT");`
+
+Has the "COREPROMPT" hook been registered?
+
+```cpp
+ECMrcm = ExecuteShellCommand_(prompt, client_manager, config_manager,
+    pre_result.command);
+```
+
+This function returns a `CR` of type `ConducCmd`.
+
+After returning, first check whether `EC` is successful.
+If it is successful, print the `msg`, then print a newline followed by:
+
+```
+Command exit with code {code}
+```
+
+`elapsed_time` refers to the duration from when the user confirms their input until the command execution completes—just before entering the next loop iteration.
+
+Fix these issues, then generate the main function entry point in `main.cpp`.
+@InteractiveLoop.cpp
+
+ResolveSysIcon_中, icon是[#3490de]icon[/]格式, 需要尝试对其进行ANSI转义, 格式不对再返回原字符串
+
+SplitCommandLine_(pre_result.command, &argv, &parse_error)
+
+这个是没必要的, 调用CLI交给它解析
+CLI::App::parse(std::string commandline, bool program_name_included=false)
+
+后续的argv.insert(argv.begin(), app_name);也没必要
