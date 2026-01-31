@@ -329,7 +329,10 @@ inline int g_cli_exit_code = 0;
 /**
  * @brief Dispatch result for CLI execution.
  */
-enum class CliDispatchResult { Exit, EnterInteractive };
+struct DispatchResult {
+  ECM rcm = {EC::Success, ""};
+  bool enter_interactive = false;
+};
 
 /**
  * @brief Bind all CLI options into the argument pool.
@@ -582,139 +585,238 @@ inline void ShowTaskInspectInfo() {
 /**
  * @brief Dispatch CLI commands based on parsed state.
  */
-inline CliDispatchResult DispatchCliCommands(const CliCommands &cli_commands,
-                                             const CliManagers &managers) {
+inline DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
+                                          const CliManagers &managers,
+                                          bool async = false,
+                                          bool enforce_interactive = false) {
+  DispatchResult result;
   const CliArgsPool &args = *cli_commands.args;
   auto &config_manager = *managers.config_manager;
   auto &filesystem = *managers.filesystem;
   amf flag = amgif;
 
+  const bool any_parsed =
+      cli_commands.config_cmd->parsed() || cli_commands.stat_cmd->parsed() ||
+      cli_commands.ls_cmd->parsed() || cli_commands.size_cmd->parsed() ||
+      cli_commands.find_cmd->parsed() || cli_commands.mkdir_cmd->parsed() ||
+      cli_commands.rm_cmd->parsed() || cli_commands.walk_cmd->parsed() ||
+      cli_commands.tree_cmd->parsed() || cli_commands.cp_cmd->parsed() ||
+      cli_commands.clients_cmd->parsed() ||
+      cli_commands.connect_cmd->parsed() || cli_commands.bash_cmd->parsed() ||
+      cli_commands.task_cmd->parsed() ||
+      cli_commands.task_cache_add->parsed() ||
+      cli_commands.task_cache_rm->parsed() ||
+      cli_commands.task_cache_clear->parsed() ||
+      cli_commands.task_cache_submit->parsed() ||
+      cli_commands.task_list_cmd->parsed() ||
+      cli_commands.task_show_cmd->parsed() ||
+      cli_commands.task_inspect_cmd->parsed() ||
+      cli_commands.task_userset_cmd->parsed() ||
+      cli_commands.task_taskentry_cmd->parsed() ||
+      cli_commands.task_terminate_cmd->parsed() ||
+      cli_commands.task_pause_cmd->parsed() ||
+      cli_commands.task_resume_cmd->parsed() ||
+      cli_commands.sftp_cmd->parsed() || cli_commands.ftp_cmd->parsed();
+
+  if (!any_parsed) {
+    std::string msg = "No valid command provided";
+    std::cerr << msg << std::endl;
+    result.rcm = {EC::InvalidArg, msg};
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  auto command_name = [&]() -> std::string {
+    if (cli_commands.config_cmd->parsed()) {
+      return "config";
+    }
+    if (cli_commands.stat_cmd->parsed()) {
+      return "stat";
+    }
+    if (cli_commands.ls_cmd->parsed()) {
+      return "ls";
+    }
+    if (cli_commands.size_cmd->parsed()) {
+      return "size";
+    }
+    if (cli_commands.find_cmd->parsed()) {
+      return "find";
+    }
+    if (cli_commands.mkdir_cmd->parsed()) {
+      return "mkdir";
+    }
+    if (cli_commands.rm_cmd->parsed()) {
+      return "rm";
+    }
+    if (cli_commands.walk_cmd->parsed()) {
+      return "walk";
+    }
+    if (cli_commands.tree_cmd->parsed()) {
+      return "tree";
+    }
+    if (cli_commands.cp_cmd->parsed()) {
+      return "cp";
+    }
+    if (cli_commands.clients_cmd->parsed()) {
+      return "clients";
+    }
+    if (cli_commands.connect_cmd->parsed()) {
+      return "connect";
+    }
+    if (cli_commands.bash_cmd->parsed()) {
+      return "bash";
+    }
+    if (cli_commands.task_cmd->parsed()) {
+      return "task";
+    }
+    if (cli_commands.sftp_cmd->parsed()) {
+      return "sftp";
+    }
+    if (cli_commands.ftp_cmd->parsed()) {
+      return "ftp";
+    }
+    return "command";
+  };
+
+  if (enforce_interactive && !AMIsInteractive.load()) {
+    std::string msg =
+        AMStr::amfmt("{} not supported in Non-Interactive mode",
+                     command_name());
+    std::cerr << msg << std::endl;
+    result.rcm = {EC::OperationUnsupported, msg};
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
   if (cli_commands.config_cmd->parsed()) {
     if (cli_commands.config_ls->parsed()) {
-      auto status = args.config_ls.detail ? config_manager.List()
-                                          : config_manager.ListName();
-      SetCliExitCode(static_cast<int>(status.first));
-      return CliDispatchResult::Exit;
+      result.rcm = args.config_ls.detail ? config_manager.List()
+                                         : config_manager.ListName();
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
     if (cli_commands.config_keys->parsed()) {
-      auto result = config_manager.PrivateKeys(true);
-      SetCliExitCode(static_cast<int>(result.first.first));
-      return CliDispatchResult::Exit;
+      auto keys_result = config_manager.PrivateKeys(true);
+      result.rcm = keys_result.first;
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
     if (cli_commands.config_data->parsed()) {
-      auto status = config_manager.Src();
-      SetCliExitCode(static_cast<int>(status.first));
-      return CliDispatchResult::Exit;
+      result.rcm = config_manager.Src();
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
     if (cli_commands.config_get->parsed()) {
-      auto status = config_manager.Query(args.config_get.nickname);
-      SetCliExitCode(static_cast<int>(status.first));
-      return CliDispatchResult::Exit;
+      result.rcm = config_manager.Query(args.config_get.nickname);
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
     if (cli_commands.config_add->parsed()) {
-      auto status = config_manager.Add();
-      SetCliExitCode(static_cast<int>(status.first));
-      return CliDispatchResult::Exit;
+      result.rcm = config_manager.Add();
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
     if (cli_commands.config_edit->parsed()) {
-      auto status = config_manager.Modify(args.config_edit.nickname);
-      SetCliExitCode(static_cast<int>(status.first));
-      return CliDispatchResult::Exit;
+      result.rcm = config_manager.Modify(args.config_edit.nickname);
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
     if (cli_commands.config_rn->parsed()) {
-      auto status = config_manager.Rename(args.config_rn.old_name,
-                                          args.config_rn.new_name);
-      SetCliExitCode(static_cast<int>(status.first));
-      return CliDispatchResult::Exit;
+      result.rcm = config_manager.Rename(args.config_rn.old_name,
+                                         args.config_rn.new_name);
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
     if (cli_commands.config_rm->parsed()) {
-      auto status = config_manager.Delete(args.config_rm.names);
-      SetCliExitCode(static_cast<int>(status.first));
-      return CliDispatchResult::Exit;
+      result.rcm = config_manager.Delete(args.config_rm.names);
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
     std::cerr << "Invalid config command" << std::endl;
-    SetCliExitCode(static_cast<int>(EC::InvalidArg));
-    return CliDispatchResult::Exit;
+    result.rcm = {EC::InvalidArg, "Invalid config command"};
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.stat_cmd->parsed()) {
-    ECM rcm = filesystem.stat(args.stat.paths, flag);
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    result.rcm = filesystem.stat(args.stat.paths, flag);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.ls_cmd->parsed()) {
-    ECM rcm =
+    result.rcm =
         filesystem.ls(args.ls.path, args.ls.list_like, args.ls.show_all, flag);
-    if (rcm.first != EC::Success) {
-      std::cerr << rcm.second << std::endl;
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
     }
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.size_cmd->parsed()) {
-    ECM rcm = filesystem.getsize(args.size.paths, flag);
-    if (rcm.first != EC::Success) {
-      std::cerr << rcm.second << std::endl;
+    result.rcm = filesystem.getsize(args.size.paths, flag);
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
     }
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.find_cmd->parsed()) {
-    ECM rcm = filesystem.find(args.find.path, SearchType::All, flag);
-    if (rcm.first != EC::Success) {
-      std::cerr << rcm.second << std::endl;
+    result.rcm = filesystem.find(args.find.path, SearchType::All, flag);
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
     }
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.mkdir_cmd->parsed()) {
-    ECM rcm = filesystem.mkdir(args.mkdir.paths, flag);
-    if (rcm.first != EC::Success) {
-      std::cerr << rcm.second << std::endl;
+    result.rcm = filesystem.mkdir(args.mkdir.paths, flag);
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
     }
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.rm_cmd->parsed()) {
-    ECM rcm = filesystem.rm(args.rm.paths, args.rm.permanent, false, flag);
-    if (rcm.first != EC::Success) {
-      std::cerr << rcm.second << std::endl;
+    result.rcm = filesystem.rm(args.rm.paths, args.rm.permanent, false, flag);
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
     }
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.walk_cmd->parsed()) {
-    ECM rcm =
+    result.rcm =
         filesystem.walk(args.walk.path, args.walk.only_file, args.walk.only_dir,
                         !args.walk.include_special, flag);
-    if (rcm.first != EC::Success) {
-      std::cerr << rcm.second << std::endl;
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
     }
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.tree_cmd->parsed()) {
-    ECM rcm = filesystem.tree(args.tree.path, args.tree.depth,
-                              !args.tree.include_special, flag);
-    if (rcm.first != EC::Success) {
-      std::cerr << rcm.second << std::endl;
+    result.rcm = filesystem.tree(args.tree.path, args.tree.depth,
+                                 !args.tree.include_special, flag);
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
     }
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.cp_cmd->parsed()) {
     if (args.cp.srcs.empty()) {
       std::cerr << "cp requires at least one source" << std::endl;
-      SetCliExitCode(static_cast<int>(EC::InvalidArg));
-      return CliDispatchResult::Exit;
+      result.rcm = {EC::InvalidArg, "cp requires at least one source"};
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
     std::vector<std::string> srcs;
     std::string dst;
@@ -722,8 +824,10 @@ inline CliDispatchResult DispatchCliCommands(const CliCommands &cli_commands,
       if (args.cp.srcs.size() != 2) {
         std::cerr << "cp requires exactly 2 paths when --output is omitted"
                   << std::endl;
-        SetCliExitCode(static_cast<int>(EC::InvalidArg));
-        return CliDispatchResult::Exit;
+        result.rcm = {EC::InvalidArg,
+                      "cp requires exactly 2 paths when --output is omitted"};
+        SetCliExitCode(static_cast<int>(result.rcm.first));
+        return result;
       }
       srcs = {args.cp.srcs.front()};
       dst = args.cp.srcs.back();
@@ -740,40 +844,47 @@ inline CliDispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     transfer_set.ignore_special_file = !args.cp.include_special;
 
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    ECM rcm = transfer_manager.transfer({transfer_set}, args.cp.quiet, flag);
-    if (rcm.first != EC::Success) {
-      std::cerr << rcm.second << std::endl;
+    result.rcm = async ? transfer_manager.transfer_async({transfer_set},
+                                                         args.cp.quiet, flag)
+                       : transfer_manager.transfer({transfer_set},
+                                                   args.cp.quiet, flag);
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
     }
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.clients_cmd->parsed()) {
-    ECM rcm = filesystem.print_clients(args.clients.detail, flag);
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    result.rcm = filesystem.print_clients(args.clients.detail, flag);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.connect_cmd->parsed()) {
-    ECM rcm = filesystem.connect(args.connect.nickname, flag);
-    if (rcm.first != EC::Success) {
-      std::cerr << rcm.second << std::endl;
+    result.rcm = filesystem.connect(args.connect.nickname, flag);
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
     }
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return (rcm.first == EC::Success ? CliDispatchResult::EnterInteractive
-                                     : CliDispatchResult::Exit);
+    result.enter_interactive = result.rcm.first == EC::Success;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.bash_cmd->parsed()) {
-    SetCliExitCode(static_cast<int>(EC::Success));
-    return CliDispatchResult::EnterInteractive;
+    result.rcm = {EC::Success, ""};
+    result.enter_interactive = true;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.task_cache_add->parsed()) {
     if (args.task_cache_add.srcs.empty()) {
       std::cerr << "task cache add requires at least one source" << std::endl;
-      SetCliExitCode(static_cast<int>(EC::InvalidArg));
-      return CliDispatchResult::Exit;
+      result.rcm = {EC::InvalidArg,
+                    "task cache add requires at least one source"};
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
     std::vector<std::string> srcs;
     std::string dst;
@@ -782,8 +893,11 @@ inline CliDispatchResult DispatchCliCommands(const CliCommands &cli_commands,
         std::cerr << "task cache add requires exactly 2 paths when --output "
                      "is omitted"
                   << std::endl;
-        SetCliExitCode(static_cast<int>(EC::InvalidArg));
-        return CliDispatchResult::Exit;
+        result.rcm = {
+            EC::InvalidArg,
+            "task cache add requires exactly 2 paths when --output is omitted"};
+        SetCliExitCode(static_cast<int>(result.rcm.first));
+        return result;
       }
       srcs = {args.task_cache_add.srcs.front()};
       dst = args.task_cache_add.srcs.back();
@@ -803,8 +917,9 @@ inline CliDispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     size_t index = transfer_manager.SubmitTransferSet(transfer_set);
     AMPromptManager::Instance().Print(
         AMStr::amfmt("✅ cache add {}", std::to_string(index)));
-    SetCliExitCode(static_cast<int>(EC::Success));
-    return CliDispatchResult::Exit;
+    result.rcm = {EC::Success, ""};
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.task_cache_rm->parsed()) {
@@ -822,54 +937,57 @@ inline CliDispatchResult DispatchCliCommands(const CliCommands &cli_commands,
         last = {EC::InvalidArg, "Cache index not found"};
       }
     }
-    SetCliExitCode(static_cast<int>(last.first));
-    return CliDispatchResult::Exit;
+    result.rcm = last;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.task_cache_clear->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
     transfer_manager.ClearCachedTransferSets();
     AMPromptManager::Instance().Print("✅ cache cleared");
-    SetCliExitCode(static_cast<int>(EC::Success));
-    return CliDispatchResult::Exit;
+    result.rcm = {EC::Success, ""};
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.task_cache_submit->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    ECM rcm =
-        transfer_manager.SubmitCachedTransferSets(args.task_cache_submit.quiet,
-                                                  flag);
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    result.rcm = transfer_manager.SubmitCachedTransferSets(
+        args.task_cache_submit.quiet, flag);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.task_list_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    ECM rcm =
+    result.rcm =
         transfer_manager.List(args.task_list.pending, args.task_list.finished,
                               args.task_list.conducting, flag);
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.task_show_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    ECM rcm = transfer_manager.Show(args.task_show.id, flag);
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    result.rcm = transfer_manager.Show(args.task_show.id, flag);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.task_inspect_cmd->parsed()) {
     if (args.task_inspect.id.empty() && !args.task_inspect.set &&
         !args.task_inspect.entry) {
       ShowTaskInspectInfo();
-      SetCliExitCode(static_cast<int>(EC::Success));
-      return CliDispatchResult::Exit;
+      result.rcm = {EC::Success, ""};
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
     if (args.task_inspect.id.empty()) {
       ShowTaskInspectInfo();
-      SetCliExitCode(static_cast<int>(EC::InvalidArg));
-      return CliDispatchResult::Exit;
+      result.rcm = {EC::InvalidArg, "Task id required"};
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
     ECM rcm = {EC::Success, ""};
@@ -877,8 +995,9 @@ inline CliDispatchResult DispatchCliCommands(const CliCommands &cli_commands,
       if (args.task_inspect.set) {
         rcm = transfer_manager.InspectTransferSets(args.task_inspect.id);
         if (rcm.first != EC::Success) {
-          SetCliExitCode(static_cast<int>(rcm.first));
-          return CliDispatchResult::Exit;
+          result.rcm = rcm;
+          SetCliExitCode(static_cast<int>(result.rcm.first));
+          return result;
         }
       }
       if (args.task_inspect.entry) {
@@ -887,70 +1006,72 @@ inline CliDispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     } else {
       rcm = transfer_manager.Inspect(args.task_inspect.id, false, false);
     }
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    result.rcm = rcm;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.task_userset_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    ECM rcm = transfer_manager.InspectUserSet(args.task_userset.index);
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    result.rcm = transfer_manager.InspectUserSet(args.task_userset.index);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.task_taskentry_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    ECM rcm = transfer_manager.InspectTaskEntry(args.task_entry.id);
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    result.rcm = transfer_manager.InspectTaskEntry(args.task_entry.id);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.task_terminate_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    ECM rcm = transfer_manager.Terminate(args.task_terminate.ids);
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    result.rcm = transfer_manager.Terminate(args.task_terminate.ids);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.task_pause_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    ECM rcm = transfer_manager.Pause(args.task_pause.ids);
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    result.rcm = transfer_manager.Pause(args.task_pause.ids);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.task_resume_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    ECM rcm = transfer_manager.Resume(args.task_resume.ids);
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return CliDispatchResult::Exit;
+    result.rcm = transfer_manager.Resume(args.task_resume.ids);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.sftp_cmd->parsed()) {
-    ECM rcm = filesystem.sftp(args.sftp.nickname, args.sftp.user_at_host,
-                              args.sftp.port, args.sftp.password,
-                              args.sftp.keyfile, flag);
-    if (rcm.first != EC::Success) {
-      std::cerr << rcm.second << std::endl;
+    result.rcm = filesystem.sftp(args.sftp.nickname, args.sftp.user_at_host,
+                                 args.sftp.port, args.sftp.password,
+                                 args.sftp.keyfile, flag);
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
     }
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return (rcm.first == EC::Success ? CliDispatchResult::EnterInteractive
-                                     : CliDispatchResult::Exit);
+    result.enter_interactive = result.rcm.first == EC::Success;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
   if (cli_commands.ftp_cmd->parsed()) {
-    ECM rcm =
+    result.rcm =
         filesystem.ftp(args.ftp.nickname, args.ftp.user_at_host, args.ftp.port,
                        args.ftp.password, args.ftp.keyfile, flag);
-    if (rcm.first != EC::Success) {
-      std::cerr << rcm.second << std::endl;
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
     }
-    SetCliExitCode(static_cast<int>(rcm.first));
-    return (rcm.first == EC::Success ? CliDispatchResult::EnterInteractive
-                                     : CliDispatchResult::Exit);
+    result.enter_interactive = result.rcm.first == EC::Success;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
   }
 
-  std::cerr << "No valid command provided" << std::endl;
-  SetCliExitCode(static_cast<int>(EC::InvalidArg));
-  return CliDispatchResult::Exit;
+  result.rcm = {EC::InvalidArg, "No valid command provided"};
+  std::cerr << result.rcm.second << std::endl;
+  SetCliExitCode(static_cast<int>(result.rcm.first));
+  return result;
 }

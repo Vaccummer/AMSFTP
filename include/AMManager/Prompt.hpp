@@ -30,9 +30,11 @@ inline std::string ToString(char *value) {
 } // namespace AMPromptDetail
 
 struct TaskInfo;
+class AMTokenTypeAnalyzer;
 
 class AMPromptManager {
 public:
+  std::unique_ptr<AMTokenTypeAnalyzer> token_analyzer_;
   static AMPromptManager &Instance();
 
   AMPromptManager(const AMPromptManager &) = delete;
@@ -94,16 +96,19 @@ public:
 
   bool Prompt(const std::string &prompt, const std::string &placeholder,
               std::string *out_input);
+  /**
+   * @brief Prompt for a command line using the core replxx handle.
+   */
+  bool PromptCore(const std::string &prompt, std::string *out_input);
   bool esc_pressed_ = false;
 
 private:
   AMPromptManager();
   std::mutex print_mutex_;
   Replxx *replxx_ = nullptr;
+  Replxx *core_replxx_ = nullptr;
 };
 
 #define AM_PROMPT_ERROR(error_name, error_msg, is_exit, exit_code)             \
   AMPromptManager::Instance().ErrorFormat((error_name), (error_msg),           \
                                           (is_exit), (exit_code), __func__)
-
-

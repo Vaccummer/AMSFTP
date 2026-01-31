@@ -376,8 +376,8 @@ AMConfigManager &AMConfigManager::Instance() {
 }
 
 ECM AMConfigManager::Init() {
-  const char *root_env = std::getenv("AMSFTP_ROOT");
-  if (!root_env || std::string(root_env).empty()) {
+  const std::string root_env = GetEnvCopy("AMSFTP_ROOT");
+  if (root_env.empty()) {
     AM_PROMPT_ERROR("ConfigInit",
                     "$AMSFTP_ROOT environment variable is not set", true, 2);
     return Err(EC::ConfigInvalid,
@@ -909,6 +909,20 @@ ECM AMConfigManager::SetUserPath(const std::string &name,
     return Dump();
   }
   return Ok();
+}
+
+/** Return a list of configured host nicknames. */
+std::vector<std::string> AMConfigManager::ListHostnames() const {
+  std::vector<std::string> names;
+  auto status = EnsureInitialized("ListHostnames");
+  if (status.first != EC::Success)
+    return names;
+  auto hosts = CollectHosts();
+  names.reserve(hosts.size());
+  for (const auto &item : hosts) {
+    names.push_back(item.first);
+  }
+  return names;
 }
 
 /**

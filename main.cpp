@@ -1,4 +1,5 @@
 #include "AMCLI/CLIBind.hpp"
+#include "AMCLI/InteractiveLoop.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMClient/SFTP.hpp"
 #include "AMManager/SignalMonitor.hpp"
@@ -70,6 +71,7 @@ int main(int argc, char **argv) {
     auto &filesystem = AMFileSystem::Instance(client_manager, config_manager);
     AMClientManager::global_interrupt_flag = amgif;
     AMFileSystem::global_interrupt_flag = amgif;
+    AMIsInteractive.store(false);
 
     CliManagers managers;
     managers.config_manager =
@@ -85,7 +87,10 @@ int main(int argc, char **argv) {
                      .count()
               << "ms" << std::endl;
     AMInitWSA();
-    (void)DispatchCliCommands(cli_commands, managers);
+    DispatchResult dispatch = DispatchCliCommands(cli_commands, managers);
+    if (dispatch.enter_interactive) {
+      RunInteractiveLoop(app_name, managers);
+    }
     time_end = std::chrono::steady_clock::now();
     std::cout << "alltime: "
               << std::chrono::duration_cast<std::chrono::milliseconds>(

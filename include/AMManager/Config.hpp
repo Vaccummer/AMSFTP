@@ -39,6 +39,8 @@ public:
 
   [[nodiscard]] ECM List() const;
   [[nodiscard]] ECM ListName() const;
+  /** Return a list of configured host nicknames. */
+  [[nodiscard]] std::vector<std::string> ListHostnames() const;
   [[nodiscard]] std::pair<ECM, std::vector<std::string>>
   PrivateKeys(bool print_sign = false) const;
   /** Return the project root directory path. */

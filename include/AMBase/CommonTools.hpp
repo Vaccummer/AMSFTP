@@ -718,7 +718,7 @@ public:
       return;
     }
     std::lock_guard<std::mutex> lock(mtx_);
-    current_size_ = std::min(total_size_, current_size_ + delta);
+    current_size_ = std::min<int64_t>(total_size_, current_size_ + delta);
     UpdateSpeedLocked_();
     RequestRefreshLocked_();
   }
@@ -940,7 +940,8 @@ private:
    * @return Human-readable speed string.
    */
   static std::string FormatSpeed_(double bytes_per_sec, size_t width) {
-    const int64_t rounded = static_cast<int64_t>(std::max(0.0, bytes_per_sec));
+    const int64_t rounded =
+        static_cast<int64_t>(std::max<int64_t>(0, bytes_per_sec));
     std::string base = FormatSize_(rounded, 4);
     auto pos = base.find(' ');
     if (pos != std::string::npos) {
@@ -995,7 +996,7 @@ public:
       : prefix_width_(prefix_width), percent_width_(percent_width),
         size_width_(size_width), time_width_(time_width),
         speed_width_(speed_width),
-        refresh_interval_ms_(std::max(16, refresh_interval_ms)) {}
+        refresh_interval_ms_(std::max<int>(16, refresh_interval_ms)) {}
 
   /**
    * @brief Destroy the group and stop background refresh.
@@ -1110,7 +1111,7 @@ public:
     const size_t max_prefix_width =
         (term_width > other_width + 1) ? (term_width - other_width - 1) : 0;
     const size_t effective_prefix_width =
-        std::min(prefix_width, max_prefix_width);
+        std::min<size_t>(prefix_width, max_prefix_width);
     std::vector<std::string> lines;
     lines.reserve(bars.size());
     for (const auto &bar : bars) {

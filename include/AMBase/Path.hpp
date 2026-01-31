@@ -22,6 +22,31 @@ using EC = ErrorCode;
 using ECM = std::pair<ErrorCode, std::string>;
 using amf = std::shared_ptr<InterruptFlag>;
 
+/**
+ * @brief Get an environment variable value in a cross-platform, safe manner.
+ */
+inline std::string GetEnvCopy(const char *name) {
+  if (!name) {
+    return "";
+  }
+#ifdef _WIN32
+  char *buffer = nullptr;
+  size_t length = 0;
+  if (_dupenv_s(&buffer, &length, name) != 0 || !buffer) {
+    return "";
+  }
+  std::string value(buffer);
+  std::free(buffer);
+  return value;
+#else
+  const char *value = std::getenv(name);
+  if (!value) {
+    return "";
+  }
+  return std::string(value);
+#endif
+}
+
 inline PathType cast_fs_type(const fs::file_type &type) {
   switch (type) {
   case fs::file_type::directory:
@@ -791,14 +816,14 @@ inline std::string HomePath() {
     return AMStr::wstr(path);
   }
   // 备选环境变量
-  const char *userprofile = std::getenv("USERPROFILE");
-  if (userprofile)
-    return std::string(userprofile);
+  const std::string userprofile = GetEnvCopy("USERPROFILE");
+  if (!userprofile.empty())
+    return userprofile;
 #else
   // Linux/macOS
-  const char *home = std::getenv("HOME");
-  if (home)
-    return std::string(home);
+  const std::string home = GetEnvCopy("HOME");
+  if (!home.empty())
+    return home;
 
   // 备选: 读取/etc/passwd
 

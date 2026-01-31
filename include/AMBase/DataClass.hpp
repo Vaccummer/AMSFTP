@@ -43,6 +43,26 @@ using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
 
+enum class AMTokenType {
+  Common,
+  Module,
+  Command,
+  VarName,
+  VarValue,
+  Nickname,
+  String,
+  Option,
+  AtSign,
+  DollarSign,
+  EqualSign
+};
+
+struct AMTokenSpan {
+  size_t start = 0;
+  size_t end = 0;
+  AMTokenType type = AMTokenType::Common;
+};
+
 template <typename Fn, typename... Args>
 inline ECM CallCallbackSafe(const Fn &fn, Args &&...args) {
   if (!fn) {
@@ -155,6 +175,10 @@ private:
   std::atomic<bool> is_killed = false;
 
 public:
+  /**
+   * @brief Return true if the interrupt flag has been marked as killed.
+   */
+  inline bool iskill() const { return is_killed.load(); }
   inline bool check() { return is_interrupted.load(); }
   inline void set(bool value) { is_interrupted.store(value); }
   inline void reset() { is_interrupted.store(false); }
