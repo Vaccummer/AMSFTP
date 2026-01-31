@@ -1,8 +1,8 @@
 #pragma once
-#include "AMManager/Prompt.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
+#include "AMManager/Prompt.hpp"
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -44,8 +44,7 @@ public:
   /** Return the project root directory path. */
   [[nodiscard]] std::filesystem::path ProjectRoot() const { return root_dir_; }
   [[nodiscard]] std::pair<ECM, ClientConfig>
-  GetClientConfig(const std::string &nickname,
-                  bool use_compression = false);
+  GetClientConfig(const std::string &nickname, bool use_compression = false);
   [[nodiscard]] int GetSettingInt(const Path &path, int default_value) const;
   /**
    * @brief Resolve network timeout from settings with a default fallback.
@@ -54,6 +53,24 @@ public:
   /** Return a string setting value or the provided default. */
   [[nodiscard]] std::string
   GetSettingString(const Path &path, const std::string &default_value) const;
+  /**
+   * @brief Query a UserPaths entry by name.
+   */
+  bool GetUserPath(const std::string &name, std::string *value) const;
+  /**
+   * @brief List all UserPaths entries.
+   */
+  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
+  ListUserPaths() const;
+  /**
+   * @brief Set a UserPaths entry and optionally persist to settings.
+   */
+  ECM SetUserPath(const std::string &name, const std::string &value,
+                  bool dump_now = true);
+  /**
+   * @brief Remove a UserPaths entry and optionally persist to settings.
+   */
+  ECM RemoveUserPath(const std::string &name, bool dump_now = true);
   [[nodiscard]] ECM Src() const;
   [[nodiscard]] ECM Delete(const std::string &targets);
   /**
@@ -148,5 +165,3 @@ private:
   bool initialized_ = false;
   bool exit_hook_installed_ = false;
 };
-
-

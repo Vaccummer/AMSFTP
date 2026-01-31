@@ -1,8 +1,8 @@
 #pragma once
 
+#include "AMBase/DataClass.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
-#include "AMBase/DataClass.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -10,6 +10,7 @@
 #include <fstream>
 #include <mutex>
 #include <thread>
+
 
 class AMLogManager {
 public:
@@ -67,5 +68,3 @@ private:
   std::atomic<bool> running_{false};
   std::atomic<int> trace_level_{4};
 };
-
-

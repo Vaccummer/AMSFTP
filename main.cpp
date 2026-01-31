@@ -85,7 +85,7 @@ int main(int argc, char **argv) {
                      .count()
               << "ms" << std::endl;
     AMInitWSA();
-    DispatchCliCommands(cli_commands, managers);
+    (void)DispatchCliCommands(cli_commands, managers);
     time_end = std::chrono::steady_clock::now();
     std::cout << "alltime: "
               << std::chrono::duration_cast<std::chrono::milliseconds>(

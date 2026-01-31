@@ -314,3 +314,321 @@ timeout_ms(也不包括, 因为可以随时终止, timeout_ms意义不大了)
 
 将绑定参数的操作独立出来成一个新文件AMCLIBind.hpp
 封装一个函数: 参数为cli_commands, 以及一个存储各个manager的共享指针的struct, 在函数中根据指令执行操作, 返回值暂时设置为void
+# Non-Interactive Improve
+
+部分非交互的cli函数比较特殊, 因为它们是交互模式的入口, 所以需要修改并新添部分函数, 可通过DispatchCliCommands函数的返回值设定
+
++ bash: 直接进入交互模式
++ sftp/ftp : 连接成功后进入
++ connect: 连接成功后进入
+
+# Interactive Mode
+
+交互模式的函数依旧绑定到CliCommands, 但是在DispatchCliCommands中不分配执行, 即cli_commands.sub_commands()读取到指令但是DispatchCliCommands中没有执行的情况.
+
+DispatchCliCommands暂时不需要更改, 先完成交互模式的函数绑定
+
+# check
+
+real_func: AMFileSystem::ECMAMFileSystem::check(conststd::vector[std::string](std::string) &nicknames, amfinterrupt_flag)
+
+ ClientRefclient = resolve_by_name(name);
+
+这里返回结果需要更详细, 是client未建立还是config不存在, 而且还要打印信息
+
++ 同时也需要包括其他函数比如cd
++ 返回的ECM只是用于设置状态, 出错时需要在函数内部打印错误信息
+  + 格式 ❌ {cli_func_name}: {msg}
+
+# ch
+
+real_func:
+
+AMFileSystem::change_client(conststd::string&nickname,amfinterrupt_flag)
+
+# disconnect
+
+AMFileSystem::remove_client
+
+# cd
+
+AMFileSystem::cd
+
+# clients
+
+AMFileSystem::print_clients
+# Improve Transfer Manager
+
+取消初始化参数, 因为各类manager都是单例模式, 可以直接通过函数获取
+
+tm需要增添一些功能
+
++ 新增一个UserTransferSet的cache池, 并设置函数让用户提交新set, 查看已有的set以及删除某些不需要的se
+  + 当然, 还需要设置一个函数执行这些transferset
++ show: 可以使用TaskInfoPrint::Show, 但是这个show接收ID和flag
++ list: 使用TaskInfoPrint::List, 但接收的时三个pending, finished, conducting bool option和一个flag
++ inspect: 接收ID, set, entry 两个bool option. 以及两个衍伸函数
+  + userset: 接收ID
+  + taskentry: 接收ID
++ 以及一些控制任务的函数
+  + terminate
+  + resume
+  + pause
+# Non-Interactive Improve
+
+部分非交互的cli函数比较特殊, 因为它们是交互模式的入口, 所以需要修改并新添部分函数, 可通过DispatchCliCommands函数的返回值设定
+
++ bash: 直接进入交互模式
++ sftp/ftp : 连接成功后进入
++ connect: 连接成功后进入
+
+# Interactive Mode
+
+交互模式的函数依旧绑定到CliCommands, 但是在DispatchCliCommands中不分配执行, 即cli_commands.sub_commands()读取到指令但是DispatchCliCommands中没有执行的情况.
+
+DispatchCliCommands暂时不需要更改, 先完成交互模式的函数绑定
+
+# check
+
+real_func: AMFileSystem::ECMAMFileSystem::check(conststd::vector[std::string](std::string) &nicknames, amfinterrupt_flag)
+
+ ClientRefclient = resolve_by_name(name);
+
+这里返回结果需要更详细, 是client未建立还是config不存在, 而且还要打印信息
+
++ 同时也需要包括其他函数比如cd
++ 返回的ECM只是用于设置状态, 出错时需要在函数内部打印错误信息
+  + 格式 ❌ {cli_func_name}: {msg}
+
+# ch
+
+real_func:
+
+AMFileSystem::change_client(conststd::string&nickname,amfinterrupt_flag)
+
+# disconnect
+
+AMFileSystem::remove_client
+
+# cd
+
+AMFileSystem::cd
+
+# clients
+
+AMFileSystem::print_clients: 该函数需要新加detail 的option, 设置时才需要打印状态, 不设置只需要打印名称即可
+
+
+
+# task 子命令
+
+以下函数在task子命令下
+
++ cache子命令
+
+  + add : 添加userset, 签名和cp相同
+  + rm: 可接收多个index
+  + clear: 清除cache
+  + submit : 生成taskinfo并提交, 设置quiet参数, 非quiet模式下需要打印userset信息,  并确认
+    + 提交成功才清空cache
+    + 空cache提交报错
++ show(函数)
++ list
+
+  + AMTransferManager::List的三个option都不传入时,默认全打印
++ show
+
+  + AMTransferManager::Show, flag由内部传入(一般是amgif)
++ inspect
+
+  + 新增一个show_info
+  + 三个option均未传入时, 使用show_info
+  + 否则, 传入什么打印什么
++ terminate
+
+  + workermanager的terminate函数需要改进一下， 应该直接从registry中找任务, 并根据任务状态执行.返回 `pair<`taskinfo `, bool>` 后者代表是否终止成功(已完成的任务无法终止)
+  + 同样, get_task(constTaskId&id)也需要更改
+  + 
+  + 所有任务控制函数都支持批量操作, 而且每个需要打印结果
++ pause
++ resume
+命令的解析使用CLI11, 但是在交互模式下, 需要对用户输入的原始命令字符串进行预处理解析
+
+所以需要有一个指令的预处理系统
+
+
+# var函数
+
++ 该函数文件中没有定义, 需要实现
++ 该函数用于变量定义, 为了使用方便, 不需要对$转义, 所以改函数的参数不能进行解析, 甚至不经过CLI11解析
++ 检测到var关键字, 除非开头有!标识, 否则直接传给var
++ ${name} = {value} 的类型也需要传给var
+
+# 内置符号
+
+内置符号在传入CLI11前, 需要被解析并替换
+
++ ! 在开头代表将指令作为作为终端命令指令(调用ConductCmd)
+
+  + 只有SFTPClient支持ConductCmd
+  + 其他client类型报错
++ & 在结尾, 且函数为transfer以及task submit时, 用于异步执行
+
+  + 不符合要求时, 不进行剥离
++ $ 符号, 是用于用户自定义变量的替代
+
+## $ 引用系统
+
+### 定义
+
++ setting中读取内置值
+
+  + 在UserPaths中, 所有变量值只能是字符串
++ 内存定义
+
+  + $arg_name = yeshahah
+  + 定义在内存中, 程序重启后丢弃
+  + 覆盖值时, 需要确认
+    + 确认的prompt需要区分覆盖的时内置值还是内存值
++ 内置定义
+
+  + 使用var ${name}={value} 定义
+    + 写入内存, 并且写回config
+    + 覆盖时依旧需要确认
++ 命名规范
+
+  + 英文大小写, 数值, 和下划线
+  + 不规范时报错提醒
+  + 变量名区分大小写
++ 格式规范
+
+1. 变量名与=之间可以有空格
+2. 变量值与等号之间的空格不计入值中, 变量值需要两端strip
+3. 变量值不需要引号包裹(因为值只能是字符串类型)
+4. 但是也需要兼容被引号包裹的情况
+   1. 若完全包裹 "  asdas   ": 则去除引号
+   2. 若不完全包裹 "   asd   "bd  : 则报错
+
+### 引用使用规范
+
++ $dsk/test1  \$dsk\test1
+
+  + $解析名称时, 遇到非法符停止
++ $(dsk)1
+
+  + 人为可以用()包裹目标
+  + 若使用了$(但是括号不闭合, 需要报错
++ 原始路径中存在$
+
+  + 若匹配的的名称不存在, 则返回不解析, 返回原字符串
+  + 若$被`转义, 不解析
++ 解析若成功, 则使用字符串替换即可
+
+# Command Preprocessing System
+
+Command parsing is handled by CLI11. However, in interactive mode, raw user input strings require preprocessing before being passed to CLI11.
+
+Therefore, a dedicated **command preprocessing system** is needed.
+
+ps: any blankspace in front of a command is allowed and ignored
+
+---
+
+## `var` Function
+
++ This function is not yet implemented and needs to be added.
++ It is used for variable definition. For usability, **no `$` escaping is required**, meaning its arguments must **bypass CLI11 parsing entirely** and remain unparsed.
++ When the keyword `var` is detected at the beginning of a command (unless prefixed with `!`), the entire line should be routed directly to the `var` handler.
++ The syntax `${name} = {value}` must also be supported and forwarded to `var`.
+
+---
+
+## Built-in Symbols
+
+Built-in symbols must be parsed and replaced **before** the command string is passed to CLI11:
+
++ **`!` at the beginning**Indicates the command should be executed as a native shell command via `ConductCmd`.
+
+  + Only `SFTPClient` supports `ConductCmd`.
+  + Other client types must return an error.
+  + strip ! and return, don't parsing Variable Reference
+  + ignore leading blankspace; if first non-space is `!`, treat as shell mode; otherwise `!` is literal
+  + if ! is leagal, remove !,  strip blankspace, end parsing and call `ConductCmd`
++ example
+
+  + ! ls .    ->   ls .
+  + ls !. -> ls !.
+  + ls . ! -> ls .!
+  + !ls-> ls
+  + ! ls -> ls
++ **`&` at the end**Used for asynchronous execution when the command is `cp` or `task submit`.
+
+  + If conditions are not met (wrong command or position), return an error; do not treat `&` as literal input.
+
+  + example
+    + cp path1 path2 &  -> cp path1 path2
+    + cp path1 path2& ->  cp path1 path2&    (& not a token, it's in the path)
+    + ls  path1& ->  ls  path1&
+    + ls  path1 & -> Return Error:  & not permited in functions except cp and task submit(Not Literal, you need to return an error)
++ **`$` symbol**
+  Used for substituting user-defined variables.
+
+---
+
+## `$` Variable Reference System
+
+### Definition Sources
+
++ **Built-in values from settings**
+
+  + In `UserPaths`, all variable values must be strings.
++ **In-memory definition**
+
+  + Syntax: `$arg_name = yeshahah`
+  + Stored in memory only; discarded on program restart.
+  + Overwriting requires confirmation.
+    + The confirmation prompt must distinguish whether the value being overwritten is built-in or in-memory.
++ **Persistent definition**
+
+  + Syntax: `var ${name}={value}`
+  + Writes to both memory and config file.
+  + Overwriting still requires confirmation.
+
+### Naming Rules
+
++ Allowed characters: letters (case-sensitive), digits, and underscores (`_`). can startwith any allowed char
++ Invalid names trigger an error with a reminder.
++ Variable names are **case-sensitive**.
+
+### Format Rules
+
+1. Whitespace is allowed between the variable name and `=`.
+2. Leading/trailing whitespace around `=` is **not** part of the value; values must be stripped.
+3. Quotation marks are **not required** (values are always strings).
+4. Quoted(" or ') values must be handled compatibly:
+   a. Fully wrapped (e.g., `"  asdas   "`): strip outer quotes.
+   b. Partially or malformed quotes (e.g., `"   asd   "bd`): report an error.
+5. leading and tailing blankspace of name/value/command will be removed
+
+### Reference Usage Rules
+
++ `$dsk/test1`
+
+  + Variable name parsing stops at the first illegal character.
++ **`${dsk}1`**
+
+  + Parentheses {}can be used to explicitly delimit the variable name.
+  + Unclosed `${...}` must trigger an error.
+  + invalid names inside {} cause no substitution and keep original.
++ **Literal `$` in paths**
+
+  + If the referenced variable name does not exist, the original string is preserved (no substitution).
+  + Escaped `$` (via backtick `` `$ ``) is not parsed.
+  + \\ can't escape $
++ **Successful substitution**
+
+  + Performs simple string replacement at the reference site.
+  + recursive substitution is not allowed
+    + $a = b
+    + $b = c
+    + $a expands to $b (literal), not c

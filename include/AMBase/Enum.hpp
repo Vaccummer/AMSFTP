@@ -173,6 +173,7 @@ enum class ErrorCode {
   ConfigDumpFailed = 103,
   ConfigInvalid = 104,
   ConfigCanceled = 105,
+  TaskNotFound = 106,
 
   // FTP Server Error
   UnsupportFTPProtocol = 47,
@@ -300,5 +301,3 @@ const std::unordered_map<int, ErrorCode> Int2EC = [] {
 inline std::string GetECName(ErrorCode ec) {
   return std::string(magic_enum::enum_name(ec));
 }
-
-

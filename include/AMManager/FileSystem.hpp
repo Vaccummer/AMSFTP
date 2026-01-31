@@ -1,12 +1,13 @@
 #pragma once
+#include "AMBase/Enum.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
-#include "AMBase/Enum.hpp"
 #include <cstdint>
 #include <string>
 #include <utility>
 #include <vector>
+
 
 class AMFileSystem {
 public:
@@ -58,8 +59,8 @@ public:
   ECM remove_client(const std::string &nickname);
   /** Change working directory with history support. */
   ECM cd(const std::string &path, amf interrupt_flag = nullptr);
-  /** Print all clients with real-time status. */
-  ECM print_clients(amf interrupt_flag = nullptr);
+  /** Print all clients with optional detailed status. */
+  ECM print_clients(bool detail = false, amf interrupt_flag = nullptr);
   /** Print stat info for a path. */
   ECM stat(const std::string &path, amf interrupt_flag = nullptr,
            int timeout_ms = -1);
@@ -168,8 +169,6 @@ private:
   std::string FormatSize(uint64_t size) const;
   /** Format unix timestamp to printable time. */
   std::string FormatTimestamp(double value) const;
-  /** Format path type to string. */
-  std::string FormatPathType(PathType type) const;
   /** Format stat output block. */
   std::string FormatStatOutput(const PathInfo &info) const;
   /** Apply styling for a path based on type. */
@@ -180,5 +179,3 @@ private:
   AMPromptManager &prompt_manager_;
   std::string last_cd_;
 };
-
-

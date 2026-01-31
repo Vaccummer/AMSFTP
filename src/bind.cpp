@@ -51,7 +51,7 @@ int main2(int argc, char **argv) {
     managers.filesystem =
         std::shared_ptr<AMFileSystem>(&filesystem, [](auto *) {});
 
-    DispatchCliCommands(cli_commands, managers);
+    (void)DispatchCliCommands(cli_commands, managers);
     return g_cli_exit_code;
   } catch (const std::exception &e) {
     std::cerr << "Unexpected error: " << e.what() << std::endl;

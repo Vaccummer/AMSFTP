@@ -14,6 +14,15 @@
 
 using EC = ErrorCode;
 
+/**
+ * @brief Print CLI error in standard format.
+ */
+static void PrintCliError_(AMPromptManager &prompt,
+                           const std::string &cli_func_name,
+                           const std::string &msg) {
+  prompt.Print(AMStr::amfmt("❌ {}: {}", cli_func_name, msg));
+}
+
 AMFileSystem &AMFileSystem::Instance(AMClientManager &client_manager,
                                      AMConfigManager &config_manager) {
   static AMFileSystem instance(client_manager, config_manager);
@@ -44,22 +53,51 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
     targets.push_back(current.empty() ? "local" : current);
   }
 
-  auto resolve_by_name = [&](const std::string &nickname) -> ClientRef {
+  auto resolve_by_name = [&](const std::string &nickname,
+                             ECM *out_error) -> ClientRef {
     ClientRef result;
+    if (out_error) {
+      *out_error = {EC::Success, ""};
+    }
     std::string lowered = AMStr::lowercase(nickname);
     if (lowered.empty() || lowered == "local") {
       result.nickname = "local";
       result.client = client_manager_.LOCAL;
       return result;
     }
-    auto names = client_manager_.Clients().get_nicknames();
-    for (const auto &name : names) {
-      if (AMStr::lowercase(name) == lowered) {
-        result.nickname = name;
-        result.client = client_manager_.Clients().GetHost(name);
-        return result;
+
+    auto cfg = config_manager_.GetClientConfig(nickname, false);
+    if (cfg.first.first != EC::Success) {
+      if (out_error) {
+        *out_error = {EC::HostConfigNotFound,
+                      AMStr::amfmt("Config not found: {}", nickname)};
+      }
+      return result;
+    }
+
+    std::string resolved_name = nickname;
+    auto client = client_manager_.Clients().GetHost(resolved_name);
+    if (!client) {
+      auto names = client_manager_.Clients().get_nicknames();
+      for (const auto &name : names) {
+        if (AMStr::lowercase(name) == lowered) {
+          resolved_name = name;
+          client = client_manager_.Clients().GetHost(name);
+          break;
+        }
       }
     }
+
+    if (!client) {
+      if (out_error) {
+        *out_error = {EC::ClientNotFound,
+                      AMStr::amfmt("Client not established: {}", nickname)};
+      }
+      return result;
+    }
+
+    result.nickname = resolved_name;
+    result.client = client;
     return result;
   };
 
@@ -68,9 +106,11 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
     if (flag && flag->check()) {
       return {EC::Terminate, "Interrupted by user"};
     }
-    ClientRef client = resolve_by_name(name);
+    ECM resolve_rcm = {EC::Success, ""};
+    ClientRef client = resolve_by_name(name, &resolve_rcm);
     if (!client.is_valid()) {
-      last = {EC::ClientNotFound, AMStr::amfmt("Client not found: {}", name)};
+      last = resolve_rcm;
+      PrintCliError_(prompt_manager_, "check", resolve_rcm.second);
       continue;
     }
     ECM rcm = PrintClientStatus(client, true, flag);
@@ -162,6 +202,7 @@ AMFileSystem::ECM AMFileSystem::change_client(const std::string &nickname,
                                               amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   if (nickname.empty()) {
+    PrintCliError_(prompt_manager_, "ch", "Empty nickname");
     return {EC::InvalidArg, "Empty nickname"};
   }
   std::string lowered = AMStr::lowercase(nickname);
@@ -183,11 +224,13 @@ AMFileSystem::ECM AMFileSystem::change_client(const std::string &nickname,
     bool canceled = false;
     if (!prompt_manager_.PromptYesNo("Client not found. Create it? (y/N): ",
                                      &canceled)) {
+      PrintCliError_(prompt_manager_, "ch", "Operation aborted");
       return {EC::Terminate, "Operation aborted"};
     }
     auto added =
         client_manager_.AddClient(nickname, nullptr, false, false, {}, flag);
     if (added.first.first != EC::Success) {
+      PrintCliError_(prompt_manager_, "ch", added.first.second);
       return added.first;
     }
     client.nickname = nickname;
@@ -202,6 +245,7 @@ AMFileSystem::ECM AMFileSystem::change_client(const std::string &nickname,
 AMFileSystem::ECM AMFileSystem::remove_client(const std::string &nickname) {
   std::vector<std::string> targets = SplitTargets(nickname);
   if (targets.empty()) {
+    PrintCliError_(prompt_manager_, "disconnect", "Empty nickname");
     return {EC::InvalidArg, "Empty nickname"};
   }
   const std::string current =
@@ -210,14 +254,19 @@ AMFileSystem::ECM AMFileSystem::remove_client(const std::string &nickname) {
   for (const auto &target : targets) {
     const std::string lower = AMStr::lowercase(target);
     if (!current_lower.empty() && lower == current_lower) {
+      PrintCliError_(prompt_manager_, "disconnect",
+                     "Cannot remove current client");
       return {EC::InvalidArg, "Cannot remove current client"};
     }
     if (lower == "local") {
+      PrintCliError_(prompt_manager_, "disconnect",
+                     "Local client cannot be removed");
       return {EC::InvalidArg, "Local client cannot be removed"};
     }
   }
   bool canceled = false;
   if (!prompt_manager_.PromptYesNo("Remove client(s)? (y/N): ", &canceled)) {
+    PrintCliError_(prompt_manager_, "disconnect", "Remove canceled");
     return {EC::Terminate, "Remove canceled"};
   }
 
@@ -225,6 +274,7 @@ AMFileSystem::ECM AMFileSystem::remove_client(const std::string &nickname) {
   for (const auto &target : targets) {
     ECM rcm = client_manager_.RemoveClient(target);
     if (rcm.first != EC::Success) {
+      PrintCliError_(prompt_manager_, "disconnect", rcm.second);
       last = rcm;
     }
   }
@@ -241,6 +291,7 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
   bool from_history = false;
   if (path == "-") {
     if (last_cd_.empty()) {
+      PrintCliError_(prompt_manager_, "cd", "No previous directory");
       return {EC::InvalidArg, "No previous directory"};
     }
     std::string target = last_cd_;
@@ -249,9 +300,15 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
     auto [nickname, resolved_path, client_ptr, rcm] =
         client_manager_.ParsePath(target, flag);
     if (rcm.first != EC::Success || !client_ptr) {
-      return rcm.first == EC::Success
-                 ? ECM{EC::ClientNotFound, "Client not found"}
-                 : rcm;
+      ECM out =
+          rcm.first == EC::Success
+              ? ECM{EC::ClientNotFound, "Client not established"}
+              : rcm;
+      if (out.first == EC::HostConfigNotFound) {
+        out.second = AMStr::amfmt("Config not found: {}", nickname);
+      }
+      PrintCliError_(prompt_manager_, "cd", out.second);
+      return out;
     }
     ClientRef client{nickname, client_ptr};
     if (resolved_path.empty()) {
@@ -259,10 +316,12 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
     }
     std::string abs_path = BuildPath(client, resolved_path);
     auto [rcm2, info] = client.client->stat(abs_path, false, flag);
-    if (rcm.first != EC::Success) {
+    if (rcm2.first != EC::Success) {
+      PrintCliError_(prompt_manager_, "cd", rcm2.second);
       return rcm2;
     }
     if (info.type != PathType::DIR) {
+      PrintCliError_(prompt_manager_, "cd", "Path is not a directory");
       return {EC::NotADirectory, "Path is not a directory"};
     }
     SetClientWorkdir(client.client, abs_path);
@@ -273,9 +332,15 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
   auto [nickname, resolved_path, client_ptr, rcm] =
       client_manager_.ParsePath(path, flag);
   if (rcm.first != EC::Success || !client_ptr) {
-    return rcm.first == EC::Success
-               ? ECM{EC::ClientNotFound, "Client not found"}
-               : rcm;
+    ECM out =
+        rcm.first == EC::Success
+            ? ECM{EC::ClientNotFound, "Client not established"}
+            : rcm;
+    if (out.first == EC::HostConfigNotFound) {
+      out.second = AMStr::amfmt("Config not found: {}", nickname);
+    }
+    PrintCliError_(prompt_manager_, "cd", out.second);
+    return out;
   }
   ClientRef client{nickname, client_ptr};
 
@@ -286,9 +351,11 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
   std::string abs_path = BuildPath(client, resolved_path);
   auto [rcm2, info] = client.client->stat(abs_path, false, flag);
   if (rcm2.first != EC::Success) {
+    PrintCliError_(prompt_manager_, "cd", rcm2.second);
     return rcm2;
   }
   if (info.type != PathType::DIR) {
+    PrintCliError_(prompt_manager_, "cd", "Path is not a directory");
     return {EC::NotADirectory, "Path is not a directory"};
   }
 
@@ -302,11 +369,12 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
   return {EC::Success, ""};
 }
 
-AMFileSystem::ECM AMFileSystem::print_clients(amf interrupt_flag) {
+AMFileSystem::ECM AMFileSystem::print_clients(bool detail,
+                                              amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   std::vector<std::string> seen;
 
-  auto add_unique = [&, flag](const std::string &name) {
+  auto add_unique = [&, flag, detail](const std::string &name) {
     std::string lowered = AMStr::lowercase(name);
     if (std::find(seen.begin(), seen.end(), lowered) != seen.end()) {
       return;
@@ -327,7 +395,11 @@ AMFileSystem::ECM AMFileSystem::print_clients(amf interrupt_flag) {
       }
     }
     if (client.is_valid()) {
-      PrintClientStatus(client, true, flag);
+      if (detail) {
+        PrintClientStatus(client, true, flag);
+      } else {
+        prompt_manager_.Print(client.nickname);
+      }
     }
   };
 
@@ -453,7 +525,7 @@ AMFileSystem::ECM AMFileSystem::ls(const std::string &path, bool list_like,
     const size_t max_width = 80;
     size_t max_len = 0;
     for (const auto &info : entries) {
-      max_len = std::max(max_len, info.name.size());
+      max_len = std::max<size_t>(max_len, info.name.size());
     }
     size_t col_width = max_len == 0 ? 1 : max_len + 2;
     size_t columns =
@@ -498,16 +570,16 @@ AMFileSystem::ECM AMFileSystem::ls(const std::string &path, bool list_like,
       type_char = 'l';
     }
     mode = std::string(1, type_char) + mode;
-    mode_width = std::max(mode_width, mode.size());
+    mode_width = std::max<size_t>(mode_width, mode.size());
 
-    owner_width = std::max(owner_width, info.owner.size());
+    owner_width = std::max<size_t>(owner_width, info.owner.size());
 
     std::string size_str = FormatSize(info.size);
-    size_width = std::max(size_width, size_str.size());
+    size_width = std::max<size_t>(size_width, size_str.size());
 
     std::string time_str = FormatTimestamp(info.modify_time);
     time_values.push_back(time_str);
-    time_width = std::max(time_width, time_str.size());
+    time_width = std::max<size_t>(time_width, time_str.size());
   }
 
   for (size_t i = 0; i < entries.size(); ++i) {
@@ -937,17 +1009,13 @@ std::string AMFileSystem::FormatTimestamp(double value) const {
   return FormatTime(static_cast<uint64_t>(value), "%Y/%m/%d %H:%M:%S");
 }
 
-std::string AMFileSystem::FormatPathType(PathType type) const {
-  return std::string(magic_enum::enum_name(type));
-}
-
 std::string AMFileSystem::FormatStatOutput(const PathInfo &info) const {
   const size_t width = 12;
   std::ostringstream out;
   out << info.path << "\n\n";
 
   out << std::left << std::setw(static_cast<int>(width)) << "type" << " : "
-      << FormatPathType(info.type) << "\n";
+      << AM_ENUM_NAME(info.type) << "\n";
   out << std::left << std::setw(static_cast<int>(width)) << "owner" << " : "
       << info.owner << "\n";
   out << std::left << std::setw(static_cast<int>(width)) << "mode" << " : "

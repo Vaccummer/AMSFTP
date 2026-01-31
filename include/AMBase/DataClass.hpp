@@ -1174,5 +1174,3 @@ inline void PrintTree(
   walk_tree(root, "");
 }
 } // namespace AMTree
-
-
