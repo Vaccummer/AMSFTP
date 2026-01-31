@@ -155,6 +155,34 @@ struct ClientsArgs {
 };
 
 /**
+ * @brief CLI argument container for check.
+ */
+struct CheckArgs {
+  std::vector<std::string> nicknames;
+};
+
+/**
+ * @brief CLI argument container for ch.
+ */
+struct ChangeClientArgs {
+  std::string nickname;
+};
+
+/**
+ * @brief CLI argument container for disconnect.
+ */
+struct DisconnectArgs {
+  std::vector<std::string> nicknames;
+};
+
+/**
+ * @brief CLI argument container for cd.
+ */
+struct CdArgs {
+  std::string path;
+};
+
+/**
  * @brief CLI argument container for connect.
  */
 struct ConnectArgs {
@@ -254,6 +282,10 @@ struct CliArgsPool {
   SftpArgs sftp;
   FtpArgs ftp;
   ClientsArgs clients;
+  CheckArgs check;
+  ChangeClientArgs ch;
+  DisconnectArgs disconnect;
+  CdArgs cd;
   ConnectArgs connect;
   TaskListArgs task_list;
   TaskShowArgs task_show;
@@ -293,6 +325,10 @@ struct CliCommands {
   CLI::App *sftp_cmd = nullptr;
   CLI::App *ftp_cmd = nullptr;
   CLI::App *clients_cmd = nullptr;
+  CLI::App *check_cmd = nullptr;
+  CLI::App *ch_cmd = nullptr;
+  CLI::App *disconnect_cmd = nullptr;
+  CLI::App *cd_cmd = nullptr;
   CLI::App *connect_cmd = nullptr;
   CLI::App *bash_cmd = nullptr;
   CLI::App *task_cmd = nullptr;
@@ -378,8 +414,7 @@ inline CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
 
   commands.ls_cmd = app.add_subcommand("ls", "List directory");
   commands.ls_cmd->add_option("path", args.ls.path, "Path to list")
-      ->required()
-      ->expected(1);
+      ->expected(0, 1);
   commands.ls_cmd->add_flag("-l", args.ls.list_like, "List like");
   commands.ls_cmd->add_flag("-a", args.ls.show_all, "Show all entries");
 
@@ -465,6 +500,27 @@ inline CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
   commands.clients_cmd->add_flag("-d,--detail", args.clients.detail,
                                  "Show full status details");
 
+  commands.check_cmd = app.add_subcommand("check", "Check client status");
+  commands.check_cmd
+      ->add_option("nicknames", args.check.nicknames, "Client nicknames")
+      ->expected(0, -1);
+
+  commands.ch_cmd = app.add_subcommand("ch", "Change current client");
+  commands.ch_cmd->add_option("nickname", args.ch.nickname, "Client nickname")
+      ->required()
+      ->expected(1, 1);
+
+  commands.disconnect_cmd =
+      app.add_subcommand("disconnect", "Disconnect clients");
+  commands.disconnect_cmd
+      ->add_option("nicknames", args.disconnect.nicknames,
+                   "Client nicknames to disconnect")
+      ->expected(1, -1);
+
+  commands.cd_cmd = app.add_subcommand("cd", "Change working directory");
+  commands.cd_cmd->add_option("path", args.cd.path, "Target path")
+      ->expected(0, 1);
+
   commands.connect_cmd = app.add_subcommand("connect", "Connect to a host");
   commands.connect_cmd
       ->add_option("nickname", args.connect.nickname, "Host nickname")
@@ -478,8 +534,8 @@ inline CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
       commands.task_cmd->add_subcommand("cache", "Manage task cache");
   commands.task_cache_add =
       commands.task_cache_cmd->add_subcommand("add", "Add transfer set");
-  commands.task_cache_add->add_option("src", args.task_cache_add.srcs,
-                                      "Source paths")
+  commands.task_cache_add
+      ->add_option("src", args.task_cache_add.srcs, "Source paths")
       ->expected(1, -1);
   commands.task_cache_add->add_option("-o,--output", args.task_cache_add.output,
                                       "Destination path (optional)");
@@ -541,8 +597,7 @@ inline CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
 
   commands.task_taskentry_cmd =
       commands.task_cmd->add_subcommand("taskentry", "Inspect task entry");
-  commands.task_taskentry_cmd
-      ->add_option("id", args.task_entry.id, "Entry ID")
+  commands.task_taskentry_cmd->add_option("id", args.task_entry.id, "Entry ID")
       ->required()
       ->expected(1, 1);
 
@@ -554,14 +609,12 @@ inline CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
 
   commands.task_pause_cmd =
       commands.task_cmd->add_subcommand("pause", "Pause task(s)");
-  commands.task_pause_cmd
-      ->add_option("id", args.task_pause.ids, "Task IDs")
+  commands.task_pause_cmd->add_option("id", args.task_pause.ids, "Task IDs")
       ->expected(1, -1);
 
   commands.task_resume_cmd =
       commands.task_cmd->add_subcommand("resume", "Resume task(s)");
-  commands.task_resume_cmd
-      ->add_option("id", args.task_resume.ids, "Task IDs")
+  commands.task_resume_cmd->add_option("id", args.task_resume.ids, "Task IDs")
       ->expected(1, -1);
 
   return commands;
@@ -592,6 +645,7 @@ inline DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   DispatchResult result;
   const CliArgsPool &args = *cli_commands.args;
   auto &config_manager = *managers.config_manager;
+  auto &client_manager = *managers.client_manager;
   auto &filesystem = *managers.filesystem;
   amf flag = amgif;
 
@@ -602,6 +656,8 @@ inline DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
       cli_commands.rm_cmd->parsed() || cli_commands.walk_cmd->parsed() ||
       cli_commands.tree_cmd->parsed() || cli_commands.cp_cmd->parsed() ||
       cli_commands.clients_cmd->parsed() ||
+      cli_commands.check_cmd->parsed() || cli_commands.ch_cmd->parsed() ||
+      cli_commands.disconnect_cmd->parsed() || cli_commands.cd_cmd->parsed() ||
       cli_commands.connect_cmd->parsed() || cli_commands.bash_cmd->parsed() ||
       cli_commands.task_cmd->parsed() ||
       cli_commands.task_cache_add->parsed() ||
@@ -660,6 +716,18 @@ inline DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     if (cli_commands.clients_cmd->parsed()) {
       return "clients";
     }
+    if (cli_commands.check_cmd->parsed()) {
+      return "check";
+    }
+    if (cli_commands.ch_cmd->parsed()) {
+      return "ch";
+    }
+    if (cli_commands.disconnect_cmd->parsed()) {
+      return "disconnect";
+    }
+    if (cli_commands.cd_cmd->parsed()) {
+      return "cd";
+    }
     if (cli_commands.connect_cmd->parsed()) {
       return "connect";
     }
@@ -679,9 +747,8 @@ inline DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   };
 
   if (enforce_interactive && !AMIsInteractive.load()) {
-    std::string msg =
-        AMStr::amfmt("{} not supported in Non-Interactive mode",
-                     command_name());
+    std::string msg = AMStr::amfmt("{} not supported in Non-Interactive mode",
+                                   command_name());
     std::cerr << msg << std::endl;
     result.rcm = {EC::OperationUnsupported, msg};
     SetCliExitCode(static_cast<int>(result.rcm.first));
@@ -745,8 +812,18 @@ inline DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.ls_cmd->parsed()) {
-    result.rcm =
-        filesystem.ls(args.ls.path, args.ls.list_like, args.ls.show_all, flag);
+    std::string path = AMStr::TrimWhitespaceCopy(args.ls.path);
+    if (path.empty()) {
+      auto client =
+          client_manager.CLIENT ? client_manager.CLIENT : client_manager.LOCAL;
+      if (client) {
+        path = client_manager.GetOrInitWorkdir(client);
+      }
+    }
+    if (path.empty()) {
+      path = "/";
+    }
+    result.rcm = filesystem.ls(path, args.ls.list_like, args.ls.show_all, flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }
@@ -844,10 +921,10 @@ inline DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     transfer_set.ignore_special_file = !args.cp.include_special;
 
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    result.rcm = async ? transfer_manager.transfer_async({transfer_set},
-                                                         args.cp.quiet, flag)
-                       : transfer_manager.transfer({transfer_set},
-                                                   args.cp.quiet, flag);
+    result.rcm =
+        async ? transfer_manager.transfer_async({transfer_set}, args.cp.quiet,
+                                                flag)
+              : transfer_manager.transfer({transfer_set}, args.cp.quiet, flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }
@@ -857,6 +934,37 @@ inline DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
 
   if (cli_commands.clients_cmd->parsed()) {
     result.rcm = filesystem.print_clients(args.clients.detail, flag);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (cli_commands.check_cmd->parsed()) {
+    result.rcm = filesystem.check(args.check.nicknames, flag);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (cli_commands.ch_cmd->parsed()) {
+    result.rcm = filesystem.change_client(args.ch.nickname, flag);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (cli_commands.disconnect_cmd->parsed()) {
+    std::string joined;
+    for (size_t i = 0; i < args.disconnect.nicknames.size(); ++i) {
+      if (i > 0) {
+        joined += " ";
+      }
+      joined += args.disconnect.nicknames[i];
+    }
+    result.rcm = filesystem.remove_client(joined);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (cli_commands.cd_cmd->parsed()) {
+    result.rcm = filesystem.cd(args.cd.path, flag);
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
@@ -932,8 +1040,7 @@ inline DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
             AMStr::amfmt("✅ cache rm {}", std::to_string(index)));
       } else {
         AMPromptManager::Instance().Print(
-            AMStr::amfmt("❌ cache rm {} : not found",
-                         std::to_string(index)));
+            AMStr::amfmt("❌ cache rm {} : not found", std::to_string(index)));
         last = {EC::InvalidArg, "Cache index not found"};
       }
     }

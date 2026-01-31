@@ -1,6 +1,7 @@
 #include "AMManager/Config.hpp"
 #include "AMBase/Enum.hpp"
 #include "AMBase/Path.hpp"
+#include "AMManager/Prompt.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -11,6 +12,7 @@
 #include <regex>
 #include <sstream>
 #include <variant>
+
 
 namespace {
 using Path = AMConfigManager::Path;

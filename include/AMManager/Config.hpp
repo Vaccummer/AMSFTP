@@ -2,10 +2,9 @@
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
-#include "AMManager/Prompt.hpp"
+#include "AMBase/cfgffi.h"
 #include <filesystem>
 #include <map>
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
