@@ -8,15 +8,19 @@
 #include <iostream>
 
 // static auto bar = ProgressBar(0);
+/** @brief No-op total-size callback placeholder for transfer progress. */
 void total_cb([[maybe_unused]] int64_t total_size) {}
+/** @brief No-op progress callback placeholder that keeps transfers running. */
 std::optional<TransferControl>
 progress_cb([[maybe_unused]] const ProgressCBInfo &info) {
   // bar.update(info.this_size);
   return std::nullopt;
 }
+/** @brief Print transfer error details to stderr for diagnostics. */
 void error_cb(const ErrorCBInfo &info) {
   std::cerr << "Error: " << info.ecm.second << std::endl;
 }
+/** @brief Temporary development entry point for ad-hoc SFTP testing. */
 int main2() {
 #ifdef _WIN32
   WSADATA wsaData;
@@ -38,8 +42,8 @@ int main2() {
 }
 
 namespace fs = std::filesystem;
-
-/** Entry point for AMSFTP CLI (non-interactive). */
+/** @brief Program entry point that forwards to the AMSFTP CLI runner. */
+/** @brief Core AMSFTP CLI entry that initializes managers and dispatches. */
 int main(int argc, char **argv) {
   try {
     auto time_start = std::chrono::steady_clock::now();
@@ -103,6 +107,7 @@ int main(int argc, char **argv) {
     return -13;
   }
 }
+/** @brief Temporary development entry point for signal monitor testing. */
 int main224(int argc, char **argv) {
   auto &signal_monitor = AMCliSignalMonitor::Instance();
   signal_monitor.InstallHandlers();
