@@ -114,4 +114,5 @@ int main224(int argc, char **argv) {
   signal_monitor.Start();
   std::string tmp_test = "";
   std::cin >> tmp_test;
+  return 0;
 }

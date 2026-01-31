@@ -1,21 +1,16 @@
 #pragma once
 #include <chrono>
 #define _WINSOCKAPI_
-#include "AMBase/cfgffi.h"
 #include <algorithm>
 #include <array>
 #include <boost/locale/encoding.hpp>
 #include <cctype>
-#include <cmath>
 #include <condition_variable>
 #include <cstdlib>
-#include <filesystem>
-#include <fstream>
 #include <indicators/progress_bar.hpp> // win 平台上该库会包含 windows.h
 #include <initializer_list>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>

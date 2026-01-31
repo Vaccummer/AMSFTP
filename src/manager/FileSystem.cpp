@@ -306,6 +306,8 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
               : rcm;
       if (out.first == EC::HostConfigNotFound) {
         out.second = AMStr::amfmt("Config not found: {}", nickname);
+      } else if (out.first == EC::ClientNotFound) {
+        out.second = AMStr::amfmt("Client not established: {}", nickname);
       }
       PrintCliError_(prompt_manager_, "cd", out.second);
       return out;
@@ -338,6 +340,8 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
             : rcm;
     if (out.first == EC::HostConfigNotFound) {
       out.second = AMStr::amfmt("Config not found: {}", nickname);
+    } else if (out.first == EC::ClientNotFound) {
+      out.second = AMStr::amfmt("Client not established: {}", nickname);
     }
     PrintCliError_(prompt_manager_, "cd", out.second);
     return out;
