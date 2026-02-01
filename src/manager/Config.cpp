@@ -89,6 +89,30 @@ std::string ToLowerCopy(const std::string &value) {
   return out;
 }
 
+/**
+ * @brief Parse a boolean token from user input.
+ */
+bool ParseBoolToken(const std::string &input, bool *value) {
+  std::string token = TrimCopy(input);
+  if (token.empty()) {
+    return false;
+  }
+  token = ToLowerCopy(token);
+  if (token == "true" || token == "1" || token == "yes" || token == "y") {
+    if (value) {
+      *value = true;
+    }
+    return true;
+  }
+  if (token == "false" || token == "0" || token == "no" || token == "n") {
+    if (value) {
+      *value = false;
+    }
+    return true;
+  }
+  return false;
+}
+
 std::optional<std::string> GetStringField(const Json &obj,
                                           const std::string &key);
 std::optional<int64_t> GetIntField(const Json &obj, const std::string &key);
@@ -96,8 +120,8 @@ std::optional<int64_t> GetIntField(const Json &obj, const std::string &key);
 std::optional<bool> GetBoolField(const Json &obj, const std::string &key);
 
 const std::vector<std::string> kHostFields = {
-    "username",  "hostname", "port",        "keyfile",   "password",
-    "trash_dir", "protocol", "buffer_size", "login_dir",
+    "hostname",    "username",    "port",        "password", "protocol",
+    "buffer_size", "trash_dir",   "login_dir",   "keyfile",  "compression",
 };
 
 /** @brief JSON schema used to validate .AMSFTP_History.toml. */
@@ -1308,8 +1332,8 @@ ECM AMConfigManager::ListName() const {
     }
 
     if (current_width > 0) {
-      line << ' ';
-      current_width += 1;
+      line << "   ";
+      current_width += 3;
     }
     line << styled;
     current_width += name_len;
@@ -1563,10 +1587,23 @@ AMConfigManager::GetClientConfig(const std::string &nickname,
   std::string trash_dir = get_string("trash_dir", "");
   std::string login_dir = get_string("login_dir", "");
   int64_t port = get_int("port", 22);
+  bool compression = false;
+  auto compression_it = host->find("compression");
+  if (compression_it != host->end() && compression_it->is_boolean() &&
+      compression_it->get<bool>()) {
+    compression = true;
+  } else {
+    if (compression_it == host->end() || !compression_it->is_boolean() ||
+        compression_it->get<bool>()) {
+      (*host)["compression"] = false;
+      updated = true;
+    }
+    compression = false;
+  }
 
   config.request =
       ConRequst(nickname, hostname, username, static_cast<int>(port), password,
-                keyfile, use_compression, trash_dir);
+                keyfile, use_compression || compression, trash_dir);
 
   std::string protocol_str = get_string("protocol", "sftp");
   config.protocol = ProtocolFromString(protocol_str);
@@ -2058,6 +2095,90 @@ ECM AMConfigManager::SetHostField(const std::string &nickname,
   return Ok();
 }
 
+/**
+ * @brief Parse and set a host field from config set command arguments.
+ */
+ECM AMConfigManager::SetHostValue(const std::vector<std::string> &args) {
+  auto status = EnsureInitialized("SetHostValue");
+  if (status.first != EC::Success) {
+    return status;
+  }
+  if (args.size() != 3) {
+    return Err(EC::InvalidArg, "config set expects 3 arguments");
+  }
+  const std::string &nickname = args[0];
+  std::string field = ToLowerCopy(args[1]);
+  const std::string &value_str = args[2];
+
+  if (nickname.empty()) {
+    return Err(EC::InvalidArg, "empty nickname");
+  }
+  if (!HostExists(nickname)) {
+    return Err(EC::HostConfigNotFound, "host not found");
+  }
+
+  const std::vector<std::string> allowed_fields = {
+      "hostname",  "username",   "port",        "password", "protocol",
+      "buffer_size", "trash_dir", "login_dir",  "keyfile",  "compression"};
+  if (std::find(allowed_fields.begin(), allowed_fields.end(), field) ==
+      allowed_fields.end()) {
+    return Err(EC::InvalidArg, "unsupported property name");
+  }
+
+  Value value;
+  if (field == "port") {
+    int64_t port = 0;
+    if (!ParsePositiveInt(value_str, &port)) {
+      return Err(EC::InvalidArg, "invalid port value");
+    }
+    value = port;
+  } else if (field == "buffer_size") {
+    try {
+      int64_t parsed = std::stoll(value_str);
+      if (parsed == 0 || parsed < -1) {
+        return Err(EC::InvalidArg, "invalid buffer_size value");
+      }
+      value = parsed;
+    } catch (...) {
+      return Err(EC::InvalidArg, "invalid buffer_size value");
+    }
+  } else if (field == "compression") {
+    bool parsed = false;
+    if (!ParseBoolToken(value_str, &parsed)) {
+      return Err(EC::InvalidArg, "invalid compression value");
+    }
+    value = parsed;
+  } else if (field == "protocol") {
+    std::string protocol = ToLowerCopy(value_str);
+    if (protocol != "sftp" && protocol != "ftp" && protocol != "local") {
+      return Err(EC::InvalidArg, "invalid protocol value");
+    }
+    value = protocol;
+  } else {
+    value = value_str;
+  }
+
+  std::string old_value;
+  auto hosts = CollectHosts();
+  auto host_it = hosts.find(nickname);
+  if (host_it != hosts.end()) {
+    auto field_it = host_it->second.fields.find(field);
+    if (field_it != host_it->second.fields.end()) {
+      old_value = ValueToString(field_it->second);
+    }
+  }
+
+  ECM set_status = SetHostField(nickname, field, value, true);
+  if (set_status.first != EC::Success) {
+    return set_status;
+  }
+
+  const std::string new_value = ValueToString(value);
+  PrintLine(AMStr::amfmt("{}.{}: {} -> {}", nickname, field, old_value,
+                         new_value));
+  return Ok();
+}
+
 std::string AMConfigManager::ValueToString(const Value &value) const {
   if (std::holds_alternative<int64_t>(value)) {
     return std::to_string(std::get<int64_t>(value));
@@ -2205,18 +2326,6 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
     PrintLine(Format(error, "error"));
   }
 
-  std::string username;
-  while (true) {
-    if (!AMPromptManager::Instance().PromptLine("Username: ", &username, "",
-                                                true, &canceled)) {
-      PrintLine("Add canceled.");
-      return Err(EC::ConfigCanceled, "add canceled");
-    }
-    if (!username.empty())
-      break;
-    PrintLine(Format("Username cannot be empty.", "error"));
-  }
-
   std::string hostname;
   while (true) {
     if (!AMPromptManager::Instance().PromptLine("Hostname: ", &hostname, "",
@@ -2229,21 +2338,16 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
     PrintLine(Format("Hostname cannot be empty.", "error"));
   }
 
-  std::string protocol;
+  std::string username;
   while (true) {
-    if (!AMPromptManager::Instance().PromptLine(
-            "Protocol (sftp/ftp): ", &protocol, "", true, &canceled)) {
+    if (!AMPromptManager::Instance().PromptLine("Username: ", &username, "",
+                                                true, &canceled)) {
       PrintLine("Add canceled.");
       return Err(EC::ConfigCanceled, "add canceled");
     }
-    if (protocol.empty()) {
-      PrintLine(Format("Protocol cannot be empty.", "error"));
-      continue;
-    }
-    protocol = ToLowerCopy(protocol);
-    if (protocol == "sftp" || protocol == "ftp")
+    if (!username.empty())
       break;
-    PrintLine(Format("Protocol must be sftp or ftp.", "error"));
+    PrintLine(Format("Username cannot be empty.", "error"));
   }
 
   std::string port_input;
@@ -2263,13 +2367,6 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
     PrintLine(Format("Port must be a positive integer.", "error"));
   }
 
-  std::string keyfile;
-  if (!AMPromptManager::Instance().PromptLine("Keyfile (optional): ", &keyfile,
-                                              "", true, &canceled)) {
-    PrintLine("Add canceled.");
-    return Err(EC::ConfigCanceled, "add canceled");
-  }
-
   std::string password;
   while (true) {
     std::string first =
@@ -2286,18 +2383,21 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
     PrintLine(Format("Passwords do not match. Please try again.", "error"));
   }
 
-  std::string trash_dir;
-  if (!AMPromptManager::Instance().PromptLine(
-          "Trash dir (optional): ", &trash_dir, "", true, &canceled)) {
-    PrintLine("Add canceled.");
-    return Err(EC::ConfigCanceled, "add canceled");
-  }
-
-  std::string login_dir;
-  if (!AMPromptManager::Instance().PromptLine(
-          "Login dir (optional): ", &login_dir, "", true, &canceled)) {
-    PrintLine("Add canceled.");
-    return Err(EC::ConfigCanceled, "add canceled");
+  std::string protocol;
+  while (true) {
+    if (!AMPromptManager::Instance().PromptLine(
+            "Protocol (sftp/ftp): ", &protocol, "", true, &canceled)) {
+      PrintLine("Add canceled.");
+      return Err(EC::ConfigCanceled, "add canceled");
+    }
+    if (protocol.empty()) {
+      PrintLine(Format("Protocol cannot be empty.", "error"));
+      continue;
+    }
+    protocol = ToLowerCopy(protocol);
+    if (protocol == "sftp" || protocol == "ftp")
+      break;
+    PrintLine(Format("Protocol must be sftp or ftp.", "error"));
   }
 
   std::string buffer_input;
@@ -2317,16 +2417,46 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
     PrintLine(Format("Buffer size must be a positive integer.", "error"));
   }
 
+  std::string trash_dir;
+  if (!AMPromptManager::Instance().PromptLine(
+          "Trash dir (optional): ", &trash_dir, "", true, &canceled)) {
+    PrintLine("Add canceled.");
+    return Err(EC::ConfigCanceled, "add canceled");
+  }
+
+  std::string login_dir;
+  if (!AMPromptManager::Instance().PromptLine(
+          "Login dir (optional): ", &login_dir, "", true, &canceled)) {
+    PrintLine("Add canceled.");
+    return Err(EC::ConfigCanceled, "add canceled");
+  }
+
+  std::string keyfile;
+  if (!AMPromptManager::Instance().PromptLine("Keyfile (optional): ", &keyfile,
+                                              "", true, &canceled)) {
+    PrintLine("Add canceled.");
+    return Err(EC::ConfigCanceled, "add canceled");
+  }
+
+  bool compression = false;
+  compression = AMPromptManager::Instance().PromptYesNo(
+      "Enable compression? (y/N): ", &canceled);
+  if (canceled) {
+    PrintLine("Add canceled.");
+    return Err(EC::ConfigCanceled, "add canceled");
+  }
+
   entry->fields.clear();
-  entry->fields["username"] = username;
   entry->fields["hostname"] = hostname;
+  entry->fields["username"] = username;
   entry->fields["port"] = port;
-  entry->fields["keyfile"] = keyfile;
   entry->fields["password"] = AMAuth::EncryptPassword(password);
-  entry->fields["trash_dir"] = trash_dir;
   entry->fields["protocol"] = protocol;
   entry->fields["buffer_size"] = buffer_size;
+  entry->fields["trash_dir"] = trash_dir;
   entry->fields["login_dir"] = login_dir;
+  entry->fields["keyfile"] = keyfile;
+  entry->fields["compression"] = compression;
   AMAuth::SecureZero(password);
   return Ok();
 }
@@ -2348,13 +2478,6 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
     return ValueToString(fit->second);
   };
 
-  std::string username = get_value("username");
-  if (!AMPromptManager::Instance().PromptLine("Username: ", &username, username,
-                                              false, &canceled, false)) {
-    PrintLine("Modify canceled.");
-    return Err(EC::ConfigCanceled, "modify canceled");
-  }
-
   std::string hostname = get_value("hostname");
   if (!AMPromptManager::Instance().PromptLine("Hostname: ", &hostname, hostname,
                                               false, &canceled, false)) {
@@ -2362,18 +2485,11 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
-  std::string protocol = get_value("protocol");
-  while (true) {
-    if (!AMPromptManager::Instance().PromptLine(
-            "Protocol (sftp/ftp): ", &protocol, protocol, false, &canceled,
-            false)) {
-      PrintLine("Modify canceled.");
-      return Err(EC::ConfigCanceled, "modify canceled");
-    }
-    protocol = ToLowerCopy(protocol);
-    if (protocol == "sftp" || protocol == "ftp")
-      break;
-    PrintLine(Format("Protocol must be sftp or ftp.", "error"));
+  std::string username = get_value("username");
+  if (!AMPromptManager::Instance().PromptLine("Username: ", &username, username,
+                                              false, &canceled, false)) {
+    PrintLine("Modify canceled.");
+    return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string port_input = get_value("port");
@@ -2395,13 +2511,6 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   }
   if (!port_input.empty())
     port = std::stoll(port_input);
-
-  std::string keyfile = get_value("keyfile");
-  if (!AMPromptManager::Instance().PromptLine(
-          "Keyfile (optional): ", &keyfile, keyfile, true, &canceled, false)) {
-    PrintLine("Modify canceled.");
-    return Err(EC::ConfigCanceled, "modify canceled");
-  }
 
   Value password_value = std::string();
   auto pw_it = updated.fields.find("password");
@@ -2434,20 +2543,18 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
     AMAuth::SecureZero(password);
   }
 
-  std::string trash_dir = get_value("trash_dir");
-  if (!AMPromptManager::Instance().PromptLine(
-          "Trash dir (optional): ", &trash_dir, trash_dir, true, &canceled,
-          false)) {
-    PrintLine("Modify canceled.");
-    return Err(EC::ConfigCanceled, "modify canceled");
-  }
-
-  std::string login_dir = get_value("login_dir");
-  if (!AMPromptManager::Instance().PromptLine(
-          "Login dir (optional): ", &login_dir, login_dir, true, &canceled,
-          false)) {
-    PrintLine("Modify canceled.");
-    return Err(EC::ConfigCanceled, "modify canceled");
+  std::string protocol = get_value("protocol");
+  while (true) {
+    if (!AMPromptManager::Instance().PromptLine(
+            "Protocol (sftp/ftp): ", &protocol, protocol, false, &canceled,
+            false)) {
+      PrintLine("Modify canceled.");
+      return Err(EC::ConfigCanceled, "modify canceled");
+    }
+    protocol = ToLowerCopy(protocol);
+    if (protocol == "sftp" || protocol == "ftp")
+      break;
+    PrintLine(Format("Protocol must be sftp or ftp.", "error"));
   }
 
   std::string buffer_input = get_value("buffer_size");
@@ -2468,16 +2575,61 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
     PrintLine(Format("Buffer size must be a positive integer.", "error"));
   }
 
+  std::string trash_dir = get_value("trash_dir");
+  if (!AMPromptManager::Instance().PromptLine(
+          "Trash dir (optional): ", &trash_dir, trash_dir, true, &canceled,
+          false)) {
+    PrintLine("Modify canceled.");
+    return Err(EC::ConfigCanceled, "modify canceled");
+  }
+
+  std::string login_dir = get_value("login_dir");
+  if (!AMPromptManager::Instance().PromptLine(
+          "Login dir (optional): ", &login_dir, login_dir, true, &canceled,
+          false)) {
+    PrintLine("Modify canceled.");
+    return Err(EC::ConfigCanceled, "modify canceled");
+  }
+
+  std::string keyfile = get_value("keyfile");
+  if (!AMPromptManager::Instance().PromptLine(
+          "Keyfile (optional): ", &keyfile, keyfile, true, &canceled, false)) {
+    PrintLine("Modify canceled.");
+    return Err(EC::ConfigCanceled, "modify canceled");
+  }
+
+  bool compression = false;
+  bool current_compression = false;
+  std::string compression_input = get_value("compression");
+  if (ParseBoolToken(compression_input, &current_compression)) {
+    compression_input = current_compression ? "true" : "false";
+  } else {
+    compression_input = "false";
+  }
+  while (true) {
+    if (!AMPromptManager::Instance().PromptLine(
+            "Compression (true/false): ", &compression_input, compression_input,
+            true, &canceled, false)) {
+      PrintLine("Modify canceled.");
+      return Err(EC::ConfigCanceled, "modify canceled");
+    }
+    if (ParseBoolToken(compression_input, &compression)) {
+      break;
+    }
+    PrintLine(Format("Compression must be true or false.", "error"));
+  }
+
   entry->fields.clear();
-  entry->fields["username"] = username;
   entry->fields["hostname"] = hostname;
+  entry->fields["username"] = username;
   entry->fields["port"] = port;
-  entry->fields["keyfile"] = keyfile;
   entry->fields["password"] = password_value;
-  entry->fields["trash_dir"] = trash_dir;
   entry->fields["protocol"] = protocol;
   entry->fields["buffer_size"] = buffer_size;
+  entry->fields["trash_dir"] = trash_dir;
   entry->fields["login_dir"] = login_dir;
+  entry->fields["keyfile"] = keyfile;
+  entry->fields["compression"] = compression;
   return Ok();
 }
 

@@ -64,7 +64,6 @@ int main(int argc, char **argv) {
 
     CliArgsPool args_pool;
     CliCommands cli_commands = BindCliOptions(app, args_pool);
-
     try {
       app.parse(argc, argv);
     } catch (const CLI::ParseError &e) {

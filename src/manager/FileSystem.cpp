@@ -129,6 +129,9 @@ AMFileSystem::ECM AMFileSystem::connect(const std::string &nickname,
     return result.first;
   }
   EnsureClientWorkdir(result.second);
+  if (result.second) {
+    return change_client(result.second->GetNickname(), flag);
+  }
   return {EC::Success, ""};
 }
 
@@ -146,8 +149,7 @@ AMFileSystem::ECM AMFileSystem::sftp(const std::string &nickname,
     return result.first;
   }
   EnsureClientWorkdir(result.second);
-  client_manager_.CLIENT = result.second;
-  return {EC::Success, ""};
+  return change_client(result.second->GetNickname(), flag);
 }
 
 AMFileSystem::ECM AMFileSystem::sftp(const std::string &nickname,
@@ -179,8 +181,7 @@ AMFileSystem::ECM AMFileSystem::ftp(const std::string &nickname,
     return result.first;
   }
   EnsureClientWorkdir(result.second);
-  client_manager_.CLIENT = result.second;
-  return {EC::Success, ""};
+  return change_client(result.second->GetNickname(), flag);
 }
 
 AMFileSystem::ECM AMFileSystem::ftp(const std::string &nickname,
