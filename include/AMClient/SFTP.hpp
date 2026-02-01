@@ -10,14 +10,15 @@
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
-#include <functional>
 #include <fcntl.h>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <regex>
 #include <string>
 #include <vector>
+
 
 // 标准库
 
@@ -224,8 +225,7 @@ private:
   bool password_auth_cb = false;
   std::vector<std::string> private_keys = {};
   AuthCallback auth_cb = {}; // optional<string>(AuthCBInfo)
-  using KnownHostCallback =
-      std::function<ECM(AMConfigManager::KnownHostEntry)>;
+  using KnownHostCallback = std::function<ECM(AMConfigManager::KnownHostEntry)>;
   KnownHostCallback known_host_cb = {};
 
   /**
@@ -2810,6 +2810,17 @@ public:
     std::string current_path = parts.front();
     for (size_t i = 1; i < parts.size(); i++) {
       current_path = AMPathStr::join(current_path, parts[i], SepType::Unix);
+      auto [rcm2, attrs] = lib_getstat(current_path, false, interrupt_flag,
+                                       timeout_ms, start_time);
+      if (rcm2.first == EC::Success) {
+        if (isdir(attrs)) {
+          continue;
+        } else {
+          return {EC::PathAlreadyExists,
+                  AMStr::amfmt("Path exists and is not a directory: {}",
+                               current_path)};
+        }
+      }
       rcm = lib_mkdir(current_path, interrupt_flag, timeout_ms, start_time);
       if (rcm.first != EC::Success) {
         return rcm;

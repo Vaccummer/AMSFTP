@@ -81,6 +81,12 @@ public:
 
     PathInfo info;
     std::string pathf = path;
+#ifdef _WIN32
+    std::string real_path = ResolveRealCasePath_(path, trace_link);
+    if (!real_path.empty()) {
+      pathf = std::move(real_path);
+    }
+#endif
     fs::path p(pathf);
     info.name = p.filename().string();
     info.path = pathf;
@@ -119,11 +125,11 @@ public:
     }
 
     auto [create_time, access_time, modify_time] =
-        AMFS::GetTime(AMStr::wstr(path));
+        AMFS::GetTime(AMStr::wstr(pathf));
     info.create_time = create_time;
     info.access_time = access_time;
     info.modify_time = modify_time;
-    info.owner = AMFS::GetFileOwner(AMStr::wstr(path));
+    info.owner = AMFS::GetFileOwner(AMStr::wstr(pathf));
 #else
     struct stat file_stat;
     // 调用 stat 获取文件元数据（支持符号链接，若需跟随链接用 stat 而非
@@ -552,4 +558,56 @@ public:
     return rename(path, target_path, false, false, interrupt_flag, timeout_ms,
                   start_time);
   }
+
+private:
+#ifdef _WIN32
+  /**
+   * @brief Resolve a Windows path with the real on-disk casing.
+   * @param path Input path that may have incorrect character casing.
+   * @param follow_links Whether to follow reparse points (true) or keep the link
+   * itself (false).
+   * @return Resolved path with real casing, or empty when resolution fails.
+   */
+  std::string ResolveRealCasePath_(const std::string &path,
+                                   bool follow_links) const {
+    if (path.empty()) {
+      return "";
+    }
+    std::wstring wpath = AMStr::wstr(path);
+    DWORD flags = FILE_FLAG_BACKUP_SEMANTICS;
+    if (!follow_links) {
+      flags |= FILE_FLAG_OPEN_REPARSE_POINT;
+    }
+    HANDLE handle = CreateFileW(wpath.c_str(), FILE_READ_ATTRIBUTES,
+                                FILE_SHARE_READ | FILE_SHARE_WRITE |
+                                    FILE_SHARE_DELETE,
+                                nullptr, OPEN_EXISTING, flags, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) {
+      return "";
+    }
+    DWORD size = GetFinalPathNameByHandleW(
+        handle, nullptr, 0, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (size == 0) {
+      CloseHandle(handle);
+      return "";
+    }
+    std::wstring buffer(size, L'\0');
+    DWORD written = GetFinalPathNameByHandleW(
+        handle, buffer.data(), size, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    CloseHandle(handle);
+    if (written == 0) {
+      return "";
+    }
+    buffer.resize(written);
+    std::wstring result = buffer;
+    const std::wstring prefix = L"\\\\?\\";
+    const std::wstring unc_prefix = L"\\\\?\\UNC\\";
+    if (result.rfind(unc_prefix, 0) == 0) {
+      result = L"\\\\" + result.substr(unc_prefix.size());
+    } else if (result.rfind(prefix, 0) == 0) {
+      result = result.substr(prefix.size());
+    }
+    return AMStr::wstr(result);
+  }
+#endif
 };

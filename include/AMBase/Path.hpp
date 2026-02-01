@@ -451,6 +451,20 @@ inline std::string UnifyPathSep(std::string path, std::string sep = "") {
   if (AMStr::CharNum(path) < 2)
     return path;
   sep = sep.empty() ? GetPathSep(path) : sep;
+  bool drive_root = false;
+  if (path.size() >= 3) {
+    const char drive = path[0];
+    if (((drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z')) &&
+        path[1] == ':') {
+      drive_root = true;
+      for (size_t i = 2; i < path.size(); ++i) {
+        if (path[i] != '/' && path[i] != '\\') {
+          drive_root = false;
+          break;
+        }
+      }
+    }
+  }
   std::string head = path.substr(0, 2);
   if (head == "//" || head == "\\\\") {
     path = path.substr(2);
@@ -458,8 +472,13 @@ inline std::string UnifyPathSep(std::string path, std::string sep = "") {
     head.clear();
   }
   path = std::regex_replace(path, std::regex("[\\\\/]+"), sep);
+  if (path.empty()) {
+    return head.empty() ? path : head;
+  }
   if (path.back() == sep[0]) {
-    path.pop_back();
+    if (!drive_root) {
+      path.pop_back();
+    }
   }
   return head + path;
 }
@@ -843,26 +862,53 @@ inline std::string abspath(const std::string &path,
                            const std::string &cwd = "",
                            const std::string &sep = "") {
   std::string new_path = AMPathStr::UnifyPathSep(path, sep);
+  std::string new_sep = sep.empty() ? AMPathStr::GetPathSep(path) : sep;
+  const bool drive_only =
+      new_path.size() == 2 &&
+      ((new_path[0] >= 'A' && new_path[0] <= 'Z') ||
+       (new_path[0] >= 'a' && new_path[0] <= 'z')) &&
+      new_path[1] == ':';
+  if (drive_only) {
+    return new_path + new_sep;
+  }
   if (AMPathStr::IsAbs(new_path, sep) && !parsing_home) {
     return new_path;
   }
-  std::string new_sep = sep.empty() ? AMPathStr::GetPathSep(path) : sep;
   if (!AMPathStr::IsAbs(new_path, new_sep)) {
-    new_path =
-        cwd.empty() ? CWD() + new_sep + new_path : cwd + new_sep + new_path;
+    const std::string base = cwd.empty() ? CWD() : cwd;
+    new_path = AMPathStr::join(base, new_path);
   }
+  const bool drive_root_anchor =
+      new_path.size() >= 3 &&
+      ((new_path[0] >= 'A' && new_path[0] <= 'Z') ||
+       (new_path[0] >= 'a' && new_path[0] <= 'z')) &&
+      new_path[1] == ':' && (new_path[2] == '/' || new_path[2] == '\\');
   std::vector<std::string> parts = AMPathStr::split(new_path);
   if (parts.empty()) {
     return "";
   }
+  auto is_drive_part = [](const std::string &part) {
+    return part.size() == 2 &&
+           ((part[0] >= 'A' && part[0] <= 'Z') ||
+            (part[0] >= 'a' && part[0] <= 'z')) &&
+           part[1] == ':';
+  };
+  auto is_unc_root = [](const std::vector<std::string> &parts_vec) {
+    if (parts_vec.size() != 2) {
+      return false;
+    }
+    const std::string &first = parts_vec[0];
+    return first.rfind("//", 0) == 0 || first.rfind("\\\\", 0) == 0;
+  };
   std::vector<std::string> new_parts{};
   std::string tmp_part;
   std::string result;
-  if (parts.empty()) {
-    return "";
-  } else if (parts.size() == 1) {
+  if (parts.size() == 1) {
     if (parts[0] == "~" && parsing_home) {
       return home.empty() ? HomePath() : home;
+    }
+    if (drive_root_anchor && is_drive_part(parts[0])) {
+      return parts[0] + new_sep;
     }
     return parts.front();
   } else if (parts[0] == "/") {
@@ -879,12 +925,23 @@ inline std::string abspath(const std::string &path,
     if (tmp_part == ".") {
       continue;
     } else if (tmp_part == "..") {
-      if (!new_parts.empty()) {
-        new_parts.pop_back();
+      if (new_parts.empty()) {
+        continue;
       }
+      /* Keep root anchors from being popped by "..". */
+      if ((new_parts.size() == 1 &&
+           (new_parts.front() == "/" || is_drive_part(new_parts.front()))) ||
+          is_unc_root(new_parts)) {
+        continue;
+      }
+      new_parts.pop_back();
     } else {
       new_parts.push_back(tmp_part);
     }
+  }
+  if (drive_root_anchor && new_parts.size() == 1 &&
+      is_drive_part(new_parts.front())) {
+    return new_parts.front() + new_sep;
   }
   if (new_parts.size() == 0) {
     return "";

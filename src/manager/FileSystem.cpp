@@ -300,10 +300,9 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
     auto [nickname, resolved_path, client_ptr, rcm] =
         client_manager_.ParsePath(target, flag);
     if (rcm.first != EC::Success || !client_ptr) {
-      ECM out =
-          rcm.first == EC::Success
-              ? ECM{EC::ClientNotFound, "Client not established"}
-              : rcm;
+      ECM out = rcm.first == EC::Success
+                    ? ECM{EC::ClientNotFound, "Client not established"}
+                    : rcm;
       if (out.first == EC::HostConfigNotFound) {
         out.second = AMStr::amfmt("Config not found: {}", nickname);
       } else if (out.first == EC::ClientNotFound) {
@@ -334,10 +333,9 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
   auto [nickname, resolved_path, client_ptr, rcm] =
       client_manager_.ParsePath(path, flag);
   if (rcm.first != EC::Success || !client_ptr) {
-    ECM out =
-        rcm.first == EC::Success
-            ? ECM{EC::ClientNotFound, "Client not established"}
-            : rcm;
+    ECM out = rcm.first == EC::Success
+                  ? ECM{EC::ClientNotFound, "Client not established"}
+                  : rcm;
     if (out.first == EC::HostConfigNotFound) {
       out.second = AMStr::amfmt("Config not found: {}", nickname);
     } else if (out.first == EC::ClientNotFound) {
@@ -358,6 +356,7 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
     PrintCliError_(prompt_manager_, "cd", rcm2.second);
     return rcm2;
   }
+  abs_path = info.path;
   if (info.type != PathType::DIR) {
     PrintCliError_(prompt_manager_, "cd", "Path is not a directory");
     return {EC::NotADirectory, "Path is not a directory"};
@@ -373,8 +372,7 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
   return {EC::Success, ""};
 }
 
-AMFileSystem::ECM AMFileSystem::print_clients(bool detail,
-                                              amf interrupt_flag) {
+AMFileSystem::ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   std::vector<std::string> seen;
 
