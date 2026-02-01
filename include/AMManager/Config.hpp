@@ -141,6 +141,11 @@ public:
                    const Value &value, bool dump_now = true);
 
   /**
+   * @brief Parse and set a host field from config set command arguments.
+   */
+  ECM SetHostValue(const std::vector<std::string> &args);
+
+  /**
    * @brief Load history data from .AMSFTP_History.toml into memory.
    */
   ECM LoadHistory();

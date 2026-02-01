@@ -825,3 +825,113 @@ PrompManager负责将历史数据写入replxx中
 在input返回且内容不为空且COREPROMPT钩子没有被触发时, 加入prompt到历史中
 
 程序退出时,获取replxx的history写回.AMSFTP_History.toml
+sftp, ch, ftp, connect连接成功后, 或切换到该client
+
+
+
+CLI11在非交互模式下无法通过-h打印使用说明,  而是返回This should be caught in your main function, see examples
+
+
+新设一个CLIBind.cpp, 将CLIBind.hpp中函数的具体定义移到其中
+
+CliCommands中存一个CLI的app的指针, DispatchCliCommands中获取const bool any_parsed =可以用app.get_subcommands()方法(去查header找函数)
+
+
+# 以下是关于CLI绑定及其对应工作函数的修改
+
+ps: 在add_subcommand, 尽量将相关的函数放在一起
+
+config的ls的-d选项改名为-l, --list  效果等同
+
+config 添加一个函数SetHostValue, 绑定cli名称为set(在config subcommand中), 函数可在非交互模式下使用
+
+config set wsl  username haha
+
+set在cli中接收有且仅有三个字符串(nickname, 属性名, 属性值), 需要在SetHostValue中解析
+
+nickname不存在, 属性名不存在, 或者属性值非法 都报错
+
+更改成功时需要提示, 案例:  wsl.username:   am  ->   haha
+
+
+config绑定一个save函数, 对应dump, 无需参数
+
+
+host的config新加一个compression的字段, 字段排序(打印或者询问用户时)
+
+
+nickname="wsl"
+
+hostname="172.26.36.83"
+
+username="am"
+
+port=22
+
+password="enc:70746B72"
+
+protocol="sftp"
+
+buffer_size=-1
+
+trash_dir="/home/am/trash"
+
+login_dir="/home/am"
+
+keyfile=""
+
+compression=false
+
+
+新增一个client subcommand(和config, task类似 ), 并在该子命令下添加子命令
+
+ls (支持-l, --list选项)对应原绑定:
+
+commands.clients_cmd=app.add_subcommand("clients", "List client names");
+
+  commands.clients_cmd->add_flag("-d,--detail", args.clients.detail,"Show full status details");
+
+check  对应原绑定:
+
+  commands.check_cmd=app.add_subcommand("check", "Check client status");
+
+  commands.check_cmd ->add_option("nicknames", args.check.nicknames, "Client nicknames")->expected(0, -1);
+
+rm 对应原绑定:
+
+  commands.disconnect_cmd=
+
+    app.add_subcommand("disconnect", "Disconnect clients");
+
+  commands.disconnect_cmd ->add_option("nicknames", args.disconnect.nicknames, "Client nicknames to disconnect")->expected(1, -1);
+
+
+以下指令我做了修改, 你保证其他地方一致性
+
+  commands.task_list_cmd=commands.task_cmd->add_subcommand("list", "List tasks");
+
+  commands.task_inspect_cmd=commands.task_cmd->add_subcommand("inspect", "Inspect a task");
+
+
+  commands.task_userset_cmd
+
+    ->add_option("index", args.task_userset.index, "Cache index")
+
+    ->expected(0, -1);
+
+可接收任意数量的index, 但需要对index进行去重
+
+没有index传入打印所有cached的userset
+
+
+  commands.task_taskentry_cmd=
+
+    commands.task_cmd->add_subcommand("taskentry", "Inspect task entry");
+
+  commands.task_taskentry_cmd->add_option("id", args.task_entry.id, "Entry ID")
+
+    ->required()
+
+    ->expected(1, 1);
+
+改名为query, 可1+个ID
