@@ -3,9 +3,16 @@
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
 #include "AMBase/cfgffi.h"
+#include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
+#include <functional>
 #include <map>
+#include <mutex>
+#include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -23,12 +30,30 @@ public:
     std::string login_dir = "";
   };
 
+  /**
+   * @brief Known host entry for SSH fingerprint verification.
+   */
+  struct KnownHostEntry {
+    std::string nickname;
+    std::string hostname;
+    int port = 0;
+    std::string protocol;
+    std::string fingerprint;
+    std::string fingerprint_sha256;
+  };
+
+  using KnownHostCallback =
+      std::function<ECM(AMConfigManager::KnownHostEntry)>;
+
   static AMConfigManager &Instance();
 
   AMConfigManager(const AMConfigManager &) = delete;
   AMConfigManager &operator=(const AMConfigManager &) = delete;
   AMConfigManager(AMConfigManager &&) = delete;
   AMConfigManager &operator=(AMConfigManager &&) = delete;
+
+  /** @brief Stop the background writer and release config handles. */
+  ~AMConfigManager();
 
   ECM Init();
   ECM Dump();
@@ -42,6 +67,20 @@ public:
   [[nodiscard]] std::vector<std::string> ListHostnames() const;
   [[nodiscard]] std::pair<ECM, std::vector<std::string>>
   PrivateKeys(bool print_sign = false) const;
+  /**
+   * @brief Find a known host entry by hostname, port, and protocol.
+   */
+  [[nodiscard]] std::pair<ECM, std::optional<KnownHostEntry>>
+  FindKnownHost(const std::string &hostname, int port,
+                const std::string &protocol) const;
+  /**
+   * @brief Insert or update a known host entry and optionally persist it.
+   */
+  ECM UpsertKnownHost(const KnownHostEntry &entry, bool dump_now = true);
+  /**
+   * @brief Build a known host verification callback for SFTP clients.
+   */
+  KnownHostCallback BuildKnownHostCallback();
   /** Return the project root directory path. */
   [[nodiscard]] std::filesystem::path ProjectRoot() const { return root_dir_; }
   [[nodiscard]] std::pair<ECM, ClientConfig>
@@ -101,6 +140,16 @@ public:
   ECM SetHostField(const std::string &nickname, const std::string &field,
                    const Value &value, bool dump_now = true);
 
+  /**
+   * @brief Submit a no-arg write task to the background writer thread.
+   */
+  void SubmitWriteTask(std::function<void()> task);
+
+  /**
+   * @brief Backup config/settings/known_hosts when the interval elapses.
+   */
+  ECM ConfigBackupIfNeeded();
+
   /** Query a value at path for config/settings JSON. */
   bool QueryKey(const nlohmann::ordered_json &root, const Path &path,
                 Value *value) const;
@@ -148,20 +197,46 @@ private:
   ECM PromptModifyFields(const std::string &nickname, HostEntry *entry);
   bool ParsePositiveInt(const std::string &input, int64_t *value) const;
 
+  /** @brief Start the background writer thread if not running. */
+  void StartWriteThread_();
+  /** @brief Stop the background writer thread and drain pending tasks. */
+  void StopWriteThread_();
+  /** @brief Background worker loop for serialized write tasks. */
+  void WriteThreadLoop_();
+  /**
+   * @brief Write a TOML snapshot to a target path using the given handle.
+   */
+  void WriteSnapshotToPath_(ConfigHandle *handle, const std::string &json,
+                            const std::filesystem::path &out_path) const;
+
   std::filesystem::path root_dir_;
   std::filesystem::path config_path_;
   std::filesystem::path settings_path_;
+  std::filesystem::path known_hosts_path_;
   /** JSON schema path for config.toml filtering. */
   std::filesystem::path config_schema_path_;
   /** JSON schema path for settings.toml filtering. */
   std::filesystem::path settings_schema_path_;
+  /** JSON schema path for known_hosts.toml filtering. */
+  std::filesystem::path known_hosts_schema_path_;
   nlohmann::ordered_json config_json_;
   nlohmann::ordered_json settings_json_;
+  nlohmann::ordered_json known_hosts_json_;
   ConfigHandle *config_handle_ = nullptr;
   ConfigHandle *settings_handle_ = nullptr;
+  ConfigHandle *known_hosts_handle_ = nullptr;
+  KnownHostCallback known_host_cb_ = {};
 
   std::vector<FormatPath> config_filters_;
   std::vector<FormatPath> settings_filters_;
+
+  std::mutex write_mtx_;
+  std::condition_variable write_cv_;
+  std::deque<std::function<void()>> write_queue_;
+  std::thread write_thread_;
+  std::atomic<bool> write_running_{false};
+  std::mutex handle_mtx_;
+  bool backup_prune_checked_ = false;
 
   bool initialized_ = false;
   bool exit_hook_installed_ = false;

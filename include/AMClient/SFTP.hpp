@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <ctime>
+#include <functional>
 #include <fcntl.h>
 #include <fstream>
 #include <memory>
@@ -21,8 +22,9 @@
 // 标准库
 
 // 自身依赖
-#include "AMClient/Base.hpp"
 #include "AMBase/CommonTools.hpp"
+#include "AMClient/Base.hpp"
+#include "AMManager/Config.hpp"
 
 // 自身依赖
 
@@ -33,6 +35,7 @@
 #include <magic_enum/magic_enum.hpp>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
+#include <openssl/sha.h>
 
 // 第三方库
 
@@ -221,6 +224,98 @@ private:
   bool password_auth_cb = false;
   std::vector<std::string> private_keys = {};
   AuthCallback auth_cb = {}; // optional<string>(AuthCBInfo)
+  using KnownHostCallback =
+      std::function<ECM(AMConfigManager::KnownHostEntry)>;
+  KnownHostCallback known_host_cb = {};
+
+  /**
+   * @brief Encode binary data as RFC 4648 Base64 without line breaks.
+   */
+  static std::string Base64Encode(const unsigned char *data, size_t len) {
+    static const char kBase64Alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    if (!data || len == 0) {
+      return "";
+    }
+    std::string out;
+    out.reserve(((len + 2) / 3) * 4);
+    for (size_t i = 0; i < len; i += 3) {
+      uint32_t chunk = static_cast<uint32_t>(data[i]) << 16;
+      const size_t remain = len - i;
+      if (remain > 1) {
+        chunk |= static_cast<uint32_t>(data[i + 1]) << 8;
+      }
+      if (remain > 2) {
+        chunk |= static_cast<uint32_t>(data[i + 2]);
+      }
+      out.push_back(kBase64Alphabet[(chunk >> 18) & 0x3F]);
+      out.push_back(kBase64Alphabet[(chunk >> 12) & 0x3F]);
+      out.push_back(remain > 1 ? kBase64Alphabet[(chunk >> 6) & 0x3F] : '=');
+      out.push_back(remain > 2 ? kBase64Alphabet[chunk & 0x3F] : '=');
+    }
+    return out;
+  }
+
+  /**
+   * @brief Map libssh2 host key type to the OpenSSH protocol string.
+   */
+  static std::string HostKeyTypeToProtocol(int type) {
+    switch (type) {
+    case LIBSSH2_HOSTKEY_TYPE_RSA:
+      return "ssh-rsa";
+    case LIBSSH2_HOSTKEY_TYPE_DSS:
+      return "ssh-dss";
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_256:
+      return "ecdsa-sha2-nistp256";
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_384:
+      return "ecdsa-sha2-nistp384";
+    case LIBSSH2_HOSTKEY_TYPE_ECDSA_521:
+      return "ecdsa-sha2-nistp521";
+    case LIBSSH2_HOSTKEY_TYPE_ED25519:
+      return "ssh-ed25519";
+    default:
+      return "";
+    }
+  }
+
+  /**
+   * @brief Verify the remote host key using an external callback when set.
+   */
+  ECM VerifyKnownHostFingerprint() {
+    if (!known_host_cb) {
+      return {EC::Success, ""};
+    }
+
+    size_t key_len = 0;
+    int key_type = LIBSSH2_HOSTKEY_TYPE_UNKNOWN;
+    const char *key_ptr = libssh2_session_hostkey(session, &key_len, &key_type);
+    if (!key_ptr || key_len == 0) {
+      return {EC::HostkeyInitFailed, "Failed to read host key from session"};
+    }
+
+    const std::string actual_protocol = HostKeyTypeToProtocol(key_type);
+    if (actual_protocol.empty()) {
+      return {EC::AlgorithmUnsupported, "Unsupported host key algorithm"};
+    }
+
+    const unsigned char *key_bytes =
+        reinterpret_cast<const unsigned char *>(key_ptr);
+    const std::string actual_fp = Base64Encode(key_bytes, key_len);
+    unsigned char digest[SHA256_DIGEST_LENGTH];
+    std::string actual_sha;
+    if (SHA256(key_bytes, key_len, digest)) {
+      actual_sha = Base64Encode(digest, SHA256_DIGEST_LENGTH);
+    }
+
+    AMConfigManager::KnownHostEntry entry;
+    entry.nickname = res_data.nickname;
+    entry.hostname = res_data.hostname;
+    entry.port = res_data.port;
+    entry.protocol = actual_protocol;
+    entry.fingerprint = actual_fp;
+    entry.fingerprint_sha256 = actual_sha;
+    return known_host_cb(std::move(entry));
+  }
 
   void LoadDefaultPrivateKeys() {
     trace(TraceLevel::Debug, EC::Success, "~/.ssh", "LoadDefaultPrivateKeys",
@@ -495,6 +590,15 @@ public:
       goto interrupted_or_sock_error;
     }
 
+    rcm = VerifyKnownHostFingerprint();
+    if (rcm.first != EC::Success) {
+      trace(TraceLevel::Error, rcm.first, res_data.hostname,
+            "VerifyKnownHostFingerprint", rcm.second);
+      libssh2_session_set_blocking(session, 1);
+      Disconnect();
+      return rcm;
+    }
+
     // 获取认证列表（非阻塞）
 
     while ((auth_list =
@@ -725,6 +829,12 @@ public:
   void SetAuthCallback(AuthCallback auth_cb = {}) {
     this->auth_cb = std::move(auth_cb);
     this->password_auth_cb = static_cast<bool>(this->auth_cb);
+  }
+  /**
+   * @brief Set callback to verify or record known host fingerprints.
+   */
+  void SetKnownHostCallback(KnownHostCallback cb = {}) {
+    this->known_host_cb = std::move(cb);
   }
 };
 
@@ -2978,5 +3088,3 @@ public:
     return {ECM{EC::Success, ""}, result_dict};
   }
 };
-
-

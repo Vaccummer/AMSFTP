@@ -42,6 +42,17 @@ int main2() {
 }
 
 namespace fs = std::filesystem;
+
+/** @brief Temporary development entry point for signal monitor testing. */
+int main224(int argc, char **argv) {
+  auto &signal_monitor = AMCliSignalMonitor::Instance();
+  signal_monitor.InstallHandlers();
+  signal_monitor.Start();
+  std::string tmp_test = "";
+  std::cin >> tmp_test;
+  return 0;
+}
+
 /** @brief Program entry point that forwards to the AMSFTP CLI runner. */
 /** @brief Core AMSFTP CLI entry that initializes managers and dispatches. */
 int main(int argc, char **argv) {
@@ -106,13 +117,4 @@ int main(int argc, char **argv) {
     std::cerr << "Unexpected error: " << e.what() << std::endl;
     return -13;
   }
-}
-/** @brief Temporary development entry point for signal monitor testing. */
-int main224(int argc, char **argv) {
-  auto &signal_monitor = AMCliSignalMonitor::Instance();
-  signal_monitor.InstallHandlers();
-  signal_monitor.Start();
-  std::string tmp_test = "";
-  std::cin >> tmp_test;
-  return 0;
 }

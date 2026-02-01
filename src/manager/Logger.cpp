@@ -1,6 +1,7 @@
 #include "AMManager/Logger.hpp"
 #include "AMBase/Enum.hpp"
 #include <magic_enum/magic_enum.hpp>
+#include <fstream>
 #include <sstream>
 
 /** Return the singleton instance initialized with the config manager. */
@@ -9,7 +10,7 @@ AMLogManager &AMLogManager::Instance(AMConfigManager &cfg) {
   return instance;
 }
 
-/** Initialize log manager with settings and start worker thread. */
+/** Initialize log manager with settings and resolve log path. */
 AMLogManager::AMLogManager(AMConfigManager &cfg)
     : config_(cfg), prompt_manager_(AMPromptManager::Instance()) {
   int initial = config_.GetSettingInt({"InternalVars", "TraceLevel"}, 4);
@@ -17,26 +18,15 @@ AMLogManager::AMLogManager(AMConfigManager &cfg)
   auto root = config_.ProjectRoot();
   log_path_ =
       root.empty() ? std::filesystem::path("AMSFTP.log") : root / "AMSFTP.log";
-  running_.store(true);
-  worker_ = std::thread([this]() { WorkerLoop(); });
 }
 
-/** Stop worker thread and close log file if needed. */
+/** Cleanup log manager resources. */
 AMLogManager::~AMLogManager() {
-  running_.store(false);
-  queue_cv_.notify_all();
-  if (worker_.joinable()) {
-    worker_.join();
-  }
 }
 
 /** Enqueue a log entry for the writer thread. */
 void AMLogManager::Enqueue(const TraceInfo &info) {
-  {
-    std::lock_guard<std::mutex> lock(queue_mtx_);
-    queue_.push_back(info);
-  }
-  queue_cv_.notify_one();
+  config_.SubmitWriteTask([this, info]() { WriteLogEntry_(info); });
 }
 
 /** Provide a trace callback for AMTracer that enqueues log entries. */
@@ -54,74 +44,28 @@ int AMLogManager::TraceLevel(int value) {
   return clamped;
 }
 
-/** Worker loop that writes queued entries to the log file. */
-void AMLogManager::WorkerLoop() {
-  while (running_.load()) {
-    TraceInfo item;
-    {
-      std::unique_lock<std::mutex> lock(queue_mtx_);
-      queue_cv_.wait(lock,
-                     [this]() { return !running_.load() || !queue_.empty(); });
-      if (!running_.load() && queue_.empty()) {
-        break;
-      }
-      item = queue_.front();
-      queue_.pop_front();
-    }
-
-    if (ToLevelInt(item.level) > trace_level_.load()) {
-      continue;
-    }
-
-    try {
-      if (!EnsureLogFile()) {
-        continue;
-      }
-      std::string time_str = FormatTime(static_cast<uint64_t>(item.timestamp),
-                                        "%Y/%m/%d %H:%M:%S");
-      std::ostringstream line;
-      line << time_str << " " << std::string(magic_enum::enum_name(item.level))
-           << " " << item.nickname << " " << item.action << " " << item.target
-           << " " << item.message;
-      log_file_ << line.str() << std::endl;
-    } catch (const std::exception &ex) {
-      prompt_manager_.ErrorFormat("LogManager", ex.what(), false, 0, __func__);
-      if (log_file_.is_open()) {
-        log_file_.close();
-      }
-    } catch (...) {
-      prompt_manager_.ErrorFormat("LogManager", "Unknown log error", false, 0,
-                                  __func__);
-      if (log_file_.is_open()) {
-        log_file_.close();
-      }
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(queue_mtx_);
-      if (queue_.empty() && log_file_.is_open()) {
-        log_file_.close();
-      }
-    }
+/** Write a log entry to disk using the background writer thread. */
+void AMLogManager::WriteLogEntry_(const TraceInfo &info) {
+  if (ToLevelInt(info.level) > trace_level_.load()) {
+    return;
   }
-}
 
-/** Ensure the log file is open and ready for writing. */
-bool AMLogManager::EnsureLogFile() {
-  if (log_file_.is_open()) {
-    return true;
-  }
   try {
-    log_file_.open(log_path_, std::ios::app);
-    log_file_.exceptions(std::ofstream::failbit | std::ofstream::badbit);
-    return log_file_.is_open();
+    std::ofstream log_file(log_path_, std::ios::app);
+    log_file.exceptions(std::ofstream::failbit | std::ofstream::badbit);
+    std::string time_str =
+        FormatTime(static_cast<uint64_t>(info.timestamp),
+                   "%Y/%m/%d %H:%M:%S");
+    std::ostringstream line;
+    line << time_str << " " << std::string(magic_enum::enum_name(info.level))
+         << " " << info.nickname << " " << info.action << " " << info.target
+         << " " << info.message;
+    log_file << line.str() << std::endl;
   } catch (const std::exception &ex) {
     prompt_manager_.ErrorFormat("LogManager", ex.what(), false, 0, __func__);
-    return false;
   } catch (...) {
-    prompt_manager_.ErrorFormat("LogManager", "Unknown log open error", false,
-                                0, __func__);
-    return false;
+    prompt_manager_.ErrorFormat("LogManager", "Unknown log error", false, 0,
+                                __func__);
   }
 }
 

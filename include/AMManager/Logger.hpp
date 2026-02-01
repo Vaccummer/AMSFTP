@@ -4,12 +4,8 @@
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
 #include <atomic>
-#include <condition_variable>
-#include <deque>
 #include <filesystem>
-#include <fstream>
-#include <mutex>
-#include <thread>
+#include <functional>
 
 
 class AMLogManager {
@@ -26,7 +22,7 @@ public:
   /** Disable move assignment. */
   AMLogManager &operator=(AMLogManager &&) = delete;
 
-  /** Shutdown worker thread and flush pending logs. */
+  /** Cleanup log manager resources. */
   ~AMLogManager();
 
   /** Enqueue a trace entry for asynchronous logging. */
@@ -42,14 +38,11 @@ public:
   int TraceLevel(int value = -99999);
 
 private:
-  /** Construct with config manager and start worker thread. */
+  /** Construct with config manager and resolve log settings. */
   explicit AMLogManager(AMConfigManager &cfg);
 
-  /** Worker loop that writes queued log entries to disk. */
-  void WorkerLoop();
-
-  /** Ensure the log file is open; returns true on success. */
-  bool EnsureLogFile();
+  /** Write a log entry to disk using the background writer thread. */
+  void WriteLogEntry_(const TraceInfo &info);
 
   /** Clamp trace level to the valid range [-1, 4]. */
   static int ClampTraceLevel(int value);
@@ -60,11 +53,5 @@ private:
   AMConfigManager &config_;
   AMPromptManager &prompt_manager_;
   std::filesystem::path log_path_;
-  std::ofstream log_file_;
-  std::mutex queue_mtx_;
-  std::condition_variable queue_cv_;
-  std::deque<TraceInfo> queue_;
-  std::thread worker_;
-  std::atomic<bool> running_{false};
   std::atomic<int> trace_level_{4};
 };
