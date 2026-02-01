@@ -643,6 +643,59 @@ public:
     oss << units[idx];
     return oss.str();
   }
+  /**
+   * @brief Read a password from the console with masked input.
+   */
+  static std::string ReadMaskedPassword(const std::string &prompt) {
+    std::string password;
+    std::cout << prompt << std::flush;
+#ifdef _WIN32
+    while (true) {
+      int ch = _getch();
+      if (ch == '\r' || ch == '\n') {
+        break;
+      }
+      if (ch == '\b') {
+        if (!password.empty()) {
+          password.pop_back();
+          std::cout << "\b \b" << std::flush;
+        }
+        continue;
+      }
+      if (ch == 0 || ch == 224) {
+        (void)_getch();
+        continue;
+      }
+      password.push_back(static_cast<char>(ch));
+      std::cout << "•" << std::flush;
+    }
+#else
+    termios oldt{};
+    termios newt{};
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= static_cast<unsigned long>(~(ECHO | ICANON));
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    while (true) {
+      int ch = ::getchar();
+      if (ch == '\n' || ch == '\r' || ch == EOF) {
+        break;
+      }
+      if (ch == 127 || ch == 8) {
+        if (!password.empty()) {
+          password.pop_back();
+          std::cout << "\b \b" << std::flush;
+        }
+        continue;
+      }
+      password.push_back(static_cast<char>(ch));
+      std::cout << "•" << std::flush;
+    }
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+#endif
+    std::cout << std::endl;
+    return password;
+  }
 
 private:
   AMConfigManager &config_;
@@ -887,60 +940,6 @@ private:
     if (disconnect_cb_) {
       CallCallbackSafe(disconnect_cb_, client, ecm);
     }
-  }
-
-  /**
-   * @brief Read a password from the console with masked input.
-   */
-  static std::string ReadMaskedPassword(const std::string &prompt) {
-    std::string password;
-    std::cout << prompt << std::flush;
-#ifdef _WIN32
-    while (true) {
-      int ch = _getch();
-      if (ch == '\r' || ch == '\n') {
-        break;
-      }
-      if (ch == '\b') {
-        if (!password.empty()) {
-          password.pop_back();
-          std::cout << "\b \b" << std::flush;
-        }
-        continue;
-      }
-      if (ch == 0 || ch == 224) {
-        (void)_getch();
-        continue;
-      }
-      password.push_back(static_cast<char>(ch));
-      std::cout << "•" << std::flush;
-    }
-#else
-    termios oldt{};
-    termios newt{};
-    tcgetattr(STDIN_FILENO, &oldt);
-    newt = oldt;
-    newt.c_lflag &= static_cast<unsigned long>(~(ECHO | ICANON));
-    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-    while (true) {
-      int ch = ::getchar();
-      if (ch == '\n' || ch == '\r' || ch == EOF) {
-        break;
-      }
-      if (ch == 127 || ch == 8) {
-        if (!password.empty()) {
-          password.pop_back();
-          std::cout << "\b \b" << std::flush;
-        }
-        continue;
-      }
-      password.push_back(static_cast<char>(ch));
-      std::cout << "•" << std::flush;
-    }
-    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-#endif
-    std::cout << std::endl;
-    return password;
   }
 
   /**
