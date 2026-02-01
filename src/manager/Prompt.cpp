@@ -11,6 +11,7 @@
 #include <replxx.h>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 
 namespace {
 ReplxxActionResult EscAbortHandler(Replxx *rx, unsigned int, void *ud) {
@@ -39,6 +40,7 @@ void HighlightCallback(const char *input, ReplxxColor *colors, int size,
   self->token_analyzer_->Highlight(
       std::string(input, static_cast<size_t>(size)), colors, size);
 }
+
 } // namespace
 
 AMPromptManager &AMPromptManager::Instance() {
@@ -56,6 +58,10 @@ AMPromptManager::AMPromptManager() {
   // }
   if (core_replxx_) {
     replxx_set_highlighter_callback(core_replxx_, HighlightCallback, this);
+    replxx_bind_key(core_replxx_, REPLXX_KEY_UP,
+                    &AMPromptManager::HistoryUpHandler_, this);
+    replxx_bind_key(core_replxx_, REPLXX_KEY_DOWN,
+                    &AMPromptManager::HistoryDownHandler_, this);
   }
 
   AMCliSignalMonitor::SignalHook hook;
@@ -329,6 +335,7 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
   }
 
   esc_pressed_ = false;
+  ResetHistorySession_();
 
   if (!core_replxx_) {
     return true;
@@ -344,5 +351,235 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
     return true;
   }
   *out_input = std::string(line);
+  ResetHistorySession_();
   return esc_pressed_;
+}
+
+/**
+ * @brief Enable or disable history navigation for arrow keys.
+ */
+void AMPromptManager::SetHistoryEnabled(bool enabled) {
+  history_enabled_ = enabled;
+  if (!history_enabled_) {
+    ResetHistorySession_();
+  }
+}
+
+/**
+ * @brief Load history for a nickname into replxx core.
+ */
+void AMPromptManager::LoadHistory(AMConfigManager &config_manager,
+                                  const std::string &nickname) {
+  if (!core_replxx_) {
+    return;
+  }
+  if (nickname.empty()) {
+    return;
+  }
+  if (history_loaded_ && history_nickname_ == nickname) {
+    return;
+  }
+  if (history_loaded_ && !history_nickname_.empty()) {
+    FlushHistory(config_manager);
+  }
+  history_nickname_ = nickname;
+  history_loaded_ = true;
+
+  max_history_count_ = config_manager.ResolveMaxHistoryCount(10);
+  replxx_set_max_history_size(core_replxx_, max_history_count_);
+  replxx_set_unique_history(core_replxx_, 1);
+  replxx_history_clear(core_replxx_);
+
+  std::vector<std::string> commands;
+  ECM status = config_manager.GetHistoryCommands(nickname, &commands);
+  if (status.first != ErrorCode::Success) {
+    ErrorFormat("HistoryLoad", status.second, false, 0, __func__);
+    return;
+  }
+  std::vector<std::string> normalized =
+      NormalizeHistory_(commands, max_history_count_);
+  for (const auto &cmd : normalized) {
+    replxx_history_add(core_replxx_, cmd.c_str());
+  }
+  if (normalized != commands) {
+    (void)config_manager.SetHistoryCommands(nickname, normalized, true);
+  }
+}
+
+/**
+ * @brief Flush current replxx history back into ConfigManager.
+ */
+void AMPromptManager::FlushHistory(AMConfigManager &config_manager) {
+  if (!history_loaded_ || history_nickname_.empty()) {
+    return;
+  }
+  max_history_count_ = config_manager.ResolveMaxHistoryCount(10);
+  std::vector<std::string> commands = CollectHistory_();
+  std::vector<std::string> normalized =
+      NormalizeHistory_(commands, max_history_count_);
+  ECM status =
+      config_manager.SetHistoryCommands(history_nickname_, normalized, true);
+  if (status.first != ErrorCode::Success) {
+    ErrorFormat("HistorySave", status.second, false, 0, __func__);
+  }
+}
+
+/**
+ * @brief Add a history entry to replxx core history.
+ */
+void AMPromptManager::AddHistoryEntry(const std::string &line) {
+  if (!core_replxx_) {
+    return;
+  }
+  if (line.empty()) {
+    return;
+  }
+  replxx_history_add(core_replxx_, line.c_str());
+}
+
+/**
+ * @brief Collect current replxx history into a list.
+ */
+std::vector<std::string> AMPromptManager::CollectHistory_() const {
+  std::vector<std::string> out;
+  if (!core_replxx_) {
+    return out;
+  }
+  ReplxxHistoryScan *scan = replxx_history_scan_start(core_replxx_);
+  if (!scan) {
+    return out;
+  }
+  ReplxxHistoryEntry entry{};
+  while (replxx_history_scan_next(core_replxx_, scan, &entry) == 0) {
+    if (entry.text && entry.text[0] != '\0') {
+      out.emplace_back(entry.text);
+    }
+  }
+  replxx_history_scan_stop(core_replxx_, scan);
+  return out;
+}
+
+/**
+ * @brief Reset history navigation session state.
+ */
+void AMPromptManager::ResetHistorySession_() {
+  history_session_active_ = false;
+  history_session_index_ = -1;
+  history_session_entries_.clear();
+  history_session_current_.clear();
+  history_original_input_.clear();
+}
+
+/**
+ * @brief Start a history navigation session from current input.
+ */
+void AMPromptManager::StartHistorySession_() {
+  if (!core_replxx_) {
+    return;
+  }
+  if (history_session_active_) {
+    return;
+  }
+  ReplxxState state{};
+  replxx_get_state(core_replxx_, &state);
+  history_original_input_ = state.text ? state.text : "";
+  history_session_entries_ = CollectHistory_();
+  const int history_count = static_cast<int>(history_session_entries_.size());
+  if (!history_original_input_.empty()) {
+    history_session_entries_.push_back(history_original_input_);
+  }
+  history_session_entries_.push_back(std::string());
+  history_session_index_ = history_count;
+  history_session_active_ = true;
+}
+
+/**
+ * @brief Apply a history entry to the replxx buffer.
+ */
+void AMPromptManager::ApplyHistoryEntry_(const std::string &line) {
+  if (!core_replxx_) {
+    return;
+  }
+  history_session_current_ = line;
+  ReplxxState state{};
+  state.text = history_session_current_.c_str();
+  state.cursorPosition = static_cast<int>(history_session_current_.size());
+  replxx_set_state(core_replxx_, &state);
+}
+
+/**
+ * @brief Normalize history to unique entries with max size.
+ */
+std::vector<std::string>
+AMPromptManager::NormalizeHistory_(const std::vector<std::string> &input,
+                                   int max_count) const {
+  std::vector<std::string> reversed;
+  reversed.reserve(input.size());
+  std::unordered_set<std::string> seen;
+  for (auto it = input.rbegin(); it != input.rend(); ++it) {
+    if (it->empty()) {
+      continue;
+    }
+    if (seen.insert(*it).second) {
+      reversed.push_back(*it);
+    }
+  }
+  std::reverse(reversed.begin(), reversed.end());
+  if (max_count > 0 &&
+      reversed.size() > static_cast<size_t>(max_count)) {
+    reversed.erase(reversed.begin(),
+                   reversed.end() - static_cast<size_t>(max_count));
+  }
+  return reversed;
+}
+
+/**
+ * @brief Handle the Up key for history or completion navigation.
+ */
+ReplxxActionResult AMPromptManager::HistoryUpHandler_(int code, void *ud) {
+  auto *self = static_cast<AMPromptManager *>(ud);
+  if (!self || !self->core_replxx_) {
+    return REPLXX_ACTION_RESULT_CONTINUE;
+  }
+  if (!self->history_enabled_) {
+    return replxx_invoke(self->core_replxx_, REPLXX_ACTION_COMPLETE_PREVIOUS,
+                         static_cast<unsigned int>(code));
+  }
+  if (!self->history_session_active_) {
+    self->StartHistorySession_();
+  }
+  if (!self->history_session_active_ ||
+      self->history_session_entries_.empty()) {
+    return REPLXX_ACTION_RESULT_CONTINUE;
+  }
+  if (self->history_session_index_ > 0) {
+    --self->history_session_index_;
+  }
+  self->ApplyHistoryEntry_(
+      self->history_session_entries_[self->history_session_index_]);
+  return REPLXX_ACTION_RESULT_CONTINUE;
+}
+
+/**
+ * @brief Handle the Down key for history or completion navigation.
+ */
+ReplxxActionResult AMPromptManager::HistoryDownHandler_(int code, void *ud) {
+  auto *self = static_cast<AMPromptManager *>(ud);
+  if (!self || !self->core_replxx_) {
+    return REPLXX_ACTION_RESULT_CONTINUE;
+  }
+  if (!self->history_enabled_) {
+    return replxx_invoke(self->core_replxx_, REPLXX_ACTION_COMPLETE_NEXT,
+                         static_cast<unsigned int>(code));
+  }
+  if (!self->history_session_active_) {
+    return REPLXX_ACTION_RESULT_CONTINUE;
+  }
+  if (self->history_session_index_ + 1 <
+      static_cast<int>(self->history_session_entries_.size())) {
+    ++self->history_session_index_;
+  }
+  self->ApplyHistoryEntry_(
+      self->history_session_entries_[self->history_session_index_]);
+  return REPLXX_ACTION_RESULT_CONTINUE;
 }

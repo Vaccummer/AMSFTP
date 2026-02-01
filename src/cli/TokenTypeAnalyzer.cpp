@@ -154,10 +154,16 @@ AMTokenTypeAnalyzer::Tokenize(const std::string &input) const {
       quoted = true;
       char quote = input[i];
       ++i;
-      while (i < input.size() && input[i] != quote) {
-        ++i;
-      }
-      if (i < input.size()) {
+      while (i < input.size()) {
+        if (input[i] == '`' && i + 1 < input.size() &&
+            (input[i + 1] == '"' || input[i + 1] == '\'')) {
+          i += 2;
+          continue;
+        }
+        if (input[i] == quote) {
+          ++i;
+          break;
+        }
         ++i;
       }
     } else {

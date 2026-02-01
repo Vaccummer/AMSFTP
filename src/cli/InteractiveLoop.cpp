@@ -3,6 +3,7 @@
 #include "AMBase/Path.hpp"
 #include "AMCLI/CommandPreprocess.hpp"
 #include "AMManager/SignalMonitor.hpp"
+#include <algorithm>
 #include <chrono>
 #include <cctype>
 #include <cstdlib>
@@ -267,6 +268,14 @@ int RunInteractiveLoop(const std::string &app_name,
       break;
     }
 
+    auto history_client = ResolveActiveClient_(client_manager);
+    std::string history_nickname =
+        history_client ? history_client->GetNickname() : std::string("local");
+    if (history_nickname.empty()) {
+      history_nickname = "local";
+    }
+    prompt.LoadHistory(config_manager, history_nickname);
+
     const std::string prompt_text =
         BuildPrompt_(prompt_state, client_manager, config_manager);
 
@@ -301,6 +310,7 @@ int RunInteractiveLoop(const std::string &app_name,
     if (trimmed.empty()) {
       continue;
     }
+    prompt.AddHistoryEntry(trimmed);
 
     if (AMStr::lowercase(trimmed) == "exit") {
       break;
@@ -358,7 +368,11 @@ int RunInteractiveLoop(const std::string &app_name,
     CliCommands cli_commands = BindCliOptions(app, args_pool);
 
     try {
-      app.parse(pre_result.command, false);
+      std::vector<std::string> cli_args =
+          AMCommandPreprocessor::SplitCliTokens(pre_result.command);
+      // CLI11 consumes args via pop_back, so reverse to preserve order.
+      std::reverse(cli_args.begin(), cli_args.end());
+      app.parse(cli_args);
     } catch (const CLI::ParseError &e) {
       const std::string parse_msg = e.what();
       prompt.Print(parse_msg);
@@ -375,6 +389,7 @@ int RunInteractiveLoop(const std::string &app_name,
     UpdatePromptState_(prompt_state, dispatch.rcm, exec_end - input_confirmed);
   }
 
+  prompt.FlushHistory(config_manager);
   AMIsInteractive.store(false);
   return g_cli_exit_code;
 }

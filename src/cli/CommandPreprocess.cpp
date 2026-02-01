@@ -1,5 +1,7 @@
 #include "AMCLI/CommandPreprocess.hpp"
 #include "AMBase/CommonTools.hpp"
+#include <cstdint>
+#include <limits>
 #include <vector>
 
 using EC = ErrorCode;
@@ -51,10 +53,39 @@ static AMCommandPreprocessor::ECM ParseValue(const std::string &input,
       return {EC::InvalidArg, "Malformed quoted value"};
     }
     *value = trimmed.substr(1, trimmed.size() - 2);
+    if (!value->empty()) {
+      std::string unescaped;
+      unescaped.reserve(value->size());
+      for (size_t i = 0; i < value->size(); ++i) {
+        if ((*value)[i] == '`' && i + 1 < value->size() &&
+            ((*value)[i + 1] == '"' || (*value)[i + 1] == '\'')) {
+          unescaped.push_back((*value)[i + 1]);
+          ++i;
+          continue;
+        }
+        unescaped.push_back((*value)[i]);
+      }
+      *value = std::move(unescaped);
+    }
     return {EC::Success, ""};
   }
 
-  *value = trimmed;
+  if (!trimmed.empty()) {
+    std::string unescaped;
+    unescaped.reserve(trimmed.size());
+    for (size_t i = 0; i < trimmed.size(); ++i) {
+      if (trimmed[i] == '`' && i + 1 < trimmed.size() &&
+          (trimmed[i + 1] == '"' || trimmed[i + 1] == '\'')) {
+        unescaped.push_back(trimmed[i + 1]);
+        ++i;
+        continue;
+      }
+      unescaped.push_back(trimmed[i]);
+    }
+    *value = std::move(unescaped);
+  } else {
+    *value = trimmed;
+  }
   return {EC::Success, ""};
 }
 
@@ -219,7 +250,14 @@ static std::vector<std::string> SplitTokens(const std::string &input,
   bool in_single = false;
   bool in_double = false;
 
-  for (char c : input) {
+  for (size_t i = 0; i < input.size(); ++i) {
+    const char c = input[i];
+    if (c == '`' && i + 1 < input.size() &&
+        (input[i + 1] == '"' || input[i + 1] == '\'')) {
+      current.push_back(input[i + 1]);
+      ++i;
+      continue;
+    }
     if (in_single) {
       if (c == '\'') {
         in_single = false;
@@ -410,8 +448,7 @@ static AMCommandPreprocessor::ECM HandleAsyncSuffix(const std::string &input,
     return {EC::Success, ""};
   }
 
-  if (trimmed.size() < 2 ||
-      !AMStr::IsWhitespace(trimmed[trimmed.size() - 2])) {
+  if (trimmed.size() < 2 || !AMStr::IsWhitespace(trimmed[trimmed.size() - 2])) {
     *command = trimmed;
     return {EC::Success, ""};
   }
@@ -429,6 +466,14 @@ static AMCommandPreprocessor::ECM HandleAsyncSuffix(const std::string &input,
   *async_flag = true;
   *command = base;
   return {EC::Success, ""};
+}
+
+/**
+ * @brief Split a command line into CLI tokens for interactive parsing.
+ */
+std::vector<std::string>
+AMCommandPreprocessor::SplitCliTokens(const std::string &input) {
+  return SplitTokens(input, UINT64_MAX - 1);
 }
 
 /**
