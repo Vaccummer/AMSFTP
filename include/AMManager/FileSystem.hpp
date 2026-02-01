@@ -8,7 +8,6 @@
 #include <utility>
 #include <vector>
 
-
 class AMFileSystem {
 public:
   using ECM = std::pair<ErrorCode, std::string>;
