@@ -1,7 +1,7 @@
 #include "AMCLI/TokenTypeAnalyzer.hpp"
-#include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMCLI/CLIBind.hpp"
+#include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Var.hpp"
 #include <algorithm>
 #include <cctype>
@@ -103,10 +103,9 @@ bool ParseHexColorToken(const std::string &token, int *r, int *g, int *b) {
 
 std::string NormalizeColorToken(const std::string &token) {
   std::string normalized = AMStr::lowercase(AMStr::TrimWhitespaceCopy(token));
-  normalized.erase(
-      std::remove_if(normalized.begin(), normalized.end(),
-                     [](char c) { return c == '_' || c == '-'; }),
-      normalized.end());
+  normalized.erase(std::remove_if(normalized.begin(), normalized.end(),
+                                  [](char c) { return c == '_' || c == '-'; }),
+                   normalized.end());
   return normalized;
 }
 
@@ -380,7 +379,8 @@ void AMTokenTypeAnalyzer::BuildCliNode(CLI::App *app, const std::string &path,
   }
 
   for (auto *sub : subs) {
-    std::string next = path.empty() ? sub->get_name() : path + " " + sub->get_name();
+    std::string next =
+        path.empty() ? sub->get_name() : path + " " + sub->get_name();
     BuildCliNode(sub, next, false);
   }
 }
@@ -404,7 +404,8 @@ void AMTokenTypeAnalyzer::RefreshNicknameCache() {
   }
 }
 
-/** Split input into whitespace-delimited tokens while keeping quoted strings. */
+/** Split input into whitespace-delimited tokens while keeping quoted strings.
+ */
 std::vector<AMTokenTypeAnalyzer::Token>
 AMTokenTypeAnalyzer::Tokenize(const std::string &input) const {
   std::vector<Token> tokens;
@@ -446,8 +447,7 @@ AMTokenTypeAnalyzer::Tokenize(const std::string &input) const {
 
 /** Parse a variable token at a given position within a limit. */
 bool AMTokenTypeAnalyzer::ParseVarTokenAt(const std::string &input, size_t pos,
-                                          size_t limit,
-                                          size_t *out_end) const {
+                                          size_t limit, size_t *out_end) const {
   if (pos >= input.size() || input[pos] != '$') {
     return false;
   }
@@ -524,9 +524,8 @@ bool AMTokenTypeAnalyzer::ParseVarTokenText(const std::string &token,
 /** Map token types to replxx colors. */
 ReplxxColor AMTokenTypeAnalyzer::ColorForType(AMTokenType type) const {
   const char *style_key = StyleKeyForType(type);
-  const std::string style =
-      config_manager_.GetSettingString({"style", "InputHighlight", style_key},
-                                       "");
+  const std::string style = config_manager_.GetSettingString(
+      {"style", "InputHighlight", style_key}, "");
   return ParseInputHighlightStyle(style, DefaultColorForType(type));
 }
 
@@ -568,8 +567,8 @@ void AMTokenTypeAnalyzer::ApplyColor(const AMTokenSpan &span,
 }
 
 /** Apply a token type to a specific range with priority checks. */
-void AMTokenTypeAnalyzer::ApplyRange(size_t start, size_t end,
-                                     AMTokenType type, ReplxxColor *colors,
+void AMTokenTypeAnalyzer::ApplyRange(size_t start, size_t end, AMTokenType type,
+                                     ReplxxColor *colors,
                                      std::vector<int> &priorities,
                                      int size) const {
   if (!colors || size <= 0) {
@@ -595,12 +594,9 @@ void AMTokenTypeAnalyzer::ApplyRange(size_t start, size_t end,
 }
 
 /** Highlight a variable token by separating $ and the name. */
-void AMTokenTypeAnalyzer::HighlightVarToken(const std::string &input,
-                                            size_t token_start,
-                                            size_t token_end,
-                                            ReplxxColor *colors,
-                                            std::vector<int> &priorities,
-                                            int size) const {
+void AMTokenTypeAnalyzer::HighlightVarToken(
+    const std::string &input, size_t token_start, size_t token_end,
+    ReplxxColor *colors, std::vector<int> &priorities, int size) const {
   if (token_end <= token_start) {
     return;
   }
@@ -621,10 +617,8 @@ void AMTokenTypeAnalyzer::HighlightVarToken(const std::string &input,
              priorities, size);
 }
 
-AMTokenType AMTokenTypeAnalyzer::VarNameTypeFor(
-    const std::string &name) const {
-  return VarExists(name) ? AMTokenType::VarName
-                         : AMTokenType::VarNameMissing;
+AMTokenType AMTokenTypeAnalyzer::VarNameTypeFor(const std::string &name) const {
+  return VarExists(name) ? AMTokenType::VarName : AMTokenType::VarNameMissing;
 }
 
 bool AMTokenTypeAnalyzer::VarExists(const std::string &name) const {
@@ -720,8 +714,8 @@ void AMTokenTypeAnalyzer::HighlightNicknameAtSign(
 }
 
 /** Validate a token against the option set for a command node. */
-bool AMTokenTypeAnalyzer::IsValidOptionToken(
-    const std::string &token, const CommandNode *node) const {
+bool AMTokenTypeAnalyzer::IsValidOptionToken(const std::string &token,
+                                             const CommandNode *node) const {
   if (!node || token.size() < 2 || token[0] != '-') {
     return false;
   }
@@ -786,7 +780,8 @@ void AMTokenTypeAnalyzer::HighlightCommandsAndOptions(
           continue;
         }
         parsing = false;
-      } else if (node && node->subcommands.find(text) != node->subcommands.end()) {
+      } else if (node &&
+                 node->subcommands.find(text) != node->subcommands.end()) {
         ApplyRange(token.start, token.end, AMTokenType::Command, colors,
                    priorities, size);
         path += " " + text;
@@ -825,10 +820,11 @@ void AMTokenTypeAnalyzer::HighlightCommandsAndOptions(
 }
 
 /** Highlight var/del commands and handle assignment/value spans. */
-void AMTokenTypeAnalyzer::HighlightVarCommand(
-    const std::string &input, const std::vector<Token> &tokens,
-    ReplxxColor *colors, std::vector<int> &priorities, int size,
-    bool *handled) const {
+void AMTokenTypeAnalyzer::HighlightVarCommand(const std::string &input,
+                                              const std::vector<Token> &tokens,
+                                              ReplxxColor *colors,
+                                              std::vector<int> &priorities,
+                                              int size, bool *handled) const {
   if (handled) {
     *handled = false;
   }
