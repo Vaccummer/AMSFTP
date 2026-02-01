@@ -4,6 +4,7 @@
 #include "AMManager/Var.hpp"
 #include <string>
 #include <utility>
+#include <vector>
 
 class AMCommandPreprocessor {
 public:
@@ -27,6 +28,11 @@ public:
    * @brief Preprocess a raw interactive command line according to rules.
    */
   Result Preprocess(const std::string &input);
+
+  /**
+   * @brief Split an interactive command line into CLI argument tokens.
+   */
+  static std::vector<std::string> SplitCliTokens(const std::string &input);
 
 private:
   AMVarManager &var_manager_;

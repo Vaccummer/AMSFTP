@@ -54,7 +54,9 @@ enum class AMTokenType {
   Option,
   AtSign,
   DollarSign,
-  EqualSign
+  EqualSign,
+  VarNameMissing,
+  EscapeSign
 };
 
 struct AMTokenSpan {

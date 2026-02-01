@@ -676,6 +676,7 @@ ECM AMConfigManager::Init() {
   config_json_ = Json::object();
   settings_json_ = Json::object();
   known_hosts_json_ = Json::object();
+  history_json_ = Json::object();
 
   {
     std::string error;
@@ -974,26 +975,29 @@ ECM AMConfigManager::EnsureHistoryLoaded_() {
   }
   const std::string schema_json = kHistorySchemaJson;
   char *err = nullptr;
-  history_handle_ =
-      cfgffi_read(history_path_.string().c_str(), schema_json.c_str(), &err);
-  if (!history_handle_) {
-    std::string msg = err ? err : "cfgffi_read failed";
+  {
+    std::lock_guard<std::mutex> lock(handle_mtx_);
+    history_handle_ =
+        cfgffi_read(history_path_.string().c_str(), schema_json.c_str(), &err);
+    if (!history_handle_) {
+      std::string msg = err ? err : "cfgffi_read failed";
+      if (err)
+        cfgffi_free_string(err);
+      return Err(EC::ConfigLoadFailed,
+                 "failed to parse history file: " + msg);
+    }
     if (err)
       cfgffi_free_string(err);
-    return Err(EC::ConfigLoadFailed,
-               "failed to parse history file: " + msg);
-  }
-  if (err)
-    cfgffi_free_string(err);
-  char *json_c = cfgffi_get_json(history_handle_);
-  if (!json_c) {
-    return Err(EC::ConfigLoadFailed, "failed to read history json");
-  }
-  std::string json_str(json_c);
-  cfgffi_free_string(json_c);
-  if (!ParseJsonString(json_str, &history_json_, &error)) {
-    return Err(EC::ConfigLoadFailed,
-               "failed to parse history json: " + error);
+    char *json_c = cfgffi_get_json(history_handle_);
+    if (!json_c) {
+      return Err(EC::ConfigLoadFailed, "failed to read history json");
+    }
+    std::string json_str(json_c);
+    cfgffi_free_string(json_c);
+    if (!ParseJsonString(json_str, &history_json_, &error)) {
+      return Err(EC::ConfigLoadFailed,
+                 "failed to parse history json: " + error);
+    }
   }
   return Ok();
 }
