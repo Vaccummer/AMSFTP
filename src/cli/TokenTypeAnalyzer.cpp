@@ -1,7 +1,13 @@
 #include "AMCLI/TokenTypeAnalyzer.hpp"
+#include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMCLI/CLIBind.hpp"
+#include "AMManager/Var.hpp"
 #include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <limits>
+#include <sstream>
 
 namespace {
 /** Return true when the character is allowed in variable names. */
@@ -45,6 +51,268 @@ size_t FindEqualOutsideQuotes(const std::string &input, size_t start) {
     }
   }
   return std::string::npos;
+}
+
+struct ReplxxPaletteEntry {
+  int r = 0;
+  int g = 0;
+  int b = 0;
+  ReplxxColor color = REPLXX_COLOR_DEFAULT;
+};
+
+const ReplxxPaletteEntry kReplxxPalette[] = {
+    {0, 0, 0, REPLXX_COLOR_BLACK},
+    {128, 0, 0, REPLXX_COLOR_RED},
+    {0, 128, 0, REPLXX_COLOR_GREEN},
+    {128, 128, 0, REPLXX_COLOR_BROWN},
+    {0, 0, 128, REPLXX_COLOR_BLUE},
+    {128, 0, 128, REPLXX_COLOR_MAGENTA},
+    {0, 128, 128, REPLXX_COLOR_CYAN},
+    {192, 192, 192, REPLXX_COLOR_LIGHTGRAY},
+    {128, 128, 128, REPLXX_COLOR_GRAY},
+    {255, 0, 0, REPLXX_COLOR_BRIGHTRED},
+    {0, 255, 0, REPLXX_COLOR_BRIGHTGREEN},
+    {255, 255, 0, REPLXX_COLOR_YELLOW},
+    {0, 0, 255, REPLXX_COLOR_BRIGHTBLUE},
+    {255, 0, 255, REPLXX_COLOR_BRIGHTMAGENTA},
+    {0, 255, 255, REPLXX_COLOR_BRIGHTCYAN},
+    {255, 255, 255, REPLXX_COLOR_WHITE},
+};
+
+bool ParseHexColorToken(const std::string &token, int *r, int *g, int *b) {
+  if (!r || !g || !b) {
+    return false;
+  }
+  if (token.size() != 7 || token[0] != '#') {
+    return false;
+  }
+  for (size_t i = 1; i < token.size(); ++i) {
+    if (!std::isxdigit(static_cast<unsigned char>(token[i]))) {
+      return false;
+    }
+  }
+  try {
+    *r = std::stoi(token.substr(1, 2), nullptr, 16);
+    *g = std::stoi(token.substr(3, 2), nullptr, 16);
+    *b = std::stoi(token.substr(5, 2), nullptr, 16);
+  } catch (...) {
+    return false;
+  }
+  return true;
+}
+
+std::string NormalizeColorToken(const std::string &token) {
+  std::string normalized = AMStr::lowercase(AMStr::TrimWhitespaceCopy(token));
+  normalized.erase(
+      std::remove_if(normalized.begin(), normalized.end(),
+                     [](char c) { return c == '_' || c == '-'; }),
+      normalized.end());
+  return normalized;
+}
+
+bool ParseNamedColorToken(const std::string &token, ReplxxColor *color) {
+  if (!color) {
+    return false;
+  }
+  const std::string name = NormalizeColorToken(token);
+  if (name == "black") {
+    *color = REPLXX_COLOR_BLACK;
+    return true;
+  }
+  if (name == "red") {
+    *color = REPLXX_COLOR_RED;
+    return true;
+  }
+  if (name == "green") {
+    *color = REPLXX_COLOR_GREEN;
+    return true;
+  }
+  if (name == "brown") {
+    *color = REPLXX_COLOR_BROWN;
+    return true;
+  }
+  if (name == "blue") {
+    *color = REPLXX_COLOR_BLUE;
+    return true;
+  }
+  if (name == "magenta") {
+    *color = REPLXX_COLOR_MAGENTA;
+    return true;
+  }
+  if (name == "cyan") {
+    *color = REPLXX_COLOR_CYAN;
+    return true;
+  }
+  if (name == "lightgray") {
+    *color = REPLXX_COLOR_LIGHTGRAY;
+    return true;
+  }
+  if (name == "gray") {
+    *color = REPLXX_COLOR_GRAY;
+    return true;
+  }
+  if (name == "brightred") {
+    *color = REPLXX_COLOR_BRIGHTRED;
+    return true;
+  }
+  if (name == "brightgreen") {
+    *color = REPLXX_COLOR_BRIGHTGREEN;
+    return true;
+  }
+  if (name == "yellow") {
+    *color = REPLXX_COLOR_YELLOW;
+    return true;
+  }
+  if (name == "brightblue") {
+    *color = REPLXX_COLOR_BRIGHTBLUE;
+    return true;
+  }
+  if (name == "brightmagenta") {
+    *color = REPLXX_COLOR_BRIGHTMAGENTA;
+    return true;
+  }
+  if (name == "brightcyan") {
+    *color = REPLXX_COLOR_BRIGHTCYAN;
+    return true;
+  }
+  if (name == "white") {
+    *color = REPLXX_COLOR_WHITE;
+    return true;
+  }
+  return false;
+}
+
+ReplxxColor NearestReplxxColor(int r, int g, int b) {
+  double best = std::numeric_limits<double>::max();
+  ReplxxColor best_color = REPLXX_COLOR_DEFAULT;
+  for (const auto &entry : kReplxxPalette) {
+    const double dr = static_cast<double>(r - entry.r);
+    const double dg = static_cast<double>(g - entry.g);
+    const double db = static_cast<double>(b - entry.b);
+    const double dist = dr * dr + dg * dg + db * db;
+    if (dist < best) {
+      best = dist;
+      best_color = entry.color;
+    }
+  }
+  return best_color;
+}
+
+ReplxxColor ParseInputHighlightStyle(const std::string &style,
+                                     ReplxxColor fallback) {
+  std::string trimmed = AMStr::TrimWhitespaceCopy(style);
+  if (trimmed.empty()) {
+    return fallback;
+  }
+  if (trimmed.front() == '[' && trimmed.back() == ']') {
+    trimmed = AMStr::TrimWhitespaceCopy(trimmed.substr(1, trimmed.size() - 2));
+  }
+  if (trimmed.empty()) {
+    return fallback;
+  }
+
+  std::istringstream iss(trimmed);
+  std::string token;
+  bool bold = false;
+  bool has_color = false;
+  ReplxxColor color = fallback;
+
+  while (iss >> token) {
+    if (token.empty()) {
+      continue;
+    }
+    const std::string normalized = NormalizeColorToken(token);
+    if (normalized == "bold") {
+      bold = true;
+      continue;
+    }
+    int r = 0;
+    int g = 0;
+    int b = 0;
+    if (ParseHexColorToken(token, &r, &g, &b)) {
+      color = NearestReplxxColor(r, g, b);
+      has_color = true;
+      continue;
+    }
+    ReplxxColor named = REPLXX_COLOR_DEFAULT;
+    if (ParseNamedColorToken(normalized, &named)) {
+      color = named;
+      has_color = true;
+      continue;
+    }
+  }
+
+  if (!has_color) {
+    color = fallback;
+  }
+  if (bold) {
+    color = replxx_color_bold(color);
+  }
+  return color;
+}
+
+const char *StyleKeyForType(AMTokenType type) {
+  switch (type) {
+  case AMTokenType::Module:
+    return "module";
+  case AMTokenType::Command:
+    return "command";
+  case AMTokenType::VarName:
+    return "exist_varname";
+  case AMTokenType::VarNameMissing:
+    return "nonexist_varname";
+  case AMTokenType::VarValue:
+    return "varvalue";
+  case AMTokenType::Nickname:
+    return "nickname";
+  case AMTokenType::String:
+    return "string";
+  case AMTokenType::Option:
+    return "option";
+  case AMTokenType::AtSign:
+    return "atsign";
+  case AMTokenType::DollarSign:
+    return "dollarsign";
+  case AMTokenType::EqualSign:
+    return "equalsign";
+  case AMTokenType::EscapeSign:
+    return "escapedsign";
+  case AMTokenType::Common:
+  default:
+    return "common";
+  }
+}
+
+ReplxxColor DefaultColorForType(AMTokenType type) {
+  switch (type) {
+  case AMTokenType::Module:
+    return replxx_color_bold(REPLXX_COLOR_BRIGHTMAGENTA);
+  case AMTokenType::Command:
+    return replxx_color_bold(REPLXX_COLOR_BRIGHTGREEN);
+  case AMTokenType::VarName:
+    return replxx_color_bold(REPLXX_COLOR_BRIGHTBLUE);
+  case AMTokenType::VarNameMissing:
+    return replxx_color_bold(REPLXX_COLOR_BRIGHTRED);
+  case AMTokenType::VarValue:
+    return REPLXX_COLOR_YELLOW;
+  case AMTokenType::Nickname:
+    return REPLXX_COLOR_BRIGHTCYAN;
+  case AMTokenType::String:
+    return REPLXX_COLOR_BROWN;
+  case AMTokenType::Option:
+    return replxx_color_bold(REPLXX_COLOR_BRIGHTCYAN);
+  case AMTokenType::AtSign:
+    return replxx_color_bold(REPLXX_COLOR_BRIGHTMAGENTA);
+  case AMTokenType::DollarSign:
+    return replxx_color_bold(REPLXX_COLOR_BRIGHTMAGENTA);
+  case AMTokenType::EqualSign:
+    return REPLXX_COLOR_BRIGHTRED;
+  case AMTokenType::EscapeSign:
+    return replxx_color_bold(REPLXX_COLOR_YELLOW);
+  case AMTokenType::Common:
+  default:
+    return REPLXX_COLOR_DEFAULT;
+  }
 }
 
 } // namespace
@@ -217,6 +485,12 @@ bool AMTokenTypeAnalyzer::ParseVarTokenAt(const std::string &input, size_t pos,
 
 /** Validate whether a complete token is a variable reference. */
 bool AMTokenTypeAnalyzer::ParseVarTokenText(const std::string &token) const {
+  return ParseVarTokenText(token, nullptr);
+}
+
+/** Validate whether a complete token is a variable reference and extract. */
+bool AMTokenTypeAnalyzer::ParseVarTokenText(const std::string &token,
+                                            std::string *out_name) const {
   if (token.empty() || token[0] != '$') {
     return false;
   }
@@ -229,51 +503,44 @@ bool AMTokenTypeAnalyzer::ParseVarTokenText(const std::string &token) const {
     }
     std::string inner =
         AMStr::TrimWhitespaceCopy(token.substr(2, token.size() - 3));
-    return IsValidVarName(inner);
+    if (!IsValidVarName(inner)) {
+      return false;
+    }
+    if (out_name) {
+      *out_name = inner;
+    }
+    return true;
   }
   std::string inner = token.substr(1);
-  return IsValidVarName(inner);
+  if (!IsValidVarName(inner)) {
+    return false;
+  }
+  if (out_name) {
+    *out_name = inner;
+  }
+  return true;
 }
 
 /** Map token types to replxx colors. */
 ReplxxColor AMTokenTypeAnalyzer::ColorForType(AMTokenType type) const {
-  switch (type) {
-  case AMTokenType::Module:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTMAGENTA);
-  case AMTokenType::Command:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTGREEN);
-  case AMTokenType::VarName:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTBLUE);
-  case AMTokenType::VarValue:
-    return REPLXX_COLOR_YELLOW;
-  case AMTokenType::Nickname:
-    return REPLXX_COLOR_BRIGHTCYAN;
-  case AMTokenType::String:
-    return REPLXX_COLOR_BROWN;
-  case AMTokenType::Option:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTCYAN);
-  case AMTokenType::AtSign:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTMAGENTA);
-  case AMTokenType::DollarSign:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTMAGENTA);
-  case AMTokenType::EqualSign:
-    return REPLXX_COLOR_BRIGHTRED;
-  case AMTokenType::Common:
-  default:
-    return REPLXX_COLOR_DEFAULT;
-  }
+  const char *style_key = StyleKeyForType(type);
+  const std::string style =
+      config_manager_.GetSettingString({"style", "InputHighlight", style_key},
+                                       "");
+  return ParseInputHighlightStyle(style, DefaultColorForType(type));
 }
 
 /** Assign a priority for overlap resolution between token types. */
 int AMTokenTypeAnalyzer::PriorityForType(AMTokenType type) const {
   switch (type) {
-  case AMTokenType::String:
+  case AMTokenType::EscapeSign:
     return 100;
   case AMTokenType::EqualSign:
     return 95;
   case AMTokenType::VarValue:
     return 90;
   case AMTokenType::VarName:
+  case AMTokenType::VarNameMissing:
   case AMTokenType::DollarSign:
     return 80;
   case AMTokenType::AtSign:
@@ -284,6 +551,8 @@ int AMTokenTypeAnalyzer::PriorityForType(AMTokenType type) const {
   case AMTokenType::Module:
   case AMTokenType::Command:
     return 50;
+  case AMTokenType::String:
+    return 20;
   case AMTokenType::Common:
   default:
     return 0;
@@ -326,7 +595,8 @@ void AMTokenTypeAnalyzer::ApplyRange(size_t start, size_t end,
 }
 
 /** Highlight a variable token by separating $ and the name. */
-void AMTokenTypeAnalyzer::HighlightVarToken(size_t token_start,
+void AMTokenTypeAnalyzer::HighlightVarToken(const std::string &input,
+                                            size_t token_start,
                                             size_t token_end,
                                             ReplxxColor *colors,
                                             std::vector<int> &priorities,
@@ -334,10 +604,36 @@ void AMTokenTypeAnalyzer::HighlightVarToken(size_t token_start,
   if (token_end <= token_start) {
     return;
   }
+  if (token_start >= input.size()) {
+    return;
+  }
+  if (token_end > input.size()) {
+    token_end = input.size();
+  }
   ApplyRange(token_start, token_start + 1, AMTokenType::DollarSign, colors,
              priorities, size);
-  ApplyRange(token_start + 1, token_end, AMTokenType::VarName, colors,
+  std::string name;
+  std::string token = input.substr(token_start, token_end - token_start);
+  if (!ParseVarTokenText(token, &name)) {
+    return;
+  }
+  ApplyRange(token_start + 1, token_end, VarNameTypeFor(name), colors,
              priorities, size);
+}
+
+AMTokenType AMTokenTypeAnalyzer::VarNameTypeFor(
+    const std::string &name) const {
+  return VarExists(name) ? AMTokenType::VarName
+                         : AMTokenType::VarNameMissing;
+}
+
+bool AMTokenTypeAnalyzer::VarExists(const std::string &name) const {
+  if (name.empty()) {
+    return false;
+  }
+  auto &var_manager = AMVarManager::Instance(config_manager_);
+  std::string value;
+  return var_manager.Resolve(name, &value);
 }
 
 /** Highlight variable references outside of quoted strings. */
@@ -371,8 +667,28 @@ void AMTokenTypeAnalyzer::HighlightVarReferences(
     if (!ParseVarTokenAt(input, i, input.size(), &end)) {
       continue;
     }
-    HighlightVarToken(i, end, colors, priorities, size);
+    HighlightVarToken(input, i, end, colors, priorities, size);
     i = end - 1;
+  }
+}
+
+/** Highlight backtick escape signs for quotes or variables. */
+void AMTokenTypeAnalyzer::HighlightEscapeSigns(const std::string &input,
+                                               ReplxxColor *colors,
+                                               std::vector<int> &priorities,
+                                               int size) const {
+  if (input.empty()) {
+    return;
+  }
+  for (size_t i = 0; i + 1 < input.size(); ++i) {
+    if (input[i] != '`') {
+      continue;
+    }
+    const char next = input[i + 1];
+    if (next != '$' && next != '"' && next != '\'') {
+      continue;
+    }
+    ApplyRange(i, i + 1, AMTokenType::EscapeSign, colors, priorities, size);
   }
 }
 
@@ -542,12 +858,21 @@ void AMTokenTypeAnalyzer::HighlightVarCommand(
     ApplyRange(eq_pos + 1, input.size(), AMTokenType::VarValue, colors,
                priorities, size);
 
-    size_t dollar = input.find('$', remainder_start);
-    if (dollar != std::string::npos && dollar < eq_pos) {
+    size_t dollar = remainder_start;
+    while (true) {
+      dollar = input.find('$', dollar);
+      if (dollar == std::string::npos || dollar >= eq_pos) {
+        break;
+      }
+      if (dollar > 0 && input[dollar - 1] == '`') {
+        ++dollar;
+        continue;
+      }
       size_t end = 0;
       if (ParseVarTokenAt(input, dollar, eq_pos, &end)) {
-        HighlightVarToken(dollar, end, colors, priorities, size);
+        HighlightVarToken(input, dollar, end, colors, priorities, size);
       }
+      break;
     }
     return;
   }
@@ -561,7 +886,7 @@ void AMTokenTypeAnalyzer::HighlightVarCommand(
     if (!ParseVarTokenText(text)) {
       continue;
     }
-    HighlightVarToken(token.start, token.end, colors, priorities, size);
+    HighlightVarToken(input, token.start, token.end, colors, priorities, size);
   }
 }
 
@@ -580,6 +905,8 @@ void AMTokenTypeAnalyzer::Highlight(const std::string &input,
   EnsureCliCache();
 
   std::vector<Token> tokens = Tokenize(input);
+
+  HighlightEscapeSigns(input, colors, priorities, size);
 
   for (const auto &token : tokens) {
     if (token.quoted) {
@@ -606,7 +933,7 @@ void AMTokenTypeAnalyzer::Highlight(const std::string &input,
                  priorities, size);
       size_t end = 0;
       if (ParseVarTokenAt(input, offset, eq_pos, &end)) {
-        HighlightVarToken(offset, end, colors, priorities, size);
+        HighlightVarToken(input, offset, end, colors, priorities, size);
       }
       HighlightVarReferences(input, tokens, colors, priorities, size);
       return;

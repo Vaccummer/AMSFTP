@@ -1,6 +1,7 @@
 #include "AMManager/Config.hpp"
 #include "AMBase/Enum.hpp"
 #include "AMBase/Path.hpp"
+#include "AMManager/Client.hpp"
 #include "AMManager/Prompt.hpp"
 #include <algorithm>
 #include <cctype>
@@ -785,7 +786,7 @@ ECM AMConfigManager::Init() {
   initialized_ = true;
   backup_prune_checked_ = false;
   if (!exit_hook_installed_) {
-    // std::atexit(&AMConfigManager::OnExit);
+    std::atexit(&AMConfigManager::OnExit);
     exit_hook_installed_ = true;
   }
 
@@ -885,9 +886,7 @@ ECM AMConfigManager::Dump() {
 /**
  * @brief Load history data from .AMSFTP_History.toml into memory.
  */
-ECM AMConfigManager::LoadHistory() {
-  return EnsureHistoryLoaded_();
-}
+ECM AMConfigManager::LoadHistory() { return EnsureHistoryLoaded_(); }
 
 /**
  * @brief Fetch history commands for a nickname.
@@ -970,8 +969,7 @@ ECM AMConfigManager::EnsureHistoryLoaded_() {
   history_json_ = Json::object();
   std::string error;
   if (!EnsureFileExists(history_path_, &error)) {
-    return Err(EC::ConfigLoadFailed,
-               "failed to create history file: " + error);
+    return Err(EC::ConfigLoadFailed, "failed to create history file: " + error);
   }
   const std::string schema_json = kHistorySchemaJson;
   char *err = nullptr;
@@ -983,8 +981,7 @@ ECM AMConfigManager::EnsureHistoryLoaded_() {
       std::string msg = err ? err : "cfgffi_read failed";
       if (err)
         cfgffi_free_string(err);
-      return Err(EC::ConfigLoadFailed,
-                 "failed to parse history file: " + msg);
+      return Err(EC::ConfigLoadFailed, "failed to parse history file: " + msg);
     }
     if (err)
       cfgffi_free_string(err);
@@ -1018,8 +1015,7 @@ ECM AMConfigManager::DumpHistory_() {
       std::string msg = err ? err : "cfgffi_write_inplace failed";
       if (err)
         cfgffi_free_string(err);
-      return Err(EC::ConfigDumpFailed,
-                 "failed to dump history file: " + msg);
+      return Err(EC::ConfigDumpFailed, "failed to dump history file: " + msg);
     }
     if (err)
       cfgffi_free_string(err);
@@ -2275,10 +2271,19 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   }
 
   std::string password;
-  if (!AMPromptManager::Instance().PromptLine(
-          "Password (optional): ", &password, "", true, &canceled)) {
-    PrintLine("Add canceled.");
-    return Err(EC::ConfigCanceled, "add canceled");
+  while (true) {
+    std::string first =
+        AMClientManager::ReadMaskedPassword("Password (optional): ");
+    std::string second =
+        AMClientManager::ReadMaskedPassword("Confirm password: ");
+    if (first == second) {
+      password = std::move(first);
+      AMAuth::SecureZero(second);
+      break;
+    }
+    AMAuth::SecureZero(first);
+    AMAuth::SecureZero(second);
+    PrintLine(Format("Passwords do not match. Please try again.", "error"));
   }
 
   std::string trash_dir;
@@ -2398,14 +2403,35 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
-  std::string password = get_value("password");
-  if (AMAuth::IsEncrypted(password)) {
-    password.clear();
+  Value password_value = std::string();
+  auto pw_it = updated.fields.find("password");
+  if (pw_it != updated.fields.end()) {
+    password_value = pw_it->second;
   }
-  if (!AMPromptManager::Instance().PromptLine(
-          "Password (optional): ", &password, "", true, &canceled, false)) {
+  bool change_password = AMPromptManager::Instance().PromptYesNo(
+      "Change password? (y/N): ", &canceled);
+  if (canceled) {
     PrintLine("Modify canceled.");
     return Err(EC::ConfigCanceled, "modify canceled");
+  }
+  if (change_password) {
+    std::string password;
+    while (true) {
+      std::string first =
+          AMClientManager::ReadMaskedPassword("Password (optional): ");
+      std::string second =
+          AMClientManager::ReadMaskedPassword("Confirm password: ");
+      if (first == second) {
+        password = std::move(first);
+        AMAuth::SecureZero(second);
+        break;
+      }
+      AMAuth::SecureZero(first);
+      AMAuth::SecureZero(second);
+      PrintLine(Format("Passwords do not match. Please try again.", "error"));
+    }
+    password_value = AMAuth::EncryptPassword(password);
+    AMAuth::SecureZero(password);
   }
 
   std::string trash_dir = get_value("trash_dir");
@@ -2447,12 +2473,11 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   entry->fields["hostname"] = hostname;
   entry->fields["port"] = port;
   entry->fields["keyfile"] = keyfile;
-  entry->fields["password"] = AMAuth::EncryptPassword(password);
+  entry->fields["password"] = password_value;
   entry->fields["trash_dir"] = trash_dir;
   entry->fields["protocol"] = protocol;
   entry->fields["buffer_size"] = buffer_size;
   entry->fields["login_dir"] = login_dir;
-  AMAuth::SecureZero(password);
   return Ok();
 }
 
