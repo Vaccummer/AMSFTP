@@ -19,7 +19,6 @@
 #include <string>
 #include <vector>
 
-
 // 标准库
 
 // 自身依赖
@@ -2530,14 +2529,22 @@ public:
     if (os_type != OS_TYPE::Uncertain && !update) {
       return os_type;
     }
+    auto [rcm2, out2] = ConductCmd("cmd /c ver");
+    int code = out2.second;
+    std::string out_str = out2.first;
+    if (out_str.find("Windows") != std::string::npos) {
+      os_type = OS_TYPE::Windows;
+      return os_type;
+    }
+
     auto [rcm, out] = ConductCmd("uname -s");
     if (rcm.first != EC::Success) {
       os_type = OS_TYPE::Uncertain;
       return os_type;
     }
-    int code = out.second;
+    code = out.second;
     if (code == 0) {
-      std::string out_str = out.first;
+      out_str = out.first;
       // 将out_str转换为小写
       std::transform(out_str.begin(), out_str.end(), out_str.begin(),
                      ::tolower);
@@ -2547,6 +2554,10 @@ public:
         os_type = OS_TYPE::MacOS;
       } else if (out_str.find("cygwin") != std::string::npos) {
         os_type = OS_TYPE::Windows;
+      } else if (out_str.find("mingw") != std::string::npos) {
+        os_type = OS_TYPE::Windows;
+      } else if (out_str.find("msys") != std::string::npos) {
+        os_type = OS_TYPE::Windows;
       } else if (out_str.find("freebsd") != std::string::npos) {
         os_type = OS_TYPE::FreeBSD;
       } else {
@@ -2555,24 +2566,7 @@ public:
       return os_type;
     }
 
-    auto [rcm2, out2] = ConductCmd("systeminfo | findstr /i \"OS Name\"");
-    if (rcm2.first != EC::Success) {
-      os_type = OS_TYPE::Uncertain;
-      return os_type;
-    }
-
-    code = out2.second;
-    if (code != 0) {
-      os_type = OS_TYPE::Unknown;
-      return os_type;
-    }
-    std::string out_str2 = out2.first;
-    if (out_str2.find("Windows") != std::string::npos) {
-      os_type = OS_TYPE::Windows;
-      return os_type;
-    }
-    os_type = OS_TYPE::Unix;
-    return os_type;
+    return OS_TYPE::Unknown;
   }
 
   std::string StrUid(const long &uid) override {

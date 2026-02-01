@@ -99,6 +99,25 @@ const std::vector<std::string> kHostFields = {
     "trash_dir", "protocol", "buffer_size", "login_dir",
 };
 
+/** @brief JSON schema used to validate .AMSFTP_History.toml. */
+const char kHistorySchemaJson[] = R"json(
+{
+  "type": "object",
+  "additionalProperties": {
+    "type": "object",
+    "properties": {
+      "commands": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "additionalProperties": false
+  }
+}
+)json";
+
 const Json *GetHostsArray(const Json &root) {
   if (!root.is_object())
     return nullptr;
@@ -859,6 +878,154 @@ ECM AMConfigManager::Dump() {
     }
   }
 
+  return Ok();
+}
+
+/**
+ * @brief Load history data from .AMSFTP_History.toml into memory.
+ */
+ECM AMConfigManager::LoadHistory() {
+  return EnsureHistoryLoaded_();
+}
+
+/**
+ * @brief Fetch history commands for a nickname.
+ */
+ECM AMConfigManager::GetHistoryCommands(const std::string &nickname,
+                                        std::vector<std::string> *out) {
+  auto status = EnsureHistoryLoaded_();
+  if (status.first != EC::Success) {
+    return status;
+  }
+  if (!out) {
+    return Err(EC::InvalidArg, "null history output");
+  }
+  out->clear();
+  if (nickname.empty()) {
+    return Ok();
+  }
+  const Json *node = FindJsonNode(history_json_, {nickname, "commands"});
+  if (!node || !node->is_array()) {
+    return Ok();
+  }
+  for (const auto &item : *node) {
+    if (item.is_string()) {
+      out->push_back(item.get<std::string>());
+    }
+  }
+  return Ok();
+}
+
+/**
+ * @brief Store history commands for a nickname and optionally persist.
+ */
+ECM AMConfigManager::SetHistoryCommands(
+    const std::string &nickname, const std::vector<std::string> &commands,
+    bool dump_now) {
+  auto status = EnsureHistoryLoaded_();
+  if (status.first != EC::Success) {
+    return status;
+  }
+  if (nickname.empty()) {
+    return Err(EC::InvalidArg, "empty history nickname");
+  }
+  if (!history_json_.is_object()) {
+    history_json_ = Json::object();
+  }
+  Json &node = history_json_[nickname];
+  if (!node.is_object()) {
+    node = Json::object();
+  }
+  node["commands"] = commands;
+  if (dump_now) {
+    return DumpHistory_();
+  }
+  return Ok();
+}
+
+/**
+ * @brief Resolve history size limit from settings with minimum 10.
+ */
+int AMConfigManager::ResolveMaxHistoryCount(int default_value) const {
+  int value = GetSettingInt({"InternalVars", "MaxHistoryCount"}, default_value);
+  if (value < 10) {
+    value = 10;
+  }
+  return value;
+}
+
+/**
+ * @brief Ensure history file is loaded and ready for access.
+ */
+ECM AMConfigManager::EnsureHistoryLoaded_() {
+  auto status = EnsureInitialized("EnsureHistoryLoaded_");
+  if (status.first != EC::Success) {
+    return status;
+  }
+  if (history_handle_) {
+    return Ok();
+  }
+  history_path_ = root_dir_ / ".AMSFTP_History.toml";
+  history_json_ = Json::object();
+  std::string error;
+  if (!EnsureFileExists(history_path_, &error)) {
+    return Err(EC::ConfigLoadFailed,
+               "failed to create history file: " + error);
+  }
+  const std::string schema_json = kHistorySchemaJson;
+  char *err = nullptr;
+  history_handle_ =
+      cfgffi_read(history_path_.string().c_str(), schema_json.c_str(), &err);
+  if (!history_handle_) {
+    std::string msg = err ? err : "cfgffi_read failed";
+    if (err)
+      cfgffi_free_string(err);
+    return Err(EC::ConfigLoadFailed,
+               "failed to parse history file: " + msg);
+  }
+  if (err)
+    cfgffi_free_string(err);
+  char *json_c = cfgffi_get_json(history_handle_);
+  if (!json_c) {
+    return Err(EC::ConfigLoadFailed, "failed to read history json");
+  }
+  std::string json_str(json_c);
+  cfgffi_free_string(json_c);
+  if (!ParseJsonString(json_str, &history_json_, &error)) {
+    return Err(EC::ConfigLoadFailed,
+               "failed to parse history json: " + error);
+  }
+  return Ok();
+}
+
+/**
+ * @brief Persist in-memory history JSON to disk.
+ */
+ECM AMConfigManager::DumpHistory_() {
+  if (!history_handle_) {
+    return Err(EC::ConfigNotInitialized, "history handle not initialized");
+  }
+  std::string json = history_json_.dump(2);
+  char *err = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(handle_mtx_);
+    int rc = cfgffi_write_inplace(history_handle_, json.c_str(), &err);
+    if (rc != 0) {
+      std::string msg = err ? err : "cfgffi_write_inplace failed";
+      if (err)
+        cfgffi_free_string(err);
+      return Err(EC::ConfigDumpFailed,
+                 "failed to dump history file: " + msg);
+    }
+    if (err)
+      cfgffi_free_string(err);
+    char *json_c = cfgffi_get_json(history_handle_);
+    if (json_c) {
+      std::string json_str(json_c);
+      cfgffi_free_string(json_c);
+      (void)ParseJsonString(json_str, &history_json_, nullptr);
+    }
+  }
   return Ok();
 }
 
@@ -1859,6 +2026,10 @@ void AMConfigManager::CloseHandles() {
   if (known_hosts_handle_) {
     cfgffi_free_handle(known_hosts_handle_);
     known_hosts_handle_ = nullptr;
+  }
+  if (history_handle_) {
+    cfgffi_free_handle(history_handle_);
+    history_handle_ = nullptr;
   }
 }
 
