@@ -655,11 +655,10 @@ inline DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
       cli_commands.find_cmd->parsed() || cli_commands.mkdir_cmd->parsed() ||
       cli_commands.rm_cmd->parsed() || cli_commands.walk_cmd->parsed() ||
       cli_commands.tree_cmd->parsed() || cli_commands.cp_cmd->parsed() ||
-      cli_commands.clients_cmd->parsed() ||
-      cli_commands.check_cmd->parsed() || cli_commands.ch_cmd->parsed() ||
-      cli_commands.disconnect_cmd->parsed() || cli_commands.cd_cmd->parsed() ||
-      cli_commands.connect_cmd->parsed() || cli_commands.bash_cmd->parsed() ||
-      cli_commands.task_cmd->parsed() ||
+      cli_commands.clients_cmd->parsed() || cli_commands.check_cmd->parsed() ||
+      cli_commands.ch_cmd->parsed() || cli_commands.disconnect_cmd->parsed() ||
+      cli_commands.cd_cmd->parsed() || cli_commands.connect_cmd->parsed() ||
+      cli_commands.bash_cmd->parsed() || cli_commands.task_cmd->parsed() ||
       cli_commands.task_cache_add->parsed() ||
       cli_commands.task_cache_rm->parsed() ||
       cli_commands.task_cache_clear->parsed() ||

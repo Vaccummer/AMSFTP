@@ -13,7 +13,6 @@
 #include <sstream>
 #include <variant>
 
-
 namespace {
 using Path = AMConfigManager::Path;
 using Value = AMConfigManager::Value;
@@ -92,6 +91,8 @@ std::string ToLowerCopy(const std::string &value) {
 std::optional<std::string> GetStringField(const Json &obj,
                                           const std::string &key);
 std::optional<int64_t> GetIntField(const Json &obj, const std::string &key);
+/** @brief Read a boolean field from a JSON object when available. */
+std::optional<bool> GetBoolField(const Json &obj, const std::string &key);
 
 const std::vector<std::string> kHostFields = {
     "username",  "hostname", "port",        "keyfile",   "password",
@@ -306,6 +307,169 @@ std::optional<int64_t> GetIntField(const Json &obj, const std::string &key) {
   return std::nullopt;
 }
 
+/** @brief Read a boolean field from a JSON object when available. */
+std::optional<bool> GetBoolField(const Json &obj, const std::string &key) {
+  if (!obj.is_object())
+    return std::nullopt;
+  auto it = obj.find(key);
+  if (it == obj.end())
+    return std::nullopt;
+  if (it->is_boolean())
+    return it->get<bool>();
+  if (it->is_number_integer())
+    return it->get<int64_t>() != 0;
+  if (it->is_number_unsigned())
+    return it->get<uint64_t>() != 0;
+  if (it->is_string()) {
+    std::string value = it->get<std::string>();
+    std::transform(
+        value.begin(), value.end(), value.begin(),
+        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (value == "true")
+      return true;
+    if (value == "false")
+      return false;
+  }
+  return std::nullopt;
+}
+
+/**
+ * @brief Return true if the name starts with prefix and ends with suffix.
+ */
+bool MatchBackupName_(const std::string &name, const std::string &prefix,
+                      const std::string &suffix) {
+  if (name.size() < prefix.size() + suffix.size()) {
+    return false;
+  }
+  if (name.compare(0, prefix.size(), prefix) != 0) {
+    return false;
+  }
+  return name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+/**
+ * @brief Remove oldest backups matching prefix/suffix to keep max_count files.
+ */
+void PruneBackupFiles_(const std::filesystem::path &dir,
+                       const std::string &prefix, const std::string &suffix,
+                       int64_t max_count) {
+  if (max_count <= 0) {
+    return;
+  }
+  std::error_code ec;
+  if (!std::filesystem::exists(dir, ec) || ec) {
+    return;
+  }
+
+  std::vector<std::filesystem::path> items;
+  for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+    if (ec) {
+      break;
+    }
+    if (!entry.is_regular_file(ec) || ec) {
+      continue;
+    }
+    std::string name = entry.path().filename().string();
+    if (MatchBackupName_(name, prefix, suffix)) {
+      items.push_back(entry.path());
+    }
+  }
+
+  if (items.size() <= static_cast<size_t>(max_count)) {
+    return;
+  }
+
+  std::sort(items.begin(), items.end(),
+            [](const std::filesystem::path &a, const std::filesystem::path &b) {
+              return a.filename().string() < b.filename().string();
+            });
+
+  size_t remove_count = items.size() - static_cast<size_t>(max_count);
+  for (size_t i = 0; i < remove_count; ++i) {
+    std::filesystem::remove(items[i], ec);
+  }
+}
+
+/**
+ * @brief Ensure the KnownHosts array exists and return it for mutation.
+ */
+Json *EnsureKnownHostsArray(Json &root) {
+  if (!root.is_object())
+    root = Json::object();
+  auto it = root.find("KnownHosts");
+  if (it == root.end() || !it->is_array()) {
+    root["KnownHosts"] = Json::array();
+  }
+  return &root["KnownHosts"];
+}
+
+/**
+ * @brief Return the KnownHosts array when available.
+ */
+const Json *GetKnownHostsArray(const Json &root) {
+  if (!root.is_object())
+    return nullptr;
+  auto it = root.find("KnownHosts");
+  if (it == root.end() || !it->is_array())
+    return nullptr;
+  return &(*it);
+}
+
+/**
+ * @brief Check whether a known_hosts item matches host, port, and protocol.
+ *
+ * RSA protocol variants are treated as compatible with "ssh-rsa".
+ */
+bool KnownHostMatch(const Json &item, const std::string &hostname, int port,
+                    const std::string &protocol) {
+  if (!item.is_object())
+    return false;
+  auto host_value = GetStringField(item, "hostname");
+  if (!host_value || *host_value != hostname)
+    return false;
+  auto port_value = GetIntField(item, "port");
+  if (!port_value.has_value() || *port_value != port)
+    return false;
+  auto protocol_value = GetStringField(item, "protocol");
+  if (!protocol_value)
+    return false;
+  const std::string expected = ToLowerCopy(*protocol_value);
+  const std::string actual = ToLowerCopy(protocol);
+  if (expected == actual)
+    return true;
+  const bool expected_is_rsa =
+      expected == "rsa-sha2-256" || expected == "rsa-sha2-512";
+  const bool actual_is_rsa =
+      actual == "rsa-sha2-256" || actual == "rsa-sha2-512";
+  if ((expected == "ssh-rsa" && actual_is_rsa) ||
+      (actual == "ssh-rsa" && expected_is_rsa)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Normalize a known host nickname to match the schema pattern.
+ */
+std::string
+NormalizeKnownHostNickname(const AMConfigManager::KnownHostEntry &entry) {
+  std::string nickname =
+      entry.nickname.empty() ? entry.hostname : entry.nickname;
+  if (nickname.empty()) {
+    nickname = "host";
+  }
+  for (char &c : nickname) {
+    if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
+          c == '-')) {
+      c = '_';
+    }
+  }
+  if (nickname.empty()) {
+    nickname = "host";
+  }
+  return nickname;
+}
+
 Json *EnsureHostsArray(Json &root) {
   if (!root.is_object())
     root = Json::object();
@@ -377,6 +541,88 @@ AMConfigManager &AMConfigManager::Instance() {
   return instance;
 }
 
+/** @brief Stop the background writer and release config handles. */
+AMConfigManager::~AMConfigManager() { CloseHandles(); }
+
+/** @brief Start the background writer thread if not running. */
+void AMConfigManager::StartWriteThread_() {
+  if (write_running_.load()) {
+    return;
+  }
+  write_running_.store(true);
+  write_thread_ = std::thread([this]() { WriteThreadLoop_(); });
+}
+
+/** @brief Stop the background writer thread and drain pending tasks. */
+void AMConfigManager::StopWriteThread_() {
+  write_running_.store(false);
+  write_cv_.notify_all();
+  if (write_thread_.joinable()) {
+    write_thread_.join();
+  }
+}
+
+/** @brief Background worker loop for serialized write tasks. */
+void AMConfigManager::WriteThreadLoop_() {
+  while (true) {
+    std::function<void()> task;
+    {
+      std::unique_lock<std::mutex> lock(write_mtx_);
+      write_cv_.wait(lock, [this]() {
+        return !write_running_.load() || !write_queue_.empty();
+      });
+      if (!write_running_.load() && write_queue_.empty()) {
+        break;
+      }
+      task = std::move(write_queue_.front());
+      write_queue_.pop_front();
+    }
+    if (task) {
+      try {
+        task();
+      } catch (...) {
+        AM_PROMPT_ERROR("ConfigWriter", "background write task failed", false,
+                        0);
+      }
+    }
+  }
+}
+
+/**
+ * @brief Write a TOML snapshot to a target path using the given handle.
+ */
+void AMConfigManager::WriteSnapshotToPath_(
+    ConfigHandle *handle, const std::string &json,
+    const std::filesystem::path &out_path) const {
+  if (!handle) {
+    return;
+  }
+  char *err = nullptr;
+  int rc = cfgffi_write(handle, out_path.string().c_str(), json.c_str(), &err);
+  if (err) {
+    cfgffi_free_string(err);
+  }
+  (void)rc;
+}
+
+/**
+ * @brief Submit a no-arg write task to the background writer thread.
+ */
+void AMConfigManager::SubmitWriteTask(std::function<void()> task) {
+  if (!task) {
+    return;
+  }
+  if (!write_running_.load()) {
+    task();
+    return;
+  }
+  {
+    std::lock_guard<std::mutex> lock(write_mtx_);
+    write_queue_.push_back(std::move(task));
+  }
+  write_cv_.notify_one();
+}
+
 ECM AMConfigManager::Init() {
   const std::string root_env = GetEnvCopy("AMSFTP_ROOT");
   if (root_env.empty()) {
@@ -402,12 +648,15 @@ ECM AMConfigManager::Init() {
 
   config_path_ = root_dir_ / "config" / "config.toml";
   settings_path_ = root_dir_ / "config" / "settings.toml";
+  known_hosts_path_ = root_dir_ / "config" / "known_hosts.toml";
   config_schema_path_ = root_dir_ / "config" / "config.schema.json";
   settings_schema_path_ = root_dir_ / "config" / "settings.schema.json";
+  known_hosts_schema_path_ = root_dir_ / "config" / "known_hosts.schema.json";
 
   CloseHandles();
   config_json_ = Json::object();
   settings_json_ = Json::object();
+  known_hosts_json_ = Json::object();
 
   {
     std::string error;
@@ -477,12 +726,50 @@ ECM AMConfigManager::Init() {
     }
   }
 
+  {
+    std::string error;
+    if (!EnsureFileExists(known_hosts_path_, &error)) {
+      AM_PROMPT_ERROR("ConfigInit",
+                      "failed to create known_hosts file: " + error, true, 2);
+      return Err(EC::ConfigLoadFailed,
+                 "failed to create known_hosts file: " + error);
+    }
+    const std::string schema_json =
+        LoadSchemaJson(known_hosts_schema_path_, &error);
+    char *err = nullptr;
+    known_hosts_handle_ = cfgffi_read(known_hosts_path_.string().c_str(),
+                                      schema_json.c_str(), &err);
+    if (!known_hosts_handle_) {
+      std::string msg = err ? err : "cfgffi_read failed";
+      if (err)
+        cfgffi_free_string(err);
+      AM_PROMPT_ERROR("ConfigInit", "failed to parse known_hosts.toml: " + msg,
+                      true, 2);
+      return Err(EC::ConfigLoadFailed,
+                 "failed to parse known_hosts.toml: " + msg);
+    }
+    if (err)
+      cfgffi_free_string(err);
+    char *json_c = cfgffi_get_json(known_hosts_handle_);
+    if (!json_c) {
+      return Err(EC::ConfigLoadFailed, "failed to read known_hosts json");
+    }
+    std::string json_str(json_c);
+    cfgffi_free_string(json_c);
+    if (!ParseJsonString(json_str, &known_hosts_json_, &error)) {
+      return Err(EC::ConfigLoadFailed,
+                 "failed to parse known_hosts json: " + error);
+    }
+  }
+
   initialized_ = true;
+  backup_prune_checked_ = false;
   if (!exit_hook_installed_) {
     // std::atexit(&AMConfigManager::OnExit);
     exit_hook_installed_ = true;
   }
 
+  StartWriteThread_();
   return Ok();
 }
 
@@ -509,6 +796,10 @@ ECM AMConfigManager::Dump() {
   if (!settings_handle_) {
     return Err(EC::ConfigNotInitialized, "settings handle not initialized");
   }
+  if (!known_hosts_handle_) {
+    return Err(EC::ConfigNotInitialized, "known_hosts handle not initialized");
+  }
+  std::lock_guard<std::mutex> lock(handle_mtx_);
   {
     std::string json = config_json_.dump(2);
     char *err = nullptr;
@@ -546,6 +837,186 @@ ECM AMConfigManager::Dump() {
       cfgffi_free_string(json_c);
       (void)ParseJsonString(json_str, &settings_json_, nullptr);
     }
+  }
+  {
+    std::string json = known_hosts_json_.dump(2);
+    char *err = nullptr;
+    int rc = cfgffi_write_inplace(known_hosts_handle_, json.c_str(), &err);
+    if (rc != 0) {
+      std::string msg = err ? err : "cfgffi_write_inplace failed";
+      if (err)
+        cfgffi_free_string(err);
+      return Err(EC::ConfigDumpFailed,
+                 "failed to dump known_hosts.toml: " + msg);
+    }
+    if (err)
+      cfgffi_free_string(err);
+    char *json_c = cfgffi_get_json(known_hosts_handle_);
+    if (json_c) {
+      std::string json_str(json_c);
+      cfgffi_free_string(json_c);
+      (void)ParseJsonString(json_str, &known_hosts_json_, nullptr);
+    }
+  }
+
+  return Ok();
+}
+
+/**
+ * @brief Backup config/settings/known_hosts when the interval elapses.
+ */
+ECM AMConfigManager::ConfigBackupIfNeeded() {
+  auto status = EnsureInitialized("ConfigBackupIfNeeded");
+  if (status.first != EC::Success)
+    return status;
+
+  constexpr bool kDefaultEnabled = true;
+  constexpr int64_t kDefaultIntervalS = 10;
+  constexpr int64_t kDefaultLastBackupS = 0;
+  constexpr int64_t kDefaultMaxBackupCount = 3;
+  constexpr int64_t kMinIntervalS = 15;
+  constexpr int64_t kNegativeIntervalFallbackS = 60;
+
+  bool changed = false;
+  if (!settings_json_.is_object()) {
+    settings_json_ = Json::object();
+    changed = true;
+  }
+
+  Json &backup_cfg = settings_json_["AutoConfigBackup"];
+  if (!backup_cfg.is_object()) {
+    backup_cfg = Json::object();
+    changed = true;
+  }
+
+  bool enabled = kDefaultEnabled;
+  if (auto v = GetBoolField(backup_cfg, "enabled")) {
+    enabled = *v;
+  } else {
+    backup_cfg["enabled"] = kDefaultEnabled;
+    changed = true;
+  }
+
+  int64_t interval_s = kNegativeIntervalFallbackS;
+  if (auto v = GetIntField(backup_cfg, "interval_s")) {
+    interval_s = *v;
+  } else {
+    changed = true;
+  }
+  if (interval_s == 0) {
+    interval_s = kNegativeIntervalFallbackS;
+    changed = true;
+  } else if (interval_s < 0) {
+    interval_s = kNegativeIntervalFallbackS;
+    changed = true;
+  } else if (interval_s > 0 && interval_s < kMinIntervalS) {
+    interval_s = kMinIntervalS;
+    changed = true;
+  }
+  backup_cfg["interval_s"] = interval_s;
+
+  int64_t max_backup_count = kDefaultMaxBackupCount;
+  if (auto v = GetIntField(backup_cfg, "max_backup_count")) {
+    max_backup_count = *v;
+  } else {
+    changed = true;
+  }
+  if (max_backup_count < 1) {
+    max_backup_count = 1;
+    changed = true;
+  }
+  backup_cfg["max_backup_count"] = max_backup_count;
+
+  const int64_t now_s = static_cast<int64_t>(timenow());
+  int64_t last_backup_time_s = kDefaultLastBackupS;
+  if (auto v = GetIntField(backup_cfg, "last_backup_time_s")) {
+    last_backup_time_s = *v;
+  } else {
+    changed = true;
+  }
+  if (last_backup_time_s < 0) {
+    last_backup_time_s = 0;
+    changed = true;
+  }
+  if (last_backup_time_s > now_s) {
+    last_backup_time_s = now_s;
+    changed = true;
+  }
+  backup_cfg["last_backup_time_s"] = last_backup_time_s;
+
+  if (!backup_prune_checked_) {
+    std::filesystem::path backup_dir = root_dir_ / "config" / "bak";
+    PruneBackupFiles_(backup_dir, "config-", ".toml.bak", max_backup_count);
+    PruneBackupFiles_(backup_dir, "settings-", ".toml.bak", max_backup_count);
+    PruneBackupFiles_(backup_dir, "known_hosts-", ".toml.bak",
+                      max_backup_count);
+    backup_prune_checked_ = true;
+  }
+
+  if (!enabled) {
+    if (changed) {
+      std::string settings_json = settings_json_.dump(2);
+      SubmitWriteTask([this, settings_json]() {
+        std::lock_guard<std::mutex> lock(handle_mtx_);
+        WriteSnapshotToPath_(settings_handle_, settings_json, settings_path_);
+      });
+    }
+    return Ok();
+  }
+
+  if (interval_s > 0 && (now_s - last_backup_time_s) < interval_s) {
+    if (changed) {
+      std::string settings_json = settings_json_.dump(2);
+      SubmitWriteTask([this, settings_json]() {
+        std::lock_guard<std::mutex> lock(handle_mtx_);
+        WriteSnapshotToPath_(settings_handle_, settings_json, settings_path_);
+      });
+    }
+    return Ok();
+  }
+
+  if (!config_handle_ || !settings_handle_ || !known_hosts_handle_) {
+    return Err(EC::ConfigNotInitialized, "config handles not initialized");
+  }
+
+  backup_cfg["last_backup_time_s"] = now_s;
+  changed = true;
+
+  std::filesystem::path backup_dir = root_dir_ / "config" / "bak";
+  std::error_code ec;
+  std::filesystem::create_directories(backup_dir, ec);
+  if (ec) {
+    return Err(EC::ConfigDumpFailed,
+               "failed to create backup dir: " + ec.message());
+  }
+
+  const std::string stamp =
+      FormatTime(static_cast<uint64_t>(now_s), "%Y-%m-%d-%H-%M");
+  std::filesystem::path config_backup =
+      backup_dir / ("config-" + stamp + ".toml.bak");
+  std::filesystem::path settings_backup =
+      backup_dir / ("settings-" + stamp + ".toml.bak");
+  std::filesystem::path known_hosts_backup =
+      backup_dir / ("known_hosts-" + stamp + ".toml.bak");
+
+  std::string config_json = config_json_.dump(2);
+  std::string settings_json = settings_json_.dump(2);
+  std::string known_hosts_json = known_hosts_json_.dump(2);
+
+  SubmitWriteTask([this, config_backup, settings_backup, known_hosts_backup,
+                   config_json, settings_json, known_hosts_json]() {
+    std::lock_guard<std::mutex> lock(handle_mtx_);
+    WriteSnapshotToPath_(config_handle_, config_json, config_backup);
+    WriteSnapshotToPath_(settings_handle_, settings_json, settings_backup);
+    WriteSnapshotToPath_(known_hosts_handle_, known_hosts_json,
+                         known_hosts_backup);
+  });
+
+  if (changed) {
+    SubmitWriteTask([this, settings_json]() {
+      std::lock_guard<std::mutex> lock(handle_mtx_);
+      WriteSnapshotToPath_(settings_handle_, settings_json, settings_path_);
+    });
   }
 
   return Ok();
@@ -714,6 +1185,165 @@ AMConfigManager::PrivateKeys(bool print_sign) const {
   }
 
   return {Ok(), keys};
+}
+
+/**
+ * @brief Find a known host entry by hostname, port, and protocol.
+ */
+std::pair<ECM, std::optional<AMConfigManager::KnownHostEntry>>
+AMConfigManager::FindKnownHost(const std::string &hostname, int port,
+                               const std::string &protocol) const {
+  auto status = EnsureInitialized("FindKnownHost");
+  if (status.first != EC::Success)
+    return {status, std::nullopt};
+
+  const Json *arr = GetKnownHostsArray(known_hosts_json_);
+  if (!arr) {
+    return {Ok(), std::nullopt};
+  }
+
+  for (const auto &item : *arr) {
+    if (!KnownHostMatch(item, hostname, port, protocol)) {
+      continue;
+    }
+    KnownHostEntry entry;
+    if (auto nickname = GetStringField(item, "nickname")) {
+      entry.nickname = *nickname;
+    }
+    if (auto host_value = GetStringField(item, "hostname")) {
+      entry.hostname = *host_value;
+    }
+    if (auto port_value = GetIntField(item, "port")) {
+      entry.port = static_cast<int>(*port_value);
+    }
+    if (auto protocol_value = GetStringField(item, "protocol")) {
+      entry.protocol = *protocol_value;
+    }
+    if (auto fingerprint = GetStringField(item, "fingerprint")) {
+      entry.fingerprint = *fingerprint;
+    }
+    return {Ok(), entry};
+  }
+
+  return {Ok(), std::nullopt};
+}
+
+/**
+ * @brief Insert or update a known host entry and optionally persist it.
+ */
+ECM AMConfigManager::UpsertKnownHost(const KnownHostEntry &entry,
+                                     bool dump_now) {
+  auto status = EnsureInitialized("UpsertKnownHost");
+  if (status.first != EC::Success) {
+    return status;
+  }
+
+  if (entry.hostname.empty() || entry.protocol.empty() || entry.port <= 0) {
+    return Err(EC::InvalidArg, "invalid known host entry");
+  }
+
+  Json *arr = EnsureKnownHostsArray(known_hosts_json_);
+  if (!arr) {
+    return Err(EC::ConfigInvalid, "known_hosts array not initialized");
+  }
+
+  Json *target = nullptr;
+  for (auto &item : *arr) {
+    if (KnownHostMatch(item, entry.hostname, entry.port, entry.protocol)) {
+      target = &item;
+      break;
+    }
+  }
+
+  if (!target) {
+    Json new_entry = Json::object();
+    (*arr).push_back(new_entry);
+    target = &(*arr)[arr->size() - 1];
+  }
+
+  (*target)["nickname"] = NormalizeKnownHostNickname(entry);
+  (*target)["hostname"] = entry.hostname;
+  (*target)["port"] = entry.port;
+  (*target)["protocol"] = entry.protocol;
+  (*target)["fingerprint"] = entry.fingerprint;
+
+  if (dump_now) {
+    return Dump();
+  }
+  return Ok();
+}
+
+/**
+ * @brief Build a known host verification callback for SFTP clients.
+ */
+AMConfigManager::KnownHostCallback AMConfigManager::BuildKnownHostCallback() {
+  if (known_host_cb_) {
+    return known_host_cb_;
+  }
+  known_host_cb_ = [this](KnownHostEntry entry) -> ECM {
+    auto status = EnsureInitialized("KnownHostCallback");
+    if (status.first != EC::Success) {
+      return status;
+    }
+
+    if (entry.hostname.empty() || entry.protocol.empty() || entry.port <= 0) {
+      return Err(EC::InvalidArg, "invalid known host entry");
+    }
+
+    entry.fingerprint = AMStr::TrimWhitespaceCopy(entry.fingerprint);
+    entry.fingerprint_sha256 =
+        AMStr::TrimWhitespaceCopy(entry.fingerprint_sha256);
+    if (entry.fingerprint.empty()) {
+      return Err(EC::InvalidArg, "empty host fingerprint");
+    }
+
+    auto [find_status, existing] =
+        FindKnownHost(entry.hostname, entry.port, entry.protocol);
+    if (find_status.first != EC::Success) {
+      return find_status;
+    }
+
+    if (!existing.has_value() ||
+        AMStr::TrimWhitespaceCopy(existing->fingerprint).empty()) {
+      AMPromptManager &prompt = AMPromptManager::Instance();
+      bool canceled = false;
+      const std::string question = AMStr::amfmt(
+          "No known host fingerprint for {}:{} {}.\n"
+          "Fingerprint: {}\nAdd it? (y/N): ",
+          entry.hostname, entry.port, entry.protocol, entry.fingerprint);
+      if (!prompt.PromptYesNo(question, &canceled)) {
+        if (canceled) {
+          return Err(EC::ConfigCanceled, "Known host fingerprint add canceled");
+        }
+        return Err(EC::HostConfigNotFound, "Known host fingerprint not found");
+      }
+      return UpsertKnownHost(entry, true);
+    }
+
+    const std::string expected_fp =
+        AMStr::TrimWhitespaceCopy(existing->fingerprint);
+    const std::string expected_lower = AMStr::lowercase(expected_fp);
+    if (expected_lower.rfind("sha256:", 0) == 0) {
+      const std::string expected_body =
+          AMStr::TrimWhitespaceCopy(expected_fp.substr(7));
+      if (entry.fingerprint_sha256.empty() ||
+          expected_body != entry.fingerprint_sha256) {
+        return {EC::HostFingerprintMismatch,
+                AMStr::amfmt("{}:{} {} fingerprint mismatches", entry.hostname,
+                             entry.port, entry.protocol)};
+      }
+      return Ok();
+    }
+
+    if (expected_fp != entry.fingerprint) {
+      return {EC::HostFingerprintMismatch,
+              AMStr::amfmt("{}:{} {} fingerprint mismatches", entry.hostname,
+                           entry.port, entry.protocol)};
+    }
+
+    return Ok();
+  };
+  return known_host_cb_;
 }
 
 std::pair<ECM, AMConfigManager::ClientConfig>
@@ -1217,6 +1847,7 @@ void AMConfigManager::OnExit() {
 }
 
 void AMConfigManager::CloseHandles() {
+  StopWriteThread_();
   if (config_handle_) {
     cfgffi_free_handle(config_handle_);
     config_handle_ = nullptr;
@@ -1224,6 +1855,10 @@ void AMConfigManager::CloseHandles() {
   if (settings_handle_) {
     cfgffi_free_handle(settings_handle_);
     settings_handle_ = nullptr;
+  }
+  if (known_hosts_handle_) {
+    cfgffi_free_handle(known_hosts_handle_);
+    known_hosts_handle_ = nullptr;
   }
 }
 

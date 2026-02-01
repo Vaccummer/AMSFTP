@@ -1,10 +1,10 @@
 #pragma once
-#include "AMManager/Config.hpp"
-#include "AMClient/IOCore.hpp"
-#include "AMManager/Logger.hpp"
-#include "AMManager/Prompt.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/Path.hpp"
+#include "AMClient/IOCore.hpp"
+#include "AMManager/Config.hpp"
+#include "AMManager/Logger.hpp"
+#include "AMManager/Prompt.hpp"
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -129,6 +129,7 @@ public:
 
     auto existing = target.GetHost(nickname);
     if (existing) {
+      ApplyKnownHostCallback_(existing);
       ECM rcm = existing->Connect(force, flag);
       if (rcm.first != EC::Success) {
         return {rcm, existing};
@@ -157,6 +158,7 @@ public:
     }
 
     std::atomic<bool> spinner_running(false);
+    ResetSpinnerStop_();
     auto auth_cb = BuildAuthCallback_(password_cb_, quiet, &spinner_running);
     auto base_client = CreateClient(
         client_config.second.request, client_config.second.protocol, trace_num_,
@@ -165,21 +167,23 @@ public:
     if (!base_client) {
       return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
     }
+    ApplyKnownHostCallback_(base_client);
 
     std::thread spinner_thread;
     std::string spinner_line;
     size_t spinner_line_len = 0;
     if (!quiet) {
       const std::string protocol_label =
-          ProtocolLabel_(base_client->GetProtocol());
+          AM_ENUM_NAME(base_client->GetProtocol());
       spinner_line = AMStr::amfmt("Connecting to {} Server   [{}]",
                                   protocol_label, nickname);
       spinner_line_len = spinner_line.size() + 3;
+      spinner_line_len_.store(spinner_line_len);
       spinner_running.store(true);
-      spinner_thread = std::thread([&spinner_running, spinner_line]() {
+      spinner_thread = std::thread([&spinner_running, spinner_line, this]() {
         const char frames[] = {'|', '/', '-', '\\'};
         size_t idx = 0;
-        while (spinner_running.load()) {
+        while (spinner_running.load() && !spinner_stop_requested_.load()) {
           char indicator = frames[idx % (sizeof(frames) / sizeof(frames[0]))];
           std::cout << '\r' << indicator << "  " << spinner_line << std::flush;
           idx++;
@@ -237,6 +241,7 @@ public:
     }
 
     std::atomic<bool> spinner_running(false);
+    ResetSpinnerStop_();
     auto auth_cb = BuildAuthCallback_(password_cb_, quiet, &spinner_running);
     auto base_client = CreateClient(
         client_config.second.request, client_config.second.protocol, trace_num_,
@@ -245,6 +250,8 @@ public:
     if (!base_client) {
       return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
     }
+
+    ApplyKnownHostCallback_(base_client);
 
     std::thread spinner_thread;
     std::string spinner_line;
@@ -255,11 +262,12 @@ public:
       spinner_line = AMStr::amfmt("Connecting to {} Server   [{}]",
                                   protocol_label, nickname);
       spinner_line_len = spinner_line.size() + 3;
+      spinner_line_len_.store(spinner_line_len);
       spinner_running.store(true);
-      spinner_thread = std::thread([&spinner_running, spinner_line]() {
+      spinner_thread = std::thread([&spinner_running, spinner_line, this]() {
         const char frames[] = {'|', '/', '-', '\\'};
         size_t idx = 0;
-        while (spinner_running.load()) {
+        while (spinner_running.load() && !spinner_stop_requested_.load()) {
           char indicator = frames[idx % (sizeof(frames) / sizeof(frames[0]))];
           std::cout << '\r' << indicator << "  " << spinner_line << std::flush;
           idx++;
@@ -354,6 +362,8 @@ public:
     if (!base_client) {
       return {ECM{EC::OperationUnsupported, "Unsupported protocol"}, nullptr};
     }
+
+    ApplyKnownHostCallback_(base_client);
 
     ECM rcm = base_client->Connect(false, flag);
     if (rcm.first != EC::Success) {
@@ -534,7 +544,8 @@ public:
   }
 
   /**
-   * @brief Build an absolute path based on client home/workdir (or passthrough).
+   * @brief Build an absolute path based on client home/workdir (or
+   * passthrough).
    */
   [[nodiscard]] std::string
   AbsPath(const std::string &path,
@@ -642,6 +653,8 @@ private:
   DisconnectCallback disconnect_cb_ = {};
   std::mutex auth_io_mtx_;
   ssize_t trace_num_ = 10;
+  std::atomic<bool> spinner_stop_requested_{false};
+  std::atomic<size_t> spinner_line_len_{0};
 
   /**
    * @brief Build an auth callback wrapper with optional log suppression and
@@ -653,6 +666,7 @@ private:
       return {};
     }
     return [this, auth_cb, quiet, spinner_running](const AuthCBInfo &info) {
+      RequestSpinnerStop_();
       if (spinner_running) {
         spinner_running->store(false);
       }
@@ -670,6 +684,52 @@ private:
       }
       return result;
     };
+  }
+
+  /**
+   * @brief Attach known host verification callback for SFTP clients.
+   */
+  void ApplyKnownHostCallback_(const std::shared_ptr<BaseClient> &client) {
+    if (!client) {
+      return;
+    }
+    if (client->GetProtocol() != ClientProtocol::SFTP) {
+      return;
+    }
+    auto sftp_client = std::dynamic_pointer_cast<AMSFTPClient>(client);
+    if (!sftp_client) {
+      return;
+    }
+    auto known_cb = config_.BuildKnownHostCallback();
+    sftp_client->SetKnownHostCallback(
+        [this, known_cb](AMConfigManager::KnownHostEntry entry) -> ECM {
+          RequestSpinnerStop_();
+          if (!known_cb) {
+            return {EC::Success, ""};
+          }
+          return known_cb(std::move(entry));
+        });
+  }
+
+  /**
+   * @brief Reset spinner stop state before starting a new spinner thread.
+   */
+  void ResetSpinnerStop_() {
+    spinner_stop_requested_.store(false);
+    spinner_line_len_.store(0);
+  }
+
+  /**
+   * @brief Stop spinner output permanently for the current connect attempt.
+   */
+  void RequestSpinnerStop_() {
+    if (spinner_stop_requested_.exchange(true)) {
+      return;
+    }
+    const size_t line_len = spinner_line_len_.load();
+    if (line_len > 0) {
+      std::cout << '\r' << std::string(line_len, ' ') << '\r' << std::flush;
+    }
   }
 
   /**
@@ -914,5 +974,3 @@ private:
     return std::nullopt;
   }
 };
-
-

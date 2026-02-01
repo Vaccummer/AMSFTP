@@ -272,6 +272,7 @@ int RunInteractiveLoop(const std::string &app_name,
 
     std::string line;
     AMCliSignalMonitor &monitor = AMCliSignalMonitor::Instance();
+    (void)config_manager.ConfigBackupIfNeeded();
     monitor.SilenceHook("GLOBAL");
     monitor.ResumeHook("COREPROMPT");
     if (amgif) {

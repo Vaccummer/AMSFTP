@@ -1,9 +1,10 @@
+use atomicwrites::{AllowOverwrite, AtomicFile, Error as AtomicError};
 use libc::c_char;
 use serde_json::{Map, Value as J};
 use std::{
     ffi::{CStr, CString},
     fs,
-    path::Path,
+    io::Write,
     ptr,
 };
 use toml_edit::{Array, ArrayOfTables, DocumentMut, Item, Table, Value};
@@ -286,16 +287,18 @@ pub extern "C" fn cfgffi_debug_order(
     to_c_string(msg)
 }
 
+/* Write file with an atomic replace to avoid partial writes on crash. */
 fn write_atomic(path: &str, content: String) -> std::io::Result<()> {
-    let p = Path::new(path);
-    let dir = p.parent().unwrap_or_else(|| Path::new("."));
-    let tmp = dir.join(format!(
-        ".{}.tmp",
-        p.file_name().and_then(|x| x.to_str()).unwrap_or("out")
-    ));
-    fs::write(&tmp, content)?;
-    fs::rename(&tmp, p)?;
-    Ok(())
+    let af = AtomicFile::new(path, AllowOverwrite);
+    af.write(|f| {
+        f.write_all(content.as_bytes())?;
+        f.sync_all()?;
+        Ok(())
+    })
+    .map_err(|e: AtomicError<std::io::Error>| match e {
+        AtomicError::Internal(err) => err,
+        AtomicError::User(err) => err,
+    })
 }
 
 /* ---------------- Schema helpers ---------------- */
