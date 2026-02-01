@@ -141,6 +141,29 @@ public:
                    const Value &value, bool dump_now = true);
 
   /**
+   * @brief Load history data from .AMSFTP_History.toml into memory.
+   */
+  ECM LoadHistory();
+
+  /**
+   * @brief Fetch history commands for a nickname.
+   */
+  ECM GetHistoryCommands(const std::string &nickname,
+                         std::vector<std::string> *out);
+
+  /**
+   * @brief Store history commands for a nickname and optionally persist.
+   */
+  ECM SetHistoryCommands(const std::string &nickname,
+                         const std::vector<std::string> &commands,
+                         bool dump_now = true);
+
+  /**
+   * @brief Resolve history size limit from settings with minimum 10.
+   */
+  [[nodiscard]] int ResolveMaxHistoryCount(int default_value = 10) const;
+
+  /**
    * @brief Submit a no-arg write task to the background writer thread.
    */
   void SubmitWriteTask(std::function<void()> task);
@@ -197,6 +220,16 @@ private:
   ECM PromptModifyFields(const std::string &nickname, HostEntry *entry);
   bool ParsePositiveInt(const std::string &input, int64_t *value) const;
 
+  /**
+   * @brief Ensure history file is loaded and ready for access.
+   */
+  ECM EnsureHistoryLoaded_();
+
+  /**
+   * @brief Persist in-memory history JSON to disk.
+   */
+  ECM DumpHistory_();
+
   /** @brief Start the background writer thread if not running. */
   void StartWriteThread_();
   /** @brief Stop the background writer thread and drain pending tasks. */
@@ -213,6 +246,7 @@ private:
   std::filesystem::path config_path_;
   std::filesystem::path settings_path_;
   std::filesystem::path known_hosts_path_;
+  std::filesystem::path history_path_;
   /** JSON schema path for config.toml filtering. */
   std::filesystem::path config_schema_path_;
   /** JSON schema path for settings.toml filtering. */
@@ -222,9 +256,11 @@ private:
   nlohmann::ordered_json config_json_;
   nlohmann::ordered_json settings_json_;
   nlohmann::ordered_json known_hosts_json_;
+  nlohmann::ordered_json history_json_;
   ConfigHandle *config_handle_ = nullptr;
   ConfigHandle *settings_handle_ = nullptr;
   ConfigHandle *known_hosts_handle_ = nullptr;
+  ConfigHandle *history_handle_ = nullptr;
   KnownHostCallback known_host_cb_ = {};
 
   std::vector<FormatPath> config_filters_;

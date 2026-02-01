@@ -797,3 +797,31 @@ real_func:
 ## clients
 
 `AMFileSystem::print_clients`: This function requires a new `detail` option. When enabled, it should print the client status; otherwise, it should print only the client names.
+## Input History
+
+需要对交互模式的input新加一个历史命令功能
+
+使用上下键可以切换历史指令(注意不能和补全菜单冲突, 有补全菜单时优先选择补全项目, 沉默历史指令选择)
+
+历史命令存在项目根目录的.AMSFTP_History.toml中
+
+注意需要以 nickname = list(cmd)的形式保存, 不同client不共享历史命令
+
+文件由ConfigManager管理, PromptManager向其读取
+
+历史最大entry最大数目为settings.InternalVars.MaxHistoryCount
+
++ 最小值与默认值均为10
+
+PrompManager负责将历史数据写入replxx中
+
+向上键往前翻, 向下键往后翻
+
+但末尾有两个临时条目(在选择时启用但不加入历史中)
+
++ 在使用上下键使用历史前已经input的内容(如果空, 则不启用)
++ 空白条目, 用于清空input
+
+在input返回且内容不为空且COREPROMPT钩子没有被触发时, 加入prompt到历史中
+
+程序退出时,获取replxx的history写回.AMSFTP_History.toml

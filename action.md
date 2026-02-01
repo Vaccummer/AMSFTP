@@ -1,33 +1,25 @@
+## Input History
 
-# All Functions below are used in Interacctive Mode
+A new history command feature needs to be added to the input functionality of the interactive mode.
 
-## check
+- Use the Up and Down arrow keys to navigate through historical commands.
 
-real_func: `AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string>& nicknames, amf_interrupt_flag)`
+  - Note: This must not conflict with the autocomplete menu. When the autocomplete menu is active, arrow key navigation should prioritize selecting autocomplete items and suppress history command navigation.
+- Historical commands are stored in `.AMSFTP_History.toml` located in the project root directory.
 
-```cpp
-ClientRef client = resolve_by_name(name);
-```
+  - Commands must be saved in the format `nickname = list(cmd)`, where each client maintains its own command history and histories are not shared across clients.
+  - This file is managed by `ConfigManager`, and `PromptManager` reads history data from it.
+- The maximum number of history entries is defined by `settings.InternalVars.MaxHistoryCount`.
 
-The return result needs to be more detailed—distinguish between "client not established" and "config does not exist"—and error messages must be printed accordingly.
+  - Minimum and default values are both set to 10.
+- `PromptManager` is responsible for loading the history data into `replxx`.
+- Pressing the Up arrow navigates backward through history; pressing the Down arrow navigates forward.
+- Two temporary entries are appended at the end of the history list during navigation (these are active during selection but are not persisted to history):
 
-+ This requirement also applies to other functions such as `cd`.
-+ The returned `ECM` is only used to set the status. When an error occurs, the function itself must print the error message internally.
-  + Format: `❌ {cli_func_name}: {msg}`
+  1. The content already entered in the input field before arrow key navigation begins (disabled if the input is empty).
+  2. An empty entry used to clear the input field.
+- A command is added to history only when:
 
-## ch
-
-real_func:
-`AMFileSystem::change_client(const std::string& nickname, amf_interrupt_flag)`
-
-## disconnect
-
-`AMFileSystem::remove_client`
-
-## cd
-
-`AMFileSystem::cd`
-
-## clients
-
-`AMFileSystem::print_clients`: This function requires a new `detail` option. When enabled, it should print the client status; otherwise, it should print only the client names.
+  - The input content is non-empty upon submission, and
+  - The `COREPROMPT` hook has not been triggered.
+- Upon program termination, the current history from `replxx` is retrieved and written back to `.AMSFTP_History.toml`.
