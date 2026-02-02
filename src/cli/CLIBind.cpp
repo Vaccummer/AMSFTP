@@ -1,7 +1,6 @@
 
 #include "AMCLI/CLIBind.hpp"
 #include "AMManager/SignalMonitor.hpp"
-#include <algorithm>
 #include <unordered_set>
 
 int g_cli_exit_code = 0;
@@ -337,11 +336,12 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   amf flag = amgif;
 
   bool any_parsed = false;
+  std::string command_name = "";
   if (cli_commands.app) {
     for (const auto *cmd : cli_commands.app->get_subcommands()) {
       if (cmd && cmd->parsed()) {
         any_parsed = true;
-        break;
+        command_name += cmd->get_name() + " ";
       }
     }
   }
@@ -353,73 +353,9 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
-
-  auto command_name = [&]() -> std::string {
-    if (cli_commands.config_cmd->parsed()) {
-      return "config";
-    }
-    if (cli_commands.client_cmd->parsed()) {
-      return "client";
-    }
-    if (cli_commands.stat_cmd->parsed()) {
-      return "stat";
-    }
-    if (cli_commands.ls_cmd->parsed()) {
-      return "ls";
-    }
-    if (cli_commands.size_cmd->parsed()) {
-      return "size";
-    }
-    if (cli_commands.find_cmd->parsed()) {
-      return "find";
-    }
-    if (cli_commands.mkdir_cmd->parsed()) {
-      return "mkdir";
-    }
-    if (cli_commands.rm_cmd->parsed()) {
-      return "rm";
-    }
-    if (cli_commands.walk_cmd->parsed()) {
-      return "walk";
-    }
-    if (cli_commands.tree_cmd->parsed()) {
-      return "tree";
-    }
-    if (cli_commands.cp_cmd->parsed()) {
-      return "cp";
-    }
-    if (cli_commands.ch_cmd->parsed()) {
-      return "ch";
-    }
-    if (cli_commands.cd_cmd->parsed()) {
-      return "cd";
-    }
-    if (cli_commands.connect_cmd->parsed()) {
-      return "connect";
-    }
-    if (cli_commands.bash_cmd->parsed()) {
-      return "bash";
-    }
-    if (cli_commands.task_cmd->parsed()) {
-      return "task";
-    }
-    if (cli_commands.sftp_cmd->parsed()) {
-      return "sftp";
-    }
-    if (cli_commands.ftp_cmd->parsed()) {
-      return "ftp";
-    }
-    return "command";
-  };
-
-  if (enforce_interactive && !AMIsInteractive.load()) {
-    std::string msg = AMStr::amfmt("{} not supported in Non-Interactive mode",
-                                   command_name());
-    std::cerr << msg << std::endl;
-    result.rcm = {EC::OperationUnsupported, msg};
-    SetCliExitCode(static_cast<int>(result.rcm.first));
-    return result;
-  }
+  command_name = command_name.empty()
+                     ? command_name
+                     : command_name.substr(0, command_name.size() - 1);
 
   if (cli_commands.config_cmd->parsed()) {
     if (cli_commands.config_ls->parsed()) {
@@ -442,8 +378,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     if (cli_commands.config_get->parsed()) {
       std::vector<std::string> targets = args.config_get.nicknames;
       if (targets.empty()) {
-        std::string current =
-            client_manager.CLIENT ? client_manager.CLIENT->GetNickname()
+        std::string current = client_manager.CLIENT
+                                  ? client_manager.CLIENT->GetNickname()
                                   : "local";
         if (current.empty()) {
           current = "local";
@@ -660,8 +596,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.connect_cmd->parsed()) {
-    result.rcm = filesystem.connect(args.connect.nickname, args.connect.force,
-                                    flag);
+    result.rcm =
+        filesystem.connect(args.connect.nickname, args.connect.force, flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }
@@ -673,6 +609,38 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   if (cli_commands.bash_cmd->parsed()) {
     result.rcm = {EC::Success, ""};
     result.enter_interactive = true;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (cli_commands.sftp_cmd->parsed()) {
+    result.rcm = filesystem.sftp(args.sftp.nickname, args.sftp.user_at_host,
+                                 args.sftp.port, args.sftp.password,
+                                 args.sftp.keyfile, flag);
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
+    }
+    result.enter_interactive = result.rcm.first == EC::Success;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (cli_commands.ftp_cmd->parsed()) {
+    result.rcm =
+        filesystem.ftp(args.ftp.nickname, args.ftp.user_at_host, args.ftp.port,
+                       args.ftp.password, args.ftp.keyfile, flag);
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
+    }
+    result.enter_interactive = result.rcm.first == EC::Success;
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (!enforce_interactive && !AMIsInteractive.load()) {
+    std::string msg =
+        AMStr::amfmt("{} not supported in Non-Interactive mode", command_name);
+    result.rcm = {EC::OperationUnsupported, msg};
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
@@ -858,30 +826,6 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   if (cli_commands.task_resume_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
     result.rcm = transfer_manager.Resume(args.task_resume.ids);
-    SetCliExitCode(static_cast<int>(result.rcm.first));
-    return result;
-  }
-
-  if (cli_commands.sftp_cmd->parsed()) {
-    result.rcm = filesystem.sftp(args.sftp.nickname, args.sftp.user_at_host,
-                                 args.sftp.port, args.sftp.password,
-                                 args.sftp.keyfile, flag);
-    if (result.rcm.first != EC::Success) {
-      std::cerr << result.rcm.second << std::endl;
-    }
-    result.enter_interactive = result.rcm.first == EC::Success;
-    SetCliExitCode(static_cast<int>(result.rcm.first));
-    return result;
-  }
-
-  if (cli_commands.ftp_cmd->parsed()) {
-    result.rcm =
-        filesystem.ftp(args.ftp.nickname, args.ftp.user_at_host, args.ftp.port,
-                       args.ftp.password, args.ftp.keyfile, flag);
-    if (result.rcm.first != EC::Success) {
-      std::cerr << result.rcm.second << std::endl;
-    }
-    result.enter_interactive = result.rcm.first == EC::Success;
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
