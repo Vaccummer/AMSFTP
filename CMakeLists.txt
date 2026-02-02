@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(AMSFTP LANGUAGES CXX)
+project(AMSFTP LANGUAGES C CXX)
 
 # ========= C++ 标准 =========
 set(CMAKE_CXX_STANDARD 17)
@@ -26,10 +26,11 @@ endif()
 # ========= 源文件 =========
 file(GLOB_RECURSE AMSFTP_SOURCES CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/main.cpp"
-  "${PROJECT_SOURCE_DIR}/src/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/*.cc"
-  "${PROJECT_SOURCE_DIR}/src/*.cxx"
+  "${PROJECT_SOURCE_DIR}/src/cli/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/manager/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/Isocline/isocline.c"
 )
+list(APPEND AMSFTP_SOURCES "${PROJECT_SOURCE_DIR}/src/Isocline/isocline.c")
 
 add_executable(amsftp ${AMSFTP_SOURCES})
 
@@ -53,35 +54,36 @@ target_link_libraries(amsftp PRIVATE
   CLI11::CLI11
 )
 
-# ========= 测试程序 =========
-file(GLOB_RECURSE AMTEST_SOURCES CONFIGURE_DEPENDS
-  "${PROJECT_SOURCE_DIR}/test/*.cpp"
-  "${PROJECT_SOURCE_DIR}/test/*.cc"
-  "${PROJECT_SOURCE_DIR}/src/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/*.cc"
-  "${PROJECT_SOURCE_DIR}/src/*.cxx"
-)
+# # ========= 测试程序 =========
+# file(GLOB_RECURSE AMTEST_SOURCES CONFIGURE_DEPENDS
+#   "${PROJECT_SOURCE_DIR}/test/*.cpp"
+#   "${PROJECT_SOURCE_DIR}/test/*.cc"
+#   "${PROJECT_SOURCE_DIR}/src/*.cpp"
+#   "${PROJECT_SOURCE_DIR}/src/*.cc"
+#   "${PROJECT_SOURCE_DIR}/src/*.cxx"
+# )
+# list(APPEND AMTEST_SOURCES "${PROJECT_SOURCE_DIR}/src/Isocline/isocline.c")
 
-add_executable(amtest ${AMTEST_SOURCES})
+# add_executable(amtest ${AMTEST_SOURCES})
 
-target_include_directories(amtest PRIVATE
-  "${PROJECT_SOURCE_DIR}/include"
-)
+# target_include_directories(amtest PRIVATE
+#   "${PROJECT_SOURCE_DIR}/include"
+# )
 
-target_link_libraries(amtest PRIVATE
-  OpenSSL::SSL
-  OpenSSL::Crypto
-  ZLIB::ZLIB
-  CURL::libcurl
-  fmt::fmt
-  nlohmann_json::nlohmann_json
-  replxx::replxx
-  libssh2::libssh2
-  CLI11::CLI11
-  shell32
-  ws2_32
-  Advapi32
-)
+# target_link_libraries(amtest PRIVATE
+#   OpenSSL::SSL
+#   OpenSSL::Crypto
+#   ZLIB::ZLIB
+#   CURL::libcurl
+#   fmt::fmt
+#   nlohmann_json::nlohmann_json
+#   replxx::replxx
+#   libssh2::libssh2
+#   CLI11::CLI11
+#   shell32
+#   ws2_32
+#   Advapi32
+# )
 
 # ========= Rust cfgffi library (optional discovery) =========
 find_library(CFGFFI_LIB NAMES cfgffi
@@ -93,7 +95,7 @@ find_library(CFGFFI_LIB NAMES cfgffi
 
 if (CFGFFI_LIB)
   target_link_libraries(amsftp PRIVATE ${CFGFFI_LIB})
-  target_link_libraries(amtest PRIVATE ${CFGFFI_LIB})
+  # target_link_libraries(amtest PRIVATE ${CFGFFI_LIB})
 else()
   message(WARNING "cfgffi library not found; build may fail if not linked elsewhere.")
 endif()
@@ -103,6 +105,6 @@ target_compile_options(amsftp PRIVATE
   $<$<CXX_COMPILER_ID:MSVC>:/Zi /Od /W4>
 )
 
-target_compile_options(amtest PRIVATE
-  $<$<CXX_COMPILER_ID:MSVC>:/Zi /Od /W4>
-)
+# target_compile_options(amtest PRIVATE
+#   $<$<CXX_COMPILER_ID:MSVC>:/Zi /Od /W4>
+# )

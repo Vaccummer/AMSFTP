@@ -1,7 +1,6 @@
 #pragma once
 #include <memory>
 #include <mutex>
-#include <replxx.h>
 #include <string>
 #include <string_view>
 #include <type_traits>
@@ -30,12 +29,10 @@ inline std::string ToString(char *value) {
 } // namespace AMPromptDetail
 
 struct TaskInfo;
-class AMTokenTypeAnalyzer;
 class AMConfigManager;
 
 class AMPromptManager {
 public:
-  std::unique_ptr<AMTokenTypeAnalyzer> token_analyzer_;
   static AMPromptManager &Instance();
 
   AMPromptManager(const AMPromptManager &) = delete;
@@ -43,13 +40,6 @@ public:
   AMPromptManager(AMPromptManager &&) = delete;
   AMPromptManager &operator=(AMPromptManager &&) = delete;
   ~AMPromptManager();
-  static ReplxxActionResult esc_abort_handler(Replxx *rx, unsigned int code,
-                                              void *ud) {
-    (void)code;
-    (void)ud;
-    // 触发内置动作：abort line
-    return replxx_invoke(rx, REPLXX_ACTION_ABORT_LINE, 0);
-  }
 
   void Print(const std::vector<std::string> &items,
              const std::string &sep = " ", const std::string &end = "\n");
@@ -98,10 +88,9 @@ public:
   bool Prompt(const std::string &prompt, const std::string &placeholder,
               std::string *out_input);
   /**
-   * @brief Prompt for a command line using the core replxx handle.
+   * @brief Prompt for a command line using the shared readline handle.
    */
   bool PromptCore(const std::string &prompt, std::string *out_input);
-  bool esc_pressed_ = false;
 
   /**
    * @brief Enable or disable history navigation for arrow keys.
@@ -109,72 +98,40 @@ public:
   void SetHistoryEnabled(bool enabled);
 
   /**
-   * @brief Load history for a nickname into replxx core.
+   * @brief Load history for a nickname into the readline history.
    */
   void LoadHistory(AMConfigManager &config_manager,
                    const std::string &nickname);
 
   /**
-   * @brief Flush current replxx history back into ConfigManager.
+   * @brief Flush current history back into ConfigManager.
    */
   void FlushHistory(AMConfigManager &config_manager);
 
   /**
-   * @brief Add a history entry to replxx core history.
+   * @brief Add a history entry to the readline history.
    */
   void AddHistoryEntry(const std::string &line);
 
 private:
   AMPromptManager();
   std::mutex print_mutex_;
-  Replxx *replxx_ = nullptr;
-  Replxx *core_replxx_ = nullptr;
   std::string history_nickname_;
   bool history_enabled_ = true;
   bool history_loaded_ = false;
   int max_history_count_ = 10;
+  std::vector<std::string> history_entries_;
 
   /**
-   * @brief Collect current replxx history into a list.
+   * @brief Collect current history into a list.
    */
   std::vector<std::string> CollectHistory_() const;
-
-  /**
-   * @brief Reset history navigation session state.
-   */
-  void ResetHistorySession_();
-
-  /**
-   * @brief Start a history navigation session from current input.
-   */
-  void StartHistorySession_();
-
-  /**
-   * @brief Apply a history entry to the replxx buffer.
-   */
-  void ApplyHistoryEntry_(const std::string &line);
 
   /**
    * @brief Normalize history to unique entries with max size.
    */
   std::vector<std::string> NormalizeHistory_(
       const std::vector<std::string> &input, int max_count) const;
-
-  /**
-   * @brief Handle the Up key for history or completion navigation.
-   */
-  static ReplxxActionResult HistoryUpHandler_(int code, void *ud);
-
-  /**
-   * @brief Handle the Down key for history or completion navigation.
-   */
-  static ReplxxActionResult HistoryDownHandler_(int code, void *ud);
-
-  bool history_session_active_ = false;
-  int history_session_index_ = -1;
-  std::vector<std::string> history_session_entries_;
-  std::string history_session_current_;
-  std::string history_original_input_;
 };
 
 #define AM_PROMPT_ERROR(error_name, error_msg, is_exit, exit_code)             \
