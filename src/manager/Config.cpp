@@ -24,6 +24,22 @@ using Json = nlohmann::ordered_json;
 ECM Ok() { return {EC::Success, ""}; }
 ECM Err(EC code, const std::string &msg) { return {code, msg}; }
 
+/**
+ * @brief Remove duplicate targets while preserving the original order.
+ */
+std::vector<std::string>
+UniqueTargetsKeepOrder(const std::vector<std::string> &targets) {
+  std::vector<std::string> unique;
+  unique.reserve(targets.size());
+  for (const auto &target : targets) {
+    if (std::find(unique.begin(), unique.end(), target) != unique.end()) {
+      continue;
+    }
+    unique.push_back(target);
+  }
+  return unique;
+}
+
 bool JsonArrayAllScalar(const Json &arr) {
   for (const auto &child : arr) {
     if (!(child.is_null() || child.is_boolean() || child.is_number() ||
@@ -120,8 +136,8 @@ std::optional<int64_t> GetIntField(const Json &obj, const std::string &key);
 std::optional<bool> GetBoolField(const Json &obj, const std::string &key);
 
 const std::vector<std::string> kHostFields = {
-    "hostname",    "username",    "port",        "password", "protocol",
-    "buffer_size", "trash_dir",   "login_dir",   "keyfile",  "compression",
+    "hostname",    "username",  "port",      "password", "protocol",
+    "buffer_size", "trash_dir", "login_dir", "keyfile",  "compression",
 };
 
 /** @brief JSON schema used to validate .AMSFTP_History.toml. */
@@ -1843,12 +1859,13 @@ ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
   if (status.first != EC::Success)
     return status;
 
-  if (targets.empty()) {
+  std::vector<std::string> unique_targets = UniqueTargetsKeepOrder(targets);
+  if (unique_targets.empty()) {
     return Err(EC::InvalidArg, "empty delete targets");
   }
 
   ECM last = Ok();
-  for (const auto &nickname : targets) {
+  for (const auto &nickname : unique_targets) {
     if (nickname.empty()) {
       last = Err(EC::InvalidArg, "empty delete target");
       continue;
@@ -1923,13 +1940,14 @@ ECM AMConfigManager::Query(const std::vector<std::string> &targets) const {
   if (status.first != EC::Success)
     return status;
 
-  if (targets.empty()) {
+  std::vector<std::string> unique_targets = UniqueTargetsKeepOrder(targets);
+  if (unique_targets.empty()) {
     return Err(EC::InvalidArg, "empty query targets");
   }
 
   auto hosts = CollectHosts();
   ECM last = Ok();
-  for (const auto &nickname : targets) {
+  for (const auto &nickname : unique_targets) {
     if (nickname.empty()) {
       last = Err(EC::InvalidArg, "empty query target");
       continue;
@@ -2118,8 +2136,8 @@ ECM AMConfigManager::SetHostValue(const std::vector<std::string> &args) {
   }
 
   const std::vector<std::string> allowed_fields = {
-      "hostname",  "username",   "port",        "password", "protocol",
-      "buffer_size", "trash_dir", "login_dir",  "keyfile",  "compression"};
+      "hostname",    "username",  "port",      "password", "protocol",
+      "buffer_size", "trash_dir", "login_dir", "keyfile",  "compression"};
   if (std::find(allowed_fields.begin(), allowed_fields.end(), field) ==
       allowed_fields.end()) {
     return Err(EC::InvalidArg, "unsupported property name");
@@ -2174,8 +2192,8 @@ ECM AMConfigManager::SetHostValue(const std::vector<std::string> &args) {
   }
 
   const std::string new_value = ValueToString(value);
-  PrintLine(AMStr::amfmt("{}.{}: {} -> {}", nickname, field, old_value,
-                         new_value));
+  PrintLine(
+      AMStr::amfmt("{}.{}: {} -> {}", nickname, field, old_value, new_value));
   return Ok();
 }
 

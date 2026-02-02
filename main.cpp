@@ -114,6 +114,10 @@ int main(int argc, char **argv) {
     if (dispatch.enter_interactive) {
       RunInteractiveLoop(app_name, managers);
     }
+    if (dispatch.rcm.first != EC::Success) {
+      std::cerr << dispatch.rcm.second << std::endl;
+      return static_cast<int>(dispatch.rcm.first);
+    }
     time_end = std::chrono::steady_clock::now();
     std::cout << "alltime: "
               << std::chrono::duration_cast<std::chrono::milliseconds>(

@@ -22,6 +22,22 @@ static void PrintCliError_(AMPromptManager &prompt,
   prompt.Print(AMStr::amfmt("❌ {}: {}", cli_func_name, msg));
 }
 
+/**
+ * @brief Remove duplicate targets while preserving the original order.
+ */
+static std::vector<std::string>
+UniqueTargetsKeepOrder_(const std::vector<std::string> &targets) {
+  std::vector<std::string> unique;
+  unique.reserve(targets.size());
+  for (const auto &target : targets) {
+    if (std::find(unique.begin(), unique.end(), target) != unique.end()) {
+      continue;
+    }
+    unique.push_back(target);
+  }
+  return unique;
+}
+
 AMFileSystem &AMFileSystem::Instance(AMClientManager &client_manager,
                                      AMConfigManager &config_manager) {
   static AMFileSystem instance(client_manager, config_manager);
@@ -45,7 +61,7 @@ AMFileSystem::ECM AMFileSystem::check(const std::string &nickname,
 AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
                                       amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  std::vector<std::string> targets = nicknames;
+  std::vector<std::string> targets = UniqueTargetsKeepOrder_(nicknames);
   if (targets.empty()) {
     const std::string current =
         client_manager_.CLIENT ? client_manager_.CLIENT->GetNickname() : "";
@@ -120,8 +136,8 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
   return last;
 }
 
-AMFileSystem::ECM AMFileSystem::connect(const std::string &nickname,
-                                        bool force, amf interrupt_flag) {
+AMFileSystem::ECM AMFileSystem::connect(const std::string &nickname, bool force,
+                                        amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   if (!force) {
     auto result =
@@ -150,8 +166,8 @@ AMFileSystem::ECM AMFileSystem::connect(const std::string &nickname,
     return {EC::Success, ""};
   }
 
-  auto rebuilt = client_manager_.AddClient(nickname, true, false, {}, flag,
-                                           false);
+  auto rebuilt =
+      client_manager_.AddClient(nickname, true, false, {}, flag, false);
   if (rebuilt.first.first != EC::Success || !rebuilt.second) {
     return rebuilt.first;
   }
@@ -450,11 +466,12 @@ AMFileSystem::ECM AMFileSystem::stat(const std::string &path,
 AMFileSystem::ECM AMFileSystem::stat(const std::vector<std::string> &paths,
                                      amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  if (paths.empty()) {
+  std::vector<std::string> targets = UniqueTargetsKeepOrder_(paths);
+  if (targets.empty()) {
     return {EC::InvalidArg, "Empty path"};
   }
   ECM last = {EC::Success, ""};
-  for (const auto &target : paths) {
+  for (const auto &target : targets) {
     if (flag && flag->check()) {
       return {EC::Terminate, "Interrupted by user"};
     }
@@ -647,11 +664,12 @@ AMFileSystem::ECM AMFileSystem::getsize(const std::string &path,
 AMFileSystem::ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
                                         amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  if (paths.empty()) {
+  std::vector<std::string> targets = UniqueTargetsKeepOrder_(paths);
+  if (targets.empty()) {
     return {EC::InvalidArg, "Empty path"};
   }
   ECM last = {EC::Success, ""};
-  for (const auto &target : paths) {
+  for (const auto &target : targets) {
     if (flag && flag->check()) {
       return {EC::Terminate, "Interrupted by user"};
     }
@@ -797,11 +815,12 @@ AMFileSystem::ECM AMFileSystem::mkdir(const std::string &path,
 AMFileSystem::ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
                                       amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  if (paths.empty()) {
+  std::vector<std::string> targets = UniqueTargetsKeepOrder_(paths);
+  if (targets.empty()) {
     return {EC::InvalidArg, "Empty path"};
   }
   ECM last = {EC::Success, ""};
-  for (const auto &target : paths) {
+  for (const auto &target : targets) {
     if (flag && flag->check()) {
       return {EC::Terminate, "Interrupted by user"};
     }
@@ -843,11 +862,12 @@ AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
                                    bool permanent, bool force,
                                    amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  if (paths.empty()) {
+  std::vector<std::string> targets = UniqueTargetsKeepOrder_(paths);
+  if (targets.empty()) {
     return {EC::InvalidArg, "Empty path"};
   }
   ECM last = {EC::Success, ""};
-  for (const auto &target : paths) {
+  for (const auto &target : targets) {
     if (flag && flag->check()) {
       return {EC::Terminate, "Interrupted by user"};
     }

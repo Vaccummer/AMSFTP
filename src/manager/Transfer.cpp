@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cctype>
 #include <exception>
-#include <iomanip>
 #include <sstream>
 #include <unordered_set>
 
@@ -84,6 +83,36 @@ static std::string FormatElapsed_(double seconds) {
   }
   oss << secs << "s";
   return oss.str();
+}
+
+/**
+ * @brief Build a unique key for a transfer task.
+ */
+static std::string BuildTaskKey_(const TransferTask &task) {
+  std::ostringstream oss;
+  oss << task.src_host << '\t' << task.src << '\t' << task.dst_host << '\t'
+      << task.dst << '\t' << static_cast<int>(task.path_type);
+  return oss.str();
+}
+
+/**
+ * @brief Remove duplicate tasks while preserving original order.
+ */
+static void DeduplicateTasks_(TASKS *tasks) {
+  if (!tasks || tasks->empty()) {
+    return;
+  }
+  std::unordered_set<std::string> seen;
+  seen.reserve(tasks->size());
+  TASKS unique;
+  unique.reserve(tasks->size());
+  for (const auto &task : *tasks) {
+    std::string key = BuildTaskKey_(task);
+    if (seen.insert(key).second) {
+      unique.push_back(task);
+    }
+  }
+  tasks->swap(unique);
 }
 
 /**
@@ -736,7 +765,7 @@ std::vector<size_t> AMTransferManager::SubmitTransferSets(
   ids.reserve(transfer_sets.size());
   std::lock_guard<std::mutex> lock(cache_mtx_);
   for (const auto &set : transfer_sets) {
-    cached_sets_.push_back(set);
+    cached_sets_.emplace_back(set);
     ids.push_back(cached_sets_.size() - 1);
   }
   return ids;
@@ -795,8 +824,8 @@ bool AMTransferManager::DeleteTransferSet(size_t set_index) {
 /**
  * @brief Delete cached transfer sets by indices.
  */
-size_t AMTransferManager::DeleteTransferSets(
-    const std::vector<size_t> &set_indices) {
+size_t
+AMTransferManager::DeleteTransferSets(const std::vector<size_t> &set_indices) {
   size_t removed = 0;
   std::lock_guard<std::mutex> lock(cache_mtx_);
   for (size_t index : set_indices) {
@@ -1034,8 +1063,7 @@ ECM AMTransferManager::Terminate(const ID &task_id, int timeout_ms) {
     return {EC::InvalidArg, AMStr::amfmt("Task not found: {}", task_id)};
   }
   if (!result.second) {
-    return {EC::InvalidArg,
-            AMStr::amfmt("Task already finished: {}", task_id)};
+    return {EC::InvalidArg, AMStr::amfmt("Task already finished: {}", task_id)};
   }
   return result.first->GetResult();
 }
@@ -1250,6 +1278,7 @@ AMTransferManager::PrepareTasks_(
     }
   }
 
+  DeduplicateTasks_(prepared.tasks.get());
   return {ECM{EC::Success, ""}, prepared};
 }
 
