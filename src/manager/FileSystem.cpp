@@ -121,18 +121,44 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
 }
 
 AMFileSystem::ECM AMFileSystem::connect(const std::string &nickname,
-                                        amf interrupt_flag) {
+                                        bool force, amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
-  auto result =
-      client_manager_.AddClient(nickname, nullptr, false, false, {}, flag);
-  if (result.first.first != EC::Success) {
-    return result.first;
+  if (!force) {
+    auto result =
+        client_manager_.AddClient(nickname, nullptr, false, false, {}, flag);
+    if (result.first.first != EC::Success) {
+      return result.first;
+    }
+    EnsureClientWorkdir(result.second);
+    if (result.second) {
+      return change_client(result.second->GetNickname(), flag);
+    }
+    return {EC::Success, ""};
   }
-  EnsureClientWorkdir(result.second);
-  if (result.second) {
-    return change_client(result.second->GetNickname(), flag);
+
+  auto existing = client_manager_.Clients().GetHost(nickname);
+  if (!existing) {
+    auto result =
+        client_manager_.AddClient(nickname, nullptr, false, false, {}, flag);
+    if (result.first.first != EC::Success) {
+      return result.first;
+    }
+    EnsureClientWorkdir(result.second);
+    if (result.second) {
+      return change_client(result.second->GetNickname(), flag);
+    }
+    return {EC::Success, ""};
   }
-  return {EC::Success, ""};
+
+  auto rebuilt = client_manager_.AddClient(nickname, true, false, {}, flag,
+                                           false);
+  if (rebuilt.first.first != EC::Success || !rebuilt.second) {
+    return rebuilt.first;
+  }
+
+  client_manager_.Clients().add_client(nickname, rebuilt.second, true);
+  EnsureClientWorkdir(rebuilt.second);
+  return change_client(rebuilt.second->GetNickname(), flag);
 }
 
 AMFileSystem::ECM AMFileSystem::sftp(const std::string &nickname,

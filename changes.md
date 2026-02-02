@@ -1,3 +1,7 @@
+# Isocline Improve
+
+this is a c repo, pay attention to its compatity with my CPP repo AMSFTP
+
 # Completion Menu
 
 ## Manual trigger

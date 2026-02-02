@@ -52,15 +52,16 @@ static const char* help[] = {
   "^u",         "delete to the start of the current line",
   "^k",         "delete to the end of the current line",
   "esc",        "delete the current input, or done with empty input",
+  "^x",         "clear the current input (undoable)",
   "","",
 
   "", "Editing:",
   "enter",      "accept current input",
   #ifndef __APPLE__
   "^enter, ^j", "",
-  "shift-tab",
+  "shift-tab,shift-enter",
   #else
-  "shift-tab,^j",
+  "shift-tab,shift-enter,^j",
   #endif
                 "create a new line for multi-line input",
   //" ",          "(or type '\\' followed by enter)",
@@ -73,12 +74,14 @@ static const char* help[] = {
   "tab",        "try to complete the current input",
   "","",
   "","In the completion menu:",
-  "enter,left", "use the currently selected completion",
-  "1 - 9",      "use completion N from the menu",
-  "tab,down",   "select the next completion",
-  "shift-tab,up","select the previous completion",
-  "esc",        "exit menu without completing",
-  "pgdn,^j",    "show all further possible completions",
+  "enter",      "use the currently selected completion",
+  "1 - 9",      "use completion N from the current page",
+  "up,down",    "select the previous/next completion",
+  "left,right", "move between columns (when available)",
+  "tab",        "go to the next page",
+  "shift-tab",  "go to the previous page",
+  "esc,^g",     "exit menu without completing",
+  "pgdn,^j",    "show all possible completions",
   "","",
   "","In incremental history search:",
   "enter",      "use the currently found history entry",
@@ -113,7 +116,7 @@ static const char* help_initial =
   #endif
   "         │        ┌───────┼──────┐        │    ctrl-r   : search history\n"
   "         ▼        ▼       ▼      ▼        ▼    tab      : complete word\n"
-  "  prompt> [ansi-darkgray]it's the quintessential language[/]     shift-tab: insert new line\n"
+  "  prompt> [ansi-darkgray]it's the quintessential language[/]     shift-tab/shift-enter: insert new line\n"
   "         ▲        ▲              ▲        ▲    esc      : delete input, done\n"
   "         │        └──────────────┘        │    ctrl-z   : undo\n"
   "         │   alt-backsp        alt-d      │\n"

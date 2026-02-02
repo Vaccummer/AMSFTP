@@ -142,6 +142,7 @@ static inline code_t key_unicode( unicode_t u ) {
 #define KEY_EVENT_RESIZE  (KEY_EVENT_BASE+1)
 #define KEY_EVENT_AUTOTAB (KEY_EVENT_BASE+2)
 #define KEY_EVENT_STOP    (KEY_EVENT_BASE+3)
+#define KEY_EVENT_COMPLETE (KEY_EVENT_BASE+4)
 
 // Convenience
 #define KEY_CTRL_UP       (WITH_CTRL(KEY_UP))

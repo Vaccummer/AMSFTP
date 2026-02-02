@@ -32,8 +32,9 @@ public:
   /** Check whether clients exist from nickname list. */
   ECM check(const std::vector<std::string> &nicknames,
             amf interrupt_flag = nullptr);
-  /** Create/connect a client by nickname. */
-  ECM connect(const std::string &nickname, amf interrupt_flag = nullptr);
+  /** Create/connect a client by nickname, optionally rebuilding it. */
+  ECM connect(const std::string &nickname, bool force = false,
+              amf interrupt_flag = nullptr);
   /** Create/connect an SFTP client by connection info. */
   ECM sftp(const std::string &nickname, const std::string &hostname,
            const std::string &username, int64_t port,

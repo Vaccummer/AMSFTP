@@ -1,5 +1,6 @@
 
 #include "AMCLI/CLIBind.hpp"
+#include "AMManager/SignalMonitor.hpp"
 #include <algorithm>
 #include <unordered_set>
 
@@ -32,8 +33,8 @@ void BindConfigCommands(CLI::App &app, CliArgsPool &args,
       commands.config_cmd->add_subcommand("save", "Save config");
 
   commands.config_get
-      ->add_option("nickname", args.config_get.nickname, "Host nickname")
-      ->required();
+      ->add_option("nicknames", args.config_get.nicknames, "Host nicknames")
+      ->expected(0, -1);
   commands.config_edit
       ->add_option("nickname", args.config_edit.nickname, "Host nickname")
       ->required();
@@ -46,8 +47,7 @@ void BindConfigCommands(CLI::App &app, CliArgsPool &args,
                    "Host nicknames to remove")
       ->expected(1, -1);
   commands.config_set
-      ->add_option("values", args.config_set.values,
-                   "nickname property value")
+      ->add_option("values", args.config_set.values, "nickname property value")
       ->expected(3, 3);
 }
 
@@ -181,6 +181,8 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
       ->add_option("nickname", args.connect.nickname, "Host nickname")
       ->required()
       ->expected(1, 1);
+  commands.connect_cmd->add_flag("-f,--force", args.connect.force,
+                                 "Rebuild and replace existing client");
 
   commands.bash_cmd = app.add_subcommand("bash", "Enter interactive mode");
 }
@@ -438,7 +440,17 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
       return result;
     }
     if (cli_commands.config_get->parsed()) {
-      result.rcm = config_manager.Query(args.config_get.nickname);
+      std::vector<std::string> targets = args.config_get.nicknames;
+      if (targets.empty()) {
+        std::string current =
+            client_manager.CLIENT ? client_manager.CLIENT->GetNickname()
+                                  : "local";
+        if (current.empty()) {
+          current = "local";
+        }
+        targets.push_back(current);
+      }
+      result.rcm = config_manager.Query(targets);
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
@@ -648,7 +660,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.connect_cmd->parsed()) {
-    result.rcm = filesystem.connect(args.connect.nickname, flag);
+    result.rcm = filesystem.connect(args.connect.nickname, args.connect.force,
+                                    flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }

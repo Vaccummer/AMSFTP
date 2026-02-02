@@ -144,10 +144,11 @@ public:
     }
 
     auto client_config = config_.GetClientConfig(nickname);
-    print(AMStr::amfmt("hostname: {}", client_config.second.request.hostname));
-    print(AMStr::amfmt("username: {}", client_config.second.request.username));
-    print(AMStr::amfmt("port: {}", client_config.second.request.port));
-    print(AMStr::amfmt("password: {}", client_config.second.request.password));
+    // print(AMStr::amfmt("hostname: {}",
+    // client_config.second.request.hostname)); print(AMStr::amfmt("username:
+    // {}", client_config.second.request.username)); print(AMStr::amfmt("port:
+    // {}", client_config.second.request.port)); print(AMStr::amfmt("password:
+    // {}", client_config.second.request.password));
     if (client_config.first.first != EC::Success) {
       return {client_config.first, nullptr};
     }
@@ -181,10 +182,10 @@ public:
       spinner_line_len_.store(spinner_line_len);
       spinner_running.store(true);
       spinner_thread = std::thread([&spinner_running, spinner_line, this]() {
-        const char frames[] = {'|', '/', '-', '\\'};
+        const std::vector<std::string> frames = {"▖", "▘", "▝", "▗"};
         size_t idx = 0;
         while (spinner_running.load() && !spinner_stop_requested_.load()) {
-          char indicator = frames[idx % (sizeof(frames) / sizeof(frames[0]))];
+          std::string indicator = frames[idx % frames.size()];
           std::cout << '\r' << indicator << "  " << spinner_line << std::flush;
           idx++;
           std::this_thread::sleep_for(std::chrono::milliseconds(120));
@@ -265,10 +266,10 @@ public:
       spinner_line_len_.store(spinner_line_len);
       spinner_running.store(true);
       spinner_thread = std::thread([&spinner_running, spinner_line, this]() {
-        const char frames[] = {'|', '/', '-', '\\'};
+        const std::vector<std::string> frames = {"▖", "▘", "▝", "▗"};
         size_t idx = 0;
         while (spinner_running.load() && !spinner_stop_requested_.load()) {
-          char indicator = frames[idx % (sizeof(frames) / sizeof(frames[0]))];
+          std::string indicator = frames[idx % frames.size()];
           std::cout << '\r' << indicator << "  " << spinner_line << std::flush;
           idx++;
           std::this_thread::sleep_for(std::chrono::milliseconds(120));

@@ -535,7 +535,8 @@ public:
     // 使用SocketConnector建立连接
     SocketConnector connector;
 
-    if (!connector.Connect(res_data.hostname, res_data.port, timeout_ms)) {
+    if (!connector.Connect(res_data.hostname, res_data.port, timeout_ms,
+                           interrupt_flag)) {
       trace(TraceLevel::Critical, connector.error_code,
             AMStr::amfmt("{}", std::to_string(connector.sock)),
             "SocketConnector.Connect", connector.error_msg);

@@ -137,8 +137,9 @@ static void edit_get_prompt_width( ic_env_t* env, editor_t* eb, bool in_extra, s
     ssize_t textw = bbcode_column_width(env->bbcode, eb->prompt_text);
     ssize_t markerw = bbcode_column_width(env->bbcode, env->prompt_marker);
     ssize_t cmarkerw = bbcode_column_width(env->bbcode, env->cprompt_marker);
+    ssize_t prefixw = (env->line_prefix == NULL ? 0 : bbcode_column_width(env->bbcode, env->line_prefix));
     *promptw = markerw + textw;
-    *cpromptw = (env->no_multiline_indent || *promptw < cmarkerw ? cmarkerw : *promptw);
+    *cpromptw = (env->no_multiline_indent || *promptw < cmarkerw ? cmarkerw : *promptw) + prefixw;
   }
 }
 
@@ -182,6 +183,9 @@ static void edit_write_prompt( ic_env_t* env, editor_t* eb, ssize_t row, bool in
   }
   // the marker
   bbcode_print(env->bbcode, (row == 0 ? env->prompt_marker : env->cprompt_marker ));   
+  if (row > 0 && env->line_prefix != NULL && env->line_prefix[0] != 0) {
+    bbcode_print(env->bbcode, env->line_prefix);
+  }
   bbcode_style_close(env->bbcode,NULL);    
 }
 
@@ -960,6 +964,9 @@ static char* edit_line( ic_env_t* env, const char* prompt_text )
       case KEY_EVENT_AUTOTAB:
         edit_generate_completions(env, &eb, true);
         break;
+      case KEY_EVENT_COMPLETE:
+        edit_generate_completions(env, &eb, false);
+        break;
 
       // completion, history, help, undo
       case KEY_TAB:
@@ -1075,6 +1082,9 @@ static char* edit_line( ic_env_t* env, const char* prompt_text )
       case KEY_CTRL_T:
         edit_swap_char(env,&eb);
         break;
+      case KEY_CTRL_X:
+        edit_delete_all(env,&eb);
+        break;
 
       // Editing
       case KEY_SHIFT_TAB:
@@ -1139,4 +1149,3 @@ static char* edit_line( ic_env_t* env, const char* prompt_text )
 
   return res;
 }
-
