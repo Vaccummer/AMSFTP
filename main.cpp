@@ -66,6 +66,15 @@ int main(int argc, char **argv) {
     CliCommands cli_commands = BindCliOptions(app, args_pool);
     try {
       app.parse(argc, argv);
+    } catch (const CLI::CallForHelp &e) {
+      std::cout << app.help() << std::endl;
+      return e.get_exit_code();
+    } catch (const CLI::CallForAllHelp &e) {
+      std::cout << app.help("", CLI::AppFormatMode::All) << std::endl;
+      return e.get_exit_code();
+    } catch (const CLI::CallForVersion &e) {
+      std::cout << app.version() << std::endl;
+      return e.get_exit_code();
     } catch (const CLI::ParseError &e) {
       return app.exit(e);
     }
