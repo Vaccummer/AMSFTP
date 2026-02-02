@@ -137,7 +137,8 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
 }
 
 AMFileSystem::ECM AMFileSystem::connect(const std::string &nickname, bool force,
-                                        amf interrupt_flag) {
+                                        amf interrupt_flag,
+                                        bool switch_client) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   if (!force) {
     auto result =
@@ -146,7 +147,7 @@ AMFileSystem::ECM AMFileSystem::connect(const std::string &nickname, bool force,
       return result.first;
     }
     EnsureClientWorkdir(result.second);
-    if (result.second) {
+    if (switch_client && result.second) {
       return change_client(result.second->GetNickname(), flag);
     }
     return {EC::Success, ""};
@@ -160,7 +161,7 @@ AMFileSystem::ECM AMFileSystem::connect(const std::string &nickname, bool force,
       return result.first;
     }
     EnsureClientWorkdir(result.second);
-    if (result.second) {
+    if (switch_client && result.second) {
       return change_client(result.second->GetNickname(), flag);
     }
     return {EC::Success, ""};
@@ -174,7 +175,10 @@ AMFileSystem::ECM AMFileSystem::connect(const std::string &nickname, bool force,
 
   client_manager_.Clients().add_client(nickname, rebuilt.second, true);
   EnsureClientWorkdir(rebuilt.second);
-  return change_client(rebuilt.second->GetNickname(), flag);
+  if (switch_client && rebuilt.second) {
+    return change_client(rebuilt.second->GetNickname(), flag);
+  }
+  return {EC::Success, ""};
 }
 
 AMFileSystem::ECM AMFileSystem::sftp(const std::string &nickname,

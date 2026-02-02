@@ -607,7 +607,14 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.ch_cmd->parsed()) {
-    result.rcm = filesystem.change_client(args.ch.nickname, flag);
+    const bool is_interactive = enforce_interactive || AMIsInteractive.load();
+    if (is_interactive) {
+      result.rcm = filesystem.change_client(args.ch.nickname, flag);
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
+    }
+    result.rcm = filesystem.connect(args.ch.nickname, false, flag, true);
+    result.enter_interactive = result.rcm.first == EC::Success;
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
@@ -619,12 +626,18 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.connect_cmd->parsed()) {
-    result.rcm =
-        filesystem.connect(args.connect.nickname, args.connect.force, flag);
+    const bool is_interactive = enforce_interactive || AMIsInteractive.load();
+    result.rcm = filesystem.connect(args.connect.nickname, args.connect.force,
+                                    flag, false);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
     }
-    result.enter_interactive = result.rcm.first == EC::Success;
+    if (!is_interactive) {
+      result.rcm = filesystem.change_client("local", flag);
+      result.enter_interactive = result.rcm.first == EC::Success;
+    }
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
