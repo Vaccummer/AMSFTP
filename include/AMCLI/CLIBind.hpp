@@ -366,6 +366,7 @@ struct CliCommands {
   CLI::App *task_terminate_cmd = nullptr;
   CLI::App *task_pause_cmd = nullptr;
   CLI::App *task_resume_cmd = nullptr;
+  CLI::App *resume_cmd = nullptr;
   const CliArgsPool *args = nullptr;
 };
 

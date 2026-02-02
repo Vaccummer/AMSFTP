@@ -284,6 +284,20 @@ void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
       ->add_option("-i,--index", args.task_resume.indices,
                    "1-based task indices to resume")
       ->expected(0, -1);
+
+  commands.resume_cmd = app.add_subcommand(
+      "retry", "Retry a completed but failed task (retry failed entries)");
+  commands.resume_cmd->add_flag("-a,--async", args.task_resume.is_async,
+                                "Submit task asynchronously");
+  commands.resume_cmd->add_flag("-q,--quiet", args.task_resume.quiet,
+                                "Suppress output");
+  commands.resume_cmd->add_option("id", args.task_resume.id, "Task ID")
+      ->required()
+      ->expected(1, 1);
+  commands.resume_cmd
+      ->add_option("-i,--index", args.task_resume.indices,
+                   "1-based task indices to resume")
+      ->expected(0, -1);
 }
 
 /**
@@ -832,11 +846,23 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     return result;
   }
 
+  if (cli_commands.resume_cmd && cli_commands.resume_cmd->parsed()) {
+    AMTransferManager &transfer_manager = AMTransferManager::Instance();
+    result.rcm = transfer_manager.resume(
+        args.task_resume.id, args.task_resume.is_async, args.task_resume.quiet,
+        args.task_resume.indices);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
   if (cli_commands.task_resume_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
     result.rcm = transfer_manager.resume(
         args.task_resume.id, args.task_resume.is_async, args.task_resume.quiet,
         args.task_resume.indices);
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
+    }
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
