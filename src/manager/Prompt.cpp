@@ -1,47 +1,15 @@
 #include "AMManager/Prompt.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
-#include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/SignalMonitor.hpp"
+#include "Isocline/isocline.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
-#include <iostream>
-#include <replxx.h>
 #include <sstream>
 #include <string>
 #include <unordered_set>
-
-namespace {
-ReplxxActionResult EscAbortHandler(Replxx *rx, unsigned int, void *ud) {
-  auto *self = static_cast<AMPromptManager *>(ud);
-  if (self) {
-    self->esc_pressed_ = true;
-  }
-  if (rx) {
-    return replxx_invoke(rx, REPLXX_ACTION_ABORT_LINE, 0);
-  }
-  return REPLXX_ACTION_RESULT_BAIL;
-}
-
-void HighlightCallback(const char *input, ReplxxColor *colors, int size,
-                       void *ud) {
-  auto *self = static_cast<AMPromptManager *>(ud);
-  if (!self) {
-    return;
-  }
-  if (!self->token_analyzer_) {
-    return;
-  }
-  if (!input || size <= 0) {
-    return;
-  }
-  self->token_analyzer_->Highlight(
-      std::string(input, static_cast<size_t>(size)), colors, size);
-}
-
-} // namespace
 
 AMPromptManager &AMPromptManager::Instance() {
   static AMPromptManager instance;
@@ -49,27 +17,15 @@ AMPromptManager &AMPromptManager::Instance() {
 }
 
 AMPromptManager::AMPromptManager() {
-  replxx_ = replxx_init();
-  core_replxx_ = replxx_init();
-  token_analyzer_ =
-      std::make_unique<AMTokenTypeAnalyzer>(AMConfigManager::Instance());
-  // if (replxx_) {
-  //   replxx_set_highlighter_callback(replxx_, HighlightCallback, this);
-  // }
-  if (core_replxx_) {
-    replxx_set_highlighter_callback(core_replxx_, HighlightCallback, this);
-    replxx_bind_key(core_replxx_, REPLXX_KEY_UP,
-                    &AMPromptManager::HistoryUpHandler_, this);
-    replxx_bind_key(core_replxx_, REPLXX_KEY_DOWN,
-                    &AMPromptManager::HistoryDownHandler_, this);
-  }
+  ic_set_prompt_marker("", "");
+  ic_set_history(nullptr, -1);
+  ic_enable_history_duplicates(false);
 
   AMCliSignalMonitor::SignalHook hook;
   hook.interrupt_flag = nullptr;
   hook.callback = [this]([[maybe_unused]] int signum) {
-    if (replxx_) {
-      replxx_emulate_key_press(replxx_, REPLXX_KEY_CONTROL('D'));
-    }
+    (void)this;
+    ic_async_stop();
   };
   hook.is_silenced = true;
   hook.priority = 0;
@@ -78,9 +34,8 @@ AMPromptManager::AMPromptManager() {
   AMCliSignalMonitor::SignalHook core_hook;
   core_hook.interrupt_flag = amgif;
   core_hook.callback = [this]([[maybe_unused]] int signum) {
-    if (core_replxx_) {
-      replxx_emulate_key_press(core_replxx_, REPLXX_KEY_CONTROL('D'));
-    }
+    (void)this;
+    ic_async_stop();
   };
   core_hook.is_silenced = true;
   core_hook.priority = 0;
@@ -88,14 +43,6 @@ AMPromptManager::AMPromptManager() {
 }
 
 AMPromptManager::~AMPromptManager() {
-  if (replxx_) {
-    replxx_end(replxx_);
-    replxx_ = nullptr;
-  }
-  if (core_replxx_) {
-    replxx_end(core_replxx_);
-    core_replxx_ = nullptr;
-  }
 }
 
 void AMPromptManager::Print(const std::vector<std::string> &items,
@@ -111,8 +58,8 @@ void AMPromptManager::Print(const std::vector<std::string> &items,
 
   const std::string output = oss.str();
   std::lock_guard<std::mutex> lock(print_mutex_);
-  std::cout << output;
-  std::cout.flush();
+  ic_print(output.c_str());
+  ic_term_flush();
 }
 
 void AMPromptManager::ErrorFormat(const std::string &error_name,
@@ -128,7 +75,7 @@ void AMPromptManager::ErrorFormat(const std::string &error_name,
   Print(body.str());
 
   if (is_exit) {
-    std::cout.flush();
+    ic_term_flush();
     std::exit(exit_code);
   }
 }
@@ -300,59 +247,36 @@ bool AMPromptManager::Prompt(const std::string &prompt,
     return true;
   }
 
-  esc_pressed_ = false;
-
-  if (!replxx_) {
-    return true;
-  }
+  (void)placeholder;
 
   PromptHookGuard hook_guard(AMCliSignalMonitor::Instance());
 
-  if (!placeholder.empty()) {
-    replxx_set_preload_buffer(replxx_, placeholder.c_str());
-  } else {
-    replxx_set_preload_buffer(replxx_, "");
-  }
-
-  const char *line = replxx_input(replxx_, prompt.c_str());
-  if (esc_pressed_) {
-    return true;
-  }
+  char *line = ic_readline(prompt.c_str());
   if (!line) {
     return true;
   }
+  ic_history_remove_last();
   *out_input = std::string(line);
-  return esc_pressed_;
+  ic_free(line);
+  return false;
 }
 
 /**
- * @brief Prompt for a command line using the core replxx handle.
+ * @brief Prompt for a command line using the shared readline handle.
  */
 bool AMPromptManager::PromptCore(const std::string &prompt,
                                  std::string *out_input) {
   if (!out_input) {
     return true;
   }
-
-  esc_pressed_ = false;
-  ResetHistorySession_();
-
-  if (!core_replxx_) {
-    return true;
-  }
-
-  replxx_set_preload_buffer(core_replxx_, "");
-
-  const char *line = replxx_input(core_replxx_, prompt.c_str());
-  if (esc_pressed_) {
-    return true;
-  }
+  char *line = ic_readline(prompt.c_str());
   if (!line) {
     return true;
   }
+  ic_history_remove_last();
   *out_input = std::string(line);
-  ResetHistorySession_();
-  return esc_pressed_;
+  ic_free(line);
+  return false;
 }
 
 /**
@@ -360,19 +284,13 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
  */
 void AMPromptManager::SetHistoryEnabled(bool enabled) {
   history_enabled_ = enabled;
-  if (!history_enabled_) {
-    ResetHistorySession_();
-  }
 }
 
 /**
- * @brief Load history for a nickname into replxx core.
+ * @brief Load history for a nickname into the readline history.
  */
 void AMPromptManager::LoadHistory(AMConfigManager &config_manager,
                                   const std::string &nickname) {
-  if (!core_replxx_) {
-    return;
-  }
   if (nickname.empty()) {
     return;
   }
@@ -386,125 +304,62 @@ void AMPromptManager::LoadHistory(AMConfigManager &config_manager,
   history_loaded_ = true;
 
   max_history_count_ = config_manager.ResolveMaxHistoryCount(10);
-  replxx_set_max_history_size(core_replxx_, max_history_count_);
-  replxx_set_unique_history(core_replxx_, 1);
-  replxx_history_clear(core_replxx_);
+  ic_set_history(nullptr, max_history_count_);
+  ic_enable_history_duplicates(false);
+  ic_history_clear();
 
   std::vector<std::string> commands;
   ECM status = config_manager.GetHistoryCommands(nickname, &commands);
   if (status.first != ErrorCode::Success) {
+    history_entries_.clear();
     ErrorFormat("HistoryLoad", status.second, false, 0, __func__);
     return;
   }
-  std::vector<std::string> normalized =
-      NormalizeHistory_(commands, max_history_count_);
-  for (const auto &cmd : normalized) {
-    replxx_history_add(core_replxx_, cmd.c_str());
+  history_entries_ = NormalizeHistory_(commands, max_history_count_);
+  for (const auto &cmd : history_entries_) {
+    ic_history_add(cmd.c_str());
   }
-  if (normalized != commands) {
-    (void)config_manager.SetHistoryCommands(nickname, normalized, true);
+  if (history_entries_ != commands) {
+    (void)config_manager.SetHistoryCommands(nickname, history_entries_, true);
   }
 }
 
 /**
- * @brief Flush current replxx history back into ConfigManager.
+ * @brief Flush current history back into ConfigManager.
  */
 void AMPromptManager::FlushHistory(AMConfigManager &config_manager) {
   if (!history_loaded_ || history_nickname_.empty()) {
     return;
   }
   max_history_count_ = config_manager.ResolveMaxHistoryCount(10);
-  std::vector<std::string> commands = CollectHistory_();
-  std::vector<std::string> normalized =
-      NormalizeHistory_(commands, max_history_count_);
-  ECM status =
-      config_manager.SetHistoryCommands(history_nickname_, normalized, true);
+  history_entries_ = NormalizeHistory_(history_entries_, max_history_count_);
+  ECM status = config_manager.SetHistoryCommands(history_nickname_,
+                                                 history_entries_, true);
   if (status.first != ErrorCode::Success) {
     ErrorFormat("HistorySave", status.second, false, 0, __func__);
   }
 }
 
 /**
- * @brief Add a history entry to replxx core history.
+ * @brief Add a history entry to the readline history.
  */
 void AMPromptManager::AddHistoryEntry(const std::string &line) {
-  if (!core_replxx_) {
+  if (!history_enabled_) {
     return;
   }
   if (line.empty()) {
     return;
   }
-  replxx_history_add(core_replxx_, line.c_str());
+  history_entries_.push_back(line);
+  history_entries_ = NormalizeHistory_(history_entries_, max_history_count_);
+  ic_history_add(line.c_str());
 }
 
 /**
- * @brief Collect current replxx history into a list.
+ * @brief Collect current history into a list.
  */
 std::vector<std::string> AMPromptManager::CollectHistory_() const {
-  std::vector<std::string> out;
-  if (!core_replxx_) {
-    return out;
-  }
-  ReplxxHistoryScan *scan = replxx_history_scan_start(core_replxx_);
-  if (!scan) {
-    return out;
-  }
-  ReplxxHistoryEntry entry{};
-  while (replxx_history_scan_next(core_replxx_, scan, &entry) == 0) {
-    if (entry.text && entry.text[0] != '\0') {
-      out.emplace_back(entry.text);
-    }
-  }
-  replxx_history_scan_stop(core_replxx_, scan);
-  return out;
-}
-
-/**
- * @brief Reset history navigation session state.
- */
-void AMPromptManager::ResetHistorySession_() {
-  history_session_active_ = false;
-  history_session_index_ = -1;
-  history_session_entries_.clear();
-  history_session_current_.clear();
-  history_original_input_.clear();
-}
-
-/**
- * @brief Start a history navigation session from current input.
- */
-void AMPromptManager::StartHistorySession_() {
-  if (!core_replxx_) {
-    return;
-  }
-  if (history_session_active_) {
-    return;
-  }
-  ReplxxState state{};
-  replxx_get_state(core_replxx_, &state);
-  history_original_input_ = state.text ? state.text : "";
-  history_session_entries_ = CollectHistory_();
-  const int history_count = static_cast<int>(history_session_entries_.size());
-  if (!history_original_input_.empty()) {
-    history_session_entries_.push_back(history_original_input_);
-  }
-  history_session_entries_.push_back(std::string());
-  history_session_index_ = history_count;
-  history_session_active_ = true;
-}
-
-/**
- * @brief Apply a history entry to the replxx buffer.
- */
-void AMPromptManager::ApplyHistoryEntry_(const std::string &line) {
-  if (!core_replxx_) {
-    return;
-  }
-  history_session_current_ = line;
-  ReplxxState state{};
-  state.text = history_session_current_.c_str();
-  state.cursorPosition = static_cast<int>(history_session_current_.size());
-  replxx_set_state(core_replxx_, &state);
+  return history_entries_;
 }
 
 /**
@@ -531,55 +386,4 @@ AMPromptManager::NormalizeHistory_(const std::vector<std::string> &input,
                    reversed.end() - static_cast<size_t>(max_count));
   }
   return reversed;
-}
-
-/**
- * @brief Handle the Up key for history or completion navigation.
- */
-ReplxxActionResult AMPromptManager::HistoryUpHandler_(int code, void *ud) {
-  auto *self = static_cast<AMPromptManager *>(ud);
-  if (!self || !self->core_replxx_) {
-    return REPLXX_ACTION_RESULT_CONTINUE;
-  }
-  if (!self->history_enabled_) {
-    return replxx_invoke(self->core_replxx_, REPLXX_ACTION_COMPLETE_PREVIOUS,
-                         static_cast<unsigned int>(code));
-  }
-  if (!self->history_session_active_) {
-    self->StartHistorySession_();
-  }
-  if (!self->history_session_active_ ||
-      self->history_session_entries_.empty()) {
-    return REPLXX_ACTION_RESULT_CONTINUE;
-  }
-  if (self->history_session_index_ > 0) {
-    --self->history_session_index_;
-  }
-  self->ApplyHistoryEntry_(
-      self->history_session_entries_[self->history_session_index_]);
-  return REPLXX_ACTION_RESULT_CONTINUE;
-}
-
-/**
- * @brief Handle the Down key for history or completion navigation.
- */
-ReplxxActionResult AMPromptManager::HistoryDownHandler_(int code, void *ud) {
-  auto *self = static_cast<AMPromptManager *>(ud);
-  if (!self || !self->core_replxx_) {
-    return REPLXX_ACTION_RESULT_CONTINUE;
-  }
-  if (!self->history_enabled_) {
-    return replxx_invoke(self->core_replxx_, REPLXX_ACTION_COMPLETE_NEXT,
-                         static_cast<unsigned int>(code));
-  }
-  if (!self->history_session_active_) {
-    return REPLXX_ACTION_RESULT_CONTINUE;
-  }
-  if (self->history_session_index_ + 1 <
-      static_cast<int>(self->history_session_entries_.size())) {
-    ++self->history_session_index_;
-  }
-  self->ApplyHistoryEntry_(
-      self->history_session_entries_[self->history_session_index_]);
-  return REPLXX_ACTION_RESULT_CONTINUE;
 }

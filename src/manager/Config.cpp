@@ -79,24 +79,6 @@ std::string TrimCopy(const std::string &value) {
   return tmp;
 }
 
-bool IsHexDigit(char c) {
-  return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
-         (c >= 'A' && c <= 'F');
-}
-
-bool ParseHexColor(const std::string &token, int *r, int *g, int *b) {
-  if (token.size() != 7 || token[0] != '#')
-    return false;
-  for (size_t i = 1; i < token.size(); ++i) {
-    if (!IsHexDigit(token[i]))
-      return false;
-  }
-  *r = std::stoi(token.substr(1, 2), nullptr, 16);
-  *g = std::stoi(token.substr(3, 2), nullptr, 16);
-  *b = std::stoi(token.substr(5, 2), nullptr, 16);
-  return true;
-}
-
 std::string ToLowerCopy(const std::string &value) {
   std::string out = value;
   std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
@@ -1245,58 +1227,9 @@ std::string AMConfigManager::Format(const std::string &ori_str,
     return "";
   if (raw.front() != '[' || raw.back() != ']')
     return ori_str;
-
-  std::string inner = TrimCopy(raw.substr(1, raw.size() - 2));
-  if (inner.empty())
-    return "";
-
-  std::istringstream iss(inner);
-  std::string token;
-  std::vector<std::string> codes;
-  while (iss >> token) {
-    if (token.empty())
-      continue;
-    int r = 0, g = 0, b = 0;
-    if (ParseHexColor(token, &r, &g, &b)) {
-      codes.push_back(AMStr::amfmt("38;2;{};{};{}", std::to_string(r),
-                                   std::to_string(g), std::to_string(b)));
-      continue;
-    }
-    std::string lower = ToLowerCopy(token);
-    if (lower == "bold") {
-      codes.push_back("1");
-      continue;
-    }
-    if (lower == "underline") {
-      codes.push_back("4");
-      continue;
-    }
-    if (lower == "italic") {
-      codes.push_back("3");
-      continue;
-    }
-    if (lower == "dim") {
-      codes.push_back("2");
-      continue;
-    }
-    if (lower == "reverse") {
-      codes.push_back("7");
-      continue;
-    }
+  if (raw.find("[/") != std::string::npos)
     return ori_str;
-  }
-
-  if (codes.empty())
-    return "";
-
-  std::ostringstream oss;
-  for (size_t i = 0; i < codes.size(); ++i) {
-    if (i > 0)
-      oss << ';';
-    oss << codes[i];
-  }
-
-  return AMStr::amfmt("\033[{}m{}\033[0m", oss.str(), ori_str);
+  return raw + ori_str + "[/]";
 }
 
 ECM AMConfigManager::List() const {
