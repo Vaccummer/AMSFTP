@@ -35,12 +35,16 @@ struct ic_env_s {
   void*           highlighter_arg;  // user state for the highlighter.
   const char*     match_braces;     // matching braces, e.g "()[]{}"
   const char*     auto_braces;      // auto insertion braces, e.g "()[]{}\"\"''"
+  const char*     line_prefix;      // fixed prefix displayed after line breaks
   char            multiline_eol;    // character used for multiline input ("\") (set to 0 to disable)
   bool            initialized;      // are we initialized?
   bool            noedit;           // is rich editing possible (tty != NULL)
   bool            singleline_only;  // allow only single line editing?
   bool            complete_nopreview; // do not show completion preview for each selection in the completion menu?
   bool            complete_autotab; // try to keep completing after a completion?
+  bool            complete_nosort;  // do not sort completion items?
+  long            complete_max_items;   // maximum number of completions to generate/show
+  long            complete_max_columns; // maximum number of columns in the completion menu
   bool            no_multiline_indent; // indent continuation lines to line up under the initial prompt 
   bool            no_help;          // show short help line for history search etc.
   bool            no_hint;          // allow hinting?

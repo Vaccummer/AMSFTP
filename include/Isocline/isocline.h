@@ -171,6 +171,11 @@ typedef void (ic_completer_fun_t)(ic_completion_env_t* cenv, const char* prefix 
 /// The initial completer use `ic_complete_filename`.
 void ic_set_default_completer( ic_completer_fun_t* completer, void* arg);
 
+/** Programmatically open the completion menu as if the user pressed tab.
+    This reuses the current completion settings and UI and returns true
+    if the request was queued. */
+bool ic_open_completion_menu(void);
+
 
 /// In a completion callback (usually from ic_complete_word()), use this function to add a completion.
 /// (the completion string is copied by isocline and do not need to be preserved or allocated).
@@ -356,10 +361,31 @@ bool ic_enable_auto_tab( bool enable );
 /// Returns the previous setting.
 bool ic_enable_completion_preview( bool enable );
 
+/** Disable or enable automatic sorting of completion items (enabled by default).
+    Returns the previous setting. */
+bool ic_enable_completion_sort( bool enable );
+
+/** Set the maximum number of completion items to generate/show.
+    Pass a value <= 0 to reset to the default (1000). Values above 1000 are clamped.
+    Returns the previous setting. */
+long ic_set_completion_max_items( long max_items );
+
+/** Set the maximum number of columns in the completion menu.
+    Pass a value <= 0 to reset to the default (4). Returns the previous setting. */
+long ic_set_completion_max_columns( long max_columns );
+
 /// Disable or enable automatic identation of continuation lines in multiline
 /// input so it aligns with the initial prompt.
 /// Returns the previous setting.
 bool ic_enable_multiline_indent(bool enable);
+
+/** Set a fixed line prefix that is displayed after line breaks in multiline input.
+    The prefix supports bbcode formatting and is not inserted into the input.
+    Pass NULL to disable the prefix. */
+void ic_set_line_prefix( const char* prefix );
+
+/** Get the current line prefix (may be an empty string). */
+const char* ic_get_line_prefix(void);
 
 /// Disable or enable display of short help messages for history search etc.
 /// (full help is always dispayed when pressing F1 regardless of this setting)

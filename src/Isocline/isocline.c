@@ -48,6 +48,8 @@
 #include "common.h"
 #include "env.h"
 
+#define IC_DEFAULT_COMPLETION_MAX_COLUMNS (4)
+
 
 //-------------------------------------------------------------
 // Readline
@@ -156,6 +158,14 @@ ic_public bool ic_async_stop(void) {
   return tty_async_stop(env->tty);
 }
 
+/** Request the completion menu to open on the next key processing cycle. */
+ic_public bool ic_open_completion_menu(void) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return false;
+  if (env->tty==NULL) return false;
+  tty_code_pushback(env->tty, KEY_EVENT_COMPLETE);
+  return true;
+}
+
 static void set_prompt_marker(ic_env_t* env, const char* prompt_marker, const char* cprompt_marker) {
   if (prompt_marker == NULL) prompt_marker = "> ";
   if (cprompt_marker == NULL) cprompt_marker = prompt_marker;
@@ -236,11 +246,61 @@ ic_public bool ic_enable_completion_preview( bool enable ) {
   return !prev;
 }
 
+/** Enable or disable automatic sorting of completion items. */
+ic_public bool ic_enable_completion_sort( bool enable ) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return false;
+  bool prev = env->complete_nosort;
+  env->complete_nosort = !enable;
+  return !prev;
+}
+
+/** Set the maximum number of completion items to generate/show. */
+ic_public long ic_set_completion_max_items( long max_items ) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return 0;
+  long prev = env->complete_max_items;
+  if (max_items <= 0) {
+    max_items = IC_MAX_COMPLETIONS_TO_SHOW;
+  }
+  if (max_items > IC_MAX_COMPLETIONS_TO_SHOW) {
+    max_items = IC_MAX_COMPLETIONS_TO_SHOW;
+  }
+  env->complete_max_items = max_items;
+  return prev;
+}
+
+/** Set the maximum number of columns in the completion menu. */
+ic_public long ic_set_completion_max_columns( long max_columns ) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return 0;
+  long prev = env->complete_max_columns;
+  if (max_columns <= 0) {
+    max_columns = IC_DEFAULT_COMPLETION_MAX_COLUMNS;
+  }
+  if (max_columns < 1) {
+    max_columns = 1;
+  }
+  env->complete_max_columns = max_columns;
+  return prev;
+}
+
 ic_public bool ic_enable_multiline_indent(bool enable) {
   ic_env_t* env = ic_get_env(); if (env==NULL) return false;
   bool prev = env->no_multiline_indent;
   env->no_multiline_indent = !enable;
   return !prev;
+}
+
+/** Set the fixed line prefix used on continuation lines. */
+ic_public void ic_set_line_prefix( const char* prefix ) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return;
+  mem_free(env->mem, env->line_prefix);
+  if (prefix == NULL) prefix = "";
+  env->line_prefix = mem_strdup(env->mem, prefix);
+}
+
+/** Get the current line prefix (may be empty). */
+ic_public const char* ic_get_line_prefix(void) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return NULL;
+  return (env->line_prefix == NULL ? "" : env->line_prefix);
 }
 
 ic_public bool ic_enable_hint(bool enable) {
@@ -492,6 +552,7 @@ static void ic_env_free(ic_env_t* env) {
   bbcode_free(env->bbcode);
   term_free(env->term);
   tty_free(env->tty);
+  mem_free(env->mem, env->line_prefix);
   mem_free(env->mem, env->cprompt_marker);
   mem_free(env->mem,env->prompt_marker);
   mem_free(env->mem, env->match_braces);
@@ -532,6 +593,9 @@ static ic_env_t* ic_env_create( ic_malloc_fun_t* _malloc, ic_realloc_fun_t* _rea
   env->completions = completions_new(env->mem);
   env->bbcode      = bbcode_new(env->mem, env->term);
   env->hint_delay  = 400;   
+  env->complete_max_items = IC_MAX_COMPLETIONS_TO_SHOW;
+  env->complete_max_columns = IC_DEFAULT_COMPLETION_MAX_COLUMNS;
+  env->line_prefix = mem_strdup(env->mem, "");
   
   if (env->tty == NULL || env->term==NULL ||
       env->completions == NULL || env->history == NULL || env->bbcode == NULL ||
@@ -591,4 +655,3 @@ ic_public void ic_init_custom_malloc( ic_malloc_fun_t* _malloc, ic_realloc_fun_t
     }
   }
 }
-

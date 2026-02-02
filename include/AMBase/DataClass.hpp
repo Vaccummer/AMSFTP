@@ -242,9 +242,32 @@ public:
 
   ~SocketConnector() {}
 
-  // 连接到指定主机，返回是否成功
+  /**
+   * @brief Connect to the specified host with an optional timeout and
+   *        interrupt flag.
+   *
+   * @param hostname Target hostname or IP address.
+   * @param port Target port.
+   * @param timeout_ms Connection timeout in milliseconds; <=0 uses a default.
+   * @param interrupt_flag Optional interrupt flag to terminate the connection.
+   * @return True on successful connection, false otherwise. On failure,
+   *         error_code and error_msg are updated.
+   */
+  bool Connect(const std::string &hostname, int port, int timeout_ms,
+               std::shared_ptr<InterruptFlag> interrupt_flag = nullptr) {
+    auto is_interrupted = [&]() {
+      return interrupt_flag && interrupt_flag->check();
+    };
+    auto mark_interrupted = [&]() {
+      error_code = EC::Terminate;
+      error_msg = "Connection interrupted";
+    };
 
-  bool Connect(const std::string &hostname, int port, int timeout_ms) {
+    if (is_interrupted()) {
+      mark_interrupted();
+      return false;
+    }
+
     // 1. DNS解析 - 使用 AF_UNSPEC 支持 IPv4 和 IPv6
     addrinfo hints{}, *result = nullptr;
     hints.ai_family = AF_UNSPEC; // 支持 IPv4 和 IPv6
@@ -267,9 +290,21 @@ public:
       return false;
     }
 
+    if (is_interrupted()) {
+      mark_interrupted();
+      freeaddrinfo(result);
+      return false;
+    }
+
     // 2. 遍历所有地址尝试连接（支持 IPv4/IPv6 双栈）
     addrinfo *rp = nullptr;
     for (rp = result; rp != nullptr; rp = rp->ai_next) {
+      if (is_interrupted()) {
+        mark_interrupted();
+        freeaddrinfo(result);
+        return false;
+      }
+
       sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
       if (sock == INVALID_SOCKET) {
         continue; // 尝试下一个地址
@@ -280,6 +315,14 @@ public:
         closesocket(sock);
         sock = INVALID_SOCKET;
         continue;
+      }
+
+      if (is_interrupted()) {
+        mark_interrupted();
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+        freeaddrinfo(result);
+        return false;
       }
 
       // 4. 发起连接
@@ -294,6 +337,13 @@ public:
 
       if (conn_result == 0) {
         // 立即成功（本地连接可能发生）
+        if (is_interrupted()) {
+          mark_interrupted();
+          closesocket(sock);
+          sock = INVALID_SOCKET;
+          freeaddrinfo(result);
+          return false;
+        }
         SetNonBlocking(false);
         freeaddrinfo(result);
         return true;
@@ -306,25 +356,56 @@ public:
       }
 
       // 5. 使用select等待连接完成
-      fd_set write_fds, error_fds;
-      FD_ZERO(&write_fds);
-      FD_ZERO(&error_fds);
-      FD_SET(sock, &write_fds);
-      FD_SET(sock, &error_fds);
+      const int64_t total_timeout_ms = timeout_ms > 0 ? timeout_ms : 6000;
+      const int64_t start_ms = am_ms();
+      int64_t remaining_ms = total_timeout_ms;
+      int select_result = 0;
+      bool timed_out = false;
 
-      timeval timeout;
-      if (timeout_ms > 0) {
-        timeout.tv_sec = timeout_ms / 1000;
-        timeout.tv_usec = (timeout_ms % 1000) * 1000;
-      } else {
-        timeout.tv_sec = 6;
-        timeout.tv_usec = 0;
+      while (remaining_ms > 0) {
+        if (is_interrupted()) {
+          mark_interrupted();
+          closesocket(sock);
+          sock = INVALID_SOCKET;
+          freeaddrinfo(result);
+          return false;
+        }
+
+        const int64_t wait_ms =
+            remaining_ms > 100 ? static_cast<int64_t>(100) : remaining_ms;
+
+        fd_set write_fds, error_fds;
+        FD_ZERO(&write_fds);
+        FD_ZERO(&error_fds);
+        FD_SET(sock, &write_fds);
+        FD_SET(sock, &error_fds);
+
+        timeval timeout;
+        timeout.tv_sec = static_cast<long>(wait_ms / 1000);
+        timeout.tv_usec = static_cast<long>((wait_ms % 1000) * 1000);
+
+        select_result =
+            select((int)sock + 1, nullptr, &write_fds, &error_fds, &timeout);
+
+        if (select_result > 0) {
+          if (FD_ISSET(sock, &error_fds)) {
+            select_result = -1;
+          }
+          break;
+        }
+
+        if (select_result < 0) {
+          break;
+        }
+
+        remaining_ms = total_timeout_ms - (am_ms() - start_ms);
       }
 
-      int select_result =
-          select((int)sock + 1, nullptr, &write_fds, &error_fds, &timeout);
+      if (remaining_ms <= 0) {
+        timed_out = true;
+      }
 
-      if (select_result <= 0 || FD_ISSET(sock, &error_fds)) {
+      if (select_result <= 0 || timed_out) {
         closesocket(sock);
         sock = INVALID_SOCKET;
         continue; // 尝试下一个地址
@@ -342,6 +423,13 @@ public:
       }
 
       // 7. 恢复阻塞模式，连接成功
+      if (is_interrupted()) {
+        mark_interrupted();
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+        freeaddrinfo(result);
+        return false;
+      }
       SetNonBlocking(false);
       freeaddrinfo(result);
       return true;

@@ -21,7 +21,7 @@ struct ConfigLsArgs {
  * @brief CLI argument container for config get.
  */
 struct ConfigGetArgs {
-  std::string nickname;
+  std::vector<std::string> nicknames;
 };
 
 /**
@@ -192,6 +192,7 @@ struct CdArgs {
  */
 struct ConnectArgs {
   std::string nickname;
+  bool force = false;
 };
 
 /**
