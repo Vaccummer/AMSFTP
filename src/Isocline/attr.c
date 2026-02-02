@@ -6,10 +6,10 @@
 -----------------------------------------------------------------------------*/
 #include <string.h>
 
-#include "common.h"
-#include "stringbuf.h" // str_next_ofs
-#include "attr.h"
-#include "term.h"      // color_from_ansi256
+#include "Isocline/common.h"
+#include "Isocline/stringbuf.h" // str_next_ofs
+#include "Isocline/attr.h"
+#include "Isocline/term.h"      // color_from_ansi256
 
 //-------------------------------------------------------------
 // Attributes

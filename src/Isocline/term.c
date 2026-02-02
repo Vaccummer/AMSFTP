@@ -10,10 +10,10 @@
 #include <stdlib.h>  // getenv
 #include <inttypes.h>
 
-#include "common.h"
-#include "tty.h"
-#include "term.h"
-#include "stringbuf.h" // str_next_ofs
+#include "Isocline/common.h"
+#include "Isocline/tty.h"
+#include "Isocline/term.h"
+#include "Isocline/stringbuf.h" // str_next_ofs
 
 #if defined(_WIN32)
 #include <windows.h>

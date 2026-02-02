@@ -109,7 +109,14 @@ int main(int argc, char **argv) {
                      time_end - time_start)
                      .count()
               << "ms" << std::endl;
+#ifdef _WIN32
     AMInitWSA();
+    std::atexit([]() {
+      if (is_wsa_initialized.exchange(false)) {
+        WSACleanup();
+      }
+    });
+#endif
     DispatchResult dispatch = DispatchCliCommands(cli_commands, managers);
     if (dispatch.enter_interactive) {
       RunInteractiveLoop(app_name, managers);

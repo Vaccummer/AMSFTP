@@ -26,8 +26,8 @@
 #include <string.h>
 #include <inttypes.h>
 
-#include "common.h"
-#include "stringbuf.h"
+#include "Isocline/common.h"
+#include "Isocline/stringbuf.h"
 
 //-------------------------------------------------------------
 // In place growable utf-8 strings
@@ -1035,4 +1035,3 @@ ic_public long ic_match_any_token(const char* s, long pos, ic_is_char_class_fun_
   }
   return 0;
 }
-

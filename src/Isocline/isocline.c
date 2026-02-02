@@ -44,9 +44,9 @@
 #include <string.h>
 #include <stdarg.h>
 
-#include "../include/isocline.h"
-#include "common.h"
-#include "env.h"
+#include "Isocline/isocline.h"
+#include "Isocline/common.h"
+#include "Isocline/env.h"
 
 #define IC_DEFAULT_COMPLETION_MAX_COLUMNS (4)
 

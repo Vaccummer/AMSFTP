@@ -10,7 +10,7 @@
 #include <stdarg.h>
 #include <locale.h>
 
-#include "tty.h"
+#include "Isocline/tty.h"
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -885,5 +885,4 @@ static void tty_done_raw(tty_t* tty) {
 }
 
 #endif
-
 

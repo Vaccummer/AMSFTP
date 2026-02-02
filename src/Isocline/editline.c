@@ -7,15 +7,15 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "common.h"
-#include "term.h"
-#include "tty.h"
-#include "env.h"
-#include "stringbuf.h"
-#include "history.h"
-#include "completions.h"
-#include "undo.h"
-#include "highlight.h"
+#include "Isocline/common.h"
+#include "Isocline/term.h"
+#include "Isocline/tty.h"
+#include "Isocline/env.h"
+#include "Isocline/stringbuf.h"
+#include "Isocline/history.h"
+#include "Isocline/completions.h"
+#include "Isocline/undo.h"
+#include "Isocline/highlight.h"
 
 //-------------------------------------------------------------
 // The editor state

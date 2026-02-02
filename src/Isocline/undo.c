@@ -7,12 +7,12 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "../include/isocline.h"
-#include "common.h"
-#include "env.h"
-#include "stringbuf.h"
-#include "completions.h"
-#include "undo.h"
+#include "Isocline/isocline.h"
+#include "Isocline/common.h"
+#include "Isocline/env.h"
+#include "Isocline/stringbuf.h"
+#include "Isocline/completions.h"
+#include "Isocline/undo.h"
 
 
 
@@ -64,4 +64,3 @@ ic_private bool editstate_restore( alloc_t* mem, editstate_t** es, const char** 
   mem_free(mem, entry);
   return true;
 }
-
