@@ -692,50 +692,19 @@ void AMTransferManager::ReturnClientsToIdle_(
   }
 }
 
-/**
- * @brief Build the default+user callback wrapper for task completion.
- */
-TaskInfo::ResultCallback
-AMTransferManager::BuildResultCallback_(std::atomic<int> &remaining,
-                                        std::condition_variable &done_cv,
-                                        std::mutex &done_mtx) {
-  return [this, &remaining, &done_cv,
-          &done_mtx](std::shared_ptr<TaskInfo> task_info) mutable {
-    if (task_info) {
-      prompt_.resultprint(task_info);
-    }
-
-    UserResultCallback user_cb;
-    {
-      std::lock_guard<std::mutex> lock(callback_mtx_);
-      user_cb = user_result_cb_;
-    }
-    auto bound_cb = BindResultCallback(std::move(user_cb));
-    if (bound_cb) {
-      CallCallbackSafe(bound_cb, task_info);
-    }
-
-    --remaining;
-
-    std::lock_guard<std::mutex> lock(done_mtx);
-    done_cv.notify_all();
-  };
-}
-
 TaskInfo::ResultCallback
 AMTransferManager::BindResultCallback(UserResultCallback user_cb) {
-  PublicResultCallback public_cb;
-  {
-    std::lock_guard<std::mutex> lock(callback_mtx_);
-    public_cb = public_result_cb_;
-  }
-
-  if (public_cb || user_cb) {
-    return [this, public_cb, user_cb](std::shared_ptr<TaskInfo> task_info) {
-      this->ResultCallback(task_info, public_cb, user_cb);
-    };
-  }
-  return {};
+  return [this, user_cb](std::shared_ptr<TaskInfo> task_info) {
+    PublicResultCallback public_cb;
+    {
+      std::lock_guard<std::mutex> lock(callback_mtx_);
+      public_cb = public_result_cb_;
+    }
+    if (!public_cb && !user_cb) {
+      return;
+    }
+    this->ResultCallback(task_info, public_cb, user_cb);
+  };
 }
 
 void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
@@ -751,12 +720,13 @@ void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
   {
     std::lock_guard<std::mutex> lock(history_mtx_);
     history_.push_front(task_info);
+    std::cout << "history_.size():" << history_.size() << std::endl;
   }
   if (user_cb) {
-    CallCallbackSafe(user_cb, task_info);
+    user_cb(task_info);
   }
   if (public_cb) {
-    CallCallbackSafe(public_cb, task_info);
+    public_cb(task_info);
   }
 }
 
@@ -1153,14 +1123,25 @@ ECM AMTransferManager::Resume(const std::vector<ID> &task_ids) {
  */
 ECM AMTransferManager::resume(const ID &task_id, bool is_async, bool quiet,
                               const std::vector<int> &indices) {
+  auto print_resume_error = [&](const std::string &msg) {
+    if (task_id.empty()) {
+      prompt_.Print(AMStr::amfmt("❌ resume : {}", msg));
+      return;
+    }
+    prompt_.Print(AMStr::amfmt("❌ resume {} : {}", task_id, msg));
+  };
+
   auto original = FindTaskById_(task_id);
   if (!original || !original->tasks) {
+    print_resume_error(AMStr::amfmt("Task not found: {}", task_id));
     return {EC::InvalidArg, AMStr::amfmt("Task not found: {}", task_id)};
   }
 
   const TaskStatus status = original->GetStatus();
   if (status != TaskStatus::Finished) {
     const std::string status_name = std::string(magic_enum::enum_name(status));
+    print_resume_error(AMStr::amfmt("Task not finished: {} (status {})",
+                                    task_id, status_name));
     return {EC::InvalidArg, AMStr::amfmt("Task not finished: {} (status {})",
                                          task_id, status_name)};
   }
@@ -1192,6 +1173,7 @@ ECM AMTransferManager::resume(const ID &task_id, bool is_async, bool quiet,
                                  JoinStrings_(invalid_text, ", ")));
     }
     if (selected_indices.empty()) {
+      print_resume_error("No valid task indices to resume");
       return {EC::InvalidArg, "No valid task indices to resume"};
     }
   }
@@ -1248,6 +1230,7 @@ ECM AMTransferManager::resume(const ID &task_id, bool is_async, bool quiet,
 
   auto [host_rcm, hostm] = CollectClients(nickname_list, nullptr);
   if (host_rcm.first != EC::Success || !hostm) {
+    print_resume_error(host_rcm.second);
     return host_rcm;
   }
 
@@ -1517,8 +1500,28 @@ ECM AMTransferManager::transfer(
   std::condition_variable done_cv;
   std::atomic<int> remaining(1);
 
-  task_info->result_callback =
-      BuildResultCallback_(remaining, done_cv, done_mtx);
+  UserResultCallback user_callback =
+      [this, &remaining, &done_cv, &done_mtx](
+          std::shared_ptr<TaskInfo> task_info) {
+        if (task_info) {
+          prompt_.resultprint(task_info);
+        }
+
+        UserResultCallback user_cb;
+        {
+          std::lock_guard<std::mutex> lock(callback_mtx_);
+          user_cb = user_result_cb_;
+        }
+        if (user_cb) {
+          CallCallbackSafe(user_cb, task_info);
+        }
+
+        --remaining;
+        std::lock_guard<std::mutex> lock(done_mtx);
+        done_cv.notify_all();
+      };
+
+  task_info->result_callback = BindResultCallback(std::move(user_callback));
 
   auto submit_rcm = worker_.submit(task_info);
   if (submit_rcm.first != EC::Success) {
@@ -1581,21 +1584,21 @@ ECM AMTransferManager::transfer_async(
     return {EC::Success, ""};
   }
 
-  task_info->result_callback = [this](std::shared_ptr<TaskInfo> info) {
-    if (info) {
-      prompt_.resultprint(info);
-    }
-
-    UserResultCallback user_cb;
-    {
-      std::lock_guard<std::mutex> lock(callback_mtx_);
-      user_cb = user_result_cb_;
-    }
-    auto bound_cb = BindResultCallback(std::move(user_cb));
-    if (bound_cb) {
-      CallCallbackSafe(bound_cb, info);
-    }
-  };
+  UserResultCallback user_callback =
+      [this](std::shared_ptr<TaskInfo> task_info) {
+        if (task_info) {
+          prompt_.resultprint(task_info);
+        }
+        UserResultCallback user_cb;
+        {
+          std::lock_guard<std::mutex> lock(callback_mtx_);
+          user_cb = user_result_cb_;
+        }
+        if (user_cb) {
+          CallCallbackSafe(user_cb, task_info);
+        }
+      };
+  task_info->result_callback = BindResultCallback(std::move(user_callback));
 
   auto submit_rcm = worker_.submit(task_info);
   if (submit_rcm.first != EC::Success) {

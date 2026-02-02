@@ -352,12 +352,8 @@ private:
   std::pair<ECM, std::shared_ptr<ClientMaintainer>>
   CollectClients(const std::vector<std::string> &nicknames,
                  const std::shared_ptr<InterruptFlag> &flag);
-  void ReturnClientsToIdle_(
-      const std::shared_ptr<ClientMaintainer> &maintainer);
-  TaskInfo::ResultCallback
-  BuildResultCallback_(std::atomic<int> &remaining,
-                       std::condition_variable &done_cv,
-                       std::mutex &done_mtx);
+  void
+  ReturnClientsToIdle_(const std::shared_ptr<ClientMaintainer> &maintainer);
   std::pair<ECM, std::shared_ptr<TaskInfo>>
   PrepareTasks_(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
                 const std::shared_ptr<InterruptFlag> &flag);
