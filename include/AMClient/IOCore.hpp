@@ -735,7 +735,6 @@ private:
    * @brief Store a completed task or invoke its result callback.
    */
   void HandleCompletedTask(const std::shared_ptr<TaskInfo> &task_info) {
-    AMPromptManager::Instance().PrintTaskResult(task_info);
     if (task_info->result_callback) {
       CallCallbackSafe(task_info->result_callback, task_info);
       return;
@@ -1832,14 +1831,20 @@ public:
         return {it->second, true};
       }
     }
+
     {
       std::lock_guard<std::mutex> lock(conducting_mtx_);
       for (size_t idx = 0; idx < conducting_by_thread_.size(); ++idx) {
         if (conducting_by_thread_[idx] == id) {
-          return {conducting_infos_[idx], true};
+          auto task_info = conducting_infos_[idx];
+          if (task_info) {
+            return {task_info, true};
+          }
+          break;
         }
       }
     }
+
     {
       std::lock_guard<std::mutex> lock(result_mtx_);
       auto it = results_.find(id);
@@ -1885,102 +1890,55 @@ public:
     if (!existing) {
       return {nullptr, false};
     }
-    if (!active) {
+    if (existing->GetStatus() == TaskStatus::Finished) {
       return {existing, false};
     }
 
-    std::shared_ptr<TaskInfo> pending_task = nullptr;
     bool terminated = false;
-    {
+    if (existing->GetStatus() == TaskStatus::Pending) {
       std::scoped_lock<std::mutex, std::mutex> lock(registry_mtx_, queue_mtx_);
       auto it = task_registry_.find(id);
       if (it != task_registry_.end() && it->second) {
-        bool in_queue = false;
         const auto &task_info = it->second;
-        if (task_info->GetStatus() == TaskStatus::Finished) {
-          pending_task = task_info;
-          terminated = false;
-        }
         const int affinity_thread = task_info->affinity_thread.load();
         const TaskAssignType assign_type = task_info->assign_type.load();
         if (assign_type == TaskAssignType::Affinity && affinity_thread >= 0 &&
             static_cast<size_t>(affinity_thread) < affinity_queues_.size()) {
-          const auto &queue =
-              affinity_queues_[static_cast<size_t>(affinity_thread)];
-          in_queue = std::find(queue.begin(), queue.end(), id) != queue.end();
+          affinity_queues_[static_cast<size_t>(affinity_thread)].remove(id);
         } else {
-          in_queue = std::find(public_queue_.begin(), public_queue_.end(),
-                               id) != public_queue_.end();
+          public_queue_.remove(id);
         }
-        if (in_queue) {
-          if (task_info->pd) {
-            task_info->pd->set_terminate();
-          }
-          task_info->SetResult({EC::Terminate, "Task terminated before start"});
-          task_info->SetStatus(TaskStatus::Finished);
-          task_info->finished_time.store(timenow());
-          task_info->OnWhichThread.store(-1);
-
-          if (assign_type == TaskAssignType::Affinity && affinity_thread >= 0 &&
-              static_cast<size_t>(affinity_thread) < affinity_queues_.size()) {
-            affinity_queues_[static_cast<size_t>(affinity_thread)].remove(id);
-          } else {
-            public_queue_.remove(id);
-          }
-          task_registry_.erase(it);
-          queue_cv_.notify_all();
-          pending_task = task_info;
-          terminated = true;
+        task_registry_.erase(it);
+        if (task_info->pd) {
+          task_info->pd->set_terminate();
         }
+        task_info->SetResult({EC::Terminate, "Task terminated before start"});
+        task_info->SetStatus(TaskStatus::Finished);
+        task_info->finished_time.store(timenow());
+        task_info->OnWhichThread.store(-1);
+        queue_cv_.notify_all();
+        terminated = true;
+        HandleCompletedTask(task_info);
+        return {task_info, terminated};
       }
     }
 
-    if (pending_task) {
-      HandleCompletedTask(pending_task);
-      return {pending_task, terminated};
-    }
-
-    std::shared_ptr<TaskInfo> conducting_task = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(conducting_mtx_);
-      for (size_t idx = 0; idx < conducting_by_thread_.size(); ++idx) {
-        if (conducting_by_thread_[idx] == id) {
-          conducting_task = conducting_infos_[idx];
-          break;
-        }
-      }
-    }
-
-    if (!conducting_task) {
-      auto result = get_result(id, false);
-      if (result) {
-        return {result, false};
-      }
-      return {nullptr, false};
-    }
-
-    if (conducting_task->GetStatus() == TaskStatus::Finished) {
-      return {conducting_task, false};
-    }
-
-    if (conducting_task->pd) {
-      conducting_task->pd->set_terminate();
+    if (existing->pd) {
+      existing->pd->set_terminate();
     }
     terminated = true;
 
     const int64_t start = am_ms();
     while (timeout_ms < 0 || (am_ms() - start) < timeout_ms) {
-      auto result = get_result(id, true);
-      if (result) {
-        return {result, terminated};
-      }
-      if (conducting_task->GetStatus() == TaskStatus::Finished &&
-          conducting_task->result_callback) {
-        return {conducting_task, terminated};
+      if (existing->GetStatus() == TaskStatus::Finished) {
+        if (existing->hostm) {
+          HandleCompletedTask(existing);
+        }
+        return {existing, terminated};
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    return {conducting_task, terminated};
+    return {existing, false};
   }
 
   /**
