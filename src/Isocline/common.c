@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
-#include "common.h"
+#include "Isocline/common.h"
 
 
 //-------------------------------------------------------------
@@ -344,4 +344,3 @@ ic_private char* mem_strndup(alloc_t* mem, const char* s, ssize_t n) {
   p[i] = 0;
   return p;
 }
-

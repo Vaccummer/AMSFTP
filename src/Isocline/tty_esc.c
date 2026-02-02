@@ -5,7 +5,7 @@
   found in the "LICENSE" file at the root of this distribution.
 -----------------------------------------------------------------------------*/
 #include <string.h>
-#include "tty.h"
+#include "Isocline/tty.h"
 
 /*-------------------------------------------------------------
 Decoding escape sequences to key codes.

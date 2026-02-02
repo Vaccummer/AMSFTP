@@ -8,11 +8,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#include "../include/isocline.h"
-#include "common.h"
-#include "env.h"
-#include "stringbuf.h"
-#include "completions.h"
+#include "Isocline/isocline.h"
+#include "Isocline/common.h"
+#include "Isocline/env.h"
+#include "Isocline/stringbuf.h"
+#include "Isocline/completions.h"
 
 
 //-------------------------------------------------------------

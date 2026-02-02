@@ -6,11 +6,11 @@
 -----------------------------------------------------------------------------*/
 
 #include <string.h>
-#include "common.h"
-#include "term.h"
-#include "stringbuf.h"
-#include "attr.h"
-#include "bbcode.h"
+#include "Isocline/common.h"
+#include "Isocline/term.h"
+#include "Isocline/stringbuf.h"
+#include "Isocline/attr.h"
+#include "Isocline/bbcode.h"
 
 //-------------------------------------------------------------
 // Syntax highlighting
