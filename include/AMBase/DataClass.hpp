@@ -905,7 +905,7 @@ struct TransferTask {
   PathType path_type = PathType::FILE;
   bool IsFinished = false;
   ECM rcm = ECM(EC::Success, "");
-  uint64_t transferred{0}; // Current file transferred size
+  uint64_t transferred = 0; // Current file transferred size
   TransferTask() : src(""), src_host(""), dst(""), dst_host(""), size(0) {}
   TransferTask(std::string src, std::string dst, std::string src_host,
                std::string dst_host, uint64_t size,
@@ -1035,6 +1035,11 @@ struct TaskInfo {
    * @brief Progress tracking: total bytes planned.
    */
   std::atomic<uint64_t> total_size{0};
+
+  /**
+   * @brief Progress tracking: transferred bytes for the current task.
+   */
+  std::atomic<uint64_t> this_task_transferred_size{0};
 
   /**
    * @brief Task list.
