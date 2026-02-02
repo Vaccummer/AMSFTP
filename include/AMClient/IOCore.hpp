@@ -929,7 +929,9 @@ private:
           total_written += bytes_written;
           task_info->total_transferred_size.fetch_add(
               static_cast<uint64_t>(bytes_written));
-          task->transferred = total_written;
+          task_info->this_task_transferred_size.store(total_written);
+          task->transferred =
+              task_info->this_task_transferred_size.load();
           InnerCallback(task_info, pd, false);
         } else if (bytes_written == 0) {
           break;
@@ -1056,8 +1058,10 @@ private:
         if (bytes_write > 0) {
           task_info->total_transferred_size.fetch_add(
               static_cast<uint64_t>(bytes_write));
+          task_info->this_task_transferred_size.store(
+              static_cast<uint64_t>(file_handle.offset));
         }
-        task->transferred = file_handle.offset;
+        task->transferred = task_info->this_task_transferred_size.load();
         InnerCallback(task_info, pd, false);
       }
     } else if (client->GetProtocol() == ClientProtocol::LOCAL) {
@@ -1087,8 +1091,10 @@ private:
         if (bytes_write > 0) {
           task_info->total_transferred_size.fetch_add(
               static_cast<uint64_t>(bytes_write));
+          task_info->this_task_transferred_size.store(
+              static_cast<uint64_t>(file_handle.offset));
         }
-        task->transferred = file_handle.offset;
+        task->transferred = task_info->this_task_transferred_size.load();
         InnerCallback(task_info, pd, false);
       }
     } else if (client->GetProtocol() == ClientProtocol::FTP) {
@@ -1134,7 +1140,10 @@ private:
           memcpy(ptr, read_ptr, to_read);
           pd->ring_buffer->commit_read(to_read);
           if (cur_task) {
-            cur_task->transferred += static_cast<uint64_t>(to_read);
+            const uint64_t delta = static_cast<uint64_t>(to_read);
+            const uint64_t total =
+                ti->this_task_transferred_size.fetch_add(delta) + delta;
+            cur_task->transferred = total;
             ti->total_transferred_size.fetch_add(
                 static_cast<uint64_t>(to_read));
           }
@@ -1312,6 +1321,7 @@ private:
       reading_thread.join();
     }
 
+    task->transferred = task_info->this_task_transferred_size.load();
     if (task->rcm.first != EC::Success) {
       return task->rcm;
     }
@@ -1434,6 +1444,7 @@ private:
       // Setup cur_task pointer to this task in tasks vector
       task_info->SetCurrentTask(&task);
       task.transferred = 0;
+      task_info->this_task_transferred_size.store(0);
       task.rcm = ECM(EC::Success, "");
       if (src_client->GetUID() == dst_client->GetUID() &&
           src_client->GetProtocol() == ClientProtocol::SFTP) {
