@@ -584,7 +584,7 @@ public:
     }
     rcm = ErrorRecord(
         rcr, TraceLevel::Critical,
-        AMStr::amfmt("socket {}", std::to_string(static_cast<uint64_t>(sock))),
+        AMStr::amfmt("socket {}", std::to_string(static_cast<size_t>(sock))),
         "libssh2_session_handshake");
     if (rcm.first != EC::Success) {
       goto interrupted_or_sock_error;
@@ -1854,7 +1854,7 @@ protected:
     }
   }
 
-  void _chmod(const std::string &path, uint64_t mode, bool recursive,
+  void _chmod(const std::string &path, size_t mode, bool recursive,
               std::unordered_map<std::string, ECM> &errors,
               LIBSSH2_SFTP_ATTRIBUTES attrs, amf interrupt_flag = nullptr,
               int timeout_ms = -1, int64_t start_time = -1) {
@@ -1874,13 +1874,13 @@ protected:
       return;
     }
 
-    uint64_t file_type = attrs.permissions & LIBSSH2_SFTP_S_IFMT;
-    uint64_t new_mode_int = (mode & ~LIBSSH2_SFTP_S_IFMT) | file_type;
+    size_t file_type = attrs.permissions & LIBSSH2_SFTP_S_IFMT;
+    size_t new_mode_int = (mode & ~LIBSSH2_SFTP_S_IFMT) | file_type;
 
     attrs.permissions = new_mode_int;
     attrs.flags = LIBSSH2_SFTP_ATTR_PERMISSIONS;
 
-    if (((uint64_t)attrs.permissions & 0777) != (mode & 0777)) {
+    if (((size_t)attrs.permissions & 0777) != (mode & 0777)) {
       rcm = lib_setstat(path, attrs, interrupt_flag, timeout_ms, start_time);
       if (rcm.first != EC::Success) {
         errors[path] = rcm;
@@ -2357,8 +2357,8 @@ public:
     amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
     start_time = start_time == -1 ? am_ms() : start_time;
 
-    static std::atomic<uint64_t> marker_seq{0};
-    const uint64_t seq = ++marker_seq;
+    static std::atomic<size_t> marker_seq{0};
+    const size_t seq = ++marker_seq;
     const std::string marker =
         AMStr::amfmt("__AMSFTP_DONE__{}__", std::to_string(seq));
 
@@ -2663,7 +2663,7 @@ public:
   }
 
   std::pair<ECM, std::unordered_map<std::string, ECM>>
-  chmod(const std::string &path, std::variant<std::string, uint64_t> mode,
+  chmod(const std::string &path, std::variant<std::string, size_t> mode,
         bool recursive = false, amf interrupt_flag = nullptr,
         int timeout_ms = -1, int64_t start_time = -1) override {
     if (static_cast<int>(GetOSType()) <= 0) {
@@ -2690,7 +2690,7 @@ public:
               {}};
     }
     std::unordered_map<std::string, ECM> ecm_map{};
-    uint64_t mode_int;
+    size_t mode_int;
     if (std::holds_alternative<std::string>(mode)) {
       if (!AMStr::IsModeValid(std::get<std::string>(mode))) {
         return {ECM{EC::InvalidArg, AMStr::amfmt("Invalid mode: {}",
@@ -2698,14 +2698,14 @@ public:
                 {}};
       }
       mode_int = AMStr::ModeTrans(std::get<std::string>(mode));
-    } else if (std::holds_alternative<uint64_t>(mode)) {
-      if (!AMStr::IsModeValid(std::get<uint64_t>(mode))) {
+    } else if (std::holds_alternative<size_t>(mode)) {
+      if (!AMStr::IsModeValid(std::get<size_t>(mode))) {
         return {ECM{EC::InvalidArg,
                     AMStr::amfmt("Invalid mode: {}",
-                                 std::to_string(std::get<uint64_t>(mode)))},
+                                 std::to_string(std::get<size_t>(mode)))},
                 {}};
       }
-      mode_int = std::get<uint64_t>(mode);
+      mode_int = std::get<size_t>(mode);
     } else {
       return {ECM{EC::InvalidArg, AMStr::amfmt("Invalid mode data type")}, {}};
     }

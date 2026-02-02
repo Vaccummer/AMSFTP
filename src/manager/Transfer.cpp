@@ -63,7 +63,7 @@ static std::string FormatTimeHM_(double timestamp) {
   if (timestamp <= 0.0) {
     return "-";
   }
-  return FormatTime(static_cast<uint64_t>(timestamp), "%H:%M");
+  return FormatTime(static_cast<size_t>(timestamp), "%H:%M");
 }
 
 /**
@@ -173,7 +173,7 @@ void TaskInfoPrint::TaskSubmitPrint(
     return;
   }
   const size_t file_num = task_info->tasks ? task_info->tasks->size() : 0;
-  const uint64_t total_size = task_info->total_size.load();
+  const size_t total_size = task_info->total_size.load();
   std::vector<std::string> nicknames = client_maintainer.get_nicknames();
   std::string nickname_str = JoinStrings_(nicknames, ", ");
   if (nickname_str.empty()) {
@@ -192,8 +192,8 @@ void TaskInfoPrint::TaskResultPrint(
   if (!task_info || task_info->quiet) {
     return;
   }
-  const uint64_t transferred = task_info->total_transferred_size.load();
-  const uint64_t total = task_info->total_size.load();
+  const size_t transferred = task_info->total_transferred_size.load();
+  const size_t total = task_info->total_size.load();
   const int thread_id = task_info->OnWhichThread.load();
 
   ECM result = task_info->GetResult();
@@ -240,7 +240,7 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
   const std::string status_name = std::string(magic_enum::enum_name(status));
 
   if (status == TaskStatus::Pending) {
-    const uint64_t total = task_info->total_size.load();
+    const size_t total = task_info->total_size.load();
     const int affinity = task_info->affinity_thread.load();
     const std::string submit_time =
         FormatTimeHM_(task_info->submit_time.load());
@@ -252,8 +252,8 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
   }
 
   if (status == TaskStatus::Finished) {
-    const uint64_t transferred = task_info->total_transferred_size.load();
-    const uint64_t total = task_info->total_size.load();
+    const size_t transferred = task_info->total_transferred_size.load();
+    const size_t total = task_info->total_size.load();
     const int thread_id = task_info->OnWhichThread.load();
     const double start_time = task_info->start_time.load();
     const double finished_time = task_info->finished_time.load();
@@ -278,8 +278,8 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
       break;
     }
     const TaskStatus current_status = task_info->GetStatus();
-    const uint64_t total = task_info->total_size.load();
-    const uint64_t transferred = task_info->total_transferred_size.load();
+    const size_t total = task_info->total_size.load();
+    const size_t transferred = task_info->total_transferred_size.load();
     bar->SetTotal(static_cast<int64_t>(total));
     bar->SetProgress(static_cast<int64_t>(transferred));
     bar->SetPrefix(BuildTaskPrefix_(task_info));
@@ -336,8 +336,8 @@ void TaskInfoPrint::List(
       if (!task) {
         continue;
       }
-      const uint64_t total = task->total_size.load();
-      const uint64_t transferred = task->total_transferred_size.load();
+      const size_t total = task->total_size.load();
+      const size_t transferred = task->total_transferred_size.load();
       bar->SetTotal(static_cast<int64_t>(total));
       bar->SetProgress(static_cast<int64_t>(transferred));
       bar->SetPrefix(BuildTaskPrefix_(task));
@@ -370,15 +370,15 @@ void TaskInfoPrint::Inspect(const std::shared_ptr<TaskInfo> &task_info,
       std::string(magic_enum::enum_name(task_info->GetStatus()));
   const std::string submit_time =
       task_info->submit_time.load() > 0.0
-          ? FormatTime(static_cast<uint64_t>(task_info->submit_time.load()))
+          ? FormatTime(static_cast<size_t>(task_info->submit_time.load()))
           : "-";
   const std::string start_time =
       task_info->start_time.load() > 0.0
-          ? FormatTime(static_cast<uint64_t>(task_info->start_time.load()))
+          ? FormatTime(static_cast<size_t>(task_info->start_time.load()))
           : "-";
   const std::string finished_time =
       task_info->finished_time.load() > 0.0
-          ? FormatTime(static_cast<uint64_t>(task_info->finished_time.load()))
+          ? FormatTime(static_cast<size_t>(task_info->finished_time.load()))
           : "-";
 
   ECM rcm = task_info->GetResult();

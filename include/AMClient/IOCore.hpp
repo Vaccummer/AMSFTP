@@ -7,7 +7,6 @@
 #include <ctime>
 #include <fcntl.h>
 #include <functional>
-#include <iostream>
 #include <list>
 #include <mutex>
 #include <numeric>
@@ -885,7 +884,7 @@ private:
 
     libssh2_session_set_blocking(client->session, 1);
     std::vector<char> buffer(chunk_size_);
-    uint64_t total_written = 0;
+    size_t total_written = 0;
     ssize_t bytes_read, bytes_written;
 
     while (total_written < task->size) {
@@ -928,10 +927,9 @@ private:
           buffer_written += bytes_written;
           total_written += bytes_written;
           task_info->total_transferred_size.fetch_add(
-              static_cast<uint64_t>(bytes_written));
+              static_cast<size_t>(bytes_written));
           task_info->this_task_transferred_size.store(total_written);
-          task->transferred =
-              task_info->this_task_transferred_size.load();
+          task->transferred = task_info->this_task_transferred_size.load();
           InnerCallback(task_info, pd, false);
         } else if (bytes_written == 0) {
           break;
@@ -1057,9 +1055,9 @@ private:
         }
         if (bytes_write > 0) {
           task_info->total_transferred_size.fetch_add(
-              static_cast<uint64_t>(bytes_write));
+              static_cast<size_t>(bytes_write));
           task_info->this_task_transferred_size.store(
-              static_cast<uint64_t>(file_handle.offset));
+              static_cast<size_t>(file_handle.offset));
         }
         task->transferred = task_info->this_task_transferred_size.load();
         InnerCallback(task_info, pd, false);
@@ -1090,9 +1088,9 @@ private:
         }
         if (bytes_write > 0) {
           task_info->total_transferred_size.fetch_add(
-              static_cast<uint64_t>(bytes_write));
+              static_cast<size_t>(bytes_write));
           task_info->this_task_transferred_size.store(
-              static_cast<uint64_t>(file_handle.offset));
+              static_cast<size_t>(file_handle.offset));
         }
         task->transferred = task_info->this_task_transferred_size.load();
         InnerCallback(task_info, pd, false);
@@ -1140,12 +1138,11 @@ private:
           memcpy(ptr, read_ptr, to_read);
           pd->ring_buffer->commit_read(to_read);
           if (cur_task) {
-            const uint64_t delta = static_cast<uint64_t>(to_read);
-            const uint64_t total =
+            const size_t delta = static_cast<size_t>(to_read);
+            const size_t total =
                 ti->this_task_transferred_size.fetch_add(delta) + delta;
             cur_task->transferred = total;
-            ti->total_transferred_size.fetch_add(
-                static_cast<uint64_t>(to_read));
+            ti->total_transferred_size.fetch_add(static_cast<size_t>(to_read));
           }
           pd->CallInnerCallback(false);
           return to_read;
@@ -1599,7 +1596,7 @@ public:
     if (task_info->total_size.load() == 0) {
       task_info->total_size.store(
           std::accumulate(task_info->tasks->begin(), task_info->tasks->end(), 0,
-                          [](uint64_t sum, const TransferTask &task) {
+                          [](size_t sum, const TransferTask &task) {
                             return sum + task.size;
                           }));
     }
@@ -1629,11 +1626,9 @@ public:
     auto task_info = std::make_shared<TaskInfo>(quiet);
     task_info->id = GenerateUID();
     task_info->tasks = tasks;
-    task_info->total_size.store(
-        std::accumulate(tasks->begin(), tasks->end(), 0,
-                        [](uint64_t sum, const TransferTask &task) {
-                          return sum + task.size;
-                        }));
+    task_info->total_size.store(std::accumulate(
+        tasks->begin(), tasks->end(), 0,
+        [](size_t sum, const TransferTask &task) { return sum + task.size; }));
     task_info->hostm = hostm;
     task_info->callback = callback;
     task_info->buffer_size.store(buffer_size);

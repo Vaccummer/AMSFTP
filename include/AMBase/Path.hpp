@@ -234,14 +234,14 @@ inline ECM fecm(const std::error_code &ec) { return {fec(ec), ec.message()}; }
 //       str.size() - suffix.size());
 // }
 
-// inline std::string ModeTrans(uint64_t mode_int) {
+// inline std::string ModeTrans(size_t mode_int) {
 //   // 把mode_int转换为8进制字符串, 长度为9
 //   if (mode_int > 0777 || mode_int == 0777) {
 //     return "rwxrwxrwx";
 //   }
 //   std::string out = "";
-//   uint64_t tmp_int;
-//   uint64_t start = 8 * 8 * 8;
+//   size_t tmp_int;
+//   size_t start = 8 * 8 * 8;
 //   for (int i = 3; i > 0; i--) {
 //     tmp_int = (mode_int % start) / (start / 8);
 //     start /= 8;
@@ -274,14 +274,14 @@ inline ECM fecm(const std::error_code &ec) { return {fec(ec), ec.message()}; }
 //   return out;
 // }
 
-// inline uint64_t ModeTrans(std::string mode_str) {
+// inline size_t ModeTrans(std::string mode_str) {
 //   std::regex pattern(
 //       R"(^[r?\-][w?\-][x?\-][r?\-][w?\-][x?\-][r?\-][w?\-][x?\-]$)");
 //   if (!std::regex_match(mode_str, pattern)) {
 //     throw std::invalid_argument(
 //         fmt::format("Invalid mode string: {}", mode_str));
 //   }
-//   uint64_t mode_int = 0;
+//   size_t mode_int = 0;
 //   for (int i = 0; i < 9; i++) {
 //     if (mode_str[i] != '?' && mode_str[i] != '-') {
 //       mode_int += (1ULL << (8 - i));
@@ -320,7 +320,7 @@ inline ECM fecm(const std::error_code &ec) { return {fec(ec), ec.message()}; }
 //                                      "\\-][r?\\-][w?\\-][x?\\-]$"));
 // }
 
-// inline bool IsModeValid(uint64_t mode_int) { return mode_int <= 0777; }
+// inline bool IsModeValid(size_t mode_int) { return mode_int <= 0777; }
 
 // inline std::string Strip(std::string path) {
 //   const std::string trim_chars = " \t\n\r\"'";
@@ -863,11 +863,10 @@ inline std::string abspath(const std::string &path,
                            const std::string &sep = "") {
   std::string new_path = AMPathStr::UnifyPathSep(path, sep);
   std::string new_sep = sep.empty() ? AMPathStr::GetPathSep(path) : sep;
-  const bool drive_only =
-      new_path.size() == 2 &&
-      ((new_path[0] >= 'A' && new_path[0] <= 'Z') ||
-       (new_path[0] >= 'a' && new_path[0] <= 'z')) &&
-      new_path[1] == ':';
+  const bool drive_only = new_path.size() == 2 &&
+                          ((new_path[0] >= 'A' && new_path[0] <= 'Z') ||
+                           (new_path[0] >= 'a' && new_path[0] <= 'z')) &&
+                          new_path[1] == ':';
   if (drive_only) {
     return new_path + new_sep;
   }
@@ -878,11 +877,11 @@ inline std::string abspath(const std::string &path,
     const std::string base = cwd.empty() ? CWD() : cwd;
     new_path = AMPathStr::join(base, new_path);
   }
-  const bool drive_root_anchor =
-      new_path.size() >= 3 &&
-      ((new_path[0] >= 'A' && new_path[0] <= 'Z') ||
-       (new_path[0] >= 'a' && new_path[0] <= 'z')) &&
-      new_path[1] == ':' && (new_path[2] == '/' || new_path[2] == '\\');
+  const bool drive_root_anchor = new_path.size() >= 3 &&
+                                 ((new_path[0] >= 'A' && new_path[0] <= 'Z') ||
+                                  (new_path[0] >= 'a' && new_path[0] <= 'z')) &&
+                                 new_path[1] == ':' &&
+                                 (new_path[2] == '/' || new_path[2] == '\\');
   std::vector<std::string> parts = AMPathStr::split(new_path);
   if (parts.empty()) {
     return "";
@@ -1331,4 +1330,3 @@ private:
     return iwalk(path);
   }
 };*/
-

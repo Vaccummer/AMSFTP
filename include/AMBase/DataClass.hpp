@@ -100,16 +100,16 @@ inline std::array<char, 32> AMcharset = {'2', '3', '4', '5', '6', '7', '8', '9',
                                          'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
 constexpr size_t AMbase = sizeof(AMcharset) - 1;
 
-inline uint64_t GenerateUIDInt() {
+inline size_t GenerateUIDInt() {
   try {
     std::random_device rd;
     std::mt19937_64 eng(rd());
-    std::uniform_int_distribution<uint64_t> dist(0, UINT64_MAX);
+    std::uniform_int_distribution<size_t> dist(0, SIZE_MAX);
     return dist(eng);
   } catch (...) {
     // fallback: time + counter
-    static std::atomic<uint64_t> counter{0};
-    uint64_t t = static_cast<uint64_t>(
+    static std::atomic<size_t> counter{0};
+    size_t t = static_cast<size_t>(
         std::chrono::steady_clock::now().time_since_epoch().count());
     return t ^ (++counter * 0x9e3779b97f4a7c15ULL);
   }
@@ -118,7 +118,7 @@ inline uint64_t GenerateUIDInt() {
 inline std::string GenerateUID(int length = 10) {
   length = length < 1 ? 1 : length;
   length = length > 32 ? 32 : length;
-  uint64_t uid = GenerateUIDInt();
+  size_t uid = GenerateUIDInt();
   // 用AMcharset生成一个字符串
   std::string uid_str;
   uid_str.reserve(static_cast<size_t>(length));
@@ -151,7 +151,7 @@ inline double am_s() {
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
-inline std::string FormatTime(const uint64_t &time,
+inline std::string FormatTime(const size_t &time,
                               const std::string &format = "%Y-%m-%d %H:%M:%S") {
   time_t timeT = static_cast<time_t>(time);
 
@@ -212,19 +212,19 @@ public:
   std::string path;
   std::string dir;
   std::string owner;
-  uint64_t size = 0;
+  size_t size = 0;
   double create_time = 0;
   double access_time = 0;
   double modify_time = 0;
   PathType type = PathType::FILE;
-  uint64_t mode_int = 0777;
+  size_t mode_int = 0777;
   std::string mode_str = "r--------";
   PathInfo() : name(""), path(""), dir(""), owner("") {}
 
   PathInfo(std::string name, std::string path, std::string dir,
-           std::string owner, uint64_t size, double create_time,
+           std::string owner, size_t size, double create_time,
            double access_time, double modify_time, PathType type,
-           uint64_t mode_int, std::string mode_str)
+           size_t mode_int, std::string mode_str)
       : name(name), path(path), dir(dir), owner(owner), size(size),
         create_time(create_time), access_time(access_time),
         modify_time(modify_time), type(type), mode_int(mode_int),
@@ -495,14 +495,14 @@ struct ProgressCBInfo {
   std::string dst;
   std::string src_host;
   std::string dst_host;
-  uint64_t this_size;
-  uint64_t file_size;
-  uint64_t accumulated_size;
-  uint64_t total_size;
+  size_t this_size;
+  size_t file_size;
+  size_t accumulated_size;
+  size_t total_size;
   ProgressCBInfo(const std::string &src, const std::string &dst,
                  const std::string &src_host, const std::string &dst_host,
-                 uint64_t this_size, uint64_t file_size,
-                 const uint64_t &accumulated_size, const uint64_t &total_size)
+                 size_t this_size, size_t file_size,
+                 const size_t &accumulated_size, const size_t &total_size)
       : src(src), dst(dst), src_host(src_host), dst_host(dst_host),
         this_size(this_size), file_size(file_size),
         accumulated_size(accumulated_size), total_size(total_size) {}
@@ -829,7 +829,7 @@ struct TransferCallback {
   using ErrorCallback = std::function<void(const ErrorCBInfo &)>;
   using ProgressCallback =
       std::function<std::optional<TransferControl>(const ProgressCBInfo &)>;
-  using TotalSizeCallback = std::function<void(uint64_t)>;
+  using TotalSizeCallback = std::function<void(size_t)>;
 
   bool need_error_cb = false;
   bool need_progress_cb = false;
@@ -837,7 +837,7 @@ struct TransferCallback {
   ErrorCallback error_cb = {}; // void(ErrorCBInfo)
   ProgressCallback progress_cb =
       {}; // optional<TransferControl>(ProgressCBInfo)
-  TotalSizeCallback total_size_cb = {}; // void(uint64_t)
+  TotalSizeCallback total_size_cb = {}; // void(size_t)
   float cb_interval_s = 0.1f;           // Callback interval in seconds
 
   TransferCallback(TotalSizeCallback total_size = {}, ErrorCallback error = {},
@@ -868,7 +868,7 @@ struct TransferCallback {
     return CallCallbackSafe(error_cb, info);
   }
 
-  ECM CallTotalSize(uint64_t total_size) const {
+  ECM CallTotalSize(size_t total_size) const {
     return CallCallbackSafe(total_size_cb, total_size);
   }
 
@@ -901,14 +901,14 @@ struct TransferTask {
   std::string src_host;
   std::string dst;
   std::string dst_host;
-  uint64_t size;
+  size_t size;
   PathType path_type = PathType::FILE;
   bool IsFinished = false;
   ECM rcm = ECM(EC::Success, "");
-  uint64_t transferred = 0; // Current file transferred size
+  size_t transferred = 0; // Current file transferred size
   TransferTask() : src(""), src_host(""), dst(""), dst_host(""), size(0) {}
   TransferTask(std::string src, std::string dst, std::string src_host,
-               std::string dst_host, uint64_t size,
+               std::string dst_host, size_t size,
                PathType path_type = PathType::FILE)
       : src(std::move(src)), src_host(std::move(src_host)), dst(std::move(dst)),
         dst_host(std::move(dst_host)), size(size), path_type(path_type) {}
@@ -1029,17 +1029,17 @@ struct TaskInfo {
   /**
    * @brief Progress tracking: accumulated transferred bytes.
    */
-  std::atomic<uint64_t> total_transferred_size{0};
+  std::atomic<size_t> total_transferred_size{0};
 
   /**
    * @brief Progress tracking: total bytes planned.
    */
-  std::atomic<uint64_t> total_size{0};
+  std::atomic<size_t> total_size{0};
 
   /**
    * @brief Progress tracking: transferred bytes for the current task.
    */
-  std::atomic<uint64_t> this_task_transferred_size{0};
+  std::atomic<size_t> this_task_transferred_size{0};
 
   /**
    * @brief Task list.

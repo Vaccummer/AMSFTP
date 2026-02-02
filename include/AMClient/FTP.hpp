@@ -792,7 +792,7 @@ private:
 
       curl_off_t filesize = 0;
       curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &filesize);
-      info.size = filesize >= 0 ? static_cast<uint64_t>(filesize) : 0;
+      info.size = filesize >= 0 ? static_cast<size_t>(filesize) : 0;
 
       long filetime = 0;
       curl_easy_getinfo(curl, CURLINFO_FILETIME, &filetime);
@@ -1714,5 +1714,3 @@ public:
   //   }
   // }
 };
-
-

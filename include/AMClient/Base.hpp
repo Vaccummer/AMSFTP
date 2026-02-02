@@ -66,7 +66,7 @@ using SR = std::pair<ECM, PathInfo>;                  // stat函数返回类型
 using WRV = std::vector<PathInfo>;                    // iwalk函数返回类型
 using WRD = AMFS::WRD;                                // walk函数返回类型
 using WR = std::pair<ECM, WRV>;                       // iwalk函数返回类型
-using SIZER = std::pair<ECM, uint64_t>;               // getsize函数返回类型
+using SIZER = std::pair<ECM, size_t>;                 // getsize函数返回类型
 using TraceCallback = std::function<void(const TraceInfo &)>;
 using CR =
     std::pair<ECM, std::pair<std::string, int>>; // ConductCmd函数返回类型
@@ -385,7 +385,7 @@ public:
     if (interrupt_flag && interrupt_flag->check()) {
       return -1;
     }
-    uint64_t size = 0;
+    size_t size = 0;
     for (auto &item : list) {
       size += item.size;
     }
@@ -511,7 +511,7 @@ public:
   }
   virtual std::pair<ECM, std::unordered_map<std::string, ECM>>
   chmod([[maybe_unused]] const std::string &path,
-        [[maybe_unused]] std::variant<std::string, uint64_t> mode,
+        [[maybe_unused]] std::variant<std::string, size_t> mode,
         [[maybe_unused]] bool recursive = false,
         [[maybe_unused]] amf interrupt_flag = nullptr,
         [[maybe_unused]] int timeout_ms = -1,
@@ -621,5 +621,3 @@ public:
         "{} Client doesn't implement funtion: walk", GetProtocolName()));
   }
 };
-
-

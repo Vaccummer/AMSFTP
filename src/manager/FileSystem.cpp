@@ -694,8 +694,8 @@ AMFileSystem::ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
       last = {EC::UnknownError, "Get size failed"};
       continue;
     }
-    prompt_manager_.Print(AMStr::amfmt(
-        "{}  {}", abs_path, FormatSize(static_cast<uint64_t>(size))));
+    prompt_manager_.Print(AMStr::amfmt("{}  {}", abs_path,
+                                       FormatSize(static_cast<size_t>(size))));
   }
   return last;
 }
@@ -1032,7 +1032,7 @@ AMFileSystem::ECM AMFileSystem::PrintClientStatus(const ClientRef &client,
   return rcm;
 }
 
-std::string AMFileSystem::FormatSize(uint64_t size) const {
+std::string AMFileSystem::FormatSize(size_t size) const {
   const char *units[] = {"B", "KB", "MB", "GB", "TB"};
   double value = static_cast<double>(size);
   size_t idx = 0;
@@ -1041,8 +1041,8 @@ std::string AMFileSystem::FormatSize(uint64_t size) const {
     ++idx;
   }
   std::ostringstream oss;
-  if (value == static_cast<uint64_t>(value)) {
-    oss << static_cast<uint64_t>(value);
+  if (value == static_cast<size_t>(value)) {
+    oss << static_cast<size_t>(value);
   } else {
     oss << std::fixed << std::setprecision(1) << value;
   }
@@ -1054,7 +1054,7 @@ std::string AMFileSystem::FormatTimestamp(double value) const {
   if (value <= 0) {
     return "";
   }
-  return FormatTime(static_cast<uint64_t>(value), "%Y/%m/%d %H:%M:%S");
+  return FormatTime(static_cast<size_t>(value), "%Y/%m/%d %H:%M:%S");
 }
 
 std::string AMFileSystem::FormatStatOutput(const PathInfo &info) const {

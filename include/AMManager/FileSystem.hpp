@@ -166,7 +166,7 @@ private:
   ECM PrintClientStatus(const ClientRef &client, bool update = true,
                         amf interrupt_flag = nullptr);
   /** Format size to human-readable string. */
-  std::string FormatSize(uint64_t size) const;
+  std::string FormatSize(size_t size) const;
   /** Format unix timestamp to printable time. */
   std::string FormatTimestamp(double value) const;
   /** Format stat output block. */
