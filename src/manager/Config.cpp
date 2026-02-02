@@ -58,7 +58,7 @@ std::string JsonScalarToString(const Json &value) {
   if (value.is_number_integer())
     return std::to_string(value.get<int64_t>());
   if (value.is_number_unsigned())
-    return std::to_string(value.get<uint64_t>());
+    return std::to_string(value.get<size_t>());
   if (value.is_number_float()) {
     std::ostringstream oss;
     oss << value.get<double>();
@@ -337,7 +337,7 @@ std::optional<std::string> GetStringField(const Json &obj,
   if (it->is_number_integer())
     return std::to_string(it->get<int64_t>());
   if (it->is_number_unsigned())
-    return std::to_string(it->get<uint64_t>());
+    return std::to_string(it->get<size_t>());
   if (it->is_boolean())
     return it->get<bool>() ? "true" : "false";
   return std::nullopt;
@@ -352,8 +352,8 @@ std::optional<int64_t> GetIntField(const Json &obj, const std::string &key) {
   if (it->is_number_integer())
     return it->get<int64_t>();
   if (it->is_number_unsigned()) {
-    auto value = it->get<uint64_t>();
-    if (value <= static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+    auto value = it->get<size_t>();
+    if (value <= static_cast<size_t>(std::numeric_limits<int64_t>::max()))
       return static_cast<int64_t>(value);
     return std::nullopt;
   }
@@ -379,7 +379,7 @@ std::optional<bool> GetBoolField(const Json &obj, const std::string &key) {
   if (it->is_number_integer())
     return it->get<int64_t>() != 0;
   if (it->is_number_unsigned())
-    return it->get<uint64_t>() != 0;
+    return it->get<size_t>() != 0;
   if (it->is_string()) {
     std::string value = it->get<std::string>();
     std::transform(
@@ -1198,7 +1198,7 @@ ECM AMConfigManager::ConfigBackupIfNeeded() {
   }
 
   const std::string stamp =
-      FormatTime(static_cast<uint64_t>(now_s), "%Y-%m-%d-%H-%M");
+      FormatTime(static_cast<size_t>(now_s), "%Y-%m-%d-%H-%M");
   std::filesystem::path config_backup =
       backup_dir / ("config-" + stamp + ".toml.bak");
   std::filesystem::path settings_backup =
@@ -1643,8 +1643,8 @@ int AMConfigManager::GetSettingInt(const Path &path, int default_value) const {
   if (node->is_number_integer())
     return static_cast<int>(node->get<int64_t>());
   if (node->is_number_unsigned()) {
-    auto value = node->get<uint64_t>();
-    if (value <= static_cast<uint64_t>(std::numeric_limits<int>::max()))
+    auto value = node->get<size_t>();
+    if (value <= static_cast<size_t>(std::numeric_limits<int>::max()))
       return static_cast<int>(value);
   }
   if (node->is_string()) {
@@ -1683,7 +1683,7 @@ AMConfigManager::GetSettingString(const Path &path,
   if (node->is_number_integer())
     return std::to_string(node->get<int64_t>());
   if (node->is_number_unsigned())
-    return std::to_string(node->get<uint64_t>());
+    return std::to_string(node->get<size_t>());
   if (node->is_boolean())
     return node->get<bool>() ? "true" : "false";
   if (node->is_number_float()) {

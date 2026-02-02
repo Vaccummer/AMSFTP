@@ -1,7 +1,7 @@
 #include "AMManager/Logger.hpp"
 #include "AMBase/Enum.hpp"
-#include <magic_enum/magic_enum.hpp>
 #include <fstream>
+#include <magic_enum/magic_enum.hpp>
 #include <sstream>
 
 /** Return the singleton instance initialized with the config manager. */
@@ -21,8 +21,7 @@ AMLogManager::AMLogManager(AMConfigManager &cfg)
 }
 
 /** Cleanup log manager resources. */
-AMLogManager::~AMLogManager() {
-}
+AMLogManager::~AMLogManager() {}
 
 /** Enqueue a log entry for the writer thread. */
 void AMLogManager::Enqueue(const TraceInfo &info) {
@@ -54,8 +53,7 @@ void AMLogManager::WriteLogEntry_(const TraceInfo &info) {
     std::ofstream log_file(log_path_, std::ios::app);
     log_file.exceptions(std::ofstream::failbit | std::ofstream::badbit);
     std::string time_str =
-        FormatTime(static_cast<uint64_t>(info.timestamp),
-                   "%Y/%m/%d %H:%M:%S");
+        FormatTime(static_cast<size_t>(info.timestamp), "%Y/%m/%d %H:%M:%S");
     std::ostringstream line;
     line << time_str << " " << std::string(magic_enum::enum_name(info.level))
          << " " << info.nickname << " " << info.action << " " << info.target
@@ -84,5 +82,3 @@ int AMLogManager::ClampTraceLevel(int value) {
 int AMLogManager::ToLevelInt(enum TraceLevel level) {
   return static_cast<int>(level);
 }
-
-

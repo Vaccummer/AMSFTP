@@ -472,7 +472,7 @@ static AMCommandPreprocessor::ECM HandleAsyncSuffix(const std::string &input,
  */
 std::vector<std::string>
 AMCommandPreprocessor::SplitCliTokens(const std::string &input) {
-  return SplitTokens(input, UINT64_MAX - 1);
+  return SplitTokens(input, SIZE_MAX - 1);
 }
 
 /**

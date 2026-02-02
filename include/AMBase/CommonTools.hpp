@@ -37,7 +37,7 @@
 /*
 class ProgressBar {
 public:
-  explicit ProgressBar(uint64_t total_size = 0, std::string unit = "B",
+  explicit ProgressBar(size_t total_size = 0, std::string unit = "B",
                        size_t bar_width = 50, bool show_eta = true,
                        bool colored = true)
       : total_(total_size), unit_(std::move(unit)), bar_width_(bar_width),
@@ -45,7 +45,7 @@ public:
         start_time_(std::chrono::steady_clock::now()) {}
 
   // ✅ 新增：动态设置总大小（可选是否重置计时器）
-  void set_total(uint64_t new_total, bool reset_timer = false) {
+  void set_total(size_t new_total, bool reset_timer = false) {
     total_ = new_total;
     if (reset_timer) {
       start_time_ = std::chrono::steady_clock::now();
@@ -58,7 +58,7 @@ public:
   }
 
   // 更新当前进度
-  void update(uint64_t current) {
+  void update(size_t current) {
     if (total_ == 0) {
       // 如果 total 未知，以 current 作为“已知最大值”估算
       if (current > current_) {
@@ -127,7 +127,7 @@ private:
     }
 
     if (speed > 0) {
-      auto [speed_str, speed_unit] = format_size(static_cast<uint64_t>(speed));
+      auto [speed_str, speed_unit] = format_size(static_cast<size_t>(speed));
       std::cout << " " << speed_str << speed_unit << "/s";
     }
 
@@ -145,7 +145,7 @@ private:
     std::cout << std::flush;
   }
 
-  std::pair<std::string, std::string> format_size(uint64_t size) const {
+  std::pair<std::string, std::string> format_size(size_t size) const {
     if (size == 0)
       return {"0", unit_};
 
@@ -169,8 +169,8 @@ private:
   }
 
 private:
-  uint64_t total_ = 0;
-  uint64_t current_ = 0;
+  size_t total_ = 0;
+  size_t current_ = 0;
   std::string unit_;
   size_t bar_width_;
   bool show_eta_;
@@ -183,7 +183,7 @@ private:
 
 class AMProgressBar : public indicators::ProgressBar {
 public:
-  AMProgressBar(uint64_t total_size = 0, std::string prefix = "",
+  AMProgressBar(size_t total_size = 0, std::string prefix = "",
                 std::string unit = "B", size_t bar_width = 50,
                 bool show_eta = true,
                 indicators::Color color = indicators::Color::green)
@@ -199,7 +199,7 @@ public:
             // indicators::option::ShowRate{true},
             // indicators::option::SampleCount{10},
             indicators::option::ForegroundColor{color}) {}
-  void setTotoalSize(uint64_t total_size) {
+  void setTotoalSize(size_t total_size) {
     this->set_option(indicators::option::MaxProgress{total_size});
   }
   void setPrefix(std::string prefix) {
@@ -215,7 +215,7 @@ public:
     this->set_option(indicators::option::Completed{true});
     this->print_progress();
   }
-  void updateProgress(uint64_t current) {
+  void updateProgress(size_t current) {
     this->set_progress(current);
     this->print_progress();
   }
@@ -473,14 +473,14 @@ inline std::pair<bool, int> endswith(const std::string &str,
       str.size() - suffix.size());
 }
 
-inline std::string ModeTrans(uint64_t mode_int) {
+inline std::string ModeTrans(size_t mode_int) {
   // 把mode_int转换为8进制字符串, 长度为9
   if (mode_int > 0777 || mode_int == 0777) {
     return "rwxrwxrwx";
   }
   std::string out = "";
-  uint64_t tmp_int;
-  uint64_t start = 8 * 8 * 8;
+  size_t tmp_int;
+  size_t start = 8 * 8 * 8;
   for (int i = 3; i > 0; i--) {
     tmp_int = (mode_int % start) / (start / 8);
     start /= 8;
@@ -513,13 +513,13 @@ inline std::string ModeTrans(uint64_t mode_int) {
   return out;
 }
 
-inline uint64_t ModeTrans(std::string mode_str) {
+inline size_t ModeTrans(std::string mode_str) {
   std::regex pattern(
       R"(^[r?\-][w?\-][x?\-][r?\-][w?\-][x?\-][r?\-][w?\-][x?\-]$)");
   if (!std::regex_match(mode_str, pattern)) {
     throw std::invalid_argument(amfmt("Invalid mode string: ", mode_str));
   }
-  uint64_t mode_int = 0;
+  size_t mode_int = 0;
   for (int i = 0; i < 9; i++) {
     if (mode_str[i] != '?' && mode_str[i] != '-') {
       mode_int += (1ULL << (8 - i));
@@ -557,7 +557,7 @@ inline bool IsModeValid(std::string mode_str) {
                                      "\\-][r?\\-][w?\\-][x?\\-]$"));
 }
 
-inline bool IsModeValid(uint64_t mode_int) { return mode_int <= 0777; }
+inline bool IsModeValid(size_t mode_int) { return mode_int <= 0777; }
 
 /**
  * @brief Return true when a character is treated as whitespace for parsing.

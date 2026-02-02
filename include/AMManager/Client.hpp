@@ -627,7 +627,7 @@ public:
   /**
    * @brief Format a size value to a human-readable string.
    */
-  static std::string FormatSize(uint64_t size) {
+  static std::string FormatSize(size_t size) {
     const char *units[] = {"B", "KB", "MB", "GB", "TB"};
     double value = static_cast<double>(size);
     size_t idx = 0;
@@ -636,8 +636,8 @@ public:
       ++idx;
     }
     std::ostringstream oss;
-    if (value == static_cast<uint64_t>(value)) {
-      oss << static_cast<uint64_t>(value);
+    if (value == static_cast<size_t>(value)) {
+      oss << static_cast<size_t>(value);
     } else {
       oss << std::fixed << std::setprecision(1) << value;
     }
