@@ -167,14 +167,13 @@ TaskInfoPrint::TaskInfoPrint(AMPromptManager &prompt) : prompt_(prompt) {}
  * @brief Print submit information for transfer_async.
  */
 void TaskInfoPrint::TaskSubmitPrint(
-    const std::shared_ptr<TaskInfo> &task_info,
-    const ClientMaintainer &client_maintainer) const {
+    const std::shared_ptr<TaskInfo> &task_info) const {
   if (!task_info) {
     return;
   }
   const size_t file_num = task_info->tasks ? task_info->tasks->size() : 0;
   const size_t total_size = task_info->total_size.load();
-  std::vector<std::string> nicknames = client_maintainer.get_nicknames();
+  std::vector<std::string> nicknames = task_info->nicknames;
   std::string nickname_str = JoinStrings_(nicknames, ", ");
   if (nickname_str.empty()) {
     nickname_str = "local";
@@ -390,10 +389,7 @@ void TaskInfoPrint::Inspect(const std::shared_ptr<TaskInfo> &task_info,
 
   size_t files_num = task_info->tasks ? task_info->tasks->size() : 0;
 
-  std::vector<std::string> client_names;
-  if (auto hostm = task_info->hostm.lock()) {
-    client_names = hostm->get_nicknames();
-  }
+  std::vector<std::string> client_names = task_info->nicknames;
   if (client_names.empty()) {
     client_names.emplace_back("local");
   }
@@ -512,16 +508,6 @@ void TaskInfoPrint::InspectTransferSets(
     }
   }
 }
-
-/**
- * @brief Prepared task bundle used during transfer setup.
- */
-struct AMTransferManager::PreparedTasks {
-  std::shared_ptr<ClientMaintainer> hostm;
-  std::shared_ptr<TASKS> tasks;
-  std::vector<std::shared_ptr<BaseClient>> clients;
-  std::vector<std::string> client_keys;
-};
 
 /**
  * @brief Return the singleton transfer manager instance.
@@ -663,31 +649,58 @@ AMTransferManager::AcquireClient_(const std::string &nickname,
 }
 
 /**
- * @brief Return a set of clients to the idle pool.
+ * @brief Collect clients and build a maintainer for required nicknames.
  */
-void AMTransferManager::ReturnClientsToIdle_(
-    const std::vector<std::shared_ptr<BaseClient>> &clients,
-    const std::vector<std::string> &keys) {
-  std::lock_guard<std::mutex> lock(idle_mtx_);
-  const size_t count = std::min(clients.size(), keys.size());
-  for (size_t i = 0; i < count; ++i) {
-    if (!clients[i]) {
+std::pair<ECM, std::shared_ptr<ClientMaintainer>>
+AMTransferManager::CollectClients(const std::vector<std::string> &nicknames,
+                                  const std::shared_ptr<InterruptFlag> &flag) {
+  auto maintainer = std::make_shared<ClientMaintainer>(
+      -1, ClientMaintainer::DisconnectCallback(),
+      client_manager_.LocalClient());
+  for (const auto &name : nicknames) {
+    if (name.empty() || name == "local") {
       continue;
     }
-    idle_pool_[keys[i]].push_front(clients[i]);
+    if (maintainer->GetHost(name)) {
+      continue;
+    }
+    auto [rcm, client] = AcquireClient_(name, flag);
+    if (rcm.first != EC::Success || !client) {
+      ReturnClientsToIdle_(maintainer);
+      return {rcm, nullptr};
+    }
+    maintainer->add_client(name, client);
+  }
+
+  return {ECM{EC::Success, ""}, maintainer};
+}
+
+/**
+ * @brief Return all maintainer clients to the idle pool.
+ */
+void AMTransferManager::ReturnClientsToIdle_(
+    const std::shared_ptr<ClientMaintainer> &maintainer) {
+  if (!maintainer) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(idle_mtx_);
+  for (const auto &pair : maintainer->hosts) {
+    if (!pair.second) {
+      continue;
+    }
+    idle_pool_[pair.first].push_front(pair.second);
   }
 }
 
 /**
  * @brief Build the default+user callback wrapper for task completion.
  */
-TaskInfo::ResultCallback AMTransferManager::BuildResultCallback_(
-    std::atomic<int> &remaining, std::condition_variable &done_cv,
-    std::mutex &done_mtx, std::atomic<bool> &terminated,
-    std::vector<std::shared_ptr<BaseClient>> clients,
-    std::vector<std::string> client_keys) {
-  return [this, &remaining, &done_cv, &done_mtx, &terminated, clients,
-          client_keys](std::shared_ptr<TaskInfo> task_info) mutable {
+TaskInfo::ResultCallback
+AMTransferManager::BuildResultCallback_(std::atomic<int> &remaining,
+                                        std::condition_variable &done_cv,
+                                        std::mutex &done_mtx) {
+  return [this, &remaining, &done_cv,
+          &done_mtx](std::shared_ptr<TaskInfo> task_info) mutable {
     if (task_info) {
       prompt_.resultprint(task_info);
     }
@@ -702,10 +715,7 @@ TaskInfo::ResultCallback AMTransferManager::BuildResultCallback_(
       CallCallbackSafe(bound_cb, task_info);
     }
 
-    const int left = --remaining;
-    if (left <= 0 || terminated.load()) {
-      ReturnClientsToIdle_(clients, client_keys);
-    }
+    --remaining;
 
     std::lock_guard<std::mutex> lock(done_mtx);
     done_cv.notify_all();
@@ -733,6 +743,10 @@ void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
                                        UserResultCallback user_cb) {
   if (!task_info) {
     return;
+  }
+  if (task_info->hostm) {
+    ReturnClientsToIdle_(task_info->hostm);
+    task_info->hostm.reset();
   }
   {
     std::lock_guard<std::mutex> lock(history_mtx_);
@@ -1135,28 +1149,149 @@ ECM AMTransferManager::Resume(const std::vector<ID> &task_ids) {
 }
 
 /**
- * @brief Prepare host maintainer and tasks from user transfer sets.
+ * @brief Resume a completed task by rebuilding failed entries.
  */
-std::pair<ECM, AMTransferManager::PreparedTasks>
-AMTransferManager::PrepareTasks_(
-    const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-    const std::shared_ptr<InterruptFlag> &flag) {
-  PreparedTasks prepared;
-  if (transfer_sets.empty()) {
-    return {ECM{EC::Success, ""}, prepared};
+ECM AMTransferManager::resume(const ID &task_id, bool is_async, bool quiet,
+                              const std::vector<int> &indices) {
+  auto original = FindTaskById_(task_id);
+  if (!original || !original->tasks) {
+    return {EC::InvalidArg, AMStr::amfmt("Task not found: {}", task_id)};
   }
 
-  std::unordered_set<std::string> nicknames;
+  const TaskStatus status = original->GetStatus();
+  if (status != TaskStatus::Finished) {
+    const std::string status_name = std::string(magic_enum::enum_name(status));
+    return {EC::InvalidArg, AMStr::amfmt("Task not finished: {} (status {})",
+                                         task_id, status_name)};
+  }
+
+  const size_t total_tasks = original->tasks->size();
+  std::vector<size_t> selected_indices;
+  std::vector<int> invalid_indices;
+
+  if (!indices.empty()) {
+    std::unordered_set<size_t> seen;
+    selected_indices.reserve(indices.size());
+    for (int idx : indices) {
+      if (idx <= 0 || static_cast<size_t>(idx) > total_tasks) {
+        invalid_indices.push_back(idx);
+        continue;
+      }
+      size_t pos = static_cast<size_t>(idx - 1);
+      if (seen.insert(pos).second) {
+        selected_indices.push_back(pos);
+      }
+    }
+    if (!invalid_indices.empty()) {
+      std::vector<std::string> invalid_text;
+      invalid_text.reserve(invalid_indices.size());
+      for (int idx : invalid_indices) {
+        invalid_text.push_back(std::to_string(idx));
+      }
+      prompt_.Print(AMStr::amfmt("Warning: invalid resume indices ignored: {}",
+                                 JoinStrings_(invalid_text, ", ")));
+    }
+    if (selected_indices.empty()) {
+      return {EC::InvalidArg, "No valid task indices to resume"};
+    }
+  }
+
+  auto tasks_ptr = std::make_shared<TASKS>();
+  auto append_task = [&](const TransferTask &task) {
+    if (task.rcm.first == EC::Success) {
+      return;
+    }
+    TransferTask copy = task;
+    copy.IsFinished = false;
+    copy.rcm = {EC::Success, ""};
+    tasks_ptr->push_back(std::move(copy));
+  };
+
+  if (indices.empty()) {
+    tasks_ptr->reserve(total_tasks);
+    for (const auto &task : *original->tasks) {
+      append_task(task);
+    }
+  } else {
+    tasks_ptr->reserve(selected_indices.size());
+    for (size_t idx : selected_indices) {
+      append_task(original->tasks->at(idx));
+    }
+  }
+
+  if (tasks_ptr->empty()) {
+    prompt_.Print("resume: all selected tasks already succeeded");
+    return {EC::Success, ""};
+  }
+
+  std::vector<std::string> nickname_list;
+  std::unordered_set<std::string> nickname_seen;
+  bool local_used = false;
+  auto record_nickname = [&](const std::string &name) {
+    if (name.empty() || name == "local") {
+      local_used = true;
+      return;
+    }
+    if (nickname_seen.insert(name).second) {
+      nickname_list.push_back(name);
+    }
+  };
+  for (const auto &task : *tasks_ptr) {
+    record_nickname(task.src_host);
+    record_nickname(task.dst_host);
+  }
+
+  std::vector<std::string> display_names = nickname_list;
+  if (local_used || display_names.empty()) {
+    display_names.push_back("local");
+  }
+
+  auto [host_rcm, hostm] = CollectClients(nickname_list, nullptr);
+  if (host_rcm.first != EC::Success || !hostm) {
+    return host_rcm;
+  }
+
+  const ssize_t buffer_size = original->buffer_size.load();
+  const int affinity_thread = original->affinity_thread.load();
+  auto task_info = worker_.cre_taskinfo(tasks_ptr, hostm, original->callback,
+                                        buffer_size, quiet, affinity_thread);
+  if (original->transfer_sets) {
+    task_info->transfer_sets = original->transfer_sets;
+  }
+  task_info->nicknames = std::move(display_names);
+
+  if (is_async) {
+    return transfer_async(task_info);
+  }
+  return transfer(task_info);
+}
+
+/**
+ * @brief Prepare host maintainer and TaskInfo from user transfer sets.
+ */
+std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
+    const std::vector<UserTransferSet> &transfer_sets, bool quiet,
+    const std::shared_ptr<InterruptFlag> &flag) {
+  if (transfer_sets.empty()) {
+    return {ECM{EC::Success, ""}, nullptr};
+  }
+
+  std::vector<std::string> nickname_list = {};
+  std::unordered_set<std::string> nickname_seen = {};
+  bool local_used = false;
+
   for (const auto &set : transfer_sets) {
     std::string dst_host;
     std::string dst_path;
     auto dst_rcm = ParseTransferPath(client_manager_, set.dst, nullptr,
                                      &dst_host, &dst_path);
     if (dst_rcm.first != EC::Success) {
-      return {dst_rcm, prepared};
+      return {dst_rcm, nullptr};
     }
-    if (!dst_host.empty()) {
-      nicknames.insert(dst_host);
+    if (dst_host.empty() || AMStr::lowercase(dst_host) == "local") {
+      local_used = true;
+    } else if (nickname_seen.insert(dst_host).second) {
+      nickname_list.push_back(dst_host);
     }
     for (const auto &src : set.srcs) {
       std::string src_host;
@@ -1164,60 +1299,54 @@ AMTransferManager::PrepareTasks_(
       auto src_rcm = ParseTransferPath(client_manager_, src, nullptr, &src_host,
                                        &src_path);
       if (src_rcm.first != EC::Success) {
-        return {src_rcm, prepared};
+        return {src_rcm, nullptr};
       }
-      if (!src_host.empty()) {
-        nicknames.insert(src_host);
+      if (src_host.empty() || AMStr::lowercase(src_host) == "local") {
+        local_used = true;
+      } else if (nickname_seen.insert(src_host).second) {
+        nickname_list.push_back(src_host);
       }
     }
   }
 
-  std::unordered_map<std::string, std::shared_ptr<BaseClient>> host_map;
-  prepared.clients.reserve(nicknames.size());
-  prepared.client_keys.reserve(nicknames.size());
-
-  for (const auto &name : nicknames) {
-    auto [rcm, client] = AcquireClient_(name, flag);
-    if (rcm.first != EC::Success || !client) {
-      ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
-      return {rcm, prepared};
-    }
-    host_map[name] = client;
-    prepared.clients.push_back(client);
-    prepared.client_keys.push_back(name.empty() ? "local" : name);
+  std::vector<std::string> display_names = nickname_list;
+  if (local_used) {
+    display_names.push_back("local");
   }
 
-  prepared.hostm = std::make_shared<ClientMaintainer>(
-      -1, ClientMaintainer::DisconnectCallback(), client_manager_.LocalClient(),
-      host_map);
+  auto [host_rcm, hostm] = CollectClients(nickname_list, flag);
+  if (host_rcm.first != EC::Success || !hostm) {
+    return {host_rcm, nullptr};
+  }
 
+  auto tasks_ptr = std::make_shared<TASKS>();
   for (const auto &set : transfer_sets) {
     std::string dst_host;
     std::string dst_path;
     auto dst_parse = ParseTransferPath(client_manager_, set.dst, nullptr,
                                        &dst_host, &dst_path);
     if (dst_parse.first != EC::Success) {
-      ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
-      return {dst_parse, prepared};
+      ReturnClientsToIdle_(hostm);
+      return {dst_parse, nullptr};
     }
-    auto dst_client = dst_host.empty() ? prepared.hostm->local_client
-                                       : prepared.hostm->GetHost(dst_host);
+    auto dst_client =
+        dst_host.empty() ? hostm->local_client : hostm->GetHost(dst_host);
     if (!dst_client) {
-      ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
+      ReturnClientsToIdle_(hostm);
       return {ECM{EC::ClientNotFound, "Destination client not available"},
-              prepared};
+              nullptr};
     }
     auto dst_rcm = ParseTransferPath(client_manager_, set.dst, dst_client,
                                      &dst_host, &dst_path);
     if (dst_rcm.first != EC::Success) {
-      ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
-      return {dst_rcm, prepared};
+      ReturnClientsToIdle_(hostm);
+      return {dst_rcm, nullptr};
     }
     for (const auto &src : set.srcs) {
       if (flag && flag->check()) {
-        ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
+        ReturnClientsToIdle_(hostm);
         return {ECM{EC::Terminate, "Interrupted before task generation"},
-                prepared};
+                nullptr};
       }
 
       std::string src_host;
@@ -1225,61 +1354,62 @@ AMTransferManager::PrepareTasks_(
       auto src_parse = ParseTransferPath(client_manager_, src, nullptr,
                                          &src_host, &src_path);
       if (src_parse.first != EC::Success) {
-        ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
-        return {src_parse, prepared};
+        ReturnClientsToIdle_(hostm);
+        return {src_parse, nullptr};
       }
-      auto src_client = src_host.empty() ? prepared.hostm->local_client
-                                         : prepared.hostm->GetHost(src_host);
+      auto src_client =
+          src_host.empty() ? hostm->local_client : hostm->GetHost(src_host);
       if (!src_client) {
-        ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
+        ReturnClientsToIdle_(hostm);
         return {ECM{EC::ClientNotFound, "Source client not available"},
-                prepared};
+                nullptr};
       }
       auto src_rcm = ParseTransferPath(client_manager_, src, src_client,
                                        &src_host, &src_path);
       if (src_rcm.first != EC::Success) {
-        ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
-        return {src_rcm, prepared};
+        ReturnClientsToIdle_(hostm);
+        return {src_rcm, nullptr};
       }
 
       std::vector<std::string> src_paths = {src_path};
       if (HasWildcard_(src_path)) {
-        auto src_client = src_host.empty() ? prepared.hostm->local_client
-                                           : prepared.hostm->GetHost(src_host);
-        if (!src_client) {
-          ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
-          return {ECM{EC::ClientNotFound, "Source client not available"},
-                  prepared};
-        }
         auto matches = src_client->find(src_path, SearchType::All, flag, 5000);
         src_paths.clear();
         for (const auto &m : matches) {
           src_paths.push_back(m.path);
         }
         if (!quiet && !ConfirmWildcard_(matches, src_host, dst_host)) {
-          ReturnClientsToIdle_(prepared.clients, prepared.client_keys);
+          ReturnClientsToIdle_(hostm);
           return {ECM{EC::Terminate, "Wildcard transfer canceled by user"},
-                  prepared};
+                  nullptr};
         }
       }
-      prepared.tasks = std::make_shared<TASKS>();
+
       for (const auto &resolved_src : src_paths) {
         auto [rcm, tasks] = AMWorkManager::load_tasks(
-            resolved_src, dst_path, prepared.hostm, src_host, dst_host,
-            set.clone, set.overwrite, set.mkdir, set.ignore_special_file, flag,
-            10000);
+            resolved_src, dst_path, hostm, src_host, dst_host, set.clone,
+            set.overwrite, set.mkdir, set.ignore_special_file, flag, 10000);
         if (rcm.first != EC::Success) {
           prompt_.ErrorFormat("LoadTasks", rcm.second, false, 0, __func__);
           continue;
         }
-        prepared.tasks->insert(prepared.tasks->end(), tasks.begin(),
-                               tasks.end());
+        tasks_ptr->insert(tasks_ptr->end(), tasks.begin(), tasks.end());
       }
     }
   }
 
-  DeduplicateTasks_(prepared.tasks.get());
-  return {ECM{EC::Success, ""}, prepared};
+  DeduplicateTasks_(tasks_ptr.get());
+  if (tasks_ptr->empty()) {
+    ReturnClientsToIdle_(hostm);
+    return {ECM{EC::Success, ""}, nullptr};
+  }
+
+  auto task_info =
+      worker_.cre_taskinfo(tasks_ptr, hostm, TransferCallback(), -1, quiet, -1);
+  task_info->transfer_sets =
+      std::make_shared<std::vector<UserTransferSet>>(transfer_sets);
+  task_info->nicknames = std::move(display_names);
+  return {ECM{EC::Success, ""}, task_info};
 }
 
 /**
@@ -1354,57 +1484,59 @@ ECM AMTransferManager::transfer(
     const std::shared_ptr<InterruptFlag> &interrupt_flag) {
   auto flag =
       interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
-  const int refresh_interval_ms = ResolveRefreshIntervalMs_();
-
-  auto [rcm, prep] = PrepareTasks_(transfer_sets, quiet, flag);
+  auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
   if (rcm.first != EC::Success) {
     return rcm;
   }
+  return transfer(task_info, flag);
+}
 
-  if (prep.tasks->empty()) {
-    ReturnClientsToIdle_(prep.clients, prep.client_keys);
+/**
+ * @brief Blocking transfer entry point for prepared task info.
+ */
+ECM AMTransferManager::transfer(
+    const std::shared_ptr<TaskInfo> &task_info,
+    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+  if (!task_info) {
     return {EC::Success, ""};
   }
+
+  if (!task_info->tasks || task_info->tasks->empty()) {
+    if (task_info->hostm) {
+      ReturnClientsToIdle_(task_info->hostm);
+      task_info->hostm.reset();
+    }
+    return {EC::Success, ""};
+  }
+
+  auto flag =
+      interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
+  const int refresh_interval_ms = ResolveRefreshIntervalMs_();
 
   std::mutex done_mtx;
   std::condition_variable done_cv;
   std::atomic<int> remaining(1);
-  std::atomic<bool> terminated(false);
 
-  auto tasks_ptr = prep.tasks;
-  auto task_info = worker_.cre_taskinfo(tasks_ptr, prep.hostm,
-                                        TransferCallback(), -1, quiet, -1);
-  task_info->transfer_sets =
-      std::make_shared<std::vector<UserTransferSet>>(transfer_sets);
-  task_info->result_callback = BuildResultCallback_(
-      remaining, done_cv, done_mtx, terminated, prep.clients, prep.client_keys);
+  task_info->result_callback =
+      BuildResultCallback_(remaining, done_cv, done_mtx);
 
   auto submit_rcm = worker_.submit(task_info);
   if (submit_rcm.first != EC::Success) {
     prompt_.ErrorFormat("SubmitTask", submit_rcm.second, false, 0, __func__);
-    ReturnClientsToIdle_(prep.clients, prep.client_keys);
+    if (task_info->hostm) {
+      ReturnClientsToIdle_(task_info->hostm);
+      task_info->hostm.reset();
+    }
     return submit_rcm;
   }
-
-  // TODO: Bar has problem
-  // AMProgressBarGroup progress_group;
-  // progress_group.Start();
-  // auto bar = std::make_shared<AMProgressBar>(
-  //     static_cast<int64_t>(task_info->total_size.load()), "transfer");
-  // progress_group.AddBar(bar);
 
   bool all_finished = false;
   while (!all_finished) {
     if (flag && flag->check()) {
-      terminated.store(true);
       (void)worker_.terminate(task_info->id, 1000);
-      // progress_group.Stop();
       return {EC::Terminate, "Transfer interrupted during progress polling"};
     }
     all_finished = task_info->GetStatus() == TaskStatus::Finished;
-    // bar->SetProgress(
-    //     static_cast<int64_t>(task_info->total_transferred_size.load()));
-    // progress_group.Refresh(true);
     std::this_thread::sleep_for(std::chrono::milliseconds(refresh_interval_ms));
   }
 
@@ -1423,34 +1555,60 @@ ECM AMTransferManager::transfer_async(
     const std::shared_ptr<InterruptFlag> &interrupt_flag) {
   auto flag =
       interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
-  auto [rcm, prep] = PrepareTasks_(transfer_sets, quiet, flag);
+  auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
   if (rcm.first != EC::Success) {
     return rcm;
   }
+  return transfer_async(task_info, flag);
+}
 
-  if (prep.tasks->empty()) {
-    ReturnClientsToIdle_(prep.clients, prep.client_keys);
+/**
+ * @brief Non-blocking transfer entry point for prepared task info.
+ */
+ECM AMTransferManager::transfer_async(
+    const std::shared_ptr<TaskInfo> &task_info,
+    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+  (void)interrupt_flag;
+  if (!task_info) {
     return {EC::Success, ""};
   }
 
-  std::mutex done_mtx;
-  std::condition_variable done_cv;
-  std::atomic<int> remaining(1);
-  std::atomic<bool> terminated(false);
+  if (!task_info->tasks || task_info->tasks->empty()) {
+    if (task_info->hostm) {
+      ReturnClientsToIdle_(task_info->hostm);
+      task_info->hostm.reset();
+    }
+    return {EC::Success, ""};
+  }
 
-  auto task_info = std::make_shared<TaskInfo>(quiet);
-  task_info->hostm = prep.hostm;
-  task_info->tasks = prep.tasks;
-  task_info->transfer_sets =
-      std::make_shared<std::vector<UserTransferSet>>(transfer_sets);
-  task_info->result_callback = BuildResultCallback_(
-      remaining, done_cv, done_mtx, terminated, prep.clients, prep.client_keys);
+  task_info->result_callback = [this](std::shared_ptr<TaskInfo> info) {
+    if (info) {
+      prompt_.resultprint(info);
+    }
+
+    UserResultCallback user_cb;
+    {
+      std::lock_guard<std::mutex> lock(callback_mtx_);
+      user_cb = user_result_cb_;
+    }
+    auto bound_cb = BindResultCallback(std::move(user_cb));
+    if (bound_cb) {
+      CallCallbackSafe(bound_cb, info);
+    }
+  };
 
   auto submit_rcm = worker_.submit(task_info);
   if (submit_rcm.first != EC::Success) {
     prompt_.ErrorFormat("SubmitTask", submit_rcm.second, false, 0, __func__);
-    ReturnClientsToIdle_(prep.clients, prep.client_keys);
+    if (task_info->hostm) {
+      ReturnClientsToIdle_(task_info->hostm);
+      task_info->hostm.reset();
+    }
     return submit_rcm;
+  }
+
+  if (!task_info->quiet) {
+    task_printer_.TaskSubmitPrint(task_info);
   }
   return {EC::Success, ""};
 }

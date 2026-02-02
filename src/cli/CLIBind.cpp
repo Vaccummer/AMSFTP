@@ -271,10 +271,19 @@ void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
   commands.task_pause_cmd->add_option("id", args.task_pause.ids, "Task IDs")
       ->expected(1, -1);
 
-  commands.task_resume_cmd =
-      commands.task_cmd->add_subcommand("resume", "Resume task(s)");
-  commands.task_resume_cmd->add_option("id", args.task_resume.ids, "Task IDs")
-      ->expected(1, -1);
+  commands.task_resume_cmd = commands.task_cmd->add_subcommand(
+      "resume", "Resume a completed task (retry failed entries)");
+  commands.task_resume_cmd->add_flag("-a,--async", args.task_resume.is_async,
+                                     "Submit task asynchronously");
+  commands.task_resume_cmd->add_flag("-q,--quiet", args.task_resume.quiet,
+                                     "Suppress output");
+  commands.task_resume_cmd->add_option("id", args.task_resume.id, "Task ID")
+      ->required()
+      ->expected(1, 1);
+  commands.task_resume_cmd
+      ->add_option("-i,--index", args.task_resume.indices,
+                   "1-based task indices to resume")
+      ->expected(0, -1);
 }
 
 /**
@@ -825,7 +834,9 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
 
   if (cli_commands.task_resume_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    result.rcm = transfer_manager.Resume(args.task_resume.ids);
+    result.rcm = transfer_manager.resume(
+        args.task_resume.id, args.task_resume.is_async, args.task_resume.quiet,
+        args.task_resume.indices);
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }

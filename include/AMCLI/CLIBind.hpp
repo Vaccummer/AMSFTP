@@ -268,6 +268,16 @@ struct TaskControlArgs {
 };
 
 /**
+ * @brief CLI argument container for task resume (failed tasks).
+ */
+struct TaskResumeArgs {
+  std::string id;
+  bool is_async = false;
+  bool quiet = false;
+  std::vector<int> indices;
+};
+
+/**
  * @brief Pool of all CLI argument structs.
  */
 struct CliArgsPool {
@@ -304,7 +314,7 @@ struct CliArgsPool {
   TaskEntryArgs task_entry;
   TaskControlArgs task_terminate;
   TaskControlArgs task_pause;
-  TaskControlArgs task_resume;
+  TaskResumeArgs task_resume;
 };
 
 /**
