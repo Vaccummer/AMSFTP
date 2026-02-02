@@ -935,3 +935,44 @@ rm 对应原绑定:
     ->expected(1, 1);
 
 改名为query, 可1+个ID
+@
+
+@src\manager\Transfer.cpp
+
+封装一个函数CollectClients, 接收vector `<nicknames>`, 返回pair `<ecm, maintainer_ptr>`用于根据需要的client创建maintainer, 逻辑类似PrepareTasks_中的相关操作
+
+将PrepareTasks_返回值修改成pair<ECM, TaskInfo_ptr>, 添加两个参数quiet,interrupt_flag,   PrepareTasks_中完成生成TaskInfo的操作(但结果回调在两类transfer中)
+
+ReturnClientsToIdle_直接接收ClientMaintainer, 读取ClientMaintainer.hosts将所有非local的clients添加回公有池
+
+transfer_async和transfer添加直接接收taskinfo的重载
+
+修复transfer中progress的bug, transfer只提交一个任务, 用不着进度条组
+
+TaskInfo持有maintainer的共享指针
+
+TaskInfo新增 attr  vector `<str> nicknames`
+
+TaskInfo在AMTransferManager::ResultCallback中将maintainer的client放回后, 设为nullptr释放
+
+取消TransferManager中查询任务函数对maintainer调用
+
+# Resume
+
+新加resume用在已经失败的任务的重新提交/续传
+
+resume接收两个参数
+
++ str id: 位置参数已经存在而且状态是已完成的任务的id, 非已完成的任务直接报错
++ bool: is_async = false
++ bool: quiet = false
++ vector `<int>` index: 接收可变数量的整数, 为TaskInfo的TASKS的指定任务的下标
+
+先查询任务id是否合法
+
+过滤非法的index(超界/负数), 过滤时需要警告用户这些index被过滤
+
+根据index传输情况, 重新构造TASKS(已经IsSuccess的task不再重传)
+
+分析需要的clients, 调用CollectClients创建maintainer, 若失败直接报错
+调用workermanager的cre_taskinfo创建Taskinfo, 根据is_async 调用相关的transfer函数

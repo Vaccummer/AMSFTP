@@ -69,7 +69,8 @@ public:
 
   ECM Init(const std::string &path, size_t file_size,
            std::shared_ptr<AMSFTPClient> client = nullptr,
-           bool is_write = false, bool sequential = true) {
+           bool is_write = false, bool sequential = true,
+           bool truncate = true) {
     this->path = path;
     this->is_write = is_write;
     this->file_size = file_size;
@@ -79,9 +80,12 @@ public:
     if (is_sftp) {
       // SFTP file
       if (is_write) {
-        sftp_handle = libssh2_sftp_open(
-            client->sftp, path.c_str(),
-            LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT, 0744);
+        int flags = LIBSSH2_FXF_WRITE;
+        if (truncate) {
+          flags |= LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_CREAT;
+        }
+        sftp_handle =
+            libssh2_sftp_open(client->sftp, path.c_str(), flags, 0744);
       } else {
         sftp_handle = libssh2_sftp_open(client->sftp, path.c_str(),
                                         LIBSSH2_FXF_READ, 0400);
@@ -97,7 +101,8 @@ public:
 #ifdef _WIN32
       DWORD access = is_write ? (GENERIC_READ | GENERIC_WRITE) : GENERIC_READ;
       DWORD share = is_write ? 0 : FILE_SHARE_READ;
-      DWORD creation = is_write ? CREATE_ALWAYS : OPEN_EXISTING;
+      DWORD creation =
+          is_write ? (truncate ? CREATE_ALWAYS : OPEN_EXISTING) : OPEN_EXISTING;
       DWORD flags =
           sequential ? FILE_FLAG_SEQUENTIAL_SCAN : FILE_ATTRIBUTE_NORMAL;
 
@@ -110,7 +115,10 @@ public:
                              path, GetLastError())};
       }
 #else
-      int flags = is_write ? (O_RDWR | O_CREAT | O_TRUNC) : O_RDONLY;
+      int flags = is_write ? O_RDWR : O_RDONLY;
+      if (is_write && truncate) {
+        flags |= (O_CREAT | O_TRUNC);
+      }
       file_handle = open(path.c_str(), flags, 0644);
 
       if (file_handle == -1) {
@@ -124,7 +132,7 @@ public:
     return {EC::Success, ""};
   }
 
-  bool IsValid() const {
+  [[nodiscard]] bool IsValid() const {
     if (is_sftp) {
       return sftp_handle != nullptr;
     } else {
@@ -134,6 +142,50 @@ public:
       return file_handle != -1;
 #endif
     }
+  }
+
+  /**
+   * @brief Seek to the specified offset for subsequent reads/writes.
+   */
+  ECM Seek(size_t new_offset) {
+    if (!IsValid()) {
+      return {EC::LocalFileOpenError, "File not initialized"};
+    }
+    if (new_offset == 0) {
+      offset = 0;
+      return {EC::Success, ""};
+    }
+    if (is_sftp) {
+      if (!client) {
+        return {EC::InvalidArg, "SFTP client not available"};
+      }
+      std::lock_guard<std::recursive_mutex> lock(client->mtx);
+      libssh2_sftp_seek64(sftp_handle,
+                          static_cast<libssh2_uint64_t>(new_offset));
+      offset = new_offset;
+      return {EC::Success, ""};
+    }
+#ifdef _WIN32
+    LARGE_INTEGER li;
+    li.QuadPart = static_cast<LONGLONG>(new_offset);
+    LARGE_INTEGER new_pos;
+    if (!SetFilePointerEx(file_handle, li, &new_pos, FILE_BEGIN)) {
+      return {EC::LocalFileReadError,
+              AMStr::amfmt("Seek local file \"{}\" failed: error code {}", path,
+                           GetLastError())};
+    }
+    offset = static_cast<size_t>(new_pos.QuadPart);
+    return {EC::Success, ""};
+#else
+    off_t res = lseek(file_handle, static_cast<off_t>(new_offset), SEEK_SET);
+    if (res == static_cast<off_t>(-1)) {
+      return {EC::LocalFileReadError,
+              AMStr::amfmt("Seek local file \"{}\" failed: {}", path,
+                           strerror(errno))};
+    }
+    offset = static_cast<size_t>(res);
+    return {EC::Success, ""};
+#endif
   }
 
   std::pair<ssize_t, ECM> Read(std::shared_ptr<StreamRingBuffer> ring_buffer) {
@@ -297,7 +349,6 @@ CreateClient(const ConRequst &requeset, ClientProtocol protocol,
 
 class ClientMaintainer {
 private:
-  std::unordered_map<std::string, std::shared_ptr<BaseClient>> hosts;
   std::atomic<bool> is_heartbeat;
   std::thread heartbeat_thread;
 
@@ -333,6 +384,7 @@ private:
 public:
   using DisconnectCallback =
       std::function<void(const std::shared_ptr<BaseClient> &, const ECM &)>;
+  std::unordered_map<std::string, std::shared_ptr<BaseClient>> hosts;
   DisconnectCallback disconnect_cb;
   bool is_disconnect_cb = false;
   std::shared_ptr<AMLocalClient> local_client;
@@ -344,7 +396,7 @@ public:
   }
 
   std::shared_ptr<BaseClient> GetHost(const std::string &nickname) {
-    if (nickname.empty()) {
+    if (nickname.empty() || AMStr::lowercase(nickname) == "local") {
       return local_client;
     }
 
@@ -402,8 +454,17 @@ public:
     return host_list;
   }
 
+  /**
+   * @brief Snapshot managed hosts.
+   */
+  std::unordered_map<std::string, std::shared_ptr<BaseClient>>
+  get_hosts_snapshot() {
+    std::lock_guard<std::recursive_mutex> lock(beat_mtx);
+    return hosts;
+  }
+
   std::optional<AMCilent> get_client(const std::string &nickname) {
-    if (nickname.empty()) {
+    if (nickname.empty() || AMStr::lowercase(nickname) == "local") {
       return local_client;
     }
     if (hosts.find(nickname) == hosts.end()) {
@@ -436,7 +497,7 @@ public:
 
   void add_client(const std::string &nickname,
                   std::shared_ptr<BaseClient> client, bool overwrite = false) {
-    if (nickname.empty()) {
+    if (nickname.empty() || AMStr::lowercase(nickname) == "local") {
       return;
     }
     std::lock_guard<std::recursive_mutex> lock(beat_mtx);
@@ -463,7 +524,7 @@ public:
   // }
 
   void remove_client(const std::string &nickname) {
-    if (nickname.empty()) {
+    if (nickname.empty() || AMStr::lowercase(nickname) == "local") {
       // 不允许删除默认本地客户端
       return;
     }
@@ -477,7 +538,7 @@ public:
   test_client(const std::string &nickname, bool update = false,
               amf interrupt_flag = nullptr, int timeout_ms = -1,
               int64_t start_time = -1) {
-    if (nickname.empty()) {
+    if (nickname.empty() || AMStr::lowercase(nickname) == "local") {
       return {ECM{EC::Success, ""}, local_client};
     }
     start_time = start_time == -1 ? am_ms() : start_time;
@@ -871,9 +932,13 @@ private:
                                msg)};
     }
 
-    LIBSSH2_SFTP_HANDLE *dstFile = libssh2_sftp_open(
-        client->sftp, task->dst.c_str(),
-        LIBSSH2_FXF_WRITE | LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC, 0744);
+    const size_t resume_offset = task->transferred;
+    int dst_flags = LIBSSH2_FXF_WRITE;
+    if (resume_offset == 0) {
+      dst_flags |= LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC;
+    }
+    LIBSSH2_SFTP_HANDLE *dstFile =
+        libssh2_sftp_open(client->sftp, task->dst.c_str(), dst_flags, 0744);
     if (!dstFile) {
       libssh2_sftp_close_handle(srcFile);
       EC rc = client->GetLastEC();
@@ -884,8 +949,15 @@ private:
 
     libssh2_session_set_blocking(client->session, 1);
     std::vector<char> buffer(chunk_size_);
-    size_t total_written = 0;
+    size_t total_written = resume_offset;
     ssize_t bytes_read, bytes_written;
+
+    if (resume_offset > 0) {
+      libssh2_sftp_seek64(srcFile,
+                          static_cast<libssh2_uint64_t>(resume_offset));
+      libssh2_sftp_seek64(dstFile,
+                          static_cast<libssh2_uint64_t>(resume_offset));
+    }
 
     while (total_written < task->size) {
       if (pd.is_terminate()) {
@@ -967,6 +1039,14 @@ private:
         task->rcm = rcm;
         return;
       }
+      if (task->transferred > 0) {
+        ECM seek_rcm = file_handle.Seek(task->transferred);
+        if (seek_rcm.first != EC::Success) {
+          pd.set_terminate();
+          task->rcm = seek_rcm;
+          return;
+        }
+      }
       std::lock_guard<std::recursive_mutex> lock(clientf->mtx);
       while (file_handle.offset < file_handle.file_size && !pd.is_terminate()) {
         while (pd.ring_buffer->writable() == 0 && !pd.is_terminate() &&
@@ -993,6 +1073,14 @@ private:
         pd.set_terminate();
         task->rcm = rcm;
         return;
+      }
+      if (task->transferred > 0) {
+        ECM seek_rcm = file_handle.Seek(task->transferred);
+        if (seek_rcm.first != EC::Success) {
+          pd.set_terminate();
+          task->rcm = seek_rcm;
+          return;
+        }
       }
       while (file_handle.offset < file_handle.file_size && !pd.is_terminate()) {
         while (pd.ring_buffer->writable() == 0 && !pd.is_terminate() &&
@@ -1031,11 +1119,21 @@ private:
     if (client->GetProtocol() == ClientProtocol::SFTP) {
       UnionFileHandle file_handle;
       auto clientf = std::static_pointer_cast<AMSFTPClient>(client);
-      ECM rcm = file_handle.Init(task->dst, task->size, clientf, true, true);
+      const bool resume = task->transferred > 0;
+      ECM rcm =
+          file_handle.Init(task->dst, task->size, clientf, true, true, !resume);
       if (rcm.first != EC::Success) {
         pd.set_terminate();
         task->rcm = rcm;
         return;
+      }
+      if (resume) {
+        ECM seek_rcm = file_handle.Seek(task->transferred);
+        if (seek_rcm.first != EC::Success) {
+          pd.set_terminate();
+          task->rcm = seek_rcm;
+          return;
+        }
       }
       while (file_handle.offset < file_handle.file_size && !pd.is_terminate()) {
         while (pd.ring_buffer->available() == 0 && !pd.is_terminate()) {
@@ -1064,11 +1162,21 @@ private:
       }
     } else if (client->GetProtocol() == ClientProtocol::LOCAL) {
       UnionFileHandle file_handle;
-      ECM rcm = file_handle.Init(task->dst, task->size, nullptr, true, true);
+      const bool resume = task->transferred > 0;
+      ECM rcm =
+          file_handle.Init(task->dst, task->size, nullptr, true, true, !resume);
       if (rcm.first != EC::Success) {
         pd.set_terminate();
         task->rcm = rcm;
         return;
+      }
+      if (resume) {
+        ECM seek_rcm = file_handle.Seek(task->transferred);
+        if (seek_rcm.first != EC::Success) {
+          pd.set_terminate();
+          task->rcm = seek_rcm;
+          return;
+        }
       }
       while (file_handle.offset < file_handle.file_size && !pd.is_terminate()) {
         while (pd.ring_buffer->available() == 0 && !pd.is_terminate()) {
@@ -1223,6 +1331,7 @@ private:
       pd->set_terminate();
       return;
     }
+    const size_t resume_offset = cur_task->transferred;
     ECM ecm = client->SetupPath(dst, false);
     if (ecm.first != EC::Success) {
       cur_task->rcm = ecm;
@@ -1233,8 +1342,13 @@ private:
     curl_easy_setopt(curl, CURLOPT_UPLOAD, 1L);
     curl_easy_setopt(curl, CURLOPT_READFUNCTION, read_callback);
     curl_easy_setopt(curl, CURLOPT_READDATA, pd);
-    curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE,
-                     static_cast<curl_off_t>(cur_task->size));
+    curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE,
+                     static_cast<curl_off_t>(resume_offset));
+    curl_easy_setopt(
+        curl, CURLOPT_INFILESIZE_LARGE,
+        static_cast<curl_off_t>(resume_offset < cur_task->size
+                                    ? (cur_task->size - resume_offset)
+                                    : 0));
     curl_easy_setopt(curl, CURLOPT_FTP_CREATE_MISSING_DIRS, CURLFTP_CREATE_DIR);
 
     CURLcode res = curl_easy_perform(curl);
@@ -1265,6 +1379,7 @@ private:
       pd->set_terminate();
       return;
     }
+    const size_t resume_offset = cur_task->transferred;
     ECM ecm = client->SetupPath(src, false);
     if (ecm.first != EC::Success) {
       cur_task->rcm = ecm;
@@ -1274,6 +1389,8 @@ private:
     auto curl = client->GetCURL();
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_callback);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, pd);
+    curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE,
+                     static_cast<curl_off_t>(resume_offset));
     CURLcode res = curl_easy_perform(curl);
     if (res == CURLE_ABORTED_BY_CALLBACK || res == CURLE_WRITE_ERROR) {
       pd->set_terminate();
@@ -1407,7 +1524,7 @@ private:
         continue;
       }
 
-      auto hostm_locked = task_info->hostm.lock();
+      auto hostm_locked = task_info->hostm;
       if (!hostm_locked) {
         task.rcm = {EC::ClientNotFound, "ClientMaintainer expired"};
         task.IsFinished = true;
@@ -1440,9 +1557,30 @@ private:
 
       // Setup cur_task pointer to this task in tasks vector
       task_info->SetCurrentTask(&task);
-      task.transferred = 0;
-      task_info->this_task_transferred_size.store(0);
       task.rcm = ECM(EC::Success, "");
+      size_t resume_offset = task.transferred;
+      bool resume_ok = false;
+      if (resume_offset > 0 && resume_offset <= task.size) {
+        auto [dst_rcm, dst_info] = dst_client->stat(task.dst, false);
+        if (dst_rcm.first == EC::Success && dst_info.type == PathType::FILE) {
+          if (dst_info.size >= resume_offset && dst_info.size <= task.size) {
+            resume_ok = true;
+          }
+        }
+      }
+      if (!resume_ok) {
+        resume_offset = 0;
+      }
+      task.transferred = resume_offset;
+      task_info->this_task_transferred_size.store(resume_offset);
+      if (resume_offset > 0) {
+        task_info->total_transferred_size.fetch_add(resume_offset);
+      }
+      if (resume_offset >= task.size && resume_offset > 0) {
+        task.IsFinished = true;
+        InnerCallback(task_info, pd, true);
+        continue;
+      }
       if (src_client->GetUID() == dst_client->GetUID() &&
           src_client->GetProtocol() == ClientProtocol::SFTP) {
         pd.ring_buffer = nullptr;

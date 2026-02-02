@@ -1086,7 +1086,12 @@ struct TaskInfo {
   /**
    * @brief Host maintainer reference.
    */
-  std::weak_ptr<ClientMaintainer> hostm;
+  std::shared_ptr<ClientMaintainer> hostm;
+
+  /**
+   * @brief Cached client nicknames for display and resume.
+   */
+  std::vector<std::string> nicknames;
 
   /**
    * @brief Requested ring buffer size.

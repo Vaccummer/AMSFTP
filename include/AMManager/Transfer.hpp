@@ -27,10 +27,8 @@ public:
    * {nicknames}".
    *
    * @param task_info Task info to print.
-   * @param client_maintainer Host maintainer used to retrieve nicknames.
    */
-  void TaskSubmitPrint(const std::shared_ptr<TaskInfo> &task_info,
-                       const ClientMaintainer &client_maintainer) const;
+  void TaskSubmitPrint(const std::shared_ptr<TaskInfo> &task_info) const;
 
   /**
    * @brief Print task result information after completion.
@@ -289,10 +287,52 @@ public:
    */
   ECM Resume(const std::vector<ID> &task_ids);
 
+  /**
+   * @brief Resume a completed task by rebuilding transfer tasks.
+   *
+   * @param task_id Task ID to resume (must be finished).
+   * @param is_async Whether to submit asynchronously.
+   * @param quiet Whether to suppress output.
+   * @param indices Optional 1-based task indices to resume.
+   */
+  ECM resume(const ID &task_id, bool is_async = false, bool quiet = false,
+             const std::vector<int> &indices = {});
+
+  /**
+   * @brief Execute transfer sets synchronously (blocking).
+   *
+   * @param transfer_sets Transfer sets to execute.
+   * @param quiet Whether to suppress output.
+   * @param interrupt_flag Optional interrupt flag.
+   */
   ECM transfer(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
                const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+  /**
+   * @brief Execute a prepared TaskInfo synchronously.
+   *
+   * @param task_info Prepared task info containing tasks and host maintainer.
+   * @param interrupt_flag Optional interrupt flag for cancellation.
+   */
+  ECM transfer(const std::shared_ptr<TaskInfo> &task_info,
+               const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+  /**
+   * @brief Execute transfer sets asynchronously (non-blocking).
+   *
+   * @param transfer_sets Transfer sets to execute.
+   * @param quiet Whether to suppress output.
+   * @param interrupt_flag Optional interrupt flag.
+   */
   ECM transfer_async(
       const std::vector<UserTransferSet> &transfer_sets, bool quiet,
+      const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+  /**
+   * @brief Execute a prepared TaskInfo asynchronously.
+   *
+   * @param task_info Prepared task info containing tasks and host maintainer.
+   * @param interrupt_flag Optional interrupt flag (unused).
+   */
+  ECM transfer_async(
+      const std::shared_ptr<TaskInfo> &task_info,
       const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
 
 private:
@@ -300,8 +340,6 @@ private:
    * @brief Construct transfer manager using singleton managers.
    */
   AMTransferManager();
-
-  struct PreparedTasks;
 
   int ResolveRefreshIntervalMs_() const;
   static bool HasWildcard_(const std::string &path);
@@ -311,16 +349,16 @@ private:
   std::pair<ECM, std::shared_ptr<BaseClient>>
   AcquireClient_(const std::string &nickname,
                  const std::shared_ptr<InterruptFlag> &flag);
-  void
-  ReturnClientsToIdle_(const std::vector<std::shared_ptr<BaseClient>> &clients,
-                       const std::vector<std::string> &keys);
+  std::pair<ECM, std::shared_ptr<ClientMaintainer>>
+  CollectClients(const std::vector<std::string> &nicknames,
+                 const std::shared_ptr<InterruptFlag> &flag);
+  void ReturnClientsToIdle_(
+      const std::shared_ptr<ClientMaintainer> &maintainer);
   TaskInfo::ResultCallback
   BuildResultCallback_(std::atomic<int> &remaining,
-                       std::condition_variable &done_cv, std::mutex &done_mtx,
-                       std::atomic<bool> &terminated,
-                       std::vector<std::shared_ptr<BaseClient>> clients,
-                       std::vector<std::string> client_keys);
-  std::pair<ECM, PreparedTasks>
+                       std::condition_variable &done_cv,
+                       std::mutex &done_mtx);
+  std::pair<ECM, std::shared_ptr<TaskInfo>>
   PrepareTasks_(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
                 const std::shared_ptr<InterruptFlag> &flag);
   std::shared_ptr<TaskInfo> FindTaskById_(const ID &task_id) const;
