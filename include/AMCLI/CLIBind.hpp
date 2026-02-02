@@ -253,7 +253,7 @@ struct TaskUserSetArgs {
 };
 
 /**
- * @brief CLI argument container for task taskentry.
+ * @brief CLI argument container for task query.
  */
 struct TaskEntryArgs {
   std::vector<std::string> ids;

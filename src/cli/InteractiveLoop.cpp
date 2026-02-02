@@ -373,6 +373,27 @@ int RunInteractiveLoop(const std::string &app_name,
       // CLI11 consumes args via pop_back, so reverse to preserve order.
       std::reverse(cli_args.begin(), cli_args.end());
       app.parse(cli_args);
+    } catch (const CLI::CallForHelp &e) {
+      prompt.Print(app.help());
+      ECM parse_rcm = {EC::Success, ""};
+      SetCliExitCode(e.get_exit_code());
+      const auto iter_end = std::chrono::steady_clock::now();
+      UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
+      continue;
+    } catch (const CLI::CallForAllHelp &e) {
+      prompt.Print(app.help("", CLI::AppFormatMode::All));
+      ECM parse_rcm = {EC::Success, ""};
+      SetCliExitCode(e.get_exit_code());
+      const auto iter_end = std::chrono::steady_clock::now();
+      UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
+      continue;
+    } catch (const CLI::CallForVersion &e) {
+      prompt.Print(app.version());
+      ECM parse_rcm = {EC::Success, ""};
+      SetCliExitCode(e.get_exit_code());
+      const auto iter_end = std::chrono::steady_clock::now();
+      UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
+      continue;
     } catch (const CLI::ParseError &e) {
       const std::string parse_msg = e.what();
       prompt.Print(parse_msg);

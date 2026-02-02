@@ -37,10 +37,11 @@
 - Rename `config ls -d` to `-l, --list` (same behavior).
 - Add `config set` (non-interactive):
   - Usage: `config set <nickname> <property_name> <property_value>`
+  - `property_value` may have blankspace, user can use quote to wrap it
   - Exactly 3 string args; parse inside `SetHostValue`.
   - Errors if:
     - nickname does not exist
-    - property name invalid/unsupported
+    - property name invalid/unsupported(already has validation actions in ConfigManager)
     - property value malformed/invalid
   - Success message: `wsl.username: am -> haha`
 - Bind `config save` to `dump` (no args).
@@ -52,6 +53,7 @@
 - Add new field `compression` to host config.
   - if not set to bool true, set false and write back
 - Maintain consistent field ordering in print/prompt.(string-only input with validation?)
+  - ordering anywhere
 
 Example (field order matters):
 
@@ -74,7 +76,7 @@ compression=false
 ### Client Subcommand
 
 - Add top-level `client` subcommand (similar to `config` and `task`).
-- 
+- legacy commands deprecated
 - Under `client`, define:
   - `ls` (supports `-l, --list`)
     - corresponds to original:
