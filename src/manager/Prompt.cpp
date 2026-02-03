@@ -1,6 +1,7 @@
 #include "AMManager/Prompt.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
+#include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "Isocline/isocline.h"
@@ -11,6 +12,28 @@
 #include <string>
 #include <unordered_set>
 
+namespace {
+/**
+ * @brief Bridge isocline highlight callbacks to the token analyzer.
+ *
+ * @param henv Highlight environment provided by isocline.
+ * @param input Current input text.
+ * @param arg Pointer to the token analyzer instance.
+ */
+void PromptHighlighter_(ic_highlight_env_t *henv, const char *input, void *arg) {
+  if (!henv || !input || !arg) {
+    return;
+  }
+  auto *analyzer = static_cast<AMTokenTypeAnalyzer *>(arg);
+  std::string formatted;
+  analyzer->HighlightFormatted(input, &formatted);
+  if (formatted.empty()) {
+    return;
+  }
+  ic_highlight_formatted(henv, input, formatted.c_str());
+}
+} // namespace
+
 AMPromptManager &AMPromptManager::Instance() {
   static AMPromptManager instance;
   return instance;
@@ -18,7 +41,8 @@ AMPromptManager &AMPromptManager::Instance() {
 
 AMPromptManager::AMPromptManager() {
   ic_set_prompt_marker("", "");
-  /** Disable multiline input so a trailing '\' does not continue to a new line. */
+  /** Disable multiline input so a trailing '\' does not continue to a new line.
+   */
   ic_enable_multiline(false);
   ic_set_history(nullptr, -1);
   ic_enable_history_duplicates(false);
@@ -44,8 +68,7 @@ AMPromptManager::AMPromptManager() {
   AMCliSignalMonitor::Instance().RegisterHook("COREPROMPT", core_hook);
 }
 
-AMPromptManager::~AMPromptManager() {
-}
+AMPromptManager::~AMPromptManager() {}
 
 void AMPromptManager::Print(const std::vector<std::string> &items,
                             const std::string &sep, const std::string &end) {
@@ -271,7 +294,9 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
   if (!out_input) {
     return true;
   }
-  char *line = ic_readline(prompt.c_str());
+  static AMTokenTypeAnalyzer analyzer(AMConfigManager::Instance());
+  char *line = ic_readline_ex(prompt.c_str(), nullptr, nullptr,
+                              &PromptHighlighter_, &analyzer);
   if (!line) {
     return true;
   }
@@ -382,8 +407,7 @@ AMPromptManager::NormalizeHistory_(const std::vector<std::string> &input,
     }
   }
   std::reverse(reversed.begin(), reversed.end());
-  if (max_count > 0 &&
-      reversed.size() > static_cast<size_t>(max_count)) {
+  if (max_count > 0 && reversed.size() > static_cast<size_t>(max_count)) {
     reversed.erase(reversed.begin(),
                    reversed.end() - static_cast<size_t>(max_count));
   }

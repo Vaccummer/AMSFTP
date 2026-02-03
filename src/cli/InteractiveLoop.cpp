@@ -4,11 +4,12 @@
 #include "AMCLI/CommandPreprocess.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include <algorithm>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
-#include <sstream>
+#include <iostream>
 #include <magic_enum/magic_enum.hpp>
+#include <sstream>
 
 namespace {
 /**
@@ -22,53 +23,275 @@ struct PromptState {
 };
 
 /**
- * @brief Convert a tagged icon string like "[#RRGGBB]text[/]" into ANSI color.
+ * @brief Parse a hex color token (#RGB or #RRGGBB) into RGB components.
  *
- * @param tagged Tagged icon string.
- * @param converted Output string with ANSI escape sequences.
- * @return True if conversion succeeded; false if format is invalid.
+ * @param hex Color token with or without a leading '#'.
+ * @param r Output red component.
+ * @param g Output green component.
+ * @param b Output blue component.
+ * @return True if parsing succeeds; false otherwise.
  */
-bool TryConvertTaggedIconToAnsi_(const std::string &tagged,
-                                 std::string *converted) {
-  if (!converted) {
+bool ParseHexColor_(const std::string &hex, int *r, int *g, int *b) {
+  if (!r || !g || !b) {
     return false;
   }
 
-  if (tagged.size() < 10) {
-    return false;
+  std::string value = hex;
+  if (!value.empty() && value.front() == '#') {
+    value.erase(value.begin());
   }
-  if (tagged[0] != '[' || tagged[1] != '#') {
-    return false;
-  }
-
-  const size_t close = tagged.find(']');
-  if (close != 8) {
+  if (!(value.size() == 3 || value.size() == 6)) {
     return false;
   }
 
-  const size_t suffix_pos = tagged.size() - 3;
-  if (tagged.compare(suffix_pos, 3, "[/]") != 0) {
-    return false;
+  auto hex_to_int = [](char c) -> int {
+    if (c >= '0' && c <= '9') {
+      return c - '0';
+    }
+    if (c >= 'a' && c <= 'f') {
+      return 10 + (c - 'a');
+    }
+    if (c >= 'A' && c <= 'F') {
+      return 10 + (c - 'A');
+    }
+    return -1;
+  };
+
+  if (value.size() == 3) {
+    const int r_n = hex_to_int(value[0]);
+    const int g_n = hex_to_int(value[1]);
+    const int b_n = hex_to_int(value[2]);
+    if (r_n < 0 || g_n < 0 || b_n < 0) {
+      return false;
+    }
+    *r = r_n * 17;
+    *g = g_n * 17;
+    *b = b_n * 17;
+    return true;
   }
 
-  const std::string hex = tagged.substr(2, 6);
-  for (char c : hex) {
+  for (char c : value) {
     if (!std::isxdigit(static_cast<unsigned char>(c))) {
       return false;
     }
   }
 
+  *r = std::stoi(value.substr(0, 2), nullptr, 16);
+  *g = std::stoi(value.substr(2, 2), nullptr, 16);
+  *b = std::stoi(value.substr(4, 2), nullptr, 16);
+  return true;
+}
+
+/**
+ * @brief Convert a tagged string like "[#RRGGBB b]text[/]" into ANSI color.
+ *
+ * @param tagged Tagged string with bbcode-style colors.
+ * @param converted Output string with ANSI escape sequences.
+ * @return True if conversion succeeded; false if format is invalid.
+ */
+bool TryConvertTaggedTextToAnsi_(const std::string &tagged,
+                                 std::string *converted) {
+  if (!converted) {
+    return false;
+  }
+  converted->clear();
+
+  if (tagged.size() < 6 || tagged.front() != '[') {
+    return false;
+  }
+
+  const size_t close = tagged.find(']');
+  if (close == std::string::npos) {
+    return false;
+  }
+  const size_t suffix_pos = tagged.rfind("[/]");
+  if (suffix_pos == std::string::npos || suffix_pos <= close) {
+    return false;
+  }
+
+  const std::string tag = tagged.substr(1, close - 1);
   const std::string content =
       tagged.substr(close + 1, suffix_pos - (close + 1));
-  const int r = std::stoi(hex.substr(0, 2), nullptr, 16);
-  const int g = std::stoi(hex.substr(2, 2), nullptr, 16);
-  const int b = std::stoi(hex.substr(4, 2), nullptr, 16);
+
+  bool bold = false;
+  bool italic = false;
+  bool underline = false;
+  bool reverse = false;
+  bool expect_bg = false;
+  bool has_style = false;
+  int fg_r = -1;
+  int fg_g = -1;
+  int fg_b = -1;
+  int bg_r = -1;
+  int bg_g = -1;
+  int bg_b = -1;
+
+  std::istringstream iss(tag);
+  std::string token;
+  while (iss >> token) {
+    if (token == "on") {
+      expect_bg = true;
+      continue;
+    }
+    if (token == "b") {
+      bold = true;
+      has_style = true;
+      continue;
+    }
+    if (token == "i") {
+      italic = true;
+      has_style = true;
+      continue;
+    }
+    if (token == "u") {
+      underline = true;
+      has_style = true;
+      continue;
+    }
+    if (token == "r") {
+      reverse = true;
+      has_style = true;
+      continue;
+    }
+
+    bool is_bg = expect_bg;
+    expect_bg = false;
+    if (token.rfind("color=", 0) == 0) {
+      token = token.substr(6);
+      is_bg = false;
+    } else if (token.rfind("bgcolor=", 0) == 0) {
+      token = token.substr(8);
+      is_bg = true;
+    } else if (token.rfind("bg=", 0) == 0) {
+      token = token.substr(3);
+      is_bg = true;
+    }
+
+    int r = 0;
+    int g = 0;
+    int b = 0;
+    if (token.rfind('#', 0) == 0 && ParseHexColor_(token, &r, &g, &b)) {
+      if (is_bg) {
+        bg_r = r;
+        bg_g = g;
+        bg_b = b;
+      } else {
+        fg_r = r;
+        fg_g = g;
+        fg_b = b;
+      }
+      has_style = true;
+      continue;
+    }
+  }
+
+  if (!has_style) {
+    return false;
+  }
 
   std::ostringstream oss;
-  oss << "\x1b[38;2;" << r << ";" << g << ";" << b << "m" << content
-      << "\x1b[0m";
+  oss << "\x1b[";
+  bool first = true;
+  auto append_code = [&oss, &first](const std::string &code) {
+    if (code.empty()) {
+      return;
+    }
+    if (!first) {
+      oss << ";";
+    }
+    oss << code;
+    first = false;
+  };
+
+  if (bold) {
+    append_code("1");
+  }
+  if (italic) {
+    append_code("3");
+  }
+  if (underline) {
+    append_code("4");
+  }
+  if (reverse) {
+    append_code("7");
+  }
+  if (fg_r >= 0) {
+    append_code(AMStr::amfmt("38;2;{};{};{}", fg_r, fg_g, fg_b));
+  }
+  if (bg_r >= 0) {
+    append_code(AMStr::amfmt("48;2;{};{};{}", bg_r, bg_g, bg_b));
+  }
+
+  oss << "m" << content << "\x1b[0m";
   *converted = oss.str();
   return true;
+}
+
+/**
+ * @brief Extract inner text from a tagged string like "[...]text[/]".
+ *
+ * @param tagged Tagged string to extract from.
+ * @param extracted Output string with the inner content only.
+ * @return True if extraction succeeded; false otherwise.
+ */
+bool TryExtractTaggedText_(const std::string &tagged,
+                           std::string *extracted) {
+  if (!extracted) {
+    return false;
+  }
+  extracted->clear();
+
+  const size_t close = tagged.find(']');
+  if (close == std::string::npos) {
+    return false;
+  }
+  const size_t suffix_pos = tagged.rfind("[/]");
+  if (suffix_pos == std::string::npos || suffix_pos <= close) {
+    return false;
+  }
+
+  *extracted = tagged.substr(close + 1, suffix_pos - (close + 1));
+  return true;
+}
+
+/**
+ * @brief Apply a bbcode style tag from settings to text and convert to ANSI.
+ *
+ * @param config_manager Config manager used to resolve style values.
+ * @param path Settings path under the style tree.
+ * @param text Raw text to style.
+ * @return Styled text with ANSI escape sequences when possible.
+ */
+std::string ApplyStyleFromConfig_(AMConfigManager &config_manager,
+                                  const AMConfigManager::Path &path,
+                                  const std::string &text) {
+  if (text.empty()) {
+    return text;
+  }
+
+  std::string raw =
+      AMStr::TrimWhitespaceCopy(config_manager.GetSettingString(path, ""));
+  if (raw.empty()) {
+    return text;
+  }
+  if (raw.front() != '[' || raw.back() != ']') {
+    return text;
+  }
+  if (raw.find("[/") != std::string::npos) {
+    return text;
+  }
+
+  const std::string tagged = raw + text + "[/]";
+  std::string converted;
+  if (TryConvertTaggedTextToAnsi_(tagged, &converted)) {
+    return converted;
+  }
+
+  std::string extracted;
+  if (TryExtractTaggedText_(tagged, &extracted)) {
+    return extracted;
+  }
+  return text;
 }
 
 /**
@@ -146,8 +369,12 @@ std::string ResolveSysIcon_(AMConfigManager &config_manager, OS_TYPE os_type) {
     icon = "💻";
   }
   std::string converted;
-  if (TryConvertTaggedIconToAnsi_(icon, &converted)) {
+  if (TryConvertTaggedTextToAnsi_(icon, &converted)) {
     return converted;
+  }
+  std::string extracted;
+  if (TryExtractTaggedText_(icon, &extracted)) {
+    return extracted;
   }
   return icon;
 }
@@ -174,7 +401,12 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
     }
     std::string sysicon = ResolveSysIcon_(config_manager, os_type);
     auto [username, hostname] = ResolveUserHost_(client);
-    state.cached_prefix = AMStr::amfmt("{} {}@{}", sysicon, username, hostname);
+    std::string styled_user = ApplyStyleFromConfig_(
+        config_manager, {"style", "Prompt", "username"}, username);
+    std::string styled_host = ApplyStyleFromConfig_(
+        config_manager, {"style", "Prompt", "hostname"}, hostname);
+    state.cached_prefix =
+        AMStr::amfmt("{} {}@{}", sysicon, styled_user, styled_host);
     state.last_nickname = nickname;
   }
 
@@ -185,30 +417,45 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
   const std::string ec_name =
       ok ? "" : std::string(magic_enum::enum_name(state.last_rcm.first));
 
-  std::string line1 =
-      AMStr::amfmt("{}  {}  {}", state.cached_prefix, elapsed, status);
+  const std::string styled_elapsed = ApplyStyleFromConfig_(
+      config_manager, {"style", "SystemInfo", "info"}, elapsed);
+  const std::string styled_status = ApplyStyleFromConfig_(
+      config_manager,
+      {"style", "SystemInfo", ok ? "success" : "error"},
+      status);
+  std::string line1 = AMStr::amfmt("{}  {}  {}", state.cached_prefix,
+                                   styled_elapsed, styled_status);
   if (!ec_name.empty()) {
-    line1 += " " + ec_name;
+    const std::string styled_ec = ApplyStyleFromConfig_(
+        config_manager, {"style", "SystemInfo", "error"}, ec_name);
+    line1 += " " + styled_ec;
   }
 
   std::string workdir = "/";
   if (client) {
     workdir = client_manager.GetOrInitWorkdir(client);
   }
-  std::string line2 = AMStr::amfmt("({}){} $", nickname, workdir);
+  const std::string styled_nickname = ApplyStyleFromConfig_(
+      config_manager, {"style", "Prompt", "nickname"}, nickname);
+  const std::string styled_cwd = ApplyStyleFromConfig_(
+      config_manager, {"style", "Prompt", "cwd"}, workdir);
+  const std::string styled_dollar = ApplyStyleFromConfig_(
+      config_manager, {"style", "Prompt", "dollarsign"}, "$");
+  std::string line2 =
+      AMStr::amfmt("({}){} {}", styled_nickname, styled_cwd, styled_dollar);
   return line1 + "\n" + line2 + " ";
 }
 
 /**
- * @brief Split a potentially multi-line prompt into a header and a single input line.
+ * @brief Split a potentially multi-line prompt into a header and a single input
+ * line.
  *
  * @param full_prompt Full prompt text that may contain newline separators.
  * @param header Output header string to print before readline (empty if none).
  * @param line Output single-line prompt to pass into ic_readline.
  */
 static void SplitPromptForReadline_(const std::string &full_prompt,
-                                    std::string *header,
-                                    std::string *line) {
+                                    std::string *header, std::string *line) {
   if (header) {
     header->clear();
   }
@@ -314,7 +561,7 @@ int RunInteractiveLoop(const std::string &app_name,
     std::string prompt_line;
     SplitPromptForReadline_(prompt_text, &prompt_header, &prompt_line);
     if (!prompt_header.empty()) {
-      prompt.Print(prompt_header);
+      std::cout << prompt_header << std::endl;
     }
 
     std::string line;

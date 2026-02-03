@@ -1503,7 +1503,7 @@ ECM AMTransferManager::transfer(
   UserResultCallback user_callback = [this, &remaining, &done_cv, &done_mtx](
                                          std::shared_ptr<TaskInfo> task_info) {
     if (task_info) {
-      prompt_.resultprint(task_info);
+      task_printer_.TaskResultPrint(task_info);
     }
 
     UserResultCallback user_cb;
@@ -1586,7 +1586,7 @@ ECM AMTransferManager::transfer_async(
   UserResultCallback user_callback =
       [this](std::shared_ptr<TaskInfo> task_info) {
         if (task_info) {
-          prompt_.resultprint(task_info);
+          task_printer_.TaskResultPrint(task_info);
         }
         UserResultCallback user_cb;
         {
