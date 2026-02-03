@@ -24,6 +24,11 @@ public:
   void Highlight(const std::string &input, ReplxxColor *colors, int size);
 
   /**
+   * @brief Build a bbcode-formatted string for isocline highlighting.
+   */
+  void HighlightFormatted(const std::string &input, std::string *formatted);
+
+  /**
    * @brief Refresh nickname cache from config.
    */
   void RefreshNicknameCache();
