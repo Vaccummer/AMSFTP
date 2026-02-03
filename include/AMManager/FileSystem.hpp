@@ -130,6 +130,8 @@ public:
   /** Update transfer buffer size and persist it in config. */
   ECM SetBufferSize(int64_t buffer_size, const std::string &nickname = "",
                     amf interrupt_flag = nullptr);
+  /** Apply styling for a path based on type. */
+  std::string StylePath(const PathInfo &info, const std::string &path) const;
 
 private:
   /** Construct with required managers. */
@@ -171,8 +173,6 @@ private:
   std::string FormatTimestamp(double value) const;
   /** Format stat output block. */
   std::string FormatStatOutput(const PathInfo &info) const;
-  /** Apply styling for a path based on type. */
-  std::string StylePath(const PathInfo &info, const std::string &path) const;
 
   AMClientManager &client_manager_;
   AMConfigManager &config_manager_;

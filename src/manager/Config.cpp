@@ -1219,8 +1219,13 @@ std::string AMConfigManager::Format(const std::string &ori_str,
 
   Path key = {"style", style_name};
   const Json *node = FindJsonNode(settings_json_, key);
-  if (!node || !node->is_string())
-    return ori_str;
+  if (!node || !node->is_string()) {
+    key = {"style", "InputHighlight", style_name};
+    node = FindJsonNode(settings_json_, key);
+    if (!node || !node->is_string()) {
+      return ori_str;
+    }
+  }
 
   std::string raw = TrimCopy(node->get<std::string>());
   if (raw.empty())

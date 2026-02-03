@@ -5,6 +5,7 @@
 #include "AMBase/Enum.hpp"
 
 // 标准库头文件（跨平台，无需条件编译）
+#include <algorithm>
 #include <cstddef>
 #include <cstdlib>
 #include <ctime>
@@ -611,6 +612,135 @@ inline std::vector<std::string> resplit(const std::string &path, char front_esc,
   return parts;
 }
 
+/**
+ * @brief Normalize a joined path by resolving "." and ".." without forcing
+ * absolute paths.
+ */
+inline std::string NormalizeJoinedPath(const std::string &path,
+                                       const std::string &sep = "") {
+  std::string normalized = UnifyPathSep(path, sep);
+  if (normalized.empty()) {
+    return normalized;
+  }
+
+  std::string use_sep = sep.empty() ? GetPathSep(normalized) : sep;
+  const bool drive_only = normalized.size() == 2 &&
+                          ((normalized[0] >= 'A' && normalized[0] <= 'Z') ||
+                           (normalized[0] >= 'a' && normalized[0] <= 'z')) &&
+                          normalized[1] == ':';
+  if (drive_only) {
+    return normalized + use_sep;
+  }
+
+  const bool drive_root_anchor =
+      normalized.size() >= 3 &&
+      ((normalized[0] >= 'A' && normalized[0] <= 'Z') ||
+       (normalized[0] >= 'a' && normalized[0] <= 'z')) &&
+      normalized[1] == ':' &&
+      (normalized[2] == '/' || normalized[2] == '\\');
+  const bool unc_root = normalized.rfind("//", 0) == 0 ||
+                        normalized.rfind("\\\\", 0) == 0;
+
+  std::vector<std::string> parts = split(normalized);
+  if (parts.empty()) {
+    return normalized;
+  }
+
+  auto is_drive_part = [](const std::string &part) {
+    return part.size() == 2 &&
+           ((part[0] >= 'A' && part[0] <= 'Z') ||
+            (part[0] >= 'a' && part[0] <= 'z')) &&
+           part[1] == ':';
+  };
+
+  const bool absolute =
+      unc_root || drive_root_anchor ||
+      (!parts.empty() &&
+       (parts.front() == "/" || is_drive_part(parts.front())));
+
+  size_t anchor_min = 0;
+  if (unc_root) {
+    anchor_min = std::min<size_t>(2, parts.size());
+  } else if (absolute) {
+    anchor_min = 1;
+  }
+
+  std::vector<std::string> new_parts;
+  new_parts.reserve(parts.size());
+
+  for (const auto &part : parts) {
+    if (part == "." || part.empty()) {
+      continue;
+    }
+    if (part == "..") {
+      if (new_parts.size() > anchor_min) {
+        new_parts.pop_back();
+      } else if (!absolute) {
+        new_parts.push_back(part);
+      }
+      continue;
+    }
+    new_parts.push_back(part);
+  }
+
+  if (new_parts.empty()) {
+    if (unc_root && parts.size() >= 2) {
+      return parts[0] + use_sep + parts[1];
+    }
+    if (!parts.empty() && parts.front() == "/") {
+      return "/";
+    }
+    if (drive_root_anchor && !parts.empty() && is_drive_part(parts.front())) {
+      return parts.front() + use_sep;
+    }
+    return "";
+  }
+
+  std::string result;
+  if (unc_root) {
+    result = new_parts.front();
+    if (new_parts.size() >= 2) {
+      result += use_sep + new_parts[1];
+      for (size_t i = 2; i < new_parts.size(); ++i) {
+        result += use_sep + new_parts[i];
+      }
+    }
+    return result;
+  }
+
+  if (new_parts.front() == "/") {
+    result = "/";
+    for (size_t i = 1; i < new_parts.size(); ++i) {
+      result += new_parts[i];
+      if (i + 1 < new_parts.size()) {
+        result += use_sep;
+      }
+    }
+    return result;
+  }
+
+  if (drive_root_anchor && is_drive_part(new_parts.front())) {
+    result = new_parts.front();
+    if (new_parts.size() == 1) {
+      return result + use_sep;
+    }
+    result += use_sep;
+    for (size_t i = 1; i < new_parts.size(); ++i) {
+      result += new_parts[i];
+      if (i + 1 < new_parts.size()) {
+        result += use_sep;
+      }
+    }
+    return result;
+  }
+
+  result = new_parts.front();
+  for (size_t i = 1; i < new_parts.size(); ++i) {
+    result += use_sep + new_parts[i];
+  }
+  return result;
+}
+
 template <typename... Args> std::string join(Args &&...args) {
   std::vector<std::string> segments;
   std::string ori_str;
@@ -698,8 +828,7 @@ template <typename... Args> std::string join(Args &&...args) {
   for (size_t i = 1; i < segments.size(); i++) {
     result += segments[i] + sep;
   }
-  result = UnifyPathSep(result, sep);
-  return result;
+  return NormalizeJoinedPath(result, sep);
 };
 
 inline std::string dirname(const std::string &path) {
@@ -938,12 +1067,21 @@ inline std::string abspath(const std::string &path,
       new_parts.push_back(tmp_part);
     }
   }
+  if (new_parts.size() == 0) {
+    if (drive_root_anchor && !parts.empty() && is_drive_part(parts.front())) {
+      return parts.front() + new_sep;
+    }
+    if (!parts.empty() && parts.front() == "/") {
+      return "/";
+    }
+    if (is_unc_root(parts) && parts.size() >= 2) {
+      return parts[0] + new_sep + parts[1];
+    }
+    return "";
+  }
   if (drive_root_anchor && new_parts.size() == 1 &&
       is_drive_part(new_parts.front())) {
     return new_parts.front() + new_sep;
-  }
-  if (new_parts.size() == 0) {
-    return "";
   }
   if (new_parts.front() == "/") {
     result = "/";
@@ -953,6 +1091,10 @@ inline std::string abspath(const std::string &path,
     result += part + new_sep;
   }
   if (!result.empty()) {
+    if (result.size() == 1 &&
+        (result[0] == '/' || result[0] == '\\')) {
+      return result;
+    }
     result.pop_back();
   }
   return result;
