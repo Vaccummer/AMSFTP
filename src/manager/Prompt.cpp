@@ -18,6 +18,8 @@ AMPromptManager &AMPromptManager::Instance() {
 
 AMPromptManager::AMPromptManager() {
   ic_set_prompt_marker("", "");
+  /** Disable multiline input so a trailing '\' does not continue to a new line. */
+  ic_enable_multiline(false);
   ic_set_history(nullptr, -1);
   ic_enable_history_duplicates(false);
 

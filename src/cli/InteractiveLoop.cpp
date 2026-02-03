@@ -200,6 +200,37 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
 }
 
 /**
+ * @brief Split a potentially multi-line prompt into a header and a single input line.
+ *
+ * @param full_prompt Full prompt text that may contain newline separators.
+ * @param header Output header string to print before readline (empty if none).
+ * @param line Output single-line prompt to pass into ic_readline.
+ */
+static void SplitPromptForReadline_(const std::string &full_prompt,
+                                    std::string *header,
+                                    std::string *line) {
+  if (header) {
+    header->clear();
+  }
+  if (!line) {
+    return;
+  }
+  line->clear();
+  if (full_prompt.empty()) {
+    return;
+  }
+  const size_t split = full_prompt.find_last_of('\n');
+  if (split == std::string::npos) {
+    *line = full_prompt;
+    return;
+  }
+  if (header) {
+    *header = full_prompt.substr(0, split);
+  }
+  *line = full_prompt.substr(split + 1);
+}
+
+/**
  * @brief Print an ECM error message if the code is not Success.
  */
 void PrintECM_(AMPromptManager &prompt, const ECM &rcm) {
@@ -279,6 +310,13 @@ int RunInteractiveLoop(const std::string &app_name,
     const std::string prompt_text =
         BuildPrompt_(prompt_state, client_manager, config_manager);
 
+    std::string prompt_header;
+    std::string prompt_line;
+    SplitPromptForReadline_(prompt_text, &prompt_header, &prompt_line);
+    if (!prompt_header.empty()) {
+      prompt.Print(prompt_header);
+    }
+
     std::string line;
     AMCliSignalMonitor &monitor = AMCliSignalMonitor::Instance();
     (void)config_manager.ConfigBackupIfNeeded();
@@ -288,7 +326,7 @@ int RunInteractiveLoop(const std::string &app_name,
       amgif->reset();
     }
 
-    bool canceled = prompt.PromptCore(prompt_text, &line);
+    bool canceled = prompt.PromptCore(prompt_line, &line);
 
     monitor.SilenceHook("COREPROMPT");
     monitor.ResumeHook("GLOBAL");
