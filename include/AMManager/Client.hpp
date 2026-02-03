@@ -598,6 +598,11 @@ public:
       auto it = client->public_kv.find("workdir");
       if (it != client->public_kv.end()) {
         std::string workdir = AMPathStr::UnifyPathSep(it->second, "/");
+        if (workdir.empty()) {
+          workdir = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+          client->public_kv["workdir"] = workdir;
+          return workdir;
+        }
         if (!workdir.empty() && !AMPathStr::IsAbs(workdir, "/")) {
           const std::string home =
               AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");

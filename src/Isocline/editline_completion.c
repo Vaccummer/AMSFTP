@@ -376,17 +376,17 @@ static void edit_generate_completions(ic_env_t* env, editor_t* eb, bool autotab)
     if (!autotab) { term_beep(env->term); }
   }
   else if (count == 1) {
-    if (env->complete_auto_fill) {
-      // complete if only one match
-      if (edit_complete(env,eb,0 /*idx*/) && env->complete_autotab) {
-        tty_code_pushback(env->tty,KEY_EVENT_AUTOTAB);
-      }
-    }
-    else {
+    if (autotab) {
       if (!env->complete_nosort) {
         completions_sort(env->completions);
       }
       edit_completion_menu( env, eb, more_available);
+    }
+    else {
+      // complete if only one match (manual tab always fills)
+      if (edit_complete(env,eb,0 /*idx*/) && env->complete_autotab) {
+        tty_code_pushback(env->tty,KEY_EVENT_AUTOTAB);
+      }
     }
   }
   else {

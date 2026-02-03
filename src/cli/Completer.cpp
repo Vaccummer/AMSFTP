@@ -18,6 +18,44 @@
 
 namespace {
 /**
+ * @brief Normalize a configured style into a bbcode opening tag.
+ */
+std::string NormalizeStyleTag_(const std::string &raw) {
+  std::string trimmed = AMStr::TrimWhitespaceCopy(raw);
+  if (trimmed.empty()) {
+    return "";
+  }
+  if (trimmed.find("[/") != std::string::npos) {
+    return "";
+  }
+  if (trimmed.front() != '[') {
+    trimmed.insert(trimmed.begin(), '[');
+  }
+  if (trimmed.back() != ']') {
+    trimmed.push_back(']');
+  }
+  return trimmed;
+}
+
+/**
+ * @brief Escape bbcode special characters in display text.
+ */
+std::string EscapeBbcodeText_(const std::string &text) {
+  std::string escaped;
+  escaped.reserve(text.size() * 2);
+  for (char c : text) {
+    if (c == '\\') {
+      escaped.append("\\\\");
+    } else if (c == '[') {
+      escaped.append("\\[");
+    } else {
+      escaped.push_back(c);
+    }
+  }
+  return escaped;
+}
+
+/**
  * @brief Token span for completion parsing.
  */
 struct CompletionToken {
@@ -243,6 +281,10 @@ private:
       top_commands_.insert(sub->get_name());
       top_help_[sub->get_name()] = sub->get_description();
     }
+    top_commands_.insert("var");
+    top_help_["var"] = "Variable manager";
+    top_commands_.insert("del");
+    top_help_["del"] = "Delete variables";
     for (auto *sub : subs) {
       auto nested = sub->get_subcommands([](CLI::App *) { return true; });
       if (!nested.empty()) {
@@ -524,24 +566,12 @@ bool IsPathArgumentCommand(const std::string &command_path, size_t arg_index) {
 }
 
 /**
- * @brief Detect path separator to preserve user input style.
+ * @brief Detect path separator for completion output.
  */
 char DetectPathSep(const std::string &path, bool remote) {
-  if (remote) {
-    return '/';
-  }
-  if (path.find('\\') != std::string::npos) {
-    return '\\';
-  }
-  if (path.size() >= 2 && std::isalpha(static_cast<unsigned char>(path[0])) &&
-      path[1] == ':') {
-    return '\\';
-  }
-#ifdef _WIN32
-  return '\\';
-#else
+  (void)path;
+  (void)remote;
   return '/';
-#endif
 }
 
 /**
@@ -1206,6 +1236,31 @@ private:
   }
 
   /**
+   * @brief Resolve bbcode tag for an input highlight style key.
+   */
+  std::string ResolveInputHighlightTag_(const std::string &key) const {
+    const std::string raw =
+        config_manager_.GetSettingString({"style", "InputHighlight", key}, "");
+    return NormalizeStyleTag_(raw);
+  }
+
+  /**
+   * @brief Build a styled and padded command/module display string.
+   */
+  std::string FormatCommandDisplay_(const std::string &name,
+                                    const std::string &style_key,
+                                    size_t pad_width) const {
+    const std::string tag = ResolveInputHighlightTag_(style_key);
+    const std::string escaped = EscapeBbcodeText_(name);
+    std::string display =
+        tag.empty() ? escaped : tag + escaped + "[/]";
+    if (pad_width > name.size()) {
+      display.append(pad_width - name.size(), ' ');
+    }
+    return display;
+  }
+
+  /**
    * @brief Collect command/option candidates.
    */
   void CollectCommandCandidates_(const CompletionContext &ctx,
@@ -1213,32 +1268,66 @@ private:
     const std::string prefix = ctx.token_prefix;
 
     if (ctx.target == CompletionTarget::TopCommand) {
+      struct ItemInfo {
+        std::string name;
+        std::string help;
+        bool is_module = false;
+      };
+      std::vector<ItemInfo> items;
       auto tops = command_tree_.ListTopCommands();
       for (const auto &item : tops) {
         if (!prefix.empty() && item.first.rfind(prefix, 0) != 0) {
           continue;
         }
+        items.push_back(
+            {item.first, item.second, command_tree_.IsModule(item.first)});
+      }
+      if (items.empty()) {
+        return;
+      }
+      size_t max_len = 0;
+      for (const auto &item : items) {
+        max_len = std::max(max_len, item.name.size());
+      }
+      for (const auto &item : items) {
         CompletionCandidate cand;
-        cand.insert_text = item.first;
-        cand.display = item.first;
-        cand.help = item.second;
-        cand.kind = command_tree_.IsModule(item.first) ? CompletionKind::Module
-                                                       : CompletionKind::Command;
+        cand.insert_text = item.name;
+        cand.display = FormatCommandDisplay_(
+            item.name, item.is_module ? "module" : "command", max_len);
+        cand.help = item.help;
+        cand.kind =
+            item.is_module ? CompletionKind::Module : CompletionKind::Command;
+        cand.score = item.is_module ? 0 : 1;
         out.push_back(std::move(cand));
       }
       return;
     }
 
     if (ctx.target == CompletionTarget::Subcommand) {
+      struct ItemInfo {
+        std::string name;
+        std::string help;
+      };
+      std::vector<ItemInfo> items;
       auto subs = command_tree_.ListSubcommands(ctx.command_path);
       for (const auto &item : subs) {
         if (!prefix.empty() && item.first.rfind(prefix, 0) != 0) {
           continue;
         }
+        items.push_back({item.first, item.second});
+      }
+      if (items.empty()) {
+        return;
+      }
+      size_t max_len = 0;
+      for (const auto &item : items) {
+        max_len = std::max(max_len, item.name.size());
+      }
+      for (const auto &item : items) {
         CompletionCandidate cand;
-        cand.insert_text = item.first;
-        cand.display = item.first;
-        cand.help = item.second;
+        cand.insert_text = item.name;
+        cand.display = FormatCommandDisplay_(item.name, "command", max_len);
+        cand.help = item.help;
         cand.kind = CompletionKind::Command;
         out.push_back(std::move(cand));
       }
@@ -1371,38 +1460,36 @@ private:
       if (styled == raw) {
         return styled;
       }
-      if (styled.size() < raw.size() + 3) {
+      if (raw.empty()) {
         return styled;
       }
-      if (styled.compare(styled.size() - 3, 3, "[/]") != 0) {
+      if (styled.find("[/") == std::string::npos) {
         return styled;
       }
-      const size_t suffix_pos = styled.size() - 3;
-      if (suffix_pos < raw.size()) {
+      const size_t pos = styled.find(raw);
+      if (pos == std::string::npos) {
         return styled;
       }
-      const size_t prefix_len = suffix_pos - raw.size();
-      if (styled.compare(prefix_len, raw.size(), raw) != 0) {
-        return styled;
-      }
-      return styled.substr(0, prefix_len) + "[!pre]" + raw + "[/pre][/]";
+      std::string result = styled;
+      result.replace(pos, raw.size(), "[!pre]" + raw + "[/pre]");
+      return result;
     };
 
     switch (info.type) {
     case PathType::DIR: {
-      const std::string styled = config_manager_.Format(name, "dir");
+      const std::string styled = filesystem_.StylePath(info, name);
       return wrap_pre(styled, name);
     }
     case PathType::SYMLINK: {
-      const std::string styled = config_manager_.Format(name, "symlink");
+      const std::string styled = filesystem_.StylePath(info, name);
       return wrap_pre(styled, name);
     }
     case PathType::FILE: {
-      const std::string styled = config_manager_.Format(name, "regular");
+      const std::string styled = filesystem_.StylePath(info, name);
       return wrap_pre(styled, name);
     }
     default: {
-      const std::string styled = config_manager_.Format(name, "otherspecial");
+      const std::string styled = filesystem_.StylePath(info, name);
       return wrap_pre(styled, name);
     }
     }

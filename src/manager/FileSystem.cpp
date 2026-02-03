@@ -38,6 +38,37 @@ UniqueTargetsKeepOrder_(const std::vector<std::string> &targets) {
   return unique;
 }
 
+/**
+ * @brief Normalize a configured style into a bbcode opening tag.
+ */
+static std::string NormalizeStyleTag_(const std::string &raw) {
+  std::string trimmed = AMStr::TrimWhitespaceCopy(raw);
+  if (trimmed.empty()) {
+    return "";
+  }
+  if (trimmed.find("[/") != std::string::npos) {
+    return "";
+  }
+  if (trimmed.front() != '[') {
+    trimmed.insert(trimmed.begin(), '[');
+  }
+  if (trimmed.back() != ']') {
+    trimmed.push_back(']');
+  }
+  return trimmed;
+}
+
+/**
+ * @brief Wrap text with a bbcode tag when provided.
+ */
+static std::string ApplyStyleTag_(const std::string &tag,
+                                  const std::string &text) {
+  if (tag.empty()) {
+    return text;
+  }
+  return tag + text + "[/]";
+}
+
 AMFileSystem &AMFileSystem::Instance(AMClientManager &client_manager,
                                      AMConfigManager &config_manager) {
   static AMFileSystem instance(client_manager, config_manager);
@@ -402,7 +433,13 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
     PrintCliError_(prompt_manager_, "cd", rcm2.second);
     return rcm2;
   }
-  abs_path = info.path;
+  if (!info.path.empty()) {
+    const std::string resolved =
+        AMPathStr::UnifyPathSep(info.path, "/");
+    if (!resolved.empty() && AMPathStr::IsAbs(resolved, "/")) {
+      abs_path = resolved;
+    }
+  }
   if (info.type != PathType::DIR) {
     PrintCliError_(prompt_manager_, "cd", "Path is not a directory");
     return {EC::NotADirectory, "Path is not a directory"};
@@ -974,6 +1011,9 @@ void AMFileSystem::SetClientWorkdir(const std::shared_ptr<BaseClient> &client,
     return;
   }
   std::string normalized = AMPathStr::UnifyPathSep(path, "/");
+  if (normalized.empty()) {
+    normalized = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+  }
   if (!normalized.empty() && !AMPathStr::IsAbs(normalized, "/")) {
     const std::string base = GetOrInitWorkdir(client);
     const std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
@@ -1005,6 +1045,11 @@ std::string AMFileSystem::GetOrInitWorkdir(
     auto it = client->public_kv.find("workdir");
     if (it != client->public_kv.end()) {
       std::string workdir = AMPathStr::UnifyPathSep(it->second, "/");
+      if (workdir.empty()) {
+        workdir = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+        client->public_kv["workdir"] = workdir;
+        return workdir;
+      }
       if (!workdir.empty() && !AMPathStr::IsAbs(workdir, "/")) {
         const std::string home =
             AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
@@ -1077,7 +1122,9 @@ std::string AMFileSystem::FormatTimestamp(double value) const {
 std::string AMFileSystem::FormatStatOutput(const PathInfo &info) const {
   const size_t width = 12;
   std::ostringstream out;
-  out << info.path << "\n\n";
+  const std::string display_path =
+      AMPathStr::UnifyPathSep(info.path, "/");
+  out << display_path << "\n\n";
 
   out << std::left << std::setw(static_cast<int>(width)) << "type" << " : "
       << AM_ENUM_NAME(info.type) << "\n";
@@ -1099,14 +1146,68 @@ std::string AMFileSystem::FormatStatOutput(const PathInfo &info) const {
 
 std::string AMFileSystem::StylePath(const PathInfo &info,
                                     const std::string &path) const {
-  std::string style = "regular";
+  std::string base_key = "regular";
   if (info.type == PathType::DIR) {
-    style = "dir";
+    base_key = "dir";
   } else if (info.type == PathType::SYMLINK) {
-    style = "symlink";
+    base_key = "symlink";
+  } else if (info.type != PathType::FILE) {
+    base_key = "otherspecial";
   }
-  std::string styled = config_manager_.Format(path, style);
-  return styled.empty() ? path : styled;
+
+  const std::string display_path = AMPathStr::UnifyPathSep(path, "/");
+  std::string main_tag = NormalizeStyleTag_(
+      config_manager_.GetSettingString({"style", "Path1", base_key}, ""));
+
+  if (info.type == PathType::FILE) {
+    const std::string ext = AMPathStr::extname(info.name);
+    if (!ext.empty()) {
+      std::string ext_tag = NormalizeStyleTag_(
+          config_manager_.GetSettingString({"style", "File2", ext}, ""));
+      if (!ext_tag.empty()) {
+        main_tag = ext_tag;
+      }
+    }
+  }
+
+  std::string styled = display_path;
+  if (!main_tag.empty()) {
+    styled = ApplyStyleTag_(main_tag, display_path);
+  } else {
+    const std::string legacy = config_manager_.Format(display_path, base_key);
+    if (!legacy.empty()) {
+      styled = legacy;
+    }
+  }
+
+  const bool is_hidden =
+      !info.name.empty() && info.name.front() == '.';
+  const bool is_nowrite =
+      info.mode_int != 0 && (info.mode_int & 0222) == 0;
+
+  auto resolve_extra = [&](const std::string &key) -> std::string {
+    std::string tag = NormalizeStyleTag_(config_manager_.GetSettingString(
+        {"style", "PathExtraStyle", key}, ""));
+    if (!tag.empty()) {
+      return tag;
+    }
+    return NormalizeStyleTag_(config_manager_.GetSettingString(
+        {"style", "PathSpecific3", key}, ""));
+  };
+
+  if (is_hidden) {
+    const std::string extra_tag = resolve_extra("hidden");
+    if (!extra_tag.empty()) {
+      styled = ApplyStyleTag_(extra_tag, styled);
+    }
+  }
+  if (is_nowrite) {
+    const std::string extra_tag = resolve_extra("nowrite");
+    if (!extra_tag.empty()) {
+      styled = ApplyStyleTag_(extra_tag, styled);
+    }
+  }
+  return styled;
 }
 
 // bool AMFileSystem::PromptYesNo(const std::string &prompt,
