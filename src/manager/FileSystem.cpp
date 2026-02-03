@@ -973,8 +973,14 @@ void AMFileSystem::SetClientWorkdir(const std::shared_ptr<BaseClient> &client,
   if (!client) {
     return;
   }
+  std::string normalized = AMPathStr::UnifyPathSep(path, "/");
+  if (!normalized.empty() && !AMPathStr::IsAbs(normalized, "/")) {
+    const std::string base = GetOrInitWorkdir(client);
+    const std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+    normalized = AMFS::abspath(normalized, true, home, base, "/");
+  }
   std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
-  client->public_kv["workdir"] = AMPathStr::UnifyPathSep(path, "/");
+  client->public_kv["workdir"] = normalized;
 }
 
 void AMFileSystem::EnsureClientWorkdir(
@@ -998,7 +1004,14 @@ std::string AMFileSystem::GetOrInitWorkdir(
     std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
     auto it = client->public_kv.find("workdir");
     if (it != client->public_kv.end()) {
-      return it->second;
+      std::string workdir = AMPathStr::UnifyPathSep(it->second, "/");
+      if (!workdir.empty() && !AMPathStr::IsAbs(workdir, "/")) {
+        const std::string home =
+            AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+        workdir = AMFS::abspath(workdir, true, home, home, "/");
+        client->public_kv["workdir"] = workdir;
+      }
+      return workdir;
     }
   }
   std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");

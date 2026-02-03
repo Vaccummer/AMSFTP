@@ -352,6 +352,9 @@ struct CliCommands {
   CLI::App *cd_cmd = nullptr;
   CLI::App *connect_cmd = nullptr;
   CLI::App *bash_cmd = nullptr;
+  CLI::App *complete_cmd = nullptr;
+  CLI::App *complete_cache_cmd = nullptr;
+  CLI::App *complete_cache_clear = nullptr;
   CLI::App *task_cmd = nullptr;
   CLI::App *task_cache_cmd = nullptr;
   CLI::App *task_cache_add = nullptr;

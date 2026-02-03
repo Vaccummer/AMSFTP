@@ -1,8 +1,10 @@
 #include "AMCLI/InteractiveLoop.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/Path.hpp"
+#include "AMCLI/Completer.hpp"
 #include "AMCLI/CommandPreprocess.hpp"
 #include "AMManager/SignalMonitor.hpp"
+#include "AMManager/Transfer.hpp"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -535,6 +537,11 @@ int RunInteractiveLoop(const std::string &app_name,
   AMConfigManager &config_manager = *managers.config_manager;
   AMClientManager &client_manager = *managers.client_manager;
   AMFileSystem &filesystem = *managers.filesystem;
+  AMTransferManager &transfer_manager = AMTransferManager::Instance();
+
+  AMCompleter completer(config_manager, client_manager, filesystem,
+                        transfer_manager);
+  completer.Install();
 
   AMCommandPreprocessor preprocessor(config_manager);
   PromptState prompt_state;

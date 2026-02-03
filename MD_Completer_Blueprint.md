@@ -1,75 +1,76 @@
+
 ## Completor Blueprint
 
-### 1) 高层架构
+### 1) High-Level Architecture
 
-- **补全流水线**：输入 → 解析cursor前的input → 构建查询 → 获取候选（同步/异步） → 排序/格式化 → 渲染 → 应用选择
-- **核心类型**：
-  - `CompletionContext`（光标位置、当前令牌、完整行、解析状态、模式）
-  - `CompletionCandidate`（显示文本、插入文本、类型、帮助信息、评分、元数据）
-  - `CompletionResult`（候选列表 + 匹配策略 + 延迟信息）
-- **补全源（可选择开启与关闭）**：
-  - `CommandSource`（命令/子命令/选项）
-  - `InternalSource`（任务ID、客户端名称、主机配置昵称、变量名  以及一些内置属性名）
-  - `PathSource`（本地/远程路径）
-- **协调器（Coordinator）**：
-  - 一个根据上下文分发请求至各补全源并合并结果的 `Completer`
-  - **统一补全流程**：即使命令补全很快，也使用相同的 `CompletionRequest`流水线，确保UI行为一致，简化系统并提升可扩展性
+- **Completion Pipeline**: Input → Parse input before cursor → Build query → Fetch candidates (synchronous/asynchronous) → Sort/format → Render → Apply selection
+- **Core Types**:
+  - `CompletionContext` (cursor position, current token, full line, parsing state, mode)
+  - `CompletionCandidate` (display text, insert text, kind, help message, score, metadata)
+  - `CompletionResult` (candidate list + match strategy + latency info)
+- **Completion Sources** (individually enable/disable):
+  - `CommandSource` (commands/subcommands/options)
+  - `InternalSource` (task IDs, client names, host config nicknames, variable names, and certain built-in attribute names)
+  - `PathSource` (local/remote paths)
+- **Coordinator**:
+  - A `Completer` that dispatches requests to individual sources based on context and merges results
+  - **Unified Flow**: Even for fast command completions, the same `CompletionRequest` pipeline is used to ensure consistent UI behavior, simplify the system, and improve extensibility
 
-### 2) 上下文解析
+### 2) Context Parsing
 
-- 目前已经存在input解析器@src\cli\TokenTypeAnalyzer.cpp
-- 支持引号、转义符和 `nickname@path`语法的令牌化
-- **目标类型判定**   越靠前优先级越高 ：
+- Input parser already exists: `@src\cli\TokenTypeAnalyzer.cpp`
+- Supports tokenization with quotes, escape characters, and `nickname@path` syntax
+- **Target Type Determination** (priority from highest to lowest; stops after first match):
 
-  - 以!开头, 屏蔽补全, 因为时调用远程终端
-  - input还没有有效命令 → 补全模块名或者顶层函数名
-  - input存在有效模块名-> 补全该模块下的函数名
-  - input存在有效函数
+  - Starts with `!` → Disable completion (invokes remote terminal)
+  - No valid command yet → Complete module names or top-level function names
+  - Valid module name present → Complete function names under that module
+  - Valid function name present:
+    - Starts with unescaped `$` → Variable name completion
+    - Starts with `--` → Complete by full option name
+    - Starts with `-` → Complete by short option name
+    - Complete function-specific parameters:
+      - e.g., `config set`: first parameter is nickname, second is config attribute name
+      - e.g., `task inspect`: complete with task IDs
+    - Path-like pattern detected (e.g., starts with `/`, `~/`, `c:/`, `nickname@c`):
+      1. Path ends with `/` or `\` → List all children under that path as candidates
+      2. Otherwise → Traverse parent directory and match items by prefix
+  - None of the above rules matched → No completion triggered
+  - Stops evaluation after the first matching rule
 
-    - 以未被转义 `$`开头 → 变量名补全
-    - 以 `--`开头-> 根据选项全称补全
-    - 以 `-`开头 → 根据选项简写进行补全
-    - 补全函数特有的参数
+### 3) Candidate Model
 
-      - 例如config set 第一个参数时nickname, 第二个参数是config中各项属性的名称
-      - task inspect 需要补全任务id
-    - 出现路径的明显特征 如以/ , ~/, c:/, nickname@c开头
-    - 1. 路径以/或\结果则获取该路径的所有子项目作为补全目标
-      2. 否则, 遍历父级目录, 以匹配前缀的作为补全目标
-  - 未触发以上规则, 不进行补全.
-  - 触发一个规则后, 不再触发下面的规则
+- **Kinds**: Module, Command, Option, VariableName, ClientName, HostConfigNickname, HostConfigAttrName, TaskId, PathLocal, PathRemote
+- **Fields**:
+  - `insert_text`: actual text to insert
+  - `display`: styled text shown in menu
+  - `help`: brief usage hint (especially important for commands)
+- **Sorting Strategy**:
+  - Prefix matches ranked highest
+  - For path matches, order by:
+    1. Regular files first
+    2. Directories next
+    3. Symbolic links after
+    4. Other special file types last
 
-### 3) 候选模型
+### 4) Asynchronous Model
 
-- **类型（kind）**：Module, Command, Option, VariableName, ClientName, HostConfigNickname, HostConfigAttrName, TaskId, PathLocal, PathRemote
-- **字段**：
-  - `insert_text`：实际插入内容
-  - `display`：菜单中显示文本(被style化)
-  - `help`：简要用法说明（命令尤为重要）
-- **排序策略**：
-  - 前缀匹配优先
-  - 路径匹配时
+- Each keystroke generates a unique request ID; input changes invalidate previous IDs and cancel outdated completion tasks. Results are validated against the current request ID before application, automatically discarding stale async results.
+- Remote path completion includes a configurable debounce delay; requests can be canceled cost-free within this window to reduce network I/O pressure.
+- **Completion Cache**:
+  - Primarily caches path completions, storing `dir`, `nickname`, `vector<PathInfo>`, and other relevant attributes (extensible as needed)
+  - Other completions reside in memory and do not require persistent caching
+  - Cache should support manual clearing via command (since paths may change) and enforce a size limit
+  - Caching only triggered when a directory contains more children than a user-defined threshold; smaller directories are not cached
 
-    - regular文件优先
-    - 其次文件夹
-    - 然后链接文件
-    - 最后其他特殊文件
+### 5) Command Completion Data
 
-### 4) 异步模型
+- Define a static command tree: command → subcommand → options → positional parameter types
+- Each node includes usage/help strings
+- Completion source recommends only relevant subcommands/options based on the current parsing node to avoid irrelevant suggestions
 
-- 每次输入都会产生一个请求ID, 修改输入时会改变请求ID并终止非该请求ID的补全任务，应用补全结果时核验请求ID, 自动丢弃过期的异步结果
-- 补全远程路径时, 设置一个延时(用户可自定义), 在延时期内可以无成本地取消服务器请求, 减轻网络IO压力
-- **补全缓存** : 主要需要存储路径补全的缓存,  包含 dir, nickname, vector `<PathInfo>`等属性即可, 如有其他需要的属性, 可以再添加. 其他补全存储在本地内存中, 无需缓存. 该缓存最好可以提供指令清除(因为路径会变动), 缓存的size也不宜过大
-  - 只有文件夹内的子项目超过指定数量(用户设置)才进行缓存, 否则不进行缓存
+### 6) Internal Value Sources
 
-### 5) 命令补全数据
-
-- 可以定义一个定义静态命令树：命令 → 子命令 → 选项 → 位置参数类型
-- 每个节点包含用法/帮助字符串
-- 补全源根据当前节点仅推荐相关子命令/选项
-
-### 6) 内部值来源
-
-- 任务ID：来自 `AMWorkManager`（进行中/执行中/历史）
-- 客户端名称：来自 `ClientMaintainer`
-- 主机配置昵称：来自 `ConfigManager`（即使未连接也提供）
+- Task IDs: from `AMWorkManager` (running/executing/history)
+- Client names: from `ClientMaintainer`
+- Host config nicknames: from `ConfigManager` (available even when not connected)

@@ -1,6 +1,7 @@
 #include "AMManager/Var.hpp"
 #include "AMBase/CommonTools.hpp"
 #include <algorithm>
+#include <unordered_set>
 
 using EC = ErrorCode;
 
@@ -25,6 +26,35 @@ AMVarManager::AMVarManager(AMConfigManager &config_manager)
 bool AMVarManager::HasMemoryVar(const std::string &name) const {
   std::lock_guard<std::mutex> lock(mutex_);
   return memory_vars_.find(name) != memory_vars_.end();
+}
+
+/**
+ * @brief List variable names from memory and storage.
+ */
+std::vector<std::string> AMVarManager::ListNames() const {
+  std::unordered_set<std::string> seen;
+  std::vector<std::string> names;
+
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    names.reserve(memory_vars_.size());
+    for (const auto &item : memory_vars_) {
+      if (seen.insert(item.first).second) {
+        names.push_back(item.first);
+      }
+    }
+  }
+
+  auto stored = config_manager_.ListUserPaths();
+  names.reserve(names.size() + stored.size());
+  for (const auto &item : stored) {
+    if (seen.insert(item.first).second) {
+      names.push_back(item.first);
+    }
+  }
+
+  std::sort(names.begin(), names.end());
+  return names;
 }
 
 /**

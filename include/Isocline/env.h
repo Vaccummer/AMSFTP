@@ -45,6 +45,10 @@ struct ic_env_s {
   bool            complete_nosort;  // do not sort completion items?
   long            complete_max_items;   // maximum number of completions to generate/show
   long            complete_max_columns; // maximum number of columns in the completion menu
+  long            complete_max_rows;    // maximum number of rows in the completion menu
+  bool            complete_number_pick; // allow selecting items with number keys
+  bool            complete_auto_fill;   // auto-complete single/prefix matches
+  const char*     complete_select_sign; // custom indicator for selected item
   bool            no_multiline_indent; // indent continuation lines to line up under the initial prompt 
   bool            no_help;          // show short help line for history search etc.
   bool            no_hint;          // allow hinting?

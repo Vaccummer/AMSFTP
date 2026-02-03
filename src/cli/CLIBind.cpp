@@ -1,5 +1,6 @@
 
 #include "AMCLI/CLIBind.hpp"
+#include "AMCLI/Completer.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include <unordered_set>
 
@@ -187,6 +188,20 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
 }
 
 /**
+ * @brief Bind completion-related CLI commands.
+ */
+void BindCompleteCommands(CLI::App &app, CliArgsPool &args,
+                          CliCommands &commands) {
+  (void)args;
+  commands.complete_cmd = app.add_subcommand("complete", "Completion utilities");
+  commands.complete_cache_cmd =
+      commands.complete_cmd->add_subcommand("cache", "Manage completion cache");
+  commands.complete_cache_clear =
+      commands.complete_cache_cmd->add_subcommand("clear",
+                                                  "Clear completion cache");
+}
+
+/**
  * @brief Bind task-related CLI commands.
  */
 void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
@@ -326,6 +341,7 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
   BindConfigCommands(app, args, commands);
   BindClientCommands(app, args, commands);
   BindFilesystemCommands(app, args, commands);
+  BindCompleteCommands(app, args, commands);
   BindTaskCommands(app, args, commands);
   return commands;
 }
@@ -379,6 +395,28 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   command_name = command_name.empty()
                      ? command_name
                      : command_name.substr(0, command_name.size() - 1);
+
+  if (cli_commands.complete_cmd && cli_commands.complete_cmd->parsed()) {
+    AMPromptManager &prompt = AMPromptManager::Instance();
+    if (cli_commands.complete_cache_clear &&
+        cli_commands.complete_cache_clear->parsed()) {
+      auto *completer = AMCompleter::Active();
+      if (!completer) {
+        result.rcm = {EC::InvalidArg, "Completer is not active"};
+        SetCliExitCode(static_cast<int>(result.rcm.first));
+        return result;
+      }
+      completer->ClearCache();
+      prompt.Print("Completion cache cleared.");
+      result.rcm = {EC::Success, ""};
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
+    }
+    std::cerr << "Invalid complete command" << std::endl;
+    result.rcm = {EC::InvalidArg, "Invalid complete command"};
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
 
   if (cli_commands.config_cmd->parsed()) {
     if (cli_commands.config_ls->parsed()) {

@@ -49,6 +49,7 @@
 #include "Isocline/env.h"
 
 #define IC_DEFAULT_COMPLETION_MAX_COLUMNS (4)
+#define IC_DEFAULT_COMPLETION_MAX_ROWS (9)
 
 
 //-------------------------------------------------------------
@@ -166,6 +167,13 @@ ic_public bool ic_open_completion_menu(void) {
   return true;
 }
 
+/** Request the completion menu asynchronously in a thread-safe way. */
+ic_public bool ic_request_completion_menu_async(void) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return false;
+  if (env->tty==NULL) return false;
+  return tty_async_complete(env->tty);
+}
+
 static void set_prompt_marker(ic_env_t* env, const char* prompt_marker, const char* cprompt_marker) {
   if (prompt_marker == NULL) prompt_marker = "> ";
   if (cprompt_marker == NULL) cprompt_marker = prompt_marker;
@@ -280,6 +288,46 @@ ic_public long ic_set_completion_max_columns( long max_columns ) {
   }
   env->complete_max_columns = max_columns;
   return prev;
+}
+
+/** Set the maximum number of rows in the completion menu. */
+ic_public long ic_set_completion_max_rows( long max_rows ) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return 0;
+  long prev = env->complete_max_rows;
+  if (max_rows == 0) {
+    max_rows = IC_DEFAULT_COMPLETION_MAX_ROWS;
+  }
+  if (max_rows > 0 && max_rows < 3) {
+    max_rows = 3;
+  }
+  env->complete_max_rows = max_rows;
+  return prev;
+}
+
+/** Enable or disable selecting completion items by number keys. */
+ic_public bool ic_enable_completion_number_pick( bool enable ) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return false;
+  bool prev = env->complete_number_pick;
+  env->complete_number_pick = enable;
+  return prev;
+}
+
+/** Enable or disable automatic completion for single/prefix matches. */
+ic_public bool ic_enable_completion_auto_fill( bool enable ) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return false;
+  bool prev = env->complete_auto_fill;
+  env->complete_auto_fill = enable;
+  return prev;
+}
+
+/** Set a custom indicator string for the selected completion item. */
+ic_public void ic_set_completion_select_sign( const char* sign ) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return;
+  mem_free(env->mem, env->complete_select_sign);
+  env->complete_select_sign = NULL;
+  if (sign != NULL && sign[0] != 0) {
+    env->complete_select_sign = mem_strdup(env->mem, sign);
+  }
 }
 
 ic_public bool ic_enable_multiline_indent(bool enable) {
@@ -557,6 +605,7 @@ static void ic_env_free(ic_env_t* env) {
   mem_free(env->mem,env->prompt_marker);
   mem_free(env->mem, env->match_braces);
   mem_free(env->mem, env->auto_braces);
+  mem_free(env->mem, env->complete_select_sign);
   env->prompt_marker = NULL;
   
   // and deallocate ourselves
@@ -595,6 +644,10 @@ static ic_env_t* ic_env_create( ic_malloc_fun_t* _malloc, ic_realloc_fun_t* _rea
   env->hint_delay  = 400;   
   env->complete_max_items = IC_MAX_COMPLETIONS_TO_SHOW;
   env->complete_max_columns = IC_DEFAULT_COMPLETION_MAX_COLUMNS;
+  env->complete_max_rows = IC_DEFAULT_COMPLETION_MAX_ROWS;
+  env->complete_number_pick = true;
+  env->complete_auto_fill = true;
+  env->complete_select_sign = NULL;
   env->line_prefix = mem_strdup(env->mem, "");
   
   if (env->tty == NULL || env->term==NULL ||
