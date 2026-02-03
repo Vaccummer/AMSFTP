@@ -597,7 +597,14 @@ public:
       std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
       auto it = client->public_kv.find("workdir");
       if (it != client->public_kv.end()) {
-        return it->second;
+        std::string workdir = AMPathStr::UnifyPathSep(it->second, "/");
+        if (!workdir.empty() && !AMPathStr::IsAbs(workdir, "/")) {
+          const std::string home =
+              AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+          workdir = AMFS::abspath(workdir, true, home, home, "/");
+          client->public_kv["workdir"] = workdir;
+        }
+        return workdir;
       }
     }
     std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");

@@ -1988,7 +1988,7 @@ public:
   /**
    * @brief Get all result IDs currently cached.
    */
-  std::vector<std::string> get_result_ids() {
+  std::vector<std::string> get_result_ids() const {
     std::lock_guard<std::mutex> lock(result_mtx_);
     std::vector<std::string> ids;
     ids.reserve(results_.size());
@@ -2001,7 +2001,7 @@ public:
   /**
    * @brief Snapshot all pending tasks that have not started yet.
    */
-  std::vector<std::shared_ptr<TaskInfo>> get_pending_tasks() {
+  std::vector<std::shared_ptr<TaskInfo>> get_pending_tasks() const {
     std::vector<std::shared_ptr<TaskInfo>> tasks;
     std::lock_guard<std::mutex> lock(registry_mtx_);
     tasks.reserve(task_registry_.size());
@@ -2016,7 +2016,7 @@ public:
   /**
    * @brief Snapshot all currently conducting tasks.
    */
-  std::vector<std::shared_ptr<TaskInfo>> get_conducting_tasks() {
+  std::vector<std::shared_ptr<TaskInfo>> get_conducting_tasks() const {
     std::vector<std::shared_ptr<TaskInfo>> tasks;
     std::lock_guard<std::mutex> lock(conducting_mtx_);
     tasks.reserve(conducting_infos_.size());

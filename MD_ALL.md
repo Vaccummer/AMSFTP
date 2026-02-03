@@ -976,3 +976,144 @@ resume接收两个参数
 
 分析需要的clients, 调用CollectClients创建maintainer, 若失败直接报错
 调用workermanager的cre_taskinfo创建Taskinfo, 根据is_async 调用相关的transfer函数
+## Completor Blueprint
+
+### 1) 高层架构
+
+- **补全流水线**：输入 → 解析cursor前的input → 构建查询 → 获取候选（同步/异步） → 排序/格式化 → 渲染 → 应用选择
+- **核心类型**：
+  - `CompletionContext`（光标位置、当前令牌、完整行、解析状态、模式）
+  - `CompletionCandidate`（显示文本、插入文本、类型、帮助信息、评分、元数据）
+  - `CompletionResult`（候选列表 + 匹配策略 + 延迟信息）
+- **补全源（可选择开启与关闭）**：
+  - `CommandSource`（命令/子命令/选项）
+  - `InternalSource`（任务ID、客户端名称、主机配置昵称、变量名  以及一些内置属性名）
+  - `PathSource`（本地/远程路径）
+- **协调器（Coordinator）**：
+  - 一个根据上下文分发请求至各补全源并合并结果的 `Completer`
+  - **统一补全流程**：即使命令补全很快，也使用相同的 `CompletionRequest`流水线，确保UI行为一致，简化系统并提升可扩展性
+
+### 2) 上下文解析
+
+- 目前已经存在input解析器@src\cli\TokenTypeAnalyzer.cpp
+- 支持引号、转义符和 `nickname@path`语法的令牌化
+- **目标类型判定**   越靠前优先级越高 ：
+
+  - 以!开头, 屏蔽补全, 因为时调用远程终端
+  - input还没有有效命令 → 补全模块名或者顶层函数名
+  - input存在有效模块名-> 补全该模块下的函数名
+  - input存在有效函数
+
+    - 以未被转义 `$`开头 → 变量名补全
+    - 以 `--`开头-> 根据选项全称补全
+    - 以 `-`开头 → 根据选项简写进行补全
+    - 补全函数特有的参数
+
+      - 例如config set 第一个参数时nickname, 第二个参数是config中各项属性的名称
+      - task inspect 需要补全任务id
+    - 出现路径的明显特征 如以/ , ~/, c:/, nickname@c开头
+    - 1. 路径以/或\结果则获取该路径的所有子项目作为补全目标
+      2. 否则, 遍历父级目录, 以匹配前缀的作为补全目标
+  - 未触发以上规则, 不进行补全.
+  - 触发一个规则后, 不再触发下面的规则
+
+### 3) 候选模型
+
+- **类型（kind）**：Module, Command, Option, VariableName, ClientName, HostConfigNickname, HostConfigAttrName, TaskId, PathLocal, PathRemote
+- **字段**：
+  - `insert_text`：实际插入内容
+  - `display`：菜单中显示文本(被style化)
+  - `help`：简要用法说明（命令尤为重要）
+- **排序策略**：
+  - 前缀匹配优先
+  - 路径匹配时
+
+    - regular文件优先
+    - 其次文件夹
+    - 然后链接文件
+    - 最后其他特殊文件
+
+### 4) 异步模型
+
+- 每次输入都会产生一个请求ID, 修改输入时会改变请求ID并终止非该请求ID的补全任务，应用补全结果时核验请求ID, 自动丢弃过期的异步结果
+- 补全远程路径时, 设置一个延时(用户可自定义), 在延时期内可以无成本地取消服务器请求, 减轻网络IO压力
+- **补全缓存** : 主要需要存储路径补全的缓存,  包含 dir, nickname, vector `<PathInfo>`等属性即可, 如有其他需要的属性, 可以再添加. 其他补全存储在本地内存中, 无需缓存. 该缓存最好可以提供指令清除(因为路径会变动), 缓存的size也不宜过大
+  - 只有文件夹内的子项目超过指定数量(用户设置)才进行缓存, 否则不进行缓存
+
+### 5) 命令补全数据
+
+- 可以定义一个定义静态命令树：命令 → 子命令 → 选项 → 位置参数类型
+- 每个节点包含用法/帮助字符串
+- 补全源根据当前节点仅推荐相关子命令/选项
+
+### 6) 内部值来源
+
+- 任务ID：来自 `AMWorkManager`（进行中/执行中/历史）
+- 客户端名称：来自 `ClientMaintainer`
+- 主机配置昵称：来自 `ConfigManager`（即使未连接也提供）
++ Bug1: path recognise error
+  (local)D:/Document/Desktop/1 $ cd ./aad
+  ❌ cd: Path not found: aad
+  󰨡 am@localhost  5ms  ❌ PathNotExist
+  (local)D:/Document/Desktop/1 $ cd aad
+  󰨡 am@localhost  5ms  ✅
+  (local)D:/Document/Desktop/1/aad $
++ Bug2: item name has a [/] and not Aligned (this bug seems only in windows)
+
+(local)D:/Document/Desktop/1/aad $ ls d:/
+  1 $RECYCLE.BIN[/]    6 Downloads[/]   11 System Volume Information[/]
+  2 CodeLib[/]    7 Drivers[/]   12 WSL[/]
+  3 Compiler[/]    8 Powershell[/]   13 Windows Kits[/]
+  4 Config.Msi[/]    9 Program Files[/]   14 tmp[/]
+  5 Document[/]   10 Softwares[/]
+
++ Improve3: Cycle page switch
+
+when tab on the last page, return to first page
+
++ Improve4: set max rows num per page
+
+given in CompleteOption.maxrows_perpage
+
++ Adjust1: set default complete type
+
+when function need path:
+
+1. token for path is empty: complete current client path
+2. path has no @
+   1. token for path is not empty but is not Path-like pattern
+      1. if has clients macthed: complete client names
+      2. else match current client path
+   2. token for path is not empty and is  Path-like pattern : complete current client path
+3. path has @
+   1. if client not exists: no complete
+   2. else, complete that client path
+
++ Improve5: number_pick switch
+
+given in CompleteOption.number_pick, if off, recognise number as common input instead of item choose
+
++ Improve6:hightlight item if select
++ Improve7: custom select item sign
+
+ →10 .AMSFTP_Trash/    the   →   sign and style can be customed
+
+given in CompleteOption.item_select_sign
+
++ Improve8: add switch for auto fill in
+
+when there's only one candidate or candidates have a same prefix,  auto fill in happened
+but 
+
++ bug3:
+
+Unix path parse seems has problem
+
+(wsl)/home/am $ cd ./yes/haha/yes2/
+ am@172.26.36.83  5ms  ✅
+(wsl)yes/haha/yes2 $
+
+(wsl)/home/am/yes/home/am $ cd ../am/
+❌ cd: Get stat failed: File does not exist
+ am@172.26.36.83  5ms  ❌ FileNotExist
+(wsl)/home/am/yes/home/am $

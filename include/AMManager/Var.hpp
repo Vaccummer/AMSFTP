@@ -57,6 +57,11 @@ public:
    */
   bool HasMemoryVar(const std::string &name) const;
 
+  /**
+   * @brief List variable names from memory and storage.
+   */
+  std::vector<std::string> ListNames() const;
+
 private:
   /**
    * @brief Construct a variable manager tied to the config manager.

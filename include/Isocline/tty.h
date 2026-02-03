@@ -38,6 +38,7 @@ ic_private bool   code_is_virt_key(code_t c );
 
 ic_private bool   tty_term_resize_event(tty_t* tty); // did the terminal resize?
 ic_private bool   tty_async_stop(const tty_t* tty);  // unblock the read asynchronously
+ic_private bool   tty_async_complete(const tty_t* tty); // request a completion key asynchronously
 ic_private void   tty_set_esc_delay(tty_t* tty, long initial_delay_ms, long followup_delay_ms);
 
 // shared between tty.c and tty_esc.c: low level character push

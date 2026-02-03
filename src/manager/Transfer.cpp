@@ -791,6 +791,54 @@ std::vector<size_t> AMTransferManager::ListTransferSetIds() const {
 }
 
 /**
+ * @brief List task IDs across pending, conducting, and finished tasks.
+ */
+std::vector<AMTransferManager::ID> AMTransferManager::ListTaskIds() const {
+  std::unordered_set<ID> seen;
+  std::vector<ID> ids;
+
+  auto add_id = [&seen, &ids](const ID &id) {
+    if (id.empty()) {
+      return;
+    }
+    if (seen.insert(id).second) {
+      ids.push_back(id);
+    }
+  };
+
+  auto pending = worker_.get_pending_tasks();
+  for (const auto &task : pending) {
+    if (task) {
+      add_id(task->id);
+    }
+  }
+
+  auto conducting = worker_.get_conducting_tasks();
+  for (const auto &task : conducting) {
+    if (task) {
+      add_id(task->id);
+    }
+  }
+
+  auto result_ids = worker_.get_result_ids();
+  for (const auto &id : result_ids) {
+    add_id(id);
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(history_mtx_);
+    for (const auto &task : history_) {
+      if (task) {
+        add_id(task->id);
+      }
+    }
+  }
+
+  std::sort(ids.begin(), ids.end());
+  return ids;
+}
+
+/**
  * @brief Delete a cached transfer set by ID.
  */
 bool AMTransferManager::DeleteTransferSet(size_t set_index) {

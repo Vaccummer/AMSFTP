@@ -53,13 +53,17 @@ static ssize_t edit_completion_digits(ssize_t value) {
 
 /** Append one completion entry to the menu buffer with fixed column width and numbering. */
 static void editor_append_completion(ic_env_t* env, editor_t* eb, ssize_t idx, ssize_t col_width,
-                                     ssize_t number_width, ssize_t number, bool selected ) {
+                                     ssize_t number_width, ssize_t number, const char* indicator,
+                                     ssize_t indicator_width, bool selected ) {
   const char* help = NULL;
   const char* display = completions_get_display(env->completions, idx, &help);
   if (display == NULL) return;
-  const char* indicator = (selected ? (tty_is_utf8(env->tty) ? "\xE2\x86\x92" : "*") : " ");
-  sbuf_appendf(eb->extra, "[ic-info]%s%*zd [/]", indicator, (int)number_width, number);
-  ssize_t prefix_width = number_width + 2;
+  if (indicator == NULL) indicator = "";
+  sbuf_append(eb->extra, "[ic-info]");
+  sbuf_append(eb->extra, indicator);
+  sbuf_appendf(eb->extra, "%*zd ", (int)number_width, number);
+  sbuf_append(eb->extra, "[/]");
+  ssize_t prefix_width = indicator_width + number_width + 1;
   ssize_t content_width = col_width - prefix_width;
 
   if (content_width > 0) {
@@ -94,19 +98,48 @@ static ssize_t edit_completions_max_width( ic_env_t* env, ssize_t count ) {
 
 static void edit_completion_menu(ic_env_t* env, editor_t* eb, bool more_available) {
   ssize_t count = completions_count(env->completions);
-  assert(count > 1);
+  assert(count > 0);
   ssize_t twidth = term_get_width(env->term) - 1;
   if (twidth < 20) twidth = 20;
 
   ssize_t max_columns = env->complete_max_columns;
   if (max_columns <= 0) max_columns = 1;
   if (max_columns > count) max_columns = count;
-  ssize_t max_rows = 9;
+  const ssize_t default_max_rows = 9;
+  ssize_t max_rows = env->complete_max_rows;
+  if (max_rows == 0) max_rows = default_max_rows;
+  if (max_rows > 0 && max_rows < 3) max_rows = 3;
+  if (max_rows < 0) max_rows = count;
+  const char* indicator_on = env->complete_select_sign;
+  if (indicator_on == NULL || indicator_on[0] == 0) {
+    indicator_on = (tty_is_utf8(env->tty) ? "\xE2\x86\x92" : "*");
+  }
+  ssize_t indicator_width = bbcode_column_width(env->bbcode, indicator_on);
+  if (indicator_width < 1) indicator_width = 1;
+  char indicator_off_buf[32];
+  char* indicator_off = indicator_off_buf;
+  if (indicator_width < (ssize_t)sizeof(indicator_off_buf)) {
+    ic_memset(indicator_off_buf, ' ', indicator_width);
+    indicator_off_buf[indicator_width] = 0;
+  }
+  else {
+    indicator_off = mem_malloc_tp_n(env->mem, char, indicator_width + 1);
+    if (indicator_off != NULL) {
+      ic_memset(indicator_off, ' ', indicator_width);
+      indicator_off[indicator_width] = 0;
+    }
+    else {
+      indicator_off = indicator_off_buf;
+      indicator_off_buf[0] = ' ';
+      indicator_off_buf[1] = 0;
+      indicator_width = 1;
+    }
+  }
   ssize_t max_item_width = edit_completions_max_width(env, count);
   ssize_t columns = 1;
   ssize_t rows = 1;
   ssize_t number_width = 1;
-  ssize_t col_width = max_item_width + number_width + 2;
+  ssize_t col_width = max_item_width + number_width + indicator_width + 1;
 
   for (ssize_t c = max_columns; c >= 1; c--) {
     ssize_t r = (count + c - 1) / c;
@@ -114,7 +147,7 @@ static void edit_completion_menu(ic_env_t* env, editor_t* eb, bool more_availabl
     if (r < 1) r = 1;
     ssize_t items_per_page = r * c;
     ssize_t num_width = edit_completion_digits(items_per_page);
-    ssize_t prefix_width = num_width + 2;
+    ssize_t prefix_width = num_width + indicator_width + 1;
     ssize_t cw = prefix_width + max_item_width;
     ssize_t total_width = c * cw + (c - 1) * 2;
     if (total_width <= twidth || c == 1) {
@@ -150,7 +183,9 @@ again:
       if (idx >= page_end) break;
       if (col > 0) sbuf_append(eb->extra, "  ");
       ssize_t number = (idx - page_start) + 1;
-      editor_append_completion(env, eb, idx, col_width, number_width, number, (idx == selected));
+      const char* indicator = (idx == selected ? indicator_on : indicator_off);
+      editor_append_completion(env, eb, idx, col_width, number_width, number, indicator,
+                               indicator_width, (idx == selected));
     }
   }
   if (page_count > 1) {
@@ -175,7 +210,7 @@ again:
   sbuf_clear(eb->extra);
   
   // direct selection?
-  if (c >= '1' && c <= '9') {
+  if (env->complete_number_pick && c >= '1' && c <= '9') {
     ssize_t i = (c - '1');
     if (i < items_on_page) {
       selected = page_start + i;
@@ -185,9 +220,14 @@ again:
 
   // process commands
   if (c == KEY_TAB) {
-    if (page + 1 < page_count) {
+    if (page_count > 0) {
       ssize_t sel_offset = (selected >= page_start && selected < page_end ? selected - page_start : -1);
-      page++;
+      if (page + 1 < page_count) {
+        page++;
+      }
+      else {
+        page = 0;
+      }
       if (sel_offset >= 0) {
         ssize_t new_start = page * items_per_page;
         ssize_t new_end = new_start + items_per_page;
@@ -199,9 +239,14 @@ again:
     goto again;
   }
   else if (c == KEY_SHIFT_TAB) {
-    if (page > 0) {
+    if (page_count > 0) {
       ssize_t sel_offset = (selected >= page_start && selected < page_end ? selected - page_start : -1);
-      page--;
+      if (page > 0) {
+        page--;
+      }
+      else {
+        page = page_count - 1;
+      }
       if (sel_offset >= 0) {
         ssize_t new_start = page * items_per_page;
         ssize_t new_end = new_start + items_per_page;
@@ -310,6 +355,9 @@ again:
       edit_refresh(env,eb);
     }
   }
+  if (indicator_off != indicator_off_buf) {
+    mem_free(env->mem, indicator_off);
+  }
   // done
   completions_clear(env->completions);
   if (c != 0) tty_code_pushback(env->tty,c);
@@ -328,14 +376,22 @@ static void edit_generate_completions(ic_env_t* env, editor_t* eb, bool autotab)
     if (!autotab) { term_beep(env->term); }
   }
   else if (count == 1) {
-    // complete if only one match    
-    if (edit_complete(env,eb,0 /*idx*/) && env->complete_autotab) {
-      tty_code_pushback(env->tty,KEY_EVENT_AUTOTAB);
-    }    
+    if (env->complete_auto_fill) {
+      // complete if only one match
+      if (edit_complete(env,eb,0 /*idx*/) && env->complete_autotab) {
+        tty_code_pushback(env->tty,KEY_EVENT_AUTOTAB);
+      }
+    }
+    else {
+      if (!env->complete_nosort) {
+        completions_sort(env->completions);
+      }
+      edit_completion_menu( env, eb, more_available);
+    }
   }
   else {
     //term_beep(env->term); 
-    if (!more_available) { 
+    if (env->complete_auto_fill && !more_available) { 
       edit_complete_longest_prefix(env,eb);
     }    
     if (!env->complete_nosort) {

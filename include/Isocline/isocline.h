@@ -176,6 +176,11 @@ void ic_set_default_completer( ic_completer_fun_t* completer, void* arg);
     if the request was queued. */
 bool ic_open_completion_menu(void);
 
+/** Thread-safe way to request the completion menu asynchronously.
+    Behaves as if the user pressed tab and returns true
+    if the request was delivered. */
+bool ic_request_completion_menu_async(void);
+
 
 /// In a completion callback (usually from ic_complete_word()), use this function to add a completion.
 /// (the completion string is copied by isocline and do not need to be preserved or allocated).
@@ -373,6 +378,23 @@ long ic_set_completion_max_items( long max_items );
 /** Set the maximum number of columns in the completion menu.
     Pass a value <= 0 to reset to the default (4). Returns the previous setting. */
 long ic_set_completion_max_columns( long max_columns );
+
+/** Set the maximum number of rows in the completion menu.
+    Pass a value < 0 to disable row limiting. Values 0<x<3 are clamped to 3.
+    Returns the previous setting. */
+long ic_set_completion_max_rows( long max_rows );
+
+/** Disable or enable selecting completion items by number keys.
+    Returns the previous setting. */
+bool ic_enable_completion_number_pick( bool enable );
+
+/** Disable or enable automatic completion for single/prefix matches.
+    Returns the previous setting. */
+bool ic_enable_completion_auto_fill( bool enable );
+
+/** Set a custom indicator string for the selected completion item.
+    Pass NULL or empty to reset to the default indicator. */
+void ic_set_completion_select_sign( const char* sign );
 
 /// Disable or enable automatic identation of continuation lines in multiline
 /// input so it aligns with the initial prompt.

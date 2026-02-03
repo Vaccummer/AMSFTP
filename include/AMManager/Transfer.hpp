@@ -1,3 +1,4 @@
+#pragma once
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
@@ -165,6 +166,11 @@ public:
    * @brief List all cached transfer set indices.
    */
   std::vector<size_t> ListTransferSetIds() const;
+
+  /**
+   * @brief List task IDs across pending, conducting, and finished tasks.
+   */
+  std::vector<ID> ListTaskIds() const;
 
   /**
    * @brief Delete a cached transfer set by index.

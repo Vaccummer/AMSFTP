@@ -535,8 +535,16 @@ ic_private bool tty_async_stop(const tty_t* tty) {
   char c = KEY_CTRL_C;
   return (ioctl(tty->fd_in, TIOCSTI, &c) >= 0);
 }
+ic_private bool tty_async_complete(const tty_t* tty) {
+  // insert tab in the input stream
+  char c = KEY_TAB;
+  return (ioctl(tty->fd_in, TIOCSTI, &c) >= 0);
+}
 #else
 ic_private bool tty_async_stop(const tty_t* tty) {
+  return false;
+}
+ic_private bool tty_async_complete(const tty_t* tty) {
   return false;
 }
 #endif
@@ -855,6 +863,21 @@ ic_private bool tty_async_stop(const tty_t* tty) {
   return (nwritten == 2);
 }
 
+ic_private bool tty_async_complete(const tty_t* tty) {
+  // send tab
+  INPUT_RECORD events[2];
+  memset(events, 0, 2*sizeof(INPUT_RECORD));
+  events[0].EventType = KEY_EVENT;
+  events[0].Event.KeyEvent.bKeyDown = TRUE;
+  events[0].Event.KeyEvent.wVirtualKeyCode = VK_TAB;
+  events[0].Event.KeyEvent.uChar.AsciiChar = KEY_TAB;
+  events[1] = events[0];
+  events[1].Event.KeyEvent.bKeyDown = FALSE;
+  DWORD nwritten = 0;
+  WriteConsoleInput(tty->hcon, events, 2, &nwritten);
+  return (nwritten == 2);
+}
+
 ic_private bool tty_start_raw(tty_t* tty) {
   if (tty->raw_enabled) return true;
   GetConsoleMode(tty->hcon,&tty->hcon_orig_mode);
@@ -885,4 +908,3 @@ static void tty_done_raw(tty_t* tty) {
 }
 
 #endif
-
