@@ -1,4 +1,5 @@
 #include "AMManager/Config.hpp"
+#include "AMBase/CommonTools.hpp"
 #include "AMBase/Enum.hpp"
 #include "AMBase/Path.hpp"
 #include "AMManager/Client.hpp"
@@ -69,6 +70,64 @@ std::string JsonScalarToString(const Json &value) {
   return value.dump();
 }
 
+/**
+ * @brief Convert a settings node into a typed value with a fallback default.
+ */
+template <typename T>
+T GetSettingValueImpl(const Json *node, const T &default_value) {
+  return default_value;
+}
+
+/**
+ * @brief Convert a settings node into an integer value with parsing fallback.
+ */
+template <>
+int GetSettingValueImpl<int>(const Json *node, const int &default_value) {
+  if (!node) {
+    return default_value;
+  }
+  if (node->is_number_integer())
+    return static_cast<int>(node->get<int64_t>());
+  if (node->is_number_unsigned()) {
+    auto value = node->get<size_t>();
+    if (value <= static_cast<size_t>(std::numeric_limits<int>::max()))
+      return static_cast<int>(value);
+  }
+  if (node->is_string()) {
+    try {
+      return std::stoi(node->get<std::string>());
+    } catch (...) {
+      return default_value;
+    }
+  }
+  return default_value;
+}
+
+/**
+ * @brief Convert a settings node into a string value with formatting fallback.
+ */
+template <>
+std::string GetSettingValueImpl<std::string>(const Json *node,
+                                             const std::string &default_value) {
+  if (!node) {
+    return default_value;
+  }
+  if (node->is_string())
+    return node->get<std::string>();
+  if (node->is_number_integer())
+    return std::to_string(node->get<int64_t>());
+  if (node->is_number_unsigned())
+    return std::to_string(node->get<size_t>());
+  if (node->is_boolean())
+    return node->get<bool>() ? "true" : "false";
+  if (node->is_number_float()) {
+    std::ostringstream oss;
+    oss << node->get<double>();
+    return oss.str();
+  }
+  return default_value;
+}
+
 void PrintLine(const std::string &value) {
   AMPromptManager::Instance().Print(value);
 }
@@ -77,6 +136,36 @@ std::string TrimCopy(const std::string &value) {
   std::string tmp = value;
   AMStr::VStrip(tmp);
   return tmp;
+}
+
+/**
+ * @brief Normalize a configured style into a bbcode opening tag.
+ */
+std::string NormalizeStyleTag_(const std::string &raw) {
+  std::string trimmed = TrimCopy(raw);
+  if (trimmed.empty()) {
+    return "";
+  }
+  if (trimmed.find("[/") != std::string::npos) {
+    return "";
+  }
+  if (trimmed.front() != '[') {
+    trimmed.insert(trimmed.begin(), '[');
+  }
+  if (trimmed.back() != ']') {
+    trimmed.push_back(']');
+  }
+  return trimmed;
+}
+
+/**
+ * @brief Wrap text with a bbcode tag when provided.
+ */
+std::string ApplyStyleTag_(const std::string &tag, const std::string &text) {
+  if (tag.empty()) {
+    return text;
+  }
+  return tag + text + "[/]";
 }
 
 std::string ToLowerCopy(const std::string &value) {
@@ -833,6 +922,7 @@ ECM AMConfigManager::Dump() {
   }
 
   std::string error;
+  std::string msg;
   if (!config_handle_) {
     return Err(EC::ConfigNotInitialized, "config handle not initialized");
   }
@@ -848,10 +938,13 @@ ECM AMConfigManager::Dump() {
     char *err = nullptr;
     int rc = cfgffi_write_inplace(config_handle_, json.c_str(), &err);
     if (rc != 0) {
-      std::string msg = err ? err : "cfgffi_write_inplace failed";
-      if (err)
+      msg = err ? err : "Unknown Error";
+      if (err) {
         cfgffi_free_string(err);
-      return Err(EC::ConfigDumpFailed, "failed to dump config.toml: " + msg);
+      }
+      return Err(
+          EC::ConfigDumpFailed,
+          AMStr::amfmt("Failed to dump to {}: {}", config_path_.string(), msg));
     }
     if (err)
       cfgffi_free_string(err);
@@ -867,10 +960,12 @@ ECM AMConfigManager::Dump() {
     char *err = nullptr;
     int rc = cfgffi_write_inplace(settings_handle_, json.c_str(), &err);
     if (rc != 0) {
-      std::string msg = err ? err : "cfgffi_write_inplace failed";
+      msg = err ? err : "Unknown cfgffi_write Error";
       if (err)
         cfgffi_free_string(err);
-      return Err(EC::ConfigDumpFailed, "failed to dump settings.toml: " + msg);
+      return Err(EC::ConfigDumpFailed,
+                 AMStr::amfmt("Failed to dump to {}: {}",
+                              settings_path_.string(), msg));
     }
     if (err)
       cfgffi_free_string(err);
@@ -886,11 +981,12 @@ ECM AMConfigManager::Dump() {
     char *err = nullptr;
     int rc = cfgffi_write_inplace(known_hosts_handle_, json.c_str(), &err);
     if (rc != 0) {
-      std::string msg = err ? err : "cfgffi_write_inplace failed";
+      msg = err ? err : "Unknown cfgffi_write Error";
       if (err)
         cfgffi_free_string(err);
       return Err(EC::ConfigDumpFailed,
-                 "failed to dump known_hosts.toml: " + msg);
+                 AMStr::amfmt("Failed to dump to {}: {}",
+                              known_hosts_path_.string(), msg));
     }
     if (err)
       cfgffi_free_string(err);
@@ -908,79 +1004,8 @@ ECM AMConfigManager::Dump() {
 /**
  * @brief Load history data from .AMSFTP_History.toml into memory.
  */
-ECM AMConfigManager::LoadHistory() { return EnsureHistoryLoaded_(); }
-
-/**
- * @brief Fetch history commands for a nickname.
- */
-ECM AMConfigManager::GetHistoryCommands(const std::string &nickname,
-                                        std::vector<std::string> *out) {
-  auto status = EnsureHistoryLoaded_();
-  if (status.first != EC::Success) {
-    return status;
-  }
-  if (!out) {
-    return Err(EC::InvalidArg, "null history output");
-  }
-  out->clear();
-  if (nickname.empty()) {
-    return Ok();
-  }
-  const Json *node = FindJsonNode(history_json_, {nickname, "commands"});
-  if (!node || !node->is_array()) {
-    return Ok();
-  }
-  for (const auto &item : *node) {
-    if (item.is_string()) {
-      out->push_back(item.get<std::string>());
-    }
-  }
-  return Ok();
-}
-
-/**
- * @brief Store history commands for a nickname and optionally persist.
- */
-ECM AMConfigManager::SetHistoryCommands(
-    const std::string &nickname, const std::vector<std::string> &commands,
-    bool dump_now) {
-  auto status = EnsureHistoryLoaded_();
-  if (status.first != EC::Success) {
-    return status;
-  }
-  if (nickname.empty()) {
-    return Err(EC::InvalidArg, "empty history nickname");
-  }
-  if (!history_json_.is_object()) {
-    history_json_ = Json::object();
-  }
-  Json &node = history_json_[nickname];
-  if (!node.is_object()) {
-    node = Json::object();
-  }
-  node["commands"] = commands;
-  if (dump_now) {
-    return DumpHistory_();
-  }
-  return Ok();
-}
-
-/**
- * @brief Resolve history size limit from settings with minimum 10.
- */
-int AMConfigManager::ResolveMaxHistoryCount(int default_value) const {
-  int value = GetSettingInt({"InternalVars", "MaxHistoryCount"}, default_value);
-  if (value < 10) {
-    value = 10;
-  }
-  return value;
-}
-
-/**
- * @brief Ensure history file is loaded and ready for access.
- */
-ECM AMConfigManager::EnsureHistoryLoaded_() {
-  auto status = EnsureInitialized("EnsureHistoryLoaded_");
+ECM AMConfigManager::LoadHistory() {
+  auto status = EnsureInitialized("LoadHistory");
   if (status.first != EC::Success) {
     return status;
   }
@@ -1022,6 +1047,72 @@ ECM AMConfigManager::EnsureHistoryLoaded_() {
 }
 
 /**
+ * @brief Fetch history commands for a nickname.
+ */
+ECM AMConfigManager::GetHistoryCommands(const std::string &nickname,
+                                        std::vector<std::string> *out) {
+  auto status = LoadHistory();
+  if (status.first != EC::Success) {
+    return status;
+  }
+  if (!out) {
+    return Err(EC::InvalidArg, "null history output");
+  }
+  out->clear();
+  if (nickname.empty()) {
+    return Ok();
+  }
+  const Json *node = FindJsonNode(history_json_, {nickname, "commands"});
+  if (!node || !node->is_array()) {
+    return Ok();
+  }
+  for (const auto &item : *node) {
+    if (item.is_string()) {
+      out->push_back(item.get<std::string>());
+    }
+  }
+  return Ok();
+}
+
+/**
+ * @brief Store history commands for a nickname and optionally persist.
+ */
+ECM AMConfigManager::SetHistoryCommands(
+    const std::string &nickname, const std::vector<std::string> &commands,
+    bool dump_now) {
+  auto status = LoadHistory();
+  if (status.first != EC::Success) {
+    return status;
+  }
+  if (nickname.empty()) {
+    return Err(EC::InvalidArg, "empty history nickname");
+  }
+  if (!history_json_.is_object()) {
+    history_json_ = Json::object();
+  }
+  Json &node = history_json_[nickname];
+  if (!node.is_object()) {
+    node = Json::object();
+  }
+  node["commands"] = commands;
+  if (dump_now) {
+    return DumpHistory_();
+  }
+  return Ok();
+}
+
+/**
+ * @brief Resolve history size limit from settings with minimum 10.
+ */
+int AMConfigManager::ResolveMaxHistoryCount(int default_value) const {
+  int value = GetSettingInt({"InternalVars", "MaxHistoryCount"}, default_value);
+  if (value < 10) {
+    value = 10;
+  }
+  return value;
+}
+
+/**
  * @brief Persist in-memory history JSON to disk.
  */
 ECM AMConfigManager::DumpHistory_() {
@@ -1034,10 +1125,12 @@ ECM AMConfigManager::DumpHistory_() {
     std::lock_guard<std::mutex> lock(handle_mtx_);
     int rc = cfgffi_write_inplace(history_handle_, json.c_str(), &err);
     if (rc != 0) {
-      std::string msg = err ? err : "cfgffi_write_inplace failed";
+      std::string msg = err ? err : "Unkown cfgffi_write Error";
       if (err)
         cfgffi_free_string(err);
-      return Err(EC::ConfigDumpFailed, "failed to dump history file: " + msg);
+      return Err(EC::ConfigDumpFailed,
+                 AMStr::amfmt("Failed to dump to {}: {}",
+                              history_path_.string(), msg));
     }
     if (err)
       cfgffi_free_string(err);
@@ -1211,30 +1304,110 @@ ECM AMConfigManager::ConfigBackupIfNeeded() {
   return Ok();
 }
 
-std::string AMConfigManager::Format(const std::string &ori_str,
-                                    const std::string &style_name) const {
+/**
+ * @brief Apply configured styles to text using path or input highlight rules.
+ */
+std::string AMConfigManager::Format(const std::string &ori_str_f,
+                                    const std::string &style_name,
+                                    const PathInfo *path_info) const {
   auto status = EnsureInitialized("Format");
-  if (status.first != EC::Success)
+  const std::string ori_str = AMStr::BBCEscape(ori_str_f);
+  if (status.first != EC::Success) {
     return ori_str;
+  }
 
-  Path key = {"style", style_name};
-  const Json *node = FindJsonNode(settings_json_, key);
-  if (!node || !node->is_string()) {
-    key = {"style", "InputHighlight", style_name};
-    node = FindJsonNode(settings_json_, key);
+  auto apply_input_style = [&](const std::string &name,
+                               const std::string &text) -> std::string {
+    if (name.empty()) {
+      return text;
+    }
+    Path key = {"style", "InputHighlight", name};
+    const Json *node = FindJsonNode(settings_json_, key);
     if (!node || !node->is_string()) {
-      return ori_str;
+      return text;
+    }
+    std::string raw = TrimCopy(node->get<std::string>());
+    if (raw.empty()) {
+      return text;
+    }
+    if (raw.front() != '[' || raw.back() != ']') {
+      return text;
+    }
+    if (raw.find("[/") != std::string::npos) {
+      return text;
+    }
+    return raw + text + "[/]";
+  };
+
+  if (!path_info) {
+    return apply_input_style(style_name, ori_str);
+  }
+
+  std::string base_key = "regular";
+  switch (path_info->type) {
+  case PathType::DIR:
+    base_key = "dir";
+    break;
+  case PathType::SYMLINK:
+    base_key = "symlink";
+    break;
+  case PathType::FILE:
+    base_key = "regular";
+    break;
+  default:
+    base_key = "otherspecial";
+    break;
+  }
+
+  std::string main_tag =
+      NormalizeStyleTag_(GetSettingString({"style", "Path1", base_key}, ""));
+  const std::string path_name =
+      !path_info->name.empty()
+          ? path_info->name
+          : (ori_str_f.empty() ? std::string()
+                               : AMPathStr::basename(ori_str_f));
+  if (path_info->type == PathType::FILE) {
+    const std::string ext = AMPathStr::extname(path_name);
+    if (!ext.empty()) {
+      std::string ext_tag =
+          NormalizeStyleTag_(GetSettingString({"style", "File2", ext}, ""));
+      if (!ext_tag.empty()) {
+        main_tag = ext_tag;
+      }
     }
   }
 
-  std::string raw = TrimCopy(node->get<std::string>());
-  if (raw.empty())
-    return "";
-  if (raw.front() != '[' || raw.back() != ']')
-    return ori_str;
-  if (raw.find("[/") != std::string::npos)
-    return ori_str;
-  return raw + ori_str + "[/]";
+  std::string styled = main_tag.empty() ? apply_input_style(style_name, ori_str)
+                                        : ApplyStyleTag_(main_tag, ori_str);
+
+  const bool is_hidden = !path_name.empty() && path_name.front() == '.';
+  const bool is_nowrite =
+      path_info->mode_int != 0 && (path_info->mode_int & 0222) == 0;
+
+  auto resolve_extra = [&](const std::string &key) -> std::string {
+    std::string tag = NormalizeStyleTag_(
+        GetSettingString({"style", "PathExtraStyle", key}, ""));
+    if (!tag.empty()) {
+      return tag;
+    }
+    return NormalizeStyleTag_(
+        GetSettingString({"style", "PathSpecific3", key}, ""));
+  };
+
+  if (is_hidden) {
+    const std::string extra_tag = resolve_extra("hidden");
+    if (!extra_tag.empty()) {
+      styled = ApplyStyleTag_(extra_tag, styled);
+    }
+  }
+  if (is_nowrite) {
+    const std::string extra_tag = resolve_extra("nowrite");
+    if (!extra_tag.empty()) {
+      styled = ApplyStyleTag_(extra_tag, styled);
+    }
+  }
+
+  return styled;
 }
 
 ECM AMConfigManager::List() const {
@@ -1244,7 +1417,7 @@ ECM AMConfigManager::List() const {
 
   auto hosts = CollectHosts();
   if (hosts.empty()) {
-    PrintLine("No hosts found.");
+    PrintLine("");
     return Ok();
   }
 
@@ -1264,7 +1437,7 @@ ECM AMConfigManager::ListName() const {
 
   auto hosts = CollectHosts();
   if (hosts.empty()) {
-    PrintLine("No hosts found.");
+    PrintLine("");
     return Ok();
   }
 
@@ -1274,7 +1447,7 @@ ECM AMConfigManager::ListName() const {
 
   for (auto it = hosts.begin(); it != hosts.end(); ++it) {
     const std::string &name = it->first;
-    const std::string styled = Format(name, "regular");
+    const std::string styled = Format(name, "nickname");
     size_t name_len = name.size();
     size_t extra = current_width == 0 ? 0 : 1;
 
@@ -1323,9 +1496,12 @@ AMConfigManager::PrivateKeys(bool print_sign) const {
   }
 
   if (print_sign) {
-    PrintLine("[Private_keys]");
+    PrintLine("[!a][Private_keys][/a]");
     for (const auto &path : keys) {
-      PrintLine(Format(path, "dir"));
+      auto [path_rcm, path_info] = AMFS::stat(path, false);
+      const PathInfo *path_ptr =
+          path_rcm.first == EC::Success ? &path_info : nullptr;
+      PrintLine(Format(path, "dir", path_ptr));
     }
   }
 
@@ -1492,8 +1668,7 @@ AMConfigManager::KnownHostCallback AMConfigManager::BuildKnownHostCallback() {
 }
 
 std::pair<ECM, AMConfigManager::ClientConfig>
-AMConfigManager::GetClientConfig(const std::string &nickname,
-                                 bool use_compression) {
+AMConfigManager::GetClientConfig(const std::string &nickname) {
   auto status = EnsureInitialized("GetClientConfig");
   if (status.first != EC::Success)
     return {status, ClientConfig{}};
@@ -1557,7 +1732,7 @@ AMConfigManager::GetClientConfig(const std::string &nickname,
 
   config.request =
       ConRequst(nickname, hostname, username, static_cast<int>(port), password,
-                keyfile, use_compression || compression, trash_dir);
+                keyfile, compression, trash_dir);
 
   std::string protocol_str = get_string("protocol", "sftp");
   config.protocol = ProtocolFromString(protocol_str);
@@ -1576,23 +1751,7 @@ int AMConfigManager::GetSettingInt(const Path &path, int default_value) const {
   if (status.first != EC::Success)
     return default_value;
   const Json *node = FindJsonNode(settings_json_, path);
-  if (!node)
-    return default_value;
-  if (node->is_number_integer())
-    return static_cast<int>(node->get<int64_t>());
-  if (node->is_number_unsigned()) {
-    auto value = node->get<size_t>();
-    if (value <= static_cast<size_t>(std::numeric_limits<int>::max()))
-      return static_cast<int>(value);
-  }
-  if (node->is_string()) {
-    try {
-      return std::stoi(node->get<std::string>());
-    } catch (...) {
-      return default_value;
-    }
-  }
-  return default_value;
+  return GetSettingValueImpl<int>(node, default_value);
 }
 
 /**
@@ -1614,36 +1773,21 @@ AMConfigManager::GetSettingString(const Path &path,
   if (status.first != EC::Success)
     return default_value;
   const Json *node = FindJsonNode(settings_json_, path);
-  if (!node)
-    return default_value;
-  if (node->is_string())
-    return node->get<std::string>();
-  if (node->is_number_integer())
-    return std::to_string(node->get<int64_t>());
-  if (node->is_number_unsigned())
-    return std::to_string(node->get<size_t>());
-  if (node->is_boolean())
-    return node->get<bool>() ? "true" : "false";
-  if (node->is_number_float()) {
-    std::ostringstream oss;
-    oss << node->get<double>();
-    return oss.str();
-  }
-  return default_value;
+  return GetSettingValueImpl<std::string>(node, default_value);
 }
 
 /**
- * @brief Query a UserPaths entry by name.
+ * @brief Query a UserVars entry by name.
  */
-bool AMConfigManager::GetUserPath(const std::string &name,
-                                  std::string *value) const {
-  auto status = EnsureInitialized("GetUserPath");
+bool AMConfigManager::GetUserVar(const std::string &name,
+                                 std::string *value) const {
+  auto status = EnsureInitialized("GetUserVar");
   if (status.first != EC::Success)
     return false;
   if (name.empty())
     return false;
 
-  const Json *node = FindJsonNode(settings_json_, {"UserPaths", name});
+  const Json *node = FindJsonNode(settings_json_, {"UserVars", name});
   if (!node)
     return false;
 
@@ -1651,23 +1795,23 @@ bool AMConfigManager::GetUserPath(const std::string &name,
     if (node->is_string()) {
       *value = node->get<std::string>();
     } else {
-      *value = GetSettingString({"UserPaths", name}, "");
+      *value = GetSettingString({"UserVars", name}, "");
     }
   }
   return true;
 }
 
 /**
- * @brief List all UserPaths entries.
+ * @brief List all UserVars entries.
  */
 std::vector<std::pair<std::string, std::string>>
-AMConfigManager::ListUserPaths() const {
+AMConfigManager::ListUserVars() const {
   std::vector<std::pair<std::string, std::string>> entries;
-  auto status = EnsureInitialized("ListUserPaths");
+  auto status = EnsureInitialized("ListUserVars");
   if (status.first != EC::Success)
     return entries;
 
-  const Json *node = FindJsonNode(settings_json_, {"UserPaths"});
+  const Json *node = FindJsonNode(settings_json_, {"UserVars"});
   if (!node || !node->is_object())
     return entries;
 
@@ -1677,24 +1821,24 @@ AMConfigManager::ListUserPaths() const {
       entries.emplace_back(it.key(), it.value().get<std::string>());
     } else {
       entries.emplace_back(it.key(),
-                           GetSettingString({"UserPaths", it.key()}, ""));
+                           GetSettingString({"UserVars", it.key()}, ""));
     }
   }
   return entries;
 }
 
 /**
- * @brief Set a UserPaths entry and optionally persist to settings.
+ * @brief Set a UserVars entry and optionally persist to settings.
  */
-ECM AMConfigManager::SetUserPath(const std::string &name,
-                                 const std::string &value, bool dump_now) {
-  auto status = EnsureInitialized("SetUserPath");
+ECM AMConfigManager::SetUserVar(const std::string &name,
+                                const std::string &value, bool dump_now) {
+  auto status = EnsureInitialized("SetUserVar");
   if (status.first != EC::Success)
     return status;
   if (name.empty())
     return Err(EC::InvalidArg, "Empty variable name");
 
-  SetKey(settings_json_, {"UserPaths", name}, value);
+  SetKey(settings_json_, {"UserVars", name}, value);
   if (dump_now) {
     return Dump();
   }
@@ -1716,19 +1860,19 @@ std::vector<std::string> AMConfigManager::ListHostnames() const {
 }
 
 /**
- * @brief Remove a UserPaths entry and optionally persist to settings.
+ * @brief Remove a UserVars entry and optionally persist to settings.
  */
-ECM AMConfigManager::RemoveUserPath(const std::string &name, bool dump_now) {
-  auto status = EnsureInitialized("RemoveUserPath");
+ECM AMConfigManager::RemoveUserVar(const std::string &name, bool dump_now) {
+  auto status = EnsureInitialized("RemoveUserVar");
   if (status.first != EC::Success)
     return status;
   if (name.empty())
     return Err(EC::InvalidArg, "Empty variable name");
 
   Json *node = nullptr;
-  if (settings_json_.contains("UserPaths") &&
-      settings_json_["UserPaths"].is_object()) {
-    node = &settings_json_["UserPaths"];
+  if (settings_json_.contains("UserVars") &&
+      settings_json_["UserVars"].is_object()) {
+    node = &settings_json_["UserVars"];
   }
 
   if (!node || !node->contains(name)) {
@@ -1756,15 +1900,22 @@ ECM AMConfigManager::Src() const {
   if (status.first != EC::Success)
     return status;
 
-  const std::string config_label = "[Config]";
+  const std::string config_label = AMStr::BBCEscape("[Config]");
   const std::string settings_label = "[Setting]";
   size_t width = std::max(config_label.size(), settings_label.size());
 
   std::string config_path = config_path_.string();
   std::string settings_path = settings_path_.string();
 
-  std::string styled_config = Format(config_path, "dir");
-  std::string styled_settings = Format(settings_path, "dir");
+  auto [config_rcm, config_info] = AMFS::stat(config_path, false);
+  const PathInfo *config_ptr =
+      config_rcm.first == EC::Success ? &config_info : nullptr;
+  auto [settings_rcm, settings_info] = AMFS::stat(settings_path, false);
+  const PathInfo *settings_ptr =
+      settings_rcm.first == EC::Success ? &settings_info : nullptr;
+
+  std::string styled_config = Format(config_path, "dir", config_ptr);
+  std::string styled_settings = Format(settings_path, "dir", settings_ptr);
 
   {
     std::ostringstream line;
@@ -1803,22 +1954,32 @@ ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
   }
 
   ECM last = Ok();
+  std::string msg;
   for (const auto &nickname : unique_targets) {
     if (nickname.empty()) {
-      last = Err(EC::InvalidArg, "empty delete target");
+      msg = "Invalid Empty Hostname";
+      last = Err(EC::InvalidArg, msg);
+      AMPromptManager::Instance().ErrorFormat(AM_ENUM_NAME(EC::InvalidArg),
+                                              msg);
       continue;
     }
     if (!HostExists(nickname)) {
-      PrintLine(Format("Host not found: " + nickname, "error"));
-      last = Err(EC::HostConfigNotFound, "host not found");
+      // EC::HostNotFound
+      msg = AMStr::amfmt("Host {} not found in config", nickname);
+      AMPromptManager::Instance().ErrorFormat(AM_ENUM_NAME(EC::InvalidArg),
+                                              msg);
+      last = Err(EC::HostConfigNotFound, msg);
       continue;
     }
 
     auto rm_status = RemoveHost(nickname);
     if (rm_status.first != EC::Success) {
       last = rm_status;
+      AMPromptManager::Instance().ErrorFormat(AM_ENUM_NAME(rm_status.first),
+                                              rm_status.second);
       continue;
     }
+
     PrintLine(Format("Deleted host: " + nickname, "success"));
   }
 

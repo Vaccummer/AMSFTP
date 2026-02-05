@@ -80,9 +80,9 @@ private:
                     bool has_storage) const;
 
   /**
-   * @brief Format a variable key/value using the UserPaths style.
+   * @brief Format a variable key/value using the UserVars style.
    */
-  std::string FormatUserPathText(const std::string &text) const;
+  std::string FormatUserVarText(const std::string &text) const;
 
   /**
    * @brief Print a formatted query line.
