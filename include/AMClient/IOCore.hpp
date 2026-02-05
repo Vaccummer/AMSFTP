@@ -2033,8 +2033,9 @@ public:
              const std::shared_ptr<ClientMaintainer> &hostm,
              const std::string &src_host = "", const std::string &dst_host = "",
              bool clone = false, bool overwrite = false, bool mkdir = true,
-             bool ignore_sepcial_file = true, amf interrupt_flag = nullptr,
-             int timeout_ms = -1, int64_t start_time = -1) {
+             bool ignore_sepcial_file = true, bool resume = false,
+             amf interrupt_flag = nullptr, int timeout_ms = -1,
+             int64_t start_time = -1) {
     start_time = start_time == -1 ? am_ms() : start_time;
     WRV result = {};
     TASKS tasks = {};
@@ -2059,10 +2060,19 @@ public:
       return {rc3, tasks};
     }
 
+    if (resume && src_stat.type == PathType::DIR) {
+      return {ECM{EC::NotAFile,
+                  AMStr::amfmt("Resume requires src to be a file: {}", src)},
+              tasks};
+    }
+
     // 检查是否为 src_file -> dst_file 的传输
     auto dstf = dst;
     auto srcf = src;
     bool is_dst_file = false;
+    if (resume) {
+      is_dst_file = true;
+    }
     if (clone) {
       is_dst_file = true;
     } else if (src_stat.type == PathType::FILE) {
@@ -2082,6 +2092,35 @@ public:
                                            "ignore_sepcial_file is true: {}",
                                            srcf)},
             {}};
+      }
+
+      if (resume) {
+        if (src_stat.type != PathType::FILE) {
+          return {ECM{EC::NotAFile,
+                      AMStr::amfmt("Resume requires src to be a file: {}",
+                                   srcf)},
+                  tasks};
+        }
+        auto [dst_stat_rcm, dst_info] = dst_client->stat(
+            dstf, false, interrupt_flag, timeout_ms, start_time);
+        if (dst_stat_rcm.first != EC::Success) {
+          return {ECM{EC::PathNotExist,
+                      AMStr::amfmt("Resume requires dst to exist: {}", dstf)},
+                  tasks};
+        }
+        if (dst_info.type != PathType::FILE) {
+          return {ECM{EC::NotAFile,
+                      AMStr::amfmt(
+                          "Resume requires dst to be a file: {}", dstf)},
+                  tasks};
+        }
+        if (dst_info.size > src_stat.size) {
+          return {ECM{EC::InvalidArg,
+                      AMStr::amfmt("Resume requires dst size <= src size: "
+                                   "{} > {}",
+                                   dst_info.size, src_stat.size)},
+                  tasks};
+        }
       }
 
       if (!is_dst_file) {
@@ -2116,7 +2155,7 @@ public:
                         AMStr::amfmt(
                             "Dst already exists and is a directory: {}", dstf)),
                     tasks};
-          } else if (!overwrite) {
+          } else if (!overwrite && !resume) {
             return {ECM{EC::PathAlreadyExists,
                         AMStr::amfmt("Dst already exists: {}", dstf)},
                     tasks};
@@ -2126,6 +2165,18 @@ public:
 
       tasks.emplace_back(srcf, dstf, src_host, dst_host, src_stat.size,
                          src_stat.type);
+      if (resume) {
+        auto [dst_stat_rcm, dst_info] = dst_client->stat(
+            dstf, false, interrupt_flag, timeout_ms, start_time);
+        if (dst_stat_rcm.first != EC::Success ||
+            dst_info.type != PathType::FILE) {
+          return {ECM{EC::InvalidArg,
+                      AMStr::amfmt(
+                          "Resume requires dst to be a file: {}", dstf)},
+                  tasks};
+        }
+        tasks.back().transferred = dst_info.size;
+      }
       return {ECM(EC::Success, ""), tasks};
     }
 

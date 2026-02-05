@@ -130,6 +130,12 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
   commands.tree_cmd->add_flag("-s,--special", args.tree.include_special,
                               "Include special files");
 
+  commands.realpath_cmd =
+      app.add_subcommand("realpath", "Print absolute path");
+  commands.realpath_cmd
+      ->add_option("path", args.realpath.path, "Path to resolve")
+      ->expected(0, 1);
+
   commands.cp_cmd = app.add_subcommand("cp", "Transfer files/directories");
   commands.cp_cmd->add_option("src", args.cp.srcs, "Source paths")
       ->expected(1, -1);
@@ -143,6 +149,8 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
                             "Clone instead of transfer");
   commands.cp_cmd->add_flag("-s,--special", args.cp.include_special,
                             "Include special files");
+  commands.cp_cmd->add_flag("-r,--resume", args.cp.resume,
+                            "Resume from existing destination file");
   commands.cp_cmd->add_flag("-q,--quiet", args.cp.quiet,
                             "Suppress transfer output");
 
@@ -227,6 +235,8 @@ void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
   commands.task_cache_add->add_flag("-s,--special",
                                     args.task_cache_add.include_special,
                                     "Include special files");
+  commands.task_cache_add->add_flag("-r,--resume", args.task_cache_add.resume,
+                                    "Resume from existing destination file");
 
   commands.task_cache_rm =
       commands.task_cache_cmd->add_subcommand("rm", "Remove cached sets");
@@ -593,12 +603,18 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.tree_cmd->parsed()) {
-    result.rcm = filesystem.tree(args.tree.path, args.tree.depth,
-                                 args.tree.only_dir, !args.tree.include_special,
-                                 flag);
+    result.rcm =
+        filesystem.tree(args.tree.path, args.tree.depth, args.tree.only_dir,
+                        !args.tree.include_special, flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (cli_commands.realpath_cmd->parsed()) {
+    result.rcm = filesystem.realpath(args.realpath.path, flag);
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
@@ -634,6 +650,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     transfer_set.overwrite = args.cp.overwrite;
     transfer_set.clone = args.cp.clone;
     transfer_set.ignore_special_file = !args.cp.include_special;
+    transfer_set.resume = args.cp.resume;
 
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
     result.rcm =
@@ -662,6 +679,9 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
 
   if (cli_commands.cd_cmd->parsed()) {
     result.rcm = filesystem.cd(args.cd.path, flag);
+    if (result.enter_interactive != true && result.rcm.first == EC::Success) {
+      result.enter_interactive = true;
+    }
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
@@ -756,6 +776,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     transfer_set.overwrite = args.task_cache_add.overwrite;
     transfer_set.clone = args.task_cache_add.clone;
     transfer_set.ignore_special_file = !args.task_cache_add.include_special;
+    transfer_set.resume = args.task_cache_add.resume;
 
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
     size_t index = transfer_manager.SubmitTransferSet(transfer_set);

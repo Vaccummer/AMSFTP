@@ -864,6 +864,85 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
   return {EC::Success, ""};
 }
 
+/**
+ * @brief Resolve a path using client workdir/home and print the absolute path.
+ * @param path Input path supporting "host@path" or a plain path; empty uses the
+ *        current client workdir.
+ * @param interrupt_flag Optional interrupt flag shared with other operations.
+ * @param timeout_ms Reserved for interface compatibility (unused).
+ * @return ECM status describing success or failure.
+ */
+AMFileSystem::ECM AMFileSystem::realpath(const std::string &path,
+                                         amf interrupt_flag, int timeout_ms) {
+  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+  if (flag && flag->check()) {
+    return {EC::Terminate, "Interrupted by user"};
+  }
+  (void)timeout_ms;
+
+  std::string input = AMStr::TrimWhitespaceCopy(path);
+  std::string nickname;
+  std::string resolved_path;
+  std::shared_ptr<BaseClient> client_ptr;
+  ECM rcm = {EC::Success, ""};
+
+  if (input.empty()) {
+    client_ptr =
+        client_manager_.CLIENT ? client_manager_.CLIENT : client_manager_.LOCAL;
+    if (!client_ptr) {
+      return {EC::ClientNotFound, "Client not found"};
+    }
+    nickname = client_ptr->GetNickname();
+  } else if (!input.empty() && input.back() == '@' && input.front() != '@') {
+    nickname = input.substr(0, input.size() - 1);
+    std::string lowered = AMStr::lowercase(nickname);
+    if (nickname.empty() || lowered == "local") {
+      nickname = "local";
+      client_ptr = client_manager_.LOCAL;
+    } else {
+      auto cfg = config_manager_.GetClientConfig(nickname, false);
+      if (cfg.first.first != EC::Success) {
+        return {EC::HostConfigNotFound,
+                AMStr::amfmt("Config not found: {}", nickname)};
+      }
+      client_ptr = client_manager_.Clients().GetHost(nickname);
+      if (!client_ptr) {
+        return {EC::ClientNotFound,
+                AMStr::amfmt("Client not established: {}", nickname)};
+      }
+    }
+  } else {
+    std::tie(nickname, resolved_path, client_ptr, rcm) =
+        client_manager_.ParsePath(input);
+    if (rcm.first != EC::Success || !client_ptr) {
+      if (rcm.first == EC::HostConfigNotFound) {
+        return {EC::HostConfigNotFound,
+                AMStr::amfmt("Config not found: {}", nickname)};
+      }
+      if (rcm.first == EC::ClientNotFound) {
+        return {EC::ClientNotFound,
+                AMStr::amfmt("Client not established: {}", nickname)};
+      }
+      if (!client_ptr && rcm.first == EC::Success) {
+        return {EC::ClientNotFound, "Client not found"};
+      }
+      return rcm;
+    }
+  }
+
+  std::string cwd = GetOrInitWorkdir(client_ptr);
+  if (resolved_path.empty()) {
+    prompt_manager_.Print(cwd);
+    return {EC::Success, ""};
+  }
+  const std::string home =
+      AMPathStr::UnifyPathSep(client_ptr->GetHomeDir(), "/");
+  const std::string abs_path =
+      AMFS::abspath(resolved_path, true, home, cwd, "/");
+  prompt_manager_.Print(abs_path);
+  return {EC::Success, ""};
+}
+
 AMFileSystem::ECM AMFileSystem::mkdir(const std::string &path,
                                       amf interrupt_flag, int timeout_ms) {
   std::vector<std::string> targets = SplitTargets(path);

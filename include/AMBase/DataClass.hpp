@@ -628,6 +628,10 @@ public:
    * @brief Whether to ignore special files during traversal.
    */
   bool ignore_special_file = true;
+  /**
+   * @brief Whether to resume from an existing destination breakpoint.
+   */
+  bool resume = false;
 
   /**
    * @brief Construct an empty transfer set with default flags.
@@ -638,9 +642,10 @@ public:
    * @brief Construct a transfer set from sources, destination, and flags.
    */
   UserTransferSet(std::vector<std::string> srcs, std::string dst, bool mkdir,
-                  bool overwrite, bool ignore_special_file)
+                  bool overwrite, bool ignore_special_file, bool resume = false)
       : srcs(std::move(srcs)), dst(std::move(dst)), mkdir(mkdir),
-        overwrite(overwrite), ignore_special_file(ignore_special_file) {}
+        overwrite(overwrite), ignore_special_file(ignore_special_file),
+        resume(resume) {}
 };
 
 struct ErrorCBInfo {
@@ -1283,8 +1288,8 @@ inline bool PrintTree(
             return false;
           }
           const bool last = (i + 1 == dir_count && file_count == 0);
-          const std::string connector = last ? "└─ " : "├─ ";
-          const std::string next_prefix = prefix + (last ? "   " : "│  ");
+          const std::string connector = last ? "└── " : "├── ";
+          const std::string next_prefix = prefix + (last ? "    " : "│   ");
           const std::string child_name = children[i];
           const std::string styled =
               style_path ? style_path(dir_info, child_name) : child_name;
@@ -1303,7 +1308,7 @@ inline bool PrintTree(
           }
           const bool last = (i + 1 == file_count);
           (void)last;
-          const std::string connector = (i + 1 == file_count) ? "└─ " : "├─ ";
+          const std::string connector = (i + 1 == file_count) ? "└── " : "├── ";
           const auto &info = files[i];
           const std::string styled =
               style_path ? style_path(info, info.name) : info.name;

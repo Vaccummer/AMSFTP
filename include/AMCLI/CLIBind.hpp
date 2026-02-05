@@ -119,6 +119,13 @@ struct TreeArgs {
 };
 
 /**
+ * @brief CLI argument container for realpath.
+ */
+struct RealpathArgs {
+  std::string path;
+};
+
+/**
  * @brief CLI argument container for cp (transfer).
  */
 struct CpArgs {
@@ -128,6 +135,7 @@ struct CpArgs {
   bool no_mkdir = false;
   bool clone = false;
   bool include_special = false;
+  bool resume = false;
   bool quiet = false;
 };
 
@@ -231,6 +239,7 @@ struct TaskCacheAddArgs {
   bool no_mkdir = false;
   bool clone = false;
   bool include_special = false;
+  bool resume = false;
 };
 
 /**
@@ -296,6 +305,7 @@ struct CliArgsPool {
   RmArgs rm;
   WalkArgs walk;
   TreeArgs tree;
+  RealpathArgs realpath;
   CpArgs cp;
   SftpArgs sftp;
   FtpArgs ftp;
@@ -342,6 +352,7 @@ struct CliCommands {
   CLI::App *rm_cmd = nullptr;
   CLI::App *walk_cmd = nullptr;
   CLI::App *tree_cmd = nullptr;
+  CLI::App *realpath_cmd = nullptr;
   CLI::App *cp_cmd = nullptr;
   CLI::App *sftp_cmd = nullptr;
   CLI::App *ftp_cmd = nullptr;

@@ -7,6 +7,10 @@
 #include <stdio.h>
 #include <string.h>
 
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
 #include "Isocline/common.h"
 #include "Isocline/term.h"
 #include "Isocline/tty.h"
@@ -645,6 +649,47 @@ static void edit_delete_all(ic_env_t* env, editor_t* eb) {
   edit_refresh(env,eb);
 }
 
+/** Copy the provided UTF-8 input to the system clipboard when supported. */
+static bool edit_copy_input_to_clipboard(const char* input) {
+  if (input == NULL) return false;
+#if defined(_WIN32)
+  int wide_len = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, input, -1, NULL, 0);
+  if (wide_len <= 0) {
+    wide_len = MultiByteToWideChar(CP_UTF8, 0, input, -1, NULL, 0);
+  }
+  if (wide_len <= 0) return false;
+  const size_t bytes = (size_t)wide_len * sizeof(wchar_t);
+  HGLOBAL handle = GlobalAlloc(GMEM_MOVEABLE, bytes);
+  if (handle == NULL) return false;
+  wchar_t* buffer = (wchar_t*)GlobalLock(handle);
+  if (buffer == NULL) {
+    GlobalFree(handle);
+    return false;
+  }
+  int converted = MultiByteToWideChar(CP_UTF8, 0, input, -1, buffer, wide_len);
+  GlobalUnlock(handle);
+  if (converted <= 0) {
+    GlobalFree(handle);
+    return false;
+  }
+  if (!OpenClipboard(NULL)) {
+    GlobalFree(handle);
+    return false;
+  }
+  EmptyClipboard();
+  if (SetClipboardData(CF_UNICODETEXT, handle) == NULL) {
+    CloseClipboard();
+    GlobalFree(handle);
+    return false;
+  }
+  CloseClipboard();
+  return true;
+#else
+  ic_unused(input);
+  return false;
+#endif
+}
+
 static void edit_delete_to_end_of_line(ic_env_t* env, editor_t* eb) { 
   ssize_t start = sbuf_find_line_start(eb->input,eb->pos);
   if (start < 0) return;
@@ -938,10 +983,6 @@ static char* edit_line( ic_env_t* env, const char* prompt_text )
         break;
       }
     } 
-    else if (c == KEY_CTRL_D) {
-      if (eb.pos == 0 && editor_pos_is_at_end(&eb)) break; // ctrl+D on empty quits with NULL
-      edit_delete_char(env,&eb);     // otherwise it is like delete
-    } 
     else if (c == KEY_CTRL_C || c == KEY_EVENT_STOP) {
       break; // ctrl+C or STOP event quits with NULL
     }
@@ -1071,8 +1112,11 @@ static char* edit_line( ic_env_t* env, const char* prompt_text )
       case KEY_CTRL_T:
         edit_swap_char(env,&eb);
         break;
-      case KEY_CTRL_X:
+      case KEY_CTRL_D:
         edit_delete_all(env,&eb);
+        break;
+      case KEY_CTRL_X:
+        edit_copy_input_to_clipboard(sbuf_string(eb->input));
         break;
 
       // Editing
@@ -1111,7 +1155,7 @@ static char* edit_line( ic_env_t* env, const char* prompt_text )
   
   // save result
   char* res; 
-  if ((c == KEY_CTRL_D && sbuf_len(eb.input) == 0) || c == KEY_CTRL_C || c == KEY_EVENT_STOP) {
+  if (c == KEY_CTRL_C || c == KEY_EVENT_STOP) {
     res = NULL;
   }
   else if (!tty_is_utf8(env->tty)) {
