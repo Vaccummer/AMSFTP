@@ -485,10 +485,9 @@ inline std::string UnifyPathSep(std::string path, std::string sep = "") {
 }
 
 inline bool IsAbs(const std::string &path, const std::string &sep = "") {
-  return std::regex_search(
-      UnifyPathSep(path, sep),
-      std::regex(
-          R"am(^(?:[a-zA-Z]:$)|(?:~$)|(?:[A-Za-z]:[/\\]|/|[\\/]{2}|~[\\/]))am"));
+  static std::regex pattern_f =
+      std::regex(R"am(^(?:[A-Za-z]:$|~$|[A-Za-z]:[/\\]|/|[\\/]{2}|~[\\/]))am");
+  return std::regex_search(UnifyPathSep(path, sep), pattern_f);
 }
 
 inline std::string extname(std::string path) {
@@ -636,10 +635,9 @@ inline std::string NormalizeJoinedPath(const std::string &path,
       normalized.size() >= 3 &&
       ((normalized[0] >= 'A' && normalized[0] <= 'Z') ||
        (normalized[0] >= 'a' && normalized[0] <= 'z')) &&
-      normalized[1] == ':' &&
-      (normalized[2] == '/' || normalized[2] == '\\');
-  const bool unc_root = normalized.rfind("//", 0) == 0 ||
-                        normalized.rfind("\\\\", 0) == 0;
+      normalized[1] == ':' && (normalized[2] == '/' || normalized[2] == '\\');
+  const bool unc_root =
+      normalized.rfind("//", 0) == 0 || normalized.rfind("\\\\", 0) == 0;
 
   std::vector<std::string> parts = split(normalized);
   if (parts.empty()) {
@@ -653,10 +651,9 @@ inline std::string NormalizeJoinedPath(const std::string &path,
            part[1] == ':';
   };
 
-  const bool absolute =
-      unc_root || drive_root_anchor ||
-      (!parts.empty() &&
-       (parts.front() == "/" || is_drive_part(parts.front())));
+  const bool absolute = unc_root || drive_root_anchor ||
+                        (!parts.empty() && (parts.front() == "/" ||
+                                            is_drive_part(parts.front())));
 
   size_t anchor_min = 0;
   if (unc_root) {
@@ -1091,8 +1088,7 @@ inline std::string abspath(const std::string &path,
     result += part + new_sep;
   }
   if (!result.empty()) {
-    if (result.size() == 1 &&
-        (result[0] == '/' || result[0] == '\\')) {
+    if (result.size() == 1 && (result[0] == '/' || result[0] == '\\')) {
       return result;
     }
     result.pop_back();

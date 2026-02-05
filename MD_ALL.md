@@ -1170,3 +1170,26 @@ path style is defined in [style.Path1]  [style.File2]  the one has greater numbe
 [style.PathExtraStyle] is extra style when path met certain demand(default is empty string, means no user extra style)
 
 [style.File2] define files have certain extension name styles, overide style in [style.Path1]
+# Improves
+
+## tab行为修改
+
+complete menu 现在不再自动触发, 而是使用tab触发
+
+在complete menu 状态, 取消tab和shift tab切换页面功能
+
+切换页面功能移到左右方向键
+
+tab键在complete menu状态用于补全左右选项的相同前缀
+
+# Tree 优化
+
+tree新增一个onlydir参数, 默认为false, 为true时只打印目录(绑定option为-o,--onlydir)
+
+# Interupt Bug
+
+当ctrl-c中断一个指令后, 再调用一次这个指令,再中断, 程序就会退出
+
+AMCliSignalMonitor的信号捕获的优先级好像不是很高, 信号似乎会泄露到其他地方
+
+tree指令无法及时相应中断

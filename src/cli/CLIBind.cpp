@@ -125,6 +125,8 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
       ->expected(1, 1);
   commands.tree_cmd->add_option("-d,--depth", args.tree.depth,
                                 "Max depth (default: -1)");
+  commands.tree_cmd->add_flag("-o,--onlydir", args.tree.only_dir,
+                              "Only show directories");
   commands.tree_cmd->add_flag("-s,--special", args.tree.include_special,
                               "Include special files");
 
@@ -193,12 +195,12 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
 void BindCompleteCommands(CLI::App &app, CliArgsPool &args,
                           CliCommands &commands) {
   (void)args;
-  commands.complete_cmd = app.add_subcommand("complete", "Completion utilities");
+  commands.complete_cmd =
+      app.add_subcommand("complete", "Completion utilities");
   commands.complete_cache_cmd =
       commands.complete_cmd->add_subcommand("cache", "Manage completion cache");
-  commands.complete_cache_clear =
-      commands.complete_cache_cmd->add_subcommand("clear",
-                                                  "Clear completion cache");
+  commands.complete_cache_clear = commands.complete_cache_cmd->add_subcommand(
+      "clear", "Clear completion cache");
 }
 
 /**
@@ -592,7 +594,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
 
   if (cli_commands.tree_cmd->parsed()) {
     result.rcm = filesystem.tree(args.tree.path, args.tree.depth,
-                                 !args.tree.include_special, flag);
+                                 args.tree.only_dir, !args.tree.include_special,
+                                 flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }

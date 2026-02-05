@@ -920,8 +920,8 @@ static char* edit_line( ic_env_t* env, const char* prompt_text )
 
     // if the user tries to move into a hint with left-cursor or end, we complete it first
     if ((c == KEY_RIGHT || c == KEY_END) && had_hint) {
-      edit_generate_completions(env, &eb, true);
-      c = KEY_NONE;      
+      edit_complete_longest_prefix(env, &eb);
+      c = KEY_NONE;
     }
 
     // Operations that may return
@@ -970,7 +970,6 @@ static char* edit_line( ic_env_t* env, const char* prompt_text )
 
       // completion, history, help, undo
       case KEY_TAB:
-      case WITH_ALT('?'):
         edit_generate_completions(env,&eb,false);
         break;
       case KEY_CTRL_R:
@@ -1004,12 +1003,7 @@ static char* edit_line( ic_env_t* env, const char* prompt_text )
         break;
       case KEY_RIGHT:
       case KEY_CTRL_F:
-        if (eb.pos == sbuf_len(eb.input)) { 
-          edit_generate_completions( env, &eb, false );
-        }
-        else {
-          edit_cursor_right(env,&eb);
-        }
+        edit_cursor_right(env,&eb);
         break;
       case KEY_UP:
         edit_cursor_row_up(env,&eb);
@@ -1033,12 +1027,7 @@ static char* edit_line( ic_env_t* env, const char* prompt_text )
       case KEY_CTRL_RIGHT:
       case WITH_SHIFT(KEY_RIGHT):      
       case WITH_ALT('f'):
-        if (eb.pos == sbuf_len(eb.input)) { 
-          edit_generate_completions( env, &eb, false );
-        }
-        else {
-          edit_cursor_next_word(env,&eb);
-        }
+        edit_cursor_next_word(env,&eb);
         break;      
       case KEY_CTRL_HOME:
       case WITH_SHIFT(KEY_HOME):      

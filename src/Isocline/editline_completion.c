@@ -219,33 +219,33 @@ again:
   }
 
   // process commands
-  if (c == KEY_TAB) {
-    if (page_count > 0) {
-      ssize_t sel_offset = (selected >= page_start && selected < page_end ? selected - page_start : -1);
-      if (page + 1 < page_count) {
-        page++;
-      }
-      else {
-        page = 0;
-      }
-      if (sel_offset >= 0) {
-        ssize_t new_start = page * items_per_page;
-        ssize_t new_end = new_start + items_per_page;
-        if (new_end > count) new_end = count;
-        if (sel_offset >= new_end - new_start) sel_offset = new_end - new_start - 1;
-        selected = (sel_offset >= 0 ? new_start + sel_offset : -1);
-      }
+  if (c == KEY_TAB || c == KEY_SHIFT_TAB) {
+    if (edit_complete_longest_prefix(env, eb)) {
+      c = KEY_EVENT_COMPLETE;
     }
-    goto again;
+    else {
+      term_beep(env->term);
+      goto again;
+    }
   }
-  else if (c == KEY_SHIFT_TAB) {
+  else if (c == KEY_LEFT || c == KEY_RIGHT) {
     if (page_count > 0) {
       ssize_t sel_offset = (selected >= page_start && selected < page_end ? selected - page_start : -1);
-      if (page > 0) {
-        page--;
+      if (c == KEY_RIGHT) {
+        if (page + 1 < page_count) {
+          page++;
+        }
+        else {
+          page = 0;
+        }
       }
       else {
-        page = page_count - 1;
+        if (page > 0) {
+          page--;
+        }
+        else {
+          page = page_count - 1;
+        }
       }
       if (sel_offset >= 0) {
         ssize_t new_start = page * items_per_page;
@@ -269,23 +269,6 @@ again:
       else {
         selected--;
         if (selected < page_start) selected = page_end - 1;
-      }
-      goto again;
-    }
-  }
-  else if (c == KEY_LEFT || c == KEY_RIGHT) {
-    if (columns > 1 && selected >= page_start && selected < page_end) {
-      ssize_t offset = selected - page_start;
-      ssize_t col = offset / rows_page;
-      if (c == KEY_LEFT) {
-        if (col > 0) {
-          selected -= rows_page;
-        }
-      }
-      else {
-        if (offset + rows_page < items_on_page) {
-          selected += rows_page;
-        }
       }
       goto again;
     }

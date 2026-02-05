@@ -1244,26 +1244,34 @@ inline void SortTreeNodes(TreeNodeMap *nodes) {
 
 /**
  * @brief Print a tree using a style callback and line printer.
+ * @return True if the tree is fully printed; false if stopped early.
  */
-inline void PrintTree(
+inline bool PrintTree(
     const std::string &root, const TreeNodeMap &nodes,
     const std::function<std::string(const PathInfo &, const std::string &)>
         &style_path,
     const std::function<void(const std::string &)> &print_line,
-    const JoinPairFn &join_pair) {
+    const JoinPairFn &join_pair,
+    const std::function<bool()> &should_stop = {}) {
   if (!print_line) {
-    return;
+    return true;
   }
   PathInfo dir_info;
   dir_info.type = PathType::DIR;
   const std::string root_line = style_path ? style_path(dir_info, root) : root;
+  if (should_stop && should_stop()) {
+    return false;
+  }
   print_line(root_line);
+  if (should_stop && should_stop()) {
+    return false;
+  }
 
-  std::function<void(const std::string &, const std::string &)> walk_tree =
+  std::function<bool(const std::string &, const std::string &)> walk_tree =
       [&](const std::string &dir_path, const std::string &prefix) {
         auto it = nodes.find(dir_path);
         if (it == nodes.end()) {
-          return;
+          return true;
         }
         const auto &children = it->second.children;
         const auto &files = it->second.files;
@@ -1271,6 +1279,9 @@ inline void PrintTree(
         const size_t file_count = files.size();
 
         for (size_t i = 0; i < dir_count; ++i) {
+          if (should_stop && should_stop()) {
+            return false;
+          }
           const bool last = (i + 1 == dir_count && file_count == 0);
           const std::string connector = last ? "`-- " : "|-- ";
           const std::string next_prefix = prefix + (last ? "    " : "|   ");
@@ -1280,11 +1291,16 @@ inline void PrintTree(
           print_line(prefix + connector + styled);
           if (join_pair) {
             const std::string child_path = join_pair(dir_path, child_name);
-            walk_tree(child_path, next_prefix);
+            if (!walk_tree(child_path, next_prefix)) {
+              return false;
+            }
           }
         }
 
         for (size_t i = 0; i < file_count; ++i) {
+          if (should_stop && should_stop()) {
+            return false;
+          }
           const bool last = (i + 1 == file_count);
           (void)last;
           const std::string connector = (i + 1 == file_count) ? "`-- " : "|-- ";
@@ -1293,8 +1309,9 @@ inline void PrintTree(
               style_path ? style_path(info, info.name) : info.name;
           print_line(prefix + connector + styled);
         }
+        return true;
       };
 
-  walk_tree(root, "");
+  return walk_tree(root, "");
 }
 } // namespace AMTree

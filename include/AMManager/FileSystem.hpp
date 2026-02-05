@@ -107,10 +107,10 @@ public:
   ECM walk(const std::string &path, bool only_file = false,
            bool only_dir = false, bool ignore_special_file = true,
            amf interrupt_flag = nullptr, int timeout_ms = -1);
-  /** Print a directory tree like unix tree using walk output. */
+  /** Print a directory tree like unix tree using walk output and filters. */
   ECM tree(const std::string &path, int max_depth = -1,
-           bool ignore_special_file = true, amf interrupt_flag = nullptr,
-           int timeout_ms = -1);
+           bool only_dir = false, bool ignore_special_file = true,
+           amf interrupt_flag = nullptr, int timeout_ms = -1);
   /** Print the absolute path resolved by client home/workdir. */
   ECM realpath(const std::string &path, amf interrupt_flag = nullptr,
                int timeout_ms = -1);

@@ -185,6 +185,7 @@ public:
 
     for (const auto &entry : fs::directory_iterator(p, ec)) {
       if (interrupt_flag && interrupt_flag->check()) {
+        print("Interrupted_ls");
         return {ECM{EC::Terminate, "Listdir interrupted by user"}, result};
       }
       if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
@@ -269,11 +270,19 @@ public:
     std::string pathf = AMPathStr::join(parts);
     std::vector<PathInfo> files_info = {};
     bool empty_dir = true;
+    if (interrupt_flag && interrupt_flag->check()) {
+      print("Interrupted_in_walk");
+      return;
+    }
     auto [error, info] = listdir(pathf, interrupt_flag, timeout_ms, start_time);
     if (error.first != EC::Success) {
       return;
     }
     for (const auto &entry : info) {
+      if (interrupt_flag && interrupt_flag->check()) {
+        print("Interrupted_wk");
+        return;
+      }
       empty_dir = false;
       if (entry.type == PathType::DIR) {
         auto n_parts = parts;
@@ -288,7 +297,7 @@ public:
     if (!empty_dir && files_info.empty()) {
       return;
     }
-    result.push_back(std::make_pair(parts, files_info));
+    result.emplace_back(parts, files_info);
   }
 
   inline std::pair<ECM, WRD> walk(const std::string &path, int max_depth,
@@ -310,6 +319,10 @@ public:
 
     _walk({path}, result, 0, max_depth, ignore_sepcial_file, interrupt_flag,
           timeout_ms, start_time);
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
+              result};
+    }
 
     return {{EC::Success, ""}, result};
   }
@@ -564,8 +577,8 @@ private:
   /**
    * @brief Resolve a Windows path with the real on-disk casing.
    * @param path Input path that may have incorrect character casing.
-   * @param follow_links Whether to follow reparse points (true) or keep the link
-   * itself (false).
+   * @param follow_links Whether to follow reparse points (true) or keep the
+   * link itself (false).
    * @return Resolved path with real casing, or empty when resolution fails.
    */
   std::string ResolveRealCasePath_(const std::string &path,
@@ -578,10 +591,10 @@ private:
     if (!follow_links) {
       flags |= FILE_FLAG_OPEN_REPARSE_POINT;
     }
-    HANDLE handle = CreateFileW(wpath.c_str(), FILE_READ_ATTRIBUTES,
-                                FILE_SHARE_READ | FILE_SHARE_WRITE |
-                                    FILE_SHARE_DELETE,
-                                nullptr, OPEN_EXISTING, flags, nullptr);
+    HANDLE handle =
+        CreateFileW(wpath.c_str(), FILE_READ_ATTRIBUTES,
+                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    nullptr, OPEN_EXISTING, flags, nullptr);
     if (handle == INVALID_HANDLE_VALUE) {
       return "";
     }

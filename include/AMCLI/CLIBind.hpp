@@ -114,6 +114,7 @@ struct WalkArgs {
 struct TreeArgs {
   std::string path;
   int depth = -1;
+  bool only_dir = false;
   bool include_special = false;
 };
 
