@@ -428,14 +428,14 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path,
   }
 
   std::string abs_path = BuildPath(client, resolved_path);
+
   auto [rcm2, info] = client.client->stat(abs_path, false, flag);
   if (rcm2.first != EC::Success) {
     PrintCliError_(prompt_manager_, "cd", rcm2.second);
     return rcm2;
   }
   if (!info.path.empty()) {
-    const std::string resolved =
-        AMPathStr::UnifyPathSep(info.path, "/");
+    const std::string resolved = AMPathStr::UnifyPathSep(info.path, "/");
     if (!resolved.empty() && AMPathStr::IsAbs(resolved, "/")) {
       abs_path = resolved;
     }
@@ -803,9 +803,9 @@ AMFileSystem::ECM AMFileSystem::walk(const std::string &path, bool only_file,
   return {EC::Success, ""};
 }
 
-/** Print a directory tree using the client walk output. */
+/** Print a directory tree using the client walk output with optional filters. */
 AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
-                                     bool ignore_special_file,
+                                     bool only_dir, bool ignore_special_file,
                                      amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   auto [nickname, resolved_path, client_ptr, rcm] =
@@ -826,6 +826,15 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
   if (rcm2.first != EC::Success) {
     return rcm2;
   }
+  if (flag && flag->check()) {
+    return {EC::Terminate, "Interrupted by user"};
+  }
+
+  if (only_dir) {
+    for (auto &entry : structure) {
+      entry.second.clear();
+    }
+  }
 
   AMTree::TreeNodeMap nodes;
   const auto join_parts = [](const std::vector<std::string> &parts) {
@@ -835,14 +844,23 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
     return AMPathStr::join(a, b);
   };
   AMTree::BuildTreeNodes(abs_path, structure, &nodes, join_parts, join_pair);
+  if (flag && flag->check()) {
+    return {EC::Terminate, "Interrupted by user"};
+  }
   AMTree::SortTreeNodes(&nodes);
-  AMTree::PrintTree(
+  if (flag && flag->check()) {
+    return {EC::Terminate, "Interrupted by user"};
+  }
+  const bool printed = AMTree::PrintTree(
       abs_path, nodes,
       [this](const PathInfo &info, const std::string &name) {
         return StylePath(info, name);
       },
       [this](const std::string &line) { prompt_manager_.Print(line); },
-      join_pair);
+      join_pair, [flag]() { return flag && flag->check(); });
+  if (!printed && flag && flag->check()) {
+    return {EC::Terminate, "Interrupted by user"};
+  }
   return {EC::Success, ""};
 }
 
@@ -1122,8 +1140,7 @@ std::string AMFileSystem::FormatTimestamp(double value) const {
 std::string AMFileSystem::FormatStatOutput(const PathInfo &info) const {
   const size_t width = 12;
   std::ostringstream out;
-  const std::string display_path =
-      AMPathStr::UnifyPathSep(info.path, "/");
+  const std::string display_path = AMPathStr::UnifyPathSep(info.path, "/");
   out << display_path << "\n\n";
 
   out << std::left << std::setw(static_cast<int>(width)) << "type" << " : "
@@ -1180,19 +1197,17 @@ std::string AMFileSystem::StylePath(const PathInfo &info,
     }
   }
 
-  const bool is_hidden =
-      !info.name.empty() && info.name.front() == '.';
-  const bool is_nowrite =
-      info.mode_int != 0 && (info.mode_int & 0222) == 0;
+  const bool is_hidden = !info.name.empty() && info.name.front() == '.';
+  const bool is_nowrite = info.mode_int != 0 && (info.mode_int & 0222) == 0;
 
   auto resolve_extra = [&](const std::string &key) -> std::string {
-    std::string tag = NormalizeStyleTag_(config_manager_.GetSettingString(
-        {"style", "PathExtraStyle", key}, ""));
+    std::string tag = NormalizeStyleTag_(
+        config_manager_.GetSettingString({"style", "PathExtraStyle", key}, ""));
     if (!tag.empty()) {
       return tag;
     }
-    return NormalizeStyleTag_(config_manager_.GetSettingString(
-        {"style", "PathSpecific3", key}, ""));
+    return NormalizeStyleTag_(
+        config_manager_.GetSettingString({"style", "PathSpecific3", key}, ""));
   };
 
   if (is_hidden) {

@@ -54,7 +54,8 @@ AMPromptManager::AMPromptManager() {
     ic_async_stop();
   };
   hook.is_silenced = true;
-  hook.priority = 0;
+  hook.priority = 100;
+  hook.consume = true;
   AMCliSignalMonitor::Instance().RegisterHook("PROMPT", hook);
 
   AMCliSignalMonitor::SignalHook core_hook;
@@ -64,7 +65,8 @@ AMPromptManager::AMPromptManager() {
     ic_async_stop();
   };
   core_hook.is_silenced = true;
-  core_hook.priority = 0;
+  core_hook.priority = 100;
+  core_hook.consume = true;
   AMCliSignalMonitor::Instance().RegisterHook("COREPROMPT", core_hook);
 }
 

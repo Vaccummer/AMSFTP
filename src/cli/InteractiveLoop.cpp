@@ -1,8 +1,8 @@
 #include "AMCLI/InteractiveLoop.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/Path.hpp"
-#include "AMCLI/Completer.hpp"
 #include "AMCLI/CommandPreprocess.hpp"
+#include "AMCLI/Completer.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Transfer.hpp"
 #include <algorithm>
@@ -236,8 +236,7 @@ bool TryConvertTaggedTextToAnsi_(const std::string &tagged,
  * @param extracted Output string with the inner content only.
  * @return True if extraction succeeded; false otherwise.
  */
-bool TryExtractTaggedText_(const std::string &tagged,
-                           std::string *extracted) {
+bool TryExtractTaggedText_(const std::string &tagged, std::string *extracted) {
   if (!extracted) {
     return false;
   }
@@ -422,8 +421,7 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
   const std::string styled_elapsed = ApplyStyleFromConfig_(
       config_manager, {"style", "SystemInfo", "info"}, elapsed);
   const std::string styled_status = ApplyStyleFromConfig_(
-      config_manager,
-      {"style", "SystemInfo", ok ? "success" : "error"},
+      config_manager, {"style", "SystemInfo", ok ? "success" : "error"},
       status);
   std::string line1 = AMStr::amfmt("{}  {}  {}", state.cached_prefix,
                                    styled_elapsed, styled_status);
@@ -574,16 +572,16 @@ int RunInteractiveLoop(const std::string &app_name,
     std::string line;
     AMCliSignalMonitor &monitor = AMCliSignalMonitor::Instance();
     (void)config_manager.ConfigBackupIfNeeded();
-    monitor.SilenceHook("GLOBAL");
-    monitor.ResumeHook("COREPROMPT");
     if (amgif) {
       amgif->reset();
     }
+    // monitor.SilenceHook("GLOBAL");
+    monitor.ResumeHook("COREPROMPT");
 
     bool canceled = prompt.PromptCore(prompt_line, &line);
 
     monitor.SilenceHook("COREPROMPT");
-    monitor.ResumeHook("GLOBAL");
+    // monitor.ResumeHook("GLOBAL");
 
     if (amgif && amgif->iskill()) {
       break;
@@ -699,6 +697,9 @@ int RunInteractiveLoop(const std::string &app_name,
     DispatchResult dispatch =
         DispatchCliCommands(cli_commands, managers, pre_result.async, true);
     const auto exec_end = std::chrono::steady_clock::now();
+    if (amgif) {
+      amgif->reset();
+    }
     UpdatePromptState_(prompt_state, dispatch.rcm, exec_end - input_confirmed);
   }
 

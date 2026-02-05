@@ -1807,7 +1807,7 @@ private:
         continue;
       }
 
-      (void)ic_request_completion_menu_async();
+      /* Completion menu is opened explicitly via Tab; do not auto-open here. */
     }
   }
 

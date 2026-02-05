@@ -4,6 +4,9 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#ifndef _WIN32
+#include <signal.h>
+#endif
 #include <functional>
 #include <mutex>
 #include <string>
@@ -30,7 +33,10 @@ public:
     amf interrupt_flag;
     SignalCallback callback;
     bool is_silenced = false;
+    /** Higher values run first. */
     int priority = 0;
+    /** Stop propagation to lower-priority hooks when set. */
+    bool consume = false;
   };
 
   /**
@@ -50,9 +56,20 @@ public:
    * @brief Install signal handlers for SIGINT/SIGTERM.
    */
   void InstallHandlers() {
+#ifdef _WIN32
     std::signal(SIGINT, AMCliSignalMonitor::SignalHandler);
 #ifdef SIGTERM
     std::signal(SIGTERM, AMCliSignalMonitor::SignalHandler);
+#endif
+#else
+    struct sigaction sa {};
+    sa.sa_handler = AMCliSignalMonitor::SignalHandler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_RESTART;
+    sigaction(SIGINT, &sa, nullptr);
+#ifdef SIGTERM
+    sigaction(SIGTERM, &sa, nullptr);
+#endif
 #endif
   }
 
@@ -96,6 +113,7 @@ public:
     if (name == "GLOBAL") {
       hooks_[name].interrupt_flag = amgif;
       hooks_[name].priority = 0;
+      hooks_[name].consume = false;
     }
     return true;
   }
@@ -171,6 +189,7 @@ private:
     global.callback = {};
     global.is_silenced = false;
     global.priority = 0;
+    global.consume = false;
     hooks_["GLOBAL"] = std::move(global);
   }
 
@@ -182,6 +201,9 @@ private:
       int signum = ConsumeSignal_();
       if (signum != 0) {
         last_handled_signal_.store(signum);
+#ifdef _WIN32
+        InstallHandlers();
+#endif
         std::vector<SignalHook> hooks;
         {
           std::lock_guard<std::mutex> lock(hooks_mtx_);
@@ -192,7 +214,7 @@ private:
         }
         std::sort(hooks.begin(), hooks.end(),
                   [](const SignalHook &a, const SignalHook &b) {
-                    return a.priority < b.priority;
+                    return a.priority > b.priority;
                   });
         for (const auto &hook : hooks) {
           if (hook.is_silenced) {
@@ -203,6 +225,10 @@ private:
           }
           if (hook.interrupt_flag) {
             hook.interrupt_flag->set(true);
+            print("Signal Triggered: {}", signum);
+          }
+          if (hook.consume) {
+            break;
           }
         }
 #ifdef SIGTERM
