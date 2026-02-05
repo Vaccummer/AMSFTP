@@ -584,6 +584,13 @@ inline std::string TrimWhitespaceCopy(const std::string &input) {
   return input.substr(start, end - start);
 }
 
+/**
+ * @brief Escape a string for bbcode output using a raw tag wrapper.
+ */
+inline std::string BBCEscape(const std::string &text) {
+  return "[!r]" + text + "[/r]";
+}
+
 inline std::string Strip(std::string path) {
   const std::string trim_chars = " \t\n\r\"'";
 

@@ -59,7 +59,8 @@ public:
   ECM Dump();
 
   [[nodiscard]] std::string Format(const std::string &ori_str,
-                                   const std::string &style_name) const;
+                                   const std::string &style_name,
+                                   const PathInfo *path_info = nullptr) const;
 
   [[nodiscard]] ECM List() const;
   [[nodiscard]] ECM ListName() const;
@@ -84,7 +85,7 @@ public:
   /** Return the project root directory path. */
   [[nodiscard]] std::filesystem::path ProjectRoot() const { return root_dir_; }
   [[nodiscard]] std::pair<ECM, ClientConfig>
-  GetClientConfig(const std::string &nickname, bool use_compression = false);
+  GetClientConfig(const std::string &nickname);
   [[nodiscard]] int GetSettingInt(const Path &path, int default_value) const;
   /**
    * @brief Resolve network timeout from settings with a default fallback.
@@ -94,23 +95,23 @@ public:
   [[nodiscard]] std::string
   GetSettingString(const Path &path, const std::string &default_value) const;
   /**
-   * @brief Query a UserPaths entry by name.
+   * @brief Query a UserVars entry by name.
    */
-  bool GetUserPath(const std::string &name, std::string *value) const;
+  bool GetUserVar(const std::string &name, std::string *value) const;
   /**
-   * @brief List all UserPaths entries.
+   * @brief List all UserVars entries.
    */
   [[nodiscard]] std::vector<std::pair<std::string, std::string>>
-  ListUserPaths() const;
+  ListUserVars() const;
   /**
-   * @brief Set a UserPaths entry and optionally persist to settings.
+   * @brief Set a UserVars entry and optionally persist to settings.
    */
-  ECM SetUserPath(const std::string &name, const std::string &value,
-                  bool dump_now = true);
+  ECM SetUserVar(const std::string &name, const std::string &value,
+                 bool dump_now = true);
   /**
-   * @brief Remove a UserPaths entry and optionally persist to settings.
+   * @brief Remove a UserVars entry and optionally persist to settings.
    */
-  ECM RemoveUserPath(const std::string &name, bool dump_now = true);
+  ECM RemoveUserVar(const std::string &name, bool dump_now = true);
   [[nodiscard]] ECM Src() const;
   [[nodiscard]] ECM Delete(const std::string &targets);
   /**
@@ -224,11 +225,6 @@ private:
   ECM PromptAddFields(std::string *nickname, HostEntry *entry);
   ECM PromptModifyFields(const std::string &nickname, HostEntry *entry);
   bool ParsePositiveInt(const std::string &input, int64_t *value) const;
-
-  /**
-   * @brief Ensure history file is loaded and ready for access.
-   */
-  ECM EnsureHistoryLoaded_();
 
   /**
    * @brief Persist in-memory history JSON to disk.

@@ -38,37 +38,6 @@ UniqueTargetsKeepOrder_(const std::vector<std::string> &targets) {
   return unique;
 }
 
-/**
- * @brief Normalize a configured style into a bbcode opening tag.
- */
-static std::string NormalizeStyleTag_(const std::string &raw) {
-  std::string trimmed = AMStr::TrimWhitespaceCopy(raw);
-  if (trimmed.empty()) {
-    return "";
-  }
-  if (trimmed.find("[/") != std::string::npos) {
-    return "";
-  }
-  if (trimmed.front() != '[') {
-    trimmed.insert(trimmed.begin(), '[');
-  }
-  if (trimmed.back() != ']') {
-    trimmed.push_back(']');
-  }
-  return trimmed;
-}
-
-/**
- * @brief Wrap text with a bbcode tag when provided.
- */
-static std::string ApplyStyleTag_(const std::string &tag,
-                                  const std::string &text) {
-  if (tag.empty()) {
-    return text;
-  }
-  return tag + text + "[/]";
-}
-
 AMFileSystem &AMFileSystem::Instance(AMClientManager &client_manager,
                                      AMConfigManager &config_manager) {
   static AMFileSystem instance(client_manager, config_manager);
@@ -112,7 +81,7 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
       return result;
     }
 
-    auto cfg = config_manager_.GetClientConfig(nickname, false);
+    auto cfg = config_manager_.GetClientConfig(nickname);
     if (cfg.first.first != EC::Success) {
       if (out_error) {
         *out_error = {EC::HostConfigNotFound,
@@ -900,7 +869,7 @@ AMFileSystem::ECM AMFileSystem::realpath(const std::string &path,
       nickname = "local";
       client_ptr = client_manager_.LOCAL;
     } else {
-      auto cfg = config_manager_.GetClientConfig(nickname, false);
+      auto cfg = config_manager_.GetClientConfig(nickname);
       if (cfg.first.first != EC::Success) {
         return {EC::HostConfigNotFound,
                 AMStr::amfmt("Config not found: {}", nickname)};
@@ -1252,56 +1221,7 @@ std::string AMFileSystem::StylePath(const PathInfo &info,
   }
 
   const std::string display_path = AMPathStr::UnifyPathSep(path, "/");
-  std::string main_tag = NormalizeStyleTag_(
-      config_manager_.GetSettingString({"style", "Path1", base_key}, ""));
-
-  if (info.type == PathType::FILE) {
-    const std::string ext = AMPathStr::extname(info.name);
-    if (!ext.empty()) {
-      std::string ext_tag = NormalizeStyleTag_(
-          config_manager_.GetSettingString({"style", "File2", ext}, ""));
-      if (!ext_tag.empty()) {
-        main_tag = ext_tag;
-      }
-    }
-  }
-
-  std::string styled = display_path;
-  if (!main_tag.empty()) {
-    styled = ApplyStyleTag_(main_tag, display_path);
-  } else {
-    const std::string legacy = config_manager_.Format(display_path, base_key);
-    if (!legacy.empty()) {
-      styled = legacy;
-    }
-  }
-
-  const bool is_hidden = !info.name.empty() && info.name.front() == '.';
-  const bool is_nowrite = info.mode_int != 0 && (info.mode_int & 0222) == 0;
-
-  auto resolve_extra = [&](const std::string &key) -> std::string {
-    std::string tag = NormalizeStyleTag_(
-        config_manager_.GetSettingString({"style", "PathExtraStyle", key}, ""));
-    if (!tag.empty()) {
-      return tag;
-    }
-    return NormalizeStyleTag_(
-        config_manager_.GetSettingString({"style", "PathSpecific3", key}, ""));
-  };
-
-  if (is_hidden) {
-    const std::string extra_tag = resolve_extra("hidden");
-    if (!extra_tag.empty()) {
-      styled = ApplyStyleTag_(extra_tag, styled);
-    }
-  }
-  if (is_nowrite) {
-    const std::string extra_tag = resolve_extra("nowrite");
-    if (!extra_tag.empty()) {
-      styled = ApplyStyleTag_(extra_tag, styled);
-    }
-  }
-  return styled;
+  return config_manager_.Format(display_path, base_key, &info);
 }
 
 // bool AMFileSystem::PromptYesNo(const std::string &prompt,

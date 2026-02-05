@@ -45,7 +45,7 @@ std::vector<std::string> AMVarManager::ListNames() const {
     }
   }
 
-  auto stored = config_manager_.ListUserPaths();
+  auto stored = config_manager_.ListUserVars();
   names.reserve(names.size() + stored.size());
   for (const auto &item : stored) {
     if (seen.insert(item.first).second) {
@@ -81,7 +81,7 @@ bool AMVarManager::Resolve(const std::string &name, std::string *value,
   }
 
   std::string builtin_value;
-  if (config_manager_.GetUserPath(name, &builtin_value)) {
+  if (config_manager_.GetUserVar(name, &builtin_value)) {
     if (value) {
       *value = builtin_value;
     }
@@ -95,10 +95,10 @@ bool AMVarManager::Resolve(const std::string &name, std::string *value,
 }
 
 /**
- * @brief Format a variable key/value using the UserPaths style.
+ * @brief Format a variable key/value using the UserVars style.
  */
-std::string AMVarManager::FormatUserPathText(const std::string &text) const {
-  return config_manager_.Format(text, "UserPaths");
+std::string AMVarManager::FormatUserVarText(const std::string &text) const {
+  return config_manager_.Format(text, "UserVars");
 }
 
 /**
@@ -107,8 +107,8 @@ std::string AMVarManager::FormatUserPathText(const std::string &text) const {
 void AMVarManager::PrintQueryLine(const std::string &scope,
                                   const std::string &name,
                                   const std::string &value) const {
-  const std::string styled_key = FormatUserPathText("$" + name);
-  const std::string styled_value = FormatUserPathText(value);
+  const std::string styled_key = FormatUserVarText("$" + name);
+  const std::string styled_value = FormatUserVarText(value);
   prompt_manager_.Print(
       AMStr::amfmt("[{}] {} = {}", scope, styled_key, styled_value));
 }
@@ -118,8 +118,8 @@ void AMVarManager::PrintQueryLine(const std::string &scope,
  */
 void AMVarManager::PrintEntry(const std::string &name,
                               const std::string &value) const {
-  const std::string styled_key = FormatUserPathText("$" + name);
-  const std::string styled_value = FormatUserPathText(value);
+  const std::string styled_key = FormatUserVarText("$" + name);
+  const std::string styled_value = FormatUserVarText(value);
   prompt_manager_.Print(AMStr::amfmt("{} = {}", styled_key, styled_value));
 }
 
@@ -179,7 +179,7 @@ AMVarManager::ECM AMVarManager::Query(const std::vector<std::string> &names) {
 
     if (source == VarSource::Memory) {
       std::string storage_value;
-      if (config_manager_.GetUserPath(name, &storage_value)) {
+      if (config_manager_.GetUserVar(name, &storage_value)) {
         PrintQueryLine("InStorage", name, storage_value);
         found = true;
         any_found = true;
@@ -213,7 +213,7 @@ AMVarManager::ECM AMVarManager::Delete(const std::vector<std::string> &names) {
       std::lock_guard<std::mutex> lock(mutex_);
       has_memory = memory_vars_.find(name) != memory_vars_.end();
     }
-    has_storage = config_manager_.GetUserPath(name, nullptr);
+    has_storage = config_manager_.GetUserVar(name, nullptr);
 
     if (!has_memory && !has_storage) {
       LogNotFound(name);
@@ -236,7 +236,7 @@ AMVarManager::ECM AMVarManager::Delete(const std::vector<std::string> &names) {
       memory_vars_.erase(name);
     }
     if (has_storage) {
-      ECM rcm = config_manager_.RemoveUserPath(name, false);
+      ECM rcm = config_manager_.RemoveUserVar(name, false);
       if (rcm.first != EC::Success) {
         last_error = rcm;
       } else {
@@ -280,7 +280,7 @@ AMVarManager::ECM AMVarManager::Enumerate() {
   prompt_manager_.Print("[InStorage]");
   {
     std::vector<std::pair<std::string, std::string>> entries =
-        config_manager_.ListUserPaths();
+        config_manager_.ListUserVars();
     std::sort(entries.begin(), entries.end(),
               [](const auto &a, const auto &b) { return a.first < b.first; });
     for (const auto &item : entries) {
@@ -318,7 +318,7 @@ AMVarManager::ECM AMVarManager::SetMemoryVar(const std::string &name,
   }
 
   const bool has_memory = HasMemoryVar(name);
-  const bool has_builtin = config_manager_.GetUserPath(name, nullptr);
+  const bool has_builtin = config_manager_.GetUserVar(name, nullptr);
   if (confirm_overwrite && (has_memory || has_builtin)) {
     VarSource source = has_memory ? VarSource::Memory : VarSource::Builtin;
     ECM confirm = ConfirmOverwrite(name, source);
@@ -345,7 +345,7 @@ AMVarManager::ECM AMVarManager::SetPersistentVar(const std::string &name,
   }
 
   const bool has_memory = HasMemoryVar(name);
-  const bool has_builtin = config_manager_.GetUserPath(name, nullptr);
+  const bool has_builtin = config_manager_.GetUserVar(name, nullptr);
   if (confirm_overwrite && (has_memory || has_builtin)) {
     VarSource source = has_memory ? VarSource::Memory : VarSource::Builtin;
     ECM confirm = ConfirmOverwrite(name, source);
@@ -354,7 +354,7 @@ AMVarManager::ECM AMVarManager::SetPersistentVar(const std::string &name,
     }
   }
 
-  ECM rcm = config_manager_.SetUserPath(name, value, true);
+  ECM rcm = config_manager_.SetUserVar(name, value, true);
   if (rcm.first != EC::Success) {
     return rcm;
   }

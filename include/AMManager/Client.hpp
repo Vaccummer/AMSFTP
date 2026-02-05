@@ -480,7 +480,7 @@ public:
       return {"local", path, LOCAL, ECM{EC::Success, ""}};
     }
 
-    auto cfg = config_.GetClientConfig(prefix, false);
+    auto cfg = config_.GetClientConfig(prefix);
     if (cfg.first.first != EC::Success) {
       return {prefix, path, nullptr,
               ECM{EC::HostConfigNotFound, "Host config not found"}};
@@ -518,7 +518,7 @@ public:
       return {"local", path, LOCAL, ECM{EC::Success, ""}};
     }
 
-    auto cfg = config_.GetClientConfig(prefix, false);
+    auto cfg = config_.GetClientConfig(prefix);
     if (cfg.first.first != EC::Success) {
       return {prefix, path, nullptr,
               ECM{EC::HostConfigNotFound, "Host config not found"}};
