@@ -11,6 +11,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <regex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -42,8 +43,7 @@ public:
     std::string fingerprint_sha256;
   };
 
-  using KnownHostCallback =
-      std::function<ECM(AMConfigManager::KnownHostEntry)>;
+  using KnownHostCallback = std::function<ECM(AMConfigManager::KnownHostEntry)>;
 
   static AMConfigManager &Instance();
 
@@ -281,4 +281,5 @@ private:
 
   bool initialized_ = false;
   bool exit_hook_installed_ = false;
+  std::regex nickname_pattern = std::regex("^[A-Za-z0-9_]+$");
 };

@@ -1837,11 +1837,11 @@ ECM AMConfigManager::Rename(const std::string &old_nickname,
 
   if (!HostExists(old_nickname)) {
     PrintLine(Format("Host not found: " + old_nickname, "error"));
-    return Err(EC::HostConfigNotFound, "host not found");
+    return {EC::HostConfigNotFound, "host not found"};
   }
 
   std::string error;
-  std::regex pattern("^[A-Za-z0-9_]+$");
+  static std::regex pattern("^[A-Za-z0-9_]+$");
   if (new_nickname.empty() || !std::regex_match(new_nickname, pattern)) {
     return Err(
         EC::InvalidArg,

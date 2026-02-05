@@ -20,7 +20,8 @@ namespace {
  * @param input Current input text.
  * @param arg Pointer to the token analyzer instance.
  */
-void PromptHighlighter_(ic_highlight_env_t *henv, const char *input, void *arg) {
+void PromptHighlighter_(ic_highlight_env_t *henv, const char *input,
+                        void *arg) {
   if (!henv || !input || !arg) {
     return;
   }
@@ -31,6 +32,31 @@ void PromptHighlighter_(ic_highlight_env_t *henv, const char *input, void *arg) 
     return;
   }
   ic_highlight_formatted(henv, input, formatted.c_str());
+}
+
+/**
+ * @brief No-op highlighter for prompts that should not show syntax colors.
+ *
+ * @param henv Highlight environment provided by isocline.
+ * @param input Current input text.
+ * @param arg User-provided argument (unused).
+ */
+void PromptNoHighlight_(ic_highlight_env_t *henv, const char *input,
+                        void *arg) {
+  (void)henv;
+  (void)input;
+  (void)arg;
+}
+
+/**
+ * @brief No-op completer to silence completion during simple prompts.
+ *
+ * @param cenv Completion environment (unused).
+ * @param prefix Current input prefix (unused).
+ */
+void PromptNoComplete_(ic_completion_env_t *cenv, const char *prefix) {
+  (void)cenv;
+  (void)prefix;
 }
 } // namespace
 
@@ -46,6 +72,7 @@ AMPromptManager::AMPromptManager() {
   ic_enable_multiline(false);
   ic_set_history(nullptr, -1);
   ic_enable_history_duplicates(false);
+  ic_style_def("ic-prompt", "[#FFFFFF]");
 
   AMCliSignalMonitor::SignalHook hook;
   hook.interrupt_flag = nullptr;
@@ -119,7 +146,7 @@ bool AMPromptManager::PromptLine(const std::string &prompt, std::string *out,
 
   std::string display_prompt = prompt;
   if (show_default && !default_value.empty()) {
-    display_prompt = AMStr::amfmt("{}[{}] ", prompt, default_value);
+    display_prompt = AMStr::amfmt("{}[!e][{}][/e] ", prompt, default_value);
   }
 
   std::string placeholder_value;
@@ -274,11 +301,21 @@ bool AMPromptManager::Prompt(const std::string &prompt,
     return true;
   }
 
-  (void)placeholder;
-
   PromptHookGuard hook_guard(AMCliSignalMonitor::Instance());
 
-  char *line = ic_readline(prompt.c_str());
+  /** Guard to silence highlight during simple prompts. */
+  struct HighlightGuard {
+    bool previous = true;
+    explicit HighlightGuard(bool enable) { previous = ic_enable_highlight(enable); }
+    ~HighlightGuard() { ic_enable_highlight(previous); }
+  };
+
+  HighlightGuard highlight_guard(false);
+
+  const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
+  char *line = ic_readline_ex_with_initial(prompt.c_str(), &PromptNoComplete_,
+                                           nullptr, &PromptNoHighlight_, nullptr,
+                                           initial);
   if (!line) {
     return true;
   }
