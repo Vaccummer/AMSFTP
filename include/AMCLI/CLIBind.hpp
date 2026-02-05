@@ -50,7 +50,9 @@ struct ConfigRemoveArgs {
  * @brief CLI argument container for config set.
  */
 struct ConfigSetArgs {
-  std::vector<std::string> values;
+  std::string nickname;
+  std::string attrname;
+  std::string value;
 };
 
 /**

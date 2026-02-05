@@ -145,7 +145,8 @@ public:
   /**
    * @brief Parse and set a host field from config set command arguments.
    */
-  ECM SetHostValue(const std::vector<std::string> &args);
+  ECM SetHostValue(const std::string &nickname, const std::string &attrname,
+                   const std::string &value);
 
   /**
    * @brief Load history data from .AMSFTP_History.toml into memory.

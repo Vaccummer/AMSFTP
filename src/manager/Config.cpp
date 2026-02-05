@@ -1952,6 +1952,36 @@ ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
     return Err(EC::InvalidArg, "empty delete targets");
   }
 
+  std::vector<std::string> styled_targets;
+  styled_targets.reserve(unique_targets.size());
+  for (const auto &nickname : unique_targets) {
+    if (nickname.empty()) {
+      continue;
+    }
+    if (HostExists(nickname)) {
+      styled_targets.push_back(Format(nickname, "nickname"));
+    }
+  }
+  if (styled_targets.empty()) {
+    return Err(EC::HostConfigNotFound, "no valid hosts to delete");
+  }
+
+  {
+    bool canceled = false;
+    std::string target_line;
+    for (size_t i = 0; i < styled_targets.size(); ++i) {
+      if (i > 0) {
+        target_line += ", ";
+      }
+      target_line += styled_targets[i];
+    }
+    const std::string question =
+        AMStr::amfmt("Delete host(s): {} ? (y/N): ", target_line);
+    if (!prompt.PromptYesNo(question, &canceled) || canceled) {
+      return Err(EC::ConfigCanceled, "delete canceled");
+    }
+  }
+
   ECM last = Ok();
   std::string msg;
   bool changed = false;
@@ -2004,21 +2034,25 @@ ECM AMConfigManager::Rename(const std::string &old_nickname,
   if (old_nickname == new_nickname) {
     return Ok();
   }
-
+  std::string msg = "";
+  msg = AMStr::amfmt("Host {} not found", Format(old_nickname, "nickname"));
   if (!HostExists(old_nickname)) {
-    PrintLine(Format("Host not found: " + old_nickname, "error"));
+    prompt.ErrorFormat(AM_ENUM_NAME(EC::HostConfigNotFound), msg);
     return {EC::HostConfigNotFound, "host not found"};
   }
 
   std::string error;
-  static std::regex pattern("^[A-Za-z0-9_]+$");
-  if (new_nickname.empty() || !std::regex_match(new_nickname, pattern)) {
-    return Err(
-        EC::InvalidArg,
-        "new nickname must contain only letters, numbers, and underscore");
+  if (new_nickname.empty() ||
+      !std::regex_match(new_nickname, nickname_pattern)) {
+    msg = "new nickname must contain only letters, numbers, and "
+          "underscore";
+    prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+    return Err(EC::InvalidArg, msg);
   }
   if (HostExists(new_nickname)) {
-    return Err(EC::KeyAlreadyExists, "new nickname already exists");
+    msg = "new nickname already exists";
+    prompt.ErrorFormat(AM_ENUM_NAME(EC::KeyAlreadyExists), msg);
+    return Err(EC::KeyAlreadyExists, msg);
   }
 
   Json *host = FindHostJsonMutable(config_json_, old_nickname);
@@ -2026,9 +2060,9 @@ ECM AMConfigManager::Rename(const std::string &old_nickname,
     return Err(EC::ConfigInvalid, "invalid host entry");
   }
   (*host)["nickname"] = new_nickname;
+  PrintLine(AMStr::amfmt("Rename host: \x1b[9m{}\x1b[29m -> {}", old_nickname,
+                         Format(new_nickname, "nickname")));
 
-  PrintLine(Format("Renamed host: " + old_nickname + " -> " + new_nickname,
-                   "success"));
   return Ok();
 }
 
@@ -2050,7 +2084,14 @@ ECM AMConfigManager::Query(const std::vector<std::string> &targets) const {
 
   std::vector<std::string> unique_targets = UniqueTargetsKeepOrder(targets);
   if (unique_targets.empty()) {
-    return Err(EC::InvalidArg, "empty query targets");
+    auto &client_manager =
+        AMClientManager::Instance(const_cast<AMConfigManager &>(*this));
+    std::string current =
+        client_manager.CLIENT ? client_manager.CLIENT->GetNickname() : "local";
+    if (current.empty()) {
+      current = "local";
+    }
+    unique_targets.push_back(current);
   }
 
   auto hosts = CollectHosts();
@@ -2058,12 +2099,15 @@ ECM AMConfigManager::Query(const std::vector<std::string> &targets) const {
   for (const auto &nickname : unique_targets) {
     if (nickname.empty()) {
       last = Err(EC::InvalidArg, "empty query target");
+      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), "Empty query target");
       continue;
     }
     auto it = hosts.find(nickname);
     if (it == hosts.end()) {
-      PrintLine(Format("Host not found: " + nickname, "error"));
-      last = Err(EC::HostConfigNotFound, "host not found");
+      std::string msg = AMStr::amfmt("Host {} not found in config",
+                                     Format(nickname, "nickname"));
+      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      last = Err(EC::HostConfigNotFound, msg);
       continue;
     }
     auto rcm = PrintHost(nickname, it->second);
@@ -2088,7 +2132,7 @@ ECM AMConfigManager::Add() {
 
   bool canceled = false;
   if (!prompt.PromptYesNo("Save host? (y/N): ", &canceled) || canceled) {
-    PrintLine("Add canceled.");
+    PrintLine("Canceled\n");
     return Err(EC::ConfigCanceled, "add canceled");
   }
 
@@ -2098,7 +2142,7 @@ ECM AMConfigManager::Add() {
       return up_status;
   }
 
-  PrintLine(Format("Added host: " + nickname, "success"));
+  PrintLine(AMStr::amfmt("✅ Add new host {}", Format(nickname, "nickname")));
   return Ok();
 }
 
@@ -2108,7 +2152,7 @@ ECM AMConfigManager::Modify(const std::string &nickname) {
     return status;
 
   if (!HostExists(nickname)) {
-    PrintLine(Format("Host not found: " + nickname, "error"));
+    PrintLine(AMStr::amfmt("Host not found: {}", Format(nickname, "nickname")));
     return Err(EC::HostConfigNotFound, "host not found");
   }
 
@@ -2130,6 +2174,105 @@ ECM AMConfigManager::Modify(const std::string &nickname) {
   }
 
   PrintLine(Format("Modified host: " + nickname, "success"));
+  return Ok();
+}
+
+/**
+ * @brief Parse and set a host field from config set command arguments.
+ */
+ECM AMConfigManager::SetHostValue(const std::string &nickname,
+                                  const std::string &attrname,
+                                  const std::string &value_str) {
+  auto status = EnsureInitialized("SetHostValue");
+  if (status.first != EC::Success) {
+    prompt.ErrorFormat(AM_ENUM_NAME(status.first), status.second);
+    return status;
+  }
+  std::string field = ToLowerCopy(attrname);
+
+  if (nickname.empty()) {
+    prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), "empty nickname");
+    return Err(EC::InvalidArg, "empty nickname");
+  }
+  if (!HostExists(nickname)) {
+    std::string msg = AMStr::amfmt("Host {} not found in config",
+                                   Format(nickname, "nickname"));
+    prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+    return Err(EC::HostConfigNotFound, "host not found");
+  }
+
+  const std::vector<std::string> allowed_fields = {
+      "hostname",    "username",  "port",      "password", "protocol",
+      "buffer_size", "trash_dir", "login_dir", "keyfile",  "compression"};
+  if (std::find(allowed_fields.begin(), allowed_fields.end(), field) ==
+      allowed_fields.end()) {
+    std::string msg = "unsupported property name";
+    prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+    return Err(EC::InvalidArg, msg);
+  }
+
+  Value value;
+  if (field == "port") {
+    int64_t port = 0;
+    if (!ParsePositiveInt(value_str, &port)) {
+      std::string msg = "invalid port value";
+      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      return Err(EC::InvalidArg, msg);
+    }
+    value = port;
+  } else if (field == "buffer_size") {
+    try {
+      int64_t parsed = std::stoll(value_str);
+      if (parsed == 0 || parsed < -1) {
+        std::string msg = "invalid buffer_size value";
+        prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+        return Err(EC::InvalidArg, msg);
+      }
+      value = parsed;
+    } catch (...) {
+      std::string msg = "invalid buffer_size value";
+      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      return Err(EC::InvalidArg, msg);
+    }
+  } else if (field == "compression") {
+    bool parsed = false;
+    if (!ParseBoolToken(value_str, &parsed)) {
+      std::string msg = "invalid compression value";
+      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      return Err(EC::InvalidArg, msg);
+    }
+    value = parsed;
+  } else if (field == "protocol") {
+    std::string protocol = ToLowerCopy(value_str);
+    if (protocol != "sftp" && protocol != "ftp" && protocol != "local") {
+      std::string msg = "invalid protocol value";
+      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      return Err(EC::InvalidArg, msg);
+    }
+    value = protocol;
+  } else {
+    value = value_str;
+  }
+
+  std::string old_value;
+  auto hosts = CollectHosts();
+  auto host_it = hosts.find(nickname);
+  if (host_it != hosts.end()) {
+    auto field_it = host_it->second.fields.find(field);
+    if (field_it != host_it->second.fields.end()) {
+      old_value = ValueToString(field_it->second);
+    }
+  }
+
+  ECM set_status = SetHostField(nickname, field, value, true);
+  if (set_status.first != EC::Success) {
+    prompt.ErrorFormat(AM_ENUM_NAME(set_status.first), set_status.second);
+    return set_status;
+  }
+
+  const std::string new_value = ValueToString(value);
+  PrintLine(
+      AMStr::amfmt("{}.{}: {} -> {}", nickname, field, old_value, new_value));
   return Ok();
 }
 
@@ -2167,7 +2310,7 @@ void AMConfigManager::OnExit() {
     (void)AMConfigManager::Instance().Dump();
     AMConfigManager::Instance().CloseHandles();
   } catch (const std::exception &e) {
-    std::cerr << "❌ Config dump failed: " << e.what() << "\n";
+    std::cerr << "❌ Toml config files dump failed: " << e.what() << "\n";
     std::terminate();
   }
 }
@@ -2214,90 +2357,6 @@ ECM AMConfigManager::SetHostField(const std::string &nickname,
   if (dump_now) {
     return Dump();
   }
-  return Ok();
-}
-
-/**
- * @brief Parse and set a host field from config set command arguments.
- */
-ECM AMConfigManager::SetHostValue(const std::vector<std::string> &args) {
-  auto status = EnsureInitialized("SetHostValue");
-  if (status.first != EC::Success) {
-    return status;
-  }
-  if (args.size() != 3) {
-    return Err(EC::InvalidArg, "config set expects 3 arguments");
-  }
-  const std::string &nickname = args[0];
-  std::string field = ToLowerCopy(args[1]);
-  const std::string &value_str = args[2];
-
-  if (nickname.empty()) {
-    return Err(EC::InvalidArg, "empty nickname");
-  }
-  if (!HostExists(nickname)) {
-    return Err(EC::HostConfigNotFound, "host not found");
-  }
-
-  const std::vector<std::string> allowed_fields = {
-      "hostname",    "username",  "port",      "password", "protocol",
-      "buffer_size", "trash_dir", "login_dir", "keyfile",  "compression"};
-  if (std::find(allowed_fields.begin(), allowed_fields.end(), field) ==
-      allowed_fields.end()) {
-    return Err(EC::InvalidArg, "unsupported property name");
-  }
-
-  Value value;
-  if (field == "port") {
-    int64_t port = 0;
-    if (!ParsePositiveInt(value_str, &port)) {
-      return Err(EC::InvalidArg, "invalid port value");
-    }
-    value = port;
-  } else if (field == "buffer_size") {
-    try {
-      int64_t parsed = std::stoll(value_str);
-      if (parsed == 0 || parsed < -1) {
-        return Err(EC::InvalidArg, "invalid buffer_size value");
-      }
-      value = parsed;
-    } catch (...) {
-      return Err(EC::InvalidArg, "invalid buffer_size value");
-    }
-  } else if (field == "compression") {
-    bool parsed = false;
-    if (!ParseBoolToken(value_str, &parsed)) {
-      return Err(EC::InvalidArg, "invalid compression value");
-    }
-    value = parsed;
-  } else if (field == "protocol") {
-    std::string protocol = ToLowerCopy(value_str);
-    if (protocol != "sftp" && protocol != "ftp" && protocol != "local") {
-      return Err(EC::InvalidArg, "invalid protocol value");
-    }
-    value = protocol;
-  } else {
-    value = value_str;
-  }
-
-  std::string old_value;
-  auto hosts = CollectHosts();
-  auto host_it = hosts.find(nickname);
-  if (host_it != hosts.end()) {
-    auto field_it = host_it->second.fields.find(field);
-    if (field_it != host_it->second.fields.end()) {
-      old_value = ValueToString(field_it->second);
-    }
-  }
-
-  ECM set_status = SetHostField(nickname, field, value, true);
-  if (set_status.first != EC::Success) {
-    return set_status;
-  }
-
-  const std::string new_value = ValueToString(value);
-  PrintLine(
-      AMStr::amfmt("{}.{}: {} -> {}", nickname, field, old_value, new_value));
   return Ok();
 }
 
@@ -2772,8 +2831,7 @@ bool AMConfigManager::ValidateNickname(const std::string &nickname,
       *error = "Nickname cannot be empty.";
     return false;
   }
-  std::regex pattern("^[A-Za-z0-9_]+$");
-  if (!std::regex_match(nickname, pattern)) {
+  if (!std::regex_match(nickname, nickname_pattern)) {
     if (error)
       *error = "Nickname must contain only letters, numbers, and _ -.";
     return false;

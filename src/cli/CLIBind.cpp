@@ -48,8 +48,14 @@ void BindConfigCommands(CLI::App &app, CliArgsPool &args,
                    "Host nicknames to remove")
       ->expected(1, -1);
   commands.config_set
-      ->add_option("values", args.config_set.values, "nickname property value")
-      ->expected(3, 3);
+      ->add_option("nickname", args.config_set.nickname, "Host nickname")
+      ->required();
+  commands.config_set
+      ->add_option("attrname", args.config_set.attrname, "Host property name")
+      ->required();
+  commands.config_set
+      ->add_option("value", args.config_set.value, "Host property value")
+      ->required();
 }
 
 /**
@@ -643,7 +649,9 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
       return result;
     }
     if (cli_commands.config_set->parsed()) {
-      result.rcm = config_manager.SetHostValue(args.config_set.values);
+      result.rcm = config_manager.SetHostValue(
+          args.config_set.nickname, args.config_set.attrname,
+          args.config_set.value);
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
