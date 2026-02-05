@@ -44,15 +44,16 @@ static const char* help[] = {
   "","",
 
   "", "Deletion:",
-  "del,^d",     "delete the current character",
+  "del",        "delete the current character",
   "backsp,^h",  "delete the previous character",
+  "^d",         "clear the current input (undoable)",
   "^w",         "delete to preceding white space",
   "alt-backsp", "delete to the start of the current word",
   "alt-d",      "delete to the end of the current word",
   "^u",         "delete to the start of the current line",
   "^k",         "delete to the end of the current line",
   "esc",        "delete the current input, or done with empty input",
-  "^x",         "clear the current input (undoable)",
+  "^x",         "copy the current input to clipboard",
   "","",
 
   "", "Editing:",

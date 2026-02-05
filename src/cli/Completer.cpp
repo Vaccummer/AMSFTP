@@ -550,7 +550,8 @@ bool IsPathLikeText(const std::string &text) {
  * @brief Return true if a command expects path input at the given arg index.
  */
 bool IsPathArgumentCommand(const std::string &command_path, size_t arg_index) {
-  if (command_path == "cd" || command_path == "ls") {
+  if (command_path == "cd" || command_path == "ls" ||
+      command_path == "realpath") {
     return arg_index == 0;
   }
   if (command_path == "find" || command_path == "walk" ||

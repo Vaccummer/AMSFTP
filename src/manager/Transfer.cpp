@@ -503,6 +503,7 @@ void TaskInfoPrint::InspectTransferSets(
         AMStr::amfmt("overwrite = {}", set.overwrite ? "true" : "false"));
     prompt_.Print(AMStr::amfmt("no special = {}",
                                set.ignore_special_file ? "true" : "false"));
+    prompt_.Print(AMStr::amfmt("resume = {}", set.resume ? "true" : "false"));
     if (i + 1 < sets.size()) {
       prompt_.Print("");
     }
@@ -1419,7 +1420,8 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
       for (const auto &resolved_src : src_paths) {
         auto [rcm, tasks] = AMWorkManager::load_tasks(
             resolved_src, dst_path, hostm, src_host, dst_host, set.clone,
-            set.overwrite, set.mkdir, set.ignore_special_file, flag, 10000);
+            set.overwrite, set.mkdir, set.ignore_special_file, set.resume, flag,
+            10000);
         if (rcm.first != EC::Success) {
           prompt_.ErrorFormat("LoadTasks", rcm.second, false, 0, __func__);
           continue;
@@ -1513,6 +1515,21 @@ bool AMTransferManager::ParseEntryId_(const ID &entry_id, ID *task_id,
 ECM AMTransferManager::transfer(
     const std::vector<UserTransferSet> &transfer_sets, bool quiet,
     const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+  bool has_resume = false;
+  for (const auto &set : transfer_sets) {
+    if (!set.resume) {
+      continue;
+    }
+    has_resume = true;
+    if (set.srcs.size() != 1 || set.dst.empty()) {
+      return {EC::InvalidArg,
+              "Resume transfer requires exactly one src and one dst"};
+    }
+  }
+  if (has_resume && transfer_sets.size() != 1) {
+    return {EC::InvalidArg,
+            "Resume transfer requires a single transfer set"};
+  }
   auto flag =
       interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
   auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
@@ -1603,6 +1620,21 @@ ECM AMTransferManager::transfer(
 ECM AMTransferManager::transfer_async(
     const std::vector<UserTransferSet> &transfer_sets, bool quiet,
     const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+  bool has_resume = false;
+  for (const auto &set : transfer_sets) {
+    if (!set.resume) {
+      continue;
+    }
+    has_resume = true;
+    if (set.srcs.size() != 1 || set.dst.empty()) {
+      return {EC::InvalidArg,
+              "Resume transfer requires exactly one src and one dst"};
+    }
+  }
+  if (has_resume && transfer_sets.size() != 1) {
+    return {EC::InvalidArg,
+            "Resume transfer requires a single transfer set"};
+  }
   auto flag =
       interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
   auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);

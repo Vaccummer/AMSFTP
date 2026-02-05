@@ -324,22 +324,37 @@ public:
       std::vector<PathInfo> files = {};
     };
 
-    const fs::path root_norm = fs::path(path).lexically_normal();
-    const std::string root_key = root_norm.string();
+    const fs::path root_norm =
+        fs::path(info.path.empty() ? path : info.path).lexically_normal();
     const std::string root_display = path;
 
+    auto normalize_key = [&](const std::string &value) {
+      std::string key = fs::path(value).lexically_normal().string();
+#ifdef _WIN32
+      key = AMStr::lowercase(key);
+#endif
+      return key;
+    };
+
+    const std::string root_key = normalize_key(root_norm.string());
+
     std::unordered_map<std::string, DirState> dir_states;
+    std::unordered_map<std::string, std::string> dir_display;
     std::unordered_set<std::string> seen_dirs;
     std::vector<std::string> dir_order;
 
-    auto ensure_dir = [&](const std::string &dir_key) {
+    auto ensure_dir = [&](const std::string &dir_key,
+                          const std::string &display_path) {
       if (seen_dirs.insert(dir_key).second) {
         dir_order.push_back(dir_key);
+      }
+      if (dir_display.find(dir_key) == dir_display.end()) {
+        dir_display[dir_key] = display_path;
       }
       (void)dir_states[dir_key];
     };
 
-    ensure_dir(root_key);
+    ensure_dir(root_key, root_norm.string());
 
     std::error_code ec;
     fs::recursive_directory_iterator it(
@@ -359,25 +374,28 @@ public:
       }
 
       const fs::path entry_path = it->path();
-      const std::string entry_key = entry_path.lexically_normal().string();
-      const std::string parent_key =
-          entry_path.parent_path().lexically_normal().string();
-
-      dir_states[parent_key].has_entry = true;
-
       auto [stat_ecm, entry_info] = stat(entry_path.string(), false);
       if (stat_ecm.first != EC::Success) {
-        continue;
-      }
-
-      if (entry_info.type == PathType::DIR) {
-        ensure_dir(entry_key);
+        const std::string parent_key = normalize_key(
+            entry_path.parent_path().lexically_normal().string());
+        dir_states[parent_key].has_entry = true;
       } else {
-        if (static_cast<int>(entry_info.type) < 0 && ignore_sepcial_file) {
-          continue;
+        const std::string entry_display = entry_info.path;
+        const std::string entry_key = normalize_key(entry_display);
+        const std::string parent_key =
+            normalize_key(fs::path(entry_display).parent_path().string());
+
+        dir_states[parent_key].has_entry = true;
+
+        if (entry_info.type == PathType::DIR) {
+          ensure_dir(entry_key, entry_display);
+        } else {
+          if (static_cast<int>(entry_info.type) < 0 && ignore_sepcial_file) {
+            continue;
+          }
+          dir_states[parent_key].has_file = true;
+          dir_states[parent_key].files.push_back(std::move(entry_info));
         }
-        dir_states[parent_key].has_file = true;
-        dir_states[parent_key].files.push_back(std::move(entry_info));
       }
 
       if (max_depth > 0 && it.depth() >= max_depth) {
@@ -389,7 +407,12 @@ public:
       std::vector<std::string> parts;
       parts.reserve(4);
       parts.push_back(root_display);
-      fs::path dir_norm = fs::path(dir_key);
+      auto it_display = dir_display.find(dir_key);
+      if (it_display == dir_display.end()) {
+        return parts;
+      }
+      fs::path dir_norm =
+          fs::path(it_display->second).lexically_normal();
       if (dir_norm != root_norm) {
         fs::path rel = dir_norm.lexically_relative(root_norm);
         if (!rel.empty() && rel != ".") {
