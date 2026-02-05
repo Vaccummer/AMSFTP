@@ -1,5 +1,6 @@
 #include "AMCLI/InteractiveLoop.hpp"
 #include "AMBase/CommonTools.hpp"
+#include "AMBase/DataClass.hpp"
 #include "AMBase/Path.hpp"
 #include "AMCLI/CommandPreprocess.hpp"
 #include "AMCLI/Completer.hpp"
@@ -12,6 +13,8 @@
 #include <iostream>
 #include <magic_enum/magic_enum.hpp>
 #include <sstream>
+#include <unordered_map>
+#include <vector>
 
 namespace {
 /**
@@ -22,6 +25,9 @@ struct PromptState {
   std::string last_elapsed = "-";
   std::string cached_prefix;
   std::string last_nickname;
+  std::string cached_sysicon;
+  std::string cached_username;
+  std::string cached_hostname;
 };
 
 /**
@@ -82,6 +88,395 @@ bool ParseHexColor_(const std::string &hex, int *r, int *g, int *b) {
   *g = std::stoi(value.substr(2, 2), nullptr, 16);
   *b = std::stoi(value.substr(4, 2), nullptr, 16);
   return true;
+}
+
+/**
+ * @brief Find the next unescaped target character in the format string.
+ *
+ * @param input Full format string.
+ * @param target Character to search for.
+ * @param start Start index for scanning.
+ * @return Index of the target or npos if not found.
+ */
+size_t FindUnescapedChar_(const std::string &input, char target,
+                          size_t start) {
+  for (size_t i = start; i < input.size(); ++i) {
+    if (input[i] == '`') {
+      if (i + 1 < input.size()) {
+        ++i;
+      }
+      continue;
+    }
+    if (input[i] == target) {
+      return i;
+    }
+  }
+  return std::string::npos;
+}
+
+/**
+ * @brief Build an ANSI escape sequence from a style definition string.
+ *
+ * @param raw Style definition (e.g., "[#RRGGBB b]" or "#RRGGBB b").
+ * @param ansi_code Output ANSI escape sequence (e.g., "\x1b[1;38;2;...m").
+ * @return True if a valid style was parsed; false otherwise.
+ */
+bool TryBuildAnsiStyleCode_(const std::string &raw, std::string *ansi_code) {
+  if (!ansi_code) {
+    return false;
+  }
+  ansi_code->clear();
+
+  std::string tag = AMStr::TrimWhitespaceCopy(raw);
+  if (tag.empty()) {
+    return false;
+  }
+  if (tag.front() == '[' && tag.back() == ']') {
+    tag = tag.substr(1, tag.size() - 2);
+  }
+  tag = AMStr::TrimWhitespaceCopy(tag);
+  if (tag.empty()) {
+    return false;
+  }
+
+  bool bold = false;
+  bool italic = false;
+  bool underline = false;
+  bool reverse = false;
+  bool expect_bg = false;
+  bool has_style = false;
+  int fg_r = -1;
+  int fg_g = -1;
+  int fg_b = -1;
+  int bg_r = -1;
+  int bg_g = -1;
+  int bg_b = -1;
+
+  std::istringstream iss(tag);
+  std::string token;
+  while (iss >> token) {
+    if (token == "on") {
+      expect_bg = true;
+      continue;
+    }
+    if (token == "b") {
+      bold = true;
+      has_style = true;
+      continue;
+    }
+    if (token == "i") {
+      italic = true;
+      has_style = true;
+      continue;
+    }
+    if (token == "u") {
+      underline = true;
+      has_style = true;
+      continue;
+    }
+    if (token == "r") {
+      reverse = true;
+      has_style = true;
+      continue;
+    }
+
+    bool is_bg = expect_bg;
+    expect_bg = false;
+    if (token.rfind("color=", 0) == 0) {
+      token = token.substr(6);
+      is_bg = false;
+    } else if (token.rfind("bgcolor=", 0) == 0) {
+      token = token.substr(8);
+      is_bg = true;
+    } else if (token.rfind("bg=", 0) == 0) {
+      token = token.substr(3);
+      is_bg = true;
+    }
+
+    int r = 0;
+    int g = 0;
+    int b = 0;
+    if (token.rfind('#', 0) == 0 && ParseHexColor_(token, &r, &g, &b)) {
+      if (is_bg) {
+        bg_r = r;
+        bg_g = g;
+        bg_b = b;
+      } else {
+        fg_r = r;
+        fg_g = g;
+        fg_b = b;
+      }
+      has_style = true;
+      continue;
+    }
+  }
+
+  if (!has_style) {
+    return false;
+  }
+
+  std::ostringstream oss;
+  oss << "\x1b[";
+  bool first = true;
+  auto append_code = [&oss, &first](const std::string &code) {
+    if (code.empty()) {
+      return;
+    }
+    if (!first) {
+      oss << ";";
+    }
+    oss << code;
+    first = false;
+  };
+
+  if (bold) {
+    append_code("1");
+  }
+  if (italic) {
+    append_code("3");
+  }
+  if (underline) {
+    append_code("4");
+  }
+  if (reverse) {
+    append_code("7");
+  }
+  if (fg_r >= 0) {
+    append_code(AMStr::amfmt("38;2;{};{};{}", fg_r, fg_g, fg_b));
+  }
+  if (bg_r >= 0) {
+    append_code(AMStr::amfmt("48;2;{};{};{}", bg_r, bg_g, bg_b));
+  }
+
+  oss << "m";
+  *ansi_code = oss.str();
+  return true;
+}
+
+/**
+ * @brief Resolve a prompt style tag into an ANSI escape sequence.
+ *
+ * @param config_manager Config manager used for style lookup.
+ * @param tag_name Tag name from format (e.g., "un" or "#RRGGBB b").
+ * @param ansi_code Output ANSI escape sequence when resolved.
+ * @return True if a style was resolved; false otherwise.
+ */
+bool ResolvePromptStyleAnsi_(AMConfigManager &config_manager,
+                             const std::string &tag_name,
+                             std::string *ansi_code) {
+  if (!ansi_code) {
+    return false;
+  }
+  ansi_code->clear();
+  std::string trimmed = AMStr::TrimWhitespaceCopy(tag_name);
+  if (trimmed.empty()) {
+    return false;
+  }
+
+  if (TryBuildAnsiStyleCode_(trimmed, ansi_code)) {
+    return true;
+  }
+
+  std::string raw =
+      config_manager.GetSettingString({"style", "Prompt", trimmed}, "");
+  if (raw.empty()) {
+    return false;
+  }
+  return TryBuildAnsiStyleCode_(raw, ansi_code);
+}
+
+/**
+ * @brief Decide whether a condition string should be treated as true.
+ *
+ * @param value Condition string after formatting.
+ * @return True if the condition is truthy; false otherwise.
+ */
+bool IsTruthy_(const std::string &value) {
+  std::string trimmed = AMStr::TrimWhitespaceCopy(value);
+  if (trimmed.empty()) {
+    return false;
+  }
+  std::string lowered = AMStr::lowercase(trimmed);
+  if (lowered == "0" || lowered == "false" || lowered == "no" ||
+      lowered == "off") {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * @brief Render a format string segment with variable substitution.
+ *
+ * @param format Full format string.
+ * @param index Current index in the format string; updated on return.
+ * @param config_manager Config manager used to resolve styles.
+ * @param vars Variable map (keys include the leading '$').
+ * @param style_stack Stack of active ANSI style codes.
+ * @param enable_styles Whether to interpret [style] tags as ANSI escapes.
+ * @param stop_on_brace Stop rendering when an unescaped '}' is reached.
+ * @return Rendered segment text.
+ */
+std::string RenderPromptSegment_(
+    const std::string &format, size_t *index,
+    AMConfigManager &config_manager,
+    const std::unordered_map<std::string, std::string> &vars,
+    std::vector<std::string> *style_stack, bool enable_styles,
+    bool stop_on_brace) {
+  if (!index) {
+    return "";
+  }
+  std::string output;
+  while (*index < format.size()) {
+    const char c = format[*index];
+    if (c == '`') {
+      if (*index + 1 < format.size()) {
+        output.push_back(format[*index + 1]);
+        *index += 2;
+      } else {
+        output.push_back('`');
+        ++(*index);
+      }
+      continue;
+    }
+
+    if (stop_on_brace && c == '}') {
+      ++(*index);
+      break;
+    }
+
+    if (c == '{') {
+      if (format.compare(*index, 3, "{if") == 0) {
+        size_t cursor = *index + 3;
+        if (cursor < format.size() && format[cursor] == '{') {
+          ++cursor;
+          std::string cond = RenderPromptSegment_(
+              format, &cursor, config_manager, vars, nullptr, false, true);
+          bool truthy = IsTruthy_(cond);
+
+          if (cursor >= format.size() || format[cursor] != '{') {
+            output.push_back('{');
+            ++(*index);
+            continue;
+          }
+          ++cursor;
+          std::string branch_true = RenderPromptSegment_(
+              format, &cursor, config_manager, vars, style_stack, enable_styles,
+              true);
+
+          if (cursor >= format.size() || format[cursor] != '{') {
+            output.push_back('{');
+            ++(*index);
+            continue;
+          }
+          ++cursor;
+          std::string branch_false = RenderPromptSegment_(
+              format, &cursor, config_manager, vars, style_stack, enable_styles,
+              true);
+
+          if (cursor < format.size() && format[cursor] == '}') {
+            ++cursor;
+          }
+
+          *index = cursor;
+          output += truthy ? branch_true : branch_false;
+          continue;
+        }
+      }
+
+      size_t close = FindUnescapedChar_(format, '}', *index + 1);
+      if (close != std::string::npos &&
+          format[*index + 1] == '$') {
+        const std::string key =
+            format.substr(*index + 1, close - (*index + 1));
+        auto it = vars.find(key);
+        if (it != vars.end()) {
+          output += it->second;
+        }
+        *index = close + 1;
+        continue;
+      }
+
+      output.push_back('{');
+      ++(*index);
+      continue;
+    }
+
+    if (c == '[') {
+      size_t close = FindUnescapedChar_(format, ']', *index + 1);
+      if (close == std::string::npos) {
+        output.push_back('[');
+        ++(*index);
+        continue;
+      }
+      const std::string tag =
+          format.substr(*index + 1, close - (*index + 1));
+      *index = close + 1;
+
+      if (!enable_styles) {
+        continue;
+      }
+
+      if (tag == "/") {
+        if (style_stack && !style_stack->empty()) {
+          const std::string prev = style_stack->back();
+          style_stack->pop_back();
+          if (!prev.empty()) {
+            output += "\x1b[0m";
+            for (auto it = style_stack->rbegin();
+                 it != style_stack->rend(); ++it) {
+              if (!it->empty()) {
+                output += *it;
+                break;
+              }
+            }
+          }
+        }
+        continue;
+      }
+
+      std::string ansi_code;
+      if (ResolvePromptStyleAnsi_(config_manager, tag, &ansi_code)) {
+        if (style_stack) {
+          style_stack->push_back(ansi_code);
+        }
+        output += ansi_code;
+      } else {
+        if (style_stack) {
+          style_stack->push_back("");
+        }
+      }
+      continue;
+    }
+
+    output.push_back(c);
+    ++(*index);
+  }
+
+  return output;
+}
+
+/**
+ * @brief Render a prompt format string into ANSI-escaped output.
+ *
+ * @param config_manager Config manager used to resolve styles.
+ * @param format Format string from settings.
+ * @param vars Variable map (keys include the leading '$').
+ * @return Rendered prompt string with ANSI escape sequences.
+ */
+std::string RenderPromptFormat_(
+    AMConfigManager &config_manager, const std::string &format,
+    const std::unordered_map<std::string, std::string> &vars) {
+  size_t index = 0;
+  std::vector<std::string> style_stack;
+  std::string rendered = RenderPromptSegment_(
+      format, &index, config_manager, vars, &style_stack, true, false);
+  for (const auto &style : style_stack) {
+    if (!style.empty()) {
+      rendered += "\x1b[0m";
+      break;
+    }
+  }
+  return rendered;
 }
 
 /**
@@ -391,7 +786,9 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
     nickname = "local";
   }
 
-  if (state.cached_prefix.empty() || state.last_nickname != nickname) {
+  if (state.cached_prefix.empty() || state.last_nickname != nickname ||
+      state.cached_sysicon.empty() || state.cached_username.empty() ||
+      state.cached_hostname.empty()) {
     OS_TYPE os_type = OS_TYPE::Unknown;
     if (client) {
       try {
@@ -402,6 +799,9 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
     }
     std::string sysicon = ResolveSysIcon_(config_manager, os_type);
     auto [username, hostname] = ResolveUserHost_(client);
+    state.cached_sysicon = sysicon;
+    state.cached_username = username;
+    state.cached_hostname = hostname;
     std::string styled_user = ApplyStyleFromConfig_(
         config_manager, {"style", "Prompt", "username"}, username);
     std::string styled_host = ApplyStyleFromConfig_(
@@ -418,6 +818,42 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
   const std::string ec_name =
       ok ? "" : std::string(magic_enum::enum_name(state.last_rcm.first));
 
+  std::string workdir = "/";
+  if (client) {
+    workdir = client_manager.GetOrInitWorkdir(client);
+  }
+
+  const std::string format =
+      config_manager.GetSettingString({"style", "Prompt", "format"}, "");
+  if (!format.empty()) {
+    std::unordered_map<std::string, std::string> vars;
+    vars["$sysicon"] = state.cached_sysicon;
+    vars["$username"] = state.cached_username;
+    vars["$hostname"] = state.cached_hostname;
+    vars["$nickname"] = nickname;
+    vars["$cwd"] = workdir;
+    vars["$elapsed"] = elapsed;
+    vars["$success"] = ok ? "1" : "";
+    vars["$ec_name"] = ec_name;
+    size_t pending_count = 0;
+    size_t running_count = 0;
+    AMTransferManager::Instance().GetTaskCounts(&pending_count, &running_count);
+    const size_t total_tasks = pending_count + running_count;
+    const std::string time_now =
+        FormatTime(static_cast<size_t>(timenow()), "%H:%M:%S");
+
+    vars["$task_pending"] = std::to_string(pending_count);
+    vars["$task_running"] = std::to_string(running_count);
+    vars["$time_now"] = time_now;
+    vars["$task_num"] = std::to_string(total_tasks);
+    vars["$time_clock"] = time_now;
+    const std::string rendered =
+        RenderPromptFormat_(config_manager, format, vars);
+    if (!rendered.empty()) {
+      return rendered;
+    }
+  }
+
   const std::string styled_elapsed = ApplyStyleFromConfig_(
       config_manager, {"style", "SystemInfo", "info"}, elapsed);
   const std::string styled_status = ApplyStyleFromConfig_(
@@ -431,10 +867,6 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
     line1 += " " + styled_ec;
   }
 
-  std::string workdir = "/";
-  if (client) {
-    workdir = client_manager.GetOrInitWorkdir(client);
-  }
   const std::string styled_nickname = ApplyStyleFromConfig_(
       config_manager, {"style", "Prompt", "nickname"}, nickname);
   const std::string styled_cwd = ApplyStyleFromConfig_(

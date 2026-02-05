@@ -89,51 +89,6 @@ static AMCommandPreprocessor::ECM ParseValue(const std::string &input,
 }
 
 /**
- * @brief Parse a variable token like $name or ${ name }.
- */
-static AMCommandPreprocessor::ECM ParseVarToken(const std::string &token,
-                                                std::string *name) {
-  if (!name) {
-    return {EC::InvalidArg, "Null output pointer"};
-  }
-  std::string trimmed = AMStr::TrimWhitespaceCopy(token);
-  if (trimmed.empty()) {
-    return {EC::InvalidArg, "Empty variable token"};
-  }
-  if (trimmed.find('=') != std::string::npos) {
-    return {EC::InvalidArg, "Invalid variable token"};
-  }
-  if (trimmed.front() != '$') {
-    return {EC::InvalidArg, "Variable token must start with $"};
-  }
-  if (trimmed.size() < 2) {
-    return {EC::InvalidArg, "Invalid variable token"};
-  }
-
-  if (trimmed[1] == '{') {
-    if (trimmed.back() != '}') {
-      return {EC::InvalidArg, "Unclosed ${...} expression"};
-    }
-    std::string inner =
-        AMStr::TrimWhitespaceCopy(trimmed.substr(2, trimmed.size() - 3));
-    if (!IsValidVarName(inner)) {
-      return {EC::InvalidArg,
-              "Invalid variable name: only letters, digits, and _ are allowed"};
-    }
-    *name = inner;
-    return {EC::Success, ""};
-  }
-
-  std::string inner = trimmed.substr(1);
-  if (!IsValidVarName(inner)) {
-    return {EC::InvalidArg,
-            "Invalid variable name: only letters, digits, and _ are allowed"};
-  }
-  *name = inner;
-  return {EC::Success, ""};
-}
-
-/**
  * @brief Parse a persistent definition ($name= or ${name}=) from the text.
  */
 static AMCommandPreprocessor::ECM
@@ -300,6 +255,18 @@ static std::vector<std::string> SplitTokens(const std::string &input,
     tokens.push_back(current);
   }
   return tokens;
+}
+
+/**
+ * @brief Return true if the first token is a variable reference command.
+ */
+static bool IsVarReferenceCommand(const std::string &input) {
+  std::vector<std::string> tokens = SplitTokens(input, 1);
+  if (tokens.empty()) {
+    return false;
+  }
+  const std::string head = AMStr::lowercase(tokens[0]);
+  return head == "var" || head == "del";
 }
 
 /**
@@ -503,82 +470,6 @@ AMCommandPreprocessor::Preprocess(const std::string &input) {
     return result;
   }
 
-  if (trimmed.size() >= 3 && trimmed.compare(0, 3, "var") == 0 &&
-      (trimmed.size() == 3 || AMStr::IsWhitespace(trimmed[3]))) {
-    std::string remainder = AMStr::TrimWhitespaceCopy(trimmed.substr(3));
-    if (remainder.empty()) {
-      result.rcm = var_manager_.Enumerate();
-      result.action = Action::Handled;
-      return result;
-    }
-
-    const size_t eq_pos = remainder.find('=');
-    if (eq_pos != std::string::npos) {
-      const std::string left =
-          AMStr::TrimWhitespaceCopy(remainder.substr(0, eq_pos));
-      const std::string right = remainder.substr(eq_pos + 1);
-      std::string name;
-      result.rcm = ParseVarToken(left, &name);
-      if (result.rcm.first != EC::Success) {
-        return result;
-      }
-      std::string value;
-      result.rcm = ParseValue(right, &value);
-      if (result.rcm.first != EC::Success) {
-        return result;
-      }
-      result.rcm = var_manager_.SetPersistentVar(name, value, true);
-      result.action = Action::Handled;
-      return result;
-    }
-
-    std::vector<std::string> tokens = SplitTokens(remainder, remainder.size());
-    if (tokens.empty()) {
-      result.rcm = {EC::InvalidArg, "var requires variable names"};
-      return result;
-    }
-    std::vector<std::string> names;
-    names.reserve(tokens.size());
-    for (const auto &token : tokens) {
-      std::string name;
-      result.rcm = ParseVarToken(token, &name);
-      if (result.rcm.first != EC::Success) {
-        return result;
-      }
-      names.push_back(name);
-    }
-    result.rcm = var_manager_.Query(names);
-    result.action = Action::Handled;
-    return result;
-  }
-
-  if (trimmed.size() >= 3 && trimmed.compare(0, 3, "del") == 0 &&
-      (trimmed.size() == 3 || AMStr::IsWhitespace(trimmed[3]))) {
-    std::string remainder = AMStr::TrimWhitespaceCopy(trimmed.substr(3));
-    if (remainder.empty()) {
-      result.rcm = {EC::InvalidArg, "del requires variable names"};
-      return result;
-    }
-    std::vector<std::string> tokens = SplitTokens(remainder, remainder.size());
-    if (tokens.empty()) {
-      result.rcm = {EC::InvalidArg, "del requires variable names"};
-      return result;
-    }
-    std::vector<std::string> names;
-    names.reserve(tokens.size());
-    for (const auto &token : tokens) {
-      std::string name;
-      result.rcm = ParseVarToken(token, &name);
-      if (result.rcm.first != EC::Success) {
-        return result;
-      }
-      names.push_back(name);
-    }
-    result.rcm = var_manager_.Delete(names);
-    result.action = Action::Handled;
-    return result;
-  }
-
   if (trimmed.size() >= 2 && trimmed[0] == '$' && trimmed[1] == '{') {
     size_t close = trimmed.find('}', 2);
     if (close != std::string::npos) {
@@ -615,15 +506,18 @@ AMCommandPreprocessor::Preprocess(const std::string &input) {
     }
   }
 
-  std::string substituted;
-  result.rcm = SubstituteAfterFirstToken(trimmed, var_manager_, &substituted);
-  if (result.rcm.first != EC::Success) {
-    return result;
+  std::string command_input = trimmed;
+  if (!IsVarReferenceCommand(trimmed)) {
+    result.rcm =
+        SubstituteAfterFirstToken(trimmed, var_manager_, &command_input);
+    if (result.rcm.first != EC::Success) {
+      return result;
+    }
   }
 
   bool async_flag = false;
   std::string command;
-  result.rcm = HandleAsyncSuffix(substituted, &command, &async_flag);
+  result.rcm = HandleAsyncSuffix(command_input, &command, &async_flag);
   if (result.rcm.first != EC::Success) {
     return result;
   }

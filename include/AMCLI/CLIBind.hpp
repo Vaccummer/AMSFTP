@@ -205,6 +205,20 @@ struct ConnectArgs {
 };
 
 /**
+ * @brief CLI argument container for var.
+ */
+struct VarArgs {
+  std::vector<std::string> tokens;
+};
+
+/**
+ * @brief CLI argument container for del.
+ */
+struct DelArgs {
+  std::vector<std::string> tokens;
+};
+
+/**
  * @brief CLI argument container for task list.
  */
 struct TaskListArgs {
@@ -315,6 +329,8 @@ struct CliArgsPool {
   DisconnectArgs disconnect;
   CdArgs cd;
   ConnectArgs connect;
+  VarArgs var;
+  DelArgs del;
   TaskListArgs task_list;
   TaskShowArgs task_show;
   TaskInspectArgs task_inspect;
@@ -363,6 +379,8 @@ struct CliCommands {
   CLI::App *client_rm_cmd = nullptr;
   CLI::App *cd_cmd = nullptr;
   CLI::App *connect_cmd = nullptr;
+  CLI::App *var_cmd = nullptr;
+  CLI::App *del_cmd = nullptr;
   CLI::App *bash_cmd = nullptr;
   CLI::App *complete_cmd = nullptr;
   CLI::App *complete_cache_cmd = nullptr;

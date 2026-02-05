@@ -335,7 +335,7 @@ AMVarManager::ECM AMVarManager::SetMemoryVar(const std::string &name,
 }
 
 /**
- * @brief Set or overwrite a persistent variable and mirror it in memory.
+ * @brief Set or overwrite a persistent variable in storage only.
  */
 AMVarManager::ECM AMVarManager::SetPersistentVar(const std::string &name,
                                                  const std::string &value,
@@ -359,9 +359,5 @@ AMVarManager::ECM AMVarManager::SetPersistentVar(const std::string &name,
     return rcm;
   }
 
-  {
-    std::lock_guard<std::mutex> lock(mutex_);
-    memory_vars_[name] = value;
-  }
   return {EC::Success, ""};
 }
