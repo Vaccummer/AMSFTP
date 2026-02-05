@@ -521,6 +521,11 @@ fn apply_json_updates_append_new(item: &mut Item, j: &J) {
                             aot.push(nt);
                         }
                     }
+                } else if arr.len() < existing {
+                    // Trim extra tables when JSON array shrinks (supports deletions).
+                    while aot.len() > arr.len() {
+                        aot.remove(aot.len() - 1);
+                    }
                 }
             }
 

@@ -42,7 +42,7 @@ if __name__ == "__main__":
     parse_and_print("[#3490de][/]")
     parse_and_print("[#FFFFFF][/]")
     parse_and_print("[#f08a5d][/]")
-    print("\x1b[1;3;4;38;2;255;80;0;48;2;30;30;30mHello\x1b[0m\n")
+    print("\x1b[1;3;4;38;2;255;80;0;48;2;30;30;30m⚠️\x1b[0m\n")
     print("\x1b[9mstrikethrough\x1b[29m normal")
     from wcwidth import wcwidth
     print(wcwidth("\uf17c"), wcwidth("\U000F0A21"))

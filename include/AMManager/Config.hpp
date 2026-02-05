@@ -3,6 +3,7 @@
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
 #include "AMBase/cfgffi.h"
+#include "AMManager/Prompt.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -263,6 +264,7 @@ private:
   ConfigHandle *known_hosts_handle_ = nullptr;
   ConfigHandle *history_handle_ = nullptr;
   KnownHostCallback known_host_cb_ = {};
+  AMPromptManager &prompt = AMPromptManager::Instance();
 
   std::vector<FormatPath> config_filters_;
   std::vector<FormatPath> settings_filters_;
