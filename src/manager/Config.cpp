@@ -1896,7 +1896,7 @@ ECM AMConfigManager::Query(const std::vector<std::string> &targets) const {
       last = Err(EC::HostConfigNotFound, "host not found");
       continue;
     }
-    auto rcm = PrintHost(it->first, it->second);
+    auto rcm = PrintHost(nickname, it->second);
     if (rcm.first != EC::Success) {
       last = rcm;
     }
@@ -2186,7 +2186,7 @@ AMConfigManager::CollectHosts() const {
 
 ECM AMConfigManager::PrintHost(const std::string &nickname,
                                const HostEntry &entry) const {
-  PrintLine("[" + nickname + "]");
+  PrintLine("[!pre][" + nickname + "][/pre]");
   size_t width = 0;
   for (const auto &field : kHostFields)
     width = std::max(width, field.size());
@@ -2200,7 +2200,7 @@ ECM AMConfigManager::PrintHost(const std::string &nickname,
     // std::string styled_value = Format(value, field);
     std::ostringstream line;
     line << std::left << std::setw(static_cast<int>(width)) << field << " :   "
-         << value;
+         << (value.empty() ? "\"\"" : value);
     PrintLine(line.str());
   }
   return Ok();

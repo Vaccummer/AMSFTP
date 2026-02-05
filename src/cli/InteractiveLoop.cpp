@@ -305,6 +305,469 @@ bool IsTruthy_(const std::string &value) {
 }
 
 /**
+ * @brief Token types for prompt condition expressions.
+ */
+enum class ExprTokenType {
+  End,
+  Number,
+  Ident,
+  String,
+  LParen,
+  RParen,
+  And,
+  Or,
+  Eq,
+  Lt,
+  Gt,
+  Le,
+  Ge,
+  Invalid
+};
+
+/**
+ * @brief Single token produced by the condition lexer.
+ */
+struct ExprToken {
+  ExprTokenType type = ExprTokenType::End;
+  std::string text;
+  double number = 0.0;
+};
+
+/**
+ * @brief Value container for condition evaluation.
+ */
+struct ExprValue {
+  enum class Kind { Number, String, Bool };
+  Kind kind = Kind::String;
+  double number = 0.0;
+  std::string text;
+  bool boolean = false;
+};
+
+/**
+ * @brief Parser state for the condition evaluator.
+ */
+struct ExprParserState {
+  const std::string *expr = nullptr;
+  size_t index = 0;
+  ExprToken current;
+  bool ok = true;
+};
+
+/**
+ * @brief Build a numeric expression value.
+ */
+ExprValue MakeExprNumber_(double value) {
+  ExprValue out;
+  out.kind = ExprValue::Kind::Number;
+  out.number = value;
+  return out;
+}
+
+/**
+ * @brief Build a string expression value.
+ */
+ExprValue MakeExprString_(const std::string &value) {
+  ExprValue out;
+  out.kind = ExprValue::Kind::String;
+  out.text = value;
+  return out;
+}
+
+/**
+ * @brief Build a boolean expression value.
+ */
+ExprValue MakeExprBool_(bool value) {
+  ExprValue out;
+  out.kind = ExprValue::Kind::Bool;
+  out.boolean = value;
+  return out;
+}
+
+/**
+ * @brief Convert an expression value into a boolean.
+ */
+bool ExprValueToBool_(const ExprValue &value) {
+  switch (value.kind) {
+  case ExprValue::Kind::Bool:
+    return value.boolean;
+  case ExprValue::Kind::Number:
+    return value.number != 0.0;
+  case ExprValue::Kind::String:
+    return IsTruthy_(value.text);
+  default:
+    return false;
+  }
+}
+
+/**
+ * @brief Convert an expression value into a string representation.
+ */
+std::string ExprValueToString_(const ExprValue &value) {
+  switch (value.kind) {
+  case ExprValue::Kind::Bool:
+    return value.boolean ? "true" : "false";
+  case ExprValue::Kind::Number: {
+    std::ostringstream oss;
+    oss << value.number;
+    return oss.str();
+  }
+  case ExprValue::Kind::String:
+    return value.text;
+  default:
+    return "";
+  }
+}
+
+/**
+ * @brief Determine if the character is a delimiter for identifiers.
+ */
+bool IsExprDelimiter_(char c) {
+  return std::isspace(static_cast<unsigned char>(c)) || c == '(' || c == ')' ||
+         c == '&' || c == '|' || c == '=' || c == '<' || c == '>';
+}
+
+/**
+ * @brief Lex the next token from an expression string.
+ */
+ExprToken NextExprToken_(const std::string &expr, size_t *index) {
+  ExprToken token;
+  if (!index) {
+    token.type = ExprTokenType::Invalid;
+    return token;
+  }
+
+  size_t i = *index;
+  while (i < expr.size() &&
+         std::isspace(static_cast<unsigned char>(expr[i]))) {
+    ++i;
+  }
+  if (i >= expr.size()) {
+    *index = i;
+    token.type = ExprTokenType::End;
+    return token;
+  }
+
+  const char c = expr[i];
+  if (c == '&' && i + 1 < expr.size() && expr[i + 1] == '&') {
+    *index = i + 2;
+    token.type = ExprTokenType::And;
+    return token;
+  }
+  if (c == '|' && i + 1 < expr.size() && expr[i + 1] == '|') {
+    *index = i + 2;
+    token.type = ExprTokenType::Or;
+    return token;
+  }
+  if (c == '=' && i + 1 < expr.size() && expr[i + 1] == '=') {
+    *index = i + 2;
+    token.type = ExprTokenType::Eq;
+    return token;
+  }
+  if (c == '<' && i + 1 < expr.size() && expr[i + 1] == '=') {
+    *index = i + 2;
+    token.type = ExprTokenType::Le;
+    return token;
+  }
+  if (c == '>' && i + 1 < expr.size() && expr[i + 1] == '=') {
+    *index = i + 2;
+    token.type = ExprTokenType::Ge;
+    return token;
+  }
+  if (c == '<') {
+    *index = i + 1;
+    token.type = ExprTokenType::Lt;
+    return token;
+  }
+  if (c == '>') {
+    *index = i + 1;
+    token.type = ExprTokenType::Gt;
+    return token;
+  }
+  if (c == '(') {
+    *index = i + 1;
+    token.type = ExprTokenType::LParen;
+    return token;
+  }
+  if (c == ')') {
+    *index = i + 1;
+    token.type = ExprTokenType::RParen;
+    return token;
+  }
+
+  if (c == '"' || c == '\'') {
+    const char quote = c;
+    ++i;
+    std::string value;
+    while (i < expr.size()) {
+      char ch = expr[i];
+      if (ch == '\\' && i + 1 < expr.size()) {
+        value.push_back(expr[i + 1]);
+        i += 2;
+        continue;
+      }
+      if (ch == quote) {
+        ++i;
+        token.type = ExprTokenType::String;
+        token.text = value;
+        *index = i;
+        return token;
+      }
+      value.push_back(ch);
+      ++i;
+    }
+    token.type = ExprTokenType::Invalid;
+    *index = expr.size();
+    return token;
+  }
+
+  auto is_digit = [](char ch) {
+    return std::isdigit(static_cast<unsigned char>(ch));
+  };
+  if (is_digit(c) ||
+      (c == '.' && i + 1 < expr.size() && is_digit(expr[i + 1])) ||
+      (c == '-' && i + 1 < expr.size() && is_digit(expr[i + 1]))) {
+    size_t start = i;
+    if (expr[i] == '-') {
+      ++i;
+    }
+    bool saw_digit = false;
+    while (i < expr.size() && is_digit(expr[i])) {
+      saw_digit = true;
+      ++i;
+    }
+    if (i < expr.size() && expr[i] == '.') {
+      ++i;
+      while (i < expr.size() && is_digit(expr[i])) {
+        saw_digit = true;
+        ++i;
+      }
+    }
+    if (saw_digit) {
+      const std::string number_text = expr.substr(start, i - start);
+      token.type = ExprTokenType::Number;
+      token.text = number_text;
+      token.number = std::strtod(number_text.c_str(), nullptr);
+      *index = i;
+      return token;
+    }
+  }
+
+  size_t start = i;
+  while (i < expr.size() && !IsExprDelimiter_(expr[i])) {
+    ++i;
+  }
+  token.type = ExprTokenType::Ident;
+  token.text = expr.substr(start, i - start);
+  *index = i;
+  return token;
+}
+
+/**
+ * @brief Initialize parser state and read the first token.
+ */
+void InitExprParser_(const std::string &expr, ExprParserState *state) {
+  if (!state) {
+    return;
+  }
+  state->expr = &expr;
+  state->index = 0;
+  state->ok = true;
+  state->current = NextExprToken_(expr, &state->index);
+}
+
+/**
+ * @brief Advance the parser to the next token.
+ */
+void AdvanceExprParser_(ExprParserState *state) {
+  if (!state || !state->expr) {
+    return;
+  }
+  state->current = NextExprToken_(*state->expr, &state->index);
+}
+
+/**
+ * @brief Parse logical OR expressions.
+ */
+ExprValue ParseExprOr_(ExprParserState *state);
+
+/**
+ * @brief Parse a primary expression node.
+ */
+ExprValue ParseExprPrimary_(ExprParserState *state) {
+  if (!state || !state->ok) {
+    return MakeExprBool_(false);
+  }
+
+  const ExprToken &tok = state->current;
+  if (tok.type == ExprTokenType::Number) {
+    AdvanceExprParser_(state);
+    return MakeExprNumber_(tok.number);
+  }
+  if (tok.type == ExprTokenType::String) {
+    AdvanceExprParser_(state);
+    return MakeExprString_(tok.text);
+  }
+  if (tok.type == ExprTokenType::Ident) {
+    const std::string lowered = AMStr::lowercase(tok.text);
+    AdvanceExprParser_(state);
+    if (lowered == "true") {
+      return MakeExprBool_(true);
+    }
+    if (lowered == "false") {
+      return MakeExprBool_(false);
+    }
+    return MakeExprString_(tok.text);
+  }
+  if (tok.type == ExprTokenType::LParen) {
+    AdvanceExprParser_(state);
+    ExprValue inner = ParseExprOr_(state);
+    if (state->current.type == ExprTokenType::RParen) {
+      AdvanceExprParser_(state);
+      return inner;
+    }
+    state->ok = false;
+    return MakeExprBool_(false);
+  }
+
+  state->ok = false;
+  return MakeExprBool_(false);
+}
+
+/**
+ * @brief Compare two expression values using a comparison operator.
+ */
+bool CompareExprValues_(const ExprValue &lhs, const ExprValue &rhs,
+                        ExprTokenType op) {
+  const bool both_numeric = lhs.kind == ExprValue::Kind::Number &&
+                            rhs.kind == ExprValue::Kind::Number;
+  if (both_numeric) {
+    switch (op) {
+    case ExprTokenType::Eq:
+      return lhs.number == rhs.number;
+    case ExprTokenType::Lt:
+      return lhs.number < rhs.number;
+    case ExprTokenType::Le:
+      return lhs.number <= rhs.number;
+    case ExprTokenType::Gt:
+      return lhs.number > rhs.number;
+    case ExprTokenType::Ge:
+      return lhs.number >= rhs.number;
+    default:
+      return false;
+    }
+  }
+
+  const std::string left = ExprValueToString_(lhs);
+  const std::string right = ExprValueToString_(rhs);
+  switch (op) {
+  case ExprTokenType::Eq:
+    return left == right;
+  case ExprTokenType::Lt:
+    return left < right;
+  case ExprTokenType::Le:
+    return left <= right;
+  case ExprTokenType::Gt:
+    return left > right;
+  case ExprTokenType::Ge:
+    return left >= right;
+  default:
+    return false;
+  }
+}
+
+/**
+ * @brief Parse comparison expressions (==, <, <=, >, >=).
+ */
+ExprValue ParseExprCompare_(ExprParserState *state) {
+  ExprValue left = ParseExprPrimary_(state);
+  while (state->ok) {
+    ExprTokenType op = state->current.type;
+    if (op != ExprTokenType::Eq && op != ExprTokenType::Lt &&
+        op != ExprTokenType::Le && op != ExprTokenType::Gt &&
+        op != ExprTokenType::Ge) {
+      break;
+    }
+    AdvanceExprParser_(state);
+    ExprValue right = ParseExprPrimary_(state);
+    const bool result = CompareExprValues_(left, right, op);
+    left = MakeExprBool_(result);
+  }
+  return left;
+}
+
+/**
+ * @brief Parse logical AND expressions.
+ */
+ExprValue ParseExprAnd_(ExprParserState *state) {
+  ExprValue left = ParseExprCompare_(state);
+  while (state->ok && state->current.type == ExprTokenType::And) {
+    AdvanceExprParser_(state);
+    ExprValue right = ParseExprCompare_(state);
+    left = MakeExprBool_(ExprValueToBool_(left) && ExprValueToBool_(right));
+  }
+  return left;
+}
+
+/**
+ * @brief Parse logical OR expressions.
+ */
+ExprValue ParseExprOr_(ExprParserState *state) {
+  ExprValue left = ParseExprAnd_(state);
+  while (state->ok && state->current.type == ExprTokenType::Or) {
+    AdvanceExprParser_(state);
+    ExprValue right = ParseExprAnd_(state);
+    left = MakeExprBool_(ExprValueToBool_(left) || ExprValueToBool_(right));
+  }
+  return left;
+}
+
+/**
+ * @brief Check if an expression contains explicit operators.
+ */
+bool ContainsExprOperators_(const std::string &expr) {
+  if (expr.empty()) {
+    return false;
+  }
+  for (size_t i = 0; i < expr.size(); ++i) {
+    const char c = expr[i];
+    if (c == '(' || c == ')' || c == '<' || c == '>') {
+      return true;
+    }
+    if (c == '=' && i + 1 < expr.size() && expr[i + 1] == '=') {
+      return true;
+    }
+    if (c == '&' && i + 1 < expr.size() && expr[i + 1] == '&') {
+      return true;
+    }
+    if (c == '|' && i + 1 < expr.size() && expr[i + 1] == '|') {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @brief Evaluate a prompt condition expression.
+ */
+bool EvaluatePromptExpression_(const std::string &expression) {
+  if (!ContainsExprOperators_(expression)) {
+    return IsTruthy_(expression);
+  }
+
+  ExprParserState state;
+  InitExprParser_(expression, &state);
+  ExprValue value = ParseExprOr_(&state);
+  if (!state.ok) {
+    return false;
+  }
+  if (state.current.type != ExprTokenType::End) {
+    return false;
+  }
+  return ExprValueToBool_(value);
+}
+
+/**
  * @brief Render a format string segment with variable substitution.
  *
  * @param format Full format string.
@@ -351,7 +814,7 @@ std::string RenderPromptSegment_(
           ++cursor;
           std::string cond = RenderPromptSegment_(
               format, &cursor, config_manager, vars, nullptr, false, true);
-          bool truthy = IsTruthy_(cond);
+          bool truthy = EvaluatePromptExpression_(cond);
 
           if (cursor >= format.size() || format[cursor] != '{') {
             output.push_back('{');
