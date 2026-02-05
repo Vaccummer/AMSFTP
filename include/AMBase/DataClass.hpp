@@ -1283,8 +1283,8 @@ inline bool PrintTree(
             return false;
           }
           const bool last = (i + 1 == dir_count && file_count == 0);
-          const std::string connector = last ? "`-- " : "|-- ";
-          const std::string next_prefix = prefix + (last ? "    " : "|   ");
+          const std::string connector = last ? "└─ " : "├─ ";
+          const std::string next_prefix = prefix + (last ? "   " : "│  ");
           const std::string child_name = children[i];
           const std::string styled =
               style_path ? style_path(dir_info, child_name) : child_name;
@@ -1303,7 +1303,7 @@ inline bool PrintTree(
           }
           const bool last = (i + 1 == file_count);
           (void)last;
-          const std::string connector = (i + 1 == file_count) ? "`-- " : "|-- ";
+          const std::string connector = (i + 1 == file_count) ? "└─ " : "├─ ";
           const auto &info = files[i];
           const std::string styled =
               style_path ? style_path(info, info.name) : info.name;

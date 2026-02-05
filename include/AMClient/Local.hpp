@@ -1,5 +1,6 @@
 #pragma once
 #include <filesystem>
+#include <unordered_map>
 #include <unordered_set>
 
 // 自身依赖
@@ -317,8 +318,107 @@ public:
               result};
     }
 
-    _walk({path}, result, 0, max_depth, ignore_sepcial_file, interrupt_flag,
-          timeout_ms, start_time);
+    struct DirState {
+      bool has_entry = false;
+      bool has_file = false;
+      std::vector<PathInfo> files = {};
+    };
+
+    const fs::path root_norm = fs::path(path).lexically_normal();
+    const std::string root_key = root_norm.string();
+    const std::string root_display = path;
+
+    std::unordered_map<std::string, DirState> dir_states;
+    std::unordered_set<std::string> seen_dirs;
+    std::vector<std::string> dir_order;
+
+    auto ensure_dir = [&](const std::string &dir_key) {
+      if (seen_dirs.insert(dir_key).second) {
+        dir_order.push_back(dir_key);
+      }
+      (void)dir_states[dir_key];
+    };
+
+    ensure_dir(root_key);
+
+    std::error_code ec;
+    fs::recursive_directory_iterator it(
+        root_norm, fs::directory_options::skip_permission_denied, ec);
+    fs::recursive_directory_iterator end;
+    for (; it != end; it.increment(ec)) {
+      if (interrupt_flag && interrupt_flag->check()) {
+        return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
+                result};
+      }
+      if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
+        break;
+      }
+      if (ec) {
+        ec.clear();
+        continue;
+      }
+
+      const fs::path entry_path = it->path();
+      const std::string entry_key = entry_path.lexically_normal().string();
+      const std::string parent_key =
+          entry_path.parent_path().lexically_normal().string();
+
+      dir_states[parent_key].has_entry = true;
+
+      auto [stat_ecm, entry_info] = stat(entry_path.string(), false);
+      if (stat_ecm.first != EC::Success) {
+        continue;
+      }
+
+      if (entry_info.type == PathType::DIR) {
+        ensure_dir(entry_key);
+      } else {
+        if (static_cast<int>(entry_info.type) < 0 && ignore_sepcial_file) {
+          continue;
+        }
+        dir_states[parent_key].has_file = true;
+        dir_states[parent_key].files.push_back(std::move(entry_info));
+      }
+
+      if (max_depth > 0 && it.depth() >= max_depth) {
+        it.disable_recursion_pending();
+      }
+    }
+
+    auto build_parts = [&](const std::string &dir_key) {
+      std::vector<std::string> parts;
+      parts.reserve(4);
+      parts.push_back(root_display);
+      fs::path dir_norm = fs::path(dir_key);
+      if (dir_norm != root_norm) {
+        fs::path rel = dir_norm.lexically_relative(root_norm);
+        if (!rel.empty() && rel != ".") {
+          for (const auto &part : rel) {
+            if (part == ".") {
+              continue;
+            }
+            parts.push_back(part.string());
+          }
+        }
+      }
+      return parts;
+    };
+
+    for (const auto &dir_key : dir_order) {
+      auto it_state = dir_states.find(dir_key);
+      DirState empty_state;
+      DirState *state =
+          it_state == dir_states.end() ? &empty_state : &it_state->second;
+      if (state->has_entry && !state->has_file) {
+        continue;
+      }
+      std::vector<PathInfo> files;
+      if (it_state != dir_states.end()) {
+        files = std::move(it_state->second.files);
+      }
+      result.emplace_back(build_parts(dir_key), std::move(files));
+    }
+
     if (interrupt_flag && interrupt_flag->check()) {
       return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
               result};
