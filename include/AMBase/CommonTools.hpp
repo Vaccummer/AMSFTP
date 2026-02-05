@@ -585,10 +585,18 @@ inline std::string TrimWhitespaceCopy(const std::string &input) {
 }
 
 /**
- * @brief Escape a string for bbcode output using a raw tag wrapper.
+ * @brief Escape a string for bbcode output by shielding tag delimiters.
  */
 inline std::string BBCEscape(const std::string &text) {
-  return "[!r]" + text + "[/r]";
+  std::string escaped;
+  escaped.reserve(text.size());
+  for (char c : text) {
+    if (c == '\\' || c == '[') {
+      escaped.push_back('\\');
+    }
+    escaped.push_back(c);
+  }
+  return escaped;
 }
 
 inline std::string Strip(std::string path) {

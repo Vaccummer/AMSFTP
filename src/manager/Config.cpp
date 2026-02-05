@@ -923,17 +923,13 @@ ECM AMConfigManager::Dump() {
 
   std::string error;
   std::string msg;
-  if (!config_handle_) {
-    return Err(EC::ConfigNotInitialized, "config handle not initialized");
-  }
-  if (!settings_handle_) {
-    return Err(EC::ConfigNotInitialized, "settings handle not initialized");
-  }
-  if (!known_hosts_handle_) {
-    return Err(EC::ConfigNotInitialized, "known_hosts handle not initialized");
-  }
+
   std::lock_guard<std::mutex> lock(handle_mtx_);
-  {
+  ECM rcm = {EC::Success, ""};
+  if (!config_handle_) {
+    rcm = {EC::ConfigNotInitialized, "config handle not initialized"};
+    prompt.ErrorFormat("ConfigNotInitialized", "config handle not initialized");
+  } else {
     std::string json = config_json_.dump(2);
     char *err = nullptr;
     int rc = cfgffi_write_inplace(config_handle_, json.c_str(), &err);
@@ -955,7 +951,9 @@ ECM AMConfigManager::Dump() {
       (void)ParseJsonString(json_str, &config_json_, nullptr);
     }
   }
-  {
+  if (!settings_handle_) {
+    return Err(EC::ConfigNotInitialized, "settings handle not initialized");
+  } else {
     std::string json = settings_json_.dump(2);
     char *err = nullptr;
     int rc = cfgffi_write_inplace(settings_handle_, json.c_str(), &err);
@@ -976,7 +974,9 @@ ECM AMConfigManager::Dump() {
       (void)ParseJsonString(json_str, &settings_json_, nullptr);
     }
   }
-  {
+  if (!known_hosts_handle_) {
+    return Err(EC::ConfigNotInitialized, "known_hosts handle not initialized");
+  } else {
     std::string json = known_hosts_json_.dump(2);
     char *err = nullptr;
     int rc = cfgffi_write_inplace(known_hosts_handle_, json.c_str(), &err);
@@ -1626,7 +1626,6 @@ AMConfigManager::KnownHostCallback AMConfigManager::BuildKnownHostCallback() {
 
     if (!existing.has_value() ||
         AMStr::TrimWhitespaceCopy(existing->fingerprint).empty()) {
-      AMPromptManager &prompt = AMPromptManager::Instance();
       bool canceled = false;
       const std::string question = AMStr::amfmt(
           "No known host fingerprint for {}:{} {}.\n"
@@ -1955,19 +1954,22 @@ ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
 
   ECM last = Ok();
   std::string msg;
+  bool changed = false;
   for (const auto &nickname : unique_targets) {
     if (nickname.empty()) {
       msg = "Invalid Empty Hostname";
       last = Err(EC::InvalidArg, msg);
-      AMPromptManager::Instance().ErrorFormat(AM_ENUM_NAME(EC::InvalidArg),
-                                              msg);
+      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      continue;
+    } else if (AMStr::lowercase(nickname) == "local") {
+      msg = "Unable to delete local host";
+      last = Err(EC::PermissionDenied, msg);
+      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
       continue;
     }
     if (!HostExists(nickname)) {
-      // EC::HostNotFound
       msg = AMStr::amfmt("Host {} not found in config", nickname);
-      AMPromptManager::Instance().ErrorFormat(AM_ENUM_NAME(EC::InvalidArg),
-                                              msg);
+      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
       last = Err(EC::HostConfigNotFound, msg);
       continue;
     }
@@ -1975,12 +1977,19 @@ ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
     auto rm_status = RemoveHost(nickname);
     if (rm_status.first != EC::Success) {
       last = rm_status;
-      AMPromptManager::Instance().ErrorFormat(AM_ENUM_NAME(rm_status.first),
-                                              rm_status.second);
+      prompt.ErrorFormat(AM_ENUM_NAME(rm_status.first), rm_status.second);
       continue;
     }
+    changed = true;
+    PrintLine(AMStr::amfmt("[#ffd460]⚠️[/]  Deleted host: {}",
+                           Format(nickname, "nickname")));
+  }
 
-    PrintLine(Format("Deleted host: " + nickname, "success"));
+  if (changed) {
+    auto dump_status = Dump();
+    if (dump_status.first != EC::Success) {
+      return dump_status;
+    }
   }
 
   return last;
@@ -2078,9 +2087,7 @@ ECM AMConfigManager::Add() {
     return prompt_status;
 
   bool canceled = false;
-  if (!AMPromptManager::Instance().PromptYesNo("Save host? (y/N): ",
-                                               &canceled) ||
-      canceled) {
+  if (!prompt.PromptYesNo("Save host? (y/N): ", &canceled) || canceled) {
     PrintLine("Add canceled.");
     return Err(EC::ConfigCanceled, "add canceled");
   }
@@ -2111,9 +2118,7 @@ ECM AMConfigManager::Modify(const std::string &nickname) {
     return prompt_status;
 
   bool canceled = false;
-  if (!AMPromptManager::Instance().PromptYesNo("Apply changes? (y/N): ",
-                                               &canceled) ||
-      canceled) {
+  if (!prompt.PromptYesNo("Apply changes? (y/N): ", &canceled) || canceled) {
     PrintLine("Modify canceled.");
     return Err(EC::ConfigCanceled, "modify canceled");
   }
@@ -2430,8 +2435,7 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   std::string error;
   bool canceled = false;
   while (true) {
-    if (!AMPromptManager::Instance().PromptLine("Nickname: ", nickname, "",
-                                                true, &canceled)) {
+    if (!prompt.PromptLine("Nickname: ", nickname, "", true, &canceled)) {
       if (canceled) {
         PrintLine("Add canceled.");
         return Err(EC::ConfigCanceled, "add canceled");
@@ -2446,8 +2450,7 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
 
   std::string hostname;
   while (true) {
-    if (!AMPromptManager::Instance().PromptLine("Hostname: ", &hostname, "",
-                                                true, &canceled)) {
+    if (!prompt.PromptLine("Hostname: ", &hostname, "", true, &canceled)) {
       PrintLine("Add canceled.");
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -2458,8 +2461,7 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
 
   std::string username;
   while (true) {
-    if (!AMPromptManager::Instance().PromptLine("Username: ", &username, "",
-                                                true, &canceled)) {
+    if (!prompt.PromptLine("Username: ", &username, "", true, &canceled)) {
       PrintLine("Add canceled.");
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -2471,8 +2473,8 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   std::string port_input;
   int64_t port = 22;
   while (true) {
-    if (!AMPromptManager::Instance().PromptLine(
-            "Port (default 22): ", &port_input, "", true, &canceled)) {
+    if (!prompt.PromptLine("Port (default 22): ", &port_input, "", true,
+                           &canceled)) {
       PrintLine("Add canceled.");
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -2503,8 +2505,8 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
 
   std::string protocol;
   while (true) {
-    if (!AMPromptManager::Instance().PromptLine(
-            "Protocol (sftp/ftp): ", &protocol, "", true, &canceled)) {
+    if (!prompt.PromptLine("Protocol (sftp/ftp): ", &protocol, "", true,
+                           &canceled)) {
       PrintLine("Add canceled.");
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -2521,9 +2523,8 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   std::string buffer_input;
   int64_t buffer_size = 24 * AMMB;
   while (true) {
-    if (!AMPromptManager::Instance().PromptLine(
-            "Buffer size(Default 24MB): ", &buffer_input, "", true,
-            &canceled)) {
+    if (!prompt.PromptLine("Buffer size(Default 24MB): ", &buffer_input, "",
+                           true, &canceled)) {
       PrintLine("Add canceled.");
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -2536,29 +2537,28 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   }
 
   std::string trash_dir;
-  if (!AMPromptManager::Instance().PromptLine(
-          "Trash dir (optional): ", &trash_dir, "", true, &canceled)) {
+  if (!prompt.PromptLine("Trash dir (optional): ", &trash_dir, "", true,
+                         &canceled)) {
     PrintLine("Add canceled.");
     return Err(EC::ConfigCanceled, "add canceled");
   }
 
   std::string login_dir;
-  if (!AMPromptManager::Instance().PromptLine(
-          "Login dir (optional): ", &login_dir, "", true, &canceled)) {
+  if (!prompt.PromptLine("Login dir (optional): ", &login_dir, "", true,
+                         &canceled)) {
     PrintLine("Add canceled.");
     return Err(EC::ConfigCanceled, "add canceled");
   }
 
   std::string keyfile;
-  if (!AMPromptManager::Instance().PromptLine("Keyfile (optional): ", &keyfile,
-                                              "", true, &canceled)) {
+  if (!prompt.PromptLine("Keyfile (optional): ", &keyfile, "", true,
+                         &canceled)) {
     PrintLine("Add canceled.");
     return Err(EC::ConfigCanceled, "add canceled");
   }
 
   bool compression = false;
-  compression = AMPromptManager::Instance().PromptYesNo(
-      "Enable compression? (y/N): ", &canceled);
+  compression = prompt.PromptYesNo("Enable compression? (y/N): ", &canceled);
   if (canceled) {
     PrintLine("Add canceled.");
     return Err(EC::ConfigCanceled, "add canceled");
@@ -2597,15 +2597,15 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   };
 
   std::string hostname = get_value("hostname");
-  if (!AMPromptManager::Instance().PromptLine("Hostname: ", &hostname, hostname,
-                                              false, &canceled, false)) {
+  if (!prompt.PromptLine("Hostname: ", &hostname, hostname, false, &canceled,
+                         false)) {
     PrintLine("Modify canceled.");
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string username = get_value("username");
-  if (!AMPromptManager::Instance().PromptLine("Username: ", &username, username,
-                                              false, &canceled, false)) {
+  if (!prompt.PromptLine("Username: ", &username, username, false, &canceled,
+                         false)) {
     PrintLine("Modify canceled.");
     return Err(EC::ConfigCanceled, "modify canceled");
   }
@@ -2615,9 +2615,8 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   if (!port_input.empty())
     ParsePositiveInt(port_input, &port);
   while (true) {
-    if (!AMPromptManager::Instance().PromptLine(
-            "Port (default 22): ", &port_input, port_input, true, &canceled,
-            false)) {
+    if (!prompt.PromptLine("Port (default 22): ", &port_input, port_input, true,
+                           &canceled, false)) {
       PrintLine("Modify canceled.");
       return Err(EC::ConfigCanceled, "modify canceled");
     }
@@ -2635,8 +2634,8 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   if (pw_it != updated.fields.end()) {
     password_value = pw_it->second;
   }
-  bool change_password = AMPromptManager::Instance().PromptYesNo(
-      "Change password? (y/N): ", &canceled);
+  bool change_password =
+      prompt.PromptYesNo("Change password? (y/N): ", &canceled);
   if (canceled) {
     PrintLine("Modify canceled.");
     return Err(EC::ConfigCanceled, "modify canceled");
@@ -2663,9 +2662,8 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
 
   std::string protocol = get_value("protocol");
   while (true) {
-    if (!AMPromptManager::Instance().PromptLine(
-            "Protocol (sftp/ftp): ", &protocol, protocol, false, &canceled,
-            false)) {
+    if (!prompt.PromptLine("Protocol (sftp/ftp): ", &protocol, protocol, false,
+                           &canceled, false)) {
       PrintLine("Modify canceled.");
       return Err(EC::ConfigCanceled, "modify canceled");
     }
@@ -2680,9 +2678,8 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   if (!buffer_input.empty())
     ParsePositiveInt(buffer_input, &buffer_size);
   while (true) {
-    if (!AMPromptManager::Instance().PromptLine("Buffer size: ", &buffer_input,
-                                                buffer_input, false, &canceled,
-                                                false)) {
+    if (!prompt.PromptLine("Buffer size: ", &buffer_input, buffer_input, false,
+                           &canceled, false)) {
       PrintLine("Modify canceled.");
       return Err(EC::ConfigCanceled, "modify canceled");
     }
@@ -2694,24 +2691,22 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   }
 
   std::string trash_dir = get_value("trash_dir");
-  if (!AMPromptManager::Instance().PromptLine(
-          "Trash dir (optional): ", &trash_dir, trash_dir, true, &canceled,
-          false)) {
+  if (!prompt.PromptLine("Trash dir (optional): ", &trash_dir, trash_dir, true,
+                         &canceled, false)) {
     PrintLine("Modify canceled.");
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string login_dir = get_value("login_dir");
-  if (!AMPromptManager::Instance().PromptLine(
-          "Login dir (optional): ", &login_dir, login_dir, true, &canceled,
-          false)) {
+  if (!prompt.PromptLine("Login dir (optional): ", &login_dir, login_dir, true,
+                         &canceled, false)) {
     PrintLine("Modify canceled.");
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string keyfile = get_value("keyfile");
-  if (!AMPromptManager::Instance().PromptLine(
-          "Keyfile (optional): ", &keyfile, keyfile, true, &canceled, false)) {
+  if (!prompt.PromptLine("Keyfile (optional): ", &keyfile, keyfile, true,
+                         &canceled, false)) {
     PrintLine("Modify canceled.");
     return Err(EC::ConfigCanceled, "modify canceled");
   }
@@ -2725,9 +2720,8 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
     compression_input = "false";
   }
   while (true) {
-    if (!AMPromptManager::Instance().PromptLine(
-            "Compression (true/false): ", &compression_input, compression_input,
-            true, &canceled, false)) {
+    if (!prompt.PromptLine("Compression (true/false): ", &compression_input,
+                           compression_input, true, &canceled, false)) {
       PrintLine("Modify canceled.");
       return Err(EC::ConfigCanceled, "modify canceled");
     }
