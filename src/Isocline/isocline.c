@@ -64,7 +64,7 @@ ic_public char* ic_readline(const char* prompt_text)
   if (env == NULL) return NULL;
   if (!env->noedit) {
     // terminal editing enabled
-    return ic_editline(env, prompt_text);   // in editline.c
+    return ic_editline(env, prompt_text, NULL);   // in editline.c
   } 
   else {
     // no editing capability (pipe, dumb terminal, etc)
@@ -80,6 +80,28 @@ ic_public char* ic_readline(const char* prompt_text)
     // read directly from stdin
     return ic_getline(env->mem);
   }
+}
+
+/** Read input with an initial pre-filled value. */
+ic_public char* ic_readline_with_initial(const char* prompt_text,
+                                         const char* initial_text)
+{
+  ic_env_t* env = ic_get_env();
+  if (env == NULL) return NULL;
+  if (!env->noedit) {
+    // terminal editing enabled
+    return ic_editline(env, prompt_text, initial_text);   // in editline.c
+  }
+  // no editing capability (pipe, dumb terminal, etc)
+  if (env->tty != NULL && env->term != NULL) {
+    term_start_raw(env->term);
+    if (prompt_text != NULL) {
+      term_write(env->term, prompt_text);
+    }
+    term_write(env->term, env->prompt_marker);
+    term_end_raw(env->term, false);
+  }
+  return ic_getline(env->mem);
 }
 
 
@@ -579,6 +601,31 @@ ic_public char* ic_readline_ex(const char* prompt_text,
   if (completer != NULL)   { ic_set_default_completer(completer, completer_arg); }
   if (highlighter != NULL) { ic_set_default_highlighter(highlighter, highlighter_arg); }
   char* res = ic_readline(prompt_text);
+  // restore previous
+  ic_set_default_completer(prev_completer, prev_completer_arg);
+  ic_set_default_highlighter(prev_highlighter, prev_highlighter_arg);
+  return res;
+}
+
+/** Read input with temporary completer/highlighter and an initial pre-filled value. */
+ic_public char* ic_readline_ex_with_initial(const char* prompt_text,
+                                  ic_completer_fun_t* completer,
+                                  void* completer_arg,
+                                  ic_highlight_fun_t* highlighter,
+                                  void* highlighter_arg,
+                                  const char* initial_text)
+{
+  ic_env_t* env = ic_get_env(); if (env == NULL) return NULL;
+  // save previous
+  ic_completer_fun_t* prev_completer;
+  void* prev_completer_arg;
+  completions_get_completer(env->completions, &prev_completer, &prev_completer_arg);
+  ic_highlight_fun_t* prev_highlighter = env->highlighter;
+  void* prev_highlighter_arg = env->highlighter_arg;
+  // call with current
+  if (completer != NULL)   { ic_set_default_completer(completer, completer_arg); }
+  if (highlighter != NULL) { ic_set_default_highlighter(highlighter, highlighter_arg); }
+  char* res = ic_readline_with_initial(prompt_text, initial_text);
   // restore previous
   ic_set_default_completer(prev_completer, prev_completer_arg);
   ic_set_default_highlighter(prev_highlighter, prev_highlighter_arg);

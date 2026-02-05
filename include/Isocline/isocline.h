@@ -63,6 +63,12 @@ Contents:
 /// @see ic_set_prompt_marker(), ic_style_def()
 char* ic_readline(const char* prompt_text);   
 
+/** Read input with an initial pre-filled value.
+    The initial text is inserted into the input buffer before editing starts.
+    Pass NULL or empty to start with an empty buffer. */
+char* ic_readline_with_initial(const char* prompt_text,
+                               const char* initial_text);
+
 /// \}
 
 
@@ -318,6 +324,16 @@ void ic_highlight_formatted(ic_highlight_env_t* henv, const char* input, const c
 /// @see ic_readline(), ic_set_prompt_marker(), ic_set_default_completer(), ic_set_default_highlighter().
 char* ic_readline_ex(const char* prompt_text, ic_completer_fun_t* completer, void* completer_arg,
                                               ic_highlight_fun_t* highlighter, void* highlighter_arg);
+
+/** Read input with temporary completer/highlighter and an initial pre-filled value.
+    This behaves like ic_readline_ex but also inserts `initial_text` into the input buffer.
+    Pass NULL or empty to start with an empty buffer. */
+char* ic_readline_ex_with_initial(const char* prompt_text,
+                                  ic_completer_fun_t* completer,
+                                  void* completer_arg,
+                                  ic_highlight_fun_t* highlighter,
+                                  void* highlighter_arg,
+                                  const char* initial_text);
 
 /// \}
 

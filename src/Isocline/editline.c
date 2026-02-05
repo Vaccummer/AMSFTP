@@ -53,14 +53,15 @@ typedef struct editor_s {
 //-------------------------------------------------------------
 // Main edit line
 //-------------------------------------------------------------
-static char *edit_line(ic_env_t *env,
-                       const char *prompt_text); // defined at bottom
+static char *edit_line(ic_env_t *env, const char *prompt_text,
+                       const char *initial_text); // defined at bottom
 static void edit_refresh(ic_env_t *env, editor_t *eb);
 
-ic_private char *ic_editline(ic_env_t *env, const char *prompt_text) {
+ic_private char *ic_editline(ic_env_t *env, const char *prompt_text,
+                             const char *initial_text) {
   tty_start_raw(env->tty);
   term_start_raw(env->term);
-  char *line = edit_line(env, prompt_text);
+  char *line = edit_line(env, prompt_text, initial_text);
   term_end_raw(env->term, false);
   tty_end_raw(env->tty);
   term_writeln(env->term, "");
@@ -963,7 +964,8 @@ static void edit_insert_char(ic_env_t *env, editor_t *eb, char c) {
 // Edit line: main edit loop
 //-------------------------------------------------------------
 
-static char *edit_line(ic_env_t *env, const char *prompt_text) {
+static char *edit_line(ic_env_t *env, const char *prompt_text,
+                       const char *initial_text) {
   // set up an edit buffer
   editor_t eb;
   memset(&eb, 0, sizeof(eb));
@@ -997,6 +999,13 @@ static char *edit_line(ic_env_t *env, const char *prompt_text) {
 
   // always a history entry for the current input
   history_push(env->history, "");
+
+  if (initial_text != NULL && initial_text[0] != 0) {
+    editor_start_modify(&eb);
+    sbuf_replace(eb.input, initial_text);
+    eb.pos = sbuf_len(eb.input);
+    edit_refresh(env, &eb);
+  }
 
   // process keys
   code_t c; // current key code
