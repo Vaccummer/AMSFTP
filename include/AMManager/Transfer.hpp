@@ -173,6 +173,15 @@ public:
   std::vector<ID> ListTaskIds() const;
 
   /**
+   * @brief Get counts of pending and conducting tasks for prompt display.
+   *
+   * @param pending_count Output count of pending tasks (nullable).
+   * @param conducting_count Output count of conducting tasks (nullable).
+   */
+  void GetTaskCounts(size_t *pending_count,
+                     size_t *conducting_count) const;
+
+  /**
    * @brief Delete a cached transfer set by index.
    *
    * @param set_index Cache index to delete.

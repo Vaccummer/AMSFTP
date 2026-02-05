@@ -2196,10 +2196,11 @@ ECM AMConfigManager::PrintHost(const std::string &nickname,
     if (it == entry.fields.end())
       continue;
     std::string value = ValueToString(it->second);
-    std::string styled_value = Format(value, field);
+    // abort value style in config print
+    // std::string styled_value = Format(value, field);
     std::ostringstream line;
     line << std::left << std::setw(static_cast<int>(width)) << field << " :   "
-         << styled_value;
+         << value;
     PrintLine(line.str());
   }
   return Ok();

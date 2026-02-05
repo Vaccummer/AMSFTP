@@ -840,6 +840,34 @@ std::vector<AMTransferManager::ID> AMTransferManager::ListTaskIds() const {
 }
 
 /**
+ * @brief Get counts of pending and conducting tasks for prompt display.
+ *
+ * @param pending_count Output count of pending tasks (nullable).
+ * @param conducting_count Output count of conducting tasks (nullable).
+ */
+void AMTransferManager::GetTaskCounts(size_t *pending_count,
+                                      size_t *conducting_count) const {
+  if (pending_count) {
+    *pending_count = 0;
+  }
+  if (conducting_count) {
+    *conducting_count = 0;
+  }
+  if (!pending_count && !conducting_count) {
+    return;
+  }
+
+  const auto pending = worker_.get_pending_tasks();
+  const auto conducting = worker_.get_conducting_tasks();
+  if (pending_count) {
+    *pending_count = pending.size();
+  }
+  if (conducting_count) {
+    *conducting_count = conducting.size();
+  }
+}
+
+/**
  * @brief Delete a cached transfer set by ID.
  */
 bool AMTransferManager::DeleteTransferSet(size_t set_index) {

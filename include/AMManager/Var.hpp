@@ -26,7 +26,7 @@ public:
                    bool confirm_overwrite = true);
 
   /**
-   * @brief Set or overwrite a persistent variable and mirror it in memory.
+   * @brief Set or overwrite a persistent variable in storage only.
    */
   ECM SetPersistentVar(const std::string &name, const std::string &value,
                        bool confirm_overwrite = true);

@@ -1,6 +1,7 @@
 
 #include "AMCLI/CLIBind.hpp"
 #include "AMCLI/Completer.hpp"
+#include "AMManager/Var.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include <unordered_set>
 
@@ -72,6 +73,22 @@ void BindClientCommands(CLI::App &app, CliArgsPool &args,
       ->add_option("nicknames", args.disconnect.nicknames,
                    "Client nicknames to disconnect")
       ->expected(1, -1);
+}
+
+/**
+ * @brief Bind variable-related CLI commands.
+ */
+void BindVarCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
+  commands.var_cmd = app.add_subcommand("var", "Variable manager");
+  commands.var_cmd
+      ->add_option("tokens", args.var.tokens,
+                   "Variable references or assignments")
+      ->expected(0, -1);
+
+  commands.del_cmd = app.add_subcommand("del", "Delete variables");
+  commands.del_cmd
+      ->add_option("tokens", args.del.tokens, "Variable references")
+      ->expected(0, -1);
 }
 
 /**
@@ -341,6 +358,146 @@ std::vector<size_t> DedupIndices(const std::vector<size_t> &indices) {
   }
   return out;
 }
+
+/**
+ * @brief Return true if a character is valid inside a variable name.
+ */
+bool IsVarNameChar_(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9') || c == '_';
+}
+
+/**
+ * @brief Return true if a variable name is non-empty and valid.
+ */
+bool IsValidVarName_(const std::string &name) {
+  if (name.empty()) {
+    return false;
+  }
+  for (char c : name) {
+    if (!IsVarNameChar_(c)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * @brief Normalize a raw value by trimming and stripping paired quotes.
+ */
+ECM ParseValue_(const std::string &input, std::string *value) {
+  if (!value) {
+    return {EC::InvalidArg, "Null output pointer"};
+  }
+  std::string trimmed = AMStr::TrimWhitespaceCopy(input);
+  if (trimmed.empty()) {
+    *value = "";
+    return {EC::Success, ""};
+  }
+
+  const char first = trimmed.front();
+  const char last = trimmed.back();
+  const bool starts_quote = first == '"' || first == '\'';
+  const bool ends_quote = last == '"' || last == '\'';
+
+  if (starts_quote || ends_quote) {
+    if (trimmed.size() < 2 || first != last) {
+      return {EC::InvalidArg, "Malformed quoted value"};
+    }
+    *value = trimmed.substr(1, trimmed.size() - 2);
+    if (!value->empty()) {
+      std::string unescaped;
+      unescaped.reserve(value->size());
+      for (size_t i = 0; i < value->size(); ++i) {
+        if ((*value)[i] == '`' && i + 1 < value->size() &&
+            ((*value)[i + 1] == '"' || (*value)[i + 1] == '\'')) {
+          unescaped.push_back((*value)[i + 1]);
+          ++i;
+          continue;
+        }
+        unescaped.push_back((*value)[i]);
+      }
+      *value = std::move(unescaped);
+    }
+    return {EC::Success, ""};
+  }
+
+  if (!trimmed.empty()) {
+    std::string unescaped;
+    unescaped.reserve(trimmed.size());
+    for (size_t i = 0; i < trimmed.size(); ++i) {
+      if (trimmed[i] == '`' && i + 1 < trimmed.size() &&
+          (trimmed[i + 1] == '"' || trimmed[i + 1] == '\'')) {
+        unescaped.push_back(trimmed[i + 1]);
+        ++i;
+        continue;
+      }
+      unescaped.push_back(trimmed[i]);
+    }
+    *value = std::move(unescaped);
+  } else {
+    *value = trimmed;
+  }
+  return {EC::Success, ""};
+}
+
+/**
+ * @brief Parse a variable token like $name or ${ name }.
+ */
+ECM ParseVarToken_(const std::string &token, std::string *name) {
+  if (!name) {
+    return {EC::InvalidArg, "Null output pointer"};
+  }
+  std::string trimmed = AMStr::TrimWhitespaceCopy(token);
+  if (trimmed.empty()) {
+    return {EC::InvalidArg, "Empty variable token"};
+  }
+  if (trimmed.find('=') != std::string::npos) {
+    return {EC::InvalidArg, "Invalid variable token"};
+  }
+  if (trimmed.front() != '$') {
+    return {EC::InvalidArg, "Variable token must start with $"};
+  }
+  if (trimmed.size() < 2) {
+    return {EC::InvalidArg, "Invalid variable token"};
+  }
+
+  if (trimmed[1] == '{') {
+    if (trimmed.back() != '}') {
+      return {EC::InvalidArg, "Unclosed ${...} expression"};
+    }
+    std::string inner =
+        AMStr::TrimWhitespaceCopy(trimmed.substr(2, trimmed.size() - 3));
+    if (!IsValidVarName_(inner)) {
+      return {EC::InvalidArg,
+              "Invalid variable name: only letters, digits, and _ are allowed"};
+    }
+    *name = inner;
+    return {EC::Success, ""};
+  }
+
+  std::string inner = trimmed.substr(1);
+  if (!IsValidVarName_(inner)) {
+    return {EC::InvalidArg,
+            "Invalid variable name: only letters, digits, and _ are allowed"};
+  }
+  *name = inner;
+  return {EC::Success, ""};
+}
+
+/**
+ * @brief Join command tokens with single spaces.
+ */
+std::string JoinTokens_(const std::vector<std::string> &tokens) {
+  std::string out;
+  for (size_t i = 0; i < tokens.size(); ++i) {
+    if (i > 0) {
+      out.push_back(' ');
+    }
+    out.append(tokens[i]);
+  }
+  return out;
+}
 } // namespace
 
 /**
@@ -352,6 +509,7 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
   commands.args = &args;
   BindConfigCommands(app, args, commands);
   BindClientCommands(app, args, commands);
+  BindVarCommands(app, args, commands);
   BindFilesystemCommands(app, args, commands);
   BindCompleteCommands(app, args, commands);
   BindTaskCommands(app, args, commands);
@@ -525,6 +683,78 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     }
     std::cerr << "Invalid client command" << std::endl;
     result.rcm = {EC::InvalidArg, "Invalid client command"};
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (cli_commands.var_cmd && cli_commands.var_cmd->parsed()) {
+    AMVarManager &var_manager = AMVarManager::Instance(config_manager);
+    const std::vector<std::string> &tokens = args.var.tokens;
+    if (tokens.empty()) {
+      result.rcm = var_manager.Enumerate();
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
+    }
+
+    const std::string remainder = JoinTokens_(tokens);
+    const size_t eq_pos = remainder.find('=');
+    if (eq_pos != std::string::npos) {
+      const std::string left =
+          AMStr::TrimWhitespaceCopy(remainder.substr(0, eq_pos));
+      const std::string right = remainder.substr(eq_pos + 1);
+      std::string name;
+      result.rcm = ParseVarToken_(left, &name);
+      if (result.rcm.first != EC::Success) {
+        SetCliExitCode(static_cast<int>(result.rcm.first));
+        return result;
+      }
+      std::string value;
+      result.rcm = ParseValue_(right, &value);
+      if (result.rcm.first != EC::Success) {
+        SetCliExitCode(static_cast<int>(result.rcm.first));
+        return result;
+      }
+      result.rcm = var_manager.SetPersistentVar(name, value, true);
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
+    }
+
+    std::vector<std::string> names;
+    names.reserve(tokens.size());
+    for (const auto &token : tokens) {
+      std::string name;
+      result.rcm = ParseVarToken_(token, &name);
+      if (result.rcm.first != EC::Success) {
+        SetCliExitCode(static_cast<int>(result.rcm.first));
+        return result;
+      }
+      names.push_back(name);
+    }
+    result.rcm = var_manager.Query(names);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (cli_commands.del_cmd && cli_commands.del_cmd->parsed()) {
+    AMVarManager &var_manager = AMVarManager::Instance(config_manager);
+    const std::vector<std::string> &tokens = args.del.tokens;
+    if (tokens.empty()) {
+      result.rcm = {EC::InvalidArg, "del requires variable names"};
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
+    }
+    std::vector<std::string> names;
+    names.reserve(tokens.size());
+    for (const auto &token : tokens) {
+      std::string name;
+      result.rcm = ParseVarToken_(token, &name);
+      if (result.rcm.first != EC::Success) {
+        SetCliExitCode(static_cast<int>(result.rcm.first));
+        return result;
+      }
+      names.push_back(name);
+    }
+    result.rcm = var_manager.Delete(names);
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
