@@ -119,13 +119,13 @@ void AMPromptManager::Print(const std::vector<std::string> &items,
 void AMPromptManager::ErrorFormat(const std::string &error_name,
                                   const std::string &error_msg, bool is_exit,
                                   int exit_code, const char *caller) {
-  std::ostringstream header;
-  header << "[Error Call from Function " << (caller ? caller : "unknown")
-         << "]";
-  Print(header.str());
 
   std::ostringstream body;
-  body << "❌  " << error_name << "  :  " << error_msg;
+  if (error_name.empty()) {
+    body << "❌ " << error_msg;
+  } else {
+    body << "❌ " << error_name << " : " << error_msg;
+  }
   Print(body.str());
 
   if (is_exit) {
@@ -226,6 +226,7 @@ void AMPromptManager::resultprint(const std::shared_ptr<TaskInfo> &task_info) {
   size_t success = 0;
   size_t failed = 0;
   size_t terminated = 0;
+
   ECM last_error = {EC::Success, ""};
 
   {
@@ -306,16 +307,18 @@ bool AMPromptManager::Prompt(const std::string &prompt,
   /** Guard to silence highlight during simple prompts. */
   struct HighlightGuard {
     bool previous = true;
-    explicit HighlightGuard(bool enable) { previous = ic_enable_highlight(enable); }
+    explicit HighlightGuard(bool enable) {
+      previous = ic_enable_highlight(enable);
+    }
     ~HighlightGuard() { ic_enable_highlight(previous); }
   };
 
   HighlightGuard highlight_guard(false);
 
   const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
-  char *line = ic_readline_ex_with_initial(prompt.c_str(), &PromptNoComplete_,
-                                           nullptr, &PromptNoHighlight_, nullptr,
-                                           initial);
+  char *line =
+      ic_readline_ex_with_initial(prompt.c_str(), &PromptNoComplete_, nullptr,
+                                  &PromptNoHighlight_, nullptr, initial);
   if (!line) {
     return true;
   }

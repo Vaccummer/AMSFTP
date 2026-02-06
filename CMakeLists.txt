@@ -52,6 +52,7 @@ target_link_libraries(amsftp PRIVATE
   ws2_32
   Advapi32
   CLI11::CLI11
+  
 )
 
 # # ========= 测试程序 =========
