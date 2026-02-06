@@ -940,7 +940,9 @@ private:
 
     {
       std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
-      client->public_kv["workdir"] = AMPathStr::UnifyPathSep(resolved, "/");
+      const std::string normalized = AMPathStr::UnifyPathSep(resolved, "/");
+      client->public_kv["workdir"] = normalized;
+      client->public_kv["login_dir"] = normalized;
     }
 
     if (need_persist) {

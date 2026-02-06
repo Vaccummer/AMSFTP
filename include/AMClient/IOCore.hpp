@@ -2194,11 +2194,12 @@ public:
               tasks};
     }
 
-    auto [rcm7, src_paths] =
+    auto [rcm7, src_pack] =
         src_client->iwalk(srcf, false, interrupt_flag, timeout_ms, start_time);
     if (rcm7.first != EC::Success) {
       return {rcm7, tasks};
     }
+    const auto &src_paths = src_pack.first;
     tasks.reserve(src_paths.size());
 
     TransferTask taskt;
