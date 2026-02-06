@@ -207,17 +207,20 @@ public:
     return {ECM{EC::Success, ""}, result};
   }
 
-  inline std::pair<ECM, std::vector<PathInfo>>
-  iwalk(const std::string &path, bool ignore_sepcial_file = true,
-        amf interrupt_flag = nullptr, int timeout_ms = -1,
-        int64_t start_time = -1) override {
+  inline std::pair<ECM, WRI> iwalk(const std::string &path,
+                                   bool ignore_sepcial_file = true,
+                                   amf interrupt_flag = nullptr,
+                                   int timeout_ms = -1,
+                                   int64_t start_time = -1) override {
     std::vector<PathInfo> result = {};
+    RMR errors = {};
     auto [error, info] = stat(path);
     if (error.first != EC::Success) {
-      return {error, result};
+      errors.emplace_back(path, error);
+      return {error, {result, errors}};
     }
     if (info.type != PathType::DIR) {
-      return {error, {info}};
+      return {error, {WRV{info}, errors}};
     }
     std::unordered_set<std::string> all_dirs;   // 存储所有目录
     std::unordered_set<std::string> has_subdir; // 存储有子目录的目录（非末级）
@@ -225,12 +228,15 @@ public:
     // 取消其追踪symlink
     for (const auto &entry : fs::recursive_directory_iterator(path, ec)) {
       if (interrupt_flag && interrupt_flag->check()) {
-        return {ECM{EC::Terminate, "iwalk interrupted by user"}, result};
+        ECM out = {EC::Terminate, "iwalk interrupted by user"};
+        return {out, {result, errors}};
       }
       if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
-        return {ECM{EC::OperationTimeout, "iwalk timeout"}, result};
+        ECM out = {EC::OperationTimeout, "iwalk timeout"};
+        return {out, {result, errors}};
       }
       if (ec) {
+        errors.emplace_back(entry.path().string(), ECM{fec(ec), ec.message()});
         ec.clear();
         continue;
       }
@@ -238,6 +244,8 @@ public:
         auto [error, info] = stat(entry.path().string(), false);
         if (error.first == EC::Success) {
           result.push_back(info);
+        } else {
+          errors.emplace_back(entry.path().string(), error);
         }
         continue;
       }
@@ -255,14 +263,17 @@ public:
         auto [error, info] = stat(dir, false);
         if (error.first == EC::Success) {
           result.push_back(info);
+        } else {
+          errors.emplace_back(dir, error);
         }
       }
     }
-    return {ECM{EC::Success, ""}, result};
+    return {ECM{EC::Success, ""}, {result, errors}};
   }
 
-  inline void _walk(std::vector<std::string> parts, WRD &result, int cur_depth,
-                    int max_depth, bool ignore_sepcial_file = true,
+  inline void _walk(std::vector<std::string> parts, WRD &result, RMR &errors,
+                    int cur_depth, int max_depth,
+                    bool ignore_sepcial_file = true,
                     amf interrupt_flag = nullptr, int timeout_ms = -1,
                     int64_t start_time = -1) {
     if (max_depth > 0 && cur_depth > max_depth) {
@@ -277,6 +288,7 @@ public:
     }
     auto [error, info] = listdir(pathf, interrupt_flag, timeout_ms, start_time);
     if (error.first != EC::Success) {
+      errors.emplace_back(pathf, error);
       return;
     }
     for (const auto &entry : info) {
@@ -288,7 +300,8 @@ public:
       if (entry.type == PathType::DIR) {
         auto n_parts = parts;
         n_parts.push_back(entry.name);
-        _walk(n_parts, result, cur_depth + 1, max_depth, ignore_sepcial_file);
+        _walk(n_parts, result, errors, cur_depth + 1, max_depth,
+              ignore_sepcial_file);
       } else if (static_cast<int>(entry.type) < 0 && ignore_sepcial_file) {
         continue;
       } else {
@@ -301,21 +314,24 @@ public:
     result.emplace_back(parts, files_info);
   }
 
-  inline std::pair<ECM, WRD> walk(const std::string &path, int max_depth,
-                                  bool ignore_sepcial_file = true,
-                                  amf interrupt_flag = nullptr,
-                                  int timeout_ms = -1,
-                                  int64_t start_time = -1) override {
+  inline std::pair<ECM, WRDR> walk(const std::string &path, int max_depth,
+                                   bool ignore_sepcial_file = true,
+                                   amf interrupt_flag = nullptr,
+                                   int timeout_ms = -1,
+                                   int64_t start_time = -1) override {
     WRD result = {};
+    RMR errors = {};
     auto [error, info] = stat(path);
     if (error.first != EC::Success) {
-      return {error, result};
+      errors.emplace_back(path, error);
+      return {error, {result, errors}};
     } else if (info.type != PathType::DIR) {
       trace(TraceLevel::Debug, EC::NotADirectory, path, "walk",
             AMStr::amfmt("Path is not a directory: {}", path));
-      return {ECM{EC::NotADirectory,
-                  AMStr::amfmt("Path is not a directory: {}", path)},
-              result};
+      ECM out = {EC::NotADirectory,
+                 AMStr::amfmt("Path is not a directory: {}", path)};
+      errors.emplace_back(path, out);
+      return {out, {result, errors}};
     }
 
     struct DirState {
@@ -362,8 +378,9 @@ public:
     fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
       if (interrupt_flag && interrupt_flag->check()) {
-        return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
-                result};
+        ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
+        errors.emplace_back(path, out);
+        return {out, {result, errors}};
       }
       if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
         break;
@@ -376,8 +393,8 @@ public:
       const fs::path entry_path = it->path();
       auto [stat_ecm, entry_info] = stat(entry_path.string(), false);
       if (stat_ecm.first != EC::Success) {
-        const std::string parent_key = normalize_key(
-            entry_path.parent_path().lexically_normal().string());
+        const std::string parent_key =
+            normalize_key(entry_path.parent_path().lexically_normal().string());
         dir_states[parent_key].has_entry = true;
       } else {
         const std::string entry_display = entry_info.path;
@@ -411,8 +428,7 @@ public:
       if (it_display == dir_display.end()) {
         return parts;
       }
-      fs::path dir_norm =
-          fs::path(it_display->second).lexically_normal();
+      fs::path dir_norm = fs::path(it_display->second).lexically_normal();
       if (dir_norm != root_norm) {
         fs::path rel = dir_norm.lexically_relative(root_norm);
         if (!rel.empty() && rel != ".") {
@@ -442,12 +458,7 @@ public:
       result.emplace_back(build_parts(dir_key), std::move(files));
     }
 
-    if (interrupt_flag && interrupt_flag->check()) {
-      return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
-              result};
-    }
-
-    return {{EC::Success, ""}, result};
+    return {{EC::Success, ""}, {result, errors}};
   }
 
   ECM mkdir(const std::string &path,

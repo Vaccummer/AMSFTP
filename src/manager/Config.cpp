@@ -1322,6 +1322,9 @@ std::string AMConfigManager::Format(const std::string &ori_str_f,
       return text;
     }
     Path key = {"style", "InputHighlight", name};
+    if (name.rfind("Prompt.", 0) == 0) {
+      key = {"style", "Prompt", name.substr(7)};
+    }
     const Json *node = FindJsonNode(settings_json_, key);
     if (!node || !node->is_string()) {
       return text;
@@ -1640,13 +1643,11 @@ AMConfigManager::KnownHostCallback AMConfigManager::BuildKnownHostCallback() {
       bool canceled = false;
       const std::string question = AMStr::amfmt(
           "No known host fingerprint for {}:{} {}.\n"
-          "Fingerprint: {}\nAdd it? (y/N): ",
+          "Fingerprint: {}",
           entry.hostname, entry.port, entry.protocol, entry.fingerprint);
-      if (!prompt.PromptYesNo(question, &canceled)) {
-        if (canceled) {
-          return Err(EC::ConfigCanceled, "Known host fingerprint add canceled");
-        }
-        return Err(EC::HostConfigNotFound, "Known host fingerprint not found");
+      prompt.Print(question);
+      if (!prompt.PromptYesNo("Add it? (y/N): ", &canceled) || !canceled) {
+        return Err(EC::ConfigCanceled, "Known host fingerprint add canceled");
       }
       return UpsertKnownHost(entry, true);
     }

@@ -952,6 +952,8 @@ using WRD =
 using amf = std::shared_ptr<InterruptFlag>;
 using EC = ErrorCode;
 using ECM = std::pair<ErrorCode, std::string>;
+using WER = std::vector<std::pair<std::string, ECM>>;
+using WRI = std::pair<std::vector<PathInfo>, WER>;
 
 inline std::string HomePath() {
 #ifdef _WIN32
@@ -1229,10 +1231,11 @@ private:
   virtual std::pair<ECM, std::vector<PathInfo>>
   listdir(const std::string &path, amf interrupt_flag = nullptr,
           int timeout_ms = -1, int64_t start_time = -1) = 0;
-  virtual std::pair<ECM, std::vector<PathInfo>>
-  iwalk(const std::string &path, bool ignore_sepcial_file = true,
-        amf interrupt_flag = nullptr, int timeout_ms = -1,
-        int64_t start_time = -1) = 0;
+  virtual std::pair<ECM, AMFS::WRI> iwalk(const std::string &path,
+                                          bool ignore_sepcial_file = true,
+                                          amf interrupt_flag = nullptr,
+                                          int timeout_ms = -1,
+                                          int64_t start_time = -1) = 0;
   std::string star_rep = "amspecial1123exchange2123for1233star4123dd";
   std::string less_rep = "amspecial4123exchange3332for2less131aa";
   std::string greater_rep = "amspecial721exchange623for511greater422ff";
@@ -1260,12 +1263,12 @@ private:
 
     if (std::regex_search(cur_pattern, std::regex("^\\*\\*+$"))) {
       std::vector<std::string> relative_parts;
-      auto [error, sub_list] =
+      auto [error, sub_pack] =
           iwalk(path.path, true, interrupt_flag, timeout_ms, start_time);
       if (error.first != EC::Success) {
         return;
       }
-      for (auto &sub : sub_list) {
+      for (auto &sub : sub_pack.first) {
         if (interrupt_flag && interrupt_flag->check()) {
           return;
         }

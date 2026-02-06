@@ -205,6 +205,8 @@ public:
     return false;
   }
 
+  [[nodiscard]] bool HostExists(const std::string &nickname) const;
+
 private:
   AMConfigManager() = default;
 
@@ -219,7 +221,6 @@ private:
   [[nodiscard]] std::map<std::string, HostEntry> CollectHosts() const;
   [[nodiscard]] ECM PrintHost(const std::string &nickname,
                               const HostEntry &entry) const;
-  [[nodiscard]] bool HostExists(const std::string &nickname) const;
   ECM UpsertHostField(const std::string &nickname, const std::string &field,
                       Value value);
   ECM RemoveHost(const std::string &nickname);

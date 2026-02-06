@@ -66,13 +66,15 @@ void BindClientCommands(CLI::App &app, CliArgsPool &args,
   commands.client_cmd = app.add_subcommand("client", "Client manager");
   commands.client_ls_cmd =
       commands.client_cmd->add_subcommand("ls", "List client names");
-  commands.client_ls_cmd->add_flag("-l,--list", args.clients.detail,
+  commands.client_ls_cmd->add_flag("-d,--detail", args.clients.detail,
                                    "Show full status details");
   commands.client_check_cmd =
       commands.client_cmd->add_subcommand("check", "Check client status");
   commands.client_check_cmd
       ->add_option("nicknames", args.check.nicknames, "Client nicknames")
       ->expected(0, -1);
+  commands.client_check_cmd->add_flag("-d,--detail", args.check.detail,
+                                      "Show client details");
   commands.client_rm_cmd =
       commands.client_cmd->add_subcommand("rm", "Disconnect clients");
   commands.client_rm_cmd
@@ -179,25 +181,19 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
 
   commands.sftp_cmd = app.add_subcommand("sftp", "Connect to SFTP host");
   commands.sftp_cmd
-      ->add_option("user_at_host", args.sftp.user_at_host,
-                   "User and host (user@host)")
+      ->add_option("targets", args.sftp.targets,
+                   "nickname user@host | user@host")
       ->required()
-      ->expected(1, 1);
-  commands.sftp_cmd->add_option("nickname", args.sftp.nickname,
-                                "Host nickname");
+      ->expected(1, 2);
   commands.sftp_cmd->add_option("-p,--port", args.sftp.port, "Port");
-  commands.sftp_cmd->add_option("--password", args.sftp.password, "Password");
   commands.sftp_cmd->add_option("--keyfile", args.sftp.keyfile, "Keyfile");
 
   commands.ftp_cmd = app.add_subcommand("ftp", "Connect to FTP host");
   commands.ftp_cmd
-      ->add_option("user_at_host", args.ftp.user_at_host,
-                   "User and host (user@host)")
+      ->add_option("targets", args.ftp.targets, "nickname user@host | user@host")
       ->required()
-      ->expected(1, 1);
-  commands.ftp_cmd->add_option("nickname", args.ftp.nickname, "Host nickname");
+      ->expected(1, 2);
   commands.ftp_cmd->add_option("-p,--port", args.ftp.port, "Port");
-  commands.ftp_cmd->add_option("--password", args.ftp.password, "Password");
   commands.ftp_cmd->add_option("--keyfile", args.ftp.keyfile, "Keyfile");
 
   commands.ch_cmd = app.add_subcommand("ch", "Change current client");
@@ -673,7 +669,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
       return result;
     }
     if (cli_commands.client_check_cmd->parsed()) {
-      result.rcm = filesystem.check(args.check.nicknames, flag);
+      result.rcm =
+          filesystem.check(args.check.nicknames, args.check.detail, flag);
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
@@ -916,7 +913,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.cd_cmd->parsed()) {
-    result.rcm = filesystem.cd(args.cd.path, flag);
+    result.rcm = filesystem.cd(args.cd.path, flag, false);
     if (result.enter_interactive != true && result.rcm.first == EC::Success) {
       result.enter_interactive = true;
     }
@@ -949,9 +946,25 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.sftp_cmd->parsed()) {
-    result.rcm = filesystem.sftp(args.sftp.nickname, args.sftp.user_at_host,
-                                 args.sftp.port, args.sftp.password,
-                                 args.sftp.keyfile, flag);
+    std::string user_at_host;
+    std::string nickname;
+    if (args.sftp.targets.size() == 1) {
+      user_at_host = args.sftp.targets[0];
+    } else if (args.sftp.targets.size() == 2) {
+      nickname = args.sftp.targets[0];
+      user_at_host = args.sftp.targets[1];
+    } else {
+      result.rcm = {EC::InvalidArg, "sftp requires user@host"};
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
+    }
+    if (user_at_host.find('@') == std::string::npos) {
+      result.rcm = {EC::InvalidArg, "Invalid user@host format"};
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
+    }
+    result.rcm = filesystem.sftp(nickname, user_at_host, args.sftp.port,
+                                 "", args.sftp.keyfile, flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }
@@ -961,9 +974,25 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.ftp_cmd->parsed()) {
-    result.rcm =
-        filesystem.ftp(args.ftp.nickname, args.ftp.user_at_host, args.ftp.port,
-                       args.ftp.password, args.ftp.keyfile, flag);
+    std::string user_at_host;
+    std::string nickname;
+    if (args.ftp.targets.size() == 1) {
+      user_at_host = args.ftp.targets[0];
+    } else if (args.ftp.targets.size() == 2) {
+      nickname = args.ftp.targets[0];
+      user_at_host = args.ftp.targets[1];
+    } else {
+      result.rcm = {EC::InvalidArg, "ftp requires user@host"};
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
+    }
+    if (user_at_host.find('@') == std::string::npos) {
+      result.rcm = {EC::InvalidArg, "Invalid user@host format"};
+      SetCliExitCode(static_cast<int>(result.rcm.first));
+      return result;
+    }
+    result.rcm = filesystem.ftp(nickname, user_at_host, args.ftp.port, "",
+                                args.ftp.keyfile, flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }

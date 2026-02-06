@@ -1311,13 +1311,16 @@ public:
   }
 
   // 将iwalk定义在基类，因为几乎所有iwalk都是基于listdir的
-  void _iwalk(const PathInfo &info, WRV &result,
+  void _iwalk(const PathInfo &info, WRV &result, RMR &errors,
               bool ignore_special_file = true, amf interrupt_flag = nullptr,
               int timeout_ms = -1, int64_t start_time = -1) {
 
     auto [rcm2, list_info] =
         listdir(info.path, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
+      if (rcm2.first != EC::OperationTimeout) {
+        errors.emplace_back(info.path, rcm2);
+      }
       return;
     }
 
@@ -1334,7 +1337,7 @@ public:
         continue;
       }
       no_subdir = false;
-      _iwalk(item, result, ignore_special_file);
+      _iwalk(item, result, errors, ignore_special_file);
     }
 
     if (no_subdir) {
@@ -1343,18 +1346,20 @@ public:
     }
   }
 
-  std::pair<ECM, std::vector<PathInfo>>
-  iwalk(const std::string &path, bool ignore_special_file = true,
-        amf interrupt_flag = nullptr, int timeout_ms = -1,
-        int64_t start_time = -1) override {
+  std::pair<ECM, WRI> iwalk(const std::string &path,
+                            bool ignore_special_file = true,
+                            amf interrupt_flag = nullptr, int timeout_ms = -1,
+                            int64_t start_time = -1) override {
     if (start_time == -1) {
       start_time = am_ms();
     }
 
     if (path.empty()) {
-      return {ECM{EC::InvalidArg, "Invalid empty path"}, {}};
+      ECM out = {EC::InvalidArg, "Invalid empty path"};
+      return {out, {WRV{}, RMR{}}};
     }
     WRV result = {};
+    RMR errors = {};
     start_time = start_time == -1 ? am_ms() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
@@ -1362,16 +1367,21 @@ public:
     auto [rcm, info] =
         stat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm.first != EC::Success) {
-      return {rcm, {}};
+      errors.emplace_back(path, rcm);
+      return {rcm, {WRV{}, errors}};
     } else if (info.type != PathType::DIR) {
-      return {{EC::Success, ""}, {info}};
+      return {{EC::Success, ""}, {WRV{info}, errors}};
     }
-    _iwalk(info, result, ignore_special_file, interrupt_flag, timeout_ms,
+    _iwalk(info, result, errors, ignore_special_file, interrupt_flag, timeout_ms,
            start_time);
-    return {ECM{EC::Success, ""}, result};
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {ECM{EC::Terminate, "iwalk interrupted by user"},
+              {result, errors}};
+    }
+    return {ECM{EC::Success, ""}, {result, errors}};
   }
 
-  void _walk(const std::vector<std::string> &parts, WRD &result,
+  void _walk(const std::vector<std::string> &parts, WRD &result, RMR &errors,
              int cur_depth = 0, int max_depth = -1,
              bool ignore_special_file = true, amf interrupt_flag = nullptr,
              int timeout_ms = -1, int64_t start_time = -1) {
@@ -1382,6 +1392,9 @@ public:
     auto [rcm2, list_info] =
         listdir(pathf, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
+      if (rcm2.first != EC::OperationTimeout) {
+        errors.emplace_back(pathf, rcm2);
+      }
       return;
     }
     if (list_info.empty()) {
@@ -1400,8 +1413,8 @@ public:
       if (info.type == PathType::DIR) {
         auto new_parts = parts;
         new_parts.push_back(info.name);
-        _walk(new_parts, result, cur_depth + 1, max_depth, ignore_special_file,
-              interrupt_flag, timeout_ms, start_time);
+        _walk(new_parts, result, errors, cur_depth + 1, max_depth,
+              ignore_special_file, interrupt_flag, timeout_ms, start_time);
       } else {
         if (ignore_special_file && static_cast<int>(info.type) < 0) {
           continue;
@@ -1414,23 +1427,29 @@ public:
     }
   }
 
-  std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1,
-                           bool ignore_special_file = true,
-                           amf interrupt_flag = nullptr, int timeout_ms = -1,
-                           int64_t start_time = -1) override {
+  std::pair<ECM, WRDR> walk(const std::string &path, int max_depth = -1,
+                            bool ignore_special_file = true,
+                            amf interrupt_flag = nullptr, int timeout_ms = -1,
+                            int64_t start_time = -1) override {
     start_time = start_time == -1 ? am_ms() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
     auto [rcm, br] = stat(path, false, interrupt_flag, timeout_ms, start_time);
+    RMR errors = {};
     if (rcm.first != EC::Success) {
-      return {rcm, {}};
+      errors.emplace_back(path, rcm);
+      return {rcm, {WRD{}, errors}};
     }
     WRD result_dict = {};
     std::vector<std::string> parts = {path};
-    _walk(parts, result_dict, 0, max_depth, ignore_special_file, interrupt_flag,
-          timeout_ms, start_time);
-    return {ECM{EC::Success, ""}, result_dict};
+    _walk(parts, result_dict, errors, 0, max_depth, ignore_special_file,
+          interrupt_flag, timeout_ms, start_time);
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
+              {result_dict, errors}};
+    }
+    return {ECM{EC::Success, ""}, {result_dict, errors}};
   }
   ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
             int timeout_ms = -1, int64_t start_time = -1) override {

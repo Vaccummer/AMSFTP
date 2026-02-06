@@ -4,6 +4,7 @@
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
 #include <cstdint>
+#include <list>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,9 +29,10 @@ public:
                                 AMConfigManager &config_manager);
 
   /** Check whether clients exist and print status. */
-  ECM check(const std::string &nickname, amf interrupt_flag = nullptr);
+  ECM check(const std::string &nickname, bool detail = false,
+            amf interrupt_flag = nullptr);
   /** Check whether clients exist from nickname list. */
-  ECM check(const std::vector<std::string> &nicknames,
+  ECM check(const std::vector<std::string> &nicknames, bool detail = false,
             amf interrupt_flag = nullptr);
   /** Create/connect a client by nickname, optionally rebuilding it. */
   ECM connect(const std::string &nickname, bool force = false,
@@ -58,7 +60,8 @@ public:
   /** Remove a client from the manager with confirmation. */
   ECM remove_client(const std::string &nickname);
   /** Change working directory with history support. */
-  ECM cd(const std::string &path, amf interrupt_flag = nullptr);
+  ECM cd(const std::string &path, amf interrupt_flag = nullptr,
+         bool from_history = false);
   /** Print all clients with optional detailed status. */
   ECM print_clients(bool detail = false, amf interrupt_flag = nullptr);
   /** Print stat info for a path. */
@@ -177,5 +180,5 @@ private:
   AMClientManager &client_manager_;
   AMConfigManager &config_manager_;
   AMPromptManager &prompt_manager_;
-  std::string last_cd_;
+  std::list<std::string> cd_history_;
 };

@@ -65,7 +65,9 @@ using BR = std::pair<bool, ECM>;                      // is_dir函数返回类�
 using SR = std::pair<ECM, PathInfo>;                  // stat函数返回类型
 using WRV = std::vector<PathInfo>;                    // iwalk函数返回类型
 using WRD = AMFS::WRD;                                // walk函数返回类型
-using WR = std::pair<ECM, WRV>;                       // iwalk函数返回类型
+using WRI = std::pair<WRV, AMFS::WER>;                // iwalk data + errors
+using WRDR = std::pair<WRD, AMFS::WER>;               // walk data + errors
+using WR = std::pair<ECM, WRI>;                       // iwalk函数返回类型
 using SIZER = std::pair<ECM, size_t>;                 // getsize函数返回类型
 using TraceCallback = std::function<void(const TraceInfo &)>;
 using CR =
@@ -377,7 +379,7 @@ public:
                           bool ignore_sepcial_file = true,
                           amf interrupt_flag = nullptr, int timeout_ms = -1,
                           int64_t start_time = -1) {
-    auto [rcm, list] = iwalk(path, ignore_sepcial_file, interrupt_flag,
+    auto [rcm, pack] = iwalk(path, ignore_sepcial_file, interrupt_flag,
                              timeout_ms, start_time);
     if (rcm.first != EC::Success) {
       return -1;
@@ -386,7 +388,7 @@ public:
       return -1;
     }
     size_t size = 0;
-    for (auto &item : list) {
+    for (auto &item : pack.first) {
       size += item.size;
     }
     return size;
@@ -600,17 +602,16 @@ public:
         "{} Client doesn't implement funtion: copy", GetProtocolName()));
   }
 
-  std::pair<ECM, std::vector<PathInfo>>
-  iwalk([[maybe_unused]] const std::string &path,
-        [[maybe_unused]] bool ignore_special_file = true,
-        [[maybe_unused]] amf interrupt_flag = nullptr,
-        [[maybe_unused]] int timeout_ms = -1,
-        [[maybe_unused]] int64_t start_time = -1) override {
+  std::pair<ECM, WRI> iwalk([[maybe_unused]] const std::string &path,
+                            [[maybe_unused]] bool ignore_special_file = true,
+                            [[maybe_unused]] amf interrupt_flag = nullptr,
+                            [[maybe_unused]] int timeout_ms = -1,
+                            [[maybe_unused]] int64_t start_time = -1) override {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: iwalk", GetProtocolName()));
   }
 
-  virtual std::pair<ECM, WRD>
+  virtual std::pair<ECM, WRDR>
   walk([[maybe_unused]] const std::string &path,
        [[maybe_unused]] int max_depth = -1,
        [[maybe_unused]] bool ignore_special_file = false,

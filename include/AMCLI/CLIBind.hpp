@@ -145,10 +145,8 @@ struct CpArgs {
  * @brief CLI argument container for sftp.
  */
 struct SftpArgs {
-  std::string nickname;
-  std::string user_at_host;
+  std::vector<std::string> targets;
   int64_t port = 22;
-  std::string password;
   std::string keyfile;
 };
 
@@ -156,10 +154,8 @@ struct SftpArgs {
  * @brief CLI argument container for ftp.
  */
 struct FtpArgs {
-  std::string nickname;
-  std::string user_at_host;
+  std::vector<std::string> targets;
   int64_t port = 21;
-  std::string password;
   std::string keyfile;
 };
 
@@ -175,6 +171,7 @@ struct ClientsArgs {
  */
 struct CheckArgs {
   std::vector<std::string> nicknames;
+  bool detail = false;
 };
 
 /**

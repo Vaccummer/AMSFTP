@@ -1676,7 +1676,7 @@ private:
                                   LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
     });
     rcm = ErrorRecord(oepn_res, TraceLevel::Debug, path, "libssh2_sftp_open_ex",
-                      "Open directory {path} failed: {error}");
+                      "Open directory {target} failed: {error}");
     if (rcm.first != EC::Success) {
       return {rcm, {}};
     }
@@ -1727,7 +1727,7 @@ private:
 
 protected:
   void _iwalk(const std::string &path, const LIBSSH2_SFTP_ATTRIBUTES &attrs,
-              WRV &result, bool ignore_sepcial_file = true,
+              WRV &result, RMR &errors, bool ignore_sepcial_file = true,
               amf interrupt_flag = nullptr, int timeout_ms = -1,
               int64_t start_time = -1) {
     // 搜索目录下所有最深层的路径, 用于递归传输路径
@@ -1747,6 +1747,9 @@ protected:
     auto [rcm2, attrs_list] =
         lib_listdir(path, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
+      if (rcm2.first != EC::OperationTimeout) {
+        errors.emplace_back(path, rcm2);
+      }
       return;
     }
 
@@ -1762,12 +1765,12 @@ protected:
       if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
         return;
       }
-      _iwalk(attrs.first, attrs.second, result, ignore_sepcial_file,
+      _iwalk(attrs.first, attrs.second, result, errors, ignore_sepcial_file,
              interrupt_flag, timeout_ms, start_time);
     }
   }
 
-  void _walk(const std::vector<std::string> &parts, WRD &result,
+  void _walk(const std::vector<std::string> &parts, WRD &result, RMR &errors,
              int cur_depth = 0, int max_depth = -1,
              bool ignore_sepcial_file = true, amf interrupt_flag = nullptr,
              int timeout_ms = -1, int64_t start_time = -1) {
@@ -1781,6 +1784,9 @@ protected:
     auto [rcm2, list_info] =
         lib_listdir(pathf, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
+      if (rcm2.first != EC::OperationTimeout) {
+        errors.emplace_back(pathf, rcm2);
+      }
       return;
     }
 
@@ -1800,8 +1806,8 @@ protected:
       if (isdir(attrs)) {
         auto new_parts = parts;
         new_parts.push_back(AMPathStr::basename(path));
-        _walk(new_parts, result, cur_depth + 1, max_depth, ignore_sepcial_file,
-              interrupt_flag, timeout_ms, start_time);
+        _walk(new_parts, result, errors, cur_depth + 1, max_depth,
+              ignore_sepcial_file, interrupt_flag, timeout_ms, start_time);
       } else {
         if (ignore_sepcial_file && !isreg(attrs)) {
           continue;
@@ -3033,13 +3039,14 @@ public:
   }*/
 
   // 递归遍历某一路径下的所有文件和底层目录，返回PathInfo的vector
-  std::pair<ECM, WRV> iwalk(const std::string &path,
+  std::pair<ECM, WRI> iwalk(const std::string &path,
                             bool ignore_sepcial_file = true,
                             amf interrupt_flag = nullptr, int timeout_ms = -1,
                             int64_t start_time = -1) override {
     ECM rcm = _precheck(path);
+    RMR errors = {};
     if (rcm.first != EC::Success) {
-      return {};
+      return {rcm, {WRV{}, errors}};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
@@ -3048,29 +3055,34 @@ public:
     auto [rcm2, attrs] =
         lib_getstat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
-      return {};
+      errors.emplace_back(path, rcm2);
+      return {rcm2, {WRV{}, errors}};
     }
     if (!isdir(attrs)) {
       if (!isreg(attrs) && ignore_sepcial_file) {
-        return {};
+        return {ECM{EC::Success, ""}, {WRV{}, errors}};
       }
-      return {ECM{EC::Success, ""}, {FormatStat(path, attrs)}};
+      return {ECM{EC::Success, ""}, {WRV{FormatStat(path, attrs)}, errors}};
     }
     // get all files and deepest folders
     WRV result = {};
-    _iwalk(path, attrs, result, ignore_sepcial_file, interrupt_flag, timeout_ms,
-           start_time);
-    return {ECM{EC::Success, ""}, result};
+    _iwalk(path, attrs, result, errors, ignore_sepcial_file, interrupt_flag,
+           timeout_ms, start_time);
+    if (interrupt_flag && interrupt_flag->check()) {
+      return {ECM{EC::Terminate, "Interrupted by user"}, {result, errors}};
+    }
+    return {ECM{EC::Success, ""}, {result, errors}};
   }
 
   // 真实的walk函数，返回([root_path, part1, part2, ...], PathInfo)的vector
-  std::pair<ECM, WRD> walk(const std::string &path, int max_depth = -1,
-                           bool ignore_special_file = false,
-                           amf interrupt_flag = nullptr, int timeout_ms = -1,
-                           int64_t start_time = -1) override {
+  std::pair<ECM, WRDR> walk(const std::string &path, int max_depth = -1,
+                            bool ignore_special_file = false,
+                            amf interrupt_flag = nullptr, int timeout_ms = -1,
+                            int64_t start_time = -1) override {
     ECM rcm0 = _precheck(path);
+    RMR errors = {};
     if (rcm0.first != EC::Success) {
-      return {rcm0, {}};
+      return {rcm0, {WRD{}, errors}};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
@@ -3078,19 +3090,22 @@ public:
     start_time = start_time == -1 ? am_ms() : start_time;
     auto [rcm, br] = stat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm.first != EC::Success) {
-      return {rcm, {}};
+      errors.emplace_back(path, rcm);
+      return {rcm, {WRD{}, errors}};
     } else if (br.type != PathType::DIR) {
-      return {{EC::NotADirectory, "Path is not a directory"}, {}};
+      ECM out = {EC::NotADirectory, "Path is not a directory"};
+      errors.emplace_back(path, out);
+      return {out, {WRD{}, errors}};
     }
     WRD result_dict = {};
     std::vector<std::string> parts = {path};
-    _walk(parts, result_dict, 0, max_depth, ignore_special_file, interrupt_flag,
-          timeout_ms, start_time);
+    _walk(parts, result_dict, errors, 0, max_depth, ignore_special_file,
+          interrupt_flag, timeout_ms, start_time);
     // 打印result_dict的类型
     if (interrupt_flag && interrupt_flag->check()) {
       return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
-              result_dict};
+              {result_dict, errors}};
     }
-    return {ECM{EC::Success, ""}, result_dict};
+    return {ECM{EC::Success, ""}, {result_dict, errors}};
   }
 };
