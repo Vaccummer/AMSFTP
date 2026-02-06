@@ -46,7 +46,7 @@ if __name__ == "__main__":
     print("\x1b[9mstrikethrough\x1b[29m normal")
     from wcwidth import wcwidth
     print(wcwidth("\uf17c"), wcwidth("\U000F0A21"))
-    print("󰨡")
+    print("\u23F9")
 
 
 

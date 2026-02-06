@@ -1383,6 +1383,7 @@ std::string AMConfigManager::Format(const std::string &ori_str_f,
   const bool is_hidden = !path_name.empty() && path_name.front() == '.';
   const bool is_nowrite =
       path_info->mode_int != 0 && (path_info->mode_int & 0222) == 0;
+  const bool is_exist = !path_info->path.empty();
 
   auto resolve_extra = [&](const std::string &key) -> std::string {
     std::string tag = NormalizeStyleTag_(
@@ -1394,6 +1395,12 @@ std::string AMConfigManager::Format(const std::string &ori_str_f,
         GetSettingString({"style", "PathSpecific3", key}, ""));
   };
 
+  if (!is_exist) {
+    const std::string extra_tag = resolve_extra("nonexist");
+    if (!extra_tag.empty()) {
+      styled = ApplyStyleTag_(extra_tag, styled);
+    }
+  }
   if (is_hidden) {
     const std::string extra_tag = resolve_extra("hidden");
     if (!extra_tag.empty()) {
@@ -1499,8 +1506,12 @@ AMConfigManager::PrivateKeys(bool print_sign) const {
     PrintLine("[!a][Private_keys][/a]");
     for (const auto &path : keys) {
       auto [path_rcm, path_info] = AMFS::stat(path, false);
+      PathInfo missing_info;
+      if (path_rcm.first != EC::Success) {
+        missing_info.name = AMPathStr::basename(path);
+      }
       const PathInfo *path_ptr =
-          path_rcm.first == EC::Success ? &path_info : nullptr;
+          path_rcm.first == EC::Success ? &path_info : &missing_info;
       PrintLine(Format(path, "dir", path_ptr));
     }
   }
@@ -1900,18 +1911,27 @@ ECM AMConfigManager::Src() const {
     return status;
 
   const std::string config_label = AMStr::BBCEscape("[Config]");
-  const std::string settings_label = "[Setting]";
+  const std::string settings_label = AMStr::BBCEscape("[Setting]");
   size_t width = std::max(config_label.size(), settings_label.size());
 
   std::string config_path = config_path_.string();
   std::string settings_path = settings_path_.string();
 
   auto [config_rcm, config_info] = AMFS::stat(config_path, false);
+  PathInfo missing_config_info;
+  if (config_rcm.first != EC::Success) {
+    missing_config_info.name = AMPathStr::basename(config_path);
+  }
   const PathInfo *config_ptr =
-      config_rcm.first == EC::Success ? &config_info : nullptr;
+      config_rcm.first == EC::Success ? &config_info : &missing_config_info;
   auto [settings_rcm, settings_info] = AMFS::stat(settings_path, false);
-  const PathInfo *settings_ptr =
-      settings_rcm.first == EC::Success ? &settings_info : nullptr;
+  PathInfo missing_settings_info;
+  if (settings_rcm.first != EC::Success) {
+    missing_settings_info.name = AMPathStr::basename(settings_path);
+  }
+  const PathInfo *settings_ptr = settings_rcm.first == EC::Success
+                                     ? &settings_info
+                                     : &missing_settings_info;
 
   std::string styled_config = Format(config_path, "dir", config_ptr);
   std::string styled_settings = Format(settings_path, "dir", settings_ptr);
@@ -1949,21 +1969,43 @@ ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
 
   std::vector<std::string> unique_targets = UniqueTargetsKeepOrder(targets);
   if (unique_targets.empty()) {
+    const std::string msg = "Empty delete targets";
+    prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
     return Err(EC::InvalidArg, "empty delete targets");
   }
 
+  ECM last = Ok();
+  std::string msg;
+  std::vector<std::string> valid_targets;
   std::vector<std::string> styled_targets;
   styled_targets.reserve(unique_targets.size());
   for (const auto &nickname : unique_targets) {
     if (nickname.empty()) {
+      msg = "Invalid Empty Hostname";
+      last = Err(EC::InvalidArg, msg);
+      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
       continue;
     }
-    if (HostExists(nickname)) {
-      styled_targets.push_back(Format(nickname, "nickname"));
+    if (AMStr::lowercase(nickname) == "local") {
+      msg = "Unable to delete local host";
+      last = Err(EC::PermissionDenied, msg);
+      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      continue;
     }
+    if (!HostExists(nickname)) {
+      msg =
+          AMStr::amfmt("{} not found in config", Format(nickname, "nickname"));
+      prompt.ErrorFormat(AM_ENUM_NAME(EC::HostConfigNotFound), msg);
+      last = Err(EC::HostConfigNotFound, msg);
+      continue;
+    }
+    valid_targets.push_back(nickname);
+    styled_targets.push_back(Format(nickname, "nickname"));
   }
   if (styled_targets.empty()) {
-    return Err(EC::HostConfigNotFound, "no valid hosts to delete");
+    return last.first == EC::Success
+               ? Err(EC::HostConfigNotFound, "no valid hosts to delete")
+               : last;
   }
 
   {
@@ -1982,28 +2024,8 @@ ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
     }
   }
 
-  ECM last = Ok();
-  std::string msg;
   bool changed = false;
-  for (const auto &nickname : unique_targets) {
-    if (nickname.empty()) {
-      msg = "Invalid Empty Hostname";
-      last = Err(EC::InvalidArg, msg);
-      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
-      continue;
-    } else if (AMStr::lowercase(nickname) == "local") {
-      msg = "Unable to delete local host";
-      last = Err(EC::PermissionDenied, msg);
-      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
-      continue;
-    }
-    if (!HostExists(nickname)) {
-      msg = AMStr::amfmt("Host {} not found in config", nickname);
-      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
-      last = Err(EC::HostConfigNotFound, msg);
-      continue;
-    }
-
+  for (const auto &nickname : valid_targets) {
     auto rm_status = RemoveHost(nickname);
     if (rm_status.first != EC::Success) {
       last = rm_status;
@@ -2132,12 +2154,15 @@ ECM AMConfigManager::Add() {
 
   bool canceled = false;
   if (!prompt.PromptYesNo("Save host? (y/N): ", &canceled) || canceled) {
-    PrintLine("Canceled\n");
+    PrintLine(AMStr::amfmt("🚫  {}\n", Format("Add Canceled", "abort")));
     return Err(EC::ConfigCanceled, "add canceled");
   }
 
-  for (const auto &field : entry.fields) {
-    auto up_status = UpsertHostField(nickname, field.first, field.second);
+  for (const auto &field : kHostFields) {
+    auto it = entry.fields.find(field);
+    if (it == entry.fields.end())
+      continue;
+    auto up_status = UpsertHostField(nickname, it->first, it->second);
     if (up_status.first != EC::Success)
       return up_status;
   }
@@ -2163,7 +2188,7 @@ ECM AMConfigManager::Modify(const std::string &nickname) {
 
   bool canceled = false;
   if (!prompt.PromptYesNo("Apply changes? (y/N): ", &canceled) || canceled) {
-    PrintLine("Modify canceled.");
+    PrintLine(AMStr::amfmt("🚫 {}\n", Format("Modify Canceled", "abort")));
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
@@ -2496,7 +2521,7 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   while (true) {
     if (!prompt.PromptLine("Nickname: ", nickname, "", true, &canceled)) {
       if (canceled) {
-        PrintLine("Add canceled.");
+        PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
         return Err(EC::ConfigCanceled, "add canceled");
       }
       return Err(EC::ConfigInvalid, "failed to read nickname");
@@ -2510,7 +2535,7 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   std::string hostname;
   while (true) {
     if (!prompt.PromptLine("Hostname: ", &hostname, "", true, &canceled)) {
-      PrintLine("Add canceled.");
+      PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
       return Err(EC::ConfigCanceled, "add canceled");
     }
     if (!hostname.empty())
@@ -2521,7 +2546,7 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   std::string username;
   while (true) {
     if (!prompt.PromptLine("Username: ", &username, "", true, &canceled)) {
-      PrintLine("Add canceled.");
+      PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
       return Err(EC::ConfigCanceled, "add canceled");
     }
     if (!username.empty())
@@ -2534,7 +2559,7 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   while (true) {
     if (!prompt.PromptLine("Port (default 22): ", &port_input, "", true,
                            &canceled)) {
-      PrintLine("Add canceled.");
+      PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
       return Err(EC::ConfigCanceled, "add canceled");
     }
     if (port_input.empty()) {
@@ -2566,7 +2591,7 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   while (true) {
     if (!prompt.PromptLine("Protocol (sftp/ftp): ", &protocol, "", true,
                            &canceled)) {
-      PrintLine("Add canceled.");
+      PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
       return Err(EC::ConfigCanceled, "add canceled");
     }
     if (protocol.empty()) {
@@ -2584,7 +2609,7 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   while (true) {
     if (!prompt.PromptLine("Buffer size(Default 24MB): ", &buffer_input, "",
                            true, &canceled)) {
-      PrintLine("Add canceled.");
+      PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
       return Err(EC::ConfigCanceled, "add canceled");
     }
     if (buffer_input.empty()) {
@@ -2598,28 +2623,28 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
   std::string trash_dir;
   if (!prompt.PromptLine("Trash dir (optional): ", &trash_dir, "", true,
                          &canceled)) {
-    PrintLine("Add canceled.");
+    PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
     return Err(EC::ConfigCanceled, "add canceled");
   }
 
   std::string login_dir;
   if (!prompt.PromptLine("Login dir (optional): ", &login_dir, "", true,
                          &canceled)) {
-    PrintLine("Add canceled.");
+    PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
     return Err(EC::ConfigCanceled, "add canceled");
   }
 
   std::string keyfile;
   if (!prompt.PromptLine("Keyfile (optional): ", &keyfile, "", true,
                          &canceled)) {
-    PrintLine("Add canceled.");
+    PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
     return Err(EC::ConfigCanceled, "add canceled");
   }
 
   bool compression = false;
   compression = prompt.PromptYesNo("Enable compression? (y/N): ", &canceled);
   if (canceled) {
-    PrintLine("Add canceled.");
+    PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
     return Err(EC::ConfigCanceled, "add canceled");
   }
 
@@ -2658,14 +2683,14 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   std::string hostname = get_value("hostname");
   if (!prompt.PromptLine("Hostname: ", &hostname, hostname, false, &canceled,
                          false)) {
-    PrintLine("Modify canceled.");
+    PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string username = get_value("username");
   if (!prompt.PromptLine("Username: ", &username, username, false, &canceled,
                          false)) {
-    PrintLine("Modify canceled.");
+    PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
@@ -2676,7 +2701,7 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   while (true) {
     if (!prompt.PromptLine("Port (default 22): ", &port_input, port_input, true,
                            &canceled, false)) {
-      PrintLine("Modify canceled.");
+      PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
       return Err(EC::ConfigCanceled, "modify canceled");
     }
     if (port_input.empty())
@@ -2696,7 +2721,7 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   bool change_password =
       prompt.PromptYesNo("Change password? (y/N): ", &canceled);
   if (canceled) {
-    PrintLine("Modify canceled.");
+    PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
     return Err(EC::ConfigCanceled, "modify canceled");
   }
   if (change_password) {
@@ -2723,7 +2748,7 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   while (true) {
     if (!prompt.PromptLine("Protocol (sftp/ftp): ", &protocol, protocol, false,
                            &canceled, false)) {
-      PrintLine("Modify canceled.");
+      PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
       return Err(EC::ConfigCanceled, "modify canceled");
     }
     protocol = ToLowerCopy(protocol);
@@ -2739,7 +2764,7 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   while (true) {
     if (!prompt.PromptLine("Buffer size: ", &buffer_input, buffer_input, false,
                            &canceled, false)) {
-      PrintLine("Modify canceled.");
+      PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
       return Err(EC::ConfigCanceled, "modify canceled");
     }
     if (buffer_input.empty())
@@ -2752,21 +2777,21 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   std::string trash_dir = get_value("trash_dir");
   if (!prompt.PromptLine("Trash dir (optional): ", &trash_dir, trash_dir, true,
                          &canceled, false)) {
-    PrintLine("Modify canceled.");
+    PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string login_dir = get_value("login_dir");
   if (!prompt.PromptLine("Login dir (optional): ", &login_dir, login_dir, true,
                          &canceled, false)) {
-    PrintLine("Modify canceled.");
+    PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string keyfile = get_value("keyfile");
   if (!prompt.PromptLine("Keyfile (optional): ", &keyfile, keyfile, true,
                          &canceled, false)) {
-    PrintLine("Modify canceled.");
+    PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
@@ -2781,7 +2806,7 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   while (true) {
     if (!prompt.PromptLine("Compression (true/false): ", &compression_input,
                            compression_input, true, &canceled, false)) {
-      PrintLine("Modify canceled.");
+      PrintLine(AMStr::amfmt("🚫 {}\n", Format("Input Abort", "abort")));
       return Err(EC::ConfigCanceled, "modify canceled");
     }
     if (ParseBoolToken(compression_input, &compression)) {

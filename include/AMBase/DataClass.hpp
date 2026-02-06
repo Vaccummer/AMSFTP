@@ -219,16 +219,18 @@ public:
   PathType type = PathType::FILE;
   size_t mode_int = 0777;
   std::string mode_str = "r--------";
-  PathInfo() : name(""), path(""), dir(""), owner("") {}
+  PathInfo() : name(""), path(""), dir(""), owner(""), mode_int(0) {}
 
   PathInfo(std::string name, std::string path, std::string dir,
            std::string owner, size_t size, double create_time,
            double access_time, double modify_time, PathType type,
            size_t mode_int, std::string mode_str)
-      : name(name), path(path), dir(dir), owner(owner), size(size),
-        create_time(create_time), access_time(access_time),
-        modify_time(modify_time), type(type), mode_int(mode_int),
-        mode_str(mode_str) {}
+      : name(std::move(name)), path(std::move(path)), dir(std::move(dir)),
+        owner(std::move(owner)), size(std::move(size)),
+        create_time(std::move(create_time)),
+        access_time(std::move(access_time)),
+        modify_time(std::move(modify_time)), type(std::move(type)),
+        mode_int(std::move(mode_int)), mode_str(std::move(mode_str)) {}
 };
 
 // 跨平台Socket连接器
