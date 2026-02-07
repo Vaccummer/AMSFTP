@@ -1092,7 +1092,7 @@ private:
       ctx.target = CompletionTarget::TaskId;
       return ctx;
     }
-    if (ctx.command_path == "task resume" || ctx.command_path == "retry") {
+    if (ctx.command_path == "task retry" || ctx.command_path == "retry") {
       if (ctx.arg_index == 0) {
         ctx.target = CompletionTarget::TaskId;
         return ctx;

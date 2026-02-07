@@ -25,22 +25,6 @@ using Json = nlohmann::ordered_json;
 ECM Ok() { return {EC::Success, ""}; }
 ECM Err(EC code, const std::string &msg) { return {code, msg}; }
 
-/**
- * @brief Remove duplicate targets while preserving the original order.
- */
-std::vector<std::string>
-UniqueTargetsKeepOrder(const std::vector<std::string> &targets) {
-  std::vector<std::string> unique;
-  unique.reserve(targets.size());
-  for (const auto &target : targets) {
-    if (std::find(unique.begin(), unique.end(), target) != unique.end()) {
-      continue;
-    }
-    unique.push_back(target);
-  }
-  return unique;
-}
-
 bool JsonArrayAllScalar(const Json &arr) {
   for (const auto &child : arr) {
     if (!(child.is_null() || child.is_boolean() || child.is_number() ||
@@ -712,7 +696,7 @@ void AMConfigManager::WriteThreadLoop_() {
       try {
         task();
       } catch (...) {
-        AM_PROMPT_ERROR("ConfigWriter", "background write task failed", false,
+        prompt.ErrorFormat("ConfigWriter", "background write task failed", false,
                         0);
       }
     }
@@ -757,7 +741,7 @@ void AMConfigManager::SubmitWriteTask(std::function<void()> task) {
 ECM AMConfigManager::Init() {
   const std::string root_env = GetEnvCopy("AMSFTP_ROOT");
   if (root_env.empty()) {
-    AM_PROMPT_ERROR("ConfigInit",
+    prompt.ErrorFormat("ConfigInit",
                     "$AMSFTP_ROOT environment variable is not set", true, 2);
     return Err(EC::ConfigInvalid,
                "AMSFTP_ROOT environment variable is not set");
@@ -768,7 +752,7 @@ ECM AMConfigManager::Init() {
   std::error_code ec;
   std::filesystem::create_directories(root_dir_, ec);
   if (ec) {
-    AM_PROMPT_ERROR("ConfigInit",
+    prompt.ErrorFormat("ConfigInit",
                     "failed to create root directory " + root_dir_.string() +
                         ": " + ec.message(),
                     true, 2);
@@ -793,7 +777,7 @@ ECM AMConfigManager::Init() {
   {
     std::string error;
     if (!EnsureFileExists(config_path_, &error)) {
-      AM_PROMPT_ERROR("ConfigInit", "failed to create config file: " + error,
+      prompt.ErrorFormat("ConfigInit", "failed to create config file: " + error,
                       true, 2);
       return Err(EC::ConfigLoadFailed,
                  "failed to create config file: " + error);
@@ -806,7 +790,7 @@ ECM AMConfigManager::Init() {
       std::string msg = err ? err : "cfgffi_read failed";
       if (err)
         cfgffi_free_string(err);
-      AM_PROMPT_ERROR("ConfigInit", "failed to parse config.toml: " + msg, true,
+      prompt.ErrorFormat("ConfigInit", "failed to parse config.toml: " + msg, true,
                       2);
       return Err(EC::ConfigLoadFailed, "failed to parse config.toml: " + msg);
     }
@@ -826,7 +810,7 @@ ECM AMConfigManager::Init() {
   {
     std::string error;
     if (!EnsureFileExists(settings_path_, &error)) {
-      AM_PROMPT_ERROR("ConfigInit", "failed to create settings file: " + error,
+      prompt.ErrorFormat("ConfigInit", "failed to create settings file: " + error,
                       true, 2);
       return Err(EC::ConfigLoadFailed,
                  "failed to create settings file: " + error);
@@ -840,7 +824,7 @@ ECM AMConfigManager::Init() {
       std::string msg = err ? err : "cfgffi_read failed";
       if (err)
         cfgffi_free_string(err);
-      AM_PROMPT_ERROR("ConfigInit", "failed to parse settings.toml: " + msg,
+      prompt.ErrorFormat("ConfigInit", "failed to parse settings.toml: " + msg,
                       true, 2);
       return Err(EC::ConfigLoadFailed, "failed to parse settings.toml: " + msg);
     }
@@ -861,7 +845,7 @@ ECM AMConfigManager::Init() {
   {
     std::string error;
     if (!EnsureFileExists(known_hosts_path_, &error)) {
-      AM_PROMPT_ERROR("ConfigInit",
+      prompt.ErrorFormat("ConfigInit",
                       "failed to create known_hosts file: " + error, true, 2);
       return Err(EC::ConfigLoadFailed,
                  "failed to create known_hosts file: " + error);
@@ -875,7 +859,7 @@ ECM AMConfigManager::Init() {
       std::string msg = err ? err : "cfgffi_read failed";
       if (err)
         cfgffi_free_string(err);
-      AM_PROMPT_ERROR("ConfigInit", "failed to parse known_hosts.toml: " + msg,
+      prompt.ErrorFormat("ConfigInit", "failed to parse known_hosts.toml: " + msg,
                       true, 2);
       return Err(EC::ConfigLoadFailed,
                  "failed to parse known_hosts.toml: " + msg);
@@ -914,7 +898,7 @@ ECM AMConfigManager::Dump() {
   std::error_code ec;
   std::filesystem::create_directories(config_dir, ec);
   if (ec) {
-    AM_PROMPT_ERROR("ConfigDumpError",
+    prompt.ErrorFormat("ConfigDumpError",
                     "failed to create config directory: " + ec.message(), true,
                     2);
     return Err(EC::ConfigDumpFailed,
@@ -1776,6 +1760,45 @@ int AMConfigManager::ResolveTimeoutMs(int default_timeout_ms) const {
   return timeout_ms;
 }
 
+/**
+ * @brief Resolve transfer refresh interval from settings with defaults.
+ */
+int AMConfigManager::ResolveRefreshIntervalMs() const {
+  int value = GetSettingInt({"transfer_manager", "refresh_interval_ms"}, 200);
+  if (value <= 0) {
+    value = 200;
+  }
+  if (value < 30) {
+    value = 30;
+  }
+  return value;
+}
+
+/**
+ * @brief Resolve heartbeat interval from settings with a default fallback.
+ */
+int AMConfigManager::ResolveHeartbeatInterval() const {
+  int value = GetSettingInt({"client_manager", "heartbeat_interval_s"}, 60);
+  if (value < 1) {
+    return value;
+  }
+  return value > 10 ? value : 10;
+}
+
+/**
+ * @brief Resolve trace buffer size from settings with sane defaults.
+ */
+ssize_t AMConfigManager::ResolveTraceNum() const {
+  int value = GetSettingInt({"client_manager", "trace_num"}, 10);
+  if (value <= 0) {
+    value = 10;
+  }
+  if (value < 5) {
+    value = 5;
+  }
+  return static_cast<ssize_t>(value);
+}
+
 /** Return a string setting value or the provided default. */
 std::string
 AMConfigManager::GetSettingString(const Path &path,
@@ -1971,7 +1994,7 @@ ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
   std::vector<std::string> unique_targets = UniqueTargetsKeepOrder(targets);
   if (unique_targets.empty()) {
     const std::string msg = "Empty delete targets";
-    prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+    prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
     return Err(EC::InvalidArg, "empty delete targets");
   }
 
@@ -1984,19 +2007,19 @@ ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
     if (nickname.empty()) {
       msg = "Invalid Empty Hostname";
       last = Err(EC::InvalidArg, msg);
-      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
       continue;
     }
     if (AMStr::lowercase(nickname) == "local") {
       msg = "Unable to delete local host";
       last = Err(EC::PermissionDenied, msg);
-      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
       continue;
     }
     if (!HostExists(nickname)) {
       msg =
           AMStr::amfmt("{} not found in config", Format(nickname, "nickname"));
-      prompt.ErrorFormat(AM_ENUM_NAME(EC::HostConfigNotFound), msg);
+      prompt.ErrorFormat(ECM{EC::HostConfigNotFound, msg});
       last = Err(EC::HostConfigNotFound, msg);
       continue;
     }
@@ -2021,6 +2044,7 @@ ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
     const std::string question =
         AMStr::amfmt("Delete host(s): {} ? (y/N): ", target_line);
     if (!prompt.PromptYesNo(question, &canceled) || canceled) {
+      PrintLine(AMStr::amfmt("🚫  {}\n", Format("Remove Canceled", "abort")));
       return Err(EC::ConfigCanceled, "delete canceled");
     }
   }
@@ -2030,7 +2054,7 @@ ECM AMConfigManager::Delete(const std::vector<std::string> &targets) {
     auto rm_status = RemoveHost(nickname);
     if (rm_status.first != EC::Success) {
       last = rm_status;
-      prompt.ErrorFormat(AM_ENUM_NAME(rm_status.first), rm_status.second);
+      prompt.ErrorFormat(rm_status);
       continue;
     }
     changed = true;
@@ -2060,7 +2084,7 @@ ECM AMConfigManager::Rename(const std::string &old_nickname,
   std::string msg = "";
   msg = AMStr::amfmt("Host {} not found", Format(old_nickname, "nickname"));
   if (!HostExists(old_nickname)) {
-    prompt.ErrorFormat(AM_ENUM_NAME(EC::HostConfigNotFound), msg);
+    prompt.ErrorFormat(ECM{EC::HostConfigNotFound, msg});
     return {EC::HostConfigNotFound, "host not found"};
   }
 
@@ -2069,12 +2093,12 @@ ECM AMConfigManager::Rename(const std::string &old_nickname,
       !std::regex_match(new_nickname, nickname_pattern)) {
     msg = "new nickname must contain only letters, numbers, and "
           "underscore";
-    prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+    prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
     return Err(EC::InvalidArg, msg);
   }
   if (HostExists(new_nickname)) {
     msg = "new nickname already exists";
-    prompt.ErrorFormat(AM_ENUM_NAME(EC::KeyAlreadyExists), msg);
+    prompt.ErrorFormat(ECM{EC::KeyAlreadyExists, msg});
     return Err(EC::KeyAlreadyExists, msg);
   }
 
@@ -2122,14 +2146,14 @@ ECM AMConfigManager::Query(const std::vector<std::string> &targets) const {
   for (const auto &nickname : unique_targets) {
     if (nickname.empty()) {
       last = Err(EC::InvalidArg, "empty query target");
-      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), "Empty query target");
+      prompt.ErrorFormat(ECM{EC::InvalidArg, "Empty query target"});
       continue;
     }
     auto it = hosts.find(nickname);
     if (it == hosts.end()) {
       std::string msg = AMStr::amfmt("Host {} not found in config",
                                      Format(nickname, "nickname"));
-      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
       last = Err(EC::HostConfigNotFound, msg);
       continue;
     }
@@ -2211,19 +2235,19 @@ ECM AMConfigManager::SetHostValue(const std::string &nickname,
                                   const std::string &value_str) {
   auto status = EnsureInitialized("SetHostValue");
   if (status.first != EC::Success) {
-    prompt.ErrorFormat(AM_ENUM_NAME(status.first), status.second);
+    prompt.ErrorFormat(status);
     return status;
   }
   std::string field = ToLowerCopy(attrname);
 
   if (nickname.empty()) {
-    prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), "empty nickname");
+    prompt.ErrorFormat(ECM{EC::InvalidArg, "empty nickname"});
     return Err(EC::InvalidArg, "empty nickname");
   }
   if (!HostExists(nickname)) {
     std::string msg = AMStr::amfmt("Host {} not found in config",
                                    Format(nickname, "nickname"));
-    prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+    prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
     return Err(EC::HostConfigNotFound, "host not found");
   }
 
@@ -2233,7 +2257,7 @@ ECM AMConfigManager::SetHostValue(const std::string &nickname,
   if (std::find(allowed_fields.begin(), allowed_fields.end(), field) ==
       allowed_fields.end()) {
     std::string msg = "unsupported property name";
-    prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+    prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
     return Err(EC::InvalidArg, msg);
   }
 
@@ -2242,7 +2266,7 @@ ECM AMConfigManager::SetHostValue(const std::string &nickname,
     int64_t port = 0;
     if (!ParsePositiveInt(value_str, &port)) {
       std::string msg = "invalid port value";
-      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
       return Err(EC::InvalidArg, msg);
     }
     value = port;
@@ -2251,20 +2275,20 @@ ECM AMConfigManager::SetHostValue(const std::string &nickname,
       int64_t parsed = std::stoll(value_str);
       if (parsed == 0 || parsed < -1) {
         std::string msg = "invalid buffer_size value";
-        prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+        prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
         return Err(EC::InvalidArg, msg);
       }
       value = parsed;
     } catch (...) {
       std::string msg = "invalid buffer_size value";
-      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
       return Err(EC::InvalidArg, msg);
     }
   } else if (field == "compression") {
     bool parsed = false;
     if (!ParseBoolToken(value_str, &parsed)) {
       std::string msg = "invalid compression value";
-      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
       return Err(EC::InvalidArg, msg);
     }
     value = parsed;
@@ -2272,7 +2296,7 @@ ECM AMConfigManager::SetHostValue(const std::string &nickname,
     std::string protocol = ToLowerCopy(value_str);
     if (protocol != "sftp" && protocol != "ftp" && protocol != "local") {
       std::string msg = "invalid protocol value";
-      prompt.ErrorFormat(AM_ENUM_NAME(EC::InvalidArg), msg);
+      prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
       return Err(EC::InvalidArg, msg);
     }
     value = protocol;
@@ -2292,7 +2316,7 @@ ECM AMConfigManager::SetHostValue(const std::string &nickname,
 
   ECM set_status = SetHostField(nickname, field, value, true);
   if (set_status.first != EC::Success) {
-    prompt.ErrorFormat(AM_ENUM_NAME(set_status.first), set_status.second);
+    prompt.ErrorFormat(set_status);
     return set_status;
   }
 
@@ -2574,10 +2598,8 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
 
   std::string password;
   while (true) {
-    std::string first =
-        AMClientManager::ReadMaskedPassword("Password (optional): ");
-    std::string second =
-        AMClientManager::ReadMaskedPassword("Confirm password: ");
+    std::string first = ReadMaskedPassword("Password (optional): ");
+    std::string second = ReadMaskedPassword("Confirm password: ");
     if (first == second) {
       password = std::move(first);
       AMAuth::SecureZero(second);
@@ -2728,10 +2750,8 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   if (change_password) {
     std::string password;
     while (true) {
-      std::string first =
-          AMClientManager::ReadMaskedPassword("Password (optional): ");
-      std::string second =
-          AMClientManager::ReadMaskedPassword("Confirm password: ");
+      std::string first = ReadMaskedPassword("Password (optional): ");
+      std::string second = ReadMaskedPassword("Confirm password: ");
       if (first == second) {
         password = std::move(first);
         AMAuth::SecureZero(second);

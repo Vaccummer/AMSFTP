@@ -43,22 +43,6 @@ using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
 
-enum class AMTokenType {
-  Common,
-  Module,
-  Command,
-  VarName,
-  VarValue,
-  Nickname,
-  String,
-  Option,
-  AtSign,
-  DollarSign,
-  EqualSign,
-  VarNameMissing,
-  EscapeSign
-};
-
 struct AMTokenSpan {
   size_t start = 0;
   size_t end = 0;
@@ -1161,6 +1145,33 @@ struct TaskInfo {
   ECM GetResult() const {
     std::lock_guard<std::mutex> lock(mtx);
     return rcm;
+  }
+
+  /**
+   * @brief Calculate and update total size from tasks when needed.
+   *
+   * @param force Recalculate even if total_size is already set.
+   * @return Updated total size.
+   */
+  size_t CalTotalSize(bool force = false) {
+    const size_t current = total_size.load();
+    if (!force && current != 0) {
+      return current;
+    }
+    std::shared_ptr<TASKS> local_tasks;
+    {
+      std::lock_guard<std::mutex> lock(mtx);
+      local_tasks = tasks;
+    }
+    if (!local_tasks) {
+      return current;
+    }
+    size_t sum = 0;
+    for (const auto &task : *local_tasks) {
+      sum += task.size;
+    }
+    total_size.store(sum);
+    return sum;
   }
 };
 

@@ -1,6 +1,7 @@
 #pragma once
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/Path.hpp"
+#include "AMClient/Base.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Logger.hpp"
@@ -8,10 +9,9 @@
 #include <atomic>
 #include <chrono>
 #include <filesystem>
-#include <iomanip>
 #include <iostream>
+#include <memory>
 #include <optional>
-#include <sstream>
 #include <thread>
 #include <tuple>
 #include <utility>
@@ -54,7 +54,7 @@ public:
   /** Initialize client manager with heartbeat interval from config. */
   explicit AMClientManager(AMConfigManager &cfg)
       : config_(cfg), log_manager_(AMLogManager::Instance(cfg)) {
-    trace_num_ = ResolveTraceNum(cfg);
+    trace_num_ = cfg.ResolveTraceNum();
     if (!password_cb_) {
       password_cb_ = [this](const AuthCBInfo &info) {
         return DefaultPasswordCallback(info);
@@ -62,7 +62,7 @@ public:
     }
     local_client_ = CreateLocalClient_(cfg, log_manager_);
     clients_ = std::make_shared<ClientMaintainer>(
-        ResolveHeartbeatInterval(cfg),
+        cfg.ResolveHeartbeatInterval(),
         [this](const auto &client, const ECM &ecm) {
           OnDisconnect(client, ecm);
         },
@@ -107,8 +107,9 @@ public:
   }
 
   /** Return typed client list. */
-  std::vector<AMCilent> GetClients() {
-    return clients_ ? clients_->get_clients() : std::vector<AMCilent>{};
+  std::vector<std::shared_ptr<BaseClient>> GetClients() {
+    return clients_ ? clients_->get_clients()
+                    : std::vector<std::shared_ptr<BaseClient>>{};
   }
 
   /** Create or reuse a client and connect it immediately. */
@@ -123,13 +124,15 @@ public:
     if (!trace_cb) {
       trace_cb = log_manager_.TraceCallbackFunc();
     }
-    if (nickname.empty() || nickname == "local") {
+    if (nickname.empty() || AMStr::lowercase(nickname) == "local") {
       return {ECM{EC::Success, ""}, target.GetHost("")};
     }
 
     auto existing = target.GetHost(nickname);
     if (existing) {
-      ApplyKnownHostCallback_(existing);
+      if (force) {
+        ApplyKnownHostCallback_(existing);
+      }
       ECM rcm = existing->Connect(force, flag);
       if (rcm.first != EC::Success) {
         return {rcm, existing};
@@ -144,11 +147,6 @@ public:
     }
 
     auto client_config = config_.GetClientConfig(nickname);
-    // print(AMStr::amfmt("hostname: {}",
-    // client_config.second.request.hostname)); print(AMStr::amfmt("username:
-    // {}", client_config.second.request.username)); print(AMStr::amfmt("port:
-    // {}", client_config.second.request.port)); print(AMStr::amfmt("password:
-    // {}", client_config.second.request.password));
     if (client_config.first.first != EC::Success) {
       return {client_config.first, nullptr};
     }
@@ -259,7 +257,7 @@ public:
     size_t spinner_line_len = 0;
     if (!quiet) {
       const std::string protocol_label =
-          ProtocolLabel_(base_client->GetProtocol());
+          std::string(AM_ENUM_NAME(base_client->GetProtocol()));
       spinner_line = AMStr::amfmt("Connecting to {} Server   [{}]",
                                   protocol_label, nickname);
       spinner_line_len = spinner_line.size() + 3;
@@ -391,7 +389,7 @@ public:
       return {save_rcm, base_client};
     }
     save_rcm = config_.SetHostField(resolved_nickname, "protocol",
-                                    ProtocolConfigValue_(protocol), false);
+                                    std::string(AM_ENUM_NAME(protocol)), false);
     if (save_rcm.first != EC::Success) {
       return {save_rcm, base_client};
     }
@@ -482,14 +480,18 @@ public:
 
     auto cfg = config_.GetClientConfig(prefix);
     if (cfg.first.first != EC::Success) {
+      const std::string styled = config_.Format(prefix, "nickname");
       return {prefix, path, nullptr,
-              ECM{EC::HostConfigNotFound, "Host config not found"}};
+              ECM{EC::HostConfigNotFound,
+                  AMStr::amfmt("Host config not found: {}", styled)}};
     }
 
     auto existing = Clients().GetHost(prefix);
     if (!existing) {
+      const std::string styled = config_.Format(prefix, "nickname");
       return {prefix, path, nullptr,
-              ECM{EC::ClientNotFound, "Client not found"}};
+              ECM{EC::ClientNotFound,
+                  AMStr::amfmt("Client not created: {}", styled)}};
     }
     return {prefix, path, existing, ECM{EC::Success, ""}};
   }
@@ -520,8 +522,10 @@ public:
 
     auto cfg = config_.GetClientConfig(prefix);
     if (cfg.first.first != EC::Success) {
+      const std::string styled = config_.Format(prefix, "nickname");
       return {prefix, path, nullptr,
-              ECM{EC::HostConfigNotFound, "Host config not found"}};
+              ECM{EC::HostConfigNotFound,
+                  AMStr::amfmt("Host config not found: {}", styled)}};
     }
 
     auto existing = Clients().GetHost(prefix);
@@ -531,7 +535,9 @@ public:
         if (!AMPromptManager::Instance().PromptYesNo(
                 "Client not found. Create it? (y/N): ", &canceled)) {
           return {prefix, path, nullptr,
-                  ECM{EC::Terminate, "Operation aborted"}};
+                  ECM{EC::Terminate,
+                      AMStr::amfmt("🚫  Aborted creating: {}",
+                                   config_.Format(prefix, "nickname"))}};
         }
       }
       auto created =
@@ -621,6 +627,28 @@ public:
   }
 
   /**
+   * @brief Set workdir for a client, normalizing and resolving relative paths.
+   */
+  void SetClientWorkdir(const std::shared_ptr<BaseClient> &client,
+                        const std::string &path) const {
+    if (!client) {
+      return;
+    }
+    std::string normalized = AMPathStr::UnifyPathSep(path, "/");
+    if (normalized.empty()) {
+      normalized = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+    }
+    if (!normalized.empty() && !AMPathStr::IsAbs(normalized, "/")) {
+      const std::string base = GetOrInitWorkdir(client);
+      const std::string home =
+          AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+      normalized = AMFS::abspath(normalized, true, home, base, "/");
+    }
+    std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
+    client->public_kv["workdir"] = normalized;
+  }
+
+  /**
    * @brief Build an absolute path based on the client's home/workdir.
    */
   [[nodiscard]] std::string BuildPath(const std::shared_ptr<BaseClient> &client,
@@ -636,78 +664,16 @@ public:
     return AMFS::abspath(path, true, home, cwd, "/");
   }
 
-  /**
-   * @brief Format a size value to a human-readable string.
-   */
-  static std::string FormatSize(size_t size) {
-    const char *units[] = {"B", "KB", "MB", "GB", "TB"};
-    double value = static_cast<double>(size);
-    size_t idx = 0;
-    while (value >= 1024.0 && idx < 4) {
-      value /= 1024.0;
-      ++idx;
+  /** Initialize client workdir in public map if missing. */
+  void InitClientWorkdir(const std::shared_ptr<BaseClient> &client) {
+    if (!client) {
+      return;
     }
-    std::ostringstream oss;
-    if (value == static_cast<size_t>(value)) {
-      oss << static_cast<size_t>(value);
-    } else {
-      oss << std::fixed << std::setprecision(1) << value;
+    std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
+    if (client->public_kv.find("workdir") == client->public_kv.end()) {
+      client->public_kv["workdir"] =
+          AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
     }
-    oss << units[idx];
-    return oss.str();
-  }
-  /**
-   * @brief Read a password from the console with masked input.
-   */
-  static std::string ReadMaskedPassword(const std::string &prompt) {
-    std::string password;
-    std::cout << prompt << std::flush;
-#ifdef _WIN32
-    while (true) {
-      int ch = _getch();
-      if (ch == '\r' || ch == '\n') {
-        break;
-      }
-      if (ch == '\b') {
-        if (!password.empty()) {
-          password.pop_back();
-          std::cout << "\b \b" << std::flush;
-        }
-        continue;
-      }
-      if (ch == 0 || ch == 224) {
-        (void)_getch();
-        continue;
-      }
-      password.push_back(static_cast<char>(ch));
-      std::cout << "•" << std::flush;
-    }
-#else
-    termios oldt{};
-    termios newt{};
-    tcgetattr(STDIN_FILENO, &oldt);
-    newt = oldt;
-    newt.c_lflag &= static_cast<unsigned long>(~(ECHO | ICANON));
-    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-    while (true) {
-      int ch = ::getchar();
-      if (ch == '\n' || ch == '\r' || ch == EOF) {
-        break;
-      }
-      if (ch == 127 || ch == 8) {
-        if (!password.empty()) {
-          password.pop_back();
-          std::cout << "\b \b" << std::flush;
-        }
-        continue;
-      }
-      password.push_back(static_cast<char>(ch));
-      std::cout << "•" << std::flush;
-    }
-    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-#endif
-    std::cout << std::endl;
-    return password;
   }
 
 private:
@@ -799,61 +765,6 @@ private:
   }
 
   /**
-   * @brief Convert protocol enum into a user-facing label for connection
-   * status.
-   */
-  static std::string ProtocolLabel_(ClientProtocol protocol) {
-    switch (protocol) {
-    case ClientProtocol::SFTP:
-      return "SFTP";
-    case ClientProtocol::FTP:
-      return "FTP";
-    case ClientProtocol::LOCAL:
-      return "LOCAL";
-    default:
-      return "Remote";
-    }
-  }
-
-  /**
-   * @brief Convert protocol enum into config protocol field text.
-   */
-  static std::string ProtocolConfigValue_(ClientProtocol protocol) {
-    switch (protocol) {
-    case ClientProtocol::SFTP:
-      return "sftp";
-    case ClientProtocol::FTP:
-      return "ftp";
-    case ClientProtocol::LOCAL:
-      return "local";
-    default:
-      return "unknown";
-    }
-  }
-
-  /** Read heartbeat interval from settings; fallback to 60 seconds. */
-  static int ResolveHeartbeatInterval(AMConfigManager &cfg) {
-    int value =
-        cfg.GetSettingInt({"client_manager", "heartbeat_interval_s"}, 60);
-    if (value <= 0) {
-      value = cfg.GetSettingInt({"ClientManager", "heartbeat_interval_s"}, 60);
-    }
-    return value > 0 ? value : 60;
-  }
-
-  /** Read trace buffer size from settings; default 10 and minimum 5. */
-  static ssize_t ResolveTraceNum(AMConfigManager &cfg) {
-    int value = cfg.GetSettingInt({"client_manager", "trace_num"}, 10);
-    if (value <= 0) {
-      value = cfg.GetSettingInt({"ClientManager", "trace_num"}, 10);
-    }
-    if (value < 5) {
-      value = 5;
-    }
-    return static_cast<ssize_t>(value);
-  }
-
-  /**
    * @brief Create the shared local client using config settings.
    */
   static std::shared_ptr<AMLocalClient>
@@ -886,7 +797,7 @@ private:
       if (std::holds_alternative<ECM>(result)) {
         const auto &ecm = std::get<ECM>(result);
         if (ecm.first != EC::Success) {
-          AM_PROMPT_ERROR("LocalClient", ecm.second, false, 0);
+          AMPromptManager::Instance().ErrorFormat(ecm);
         }
       }
     }
@@ -896,18 +807,6 @@ private:
     }
 
     return client;
-  }
-
-  /** Initialize client workdir in public map if missing. */
-  void InitClientWorkdir(const std::shared_ptr<BaseClient> &client) {
-    if (!client) {
-      return;
-    }
-    std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
-    if (client->public_kv.find("workdir") == client->public_kv.end()) {
-      client->public_kv["workdir"] =
-          AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
-    }
   }
 
   /** Resolve workdir from login_dir/home_dir and persist if needed. */

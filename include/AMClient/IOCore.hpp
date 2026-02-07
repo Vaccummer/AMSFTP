@@ -322,9 +322,6 @@ public:
   }
 };
 
-using AMCilent =
-    std::variant<std::shared_ptr<AMSFTPClient>, std::shared_ptr<AMFTPClient>,
-                 std::shared_ptr<AMLocalClient>>;
 using ECM = std::pair<ErrorCode, std::string>;
 using EC = ErrorCode;
 
@@ -463,34 +460,27 @@ public:
     return hosts;
   }
 
-  std::optional<AMCilent> get_client(const std::string &nickname) {
+  std::shared_ptr<BaseClient> get_client(const std::string &nickname) {
+    std::lock_guard<std::recursive_mutex> lock(beat_mtx);
     if (nickname.empty() || AMStr::lowercase(nickname) == "local") {
       return local_client;
     }
-    if (hosts.find(nickname) == hosts.end()) {
-      return std::nullopt;
+    auto it = hosts.find(nickname);
+    if (it == hosts.end()) {
+      return nullptr;
     }
-    auto client = hosts[nickname];
-    if (client->GetProtocol() == ClientProtocol::SFTP) {
-      return std::dynamic_pointer_cast<AMSFTPClient>(client);
-    } else if (client->GetProtocol() == ClientProtocol::FTP) {
-      return std::dynamic_pointer_cast<AMFTPClient>(client);
-    } else if (client->GetProtocol() == ClientProtocol::LOCAL) {
-      return std::dynamic_pointer_cast<AMLocalClient>(client);
-    }
-    return std::nullopt;
+    return it->second;
   }
 
-  std::vector<AMCilent> get_clients() {
-    std::vector<AMCilent> client_list;
-    for (auto &host : hosts) {
-      if (host.second->GetProtocol() == ClientProtocol::SFTP) {
-        client_list.emplace_back(
-            std::dynamic_pointer_cast<AMSFTPClient>(host.second));
-      } else if (host.second->GetProtocol() == ClientProtocol::FTP) {
-        client_list.emplace_back(
-            std::dynamic_pointer_cast<AMFTPClient>(host.second));
-      }
+  std::vector<std::shared_ptr<BaseClient>> get_clients() {
+    std::vector<std::shared_ptr<BaseClient>> client_list{};
+    std::lock_guard<std::recursive_mutex> lock(beat_mtx);
+    if (local_client) {
+      client_list.push_back(local_client);
+    }
+    client_list.reserve(client_list.size() + hosts.size());
+    for (const auto &host : hosts) {
+      client_list.push_back(host.second);
     }
     return client_list;
   }
@@ -596,8 +586,8 @@ private:
   std::unordered_set<TaskId> conducting_tasks_;
   std::vector<TaskId> conducting_by_thread_;
   std::vector<std::shared_ptr<TaskInfo>> conducting_infos_;
-
   size_t chunk_size_ = 256 * AMKB;
+  std::atomic<bool> is_deconstruct{false};
 
   /**
    * @brief Clamp thread count to the supported range [1, 64].
@@ -1483,7 +1473,9 @@ private:
       task_info->pd.reset();
       task_info->OnWhichThread.store(-1);
 
-      HandleCompletedTask(task_info);
+      if (running_.load()) {
+        HandleCompletedTask(task_info);
+      }
       ClearConducting(thread_index);
     }
 
@@ -1494,7 +1486,6 @@ private:
 
   // Execute a single TaskInfo
   void ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
-    EnsureProgressData(task_info);
     task_info->SetStatus(TaskStatus::Conducting);
     task_info->start_time.store(timenow());
 
@@ -1629,14 +1620,45 @@ public:
   /**
    * @brief Stop all workers and join their threads.
    */
-  ~AMWorkManager() {
+  ~AMWorkManager() { GracefulTerminate(); }
+
+  /**
+   * @brief Gracefully terminate pending/conducting tasks and stop workers.
+   *
+   * @param timeout_ms Max wait time for conducting tasks; negative to wait
+   * forever.
+   * @return ECM result (timeout when tasks remain conducting).
+   */
+  ECM GracefulTerminate(int timeout_ms = 5000) {
+    if (is_deconstruct.load()) {
+      return {EC::Success, ""};
+    }
     running_.store(false);
     queue_cv_.notify_all();
+    {
+      std::lock_guard<std::mutex> lock(conducting_mtx_);
+      for (const auto &info : conducting_infos_) {
+        if (info && info->pd) {
+          info->pd->set_terminate();
+        }
+      }
+    }
+
+    const int64_t start = am_ms();
+    while (is_conducting()) {
+      if (timeout_ms >= 0 && (am_ms() - start) > timeout_ms) {
+        return {EC::OperationTimeout, "Graceful terminate timed out"};
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+
     for (auto &thread : worker_threads_) {
       if (thread.joinable()) {
         thread.join();
       }
     }
+    is_deconstruct.store(true);
+    return {EC::Success, ""};
   }
 
   /**
@@ -1646,7 +1668,7 @@ public:
     if (size < 32 * AMKB) {
       return chunk_size_;
     }
-    chunk_size_ = std::min<size_t>(static_cast<size_t>(size), AMMaxBufferSize);
+    this->chunk_size_ = std::min<size_t>(static_cast<size_t>(size), 4 * AMMB);
     return chunk_size_;
   }
 
@@ -1763,9 +1785,8 @@ public:
     auto task_info = std::make_shared<TaskInfo>(quiet);
     task_info->id = GenerateUID();
     task_info->tasks = tasks;
-    task_info->total_size.store(std::accumulate(
-        tasks->begin(), tasks->end(), 0,
-        [](size_t sum, const TransferTask &task) { return sum + task.size; }));
+    task_info->CalTotalSize();
+
     task_info->hostm = hostm;
     task_info->callback = callback;
     task_info->buffer_size.store(buffer_size);
@@ -1858,43 +1879,67 @@ public:
   /**
    * @brief Pause a task by ID.
    */
-  bool pause(const TaskId &id) {
+  ECM pause(const TaskId &id) {
     auto [task_info, active] = get_task(id);
-    if (!task_info || !active || !task_info->pd) {
-      return false;
+    if (!task_info || !active) {
+      return {EC::TaskNotFound, AMStr::amfmt("Task not found: {}", id)};
+    }
+    auto status_t = task_info->GetStatus();
+    if (status_t == TaskStatus::Pending) {
+      return {EC::OperationUnsupported,
+              AMStr::amfmt("Task is still pending: {}", id)};
+    } else if (status_t == TaskStatus::Finished) {
+      return {EC::OperationUnsupported,
+              AMStr::amfmt("Task is already finished: {}", id)};
+    }
+    if (task_info->pd->is_pause()) {
+      return {EC::Success, AMStr::amfmt("Task already paused: {}", id)};
     }
     task_info->pd->set_pause();
-    return true;
+    return {EC::Success, ""};
   }
 
   /**
    * @brief Resume a task by ID.
    */
-  bool resume(const TaskId &id) {
+  ECM resume(const TaskId &id) {
     auto [task_info, active] = get_task(id);
-    if (!task_info || !active || !task_info->pd) {
-      return false;
+    if (!task_info || !active) {
+      return {EC::TaskNotFound, AMStr::amfmt("Task not found: {}", id)};
     }
-    task_info->pd->set_running();
-    return true;
+    auto status_t = task_info->GetStatus();
+    if (status_t == TaskStatus::Pending) {
+      return {EC::OperationUnsupported,
+              AMStr::amfmt("Task is still pending: {}", id)};
+    } else if (status_t == TaskStatus::Finished) {
+      return {EC::OperationUnsupported,
+              AMStr::amfmt("Task is already finished: {}", id)};
+    }
+    if (task_info->pd->is_pause()) {
+      task_info->pd->set_running();
+      return {EC::Success, ""};
+    }
+    return {EC::Success, AMStr::amfmt("Task is conducting: {}", id)};
   }
 
   /**
    * @brief Terminate a task by ID and optionally wait for completion.
    *
-   * @return Pair of task info and termination success flag.
+   * @return Pair of task info and termination result.
    */
-  std::pair<std::shared_ptr<TaskInfo>, bool> terminate(const TaskId &id,
-                                                       int timeout_ms = 5000) {
+  std::pair<std::shared_ptr<TaskInfo>, ECM> terminate(const TaskId &id,
+                                                      int timeout_ms = 5000) {
     auto [existing, active] = get_task(id);
     if (!existing) {
-      return {nullptr, false};
+      return {nullptr,
+              {EC::TaskNotFound, AMStr::amfmt("Task not found: {}", id)}};
     }
     if (existing->GetStatus() == TaskStatus::Finished) {
-      return {existing, false};
+      return {existing,
+              {EC::OperationUnsupported,
+               AMStr::amfmt("Task already finished: {}", id)}};
     }
 
-    bool terminated = false;
     if (existing->GetStatus() == TaskStatus::Pending) {
       std::scoped_lock<std::mutex, std::mutex> lock(registry_mtx_, queue_mtx_);
       auto it = task_registry_.find(id);
@@ -1917,16 +1962,14 @@ public:
         task_info->finished_time.store(timenow());
         task_info->OnWhichThread.store(-1);
         queue_cv_.notify_all();
-        terminated = true;
         HandleCompletedTask(task_info);
-        return {task_info, terminated};
+        return {task_info, {EC::Success, ""}};
       }
     }
 
     if (existing->pd) {
       existing->pd->set_terminate();
     }
-    terminated = true;
 
     const int64_t start = am_ms();
     while (timeout_ms < 0 || (am_ms() - start) < timeout_ms) {
@@ -1934,11 +1977,13 @@ public:
         if (existing->hostm) {
           HandleCompletedTask(existing);
         }
-        return {existing, terminated};
+        return {existing, {EC::Success, ""}};
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    return {existing, false};
+    return {
+        existing,
+        {EC::OperationTimeout, AMStr::amfmt("Task terminate timeout: {}", id)}};
   }
 
   /**
@@ -2055,6 +2100,7 @@ public:
     }
     auto [rc3, src_stat] =
         src_client->stat(src, false, interrupt_flag, timeout_ms, start_time);
+    print("size is {}", src_stat.size);
 
     if (rc3.first != EC::Success) {
       return {rc3, tasks};
@@ -2096,10 +2142,10 @@ public:
 
       if (resume) {
         if (src_stat.type != PathType::FILE) {
-          return {ECM{EC::NotAFile,
-                      AMStr::amfmt("Resume requires src to be a file: {}",
-                                   srcf)},
-                  tasks};
+          return {
+              ECM{EC::NotAFile,
+                  AMStr::amfmt("Resume requires src to be a file: {}", srcf)},
+              tasks};
         }
         auto [dst_stat_rcm, dst_info] = dst_client->stat(
             dstf, false, interrupt_flag, timeout_ms, start_time);
@@ -2109,10 +2155,10 @@ public:
                   tasks};
         }
         if (dst_info.type != PathType::FILE) {
-          return {ECM{EC::NotAFile,
-                      AMStr::amfmt(
-                          "Resume requires dst to be a file: {}", dstf)},
-                  tasks};
+          return {
+              ECM{EC::NotAFile,
+                  AMStr::amfmt("Resume requires dst to be a file: {}", dstf)},
+              tasks};
         }
         if (dst_info.size > src_stat.size) {
           return {ECM{EC::InvalidArg,
@@ -2170,10 +2216,10 @@ public:
             dstf, false, interrupt_flag, timeout_ms, start_time);
         if (dst_stat_rcm.first != EC::Success ||
             dst_info.type != PathType::FILE) {
-          return {ECM{EC::InvalidArg,
-                      AMStr::amfmt(
-                          "Resume requires dst to be a file: {}", dstf)},
-                  tasks};
+          return {
+              ECM{EC::InvalidArg,
+                  AMStr::amfmt("Resume requires dst to be a file: {}", dstf)},
+              tasks};
         }
         tasks.back().transferred = dst_info.size;
       }

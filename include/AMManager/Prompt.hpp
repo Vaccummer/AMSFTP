@@ -1,4 +1,5 @@
 #pragma once
+#include "AMBase/Enum.hpp"
 #include <memory>
 #include <mutex>
 #include <string>
@@ -68,8 +69,10 @@ public:
   }
 
   void ErrorFormat(const std::string &error_name, const std::string &error_msg,
-                   bool is_exit = false, int exit_code = 0,
-                   const char *caller = "unknown");
+                   bool is_exit = false, int exit_code = 0);
+
+  void ErrorFormat(const std::pair<ErrorCode, std::string> &rcm,
+                   bool is_exit = false);
 
   /** Prompt for a line of input with optional defaults. */
   bool PromptLine(const std::string &prompt, std::string *out,
@@ -130,10 +133,6 @@ private:
   /**
    * @brief Normalize history to unique entries with max size.
    */
-  std::vector<std::string> NormalizeHistory_(
-      const std::vector<std::string> &input, int max_count) const;
+  std::vector<std::string>
+  NormalizeHistory_(const std::vector<std::string> &input, int max_count) const;
 };
-
-#define AM_PROMPT_ERROR(error_name, error_msg, is_exit, exit_code)             \
-  AMPromptManager::Instance().ErrorFormat((error_name), (error_msg),           \
-                                          (is_exit), (exit_code), __func__)
