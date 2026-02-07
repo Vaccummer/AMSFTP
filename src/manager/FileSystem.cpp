@@ -867,7 +867,8 @@ AMFileSystem::ECM AMFileSystem::find(const std::string &path, SearchType type,
 
 /** Walk a path and print entries based on filters. */
 AMFileSystem::ECM AMFileSystem::walk(const std::string &path, bool only_file,
-                                     bool only_dir, bool ignore_special_file,
+                                     bool only_dir, bool show_all,
+                                     bool ignore_special_file, bool quiet,
                                      amf interrupt_flag, int timeout_ms) {
   if (only_file && only_dir) {
     return {EC::InvalidArg, "Conflicting filters: both file and dir"};
@@ -876,25 +877,32 @@ AMFileSystem::ECM AMFileSystem::walk(const std::string &path, bool only_file,
   auto [nickname, resolved_path, client_ptr, rcm] =
       client_manager_.ParsePath(path, flag);
   if (rcm.first != EC::Success || !client_ptr) {
-    prompt_manager_.ErrorFormat(AM_ENUM_NAME(rcm.first), rcm.second);
+    if (!quiet) {
+      prompt_manager_.ErrorFormat(AM_ENUM_NAME(rcm.first), rcm.second);
+    }
     return rcm;
   }
   if (resolved_path.empty()) {
     ECM out = {EC::InvalidArg, "Empty path"};
-    prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+    if (!quiet) {
+      prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+    }
     return out;
   }
   ClientRef client{nickname, client_ptr};
   std::string abs_path = BuildPath(client, resolved_path);
   int64_t start_time = am_ms();
-  auto [rcm2, pack] = client.client->iwalk(abs_path, ignore_special_file, flag,
-                                           timeout_ms, start_time);
+  auto [rcm2, pack] =
+      client.client->iwalk(abs_path, show_all, ignore_special_file, nullptr,
+                           flag, timeout_ms, start_time);
   if (rcm2.first != EC::Success) {
     prompt_manager_.ErrorFormat(AM_ENUM_NAME(rcm2.first), rcm2.second);
     return rcm2;
   }
-  for (const auto &err : pack.second) {
-    prompt_manager_.ErrorFormat(err.first, err.second.second);
+  if (!quiet) {
+    for (const auto &err : pack.second) {
+      prompt_manager_.ErrorFormat(err.first, err.second.second);
+    }
   }
   const auto &list = pack.first;
   for (const auto &info : list) {
@@ -912,7 +920,8 @@ AMFileSystem::ECM AMFileSystem::walk(const std::string &path, bool only_file,
 /** Print a directory tree using the client walk output with optional filters.
  */
 AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
-                                     bool only_dir, bool ignore_special_file,
+                                     bool only_dir, bool show_all,
+                                     bool ignore_special_file, bool quiet,
                                      amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   auto [nickname, resolved_path, client_ptr, rcm] =
@@ -921,7 +930,9 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
     ECM out = rcm.first == EC::Success
                   ? ECM{EC::ClientNotFound, "Client not found"}
                   : rcm;
+
     prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+
     return out;
   }
   if (resolved_path.empty()) {
@@ -932,23 +943,21 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
   ClientRef client{nickname, client_ptr};
   std::string abs_path = BuildPath(client, resolved_path);
   int64_t start_time = am_ms();
-  auto [rcm2, pack] = client.client->walk(
-      abs_path, max_depth, ignore_special_file, flag, timeout_ms, start_time);
+  auto [rcm2, pack] =
+      client.client->walk(abs_path, max_depth, show_all, ignore_special_file,
+                          nullptr, flag, timeout_ms, start_time);
   if (rcm2.first != EC::Success) {
     prompt_manager_.ErrorFormat(AM_ENUM_NAME(rcm2.first), rcm2.second);
     return rcm2;
   }
-  for (const auto &err : pack.second) {
-    const std::string msg =
-        AMStr::amfmt("{} : {}", err.first, err.second.second);
-    prompt_manager_.ErrorFormat(AM_ENUM_NAME(err.second.first), msg);
+  if (!quiet) {
+    for (const auto &err : pack.second) {
+      const std::string msg =
+          AMStr::amfmt("{} : {}", err.first, err.second.second);
+      prompt_manager_.ErrorFormat(AM_ENUM_NAME(err.second.first), msg);
+    }
   }
   auto &structure = pack.first;
-  if (flag && flag->check()) {
-    ECM out = {EC::Terminate, "Interrupted by user"};
-    prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
-    return out;
-  }
 
   if (only_dir) {
     for (auto &entry : structure) {
@@ -966,13 +975,17 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
   AMTree::BuildTreeNodes(abs_path, structure, &nodes, join_parts, join_pair);
   if (flag && flag->check()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
-    prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+    if (!quiet) {
+      prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+    }
     return out;
   }
   AMTree::SortTreeNodes(&nodes);
   if (flag && flag->check()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
-    prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+    if (!quiet) {
+      prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+    }
     return out;
   }
   const bool printed = AMTree::PrintTree(
@@ -984,7 +997,9 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
       join_pair, [flag]() { return flag && flag->check(); });
   if (!printed && flag && flag->check()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
-    prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+    if (!quiet) {
+      prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+    }
     return out;
   }
   return {EC::Success, ""};
@@ -1189,7 +1204,7 @@ AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
       RMR errors = {};
       if (permanent) {
         auto tmp_res =
-            client.client->remove(abs_path, flag, timeout_ms, start_time);
+        client.client->remove(abs_path, nullptr, flag, timeout_ms, start_time);
         rcm = tmp_res.first;
         errors = tmp_res.second;
       } else {

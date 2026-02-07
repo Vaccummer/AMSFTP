@@ -947,6 +947,8 @@ inline bool is_readonly(const std::wstring &path) {
 
 using CB =
     std::shared_ptr<std::function<void(std::string, std::string, std::string)>>;
+using WalkErrorCallback =
+    std::shared_ptr<std::function<void(const std::string &, const ECM &)>>;
 using WRD =
     std::vector<std::pair<std::vector<std::string>, std::vector<PathInfo>>>;
 using amf = std::shared_ptr<InterruptFlag>;
@@ -1231,11 +1233,12 @@ private:
   virtual std::pair<ECM, std::vector<PathInfo>>
   listdir(const std::string &path, amf interrupt_flag = nullptr,
           int timeout_ms = -1, int64_t start_time = -1) = 0;
-  virtual std::pair<ECM, AMFS::WRI> iwalk(const std::string &path,
-                                          bool ignore_sepcial_file = true,
-                                          amf interrupt_flag = nullptr,
-                                          int timeout_ms = -1,
-                                          int64_t start_time = -1) = 0;
+  virtual std::pair<ECM, AMFS::WRI>
+  iwalk(const std::string &path, bool show_all = false,
+        bool ignore_sepcial_file = true,
+        AMFS::WalkErrorCallback error_callback = nullptr,
+        amf interrupt_flag = nullptr, int timeout_ms = -1,
+        int64_t start_time = -1) = 0;
   std::string star_rep = "amspecial1123exchange2123for1233star4123dd";
   std::string less_rep = "amspecial4123exchange3332for2less131aa";
   std::string greater_rep = "amspecial721exchange623for511greater422ff";
@@ -1263,8 +1266,8 @@ private:
 
     if (std::regex_search(cur_pattern, std::regex("^\\*\\*+$"))) {
       std::vector<std::string> relative_parts;
-      auto [error, sub_pack] =
-          iwalk(path.path, true, interrupt_flag, timeout_ms, start_time);
+      auto [error, sub_pack] = iwalk(path.path, true, true, nullptr,
+                                     interrupt_flag, timeout_ms, start_time);
       if (error.first != EC::Success) {
         return;
       }

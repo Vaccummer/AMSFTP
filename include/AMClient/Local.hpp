@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <filesystem>
 #include <unordered_map>
 #include <unordered_set>
@@ -14,6 +15,18 @@
 #include <magic_enum/magic_enum.hpp>
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#ifndef _WIN32
+#include <errno.h>
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 // Wait result for non-blocking socket operations
 class AMLocalClient : public BaseClient {
@@ -66,6 +79,227 @@ public:
     }
     this->home_dir = AMFS::HomePath();
     return this->home_dir;
+  }
+
+  /**
+   * @brief Execute a local shell command using fork/exec/pipe.
+   * @param cmd Command string passed to /bin/sh -c.
+   * @param max_time_ms Max execution time in milliseconds; <=0 means no limit.
+   * @param interrupt_flag Optional interrupt flag to abort execution.
+   * @return ECM status and pair of output string with exit status.
+   */
+  CR ConductCmd(const std::string &cmd, int max_time_ms = -1,
+                amf interrupt_flag = nullptr) override {
+#ifdef _WIN32
+    amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    if (flag && flag->check()) {
+      return {ECM{EC::Terminate, "Operation aborted before command sent"},
+              {"", -1}};
+    }
+
+    SECURITY_ATTRIBUTES sa;
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = nullptr;
+    sa.bInheritHandle = TRUE;
+
+    HANDLE read_pipe = nullptr;
+    HANDLE write_pipe = nullptr;
+    if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
+      return {ECM{EC::UnknownError, "CreatePipe failed"}, {"", -1}};
+    }
+    SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
+
+    STARTUPINFOA si;
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    si.hStdOutput = write_pipe;
+    si.hStdError = write_pipe;
+
+    PROCESS_INFORMATION pi;
+    ZeroMemory(&pi, sizeof(pi));
+
+    std::string cmdline = "cmd /c " + cmd;
+    std::vector<char> cmd_buf(cmdline.begin(), cmdline.end());
+    cmd_buf.push_back('\0');
+
+    BOOL created =
+        CreateProcessA(nullptr, cmd_buf.data(), nullptr, nullptr, TRUE,
+                       CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
+    CloseHandle(write_pipe);
+
+    if (!created) {
+      CloseHandle(read_pipe);
+      return {ECM{EC::UnknownError, "CreateProcess failed"}, {"", -1}};
+    }
+
+    std::string output;
+    std::array<char, 4096> buffer;
+    int exit_status = -1;
+    bool finished = false;
+    int64_t start_time = am_ms();
+
+    while (true) {
+      if (flag && flag->check()) {
+        TerminateProcess(pi.hProcess, 1);
+        finished = true;
+        break;
+      }
+      if (max_time_ms > 0 && am_ms() - start_time >= max_time_ms) {
+        TerminateProcess(pi.hProcess, 1);
+        finished = true;
+        break;
+      }
+
+      DWORD available = 0;
+      if (PeekNamedPipe(read_pipe, nullptr, 0, nullptr, &available, nullptr) &&
+          available > 0) {
+        DWORD read_bytes = 0;
+        if (ReadFile(read_pipe, buffer.data(),
+                     static_cast<DWORD>(buffer.size()), &read_bytes, nullptr) &&
+            read_bytes > 0) {
+          output.append(buffer.data(), static_cast<size_t>(read_bytes));
+        }
+      }
+
+      DWORD wait = WaitForSingleObject(pi.hProcess, 10);
+      if (wait == WAIT_OBJECT_0) {
+        finished = true;
+        break;
+      }
+    }
+
+    if (finished) {
+      DWORD code = 0;
+      if (GetExitCodeProcess(pi.hProcess, &code)) {
+        exit_status = static_cast<int>(code);
+      }
+      // Drain remaining output
+      DWORD read_bytes = 0;
+      while (ReadFile(read_pipe, buffer.data(),
+                      static_cast<DWORD>(buffer.size()), &read_bytes,
+                      nullptr) &&
+             read_bytes > 0) {
+        output.append(buffer.data(), static_cast<size_t>(read_bytes));
+      }
+    }
+
+    CloseHandle(read_pipe);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    return {ECM{EC::Success, ""}, { output, exit_status }};
+#else
+    amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    if (flag && flag->check()) {
+      return {ECM{EC::Terminate, "Operation aborted before command sent"},
+              {"", -1}};
+    }
+
+    int pipefd[2] = {-1, -1};
+    if (pipe(pipefd) != 0) {
+      return {ECM{fec(std::error_code(errno, std::generic_category())),
+                  "pipe failed"},
+              {"", -1}};
+    }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+      close(pipefd[0]);
+      close(pipefd[1]);
+      return {ECM{fec(std::error_code(errno, std::generic_category())),
+                  "fork failed"},
+              {"", -1}};
+    }
+
+    if (pid == 0) {
+      dup2(pipefd[1], STDOUT_FILENO);
+      dup2(pipefd[1], STDERR_FILENO);
+      close(pipefd[0]);
+      close(pipefd[1]);
+      execl("/bin/sh", "sh", "-c", cmd.c_str(), (char *)nullptr);
+      _exit(127);
+    }
+
+    close(pipefd[1]);
+    int flags = fcntl(pipefd[0], F_GETFL, 0);
+    if (flags != -1) {
+      fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+    }
+
+    std::string output;
+    std::array<char, 4096> buffer;
+    int exit_status = -1;
+    bool child_exited = false;
+    int64_t start_time = am_ms();
+
+    auto kill_child = [&](int sig) {
+      if (!child_exited) {
+        kill(pid, sig);
+      }
+    };
+
+    while (true) {
+      if (flag && flag->check()) {
+        kill_child(SIGKILL);
+        break;
+      }
+      if (max_time_ms > 0 && am_ms() - start_time >= max_time_ms) {
+        kill_child(SIGKILL);
+        break;
+      }
+
+      bool read_any = false;
+      while (true) {
+        ssize_t n = read(pipefd[0], buffer.data(), buffer.size());
+        if (n > 0) {
+          output.append(buffer.data(), static_cast<size_t>(n));
+          read_any = true;
+          continue;
+        }
+        if (n == 0) {
+          child_exited = true;
+          break;
+        }
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+          break;
+        }
+        break;
+      }
+
+      int status = 0;
+      pid_t w = waitpid(pid, &status, WNOHANG);
+      if (w == pid) {
+        child_exited = true;
+        if (WIFEXITED(status)) {
+          exit_status = WEXITSTATUS(status);
+        } else if (WIFSIGNALED(status)) {
+          exit_status = 128 + WTERMSIG(status);
+        }
+      }
+
+      if (child_exited) {
+        while (true) {
+          ssize_t n = read(pipefd[0], buffer.data(), buffer.size());
+          if (n > 0) {
+            output.append(buffer.data(), static_cast<size_t>(n));
+            continue;
+          }
+          break;
+        }
+        break;
+      }
+
+      if (!read_any) {
+        usleep(10000);
+      }
+    }
+
+    close(pipefd[0]);
+
+    return {ECM{EC::Success, ""}, { output, exit_status }};
+#endif
   }
 
   SR stat(const std::string &path, bool trace_link = false,
@@ -207,15 +441,19 @@ public:
     return {ECM{EC::Success, ""}, result};
   }
 
-  inline std::pair<ECM, WRI> iwalk(const std::string &path,
-                                   bool ignore_sepcial_file = true,
-                                   amf interrupt_flag = nullptr,
-                                   int timeout_ms = -1,
-                                   int64_t start_time = -1) override {
+  inline std::pair<ECM, WRI>
+  iwalk(const std::string &path, bool show_all = false,
+        bool ignore_sepcial_file = true,
+        AMFS::WalkErrorCallback error_callback = nullptr,
+        amf interrupt_flag = nullptr, int timeout_ms = -1,
+        int64_t start_time = -1) override {
     std::vector<PathInfo> result = {};
     RMR errors = {};
     auto [error, info] = stat(path);
     if (error.first != EC::Success) {
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, error);
+      }
       errors.emplace_back(path, error);
       return {error, {result, errors}};
     }
@@ -224,9 +462,15 @@ public:
     }
     std::unordered_set<std::string> all_dirs;   // 存储所有目录
     std::unordered_set<std::string> has_subdir; // 存储有子目录的目录（非末级）
+    const bool filter_hidden = !show_all;
+    const bool filter_special = !show_all && ignore_sepcial_file;
+    const auto is_hidden_name = [](const std::string &name) {
+      return !name.empty() && name[0] == '.';
+    };
     std::error_code ec;
-    // 取消其追踪symlink
-    for (const auto &entry : fs::recursive_directory_iterator(path, ec)) {
+    fs::recursive_directory_iterator it(path, ec);
+    fs::recursive_directory_iterator end;
+    for (; it != end; it.increment(ec)) {
       if (interrupt_flag && interrupt_flag->check()) {
         ECM out = {EC::Terminate, "iwalk interrupted by user"};
         return {out, {result, errors}};
@@ -236,25 +480,66 @@ public:
         return {out, {result, errors}};
       }
       if (ec) {
-        errors.emplace_back(entry.path().string(), ECM{fec(ec), ec.message()});
+        ECM out = {fec(ec), ec.message()};
+        if (error_callback && *error_callback) {
+          (*error_callback)(it->path().string(), out);
+        }
+        errors.emplace_back(it->path().string(), out);
         ec.clear();
         continue;
       }
-      if (entry.is_regular_file()) {
-        auto [error, info] = stat(entry.path().string(), false);
-        if (error.first == EC::Success) {
-          result.push_back(info);
-        } else {
-          errors.emplace_back(entry.path().string(), error);
+      const fs::path entry_path = it->path();
+      const std::string base_name = entry_path.filename().string();
+      if (filter_hidden && is_hidden_name(base_name)) {
+        std::error_code ec_dir;
+        if (it->is_directory(ec_dir)) {
+          it.disable_recursion_pending();
+        }
+        if (ec_dir) {
+          ec_dir.clear();
         }
         continue;
       }
-      if (!entry.is_directory() && ignore_sepcial_file) {
+      std::error_code ec_type;
+      const bool is_file = it->is_regular_file(ec_type);
+      if (ec_type) {
+        ECM out = {fec(ec_type), ec_type.message()};
+        if (error_callback && *error_callback) {
+          (*error_callback)(entry_path.string(), out);
+        }
+        errors.emplace_back(entry_path.string(), out);
+        ec_type.clear();
         continue;
       }
-      all_dirs.insert(entry.path().string());
-      if (entry.path().parent_path() != entry.path()) {
-        has_subdir.insert(entry.path().parent_path().string());
+      if (is_file) {
+        auto [error, info] = stat(entry_path.string(), false);
+        if (error.first == EC::Success) {
+          result.push_back(info);
+        } else {
+          if (error_callback && *error_callback) {
+            (*error_callback)(entry_path.string(), error);
+          }
+          errors.emplace_back(entry_path.string(), error);
+        }
+        continue;
+      }
+      std::error_code ec_dir;
+      const bool is_dir = it->is_directory(ec_dir);
+      if (ec_dir) {
+        ECM out = {fec(ec_dir), ec_dir.message()};
+        if (error_callback && *error_callback) {
+          (*error_callback)(entry_path.string(), out);
+        }
+        errors.emplace_back(entry_path.string(), out);
+        ec_dir.clear();
+        continue;
+      }
+      if (!is_dir && filter_special) {
+        continue;
+      }
+      all_dirs.insert(entry_path.string());
+      if (entry_path.parent_path() != entry_path) {
+        has_subdir.insert(entry_path.parent_path().string());
       }
     }
     result.reserve(result.size() + all_dirs.size() - has_subdir.size());
@@ -264,6 +549,9 @@ public:
         if (error.first == EC::Success) {
           result.push_back(info);
         } else {
+          if (error_callback && *error_callback) {
+            (*error_callback)(dir, error);
+          }
           errors.emplace_back(dir, error);
         }
       }
@@ -272,8 +560,9 @@ public:
   }
 
   inline void _walk(std::vector<std::string> parts, WRD &result, RMR &errors,
-                    int cur_depth, int max_depth,
+                    int cur_depth, int max_depth, bool show_all = false,
                     bool ignore_sepcial_file = true,
+                    AMFS::WalkErrorCallback error_callback = nullptr,
                     amf interrupt_flag = nullptr, int timeout_ms = -1,
                     int64_t start_time = -1) {
     if (max_depth > 0 && cur_depth > max_depth) {
@@ -288,21 +577,32 @@ public:
     }
     auto [error, info] = listdir(pathf, interrupt_flag, timeout_ms, start_time);
     if (error.first != EC::Success) {
+      if (error_callback && *error_callback) {
+        (*error_callback)(pathf, error);
+      }
       errors.emplace_back(pathf, error);
       return;
     }
+    const bool filter_hidden = !show_all;
+    const bool filter_special = !show_all && ignore_sepcial_file;
+    const auto is_hidden_name = [](const std::string &name) {
+      return !name.empty() && name[0] == '.';
+    };
     for (const auto &entry : info) {
       if (interrupt_flag && interrupt_flag->check()) {
         print("Interrupted_wk");
         return;
       }
       empty_dir = false;
+      if (filter_hidden && is_hidden_name(entry.name)) {
+        continue;
+      }
       if (entry.type == PathType::DIR) {
         auto n_parts = parts;
         n_parts.push_back(entry.name);
-        _walk(n_parts, result, errors, cur_depth + 1, max_depth,
-              ignore_sepcial_file);
-      } else if (static_cast<int>(entry.type) < 0 && ignore_sepcial_file) {
+        _walk(n_parts, result, errors, cur_depth + 1, max_depth, show_all,
+              ignore_sepcial_file, error_callback);
+      } else if (static_cast<int>(entry.type) < 0 && filter_special) {
         continue;
       } else {
         files_info.push_back(entry);
@@ -314,15 +614,19 @@ public:
     result.emplace_back(parts, files_info);
   }
 
-  inline std::pair<ECM, WRDR> walk(const std::string &path, int max_depth,
-                                   bool ignore_sepcial_file = true,
-                                   amf interrupt_flag = nullptr,
-                                   int timeout_ms = -1,
-                                   int64_t start_time = -1) override {
+  inline std::pair<ECM, WRDR>
+  walk(const std::string &path, int max_depth, bool show_all = false,
+       bool ignore_sepcial_file = true,
+       AMFS::WalkErrorCallback error_callback = nullptr,
+       amf interrupt_flag = nullptr, int timeout_ms = -1,
+       int64_t start_time = -1) override {
     WRD result = {};
     RMR errors = {};
     auto [error, info] = stat(path);
     if (error.first != EC::Success) {
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, error);
+      }
       errors.emplace_back(path, error);
       return {error, {result, errors}};
     } else if (info.type != PathType::DIR) {
@@ -330,6 +634,9 @@ public:
             AMStr::amfmt("Path is not a directory: {}", path));
       ECM out = {EC::NotADirectory,
                  AMStr::amfmt("Path is not a directory: {}", path)};
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, out);
+      }
       errors.emplace_back(path, out);
       return {out, {result, errors}};
     }
@@ -379,6 +686,9 @@ public:
     for (; it != end; it.increment(ec)) {
       if (interrupt_flag && interrupt_flag->check()) {
         ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
+        if (error_callback && *error_callback) {
+          (*error_callback)(path, out);
+        }
         errors.emplace_back(path, out);
         return {out, {result, errors}};
       }
@@ -391,11 +701,25 @@ public:
       }
 
       const fs::path entry_path = it->path();
+      const std::string base_name = entry_path.filename().string();
+      if (!show_all && !base_name.empty() && base_name[0] == '.') {
+        std::error_code ec_dir;
+        if (it->is_directory(ec_dir)) {
+          it.disable_recursion_pending();
+        }
+        if (ec_dir) {
+          ec_dir.clear();
+        }
+        continue;
+      }
       auto [stat_ecm, entry_info] = stat(entry_path.string(), false);
       if (stat_ecm.first != EC::Success) {
         const std::string parent_key =
             normalize_key(entry_path.parent_path().lexically_normal().string());
         dir_states[parent_key].has_entry = true;
+        if (error_callback && *error_callback) {
+          (*error_callback)(entry_path.string(), stat_ecm);
+        }
       } else {
         const std::string entry_display = entry_info.path;
         const std::string entry_key = normalize_key(entry_display);
@@ -407,7 +731,8 @@ public:
         if (entry_info.type == PathType::DIR) {
           ensure_dir(entry_key, entry_display);
         } else {
-          if (static_cast<int>(entry_info.type) < 0 && ignore_sepcial_file) {
+          if (!show_all && static_cast<int>(entry_info.type) < 0 &&
+              ignore_sepcial_file) {
             continue;
           }
           dir_states[parent_key].has_file = true;
@@ -597,35 +922,47 @@ public:
   }
 
   void _remove(const std::string &path, RMR &errors,
+               AMFS::WalkErrorCallback error_callback = nullptr,
                amf interrupt_flag = nullptr, int timeout_ms = -1,
                int64_t start_time = -1) {
     std::error_code ec;
     auto [error, listing] =
         listdir(path, interrupt_flag, timeout_ms, start_time);
     if (error.first != EC::Success) {
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, error);
+      }
       errors.emplace_back(path, error);
       return;
     }
     for (const auto &entry : listing) {
       if (entry.type == PathType::DIR) {
-        _remove(entry.path, errors, interrupt_flag, timeout_ms, start_time);
+        _remove(entry.path, errors, error_callback, interrupt_flag, timeout_ms,
+                start_time);
       } else {
         fs::remove(entry.path, ec);
         if (ec) {
-          errors.emplace_back(
-              entry.path, ECM{fec(ec), AMStr::amfmt("remove {} failed: {}",
-                                                    entry.path, ec.message())});
+          ECM out = {fec(ec), AMStr::amfmt("remove {} failed: {}", entry.path,
+                                           ec.message())};
+          if (error_callback && *error_callback) {
+            (*error_callback)(entry.path, out);
+          }
+          errors.emplace_back(entry.path, out);
         }
       }
     }
     fs::remove(fs::path(path), ec);
     if (ec) {
-      errors.emplace_back(
-          path, ECM{fec(ec),
-                    AMStr::amfmt("remove {} failed: {}", path, ec.message())});
+      ECM out = {fec(ec),
+                 AMStr::amfmt("remove {} failed: {}", path, ec.message())};
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, out);
+      }
+      errors.emplace_back(path, out);
     }
   }
   std::pair<ECM, RMR> remove(const std::string &path,
+                             AMFS::WalkErrorCallback error_callback = nullptr,
                              amf interrupt_flag = nullptr, int timeout_ms = -1,
                              int64_t start_time = -1) override {
     if (path.empty()) {
@@ -633,18 +970,25 @@ public:
     }
     auto [error, info] = stat(path);
     if (error.first != EC::Success) {
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, error);
+      }
       return {error, RMR{}};
     }
     RMR errors = {};
     std::error_code ec;
     if (info.type == PathType::DIR) {
-      _remove(path, errors, interrupt_flag, timeout_ms, start_time);
+      _remove(path, errors, error_callback, interrupt_flag, timeout_ms,
+              start_time);
     } else {
       fs::remove(fs::path(path), ec);
       if (ec) {
-        return {ECM{fec(ec),
-                    AMStr::amfmt("remove {} failed: {}", path, ec.message())},
-                errors};
+        ECM out = {fec(ec),
+                   AMStr::amfmt("remove {} failed: {}", path, ec.message())};
+        if (error_callback && *error_callback) {
+          (*error_callback)(path, out);
+        }
+        return {out, errors};
       }
     }
     return {ECM{EC::Success, ""}, errors};

@@ -141,8 +141,12 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
                               "Only show files");
   commands.walk_cmd->add_flag("-d,--dir", args.walk.only_dir,
                               "Only show directories");
+  commands.walk_cmd->add_flag("-a,--all", args.walk.show_all,
+                              "Show hidden entries");
   commands.walk_cmd->add_flag("-s,--special", args.walk.include_special,
                               "Include special files");
+  commands.walk_cmd->add_flag("-q,--quiet", args.walk.quiet,
+                              "Suppress error output");
 
   commands.tree_cmd = app.add_subcommand("tree", "Print directory tree");
   commands.tree_cmd->add_option("path", args.tree.path, "Path to tree")
@@ -152,8 +156,12 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
                                 "Max depth (default: -1)");
   commands.tree_cmd->add_flag("-o,--onlydir", args.tree.only_dir,
                               "Only show directories");
+  commands.tree_cmd->add_flag("-a,--all", args.tree.show_all,
+                              "Show hidden entries");
   commands.tree_cmd->add_flag("-s,--special", args.tree.include_special,
                               "Include special files");
+  commands.tree_cmd->add_flag("-q,--quiet", args.tree.quiet,
+                              "Suppress error output");
 
   commands.realpath_cmd =
       app.add_subcommand("realpath", "Print absolute path");
@@ -829,7 +837,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   if (cli_commands.walk_cmd->parsed()) {
     result.rcm =
         filesystem.walk(args.walk.path, args.walk.only_file, args.walk.only_dir,
-                        !args.walk.include_special, flag);
+                        args.walk.show_all, !args.walk.include_special,
+                        args.walk.quiet, flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }
@@ -840,7 +849,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   if (cli_commands.tree_cmd->parsed()) {
     result.rcm =
         filesystem.tree(args.tree.path, args.tree.depth, args.tree.only_dir,
-                        !args.tree.include_special, flag);
+                        args.tree.show_all, !args.tree.include_special,
+                        args.tree.quiet, flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }
