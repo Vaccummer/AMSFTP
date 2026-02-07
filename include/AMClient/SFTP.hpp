@@ -2003,25 +2003,37 @@ public:
 
     // 使用 libssh2_sftp_stat 测量 RTT（最小开销的 SFTP 操作）
     LIBSSH2_SFTP_ATTRIBUTES attrs;
+    amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    libssh2_session_set_blocking(session, 0);
 
     for (ssize_t i = 0; i < times; i++) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (flag && flag->check()) {
         break;
       }
 
-      auto start = -1;
+      int64_t start = am_ms();
+      int rc = 0;
+      WaitResult wr = WaitResult::Ready;
 
-      // stat "/" 是最轻量的操作
-      int rc = libssh2_sftp_stat(sftp, "/", &attrs);
+      while ((rc = libssh2_sftp_stat(sftp, "/", &attrs)) ==
+             LIBSSH2_ERROR_EAGAIN) {
+        wr = wait_for_socket(SocketWaitType::Auto, flag, start, -1);
+        if (wr != WaitResult::Ready) {
+          break;
+        }
+      }
 
-      auto end = -1;
+      if (wr != WaitResult::Ready) {
+        break;
+      }
 
       if (rc == 0) {
-        double rtt_ms =
-            std::chrono::duration<double, std::milli>(end - start).count();
-        rtts.push_back(rtt_ms);
+        int64_t end = am_ms();
+        rtts.push_back(static_cast<double>(end - start));
       }
     }
+
+    libssh2_session_set_blocking(session, 1);
 
     if (rtts.empty()) {
       return -1.0;
@@ -3099,6 +3111,9 @@ public:
     ECM rcm = _precheck(path);
     RMR errors = {};
     if (rcm.first != EC::Success) {
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, rcm);
+      }
       return {rcm, {WRV{}, errors}};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -3125,7 +3140,11 @@ public:
     _iwalk(path, attrs, result, errors, show_all, ignore_sepcial_file,
            error_callback, interrupt_flag, timeout_ms, start_time);
     if (interrupt_flag && interrupt_flag->check()) {
-      return {ECM{EC::Terminate, "Interrupted by user"}, {result, errors}};
+      ECM out = {EC::Terminate, "Interrupted by user"};
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, out);
+      }
+      return {out, {result, errors}};
     }
     return {ECM{EC::Success, ""}, {result, errors}};
   }
@@ -3171,8 +3190,11 @@ public:
           start_time);
     // 打印result_dict的类型
     if (interrupt_flag && interrupt_flag->check()) {
-      return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
-              {result_dict, errors}};
+      ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, out);
+      }
+      return {out, {result_dict, errors}};
     }
     return {ECM{EC::Success, ""}, {result_dict, errors}};
   }

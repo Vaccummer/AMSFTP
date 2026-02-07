@@ -892,14 +892,15 @@ AMFileSystem::ECM AMFileSystem::walk(const std::string &path, bool only_file,
   ClientRef client{nickname, client_ptr};
   std::string abs_path = BuildPath(client, resolved_path);
   int64_t start_time = am_ms();
+  AMFS::WalkErrorCallback error_cb = MakeWalkErrorCallback("walk", quiet);
   auto [rcm2, pack] =
-      client.client->iwalk(abs_path, show_all, ignore_special_file, nullptr,
+      client.client->iwalk(abs_path, show_all, ignore_special_file, error_cb,
                            flag, timeout_ms, start_time);
   if (rcm2.first != EC::Success) {
     prompt_manager_.ErrorFormat(AM_ENUM_NAME(rcm2.first), rcm2.second);
     return rcm2;
   }
-  if (!quiet) {
+  if (!quiet && !error_cb) {
     for (const auto &err : pack.second) {
       prompt_manager_.ErrorFormat(err.first, err.second.second);
     }
@@ -943,14 +944,15 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
   ClientRef client{nickname, client_ptr};
   std::string abs_path = BuildPath(client, resolved_path);
   int64_t start_time = am_ms();
+  AMFS::WalkErrorCallback error_cb = MakeWalkErrorCallback("tree", quiet);
   auto [rcm2, pack] =
       client.client->walk(abs_path, max_depth, show_all, ignore_special_file,
-                          nullptr, flag, timeout_ms, start_time);
+                          error_cb, flag, timeout_ms, start_time);
   if (rcm2.first != EC::Success) {
     prompt_manager_.ErrorFormat(AM_ENUM_NAME(rcm2.first), rcm2.second);
     return rcm2;
   }
-  if (!quiet) {
+  if (!quiet && !error_cb) {
     for (const auto &err : pack.second) {
       const std::string msg =
           AMStr::amfmt("{} : {}", err.first, err.second.second);
@@ -1002,6 +1004,39 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
     }
     return out;
   }
+  return {EC::Success, ""};
+}
+
+AMFileSystem::ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
+  amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
+  if (flag && flag->check()) {
+    ECM out = {EC::Terminate, "Interrupted by user"};
+    prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+    return out;
+  }
+
+  auto client =
+      client_manager_.CLIENT ? client_manager_.CLIENT : client_manager_.LOCAL;
+  if (!client) {
+    ECM out = {EC::ClientNotFound, "Client not found"};
+    prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+    return out;
+  }
+  if (client == client_manager_.LOCAL) {
+    ECM out = {EC::InvalidArg, "Local client does not support RTT"};
+    prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+    return out;
+  }
+  if (times <= 0) {
+    times = 1;
+  }
+  double rtt = client->GetRTT(times, flag);
+  if (rtt < 0.0) {
+    ECM out = {EC::CommonFailure, "RTT measurement failed"};
+    prompt_manager_.ErrorFormat(AM_ENUM_NAME(out.first), out.second);
+    return out;
+  }
+  prompt_manager_.Print(AMStr::amfmt("{} ms", rtt));
   return {EC::Success, ""};
 }
 
@@ -1143,21 +1178,22 @@ AMFileSystem::ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
   return last;
 }
 
-AMFileSystem::ECM AMFileSystem::rm(const std::string &path, amf interrupt_flag,
-                                   int timeout_ms) {
+AMFileSystem::ECM AMFileSystem::rm(const std::string &path, bool quiet,
+                                   amf interrupt_flag, int timeout_ms) {
   std::vector<std::string> targets = SplitTargets(path);
-  return rm(targets, false, false, interrupt_flag, timeout_ms);
+  return rm(targets, false, false, quiet, interrupt_flag, timeout_ms);
 }
 
 /** Remove paths using safe removal. */
 AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
-                                   amf interrupt_flag, int timeout_ms) {
-  return rm(paths, false, false, interrupt_flag, timeout_ms);
+                                   bool quiet, amf interrupt_flag,
+                                   int timeout_ms) {
+  return rm(paths, false, false, quiet, interrupt_flag, timeout_ms);
 }
 
 /** Remove paths using safe or permanent removal with optional force. */
 AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
-                                   bool permanent, bool force,
+                                   bool permanent, bool force, bool quiet,
                                    amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : global_interrupt_flag;
   std::vector<std::string> targets = UniqueTargetsKeepOrder_(paths);
@@ -1167,6 +1203,10 @@ AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
   ECM last = {EC::Success, ""};
   for (const auto &target : targets) {
     if (flag && flag->check()) {
+      if (!quiet) {
+        prompt_manager_.ErrorFormat(AM_ENUM_NAME(EC::Terminate),
+                                    "Interrupted by user");
+      }
       return {EC::Terminate, "Interrupted by user"};
     }
     if (permanent || !force) {
@@ -1177,8 +1217,10 @@ AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
               : AMStr::amfmt("Remove path? [{}] (y/N): ", target);
       if (!prompt_manager_.PromptYesNo(prompt, &canceled)) {
         last = {EC::Terminate, "Remove canceled"};
-        prompt_manager_.ErrorFormat(AM_ENUM_NAME(EC::ConfigCanceled),
-                                    "Remove canceled");
+        if (!quiet) {
+          prompt_manager_.ErrorFormat(AM_ENUM_NAME(EC::ConfigCanceled),
+                                      "Remove canceled");
+        }
         continue;
       }
     }
@@ -1188,12 +1230,16 @@ AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
       last = rcm.first == EC::Success
                  ? ECM{EC::ClientNotFound, "Client not found"}
                  : rcm;
-      prompt_manager_.ErrorFormat(AM_ENUM_NAME(last.first), last.second);
+      if (!quiet) {
+        prompt_manager_.ErrorFormat(AM_ENUM_NAME(last.first), last.second);
+      }
       continue;
     }
     if (resolved_path.empty()) {
       last = {EC::InvalidArg, "Empty path"};
-      prompt_manager_.ErrorFormat(AM_ENUM_NAME(last.first), last.second);
+      if (!quiet) {
+        prompt_manager_.ErrorFormat(AM_ENUM_NAME(last.first), last.second);
+      }
       continue;
     }
     ClientRef client{nickname, client_ptr};
@@ -1203,8 +1249,9 @@ AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
       ECM rcm;
       RMR errors = {};
       if (permanent) {
-        auto tmp_res =
-        client.client->remove(abs_path, nullptr, flag, timeout_ms, start_time);
+        AMFS::WalkErrorCallback error_cb = MakeWalkErrorCallback("rm", quiet);
+        auto tmp_res = client.client->remove(abs_path, error_cb, flag,
+                                             timeout_ms, start_time);
         rcm = tmp_res.first;
         errors = tmp_res.second;
       } else {
@@ -1212,14 +1259,18 @@ AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
       }
       if (rcm.first != EC::Success) {
         last = rcm;
-        for (const auto &error : errors) {
-          last = {EC::UnknownError, error.second.second};
+        if (!errors.empty()) {
+          last = {EC::UnknownError, errors.back().second.second};
         }
-        prompt_manager_.ErrorFormat(AM_ENUM_NAME(last.first), last.second);
+        if (!quiet) {
+          prompt_manager_.ErrorFormat(AM_ENUM_NAME(last.first), last.second);
+        }
       }
     } catch (const std::exception &ex) {
       last = {EC::UnImplentedMethod, ex.what()};
-      prompt_manager_.ErrorFormat(AM_ENUM_NAME(last.first), last.second);
+      if (!quiet) {
+        prompt_manager_.ErrorFormat(AM_ENUM_NAME(last.first), last.second);
+      }
     }
   }
   return last;
@@ -1423,6 +1474,27 @@ std::string AMFileSystem::FormatStatOutput(const PathInfo &info) const {
   out << std::left << std::setw(static_cast<int>(width)) << "access_time"
       << " : " << FormatTimestamp(info.access_time) << "\n";
   return out.str();
+}
+
+/** Create a walk error callback that prints formatted errors. */
+AMFS::WalkErrorCallback
+AMFileSystem::MakeWalkErrorCallback(const std::string &func_name,
+                                    bool quiet) const {
+  if (quiet) {
+    return nullptr;
+  }
+  return std::make_shared<
+      std::function<void(const std::string &, const ECM &)>>(
+      [this, func_name](const std::string &path, const ECM &rcm) {
+        if (rcm.first == EC::Success) {
+          return;
+        }
+        std::string msg = rcm.second;
+        if (!func_name.empty()) {
+          msg = AMStr::amfmt("{} error: {}", func_name, msg);
+        }
+        prompt_manager_.ErrorFormat(AM_ENUM_NAME(rcm.first), msg);
+      });
 }
 
 std::string AMFileSystem::StylePath(const PathInfo &info,

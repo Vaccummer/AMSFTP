@@ -90,14 +90,15 @@ public:
   ECM mkdir(const std::vector<std::string> &paths, amf interrupt_flag = nullptr,
             int timeout_ms = -1);
   /** Remove a path using safe removal. */
-  ECM rm(const std::string &path, amf interrupt_flag = nullptr,
-         int timeout_ms = -1);
+  ECM rm(const std::string &path, bool quiet = false,
+         amf interrupt_flag = nullptr, int timeout_ms = -1);
   /** Remove paths using safe removal. */
-  ECM rm(const std::vector<std::string> &paths, amf interrupt_flag = nullptr,
-         int timeout_ms = -1);
+  ECM rm(const std::vector<std::string> &paths, bool quiet = false,
+         amf interrupt_flag = nullptr, int timeout_ms = -1);
   /** Remove paths using safe or permanent removal with optional force. */
   ECM rm(const std::vector<std::string> &paths, bool permanent, bool force,
-         amf interrupt_flag = nullptr, int timeout_ms = -1);
+         bool quiet = false, amf interrupt_flag = nullptr,
+         int timeout_ms = -1);
   /** Move multiple sources into destination without cross-client moves. */
   ECM move(const std::vector<std::string> &srcs, const std::string &dst,
            bool mkdir = false, bool overwrite = false,
@@ -116,6 +117,8 @@ public:
            bool show_all = false, bool ignore_special_file = true,
            bool quiet = false, amf interrupt_flag = nullptr,
            int timeout_ms = -1);
+  /** Measure current client RTT and print the result. */
+  ECM TestRTT(int times = 1, amf interrupt_flag = nullptr);
   /** Print the absolute path resolved by client home/workdir. */
   ECM realpath(const std::string &path, amf interrupt_flag = nullptr,
                int timeout_ms = -1);
@@ -178,6 +181,14 @@ private:
   std::string FormatTimestamp(double value) const;
   /** Format stat output block. */
   std::string FormatStatOutput(const PathInfo &info) const;
+  /**
+   * @brief Create a walk error callback that prints formatted errors.
+   * @param func_name Function label for error messages.
+   * @param quiet When true, suppress callback creation.
+   * @return WalkErrorCallback instance or nullptr when quiet.
+   */
+  [[nodiscard]] AMFS::WalkErrorCallback
+  MakeWalkErrorCallback(const std::string &func_name, bool quiet) const;
 
   AMClientManager &client_manager_;
   AMConfigManager &config_manager_;

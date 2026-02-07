@@ -473,10 +473,16 @@ public:
     for (; it != end; it.increment(ec)) {
       if (interrupt_flag && interrupt_flag->check()) {
         ECM out = {EC::Terminate, "iwalk interrupted by user"};
+        if (error_callback && *error_callback) {
+          (*error_callback)(path, out);
+        }
         return {out, {result, errors}};
       }
       if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
         ECM out = {EC::OperationTimeout, "iwalk timeout"};
+        if (error_callback && *error_callback) {
+          (*error_callback)(path, out);
+        }
         return {out, {result, errors}};
       }
       if (ec) {
@@ -572,7 +578,11 @@ public:
     std::vector<PathInfo> files_info = {};
     bool empty_dir = true;
     if (interrupt_flag && interrupt_flag->check()) {
-      print("Interrupted_in_walk");
+      ECM out = {EC::Terminate, "walk interrupted by user"};
+      if (error_callback && *error_callback) {
+        (*error_callback)(pathf, out);
+      }
+      errors.emplace_back(pathf, out);
       return;
     }
     auto [error, info] = listdir(pathf, interrupt_flag, timeout_ms, start_time);
@@ -590,7 +600,11 @@ public:
     };
     for (const auto &entry : info) {
       if (interrupt_flag && interrupt_flag->check()) {
-        print("Interrupted_wk");
+        ECM out = {EC::Terminate, "walk interrupted by user"};
+        if (error_callback && *error_callback) {
+          (*error_callback)(pathf, out);
+        }
+        errors.emplace_back(pathf, out);
         return;
       }
       empty_dir = false;
@@ -680,8 +694,7 @@ public:
     ensure_dir(root_key, root_norm.string());
 
     std::error_code ec;
-    fs::recursive_directory_iterator it(
-        root_norm, fs::directory_options::skip_permission_denied, ec);
+    fs::recursive_directory_iterator it(root_norm, ec);
     fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
       if (interrupt_flag && interrupt_flag->check()) {
@@ -693,9 +706,19 @@ public:
         return {out, {result, errors}};
       }
       if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
-        break;
+        ECM out = {EC::OperationTimeout, "walk timeout"};
+        if (error_callback && *error_callback) {
+          (*error_callback)(path, out);
+        }
+        errors.emplace_back(path, out);
+        return {out, {result, errors}};
       }
       if (ec) {
+        ECM out = {fec(ec), ec.message()};
+        if (error_callback && *error_callback) {
+          (*error_callback)(it->path().string(), out);
+        }
+        errors.emplace_back(it->path().string(), out);
         ec.clear();
         continue;
       }

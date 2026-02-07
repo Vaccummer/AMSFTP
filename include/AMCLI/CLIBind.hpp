@@ -98,6 +98,7 @@ struct MkdirArgs {
 struct RmArgs {
   std::vector<std::string> paths;
   bool permanent = false;
+  bool quiet = false;
 };
 
 /**
@@ -129,6 +130,13 @@ struct TreeArgs {
  */
 struct RealpathArgs {
   std::string path;
+};
+
+/**
+ * @brief CLI argument container for rtt.
+ */
+struct RttArgs {
+  int times = 1;
 };
 
 /**
@@ -323,6 +331,7 @@ struct CliArgsPool {
   WalkArgs walk;
   TreeArgs tree;
   RealpathArgs realpath;
+  RttArgs rtt;
   CpArgs cp;
   SftpArgs sftp;
   FtpArgs ftp;
@@ -372,6 +381,7 @@ struct CliCommands {
   CLI::App *walk_cmd = nullptr;
   CLI::App *tree_cmd = nullptr;
   CLI::App *realpath_cmd = nullptr;
+  CLI::App *rtt_cmd = nullptr;
   CLI::App *cp_cmd = nullptr;
   CLI::App *sftp_cmd = nullptr;
   CLI::App *ftp_cmd = nullptr;

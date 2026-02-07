@@ -1109,6 +1109,57 @@ public:
     return rcm;
   }
 
+  // 获取 RTT (Round Trip Time)，返回平均值（毫秒）
+  // 通过执行轻量级 LIST 请求来测量
+  double GetRTT(ssize_t times = 5, amf interrupt_flag = nullptr) override {
+    if (times <= 0) {
+      times = 1;
+    }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!curl || !multi) {
+      return -1.0;
+    }
+    amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
+    std::vector<double> rtts;
+    rtts.reserve(static_cast<size_t>(times));
+
+    for (ssize_t i = 0; i < times; i++) {
+      if (flag && flag->check()) {
+        break;
+      }
+      ECM ecm = SetupPath("", true);
+      if (ecm.first != EC::Success) {
+        return -1.0;
+      }
+      struct MemoryStruct chunk;
+      chunk.memory = (char *)malloc(1);
+      chunk.size = 0;
+      curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
+      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+      curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+
+      int64_t start_time = am_ms();
+      auto nb_res = nb_perform(flag, -1, start_time);
+      int64_t end_time = am_ms();
+      free(chunk.memory);
+
+      if (nb_res.ok() && nb_res.value == CURLE_OK) {
+        rtts.push_back(static_cast<double>(end_time - start_time));
+      } else if (nb_res.status == WaitResult::Interrupted) {
+        break;
+      }
+    }
+
+    if (rtts.empty()) {
+      return -1.0;
+    }
+    double sum = 0.0;
+    for (double v : rtts) {
+      sum += v;
+    }
+    return sum / static_cast<double>(rtts.size());
+  }
+
   ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
             int64_t start_time = -1) override {
     start_time = start_time == -1 ? am_ms() : start_time;
@@ -1374,6 +1425,9 @@ public:
 
     if (path.empty()) {
       ECM out = {EC::InvalidArg, "Invalid empty path"};
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, out);
+      }
       return {out, {WRV{}, RMR{}}};
     }
     WRV result = {};
@@ -1396,8 +1450,11 @@ public:
     _iwalk(info, result, errors, show_all, ignore_special_file, error_callback,
            interrupt_flag, timeout_ms, start_time);
     if (interrupt_flag && interrupt_flag->check()) {
-      return {ECM{EC::Terminate, "iwalk interrupted by user"},
-              {result, errors}};
+      ECM out = {EC::Terminate, "iwalk interrupted by user"};
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, out);
+      }
+      return {out, {result, errors}};
     }
     return {ECM{EC::Success, ""}, {result, errors}};
   }
@@ -1487,8 +1544,11 @@ public:
           ignore_special_file, error_callback, interrupt_flag, timeout_ms,
           start_time);
     if (interrupt_flag && interrupt_flag->check()) {
-      return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
-              {result_dict, errors}};
+      ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, out);
+      }
+      return {out, {result_dict, errors}};
     }
     return {ECM{EC::Success, ""}, {result_dict, errors}};
   }
