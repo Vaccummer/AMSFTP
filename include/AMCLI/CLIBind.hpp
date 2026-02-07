@@ -107,7 +107,9 @@ struct WalkArgs {
   std::string path;
   bool only_file = false;
   bool only_dir = false;
+  bool show_all = false;
   bool include_special = false;
+  bool quiet = false;
 };
 
 /**
@@ -117,7 +119,9 @@ struct TreeArgs {
   std::string path;
   int depth = -1;
   bool only_dir = false;
+  bool show_all = false;
   bool include_special = false;
+  bool quiet = false;
 };
 
 /**

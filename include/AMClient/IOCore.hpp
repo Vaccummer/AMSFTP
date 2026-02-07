@@ -2194,8 +2194,8 @@ public:
               tasks};
     }
 
-    auto [rcm7, src_pack] =
-        src_client->iwalk(srcf, false, interrupt_flag, timeout_ms, start_time);
+    auto [rcm7, src_pack] = src_client->iwalk(
+        srcf, true, false, nullptr, interrupt_flag, timeout_ms, start_time);
     if (rcm7.first != EC::Success) {
       return {rcm7, tasks};
     }

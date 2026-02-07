@@ -379,8 +379,8 @@ public:
                           bool ignore_sepcial_file = true,
                           amf interrupt_flag = nullptr, int timeout_ms = -1,
                           int64_t start_time = -1) {
-    auto [rcm, pack] = iwalk(path, ignore_sepcial_file, interrupt_flag,
-                             timeout_ms, start_time);
+    auto [rcm, pack] = iwalk(path, true, ignore_sepcial_file, nullptr,
+                             interrupt_flag, timeout_ms, start_time);
     if (rcm.first != EC::Success) {
       return -1;
     }
@@ -579,6 +579,7 @@ public:
 
   virtual std::pair<ECM, RMR>
   remove([[maybe_unused]] const std::string &path,
+         [[maybe_unused]] AMFS::WalkErrorCallback error_callback = nullptr,
          [[maybe_unused]] amf interrupt_flag = nullptr,
          [[maybe_unused]] int timeout_ms = -1,
          [[maybe_unused]] int64_t start_time = -1) {
@@ -602,11 +603,14 @@ public:
         "{} Client doesn't implement funtion: copy", GetProtocolName()));
   }
 
-  std::pair<ECM, WRI> iwalk([[maybe_unused]] const std::string &path,
-                            [[maybe_unused]] bool ignore_special_file = true,
-                            [[maybe_unused]] amf interrupt_flag = nullptr,
-                            [[maybe_unused]] int timeout_ms = -1,
-                            [[maybe_unused]] int64_t start_time = -1) override {
+  std::pair<ECM, WRI>
+  iwalk([[maybe_unused]] const std::string &path,
+        [[maybe_unused]] bool show_all = false,
+        [[maybe_unused]] bool ignore_special_file = true,
+        [[maybe_unused]] AMFS::WalkErrorCallback error_callback = nullptr,
+        [[maybe_unused]] amf interrupt_flag = nullptr,
+        [[maybe_unused]] int timeout_ms = -1,
+        [[maybe_unused]] int64_t start_time = -1) override {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: iwalk", GetProtocolName()));
   }
@@ -614,7 +618,9 @@ public:
   virtual std::pair<ECM, WRDR>
   walk([[maybe_unused]] const std::string &path,
        [[maybe_unused]] int max_depth = -1,
+       [[maybe_unused]] bool show_all = false,
        [[maybe_unused]] bool ignore_special_file = false,
+       [[maybe_unused]] AMFS::WalkErrorCallback error_callback = nullptr,
        [[maybe_unused]] amf interrupt_flag = nullptr,
        [[maybe_unused]] int timeout_ms = -1,
        [[maybe_unused]] int64_t start_time = -1) {
