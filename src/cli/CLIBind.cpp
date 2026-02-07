@@ -132,6 +132,8 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
       ->expected(1, -1);
   commands.rm_cmd->add_flag("-p,--permanent", args.rm.permanent,
                             "Delete permanently");
+  commands.rm_cmd->add_flag("-q,--quiet", args.rm.quiet,
+                            "Suppress error output");
 
   commands.walk_cmd = app.add_subcommand("walk", "Walk paths");
   commands.walk_cmd->add_option("path", args.walk.path, "Path to walk")
@@ -167,6 +169,10 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
       app.add_subcommand("realpath", "Print absolute path");
   commands.realpath_cmd
       ->add_option("path", args.realpath.path, "Path to resolve")
+      ->expected(0, 1);
+
+  commands.rtt_cmd = app.add_subcommand("rtt", "Measure current client RTT");
+  commands.rtt_cmd->add_option("times", args.rtt.times, "Samples (default: 1)")
       ->expected(0, 1);
 
   commands.cp_cmd = app.add_subcommand("cp", "Transfer files/directories");
@@ -826,7 +832,9 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.rm_cmd->parsed()) {
-    result.rcm = filesystem.rm(args.rm.paths, args.rm.permanent, false, flag);
+    result.rcm =
+        filesystem.rm(args.rm.paths, args.rm.permanent, false, args.rm.quiet,
+                      flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }
@@ -860,6 +868,15 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
 
   if (cli_commands.realpath_cmd->parsed()) {
     result.rcm = filesystem.realpath(args.realpath.path, flag);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (cli_commands.rtt_cmd->parsed()) {
+    result.rcm = filesystem.TestRTT(args.rtt.times, flag);
+    if (result.rcm.first != EC::Success) {
+      std::cerr << result.rcm.second << std::endl;
+    }
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
