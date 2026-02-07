@@ -174,6 +174,7 @@ enum class ErrorCode {
   ConfigInvalid = 104,
   ConfigCanceled = 105,
   TaskNotFound = 106,
+  IndexOutOfRange = 107,
 
   // FTP Server Error
   UnsupportFTPProtocol = 47,
@@ -263,6 +264,22 @@ enum class TraceLevel {
   Warning = 2,
   Info = 3,
   Debug = 4
+};
+
+enum class AMTokenType {
+  Common,
+  Module,
+  Command,
+  VarName,
+  VarValue,
+  Nickname,
+  String,
+  Option,
+  AtSign,
+  DollarSign,
+  EqualSign,
+  VarNameMissing,
+  EscapeSign
 };
 
 // 将libssh2错误码映射为错误消息

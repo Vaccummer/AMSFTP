@@ -278,6 +278,7 @@ struct TaskCacheRmArgs {
  * @brief CLI argument container for task cache submit.
  */
 struct TaskCacheSubmitArgs {
+  bool is_async = false;
   bool quiet = false;
 };
 
@@ -303,9 +304,9 @@ struct TaskControlArgs {
 };
 
 /**
- * @brief CLI argument container for task resume (failed tasks).
+ * @brief CLI argument container for task retry (failed tasks).
  */
-struct TaskResumeArgs {
+struct TaskRetryArgs {
   std::string id;
   bool is_async = false;
   bool quiet = false;
@@ -353,7 +354,8 @@ struct CliArgsPool {
   TaskEntryArgs task_entry;
   TaskControlArgs task_terminate;
   TaskControlArgs task_pause;
-  TaskResumeArgs task_resume;
+  TaskControlArgs task_resume;
+  TaskRetryArgs task_retry;
 };
 
 /**
@@ -412,6 +414,7 @@ struct CliCommands {
   CLI::App *task_terminate_cmd = nullptr;
   CLI::App *task_pause_cmd = nullptr;
   CLI::App *task_resume_cmd = nullptr;
+  CLI::App *task_retry_cmd = nullptr;
   CLI::App *resume_cmd = nullptr;
   const CliArgsPool *args = nullptr;
 };

@@ -160,23 +160,11 @@ private:
   /** Build absolute path using AMFS::abspath and workdir. */
   [[nodiscard]] std::string BuildPath(const ClientRef &client,
                                       const std::string &path) const;
-  /** Get client workdir from public map or fallback to home dir. */
-  [[nodiscard]] std::string
-  GetClientWorkdir(const std::shared_ptr<BaseClient> &client) const;
-  /** Set client workdir in public map. */
-  void SetClientWorkdir(const std::shared_ptr<BaseClient> &client,
-                        const std::string &path);
-  /** Ensure workdir exists in public map. */
-  void EnsureClientWorkdir(const std::shared_ptr<BaseClient> &client);
-  /** Get workdir and initialize if missing. */
-  std::string GetOrInitWorkdir(const std::shared_ptr<BaseClient> &client) const;
   /** Update cd history. */
   void UpdateHistory(const std::string &nickname, const std::string &path);
   /** Print a client status line. */
   ECM PrintClientStatus(const ClientRef &client, bool update = true,
                         amf interrupt_flag = nullptr);
-  /** Format size to human-readable string. */
-  std::string FormatSize(size_t size) const;
   /** Format unix timestamp to printable time. */
   std::string FormatTimestamp(double value) const;
   /** Format stat output block. */

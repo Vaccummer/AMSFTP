@@ -128,7 +128,6 @@ public:
    * @brief Set the public result callback wrapper for all task completions.
    */
   void SetPublicResultCallback(PublicResultCallback cb = {});
-  void SetResultCallback(UserResultCallback cb = {});
   [[nodiscard]] TaskInfo::ResultCallback
   BindResultCallback(UserResultCallback user_cb);
   std::list<std::shared_ptr<TaskInfo>> GetHistory() const;
@@ -160,7 +159,7 @@ public:
    * @param out_set Output transfer set.
    * @return True when found.
    */
-  bool QueryTransferSet(size_t set_index, UserTransferSet *out_set) const;
+  ECM QueryTransferSet(size_t set_index, UserTransferSet *out_set) const;
 
   /**
    * @brief List all cached transfer set indices.
@@ -178,16 +177,7 @@ public:
    * @param pending_count Output count of pending tasks (nullable).
    * @param conducting_count Output count of conducting tasks (nullable).
    */
-  void GetTaskCounts(size_t *pending_count,
-                     size_t *conducting_count) const;
-
-  /**
-   * @brief Delete a cached transfer set by index.
-   *
-   * @param set_index Cache index to delete.
-   * @return True when removed.
-   */
-  bool DeleteTransferSet(size_t set_index);
+  void GetTaskCounts(size_t *pending_count, size_t *conducting_count) const;
 
   /**
    * @brief Delete cached transfer sets by indices.
@@ -203,24 +193,16 @@ public:
   void ClearCachedTransferSets();
 
   /**
-   * @brief Execute all cached transfer sets.
-   *
-   * @param quiet Whether to suppress output.
-   * @param interrupt_flag Optional interrupt flag.
-   */
-  ECM ExecuteCachedTransferSets(
-      bool quiet,
-      const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
-
-  /**
-   * @brief Submit cached transfer sets as an async task.
+   * @brief Submit cached transfer sets as a task.
    *
    * @param quiet Whether to suppress output and confirmation.
    * @param interrupt_flag Optional interrupt flag.
+   * @param is_async Whether to submit as an async task.
    */
   ECM SubmitCachedTransferSets(
       bool quiet,
-      const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+      const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr,
+      bool is_async = false);
 
   /**
    * @brief Show task status by ID using TaskInfoPrint.
@@ -262,14 +244,14 @@ public:
   ECM InspectTaskEntries(const ID &task_id) const;
 
   /**
-   * @brief Inspect a cached user transfer set by cache index.
+   * @brief Query a cached user transfer set by cache index.
    */
-  ECM InspectUserSet(size_t set_index) const;
+  ECM QueryCachedUserSet(size_t set_index) const;
 
   /**
-   * @brief Inspect a single task entry by entry ID.
+   * @brief Query a single task entry by entry ID.
    */
-  ECM InspectTaskEntry(const ID &entry_id) const;
+  ECM QuerySetEntry(const ID &entry_id) const;
 
   /**
    * @brief Terminate a running task by ID.
@@ -302,15 +284,15 @@ public:
   ECM Resume(const std::vector<ID> &task_ids);
 
   /**
-   * @brief Resume a completed task by rebuilding transfer tasks.
+   * @brief Retry a completed task by rebuilding transfer tasks.
    *
-   * @param task_id Task ID to resume (must be finished).
+   * @param task_id Task ID to retry (must be finished).
    * @param is_async Whether to submit asynchronously.
    * @param quiet Whether to suppress output.
-   * @param indices Optional 1-based task indices to resume.
+   * @param indices Optional 1-based task indices to retry.
    */
-  ECM resume(const ID &task_id, bool is_async = false, bool quiet = false,
-             const std::vector<int> &indices = {});
+  ECM retry(const ID &task_id, bool is_async = false, bool quiet = false,
+            const std::vector<int> &indices = {});
 
   /**
    * @brief Execute transfer sets synchronously (blocking).
@@ -355,7 +337,6 @@ private:
    */
   AMTransferManager();
 
-  int ResolveRefreshIntervalMs_() const;
   static bool HasWildcard_(const std::string &path);
   bool ConfirmWildcard_(const std::vector<PathInfo> &matches,
                         const std::string &src_host,

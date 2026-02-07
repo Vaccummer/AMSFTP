@@ -1,5 +1,6 @@
 #include "AMManager/Transfer.hpp"
 #include "AMBase/CommonTools.hpp"
+#include "AMBase/DataClass.hpp"
 #include "AMBase/Path.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
@@ -10,16 +11,17 @@
 #include <sstream>
 #include <unordered_set>
 
+namespace {
 /**
  * @brief Parse a transfer path into nickname and path using client manager.
  *
  * Host config not found is treated as an error; missing clients are allowed
  * so that transfer can create them later.
  */
-static ECM ParseTransferPath(AMClientManager &client_manager,
-                             const std::string &input,
-                             const std::shared_ptr<BaseClient> &client,
-                             std::string *nickname, std::string *path) {
+ECM ParseTransferPath(AMClientManager &client_manager,
+                      const std::string &input,
+                      const std::shared_ptr<BaseClient> &client,
+                      std::string *nickname, std::string *path) {
   auto [parsed_name, parsed_path, _client, rcm] =
       client_manager.ParsePath(input);
   if (rcm.first == EC::HostConfigNotFound) {
@@ -41,8 +43,8 @@ static ECM ParseTransferPath(AMClientManager &client_manager,
 /**
  * @brief Join strings with a separator.
  */
-static std::string JoinStrings_(const std::vector<std::string> &items,
-                                const std::string &sep) {
+std::string JoinStrings_(const std::vector<std::string> &items,
+                         const std::string &sep) {
   if (items.empty()) {
     return "";
   }
@@ -59,7 +61,7 @@ static std::string JoinStrings_(const std::vector<std::string> &items,
 /**
  * @brief Format a unix timestamp as "HH:MM".
  */
-static std::string FormatTimeHM_(double timestamp) {
+std::string FormatTimeHM_(double timestamp) {
   if (timestamp <= 0.0) {
     return "-";
   }
@@ -69,7 +71,7 @@ static std::string FormatTimeHM_(double timestamp) {
 /**
  * @brief Format elapsed seconds into "XmYs" or "XhYmZs".
  */
-static std::string FormatElapsed_(double seconds) {
+std::string FormatElapsed_(double seconds) {
   const int64_t total = static_cast<int64_t>(std::max(0.0, seconds));
   const int64_t hours = total / 3600;
   const int64_t minutes = (total % 3600) / 60;
@@ -88,7 +90,7 @@ static std::string FormatElapsed_(double seconds) {
 /**
  * @brief Build a unique key for a transfer task.
  */
-static std::string BuildTaskKey_(const TransferTask &task) {
+std::string BuildTaskKey_(const TransferTask &task) {
   std::ostringstream oss;
   oss << task.src_host << '\t' << task.src << '\t' << task.dst_host << '\t'
       << task.dst << '\t' << static_cast<int>(task.path_type);
@@ -98,7 +100,7 @@ static std::string BuildTaskKey_(const TransferTask &task) {
 /**
  * @brief Remove duplicate tasks while preserving original order.
  */
-static void DeduplicateTasks_(TASKS *tasks) {
+void DeduplicateTasks_(TASKS *tasks) {
   if (!tasks || tasks->empty()) {
     return;
   }
@@ -118,8 +120,7 @@ static void DeduplicateTasks_(TASKS *tasks) {
 /**
  * @brief Build a progress bar prefix from the current task info.
  */
-static std::string
-BuildTaskPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
+std::string BuildTaskPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
   if (!task_info) {
     return "Task";
   }
@@ -147,16 +148,17 @@ BuildTaskPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
 /**
  * @brief Print a task control result line.
  */
-static void PrintTaskControlResult_(AMPromptManager &prompt,
-                                    const std::string &action,
-                                    const std::string &task_id,
-                                    const ECM &rcm) {
-  if (rcm.first == EC::Success) {
-    prompt.Print(AMStr::amfmt("✅ {} {}", action, task_id));
-    return;
-  }
-  prompt.Print(AMStr::amfmt("❌ {} {} : {}", action, task_id, rcm.second));
-}
+// void PrintTaskControlResult_(AMPromptManager &prompt,
+//                                     const std::string &action,
+//                                     const std::string &task_id,
+//                                     const ECM &rcm) {
+//   if (rcm.first == EC::Success) {
+//     prompt.Print(AMStr::amfmt("✅ {} {}", action, task_id));
+//     return;
+//   }
+//   prompt.Print(AMStr::amfmt("❌ {} {} : {}", action, task_id, rcm.second));
+// }
+} // namespace
 
 /**
  * @brief Construct a task info printer bound to a prompt manager.
@@ -180,7 +182,7 @@ void TaskInfoPrint::TaskSubmitPrint(
   }
   prompt_.Print(AMStr::amfmt(
       "Submit ID: [{}] FileNum: {} TotalSize: {} Clients: {}", task_info->id,
-      file_num, AMClientManager::FormatSize(total_size), nickname_str));
+      file_num, FormatSize(total_size), nickname_str));
 }
 
 /**
@@ -209,9 +211,8 @@ void TaskInfoPrint::TaskResultPrint(
   const std::string prefix = success ? "✅" : "❌";
   if (success) {
     prompt_.Print(AMStr::amfmt("{} [{}] {}/{} ThreadID: {}", prefix,
-                               task_info->id,
-                               AMClientManager::FormatSize(transferred),
-                               AMClientManager::FormatSize(total), thread_id));
+                               task_info->id, FormatSize(transferred),
+                               FormatSize(total), thread_id));
     return;
   }
 
@@ -220,10 +221,9 @@ void TaskInfoPrint::TaskResultPrint(
   if (!result.second.empty()) {
     rcm_text = AMStr::amfmt("{}: {}", rcm_name, result.second);
   }
-  prompt_.Print(
-      AMStr::amfmt("{} [{}] {}/{} ThreadID: {} {}", prefix, task_info->id,
-                   AMClientManager::FormatSize(transferred),
-                   AMClientManager::FormatSize(total), thread_id, rcm_text));
+  prompt_.Print(AMStr::amfmt("{} [{}] {}/{} ThreadID: {} {}", prefix,
+                             task_info->id, FormatSize(transferred),
+                             FormatSize(total), thread_id, rcm_text));
 }
 
 /**
@@ -236,7 +236,7 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
   }
 
   const TaskStatus status = task_info->GetStatus();
-  const std::string status_name = std::string(magic_enum::enum_name(status));
+  const std::string status_name = AM_ENUM_NAME(status);
 
   if (status == TaskStatus::Pending) {
     const size_t total = task_info->total_size.load();
@@ -245,8 +245,7 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
         FormatTimeHM_(task_info->submit_time.load());
     prompt_.Print(AMStr::amfmt(
         "[{}] Status: {} TotalSize: {} AffinityThread: {} SubmitTime: {}",
-        task_info->id, status_name, AMClientManager::FormatSize(total),
-        affinity, submit_time));
+        task_info->id, status_name, FormatSize(total), affinity, submit_time));
     return;
   }
 
@@ -257,10 +256,25 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
     const double start_time = task_info->start_time.load();
     const double finished_time = task_info->finished_time.load();
     const std::string elapsed = FormatElapsed_(finished_time - start_time);
-    prompt_.Print(AMStr::amfmt(
-        "[{}] Status: {} {}/{} ThreadID: {} ElapsedTime: {}", task_info->id,
-        status_name, AMClientManager::FormatSize(transferred),
-        AMClientManager::FormatSize(total), thread_id, elapsed));
+    prompt_.Print(
+        AMStr::amfmt("[{}] Status: {} {}/{} ThreadID: {} ElapsedTime: {}",
+                     task_info->id, status_name, FormatSize(transferred),
+                     FormatSize(total), thread_id, elapsed));
+    return;
+  }
+
+  if (status == TaskStatus::Conducting && task_info->pd &&
+      task_info->pd->is_pause()) {
+    const size_t transferred = task_info->total_transferred_size.load();
+    const size_t total = task_info->total_size.load();
+    const int thread_id = task_info->OnWhichThread.load();
+    const double start_time = task_info->start_time.load();
+    const double elapsed_time = timenow() - start_time;
+    const std::string elapsed = FormatElapsed_(elapsed_time);
+    prompt_.Print(
+        AMStr::amfmt("[{}] Status: {} {}/{} ThreadID: {} ElapsedTime: {}",
+                     task_info->id, "Paused", FormatSize(transferred),
+                     FormatSize(total), thread_id, elapsed));
     return;
   }
 
@@ -402,8 +416,8 @@ void TaskInfoPrint::Inspect(const std::shared_ptr<TaskInfo> &task_info,
       {"finished_time", finished_time},
       {"rcm", rcm_text},
       {"total_transferred_size",
-       AMClientManager::FormatSize(task_info->total_transferred_size.load())},
-      {"total_size", AMClientManager::FormatSize(task_info->total_size.load())},
+       FormatSize(task_info->total_transferred_size.load())},
+      {"total_size", FormatSize(task_info->total_size.load())},
       {"files_num", std::to_string(files_num)},
       {"quiet", task_info->quiet ? "true" : "false"},
       {"affinity_thread", std::to_string(task_info->affinity_thread.load())},
@@ -454,11 +468,10 @@ void TaskInfoPrint::InspectTaskEntries(
     prompt_.Print("");
     prompt_.Print(AMStr::amfmt("dst: {}@{}", dst_host, task.dst));
     prompt_.Print("");
-    prompt_.Print(
-        AMStr::amfmt("size: {}", AMClientManager::FormatSize(task.size)));
+    prompt_.Print(AMStr::amfmt("size: {}", FormatSize(task.size)));
     prompt_.Print("");
-    prompt_.Print(AMStr::amfmt("transferred: {}",
-                               AMClientManager::FormatSize(task.transferred)));
+    prompt_.Print(
+        AMStr::amfmt("transferred: {}", FormatSize(task.transferred)));
     if (task.IsFinished) {
       std::string rcm_name = std::string(magic_enum::enum_name(task.rcm.first));
       std::string rcm_text = rcm_name;
@@ -535,14 +548,6 @@ void AMTransferManager::SetPublicResultCallback(PublicResultCallback cb) {
 }
 
 /**
- * @brief Set a custom result callback invoked after the default callback.
- */
-void AMTransferManager::SetResultCallback(UserResultCallback cb) {
-  std::lock_guard<std::mutex> lock(callback_mtx_);
-  user_result_cb_ = std::move(cb);
-}
-
-/**
  * @brief Get a copy of transfer history (newest first).
  */
 std::list<std::shared_ptr<TaskInfo>> AMTransferManager::GetHistory() const {
@@ -551,27 +556,12 @@ std::list<std::shared_ptr<TaskInfo>> AMTransferManager::GetHistory() const {
 }
 
 /**
- * @brief Resolve progress refresh interval from settings.
- */
-int AMTransferManager::ResolveRefreshIntervalMs_() const {
-  int value =
-      config_.GetSettingInt({"transfer_manager", "refresh_interval_ms"}, 200);
-  if (value <= 0) {
-    value = 200;
-  }
-  if (value < 30) {
-    value = 30;
-  }
-  return value;
-}
-
-/**
  * @brief Check whether a path contains wildcard tokens.
  */
 bool AMTransferManager::HasWildcard_(const std::string &path) {
   return path.find('*') != std::string::npos ||
-         path.find('<') != std::string::npos ||
-         path.find('>') != std::string::npos;
+         (path.find('<') != std::string::npos &&
+          path.find('>') != std::string::npos);
 }
 
 /**
@@ -737,7 +727,7 @@ void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
 size_t
 AMTransferManager::SubmitTransferSet(const UserTransferSet &transfer_set) {
   std::lock_guard<std::mutex> lock(cache_mtx_);
-  cached_sets_.push_back(transfer_set);
+  cached_sets_.emplace_back(transfer_set);
   return cached_sets_.size() - 1;
 }
 
@@ -759,21 +749,24 @@ std::vector<size_t> AMTransferManager::SubmitTransferSets(
 /**
  * @brief Query a cached transfer set by ID.
  */
-bool AMTransferManager::QueryTransferSet(size_t set_index,
-                                         UserTransferSet *out_set) const {
+ECM AMTransferManager::QueryTransferSet(size_t set_index,
+                                        UserTransferSet *out_set) const {
   if (!out_set) {
-    return false;
+    return {EC::InvalidArg, "Output reciever is nullptr"};
   }
   std::lock_guard<std::mutex> lock(cache_mtx_);
   if (set_index >= cached_sets_.size()) {
-    return false;
+    return {EC::IndexOutOfRange,
+            AMStr::amfmt("Max is {}, but recieve {}", set_index,
+                         cached_sets_.size() - 1)};
   }
   const auto &entry = cached_sets_[set_index];
   if (!entry.has_value()) {
-    return false;
+    return {EC::TaskNotFound,
+            AMStr::amfmt("Index {} is already dleted", set_index)};
   }
   *out_set = *entry;
-  return true;
+  return {EC::Success, ""};
 }
 
 /**
@@ -868,33 +861,29 @@ void AMTransferManager::GetTaskCounts(size_t *pending_count,
 }
 
 /**
- * @brief Delete a cached transfer set by ID.
- */
-bool AMTransferManager::DeleteTransferSet(size_t set_index) {
-  std::lock_guard<std::mutex> lock(cache_mtx_);
-  if (set_index >= cached_sets_.size()) {
-    return false;
-  }
-  if (!cached_sets_[set_index].has_value()) {
-    return false;
-  }
-  cached_sets_[set_index].reset();
-  return true;
-}
-
-/**
  * @brief Delete cached transfer sets by indices.
  */
 size_t
 AMTransferManager::DeleteTransferSets(const std::vector<size_t> &set_indices) {
+  if (set_indices.empty()) {
+    return 0;
+  }
+  const std::vector<size_t> unique_indices =
+      UniqueTargetsKeepOrder(set_indices);
+
   size_t removed = 0;
   std::lock_guard<std::mutex> lock(cache_mtx_);
-  for (size_t index : set_indices) {
+  std::string msg = "";
+  for (size_t index : unique_indices) {
     if (index >= cached_sets_.size()) {
+      msg =
+          AMStr::amfmt("Get index {}, but max is ", index, cached_sets_.size());
+      prompt_.ErrorFormat(ECM{EC::IndexOutOfRange, msg});
       continue;
-    }
-    if (!cached_sets_[index].has_value()) {
-      continue;
+    } else if (!cached_sets_[index].has_value()) {
+      prompt_.ErrorFormat(
+          ECM{EC::TaskNotFound,
+              AMStr::amfmt("Index {} is already deleted", index)});
     }
     cached_sets_[index].reset();
     removed++;
@@ -911,31 +900,11 @@ void AMTransferManager::ClearCachedTransferSets() {
 }
 
 /**
- * @brief Execute all cached transfer sets.
- */
-ECM AMTransferManager::ExecuteCachedTransferSets(
-    bool quiet, const std::shared_ptr<InterruptFlag> &interrupt_flag) {
-  std::vector<UserTransferSet> transfer_sets;
-  {
-    std::lock_guard<std::mutex> lock(cache_mtx_);
-    transfer_sets.reserve(cached_sets_.size());
-    for (const auto &entry : cached_sets_) {
-      if (entry.has_value()) {
-        transfer_sets.push_back(*entry);
-      }
-    }
-  }
-  if (transfer_sets.empty()) {
-    return {EC::Success, ""};
-  }
-  return transfer(transfer_sets, quiet, interrupt_flag);
-}
-
-/**
- * @brief Submit cached transfer sets as an async task.
+ * @brief Submit cached transfer sets as a task.
  */
 ECM AMTransferManager::SubmitCachedTransferSets(
-    bool quiet, const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+    bool quiet, const std::shared_ptr<InterruptFlag> &interrupt_flag,
+    bool is_async) {
   std::vector<UserTransferSet> transfer_sets;
   {
     std::lock_guard<std::mutex> lock(cache_mtx_);
@@ -948,8 +917,9 @@ ECM AMTransferManager::SubmitCachedTransferSets(
   }
 
   if (transfer_sets.empty()) {
-    prompt_.Print("❌ task submit: cache is empty");
-    return {EC::InvalidArg, "Cached transfer set is empty"};
+    std::string msg = "Cached transfer set is empty";
+    prompt_.ErrorFormat(ECM{EC::InvalidArg, msg});
+    return {EC::InvalidArg, msg};
   }
 
   if (!quiet) {
@@ -960,14 +930,18 @@ ECM AMTransferManager::SubmitCachedTransferSets(
     bool canceled = false;
     if (!prompt_.PromptYesNo("Submit cached transfer sets? (y/N): ",
                              &canceled)) {
+      prompt_.Print(
+          AMStr::amfmt("🚫  {}\n", config_.Format("Add Canceled", "abort")));
       return {EC::Terminate, "Task submission canceled"};
     }
   }
 
-  ECM rcm = transfer_async(transfer_sets, quiet, interrupt_flag);
+  ECM rcm = is_async ? transfer_async(transfer_sets, quiet, interrupt_flag)
+                     : transfer(transfer_sets, quiet, interrupt_flag);
   if (rcm.first == EC::Success) {
     ClearCachedTransferSets();
   }
+  prompt_.ErrorFormat(rcm);
   return rcm;
 }
 
@@ -978,7 +952,7 @@ ECM AMTransferManager::Show(
     const ID &task_id, const std::shared_ptr<InterruptFlag> &interrupt_flag) {
   auto task_info = FindTaskById_(task_id);
   if (!task_info) {
-    return {EC::InvalidArg, AMStr::amfmt("Task not found: {}", task_id)};
+    return {EC::TaskNotFound, AMStr::amfmt("Task not found: {}", task_id)};
   }
   task_printer_.Show(task_info, interrupt_flag);
   return {EC::Success, ""};
@@ -1022,7 +996,7 @@ ECM AMTransferManager::Inspect(const ID &task_id, bool show_sets,
                                bool show_entries) const {
   auto task_info = FindTaskById_(task_id);
   if (!task_info) {
-    return {EC::InvalidArg, AMStr::amfmt("Task not found: {}", task_id)};
+    return {EC::TaskNotFound, AMStr::amfmt("Task ID not found: {}", task_id)};
   }
   task_printer_.Inspect(task_info, show_entries, show_sets);
   return {EC::Success, ""};
@@ -1034,7 +1008,7 @@ ECM AMTransferManager::Inspect(const ID &task_id, bool show_sets,
 ECM AMTransferManager::InspectTransferSets(const ID &task_id) const {
   auto task_info = FindTaskById_(task_id);
   if (!task_info) {
-    return {EC::InvalidArg, AMStr::amfmt("Task not found: {}", task_id)};
+    return {EC::TaskNotFound, AMStr::amfmt("Task ID not found: {}", task_id)};
   }
   task_printer_.InspectTransferSets(task_info);
   return {EC::Success, ""};
@@ -1046,7 +1020,7 @@ ECM AMTransferManager::InspectTransferSets(const ID &task_id) const {
 ECM AMTransferManager::InspectTaskEntries(const ID &task_id) const {
   auto task_info = FindTaskById_(task_id);
   if (!task_info) {
-    return {EC::InvalidArg, AMStr::amfmt("Task not found: {}", task_id)};
+    return {EC::TaskNotFound, AMStr::amfmt("Task ID not found: {}", task_id)};
   }
   task_printer_.InspectTaskEntries(task_info);
   return {EC::Success, ""};
@@ -1055,10 +1029,12 @@ ECM AMTransferManager::InspectTaskEntries(const ID &task_id) const {
 /**
  * @brief Inspect a cached user transfer set by cache ID.
  */
-ECM AMTransferManager::InspectUserSet(size_t set_index) const {
+ECM AMTransferManager::QueryCachedUserSet(size_t set_index) const {
   UserTransferSet transfer_set;
-  if (!QueryTransferSet(set_index, &transfer_set)) {
-    return {EC::InvalidArg, AMStr::amfmt("User set not found: {}", set_index)};
+  ECM rcm = QueryTransferSet(set_index, &transfer_set);
+  if (rcm.first != EC::Success) {
+    prompt_.ErrorFormat(rcm);
+    return rcm;
   }
 
   auto temp = std::make_shared<TaskInfo>(true);
@@ -1071,7 +1047,7 @@ ECM AMTransferManager::InspectUserSet(size_t set_index) const {
 /**
  * @brief Inspect a single task entry by entry ID.
  */
-ECM AMTransferManager::InspectTaskEntry(const ID &entry_id) const {
+ECM AMTransferManager::QuerySetEntry(const ID &entry_id) const {
   ID task_id;
   size_t entry_index = 0;
   if (!ParseEntryId_(entry_id, &task_id, &entry_index)) {
@@ -1098,11 +1074,9 @@ ECM AMTransferManager::InspectTaskEntry(const ID &entry_id) const {
   prompt_.Print("");
   prompt_.Print(AMStr::amfmt("dst: {}@{}", dst_host, task.dst));
   prompt_.Print("");
-  prompt_.Print(
-      AMStr::amfmt("size: {}", AMClientManager::FormatSize(task.size)));
+  prompt_.Print(AMStr::amfmt("size: {}", FormatSize(task.size)));
   prompt_.Print("");
-  prompt_.Print(AMStr::amfmt("transferred: {}",
-                             AMClientManager::FormatSize(task.transferred)));
+  prompt_.Print(AMStr::amfmt("transferred: {}", FormatSize(task.transferred)));
   if (task.IsFinished) {
     std::string rcm_name = std::string(magic_enum::enum_name(task.rcm.first));
     std::string rcm_text = rcm_name;
@@ -1121,32 +1095,52 @@ ECM AMTransferManager::InspectTaskEntry(const ID &entry_id) const {
 ECM AMTransferManager::Terminate(const ID &task_id, int timeout_ms) {
   auto result = worker_.terminate(task_id, timeout_ms);
   if (!result.first) {
-    return {EC::InvalidArg, AMStr::amfmt("Task not found: {}", task_id)};
+    if (result.second.first != EC::Success) {
+      if (result.second.second.empty()) {
+        prompt_.ErrorFormat(result.second);
+      } else {
+        prompt_.ErrorFormat(result.second);
+      }
+    }
+    return result.second;
   }
-  if (!result.second) {
-    return {EC::InvalidArg, AMStr::amfmt("Task already finished: {}", task_id)};
+  if (result.second.first != EC::Success) {
+    prompt_.ErrorFormat(result.second);
+    return result.second;
+  } else if (!result.second.second.empty()) {
+    prompt_.Print(result.second.second);
   }
-  return result.first->GetResult();
+  return result.second;
 }
 
 /**
  * @brief Pause a running task by ID.
  */
 ECM AMTransferManager::Pause(const ID &task_id) {
-  if (!worker_.pause(task_id)) {
-    return {EC::InvalidArg, AMStr::amfmt("Task not found: {}", task_id)};
+  ECM rcm = worker_.pause(task_id);
+  if (rcm.first != EC::Success) {
+    if (rcm.second.empty()) {
+      prompt_.ErrorFormat(rcm);
+    } else if (!rcm.second.empty()) {
+      prompt_.Print(rcm.second);
+    }
   }
-  return {EC::Success, ""};
+  return rcm;
 }
 
 /**
  * @brief Resume a paused task by ID.
  */
 ECM AMTransferManager::Resume(const ID &task_id) {
-  if (!worker_.resume(task_id)) {
-    return {EC::InvalidArg, AMStr::amfmt("Task not found: {}", task_id)};
+  ECM rcm = worker_.resume(task_id);
+  if (rcm.first != EC::Success) {
+    if (rcm.second.empty()) {
+      prompt_.ErrorFormat(rcm);
+    } else if (!rcm.second.empty()) {
+      prompt_.Print(rcm.second);
+    }
   }
-  return {EC::Success, ""};
+  return rcm;
 }
 
 /**
@@ -1155,9 +1149,9 @@ ECM AMTransferManager::Resume(const ID &task_id) {
 ECM AMTransferManager::Terminate(const std::vector<ID> &task_ids,
                                  int timeout_ms) {
   ECM last = {EC::Success, ""};
+  ECM rcm = {EC::Success, ""};
   for (const auto &id : task_ids) {
-    ECM rcm = Terminate(id, timeout_ms);
-    PrintTaskControlResult_(prompt_, "terminate", id, rcm);
+    rcm = Terminate(id, timeout_ms);
     if (rcm.first != EC::Success) {
       last = rcm;
     }
@@ -1170,9 +1164,9 @@ ECM AMTransferManager::Terminate(const std::vector<ID> &task_ids,
  */
 ECM AMTransferManager::Pause(const std::vector<ID> &task_ids) {
   ECM last = {EC::Success, ""};
+  ECM rcm = {EC::Success, ""};
   for (const auto &id : task_ids) {
-    ECM rcm = Pause(id);
-    PrintTaskControlResult_(prompt_, "pause", id, rcm);
+    rcm = Pause(id);
     if (rcm.first != EC::Success) {
       last = rcm;
     }
@@ -1185,9 +1179,9 @@ ECM AMTransferManager::Pause(const std::vector<ID> &task_ids) {
  */
 ECM AMTransferManager::Resume(const std::vector<ID> &task_ids) {
   ECM last = {EC::Success, ""};
+  ECM rcm = {EC::Success, ""};
   for (const auto &id : task_ids) {
-    ECM rcm = Resume(id);
-    PrintTaskControlResult_(prompt_, "resume", id, rcm);
+    rcm = Resume(id);
     if (rcm.first != EC::Success) {
       last = rcm;
     }
@@ -1196,31 +1190,25 @@ ECM AMTransferManager::Resume(const std::vector<ID> &task_ids) {
 }
 
 /**
- * @brief Resume a completed task by rebuilding failed entries.
+ * @brief Retry a completed task by rebuilding failed entries.
  */
-ECM AMTransferManager::resume(const ID &task_id, bool is_async, bool quiet,
-                              const std::vector<int> &indices) {
-  auto print_resume_error = [&](const std::string &msg) {
-    if (task_id.empty()) {
-      prompt_.Print(AMStr::amfmt("❌ resume : {}", msg));
-      return;
-    }
-    prompt_.Print(AMStr::amfmt("❌ resume {} : {}", task_id, msg));
-  };
+ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
+                             const std::vector<int> &indices) {
 
   auto original = FindTaskById_(task_id);
   if (!original || !original->tasks) {
-    print_resume_error(AMStr::amfmt("Task not found: {}", task_id));
-    return {EC::InvalidArg, AMStr::amfmt("Task not found: {}", task_id)};
+    ECM rcm = {EC::TaskNotFound, AMStr::amfmt("Task not found: {}", task_id)};
+    prompt_.ErrorFormat(rcm);
+    return rcm;
   }
 
   const TaskStatus status = original->GetStatus();
   if (status != TaskStatus::Finished) {
     const std::string status_name = std::string(magic_enum::enum_name(status));
-    print_resume_error(AMStr::amfmt("Task not finished: {} (status {})",
-                                    task_id, status_name));
-    return {EC::InvalidArg, AMStr::amfmt("Task not finished: {} (status {})",
-                                         task_id, status_name)};
+    ECM rcm = {EC::InvalidArg, AMStr::amfmt("Task not finished: {} (status {})",
+                                            task_id, status_name)};
+    prompt_.ErrorFormat(rcm);
+    return rcm;
   }
 
   const size_t total_tasks = original->tasks->size();
@@ -1246,12 +1234,13 @@ ECM AMTransferManager::resume(const ID &task_id, bool is_async, bool quiet,
       for (int idx : invalid_indices) {
         invalid_text.push_back(std::to_string(idx));
       }
-      prompt_.Print(AMStr::amfmt("Warning: invalid resume indices ignored: {}",
+      prompt_.Print(AMStr::amfmt("Warning: invalid retry indices ignored: {}",
                                  JoinStrings_(invalid_text, ", ")));
     }
     if (selected_indices.empty()) {
-      print_resume_error("No valid task indices to resume");
-      return {EC::InvalidArg, "No valid task indices to resume"};
+      ECM rcm = {EC::InvalidArg, "No valid task indices to retry"};
+      prompt_.ErrorFormat(rcm);
+      return {EC::InvalidArg, "No valid task indices to retry"};
     }
   }
 
@@ -1279,7 +1268,7 @@ ECM AMTransferManager::resume(const ID &task_id, bool is_async, bool quiet,
   }
 
   if (tasks_ptr->empty()) {
-    prompt_.Print("resume: all selected tasks already succeeded");
+    prompt_.Print("retry: all selected tasks already succeeded");
     return {EC::Success, ""};
   }
 
@@ -1307,7 +1296,7 @@ ECM AMTransferManager::resume(const ID &task_id, bool is_async, bool quiet,
 
   auto [host_rcm, hostm] = CollectClients(nickname_list, nullptr);
   if (host_rcm.first != EC::Success || !hostm) {
-    print_resume_error(host_rcm.second);
+    prompt_.ErrorFormat(host_rcm);
     return host_rcm;
   }
 
@@ -1324,6 +1313,190 @@ ECM AMTransferManager::resume(const ID &task_id, bool is_async, bool quiet,
     return transfer_async(task_info);
   }
   return transfer(task_info);
+}
+
+/**
+ * @brief Blocking transfer entry point.
+ */
+ECM AMTransferManager::transfer(
+    const std::vector<UserTransferSet> &transfer_sets, bool quiet,
+    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+  bool has_resume = false;
+  for (const auto &set : transfer_sets) {
+    if (!set.resume) {
+      continue;
+    }
+    has_resume = true;
+    if (set.srcs.size() != 1 || set.dst.empty()) {
+      return {EC::InvalidArg,
+              "Resume transfer requires exactly one src and one dst"};
+    }
+  }
+  if (has_resume && transfer_sets.size() != 1) {
+    return {EC::InvalidArg, "Resume transfer requires a single transfer set"};
+  }
+  auto flag =
+      interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
+  auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
+  if (rcm.first != EC::Success) {
+    return rcm;
+  }
+  return transfer(task_info, flag);
+}
+
+/**
+ * @brief Blocking transfer entry point for prepared task info.
+ */
+ECM AMTransferManager::transfer(
+    const std::shared_ptr<TaskInfo> &task_info,
+    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+  if (!task_info) {
+    return {EC::Success, ""};
+  }
+
+  if (!task_info->tasks || task_info->tasks->empty()) {
+    if (task_info->hostm) {
+      ReturnClientsToIdle_(task_info->hostm);
+      task_info->hostm.reset();
+    }
+    return {EC::Success, ""};
+  }
+
+  auto flag =
+      interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
+  const int refresh_interval_ms = config_.ResolveRefreshIntervalMs();
+
+  std::mutex done_mtx;
+  std::condition_variable done_cv;
+  std::atomic<int> remaining(1);
+
+  UserResultCallback user_callback = [this, &remaining, &done_cv, &done_mtx](
+                                         std::shared_ptr<TaskInfo> task_info) {
+    if (task_info) {
+      task_printer_.TaskResultPrint(task_info);
+    }
+
+    UserResultCallback user_cb;
+    {
+      std::lock_guard<std::mutex> lock(callback_mtx_);
+      user_cb = user_result_cb_;
+    }
+    if (user_cb) {
+      CallCallbackSafe(user_cb, task_info);
+    }
+
+    --remaining;
+    std::lock_guard<std::mutex> lock(done_mtx);
+    done_cv.notify_all();
+  };
+
+  task_info->result_callback = BindResultCallback(std::move(user_callback));
+
+  auto submit_rcm = worker_.submit(task_info);
+  if (submit_rcm.first != EC::Success) {
+    prompt_.ErrorFormat(submit_rcm);
+    if (task_info->hostm) {
+      ReturnClientsToIdle_(task_info->hostm);
+      task_info->hostm.reset();
+    }
+    return submit_rcm;
+  }
+
+  bool all_finished = false;
+  while (!all_finished) {
+    if (flag && flag->check()) {
+      (void)worker_.terminate(task_info->id, 1000);
+      return {EC::Terminate, "Transfer interrupted during progress polling"};
+    }
+    all_finished = task_info->GetStatus() == TaskStatus::Finished;
+    std::this_thread::sleep_for(std::chrono::milliseconds(refresh_interval_ms));
+  }
+
+  {
+    std::unique_lock<std::mutex> lock(done_mtx);
+    done_cv.wait(lock, [&]() { return remaining.load() <= 0; });
+  }
+  return task_info->GetResult();
+}
+
+/**
+ * @brief Non-blocking transfer entry point.
+ */
+ECM AMTransferManager::transfer_async(
+    const std::vector<UserTransferSet> &transfer_sets, bool quiet,
+    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+  bool has_resume = false;
+  for (const auto &set : transfer_sets) {
+    if (!set.resume) {
+      continue;
+    }
+    has_resume = true;
+    if (set.srcs.size() != 1 || set.dst.empty()) {
+      return {EC::InvalidArg,
+              "Resume transfer requires exactly one src and one dst"};
+    }
+  }
+  if (has_resume && transfer_sets.size() != 1) {
+    return {EC::InvalidArg, "Resume transfer requires a single transfer set"};
+  }
+  auto flag =
+      interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
+  auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
+  if (rcm.first != EC::Success) {
+    return rcm;
+  }
+  return transfer_async(task_info, flag);
+}
+
+/**
+ * @brief Non-blocking transfer entry point for prepared task info.
+ */
+ECM AMTransferManager::transfer_async(
+    const std::shared_ptr<TaskInfo> &task_info,
+    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+  (void)interrupt_flag;
+  if (!task_info) {
+    return {EC::Success, ""};
+  }
+
+  if (!task_info->tasks || task_info->tasks->empty()) {
+    if (task_info->hostm) {
+      ReturnClientsToIdle_(task_info->hostm);
+      task_info->hostm.reset();
+    }
+    return {EC::InvalidArg, "Task List is empty"};
+  }
+
+  UserResultCallback user_callback =
+      [this](std::shared_ptr<TaskInfo> task_info) {
+        if (task_info) {
+          task_printer_.TaskResultPrint(task_info);
+        }
+        UserResultCallback user_cb;
+        {
+          std::lock_guard<std::mutex> lock(callback_mtx_);
+          user_cb = user_result_cb_;
+        }
+        if (user_cb) {
+          CallCallbackSafe(user_cb, task_info);
+        }
+      };
+  task_info->result_callback = BindResultCallback(std::move(user_callback));
+
+  auto submit_rcm = worker_.submit(task_info);
+  if (submit_rcm.first != EC::Success) {
+    prompt_.ErrorFormat(submit_rcm);
+    if (task_info->hostm) {
+      ReturnClientsToIdle_(task_info->hostm);
+      task_info->hostm.reset();
+    }
+    return submit_rcm;
+  }
+
+  if (!task_info->quiet) {
+    task_printer_.TaskSubmitPrint(task_info);
+  }
+  return {EC::Success, ""};
 }
 
 /**
@@ -1451,7 +1624,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
             set.overwrite, set.mkdir, set.ignore_special_file, set.resume, flag,
             10000);
         if (rcm.first != EC::Success) {
-          prompt_.ErrorFormat("LoadTasks", rcm.second, false, 0, __func__);
+          prompt_.ErrorFormat(rcm);
           continue;
         }
         tasks_ptr->insert(tasks_ptr->end(), tasks.begin(), tasks.end());
@@ -1535,190 +1708,4 @@ bool AMTransferManager::ParseEntryId_(const ID &entry_id, ID *task_id,
   } catch (const std::exception &) {
     return false;
   }
-}
-
-/**
- * @brief Blocking transfer entry point.
- */
-ECM AMTransferManager::transfer(
-    const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
-  bool has_resume = false;
-  for (const auto &set : transfer_sets) {
-    if (!set.resume) {
-      continue;
-    }
-    has_resume = true;
-    if (set.srcs.size() != 1 || set.dst.empty()) {
-      return {EC::InvalidArg,
-              "Resume transfer requires exactly one src and one dst"};
-    }
-  }
-  if (has_resume && transfer_sets.size() != 1) {
-    return {EC::InvalidArg,
-            "Resume transfer requires a single transfer set"};
-  }
-  auto flag =
-      interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
-  auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
-  if (rcm.first != EC::Success) {
-    return rcm;
-  }
-  return transfer(task_info, flag);
-}
-
-/**
- * @brief Blocking transfer entry point for prepared task info.
- */
-ECM AMTransferManager::transfer(
-    const std::shared_ptr<TaskInfo> &task_info,
-    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
-  if (!task_info) {
-    return {EC::Success, ""};
-  }
-
-  if (!task_info->tasks || task_info->tasks->empty()) {
-    if (task_info->hostm) {
-      ReturnClientsToIdle_(task_info->hostm);
-      task_info->hostm.reset();
-    }
-    return {EC::Success, ""};
-  }
-
-  auto flag =
-      interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
-  const int refresh_interval_ms = ResolveRefreshIntervalMs_();
-
-  std::mutex done_mtx;
-  std::condition_variable done_cv;
-  std::atomic<int> remaining(1);
-
-  UserResultCallback user_callback = [this, &remaining, &done_cv, &done_mtx](
-                                         std::shared_ptr<TaskInfo> task_info) {
-    if (task_info) {
-      task_printer_.TaskResultPrint(task_info);
-    }
-
-    UserResultCallback user_cb;
-    {
-      std::lock_guard<std::mutex> lock(callback_mtx_);
-      user_cb = user_result_cb_;
-    }
-    if (user_cb) {
-      CallCallbackSafe(user_cb, task_info);
-    }
-
-    --remaining;
-    std::lock_guard<std::mutex> lock(done_mtx);
-    done_cv.notify_all();
-  };
-
-  task_info->result_callback = BindResultCallback(std::move(user_callback));
-
-  auto submit_rcm = worker_.submit(task_info);
-  if (submit_rcm.first != EC::Success) {
-    prompt_.ErrorFormat("SubmitTask", submit_rcm.second, false, 0, __func__);
-    if (task_info->hostm) {
-      ReturnClientsToIdle_(task_info->hostm);
-      task_info->hostm.reset();
-    }
-    return submit_rcm;
-  }
-
-  bool all_finished = false;
-  while (!all_finished) {
-    if (flag && flag->check()) {
-      (void)worker_.terminate(task_info->id, 1000);
-      return {EC::Terminate, "Transfer interrupted during progress polling"};
-    }
-    all_finished = task_info->GetStatus() == TaskStatus::Finished;
-    std::this_thread::sleep_for(std::chrono::milliseconds(refresh_interval_ms));
-  }
-
-  {
-    std::unique_lock<std::mutex> lock(done_mtx);
-    done_cv.wait(lock, [&]() { return remaining.load() <= 0; });
-  }
-  return task_info->GetResult();
-}
-
-/**
- * @brief Non-blocking transfer entry point.
- */
-ECM AMTransferManager::transfer_async(
-    const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
-  bool has_resume = false;
-  for (const auto &set : transfer_sets) {
-    if (!set.resume) {
-      continue;
-    }
-    has_resume = true;
-    if (set.srcs.size() != 1 || set.dst.empty()) {
-      return {EC::InvalidArg,
-              "Resume transfer requires exactly one src and one dst"};
-    }
-  }
-  if (has_resume && transfer_sets.size() != 1) {
-    return {EC::InvalidArg,
-            "Resume transfer requires a single transfer set"};
-  }
-  auto flag =
-      interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
-  auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
-  if (rcm.first != EC::Success) {
-    return rcm;
-  }
-  return transfer_async(task_info, flag);
-}
-
-/**
- * @brief Non-blocking transfer entry point for prepared task info.
- */
-ECM AMTransferManager::transfer_async(
-    const std::shared_ptr<TaskInfo> &task_info,
-    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
-  (void)interrupt_flag;
-  if (!task_info) {
-    return {EC::Success, ""};
-  }
-
-  if (!task_info->tasks || task_info->tasks->empty()) {
-    if (task_info->hostm) {
-      ReturnClientsToIdle_(task_info->hostm);
-      task_info->hostm.reset();
-    }
-    return {EC::Success, ""};
-  }
-
-  UserResultCallback user_callback =
-      [this](std::shared_ptr<TaskInfo> task_info) {
-        if (task_info) {
-          task_printer_.TaskResultPrint(task_info);
-        }
-        UserResultCallback user_cb;
-        {
-          std::lock_guard<std::mutex> lock(callback_mtx_);
-          user_cb = user_result_cb_;
-        }
-        if (user_cb) {
-          CallCallbackSafe(user_cb, task_info);
-        }
-      };
-  task_info->result_callback = BindResultCallback(std::move(user_callback));
-
-  auto submit_rcm = worker_.submit(task_info);
-  if (submit_rcm.first != EC::Success) {
-    prompt_.ErrorFormat("SubmitTask", submit_rcm.second, false, 0, __func__);
-    if (task_info->hostm) {
-      ReturnClientsToIdle_(task_info->hostm);
-      task_info->hostm.reset();
-    }
-    return submit_rcm;
-  }
-
-  if (!task_info->quiet) {
-    task_printer_.TaskSubmitPrint(task_info);
-  }
-  return {EC::Success, ""};
 }

@@ -60,10 +60,9 @@ void AMLogManager::WriteLogEntry_(const TraceInfo &info) {
          << " " << info.message;
     log_file << line.str() << std::endl;
   } catch (const std::exception &ex) {
-    prompt_manager_.ErrorFormat("LogManager", ex.what(), false, 0, __func__);
+    prompt_manager_.ErrorFormat("LogWriteError", ex.what());
   } catch (...) {
-    prompt_manager_.ErrorFormat("LogManager", "Unknown log error", false, 0,
-                                __func__);
+    prompt_manager_.ErrorFormat("LogWriteError", "Unknown Error");
   }
 }
 

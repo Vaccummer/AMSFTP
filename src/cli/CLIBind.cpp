@@ -1,13 +1,12 @@
 
 #include "AMCLI/CLIBind.hpp"
 #include "AMCLI/Completer.hpp"
-#include "AMManager/Var.hpp"
 #include "AMManager/SignalMonitor.hpp"
+#include "AMManager/Var.hpp"
 #include <unordered_set>
 
 int g_cli_exit_code = 0;
 
-namespace {
 /**
  * @brief Bind config-related CLI commands.
  */
@@ -94,8 +93,7 @@ void BindVarCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
       ->expected(0, -1);
 
   commands.del_cmd = app.add_subcommand("del", "Delete variables");
-  commands.del_cmd
-      ->add_option("tokens", args.del.tokens, "Variable references")
+  commands.del_cmd->add_option("tokens", args.del.tokens, "Variable references")
       ->expected(0, -1);
 }
 
@@ -165,8 +163,7 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
   commands.tree_cmd->add_flag("-q,--quiet", args.tree.quiet,
                               "Suppress error output");
 
-  commands.realpath_cmd =
-      app.add_subcommand("realpath", "Print absolute path");
+  commands.realpath_cmd = app.add_subcommand("realpath", "Print absolute path");
   commands.realpath_cmd
       ->add_option("path", args.realpath.path, "Path to resolve")
       ->expected(0, 1);
@@ -204,7 +201,8 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
 
   commands.ftp_cmd = app.add_subcommand("ftp", "Connect to FTP host");
   commands.ftp_cmd
-      ->add_option("targets", args.ftp.targets, "nickname user@host | user@host")
+      ->add_option("targets", args.ftp.targets,
+                   "nickname user@host | user@host")
       ->required()
       ->expected(1, 2);
   commands.ftp_cmd->add_option("-p,--port", args.ftp.port, "Port");
@@ -282,6 +280,8 @@ void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
 
   commands.task_cache_submit =
       commands.task_cache_cmd->add_subcommand("submit", "Submit cached tasks");
+  commands.task_cache_submit->add_flag(
+      "-a,--async", args.task_cache_submit.is_async, "Submit as async task");
   commands.task_cache_submit->add_flag("-q,--quiet",
                                        args.task_cache_submit.quiet,
                                        "Suppress output and confirmation");
@@ -331,33 +331,54 @@ void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
   commands.task_pause_cmd->add_option("id", args.task_pause.ids, "Task IDs")
       ->expected(1, -1);
 
-  commands.task_resume_cmd = commands.task_cmd->add_subcommand(
-      "resume", "Resume a completed task (retry failed entries)");
-  commands.task_resume_cmd->add_flag("-a,--async", args.task_resume.is_async,
-                                     "Submit task asynchronously");
-  commands.task_resume_cmd->add_flag("-q,--quiet", args.task_resume.quiet,
-                                     "Suppress output");
-  commands.task_resume_cmd->add_option("id", args.task_resume.id, "Task ID")
+  commands.task_resume_cmd =
+      commands.task_cmd->add_subcommand("resume", "Resume paused task(s)");
+  commands.task_resume_cmd->add_option("id", args.task_resume.ids, "Task IDs")
+      ->expected(1, -1);
+
+  commands.task_retry_cmd = commands.task_cmd->add_subcommand(
+      "retry", "Retry a completed task (retry failed entries)");
+  commands.task_retry_cmd->add_flag("-a,--async", args.task_retry.is_async,
+                                    "Submit task asynchronously");
+  commands.task_retry_cmd->add_flag("-q,--quiet", args.task_retry.quiet,
+                                    "Suppress output");
+  commands.task_retry_cmd->add_option("id", args.task_retry.id, "Task ID")
       ->required()
       ->expected(1, 1);
-  commands.task_resume_cmd
-      ->add_option("-i,--index", args.task_resume.indices,
-                   "1-based task indices to resume")
+  commands.task_retry_cmd
+      ->add_option("-i,--index", args.task_retry.indices,
+                   "1-based task indices to retry")
       ->expected(0, -1);
 
   commands.resume_cmd = app.add_subcommand(
       "retry", "Retry a completed but failed task (retry failed entries)");
-  commands.resume_cmd->add_flag("-a,--async", args.task_resume.is_async,
+  commands.resume_cmd->add_flag("-a,--async", args.task_retry.is_async,
                                 "Submit task asynchronously");
-  commands.resume_cmd->add_flag("-q,--quiet", args.task_resume.quiet,
+  commands.resume_cmd->add_flag("-q,--quiet", args.task_retry.quiet,
                                 "Suppress output");
-  commands.resume_cmd->add_option("id", args.task_resume.id, "Task ID")
+  commands.resume_cmd->add_option("id", args.task_retry.id, "Task ID")
       ->required()
       ->expected(1, 1);
   commands.resume_cmd
-      ->add_option("-i,--index", args.task_resume.indices,
-                   "1-based task indices to resume")
+      ->add_option("-i,--index", args.task_retry.indices,
+                   "1-based task indices to retry")
       ->expected(0, -1);
+}
+
+/**
+ * @brief Bind all CLI options into the argument pool.
+ */
+CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
+  CliCommands commands;
+  commands.app = &app;
+  commands.args = &args;
+  BindConfigCommands(app, args, commands);
+  BindClientCommands(app, args, commands);
+  BindVarCommands(app, args, commands);
+  BindFilesystemCommands(app, args, commands);
+  BindCompleteCommands(app, args, commands);
+  BindTaskCommands(app, args, commands);
+  return commands;
 }
 
 /**
@@ -514,23 +535,6 @@ std::string JoinTokens_(const std::vector<std::string> &tokens) {
   }
   return out;
 }
-} // namespace
-
-/**
- * @brief Bind all CLI options into the argument pool.
- */
-CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
-  CliCommands commands;
-  commands.app = &app;
-  commands.args = &args;
-  BindConfigCommands(app, args, commands);
-  BindClientCommands(app, args, commands);
-  BindVarCommands(app, args, commands);
-  BindFilesystemCommands(app, args, commands);
-  BindCompleteCommands(app, args, commands);
-  BindTaskCommands(app, args, commands);
-  return commands;
-}
 
 /**
  * @brief Set the exit code and return.
@@ -659,9 +663,9 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
       return result;
     }
     if (cli_commands.config_set->parsed()) {
-      result.rcm = config_manager.SetHostValue(
-          args.config_set.nickname, args.config_set.attrname,
-          args.config_set.value);
+      result.rcm = config_manager.SetHostValue(args.config_set.nickname,
+                                               args.config_set.attrname,
+                                               args.config_set.value);
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
@@ -832,9 +836,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.rm_cmd->parsed()) {
-    result.rcm =
-        filesystem.rm(args.rm.paths, args.rm.permanent, false, args.rm.quiet,
-                      flag);
+    result.rcm = filesystem.rm(args.rm.paths, args.rm.permanent, false,
+                               args.rm.quiet, flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }
@@ -843,10 +846,9 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.walk_cmd->parsed()) {
-    result.rcm =
-        filesystem.walk(args.walk.path, args.walk.only_file, args.walk.only_dir,
-                        args.walk.show_all, !args.walk.include_special,
-                        args.walk.quiet, flag);
+    result.rcm = filesystem.walk(
+        args.walk.path, args.walk.only_file, args.walk.only_dir,
+        args.walk.show_all, !args.walk.include_special, args.walk.quiet, flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }
@@ -855,10 +857,9 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.tree_cmd->parsed()) {
-    result.rcm =
-        filesystem.tree(args.tree.path, args.tree.depth, args.tree.only_dir,
-                        args.tree.show_all, !args.tree.include_special,
-                        args.tree.quiet, flag);
+    result.rcm = filesystem.tree(
+        args.tree.path, args.tree.depth, args.tree.only_dir, args.tree.show_all,
+        !args.tree.include_special, args.tree.quiet, flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }
@@ -990,8 +991,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
-    result.rcm = filesystem.sftp(nickname, user_at_host, args.sftp.port,
-                                 "", args.sftp.keyfile, flag);
+    result.rcm = filesystem.sftp(nickname, user_at_host, args.sftp.port, "",
+                                 args.sftp.keyfile, flag);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }
@@ -1083,19 +1084,17 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
 
   if (cli_commands.task_cache_rm->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    ECM last = {EC::Success, ""};
-    for (size_t index : args.task_cache_rm.indices) {
-      bool removed = transfer_manager.DeleteTransferSet(index);
-      if (removed) {
+    std::vector<size_t> indices = DedupIndices(args.task_cache_rm.indices);
+    const size_t removed = transfer_manager.DeleteTransferSets(indices);
+    if (removed < indices.size()) {
+      result.rcm = {EC::InvalidArg, "Cache index not found"};
+    } else {
+      result.rcm = {EC::Success, ""};
+      for (size_t index : indices) {
         AMPromptManager::Instance().Print(
             AMStr::amfmt("✅ cache rm {}", std::to_string(index)));
-      } else {
-        AMPromptManager::Instance().Print(
-            AMStr::amfmt("❌ cache rm {} : not found", std::to_string(index)));
-        last = {EC::InvalidArg, "Cache index not found"};
       }
     }
-    result.rcm = last;
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
@@ -1112,7 +1111,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   if (cli_commands.task_cache_submit->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
     result.rcm = transfer_manager.SubmitCachedTransferSets(
-        args.task_cache_submit.quiet, flag);
+        args.task_cache_submit.quiet, flag, args.task_cache_submit.is_async);
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
@@ -1177,7 +1176,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     }
     ECM last = {EC::Success, ""};
     for (size_t index : indices) {
-      ECM rcm = transfer_manager.InspectUserSet(index);
+      ECM rcm = transfer_manager.QueryCachedUserSet(index);
       if (rcm.first != EC::Success) {
         last = rcm;
       }
@@ -1191,7 +1190,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
     ECM last = {EC::Success, ""};
     for (const auto &id : args.task_entry.ids) {
-      ECM rcm = transfer_manager.InspectTaskEntry(id);
+      ECM rcm = transfer_manager.QuerySetEntry(id);
       if (rcm.first != EC::Success) {
         last = rcm;
       }
@@ -1215,20 +1214,27 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     return result;
   }
 
-  if (cli_commands.resume_cmd && cli_commands.resume_cmd->parsed()) {
+  if (cli_commands.task_resume_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    result.rcm = transfer_manager.resume(
-        args.task_resume.id, args.task_resume.is_async, args.task_resume.quiet,
-        args.task_resume.indices);
+    result.rcm = transfer_manager.Resume(args.task_resume.ids);
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
 
-  if (cli_commands.task_resume_cmd->parsed()) {
+  if (cli_commands.resume_cmd && cli_commands.resume_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    result.rcm = transfer_manager.resume(
-        args.task_resume.id, args.task_resume.is_async, args.task_resume.quiet,
-        args.task_resume.indices);
+    result.rcm =
+        transfer_manager.retry(args.task_retry.id, args.task_retry.is_async,
+                               args.task_retry.quiet, args.task_retry.indices);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (cli_commands.task_retry_cmd->parsed()) {
+    AMTransferManager &transfer_manager = AMTransferManager::Instance();
+    result.rcm =
+        transfer_manager.retry(args.task_retry.id, args.task_retry.is_async,
+                               args.task_retry.quiet, args.task_retry.indices);
     if (result.rcm.first != EC::Success) {
       std::cerr << result.rcm.second << std::endl;
     }

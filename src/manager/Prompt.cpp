@@ -118,7 +118,7 @@ void AMPromptManager::Print(const std::vector<std::string> &items,
 
 void AMPromptManager::ErrorFormat(const std::string &error_name,
                                   const std::string &error_msg, bool is_exit,
-                                  int exit_code, const char *caller) {
+                                  int exit_code) {
 
   std::ostringstream body;
   if (error_name.empty()) {
@@ -132,6 +132,12 @@ void AMPromptManager::ErrorFormat(const std::string &error_name,
     ic_term_flush();
     std::exit(exit_code);
   }
+}
+
+void AMPromptManager::ErrorFormat(const std::pair<ErrorCode, std::string> &rcm,
+                                  bool is_exit) {
+  ErrorFormat(AM_ENUM_NAME(rcm.first), rcm.second, is_exit,
+              static_cast<int>(rcm.first));
 }
 
 /** Prompt for a line of input with optional defaults. */
@@ -381,7 +387,7 @@ void AMPromptManager::LoadHistory(AMConfigManager &config_manager,
   ECM status = config_manager.GetHistoryCommands(nickname, &commands);
   if (status.first != ErrorCode::Success) {
     history_entries_.clear();
-    ErrorFormat("HistoryLoad", status.second, false, 0, __func__);
+    ErrorFormat("HistoryLoad", status.second);
     return;
   }
   history_entries_ = NormalizeHistory_(commands, max_history_count_);
@@ -405,7 +411,7 @@ void AMPromptManager::FlushHistory(AMConfigManager &config_manager) {
   ECM status = config_manager.SetHistoryCommands(history_nickname_,
                                                  history_entries_, true);
   if (status.first != ErrorCode::Success) {
-    ErrorFormat("HistorySave", status.second, false, 0, __func__);
+    ErrorFormat(status);
   }
 }
 

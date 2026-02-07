@@ -92,6 +92,18 @@ public:
    * @brief Resolve network timeout from settings with a default fallback.
    */
   [[nodiscard]] int ResolveTimeoutMs(int default_timeout_ms = 5000) const;
+  /**
+   * @brief Resolve transfer refresh interval from settings with defaults.
+   */
+  [[nodiscard]] int ResolveRefreshIntervalMs() const;
+  /**
+   * @brief Resolve heartbeat interval from settings with a default fallback.
+   */
+  [[nodiscard]] int ResolveHeartbeatInterval() const;
+  /**
+   * @brief Resolve trace buffer size from settings with sane defaults.
+   */
+  [[nodiscard]] ssize_t ResolveTraceNum() const;
   /** Return a string setting value or the provided default. */
   [[nodiscard]] std::string
   GetSettingString(const Path &path, const std::string &default_value) const;

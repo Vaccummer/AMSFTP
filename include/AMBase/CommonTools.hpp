@@ -28,8 +28,10 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <conio.h>
 #include <windows.h>
 #else
+#include <termios.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 #endif
@@ -1419,3 +1421,94 @@ private:
     return set.find(segment) != set.end();
   }
 };
+
+/**
+ * @brief Format size to human-readable string.
+ */
+inline std::string FormatSize(size_t size) {
+  const char *units[] = {"B", "KB", "MB", "GB", "TB"};
+  double value = static_cast<double>(size);
+  size_t idx = 0;
+  while (value >= 1024.0 && idx < 4) {
+    value /= 1024.0;
+    ++idx;
+  }
+  std::ostringstream oss;
+  if (value == static_cast<size_t>(value)) {
+    oss << static_cast<size_t>(value);
+  } else {
+    oss << std::fixed << std::setprecision(1) << value;
+  }
+  oss << units[idx];
+  return oss.str();
+}
+
+/**
+ * @brief Remove duplicate entries while preserving original order.
+ */
+template <typename T>
+std::vector<T> UniqueTargetsKeepOrder(const std::vector<T> &targets) {
+  std::vector<T> unique;
+  unique.reserve(targets.size());
+  for (const auto &target : targets) {
+    if (std::find(unique.begin(), unique.end(), target) != unique.end()) {
+      continue;
+    }
+    unique.push_back(target);
+  }
+  return unique;
+}
+
+/**
+ * @brief Read a password from the console with masked input.
+ */
+inline std::string ReadMaskedPassword(const std::string &prompt) {
+  std::string password;
+  std::cout << prompt << std::flush;
+#ifdef _WIN32
+  while (true) {
+    int ch = _getch();
+    if (ch == '\r' || ch == '\n') {
+      break;
+    }
+    if (ch == '\b') {
+      if (!password.empty()) {
+        password.pop_back();
+        std::cout << "\b \b" << std::flush;
+      }
+      continue;
+    }
+    if (ch == 0 || ch == 224) {
+      (void)_getch();
+      continue;
+    }
+    password.push_back(static_cast<char>(ch));
+    std::cout << "*" << std::flush;
+  }
+#else
+  termios oldt{};
+  termios newt{};
+  tcgetattr(STDIN_FILENO, &oldt);
+  newt = oldt;
+  newt.c_lflag &= static_cast<unsigned long>(~(ECHO | ICANON));
+  tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+  while (true) {
+    int ch = ::getchar();
+    if (ch == '\n' || ch == '\r' || ch == EOF) {
+      break;
+    }
+    if (ch == 127 || ch == 8) {
+      if (!password.empty()) {
+        password.pop_back();
+        std::cout << "\b \b" << std::flush;
+      }
+      continue;
+    }
+    password.push_back(static_cast<char>(ch));
+    std::cout << "*" << std::flush;
+  }
+  tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+#endif
+  std::cout << "\n";
+  return password;
+}
