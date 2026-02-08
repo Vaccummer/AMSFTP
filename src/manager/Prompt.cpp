@@ -97,7 +97,7 @@ AMPromptManager::AMPromptManager() {
   AMCliSignalMonitor::Instance().RegisterHook("COREPROMPT", core_hook);
 }
 
-AMPromptManager::~AMPromptManager() {}
+AMPromptManager::~AMPromptManager() = default;
 
 void AMPromptManager::Print(const std::vector<std::string> &items,
                             const std::string &sep, const std::string &end) {
@@ -111,9 +111,28 @@ void AMPromptManager::Print(const std::vector<std::string> &items,
   oss << end;
 
   const std::string output = oss.str();
+  std::string out = output;
+  if (ic_is_editline_active() &&
+      (out.empty() || (out.front() != '\r' && out.front() != '\n'))) {
+    // ensure we break out of the active input line before printing
+    out = "\r\n" + out;
+  }
+  if (out.empty() || out.back() != '\n') {
+    out.push_back('\n');
+  }
+
   std::lock_guard<std::mutex> lock(print_mutex_);
-  ic_print(output.c_str());
+
+  if (AMProgressBar::IsAnyBarShowing()) {
+    cached_output_ += out;
+    return;
+  }
+
+  ic_print("\x1b[0m");
+  ic_print(out.c_str());
+  ic_print("\x1b[0m");
   ic_term_flush();
+  ic_request_refresh_async();
 }
 
 void AMPromptManager::ErrorFormat(const std::string &error_name,
@@ -195,6 +214,19 @@ bool AMPromptManager::PromptYesNo(const std::string &prompt, bool *canceled) {
 void AMPromptManager::PrintTaskResult(
     const std::shared_ptr<TaskInfo> &task_info) {
   resultprint(task_info);
+}
+
+void AMPromptManager::FlushCachedOutput() {
+  std::lock_guard<std::mutex> lock(print_mutex_);
+  if (cached_output_.empty()) {
+    return;
+  }
+  ic_print("\x1b[0m");
+  ic_print(cached_output_.c_str());
+  ic_print("\x1b[0m");
+  ic_term_flush();
+  ic_request_refresh_async();
+  cached_output_.clear();
 }
 
 /**
@@ -345,10 +377,10 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
   static AMTokenTypeAnalyzer analyzer(AMConfigManager::Instance());
   char *line = ic_readline_ex(prompt.c_str(), nullptr, nullptr,
                               &PromptHighlighter_, &analyzer);
+  ic_history_remove_last();
   if (!line) {
     return true;
   }
-  ic_history_remove_last();
   *out_input = std::string(line);
   ic_free(line);
   return false;

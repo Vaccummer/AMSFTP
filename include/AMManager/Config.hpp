@@ -1,7 +1,7 @@
 #pragma once
-#include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
+#include "AMBase/CommonTools.hpp"
 #include "AMBase/cfgffi.h"
 #include "AMManager/Prompt.hpp"
 #include <atomic>
@@ -16,14 +16,14 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 class AMConfigManager {
 public:
-  using Path = AMConfigProcessor::Path;
-  using Value = AMConfigProcessor::Value;
-  using FlatMap = AMConfigProcessor::FlatMap;
-  using FormatPath = AMConfigProcessor::FormatPath;
+  using Path = std::vector<std::string>;
+  using Value =
+      std::variant<int64_t, bool, std::string, std::vector<std::string>>;
 
   struct ClientConfig {
     ConRequst request;
@@ -87,6 +87,11 @@ public:
   [[nodiscard]] std::filesystem::path ProjectRoot() const { return root_dir_; }
   [[nodiscard]] std::pair<ECM, ClientConfig>
   GetClientConfig(const std::string &nickname);
+  /**
+   * @brief Create a progress bar configured from style.ProgressBar settings.
+   */
+  [[nodiscard]] AMProgressBar
+  CreateProgressBar(int64_t total_size, const std::string &prefix) const;
   [[nodiscard]] int GetSettingInt(const Path &path, int default_value) const;
   /**
    * @brief Resolve network timeout from settings with a default fallback.
@@ -240,6 +245,10 @@ private:
   ECM PromptAddFields(std::string *nickname, HostEntry *entry);
   ECM PromptModifyFields(const std::string &nickname, HostEntry *entry);
   bool ParsePositiveInt(const std::string &input, int64_t *value) const;
+  /**
+   * @brief Build progress bar style from settings.
+   */
+  AMProgressBarStyle BuildProgressBarStyle_() const;
 
   /**
    * @brief Persist in-memory history JSON to disk.
@@ -280,9 +289,6 @@ private:
   KnownHostCallback known_host_cb_ = {};
   AMPromptManager &prompt = AMPromptManager::Instance();
 
-  std::vector<FormatPath> config_filters_;
-  std::vector<FormatPath> settings_filters_;
-
   std::mutex write_mtx_;
   std::condition_variable write_cv_;
   std::deque<std::function<void()>> write_queue_;
@@ -290,6 +296,7 @@ private:
   std::atomic<bool> write_running_{false};
   std::mutex handle_mtx_;
   bool backup_prune_checked_ = false;
+  mutable std::optional<AMProgressBarStyle> progress_bar_style_;
 
   bool initialized_ = false;
   bool exit_hook_installed_ = false;

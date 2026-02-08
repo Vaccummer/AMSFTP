@@ -161,6 +161,85 @@ std::string ToLowerCopy(const std::string &value) {
 }
 
 /**
+ * @brief Parse a hex color string (#RRGGBB) into an ANSI escape sequence.
+ */
+std::optional<std::string> ParseHexColorToAnsi(const std::string &value) {
+  std::string token = TrimCopy(value);
+  if (token.empty()) {
+    return std::nullopt;
+  }
+  if (token.rfind("#", 0) == 0) {
+    token.erase(0, 1);
+  }
+  if (token.size() != 6) {
+    return std::nullopt;
+  }
+  auto hex_to_int = [](char c) -> int {
+    if (c >= '0' && c <= '9')
+      return c - '0';
+    if (c >= 'a' && c <= 'f')
+      return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F')
+      return 10 + (c - 'A');
+    return -1;
+  };
+  int vals[6];
+  for (size_t i = 0; i < 6; ++i) {
+    vals[i] = hex_to_int(token[i]);
+    if (vals[i] < 0) {
+      return std::nullopt;
+    }
+  }
+  int r = vals[0] * 16 + vals[1];
+  int g = vals[2] * 16 + vals[3];
+  int b = vals[4] * 16 + vals[5];
+  return AMStr::amfmt("\x1b[38;2;{};{};{}m", r, g, b);
+}
+
+/**
+ * @brief Map a progress bar color name or hex to indicators::Color/ANSI.
+ */
+std::variant<indicators::Color, std::string>
+ParseProgressBarColor(const std::string &value) {
+  const std::string trimmed = TrimCopy(value);
+  if (trimmed.empty()) {
+    return indicators::Color::unspecified;
+  }
+  if (!trimmed.empty() && trimmed[0] == '#') {
+    auto ansi = ParseHexColorToAnsi(trimmed);
+    if (ansi) {
+      return *ansi;
+    }
+  }
+  const std::string token = ToLowerCopy(trimmed);
+  if (token == "grey") {
+    return indicators::Color::grey;
+  }
+  if (token == "red") {
+    return indicators::Color::red;
+  }
+  if (token == "green") {
+    return indicators::Color::green;
+  }
+  if (token == "yellow") {
+    return indicators::Color::yellow;
+  }
+  if (token == "blue") {
+    return indicators::Color::blue;
+  }
+  if (token == "magenta") {
+    return indicators::Color::magenta;
+  }
+  if (token == "cyan") {
+    return indicators::Color::cyan;
+  }
+  if (token == "white") {
+    return indicators::Color::white;
+  }
+  return indicators::Color::unspecified;
+}
+
+/**
  * @brief Parse a boolean token from user input.
  */
 bool ParseBoolToken(const std::string &input, bool *value) {
@@ -696,8 +775,8 @@ void AMConfigManager::WriteThreadLoop_() {
       try {
         task();
       } catch (...) {
-        prompt.ErrorFormat("ConfigWriter", "background write task failed", false,
-                        0);
+        prompt.ErrorFormat("ConfigWriter", "background write task failed",
+                           false, 0);
       }
     }
   }
@@ -742,7 +821,7 @@ ECM AMConfigManager::Init() {
   const std::string root_env = GetEnvCopy("AMSFTP_ROOT");
   if (root_env.empty()) {
     prompt.ErrorFormat("ConfigInit",
-                    "$AMSFTP_ROOT environment variable is not set", true, 2);
+                       "$AMSFTP_ROOT environment variable is not set", true, 2);
     return Err(EC::ConfigInvalid,
                "AMSFTP_ROOT environment variable is not set");
   }
@@ -753,9 +832,9 @@ ECM AMConfigManager::Init() {
   std::filesystem::create_directories(root_dir_, ec);
   if (ec) {
     prompt.ErrorFormat("ConfigInit",
-                    "failed to create root directory " + root_dir_.string() +
-                        ": " + ec.message(),
-                    true, 2);
+                       "failed to create root directory " + root_dir_.string() +
+                           ": " + ec.message(),
+                       true, 2);
     return Err(EC::ConfigLoadFailed, "failed to create root directory " +
                                          root_dir_.string() + ": " +
                                          ec.message());
@@ -778,7 +857,7 @@ ECM AMConfigManager::Init() {
     std::string error;
     if (!EnsureFileExists(config_path_, &error)) {
       prompt.ErrorFormat("ConfigInit", "failed to create config file: " + error,
-                      true, 2);
+                         true, 2);
       return Err(EC::ConfigLoadFailed,
                  "failed to create config file: " + error);
     }
@@ -790,8 +869,8 @@ ECM AMConfigManager::Init() {
       std::string msg = err ? err : "cfgffi_read failed";
       if (err)
         cfgffi_free_string(err);
-      prompt.ErrorFormat("ConfigInit", "failed to parse config.toml: " + msg, true,
-                      2);
+      prompt.ErrorFormat("ConfigInit", "failed to parse config.toml: " + msg,
+                         true, 2);
       return Err(EC::ConfigLoadFailed, "failed to parse config.toml: " + msg);
     }
     if (err)
@@ -810,8 +889,8 @@ ECM AMConfigManager::Init() {
   {
     std::string error;
     if (!EnsureFileExists(settings_path_, &error)) {
-      prompt.ErrorFormat("ConfigInit", "failed to create settings file: " + error,
-                      true, 2);
+      prompt.ErrorFormat("ConfigInit",
+                         "failed to create settings file: " + error, true, 2);
       return Err(EC::ConfigLoadFailed,
                  "failed to create settings file: " + error);
     }
@@ -825,7 +904,7 @@ ECM AMConfigManager::Init() {
       if (err)
         cfgffi_free_string(err);
       prompt.ErrorFormat("ConfigInit", "failed to parse settings.toml: " + msg,
-                      true, 2);
+                         true, 2);
       return Err(EC::ConfigLoadFailed, "failed to parse settings.toml: " + msg);
     }
     if (err)
@@ -845,8 +924,8 @@ ECM AMConfigManager::Init() {
   {
     std::string error;
     if (!EnsureFileExists(known_hosts_path_, &error)) {
-      prompt.ErrorFormat("ConfigInit",
-                      "failed to create known_hosts file: " + error, true, 2);
+      prompt.ErrorFormat(
+          "ConfigInit", "failed to create known_hosts file: " + error, true, 2);
       return Err(EC::ConfigLoadFailed,
                  "failed to create known_hosts file: " + error);
     }
@@ -859,8 +938,8 @@ ECM AMConfigManager::Init() {
       std::string msg = err ? err : "cfgffi_read failed";
       if (err)
         cfgffi_free_string(err);
-      prompt.ErrorFormat("ConfigInit", "failed to parse known_hosts.toml: " + msg,
-                      true, 2);
+      prompt.ErrorFormat("ConfigInit",
+                         "failed to parse known_hosts.toml: " + msg, true, 2);
       return Err(EC::ConfigLoadFailed,
                  "failed to parse known_hosts.toml: " + msg);
     }
@@ -899,8 +978,8 @@ ECM AMConfigManager::Dump() {
   std::filesystem::create_directories(config_dir, ec);
   if (ec) {
     prompt.ErrorFormat("ConfigDumpError",
-                    "failed to create config directory: " + ec.message(), true,
-                    2);
+                       "failed to create config directory: " + ec.message(),
+                       true, 2);
     return Err(EC::ConfigDumpFailed,
                "failed to create config directory: " + ec.message());
   }
@@ -1808,6 +1887,64 @@ AMConfigManager::GetSettingString(const Path &path,
     return default_value;
   const Json *node = FindJsonNode(settings_json_, path);
   return GetSettingValueImpl<std::string>(node, default_value);
+}
+
+/**
+ * @brief Create a progress bar configured from style.ProgressBar settings.
+ */
+AMProgressBar
+AMConfigManager::CreateProgressBar(int64_t total_size,
+                                   const std::string &prefix) const {
+  if (!progress_bar_style_) {
+    progress_bar_style_ = BuildProgressBarStyle_();
+  }
+  return AMProgressBar(total_size, prefix, *progress_bar_style_);
+}
+
+/**
+ * @brief Build progress bar style from settings.
+ */
+AMProgressBarStyle AMConfigManager::BuildProgressBarStyle_() const {
+  AMProgressBarStyle style;
+  int width = GetSettingInt({"style", "ProgressBar", "BarWidth"}, -1);
+  if (width <= 0) {
+    width = GetSettingInt({"style", "ProgressBar", "Width"}, -1);
+  }
+  if (width > 0) {
+    style.bar_width = static_cast<size_t>(width);
+  }
+  style.width_offset =
+      GetSettingInt({"style", "ProgressBar", "WidthOffset"}, 30);
+
+  style.start = GetSettingString({"style", "ProgressBar", "lborder"}, "");
+
+  style.end = GetSettingString({"style", "ProgressBar", "rborder"}, "");
+
+  std::string fill = GetSettingString({"style", "ProgressBar", "fill"}, "▓");
+  style.fill = fill.empty() ? "█" : fill;
+  std::string lead = GetSettingString({"style", "ProgressBar", "head"}, "█");
+  style.lead = lead.empty() ? "▓" : lead;
+
+  style.remainder = GetSettingString({"style", "ProgressBar", "remain"}, " ");
+
+  style.color = ParseProgressBarColor(
+      GetSettingString({"style", "ProgressBar", "color"}, "#FFFFFF"));
+
+  auto parse_bool = [&](const Path &path, bool default_value) {
+    std::string raw = GetSettingString(path, default_value ? "true" : "false");
+    bool value = default_value;
+    ParseBoolToken(raw, &value);
+    return value;
+  };
+
+  style.show_percentage = parse_bool({"style", "ProgressBar", "ShowPercentage"},
+                                     style.show_percentage);
+  style.show_elapsed_time = parse_bool(
+      {"style", "ProgressBar", "ShowElapsedTime"}, style.show_elapsed_time);
+  style.show_remaining_time = parse_bool(
+      {"style", "ProgressBar", "ShowRemainingTime"}, style.show_remaining_time);
+
+  return style;
 }
 
 /**

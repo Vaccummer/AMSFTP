@@ -1,18 +1,24 @@
 #pragma once
+#include <atomic>
 #include <chrono>
+#include <cstddef>
+#include <indicators/color.hpp>
+#include <indicators/setting.hpp>
 #define _WINSOCKAPI_
 #include <algorithm>
-#include <array>
 #include <boost/locale/encoding.hpp>
 #include <cctype>
-#include <condition_variable>
 #include <cstdlib>
+#include <deque>
+#include <indicators/cursor_control.hpp>
+#include <indicators/cursor_movement.hpp>
+#include <indicators/dynamic_progress.hpp>
+#include <indicators/multi_progress.hpp>
 #include <indicators/progress_bar.hpp> // win 平台上该库会包含 windows.h
+#include <indicators/terminal_size.hpp>
 #include <initializer_list>
 #include <iomanip>
 #include <iostream>
-#include <map>
-#include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
 #include <regex>
@@ -20,10 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <type_traits>
-#include <unordered_map>
-#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -31,12 +34,12 @@
 #include <conio.h>
 #include <windows.h>
 #else
-#include <termios.h>
 #include <sys/ioctl.h>
+#include <termios.h>
 #include <unistd.h>
+
 #endif
 
-/*
 class ProgressBar {
 public:
   explicit ProgressBar(size_t total_size = 0, std::string unit = "B",
@@ -183,12 +186,12 @@ private:
   ProgressBar &operator=(const ProgressBar &) = delete;
 };
 
-class AMProgressBar : public indicators::ProgressBar {
+class AMProgressBar2 : public indicators::ProgressBar {
 public:
-  AMProgressBar(size_t total_size = 0, std::string prefix = "",
-                std::string unit = "B", size_t bar_width = 50,
-                bool show_eta = true,
-                indicators::Color color = indicators::Color::green)
+  AMProgressBar2(size_t total_size = 0, std::string prefix = "",
+                 std::string unit = "B", size_t bar_width = 50,
+                 bool show_eta = true,
+                 indicators::Color color = indicators::Color::green)
       : indicators::ProgressBar(
             indicators::option::BarWidth{bar_width},
             indicators::option::Start{"["}, indicators::option::Fill{"█"},
@@ -222,7 +225,7 @@ public:
     this->print_progress();
   }
 };
-*/
+
 namespace AMStr {
 inline void amfmt_append(std::string &out, const std::string &value) {
   out += value;
@@ -669,28 +672,72 @@ inline std::string replace_all(std::string str, const std::string &old_sub,
 
 } // namespace AMStr
 // 导出amfmt函数
+
 #define AM_ENUM_NAME(x) std::string(magic_enum::enum_name(x))
-class AMProgressBarGroup;
 
 /**
- * @brief Thread-safe ANSI progress bar designed for atomic group refresh.
+ * @brief Progress bar style configuration.
+ */
+struct AMProgressBarStyle {
+  size_t bar_width = 30;
+  std::string start = "[";
+  std::string end = "]";
+  std::string fill = "=";
+  std::string lead = ">";
+  std::string remainder = " ";
+  std::variant<indicators::Color, std::string> color = indicators::Color::blue;
+  int width_offset = 30;
+  bool show_percentage = true;
+  bool show_elapsed_time = true;
+  bool show_remaining_time = true;
+};
+
+/**
+ * @brief Progress bar wrapper that updates its text using
+ * indicators::ProgressBar.
  *
- * This progress bar does not print by itself. It delegates rendering to
- * AMProgressBarGroup which coordinates multiple bars and performs atomic
- * redraws to avoid tearing.
+ * The bar itself does not print unless it is managed by a group refresh.
  */
 class AMProgressBar {
 public:
+  inline static std::atomic<int> active_count_{0};
   /**
-   * @brief Construct a progress bar with total size and optional prefix.
-   * @param total_size Total number of bytes for completion.
-   * @param prefix Display prefix (left-aligned).
+   * @brief Construct a progress bar with a total size and prefix.
+   * @param total_size Total number of bytes to complete.
+   * @param prefix Display prefix.
    */
-  explicit AMProgressBar(int64_t total_size = 0, std::string prefix = "")
+  explicit AMProgressBar(int64_t total_size = 0, std::string prefix = "",
+                         AMProgressBarStyle style = {})
       : total_size_(std::max<int64_t>(0, total_size)),
-        prefix_(std::move(prefix)),
+        prefix_(std::move(prefix)), prefix_field_(), postfix_(),
+        bar_width_(style.bar_width > 0 ? style.bar_width : 30),
+        start_token_(style.start), end_token_(style.end),
+        show_percentage_(style.show_percentage),
+        show_elapsed_time_(style.show_elapsed_time),
+        show_remaining_time_(style.show_remaining_time),
+        width_offset_(style.width_offset),
         start_time_(std::chrono::steady_clock::now()),
-        last_update_time_(start_time_) {}
+        last_update_time_(start_time_),
+        bar_(indicators::option::BarWidth{bar_width_},
+             indicators::option::Start{start_token_},
+             indicators::option::Fill{style.fill.empty() ? "=" : style.fill},
+             indicators::option::Lead{style.lead.empty() ? ">" : style.lead},
+             indicators::option::Remainder{
+                 style.remainder.empty() ? " " : style.remainder},
+             indicators::option::End{end_token_},
+             indicators::option::PrefixText{prefix_},
+             indicators::option::ForegroundColor{style.color},
+             indicators::option::PostfixText{""},
+             indicators::option::MaxProgress{static_cast<size_t>(total_size_)},
+             indicators::option::ShowPercentage{false},
+             indicators::option::ShowElapsedTime{false},
+             indicators::option::ShowRemainingTime{false}) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    UpdatePostfixLocked_();
+    UpdatePrefixLocked_();
+    bar_.set_option(indicators::option::PrefixText{prefix_field_});
+    bar_.set_option(indicators::option::PostfixText{postfix_});
+  }
 
   /**
    * @brief Set or update the total size.
@@ -707,23 +754,31 @@ public:
       start_time_ = std::chrono::steady_clock::now();
       last_update_time_ = start_time_;
       last_update_size_ = current_size_;
+      speed_samples_.clear();
+      speed_bps_ = 0.0;
     }
-    RequestRefreshLocked_();
+    bar_.set_option(
+        indicators::option::MaxProgress{static_cast<size_t>(total_size_)});
+    UpdatePostfixLocked_();
+    UpdatePrefixLocked_();
+    bar_.set_option(indicators::option::PrefixText{prefix_field_});
+    bar_.set_option(indicators::option::PostfixText{postfix_});
   }
 
   /**
    * @brief Set the display prefix.
-   * @param prefix Prefix text (left-aligned).
+   * @param prefix Prefix text.
    */
   void SetPrefix(std::string prefix) {
     std::lock_guard<std::mutex> lock(mtx_);
     prefix_ = std::move(prefix);
-    RequestRefreshLocked_();
+    UpdatePrefixLocked_();
+    bar_.set_option(indicators::option::PrefixText{prefix_field_});
   }
 
   /**
    * @brief Advance progress by a delta in bytes.
-   * @param delta Bytes to add (negative values are ignored).
+   * @param delta Bytes to add.
    */
   void Advance(int64_t delta) {
     if (delta <= 0) {
@@ -732,7 +787,11 @@ public:
     std::lock_guard<std::mutex> lock(mtx_);
     current_size_ = std::min<int64_t>(total_size_, current_size_ + delta);
     UpdateSpeedLocked_();
-    RequestRefreshLocked_();
+    UpdatePostfixLocked_();
+    UpdatePrefixLocked_();
+    bar_.set_option(indicators::option::PrefixText{prefix_field_});
+    bar_.set_option(indicators::option::PostfixText{postfix_});
+    bar_.set_progress(static_cast<size_t>(current_size_));
   }
 
   /**
@@ -743,7 +802,87 @@ public:
     std::lock_guard<std::mutex> lock(mtx_);
     current_size_ = std::clamp<int64_t>(current_size, 0, total_size_);
     UpdateSpeedLocked_();
-    RequestRefreshLocked_();
+    UpdatePostfixLocked_();
+    UpdatePrefixLocked_();
+    bar_.set_option(indicators::option::PrefixText{prefix_field_});
+    bar_.set_option(indicators::option::PostfixText{postfix_});
+    bar_.set_progress(static_cast<size_t>(current_size_));
+  }
+
+  /**
+   * @brief Set the start time using a Unix epoch timestamp (seconds).
+   * @param epoch_seconds Unix epoch time in seconds.
+   */
+  void SetStartTimeEpoch(double epoch_seconds) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    const auto sys_now = std::chrono::system_clock::now();
+    const auto steady_now = std::chrono::steady_clock::now();
+    const auto epoch_now =
+        std::chrono::duration<double>(sys_now.time_since_epoch()).count();
+    const auto delta = epoch_seconds - epoch_now;
+    start_time_ =
+        steady_now +
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double>(delta));
+    last_update_time_ = steady_now;
+    last_update_size_ = current_size_;
+    speed_samples_.clear();
+    speed_bps_ = 0.0;
+    UpdatePostfixLocked_();
+    UpdatePrefixLocked_();
+    bar_.set_option(indicators::option::PrefixText{prefix_field_});
+    bar_.set_option(indicators::option::PostfixText{postfix_});
+  }
+
+  void SetCursorVisible(bool sign) { indicators::show_console_cursor(sign); }
+
+  /**
+   * @brief Set the maximum window size for speed calculation.
+   * @param window_size Maximum number of samples to keep.
+   */
+  void SetSpeedWindowSize(size_t window_size) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    speed_window_size_ = std::max<size_t>(1, window_size);
+    while (speed_samples_.size() > speed_window_size_) {
+      speed_samples_.pop_front();
+    }
+    UpdateSpeedLocked_();
+    UpdatePostfixLocked_();
+    UpdatePrefixLocked_();
+    bar_.set_option(indicators::option::PrefixText{prefix_field_});
+    bar_.set_option(indicators::option::PostfixText{postfix_});
+  }
+
+  /**
+   * @brief Render the progress bar in-place.
+   * @param from_group Whether the render is driven by a group.
+   */
+  void Print(bool from_group = false) {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (!from_group && !showing_) {
+      showing_ = true;
+      active_count_.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (!from_group && !cursor_hidden_) {
+      indicators::show_console_cursor(false);
+      cursor_hidden_ = true;
+    }
+    bar_.print_progress(from_group);
+  }
+
+  /**
+   * @brief Restore cursor visibility if it was hidden by this bar.
+   */
+  void EndDisplay() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (cursor_hidden_) {
+      indicators::show_console_cursor(true);
+      cursor_hidden_ = false;
+    }
+    if (showing_) {
+      showing_ = false;
+      active_count_.fetch_sub(1, std::memory_order_relaxed);
+    }
   }
 
   /**
@@ -753,8 +892,19 @@ public:
     std::lock_guard<std::mutex> lock(mtx_);
     current_size_ = total_size_;
     UpdateSpeedLocked_();
-    finished_ = true;
-    RequestRefreshLocked_();
+    UpdatePostfixLocked_();
+    UpdatePrefixLocked_();
+    bar_.set_option(indicators::option::PrefixText{prefix_field_});
+    bar_.set_option(indicators::option::PostfixText{postfix_});
+    bar_.set_option(indicators::option::Completed{true});
+    if (cursor_hidden_) {
+      indicators::show_console_cursor(true);
+      cursor_hidden_ = false;
+    }
+    if (showing_) {
+      showing_ = false;
+      active_count_.fetch_sub(1, std::memory_order_relaxed);
+    }
   }
 
   /**
@@ -763,97 +913,116 @@ public:
    */
   bool IsFinished() const {
     std::lock_guard<std::mutex> lock(mtx_);
-    return finished_;
+    return bar_.is_completed();
+  }
+
+  /**
+   * @brief Check whether any progress bar is currently showing.
+   */
+  static bool IsAnyBarShowing() {
+    return active_count_.load(std::memory_order_relaxed) > 0;
   }
 
 private:
-  friend class AMProgressBarGroup;
+  /**
+   * @brief Print progress through indicators without ending the line.
+   * @param from_group Whether we are called from a group render.
+   */
+  void PrintLocked_(bool from_group) { bar_.print_progress(from_group); }
 
   /**
-   * @brief Format the bar into a single display line.
-   * @param prefix_width Width of the prefix field.
-   * @param percent_width Width of percentage field.
-   * @param size_width Width of size fields.
-   * @param time_width Width of time fields.
-   * @param speed_width Width of speed field.
-   * @param now Current time point for consistent group rendering.
-   * @return Fully formatted line.
+   * @brief Update speed sampling information while holding the lock.
    */
-  std::string RenderLine(size_t prefix_width, size_t percent_width,
-                         size_t size_width, size_t time_width,
-                         size_t speed_width,
-                         std::chrono::steady_clock::time_point now) const {
-    std::lock_guard<std::mutex> lock(mtx_);
+  void UpdateSpeedLocked_() {
+    const auto now = std::chrono::steady_clock::now();
+    speed_samples_.push_back({now, current_size_});
+    while (speed_samples_.size() > speed_window_size_) {
+      speed_samples_.pop_front();
+    }
+    if (speed_samples_.size() >= 2) {
+      const auto &first = speed_samples_.front();
+      const auto &last = speed_samples_.back();
+      const double dt =
+          std::chrono::duration<double>(last.when - first.when).count();
+      if (dt > 0.0) {
+        speed_bps_ = static_cast<double>(last.value - first.value) / dt;
+      } else {
+        speed_bps_ = 0.0;
+      }
+    } else {
+      speed_bps_ = 0.0;
+    }
+    last_update_time_ = now;
+    last_update_size_ = current_size_;
+  }
 
+  /**
+   * @brief Compute the postfix string with size, percentage, and speed.
+   */
+  void UpdatePostfixLocked_() {
     const double percent = (total_size_ <= 0)
                                ? 0.0
                                : (static_cast<double>(current_size_) /
                                   static_cast<double>(total_size_)) *
                                      100.0;
-
-    const auto elapsed =
-        std::chrono::duration_cast<std::chrono::seconds>(now - start_time_);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+        std::chrono::steady_clock::now() - start_time_);
     const int64_t elapsed_sec = std::max<int64_t>(0, elapsed.count());
-
-    const double speed_bps =
-        (elapsed_sec > 0) ? static_cast<double>(current_size_) / elapsed_sec
-                          : 0.0;
-
+    const double speed_bps = speed_bps_;
     const int64_t remaining_bytes =
         (total_size_ > current_size_) ? (total_size_ - current_size_) : 0;
     const int64_t remain_sec =
         (speed_bps > 0.0) ? static_cast<int64_t>(remaining_bytes / speed_bps)
                           : 0;
 
-    std::string prefix_field = PadRight_(prefix_, prefix_width);
-    std::string percent_field =
-        PadLeft_(FormatPercent_(percent), percent_width);
-
-    std::string current_field =
-        PadLeft_(FormatSize_(current_size_, 4), size_width);
-    std::string total_field = PadLeft_(FormatSize_(total_size_, 4), size_width);
-
-    std::string elapsed_field =
-        PadLeft_(FormatTimeMMSS_(elapsed_sec), time_width);
-    std::string remain_field =
-        PadLeft_(FormatTimeMMSS_(remain_sec), time_width);
-
-    std::string speed_field =
-        PadLeft_(FormatSpeed_(speed_bps, speed_width), speed_width);
-
-    return AMStr::amfmt("{}    {} | {}/{} [{}<{} {}]", prefix_field,
-                        percent_field, current_field, total_field,
-                        elapsed_field, remain_field, speed_field);
+    std::string size_part = AMStr::amfmt("{}/{}", FormatSize_(current_size_, 2),
+                                         FormatSize_(total_size_, 2));
+    std::vector<std::string> bracket_parts;
+    if (show_elapsed_time_ || show_remaining_time_) {
+      std::string time_part;
+      if (show_elapsed_time_) {
+        time_part = FormatTimeMMSS_(elapsed_sec);
+      }
+      if (show_remaining_time_) {
+        if (!time_part.empty()) {
+          time_part += "<";
+        }
+        time_part += FormatTimeMMSS_(remain_sec);
+      }
+      if (!time_part.empty()) {
+        bracket_parts.push_back(std::move(time_part));
+      }
+    }
+    bracket_parts.push_back(FormatSpeed_(speed_bps));
+    std::ostringstream bracket_oss;
+    for (size_t i = 0; i < bracket_parts.size(); ++i) {
+      if (i > 0) {
+        bracket_oss << ' ';
+      }
+      bracket_oss << bracket_parts[i];
+    }
+    if (show_percentage_) {
+      postfix_ = AMStr::amfmt("{} | {} [{}]", FormatPercent_(percent),
+                              size_part, bracket_oss.str());
+    } else {
+      postfix_ = AMStr::amfmt("{} [{}]", size_part, bracket_oss.str());
+    }
   }
 
   /**
-   * @brief Bind this bar to a group for refresh coordination.
-   * @param group Owning group pointer.
+   * @brief Update the prefix field to a fixed width based on terminal size.
    */
-  void BindGroup_(AMProgressBarGroup *group) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    group_ = group;
-  }
+  void UpdatePrefixLocked_() {
+    const size_t term_width = indicators::terminal_width();
+    const size_t postfix_len = postfix_.size();
+    const size_t start_len = start_token_.size();
+    const size_t end_len = end_token_.size();
+    int max_prefix =
+        static_cast<int>(term_width) -
+        static_cast<int>(bar_width_ + start_len + end_len + postfix_len) -
+        width_offset_;
 
-  /**
-   * @brief Clear group binding when removed from a group.
-   */
-  void UnbindGroup_() {
-    std::lock_guard<std::mutex> lock(mtx_);
-    group_ = nullptr;
-  }
-
-  /**
-   * @brief Request a group refresh while holding the lock.
-   */
-  void RequestRefreshLocked_() const;
-
-  /**
-   * @brief Update speed sampling information while holding the lock.
-   */
-  void UpdateSpeedLocked_() {
-    last_update_time_ = std::chrono::steady_clock::now();
-    last_update_size_ = current_size_;
+    prefix_field_ = PadRight_(prefix_, max_prefix > 0 ? max_prefix : 0);
   }
 
   /**
@@ -863,26 +1032,14 @@ private:
    * @return Padded string.
    */
   static std::string PadRight_(std::string_view value, size_t width) {
+    if (width == 0) {
+      return {};
+    }
     if (value.size() >= width) {
       return std::string(value.substr(0, width));
     }
     std::string out(value);
     out.append(width - value.size(), ' ');
-    return out;
-  }
-
-  /**
-   * @brief Left pad a string to a given width.
-   * @param value Input string.
-   * @param width Target width.
-   * @return Padded string.
-   */
-  static std::string PadLeft_(std::string_view value, size_t width) {
-    if (value.size() >= width) {
-      return std::string(value.substr(value.size() - width));
-    }
-    std::string out(width - value.size(), ' ');
-    out.append(value.begin(), value.end());
     return out;
   }
 
@@ -899,77 +1056,52 @@ private:
   }
 
   /**
-   * @brief Format a byte size with significant digits and IEC units.
-   * @param bytes Size in bytes.
-   * @param sig_digits Number of significant digits.
-   * @return Human-readable size string.
+   * @brief Format bytes into a human readable size.
+   * @param bytes Input size in bytes.
+   * @param precision Decimal digits.
+   * @return Formatted size string.
    */
-  static std::string FormatSize_(int64_t bytes, int sig_digits) {
-    static constexpr const char *kUnits[] = {"B", "KB", "MB", "GB", "TB"};
-    const double sign = (bytes < 0) ? -1.0 : 1.0;
-    double value = static_cast<double>(std::llabs(bytes));
-    size_t unit_index = 0;
-    while (value >= 1000.0 && unit_index < std::size(kUnits) - 1) {
-      value /= 1024.0;
-      unit_index++;
+  static std::string FormatSize_(int64_t bytes, int precision = 1) {
+    const char *suffixes[] = {"B", "KB", "MB", "GB", "TB"};
+    double size = static_cast<double>(std::max<int64_t>(0, bytes));
+    int idx = 0;
+    while (size >= 1024.0 && idx < 4) {
+      size /= 1024.0;
+      ++idx;
     }
-
-    if (value == 0.0) {
-      return "0 B";
-    }
-
-    (void)sig_digits;
-    int decimals = 0;
-    if (value < 10.0) {
-      decimals = 2;
-    }
-
     std::ostringstream oss;
-    oss << std::fixed << std::setprecision(decimals) << (sign * value) << " "
-        << kUnits[unit_index];
+    if (idx == 0) {
+      oss << static_cast<int64_t>(size) << ' ' << suffixes[idx];
+    } else {
+      oss << std::fixed << std::setprecision(precision) << size << ' '
+          << suffixes[idx];
+    }
     return oss.str();
   }
 
   /**
-   * @brief Format time as mm:ss.
-   * @param seconds Seconds to format.
-   * @return Time string in mm:ss.
+   * @brief Format elapsed seconds into MM:SS.
+   * @param seconds Elapsed seconds.
+   * @return Formatted time string.
    */
   static std::string FormatTimeMMSS_(int64_t seconds) {
     const int64_t clamped = std::max<int64_t>(0, seconds);
-    const int64_t mm = clamped / 60;
-    const int64_t ss = clamped % 60;
+    const int64_t minutes = clamped / 60;
+    const int64_t secs = clamped % 60;
     std::ostringstream oss;
-    oss << std::setw(2) << std::setfill('0') << mm << ":" << std::setw(2)
-        << std::setfill('0') << ss;
+    oss << std::setw(2) << std::setfill('0') << minutes << ":" << std::setw(2)
+        << std::setfill('0') << secs;
     return oss.str();
   }
 
   /**
-   * @brief Format speed using the size formatter with 1 decimal place.
-   * @param bytes_per_sec Speed in bytes per second.
-   * @param width Target width for compacting if necessary.
-   * @return Human-readable speed string.
+   * @brief Format speed in bytes per second.
+   * @param bps Speed in bytes/sec.
+   * @return Formatted speed string.
    */
-  static std::string FormatSpeed_(double bytes_per_sec, size_t width) {
-    const int64_t rounded =
-        static_cast<int64_t>(std::max<int64_t>(0, bytes_per_sec));
-    std::string base = FormatSize_(rounded, 4);
-    auto pos = base.find(' ');
-    if (pos != std::string::npos) {
-      std::string number = base.substr(0, pos);
-      std::string unit = base.substr(pos + 1);
-      std::ostringstream oss;
-      oss << std::fixed << std::setprecision(1) << std::stod(number) << " "
-          << unit << "/s";
-      base = oss.str();
-    } else {
-      base += "/s";
-    }
-    if (base.size() > width && width > 0) {
-      return base.substr(base.size() - width);
-    }
-    return base;
+  static std::string FormatSpeed_(double bps) {
+    const std::string size = FormatSize_(static_cast<int64_t>(bps), 1);
+    return size + "/s";
   }
 
 private:
@@ -977,323 +1109,29 @@ private:
   int64_t total_size_ = 0;
   int64_t current_size_ = 0;
   std::string prefix_;
-  bool finished_ = false;
+  std::string prefix_field_;
+  std::string postfix_;
+  const size_t bar_width_;
+  const std::string start_token_;
+  const std::string end_token_;
+  const bool show_percentage_;
+  const bool show_elapsed_time_;
+  const bool show_remaining_time_;
+  const int width_offset_;
   std::chrono::steady_clock::time_point start_time_;
   std::chrono::steady_clock::time_point last_update_time_;
   int64_t last_update_size_ = 0;
-  AMProgressBarGroup *group_ = nullptr;
+  struct SpeedSample {
+    std::chrono::steady_clock::time_point when;
+    int64_t value = 0;
+  };
+  std::deque<SpeedSample> speed_samples_;
+  size_t speed_window_size_ = 10;
+  double speed_bps_ = 0.0;
+  bool cursor_hidden_ = false;
+  bool showing_ = false;
+  indicators::ProgressBar bar_;
 };
-
-/**
- * @brief Thread-safe group renderer for multiple progress bars.
- *
- * The group owns a terminal region and redraws all bars atomically using
- * ANSI escape sequences to prevent tearing and overlapping output.
- */
-class AMProgressBarGroup {
-public:
-  /**
-   * @brief Construct a group with configurable field widths.
-   * @param prefix_width Width of prefix field (left-aligned).
-   * @param percent_width Width of percentage field.
-   * @param size_width Width of accumulated/total size fields.
-   * @param time_width Width of elapsed/remain time fields.
-   * @param speed_width Width of speed field.
-   * @param refresh_interval_ms Background refresh interval in milliseconds.
-   */
-  explicit AMProgressBarGroup(size_t prefix_width = 16,
-                              size_t percent_width = 7, size_t size_width = 12,
-                              size_t time_width = 5, size_t speed_width = 12,
-                              int refresh_interval_ms = 100)
-      : prefix_width_(prefix_width), percent_width_(percent_width),
-        size_width_(size_width), time_width_(time_width),
-        speed_width_(speed_width),
-        refresh_interval_ms_(std::max<int>(16, refresh_interval_ms)) {}
-
-  /**
-   * @brief Destroy the group and stop background refresh.
-   */
-  ~AMProgressBarGroup() { Stop(); }
-
-  /**
-   * @brief Start background refresh thread if not already running.
-   */
-  void Start() {
-    std::lock_guard<std::mutex> lock(mtx_);
-    if (running_) {
-      return;
-    }
-    running_ = true;
-    worker_ = std::thread([this]() { Run_(); });
-  }
-
-  /**
-   * @brief Stop background refresh thread and finalize display.
-   */
-  void Stop() {
-    {
-      std::lock_guard<std::mutex> lock(mtx_);
-      if (!running_) {
-        return;
-      }
-      running_ = false;
-      dirty_ = true;
-    }
-    cv_.notify_all();
-    if (worker_.joinable()) {
-      worker_.join();
-    }
-    Refresh(true);
-  }
-
-  /**
-   * @brief Add a progress bar to the group.
-   * @param bar Shared progress bar instance.
-   */
-  void AddBar(const std::shared_ptr<AMProgressBar> &bar) {
-    if (!bar) {
-      return;
-    }
-    std::lock_guard<std::mutex> lock(mtx_);
-    bars_.push_back(bar);
-    bar->BindGroup_(this);
-    dirty_ = true;
-    cv_.notify_all();
-  }
-
-  /**
-   * @brief Remove a progress bar from the group.
-   * @param bar Shared progress bar instance.
-   */
-  void RemoveBar(const std::shared_ptr<AMProgressBar> &bar) {
-    if (!bar) {
-      return;
-    }
-    std::lock_guard<std::mutex> lock(mtx_);
-    bars_.erase(std::remove_if(bars_.begin(), bars_.end(),
-                               [&](const std::weak_ptr<AMProgressBar> &w) {
-                                 auto sp = w.lock();
-                                 return !sp || sp == bar;
-                               }),
-                bars_.end());
-    bar->UnbindGroup_();
-    dirty_ = true;
-    cv_.notify_all();
-  }
-
-  /**
-   * @brief Trigger a refresh request from a bar update.
-   */
-  void RequestRefresh() {
-    {
-      std::lock_guard<std::mutex> lock(mtx_);
-      dirty_ = true;
-    }
-    cv_.notify_all();
-  }
-
-  /**
-   * @brief Perform an immediate atomic refresh.
-   * @param force Whether to refresh even if not marked dirty.
-   */
-  void Refresh(bool force = false) {
-    std::vector<std::shared_ptr<AMProgressBar>> bars;
-    size_t prefix_width = 0;
-    {
-      std::lock_guard<std::mutex> lock(mtx_);
-      if (!force && !dirty_) {
-        return;
-      }
-      dirty_ = false;
-      prefix_width = prefix_width_;
-      bars.reserve(bars_.size());
-      for (auto it = bars_.begin(); it != bars_.end();) {
-        if (auto sp = it->lock()) {
-          bars.push_back(sp);
-          ++it;
-        } else {
-          it = bars_.erase(it);
-        }
-      }
-    }
-
-    const auto now = std::chrono::steady_clock::now();
-    const size_t term_width = GetTerminalWidth_();
-    const size_t other_width = ComputeOtherFieldsWidth_();
-    const size_t max_prefix_width =
-        (term_width > other_width + 1) ? (term_width - other_width - 1) : 0;
-    const size_t effective_prefix_width =
-        std::min<size_t>(prefix_width, max_prefix_width);
-    std::vector<std::string> lines;
-    lines.reserve(bars.size());
-    for (const auto &bar : bars) {
-      lines.push_back(bar->RenderLine(effective_prefix_width, percent_width_,
-                                      size_width_, time_width_, speed_width_,
-                                      now));
-    }
-    RenderLinesAtomic_(lines);
-  }
-
-  /**
-   * @brief Configure the prefix field width.
-   * @param width New width.
-   */
-  void SetPrefixWidth(size_t width) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    prefix_width_ = width;
-    dirty_ = true;
-    cv_.notify_all();
-  }
-
-  /**
-   * @brief Configure the percentage field width.
-   * @param width New width.
-   */
-  void SetPercentWidth(size_t width) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    percent_width_ = width;
-    dirty_ = true;
-    cv_.notify_all();
-  }
-
-  /**
-   * @brief Configure the size field width.
-   * @param width New width.
-   */
-  void SetSizeWidth(size_t width) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    size_width_ = width;
-    dirty_ = true;
-    cv_.notify_all();
-  }
-
-  /**
-   * @brief Configure the time field width.
-   * @param width New width.
-   */
-  void SetTimeWidth(size_t width) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    time_width_ = width;
-    dirty_ = true;
-    cv_.notify_all();
-  }
-
-  /**
-   * @brief Configure the speed field width.
-   * @param width New width.
-   */
-  void SetSpeedWidth(size_t width) {
-    std::lock_guard<std::mutex> lock(mtx_);
-    speed_width_ = width;
-    dirty_ = true;
-    cv_.notify_all();
-  }
-
-private:
-  /**
-   * @brief Compute the total width of all non-prefix fields and separators.
-   * @return Width in characters.
-   */
-  size_t ComputeOtherFieldsWidth_() const {
-    // Format: "{prefix}    {percentage} | {acc}/{total}     [ {elapse}<{remain}
-    // {speed} ]"
-    const size_t separators_width =
-        4 + 3 + 1 + 5 + 3 + 1 + 2 + 2; // spaces and symbols between fields
-    return percent_width_ + (2 * size_width_) + (2 * time_width_) +
-           speed_width_ + separators_width;
-  }
-
-  /**
-   * @brief Get terminal width in characters, with a safe fallback.
-   * @return Terminal width, defaulting to 120 when unknown.
-   */
-  static size_t GetTerminalWidth_() {
-#ifdef _WIN32
-    CONSOLE_SCREEN_BUFFER_INFO csbi;
-    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
-    if (h != INVALID_HANDLE_VALUE && GetConsoleScreenBufferInfo(h, &csbi)) {
-      const int width = csbi.srWindow.Right - csbi.srWindow.Left + 1;
-      if (width > 0) {
-        return static_cast<size_t>(width);
-      }
-    }
-#else
-    struct winsize w;
-    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &w) == 0 && w.ws_col > 0) {
-      return static_cast<size_t>(w.ws_col);
-    }
-#endif
-    return 120;
-  }
-
-  /**
-   * @brief Background refresh loop.
-   */
-  void Run_() {
-    std::unique_lock<std::mutex> lock(mtx_);
-    while (running_) {
-      cv_.wait_for(lock, std::chrono::milliseconds(refresh_interval_ms_),
-                   [&]() { return !running_ || dirty_; });
-      if (!running_) {
-        break;
-      }
-      lock.unlock();
-      Refresh(true);
-      lock.lock();
-    }
-  }
-
-  /**
-   * @brief Render all lines using ANSI escape sequences atomically.
-   * @param lines Lines to render.
-   */
-  void RenderLinesAtomic_(const std::vector<std::string> &lines) {
-    std::lock_guard<std::mutex> out_lock(out_mtx_);
-
-    if (last_rendered_lines_ > 0) {
-      std::cout << "\x1b[" << last_rendered_lines_ << "F";
-    }
-
-    for (size_t i = 0; i < lines.size(); ++i) {
-      std::cout << "\x1b[2K\r" << lines[i];
-      if (i + 1 < lines.size()) {
-        std::cout << "\n";
-      }
-    }
-
-    if (lines.empty()) {
-      std::cout << "\x1b[2K\r";
-    }
-
-    std::cout << std::flush;
-    last_rendered_lines_ = lines.size();
-  }
-
-private:
-  mutable std::mutex mtx_;
-  std::condition_variable cv_;
-  std::vector<std::weak_ptr<AMProgressBar>> bars_;
-  bool running_ = false;
-  bool dirty_ = true;
-  std::thread worker_;
-  size_t prefix_width_;
-  size_t percent_width_;
-  size_t size_width_;
-  size_t time_width_;
-  size_t speed_width_;
-  int refresh_interval_ms_;
-  std::mutex out_mtx_;
-  size_t last_rendered_lines_ = 0;
-};
-
-/**
- * @brief Request a refresh from the owning group.
- */
-inline void AMProgressBar::RequestRefreshLocked_() const {
-  if (group_ != nullptr) {
-    group_->RequestRefresh();
-  }
-}
 
 inline void print(const std::string &str) { std::cout << str << "\n"; }
 
@@ -1306,128 +1144,12 @@ template <typename... Args> inline void print(Args &&...args) {
 }
 using Json = nlohmann::ordered_json;
 
-class AMConfigProcessor {
-public:
-  using Path = std::vector<std::string>;
-  using Match =
-      std::variant<std::string, std::regex, std::unordered_set<std::string>>;
-  using FormatPath = std::vector<Match>;
-  using Value =
-      std::variant<int64_t, bool, std::string, std::vector<std::string>>;
-
-  struct PathLess {
-    bool operator()(const Path &a, const Path &b) const {
-      return std::lexicographical_compare(a.begin(), a.end(), b.begin(),
-                                          b.end());
-    }
-  };
-
-  using FlatMap = std::map<Path, Value, PathLess>;
-
-  static void FilterKeys(FlatMap &data, const std::vector<Path> &formats) {
-    std::vector<FormatPath> converted;
-    converted.reserve(formats.size());
-    for (const auto &fmt : formats) {
-      FormatPath fmt_path;
-      fmt_path.reserve(fmt.size());
-      for (const auto &seg : fmt) {
-        fmt_path.emplace_back(seg);
-      }
-      converted.push_back(std::move(fmt_path));
-    }
-    FilterKeys(data, converted);
-  }
-
-  static void FilterKeys(FlatMap &data,
-                         const std::vector<FormatPath> &formats) {
-    if (formats.empty())
-      return;
-
-    for (auto it = data.begin(); it != data.end();) {
-      if (!MatchesAnyFormat(it->first, formats)) {
-        it = data.erase(it);
-        continue;
-      }
-      ++it;
-    }
-  }
-
-  static const Value *Query(const FlatMap &data, const Path &key) {
-    auto it = data.find(key);
-    if (it == data.end())
-      return nullptr;
-    return &it->second;
-  }
-
-  static const Value *Query(FlatMap &data, const Path &key,
-                            Value default_value) {
-    auto it = data.find(key);
-    if (it == data.end()) {
-      auto inserted = data.emplace(key, std::move(default_value));
-      return &inserted.first->second;
-    }
-    return &it->second;
-  }
-
-  static bool Modify(FlatMap &data, const Path &key, const Value &value) {
-    auto it = data.find(key);
-    if (it == data.end())
-      return false;
-    it->second = value;
-    return true;
-  }
-
-private:
-  static bool MatchesAnyFormat(const Path &key,
-                               const std::vector<FormatPath> &formats) {
-    for (const auto &fmt : formats) {
-      if (key.size() != fmt.size())
-        continue;
-      if (PathMatchesFormat(key, fmt))
-        return true;
-    }
-    return false;
-  }
-
-  static bool PathMatchesFormat(const Path &key, const FormatPath &fmt) {
-    for (size_t i = 0; i < key.size(); ++i) {
-      if (!SegmentMatchesFormat(key[i], fmt[i]))
-        return false;
-    }
-    return true;
-  }
-
-  static bool SegmentMatchesFormat(const std::string &segment,
-                                   const Match &format) {
-    if (std::holds_alternative<std::string>(format)) {
-      const std::string &fmt = std::get<std::string>(format);
-      if (fmt == "*")
-        return true;
-      if (fmt.size() >= 2 && fmt.front() == '^' && fmt.back() == '$') {
-        try {
-          std::regex re(fmt);
-          return std::regex_match(segment, re);
-        } catch (const std::regex_error &e) {
-          (void)e;
-          return false;
-        }
-      }
-      return segment == fmt;
-    }
-    if (std::holds_alternative<std::regex>(format)) {
-      return std::regex_match(segment, std::get<std::regex>(format));
-    }
-    const auto &set = std::get<std::unordered_set<std::string>>(format);
-    return set.find(segment) != set.end();
-  }
-};
-
 /**
  * @brief Format size to human-readable string.
  */
 inline std::string FormatSize(size_t size) {
-  const char *units[] = {"B", "KB", "MB", "GB", "TB"};
-  double value = static_cast<double>(size);
+  static const std::vector<std::string> units = {"B", "KB", "MB", "GB", "TB"};
+  auto value = static_cast<double>(size);
   size_t idx = 0;
   while (value >= 1024.0 && idx < 4) {
     value /= 1024.0;

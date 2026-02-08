@@ -181,6 +181,23 @@ ic_public bool ic_async_stop(void) {
   return tty_async_stop(env->tty);
 }
 
+/** Request a soft refresh of the current input line asynchronously. */
+ic_public bool ic_request_refresh_async(void) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return false;
+  if (env->tty==NULL || !env->edit_active) return false;
+  env->refresh_request = true;
+  if (!tty_async_complete(env->tty)) {
+    env->refresh_request = false;
+    return false;
+  }
+  return true;
+}
+
+ic_public bool ic_is_editline_active(void) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return false;
+  return env->edit_active;
+}
+
 /** Request the completion menu to open on the next key processing cycle. */
 ic_public bool ic_open_completion_menu(void) {
   ic_env_t* env = ic_get_env(); if (env==NULL) return false;

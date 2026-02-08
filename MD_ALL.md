@@ -1193,3 +1193,11 @@ tree新增一个onlydir参数, 默认为false, 为true时只打印目录(绑定o
 AMCliSignalMonitor的信号捕获的优先级好像不是很高, 信号似乎会泄露到其他地方
 
 tree指令无法及时相应中断
+
+ProgressBar Improve
+
+在configmanager中新加一个创建进度条的函数, 读取style.ProgressBar中的配置创建, 注意限制color取值, 并映射成以下color
+
+namespace indicators { enum class Color { grey, red, green, yellow, blue, magenta, cyan, white, unspecified };}
+
+进度条的config不会在运行时改变, 可以创建一个, 然后进行复制

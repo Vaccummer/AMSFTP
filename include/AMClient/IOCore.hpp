@@ -608,6 +608,34 @@ private:
   }
 
   /**
+   * @brief Check whether a task id is already in use.
+   */
+  bool IsTaskIdUsed_(const TaskId &task_id) const {
+    std::scoped_lock lock(registry_mtx_, result_mtx_, conducting_mtx_);
+    if (task_registry_.find(task_id) != task_registry_.end()) {
+      return true;
+    }
+    if (results_.find(task_id) != results_.end()) {
+      return true;
+    }
+    return conducting_tasks_.find(task_id) != conducting_tasks_.end();
+  }
+
+  /**
+   * @brief Generate a simple numeric task id that does not duplicate.
+   */
+  TaskId GenerateTaskId_() const {
+    static std::atomic<uint64_t> counter{0};
+    while (true) {
+      const uint64_t value = counter.fetch_add(1, std::memory_order_relaxed);
+      TaskId candidate = std::to_string(value);
+      if (!IsTaskIdUsed_(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  /**
    * @brief Determine whether any pending tasks exist.
    *
    * This function assumes queue_mtx_ is already held.
@@ -1746,8 +1774,8 @@ public:
       return {EC::InvalidArg, "Tasks is nullptr or empty"};
     }
 
-    if (task_info->id.empty()) {
-      task_info->id = GenerateUID();
+    if (task_info->id.empty() || IsTaskIdUsed_(task_info->id)) {
+      task_info->id = GenerateTaskId_();
     }
     task_info->submit_time.store(timenow());
     task_info->SetStatus(TaskStatus::Pending);
@@ -1783,7 +1811,7 @@ public:
                ssize_t buffer_size = -1, bool quiet = false,
                int thread_id = -1) {
     auto task_info = std::make_shared<TaskInfo>(quiet);
-    task_info->id = GenerateUID();
+    task_info->id = GenerateTaskId_();
     task_info->tasks = tasks;
     task_info->CalTotalSize();
 
@@ -2100,7 +2128,6 @@ public:
     }
     auto [rc3, src_stat] =
         src_client->stat(src, false, interrupt_flag, timeout_ms, start_time);
-    print("size is {}", src_stat.size);
 
     if (rc3.first != EC::Success) {
       return {rc3, tasks};

@@ -18,8 +18,7 @@ namespace {
  * Host config not found is treated as an error; missing clients are allowed
  * so that transfer can create them later.
  */
-ECM ParseTransferPath(AMClientManager &client_manager,
-                      const std::string &input,
+ECM ParseTransferPath(AMClientManager &client_manager, const std::string &input,
                       const std::shared_ptr<BaseClient> &client,
                       std::string *nickname, std::string *path) {
   auto [parsed_name, parsed_path, _client, rcm] =
@@ -176,13 +175,13 @@ void TaskInfoPrint::TaskSubmitPrint(
   const size_t file_num = task_info->tasks ? task_info->tasks->size() : 0;
   const size_t total_size = task_info->total_size.load();
   std::vector<std::string> nicknames = task_info->nicknames;
-  std::string nickname_str = JoinStrings_(nicknames, ", ");
+  std::string nickname_str = JoinStrings_(nicknames, " ");
   if (nickname_str.empty()) {
     nickname_str = "local";
   }
-  prompt_.Print(AMStr::amfmt(
-      "Submit ID: [{}] FileNum: {} TotalSize: {} Clients: {}", task_info->id,
-      file_num, FormatSize(total_size), nickname_str));
+  prompt_.Print(AMStr::amfmt("ID: {}; FileNum: {}; TotalSize: {}; Clients: {}",
+                             task_info->id, file_num, FormatSize(total_size),
+                             nickname_str));
 }
 
 /**
@@ -190,28 +189,41 @@ void TaskInfoPrint::TaskSubmitPrint(
  */
 void TaskInfoPrint::TaskResultPrint(
     const std::shared_ptr<TaskInfo> &task_info) const {
-  if (!task_info || task_info->quiet) {
+  if (!task_info) {
     return;
   }
-  const size_t transferred = task_info->total_transferred_size.load();
-  const size_t total = task_info->total_size.load();
-  const int thread_id = task_info->OnWhichThread.load();
+  size_t transferred = 0;
+  size_t total = 0;
+  int thread_id = 0;
+  ECM result;
+  bool success = false;
+  decltype(task_info->id) task_id;
+  {
+    std::lock_guard<std::mutex> lock(task_info->mtx);
+    if (task_info->quiet) {
+      return;
+    }
+    transferred = task_info->total_transferred_size.load();
+    total = task_info->total_size.load();
+    thread_id = task_info->OnWhichThread.load();
+    task_id = task_info->id;
 
-  ECM result = task_info->GetResult();
-  bool success = result.first == EC::Success;
-  if (success && task_info->tasks) {
-    for (const auto &task : *task_info->tasks) {
-      if (task.rcm.first != EC::Success) {
-        result = task.rcm;
-        success = false;
+    result = task_info->rcm;
+    success = result.first == EC::Success;
+    if (success && task_info->tasks) {
+      for (const auto &task : *task_info->tasks) {
+        if (task.rcm.first != EC::Success) {
+          result = task.rcm;
+          success = false;
+        }
       }
     }
   }
 
   const std::string prefix = success ? "✅" : "❌";
   if (success) {
-    prompt_.Print(AMStr::amfmt("{} [{}] {}/{} ThreadID: {}", prefix,
-                               task_info->id, FormatSize(transferred),
+    prompt_.Print(AMStr::amfmt("{} [!q][{}][/q] {}/{} ThreadID: {}", prefix,
+                               task_id, FormatSize(transferred),
                                FormatSize(total), thread_id));
     return;
   }
@@ -221,9 +233,9 @@ void TaskInfoPrint::TaskResultPrint(
   if (!result.second.empty()) {
     rcm_text = AMStr::amfmt("{}: {}", rcm_name, result.second);
   }
-  prompt_.Print(AMStr::amfmt("{} [{}] {}/{} ThreadID: {} {}", prefix,
-                             task_info->id, FormatSize(transferred),
-                             FormatSize(total), thread_id, rcm_text));
+  prompt_.Print(AMStr::amfmt("{} [{}] {}/{} ThreadID: {} {}", prefix, task_id,
+                             FormatSize(transferred), FormatSize(total),
+                             thread_id, rcm_text));
 }
 
 /**
@@ -278,14 +290,12 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
     return;
   }
 
-  AMProgressBarGroup group(48);
-  group.Start();
-  auto bar = std::make_shared<AMProgressBar>(
+  AMProgressBar bar = AMConfigManager::Instance().CreateProgressBar(
       static_cast<int64_t>(task_info->total_size.load()),
       BuildTaskPrefix_(task_info));
-  group.AddBar(bar);
-
-  const int refresh_ms = 100;
+  bar.SetStartTimeEpoch(task_info->start_time.load());
+  bar.Print();
+  const int refresh_ms = 300;
   while (true) {
     if (interrupt_flag && interrupt_flag->check()) {
       break;
@@ -293,16 +303,16 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
     const TaskStatus current_status = task_info->GetStatus();
     const size_t total = task_info->total_size.load();
     const size_t transferred = task_info->total_transferred_size.load();
-    bar->SetTotal(static_cast<int64_t>(total));
-    bar->SetProgress(static_cast<int64_t>(transferred));
-    bar->SetPrefix(BuildTaskPrefix_(task_info));
+    bar.SetTotal(static_cast<int64_t>(total));
+    bar.SetProgress(static_cast<int64_t>(transferred));
+    bar.SetPrefix(BuildTaskPrefix_(task_info));
     if (current_status == TaskStatus::Finished) {
-      bar->Finish();
+      bar.Finish();
       break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
   }
-  group.Stop();
+  bar.EndDisplay();
 }
 
 /**
@@ -324,49 +334,49 @@ void TaskInfoPrint::List(
     return;
   }
 
-  AMProgressBarGroup group(48);
-  group.Start();
-  std::vector<std::shared_ptr<AMProgressBar>> bars;
-  bars.reserve(conducting.size());
-  for (const auto &task : conducting) {
-    auto bar = std::make_shared<AMProgressBar>(
-        static_cast<int64_t>(task ? task->total_size.load() : 0),
-        BuildTaskPrefix_(task));
-    group.AddBar(bar);
-    bars.push_back(bar);
-  }
+  // AMProgressBarGroup group(48);
+  // group.Start();
+  // std::vector<std::shared_ptr<AMProgressBar>> bars;
+  // bars.reserve(conducting.size());
+  // for (const auto &task : conducting) {
+  //   auto bar = std::make_shared<AMProgressBar>(
+  //       static_cast<int64_t>(task ? task->total_size.load() : 0),
+  //       BuildTaskPrefix_(task));
+  //   group.AddBar(bar);
+  //   bars.push_back(bar);
+  // }
 
-  const int refresh_ms = 100;
-  while (true) {
-    if (interrupt_flag && interrupt_flag->check()) {
-      break;
-    }
+  // const int refresh_ms = 100;
+  // while (true) {
+  //   if (interrupt_flag && interrupt_flag->check()) {
+  //     break;
+  //   }
 
-    bool any_running = false;
-    for (size_t i = 0; i < conducting.size(); ++i) {
-      const auto &task = conducting[i];
-      const auto &bar = bars[i];
-      if (!task) {
-        continue;
-      }
-      const size_t total = task->total_size.load();
-      const size_t transferred = task->total_transferred_size.load();
-      bar->SetTotal(static_cast<int64_t>(total));
-      bar->SetProgress(static_cast<int64_t>(transferred));
-      bar->SetPrefix(BuildTaskPrefix_(task));
-      if (task->GetStatus() == TaskStatus::Finished) {
-        bar->Finish();
-      } else {
-        any_running = true;
-      }
-    }
+  //   bool any_running = false;
+  //   for (size_t i = 0; i < conducting.size(); ++i) {
+  //     const auto &task = conducting[i];
+  //     const auto &bar = bars[i];
+  //     if (!task) {
+  //       continue;
+  //     }
+  //     const size_t total = task->total_size.load();
+  //     const size_t transferred = task->total_transferred_size.load();
+  //     bar->SetTotal(static_cast<int64_t>(total));
+  //     bar->SetProgress(static_cast<int64_t>(transferred));
+  //     bar->SetPrefix(BuildTaskPrefix_(task));
+  //     if (task->GetStatus() == TaskStatus::Finished) {
+  //       bar->Finish();
+  //     } else {
+  //       any_running = true;
+  //     }
+  //   }
 
-    if (!any_running) {
-      break;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
-  }
-  group.Stop();
+  //   if (!any_running) {
+  //     break;
+  //   }
+  //   std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
+  // }
+  // group.Stop();
 }
 
 /**
@@ -691,9 +701,6 @@ AMTransferManager::BindResultCallback(UserResultCallback user_cb) {
       std::lock_guard<std::mutex> lock(callback_mtx_);
       public_cb = public_result_cb_;
     }
-    if (!public_cb && !user_cb) {
-      return;
-    }
     this->ResultCallback(task_info, public_cb, user_cb);
   };
 }
@@ -704,6 +711,7 @@ void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
   if (!task_info) {
     return;
   }
+  task_printer_.TaskResultPrint(task_info);
   if (task_info->hostm) {
     ReturnClientsToIdle_(task_info->hostm);
     task_info->hostm.reset();
@@ -711,7 +719,6 @@ void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
   {
     std::lock_guard<std::mutex> lock(history_mtx_);
     history_.push_front(task_info);
-    std::cout << "history_.size():" << history_.size() << std::endl;
   }
   if (user_cb) {
     user_cb(task_info);
@@ -1467,21 +1474,7 @@ ECM AMTransferManager::transfer_async(
     return {EC::InvalidArg, "Task List is empty"};
   }
 
-  UserResultCallback user_callback =
-      [this](std::shared_ptr<TaskInfo> task_info) {
-        if (task_info) {
-          task_printer_.TaskResultPrint(task_info);
-        }
-        UserResultCallback user_cb;
-        {
-          std::lock_guard<std::mutex> lock(callback_mtx_);
-          user_cb = user_result_cb_;
-        }
-        if (user_cb) {
-          CallCallbackSafe(user_cb, task_info);
-        }
-      };
-  task_info->result_callback = BindResultCallback(std::move(user_callback));
+  task_info->result_callback = BindResultCallback({});
 
   auto submit_rcm = worker_.submit(task_info);
   if (submit_rcm.first != EC::Success) {
@@ -1641,7 +1634,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
   auto task_info =
       worker_.cre_taskinfo(tasks_ptr, hostm, TransferCallback(), -1, quiet, -1);
   task_info->transfer_sets =
-      std::make_shared<std::vector<UserTransferSet>>(transfer_sets);
+      std::make_shared<std::vector<UserTransferSet>>(std::move(transfer_sets));
   task_info->nicknames = std::move(display_names);
   return {ECM{EC::Success, ""}, task_info};
 }
