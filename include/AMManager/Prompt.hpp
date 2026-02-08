@@ -88,6 +88,11 @@ public:
 
   void PrintTaskResult(const std::shared_ptr<TaskInfo> &task_info);
 
+  /**
+   * @brief Flush cached output collected while progress bars are active.
+   */
+  void FlushCachedOutput();
+
   bool Prompt(const std::string &prompt, const std::string &placeholder,
               std::string *out_input);
   /**
@@ -124,6 +129,7 @@ private:
   bool history_loaded_ = false;
   int max_history_count_ = 10;
   std::vector<std::string> history_entries_;
+  std::string cached_output_;
 
   /**
    * @brief Collect current history into a list.

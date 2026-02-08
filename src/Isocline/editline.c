@@ -987,6 +987,8 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
       eb.hint_help == NULL) {
     return NULL;
   }
+  env->edit_active = true;
+  env->refresh_request = false;
 
   // caching
   if (!(env->no_highlight && env->no_bracematch)) {
@@ -1088,6 +1090,11 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
 
       // completion, history, help, undo
       case KEY_TAB:
+        if (env->refresh_request) {
+          env->refresh_request = false;
+          edit_refresh(env, &eb);
+          break;
+        }
         edit_generate_completions(env, &eb, false);
         break;
       case KEY_CTRL_R:
@@ -1253,6 +1260,8 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
   sbuf_free(eb.extra);
   sbuf_free(eb.hint);
   sbuf_free(eb.hint_help);
+  env->edit_active = false;
+  env->refresh_request = false;
 
   return res;
 }

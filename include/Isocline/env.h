@@ -49,6 +49,8 @@ struct ic_env_s {
   bool            complete_number_pick; // allow selecting items with number keys
   bool            complete_auto_fill;   // auto-complete single/prefix matches
   const char*     complete_select_sign; // custom indicator for selected item
+  bool            edit_active;      // is an editline session currently active?
+  bool            refresh_request;  // request a soft refresh on next key cycle
   bool            no_multiline_indent; // indent continuation lines to line up under the initial prompt 
   bool            no_help;          // show short help line for history search etc.
   bool            no_hint;          // allow hinting?

@@ -62,7 +62,7 @@ public:
     std::signal(SIGTERM, AMCliSignalMonitor::SignalHandler);
 #endif
 #else
-    struct sigaction sa {};
+    struct sigaction sa{};
     sa.sa_handler = AMCliSignalMonitor::SignalHandler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = SA_RESTART;
@@ -225,7 +225,6 @@ private:
           }
           if (hook.interrupt_flag) {
             hook.interrupt_flag->set(true);
-            print("Signal Triggered: {}", signum);
           }
           if (hook.consume) {
             break;

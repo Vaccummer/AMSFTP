@@ -658,6 +658,14 @@ int ic_term_get_color_bits( void );
 /// functional on Linux, macOS and Windows).
 bool ic_async_stop(void);
 
+/// Thread-safe way to request a refresh of the current input line.
+/// Useful for printing background messages while readline is active.
+/// Returns `true` if the refresh request was delivered.
+bool ic_request_refresh_async(void);
+
+/// Returns true if an editline session is currently active.
+bool ic_is_editline_active(void);
+
 /// \}
 
 //--------------------------------------------------------------

@@ -98,8 +98,7 @@ bool ParseHexColor_(const std::string &hex, int *r, int *g, int *b) {
  * @param start Start index for scanning.
  * @return Index of the target or npos if not found.
  */
-size_t FindUnescapedChar_(const std::string &input, char target,
-                          size_t start) {
+size_t FindUnescapedChar_(const std::string &input, char target, size_t start) {
   for (size_t i = start; i < input.size(); ++i) {
     if (input[i] == '`') {
       if (i + 1 < input.size()) {
@@ -438,8 +437,7 @@ ExprToken NextExprToken_(const std::string &expr, size_t *index) {
   }
 
   size_t i = *index;
-  while (i < expr.size() &&
-         std::isspace(static_cast<unsigned char>(expr[i]))) {
+  while (i < expr.size() && std::isspace(static_cast<unsigned char>(expr[i]))) {
     ++i;
   }
   if (i >= expr.size()) {
@@ -779,12 +777,12 @@ bool EvaluatePromptExpression_(const std::string &expression) {
  * @param stop_on_brace Stop rendering when an unescaped '}' is reached.
  * @return Rendered segment text.
  */
-std::string RenderPromptSegment_(
-    const std::string &format, size_t *index,
-    AMConfigManager &config_manager,
-    const std::unordered_map<std::string, std::string> &vars,
-    std::vector<std::string> *style_stack, bool enable_styles,
-    bool stop_on_brace) {
+std::string
+RenderPromptSegment_(const std::string &format, size_t *index,
+                     AMConfigManager &config_manager,
+                     const std::unordered_map<std::string, std::string> &vars,
+                     std::vector<std::string> *style_stack, bool enable_styles,
+                     bool stop_on_brace) {
   if (!index) {
     return "";
   }
@@ -822,9 +820,9 @@ std::string RenderPromptSegment_(
             continue;
           }
           ++cursor;
-          std::string branch_true = RenderPromptSegment_(
-              format, &cursor, config_manager, vars, style_stack, enable_styles,
-              true);
+          std::string branch_true =
+              RenderPromptSegment_(format, &cursor, config_manager, vars,
+                                   style_stack, enable_styles, true);
 
           if (cursor >= format.size() || format[cursor] != '{') {
             output.push_back('{');
@@ -832,9 +830,9 @@ std::string RenderPromptSegment_(
             continue;
           }
           ++cursor;
-          std::string branch_false = RenderPromptSegment_(
-              format, &cursor, config_manager, vars, style_stack, enable_styles,
-              true);
+          std::string branch_false =
+              RenderPromptSegment_(format, &cursor, config_manager, vars,
+                                   style_stack, enable_styles, true);
 
           if (cursor < format.size() && format[cursor] == '}') {
             ++cursor;
@@ -847,10 +845,8 @@ std::string RenderPromptSegment_(
       }
 
       size_t close = FindUnescapedChar_(format, '}', *index + 1);
-      if (close != std::string::npos &&
-          format[*index + 1] == '$') {
-        const std::string key =
-            format.substr(*index + 1, close - (*index + 1));
+      if (close != std::string::npos && format[*index + 1] == '$') {
+        const std::string key = format.substr(*index + 1, close - (*index + 1));
         auto it = vars.find(key);
         if (it != vars.end()) {
           output += it->second;
@@ -871,8 +867,7 @@ std::string RenderPromptSegment_(
         ++(*index);
         continue;
       }
-      const std::string tag =
-          format.substr(*index + 1, close - (*index + 1));
+      const std::string tag = format.substr(*index + 1, close - (*index + 1));
       *index = close + 1;
 
       if (!enable_styles) {
@@ -885,8 +880,8 @@ std::string RenderPromptSegment_(
           style_stack->pop_back();
           if (!prev.empty()) {
             output += "\x1b[0m";
-            for (auto it = style_stack->rbegin();
-                 it != style_stack->rend(); ++it) {
+            for (auto it = style_stack->rbegin(); it != style_stack->rend();
+                 ++it) {
               if (!it->empty()) {
                 output += *it;
                 break;
@@ -926,13 +921,13 @@ std::string RenderPromptSegment_(
  * @param vars Variable map (keys include the leading '$').
  * @return Rendered prompt string with ANSI escape sequences.
  */
-std::string RenderPromptFormat_(
-    AMConfigManager &config_manager, const std::string &format,
-    const std::unordered_map<std::string, std::string> &vars) {
+std::string
+RenderPromptFormat_(AMConfigManager &config_manager, const std::string &format,
+                    const std::unordered_map<std::string, std::string> &vars) {
   size_t index = 0;
   std::vector<std::string> style_stack;
-  std::string rendered = RenderPromptSegment_(
-      format, &index, config_manager, vars, &style_stack, true, false);
+  std::string rendered = RenderPromptSegment_(format, &index, config_manager,
+                                              vars, &style_stack, true, false);
   for (const auto &style : style_stack) {
     if (!style.empty()) {
       rendered += "\x1b[0m";
@@ -1457,6 +1452,7 @@ int RunInteractiveLoop(const std::string &app_name,
     const std::string prompt_text =
         BuildPrompt_(prompt_state, client_manager, config_manager);
 
+    prompt.FlushCachedOutput();
     std::string prompt_header;
     std::string prompt_line;
     SplitPromptForReadline_(prompt_text, &prompt_header, &prompt_line);
