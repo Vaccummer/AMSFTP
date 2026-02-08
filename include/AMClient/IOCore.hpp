@@ -370,7 +370,7 @@ private:
       while (millsecond < interval_s * 1000) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         millsecond += 100;
-        if (!is_heartbeat.load()) {
+        if (!is_heartbeat.load(std::memory_order_acquire)) {
           return;
         }
       }
@@ -386,7 +386,7 @@ public:
   bool is_disconnect_cb = false;
   std::shared_ptr<AMLocalClient> local_client;
   ~ClientMaintainer() {
-    is_heartbeat.store(false);
+    is_heartbeat.store(false, std::memory_order_relaxed);
     if (heartbeat_thread.joinable()) {
       heartbeat_thread.join();
     }
@@ -420,11 +420,11 @@ public:
     this->is_disconnect_cb = static_cast<bool>(this->disconnect_cb);
 
     if (heartbeat_interval_s < 0) {
-      this->is_heartbeat.store(false);
+      this->is_heartbeat.store(false, std::memory_order_relaxed);
       return;
     }
 
-    this->is_heartbeat.store(true);
+    this->is_heartbeat.store(true, std::memory_order_relaxed);
     heartbeat_thread = std::thread(
         [this, heartbeat_interval_s]() { HeartbeatAct(heartbeat_interval_s); });
   }
@@ -602,7 +602,8 @@ private:
    * @brief Check whether a thread ID is valid for affinity scheduling.
    */
   bool IsValidThreadId(int thread_id) const {
-    const size_t active_count = desired_thread_count_.load();
+    const size_t active_count =
+        desired_thread_count_.load(std::memory_order_relaxed);
     return thread_id >= 0 && static_cast<size_t>(thread_id) < active_count &&
            static_cast<size_t>(thread_id) < affinity_queues_.size();
   }
@@ -692,9 +693,9 @@ private:
 
     target_queue->push_back(task_info->id);
 
-    task_info->assign_type.store(assign_type);
-    task_info->affinity_thread.store(affinity_thread);
-    task_info->OnWhichThread.store(-1);
+    task_info->assign_type.store(assign_type, std::memory_order_relaxed);
+    task_info->affinity_thread.store(affinity_thread, std::memory_order_relaxed);
+    task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
     task_registry_[task_info->id] = task_info;
   }
 
@@ -707,15 +708,16 @@ private:
       {
         std::unique_lock<std::mutex> lock(queue_mtx_);
         queue_cv_.wait(lock, [this, thread_index]() {
-          return !running_.load() || HasPendingTasksLocked() ||
-                 thread_index >= desired_thread_count_.load();
+          return !running_.load(std::memory_order_acquire) ||
+                 HasPendingTasksLocked() ||
+                 thread_index >= desired_thread_count_.load(std::memory_order_relaxed);
         });
 
-        if (!running_.load() && !HasPendingTasksLocked()) {
+        if (!running_.load(std::memory_order_relaxed) && !HasPendingTasksLocked()) {
           return std::nullopt;
         }
 
-        if (thread_index >= desired_thread_count_.load()) {
+        if (thread_index >= desired_thread_count_.load(std::memory_order_relaxed)) {
           const bool has_affinity = thread_index < affinity_queues_.size() &&
                                     !affinity_queues_[thread_index].empty();
           if (!has_affinity) {
@@ -817,8 +819,8 @@ private:
     auto ctrl_opt = task_info->callback.CallProgress(
         ProgressCBInfo(cur_task->src, cur_task->dst, cur_task->src_host,
                        cur_task->dst_host, cur_task->transferred,
-                       cur_task->size, task_info->total_transferred_size.load(),
-                       task_info->total_size.load()),
+                       cur_task->size, task_info->total_transferred_size.load(std::memory_order_relaxed),
+                       task_info->total_size.load(std::memory_order_relaxed)),
         &cb_error);
 
     if (cb_error.first != EC::Success && task_info->callback.need_error_cb) {
@@ -851,7 +853,7 @@ private:
     if (task_info->pd && task_info->pd->is_terminate()) {
       task_info->SetResult({EC::Terminate, "Task terminated before start"});
       task_info->SetStatus(TaskStatus::Finished);
-      task_info->finished_time.store(timenow());
+      task_info->finished_time.store(timenow(), std::memory_order_relaxed);
       return true;
     }
     return false;
@@ -1016,9 +1018,10 @@ private:
           buffer_written += bytes_written;
           total_written += bytes_written;
           task_info->total_transferred_size.fetch_add(
-              static_cast<size_t>(bytes_written));
-          task_info->this_task_transferred_size.store(total_written);
-          task->transferred = task_info->this_task_transferred_size.load();
+              static_cast<size_t>(bytes_written),
+              std::memory_order_relaxed);
+          task_info->this_task_transferred_size.store(total_written, std::memory_order_relaxed);
+          task->transferred = task_info->this_task_transferred_size.load(std::memory_order_relaxed);
           InnerCallback(task_info, pd, false);
         } else if (bytes_written == 0) {
           break;
@@ -1170,11 +1173,13 @@ private:
         }
         if (bytes_write > 0) {
           task_info->total_transferred_size.fetch_add(
-              static_cast<size_t>(bytes_write));
+              static_cast<size_t>(bytes_write),
+              std::memory_order_relaxed);
           task_info->this_task_transferred_size.store(
-              static_cast<size_t>(file_handle.offset));
+              static_cast<size_t>(file_handle.offset),
+              std::memory_order_relaxed);
         }
-        task->transferred = task_info->this_task_transferred_size.load();
+        task->transferred = task_info->this_task_transferred_size.load(std::memory_order_relaxed);
         InnerCallback(task_info, pd, false);
       }
     } else if (client->GetProtocol() == ClientProtocol::LOCAL) {
@@ -1213,11 +1218,13 @@ private:
         }
         if (bytes_write > 0) {
           task_info->total_transferred_size.fetch_add(
-              static_cast<size_t>(bytes_write));
+              static_cast<size_t>(bytes_write),
+              std::memory_order_relaxed);
           task_info->this_task_transferred_size.store(
-              static_cast<size_t>(file_handle.offset));
+              static_cast<size_t>(file_handle.offset),
+              std::memory_order_relaxed);
         }
-        task->transferred = task_info->this_task_transferred_size.load();
+        task->transferred = task_info->this_task_transferred_size.load(std::memory_order_relaxed);
         InnerCallback(task_info, pd, false);
       }
     } else if (client->GetProtocol() == ClientProtocol::FTP) {
@@ -1265,9 +1272,12 @@ private:
           if (cur_task) {
             const size_t delta = static_cast<size_t>(to_read);
             const size_t total =
-                ti->this_task_transferred_size.fetch_add(delta) + delta;
+                ti->this_task_transferred_size.fetch_add(
+                    delta, std::memory_order_relaxed) +
+                delta;
             cur_task->transferred = total;
-            ti->total_transferred_size.fetch_add(static_cast<size_t>(to_read));
+            ti->total_transferred_size.fetch_add(static_cast<size_t>(to_read),
+                                                 std::memory_order_relaxed);
           }
           pd->CallInnerCallback(false);
           return to_read;
@@ -1452,11 +1462,12 @@ private:
       reading_thread.join();
     }
 
-    task->transferred = task_info->this_task_transferred_size.load();
+    task->transferred = task_info->this_task_transferred_size.load(std::memory_order_relaxed);
     if (task->rcm.first != EC::Success) {
       return task->rcm;
     }
     if (task->transferred >= task->size) {
+
       return task->rcm;
     } else if (pd.is_terminate()) {
       return {EC::Terminate, "Task terminated by user"};
@@ -1468,8 +1479,8 @@ private:
    * @brief Worker thread function with affinity-aware scheduling.
    */
   void WorkerLoop(size_t thread_index) {
-    while (running_.load()) {
-      if (thread_index >= desired_thread_count_.load()) {
+    while (running_.load(std::memory_order_relaxed)) {
+      if (thread_index >= desired_thread_count_.load(std::memory_order_relaxed)) {
         std::lock_guard<std::mutex> lock(queue_mtx_);
         const bool has_affinity = thread_index < affinity_queues_.size() &&
                                   !affinity_queues_[thread_index].empty();
@@ -1485,13 +1496,14 @@ private:
 
       const auto &[task_id, task_info] = *task_opt;
       SetConducting(thread_index, task_id, task_info);
-      task_info->OnWhichThread.store(static_cast<int>(thread_index));
+      task_info->OnWhichThread.store(static_cast<int>(thread_index),
+                                     std::memory_order_relaxed);
 
       EnsureProgressData(task_info);
 
       if (ShouldSkipTask(task_info)) {
         task_info->pd.reset();
-        task_info->OnWhichThread.store(-1);
+        task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
         HandleCompletedTask(task_info);
         ClearConducting(thread_index);
         continue;
@@ -1499,9 +1511,9 @@ private:
 
       ExecuteTask(task_info);
       task_info->pd.reset();
-      task_info->OnWhichThread.store(-1);
+      task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
 
-      if (running_.load()) {
+      if (running_.load(std::memory_order_relaxed)) {
         HandleCompletedTask(task_info);
       }
       ClearConducting(thread_index);
@@ -1515,10 +1527,10 @@ private:
   // Execute a single TaskInfo
   void ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
     task_info->SetStatus(TaskStatus::Conducting);
-    task_info->start_time.store(timenow());
+    task_info->start_time.store(timenow(), std::memory_order_relaxed);
 
     if (task_info->callback.need_total_size_cb) {
-      task_info->callback.CallTotalSize(task_info->total_size.load());
+      task_info->callback.CallTotalSize(task_info->total_size.load(std::memory_order_relaxed));
     }
 
     auto &pd = *(task_info->pd);
@@ -1526,7 +1538,7 @@ private:
 
     if (!task_info->tasks) {
       task_info->SetStatus(TaskStatus::Finished);
-      task_info->finished_time.store(timenow());
+      task_info->finished_time.store(timenow(), std::memory_order_relaxed);
       return;
     }
 
@@ -1590,9 +1602,10 @@ private:
         resume_offset = 0;
       }
       task.transferred = resume_offset;
-      task_info->this_task_transferred_size.store(resume_offset);
+      task_info->this_task_transferred_size.store(resume_offset, std::memory_order_relaxed);
       if (resume_offset > 0) {
-        task_info->total_transferred_size.fetch_add(resume_offset);
+        task_info->total_transferred_size.fetch_add(resume_offset,
+                                                    std::memory_order_relaxed);
       }
       if (resume_offset >= task.size && resume_offset > 0) {
         task.IsFinished = true;
@@ -1604,14 +1617,16 @@ private:
         pd.ring_buffer = nullptr;
       }
       pd.ring_buffer = std::make_shared<StreamRingBuffer>(CalculateBufferSize(
-          src_client, dst_client, task_info->buffer_size.load()));
+          src_client, dst_client,
+          task_info->buffer_size.load(std::memory_order_relaxed)));
 
       task.rcm = TransferSingleFile(src_client, dst_client, task_info);
       task.IsFinished = true;
-
-      if (task.rcm.first != EC::Success && task_info->callback.need_error_cb &&
-          task.rcm.first != EC::Terminate) {
-
+      if (task.rcm.first == EC::Success) {
+        task_info->success_filenum.fetch_add(1, std::memory_order_relaxed);
+      } else if (task.rcm.first != EC::Success &&
+                 task_info->callback.need_error_cb &&
+                 task.rcm.first != EC::Terminate) {
         task_info->callback.CallError(ErrorCBInfo(
             task.rcm, task.src, task.dst, task.src_host, task.dst_host));
       }
@@ -1631,7 +1646,7 @@ private:
     // }
 
     task_info->SetStatus(TaskStatus::Finished);
-    task_info->finished_time.store(timenow());
+    task_info->finished_time.store(timenow(), std::memory_order_relaxed);
   }
 
 public:
@@ -1658,10 +1673,10 @@ public:
    * @return ECM result (timeout when tasks remain conducting).
    */
   ECM GracefulTerminate(int timeout_ms = 5000) {
-    if (is_deconstruct.load()) {
+    if (is_deconstruct.load(std::memory_order_relaxed)) {
       return {EC::Success, ""};
     }
-    running_.store(false);
+    running_.store(false, std::memory_order_relaxed);
     queue_cv_.notify_all();
     {
       std::lock_guard<std::mutex> lock(conducting_mtx_);
@@ -1685,7 +1700,7 @@ public:
         thread.join();
       }
     }
-    is_deconstruct.store(true);
+    is_deconstruct.store(true, std::memory_order_relaxed);
     return {EC::Success, ""};
   }
 
@@ -1705,11 +1720,11 @@ public:
    */
   size_t ThreadCount(size_t new_count = 0) {
     if (new_count == 0) {
-      return desired_thread_count_.load();
+      return desired_thread_count_.load(std::memory_order_relaxed);
     }
 
     new_count = ClampThreadCount(new_count);
-    const size_t current = desired_thread_count_.load();
+    const size_t current = desired_thread_count_.load(std::memory_order_relaxed);
     if (new_count == current) {
       return current;
     }
@@ -1729,7 +1744,7 @@ public:
         }
       }
 
-      desired_thread_count_.store(new_count);
+      desired_thread_count_.store(new_count, std::memory_order_relaxed);
       const size_t existing_threads = worker_threads_.size();
       for (size_t idx = existing_threads; idx < new_count; ++idx) {
         worker_threads_.emplace_back([this, idx]() { WorkerLoop(idx); });
@@ -1738,7 +1753,7 @@ public:
       return new_count;
     }
 
-    desired_thread_count_.store(new_count);
+    desired_thread_count_.store(new_count, std::memory_order_relaxed);
     queue_cv_.notify_all();
     return new_count;
   }
@@ -1747,7 +1762,7 @@ public:
   std::pair<std::vector<size_t>, std::vector<size_t>> get_thread_ids() {
     std::vector<size_t> occupied;
     std::vector<size_t> idle;
-    const size_t count = desired_thread_count_.load();
+    const size_t count = desired_thread_count_.load(std::memory_order_relaxed);
     occupied.reserve(count);
     idle.reserve(count);
     std::lock_guard<std::mutex> lock(conducting_mtx_);
@@ -1777,20 +1792,25 @@ public:
     if (task_info->id.empty() || IsTaskIdUsed_(task_info->id)) {
       task_info->id = GenerateTaskId_();
     }
-    task_info->submit_time.store(timenow());
+    task_info->submit_time.store(timenow(), std::memory_order_relaxed);
     task_info->SetStatus(TaskStatus::Pending);
 
-    if (task_info->total_size.load() == 0) {
+    if (task_info->total_size.load(std::memory_order_relaxed) == 0) {
       task_info->total_size.store(
           std::accumulate(task_info->tasks->begin(), task_info->tasks->end(), 0,
                           [](size_t sum, const TransferTask &task) {
                             return sum + task.size;
-                          }));
+                          }),
+          std::memory_order_relaxed);
     }
-    task_info->total_transferred_size.store(0);
-    task_info->OnWhichThread.store(-1);
+    if (task_info->filenum.load(std::memory_order_relaxed) == 0) {
+      task_info->filenum.store(task_info->tasks->size(),
+                               std::memory_order_relaxed);
+    }
+    task_info->total_transferred_size.store(0, std::memory_order_relaxed);
+    task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
 
-    const int requested_thread_id = task_info->affinity_thread.load();
+    const int requested_thread_id = task_info->affinity_thread.load(std::memory_order_relaxed);
     const bool affinity_valid = IsValidThreadId(requested_thread_id);
     const TaskAssignType assign_type =
         affinity_valid ? TaskAssignType::Affinity : TaskAssignType::Public;
@@ -1814,11 +1834,12 @@ public:
     task_info->id = GenerateTaskId_();
     task_info->tasks = tasks;
     task_info->CalTotalSize();
+    task_info->CalFileNum();
 
     task_info->hostm = hostm;
     task_info->callback = callback;
-    task_info->buffer_size.store(buffer_size);
-    task_info->affinity_thread.store(thread_id);
+    task_info->buffer_size.store(buffer_size, std::memory_order_relaxed);
+    task_info->affinity_thread.store(thread_id, std::memory_order_relaxed);
     return task_info;
   }
 
@@ -1973,8 +1994,8 @@ public:
       auto it = task_registry_.find(id);
       if (it != task_registry_.end() && it->second) {
         const auto &task_info = it->second;
-        const int affinity_thread = task_info->affinity_thread.load();
-        const TaskAssignType assign_type = task_info->assign_type.load();
+        const int affinity_thread = task_info->affinity_thread.load(std::memory_order_relaxed);
+        const TaskAssignType assign_type = task_info->assign_type.load(std::memory_order_relaxed);
         if (assign_type == TaskAssignType::Affinity && affinity_thread >= 0 &&
             static_cast<size_t>(affinity_thread) < affinity_queues_.size()) {
           affinity_queues_[static_cast<size_t>(affinity_thread)].remove(id);
@@ -1987,8 +2008,8 @@ public:
         }
         task_info->SetResult({EC::Terminate, "Task terminated before start"});
         task_info->SetStatus(TaskStatus::Finished);
-        task_info->finished_time.store(timenow());
-        task_info->OnWhichThread.store(-1);
+        task_info->finished_time.store(timenow(), std::memory_order_relaxed);
+        task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
         queue_cv_.notify_all();
         HandleCompletedTask(task_info);
         return {task_info, {EC::Success, ""}};

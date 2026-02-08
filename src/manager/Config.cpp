@@ -740,16 +740,16 @@ AMConfigManager::~AMConfigManager() { CloseHandles(); }
 
 /** @brief Start the background writer thread if not running. */
 void AMConfigManager::StartWriteThread_() {
-  if (write_running_.load()) {
+  if (write_running_.load(std::memory_order_relaxed)) {
     return;
   }
-  write_running_.store(true);
+  write_running_.store(true, std::memory_order_relaxed);
   write_thread_ = std::thread([this]() { WriteThreadLoop_(); });
 }
 
 /** @brief Stop the background writer thread and drain pending tasks. */
 void AMConfigManager::StopWriteThread_() {
-  write_running_.store(false);
+  write_running_.store(false, std::memory_order_relaxed);
   write_cv_.notify_all();
   if (write_thread_.joinable()) {
     write_thread_.join();
@@ -763,9 +763,11 @@ void AMConfigManager::WriteThreadLoop_() {
     {
       std::unique_lock<std::mutex> lock(write_mtx_);
       write_cv_.wait(lock, [this]() {
-        return !write_running_.load() || !write_queue_.empty();
+        return !write_running_.load(std::memory_order_relaxed) ||
+               !write_queue_.empty();
       });
-      if (!write_running_.load() && write_queue_.empty()) {
+      if (!write_running_.load(std::memory_order_relaxed) &&
+          write_queue_.empty()) {
         break;
       }
       task = std::move(write_queue_.front());
@@ -806,7 +808,7 @@ void AMConfigManager::SubmitWriteTask(std::function<void()> task) {
   if (!task) {
     return;
   }
-  if (!write_running_.load()) {
+  if (!write_running_.load(std::memory_order_relaxed)) {
     task();
     return;
   }

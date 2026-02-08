@@ -177,12 +177,12 @@ public:
       spinner_line = AMStr::amfmt("Connecting to {} Server   [{}]",
                                   protocol_label, nickname);
       spinner_line_len = spinner_line.size() + 3;
-      spinner_line_len_.store(spinner_line_len);
-      spinner_running.store(true);
+      spinner_line_len_.store(spinner_line_len, std::memory_order_relaxed);
+      spinner_running.store(true, std::memory_order_relaxed);
       spinner_thread = std::thread([&spinner_running, spinner_line, this]() {
         const std::vector<std::string> frames = {"▖", "▘", "▝", "▗"};
         size_t idx = 0;
-        while (spinner_running.load() && !spinner_stop_requested_.load()) {
+        while (spinner_running.load(std::memory_order_relaxed) && !spinner_stop_requested_.load(std::memory_order_relaxed)) {
           std::string indicator = frames[idx % frames.size()];
           std::cout << '\r' << indicator << "  " << spinner_line << std::flush;
           idx++;
@@ -192,7 +192,7 @@ public:
     }
 
     ECM rcm = base_client->Connect(force, flag);
-    spinner_running.store(false);
+    spinner_running.store(false, std::memory_order_relaxed);
     if (spinner_thread.joinable()) {
       spinner_thread.join();
       if (spinner_line_len > 0) {
@@ -261,12 +261,12 @@ public:
       spinner_line = AMStr::amfmt("Connecting to {} Server   [{}]",
                                   protocol_label, nickname);
       spinner_line_len = spinner_line.size() + 3;
-      spinner_line_len_.store(spinner_line_len);
-      spinner_running.store(true);
+      spinner_line_len_.store(spinner_line_len, std::memory_order_relaxed);
+      spinner_running.store(true, std::memory_order_relaxed);
       spinner_thread = std::thread([&spinner_running, spinner_line, this]() {
         const std::vector<std::string> frames = {"▖", "▘", "▝", "▗"};
         size_t idx = 0;
-        while (spinner_running.load() && !spinner_stop_requested_.load()) {
+        while (spinner_running.load(std::memory_order_relaxed) && !spinner_stop_requested_.load(std::memory_order_relaxed)) {
           std::string indicator = frames[idx % frames.size()];
           std::cout << '\r' << indicator << "  " << spinner_line << std::flush;
           idx++;
@@ -276,7 +276,7 @@ public:
     }
 
     ECM rcm = base_client->Connect(force, flag);
-    spinner_running.store(false);
+    spinner_running.store(false, std::memory_order_relaxed);
     if (spinner_thread.joinable()) {
       spinner_thread.join();
       if (spinner_line_len > 0) {
@@ -530,7 +530,7 @@ public:
 
     auto existing = Clients().GetHost(prefix);
     if (!existing) {
-      if (AMIsInteractive.load()) {
+      if (AMIsInteractive.load(std::memory_order_relaxed)) {
         bool canceled = false;
         if (!AMPromptManager::Instance().PromptYesNo(
                 "Client not found. Create it? (y/N): ", &canceled)) {
@@ -700,7 +700,7 @@ private:
     return [this, auth_cb, quiet, spinner_running](const AuthCBInfo &info) {
       RequestSpinnerStop_();
       if (spinner_running) {
-        spinner_running->store(false);
+        spinner_running->store(false, std::memory_order_relaxed);
       }
       int prev_level = -99999;
       if (quiet) {
@@ -747,18 +747,18 @@ private:
    * @brief Reset spinner stop state before starting a new spinner thread.
    */
   void ResetSpinnerStop_() {
-    spinner_stop_requested_.store(false);
-    spinner_line_len_.store(0);
+    spinner_stop_requested_.store(false, std::memory_order_relaxed);
+    spinner_line_len_.store(0, std::memory_order_relaxed);
   }
 
   /**
    * @brief Stop spinner output permanently for the current connect attempt.
    */
   void RequestSpinnerStop_() {
-    if (spinner_stop_requested_.exchange(true)) {
+    if (spinner_stop_requested_.exchange(true, std::memory_order_relaxed)) {
       return;
     }
-    const size_t line_len = spinner_line_len_.load();
+    const size_t line_len = spinner_line_len_.load(std::memory_order_relaxed);
     if (line_len > 0) {
       std::cout << '\r' << std::string(line_len, ' ') << '\r' << std::flush;
     }

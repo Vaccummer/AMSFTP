@@ -928,7 +928,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.ch_cmd->parsed()) {
-    const bool is_interactive = enforce_interactive || AMIsInteractive.load();
+    const bool is_interactive = enforce_interactive || AMIsInteractive.load(std::memory_order_relaxed);
     if (is_interactive) {
       result.rcm = filesystem.change_client(args.ch.nickname, flag);
       SetCliExitCode(static_cast<int>(result.rcm.first));
@@ -950,7 +950,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.connect_cmd->parsed()) {
-    const bool is_interactive = enforce_interactive || AMIsInteractive.load();
+    const bool is_interactive = enforce_interactive || AMIsInteractive.load(std::memory_order_relaxed);
     result.rcm = filesystem.connect(args.connect.nickname, args.connect.force,
                                     flag, false);
     if (result.rcm.first != EC::Success) {
@@ -1029,7 +1029,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     return result;
   }
 
-  if (!enforce_interactive && !AMIsInteractive.load()) {
+  if (!enforce_interactive && !AMIsInteractive.load(std::memory_order_relaxed)) {
     std::string msg =
         AMStr::amfmt("{} not supported in Non-Interactive mode", command_name);
     result.rcm = {EC::OperationUnsupported, msg};

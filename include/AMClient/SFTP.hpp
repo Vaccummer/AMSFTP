@@ -47,7 +47,7 @@ inline void AMInitWSA() {
   if (result != 0) {
     throw std::runtime_error("WSAStartup failed");
   }
-  is_wsa_initialized.store(true);
+  is_wsa_initialized.store(true, std::memory_order_relaxed);
 }
 #endif
 
@@ -332,7 +332,7 @@ private:
 
   void Disconnect() {
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    has_connected.store(false);
+    has_connected.store(false, std::memory_order_relaxed);
     if (sftp) {
       libssh2_sftp_shutdown(sftp);
       sftp = nullptr;
@@ -371,7 +371,7 @@ public:
     if (private_keys.empty()) {
       LoadDefaultPrivateKeys();
     }
-    has_connected.store(false);
+    has_connected.store(false, std::memory_order_relaxed);
   }
 
   inline WaitResult wait_for_socket(SocketWaitType wait_dir,
@@ -502,12 +502,12 @@ public:
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     start_time = start_time == -1 ? am_ms() : start_time;
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    if (has_connected.load()) {
+    if (has_connected.load(std::memory_order_relaxed)) {
       if (!force) {
         return GetState();
       }
       Disconnect();
-      has_connected.store(false);
+      has_connected.store(false, std::memory_order_relaxed);
     }
 
     ECM rcm = {EC::Success, ""};
@@ -764,7 +764,7 @@ public:
       return rcm;
     }
 
-    has_connected.store(true);
+    has_connected.store(true, std::memory_order_relaxed);
     return {EC::Success, ""};
 
   interrupted_or_sock_error:
@@ -877,7 +877,7 @@ private:
   std::mutex terminal_cb_mtx;
 
   void StartReader() {
-    if (reader_running.load()) {
+    if (reader_running.load(std::memory_order_relaxed)) {
       return;
     }
     bool has_cb = false;
@@ -885,17 +885,17 @@ private:
       std::lock_guard<std::mutex> lock(terminal_cb_mtx);
       has_cb = static_cast<bool>(terminal_output_cb);
     }
-    reader_running.store(true);
-    reader_paused.store(!has_cb);
+    reader_running.store(true, std::memory_order_relaxed);
+    reader_paused.store(!has_cb, std::memory_order_relaxed);
     reader_thread = std::thread([this]() { ReaderLoop(); });
   }
 
   void StopReader() {
-    if (!reader_running.load() && !reader_thread.joinable()) {
+    if (!reader_running.load(std::memory_order_relaxed) && !reader_thread.joinable()) {
       return;
     }
-    reader_running.store(false);
-    reader_paused.store(false);
+    reader_running.store(false, std::memory_order_relaxed);
+    reader_paused.store(false, std::memory_order_relaxed);
     reader_cv.notify_all();
     if (reader_thread.joinable()) {
       reader_thread.join();
@@ -915,17 +915,17 @@ private:
 
   void ReaderLoop() {
     std::array<char, 4096> buffer;
-    while (reader_running.load()) {
-      if (reader_paused.load()) {
+    while (reader_running.load(std::memory_order_relaxed)) {
+      if (reader_paused.load(std::memory_order_relaxed)) {
         std::unique_lock<std::mutex> lock(reader_cv_mtx);
         reader_cv.wait(lock, [this]() {
-          return !reader_paused.load() || !reader_running.load();
+          return !reader_paused.load(std::memory_order_relaxed) || !reader_running.load(std::memory_order_relaxed);
         });
         continue;
       }
 
       if (terminal_interrupt_flag && terminal_interrupt_flag->check()) {
-        reader_running.store(false);
+        reader_running.store(false, std::memory_order_relaxed);
         break;
       }
 
@@ -935,7 +935,7 @@ private:
       }
 
       int64_t start_time = am_ms();
-      int wait_timeout = reader_wait_timeout_ms.load();
+      int wait_timeout = reader_wait_timeout_ms.load(std::memory_order_relaxed);
       WaitResult wr =
           wait_for_socket(SocketWaitType::Read, terminal_interrupt_flag,
                           start_time, wait_timeout);
@@ -943,7 +943,7 @@ private:
         continue;
       }
       if (wr == WaitResult::Interrupted) {
-        reader_running.store(false);
+        reader_running.store(false, std::memory_order_relaxed);
         break;
       }
       if (wr == WaitResult::Error) {
@@ -965,7 +965,7 @@ private:
           if (nbytes == 0) {
             terminal_channel->close();
             terminal_channel.reset();
-            reader_running.store(false);
+            reader_running.store(false, std::memory_order_relaxed);
             break;
           }
           if (nbytes == LIBSSH2_ERROR_EAGAIN) {
@@ -973,7 +973,7 @@ private:
           }
           terminal_channel->close();
           terminal_channel.reset();
-          reader_running.store(false);
+          reader_running.store(false, std::memory_order_relaxed);
           break;
         }
       }
@@ -1096,7 +1096,7 @@ public:
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     start_time = start_time == -1 ? am_ms() : start_time;
 
-    if (has_connected.load() && session && !force) {
+    if (has_connected.load(std::memory_order_relaxed) && session && !force) {
       ECM chk = Check(interrupt_flag, timeout_ms, start_time);
       if (chk.first == EC::Success) {
         return chk;
@@ -1145,7 +1145,7 @@ public:
     }
     (void)timeout_ms;
     (void)start_time;
-    if (!session || sock == INVALID_SOCKET || !has_connected.load()) {
+    if (!session || sock == INVALID_SOCKET || !has_connected.load(std::memory_order_relaxed)) {
       ECM rcm = {EC::NoConnection, "Session not connected"};
       SetState(rcm);
       return rcm;
@@ -1161,10 +1161,10 @@ public:
     return {EC::Success, ""};
   }
 
-  void PauseReading() override { reader_paused.store(true); }
+  void PauseReading() override { reader_paused.store(true, std::memory_order_relaxed); }
 
   void ResumeReading() override {
-    reader_paused.store(false);
+    reader_paused.store(false, std::memory_order_relaxed);
     reader_cv.notify_all();
   }
 
@@ -1185,7 +1185,7 @@ public:
     if (timeout_ms < 1) {
       timeout_ms = 1;
     }
-    reader_wait_timeout_ms.store(timeout_ms);
+    reader_wait_timeout_ms.store(timeout_ms, std::memory_order_relaxed);
   }
 
   ECM SetTerminalWindowInfo(const TerminalWindowInfo &window,
@@ -1337,7 +1337,7 @@ public:
     (void)interrupt_flag;
     (void)timeout_ms;
     (void)start_time;
-    closed.store(false);
+    closed.store(false, std::memory_order_relaxed);
     return {EC::Success, ""};
   }
 
@@ -1348,15 +1348,15 @@ public:
     if (interrupt_flag && interrupt_flag->check()) {
       return {EC::Terminate, "Check interrupted"};
     }
-    if (closed.load()) {
+    if (closed.load(std::memory_order_relaxed)) {
       return {EC::NoConnection, "Terminal closed"};
     }
     return {EC::Success, ""};
   }
 
-  void PauseReading() override { paused.store(true); }
+  void PauseReading() override { paused.store(true, std::memory_order_relaxed); }
 
-  void ResumeReading() override { paused.store(false); }
+  void ResumeReading() override { paused.store(false, std::memory_order_relaxed); }
 
   void
   SetTerminalOutputCallback(TerminalOutputCallback output_cb = {}) override {
@@ -1378,12 +1378,12 @@ public:
     if (timeout_ms < 1) {
       timeout_ms = 1;
     }
-    reader_wait_timeout_ms.store(timeout_ms);
+    reader_wait_timeout_ms.store(timeout_ms, std::memory_order_relaxed);
   }
 
   ECM TerminalWrite(const std::string &msg, amf interrupt_flag = nullptr,
                     int timeout_ms = -1, int64_t start_time = -1) override {
-    if (closed.load()) {
+    if (closed.load(std::memory_order_relaxed)) {
       return {EC::NoConnection, "Terminal closed"};
     }
     if (msg.empty()) {
@@ -1399,7 +1399,7 @@ public:
     }
 
     if (timeout_ms <= 0) {
-      timeout_ms = reader_wait_timeout_ms.load();
+      timeout_ms = reader_wait_timeout_ms.load(std::memory_order_relaxed);
     }
     start_time = start_time == -1 ? am_ms() : start_time;
 
@@ -1423,7 +1423,7 @@ public:
         return {EC::OperationTimeout, "Terminal write timed out"};
       }
 
-      if (!paused.load()) {
+      if (!paused.load(std::memory_order_relaxed)) {
         TerminalOutputCallback cb;
         {
           std::lock_guard<std::mutex> lock(terminal_cb_mtx);
@@ -1443,7 +1443,7 @@ public:
   }
 
   ECM TerminalClose() override {
-    closed.store(true);
+    closed.store(true, std::memory_order_relaxed);
     return {EC::Success, ""};
   }
 };

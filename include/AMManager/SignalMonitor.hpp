@@ -77,7 +77,7 @@ public:
    * @brief Start the background worker thread.
    */
   void Start() {
-    if (running_.exchange(true)) {
+    if (running_.exchange(true, std::memory_order_acq_rel)) {
       return;
     }
     worker_ = std::thread([this]() { Run_(); });
@@ -87,7 +87,7 @@ public:
    * @brief Stop the background worker thread.
    */
   void Stop() {
-    running_.store(false);
+    running_.store(false, std::memory_order_release);
     if (worker_.joinable()) {
       worker_.join();
     }
@@ -96,7 +96,9 @@ public:
   /**
    * @brief Get the last signal observed by the worker loop.
    */
-  int LastSignal() const { return last_handled_signal_.load(); }
+  int LastSignal() const {
+    return last_handled_signal_.load(std::memory_order_relaxed);
+  }
 
   /**
    * @brief Register a signal hook (name must be unique).
@@ -197,10 +199,10 @@ private:
    * @brief Worker loop that consumes recorded signals.
    */
   void Run_() {
-    while (running_.load()) {
+    while (running_.load(std::memory_order_acquire)) {
       int signum = ConsumeSignal_();
       if (signum != 0) {
-        last_handled_signal_.store(signum);
+        last_handled_signal_.store(signum, std::memory_order_relaxed);
 #ifdef _WIN32
         InstallHandlers();
 #endif

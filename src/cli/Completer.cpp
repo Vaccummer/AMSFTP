@@ -877,8 +877,9 @@ private:
     }
     last_input_ = input;
     last_cursor_ = cursor;
-    last_request_id_ = request_counter_.fetch_add(1) + 1;
-    current_request_id_.store(last_request_id_);
+    last_request_id_ =
+        request_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
+    current_request_id_.store(last_request_id_, std::memory_order_relaxed);
     {
       std::lock_guard<std::mutex> res_lock(async_result_mtx_);
       async_result_.reset();
@@ -1732,7 +1733,7 @@ private:
    * @brief Stop the async worker thread.
    */
   void StopAsyncWorker() {
-    async_stop_.store(true);
+    async_stop_.store(true, std::memory_order_relaxed);
     async_cv_.notify_all();
     if (async_thread_.joinable()) {
       async_thread_.join();
@@ -1748,9 +1749,9 @@ private:
       {
         std::unique_lock<std::mutex> lock(async_mtx_);
         async_cv_.wait(lock, [this]() {
-          return async_stop_.load() || pending_request_.has_value();
+          return async_stop_.load(std::memory_order_relaxed) || pending_request_.has_value();
         });
-        if (async_stop_.load()) {
+        if (async_stop_.load(std::memory_order_relaxed)) {
           break;
         }
         request = *pending_request_;
@@ -1760,11 +1761,11 @@ private:
         if (delay_ms > 0) {
           auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(delay_ms);
-          while (!async_stop_.load()) {
+          while (!async_stop_.load(std::memory_order_relaxed)) {
             if (async_cv_.wait_until(lock, deadline, [this]() {
-                  return async_stop_.load() || pending_request_.has_value();
+                  return async_stop_.load(std::memory_order_relaxed) || pending_request_.has_value();
                 })) {
-              if (async_stop_.load()) {
+              if (async_stop_.load(std::memory_order_relaxed)) {
                 break;
               }
               request = *pending_request_;
@@ -1776,12 +1777,12 @@ private:
             break;
           }
         }
-        if (async_stop_.load()) {
+        if (async_stop_.load(std::memory_order_relaxed)) {
           break;
         }
       }
 
-      if (request.request_id != current_request_id_.load()) {
+      if (request.request_id != current_request_id_.load(std::memory_order_relaxed)) {
         continue;
       }
 
@@ -1804,7 +1805,7 @@ private:
                         std::move(listed)};
       }
 
-      if (request.request_id != current_request_id_.load()) {
+      if (request.request_id != current_request_id_.load(std::memory_order_relaxed)) {
         continue;
       }
 
@@ -1881,13 +1882,13 @@ void AMCompleter::ClearCache() {
 /**
  * @brief Return the currently active completer instance.
  */
-AMCompleter *AMCompleter::Active() { return g_active_completer.load(); }
+AMCompleter *AMCompleter::Active() { return g_active_completer.load(std::memory_order_relaxed); }
 
 /**
  * @brief Set the active completer instance.
  */
 void AMCompleter::SetActive(AMCompleter *instance) {
-  g_active_completer.store(instance);
+  g_active_completer.store(instance, std::memory_order_relaxed);
 }
 
 /**

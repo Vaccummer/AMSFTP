@@ -5,6 +5,7 @@
 #include <indicators/color.hpp>
 #include <indicators/setting.hpp>
 #define _WINSOCKAPI_
+#include "Isocline/isocline.h"
 #include <algorithm>
 #include <boost/locale/encoding.hpp>
 #include <cctype>
@@ -905,6 +906,7 @@ public:
       showing_ = false;
       active_count_.fetch_sub(1, std::memory_order_relaxed);
     }
+    ic_print("\x1b[0m");
   }
 
   /**

@@ -1105,7 +1105,7 @@ public:
     SetState({EC::Success, ""});
     trace(TraceLevel::Info, EC::Success, nickname, "Connect",
           "Connect success");
-    connected.store(true);
+    connected.store(true, std::memory_order_relaxed);
     return rcm;
   }
 
@@ -1215,19 +1215,19 @@ public:
 
     // 优先使用 MLST（现代方法）
     /*
-    if (mlst_supported.load()) {
+    if (mlst_supported.load(std::memory_order_relaxed)) {
       auto [ecm, info] =
           try_mlst(pathf, interrupt_flag, timeout_ms, start_time);
 
       if (ecm.first == EC::Success) {
-        mlst_checked.store(true);
+        mlst_checked.store(true, std::memory_order_relaxed);
         return {ecm, info};
       }
 
       // MLST 不支持，标记并回退
       if (ecm.first == EC::OperationUnsupported) {
-        mlst_supported.store(false);
-        mlst_checked.store(true);
+        mlst_supported.store(false, std::memory_order_relaxed);
+        mlst_checked.store(true, std::memory_order_relaxed);
         // 继续使用传统方法
       } else if (ecm.first == EC::Terminate ||
                  ecm.first == EC::OperationTimeout) {
@@ -1277,14 +1277,14 @@ public:
           try_mlsd(pathf, interrupt_flag, max_time_ms, start_time);
 
       if (ecm.first == EC::Success) {
-        mlst_checked.store(true);
+        mlst_checked.store(true, std::memory_order_relaxed);
         return {ecm, file_list};
       }
 
       // MLSD 不支持，标记并回退
       if (ecm.first == EC::OperationUnsupported) {
-        mlst_supported.store(false);
-        mlst_checked.store(true);
+        mlst_supported.store(false, std::memory_order_relaxed);
+        mlst_checked.store(true, std::memory_order_relaxed);
         // 继续使用传统方法
       } else if (ecm.first == EC::Terminate ||
                  ecm.first == EC::OperationTimeout) {
