@@ -1419,7 +1419,7 @@ void UpdatePromptState_(PromptState &state, const ECM &rcm,
  */
 int RunInteractiveLoop(const std::string &app_name,
                        const CliManagers &managers) {
-  AMIsInteractive.store(true);
+  AMIsInteractive.store(true, std::memory_order_relaxed);
 
   AMPromptManager &prompt = AMPromptManager::Instance();
   AMConfigManager &config_manager = *managers.config_manager;
@@ -1595,6 +1595,6 @@ int RunInteractiveLoop(const std::string &app_name,
   }
 
   prompt.FlushHistory(config_manager);
-  AMIsInteractive.store(false);
+  AMIsInteractive.store(false, std::memory_order_relaxed);
   return g_cli_exit_code;
 }

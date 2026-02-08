@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -112,27 +113,20 @@ void AMPromptManager::Print(const std::vector<std::string> &items,
 
   const std::string output = oss.str();
   std::string out = output;
-  if (ic_is_editline_active() &&
-      (out.empty() || (out.front() != '\r' && out.front() != '\n'))) {
-    // ensure we break out of the active input line before printing
-    out = "\r\n" + out;
-  }
   if (out.empty() || out.back() != '\n') {
     out.push_back('\n');
   }
 
-  std::lock_guard<std::mutex> lock(print_mutex_);
-
-  if (AMProgressBar::IsAnyBarShowing()) {
+  if (AMProgressBar::IsAnyBarShowing() || ic_is_editline_active()) {
+    std::lock_guard<std::mutex> lock(cached_output_mutex);
     cached_output_ += out;
     return;
   }
-
-  ic_print("\x1b[0m");
-  ic_print(out.c_str());
-  ic_print("\x1b[0m");
-  ic_term_flush();
-  ic_request_refresh_async();
+  {
+    std::lock_guard<std::mutex> lock(print_mutex_);
+    ic_print(out.c_str());
+    ic_term_flush();
+  }
 }
 
 void AMPromptManager::ErrorFormat(const std::string &error_name,
@@ -208,114 +202,116 @@ bool AMPromptManager::PromptYesNo(const std::string &prompt, bool *canceled) {
   return lower == "y" || lower == "yes";
 }
 
-/**
- * @brief Placeholder result printer entry; delegates to resultprint().
- */
-void AMPromptManager::PrintTaskResult(
-    const std::shared_ptr<TaskInfo> &task_info) {
-  resultprint(task_info);
-}
-
 void AMPromptManager::FlushCachedOutput() {
-  std::lock_guard<std::mutex> lock(print_mutex_);
+
   if (cached_output_.empty()) {
     return;
   }
-  ic_print("\x1b[0m");
-  ic_print(cached_output_.c_str());
-  ic_print("\x1b[0m");
-  ic_term_flush();
-  ic_request_refresh_async();
-  cached_output_.clear();
-}
-
-/**
- * @brief Placeholder implementation that prints task execution results.
- */
-void AMPromptManager::resultprint(const std::shared_ptr<TaskInfo> &task_info) {
-  if (!task_info || task_info->quiet) {
-    return;
-  }
-
-  TaskStatus status = task_info->GetStatus();
-  const char *status_str = "Unknown";
-  switch (status) {
-  case TaskStatus::Pending:
-    status_str = "Pending";
-    break;
-  case TaskStatus::Conducting:
-    status_str = "Conducting";
-    break;
-  case TaskStatus::Finished:
-    status_str = "Finished";
-    break;
-  default:
-    break;
-  }
-
-  const double submit_time = task_info->submit_time.load();
-  const double start_time = task_info->start_time.load();
-  const double finished_time = task_info->finished_time.load();
-  const double duration_s = (start_time > 0 && finished_time >= start_time)
-                                ? (finished_time - start_time)
-                                : 0.0;
-
-  size_t total = 0;
-  size_t success = 0;
-  size_t failed = 0;
-  size_t terminated = 0;
-
-  ECM last_error = {EC::Success, ""};
-
   {
-    std::lock_guard<std::mutex> lock(task_info->mtx);
-    auto tasks_ptr = task_info->tasks;
-    if (tasks_ptr) {
-      total = tasks_ptr->size();
-      for (const auto &task : *tasks_ptr) {
-        if (task.rcm.first == EC::Success) {
-          ++success;
-        } else if (task.rcm.first == EC::Terminate) {
-          ++terminated;
-          last_error = task.rcm;
-        } else {
-          ++failed;
-          last_error = task.rcm;
-        }
-      }
-    }
+    std::lock_guard<std::mutex> lock(print_mutex_);
+    ic_print("\x1b[0m");
+    ic_print(cached_output_.c_str());
+    ic_print("\x1b[0m");
+    ic_term_flush();
   }
-
-  std::ostringstream oss;
-  oss << "[TaskResult] id=" << task_info->id << " status=" << status_str
-      << " total=" << total << " success=" << success << " failed=" << failed
-      << " terminated=" << terminated;
-  if (duration_s > 0.0) {
-    oss << " duration_s=" << duration_s;
+  {
+    std::lock_guard<std::mutex> lock2(cached_output_mutex);
+    cached_output_.clear();
   }
-  if (submit_time > 0.0) {
-    oss << " submit_time=" << submit_time;
-  }
-  if (last_error.first != EC::Success && !last_error.second.empty()) {
-    oss << " last_error=\"" << last_error.second << "\"";
-  }
-
-  Print(oss.str());
 }
 
-/**
- * @brief Placeholder implementation that prints submitted task metadata.
- */
-void AMPromptManager::taskprint(const std::shared_ptr<TaskInfo> &task_info) {
-  if (!task_info || task_info->quiet) {
-    return;
-  }
-  std::ostringstream oss;
-  oss << "[TaskSubmit] id=" << task_info->id
-      << " affinity_thread=" << task_info->affinity_thread.load()
-      << " status=" << static_cast<int>(task_info->GetStatus());
-  Print(oss.str());
-}
+// /**
+//  * @brief Placeholder implementation that prints task execution results.
+//  */
+// void AMPromptManager::resultprint(const std::shared_ptr<TaskInfo> &task_info)
+// {
+//   if (!task_info || task_info->quiet) {
+//     return;
+//   }
+
+//   TaskStatus status = task_info->GetStatus();
+//   const char *status_str = "Unknown";
+//   switch (status) {
+//   case TaskStatus::Pending:
+//     status_str = "Pending";
+//     break;
+//   case TaskStatus::Conducting:
+//     status_str = "Conducting";
+//     break;
+//   case TaskStatus::Finished:
+//     status_str = "Finished";
+//     break;
+//   default:
+//     break;
+//   }
+
+//   const double submit_time =
+//       task_info->submit_time.load(std::memory_order_relaxed);
+//   const double start_time =
+//       task_info->start_time.load(std::memory_order_relaxed);
+//   const double finished_time =
+//       task_info->finished_time.load(std::memory_order_relaxed);
+//   const double duration_s = (start_time > 0 && finished_time >= start_time)
+//                                 ? (finished_time - start_time)
+//                                 : 0.0;
+
+//   size_t total = 0;
+//   size_t success = 0;
+//   size_t failed = 0;
+//   size_t terminated = 0;
+
+//   ECM last_error = {EC::Success, ""};
+
+//   {
+//     std::lock_guard<std::mutex> lock(task_info->mtx);
+//     auto tasks_ptr = task_info->tasks;
+//     if (tasks_ptr) {
+//       total = tasks_ptr->size();
+//       for (const auto &task : *tasks_ptr) {
+//         if (task.rcm.first == EC::Success) {
+//           ++success;
+//         } else if (task.rcm.first == EC::Terminate) {
+//           ++terminated;
+//           last_error = task.rcm;
+//         } else {
+//           ++failed;
+//           last_error = task.rcm;
+//         }
+//       }
+//     }
+//   }
+
+//   std::ostringstream oss;
+//   oss << "[TaskResult] id=" << task_info->id << " status=" << status_str
+//       << " total=" << total << " success=" << success << " failed=" << failed
+//       << " terminated=" << terminated;
+//   if (duration_s > 0.0) {
+//     oss << " duration_s=" << duration_s;
+//   }
+//   if (submit_time > 0.0) {
+//     oss << " submit_time=" << submit_time;
+//   }
+//   if (last_error.first != EC::Success && !last_error.second.empty()) {
+//     oss << " last_error=\"" << last_error.second << "\"";
+//   }
+
+//   Print(oss.str());
+// }
+
+// /**
+//  * @brief Placeholder implementation that prints submitted task metadata.
+//  */
+// void AMPromptManager::taskprint(const std::shared_ptr<TaskInfo> &task_info) {
+//   if (!task_info || task_info->quiet) {
+//     return;
+//   }
+//   std::ostringstream oss;
+//   oss << "[TaskSubmit] id=" << task_info->id
+//       << " affinity_thread="
+//       << task_info->affinity_thread.load(std::memory_order_relaxed)
+//       << " status=" << static_cast<int>(task_info->GetStatus());
+//   Print(oss.str());
+// }
 
 bool AMPromptManager::Prompt(const std::string &prompt,
                              const std::string &placeholder,

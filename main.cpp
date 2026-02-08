@@ -28,7 +28,7 @@ int main2() {
   if (result != 0) {
     throw std::runtime_error("WSAStartup failed");
   }
-  is_wsa_initialized.store(true);
+  is_wsa_initialized.store(true, std::memory_order_relaxed);
 #endif
   auto wsl_con = ConRequst("wsl", "172.26.36.83", "am", 22, "1984");
   auto wsl = std::make_shared<AMSFTPClient>(wsl_con);
@@ -94,7 +94,7 @@ int main(int argc, char **argv) {
     auto &filesystem = AMFileSystem::Instance(client_manager, config_manager);
     AMClientManager::global_interrupt_flag = amgif;
     AMFileSystem::global_interrupt_flag = amgif;
-    AMIsInteractive.store(false);
+    AMIsInteractive.store(false, std::memory_order_relaxed);
 
     CliManagers managers;
     managers.config_manager =

@@ -96,7 +96,8 @@ inline size_t GenerateUIDInt() {
     static std::atomic<size_t> counter{0};
     size_t t = static_cast<size_t>(
         std::chrono::steady_clock::now().time_since_epoch().count());
-    return t ^ (++counter * 0x9e3779b97f4a7c15ULL);
+    return t ^ ((counter.fetch_add(1, std::memory_order_relaxed) + 1) *
+                0x9e3779b97f4a7c15ULL);
   }
 }
 
@@ -165,13 +166,17 @@ public:
   /**
    * @brief Return true if the interrupt flag has been marked as killed.
    */
-  inline bool iskill() const { return is_killed.load(); }
-  inline bool check() { return is_interrupted.load(); }
-  inline void set(bool value) { is_interrupted.store(value); }
-  inline void reset() { is_interrupted.store(false); }
+  inline bool iskill() const {
+    return is_killed.load(std::memory_order_relaxed);
+  }
+  inline bool check() { return is_interrupted.load(std::memory_order_relaxed); }
+  inline void set(bool value) {
+    is_interrupted.store(value, std::memory_order_relaxed);
+  }
+  inline void reset() { is_interrupted.store(false, std::memory_order_relaxed); }
   inline void kill() {
-    is_interrupted.store(true);
-    is_killed.store(true);
+    is_interrupted.store(true, std::memory_order_relaxed);
+    is_killed.store(true, std::memory_order_relaxed);
   }
 };
 
@@ -941,23 +946,29 @@ struct WkProgressData {
 
   // Control signal helpers
   bool is_terminate() const {
-    return control_sign.load() == static_cast<int>(ControlSignal::Terminate);
+    return control_sign.load(std::memory_order_relaxed) ==
+           static_cast<int>(ControlSignal::Terminate);
   }
   bool is_pause() const {
-    return control_sign.load() == static_cast<int>(ControlSignal::Pause);
+    return control_sign.load(std::memory_order_relaxed) ==
+           static_cast<int>(ControlSignal::Pause);
   }
   bool is_running() const {
-    return control_sign.load() == static_cast<int>(ControlSignal::Running);
+    return control_sign.load(std::memory_order_relaxed) ==
+           static_cast<int>(ControlSignal::Running);
   }
 
   void set_terminate() {
-    control_sign.store(static_cast<int>(ControlSignal::Terminate));
+    control_sign.store(static_cast<int>(ControlSignal::Terminate),
+                       std::memory_order_relaxed);
   }
   void set_pause() {
-    control_sign.store(static_cast<int>(ControlSignal::Pause));
+    control_sign.store(static_cast<int>(ControlSignal::Pause),
+                       std::memory_order_relaxed);
   }
   void set_running() {
-    control_sign.store(static_cast<int>(ControlSignal::Running));
+    control_sign.store(static_cast<int>(ControlSignal::Running),
+                       std::memory_order_relaxed);
   }
 
   void CallInnerCallback(bool force = false) {
@@ -1027,6 +1038,16 @@ struct TaskInfo {
    * @brief Progress tracking: total bytes planned.
    */
   std::atomic<size_t> total_size{0};
+
+  /**
+   * @brief Total number of files in this task.
+   */
+  std::atomic<size_t> filenum{0};
+
+  /**
+   * @brief Number of successfully transferred files.
+   */
+  std::atomic<size_t> success_filenum{0};
 
   /**
    * @brief Progress tracking: transferred bytes for the current task.
@@ -1108,12 +1129,14 @@ struct TaskInfo {
   /**
    * @brief Safely update the task status.
    */
-  void SetStatus(TaskStatus new_status) { status.store(new_status); }
+  void SetStatus(TaskStatus new_status) {
+    status.store(new_status, std::memory_order_release);
+  }
 
   /**
    * @brief Safely read the task status.
    */
-  TaskStatus GetStatus() const { return status.load(); }
+  TaskStatus GetStatus() const { return status.load(std::memory_order_acquire); }
 
   /**
    * @brief Safely set the current task pointer.
@@ -1155,7 +1178,7 @@ struct TaskInfo {
    * @return Updated total size.
    */
   size_t CalTotalSize(bool force = false) {
-    const size_t current = total_size.load();
+    const size_t current = total_size.load(std::memory_order_relaxed);
     if (!force && current != 0) {
       return current;
     }
@@ -1171,8 +1194,32 @@ struct TaskInfo {
     for (const auto &task : *local_tasks) {
       sum += task.size;
     }
-    total_size.store(sum);
+    total_size.store(sum, std::memory_order_relaxed);
     return sum;
+  }
+
+  /**
+   * @brief Calculate and update file count from tasks when needed.
+   *
+   * @param force Recalculate even if filenum is already set.
+   * @return Updated file count.
+   */
+  size_t CalFileNum(bool force = false) {
+    const size_t current = filenum.load(std::memory_order_relaxed);
+    if (!force && current != 0) {
+      return current;
+    }
+    std::shared_ptr<TASKS> local_tasks;
+    {
+      std::lock_guard<std::mutex> lock(mtx);
+      local_tasks = tasks;
+    }
+    if (!local_tasks) {
+      return current;
+    }
+    const size_t count = local_tasks->size();
+    filenum.store(count, std::memory_order_relaxed);
+    return count;
   }
 };
 

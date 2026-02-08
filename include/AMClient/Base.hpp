@@ -41,9 +41,9 @@
 extern std::atomic<bool> is_wsa_initialized;
 inline void cleanup_wsa() {
   // 清理wsa，如果wsa已经初始化，则清理wsa
-  if (is_wsa_initialized.load()) {
+  if (is_wsa_initialized.load(std::memory_order_relaxed)) {
     WSACleanup();
-    is_wsa_initialized.store(false);
+    is_wsa_initialized.store(false, std::memory_order_relaxed);
   }
 }
 #endif
@@ -182,11 +182,11 @@ public:
 
   void trace(const TraceInfo &trace_info) {
     std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
-    if (is_trace_pause.load()) {
+    if (is_trace_pause.load(std::memory_order_relaxed)) {
       return;
     }
     this->push(trace_info);
-    if (is_trace_cb.load()) {
+    if (is_trace_cb.load(std::memory_order_relaxed)) {
       CallCallbackSafe(trace_cb, trace_info);
     } else {
       this->WriteLog(trace_info);
@@ -194,11 +194,14 @@ public:
     this->push(trace_info);
   }
 
-  void SetTraceState(bool is_pause) { is_trace_pause.store(is_pause); }
+  void SetTraceState(bool is_pause) {
+    is_trace_pause.store(is_pause, std::memory_order_relaxed);
+  }
 
   void SetTraceCallback(TraceCallback trace = {}) {
     trace_cb = std::move(trace);
-    is_trace_cb.store(static_cast<bool>(trace_cb));
+    is_trace_cb.store(static_cast<bool>(trace_cb),
+                      std::memory_order_relaxed);
   }
 
   void SetPyTrace(TraceCallback trace = {}) { SetTraceCallback(trace); }

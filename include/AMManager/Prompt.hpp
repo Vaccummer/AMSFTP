@@ -81,10 +81,10 @@ public:
   /** Prompt for a yes/no response. */
   bool PromptYesNo(const std::string &prompt, bool *canceled);
 
-  /** Placeholder task result printer; format TBD. */
-  void resultprint(const std::shared_ptr<TaskInfo> &task_info);
-  /** Placeholder task metadata printer; format TBD. */
-  void taskprint(const std::shared_ptr<TaskInfo> &task_info);
+  // /** Placeholder task result printer; format TBD. */
+  // void resultprint(const std::shared_ptr<TaskInfo> &task_info);
+  // /** Placeholder task metadata printer; format TBD. */
+  // void taskprint(const std::shared_ptr<TaskInfo> &task_info);
 
   void PrintTaskResult(const std::shared_ptr<TaskInfo> &task_info);
 
@@ -130,6 +130,7 @@ private:
   int max_history_count_ = 10;
   std::vector<std::string> history_entries_;
   std::string cached_output_;
+  std::mutex cached_output_mutex;
 
   /**
    * @brief Collect current history into a list.
