@@ -868,7 +868,11 @@ private:
     if (info.NeedPassword) {
       const std::string prompt =
           AMStr::amfmt("❔ [{}] Require Password: ", client_name);
-      return ReadMaskedPassword(prompt);
+      std::string password;
+      if (AMPromptManager::Instance().SecurePrompt(prompt, &password)) {
+        return std::string();
+      }
+      return password;
     }
 
     if (!info.iscorrect) {

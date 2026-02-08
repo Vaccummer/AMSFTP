@@ -13,6 +13,13 @@
 #include <string>
 #include <unordered_set>
 
+#ifdef _WIN32
+#include <conio.h>
+#else
+#include <termios.h>
+#include <unistd.h>
+#endif
+
 namespace {
 /**
  * @brief Bridge isocline highlight callbacks to the token analyzer.
@@ -220,102 +227,15 @@ void AMPromptManager::FlushCachedOutput() {
   }
 }
 
-// /**
-//  * @brief Placeholder implementation that prints task execution results.
-//  */
-// void AMPromptManager::resultprint(const std::shared_ptr<TaskInfo> &task_info)
-// {
-//   if (!task_info || task_info->quiet) {
-//     return;
-//   }
-
-//   TaskStatus status = task_info->GetStatus();
-//   const char *status_str = "Unknown";
-//   switch (status) {
-//   case TaskStatus::Pending:
-//     status_str = "Pending";
-//     break;
-//   case TaskStatus::Conducting:
-//     status_str = "Conducting";
-//     break;
-//   case TaskStatus::Finished:
-//     status_str = "Finished";
-//     break;
-//   default:
-//     break;
-//   }
-
-//   const double submit_time =
-//       task_info->submit_time.load(std::memory_order_relaxed);
-//   const double start_time =
-//       task_info->start_time.load(std::memory_order_relaxed);
-//   const double finished_time =
-//       task_info->finished_time.load(std::memory_order_relaxed);
-//   const double duration_s = (start_time > 0 && finished_time >= start_time)
-//                                 ? (finished_time - start_time)
-//                                 : 0.0;
-
-//   size_t total = 0;
-//   size_t success = 0;
-//   size_t failed = 0;
-//   size_t terminated = 0;
-
-//   ECM last_error = {EC::Success, ""};
-
-//   {
-//     std::lock_guard<std::mutex> lock(task_info->mtx);
-//     auto tasks_ptr = task_info->tasks;
-//     if (tasks_ptr) {
-//       total = tasks_ptr->size();
-//       for (const auto &task : *tasks_ptr) {
-//         if (task.rcm.first == EC::Success) {
-//           ++success;
-//         } else if (task.rcm.first == EC::Terminate) {
-//           ++terminated;
-//           last_error = task.rcm;
-//         } else {
-//           ++failed;
-//           last_error = task.rcm;
-//         }
-//       }
-//     }
-//   }
-
-//   std::ostringstream oss;
-//   oss << "[TaskResult] id=" << task_info->id << " status=" << status_str
-//       << " total=" << total << " success=" << success << " failed=" << failed
-//       << " terminated=" << terminated;
-//   if (duration_s > 0.0) {
-//     oss << " duration_s=" << duration_s;
-//   }
-//   if (submit_time > 0.0) {
-//     oss << " submit_time=" << submit_time;
-//   }
-//   if (last_error.first != EC::Success && !last_error.second.empty()) {
-//     oss << " last_error=\"" << last_error.second << "\"";
-//   }
-
-//   Print(oss.str());
-// }
-
-// /**
-//  * @brief Placeholder implementation that prints submitted task metadata.
-//  */
-// void AMPromptManager::taskprint(const std::shared_ptr<TaskInfo> &task_info) {
-//   if (!task_info || task_info->quiet) {
-//     return;
-//   }
-//   std::ostringstream oss;
-//   oss << "[TaskSubmit] id=" << task_info->id
-//       << " affinity_thread="
-//       << task_info->affinity_thread.load(std::memory_order_relaxed)
-//       << " status=" << static_cast<int>(task_info->GetStatus());
-//   Print(oss.str());
-// }
-
 bool AMPromptManager::Prompt(const std::string &prompt,
                              const std::string &placeholder,
                              std::string *out_input) {
+  struct FlushGuard {
+    AMPromptManager &prompt_mgr;
+    ~FlushGuard() { prompt_mgr.FlushCachedOutput(); }
+  };
+  FlushGuard flush_guard{*this};
+
   /** Guard to toggle signal hooks around input. */
   struct PromptHookGuard {
     AMCliSignalMonitor &monitor;
@@ -367,6 +287,12 @@ bool AMPromptManager::Prompt(const std::string &prompt,
  */
 bool AMPromptManager::PromptCore(const std::string &prompt,
                                  std::string *out_input) {
+  struct FlushGuard {
+    AMPromptManager &prompt_mgr;
+    ~FlushGuard() { prompt_mgr.FlushCachedOutput(); }
+  };
+  FlushGuard flush_guard{*this};
+
   if (!out_input) {
     return true;
   }
@@ -379,6 +305,93 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
   }
   *out_input = std::string(line);
   ic_free(line);
+  return false;
+}
+
+bool AMPromptManager::SecurePrompt(const std::string &prompt,
+                                   std::string *out_input) {
+  struct FlushGuard {
+    AMPromptManager &prompt_mgr;
+    ~FlushGuard() { prompt_mgr.FlushCachedOutput(); }
+  };
+  FlushGuard flush_guard{*this};
+
+  if (!out_input) {
+    return true;
+  }
+  out_input->clear();
+
+  struct PromptHookGuard {
+    AMCliSignalMonitor &monitor;
+    explicit PromptHookGuard(AMCliSignalMonitor &monitor_ref)
+        : monitor(monitor_ref) {
+      monitor.SilenceHook("GLOBAL");
+      monitor.ResumeHook("PROMPT");
+    }
+    ~PromptHookGuard() {
+      monitor.ResumeHook("GLOBAL");
+      monitor.SilenceHook("PROMPT");
+    }
+  };
+  PromptHookGuard hook_guard(AMCliSignalMonitor::Instance());
+
+  std::string password;
+  std::cout << prompt << std::flush;
+#ifdef _WIN32
+  while (true) {
+    int ch = _getch();
+    if (ch == 3 || (amgif && amgif->check())) {
+      std::cout << "\n";
+      return true;
+    }
+    if (ch == '\r' || ch == '\n') {
+      break;
+    }
+    if (ch == '\b') {
+      if (!password.empty()) {
+        password.pop_back();
+        std::cout << "\b \b" << std::flush;
+      }
+      continue;
+    }
+    if (ch == 0 || ch == 224) {
+      (void)_getch();
+      continue;
+    }
+    password.push_back(static_cast<char>(ch));
+    std::cout << "*" << std::flush;
+  }
+#else
+  termios oldt{};
+  termios newt{};
+  tcgetattr(STDIN_FILENO, &oldt);
+  newt = oldt;
+  newt.c_lflag &= static_cast<unsigned long>(~(ECHO | ICANON));
+  tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+  while (true) {
+    int ch = ::getchar();
+    if (ch == 3 || (amgif && amgif->check())) {
+      tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+      std::cout << "\n";
+      return true;
+    }
+    if (ch == '\n' || ch == '\r' || ch == EOF) {
+      break;
+    }
+    if (ch == 127 || ch == 8) {
+      if (!password.empty()) {
+        password.pop_back();
+        std::cout << "\b \b" << std::flush;
+      }
+      continue;
+    }
+    password.push_back(static_cast<char>(ch));
+    std::cout << "*" << std::flush;
+  }
+  tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+#endif
+  std::cout << "\n";
+  *out_input = std::move(password);
   return false;
 }
 

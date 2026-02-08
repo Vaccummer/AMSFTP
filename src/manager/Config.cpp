@@ -2737,8 +2737,14 @@ ECM AMConfigManager::PromptAddFields(std::string *nickname, HostEntry *entry) {
 
   std::string password;
   while (true) {
-    std::string first = ReadMaskedPassword("Password (optional): ");
-    std::string second = ReadMaskedPassword("Confirm password: ");
+    std::string first;
+    std::string second;
+    if (prompt.SecurePrompt("Password (optional): ", &first)) {
+      return {EC::InvalidArg, "Password entry canceled"};
+    }
+    if (prompt.SecurePrompt("Confirm password: ", &second)) {
+      return {EC::InvalidArg, "Password entry canceled"};
+    }
     if (first == second) {
       password = std::move(first);
       AMAuth::SecureZero(second);
@@ -2889,8 +2895,14 @@ ECM AMConfigManager::PromptModifyFields(const std::string &nickname,
   if (change_password) {
     std::string password;
     while (true) {
-      std::string first = ReadMaskedPassword("Password (optional): ");
-      std::string second = ReadMaskedPassword("Confirm password: ");
+      std::string first;
+      std::string second;
+      if (prompt.SecurePrompt("Password (optional): ", &first)) {
+        return {EC::InvalidArg, "Password entry canceled"};
+      }
+      if (prompt.SecurePrompt("Confirm password: ", &second)) {
+        return {EC::InvalidArg, "Password entry canceled"};
+      }
       if (first == second) {
         password = std::move(first);
         AMAuth::SecureZero(second);

@@ -81,6 +81,11 @@ public:
   /** Prompt for a yes/no response. */
   bool PromptYesNo(const std::string &prompt, bool *canceled);
 
+  /**
+   * @brief Prompt for sensitive input with masked characters.
+   */
+  bool SecurePrompt(const std::string &prompt, std::string *out_input);
+
   // /** Placeholder task result printer; format TBD. */
   // void resultprint(const std::shared_ptr<TaskInfo> &task_info);
   // /** Placeholder task metadata printer; format TBD. */
