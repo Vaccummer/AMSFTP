@@ -298,6 +298,8 @@ void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
   commands.task_list_cmd = commands.task_cmd->add_subcommand("ls", "List tasks");
   commands.task_list_cmd->add_flag("-p,--pending", args.task_list.pending,
                                    "Show pending tasks");
+  commands.task_list_cmd->add_flag("-s,--suspend", args.task_list.suspend,
+                                   "Show paused tasks");
   commands.task_list_cmd->add_flag("-f,--finished", args.task_list.finished,
                                    "Show finished tasks");
   commands.task_list_cmd->add_flag("-c,--conducting", args.task_list.conducting,
@@ -1135,7 +1137,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   if (cli_commands.task_list_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
     result.rcm =
-        transfer_manager.List(args.task_list.pending, args.task_list.finished,
+        transfer_manager.List(args.task_list.pending, args.task_list.suspend,
+                              args.task_list.finished,
                               args.task_list.conducting, flag);
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;

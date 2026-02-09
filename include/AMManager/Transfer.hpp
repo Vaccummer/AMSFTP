@@ -229,11 +229,12 @@ public:
    * @brief List tasks by status using TaskInfoPrint.
    *
    * @param pending Whether to list pending tasks.
+   * @param suspend Whether to list paused tasks.
    * @param finished Whether to list finished tasks.
    * @param conducting Whether to list conducting tasks.
    * @param interrupt_flag Optional flag to stop progress rendering.
    */
-  ECM List(bool pending, bool finished, bool conducting,
+  ECM List(bool pending, bool suspend, bool finished, bool conducting,
            const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
 
   /**
