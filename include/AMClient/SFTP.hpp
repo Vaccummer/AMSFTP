@@ -180,44 +180,6 @@ protected:
   // 便捷宏/lambda 版本，用于更简洁的调用
   // 用法: auto result = nb_call(flag, timeout, [&]{ return
   // libssh2_sftp_unlink(sftp, path); });
-  template <typename Func>
-  auto nb_call(const amf interrupt_flag, int64_t timeout_ms, int64_t start_time,
-               Func &&func) -> NBResult<decltype(func())> {
-    using RetType = decltype(func());
-
-    libssh2_session_set_blocking(session, 0);
-
-    RetType rc;
-    WaitResult wr = WaitResult::Ready;
-
-    while (true) {
-      rc = func();
-
-      if constexpr (std::is_same_v<RetType, int> ||
-                    std::is_same_v<RetType, ssize_t>) {
-        if (rc != LIBSSH2_ERROR_EAGAIN) {
-          break;
-        }
-      } else if constexpr (std::is_pointer_v<RetType>) {
-        if (rc != nullptr ||
-            libssh2_session_last_errno(session) != LIBSSH2_ERROR_EAGAIN) {
-          break;
-        }
-      } else {
-        break;
-      }
-
-      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, start_time,
-                           timeout_ms, poll_interval_ms);
-      if (wr != WaitResult::Ready) {
-        libssh2_session_set_blocking(session, 1);
-        return {rc, wr};
-      }
-    }
-
-    libssh2_session_set_blocking(session, 1);
-    return {rc, WaitResult::Ready};
-  }
 
 private:
   ECM CurError = {EC::NoConnection, "Connection not established"};
@@ -374,11 +336,57 @@ public:
     has_connected.store(false, std::memory_order_relaxed);
   }
 
-  inline WaitResult wait_for_socket(SocketWaitType wait_dir,
-                                    const amf &flag = nullptr,
-                                    int64_t start_time = -1,
-                                    int64_t timeout_ms = -1,
-                                    int poll_interval_ms = 20) {
+  inline std::function<bool()> MakeInterruptCb(const amf &flag) const {
+    return [flag]() { return flag && flag->check(); };
+  }
+  template <typename Func>
+  auto nb_call(const std::function<bool()> &interrupt_cb, int64_t timeout_ms,
+               int64_t start_time, Func &&func) -> NBResult<decltype(func())> {
+    using RetType = decltype(func());
+
+    RetType rc;
+    WaitResult wr = WaitResult::Ready;
+
+    while (true) {
+      rc = func();
+
+      if constexpr (std::is_same_v<RetType, int> ||
+                    std::is_same_v<RetType, ssize_t>) {
+        if (rc != LIBSSH2_ERROR_EAGAIN) {
+          break;
+        }
+      } else if constexpr (std::is_pointer_v<RetType>) {
+        if (rc != nullptr ||
+            libssh2_session_last_errno(session) != LIBSSH2_ERROR_EAGAIN) {
+          break;
+        }
+      } else {
+        break;
+      }
+
+      wr = wait_for_socket(SocketWaitType::Auto, interrupt_cb, start_time,
+                           timeout_ms, poll_interval_ms);
+      if (wr != WaitResult::Ready) {
+        libssh2_session_set_blocking(session, 1);
+        return {rc, wr};
+      }
+    }
+
+    return {rc, WaitResult::Ready};
+  }
+
+  template <typename Func>
+  auto nb_call(const amf interrupt_flag, int64_t timeout_ms, int64_t start_time,
+               Func &&func) -> NBResult<decltype(func())> {
+    return nb_call(MakeInterruptCb(interrupt_flag), timeout_ms, start_time,
+                   std::forward<Func>(func));
+  }
+
+  inline WaitResult
+  wait_for_socket(SocketWaitType wait_dir,
+                  const std::function<bool()> &interrupt_cb = {},
+                  int64_t start_time = -1, int64_t timeout_ms = -1,
+                  int poll_interval_ms = 20) {
     // Fast path: check if socket is already ready without select
     if (wait_dir == SocketWaitType::Auto) {
       int dir = libssh2_session_block_directions(session);
@@ -388,7 +396,7 @@ public:
     }
 
     // Pre-check interrupt and timeout before entering select
-    if (flag && flag->check()) {
+    if (interrupt_cb && interrupt_cb()) {
       return WaitResult::Interrupted;
     }
     if (timeout_ms > 0) {
@@ -472,7 +480,7 @@ public:
       }
 
       // rc == 0: select timeout, check interrupt and timeout
-      if (flag && flag->check()) {
+      if (interrupt_cb && interrupt_cb()) {
         return WaitResult::Interrupted;
       }
       if (timeout_ms > 0) {
@@ -573,8 +581,9 @@ public:
     // 非阻塞握手
     while (true) {
       rcr = libssh2_session_handshake(session, sock);
-      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, start_time,
-                           timeout_ms);
+      wr =
+          wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(interrupt_flag),
+                          start_time, timeout_ms);
       if (wr != WaitResult::Ready) {
         goto interrupted_or_sock_error;
       }
@@ -605,8 +614,9 @@ public:
                 libssh2_userauth_list(session, res_data.username.c_str(),
                                       res_data.username.length())) == nullptr &&
            libssh2_session_last_errno(session) == LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, interrupt_flag, start_time,
-                           timeout_ms);
+      wr =
+          wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(interrupt_flag),
+                          start_time, timeout_ms);
       if (wr != WaitResult::Ready) {
         goto interrupted_or_sock_error;
       }
@@ -765,6 +775,7 @@ public:
     }
 
     has_connected.store(true, std::memory_order_relaxed);
+    libssh2_session_set_blocking(session, 0);
     return {EC::Success, ""};
 
   interrupted_or_sock_error:
@@ -891,7 +902,8 @@ private:
   }
 
   void StopReader() {
-    if (!reader_running.load(std::memory_order_relaxed) && !reader_thread.joinable()) {
+    if (!reader_running.load(std::memory_order_relaxed) &&
+        !reader_thread.joinable()) {
       return;
     }
     reader_running.store(false, std::memory_order_relaxed);
@@ -919,7 +931,8 @@ private:
       if (reader_paused.load(std::memory_order_relaxed)) {
         std::unique_lock<std::mutex> lock(reader_cv_mtx);
         reader_cv.wait(lock, [this]() {
-          return !reader_paused.load(std::memory_order_relaxed) || !reader_running.load(std::memory_order_relaxed);
+          return !reader_paused.load(std::memory_order_relaxed) ||
+                 !reader_running.load(std::memory_order_relaxed);
         });
         continue;
       }
@@ -936,9 +949,9 @@ private:
 
       int64_t start_time = am_ms();
       int wait_timeout = reader_wait_timeout_ms.load(std::memory_order_relaxed);
-      WaitResult wr =
-          wait_for_socket(SocketWaitType::Read, terminal_interrupt_flag,
-                          start_time, wait_timeout);
+      WaitResult wr = wait_for_socket(SocketWaitType::Read,
+                                      MakeInterruptCb(terminal_interrupt_flag),
+                                      start_time, wait_timeout);
       if (wr == WaitResult::Timeout) {
         continue;
       }
@@ -1030,7 +1043,8 @@ private:
                 0, terminal_window.cols, terminal_window.rows,
                 terminal_window.width, terminal_window.height)) ==
            LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, flag, start_time, timeout_ms);
+      wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
+                           start_time, timeout_ms);
       if (wr != WaitResult::Ready) {
         goto cleanup;
       }
@@ -1043,7 +1057,8 @@ private:
 
     while ((rc = libssh2_channel_shell(terminal_channel->channel)) ==
            LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, flag, start_time, timeout_ms);
+      wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
+                           start_time, timeout_ms);
       if (wr != WaitResult::Ready) {
         goto cleanup;
       }
@@ -1145,7 +1160,8 @@ public:
     }
     (void)timeout_ms;
     (void)start_time;
-    if (!session || sock == INVALID_SOCKET || !has_connected.load(std::memory_order_relaxed)) {
+    if (!session || sock == INVALID_SOCKET ||
+        !has_connected.load(std::memory_order_relaxed)) {
       ECM rcm = {EC::NoConnection, "Session not connected"};
       SetState(rcm);
       return rcm;
@@ -1161,7 +1177,9 @@ public:
     return {EC::Success, ""};
   }
 
-  void PauseReading() override { reader_paused.store(true, std::memory_order_relaxed); }
+  void PauseReading() override {
+    reader_paused.store(true, std::memory_order_relaxed);
+  }
 
   void ResumeReading() override {
     reader_paused.store(false, std::memory_order_relaxed);
@@ -1209,8 +1227,8 @@ public:
                   terminal_channel->channel, terminal_window.cols,
                   terminal_window.rows, terminal_window.width,
                   terminal_window.height)) == LIBSSH2_ERROR_EAGAIN) {
-        wr =
-            wait_for_socket(SocketWaitType::Auto, flag, start_time, timeout_ms);
+        wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
+                             start_time, timeout_ms);
         if (wr != WaitResult::Ready) {
           goto cleanup;
         }
@@ -1267,8 +1285,8 @@ public:
         continue;
       }
       if (rc == LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Write, flag, start_time,
-                             timeout_ms);
+        wr = wait_for_socket(SocketWaitType::Write, MakeInterruptCb(flag),
+                             start_time, timeout_ms);
         if (wr != WaitResult::Ready) {
           goto cleanup;
         }
@@ -1354,9 +1372,13 @@ public:
     return {EC::Success, ""};
   }
 
-  void PauseReading() override { paused.store(true, std::memory_order_relaxed); }
+  void PauseReading() override {
+    paused.store(true, std::memory_order_relaxed);
+  }
 
-  void ResumeReading() override { paused.store(false, std::memory_order_relaxed); }
+  void ResumeReading() override {
+    paused.store(false, std::memory_order_relaxed);
+  }
 
   void
   SetTerminalOutputCallback(TerminalOutputCallback output_cb = {}) override {
@@ -2017,7 +2039,8 @@ public:
 
       while ((rc = libssh2_sftp_stat(sftp, "/", &attrs)) ==
              LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Auto, flag, start, -1);
+        wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag), start,
+                             -1);
         if (wr != WaitResult::Ready) {
           break;
         }
@@ -2091,7 +2114,8 @@ public:
     // 1. 执行命令
     while ((rc = libssh2_channel_exec(sf.channel, cmd.c_str())) ==
            LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, flag, time_start, max_time_ms);
+      wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
+                           time_start, max_time_ms);
       if (wr != WaitResult::Ready) {
         goto cleanup;
       }
@@ -2117,8 +2141,8 @@ public:
         stage = CmdStage::AwaitExit;
         break; // EOF
       } else if (nbytes == LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Auto, flag, time_start,
-                             max_time_ms);
+        wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
+                             time_start, max_time_ms);
         if (wr != WaitResult::Ready) {
           goto cleanup;
         }
@@ -2138,7 +2162,8 @@ public:
 
     // 4. 非阻塞关闭通道
     while ((rc = sf.close_nonblock()) == LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, flag, time_start, max_time_ms);
+      wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
+                           time_start, max_time_ms);
       if (wr != WaitResult::Ready) {
         goto cleanup;
       }
@@ -2226,9 +2251,8 @@ public:
                 0, terminal_window.cols, terminal_window.rows,
                 terminal_window.width, terminal_window.height)) ==
            LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, flag, start_time, timeout_ms);
-      if (wr != WaitResult::Ready) {
-        goto cleanup;
+      wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
+  start_time, timeout_ms); if (wr != WaitResult::Ready) { goto cleanup;
       }
     }
     if (rc != 0) {
@@ -2240,9 +2264,8 @@ public:
 
     while ((rc = libssh2_channel_shell(terminal_channel->channel)) ==
            LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, flag, start_time, timeout_ms);
-      if (wr != WaitResult::Ready) {
-        goto cleanup;
+      wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
+  start_time, timeout_ms); if (wr != WaitResult::Ready) { goto cleanup;
       }
     }
     if (rc != 0) {
@@ -2300,10 +2323,8 @@ public:
         continue;
       }
       if (rc == LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Write, flag, start_time,
-                             timeout_ms);
-        if (wr != WaitResult::Ready) {
-          goto cleanup;
+        wr = wait_for_socket(SocketWaitType::Write, MakeInterruptCb(flag),
+  start_time, timeout_ms); if (wr != WaitResult::Ready) { goto cleanup;
         }
         continue;
       }
@@ -2352,9 +2373,8 @@ public:
     WaitResult wr = WaitResult::Ready;
 
     if (wait_for_data) {
-      wr = wait_for_socket(SocketWaitType::Read, flag, start_time, timeout_ms);
-      if (wr != WaitResult::Ready) {
-        goto cleanup;
+      wr = wait_for_socket(SocketWaitType::Read, MakeInterruptCb(flag),
+  start_time, timeout_ms); if (wr != WaitResult::Ready) { goto cleanup;
       }
     }
 
@@ -2512,10 +2532,8 @@ public:
         continue;
       }
       if (rc == LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Write, flag, start_time,
-                             timeout_ms);
-        if (wr != WaitResult::Ready) {
-          goto cleanup;
+        wr = wait_for_socket(SocketWaitType::Write, MakeInterruptCb(flag),
+  start_time, timeout_ms); if (wr != WaitResult::Ready) { goto cleanup;
         }
         continue;
       }
