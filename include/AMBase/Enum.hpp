@@ -227,9 +227,11 @@ enum class SepType { Unix = 0, Windows = 1 };
 
 enum class ControlSignal : int { Running = 0, Pause = 1, Terminate = 2 };
 
-enum class TaskStatus { Pending, Conducting, Finished };
+enum class TaskStatus { Pending, Conducting, Paused, Finished };
 
 enum class MapType { Read = 0, Write = 1 };
+
+enum class TaskAssignType { Affinity, Public };
 
 enum class OS_TYPE {
   Windows = -1,

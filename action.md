@@ -1,12 +1,20 @@
-# Progressbar Size Fix
+# Add  New TaskStatus: Paused
 
-wsl@test.7z -> mac@test.7z                                 █▓         16.8% | 1.90 GB/11.30 GB [02:02<00:00 0 B/s      ]
+the add of new status Paused will result in greate change in AMWorkManager
 
-16.8%  -> fix percentage as wide as "99.9%"
+General Desctiption
 
-1.90 GB -> fix size as wide as 999.9MB
-when size num exceed 1000, change unit
+1. TaskStatus: :Paused set when call TaskStatus.pause() on Conducting task
+2. when a task is paused, it will be offloaded from current task
 
-02:02 -> fix time as wide as "1:02:09"  (when not longer than 1 hour, hide hour part)
+   1. you can change WkProgressData::is_terminate to below and tell it from terminate by reading exact control_sign value
 
-0 B/s -> fix speed as wide as "123.9MB/s"  (like size num process)
+   control_sign.load(std::memory_order_acquire) !=
+
+   static_cast `<int>`(ControlSignal::Running);
+
+   1. keep related data for resuming by breakpoint mechanism
+3. A task is pause won't be assigned to any thread
+4. when call resume() on a paused task, set task status to Pending and wait for assigning
+
+remember when conduct ever paused task, don't overwrite its starting time. you can set a sign in TaskInfo to skip starting time set

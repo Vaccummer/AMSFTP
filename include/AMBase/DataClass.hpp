@@ -982,7 +982,6 @@ struct WkProgressData {
 /**
  * @brief Task assignment type for scheduler bookkeeping.
  */
-enum class TaskAssignType { Affinity, Public };
 
 struct TaskInfo {
   /**
