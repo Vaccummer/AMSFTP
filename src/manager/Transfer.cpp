@@ -77,7 +77,7 @@ std::string FormatTimeHM_(double timestamp) {
  * @brief Format elapsed seconds into "XmYs" or "XhYmZs".
  */
 std::string FormatElapsed_(double seconds) {
-  const int64_t total = static_cast<int64_t>(std::max(0.0, seconds));
+  const int64_t total = static_cast<int64_t>(std::max<int64_t>(0, seconds));
   const int64_t hours = total / 3600;
   const int64_t minutes = (total % 3600) / 60;
   const int64_t secs = total % 60;
@@ -809,7 +809,7 @@ void TaskInfoPrint::Inspect(const std::shared_ptr<TaskInfo> &task_info,
 
   size_t max_len = 0;
   for (const auto &field : fields) {
-    max_len = std::max(max_len, field.first.size());
+    max_len = std::max<size_t>(max_len, field.first.size());
   }
 
   for (const auto &field : fields) {
@@ -924,7 +924,7 @@ AMTransferManager::AMTransferManager()
       config_.GetSettingInt({"InternalVars", "MaxThreadNum"}, 16);
   int init_threads =
       config_.GetSettingInt({"InternalVars", "InitThreadNum"}, 1);
-  init_threads = std::max(1, std::min(init_threads, max_threads));
+  init_threads = std::max<int>(1, std::min<int>(init_threads, max_threads));
   worker_.ThreadCount(static_cast<size_t>(init_threads));
 }
 
@@ -1576,7 +1576,7 @@ ECM AMTransferManager::Thread(int num) {
     return {EC::Success, ""};
   }
 
-  int clamped = std::max(1, std::min(num, max_threads));
+  int clamped = std::max<int>(1, std::min<int>(num, max_threads));
   const size_t applied = worker_.ThreadCount(static_cast<size_t>(clamped));
   prompt_.Print(AMStr::amfmt("ThreadNum: {}", applied));
   return {EC::Success, ""};

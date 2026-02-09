@@ -7,6 +7,7 @@
 #include <ctime>
 #include <fcntl.h>
 #include <functional>
+#include <libssh2.h>
 #include <list>
 #include <mutex>
 #include <numeric>
@@ -36,6 +37,7 @@ public:
   // SFTP file handle
   LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
   std::shared_ptr<AMSFTPClient> client = nullptr;
+  WkProgressData *pd = nullptr;
 
   // Common members
   std::string path;
@@ -69,26 +71,41 @@ public:
 
   ECM Init(const std::string &path, size_t file_size,
            std::shared_ptr<AMSFTPClient> client = nullptr,
-           bool is_write = false, bool sequential = true,
-           bool truncate = true) {
+           bool is_write = false, bool sequential = true, bool truncate = true,
+           WkProgressData *progress = nullptr) {
     this->path = path;
     this->is_write = is_write;
     this->file_size = file_size;
     this->client = client;
     this->is_sftp = (client != nullptr);
+    this->pd = progress;
 
     if (is_sftp) {
       // SFTP file
+      std::lock_guard<std::recursive_mutex> lock(client->mtx);
+      libssh2_session_set_blocking(client->session, 0);
+
       if (is_write) {
         int flags = LIBSSH2_FXF_WRITE;
         if (truncate) {
           flags |= LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_CREAT;
         }
-        sftp_handle =
-            libssh2_sftp_open(client->sftp, path.c_str(), flags, 0744);
+        auto nb_res = client->nb_call(
+            pd ? std::function<bool()>([this]() { return pd->is_terminate(); })
+               : std::function<bool()>(),
+            -1, am_ms(), [&]() {
+              return libssh2_sftp_open(client->sftp, path.c_str(), flags, 0744);
+            });
+        sftp_handle = nb_res.value;
       } else {
-        sftp_handle = libssh2_sftp_open(client->sftp, path.c_str(),
-                                        LIBSSH2_FXF_READ, 0400);
+        auto nb_res = client->nb_call(
+            pd ? std::function<bool()>([this]() { return pd->is_terminate(); })
+               : std::function<bool()>(),
+            -1, am_ms(), [&]() {
+              return libssh2_sftp_open(client->sftp, path.c_str(),
+                                       LIBSSH2_FXF_READ, 0400);
+            });
+        sftp_handle = nb_res.value;
       }
       if (!sftp_handle) {
         EC rc = client->GetLastEC();
@@ -188,32 +205,58 @@ public:
 #endif
   }
 
-  std::pair<ssize_t, ECM> Read(std::shared_ptr<StreamRingBuffer> ring_buffer) {
+  std::pair<ssize_t, ECM> Read() {
     if (!IsValid()) {
       return {-1, {EC::LocalFileOpenError, "File not initialized"}};
     }
+    if (!pd || !pd->ring_buffer) {
+      return {-1, {EC::InvalidArg, "Progress data not initialized"}};
+    }
 
-    auto [write_ptr, max_write] = ring_buffer->get_write_ptr();
+    auto [write_ptr, max_write] = pd->ring_buffer->get_write_ptr();
     ssize_t to_read = std::min<ssize_t>(max_write, (file_size - offset));
     ssize_t bytes_read;
     if (to_read > 0) {
       if (is_sftp) {
-        // SFTP read
-        bytes_read = libssh2_sftp_read(sftp_handle, write_ptr, to_read);
-        if (bytes_read > 0) {
-          ring_buffer->commit_write(bytes_read);
-          offset += bytes_read;
-          return {bytes_read, {EC::Success, ""}};
-        } else if (bytes_read == 0) {
-          return {0, {EC::EndOfFile, "End of file"}};
-        } else if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
-          return {LIBSSH2_ERROR_EAGAIN, {EC::SSHEAGAIN, "SSH EAGAIN"}};
-        } else {
-          EC rc = client->GetLastEC();
-          std::string msg = client->GetLastErrorMsg();
+        // SFTP read (non-blocking)
+        while (true) {
+          if (pd->is_terminate()) {
+            return {-1, {EC::Terminate, "Task terminated by user"}};
+          }
+          while (pd->is_pause() && !pd->is_terminate()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+          }
+          {
+            std::lock_guard<std::recursive_mutex> lock(client->mtx);
+            bytes_read = libssh2_sftp_read(sftp_handle, write_ptr, to_read);
+          }
+          if (bytes_read > 0) {
+            pd->ring_buffer->commit_write(bytes_read);
+            offset += bytes_read;
+            return {bytes_read, {EC::Success, ""}};
+          }
+          if (bytes_read == 0) {
+            return {0, {EC::EndOfFile, "End of file"}};
+          }
+          if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
+            WaitResult wr =
+                client->wait_for_socket(SocketWaitType::Read, [this]() {
+                  return pd && pd->is_terminate();
+                });
+            if (wr == WaitResult::Error) {
+              return {
+                  -1,
+                  {wait_result_to_error_code(wr), "SFTP read socket error"}};
+            }
+            if (wr == WaitResult::Interrupted) {
+              return {-1, {EC::Terminate, "Task terminated by user"}};
+            }
+            continue;
+          }
           return {bytes_read,
-                  {rc, AMStr::amfmt("Read sftp file \"{}\" failed: {}", path,
-                                    msg)}};
+                  {client->GetLastEC(),
+                   AMStr::amfmt("Read sftp file \"{}\" failed: {}", path,
+                                client->GetLastErrorMsg())}};
         }
       } else {
         // Local file read
@@ -227,7 +270,7 @@ public:
                                 path, GetLastError())}};
         }
         if (bytes_read > 0) {
-          ring_buffer->commit_write(bytes_read);
+          pd->ring_buffer->commit_write(bytes_read);
           offset += bytes_read;
           return {static_cast<int>(bytes_read), {EC::Success, ""}};
         } else {
@@ -236,7 +279,7 @@ public:
 #else
         ssize_t bytes_read = read(file_handle, write_ptr, to_read);
         if (bytes_read > 0) {
-          ring_buffer->commit_write(bytes_read);
+          pd->ring_buffer->commit_write(bytes_read);
           offset += bytes_read;
           return {static_cast<int>(bytes_read), {EC::Success, ""}};
         } else if (bytes_read == 0) {
@@ -253,28 +296,53 @@ public:
     return {0, {EC::Success, ""}};
   }
 
-  std::pair<ssize_t, ECM> Write(std::shared_ptr<StreamRingBuffer> ring_buffer) {
+  std::pair<ssize_t, ECM> Write() {
     if (!IsValid()) {
       return {-1, {EC::LocalFileOpenError, "File not initialized"}};
     }
+    if (!pd || !pd->ring_buffer) {
+      return {-1, {EC::InvalidArg, "Progress data not initialized"}};
+    }
 
-    auto [read_ptr, max_read] = ring_buffer->get_read_ptr();
+    auto [read_ptr, max_read] = pd->ring_buffer->get_read_ptr();
     ssize_t to_write = std::min<ssize_t>(max_read, (file_size - offset));
     ssize_t bytes_written;
     if (to_write > 0) {
       if (is_sftp) {
-        // SFTP write
-        std::lock_guard<std::recursive_mutex> lock(client->mtx);
-        bytes_written = libssh2_sftp_write(sftp_handle, read_ptr, to_write);
-        if (bytes_written > 0) {
-          ring_buffer->commit_read(bytes_written);
-          offset += bytes_written;
-          return {bytes_written, {EC::Success, ""}};
-        } else if (bytes_written == 0) {
-          return {0, {EC::EndOfFile, "End of file"}};
-        } else if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
-          return {LIBSSH2_ERROR_EAGAIN, {EC::SSHEAGAIN, "SSH EAGAIN"}};
-        } else {
+        // SFTP write (non-blocking)
+        while (true) {
+          if (pd->is_terminate()) {
+            return {-1, {EC::Terminate, "Task terminated by user"}};
+          }
+          while (pd->is_pause() && !pd->is_terminate()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+          }
+          {
+            std::lock_guard<std::recursive_mutex> lock(client->mtx);
+            bytes_written = libssh2_sftp_write(sftp_handle, read_ptr, to_write);
+          }
+          if (bytes_written > 0) {
+            pd->ring_buffer->commit_read(bytes_written);
+            offset += bytes_written;
+            return {bytes_written, {EC::Success, ""}};
+          }
+          if (bytes_written == 0) {
+            return {0, {EC::EndOfFile, "End of file"}};
+          }
+          if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
+            WaitResult wr = client->wait_for_socket(
+                SocketWaitType::Write,
+                [this]() { return pd && pd->is_terminate(); }, am_ms(), 200);
+            if (wr == WaitResult::Error) {
+              return {
+                  LIBSSH2_ERROR_EAGAIN,
+                  {wait_result_to_error_code(wr), "SFTP write socket error"}};
+            }
+            if (wr == WaitResult::Interrupted) {
+              return {-1, {EC::Terminate, "Task terminated by user"}};
+            }
+            continue;
+          }
           EC rc = client->GetLastEC();
           std::string msg = client->GetLastErrorMsg();
           return {bytes_written,
@@ -293,7 +361,7 @@ public:
                                 path, GetLastError())}};
         }
         if (bytes_written > 0) {
-          ring_buffer->commit_read(bytes_written);
+          pd->ring_buffer->commit_read(bytes_written);
           offset += bytes_written;
           return {static_cast<int>(bytes_written), {EC::Success, ""}};
         } else {
@@ -302,7 +370,7 @@ public:
 #else
         ssize_t bytes_written = write(file_handle, read_ptr, to_write);
         if (bytes_written > 0) {
-          ring_buffer->commit_read(bytes_written);
+          pd->ring_buffer->commit_read(bytes_written);
           offset += bytes_written;
           return {static_cast<int>(bytes_written), {EC::Success, ""}};
         } else if (bytes_written == 0) {
@@ -933,20 +1001,24 @@ private:
     return {rcm, src_client, dst_client};
   }
 
-  // Transit for SFTP same-host copy (blocking mode)
+  // Transit for SFTP same-host copy (non-blocking read/write)
   ECM Transit(std::shared_ptr<AMSFTPClient> client,
               std::shared_ptr<TaskInfo> task_info) {
     auto &pd = *(task_info->pd);
     auto *task = task_info->cur_task;
     ECM rcm = ECM{EC::Success, ""};
-    std::lock_guard<std::recursive_mutex> lock(client->mtx);
     rcm = client->mkdir(AMPathStr::dirname(task->dst));
     if (rcm.first != EC::Success) {
       return rcm;
     }
 
-    LIBSSH2_SFTP_HANDLE *srcFile = libssh2_sftp_open(
-        client->sftp, task->src.c_str(), LIBSSH2_FXF_READ, 0400);
+    auto src_open = client->nb_call(
+        std::function<bool()>([&]() { return pd.is_terminate(); }), -1, am_ms(),
+        [&]() {
+          return libssh2_sftp_open(client->sftp, task->src.c_str(),
+                                   LIBSSH2_FXF_READ, 0400);
+        });
+    LIBSSH2_SFTP_HANDLE *srcFile = src_open.value;
     if (!srcFile) {
       EC rc = client->GetLastEC();
       std::string msg = client->GetLastErrorMsg();
@@ -959,8 +1031,13 @@ private:
     if (resume_offset == 0) {
       dst_flags |= LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC;
     }
-    LIBSSH2_SFTP_HANDLE *dstFile =
-        libssh2_sftp_open(client->sftp, task->dst.c_str(), dst_flags, 0744);
+    auto dst_open = client->nb_call(
+        std::function<bool()>([&]() { return pd.is_terminate(); }), -1, am_ms(),
+        [&]() {
+          return libssh2_sftp_open(client->sftp, task->dst.c_str(), dst_flags,
+                                   0744);
+        });
+    LIBSSH2_SFTP_HANDLE *dstFile = dst_open.value;
     if (!dstFile) {
       libssh2_sftp_close_handle(srcFile);
       EC rc = client->GetLastEC();
@@ -969,7 +1046,7 @@ private:
                                msg)};
     }
 
-    libssh2_session_set_blocking(client->session, 1);
+    libssh2_session_set_blocking(client->session, 0);
     std::vector<char> buffer(chunk_size_);
     size_t total_written = resume_offset;
     ssize_t bytes_read, bytes_written;
@@ -1000,6 +1077,19 @@ private:
           buffer_filled += bytes_read;
         } else if (bytes_read == 0) {
           break;
+        } else if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
+          WaitResult wr = client->wait_for_socket(
+              SocketWaitType::Read, [&]() { return pd.is_terminate(); },
+              am_ms(), 200);
+          if (wr == WaitResult::Interrupted) {
+            rcm = {EC::Terminate, "Transfer interrupted by user"};
+            goto clean;
+          }
+          if (wr == WaitResult::Error) {
+            rcm = {wait_result_to_error_code(wr), "SFTP read socket error"};
+            goto clean;
+          }
+          continue;
         } else {
           EC rc = client->GetLastEC();
           std::string msg = client->GetLastErrorMsg();
@@ -1029,6 +1119,19 @@ private:
           InnerCallback(task_info, pd, false);
         } else if (bytes_written == 0) {
           break;
+        } else if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
+          WaitResult wr = client->wait_for_socket(
+              SocketWaitType::Write, [&]() { return pd.is_terminate(); },
+              am_ms(), 200);
+          if (wr == WaitResult::Interrupted) {
+            rcm = {EC::Terminate, "Transfer interrupted by user"};
+            goto clean;
+          }
+          if (wr == WaitResult::Error) {
+            rcm = {wait_result_to_error_code(wr), "SFTP write socket error"};
+            goto clean;
+          }
+          continue;
         } else {
           EC rc = client->GetLastEC();
           std::string msg = client->GetLastErrorMsg();
@@ -1057,7 +1160,8 @@ private:
     if (client->GetProtocol() == ClientProtocol::SFTP) {
       UnionFileHandle file_handle;
       auto clientf = std::static_pointer_cast<AMSFTPClient>(client);
-      ECM rcm = file_handle.Init(task->src, task->size, clientf, false, true);
+      ECM rcm = file_handle.Init(task->src, task->size, clientf, false, true,
+                                 true, &pd);
       if (rcm.first != EC::Success) {
         pd.set_terminate();
         task->rcm = rcm;
@@ -1072,6 +1176,7 @@ private:
         }
       }
       std::lock_guard<std::recursive_mutex> lock(clientf->mtx);
+      libssh2_session_set_blocking(clientf->session, 0);
       while (file_handle.offset < file_handle.file_size && !pd.is_terminate()) {
         while (pd.ring_buffer->writable() == 0 && !pd.is_terminate() &&
                file_handle.offset < file_handle.file_size) {
@@ -1083,7 +1188,7 @@ private:
         if (pd.is_terminate()) {
           return;
         }
-        auto [bytes_read, ecm] = file_handle.Read(pd.ring_buffer);
+        auto [bytes_read, ecm] = file_handle.Read();
         if (ecm.first != EC::Success && ecm.first != EC::EndOfFile) {
           pd.set_terminate();
           task->rcm = ecm;
@@ -1092,7 +1197,8 @@ private:
       }
     } else if (client->GetProtocol() == ClientProtocol::LOCAL) {
       UnionFileHandle file_handle;
-      ECM rcm = file_handle.Init(task->src, task->size, nullptr, false, true);
+      ECM rcm = file_handle.Init(task->src, task->size, nullptr, false, true,
+                                 true, &pd);
       if (rcm.first != EC::Success) {
         pd.set_terminate();
         task->rcm = rcm;
@@ -1106,7 +1212,7 @@ private:
           return;
         }
       }
-      while (file_handle.offset < file_handle.file_size && !pd.is_terminate()) {
+      while (file_handle.offset < file_handle.file_size) {
         while (pd.ring_buffer->writable() == 0 && !pd.is_terminate() &&
                file_handle.offset < file_handle.file_size) {
           std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -1117,7 +1223,7 @@ private:
         if (pd.is_terminate()) {
           return;
         }
-        auto [bytes_read, ecm] = file_handle.Read(pd.ring_buffer);
+        auto [bytes_read, ecm] = file_handle.Read();
         if (ecm.first != EC::Success && ecm.first != EC::EndOfFile) {
           pd.set_terminate();
           task->rcm = ecm;
@@ -1144,8 +1250,8 @@ private:
       UnionFileHandle file_handle;
       auto clientf = std::static_pointer_cast<AMSFTPClient>(client);
       const bool resume = task->transferred > 0;
-      ECM rcm =
-          file_handle.Init(task->dst, task->size, clientf, true, true, !resume);
+      ECM rcm = file_handle.Init(task->dst, task->size, clientf, true, true,
+                                 !resume, &pd);
       if (rcm.first != EC::Success) {
         pd.set_terminate();
         task->rcm = rcm;
@@ -1159,6 +1265,7 @@ private:
           return;
         }
       }
+      libssh2_session_set_blocking(clientf->session, 0);
       while (file_handle.offset < file_handle.file_size && !pd.is_terminate()) {
         while (pd.ring_buffer->available() == 0 && !pd.is_terminate()) {
           std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -1169,7 +1276,7 @@ private:
         if (pd.is_terminate()) {
           return;
         }
-        auto [bytes_write, ecm] = file_handle.Write(pd.ring_buffer);
+        auto [bytes_write, ecm] = file_handle.Write();
         if (ecm.first != EC::Success && ecm.first != EC::EndOfFile) {
           pd.set_terminate();
           task->rcm = ecm;
@@ -1189,8 +1296,8 @@ private:
     } else if (client->GetProtocol() == ClientProtocol::LOCAL) {
       UnionFileHandle file_handle;
       const bool resume = task->transferred > 0;
-      ECM rcm =
-          file_handle.Init(task->dst, task->size, nullptr, true, true, !resume);
+      ECM rcm = file_handle.Init(task->dst, task->size, nullptr, true, true,
+                                 !resume, &pd);
       if (rcm.first != EC::Success) {
         pd.set_terminate();
         task->rcm = rcm;
@@ -1214,7 +1321,7 @@ private:
         if (pd.is_terminate()) {
           return;
         }
-        auto [bytes_write, ecm] = file_handle.Write(pd.ring_buffer);
+        auto [bytes_write, ecm] = file_handle.Write();
         if (ecm.first != EC::Success && ecm.first != EC::EndOfFile) {
           pd.set_terminate();
           task->rcm = ecm;
