@@ -1265,6 +1265,19 @@ private:
     return out;
   }
 
+  static std::string PadLeft_(std::string_view value, size_t width) {
+    if (width == 0) {
+      return {};
+    }
+    if (value.size() >= width) {
+      return std::string(value);
+    }
+    std::string out;
+    out.append(width - value.size(), ' ');
+    out.append(value);
+    return out;
+  }
+
   /**
    * @brief Format percentage as a fixed-width string.
    * @param percent Percentage value in [0, 100].
@@ -1272,9 +1285,12 @@ private:
    */
   static std::string FormatPercent_(double percent) {
     const double clamped = std::clamp(percent, 0.0, 100.0);
+    if (clamped >= 100.0) {
+      return PadLeft_("100%", 5);
+    }
     std::ostringstream oss;
     oss << std::fixed << std::setprecision(1) << clamped << "%";
-    return oss.str();
+    return PadLeft_(oss.str(), 5);
   }
 
   /**
@@ -1287,18 +1303,36 @@ private:
     const char *suffixes[] = {"B", "KB", "MB", "GB", "TB"};
     double size = static_cast<double>(std::max<int64_t>(0, bytes));
     int idx = 0;
-    while (size >= 1024.0 && idx < 4) {
-      size /= 1024.0;
+    while (size >= 1000.0 && idx < 4) {
+      size /= 1000.0;
       ++idx;
     }
     std::ostringstream oss;
     if (idx == 0) {
-      oss << static_cast<int64_t>(size) << ' ' << suffixes[idx];
+      oss << static_cast<int64_t>(size);
     } else {
-      oss << std::fixed << std::setprecision(precision) << size << ' '
-          << suffixes[idx];
+      oss << std::fixed << std::setprecision(precision) << size;
     }
-    return oss.str();
+    std::string out = AMStr::amfmt("{}{}", oss.str(), suffixes[idx]);
+    return PadLeft_(out, 7);
+  }
+
+  static std::string FormatSizeNoSpace_(int64_t bytes, int precision = 1) {
+    const char *suffixes[] = {"B", "KB", "MB", "GB", "TB"};
+    double size = static_cast<double>(std::max<int64_t>(0, bytes));
+    int idx = 0;
+    while (size >= 1000.0 && idx < 4) {
+      size /= 1000.0;
+      ++idx;
+    }
+    std::ostringstream oss;
+    if (idx == 0) {
+      oss << static_cast<int64_t>(size);
+    } else {
+      oss << std::fixed << std::setprecision(precision) << size;
+    }
+    const std::string out = AMStr::amfmt("{}{}", oss.str(), suffixes[idx]);
+    return PadLeft_(out, 7);
   }
 
   /**
@@ -1308,12 +1342,18 @@ private:
    */
   static std::string FormatTimeMMSS_(int64_t seconds) {
     const int64_t clamped = std::max<int64_t>(0, seconds);
-    const int64_t minutes = clamped / 60;
+    const int64_t hours = clamped / 3600;
+    const int64_t minutes = (clamped % 3600) / 60;
     const int64_t secs = clamped % 60;
     std::ostringstream oss;
+    if (hours > 0) {
+      oss << hours << ":" << std::setw(2) << std::setfill('0') << minutes
+          << ":" << std::setw(2) << std::setfill('0') << secs;
+      return oss.str();
+    }
     oss << std::setw(2) << std::setfill('0') << minutes << ":" << std::setw(2)
         << std::setfill('0') << secs;
-    return oss.str();
+    return PadLeft_(oss.str(), 7);
   }
 
   /**
@@ -1322,8 +1362,8 @@ private:
    * @return Formatted speed string.
    */
   static std::string FormatSpeed_(double bps) {
-    const std::string size = FormatSize_(static_cast<int64_t>(bps), 1);
-    return size + "/s";
+    const std::string size = FormatSizeNoSpace_(static_cast<int64_t>(bps), 1);
+    return PadLeft_(size + "/s", 9);
   }
 
 private:

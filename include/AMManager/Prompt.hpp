@@ -98,6 +98,26 @@ public:
    */
   void FlushCachedOutput();
 
+  /**
+   * @brief Force Print to cache output instead of writing to the terminal.
+   */
+  void SetCacheOutputOnly(bool enabled);
+
+  /**
+   * @brief Print output immediately, bypassing cache checks.
+   */
+  void PrintRaw(const std::string &text, bool append_newline = true);
+
+  /**
+   * @brief Clear the terminal screen (optionally full reset).
+   */
+  void ClearScreen(bool clear_scrollback = false);
+
+  /**
+   * @brief Enter/leave the alternate screen buffer.
+   */
+  void UseAlternateScreen(bool enable);
+
   bool Prompt(const std::string &prompt, const std::string &placeholder,
               std::string *out_input);
   /**
@@ -136,6 +156,7 @@ private:
   std::vector<std::string> history_entries_;
   std::string cached_output_;
   std::mutex cached_output_mutex;
+  bool cache_output_only_ = false;
 
   /**
    * @brief Collect current history into a list.

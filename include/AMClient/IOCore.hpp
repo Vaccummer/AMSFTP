@@ -194,8 +194,7 @@ public:
     }
 
     auto [write_ptr, max_write] = ring_buffer->get_write_ptr();
-    ssize_t to_read =
-        max_write > file_size - offset ? file_size - offset : max_write;
+    ssize_t to_read = std::min<ssize_t>(max_write, (file_size - offset));
     ssize_t bytes_read;
     if (to_read > 0) {
       if (is_sftp) {
@@ -260,8 +259,7 @@ public:
     }
 
     auto [read_ptr, max_read] = ring_buffer->get_read_ptr();
-    ssize_t to_write =
-        max_read > file_size - offset ? file_size - offset : max_read;
+    ssize_t to_write = std::min<ssize_t>(max_read, (file_size - offset));
     ssize_t bytes_written;
     if (to_write > 0) {
       if (is_sftp) {
@@ -694,7 +692,8 @@ private:
     target_queue->push_back(task_info->id);
 
     task_info->assign_type.store(assign_type, std::memory_order_relaxed);
-    task_info->affinity_thread.store(affinity_thread, std::memory_order_relaxed);
+    task_info->affinity_thread.store(affinity_thread,
+                                     std::memory_order_relaxed);
     task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
     task_registry_[task_info->id] = task_info;
   }
@@ -710,14 +709,17 @@ private:
         queue_cv_.wait(lock, [this, thread_index]() {
           return !running_.load(std::memory_order_acquire) ||
                  HasPendingTasksLocked() ||
-                 thread_index >= desired_thread_count_.load(std::memory_order_relaxed);
+                 thread_index >=
+                     desired_thread_count_.load(std::memory_order_relaxed);
         });
 
-        if (!running_.load(std::memory_order_relaxed) && !HasPendingTasksLocked()) {
+        if (!running_.load(std::memory_order_relaxed) &&
+            !HasPendingTasksLocked()) {
           return std::nullopt;
         }
 
-        if (thread_index >= desired_thread_count_.load(std::memory_order_relaxed)) {
+        if (thread_index >=
+            desired_thread_count_.load(std::memory_order_relaxed)) {
           const bool has_affinity = thread_index < affinity_queues_.size() &&
                                     !affinity_queues_[thread_index].empty();
           if (!has_affinity) {
@@ -817,10 +819,11 @@ private:
     pd.cb_time = time_now;
     ECM cb_error = {EC::Success, ""};
     auto ctrl_opt = task_info->callback.CallProgress(
-        ProgressCBInfo(cur_task->src, cur_task->dst, cur_task->src_host,
-                       cur_task->dst_host, cur_task->transferred,
-                       cur_task->size, task_info->total_transferred_size.load(std::memory_order_relaxed),
-                       task_info->total_size.load(std::memory_order_relaxed)),
+        ProgressCBInfo(
+            cur_task->src, cur_task->dst, cur_task->src_host,
+            cur_task->dst_host, cur_task->transferred, cur_task->size,
+            task_info->total_transferred_size.load(std::memory_order_relaxed),
+            task_info->total_size.load(std::memory_order_relaxed)),
         &cb_error);
 
     if (cb_error.first != EC::Success && task_info->callback.need_error_cb) {
@@ -1018,10 +1021,11 @@ private:
           buffer_written += bytes_written;
           total_written += bytes_written;
           task_info->total_transferred_size.fetch_add(
-              static_cast<size_t>(bytes_written),
+              static_cast<size_t>(bytes_written), std::memory_order_relaxed);
+          task_info->this_task_transferred_size.store(
+              total_written, std::memory_order_relaxed);
+          task->transferred = task_info->this_task_transferred_size.load(
               std::memory_order_relaxed);
-          task_info->this_task_transferred_size.store(total_written, std::memory_order_relaxed);
-          task->transferred = task_info->this_task_transferred_size.load(std::memory_order_relaxed);
           InnerCallback(task_info, pd, false);
         } else if (bytes_written == 0) {
           break;
@@ -1173,13 +1177,13 @@ private:
         }
         if (bytes_write > 0) {
           task_info->total_transferred_size.fetch_add(
-              static_cast<size_t>(bytes_write),
-              std::memory_order_relaxed);
+              static_cast<size_t>(bytes_write), std::memory_order_relaxed);
           task_info->this_task_transferred_size.store(
               static_cast<size_t>(file_handle.offset),
               std::memory_order_relaxed);
         }
-        task->transferred = task_info->this_task_transferred_size.load(std::memory_order_relaxed);
+        task->transferred = task_info->this_task_transferred_size.load(
+            std::memory_order_relaxed);
         InnerCallback(task_info, pd, false);
       }
     } else if (client->GetProtocol() == ClientProtocol::LOCAL) {
@@ -1218,13 +1222,13 @@ private:
         }
         if (bytes_write > 0) {
           task_info->total_transferred_size.fetch_add(
-              static_cast<size_t>(bytes_write),
-              std::memory_order_relaxed);
+              static_cast<size_t>(bytes_write), std::memory_order_relaxed);
           task_info->this_task_transferred_size.store(
               static_cast<size_t>(file_handle.offset),
               std::memory_order_relaxed);
         }
-        task->transferred = task_info->this_task_transferred_size.load(std::memory_order_relaxed);
+        task->transferred = task_info->this_task_transferred_size.load(
+            std::memory_order_relaxed);
         InnerCallback(task_info, pd, false);
       }
     } else if (client->GetProtocol() == ClientProtocol::FTP) {
@@ -1271,10 +1275,9 @@ private:
           pd->ring_buffer->commit_read(to_read);
           if (cur_task) {
             const size_t delta = static_cast<size_t>(to_read);
-            const size_t total =
-                ti->this_task_transferred_size.fetch_add(
-                    delta, std::memory_order_relaxed) +
-                delta;
+            const size_t total = ti->this_task_transferred_size.fetch_add(
+                                     delta, std::memory_order_relaxed) +
+                                 delta;
             cur_task->transferred = total;
             ti->total_transferred_size.fetch_add(static_cast<size_t>(to_read),
                                                  std::memory_order_relaxed);
@@ -1457,12 +1460,14 @@ private:
         [&]() { this->XToBuffer(src_client, task_info); });
 
     this->BufferToX(dst_client, task_info);
+    int bb = 1;
 
     if (reading_thread.joinable()) {
       reading_thread.join();
     }
 
-    task->transferred = task_info->this_task_transferred_size.load(std::memory_order_relaxed);
+    task->transferred =
+        task_info->this_task_transferred_size.load(std::memory_order_relaxed);
     if (task->rcm.first != EC::Success) {
       return task->rcm;
     }
@@ -1480,7 +1485,8 @@ private:
    */
   void WorkerLoop(size_t thread_index) {
     while (running_.load(std::memory_order_relaxed)) {
-      if (thread_index >= desired_thread_count_.load(std::memory_order_relaxed)) {
+      if (thread_index >=
+          desired_thread_count_.load(std::memory_order_relaxed)) {
         std::lock_guard<std::mutex> lock(queue_mtx_);
         const bool has_affinity = thread_index < affinity_queues_.size() &&
                                   !affinity_queues_[thread_index].empty();
@@ -1530,7 +1536,8 @@ private:
     task_info->start_time.store(timenow(), std::memory_order_relaxed);
 
     if (task_info->callback.need_total_size_cb) {
-      task_info->callback.CallTotalSize(task_info->total_size.load(std::memory_order_relaxed));
+      task_info->callback.CallTotalSize(
+          task_info->total_size.load(std::memory_order_relaxed));
     }
 
     auto &pd = *(task_info->pd);
@@ -1602,7 +1609,8 @@ private:
         resume_offset = 0;
       }
       task.transferred = resume_offset;
-      task_info->this_task_transferred_size.store(resume_offset, std::memory_order_relaxed);
+      task_info->this_task_transferred_size.store(resume_offset,
+                                                  std::memory_order_relaxed);
       if (resume_offset > 0) {
         task_info->total_transferred_size.fetch_add(resume_offset,
                                                     std::memory_order_relaxed);
@@ -1724,7 +1732,8 @@ public:
     }
 
     new_count = ClampThreadCount(new_count);
-    const size_t current = desired_thread_count_.load(std::memory_order_relaxed);
+    const size_t current =
+        desired_thread_count_.load(std::memory_order_relaxed);
     if (new_count == current) {
       return current;
     }
@@ -1810,7 +1819,8 @@ public:
     task_info->total_transferred_size.store(0, std::memory_order_relaxed);
     task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
 
-    const int requested_thread_id = task_info->affinity_thread.load(std::memory_order_relaxed);
+    const int requested_thread_id =
+        task_info->affinity_thread.load(std::memory_order_relaxed);
     const bool affinity_valid = IsValidThreadId(requested_thread_id);
     const TaskAssignType assign_type =
         affinity_valid ? TaskAssignType::Affinity : TaskAssignType::Public;
@@ -1994,8 +2004,10 @@ public:
       auto it = task_registry_.find(id);
       if (it != task_registry_.end() && it->second) {
         const auto &task_info = it->second;
-        const int affinity_thread = task_info->affinity_thread.load(std::memory_order_relaxed);
-        const TaskAssignType assign_type = task_info->assign_type.load(std::memory_order_relaxed);
+        const int affinity_thread =
+            task_info->affinity_thread.load(std::memory_order_relaxed);
+        const TaskAssignType assign_type =
+            task_info->assign_type.load(std::memory_order_relaxed);
         if (assign_type == TaskAssignType::Affinity && affinity_thread >= 0 &&
             static_cast<size_t>(affinity_thread) < affinity_queues_.size()) {
           affinity_queues_[static_cast<size_t>(affinity_thread)].remove(id);

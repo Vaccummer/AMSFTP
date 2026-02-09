@@ -5,11 +5,15 @@
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
+#include "AMManager/SignalMonitor.hpp"
+#include "third_party/indicators/dynamic_progress.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <csignal>
 #include <cstddef>
 #include <exception>
+#include <memory>
 #include <sstream>
 #include <unordered_set>
 
@@ -146,6 +150,202 @@ std::string BuildTaskPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
   return AMStr::amfmt("{}@{} -> {}@{}", src_host, src_name, dst_host, dst_name);
 }
 
+struct TaskRowData {
+  std::string id;
+  std::string status;
+  std::string elapsed;
+  std::string files;
+  std::string size;
+  std::string speed;
+  std::string thread_id;
+  std::string task_now;
+  std::string ec;
+  int order = 0;
+  bool conducting = false;
+};
+
+int StatusOrder_(const std::string &status) {
+  if (status == "Pending")
+    return 0;
+  if (status == "Paused")
+    return 1;
+  if (status == "Conducting")
+    return 2;
+  return 3;
+}
+
+bool IsInterrupted_(const std::shared_ptr<InterruptFlag> &flag) {
+  if (flag && flag->check()) {
+    return true;
+  }
+  if (amgif && amgif->check()) {
+    return true;
+  }
+#ifdef SIGINT
+  const int last_signal = AMCliSignalMonitor::Instance().LastSignal();
+  if (last_signal == SIGINT) {
+    if (flag) {
+      flag->set(true);
+    }
+    if (amgif) {
+      amgif->set(true);
+    }
+    return true;
+  }
+#endif
+  return false;
+}
+
+void ResetInterruptFlag_(const std::shared_ptr<InterruptFlag> &flag) {
+  if (flag && !flag->iskill()) {
+    flag->reset();
+  }
+}
+
+class SignalHookGuard {
+public:
+  SignalHookGuard() : monitor_(AMCliSignalMonitor::Instance()) {
+    monitor_.ResumeHook("GLOBAL");
+    monitor_.SilenceHook("PROMPT");
+    monitor_.SilenceHook("COREPROMPT");
+  }
+  ~SignalHookGuard() {
+    monitor_.ResumeHook("GLOBAL");
+    monitor_.SilenceHook("PROMPT");
+    monitor_.SilenceHook("COREPROMPT");
+  }
+
+private:
+  AMCliSignalMonitor &monitor_;
+};
+
+TaskRowData BuildTaskRow_(const std::shared_ptr<TaskInfo> &task_info) {
+  TaskRowData row;
+  if (!task_info) {
+    row.id = "-";
+    row.status = "-";
+    row.elapsed = "-";
+    row.files = "-";
+    row.size = "-";
+    row.speed = "-";
+    row.thread_id = "-";
+    row.task_now = "-";
+    row.ec = "-";
+    row.order = 3;
+    row.conducting = false;
+    return row;
+  }
+
+  const TaskStatus status = task_info->GetStatus();
+  const bool is_paused = status == TaskStatus::Conducting && task_info->pd &&
+                         task_info->pd->is_pause();
+  row.status = is_paused ? "Paused" : std::string(AM_ENUM_NAME(status));
+  row.order = StatusOrder_(row.status);
+  row.conducting = status == TaskStatus::Conducting || row.status == "Paused";
+
+  double start_time = 0.0;
+  double finished_time = 0.0;
+  size_t transferred = 0;
+  size_t total = 0;
+  size_t filenum = 0;
+  size_t success_num = 0;
+  int thread_id = 0;
+  ECM rcm = {EC::Success, ""};
+  std::string task_now;
+  {
+    std::lock_guard<std::mutex> lock(task_info->mtx);
+    row.id = task_info->id;
+    start_time = task_info->start_time.load(std::memory_order_relaxed);
+    finished_time = task_info->finished_time.load(std::memory_order_relaxed);
+    transferred =
+        task_info->total_transferred_size.load(std::memory_order_relaxed);
+    total = task_info->total_size.load(std::memory_order_relaxed);
+    filenum = task_info->filenum.load(std::memory_order_relaxed);
+    success_num = task_info->success_filenum.load(std::memory_order_relaxed);
+    thread_id = task_info->OnWhichThread.load(std::memory_order_relaxed);
+    rcm = task_info->rcm;
+    if (task_info->cur_task) {
+      task_now = AMPathStr::basename(task_info->cur_task->src);
+    }
+  }
+
+  if (row.status == "Pending") {
+    row.elapsed = "-";
+  } else if (row.status == "Finished") {
+    if (start_time > 0.0 && finished_time > 0.0) {
+      row.elapsed = FormatElapsed_(finished_time - start_time);
+    } else {
+      row.elapsed = "-";
+    }
+  } else {
+    row.elapsed =
+        start_time > 0.0 ? FormatElapsed_(timenow() - start_time) : "-";
+  }
+
+  row.files = AMStr::amfmt("{}/{}", success_num, filenum);
+  row.size = AMStr::amfmt("{}/{}", FormatSize(transferred), FormatSize(total));
+  if (row.status == "Pending") {
+    row.speed = "-";
+  } else {
+    double elapsed = 0.0;
+    if (row.status == "Finished" && start_time > 0.0 && finished_time > 0.0) {
+      elapsed = finished_time - start_time;
+    } else if (start_time > 0.0) {
+      elapsed = timenow() - start_time;
+    }
+    if (elapsed > 0.0) {
+      const double speed = transferred / elapsed;
+      row.speed = AMStr::amfmt("{}/s", FormatSize(static_cast<size_t>(speed)));
+    } else {
+      row.speed = "-";
+    }
+  }
+  row.thread_id = thread_id < 0 ? "-" : std::to_string(thread_id);
+  if (row.status == "Conducting" || row.status == "Paused") {
+    row.task_now = task_now.empty() ? "-" : task_now;
+  } else {
+    row.task_now = "-";
+  }
+  if (row.status == "Finished") {
+    row.ec = AM_ENUM_NAME(rcm.first);
+  } else {
+    row.ec = "-";
+  }
+  return row;
+}
+
+std::string BuildTaskTable_(const std::vector<std::shared_ptr<TaskInfo>> &tasks,
+                            bool include_conducting) {
+  const std::vector<std::string> keys = {"ID",    "Status", "Elapsed", "Size",
+                                         "Speed", "Files",  "TaskNow", "EC"};
+  std::vector<TaskRowData> rows;
+  rows.reserve(tasks.size());
+  for (const auto &task : tasks) {
+    TaskRowData row = BuildTaskRow_(task);
+    if (!include_conducting && row.conducting) {
+      continue;
+    }
+    rows.push_back(std::move(row));
+  }
+  if (rows.empty()) {
+    return "";
+  }
+  std::sort(rows.begin(), rows.end(),
+            [](const TaskRowData &a, const TaskRowData &b) {
+              if (a.order != b.order) {
+                return a.order < b.order;
+              }
+              return a.id < b.id;
+            });
+  std::vector<std::vector<std::string>> lines;
+  lines.reserve(rows.size());
+  for (const auto &row : rows) {
+    lines.push_back({row.id, row.status, row.elapsed, row.size, row.speed,
+                     row.files, row.task_now, row.ec});
+  }
+  return AMStr::FormatUtf8Table(keys, lines);
+}
+
 /**
  * @brief Progress bar wrapper for task status display in TaskInfoPrint::Show.
  */
@@ -206,19 +406,114 @@ private:
   AMProgressBar bar_;
 };
 
-/**
- * @brief Print a task control result line.
- */
-// void PrintTaskControlResult_(AMPromptManager &prompt,
-//                                     const std::string &action,
-//                                     const std::string &task_id,
-//                                     const ECM &rcm) {
-//   if (rcm.first == EC::Success) {
-//     prompt.Print(AMStr::amfmt("✅ {} {}", action, task_id));
-//     return;
-//   }
-//   prompt.Print(AMStr::amfmt("❌ {} {} : {}", action, task_id, rcm.second));
-// }
+void PrintTaskProgress_(const std::shared_ptr<TaskInfo> &task_info,
+                        const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+  if (!task_info) {
+    return;
+  }
+  SignalHookGuard hook_guard;
+  TaskInfoProgressPrinter progress_printer(task_info);
+  progress_printer.Start();
+  const int refresh_ms = 300;
+  bool finished = false;
+  while (true) {
+    if (interrupt_flag && interrupt_flag->check()) {
+      break;
+    }
+    const TaskStatus current_status = progress_printer.Update();
+    if (current_status == TaskStatus::Finished) {
+      finished = true;
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
+  }
+  progress_printer.Finish(finished);
+}
+
+struct TaskProgressGroupBar {
+  std::shared_ptr<TaskInfo> task_info;
+  AMProgressBar bar;
+  std::atomic<bool> multi_progress_mode_{false};
+
+  explicit TaskProgressGroupBar(const std::shared_ptr<TaskInfo> &task)
+      : task_info(task),
+        bar(AMConfigManager::Instance().CreateProgressBar(
+            task ? task->total_size.load(std::memory_order_relaxed) : 0,
+            BuildTaskPrefix_(task))) {
+    if (task) {
+      const double start_time =
+          task->start_time.load(std::memory_order_relaxed);
+      if (start_time > 0.0) {
+        bar.SetStartTimeEpoch(start_time);
+      }
+    }
+  }
+
+  void Update(bool *any_running) {
+    if (!task_info) {
+      return;
+    }
+    const size_t total = task_info->total_size.load(std::memory_order_relaxed);
+    const size_t transferred =
+        task_info->total_transferred_size.load(std::memory_order_relaxed);
+    bar.SetTotal(static_cast<int64_t>(total));
+    bar.SetProgress(static_cast<int64_t>(transferred));
+    bar.SetPrefix(BuildTaskPrefix_(task_info));
+
+    if (task_info->GetStatus() == TaskStatus::Finished) {
+      bar.Finish();
+    } else if (any_running) {
+      *any_running = true;
+    }
+  }
+
+  void print_progress(bool from_multi_progress = true) {
+    (void)from_multi_progress;
+    bar.Print(true);
+  }
+
+  bool is_completed() const { return bar.IsFinished(); }
+};
+
+void PrintTaskProgressGroup_(
+    const std::vector<std::shared_ptr<TaskInfo>> &tasks,
+    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+  if (tasks.empty()) {
+    return;
+  }
+  SignalHookGuard hook_guard;
+  std::vector<std::unique_ptr<TaskProgressGroupBar>> bars;
+  bars.reserve(tasks.size());
+  for (const auto &task : tasks) {
+    bars.push_back(std::make_unique<TaskProgressGroupBar>(task));
+  }
+
+  indicators::DynamicProgress<TaskProgressGroupBar> group(*bars[0]);
+  for (size_t i = 1; i < bars.size(); ++i) {
+    group.push_back(*bars[i]);
+  }
+
+  const int refresh_ms = AMConfigManager::Instance().ResolveRefreshIntervalMs();
+  while (true) {
+    if (IsInterrupted_(interrupt_flag)) {
+      break;
+    }
+    bool any_running = false;
+    for (auto &bar : bars) {
+      bar->Update(&any_running);
+    }
+    group.print_progress();
+    if (!any_running) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
+  }
+
+  for (auto &bar : bars) {
+    bar->bar.EndDisplay();
+  }
+}
+
 } // namespace
 
 /**
@@ -369,7 +664,7 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
   const int refresh_ms = 300;
   bool finished = false;
   while (true) {
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (IsInterrupted_(interrupt_flag)) {
       break;
     }
     const TaskStatus current_status = progress_printer.Update();
@@ -624,7 +919,14 @@ AMTransferManager &AMTransferManager::Instance() {
 AMTransferManager::AMTransferManager()
     : config_(AMConfigManager::Instance()),
       client_manager_(AMClientManager::Instance(config_)),
-      prompt_(AMPromptManager::Instance()), task_printer_(prompt_) {}
+      prompt_(AMPromptManager::Instance()), task_printer_(prompt_) {
+  const int max_threads =
+      config_.GetSettingInt({"InternalVars", "MaxThreadNum"}, 16);
+  int init_threads =
+      config_.GetSettingInt({"InternalVars", "InitThreadNum"}, 1);
+  init_threads = std::max(1, std::min(init_threads, max_threads));
+  worker_.ThreadCount(static_cast<size_t>(init_threads));
+}
 
 /**
  * @brief Set the public result callback wrapper for all task completions.
@@ -1034,13 +1336,75 @@ ECM AMTransferManager::SubmitCachedTransferSets(
  */
 ECM AMTransferManager::Show(
     const ID &task_id, const std::shared_ptr<InterruptFlag> &interrupt_flag) {
-  auto task_info = FindTaskById_(task_id);
-  if (!task_info) {
-    return {EC::TaskNotFound, AMStr::amfmt("Task not found: {}", task_id)};
-  }
-  task_printer_.Show(task_info, interrupt_flag);
+  return Show(std::vector<ID>{task_id}, interrupt_flag);
+}
 
-  return {EC::Success, ""};
+ECM AMTransferManager::Show(
+    const std::vector<ID> &task_ids,
+    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+  if (task_ids.empty()) {
+    return {EC::InvalidArg, "Task id required"};
+  }
+
+  ResetInterruptFlag_(interrupt_flag);
+  ResetInterruptFlag_(amgif);
+
+  std::unordered_set<ID> seen;
+  std::vector<std::shared_ptr<TaskInfo>> valid_tasks;
+  valid_tasks.reserve(task_ids.size());
+  ECM last_error = {EC::Success, ""};
+
+  for (const auto &id : task_ids) {
+    if (id.empty()) {
+      continue;
+    }
+    if (!seen.insert(id).second) {
+      continue;
+    }
+    auto task_info = FindTaskById_(id);
+    if (!task_info) {
+      last_error =
+          ECM{EC::TaskNotFound, AMStr::amfmt("Task not found: {}", id)};
+      prompt_.ErrorFormat(last_error);
+      continue;
+    }
+    valid_tasks.push_back(task_info);
+  }
+
+  if (valid_tasks.empty()) {
+    return last_error.first == EC::Success
+               ? ECM{EC::TaskNotFound, "Task id not found"}
+               : last_error;
+  }
+
+  std::vector<std::shared_ptr<TaskInfo>> non_conducting;
+  std::vector<std::shared_ptr<TaskInfo>> conducting;
+  for (const auto &task : valid_tasks) {
+    TaskRowData row = BuildTaskRow_(task);
+    if (row.conducting) {
+      conducting.push_back(task);
+    } else {
+      non_conducting.push_back(task);
+    }
+  }
+
+  const std::string table = BuildTaskTable_(non_conducting, false);
+  if (!table.empty()) {
+    prompt_.Print(table);
+  }
+
+  if (!conducting.empty()) {
+    if (conducting.size() > 1) {
+      PrintTaskProgressGroup_(conducting, interrupt_flag);
+    } else {
+      PrintTaskProgress_(conducting[0], interrupt_flag);
+    }
+  }
+
+  ResetInterruptFlag_(interrupt_flag);
+  ResetInterruptFlag_(amgif);
+
+  return last_error.first == EC::Success ? ECM{EC::Success, ""} : last_error;
 }
 
 /**
@@ -1054,23 +1418,97 @@ ECM AMTransferManager::List(
     finished = true;
     conducting = true;
   }
+  return {EC::Success, ""};
 
   std::vector<std::shared_ptr<TaskInfo>> pending_tasks;
   std::vector<std::shared_ptr<TaskInfo>> finished_tasks;
   std::vector<std::shared_ptr<TaskInfo>> conducting_tasks;
 
-  if (pending) {
-    pending_tasks = worker_.get_pending_tasks();
-  }
-  if (finished) {
-    finished_tasks = SnapshotHistory_();
-  }
-  if (conducting) {
-    conducting_tasks = worker_.get_conducting_tasks();
+  auto collect_tasks = [&]() {
+    if (pending) {
+      pending_tasks = worker_.get_pending_tasks();
+    }
+    if (finished) {
+      finished_tasks = SnapshotHistory_();
+    }
+    if (conducting) {
+      conducting_tasks = worker_.get_conducting_tasks();
+    }
+  };
+
+  collect_tasks();
+
+  const bool enable_dynamic =
+      conducting && interrupt_flag && !conducting_tasks.empty();
+  if (!enable_dynamic) {
+    std::vector<std::shared_ptr<TaskInfo>> all_tasks;
+    all_tasks.reserve(pending_tasks.size() + finished_tasks.size() +
+                      conducting_tasks.size());
+    all_tasks.insert(all_tasks.end(), pending_tasks.begin(),
+                     pending_tasks.end());
+    all_tasks.insert(all_tasks.end(), conducting_tasks.begin(),
+                     conducting_tasks.end());
+    all_tasks.insert(all_tasks.end(), finished_tasks.begin(),
+                     finished_tasks.end());
+    const std::string table = BuildTaskTable_(all_tasks, true);
+    if (!table.empty()) {
+      prompt_.Print(table);
+    }
+    return {EC::Success, ""};
   }
 
-  task_printer_.List(pending_tasks, finished_tasks, conducting_tasks,
-                     interrupt_flag);
+  prompt_.SetCacheOutputOnly(true);
+  const int refresh_ms = 500;
+  bool alt_screen = false;
+  SignalHookGuard hook_guard;
+  while (true) {
+    if (IsInterrupted_(interrupt_flag)) {
+      if (alt_screen) {
+        prompt_.UseAlternateScreen(false);
+      }
+      prompt_.SetCacheOutputOnly(false);
+      prompt_.FlushCachedOutput();
+      return {EC::Terminate, "Interrupted"};
+    }
+
+    pending_tasks.clear();
+    finished_tasks.clear();
+    conducting_tasks.clear();
+    collect_tasks();
+
+    std::vector<std::shared_ptr<TaskInfo>> all_tasks;
+    all_tasks.reserve(pending_tasks.size() + finished_tasks.size() +
+                      conducting_tasks.size());
+    all_tasks.insert(all_tasks.end(), pending_tasks.begin(),
+                     pending_tasks.end());
+    all_tasks.insert(all_tasks.end(), conducting_tasks.begin(),
+                     conducting_tasks.end());
+    all_tasks.insert(all_tasks.end(), finished_tasks.begin(),
+                     finished_tasks.end());
+    const std::string table = BuildTaskTable_(all_tasks, true);
+    if (table.empty()) {
+      break;
+    }
+
+    if (!alt_screen) {
+      prompt_.UseAlternateScreen(true);
+      alt_screen = true;
+    }
+
+    prompt_.PrintRaw("\x1b[H", false);
+    prompt_.PrintRaw(table, false);
+    prompt_.PrintRaw("\x1b[J", false);
+
+    if (conducting_tasks.empty()) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
+  }
+  prompt_.SetCacheOutputOnly(false);
+  if (alt_screen) {
+    prompt_.UseAlternateScreen(false);
+  }
+  prompt_.FlushCachedOutput();
   return {EC::Success, ""};
 }
 
@@ -1126,6 +1564,21 @@ ECM AMTransferManager::QueryCachedUserSet(size_t set_index) const {
   temp->transfer_sets = std::make_shared<std::vector<UserTransferSet>>(
       std::vector<UserTransferSet>{transfer_set});
   task_printer_.InspectTransferSets(temp);
+  return {EC::Success, ""};
+}
+
+ECM AMTransferManager::Thread(int num) {
+  const int max_threads =
+      config_.GetSettingInt({"InternalVars", "MaxThreadNum"}, 16);
+  if (num < 0) {
+    const size_t current = worker_.ThreadCount(0);
+    prompt_.Print(AMStr::amfmt("ThreadNum: {}", current));
+    return {EC::Success, ""};
+  }
+
+  int clamped = std::max(1, std::min(num, max_threads));
+  const size_t applied = worker_.ThreadCount(static_cast<size_t>(clamped));
+  prompt_.Print(AMStr::amfmt("ThreadNum: {}", applied));
   return {EC::Success, ""};
 }
 

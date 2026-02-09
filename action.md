@@ -1,27 +1,12 @@
-AMTransferManager::Show now accept multi taskids
+# Progressbar Size Fix
 
-1. remove duplicated ids
-2. check ids exists, prompt error if id not valid
-3. print non-conducting tasks in a table
-4. print conducting tasks(include paused) in porgressbar(1 bar per task)
+wsl@test.7z -> mac@test.7z                                 █▓         16.8% | 1.90 GB/11.30 GB [02:02<00:00 0 B/s      ]
 
-AMTransferManager::List: print all task in table format(even conducting)
+16.8%  -> fix percentage as wide as "99.9%"
 
-+ if possible, dynamic update conducting task info just like nvidia-smi
-  + if implement such feature, set a sign for Pint in PromptManager to cache print string
+1.90 GB -> fix size as wide as 999.9MB
+when size num exceed 1000, change unit
 
-# Table Keys
+02:02 -> fix time as wide as "1:02:09"  (when not longer than 1 hour, hide hour part)
 
-(use - for key not suits current status)
-
-id 
-
-status(Pending, Paused,Conducting, Finished)(also task display order)
-
-Elapsed(From conducting point till now)
-
-Files (success_filenum/filenum)
-
-Size(transferred/total)
-
-ThreadID
+0 B/s -> fix speed as wide as "123.9MB/s"  (like size num process)

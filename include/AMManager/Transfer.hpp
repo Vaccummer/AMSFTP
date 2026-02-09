@@ -214,6 +214,18 @@ public:
            const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
 
   /**
+   * @brief Show task status by multiple IDs using TaskInfoPrint.
+   *
+   * The order of display follows status order (Pending, Paused, Conducting,
+   * Finished). Invalid IDs will be reported and skipped.
+   *
+   * @param task_ids Task IDs to show.
+   * @param interrupt_flag Optional flag to stop progress rendering.
+   */
+  ECM Show(const std::vector<ID> &task_ids,
+           const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+
+  /**
    * @brief List tasks by status using TaskInfoPrint.
    *
    * @param pending Whether to list pending tasks.
@@ -247,6 +259,17 @@ public:
    * @brief Query a cached user transfer set by cache index.
    */
   ECM QueryCachedUserSet(size_t set_index) const;
+
+  /**
+   * @brief Get or set worker thread count.
+   *
+   * When num < 0, prints and returns current thread count. Otherwise clamps the
+   * value to [1, InternalVars.MaxThreadNum], applies it, prints the new count,
+   * and returns success.
+   *
+   * @param num Desired thread count, or negative to query.
+   */
+  ECM Thread(int num = -1);
 
   /**
    * @brief Query a single task entry by entry ID.

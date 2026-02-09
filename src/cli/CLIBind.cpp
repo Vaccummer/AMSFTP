@@ -172,6 +172,10 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
   commands.rtt_cmd->add_option("times", args.rtt.times, "Samples (default: 1)")
       ->expected(0, 1);
 
+  commands.clear_cmd = app.add_subcommand("clear", "Clear screen");
+  commands.clear_cmd->add_flag("-a,--all", args.clear.all,
+                               "Clear scrollback buffer");
+
   commands.cp_cmd = app.add_subcommand("cp", "Transfer files/directories");
   commands.cp_cmd->add_option("src", args.cp.srcs, "Source paths")
       ->expected(1, -1);
@@ -291,8 +295,7 @@ void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
       ->add_option("index", args.task_userset.indices, "Cache index")
       ->expected(0, -1);
 
-  commands.task_list_cmd =
-      commands.task_cmd->add_subcommand("list", "List tasks");
+  commands.task_list_cmd = commands.task_cmd->add_subcommand("ls", "List tasks");
   commands.task_list_cmd->add_flag("-p,--pending", args.task_list.pending,
                                    "Show pending tasks");
   commands.task_list_cmd->add_flag("-f,--finished", args.task_list.finished,
@@ -302,9 +305,15 @@ void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
 
   commands.task_show_cmd =
       commands.task_cmd->add_subcommand("show", "Show task status");
-  commands.task_show_cmd->add_option("id", args.task_show.id, "Task ID")
+  commands.task_show_cmd->add_option("id", args.task_show.ids, "Task ID")
       ->required()
-      ->expected(1, 1);
+      ->expected(1, -1);
+
+  commands.task_thread_cmd =
+      commands.task_cmd->add_subcommand("thread", "Get or set thread count");
+  commands.task_thread_cmd->add_option("num", args.task_thread.num,
+                                       "Thread count (optional)")
+      ->expected(0, 1);
 
   commands.task_inspect_cmd =
       commands.task_cmd->add_subcommand("inspect", "Inspect a task");
@@ -882,6 +891,13 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     return result;
   }
 
+  if (cli_commands.clear_cmd && cli_commands.clear_cmd->parsed()) {
+    AMPromptManager::Instance().ClearScreen(args.clear.all);
+    result.rcm = {EC::Success, ""};
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
   if (cli_commands.cp_cmd->parsed()) {
     if (args.cp.srcs.empty()) {
       std::cerr << "cp requires at least one source" << std::endl;
@@ -1127,7 +1143,14 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
 
   if (cli_commands.task_show_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    result.rcm = transfer_manager.Show(args.task_show.id, flag);
+    result.rcm = transfer_manager.Show(args.task_show.ids, flag);
+    SetCliExitCode(static_cast<int>(result.rcm.first));
+    return result;
+  }
+
+  if (cli_commands.task_thread_cmd && cli_commands.task_thread_cmd->parsed()) {
+    AMTransferManager &transfer_manager = AMTransferManager::Instance();
+    result.rcm = transfer_manager.Thread(args.task_thread.num);
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }
