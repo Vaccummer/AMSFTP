@@ -237,11 +237,13 @@ TaskRowData BuildTaskRow_(const std::shared_ptr<TaskInfo> &task_info) {
   }
 
   const TaskStatus status = task_info->GetStatus();
-  const bool is_paused = status == TaskStatus::Conducting && task_info->pd &&
-                         task_info->pd->is_pause();
+  const bool is_paused =
+      status == TaskStatus::Paused ||
+      (status == TaskStatus::Conducting && task_info->pd &&
+       task_info->pd->is_pause_only());
   row.status = is_paused ? "Paused" : std::string(AM_ENUM_NAME(status));
   row.order = StatusOrder_(row.status);
-  row.conducting = status == TaskStatus::Conducting || row.status == "Paused";
+  row.conducting = status == TaskStatus::Conducting;
 
   double start_time = 0.0;
   double finished_time = 0.0;
@@ -638,8 +640,9 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
     return;
   }
 
-  if (status == TaskStatus::Conducting && task_info->pd &&
-      task_info->pd->is_pause()) {
+  if (status == TaskStatus::Paused ||
+      (status == TaskStatus::Conducting && task_info->pd &&
+       task_info->pd->is_pause_only())) {
     const size_t transferred =
         task_info->total_transferred_size.load(std::memory_order_relaxed);
     const size_t total = task_info->total_size.load(std::memory_order_relaxed);

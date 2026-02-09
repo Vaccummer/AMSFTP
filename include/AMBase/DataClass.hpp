@@ -947,8 +947,16 @@ struct WkProgressData {
 
   // Control signal helpers
   bool is_terminate() const {
+    return control_sign.load(std::memory_order_acquire) !=
+           static_cast<int>(ControlSignal::Running);
+  }
+  bool is_terminate_only() const {
     return control_sign.load(std::memory_order_acquire) ==
            static_cast<int>(ControlSignal::Terminate);
+  }
+  bool is_pause_only() const {
+    return control_sign.load(std::memory_order_acquire) ==
+           static_cast<int>(ControlSignal::Pause);
   }
   bool is_pause() const {
     return control_sign.load(std::memory_order_acquire) ==
@@ -1008,6 +1016,11 @@ struct TaskInfo {
    * @brief Start timestamp.
    */
   std::atomic<double> start_time{0};
+
+  /**
+   * @brief Preserve start_time when resuming from pause.
+   */
+  std::atomic<bool> keep_start_time{false};
 
   /**
    * @brief Finished timestamp.
