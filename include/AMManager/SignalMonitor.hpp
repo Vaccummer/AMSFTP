@@ -6,6 +6,8 @@
 #include <csignal>
 #ifndef _WIN32
 #include <signal.h>
+#else
+#include <windows.h>
 #endif
 #include <functional>
 #include <mutex>
@@ -61,6 +63,7 @@ public:
 #ifdef SIGTERM
     std::signal(SIGTERM, AMCliSignalMonitor::SignalHandler);
 #endif
+    SetConsoleCtrlHandler(AMCliSignalMonitor::ConsoleCtrlHandler_, TRUE);
 #else
     struct sigaction sa{};
     sa.sa_handler = AMCliSignalMonitor::SignalHandler;
@@ -185,6 +188,24 @@ public:
   static void SignalHandler(int signum) { GlobalSignalInt = signum; }
 
 private:
+#ifdef _WIN32
+  /**
+   * @brief Console control handler for CTRL+C/CTRL+BREAK.
+   */
+  static BOOL WINAPI ConsoleCtrlHandler_(DWORD type) {
+    switch (type) {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+      GlobalSignalInt = SIGINT;
+      if (amgif) {
+        amgif->set(true);
+      }
+      return TRUE;
+    default:
+      return FALSE;
+    }
+  }
+#endif
   AMCliSignalMonitor() {
     SignalHook global;
     global.interrupt_flag = amgif;

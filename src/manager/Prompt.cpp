@@ -124,7 +124,8 @@ void AMPromptManager::Print(const std::vector<std::string> &items,
     out.push_back('\n');
   }
 
-  if (AMProgressBar::IsAnyBarShowing() || ic_is_editline_active()) {
+  if (cache_output_only_ || AMProgressBar::IsAnyBarShowing() ||
+      ic_is_editline_active()) {
     std::lock_guard<std::mutex> lock(cached_output_mutex);
     cached_output_ += out;
     return;
@@ -225,6 +226,40 @@ void AMPromptManager::FlushCachedOutput() {
     std::lock_guard<std::mutex> lock2(cached_output_mutex);
     cached_output_.clear();
   }
+}
+
+void AMPromptManager::SetCacheOutputOnly(bool enabled) {
+  std::lock_guard<std::mutex> lock(cached_output_mutex);
+  cache_output_only_ = enabled;
+}
+
+void AMPromptManager::PrintRaw(const std::string &text, bool append_newline) {
+  std::string out = text;
+  if (append_newline && (out.empty() || out.back() != '\n')) {
+    out.push_back('\n');
+  }
+  std::lock_guard<std::mutex> lock(print_mutex_);
+  ic_print(out.c_str());
+  ic_term_flush();
+}
+
+void AMPromptManager::ClearScreen(bool clear_scrollback) {
+  std::lock_guard<std::mutex> lock(print_mutex_);
+  if (clear_scrollback) {
+    ic_print("\x1b[3J");
+  }
+  ic_print("\x1b[2J\x1b[H");
+  ic_term_flush();
+}
+
+void AMPromptManager::UseAlternateScreen(bool enable) {
+  std::lock_guard<std::mutex> lock(print_mutex_);
+  if (enable) {
+    ic_print("\x1b[?1049h");
+  } else {
+    ic_print("\x1b[?1049l");
+  }
+  ic_term_flush();
 }
 
 bool AMPromptManager::Prompt(const std::string &prompt,

@@ -22,7 +22,6 @@
 #include <utility>
 #include <vector>
 
-
 // 标准库
 
 // 自身依赖
@@ -173,7 +172,9 @@ public:
   inline void set(bool value) {
     is_interrupted.store(value, std::memory_order_relaxed);
   }
-  inline void reset() { is_interrupted.store(false, std::memory_order_relaxed); }
+  inline void reset() {
+    is_interrupted.store(false, std::memory_order_relaxed);
+  }
   inline void kill() {
     is_interrupted.store(true, std::memory_order_relaxed);
     is_killed.store(true, std::memory_order_relaxed);
@@ -946,29 +947,29 @@ struct WkProgressData {
 
   // Control signal helpers
   bool is_terminate() const {
-    return control_sign.load(std::memory_order_relaxed) ==
+    return control_sign.load(std::memory_order_acquire) ==
            static_cast<int>(ControlSignal::Terminate);
   }
   bool is_pause() const {
-    return control_sign.load(std::memory_order_relaxed) ==
+    return control_sign.load(std::memory_order_acquire) ==
            static_cast<int>(ControlSignal::Pause);
   }
   bool is_running() const {
-    return control_sign.load(std::memory_order_relaxed) ==
+    return control_sign.load(std::memory_order_acquire) ==
            static_cast<int>(ControlSignal::Running);
   }
 
   void set_terminate() {
     control_sign.store(static_cast<int>(ControlSignal::Terminate),
-                       std::memory_order_relaxed);
+                       std::memory_order_release);
   }
   void set_pause() {
     control_sign.store(static_cast<int>(ControlSignal::Pause),
-                       std::memory_order_relaxed);
+                       std::memory_order_release);
   }
   void set_running() {
     control_sign.store(static_cast<int>(ControlSignal::Running),
-                       std::memory_order_relaxed);
+                       std::memory_order_release);
   }
 
   void CallInnerCallback(bool force = false) {
@@ -1136,7 +1137,9 @@ struct TaskInfo {
   /**
    * @brief Safely read the task status.
    */
-  TaskStatus GetStatus() const { return status.load(std::memory_order_acquire); }
+  TaskStatus GetStatus() const {
+    return status.load(std::memory_order_acquire);
+  }
 
   /**
    * @brief Safely set the current task pointer.

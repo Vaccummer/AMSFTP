@@ -140,6 +140,13 @@ struct RttArgs {
 };
 
 /**
+ * @brief CLI argument container for clear.
+ */
+struct ClearArgs {
+  bool all = false;
+};
+
+/**
  * @brief CLI argument container for cp (transfer).
  */
 struct CpArgs {
@@ -242,7 +249,7 @@ struct TaskListArgs {
  * @brief CLI argument container for task show.
  */
 struct TaskShowArgs {
-  std::string id;
+  std::vector<std::string> ids;
 };
 
 /**
@@ -252,6 +259,13 @@ struct TaskInspectArgs {
   std::string id;
   bool set = false;
   bool entry = false;
+};
+
+/**
+ * @brief CLI argument container for task thread.
+ */
+struct TaskThreadArgs {
+  int num = -1;
 };
 
 /**
@@ -333,6 +347,7 @@ struct CliArgsPool {
   TreeArgs tree;
   RealpathArgs realpath;
   RttArgs rtt;
+  ClearArgs clear;
   CpArgs cp;
   SftpArgs sftp;
   FtpArgs ftp;
@@ -347,6 +362,7 @@ struct CliArgsPool {
   TaskListArgs task_list;
   TaskShowArgs task_show;
   TaskInspectArgs task_inspect;
+  TaskThreadArgs task_thread;
   TaskCacheAddArgs task_cache_add;
   TaskCacheRmArgs task_cache_rm;
   TaskCacheSubmitArgs task_cache_submit;
@@ -384,6 +400,7 @@ struct CliCommands {
   CLI::App *tree_cmd = nullptr;
   CLI::App *realpath_cmd = nullptr;
   CLI::App *rtt_cmd = nullptr;
+  CLI::App *clear_cmd = nullptr;
   CLI::App *cp_cmd = nullptr;
   CLI::App *sftp_cmd = nullptr;
   CLI::App *ftp_cmd = nullptr;
@@ -409,6 +426,7 @@ struct CliCommands {
   CLI::App *task_list_cmd = nullptr;
   CLI::App *task_show_cmd = nullptr;
   CLI::App *task_inspect_cmd = nullptr;
+  CLI::App *task_thread_cmd = nullptr;
   CLI::App *task_userset_cmd = nullptr;
   CLI::App *task_query_cmd = nullptr;
   CLI::App *task_terminate_cmd = nullptr;
