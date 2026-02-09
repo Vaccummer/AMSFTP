@@ -4,13 +4,13 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstddef>
 #include <ctime>
 #include <fcntl.h>
 #include <functional>
 #include <libssh2.h>
 #include <list>
 #include <mutex>
-#include <numeric>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -766,14 +766,6 @@ private:
     task_registry_[task_info->id] = task_info;
   }
 
-  void StorePausedTask(const std::shared_ptr<TaskInfo> &task_info) {
-    if (!task_info) {
-      return;
-    }
-    std::lock_guard<std::mutex> lock(registry_mtx_);
-    task_registry_[task_info->id] = task_info;
-  }
-
   /**
    * @brief Dequeue a task for a specific worker thread.
    */
@@ -823,8 +815,8 @@ private:
           continue;
         }
         auto task_info = it->second;
-        task_registry_.erase(it);
-        return std::make_optional(std::make_pair(task_id, task_info));
+        // task_registry_.erase(it);
+        return {{task_id, task_info}};
       }
     }
   }
@@ -1589,10 +1581,9 @@ private:
     }
     if (task->transferred >= task->size) {
       return task->rcm;
-    } else if (pd.is_terminate()) {
-      if (pd.is_pause_only()) {
-        return {EC::TransferPause, "Task paused by user"};
-      }
+    } else if (pd.is_pause_only()) {
+      return {EC::TransferPause, "Task paused by user"};
+    } else if (pd.is_terminate_only()) {
       return {EC::Terminate, "Task terminated by user"};
     }
     return {EC::UnknownError, "Task not finished but exited unexpectedly"};
@@ -1623,27 +1614,20 @@ private:
       task_info->OnWhichThread.store(static_cast<int>(thread_index),
                                      std::memory_order_relaxed);
 
-      EnsureProgressData(task_info);
-
       if (ShouldSkipTask(task_info)) {
-        task_info->pd.reset();
         task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
         HandleCompletedTask(task_info);
         ClearConducting(thread_index);
         continue;
       }
 
+      EnsureProgressData(task_info);
       ExecuteTask(task_info);
-      task_info->pd.reset();
-      task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
+      task_info->DeleteProgressData();
+      // task_info->OnWhichThread.store(-1);
 
-      if (task_info->GetStatus() == TaskStatus::Paused) {
-        StorePausedTask(task_info);
-        ClearConducting(thread_index);
-        continue;
-      }
-
-      if (running_.load(std::memory_order_relaxed)) {
+      if (running_.load(std::memory_order_relaxed) &&
+          task_info->GetStatus() != TaskStatus::Paused) {
         HandleCompletedTask(task_info);
       }
       ClearConducting(thread_index);
@@ -1672,19 +1656,18 @@ private:
 
     if (!task_info->tasks) {
       task_info->SetStatus(TaskStatus::Finished);
+      task_info->SetResult({EC::InvalidArg, "No task is provided"});
       task_info->finished_time.store(timenow(), std::memory_order_relaxed);
       return;
     }
 
     for (auto &task : *(task_info->tasks)) {
       // Check terminate/pause before each file
-      if (pd.is_terminate()) {
-        if (pd.is_pause_only()) {
-          task_info->SetStatus(TaskStatus::Paused);
-          task_info->keep_start_time.store(true, std::memory_order_relaxed);
-          task_info->SetResult({EC::TransferPause, "Task paused by user"});
-          return;
-        }
+      if (pd.is_pause_only()) {
+        task_info->SetStatus(TaskStatus::Paused);
+        task_info->keep_start_time.store(true, std::memory_order_relaxed);
+        return;
+      } else if (pd.is_terminate_only()) {
         task.rcm = {EC::Terminate, "Task terminated by user"};
         task.IsFinished = true;
         continue;
@@ -1730,36 +1713,58 @@ private:
       task.rcm = ECM(EC::Success, "");
       size_t resume_offset = task.transferred;
       bool resume_ok = false;
-      if (resume_offset > 0 && resume_offset <= task.size) {
-        auto [dst_rcm, dst_info] = dst_client->stat(task.dst, false);
-        if (dst_rcm.first == EC::Success && dst_info.type == PathType::FILE) {
-          if (dst_info.size >= resume_offset && dst_info.size <= task.size) {
-            resume_ok = true;
+
+      // offset check
+      if (resume_offset > 0) {
+        if (resume_offset > task.size) {
+          task.rcm = {EC::InvalidOffset, "Offset exceeds src size"};
+          task.IsFinished = true;
+          if (task_info->callback.need_error_cb) {
+            task_info->callback.CallError(ErrorCBInfo(
+                task.rcm, task.src, task.dst, task.src_host, task.dst_host));
           }
+          continue;
         }
+        auto [dst_rcm, dst_info] = dst_client->stat(task.dst, false);
+        if (dst_rcm.first != EC::Success) {
+          task.rcm = {EC::InvalidOffset, "Dst stat failed but offset is given"};
+          task.IsFinished = true;
+          goto OffsetErrorCB;
+        }
+        if (dst_info.type == PathType::DIR) {
+          task.rcm = {EC::NotAFile, "Dst already exists but is a directory"};
+          task.IsFinished = true;
+          goto OffsetErrorCB;
+        }
+        if (resume_offset > dst_info.size) {
+          task.rcm = {EC::InvalidOffset, "Offset exceeds dst file size"};
+          task.IsFinished = true;
+          goto OffsetErrorCB;
+        }
+        goto PassOffsetCheck;
+      OffsetErrorCB:
+        if (task_info->callback.need_error_cb) {
+          task_info->callback.CallError(ErrorCBInfo(
+              task.rcm, task.src, task.dst, task.src_host, task.dst_host));
+        }
+        continue;
       }
-      if (!resume_ok) {
-        resume_offset = 0;
-      }
-      task.transferred = resume_offset;
+    PassOffsetCheck:
       task_info->this_task_transferred_size.store(resume_offset,
                                                   std::memory_order_relaxed);
       if (resume_offset > 0) {
         task_info->total_transferred_size.fetch_add(resume_offset,
                                                     std::memory_order_relaxed);
       }
-      if (resume_offset >= task.size && resume_offset > 0) {
-        task.IsFinished = true;
-        InnerCallback(task_info, pd, true);
-        continue;
-      }
+
       if (src_client->GetUID() == dst_client->GetUID() &&
           src_client->GetProtocol() == ClientProtocol::SFTP) {
         pd.ring_buffer = nullptr;
+      } else {
+        pd.ring_buffer = std::make_shared<StreamRingBuffer>(CalculateBufferSize(
+            src_client, dst_client,
+            task_info->buffer_size.load(std::memory_order_relaxed)));
       }
-      pd.ring_buffer = std::make_shared<StreamRingBuffer>(CalculateBufferSize(
-          src_client, dst_client,
-          task_info->buffer_size.load(std::memory_order_relaxed)));
 
       task.rcm = TransferSingleFile(src_client, dst_client, task_info);
       if (pd.is_pause_only()) {
@@ -1782,17 +1787,21 @@ private:
       InnerCallback(task_info, pd, true);
     }
 
-    // bool any_error = false;
-    // for (auto &task : tasks) {
-    //   if (task.rcm.first != EC::Success) {
-    //     any_error = true;
-    //     task_info->rcm = task.rcm; // Last error
-    //   }
-    // }
-    // if (!any_error) {
-    //   task_info->rcm = {EC::Success, ""};
-    // }
-
+    if (!task_info->pd->is_terminate_only()) {
+      bool any_error = false;
+      for (auto &task : *(task_info->tasks)) {
+        if (task.rcm.first != EC::Success) {
+          any_error = true;
+          task_info->SetResult(task.rcm); // Last error
+          break;
+        }
+      }
+      if (!any_error) {
+        task_info->SetResult({EC::Success, ""});
+      }
+    } else {
+      task_info->SetResult({EC::Terminate, "Task terminated by user"});
+    }
     task_info->SetStatus(TaskStatus::Finished);
     task_info->finished_time.store(timenow(), std::memory_order_relaxed);
   }
@@ -1944,18 +1953,9 @@ public:
     task_info->submit_time.store(timenow(), std::memory_order_relaxed);
     task_info->SetStatus(TaskStatus::Pending);
 
-    if (task_info->total_size.load(std::memory_order_relaxed) == 0) {
-      task_info->total_size.store(
-          std::accumulate(task_info->tasks->begin(), task_info->tasks->end(), 0,
-                          [](size_t sum, const TransferTask &task) {
-                            return sum + task.size;
-                          }),
-          std::memory_order_relaxed);
-    }
-    if (task_info->filenum.load(std::memory_order_relaxed) == 0) {
-      task_info->filenum.store(task_info->tasks->size(),
-                               std::memory_order_relaxed);
-    }
+    task_info->CalTotalSize();
+    task_info->CalFileNum();
+
     task_info->total_transferred_size.store(0, std::memory_order_relaxed);
     task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
 
@@ -2044,41 +2044,22 @@ public:
    * @return Pair of task info and active flag (true if not finished).
    */
   std::pair<std::shared_ptr<TaskInfo>, bool> get_task(const TaskId &id) const {
-    {
-      std::lock_guard<std::mutex> lock(registry_mtx_);
-      auto it = task_registry_.find(id);
-      if (it != task_registry_.end()) {
-        return {it->second, true};
-      }
+
+    std::lock_guard<std::mutex> lock(registry_mtx_);
+    auto it = task_registry_.find(id);
+    if (it != task_registry_.end()) {
+      return {it->second, true};
     }
 
-    {
-      std::lock_guard<std::mutex> lock(conducting_mtx_);
-      for (size_t idx = 0; idx < conducting_by_thread_.size(); ++idx) {
-        if (conducting_by_thread_[idx] == id) {
-          auto task_info = conducting_infos_[idx];
-          if (task_info) {
-            return {task_info, true};
-          }
-          break;
-        }
-      }
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(result_mtx_);
-      auto it = results_.find(id);
-      if (it != results_.end()) {
-        return {it->second, false};
-      }
-    }
     return {nullptr, false};
   }
 
   /**
-   * @brief Pause a task by ID.
+   * @brief Pause a task by ID and wait for paused status.
+   *
+   * @param timeout_ms Max wait time in milliseconds; negative to wait forever.
    */
-  ECM pause(const TaskId &id) {
+  ECM pause(const TaskId &id, int timeout_ms = 5000) {
     auto [task_info, active] = get_task(id);
     if (!task_info || !active) {
       return {EC::TaskNotFound, AMStr::amfmt("Task not found: {}", id)};
@@ -2095,18 +2076,30 @@ public:
         (task_info->pd && task_info->pd->is_pause_only())) {
       return {EC::Success, AMStr::amfmt("Task already paused: {}", id)};
     }
-    task_info->SetStatus(TaskStatus::Paused);
-    task_info->keep_start_time.store(true, std::memory_order_relaxed);
     if (task_info->pd) {
       task_info->pd->set_pause();
     }
-    return {EC::Success, ""};
+    const int64_t start = am_ms();
+    while (timeout_ms < 0 || (am_ms() - start) < timeout_ms) {
+      status_t = task_info->GetStatus();
+      if (status_t == TaskStatus::Paused) {
+        return {EC::Success, ""};
+      }
+      if (status_t == TaskStatus::Finished) {
+        return {EC::OperationUnsupported,
+                AMStr::amfmt("Task is already finished: {}", id)};
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return {EC::OperationTimeout, AMStr::amfmt("Task pause timeout: {}", id)};
   }
 
   /**
-   * @brief Resume a task by ID.
+   * @brief Resume a task by ID and wait for in-flight pause to complete.
+   *
+   * @param timeout_ms Max wait time in milliseconds; negative to wait forever.
    */
-  ECM resume(const TaskId &id) {
+  ECM resume(const TaskId &id, int timeout_ms = 5000) {
     auto [task_info, active] = get_task(id);
     if (!task_info || !active) {
       return {EC::TaskNotFound, AMStr::amfmt("Task not found: {}", id)};
@@ -2119,6 +2112,26 @@ public:
       return {EC::OperationUnsupported,
               AMStr::amfmt("Task is already finished: {}", id)};
     }
+    if (task_info->pd && task_info->pd->is_pause_only() &&
+        status_t != TaskStatus::Paused) {
+      const int64_t start = am_ms();
+      while (timeout_ms < 0 || (am_ms() - start) < timeout_ms) {
+        status_t = task_info->GetStatus();
+        if (status_t == TaskStatus::Paused) {
+          break;
+        }
+        if (status_t == TaskStatus::Finished) {
+          return {EC::OperationUnsupported,
+                  AMStr::amfmt("Task is already finished: {}", id)};
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      }
+      if (status_t != TaskStatus::Paused) {
+        return {EC::OperationTimeout,
+                AMStr::amfmt("Task pause timeout: {}", id)};
+      }
+    }
+    status_t = task_info->GetStatus();
     if (status_t == TaskStatus::Paused ||
         (task_info->pd && task_info->pd->is_pause_only())) {
       if (task_info->pd) {
@@ -2172,7 +2185,6 @@ public:
       auto it = task_registry_.find(id);
       if (it != task_registry_.end() && it->second) {
         const auto &task_info = it->second;
-
         if (task_info->pd) {
           task_info->pd->set_terminate();
         }
@@ -2180,9 +2192,9 @@ public:
         task_info->SetStatus(TaskStatus::Finished);
         task_info->finished_time.store(timenow(), std::memory_order_relaxed);
         task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
-        queue_cv_.notify_all();
-        task_registry_.erase(it);
         HandleCompletedTask(task_info);
+        task_registry_.erase(it);
+        queue_cv_.notify_all();
         return {task_info, {EC::Success, ""}};
       }
     }

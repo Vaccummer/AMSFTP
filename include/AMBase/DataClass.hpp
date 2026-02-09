@@ -1236,6 +1236,11 @@ struct TaskInfo {
     filenum.store(count, std::memory_order_relaxed);
     return count;
   }
+
+  void DeleteProgressData() {
+    std::lock_guard<std::mutex> lock(mtx);
+    this->pd = nullptr;
+  }
 };
 
 namespace AMTree {

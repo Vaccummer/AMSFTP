@@ -175,6 +175,7 @@ enum class ErrorCode {
   ConfigCanceled = 105,
   TaskNotFound = 106,
   IndexOutOfRange = 107,
+  InvalidOffset = 108,
 
   // FTP Server Error
   UnsupportFTPProtocol = 47,

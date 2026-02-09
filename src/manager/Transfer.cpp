@@ -169,9 +169,11 @@ int StatusOrder_(const std::string &status) {
     return 0;
   if (status == "Paused")
     return 1;
-  if (status == "Conducting")
+  if (status == "Finished")
     return 2;
-  return 3;
+  if (status == "Conducting")
+    return 3;
+  return 4;
 }
 
 bool IsInterrupted_(const std::shared_ptr<InterruptFlag> &flag) {
@@ -237,10 +239,9 @@ TaskRowData BuildTaskRow_(const std::shared_ptr<TaskInfo> &task_info) {
   }
 
   const TaskStatus status = task_info->GetStatus();
-  const bool is_paused =
-      status == TaskStatus::Paused ||
-      (status == TaskStatus::Conducting && task_info->pd &&
-       task_info->pd->is_pause_only());
+  const bool is_paused = status == TaskStatus::Paused ||
+                         (status == TaskStatus::Conducting && task_info->pd &&
+                          task_info->pd->is_pause_only());
   row.status = is_paused ? "Paused" : std::string(AM_ENUM_NAME(status));
   row.order = StatusOrder_(row.status);
   row.conducting = status == TaskStatus::Conducting;
@@ -1414,22 +1415,42 @@ ECM AMTransferManager::Show(
  * @brief List tasks by status using TaskInfoPrint.
  */
 ECM AMTransferManager::List(
-    bool pending, bool finished, bool conducting,
+    bool pending, bool suspend, bool finished, bool conducting,
     const std::shared_ptr<InterruptFlag> &interrupt_flag) {
-  if (!pending && !finished && !conducting) {
+  if (!pending && !suspend && !finished && !conducting) {
     pending = true;
+    suspend = true;
     finished = true;
     conducting = true;
   }
-  return {EC::Success, ""};
 
   std::vector<std::shared_ptr<TaskInfo>> pending_tasks;
+  std::vector<std::shared_ptr<TaskInfo>> paused_tasks;
   std::vector<std::shared_ptr<TaskInfo>> finished_tasks;
   std::vector<std::shared_ptr<TaskInfo>> conducting_tasks;
 
   auto collect_tasks = [&]() {
-    if (pending) {
-      pending_tasks = worker_.get_pending_tasks();
+    if (pending || suspend) {
+      auto registry_tasks = worker_.get_pending_tasks();
+      pending_tasks.reserve(registry_tasks.size());
+      paused_tasks.reserve(registry_tasks.size());
+      for (const auto &task : registry_tasks) {
+        if (!task) {
+          continue;
+        }
+        const TaskStatus status = task->GetStatus();
+        const bool is_paused =
+            status == TaskStatus::Paused ||
+            (status == TaskStatus::Conducting && task->pd &&
+             task->pd->is_pause_only());
+        if (is_paused) {
+          if (suspend) {
+            paused_tasks.push_back(task);
+          }
+        } else if (pending) {
+          pending_tasks.push_back(task);
+        }
+      }
     }
     if (finished) {
       finished_tasks = SnapshotHistory_();
@@ -1445,10 +1466,11 @@ ECM AMTransferManager::List(
       conducting && interrupt_flag && !conducting_tasks.empty();
   if (!enable_dynamic) {
     std::vector<std::shared_ptr<TaskInfo>> all_tasks;
-    all_tasks.reserve(pending_tasks.size() + finished_tasks.size() +
-                      conducting_tasks.size());
+    all_tasks.reserve(pending_tasks.size() + paused_tasks.size() +
+                      finished_tasks.size() + conducting_tasks.size());
     all_tasks.insert(all_tasks.end(), pending_tasks.begin(),
                      pending_tasks.end());
+    all_tasks.insert(all_tasks.end(), paused_tasks.begin(), paused_tasks.end());
     all_tasks.insert(all_tasks.end(), conducting_tasks.begin(),
                      conducting_tasks.end());
     all_tasks.insert(all_tasks.end(), finished_tasks.begin(),
@@ -1475,15 +1497,17 @@ ECM AMTransferManager::List(
     }
 
     pending_tasks.clear();
+    paused_tasks.clear();
     finished_tasks.clear();
     conducting_tasks.clear();
     collect_tasks();
 
     std::vector<std::shared_ptr<TaskInfo>> all_tasks;
-    all_tasks.reserve(pending_tasks.size() + finished_tasks.size() +
-                      conducting_tasks.size());
+    all_tasks.reserve(pending_tasks.size() + paused_tasks.size() +
+                      finished_tasks.size() + conducting_tasks.size());
     all_tasks.insert(all_tasks.end(), pending_tasks.begin(),
                      pending_tasks.end());
+    all_tasks.insert(all_tasks.end(), paused_tasks.begin(), paused_tasks.end());
     all_tasks.insert(all_tasks.end(), conducting_tasks.begin(),
                      conducting_tasks.end());
     all_tasks.insert(all_tasks.end(), finished_tasks.begin(),

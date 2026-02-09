@@ -241,6 +241,7 @@ struct DelArgs {
  */
 struct TaskListArgs {
   bool pending = false;
+  bool suspend = false;
   bool finished = false;
   bool conducting = false;
 };
