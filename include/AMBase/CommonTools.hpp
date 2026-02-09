@@ -1,22 +1,20 @@
 #pragma once
+#include "third_party/indicators/color.hpp"
+#include "third_party/indicators/setting.hpp"
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <indicators/color.hpp>
-#include <indicators/setting.hpp>
+
 #define _WINSOCKAPI_
 #include "Isocline/isocline.h"
+#include "third_party/indicators/cursor_control.hpp"
+#include "third_party/indicators/progress_bar.hpp" // win 平台上该库会包含 windows.h
+#include "third_party/indicators/terminal_size.hpp"
 #include <algorithm>
 #include <boost/locale/encoding.hpp>
 #include <cctype>
 #include <cstdlib>
 #include <deque>
-#include <indicators/cursor_control.hpp>
-#include <indicators/cursor_movement.hpp>
-#include <indicators/dynamic_progress.hpp>
-#include <indicators/multi_progress.hpp>
-#include <indicators/progress_bar.hpp> // win 平台上该库会包含 windows.h
-#include <indicators/terminal_size.hpp>
 #include <initializer_list>
 #include <iomanip>
 #include <iostream>
@@ -466,6 +464,228 @@ inline size_t CharNum(const std::string &utf8_str) {
   }
 
   return char_count;
+}
+
+/** Decode next UTF-8 codepoint; returns U+FFFD on error and advances index by 1. */
+inline uint32_t NextCodepointUtf8(const std::string &utf8_str, size_t &idx) {
+  const size_t str_len = utf8_str.size();
+  if (idx >= str_len) {
+    return 0;
+  }
+  const uint8_t c0 = static_cast<uint8_t>(utf8_str[idx]);
+  if ((c0 & 0x80) == 0) {
+    ++idx;
+    return c0;
+  }
+  if ((c0 & 0xE0) == 0xC0 && idx + 1 < str_len) {
+    const uint8_t c1 = static_cast<uint8_t>(utf8_str[idx + 1]);
+    if ((c1 & 0xC0) == 0x80) {
+      idx += 2;
+      return (static_cast<uint32_t>(c0 & 0x1F) << 6) |
+             (static_cast<uint32_t>(c1 & 0x3F));
+    }
+  } else if ((c0 & 0xF0) == 0xE0 && idx + 2 < str_len) {
+    const uint8_t c1 = static_cast<uint8_t>(utf8_str[idx + 1]);
+    const uint8_t c2 = static_cast<uint8_t>(utf8_str[idx + 2]);
+    if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80) {
+      idx += 3;
+      return (static_cast<uint32_t>(c0 & 0x0F) << 12) |
+             (static_cast<uint32_t>(c1 & 0x3F) << 6) |
+             (static_cast<uint32_t>(c2 & 0x3F));
+    }
+  } else if ((c0 & 0xF8) == 0xF0 && idx + 3 < str_len) {
+    const uint8_t c1 = static_cast<uint8_t>(utf8_str[idx + 1]);
+    const uint8_t c2 = static_cast<uint8_t>(utf8_str[idx + 2]);
+    const uint8_t c3 = static_cast<uint8_t>(utf8_str[idx + 3]);
+    if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80 &&
+        (c3 & 0xC0) == 0x80) {
+      idx += 4;
+      return (static_cast<uint32_t>(c0 & 0x07) << 18) |
+             (static_cast<uint32_t>(c1 & 0x3F) << 12) |
+             (static_cast<uint32_t>(c2 & 0x3F) << 6) |
+             (static_cast<uint32_t>(c3 & 0x3F));
+    }
+  }
+  ++idx;
+  return 0xFFFD;
+}
+
+/** Heuristic display width for a Unicode codepoint in monospace terminals. */
+inline size_t CodepointDisplayWidth(uint32_t cp) {
+  if (cp == 0) {
+    return 0;
+  }
+  // Combining marks (zero width)
+  if ((cp >= 0x0300 && cp <= 0x036F) || (cp >= 0x1AB0 && cp <= 0x1AFF) ||
+      (cp >= 0x1DC0 && cp <= 0x1DFF) || (cp >= 0x20D0 && cp <= 0x20FF) ||
+      (cp >= 0xFE20 && cp <= 0xFE2F)) {
+    return 0;
+  }
+  // Wide characters (CJK/emoji/box drawing) treated as width 2.
+  if ((cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2329 && cp <= 0x232A) ||
+      (cp >= 0x2E80 && cp <= 0xA4CF) || (cp >= 0xAC00 && cp <= 0xD7A3) ||
+      (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0xFE10 && cp <= 0xFE19) ||
+      (cp >= 0xFE30 && cp <= 0xFE6F) || (cp >= 0xFF00 && cp <= 0xFF60) ||
+      (cp >= 0xFFE0 && cp <= 0xFFE6) || (cp >= 0x2600 && cp <= 0x27BF) ||
+      (cp >= 0x1F1E6 && cp <= 0x1F1FF) || (cp >= 0x1F300 && cp <= 0x1FAFF)) {
+    return 2;
+  }
+  return 1;
+}
+
+/** Display width for a UTF-8 string (accounts for wide and combining chars). */
+inline size_t DisplayWidthUtf8(const std::string &utf8_str) {
+  size_t width = 0;
+  size_t idx = 0;
+  while (idx < utf8_str.size()) {
+    const uint32_t cp = NextCodepointUtf8(utf8_str, idx);
+    width += CodepointDisplayWidth(cp);
+  }
+  return width;
+}
+
+/**
+ * Repeat a UTF-8 token (e.g., a single box-drawing glyph) for the given count.
+ * This is used to build table borders where each column has variable width.
+ */
+inline std::string RepeatUtf8(const std::string &token, size_t count) {
+  std::string out;
+  out.reserve(token.size() * count);
+  for (size_t i = 0; i < count; ++i) {
+    out += token;
+  }
+  return out;
+}
+
+/**
+ * Right-pad a UTF-8 string with spaces until it reaches the target display
+ * width. Width is measured in UTF-8 codepoint count using CharNum, not byte
+ * length.
+ */
+inline std::string PadRightUtf8(const std::string &text, size_t width) {
+  const size_t len = DisplayWidthUtf8(text);
+  if (len >= width) {
+    return text;
+  }
+  return text + std::string(width - len, ' ');
+}
+
+/** Parse #RRGGBB to ANSI 24-bit foreground color escape code; empty on failure. */
+inline std::string AnsiColor24(const std::string &hex_color) {
+  if (hex_color.size() != 7 || hex_color[0] != '#') {
+    return "";
+  }
+  auto hex_to_int = [](char c) -> int {
+    if (c >= '0' && c <= '9')
+      return c - '0';
+    if (c >= 'a' && c <= 'f')
+      return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F')
+      return 10 + (c - 'A');
+    return -1;
+  };
+  int vals[6];
+  for (int i = 0; i < 6; ++i) {
+    vals[i] = hex_to_int(hex_color[1 + i]);
+    if (vals[i] < 0) {
+      return "";
+    }
+  }
+  const int r = vals[0] * 16 + vals[1];
+  const int g = vals[2] * 16 + vals[3];
+  const int b = vals[4] * 16 + vals[5];
+  return AMStr::amfmt("\x1b[38;2;{};{};{}m", r, g, b);
+}
+
+/**
+ * Build a UTF-8 bordered table string using the provided column keys and rows.
+ * Column order strictly follows the order in the keys vector, and missing cells
+ * are treated as empty strings so all rows align correctly.
+ */
+inline std::string
+FormatUtf8Table(const std::vector<std::string> &keys,
+                const std::vector<std::vector<std::string>> &rows,
+                const std::string &skeleton_color = "", size_t pad_left = 1,
+                size_t pad_right = 1, size_t pad_top = 0,
+                size_t pad_bottom = 0) {
+  if (keys.empty()) {
+    return "";
+  }
+
+  const size_t col_count = keys.size();
+  std::vector<size_t> widths(col_count, 0);
+  for (size_t c = 0; c < col_count; ++c) {
+    widths[c] = DisplayWidthUtf8(keys[c]);
+  }
+  for (const auto &row : rows) {
+    for (size_t c = 0; c < col_count; ++c) {
+      const std::string &cell = (c < row.size()) ? row[c] : std::string();
+      const size_t cell_len = DisplayWidthUtf8(cell);
+      if (cell_len > widths[c]) {
+        widths[c] = cell_len;
+      }
+    }
+  }
+
+  const std::string color_prefix = AnsiColor24(skeleton_color);
+  const std::string color_suffix = color_prefix.empty() ? "" : "\x1b[0m";
+
+  auto build_border = [&](const std::string &left, const std::string &mid,
+                          const std::string &right) {
+    std::string line = color_prefix + left + color_suffix;
+    for (size_t c = 0; c < col_count; ++c) {
+      line += color_prefix +
+              RepeatUtf8("─", widths[c] + pad_left + pad_right) + color_suffix;
+      line += color_prefix + ((c + 1 == col_count) ? right : mid) + color_suffix;
+    }
+    return line;
+  };
+
+  auto build_row = [&](const std::vector<std::string> &row) {
+    std::string line = color_prefix + "│" + color_suffix;
+    for (size_t c = 0; c < col_count; ++c) {
+      const std::string &cell = (c < row.size()) ? row[c] : std::string();
+      line += std::string(pad_left, ' ');
+      line += PadRightUtf8(cell, widths[c]);
+      line += std::string(pad_right, ' ');
+      line += color_prefix + "│" + color_suffix;
+    }
+    return line;
+  };
+
+  auto build_empty_row = [&]() {
+    std::string line = color_prefix + "│" + color_suffix;
+    for (size_t c = 0; c < col_count; ++c) {
+      line += std::string(widths[c] + pad_left + pad_right, ' ');
+      line += color_prefix + "│" + color_suffix;
+    }
+    return line;
+  };
+
+  std::ostringstream oss;
+  oss << build_border("┌", "┬", "┐") << "\n";
+  for (size_t i = 0; i < pad_top; ++i) {
+    oss << build_empty_row() << "\n";
+  }
+  oss << build_row(keys) << "\n";
+  for (size_t i = 0; i < pad_bottom; ++i) {
+    oss << build_empty_row() << "\n";
+  }
+  oss << build_border("├", "┼", "┤") << "\n";
+  for (size_t r = 0; r < rows.size(); ++r) {
+    for (size_t i = 0; i < pad_top; ++i) {
+      oss << build_empty_row() << "\n";
+    }
+    oss << build_row(rows[r]);
+    for (size_t i = 0; i < pad_bottom; ++i) {
+      oss << "\n" << build_empty_row();
+    }
+    if (r + 1 < rows.size()) {
+      oss << "\n";
+    }
+  }
+  oss << "\n" << build_border("└", "┴", "┘");
+  return oss.str();
 }
 
 inline std::pair<bool, int> endswith(const std::string &str,
@@ -1182,4 +1402,3 @@ std::vector<T> UniqueTargetsKeepOrder(const std::vector<T> &targets) {
   }
   return unique;
 }
-
