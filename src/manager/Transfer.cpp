@@ -6,6 +6,7 @@
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstddef>
 #include <exception>
@@ -146,6 +147,66 @@ std::string BuildTaskPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
 }
 
 /**
+ * @brief Progress bar wrapper for task status display in TaskInfoPrint::Show.
+ */
+class TaskInfoProgressPrinter {
+public:
+  /**
+   * @brief Construct a progress printer for a task.
+   * @param task_info Task info used for live updates (nullable).
+   */
+  explicit TaskInfoProgressPrinter(const std::shared_ptr<TaskInfo> &task_info)
+      : task_info_(task_info),
+        bar_(AMConfigManager::Instance().CreateProgressBar(
+            static_cast<int64_t>(task_info ? task_info->total_size.load(
+                                                 std::memory_order_relaxed)
+                                           : 0),
+            BuildTaskPrefix_(task_info))) {
+    if (task_info_) {
+      bar_.SetStartTimeEpoch(
+          task_info_->start_time.load(std::memory_order_relaxed));
+    }
+  }
+
+  /**
+   * @brief Start rendering the progress bar.
+   */
+  void Start() { bar_.Print(); }
+
+  /**
+   * @brief Update the bar state from task info.
+   * @return Current task status.
+   */
+  TaskStatus Update() {
+    if (!task_info_) {
+      return TaskStatus::Pending;
+    }
+    const size_t total = task_info_->total_size.load(std::memory_order_relaxed);
+    const size_t transferred =
+        task_info_->total_transferred_size.load(std::memory_order_relaxed);
+    bar_.SetTotal(static_cast<int64_t>(total));
+    bar_.SetProgress(static_cast<int64_t>(transferred));
+    bar_.SetPrefix(BuildTaskPrefix_(task_info_));
+    return task_info_->GetStatus();
+  }
+
+  /**
+   * @brief Finish the progress display and restore the terminal state.
+   * @param completed Whether to mark the bar as completed.
+   */
+  void Finish(bool completed) {
+    if (completed) {
+      bar_.Finish();
+    }
+    bar_.EndDisplay();
+  }
+
+private:
+  std::shared_ptr<TaskInfo> task_info_;
+  AMProgressBar bar_;
+};
+
+/**
  * @brief Print a task control result line.
  */
 // void PrintTaskControlResult_(AMPromptManager &prompt,
@@ -181,9 +242,9 @@ void TaskInfoPrint::TaskSubmitPrint(
   if (nickname_str.empty()) {
     nickname_str = "local";
   }
-  prompt_.Print(AMStr::amfmt("ID: {}; FileNum: {}; TotalSize: {}; Clients: {}",
-                             task_info->id, file_num, FormatSize(total_size),
-                             nickname_str));
+  prompt_.Print(AMStr::amfmt(
+      "SubmitInfo ID: {}; FileNum: {}; TotalSize: {}; Clients: {}",
+      task_info->id, file_num, FormatSize(total_size), nickname_str));
 }
 
 /**
@@ -213,7 +274,7 @@ void TaskInfoPrint::TaskResultPrint(
     thread_id = task_info->OnWhichThread.load(std::memory_order_relaxed);
     task_id = task_info->id;
     filenum = task_info->filenum.load(std::memory_order_relaxed);
-    success = task_info->success_filenum.load(std::memory_order_relaxed);
+    success_num = task_info->success_filenum.load(std::memory_order_relaxed);
 
     result = task_info->rcm;
     success = result.first == EC::Success;
@@ -232,13 +293,12 @@ void TaskInfoPrint::TaskResultPrint(
       success
           ? ""
           : AMStr::amfmt(" {}: {}", AM_ENUM_NAME(result.first), result.second);
-  if (success) {
-    prompt_.Print(AMStr::amfmt(
-        "TaskResult  {} ID: {}; Files: {}/{}; Size: {}/{}; ThreadID: {};{}",
-        prefix, task_id, success_num, filenum, FormatSize(transferred),
-        FormatSize(total), thread_id, rcm_text));
-    return;
-  }
+
+  prompt_.Print(AMStr::amfmt(
+      "TaskResult  {} ID: {}; Files: {}/{}; Size: {}/{}; ThreadID: {};{}",
+      prefix, task_id, success_num, filenum, FormatSize(transferred),
+      FormatSize(total), thread_id, rcm_text));
+  return;
 }
 
 /**
@@ -254,8 +314,7 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
   const std::string status_name = AM_ENUM_NAME(status);
 
   if (status == TaskStatus::Pending) {
-    const size_t total =
-        task_info->total_size.load(std::memory_order_relaxed);
+    const size_t total = task_info->total_size.load(std::memory_order_relaxed);
     const int affinity =
         task_info->affinity_thread.load(std::memory_order_relaxed);
     const std::string submit_time =
@@ -269,8 +328,7 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
   if (status == TaskStatus::Finished) {
     const size_t transferred =
         task_info->total_transferred_size.load(std::memory_order_relaxed);
-    const size_t total =
-        task_info->total_size.load(std::memory_order_relaxed);
+    const size_t total = task_info->total_size.load(std::memory_order_relaxed);
     const int thread_id =
         task_info->OnWhichThread.load(std::memory_order_relaxed);
     const double start_time =
@@ -289,48 +347,39 @@ void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
       task_info->pd->is_pause()) {
     const size_t transferred =
         task_info->total_transferred_size.load(std::memory_order_relaxed);
-    const size_t total =
-        task_info->total_size.load(std::memory_order_relaxed);
+    const size_t total = task_info->total_size.load(std::memory_order_relaxed);
     const int thread_id =
         task_info->OnWhichThread.load(std::memory_order_relaxed);
     const double start_time =
         task_info->start_time.load(std::memory_order_relaxed);
     const double elapsed_time = timenow() - start_time;
     const std::string elapsed = FormatElapsed_(elapsed_time);
-    prompt_.Print(
-        AMStr::amfmt("[{}] Status: {} {}/{} ThreadID: {} ElapsedTime: {}",
-                     task_info->id, "Paused", FormatSize(transferred),
-                     FormatSize(total), thread_id, elapsed));
+    prompt_.Print(AMStr::amfmt(
+        "ID: {}; Status: {}; Files: {}/{}; Sise: {}/{}; "
+        "ThreadID: {}; ElapsedTime: {}",
+        task_info->id, "Paused",
+        task_info->success_filenum.load(std::memory_order_relaxed),
+        task_info->filenum.load(std::memory_order_relaxed),
+        FormatSize(transferred), FormatSize(total), thread_id, elapsed));
     return;
   }
 
-  AMProgressBar bar = AMConfigManager::Instance().CreateProgressBar(
-      static_cast<int64_t>(
-          task_info->total_size.load(std::memory_order_relaxed)),
-      BuildTaskPrefix_(task_info));
-  bar.SetStartTimeEpoch(
-      task_info->start_time.load(std::memory_order_relaxed));
-  bar.Print();
+  TaskInfoProgressPrinter progress_printer(task_info);
+  progress_printer.Start();
   const int refresh_ms = 300;
+  bool finished = false;
   while (true) {
     if (interrupt_flag && interrupt_flag->check()) {
       break;
     }
-    const TaskStatus current_status = task_info->GetStatus();
-    const size_t total =
-        task_info->total_size.load(std::memory_order_relaxed);
-    const size_t transferred =
-        task_info->total_transferred_size.load(std::memory_order_relaxed);
-    bar.SetTotal(static_cast<int64_t>(total));
-    bar.SetProgress(static_cast<int64_t>(transferred));
-    bar.SetPrefix(BuildTaskPrefix_(task_info));
+    const TaskStatus current_status = progress_printer.Update();
     if (current_status == TaskStatus::Finished) {
-      bar.Finish();
+      finished = true;
       break;
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
   }
-  bar.EndDisplay();
+  progress_printer.Finish(finished);
 }
 
 /**
@@ -358,7 +407,8 @@ void TaskInfoPrint::List(
   // bars.reserve(conducting.size());
   // for (const auto &task : conducting) {
   //   auto bar = std::make_shared<AMProgressBar>(
-  //       static_cast<int64_t>(task ? task->total_size.load(std::memory_order_relaxed) : 0),
+  //       static_cast<int64_t>(task ?
+  //       task->total_size.load(std::memory_order_relaxed) : 0),
   //       BuildTaskPrefix_(task));
   //   group.AddBar(bar);
   //   bars.push_back(bar);
@@ -378,7 +428,8 @@ void TaskInfoPrint::List(
   //       continue;
   //     }
   //     const size_t total = task->total_size.load(std::memory_order_relaxed);
-  //     const size_t transferred = task->total_transferred_size.load(std::memory_order_relaxed);
+  //     const size_t transferred =
+  //     task->total_transferred_size.load(std::memory_order_relaxed);
   //     bar->SetTotal(static_cast<int64_t>(total));
   //     bar->SetProgress(static_cast<int64_t>(transferred));
   //     bar->SetPrefix(BuildTaskPrefix_(task));
@@ -447,18 +498,18 @@ void TaskInfoPrint::Inspect(const std::shared_ptr<TaskInfo> &task_info,
       {"finished_time", finished_time},
       {"rcm", rcm_text},
       {"total_transferred_size",
-       FormatSize(task_info->total_transferred_size.load(
-           std::memory_order_relaxed))},
-      {"total_size", FormatSize(task_info->total_size.load(
-                        std::memory_order_relaxed))},
+       FormatSize(
+           task_info->total_transferred_size.load(std::memory_order_relaxed))},
+      {"total_size",
+       FormatSize(task_info->total_size.load(std::memory_order_relaxed))},
       {"files_num", std::to_string(files_num)},
       {"quiet", task_info->quiet ? "true" : "false"},
       {"affinity_thread", std::to_string(task_info->affinity_thread.load(
                               std::memory_order_relaxed))},
       {"on_which_thread", std::to_string(task_info->OnWhichThread.load(
-                             std::memory_order_relaxed))},
-      {"buffer_size", std::to_string(task_info->buffer_size.load(
-                         std::memory_order_relaxed))},
+                              std::memory_order_relaxed))},
+      {"buffer_size",
+       std::to_string(task_info->buffer_size.load(std::memory_order_relaxed))},
       {"client_names", JoinStrings_(client_names, ", ")}};
 
   size_t max_len = 0;
@@ -988,6 +1039,7 @@ ECM AMTransferManager::Show(
     return {EC::TaskNotFound, AMStr::amfmt("Task not found: {}", task_id)};
   }
   task_printer_.Show(task_info, interrupt_flag);
+
   return {EC::Success, ""};
 }
 
@@ -1449,9 +1501,8 @@ ECM AMTransferManager::transfer(
 
   {
     std::unique_lock<std::mutex> lock(done_mtx);
-    done_cv.wait(lock, [&]() {
-      return remaining.load(std::memory_order_relaxed) <= 0;
-    });
+    done_cv.wait(
+        lock, [&]() { return remaining.load(std::memory_order_relaxed) <= 0; });
   }
   return task_info->GetResult();
 }

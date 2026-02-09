@@ -14,7 +14,6 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(replxx CONFIG REQUIRED)
 find_package(libssh2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
-find_package(indicators CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 
 # ========= MSVC 运行库（/MD /MDd） =========
@@ -36,6 +35,7 @@ add_executable(amsftp ${AMSFTP_SOURCES})
 
 target_include_directories(amsftp PRIVATE
   "${PROJECT_SOURCE_DIR}/include"
+  "${PROJECT_SOURCE_DIR}/include/third_party"
 )
 
 # ========= 链接（全部用 vcpkg target） =========

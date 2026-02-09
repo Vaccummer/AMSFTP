@@ -1,13 +1,27 @@
+AMTransferManager::Show now accept multi taskids
 
-**ProgressBar Improvement**
+1. remove duplicated ids
+2. check ids exists, prompt error if id not valid
+3. print non-conducting tasks in a table
+4. print conducting tasks(include paused) in porgressbar(1 bar per task)
 
-- Add a new function in `ConfigManager` to create progress bars, which initializes them based on the configuration read from `style.ProgressBar`.
-- Validate and restrict the input color values, mapping them to the following `indicators::Color` enum:
+AMTransferManager::List: print all task in table format(even conducting)
 
-```cpp
-namespace indicators {
-  enum class Color { grey, red, green, yellow, blue, magenta, cyan, white, unspecified };
-}
-```
++ if possible, dynamic update conducting task info just like nvidia-smi
+  + if implement such feature, set a sign for Pint in PromptManager to cache print string
 
-- Since the progress bar configuration is immutable at runtime, a single instance can be created upfront and then duplicated/cloned as needed.
+# Table Keys
+
+(use - for key not suits current status)
+
+id 
+
+status(Pending, Paused,Conducting, Finished)(also task display order)
+
+Elapsed(From conducting point till now)
+
+Files (success_filenum/filenum)
+
+Size(transferred/total)
+
+ThreadID
