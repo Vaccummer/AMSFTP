@@ -32,7 +32,7 @@ using EC = ErrorCode;
 using ECM = std::pair<EC, std::string>;
 using AuthCallback =
     std::function<std::optional<std::string>(const AuthCBInfo &)>;
-
+namespace {
 // 解析 IIS/DOS 格式的目录列表行
 // 格式: 03-03-25  11:27AM                90624 zlib1.dll
 //       01-10-26  12:01PM       <DIR>          AMSFTP
@@ -508,6 +508,7 @@ inline EC GetFTPErrorCode(CURLcode curl_code) {
     return EC::CommonFailure;
   }
 }
+} // namespace
 
 // FTP Client using libcurl
 class AMFTPClient : public BaseClient {
