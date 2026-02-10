@@ -16,10 +16,10 @@ extern "C" {
 #endif
 
 // 不透明句柄
-typedef struct ConfigHandle ConfigHandle;
-
+using ConfigHandle = struct ConfigHandle;
 // 读取 TOML 并按 JSON Schema 过滤未知字段，返回句柄
-// 失败返回 NULL，out_err 返回错误信息（UTF-8），需要 cfgffi_free_string 释放
+// 失败返回 NULL，out_err 返回错误信息（UTF-8），需要 cfgffi_free_string
+// 释放
 CFGFFI_API ConfigHandle *cfgffi_read(const char *path, const char *schema_json,
                                      char **out_err);
 
@@ -53,5 +53,3 @@ CFGFFI_API void cfgffi_free_handle(ConfigHandle *h);
 #ifdef __cplusplus
 } // extern "C"
 #endif
-
-

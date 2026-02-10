@@ -1,6 +1,7 @@
 #pragma once
 // 标准库
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>

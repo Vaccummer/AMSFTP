@@ -295,7 +295,8 @@ void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
       ->add_option("index", args.task_userset.indices, "Cache index")
       ->expected(0, -1);
 
-  commands.task_list_cmd = commands.task_cmd->add_subcommand("ls", "List tasks");
+  commands.task_list_cmd =
+      commands.task_cmd->add_subcommand("ls", "List tasks");
   commands.task_list_cmd->add_flag("-p,--pending", args.task_list.pending,
                                    "Show pending tasks");
   commands.task_list_cmd->add_flag("-s,--suspend", args.task_list.suspend,
@@ -313,8 +314,8 @@ void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
 
   commands.task_thread_cmd =
       commands.task_cmd->add_subcommand("thread", "Get or set thread count");
-  commands.task_thread_cmd->add_option("num", args.task_thread.num,
-                                       "Thread count (optional)")
+  commands.task_thread_cmd
+      ->add_option("num", args.task_thread.num, "Thread count (optional)")
       ->expected(0, 1);
 
   commands.task_inspect_cmd =
@@ -946,7 +947,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.ch_cmd->parsed()) {
-    const bool is_interactive = enforce_interactive || AMIsInteractive.load(std::memory_order_relaxed);
+    const bool is_interactive =
+        enforce_interactive || AMIsInteractive.load(std::memory_order_relaxed);
     if (is_interactive) {
       result.rcm = filesystem.change_client(args.ch.nickname, flag);
       SetCliExitCode(static_cast<int>(result.rcm.first));
@@ -968,7 +970,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.connect_cmd->parsed()) {
-    const bool is_interactive = enforce_interactive || AMIsInteractive.load(std::memory_order_relaxed);
+    const bool is_interactive =
+        enforce_interactive || AMIsInteractive.load(std::memory_order_relaxed);
     result.rcm = filesystem.connect(args.connect.nickname, args.connect.force,
                                     flag, false);
     if (result.rcm.first != EC::Success) {
@@ -1047,7 +1050,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     return result;
   }
 
-  if (!enforce_interactive && !AMIsInteractive.load(std::memory_order_relaxed)) {
+  if (!enforce_interactive &&
+      !AMIsInteractive.load(std::memory_order_relaxed)) {
     std::string msg =
         AMStr::amfmt("{} not supported in Non-Interactive mode", command_name);
     result.rcm = {EC::OperationUnsupported, msg};
@@ -1136,10 +1140,9 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
 
   if (cli_commands.task_list_cmd->parsed()) {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    result.rcm =
-        transfer_manager.List(args.task_list.pending, args.task_list.suspend,
-                              args.task_list.finished,
-                              args.task_list.conducting, flag);
+    result.rcm = transfer_manager.List(
+        args.task_list.pending, args.task_list.suspend, args.task_list.finished,
+        args.task_list.conducting, flag);
     SetCliExitCode(static_cast<int>(result.rcm.first));
     return result;
   }

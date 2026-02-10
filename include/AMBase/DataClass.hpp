@@ -13,19 +13,16 @@
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <random>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
 // 标准库
 
 // 自身依赖
-#include "AMBase/CommonTools.hpp"
 #include "AMBase/Enum.hpp"
 
 // 自身依赖
@@ -43,11 +40,26 @@ using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
 
+template <typename T> struct NBResult {
+  T value;           // 函数返回值
+  WaitResult status; // 等待状态
+
+  [[nodiscard]] bool ok() const { return status == WaitResult::Ready; }
+  [[nodiscard]] bool is_timeout() const {
+    return status == WaitResult::Timeout;
+  }
+  [[nodiscard]] bool is_interrupted() const {
+    return status == WaitResult::Interrupted;
+  }
+  [[nodiscard]] bool is_error() const { return status == WaitResult::Error; }
+};
 struct AMTokenSpan {
   size_t start = 0;
   size_t end = 0;
   AMTokenType type = AMTokenType::Common;
 };
+
+enum class ControlSignal : int { Running = 0, Pause = 1, Terminate = 2 };
 
 template <typename Fn, typename... Args>
 inline ECM CallCallbackSafe(const Fn &fn, Args &&...args) {
@@ -76,43 +88,6 @@ inline std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn, Args &&...args) {
   } catch (...) {
     return {Ret{}, {EC::PyCBError, "Unknown callback error"}};
   }
-}
-
-inline std::array<char, 32> AMcharset = {'2', '3', '4', '5', '6', '7', '8', '9',
-                                         'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
-                                         'J', 'K', 'M', 'N', 'P', 'Q', 'R', 'S',
-                                         'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
-constexpr size_t AMbase = sizeof(AMcharset) - 1;
-
-inline size_t GenerateUIDInt() {
-  try {
-    std::random_device rd;
-    std::mt19937_64 eng(rd());
-    std::uniform_int_distribution<size_t> dist(0, SIZE_MAX);
-    return dist(eng);
-  } catch (...) {
-    // fallback: time + counter
-    static std::atomic<size_t> counter{0};
-    size_t t = static_cast<size_t>(
-        std::chrono::steady_clock::now().time_since_epoch().count());
-    return t ^ ((counter.fetch_add(1, std::memory_order_relaxed) + 1) *
-                0x9e3779b97f4a7c15ULL);
-  }
-}
-
-inline std::string GenerateUID(int length = 10) {
-  length = length < 1 ? 1 : length;
-  length = length > 32 ? 32 : length;
-  size_t uid = GenerateUIDInt();
-  // 用AMcharset生成一个字符串
-  std::string uid_str;
-  uid_str.reserve(static_cast<size_t>(length));
-  for (int i = 0; i < length; i++) {
-    uid_str += AMcharset[static_cast<size_t>(uid % AMbase)];
-    uid /= AMbase;
-  }
-  std::reverse(uid_str.begin(), uid_str.end());
-  return uid_str;
 }
 
 inline double timenow() {
@@ -182,20 +157,6 @@ public:
 };
 
 // 非阻塞调用结果
-template <typename T> struct NBResult {
-  T value;           // 函数返回值
-  WaitResult status; // 等待状态
-
-  bool ok() const { return status == WaitResult::Ready; }
-  bool is_timeout() const { return status == WaitResult::Timeout; }
-  bool is_interrupted() const { return status == WaitResult::Interrupted; }
-  bool is_error() const { return status == WaitResult::Error; }
-};
-
-struct MemoryStruct {
-  char *memory;
-  size_t size;
-};
 
 class PathInfo {
 public:
@@ -222,244 +183,6 @@ public:
         access_time(std::move(access_time)),
         modify_time(std::move(modify_time)), type(std::move(type)),
         mode_int(std::move(mode_int)), mode_str(std::move(mode_str)) {}
-};
-
-// 跨平台Socket连接器
-class SocketConnector {
-public:
-  SOCKET sock = INVALID_SOCKET;
-  std::string error_msg = "";
-  EC error_code = EC::Success;
-
-  SocketConnector() = default;
-
-  ~SocketConnector() {}
-
-  /**
-   * @brief Connect to the specified host with an optional timeout and
-   *        interrupt flag.
-   *
-   * @param hostname Target hostname or IP address.
-   * @param port Target port.
-   * @param timeout_ms Connection timeout in milliseconds; <=0 uses a default.
-   * @param interrupt_flag Optional interrupt flag to terminate the connection.
-   * @return True on successful connection, false otherwise. On failure,
-   *         error_code and error_msg are updated.
-   */
-  bool Connect(const std::string &hostname, int port, int timeout_ms,
-               std::shared_ptr<InterruptFlag> interrupt_flag = nullptr) {
-    auto is_interrupted = [&]() {
-      return interrupt_flag && interrupt_flag->check();
-    };
-    auto mark_interrupted = [&]() {
-      error_code = EC::Terminate;
-      error_msg = "Connection interrupted";
-    };
-
-    if (is_interrupted()) {
-      mark_interrupted();
-      return false;
-    }
-
-    // 1. DNS解析 - 使用 AF_UNSPEC 支持 IPv4 和 IPv6
-    addrinfo hints{}, *result = nullptr;
-    hints.ai_family = AF_UNSPEC; // 支持 IPv4 和 IPv6
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
-
-    int dns_err = getaddrinfo(hostname.c_str(), std::to_string(port).c_str(),
-                              &hints, &result);
-    if (dns_err != 0) {
-#ifdef _WIN32
-      auto dns_err_str = gai_strerrorA(dns_err);
-      error_msg = AMStr::amfmt("DNS resolve failed: {} (hostname={})",
-                               dns_err_str, hostname);
-#else
-      auto dns_err_str = gai_strerror(dns_err);
-      error_msg = AMStr::amfmt("DNS resolve failed: {} (hostname={})",
-                               dns_err_str, hostname);
-#endif
-      error_code = EC::DNSResolveError;
-      return false;
-    }
-
-    if (is_interrupted()) {
-      mark_interrupted();
-      freeaddrinfo(result);
-      return false;
-    }
-
-    // 2. 遍历所有地址尝试连接（支持 IPv4/IPv6 双栈）
-    addrinfo *rp = nullptr;
-    for (rp = result; rp != nullptr; rp = rp->ai_next) {
-      if (is_interrupted()) {
-        mark_interrupted();
-        freeaddrinfo(result);
-        return false;
-      }
-
-      sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-      if (sock == INVALID_SOCKET) {
-        continue; // 尝试下一个地址
-      }
-
-      // 3. 设置非阻塞模式
-      if (!SetNonBlocking(true)) {
-        closesocket(sock);
-        sock = INVALID_SOCKET;
-        continue;
-      }
-
-      if (is_interrupted()) {
-        mark_interrupted();
-        closesocket(sock);
-        sock = INVALID_SOCKET;
-        freeaddrinfo(result);
-        return false;
-      }
-
-      // 4. 发起连接
-      int conn_result = connect(sock, rp->ai_addr, (int)rp->ai_addrlen);
-
-#ifdef _WIN32
-      bool in_progress =
-          (conn_result == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK);
-#else
-      bool in_progress = (conn_result == -1 && errno == EINPROGRESS);
-#endif
-
-      if (conn_result == 0) {
-        // 立即成功（本地连接可能发生）
-        if (is_interrupted()) {
-          mark_interrupted();
-          closesocket(sock);
-          sock = INVALID_SOCKET;
-          freeaddrinfo(result);
-          return false;
-        }
-        SetNonBlocking(false);
-        freeaddrinfo(result);
-        return true;
-      }
-
-      if (!in_progress) {
-        closesocket(sock);
-        sock = INVALID_SOCKET;
-        continue; // 尝试下一个地址
-      }
-
-      // 5. 使用select等待连接完成
-      const int64_t total_timeout_ms = timeout_ms > 0 ? timeout_ms : 6000;
-      const int64_t start_ms = am_ms();
-      int64_t remaining_ms = total_timeout_ms;
-      int select_result = 0;
-      bool timed_out = false;
-
-      while (remaining_ms > 0) {
-        if (is_interrupted()) {
-          mark_interrupted();
-          closesocket(sock);
-          sock = INVALID_SOCKET;
-          freeaddrinfo(result);
-          return false;
-        }
-
-        const int64_t wait_ms =
-            remaining_ms > 100 ? static_cast<int64_t>(100) : remaining_ms;
-
-        fd_set write_fds, error_fds;
-        FD_ZERO(&write_fds);
-        FD_ZERO(&error_fds);
-        FD_SET(sock, &write_fds);
-        FD_SET(sock, &error_fds);
-
-        timeval timeout;
-        timeout.tv_sec = static_cast<long>(wait_ms / 1000);
-        timeout.tv_usec = static_cast<long>((wait_ms % 1000) * 1000);
-
-        select_result =
-            select((int)sock + 1, nullptr, &write_fds, &error_fds, &timeout);
-
-        if (select_result > 0) {
-          if (FD_ISSET(sock, &error_fds)) {
-            select_result = -1;
-          }
-          break;
-        }
-
-        if (select_result < 0) {
-          break;
-        }
-
-        remaining_ms = total_timeout_ms - (am_ms() - start_ms);
-      }
-
-      if (remaining_ms <= 0) {
-        timed_out = true;
-      }
-
-      if (select_result <= 0 || timed_out) {
-        closesocket(sock);
-        sock = INVALID_SOCKET;
-        continue; // 尝试下一个地址
-      }
-
-      // 6. 检查socket错误
-      int sock_error = 0;
-      socklen_t len = sizeof(sock_error);
-      if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&sock_error, &len) <
-              0 ||
-          sock_error != 0) {
-        closesocket(sock);
-        sock = INVALID_SOCKET;
-        continue; // 尝试下一个地址
-      }
-
-      // 7. 恢复阻塞模式，连接成功
-      if (is_interrupted()) {
-        mark_interrupted();
-        closesocket(sock);
-        sock = INVALID_SOCKET;
-        freeaddrinfo(result);
-        return false;
-      }
-      SetNonBlocking(false);
-      freeaddrinfo(result);
-      return true;
-    }
-
-    // 所有地址都尝试失败
-    freeaddrinfo(result);
-    error_msg = "Socket connect failed for all addresses";
-    error_code = EC::SocketConnectFailed;
-    return false;
-  }
-
-private:
-  bool SetNonBlocking(bool non_blocking) {
-#ifdef _WIN32
-    u_long mode = non_blocking ? 1 : 0;
-    if (ioctlsocket(sock, FIONBIO, &mode) != 0) {
-      error_msg = "Failed to set socket non-blocking mode";
-      error_code = EC::SocketCreateError;
-      return false;
-    }
-#else
-    int flags = fcntl(sock, F_GETFL, 0);
-    if (flags < 0) {
-      error_msg = "Failed to get socket flags";
-      error_code = EC::SocketCreateError;
-      return false;
-    }
-    flags = non_blocking ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
-    if (fcntl(sock, F_SETFL, flags) < 0) {
-      error_msg = "Failed to set socket non-blocking mode";
-      error_code = EC::SocketCreateError;
-      return false;
-    }
-#endif
-    return true;
-  }
 };
 
 struct ConRequst {
@@ -499,99 +222,6 @@ struct ProgressCBInfo {
       : src(src), dst(dst), src_host(src_host), dst_host(dst_host),
         this_size(this_size), file_size(file_size),
         accumulated_size(accumulated_size), total_size(total_size) {}
-};
-
-class StreamRingBuffer {
-private:
-  /**
-   * @brief Backing storage for the ring buffer.
-   *
-   * This uses std::array to replace the raw char[] buffer. The effective
-   * capacity is clamped to the requested size at construction time.
-   */
-  std::array<char, static_cast<size_t>(AMMaxBufferSize)> buffer_{};
-  size_t capacity_ = 0;
-  std::atomic<size_t> head_{0}; // 消费者读取位置
-  std::atomic<size_t> tail_{0}; // 生产者写入位置
-
-public:
-  /**
-   * @brief Construct a ring buffer with a requested capacity.
-   *
-   * @param size Requested buffer size in bytes. The actual capacity is clamped
-   *             to the maximum std::array size.
-   */
-  explicit StreamRingBuffer(size_t size)
-      : capacity_(std::min<size_t>(size, buffer_.size())) {}
-
-  /**
-   * @brief Get the amount of readable data in the buffer.
-   */
-  size_t available() const {
-    return tail_.load(std::memory_order_acquire) -
-           head_.load(std::memory_order_relaxed);
-  }
-
-  /**
-   * @brief Get the amount of writable space remaining in the buffer.
-   */
-  size_t writable() const { return capacity_ - available(); }
-
-  /**
-   * @brief Get the write pointer and maximum contiguous writable length.
-   */
-  std::pair<char *, size_t> get_write_ptr() {
-    size_t t = tail_.load(std::memory_order_relaxed);
-    size_t h = head_.load(std::memory_order_acquire);
-    size_t pos = t % capacity_;
-    size_t used = t - h;
-    size_t free_space = capacity_ - used;
-    // 连续可写 = min(到末尾的距离, 空闲空间)
-    size_t contig = capacity_ - pos > free_space ? free_space : capacity_ - pos;
-    return {buffer_.data() + pos, contig};
-  }
-
-  /**
-   * @brief Commit a number of bytes as written to the buffer.
-   */
-  void commit_write(size_t len) {
-    tail_.fetch_add(len, std::memory_order_release);
-  }
-
-  /**
-   * @brief Get the read pointer and maximum contiguous readable length.
-   */
-  std::pair<char *, size_t> get_read_ptr() {
-    size_t h = head_.load(std::memory_order_relaxed);
-    size_t t = tail_.load(std::memory_order_acquire);
-    size_t pos = h % capacity_;
-    size_t avail = t - h;
-    // 连续可读 = min(到末尾的距离, 可用数据)
-    size_t contig = capacity_ - pos > avail ? avail : capacity_ - pos;
-    return {buffer_.data() + pos, contig};
-  }
-
-  /**
-   * @brief Commit a number of bytes as consumed from the buffer.
-   */
-  void commit_read(size_t len) {
-    head_.fetch_add(len, std::memory_order_release);
-  }
-
-  /**
-   * @brief Check whether the buffer has no readable data.
-   */
-  bool empty() const { return available() == 0; }
-
-  /**
-   * @brief Check whether the buffer has no writable space.
-   */
-  bool full() const { return writable() == 0; }
-
-  /**
-   * @brief Get the effective capacity of the buffer.
-   */
-  size_t get_capacity() const { return capacity_; }
 };
 
 class UserTransferSet {
@@ -911,26 +541,99 @@ struct TransferTask {
       : src(std::move(src)), src_host(std::move(src_host)), dst(std::move(dst)),
         dst_host(std::move(dst_host)), size(size), path_type(path_type) {}
 };
-
-using TASKS = std::vector<TransferTask>;
-class UnimplementedMethodException : public std::exception {
-public:
-  UnimplementedMethodException(std::string message)
-      : message(std::move(message)) {}
-  const char *what() const noexcept override { return message.c_str(); }
-
+class StreamRingBuffer {
 private:
-  std::string message;
-};
+  /**
+   * @brief Backing storage for the ring buffer.
+   *
+   * This uses std::array to replace the raw char[] buffer. The effective
+   * capacity is clamped to the requested size at construction time.
+   */
+  std::array<char, static_cast<size_t>(AMMaxBufferSize)> buffer_{};
+  size_t capacity_ = 0;
+  std::atomic<size_t> head_{0}; // 消费者读取位置
+  std::atomic<size_t> tail_{0}; // 生产者写入位置
 
-struct TerminalWindowInfo {
-  int cols = 80;
-  int rows = 24;
-  int width = 0;
-  int height = 0;
-  std::string term = "xterm-256color";
-};
+public:
+  /**
+   * @brief Construct a ring buffer with a requested capacity.
+   *
+   * @param size Requested buffer size in bytes. The actual capacity is clamped
+   *             to the maximum std::array size.
+   */
+  explicit StreamRingBuffer(size_t size)
+      : capacity_(std::min<size_t>(size, buffer_.size())) {}
 
+  /**
+   * @brief Get the amount of readable data in the buffer.
+   */
+  size_t available() const {
+    return tail_.load(std::memory_order_acquire) -
+           head_.load(std::memory_order_relaxed);
+  }
+
+  /**
+   * @brief Get the amount of writable space remaining in the buffer.
+   */
+  size_t writable() const { return capacity_ - available(); }
+
+  /**
+   * @brief Get the write pointer and maximum contiguous writable length.
+   */
+  std::pair<char *, size_t> get_write_ptr() {
+    size_t t = tail_.load(std::memory_order_relaxed);
+    size_t h = head_.load(std::memory_order_acquire);
+    size_t pos = t % capacity_;
+    size_t used = t - h;
+    size_t free_space = capacity_ - used;
+    // 连续可写 = min(到末尾的距离, 空闲空间)
+    size_t contig = capacity_ - pos > free_space ? free_space : capacity_ - pos;
+    return {buffer_.data() + pos, contig};
+  }
+
+  /**
+   * @brief Commit a number of bytes as written to the buffer.
+   */
+  void commit_write(size_t len) {
+    tail_.fetch_add(len, std::memory_order_release);
+  }
+
+  /**
+   * @brief Get the read pointer and maximum contiguous readable length.
+   */
+  std::pair<char *, size_t> get_read_ptr() {
+    size_t h = head_.load(std::memory_order_relaxed);
+    size_t t = tail_.load(std::memory_order_acquire);
+    size_t pos = h % capacity_;
+    size_t avail = t - h;
+    // 连续可读 = min(到末尾的距离, 可用数据)
+    size_t contig = capacity_ - pos > avail ? avail : capacity_ - pos;
+    return {buffer_.data() + pos, contig};
+  }
+
+  /**
+   * @brief Commit a number of bytes as consumed from the buffer.
+   */
+  void commit_read(size_t len) {
+    head_.fetch_add(len, std::memory_order_release);
+  }
+
+  /**
+   * @brief Check whether the buffer has no readable data.
+   */
+  bool empty() const { return available() == 0; }
+
+  /**
+   * @brief Check whether the buffer has no writable space.
+   */
+  bool full() const { return writable() == 0; }
+
+  /**
+   * @brief Get the effective capacity of the buffer.
+   */
+  size_t get_capacity() const { return capacity_; }
+};
+using TASKS = std::vector<TransferTask>;
 struct TaskInfo;        // Forward declaration
 class ClientMaintainer; // Forward declaration
 // New ProgressData that holds weak_ptr to TaskInfo to avoid cycle reference
@@ -1242,162 +945,3 @@ struct TaskInfo {
     this->pd = nullptr;
   }
 };
-
-namespace AMTree {
-struct TreeNode {
-  std::vector<std::string> children;
-  std::vector<PathInfo> files;
-};
-
-using TreeNodeMap = std::unordered_map<std::string, TreeNode>;
-using JoinPartsFn =
-    std::function<std::string(const std::vector<std::string> &)>;
-using JoinPairFn =
-    std::function<std::string(const std::string &, const std::string &)>;
-
-/**
- * @brief Build tree nodes from walk structure data.
- */
-inline void BuildTreeNodes(
-    const std::string &root,
-    const std::vector<
-        std::pair<std::vector<std::string>, std::vector<PathInfo>>> &structure,
-    TreeNodeMap *nodes, const JoinPartsFn &join_parts,
-    const JoinPairFn &join_pair) {
-  (void)join_pair;
-  if (!nodes) {
-    return;
-  }
-  nodes->clear();
-  std::unordered_set<std::string> child_set;
-
-  auto ensure_node = [&](const std::string &dir_path) {
-    if (nodes->find(dir_path) == nodes->end()) {
-      (*nodes)[dir_path] = TreeNode{};
-    }
-  };
-
-  auto add_child = [&](const std::string &parent, const std::string &name) {
-    std::string key = parent + "\n" + name;
-    if (child_set.find(key) != child_set.end()) {
-      return;
-    }
-    child_set.insert(key);
-    (*nodes)[parent].children.push_back(name);
-  };
-
-  ensure_node(root);
-  for (const auto &entry : structure) {
-    const auto &parts = entry.first;
-    const auto &files = entry.second;
-    if (parts.empty()) {
-      continue;
-    }
-    std::string dir_path = join_parts ? join_parts(parts) : root;
-    ensure_node(dir_path);
-    if (!files.empty()) {
-      auto &list = (*nodes)[dir_path].files;
-      list.insert(list.end(), files.begin(), files.end());
-    }
-    if (parts.size() > 1) {
-      std::vector<std::string> parent_parts(parts.begin(), parts.end() - 1);
-      std::string parent_path = join_parts ? join_parts(parent_parts) : root;
-      ensure_node(parent_path);
-      add_child(parent_path, parts.back());
-    }
-  }
-}
-
-/**
- * @brief Sort tree node children and files by case-insensitive name.
- */
-inline void SortTreeNodes(TreeNodeMap *nodes) {
-  if (!nodes) {
-    return;
-  }
-  for (auto &[dir, node] : *nodes) {
-    (void)dir;
-    std::sort(node.children.begin(), node.children.end(),
-              [&](const std::string &a, const std::string &b) {
-                return AMStr::lowercase(a) < AMStr::lowercase(b);
-              });
-    std::sort(node.files.begin(), node.files.end(),
-              [&](const PathInfo &a, const PathInfo &b) {
-                return AMStr::lowercase(a.name) < AMStr::lowercase(b.name);
-              });
-  }
-}
-
-/**
- * @brief Print a tree using a style callback and line printer.
- * @return True if the tree is fully printed; false if stopped early.
- */
-inline bool PrintTree(
-    const std::string &root, const TreeNodeMap &nodes,
-    const std::function<std::string(const PathInfo &, const std::string &)>
-        &style_path,
-    const std::function<void(const std::string &)> &print_line,
-    const JoinPairFn &join_pair,
-    const std::function<bool()> &should_stop = {}) {
-  if (!print_line) {
-    return true;
-  }
-  PathInfo dir_info;
-  dir_info.type = PathType::DIR;
-  const std::string root_line = style_path ? style_path(dir_info, root) : root;
-  if (should_stop && should_stop()) {
-    return false;
-  }
-  print_line(root_line);
-  if (should_stop && should_stop()) {
-    return false;
-  }
-
-  std::function<bool(const std::string &, const std::string &)> walk_tree =
-      [&](const std::string &dir_path, const std::string &prefix) {
-        auto it = nodes.find(dir_path);
-        if (it == nodes.end()) {
-          return true;
-        }
-        const auto &children = it->second.children;
-        const auto &files = it->second.files;
-        const size_t dir_count = children.size();
-        const size_t file_count = files.size();
-
-        for (size_t i = 0; i < dir_count; ++i) {
-          if (should_stop && should_stop()) {
-            return false;
-          }
-          const bool last = (i + 1 == dir_count && file_count == 0);
-          const std::string connector = last ? "└── " : "├── ";
-          const std::string next_prefix = prefix + (last ? "    " : "│   ");
-          const std::string child_name = children[i];
-          const std::string styled =
-              style_path ? style_path(dir_info, child_name) : child_name;
-          print_line(prefix + connector + styled);
-          if (join_pair) {
-            const std::string child_path = join_pair(dir_path, child_name);
-            if (!walk_tree(child_path, next_prefix)) {
-              return false;
-            }
-          }
-        }
-
-        for (size_t i = 0; i < file_count; ++i) {
-          if (should_stop && should_stop()) {
-            return false;
-          }
-          const bool last = (i + 1 == file_count);
-          (void)last;
-          const std::string connector = (i + 1 == file_count) ? "└── " : "├── ";
-          const auto &info = files[i];
-          const std::string styled =
-              style_path ? style_path(info, info.name) : info.name;
-          print_line(prefix + connector + styled);
-        }
-        return true;
-      };
-
-  return walk_tree(root, "");
-}
-} // namespace AMTree

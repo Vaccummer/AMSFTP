@@ -3,7 +3,6 @@
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
 #include <string>
-#include <unordered_map>
 
 // clang-format off
 #ifdef _WIN32
@@ -41,24 +40,6 @@ constexpr ssize_t AMDefaultLocalBufferSize = 1024 * 1024 * 16;
 constexpr ssize_t AMDefaultRemoteBufferSize = 1024 * 1024 * 8;
 constexpr ssize_t AMMinBufferSize = 1024 * 512;
 constexpr ssize_t AMMaxBufferSize = 1024 * 1024 * 64;
-
-// Socket wait direction
-enum class SocketWaitType {
-  Read,        // Wait for socket readable
-  Write,       // Wait for socket writable
-  ReadWrite,   // Wait for both readable and writable
-  ReadOrWrite, // Wait for readable or writable, 返回 ReadReady/WriteReady
-  Auto         // Determine from libssh2_session_block_directions
-};
-
-enum class WaitResult {
-  Ready,       // Socket is ready for read/write
-  ReadReady,   // Socket is ready for read (仅 ReadOrWrite 模式)
-  WriteReady,  // Socket is ready for write (仅 ReadOrWrite 模式)
-  Timeout,     // Operation timed out
-  Interrupted, // Operation was interrupted by flag
-  Error        // Socket error occurred
-};
 
 enum class ErrorCode {
   Success = 0,
@@ -194,7 +175,14 @@ enum class ErrorCode {
   FTPDownloadFailed = 52,
   FTPListFailed = 53,
 };
-using ECM = std::pair<ErrorCode, std::string>;
+enum class WaitResult {
+  Ready,       // Socket is ready for read/write
+  ReadReady,   // Socket is ready for read (仅 ReadOrWrite 模式)
+  WriteReady,  // Socket is ready for write (仅 ReadOrWrite 模式)
+  Timeout,     // Operation timed out
+  Interrupted, // Operation was interrupted by flag
+  Error        // Socket error occurred
+};
 inline ErrorCode wait_result_to_error_code(WaitResult wr) {
   switch (wr) {
   case WaitResult::Ready:
@@ -211,6 +199,8 @@ inline ErrorCode wait_result_to_error_code(WaitResult wr) {
     return ErrorCode::UnknownError;
   }
 }
+using ECM = std::pair<ErrorCode, std::string>;
+
 enum class PathType {
   BlockDevice = -1,
   CharacterDevice = -2,
@@ -225,8 +215,6 @@ enum class PathType {
 enum class SearchType { All = 0, File = 1, Directory = 2 };
 
 enum class SepType { Unix = 0, Windows = 1 };
-
-enum class ControlSignal : int { Running = 0, Pause = 1, Terminate = 2 };
 
 enum class TaskStatus { Pending, Conducting, Paused, Finished };
 
@@ -284,39 +272,6 @@ enum class AMTokenType {
   VarNameMissing,
   EscapeSign
 };
-
-// 将libssh2错误码映射为错误消息
-const std::unordered_map<int, std::string> SFTPMessage = {
-    {LIBSSH2_FX_EOF, "End of file"},
-    {LIBSSH2_FX_NO_SUCH_FILE, "File does not exist"},
-    {LIBSSH2_FX_PERMISSION_DENIED, "Permission denied"},
-    {LIBSSH2_FX_FAILURE, "Generic failure"},
-    {LIBSSH2_FX_BAD_MESSAGE, "Bad message format"},
-    {LIBSSH2_FX_NO_CONNECTION, "No connection exists"},
-    {LIBSSH2_FX_CONNECTION_LOST, "Connection lost"},
-    {LIBSSH2_FX_OP_UNSUPPORTED, "Operation not supported"},
-    {LIBSSH2_FX_INVALID_HANDLE, "Invalid handle"},
-    {LIBSSH2_FX_NO_SUCH_PATH, "No such path"},
-    {LIBSSH2_FX_FILE_ALREADY_EXISTS, "File already exists"},
-    {LIBSSH2_FX_WRITE_PROTECT, "Target is write protected"},
-    {LIBSSH2_FX_NO_MEDIA, "Target Storage Media is not available"},
-    {LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM, "No space on filesystem"},
-    {LIBSSH2_FX_QUOTA_EXCEEDED, "Space quota exceeded"},
-    {LIBSSH2_FX_UNKNOWN_PRINCIPAL, "User not found in host"},
-    {LIBSSH2_FX_LOCK_CONFLICT, "Path is locked by another process"},
-    {LIBSSH2_FX_DIR_NOT_EMPTY, "Directory is not empty"},
-    {LIBSSH2_FX_NOT_A_DIRECTORY, "Target is not a directory"},
-    {LIBSSH2_FX_INVALID_FILENAME, "Filename is invalid"},
-    {LIBSSH2_FX_LINK_LOOP, "Symbolic link loop"}};
-
-// 将ErrorCode枚举值映射为int
-const std::unordered_map<int, ErrorCode> Int2EC = [] {
-  std::unordered_map<int, ErrorCode> map;
-  for (auto [val, name] : magic_enum::enum_entries<ErrorCode>()) {
-    map[static_cast<int>(val)] = val;
-  }
-  return map;
-}();
 
 inline std::string GetECName(ErrorCode ec) {
   return std::string(magic_enum::enum_name(ec));

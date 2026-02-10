@@ -1,5 +1,7 @@
 #pragma once
 // 标准库
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
@@ -7,7 +9,7 @@
 #include <cstdio>
 #include <ctime>
 #include <fcntl.h>
-
+#include <random>
 #include <fstream>
 #include <iostream>
 #include <list>
@@ -52,6 +54,53 @@ inline bool isok(ECM &ecm) { return ecm.first == EC::Success; }
 inline bool isdir(const LIBSSH2_SFTP_ATTRIBUTES &attrs);
 inline bool isreg(const LIBSSH2_SFTP_ATTRIBUTES &attrs);
 inline bool IsValidKey(const std::string &key);
+
+inline std::array<char, 32> AMcharset = {'2', '3', '4', '5', '6', '7', '8', '9',
+                                         'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+                                         'J', 'K', 'M', 'N', 'P', 'Q', 'R', 'S',
+                                         'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
+constexpr size_t AMbase = sizeof(AMcharset) - 1;
+
+inline size_t GenerateUIDInt() {
+  try {
+    std::random_device rd;
+    std::mt19937_64 eng(rd());
+    std::uniform_int_distribution<size_t> dist(0, SIZE_MAX);
+    return dist(eng);
+  } catch (...) {
+    // fallback: time + counter
+    static std::atomic<size_t> counter{0};
+    size_t t = static_cast<size_t>(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    return t ^ ((counter.fetch_add(1, std::memory_order_relaxed) + 1) *
+                0x9e3779b97f4a7c15ULL);
+  }
+}
+
+inline std::string GenerateUID(int length = 10) {
+  length = length < 1 ? 1 : length;
+  length = length > 32 ? 32 : length;
+  size_t uid = GenerateUIDInt();
+  // 用AMcharset生成一个字符串
+  std::string uid_str;
+  uid_str.reserve(static_cast<size_t>(length));
+  for (int i = 0; i < length; i++) {
+    uid_str += AMcharset[static_cast<size_t>(uid % AMbase)];
+    uid /= AMbase;
+  }
+  std::reverse(uid_str.begin(), uid_str.end());
+  return uid_str;
+}
+
+class UnimplementedMethodException : public std::exception {
+public:
+  UnimplementedMethodException(std::string message)
+      : message(std::move(message)) {}
+  const char *what() const noexcept override { return message.c_str(); }
+
+private:
+  std::string message;
+};
 
 namespace fs = std::filesystem;
 using amf = std::shared_ptr<InterruptFlag>;

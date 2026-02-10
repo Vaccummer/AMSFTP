@@ -17,6 +17,7 @@
 #include <mutex>
 #include <regex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // 标准库
@@ -37,8 +38,262 @@
 #include <openssl/rsa.h>
 #include <openssl/sha.h>
 
-// 第三方库
+// Socket wait direction
+enum class SocketWaitType {
+  Read,        // Wait for socket readable
+  Write,       // Wait for socket writable
+  ReadWrite,   // Wait for both readable and writable
+  ReadOrWrite, // Wait for readable or writable, 返回 ReadReady/WriteReady
+  Auto         // Determine from libssh2_session_block_directions
+};
 
+// 跨平台Socket连接器
+class SocketConnector {
+public:
+  SOCKET sock = INVALID_SOCKET;
+  std::string error_msg = "";
+  EC error_code = EC::Success;
+
+  SocketConnector() = default;
+
+  ~SocketConnector() {}
+
+  /**
+   * @brief Connect to the specified host with an optional timeout and
+   *        interrupt flag.
+   *
+   * @param hostname Target hostname or IP address.
+   * @param port Target port.
+   * @param timeout_ms Connection timeout in milliseconds; <=0 uses a default.
+   * @param interrupt_flag Optional interrupt flag to terminate the connection.
+   * @return True on successful connection, false otherwise. On failure,
+   *         error_code and error_msg are updated.
+   */
+  bool Connect(const std::string &hostname, int port, int timeout_ms,
+               std::shared_ptr<InterruptFlag> interrupt_flag = nullptr) {
+    auto is_interrupted = [&]() {
+      return interrupt_flag && interrupt_flag->check();
+    };
+    auto mark_interrupted = [&]() {
+      error_code = EC::Terminate;
+      error_msg = "Connection interrupted";
+    };
+
+    if (is_interrupted()) {
+      mark_interrupted();
+      return false;
+    }
+
+    // 1. DNS解析 - 使用 AF_UNSPEC 支持 IPv4 和 IPv6
+    addrinfo hints{}, *result = nullptr;
+    hints.ai_family = AF_UNSPEC; // 支持 IPv4 和 IPv6
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    int dns_err = getaddrinfo(hostname.c_str(), std::to_string(port).c_str(),
+                              &hints, &result);
+    if (dns_err != 0) {
+#ifdef _WIN32
+      auto dns_err_str = gai_strerrorA(dns_err);
+      error_msg = AMStr::amfmt("DNS resolve failed: {} (hostname={})",
+                               dns_err_str, hostname);
+#else
+      auto dns_err_str = gai_strerror(dns_err);
+      error_msg = AMStr::amfmt("DNS resolve failed: {} (hostname={})",
+                               dns_err_str, hostname);
+#endif
+      error_code = EC::DNSResolveError;
+      return false;
+    }
+
+    if (is_interrupted()) {
+      mark_interrupted();
+      freeaddrinfo(result);
+      return false;
+    }
+
+    // 2. 遍历所有地址尝试连接（支持 IPv4/IPv6 双栈）
+    addrinfo *rp = nullptr;
+    for (rp = result; rp != nullptr; rp = rp->ai_next) {
+      if (is_interrupted()) {
+        mark_interrupted();
+        freeaddrinfo(result);
+        return false;
+      }
+
+      sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
+      if (sock == INVALID_SOCKET) {
+        continue; // 尝试下一个地址
+      }
+
+      // 3. 设置非阻塞模式
+      if (!SetNonBlocking(true)) {
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+        continue;
+      }
+
+      if (is_interrupted()) {
+        mark_interrupted();
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+        freeaddrinfo(result);
+        return false;
+      }
+
+      // 4. 发起连接
+      int conn_result = connect(sock, rp->ai_addr, (int)rp->ai_addrlen);
+
+#ifdef _WIN32
+      bool in_progress =
+          (conn_result == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK);
+#else
+      bool in_progress = (conn_result == -1 && errno == EINPROGRESS);
+#endif
+
+      if (conn_result == 0) {
+        // 立即成功（本地连接可能发生）
+        if (is_interrupted()) {
+          mark_interrupted();
+          closesocket(sock);
+          sock = INVALID_SOCKET;
+          freeaddrinfo(result);
+          return false;
+        }
+        SetNonBlocking(false);
+        freeaddrinfo(result);
+        return true;
+      }
+
+      if (!in_progress) {
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+        continue; // 尝试下一个地址
+      }
+
+      // 5. 使用select等待连接完成
+      const int64_t total_timeout_ms = timeout_ms > 0 ? timeout_ms : 6000;
+      const int64_t start_ms = am_ms();
+      int64_t remaining_ms = total_timeout_ms;
+      int select_result = 0;
+      bool timed_out = false;
+
+      while (remaining_ms > 0) {
+        if (is_interrupted()) {
+          mark_interrupted();
+          closesocket(sock);
+          sock = INVALID_SOCKET;
+          freeaddrinfo(result);
+          return false;
+        }
+
+        const int64_t wait_ms =
+            remaining_ms > 100 ? static_cast<int64_t>(100) : remaining_ms;
+
+        fd_set write_fds, error_fds;
+        FD_ZERO(&write_fds);
+        FD_ZERO(&error_fds);
+        FD_SET(sock, &write_fds);
+        FD_SET(sock, &error_fds);
+
+        timeval timeout;
+        timeout.tv_sec = static_cast<long>(wait_ms / 1000);
+        timeout.tv_usec = static_cast<long>((wait_ms % 1000) * 1000);
+
+        select_result =
+            select((int)sock + 1, nullptr, &write_fds, &error_fds, &timeout);
+
+        if (select_result > 0) {
+          if (FD_ISSET(sock, &error_fds)) {
+            select_result = -1;
+          }
+          break;
+        }
+
+        if (select_result < 0) {
+          break;
+        }
+
+        remaining_ms = total_timeout_ms - (am_ms() - start_ms);
+      }
+
+      if (remaining_ms <= 0) {
+        timed_out = true;
+      }
+
+      if (select_result <= 0 || timed_out) {
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+        continue; // 尝试下一个地址
+      }
+
+      // 6. 检查socket错误
+      int sock_error = 0;
+      socklen_t len = sizeof(sock_error);
+      if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&sock_error, &len) <
+              0 ||
+          sock_error != 0) {
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+        continue; // 尝试下一个地址
+      }
+
+      // 7. 恢复阻塞模式，连接成功
+      if (is_interrupted()) {
+        mark_interrupted();
+        closesocket(sock);
+        sock = INVALID_SOCKET;
+        freeaddrinfo(result);
+        return false;
+      }
+      SetNonBlocking(false);
+      freeaddrinfo(result);
+      return true;
+    }
+
+    // 所有地址都尝试失败
+    freeaddrinfo(result);
+    error_msg = "Socket connect failed for all addresses";
+    error_code = EC::SocketConnectFailed;
+    return false;
+  }
+
+private:
+  bool SetNonBlocking(bool non_blocking) {
+#ifdef _WIN32
+    u_long mode = non_blocking ? 1 : 0;
+    if (ioctlsocket(sock, FIONBIO, &mode) != 0) {
+      error_msg = "Failed to set socket non-blocking mode";
+      error_code = EC::SocketCreateError;
+      return false;
+    }
+#else
+    int flags = fcntl(sock, F_GETFL, 0);
+    if (flags < 0) {
+      error_msg = "Failed to get socket flags";
+      error_code = EC::SocketCreateError;
+      return false;
+    }
+    flags = non_blocking ? (flags | O_NONBLOCK) : (flags & ~O_NONBLOCK);
+    if (fcntl(sock, F_SETFL, flags) < 0) {
+      error_msg = "Failed to set socket non-blocking mode";
+      error_code = EC::SocketCreateError;
+      return false;
+    }
+#endif
+    return true;
+  }
+};
+
+struct TerminalWindowInfo {
+  int cols = 80;
+  int rows = 24;
+  int width = 0;
+  int height = 0;
+  std::string term = "xterm-256color";
+};
+
+// 第三方库
 #ifdef _WIN32
 inline std::atomic<bool> is_wsa_initialized(false);
 inline void AMInitWSA() {
@@ -54,6 +309,39 @@ inline void AMInitWSA() {
 inline std::string GetLibssh2Version() {
   return libssh2_version(LIBSSH2_VERSION_NUM);
 }
+
+// 将libssh2错误码映射为错误消息
+const std::unordered_map<int, std::string> SFTPMessage = {
+    {LIBSSH2_FX_EOF, "End of file"},
+    {LIBSSH2_FX_NO_SUCH_FILE, "File does not exist"},
+    {LIBSSH2_FX_PERMISSION_DENIED, "Permission denied"},
+    {LIBSSH2_FX_FAILURE, "Generic failure"},
+    {LIBSSH2_FX_BAD_MESSAGE, "Bad message format"},
+    {LIBSSH2_FX_NO_CONNECTION, "No connection exists"},
+    {LIBSSH2_FX_CONNECTION_LOST, "Connection lost"},
+    {LIBSSH2_FX_OP_UNSUPPORTED, "Operation not supported"},
+    {LIBSSH2_FX_INVALID_HANDLE, "Invalid handle"},
+    {LIBSSH2_FX_NO_SUCH_PATH, "No such path"},
+    {LIBSSH2_FX_FILE_ALREADY_EXISTS, "File already exists"},
+    {LIBSSH2_FX_WRITE_PROTECT, "Target is write protected"},
+    {LIBSSH2_FX_NO_MEDIA, "Target Storage Media is not available"},
+    {LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM, "No space on filesystem"},
+    {LIBSSH2_FX_QUOTA_EXCEEDED, "Space quota exceeded"},
+    {LIBSSH2_FX_UNKNOWN_PRINCIPAL, "User not found in host"},
+    {LIBSSH2_FX_LOCK_CONFLICT, "Path is locked by another process"},
+    {LIBSSH2_FX_DIR_NOT_EMPTY, "Directory is not empty"},
+    {LIBSSH2_FX_NOT_A_DIRECTORY, "Target is not a directory"},
+    {LIBSSH2_FX_INVALID_FILENAME, "Filename is invalid"},
+    {LIBSSH2_FX_LINK_LOOP, "Symbolic link loop"}};
+
+// 将ErrorCode枚举值映射为int
+const std::unordered_map<int, ErrorCode> Int2EC = [] {
+  std::unordered_map<int, ErrorCode> map;
+  for (auto [val, name] : magic_enum::enum_entries<ErrorCode>()) {
+    map[static_cast<int>(val)] = val;
+  }
+  return map;
+}();
 inline bool IsValidKey(const std::string &key) {
   std::ifstream file(key);
   if (!file.is_open())
