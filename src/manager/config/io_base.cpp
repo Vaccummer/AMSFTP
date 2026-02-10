@@ -134,12 +134,12 @@ ECM AMConfigStorage::LoadAll() {
 /**
  * @brief Load a document from disk by kind.
  */
-ECM AMConfigStorage::Load(DocumentKind kind) {
+ECM AMConfigStorage::Load(DocumentKind kind, bool force) {
   DocumentState *doc = GetDoc_(kind);
   if (!doc) {
     return Err(EC::ConfigNotInitialized, "document not initialized");
   }
-  if (kind == DocumentKind::History && doc->handle) {
+  if (!force && doc->handle) {
     return Ok();
   }
   return LoadDocument_(kind, doc);
@@ -612,77 +612,6 @@ AMConfigStorage::GetDataPath(DocumentKind kind) const {
     return {std::nullopt, std::nullopt};
   }
   return {doc->path, doc->schema_path};
-}
-
-/**
- * @brief Query a JSON value by path from a root object.
- */
-bool AMConfigStorage::QueryKey(const nlohmann::ordered_json &root,
-                               const Path &path, Value *value) const {
-  if (!value) {
-    return false;
-  }
-  const nlohmann::ordered_json *node = &root;
-  for (const auto &seg : path) {
-    if (!node->is_object()) {
-      return false;
-    }
-    auto it = node->find(seg);
-    if (it == node->end()) {
-      return false;
-    }
-    node = &(*it);
-  }
-  if (node->is_boolean()) {
-    *value = node->get<bool>();
-    return true;
-  }
-  if (node->is_number_integer()) {
-    *value = node->get<int64_t>();
-    return true;
-  }
-  if (node->is_number_unsigned()) {
-    *value = static_cast<int64_t>(node->get<size_t>());
-    return true;
-  }
-  if (node->is_string()) {
-    *value = node->get<std::string>();
-    return true;
-  }
-  if (node->is_array()) {
-    std::vector<std::string> values;
-    values.reserve(node->size());
-    for (const auto &child : *node) {
-      if (child.is_string()) {
-        values.push_back(child.get<std::string>());
-        continue;
-      }
-      if (child.is_boolean()) {
-        values.push_back(child.get<bool>() ? "true" : "false");
-        continue;
-      }
-      if (child.is_number_integer()) {
-        values.push_back(std::to_string(child.get<int64_t>()));
-        continue;
-      }
-      if (child.is_number_unsigned()) {
-        values.push_back(std::to_string(child.get<size_t>()));
-        continue;
-      }
-      if (child.is_number_float()) {
-        values.push_back(std::to_string(child.get<double>()));
-        continue;
-      }
-      if (child.is_null()) {
-        values.emplace_back("null");
-        continue;
-      }
-      return false;
-    }
-    *value = std::move(values);
-    return true;
-  }
-  return false;
 }
 
 /**

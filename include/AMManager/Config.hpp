@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <functional>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -16,6 +17,7 @@
 #include <regex>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -52,7 +54,10 @@ public:
   using Path = std::vector<std::string>;
   using Value =
       std::variant<int64_t, bool, std::string, std::vector<std::string>>;
-
+  template <class T>
+  static inline constexpr bool kValueTypeSupported =
+      std::is_arithmetic_v<T> || std::is_same_v<T, std::string> ||
+      std::is_same_v<T, nlohmann::ordered_json *>;
   /**
    * @brief Construct a storage layer with empty state.
    */
@@ -105,7 +110,7 @@ public:
    * @param kind Document kind to load.
    * @return ECM success or failure.
    */
-  ECM Load(DocumentKind kind);
+  ECM Load(DocumentKind kind, bool force = false);
 
   /**
    * @brief Close storage with a final dump and shutdown.
@@ -214,15 +219,63 @@ public:
             std::optional<std::filesystem::path>>
   GetDataPath(DocumentKind kind) const;
 
-  /**
-   * @brief Query a JSON value by path from a root object.
-   * @param root JSON root to search.
-   * @param path Path segments leading to the target node.
-   * @param value Output variant value on success.
-   * @return True when the value is found and converted.
-   */
+  template <typename T>
   bool QueryKey(const nlohmann::ordered_json &root, const Path &path,
-                Value *value) const;
+                T *value) const {
+    static_assert(kValueTypeSupported<T>, "T is not supported");
+    if (!value) {
+      return false;
+    }
+    const nlohmann::ordered_json *node = &root;
+    for (const auto &seg : path) {
+      if (!node->is_object()) {
+        return false;
+      }
+      auto it = node->find(seg);
+      if (it == node->end()) {
+        return false;
+      }
+      node = &(*it);
+    }
+    if constexpr (std::is_same_v<T, bool>) {
+      if (!node->is_boolean()) {
+        return false;
+      }
+      *value = node->get<bool>();
+      return true;
+    } else if constexpr (std::is_same_v<T, std::string>) {
+      if (!node->is_string()) {
+        return false;
+      }
+      *value = node->get<std::string>();
+      return true;
+    } else if constexpr (std::is_floating_point_v<T>) {
+      if (!node->is_number()) {
+        return false;
+      }
+      *value = static_cast<T>(node->get<double>());
+      return true;
+    } else if constexpr (std::is_integral_v<T>) {
+      if (!node->is_number()) {
+        return false;
+      }
+      if (node->is_number_integer()) {
+        const int64_t raw = node->get<int64_t>();
+        if (raw < static_cast<int64_t>(std::numeric_limits<T>::min()) ||
+            raw > static_cast<int64_t>(std::numeric_limits<T>::max())) {
+          return false;
+        }
+        *value = static_cast<T>(raw);
+        return true;
+      }
+      return false;
+    } else if constexpr (std::is_same_v<T, nlohmann::ordered_json *>) {
+      *value = const_cast<nlohmann::ordered_json *>(node);
+      return true;
+    } else {
+      return false;
+    }
+  }
 
   /**
    * @brief Set or create a JSON value by path in a root object.
@@ -233,6 +286,7 @@ public:
    */
   template <typename T>
   bool SetKey(nlohmann::ordered_json &root, const Path &path, T value) {
+    static_assert(kValueTypeSupported<T>, "T is not supported");
     nlohmann::ordered_json *node = &root;
     for (size_t i = 0; i < path.size(); ++i) {
       const std::string &seg = path[i];
@@ -254,18 +308,15 @@ public:
   template <typename T>
   T ResolveArg(DocumentKind kind, const Path &path, const T &default_value,
                const std::function<T(T)> &post_process) {
+    static_assert(kValueTypeSupported<T>, "T is not supported");
     auto json = GetJson(kind);
     if (!json.has_value()) {
       return default_value;
     }
-    Value raw;
-    if (!QueryKey(json->get(), path, &raw)) {
+    T value = {};
+    if (!QueryKey(json->get(), path, &value)) {
       return default_value;
     }
-    if (!std::holds_alternative<T>(raw)) {
-      return default_value;
-    }
-    T value = std::get<T>(raw);
     if (post_process) {
       return post_process(value);
     }
@@ -367,7 +418,7 @@ public:
    * @param out Output list for commands.
    * @return ECM success or failure.
    */
-  ECM GetHistoryCommands(const std::string &nickname,
+  ECM GetHistoryCommands(std::string nickname,
                          std::vector<std::string> *out) const;
 
   /**
@@ -380,13 +431,6 @@ public:
   ECM SetHistoryCommands(const std::string &nickname,
                          const std::vector<std::string> &commands,
                          bool dump_now = true);
-
-  /**
-   * @brief Resolve history size limit from settings with minimum 10.
-   * @param default_value Default fallback when no setting is found.
-   * @return Resolved history max count.
-   */
-  [[nodiscard]] int ResolveMaxHistoryCount(int default_value = 10) const;
 
   /**
    * @brief Check whether a host nickname exists in the configuration.
@@ -404,15 +448,6 @@ public:
   bool ValidateNickname(const std::string &nickname, std::string *error) const;
 
 private:
-  /**
-   * @brief Find a JSON node by walking a path.
-   * @param root JSON root to search.
-   * @param path Path segments leading to the target node.
-   * @return Pointer to the node when found, otherwise nullptr.
-   */
-  [[nodiscard]] const nlohmann::ordered_json *
-  FindJsonNode_(const nlohmann::ordered_json &root, const Path &path) const;
-
   AMConfigStorage *storage_ = nullptr;
   std::regex nickname_pattern_;
 };
@@ -464,24 +499,6 @@ public:
                   const std::vector<std::vector<std::string>> &rows) const;
 
 private:
-  /**
-   * @brief Read an integer setting from settings JSON.
-   * @param path Path segments for the setting.
-   * @param default_value Default fallback value.
-   * @return Parsed integer value.
-   */
-  int GetSettingInt_(const std::vector<std::string> &path,
-                     int default_value) const;
-
-  /**
-   * @brief Read a string setting from settings JSON.
-   * @param path Path segments for the setting.
-   * @param default_value Default fallback value.
-   * @return Parsed string value.
-   */
-  std::string GetSettingString_(const std::vector<std::string> &path,
-                                const std::string &default_value) const;
-
   /**
    * @brief Build progress bar style from settings.
    * @return Progress bar style configuration.
