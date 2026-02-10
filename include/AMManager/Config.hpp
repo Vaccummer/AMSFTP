@@ -5,19 +5,44 @@
 #include "AMBase/cfgffi.h"
 #include "AMManager/Prompt.hpp"
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
-#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
+#include <queue>
 #include <regex>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
+
+/**
+ * @brief Configuration document types tracked by storage.
+ */
+enum class DocumentKind {
+  Config = 1,
+  Settings = 2,
+  KnownHosts = 3,
+  History = 4
+};
+
+/**
+ * @brief Per-document storage state for configuration data.
+ */
+struct DocumentState {
+  std::filesystem::path path;
+  std::filesystem::path schema_path;
+  ConfigHandle *handle = nullptr;
+  nlohmann::ordered_json json;
+  mutable std::mutex mtx;
+  bool dirty = false;
+  std::chrono::system_clock::time_point last_modified;
+};
 
 /**
  * @brief Low-level config storage layer for raw persistence and file I/O.
@@ -31,38 +56,31 @@ public:
   /**
    * @brief Construct a storage layer with empty state.
    */
-  AMConfigStorage() = default;
+  AMConfigStorage();
 
   /**
    * @brief Stop the background writer thread on destruction.
    */
-  ~AMConfigStorage() { StopWriteThread(); }
+  ~AMConfigStorage();
 
   /**
-   * @brief Initialize storage paths and reset cached documents.
+   * @brief Initialize storage paths from a project root directory.
    * @param root_dir Project root directory.
-   * @param config_path Config file path.
-   * @param settings_path Settings file path.
-   * @param known_hosts_path Known hosts file path.
-   * @param history_path History file path.
    * @return ECM success or failure.
    */
-  ECM Init(const std::filesystem::path &root_dir,
-           const std::filesystem::path &config_path,
-           const std::filesystem::path &settings_path,
-           const std::filesystem::path &known_hosts_path,
-           const std::filesystem::path &history_path) {
-    root_dir_ = root_dir;
-    config_path_ = config_path;
-    settings_path_ = settings_path;
-    known_hosts_path_ = known_hosts_path;
-    history_path_ = history_path;
-    config_json_ = nlohmann::ordered_json::object();
-    settings_json_ = nlohmann::ordered_json::object();
-    known_hosts_json_ = nlohmann::ordered_json::object();
-    history_json_ = nlohmann::ordered_json::object();
-    return {EC::Success, ""};
-  }
+  ECM Init(const std::filesystem::path &root_dir);
+
+  /**
+   * @brief Initialize storage with explicit document paths and schemas.
+   * @param root_dir Project root directory.
+   * @param paths Document paths keyed by kind.
+   * @param schemas Schema paths keyed by kind.
+   * @return ECM success or failure.
+   */
+  ECM Init(
+      const std::filesystem::path &root_dir,
+      const std::unordered_map<DocumentKind, std::filesystem::path> &paths,
+      const std::unordered_map<DocumentKind, std::filesystem::path> &schemas);
 
   /**
    * @brief Bind cfgffi handles used for persisting config documents.
@@ -70,57 +88,131 @@ public:
    * @param settings_handle Settings handle pointer.
    * @param known_hosts_handle Known hosts handle pointer.
    * @param history_handle History handle pointer.
-   */
-  void BindHandles(ConfigHandle *config_handle, ConfigHandle *settings_handle,
-                   ConfigHandle *known_hosts_handle,
-                   ConfigHandle *history_handle) {
-    config_handle_ = config_handle;
-    settings_handle_ = settings_handle;
-    known_hosts_handle_ = known_hosts_handle;
-    history_handle_ = history_handle;
-  }
-
-  /**
-   * @brief Persist config/settings/known_hosts JSON snapshots to disk.
    * @return ECM success or failure.
    */
-  ECM Dump() {
-    std::error_code ec;
-    if (!config_path_.empty()) {
-      std::filesystem::create_directories(config_path_.parent_path(), ec);
-      if (ec) {
-        return {EC::ConfigDumpFailed,
-                AMStr::amfmt("failed to create config directory: {}",
-                             ec.message())};
-      }
-    }
-
-    ECM rcm =
-        WriteHandleJson_(config_handle_, &config_json_, config_path_, "config");
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-    rcm = WriteHandleJson_(settings_handle_, &settings_json_, settings_path_,
-                           "settings");
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-    rcm = WriteHandleJson_(known_hosts_handle_, &known_hosts_json_,
-                           known_hosts_path_, "known_hosts");
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-    return {EC::Success, ""};
-  }
+  ECM BindHandles(ConfigHandle *config_handle, ConfigHandle *settings_handle,
+                  ConfigHandle *known_hosts_handle,
+                  ConfigHandle *history_handle);
 
   /**
-   * @brief Persist history JSON snapshot to disk.
+   * @brief Load config, settings, and known_hosts documents from disk.
    * @return ECM success or failure.
    */
-  ECM DumpHistory() {
-    return WriteHandleJson_(history_handle_, &history_json_, history_path_,
-                            "history");
-  }
+  ECM LoadAll();
+
+  /**
+   * @brief Load a document from disk by kind.
+   * @param kind Document kind to load.
+   * @return ECM success or failure.
+   */
+  ECM Load(DocumentKind kind);
+
+  /**
+   * @brief Close storage with a final dump and shutdown.
+   * @return ECM success or failure.
+   */
+  ECM Close();
+
+  /**
+   * @brief Release cfgffi handles and reset pointers without dumping.
+   */
+  void CloseHandles();
+
+  /**
+   * @brief Snapshot a document in a thread-safe manner.
+   * @param kind Document kind to snapshot.
+   * @return JSON snapshot copy.
+   */
+  nlohmann::ordered_json Snapshot(DocumentKind kind) const;
+
+  /**
+   * @brief Report whether a document has pending changes.
+   * @param kind Document kind to check.
+   * @return True if the document is dirty.
+   */
+  bool IsDirty(DocumentKind kind) const;
+
+  /**
+   * @brief Mutate a document and optionally persist immediately.
+   * @param kind Document kind to mutate.
+   * @param mutator Mutation callback invoked with the JSON object.
+   * @param dump_now Whether to persist immediately.
+   * @return ECM success or failure.
+   */
+  ECM Mutate(DocumentKind kind,
+             std::function<void(nlohmann::ordered_json &)> mutator,
+             bool dump_now = false);
+
+  /**
+   * @brief Persist all document snapshots to disk.
+   * @return ECM success or failure.
+   */
+  ECM DumpAll();
+
+  /**
+   * @brief Persist a single document snapshot to disk.
+   * @param kind Document kind to dump.
+   * @param path Override output path (empty uses document path).
+   * @return ECM success or failure.
+   */
+  ECM Dump(DocumentKind kind, const std::string &path = "");
+
+  /**
+   * @brief Trigger backup logic when needed.
+   * @return ECM success or failure.
+   */
+  ECM BackupIfNeeded();
+
+  /**
+   * @brief Start the background writer thread if not running.
+   */
+  void StartWriteThread();
+
+  /**
+   * @brief Stop the background writer thread and drain pending tasks.
+   */
+  void StopWriteThread();
+
+  /**
+   * @brief Submit a write task to the background queue.
+   * @param task Task returning ECM to execute asynchronously.
+   */
+  void SubmitWriteTask(std::function<ECM()> task);
+
+  /**
+   * @brief Submit a no-arg write task to the background queue.
+   * @param task Task to execute asynchronously.
+   */
+  void SubmitWriteTaskVoid(std::function<void()> task);
+
+  /**
+   * @brief Provide mutable access to a document JSON.
+   * @return Reference to JSON object.
+   */
+  [[nodiscard]] std::optional<std::reference_wrapper<nlohmann::ordered_json>>
+  GetJson(DocumentKind kind);
+
+  /**
+   * @brief Provide read-only access to a document JSON.
+   * @return Const reference to JSON object.
+   */
+  [[nodiscard]]
+  std::optional<std::reference_wrapper<const nlohmann::ordered_json>>
+  GetJson(DocumentKind kind) const;
+
+  /**
+   * @brief Return the root directory used by the storage layer.
+   * @return Root directory path.
+   */
+  [[nodiscard]] const std::filesystem::path &RootDir() const;
+
+  /**
+   * @brief Return the config and schema paths tracked by the storage layer.
+   */
+  [[nodiscard]]
+  std::pair<std::optional<std::filesystem::path>,
+            std::optional<std::filesystem::path>>
+  GetDataPath(DocumentKind kind) const;
 
   /**
    * @brief Query a JSON value by path from a root object.
@@ -130,72 +222,7 @@ public:
    * @return True when the value is found and converted.
    */
   bool QueryKey(const nlohmann::ordered_json &root, const Path &path,
-                Value *value) const {
-    if (!value) {
-      return false;
-    }
-    const nlohmann::ordered_json *node = &root;
-    for (const auto &seg : path) {
-      if (!node->is_object()) {
-        return false;
-      }
-      auto it = node->find(seg);
-      if (it == node->end()) {
-        return false;
-      }
-      node = &(*it);
-    }
-    if (node->is_boolean()) {
-      *value = node->get<bool>();
-      return true;
-    }
-    if (node->is_number_integer()) {
-      *value = node->get<int64_t>();
-      return true;
-    }
-    if (node->is_number_unsigned()) {
-      *value = static_cast<int64_t>(node->get<size_t>());
-      return true;
-    }
-    if (node->is_string()) {
-      *value = node->get<std::string>();
-      return true;
-    }
-    if (node->is_array()) {
-      std::vector<std::string> values;
-      values.reserve(node->size());
-      for (const auto &child : *node) {
-        if (child.is_string()) {
-          values.push_back(child.get<std::string>());
-          continue;
-        }
-        if (child.is_boolean()) {
-          values.push_back(child.get<bool>() ? "true" : "false");
-          continue;
-        }
-        if (child.is_number_integer()) {
-          values.push_back(std::to_string(child.get<int64_t>()));
-          continue;
-        }
-        if (child.is_number_unsigned()) {
-          values.push_back(std::to_string(child.get<size_t>()));
-          continue;
-        }
-        if (child.is_number_float()) {
-          values.push_back(std::to_string(child.get<double>()));
-          continue;
-        }
-        if (child.is_null()) {
-          values.emplace_back("null");
-          continue;
-        }
-        return false;
-      }
-      *value = std::move(values);
-      return true;
-    }
-    return false;
-  }
+                Value *value) const;
 
   /**
    * @brief Set or create a JSON value by path in a root object.
@@ -224,227 +251,82 @@ public:
     return false;
   }
 
-  /**
-   * @brief Submit a write task to the background queue.
-   * @param task Task to execute asynchronously.
-   */
-  void SubmitWriteTask(std::function<void()> task) {
-    if (!task) {
-      return;
+  template <typename T>
+  T ResolveArg(DocumentKind kind, const Path &path, const T &default_value,
+               const std::function<T(T)> &post_process) {
+    auto json = GetJson(kind);
+    if (!json.has_value()) {
+      return default_value;
     }
-    StartWriteThread();
-    {
-      std::lock_guard<std::mutex> lock(write_mtx_);
-      write_queue_.push_back(std::move(task));
+    Value raw;
+    if (!QueryKey(json->get(), path, &raw)) {
+      return default_value;
     }
-    write_cv_.notify_one();
-  }
-
-  /**
-   * @brief Start the background writer thread if not running.
-   */
-  void StartWriteThread() {
-    std::lock_guard<std::mutex> lock(write_mtx_);
-    if (write_running_) {
-      return;
+    if (!std::holds_alternative<T>(raw)) {
+      return default_value;
     }
-    write_running_ = true;
-    write_thread_ = std::thread([this]() { WriteThreadLoop_(); });
-  }
-
-  /**
-   * @brief Stop the background writer thread and drain pending tasks.
-   */
-  void StopWriteThread() {
-    {
-      std::lock_guard<std::mutex> lock(write_mtx_);
-      if (!write_running_) {
-        return;
-      }
-      write_running_ = false;
+    T value = std::get<T>(raw);
+    if (post_process) {
+      return post_process(value);
     }
-    write_cv_.notify_one();
-    if (write_thread_.joinable()) {
-      write_thread_.join();
-    }
-  }
-
-  /**
-   * @brief Trigger backup logic when needed (no-op placeholder).
-   * @return ECM success or failure.
-   */
-  ECM BackupIfNeeded() { return {EC::Success, ""}; }
-
-  /**
-   * @brief Provide mutable access to config JSON.
-   * @return Reference to config JSON object.
-   */
-  [[nodiscard]] nlohmann::ordered_json &config_json() { return config_json_; }
-
-  /**
-   * @brief Provide mutable access to settings JSON.
-   * @return Reference to settings JSON object.
-   */
-  [[nodiscard]] nlohmann::ordered_json &settings_json() {
-    return settings_json_;
-  }
-
-  /**
-   * @brief Provide mutable access to known hosts JSON.
-   * @return Reference to known hosts JSON object.
-   */
-  [[nodiscard]] nlohmann::ordered_json &known_hosts_json() {
-    return known_hosts_json_;
-  }
-
-  /**
-   * @brief Provide mutable access to history JSON.
-   * @return Reference to history JSON object.
-   */
-  [[nodiscard]] nlohmann::ordered_json &history_json() { return history_json_; }
-
-  /**
-   * @brief Return the root directory used by the storage layer.
-   * @return Root directory path.
-   */
-  [[nodiscard]] const std::filesystem::path &root_dir() const {
-    return root_dir_;
-  }
-
-  /**
-   * @brief Return the config file path tracked by the storage layer.
-   * @return Config file path.
-   */
-  [[nodiscard]] const std::filesystem::path &config_path() const {
-    return config_path_;
-  }
-
-  /**
-   * @brief Return the settings file path tracked by the storage layer.
-   * @return Settings file path.
-   */
-  [[nodiscard]] const std::filesystem::path &settings_path() const {
-    return settings_path_;
-  }
-
-  /**
-   * @brief Return the known hosts file path tracked by the storage layer.
-   * @return Known hosts file path.
-   */
-  [[nodiscard]] const std::filesystem::path &known_hosts_path() const {
-    return known_hosts_path_;
-  }
-
-  /**
-   * @brief Return the history file path tracked by the storage layer.
-   * @return History file path.
-   */
-  [[nodiscard]] const std::filesystem::path &history_path() const {
-    return history_path_;
+    return value;
   }
 
 private:
   /**
-   * @brief Parse JSON text into an ordered_json object.
-   * @param json_str JSON string to parse.
-   * @param out Parsed JSON output.
-   * @return True when parsing succeeds.
+   * @brief Locate a document state by kind.
+   * @param kind Document kind.
+   * @return Pointer to document state or nullptr.
    */
-  bool ParseJsonString_(const std::string &json_str,
-                        nlohmann::ordered_json *out) const {
-    if (!out) {
-      return false;
-    }
-    try {
-      *out = nlohmann::ordered_json::parse(json_str);
-      return true;
-    } catch (...) {
-      return false;
-    }
-  }
+  DocumentState *GetDoc_(DocumentKind kind);
+
+  /**
+   * @brief Locate a document state by kind (const).
+   * @param kind Document kind.
+   * @return Pointer to document state or nullptr.
+   */
+  const DocumentState *GetDoc_(DocumentKind kind) const;
+
+  /**
+   * @brief Load a document into memory using cfgffi.
+   * @param kind Document kind.
+   * @param doc Document state to populate.
+   * @return ECM success or failure.
+   */
+  ECM LoadDocument_(DocumentKind kind, DocumentState *doc);
 
   /**
    * @brief Write JSON content into a cfgffi handle and refresh the cache.
-   * @param handle cfgffi handle pointer.
-   * @param json JSON object to serialize.
-   * @param path Target file path for error messaging.
-   * @param label Friendly label used in error messages.
+   * @param doc Document state to dump.
+   * @param kind Document kind used in error messages.
    * @return ECM success or failure.
    */
-  ECM WriteHandleJson_(ConfigHandle *handle, nlohmann::ordered_json *json,
-                       const std::filesystem::path &path,
-                       const std::string &label) {
-    if (!handle || !json) {
-      return {EC::ConfigNotInitialized,
-              AMStr::amfmt("{} handle not initialized", label)};
-    }
-    std::string payload = json->dump(2);
-    char *err = nullptr;
-    {
-      std::lock_guard<std::mutex> lock(handle_mtx_);
-      int rc = cfgffi_write_inplace(handle, payload.c_str(), &err);
-      if (rc != 0) {
-        std::string msg = err ? err : "cfgffi_write error";
-        if (err) {
-          cfgffi_free_string(err);
-        }
-        return {EC::ConfigDumpFailed,
-                AMStr::amfmt("Failed to dump to {}: {}", path.string(), msg)};
-      }
-      if (err) {
-        cfgffi_free_string(err);
-      }
-      char *json_c = cfgffi_get_json(handle);
-      if (json_c) {
-        std::string json_str(json_c);
-        cfgffi_free_string(json_c);
-        (void)ParseJsonString_(json_str, json);
-      }
-    }
-    return {EC::Success, ""};
-  }
+  ECM WriteHandleJson_(DocumentState *doc, DocumentKind kind);
+
+  /**
+   * @brief Write a TOML snapshot to a target path using the given handle.
+   * @param handle cfgffi handle pointer.
+   * @param json JSON payload to serialize.
+   * @param out_path Target file path.
+   */
+  void WriteSnapshotToPath_(ConfigHandle *handle, const std::string &json,
+                            const std::filesystem::path &out_path) const;
 
   /**
    * @brief Worker loop that processes queued write tasks.
    */
-  void WriteThreadLoop_() {
-    for (;;) {
-      std::function<void()> task;
-      {
-        std::unique_lock<std::mutex> lock(write_mtx_);
-        write_cv_.wait(
-            lock, [&]() { return !write_running_ || !write_queue_.empty(); });
-        if (!write_running_ && write_queue_.empty()) {
-          break;
-        }
-        task = std::move(write_queue_.front());
-        write_queue_.pop_front();
-      }
-      if (task) {
-        task();
-      }
-    }
-  }
+  void WriteThreadLoop_();
 
   std::filesystem::path root_dir_;
-  std::filesystem::path config_path_;
-  std::filesystem::path settings_path_;
-  std::filesystem::path known_hosts_path_;
-  std::filesystem::path history_path_;
-  nlohmann::ordered_json config_json_;
-  nlohmann::ordered_json settings_json_;
-  nlohmann::ordered_json known_hosts_json_;
-  nlohmann::ordered_json history_json_;
-  ConfigHandle *config_handle_ = nullptr;
-  ConfigHandle *settings_handle_ = nullptr;
-  ConfigHandle *known_hosts_handle_ = nullptr;
-  ConfigHandle *history_handle_ = nullptr;
+  std::map<DocumentKind, DocumentState> docs_;
   std::mutex handle_mtx_;
   std::mutex write_mtx_;
   std::condition_variable write_cv_;
-  std::deque<std::function<void()>> write_queue_;
+  std::queue<std::function<ECM()>> write_queue_;
   std::thread write_thread_;
   std::atomic<bool> write_running_{false};
+  std::atomic<bool> shutdown_requested_{false};
+  bool backup_prune_checked_ = false;
 };
 
 /**
@@ -459,34 +341,25 @@ public:
   /**
    * @brief Construct a core data layer with default rules.
    */
-  AMConfigCoreData() : nickname_pattern_("^[A-Za-z0-9_-]+$") {}
+  AMConfigCoreData();
 
   /**
    * @brief Bind the storage layer used for raw config access.
    * @param storage Storage layer pointer.
    */
-  void BindStorage(AMConfigStorage *storage) { storage_ = storage; }
+  void BindStorage(AMConfigStorage *storage);
 
   /**
    * @brief Report whether the layer has an attached storage instance.
    * @return True when storage is bound.
    */
-  [[nodiscard]] bool HasStorage() const { return storage_ != nullptr; }
+  [[nodiscard]] bool HasStorage() const;
 
   /**
    * @brief Load history data into memory (in-memory only for now).
    * @return ECM success or failure.
    */
-  ECM LoadHistory() {
-    if (!storage_) {
-      return {EC::ConfigNotInitialized, "config storage not initialized"};
-    }
-    auto &history = storage_->history_json();
-    if (!history.is_object()) {
-      history = nlohmann::ordered_json::object();
-    }
-    return {EC::Success, ""};
-  }
+  ECM LoadHistory();
 
   /**
    * @brief Fetch history commands for a nickname.
@@ -495,29 +368,7 @@ public:
    * @return ECM success or failure.
    */
   ECM GetHistoryCommands(const std::string &nickname,
-                         std::vector<std::string> *out) const {
-    if (!out) {
-      return {EC::InvalidArg, "null history output"};
-    }
-    out->clear();
-    if (!storage_) {
-      return {EC::ConfigNotInitialized, "config storage not initialized"};
-    }
-    if (nickname.empty()) {
-      return {EC::Success, ""};
-    }
-    const auto *node =
-        FindJsonNode_(storage_->history_json(), {nickname, "commands"});
-    if (!node || !node->is_array()) {
-      return {EC::Success, ""};
-    }
-    for (const auto &item : *node) {
-      if (item.is_string()) {
-        out->push_back(item.get<std::string>());
-      }
-    }
-    return {EC::Success, ""};
-  }
+                         std::vector<std::string> *out) const;
 
   /**
    * @brief Store history commands for a nickname and optionally persist.
@@ -528,86 +379,21 @@ public:
    */
   ECM SetHistoryCommands(const std::string &nickname,
                          const std::vector<std::string> &commands,
-                         bool dump_now = true) {
-    if (!storage_) {
-      return {EC::ConfigNotInitialized, "config storage not initialized"};
-    }
-    if (nickname.empty()) {
-      return {EC::InvalidArg, "empty history nickname"};
-    }
-    auto &history = storage_->history_json();
-    if (!history.is_object()) {
-      history = nlohmann::ordered_json::object();
-    }
-    nlohmann::ordered_json &node = history[nickname];
-    if (!node.is_object()) {
-      node = nlohmann::ordered_json::object();
-    }
-    node["commands"] = commands;
-    if (dump_now) {
-      return storage_->DumpHistory();
-    }
-    return {EC::Success, ""};
-  }
+                         bool dump_now = true);
 
   /**
    * @brief Resolve history size limit from settings with minimum 10.
    * @param default_value Default fallback when no setting is found.
    * @return Resolved history max count.
    */
-  [[nodiscard]] int ResolveMaxHistoryCount(int default_value = 10) const {
-    const int fallback = std::max(default_value, 10);
-    if (!storage_) {
-      return fallback;
-    }
-    AMConfigStorage::Value value;
-    if (!storage_->QueryKey(storage_->settings_json(),
-                            {"InternalVars", "MaxHistoryCount"}, &value)) {
-      return fallback;
-    }
-    if (std::holds_alternative<int64_t>(value)) {
-      const int64_t raw = std::get<int64_t>(value);
-      if (raw >= 10) {
-        return static_cast<int>(raw);
-      }
-    }
-    if (std::holds_alternative<std::string>(value)) {
-      try {
-        const int parsed = std::stoi(std::get<std::string>(value));
-        return parsed >= 10 ? parsed : fallback;
-      } catch (...) {
-        return fallback;
-      }
-    }
-    return fallback;
-  }
+  [[nodiscard]] int ResolveMaxHistoryCount(int default_value = 10) const;
 
   /**
    * @brief Check whether a host nickname exists in the configuration.
    * @param nickname Host nickname.
    * @return True when the nickname is present.
    */
-  [[nodiscard]] bool HostExists(const std::string &nickname) const {
-    if (!storage_ || nickname.empty()) {
-      return false;
-    }
-    const auto &root = storage_->config_json();
-    auto it = root.find("HOSTS");
-    if (it == root.end() || !it->is_array()) {
-      return false;
-    }
-    for (const auto &item : *it) {
-      if (!item.is_object()) {
-        continue;
-      }
-      auto nick_it = item.find("nickname");
-      if (nick_it != item.end() && nick_it->is_string() &&
-          nick_it->get<std::string>() == nickname) {
-        return true;
-      }
-    }
-    return false;
-  }
+  [[nodiscard]] bool HostExists(const std::string &nickname) const;
 
   /**
    * @brief Validate whether a nickname is legal and not already used.
@@ -615,27 +401,7 @@ public:
    * @param error Output error message on failure.
    * @return True when the nickname is valid.
    */
-  bool ValidateNickname(const std::string &nickname, std::string *error) const {
-    if (nickname.empty()) {
-      if (error) {
-        *error = "Nickname cannot be empty.";
-      }
-      return false;
-    }
-    if (!std::regex_match(nickname, nickname_pattern_)) {
-      if (error) {
-        *error = "Nickname must contain only letters, numbers, _ or -.";
-      }
-      return false;
-    }
-    if (HostExists(nickname)) {
-      if (error) {
-        *error = "Nickname already exists.";
-      }
-      return false;
-    }
-    return true;
-  }
+  bool ValidateNickname(const std::string &nickname, std::string *error) const;
 
 private:
   /**
@@ -645,20 +411,7 @@ private:
    * @return Pointer to the node when found, otherwise nullptr.
    */
   [[nodiscard]] const nlohmann::ordered_json *
-  FindJsonNode_(const nlohmann::ordered_json &root, const Path &path) const {
-    const nlohmann::ordered_json *node = &root;
-    for (const auto &seg : path) {
-      if (!node->is_object()) {
-        return nullptr;
-      }
-      auto it = node->find(seg);
-      if (it == node->end()) {
-        return nullptr;
-      }
-      node = &(*it);
-    }
-    return node;
-  }
+  FindJsonNode_(const nlohmann::ordered_json &root, const Path &path) const;
 
   AMConfigStorage *storage_ = nullptr;
   std::regex nickname_pattern_;
@@ -672,13 +425,13 @@ public:
   /**
    * @brief Construct a style layer with no bound storage.
    */
-  AMConfigStyleData() = default;
+  AMConfigStyleData();
 
   /**
    * @brief Bind the storage layer used for style configuration lookups.
    * @param storage Storage layer pointer.
    */
-  void BindStorage(AMConfigStorage *storage) { storage_ = storage; }
+  void BindStorage(AMConfigStorage *storage);
 
   /**
    * @brief Apply a named style to a string with optional path context.
@@ -689,14 +442,7 @@ public:
    */
   [[nodiscard]] std::string Format(const std::string &ori_str,
                                    const std::string &style_name,
-                                   const PathInfo *path_info = nullptr) const {
-    (void)style_name;
-    (void)path_info;
-    if (!storage_) {
-      return ori_str;
-    }
-    return ori_str;
-  }
+                                   const PathInfo *path_info = nullptr) const;
 
   /**
    * @brief Create a progress bar using the current style configuration.
@@ -705,9 +451,7 @@ public:
    * @return Configured progress bar instance.
    */
   [[nodiscard]] AMProgressBar
-  CreateProgressBar(int64_t total_size, const std::string &prefix) const {
-    return AMProgressBar(total_size, prefix);
-  }
+  CreateProgressBar(int64_t total_size, const std::string &prefix) const;
 
   /**
    * @brief Format a UTF-8 table using configured style defaults.
@@ -717,12 +461,35 @@ public:
    */
   [[nodiscard]] std::string
   FormatUtf8Table(const std::vector<std::string> &keys,
-                  const std::vector<std::vector<std::string>> &rows) const {
-    return AMStr::FormatUtf8Table(keys, rows);
-  }
+                  const std::vector<std::vector<std::string>> &rows) const;
 
 private:
+  /**
+   * @brief Read an integer setting from settings JSON.
+   * @param path Path segments for the setting.
+   * @param default_value Default fallback value.
+   * @return Parsed integer value.
+   */
+  int GetSettingInt_(const std::vector<std::string> &path,
+                     int default_value) const;
+
+  /**
+   * @brief Read a string setting from settings JSON.
+   * @param path Path segments for the setting.
+   * @param default_value Default fallback value.
+   * @return Parsed string value.
+   */
+  std::string GetSettingString_(const std::vector<std::string> &path,
+                                const std::string &default_value) const;
+
+  /**
+   * @brief Build progress bar style from settings.
+   * @return Progress bar style configuration.
+   */
+  AMProgressBarStyle BuildProgressBarStyle_() const;
+
   AMConfigStorage *storage_ = nullptr;
+  mutable std::optional<AMProgressBarStyle> progress_bar_style_;
 };
 
 /**
@@ -739,142 +506,120 @@ public:
   /**
    * @brief Construct an empty CLI adapter without callbacks.
    */
-  AMConfigCLIAdapter() = default;
+  AMConfigCLIAdapter();
 
   /**
    * @brief Bind the list callback used by CLI.
    * @param cb Callback to invoke for list.
    */
-  void SetListCallback(SimpleCallback cb) { list_cb_ = std::move(cb); }
+  void SetListCallback(SimpleCallback cb);
 
   /**
    * @brief Bind the list-name callback used by CLI.
    * @param cb Callback to invoke for list-name.
    */
-  void SetListNameCallback(SimpleCallback cb) { list_name_cb_ = std::move(cb); }
+  void SetListNameCallback(SimpleCallback cb);
 
   /**
    * @brief Bind the add callback used by CLI.
    * @param cb Callback to invoke for add.
    */
-  void SetAddCallback(SimpleCallback cb) { add_cb_ = std::move(cb); }
+  void SetAddCallback(SimpleCallback cb);
 
   /**
    * @brief Bind the modify callback used by CLI.
    * @param cb Callback to invoke for modify.
    */
-  void SetModifyCallback(StringCallback cb) { modify_cb_ = std::move(cb); }
+  void SetModifyCallback(StringCallback cb);
 
   /**
-   * @brief Bind the delete-by-string callback used by CLI.
-   * @param cb Callback to invoke for delete with raw string.
+   * @brief Bind the delete callback used by CLI.
+   * @param cb Callback to invoke for delete.
    */
-  void SetDeleteCallback(StringCallback cb) { delete_cb_ = std::move(cb); }
+  void SetDeleteCallback(StringCallback cb);
 
   /**
-   * @brief Bind the delete-by-list callback used by CLI.
-   * @param cb Callback to invoke for delete with nickname list.
+   * @brief Bind the delete-list callback used by CLI.
+   * @param cb Callback to invoke for delete-list.
    */
-  void SetDeleteListCallback(StringsCallback cb) {
-    delete_list_cb_ = std::move(cb);
-  }
+  void SetDeleteListCallback(StringsCallback cb);
 
   /**
-   * @brief Bind the query-by-string callback used by CLI.
-   * @param cb Callback to invoke for query with raw string.
+   * @brief Bind the query callback used by CLI.
+   * @param cb Callback to invoke for query.
    */
-  void SetQueryCallback(StringCallback cb) { query_cb_ = std::move(cb); }
+  void SetQueryCallback(StringCallback cb);
 
   /**
-   * @brief Bind the query-by-list callback used by CLI.
-   * @param cb Callback to invoke for query with nickname list.
+   * @brief Bind the query-list callback used by CLI.
+   * @param cb Callback to invoke for query-list.
    */
-  void SetQueryListCallback(StringsCallback cb) {
-    query_list_cb_ = std::move(cb);
-  }
+  void SetQueryListCallback(StringsCallback cb);
 
   /**
    * @brief Bind the rename callback used by CLI.
    * @param cb Callback to invoke for rename.
    */
-  void SetRenameCallback(RenameCallback cb) { rename_cb_ = std::move(cb); }
+  void SetRenameCallback(RenameCallback cb);
 
   /**
    * @brief Bind the src callback used by CLI.
    * @param cb Callback to invoke for src.
    */
-  void SetSrcCallback(SimpleCallback cb) { src_cb_ = std::move(cb); }
+  void SetSrcCallback(SimpleCallback cb);
 
   /**
    * @brief List configuration entries for CLI output.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM List() const {
-    return list_cb_ ? list_cb_() : MissingCallback_("List");
-  }
+  [[nodiscard]] ECM List() const;
 
   /**
    * @brief List configuration entry names for CLI output.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM ListName() const {
-    return list_name_cb_ ? list_name_cb_() : MissingCallback_("ListName");
-  }
+  [[nodiscard]] ECM ListName() const;
 
   /**
-   * @brief Add a new configuration entry through the CLI flow.
+   * @brief Add a configuration entry for CLI output.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM Add() {
-    return add_cb_ ? add_cb_() : MissingCallback_("Add");
-  }
+  [[nodiscard]] ECM Add() const;
 
   /**
-   * @brief Modify an existing configuration entry.
-   * @param nickname Host nickname to modify.
+   * @brief Modify a configuration entry.
+   * @param nickname Entry nickname.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM Modify(const std::string &nickname) {
-    return modify_cb_ ? modify_cb_(nickname) : MissingCallback_("Modify");
-  }
+  [[nodiscard]] ECM Modify(const std::string &nickname) const;
 
   /**
-   * @brief Delete configuration entries specified by a raw CLI argument.
-   * @param targets Raw target string.
+   * @brief Delete a configuration entry.
+   * @param nickname Entry nickname.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM Delete(const std::string &targets) {
-    return delete_cb_ ? delete_cb_(targets) : MissingCallback_("Delete");
-  }
+  [[nodiscard]] ECM Delete(const std::string &nickname) const;
 
   /**
-   * @brief Delete configuration entries specified by nickname list.
-   * @param targets Nickname list.
+   * @brief Delete configuration entries by list.
+   * @param targets Entry nicknames.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM Delete(const std::vector<std::string> &targets) {
-    return delete_list_cb_ ? delete_list_cb_(targets)
-                           : MissingCallback_("DeleteList");
-  }
+  [[nodiscard]] ECM Delete(const std::vector<std::string> &targets) const;
 
   /**
-   * @brief Query configuration entries specified by a raw CLI argument.
-   * @param targets Raw target string.
+   * @brief Query a configuration entry.
+   * @param nickname Entry nickname.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM Query(const std::string &targets) const {
-    return query_cb_ ? query_cb_(targets) : MissingCallback_("Query");
-  }
+  [[nodiscard]] ECM Query(const std::string &nickname) const;
 
   /**
-   * @brief Query configuration entries specified by nickname list.
-   * @param targets Nickname list.
+   * @brief Query configuration entries by list.
+   * @param targets Entry nicknames.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM Query(const std::vector<std::string> &targets) const {
-    return query_list_cb_ ? query_list_cb_(targets)
-                          : MissingCallback_("QueryList");
-  }
+  [[nodiscard]] ECM Query(const std::vector<std::string> &targets) const;
 
   /**
    * @brief Rename a configuration entry.
@@ -883,18 +628,13 @@ public:
    * @return ECM success or failure.
    */
   [[nodiscard]] ECM Rename(const std::string &old_nickname,
-                           const std::string &new_nickname) {
-    return rename_cb_ ? rename_cb_(old_nickname, new_nickname)
-                      : MissingCallback_("Rename");
-  }
+                           const std::string &new_nickname);
 
   /**
    * @brief Print configuration source file locations for CLI.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM Src() const {
-    return src_cb_ ? src_cb_() : MissingCallback_("Src");
-  }
+  [[nodiscard]] ECM Src() const;
 
 private:
   /**
@@ -902,10 +642,7 @@ private:
    * @param action Action name being invoked.
    * @return ECM error response.
    */
-  [[nodiscard]] ECM MissingCallback_(const std::string &action) const {
-    return {EC::ConfigNotInitialized,
-            AMStr::amfmt("ConfigCLIAdapter missing callback: {}", action)};
-  }
+  [[nodiscard]] ECM MissingCallback_(const std::string &action) const;
 
   SimpleCallback list_cb_;
   SimpleCallback list_name_cb_;
@@ -991,7 +728,7 @@ public:
    */
   KnownHostCallback BuildKnownHostCallback();
   /** Return the project root directory path. */
-  [[nodiscard]] std::filesystem::path ProjectRoot() const { return root_dir_; }
+  [[nodiscard]] std::filesystem::path ProjectRoot() const;
   [[nodiscard]] std::pair<ECM, ClientConfig>
   GetClientConfig(const std::string &nickname);
   /**
@@ -1164,59 +901,17 @@ private:
   ECM PromptModifyFields(const std::string &nickname, HostEntry *entry);
   bool ParsePositiveInt(const std::string &input, int64_t *value) const;
   /**
-   * @brief Build progress bar style from settings.
-   */
-  AMProgressBarStyle BuildProgressBarStyle_() const;
-
-  /**
    * @brief Persist in-memory history JSON to disk.
    */
   ECM DumpHistory_();
 
-  /** @brief Start the background writer thread if not running. */
-  void StartWriteThread_();
-  /** @brief Stop the background writer thread and drain pending tasks. */
-  void StopWriteThread_();
-  /** @brief Background worker loop for serialized write tasks. */
-  void WriteThreadLoop_();
-  /**
-   * @brief Write a TOML snapshot to a target path using the given handle.
-   */
-  void WriteSnapshotToPath_(ConfigHandle *handle, const std::string &json,
-                            const std::filesystem::path &out_path) const;
-
-  std::filesystem::path root_dir_;
-  std::filesystem::path config_path_;
-  std::filesystem::path settings_path_;
-  std::filesystem::path known_hosts_path_;
-  std::filesystem::path history_path_;
-  /** JSON schema path for config.toml filtering. */
-  std::filesystem::path config_schema_path_;
-  /** JSON schema path for settings.toml filtering. */
-  std::filesystem::path settings_schema_path_;
-  /** JSON schema path for known_hosts.toml filtering. */
-  std::filesystem::path known_hosts_schema_path_;
-  nlohmann::ordered_json config_json_;
-  nlohmann::ordered_json settings_json_;
-  nlohmann::ordered_json known_hosts_json_;
-  nlohmann::ordered_json history_json_;
-  ConfigHandle *config_handle_ = nullptr;
-  ConfigHandle *settings_handle_ = nullptr;
-  ConfigHandle *known_hosts_handle_ = nullptr;
-  ConfigHandle *history_handle_ = nullptr;
+  AMConfigStorage storage_;
+  AMConfigCoreData core_data_;
+  AMConfigStyleData style_data_;
+  AMConfigCLIAdapter cli_adapter_;
   KnownHostCallback known_host_cb_ = {};
   AMPromptManager &prompt = AMPromptManager::Instance();
 
-  std::mutex write_mtx_;
-  std::condition_variable write_cv_;
-  std::deque<std::function<void()>> write_queue_;
-  std::thread write_thread_;
-  std::atomic<bool> write_running_{false};
-  std::mutex handle_mtx_;
-  bool backup_prune_checked_ = false;
-  mutable std::optional<AMProgressBarStyle> progress_bar_style_;
-
   bool initialized_ = false;
   bool exit_hook_installed_ = false;
-  std::regex nickname_pattern = std::regex("^[A-Za-z0-9_]+$");
 };

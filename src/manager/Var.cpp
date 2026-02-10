@@ -133,9 +133,8 @@ void AMVarManager::LogNotFound(const std::string &name) const {
 /**
  * @brief Ask the user to confirm deleting a variable.
  */
-AMVarManager::ECM AMVarManager::ConfirmDelete(const std::string &name,
-                                              bool has_memory,
-                                              bool has_storage) const {
+ECM AMVarManager::ConfirmDelete(const std::string &name, bool has_memory,
+                                bool has_storage) const {
   std::string scope;
   if (has_memory && has_storage) {
     scope = "memory/storage";
@@ -159,7 +158,7 @@ AMVarManager::ECM AMVarManager::ConfirmDelete(const std::string &name,
 /**
  * @brief Query variables in memory and storage, printing results.
  */
-AMVarManager::ECM AMVarManager::Query(const std::vector<std::string> &names) {
+ECM AMVarManager::Query(const std::vector<std::string> &names) {
   ECM last_error = {EC::Success, ""};
   bool any_found = false;
 
@@ -202,7 +201,7 @@ AMVarManager::ECM AMVarManager::Query(const std::vector<std::string> &names) {
 /**
  * @brief Delete variables from memory and storage, confirming per key.
  */
-AMVarManager::ECM AMVarManager::Delete(const std::vector<std::string> &names) {
+ECM AMVarManager::Delete(const std::vector<std::string> &names) {
   ECM last_error = {EC::Success, ""};
   bool storage_changed = false;
 
@@ -258,7 +257,7 @@ AMVarManager::ECM AMVarManager::Delete(const std::vector<std::string> &names) {
 /**
  * @brief Enumerate variables, printing memory entries then storage entries.
  */
-AMVarManager::ECM AMVarManager::Enumerate() {
+ECM AMVarManager::Enumerate() {
   prompt_manager_.Print("[InMemory]");
   {
     std::vector<std::pair<std::string, std::string>> entries;
@@ -293,8 +292,8 @@ AMVarManager::ECM AMVarManager::Enumerate() {
 /**
  * @brief Ask the user to confirm overwriting an existing variable.
  */
-AMVarManager::ECM AMVarManager::ConfirmOverwrite(const std::string &name,
-                                                 VarSource source) const {
+ECM AMVarManager::ConfirmOverwrite(const std::string &name,
+                                   VarSource source) const {
   const std::string source_label =
       source == VarSource::Builtin ? "built-in" : "in-memory";
   const std::string prompt = AMStr::amfmt(
@@ -310,9 +309,9 @@ AMVarManager::ECM AMVarManager::ConfirmOverwrite(const std::string &name,
 /**
  * @brief Set or overwrite an in-memory variable, confirming overwrites.
  */
-AMVarManager::ECM AMVarManager::SetMemoryVar(const std::string &name,
-                                             const std::string &value,
-                                             bool confirm_overwrite) {
+ECM AMVarManager::SetMemoryVar(const std::string &name,
+                               const std::string &value,
+                               bool confirm_overwrite) {
   if (name.empty()) {
     return {EC::InvalidArg, "Empty variable name"};
   }
@@ -337,9 +336,9 @@ AMVarManager::ECM AMVarManager::SetMemoryVar(const std::string &name,
 /**
  * @brief Set or overwrite a persistent variable in storage only.
  */
-AMVarManager::ECM AMVarManager::SetPersistentVar(const std::string &name,
-                                                 const std::string &value,
-                                                 bool confirm_overwrite) {
+ECM AMVarManager::SetPersistentVar(const std::string &name,
+                                   const std::string &value,
+                                   bool confirm_overwrite) {
   if (name.empty()) {
     return {EC::InvalidArg, "Empty variable name"};
   }

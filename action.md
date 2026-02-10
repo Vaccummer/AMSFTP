@@ -1,79 +1,65 @@
+# Migration Plan: Refactor AMConfigManager into Layered Components
 
-# AMConfigManager Improvement Plan
+Migrate the majority of `AMConfigManager`'s member functions into four dedicated classes: `AMConfigStyleData`, `AMConfigCLIAdapter`, `AMConfigCoreData`, and `AMConfigStorage`. `AMConfigManager` will retain ownership of these components via composition (holding instances, not raw references for lifetime safety) and delegate calls to the appropriate layer.
 
-The current `ConfigManager` class contains too many member functions, resulting in excessive responsibilities, poor maintainability, and high cognitive load. To address this, we propose a clean separation into **four distinct layers** while preserving backward compatibility through an append-only approach (no modification to existing code during initial refactoring).
-
-## Proposed Layered Architecture
-
-### 1. **ConfigStorage** – Low-level I/O Layer
-
-*Responsible for raw config data persistence and thread-safe file operations*
-
-- Maintains underlying config data structures
-- Implements `dump()` for serialization
-- Supports key-value queries/writes via `std::vector<std::string>` path notation
-- Handles automatic backup mechanisms
-- Manages background file-writing thread
-
-*Member variable name in facade:* `storage_`
-
-### 2. **ConfigDataAccess** – Data Access & Preprocessing Layer
-
-*Split into two peer sub-layers with orthogonal responsibilities:*
-
-#### 2.1 **ConfigCoreData** – Non-style Data Access
-
-*Handles business-logic config entities*
-
-- Manages `History`, `HostConfig`, and other non-styling data
-- Provides typed accessors and validators for core configuration
-
-*Member variable name in facade:* `core_data_`
-
-#### 2.2 **ConfigStyleData** – Style Data Access
-
-*Handles UI/style-related configuration*
-
-- Reads/writes progress bar styles, table styles
-- Provides string styling helpers (e.g., colorization, formatting)
-
-*Member variable name in facade:* `style_data_`
-
-### 3. **ConfigCLIAdapter** – CLI Exposure Layer
-
-*Pure interface layer for command-line binding*
-
-- Exposes all CLI-bound functions with clean, narrow interfaces
-- Translates CLI arguments into internal operations
-- Contains no business logic – delegates to lower layers
-
-*Member variable name in facade:* `cli_adapter_`
-
-### 4. **ConfigManager** – Public Facade (Top Layer)
-
-*Minimal coordinator preserving existing public API*
-
-- Holds instances of the four new components via composition
-- Exposes only `init()` and legacy-compatible public methods (delegating internally)
-- Serves as migration bridge during incremental refactoring
+`AMConfigStorage` requires further abstraction. Below is a refined design based on your reference code, with improvements for robustness, thread safety, and API clarity:
 
 ```cpp
-class ConfigManager {
-    ConfigStorage storage_;
-    ConfigCoreData core_data_;
-    ConfigStyleData style_data_;
-    ConfigCLIAdapter cli_adapter_;
+enum class DocumentKind { Config, Settings, KnownHosts, History };
+
+struct DocumentState {
+  std::filesystem::path path;
+  std::filesystem::path schema_path;
+  ConfigHandle* handle = nullptr;
+  nlohmann::ordered_json json;
+  mutable std::mutex mtx;  // mutable for const-correct locking in Snapshot()
+  bool dirty = false;
+  std::chrono::system_clock::time_point last_modified;
+};
+
+class AMConfigStorage {
 public:
-    bool init();  // Orchestrates initialization of all subcomponents
-    // Legacy methods delegate to subcomponents (append-only)
+  // Lifecycle
+  ECM Init(const std::filesystem::path& root_dir,
+           const std::unordered_map<DocumentKind, std::filesystem::path>& paths,
+           const std::unordered_map<DocumentKind, std::filesystem::path>& schemas);
+  
+  ECM BindHandles(ConfigHandle* config, ConfigHandle* settings,
+                  ConfigHandle* known_hosts, ConfigHandle* history);
+  
+  ECM LoadAll();
+  ECM Load(DocumentKind kind);
+  ECM Close();  // Graceful shutdown with final dump
+
+  // Read operations (thread-safe snapshots)
+  nlohmann::ordered_json Snapshot(DocumentKind kind) const;
+  bool IsDirty(DocumentKind kind) const;
+
+  // Mutation (thread-safe, supports deferred persistence)
+  ECM Mutate(DocumentKind kind,
+             std::function<void(nlohmann::ordered_json&)> mutator,
+             bool dump_now = false);
+
+  // Persistence
+  ECM DumpAll();
+  ECM Dump(DocumentKind kind);
+  ECM BackupIfNeeded();
+
+  // Writer thread management (typically called once during init/shutdown)
+  void StartWriteThread();
+  void StopWriteThread();  // Joins thread and flushes queue
+
+private:
+  // Thread-safe task submission (internal use)
+  void SubmitWriteTask(std::function<ECM()> task);
+
+  // Internal state
+  std::filesystem::path root_dir_;
+  std::unordered_map<DocumentKind, DocumentState> docs_;
+  std::thread writer_thread_;
+  std::mutex queue_mtx_;
+  std::condition_variable queue_cv_;
+  std::queue<std::function<ECM()>> write_queue_;
+  std::atomic<bool> shutdown_requested_{false};
 };
 ```
-
-## Implementation Strategy (Append-Only)
-
-1. **Phase 1**: Implement new classes *alongside* existing `ConfigManager` without modifying current code
-2. **Phase 2**: Gradually migrate internal logic into new layers while maintaining original behavior
-3. **Phase 3**: Update call sites incrementally; original interface remains functional throughout
-
-> ✅ **Key constraint**: All changes must be *append-only* – no deletion/modification of existing functions until full migration validation is complete. New functionality is added via composition without breaking existing clients.
->

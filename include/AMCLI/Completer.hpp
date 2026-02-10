@@ -65,8 +65,7 @@ private:
    * @param cenv Completion environment provided by isocline.
    * @param prefix Raw input prefix before the cursor.
    */
-  static void IsoclineCompleter(ic_completion_env_t *cenv,
-                                const char *prefix);
+  static void IsoclineCompleter(ic_completion_env_t *cenv, const char *prefix);
 
   AMCompleter(const AMCompleter &) = delete;
   AMCompleter &operator=(const AMCompleter &) = delete;

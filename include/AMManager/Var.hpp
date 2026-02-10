@@ -5,13 +5,10 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
-#include <utility>
 #include <vector>
 
 class AMVarManager {
 public:
-  using ECM = std::pair<ErrorCode, std::string>;
-
   enum class VarSource { Builtin, Memory };
 
   /**

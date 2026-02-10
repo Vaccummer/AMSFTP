@@ -1201,3 +1201,41 @@ ProgressBar Improve
 namespace indicators { enum class Color { grey, red, green, yellow, blue, magenta, cyan, white, unspecified };}
 
 进度条的config不会在运行时改变, 可以创建一个, 然后进行复制
+翻译成英文
+将AMConfigManager的大部分函数迁移到AMConfigStyleData, AMConfigCLIAdapter,AMConfigCoreData, AMConfigStorage中实现, AMConfigManager持有以上几个类的引用, 并修改调用方式
+AMConfigStorage需要进一步抽象, 参考为以下代码, 你可以在其中不足之处进行优化
+enum class DocumentKind { Config, Settings, KnownHosts, History };
+
+struct DocumentState {
+  std::filesystem::path path;
+  std::filesystem::path schema_path;
+  ConfigHandle* handle = nullptr;
+  nlohmann::ordered_json json;
+  std::mutex mtx;
+  bool dirty = false;
+};
+
+class AMConfigStorage {
+public:
+  ECM Init(const std::filesystem::path& root_dir);
+  ECM BindHandles(ConfigHandle* config, ConfigHandle* settings,
+                  ConfigHandle* known_hosts, ConfigHandle* history);
+
+  ECM LoadAll();
+  ECM Load(DocumentKind kind);
+
+  nlohmann::ordered_json Snapshot(DocumentKind kind) const;
+
+  ECM Mutate(DocumentKind kind, std::function[void(nlohmann::ordered_json&amp;)](void(nlohmann::ordered_json&)) fn,
+             bool dump_now);
+
+  ECM DumpAll();
+  ECM Dump(DocumentKind kind);
+
+  ECM BackupIfNeeded();
+  void SubmitWriteTask(std::function<void()> task);
+
+  void StartWriteThread();
+  void StopWriteThread();
+  void Close();
+};

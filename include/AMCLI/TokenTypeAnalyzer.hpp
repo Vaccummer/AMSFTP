@@ -61,18 +61,16 @@ private:
   bool ParseVarTokenAt(const std::string &input, size_t pos, size_t limit,
                        size_t *out_end) const;
   bool ParseVarTokenText(const std::string &token) const;
-  bool ParseVarTokenText(const std::string &token,
-                         std::string *out_name) const;
+  bool ParseVarTokenText(const std::string &token, std::string *out_name) const;
 
   void HighlightVarToken(const std::string &input, size_t token_start,
-                         size_t token_end,
-                         ReplxxColor *colors, std::vector<int> &priorities,
-                         int size) const;
+                         size_t token_end, ReplxxColor *colors,
+                         std::vector<int> &priorities, int size) const;
 
   void HighlightVarReferences(const std::string &input,
                               const std::vector<Token> &tokens,
-                              ReplxxColor *colors,
-                              std::vector<int> &priorities, int size) const;
+                              ReplxxColor *colors, std::vector<int> &priorities,
+                              int size) const;
 
   void HighlightEscapeSigns(const std::string &input, ReplxxColor *colors,
                             std::vector<int> &priorities, int size) const;
@@ -91,9 +89,8 @@ private:
 
   void HighlightVarCommand(const std::string &input,
                            const std::vector<Token> &tokens,
-                           ReplxxColor *colors,
-                           std::vector<int> &priorities, int size,
-                           bool *handled) const;
+                           ReplxxColor *colors, std::vector<int> &priorities,
+                           int size, bool *handled) const;
 
   AMTokenType VarNameTypeFor(const std::string &name) const;
   bool VarExists(const std::string &name) const;
