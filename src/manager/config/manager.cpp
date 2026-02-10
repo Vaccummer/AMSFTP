@@ -1,735 +1,7 @@
-#include "AMManager/Config.hpp"
-#include "AMBase/CommonTools.hpp"
-#include "AMBase/Enum.hpp"
-#include "AMBase/Path.hpp"
 #include "AMManager/Client.hpp"
-#include "AMManager/Prompt.hpp"
-#include <algorithm>
-#include <cctype>
-#include <cstdlib>
-#include <fstream>
-#include <iomanip>
-#include <limits>
-#include <optional>
-#include <regex>
-#include <sstream>
-#include <variant>
+#include "internal_func.hpp"
 
-namespace {
-using Path = AMConfigManager::Path;
-using Value = AMConfigManager::Value;
-using ClientConfig = AMConfigManager::ClientConfig;
-using ResolveArgType = AMConfigManager::ResolveArgType;
-using EC = ErrorCode;
-using Json = nlohmann::ordered_json;
-
-ECM Ok() { return {EC::Success, ""}; }
-ECM Err(EC code, const std::string &msg) { return {code, msg}; }
-
-bool JsonArrayAllScalar(const Json &arr) {
-  for (const auto &child : arr) {
-    if (!(child.is_null() || child.is_boolean() || child.is_number() ||
-          child.is_string())) {
-      return false;
-    }
-  }
-  return true;
-}
-
-std::string JsonScalarToString(const Json &value) {
-  if (value.is_string())
-    return value.get<std::string>();
-  if (value.is_boolean())
-    return value.get<bool>() ? "true" : "false";
-  if (value.is_number_integer())
-    return std::to_string(value.get<int64_t>());
-  if (value.is_number_unsigned())
-    return std::to_string(value.get<size_t>());
-  if (value.is_number_float()) {
-    std::ostringstream oss;
-    oss << value.get<double>();
-    return oss.str();
-  }
-  if (value.is_null())
-    return "null";
-  return value.dump();
-}
-
-/**
- * @brief Convert a settings node into a typed value with a fallback default.
- */
-template <typename T>
-T GetSettingValueImpl(const Json *node, const T &default_value) {
-  return default_value;
-}
-
-/**
- * @brief Convert a settings node into an integer value with parsing fallback.
- */
-template <>
-int GetSettingValueImpl<int>(const Json *node, const int &default_value) {
-  if (!node) {
-    return default_value;
-  }
-  if (node->is_number_integer())
-    return static_cast<int>(node->get<int64_t>());
-  if (node->is_number_unsigned()) {
-    auto value = node->get<size_t>();
-    if (value <= static_cast<size_t>(std::numeric_limits<int>::max()))
-      return static_cast<int>(value);
-  }
-  if (node->is_string()) {
-    try {
-      return std::stoi(node->get<std::string>());
-    } catch (...) {
-      return default_value;
-    }
-  }
-  return default_value;
-}
-
-/**
- * @brief Convert a settings node into a string value with formatting fallback.
- */
-template <>
-std::string GetSettingValueImpl<std::string>(const Json *node,
-                                             const std::string &default_value) {
-  if (!node) {
-    return default_value;
-  }
-  if (node->is_string())
-    return node->get<std::string>();
-  if (node->is_number_integer())
-    return std::to_string(node->get<int64_t>());
-  if (node->is_number_unsigned())
-    return std::to_string(node->get<size_t>());
-  if (node->is_boolean())
-    return node->get<bool>() ? "true" : "false";
-  if (node->is_number_float()) {
-    std::ostringstream oss;
-    oss << node->get<double>();
-    return oss.str();
-  }
-  return default_value;
-}
-
-void PrintLine(const std::string &value) {
-  AMPromptManager::Instance().Print(value);
-}
-
-std::string TrimCopy(const std::string &value) {
-  std::string tmp = value;
-  AMStr::VStrip(tmp);
-  return tmp;
-}
-
-/**
- * @brief Normalize a configured style into a bbcode opening tag.
- */
-std::string NormalizeStyleTag_(const std::string &raw) {
-  std::string trimmed = TrimCopy(raw);
-  if (trimmed.empty()) {
-    return "";
-  }
-  if (trimmed.find("[/") != std::string::npos) {
-    return "";
-  }
-  if (trimmed.front() != '[') {
-    trimmed.insert(trimmed.begin(), '[');
-  }
-  if (trimmed.back() != ']') {
-    trimmed.push_back(']');
-  }
-  return trimmed;
-}
-
-/**
- * @brief Wrap text with a bbcode tag when provided.
- */
-std::string ApplyStyleTag_(const std::string &tag, const std::string &text) {
-  if (tag.empty()) {
-    return text;
-  }
-  return tag + text + "[/]";
-}
-
-std::string ToLowerCopy(const std::string &value) {
-  std::string out = value;
-  std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
-    return static_cast<char>(std::tolower(c));
-  });
-  return out;
-}
-
-/**
- * @brief Parse a hex color string (#RRGGBB) into an ANSI escape sequence.
- */
-std::optional<std::string> ParseHexColorToAnsi(const std::string &value) {
-  std::string token = TrimCopy(value);
-  if (token.empty()) {
-    return std::nullopt;
-  }
-  if (token.rfind("#", 0) == 0) {
-    token.erase(0, 1);
-  }
-  if (token.size() != 6) {
-    return std::nullopt;
-  }
-  auto hex_to_int = [](char c) -> int {
-    if (c >= '0' && c <= '9')
-      return c - '0';
-    if (c >= 'a' && c <= 'f')
-      return 10 + (c - 'a');
-    if (c >= 'A' && c <= 'F')
-      return 10 + (c - 'A');
-    return -1;
-  };
-  int vals[6];
-  for (size_t i = 0; i < 6; ++i) {
-    vals[i] = hex_to_int(token[i]);
-    if (vals[i] < 0) {
-      return std::nullopt;
-    }
-  }
-  int r = vals[0] * 16 + vals[1];
-  int g = vals[2] * 16 + vals[3];
-  int b = vals[4] * 16 + vals[5];
-  return AMStr::amfmt("\x1b[38;2;{};{};{}m", r, g, b);
-}
-
-/**
- * @brief Map a progress bar color name or hex to indicators::Color/ANSI.
- */
-std::variant<indicators::Color, std::string>
-ParseProgressBarColor(const std::string &value) {
-  const std::string trimmed = TrimCopy(value);
-  if (trimmed.empty()) {
-    return indicators::Color::unspecified;
-  }
-  if (!trimmed.empty() && trimmed[0] == '#') {
-    auto ansi = ParseHexColorToAnsi(trimmed);
-    if (ansi) {
-      return *ansi;
-    }
-  }
-  const std::string token = ToLowerCopy(trimmed);
-  if (token == "grey") {
-    return indicators::Color::grey;
-  }
-  if (token == "red") {
-    return indicators::Color::red;
-  }
-  if (token == "green") {
-    return indicators::Color::green;
-  }
-  if (token == "yellow") {
-    return indicators::Color::yellow;
-  }
-  if (token == "blue") {
-    return indicators::Color::blue;
-  }
-  if (token == "magenta") {
-    return indicators::Color::magenta;
-  }
-  if (token == "cyan") {
-    return indicators::Color::cyan;
-  }
-  if (token == "white") {
-    return indicators::Color::white;
-  }
-  return indicators::Color::unspecified;
-}
-
-/**
- * @brief Parse a boolean token from user input.
- */
-bool ParseBoolToken(const std::string &input, bool *value) {
-  std::string token = TrimCopy(input);
-  if (token.empty()) {
-    return false;
-  }
-  token = ToLowerCopy(token);
-  if (token == "true" || token == "1" || token == "yes" || token == "y") {
-    if (value) {
-      *value = true;
-    }
-    return true;
-  }
-  if (token == "false" || token == "0" || token == "no" || token == "n") {
-    if (value) {
-      *value = false;
-    }
-    return true;
-  }
-  return false;
-}
-
-std::optional<std::string> GetStringField(const Json &obj,
-                                          const std::string &key);
-std::optional<int64_t> GetIntField(const Json &obj, const std::string &key);
-/** @brief Read a boolean field from a JSON object when available. */
-std::optional<bool> GetBoolField(const Json &obj, const std::string &key);
-
-const std::vector<std::string> kHostFields = {
-    "hostname",    "username",  "port",      "password", "protocol",
-    "buffer_size", "trash_dir", "login_dir", "keyfile",  "compression",
-};
-
-/** @brief JSON schema used to validate .AMSFTP_History.toml. */
-const char kHistorySchemaJson[] = R"json(
-{
-  "type": "object",
-  "additionalProperties": {
-    "type": "object",
-    "properties": {
-      "commands": {
-        "type": "array",
-        "items": {
-          "type": "string"
-        }
-      }
-    },
-    "additionalProperties": false
-  }
-}
-)json";
-
-const Json *GetHostsArray(const Json &root) {
-  if (!root.is_object())
-    return nullptr;
-  auto it = root.find("HOSTS");
-  if (it == root.end() || !it->is_array())
-    return nullptr;
-  return &(*it);
-}
-
-bool IsHostValid(const Json &tbl) {
-  auto nickname = GetStringField(tbl, "nickname");
-  if (!nickname || nickname->empty())
-    return false;
-  auto hostname = GetStringField(tbl, "hostname");
-  if (!hostname || hostname->empty())
-    return false;
-  return true;
-}
-
-bool ParseIndex(const std::string &value, std::size_t *out) {
-  if (value.empty())
-    return false;
-  std::size_t idx = 0;
-  for (char c : value) {
-    if (!std::isdigit(static_cast<unsigned char>(c)))
-      return false;
-    idx = idx * 10 + static_cast<std::size_t>(c - '0');
-  }
-  if (out)
-    *out = idx;
-  return true;
-}
-
-bool ReadTextFile(const std::filesystem::path &path, std::string *out,
-                  std::string *error) {
-  if (!out) {
-    if (error)
-      *error = "null output buffer";
-    return false;
-  }
-  std::ifstream in(path, std::ios::in | std::ios::binary);
-  if (!in.is_open()) {
-    if (error)
-      *error = "failed to open file";
-    return false;
-  }
-  std::ostringstream oss;
-  oss << in.rdbuf();
-  if (!in.good() && !in.eof()) {
-    if (error)
-      *error = "failed to read file";
-    return false;
-  }
-  *out = oss.str();
-  return true;
-}
-
-std::string LoadSchemaJson(const std::filesystem::path &schema_path,
-                           std::string *error) {
-  if (schema_path.empty())
-    return "{}";
-  std::string json;
-  std::string read_error;
-  if (!ReadTextFile(schema_path, &json, &read_error)) {
-    if (error)
-      *error = "failed to read schema: " + read_error;
-    return "{}";
-  }
-  if (json.empty())
-    return "{}";
-  return json;
-}
-
-bool EnsureFileExists(const std::filesystem::path &path, std::string *error) {
-  std::error_code ec;
-  std::filesystem::create_directories(path.parent_path(), ec);
-  if (ec) {
-    if (error)
-      *error = ec.message();
-    return false;
-  }
-  if (!std::filesystem::exists(path, ec)) {
-    std::ofstream out(path);
-    if (!out.is_open()) {
-      if (error)
-        *error = "failed to create file";
-      return false;
-    }
-  }
-  return true;
-}
-
-bool ParseJsonString(const std::string &text, Json *out, std::string *error) {
-  if (!out) {
-    if (error)
-      *error = "null json output";
-    return false;
-  }
-  try {
-    *out = Json::parse(text);
-    return true;
-  } catch (const std::exception &e) {
-    if (error)
-      *error = e.what();
-    return false;
-  }
-}
-
-const Json *FindJsonNode(const Json &root, const Path &path) {
-  const Json *node = &root;
-  for (const auto &seg : path) {
-    if (node->is_object()) {
-      auto it = node->find(seg);
-      if (it == node->end())
-        return nullptr;
-      node = &(*it);
-      continue;
-    }
-    if (node->is_array()) {
-      std::size_t idx = 0;
-      if (!ParseIndex(seg, &idx) || idx >= node->size())
-        return nullptr;
-      node = &(*node)[idx];
-      continue;
-    }
-    return nullptr;
-  }
-  return node;
-}
-
-bool NodeToValue(const Json &node, Value *out) {
-  if (!out)
-    return false;
-  if (node.is_number_integer()) {
-    *out = node.get<int64_t>();
-    return true;
-  }
-  if (node.is_boolean()) {
-    *out = node.get<bool>();
-    return true;
-  }
-  if (node.is_string()) {
-    *out = node.get<std::string>();
-    return true;
-  }
-  if (node.is_number_float()) {
-    std::ostringstream oss;
-    oss << node.get<double>();
-    *out = oss.str();
-    return true;
-  }
-  if (node.is_array()) {
-    const Json &arr = node;
-    if (!JsonArrayAllScalar(arr))
-      return false;
-    std::vector<std::string> items;
-    items.reserve(arr.size());
-    for (const auto &child : arr) {
-      items.push_back(JsonScalarToString(child));
-    }
-    *out = std::move(items);
-    return true;
-  }
-  return false;
-}
-
-std::optional<std::string> GetStringField(const Json &obj,
-                                          const std::string &key) {
-  if (!obj.is_object())
-    return std::nullopt;
-  auto it = obj.find(key);
-  if (it == obj.end())
-    return std::nullopt;
-  if (it->is_string())
-    return it->get<std::string>();
-  if (it->is_number_integer())
-    return std::to_string(it->get<int64_t>());
-  if (it->is_number_unsigned())
-    return std::to_string(it->get<size_t>());
-  if (it->is_boolean())
-    return it->get<bool>() ? "true" : "false";
-  return std::nullopt;
-}
-
-std::optional<int64_t> GetIntField(const Json &obj, const std::string &key) {
-  if (!obj.is_object())
-    return std::nullopt;
-  auto it = obj.find(key);
-  if (it == obj.end())
-    return std::nullopt;
-  if (it->is_number_integer())
-    return it->get<int64_t>();
-  if (it->is_number_unsigned()) {
-    auto value = it->get<size_t>();
-    if (value <= static_cast<size_t>(std::numeric_limits<int64_t>::max()))
-      return static_cast<int64_t>(value);
-    return std::nullopt;
-  }
-  if (it->is_string()) {
-    try {
-      return std::stoll(it->get<std::string>());
-    } catch (...) {
-      return std::nullopt;
-    }
-  }
-  return std::nullopt;
-}
-
-/** @brief Read a boolean field from a JSON object when available. */
-std::optional<bool> GetBoolField(const Json &obj, const std::string &key) {
-  if (!obj.is_object())
-    return std::nullopt;
-  auto it = obj.find(key);
-  if (it == obj.end())
-    return std::nullopt;
-  if (it->is_boolean())
-    return it->get<bool>();
-  if (it->is_number_integer())
-    return it->get<int64_t>() != 0;
-  if (it->is_number_unsigned())
-    return it->get<size_t>() != 0;
-  if (it->is_string()) {
-    std::string value = it->get<std::string>();
-    std::transform(
-        value.begin(), value.end(), value.begin(),
-        [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    if (value == "true")
-      return true;
-    if (value == "false")
-      return false;
-  }
-  return std::nullopt;
-}
-
-/**
- * @brief Return true if the name starts with prefix and ends with suffix.
- */
-bool MatchBackupName_(const std::string &name, const std::string &prefix,
-                      const std::string &suffix) {
-  if (name.size() < prefix.size() + suffix.size()) {
-    return false;
-  }
-  if (name.compare(0, prefix.size(), prefix) != 0) {
-    return false;
-  }
-  return name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
-
-/**
- * @brief Remove oldest backups matching prefix/suffix to keep max_count files.
- */
-void PruneBackupFiles_(const std::filesystem::path &dir,
-                       const std::string &prefix, const std::string &suffix,
-                       int64_t max_count) {
-  if (max_count <= 0) {
-    return;
-  }
-  std::error_code ec;
-  if (!std::filesystem::exists(dir, ec) || ec) {
-    return;
-  }
-
-  std::vector<std::filesystem::path> items;
-  for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
-    if (ec) {
-      break;
-    }
-    if (!entry.is_regular_file(ec) || ec) {
-      continue;
-    }
-    std::string name = entry.path().filename().string();
-    if (MatchBackupName_(name, prefix, suffix)) {
-      items.push_back(entry.path());
-    }
-  }
-
-  if (items.size() <= static_cast<size_t>(max_count)) {
-    return;
-  }
-
-  std::sort(items.begin(), items.end(),
-            [](const std::filesystem::path &a, const std::filesystem::path &b) {
-              return a.filename().string() < b.filename().string();
-            });
-
-  size_t remove_count = items.size() - static_cast<size_t>(max_count);
-  for (size_t i = 0; i < remove_count; ++i) {
-    std::filesystem::remove(items[i], ec);
-  }
-}
-
-/**
- * @brief Ensure the KnownHosts array exists and return it for mutation.
- */
-Json *EnsureKnownHostsArray(Json &root) {
-  if (!root.is_object())
-    root = Json::object();
-  auto it = root.find("KnownHosts");
-  if (it == root.end() || !it->is_array()) {
-    root["KnownHosts"] = Json::array();
-  }
-  return &root["KnownHosts"];
-}
-
-/**
- * @brief Return the KnownHosts array when available.
- */
-const Json *GetKnownHostsArray(const Json &root) {
-  if (!root.is_object())
-    return nullptr;
-  auto it = root.find("KnownHosts");
-  if (it == root.end() || !it->is_array())
-    return nullptr;
-  return &(*it);
-}
-
-/**
- * @brief Check whether a known_hosts item matches host, port, and protocol.
- *
- * RSA protocol variants are treated as compatible with "ssh-rsa".
- */
-bool KnownHostMatch(const Json &item, const std::string &hostname, int port,
-                    const std::string &protocol) {
-  if (!item.is_object())
-    return false;
-  auto host_value = GetStringField(item, "hostname");
-  if (!host_value || *host_value != hostname)
-    return false;
-  auto port_value = GetIntField(item, "port");
-  if (!port_value.has_value() || *port_value != port)
-    return false;
-  auto protocol_value = GetStringField(item, "protocol");
-  if (!protocol_value)
-    return false;
-  const std::string expected = ToLowerCopy(*protocol_value);
-  const std::string actual = ToLowerCopy(protocol);
-  if (expected == actual)
-    return true;
-  const bool expected_is_rsa =
-      expected == "rsa-sha2-256" || expected == "rsa-sha2-512";
-  const bool actual_is_rsa =
-      actual == "rsa-sha2-256" || actual == "rsa-sha2-512";
-  if ((expected == "ssh-rsa" && actual_is_rsa) ||
-      (actual == "ssh-rsa" && expected_is_rsa)) {
-    return true;
-  }
-  return false;
-}
-
-/**
- * @brief Normalize a known host nickname to match the schema pattern.
- */
-std::string
-NormalizeKnownHostNickname(const AMConfigManager::KnownHostEntry &entry) {
-  std::string nickname =
-      entry.nickname.empty() ? entry.hostname : entry.nickname;
-  if (nickname.empty()) {
-    nickname = "host";
-  }
-  for (char &c : nickname) {
-    if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '_' ||
-          c == '-')) {
-      c = '_';
-    }
-  }
-  if (nickname.empty()) {
-    nickname = "host";
-  }
-  return nickname;
-}
-
-Json *EnsureHostsArray(Json &root) {
-  if (!root.is_object())
-    root = Json::object();
-  auto it = root.find("HOSTS");
-  if (it == root.end() || !it->is_array()) {
-    root["HOSTS"] = Json::array();
-  }
-  return &root["HOSTS"];
-}
-
-const Json *FindHostJson(const Json &root, const std::string &nickname,
-                         std::size_t *out_index = nullptr) {
-  const Json *arr = GetHostsArray(root);
-  if (!arr)
-    return nullptr;
-  for (std::size_t i = 0; i < arr->size(); ++i) {
-    const Json &item = (*arr)[i];
-    if (!item.is_object())
-      continue;
-    if (!IsHostValid(item))
-      continue;
-    auto name = GetStringField(item, "nickname");
-    if (name && *name == nickname) {
-      if (out_index)
-        *out_index = i;
-      return &item;
-    }
-  }
-  return nullptr;
-}
-
-Json *FindHostJsonMutable(Json &root, const std::string &nickname,
-                          std::size_t *out_index = nullptr) {
-  Json *arr = EnsureHostsArray(root);
-  if (!arr)
-    return nullptr;
-  for (std::size_t i = 0; i < arr->size(); ++i) {
-    Json &item = (*arr)[i];
-    if (!item.is_object())
-      continue;
-    auto name = GetStringField(item, "nickname");
-    if (name && *name == nickname) {
-      if (out_index)
-        *out_index = i;
-      return &item;
-    }
-  }
-  return nullptr;
-}
-
-ClientProtocol ProtocolFromString(const std::string &value) {
-  std::string lower = value;
-  std::transform(
-      lower.begin(), lower.end(), lower.begin(),
-      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  if (lower == "sftp")
-    return ClientProtocol::SFTP;
-  if (lower == "ftp")
-    return ClientProtocol::FTP;
-  if (lower == "local")
-    return ClientProtocol::LOCAL;
-  return ClientProtocol::Unknown;
-}
-
-} // namespace
+using namespace AMConfigInternal;
 
 AMConfigManager &AMConfigManager::Instance() {
   static AMConfigManager instance;
@@ -739,85 +11,11 @@ AMConfigManager &AMConfigManager::Instance() {
 /** @brief Stop the background writer and release config handles. */
 AMConfigManager::~AMConfigManager() { CloseHandles(); }
 
-/** @brief Start the background writer thread if not running. */
-void AMConfigManager::StartWriteThread_() {
-  if (write_running_.load(std::memory_order_relaxed)) {
-    return;
-  }
-  write_running_.store(true, std::memory_order_relaxed);
-  write_thread_ = std::thread([this]() { WriteThreadLoop_(); });
-}
-
-/** @brief Stop the background writer thread and drain pending tasks. */
-void AMConfigManager::StopWriteThread_() {
-  write_running_.store(false, std::memory_order_relaxed);
-  write_cv_.notify_all();
-  if (write_thread_.joinable()) {
-    write_thread_.join();
-  }
-}
-
-/** @brief Background worker loop for serialized write tasks. */
-void AMConfigManager::WriteThreadLoop_() {
-  while (true) {
-    std::function<void()> task;
-    {
-      std::unique_lock<std::mutex> lock(write_mtx_);
-      write_cv_.wait(lock, [this]() {
-        return !write_running_.load(std::memory_order_relaxed) ||
-               !write_queue_.empty();
-      });
-      if (!write_running_.load(std::memory_order_relaxed) &&
-          write_queue_.empty()) {
-        break;
-      }
-      task = std::move(write_queue_.front());
-      write_queue_.pop_front();
-    }
-    if (task) {
-      try {
-        task();
-      } catch (...) {
-        prompt.ErrorFormat("ConfigWriter", "background write task failed",
-                           false, 0);
-      }
-    }
-  }
-}
-
-/**
- * @brief Write a TOML snapshot to a target path using the given handle.
- */
-void AMConfigManager::WriteSnapshotToPath_(
-    ConfigHandle *handle, const std::string &json,
-    const std::filesystem::path &out_path) const {
-  if (!handle) {
-    return;
-  }
-  char *err = nullptr;
-  int rc = cfgffi_write(handle, out_path.string().c_str(), json.c_str(), &err);
-  if (err) {
-    cfgffi_free_string(err);
-  }
-  (void)rc;
-}
-
 /**
  * @brief Submit a no-arg write task to the background writer thread.
  */
 void AMConfigManager::SubmitWriteTask(std::function<void()> task) {
-  if (!task) {
-    return;
-  }
-  if (!write_running_.load(std::memory_order_relaxed)) {
-    task();
-    return;
-  }
-  {
-    std::lock_guard<std::mutex> lock(write_mtx_);
-    write_queue_.push_back(std::move(task));
-  }
-  write_cv_.notify_one();
+  storage_.SubmitWriteTaskVoid(std::move(task));
 }
 
 ECM AMConfigManager::Init() {
@@ -829,145 +27,63 @@ ECM AMConfigManager::Init() {
                "AMSFTP_ROOT environment variable is not set");
   }
 
-  root_dir_ = std::filesystem::path(root_env);
-  // mkdirs, already exists is ok
+  std::filesystem::path root_dir(root_env);
   std::error_code ec;
-  std::filesystem::create_directories(root_dir_, ec);
+  std::filesystem::create_directories(root_dir, ec);
   if (ec) {
     prompt.ErrorFormat("ConfigInit",
-                       "failed to create root directory " + root_dir_.string() +
+                       "failed to create root directory " + root_dir.string() +
                            ": " + ec.message(),
                        true, 2);
     return Err(EC::ConfigLoadFailed, "failed to create root directory " +
-                                         root_dir_.string() + ": " +
+                                         root_dir.string() + ": " +
                                          ec.message());
   }
 
-  config_path_ = root_dir_ / "config" / "config.toml";
-  settings_path_ = root_dir_ / "config" / "settings.toml";
-  known_hosts_path_ = root_dir_ / "config" / "known_hosts.toml";
-  config_schema_path_ = root_dir_ / "config" / "config.schema.json";
-  settings_schema_path_ = root_dir_ / "config" / "settings.schema.json";
-  known_hosts_schema_path_ = root_dir_ / "config" / "known_hosts.schema.json";
-
-  CloseHandles();
-  config_json_ = Json::object();
-  settings_json_ = Json::object();
-  known_hosts_json_ = Json::object();
-  history_json_ = Json::object();
-
-  {
-    std::string error;
-    if (!EnsureFileExists(config_path_, &error)) {
-      prompt.ErrorFormat("ConfigInit", "failed to create config file: " + error,
-                         true, 2);
-      return Err(EC::ConfigLoadFailed,
-                 "failed to create config file: " + error);
-    }
-    const std::string schema_json = LoadSchemaJson(config_schema_path_, &error);
-    char *err = nullptr;
-    config_handle_ =
-        cfgffi_read(config_path_.string().c_str(), schema_json.c_str(), &err);
-    if (!config_handle_) {
-      std::string msg = err ? err : "cfgffi_read failed";
-      if (err)
-        cfgffi_free_string(err);
-      prompt.ErrorFormat("ConfigInit", "failed to parse config.toml: " + msg,
-                         true, 2);
-      return Err(EC::ConfigLoadFailed, "failed to parse config.toml: " + msg);
-    }
-    if (err)
-      cfgffi_free_string(err);
-    char *json_c = cfgffi_get_json(config_handle_);
-    if (!json_c) {
-      return Err(EC::ConfigLoadFailed, "failed to read config json");
-    }
-    std::string json_str(json_c);
-    cfgffi_free_string(json_c);
-    if (!ParseJsonString(json_str, &config_json_, &error)) {
-      return Err(EC::ConfigLoadFailed, "failed to parse config json: " + error);
-    }
+  auto init_status = storage_.Init(root_dir);
+  if (init_status.first != EC::Success) {
+    prompt.ErrorFormat("ConfigInit", init_status.second, true, 2);
+    return init_status;
   }
 
-  {
-    std::string error;
-    if (!EnsureFileExists(settings_path_, &error)) {
-      prompt.ErrorFormat("ConfigInit",
-                         "failed to create settings file: " + error, true, 2);
-      return Err(EC::ConfigLoadFailed,
-                 "failed to create settings file: " + error);
-    }
-    const std::string schema_json =
-        LoadSchemaJson(settings_schema_path_, &error);
-    char *err = nullptr;
-    settings_handle_ =
-        cfgffi_read(settings_path_.string().c_str(), schema_json.c_str(), &err);
-    if (!settings_handle_) {
-      std::string msg = err ? err : "cfgffi_read failed";
-      if (err)
-        cfgffi_free_string(err);
-      prompt.ErrorFormat("ConfigInit", "failed to parse settings.toml: " + msg,
-                         true, 2);
-      return Err(EC::ConfigLoadFailed, "failed to parse settings.toml: " + msg);
-    }
-    if (err)
-      cfgffi_free_string(err);
-    char *json_c = cfgffi_get_json(settings_handle_);
-    if (!json_c) {
-      return Err(EC::ConfigLoadFailed, "failed to read settings json");
-    }
-    std::string json_str(json_c);
-    cfgffi_free_string(json_c);
-    if (!ParseJsonString(json_str, &settings_json_, &error)) {
-      return Err(EC::ConfigLoadFailed,
-                 "failed to parse settings json: " + error);
-    }
+  auto load_status = storage_.LoadAll();
+  if (load_status.first != EC::Success) {
+    prompt.ErrorFormat("ConfigInit", load_status.second, true, 2);
+    return load_status;
   }
 
-  {
-    std::string error;
-    if (!EnsureFileExists(known_hosts_path_, &error)) {
-      prompt.ErrorFormat(
-          "ConfigInit", "failed to create known_hosts file: " + error, true, 2);
-      return Err(EC::ConfigLoadFailed,
-                 "failed to create known_hosts file: " + error);
-    }
-    const std::string schema_json =
-        LoadSchemaJson(known_hosts_schema_path_, &error);
-    char *err = nullptr;
-    known_hosts_handle_ = cfgffi_read(known_hosts_path_.string().c_str(),
-                                      schema_json.c_str(), &err);
-    if (!known_hosts_handle_) {
-      std::string msg = err ? err : "cfgffi_read failed";
-      if (err)
-        cfgffi_free_string(err);
-      prompt.ErrorFormat("ConfigInit",
-                         "failed to parse known_hosts.toml: " + msg, true, 2);
-      return Err(EC::ConfigLoadFailed,
-                 "failed to parse known_hosts.toml: " + msg);
-    }
-    if (err)
-      cfgffi_free_string(err);
-    char *json_c = cfgffi_get_json(known_hosts_handle_);
-    if (!json_c) {
-      return Err(EC::ConfigLoadFailed, "failed to read known_hosts json");
-    }
-    std::string json_str(json_c);
-    cfgffi_free_string(json_c);
-    if (!ParseJsonString(json_str, &known_hosts_json_, &error)) {
-      return Err(EC::ConfigLoadFailed,
-                 "failed to parse known_hosts json: " + error);
-    }
-  }
+  core_data_.BindStorage(&storage_);
+  style_data_.BindStorage(&storage_);
+  cli_adapter_.SetListCallback([this]() { return List(); });
+  cli_adapter_.SetListNameCallback([this]() { return ListName(); });
+  cli_adapter_.SetAddCallback([this]() { return Add(); });
+  cli_adapter_.SetModifyCallback(
+      [this](const std::string &nickname) { return Modify(nickname); });
+  cli_adapter_.SetDeleteCallback(
+      [this](const std::string &targets) { return Delete(targets); });
+  cli_adapter_.SetDeleteListCallback(
+      [this](const std::vector<std::string> &targets) {
+        return Delete(targets);
+      });
+  cli_adapter_.SetQueryCallback(
+      [this](const std::string &targets) { return Query(targets); });
+  cli_adapter_.SetQueryListCallback(
+      [this](const std::vector<std::string> &targets) {
+        return Query(targets);
+      });
+  cli_adapter_.SetRenameCallback(
+      [this](const std::string &old_name, const std::string &new_name) {
+        return Rename(old_name, new_name);
+      });
+  cli_adapter_.SetSrcCallback([this]() { return Src(); });
 
   initialized_ = true;
-  backup_prune_checked_ = false;
   if (!exit_hook_installed_) {
     std::atexit(&AMConfigManager::OnExit);
     exit_hook_installed_ = true;
   }
 
-  StartWriteThread_();
+  storage_.StartWriteThread();
   return Ok();
 }
 
@@ -975,96 +91,11 @@ ECM AMConfigManager::Dump() {
   auto status = EnsureInitialized("Dump");
   if (status.first != EC::Success)
     return status;
-
-  std::filesystem::path config_dir = root_dir_ / "config";
-  std::error_code ec;
-  std::filesystem::create_directories(config_dir, ec);
-  if (ec) {
-    prompt.ErrorFormat("ConfigDumpError",
-                       "failed to create config directory: " + ec.message(),
-                       true, 2);
-    return Err(EC::ConfigDumpFailed,
-               "failed to create config directory: " + ec.message());
+  ECM rcm = storage_.DumpAll();
+  if (rcm.first != EC::Success) {
+    prompt.ErrorFormat("ConfigDumpError", rcm.second, true, 2);
   }
-
-  std::string error;
-  std::string msg;
-
-  std::lock_guard<std::mutex> lock(handle_mtx_);
-  ECM rcm = {EC::Success, ""};
-  if (!config_handle_) {
-    rcm = {EC::ConfigNotInitialized, "config handle not initialized"};
-    prompt.ErrorFormat("ConfigNotInitialized", "config handle not initialized");
-  } else {
-    std::string json = config_json_.dump(2);
-    char *err = nullptr;
-    int rc = cfgffi_write_inplace(config_handle_, json.c_str(), &err);
-    if (rc != 0) {
-      msg = err ? err : "Unknown Error";
-      if (err) {
-        cfgffi_free_string(err);
-      }
-      return Err(
-          EC::ConfigDumpFailed,
-          AMStr::amfmt("Failed to dump to {}: {}", config_path_.string(), msg));
-    }
-    if (err)
-      cfgffi_free_string(err);
-    char *json_c = cfgffi_get_json(config_handle_);
-    if (json_c) {
-      std::string json_str(json_c);
-      cfgffi_free_string(json_c);
-      (void)ParseJsonString(json_str, &config_json_, nullptr);
-    }
-  }
-  if (!settings_handle_) {
-    return Err(EC::ConfigNotInitialized, "settings handle not initialized");
-  } else {
-    std::string json = settings_json_.dump(2);
-    char *err = nullptr;
-    int rc = cfgffi_write_inplace(settings_handle_, json.c_str(), &err);
-    if (rc != 0) {
-      msg = err ? err : "Unknown cfgffi_write Error";
-      if (err)
-        cfgffi_free_string(err);
-      return Err(EC::ConfigDumpFailed,
-                 AMStr::amfmt("Failed to dump to {}: {}",
-                              settings_path_.string(), msg));
-    }
-    if (err)
-      cfgffi_free_string(err);
-    char *json_c = cfgffi_get_json(settings_handle_);
-    if (json_c) {
-      std::string json_str(json_c);
-      cfgffi_free_string(json_c);
-      (void)ParseJsonString(json_str, &settings_json_, nullptr);
-    }
-  }
-  if (!known_hosts_handle_) {
-    return Err(EC::ConfigNotInitialized, "known_hosts handle not initialized");
-  } else {
-    std::string json = known_hosts_json_.dump(2);
-    char *err = nullptr;
-    int rc = cfgffi_write_inplace(known_hosts_handle_, json.c_str(), &err);
-    if (rc != 0) {
-      msg = err ? err : "Unknown cfgffi_write Error";
-      if (err)
-        cfgffi_free_string(err);
-      return Err(EC::ConfigDumpFailed,
-                 AMStr::amfmt("Failed to dump to {}: {}",
-                              known_hosts_path_.string(), msg));
-    }
-    if (err)
-      cfgffi_free_string(err);
-    char *json_c = cfgffi_get_json(known_hosts_handle_);
-    if (json_c) {
-      std::string json_str(json_c);
-      cfgffi_free_string(json_c);
-      (void)ParseJsonString(json_str, &known_hosts_json_, nullptr);
-    }
-  }
-
-  return Ok();
+  return rcm;
 }
 
 /**
@@ -1075,41 +106,7 @@ ECM AMConfigManager::LoadHistory() {
   if (status.first != EC::Success) {
     return status;
   }
-  if (history_handle_) {
-    return Ok();
-  }
-  history_path_ = root_dir_ / ".AMSFTP_History.toml";
-  history_json_ = Json::object();
-  std::string error;
-  if (!EnsureFileExists(history_path_, &error)) {
-    return Err(EC::ConfigLoadFailed, "failed to create history file: " + error);
-  }
-  const std::string schema_json = kHistorySchemaJson;
-  char *err = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(handle_mtx_);
-    history_handle_ =
-        cfgffi_read(history_path_.string().c_str(), schema_json.c_str(), &err);
-    if (!history_handle_) {
-      std::string msg = err ? err : "cfgffi_read failed";
-      if (err)
-        cfgffi_free_string(err);
-      return Err(EC::ConfigLoadFailed, "failed to parse history file: " + msg);
-    }
-    if (err)
-      cfgffi_free_string(err);
-    char *json_c = cfgffi_get_json(history_handle_);
-    if (!json_c) {
-      return Err(EC::ConfigLoadFailed, "failed to read history json");
-    }
-    std::string json_str(json_c);
-    cfgffi_free_string(json_c);
-    if (!ParseJsonString(json_str, &history_json_, &error)) {
-      return Err(EC::ConfigLoadFailed,
-                 "failed to parse history json: " + error);
-    }
-  }
-  return Ok();
+  return core_data_.LoadHistory();
 }
 
 /**
@@ -1117,27 +114,11 @@ ECM AMConfigManager::LoadHistory() {
  */
 ECM AMConfigManager::GetHistoryCommands(const std::string &nickname,
                                         std::vector<std::string> *out) {
-  auto status = LoadHistory();
+  auto status = EnsureInitialized("GetHistoryCommands");
   if (status.first != EC::Success) {
     return status;
   }
-  if (!out) {
-    return Err(EC::InvalidArg, "null history output");
-  }
-  out->clear();
-  if (nickname.empty()) {
-    return Ok();
-  }
-  const Json *node = FindJsonNode(history_json_, {nickname, "commands"});
-  if (!node || !node->is_array()) {
-    return Ok();
-  }
-  for (const auto &item : *node) {
-    if (item.is_string()) {
-      out->push_back(item.get<std::string>());
-    }
-  }
-  return Ok();
+  return core_data_.GetHistoryCommands(nickname, out);
 }
 
 /**
@@ -1146,64 +127,25 @@ ECM AMConfigManager::GetHistoryCommands(const std::string &nickname,
 ECM AMConfigManager::SetHistoryCommands(
     const std::string &nickname, const std::vector<std::string> &commands,
     bool dump_now) {
-  auto status = LoadHistory();
+  auto status = EnsureInitialized("SetHistoryCommands");
   if (status.first != EC::Success) {
     return status;
   }
-  if (nickname.empty()) {
-    return Err(EC::InvalidArg, "empty history nickname");
-  }
-  if (!history_json_.is_object()) {
-    history_json_ = Json::object();
-  }
-  Json &node = history_json_[nickname];
-  if (!node.is_object()) {
-    node = Json::object();
-  }
-  node["commands"] = commands;
-  if (dump_now) {
-    return DumpHistory_();
-  }
-  return Ok();
+  return core_data_.SetHistoryCommands(nickname, commands, dump_now);
 }
 
 /**
  * @brief Resolve history size limit from settings with minimum 10.
  */
 int AMConfigManager::ResolveMaxHistoryCount(int default_value) const {
-  return ResolveArg(ResolveArgType::MaxHistoryCount, default_value);
+  return core_data_.ResolveMaxHistoryCount(default_value);
 }
 
 /**
  * @brief Persist in-memory history JSON to disk.
  */
 ECM AMConfigManager::DumpHistory_() {
-  if (!history_handle_) {
-    return Err(EC::ConfigNotInitialized, "history handle not initialized");
-  }
-  std::string json = history_json_.dump(2);
-  char *err = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(handle_mtx_);
-    int rc = cfgffi_write_inplace(history_handle_, json.c_str(), &err);
-    if (rc != 0) {
-      std::string msg = err ? err : "Unkown cfgffi_write Error";
-      if (err)
-        cfgffi_free_string(err);
-      return Err(EC::ConfigDumpFailed,
-                 AMStr::amfmt("Failed to dump to {}: {}",
-                              history_path_.string(), msg));
-    }
-    if (err)
-      cfgffi_free_string(err);
-    char *json_c = cfgffi_get_json(history_handle_);
-    if (json_c) {
-      std::string json_str(json_c);
-      cfgffi_free_string(json_c);
-      (void)ParseJsonString(json_str, &history_json_, nullptr);
-    }
-  }
-  return Ok();
+  return storage_.Dump(DocumentKind::History);
 }
 
 /**
@@ -1213,157 +155,7 @@ ECM AMConfigManager::ConfigBackupIfNeeded() {
   auto status = EnsureInitialized("ConfigBackupIfNeeded");
   if (status.first != EC::Success)
     return status;
-
-  constexpr bool kDefaultEnabled = true;
-  constexpr int64_t kDefaultIntervalS = 10;
-  constexpr int64_t kDefaultLastBackupS = 0;
-  constexpr int64_t kDefaultMaxBackupCount = 3;
-  constexpr int64_t kMinIntervalS = 15;
-  constexpr int64_t kNegativeIntervalFallbackS = 60;
-
-  bool changed = false;
-  if (!settings_json_.is_object()) {
-    settings_json_ = Json::object();
-    changed = true;
-  }
-
-  Json &backup_cfg = settings_json_["AutoConfigBackup"];
-  if (!backup_cfg.is_object()) {
-    backup_cfg = Json::object();
-    changed = true;
-  }
-
-  bool enabled = kDefaultEnabled;
-  if (auto v = GetBoolField(backup_cfg, "enabled")) {
-    enabled = *v;
-  } else {
-    backup_cfg["enabled"] = kDefaultEnabled;
-    changed = true;
-  }
-
-  int64_t interval_s = kNegativeIntervalFallbackS;
-  if (auto v = GetIntField(backup_cfg, "interval_s")) {
-    interval_s = *v;
-  } else {
-    changed = true;
-  }
-  if (interval_s == 0) {
-    interval_s = kNegativeIntervalFallbackS;
-    changed = true;
-  } else if (interval_s < 0) {
-    interval_s = kNegativeIntervalFallbackS;
-    changed = true;
-  } else if (interval_s > 0 && interval_s < kMinIntervalS) {
-    interval_s = kMinIntervalS;
-    changed = true;
-  }
-  backup_cfg["interval_s"] = interval_s;
-
-  int64_t max_backup_count = kDefaultMaxBackupCount;
-  if (auto v = GetIntField(backup_cfg, "max_backup_count")) {
-    max_backup_count = *v;
-  } else {
-    changed = true;
-  }
-  if (max_backup_count < 1) {
-    max_backup_count = 1;
-    changed = true;
-  }
-  backup_cfg["max_backup_count"] = max_backup_count;
-
-  const int64_t now_s = static_cast<int64_t>(timenow());
-  int64_t last_backup_time_s = kDefaultLastBackupS;
-  if (auto v = GetIntField(backup_cfg, "last_backup_time_s")) {
-    last_backup_time_s = *v;
-  } else {
-    changed = true;
-  }
-  if (last_backup_time_s < 0) {
-    last_backup_time_s = 0;
-    changed = true;
-  }
-  if (last_backup_time_s > now_s) {
-    last_backup_time_s = now_s;
-    changed = true;
-  }
-  backup_cfg["last_backup_time_s"] = last_backup_time_s;
-
-  if (!backup_prune_checked_) {
-    std::filesystem::path backup_dir = root_dir_ / "config" / "bak";
-    PruneBackupFiles_(backup_dir, "config-", ".toml.bak", max_backup_count);
-    PruneBackupFiles_(backup_dir, "settings-", ".toml.bak", max_backup_count);
-    PruneBackupFiles_(backup_dir, "known_hosts-", ".toml.bak",
-                      max_backup_count);
-    backup_prune_checked_ = true;
-  }
-
-  if (!enabled) {
-    if (changed) {
-      std::string settings_json = settings_json_.dump(2);
-      SubmitWriteTask([this, settings_json]() {
-        std::lock_guard<std::mutex> lock(handle_mtx_);
-        WriteSnapshotToPath_(settings_handle_, settings_json, settings_path_);
-      });
-    }
-    return Ok();
-  }
-
-  if (interval_s > 0 && (now_s - last_backup_time_s) < interval_s) {
-    if (changed) {
-      std::string settings_json = settings_json_.dump(2);
-      SubmitWriteTask([this, settings_json]() {
-        std::lock_guard<std::mutex> lock(handle_mtx_);
-        WriteSnapshotToPath_(settings_handle_, settings_json, settings_path_);
-      });
-    }
-    return Ok();
-  }
-
-  if (!config_handle_ || !settings_handle_ || !known_hosts_handle_) {
-    return Err(EC::ConfigNotInitialized, "config handles not initialized");
-  }
-
-  backup_cfg["last_backup_time_s"] = now_s;
-  changed = true;
-
-  std::filesystem::path backup_dir = root_dir_ / "config" / "bak";
-  std::error_code ec;
-  std::filesystem::create_directories(backup_dir, ec);
-  if (ec) {
-    return Err(EC::ConfigDumpFailed,
-               "failed to create backup dir: " + ec.message());
-  }
-
-  const std::string stamp =
-      FormatTime(static_cast<size_t>(now_s), "%Y-%m-%d-%H-%M");
-  std::filesystem::path config_backup =
-      backup_dir / ("config-" + stamp + ".toml.bak");
-  std::filesystem::path settings_backup =
-      backup_dir / ("settings-" + stamp + ".toml.bak");
-  std::filesystem::path known_hosts_backup =
-      backup_dir / ("known_hosts-" + stamp + ".toml.bak");
-
-  std::string config_json = config_json_.dump(2);
-  std::string settings_json = settings_json_.dump(2);
-  std::string known_hosts_json = known_hosts_json_.dump(2);
-
-  SubmitWriteTask([this, config_backup, settings_backup, known_hosts_backup,
-                   config_json, settings_json, known_hosts_json]() {
-    std::lock_guard<std::mutex> lock(handle_mtx_);
-    WriteSnapshotToPath_(config_handle_, config_json, config_backup);
-    WriteSnapshotToPath_(settings_handle_, settings_json, settings_backup);
-    WriteSnapshotToPath_(known_hosts_handle_, known_hosts_json,
-                         known_hosts_backup);
-  });
-
-  if (changed) {
-    SubmitWriteTask([this, settings_json]() {
-      std::lock_guard<std::mutex> lock(handle_mtx_);
-      WriteSnapshotToPath_(settings_handle_, settings_json, settings_path_);
-    });
-  }
-
-  return Ok();
+  return storage_.BackupIfNeeded();
 }
 
 /**
@@ -1373,113 +165,10 @@ std::string AMConfigManager::Format(const std::string &ori_str_f,
                                     const std::string &style_name,
                                     const PathInfo *path_info) const {
   auto status = EnsureInitialized("Format");
-  const std::string ori_str = AMStr::BBCEscape(ori_str_f);
   if (status.first != EC::Success) {
-    return ori_str;
+    return AMStr::BBCEscape(ori_str_f);
   }
-
-  auto apply_input_style = [&](const std::string &name,
-                               const std::string &text) -> std::string {
-    if (name.empty()) {
-      return text;
-    }
-    Path key = {"style", "InputHighlight", name};
-    if (name.rfind("Prompt.", 0) == 0) {
-      key = {"style", "Prompt", name.substr(7)};
-    }
-    const Json *node = FindJsonNode(settings_json_, key);
-    if (!node || !node->is_string()) {
-      return text;
-    }
-    std::string raw = TrimCopy(node->get<std::string>());
-    if (raw.empty()) {
-      return text;
-    }
-    if (raw.front() != '[' || raw.back() != ']') {
-      return text;
-    }
-    if (raw.find("[/") != std::string::npos) {
-      return text;
-    }
-    return raw + text + "[/]";
-  };
-
-  if (!path_info) {
-    return apply_input_style(style_name, ori_str);
-  }
-
-  std::string base_key = "regular";
-  switch (path_info->type) {
-  case PathType::DIR:
-    base_key = "dir";
-    break;
-  case PathType::SYMLINK:
-    base_key = "symlink";
-    break;
-  case PathType::FILE:
-    base_key = "regular";
-    break;
-  default:
-    base_key = "otherspecial";
-    break;
-  }
-
-  std::string main_tag =
-      NormalizeStyleTag_(GetSettingString({"style", "Path1", base_key}, ""));
-  const std::string path_name =
-      !path_info->name.empty()
-          ? path_info->name
-          : (ori_str_f.empty() ? std::string()
-                               : AMPathStr::basename(ori_str_f));
-  if (path_info->type == PathType::FILE) {
-    const std::string ext = AMPathStr::extname(path_name);
-    if (!ext.empty()) {
-      std::string ext_tag =
-          NormalizeStyleTag_(GetSettingString({"style", "File2", ext}, ""));
-      if (!ext_tag.empty()) {
-        main_tag = ext_tag;
-      }
-    }
-  }
-
-  std::string styled = main_tag.empty() ? apply_input_style(style_name, ori_str)
-                                        : ApplyStyleTag_(main_tag, ori_str);
-
-  const bool is_hidden = !path_name.empty() && path_name.front() == '.';
-  const bool is_nowrite =
-      path_info->mode_int != 0 && (path_info->mode_int & 0222) == 0;
-  const bool is_exist = !path_info->path.empty();
-
-  auto resolve_extra = [&](const std::string &key) -> std::string {
-    std::string tag = NormalizeStyleTag_(
-        GetSettingString({"style", "PathExtraStyle", key}, ""));
-    if (!tag.empty()) {
-      return tag;
-    }
-    return NormalizeStyleTag_(
-        GetSettingString({"style", "PathSpecific3", key}, ""));
-  };
-
-  if (!is_exist) {
-    const std::string extra_tag = resolve_extra("nonexist");
-    if (!extra_tag.empty()) {
-      styled = ApplyStyleTag_(extra_tag, styled);
-    }
-  }
-  if (is_hidden) {
-    const std::string extra_tag = resolve_extra("hidden");
-    if (!extra_tag.empty()) {
-      styled = ApplyStyleTag_(extra_tag, styled);
-    }
-  }
-  if (is_nowrite) {
-    const std::string extra_tag = resolve_extra("nowrite");
-    if (!extra_tag.empty()) {
-      styled = ApplyStyleTag_(extra_tag, styled);
-    }
-  }
-
-  return styled;
+  return style_data_.Format(ori_str_f, style_name, path_info);
 }
 
 ECM AMConfigManager::List() const {
@@ -1552,9 +241,11 @@ AMConfigManager::PrivateKeys(bool print_sign) const {
 
   std::vector<std::string> keys;
   const Json *node = nullptr;
-  if (config_json_.is_object()) {
-    auto it = config_json_.find("private_keys");
-    if (it != config_json_.end()) {
+  const Json &config_json =
+      storage_.GetJson(DocumentKind::Config).value().get();
+  if (config_json.is_object()) {
+    auto it = config_json.find("private_keys");
+    if (it != config_json.end()) {
       node = &(*it);
     }
   }
@@ -1594,7 +285,8 @@ AMConfigManager::FindKnownHost(const std::string &hostname, int port,
   if (status.first != EC::Success)
     return {status, std::nullopt};
 
-  const Json *arr = GetKnownHostsArray(known_hosts_json_);
+  const Json *arr = GetKnownHostsArray(
+      storage_.GetJson(DocumentKind::KnownHosts).value().get());
   if (!arr) {
     return {Ok(), std::nullopt};
   }
@@ -1639,7 +331,8 @@ ECM AMConfigManager::UpsertKnownHost(const KnownHostEntry &entry,
     return Err(EC::InvalidArg, "invalid known host entry");
   }
 
-  Json *arr = EnsureKnownHostsArray(known_hosts_json_);
+  Json *arr = EnsureKnownHostsArray(
+      storage_.GetJson(DocumentKind::KnownHosts).value().get());
   if (!arr) {
     return Err(EC::ConfigInvalid, "known_hosts array not initialized");
   }
@@ -1740,13 +433,21 @@ AMConfigManager::KnownHostCallback AMConfigManager::BuildKnownHostCallback() {
   return known_host_cb_;
 }
 
+/**
+ * @brief Return the project root directory path.
+ */
+std::filesystem::path AMConfigManager::ProjectRoot() const {
+  return storage_.RootDir();
+}
+
 std::pair<ECM, AMConfigManager::ClientConfig>
 AMConfigManager::GetClientConfig(const std::string &nickname) {
   auto status = EnsureInitialized("GetClientConfig");
   if (status.first != EC::Success)
     return {status, ClientConfig{}};
 
-  Json *host = FindHostJsonMutable(config_json_, nickname);
+  Json *host = FindHostJsonMutable(
+      storage_.GetJson(DocumentKind::Config).value().get(), nickname);
   if (!host) {
     return {Err(EC::HostConfigNotFound, "client config not found"),
             ClientConfig{}};
@@ -1823,7 +524,8 @@ int AMConfigManager::GetSettingInt(const Path &path, int default_value) const {
   auto status = EnsureInitialized("GetSettingInt");
   if (status.first != EC::Success)
     return default_value;
-  const Json *node = FindJsonNode(settings_json_, path);
+  const Json *node = FindJsonNode(
+      storage_.GetJson(DocumentKind::Settings).value().get(), path);
   return GetSettingValueImpl<int>(node, default_value);
 }
 
@@ -1933,7 +635,8 @@ AMConfigManager::GetSettingString(const Path &path,
   auto status = EnsureInitialized("GetSettingString");
   if (status.first != EC::Success)
     return default_value;
-  const Json *node = FindJsonNode(settings_json_, path);
+  const Json *node = FindJsonNode(
+      storage_.GetJson(DocumentKind::Settings).value().get(), path);
   return GetSettingValueImpl<std::string>(node, default_value);
 }
 
@@ -1943,10 +646,7 @@ AMConfigManager::GetSettingString(const Path &path,
 AMProgressBar
 AMConfigManager::CreateProgressBar(int64_t total_size,
                                    const std::string &prefix) const {
-  if (!progress_bar_style_) {
-    progress_bar_style_ = BuildProgressBarStyle_();
-  }
-  return AMProgressBar(total_size, prefix, *progress_bar_style_);
+  return style_data_.CreateProgressBar(total_size, prefix);
 }
 
 /**
@@ -1955,74 +655,7 @@ AMConfigManager::CreateProgressBar(int64_t total_size,
 std::string AMConfigManager::FormatUtf8Table(
     const std::vector<std::string> &keys,
     const std::vector<std::vector<std::string>> &rows) const {
-  static const std::string skeleton_color =
-      GetSettingString({"style", "Table", "color"}, "");
-
-  auto clamp_padding = [](int value, size_t fallback) -> size_t {
-    if (value < 0) {
-      return fallback;
-    }
-    return static_cast<size_t>(value);
-  };
-
-  static const size_t pad_left =
-      clamp_padding(GetSettingInt({"style", "Table", "left_padding"}, 1), 0);
-  static const size_t pad_right =
-      clamp_padding(GetSettingInt({"style", "Table", "right_padding"}, 1), 0);
-  static const size_t pad_top =
-      clamp_padding(GetSettingInt({"style", "Table", "top_padding"}, 0), 0);
-  static const size_t pad_bottom =
-      clamp_padding(GetSettingInt({"style", "Table", "bottom_padding"}, 0), 0);
-
-  return AMStr::FormatUtf8Table(keys, rows, skeleton_color, pad_left, pad_right,
-                                pad_top, pad_bottom);
-}
-
-/**
- * @brief Build progress bar style from settings.
- */
-AMProgressBarStyle AMConfigManager::BuildProgressBarStyle_() const {
-  AMProgressBarStyle style;
-  int width = GetSettingInt({"style", "ProgressBar", "bar_width"}, -1);
-  if (width <= 0) {
-    width = GetSettingInt({"style", "ProgressBar", "Width"}, -1);
-  }
-  if (width > 0) {
-    style.bar_width = static_cast<size_t>(width);
-  }
-  style.width_offset =
-      GetSettingInt({"style", "ProgressBar", "width_offset"}, 30);
-
-  style.start = GetSettingString({"style", "ProgressBar", "lborder"}, "");
-
-  style.end = GetSettingString({"style", "ProgressBar", "rborder"}, "");
-
-  std::string fill = GetSettingString({"style", "ProgressBar", "fill"}, "▓");
-  style.fill = fill.empty() ? "█" : fill;
-  std::string lead = GetSettingString({"style", "ProgressBar", "head"}, "█");
-  style.lead = lead.empty() ? "▓" : lead;
-
-  style.remainder = GetSettingString({"style", "ProgressBar", "remain"}, " ");
-
-  style.color = ParseProgressBarColor(
-      GetSettingString({"style", "ProgressBar", "color"}, "#FFFFFF"));
-
-  auto parse_bool = [&](const Path &path, bool default_value) {
-    std::string raw = GetSettingString(path, default_value ? "true" : "false");
-    bool value = default_value;
-    ParseBoolToken(raw, &value);
-    return value;
-  };
-
-  style.show_percentage = parse_bool(
-      {"style", "ProgressBar", "show_percentage"}, style.show_percentage);
-  style.show_elapsed_time = parse_bool(
-      {"style", "ProgressBar", "show_elapsed_time"}, style.show_elapsed_time);
-  style.show_remaining_time =
-      parse_bool({"style", "ProgressBar", "show_remaining_time"},
-                 style.show_remaining_time);
-
-  return style;
+  return style_data_.FormatUtf8Table(keys, rows);
 }
 
 /**
@@ -2036,7 +669,9 @@ bool AMConfigManager::GetUserVar(const std::string &name,
   if (name.empty())
     return false;
 
-  const Json *node = FindJsonNode(settings_json_, {"UserVars", name});
+  const Json *node =
+      FindJsonNode(storage_.GetJson(DocumentKind::Settings).value().get(),
+                   {"UserVars", name});
   if (!node)
     return false;
 
@@ -2060,7 +695,8 @@ AMConfigManager::ListUserVars() const {
   if (status.first != EC::Success)
     return entries;
 
-  const Json *node = FindJsonNode(settings_json_, {"UserVars"});
+  const Json *node = FindJsonNode(
+      storage_.GetJson(DocumentKind::Settings).value().get(), {"UserVars"});
   if (!node || !node->is_object())
     return entries;
 
@@ -2087,7 +723,8 @@ ECM AMConfigManager::SetUserVar(const std::string &name,
   if (name.empty())
     return Err(EC::InvalidArg, "Empty variable name");
 
-  SetKey(settings_json_, {"UserVars", name}, value);
+  SetKey(storage_.GetJson(DocumentKind::Settings).value().get(),
+         {"UserVars", name}, value);
   if (dump_now) {
     return Dump();
   }
@@ -2119,9 +756,10 @@ ECM AMConfigManager::RemoveUserVar(const std::string &name, bool dump_now) {
     return Err(EC::InvalidArg, "Empty variable name");
 
   Json *node = nullptr;
-  if (settings_json_.contains("UserVars") &&
-      settings_json_["UserVars"].is_object()) {
-    node = &settings_json_["UserVars"];
+  auto &settings_json = storage_.GetJson(DocumentKind::Settings).value().get();
+  if (settings_json.contains("UserVars") &&
+      settings_json["UserVars"].is_object()) {
+    node = &settings_json["UserVars"];
   }
 
   if (!node || !node->contains(name)) {
@@ -2153,8 +791,12 @@ ECM AMConfigManager::Src() const {
   const std::string settings_label = AMStr::BBCEscape("[Setting]");
   size_t width = std::max(config_label.size(), settings_label.size());
 
-  std::string config_path = config_path_.string();
-  std::string settings_path = settings_path_.string();
+  const auto config_paths = storage_.GetDataPath(DocumentKind::Config);
+  const auto settings_paths = storage_.GetDataPath(DocumentKind::Settings);
+  std::string config_path =
+      config_paths.first ? config_paths.first->string() : std::string();
+  std::string settings_path =
+      settings_paths.first ? settings_paths.first->string() : std::string();
 
   auto [config_rcm, config_info] = AMFS::stat(config_path, false);
   PathInfo missing_config_info;
@@ -2303,9 +945,13 @@ ECM AMConfigManager::Rename(const std::string &old_nickname,
     return {EC::HostConfigNotFound, "host not found"};
   }
 
-  std::string error;
-  if (new_nickname.empty() ||
-      !std::regex_match(new_nickname, nickname_pattern)) {
+  if (new_nickname.empty()) {
+    msg = "new nickname must contain only letters, numbers, and underscore";
+    prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
+    return Err(EC::InvalidArg, msg);
+  }
+  const std::regex nickname_pattern("^[A-Za-z0-9_]+$");
+  if (!std::regex_match(new_nickname, nickname_pattern)) {
     msg = "new nickname must contain only letters, numbers, and "
           "underscore";
     prompt.ErrorFormat(ECM{EC::InvalidArg, msg});
@@ -2317,7 +963,8 @@ ECM AMConfigManager::Rename(const std::string &old_nickname,
     return Err(EC::KeyAlreadyExists, msg);
   }
 
-  Json *host = FindHostJsonMutable(config_json_, old_nickname);
+  Json *host = FindHostJsonMutable(
+      storage_.GetJson(DocumentKind::Config).value().get(), old_nickname);
   if (!host) {
     return Err(EC::ConfigInvalid, "invalid host entry");
   }
@@ -2580,25 +1227,7 @@ void AMConfigManager::OnExit() {
   }
 }
 
-void AMConfigManager::CloseHandles() {
-  StopWriteThread_();
-  if (config_handle_) {
-    cfgffi_free_handle(config_handle_);
-    config_handle_ = nullptr;
-  }
-  if (settings_handle_) {
-    cfgffi_free_handle(settings_handle_);
-    settings_handle_ = nullptr;
-  }
-  if (known_hosts_handle_) {
-    cfgffi_free_handle(known_hosts_handle_);
-    known_hosts_handle_ = nullptr;
-  }
-  if (history_handle_) {
-    cfgffi_free_handle(history_handle_);
-    history_handle_ = nullptr;
-  }
-}
+void AMConfigManager::CloseHandles() { storage_.CloseHandles(); }
 
 ECM AMConfigManager::EnsureInitialized(const char *caller) const {
   if (!initialized_) {
@@ -2651,7 +1280,8 @@ std::string AMConfigManager::ValueToString(const Value &value) const {
 std::map<std::string, AMConfigManager::HostEntry>
 AMConfigManager::CollectHosts() const {
   std::map<std::string, HostEntry> hosts;
-  const Json *arr = GetHostsArray(config_json_);
+  const Json *arr =
+      GetHostsArray(storage_.GetJson(DocumentKind::Config).value().get());
   if (!arr)
     return hosts;
   for (const auto &node : *arr) {
@@ -2697,20 +1327,23 @@ ECM AMConfigManager::PrintHost(const std::string &nickname,
 }
 
 bool AMConfigManager::HostExists(const std::string &nickname) const {
-  return FindHostJson(config_json_, nickname) != nullptr;
+  return core_data_.HostExists(nickname);
 }
 
 ECM AMConfigManager::UpsertHostField(const std::string &nickname,
                                      const std::string &field, Value value) {
-  Json *host = FindHostJsonMutable(config_json_, nickname);
+  Json *host = FindHostJsonMutable(
+      storage_.GetJson(DocumentKind::Config).value().get(), nickname);
   if (!host) {
-    Json *arr = EnsureHostsArray(config_json_);
+    Json *arr =
+        EnsureHostsArray(storage_.GetJson(DocumentKind::Config).value().get());
     if (!arr)
       return Err(EC::ConfigInvalid, "invalid host list");
     Json new_host = Json::object();
     new_host["nickname"] = nickname;
     arr->push_back(std::move(new_host));
-    host = FindHostJsonMutable(config_json_, nickname);
+    host = FindHostJsonMutable(
+        storage_.GetJson(DocumentKind::Config).value().get(), nickname);
   }
   if (!host)
     return Err(EC::ConfigInvalid, "invalid host table");
@@ -2746,9 +1379,11 @@ ECM AMConfigManager::UpsertHostField(const std::string &nickname,
 
 ECM AMConfigManager::RemoveHost(const std::string &nickname) {
   std::size_t index = 0;
-  if (!FindHostJson(config_json_, nickname, &index))
+  if (!FindHostJson(storage_.GetJson(DocumentKind::Config).value().get(),
+                    nickname, &index))
     return Ok();
-  Json *arr = EnsureHostsArray(config_json_);
+  Json *arr =
+      EnsureHostsArray(storage_.GetJson(DocumentKind::Config).value().get());
   if (!arr || index >= arr->size())
     return Ok();
   arr->erase(arr->begin() + static_cast<std::ptrdiff_t>(index));
@@ -3099,20 +1734,5 @@ bool AMConfigManager::ParsePositiveInt(const std::string &input,
 
 bool AMConfigManager::ValidateNickname(const std::string &nickname,
                                        std::string *error) const {
-  if (nickname.empty()) {
-    if (error)
-      *error = "Nickname cannot be empty.";
-    return false;
-  }
-  if (!std::regex_match(nickname, nickname_pattern)) {
-    if (error)
-      *error = "Nickname must contain only letters, numbers, and _ -.";
-    return false;
-  }
-  if (HostExists(nickname)) {
-    if (error)
-      *error = "Nickname already exists.";
-    return false;
-  }
-  return true;
+  return core_data_.ValidateNickname(nickname, error);
 }

@@ -194,7 +194,7 @@ enum class ErrorCode {
   FTPDownloadFailed = 52,
   FTPListFailed = 53,
 };
-
+using ECM = std::pair<ErrorCode, std::string>;
 inline ErrorCode wait_result_to_error_code(WaitResult wr) {
   switch (wr) {
   case WaitResult::Ready:
