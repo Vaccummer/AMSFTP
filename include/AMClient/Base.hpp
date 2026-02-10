@@ -200,8 +200,7 @@ public:
 
   void SetTraceCallback(TraceCallback trace = {}) {
     trace_cb = std::move(trace);
-    is_trace_cb.store(static_cast<bool>(trace_cb),
-                      std::memory_order_relaxed);
+    is_trace_cb.store(static_cast<bool>(trace_cb), std::memory_order_relaxed);
   }
 
   void SetPyTrace(TraceCallback trace = {}) { SetTraceCallback(trace); }
