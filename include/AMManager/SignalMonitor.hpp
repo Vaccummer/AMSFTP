@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <consoleapi.h>
 #include <csignal>
 #ifndef _WIN32
 #include <signal.h>
@@ -19,7 +20,7 @@
 /**
  * @brief Global signal code observed by the CLI signal monitor.
  */
-inline volatile sig_atomic_t GlobalSignalInt = 0;
+inline std::atomic<int> GlobalSignalInt = 0;
 inline std::shared_ptr<InterruptFlag> amgif = std::make_shared<InterruptFlag>();
 
 /**
@@ -59,10 +60,6 @@ public:
    */
   void InstallHandlers() {
 #ifdef _WIN32
-    std::signal(SIGINT, AMCliSignalMonitor::SignalHandler);
-#ifdef SIGTERM
-    std::signal(SIGTERM, AMCliSignalMonitor::SignalHandler);
-#endif
     SetConsoleCtrlHandler(AMCliSignalMonitor::ConsoleCtrlHandler_, TRUE);
 #else
     struct sigaction sa{};
@@ -185,7 +182,7 @@ public:
   /**
    * @brief Signal handler to record the signal number.
    */
-  static void SignalHandler(int signum) { GlobalSignalInt = signum; }
+  static void SignalHandler(int signum) { GlobalSignalInt.store(signum); }
 
 private:
 #ifdef _WIN32
@@ -194,12 +191,14 @@ private:
    */
   static BOOL WINAPI ConsoleCtrlHandler_(DWORD type) {
     switch (type) {
-    case CTRL_C_EVENT:
-    case CTRL_BREAK_EVENT:
-      GlobalSignalInt = SIGINT;
-      if (amgif) {
-        amgif->set(true);
-      }
+    case CTRL_C_EVENT: // ctrl-c trigger
+      GlobalSignalInt.store(SIGINT);
+      return TRUE;
+    case CTRL_BREAK_EVENT: // ctrl-break trigger
+      GlobalSignalInt.store(SIGTERM);
+      return TRUE;
+    case CTRL_CLOSE_EVENT: // window close trigger
+      GlobalSignalInt.store(SIGTERM);
       return TRUE;
     default:
       return FALSE;
@@ -221,12 +220,9 @@ private:
    */
   void Run_() {
     while (running_.load(std::memory_order_acquire)) {
-      int signum = ConsumeSignal_();
+      int signum = GlobalSignalInt.exchange(0);
       if (signum != 0) {
         last_handled_signal_.store(signum, std::memory_order_relaxed);
-#ifdef _WIN32
-        InstallHandlers();
-#endif
         std::vector<SignalHook> hooks;
         {
           std::lock_guard<std::mutex> lock(hooks_mtx_);
@@ -253,25 +249,12 @@ private:
             break;
           }
         }
-#ifdef SIGTERM
         if (signum == SIGTERM && amgif) {
           amgif->set(true);
         }
-#endif
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-  }
-
-  /**
-   * @brief Consume the pending signal value and clear it.
-   */
-  int ConsumeSignal_() {
-    sig_atomic_t signum = GlobalSignalInt;
-    if (signum != 0) {
-      GlobalSignalInt = 0;
-    }
-    return static_cast<int>(signum);
   }
 
   std::atomic<bool> running_{false};

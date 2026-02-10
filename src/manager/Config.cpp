@@ -19,6 +19,7 @@ namespace {
 using Path = AMConfigManager::Path;
 using Value = AMConfigManager::Value;
 using ClientConfig = AMConfigManager::ClientConfig;
+using ResolveArgType = AMConfigManager::ResolveArgType;
 using EC = ErrorCode;
 using Json = nlohmann::ordered_json;
 
@@ -1170,11 +1171,7 @@ ECM AMConfigManager::SetHistoryCommands(
  * @brief Resolve history size limit from settings with minimum 10.
  */
 int AMConfigManager::ResolveMaxHistoryCount(int default_value) const {
-  int value = GetSettingInt({"InternalVars", "MaxHistoryCount"}, default_value);
-  if (value < 10) {
-    value = 10;
-  }
-  return value;
+  return ResolveArg(ResolveArgType::MaxHistoryCount, default_value);
 }
 
 /**
@@ -1831,53 +1828,102 @@ int AMConfigManager::GetSettingInt(const Path &path, int default_value) const {
 }
 
 /**
+ * @brief Resolve an integer setting by type with optional post-processing.
+ */
+int AMConfigManager::ResolveArg(ResolveArgType target_type,
+                                int default_value) const {
+  static const std::map<ResolveArgType, Path> kPaths = {
+      {ResolveArgType::TimeoutMs, {"client_manager", "timeout_ms"}},
+      {ResolveArgType::RefreshIntervalMs,
+       {"transfer_manager", "refresh_interval_ms"}},
+      {ResolveArgType::HeartbeatIntervalS,
+       {"client_manager", "heartbeat_interval_s"}},
+      {ResolveArgType::TraceNum, {"client_manager", "trace_num"}},
+      {ResolveArgType::MaxHistoryCount, {"InternalVars", "MaxHistoryCount"}}};
+
+  static const std::map<ResolveArgType, std::function<int(int, int)>>
+      kAfterProcess = {
+          {ResolveArgType::TimeoutMs,
+           [](int value, int fallback) {
+             if (value <= 0) {
+               return fallback;
+             }
+             return value;
+           }},
+          {ResolveArgType::RefreshIntervalMs,
+           [](int value, int fallback) {
+             if (value <= 0) {
+               value = fallback;
+             }
+             if (value < 30) {
+               value = 30;
+             }
+             return value;
+           }},
+          {ResolveArgType::HeartbeatIntervalS,
+           [](int value, int fallback) {
+             (void)fallback;
+             if (value < 1) {
+               return value;
+             }
+             return value > 10 ? value : 10;
+           }},
+          {ResolveArgType::TraceNum,
+           [](int value, int fallback) {
+             if (value <= 0) {
+               value = fallback;
+             }
+             if (value < 5) {
+               value = 5;
+             }
+             return value;
+           }},
+          {ResolveArgType::MaxHistoryCount, [](int value, int fallback) {
+             (void)fallback;
+             if (value < 10) {
+               value = 10;
+             }
+             return value;
+           }}};
+
+  auto path_it = kPaths.find(target_type);
+  if (path_it == kPaths.end()) {
+    return default_value;
+  }
+  int value = GetSettingInt(path_it->second, default_value);
+  auto post_it = kAfterProcess.find(target_type);
+  if (post_it != kAfterProcess.end()) {
+    value = post_it->second(value, default_value);
+  }
+  return value;
+}
+
+/**
  * @brief Resolve network timeout from settings with a default fallback.
  */
 int AMConfigManager::ResolveTimeoutMs(int default_timeout_ms) const {
-  int timeout_ms = GetSettingInt({"client_manager", "timeout_ms"}, -1);
-  if (timeout_ms <= 0) {
-    timeout_ms = default_timeout_ms;
-  }
-  return timeout_ms;
+  return ResolveArg(ResolveArgType::TimeoutMs, default_timeout_ms);
 }
 
 /**
  * @brief Resolve transfer refresh interval from settings with defaults.
  */
 int AMConfigManager::ResolveRefreshIntervalMs() const {
-  int value = GetSettingInt({"transfer_manager", "refresh_interval_ms"}, 200);
-  if (value <= 0) {
-    value = 200;
-  }
-  if (value < 30) {
-    value = 30;
-  }
-  return value;
+  return ResolveArg(ResolveArgType::RefreshIntervalMs, 200);
 }
 
 /**
  * @brief Resolve heartbeat interval from settings with a default fallback.
  */
 int AMConfigManager::ResolveHeartbeatInterval() const {
-  int value = GetSettingInt({"client_manager", "heartbeat_interval_s"}, 60);
-  if (value < 1) {
-    return value;
-  }
-  return value > 10 ? value : 10;
+  return ResolveArg(ResolveArgType::HeartbeatIntervalS, 60);
 }
 
 /**
  * @brief Resolve trace buffer size from settings with sane defaults.
  */
 ssize_t AMConfigManager::ResolveTraceNum() const {
-  int value = GetSettingInt({"client_manager", "trace_num"}, 10);
-  if (value <= 0) {
-    value = 10;
-  }
-  if (value < 5) {
-    value = 5;
-  }
-  return static_cast<ssize_t>(value);
+  return static_cast<ssize_t>(ResolveArg(ResolveArgType::TraceNum, 10));
 }
 
 /** Return a string setting value or the provided default. */
@@ -1904,11 +1950,40 @@ AMConfigManager::CreateProgressBar(int64_t total_size,
 }
 
 /**
+ * @brief Create a UTF-8 table using style.Table settings.
+ */
+std::string AMConfigManager::FormatUtf8Table(
+    const std::vector<std::string> &keys,
+    const std::vector<std::vector<std::string>> &rows) const {
+  static const std::string skeleton_color =
+      GetSettingString({"style", "Table", "color"}, "");
+
+  auto clamp_padding = [](int value, size_t fallback) -> size_t {
+    if (value < 0) {
+      return fallback;
+    }
+    return static_cast<size_t>(value);
+  };
+
+  static const size_t pad_left =
+      clamp_padding(GetSettingInt({"style", "Table", "left_padding"}, 1), 0);
+  static const size_t pad_right =
+      clamp_padding(GetSettingInt({"style", "Table", "right_padding"}, 1), 0);
+  static const size_t pad_top =
+      clamp_padding(GetSettingInt({"style", "Table", "top_padding"}, 0), 0);
+  static const size_t pad_bottom =
+      clamp_padding(GetSettingInt({"style", "Table", "bottom_padding"}, 0), 0);
+
+  return AMStr::FormatUtf8Table(keys, rows, skeleton_color, pad_left, pad_right,
+                                pad_top, pad_bottom);
+}
+
+/**
  * @brief Build progress bar style from settings.
  */
 AMProgressBarStyle AMConfigManager::BuildProgressBarStyle_() const {
   AMProgressBarStyle style;
-  int width = GetSettingInt({"style", "ProgressBar", "BarWidth"}, -1);
+  int width = GetSettingInt({"style", "ProgressBar", "bar_width"}, -1);
   if (width <= 0) {
     width = GetSettingInt({"style", "ProgressBar", "Width"}, -1);
   }
@@ -1916,7 +1991,7 @@ AMProgressBarStyle AMConfigManager::BuildProgressBarStyle_() const {
     style.bar_width = static_cast<size_t>(width);
   }
   style.width_offset =
-      GetSettingInt({"style", "ProgressBar", "WidthOffset"}, 30);
+      GetSettingInt({"style", "ProgressBar", "width_offset"}, 30);
 
   style.start = GetSettingString({"style", "ProgressBar", "lborder"}, "");
 
@@ -1939,12 +2014,13 @@ AMProgressBarStyle AMConfigManager::BuildProgressBarStyle_() const {
     return value;
   };
 
-  style.show_percentage = parse_bool({"style", "ProgressBar", "ShowPercentage"},
-                                     style.show_percentage);
+  style.show_percentage = parse_bool(
+      {"style", "ProgressBar", "show_percentage"}, style.show_percentage);
   style.show_elapsed_time = parse_bool(
-      {"style", "ProgressBar", "ShowElapsedTime"}, style.show_elapsed_time);
-  style.show_remaining_time = parse_bool(
-      {"style", "ProgressBar", "ShowRemainingTime"}, style.show_remaining_time);
+      {"style", "ProgressBar", "show_elapsed_time"}, style.show_elapsed_time);
+  style.show_remaining_time =
+      parse_bool({"style", "ProgressBar", "show_remaining_time"},
+                 style.show_remaining_time);
 
   return style;
 }

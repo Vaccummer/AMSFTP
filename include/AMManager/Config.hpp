@@ -24,6 +24,13 @@ public:
   using Path = std::vector<std::string>;
   using Value =
       std::variant<int64_t, bool, std::string, std::vector<std::string>>;
+  enum class ResolveArgType {
+    TimeoutMs,
+    RefreshIntervalMs,
+    HeartbeatIntervalS,
+    TraceNum,
+    MaxHistoryCount
+  };
 
   struct ClientConfig {
     ConRequst request;
@@ -92,7 +99,18 @@ public:
    */
   [[nodiscard]] AMProgressBar
   CreateProgressBar(int64_t total_size, const std::string &prefix) const;
+  /**
+   * @brief Create a UTF-8 table using style.Table settings.
+   */
+  [[nodiscard]] std::string
+  FormatUtf8Table(const std::vector<std::string> &keys,
+                  const std::vector<std::vector<std::string>> &rows) const;
   [[nodiscard]] int GetSettingInt(const Path &path, int default_value) const;
+  /**
+   * @brief Resolve an integer setting by type with optional post-processing.
+   */
+  [[nodiscard]] int ResolveArg(ResolveArgType target_type,
+                               int default_value) const;
   /**
    * @brief Resolve network timeout from settings with a default fallback.
    */

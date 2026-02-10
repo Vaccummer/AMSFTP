@@ -55,6 +55,15 @@ target_link_libraries(amsftp PRIVATE
   
 )
 
+# ========= Console Ctrl-C trigger tool =========
+add_executable(ctrlc_trigger
+  "${PROJECT_SOURCE_DIR}/src/tools/ConsoleCtrlTrigger.cpp"
+)
+
+target_compile_options(ctrlc_trigger PRIVATE
+  $<$<CXX_COMPILER_ID:MSVC>:/Zi /Od /W4>
+)
+
 # # ========= 测试程序 =========
 # file(GLOB_RECURSE AMTEST_SOURCES CONFIGURE_DEPENDS
 #   "${PROJECT_SOURCE_DIR}/test/*.cpp"
