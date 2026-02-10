@@ -3,6 +3,7 @@
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
+#include <deque>
 #include <functional>
 #include <list>
 #include <mutex>
@@ -284,11 +285,17 @@ public:
 
   /**
    * @brief Pause a running task by ID.
+   *
+   * If the task_id string contains comma/semicolon/whitespace separators,
+   * it will be treated as multiple task IDs.
    */
   ECM Pause(const ID &task_id);
 
   /**
    * @brief Resume a paused task by ID.
+   *
+   * If the task_id string contains comma/semicolon/whitespace separators,
+   * it will be treated as multiple task IDs.
    */
   ECM Resume(const ID &task_id);
 
@@ -396,4 +403,7 @@ private:
   mutable std::mutex callback_mtx_;
   PublicResultCallback public_result_cb_ = {};
   UserResultCallback user_result_cb_ = {};
+  mutable std::mutex speed_mtx_;
+  std::unordered_map<ID, std::deque<std::pair<double, size_t>>>
+      speed_samples_;
 };

@@ -2305,6 +2305,15 @@ public:
   }
 
   /**
+   * @brief Snapshot the task registry map (task id -> task info).
+   */
+  std::unordered_map<std::string, std::shared_ptr<TaskInfo>>
+  get_registry_copy() const {
+    std::lock_guard<std::mutex> lock(registry_mtx_);
+    return task_registry_;
+  }
+
+  /**
    * @brief Snapshot all pending tasks that have not started yet.
    */
   std::vector<std::shared_ptr<TaskInfo>> get_pending_tasks() const {

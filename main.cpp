@@ -117,6 +117,8 @@ int main(int argc, char **argv) {
       }
     });
 #endif
+    print("pid is : {}", GetCurrentProcessId());
+
     DispatchResult dispatch = DispatchCliCommands(cli_commands, managers);
     if (dispatch.enter_interactive) {
       RunInteractiveLoop(app_name, managers);

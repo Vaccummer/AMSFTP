@@ -10,11 +10,14 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
-#include <csignal>
+#include <cmath>
 #include <cstddef>
+#include <deque>
 #include <exception>
+#include <iomanip>
 #include <memory>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace {
@@ -27,6 +30,7 @@ namespace {
 ECM ParseTransferPath(AMClientManager &client_manager, const std::string &input,
                       const std::shared_ptr<BaseClient> &client,
                       std::string *nickname, std::string *path) {
+
   auto [parsed_name, parsed_path, _client, rcm] =
       client_manager.ParsePath(input);
   if (rcm.first == EC::HostConfigNotFound) {
@@ -34,6 +38,7 @@ ECM ParseTransferPath(AMClientManager &client_manager, const std::string &input,
   }
   std::string resolved_path = parsed_path;
   if (client) {
+
     resolved_path = client_manager.AbsPath(parsed_path, client);
   }
   if (nickname) {
@@ -53,6 +58,7 @@ std::string JoinStrings_(const std::vector<std::string> &items,
   if (items.empty()) {
     return "";
   }
+
   std::ostringstream oss;
   for (size_t i = 0; i < items.size(); ++i) {
     if (i > 0) {
@@ -164,6 +170,146 @@ struct TaskRowData {
   bool conducting = false;
 };
 
+/**
+ * @brief Left pad an ASCII string to a fixed width.
+ */
+std::string PadLeftAscii_(const std::string &value, size_t width) {
+  if (width == 0) {
+    return {};
+  }
+  if (value.size() >= width) {
+    return value;
+  }
+  return std::string(width - value.size(), ' ') + value;
+}
+
+/**
+ * @brief Format bytes for task tables with a fixed width (up to "999.9MB").
+ */
+std::string FormatTableSize_(size_t bytes) {
+  static const std::vector<std::string> units = {"B", "KB", "MB", "GB", "TB"};
+  constexpr double kUnitSwitch = 1000.0;
+  constexpr size_t kMaxUnit = 4;
+  constexpr size_t kWidth = 7;
+  double value = static_cast<double>(bytes);
+  size_t idx = 0;
+  while (value >= kUnitSwitch && idx < kMaxUnit) {
+    value /= kUnitSwitch;
+    ++idx;
+  }
+  if (idx == kMaxUnit && value >= kUnitSwitch) {
+    value = kUnitSwitch - 0.1;
+  }
+  std::ostringstream oss;
+  if (idx == 0) {
+    oss << static_cast<size_t>(value);
+  } else {
+    value = std::floor(value * 10.0) / 10.0;
+    oss << std::fixed << std::setprecision(1) << value;
+  }
+  const std::string out = AMStr::amfmt("{}{}", oss.str(), units[idx]);
+  return PadLeftAscii_(out, kWidth);
+}
+
+/**
+ * @brief Format bytes-per-second for task tables with fixed width (up to
+ * "999MB/s").
+ */
+std::string FormatSpeedBps_(double bps) {
+  constexpr size_t kWidth = 7;
+  if (bps <= 0.0) {
+    return PadLeftAscii_("-", kWidth);
+  }
+  static const std::vector<std::string> units = {"B", "KB", "MB", "GB", "TB"};
+  constexpr double kUnitSwitch = 1000.0;
+  constexpr size_t kMaxUnit = 4;
+  double value = std::max<double>(0.0, bps);
+  size_t idx = 0;
+  while (value >= kUnitSwitch && idx < kMaxUnit) {
+    value /= kUnitSwitch;
+    ++idx;
+  }
+  if (idx == kMaxUnit && value >= kUnitSwitch) {
+    value = kUnitSwitch - 1.0;
+  }
+  value = std::floor(value);
+  if (value >= kUnitSwitch && idx < kMaxUnit) {
+    value /= kUnitSwitch;
+    ++idx;
+    value = std::floor(value);
+  }
+  const std::string out =
+      AMStr::amfmt("{}{}/s", static_cast<int64_t>(value), units[idx]);
+  return PadLeftAscii_(out, kWidth);
+}
+
+/**
+ * @brief Resolve speed calculation window size from settings.
+ */
+size_t ResolveSpeedWindowSize_(const AMConfigManager &config) {
+  const int value =
+      config.GetSettingInt({"InternalVars", "SpeedCalWindowSize"}, 5);
+  if (value < 2) {
+    return 2;
+  }
+  return static_cast<size_t>(value);
+}
+
+/**
+ * @brief Update rolling speed samples and produce speed text for conducting
+ * tasks.
+ */
+void UpdateSpeedCache_(
+    const std::vector<std::shared_ptr<TaskInfo>> &conducting_tasks,
+    size_t window_size, std::unordered_map<std::string, std::string> *out_speed,
+    std::unordered_map<std::string, std::deque<std::pair<double, size_t>>>
+        *speed_samples,
+    std::mutex *speed_mtx) {
+  if (!out_speed || !speed_samples || !speed_mtx) {
+    return;
+  }
+
+  out_speed->clear();
+  const double now = timenow();
+  std::unordered_set<std::string> active_ids;
+  active_ids.reserve(conducting_tasks.size());
+
+  std::lock_guard<std::mutex> lock(*speed_mtx);
+  for (const auto &task : conducting_tasks) {
+    if (!task) {
+      continue;
+    }
+    active_ids.insert(task->id);
+    const size_t transferred =
+        task->total_transferred_size.load(std::memory_order_relaxed);
+    auto &samples = (*speed_samples)[task->id];
+    samples.emplace_back(now, transferred);
+    while (samples.size() > window_size) {
+      samples.pop_front();
+    }
+    if (samples.size() >= 2) {
+      const auto &first = samples.front();
+      const auto &last = samples.back();
+      const double dt = last.first - first.first;
+      if (dt > 0.0 && last.second >= first.second) {
+        const double bps = static_cast<double>(last.second - first.second) / dt;
+        const std::string speed_text = FormatSpeedBps_(bps);
+        if (speed_text != "-") {
+          (*out_speed)[task->id] = speed_text;
+        }
+      }
+    }
+  }
+
+  for (auto it = speed_samples->begin(); it != speed_samples->end();) {
+    if (active_ids.find(it->first) == active_ids.end()) {
+      it = speed_samples->erase(it);
+    } else {
+      ++it;
+    }
+  }
+}
+
 int StatusOrder_(const std::string &status) {
   if (status == "Pending")
     return 0;
@@ -176,29 +322,14 @@ int StatusOrder_(const std::string &status) {
   return 4;
 }
 
-bool IsInterrupted_(const std::shared_ptr<InterruptFlag> &flag) {
+inline bool IsInterrupted_(const std::shared_ptr<InterruptFlag> &flag) {
   if (flag && flag->check()) {
     return true;
   }
-  if (amgif && amgif->check()) {
-    return true;
-  }
-#ifdef SIGINT
-  const int last_signal = AMCliSignalMonitor::Instance().LastSignal();
-  if (last_signal == SIGINT) {
-    if (flag) {
-      flag->set(true);
-    }
-    if (amgif) {
-      amgif->set(true);
-    }
-    return true;
-  }
-#endif
   return false;
 }
 
-void ResetInterruptFlag_(const std::shared_ptr<InterruptFlag> &flag) {
+inline void ResetInterruptFlag_(const std::shared_ptr<InterruptFlag> &flag) {
   if (flag && !flag->iskill()) {
     flag->reset();
   }
@@ -221,7 +352,12 @@ private:
   AMCliSignalMonitor &monitor_;
 };
 
-TaskRowData BuildTaskRow_(const std::shared_ptr<TaskInfo> &task_info) {
+/**
+ * @brief Build a single row for the task list table.
+ */
+TaskRowData BuildTaskRow_(
+    const std::shared_ptr<TaskInfo> &task_info,
+    const std::unordered_map<std::string, std::string> *speed_map = nullptr) {
   TaskRowData row;
   if (!task_info) {
     row.id = "-";
@@ -286,21 +422,13 @@ TaskRowData BuildTaskRow_(const std::shared_ptr<TaskInfo> &task_info) {
   }
 
   row.files = AMStr::amfmt("{}/{}", success_num, filenum);
-  row.size = AMStr::amfmt("{}/{}", FormatSize(transferred), FormatSize(total));
-  if (row.status == "Pending") {
-    row.speed = "-";
-  } else {
-    double elapsed = 0.0;
-    if (row.status == "Finished" && start_time > 0.0 && finished_time > 0.0) {
-      elapsed = finished_time - start_time;
-    } else if (start_time > 0.0) {
-      elapsed = timenow() - start_time;
-    }
-    if (elapsed > 0.0) {
-      const double speed = transferred / elapsed;
-      row.speed = AMStr::amfmt("{}/s", FormatSize(static_cast<size_t>(speed)));
-    } else {
-      row.speed = "-";
+  row.size =
+      AMStr::amfmt("{}/{}", FormatTableSize_(transferred), FormatSize(total));
+  row.speed = FormatSpeedBps_(0.0);
+  if (row.status == "Conducting" && speed_map) {
+    auto it = speed_map->find(row.id);
+    if (it != speed_map->end() && !it->second.empty()) {
+      row.speed = it->second;
     }
   }
   row.thread_id = thread_id < 0 ? "-" : std::to_string(thread_id);
@@ -317,14 +445,16 @@ TaskRowData BuildTaskRow_(const std::shared_ptr<TaskInfo> &task_info) {
   return row;
 }
 
-std::string BuildTaskTable_(const std::vector<std::shared_ptr<TaskInfo>> &tasks,
-                            bool include_conducting) {
-  const std::vector<std::string> keys = {"ID",    "Status", "Elapsed", "Size",
-                                         "Speed", "Files",  "TaskNow", "EC"};
+std::string BuildTaskTable_(
+    const std::vector<std::shared_ptr<TaskInfo>> &tasks,
+    bool include_conducting,
+    const std::unordered_map<std::string, std::string> *speed_map = nullptr) {
+  static const std::vector<std::string> keys = {
+      "ID", "Status", "Elapsed", "Size", "Speed", "Files", "TaskNow", "EC"};
   std::vector<TaskRowData> rows;
   rows.reserve(tasks.size());
   for (const auto &task : tasks) {
-    TaskRowData row = BuildTaskRow_(task);
+    TaskRowData row = BuildTaskRow_(task, speed_map);
     if (!include_conducting && row.conducting) {
       continue;
     }
@@ -346,7 +476,83 @@ std::string BuildTaskTable_(const std::vector<std::shared_ptr<TaskInfo>> &tasks,
     lines.push_back({row.id, row.status, row.elapsed, row.size, row.speed,
                      row.files, row.task_now, row.ec});
   }
-  return AMStr::FormatUtf8Table(keys, lines);
+  return AMConfigManager::Instance().FormatUtf8Table(keys, lines);
+}
+
+/**
+ * @brief Count rendered lines in a multi-line string (no trailing newline).
+ */
+size_t CountLines_(const std::string &text) {
+  if (text.empty()) {
+    return 0;
+  }
+  size_t lines = 0;
+  for (char ch : text) {
+    if (ch == '\n') {
+      ++lines;
+    }
+  }
+  if (text.back() != '\n') {
+    ++lines;
+  }
+  return lines;
+}
+
+/**
+ * @brief Build ANSI output to redraw a multi-line table in-place.
+ */
+std::string BuildTableRefreshOutput_(const std::string &table,
+                                     size_t last_lines, size_t *out_lines) {
+  std::vector<std::string> lines;
+  lines.reserve(std::max<size_t>(1, CountLines_(table)));
+  std::string current;
+  for (char ch : table) {
+    if (ch == '\n') {
+      lines.push_back(current);
+      current.clear();
+    } else {
+      current.push_back(ch);
+    }
+  }
+  lines.push_back(current);
+
+  const size_t new_lines = lines.size();
+  if (out_lines) {
+    *out_lines = new_lines;
+  }
+
+  std::string out;
+  if (last_lines > 0) {
+    out += AMStr::amfmt("\x1b[{}A", last_lines);
+  }
+
+  const size_t extra_lines =
+      last_lines > new_lines ? last_lines - new_lines : 0;
+  for (size_t i = 0; i < new_lines; ++i) {
+    out += "\r";
+    out += lines[i];
+    out += "\x1b[K";
+    if (i + 1 < new_lines || extra_lines > 0) {
+      out += "\n";
+    }
+  }
+
+  if (extra_lines > 0) {
+    for (size_t i = 0; i < extra_lines; ++i) {
+      out += "\r";
+      out += "\x1b[2K";
+      if (i + 1 < extra_lines) {
+        out += "\n";
+      }
+    }
+    if (extra_lines > 1) {
+      out += AMStr::amfmt("\x1b[{}A", extra_lines - 1);
+    }
+  } else {
+    out += "\n";
+  }
+
+  return out;
 }
 
 /**
@@ -1020,7 +1226,10 @@ AMTransferManager::AcquireClient_(const std::string &nickname,
     if (it != idle_pool_.end() && !it->second.empty()) {
       auto client = it->second.front();
       it->second.pop_front();
-      return {ECM{EC::Success, ""}, client};
+      auto rcm2 = client->Check(flag);
+      if (rcm2.first == EC::Success) {
+        return {ECM{EC::Success, ""}, client};
+      }
     }
   }
 
@@ -1430,37 +1639,73 @@ ECM AMTransferManager::List(
   std::vector<std::shared_ptr<TaskInfo>> conducting_tasks;
 
   auto collect_tasks = [&]() {
-    if (pending || suspend) {
-      auto registry_tasks = worker_.get_pending_tasks();
-      pending_tasks.reserve(registry_tasks.size());
-      paused_tasks.reserve(registry_tasks.size());
-      for (const auto &task : registry_tasks) {
+    auto registry_snapshot = worker_.get_registry_copy();
+
+    pending_tasks.reserve(registry_snapshot.size());
+    paused_tasks.reserve(registry_snapshot.size());
+    conducting_tasks.reserve(registry_snapshot.size());
+    finished_tasks.reserve(registry_snapshot.size());
+
+    std::unordered_set<std::string> finished_ids;
+    finished_ids.reserve(registry_snapshot.size());
+
+    for (const auto &entry : registry_snapshot) {
+      const auto &task = entry.second;
+      if (!task) {
+        continue;
+      }
+      const TaskStatus status = task->GetStatus();
+      const bool is_paused = status == TaskStatus::Paused ||
+                             (status == TaskStatus::Conducting && task->pd &&
+                              task->pd->is_pause_only());
+      if (status == TaskStatus::Finished) {
+        if (finished) {
+          finished_tasks.push_back(task);
+          finished_ids.insert(task->id);
+        }
+        continue;
+      }
+      if (is_paused) {
+        if (suspend) {
+          paused_tasks.push_back(task);
+        }
+        continue;
+      }
+      if (status == TaskStatus::Pending) {
+        if (pending) {
+          pending_tasks.push_back(task);
+        }
+        continue;
+      }
+      if (status == TaskStatus::Conducting) {
+        if (conducting) {
+          conducting_tasks.push_back(task);
+        }
+        continue;
+      }
+    }
+
+    if (finished) {
+      auto history_tasks = SnapshotHistory_();
+      for (const auto &task : history_tasks) {
         if (!task) {
           continue;
         }
-        const TaskStatus status = task->GetStatus();
-        const bool is_paused =
-            status == TaskStatus::Paused ||
-            (status == TaskStatus::Conducting && task->pd &&
-             task->pd->is_pause_only());
-        if (is_paused) {
-          if (suspend) {
-            paused_tasks.push_back(task);
-          }
-        } else if (pending) {
-          pending_tasks.push_back(task);
+        if (finished_ids.find(task->id) == finished_ids.end()) {
+          finished_tasks.push_back(task);
         }
       }
-    }
-    if (finished) {
-      finished_tasks = SnapshotHistory_();
-    }
-    if (conducting) {
-      conducting_tasks = worker_.get_conducting_tasks();
     }
   };
 
   collect_tasks();
+
+  static const size_t speed_window_size = ResolveSpeedWindowSize_(config_);
+  std::unordered_map<ID, std::string> speed_map;
+  if (conducting) {
+    UpdateSpeedCache_(conducting_tasks, speed_window_size, &speed_map,
+                      &speed_samples_, &speed_mtx_);
+  }
 
   const bool enable_dynamic =
       conducting && interrupt_flag && !conducting_tasks.empty();
@@ -1475,7 +1720,7 @@ ECM AMTransferManager::List(
                      conducting_tasks.end());
     all_tasks.insert(all_tasks.end(), finished_tasks.begin(),
                      finished_tasks.end());
-    const std::string table = BuildTaskTable_(all_tasks, true);
+    const std::string table = BuildTaskTable_(all_tasks, true, &speed_map);
     if (!table.empty()) {
       prompt_.Print(table);
     }
@@ -1483,24 +1728,21 @@ ECM AMTransferManager::List(
   }
 
   prompt_.SetCacheOutputOnly(true);
-  const int refresh_ms = 500;
-  bool alt_screen = false;
+  static const int refresh_ms = config_.ResolveRefreshIntervalMs();
   SignalHookGuard hook_guard;
+  size_t last_lines = 0;
+  std::string last_table;
   while (true) {
     if (IsInterrupted_(interrupt_flag)) {
-      if (alt_screen) {
-        prompt_.UseAlternateScreen(false);
-      }
-      prompt_.SetCacheOutputOnly(false);
-      prompt_.FlushCachedOutput();
-      return {EC::Terminate, "Interrupted"};
+      break;
     }
-
     pending_tasks.clear();
     paused_tasks.clear();
     finished_tasks.clear();
     conducting_tasks.clear();
     collect_tasks();
+    UpdateSpeedCache_(conducting_tasks, speed_window_size, &speed_map,
+                      &speed_samples_, &speed_mtx_);
 
     std::vector<std::shared_ptr<TaskInfo>> all_tasks;
     all_tasks.reserve(pending_tasks.size() + paused_tasks.size() +
@@ -1512,19 +1754,20 @@ ECM AMTransferManager::List(
                      conducting_tasks.end());
     all_tasks.insert(all_tasks.end(), finished_tasks.begin(),
                      finished_tasks.end());
-    const std::string table = BuildTaskTable_(all_tasks, true);
+    const std::string table = BuildTaskTable_(all_tasks, true, &speed_map);
     if (table.empty()) {
+      prompt_.Print("table is empty");
       break;
     }
 
-    if (!alt_screen) {
-      prompt_.UseAlternateScreen(true);
-      alt_screen = true;
+    if (table != last_table) {
+      size_t new_lines = 0;
+      const std::string output =
+          BuildTableRefreshOutput_(table, last_lines, &new_lines);
+      prompt_.PrintRaw(output, false);
+      last_lines = new_lines;
+      last_table = table;
     }
-
-    prompt_.PrintRaw("\x1b[H", false);
-    prompt_.PrintRaw(table, false);
-    prompt_.PrintRaw("\x1b[J", false);
 
     if (conducting_tasks.empty()) {
       break;
@@ -1532,9 +1775,6 @@ ECM AMTransferManager::List(
     std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
   }
   prompt_.SetCacheOutputOnly(false);
-  if (alt_screen) {
-    prompt_.UseAlternateScreen(false);
-  }
   prompt_.FlushCachedOutput();
   return {EC::Success, ""};
 }
@@ -1682,7 +1922,31 @@ ECM AMTransferManager::Terminate(const ID &task_id, int timeout_ms) {
  * @brief Pause a running task by ID.
  */
 ECM AMTransferManager::Pause(const ID &task_id) {
-  ECM rcm = worker_.pause(task_id);
+  std::vector<ID> ids;
+  ids.reserve(2);
+  std::string token;
+  bool has_sep = false;
+  for (const char ch : task_id) {
+    if (ch == ',' || ch == ';' ||
+        std::isspace(static_cast<unsigned char>(ch))) {
+      has_sep = true;
+      if (!token.empty()) {
+        ids.push_back(token);
+        token.clear();
+      }
+      continue;
+    }
+    token.push_back(ch);
+  }
+  if (!token.empty()) {
+    ids.push_back(token);
+  }
+  if (has_sep && ids.size() > 1) {
+    return Pause(ids);
+  }
+
+  const ID &single_id = ids.empty() ? task_id : ids.front();
+  ECM rcm = worker_.pause(single_id);
   if (rcm.first != EC::Success) {
     if (rcm.second.empty()) {
       prompt_.ErrorFormat(rcm);
@@ -1697,7 +1961,31 @@ ECM AMTransferManager::Pause(const ID &task_id) {
  * @brief Resume a paused task by ID.
  */
 ECM AMTransferManager::Resume(const ID &task_id) {
-  ECM rcm = worker_.resume(task_id);
+  std::vector<ID> ids;
+  ids.reserve(2);
+  std::string token;
+  bool has_sep = false;
+  for (const char ch : task_id) {
+    if (ch == ',' || ch == ';' ||
+        std::isspace(static_cast<unsigned char>(ch))) {
+      has_sep = true;
+      if (!token.empty()) {
+        ids.push_back(token);
+        token.clear();
+      }
+      continue;
+    }
+    token.push_back(ch);
+  }
+  if (!token.empty()) {
+    ids.push_back(token);
+  }
+  if (has_sep && ids.size() > 1) {
+    return Resume(ids);
+  }
+
+  const ID &single_id = ids.empty() ? task_id : ids.front();
+  ECM rcm = worker_.resume(single_id);
   if (rcm.first != EC::Success) {
     if (rcm.second.empty()) {
       prompt_.ErrorFormat(rcm);
@@ -1715,7 +2003,15 @@ ECM AMTransferManager::Terminate(const std::vector<ID> &task_ids,
                                  int timeout_ms) {
   ECM last = {EC::Success, ""};
   ECM rcm = {EC::Success, ""};
+  std::unordered_set<ID> seen;
+  seen.reserve(task_ids.size());
   for (const auto &id : task_ids) {
+    if (id.empty()) {
+      continue;
+    }
+    if (!seen.insert(id).second) {
+      continue;
+    }
     rcm = Terminate(id, timeout_ms);
     if (rcm.first != EC::Success) {
       last = rcm;
@@ -1730,7 +2026,15 @@ ECM AMTransferManager::Terminate(const std::vector<ID> &task_ids,
 ECM AMTransferManager::Pause(const std::vector<ID> &task_ids) {
   ECM last = {EC::Success, ""};
   ECM rcm = {EC::Success, ""};
+  std::unordered_set<ID> seen;
+  seen.reserve(task_ids.size());
   for (const auto &id : task_ids) {
+    if (id.empty()) {
+      continue;
+    }
+    if (!seen.insert(id).second) {
+      continue;
+    }
     rcm = Pause(id);
     if (rcm.first != EC::Success) {
       last = rcm;
@@ -1745,7 +2049,15 @@ ECM AMTransferManager::Pause(const std::vector<ID> &task_ids) {
 ECM AMTransferManager::Resume(const std::vector<ID> &task_ids) {
   ECM last = {EC::Success, ""};
   ECM rcm = {EC::Success, ""};
+  std::unordered_set<ID> seen;
+  seen.reserve(task_ids.size());
   for (const auto &id : task_ids) {
+    if (id.empty()) {
+      continue;
+    }
+    if (!seen.insert(id).second) {
+      continue;
+    }
     rcm = Resume(id);
     if (rcm.first != EC::Success) {
       last = rcm;
@@ -2098,7 +2410,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
 
   std::vector<std::string> display_names = nickname_list;
   if (local_used) {
-    display_names.push_back("local");
+    display_names.emplace_back("local");
   }
 
   auto [host_rcm, hostm] = CollectClients(nickname_list, flag);
