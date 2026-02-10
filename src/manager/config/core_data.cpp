@@ -1,28 +1,27 @@
 #include "internal_func.hpp"
 
 using namespace AMConfigInternal;
+using cls = AMConfigCoreData;
 
 /**
  * @brief Construct a core data layer with default rules.
  */
-AMConfigCoreData::AMConfigCoreData() : nickname_pattern_("^[A-Za-z0-9_-]+$") {}
+cls::AMConfigCoreData() : nickname_pattern_("^[A-Za-z0-9_-]+$") {}
 
 /**
  * @brief Bind the storage layer used for raw config access.
  */
-void AMConfigCoreData::BindStorage(AMConfigStorage *storage) {
-  storage_ = storage;
-}
+void cls::BindStorage(AMConfigStorage *storage) { storage_ = storage; }
 
 /**
  * @brief Report whether the layer has an attached storage instance.
  */
-bool AMConfigCoreData::HasStorage() const { return storage_ != nullptr; }
+bool cls::HasStorage() const { return storage_ != nullptr; }
 
 /**
  * @brief Load history data into memory (in-memory only for now).
  */
-ECM AMConfigCoreData::LoadHistory() {
+ECM cls::LoadHistory() {
   if (!storage_) {
     return Err(EC::ConfigNotInitialized, "config storage not initialized");
   }
@@ -32,8 +31,8 @@ ECM AMConfigCoreData::LoadHistory() {
 /**
  * @brief Fetch history commands for a nickname.
  */
-ECM AMConfigCoreData::GetHistoryCommands(const std::string &nickname,
-                                         std::vector<std::string> *out) const {
+ECM cls::GetHistoryCommands(std::string nickname,
+                            std::vector<std::string> *out) const {
   if (!out) {
     return Err(EC::InvalidArg, "null history output");
   }
@@ -46,10 +45,10 @@ ECM AMConfigCoreData::GetHistoryCommands(const std::string &nickname,
     return load_status;
   }
   if (nickname.empty()) {
-    return Ok();
+    nickname = "local";
   }
-  const Json history = storage_->Snapshot(DocumentKind::History);
-  const Json *node = FindJsonNode_(history, {nickname, "commands"});
+  auto *node = storage_->ResolveArg<nlohmann::ordered_json *>(
+      DocumentKind::History, {nickname, "commands"}, nullptr, {});
   if (!node || !node->is_array()) {
     return Ok();
   }
@@ -64,9 +63,9 @@ ECM AMConfigCoreData::GetHistoryCommands(const std::string &nickname,
 /**
  * @brief Store history commands for a nickname and optionally persist.
  */
-ECM AMConfigCoreData::SetHistoryCommands(
-    const std::string &nickname, const std::vector<std::string> &commands,
-    bool dump_now) {
+ECM cls::SetHistoryCommands(const std::string &nickname,
+                            const std::vector<std::string> &commands,
+                            bool dump_now) {
   if (!storage_) {
     return Err(EC::ConfigNotInitialized, "config storage not initialized");
   }
@@ -93,51 +92,37 @@ ECM AMConfigCoreData::SetHistoryCommands(
 }
 
 /**
- * @brief Resolve history size limit from settings with minimum 10.
- */
-int AMConfigCoreData::ResolveMaxHistoryCount(int default_value) const {
-  const int fallback = std::max(default_value, 10);
-  if (!storage_) {
-    return fallback;
-  }
-  AMConfigStorage::Value value;
-  if (!storage_->QueryKey(storage_->GetJson(DocumentKind::Settings).value().get(),
-                          {"InternalVars", "MaxHistoryCount"}, &value)) {
-    return fallback;
-  }
-  if (std::holds_alternative<int64_t>(value)) {
-    const int64_t raw = std::get<int64_t>(value);
-    if (raw >= 10) {
-      return static_cast<int>(raw);
-    }
-  }
-  if (std::holds_alternative<std::string>(value)) {
-    try {
-      const int parsed = std::stoi(std::get<std::string>(value));
-      return parsed >= 10 ? parsed : fallback;
-    } catch (...) {
-      return fallback;
-    }
-  }
-  return fallback;
-}
-
-/**
  * @brief Check whether a host nickname exists in the configuration.
  */
-bool AMConfigCoreData::HostExists(const std::string &nickname) const {
+bool cls::HostExists(const std::string &nickname) const {
   if (!storage_ || nickname.empty()) {
     return false;
   }
-  return FindHostJson(storage_->GetJson(DocumentKind::Config).value().get(),
-                      nickname) != nullptr;
+  auto *hosts = storage_->ResolveArg<nlohmann::ordered_json *>(
+      DocumentKind::Config, {"HOSTS"}, nullptr, {});
+  if (!hosts || !hosts->is_array()) {
+    return false;
+  }
+  for (const auto &item : *hosts) {
+    if (!item.is_object()) {
+      continue;
+    }
+    if (!IsHostValid(item)) {
+      continue;
+    }
+    auto name = GetStringField(item, "nickname");
+    if (name && *name == nickname) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
  * @brief Validate whether a nickname is legal and not already used.
  */
-bool AMConfigCoreData::ValidateNickname(const std::string &nickname,
-                                        std::string *error) const {
+bool cls::ValidateNickname(const std::string &nickname,
+                           std::string *error) const {
   if (nickname.empty()) {
     if (error) {
       *error = "Nickname cannot be empty.";
@@ -157,24 +142,4 @@ bool AMConfigCoreData::ValidateNickname(const std::string &nickname,
     return false;
   }
   return true;
-}
-
-/**
- * @brief Find a JSON node by walking a path.
- */
-const nlohmann::ordered_json *
-AMConfigCoreData::FindJsonNode_(const nlohmann::ordered_json &root,
-                                const Path &path) const {
-  const nlohmann::ordered_json *node = &root;
-  for (const auto &seg : path) {
-    if (!node->is_object()) {
-      return nullptr;
-    }
-    auto it = node->find(seg);
-    if (it == node->end()) {
-      return nullptr;
-    }
-    node = &(*it);
-  }
-  return node;
 }

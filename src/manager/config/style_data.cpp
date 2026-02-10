@@ -1,16 +1,20 @@
+#include "AMBase/CommonTools.hpp"
 #include "internal_func.hpp"
 
 using namespace AMConfigInternal;
+using cls = AMConfigStyleData;
+using Bar = AMProgressBar;
+using BarStyle = AMProgressBarStyle;
 
 /**
  * @brief Construct a style layer with no bound storage.
  */
-AMConfigStyleData::AMConfigStyleData() = default;
+cls::AMConfigStyleData() = default;
 
 /**
  * @brief Bind the storage layer used for style configuration lookups.
  */
-void AMConfigStyleData::BindStorage(AMConfigStorage *storage) {
+void cls::BindStorage(AMConfigStorage *storage) {
   storage_ = storage;
   progress_bar_style_.reset();
 }
@@ -18,9 +22,9 @@ void AMConfigStyleData::BindStorage(AMConfigStorage *storage) {
 /**
  * @brief Apply a named style to a string with optional path context.
  */
-std::string AMConfigStyleData::Format(const std::string &ori_str_f,
-                                      const std::string &style_name,
-                                      const PathInfo *path_info) const {
+std::string cls::Format(const std::string &ori_str_f,
+                        const std::string &style_name,
+                        const PathInfo *path_info) const {
   const std::string ori_str = AMStr::BBCEscape(ori_str_f);
   if (!storage_) {
     return ori_str;
@@ -35,13 +39,8 @@ std::string AMConfigStyleData::Format(const std::string &ori_str_f,
     if (name.rfind("Prompt.", 0) == 0) {
       key = {"style", "Prompt", name.substr(7)};
     }
-    const Json *node =
-        FindJsonNode(storage_->GetJson(DocumentKind::Settings).value().get(),
-                     key);
-    if (!node || !node->is_string()) {
-      return text;
-    }
-    std::string raw = TrimCopy(node->get<std::string>());
+    std::string raw = TrimCopy(
+        storage_->ResolveArg<std::string>(DocumentKind::Settings, key, "", {}));
     if (raw.empty()) {
       return text;
     }
@@ -74,8 +73,8 @@ std::string AMConfigStyleData::Format(const std::string &ori_str_f,
     break;
   }
 
-  std::string main_tag =
-      NormalizeStyleTag_(GetSettingString_({"style", "Path1", base_key}, ""));
+  std::string main_tag = NormalizeStyleTag_(storage_->ResolveArg<std::string>(
+      DocumentKind::Settings, {"style", "Path1", base_key}, "", {}));
   const std::string path_name =
       !path_info->name.empty()
           ? path_info->name
@@ -85,7 +84,8 @@ std::string AMConfigStyleData::Format(const std::string &ori_str_f,
     const std::string ext = AMPathStr::extname(path_name);
     if (!ext.empty()) {
       std::string ext_tag =
-          NormalizeStyleTag_(GetSettingString_({"style", "File2", ext}, ""));
+          NormalizeStyleTag_(storage_->ResolveArg<std::string>(
+              DocumentKind::Settings, {"style", "File2", ext}, "", {}));
       if (!ext_tag.empty()) {
         main_tag = ext_tag;
       }
@@ -101,13 +101,13 @@ std::string AMConfigStyleData::Format(const std::string &ori_str_f,
   const bool is_exist = !path_info->path.empty();
 
   auto resolve_extra = [&](const std::string &key) -> std::string {
-    std::string tag = NormalizeStyleTag_(
-        GetSettingString_({"style", "PathExtraStyle", key}, ""));
+    std::string tag = NormalizeStyleTag_(storage_->ResolveArg<std::string>(
+        DocumentKind::Settings, {"style", "PathExtraStyle", key}, "", {}));
     if (!tag.empty()) {
       return tag;
     }
-    return NormalizeStyleTag_(
-        GetSettingString_({"style", "PathSpecific3", key}, ""));
+    return NormalizeStyleTag_(storage_->ResolveArg<std::string>(
+        DocumentKind::Settings, {"style", "PathSpecific3", key}, "", {}));
   };
 
   if (!is_exist) {
@@ -134,23 +134,25 @@ std::string AMConfigStyleData::Format(const std::string &ori_str_f,
 /**
  * @brief Create a progress bar using the current style configuration.
  */
-AMProgressBar
-AMConfigStyleData::CreateProgressBar(int64_t total_size,
-                                     const std::string &prefix) const {
+Bar cls::CreateProgressBar(int64_t total_size,
+                           const std::string &prefix) const {
   if (!progress_bar_style_) {
     progress_bar_style_ = BuildProgressBarStyle_();
   }
-  return AMProgressBar(total_size, prefix, *progress_bar_style_);
+  return Bar(total_size, prefix, *progress_bar_style_);
 }
 
 /**
  * @brief Format a UTF-8 table using configured style defaults.
  */
-std::string AMConfigStyleData::FormatUtf8Table(
-    const std::vector<std::string> &keys,
-    const std::vector<std::vector<std::string>> &rows) const {
-  static const std::string skeleton_color =
-      GetSettingString_({"style", "Table", "color"}, "");
+std::string
+cls::FormatUtf8Table(const std::vector<std::string> &keys,
+                     const std::vector<std::vector<std::string>> &rows) const {
+  if (!storage_) {
+    return AMStr::FormatUtf8Table(keys, rows, "", 1, 1, 0, 0);
+  }
+  auto skeleton_color = storage_->ResolveArg<std::string>(
+      DocumentKind::Settings, {"style", "Table", "color"}, "", {});
 
   auto clamp_padding = [](int value, size_t fallback) -> size_t {
     if (value < 0) {
@@ -159,14 +161,18 @@ std::string AMConfigStyleData::FormatUtf8Table(
     return static_cast<size_t>(value);
   };
 
-  static const size_t pad_left =
-      clamp_padding(GetSettingInt_({"style", "Table", "left_padding"}, 1), 0);
-  static const size_t pad_right =
-      clamp_padding(GetSettingInt_({"style", "Table", "right_padding"}, 1), 0);
-  static const size_t pad_top =
-      clamp_padding(GetSettingInt_({"style", "Table", "top_padding"}, 0), 0);
-  static const size_t pad_bottom =
-      clamp_padding(GetSettingInt_({"style", "Table", "bottom_padding"}, 0), 0);
+  auto pad_left_raw = storage_->ResolveArg<int64_t>(
+      DocumentKind::Settings, {"style", "Table", "left_padding"}, 1, {});
+  auto pad_right_raw = storage_->ResolveArg<int64_t>(
+      DocumentKind::Settings, {"style", "Table", "right_padding"}, 1, {});
+  auto pad_top_raw = storage_->ResolveArg<int64_t>(
+      DocumentKind::Settings, {"style", "Table", "top_padding"}, 0, {});
+  auto pad_bottom_raw = storage_->ResolveArg<int64_t>(
+      DocumentKind::Settings, {"style", "Table", "bottom_padding"}, 0, {});
+  const size_t pad_left = clamp_padding(static_cast<int>(pad_left_raw), 0);
+  const size_t pad_right = clamp_padding(static_cast<int>(pad_right_raw), 0);
+  const size_t pad_top = clamp_padding(static_cast<int>(pad_top_raw), 0);
+  const size_t pad_bottom = clamp_padding(static_cast<int>(pad_bottom_raw), 0);
 
   return AMStr::FormatUtf8Table(keys, rows, skeleton_color, pad_left, pad_right,
                                 pad_top, pad_bottom);
@@ -175,64 +181,51 @@ std::string AMConfigStyleData::FormatUtf8Table(
 /**
  * @brief Read an integer setting from settings JSON.
  */
-int AMConfigStyleData::GetSettingInt_(const std::vector<std::string> &path,
-                                      int default_value) const {
-  if (!storage_) {
-    return default_value;
-  }
-  const Json *node =
-      FindJsonNode(storage_->GetJson(DocumentKind::Settings).value().get(),
-                   path);
-  return GetSettingValueImpl<int>(node, default_value);
-}
-
-/**
- * @brief Read a string setting from settings JSON.
- */
-std::string
-AMConfigStyleData::GetSettingString_(const std::vector<std::string> &path,
-                                     const std::string &default_value) const {
-  if (!storage_) {
-    return default_value;
-  }
-  const Json *node =
-      FindJsonNode(storage_->GetJson(DocumentKind::Settings).value().get(),
-                   path);
-  return GetSettingValueImpl<std::string>(node, default_value);
-}
-
 /**
  * @brief Build progress bar style from settings.
  */
-AMProgressBarStyle AMConfigStyleData::BuildProgressBarStyle_() const {
-  AMProgressBarStyle style;
-  int width = GetSettingInt_({"style", "ProgressBar", "bar_width"}, -1);
+BarStyle cls::BuildProgressBarStyle_() const {
+  if (!storage_) {
+    return {};
+  }
+  BarStyle style;
+  int width = static_cast<int>(storage_->ResolveArg<int64_t>(
+      DocumentKind::Settings, {"style", "ProgressBar", "bar_width"}, -1, {}));
   if (width <= 0) {
-    width = GetSettingInt_({"style", "ProgressBar", "Width"}, -1);
+    width = static_cast<int>(storage_->ResolveArg<int64_t>(
+        DocumentKind::Settings, {"style", "ProgressBar", "Width"}, -1, {}));
   }
   if (width > 0) {
     style.bar_width = static_cast<size_t>(width);
   }
-  style.width_offset =
-      GetSettingInt_({"style", "ProgressBar", "width_offset"}, 30);
+  style.width_offset = static_cast<int>(storage_->ResolveArg<int64_t>(
+      DocumentKind::Settings, {"style", "ProgressBar", "width_offset"}, 30,
+      {}));
 
-  style.start = GetSettingString_({"style", "ProgressBar", "lborder"}, "");
+  style.start = storage_->ResolveArg<std::string>(
+      DocumentKind::Settings, {"style", "ProgressBar", "lborder"}, "", {});
 
-  style.end = GetSettingString_({"style", "ProgressBar", "rborder"}, "");
+  style.end = storage_->ResolveArg<std::string>(
+      DocumentKind::Settings, {"style", "ProgressBar", "rborder"}, "", {});
 
-  std::string fill = GetSettingString_({"style", "ProgressBar", "fill"}, "▓");
+  std::string fill = storage_->ResolveArg<std::string>(
+      DocumentKind::Settings, {"style", "ProgressBar", "fill"}, "▓", {});
   style.fill = fill.empty() ? "█" : fill;
-  std::string lead = GetSettingString_({"style", "ProgressBar", "head"}, "█");
+  std::string lead = storage_->ResolveArg<std::string>(
+      DocumentKind::Settings, {"style", "ProgressBar", "head"}, "█", {});
   style.lead = lead.empty() ? "▓" : lead;
 
-  style.remainder = GetSettingString_({"style", "ProgressBar", "remain"}, " ");
+  style.remainder = storage_->ResolveArg<std::string>(
+      DocumentKind::Settings, {"style", "ProgressBar", "remain"}, " ", {});
 
-  style.color = ParseProgressBarColor(
-      GetSettingString_({"style", "ProgressBar", "color"}, "#FFFFFF"));
+  style.color = ParseProgressBarColor(storage_->ResolveArg<std::string>(
+      DocumentKind::Settings, {"style", "ProgressBar", "color"}, "#FFFFFF",
+      {}));
 
   auto parse_bool = [&](const std::vector<std::string> &path,
                         bool default_value) {
-    std::string raw = GetSettingString_(path, default_value ? "true" : "false");
+    std::string raw = storage_->ResolveArg<std::string>(
+        DocumentKind::Settings, path, default_value ? "true" : "false", {});
     bool value = default_value;
     ParseBoolToken(raw, &value);
     return value;

@@ -138,7 +138,31 @@ ECM AMConfigManager::SetHistoryCommands(
  * @brief Resolve history size limit from settings with minimum 10.
  */
 int AMConfigManager::ResolveMaxHistoryCount(int default_value) const {
-  return core_data_.ResolveMaxHistoryCount(default_value);
+  const int fallback = std::max(default_value, 10);
+  auto status = EnsureInitialized("ResolveMaxHistoryCount");
+  if (status.first != EC::Success) {
+    return fallback;
+  }
+  const int64_t fallback64 = static_cast<int64_t>(fallback);
+  int64_t raw = storage_.ResolveArg<int64_t>(
+      DocumentKind::Settings, {"InternalVars", "MaxHistoryCount"}, fallback64,
+      [fallback64](int64_t value) {
+        return value >= 10 ? value : fallback64;
+      });
+  if (raw != fallback64) {
+    return static_cast<int>(raw);
+  }
+  std::string text = storage_.ResolveArg<std::string>(
+      DocumentKind::Settings, {"InternalVars", "MaxHistoryCount"}, "", {});
+  if (!text.empty()) {
+    try {
+      const int parsed = std::stoi(text);
+      return parsed >= 10 ? parsed : fallback;
+    } catch (...) {
+      return fallback;
+    }
+  }
+  return fallback;
 }
 
 /**

@@ -144,6 +144,7 @@ inline std::string TrimCopy(const std::string &value) {
  */
 inline std::string NormalizeStyleTag_(const std::string &raw) {
   std::string trimmed = TrimCopy(raw);
+
   if (trimmed.empty()) {
     return "";
   }
