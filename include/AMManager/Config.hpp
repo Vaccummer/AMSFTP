@@ -2,7 +2,7 @@
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
-#include "AMBase/cfgffi.h"
+#include "AMBase/RustTomlRead.h"
 #include "AMManager/Prompt.hpp"
 #include <atomic>
 #include <chrono>

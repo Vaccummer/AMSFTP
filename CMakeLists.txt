@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 project(AMSFTP LANGUAGES C CXX)
 
+
 # ========= C++ 标准 =========
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -55,16 +56,15 @@ target_link_libraries(amsftp PRIVATE
   CLI11::CLI11
   
 )
-
+add_compile_definitions(NOMINMAX)
 # ========= Console Ctrl-C trigger tool =========
-add_executable(ctrlc_trigger
-  "${PROJECT_SOURCE_DIR}/src/tools/ConsoleCtrlTrigger.cpp"
-)
+# add_executable(ctrlc_trigger
+#   "${PROJECT_SOURCE_DIR}/src/tools/ConsoleCtrlTrigger.cpp"
+# )
 
-target_compile_options(ctrlc_trigger PRIVATE
-  $<$<CXX_COMPILER_ID:MSVC>:/Zi /Od /W4>
-)
-
+# target_compile_options(ctrlc_trigger PRIVATE
+#   $<$<CXX_COMPILER_ID:MSVC>:/Zi /Od /W4>
+# )
 # # ========= 测试程序 =========
 # file(GLOB_RECURSE AMTEST_SOURCES CONFIGURE_DEPENDS
 #   "${PROJECT_SOURCE_DIR}/test/*.cpp"

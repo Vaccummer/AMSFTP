@@ -6,6 +6,7 @@
 #include <cstddef>
 
 #define _WINSOCKAPI_
+
 #include "Isocline/isocline.h"
 #include "third_party/indicators/cursor_control.hpp"
 #include "third_party/indicators/progress_bar.hpp" // win 平台上该库会包含 windows.h
@@ -466,7 +467,8 @@ inline size_t CharNum(const std::string &utf8_str) {
   return char_count;
 }
 
-/** Decode next UTF-8 codepoint; returns U+FFFD on error and advances index by 1. */
+/** Decode next UTF-8 codepoint; returns U+FFFD on error and advances index
+ * by 1. */
 inline uint32_t NextCodepointUtf8(const std::string &utf8_str, size_t &idx) {
   const size_t str_len = utf8_str.size();
   if (idx >= str_len) {
@@ -497,8 +499,7 @@ inline uint32_t NextCodepointUtf8(const std::string &utf8_str, size_t &idx) {
     const uint8_t c1 = static_cast<uint8_t>(utf8_str[idx + 1]);
     const uint8_t c2 = static_cast<uint8_t>(utf8_str[idx + 2]);
     const uint8_t c3 = static_cast<uint8_t>(utf8_str[idx + 3]);
-    if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80 &&
-        (c3 & 0xC0) == 0x80) {
+    if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80 && (c3 & 0xC0) == 0x80) {
       idx += 4;
       return (static_cast<uint32_t>(c0 & 0x07) << 18) |
              (static_cast<uint32_t>(c1 & 0x3F) << 12) |
@@ -570,7 +571,8 @@ inline std::string PadRightUtf8(const std::string &text, size_t width) {
   return text + std::string(width - len, ' ');
 }
 
-/** Parse #RRGGBB to ANSI 24-bit foreground color escape code; empty on failure. */
+/** Parse #RRGGBB to ANSI 24-bit foreground color escape code; empty on failure.
+ */
 inline std::string AnsiColor24(const std::string &hex_color) {
   if (hex_color.size() != 7 || hex_color[0] != '#') {
     return "";
@@ -634,9 +636,10 @@ FormatUtf8Table(const std::vector<std::string> &keys,
                           const std::string &right) {
     std::string line = color_prefix + left + color_suffix;
     for (size_t c = 0; c < col_count; ++c) {
-      line += color_prefix +
-              RepeatUtf8("─", widths[c] + pad_left + pad_right) + color_suffix;
-      line += color_prefix + ((c + 1 == col_count) ? right : mid) + color_suffix;
+      line += color_prefix + RepeatUtf8("─", widths[c] + pad_left + pad_right) +
+              color_suffix;
+      line +=
+          color_prefix + ((c + 1 == col_count) ? right : mid) + color_suffix;
     }
     return line;
   };
@@ -1347,8 +1350,8 @@ private:
     const int64_t secs = clamped % 60;
     std::ostringstream oss;
     if (hours > 0) {
-      oss << hours << ":" << std::setw(2) << std::setfill('0') << minutes
-          << ":" << std::setw(2) << std::setfill('0') << secs;
+      oss << hours << ":" << std::setw(2) << std::setfill('0') << minutes << ":"
+          << std::setw(2) << std::setfill('0') << secs;
       return oss.str();
     }
     oss << std::setw(2) << std::setfill('0') << minutes << ":" << std::setw(2)

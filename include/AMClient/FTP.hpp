@@ -13,8 +13,6 @@
 #include <sstream>
 #include <string>
 
-// 标准库
-
 // 自身依赖
 #include "AMClient/Base.hpp"
 
@@ -28,11 +26,11 @@
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
 
-using EC = ErrorCode;
-using ECM = std::pair<EC, std::string>;
-using AuthCallback =
-    std::function<std::optional<std::string>(const AuthCBInfo &)>;
 namespace {
+struct MemoryStruct {
+  char *memory;
+  size_t size;
+};
 // 解析 IIS/DOS 格式的目录列表行
 // 格式: 03-03-25  11:27AM                90624 zlib1.dll
 //       01-10-26  12:01PM       <DIR>          AMSFTP
@@ -512,6 +510,9 @@ inline EC GetFTPErrorCode(CURLcode curl_code) {
 
 // FTP Client using libcurl
 class AMFTPClient : public BaseClient {
+  using AuthCallback =
+      std::function<std::optional<std::string>(const AuthCBInfo &)>;
+
 private:
   CURL *curl = nullptr;
   CURLM *multi = nullptr; // 复用的 multi handle
