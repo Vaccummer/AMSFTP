@@ -7,20 +7,10 @@
 #include <filesystem>
 #include <functional>
 
-
-class AMLogManager {
+class AMLogManager : private NonCopyableNonMovable {
 public:
   /** Return the singleton instance (requires a valid config manager). */
   static AMLogManager &Instance(AMConfigManager &cfg);
-
-  /** Disable copy construction. */
-  AMLogManager(const AMLogManager &) = delete;
-  /** Disable copy assignment. */
-  AMLogManager &operator=(const AMLogManager &) = delete;
-  /** Disable move construction. */
-  AMLogManager(AMLogManager &&) = delete;
-  /** Disable move assignment. */
-  AMLogManager &operator=(AMLogManager &&) = delete;
 
   /** Cleanup log manager resources. */
   ~AMLogManager();

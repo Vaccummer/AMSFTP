@@ -17,18 +17,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-#include "TransferInternal.hpp"
 namespace {
-
-/**
- * @brief Format a unix timestamp as "HH:MM".
- */
-std::string FormatTimeHM_(double timestamp) {
-  if (timestamp <= 0.0) {
-    return "-";
-  }
-  return FormatTime(static_cast<size_t>(timestamp), "%H:%M");
-}
 
 /**
  * @brief Format elapsed seconds into "XmYs" or "XhYmZs".
@@ -92,19 +81,6 @@ struct TaskRowData {
 };
 
 /**
- * @brief Left pad an ASCII string to a fixed width.
- */
-std::string PadLeftAscii_(const std::string &value, size_t width) {
-  if (width == 0) {
-    return {};
-  }
-  if (value.size() >= width) {
-    return value;
-  }
-  return std::string(width - value.size(), ' ') + value;
-}
-
-/**
  * @brief Format bytes for task tables with a fixed width (up to "999.9MB").
  */
 std::string FormatTableSize_(size_t bytes) {
@@ -136,7 +112,7 @@ std::string FormatTableSize_(size_t bytes) {
     oss << std::fixed << std::setprecision(1) << value;
   }
   const std::string out = AMStr::amfmt("{}{}", oss.str(), units[idx]);
-  return PadLeftAscii_(out, kWidth);
+  return AMStr::PadLeftAscii(out, kWidth);
 }
 
 /**
@@ -146,7 +122,7 @@ std::string FormatTableSize_(size_t bytes) {
 std::string FormatSpeedBps_(double bps) {
   constexpr size_t kWidth = 7;
   if (bps <= 0.0) {
-    return PadLeftAscii_("-", kWidth);
+    return AMStr::PadLeftAscii("-", kWidth);
   }
   static const std::vector<std::string> units = {"B", "KB", "MB", "GB", "TB"};
   constexpr double kUnitSwitch = 1000.0;
@@ -168,19 +144,7 @@ std::string FormatSpeedBps_(double bps) {
   }
   const std::string out =
       AMStr::amfmt("{}{}/s", static_cast<int64_t>(value), units[idx]);
-  return PadLeftAscii_(out, kWidth);
-}
-
-/**
- * @brief Resolve speed calculation window size from settings.
- */
-size_t ResolveSpeedWindowSize_(const AMConfigManager &config) {
-  const int value =
-      config.GetSettingInt({"InternalVars", "SpeedCalWindowSize"}, 5);
-  if (value < 2) {
-    return 2;
-  }
-  return static_cast<size_t>(value);
+  return AMStr::PadLeftAscii(out, kWidth);
 }
 
 /**
@@ -408,31 +372,12 @@ std::string BuildTaskTable_(
 }
 
 /**
- * @brief Count rendered lines in a multi-line string (no trailing newline).
- */
-size_t CountLines_(const std::string &text) {
-  if (text.empty()) {
-    return 0;
-  }
-  size_t lines = 0;
-  for (char ch : text) {
-    if (ch == '\n') {
-      ++lines;
-    }
-  }
-  if (text.back() != '\n') {
-    ++lines;
-  }
-  return lines;
-}
-
-/**
  * @brief Build ANSI output to redraw a multi-line table in-place.
  */
 std::string BuildTableRefreshOutput_(const std::string &table,
                                      size_t last_lines, size_t *out_lines) {
   std::vector<std::string> lines;
-  lines.reserve(std::max<size_t>(1, CountLines_(table)));
+  lines.reserve(std::max<size_t>(1, AMStr::CountLines(table)));
   std::string current;
   for (char ch : table) {
     if (ch == '\n') {
@@ -484,7 +429,7 @@ std::string BuildTableRefreshOutput_(const std::string &table,
 }
 
 /**
- * @brief Progress bar wrapper for task status display in TaskInfoPrint::Show.
+ * @brief Progress bar wrapper for task status display in AMTransferManager::Show.
  */
 class TaskInfoProgressPrinter {
 public:
@@ -654,397 +599,7 @@ void PrintTaskProgressGroup_(
 } // namespace
 
 /**
- * @brief Construct a task info printer bound to a prompt manager.
- */
-TaskInfoPrint::TaskInfoPrint(AMPromptManager &prompt) : prompt_(prompt) {}
-
-/**
- * @brief Print submit information for transfer_async.
- */
-void TaskInfoPrint::TaskSubmitPrint(
-    const std::shared_ptr<TaskInfo> &task_info) const {
-  if (!task_info) {
-    return;
-  }
-  const size_t file_num = task_info->tasks ? task_info->tasks->size() : 0;
-  const size_t total_size =
-      task_info->total_size.load(std::memory_order_relaxed);
-  std::vector<std::string> nicknames = task_info->nicknames;
-  std::string nickname_str = JoinStrings_(nicknames, " ");
-  if (nickname_str.empty()) {
-    nickname_str = "local";
-  }
-  prompt_.Print(AMStr::amfmt(
-      "SubmitInfo ID: {}; FileNum: {}; TotalSize: {}; Clients: {}",
-      task_info->id, file_num, FormatSize(total_size), nickname_str));
-}
-
-/**
- * @brief Print task result information after completion.
- */
-void TaskInfoPrint::TaskResultPrint(
-    const std::shared_ptr<TaskInfo> &task_info) const {
-  if (!task_info) {
-    return;
-  }
-  size_t transferred = 0;
-  size_t total = 0;
-  int thread_id = 0;
-  ECM result;
-  bool success = false;
-  size_t filenum;
-  size_t success_num;
-  decltype(task_info->id) task_id;
-  {
-    std::lock_guard<std::mutex> lock(task_info->mtx);
-    if (task_info->quiet) {
-      return;
-    }
-    transferred =
-        task_info->total_transferred_size.load(std::memory_order_relaxed);
-    total = task_info->total_size.load(std::memory_order_relaxed);
-    thread_id = task_info->OnWhichThread.load(std::memory_order_relaxed);
-    task_id = task_info->id;
-    filenum = task_info->filenum.load(std::memory_order_relaxed);
-    success_num = task_info->success_filenum.load(std::memory_order_relaxed);
-
-    result = task_info->rcm;
-    success = result.first == EC::Success;
-    if (success && task_info->tasks) {
-      for (const auto &task : *task_info->tasks) {
-        if (task.rcm.first != EC::Success) {
-          result = task.rcm;
-          success = false;
-        }
-      }
-    }
-  }
-
-  const std::string prefix = success ? "✅" : "❌";
-  std::string rcm_text =
-      success
-          ? ""
-          : AMStr::amfmt(" {}: {}", AM_ENUM_NAME(result.first), result.second);
-
-  prompt_.Print(AMStr::amfmt(
-      "TaskResult  {} ID: {}; Files: {}/{}; Size: {}/{}; ThreadID: {};{}",
-      prefix, task_id, success_num, filenum, FormatSize(transferred),
-      FormatSize(total), thread_id, rcm_text));
-  return;
-}
-
-/**
- * @brief Show task status for quick queries.
- */
-void TaskInfoPrint::Show(const std::shared_ptr<TaskInfo> &task_info,
-                         const std::shared_ptr<InterruptFlag> &interrupt_flag) {
-  if (!task_info) {
-    return;
-  }
-
-  const TaskStatus status = task_info->GetStatus();
-  const std::string status_name = AM_ENUM_NAME(status);
-
-  if (status == TaskStatus::Pending) {
-    const size_t total = task_info->total_size.load(std::memory_order_relaxed);
-    const int affinity =
-        task_info->affinity_thread.load(std::memory_order_relaxed);
-    const std::string submit_time =
-        FormatTimeHM_(task_info->submit_time.load(std::memory_order_relaxed));
-    prompt_.Print(AMStr::amfmt(
-        "[{}] Status: {} TotalSize: {} AffinityThread: {} SubmitTime: {}",
-        task_info->id, status_name, FormatSize(total), affinity, submit_time));
-    return;
-  }
-
-  if (status == TaskStatus::Finished) {
-    const size_t transferred =
-        task_info->total_transferred_size.load(std::memory_order_relaxed);
-    const size_t total = task_info->total_size.load(std::memory_order_relaxed);
-    const int thread_id =
-        task_info->OnWhichThread.load(std::memory_order_relaxed);
-    const double start_time =
-        task_info->start_time.load(std::memory_order_relaxed);
-    const double finished_time =
-        task_info->finished_time.load(std::memory_order_relaxed);
-    const std::string elapsed = FormatElapsed_(finished_time - start_time);
-    prompt_.Print(
-        AMStr::amfmt("[{}] Status: {} {}/{} ThreadID: {} ElapsedTime: {}",
-                     task_info->id, status_name, FormatSize(transferred),
-                     FormatSize(total), thread_id, elapsed));
-    return;
-  }
-
-  if (status == TaskStatus::Paused ||
-      (status == TaskStatus::Conducting && task_info->pd &&
-       task_info->pd->is_pause_only())) {
-    const size_t transferred =
-        task_info->total_transferred_size.load(std::memory_order_relaxed);
-    const size_t total = task_info->total_size.load(std::memory_order_relaxed);
-    const int thread_id =
-        task_info->OnWhichThread.load(std::memory_order_relaxed);
-    const double start_time =
-        task_info->start_time.load(std::memory_order_relaxed);
-    const double elapsed_time = timenow() - start_time;
-    const std::string elapsed = FormatElapsed_(elapsed_time);
-    prompt_.Print(AMStr::amfmt(
-        "ID: {}; Status: {}; Files: {}/{}; Sise: {}/{}; "
-        "ThreadID: {}; ElapsedTime: {}",
-        task_info->id, "Paused",
-        task_info->success_filenum.load(std::memory_order_relaxed),
-        task_info->filenum.load(std::memory_order_relaxed),
-        FormatSize(transferred), FormatSize(total), thread_id, elapsed));
-    return;
-  }
-
-  TaskInfoProgressPrinter progress_printer(task_info);
-  progress_printer.Start();
-  const int refresh_ms = 300;
-  bool finished = false;
-  while (true) {
-    if (IsInterrupted_(interrupt_flag)) {
-      break;
-    }
-    const TaskStatus current_status = progress_printer.Update();
-    if (current_status == TaskStatus::Finished) {
-      finished = true;
-      break;
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
-  }
-  progress_printer.Finish(finished);
-}
-
-/**
- * @brief Print multiple tasks in batch.
- */
-void TaskInfoPrint::List(
-    const std::vector<std::shared_ptr<TaskInfo>> &pending,
-    const std::vector<std::shared_ptr<TaskInfo>> &finished,
-    const std::vector<std::shared_ptr<TaskInfo>> &conducting,
-    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
-  for (const auto &task : pending) {
-    Show(task, interrupt_flag);
-  }
-  for (const auto &task : finished) {
-    Show(task, interrupt_flag);
-  }
-
-  if (conducting.empty()) {
-    return;
-  }
-
-  // AMProgressBarGroup group(48);
-  // group.Start();
-  // std::vector<std::shared_ptr<AMProgressBar>> bars;
-  // bars.reserve(conducting.size());
-  // for (const auto &task : conducting) {
-  //   auto bar = std::make_shared<AMProgressBar>(
-  //       static_cast<int64_t>(task ?
-  //       task->total_size.load(std::memory_order_relaxed) : 0),
-  //       BuildTaskPrefix_(task));
-  //   group.AddBar(bar);
-  //   bars.push_back(bar);
-  // }
-
-  // const int refresh_ms = 100;
-  // while (true) {
-  //   if (interrupt_flag && interrupt_flag->check()) {
-  //     break;
-  //   }
-
-  //   bool any_running = false;
-  //   for (size_t i = 0; i < conducting.size(); ++i) {
-  //     const auto &task = conducting[i];
-  //     const auto &bar = bars[i];
-  //     if (!task) {
-  //       continue;
-  //     }
-  //     const size_t total = task->total_size.load(std::memory_order_relaxed);
-  //     const size_t transferred =
-  //     task->total_transferred_size.load(std::memory_order_relaxed);
-  //     bar->SetTotal(static_cast<int64_t>(total));
-  //     bar->SetProgress(static_cast<int64_t>(transferred));
-  //     bar->SetPrefix(BuildTaskPrefix_(task));
-  //     if (task->GetStatus() == TaskStatus::Finished) {
-  //       bar->Finish();
-  //     } else {
-  //       any_running = true;
-  //     }
-  //   }
-
-  //   if (!any_running) {
-  //     break;
-  //   }
-  //   std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
-  // }
-  // group.Stop();
-}
-
-/**
- * @brief Print detailed task information.
- */
-void TaskInfoPrint::Inspect(const std::shared_ptr<TaskInfo> &task_info,
-                            bool show_task_entries,
-                            bool show_transfer_sets) const {
-  if (!task_info) {
-    return;
-  }
-
-  const auto status_name =
-      std::string(magic_enum::enum_name(task_info->GetStatus()));
-  const std::string submit_time =
-      task_info->submit_time.load(std::memory_order_relaxed) > 0.0
-          ? FormatTime(static_cast<size_t>(
-                task_info->submit_time.load(std::memory_order_relaxed)))
-          : "-";
-  const std::string start_time =
-      task_info->start_time.load(std::memory_order_relaxed) > 0.0
-          ? FormatTime(static_cast<size_t>(
-                task_info->start_time.load(std::memory_order_relaxed)))
-          : "-";
-  const std::string finished_time =
-      task_info->finished_time.load(std::memory_order_relaxed) > 0.0
-          ? FormatTime(static_cast<size_t>(
-                task_info->finished_time.load(std::memory_order_relaxed)))
-          : "-";
-
-  ECM rcm = task_info->GetResult();
-  std::string rcm_name = std::string(magic_enum::enum_name(rcm.first));
-  std::string rcm_text = rcm_name;
-  if (!rcm.second.empty()) {
-    rcm_text = AMStr::amfmt("{}: {}", rcm_name, rcm.second);
-  }
-
-  size_t files_num = task_info->tasks ? task_info->tasks->size() : 0;
-
-  std::vector<std::string> client_names = task_info->nicknames;
-  if (client_names.empty()) {
-    client_names.emplace_back("local");
-  }
-
-  std::vector<std::pair<std::string, std::string>> fields = {
-      {"id", task_info->id},
-      {"status", status_name},
-      {"submit_time", submit_time},
-      {"start_time", start_time},
-      {"finished_time", finished_time},
-      {"rcm", rcm_text},
-      {"total_transferred_size",
-       FormatSize(
-           task_info->total_transferred_size.load(std::memory_order_relaxed))},
-      {"total_size",
-       FormatSize(task_info->total_size.load(std::memory_order_relaxed))},
-      {"files_num", std::to_string(files_num)},
-      {"quiet", task_info->quiet ? "true" : "false"},
-      {"affinity_thread", std::to_string(task_info->affinity_thread.load(
-                              std::memory_order_relaxed))},
-      {"on_which_thread", std::to_string(task_info->OnWhichThread.load(
-                              std::memory_order_relaxed))},
-      {"buffer_size",
-       std::to_string(task_info->buffer_size.load(std::memory_order_relaxed))},
-      {"client_names", JoinStrings_(client_names, ", ")}};
-
-  size_t max_len = 0;
-  for (const auto &field : fields) {
-    max_len = std::max<size_t>(max_len, field.first.size());
-  }
-
-  for (const auto &field : fields) {
-    std::string label = field.first;
-    if (label.size() < max_len) {
-      label.append(max_len - label.size(), ' ');
-    }
-    prompt_.Print(AMStr::amfmt("{} : {}", label, field.second));
-  }
-
-  if (show_task_entries) {
-    InspectTaskEntries(task_info);
-  }
-  if (show_transfer_sets) {
-    InspectTransferSets(task_info);
-  }
-}
-
-/**
- * @brief Print individual task entries inside task_info.
- */
-void TaskInfoPrint::InspectTaskEntries(
-    const std::shared_ptr<TaskInfo> &task_info) const {
-  if (!task_info || !task_info->tasks) {
-    return;
-  }
-
-  const auto &tasks = *task_info->tasks;
-  for (size_t i = 0; i < tasks.size(); ++i) {
-    const auto &task = tasks[i];
-    prompt_.Print(AMStr::amfmt("[{}]", i + 1));
-    prompt_.Print("");
-    const std::string src_host =
-        task.src_host.empty() ? "local" : task.src_host;
-    const std::string dst_host =
-        task.dst_host.empty() ? "local" : task.dst_host;
-    prompt_.Print(AMStr::amfmt("src: {}@{}", src_host, task.src));
-    prompt_.Print("");
-    prompt_.Print(AMStr::amfmt("dst: {}@{}", dst_host, task.dst));
-    prompt_.Print("");
-    prompt_.Print(AMStr::amfmt("size: {}", FormatSize(task.size)));
-    prompt_.Print("");
-    prompt_.Print(
-        AMStr::amfmt("transferred: {}", FormatSize(task.transferred)));
-    if (task.IsFinished) {
-      std::string rcm_name = std::string(magic_enum::enum_name(task.rcm.first));
-      std::string rcm_text = rcm_name;
-      if (!task.rcm.second.empty()) {
-        rcm_text = AMStr::amfmt("{}: {}", rcm_name, task.rcm.second);
-      }
-      prompt_.Print("");
-      prompt_.Print(AMStr::amfmt("rcm: {}", rcm_text));
-    }
-    if (i + 1 < tasks.size()) {
-      prompt_.Print("");
-    }
-  }
-}
-
-/**
- * @brief Print original UserTransferSet settings for the task.
- */
-void TaskInfoPrint::InspectTransferSets(
-    const std::shared_ptr<TaskInfo> &task_info) const {
-  if (!task_info || !task_info->transfer_sets) {
-    return;
-  }
-
-  const auto &sets = *task_info->transfer_sets;
-  const bool show_index = sets.size() > 1;
-  for (size_t i = 0; i < sets.size(); ++i) {
-    const auto &set = sets[i];
-    if (show_index) {
-      prompt_.Print(AMStr::amfmt("[{}]", i + 1));
-      prompt_.Print("");
-    }
-    for (const auto &src : set.srcs) {
-      prompt_.Print(src);
-    }
-    prompt_.Print("");
-    prompt_.Print(AMStr::amfmt(" ->  {}", set.dst));
-    prompt_.Print("");
-    prompt_.Print(AMStr::amfmt("clone = {}", set.clone ? "true" : "false"));
-    prompt_.Print(AMStr::amfmt("mkdir = {}", set.mkdir ? "true" : "false"));
-    prompt_.Print(
-        AMStr::amfmt("overwrite = {}", set.overwrite ? "true" : "false"));
-    prompt_.Print(AMStr::amfmt("no special = {}",
-                               set.ignore_special_file ? "true" : "false"));
-    prompt_.Print(AMStr::amfmt("resume = {}", set.resume ? "true" : "false"));
-    if (i + 1 < sets.size()) {
-      prompt_.Print("");
-    }
-  }
-}
-
-/**
- * @brief Show task status by ID using TaskInfoPrint.
+ * @brief Show task status by ID.
  */
 ECM AMTransferManager::Show(
     const ID &task_id, const std::shared_ptr<InterruptFlag> &interrupt_flag) {
@@ -1120,7 +675,7 @@ ECM AMTransferManager::Show(
 }
 
 /**
- * @brief List tasks by status using TaskInfoPrint.
+ * @brief List tasks by status.
  */
 ECM AMTransferManager::List(
     bool pending, bool suspend, bool finished, bool conducting,
@@ -1199,7 +754,8 @@ ECM AMTransferManager::List(
 
   collect_tasks();
 
-  static const size_t speed_window_size = ResolveSpeedWindowSize_(config_);
+  static const size_t speed_window_size = static_cast<size_t>(config_.ResolveArg(
+      AMConfigManager::ResolveArgType::SpeedCalWindowSize, 5));
   std::unordered_map<ID, std::string> speed_map;
   if (conducting) {
     UpdateSpeedCache_(conducting_tasks, speed_window_size, &speed_map,

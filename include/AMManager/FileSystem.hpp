@@ -9,20 +9,11 @@
 #include <utility>
 #include <vector>
 
-class AMFileSystem {
+class AMFileSystem : private NonCopyableNonMovable {
 public:
   using ECM = std::pair<ErrorCode, std::string>;
   /** Global interrupt flag used when no flag is provided. */
   inline static amf global_interrupt_flag = std::make_shared<InterruptFlag>();
-
-  /** Disable copy construction. */
-  AMFileSystem(const AMFileSystem &) = delete;
-  /** Disable copy assignment. */
-  AMFileSystem &operator=(const AMFileSystem &) = delete;
-  /** Disable move construction. */
-  AMFileSystem(AMFileSystem &&) = delete;
-  /** Disable move assignment. */
-  AMFileSystem &operator=(AMFileSystem &&) = delete;
 
   /** Return the singleton instance. */
   static AMFileSystem &Instance(AMClientManager &client_manager,
@@ -97,8 +88,7 @@ public:
          amf interrupt_flag = nullptr, int timeout_ms = -1);
   /** Remove paths using safe or permanent removal with optional force. */
   ECM rm(const std::vector<std::string> &paths, bool permanent, bool force,
-         bool quiet = false, amf interrupt_flag = nullptr,
-         int timeout_ms = -1);
+         bool quiet = false, amf interrupt_flag = nullptr, int timeout_ms = -1);
   /** Move multiple sources into destination without cross-client moves. */
   ECM move(const std::vector<std::string> &srcs, const std::string &dst,
            bool mkdir = false, bool overwrite = false,

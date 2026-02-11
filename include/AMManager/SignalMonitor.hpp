@@ -26,7 +26,7 @@ inline std::shared_ptr<InterruptFlag> amgif = std::make_shared<InterruptFlag>();
 /**
  * @brief Signal monitor that safely transfers signal events to a worker thread.
  */
-class AMCliSignalMonitor {
+class AMCliSignalMonitor : private NonCopyableNonMovable {
 public:
   using SignalCallback = std::function<void(int)>;
   /**

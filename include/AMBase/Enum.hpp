@@ -240,6 +240,12 @@ enum class ClientProtocol {
   LOCAL = 3
 };
 
+inline static std::unordered_map<std::string, ClientProtocol> protocol_map = {
+    {"sftp", ClientProtocol::SFTP},
+    {"ftp", ClientProtocol::FTP},
+    {"local", ClientProtocol::LOCAL},
+};
+
 enum class BufferStatus {
   is_writing = 0,
   is_reading = 1,

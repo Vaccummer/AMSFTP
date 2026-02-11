@@ -1,15 +1,13 @@
-@src\manager\config\manager.cpp
+@src\manager\Prompt.cpp
 
-we're going to remove most AMConfigManager functions, but some functions in it need to be moved and implemented somewhere else
+@include\AMManager\Config.hpp
 
-implement FindKnownHost in AMConfigCoreData
+set AMPromptManager's base class AMHistoryManager
 
-implement PrivateKeys in AMConfigCoreData (remove boolprint_sign, just return keys)
+move history operation from AMPromptManager to its Base Class AMHistoryManager
 
-implement UpsertKnownHost in AMConfigCoreData
+move functions in ConfigManager to AMHistoryManager
 
-remain BuildKnownHostCallback
-
-implement GetClientConfig in AMConfigCoreData
-
-move uservar related functions to AMConfigCoreData
++ ECM LoadHistory();
++ ECM GetHistoryCommands(conststd::string&nickname, std::vector[std::string](std::string) *out);
++ ECMSetHistoryCommands(conststd::string&nickname, conststd::vector[std::string](std::string) &commands, booldump_now = true)

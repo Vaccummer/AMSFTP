@@ -652,7 +652,7 @@ struct AMCompleter::Impl {
   /**
    * @brief Construct the implementation with required managers.
    */
-  Impl(AMConfigManager &config_manager, AMClientManager &client_manager,
+  Impl(AMConfigManager &config_manager, AMClientManage::Manager &client_manager,
        AMFileSystem &filesystem, AMTransferManager &transfer_manager)
       : config_manager_(config_manager), client_manager_(client_manager),
         filesystem_(filesystem), transfer_manager_(transfer_manager) {
@@ -1164,7 +1164,8 @@ private:
     }
 
     const auto current_client =
-        client_manager_.CLIENT ? client_manager_.CLIENT : client_manager_.LOCAL;
+        client_manager_.CurrentClient() ? client_manager_.CurrentClient()
+                                        : client_manager_.LocalClientBase();
     const bool current_remote =
         current_client && current_client->GetProtocol() != ClientProtocol::LOCAL;
 
@@ -1226,7 +1227,7 @@ private:
     if (path.remote) {
       client = client_manager_.Clients().GetHost(path.nickname);
     } else {
-      client = client_manager_.LOCAL;
+      client = client_manager_.LocalClientBase();
     }
     if (!client) {
       return path;
@@ -1637,7 +1638,7 @@ private:
       return;
     }
 
-    auto client = client_manager_.LOCAL;
+    auto client = client_manager_.LocalClientBase();
     if (!client) {
       return;
     }
@@ -1815,7 +1816,7 @@ private:
 
 private:
   AMConfigManager &config_manager_;
-  AMClientManager &client_manager_;
+  AMClientManage::Manager &client_manager_;
   AMFileSystem &filesystem_;
   AMTransferManager &transfer_manager_;
   CommandTree command_tree_;
@@ -1848,7 +1849,7 @@ std::atomic<AMCompleter *> g_active_completer{nullptr};
  * @brief Construct the completer with required managers.
  */
 AMCompleter::AMCompleter(AMConfigManager &config_manager,
-                         AMClientManager &client_manager,
+                         AMClientManage::Manager &client_manager,
                          AMFileSystem &filesystem,
                          AMTransferManager &transfer_manager)
     : impl_(std::make_unique<AMCompleter::Impl>(config_manager, client_manager,

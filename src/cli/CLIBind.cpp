@@ -1,6 +1,7 @@
 
 #include "AMCLI/CLIBind.hpp"
 #include "AMCLI/Completer.hpp"
+#include "AMManager/Host.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Var.hpp"
 #include <unordered_set>
@@ -622,67 +623,67 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
 
   if (cli_commands.config_cmd->parsed()) {
     if (cli_commands.config_ls->parsed()) {
-      result.rcm = args.config_ls.detail ? config_manager.List()
-                                         : config_manager.ListName();
+      result.rcm = args.config_ls.detail ? config_manager.Host().List()
+                                         : config_manager.Host().ListName();
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
     if (cli_commands.config_keys->parsed()) {
-      auto keys_result = config_manager.PrivateKeys(true);
+      auto keys_result = config_manager.Host().PrivateKeys(true);
       result.rcm = keys_result.first;
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
     if (cli_commands.config_data->parsed()) {
-      result.rcm = config_manager.Src();
+      result.rcm = config_manager.Host().Src();
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
     if (cli_commands.config_get->parsed()) {
       std::vector<std::string> targets = args.config_get.nicknames;
       if (targets.empty()) {
-        std::string current = client_manager.CLIENT
-                                  ? client_manager.CLIENT->GetNickname()
+        std::string current = client_manager.CurrentClient()
+                                  ? client_manager.CurrentClient()->GetNickname()
                                   : "local";
         if (current.empty()) {
           current = "local";
         }
         targets.push_back(current);
       }
-      result.rcm = config_manager.Query(targets);
+      result.rcm = config_manager.Host().Query(targets);
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
     if (cli_commands.config_add->parsed()) {
-      result.rcm = config_manager.Add();
+      result.rcm = config_manager.Host().Add();
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
     if (cli_commands.config_edit->parsed()) {
-      result.rcm = config_manager.Modify(args.config_edit.nickname);
+      result.rcm = config_manager.Host().Modify(args.config_edit.nickname);
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
     if (cli_commands.config_rn->parsed()) {
-      result.rcm = config_manager.Rename(args.config_rn.old_name,
-                                         args.config_rn.new_name);
+      result.rcm = config_manager.Host().Rename(args.config_rn.old_name,
+                                                args.config_rn.new_name);
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
     if (cli_commands.config_rm->parsed()) {
-      result.rcm = config_manager.Delete(args.config_rm.names);
+      result.rcm = config_manager.Host().Delete(args.config_rm.names);
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
     if (cli_commands.config_set->parsed()) {
-      result.rcm = config_manager.SetHostValue(args.config_set.nickname,
-                                               args.config_set.attrname,
-                                               args.config_set.value);
+      result.rcm = config_manager.Host().SetHostValue(
+          args.config_set.nickname, args.config_set.attrname,
+          args.config_set.value);
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
     if (cli_commands.config_save->parsed()) {
-      result.rcm = config_manager.Dump();
+      result.rcm = config_manager.DumpAll();
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
@@ -803,8 +804,9 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   if (cli_commands.ls_cmd->parsed()) {
     std::string path = AMStr::TrimWhitespaceCopy(args.ls.path);
     if (path.empty()) {
-      auto client =
-          client_manager.CLIENT ? client_manager.CLIENT : client_manager.LOCAL;
+      auto client = client_manager.CurrentClient()
+                        ? client_manager.CurrentClient()
+                        : client_manager.LocalClientBase();
       if (client) {
         path = client_manager.GetOrInitWorkdir(client);
       }

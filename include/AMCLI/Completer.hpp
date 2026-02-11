@@ -10,7 +10,9 @@
 struct ic_completion_env_s;
 using ic_completion_env_t = ic_completion_env_s;
 
-class AMClientManager;
+namespace AMClientManage {
+class Manager;
+}
 class AMConfigManager;
 class AMFileSystem;
 class AMTransferManager;
@@ -28,7 +30,8 @@ public:
    * @param filesystem Filesystem manager reference.
    * @param transfer_manager Transfer manager reference.
    */
-  AMCompleter(AMConfigManager &config_manager, AMClientManager &client_manager,
+  AMCompleter(AMConfigManager &config_manager,
+              AMClientManage::Manager &client_manager,
               AMFileSystem &filesystem, AMTransferManager &transfer_manager);
 
   /**

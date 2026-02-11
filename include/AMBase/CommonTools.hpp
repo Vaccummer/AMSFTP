@@ -1,4 +1,5 @@
 #pragma once
+
 #include "third_party/indicators/color.hpp"
 #include "third_party/indicators/setting.hpp"
 #include <atomic>
@@ -6,7 +7,6 @@
 #include <cstddef>
 
 #define _WINSOCKAPI_
-
 #include "Isocline/isocline.h"
 #include "third_party/indicators/cursor_control.hpp"
 #include "third_party/indicators/progress_bar.hpp" // win 平台上该库会包含 windows.h
@@ -789,31 +789,6 @@ inline bool IsModeValid(std::string mode_str) {
 inline bool IsModeValid(size_t mode_int) { return mode_int <= 0777; }
 
 /**
- * @brief Return true when a character is treated as whitespace for parsing.
- */
-inline bool IsWhitespace(char c) {
-  return std::isspace(static_cast<unsigned char>(c)) != 0;
-}
-
-/**
- * @brief Trim leading and trailing whitespace only and return a copy.
- */
-inline std::string TrimWhitespaceCopy(const std::string &input) {
-  size_t start = 0;
-  while (start < input.size() && IsWhitespace(input[start])) {
-    ++start;
-  }
-  if (start >= input.size()) {
-    return "";
-  }
-  size_t end = input.size();
-  while (end > start && IsWhitespace(input[end - 1])) {
-    --end;
-  }
-  return input.substr(start, end - start);
-}
-
-/**
  * @brief Escape a string for bbcode output by shielding tag delimiters.
  */
 inline std::string BBCEscape(const std::string &text) {
@@ -828,29 +803,27 @@ inline std::string BBCEscape(const std::string &text) {
   return escaped;
 }
 
-inline std::string Strip(std::string path) {
-  const std::string trim_chars = " \t\n\r\"'";
-
-  size_t start = path.find_first_not_of(trim_chars);
-
-  if (start == std::string::npos || start > path.size() - 2) {
-    return "";
-  }
-
-  size_t end = path.find_last_not_of(trim_chars);
-  return path.substr(start, end - start + 1);
-}
-
 inline void VStrip(std::string &path) {
-  const std::string trim_chars = " \t\n\r\"'";
-
-  size_t start = path.find_first_not_of(trim_chars);
-  if (start == std::string::npos) {
-    path = "";
+  size_t start = 0;
+  while (start < path.size() &&
+         std::isspace(static_cast<unsigned char>(path[start])) != 0) {
+    ++start;
+  }
+  if (start >= path.size()) {
     return;
   }
-  size_t end = path.find_last_not_of(trim_chars);
-  path = path.substr(start, end - start + 1);
+  size_t end = path.size();
+  while (end > start &&
+         std::isspace(static_cast<unsigned char>(path[end - 1])) != 0) {
+    --end;
+  }
+  path = path.substr(start, end - start);
+}
+
+inline std::string Strip(const std::string &path) {
+  std::string result = path;
+  VStrip(result);
+  return result;
 }
 
 inline void vreplace(std::string &str, const std::string &from,
@@ -894,9 +867,56 @@ inline std::string replace_all(std::string str, const std::string &old_sub,
   return str;
 }
 
-} // namespace AMStr
-// 导出amfmt函数
+inline std::string join(const std::vector<std::string> &parts,
+                        const std::string &sep) {
+  if (parts.empty()) {
+    return "";
+  }
+  std::string out = parts[0];
+  for (size_t i = 1; i < parts.size(); ++i) {
+    out += sep;
+    out += parts[i];
+  }
+  return out;
+}
 
+/**
+ * @brief Left pad an ASCII string to a fixed width.
+ */
+inline std::string PadLeftAscii(std::string_view value, size_t width) {
+  if (width == 0) {
+    return {};
+  }
+  if (value.size() >= width) {
+    return std::string(value);
+  }
+  std::string out;
+  out.append(width - value.size(), ' ');
+  out.append(value);
+  return out;
+}
+
+/**
+ * @brief Count rendered lines in a multi-line string.
+ */
+inline size_t CountLines(const std::string &text) {
+  if (text.empty()) {
+    return 0;
+  }
+  size_t lines = 0;
+  for (char ch : text) {
+    if (ch == '\n') {
+      ++lines;
+    }
+  }
+  if (text.back() != '\n') {
+    ++lines;
+  }
+  return lines;
+}
+
+// 导出amfmt函数
+} // namespace AMStr
 #define AM_ENUM_NAME(x) std::string(magic_enum::enum_name(x))
 
 /**
@@ -1430,6 +1450,36 @@ inline std::string FormatSize(size_t size) {
   return oss.str();
 }
 
+inline std::string FormatSize(int64_t size) {
+  if (size < 0) {
+    return "0B";
+  }
+  return FormatSize(static_cast<size_t>(size));
+}
+
+inline bool GetEnv(std::string_view key, std::string *target) {
+  if (!key.data() || !target) {
+    return false;
+  }
+#ifdef _WIN32
+  char *buffer = nullptr;
+  size_t length = 0;
+  if (_dupenv_s(&buffer, &length, key.data()) != 0 || !buffer) {
+    return false;
+  }
+  *target = std::string(buffer);
+  std::free(buffer);
+  return true;
+#else
+  const char *value = std::getenv(key.data());
+  if (!value) {
+    return false;
+  }
+  *target = std::string(value);
+  return true;
+#endif
+}
+
 /**
  * @brief Remove duplicate entries while preserving original order.
  */
@@ -1444,4 +1494,252 @@ std::vector<T> UniqueTargetsKeepOrder(const std::vector<T> &targets) {
     unique.push_back(target);
   }
   return unique;
+}
+
+template <class T>
+static inline constexpr bool kValueTypeSupported =
+    std::is_arithmetic_v<std::decay_t<T>> ||
+    std::is_same_v<std::decay_t<T>, std::string> ||
+    std::is_same_v<std::decay_t<T>, std::vector<std::string>> ||
+    std::is_same_v<std::decay_t<T>, Json>;
+
+template <typename T>
+inline static bool QueryKey(const Json &root,
+                            const std::vector<std::string> &path, T *value) {
+  static_assert(kValueTypeSupported<T>, "T is not supported");
+  if (!value) {
+    return false;
+  }
+  const Json *node = &root;
+  for (const auto &seg : path) {
+    if (!node->is_object()) {
+      return false;
+    }
+    auto it = node->find(seg);
+    if (it == node->end()) {
+      return false;
+    }
+    node = &(*it);
+  }
+  if constexpr (std::is_same_v<T, bool>) {
+    if (!node->is_boolean()) {
+      if (node->is_number_integer()) {
+        *value = node->get<int64_t>() != 0;
+        return true;
+      }
+      if (node->is_number_unsigned()) {
+        *value = node->get<size_t>() != 0;
+        return true;
+      }
+      if (node->is_string()) {
+        const std::string token = AMStr::lowercase(node->get<std::string>());
+        if (token == "true" || token == "1" || token == "yes" ||
+            token == "on") {
+          *value = true;
+          return true;
+        }
+        if (token == "false" || token == "0" || token == "no" ||
+            token == "off") {
+          *value = false;
+          return true;
+        }
+      }
+      return false;
+    }
+    *value = node->get<bool>();
+    return true;
+  } else if constexpr (std::is_same_v<T, std::string>) {
+    if (node->is_string()) {
+      *value = node->get<std::string>();
+      return true;
+    }
+    if (node->is_boolean()) {
+      *value = node->get<bool>() ? "true" : "false";
+      return true;
+    }
+    if (node->is_number_integer()) {
+      *value = std::to_string(node->get<int64_t>());
+      return true;
+    }
+    if (node->is_number_unsigned()) {
+      *value = std::to_string(node->get<size_t>());
+      return true;
+    }
+    if (node->is_number_float()) {
+      *value = std::to_string(node->get<double>());
+      return true;
+    }
+    return false;
+  } else if constexpr (std::is_same_v<T, std::vector<std::string>>) {
+    if (!node->is_array()) {
+      return false;
+    }
+    std::vector<std::string> out;
+    out.reserve(node->size());
+    for (const auto &item : *node) {
+      if (item.is_string()) {
+        out.push_back(item.get<std::string>());
+        continue;
+      }
+      if (item.is_boolean()) {
+        out.push_back(item.get<bool>() ? "true" : "false");
+        continue;
+      }
+      if (item.is_number_integer()) {
+        out.push_back(std::to_string(item.get<int64_t>()));
+        continue;
+      }
+      if (item.is_number_unsigned()) {
+        out.push_back(std::to_string(item.get<size_t>()));
+        continue;
+      }
+      if (item.is_number_float()) {
+        out.push_back(std::to_string(item.get<double>()));
+        continue;
+      }
+      return false;
+    }
+    *value = std::move(out);
+    return true;
+  } else if constexpr (std::is_same_v<T, nlohmann::ordered_json>) {
+    *value = *node;
+    return true;
+  } else if constexpr (std::is_floating_point_v<T>) {
+    if (node->is_number()) {
+      *value = static_cast<T>(node->get<double>());
+      return true;
+    }
+    if (node->is_string()) {
+      try {
+        *value = static_cast<T>(std::stod(node->get<std::string>()));
+        return true;
+      } catch (...) {
+        return false;
+      }
+    }
+    return false;
+  } else if constexpr (std::is_integral_v<T>) {
+    if (node->is_number_integer()) {
+      const int64_t raw = node->get<int64_t>();
+      if (raw < static_cast<int64_t>(std::numeric_limits<T>::min()) ||
+          raw > static_cast<int64_t>(std::numeric_limits<T>::max())) {
+        return false;
+      }
+      *value = static_cast<T>(raw);
+      return true;
+    }
+    if (node->is_number_unsigned()) {
+      const uint64_t raw = node->get<uint64_t>();
+      if (raw > static_cast<uint64_t>(std::numeric_limits<T>::max())) {
+        return false;
+      }
+      *value = static_cast<T>(raw);
+      return true;
+    }
+    if (node->is_string()) {
+      try {
+        const int64_t raw = std::stoll(node->get<std::string>());
+        if (raw < static_cast<int64_t>(std::numeric_limits<T>::min()) ||
+            raw > static_cast<int64_t>(std::numeric_limits<T>::max())) {
+          return false;
+        }
+        *value = static_cast<T>(raw);
+        return true;
+      } catch (...) {
+        return false;
+      }
+    }
+    return false;
+  } else {
+    return false;
+  }
+}
+
+template <typename T>
+inline static bool SetKey(nlohmann::ordered_json &root,
+                          const std::vector<std::string> &path, T value) {
+  static_assert(kValueTypeSupported<T>, "T is not supported");
+  if (path.empty()) {
+    root = value;
+    return true;
+  }
+  nlohmann::ordered_json *node = &root;
+  for (size_t i = 0; i < path.size(); ++i) {
+    const std::string &seg = path[i];
+    if (i + 1 == path.size()) {
+      (*node)[seg] = value;
+      return true;
+    }
+    if (!node->is_object()) {
+      *node = nlohmann::ordered_json::object();
+    }
+    if (!node->contains(seg) || !(*node)[seg].is_object()) {
+      (*node)[seg] = nlohmann::ordered_json::object();
+    }
+    node = &(*node)[seg];
+  }
+  return false;
+}
+
+bool DelKey(Json &root, const std::vector<std::string> &path) {
+  if (path.empty()) {
+    return false;
+  }
+  Json *node = &root;
+  for (size_t i = 0; i < path.size(); ++i) {
+    const std::string &seg = path[i];
+    if (!node->is_object()) {
+      return false;
+    }
+    auto it = node->find(seg);
+    if (it == node->end()) {
+      return false;
+    }
+    if (i + 1 == path.size()) {
+      node->erase(it);
+      return true;
+    }
+    node = &(*it);
+  }
+  return false;
+}
+
+template <typename T> bool StrValueParse(const std::string &input, T *out) {
+  static_assert(std::is_arithmetic_v<std::decay_t<T>> ||
+                    std::is_same_v<std::decay_t<T>, std::string> ||
+                    std::is_same_v<T, bool>,
+                "T is not supported");
+  if constexpr (std::is_same_v<T, bool>) {
+    const std::string token = AMStr::lowercase(input);
+    if (token == "true") {
+      *out = true;
+      return true;
+    }
+    if (token == "false") {
+      *out = false;
+      return true;
+    }
+  }
+  if constexpr (std::is_same_v<T, std::string>) {
+    *out = input;
+    return true;
+  }
+  if constexpr (std::is_arithmetic_v<std::decay_t<T>>) {
+    try {
+      auto tmp_d = std::stod(input);
+      if (tmp_d < 0 && std::is_unsigned_v<std::decay_t<T>>) {
+        return false;
+      }
+      if (tmp_d > static_cast<double>(std::numeric_limits<T>::max()) ||
+          tmp_d < static_cast<double>(std::numeric_limits<T>::min())) {
+        return false;
+      }
+      *out = static_cast<T>(tmp_d);
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  return false;
 }

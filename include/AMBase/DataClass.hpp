@@ -131,6 +131,22 @@ inline std::string FormatTime(const size_t &time,
   };
 }
 
+/**
+ * @brief Format a unix timestamp as "HH:MM".
+ */
+inline std::string FormatTimeHM(double timestamp) {
+  if (timestamp <= 0.0) {
+    return "-";
+  }
+  return FormatTime(static_cast<size_t>(timestamp), "%H:%M");
+}
+
+/** @brief Return a success ECM. */
+inline ECM Ok() { return {EC::Success, ""}; }
+
+/** @brief Build an error ECM with message. */
+inline ECM Err(EC code, const std::string &msg) { return {code, msg}; }
+
 class InterruptFlag {
 private:
   std::atomic<bool> is_interrupted = false;
@@ -944,4 +960,15 @@ struct TaskInfo {
     std::lock_guard<std::mutex> lock(mtx);
     this->pd = nullptr;
   }
+};
+
+struct NonCopyableNonMovable {
+  NonCopyableNonMovable() = default;
+  ~NonCopyableNonMovable() = default;
+
+  NonCopyableNonMovable(const NonCopyableNonMovable &) = delete;
+  NonCopyableNonMovable &operator=(const NonCopyableNonMovable &) = delete;
+
+  NonCopyableNonMovable(NonCopyableNonMovable &&) = delete;
+  NonCopyableNonMovable &operator=(NonCopyableNonMovable &&) = delete;
 };

@@ -1,7 +1,494 @@
 #include "AMBase/CommonTools.hpp"
-#include "internal_func.hpp"
+#include "AMBase/Path.hpp"
+#include "AMManager/Config.hpp"
+#include <array>
+#include <fstream>
+#include <limits>
+#include <optional>
+#include <sstream>
 
-using namespace AMConfigInternal;
+namespace {
+using Path = AMConfigManager::Path;
+using Value = AMConfigManager::Value;
+using Json = nlohmann::ordered_json;
+
+/**
+ * @brief Check whether every element in a JSON array is a scalar type.
+ */
+bool JsonArrayAllScalar(const Json &arr) {
+  for (const auto &child : arr) {
+    if (!(child.is_null() || child.is_boolean() || child.is_number() ||
+          child.is_string())) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * @brief Convert a JSON scalar value into a string representation.
+ */
+std::string JsonScalarToString(const Json &value) {
+  if (value.is_string())
+    return value.get<std::string>();
+  if (value.is_boolean())
+    return value.get<bool>() ? "true" : "false";
+  if (value.is_number_integer())
+    return std::to_string(value.get<int64_t>());
+  if (value.is_number_unsigned())
+    return std::to_string(value.get<size_t>());
+  if (value.is_number_float()) {
+    std::ostringstream oss;
+    oss << value.get<double>();
+    return oss.str();
+  }
+  if (value.is_null())
+    return "null";
+  return value.dump();
+}
+
+/**
+ * @brief Convert a settings node into a typed value with a fallback default.
+ */
+template <typename T>
+T GetSettingValueImpl(const Json *node, const T &default_value) {
+  (void)node;
+  return default_value;
+}
+
+/**
+ * @brief Convert a settings node into an integer value with parsing fallback.
+ */
+template <>
+int GetSettingValueImpl<int>(const Json *node, const int &default_value) {
+  if (!node) {
+    return default_value;
+  }
+  if (node->is_number_integer())
+    return static_cast<int>(node->get<int64_t>());
+  if (node->is_number_unsigned()) {
+    auto value = node->get<size_t>();
+    if (value <= static_cast<size_t>(std::numeric_limits<int>::max()))
+      return static_cast<int>(value);
+  }
+  if (node->is_string()) {
+    try {
+      return std::stoi(node->get<std::string>());
+    } catch (...) {
+      return default_value;
+    }
+  }
+  return default_value;
+}
+
+/**
+ * @brief Convert a settings node into a string value with formatting fallback.
+ */
+template <>
+std::string GetSettingValueImpl<std::string>(const Json *node,
+                                             const std::string &default_value) {
+  if (!node) {
+    return default_value;
+  }
+  if (node->is_string())
+    return node->get<std::string>();
+  if (node->is_number_integer())
+    return std::to_string(node->get<int64_t>());
+  if (node->is_number_unsigned())
+    return std::to_string(node->get<size_t>());
+  if (node->is_boolean())
+    return node->get<bool>() ? "true" : "false";
+  if (node->is_number_float()) {
+    std::ostringstream oss;
+    oss << node->get<double>();
+    return oss.str();
+  }
+  return default_value;
+}
+
+/**
+ * @brief Parse a positive integer index from a string.
+ */
+bool ParseIndex(const std::string &value, std::size_t *out) {
+  if (value.empty())
+    return false;
+  std::size_t idx = 0;
+  for (char c : value) {
+    if (!std::isdigit(static_cast<unsigned char>(c)))
+      return false;
+    idx = idx * 10 + static_cast<std::size_t>(c - '0');
+  }
+  if (out)
+    *out = idx;
+  return true;
+}
+
+/**
+ * @brief Read a text file into a string buffer.
+ */
+bool ReadTextFile(const std::filesystem::path &path, std::string *out,
+                  std::string *error) {
+  if (!out) {
+    if (error)
+      *error = "null output buffer";
+    return false;
+  }
+  std::ifstream in(path, std::ios::in | std::ios::binary);
+  if (!in.is_open()) {
+    if (error)
+      *error = "failed to open file";
+    return false;
+  }
+  std::ostringstream oss;
+  oss << in.rdbuf();
+  if (!in.good() && !in.eof()) {
+    if (error)
+      *error = "failed to read file";
+    return false;
+  }
+  *out = oss.str();
+  return true;
+}
+
+/**
+ * @brief Load a JSON schema file or return an empty schema string.
+ */
+std::string LoadSchemaJson(const std::filesystem::path &schema_path,
+                           std::string *error) {
+  if (schema_path.empty())
+    return "{}";
+  std::string json;
+  std::string read_error;
+  if (!ReadTextFile(schema_path, &json, &read_error)) {
+    if (error)
+      *error = "failed to read schema: " + read_error;
+    return "{}";
+  }
+  if (json.empty())
+    return "{}";
+  return json;
+}
+
+/**
+ * @brief Ensure a file exists by creating its parent directory and file.
+ */
+bool EnsureFileExists(const std::filesystem::path &path, std::string *error) {
+  std::error_code ec;
+  std::filesystem::create_directories(path.parent_path(), ec);
+  if (ec) {
+    if (error)
+      *error = ec.message();
+    return false;
+  }
+  if (!std::filesystem::exists(path, ec)) {
+    std::ofstream out(path);
+    if (!out.is_open()) {
+      if (error)
+        *error = "failed to create file";
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * @brief Parse a JSON string into an ordered_json structure.
+ */
+bool ParseJsonString(const std::string &text, Json *out, std::string *error) {
+  if (!out) {
+    if (error)
+      *error = "null json output";
+    return false;
+  }
+  try {
+    *out = Json::parse(text);
+    return true;
+  } catch (const std::exception &e) {
+    if (error)
+      *error = e.what();
+    return false;
+  }
+}
+
+/**
+ * @brief Find a JSON node by walking the provided path.
+ */
+const Json *FindJsonNode(const Json &root, const Path &path) {
+  const Json *node = &root;
+  for (const auto &seg : path) {
+    if (node->is_object()) {
+      auto it = node->find(seg);
+      if (it == node->end())
+        return nullptr;
+      node = &(*it);
+      continue;
+    }
+    if (node->is_array()) {
+      std::size_t idx = 0;
+      if (!ParseIndex(seg, &idx) || idx >= node->size())
+        return nullptr;
+      node = &(*node)[idx];
+      continue;
+    }
+    return nullptr;
+  }
+  return node;
+}
+
+/**
+ * @brief Convert a JSON node into a typed Value.
+ */
+bool NodeToValue(const Json &node, Value *out) {
+  if (!out)
+    return false;
+  if (node.is_number_integer()) {
+    *out = node.get<int64_t>();
+    return true;
+  }
+  if (node.is_boolean()) {
+    *out = node.get<bool>();
+    return true;
+  }
+  if (node.is_string()) {
+    *out = node.get<std::string>();
+    return true;
+  }
+  if (node.is_number_float()) {
+    std::ostringstream oss;
+    oss << node.get<double>();
+    *out = oss.str();
+    return true;
+  }
+  if (node.is_array()) {
+    const Json &arr = node;
+    if (!JsonArrayAllScalar(arr))
+      return false;
+    std::vector<std::string> items;
+    items.reserve(arr.size());
+    for (const auto &child : arr) {
+      items.push_back(JsonScalarToString(child));
+    }
+    *out = std::move(items);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Read a field as a string when available.
+ */
+std::optional<std::string> GetStringField(const Json &obj,
+                                          const std::string &key) {
+  if (!obj.is_object())
+    return std::nullopt;
+  auto it = obj.find(key);
+  if (it == obj.end())
+    return std::nullopt;
+  if (it->is_string())
+    return it->get<std::string>();
+  if (it->is_number_integer())
+    return std::to_string(it->get<int64_t>());
+  if (it->is_number_unsigned())
+    return std::to_string(it->get<size_t>());
+  if (it->is_boolean())
+    return it->get<bool>() ? "true" : "false";
+  return std::nullopt;
+}
+
+/**
+ * @brief Read a field as int64 when available.
+ */
+std::optional<int64_t> GetIntField(const Json &obj, const std::string &key) {
+  if (!obj.is_object())
+    return std::nullopt;
+  auto it = obj.find(key);
+  if (it == obj.end())
+    return std::nullopt;
+  if (it->is_number_integer())
+    return it->get<int64_t>();
+  if (it->is_number_unsigned()) {
+    auto value = it->get<size_t>();
+    if (value <= static_cast<size_t>(std::numeric_limits<int64_t>::max()))
+      return static_cast<int64_t>(value);
+    return std::nullopt;
+  }
+  if (it->is_string()) {
+    try {
+      return std::stoll(it->get<std::string>());
+    } catch (...) {
+      return std::nullopt;
+    }
+  }
+  return std::nullopt;
+}
+
+/**
+ * @brief Read a boolean field from a JSON object when available.
+ */
+std::optional<bool> GetBoolField(const Json &obj, const std::string &key) {
+  if (!obj.is_object())
+    return std::nullopt;
+  auto it = obj.find(key);
+  if (it == obj.end())
+    return std::nullopt;
+  if (it->is_boolean())
+    return it->get<bool>();
+  if (it->is_number_integer())
+    return it->get<int64_t>() != 0;
+  if (it->is_number_unsigned())
+    return it->get<size_t>() != 0;
+  if (it->is_string()) {
+    std::string value = AMStr::lowercase(it->get<std::string>());
+    if (value == "true")
+      return true;
+    if (value == "false")
+      return false;
+  }
+  return std::nullopt;
+}
+
+/**
+ * @brief Return the HOSTS array if present and valid.
+ */
+const Json *GetHostsArray(const Json &root) {
+  if (!root.is_object())
+    return nullptr;
+  auto it = root.find("HOSTS");
+  if (it == root.end() || !it->is_array())
+    return nullptr;
+  return &(*it);
+}
+
+/**
+ * @brief Check whether a host table contains required fields.
+ */
+bool IsHostValid(const Json &tbl) {
+  auto nickname = GetStringField(tbl, "nickname");
+  if (!nickname || nickname->empty())
+    return false;
+  auto hostname = GetStringField(tbl, "hostname");
+  if (!hostname || hostname->empty())
+    return false;
+  return true;
+}
+
+/**
+ * @brief Ensure the HOSTS array exists and return it for mutation.
+ */
+Json *EnsureHostsArray(Json &root) {
+  if (!root.is_object())
+    root = Json::object();
+  auto it = root.find("HOSTS");
+  if (it == root.end() || !it->is_array()) {
+    root["HOSTS"] = Json::array();
+  }
+  return &root["HOSTS"];
+}
+
+/**
+ * @brief Locate a host entry by nickname.
+ */
+const Json *FindHostJson(const Json &root, const std::string &nickname,
+                         std::size_t *out_index = nullptr) {
+  const Json *arr = GetHostsArray(root);
+  if (!arr)
+    return nullptr;
+  for (std::size_t i = 0; i < arr->size(); ++i) {
+    const Json &item = (*arr)[i];
+    if (!item.is_object())
+      continue;
+    if (!IsHostValid(item))
+      continue;
+    auto name = GetStringField(item, "nickname");
+    if (name && *name == nickname) {
+      if (out_index)
+        *out_index = i;
+      return &item;
+    }
+  }
+  return nullptr;
+}
+
+/**
+ * @brief Locate a mutable host entry by nickname.
+ */
+Json *FindHostJsonMutable(Json &root, const std::string &nickname,
+                          std::size_t *out_index = nullptr) {
+  Json *arr = EnsureHostsArray(root);
+  if (!arr)
+    return nullptr;
+  for (std::size_t i = 0; i < arr->size(); ++i) {
+    Json &item = (*arr)[i];
+    if (!item.is_object())
+      continue;
+    auto name = GetStringField(item, "nickname");
+    if (name && *name == nickname) {
+      if (out_index)
+        *out_index = i;
+      return &item;
+    }
+  }
+  return nullptr;
+}
+
+/**
+ * @brief Return true if the name starts with prefix and ends with suffix.
+ */
+bool MatchBackupName_(const std::string &name, const std::string &prefix,
+                      const std::string &suffix) {
+  if (name.size() < prefix.size() + suffix.size()) {
+    return false;
+  }
+  if (name.compare(0, prefix.size(), prefix) != 0) {
+    return false;
+  }
+  return name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
+/**
+ * @brief Remove oldest backups matching prefix/suffix to keep max_count files.
+ */
+void PruneBackupFiles_(const std::filesystem::path &dir,
+                       const std::string &prefix, const std::string &suffix,
+                       int64_t max_count) {
+  if (max_count <= 0) {
+    return;
+  }
+  std::error_code ec;
+  if (!std::filesystem::exists(dir, ec) || ec) {
+    return;
+  }
+
+  std::vector<std::filesystem::path> items;
+  for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+    if (ec) {
+      break;
+    }
+    if (!entry.is_regular_file(ec) || ec) {
+      continue;
+    }
+    std::string name = entry.path().filename().string();
+    if (MatchBackupName_(name, prefix, suffix)) {
+      items.push_back(entry.path());
+    }
+  }
+
+  if (items.size() <= static_cast<size_t>(max_count)) {
+    return;
+  }
+
+  std::sort(items.begin(), items.end(),
+            [](const std::filesystem::path &a, const std::filesystem::path &b) {
+              return a.filename().string() < b.filename().string();
+            });
+
+  size_t remove_count = items.size() - static_cast<size_t>(max_count);
+  for (size_t i = 0; i < remove_count; ++i) {
+    std::filesystem::remove(items[i], ec);
+  }
+}
+} // namespace
+
 /** @brief JSON schema used to validate .AMSFTP_History.toml. */
 inline constexpr const char kHistorySchemaJson[] = R"json(
 {
@@ -20,16 +507,6 @@ inline constexpr const char kHistorySchemaJson[] = R"json(
   }
 }
 )json";
-
-/**
- * @brief Construct a storage layer with empty state.
- */
-AMConfigStorage::AMConfigStorage() = default;
-
-/**
- * @brief Stop the background writer thread on destruction.
- */
-AMConfigStorage::~AMConfigStorage() { CloseHandles(); }
 
 /**
  * @brief Initialize storage paths from a project root directory.
@@ -88,70 +565,98 @@ ECM AMConfigStorage::Init(
   backup_prune_checked_ = false;
   shutdown_requested_.store(false, std::memory_order_relaxed);
   StartWriteThread();
+  initialized_ = true;
   return Ok();
 }
 
 /**
- * @brief Bind cfgffi handles used for persisting config documents.
+ * @brief Load a document from disk, or all documents when kind is nullopt.
  */
-ECM AMConfigStorage::BindHandles(ConfigHandle *config_handle,
-                                 ConfigHandle *settings_handle,
-                                 ConfigHandle *known_hosts_handle,
-                                 ConfigHandle *history_handle) {
-  DocumentState *config_doc = GetDoc_(DocumentKind::Config);
-  DocumentState *settings_doc = GetDoc_(DocumentKind::Settings);
-  DocumentState *known_doc = GetDoc_(DocumentKind::KnownHosts);
-  DocumentState *history_doc = GetDoc_(DocumentKind::History);
-  if (!config_doc || !settings_doc || !known_doc || !history_doc) {
-    return Err(EC::ConfigNotInitialized, "config documents not initialized");
-  }
-  config_doc->handle = config_handle;
-  settings_doc->handle = settings_handle;
-  known_doc->handle = known_hosts_handle;
-  history_doc->handle = history_handle;
-  return Ok();
-}
+ECM AMConfigStorage::Load(std::optional<DocumentKind> kind, bool force) {
+  auto load_single = [&](DocumentKind target_kind) -> ECM {
+    DocumentState *doc = GetDoc_(target_kind);
+    if (!doc) {
+      return Err(EC::ConfigNotInitialized, "document not initialized");
+    }
+    if (!force && doc->handle) {
+      return Ok();
+    }
+    return LoadDocument_(target_kind, doc);
+  };
 
-/**
- * @brief Load config, settings, and known_hosts documents from disk.
- */
-ECM AMConfigStorage::LoadAll() {
-  ECM rcm = Load(DocumentKind::Config);
-  if (rcm.first != EC::Success) {
-    return rcm;
+  if (kind.has_value()) {
+    return load_single(kind.value());
   }
-  rcm = Load(DocumentKind::Settings);
-  if (rcm.first != EC::Success) {
-    return rcm;
-  }
-  rcm = Load(DocumentKind::KnownHosts);
-  if (rcm.first != EC::Success) {
-    return rcm;
+
+  static const std::array<DocumentKind, 4> kAllKinds = {
+      DocumentKind::Config, DocumentKind::Settings, DocumentKind::KnownHosts,
+      DocumentKind::History};
+  for (DocumentKind current : kAllKinds) {
+    ECM rcm = load_single(current);
+    if (rcm.first != EC::Success) {
+      return rcm;
+    }
   }
   return Ok();
 }
-
 /**
- * @brief Load a document from disk by kind.
+ * @brief Load a document into memory using cfgffi.
  */
-ECM AMConfigStorage::Load(DocumentKind kind, bool force) {
-  DocumentState *doc = GetDoc_(kind);
+ECM AMConfigStorage::LoadDocument_(DocumentKind kind, DocumentState *doc) {
   if (!doc) {
     return Err(EC::ConfigNotInitialized, "document not initialized");
   }
-  if (!force && doc->handle) {
-    return Ok();
+  std::string error;
+  if (!EnsureFileExists(doc->path, &error)) {
+    return Err(EC::ConfigLoadFailed,
+               "failed to create " + AM_ENUM_NAME(kind) + " file: " + error);
   }
-  return LoadDocument_(kind, doc);
-}
-
-/**
- * @brief Close storage with a final dump and shutdown.
- */
-ECM AMConfigStorage::Close() {
-  ECM rcm = DumpAll();
-  CloseHandles();
-  return rcm;
+  std::string schema_json;
+  if (kind == DocumentKind::History) {
+    schema_json = kHistorySchemaJson;
+  } else {
+    schema_json = LoadSchemaJson(doc->schema_path, &error);
+  }
+  char *err = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(handle_mtx_);
+    if (doc->handle) {
+      cfgffi_free_handle(doc->handle);
+      doc->handle = nullptr;
+    }
+    doc->handle =
+        cfgffi_read(doc->path.string().c_str(), schema_json.c_str(), &err);
+  }
+  if (!doc->handle) {
+    std::string msg = err ? err : "cfgffi_read failed";
+    if (err) {
+      cfgffi_free_string(err);
+    }
+    return Err(EC::ConfigLoadFailed,
+               "failed to parse " + AM_ENUM_NAME(kind) + ": " + msg);
+  }
+  if (err) {
+    cfgffi_free_string(err);
+  }
+  char *json_c = cfgffi_get_json(doc->handle);
+  if (!json_c) {
+    return Err(EC::ConfigLoadFailed,
+               "failed to read " + AM_ENUM_NAME(kind) + " json");
+  }
+  std::string json_str(json_c);
+  cfgffi_free_string(json_c);
+  Json parsed;
+  if (!ParseJsonString(json_str, &parsed, &error)) {
+    return Err(EC::ConfigLoadFailed,
+               "failed to parse " + AM_ENUM_NAME(kind) + " json: " + error);
+  }
+  {
+    std::lock_guard<std::mutex> lock(doc->mtx);
+    doc->json = std::move(parsed);
+    doc->dirty = false;
+    doc->last_modified = std::chrono::system_clock::now();
+  }
+  return Ok();
 }
 
 /**
@@ -167,6 +672,7 @@ void AMConfigStorage::CloseHandles() {
       doc.handle = nullptr;
     }
   }
+  initialized_ = false;
 }
 
 /**
@@ -194,33 +700,14 @@ bool AMConfigStorage::IsDirty(DocumentKind kind) const {
 }
 
 /**
- * @brief Mutate a document and optionally persist immediately.
- */
-ECM AMConfigStorage::Mutate(
-    DocumentKind kind, std::function<void(nlohmann::ordered_json &)> mutator,
-    bool dump_now) {
-  DocumentState *doc = GetDoc_(kind);
-  if (!doc) {
-    return Err(EC::ConfigNotInitialized, "document not initialized");
-  }
-  if (!mutator) {
-    return Err(EC::InvalidArg, "null mutator");
-  }
-  {
-    std::lock_guard<std::mutex> lock(doc->mtx);
-    mutator(doc->json);
-    doc->dirty = true;
-  }
-  if (dump_now) {
-    return Dump(kind);
-  }
-  return Ok();
-}
-
-/**
  * @brief Persist all document snapshots to disk.
  */
-ECM AMConfigStorage::DumpAll() {
+ECM AMConfigStorage::DumpAll(bool async) {
+  if (async) {
+    SubmitWriteTask([this]() -> ECM { return DumpAll(false); });
+    return Ok();
+  }
+
   ECM rcm = Dump(DocumentKind::Config);
   if (rcm.first != EC::Success) {
     return rcm;
@@ -243,10 +730,21 @@ ECM AMConfigStorage::DumpAll() {
 /**
  * @brief Persist a single document snapshot to disk.
  */
-ECM AMConfigStorage::Dump(DocumentKind kind, const std::string &path) {
+ECM AMConfigStorage::Dump(DocumentKind kind, const std::string &path,
+                          bool async) {
+  if (async) {
+    std::string path_copy = path;
+    SubmitWriteTask([this, kind, path_copy]() -> ECM {
+      return Dump(kind, path_copy, false);
+    });
+    return Ok();
+  }
+
   DocumentState *doc = GetDoc_(kind);
   if (!doc) {
-    return Err(EC::ConfigNotInitialized, "document not initialized");
+    ECM rcm = Err(EC::ConfigNotInitialized, "document not initialized");
+    NotifyDumpError_(rcm);
+    return rcm;
   }
   if (path.empty()) {
     std::lock_guard<std::mutex> lock(doc->mtx);
@@ -259,13 +757,19 @@ ECM AMConfigStorage::Dump(DocumentKind kind, const std::string &path) {
   if (!out_path.empty()) {
     std::filesystem::create_directories(out_path.parent_path(), ec);
     if (ec) {
-      return Err(
+      ECM rcm = Err(
           EC::ConfigDumpFailed,
           AMStr::amfmt("failed to create config directory: {}", ec.message()));
+      NotifyDumpError_(rcm);
+      return rcm;
     }
   }
   if (path.empty()) {
-    return WriteHandleJson_(doc, kind);
+    ECM rcm = WriteHandleJson_(doc, kind);
+    if (rcm.first != EC::Success) {
+      NotifyDumpError_(rcm);
+    }
+    return rcm;
   }
 
   std::string json_payload;
@@ -346,7 +850,7 @@ ECM AMConfigStorage::BackupIfNeeded() {
     }
     backup_cfg["max_backup_count"] = max_backup_count;
 
-    const int64_t now_s = static_cast<int64_t>(timenow());
+    auto now_s = static_cast<int64_t>(timenow());
     int64_t last_backup_time_s = kDefaultLastBackupS;
     if (auto v = GetIntField(backup_cfg, "last_backup_time_s")) {
       last_backup_time_s = *v;
@@ -554,64 +1058,65 @@ void AMConfigStorage::SubmitWriteTask(std::function<ECM()> task) {
     return;
   }
   {
-    std::lock_guard<std::mutex> lock(write_mtx_);
+    std::lock_guard<std::mutex> lock(write_queue_mtx_);
     write_queue_.push(std::move(task));
   }
   write_cv_.notify_one();
 }
 
 /**
- * @brief Submit a no-arg write task to the background queue.
+ * @brief Register a callback invoked on dump errors.
  */
-void AMConfigStorage::SubmitWriteTaskVoid(std::function<void()> task) {
-  SubmitWriteTask([task]() -> ECM {
-    task();
-    return Ok();
-  });
+void AMConfigStorage::SetDumpErrorCallback(DumpErrorCallback cb) {
+  dump_error_cb_ = std::move(cb);
 }
 
 /**
- * @brief Provide mutable access to a document JSON.
+ * @brief Return a thread-safe copy of a document JSON.
  */
-std::optional<std::reference_wrapper<nlohmann::ordered_json>>
-AMConfigStorage::GetJson(DocumentKind kind) {
-  DocumentState *doc = GetDoc_(kind);
-  if (!doc) {
-    return std::nullopt;
+bool AMConfigStorage::GetJson(DocumentKind kind,
+                              nlohmann::ordered_json *value) const {
+  if (!value) {
+    return false;
   }
-  return std::ref(doc->json);
-}
-
-/**
- * @brief Provide read-only access to a document JSON.
- */
-std::optional<std::reference_wrapper<const nlohmann::ordered_json>>
-AMConfigStorage::GetJson(DocumentKind kind) const {
   const DocumentState *doc = GetDoc_(kind);
   if (!doc) {
-    return std::nullopt;
+    return false;
   }
-  return std::cref(doc->json);
+  *value = doc->GetJson();
+  return true;
 }
 
 /**
- * @brief Return the root directory used by the storage layer.
+ * @brief Return a thread-safe serialized JSON string of a document.
  */
-const std::filesystem::path &AMConfigStorage::RootDir() const {
-  return root_dir_;
-}
-
-/**
- * @brief Return the config and schema paths tracked by the storage layer.
- */
-std::pair<std::optional<std::filesystem::path>,
-          std::optional<std::filesystem::path>>
-AMConfigStorage::GetDataPath(DocumentKind kind) const {
+bool AMConfigStorage::GetJsonStr(DocumentKind kind, std::string *value,
+                                 int indent) const {
+  if (!value) {
+    return false;
+  }
   const DocumentState *doc = GetDoc_(kind);
   if (!doc) {
-    return {std::nullopt, std::nullopt};
+    return false;
   }
-  return {doc->path, doc->schema_path};
+  *value = doc->GetJsonStr(indent);
+  return true;
+}
+
+/**
+ * @brief Return the config data path tracked for a document.
+ */
+bool AMConfigStorage::GetDataPath(DocumentKind kind,
+                                  std::filesystem::path *value) const {
+  if (!value) {
+    return false;
+  }
+  const DocumentState *doc = GetDoc_(kind);
+  if (!doc) {
+    return false;
+  }
+  *value = doc->path;
+  return true;
 }
 
 /**
@@ -626,6 +1131,15 @@ DocumentState *AMConfigStorage::GetDoc_(DocumentKind kind) {
 }
 
 /**
+ * @brief Notify any registered dump-error callback.
+ */
+void AMConfigStorage::NotifyDumpError_(const ECM &err) const {
+  if (dump_error_cb_) {
+    dump_error_cb_(err);
+  }
+}
+
+/**
  * @brief Locate a document state by kind (const).
  */
 const DocumentState *AMConfigStorage::GetDoc_(DocumentKind kind) const {
@@ -634,66 +1148,6 @@ const DocumentState *AMConfigStorage::GetDoc_(DocumentKind kind) const {
     return nullptr;
   }
   return &it->second;
-}
-
-/**
- * @brief Load a document into memory using cfgffi.
- */
-ECM AMConfigStorage::LoadDocument_(DocumentKind kind, DocumentState *doc) {
-  if (!doc) {
-    return Err(EC::ConfigNotInitialized, "document not initialized");
-  }
-  std::string error;
-  if (!EnsureFileExists(doc->path, &error)) {
-    return Err(EC::ConfigLoadFailed,
-               "failed to create " + AM_ENUM_NAME(kind) + " file: " + error);
-  }
-  std::string schema_json;
-  if (kind == DocumentKind::History) {
-    schema_json = kHistorySchemaJson;
-  } else {
-    schema_json = LoadSchemaJson(doc->schema_path, &error);
-  }
-  char *err = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(handle_mtx_);
-    if (doc->handle) {
-      cfgffi_free_handle(doc->handle);
-      doc->handle = nullptr;
-    }
-    doc->handle =
-        cfgffi_read(doc->path.string().c_str(), schema_json.c_str(), &err);
-  }
-  if (!doc->handle) {
-    std::string msg = err ? err : "cfgffi_read failed";
-    if (err) {
-      cfgffi_free_string(err);
-    }
-    return Err(EC::ConfigLoadFailed,
-               "failed to parse " + AM_ENUM_NAME(kind) + ": " + msg);
-  }
-  if (err) {
-    cfgffi_free_string(err);
-  }
-  char *json_c = cfgffi_get_json(doc->handle);
-  if (!json_c) {
-    return Err(EC::ConfigLoadFailed,
-               "failed to read " + AM_ENUM_NAME(kind) + " json");
-  }
-  std::string json_str(json_c);
-  cfgffi_free_string(json_c);
-  Json parsed;
-  if (!ParseJsonString(json_str, &parsed, &error)) {
-    return Err(EC::ConfigLoadFailed,
-               "failed to parse " + AM_ENUM_NAME(kind) + " json: " + error);
-  }
-  {
-    std::lock_guard<std::mutex> lock(doc->mtx);
-    doc->json = std::move(parsed);
-    doc->dirty = false;
-    doc->last_modified = std::chrono::system_clock::now();
-  }
-  return Ok();
 }
 
 /**
@@ -749,13 +1203,13 @@ ECM AMConfigStorage::WriteHandleJson_(DocumentState *doc, DocumentKind kind) {
  * @brief Write a TOML snapshot to a target path using the given handle.
  */
 void AMConfigStorage::WriteSnapshotToPath_(
-    ConfigHandle *handle, const std::string &json,
+    ConfigHandle *handle, std::string_view json,
     const std::filesystem::path &out_path) const {
   if (!handle) {
     return;
   }
   char *err = nullptr;
-  int rc = cfgffi_write(handle, out_path.string().c_str(), json.c_str(), &err);
+  int rc = cfgffi_write(handle, out_path.string().c_str(), json.data(), &err);
   if (err) {
     cfgffi_free_string(err);
   }
@@ -789,3 +1243,113 @@ void AMConfigStorage::WriteThreadLoop_() {
     }
   }
 }
+
+/**
+ * @brief Return the project root directory path.
+ */
+std::filesystem::path AMConfigStorage::ProjectRoot() const { return root_dir_; }
+
+/**
+ * @brief Query a UserVars entry by name.
+ */
+bool AMConfigStorage::GetUserVar(const std::string &name,
+                                 std::string *value) const {
+  if (name.empty())
+    return false;
+  Json settings_json;
+  if (!GetJson(DocumentKind::Settings, &settings_json)) {
+    return false;
+  }
+  const Json *node = FindJsonNode(settings_json, {"UserVars", name});
+  if (!node)
+    return false;
+
+  if (value) {
+    std::string parsed;
+    if (!QueryKey(settings_json, {"UserVars", name}, &parsed)) {
+      return false;
+    }
+    *value = std::move(parsed);
+  }
+  return true;
+}
+
+/**
+ * @brief List all UserVars entries.
+ */
+std::vector<std::pair<std::string, std::string>>
+AMConfigStorage::ListUserVars() const {
+  std::vector<std::pair<std::string, std::string>> entries;
+
+  Json settings_json;
+  if (!GetJson(DocumentKind::Settings, &settings_json)) {
+    return entries;
+  }
+  const Json *node = FindJsonNode(settings_json, {"UserVars"});
+  if (!node || !node->is_object())
+    return entries;
+
+  entries.reserve(node->size());
+  for (auto it = node->begin(); it != node->end(); ++it) {
+    std::string parsed;
+    if (QueryKey(settings_json, {"UserVars", it.key()}, &parsed)) {
+      entries.emplace_back(it.key(), std::move(parsed));
+    }
+  }
+  return entries;
+}
+
+/**
+ * @brief Set a UserVars entry and optionally persist to settings.
+ */
+ECM AMConfigStorage::SetUserVar(const std::string &name,
+                                const std::string &value, bool dump_now) {
+
+  if (name.empty())
+    return Err(EC::InvalidArg, "Empty variable name");
+
+  if (!SetArg(DocumentKind::Settings, {"UserVars", name}, value)) {
+    return Err(EC::ConfigInvalid, "failed to set UserVars");
+  }
+  if (dump_now) {
+    return DumpAll();
+  }
+  return Ok();
+}
+
+/**
+ * @brief Remove a UserVars entry and optionally persist to settings.
+ */
+ECM AMConfigStorage::RemoveUserVar(const std::string &name, bool dump_now) {
+
+  if (name.empty())
+    return Err(EC::InvalidArg, "Empty variable name");
+
+  DocumentState *settings_doc = GetDoc_(DocumentKind::Settings);
+  if (!settings_doc) {
+    return Err(EC::ConfigNotInitialized, "settings document not initialized");
+  }
+  std::lock_guard<std::mutex> lock(settings_doc->mtx);
+  Json *node = nullptr;
+  auto &settings_json = settings_doc->json;
+  if (settings_json.contains("UserVars") &&
+      settings_json["UserVars"].is_object()) {
+    node = &settings_json["UserVars"];
+  }
+
+  if (!node || !node->contains(name)) {
+    return Err(EC::InvalidArg, "Variable not found");
+  }
+
+  node->erase(name);
+  settings_doc->dirty = true;
+  if (dump_now) {
+    return DumpAll();
+  }
+  return Ok();
+}
+
+/**
+ * @brief Backup config/settings/known_hosts when the interval elapses.
+ */
+ECM AMConfigStorage::ConfigBackupIfNeeded() { return BackupIfNeeded(); }

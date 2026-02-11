@@ -169,8 +169,46 @@ protected:
 public:
   /** Thread-safe public key/value map for client metadata (lock with
    * public_kv_mtx). */
-  std::recursive_mutex public_kv_mtx;
+  mutable std::recursive_mutex public_kv_mtx;
   std::unordered_map<std::string, std::string> public_kv;
+
+  /**
+   * @brief Get a public metadata value by key.
+   * @param key Metadata key.
+   * @param value Output value pointer. When null, only existence is checked.
+   * @return True when key exists.
+   */
+  [[nodiscard]] bool GetPublicValue(const std::string &key,
+                                    std::string *value) const {
+    std::lock_guard<std::recursive_mutex> lock(public_kv_mtx);
+    auto it = public_kv.find(key);
+    if (it == public_kv.end()) {
+      return false;
+    }
+    if (value) {
+      *value = it->second;
+    }
+    return true;
+  }
+
+  /**
+   * @brief Set a public metadata value.
+   * @param key Metadata key.
+   * @param value Metadata value.
+   * @param force Overwrite when key already exists.
+   * @return True when the value is written.
+   */
+  [[nodiscard]] bool SetPulbicValue(const std::string &key,
+                                    const std::string &value,
+                                    bool force) {
+    std::lock_guard<std::recursive_mutex> lock(public_kv_mtx);
+    auto it = public_kv.find(key);
+    if (it != public_kv.end() && !force) {
+      return false;
+    }
+    public_kv[key] = value;
+    return true;
+  }
 
   AMTracer(const ConRequst &request, int buffer_capacity = 10,
            TraceCallback trace_cb = {})

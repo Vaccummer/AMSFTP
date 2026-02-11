@@ -25,7 +25,10 @@ AMLogManager::~AMLogManager() {}
 
 /** Enqueue a log entry for the writer thread. */
 void AMLogManager::Enqueue(const TraceInfo &info) {
-  config_.SubmitWriteTask([this, info]() { WriteLogEntry_(info); });
+  config_.SubmitWriteTask([this, info]() -> ECM {
+    WriteLogEntry_(info);
+    return {EC::Success, ""};
+  });
 }
 
 /** Provide a trace callback for AMTracer that enqueues log entries. */

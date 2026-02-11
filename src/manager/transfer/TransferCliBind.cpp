@@ -1,26 +1,186 @@
-#include "AMManager/Transfer.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Path.hpp"
 #include "AMClient/IOCore.hpp"
-#include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
-#include "AMManager/SignalMonitor.hpp"
-#include "third_party/indicators/dynamic_progress.hpp"
+#include "AMManager/Transfer.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
-#include <cmath>
 #include <cstddef>
-#include <deque>
-#include <exception>
-#include <iomanip>
 #include <memory>
-#include <sstream>
-#include <unordered_map>
 #include <unordered_set>
 
-#include "TransferInternal.hpp"
+namespace {
+
+/**
+ * @brief Print one transfer task entry.
+ */
+void PrintTaskEntry_(AMPromptManager &prompt, const TransferTask &task,
+                     size_t index) {
+  prompt.Print(AMStr::amfmt("[{}]", index));
+  prompt.Print("");
+  const std::string src_host = task.src_host.empty() ? "local" : task.src_host;
+  const std::string dst_host = task.dst_host.empty() ? "local" : task.dst_host;
+  prompt.Print(AMStr::amfmt("src: {}@{}", src_host, task.src));
+  prompt.Print("");
+  prompt.Print(AMStr::amfmt("dst: {}@{}", dst_host, task.dst));
+  prompt.Print("");
+  prompt.Print(AMStr::amfmt("size: {}", FormatSize(task.size)));
+  prompt.Print("");
+  prompt.Print(AMStr::amfmt("transferred: {}", FormatSize(task.transferred)));
+  if (task.IsFinished) {
+    std::string rcm_name = std::string(magic_enum::enum_name(task.rcm.first));
+    std::string rcm_text = rcm_name;
+    if (!task.rcm.second.empty()) {
+      rcm_text = AMStr::amfmt("{}: {}", rcm_name, task.rcm.second);
+    }
+    prompt.Print("");
+    prompt.Print(AMStr::amfmt("rcm: {}", rcm_text));
+  }
+}
+
+/**
+ * @brief Print task entries from a task info object.
+ */
+void PrintInspectTaskEntries_(AMPromptManager &prompt,
+                              const std::shared_ptr<TaskInfo> &task_info) {
+  if (!task_info || !task_info->tasks) {
+    return;
+  }
+
+  const auto &tasks = *task_info->tasks;
+  for (size_t i = 0; i < tasks.size(); ++i) {
+    PrintTaskEntry_(prompt, tasks[i], i + 1);
+    if (i + 1 < tasks.size()) {
+      prompt.Print("");
+    }
+  }
+}
+
+/**
+ * @brief Print original user transfer sets from a task info object.
+ */
+void PrintInspectTransferSets_(AMPromptManager &prompt,
+                               const std::shared_ptr<TaskInfo> &task_info) {
+  if (!task_info || !task_info->transfer_sets) {
+    return;
+  }
+
+  const auto &sets = *task_info->transfer_sets;
+  const bool show_index = sets.size() > 1;
+  for (size_t i = 0; i < sets.size(); ++i) {
+    const auto &set = sets[i];
+    if (show_index) {
+      prompt.Print(AMStr::amfmt("[{}]", i + 1));
+      prompt.Print("");
+    }
+    for (const auto &src : set.srcs) {
+      prompt.Print(src);
+    }
+    prompt.Print("");
+    prompt.Print(AMStr::amfmt(" ->  {}", set.dst));
+    prompt.Print("");
+    prompt.Print(AMStr::amfmt("clone = {}", set.clone ? "true" : "false"));
+    prompt.Print(AMStr::amfmt("mkdir = {}", set.mkdir ? "true" : "false"));
+    prompt.Print(
+        AMStr::amfmt("overwrite = {}", set.overwrite ? "true" : "false"));
+    prompt.Print(AMStr::amfmt("no special = {}",
+                              set.ignore_special_file ? "true" : "false"));
+    prompt.Print(AMStr::amfmt("resume = {}", set.resume ? "true" : "false"));
+    if (i + 1 < sets.size()) {
+      prompt.Print("");
+    }
+  }
+}
+
+/**
+ * @brief Print detailed task fields and optional sections.
+ */
+void PrintInspectTask_(AMPromptManager &prompt,
+                       const std::shared_ptr<TaskInfo> &task_info,
+                       bool show_task_entries, bool show_transfer_sets) {
+  if (!task_info) {
+    return;
+  }
+
+  const auto status_name =
+      std::string(magic_enum::enum_name(task_info->GetStatus()));
+  const std::string submit_time =
+      task_info->submit_time.load(std::memory_order_relaxed) > 0.0
+          ? FormatTime(static_cast<size_t>(
+                task_info->submit_time.load(std::memory_order_relaxed)))
+          : "-";
+  const std::string start_time =
+      task_info->start_time.load(std::memory_order_relaxed) > 0.0
+          ? FormatTime(static_cast<size_t>(
+                task_info->start_time.load(std::memory_order_relaxed)))
+          : "-";
+  const std::string finished_time =
+      task_info->finished_time.load(std::memory_order_relaxed) > 0.0
+          ? FormatTime(static_cast<size_t>(
+                task_info->finished_time.load(std::memory_order_relaxed)))
+          : "-";
+
+  ECM rcm = task_info->GetResult();
+  std::string rcm_name = std::string(magic_enum::enum_name(rcm.first));
+  std::string rcm_text = rcm_name;
+  if (!rcm.second.empty()) {
+    rcm_text = AMStr::amfmt("{}: {}", rcm_name, rcm.second);
+  }
+
+  size_t files_num = task_info->tasks ? task_info->tasks->size() : 0;
+
+  std::vector<std::string> client_names = task_info->nicknames;
+  if (client_names.empty()) {
+    client_names.emplace_back("local");
+  }
+
+  std::vector<std::pair<std::string, std::string>> fields = {
+      {"id", task_info->id},
+      {"status", status_name},
+      {"submit_time", submit_time},
+      {"start_time", start_time},
+      {"finished_time", finished_time},
+      {"rcm", rcm_text},
+      {"total_transferred_size",
+       FormatSize(
+           task_info->total_transferred_size.load(std::memory_order_relaxed))},
+      {"total_size",
+       FormatSize(task_info->total_size.load(std::memory_order_relaxed))},
+      {"files_num", std::to_string(files_num)},
+      {"quiet", task_info->quiet ? "true" : "false"},
+      {"affinity_thread", std::to_string(task_info->affinity_thread.load(
+                              std::memory_order_relaxed))},
+      {"on_which_thread", std::to_string(task_info->OnWhichThread.load(
+                              std::memory_order_relaxed))},
+      {"buffer_size",
+       std::to_string(task_info->buffer_size.load(std::memory_order_relaxed))},
+      {"client_names", AMStr::join(client_names, ", ")}};
+
+  size_t max_len = 0;
+  for (const auto &field : fields) {
+    max_len = std::max<size_t>(max_len, field.first.size());
+  }
+
+  for (const auto &field : fields) {
+    std::string label = field.first;
+    if (label.size() < max_len) {
+      label.append(max_len - label.size(), ' ');
+    }
+    prompt.Print(AMStr::amfmt("{} : {}", label, field.second));
+  }
+
+  if (show_task_entries) {
+    PrintInspectTaskEntries_(prompt, task_info);
+  }
+  if (show_transfer_sets) {
+    PrintInspectTransferSets_(prompt, task_info);
+  }
+}
+
+} // namespace
+
 /**
  * @brief Submit a transfer set into the cache pool.
  */
@@ -83,7 +243,6 @@ std::vector<size_t> AMTransferManager::ListTransferSetIds() const {
   }
   return indices;
 }
-
 
 /**
  * @brief List task IDs across pending, conducting, and finished tasks.
@@ -227,7 +386,7 @@ ECM AMTransferManager::SubmitCachedTransferSets(
     auto temp = std::make_shared<TaskInfo>(true);
     temp->transfer_sets =
         std::make_shared<std::vector<UserTransferSet>>(transfer_sets);
-    task_printer_.InspectTransferSets(temp);
+    PrintInspectTransferSets_(prompt_, temp);
     bool canceled = false;
     if (!prompt_.PromptYesNo("Submit cached transfer sets? (y/N): ",
                              &canceled)) {
@@ -255,7 +414,7 @@ ECM AMTransferManager::Inspect(const ID &task_id, bool show_sets,
   if (!task_info) {
     return {EC::TaskNotFound, AMStr::amfmt("Task ID not found: {}", task_id)};
   }
-  task_printer_.Inspect(task_info, show_entries, show_sets);
+  PrintInspectTask_(prompt_, task_info, show_entries, show_sets);
   return {EC::Success, ""};
 }
 
@@ -267,7 +426,7 @@ ECM AMTransferManager::InspectTransferSets(const ID &task_id) const {
   if (!task_info) {
     return {EC::TaskNotFound, AMStr::amfmt("Task ID not found: {}", task_id)};
   }
-  task_printer_.InspectTransferSets(task_info);
+  PrintInspectTransferSets_(prompt_, task_info);
   return {EC::Success, ""};
 }
 
@@ -279,7 +438,7 @@ ECM AMTransferManager::InspectTaskEntries(const ID &task_id) const {
   if (!task_info) {
     return {EC::TaskNotFound, AMStr::amfmt("Task ID not found: {}", task_id)};
   }
-  task_printer_.InspectTaskEntries(task_info);
+  PrintInspectTaskEntries_(prompt_, task_info);
   return {EC::Success, ""};
 }
 
@@ -297,7 +456,7 @@ ECM AMTransferManager::QueryCachedUserSet(size_t set_index) const {
   auto temp = std::make_shared<TaskInfo>(true);
   temp->transfer_sets = std::make_shared<std::vector<UserTransferSet>>(
       std::vector<UserTransferSet>{transfer_set});
-  task_printer_.InspectTransferSets(temp);
+  PrintInspectTransferSets_(prompt_, temp);
   return {EC::Success, ""};
 }
 
@@ -338,26 +497,7 @@ ECM AMTransferManager::QuerySetEntry(const ID &entry_id) const {
   }
 
   const auto &task = task_info->tasks->at(entry_index - 1);
-  prompt_.Print(AMStr::amfmt("[{}]", entry_index));
-  prompt_.Print("");
-  const std::string src_host = task.src_host.empty() ? "local" : task.src_host;
-  const std::string dst_host = task.dst_host.empty() ? "local" : task.dst_host;
-  prompt_.Print(AMStr::amfmt("src: {}@{}", src_host, task.src));
-  prompt_.Print("");
-  prompt_.Print(AMStr::amfmt("dst: {}@{}", dst_host, task.dst));
-  prompt_.Print("");
-  prompt_.Print(AMStr::amfmt("size: {}", FormatSize(task.size)));
-  prompt_.Print("");
-  prompt_.Print(AMStr::amfmt("transferred: {}", FormatSize(task.transferred)));
-  if (task.IsFinished) {
-    std::string rcm_name = std::string(magic_enum::enum_name(task.rcm.first));
-    std::string rcm_text = rcm_name;
-    if (!task.rcm.second.empty()) {
-      rcm_text = AMStr::amfmt("{}: {}", rcm_name, task.rcm.second);
-    }
-    prompt_.Print("");
-    prompt_.Print(AMStr::amfmt("rcm: {}", rcm_text));
-  }
+  PrintTaskEntry_(prompt_, task, entry_index);
   return {EC::Success, ""};
 }
 
@@ -579,7 +719,7 @@ ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
         invalid_text.push_back(std::to_string(idx));
       }
       prompt_.Print(AMStr::amfmt("Warning: invalid retry indices ignored: {}",
-                                 JoinStrings_(invalid_text, ", ")));
+                                 AMStr::join(invalid_text, ", ")));
     }
     if (selected_indices.empty()) {
       ECM rcm = {EC::InvalidArg, "No valid task indices to retry"};
@@ -660,4 +800,3 @@ ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
   }
   return transfer(task_info);
 }
-
