@@ -1153,10 +1153,10 @@ std::string ApplyStyleFromConfig_(AMConfigManager &config_manager,
  */
 std::shared_ptr<BaseClient>
 ResolveActiveClient_(AMClientManager &client_manager) {
-  if (client_manager.CLIENT) {
-    return client_manager.CLIENT;
+  if (client_manager.CurrentClient()) {
+    return client_manager.CurrentClient();
   }
-  return client_manager.LOCAL;
+  return client_manager.LocalClientBase();
 }
 
 /**
@@ -1172,7 +1172,13 @@ ResolveUserHost_(const std::shared_ptr<BaseClient> &client) {
     hostname = request.hostname;
   }
 
-  auto read_env = [](const char *key) { return GetEnvCopy(key); };
+  auto read_env = [](const char *key) {
+    std::string value;
+    if (GetEnv(key, &value)) {
+      return value;
+    }
+    return std::string();
+  };
 
   if (username.empty()) {
 #ifdef _WIN32
@@ -1469,7 +1475,7 @@ int RunInteractiveLoop(const std::string &app_name,
     // monitor.SilenceHook("GLOBAL");
     monitor.ResumeHook("COREPROMPT");
 
-    bool canceled = prompt.PromptCore(prompt_line, &line);
+    bool canceled = !prompt.PromptCore(prompt_line, &line);
 
     monitor.SilenceHook("COREPROMPT");
     // monitor.ResumeHook("GLOBAL");

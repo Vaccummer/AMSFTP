@@ -1,5 +1,5 @@
 #pragma once
-#include "AMBase/Enum.hpp"
+#include "AMBase/DataClass.hpp"
 #include <memory>
 #include <mutex>
 #include <string>
@@ -32,14 +32,73 @@ inline std::string ToString(char *value) {
 struct TaskInfo;
 class AMConfigManager;
 
-class AMPromptManager {
+class AMHistoryManager {
+public:
+  /**
+   * @brief Enable or disable history navigation for arrow keys.
+   */
+  void SetHistoryEnabled(bool enabled);
+
+  /**
+   * @brief Load history for a nickname into the readline history.
+   */
+  void LoadHistory(AMConfigManager &config_manager,
+                   const std::string &nickname);
+
+  /**
+   * @brief Flush current history back into ConfigManager.
+   */
+  void FlushHistory(AMConfigManager &config_manager);
+
+  /**
+   * @brief Add a history entry to the readline history.
+   */
+  void AddHistoryEntry(const std::string &line);
+
+  /**
+   * @brief Load history data from .AMSFTP_History.toml into memory.
+   */
+  ECM LoadHistory();
+
+  /**
+   * @brief Fetch history commands for a nickname.
+   */
+  ECM GetHistoryCommands(const std::string &nickname,
+                         std::vector<std::string> *out);
+
+  /**
+   * @brief Store history commands for a nickname and optionally persist.
+   */
+  ECM SetHistoryCommands(const std::string &nickname,
+                         const std::vector<std::string> &commands,
+                         bool dump_now = true);
+
+protected:
+  AMHistoryManager() = default;
+  ~AMHistoryManager() = default;
+
+  /**
+   * @brief Collect current history into a list.
+   */
+  [[nodiscard]] std::vector<std::string> CollectHistory_() const;
+
+  /**
+   * @brief Normalize history to unique entries with max size.
+   */
+  [[nodiscard]] std::vector<std::string>
+  NormalizeHistory_(const std::vector<std::string> &input, int max_count) const;
+
+  std::string history_nickname_;
+  bool history_enabled_ = true;
+  bool history_loaded_ = false;
+  int max_history_count_ = 10;
+  std::vector<std::string> history_entries_;
+};
+
+class AMPromptManager : public AMHistoryManager, private NonCopyableNonMovable {
 public:
   static AMPromptManager &Instance();
 
-  AMPromptManager(const AMPromptManager &) = delete;
-  AMPromptManager &operator=(const AMPromptManager &) = delete;
-  AMPromptManager(AMPromptManager &&) = delete;
-  AMPromptManager &operator=(AMPromptManager &&) = delete;
   ~AMPromptManager();
 
   void Print(const std::vector<std::string> &items,
@@ -125,47 +184,10 @@ public:
    */
   bool PromptCore(const std::string &prompt, std::string *out_input);
 
-  /**
-   * @brief Enable or disable history navigation for arrow keys.
-   */
-  void SetHistoryEnabled(bool enabled);
-
-  /**
-   * @brief Load history for a nickname into the readline history.
-   */
-  void LoadHistory(AMConfigManager &config_manager,
-                   const std::string &nickname);
-
-  /**
-   * @brief Flush current history back into ConfigManager.
-   */
-  void FlushHistory(AMConfigManager &config_manager);
-
-  /**
-   * @brief Add a history entry to the readline history.
-   */
-  void AddHistoryEntry(const std::string &line);
-
 private:
   AMPromptManager();
   std::mutex print_mutex_;
-  std::string history_nickname_;
-  bool history_enabled_ = true;
-  bool history_loaded_ = false;
-  int max_history_count_ = 10;
-  std::vector<std::string> history_entries_;
   std::string cached_output_;
   std::mutex cached_output_mutex;
   bool cache_output_only_ = false;
-
-  /**
-   * @brief Collect current history into a list.
-   */
-  std::vector<std::string> CollectHistory_() const;
-
-  /**
-   * @brief Normalize history to unique entries with max size.
-   */
-  std::vector<std::string>
-  NormalizeHistory_(const std::vector<std::string> &input, int max_count) const;
 };

@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-class AMVarManager {
+class AMVarManager : private NonCopyableNonMovable {
 public:
   enum class VarSource { Builtin, Memory };
 

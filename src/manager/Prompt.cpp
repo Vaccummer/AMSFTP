@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -181,8 +182,8 @@ bool AMPromptManager::PromptLine(const std::string &prompt, std::string *out,
     placeholder_value = default_value;
   }
 
-  const bool was_canceled = Prompt(display_prompt, placeholder_value, out);
-  if (was_canceled) {
+  const bool ok = Prompt(display_prompt, placeholder_value, out);
+  if (!ok) {
     if (canceled)
       *canceled = true;
     return false;
@@ -309,12 +310,12 @@ bool AMPromptManager::Prompt(const std::string &prompt,
       ic_readline_ex_with_initial(prompt.c_str(), &PromptNoComplete_, nullptr,
                                   &PromptNoHighlight_, nullptr, initial);
   if (!line) {
-    return true;
+    return false;
   }
   ic_history_remove_last();
   *out_input = std::string(line);
   ic_free(line);
-  return false;
+  return true;
 }
 
 /**
@@ -336,11 +337,11 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
                               &PromptHighlighter_, &analyzer);
   ic_history_remove_last();
   if (!line) {
-    return true;
+    return false;
   }
   *out_input = std::string(line);
   ic_free(line);
-  return false;
+  return true;
 }
 
 bool AMPromptManager::SecurePrompt(const std::string &prompt,
@@ -377,7 +378,7 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
     int ch = _getch();
     if (ch == 3 || (amgif && amgif->check())) {
       std::cout << "\n";
-      return true;
+      return false;
     }
     if (ch == '\r' || ch == '\n') {
       break;
@@ -408,7 +409,7 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
     if (ch == 3 || (amgif && amgif->check())) {
       tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
       std::cout << "\n";
-      return true;
+      return false;
     }
     if (ch == '\n' || ch == '\r' || ch == EOF) {
       break;
@@ -427,21 +428,21 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
 #endif
   std::cout << "\n";
   *out_input = std::move(password);
-  return false;
+  return true;
 }
 
 /**
  * @brief Enable or disable history navigation for arrow keys.
  */
-void AMPromptManager::SetHistoryEnabled(bool enabled) {
+void AMHistoryManager::SetHistoryEnabled(bool enabled) {
   history_enabled_ = enabled;
 }
 
 /**
  * @brief Load history for a nickname into the readline history.
  */
-void AMPromptManager::LoadHistory(AMConfigManager &config_manager,
-                                  const std::string &nickname) {
+void AMHistoryManager::LoadHistory(AMConfigManager &config_manager,
+                                   const std::string &nickname) {
   if (nickname.empty()) {
     return;
   }
@@ -454,16 +455,42 @@ void AMPromptManager::LoadHistory(AMConfigManager &config_manager,
   history_nickname_ = nickname;
   history_loaded_ = true;
 
-  max_history_count_ = config_manager.ResolveMaxHistoryCount(10);
+  const int64_t resolved_max = config_manager.ResolveArg<int64_t>(
+      DocumentKind::Settings, {"InternalVars", "MaxHistoryCount"},
+      static_cast<int64_t>(10), [](int64_t value) -> int64_t {
+        return value > 0 ? value : static_cast<int64_t>(10);
+      });
+  if (resolved_max > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+    max_history_count_ = std::numeric_limits<int>::max();
+  } else {
+    max_history_count_ = static_cast<int>(resolved_max);
+  }
   ic_set_history(nullptr, max_history_count_);
   ic_enable_history_duplicates(false);
   ic_history_clear();
 
   std::vector<std::string> commands;
-  ECM status = config_manager.GetHistoryCommands(nickname, &commands);
+  ECM status = Ok();
+  ECM load_status = config_manager.Load(DocumentKind::History);
+  if (load_status.first != EC::Success) {
+    status = load_status;
+  } else {
+    nlohmann::ordered_json history_json;
+    if (config_manager.GetJson(DocumentKind::History, &history_json)) {
+      nlohmann::ordered_json node = nlohmann::ordered_json::array();
+      if (QueryKey(history_json, {nickname, "commands"}, &node) &&
+          node.is_array()) {
+        for (const auto &item : node) {
+          if (item.is_string()) {
+            commands.push_back(item.get<std::string>());
+          }
+        }
+      }
+    }
+  }
   if (status.first != ErrorCode::Success) {
     history_entries_.clear();
-    ErrorFormat("HistoryLoad", status.second);
+    AMPromptManager::Instance().ErrorFormat("HistoryLoad", status.second);
     return;
   }
   history_entries_ = NormalizeHistory_(commands, max_history_count_);
@@ -471,30 +498,47 @@ void AMPromptManager::LoadHistory(AMConfigManager &config_manager,
     ic_history_add(cmd.c_str());
   }
   if (history_entries_ != commands) {
-    (void)config_manager.SetHistoryCommands(nickname, history_entries_, true);
+    (void)config_manager.SetArg(DocumentKind::History, {nickname, "commands"},
+                                history_entries_);
+    (void)config_manager.Dump(DocumentKind::History);
   }
 }
 
 /**
  * @brief Flush current history back into ConfigManager.
  */
-void AMPromptManager::FlushHistory(AMConfigManager &config_manager) {
+void AMHistoryManager::FlushHistory(AMConfigManager &config_manager) {
   if (!history_loaded_ || history_nickname_.empty()) {
     return;
   }
-  max_history_count_ = config_manager.ResolveMaxHistoryCount(10);
+  const int64_t resolved_max = config_manager.ResolveArg<int64_t>(
+      DocumentKind::Settings, {"InternalVars", "MaxHistoryCount"},
+      static_cast<int64_t>(10), [](int64_t value) -> int64_t {
+        return value > 0 ? value : static_cast<int64_t>(10);
+      });
+  if (resolved_max > static_cast<int64_t>(std::numeric_limits<int>::max())) {
+    max_history_count_ = std::numeric_limits<int>::max();
+  } else {
+    max_history_count_ = static_cast<int>(resolved_max);
+  }
   history_entries_ = NormalizeHistory_(history_entries_, max_history_count_);
-  ECM status = config_manager.SetHistoryCommands(history_nickname_,
-                                                 history_entries_, true);
+  ECM status = Ok();
+  if (!config_manager.SetArg(DocumentKind::History,
+                             {history_nickname_, "commands"},
+                             history_entries_)) {
+    status = Err(EC::ConfigInvalid, "failed to set history commands");
+  } else {
+    status = config_manager.Dump(DocumentKind::History);
+  }
   if (status.first != ErrorCode::Success) {
-    ErrorFormat(status);
+    AMPromptManager::Instance().ErrorFormat(status);
   }
 }
 
 /**
  * @brief Add a history entry to the readline history.
  */
-void AMPromptManager::AddHistoryEntry(const std::string &line) {
+void AMHistoryManager::AddHistoryEntry(const std::string &line) {
   if (!history_enabled_) {
     return;
   }
@@ -509,7 +553,7 @@ void AMPromptManager::AddHistoryEntry(const std::string &line) {
 /**
  * @brief Collect current history into a list.
  */
-std::vector<std::string> AMPromptManager::CollectHistory_() const {
+std::vector<std::string> AMHistoryManager::CollectHistory_() const {
   return history_entries_;
 }
 
@@ -517,8 +561,8 @@ std::vector<std::string> AMPromptManager::CollectHistory_() const {
  * @brief Normalize history to unique entries with max size.
  */
 std::vector<std::string>
-AMPromptManager::NormalizeHistory_(const std::vector<std::string> &input,
-                                   int max_count) const {
+AMHistoryManager::NormalizeHistory_(const std::vector<std::string> &input,
+                                    int max_count) const {
   std::vector<std::string> reversed;
   reversed.reserve(input.size());
   std::unordered_set<std::string> seen;
@@ -536,4 +580,70 @@ AMPromptManager::NormalizeHistory_(const std::vector<std::string> &input,
                    reversed.end() - static_cast<size_t>(max_count));
   }
   return reversed;
+}
+
+/**
+ * @brief Load history data from .AMSFTP_History.toml into memory.
+ */
+ECM AMHistoryManager::LoadHistory() {
+  AMConfigManager &config_manager = AMConfigManager::Instance();
+  return config_manager.Load(DocumentKind::History);
+}
+
+/**
+ * @brief Fetch history commands for a nickname.
+ */
+ECM AMHistoryManager::GetHistoryCommands(const std::string &nickname,
+                                         std::vector<std::string> *out) {
+  if (!out) {
+    return Err(EC::InvalidArg, "null history output");
+  }
+  out->clear();
+  AMConfigManager &config_manager = AMConfigManager::Instance();
+  ECM load_status = config_manager.Load(DocumentKind::History);
+  if (load_status.first != EC::Success) {
+    return load_status;
+  }
+  const std::string resolved = nickname.empty() ? "local" : nickname;
+  nlohmann::ordered_json history_json;
+  if (!config_manager.GetJson(DocumentKind::History, &history_json)) {
+    return Ok();
+  }
+  nlohmann::ordered_json node = nlohmann::ordered_json::array();
+  if (!QueryKey(history_json, {resolved, "commands"}, &node)) {
+    return Ok();
+  }
+  if (!node.is_array()) {
+    return Ok();
+  }
+  for (const auto &item : node) {
+    if (item.is_string()) {
+      out->push_back(item.get<std::string>());
+    }
+  }
+  return Ok();
+}
+
+/**
+ * @brief Store history commands for a nickname and optionally persist.
+ */
+ECM AMHistoryManager::SetHistoryCommands(
+    const std::string &nickname, const std::vector<std::string> &commands,
+    bool dump_now) {
+  AMConfigManager &config_manager = AMConfigManager::Instance();
+  ECM load_status = config_manager.Load(DocumentKind::History);
+  if (load_status.first != EC::Success) {
+    return load_status;
+  }
+  if (nickname.empty()) {
+    return Err(EC::InvalidArg, "empty history nickname");
+  }
+  if (!config_manager.SetArg(DocumentKind::History, {nickname, "commands"},
+                             commands)) {
+    return Err(EC::ConfigInvalid, "failed to set history commands");
+  }
+  if (dump_now) {
+    return config_manager.Dump(DocumentKind::History);
+  }
+  return Ok();
 }

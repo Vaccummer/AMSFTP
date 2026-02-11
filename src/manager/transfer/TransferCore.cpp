@@ -75,6 +75,80 @@ void DeduplicateTasks_(TASKS *tasks) {
   tasks->swap(unique);
 }
 
+/**
+ * @brief Print submit information for transfer_async.
+ */
+void PrintTaskSubmit_(AMPromptManager &prompt,
+                      const std::shared_ptr<TaskInfo> &task_info) {
+  if (!task_info) {
+    return;
+  }
+  const size_t file_num = task_info->tasks ? task_info->tasks->size() : 0;
+  const size_t total_size =
+      task_info->total_size.load(std::memory_order_relaxed);
+  std::vector<std::string> nicknames = task_info->nicknames;
+  std::string nickname_str = AMStr::join(nicknames, " ");
+  if (nickname_str.empty()) {
+    nickname_str = "local";
+  }
+  prompt.Print(AMStr::amfmt(
+      "SubmitInfo ID: {}; FileNum: {}; TotalSize: {}; Clients: {}",
+      task_info->id, file_num, FormatSize(total_size), nickname_str));
+}
+
+/**
+ * @brief Print task result information after completion.
+ */
+void PrintTaskResult_(AMPromptManager &prompt,
+                      const std::shared_ptr<TaskInfo> &task_info) {
+  if (!task_info) {
+    return;
+  }
+  size_t transferred = 0;
+  size_t total = 0;
+  int thread_id = 0;
+  ECM result;
+  bool success = false;
+  size_t filenum;
+  size_t success_num;
+  decltype(task_info->id) task_id;
+  {
+    std::lock_guard<std::mutex> lock(task_info->mtx);
+    if (task_info->quiet) {
+      return;
+    }
+    transferred =
+        task_info->total_transferred_size.load(std::memory_order_relaxed);
+    total = task_info->total_size.load(std::memory_order_relaxed);
+    thread_id = task_info->OnWhichThread.load(std::memory_order_relaxed);
+    task_id = task_info->id;
+    filenum = task_info->filenum.load(std::memory_order_relaxed);
+    success_num = task_info->success_filenum.load(std::memory_order_relaxed);
+
+    result = task_info->rcm;
+    success = result.first == EC::Success;
+    if (success && task_info->tasks) {
+      for (const auto &task : *task_info->tasks) {
+        if (task.rcm.first != EC::Success) {
+          result = task.rcm;
+          success = false;
+        }
+      }
+    }
+  }
+
+  const std::string prefix = success ? "✅" : "❌";
+  std::string rcm_text =
+      success
+          ? ""
+          : AMStr::amfmt(" {}: {}", AM_ENUM_NAME(result.first), result.second);
+
+  prompt.Print(AMStr::amfmt(
+      "TaskResult  {} ID: {}; Files: {}/{}; Size: {}/{}; ThreadID: {};{}",
+      prefix, task_id, success_num, filenum, FormatSize(transferred),
+      FormatSize(total), thread_id, rcm_text));
+}
+
 } // namespace
 
 /**
@@ -91,7 +165,7 @@ AMTransferManager &AMTransferManager::Instance() {
 AMTransferManager::AMTransferManager()
     : config_(AMConfigManager::Instance()),
       client_manager_(AMClientManager::Instance(config_)),
-      prompt_(AMPromptManager::Instance()), task_printer_(prompt_) {
+      prompt_(AMPromptManager::Instance()) {
   const int max_threads =
       config_.GetSettingInt({"InternalVars", "MaxThreadNum"}, 16);
   int init_threads =
@@ -265,7 +339,7 @@ void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
   if (!task_info) {
     return;
   }
-  task_printer_.TaskResultPrint(task_info);
+  PrintTaskResult_(prompt_, task_info);
   if (task_info->hostm) {
     ReturnClientsToIdle_(task_info->hostm);
     task_info->hostm.reset();
@@ -340,7 +414,7 @@ ECM AMTransferManager::transfer(
   UserResultCallback user_callback = [this, &remaining, &done_cv, &done_mtx](
                                          std::shared_ptr<TaskInfo> task_info) {
     if (task_info) {
-      task_printer_.TaskResultPrint(task_info);
+      PrintTaskResult_(prompt_, task_info);
     }
 
     UserResultCallback user_cb;
@@ -448,7 +522,7 @@ ECM AMTransferManager::transfer_async(
   }
 
   if (!task_info->quiet) {
-    task_printer_.TaskSubmitPrint(task_info);
+    PrintTaskSubmit_(prompt_, task_info);
   }
   return {EC::Success, ""};
 }

@@ -547,13 +547,14 @@ private:
       return {EC::AlgorithmUnsupported, "Unsupported host key algorithm"};
     }
 
-    const unsigned char *key_bytes =
-        reinterpret_cast<const unsigned char *>(key_ptr);
-    const std::string actual_fp = Base64Encode(key_bytes, key_len);
-    unsigned char digest[SHA256_DIGEST_LENGTH];
-    std::string actual_sha;
-    if (SHA256(key_bytes, key_len, digest)) {
-      actual_sha = Base64Encode(digest, SHA256_DIGEST_LENGTH);
+    auto *key_bytes = reinterpret_cast<const unsigned char *>(key_ptr);
+
+    std::array<unsigned char, SHA256_DIGEST_LENGTH> digest;
+    std::string actual_sha = "";
+    if (SHA256(key_bytes, key_len, digest.data()) == nullptr) {
+      actual_sha = Base64Encode(digest.data(), SHA256_DIGEST_LENGTH);
+      actual_sha.erase(actual_sha.find_last_not_of('=') +
+                       1); // Remove trailing '='
     }
 
     AMConfigManager::KnownHostEntry entry;
@@ -561,8 +562,7 @@ private:
     entry.hostname = res_data.hostname;
     entry.port = res_data.port;
     entry.protocol = actual_protocol;
-    entry.fingerprint = actual_fp;
-    entry.fingerprint_sha256 = actual_sha;
+    entry.fingerprint = actual_sha;
     return known_host_cb(std::move(entry));
   }
 

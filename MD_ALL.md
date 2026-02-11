@@ -1239,3 +1239,71 @@ public:
   void StopWriteThread();
   void Close();
 };
+@include\AMManager\Client.hpp
+
+将 class AMClientManager 拆分为几个类
+
+1. 信息数据读取类
+   1. 从config中读取host的配置
+   2. 读取know_host的数据
+   3. src\manager\config\manager.cpp 中的ConfigManager已被弃用, 若该类中的FindKnownHost, GetClientConfig需要取回
+   4. Client的public_kv的读写
+2. Client操作类
+   1. client的创建, 删除, 枚举
+   2. 各种callback函数的定义与绑定
+3. Path操作类
+   1. BuildPath, GetOrInitWorkdir, AbsPath, ParsePath 等与路径操作相关的函数
+@include\AMManager\Client.hpp
+adjust class arrage structure to inherit mode
+
+AMClientInfoReader->AMClientOperator->AMClientPathOps
+
+set memeber function DefaultPasswordCallback and DefaultDisconnectCallback as builtin value for password_cb_ and disconnect_cb_
+
+
+wrapp class of include\AMManager\Client.hpp in namespace AMClientManage
+rename AMClientInfoReader -> Reader
+
+AMClientOperator -> Operator
+
+AMClientPathOps -> PathOps
+
+AMClientManager -> Manager
+
+function in different classes implemented in different src files stored in src\manager\client
+@include\AMManager\Config.hpp
+
+remove AMConfigCoreData, cause specific config read won't be implement in configMANAGER
+
+
+make class structure to inherit type
+
+AMConfigStorage->AMConfigStyleData->AMConfigCLIAdapter->AMConfigManager
+function implemented in different cpp file in src\manager\config
+
+Implement bool SetArg(DocumentKindkind, constPath&path, T value)
+
+Dump and DumpAll add option bool async
+if true, add task to write thread
+
+add new mechanism DumpErrorCallback void(ECM)
+when dump error, transit error to ECM and callback
+AMConfigStorage suply interface to set the callback
+@include\AMManager\Config.hpp
+
+remove AMConfigCoreData, cause specific config read won't be implement in configMANAGER
+
+
+make class structure to inherit type
+
+AMConfigStorage->AMConfigStyleData->AMConfigCLIAdapter->AMConfigManager
+function implemented in different cpp file in src\manager\config
+
+Implement bool SetArg(DocumentKindkind, constPath&path, T value)
+
+Dump and DumpAll add option bool async
+if true, add task to write thread
+
+add new mechanism DumpErrorCallback void(ECM)
+when dump error, transit error to ECM and callback
+AMConfigStorage suply interface to set the callback

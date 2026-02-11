@@ -626,9 +626,6 @@ public:
   };
 };
 
-class AMConfigManager;
-class AMClientManager;
-
 class AMWorkManager {
 private:
   using TaskId = std::string;

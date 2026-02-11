@@ -12,98 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
-class TaskInfoPrint {
-public:
-  /**
-   * @brief Construct a task info printer bound to a prompt manager.
-   *
-   * @param prompt Prompt manager used for formatted output.
-   */
-  explicit TaskInfoPrint(AMPromptManager &prompt = AMPromptManager::Instance());
-
-  /**
-   * @brief Print submit information for transfer_async.
-   *
-   * Format: "Submit ID: [{taskid}] FileNum: {num} TotalSize: {size} Clients:
-   * {nicknames}".
-   *
-   * @param task_info Task info to print.
-   */
-  void TaskSubmitPrint(const std::shared_ptr<TaskInfo> &task_info) const;
-
-  /**
-   * @brief Print task result information after completion.
-   *
-   * Do not print if task_info->quiet is true. Use a success/failure marker
-   * followed by the task id and progress details. If the task succeeded, omit
-   * the result code/message segment.
-   *
-   * @param task_info Task info to print.
-   */
-  void TaskResultPrint(const std::shared_ptr<TaskInfo> &task_info) const;
-
-  /**
-   * @brief Show task status for quick queries.
-   *
-   * Pending tasks print basic metadata, finished tasks include transferred
-   * sizes and elapsed time, and conducting tasks render a progress bar that
-   * refreshes until the interrupt flag is set.
-   *
-   * @param task_info Task info to show.
-   * @param interrupt_flag Optional flag to stop progress rendering.
-   */
-  void Show(const std::shared_ptr<TaskInfo> &task_info,
-            const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
-
-  /**
-   * @brief Print multiple tasks in batch.
-   *
-   * Pending and finished tasks are printed via Show(), while conducting tasks
-   * create multiple progress bars for ongoing updates.
-   *
-   * @param pending Pending tasks to print.
-   * @param finished Finished tasks to print.
-   * @param conducting Conducting tasks to print with progress bars.
-   * @param interrupt_flag Optional flag to stop progress rendering.
-   */
-  void List(const std::vector<std::shared_ptr<TaskInfo>> &pending,
-            const std::vector<std::shared_ptr<TaskInfo>> &finished,
-            const std::vector<std::shared_ptr<TaskInfo>> &conducting,
-            const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
-
-  /**
-   * @brief Print detailed task information.
-   *
-   * This prints one attribute per line with aligned names. Use the optional
-   * flags to also print task entries or transfer set details.
-   *
-   * @param task_info Task info to inspect.
-   * @param show_task_entries Whether to print the task list.
-   * @param show_transfer_sets Whether to print transfer set details.
-   */
-  void Inspect(const std::shared_ptr<TaskInfo> &task_info,
-               bool show_task_entries = false,
-               bool show_transfer_sets = false) const;
-
-  /**
-   * @brief Print individual task entries inside task_info.
-   *
-   * @param task_info Task info holding transfer tasks.
-   */
-  void InspectTaskEntries(const std::shared_ptr<TaskInfo> &task_info) const;
-
-  /**
-   * @brief Print original UserTransferSet settings for the task.
-   *
-   * @param task_info Task info holding transfer set configurations.
-   */
-  void InspectTransferSets(const std::shared_ptr<TaskInfo> &task_info) const;
-
-private:
-  AMPromptManager &prompt_;
-};
-
-class AMTransferManager {
+class AMTransferManager : private NonCopyableNonMovable {
 public:
   using ID = std::string;
   using UserResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
@@ -115,15 +24,6 @@ public:
    * @brief Return the singleton instance.
    */
   static AMTransferManager &Instance();
-
-  /** Disable copy construction. */
-  AMTransferManager(const AMTransferManager &) = delete;
-  /** Disable copy assignment. */
-  AMTransferManager &operator=(const AMTransferManager &) = delete;
-  /** Disable move construction. */
-  AMTransferManager(AMTransferManager &&) = delete;
-  /** Disable move assignment. */
-  AMTransferManager &operator=(AMTransferManager &&) = delete;
 
   /**
    * @brief Set the public result callback wrapper for all task completions.
@@ -206,7 +106,7 @@ public:
       bool is_async = false);
 
   /**
-   * @brief Show task status by ID using TaskInfoPrint.
+   * @brief Show task status by ID.
    *
    * @param task_id Task ID.
    * @param interrupt_flag Optional flag to stop progress rendering.
@@ -215,7 +115,7 @@ public:
            const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
 
   /**
-   * @brief Show task status by multiple IDs using TaskInfoPrint.
+   * @brief Show task status by multiple IDs.
    *
    * The order of display follows status order (Pending, Paused, Conducting,
    * Finished). Invalid IDs will be reported and skipped.
@@ -227,7 +127,7 @@ public:
            const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
 
   /**
-   * @brief List tasks by status using TaskInfoPrint.
+   * @brief List tasks by status.
    *
    * @param pending Whether to list pending tasks.
    * @param suspend Whether to list paused tasks.
@@ -392,7 +292,6 @@ private:
   AMConfigManager &config_;
   AMClientManager &client_manager_;
   AMPromptManager &prompt_;
-  TaskInfoPrint task_printer_;
   AMWorkManager worker_;
   mutable std::mutex idle_mtx_;
   std::unordered_map<ID, std::list<std::shared_ptr<BaseClient>>> idle_pool_;
@@ -404,6 +303,5 @@ private:
   PublicResultCallback public_result_cb_ = {};
   UserResultCallback user_result_cb_ = {};
   mutable std::mutex speed_mtx_;
-  std::unordered_map<ID, std::deque<std::pair<double, size_t>>>
-      speed_samples_;
+  std::unordered_map<ID, std::deque<std::pair<double, size_t>>> speed_samples_;
 };

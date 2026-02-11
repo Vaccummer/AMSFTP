@@ -9,6 +9,7 @@
 #include <condition_variable>
 #include <filesystem>
 #include <functional>
+#include <handleapi.h>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -22,6 +23,8 @@
 #include <utility>
 #include <variant>
 #include <vector>
+
+class AMHostManager;
 
 /**
  * @brief Configuration document types tracked by storage.
@@ -44,6 +47,41 @@ struct DocumentState {
   mutable std::mutex mtx;
   bool dirty = false;
   std::chrono::system_clock::time_point last_modified;
+
+  /**
+   * @brief Return a thread-safe copy of the JSON document.
+   * @return Copied JSON payload.
+   */
+  [[nodiscard]] nlohmann::ordered_json GetJson() const {
+    std::lock_guard<std::mutex> lock(mtx);
+    return json;
+  }
+
+  /**
+   * @brief Return a thread-safe serialized JSON string.
+   * @param indent Indent passed to nlohmann::json::dump.
+   * @return Serialized JSON text.
+   */
+  [[nodiscard]] std::string GetJsonStr(int indent = 2) const {
+    std::lock_guard<std::mutex> lock(mtx);
+    return json.dump(indent);
+  }
+
+  /**
+   * @brief Acquire a document mutex lock for guarded JSON access.
+   * @return Unique lock holding the document mutex.
+   */
+  [[nodiscard]] std::unique_lock<std::mutex> LockJson() const {
+    return std::unique_lock<std::mutex>(mtx);
+  }
+
+  /**
+   * @brief Return a const reference to JSON without locking.
+   * @return Const JSON reference. Caller must hold LockJson().
+   */
+  [[nodiscard]] const nlohmann::ordered_json &GetJsonConstRef() const {
+    return json;
+  }
 };
 
 /**
@@ -54,19 +92,17 @@ public:
   using Path = std::vector<std::string>;
   using Value =
       std::variant<int64_t, bool, std::string, std::vector<std::string>>;
-  template <class T>
-  static inline constexpr bool kValueTypeSupported =
-      std::is_arithmetic_v<T> || std::is_same_v<T, std::string> ||
-      std::is_same_v<T, nlohmann::ordered_json *>;
+  using DumpErrorCallback = std::function<void(ECM)>;
+
   /**
    * @brief Construct a storage layer with empty state.
    */
-  AMConfigStorage();
+  AMConfigStorage() = default;
 
   /**
    * @brief Stop the background writer thread on destruction.
    */
-  ~AMConfigStorage();
+  virtual ~AMConfigStorage() { CloseHandles(); };
 
   /**
    * @brief Initialize storage paths from a project root directory.
@@ -88,35 +124,11 @@ public:
       const std::unordered_map<DocumentKind, std::filesystem::path> &schemas);
 
   /**
-   * @brief Bind cfgffi handles used for persisting config documents.
-   * @param config_handle Config handle pointer.
-   * @param settings_handle Settings handle pointer.
-   * @param known_hosts_handle Known hosts handle pointer.
-   * @param history_handle History handle pointer.
+   * @brief Load a document from disk, or all documents when kind is nullopt.
+   * @param kind Target document kind; nullopt means load all.
    * @return ECM success or failure.
    */
-  ECM BindHandles(ConfigHandle *config_handle, ConfigHandle *settings_handle,
-                  ConfigHandle *known_hosts_handle,
-                  ConfigHandle *history_handle);
-
-  /**
-   * @brief Load config, settings, and known_hosts documents from disk.
-   * @return ECM success or failure.
-   */
-  ECM LoadAll();
-
-  /**
-   * @brief Load a document from disk by kind.
-   * @param kind Document kind to load.
-   * @return ECM success or failure.
-   */
-  ECM Load(DocumentKind kind, bool force = false);
-
-  /**
-   * @brief Close storage with a final dump and shutdown.
-   * @return ECM success or failure.
-   */
-  ECM Close();
+  ECM Load(std::optional<DocumentKind> kind = std::nullopt, bool force = false);
 
   /**
    * @brief Release cfgffi handles and reset pointers without dumping.
@@ -138,21 +150,10 @@ public:
   bool IsDirty(DocumentKind kind) const;
 
   /**
-   * @brief Mutate a document and optionally persist immediately.
-   * @param kind Document kind to mutate.
-   * @param mutator Mutation callback invoked with the JSON object.
-   * @param dump_now Whether to persist immediately.
-   * @return ECM success or failure.
-   */
-  ECM Mutate(DocumentKind kind,
-             std::function<void(nlohmann::ordered_json &)> mutator,
-             bool dump_now = false);
-
-  /**
    * @brief Persist all document snapshots to disk.
    * @return ECM success or failure.
    */
-  ECM DumpAll();
+  ECM DumpAll(bool async = false);
 
   /**
    * @brief Persist a single document snapshot to disk.
@@ -160,7 +161,7 @@ public:
    * @param path Override output path (empty uses document path).
    * @return ECM success or failure.
    */
-  ECM Dump(DocumentKind kind, const std::string &path = "");
+  ECM Dump(DocumentKind kind, const std::string &path = "", bool async = false);
 
   /**
    * @brief Trigger backup logic when needed.
@@ -185,136 +186,98 @@ public:
   void SubmitWriteTask(std::function<ECM()> task);
 
   /**
-   * @brief Submit a no-arg write task to the background queue.
-   * @param task Task to execute asynchronously.
+   * @brief Register a callback invoked on dump errors.
+   * @param cb Callback to receive error ECM.
    */
-  void SubmitWriteTaskVoid(std::function<void()> task);
+  void SetDumpErrorCallback(DumpErrorCallback cb);
 
   /**
-   * @brief Provide mutable access to a document JSON.
-   * @return Reference to JSON object.
+   * @brief Return a thread-safe copy of a document JSON.
+   * @param kind Document kind to snapshot.
+   * @param value Output JSON snapshot copy.
+   * @return True when the document exists and value is written.
    */
-  [[nodiscard]] std::optional<std::reference_wrapper<nlohmann::ordered_json>>
-  GetJson(DocumentKind kind);
+  [[nodiscard]] bool GetJson(DocumentKind kind,
+                             nlohmann::ordered_json *value) const;
 
   /**
-   * @brief Provide read-only access to a document JSON.
-   * @return Const reference to JSON object.
+   * @brief Return a thread-safe serialized JSON string of a document.
+   * @param kind Document kind to snapshot.
+   * @param value Output JSON string snapshot.
+   * @param indent Indent passed to nlohmann::json::dump.
+   * @return True when the document exists and value is written.
    */
-  [[nodiscard]]
-  std::optional<std::reference_wrapper<const nlohmann::ordered_json>>
-  GetJson(DocumentKind kind) const;
+  [[nodiscard]] bool GetJsonStr(DocumentKind kind, std::string *value,
+                                int indent = 2) const;
 
   /**
-   * @brief Return the root directory used by the storage layer.
-   * @return Root directory path.
+   * @brief Return the config data path tracked for a document.
+   * @param kind Document kind to query.
+   * @param value Output path when available.
+   * @return True when the document exists and value is written.
    */
-  [[nodiscard]] const std::filesystem::path &RootDir() const;
+  [[nodiscard]] bool GetDataPath(DocumentKind kind,
+                                 std::filesystem::path *value) const;
 
+  /** Return the project root directory path. */
+  [[nodiscard]] std::filesystem::path ProjectRoot() const;
+  [[nodiscard]] int GetSettingInt(const Path &path, int default_value) const;
   /**
-   * @brief Return the config and schema paths tracked by the storage layer.
+   * @brief Query a UserVars entry by name.
    */
-  [[nodiscard]]
-  std::pair<std::optional<std::filesystem::path>,
-            std::optional<std::filesystem::path>>
-  GetDataPath(DocumentKind kind) const;
-
-  template <typename T>
-  bool QueryKey(const nlohmann::ordered_json &root, const Path &path,
-                T *value) const {
-    static_assert(kValueTypeSupported<T>, "T is not supported");
-    if (!value) {
-      return false;
-    }
-    const nlohmann::ordered_json *node = &root;
-    for (const auto &seg : path) {
-      if (!node->is_object()) {
-        return false;
-      }
-      auto it = node->find(seg);
-      if (it == node->end()) {
-        return false;
-      }
-      node = &(*it);
-    }
-    if constexpr (std::is_same_v<T, bool>) {
-      if (!node->is_boolean()) {
-        return false;
-      }
-      *value = node->get<bool>();
-      return true;
-    } else if constexpr (std::is_same_v<T, std::string>) {
-      if (!node->is_string()) {
-        return false;
-      }
-      *value = node->get<std::string>();
-      return true;
-    } else if constexpr (std::is_floating_point_v<T>) {
-      if (!node->is_number()) {
-        return false;
-      }
-      *value = static_cast<T>(node->get<double>());
-      return true;
-    } else if constexpr (std::is_integral_v<T>) {
-      if (!node->is_number()) {
-        return false;
-      }
-      if (node->is_number_integer()) {
-        const int64_t raw = node->get<int64_t>();
-        if (raw < static_cast<int64_t>(std::numeric_limits<T>::min()) ||
-            raw > static_cast<int64_t>(std::numeric_limits<T>::max())) {
-          return false;
-        }
-        *value = static_cast<T>(raw);
-        return true;
-      }
-      return false;
-    } else if constexpr (std::is_same_v<T, nlohmann::ordered_json *>) {
-      *value = const_cast<nlohmann::ordered_json *>(node);
-      return true;
-    } else {
-      return false;
-    }
-  }
-
+  bool GetUserVar(const std::string &name, std::string *value) const;
   /**
-   * @brief Set or create a JSON value by path in a root object.
-   * @param root JSON root to mutate.
-   * @param path Path segments to create or update.
-   * @param value Value to assign at the target node.
-   * @return True when the value is set.
+   * @brief List all UserVars entries.
    */
-  template <typename T>
-  bool SetKey(nlohmann::ordered_json &root, const Path &path, T value) {
-    static_assert(kValueTypeSupported<T>, "T is not supported");
-    nlohmann::ordered_json *node = &root;
-    for (size_t i = 0; i < path.size(); ++i) {
-      const std::string &seg = path[i];
-      if (i + 1 == path.size()) {
-        (*node)[seg] = value;
-        return true;
-      }
-      if (!node->is_object()) {
-        *node = nlohmann::ordered_json::object();
-      }
-      if (!node->contains(seg) || !(*node)[seg].is_object()) {
-        (*node)[seg] = nlohmann::ordered_json::object();
-      }
-      node = &(*node)[seg];
-    }
-    return false;
-  }
+  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
+  ListUserVars() const;
+  /**
+   * @brief Set a UserVars entry and optionally persist to settings.
+   */
+  ECM SetUserVar(const std::string &name, const std::string &value,
+                 bool dump_now = true);
+  /**
+   * @brief Remove a UserVars entry and optionally persist to settings.
+   */
+  ECM RemoveUserVar(const std::string &name, bool dump_now = true);
+  /**
+   * @brief Backup config/settings/known_hosts when the interval elapses.
+   */
+  ECM ConfigBackupIfNeeded();
+  /** Return a list of configured host nicknames. */
+  [[nodiscard]] std::vector<std::string> ListHostnames() const;
+  /**
+   * @brief Persist an encrypted password for a given client nickname.
+   */
+  // ECM SetClientPasswordEncrypted(const std::string &nickname,
+  //                                const std::string &encrypted_password,
+  //                                bool dump_now = true);
+  // /** Set a host field and optionally dump config. */
+  // ECM SetHostField(const std::string &nickname, const std::string &field,
+  //                  const Value &value, bool dump_now = true);
+  // /**
+  //  * @brief Validate whether a nickname is legal and not already used.
+  //  */
+  // bool ValidateNickname(const std::string &nickname, std::string *error)
+  // const;
+  // /**
+  //  * @brief Check whether a host nickname exists in the configuration.
+  //  * @param nickname Host nickname.
+  //  * @return True when the nickname is present.
+  //  */
+  // [[nodiscard]] bool HostExists(const std::string &nickname) const;
 
   template <typename T>
   T ResolveArg(DocumentKind kind, const Path &path, const T &default_value,
-               const std::function<T(T)> &post_process) {
+               const std::function<T(T)> &post_process) const {
     static_assert(kValueTypeSupported<T>, "T is not supported");
-    auto json = GetJson(kind);
-    if (!json.has_value()) {
+    const DocumentState *doc = GetDoc_(kind);
+    if (!doc) {
       return default_value;
     }
+    std::lock_guard<std::mutex> lock(doc->mtx);
     T value = {};
-    if (!QueryKey(json->get(), path, &value)) {
+    if (!QueryKey(doc->GetJsonConstRef(), path, &value)) {
       return default_value;
     }
     if (post_process) {
@@ -322,6 +285,75 @@ public:
     }
     return value;
   }
+  template <typename T>
+  bool ResolveArg(DocumentKind kind, const Path &path, T *data) {
+    static_assert(kValueTypeSupported<T>, "T is not supported");
+    const DocumentState *doc = GetDoc_(kind);
+    std::lock_guard<std::mutex> lock(doc->mtx);
+    if (!QueryKey(doc->GetJsonConstRef(), path, data)) {
+      return false;
+    }
+    return true;
+  }
+
+  inline bool
+  ExternaLView(DocumentKind kind,
+               const std::function<void(const Json &)> &transform) const {
+    const DocumentState *doc = GetDoc_(kind);
+    if (!doc || !transform) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(doc->mtx);
+    try {
+      transform(doc->GetJsonConstRef());
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
+
+  template <typename T>
+  bool SetArg(DocumentKind kind, const Path &path, T value) {
+    static_assert(kValueTypeSupported<T>, "T is not supported");
+    DocumentState *doc = GetDoc_(kind);
+    if (!doc) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(doc->mtx);
+    if (!doc->json.is_object()) {
+      doc->json = nlohmann::ordered_json::object();
+    }
+    if (!SetKey(doc->json, path, value)) {
+      return false;
+    }
+    doc->dirty = true;
+    return true;
+  }
+
+  bool DelArg(DocumentKind kind, const Path &path) {
+    DocumentState *doc = GetDoc_(kind);
+    if (!doc) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(doc->mtx);
+    if (!doc->json.is_object()) {
+      return false;
+    }
+    if (!DelKey(doc->json, path)) {
+      return false;
+    }
+    doc->dirty = true;
+    return true;
+  }
+
+protected:
+  friend class AMHostManager;
+  /**
+   * @brief Notify any registered dump-error callback.
+   * @param err Error ECM to forward.
+   */
+  void NotifyDumpError_(const ECM &err) const;
+  AMPromptManager &prompt = AMPromptManager::Instance();
 
 private:
   /**
@@ -360,7 +392,7 @@ private:
    * @param json JSON payload to serialize.
    * @param out_path Target file path.
    */
-  void WriteSnapshotToPath_(ConfigHandle *handle, const std::string &json,
+  void WriteSnapshotToPath_(ConfigHandle *handle, std::string_view json,
                             const std::filesystem::path &out_path) const;
 
   /**
@@ -369,104 +401,30 @@ private:
   void WriteThreadLoop_();
 
   std::filesystem::path root_dir_;
-  std::map<DocumentKind, DocumentState> docs_;
+  std::unordered_map<DocumentKind, DocumentState> docs_;
   std::mutex handle_mtx_;
-  std::mutex write_mtx_;
+  std::mutex write_mtx_; // shared by all write operations and the write thread
+  std::mutex write_queue_mtx_; // protects the write task queue
   std::condition_variable write_cv_;
   std::queue<std::function<ECM()>> write_queue_;
   std::thread write_thread_;
   std::atomic<bool> write_running_{false};
   std::atomic<bool> shutdown_requested_{false};
   bool backup_prune_checked_ = false;
-};
-
-/**
- * @brief Data access layer for non-style configuration entities.
- */
-class AMConfigCoreData {
-public:
-  using Path = std::vector<std::string>;
-  using Value =
-      std::variant<int64_t, bool, std::string, std::vector<std::string>>;
-
-  /**
-   * @brief Construct a core data layer with default rules.
-   */
-  AMConfigCoreData();
-
-  /**
-   * @brief Bind the storage layer used for raw config access.
-   * @param storage Storage layer pointer.
-   */
-  void BindStorage(AMConfigStorage *storage);
-
-  /**
-   * @brief Report whether the layer has an attached storage instance.
-   * @return True when storage is bound.
-   */
-  [[nodiscard]] bool HasStorage() const;
-
-  /**
-   * @brief Load history data into memory (in-memory only for now).
-   * @return ECM success or failure.
-   */
-  ECM LoadHistory();
-
-  /**
-   * @brief Fetch history commands for a nickname.
-   * @param nickname Host nickname.
-   * @param out Output list for commands.
-   * @return ECM success or failure.
-   */
-  ECM GetHistoryCommands(std::string nickname,
-                         std::vector<std::string> *out) const;
-
-  /**
-   * @brief Store history commands for a nickname and optionally persist.
-   * @param nickname Host nickname.
-   * @param commands Command list to store.
-   * @param dump_now Whether to persist immediately.
-   * @return ECM success or failure.
-   */
-  ECM SetHistoryCommands(const std::string &nickname,
-                         const std::vector<std::string> &commands,
-                         bool dump_now = true);
-
-  /**
-   * @brief Check whether a host nickname exists in the configuration.
-   * @param nickname Host nickname.
-   * @return True when the nickname is present.
-   */
-  [[nodiscard]] bool HostExists(const std::string &nickname) const;
-
-  /**
-   * @brief Validate whether a nickname is legal and not already used.
-   * @param nickname Host nickname to validate.
-   * @param error Output error message on failure.
-   * @return True when the nickname is valid.
-   */
-  bool ValidateNickname(const std::string &nickname, std::string *error) const;
-
-private:
-  AMConfigStorage *storage_ = nullptr;
-  std::regex nickname_pattern_;
+  DumpErrorCallback dump_error_cb_;
+  std::regex nickname_pattern_{"^[A-Za-z0-9_-]+$"};
+  bool initialized_ = false;
 };
 
 /**
  * @brief Style access layer for UI and formatting configuration.
  */
-class AMConfigStyleData {
+class AMConfigStyleData : public AMConfigStorage {
 public:
   /**
    * @brief Construct a style layer with no bound storage.
    */
   AMConfigStyleData();
-
-  /**
-   * @brief Bind the storage layer used for style configuration lookups.
-   * @param storage Storage layer pointer.
-   */
-  void BindStorage(AMConfigStorage *storage);
 
   /**
    * @brief Apply a named style to a string with optional path context.
@@ -505,14 +463,13 @@ private:
    */
   AMProgressBarStyle BuildProgressBarStyle_() const;
 
-  AMConfigStorage *storage_ = nullptr;
   mutable std::optional<AMProgressBarStyle> progress_bar_style_;
 };
 
 /**
  * @brief CLI exposure layer for configuration commands.
  */
-class AMConfigCLIAdapter {
+class AMConfigCLIAdapter : public AMConfigStyleData {
 public:
   using SimpleCallback = std::function<ECM()>;
   using StringCallback = std::function<ECM(const std::string &)>;
@@ -601,28 +558,28 @@ public:
    * @brief Add a configuration entry for CLI output.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM Add() const;
+  [[nodiscard]] ECM Add();
 
   /**
    * @brief Modify a configuration entry.
    * @param nickname Entry nickname.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM Modify(const std::string &nickname) const;
+  [[nodiscard]] ECM Modify(const std::string &nickname);
 
   /**
    * @brief Delete a configuration entry.
    * @param nickname Entry nickname.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM Delete(const std::string &nickname) const;
+  [[nodiscard]] ECM Delete(const std::string &nickname);
 
   /**
    * @brief Delete configuration entries by list.
    * @param targets Entry nicknames.
    * @return ECM success or failure.
    */
-  [[nodiscard]] ECM Delete(const std::vector<std::string> &targets) const;
+  [[nodiscard]] ECM Delete(const std::vector<std::string> &targets);
 
   /**
    * @brief Query a configuration entry.
@@ -653,7 +610,31 @@ public:
    */
   [[nodiscard]] ECM Src() const;
 
+  /**
+   * @brief Parse and set a host field from config set command arguments.
+   */
+  ECM SetHostValue(const std::string &nickname, const std::string &attrname,
+                   const std::string &value);
+
+  /**
+   * @brief Return configured private key paths (optionally print).
+   */
+  [[nodiscard]] std::pair<ECM, std::vector<std::string>>
+  PrivateKeys(bool print_sign = false) const;
+
 private:
+  struct HostEntry {
+    std::map<std::string, Value> fields;
+  };
+
+  [[nodiscard]] std::string ValueToString_(const Value &value) const;
+  [[nodiscard]] std::map<std::string, HostEntry> CollectHosts_() const;
+  [[nodiscard]] ECM PrintHost_(const std::string &nickname,
+                               const HostEntry &entry) const;
+  ECM PromptAddFields_(std::string *nickname, HostEntry *entry);
+  ECM PromptModifyFields_(const std::string &nickname, HostEntry *entry);
+  bool ParsePositiveInt_(const std::string &input, int64_t *value) const;
+
   /**
    * @brief Build a standardized error response for missing callbacks.
    * @param action Action name being invoked.
@@ -673,18 +654,10 @@ private:
   RenameCallback rename_cb_;
 };
 
-class AMConfigManager {
+class AMConfigManager : public AMConfigStyleData {
 public:
-  using Path = std::vector<std::string>;
-  using Value =
-      std::variant<int64_t, bool, std::string, std::vector<std::string>>;
-  enum class ResolveArgType {
-    TimeoutMs,
-    RefreshIntervalMs,
-    HeartbeatIntervalS,
-    TraceNum,
-    MaxHistoryCount
-  };
+  using Path = AMConfigStorage::Path;
+  using Value = AMConfigStorage::Value;
 
   struct ClientConfig {
     ConRequst request;
@@ -718,217 +691,13 @@ public:
   ~AMConfigManager();
 
   ECM Init();
-  ECM Dump();
-
-  [[nodiscard]] std::string Format(const std::string &ori_str,
-                                   const std::string &style_name,
-                                   const PathInfo *path_info = nullptr) const;
-
-  [[nodiscard]] ECM List() const;
-  [[nodiscard]] ECM ListName() const;
-  /** Return a list of configured host nicknames. */
-  [[nodiscard]] std::vector<std::string> ListHostnames() const;
-  [[nodiscard]] std::pair<ECM, std::vector<std::string>>
-  PrivateKeys(bool print_sign = false) const;
-  /**
-   * @brief Find a known host entry by hostname, port, and protocol.
-   */
-  [[nodiscard]] std::pair<ECM, std::optional<KnownHostEntry>>
-  FindKnownHost(const std::string &hostname, int port,
-                const std::string &protocol) const;
-  /**
-   * @brief Insert or update a known host entry and optionally persist it.
-   */
-  ECM UpsertKnownHost(const KnownHostEntry &entry, bool dump_now = true);
-  /**
-   * @brief Build a known host verification callback for SFTP clients.
-   */
-  KnownHostCallback BuildKnownHostCallback();
-  /** Return the project root directory path. */
-  [[nodiscard]] std::filesystem::path ProjectRoot() const;
-  [[nodiscard]] std::pair<ECM, ClientConfig>
-  GetClientConfig(const std::string &nickname);
-  /**
-   * @brief Create a progress bar configured from style.ProgressBar settings.
-   */
-  [[nodiscard]] AMProgressBar
-  CreateProgressBar(int64_t total_size, const std::string &prefix) const;
-  /**
-   * @brief Create a UTF-8 table using style.Table settings.
-   */
-  [[nodiscard]] std::string
-  FormatUtf8Table(const std::vector<std::string> &keys,
-                  const std::vector<std::vector<std::string>> &rows) const;
-  [[nodiscard]] int GetSettingInt(const Path &path, int default_value) const;
-  /**
-   * @brief Resolve an integer setting by type with optional post-processing.
-   */
-  [[nodiscard]] int ResolveArg(ResolveArgType target_type,
-                               int default_value) const;
-  /**
-   * @brief Resolve network timeout from settings with a default fallback.
-   */
-  [[nodiscard]] int ResolveTimeoutMs(int default_timeout_ms = 5000) const;
-  /**
-   * @brief Resolve transfer refresh interval from settings with defaults.
-   */
-  [[nodiscard]] int ResolveRefreshIntervalMs() const;
-  /**
-   * @brief Resolve heartbeat interval from settings with a default fallback.
-   */
-  [[nodiscard]] int ResolveHeartbeatInterval() const;
-  /**
-   * @brief Resolve trace buffer size from settings with sane defaults.
-   */
-  [[nodiscard]] ssize_t ResolveTraceNum() const;
-  /** Return a string setting value or the provided default. */
   [[nodiscard]] std::string
   GetSettingString(const Path &path, const std::string &default_value) const;
-  /**
-   * @brief Query a UserVars entry by name.
-   */
-  bool GetUserVar(const std::string &name, std::string *value) const;
-  /**
-   * @brief List all UserVars entries.
-   */
-  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
-  ListUserVars() const;
-  /**
-   * @brief Set a UserVars entry and optionally persist to settings.
-   */
-  ECM SetUserVar(const std::string &name, const std::string &value,
-                 bool dump_now = true);
-  /**
-   * @brief Remove a UserVars entry and optionally persist to settings.
-   */
-  ECM RemoveUserVar(const std::string &name, bool dump_now = true);
-  [[nodiscard]] ECM Src() const;
-  [[nodiscard]] ECM Delete(const std::string &targets);
-  /**
-   * @brief Delete hosts by nickname list without parsing input.
-   */
-  [[nodiscard]] ECM Delete(const std::vector<std::string> &targets);
-  [[nodiscard]] ECM Rename(const std::string &old_nickname,
-                           const std::string &new_nickname);
-  [[nodiscard]] ECM Query(const std::string &targets) const;
-  /**
-   * @brief Query hosts by nickname list without parsing input.
-   */
-  [[nodiscard]] ECM Query(const std::vector<std::string> &targets) const;
-  [[nodiscard]] ECM Add();
-  [[nodiscard]] ECM Modify(const std::string &nickname);
-  /**
-   * @brief Validate whether a nickname is legal and not already used.
-   */
-  bool ValidateNickname(const std::string &nickname, std::string *error) const;
-  /**
-   * @brief Persist an encrypted password for a given client nickname.
-   */
-  ECM SetClientPasswordEncrypted(const std::string &nickname,
-                                 const std::string &encrypted_password,
-                                 bool dump_now = true);
-  /** Set a host field and optionally dump config. */
-  ECM SetHostField(const std::string &nickname, const std::string &field,
-                   const Value &value, bool dump_now = true);
-
-  /**
-   * @brief Parse and set a host field from config set command arguments.
-   */
-  ECM SetHostValue(const std::string &nickname, const std::string &attrname,
-                   const std::string &value);
-
-  /**
-   * @brief Load history data from .AMSFTP_History.toml into memory.
-   */
-  ECM LoadHistory();
-
-  /**
-   * @brief Fetch history commands for a nickname.
-   */
-  ECM GetHistoryCommands(const std::string &nickname,
-                         std::vector<std::string> *out);
-
-  /**
-   * @brief Store history commands for a nickname and optionally persist.
-   */
-  ECM SetHistoryCommands(const std::string &nickname,
-                         const std::vector<std::string> &commands,
-                         bool dump_now = true);
-
-  /**
-   * @brief Resolve history size limit from settings with minimum 10.
-   */
-  [[nodiscard]] int ResolveMaxHistoryCount(int default_value = 10) const;
-
-  /**
-   * @brief Submit a no-arg write task to the background writer thread.
-   */
-  void SubmitWriteTask(std::function<void()> task);
-
-  /**
-   * @brief Backup config/settings/known_hosts when the interval elapses.
-   */
-  ECM ConfigBackupIfNeeded();
-
-  /** Query a value at path for config/settings JSON. */
-  bool QueryKey(const nlohmann::ordered_json &root, const Path &path,
-                Value *value) const;
-  /** Set or create a value at path for config/settings JSON. */
-  template <typename T>
-  bool SetKey(nlohmann::ordered_json &root, const Path &path, T value) {
-    nlohmann::ordered_json *node = &root;
-    for (size_t i = 0; i < path.size(); ++i) {
-      const std::string &seg = path[i];
-      if (i + 1 == path.size()) {
-        (*node)[seg] = value;
-        return true;
-      }
-      if (!node->is_object()) {
-        *node = nlohmann::ordered_json::object();
-      }
-      if (!node->contains(seg) || !(*node)[seg].is_object()) {
-        (*node)[seg] = nlohmann::ordered_json::object();
-      }
-      node = &(*node)[seg];
-    }
-    return false;
-  }
-
-  [[nodiscard]] bool HostExists(const std::string &nickname) const;
+  [[nodiscard]] int ResolveTimeoutMs(int default_timeout_ms = 5000) const;
+  AMHostManager &Host();
+  const AMHostManager &Host() const;
 
 private:
-  AMConfigManager() = default;
-
-  struct HostEntry {
-    std::map<std::string, Value> fields;
-  };
-
-  static void OnExit();
-  void CloseHandles();
-  ECM EnsureInitialized(const char *caller) const;
-  [[nodiscard]] std::string ValueToString(const Value &value) const;
-  [[nodiscard]] std::map<std::string, HostEntry> CollectHosts() const;
-  [[nodiscard]] ECM PrintHost(const std::string &nickname,
-                              const HostEntry &entry) const;
-  ECM UpsertHostField(const std::string &nickname, const std::string &field,
-                      Value value);
-  ECM RemoveHost(const std::string &nickname);
-
-  ECM PromptAddFields(std::string *nickname, HostEntry *entry);
-  ECM PromptModifyFields(const std::string &nickname, HostEntry *entry);
-  bool ParsePositiveInt(const std::string &input, int64_t *value) const;
-  /**
-   * @brief Persist in-memory history JSON to disk.
-   */
-  ECM DumpHistory_();
-
-  AMConfigStorage storage_;
-  AMConfigCoreData core_data_;
-  AMConfigStyleData style_data_;
-  AMConfigCLIAdapter cli_adapter_;
-  KnownHostCallback known_host_cb_ = {};
-  AMPromptManager &prompt = AMPromptManager::Instance();
-
-  bool initialized_ = false;
-  bool exit_hook_installed_ = false;
+  AMConfigManager();
+  std::unique_ptr<AMHostManager> host_manager_;
 };
