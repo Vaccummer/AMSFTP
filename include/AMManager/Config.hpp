@@ -210,24 +210,6 @@ public:
   [[nodiscard]] std::filesystem::path ProjectRoot() const;
 
   /**
-   * @brief Query a UserVars entry by name.
-   */
-  bool GetUserVar(const std::string &name, std::string *value) const;
-  /**
-   * @brief List all UserVars entries.
-   */
-  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
-  ListUserVars() const;
-  /**
-   * @brief Set a UserVars entry and optionally persist to settings.
-   */
-  ECM SetUserVar(const std::string &name, const std::string &value,
-                 bool dump_now = true);
-  /**
-   * @brief Remove a UserVars entry and optionally persist to settings.
-   */
-  ECM RemoveUserVar(const std::string &name, bool dump_now = true);
-  /**
    * @brief Backup config/settings/known_hosts when the interval elapses.
    */
   ECM ConfigBackupIfNeeded();

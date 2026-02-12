@@ -158,7 +158,7 @@ void AMPromptManager::Print(const std::vector<std::string> &items,
     cached_output_ += out;
     return;
   }
-  
+
   {
     std::lock_guard<std::mutex> lock(print_mutex_);
     ic_print(out.c_str());

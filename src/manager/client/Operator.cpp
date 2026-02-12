@@ -88,8 +88,8 @@ std::vector<std::shared_ptr<BaseClient>> Operator::GetClients() {
                   : std::vector<std::shared_ptr<BaseClient>>{};
 }
 
-std::pair<ECM, ClientConfig> Operator::GetClientConfig(
-    const std::string &nickname) {
+std::pair<ECM, ClientConfig>
+Operator::GetClientConfig(const std::string &nickname) {
   return hostm_.GetClientConfig(nickname);
 }
 
@@ -375,16 +375,15 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
     password_enc = AMAuth::EncryptPassword(password_enc);
   }
 
-  ConRequst request(resolved_nickname, hostname, username, static_cast<int>(port),
-                    password_enc, keyfile, false, "");
+  ConRequst request(resolved_nickname, hostname, username,
+                    static_cast<int>(port), password_enc, keyfile, false, "");
   if (!trace_cb) {
     trace_cb = log_manager_.TraceCallbackFunc();
   }
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, nullptr);
-  auto base_client =
-      CreateClient(request, protocol, trace_num_, std::move(trace_cb),
-                   AMDefaultRemoteBufferSize, std::move(keys),
-                   std::move(auth_cb));
+  auto base_client = CreateClient(
+      request, protocol, trace_num_, std::move(trace_cb),
+      AMDefaultRemoteBufferSize, std::move(keys), std::move(auth_cb));
   if (!base_client) {
     return {Err(EC::OperationUnsupported, "Unsupported protocol"), nullptr};
   }
@@ -480,7 +479,8 @@ AuthCallback Operator::BuildAuthCallback_(const AuthCallback &auth_cb,
   };
 }
 
-void Operator::ApplyKnownHostCallback_(const std::shared_ptr<BaseClient> &client) {
+void Operator::ApplyKnownHostCallback_(
+    const std::shared_ptr<BaseClient> &client) {
   if (!client || client->GetProtocol() != ClientProtocol::SFTP) {
     return;
   }
@@ -500,11 +500,12 @@ void Operator::ApplyKnownHostCallback_(const std::shared_ptr<BaseClient> &client
       bool canceled = false;
       bool accepted = true;
       if (AMIsInteractive.load(std::memory_order_relaxed)) {
-        prompt_.Print(AMStr::amfmt("Unknown host: {}:{}  [{}]",
-                                   query.hostname, query.port, query.protocol));
-        prompt_.Print(
-            AMStr::amfmt("Fingerprint: {}", AMStr::Strip(query.GetFingerprint())));
-        accepted = prompt_.PromptYesNo("Trust this host key? (y/N): ", &canceled);
+        prompt_.Print(AMStr::amfmt("Unknown host: {}:{}  [{}]", query.hostname,
+                                   query.port, query.protocol));
+        prompt_.Print(AMStr::amfmt("Fingerprint: {}",
+                                   AMStr::Strip(query.GetFingerprint())));
+        accepted =
+            prompt_.PromptYesNo("Trust this host key? (y/N): ", &canceled);
       }
       if (canceled || !accepted) {
         return Err(EC::ConfigCanceled, "Known host fingerprint add canceled");
@@ -564,15 +565,16 @@ void Operator::DefaultDisconnectCallback(
   if (!client || ecm.first == EC::Success) {
     return;
   }
-  prompt_.ErrorFormat(ECM{
-      ecm.first,
-      AMStr::amfmt("Client disconnected [{}]: {}", client->GetNickname(),
-                   ecm.second.empty() ? std::string(AM_ENUM_NAME(ecm.first))
-                                      : ecm.second)});
+  prompt_.ErrorFormat(
+      ECM{ecm.first,
+          AMStr::amfmt("Client disconnected [{}]: {}", client->GetNickname(),
+                       ecm.second.empty() ? std::string(AM_ENUM_NAME(ecm.first))
+                                          : ecm.second)});
 }
 
 AuthCallback Operator::BuiltinPasswordCallback_() {
-  return [this](const AuthCBInfo &info) { return DefaultPasswordCallback(info); };
+  return
+      [this](const AuthCBInfo &info) { return DefaultPasswordCallback(info); };
 }
 
 Operator::DisconnectCallback Operator::BuiltinDisconnectCallback_() {

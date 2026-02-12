@@ -1307,3 +1307,13 @@ if true, add task to write thread
 add new mechanism DumpErrorCallback void(ECM)
 when dump error, transit error to ECM and callback
 AMConfigStorage suply interface to set the callback
+@src\cli\CLIBind.cpp
+
+@include\AMCLI\CLIBind.hpp
+在类似ConfigLsArgs 所有存储函数参数的结构体中定义一个Run函数
+
+CommonArg: 类型为所有Args结构体的variant
+
+为所有命令绑定添加一个callback: 将CommonArg设置为指定结构体
+
+使用CLI11解析指令, 检查CommonArg是否为空, 非空使用std::visit进行调用Run函数并获取ECM

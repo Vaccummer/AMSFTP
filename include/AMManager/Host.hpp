@@ -193,6 +193,10 @@ public:
 
   [[nodiscard]] std::pair<ECM, ClientConfig>
   GetClientConfig(const std::string &nickname);
+  /**
+   * @brief Fetch local client config from storage and fall back to defaults.
+   */
+  [[nodiscard]] std::pair<ECM, ClientConfig> GetLocalConfig();
   ECM UpsertHost(const ClientConfig &entry, bool dump_now = true);
 
   [[nodiscard]] ECM FindKnownHost(KnownHostQuery &query) const;
