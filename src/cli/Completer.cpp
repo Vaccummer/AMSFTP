@@ -18,6 +18,7 @@
 #include <vector>
 
 namespace {
+std::atomic<AMCompleter *> g_active_completer{nullptr};
 /**
  * @brief Normalize a configured style into a bbcode opening tag.
  */
@@ -655,13 +656,7 @@ struct AMCompleterImpl::State {
   /**
    * @brief Construct the implementation with required managers.
    */
-  explicit State(AMCompleterImpl *owner)
-      : owner_(owner), config_manager_(AMConfigManager::Instance()),
-        client_manager_(AMClientManage::Manager::Instance()),
-        filesystem_(AMFileSystem::Instance()),
-        transfer_manager_(AMTransferManager::Instance()) {
-    StartAsyncWorker();
-  }
+  explicit State(AMCompleterImpl *owner) : owner_(owner) { StartAsyncWorker(); }
 
   /**
    * @brief Stop the async worker on destruction.
@@ -1141,7 +1136,7 @@ private:
                                     const std::string &style_key,
                                     size_t pad_width) const {
     const std::string tag = style_key == "module" ? owner_->input_tag_module_
-                                                   : owner_->input_tag_command_;
+                                                  : owner_->input_tag_command_;
     const std::string escaped = EscapeBbcodeText_(name);
     std::string display = tag.empty() ? escaped : tag + escaped + "[/]";
     if (pad_width > name.size()) {
@@ -1529,7 +1524,9 @@ private:
     if (!client) {
       return;
     }
-    const int timeout_ms = config_manager_.ResolveTimeoutMs(5000);
+    const int timeout_ms = config_manager_.ResolveArg<int>(
+        DocumentKind::Settings, {"CompleteOption", "timeout_ms"}, 5000,
+        [](int v) { return v > 0 ? v : 5000; });
     auto [rcm, listed] =
         client->listdir(ctx.path.dir_abs, nullptr, timeout_ms, am_ms());
     if (rcm.first != EC::Success) {
@@ -1680,7 +1677,9 @@ private:
       if (!client) {
         continue;
       }
-      const int timeout_ms = config_manager_.ResolveTimeoutMs(5000);
+      const int timeout_ms = config_manager_.ResolveArg<int>(
+          DocumentKind::Settings, {"CompleteOption", "timeout_ms"}, 5000,
+          [](int v) { return v > 0 ? v : 5000; });
       auto [rcm, listed] =
           client->listdir(request.key.dir, nullptr, timeout_ms, am_ms());
       if (rcm.first != EC::Success) {
@@ -1706,10 +1705,11 @@ private:
 
 private:
   AMCompleterImpl *owner_ = nullptr;
-  AMConfigManager &config_manager_;
-  AMClientManage::Manager &client_manager_;
-  AMFileSystem &filesystem_;
-  AMTransferManager &transfer_manager_;
+  AMConfigManager &config_manager_ = AMConfigManager::Instance();
+  AMClientManage::Manager &client_manager_ =
+      AMClientManage::Manager::Instance();
+  AMFileSystem &filesystem_ = AMFileSystem::Instance();
+  AMTransferManager &transfer_manager_ = AMTransferManager::Instance();
   CommandTree command_tree_;
 
   std::mutex cache_mtx_;
@@ -1732,10 +1732,6 @@ private:
   std::optional<AsyncResult> async_result_;
 };
 
-namespace {
-std::atomic<AMCompleter *> g_active_completer{nullptr};
-}
-
 /**
  * @brief Construct completer implementation state.
  */
@@ -1752,14 +1748,15 @@ AMCompleterImpl::~AMCompleterImpl() = default;
 void AMCompleterImpl::LoadConfig() {
   AMConfigManager &config = AMConfigManager::Instance();
 
-  int max_items = config.GetSettingInt({"CompleteOption", "maxnum"}, -1);
+  int max_items = config.ResolveArg<int>(DocumentKind::Settings,
+                                         {"CompleteOption", "maxnum"}, -1, {});
   if (max_items <= 0) {
     max_items = -1;
   }
   complete_max_items_ = max_items;
 
-  int max_rows =
-      config.GetSettingInt({"CompleteOption", "maxrows_perpage"}, 9);
+  int max_rows = config.ResolveArg<int>(
+      DocumentKind::Settings, {"CompleteOption", "maxrows_perpage"}, 9, {});
   if (max_rows == 0) {
     max_rows = 9;
   }
@@ -1770,8 +1767,8 @@ void AMCompleterImpl::LoadConfig() {
 
   auto read_bool = [&config](const std::vector<std::string> &path,
                              bool default_value) {
-    std::string value =
-        config.GetSettingString(path, default_value ? "true" : "false");
+    std::string value = config.ResolveArg<std::string>(
+        DocumentKind::Settings, path, default_value ? "true" : "false", {});
     value = AMStr::lowercase(AMStr::Strip(value));
     if (value == "true" || value == "1" || value == "yes" || value == "on") {
       return true;
@@ -1782,11 +1779,10 @@ void AMCompleterImpl::LoadConfig() {
     return default_value;
   };
 
-  complete_number_pick_ =
-      read_bool({"CompleteOption", "number_pick"}, true);
+  complete_number_pick_ = read_bool({"CompleteOption", "number_pick"}, true);
   complete_auto_fill_ = read_bool({"CompleteOption", "auto_fillin"}, true);
-  complete_select_sign_ =
-      config.GetSettingString({"CompleteOption", "item_select_sign"}, "");
+  complete_select_sign_ = config.ResolveArg<std::string>(
+      DocumentKind::Settings, {"CompleteOption", "item_select_sign"}, "", {});
 
   complete_delay_ms_ = config.ResolveArg<int>(
       DocumentKind::Settings, {"CompleteOption", "complete_delay_ms"}, 100,
@@ -1797,8 +1793,8 @@ void AMCompleterImpl::LoadConfig() {
       static_cast<size_t>(100),
       [](size_t v) { return static_cast<size_t>(v); });
 
-  int max_entries =
-      config.GetSettingInt({"CompleteOption", "cache_max_entries"}, 64);
+  int max_entries = config.ResolveArg<int>(
+      DocumentKind::Settings, {"CompleteOption", "cache_max_entries"}, 64, {});
   if (max_entries < 1) {
     max_entries = 1;
   }
@@ -1846,26 +1842,6 @@ void AMCompleterImpl::HandleCompletion(ic_completion_env_t *cenv,
 }
 
 /**
- * @brief Construct completer facade.
- */
-AMCompleter::AMCompleter() { SetActive(this); }
-
-/**
- * @brief Stop the async worker and release resources.
- */
-AMCompleter::~AMCompleter() { SetActive(nullptr); }
-
-/**
- * @brief Initialize completer state.
- */
-void AMCompleter::Init() {}
-
-/**
- * @brief Install the completer into the isocline environment.
- */
-void AMCompleter::Install() { AMCompleterImpl::Install(this); }
-
-/**
  * @brief Clear any cached completion results.
  */
 void AMCompleter::ClearCache() { AMCompleterImpl::ClearCache(); }
@@ -1902,6 +1878,5 @@ void AMCompleter::IsoclineCompleter(ic_completion_env_t *cenv,
   if (!input || cursor < 0) {
     return;
   }
-  self->HandleCompletion(cenv, std::string(input),
-                         static_cast<size_t>(cursor));
+  self->HandleCompletion(cenv, std::string(input), static_cast<size_t>(cursor));
 }

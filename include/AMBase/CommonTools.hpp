@@ -804,6 +804,10 @@ inline std::string BBCEscape(const std::string &text) {
   return escaped;
 }
 
+inline bool IsWhitespace(char c) {
+  return std::isspace(static_cast<unsigned char>(c)) != 0;
+}
+
 inline void VStrip(std::string &path) {
   size_t start = 0;
   while (start < path.size() &&

@@ -9,7 +9,8 @@ using ic_completion_env_t = ic_completion_env_s;
 /**
  * @brief Base implementation storage and operations for AMCompleter.
  */
-struct AMCompleterImpl {
+class AMCompleterImpl {
+public:
   /**
    * @brief Initialize completer runtime state.
    */
@@ -18,7 +19,7 @@ struct AMCompleterImpl {
   /**
    * @brief Stop async worker and release runtime state.
    */
-  ~AMCompleterImpl();
+  virtual ~AMCompleterImpl();
 
   /**
    * @brief Read all completion settings and cache them for the current install.
@@ -65,22 +66,27 @@ protected:
 /**
  * @brief Completion coordinator for interactive input.
  */
-class AMCompleter : public NonCopyableNonMovable, private AMCompleterImpl {
+class AMCompleter : public NonCopyableNonMovable, AMCompleterImpl {
 public:
   using Impl = AMCompleterImpl;
 
-  AMCompleter();
+  /**
+   * @brief Construct completer facade.
+   */
+  AMCompleter() { SetActive(this); }
+
   /**
    * @brief Stop the async worker and release resources.
    */
-  ~AMCompleter();
-
-  void Init() override;
+  ~AMCompleter() override { SetActive(nullptr); }
 
   /**
-   * @brief Install the completer into the isocline environment.
+   * @brief Initialize completer state.
    */
-  void Install();
+  void Init() override {
+    Install(this);
+    LoadConfig();
+  }
 
   /**
    * @brief Clear any cached completion results.

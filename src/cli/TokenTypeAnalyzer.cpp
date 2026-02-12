@@ -3,10 +3,9 @@
 #include "AMCLI/CLIBind.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Var.hpp"
-#include <array>
 #include <algorithm>
+#include <array>
 #include <cctype>
-#include <cmath>
 #include <limits>
 #include <sstream>
 
@@ -40,7 +39,7 @@ bool IsQuoted(char c) { return c == '"' || c == '\''; }
  * @return Opening bbcode tag, or empty if the input is unusable.
  */
 std::string NormalizeStyleTag_(const std::string &raw) {
-  std::string trimmed = AMStr::TrimWhitespaceCopy(raw);
+  std::string trimmed = AMStr::Strip(raw);
   if (trimmed.empty()) {
     return "";
   }
@@ -142,7 +141,7 @@ bool ParseHexColorToken(const std::string &token, int *r, int *g, int *b) {
 }
 
 std::string NormalizeColorToken(const std::string &token) {
-  std::string normalized = AMStr::lowercase(AMStr::TrimWhitespaceCopy(token));
+  std::string normalized = AMStr::lowercase(AMStr::Strip(token));
   normalized.erase(std::remove_if(normalized.begin(), normalized.end(),
                                   [](char c) { return c == '_' || c == '-'; }),
                    normalized.end());
@@ -239,12 +238,12 @@ ReplxxColor NearestReplxxColor(int r, int g, int b) {
 
 ReplxxColor ParseInputHighlightStyle(const std::string &style,
                                      ReplxxColor fallback) {
-  std::string trimmed = AMStr::TrimWhitespaceCopy(style);
+  std::string trimmed = AMStr::Strip(style);
   if (trimmed.empty()) {
     return fallback;
   }
   if (trimmed.front() == '[' && trimmed.back() == ']') {
-    trimmed = AMStr::TrimWhitespaceCopy(trimmed.substr(1, trimmed.size() - 2));
+    trimmed = AMStr::Strip(trimmed.substr(1, trimmed.size() - 2));
   }
   if (trimmed.empty()) {
     return fallback;
@@ -499,8 +498,7 @@ bool AMTokenTypeAnalyzer::ParseVarTokenAt(const std::string &input, size_t pos,
     if (close == std::string::npos || close >= limit) {
       return false;
     }
-    std::string inner =
-        AMStr::TrimWhitespaceCopy(input.substr(pos + 2, close - pos - 2));
+    std::string inner = AMStr::Strip(input.substr(pos + 2, close - pos - 2));
     if (!IsValidVarName(inner)) {
       return false;
     }
@@ -541,8 +539,7 @@ bool AMTokenTypeAnalyzer::ParseVarTokenText(const std::string &token,
     if (token.back() != '}') {
       return false;
     }
-    std::string inner =
-        AMStr::TrimWhitespaceCopy(token.substr(2, token.size() - 3));
+    std::string inner = AMStr::Strip(token.substr(2, token.size() - 3));
     if (!IsValidVarName(inner)) {
       return false;
     }
@@ -564,8 +561,8 @@ bool AMTokenTypeAnalyzer::ParseVarTokenText(const std::string &token,
 /** Map token types to replxx colors. */
 ReplxxColor AMTokenTypeAnalyzer::ColorForType(AMTokenType type) const {
   const char *style_key = StyleKeyForType(type);
-  const std::string style = config_manager_.GetSettingString(
-      {"style", "InputHighlight", style_key}, "");
+  const std::string style = config_manager_.ResolveArg<std::string>(
+      DocumentKind::Settings, {"style", "InputHighlight", style_key}, "", {});
   return ParseInputHighlightStyle(style, DefaultColorForType(type));
 }
 
@@ -958,7 +955,7 @@ void AMTokenTypeAnalyzer::Highlight(const std::string &input,
     return;
   }
 
-  std::string trimmed = AMStr::TrimWhitespaceCopy(input);
+  std::string trimmed = AMStr::Strip(input);
   if (!trimmed.empty() && trimmed.front() == '$') {
     size_t offset = input.find('$');
     size_t eq_pos = FindEqualOutsideQuotes(input, offset);
@@ -1253,7 +1250,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
   if (handled) {
     highlight_var_references();
   } else {
-    std::string trimmed = AMStr::TrimWhitespaceCopy(input);
+    std::string trimmed = AMStr::Strip(input);
     if (!trimmed.empty() && trimmed.front() == '$') {
       size_t offset = input.find('$');
       size_t eq_pos = FindEqualOutsideQuotes(input, offset);
@@ -1287,8 +1284,9 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
   for (size_t i = 0; i < kTokenTypeCount; ++i) {
     AMTokenType type = static_cast<AMTokenType>(i);
     const char *style_key = StyleKeyForType(type);
-    style_tags[i] = NormalizeStyleTag_(config_manager_.GetSettingString(
-        {"style", "InputHighlight", style_key}, ""));
+    style_tags[i] = NormalizeStyleTag_(config_manager_.ResolveArg<std::string>(
+        DocumentKind::Settings, {"style", "InputHighlight", style_key}, "",
+        {}));
   }
 
   formatted->reserve(input.size() + 16);
