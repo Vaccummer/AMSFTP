@@ -36,7 +36,7 @@ static AMCommandPreprocessor::ECM ParseValue(const std::string &input,
   if (!value) {
     return {EC::InvalidArg, "Null output pointer"};
   }
-  std::string trimmed = AMStr::TrimWhitespaceCopy(input);
+  std::string trimmed = AMStr::Strip(input);
   if (trimmed.empty()) {
     *value = "";
     return {EC::Success, ""};
@@ -97,7 +97,7 @@ ParsePersistentDefinition(const std::string &text, std::string *name,
   if (!name || !value) {
     return {EC::InvalidArg, "Null output pointer"};
   }
-  std::string trimmed = AMStr::TrimWhitespaceCopy(text);
+  std::string trimmed = AMStr::Strip(text);
   if (trimmed.size() < 2 || trimmed[0] != '$') {
     return {EC::InvalidArg, "Persistent definition must start with $"};
   }
@@ -109,8 +109,7 @@ ParsePersistentDefinition(const std::string &text, std::string *name,
     if (close == std::string::npos) {
       return {EC::InvalidArg, "Unclosed ${...} expression"};
     }
-    name_part =
-        AMStr::TrimWhitespaceCopy(trimmed.substr(pos + 1, close - pos - 1));
+    name_part = AMStr::Strip(trimmed.substr(pos + 1, close - pos - 1));
     pos = close + 1;
   } else {
     const size_t start = pos;
@@ -321,7 +320,7 @@ static AMCommandPreprocessor::ECM SubstituteVariables(const std::string &input,
         return {EC::InvalidArg, "Unclosed ${...} expression"};
       }
       const std::string name_raw = input.substr(i + 2, close - (i + 2));
-      const std::string name = AMStr::TrimWhitespaceCopy(name_raw);
+      const std::string name = AMStr::Strip(name_raw);
       if (!IsValidVarName(name)) {
         output->append(input.substr(i, close - i + 1));
         i = close;
@@ -404,7 +403,7 @@ static AMCommandPreprocessor::ECM HandleAsyncSuffix(const std::string &input,
     return {EC::InvalidArg, "Null output pointer"};
   }
   *async_flag = false;
-  std::string trimmed = AMStr::TrimWhitespaceCopy(input);
+  std::string trimmed = AMStr::Strip(input);
   if (trimmed.empty()) {
     *command = "";
     return {EC::Success, ""};
@@ -419,8 +418,7 @@ static AMCommandPreprocessor::ECM HandleAsyncSuffix(const std::string &input,
     return {EC::Success, ""};
   }
 
-  std::string base =
-      AMStr::TrimWhitespaceCopy(trimmed.substr(0, trimmed.size() - 1));
+  std::string base = AMStr::Strip(trimmed.substr(0, trimmed.size() - 1));
   if (base.empty()) {
     return {EC::InvalidArg, "Empty command before &"};
   }
@@ -454,13 +452,13 @@ AMCommandPreprocessor::AMCommandPreprocessor(AMConfigManager &config_manager)
 AMCommandPreprocessor::Result
 AMCommandPreprocessor::Preprocess(const std::string &input) {
   Result result;
-  std::string trimmed = AMStr::TrimWhitespaceCopy(input);
+  std::string trimmed = AMStr::Strip(input);
   if (trimmed.empty()) {
     return result;
   }
 
   if (!trimmed.empty() && trimmed.front() == '!') {
-    std::string shell = AMStr::TrimWhitespaceCopy(trimmed.substr(1));
+    std::string shell = AMStr::Strip(trimmed.substr(1));
     if (shell.empty()) {
       result.rcm = {EC::InvalidArg, "Empty shell command"};
       return result;

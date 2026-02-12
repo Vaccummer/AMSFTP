@@ -276,8 +276,8 @@ bool ResolvePromptStyleAnsi_(AMConfigManager &config_manager,
     return true;
   }
 
-  std::string raw =
-      config_manager.GetSettingString({"style", "Prompt", trimmed}, "");
+  auto raw = config_manager.ResolveArg<std::string>(
+      DocumentKind::Settings, {"style", "Prompt", trimmed}, "", {});
   if (raw.empty()) {
     return false;
   }
@@ -1123,7 +1123,8 @@ std::string ApplyStyleFromConfig_(AMConfigManager &config_manager,
     return text;
   }
 
-  std::string raw = AMStr::Strip(config_manager.GetSettingString(path, ""));
+  std::string raw = AMStr::Strip(config_manager.ResolveArg<std::string>(
+      DocumentKind::Settings, path, "", {}));
   if (raw.empty()) {
     return text;
   }
@@ -1222,8 +1223,8 @@ std::string ResolveSysIcon_(AMConfigManager &config_manager, OS_TYPE os_type) {
     break;
   }
 
-  std::string icon =
-      config_manager.GetSettingString({"style", "Icons", key}, "");
+  std::string icon = config_manager.ResolveArg<std::string>(
+      DocumentKind::Settings, {"style", "Icons", key}, "", {});
   if (icon.empty()) {
     icon = "💻";
   }
@@ -1286,8 +1287,8 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
     workdir = client_manager.GetOrInitWorkdir(client);
   }
 
-  const std::string format =
-      config_manager.GetSettingString({"style", "Prompt", "format"}, "");
+  const std::string format = config_manager.ResolveArg<std::string>(
+      DocumentKind::Settings, {"style", "Prompt", "format"}, "", {});
   if (!format.empty()) {
     std::unordered_map<std::string, std::string> vars;
     vars["$sysicon"] = state.cached_sysicon;
@@ -1403,8 +1404,7 @@ CR ExecuteShellCommand_(AMClientManager &client_manager,
             {"", -1}};
   }
 
-  const int timeout_ms = config_manager.ResolveTimeoutMs(5000);
-  return client->ConductCmd(command, timeout_ms, amgif);
+  return client->ConductCmd(command, -1, amgif);
 }
 
 /**
@@ -1597,7 +1597,7 @@ int RunInteractiveLoop(const std::string &app_name,
     UpdatePromptState_(prompt_state, dispatch.rcm, exec_end - input_confirmed);
   }
 
-  prompt.FlushHistory(config_manager);
+  prompt.FlushHistory();
   AMIsInteractive.store(false, std::memory_order_relaxed);
   return g_cli_exit_code;
 }
