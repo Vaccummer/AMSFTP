@@ -1,104 +1,95 @@
 #include "AMManager/Client.hpp"
+#include <filesystem>
 
 namespace AMClientManage {
-
-PathOps::PathOps(AMConfigManager &config) : Operator(config) {}
+namespace {
+inline bool IsLocalNickname_(const std::string &nickname) {
+  const std::string lowered = AMStr::lowercase(AMStr::Strip(nickname));
+  return lowered.empty() || lowered == "local";
+}
+} // namespace
 
 std::tuple<std::string, std::string, std::shared_ptr<BaseClient>, ECM>
 PathOps::ParsePath(const std::string &input) {
   if (!input.empty() && input.front() == '@') {
-    std::string path = input.substr(1);
-    return {"local", path, LocalClientBase(), ECM{EC::Success, ""}};
+    return {"local", input.substr(1), LocalClientBase(), Ok()};
   }
 
-  auto pos = input.find('@');
+  const auto pos = input.find('@');
   if (pos == std::string::npos || pos + 1 >= input.size()) {
-    std::shared_ptr<BaseClient> current = manager_ref_.CurrentClient()
-                                              ? manager_ref_.CurrentClient()
-                                              : manager_ref_.LocalClientBase();
-    std::string nickname = current ? current->GetNickname() : "local";
-    return {nickname, input, current, ECM{EC::Success, ""}};
+    std::shared_ptr<BaseClient> current =
+        CurrentClient() ? CurrentClient() : LocalClientBase();
+    const std::string nickname = current ? current->GetNickname() : "local";
+    return {nickname, input, current, Ok()};
   }
 
-  std::string prefix = input.substr(0, pos);
-  std::string path = input.substr(pos + 1);
-  std::string lowered = AMStr::lowercase(prefix);
-  if (prefix.empty() || lowered == "local") {
-    return {"local", path, manager_ref_.LocalClientBase(),
-            ECM{EC::Success, ""}};
+  const std::string prefix = input.substr(0, pos);
+  const std::string path = input.substr(pos + 1);
+  if (IsLocalNickname_(prefix)) {
+    return {"local", path, LocalClientBase(), Ok()};
   }
 
-  auto cfg = manager_ref_.GetClientConfig(prefix);
+  auto cfg = GetClientConfig(prefix);
   if (cfg.first.first != EC::Success) {
-    const std::string styled = manager_ref_.config_.Format(prefix, "nickname");
     return {prefix, path, nullptr,
-            ECM{EC::HostConfigNotFound,
-                AMStr::amfmt("Host config not found: {}", styled)}};
+            Err(EC::HostConfigNotFound,
+                AMStr::amfmt("Host config not found: {}", prefix))};
   }
 
-  auto existing = manager_ref_.Clients().GetHost(prefix);
+  auto existing = Clients().GetHost(prefix);
   if (!existing) {
-    const std::string styled = manager_ref_.config_.Format(prefix, "nickname");
     return {prefix, path, nullptr,
-            ECM{EC::ClientNotFound,
-                AMStr::amfmt("Client not created: {}", styled)}};
+            Err(EC::ClientNotFound,
+                AMStr::amfmt("Client not created: {}", prefix))};
   }
-  return {prefix, path, existing, ECM{EC::Success, ""}};
+  return {prefix, path, existing, Ok()};
 }
 
 std::tuple<std::string, std::string, std::shared_ptr<BaseClient>, ECM>
 PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
   if (!input.empty() && input.front() == '@') {
-    std::string path = input.substr(1);
-    return {"local", path, manager_ref_.LocalClientBase(),
-            ECM{EC::Success, ""}};
+    return {"local", input.substr(1), LocalClientBase(), Ok()};
   }
 
-  auto pos = input.find('@');
+  const auto pos = input.find('@');
   if (pos == std::string::npos || pos + 1 >= input.size()) {
-    std::shared_ptr<BaseClient> current = manager_ref_.CurrentClient()
-                                              ? manager_ref_.CurrentClient()
-                                              : manager_ref_.LocalClientBase();
-    std::string nickname = current ? current->GetNickname() : "local";
-    return {nickname, input, current, ECM{EC::Success, ""}};
+    std::shared_ptr<BaseClient> current =
+        CurrentClient() ? CurrentClient() : LocalClientBase();
+    const std::string nickname = current ? current->GetNickname() : "local";
+    return {nickname, input, current, Ok()};
   }
 
-  std::string prefix = input.substr(0, pos);
-  std::string path = input.substr(pos + 1);
-  std::string lowered = AMStr::lowercase(prefix);
-  if (prefix.empty() || lowered == "local") {
-    return {"local", path, manager_ref_.LocalClientBase(),
-            ECM{EC::Success, ""}};
+  const std::string prefix = input.substr(0, pos);
+  const std::string path = input.substr(pos + 1);
+  if (IsLocalNickname_(prefix)) {
+    return {"local", path, LocalClientBase(), Ok()};
   }
 
-  auto cfg = manager_ref_.GetClientConfig(prefix);
+  auto cfg = GetClientConfig(prefix);
   if (cfg.first.first != EC::Success) {
-    const std::string styled = manager_ref_.config_.Format(prefix, "nickname");
     return {prefix, path, nullptr,
-            ECM{EC::HostConfigNotFound,
-                AMStr::amfmt("Host config not found: {}", styled)}};
+            Err(EC::HostConfigNotFound,
+                AMStr::amfmt("Host config not found: {}", prefix))};
   }
 
-  auto existing = manager_ref_.Clients().GetHost(prefix);
+  auto existing = Clients().GetHost(prefix);
   if (!existing) {
     if (AMIsInteractive.load(std::memory_order_relaxed)) {
       bool canceled = false;
-      if (!AMPromptManager::Instance().PromptYesNo(
-              "Client not found. Create it? (y/N): ", &canceled)) {
+      if (!prompt_.PromptYesNo("Client not found. Create it? (y/N): ",
+                               &canceled)) {
         return {prefix, path, nullptr,
-                ECM{EC::Terminate, AMStr::amfmt("🚫  Aborted creating: {}",
-                                                manager_ref_.config_.Format(
-                                                    prefix, "nickname"))}};
+                Err(EC::Terminate,
+                    AMStr::amfmt("Aborted creating client: {}", prefix))};
       }
     }
-    auto created = manager_ref_.AddClient(prefix, nullptr, false, false, {},
-                                          interrupt_flag);
+    auto created = AddClient(prefix, nullptr, false, false, {}, interrupt_flag);
     if (created.first.first != EC::Success) {
       return {prefix, path, created.second, created.first};
     }
-    return {prefix, path, created.second, ECM{EC::Success, ""}};
+    return {prefix, path, created.second, Ok()};
   }
-  return {prefix, path, existing, ECM{EC::Success, ""}};
+  return {prefix, path, existing, Ok()};
 }
 
 std::string PathOps::AbsPath(const std::string &path,
@@ -109,8 +100,8 @@ std::string PathOps::AbsPath(const std::string &path,
   if (path.empty()) {
     return GetOrInitWorkdir(client);
   }
-  std::string cwd = GetOrInitWorkdir(client);
-  std::string home = client->GetHomeDir();
+  const std::string cwd = GetOrInitWorkdir(client);
+  const std::string home = client->GetHomeDir();
   return AMFS::abspath(path, true, home, cwd, "/");
 }
 
@@ -136,7 +127,7 @@ PathOps::GetOrInitWorkdir(const std::shared_ptr<BaseClient> &client) const {
     return workdir;
   }
 
-  std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+  const std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
   (void)client->SetPulbicValue("workdir", home, true);
   return home;
 }
@@ -166,13 +157,12 @@ std::string PathOps::BuildPath(const std::shared_ptr<BaseClient> &client,
   if (path.empty()) {
     return GetOrInitWorkdir(client);
   }
-  std::string cwd = GetOrInitWorkdir(client);
-  std::string home = client->GetHomeDir();
+  const std::string cwd = GetOrInitWorkdir(client);
+  const std::string home = client->GetHomeDir();
   return AMFS::abspath(path, true, home, cwd, "/");
 }
 
-void PathOps::InitClientWorkdir(
-    const std::shared_ptr<BaseClient> &client) const {
+void PathOps::InitClientWorkdir(const std::shared_ptr<BaseClient> &client) const {
   if (!client) {
     return;
   }
@@ -216,9 +206,8 @@ void PathOps::ApplyLoginDir(const std::string &nickname,
   (void)client->SetPulbicValue("workdir", normalized, true);
   (void)client->SetPulbicValue("login_dir", normalized, true);
 
-  if (need_persist) {
-    (void)manager_ref_.config_.SetHostField(nickname, "login_dir", resolved,
-                                            true);
+  if (need_persist && !IsLocalNickname_(nickname)) {
+    (void)hostm_.SetHostValue(nickname, configkn::login_dir, resolved);
   }
 }
 

@@ -3,6 +3,7 @@
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
 #include "AMBase/Path.hpp"
+#include "AMManager/Config.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
@@ -256,19 +257,6 @@ static void PrintClientDetail_(AMPromptManager &prompt_manager,
   }
 }
 
-AMFileSystem &AMFileSystem::Instance(AMClientManager &client_manager,
-                                     AMConfigManager &config_manager) {
-  static AMFileSystem instance(client_manager, config_manager);
-  return instance;
-}
-
-AMFileSystem::AMFileSystem(AMClientManager &client_manager,
-                           AMConfigManager &config_manager)
-    : client_manager_(client_manager), config_manager_(config_manager),
-      prompt_manager_(AMPromptManager::Instance()) {
-  client_manager_.InitClientWorkdir(client_manager_.LocalClientBase());
-}
-
 AMFileSystem::ECM AMFileSystem::check(const std::string &nickname, bool detail,
                                       amf interrupt_flag) {
   std::vector<std::string> targets = SplitTargets(nickname);
@@ -317,7 +305,7 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
     if (!client) {
       if (out_error) {
         const std::string styled = config_manager_.Format(nickname, "nickname");
-        if (config_manager_.HostExists(nickname)) {
+        if (hostm_.HostExists(nickname)) {
           *out_error = {EC::ClientNotFound,
                         AMStr::amfmt("Client not established: {}", styled)};
         } else {
@@ -710,7 +698,8 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path, amf interrupt_flag,
     }
   }
   if (info.type != PathType::DIR) {
-    prompt_manager_.ErrorFormat(ECM{EC::NotADirectory, "Path is not a directory"});
+    prompt_manager_.ErrorFormat(
+        ECM{EC::NotADirectory, "Path is not a directory"});
     return {EC::NotADirectory, "Path is not a directory"};
   }
 
@@ -1160,9 +1149,9 @@ AMFileSystem::ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
     return out;
   }
 
-  auto client =
-      client_manager_.CurrentClient() ? client_manager_.CurrentClient()
-                                      : client_manager_.LocalClientBase();
+  auto client = client_manager_.CurrentClient()
+                    ? client_manager_.CurrentClient()
+                    : client_manager_.LocalClientBase();
   if (!client) {
     ECM out = {EC::ClientNotFound, "Client not found"};
     prompt_manager_.ErrorFormat(out);
@@ -1204,16 +1193,16 @@ AMFileSystem::ECM AMFileSystem::realpath(const std::string &path,
   }
   (void)timeout_ms;
 
-  std::string input = AMStr::TrimWhitespaceCopy(path);
+  std::string input = AMStr::Strip(path);
   std::string nickname;
   std::string resolved_path;
   std::shared_ptr<BaseClient> client_ptr;
   ECM rcm = {EC::Success, ""};
 
   if (input.empty()) {
-    client_ptr =
-        client_manager_.CurrentClient() ? client_manager_.CurrentClient()
-                                        : client_manager_.LocalClientBase();
+    client_ptr = client_manager_.CurrentClient()
+                     ? client_manager_.CurrentClient()
+                     : client_manager_.LocalClientBase();
     if (!client_ptr) {
       ECM out = {EC::ClientNotFound, "Client not found"};
       prompt_manager_.ErrorFormat(out);
@@ -1364,7 +1353,8 @@ AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
       if (!prompt_manager_.PromptYesNo(prompt, &canceled)) {
         last = {EC::Terminate, "Remove canceled"};
         if (!quiet) {
-          prompt_manager_.ErrorFormat(ECM{EC::ConfigCanceled, "Remove canceled"});
+          prompt_manager_.ErrorFormat(
+              ECM{EC::ConfigCanceled, "Remove canceled"});
         }
         continue;
       }
@@ -1439,17 +1429,19 @@ std::string AMFileSystem::BuildPath(const ClientRef &client,
 
 void AMFileSystem::UpdateHistory(const std::string &nickname,
                                  const std::string &path) {
-  if (nickname.empty() || path.empty()) {
+  if (path.empty()) {
     return;
   }
-  const int max_history = std::max<int>(
-      1, config_manager_.GetSettingInt({"InternalVars", "MaxCdHistory"}, 20));
+  static const int max_history = config_manager_.ResolveArg<int>(
+      DocumentKind::Settings, {"FileSystem", "max_cd_history"}, (int)5,
+      [](int v) -> int { return std::max<int>(1, v); });
+
   const std::string entry = nickname + "@" + path;
   if (!cd_history_.empty() && cd_history_.back() == entry) {
     return;
   }
   cd_history_.push_back(entry);
-  while (static_cast<int>(cd_history_.size()) > max_history) {
+  while (cd_history_.size() > max_history) {
     cd_history_.pop_front();
   }
 }

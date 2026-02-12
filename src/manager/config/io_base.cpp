@@ -676,18 +676,6 @@ void AMConfigStorage::CloseHandles() {
 }
 
 /**
- * @brief Snapshot a document in a thread-safe manner.
- */
-nlohmann::ordered_json AMConfigStorage::Snapshot(DocumentKind kind) const {
-  const DocumentState *doc = GetDoc_(kind);
-  if (!doc) {
-    return nlohmann::ordered_json::object();
-  }
-  std::lock_guard<std::mutex> lock(doc->mtx);
-  return doc->json;
-}
-
-/**
  * @brief Report whether a document has pending changes.
  */
 bool AMConfigStorage::IsDirty(DocumentKind kind) const {

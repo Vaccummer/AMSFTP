@@ -1,43 +1,81 @@
 #pragma once
-#include <atomic>
-#include <condition_variable>
-#include <cstddef>
+#include "AMBase/DataClass.hpp"
 #include <memory>
-#include <mutex>
 #include <string>
-#include <thread>
 
 struct ic_completion_env_s;
 using ic_completion_env_t = ic_completion_env_s;
 
-namespace AMClientManage {
-class Manager;
-}
-class AMConfigManager;
-class AMFileSystem;
-class AMTransferManager;
+/**
+ * @brief Base implementation storage and operations for AMCompleter.
+ */
+struct AMCompleterImpl {
+  /**
+   * @brief Initialize completer runtime state.
+   */
+  AMCompleterImpl();
+
+  /**
+   * @brief Stop async worker and release runtime state.
+   */
+  ~AMCompleterImpl();
+
+  /**
+   * @brief Read all completion settings and cache them for the current install.
+   */
+  void LoadConfig();
+
+  /**
+   * @brief Install isocline completion callback and apply configuration.
+   *
+   * @param completion_arg Callback context argument passed to isocline.
+   */
+  void Install(void *completion_arg);
+
+  /**
+   * @brief Clear path completion caches.
+   */
+  void ClearCache();
+
+  /**
+   * @brief Handle one completion request.
+   */
+  void HandleCompletion(ic_completion_env_t *cenv, const std::string &input,
+                        size_t cursor);
+
+protected:
+  /**
+   * @brief Runtime state holder for completion internals.
+   */
+  struct State;
+  std::unique_ptr<State> state_;
+
+  int complete_max_items_ = -1;
+  long complete_max_rows_ = 9;
+  bool complete_number_pick_ = true;
+  bool complete_auto_fill_ = true;
+  std::string complete_select_sign_;
+  int complete_delay_ms_ = 100;
+  size_t cache_min_items_ = 100;
+  size_t cache_max_entries_ = 64;
+  std::string input_tag_command_;
+  std::string input_tag_module_;
+};
 
 /**
  * @brief Completion coordinator for interactive input.
  */
-class AMCompleter {
+class AMCompleter : public NonCopyableNonMovable, private AMCompleterImpl {
 public:
-  /**
-   * @brief Construct the completer with required managers.
-   *
-   * @param config_manager Settings/config manager reference.
-   * @param client_manager Client manager reference.
-   * @param filesystem Filesystem manager reference.
-   * @param transfer_manager Transfer manager reference.
-   */
-  AMCompleter(AMConfigManager &config_manager,
-              AMClientManage::Manager &client_manager,
-              AMFileSystem &filesystem, AMTransferManager &transfer_manager);
+  using Impl = AMCompleterImpl;
 
+  AMCompleter();
   /**
    * @brief Stop the async worker and release resources.
    */
   ~AMCompleter();
+
+  void Init() override;
 
   /**
    * @brief Install the completer into the isocline environment.
@@ -61,7 +99,7 @@ public:
    */
   static void SetActive(AMCompleter *instance);
 
-private:
+public:
   /**
    * @brief Isocline callback entrypoint for completion.
    *
@@ -69,16 +107,4 @@ private:
    * @param prefix Raw input prefix before the cursor.
    */
   static void IsoclineCompleter(ic_completion_env_t *cenv, const char *prefix);
-
-  AMCompleter(const AMCompleter &) = delete;
-  AMCompleter &operator=(const AMCompleter &) = delete;
-  AMCompleter(AMCompleter &&) = delete;
-  AMCompleter &operator=(AMCompleter &&) = delete;
-
-  /**
-   * @brief Opaque implementation container.
-   */
-  struct Impl;
-
-  std::unique_ptr<Impl> impl_;
 };

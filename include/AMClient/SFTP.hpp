@@ -20,16 +20,9 @@
 #include <unordered_map>
 #include <vector>
 
-// 标准库
-
-// 自身依赖
 #include "AMBase/CommonTools.hpp"
 #include "AMClient/Base.hpp"
-#include "AMManager/Config.hpp"
 
-// 自身依赖
-
-// 第三方库
 #include <curl/curl.h>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -293,7 +286,37 @@ struct TerminalWindowInfo {
   std::string term = "xterm-256color";
 };
 
-// 第三方库
+class KnownHostQuery {
+public:
+  std::string nickname = "";
+  std::string hostname = "";
+  int port = 0;
+  std::string protocol = "";
+  std::string username = "";
+  KnownHostQuery() = default;
+  [[nodiscard]] bool IsValid() const {
+    return !hostname.empty() && port > 0 && port <= 65535;
+  }
+
+  [[nodiscard]] std::vector<std::string> GetPath() const {
+    return {this->hostname, std::to_string(this->port), this->username,
+            this->protocol};
+  }
+
+  bool SetFingerprint(const std::string &fingerprint) {
+    if (fingerprint.empty()) {
+      return false;
+    }
+    this->fingerprint = fingerprint;
+    return true;
+  }
+
+  [[nodiscard]] std::string GetFingerprint() const { return this->fingerprint; }
+
+private:
+  std::string fingerprint = "";
+};
+
 #ifdef _WIN32
 inline std::atomic<bool> is_wsa_initialized(false);
 inline void AMInitWSA() {
@@ -310,38 +333,52 @@ inline std::string GetLibssh2Version() {
   return libssh2_version(LIBSSH2_VERSION_NUM);
 }
 
-// 将libssh2错误码映射为错误消息
-const std::unordered_map<int, std::string> SFTPMessage = {
-    {LIBSSH2_FX_EOF, "End of file"},
-    {LIBSSH2_FX_NO_SUCH_FILE, "File does not exist"},
-    {LIBSSH2_FX_PERMISSION_DENIED, "Permission denied"},
-    {LIBSSH2_FX_FAILURE, "Generic failure"},
-    {LIBSSH2_FX_BAD_MESSAGE, "Bad message format"},
-    {LIBSSH2_FX_NO_CONNECTION, "No connection exists"},
-    {LIBSSH2_FX_CONNECTION_LOST, "Connection lost"},
-    {LIBSSH2_FX_OP_UNSUPPORTED, "Operation not supported"},
-    {LIBSSH2_FX_INVALID_HANDLE, "Invalid handle"},
-    {LIBSSH2_FX_NO_SUCH_PATH, "No such path"},
-    {LIBSSH2_FX_FILE_ALREADY_EXISTS, "File already exists"},
-    {LIBSSH2_FX_WRITE_PROTECT, "Target is write protected"},
-    {LIBSSH2_FX_NO_MEDIA, "Target Storage Media is not available"},
-    {LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM, "No space on filesystem"},
-    {LIBSSH2_FX_QUOTA_EXCEEDED, "Space quota exceeded"},
-    {LIBSSH2_FX_UNKNOWN_PRINCIPAL, "User not found in host"},
-    {LIBSSH2_FX_LOCK_CONFLICT, "Path is locked by another process"},
-    {LIBSSH2_FX_DIR_NOT_EMPTY, "Directory is not empty"},
-    {LIBSSH2_FX_NOT_A_DIRECTORY, "Target is not a directory"},
-    {LIBSSH2_FX_INVALID_FILENAME, "Filename is invalid"},
-    {LIBSSH2_FX_LINK_LOOP, "Symbolic link loop"}};
-
-// 将ErrorCode枚举值映射为int
-const std::unordered_map<int, ErrorCode> Int2EC = [] {
-  std::unordered_map<int, ErrorCode> map;
-  for (auto [val, name] : magic_enum::enum_entries<ErrorCode>()) {
-    map[static_cast<int>(val)] = val;
+inline std::string SSHCodeToString(int code) {
+  static const std::unordered_map<int, std::string> SFTPMessage = {
+      {LIBSSH2_FX_EOF, "End of file"},
+      {LIBSSH2_FX_NO_SUCH_FILE, "File does not exist"},
+      {LIBSSH2_FX_PERMISSION_DENIED, "Permission denied"},
+      {LIBSSH2_FX_FAILURE, "Generic failure"},
+      {LIBSSH2_FX_BAD_MESSAGE, "Bad message format"},
+      {LIBSSH2_FX_NO_CONNECTION, "No connection exists"},
+      {LIBSSH2_FX_CONNECTION_LOST, "Connection lost"},
+      {LIBSSH2_FX_OP_UNSUPPORTED, "Operation not supported"},
+      {LIBSSH2_FX_INVALID_HANDLE, "Invalid handle"},
+      {LIBSSH2_FX_NO_SUCH_PATH, "No such path"},
+      {LIBSSH2_FX_FILE_ALREADY_EXISTS, "File already exists"},
+      {LIBSSH2_FX_WRITE_PROTECT, "Target is write protected"},
+      {LIBSSH2_FX_NO_MEDIA, "Target Storage Media is not available"},
+      {LIBSSH2_FX_NO_SPACE_ON_FILESYSTEM, "No space on filesystem"},
+      {LIBSSH2_FX_QUOTA_EXCEEDED, "Space quota exceeded"},
+      {LIBSSH2_FX_UNKNOWN_PRINCIPAL, "User not found in host"},
+      {LIBSSH2_FX_LOCK_CONFLICT, "Path is locked by another process"},
+      {LIBSSH2_FX_DIR_NOT_EMPTY, "Directory is not empty"},
+      {LIBSSH2_FX_NOT_A_DIRECTORY, "Target is not a directory"},
+      {LIBSSH2_FX_INVALID_FILENAME, "Filename is invalid"},
+      {LIBSSH2_FX_LINK_LOOP, "Symbolic link loop"}};
+  auto it = SFTPMessage.find(code);
+  if (it != SFTPMessage.end()) {
+    return it->second;
   }
-  return map;
-}();
+  return "Unknown error code: " + std::to_string(code);
+}
+
+inline EC IntToEC(int code) {
+  static const std::unordered_map<int, ErrorCode> Int2EC = [] {
+    std::unordered_map<int, ErrorCode> map;
+    for (auto [val, name] : magic_enum::enum_entries<ErrorCode>()) {
+      map[static_cast<int>(val)] = val;
+    }
+    return map;
+  }();
+  auto it = Int2EC.find(code);
+  if (it != Int2EC.end()) {
+    return it->second;
+  } else {
+    return EC::UnknownError;
+  }
+}
+
 inline bool IsValidKey(const std::string &key) {
   std::ifstream file(key);
   if (!file.is_open())
@@ -369,8 +406,6 @@ inline bool isreg(const LIBSSH2_SFTP_ATTRIBUTES &attrs) {
   return (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) &&
          (attrs.permissions & LIBSSH2_SFTP_S_IFREG);
 }
-inline void cleanup_wsa();
-// Wait result for non-blocking socket operations
 
 using AuthCallback =
     std::function<std::optional<std::string>(const AuthCBInfo &)>;
@@ -474,7 +509,7 @@ private:
   bool password_auth_cb = false;
   std::vector<std::string> private_keys = {};
   AuthCallback auth_cb = {}; // optional<string>(AuthCBInfo)
-  using KnownHostCallback = std::function<ECM(AMConfigManager::KnownHostEntry)>;
+  using KnownHostCallback = std::function<ECM(const KnownHostQuery &)>;
   KnownHostCallback known_host_cb = {};
 
   /**
@@ -557,12 +592,12 @@ private:
                        1); // Remove trailing '='
     }
 
-    AMConfigManager::KnownHostEntry entry;
+    KnownHostQuery entry;
     entry.nickname = res_data.nickname;
     entry.hostname = res_data.hostname;
     entry.port = res_data.port;
     entry.protocol = actual_protocol;
-    entry.fingerprint = actual_sha;
+    entry.SetFingerprint(actual_sha);
     return known_host_cb(std::move(entry));
   }
 
@@ -1088,13 +1123,13 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     int ori_code = libssh2_session_last_errno(session);
     if (ori_code != LIBSSH2_ERROR_SFTP_PROTOCOL) {
-      return Int2EC.at(ori_code);
+      return IntToEC(ori_code);
     } else {
       if (!sftp) {
         return EC::NoConnection;
       }
       int ori_code2 = libssh2_sftp_last_error(sftp);
-      return Int2EC.at(ori_code2);
+      return IntToEC(ori_code2);
     }
   }
 
@@ -1116,12 +1151,7 @@ public:
       if (!sftp) {
         return "SFTP not initialized";
       }
-      int ori_code2 = libssh2_sftp_last_error(sftp);
-
-      if (SFTPMessage.find(ori_code2) != SFTPMessage.end()) {
-        return SFTPMessage.at(ori_code2);
-      }
-      return "Unknown SFTP error";
+      return SSHCodeToString(libssh2_sftp_last_error(sftp));
     }
   }
 

@@ -39,7 +39,7 @@ constexpr ssize_t AMGB = 1024 * 1024 * 1024;
 constexpr ssize_t AMDefaultLocalBufferSize = 1024 * 1024 * 16;
 constexpr ssize_t AMDefaultRemoteBufferSize = 1024 * 1024 * 8;
 constexpr ssize_t AMMinBufferSize = 1024 * 512;
-constexpr ssize_t AMMaxBufferSize = 1024 * 1024 * 64;
+constexpr ssize_t AMMaxBufferSize = 1024 * 1024 * 512;
 
 enum class ErrorCode {
   Success = 0,
@@ -199,7 +199,6 @@ inline ErrorCode wait_result_to_error_code(WaitResult wr) {
     return ErrorCode::UnknownError;
   }
 }
-using ECM = std::pair<ErrorCode, std::string>;
 
 enum class PathType {
   BlockDevice = -1,

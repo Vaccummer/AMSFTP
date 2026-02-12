@@ -279,6 +279,17 @@ ic_public void ic_history_clear(void) {
   history_clear(env->history);
 }
 
+ic_public long ic_history_count(void) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return 0;
+  return (long)history_count(env->history);
+}
+
+ic_public const char* ic_history_get(long index) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return NULL;
+  if (index < 0) return NULL;
+  return history_get(env->history, (ssize_t)index);
+}
+
 ic_public bool ic_enable_auto_tab( bool enable ) {
   ic_env_t* env = ic_get_env(); if (env==NULL) return false;
   bool prev = env->complete_autotab;

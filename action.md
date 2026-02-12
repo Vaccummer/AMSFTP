@@ -1,13 +1,28 @@
-@src\manager\Prompt.cpp
+@src\manager\host\cli.cpp
 
-@include\AMManager\Config.hpp
+对于所有函数, 去除:
 
-set AMPromptManager's base class AMHistoryManager
+  ECMstatus = EnsureReady_("HostQuery");
 
-move history operation from AMPromptManager to its Base Class AMHistoryManager
+  if (status.first!=EC::Success) {
 
-move functions in ConfigManager to AMHistoryManager
+    returnstatus;
 
-+ ECM LoadHistory();
-+ ECM GetHistoryCommands(conststd::string&nickname, std::vector[std::string](std::string) *out);
-+ ECMSetHistoryCommands(conststd::string&nickname, conststd::vector[std::string](std::string) &commands, booldump_now = true)
+  }
+
+  CollectHosts_();
+
+
+cls::Delete(conststd::vector[std::string](std::string) &targets)
+
++ 先进行去重
++ 检查nickname是否有效, 无效报错
++ prompt确认是否删除(prompt中需要包含所有将被删除的名称)
+  + 取消时提示操作终止
++ 逐个删除, 删除失败报错
+
+cls::Query
+
++ 去重
++ 先报错
++ 再打印内容

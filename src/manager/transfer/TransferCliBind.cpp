@@ -461,18 +461,32 @@ ECM AMTransferManager::QueryCachedUserSet(size_t set_index) const {
 }
 
 ECM AMTransferManager::Thread(int num) {
-  const int max_threads =
-      config_.GetSettingInt({"InternalVars", "MaxThreadNum"}, 16);
-  if (num < 0) {
+  static const int max_threads = config_.ResolveArg<int>(
+      DocumentKind::Settings, {"TransferManager", "max_thread_num"}, (int)16,
+      [](int val) { return std::max(1, std::min(val, (int)999999)); });
+
+  if (num == -1) {
     const size_t current = worker_.ThreadCount(0);
-    prompt_.Print(AMStr::amfmt("ThreadNum: {}", current));
+    prompt_.Print(AMStr::amfmt("Current ThreadNum: {}", current));
     return {EC::Success, ""};
   }
+  ECM rcm = {EC::Success, ""};
+  if (num <= 0) {
+    rcm = {EC::InvalidArg,
+           AMStr::amfmt("ThreadNum must be positive, but recieve {}", num)};
+    prompt_.ErrorFormat(rcm);
+    return rcm;
+  } else if (num > max_threads) {
+    rcm = {EC::InvalidArg,
+           AMStr::amfmt("ThreadNum too large, max is {}, but recieve {}",
+                        max_threads, num)};
+    prompt_.ErrorFormat(rcm);
+    return rcm;
+  }
 
-  int clamped = std::max<int>(1, std::min<int>(num, max_threads));
-  const size_t applied = worker_.ThreadCount(static_cast<size_t>(clamped));
-  prompt_.Print(AMStr::amfmt("ThreadNum: {}", applied));
-  return {EC::Success, ""};
+  const size_t applied = worker_.ThreadCount(static_cast<size_t>(num));
+  prompt_.Print(AMStr::amfmt("Set ThreadNum to : {}", applied));
+  return rcm;
 }
 
 /**

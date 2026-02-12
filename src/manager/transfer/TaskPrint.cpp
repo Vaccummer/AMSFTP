@@ -3,6 +3,7 @@
 #include "AMBase/Path.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Config.hpp"
+#include "AMManager/Prompt.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Transfer.hpp"
 #include "third_party/indicators/dynamic_progress.hpp"
@@ -11,6 +12,7 @@
 #include <cmath>
 #include <cstddef>
 #include <deque>
+#include <functional>
 #include <iomanip>
 #include <memory>
 #include <sstream>
@@ -429,7 +431,8 @@ std::string BuildTableRefreshOutput_(const std::string &table,
 }
 
 /**
- * @brief Progress bar wrapper for task status display in AMTransferManager::Show.
+ * @brief Progress bar wrapper for task status display in
+ * AMTransferManager::Show.
  */
 class TaskInfoProgressPrinter {
 public:
@@ -488,16 +491,43 @@ private:
   AMProgressBar bar_;
 };
 
+int GetRefreshIntervalMs_() {
+  std::function<int(int)> funcf = [](int para) {
+    if (para < 0)
+      return 300;
+    return std::max<int>(para, 5);
+  };
+  static const int refresh_ms = AMConfigManager::Instance().ResolveArg(
+      DocumentKind::Settings, {"style", "ProgressBar", "refresh_interval_ms"},
+      300, funcf);
+  return refresh_ms;
+}
+
+size_t GetSpeedWindowSize() {
+  std::function<size_t(size_t)> funct = [](size_t para) {
+    if (para < 0)
+      return static_cast<size_t>(5);
+    return std::max<size_t>(1, para);
+  };
+  static const size_t speed_window_size =
+      AMConfigManager::Instance().ResolveArg(
+          DocumentKind::Settings,
+          {"style", "ProgressBar", "speed_cal_window_size"},
+          static_cast<size_t>(300), funct);
+  return speed_window_size;
+}
+
 void PrintTaskProgress_(const std::shared_ptr<TaskInfo> &task_info,
                         const std::shared_ptr<InterruptFlag> &interrupt_flag) {
   if (!task_info) {
     return;
   }
-  SignalHookGuard hook_guard;
   TaskInfoProgressPrinter progress_printer(task_info);
   progress_printer.Start();
-  const int refresh_ms = 300;
+  static const int refresh_ms = GetRefreshIntervalMs_();
+
   bool finished = false;
+  PrintLock();
   while (true) {
     if (interrupt_flag && interrupt_flag->check()) {
       break;
@@ -575,7 +605,8 @@ void PrintTaskProgressGroup_(
     group.push_back(*bars[i]);
   }
 
-  const int refresh_ms = AMConfigManager::Instance().ResolveRefreshIntervalMs();
+  static const int refresh_ms = GetRefreshIntervalMs_();
+  PrintLock();
   while (true) {
     if (IsInterrupted_(interrupt_flag)) {
       break;
@@ -595,7 +626,6 @@ void PrintTaskProgressGroup_(
     bar->bar.EndDisplay();
   }
 }
-
 } // namespace
 
 /**
@@ -754,8 +784,7 @@ ECM AMTransferManager::List(
 
   collect_tasks();
 
-  static const size_t speed_window_size = static_cast<size_t>(config_.ResolveArg(
-      AMConfigManager::ResolveArgType::SpeedCalWindowSize, 5));
+  static const size_t speed_window_size = GetSpeedWindowSize();
   std::unordered_map<ID, std::string> speed_map;
   if (conducting) {
     UpdateSpeedCache_(conducting_tasks, speed_window_size, &speed_map,
@@ -783,7 +812,7 @@ ECM AMTransferManager::List(
   }
 
   prompt_.SetCacheOutputOnly(true);
-  static const int refresh_ms = config_.ResolveRefreshIntervalMs();
+  static const int refresh_ms = GetRefreshIntervalMs_();
   SignalHookGuard hook_guard;
   size_t last_lines = 0;
   std::string last_table;

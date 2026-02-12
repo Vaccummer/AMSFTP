@@ -4,9 +4,10 @@
 #include "AMBase/Enum.hpp"
 #include "AMBase/Path.hpp"
 #include "AMCLI/CLIBind.hpp"
+#include "AMManager/Config.hpp"
 #include "AMManager/Var.hpp"
-#include "Isocline/isocline.h"
 #include "CLI/CLI.hpp"
+#include "Isocline/isocline.h"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -21,7 +22,7 @@ namespace {
  * @brief Normalize a configured style into a bbcode opening tag.
  */
 std::string NormalizeStyleTag_(const std::string &raw) {
-  std::string trimmed = AMStr::TrimWhitespaceCopy(raw);
+  std::string trimmed = AMStr::Strip(raw);
   if (trimmed.empty()) {
     return "";
   }
@@ -435,7 +436,8 @@ std::vector<CompletionToken> TokenizeInput(const std::string &input) {
   std::vector<CompletionToken> tokens;
   size_t i = 0;
   while (i < input.size()) {
-    while (i < input.size() && AMStr::IsWhitespace(input[i])) {
+    while (i < input.size() &&
+           std::isspace(static_cast<unsigned char>(input[i])) != 0) {
       ++i;
     }
     if (i >= input.size()) {
@@ -464,7 +466,8 @@ std::vector<CompletionToken> TokenizeInput(const std::string &input) {
       tokens.push_back({start, end, content_start, content_end, true});
       continue;
     }
-    while (i < input.size() && !AMStr::IsWhitespace(input[i])) {
+    while (i < input.size() &&
+           std::isspace(static_cast<unsigned char>(input[i])) == 0) {
       ++i;
     }
     const size_t end = i;
@@ -476,8 +479,8 @@ std::vector<CompletionToken> TokenizeInput(const std::string &input) {
 /**
  * @brief Find the token that owns the cursor.
  */
-bool FindTokenAtCursor(const std::vector<CompletionToken> &tokens, size_t cursor,
-                       CompletionToken *out, size_t *out_index) {
+bool FindTokenAtCursor(const std::vector<CompletionToken> &tokens,
+                       size_t cursor, CompletionToken *out, size_t *out_index) {
   for (size_t i = 0; i < tokens.size(); ++i) {
     const auto &tok = tokens[i];
     const size_t begin = tok.quoted ? tok.content_start : tok.start;
@@ -559,8 +562,7 @@ bool IsPathArgumentCommand(const std::string &command_path, size_t arg_index) {
     return arg_index == 0;
   }
   if (command_path == "stat" || command_path == "size" ||
-      command_path == "mkdir" || command_path == "rm" ||
-      command_path == "cp") {
+      command_path == "mkdir" || command_path == "rm" || command_path == "cp") {
     return true;
   }
   return false;
@@ -634,51 +636,53 @@ int PathTypeOrder(PathType type) {
  * @brief Return true when candidate is a path type.
  */
 bool IsPathCandidate(CompletionKind kind) {
-  return kind == CompletionKind::PathLocal || kind == CompletionKind::PathRemote;
+  return kind == CompletionKind::PathLocal ||
+         kind == CompletionKind::PathRemote;
 }
 
 /**
  * @brief Static host configuration fields for completion.
  */
 const std::vector<std::string> kHostConfigFields = {
-    "hostname",  "username", "port",      "keyfile",  "password",
+    "hostname",  "username", "port",        "keyfile",  "password",
     "trash_dir", "protocol", "buffer_size", "login_dir"};
 } // namespace
 
 /**
- * @brief Implementation container for AMCompleter.
+ * @brief Runtime state for AMCompleter implementation.
  */
-struct AMCompleter::Impl {
+struct AMCompleterImpl::State {
   /**
    * @brief Construct the implementation with required managers.
    */
-  Impl(AMConfigManager &config_manager, AMClientManage::Manager &client_manager,
-       AMFileSystem &filesystem, AMTransferManager &transfer_manager)
-      : config_manager_(config_manager), client_manager_(client_manager),
-        filesystem_(filesystem), transfer_manager_(transfer_manager) {
+  explicit State(AMCompleterImpl *owner)
+      : owner_(owner), config_manager_(AMConfigManager::Instance()),
+        client_manager_(AMClientManage::Manager::Instance()),
+        filesystem_(AMFileSystem::Instance()),
+        transfer_manager_(AMTransferManager::Instance()) {
     StartAsyncWorker();
   }
 
   /**
    * @brief Stop the async worker on destruction.
    */
-  ~Impl() { StopAsyncWorker(); }
+  ~State() { StopAsyncWorker(); }
 
   /**
    * @brief Install the completer into isocline.
    */
-  void Install() {
-    ic_set_default_completer(&AMCompleter::IsoclineCompleter, this);
+  void Install(void *completion_arg) {
+    ic_set_default_completer(&AMCompleter::IsoclineCompleter, completion_arg);
     ic_enable_completion_sort(false);
     ic_enable_completion_preview(true);
-    const int max_items = ResolveCompleteMaxItems_();
+    const int max_items = owner_->complete_max_items_;
     if (max_items > 0) {
       ic_set_completion_max_items(max_items);
     }
-    ic_set_completion_max_rows(ResolveCompleteMaxRows_());
-    ic_enable_completion_number_pick(ResolveCompleteNumberPick_());
-    ic_enable_completion_auto_fill(ResolveCompleteAutoFill_());
-    const std::string select_sign = ResolveCompleteSelectSign_();
+    ic_set_completion_max_rows(owner_->complete_max_rows_);
+    ic_enable_completion_number_pick(owner_->complete_number_pick_);
+    ic_enable_completion_auto_fill(owner_->complete_auto_fill_);
+    const std::string &select_sign = owner_->complete_select_sign_;
     if (select_sign.empty()) {
       ic_set_completion_select_sign(nullptr);
     } else {
@@ -743,115 +747,6 @@ struct AMCompleter::Impl {
 
 private:
   /**
-   * @brief Resolve completion max items from settings.
-   */
-  int ResolveCompleteMaxItems_() const {
-    const int value =
-        config_manager_.GetSettingInt({"CompleteOption", "maxnum"}, -1);
-    if (value <= 0) {
-      return -1;
-    }
-    return value;
-  }
-
-  /**
-   * @brief Resolve completion max rows per page.
-   */
-  long ResolveCompleteMaxRows_() const {
-    int value =
-        config_manager_.GetSettingInt({"CompleteOption", "maxrows_perpage"}, 9);
-    if (value == 0) {
-      value = 9;
-    }
-    if (value > 0 && value < 3) {
-      value = 3;
-    }
-    return static_cast<long>(value);
-  }
-
-  /**
-   * @brief Resolve a boolean setting from string values.
-   */
-  bool ResolveSettingBool_(const std::vector<std::string> &path,
-                           bool default_value) const {
-    std::string value =
-        config_manager_.GetSettingString(path,
-                                         default_value ? "true" : "false");
-    value = AMStr::lowercase(AMStr::TrimWhitespaceCopy(value));
-    if (value == "true" || value == "1" || value == "yes" || value == "on") {
-      return true;
-    }
-    if (value == "false" || value == "0" || value == "no" || value == "off") {
-      return false;
-    }
-    return default_value;
-  }
-
-  /**
-   * @brief Resolve completion number picking toggle.
-   */
-  bool ResolveCompleteNumberPick_() const {
-    return ResolveSettingBool_({"CompleteOption", "number_pick"}, true);
-  }
-
-  /**
-   * @brief Resolve completion auto fill toggle.
-   */
-  bool ResolveCompleteAutoFill_() const {
-    return ResolveSettingBool_({"CompleteOption", "auto_fillin"}, true);
-  }
-
-  /**
-   * @brief Resolve completion select sign.
-   */
-  std::string ResolveCompleteSelectSign_() const {
-    return config_manager_.GetSettingString(
-        {"CompleteOption", "item_select_sign"}, "");
-  }
-
-  /**
-   * @brief Resolve completion debounce delay.
-   */
-  int ResolveCompleteDelayMs_() const {
-    int delay =
-        config_manager_.GetSettingInt({"CompleteOption", "complete_delay_ms"},
-                                      100);
-    if (delay < 0) {
-      delay = 0;
-    }
-    if (delay > 1000) {
-      delay = 1000;
-    }
-    return delay;
-  }
-
-  /**
-   * @brief Resolve cache threshold for directory items.
-   */
-  size_t ResolveCacheMinItems_() const {
-    int value =
-        config_manager_.GetSettingInt({"CompleteOption", "cache_min_items"},
-                                      200);
-    if (value < 0) {
-      value = 0;
-    }
-    return static_cast<size_t>(value);
-  }
-
-  /**
-   * @brief Resolve cache max entries.
-   */
-  size_t ResolveCacheMaxEntries_() const {
-    int value =
-        config_manager_.GetSettingInt({"CompleteOption", "cache_max_entries"},
-                                      64);
-    if (value < 1) {
-      value = 1;
-    }
-    return static_cast<size_t>(value);
-  }
-
-  /**
    * @brief Return true if any client nickname matches the prefix.
    */
   bool HasClientPrefixMatch_(const std::string &prefix) const {
@@ -906,9 +801,8 @@ private:
       if (token.content_end <= token.content_start) {
         break;
       }
-      const std::string raw =
-          input.substr(token.content_start,
-                       token.content_end - token.content_start);
+      const std::string raw = input.substr(
+          token.content_start, token.content_end - token.content_start);
       const std::string text = UnescapeBackticks(raw);
       if (text.empty()) {
         break;
@@ -957,14 +851,14 @@ private:
                           const std::string &input, size_t command_tokens,
                           size_t current_index) {
     size_t index = 0;
-    for (size_t i = command_tokens; i < tokens.size() && i < current_index; ++i) {
+    for (size_t i = command_tokens; i < tokens.size() && i < current_index;
+         ++i) {
       const auto &token = tokens[i];
       if (token.content_end <= token.content_start) {
         continue;
       }
-      const std::string raw =
-          input.substr(token.content_start,
-                       token.content_end - token.content_start);
+      const std::string raw = input.substr(
+          token.content_start, token.content_end - token.content_start);
       const std::string text = UnescapeBackticks(raw);
       if (StartsWithLongOption(text) || StartsWithShortOption(text)) {
         continue;
@@ -984,7 +878,7 @@ private:
     ctx.cursor = cursor;
     ctx.request_id = request_id;
 
-    std::string trimmed = AMStr::TrimWhitespaceCopy(input);
+    std::string trimmed = AMStr::Strip(input);
     if (!trimmed.empty() && trimmed.front() == '!') {
       ctx.target = CompletionTarget::Disabled;
       return ctx;
@@ -1020,7 +914,8 @@ private:
                       &command_tokens);
     ctx.command_node = node;
     ctx.command_tokens = command_tokens;
-    ctx.arg_index = ComputeArgIndex_(tokens, input, command_tokens, token_index);
+    ctx.arg_index =
+        ComputeArgIndex_(tokens, input, command_tokens, token_index);
 
     if (ctx.command_path.empty()) {
       if (token_index == 0 || tokens.empty()) {
@@ -1163,11 +1058,12 @@ private:
       return path;
     }
 
-    const auto current_client =
-        client_manager_.CurrentClient() ? client_manager_.CurrentClient()
-                                        : client_manager_.LocalClientBase();
+    const auto current_client = client_manager_.CurrentClient()
+                                    ? client_manager_.CurrentClient()
+                                    : client_manager_.LocalClientBase();
     const bool current_remote =
-        current_client && current_client->GetProtocol() != ClientProtocol::LOCAL;
+        current_client &&
+        current_client->GetProtocol() != ClientProtocol::LOCAL;
 
     bool force_local = false;
     std::string nickname;
@@ -1239,24 +1135,15 @@ private:
   }
 
   /**
-   * @brief Resolve bbcode tag for an input highlight style key.
-   */
-  std::string ResolveInputHighlightTag_(const std::string &key) const {
-    const std::string raw =
-        config_manager_.GetSettingString({"style", "InputHighlight", key}, "");
-    return NormalizeStyleTag_(raw);
-  }
-
-  /**
    * @brief Build a styled and padded command/module display string.
    */
   std::string FormatCommandDisplay_(const std::string &name,
                                     const std::string &style_key,
                                     size_t pad_width) const {
-    const std::string tag = ResolveInputHighlightTag_(style_key);
+    const std::string tag = style_key == "module" ? owner_->input_tag_module_
+                                                   : owner_->input_tag_command_;
     const std::string escaped = EscapeBbcodeText_(name);
-    std::string display =
-        tag.empty() ? escaped : tag + escaped + "[/]";
+    std::string display = tag.empty() ? escaped : tag + escaped + "[/]";
     if (pad_width > name.size()) {
       display.append(pad_width - name.size(), ' ');
     }
@@ -1539,8 +1426,8 @@ private:
       }
       const std::string display_name = is_dir ? name + ctx.path.sep : name;
       cand.display = FormatPathDisplay_(info, display_name);
-      cand.kind =
-          ctx.path.remote ? CompletionKind::PathRemote : CompletionKind::PathLocal;
+      cand.kind = ctx.path.remote ? CompletionKind::PathRemote
+                                  : CompletionKind::PathLocal;
       cand.path_type = info.type;
       out.push_back(std::move(cand));
     }
@@ -1567,7 +1454,7 @@ private:
   void StoreCache_(const CacheKey &key, const std::vector<PathInfo> &items) {
     std::lock_guard<std::mutex> lock(cache_mtx_);
     cache_[key] = CacheEntry{items, std::chrono::steady_clock::now()};
-    const size_t max_entries = ResolveCacheMaxEntries_();
+    const size_t max_entries = owner_->cache_max_entries_;
     if (cache_.size() <= max_entries) {
       return;
     }
@@ -1622,7 +1509,7 @@ private:
         return;
       }
       if (TryConsumeAsyncResult_(ctx, &items)) {
-        const size_t cache_min = ResolveCacheMinItems_();
+        const size_t cache_min = owner_->cache_min_items_;
         if (items.size() >= cache_min) {
           StoreCache_(key, items);
         }
@@ -1648,7 +1535,7 @@ private:
     if (rcm.first != EC::Success) {
       return;
     }
-    const size_t cache_min = ResolveCacheMinItems_();
+    const size_t cache_min = owner_->cache_min_items_;
     if (listed.size() >= cache_min) {
       StoreCache_(key, listed);
     }
@@ -1659,23 +1546,23 @@ private:
    * @brief Sort candidates by prefix and path type rules.
    */
   void SortCandidates_(std::vector<CompletionCandidate> &items) {
-    std::stable_sort(items.begin(), items.end(),
-                     [](const CompletionCandidate &a,
-                        const CompletionCandidate &b) {
-                       if (a.score != b.score) {
-                         return a.score < b.score;
-                       }
-                       const bool a_path = IsPathCandidate(a.kind);
-                       const bool b_path = IsPathCandidate(b.kind);
-                       if (a_path && b_path) {
-                         const int ao = PathTypeOrder(a.path_type);
-                         const int bo = PathTypeOrder(b.path_type);
-                         if (ao != bo) {
-                           return ao < bo;
-                         }
-                       }
-                       return a.insert_text < b.insert_text;
-                     });
+    std::stable_sort(
+        items.begin(), items.end(),
+        [](const CompletionCandidate &a, const CompletionCandidate &b) {
+          if (a.score != b.score) {
+            return a.score < b.score;
+          }
+          const bool a_path = IsPathCandidate(a.kind);
+          const bool b_path = IsPathCandidate(b.kind);
+          if (a_path && b_path) {
+            const int ao = PathTypeOrder(a.path_type);
+            const int bo = PathTypeOrder(b.path_type);
+            if (ao != bo) {
+              return ao < bo;
+            }
+          }
+          return a.insert_text < b.insert_text;
+        });
   }
 
   /**
@@ -1690,14 +1577,13 @@ private:
     long delete_after = 0;
     if (ctx.has_token && ctx.cursor >= ctx.token.content_start &&
         ctx.cursor <= ctx.token.content_end) {
-      delete_before =
-          static_cast<long>(ctx.cursor - ctx.token.content_start);
-      delete_after =
-          static_cast<long>(ctx.token.content_end - ctx.cursor);
+      delete_before = static_cast<long>(ctx.cursor - ctx.token.content_start);
+      delete_after = static_cast<long>(ctx.token.content_end - ctx.cursor);
     }
 
     for (const auto &cand : items) {
-      const char *display = cand.display.empty() ? nullptr : cand.display.c_str();
+      const char *display =
+          cand.display.empty() ? nullptr : cand.display.c_str();
       const char *help = cand.help.empty() ? nullptr : cand.help.c_str();
       ic_add_completion_prim(cenv, cand.insert_text.c_str(), display, help,
                              delete_before, delete_after);
@@ -1750,7 +1636,8 @@ private:
       {
         std::unique_lock<std::mutex> lock(async_mtx_);
         async_cv_.wait(lock, [this]() {
-          return async_stop_.load(std::memory_order_relaxed) || pending_request_.has_value();
+          return async_stop_.load(std::memory_order_relaxed) ||
+                 pending_request_.has_value();
         });
         if (async_stop_.load(std::memory_order_relaxed)) {
           break;
@@ -1758,13 +1645,14 @@ private:
         request = *pending_request_;
         pending_request_.reset();
 
-        const int delay_ms = ResolveCompleteDelayMs_();
+        const int delay_ms = owner_->complete_delay_ms_;
         if (delay_ms > 0) {
           auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(delay_ms);
           while (!async_stop_.load(std::memory_order_relaxed)) {
             if (async_cv_.wait_until(lock, deadline, [this]() {
-                  return async_stop_.load(std::memory_order_relaxed) || pending_request_.has_value();
+                  return async_stop_.load(std::memory_order_relaxed) ||
+                         pending_request_.has_value();
                 })) {
               if (async_stop_.load(std::memory_order_relaxed)) {
                 break;
@@ -1783,7 +1671,8 @@ private:
         }
       }
 
-      if (request.request_id != current_request_id_.load(std::memory_order_relaxed)) {
+      if (request.request_id !=
+          current_request_id_.load(std::memory_order_relaxed)) {
         continue;
       }
 
@@ -1801,12 +1690,13 @@ private:
       {
         std::lock_guard<std::mutex> lock(async_result_mtx_);
         async_result_ =
-            AsyncResult{request.request_id, request.key, request.base,
+            AsyncResult{request.request_id,  request.key, request.base,
                         request.leaf_prefix, request.sep, request.remote,
                         std::move(listed)};
       }
 
-      if (request.request_id != current_request_id_.load(std::memory_order_relaxed)) {
+      if (request.request_id !=
+          current_request_id_.load(std::memory_order_relaxed)) {
         continue;
       }
 
@@ -1815,6 +1705,7 @@ private:
   }
 
 private:
+  AMCompleterImpl *owner_ = nullptr;
   AMConfigManager &config_manager_;
   AMClientManage::Manager &client_manager_;
   AMFileSystem &filesystem_;
@@ -1846,16 +1737,118 @@ std::atomic<AMCompleter *> g_active_completer{nullptr};
 }
 
 /**
- * @brief Construct the completer with required managers.
+ * @brief Construct completer implementation state.
  */
-AMCompleter::AMCompleter(AMConfigManager &config_manager,
-                         AMClientManage::Manager &client_manager,
-                         AMFileSystem &filesystem,
-                         AMTransferManager &transfer_manager)
-    : impl_(std::make_unique<AMCompleter::Impl>(config_manager, client_manager,
-                                                filesystem, transfer_manager)) {
-  SetActive(this);
+AMCompleterImpl::AMCompleterImpl() : state_(std::make_unique<State>(this)) {}
+
+/**
+ * @brief Destroy completer implementation state.
+ */
+AMCompleterImpl::~AMCompleterImpl() = default;
+
+/**
+ * @brief Load completion configuration from settings.
+ */
+void AMCompleterImpl::LoadConfig() {
+  AMConfigManager &config = AMConfigManager::Instance();
+
+  int max_items = config.GetSettingInt({"CompleteOption", "maxnum"}, -1);
+  if (max_items <= 0) {
+    max_items = -1;
+  }
+  complete_max_items_ = max_items;
+
+  int max_rows =
+      config.GetSettingInt({"CompleteOption", "maxrows_perpage"}, 9);
+  if (max_rows == 0) {
+    max_rows = 9;
+  }
+  if (max_rows > 0 && max_rows < 3) {
+    max_rows = 3;
+  }
+  complete_max_rows_ = static_cast<long>(max_rows);
+
+  auto read_bool = [&config](const std::vector<std::string> &path,
+                             bool default_value) {
+    std::string value =
+        config.GetSettingString(path, default_value ? "true" : "false");
+    value = AMStr::lowercase(AMStr::Strip(value));
+    if (value == "true" || value == "1" || value == "yes" || value == "on") {
+      return true;
+    }
+    if (value == "false" || value == "0" || value == "no" || value == "off") {
+      return false;
+    }
+    return default_value;
+  };
+
+  complete_number_pick_ =
+      read_bool({"CompleteOption", "number_pick"}, true);
+  complete_auto_fill_ = read_bool({"CompleteOption", "auto_fillin"}, true);
+  complete_select_sign_ =
+      config.GetSettingString({"CompleteOption", "item_select_sign"}, "");
+
+  complete_delay_ms_ = config.ResolveArg<int>(
+      DocumentKind::Settings, {"CompleteOption", "complete_delay_ms"}, 100,
+      [](int v) { return v < 0 ? 0 : v; });
+
+  cache_min_items_ = config.ResolveArg<size_t>(
+      DocumentKind::Settings, {"CompleteOption", "cache_min_items"},
+      static_cast<size_t>(100),
+      [](size_t v) { return static_cast<size_t>(v); });
+
+  int max_entries =
+      config.GetSettingInt({"CompleteOption", "cache_max_entries"}, 64);
+  if (max_entries < 1) {
+    max_entries = 1;
+  }
+  cache_max_entries_ = static_cast<size_t>(max_entries);
+
+  std::string command_tag = "";
+  config.ResolveArg(DocumentKind::Settings,
+                    {"style", "InputHighlight", "command"}, &command_tag);
+  input_tag_command_ = NormalizeStyleTag_(command_tag);
+
+  std::string module_tag = "";
+  config.ResolveArg(DocumentKind::Settings,
+                    {"style", "InputHighlight", "module"}, &module_tag);
+  input_tag_module_ = NormalizeStyleTag_(module_tag);
 }
+
+/**
+ * @brief Install completer callback and apply current configuration.
+ */
+void AMCompleterImpl::Install(void *completion_arg) {
+  LoadConfig();
+  if (state_) {
+    state_->Install(completion_arg);
+  }
+}
+
+/**
+ * @brief Clear completion caches.
+ */
+void AMCompleterImpl::ClearCache() {
+  if (state_) {
+    state_->ClearCache();
+  }
+}
+
+/**
+ * @brief Forward completion handling into runtime state.
+ */
+void AMCompleterImpl::HandleCompletion(ic_completion_env_t *cenv,
+                                       const std::string &input,
+                                       size_t cursor) {
+  if (state_) {
+    state_->HandleCompletion(cenv, input, cursor);
+  }
+}
+
+/**
+ * @brief Construct completer facade.
+ */
+AMCompleter::AMCompleter() { SetActive(this); }
 
 /**
  * @brief Stop the async worker and release resources.
@@ -1863,27 +1856,26 @@ AMCompleter::AMCompleter(AMConfigManager &config_manager,
 AMCompleter::~AMCompleter() { SetActive(nullptr); }
 
 /**
+ * @brief Initialize completer state.
+ */
+void AMCompleter::Init() {}
+
+/**
  * @brief Install the completer into the isocline environment.
  */
-void AMCompleter::Install() {
-  if (impl_) {
-    impl_->Install();
-  }
-}
+void AMCompleter::Install() { AMCompleterImpl::Install(this); }
 
 /**
  * @brief Clear any cached completion results.
  */
-void AMCompleter::ClearCache() {
-  if (impl_) {
-    impl_->ClearCache();
-  }
-}
+void AMCompleter::ClearCache() { AMCompleterImpl::ClearCache(); }
 
 /**
  * @brief Return the currently active completer instance.
  */
-AMCompleter *AMCompleter::Active() { return g_active_completer.load(std::memory_order_relaxed); }
+AMCompleter *AMCompleter::Active() {
+  return g_active_completer.load(std::memory_order_relaxed);
+}
 
 /**
  * @brief Set the active completer instance.
@@ -1901,8 +1893,8 @@ void AMCompleter::IsoclineCompleter(ic_completion_env_t *cenv,
   if (!cenv) {
     return;
   }
-  auto *impl = static_cast<AMCompleter::Impl *>(ic_completion_arg(cenv));
-  if (!impl) {
+  auto *self = static_cast<AMCompleter *>(ic_completion_arg(cenv));
+  if (!self) {
     return;
   }
   long cursor = 0;
@@ -1910,6 +1902,6 @@ void AMCompleter::IsoclineCompleter(ic_completion_env_t *cenv,
   if (!input || cursor < 0) {
     return;
   }
-  impl->HandleCompletion(cenv, std::string(input),
+  self->HandleCompletion(cenv, std::string(input),
                          static_cast<size_t>(cursor));
 }

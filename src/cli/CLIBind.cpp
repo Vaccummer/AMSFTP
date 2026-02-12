@@ -439,7 +439,7 @@ ECM ParseValue_(const std::string &input, std::string *value) {
   if (!value) {
     return {EC::InvalidArg, "Null output pointer"};
   }
-  std::string trimmed = AMStr::TrimWhitespaceCopy(input);
+  std::string trimmed = AMStr::Strip(input);
   if (trimmed.empty()) {
     *value = "";
     return {EC::Success, ""};
@@ -498,7 +498,7 @@ ECM ParseVarToken_(const std::string &token, std::string *name) {
   if (!name) {
     return {EC::InvalidArg, "Null output pointer"};
   }
-  std::string trimmed = AMStr::TrimWhitespaceCopy(token);
+  std::string trimmed = AMStr::Strip(token);
   if (trimmed.empty()) {
     return {EC::InvalidArg, "Empty variable token"};
   }
@@ -516,8 +516,7 @@ ECM ParseVarToken_(const std::string &token, std::string *name) {
     if (trimmed.back() != '}') {
       return {EC::InvalidArg, "Unclosed ${...} expression"};
     }
-    std::string inner =
-        AMStr::TrimWhitespaceCopy(trimmed.substr(2, trimmed.size() - 3));
+    std::string inner = AMStr::Strip(trimmed.substr(2, trimmed.size() - 3));
     if (!IsValidVarName_(inner)) {
       return {EC::InvalidArg,
               "Invalid variable name: only letters, digits, and _ are allowed"};
@@ -642,9 +641,10 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     if (cli_commands.config_get->parsed()) {
       std::vector<std::string> targets = args.config_get.nicknames;
       if (targets.empty()) {
-        std::string current = client_manager.CurrentClient()
-                                  ? client_manager.CurrentClient()->GetNickname()
-                                  : "local";
+        std::string current =
+            client_manager.CurrentClient()
+                ? client_manager.CurrentClient()->GetNickname()
+                : "local";
         if (current.empty()) {
           current = "local";
         }
@@ -676,9 +676,9 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
       return result;
     }
     if (cli_commands.config_set->parsed()) {
-      result.rcm = config_manager.Host().SetHostValue(
-          args.config_set.nickname, args.config_set.attrname,
-          args.config_set.value);
+      result.rcm = config_manager.Host().SetHostValue(args.config_set.nickname,
+                                                      args.config_set.attrname,
+                                                      args.config_set.value);
       SetCliExitCode(static_cast<int>(result.rcm.first));
       return result;
     }
@@ -735,8 +735,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     const std::string remainder = JoinTokens_(tokens);
     const size_t eq_pos = remainder.find('=');
     if (eq_pos != std::string::npos) {
-      const std::string left =
-          AMStr::TrimWhitespaceCopy(remainder.substr(0, eq_pos));
+      const std::string left = AMStr::Strip(remainder.substr(0, eq_pos));
       const std::string right = remainder.substr(eq_pos + 1);
       std::string name;
       result.rcm = ParseVarToken_(left, &name);
@@ -802,7 +801,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   }
 
   if (cli_commands.ls_cmd->parsed()) {
-    std::string path = AMStr::TrimWhitespaceCopy(args.ls.path);
+    std::string path = AMStr::Strip(args.ls.path);
     if (path.empty()) {
       auto client = client_manager.CurrentClient()
                         ? client_manager.CurrentClient()

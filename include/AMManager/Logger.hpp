@@ -9,8 +9,12 @@
 
 class AMLogManager : private NonCopyableNonMovable {
 public:
+  explicit AMLogManager();
   /** Return the singleton instance (requires a valid config manager). */
-  static AMLogManager &Instance(AMConfigManager &cfg);
+  static AMLogManager &Instance() {
+    static AMLogManager instance;
+    return instance;
+  }
 
   /** Cleanup log manager resources. */
   ~AMLogManager();
@@ -28,9 +32,6 @@ public:
   int TraceLevel(int value = -99999);
 
 private:
-  /** Construct with config manager and resolve log settings. */
-  explicit AMLogManager(AMConfigManager &cfg);
-
   /** Write a log entry to disk using the background writer thread. */
   void WriteLogEntry_(const TraceInfo &info);
 
@@ -40,8 +41,8 @@ private:
   /** Convert trace level enum to integer severity. */
   static int ToLevelInt(enum TraceLevel level);
 
-  AMConfigManager &config_;
-  AMPromptManager &prompt_manager_;
+  AMConfigManager &config_ = AMConfigManager::Instance();
+  AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
   std::filesystem::path log_path_;
   std::atomic<int> trace_level_{4};
 };

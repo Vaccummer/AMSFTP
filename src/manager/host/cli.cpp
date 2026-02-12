@@ -1,42 +1,15 @@
+#include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
+#include "AMBase/Enum.hpp"
 #include "AMBase/Path.hpp"
+#include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
-#include <algorithm>
 #include <sstream>
+#include <string>
+#include <vector>
 
 using cls = AMHostManager;
 
-namespace {
-
-/**
- * @brief Print a line via the global prompt manager.
- */
-void PrintLine(const std::string &value) {
-  AMPromptManager::Instance().Print(value);
-}
-
-/**
- * @brief Parse human-friendly boolean tokens.
- */
-bool ParseBoolToken(const std::string &input, bool *value) {
-  if (!value) {
-    return false;
-  }
-  const std::string token = AMStr::lowercase(AMStr::Strip(input));
-  if (token == "true" || token == "1" || token == "yes" || token == "y") {
-    *value = true;
-    return true;
-  }
-  if (token == "false" || token == "0" || token == "no" || token == "n") {
-    *value = false;
-    return true;
-  }
-  return false;
-}
-
-/**
- * @brief Split whitespace-separated host names.
- */
 std::vector<std::string> SplitTokens(const std::string &text) {
   std::istringstream iss(text);
   std::vector<std::string> out;
@@ -49,72 +22,35 @@ std::vector<std::string> SplitTokens(const std::string &text) {
   return out;
 }
 
-/**
- * @brief Convert known config fields to their display value.
- */
-std::string GetFieldString(const ClientConfig &entry,
-                           const std::string &field) {
-  if (field == "hostname") {
-    return entry.request.hostname;
+std::pair<ECM, std::vector<std::string>>
+cls::PrivateKeys(bool print_sign) const {
+  std::vector<std::string> keys = {};
+  ECM rcm = Ok();
+  if (!config_.ResolveArg(DocumentKind::Config, {configkn::keys}, &keys)) {
+    rcm = {EC::CommonFailure,
+           AMStr::amfmt("Fail to read config attribute: {}", configkn::keys)};
+    prompt_.ErrorFormat(rcm);
+    return {rcm, keys};
   }
-  if (field == "username") {
-    return entry.request.username;
+  if (!print_sign) {
+    return {rcm, keys};
   }
-  if (field == "port") {
-    return std::to_string(entry.request.port);
+  static const std::string key_sign =
+      AMStr::BBCEscape(AMStr::amfmt("[{}]", configkn::keys));
+  auto info = PathInfo();
+  for (auto &key : keys) {
+    info = AMFS::stat(key).second;
+    prompt_.Print(config_.Format(key, "", &info));
   }
-  if (field == "password") {
-    return entry.request.password;
-  }
-  if (field == "protocol") {
-    switch (entry.protocol) {
-    case ClientProtocol::SFTP:
-      return "sftp";
-    case ClientProtocol::FTP:
-      return "ftp";
-    case ClientProtocol::LOCAL:
-      return "local";
-    default:
-      return "unknown";
-    }
-  }
-  if (field == "buffer_size") {
-    return std::to_string(entry.buffer_size);
-  }
-  if (field == "trash_dir") {
-    return entry.request.trash_dir;
-  }
-  if (field == "login_dir") {
-    return entry.login_dir;
-  }
-  if (field == "keyfile") {
-    return entry.request.keyfile;
-  }
-  if (field == "compression") {
-    return entry.request.compression ? "true" : "false";
-  }
-  return "";
+  return {rcm, keys};
 }
-
-} // namespace
-
-/**
- * @brief List host nicknames only.
- */
-ECM cls::ListName() const { return List(false); }
 
 /**
  * @brief List configured hosts in compact or detailed mode.
  */
 ECM cls::List(bool detailed) const {
-  auto status = EnsureReady_("HostList");
-  if (status.first != EC::Success) {
-    return status;
-  }
-  CollectHosts_();
-
   if (host_configs.empty()) {
-    PrintLine("");
+    prompt_.Print("");
     return Ok();
   }
 
@@ -124,12 +60,12 @@ ECM cls::List(bool detailed) const {
     std::ostringstream line;
     for (auto it = host_configs.begin(); it != host_configs.end(); ++it) {
       const std::string &nickname = it->first;
-      const std::string styled = FormatValue_(nickname, "nickname");
+      const std::string styled = config_.Format(nickname, "nickname");
       const size_t display_len = nickname.size();
       const size_t separator_len = current_width == 0 ? 0 : 3;
       if (current_width + separator_len + display_len > max_width &&
           current_width > 0) {
-        PrintLine(line.str());
+        prompt_.Print(line.str());
         line.str(std::string());
         line.clear();
         current_width = 0;
@@ -142,7 +78,7 @@ ECM cls::List(bool detailed) const {
       current_width += display_len;
     }
     if (current_width > 0) {
-      PrintLine(line.str());
+      prompt_.Print(line.str());
     }
     return Ok();
   }
@@ -152,7 +88,7 @@ ECM cls::List(bool detailed) const {
     if (print_status.first != EC::Success) {
       return print_status;
     }
-    PrintLine("");
+    prompt_.Print("");
   }
   return Ok();
 }
@@ -161,51 +97,24 @@ ECM cls::List(bool detailed) const {
  * @brief Prompt and add one host configuration.
  */
 ECM cls::Add() {
-  ECM status = EnsureReady_("HostAdd");
-  if (status.first != EC::Success) {
-    return status;
-  }
-  CollectHosts_();
-
   ClientConfig entry;
   ECM prompt_status = PromptAddFields_("", entry);
   if (prompt_status.first != EC::Success) {
     return prompt_status;
   }
-
-  entry.request.nickname = AMStr::Strip(entry.request.nickname);
-  if (entry.request.nickname.empty()) {
-    return Err(EC::InvalidArg, "empty nickname");
+  prompt_status = AddHost_(entry.request.nickname, entry);
+  if (prompt_status.first != EC::Success) {
+    prompt_.ErrorFormat(prompt_status);
+    return prompt_status;
   }
-  if (!ValidateNickname(entry.request.nickname)) {
-    return Err(EC::InvalidArg, "invalid nickname");
-  }
-  if (HostExists(entry.request.nickname)) {
-    return Err(EC::KeyAlreadyExists, "nickname already exists");
-  }
-
-  ECM persist_status = PersistHostConfig_(entry.request.nickname, entry, true);
-  if (persist_status.first != EC::Success) {
-    prompt_.ErrorFormat(persist_status);
-    return persist_status;
-  }
-  host_configs[entry.request.nickname] = entry;
-
-  PrintLine(FormatValue_(AMStr::amfmt("Added host: {}", entry.request.nickname),
-                         "success"));
-  return Ok();
+  config_.Dump(DocumentKind::Config, "", true);
+  return prompt_status;
 }
 
 /**
  * @brief Prompt and modify an existing host configuration.
  */
 ECM cls::Modify(const std::string &nickname) {
-  ECM status = EnsureReady_("HostModify");
-  if (status.first != EC::Success) {
-    return status;
-  }
-  CollectHosts_();
-
   if (!HostExists(nickname)) {
     return Err(EC::HostConfigNotFound, "host not found");
   }
@@ -215,16 +124,13 @@ ECM cls::Modify(const std::string &nickname) {
     return prompt_status;
   }
 
-  ECM persist_status = PersistHostConfig_(nickname, updated, true);
-  if (persist_status.first != EC::Success) {
-    prompt_.ErrorFormat(persist_status);
-    return persist_status;
+  prompt_status = AddHost_(updated.request.nickname, updated);
+  if (prompt_status.first != EC::Success) {
+    prompt_.ErrorFormat(prompt_status);
+    return prompt_status;
   }
-  host_configs[nickname] = updated;
-
-  PrintLine(
-      FormatValue_(AMStr::amfmt("Modified host: {}", nickname), "success"));
-  return Ok();
+  config_.Dump(DocumentKind::Config, "", true);
+  return prompt_status;
 }
 
 /**
@@ -241,35 +147,57 @@ ECM cls::Delete(const std::string &nickname) {
  * @brief Delete hosts from explicit target names.
  */
 ECM cls::Delete(const std::vector<std::string> &targets) {
-  ECM status = EnsureReady_("HostDelete");
-  if (status.first != EC::Success) {
-    return status;
-  }
-  CollectHosts_();
+  std::vector<std::string> uniq_targets = VectorDedup(targets);
 
-  ECM overall = Ok();
-  bool removed_any = false;
-  for (const std::string &name : targets) {
-    if (name.empty()) {
+  if (uniq_targets.empty()) {
+    return Ok();
+  }
+  ECM rcm = Ok();
+  std::vector<std::string> valid_targets = {};
+
+  for (const auto &name : uniq_targets) {
+    if (!HostExists(name)) {
+      rcm =
+          Err(EC::InvalidArg, AMStr::amfmt("invalid host nickname: {}", name));
+      prompt_.ErrorFormat(rcm);
       continue;
     }
-    ECM rm_status = RemoveHost_(name);
-    if (rm_status.first != EC::Success) {
-      prompt_.ErrorFormat(rm_status);
-      overall = rm_status;
-      continue;
-    }
-    removed_any = true;
+    valid_targets.push_back(name);
+  }
+  if (valid_targets.empty()) {
+    return rcm;
   }
 
-  if (removed_any) {
-    ECM dump_status = SaveConfig_(false);
-    if (dump_status.first != EC::Success) {
-      prompt_.ErrorFormat(dump_status);
-      return dump_status;
+  std::string listing;
+  for (size_t i = 0; i < uniq_targets.size(); ++i) {
+    if (i > 0) {
+      listing += ", ";
     }
+    listing += config_.Format(uniq_targets[i], "nickname");
   }
-  return overall;
+
+  bool canceled = false;
+  const bool confirmed = prompt_.PromptYesNo(
+      AMStr::amfmt("Delete {} host(s): {} ? (y/N): ", uniq_targets.size(),
+                   listing),
+      &canceled);
+
+  if (canceled || !confirmed) {
+    prompt_.Print("Delete aborted.");
+    return Ok();
+  }
+
+  for (const auto &name : uniq_targets) {
+    ECM rcm = RemoveHost_(name);
+    if (rcm.first != EC::Success) {
+      prompt_.ErrorFormat(rcm);
+      return rcm;
+    }
+    // prompt_.Print(
+    //     AMStr::amfmt("Deleted host: {}", config_.Format(name, "nickname")));
+  }
+
+  return config_.Dump(DocumentKind::Config, "", true);
 }
 
 /**
@@ -283,44 +211,42 @@ ECM cls::Query(const std::string &nickname) const {
  * @brief Query one or more hosts and print detailed fields.
  */
 ECM cls::Query(const std::vector<std::string> &targets) const {
-  ECM status = EnsureReady_("HostQuery");
-  if (status.first != EC::Success) {
-    return status;
-  }
-  CollectHosts_();
-
+  ECM rcm = Ok();
   if (host_configs.empty()) {
-    PrintLine("");
-    return Ok();
+    rcm = Err(EC::HostConfigNotFound, "no hosts configured");
+    prompt_.ErrorFormat(rcm);
+    return rcm;
   }
 
-  if (targets.empty()) {
-    for (const auto &item : host_configs) {
-      ECM print_status = PrintHost_(item.first, item.second);
-      if (print_status.first != EC::Success) {
-        return print_status;
-      }
-      PrintLine("");
-    }
-    return Ok();
-  }
+  std::vector<std::string> uniq_targets = VectorDedup(targets);
+  std::vector<std::string> valid_targets = {};
 
-  for (const std::string &nickname : targets) {
+  for (const std::string &nickname : uniq_targets) {
     auto it = host_configs.find(nickname);
     if (it == host_configs.end()) {
-      const std::string styled = FormatValue_(nickname, "nickname");
+      const std::string styled = config_.Format(nickname, "nickname");
       ECM err = Err(EC::HostConfigNotFound,
                     AMStr::amfmt("Host {} not found", styled));
       prompt_.ErrorFormat(err);
       return err;
     }
-    ECM print_status = PrintHost_(it->first, it->second);
-    if (print_status.first != EC::Success) {
-      return print_status;
-    }
-    PrintLine("");
+    valid_targets.push_back(nickname);
   }
-  return Ok();
+  if (valid_targets.empty()) {
+    return rcm;
+  }
+
+  ECM print_status = Ok();
+  for (const std::string &nickname : valid_targets) {
+    auto it = host_configs.find(nickname);
+    print_status = PrintHost_(it->first, it->second);
+    if (print_status.first != EC::Success) {
+      prompt_.ErrorFormat(print_status);
+      rcm = print_status;
+    }
+    prompt_.Print("");
+  }
+  return rcm;
 }
 
 /**
@@ -328,110 +254,84 @@ ECM cls::Query(const std::vector<std::string> &targets) const {
  */
 ECM cls::Rename(const std::string &old_nickname,
                 const std::string &new_nickname) {
-  ECM status = EnsureReady_("HostRename");
-  if (status.first != EC::Success) {
-    return status;
-  }
-  CollectHosts_();
-
+  ECM rcm = Ok();
   if (old_nickname.empty() || new_nickname.empty()) {
-    ECM err = Err(EC::InvalidArg, "empty nickname");
-    prompt_.ErrorFormat(err);
-    return err;
+    rcm = Err(EC::InvalidArg, "empty nickname");
+    prompt_.ErrorFormat(rcm);
+    return rcm;
   }
+
   if (old_nickname == new_nickname) {
-    ECM err = Err(EC::InvalidArg, "new nickname same as old nickname");
-    prompt_.ErrorFormat(err);
-    return err;
+    rcm = Err(EC::InvalidArg, "new nickname same as old nickname");
+    prompt_.ErrorFormat(rcm);
+    return rcm;
   }
-  if (!ValidateNickname(new_nickname)) {
-    ECM err = Err(EC::InvalidArg, "invalid new nickname");
-    prompt_.ErrorFormat(err);
-    return err;
+
+  if (!configkn::ValidateNickname(new_nickname)) {
+    rcm =
+        Err(EC::InvalidArg, "invalid new nickname, pattern is [a-zA-Z0-9_-]+");
+    prompt_.ErrorFormat(rcm);
+    return rcm;
   }
-  if (!HostExists(old_nickname)) {
-    ECM err = Err(EC::HostConfigNotFound, "old nickname not found");
-    prompt_.ErrorFormat(err);
-    return err;
-  }
+
   if (HostExists(new_nickname)) {
-    ECM err = Err(EC::KeyAlreadyExists, "new nickname already exists");
-    prompt_.ErrorFormat(err);
-    return err;
+    rcm = Err(EC::KeyAlreadyExists, "new nickname already exists");
+    prompt_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  if (!HostExists(old_nickname)) {
+    rcm = Err(EC::HostConfigNotFound, "old nickname not found");
+    prompt_.ErrorFormat(rcm);
+    return rcm;
   }
 
   ClientConfig moved = host_configs[old_nickname];
   moved.request.nickname = new_nickname;
 
-  ECM write_new_status = PersistHostConfig_(new_nickname, moved, false);
-  if (write_new_status.first != EC::Success) {
-    prompt_.ErrorFormat(write_new_status);
-    return write_new_status;
-  }
-
-  ECM remove_old_status = RemoveHost_(old_nickname);
-  if (remove_old_status.first != EC::Success) {
-    prompt_.ErrorFormat(remove_old_status);
-    return remove_old_status;
-  }
-
-  ECM dump_status = SaveConfig_(false);
-  if (dump_status.first != EC::Success) {
-    prompt_.ErrorFormat(dump_status);
-    return dump_status;
-  }
-
   host_configs[new_nickname] = moved;
-  PrintLine(AMStr::amfmt("Rename host: \x1b[9m{}\x1b[29m -> {}", old_nickname,
-                         FormatValue_(new_nickname, "nickname")));
-  return Ok();
+  rcm = AddHost_(new_nickname, moved);
+
+  if (rcm.first != EC::Success) {
+    prompt_.ErrorFormat(rcm);
+    host_configs.erase(new_nickname);
+    return rcm;
+  }
+
+  host_configs.erase(old_nickname);
+
+  rcm = RemoveHost_(old_nickname);
+  if (rcm.first != EC::Success) {
+    prompt_.ErrorFormat(rcm);
+  }
+  return rcm;
 }
 
 /**
  * @brief Print config and settings source paths.
  */
 ECM cls::Src() const {
-  ECM status = EnsureReady_("HostSrc");
-  if (status.first != EC::Success) {
-    return status;
-  }
-
-  const std::string config_label = AMStr::BBCEscape("[Config]");
-  const std::string settings_label = AMStr::BBCEscape("[Setting]");
-  const size_t width = std::max(config_label.size(), settings_label.size());
-
+  static const std::string config_label = AMStr::BBCEscape("[Config] ");
+  static const std::string settings_label = AMStr::BBCEscape("[Setting]");
   std::filesystem::path config_path_obj;
   std::filesystem::path settings_path_obj;
-  std::string config_path;
-  std::string settings_path;
-  if (GetDocumentPath_(DocumentKind::Config, &config_path_obj)) {
+  std::string config_path = "";
+  std::string settings_path = "";
+
+  if (config_.GetDataPath(DocumentKind::Config, &config_path_obj)) {
     config_path = config_path_obj.string();
+    auto [config_rcm, config_info] = AMFS::stat(config_path, false);
+    prompt_.Print(
+        AMStr::amfmt("{} = {}", config_label,
+                     config_.Format(config_path, "dir", &config_info)));
   }
-  if (GetDocumentPath_(DocumentKind::Settings, &settings_path_obj)) {
+  if (config_.GetDataPath(DocumentKind::Settings, &settings_path_obj)) {
     settings_path = settings_path_obj.string();
+    auto [settings_rcm, settings_info] = AMFS::stat(settings_path, false);
+    prompt_.Print(
+        AMStr::amfmt("{} = {}", settings_label,
+                     config_.Format(settings_path, "dir", &settings_info)));
   }
-
-  auto [config_rcm, config_info] = AMFS::stat(config_path, false);
-  PathInfo missing_config_info;
-  if (config_rcm.first != EC::Success) {
-    missing_config_info.name = AMPathStr::basename(config_path);
-  }
-  const PathInfo *config_ptr =
-      config_rcm.first == EC::Success ? &config_info : &missing_config_info;
-
-  auto [settings_rcm, settings_info] = AMFS::stat(settings_path, false);
-  PathInfo missing_settings_info;
-  if (settings_rcm.first != EC::Success) {
-    missing_settings_info.name = AMPathStr::basename(settings_path);
-  }
-  const PathInfo *settings_ptr = settings_rcm.first == EC::Success
-                                     ? &settings_info
-                                     : &missing_settings_info;
-
-  PrintLine(AMStr::amfmt("{:<{}} : {}", config_label, width,
-                         FormatValue_(config_path, "dir", config_ptr)));
-  PrintLine(AMStr::amfmt("{:<{}} : {}", settings_label, width,
-                         FormatValue_(settings_path, "dir", settings_ptr)));
   return Ok();
 }
 
@@ -440,13 +340,6 @@ ECM cls::Src() const {
  */
 ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
                       const std::string &value_str) {
-  ECM status = EnsureReady_("SetHostValue");
-  if (status.first != EC::Success) {
-    prompt_.ErrorFormat(status);
-    return status;
-  }
-  CollectHosts_();
-
   const std::string field = AMStr::lowercase(attrname);
   if (nickname.empty()) {
     ECM err = Err(EC::InvalidArg, "empty nickname");
@@ -458,132 +351,159 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     prompt_.ErrorFormat(err);
     return err;
   }
+  bool field_validated = false;
 
-  static const std::vector<std::string> allowed_fields = {
-      "hostname",    "username",  "port",      "password", "protocol",
-      "buffer_size", "trash_dir", "login_dir", "keyfile",  "compression"};
-  if (std::find(allowed_fields.begin(), allowed_fields.end(), field) ==
-      allowed_fields.end()) {
+  for (const std::string &allowed : configkn::fileds) {
+    if (field == allowed) {
+      field_validated = true;
+      break;
+    }
+  }
+
+  if (!field_validated) {
     ECM err = Err(EC::InvalidArg, "unsupported property name");
     prompt_.ErrorFormat(err);
     return err;
   }
 
-  ClientConfig updated = host_configs[nickname];
-  const std::string old_value = GetFieldString(updated, field);
+  ClientConfig &updated = host_configs[nickname];
+  std::string old_value = "";
+  std::string new_value = "";
   ECM set_status = Ok();
-
-  if (field == "port") {
+  if (field == configkn::hostname) {
+    if (value_str.empty()) {
+      set_status = Err(EC::InvalidArg, "hostname cannot be empty");
+      prompt_.ErrorFormat(set_status);
+      return set_status;
+    }
+    old_value = updated.request.hostname;
+    updated.request.hostname = value_str;
+    new_value = value_str;
+  } else if (field == configkn::username) {
+    if (value_str.empty()) {
+      set_status = Err(EC::InvalidArg, "username cannot be empty");
+      prompt_.ErrorFormat(set_status);
+      return set_status;
+    }
+    old_value = updated.request.username;
+    updated.request.username = value_str;
+    new_value = value_str;
+  } else if (field == configkn::port) {
     int64_t port = 0;
-    if (!StrValueParse(value_str, &port) || port <= 0 ||
-        port > std::numeric_limits<int>::max()) {
-      return Err(EC::InvalidArg, "invalid port value");
+    if (!StrValueParse(value_str, &port) || port <= 0 || port > 65535) {
+      set_status = Err(EC::InvalidArg, "invalid port value");
+      prompt_.ErrorFormat(set_status);
+      return set_status;
     }
-    set_status = SetHostField(nickname, field, port, true);
-    if (set_status.first == EC::Success) {
-      updated.request.port = static_cast<int>(port);
-    }
-  } else if (field == "buffer_size") {
+    old_value = std::to_string(updated.request.port);
+    updated.request.port = static_cast<int>(port);
+    new_value = std::to_string(port);
+  } else if (field == configkn::buffer_size) {
     int64_t buffer_size = 0;
-    if (!StrValueParse(value_str, &buffer_size) ||
-        (buffer_size != -1 && buffer_size <= 0)) {
-      return Err(EC::InvalidArg, "invalid buffer_size value");
+    if (!StrValueParse(value_str, &buffer_size)) {
+      set_status =
+          Err(EC::InvalidArg, "Buffer size must be an positive integer");
+      prompt_.ErrorFormat(set_status);
+      return set_status;
+    } else if (buffer_size < AMMinBufferSize || buffer_size > AMMaxBufferSize) {
+      set_status = Err(EC::InvalidArg,
+                       AMStr::amfmt("Buffer size must be between {} and {}",
+                                    AMMinBufferSize, AMMaxBufferSize));
+      prompt_.ErrorFormat(set_status);
+      return set_status;
     }
-    set_status = SetHostField(nickname, field, buffer_size, true);
-    if (set_status.first == EC::Success) {
-      updated.buffer_size = buffer_size;
-    }
-  } else if (field == "compression") {
+    old_value = std::to_string(updated.buffer_size);
+    updated.buffer_size = buffer_size;
+    new_value = std::to_string(buffer_size);
+  } else if (field == configkn::compression) {
     bool compression = false;
-    if (!ParseBoolToken(value_str, &compression)) {
-      return Err(EC::InvalidArg, "invalid compression value");
+    if (!StrValueParse(value_str, &compression)) {
+      set_status =
+          Err(EC::InvalidArg, "compression value must be true or false");
+      prompt_.ErrorFormat(set_status);
+      return set_status;
     }
-    set_status = SetHostField(nickname, field, compression, true);
-    if (set_status.first == EC::Success) {
-      updated.request.compression = compression;
-    }
-  } else if (field == "protocol") {
+    old_value = updated.request.compression ? "true" : "false";
+    updated.request.compression = compression;
+    new_value = compression ? "true" : "false";
+
+  } else if (field == configkn::protocol) {
     std::string protocol = AMStr::lowercase(AMStr::Strip(value_str));
     if (protocol != "sftp" && protocol != "ftp" && protocol != "local") {
-      return Err(EC::InvalidArg, "invalid protocol value");
+      set_status = Err(EC::InvalidArg, "protocol must be sftp, ftp or local");
+      prompt_.ErrorFormat(set_status);
+      return set_status;
     }
-    set_status = SetHostField(nickname, field, protocol, true);
-    if (set_status.first == EC::Success) {
-      updated.protocol = StrToProtocol(protocol);
-    }
-  } else if (field == "password") {
-    std::string encrypted = AMAuth::EncryptPassword(value_str);
-    set_status = SetHostField(nickname, field, encrypted, true);
-    if (set_status.first == EC::Success) {
-      updated.request.password = encrypted;
-    }
-  } else {
-    set_status = SetHostField(nickname, field, value_str, true);
-    if (set_status.first == EC::Success) {
-      if (field == "hostname") {
-        updated.request.hostname = value_str;
-      } else if (field == "username") {
-        updated.request.username = value_str;
-      } else if (field == "trash_dir") {
-        updated.request.trash_dir = value_str;
-      } else if (field == "login_dir") {
-        updated.login_dir = value_str;
-      } else if (field == "keyfile") {
-        updated.request.keyfile = value_str;
+    old_value = AMStr::lowercase(AM_ENUM_NAME(updated.protocol));
+    updated.protocol = configkn::StrToProtocol(protocol);
+    new_value = AMStr::lowercase(AM_ENUM_NAME(updated.protocol));
+
+  } else if (field == configkn::password) {
+    std::string tmp_pswd = AMStr::Strip(value_str);
+    if (tmp_pswd.empty()) {
+      if (!prompt_.SecurePrompt("Password: ", &tmp_pswd)) {
+        set_status = Err(EC::ConfigCanceled, "password input canceled");
+        prompt_.ErrorFormat(set_status);
+        return set_status;
       }
     }
-  }
-
-  if (set_status.first != EC::Success) {
+    if (tmp_pswd.empty()) {
+      set_status = Err(EC::InvalidArg, "password cannot be empty");
+      prompt_.ErrorFormat(set_status);
+      return set_status;
+    }
+    if (!AMAuth::IsEncrypted(tmp_pswd)) {
+      tmp_pswd = AMAuth::EncryptPassword(tmp_pswd);
+    }
+    old_value = updated.request.password.empty() ? "\"\"" : "***";
+    updated.request.password = tmp_pswd;
+    new_value = "***";
+  } else if (field == configkn::keyfile) {
+    old_value = updated.request.keyfile;
+    updated.request.keyfile = value_str;
+    new_value = value_str;
+  } else if (field == configkn::trash_dir) {
+    old_value = updated.request.trash_dir;
+    updated.request.trash_dir = value_str;
+    new_value = value_str;
+  } else if (field == configkn::login_dir) {
+    old_value = updated.login_dir;
+    updated.login_dir = value_str;
+    new_value = value_str;
+  } else {
+    set_status = Err(EC::InvalidArg,
+                     AMStr::amfmt("unsupported property name: {}", field));
     prompt_.ErrorFormat(set_status);
     return set_status;
   }
 
-  host_configs[nickname] = updated;
-  const std::string new_value = GetFieldString(updated, field);
-  PrintLine(
+  bool write_ok = false;
+  if (field == configkn::port) {
+    write_ok = config_.SetArg(DocumentKind::Config,
+                              {configkn::hosts, nickname, field},
+                              static_cast<int64_t>(updated.request.port));
+  } else if (field == configkn::buffer_size) {
+    write_ok = config_.SetArg(DocumentKind::Config,
+                              {configkn::hosts, nickname, field},
+                              static_cast<int64_t>(updated.buffer_size));
+  } else if (field == configkn::compression) {
+    write_ok = config_.SetArg(DocumentKind::Config,
+                              {configkn::hosts, nickname, field},
+                              updated.request.compression);
+  } else {
+    write_ok =
+        config_.SetArg(DocumentKind::Config, {configkn::hosts, nickname, field},
+                       new_value);
+  }
+
+  if (!write_ok) {
+    set_status = Err(EC::CommonFailure, "failed to write config");
+    prompt_.ErrorFormat(set_status);
+    return set_status;
+  }
+
+  config_.Dump(DocumentKind::Config, "", true);
+  prompt_.Print(
       AMStr::amfmt("{}.{}: {} -> {}", nickname, field, old_value, new_value));
-  return Ok();
-}
-
-/**
- * @brief Read private key paths from config and optionally print them.
- */
-std::pair<ECM, std::vector<std::string>>
-cls::PrivateKeys(bool print_sign) const {
-  ECM status = EnsureReady_("HostPrivateKeys");
-  if (status.first != EC::Success) {
-    return {status, {}};
-  }
-
-  nlohmann::ordered_json config_json;
-  if (!GetDocumentJson_(DocumentKind::Config, &config_json)) {
-    return {Ok(), {}};
-  }
-
-  std::vector<std::string> keys;
-  const auto it = config_json.find("private_keys");
-  if (it != config_json.end() && it->is_array()) {
-    keys.reserve(it->size());
-    for (const auto &item : *it) {
-      if (item.is_string()) {
-        keys.push_back(item.get<std::string>());
-      }
-    }
-  }
-
-  if (print_sign) {
-    PrintLine("[!a][Private_keys][/a]");
-    for (const std::string &path : keys) {
-      auto [path_rcm, path_info] = AMFS::stat(path, false);
-      PathInfo missing_info;
-      if (path_rcm.first != EC::Success) {
-        missing_info.name = AMPathStr::basename(path);
-      }
-      const PathInfo *path_ptr =
-          path_rcm.first == EC::Success ? &path_info : &missing_info;
-      PrintLine(FormatValue_(path, "dir", path_ptr));
-    }
-  }
-  return {Ok(), keys};
+  return set_status;
 }

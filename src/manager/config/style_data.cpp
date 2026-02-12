@@ -2,7 +2,7 @@
 #include "AMBase/Path.hpp"
 #include "AMManager/Config.hpp"
 
-using cls = AMConfigStyleData;
+using cls = AMConfigManager;
 using Bar = AMProgressBar;
 using BarStyle = AMProgressBarStyle;
 
@@ -32,47 +32,12 @@ std::string NormalizeStyleTag_(const std::string &raw) {
 /**
  * @brief Wrap text with a bbcode tag when provided.
  */
-std::string ApplyStyleTag_(const std::string &tag, const std::string &text) {
+inline std::string ApplyStyleTag_(const std::string &tag,
+                                  const std::string &text) {
   if (tag.empty()) {
     return text;
   }
   return tag + text + "[/]";
-}
-
-/**
- * @brief Parse a hex color string (#RRGGBB) into an ANSI escape sequence.
- */
-std::optional<std::string> ParseHexColorToAnsi(const std::string &value) {
-  std::string token = AMStr::Strip(value);
-  if (token.empty()) {
-    return std::nullopt;
-  }
-  if (token.rfind("#", 0) == 0) {
-    token.erase(0, 1);
-  }
-  if (token.size() != 6) {
-    return std::nullopt;
-  }
-  auto hex_to_int = [](char c) -> int {
-    if (c >= '0' && c <= '9')
-      return c - '0';
-    if (c >= 'a' && c <= 'f')
-      return 10 + (c - 'a');
-    if (c >= 'A' && c <= 'F')
-      return 10 + (c - 'A');
-    return -1;
-  };
-  int vals[6];
-  for (size_t i = 0; i < 6; ++i) {
-    vals[i] = hex_to_int(token[i]);
-    if (vals[i] < 0) {
-      return std::nullopt;
-    }
-  }
-  int r = vals[0] * 16 + vals[1];
-  int g = vals[2] * 16 + vals[3];
-  int b = vals[4] * 16 + vals[5];
-  return AMStr::amfmt("\x1b[38;2;{};{};{}m", r, g, b);
 }
 
 /**
@@ -85,61 +50,28 @@ ParseProgressBarColor(const std::string &value) {
     return indicators::Color::unspecified;
   }
   if (!trimmed.empty() && trimmed[0] == '#') {
-    auto ansi = ParseHexColorToAnsi(trimmed);
+    auto ansi = HexToAnsi(trimmed);
     if (ansi) {
       return *ansi;
     }
   }
   const std::string token = AMStr::lowercase(trimmed);
-  if (token == "grey") {
-    return indicators::Color::grey;
-  }
-  if (token == "red") {
-    return indicators::Color::red;
-  }
-  if (token == "green") {
-    return indicators::Color::green;
-  }
-  if (token == "yellow") {
-    return indicators::Color::yellow;
-  }
-  if (token == "blue") {
-    return indicators::Color::blue;
-  }
-  if (token == "magenta") {
-    return indicators::Color::magenta;
-  }
-  if (token == "cyan") {
-    return indicators::Color::cyan;
-  }
-  if (token == "white") {
-    return indicators::Color::white;
+  static const std::unordered_map<std::string, indicators::Color> color_map = {
+      {"unspecified", indicators::Color::unspecified},
+      {"red", indicators::Color::red},
+      {"green", indicators::Color::green},
+      {"yellow", indicators::Color::yellow},
+      {"blue", indicators::Color::blue},
+      {"magenta", indicators::Color::magenta},
+      {"cyan", indicators::Color::cyan},
+      {"white", indicators::Color::white},
+      {"grey", indicators::Color::grey},
+  };
+  auto it = color_map.find(token);
+  if (it != color_map.end()) {
+    return it->second;
   }
   return indicators::Color::unspecified;
-}
-
-/**
- * @brief Parse a boolean token from user input.
- */
-bool ParseBoolToken(const std::string &input, bool *value) {
-  std::string token = AMStr::Strip(input);
-  if (token.empty()) {
-    return false;
-  }
-  token = AMStr::lowercase(token);
-  if (token == "true" || token == "1" || token == "yes" || token == "y") {
-    if (value) {
-      *value = true;
-    }
-    return true;
-  }
-  if (token == "false" || token == "0" || token == "no" || token == "n") {
-    if (value) {
-      *value = false;
-    }
-    return true;
-  }
-  return false;
 }
 
 } // namespace
@@ -147,7 +79,7 @@ bool ParseBoolToken(const std::string &input, bool *value) {
 /**
  * @brief Construct a style layer with no bound storage.
  */
-cls::AMConfigStyleData() = default;
+cls::AMConfigManager() = default;
 
 /**
  * @brief Apply a named style to a string with optional path context.
@@ -342,22 +274,15 @@ BarStyle cls::BuildProgressBarStyle_() const {
       DocumentKind::Settings, {"style", "ProgressBar", "color"}, "#FFFFFF",
       {}));
 
-  auto parse_bool = [&](const std::vector<std::string> &path,
-                        bool default_value) {
-    auto raw = ResolveArg<std::string>(DocumentKind::Settings, path,
-                                       default_value ? "true" : "false", {});
-    bool value = default_value;
-    ParseBoolToken(raw, &value);
-    return value;
-  };
-
-  style.show_percentage = parse_bool(
-      {"style", "ProgressBar", "show_percentage"}, style.show_percentage);
-  style.show_elapsed_time = parse_bool(
-      {"style", "ProgressBar", "show_elapsed_time"}, style.show_elapsed_time);
-  style.show_remaining_time =
-      parse_bool({"style", "ProgressBar", "show_remaining_time"},
-                 style.show_remaining_time);
+  style.show_percentage = ResolveArg<bool>(
+      DocumentKind::Settings, {"style", "ProgressBar", "show_percentage"},
+      style.show_percentage, {});
+  style.show_elapsed_time = ResolveArg<bool>(
+      DocumentKind::Settings, {"style", "ProgressBar", "show_elapsed_time"},
+      style.show_elapsed_time, {});
+  style.show_remaining_time = ResolveArg<bool>(
+      DocumentKind::Settings, {"style", "ProgressBar", "show_remaining_time"},
+      style.show_remaining_time, {});
 
   return style;
 }
