@@ -1,30 +1,24 @@
 #pragma once
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
-#include "AMBase/Enum.hpp"
 #include "AMBase/RustTomlRead.h"
-#include "AMManager/Prompt.hpp"
+// #include "AMManager/Prompt.hpp"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
 #include <functional>
 #include <handleapi.h>
-#include <limits>
-#include <map>
 #include <mutex>
 #include <optional>
 #include <queue>
 #include <regex>
 #include <string>
 #include <thread>
-#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
-
-class AMHostManager;
 
 /**
  * @brief Configuration document types tracked by storage.
@@ -136,13 +130,6 @@ public:
   void CloseHandles();
 
   /**
-   * @brief Snapshot a document in a thread-safe manner.
-   * @param kind Document kind to snapshot.
-   * @return JSON snapshot copy.
-   */
-  nlohmann::ordered_json Snapshot(DocumentKind kind) const;
-
-  /**
    * @brief Report whether a document has pending changes.
    * @param kind Document kind to check.
    * @return True if the document is dirty.
@@ -221,7 +208,7 @@ public:
 
   /** Return the project root directory path. */
   [[nodiscard]] std::filesystem::path ProjectRoot() const;
-  [[nodiscard]] int GetSettingInt(const Path &path, int default_value) const;
+
   /**
    * @brief Query a UserVars entry by name.
    */
@@ -353,7 +340,6 @@ protected:
    * @param err Error ECM to forward.
    */
   void NotifyDumpError_(const ECM &err) const;
-  AMPromptManager &prompt = AMPromptManager::Instance();
 
 private:
   /**
@@ -419,12 +405,12 @@ private:
 /**
  * @brief Style access layer for UI and formatting configuration.
  */
-class AMConfigStyleData : public AMConfigStorage {
+class AMConfigManager : public AMConfigStorage, NonCopyableNonMovable {
 public:
   /**
    * @brief Construct a style layer with no bound storage.
    */
-  AMConfigStyleData();
+  AMConfigManager();
 
   /**
    * @brief Apply a named style to a string with optional path context.
@@ -456,6 +442,11 @@ public:
   FormatUtf8Table(const std::vector<std::string> &keys,
                   const std::vector<std::vector<std::string>> &rows) const;
 
+  static AMConfigManager &Instance() {
+    static AMConfigManager instance;
+    return instance;
+  };
+
 private:
   /**
    * @brief Build progress bar style from settings.
@@ -464,240 +455,4 @@ private:
   AMProgressBarStyle BuildProgressBarStyle_() const;
 
   mutable std::optional<AMProgressBarStyle> progress_bar_style_;
-};
-
-/**
- * @brief CLI exposure layer for configuration commands.
- */
-class AMConfigCLIAdapter : public AMConfigStyleData {
-public:
-  using SimpleCallback = std::function<ECM()>;
-  using StringCallback = std::function<ECM(const std::string &)>;
-  using StringsCallback = std::function<ECM(const std::vector<std::string> &)>;
-  using RenameCallback =
-      std::function<ECM(const std::string &, const std::string &)>;
-
-  /**
-   * @brief Construct an empty CLI adapter without callbacks.
-   */
-  AMConfigCLIAdapter();
-
-  /**
-   * @brief Bind the list callback used by CLI.
-   * @param cb Callback to invoke for list.
-   */
-  void SetListCallback(SimpleCallback cb);
-
-  /**
-   * @brief Bind the list-name callback used by CLI.
-   * @param cb Callback to invoke for list-name.
-   */
-  void SetListNameCallback(SimpleCallback cb);
-
-  /**
-   * @brief Bind the add callback used by CLI.
-   * @param cb Callback to invoke for add.
-   */
-  void SetAddCallback(SimpleCallback cb);
-
-  /**
-   * @brief Bind the modify callback used by CLI.
-   * @param cb Callback to invoke for modify.
-   */
-  void SetModifyCallback(StringCallback cb);
-
-  /**
-   * @brief Bind the delete callback used by CLI.
-   * @param cb Callback to invoke for delete.
-   */
-  void SetDeleteCallback(StringCallback cb);
-
-  /**
-   * @brief Bind the delete-list callback used by CLI.
-   * @param cb Callback to invoke for delete-list.
-   */
-  void SetDeleteListCallback(StringsCallback cb);
-
-  /**
-   * @brief Bind the query callback used by CLI.
-   * @param cb Callback to invoke for query.
-   */
-  void SetQueryCallback(StringCallback cb);
-
-  /**
-   * @brief Bind the query-list callback used by CLI.
-   * @param cb Callback to invoke for query-list.
-   */
-  void SetQueryListCallback(StringsCallback cb);
-
-  /**
-   * @brief Bind the rename callback used by CLI.
-   * @param cb Callback to invoke for rename.
-   */
-  void SetRenameCallback(RenameCallback cb);
-
-  /**
-   * @brief Bind the src callback used by CLI.
-   * @param cb Callback to invoke for src.
-   */
-  void SetSrcCallback(SimpleCallback cb);
-
-  /**
-   * @brief List configuration entries for CLI output.
-   * @return ECM success or failure.
-   */
-  [[nodiscard]] ECM List() const;
-
-  /**
-   * @brief List configuration entry names for CLI output.
-   * @return ECM success or failure.
-   */
-  [[nodiscard]] ECM ListName() const;
-
-  /**
-   * @brief Add a configuration entry for CLI output.
-   * @return ECM success or failure.
-   */
-  [[nodiscard]] ECM Add();
-
-  /**
-   * @brief Modify a configuration entry.
-   * @param nickname Entry nickname.
-   * @return ECM success or failure.
-   */
-  [[nodiscard]] ECM Modify(const std::string &nickname);
-
-  /**
-   * @brief Delete a configuration entry.
-   * @param nickname Entry nickname.
-   * @return ECM success or failure.
-   */
-  [[nodiscard]] ECM Delete(const std::string &nickname);
-
-  /**
-   * @brief Delete configuration entries by list.
-   * @param targets Entry nicknames.
-   * @return ECM success or failure.
-   */
-  [[nodiscard]] ECM Delete(const std::vector<std::string> &targets);
-
-  /**
-   * @brief Query a configuration entry.
-   * @param nickname Entry nickname.
-   * @return ECM success or failure.
-   */
-  [[nodiscard]] ECM Query(const std::string &nickname) const;
-
-  /**
-   * @brief Query configuration entries by list.
-   * @param targets Entry nicknames.
-   * @return ECM success or failure.
-   */
-  [[nodiscard]] ECM Query(const std::vector<std::string> &targets) const;
-
-  /**
-   * @brief Rename a configuration entry.
-   * @param old_nickname Current nickname.
-   * @param new_nickname New nickname.
-   * @return ECM success or failure.
-   */
-  [[nodiscard]] ECM Rename(const std::string &old_nickname,
-                           const std::string &new_nickname);
-
-  /**
-   * @brief Print configuration source file locations for CLI.
-   * @return ECM success or failure.
-   */
-  [[nodiscard]] ECM Src() const;
-
-  /**
-   * @brief Parse and set a host field from config set command arguments.
-   */
-  ECM SetHostValue(const std::string &nickname, const std::string &attrname,
-                   const std::string &value);
-
-  /**
-   * @brief Return configured private key paths (optionally print).
-   */
-  [[nodiscard]] std::pair<ECM, std::vector<std::string>>
-  PrivateKeys(bool print_sign = false) const;
-
-private:
-  struct HostEntry {
-    std::map<std::string, Value> fields;
-  };
-
-  [[nodiscard]] std::string ValueToString_(const Value &value) const;
-  [[nodiscard]] std::map<std::string, HostEntry> CollectHosts_() const;
-  [[nodiscard]] ECM PrintHost_(const std::string &nickname,
-                               const HostEntry &entry) const;
-  ECM PromptAddFields_(std::string *nickname, HostEntry *entry);
-  ECM PromptModifyFields_(const std::string &nickname, HostEntry *entry);
-  bool ParsePositiveInt_(const std::string &input, int64_t *value) const;
-
-  /**
-   * @brief Build a standardized error response for missing callbacks.
-   * @param action Action name being invoked.
-   * @return ECM error response.
-   */
-  [[nodiscard]] ECM MissingCallback_(const std::string &action) const;
-
-  SimpleCallback list_cb_;
-  SimpleCallback list_name_cb_;
-  SimpleCallback add_cb_;
-  SimpleCallback src_cb_;
-  StringCallback modify_cb_;
-  StringCallback delete_cb_;
-  StringsCallback delete_list_cb_;
-  StringCallback query_cb_;
-  StringsCallback query_list_cb_;
-  RenameCallback rename_cb_;
-};
-
-class AMConfigManager : public AMConfigStyleData {
-public:
-  using Path = AMConfigStorage::Path;
-  using Value = AMConfigStorage::Value;
-
-  struct ClientConfig {
-    ConRequst request;
-    ClientProtocol protocol = ClientProtocol::SFTP;
-    int64_t buffer_size = -1;
-    std::string login_dir = "";
-  };
-
-  /**
-   * @brief Known host entry for SSH fingerprint verification.
-   */
-  struct KnownHostEntry {
-    std::string nickname;
-    std::string hostname;
-    int port = 0;
-    std::string protocol;
-    std::string fingerprint;
-    std::string fingerprint_sha256;
-  };
-
-  using KnownHostCallback = std::function<ECM(AMConfigManager::KnownHostEntry)>;
-
-  static AMConfigManager &Instance();
-
-  AMConfigManager(const AMConfigManager &) = delete;
-  AMConfigManager &operator=(const AMConfigManager &) = delete;
-  AMConfigManager(AMConfigManager &&) = delete;
-  AMConfigManager &operator=(AMConfigManager &&) = delete;
-
-  /** @brief Stop the background writer and release config handles. */
-  ~AMConfigManager();
-
-  ECM Init();
-  [[nodiscard]] std::string
-  GetSettingString(const Path &path, const std::string &default_value) const;
-  [[nodiscard]] int ResolveTimeoutMs(int default_timeout_ms = 5000) const;
-  AMHostManager &Host();
-  const AMHostManager &Host() const;
-
-private:
-  AMConfigManager();
-  std::unique_ptr<AMHostManager> host_manager_;
 };

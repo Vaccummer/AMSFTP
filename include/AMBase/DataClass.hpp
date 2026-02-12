@@ -40,6 +40,17 @@ using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
 
+// class ECM {
+// public:
+//   EC code = EC::Success;
+//   std::string msg = "";
+//   ECM() = default;
+//   explicit ECM(EC ec, std::string msg = "") : code(ec), msg(std::move(msg))
+//   {}
+
+//   explicit operator bool() const { return code == EC::Success; }
+// };
+
 template <typename T> struct NBResult {
   T value;           // 函数返回值
   WaitResult status; // 等待状态
@@ -64,7 +75,7 @@ enum class ControlSignal : int { Running = 0, Pause = 1, Terminate = 2 };
 template <typename Fn, typename... Args>
 inline ECM CallCallbackSafe(const Fn &fn, Args &&...args) {
   if (!fn) {
-    return {EC::Success, ""};
+    return {};
   }
   try {
     fn(std::forward<Args>(args)...);
@@ -220,6 +231,10 @@ struct ConRequst {
         username(std::move(username)), password(std::move(password)),
         keyfile(std::move(keyfile)), compression(compression), port(port),
         trash_dir(std::move(trash_dir)) {}
+  [[nodiscard]] bool IsValid() const {
+    return !nickname.empty() && !hostname.empty() && !username.empty() &&
+           port > 0 && port <= 65535;
+  }
 };
 
 struct ProgressCBInfo {
@@ -963,12 +978,15 @@ struct TaskInfo {
 };
 
 struct NonCopyableNonMovable {
+protected:
   NonCopyableNonMovable() = default;
-  ~NonCopyableNonMovable() = default;
+  virtual ~NonCopyableNonMovable() = default; // ✅
 
+public:
   NonCopyableNonMovable(const NonCopyableNonMovable &) = delete;
   NonCopyableNonMovable &operator=(const NonCopyableNonMovable &) = delete;
-
   NonCopyableNonMovable(NonCopyableNonMovable &&) = delete;
   NonCopyableNonMovable &operator=(NonCopyableNonMovable &&) = delete;
+
+  virtual void Init() {}
 };

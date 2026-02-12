@@ -2,6 +2,7 @@
 #include "AMBase/Enum.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
+#include "AMManager/Host.hpp"
 #include "AMManager/Prompt.hpp"
 #include <cstdint>
 #include <list>
@@ -16,8 +17,10 @@ public:
   inline static amf global_interrupt_flag = std::make_shared<InterruptFlag>();
 
   /** Return the singleton instance. */
-  static AMFileSystem &Instance(AMClientManager &client_manager,
-                                AMConfigManager &config_manager);
+  static AMFileSystem &Instance() {
+    static AMFileSystem instance{};
+    return instance;
+  }
 
   /** Check whether clients exist and print status. */
   ECM check(const std::string &nickname, bool detail = false,
@@ -132,9 +135,7 @@ public:
   std::string StylePath(const PathInfo &info, const std::string &path) const;
 
 private:
-  /** Construct with required managers. */
-  AMFileSystem(AMClientManager &client_manager,
-               AMConfigManager &config_manager);
+  AMFileSystem() = default;
 
   /** Resolved client reference helper. */
   struct ClientRef {
@@ -168,8 +169,9 @@ private:
   [[nodiscard]] AMFS::WalkErrorCallback
   MakeWalkErrorCallback(const std::string &func_name, bool quiet) const;
 
-  AMClientManager &client_manager_;
-  AMConfigManager &config_manager_;
-  AMPromptManager &prompt_manager_;
+  AMClientManager &client_manager_ = AMClientManager::Instance();
+  AMConfigManager &config_manager_ = AMConfigManager::Instance();
+  AMHostManager &hostm_ = AMHostManager::Instance();
+  AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
   std::list<std::string> cd_history_;
 };

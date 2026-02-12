@@ -1,10 +1,14 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
+#include "AMManager/Config.hpp"
+#include <atomic>
+#include <cstddef>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 namespace AMPromptDetail {
@@ -32,6 +36,21 @@ inline std::string ToString(char *value) {
 struct TaskInfo;
 class AMConfigManager;
 
+inline std::vector<std::string> GetIsoRecords() {
+  long count = ic_history_count();
+  if (count < 0) {
+    return {};
+  }
+  std::vector<std::string> records{static_cast<size_t>(count)};
+  for (long i = 0; i < count; ++i) {
+    const char *entry = ic_history_get(i);
+    if (entry) {
+      records.emplace_back(entry);
+    }
+  }
+  return records;
+}
+
 class AMHistoryManager {
 public:
   /**
@@ -40,15 +59,9 @@ public:
   void SetHistoryEnabled(bool enabled);
 
   /**
-   * @brief Load history for a nickname into the readline history.
-   */
-  void LoadHistory(AMConfigManager &config_manager,
-                   const std::string &nickname);
-
-  /**
    * @brief Flush current history back into ConfigManager.
    */
-  void FlushHistory(AMConfigManager &config_manager);
+  void FlushHistory();
 
   /**
    * @brief Add a history entry to the readline history.
@@ -58,20 +71,7 @@ public:
   /**
    * @brief Load history data from .AMSFTP_History.toml into memory.
    */
-  ECM LoadHistory();
-
-  /**
-   * @brief Fetch history commands for a nickname.
-   */
-  ECM GetHistoryCommands(const std::string &nickname,
-                         std::vector<std::string> *out);
-
-  /**
-   * @brief Store history commands for a nickname and optionally persist.
-   */
-  ECM SetHistoryCommands(const std::string &nickname,
-                         const std::vector<std::string> &commands,
-                         bool dump_now = true);
+  ECM LoadHistory(const std::string &nickname);
 
 protected:
   AMHistoryManager() = default;
@@ -80,26 +80,23 @@ protected:
   /**
    * @brief Collect current history into a list.
    */
-  [[nodiscard]] std::vector<std::string> CollectHistory_() const;
+  void CollectHistory_();
 
-  /**
-   * @brief Normalize history to unique entries with max size.
-   */
-  [[nodiscard]] std::vector<std::string>
-  NormalizeHistory_(const std::vector<std::string> &input, int max_count) const;
-
+  AMConfigManager &config_ = AMConfigManager::Instance();
+  std::unordered_map<std::string, std::vector<std::string>> history_map_;
   std::string history_nickname_;
   bool history_enabled_ = true;
   bool history_loaded_ = false;
   int max_history_count_ = 10;
-  std::vector<std::string> history_entries_;
 };
 
-class AMPromptManager : public AMHistoryManager, private NonCopyableNonMovable {
+class AMPromptManager : public AMHistoryManager, NonCopyableNonMovable {
 public:
   static AMPromptManager &Instance();
 
   ~AMPromptManager();
+
+  void Init() override;
 
   void Print(const std::vector<std::string> &items,
              const std::string &sep = " ", const std::string &end = "\n");
@@ -133,10 +130,6 @@ public:
   void ErrorFormat(const std::pair<ErrorCode, std::string> &rcm,
                    bool is_exit = false);
 
-  /** Prompt for a line of input with optional defaults. */
-  bool PromptLine(const std::string &prompt, std::string *out,
-                  const std::string &default_value, bool allow_empty,
-                  bool *canceled, bool show_default = true);
   /** Prompt for a yes/no response. */
   bool PromptYesNo(const std::string &prompt, bool *canceled);
 
@@ -158,9 +151,16 @@ public:
   void FlushCachedOutput();
 
   /**
-   * @brief Force Print to cache output instead of writing to the terminal.
+   * @brief Adjust print-cache lock depth.
+   *
+   * enabled=true  -> lock depth +1
+   * enabled=false -> lock depth -1 (clamped at 0)
    */
   void SetCacheOutputOnly(bool enabled);
+  /**
+   * @brief Return whether Print currently caches output only.
+   */
+  [[nodiscard]] bool IsCacheOutputOnly() const;
 
   /**
    * @brief Print output immediately, bypassing cache checks.
@@ -185,9 +185,32 @@ public:
   bool PromptCore(const std::string &prompt, std::string *out_input);
 
 private:
-  AMPromptManager();
+  void InitIsoclineConfig();
   std::mutex print_mutex_;
   std::string cached_output_;
-  std::mutex cached_output_mutex;
-  bool cache_output_only_ = false;
+  std::mutex cached_output_mutex_;
+  std::atomic<int> cache_output_lock_depth_{0};
 };
+
+class AMPrintLockGuard : NonCopyableNonMovable {
+public:
+  AMPrintLockGuard() : prompt_(AMPromptManager::Instance()) {
+    prompt_.SetCacheOutputOnly(true);
+  }
+
+  ~AMPrintLockGuard() { prompt_.SetCacheOutputOnly(false); }
+
+private:
+  AMPromptManager &prompt_;
+};
+
+/**
+ * @brief Global RAII print lock.
+ *
+ * Usage:
+ * @code
+ * auto lock = PrintLock();
+ * // all AMPromptManager::Print output is cached in this scope
+ * @endcode
+ */
+inline AMPrintLockGuard PrintLock() { return {}; }

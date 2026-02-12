@@ -166,12 +166,13 @@ AMTransferManager::AMTransferManager()
     : config_(AMConfigManager::Instance()),
       client_manager_(AMClientManager::Instance(config_)),
       prompt_(AMPromptManager::Instance()) {
-  const int max_threads =
-      config_.GetSettingInt({"InternalVars", "MaxThreadNum"}, 16);
-  int init_threads =
-      config_.GetSettingInt({"InternalVars", "InitThreadNum"}, 1);
-  init_threads = std::max<int>(1, std::min<int>(init_threads, max_threads));
-  worker_.ThreadCount(static_cast<size_t>(init_threads));
+  int init_thread_num = 1;
+
+  config_.ResolveArg(DocumentKind::Settings,
+                     {"TransferManager", "init_thread_num"}, &init_thread_num);
+
+  init_thread_num = std::min(std::max(1, init_thread_num), 128);
+  worker_.ThreadCount(init_thread_num);
 }
 
 /**
@@ -405,7 +406,7 @@ ECM AMTransferManager::transfer(
 
   auto flag =
       interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
-  const int refresh_interval_ms = config_.ResolveRefreshIntervalMs();
+  const int refresh_interval_ms = 300;
 
   std::mutex done_mtx;
   std::condition_variable done_cv;

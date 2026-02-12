@@ -2,95 +2,26 @@
 #include "AMBase/Path.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
-#include <cctype>
+#include <iomanip>
+#include <sstream>
 #include <string>
-#include <vector>
 
-namespace {
-using Json = nlohmann::ordered_json;
-using Value = AMHostManager::Value;
-
-std::optional<std::string> GetStringField(const Json &obj,
-                                          const std::string &key) {
-  if (!obj.is_object()) {
-    return std::nullopt;
-  }
-  auto it = obj.find(key);
-  if (it == obj.end()) {
-    return std::nullopt;
-  }
-  if (it->is_string()) {
-    return it->get<std::string>();
-  }
-  if (it->is_number_integer()) {
-    return std::to_string(it->get<int64_t>());
-  }
-  if (it->is_boolean()) {
-    return it->get<bool>() ? "true" : "false";
-  }
-  return std::nullopt;
+AMHostManager::AMHostManager()
+    : config_(AMConfigManager::Instance()), prompt_(AMPromptManager::Instance()) {
 }
 
-bool ProtocolMatch(const std::string &stored, const std::string &actual) {
-  const std::string expected = AMStr::lowercase(stored);
-  const std::string real = AMStr::lowercase(actual);
-  if (expected == real) {
-    return true;
-  }
-  const bool expected_is_rsa =
-      expected == "rsa-sha2-256" || expected == "rsa-sha2-512";
-  const bool real_is_rsa = real == "rsa-sha2-256" || real == "rsa-sha2-512";
-  return (expected == "ssh-rsa" && real_is_rsa) ||
-         (real == "ssh-rsa" && expected_is_rsa);
+AMHostManager &AMHostManager::Instance() {
+  static AMHostManager instance;
+  return instance;
 }
 
-} // namespace
-
-AMHostManager::AMHostManager(AMConfigManager &config)
-    : config_(config), prompt_(AMPromptManager::Instance()) {}
-
-std::pair<ECM, ClientConfig> BuildConfigFromJson(const Json &config_json,
-                                                 const std::string &nickname) {
-  ClientConfig cfg;
-  if (!config_json.is_object()) {
-    return {Err(EC::InvalidArg, "config is not an object"), {}};
-  }
-  if (!QueryKey(config_json, {"hostname"}, &cfg.request.hostname) ||
-      cfg.request.hostname.empty()) {
-    return {Err(EC::InvalidArg, "hostname is not valid"), {}};
-  }
-  if (!QueryKey(config_json, {"username"}, &cfg.request.username) ||
-      cfg.request.username.empty()) {
-    return {Err(EC::InvalidArg, "username is not valid"), {}};
-  }
-  cfg.request.nickname = nickname;
-  QueryKey(config_json, {"port"}, &cfg.request.port);
-  QueryKey(config_json, {"password"}, &cfg.request.password);
-  QueryKey(config_json, {"keyfile"}, &cfg.request.keyfile);
-  QueryKey(config_json, {"compression"}, &cfg.request.compression);
-  QueryKey(config_json, {"trash_dir"}, &cfg.request.trash_dir);
-  std::string protocol_str;
-  if (!QueryKey(config_json, {"protocol"}, &protocol_str)) {
-    cfg.protocol = ClientProtocol::SFTP;
-  } else {
-    auto it = protocol_map.find(AMStr::lowercase(protocol_str));
-    if (it != protocol_map.end()) {
-      cfg.protocol = it->second;
-    } else {
-      return {Err(EC::InvalidArg, "protocol is not valid"), {}};
-    }
-  }
-  QueryKey(config_json, {"buffer_size"}, &cfg.buffer_size);
-  QueryKey(config_json, {"login_dir"}, &cfg.login_dir);
-  return {Ok(), cfg};
-}
+ECM AMHostManager::Save() { return config_.Dump(DocumentKind::Config, "", true); }
 
 void AMHostManager::CollectHosts_() const {
-  if (!host_configs.empty()) {
-    return;
-  }
+  host_configs.clear();
   Json hosts_json;
-  if (!config_.ResolveArg(DocumentKind::Config, {"HOSTS"}, &hosts_json)) {
+  if (!config_.ResolveArg(DocumentKind::Config, {configkn::hosts},
+                          &hosts_json)) {
     return;
   }
   if (!hosts_json.is_object()) {
@@ -98,9 +29,8 @@ void AMHostManager::CollectHosts_() const {
   }
   for (auto it = hosts_json.begin(); it != hosts_json.end(); ++it) {
     const std::string nickname = it.key();
-    const Json &config_json = it.value();
-    auto [ecm, cfg] = BuildConfigFromJson(config_json, nickname);
-    if (ecm.first == EC::Success) {
+    auto cfg = ClientConfig(nickname, it.value());
+    if (cfg.IsValid()) {
       host_configs[nickname] = cfg;
     }
   }
@@ -116,29 +46,55 @@ AMHostManager::GetClientConfig(const std::string &nickname) {
   return {Ok(), host_configs[nickname]};
 }
 
-std::pair<ECM, std::optional<KnownHostEntry>>
-AMHostManager::FindKnownHost(const std::string &hostname, int port,
-                             const std::string &protocol) const {
-  Json hosts_it;
-  if (!config_.ResolveArg(DocumentKind::KnownHosts,
-                          {AMStr::amfmt("{}:{}", hostname, port)}, &hosts_it)) {
-    return {{EC::HostConfigNotFound,
-             AMStr::amfmt("known_host not found: {}:{}", hostname, port)},
-            std::nullopt};
+ECM AMHostManager::UpsertHost(const ClientConfig &entry, bool dump_now) {
+  if (!entry.IsValid()) {
+    return Err(EC::InvalidArg, "invalid host config");
   }
-  std::string fingerprint;
-  if (!QueryKey(hosts_it, {"fingerprint"}, &fingerprint)) {
-    return {{EC::HostConfigNotFound,
-             AMStr::amfmt("known_host fingerprint not found: {}:{}", hostname,
-                          port)},
-            std::nullopt};
+  if (!configkn::ValidateNickname(entry.request.nickname)) {
+    return Err(EC::InvalidArg, "invalid nickname");
   }
-  KnownHostEntry entry;
-  entry.hostname = hostname;
-  entry.port = port;
-  entry.protocol = protocol;
-  entry.fingerprint = fingerprint;
-  return {Ok(), entry};
+  ECM rcm = AddHost_(entry.request.nickname, entry);
+  if (rcm.first != EC::Success) {
+    return rcm;
+  }
+  if (!dump_now) {
+    return Ok();
+  }
+  return config_.Dump(DocumentKind::Config, "", true);
+}
+
+ECM AMHostManager::FindKnownHost(KnownHostQuery &query) const {
+  if (!query.IsValid()) {
+    return ECM{EC::InvalidArg, "invalid query args"};
+  }
+  std::string fingerprint = "";
+  if (!config_.ResolveArg(DocumentKind::KnownHosts, query.GetPath(),
+                          &fingerprint)) {
+    return ECM{EC::HostConfigNotFound,
+               "fingerprint not found for given host query"};
+  }
+  if (fingerprint.empty()) {
+    return ECM{EC::InvalidArg, "fingerprint is found but empty"};
+  }
+  query.SetFingerprint(fingerprint);
+  return Ok();
+}
+
+ECM AMHostManager::UpsertKnownHost(const KnownHostQuery &query, bool dump_now) {
+  if (!query.IsValid()) {
+    return Err(EC::InvalidArg, "invalid known-host query");
+  }
+  const std::string fingerprint = AMStr::Strip(query.GetFingerprint());
+  if (fingerprint.empty()) {
+    return Err(EC::InvalidArg, "empty fingerprint");
+  }
+  if (!config_.SetArg(DocumentKind::KnownHosts, query.GetPath(), fingerprint)) {
+    return Err(EC::CommonFailure, "failed to write known_hosts data");
+  }
+  if (!dump_now) {
+    return Ok();
+  }
+  return config_.Dump(DocumentKind::KnownHosts, "", true);
 }
 
 bool AMHostManager::HostExists(const std::string &nickname) const {
@@ -147,82 +103,6 @@ bool AMHostManager::HostExists(const std::string &nickname) const {
   }
   CollectHosts_();
   return host_configs.find(nickname) != host_configs.end();
-}
-
-bool AMHostManager::ValidateNickname(const std::string &nickname) const {
-  // regex is "^[a-zA-Z0-9_-]+$" but use manual check to avoid regex overhead
-  if (nickname.empty())
-    return false;
-  for (const auto &ch : nickname) {
-    if (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' ||
-        ch == '-') {
-      continue;
-    }
-    return false;
-  }
-  return true;
-}
-
-std::vector<std::string> AMHostManager::ListHostnames() const {
-  CollectHosts_();
-  std::vector<std::string> names;
-  names.reserve(host_configs.size());
-  for (const auto &item : host_configs) {
-    names.push_back(item.first);
-  }
-  return names;
-}
-
-ECM AMHostManager::SetHostConfigField(
-    const std::string &nickname, const std::string &field,
-    const std::variant<int64_t, bool, std::string, std::vector<std::string>>
-        &value) {
-  if (host_configs.find(nickname) == host_configs.end()) {
-    return {EC::HostConfigNotFound, "host config not found"};
-  }
-  auto &entry = host_configs[nickname];
-  auto field_f = AMStr::lowercase(field);
-  if (field_f == "hostname" && std::holds_alternative<std::string>(value)) {
-    entry.request.hostname = std::get<std::string>(value);
-    return Ok();
-  };
-  if (field_f == "username" && std::holds_alternative<std::string>(value)) {
-    entry.request.username = std::get<std::string>(value);
-    return Ok();
-  };
-  if (field_f == "port" && std::holds_alternative<int64_t>(value)) {
-    entry.request.port = static_cast<int>(std::get<int64_t>(value));
-    return Ok();
-  };
-  if (field_f == "password" && std::holds_alternative<std::string>(value)) {
-    entry.request.password = std::get<std::string>(value);
-    return Ok();
-  };
-  if (field_f == "protocol" && std::holds_alternative<std::string>(value)) {
-    entry.protocol = StrToProtocol(std::get<std::string>(value));
-    return Ok();
-  }
-  if (field_f == "buffer_size" && std::holds_alternative<int64_t>(value)) {
-    entry.buffer_size = std::get<int64_t>(value);
-    return Ok();
-  };
-  if (field_f == "login_dir" && std::holds_alternative<std::string>(value)) {
-    entry.login_dir = std::get<std::string>(value);
-    return Ok();
-  };
-  if (field_f == "trash_dir" && std::holds_alternative<std::string>(value)) {
-    entry.request.trash_dir = std::get<std::string>(value);
-    return Ok();
-  };
-  if (field_f == "keyfile" && std::holds_alternative<std::string>(value)) {
-    entry.request.keyfile = std::get<std::string>(value);
-    return Ok();
-  };
-  if (field_f == "compression" && std::holds_alternative<bool>(value)) {
-    entry.request.compression = std::get<bool>(value);
-    return Ok();
-  };
-  return {EC::InvalidArg, "invalid field name or value type"};
 }
 
 ECM AMHostManager::PromptAddFields_(const std::string &nickname,
@@ -243,7 +123,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
       prompt_.ErrorFormat(ECM{EC::InvalidArg, "Nickname cannot be empty"});
     }
   }
-  if (!ValidateNickname(entry.request.nickname)) {
+  if (!configkn::ValidateNickname(entry.request.nickname)) {
     return Err(EC::InvalidArg, "Nickname must match [A-Za-z0-9_-]+");
   }
   if (HostExists(entry.request.nickname)) {
@@ -326,7 +206,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     }
     protocol = AMStr::lowercase(AMStr::Strip(protocol));
     if (protocol == "sftp" || protocol == "ftp" || protocol == "local") {
-      entry.protocol = StrToProtocol(protocol);
+      entry.protocol = configkn::StrToProtocol(protocol);
       break;
     }
     prompt_.ErrorFormat(
@@ -543,7 +423,7 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
   entry.request.hostname = hostname;
   entry.request.username = username;
   entry.request.port = port;
-  entry.protocol = StrToProtocol(protocol);
+  entry.protocol = configkn::StrToProtocol(protocol);
   entry.buffer_size = buffer_size;
   entry.request.trash_dir = trash_dir;
   entry.login_dir = login_dir;
@@ -556,12 +436,12 @@ ECM AMHostManager::PrintHost_(const std::string &nickname,
                               const ClientConfig &entry) const {
   prompt_.Print("[!pre][" + nickname + "][/pre]");
   size_t width = 0;
-  for (const auto &field : kHostFields)
+  for (const auto &field : configkn::fileds)
     width = std::max(width, field.size());
 
   auto dict_f = entry.GetStrDict();
 
-  for (const auto &field : kHostFields) {
+  for (const auto &field : configkn::fileds) {
     auto it = dict_f.find(field);
     if (it == dict_f.end())
       continue;
@@ -569,6 +449,17 @@ ECM AMHostManager::PrintHost_(const std::string &nickname,
     line << std::left << std::setw(static_cast<int>(width)) << field << " :   "
          << (it->second.empty() ? "\"\"" : it->second);
     prompt_.Print(line.str());
+  }
+  return Ok();
+}
+
+ECM AMHostManager::AddHost_(const std::string &nickname,
+                            const ClientConfig &entry) {
+  host_configs[nickname] = entry;
+  auto json_entry = entry.GetJson();
+  if (!config_.SetArg(DocumentKind::Config, {configkn::hosts, nickname},
+                      json_entry)) {
+    return Err(EC::CommonFailure, "failed to set config in memory data");
   }
   return Ok();
 }
@@ -581,121 +472,8 @@ ECM AMHostManager::RemoveHost_(const std::string &nickname) {
   if (host_configs.erase(nickname) == 0) {
     return Err(EC::HostConfigNotFound, "host config not found");
   }
-  if (!config_.DelArg(DocumentKind::Config, {"HOSTS", nickname})) {
+  if (!config_.DelArg(DocumentKind::Config, {configkn::hosts, nickname})) {
     return Err(EC::CommonFailure, "failed to remove config in memory data");
-  }
-  return Ok();
-}
-
-ECM AMHostManager::SaveConfig_(bool async) {
-  return config_.Dump(DocumentKind::Config, "", async);
-}
-
-ECM AMHostManager::SaveAll_(bool async) { return config_.DumpAll(async); }
-
-bool AMHostManager::GetDocumentJson_(DocumentKind kind, Json *value) const {
-  if (!value) {
-    return false;
-  }
-  return config_.GetJson(kind, value);
-}
-
-bool AMHostManager::GetDocumentPath_(DocumentKind kind,
-                                     std::filesystem::path *value) const {
-  if (!value) {
-    return false;
-  }
-  return config_.GetDataPath(kind, value);
-}
-
-std::string AMHostManager::FormatValue_(const std::string &text,
-                                        const std::string &style_name,
-                                        const PathInfo *path_info) const {
-  return config_.Format(text, style_name, path_info);
-}
-
-std::string AMHostManager::ProtocolToString_(ClientProtocol protocol) const {
-  switch (protocol) {
-  case ClientProtocol::SFTP:
-    return "sftp";
-  case ClientProtocol::FTP:
-    return "ftp";
-  case ClientProtocol::LOCAL:
-    return "local";
-  default:
-    return "sftp";
-  }
-}
-
-std::string AMHostManager::ValueToString_(const Value &value) const {
-  if (std::holds_alternative<int64_t>(value)) {
-    return std::to_string(std::get<int64_t>(value));
-  }
-  if (std::holds_alternative<bool>(value)) {
-    return std::get<bool>(value) ? "true" : "false";
-  }
-  if (std::holds_alternative<std::string>(value)) {
-    return std::get<std::string>(value);
-  }
-  if (std::holds_alternative<std::vector<std::string>>(value)) {
-    const auto &items = std::get<std::vector<std::string>>(value);
-    return AMStr::amfmt("[{}]", AMStr::join(items, ", "));
-  }
-  return "";
-}
-
-ECM AMHostManager::PersistHostConfig_(const std::string &nickname,
-                                      const ClientConfig &entry,
-                                      bool dump_now) {
-  ECM set_status =
-      SetHostField(nickname, "hostname", entry.request.hostname, false);
-  if (set_status.first != EC::Success) {
-    return set_status;
-  }
-  set_status =
-      SetHostField(nickname, "username", entry.request.username, false);
-  if (set_status.first != EC::Success) {
-    return set_status;
-  }
-  set_status = SetHostField(nickname, "port",
-                            static_cast<int64_t>(entry.request.port), false);
-  if (set_status.first != EC::Success) {
-    return set_status;
-  }
-  set_status =
-      SetHostField(nickname, "password", entry.request.password, false);
-  if (set_status.first != EC::Success) {
-    return set_status;
-  }
-  set_status = SetHostField(nickname, "protocol",
-                            ProtocolToString_(entry.protocol), false);
-  if (set_status.first != EC::Success) {
-    return set_status;
-  }
-  set_status = SetHostField(nickname, "buffer_size", entry.buffer_size, false);
-  if (set_status.first != EC::Success) {
-    return set_status;
-  }
-  set_status =
-      SetHostField(nickname, "trash_dir", entry.request.trash_dir, false);
-  if (set_status.first != EC::Success) {
-    return set_status;
-  }
-  set_status = SetHostField(nickname, "login_dir", entry.login_dir, false);
-  if (set_status.first != EC::Success) {
-    return set_status;
-  }
-  set_status = SetHostField(nickname, "keyfile", entry.request.keyfile, false);
-  if (set_status.first != EC::Success) {
-    return set_status;
-  }
-  set_status =
-      SetHostField(nickname, "compression", entry.request.compression, false);
-  if (set_status.first != EC::Success) {
-    return set_status;
-  }
-  if (dump_now) {
-    return SaveConfig_(false);
   }
   return Ok();
 }

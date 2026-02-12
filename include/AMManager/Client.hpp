@@ -2,11 +2,13 @@
 #include "AMBase/Path.hpp"
 #include "AMClient/Base.hpp"
 #include "AMClient/IOCore.hpp"
+#include "AMManager/Host.hpp"
 #include "AMManager/Logger.hpp"
 #include "AMManager/Prompt.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -21,30 +23,7 @@
 inline std::atomic<bool> AMIsInteractive = false;
 
 namespace AMClientManage {
-
-class Reader {
-public:
-  explicit Reader(AMConfigManager &config);
-
-  [[nodiscard]] std::pair<ECM, AMConfigManager::ClientConfig>
-  GetClientConfig(const std::string &nickname);
-
-  [[nodiscard]] std::pair<ECM, std::optional<AMConfigManager::KnownHostEntry>>
-  FindKnownHost(const std::string &hostname, int port,
-                const std::string &protocol) const;
-
-  [[nodiscard]] AMConfigManager::KnownHostCallback BuildKnownHostCallback();
-
-  [[nodiscard]] ECM
-  UpsertKnownHost(const AMConfigManager::KnownHostEntry &entry,
-                  bool dump_now = true);
-
-protected:
-  AMConfigManager &config_;
-  AMConfigManager::KnownHostCallback known_host_cb_ = {};
-};
-
-class Operator : public Reader {
+class Operator {
 public:
   using DisconnectCallback =
       std::function<void(const std::shared_ptr<BaseClient> &, const ECM &)>;
@@ -54,6 +33,8 @@ public:
   ClientMaintainer &Clients();
   [[nodiscard]] std::vector<std::string> GetClientNames();
   [[nodiscard]] std::vector<std::shared_ptr<BaseClient>> GetClients();
+  [[nodiscard]] std::pair<ECM, ClientConfig>
+  GetClientConfig(const std::string &nickname);
   [[nodiscard]] std::shared_ptr<AMLocalClient> LocalClient() const;
   [[nodiscard]] std::shared_ptr<BaseClient> LocalClientBase() const;
   [[nodiscard]] std::shared_ptr<BaseClient> CurrentClient() const;
@@ -98,12 +79,27 @@ public:
   EnsureClient(const std::string &nickname, amf interrupt_flag = nullptr);
 
 protected:
+  AMHostManager &hostm_ = AMHostManager::Instance();
+  AMLogManager &log_manager_ = AMLogManager::Instance();
+  AMPromptManager &prompt_ = AMPromptManager::Instance();
   std::shared_ptr<BaseClient> current_client_;
   std::shared_ptr<BaseClient> local_client_base_;
   std::shared_ptr<ClientMaintainer> clients_;
   ssize_t trace_num_ = 10;
+  AuthCallback password_cb_ = {};
+  DisconnectCallback disconnect_cb_ = {};
+  mutable std::mutex auth_io_mtx_;
   std::atomic<bool> spinner_stop_requested_{false};
   std::atomic<size_t> spinner_line_len_{0};
+
+  AuthCallback BuildAuthCallback_(const AuthCallback &auth_cb, bool quiet,
+                                  std::atomic<bool> *spinner_running);
+  void ApplyKnownHostCallback_(const std::shared_ptr<BaseClient> &client);
+  std::optional<std::string> DefaultPasswordCallback(const AuthCBInfo &info);
+  void DefaultDisconnectCallback(const std::shared_ptr<BaseClient> &client,
+                                 const ECM &ecm);
+  AuthCallback BuiltinPasswordCallback_();
+  DisconnectCallback BuiltinDisconnectCallback_();
 };
 
 class PathOps : public Operator {
@@ -136,47 +132,20 @@ public:
 
 class Manager : public PathOps, private NonCopyableNonMovable {
 public:
-  using ClientMaintainerRef = ClientMaintainer;
-  using ClientMaintainerPtr = std::shared_ptr<ClientMaintainer>;
-  using PasswordCallback = AuthCallback;
-  using DisconnectCallback =
-      std::function<void(const std::shared_ptr<BaseClient> &, const ECM &)>;
   inline static amf global_interrupt_flag = amgif;
 
-  static Manager &Instance(AMConfigManager &cfg);
-
-  explicit Manager(AMConfigManager &cfg);
+  explicit Manager();
+  static Manager &Instance() {
+    static Manager instance;
+    return instance;
+  }
+  static Manager &Instance(AMConfigManager & /*config_manager*/) {
+    return Instance();
+  }
 
 private:
-  friend class Operator;
-  friend class PathOps;
-
-  AMLogManager &log_manager_;
-  AMPromptManager &prompt_ = AMPromptManager::Instance();
-  std::shared_ptr<AMLocalClient> local_client_;
-  PasswordCallback password_cb_ = {};
-  DisconnectCallback disconnect_cb_ = {};
-  std::mutex auth_io_mtx_;
-
-  AuthCallback BuildAuthCallback_(const AuthCallback &auth_cb, bool quiet,
-                                  std::atomic<bool> *spinner_running);
-
-  void ApplyKnownHostCallback_(const std::shared_ptr<BaseClient> &client);
-
-  void ResetSpinnerStop_();
-  void RequestSpinnerStop_();
-
-  std::shared_ptr<AMLocalClient> CreateLocalClient_(AMConfigManager &cfg,
+  std::shared_ptr<AMLocalClient> CreateLocalClient_(AMHostManager &hostm,
                                                     AMLogManager &log_manager);
-
-  void OnDisconnect(const std::shared_ptr<BaseClient> &client, const ECM &ecm);
-
-  std::optional<std::string> DefaultPasswordCallback(const AuthCBInfo &info);
-  void DefaultDisconnectCallback(const std::shared_ptr<BaseClient> &client,
-                                 const ECM &ecm);
-
-  PasswordCallback BuiltinPasswordCallback_();
-  DisconnectCallback BuiltinDisconnectCallback_();
 };
 
 } // namespace AMClientManage

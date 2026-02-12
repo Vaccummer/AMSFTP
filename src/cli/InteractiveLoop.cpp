@@ -126,14 +126,14 @@ bool TryBuildAnsiStyleCode_(const std::string &raw, std::string *ansi_code) {
   }
   ansi_code->clear();
 
-  std::string tag = AMStr::TrimWhitespaceCopy(raw);
+  std::string tag = AMStr::Strip(raw);
   if (tag.empty()) {
     return false;
   }
   if (tag.front() == '[' && tag.back() == ']') {
     tag = tag.substr(1, tag.size() - 2);
   }
-  tag = AMStr::TrimWhitespaceCopy(tag);
+  tag = AMStr::Strip(tag);
   if (tag.empty()) {
     return false;
   }
@@ -267,7 +267,7 @@ bool ResolvePromptStyleAnsi_(AMConfigManager &config_manager,
     return false;
   }
   ansi_code->clear();
-  std::string trimmed = AMStr::TrimWhitespaceCopy(tag_name);
+  std::string trimmed = AMStr::Strip(tag_name);
   if (trimmed.empty()) {
     return false;
   }
@@ -291,7 +291,7 @@ bool ResolvePromptStyleAnsi_(AMConfigManager &config_manager,
  * @return True if the condition is truthy; false otherwise.
  */
 bool IsTruthy_(const std::string &value) {
-  std::string trimmed = AMStr::TrimWhitespaceCopy(value);
+  std::string trimmed = AMStr::Strip(value);
   if (trimmed.empty()) {
     return false;
   }
@@ -1123,8 +1123,7 @@ std::string ApplyStyleFromConfig_(AMConfigManager &config_manager,
     return text;
   }
 
-  std::string raw =
-      AMStr::TrimWhitespaceCopy(config_manager.GetSettingString(path, ""));
+  std::string raw = AMStr::Strip(config_manager.GetSettingString(path, ""));
   if (raw.empty()) {
     return text;
   }
@@ -1433,14 +1432,11 @@ int RunInteractiveLoop(const std::string &app_name,
   AMFileSystem &filesystem = *managers.filesystem;
   AMTransferManager &transfer_manager = AMTransferManager::Instance();
 
-  AMCompleter completer(config_manager, client_manager, filesystem,
-                        transfer_manager);
+  AMCompleter completer{};
   completer.Install();
 
   AMCommandPreprocessor preprocessor(config_manager);
   PromptState prompt_state;
-
-  (void)filesystem;
 
   while (true) {
     if (amgif && amgif->iskill()) {
@@ -1453,7 +1449,7 @@ int RunInteractiveLoop(const std::string &app_name,
     if (history_nickname.empty()) {
       history_nickname = "local";
     }
-    prompt.LoadHistory(config_manager, history_nickname);
+    prompt.LoadHistory(history_nickname);
 
     const std::string prompt_text =
         BuildPrompt_(prompt_state, client_manager, config_manager);
@@ -1468,7 +1464,8 @@ int RunInteractiveLoop(const std::string &app_name,
 
     std::string line;
     AMCliSignalMonitor &monitor = AMCliSignalMonitor::Instance();
-    (void)config_manager.ConfigBackupIfNeeded();
+    (void)config_manager.BackupIfNeeded();
+
     if (amgif) {
       amgif->reset();
     }
@@ -1493,7 +1490,7 @@ int RunInteractiveLoop(const std::string &app_name,
 
     const auto input_confirmed = std::chrono::steady_clock::now();
 
-    std::string trimmed = AMStr::TrimWhitespaceCopy(line);
+    std::string trimmed = AMStr::Strip(line);
     if (trimmed.empty()) {
       continue;
     }

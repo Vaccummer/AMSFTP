@@ -146,6 +146,14 @@ void ic_history_clear(void);
 /// Add an entry to the history
 void ic_history_add( const char* entry );
 
+/// Return the number of entries currently stored in input history.
+/// Returns 0 when isocline is not initialized.
+long ic_history_count(void);
+
+/// Get a history entry by index, where index 0 is the most recent entry.
+/// Returns NULL when the index is out of range or isocline is not initialized.
+const char* ic_history_get(long index);
+
 /// \}
 
 //--------------------------------------------------------------

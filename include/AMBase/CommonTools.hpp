@@ -21,6 +21,7 @@
 #include <iostream>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -1742,4 +1743,51 @@ template <typename T> bool StrValueParse(const std::string &input, T *out) {
   }
 
   return false;
+}
+
+template <typename T> std::vector<T> VectorDedup(const std::vector<T> &input) {
+  std::vector<T> output;
+  output.reserve(input.size());
+  for (const auto &item : input) {
+    if (std::find(output.begin(), output.end(), item) == output.end()) {
+      output.push_back(item);
+    }
+  }
+  return output;
+}
+
+/**
+ * @brief Parse a hex color string (#RRGGBB) into an ANSI escape sequence.
+ */
+inline std::optional<std::string> HexToAnsi(const std::string &value) {
+  std::string token = AMStr::Strip(value);
+  if (token.empty()) {
+    return std::nullopt;
+  }
+  if (token.rfind("#", 0) == 0) {
+    token.erase(0, 1);
+  }
+  if (token.size() != 6) {
+    return std::nullopt;
+  }
+  auto hex_to_int = [](char c) -> int {
+    if (c >= '0' && c <= '9')
+      return c - '0';
+    if (c >= 'a' && c <= 'f')
+      return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F')
+      return 10 + (c - 'A');
+    return -1;
+  };
+  std::array<int, 6> vals;
+  for (size_t i = 0; i < 6; ++i) {
+    vals[i] = hex_to_int(token[i]);
+    if (vals[i] < 0) {
+      return std::nullopt;
+    }
+  }
+  int r = vals[0] * 16 + vals[1];
+  int g = vals[2] * 16 + vals[3];
+  int b = vals[4] * 16 + vals[5];
+  return AMStr::amfmt("\x1b[38;2;{};{};{}m", r, g, b);
 }
