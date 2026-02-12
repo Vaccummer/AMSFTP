@@ -5,6 +5,29 @@
 
 using EC = ErrorCode;
 
+namespace {
+using Json = nlohmann::ordered_json;
+using Path = std::vector<std::string>;
+
+/**
+ * @brief Find a JSON node by walking the provided path.
+ */
+const Json *FindJsonNode(const Json &root, const Path &path) {
+  const Json *node = &root;
+  for (const auto &seg : path) {
+    if (!node->is_object()) {
+      return nullptr;
+    }
+    auto it = node->find(seg);
+    if (it == node->end()) {
+      return nullptr;
+    }
+    node = &(*it);
+  }
+  return node;
+}
+} // namespace
+
 /**
  * @brief Return the singleton variable manager bound to a config manager.
  */
@@ -45,7 +68,7 @@ std::vector<std::string> AMVarManager::ListNames() const {
     }
   }
 
-  auto stored = config_manager_.ListUserVars();
+  auto stored = ListUserVars();
   names.reserve(names.size() + stored.size());
   for (const auto &item : stored) {
     if (seen.insert(item.first).second) {
@@ -81,7 +104,7 @@ bool AMVarManager::Resolve(const std::string &name, std::string *value,
   }
 
   std::string builtin_value;
-  if (config_manager_.GetUserVar(name, &builtin_value)) {
+  if (GetUserVar(name, &builtin_value)) {
     if (value) {
       *value = builtin_value;
     }
@@ -92,6 +115,102 @@ bool AMVarManager::Resolve(const std::string &name, std::string *value,
   }
 
   return false;
+}
+
+/**
+ * @brief Query a persistent variable from storage.
+ */
+bool AMVarManager::GetUserVar(const std::string &name,
+                              std::string *value) const {
+  if (name.empty()) {
+    return false;
+  }
+  Json settings_json;
+  if (!config_manager_.GetJson(DocumentKind::Settings, &settings_json)) {
+    return false;
+  }
+  const Json *node = FindJsonNode(settings_json, {"UserVars", name});
+  if (!node) {
+    return false;
+  }
+  if (value) {
+    std::string parsed;
+    if (!QueryKey(settings_json, {"UserVars", name}, &parsed)) {
+      return false;
+    }
+    *value = std::move(parsed);
+  }
+  return true;
+}
+
+/**
+ * @brief List all persistent variables from storage.
+ */
+std::vector<std::pair<std::string, std::string>>
+AMVarManager::ListUserVars() const {
+  std::vector<std::pair<std::string, std::string>> entries;
+
+  Json settings_json;
+  if (!config_manager_.GetJson(DocumentKind::Settings, &settings_json)) {
+    return entries;
+  }
+  const Json *node = FindJsonNode(settings_json, {"UserVars"});
+  if (!node || !node->is_object()) {
+    return entries;
+  }
+
+  entries.reserve(node->size());
+  for (auto it = node->begin(); it != node->end(); ++it) {
+    std::string parsed;
+    if (QueryKey(settings_json, {"UserVars", it.key()}, &parsed)) {
+      entries.emplace_back(it.key(), std::move(parsed));
+    }
+  }
+  return entries;
+}
+
+/**
+ * @brief Set a persistent variable and optionally dump settings.
+ */
+ECM AMVarManager::SetUserVar(const std::string &name,
+                             const std::string &value, bool dump_now) {
+  if (name.empty()) {
+    return Err(EC::InvalidArg, "Empty variable name");
+  }
+  if (!config_manager_.SetArg(DocumentKind::Settings, {"UserVars", name},
+                              value)) {
+    return Err(EC::ConfigInvalid, "failed to set UserVars");
+  }
+  if (dump_now) {
+    return config_manager_.DumpAll();
+  }
+  return Ok();
+}
+
+/**
+ * @brief Remove a persistent variable and optionally dump settings.
+ */
+ECM AMVarManager::RemoveUserVar(const std::string &name, bool dump_now) {
+  if (name.empty()) {
+    return Err(EC::InvalidArg, "Empty variable name");
+  }
+
+  Json settings_json;
+  if (!config_manager_.GetJson(DocumentKind::Settings, &settings_json)) {
+    return Err(EC::ConfigNotInitialized, "settings document not initialized");
+  }
+  const Json *node = FindJsonNode(settings_json, {"UserVars", name});
+  if (!node) {
+    return Err(EC::InvalidArg, "Variable not found");
+  }
+
+  if (!config_manager_.DelArg(DocumentKind::Settings, {"UserVars", name})) {
+    return Err(EC::ConfigInvalid, "failed to remove UserVars");
+  }
+  if (dump_now) {
+    return config_manager_.DumpAll();
+  }
+  return Ok();
 }
 
 /**
@@ -166,7 +285,7 @@ ECM AMVarManager::Query(const std::vector<std::string> &names) {
     bool found = false;
     std::string value;
     VarSource source = VarSource::Memory;
-    if (Resolve(name, &value, &source)) {
+  if (Resolve(name, &value, &source)) {
       if (source == VarSource::Memory) {
         PrintQueryLine("InMemory", name, value);
       } else {
@@ -178,7 +297,7 @@ ECM AMVarManager::Query(const std::vector<std::string> &names) {
 
     if (source == VarSource::Memory) {
       std::string storage_value;
-      if (config_manager_.GetUserVar(name, &storage_value)) {
+      if (GetUserVar(name, &storage_value)) {
         PrintQueryLine("InStorage", name, storage_value);
         found = true;
         any_found = true;
@@ -212,7 +331,7 @@ ECM AMVarManager::Delete(const std::vector<std::string> &names) {
       std::lock_guard<std::mutex> lock(mutex_);
       has_memory = memory_vars_.find(name) != memory_vars_.end();
     }
-    has_storage = config_manager_.GetUserVar(name, nullptr);
+    has_storage = GetUserVar(name, nullptr);
 
     if (!has_memory && !has_storage) {
       LogNotFound(name);
@@ -235,7 +354,7 @@ ECM AMVarManager::Delete(const std::vector<std::string> &names) {
       memory_vars_.erase(name);
     }
     if (has_storage) {
-      ECM rcm = config_manager_.RemoveUserVar(name, false);
+      ECM rcm = RemoveUserVar(name, false);
       if (rcm.first != EC::Success) {
         last_error = rcm;
       } else {
@@ -278,8 +397,7 @@ ECM AMVarManager::Enumerate() {
   prompt_manager_.Print("");
   prompt_manager_.Print("[InStorage]");
   {
-    std::vector<std::pair<std::string, std::string>> entries =
-        config_manager_.ListUserVars();
+    std::vector<std::pair<std::string, std::string>> entries = ListUserVars();
     std::sort(entries.begin(), entries.end(),
               [](const auto &a, const auto &b) { return a.first < b.first; });
     for (const auto &item : entries) {
@@ -317,7 +435,7 @@ ECM AMVarManager::SetMemoryVar(const std::string &name,
   }
 
   const bool has_memory = HasMemoryVar(name);
-  const bool has_builtin = config_manager_.GetUserVar(name, nullptr);
+  const bool has_builtin = GetUserVar(name, nullptr);
   if (confirm_overwrite && (has_memory || has_builtin)) {
     VarSource source = has_memory ? VarSource::Memory : VarSource::Builtin;
     ECM confirm = ConfirmOverwrite(name, source);
@@ -344,7 +462,7 @@ ECM AMVarManager::SetPersistentVar(const std::string &name,
   }
 
   const bool has_memory = HasMemoryVar(name);
-  const bool has_builtin = config_manager_.GetUserVar(name, nullptr);
+  const bool has_builtin = GetUserVar(name, nullptr);
   if (confirm_overwrite && (has_memory || has_builtin)) {
     VarSource source = has_memory ? VarSource::Memory : VarSource::Builtin;
     ECM confirm = ConfirmOverwrite(name, source);
@@ -353,7 +471,7 @@ ECM AMVarManager::SetPersistentVar(const std::string &name,
     }
   }
 
-  ECM rcm = config_manager_.SetUserVar(name, value, true);
+  ECM rcm = SetUserVar(name, value, true);
   if (rcm.first != EC::Success) {
     return rcm;
   }

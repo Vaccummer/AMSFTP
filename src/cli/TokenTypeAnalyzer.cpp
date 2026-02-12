@@ -11,7 +11,7 @@
 
 namespace {
 /** Return true when the character is allowed in variable names. */
-bool IsVarNameChar(char c) {
+inline bool IsVarNameChar(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
          (c >= '0' && c <= '9') || c == '_';
 }
@@ -30,7 +30,7 @@ bool IsValidVarName(const std::string &name) {
 }
 
 /** Return true when the character begins or ends a quoted string token. */
-bool IsQuoted(char c) { return c == '"' || c == '\''; }
+inline bool IsQuoted(char c) { return c == '"' || c == '\''; }
 
 /**
  * @brief Normalize a configured style into a bbcode opening tag.

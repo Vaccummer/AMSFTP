@@ -132,7 +132,8 @@ public:
   ECM SetBufferSize(int64_t buffer_size, const std::string &nickname = "",
                     amf interrupt_flag = nullptr);
   /** Apply styling for a path based on type. */
-  std::string StylePath(const PathInfo &info, const std::string &path) const;
+  [[nodiscard]] std::string StylePath(const PathInfo &info,
+                                      const std::string &path) const;
 
 private:
   AMFileSystem() = default;

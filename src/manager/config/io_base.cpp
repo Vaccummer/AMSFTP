@@ -8,7 +8,6 @@
 #include <sstream>
 
 namespace {
-using Path = AMConfigManager::Path;
 using Value = AMConfigManager::Value;
 using Json = nlohmann::ordered_json;
 
@@ -208,31 +207,6 @@ bool ParseJsonString(const std::string &text, Json *out, std::string *error) {
       *error = e.what();
     return false;
   }
-}
-
-/**
- * @brief Find a JSON node by walking the provided path.
- */
-const Json *FindJsonNode(const Json &root, const Path &path) {
-  const Json *node = &root;
-  for (const auto &seg : path) {
-    if (node->is_object()) {
-      auto it = node->find(seg);
-      if (it == node->end())
-        return nullptr;
-      node = &(*it);
-      continue;
-    }
-    if (node->is_array()) {
-      std::size_t idx = 0;
-      if (!ParseIndex(seg, &idx) || idx >= node->size())
-        return nullptr;
-      node = &(*node)[idx];
-      continue;
-    }
-    return nullptr;
-  }
-  return node;
 }
 
 /**
@@ -1236,106 +1210,6 @@ void AMConfigStorage::WriteThreadLoop_() {
  * @brief Return the project root directory path.
  */
 std::filesystem::path AMConfigStorage::ProjectRoot() const { return root_dir_; }
-
-/**
- * @brief Query a UserVars entry by name.
- */
-bool AMConfigStorage::GetUserVar(const std::string &name,
-                                 std::string *value) const {
-  if (name.empty())
-    return false;
-  Json settings_json;
-  if (!GetJson(DocumentKind::Settings, &settings_json)) {
-    return false;
-  }
-  const Json *node = FindJsonNode(settings_json, {"UserVars", name});
-  if (!node)
-    return false;
-
-  if (value) {
-    std::string parsed;
-    if (!QueryKey(settings_json, {"UserVars", name}, &parsed)) {
-      return false;
-    }
-    *value = std::move(parsed);
-  }
-  return true;
-}
-
-/**
- * @brief List all UserVars entries.
- */
-std::vector<std::pair<std::string, std::string>>
-AMConfigStorage::ListUserVars() const {
-  std::vector<std::pair<std::string, std::string>> entries;
-
-  Json settings_json;
-  if (!GetJson(DocumentKind::Settings, &settings_json)) {
-    return entries;
-  }
-  const Json *node = FindJsonNode(settings_json, {"UserVars"});
-  if (!node || !node->is_object())
-    return entries;
-
-  entries.reserve(node->size());
-  for (auto it = node->begin(); it != node->end(); ++it) {
-    std::string parsed;
-    if (QueryKey(settings_json, {"UserVars", it.key()}, &parsed)) {
-      entries.emplace_back(it.key(), std::move(parsed));
-    }
-  }
-  return entries;
-}
-
-/**
- * @brief Set a UserVars entry and optionally persist to settings.
- */
-ECM AMConfigStorage::SetUserVar(const std::string &name,
-                                const std::string &value, bool dump_now) {
-
-  if (name.empty())
-    return Err(EC::InvalidArg, "Empty variable name");
-
-  if (!SetArg(DocumentKind::Settings, {"UserVars", name}, value)) {
-    return Err(EC::ConfigInvalid, "failed to set UserVars");
-  }
-  if (dump_now) {
-    return DumpAll();
-  }
-  return Ok();
-}
-
-/**
- * @brief Remove a UserVars entry and optionally persist to settings.
- */
-ECM AMConfigStorage::RemoveUserVar(const std::string &name, bool dump_now) {
-
-  if (name.empty())
-    return Err(EC::InvalidArg, "Empty variable name");
-
-  DocumentState *settings_doc = GetDoc_(DocumentKind::Settings);
-  if (!settings_doc) {
-    return Err(EC::ConfigNotInitialized, "settings document not initialized");
-  }
-  std::lock_guard<std::mutex> lock(settings_doc->mtx);
-  Json *node = nullptr;
-  auto &settings_json = settings_doc->json;
-  if (settings_json.contains("UserVars") &&
-      settings_json["UserVars"].is_object()) {
-    node = &settings_json["UserVars"];
-  }
-
-  if (!node || !node->contains(name)) {
-    return Err(EC::InvalidArg, "Variable not found");
-  }
-
-  node->erase(name);
-  settings_doc->dirty = true;
-  if (dump_now) {
-    return DumpAll();
-  }
-  return Ok();
-}
 
 /**
  * @brief Backup config/settings/known_hosts when the interval elapses.

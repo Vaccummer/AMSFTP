@@ -6,16 +6,39 @@
 #include <sstream>
 #include <string>
 
-AMHostManager::AMHostManager()
-    : config_(AMConfigManager::Instance()), prompt_(AMPromptManager::Instance()) {
+namespace {
+/**
+ * @brief Resolve the local username from environment variables.
+ */
+std::string GetLocalUsername_() {
+  std::string local_user = "";
+#ifdef _WIN32
+  const char *env_user = std::getenv("USERNAME");
+#else
+  const char *env_user = std::getenv("USER");
+#endif
+  if (env_user) {
+    local_user = env_user;
+  }
+  if (local_user.empty()) {
+    local_user = "local";
+  }
+  return local_user;
 }
+} // namespace
+
+AMHostManager::AMHostManager()
+    : config_(AMConfigManager::Instance()),
+      prompt_(AMPromptManager::Instance()) {}
 
 AMHostManager &AMHostManager::Instance() {
   static AMHostManager instance;
   return instance;
 }
 
-ECM AMHostManager::Save() { return config_.Dump(DocumentKind::Config, "", true); }
+ECM AMHostManager::Save() {
+  return config_.Dump(DocumentKind::Config, "", true);
+}
 
 void AMHostManager::CollectHosts_() const {
   host_configs.clear();
@@ -44,6 +67,65 @@ AMHostManager::GetClientConfig(const std::string &nickname) {
             {}};
   }
   return {Ok(), host_configs[nickname]};
+}
+
+/**
+ * @brief Get local client config from config storage or use defaults.
+ */
+std::pair<ECM, ClientConfig> AMHostManager::GetLocalConfig() {
+  ClientConfig result;
+
+  const std::string local_user = GetLocalUsername_();
+  const std::string fallback_home = AMFS::HomePath();
+
+  std::string root_dir = "";
+  if (!GetEnv("AMSFTP_ROOT", &root_dir) || root_dir.empty()) {
+    root_dir = config_.ProjectRoot().string();
+  }
+  const std::string fallback_trash =
+      AMPathStr::join(root_dir, "trash");
+
+  Json host_json;
+  if (config_.ResolveArg(DocumentKind::Config, {configkn::hosts, "local"},
+                         &host_json) &&
+      host_json.is_object()) {
+    ClientConfig stored("local", host_json);
+    if (stored.IsValid()) {
+      result = stored;
+    }
+  }
+
+  if (result.request.nickname.empty()) {
+    result.request.nickname = "local";
+  }
+  if (result.request.hostname.empty()) {
+    result.request.hostname = "localhost";
+  }
+  if (result.request.username.empty()) {
+    result.request.username = local_user;
+  }
+  if (result.request.port <= 0 || result.request.port > 65535) {
+    result.request.port = configkn::DefaultSFTPPort;
+  }
+
+  result.protocol = ClientProtocol::LOCAL;
+
+  if (result.buffer_size <= 0) {
+    result.buffer_size = 64 * AMMB;
+  } else {
+    result.buffer_size = std::min(
+        std::max(result.buffer_size, static_cast<int64_t>(AMMinBufferSize)),
+        static_cast<int64_t>(AMMaxBufferSize));
+  }
+
+  if (result.login_dir.empty()) {
+    result.login_dir = fallback_home;
+  }
+  if (result.request.trash_dir.empty()) {
+    result.request.trash_dir = fallback_trash;
+  }
+
+  return {Ok(), result};
 }
 
 ECM AMHostManager::UpsertHost(const ClientConfig &entry, bool dump_now) {

@@ -35,6 +35,28 @@ public:
                VarSource *source = nullptr) const;
 
   /**
+   * @brief Query a persistent variable from storage.
+   */
+  bool GetUserVar(const std::string &name, std::string *value) const;
+
+  /**
+   * @brief List all persistent variables from storage.
+   */
+  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
+  ListUserVars() const;
+
+  /**
+   * @brief Set a persistent variable and optionally dump settings.
+   */
+  ECM SetUserVar(const std::string &name, const std::string &value,
+                 bool dump_now = true);
+
+  /**
+   * @brief Remove a persistent variable and optionally dump settings.
+   */
+  ECM RemoveUserVar(const std::string &name, bool dump_now = true);
+
+  /**
    * @brief Query variables in memory and storage, printing results.
    */
   ECM Query(const std::vector<std::string> &names);
