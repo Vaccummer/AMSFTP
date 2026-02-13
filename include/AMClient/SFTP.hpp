@@ -293,7 +293,14 @@ public:
   int port = 0;
   std::string protocol = "";
   std::string username = "";
+  KnownHostQuery(std::string_view nickname, std::string_view hostname, int port,
+                 std::string_view protocol, std::string_view username,
+                 std::string_view fingerprint = "")
+      : nickname(nickname), hostname(hostname), port(port), protocol(protocol),
+        username(username), fingerprint(fingerprint) {}
+
   KnownHostQuery() = default;
+
   [[nodiscard]] bool IsValid() const {
     return !hostname.empty() && port > 0 && port <= 65535;
   }
@@ -434,9 +441,6 @@ protected:
     return {ec, prompt};
   }
 
-  // NBResult 版本的 ErrorRecord
-  // 处理: 超时、终止、socket error、执行完成但报错、执行成功
-  // 返回 {EC::Success, ""} 表示成功，其他表示失败
   template <typename T>
   ECM ErrorRecord(const NBResult<T> &result, TraceLevel level,
                   const std::string &target, const std::string &action,
@@ -499,10 +503,6 @@ protected:
     // 5. 执行成功
     return {EC::Success, ""};
   }
-
-  // 便捷宏/lambda 版本，用于更简洁的调用
-  // 用法: auto result = nb_call(flag, timeout, [&]{ return
-  // libssh2_sftp_unlink(sftp, path); });
 
 private:
   ECM CurError = {EC::NoConnection, "Connection not established"};
@@ -586,18 +586,12 @@ private:
 
     std::array<unsigned char, SHA256_DIGEST_LENGTH> digest;
     std::string actual_sha = "";
-    if (SHA256(key_bytes, key_len, digest.data()) == nullptr) {
+    if (SHA256(key_bytes, key_len, digest.data())) {
       actual_sha = Base64Encode(digest.data(), SHA256_DIGEST_LENGTH);
-      actual_sha.erase(actual_sha.find_last_not_of('=') +
-                       1); // Remove trailing '='
     }
 
-    KnownHostQuery entry;
-    entry.nickname = res_data.nickname;
-    entry.hostname = res_data.hostname;
-    entry.port = res_data.port;
-    entry.protocol = actual_protocol;
-    entry.SetFingerprint(actual_sha);
+    KnownHostQuery entry{res_data.nickname, res_data.hostname, res_data.port,
+                         actual_protocol,   res_data.username, actual_sha};
     return known_host_cb(std::move(entry));
   }
 

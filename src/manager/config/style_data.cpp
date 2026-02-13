@@ -77,11 +77,6 @@ ParseProgressBarColor(const std::string &value) {
 } // namespace
 
 /**
- * @brief Construct a style layer with no bound storage.
- */
-cls::AMConfigManager() = default;
-
-/**
  * @brief Apply a named style to a string with optional path context.
  */
 std::string cls::Format(const std::string &ori_str_f,

@@ -540,7 +540,8 @@ ECM AMConfigStorage::AMInit(
   shutdown_requested_.store(false, std::memory_order_relaxed);
   StartWriteThread();
   initialized_ = true;
-  return Ok();
+
+  return Load();
 }
 
 /**

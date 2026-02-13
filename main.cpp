@@ -84,22 +84,14 @@ int main(int argc, char **argv) {
     signal_monitor.Start();
 
     auto &config_manager = AMConfigManager::Instance();
-    std::string root_dir = "";
-    if (!GetEnv("AMSFTP_ROOT", &root_dir)) {
-      std::cerr << "Failed to get $AMSFTP_ROOT environment variable"
-                << std::endl;
-      return -1;
-    }
-
-    auto init_status = config_manager.AMInit(fs::path(root_dir));
-    if (init_status.first != EC::Success) {
-      std::cerr << init_status.second << std::endl;
-      return static_cast<int>(init_status.first);
-    }
+    config_manager.Init();
+    auto &hostm = AMHostManager::Instance();
+    hostm.Init();
 
     auto &client_manager = AMClientManager::Instance();
+    client_manager.Init();
     auto &filesystem = AMFileSystem::Instance();
-    AMFileSystem::global_interrupt_flag = amgif;
+    filesystem.Init();
     AMIsInteractive.store(false, std::memory_order_relaxed);
 
     CliManagers managers;

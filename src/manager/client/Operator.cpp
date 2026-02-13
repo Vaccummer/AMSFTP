@@ -1,4 +1,6 @@
+#include "AMClient/Base.hpp"
 #include "AMManager/Client.hpp"
+#include "AMManager/SignalMonitor.hpp"
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -86,11 +88,6 @@ std::vector<std::string> Operator::GetClientNames() {
 std::vector<std::shared_ptr<BaseClient>> Operator::GetClients() {
   return clients_ ? clients_->get_clients()
                   : std::vector<std::shared_ptr<BaseClient>>{};
-}
-
-std::pair<ECM, ClientConfig>
-Operator::GetClientConfig(const std::string &nickname) {
-  return hostm_.GetClientConfig(nickname);
 }
 
 std::shared_ptr<AMLocalClient> Operator::LocalClient() const {
@@ -493,15 +490,15 @@ void Operator::ApplyKnownHostCallback_(
     if (!query.IsValid()) {
       return Err(EC::InvalidArg, "invalid known host query");
     }
-
     KnownHostQuery stored = query;
     ECM find_rcm = hostm_.FindKnownHost(stored);
-    if (find_rcm.first == EC::HostConfigNotFound) {
+    if (find_rcm.first != EC::Success) {
       bool canceled = false;
       bool accepted = true;
       if (AMIsInteractive.load(std::memory_order_relaxed)) {
-        prompt_.Print(AMStr::amfmt("Unknown host: {}:{}  [{}]", query.hostname,
-                                   query.port, query.protocol));
+        prompt_.Print(AMStr::amfmt(
+            "Unknown host: {}:{}  User: {} Protocol: [!se][{}][/se]",
+            query.hostname, query.port, query.username, query.protocol));
         prompt_.Print(AMStr::amfmt("Fingerprint: {}",
                                    AMStr::Strip(query.GetFingerprint())));
         accepted =
@@ -581,6 +578,25 @@ Operator::DisconnectCallback Operator::BuiltinDisconnectCallback_() {
   return [this](const std::shared_ptr<BaseClient> &client, const ECM &ecm) {
     DefaultDisconnectCallback(client, ecm);
   };
+}
+
+std::shared_ptr<BaseClient>
+Operator::CreateLocalClient_(AMHostManager &hostm, AMLogManager &log_manager) {
+  auto trace_cb = log_manager.TraceCallbackFunc();
+
+  auto [rcm, cfg] = hostm.GetLocalConfig();
+  auto client_t = CreateClient(cfg.request, ClientProtocol::LOCAL, trace_num_,
+                               std::move(trace_cb), cfg.buffer_size, {}, {});
+  if (!client_t) {
+    std::cerr << "Failed to create local client: Unsupported protocol"
+              << std::endl;
+    std::exit(1);
+  }
+  (void)client_t->SetPulbicValue(
+      "workdir", AMPathStr::UnifyPathSep(cfg.login_dir, "/"), true);
+  (void)client_t->SetPulbicValue(
+      "login_dir", AMPathStr::UnifyPathSep(cfg.login_dir, "/"), true);
+  return client_t;
 }
 
 } // namespace AMClientManage

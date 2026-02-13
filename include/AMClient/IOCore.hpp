@@ -407,6 +407,11 @@ CreateClient(const ConRequst &requeset, ClientProtocol protocol,
         requeset, trace_num, std::move(trace_cb), std::move(auth_cb));
     client->TransferRingBufferSize(buffer_size);
     return std::dynamic_pointer_cast<BaseClient>(client);
+  } else if (protocol == ClientProtocol::LOCAL) {
+    auto client = std::make_shared<AMLocalClient>(requeset, trace_num,
+                                                  std::move(trace_cb));
+    client->TransferRingBufferSize(buffer_size);
+    return std::dynamic_pointer_cast<BaseClient>(client);
   }
   return nullptr;
 }
@@ -451,7 +456,7 @@ public:
   std::unordered_map<std::string, std::shared_ptr<BaseClient>> hosts;
   DisconnectCallback disconnect_cb;
   bool is_disconnect_cb = false;
-  std::shared_ptr<AMLocalClient> local_client;
+  std::shared_ptr<BaseClient> local_client;
   ~ClientMaintainer() {
     is_heartbeat.store(false, std::memory_order_relaxed);
     if (heartbeat_thread.joinable()) {
@@ -472,7 +477,7 @@ public:
 
   ClientMaintainer(int heartbeat_interval_s = 60,
                    DisconnectCallback disconnect_cb = {},
-                   std::shared_ptr<AMLocalClient> local_client = nullptr,
+                   std::shared_ptr<BaseClient> local_client = nullptr,
                    std::unordered_map<std::string, std::shared_ptr<BaseClient>>
                        init_hosts = {}) {
     // 初始化本地客户端

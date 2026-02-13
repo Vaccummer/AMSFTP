@@ -29,7 +29,7 @@ PathOps::ParsePath(const std::string &input) {
     return {"local", path, LocalClientBase(), Ok()};
   }
 
-  auto cfg = GetClientConfig(prefix);
+  auto cfg = hostm_.GetClientConfig(prefix);
   if (cfg.first.first != EC::Success) {
     return {prefix, path, nullptr,
             Err(EC::HostConfigNotFound,
@@ -65,7 +65,7 @@ PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
     return {"local", path, LocalClientBase(), Ok()};
   }
 
-  auto cfg = GetClientConfig(prefix);
+  auto cfg = hostm_.GetClientConfig(prefix);
   if (cfg.first.first != EC::Success) {
     return {prefix, path, nullptr,
             Err(EC::HostConfigNotFound,
@@ -162,7 +162,8 @@ std::string PathOps::BuildPath(const std::shared_ptr<BaseClient> &client,
   return AMFS::abspath(path, true, home, cwd, "/");
 }
 
-void PathOps::InitClientWorkdir(const std::shared_ptr<BaseClient> &client) const {
+void PathOps::InitClientWorkdir(
+    const std::shared_ptr<BaseClient> &client) const {
   if (!client) {
     return;
   }

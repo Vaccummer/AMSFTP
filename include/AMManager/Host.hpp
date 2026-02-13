@@ -186,10 +186,14 @@ struct KnownHostEntry {
   }
 };
 
-class AMHostManager {
+class AMHostManager : public NonCopyableNonMovable {
 public:
-  explicit AMHostManager();
-  static AMHostManager &Instance();
+  explicit AMHostManager() = default;
+  static AMHostManager &Instance() {
+    static AMHostManager instance;
+    return instance;
+  }
+  void Init() override { CollectHosts_(); };
 
   [[nodiscard]] std::pair<ECM, ClientConfig>
   GetClientConfig(const std::string &nickname);
