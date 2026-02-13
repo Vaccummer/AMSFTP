@@ -3,7 +3,7 @@
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Path.hpp"
 #include "AMCLI/CommandPreprocess.hpp"
-#include "AMCLI/Completer.hpp"
+#include "AMCLI/Completer/Proxy.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Transfer.hpp"
 #include <algorithm>
@@ -1435,7 +1435,7 @@ int RunInteractiveLoop(const std::string &app_name,
   AMCompleter completer{};
   completer.Install();
 
-  AMCommandPreprocessor preprocessor(config_manager);
+  AMCommandPreprocessor preprocessor = AMCommandPreprocessor::Instance();
   PromptState prompt_state;
 
   while (true) {
@@ -1601,3 +1601,5 @@ int RunInteractiveLoop(const std::string &app_name,
   AMIsInteractive.store(false, std::memory_order_relaxed);
   return g_cli_exit_code;
 }
+
+

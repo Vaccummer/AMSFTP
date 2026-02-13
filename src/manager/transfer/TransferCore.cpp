@@ -162,10 +162,7 @@ AMTransferManager &AMTransferManager::Instance() {
 /**
  * @brief Construct a transfer manager using singleton managers.
  */
-AMTransferManager::AMTransferManager()
-    : config_(AMConfigManager::Instance()),
-      client_manager_(AMClientManager::Instance(config_)),
-      prompt_(AMPromptManager::Instance()) {
+AMTransferManager::AMTransferManager() {
   int init_thread_num = 1;
 
   config_.ResolveArg(DocumentKind::Settings,

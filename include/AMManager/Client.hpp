@@ -132,15 +132,10 @@ public:
 
 class Manager : public PathOps, private NonCopyableNonMovable {
 public:
-  inline static amf global_interrupt_flag = amgif;
-
   explicit Manager();
   static Manager &Instance() {
     static Manager instance;
     return instance;
-  }
-  static Manager &Instance(AMConfigManager & /*config_manager*/) {
-    return Instance();
   }
 
 private:

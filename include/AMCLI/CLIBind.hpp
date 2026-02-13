@@ -1,5 +1,6 @@
 #pragma once
-#include "AMCLI/Completer.hpp"
+#include "AMBase/CommonTools.hpp"
+#include "AMCLI/Completer/Proxy.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/FileSystem.hpp"
@@ -14,7 +15,6 @@
 #include <iostream>
 #include <memory>
 #include <string>
-#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -68,159 +68,7 @@ inline ECM EnsureInteractive_(const CliRunContext &ctx) {
           AMStr::amfmt("{} not supported in Non-Interactive mode", name)};
 }
 
-/**
- * @brief Deduplicate indices while preserving input order.
- */
-inline std::vector<size_t> DedupIndices(const std::vector<size_t> &indices) {
-  std::vector<size_t> out;
-  std::unordered_set<size_t> seen;
-  out.reserve(indices.size());
-  for (size_t idx : indices) {
-    if (seen.insert(idx).second) {
-      out.push_back(idx);
-    }
-  }
-  return out;
-}
-
-/**
- * @brief Return true if a character is valid inside a variable name.
- */
-inline bool IsVarNameChar_(char c) {
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-         (c >= '0' && c <= '9') || c == '_';
-}
-
-/**
- * @brief Return true if a variable name is non-empty and valid.
- */
-inline bool IsValidVarName_(const std::string &name) {
-  if (name.empty()) {
-    return false;
-  }
-  for (char c : name) {
-    if (!IsVarNameChar_(c)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * @brief Normalize a raw value by trimming and stripping paired quotes.
- */
-inline ECM ParseValue_(const std::string &input, std::string *value) {
-  if (!value) {
-    return {EC::InvalidArg, "Null output pointer"};
-  }
-  std::string trimmed = AMStr::Strip(input);
-  if (trimmed.empty()) {
-    *value = "";
-    return {EC::Success, ""};
-  }
-
-  const char first = trimmed.front();
-  const char last = trimmed.back();
-  const bool starts_quote = first == '"' || first == '\'';
-  const bool ends_quote = last == '"' || last == '\'';
-
-  if (starts_quote || ends_quote) {
-    if (trimmed.size() < 2 || first != last) {
-      return {EC::InvalidArg, "Malformed quoted value"};
-    }
-    *value = trimmed.substr(1, trimmed.size() - 2);
-    if (!value->empty()) {
-      std::string unescaped;
-      unescaped.reserve(value->size());
-      for (size_t i = 0; i < value->size(); ++i) {
-        if ((*value)[i] == '`' && i + 1 < value->size() &&
-            ((*value)[i + 1] == '"' || (*value)[i + 1] == '\'')) {
-          unescaped.push_back((*value)[i + 1]);
-          ++i;
-          continue;
-        }
-        unescaped.push_back((*value)[i]);
-      }
-      *value = std::move(unescaped);
-    }
-    return {EC::Success, ""};
-  }
-
-  if (!trimmed.empty()) {
-    std::string unescaped;
-    unescaped.reserve(trimmed.size());
-    for (size_t i = 0; i < trimmed.size(); ++i) {
-      if (trimmed[i] == '`' && i + 1 < trimmed.size() &&
-          (trimmed[i + 1] == '"' || trimmed[i + 1] == '\'')) {
-        unescaped.push_back(trimmed[i + 1]);
-        ++i;
-        continue;
-      }
-      unescaped.push_back(trimmed[i]);
-    }
-    *value = std::move(unescaped);
-  } else {
-    *value = trimmed;
-  }
-  return {EC::Success, ""};
-}
-
-/**
- * @brief Parse a variable token like $name or ${ name }.
- */
-inline ECM ParseVarToken_(const std::string &token, std::string *name) {
-  if (!name) {
-    return {EC::InvalidArg, "Null output pointer"};
-  }
-  std::string trimmed = AMStr::Strip(token);
-  if (trimmed.empty()) {
-    return {EC::InvalidArg, "Empty variable token"};
-  }
-  if (trimmed.find('=') != std::string::npos) {
-    return {EC::InvalidArg, "Invalid variable token"};
-  }
-  if (trimmed.front() != '$') {
-    return {EC::InvalidArg, "Variable token must start with $"};
-  }
-  if (trimmed.size() < 2) {
-    return {EC::InvalidArg, "Invalid variable token"};
-  }
-
-  if (trimmed[1] == '{') {
-    if (trimmed.back() != '}') {
-      return {EC::InvalidArg, "Unclosed ${...} expression"};
-    }
-    std::string inner = AMStr::Strip(trimmed.substr(2, trimmed.size() - 3));
-    if (!IsValidVarName_(inner)) {
-      return {EC::InvalidArg,
-              "Invalid variable name: only letters, digits, and _ are allowed"};
-    }
-    *name = inner;
-    return {EC::Success, ""};
-  }
-
-  std::string inner = trimmed.substr(1);
-  if (!IsValidVarName_(inner)) {
-    return {EC::InvalidArg,
-            "Invalid variable name: only letters, digits, and _ are allowed"};
-  }
-  *name = inner;
-  return {EC::Success, ""};
-}
-
-/**
- * @brief Join command tokens with single spaces.
- */
-inline std::string JoinTokens_(const std::vector<std::string> &tokens) {
-  std::string out;
-  for (size_t i = 0; i < tokens.size(); ++i) {
-    if (i > 0) {
-      out.push_back(' ');
-    }
-    out.append(tokens[i]);
-  }
-  return out;
-}
+void ShowTaskInspectInfo();
 
 /**
  * @brief CLI argument container for config ls.
@@ -230,7 +78,7 @@ struct ConfigLsArgs {
   /**
    * @brief Execute config ls with optional detail flag.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
     AMHostManager &host_manager = AMHostManager::Instance();
@@ -249,7 +97,7 @@ struct ConfigKeysArgs {
   /**
    * @brief Execute config keys.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
     AMHostManager &host_manager = AMHostManager::Instance();
@@ -268,7 +116,7 @@ struct ConfigDataArgs {
   /**
    * @brief Execute config data.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
     AMHostManager &host_manager = AMHostManager::Instance();
@@ -288,7 +136,7 @@ struct ConfigGetArgs {
   /**
    * @brief Execute config get with optional nickname list.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     auto &client_manager = *managers.client_manager;
     std::vector<std::string> targets = nicknames;
@@ -317,7 +165,7 @@ struct ConfigAddArgs {
   /**
    * @brief Execute config add.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
     return AMHostManager::Instance().Add();
@@ -336,7 +184,7 @@ struct ConfigEditArgs {
   /**
    * @brief Execute config edit for a nickname.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
     return AMHostManager::Instance().Modify(nickname);
@@ -356,7 +204,7 @@ struct ConfigRenameArgs {
   /**
    * @brief Execute config rename.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
     return AMHostManager::Instance().Rename(old_name, new_name);
@@ -378,7 +226,7 @@ struct ConfigRemoveArgs {
   /**
    * @brief Execute config remove for target names.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
     return AMHostManager::Instance().Delete(names);
@@ -399,7 +247,7 @@ struct ConfigSetArgs {
   /**
    * @brief Execute config set for a host attribute.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
     return AMHostManager::Instance().SetHostValue(nickname, attrname, value);
@@ -421,7 +269,7 @@ struct ConfigSaveArgs {
   /**
    * @brief Execute config save.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
     return AMHostManager::Instance().Save();
@@ -440,7 +288,7 @@ struct StatArgs {
   /**
    * @brief Execute stat for target paths.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     return managers.filesystem->stat(paths, amgif);
   }
@@ -460,7 +308,7 @@ struct LsArgs {
   /**
    * @brief Execute ls for a path or current workdir.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     auto &client_manager = *managers.client_manager;
     auto &filesystem = *managers.filesystem;
@@ -498,7 +346,7 @@ struct SizeArgs {
   /**
    * @brief Execute size for target paths.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     ECM rcm = managers.filesystem->getsize(paths, amgif);
     PrintRunError_(rcm);
@@ -518,7 +366,7 @@ struct FindArgs {
   /**
    * @brief Execute find for a path.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     ECM rcm = managers.filesystem->find(path, SearchType::All, amgif);
     PrintRunError_(rcm);
@@ -538,7 +386,7 @@ struct MkdirArgs {
   /**
    * @brief Execute mkdir for target paths.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     ECM rcm = managers.filesystem->mkdir(paths, amgif);
     PrintRunError_(rcm);
@@ -560,7 +408,7 @@ struct RmArgs {
   /**
    * @brief Execute rm for target paths.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     ECM rcm = managers.filesystem->rm(paths, permanent, false, quiet, amgif);
     PrintRunError_(rcm);
@@ -589,7 +437,7 @@ struct WalkArgs {
   /**
    * @brief Execute walk for a path.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     ECM rcm = managers.filesystem->walk(path, only_file, only_dir, show_all,
                                         !include_special, quiet, amgif);
@@ -622,7 +470,7 @@ struct TreeArgs {
   /**
    * @brief Execute tree for a path.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     ECM rcm = managers.filesystem->tree(path, depth, only_dir, show_all,
                                         !include_special, quiet, amgif);
@@ -650,7 +498,7 @@ struct RealpathArgs {
   /**
    * @brief Execute realpath for a target path.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     return managers.filesystem->realpath(path, amgif);
   }
@@ -668,7 +516,7 @@ struct RttArgs {
   /**
    * @brief Execute rtt with sample count.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     ECM rcm = managers.filesystem->TestRTT(times, amgif);
     PrintRunError_(rcm);
@@ -688,7 +536,7 @@ struct ClearArgs {
   /**
    * @brief Execute clear screen.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
     AMPromptManager::Instance().ClearScreen(all);
@@ -715,7 +563,7 @@ struct CpArgs {
   /**
    * @brief Execute cp transfer.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     if (srcs.empty()) {
       return {EC::InvalidArg, "cp requires at least one source"};
@@ -777,7 +625,7 @@ struct SftpArgs {
   /**
    * @brief Execute sftp connection.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     auto &filesystem = *managers.filesystem;
     std::string user_at_host;
     std::string nickname;
@@ -795,7 +643,7 @@ struct SftpArgs {
 
     ECM rcm = filesystem.sftp(nickname, user_at_host, port, "", keyfile, amgif);
     PrintRunError_(rcm);
-    SetEnterInteractive_(ctx, rcm.first == EC::Success);
+    *(ctx.enter_interactive) = rcm.first == EC::Success;
     return rcm;
   }
   /**
@@ -818,7 +666,7 @@ struct FtpArgs {
   /**
    * @brief Execute ftp connection.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     auto &filesystem = *managers.filesystem;
     std::string user_at_host;
     std::string nickname;
@@ -857,7 +705,7 @@ struct ClientsArgs {
   /**
    * @brief Execute clients list.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     return managers.filesystem->print_clients(detail, amgif);
   }
@@ -876,7 +724,7 @@ struct CheckArgs {
   /**
    * @brief Execute client check.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     return managers.filesystem->check(nicknames, detail, amgif);
   }
@@ -897,7 +745,7 @@ struct ChangeClientArgs {
   /**
    * @brief Execute client change.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     auto &filesystem = *managers.filesystem;
     const bool is_interactive = ctx.enforce_interactive ||
                                 AMIsInteractive.load(std::memory_order_relaxed);
@@ -922,7 +770,7 @@ struct DisconnectArgs {
   /**
    * @brief Execute client disconnect.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     std::string joined;
     for (size_t i = 0; i < nicknames.size(); ++i) {
@@ -947,7 +795,7 @@ struct CdArgs {
   /**
    * @brief Execute cd.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM rcm = managers.filesystem->cd(path, amgif, false);
     if (rcm.first == EC::Success) {
       SetEnterInteractive_(ctx, true);
@@ -969,7 +817,7 @@ struct ConnectArgs {
   /**
    * @brief Execute connect.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     auto &filesystem = *managers.filesystem;
     const bool is_interactive = ctx.enforce_interactive ||
                                 AMIsInteractive.load(std::memory_order_relaxed);
@@ -1000,7 +848,7 @@ struct BashArgs {
   /**
    * @brief Enter interactive mode.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     SetEnterInteractive_(ctx, true);
     return {EC::Success, ""};
@@ -1019,43 +867,11 @@ struct VarArgs {
   /**
    * @brief Execute var query or assignment.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
+    (void)managers;
     (void)ctx;
-    auto &config_manager = *managers.config_manager;
-    AMVarManager &var_manager = AMVarManager::Instance(config_manager);
-    if (tokens.empty()) {
-      return var_manager.Enumerate();
-    }
-
-    const std::string remainder = JoinTokens_(tokens);
-    const size_t eq_pos = remainder.find('=');
-    if (eq_pos != std::string::npos) {
-      const std::string left = AMStr::Strip(remainder.substr(0, eq_pos));
-      const std::string right = remainder.substr(eq_pos + 1);
-      std::string name;
-      ECM rcm = ParseVarToken_(left, &name);
-      if (rcm.first != EC::Success) {
-        return rcm;
-      }
-      std::string parsed_value;
-      rcm = ParseValue_(right, &parsed_value);
-      if (rcm.first != EC::Success) {
-        return rcm;
-      }
-      return var_manager.SetPersistentVar(name, parsed_value, true);
-    }
-
-    std::vector<std::string> names;
-    names.reserve(tokens.size());
-    for (const auto &token : tokens) {
-      std::string name;
-      ECM rcm = ParseVarToken_(token, &name);
-      if (rcm.first != EC::Success) {
-        return rcm;
-      }
-      names.push_back(name);
-    }
-    return var_manager.Query(names);
+    AMVarManager &var_manager = AMVarManager::Instance();
+    return var_manager.ExecuteVarTokens(tokens);
   }
   /**
    * @brief Reset var arguments to defaults.
@@ -1071,24 +887,11 @@ struct DelArgs {
   /**
    * @brief Execute delete for variable tokens.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
+    (void)managers;
     (void)ctx;
-    auto &config_manager = *managers.config_manager;
-    AMVarManager &var_manager = AMVarManager::Instance(config_manager);
-    if (tokens.empty()) {
-      return {EC::InvalidArg, "del requires variable names"};
-    }
-    std::vector<std::string> names;
-    names.reserve(tokens.size());
-    for (const auto &token : tokens) {
-      std::string name;
-      ECM rcm = ParseVarToken_(token, &name);
-      if (rcm.first != EC::Success) {
-        return rcm;
-      }
-      names.push_back(name);
-    }
-    return var_manager.Delete(names);
+    AMVarManager &var_manager = AMVarManager::Instance();
+    return var_manager.ExecuteDelTokens(tokens);
   }
   /**
    * @brief Reset del arguments to defaults.
@@ -1103,7 +906,7 @@ struct CompleteCacheClearArgs {
   /**
    * @brief Execute completion cache clear.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
     auto *completer = AMCompleter::Active();
@@ -1131,11 +934,12 @@ struct TaskListArgs {
   /**
    * @brief Execute task list.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM ready = EnsureInteractive_(ctx);
     if (ready.first != EC::Success) {
       return ready;
     }
+    (void)managers;
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
     return transfer_manager.List(pending, suspend, finished, conducting, amgif);
   }
@@ -1158,7 +962,7 @@ struct TaskShowArgs {
   /**
    * @brief Execute task show.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM ready = EnsureInteractive_(ctx);
     if (ready.first != EC::Success) {
       return ready;
@@ -1182,7 +986,7 @@ struct TaskInspectArgs {
   /**
    * @brief Execute task inspect.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM ready = EnsureInteractive_(ctx);
     if (ready.first != EC::Success) {
       return ready;
@@ -1232,7 +1036,7 @@ struct TaskThreadArgs {
   /**
    * @brief Execute task thread update/query.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM ready = EnsureInteractive_(ctx);
     if (ready.first != EC::Success) {
       return ready;
@@ -1260,7 +1064,7 @@ struct TaskCacheAddArgs {
   /**
    * @brief Execute task cache add.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM ready = EnsureInteractive_(ctx);
     if (ready.first != EC::Success) {
       return ready;
@@ -1322,14 +1126,14 @@ struct TaskCacheRmArgs {
   /**
    * @brief Execute task cache remove.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM ready = EnsureInteractive_(ctx);
     if (ready.first != EC::Success) {
       return ready;
     }
     (void)managers;
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    std::vector<size_t> deduped = DedupIndices(indices);
+    std::vector<size_t> deduped = VectorDedup(indices);
     const size_t removed = transfer_manager.DeleteTransferSets(deduped);
     if (removed < deduped.size()) {
       return {EC::InvalidArg, "Cache index not found"};
@@ -1353,7 +1157,7 @@ struct TaskCacheClearArgs {
   /**
    * @brief Execute task cache clear.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM ready = EnsureInteractive_(ctx);
     if (ready.first != EC::Success) {
       return ready;
@@ -1378,7 +1182,7 @@ struct TaskCacheSubmitArgs {
   /**
    * @brief Execute task cache submit.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM ready = EnsureInteractive_(ctx);
     if (ready.first != EC::Success) {
       return ready;
@@ -1404,14 +1208,14 @@ struct TaskUserSetArgs {
   /**
    * @brief Execute task userset query.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM ready = EnsureInteractive_(ctx);
     if (ready.first != EC::Success) {
       return ready;
     }
     (void)managers;
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    std::vector<size_t> deduped = DedupIndices(indices);
+    std::vector<size_t> deduped = VectorDedup(indices);
     if (deduped.empty()) {
       deduped = transfer_manager.ListTransferSetIds();
     }
@@ -1438,7 +1242,7 @@ struct TaskEntryArgs {
   /**
    * @brief Execute task entry query.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM ready = EnsureInteractive_(ctx);
     if (ready.first != EC::Success) {
       return ready;
@@ -1470,7 +1274,7 @@ struct TaskControlArgs {
   /**
    * @brief Execute task control action.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM ready = EnsureInteractive_(ctx);
     if (ready.first != EC::Success) {
       return ready;
@@ -1508,7 +1312,7 @@ struct TaskRetryArgs {
   /**
    * @brief Execute task retry.
    */
-  ECM Run(const CliManagers &managers, CliRunContext &ctx) const {
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     ECM ready = EnsureInteractive_(ctx);
     if (ready.first != EC::Success) {
       return ready;
@@ -1684,11 +1488,6 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args);
  * @brief Set the exit code and return.
  */
 void SetCliExitCode(int code);
-
-/**
- * @brief Print task inspect helper info.
- */
-void ShowTaskInspectInfo();
 
 /**
  * @brief Dispatch CLI commands based on parsed state.

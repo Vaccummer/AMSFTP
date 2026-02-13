@@ -2,6 +2,7 @@
 #include "AMBase/Path.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -13,13 +14,10 @@ namespace {
 std::string GetLocalUsername_() {
   std::string local_user = "";
 #ifdef _WIN32
-  const char *env_user = std::getenv("USERNAME");
+  GetEnv("USERNAME", &local_user);
 #else
-  const char *env_user = std::getenv("USER");
+  GetEnv("USER", &local_user);
 #endif
-  if (env_user) {
-    local_user = env_user;
-  }
   if (local_user.empty()) {
     local_user = "local";
   }
@@ -27,9 +25,7 @@ std::string GetLocalUsername_() {
 }
 } // namespace
 
-AMHostManager::AMHostManager()
-    : config_(AMConfigManager::Instance()),
-      prompt_(AMPromptManager::Instance()) {}
+AMHostManager::AMHostManager() = default;
 
 AMHostManager &AMHostManager::Instance() {
   static AMHostManager instance;
@@ -82,8 +78,7 @@ std::pair<ECM, ClientConfig> AMHostManager::GetLocalConfig() {
   if (!GetEnv("AMSFTP_ROOT", &root_dir) || root_dir.empty()) {
     root_dir = config_.ProjectRoot().string();
   }
-  const std::string fallback_trash =
-      AMPathStr::join(root_dir, "trash");
+  const std::string fallback_trash = AMPathStr::join(root_dir, "trash");
 
   Json host_json;
   if (config_.ResolveArg(DocumentKind::Config, {configkn::hosts, "local"},
@@ -185,6 +180,17 @@ bool AMHostManager::HostExists(const std::string &nickname) const {
   }
   CollectHosts_();
   return host_configs.find(nickname) != host_configs.end();
+}
+
+std::vector<std::string> AMHostManager::ListNames() const {
+  CollectHosts_();
+  std::vector<std::string> names;
+  names.reserve(host_configs.size());
+  for (const auto &pair : host_configs) {
+    names.push_back(pair.first);
+  }
+  std::sort(names.begin(), names.end());
+  return names;
 }
 
 ECM AMHostManager::PromptAddFields_(const std::string &nickname,

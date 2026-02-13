@@ -1,27 +1,9 @@
 #include "AMManager/Logger.hpp"
 #include "AMBase/Enum.hpp"
+#include "AMManager/Config.hpp"
 #include <fstream>
 #include <magic_enum/magic_enum.hpp>
 #include <sstream>
-
-/** Return the singleton instance initialized with the config manager. */
-AMLogManager &AMLogManager::Instance(AMConfigManager &cfg) {
-  static AMLogManager instance(cfg);
-  return instance;
-}
-
-/** Initialize log manager with settings and resolve log path. */
-AMLogManager::AMLogManager(AMConfigManager &cfg)
-    : config_(cfg), prompt_manager_(AMPromptManager::Instance()) {
-  int initial = config_.GetSettingInt({"InternalVars", "TraceLevel"}, 4);
-  trace_level_.store(ClampTraceLevel(initial), std::memory_order_relaxed);
-  auto root = config_.ProjectRoot();
-  log_path_ =
-      root.empty() ? std::filesystem::path("AMSFTP.log") : root / "AMSFTP.log";
-}
-
-/** Cleanup log manager resources. */
-AMLogManager::~AMLogManager() {}
 
 /** Enqueue a log entry for the writer thread. */
 void AMLogManager::Enqueue(const TraceInfo &info) {
@@ -48,8 +30,7 @@ int AMLogManager::TraceLevel(int value) {
 
 /** Write a log entry to disk using the background writer thread. */
 void AMLogManager::WriteLogEntry_(const TraceInfo &info) {
-  if (ToLevelInt(info.level) >
-      trace_level_.load(std::memory_order_relaxed)) {
+  if (ToLevelInt(info.level) > trace_level_.load(std::memory_order_relaxed)) {
     return;
   }
 

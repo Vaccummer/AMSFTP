@@ -9,15 +9,25 @@
 
 class AMLogManager : private NonCopyableNonMovable {
 public:
-  explicit AMLogManager();
-  /** Return the singleton instance (requires a valid config manager). */
+  /** Initialize log manager with settings and resolve log path. */
+  explicit AMLogManager() {
+    int initial = config_.ResolveArg<int>(
+        DocumentKind::Settings, {"InternalVars", "TraceLevel"}, 4,
+        [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
+    trace_level_.store(initial, std::memory_order_relaxed);
+    auto root = config_.ProjectRoot();
+    log_path_ = root.empty() ? std::filesystem::path("AMSFTP.log")
+                             : root / "AMSFTP.log";
+  }
+
+  /** Cleanup log manager resources. */
+  ~AMLogManager() override = default;
+
+  /** Return the singleton instance. */
   static AMLogManager &Instance() {
     static AMLogManager instance;
     return instance;
   }
-
-  /** Cleanup log manager resources. */
-  ~AMLogManager();
 
   /** Enqueue a trace entry for asynchronous logging. */
   void Enqueue(const TraceInfo &info);

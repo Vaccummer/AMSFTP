@@ -289,9 +289,9 @@ private:
                      size_t *entry_index) const;
 
 private:
-  AMConfigManager &config_;
-  AMClientManager &client_manager_;
-  AMPromptManager &prompt_;
+  AMConfigManager &config_ = AMConfigManager::Instance();
+  AMClientManager &client_manager_ = AMClientManager::Instance();
+  AMPromptManager &prompt_ = AMPromptManager::Instance();
   AMWorkManager worker_;
   mutable std::mutex idle_mtx_;
   std::unordered_map<ID, std::list<std::shared_ptr<BaseClient>>> idle_pool_;

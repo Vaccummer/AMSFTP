@@ -1,6 +1,5 @@
 #pragma once
 #include "AMBase/Enum.hpp"
-#include "AMManager/Config.hpp"
 #include "AMManager/Var.hpp"
 #include <string>
 #include <utility>
@@ -19,10 +18,12 @@ public:
     bool async = false;
   };
 
-  /**
-   * @brief Construct a command preprocessor bound to a config manager.
-   */
-  explicit AMCommandPreprocessor(AMConfigManager &config_manager);
+  AMCommandPreprocessor() = default;
+
+  static AMCommandPreprocessor &Instance() {
+    static AMCommandPreprocessor instance;
+    return instance;
+  }
 
   /**
    * @brief Preprocess a raw interactive command line according to rules.
@@ -35,5 +36,5 @@ public:
   static std::vector<std::string> SplitCliTokens(const std::string &input);
 
 private:
-  AMVarManager &var_manager_;
+  AMVarManager &var_manager_ = AMVarManager::Instance();
 };

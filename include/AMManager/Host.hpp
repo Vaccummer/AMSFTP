@@ -204,6 +204,8 @@ public:
 
   [[nodiscard]] bool HostExists(const std::string &nickname) const;
 
+  [[nodiscard]] std::vector<std::string> ListNames() const;
+
   void CollectHosts_() const;
 
   [[nodiscard]] std::pair<ECM, std::vector<std::string>>
@@ -231,6 +233,6 @@ private:
   ECM PromptModifyFields_(const std::string &nickname, ClientConfig &entry);
   ECM AddHost_(const std::string &nickname, const ClientConfig &entry);
   ECM RemoveHost_(const std::string &nickname);
-  AMConfigManager &config_;
-  AMPromptManager &prompt_;
+  AMConfigManager &config_ = AMConfigManager::Instance();
+  AMPromptManager &prompt_ = AMPromptManager::Instance();
 };

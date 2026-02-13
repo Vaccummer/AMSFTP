@@ -227,7 +227,87 @@ public:
   }
 };
 
+/**
+ * @brief Forward declaration for DisplayWidthUtf8.
+ */
+
 namespace AMStr {
+/** Decode next UTF-8 codepoint; returns U+FFFD on error and advances index
+ * by 1. */
+inline uint32_t NextCodepointUtf8(const std::string &utf8_str, size_t &idx) {
+  const size_t str_len = utf8_str.size();
+  if (idx >= str_len) {
+    return 0;
+  }
+  const uint8_t c0 = static_cast<uint8_t>(utf8_str[idx]);
+  if ((c0 & 0x80) == 0) {
+    ++idx;
+    return c0;
+  }
+  if ((c0 & 0xE0) == 0xC0 && idx + 1 < str_len) {
+    const uint8_t c1 = static_cast<uint8_t>(utf8_str[idx + 1]);
+    if ((c1 & 0xC0) == 0x80) {
+      idx += 2;
+      return (static_cast<uint32_t>(c0 & 0x1F) << 6) |
+             (static_cast<uint32_t>(c1 & 0x3F));
+    }
+  } else if ((c0 & 0xF0) == 0xE0 && idx + 2 < str_len) {
+    const uint8_t c1 = static_cast<uint8_t>(utf8_str[idx + 1]);
+    const uint8_t c2 = static_cast<uint8_t>(utf8_str[idx + 2]);
+    if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80) {
+      idx += 3;
+      return (static_cast<uint32_t>(c0 & 0x0F) << 12) |
+             (static_cast<uint32_t>(c1 & 0x3F) << 6) |
+             (static_cast<uint32_t>(c2 & 0x3F));
+    }
+  } else if ((c0 & 0xF8) == 0xF0 && idx + 3 < str_len) {
+    const uint8_t c1 = static_cast<uint8_t>(utf8_str[idx + 1]);
+    const uint8_t c2 = static_cast<uint8_t>(utf8_str[idx + 2]);
+    const uint8_t c3 = static_cast<uint8_t>(utf8_str[idx + 3]);
+    if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80 && (c3 & 0xC0) == 0x80) {
+      idx += 4;
+      return (static_cast<uint32_t>(c0 & 0x07) << 18) |
+             (static_cast<uint32_t>(c1 & 0x3F) << 12) |
+             (static_cast<uint32_t>(c2 & 0x3F) << 6) |
+             (static_cast<uint32_t>(c3 & 0x3F));
+    }
+  }
+  ++idx;
+  return 0xFFFD;
+}
+
+/** Heuristic display width for a Unicode codepoint in monospace terminals. */
+inline size_t CodepointDisplayWidth(uint32_t cp) {
+  if (cp == 0) {
+    return 0;
+  }
+  // Combining marks (zero width)
+  if ((cp >= 0x0300 && cp <= 0x036F) || (cp >= 0x1AB0 && cp <= 0x1AFF) ||
+      (cp >= 0x1DC0 && cp <= 0x1DFF) || (cp >= 0x20D0 && cp <= 0x20FF) ||
+      (cp >= 0xFE20 && cp <= 0xFE2F)) {
+    return 0;
+  }
+  // Wide characters (CJK/emoji/box drawing) treated as width 2.
+  if ((cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2329 && cp <= 0x232A) ||
+      (cp >= 0x2E80 && cp <= 0xA4CF) || (cp >= 0xAC00 && cp <= 0xD7A3) ||
+      (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0xFE10 && cp <= 0xFE19) ||
+      (cp >= 0xFE30 && cp <= 0xFE6F) || (cp >= 0xFF00 && cp <= 0xFF60) ||
+      (cp >= 0xFFE0 && cp <= 0xFFE6) || (cp >= 0x2600 && cp <= 0x27BF) ||
+      (cp >= 0x1F1E6 && cp <= 0x1F1FF) || (cp >= 0x1F300 && cp <= 0x1FAFF)) {
+    return 2;
+  }
+  return 1;
+}
+inline size_t DisplayWidthUtf8(const std::string &utf8_str) {
+  size_t width = 0;
+  size_t idx = 0;
+  while (idx < utf8_str.size()) {
+    const uint32_t cp = NextCodepointUtf8(utf8_str, idx);
+    width += CodepointDisplayWidth(cp);
+  }
+  return width;
+}
+
 inline void amfmt_append(std::string &out, const std::string &value) {
   out += value;
 }
@@ -264,19 +344,94 @@ inline void amfmt_append(std::string &out, T value) {
 }
 
 template <typename T>
-struct amfmt_allowed
-    : std::bool_constant<
-          std::disjunction_v<std::is_arithmetic<std::decay_t<T>>,
-                             std::is_same<std::decay_t<T>, std::string>,
-                             std::is_same<std::decay_t<T>, const char *>,
-                             std::is_same<std::decay_t<T>, char *>>> {};
+inline constexpr bool amfmt_allowed_v =
+    std::disjunction_v<std::is_arithmetic<std::decay_t<T>>,
+                       std::is_same<std::decay_t<T>, std::string>,
+                       std::is_same<std::decay_t<T>, const char *>,
+                       std::is_same<std::decay_t<T>, char *>>;
 
+/**
+ * @brief Convert a supported amfmt value into a string.
+ */
 template <typename T> inline std::string amfmt_to_string(T &&value) {
-  static_assert(amfmt_allowed<T>::value,
+  static_assert(amfmt_allowed_v<T>,
                 "amfmt only accepts string, char*, or integral types");
   std::string out;
   amfmt_append(out, std::forward<T>(value));
   return out;
+}
+
+/**
+ * @brief Parse a padding specification like "<5" into alignment and width.
+ */
+inline bool amfmt_parse_padding_spec(const std::string &spec, char *align_out,
+                                     size_t *width_out) {
+  if (!align_out || !width_out) {
+    return false;
+  }
+  if (spec.empty()) {
+    return false;
+  }
+  const char align = spec.front();
+  if (align != '<' && align != '>' && align != '^') {
+    return false;
+  }
+  if (spec.size() == 1) {
+    return false;
+  }
+  size_t width = 0;
+  for (size_t i = 1; i < spec.size(); ++i) {
+    const char c = spec[i];
+    if (c < '0' || c > '9') {
+      return false;
+    }
+    width = width * 10 + static_cast<size_t>(c - '0');
+  }
+  if (width == 0) {
+    return false;
+  }
+  *align_out = align;
+  *width_out = width;
+  return true;
+}
+
+/**
+ * @brief Apply padding to a string using the given alignment and width.
+ */
+inline std::string amfmt_apply_padding(const std::string &value, char align,
+                                       size_t width) {
+  const size_t current = DisplayWidthUtf8(value);
+  if (current >= width) {
+    return value;
+  }
+  const size_t padding = width - current;
+  if (align == '<') {
+    return value + std::string(padding, ' ');
+  }
+  if (align == '>') {
+    return std::string(padding, ' ') + value;
+  }
+  const size_t left = padding / 2;
+  const size_t right = padding - left;
+  return std::string(left, ' ') + value + std::string(right, ' ');
+}
+
+/**
+ * @brief Resolve a padding spec token like ":<5" or "<5".
+ */
+inline bool amfmt_parse_spec_token(const std::string &token, char *align_out,
+                                   size_t *width_out) {
+  if (!align_out || !width_out) {
+    return false;
+  }
+  if (token.empty()) {
+    return false;
+  }
+  if (token.front() == ':') {
+    const std::string inner = token.substr(1);
+    return amfmt_parse_padding_spec(inner, align_out, width_out);
+  }
+  return amfmt_parse_padding_spec(token, align_out, width_out);
 }
 
 inline size_t amfmt_count_placeholders(const std::string &templ) {
@@ -311,7 +466,7 @@ inline size_t amfmt_count_placeholders(const std::string &templ) {
 
 template <typename... Args>
 inline std::string amfmt(const std::string &templ, Args &&...args) {
-  static_assert((amfmt_allowed<Args>::value && ...),
+  static_assert((amfmt_allowed_v<Args> && ...),
                 "amfmt only accepts string, char*, or integral types");
   size_t placeholder_count = amfmt_count_placeholders(templ);
   constexpr size_t arg_count = sizeof...(Args);
@@ -340,15 +495,26 @@ inline std::string amfmt(const std::string &templ, Args &&...args) {
         continue;
       }
       size_t j = i + 1;
+      std::string token;
       for (; j < templ.size(); ++j) {
         if (templ[j] == '}') {
           if (arg_index >= values.size()) {
             throw std::runtime_error("amfmt: argument count mismatch");
           }
-          out += values[arg_index++];
+          std::string value = values[arg_index++];
+          if (!token.empty()) {
+            char align = 0;
+            size_t width = 0;
+            if (!amfmt_parse_spec_token(token, &align, &width)) {
+              throw std::runtime_error("amfmt: unsupported format specifier");
+            }
+            value = amfmt_apply_padding(value, align, width);
+          }
+          out += value;
           i = j;
           break;
         }
+        token.push_back(templ[j]);
       }
       if (j >= templ.size()) {
         throw std::runtime_error("amfmt: unmatched '{' in template");
@@ -468,83 +634,7 @@ inline size_t CharNum(const std::string &utf8_str) {
   return char_count;
 }
 
-/** Decode next UTF-8 codepoint; returns U+FFFD on error and advances index
- * by 1. */
-inline uint32_t NextCodepointUtf8(const std::string &utf8_str, size_t &idx) {
-  const size_t str_len = utf8_str.size();
-  if (idx >= str_len) {
-    return 0;
-  }
-  const uint8_t c0 = static_cast<uint8_t>(utf8_str[idx]);
-  if ((c0 & 0x80) == 0) {
-    ++idx;
-    return c0;
-  }
-  if ((c0 & 0xE0) == 0xC0 && idx + 1 < str_len) {
-    const uint8_t c1 = static_cast<uint8_t>(utf8_str[idx + 1]);
-    if ((c1 & 0xC0) == 0x80) {
-      idx += 2;
-      return (static_cast<uint32_t>(c0 & 0x1F) << 6) |
-             (static_cast<uint32_t>(c1 & 0x3F));
-    }
-  } else if ((c0 & 0xF0) == 0xE0 && idx + 2 < str_len) {
-    const uint8_t c1 = static_cast<uint8_t>(utf8_str[idx + 1]);
-    const uint8_t c2 = static_cast<uint8_t>(utf8_str[idx + 2]);
-    if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80) {
-      idx += 3;
-      return (static_cast<uint32_t>(c0 & 0x0F) << 12) |
-             (static_cast<uint32_t>(c1 & 0x3F) << 6) |
-             (static_cast<uint32_t>(c2 & 0x3F));
-    }
-  } else if ((c0 & 0xF8) == 0xF0 && idx + 3 < str_len) {
-    const uint8_t c1 = static_cast<uint8_t>(utf8_str[idx + 1]);
-    const uint8_t c2 = static_cast<uint8_t>(utf8_str[idx + 2]);
-    const uint8_t c3 = static_cast<uint8_t>(utf8_str[idx + 3]);
-    if ((c1 & 0xC0) == 0x80 && (c2 & 0xC0) == 0x80 && (c3 & 0xC0) == 0x80) {
-      idx += 4;
-      return (static_cast<uint32_t>(c0 & 0x07) << 18) |
-             (static_cast<uint32_t>(c1 & 0x3F) << 12) |
-             (static_cast<uint32_t>(c2 & 0x3F) << 6) |
-             (static_cast<uint32_t>(c3 & 0x3F));
-    }
-  }
-  ++idx;
-  return 0xFFFD;
-}
-
-/** Heuristic display width for a Unicode codepoint in monospace terminals. */
-inline size_t CodepointDisplayWidth(uint32_t cp) {
-  if (cp == 0) {
-    return 0;
-  }
-  // Combining marks (zero width)
-  if ((cp >= 0x0300 && cp <= 0x036F) || (cp >= 0x1AB0 && cp <= 0x1AFF) ||
-      (cp >= 0x1DC0 && cp <= 0x1DFF) || (cp >= 0x20D0 && cp <= 0x20FF) ||
-      (cp >= 0xFE20 && cp <= 0xFE2F)) {
-    return 0;
-  }
-  // Wide characters (CJK/emoji/box drawing) treated as width 2.
-  if ((cp >= 0x1100 && cp <= 0x115F) || (cp >= 0x2329 && cp <= 0x232A) ||
-      (cp >= 0x2E80 && cp <= 0xA4CF) || (cp >= 0xAC00 && cp <= 0xD7A3) ||
-      (cp >= 0xF900 && cp <= 0xFAFF) || (cp >= 0xFE10 && cp <= 0xFE19) ||
-      (cp >= 0xFE30 && cp <= 0xFE6F) || (cp >= 0xFF00 && cp <= 0xFF60) ||
-      (cp >= 0xFFE0 && cp <= 0xFFE6) || (cp >= 0x2600 && cp <= 0x27BF) ||
-      (cp >= 0x1F1E6 && cp <= 0x1F1FF) || (cp >= 0x1F300 && cp <= 0x1FAFF)) {
-    return 2;
-  }
-  return 1;
-}
-
 /** Display width for a UTF-8 string (accounts for wide and combining chars). */
-inline size_t DisplayWidthUtf8(const std::string &utf8_str) {
-  size_t width = 0;
-  size_t idx = 0;
-  while (idx < utf8_str.size()) {
-    const uint32_t cp = NextCodepointUtf8(utf8_str, idx);
-    width += CodepointDisplayWidth(cp);
-  }
-  return width;
-}
 
 /**
  * Repeat a UTF-8 token (e.g., a single box-drawing glyph) for the given count.
@@ -1686,7 +1776,7 @@ inline static bool SetKey(nlohmann::ordered_json &root,
   return false;
 }
 
-bool DelKey(Json &root, const std::vector<std::string> &path) {
+inline bool DelKey(Json &root, const std::vector<std::string> &path) {
   if (path.empty()) {
     return false;
   }

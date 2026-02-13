@@ -1,10 +1,6 @@
 
 #include "AMCLI/CLIBind.hpp"
-#include "AMCLI/Completer.hpp"
-#include "AMManager/SignalMonitor.hpp"
-#include "AMManager/Var.hpp"
 #include <type_traits>
-#include <unordered_set>
 
 int g_cli_exit_code = 0;
 

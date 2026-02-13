@@ -1,5 +1,6 @@
 #include "AMManager/Var.hpp"
 #include "AMBase/CommonTools.hpp"
+#include "AMManager/Config.hpp"
 #include <algorithm>
 #include <unordered_set>
 
@@ -26,22 +27,150 @@ const Json *FindJsonNode(const Json &root, const Path &path) {
   }
   return node;
 }
-} // namespace
 
 /**
- * @brief Return the singleton variable manager bound to a config manager.
+ * @brief Return true if a character is valid inside a variable name.
  */
-AMVarManager &AMVarManager::Instance(AMConfigManager &config_manager) {
-  static AMVarManager instance(config_manager);
-  return instance;
+bool IsVarNameChar_(char c) {
+  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+         (c >= '0' && c <= '9') || c == '_';
 }
 
 /**
- * @brief Construct a variable manager tied to the config manager.
+ * @brief Return true if a variable name is non-empty and valid.
  */
-AMVarManager::AMVarManager(AMConfigManager &config_manager)
-    : config_manager_(config_manager),
-      prompt_manager_(AMPromptManager::Instance()) {}
+bool IsValidVarName_(const std::string &name) {
+  if (name.empty()) {
+    return false;
+  }
+  for (char c : name) {
+    if (!IsVarNameChar_(c)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * @brief Parse a variable token like $name or ${ name }.
+ */
+ECM ParseVarToken_(const std::string &token, std::string *name) {
+  if (!name) {
+    return {EC::InvalidArg, "Null output pointer"};
+  }
+  std::string trimmed = AMStr::Strip(token);
+  if (trimmed.empty()) {
+    return {EC::InvalidArg, "Empty variable token"};
+  }
+  if (trimmed.find('=') != std::string::npos) {
+    return {EC::InvalidArg, "Invalid variable token"};
+  }
+  if (trimmed.front() != '$') {
+    return {EC::InvalidArg, "Variable token must start with $"};
+  }
+  if (trimmed.size() < 2) {
+    return {EC::InvalidArg, "Invalid variable token"};
+  }
+
+  if (trimmed[1] == '{') {
+    if (trimmed.back() != '}') {
+      return {EC::InvalidArg, "Unclosed ${...} expression"};
+    }
+    std::string inner = AMStr::Strip(trimmed.substr(2, trimmed.size() - 3));
+    if (!IsValidVarName_(inner)) {
+      return {EC::InvalidArg,
+              "Invalid variable name: only letters, digits, and _ are "
+              "allowed"};
+    }
+    *name = inner;
+    return {EC::Success, ""};
+  }
+
+  std::string inner = trimmed.substr(1);
+  if (!IsValidVarName_(inner)) {
+    return {EC::InvalidArg,
+            "Invalid variable name: only letters, digits, and _ are allowed"};
+  }
+  *name = inner;
+  return {EC::Success, ""};
+}
+
+/**
+ * @brief Normalize a raw value by trimming and stripping paired quotes.
+ */
+ECM ParseValue_(const std::string &input, std::string *value) {
+  if (!value) {
+    return {EC::InvalidArg, "Null output pointer"};
+  }
+  std::string trimmed = AMStr::Strip(input);
+  if (trimmed.empty()) {
+    *value = "";
+    return {EC::Success, ""};
+  }
+
+  const char first = trimmed.front();
+  const char last = trimmed.back();
+  const bool starts_quote = first == '"' || first == '\'';
+  const bool ends_quote = last == '"' || last == '\'';
+
+  if (starts_quote || ends_quote) {
+    if (trimmed.size() < 2 || first != last) {
+      return {EC::InvalidArg, "Malformed quoted value"};
+    }
+    *value = trimmed.substr(1, trimmed.size() - 2);
+    if (!value->empty()) {
+      std::string unescaped;
+      unescaped.reserve(value->size());
+      for (size_t i = 0; i < value->size(); ++i) {
+        if ((*value)[i] == '`' && i + 1 < value->size() &&
+            ((*value)[i + 1] == '"' || (*value)[i + 1] == '\'')) {
+          unescaped.push_back((*value)[i + 1]);
+          ++i;
+          continue;
+        }
+        unescaped.push_back((*value)[i]);
+      }
+      *value = std::move(unescaped);
+    }
+    return {EC::Success, ""};
+  }
+
+  std::string unescaped;
+  unescaped.reserve(trimmed.size());
+  for (size_t i = 0; i < trimmed.size(); ++i) {
+    if (trimmed[i] == '`' && i + 1 < trimmed.size() &&
+        (trimmed[i + 1] == '"' || trimmed[i + 1] == '\'')) {
+      unescaped.push_back(trimmed[i + 1]);
+      ++i;
+      continue;
+    }
+    unescaped.push_back(trimmed[i]);
+  }
+  *value = std::move(unescaped);
+  return {EC::Success, ""};
+}
+
+/**
+ * @brief Parse variable tokens into validated variable names.
+ */
+ECM ParseVarNames_(const std::vector<std::string> &tokens,
+                   std::vector<std::string> *names) {
+  if (!names) {
+    return {EC::InvalidArg, "Null output pointer"};
+  }
+  names->clear();
+  names->reserve(tokens.size());
+  for (const auto &token : tokens) {
+    std::string name;
+    ECM rcm = ParseVarToken_(token, &name);
+    if (rcm.first != EC::Success) {
+      return rcm;
+    }
+    names->push_back(name);
+  }
+  return {EC::Success, ""};
+}
+} // namespace
 
 /**
  * @brief Return true if an in-memory variable exists.
@@ -172,8 +301,8 @@ AMVarManager::ListUserVars() const {
 /**
  * @brief Set a persistent variable and optionally dump settings.
  */
-ECM AMVarManager::SetUserVar(const std::string &name,
-                             const std::string &value, bool dump_now) {
+ECM AMVarManager::SetUserVar(const std::string &name, const std::string &value,
+                             bool dump_now) {
   if (name.empty()) {
     return Err(EC::InvalidArg, "Empty variable name");
   }
@@ -285,7 +414,7 @@ ECM AMVarManager::Query(const std::vector<std::string> &names) {
     bool found = false;
     std::string value;
     VarSource source = VarSource::Memory;
-  if (Resolve(name, &value, &source)) {
+    if (Resolve(name, &value, &source)) {
       if (source == VarSource::Memory) {
         PrintQueryLine("InMemory", name, value);
       } else {
@@ -315,6 +444,55 @@ ECM AMVarManager::Query(const std::vector<std::string> &names) {
     last_error = {EC::InvalidArg, "No matching variables"};
   }
   return last_error;
+}
+
+/**
+ * @brief Execute `var` command tokens (enumerate/query/assignment).
+ */
+ECM AMVarManager::ExecuteVarTokens(const std::vector<std::string> &tokens) {
+  if (tokens.empty()) {
+    return Enumerate();
+  }
+
+  const std::string remainder = AMStr::join(tokens, " ");
+  const size_t eq_pos = remainder.find('=');
+  if (eq_pos != std::string::npos) {
+    const std::string left = AMStr::Strip(remainder.substr(0, eq_pos));
+    const std::string right = remainder.substr(eq_pos + 1);
+    std::string name;
+    ECM rcm = ParseVarToken_(left, &name);
+    if (rcm.first != EC::Success) {
+      return rcm;
+    }
+    std::string parsed_value;
+    rcm = ParseValue_(right, &parsed_value);
+    if (rcm.first != EC::Success) {
+      return rcm;
+    }
+    return SetPersistentVar(name, parsed_value, true);
+  }
+
+  std::vector<std::string> names;
+  ECM rcm = ParseVarNames_(tokens, &names);
+  if (rcm.first != EC::Success) {
+    return rcm;
+  }
+  return Query(names);
+}
+
+/**
+ * @brief Execute `del` command tokens (parse names then delete).
+ */
+ECM AMVarManager::ExecuteDelTokens(const std::vector<std::string> &tokens) {
+  if (tokens.empty()) {
+    return {EC::InvalidArg, "del requires variable names"};
+  }
+  std::vector<std::string> names;
+  ECM rcm = ParseVarNames_(tokens, &names);
+  if (rcm.first != EC::Success) {
+    return rcm;
+  }
+  return Delete(names);
 }
 
 /**
@@ -364,7 +542,7 @@ ECM AMVarManager::Delete(const std::vector<std::string> &names) {
   }
 
   if (storage_changed) {
-    ECM rcm = config_manager_.Dump();
+    ECM rcm = config_manager_.Dump(DocumentKind::Settings);
     if (rcm.first != EC::Success) {
       last_error = rcm;
     }

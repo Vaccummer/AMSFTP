@@ -1,5 +1,4 @@
 #pragma once
-#include "AMBase/Enum.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
 #include <mutex>
@@ -14,7 +13,10 @@ public:
   /**
    * @brief Return the singleton variable manager bound to a config manager.
    */
-  static AMVarManager &Instance(AMConfigManager &config_manager);
+  static AMVarManager &Instance() {
+    static AMVarManager instance;
+    return instance;
+  };
 
   /**
    * @brief Set or overwrite an in-memory variable, confirming overwrites.
@@ -62,6 +64,16 @@ public:
   ECM Query(const std::vector<std::string> &names);
 
   /**
+   * @brief Execute `var` command tokens (enumerate/query/assignment).
+   */
+  ECM ExecuteVarTokens(const std::vector<std::string> &tokens);
+
+  /**
+   * @brief Execute `del` command tokens (parse names then delete).
+   */
+  ECM ExecuteDelTokens(const std::vector<std::string> &tokens);
+
+  /**
    * @brief Delete variables from memory and storage, confirming per key.
    */
   ECM Delete(const std::vector<std::string> &names);
@@ -85,7 +97,7 @@ private:
   /**
    * @brief Construct a variable manager tied to the config manager.
    */
-  explicit AMVarManager(AMConfigManager &config_manager);
+  explicit AMVarManager() = default;
 
   /**
    * @brief Ask the user to confirm overwriting an existing variable.
@@ -119,8 +131,8 @@ private:
    */
   void LogNotFound(const std::string &name) const;
 
-  AMConfigManager &config_manager_;
-  AMPromptManager &prompt_manager_;
+  AMConfigManager &config_manager_ = AMConfigManager::Instance();
+  AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
   mutable std::mutex mutex_;
   std::unordered_map<std::string, std::string> memory_vars_;
 };
