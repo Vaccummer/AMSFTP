@@ -1,4 +1,5 @@
 #include "AMCLI/Completer/Proxy.hpp"
+#include "AMCLI/Completer/Engine.hpp"
 #include "Isocline/isocline.h"
 #include <atomic>
 #include <string>
@@ -13,7 +14,10 @@ std::atomic<AMCompleter *> g_active_completer{nullptr};
 /**
  * @brief Construct completer facade.
  */
-AMCompleter::AMCompleter() { SetActive(this); }
+AMCompleter::AMCompleter() {
+  engine_ = std::make_unique<AMCompleteEngine>();
+  SetActive(this);
+}
 
 /**
  * @brief Stop the async worker and release resources.
@@ -21,22 +25,17 @@ AMCompleter::AMCompleter() { SetActive(this); }
 AMCompleter::~AMCompleter() { SetActive(nullptr); }
 
 /**
- * @brief Initialize completer state.
- */
-void AMCompleter::Init() { Install(); }
-
-/**
  * @brief Install completer callback and apply configuration.
  */
 void AMCompleter::Install() {
-  engine_.Install(this);
-  engine_.LoadConfig();
+  engine_->Install(this);
+  engine_->LoadConfig();
 }
 
 /**
  * @brief Clear any cached completion results.
  */
-void AMCompleter::ClearCache() { engine_.ClearCache(); }
+void AMCompleter::ClearCache() { engine_->ClearCache(); }
 
 /**
  * @brief Return the currently active completer instance.
@@ -70,8 +69,6 @@ void AMCompleter::IsoclineCompleter(ic_completion_env_t *cenv,
   if (!input || cursor < 0) {
     return;
   }
-  self->engine_.HandleCompletion(cenv, std::string(input),
-                                 static_cast<size_t>(cursor));
+  self->engine_->HandleCompletion(cenv, std::string(input),
+                                  static_cast<size_t>(cursor));
 }
-
-

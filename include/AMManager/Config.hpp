@@ -2,18 +2,15 @@
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/RustTomlRead.h"
-// #include "AMManager/Prompt.hpp"
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
-#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <handleapi.h>
 #include <mutex>
 #include <optional>
 #include <queue>
-#include <regex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -379,7 +376,6 @@ private:
   std::atomic<bool> shutdown_requested_{false};
   bool backup_prune_checked_ = false;
   DumpErrorCallback dump_error_cb_;
-  std::regex nickname_pattern_{"^[A-Za-z0-9_-]+$"};
   bool initialized_ = false;
 };
 
@@ -389,6 +385,19 @@ private:
 class AMConfigManager : public AMConfigStorage, NonCopyableNonMovable {
 public:
   AMConfigManager() = default;
+  static AMConfigManager &Instance() {
+    static AMConfigManager instance;
+    return instance;
+  };
+
+  ECM Init() override {
+    std::string root_dir = "";
+    if (!GetEnv("AMSFTP_ROOT", &root_dir)) {
+      return Err(EC::ProgrammInitializeFailed,
+                 "Failed to get $AMSFTP_ROOT environment variable");
+    }
+    return AMInit(std::filesystem::path(root_dir));
+  };
 
   /**
    * @brief Apply a named style to a string with optional path context.
@@ -419,21 +428,6 @@ public:
   [[nodiscard]] std::string
   FormatUtf8Table(const std::vector<std::string> &keys,
                   const std::vector<std::vector<std::string>> &rows) const;
-
-  static AMConfigManager &Instance() {
-    static AMConfigManager instance;
-    return instance;
-  };
-
-  void Init() override {
-    std::string root_dir = "";
-    if (!GetEnv("AMSFTP_ROOT", &root_dir)) {
-      std::cerr << "Failed to get $AMSFTP_ROOT environment variable"
-                << std::endl;
-      std::exit(-1);
-    }
-    AMInit(std::filesystem::path(root_dir));
-  };
 
 private:
   /**

@@ -1,7 +1,6 @@
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/Path.hpp"
 #include "AMManager/Config.hpp"
-#include <array>
 #include <fstream>
 #include <limits>
 #include <optional>
@@ -464,7 +463,7 @@ void PruneBackupFiles_(const std::filesystem::path &dir,
 } // namespace
 
 /** @brief JSON schema used to validate .AMSFTP_History.toml. */
-inline constexpr const char kHistorySchemaJson[] = R"json(
+inline constexpr char kHistorySchemaJson[250] = R"json(
 {
   "type": "object",
   "additionalProperties": {
@@ -513,7 +512,6 @@ ECM AMConfigStorage::AMInit(
   CloseHandles();
   root_dir_ = root_dir;
   docs_.clear();
-
   auto init_doc = [&](DocumentKind kind, const std::filesystem::path &fallback,
                       const std::filesystem::path &schema_fallback) {
     DocumentState &doc = docs_[kind];
@@ -540,7 +538,6 @@ ECM AMConfigStorage::AMInit(
   shutdown_requested_.store(false, std::memory_order_relaxed);
   StartWriteThread();
   initialized_ = true;
-
   return Load();
 }
 
@@ -563,10 +560,7 @@ ECM AMConfigStorage::Load(std::optional<DocumentKind> kind, bool force) {
     return load_single(kind.value());
   }
 
-  static const std::array<DocumentKind, 4> kAllKinds = {
-      DocumentKind::Config, DocumentKind::Settings, DocumentKind::KnownHosts,
-      DocumentKind::History};
-  for (DocumentKind current : kAllKinds) {
+  for (DocumentKind current : magic_enum::enum_values<DocumentKind>()) {
     ECM rcm = load_single(current);
     if (rcm.first != EC::Success) {
       return rcm;

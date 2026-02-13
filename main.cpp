@@ -85,9 +85,10 @@ int main(int argc, char **argv) {
 
     auto &config_manager = AMConfigManager::Instance();
     config_manager.Init();
+    auto &prompt_manager = AMPromptManager::Instance();
+    prompt_manager.Init();
     auto &hostm = AMHostManager::Instance();
     hostm.Init();
-
     auto &client_manager = AMClientManager::Instance();
     client_manager.Init();
     auto &filesystem = AMFileSystem::Instance();

@@ -193,7 +193,10 @@ public:
     static AMHostManager instance;
     return instance;
   }
-  void Init() override { CollectHosts_(); };
+  ECM Init() override {
+    CollectHosts_();
+    return Ok();
+  };
 
   [[nodiscard]] std::pair<ECM, ClientConfig>
   GetClientConfig(const std::string &nickname);

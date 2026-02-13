@@ -153,7 +153,10 @@ inline std::string FormatTimeHM(double timestamp) {
 }
 
 /** @brief Return a success ECM. */
-inline ECM Ok() { return {EC::Success, ""}; }
+inline ECM Ok() {
+  const static ECM ok_instance{EC::Success, ""};
+  return ok_instance;
+}
 
 /** @brief Build an error ECM with message. */
 inline ECM Err(EC code, const std::string &msg) { return {code, msg}; }
@@ -988,5 +991,5 @@ public:
   NonCopyableNonMovable(NonCopyableNonMovable &&) = delete;
   NonCopyableNonMovable &operator=(NonCopyableNonMovable &&) = delete;
 
-  virtual void Init() {}
+  virtual ECM Init() { return {EC::Success, ""}; } // 可选的初始化接口
 };
