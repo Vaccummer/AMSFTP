@@ -1,6 +1,8 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
-#include "AMCLI/Completer/Engine.hpp"
+
+class AMCompleteEngine;
+struct ic_completion_env_s;
 
 /**
  * @brief Completion coordinator for interactive input.
@@ -20,7 +22,13 @@ public:
   /**
    * @brief Initialize completer state.
    */
-  void Init() override;
+  /**
+   * @brief Initialize completer state.
+   */
+  ECM Init() override {
+    Install();
+    return Ok();
+  }
 
   /**
    * @brief Install completer callback and apply configuration.
@@ -44,10 +52,8 @@ public:
    */
   static void SetActive(AMCompleter *instance);
 
-  static void IsoclineCompleter(ic_completion_env_t *cenv, const char *prefix);
+  static void IsoclineCompleter(ic_completion_env_s *cenv, const char *prefix);
 
 private:
-  AMCompleteEngine engine_{};
+  std::unique_ptr<AMCompleteEngine> engine_;
 };
-
-

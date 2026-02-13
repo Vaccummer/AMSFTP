@@ -106,18 +106,19 @@ void Operator::SetCurrentClient(const std::shared_ptr<BaseClient> &client) {
   current_client_ = client;
 }
 
-void Operator::ConfigureState(
-    const std::shared_ptr<ClientMaintainer> &clients,
-    const std::shared_ptr<BaseClient> &local_client_base, ssize_t trace_num) {
-  clients_ = clients;
-  local_client_base_ = local_client_base;
-  current_client_ = local_client_base;
-  trace_num_ = trace_num;
-  if (clients_) {
-    clients_->disconnect_cb = disconnect_cb_;
-    clients_->is_disconnect_cb = static_cast<bool>(disconnect_cb_);
-  }
-}
+// void Operator::ConfigureState(
+//     const std::shared_ptr<ClientMaintainer> &clients,
+//     const std::shared_ptr<BaseClient> &local_client_base, ssize_t trace_num)
+//     {
+//   clients_ = clients;
+//   local_client_base_ = local_client_base;
+//   current_client_ = local_client_base;
+//   trace_num_ = trace_num;
+//   if (clients_) {
+//     clients_->disconnect_cb = disconnect_cb_;
+//     clients_->is_disconnect_cb = static_cast<bool>(disconnect_cb_);
+//   }
+// }
 
 void Operator::ResetSpinnerState() {
   spinner_stop_requested_.store(false, std::memory_order_relaxed);
@@ -175,9 +176,9 @@ Operator::AddClient(const std::string &nickname,
     return {Ok(), existing};
   }
 
-  auto client_config = hostm_.GetClientConfig(nickname);
-  if (client_config.first.first != EC::Success) {
-    return {client_config.first, nullptr};
+  auto [rcm2, client_config] = hostm_.GetClientConfig(nickname);
+  if (rcm2.first != EC::Success) {
+    return {rcm2, nullptr};
   }
 
   auto keys_result = hostm_.PrivateKeys(false);
@@ -189,9 +190,8 @@ Operator::AddClient(const std::string &nickname,
   ResetSpinnerState();
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, &spinner_running);
   auto base_client = CreateClient(
-      client_config.second.request, client_config.second.protocol, trace_num_,
-      std::move(trace_cb), client_config.second.buffer_size, keys_result.second,
-      std::move(auth_cb));
+      client_config.request, client_config.protocol, 10, std::move(trace_cb),
+      client_config.buffer_size, keys_result.second, std::move(auth_cb));
   if (!base_client) {
     return {Err(EC::OperationUnsupported, "Unsupported protocol"), nullptr};
   }
@@ -233,8 +233,7 @@ Operator::AddClient(const std::string &nickname,
     return {rcm, base_client};
   }
 
-  ApplyLoginDir_(hostm_, nickname, base_client, client_config.second.login_dir,
-                 flag);
+  ApplyLoginDir_(hostm_, nickname, base_client, client_config.login_dir, flag);
   target.add_client(nickname, base_client, true);
   return {Ok(), base_client};
 }
@@ -269,10 +268,10 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
   std::atomic<bool> spinner_running(false);
   ResetSpinnerState();
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, &spinner_running);
-  auto base_client = CreateClient(
-      client_config.second.request, client_config.second.protocol, trace_num_,
-      std::move(trace_cb), client_config.second.buffer_size, keys_result.second,
-      std::move(auth_cb));
+  auto base_client =
+      CreateClient(client_config.second.request, client_config.second.protocol,
+                   10, std::move(trace_cb), client_config.second.buffer_size,
+                   keys_result.second, std::move(auth_cb));
   if (!base_client) {
     return {Err(EC::OperationUnsupported, "Unsupported protocol"), nullptr};
   }
@@ -378,9 +377,9 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
     trace_cb = log_manager_.TraceCallbackFunc();
   }
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, nullptr);
-  auto base_client = CreateClient(
-      request, protocol, trace_num_, std::move(trace_cb),
-      AMDefaultRemoteBufferSize, std::move(keys), std::move(auth_cb));
+  auto base_client = CreateClient(request, protocol, 10, std::move(trace_cb),
+                                  AMDefaultRemoteBufferSize, std::move(keys),
+                                  std::move(auth_cb));
   if (!base_client) {
     return {Err(EC::OperationUnsupported, "Unsupported protocol"), nullptr};
   }
@@ -585,7 +584,7 @@ Operator::CreateLocalClient_(AMHostManager &hostm, AMLogManager &log_manager) {
   auto trace_cb = log_manager.TraceCallbackFunc();
 
   auto [rcm, cfg] = hostm.GetLocalConfig();
-  auto client_t = CreateClient(cfg.request, ClientProtocol::LOCAL, trace_num_,
+  auto client_t = CreateClient(cfg.request, ClientProtocol::LOCAL, 10,
                                std::move(trace_cb), cfg.buffer_size, {}, {});
   if (!client_t) {
     std::cerr << "Failed to create local client: Unsupported protocol"

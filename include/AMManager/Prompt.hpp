@@ -94,9 +94,13 @@ class AMPromptManager : public AMHistoryManager, NonCopyableNonMovable {
 public:
   static AMPromptManager &Instance();
 
-  ~AMPromptManager();
+  ~AMPromptManager() override = default;
 
-  void Init() override;
+  ECM Init() override {
+    InitIsoclineConfig();
+    CollectHistory_();
+    return Ok();
+  }
 
   void Print(const std::vector<std::string> &items,
              const std::string &sep = " ", const std::string &end = "\n");

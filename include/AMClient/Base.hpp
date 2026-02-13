@@ -9,17 +9,18 @@
 #include <cstdio>
 #include <ctime>
 #include <fcntl.h>
-#include <random>
 #include <fstream>
 #include <iostream>
 #include <list>
 #include <memory>
 #include <mutex>
+#include <random>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
 
 // 自身依赖
 #include "AMBase/DataClass.hpp"
@@ -199,8 +200,7 @@ public:
    * @return True when the value is written.
    */
   [[nodiscard]] bool SetPulbicValue(const std::string &key,
-                                    const std::string &value,
-                                    bool force) {
+                                    const std::string &value, bool force) {
     std::lock_guard<std::recursive_mutex> lock(public_kv_mtx);
     auto it = public_kv.find(key);
     if (it != public_kv.end() && !force) {

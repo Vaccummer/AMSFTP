@@ -9,6 +9,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <sys/stat.h>
 
 #ifdef _WIN32
 #include <conio.h>
@@ -63,6 +64,23 @@ void PromptNoComplete_(ic_completion_env_t *cenv, const char *prefix) {
   (void)cenv;
   (void)prefix;
 }
+
+static const std::string inputsetroot = "InputSet";
+static const std::vector<std::string> color_p = {inputsetroot,
+                                                 "builtin_prompt_color"};
+static const std::vector<std::string> prompt_marker_p = {inputsetroot,
+                                                         "prompt_marker"};
+static const std::vector<std::string> continuation_prompt_marker_p = {
+    inputsetroot, "continuation_prompt_marker"};
+static const std::vector<std::string> max_history_count_p = {
+    inputsetroot, "max_history_count"};
+static const std::vector<std::string> enable_multiline_p = {inputsetroot,
+                                                            "enable_multiline"};
+static const std::vector<std::string> enable_history_duplicates_p = {
+    inputsetroot, "enable_history_duplicates"};
+static const std::string default_promtpt_color = "#FFFFFF";
+static const std::string ickey = "ic-prompt";
+
 } // namespace
 
 AMPromptManager &AMPromptManager::Instance() {
@@ -70,30 +88,25 @@ AMPromptManager &AMPromptManager::Instance() {
   return instance;
 }
 
-AMPromptManager::~AMPromptManager() = default;
-
 void AMPromptManager::InitIsoclineConfig() {
   std::string a = "";
   std::string b = "";
-  config_.ResolveArg(DocumentKind::Settings, {"InputSet", "prompt_marker"}, &a);
-  config_.ResolveArg(DocumentKind::Settings,
-                     {"InputSet", "continuation_prompt_marker"}, &b);
+  config_.ResolveArg(DocumentKind::Settings, prompt_marker_p, &a);
+  config_.ResolveArg(DocumentKind::Settings, continuation_prompt_marker_p, &b);
   ic_set_prompt_marker(a.c_str(), b.c_str());
-  a = "[#FFFFFF]";
-  config_.ResolveArg(DocumentKind::Settings, {"InputSet", "prompt_marker"}, &a);
-  ic_style_def("ic-prompt", a.c_str());
+  a = default_promtpt_color;
+  config_.ResolveArg(DocumentKind::Settings, color_p, &a);
+  ic_style_def(ickey.c_str(), a.c_str());
 
   bool tmp_bool = false;
-  config_.ResolveArg(DocumentKind::Settings, {"InputSet", "enable_multiline"},
-                     &tmp_bool);
+  config_.ResolveArg(DocumentKind::Settings, enable_multiline_p, &tmp_bool);
   ic_enable_multiline(tmp_bool);
-  config_.ResolveArg(DocumentKind::Settings,
-                     {"InputSet", "enable_history_duplicates"}, &tmp_bool);
+  config_.ResolveArg(DocumentKind::Settings, enable_history_duplicates_p,
+                     &tmp_bool);
   ic_enable_history_duplicates(tmp_bool);
 
   int tmp_int = 10;
-  config_.ResolveArg(DocumentKind::Settings, {"InputSet", "max_history_count"},
-                     &tmp_int);
+  config_.ResolveArg(DocumentKind::Settings, max_history_count_p, &tmp_int);
   tmp_int = std::min(std::max(1, tmp_int), 150);
   ic_set_history(nullptr, tmp_int);
 
@@ -118,11 +131,6 @@ void AMPromptManager::InitIsoclineConfig() {
   core_hook.priority = 100;
   core_hook.consume = true;
   AMCliSignalMonitor::Instance().RegisterHook("COREPROMPT", core_hook);
-}
-
-void AMPromptManager::Init() {
-  InitIsoclineConfig();
-  CollectHistory_();
 }
 
 void AMPromptManager::PrintRaw(const std::string &text, bool append_newline) {

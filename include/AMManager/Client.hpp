@@ -1,4 +1,5 @@
 #pragma once
+#include "AMBase/DataClass.hpp"
 #include "AMBase/Path.hpp"
 #include "AMClient/Base.hpp"
 #include "AMClient/IOCore.hpp"
@@ -82,7 +83,6 @@ protected:
   std::shared_ptr<BaseClient> current_client_;
   std::shared_ptr<BaseClient> local_client_base_;
   std::shared_ptr<ClientMaintainer> clients_;
-  ssize_t trace_num_ = 10;
   AuthCallback password_cb_ = {};
   DisconnectCallback disconnect_cb_ = {};
   mutable std::mutex auth_io_mtx_;
@@ -133,7 +133,21 @@ class Manager : public PathOps, private NonCopyableNonMovable {
 public:
   explicit Manager() = default;
 
-  void Init() override;
+  ECM Init() override {
+    SetPasswordCallback();
+    SetDisconnectCallback();
+    std::shared_ptr<BaseClient> local_client_base_ =
+        CreateLocalClient_(hostm_, log_manager_);
+    if (!local_client_base_) {
+      return Err(EC::ProgrammInitializeFailed, "Failed to create local client");
+    }
+    clients_ = std::make_shared<ClientMaintainer>(60, disconnect_cb_,
+                                                  local_client_base_);
+    clients_->disconnect_cb = disconnect_cb_;
+    clients_->is_disconnect_cb = static_cast<bool>(disconnect_cb_);
+    current_client_ = local_client_base_;
+    return Ok();
+  }
 
   static Manager &Instance() {
     static Manager instance;
