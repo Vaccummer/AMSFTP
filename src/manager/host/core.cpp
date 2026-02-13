@@ -25,13 +25,6 @@ std::string GetLocalUsername_() {
 }
 } // namespace
 
-AMHostManager::AMHostManager() = default;
-
-AMHostManager &AMHostManager::Instance() {
-  static AMHostManager instance;
-  return instance;
-}
-
 ECM AMHostManager::Save() {
   return config_.Dump(DocumentKind::Config, "", true);
 }

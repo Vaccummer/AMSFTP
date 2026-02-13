@@ -10,11 +10,10 @@
 #include <utility>
 #include <vector>
 
-class AMFileSystem : private NonCopyableNonMovable {
+class AMFileSystem : public NonCopyableNonMovable {
 public:
   using ECM = std::pair<ErrorCode, std::string>;
   /** Global interrupt flag used when no flag is provided. */
-  inline static amf global_interrupt_flag = std::make_shared<InterruptFlag>();
 
   /** Return the singleton instance. */
   static AMFileSystem &Instance() {

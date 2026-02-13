@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <handleapi.h>
@@ -387,10 +388,7 @@ private:
  */
 class AMConfigManager : public AMConfigStorage, NonCopyableNonMovable {
 public:
-  /**
-   * @brief Construct a style layer with no bound storage.
-   */
-  AMConfigManager();
+  AMConfigManager() = default;
 
   /**
    * @brief Apply a named style to a string with optional path context.
@@ -425,6 +423,16 @@ public:
   static AMConfigManager &Instance() {
     static AMConfigManager instance;
     return instance;
+  };
+
+  void Init() override {
+    std::string root_dir = "";
+    if (!GetEnv("AMSFTP_ROOT", &root_dir)) {
+      std::cerr << "Failed to get $AMSFTP_ROOT environment variable"
+                << std::endl;
+      std::exit(-1);
+    }
+    AMInit(std::filesystem::path(root_dir));
   };
 
 private:

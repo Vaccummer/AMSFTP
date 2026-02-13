@@ -5,7 +5,6 @@
 #include "AMManager/Host.hpp"
 #include "AMManager/Logger.hpp"
 #include "AMManager/Prompt.hpp"
-#include "AMManager/SignalMonitor.hpp"
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -33,8 +32,6 @@ public:
   ClientMaintainer &Clients();
   [[nodiscard]] std::vector<std::string> GetClientNames();
   [[nodiscard]] std::vector<std::shared_ptr<BaseClient>> GetClients();
-  [[nodiscard]] std::pair<ECM, ClientConfig>
-  GetClientConfig(const std::string &nickname);
   [[nodiscard]] std::shared_ptr<AMLocalClient> LocalClient() const;
   [[nodiscard]] std::shared_ptr<BaseClient> LocalClientBase() const;
   [[nodiscard]] std::shared_ptr<BaseClient> CurrentClient() const;
@@ -100,6 +97,8 @@ protected:
                                  const ECM &ecm);
   AuthCallback BuiltinPasswordCallback_();
   DisconnectCallback BuiltinDisconnectCallback_();
+  std::shared_ptr<BaseClient> CreateLocalClient_(AMHostManager &hostm,
+                                                 AMLogManager &log_manager);
 };
 
 class PathOps : public Operator {
@@ -132,15 +131,14 @@ public:
 
 class Manager : public PathOps, private NonCopyableNonMovable {
 public:
-  explicit Manager();
+  explicit Manager() = default;
+
+  void Init() override;
+
   static Manager &Instance() {
     static Manager instance;
     return instance;
   }
-
-private:
-  std::shared_ptr<AMLocalClient> CreateLocalClient_(AMHostManager &hostm,
-                                                    AMLogManager &log_manager);
 };
 
 } // namespace AMClientManage

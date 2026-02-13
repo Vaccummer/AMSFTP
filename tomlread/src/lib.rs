@@ -186,6 +186,9 @@ pub extern "C" fn cfgffi_write(
 
     // 应用更新：允许新增，但新增追加到末尾
     apply_json_updates_append_new(h.doc.as_item_mut(), &j);
+    // Hide intermediate parent tables when they only contain nested tables.
+    // This keeps output compact for path-shaped maps (for example known_hosts).
+    normalize_toml_layout(h.doc.as_item_mut());
 
     if let Err(e) = write_atomic(out_path, h.doc.to_string()) {
         set_err(format!("write file error: {e}"));
@@ -554,6 +557,53 @@ fn apply_json_updates_append_new(item: &mut Item, j: &J) {
                 }
             }
         },
+    }
+}
+
+/* ---------------- TOML layout normalization ---------------- */
+
+fn normalize_table_implicit(table: &mut Table, depth: usize) {
+    let keys: Vec<String> = table.iter().map(|(k, _)| k.to_string()).collect();
+    let mut has_table_child = false;
+    let mut has_non_table_child = false;
+
+    for key in keys {
+        if let Some(child) = table.get_mut(&key) {
+            match child {
+                Item::Table(child_table) => {
+                    has_table_child = true;
+                    normalize_table_implicit(child_table, depth + 1);
+                }
+                Item::ArrayOfTables(aot) => {
+                    has_non_table_child = true;
+                    for child_table in aot.iter_mut() {
+                        normalize_table_implicit(child_table, depth + 1);
+                    }
+                }
+                Item::Value(_) => {
+                    has_non_table_child = true;
+                }
+                _ => {
+                    has_non_table_child = true;
+                }
+            }
+        }
+    }
+
+    if depth > 0 && has_table_child && !has_non_table_child {
+        table.set_implicit(true);
+    }
+}
+
+fn normalize_toml_layout(item: &mut Item) {
+    match item {
+        Item::Table(table) => normalize_table_implicit(table, 0),
+        Item::ArrayOfTables(aot) => {
+            for table in aot.iter_mut() {
+                normalize_table_implicit(table, 0);
+            }
+        }
+        _ => {}
     }
 }
 
