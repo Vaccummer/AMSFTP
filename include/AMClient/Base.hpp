@@ -1,5 +1,5 @@
 #pragma once
-// 标准库
+// standard library
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -21,13 +21,12 @@
 #include <utility>
 #include <vector>
 
-// 自身依赖
+// project header
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
 #include "AMBase/Path.hpp"
-// 自身依赖
 
-// 第三方库
+// 3rd party library
 #include <curl/curl.h>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -36,29 +35,13 @@
 #include <openssl/rsa.h>
 
 // #define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR // in case mutex constructor is
-// not
-//                                              // supported
+// not constexpr in some environments (like pybind11's embedded MSVC 2015),
+// which causes static initialization failure
 
-#ifdef _WIN32
-extern std::atomic<bool> is_wsa_initialized;
-inline void cleanup_wsa() {
-  // 清理wsa，如果wsa已经初始化，则清理wsa
-  if (is_wsa_initialized.load(std::memory_order_relaxed)) {
-    WSACleanup();
-    is_wsa_initialized.store(false, std::memory_order_relaxed);
-  }
-}
-#endif
-
-inline bool isok(ECM &ecm) { return ecm.first == EC::Success; }
-inline bool isdir(const LIBSSH2_SFTP_ATTRIBUTES &attrs);
-inline bool isreg(const LIBSSH2_SFTP_ATTRIBUTES &attrs);
-inline bool IsValidKey(const std::string &key);
-
-inline std::array<char, 32> AMcharset = {'2', '3', '4', '5', '6', '7', '8', '9',
-                                         'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
-                                         'J', 'K', 'M', 'N', 'P', 'Q', 'R', 'S',
-                                         'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
+inline static const std::array<char, 32> AMcharset = {
+    '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C',
+    'D', 'E', 'F', 'G', 'H', 'J', 'K', 'M', 'N', 'P', 'Q',
+    'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
 constexpr size_t AMbase = sizeof(AMcharset) - 1;
 
 inline size_t GenerateUIDInt() {
@@ -103,26 +86,18 @@ private:
 };
 
 namespace fs = std::filesystem;
-using amf = std::shared_ptr<InterruptFlag>;
-using PathInfo = PathInfo;
-using PathType = PathType;
-using EC = ErrorCode;
-using ECM = std::pair<EC, std::string>;
-using TASKS = std::vector<TransferTask>;              // load_task返回类型
-using RMR = std::vector<std::pair<std::string, ECM>>; // rm函数的返回类型
-using BR = std::pair<bool, ECM>;                      // is_dir函数返回类型
-using SR = std::pair<ECM, PathInfo>;                  // stat函数返回类型
-using WRV = std::vector<PathInfo>;                    // iwalk函数返回类型
-using WRD = AMFS::WRD;                                // walk函数返回类型
+using RMR = std::vector<std::pair<std::string, ECM>>; // rm func return type
+using BR = std::pair<bool, ECM>;                      // is_dir func return type
+using SR = std::pair<ECM, PathInfo>;                  // stat func return type
+using WRV = std::vector<PathInfo>;                    // iwalk func return type
+using WRD = AMFS::WRD;                                // walk func return type
 using WRI = std::pair<WRV, AMFS::WER>;                // iwalk data + errors
 using WRDR = std::pair<WRD, AMFS::WER>;               // walk data + errors
-using WR = std::pair<ECM, WRI>;                       // iwalk函数返回类型
-using SIZER = std::pair<ECM, size_t>;                 // getsize函数返回类型
+using WR = std::pair<ECM, WRI>;                       // iwalk func return type
+using SIZER = std::pair<ECM, size_t>; // getsize func return type
 using TraceCallback = std::function<void(const TraceInfo &)>;
 using CR =
-    std::pair<ECM, std::pair<std::string, int>>; // ConductCmd函数返回类型
-// Wait result for non-blocking socket operations
-inline std::mutex AMlog_mutex;
+    std::pair<ECM, std::pair<std::string, int>>; // ConductCmd func return type
 
 class BasePathMatch {
 private:
@@ -140,9 +115,6 @@ private:
         AMFS::WalkErrorCallback error_callback = nullptr,
         amf interrupt_flag = nullptr, int timeout_ms = -1,
         int64_t start_time = -1) = 0;
-  std::string star_rep = "amspecial1123exchange2123for1233star4123dd";
-  std::string less_rep = "amspecial4123exchange3332for2less131aa";
-  std::string greater_rep = "amspecial721exchange623for511greater422ff";
 
   void _find(std::vector<PathInfo> &results, const PathInfo &path,
              const std::vector<std::string> &match_parts,
@@ -269,6 +241,10 @@ public:
 
   bool name_match(const std::string &name, const std::string &pattern) {
     // 将pattern中的*换成star_rep，<换成less_rep，>换成greater_rep
+    static const std::string star_rep = "XKSOX1S";
+    static const std::string less_rep = "SORBVs8";
+    static const std::string greater_rep = "YNBSkdu8";
+
     std::string pattern_new = pattern;
     pattern_new = _rep(pattern_new, "*", star_rep);
     pattern_new = _rep(pattern_new, "<", less_rep);
@@ -360,7 +336,7 @@ class AMTracer {
 private:
   TraceCallback trace_cb;
   std::list<TraceInfo> buffer = {};
-  std::recursive_mutex buffer_mutex;
+  std::mutex buffer_mutex;
   ssize_t capacity = 10;
   std::atomic<bool> is_trace_cb = false;
   std::atomic<bool> is_trace_pause = false;
@@ -369,8 +345,8 @@ private:
       {TraceLevel::Warning, "⚠️"},  {TraceLevel::Error, "❌"},
       {TraceLevel::Critical, "☠️"},
   };
+
   void WriteLog(const TraceInfo &trace_info) {
-    std::lock_guard<std::mutex> lock(AMlog_mutex);
     std::ofstream file("AMSFTP.log", std::ios::app);
     if (!file.is_open()) {
       return;
@@ -391,6 +367,7 @@ private:
 protected:
   ConRequst res_data;
   void push(const TraceInfo &value) {
+    std::lock_guard<std::mutex> lock(buffer_mutex);
     if (buffer.size() >= static_cast<size_t>(capacity)) {
       buffer.pop_front();
     }
@@ -401,7 +378,7 @@ protected:
 public:
   /** Thread-safe public key/value map for client metadata (lock with
    * public_kv_mtx). */
-  mutable std::recursive_mutex public_kv_mtx;
+  mutable std::mutex public_kv_mtx;
   std::unordered_map<std::string, std::string> public_kv;
 
   /**
@@ -412,7 +389,7 @@ public:
    */
   [[nodiscard]] bool GetPublicValue(const std::string &key,
                                     std::string *value) const {
-    std::lock_guard<std::recursive_mutex> lock(public_kv_mtx);
+    std::lock_guard<std::mutex> lock(public_kv_mtx);
     auto it = public_kv.find(key);
     if (it == public_kv.end()) {
       return false;
@@ -432,7 +409,7 @@ public:
    */
   [[nodiscard]] bool SetPulbicValue(const std::string &key,
                                     const std::string &value, bool force) {
-    std::lock_guard<std::recursive_mutex> lock(public_kv_mtx);
+    std::lock_guard<std::mutex> lock(public_kv_mtx);
     auto it = public_kv.find(key);
     if (it != public_kv.end() && !force) {
       return false;
@@ -449,12 +426,12 @@ public:
     this->is_trace_cb = static_cast<bool>(this->trace_cb);
   }
   size_t GetTraceNum() {
-    std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
+    std::lock_guard<std::mutex> lock(buffer_mutex);
     return buffer.size();
   }
 
   std::shared_ptr<TraceInfo> LastTrace() {
-    std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
+    std::lock_guard<std::mutex> lock(buffer_mutex);
     if (buffer.empty()) {
       return nullptr;
     }
@@ -471,7 +448,7 @@ public:
   }
 
   void ClearTracer() {
-    std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
+    std::lock_guard<std::mutex> lock(buffer_mutex);
     buffer.clear();
   }
 
@@ -484,7 +461,7 @@ public:
       capacity = size;
       return capacity;
     } else {
-      std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
+      std::lock_guard<std::mutex> lock(buffer_mutex);
       while (buffer.size() > static_cast<size_t>(size)) {
         buffer.pop_front();
       }
@@ -499,17 +476,13 @@ public:
   }
 
   void trace(const TraceInfo &trace_info) {
-    std::lock_guard<std::recursive_mutex> lock(buffer_mutex);
     if (is_trace_pause.load(std::memory_order_relaxed)) {
       return;
     }
     this->push(trace_info);
     if (is_trace_cb.load(std::memory_order_relaxed)) {
       CallCallbackSafe(trace_cb, trace_info);
-    } else {
-      this->WriteLog(trace_info);
     }
-    this->push(trace_info);
   }
 
   void SetTraceState(bool is_pause) {
