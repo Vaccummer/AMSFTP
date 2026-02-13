@@ -1,22 +1,17 @@
 #pragma once
-// 自身依赖
+// standard library
+#ifdef _WIN32
+#define _WINSOCKAPI_
+#include <accctrl.h> // 定义 SE_OBJECT_TYPE 枚举
+#include <aclapi.h>  // 定义安全操作函数
+#include <shlobj.h>
+#include <windows.h>
+#endif
+
+// project header
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
-
-// 标准库头文件（跨平台，无需条件编译）
-#include <algorithm>
-#include <cstddef>
-#include <cstdlib>
-#include <ctime>
-#include <filesystem>
-#include <functional>
-#include <regex>
-#include <string>
-#include <variant>
-
-// 第三方库头文件（跨平台，需链接 fmt 库）
-#include <boost/locale/encoding.hpp>
 
 namespace fs = std::filesystem;
 using EC = ErrorCode;
@@ -70,7 +65,8 @@ inline PathType cast_fs_type(const fs::file_type &type) {
     return PathType::Unknown;
   }
 }
-// 将 std::filesystem 错误转换为 ErrorCode
+
+// turn std::error_code to ErrorCode
 inline EC fec(const std::error_code &ec) {
   if (!ec)
     return EC::Success;
@@ -118,7 +114,7 @@ inline EC fec(const std::error_code &ec) {
   }
 }
 
-// 将 std::filesystem 错误转换为 ECM (ErrorCode + message)
+// Custom std::error_code to ECM
 inline ECM fecm(const std::error_code &ec) { return {fec(ec), ec.message()}; }
 
 namespace AMPathStr {
@@ -1182,23 +1178,3 @@ public:
     return results;
   }
 };
-
-/*
-class PathMatch : public BasePathMatch {
-private:
-  std::pair<bool, PathInfo> istat(const std::string &path) override {
-    auto [error, info] = stat(path);
-    if (error.empty()) {
-      return std::make_pair(true, info);
-    }
-    return std::make_pair(false, PathInfo());
-  }
-
-  std::vector<PathInfo> ilistdir(const std::string &path) override {
-    return listdir(path);
-  }
-
-  std::vector<PathInfo> iiwalk(const std::string &path) override {
-    return iwalk(path);
-  }
-};*/

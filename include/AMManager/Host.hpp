@@ -23,6 +23,11 @@ inline bool ValidateNickname(const std::string &nickname) {
 };
 
 inline ClientProtocol StrToProtocol(const std::string &protocol_str) {
+  const static std::unordered_map<std::string, ClientProtocol> protocol_map = {
+      {"sftp", ClientProtocol::SFTP},
+      {"ftp", ClientProtocol::FTP},
+      {"local", ClientProtocol::LOCAL},
+  };
   auto it = protocol_map.find(AMStr::lowercase(protocol_str));
   if (it != protocol_map.end()) {
     return it->second;

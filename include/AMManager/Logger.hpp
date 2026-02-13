@@ -1,5 +1,4 @@
 #pragma once
-
 #include "AMBase/DataClass.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"

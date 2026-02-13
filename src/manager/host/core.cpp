@@ -345,7 +345,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
 ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
                                        ClientConfig &entry) {
   (void)nickname;
-  auto print_abort = [this]() {
+  static auto print_abort = [this]() {
     prompt_.Print(AMStr::amfmt("{}\n", config_.Format("Input Abort", "abort")));
   };
 
@@ -427,24 +427,18 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     }
   }
 
-  std::string protocol = "sftp";
-  for (const auto &item : protocol_map) {
-    if (item.second == entry.protocol) {
-      protocol = item.first;
-      break;
-    }
-  }
+  std::string protocol = AMStr::lowercase(AM_ENUM_NAME(entry.protocol));
+
   while (true) {
-    if (!prompt_.Prompt("Protocol (sftp/ftp/local): ", protocol, &protocol)) {
+    if (!prompt_.Prompt("Protocol (sftp/ftp): ", protocol, &protocol)) {
       print_abort();
       return Err(EC::ConfigCanceled, "modify canceled");
     }
     protocol = AMStr::lowercase(AMStr::Strip(protocol));
-    if (protocol == "sftp" || protocol == "ftp" || protocol == "local") {
+    if (protocol == "sftp" || protocol == "ftp") {
       break;
     }
-    prompt_.ErrorFormat(
-        ECM{EC::InvalidArg, "Protocol must be sftp, ftp, or local"});
+    prompt_.ErrorFormat(ECM{EC::InvalidArg, "Protocol must be sftp or ftp"});
   }
 
   int64_t buffer_size = entry.buffer_size > 0 ? entry.buffer_size : 24 * AMMB;
