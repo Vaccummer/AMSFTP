@@ -28,11 +28,24 @@ public:
     return instance;
   }
 
+  ECM Init() override {
+    log_path_ = config_.ProjectRoot() / "log" / "Client.log";
+    app_log_path_ = config_.ProjectRoot() / "log" / "App.log";
+    std::error_code ec;
+    std::filesystem::create_directories(log_path_.parent_path(), ec);
+    return fecm(ec);
+  };
+
   /** Enqueue a trace entry for asynchronous logging. */
   void Enqueue(const TraceInfo &info);
 
   /** Return a trace callback that enqueues trace entries. */
   std::function<void(const TraceInfo &)> TraceCallbackFunc();
+
+  void ProgrammTrace(TraceLevel level, EC error_code,
+                     const std::string &target = "",
+                     const std::string &action = "",
+                     const std::string &msg = "") {}
 
   /**
    * Get or set the trace level.
@@ -53,5 +66,6 @@ private:
   AMConfigManager &config_ = AMConfigManager::Instance();
   AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
   std::filesystem::path log_path_;
+  std::filesystem::path app_log_path_;
   std::atomic<int> trace_level_{4};
 };

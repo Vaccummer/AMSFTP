@@ -21,7 +21,6 @@
 #include <utility>
 #include <vector>
 
-
 // 自身依赖
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
@@ -124,6 +123,238 @@ using CR =
     std::pair<ECM, std::pair<std::string, int>>; // ConductCmd函数返回类型
 // Wait result for non-blocking socket operations
 inline std::mutex AMlog_mutex;
+
+class BasePathMatch {
+private:
+  virtual std::pair<ECM, PathInfo> stat(const std::string &path,
+                                        bool trace_link = false,
+                                        amf interrupt_flag = nullptr,
+                                        int timeout_ms = -1,
+                                        int64_t start_time = -1) = 0;
+  virtual std::pair<ECM, std::vector<PathInfo>>
+  listdir(const std::string &path, amf interrupt_flag = nullptr,
+          int timeout_ms = -1, int64_t start_time = -1) = 0;
+  virtual std::pair<ECM, AMFS::WRI>
+  iwalk(const std::string &path, bool show_all = false,
+        bool ignore_sepcial_file = true,
+        AMFS::WalkErrorCallback error_callback = nullptr,
+        amf interrupt_flag = nullptr, int timeout_ms = -1,
+        int64_t start_time = -1) = 0;
+  std::string star_rep = "amspecial1123exchange2123for1233star4123dd";
+  std::string less_rep = "amspecial4123exchange3332for2less131aa";
+  std::string greater_rep = "amspecial721exchange623for511greater422ff";
+
+  void _find(std::vector<PathInfo> &results, const PathInfo &path,
+             const std::vector<std::string> &match_parts,
+             const SearchType &type, const std::string &sep,
+             amf interrupt_flag = nullptr, int timeout_ms = -1,
+             int64_t start_time = -1) {
+    if (match_parts.empty()) {
+      if (type == SearchType::All ||
+          (type == SearchType::Directory && path.type == PathType::DIR) ||
+          (type == SearchType::File && path.type == PathType::FILE)) {
+        results.push_back(path);
+      }
+      return;
+    }
+
+    if (path.type != PathType::DIR) {
+      // 当前路径已经是文件，无法继续匹配
+      return;
+    }
+
+    std::string cur_pattern = match_parts[0];
+
+    if (std::regex_search(cur_pattern, std::regex("^\\*\\*+$"))) {
+      std::vector<std::string> relative_parts;
+      auto [error, sub_pack] = iwalk(path.path, true, true, nullptr,
+                                     interrupt_flag, timeout_ms, start_time);
+      if (error.first != EC::Success) {
+        return;
+      }
+      for (auto &sub : sub_pack.first) {
+        if (interrupt_flag && interrupt_flag->check()) {
+          return;
+        }
+        if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+          return;
+        }
+        if ((sub.type == PathType::DIR && type == SearchType::File) ||
+            (sub.type != PathType::DIR && type == SearchType::Directory)) {
+          continue;
+        }
+        // sub.path relative to path.path
+        relative_parts = AMPathStr::split(sub.path.substr(path.path.size()));
+        if (walk_match(relative_parts, match_parts)) {
+          results.push_back(sub);
+        }
+      }
+      return;
+    }
+    // 处理不匹配模式
+    else if (cur_pattern.find("*") == std::string::npos &&
+             (cur_pattern.find("<") == std::string::npos ||
+              cur_pattern.find(">") == std::string::npos)) {
+      auto new_parts2 = match_parts;
+      new_parts2.erase(new_parts2.begin());
+      auto [error2, sub_list2] =
+          listdir(path.path, interrupt_flag, timeout_ms, start_time);
+      if (error2.first != EC::Success) {
+        return;
+      }
+      for (auto &sub : sub_list2) {
+        if (interrupt_flag && interrupt_flag->check()) {
+          return;
+        }
+        if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+          return;
+        }
+        if (sub.name == cur_pattern) {
+          _find(results, sub, new_parts2, type, sep, interrupt_flag, timeout_ms,
+                start_time);
+        }
+      }
+    }
+    // 进入匹配模式
+    else {
+      auto new_parts3 = match_parts;
+      new_parts3.erase(new_parts3.begin());
+      auto [error3, sub_list3] =
+          listdir(path.path, interrupt_flag, timeout_ms, start_time);
+      if (error3.first != EC::Success) {
+        return;
+      }
+      for (auto &sub : sub_list3) {
+        if (interrupt_flag && interrupt_flag->check()) {
+          return;
+        }
+        if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+          return;
+        }
+        if (name_match(sub.name, cur_pattern)) {
+          _find(results, sub, new_parts3, type, sep);
+        }
+      }
+    }
+
+    return;
+  }
+
+  std::string _rep(const std::string &str, const std::string &from,
+                   const std::string &to) {
+    std::string result = str;
+    if (from.empty())
+      return result; // 避免空字符串导致无限循环
+    size_t pos = 0;
+    while ((pos = result.find(from, pos)) != std::string::npos) {
+      result.replace(pos, from.length(), to);
+      pos +=
+          to.length(); // 跳过替换后的内容，防止重复替换（比如from是to的子串）
+    }
+    return result;
+  }
+
+public:
+  bool str_match(const std::string &name, const std::string &pattern) {
+    std::string patternf = "^" + pattern + "$";
+    std::wstring w_pattern = AMStr::wstr(patternf);
+    std::wstring w_name = AMStr::wstr(name);
+    try {
+      bool res = std::regex_search(w_name, std::wregex(w_pattern));
+      return res;
+    } catch (const std::regex_error) {
+      return false;
+    }
+  }
+
+  bool name_match(const std::string &name, const std::string &pattern) {
+    // 将pattern中的*换成star_rep，<换成less_rep，>换成greater_rep
+    std::string pattern_new = pattern;
+    pattern_new = _rep(pattern_new, "*", star_rep);
+    pattern_new = _rep(pattern_new, "<", less_rep);
+    pattern_new = _rep(pattern_new, ">", greater_rep);
+    pattern_new = AMPathStr::RegexEscape(pattern_new);
+    // 将path中的star_rep换成.*，less_rep换成[，greater_rep换成], 不要用正则替换
+    pattern_new = _rep(pattern_new, star_rep, ".*");
+    pattern_new = _rep(pattern_new, less_rep, "[");
+    pattern_new = _rep(pattern_new, greater_rep, "]");
+    return str_match(name, pattern_new);
+  };
+
+  bool walk_match(const std::vector<std::string> &parts,
+                  const std::vector<std::string> &match_parts) {
+    if (match_parts.size() > parts.size()) {
+      return false;
+    }
+    size_t pos = 0;
+    bool is_match;
+    for (auto &part : match_parts) {
+      is_match = false;
+      for (size_t i = pos; i < parts.size(); i++) {
+        if (name_match(parts[i], part)) {
+          is_match = true;
+          pos = i + 1;
+          break;
+        }
+      }
+      if (!is_match) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  std::vector<PathInfo> find(const std::string &path,
+                             SearchType type = SearchType::All,
+                             amf interrupt_flag = nullptr, int timeout_ms = -1,
+                             int64_t start_time = -1) {
+    std::vector<PathInfo> results = {};
+    auto parts = AMPathStr::split(path);
+    if (parts.empty()) {
+      return results;
+    } else if (parts.size() == 1) {
+      auto [error, info] =
+          stat(parts[0], false, interrupt_flag, timeout_ms, start_time);
+      if (error.first != EC::Success) {
+        return {};
+      }
+      if (error.first == EC::Success &&
+          (type == SearchType::All ||
+           (type == SearchType::Directory && info.type == PathType::DIR) ||
+           (type == SearchType::File && info.type == PathType::FILE))) {
+        results.push_back(info);
+      }
+      return results;
+    }
+
+    std::string sep = AMPathStr::GetPathSep(path);
+    std::string cur_path = parts[0];
+    bool is_stop = false;
+    std::vector<std::string> match_parts = {};
+
+    for (size_t i = 1; i < parts.size(); i++) {
+      // 没有* < >时，链接到cur_path
+      if (parts[i].find("*") == std::string::npos &&
+          parts[i].find("<") == std::string::npos &&
+          parts[i].find(">") == std::string::npos && !is_stop) {
+        cur_path = AMPathStr::join(cur_path, parts[i]);
+      } else {
+        is_stop = true;
+        match_parts.push_back(parts[i]);
+      }
+    }
+
+    // 检查cur_path是否存在
+    auto [error, info] =
+        stat(cur_path, false, interrupt_flag, timeout_ms, start_time);
+    if (error.first != EC::Success) {
+      return {};
+    }
+    _find(results, info, match_parts, type, sep, interrupt_flag, timeout_ms,
+          start_time);
+    return results;
+  }
+};
 
 class AMTracer {
 private:

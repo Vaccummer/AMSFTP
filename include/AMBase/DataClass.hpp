@@ -1,6 +1,7 @@
 #pragma once
 // standard library
 #include <chrono>
+#include <filesystem>
 #include <iomanip>
 #include <mutex>
 #include <sstream>
@@ -17,6 +18,8 @@
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
+
+namespace fs = std::filesystem;
 
 template <typename T> struct NBResult {
   T value;           // 函数返回值
@@ -128,6 +131,84 @@ inline ECM Ok() {
 
 /** @brief Build an error ECM with message. */
 inline ECM Err(EC code, const std::string &msg) { return {code, msg}; }
+
+inline PathType cast_fs_type(const fs::file_type &type) {
+  switch (type) {
+  case fs::file_type::directory:
+    return PathType::DIR;
+  case fs::file_type::symlink:
+    return PathType::SYMLINK;
+  case fs::file_type::regular:
+    return PathType::FILE;
+  case fs::file_type::block:
+    return PathType::BlockDevice;
+  case fs::file_type::character:
+    return PathType::CharacterDevice;
+  case fs::file_type::fifo:
+    return PathType::FIFO;
+  case fs::file_type::socket:
+    return PathType::Socket;
+  case fs::file_type::unknown:
+    return PathType::Unknown;
+  default:
+    return PathType::Unknown;
+  }
+}
+
+// turn std::error_code to ErrorCode
+inline EC fec(const std::error_code &ec) {
+  if (!ec)
+    return EC::Success;
+  // 使用 std::errc 进行跨平台映射
+  auto errc = static_cast<std::errc>(ec.value());
+
+  switch (errc) {
+  case std::errc::no_such_file_or_directory:
+    return EC::FileNotExist;
+  case std::errc::permission_denied:
+    return EC::PermissionDenied;
+  case std::errc::file_exists:
+    return EC::PathAlreadyExists;
+  case std::errc::not_a_directory:
+    return EC::NotADirectory;
+  case std::errc::is_a_directory:
+    return EC::NotAFile;
+  case std::errc::directory_not_empty:
+    return EC::DirNotEmpty;
+  case std::errc::no_space_on_device:
+    return EC::FilesystemNoSpace;
+  case std::errc::read_only_file_system:
+    return EC::FileWriteProtected;
+  case std::errc::too_many_symbolic_link_levels:
+    return EC::SymlinkLoop;
+  case std::errc::filename_too_long:
+    return EC::InvalidFilename;
+  case std::errc::invalid_argument:
+    return EC::InvalidArg;
+  case std::errc::io_error:
+    return EC::LocalFileError;
+  case std::errc::not_supported:
+  case std::errc::operation_not_supported:
+    return EC::OperationUnsupported;
+  case std::errc::timed_out:
+    return EC::OperationTimeout;
+  case std::errc::connection_refused:
+  case std::errc::network_unreachable:
+  case std::errc::host_unreachable:
+    return EC::NoConnection;
+  case std::errc::connection_reset:
+    return EC::ConnectionLost;
+  default:
+    return EC::UnknownError;
+  }
+}
+
+// Custom std::error_code to ECM
+inline ECM fecm(const std::error_code &ec) {
+  if (!ec)
+    return {EC::Success, ""};
+  return {fec(ec), ec.message()};
+}
 
 class InterruptFlag {
 private:
@@ -959,3 +1040,5 @@ public:
 
   virtual ECM Init() { return {EC::Success, ""}; }
 };
+
+using amf = std::shared_ptr<InterruptFlag>;
