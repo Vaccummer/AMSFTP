@@ -83,11 +83,6 @@ static const std::string ickey = "ic-prompt";
 
 } // namespace
 
-AMPromptManager &AMPromptManager::Instance() {
-  static AMPromptManager instance;
-  return instance;
-}
-
 void AMPromptManager::InitIsoclineConfig() {
   std::string a = "";
   std::string b = "";
@@ -155,31 +150,24 @@ void AMPromptManager::Print(const std::vector<std::string> &items,
   oss << end;
 
   const std::string output = oss.str();
-  std::string out = output;
-  if (out.empty() || out.back() != '\n') {
-    out.push_back('\n');
-  }
 
-  if (cache_output_lock_depth_.load(std::memory_order_relaxed) > 0 ||
-      AMProgressBar::IsAnyBarShowing() || ic_is_editline_active()) {
+  if (IsCacheOutputOnly()) {
     std::lock_guard<std::mutex> lock(cached_output_mutex_);
-    cached_output_ += out;
+    cached_output_ += output;
     return;
   }
 
   {
     std::lock_guard<std::mutex> lock(print_mutex_);
-    ic_print(out.c_str());
+    ic_print(output.c_str());
     ic_term_flush();
   }
 }
 
 void AMPromptManager::FlushCachedOutput() {
-
   if (cached_output_.empty()) {
     return;
   }
-
   std::lock_guard<std::mutex> lock1(print_mutex_);
   std::lock_guard<std::mutex> lock2(cached_output_mutex_);
   ic_print("\x1b[0m");
@@ -195,6 +183,9 @@ void AMPromptManager::SetCacheOutputOnly(bool enabled) {
     return;
   }
   cache_output_lock_depth_.fetch_sub(1, std::memory_order_relaxed);
+  if (cache_output_lock_depth_.load(std::memory_order_relaxed) == 0) {
+    FlushCachedOutput();
+  }
 }
 
 bool AMPromptManager::IsCacheOutputOnly() const {
@@ -204,7 +195,6 @@ bool AMPromptManager::IsCacheOutputOnly() const {
 void AMPromptManager::ErrorFormat(const std::string &error_name,
                                   const std::string &error_msg, bool is_exit,
                                   int exit_code) {
-
   std::ostringstream body;
   if (error_name.empty()) {
     body << "❌ " << error_msg;
@@ -234,7 +224,6 @@ bool AMPromptManager::PromptYesNo(const std::string &prompt, bool *canceled) {
     }
     return false;
   }
-
   AMStr::VStrip(answer);
   AMStr::vlowercase(answer);
   return answer == "y" || answer == "yes";
@@ -299,45 +288,14 @@ bool AMPromptManager::PromptLine(const std::string &prompt, std::string *out,
 bool AMPromptManager::Prompt(const std::string &prompt,
                              const std::string &placeholder,
                              std::string *out_input) {
-  struct FlushGuard {
-    AMPromptManager &prompt_mgr;
-    ~FlushGuard() { prompt_mgr.FlushCachedOutput(); }
-  };
-  FlushGuard flush_guard{*this};
-
-  /** Guard to toggle signal hooks around input. */
-  struct PromptHookGuard {
-    AMCliSignalMonitor &monitor;
-    /** Activate prompt hook and silence global. */
-    explicit PromptHookGuard(AMCliSignalMonitor &monitor_ref)
-        : monitor(monitor_ref) {
-      monitor.SilenceHook("GLOBAL");
-      monitor.ResumeHook("PROMPT");
-    }
-    /** Restore global hook and silence prompt. */
-    ~PromptHookGuard() {
-      monitor.ResumeHook("GLOBAL");
-      monitor.SilenceHook("PROMPT");
-    }
-  };
 
   if (!out_input) {
     return true;
   }
 
-  PromptHookGuard hook_guard(AMCliSignalMonitor::Instance());
-
-  /** Guard to silence highlight during simple prompts. */
-  struct HighlightGuard {
-    bool previous = true;
-    explicit HighlightGuard(bool enable) {
-      previous = ic_enable_highlight(enable);
-    }
-    ~HighlightGuard() { ic_enable_highlight(previous); }
-  };
-
-  HighlightGuard highlight_guard(false);
-
+  auto lock = PrintLock();
+  auto hooklock = HookLock();
+  auto highlight_lock = HighlightLock(false);
   const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
   char *line =
       ic_readline_ex_with_initial(prompt.c_str(), &PromptNoComplete_, nullptr,
@@ -356,15 +314,12 @@ bool AMPromptManager::Prompt(const std::string &prompt,
  */
 bool AMPromptManager::PromptCore(const std::string &prompt,
                                  std::string *out_input) {
-  struct FlushGuard {
-    AMPromptManager &prompt_mgr;
-    ~FlushGuard() { prompt_mgr.FlushCachedOutput(); }
-  };
-  FlushGuard flush_guard{*this};
 
   if (!out_input) {
     return true;
   }
+  auto lock = PrintLock();
+  auto hooklock = HookLock();
   static AMTokenTypeAnalyzer analyzer(AMConfigManager::Instance());
   char *line = ic_readline_ex(prompt.c_str(), nullptr, nullptr,
                               &PromptHighlighter_, &analyzer);
@@ -379,31 +334,13 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
 
 bool AMPromptManager::SecurePrompt(const std::string &prompt,
                                    std::string *out_input) {
-  struct FlushGuard {
-    AMPromptManager &prompt_mgr;
-    ~FlushGuard() { prompt_mgr.FlushCachedOutput(); }
-  };
-  FlushGuard flush_guard{*this};
 
   if (!out_input) {
     return true;
   }
   out_input->clear();
-
-  struct PromptHookGuard {
-    AMCliSignalMonitor &monitor;
-    explicit PromptHookGuard(AMCliSignalMonitor &monitor_ref)
-        : monitor(monitor_ref) {
-      monitor.SilenceHook("GLOBAL");
-      monitor.ResumeHook("PROMPT");
-    }
-    ~PromptHookGuard() {
-      monitor.ResumeHook("GLOBAL");
-      monitor.SilenceHook("PROMPT");
-    }
-  };
-  PromptHookGuard hook_guard(AMCliSignalMonitor::Instance());
-
+  auto lock = PrintLock();
+  auto hooklock = HookLock();
   std::string password;
   std::cout << prompt << std::flush;
 #ifdef _WIN32

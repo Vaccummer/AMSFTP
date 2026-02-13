@@ -59,6 +59,22 @@ void PromptNoComplete_(ic_completion_env_t *cenv, const char *prefix) {
   (void)cenv;
   (void)prefix;
 }
+
+inline std::vector<std::string> GetIsoRecords() {
+  long count = ic_history_count();
+  if (count < 0) {
+    return {};
+  }
+  std::vector<std::string> records{static_cast<size_t>(count)};
+  for (long i = 0; i < count; ++i) {
+    const char *entry = ic_history_get(i);
+    if (entry) {
+      records.emplace_back(entry);
+    }
+  }
+  return records;
+}
+
 } // namespace
 
 /**

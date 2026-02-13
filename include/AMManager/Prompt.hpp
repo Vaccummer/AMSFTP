@@ -1,8 +1,8 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
 #include "AMManager/Config.hpp"
+#include "AMManager/SignalMonitor.hpp"
 #include <atomic>
-#include <cstddef>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -21,35 +21,17 @@ template <> struct IsStringLike<char *> : std::true_type {};
 template <typename T>
 inline constexpr bool IsStringLikeV = IsStringLike<std::decay_t<T>>::value;
 
-inline std::string ToString(const std::string &value) { return value; }
-inline std::string ToString(std::string_view value) {
-  return std::string(value);
-}
-inline std::string ToString(const char *value) {
-  return value ? std::string(value) : std::string();
-}
-inline std::string ToString(char *value) {
-  return value ? std::string(value) : std::string();
-}
-} // namespace AMPromptDetail
-
-struct TaskInfo;
-class AMConfigManager;
-
-inline std::vector<std::string> GetIsoRecords() {
-  long count = ic_history_count();
-  if (count < 0) {
+template <typename T> std::string ToString(T &&value) {
+  if constexpr (IsStringLikeV<T>) {
+    return std::string(std::forward<T>(value));
+  } else {
+    static_assert(IsStringLikeV<T>,
+                  "AMPromptManager::Print only accepts string-like arguments");
     return {};
   }
-  std::vector<std::string> records{static_cast<size_t>(count)};
-  for (long i = 0; i < count; ++i) {
-    const char *entry = ic_history_get(i);
-    if (entry) {
-      records.emplace_back(entry);
-    }
-  }
-  return records;
 }
+
+} // namespace AMPromptDetail
 
 class AMHistoryManager {
 public:
@@ -92,7 +74,10 @@ protected:
 
 class AMPromptManager : public AMHistoryManager, NonCopyableNonMovable {
 public:
-  static AMPromptManager &Instance();
+  static AMPromptManager &Instance() {
+    static AMPromptManager instance;
+    return instance;
+  }
 
   ~AMPromptManager() override = default;
 
@@ -198,23 +183,37 @@ private:
 
 class AMPrintLockGuard : NonCopyableNonMovable {
 public:
-  AMPrintLockGuard() : prompt_(AMPromptManager::Instance()) {
+  explicit AMPrintLockGuard() : prompt_(AMPromptManager::Instance()) {
     prompt_.SetCacheOutputOnly(true);
   }
 
-  ~AMPrintLockGuard() { prompt_.SetCacheOutputOnly(false); }
+  ~AMPrintLockGuard() override { prompt_.SetCacheOutputOnly(false); }
 
 private:
   AMPromptManager &prompt_;
 };
 
-/**
- * @brief Global RAII print lock.
- *
- * Usage:
- * @code
- * auto lock = PrintLock();
- * // all AMPromptManager::Print output is cached in this scope
- * @endcode
- */
-inline AMPrintLockGuard PrintLock() { return {}; }
+struct AMPromptHookGuard {
+  explicit AMPromptHookGuard() {
+    AMCliSignalMonitor::Instance().SilenceHook("GLOBAL");
+    AMCliSignalMonitor::Instance().ResumeHook("PROMPT");
+  }
+  ~AMPromptHookGuard() {
+    AMCliSignalMonitor::Instance().ResumeHook("GLOBAL");
+    AMCliSignalMonitor::Instance().SilenceHook("PROMPT");
+  }
+};
+
+struct HighlightGuard {
+  bool previous = true;
+  explicit HighlightGuard(bool enable) {
+    previous = ic_enable_highlight(enable);
+  }
+  ~HighlightGuard() { ic_enable_highlight(previous); }
+};
+
+inline AMPrintLockGuard PrintLock() { return AMPrintLockGuard(); }
+inline AMPromptHookGuard HookLock() { return AMPromptHookGuard(); }
+inline HighlightGuard HighlightLock(bool enable) {
+  return HighlightGuard(enable);
+}
