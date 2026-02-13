@@ -482,9 +482,10 @@ struct TraceInfo {
         target(""), action(""), message("") {}
   TraceInfo(TraceLevel level, ErrorCode error_code, std::string nickname,
             std::string target, std::string action, std::string message)
-      : level(level), error_code(error_code), nickname(nickname),
-        target(target), action(action), message(message), timestamp(timenow()) {
-  }
+      : level(std::move(level)), error_code(std::move(error_code)),
+        nickname(std::move(nickname)), target(std::move(target)),
+        action(std::move(action)), message(std::move(message)),
+        timestamp(timenow()) {}
 };
 
 struct TransferCallback {

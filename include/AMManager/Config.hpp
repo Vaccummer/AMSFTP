@@ -2,20 +2,10 @@
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/RustTomlRead.h"
-#include <atomic>
-#include <chrono>
 #include <condition_variable>
-#include <filesystem>
-#include <functional>
 #include <handleapi.h>
-#include <mutex>
-#include <optional>
 #include <queue>
-#include <string>
 #include <thread>
-#include <unordered_map>
-#include <variant>
-#include <vector>
 
 /**
  * @brief Configuration document types tracked by storage.
@@ -81,8 +71,6 @@ struct DocumentState {
 class AMConfigStorage {
 public:
   using Path = std::vector<std::string>;
-  using Value =
-      std::variant<int64_t, bool, std::string, std::vector<std::string>>;
   using DumpErrorCallback = std::function<void(ECM)>;
 
   /**
@@ -261,6 +249,8 @@ public:
     return true;
   }
 
+  // conduct a read-only operation on a document's JSON with a provided
+  // transform in lock guard
   inline bool
   ExternaLView(DocumentKind kind,
                const std::function<void(const Json &)> &transform) const {
@@ -389,7 +379,6 @@ public:
     static AMConfigManager instance;
     return instance;
   };
-
   ECM Init() override {
     std::string root_dir = "";
     if (!GetEnv("AMSFTP_ROOT", &root_dir)) {

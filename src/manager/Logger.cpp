@@ -15,7 +15,8 @@ void AMLogManager::Enqueue(const TraceInfo &info) {
 
 /** Provide a trace callback for AMTracer that enqueues log entries. */
 std::function<void(const TraceInfo &)> AMLogManager::TraceCallbackFunc() {
-  return [this](const TraceInfo &info) { Enqueue(info); };
+  static auto callback = [this](const TraceInfo &info) { Enqueue(info); };
+  return callback;
 }
 
 /** Get or set trace level; value == -99999 returns the current level. */
