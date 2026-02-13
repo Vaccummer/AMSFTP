@@ -441,12 +441,6 @@ AMCommandPreprocessor::SplitCliTokens(const std::string &input) {
 }
 
 /**
- * @brief Construct a command preprocessor bound to a config manager.
- */
-AMCommandPreprocessor::AMCommandPreprocessor(AMConfigManager &config_manager)
-    : var_manager_(AMVarManager::Instance(config_manager)) {}
-
-/**
  * @brief Preprocess a raw interactive command line according to rules.
  */
 AMCommandPreprocessor::Result

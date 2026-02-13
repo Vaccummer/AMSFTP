@@ -2,6 +2,7 @@
 #include "AMBase/CommonTools.hpp"
 #include "AMCLI/CLIBind.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
+#include "AMManager/Host.hpp"
 #include "AMManager/Var.hpp"
 #include <algorithm>
 #include <array>
@@ -434,10 +435,10 @@ AMTokenTypeAnalyzer::FindNode(const std::string &path) const {
   return &it->second;
 }
 
-/** Reload nickname cache from configuration. */
+/** Reload nickname cache from host manager. */
 void AMTokenTypeAnalyzer::RefreshNicknameCache() {
   nicknames_.clear();
-  auto names = config_manager_.ListHostnames();
+  auto names = AMHostManager::Instance().ListNames();
   for (const auto &name : names) {
     nicknames_.insert(name);
   }
@@ -662,7 +663,7 @@ bool AMTokenTypeAnalyzer::VarExists(const std::string &name) const {
   if (name.empty()) {
     return false;
   }
-  auto &var_manager = AMVarManager::Instance(config_manager_);
+  auto &var_manager = AMVarManager::Instance();
   std::string value;
   return var_manager.Resolve(name, &value);
 }

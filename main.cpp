@@ -84,15 +84,21 @@ int main(int argc, char **argv) {
     signal_monitor.Start();
 
     auto &config_manager = AMConfigManager::Instance();
-    auto init_status = config_manager.Init();
+    std::string root_dir = "";
+    if (!GetEnv("AMSFTP_ROOT", &root_dir)) {
+      std::cerr << "Failed to get $AMSFTP_ROOT environment variable"
+                << std::endl;
+      return -1;
+    }
+
+    auto init_status = config_manager.AMInit(fs::path(root_dir));
     if (init_status.first != EC::Success) {
       std::cerr << init_status.second << std::endl;
       return static_cast<int>(init_status.first);
     }
 
-    auto &client_manager = AMClientManager::Instance(config_manager);
-    auto &filesystem = AMFileSystem::Instance(client_manager, config_manager);
-    AMClientManager::global_interrupt_flag = amgif;
+    auto &client_manager = AMClientManager::Instance();
+    auto &filesystem = AMFileSystem::Instance();
     AMFileSystem::global_interrupt_flag = amgif;
     AMIsInteractive.store(false, std::memory_order_relaxed);
 
@@ -117,7 +123,6 @@ int main(int argc, char **argv) {
       }
     });
 #endif
-    print("pid is : {}", GetCurrentProcessId());
 
     DispatchResult dispatch = DispatchCliCommands(cli_commands, managers);
     if (dispatch.enter_interactive) {

@@ -1,37 +1,21 @@
+AMCompleteEngine Improve
 
-## Refactor PImpl Pattern
+# 低耦合性和可扩展性是该类设计的主要目标
 
-  Promote `AMCompleter::Impl` to an independent class named `AMCompleteEngine`, and decompose `AMCompleteEngine` into the following
-  components:
+该类依旧存在很强的耦合性, 你需要进行如下改善:
 
-### 1. Core Engine Logic and Standard Definitions
+1. AMCompleteEngine不包含任何补全搜索的逻辑, 而是提供一个接口RegisterSearchEngine(vector CompletionTarget, SearchEngine_ptr) 并将指针放入字典中
+2. SearchEngine是一个搜索引擎的基类, 有CollectCandidate, SortCandate 的纯虚函数
 
-    - Framework of the entire completion pipeline
-     - Standardized formats for completion requests and candidates:
-       -`CompletionRequest` structure
-       - `CompletionCandidate` structure (with fields: `insert_text`, `display`, `kind`, `help`, `score`, metadata)
-     - Formalized asynchronous completion workflow:
-       - `AsyncRequest` encapsulates:
-         - `request_id` for result validation
-         - Candidate list
-         - A search function that performs the actual completion lookup (the function itself handles timeout logic and cache
-  behavior)
-         - Additional attributes as needed (e.g., priority, cancellation token)
+   1. CollectCandidate是同步的, 如果需要异步补全, 需要在CollectCandidate返回一个AsynRequest供AMCompleteEngine识别, 然后进入异步处理流程
 
-### 2. Context-Aware Dispatch Functions (Completion Orchestration)
+      1. AsynRequest 至少包含以下内容
+         1. ID
+         2. Timeout_ms
+         3. Interuput flag(用于AMCompleteEngine终止函数执行)
+         4. 具体搜索函数Attr(本质上为SearchEngine)
+         5. 成员函数Search(使用AsynRequest中的参数执行4中的函数)
+   2. 同步或者异步处理流程完全由AMCompleteEngine实现, 同时异步的工作线程也由AMCompleteEngine管理
 
-    -`BuildContext_()`: Parses input tokens and determines the completion target type (command, option, path, variable, etc.)
-     - New dispatch function: Routes completion requests to appropriate search functions based on `CompletionTarget` enum
-     - `SortCandidates_()`: Applies unified scoring and ordering rules across all candidate sources
-
-### 3. Concrete Completion Search Functions (Pluggable Sources)
-
-    -`CollectCommandCandidates_()`: Queries the static `CommandTree` for command/subcommand/option suggestions
-     - `CollectInternalCandidates_()`: Gathers values from internal sources (variables, client names, host nicknames, task IDs,
-  config attributes)
-     - `CollectPathCandidates_()`: Handles local/remote path completion with caching and async remote lookup
-
-> **Design Goal**: Decouple the completion *orchestration* (part 2) from the *data sources* (part 3), with part 1 providing the
-> standardized interface and async infrastructure. This enables easier testing, source replacement, and future extension (e.g.,
-> plugin-based completion sources).
->
+      1. Cache 之类的由SearchEngine自行管理
+   3. AMCompleteEngine不必再持有config_manager_, client_manager_, filesystem_, transfer_manager_, 因为它不需要实现具体的补全搜索逻辑

@@ -16,7 +16,6 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -103,7 +102,7 @@ public:
    * @param root_dir Project root directory.
    * @return ECM success or failure.
    */
-  ECM Init(const std::filesystem::path &root_dir);
+  ECM AMInit(const std::filesystem::path &root_dir);
 
   /**
    * @brief Initialize storage with explicit document paths and schemas.
@@ -112,7 +111,7 @@ public:
    * @param schemas Schema paths keyed by kind.
    * @return ECM success or failure.
    */
-  ECM Init(
+  ECM AMInit(
       const std::filesystem::path &root_dir,
       const std::unordered_map<DocumentKind, std::filesystem::path> &paths,
       const std::unordered_map<DocumentKind, std::filesystem::path> &schemas);
@@ -213,8 +212,7 @@ public:
    * @brief Backup config/settings/known_hosts when the interval elapses.
    */
   ECM ConfigBackupIfNeeded();
-  /** Return a list of configured host nicknames. */
-  [[nodiscard]] std::vector<std::string> ListHostnames() const;
+
   /**
    * @brief Persist an encrypted password for a given client nickname.
    */

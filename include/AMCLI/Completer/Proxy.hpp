@@ -1,6 +1,6 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
-#include "AMCLI/CompleteEngine.hpp"
+#include "AMCLI/Completer/Engine.hpp"
 
 /**
  * @brief Completion coordinator for interactive input.
@@ -49,3 +49,5 @@ public:
 private:
   AMCompleteEngine engine_{};
 };
+
+

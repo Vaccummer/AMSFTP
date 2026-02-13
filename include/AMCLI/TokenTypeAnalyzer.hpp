@@ -29,7 +29,7 @@ public:
   void HighlightFormatted(const std::string &input, std::string *formatted);
 
   /**
-   * @brief Refresh nickname cache from config.
+   * @brief Refresh nickname cache from host manager.
    */
   void RefreshNicknameCache();
 

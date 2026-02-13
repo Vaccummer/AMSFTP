@@ -485,7 +485,7 @@ inline constexpr const char kHistorySchemaJson[] = R"json(
 /**
  * @brief Initialize storage paths from a project root directory.
  */
-ECM AMConfigStorage::Init(const std::filesystem::path &root_dir) {
+ECM AMConfigStorage::AMInit(const std::filesystem::path &root_dir) {
   std::unordered_map<DocumentKind, std::filesystem::path> paths;
   std::unordered_map<DocumentKind, std::filesystem::path> schemas;
 
@@ -500,13 +500,13 @@ ECM AMConfigStorage::Init(const std::filesystem::path &root_dir) {
   schemas[DocumentKind::KnownHosts] =
       root_dir / "config" / "known_hosts.schema.json";
 
-  return Init(root_dir, paths, schemas);
+  return AMInit(root_dir, paths, schemas);
 }
 
 /**
  * @brief Initialize storage with explicit document paths and schemas.
  */
-ECM AMConfigStorage::Init(
+ECM AMConfigStorage::AMInit(
     const std::filesystem::path &root_dir,
     const std::unordered_map<DocumentKind, std::filesystem::path> &paths,
     const std::unordered_map<DocumentKind, std::filesystem::path> &schemas) {
