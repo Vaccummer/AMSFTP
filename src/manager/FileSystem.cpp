@@ -15,7 +15,6 @@
 #include <unordered_map>
 #include <unordered_set>
 
-
 using EC = ErrorCode;
 
 namespace AMTree {
@@ -216,7 +215,7 @@ static void PrintClientDetail_(AMPromptManager &prompt_manager,
 
   std::string login_dir;
   {
-    std::lock_guard<std::recursive_mutex> lock(client->public_kv_mtx);
+    std::lock_guard<std::mutex> lock(client->public_kv_mtx);
     auto it = client->public_kv.find("login_dir");
     if (it != client->public_kv.end()) {
       login_dir = it->second;

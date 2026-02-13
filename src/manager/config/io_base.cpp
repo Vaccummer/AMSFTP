@@ -7,7 +7,6 @@
 #include <sstream>
 
 namespace {
-using Value = AMConfigManager::Value;
 using Json = nlohmann::ordered_json;
 
 /**
@@ -206,45 +205,6 @@ bool ParseJsonString(const std::string &text, Json *out, std::string *error) {
       *error = e.what();
     return false;
   }
-}
-
-/**
- * @brief Convert a JSON node into a typed Value.
- */
-bool NodeToValue(const Json &node, Value *out) {
-  if (!out)
-    return false;
-  if (node.is_number_integer()) {
-    *out = node.get<int64_t>();
-    return true;
-  }
-  if (node.is_boolean()) {
-    *out = node.get<bool>();
-    return true;
-  }
-  if (node.is_string()) {
-    *out = node.get<std::string>();
-    return true;
-  }
-  if (node.is_number_float()) {
-    std::ostringstream oss;
-    oss << node.get<double>();
-    *out = oss.str();
-    return true;
-  }
-  if (node.is_array()) {
-    const Json &arr = node;
-    if (!JsonArrayAllScalar(arr))
-      return false;
-    std::vector<std::string> items;
-    items.reserve(arr.size());
-    for (const auto &child : arr) {
-      items.push_back(JsonScalarToString(child));
-    }
-    *out = std::move(items);
-    return true;
-  }
-  return false;
 }
 
 /**

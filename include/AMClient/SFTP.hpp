@@ -1,5 +1,5 @@
 #pragma once
-// 标准库
+// standard library
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -19,8 +19,17 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#ifdef _WIN32
+#define _WINSOCKAPI_
+#include <shlobj.h>
+#include <windows.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#endif
 
+// project headers
 #include "AMBase/CommonTools.hpp"
+#include "AMBase/DataClass.hpp"
 #include "AMClient/Base.hpp"
 
 #include <curl/curl.h>
@@ -325,7 +334,8 @@ private:
 };
 
 #ifdef _WIN32
-inline std::atomic<bool> is_wsa_initialized(false);
+inline static std::atomic<bool> is_wsa_initialized(false);
+
 inline void AMInitWSA() {
   WSADATA wsaData;
   int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
@@ -333,6 +343,15 @@ inline void AMInitWSA() {
     throw std::runtime_error("WSAStartup failed");
   }
   is_wsa_initialized.store(true, std::memory_order_relaxed);
+}
+inline void AMInitWSA();
+
+inline void cleanup_wsa() {
+  // 清理wsa，如果wsa已经初始化，则清理wsa
+  if (is_wsa_initialized.load(std::memory_order_relaxed)) {
+    WSACleanup();
+    is_wsa_initialized.store(false, std::memory_order_relaxed);
+  }
 }
 #endif
 

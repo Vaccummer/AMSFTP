@@ -15,10 +15,14 @@
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
 
+struct TransferTask; // Forward declaration
+class InterruptFlag; // Forward declaration
+
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
-
+using TASKS = std::vector<TransferTask>;
+using amf = std::shared_ptr<InterruptFlag>;
 namespace fs = std::filesystem;
 
 template <typename T> struct NBResult {
@@ -122,6 +126,8 @@ inline std::string FormatTimeHM(double timestamp) {
   }
   return FormatTime(static_cast<size_t>(timestamp), "%H:%M");
 }
+
+inline bool isok(const ECM &ecm) { return ecm.first == EC::Success; }
 
 /** @brief Return a success ECM. */
 inline ECM Ok() {
@@ -626,6 +632,7 @@ struct TransferTask {
       : src(std::move(src)), src_host(std::move(src_host)), dst(std::move(dst)),
         dst_host(std::move(dst_host)), size(size), path_type(path_type) {}
 };
+
 class StreamRingBuffer {
 private:
   /**
@@ -718,9 +725,10 @@ public:
    */
   size_t get_capacity() const { return capacity_; }
 };
-using TASKS = std::vector<TransferTask>;
-struct TaskInfo;        // Forward declaration
-                        //
+
+struct TaskInfo; // Forward declaration
+                 //
+
 class ClientMaintainer; // Forward declaration
 // New ProgressData that holds weak_ptr to TaskInfo to avoid cycle reference
 // Reads/writes directly on TaskInfo for progress tracking
@@ -1040,5 +1048,3 @@ public:
 
   virtual ECM Init() { return {EC::Success, ""}; }
 };
-
-using amf = std::shared_ptr<InterruptFlag>;
