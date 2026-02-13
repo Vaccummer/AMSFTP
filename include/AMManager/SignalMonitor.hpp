@@ -1,14 +1,13 @@
 #pragma once
-#include "AMBase/Path.hpp"
+#define _WINSOCKAPI_
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <consoleapi.h>
 #include <csignal>
-#ifndef _WIN32
-#include <signal.h>
-#else
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <consoleapi.h>
 #endif
 #include <functional>
 #include <mutex>
@@ -16,6 +15,9 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+// programm headers
+#include "AMBase/DataClass.hpp"
 
 /**
  * @brief Global signal code observed by the CLI signal monitor.
