@@ -1,55 +1,22 @@
 #pragma once
-// 标准库
-#include <array>
-#include <atomic>
+// standard library
 #include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <cstdint> // 用于int64_t类型
-#include <exception>
-#include <fcntl.h>
-#include <functional>
 #include <iomanip>
-#include <memory>
 #include <mutex>
-#include <optional>
 #include <sstream>
 #include <string>
-#include <string_view>
-#include <unordered_map>
-#include <utility>
-#include <vector>
 
-// 标准库
-
-// 自身依赖
+// project header
 #include "AMBase/Enum.hpp"
 
-// 自身依赖
-
-// 第三方库
+// 3rd party library
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
-#include <openssl/pem.h>
-#include <openssl/rsa.h>
-
-// 第三方库
 
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
-
-// class ECM {
-// public:
-//   EC code = EC::Success;
-//   std::string msg = "";
-//   ECM() = default;
-//   explicit ECM(EC ec, std::string msg = "") : code(ec), msg(std::move(msg))
-//   {}
-
-//   explicit operator bool() const { return code == EC::Success; }
-// };
 
 template <typename T> struct NBResult {
   T value;           // 函数返回值
@@ -64,6 +31,7 @@ template <typename T> struct NBResult {
   }
   [[nodiscard]] bool is_error() const { return status == WaitResult::Error; }
 };
+
 struct AMTokenSpan {
   size_t start = 0;
   size_t end = 0;
@@ -124,7 +92,7 @@ inline double am_s() {
 }
 inline std::string FormatTime(const size_t &time,
                               const std::string &format = "%Y-%m-%d %H:%M:%S") {
-  time_t timeT = static_cast<time_t>(time);
+  auto timeT = static_cast<time_t>(time);
 
   struct tm timeInfo;
   {
@@ -469,6 +437,7 @@ struct AuthCBInfo {
 };
 
 struct TraceInfo {
+  TraceSource source = TraceSource::Client;
   TraceLevel level;
   ErrorCode error_code;
   std::string nickname;
@@ -670,9 +639,11 @@ public:
 };
 using TASKS = std::vector<TransferTask>;
 struct TaskInfo;        // Forward declaration
+                        //
 class ClientMaintainer; // Forward declaration
 // New ProgressData that holds weak_ptr to TaskInfo to avoid cycle reference
 // Reads/writes directly on TaskInfo for progress tracking
+
 struct WkProgressData {
   std::weak_ptr<TaskInfo> task_info;
   std::atomic<int> control_sign{0}; // 0=Running, 1=Pause, 2=Terminate
@@ -724,10 +695,6 @@ struct WkProgressData {
     }
   }
 };
-
-/**
- * @brief Task assignment type for scheduler bookkeeping.
- */
 
 struct TaskInfo {
   /**
@@ -982,15 +949,13 @@ struct TaskInfo {
 };
 
 struct NonCopyableNonMovable {
-protected:
-  NonCopyableNonMovable() = default;
-  virtual ~NonCopyableNonMovable() = default; // ✅
-
 public:
+  NonCopyableNonMovable() = default;
+  virtual ~NonCopyableNonMovable() = default;
   NonCopyableNonMovable(const NonCopyableNonMovable &) = delete;
   NonCopyableNonMovable &operator=(const NonCopyableNonMovable &) = delete;
   NonCopyableNonMovable(NonCopyableNonMovable &&) = delete;
   NonCopyableNonMovable &operator=(NonCopyableNonMovable &&) = delete;
 
-  virtual ECM Init() { return {EC::Success, ""}; } // 可选的初始化接口
+  virtual ECM Init() { return {EC::Success, ""}; }
 };

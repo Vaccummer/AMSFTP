@@ -1,22 +1,14 @@
 #pragma once
-
-#include "third_party/indicators/color.hpp"
-#include "third_party/indicators/setting.hpp"
-#include <atomic>
-#include <chrono>
-#include <cstddef>
-
 #define _WINSOCKAPI_
-#include "Isocline/isocline.h"
-#include "third_party/indicators/cursor_control.hpp"
-#include "third_party/indicators/progress_bar.hpp" // win 平台上该库会包含 windows.h
-#include "third_party/indicators/terminal_size.hpp"
+// standard library
 #include <algorithm>
+#include <atomic>
 #include <boost/locale/encoding.hpp>
 #include <cctype>
+#include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <deque>
-#include <initializer_list>
 #include <iomanip>
 #include <iostream>
 #include <mutex>
@@ -30,7 +22,6 @@
 #include <type_traits>
 #include <variant>
 #include <vector>
-
 #ifdef _WIN32
 #include <conio.h>
 #include <windows.h>
@@ -38,8 +29,15 @@
 #include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
-
 #endif
+
+// project header
+#include "Isocline/isocline.h"
+#include "third_party/indicators/color.hpp"
+#include "third_party/indicators/cursor_control.hpp"
+#include "third_party/indicators/progress_bar.hpp" // win 平台上该库会包含 windows.h
+#include "third_party/indicators/setting.hpp"
+#include "third_party/indicators/terminal_size.hpp"
 
 class ProgressBar {
 public:

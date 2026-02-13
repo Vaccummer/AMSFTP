@@ -2,36 +2,6 @@
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
-#include <string>
-
-// clang-format off
-#ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <aclapi.h> // Windows ACL API
-#include <sddl.h>   // Windows SDDL API
-#include <shlobj.h>
-#include <shlwapi.h> // Windows Shell 轻量级 API
-#include <windows.h>
-// clang-format on
-
-#else
-#include <arpa/inet.h>
-#include <errno.h>
-#include <fcntl.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <pwd.h>
-#include <sys/mman.h>
-#include <sys/socket.h>
-#include <sys/stat.h> // Unix 文件状态 API（stat 函数等）
-#include <sys/stat.h>
-#include <unistd.h>
-#define SOCKET int
-#define INVALID_SOCKET -1
-#define SOCKET_ERROR -1
-#define closesocket close
-#endif
 
 constexpr ssize_t AMKB = 1024;
 constexpr ssize_t AMMB = 1024 * 1024;
@@ -176,6 +146,7 @@ enum class ErrorCode {
   FTPDownloadFailed = 52,
   FTPListFailed = 53,
 };
+
 enum class WaitResult {
   Ready,       // Socket is ready for read/write
   ReadReady,   // Socket is ready for read (仅 ReadOrWrite 模式)
@@ -184,6 +155,7 @@ enum class WaitResult {
   Interrupted, // Operation was interrupted by flag
   Error        // Socket error occurred
 };
+
 inline ErrorCode wait_result_to_error_code(WaitResult wr) {
   switch (wr) {
   case WaitResult::Ready:
@@ -240,12 +212,6 @@ enum class ClientProtocol {
   LOCAL = 3
 };
 
-inline static std::unordered_map<std::string, ClientProtocol> protocol_map = {
-    {"sftp", ClientProtocol::SFTP},
-    {"ftp", ClientProtocol::FTP},
-    {"local", ClientProtocol::LOCAL},
-};
-
 enum class BufferStatus {
   is_writing = 0,
   is_reading = 1,
@@ -279,6 +245,8 @@ enum class AMTokenType {
   EscapeSign
 };
 
-inline std::string GetECName(ErrorCode ec) {
-  return std::string(magic_enum::enum_name(ec));
-}
+enum class TraceSource {
+  Client = 0,
+  Programm = 1
+
+};

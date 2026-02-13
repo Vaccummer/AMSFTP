@@ -24,7 +24,6 @@
 #include "AMClient/FTP.hpp"
 #include "AMClient/Local.hpp"
 #include "AMClient/SFTP.hpp"
-#include "AMManager/Prompt.hpp"
 
 class UnionFileHandle {
 public:
