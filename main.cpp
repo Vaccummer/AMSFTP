@@ -6,6 +6,7 @@
 #include <atomic>
 #include <filesystem>
 #include <iostream>
+#include <stdexcept>
 
 // static auto bar = ProgressBar(0);
 /** @brief No-op total-size callback placeholder for transfer progress. */
@@ -119,6 +120,7 @@ int main(int argc, char **argv) {
 
     DispatchResult dispatch = DispatchCliCommands(cli_commands, managers);
     if (dispatch.enter_interactive) {
+      prompt_manager.LoadHistory(client_manager.CurrentNickname());
       RunInteractiveLoop(app_name, managers);
     }
     if (dispatch.rcm.first != EC::Success) {
@@ -132,8 +134,8 @@ int main(int argc, char **argv) {
                      .count()
               << "ms" << std::endl;
     return g_cli_exit_code;
-  } catch (const std::exception &e) {
-    std::cerr << "Unexpected error: " << e.what() << std::endl;
-    return -13;
+  } catch (const std::runtime_error &e) {
+    std::cerr << "Uncatched RuntimeError: " << e.what() << std::endl;
+    return static_cast<int>(EC::UnknownError);
   }
 }

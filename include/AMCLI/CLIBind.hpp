@@ -141,9 +141,7 @@ struct ConfigGetArgs {
     auto &client_manager = *managers.client_manager;
     std::vector<std::string> targets = nicknames;
     if (targets.empty()) {
-      std::string current = client_manager.CurrentClient()
-                                ? client_manager.CurrentClient()->GetNickname()
-                                : "local";
+      std::string current = client_manager.CurrentNickname();
       if (current.empty()) {
         current = "local";
       }
@@ -314,9 +312,7 @@ struct LsArgs {
     auto &filesystem = *managers.filesystem;
     std::string query_path = AMStr::Strip(path);
     if (query_path.empty()) {
-      auto client = client_manager.CurrentClient()
-                        ? client_manager.CurrentClient()
-                        : client_manager.LocalClientBase();
+      auto client = client_manager.CurrentClient();
       if (client) {
         query_path = client_manager.GetOrInitWorkdir(client);
       }

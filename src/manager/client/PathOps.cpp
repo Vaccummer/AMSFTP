@@ -12,13 +12,12 @@ inline bool IsLocalNickname_(const std::string &nickname) {
 std::tuple<std::string, std::string, std::shared_ptr<BaseClient>, ECM>
 PathOps::ParsePath(const std::string &input) {
   if (!input.empty() && input.front() == '@') {
-    return {"local", input.substr(1), LocalClientBase(), Ok()};
+    return {"local", input.substr(1), LocalClient(), Ok()};
   }
 
   const auto pos = input.find('@');
   if (pos == std::string::npos || pos + 1 >= input.size()) {
-    std::shared_ptr<BaseClient> current =
-        CurrentClient() ? CurrentClient() : LocalClientBase();
+    std::shared_ptr<BaseClient> current = CurrentClient();
     const std::string nickname = current ? current->GetNickname() : "local";
     return {nickname, input, current, Ok()};
   }
@@ -26,7 +25,7 @@ PathOps::ParsePath(const std::string &input) {
   const std::string prefix = input.substr(0, pos);
   const std::string path = input.substr(pos + 1);
   if (IsLocalNickname_(prefix)) {
-    return {"local", path, LocalClientBase(), Ok()};
+    return {"local", path, LocalClient(), Ok()};
   }
 
   auto cfg = hostm_.GetClientConfig(prefix);
@@ -48,13 +47,12 @@ PathOps::ParsePath(const std::string &input) {
 std::tuple<std::string, std::string, std::shared_ptr<BaseClient>, ECM>
 PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
   if (!input.empty() && input.front() == '@') {
-    return {"local", input.substr(1), LocalClientBase(), Ok()};
+    return {"local", input.substr(1), LocalClient(), Ok()};
   }
 
   const auto pos = input.find('@');
   if (pos == std::string::npos || pos + 1 >= input.size()) {
-    std::shared_ptr<BaseClient> current =
-        CurrentClient() ? CurrentClient() : LocalClientBase();
+    std::shared_ptr<BaseClient> current = CurrentClient();
     const std::string nickname = current ? current->GetNickname() : "local";
     return {nickname, input, current, Ok()};
   }
@@ -62,7 +60,7 @@ PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
   const std::string prefix = input.substr(0, pos);
   const std::string path = input.substr(pos + 1);
   if (IsLocalNickname_(prefix)) {
-    return {"local", path, LocalClientBase(), Ok()};
+    return {"local", path, LocalClient(), Ok()};
   }
 
   auto cfg = hostm_.GetClientConfig(prefix);

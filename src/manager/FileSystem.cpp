@@ -270,10 +270,7 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
   amf flag = interrupt_flag ? interrupt_flag : amgif;
   std::vector<std::string> targets = UniqueTargetsKeepOrder(nicknames);
   if (targets.empty()) {
-    const std::string current =
-        client_manager_.CurrentClient()
-            ? client_manager_.CurrentClient()->GetNickname()
-            : "";
+    const std::string current = client_manager_.CurrentNickname();
     targets.push_back(current.empty() ? "local" : current);
   }
 
@@ -286,7 +283,7 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
     std::string lowered = AMStr::lowercase(nickname);
     if (lowered.empty() || AMStr::lowercase(nickname) == "local") {
       result.nickname = "local";
-      result.client = client_manager_.LocalClientBase();
+      result.client = client_manager_.LocalClient();
       return result;
     }
 
@@ -472,7 +469,7 @@ AMFileSystem::ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
     ClientRef client;
     if (lowered.empty() || lowered == "local") {
       client.nickname = "local";
-      client.client = client_manager_.LocalClientBase();
+      client.client = client_manager_.LocalClient();
     } else {
       auto names = client_manager_.Clients().get_nicknames();
       for (const auto &item : names) {
@@ -512,7 +509,7 @@ AMFileSystem::ECM AMFileSystem::change_client(const std::string &nickname,
   ClientRef client;
   if (lowered.empty() || lowered == "local") {
     client.nickname = "local";
-    client.client = client_manager_.LocalClientBase();
+    client.client = client_manager_.LocalClient();
   } else {
     auto names = client_manager_.Clients().get_nicknames();
     for (const auto &name : names) {
@@ -1150,15 +1147,13 @@ AMFileSystem::ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
     return out;
   }
 
-  auto client = client_manager_.CurrentClient()
-                    ? client_manager_.CurrentClient()
-                    : client_manager_.LocalClientBase();
+  auto client = client_manager_.CurrentClient();
   if (!client) {
     ECM out = {EC::ClientNotFound, "Client not found"};
     prompt_manager_.ErrorFormat(out);
     return out;
   }
-  if (client == client_manager_.LocalClientBase()) {
+  if (client->GetProtocol() == ClientProtocol::LOCAL) {
     ECM out = {EC::InvalidArg, "Local client does not support RTT"};
     prompt_manager_.ErrorFormat(out);
     return out;
@@ -1203,7 +1198,7 @@ AMFileSystem::ECM AMFileSystem::realpath(const std::string &path,
   if (input.empty()) {
     client_ptr = client_manager_.CurrentClient()
                      ? client_manager_.CurrentClient()
-                     : client_manager_.LocalClientBase();
+                     : client_manager_.LocalClient();
     if (!client_ptr) {
       ECM out = {EC::ClientNotFound, "Client not found"};
       prompt_manager_.ErrorFormat(out);
@@ -1215,7 +1210,7 @@ AMFileSystem::ECM AMFileSystem::realpath(const std::string &path,
     std::string lowered = AMStr::lowercase(nickname);
     if (nickname.empty() || lowered == "local") {
       nickname = "local";
-      client_ptr = client_manager_.LocalClientBase();
+      client_ptr = client_manager_.LocalClient();
     } else {
       auto cfg = hostm_.GetClientConfig(nickname);
       if (cfg.first.first != EC::Success) {

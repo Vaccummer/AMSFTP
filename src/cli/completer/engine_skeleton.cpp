@@ -1,7 +1,7 @@
-#include "AMCLI/Completer/Engine.hpp"
 #include "AMBase/CommonTools.hpp"
-#include "AMCLI/Completer/Searcher.hpp"
+#include "AMCLI/Completer/Engine.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
+#include "AMCLI/Completer/Searcher.hpp"
 #include "AMManager/Config.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
@@ -177,7 +177,7 @@ void AMCompleteEngine::LoadConfig() {
   if (async_workers < 1) {
     async_workers = 1;
   }
-  const size_t worker_count = static_cast<size_t>(async_workers);
+  auto worker_count = static_cast<size_t>(async_workers);
   const bool worker_changed = args_.complete_async_workers != worker_count;
   args_.complete_async_workers = worker_count;
 
@@ -199,9 +199,7 @@ void AMCompleteEngine::LoadConfig() {
 /**
  * @brief Get current completion arguments.
  */
-const AMCompletionArgs &AMCompleteEngine::GetArgs() const {
-  return args_;
-}
+const AMCompletionArgs &AMCompleteEngine::GetArgs() const { return args_; }
 
 /**
  * @brief Get mutable completion arguments.
@@ -242,8 +240,8 @@ void AMCompleteEngine::RegisterSearchEngine(
 /**
  * @brief Hash enum value.
  */
-std::size_t AMCompletionTargetHash::operator()(
-    AMCompletionTarget target) const {
+std::size_t
+AMCompletionTargetHash::operator()(AMCompletionTarget target) const {
   return static_cast<std::size_t>(target);
 }
 
@@ -492,5 +490,3 @@ void AMCompleteEngine::AsyncWorkerLoop_() {
     }
   }
 }
-
-

@@ -4,6 +4,7 @@
 #include <chrono>
 #include <filesystem>
 #include <iostream>
+#include <string>
 #include <thread>
 
 namespace AMClientManage {
@@ -90,16 +91,20 @@ std::vector<std::shared_ptr<BaseClient>> Operator::GetClients() {
                   : std::vector<std::shared_ptr<BaseClient>>{};
 }
 
-std::shared_ptr<AMLocalClient> Operator::LocalClient() const {
-  return std::dynamic_pointer_cast<AMLocalClient>(local_client_base_);
-}
-
-std::shared_ptr<BaseClient> Operator::LocalClientBase() const {
+std::shared_ptr<BaseClient> Operator::LocalClient() const {
   return local_client_base_;
 }
 
+std::string Operator::CurrentNickname() const {
+  return current_client_->GetNickname();
+}
+
 std::shared_ptr<BaseClient> Operator::CurrentClient() const {
-  return current_client_;
+  if (current_client_) {
+    return current_client_;
+  } else {
+    return LocalClient();
+  }
 }
 
 void Operator::SetCurrentClient(const std::shared_ptr<BaseClient> &client) {
@@ -154,7 +159,7 @@ Operator::AddClient(const std::string &nickname,
     trace_cb = log_manager_.TraceCallbackFunc();
   }
   if (IsLocalNickname_(nickname)) {
-    return {Ok(), LocalClientBase()};
+    return {Ok(), LocalClient()};
   }
 
   auto existing = target.GetHost(nickname);
@@ -249,7 +254,7 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
 
   amf flag = interrupt_flag ? interrupt_flag : amgif;
   if (IsLocalNickname_(nickname)) {
-    return {Ok(), LocalClientBase()};
+    return {Ok(), LocalClient()};
   }
   if (!trace_cb) {
     trace_cb = log_manager_.TraceCallbackFunc();
@@ -433,7 +438,7 @@ std::pair<ECM, std::shared_ptr<BaseClient>>
 Operator::EnsureClient(const std::string &nickname, amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : amgif;
   if (IsLocalNickname_(nickname)) {
-    return {Ok(), LocalClientBase()};
+    return {Ok(), LocalClient()};
   }
 
   auto existing = clients_ ? clients_->GetHost(nickname) : nullptr;
@@ -459,17 +464,20 @@ AuthCallback Operator::BuildAuthCallback_(const AuthCallback &auth_cb,
     if (spinner_running) {
       spinner_running->store(false, std::memory_order_relaxed);
     }
-    int prev_level = -99999;
+    int prev_client_level = -99999;
+    int prev_program_level = -99999;
     if (quiet) {
-      prev_level = log_manager_.TraceLevel();
-      log_manager_.TraceLevel(-1);
+      prev_client_level = log_manager_.TraceLevel(-99999, false, true, false);
+      prev_program_level = log_manager_.TraceLevel(-99999, true, false, false);
+      log_manager_.TraceLevel(-1, true, true, false);
     }
     std::optional<std::string> result;
     if (auth_cb) {
       result = auth_cb(info);
     }
     if (quiet) {
-      log_manager_.TraceLevel(prev_level);
+      log_manager_.TraceLevel(prev_client_level, false, true, false);
+      log_manager_.TraceLevel(prev_program_level, true, false, false);
     }
     return result;
   };
@@ -579,13 +587,11 @@ Operator::DisconnectCallback Operator::BuiltinDisconnectCallback_() {
   };
 }
 
-std::shared_ptr<BaseClient>
-Operator::CreateLocalClient_(AMHostManager &hostm, AMLogManager &log_manager) {
-  auto trace_cb = log_manager.TraceCallbackFunc();
-
-  auto [rcm, cfg] = hostm.GetLocalConfig();
+std::shared_ptr<BaseClient> Operator::CreateLocalClient_() {
+  auto [rcm, cfg] = hostm_.GetLocalConfig();
   auto client_t = CreateClient(cfg.request, ClientProtocol::LOCAL, 10,
-                               std::move(trace_cb), cfg.buffer_size, {}, {});
+                               std::move(log_manager_.TraceCallbackFunc()),
+                               cfg.buffer_size, {}, {});
   if (!client_t) {
     std::cerr << "Failed to create local client: Unsupported protocol"
               << std::endl;

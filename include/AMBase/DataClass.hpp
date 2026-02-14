@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 
@@ -295,6 +296,9 @@ struct ConRequst {
   }
 };
 
+/** @brief Canonical alias of the connection request type used by tracing. */
+using ConRequest = ConRequst;
+
 struct ProgressCBInfo {
   std::string src;
   std::string dst;
@@ -531,16 +535,21 @@ struct TraceInfo {
   std::string target;
   std::string action;
   std::string message;
+  std::optional<ConRequest> request = std::nullopt;
   double timestamp;
 
   TraceInfo()
       : level(TraceLevel::Info), error_code(EC::Success), nickname(""),
-        target(""), action(""), message("") {}
+        target(""), action(""), message(""), request(std::nullopt),
+        timestamp(timenow()) {}
   TraceInfo(TraceLevel level, ErrorCode error_code, std::string nickname,
-            std::string target, std::string action, std::string message)
-      : level(std::move(level)), error_code(std::move(error_code)),
-        nickname(std::move(nickname)), target(std::move(target)),
-        action(std::move(action)), message(std::move(message)),
+            std::string target, std::string action, std::string message,
+            std::optional<ConRequest> request = std::nullopt,
+            TraceSource source = TraceSource::Client)
+      : source(source), level(std::move(level)),
+        error_code(std::move(error_code)), nickname(std::move(nickname)),
+        target(std::move(target)), action(std::move(action)),
+        message(std::move(message)), request(std::move(request)),
         timestamp(timenow()) {}
 };
 

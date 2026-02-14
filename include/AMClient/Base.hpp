@@ -38,12 +38,6 @@
 // not constexpr in some environments (like pybind11's embedded MSVC 2015),
 // which causes static initialization failure
 
-inline static const std::array<char, 32> AMcharset = {
-    '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C',
-    'D', 'E', 'F', 'G', 'H', 'J', 'K', 'M', 'N', 'P', 'Q',
-    'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
-constexpr size_t AMbase = sizeof(AMcharset) - 1;
-
 inline size_t GenerateUIDInt() {
   try {
     std::random_device rd;
@@ -61,6 +55,11 @@ inline size_t GenerateUIDInt() {
 }
 
 inline std::string GenerateUID(int length = 10) {
+  static const std::array<char, 32> AMcharset = {
+      '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C',
+      'D', 'E', 'F', 'G', 'H', 'J', 'K', 'M', 'N', 'P', 'Q',
+      'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z'};
+  static constexpr size_t AMbase = sizeof(AMcharset) - 1;
   length = length < 1 ? 1 : length;
   length = length > 32 ? 32 : length;
   size_t uid = GenerateUIDInt();
@@ -79,7 +78,9 @@ class UnimplementedMethodException : public std::exception {
 public:
   UnimplementedMethodException(std::string message)
       : message(std::move(message)) {}
-  const char *what() const noexcept override { return message.c_str(); }
+  [[nodiscard]] const char *what() const noexcept override {
+    return message.c_str();
+  }
 
 private:
   std::string message;
@@ -472,7 +473,8 @@ public:
 
   void trace(TraceLevel level, EC error_code, const std::string &target = "",
              const std::string &action = "", const std::string &msg = "") {
-    this->trace(TraceInfo(level, error_code, nickname, target, action, msg));
+    this->trace(TraceInfo(level, error_code, nickname, target, action, msg,
+                          res_data, TraceSource::Client));
   }
 
   void trace(const TraceInfo &trace_info) {
