@@ -230,23 +230,26 @@ enum class TraceLevel {
 };
 
 enum class AMTokenType {
-  Common,
-  Module,
-  Command,
-  VarName,
-  VarValue,
-  Nickname,
-  String,
-  Option,
-  AtSign,
-  DollarSign,
-  EqualSign,
-  VarNameMissing,
-  EscapeSign
+  Unset = -1,
+  Common = 0,
+  Module = 1,
+  Command = 2,
+  VarName = 3,
+  VarValue = 4,
+  Nickname = 5,
+  String = 6,
+  Option = 7,
+  AtSign = 8,
+  DollarSign = 9,
+  EqualSign = 10,
+  VarNameMissing = 11,
+  EscapeSign = 12,
+  Path = 13,
+  Unexistpath = 14,
+  File = 15,
+  Dir = 16,
+  Special = 17
+
 };
 
-enum class TraceSource {
-  Client = 0,
-  Programm = 1
-
-};
+enum class TraceSource { Client = 0, Programm = 1 };
