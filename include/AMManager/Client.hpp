@@ -33,9 +33,9 @@ public:
   ClientMaintainer &Clients();
   [[nodiscard]] std::vector<std::string> GetClientNames();
   [[nodiscard]] std::vector<std::shared_ptr<BaseClient>> GetClients();
-  [[nodiscard]] std::shared_ptr<AMLocalClient> LocalClient() const;
-  [[nodiscard]] std::shared_ptr<BaseClient> LocalClientBase() const;
+  [[nodiscard]] std::shared_ptr<BaseClient> LocalClient() const;
   [[nodiscard]] std::shared_ptr<BaseClient> CurrentClient() const;
+  [[nodiscard]] std::string CurrentNickname() const;
   void SetCurrentClient(const std::shared_ptr<BaseClient> &client);
   void ConfigureState(const std::shared_ptr<ClientMaintainer> &clients,
                       const std::shared_ptr<BaseClient> &local_client_base,
@@ -97,8 +97,7 @@ protected:
                                  const ECM &ecm);
   AuthCallback BuiltinPasswordCallback_();
   DisconnectCallback BuiltinDisconnectCallback_();
-  std::shared_ptr<BaseClient> CreateLocalClient_(AMHostManager &hostm,
-                                                 AMLogManager &log_manager);
+  std::shared_ptr<BaseClient> CreateLocalClient_();
 };
 
 class PathOps : public Operator {
@@ -136,8 +135,7 @@ public:
   ECM Init() override {
     SetPasswordCallback();
     SetDisconnectCallback();
-    std::shared_ptr<BaseClient> local_client_base_ =
-        CreateLocalClient_(hostm_, log_manager_);
+    std::shared_ptr<BaseClient> local_client_base_ = CreateLocalClient_();
     if (!local_client_base_) {
       return Err(EC::ProgrammInitializeFailed, "Failed to create local client");
     }

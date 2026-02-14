@@ -3,7 +3,6 @@
 #include "AMBase/Path.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
 #include "AMManager/Transfer.hpp"
 #include <algorithm>
 #include <atomic>
@@ -150,27 +149,6 @@ void PrintTaskResult_(AMPromptManager &prompt,
 }
 
 } // namespace
-
-/**
- * @brief Return the singleton transfer manager instance.
- */
-AMTransferManager &AMTransferManager::Instance() {
-  static AMTransferManager instance;
-  return instance;
-}
-
-/**
- * @brief Construct a transfer manager using singleton managers.
- */
-AMTransferManager::AMTransferManager() {
-  int init_thread_num = 1;
-
-  config_.ResolveArg(DocumentKind::Settings,
-                     {"TransferManager", "init_thread_num"}, &init_thread_num);
-
-  init_thread_num = std::min(std::max(1, init_thread_num), 128);
-  worker_.ThreadCount(init_thread_num);
-}
 
 /**
  * @brief Set the public result callback wrapper for all task completions.

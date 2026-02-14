@@ -5,6 +5,7 @@
 #include "AMManager/Prompt.hpp"
 #include "Isocline/isocline.h"
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <conio.h>
@@ -125,21 +126,34 @@ ECM AMHistoryManager::LoadHistory(const std::string &nickname) {
   if (history_loaded_ && history_nickname_ == nickname) {
     return Ok();
   }
-  history_map_[nickname] = GetIsoRecords();
+
+  std::vector<std::string> tmp_vector = {};
+  std::string tmp_nickname = nickname;
+
+  if (history_loaded_) {
+    tmp_vector = GetIsoRecords();
+  }
+
   ic_set_history(nullptr, max_history_count_);
-  ic_enable_history_duplicates(true);
   ic_history_clear();
 
   history_nickname_ = nickname;
 
-  if (history_map_.find(nickname) == history_map_.end()) {
+  auto it = history_map_.find(nickname);
+
+  if (it == history_map_.end()) {
     return Err(EC::HostConfigNotFound,
                "input history not found for nickname: " + nickname);
   }
 
-  for (const auto &cmd : history_map_[nickname]) {
+  for (const auto &cmd : it->second) {
     ic_history_add(cmd.c_str());
   }
+
+  if (history_loaded_) {
+    history_map_[nickname] = std::move(tmp_vector);
+  }
+
   return Ok();
 }
 

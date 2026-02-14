@@ -171,12 +171,10 @@ bool AMHostManager::HostExists(const std::string &nickname) const {
   if (nickname.empty()) {
     return false;
   }
-  CollectHosts_();
   return host_configs.find(nickname) != host_configs.end();
 }
 
 std::vector<std::string> AMHostManager::ListNames() const {
-  CollectHosts_();
   std::vector<std::string> names;
   names.reserve(host_configs.size());
   for (const auto &pair : host_configs) {

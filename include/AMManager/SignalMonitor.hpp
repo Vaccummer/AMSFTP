@@ -55,7 +55,7 @@ public:
   /**
    * @brief Stop the worker thread on destruction.
    */
-  ~AMCliSignalMonitor() { Stop(); }
+  ~AMCliSignalMonitor() override { Stop(); }
 
   /**
    * @brief Install signal handlers for SIGINT/SIGTERM.
@@ -83,6 +83,18 @@ public:
       return;
     }
     worker_ = std::thread([this]() { Run_(); });
+  }
+
+  ECM Init() override {
+    SignalHook global;
+    global.interrupt_flag = amgif;
+    global.callback = {};
+    global.is_silenced = false;
+    global.priority = 0;
+    global.consume = false;
+    hooks_["GLOBAL"] = std::move(global);
+    Start();
+    return Ok();
   }
 
   /**
@@ -207,15 +219,7 @@ private:
     }
   }
 #endif
-  AMCliSignalMonitor() {
-    SignalHook global;
-    global.interrupt_flag = amgif;
-    global.callback = {};
-    global.is_silenced = false;
-    global.priority = 0;
-    global.consume = false;
-    hooks_["GLOBAL"] = std::move(global);
-  }
+  AMCliSignalMonitor() = default;
 
   /**
    * @brief Worker loop that consumes recorded signals.

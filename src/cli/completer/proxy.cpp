@@ -28,8 +28,8 @@ AMCompleter::~AMCompleter() { SetActive(nullptr); }
  * @brief Install completer callback and apply configuration.
  */
 void AMCompleter::Install() {
-  engine_->Install(this);
   engine_->LoadConfig();
+  engine_->Install(this);
 }
 
 /**

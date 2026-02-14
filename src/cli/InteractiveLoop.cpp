@@ -1153,10 +1153,7 @@ std::string ApplyStyleFromConfig_(AMConfigManager &config_manager,
  */
 std::shared_ptr<BaseClient>
 ResolveActiveClient_(AMClientManager &client_manager) {
-  if (client_manager.CurrentClient()) {
-    return client_manager.CurrentClient();
-  }
-  return client_manager.LocalClientBase();
+  return client_manager.CurrentClient();
 }
 
 /**
@@ -1445,7 +1442,7 @@ int RunInteractiveLoop(const std::string &app_name,
 
     auto history_client = ResolveActiveClient_(client_manager);
     std::string history_nickname =
-        history_client ? history_client->GetNickname() : std::string("local");
+        history_client ? history_client->GetNickname() : "local";
     if (history_nickname.empty()) {
       history_nickname = "local";
     }
@@ -1458,6 +1455,7 @@ int RunInteractiveLoop(const std::string &app_name,
     std::string prompt_header;
     std::string prompt_line;
     SplitPromptForReadline_(prompt_text, &prompt_header, &prompt_line);
+
     if (!prompt_header.empty()) {
       std::cout << prompt_header << std::endl;
     }
@@ -1601,5 +1599,3 @@ int RunInteractiveLoop(const std::string &app_name,
   AMIsInteractive.store(false, std::memory_order_relaxed);
   return g_cli_exit_code;
 }
-
-

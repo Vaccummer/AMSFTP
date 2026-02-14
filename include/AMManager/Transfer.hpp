@@ -1,4 +1,5 @@
 #pragma once
+#include "AMBase/DataClass.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
@@ -23,7 +24,21 @@ public:
   /**
    * @brief Return the singleton instance.
    */
-  static AMTransferManager &Instance();
+  static AMTransferManager &Instance() {
+    static AMTransferManager instance;
+    return instance;
+  };
+
+  ECM Init() override {
+    int init_thread_num = 1;
+    config_.ResolveArg(DocumentKind::Settings,
+                       {"TransferManager", "init_thread_num"},
+                       &init_thread_num);
+
+    init_thread_num = std::min(std::max(1, init_thread_num), 128);
+    worker_.ThreadCount(init_thread_num);
+    return Ok();
+  }
 
   /**
    * @brief Set the public result callback wrapper for all task completions.
@@ -266,9 +281,10 @@ private:
   /**
    * @brief Construct transfer manager using singleton managers.
    */
-  AMTransferManager();
+  AMTransferManager() = default;
 
   static bool HasWildcard_(const std::string &path);
+
   bool ConfirmWildcard_(const std::vector<PathInfo> &matches,
                         const std::string &src_host,
                         const std::string &dst_host);

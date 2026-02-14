@@ -1,6 +1,6 @@
+#include "AMCLI/Completer/Searcher.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMCLI/CLIBind.hpp"
-#include "AMCLI/Completer/Searcher.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/FileSystem.hpp"
@@ -837,7 +837,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       ctx.args ? ctx.args->cache_max_entries : static_cast<size_t>(64);
 
   if (!path.remote) {
-    auto client = client_manager_.LocalClientBase();
+    auto client = client_manager_.LocalClient();
     if (!client) {
       return result;
     }
@@ -972,9 +972,7 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
     return path;
   }
 
-  const auto current_client = client_manager_.CurrentClient()
-                                  ? client_manager_.CurrentClient()
-                                  : client_manager_.LocalClientBase();
+  const auto current_client = client_manager_.CurrentClient();
   const bool current_remote =
       current_client && current_client->GetProtocol() != ClientProtocol::LOCAL;
 
@@ -1036,7 +1034,7 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
   if (path.remote) {
     client = client_manager_.Clients().GetHost(path.nickname);
   } else {
-    client = client_manager_.LocalClientBase();
+    client = client_manager_.LocalClient();
   }
   if (!client) {
     return path;
