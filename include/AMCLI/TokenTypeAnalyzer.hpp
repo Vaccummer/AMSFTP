@@ -31,13 +31,17 @@ public:
   static void PromptHighlighter_(ic_highlight_env_t *henv, const char *input,
                                  void *arg);
 
-private:
-  struct Token {
+  /**
+   * @brief Token parsed from input, optionally annotated with type.
+   */
+  struct AMToken {
     size_t start = 0;
     size_t end = 0;
     bool quoted = false;
+    AMTokenType type = AMTokenType::Unset;
   };
 
+private:
   using CommandNode = CommandTree::CommandNode;
 
   AMTokenTypeAnalyzer() = default;
@@ -45,13 +49,14 @@ private:
   void EnsureCliCache();
   void BuildCliCache();
 
-  std::vector<Token> Tokenize(const std::string &input) const;
+  std::vector<AMToken> Tokenize(const std::string &input,
+                                bool analyse_type = false) const;
   bool ParseVarTokenAt(const std::string &input, size_t pos, size_t limit,
                        size_t *out_end) const;
-  bool ParseVarTokenText(const std::string &token) const;
-  bool ParseVarTokenText(const std::string &token, std::string *out_name) const;
+  bool ParseVarTokenText(const std::string &token,
+                         std::string *out_name = nullptr) const;
 
-  AMTokenType VarNameTypeFor(const std::string &name) const;
+  [[nodiscard]] AMTokenType VarNameTypeFor(const std::string &name) const;
 
   bool IsValidOptionToken(const std::string &token,
                           const CommandNode *node) const;

@@ -145,11 +145,14 @@ void AMTokenTypeAnalyzer::PromptHighlighter_(ic_highlight_env_t *henv,
   ic_highlight_formatted(henv, input, formatted.c_str());
 }
 
-/** Split input into whitespace-delimited tokens while keeping quoted strings.
+/**
+ * @brief Split input into whitespace-delimited tokens while keeping quoted
+ * strings, optionally analyzing token type.
  */
-std::vector<AMTokenTypeAnalyzer::Token>
-AMTokenTypeAnalyzer::Tokenize(const std::string &input) const {
-  std::vector<Token> tokens;
+std::vector<AMTokenTypeAnalyzer::AMToken>
+AMTokenTypeAnalyzer::Tokenize(const std::string &input,
+                              bool analyse_type) const {
+  std::vector<AMToken> tokens;
   size_t i = 0;
   while (i < input.size()) {
     while (i < input.size() && AMStr::IsWhitespace(input[i])) {
@@ -181,8 +184,116 @@ AMTokenTypeAnalyzer::Tokenize(const std::string &input) const {
         ++i;
       }
     }
-    tokens.push_back({start, i, quoted});
+    AMToken token;
+    token.start = start;
+    token.end = i;
+    token.quoted = quoted;
+    token.type = analyse_type ? AMTokenType::Common : AMTokenType::Unset;
+    tokens.push_back(token);
   }
+
+  if (!analyse_type) {
+    return tokens;
+  }
+
+  std::vector<std::string> texts;
+  texts.reserve(tokens.size());
+  for (const auto &token : tokens) {
+    texts.push_back(input.substr(token.start, token.end - token.start));
+  }
+
+  for (size_t idx = 0; idx < tokens.size(); ++idx) {
+    auto &token = tokens[idx];
+    if (token.quoted) {
+      token.type = AMTokenType::String;
+      continue;
+    }
+
+    const std::string &text = texts[idx];
+    if (text.empty()) {
+      token.type = AMTokenType::Common;
+      continue;
+    }
+    std::string name;
+    if (ParseVarTokenText(text, &name)) {
+      token.type = VarNameTypeFor(name);
+      continue;
+    }
+
+    if (text.rfind("--", 0) == 0 || (text.size() >= 2 && text[0] == '-')) {
+      token.type = AMTokenType::Option;
+      continue;
+    }
+
+    size_t at_pos = text.find('@');
+    if (at_pos != std::string::npos && at_pos > 0) {
+      const std::string prefix = text.substr(0, at_pos);
+      if (nicknames_.find(prefix) != nicknames_.end()) {
+        token.type = AMTokenType::Nickname;
+      }
+    }
+  }
+
+  if (command_tree_) {
+    const CommandNode *node = nullptr;
+    std::string path;
+    bool parsing = true;
+    for (size_t idx = 0; idx < tokens.size(); ++idx) {
+      auto &token = tokens[idx];
+      if (token.quoted) {
+        continue;
+      }
+      const std::string &text = texts[idx];
+      if (text.empty()) {
+        continue;
+      }
+      if (parsing) {
+        if (path.empty()) {
+          if (command_tree_->IsModule(text)) {
+            token.type = AMTokenType::Module;
+            path = text;
+            node = command_tree_->FindNode(path);
+            continue;
+          }
+          if (command_tree_->IsTopCommand(text)) {
+            token.type = AMTokenType::Command;
+            path = text;
+            node = command_tree_->FindNode(path);
+            if (!node || node->subcommands.empty()) {
+              parsing = false;
+            }
+            continue;
+          }
+          parsing = false;
+        } else if (node &&
+                   node->subcommands.find(text) != node->subcommands.end()) {
+          token.type = AMTokenType::Command;
+          path += " " + text;
+          node = command_tree_->FindNode(path);
+          if (!node || node->subcommands.empty()) {
+            parsing = false;
+          }
+          continue;
+        } else {
+          parsing = false;
+        }
+      }
+    }
+
+    if (node) {
+      for (size_t idx = 0; idx < tokens.size(); ++idx) {
+        auto &token = tokens[idx];
+        if (token.quoted || token.type != AMTokenType::Common) {
+          continue;
+        }
+        const std::string &text = texts[idx];
+        if (IsValidOptionToken(text, node)) {
+          token.type = AMTokenType::Option;
+        }
+      }
+    }
+  }
+
   return tokens;
 }
 
@@ -221,11 +332,6 @@ bool AMTokenTypeAnalyzer::ParseVarTokenAt(const std::string &input, size_t pos,
     *out_end = cur;
   }
   return true;
-}
-
-/** Validate whether a complete token is a variable reference. */
-bool AMTokenTypeAnalyzer::ParseVarTokenText(const std::string &token) const {
-  return ParseVarTokenText(token, nullptr);
 }
 
 /** Validate whether a complete token is a variable reference and extract. */
@@ -337,7 +443,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
 
   RefreshNicknameCache();
 
-  std::vector<Token> tokens = Tokenize(input);
+  std::vector<AMToken> tokens = Tokenize(input);
 
   auto apply_range = [&](size_t start, size_t end, AMTokenType type) {
     if (start >= end || start >= size) {
