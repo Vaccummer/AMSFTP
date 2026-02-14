@@ -157,9 +157,9 @@ private:
   ECM PrintClientStatus(const ClientRef &client, bool update = true,
                         amf interrupt_flag = nullptr);
   /** Format unix timestamp to printable time. */
-  std::string FormatTimestamp(double value) const;
+  [[nodiscard]] std::string FormatTimestamp(double value) const;
   /** Format stat output block. */
-  std::string FormatStatOutput(const PathInfo &info) const;
+  [[nodiscard]] std::string FormatStatOutput(const PathInfo &info) const;
   /**
    * @brief Create a walk error callback that prints formatted errors.
    * @param func_name Function label for error messages.

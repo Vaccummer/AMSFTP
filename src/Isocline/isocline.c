@@ -380,6 +380,16 @@ ic_public void ic_set_completion_select_sign( const char* sign ) {
   }
 }
 
+/** Set an optional marker appended to the completion page info line. */
+ic_public void ic_set_completion_page_marker( const char* marker ) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return;
+  mem_free(env->mem, env->completion_page_marker);
+  env->completion_page_marker = NULL;
+  if (marker != NULL && marker[0] != 0) {
+    env->completion_page_marker = mem_strdup(env->mem, marker);
+  }
+}
+
 ic_public bool ic_enable_multiline_indent(bool enable) {
   ic_env_t* env = ic_get_env(); if (env==NULL) return false;
   bool prev = env->no_multiline_indent;
@@ -681,6 +691,7 @@ static void ic_env_free(ic_env_t* env) {
   mem_free(env->mem, env->match_braces);
   mem_free(env->mem, env->auto_braces);
   mem_free(env->mem, env->complete_select_sign);
+  mem_free(env->mem, env->completion_page_marker);
   env->prompt_marker = NULL;
   
   // and deallocate ourselves

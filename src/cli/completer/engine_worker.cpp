@@ -1,9 +1,9 @@
-#include "AMCLI/Completer/Engine.hpp"
 #include "AMBase/CommonTools.hpp"
+#include "AMCLI/Completer/Engine.hpp"
 #include "Isocline/isocline.h"
-#include <algorithm>
 #include <cctype>
 #include <iterator>
+#include <unordered_set>
 
 namespace {
 /**
@@ -80,28 +80,92 @@ bool IsPathLikeText_(const std::string &text) {
 }
 
 /**
- * @brief Return path-type ordering rank used by merged sorting.
+ * @brief Return true when command name is a module command.
  */
-int PathTypeOrder_(PathType type) {
-  switch (type) {
-  case PathType::FILE:
-    return 0;
-  case PathType::DIR:
-    return 1;
-  case PathType::SYMLINK:
-    return 2;
-  default:
-    return 3;
-  }
+bool IsModuleCommand_(const std::string &name) {
+  return name == "config" || name == "client" || name == "task";
 }
 
 /**
- * @brief Return true if candidate kind represents a path entry.
+ * @brief Parsed command/argument state from tokens before cursor.
  */
-bool IsPathCandidate_(AMCompletionKind kind) {
-  return kind == AMCompletionKind::PathLocal ||
-         kind == AMCompletionKind::PathRemote;
+struct CommandState {
+  std::string command_path;
+  size_t command_tokens = 0;
+  size_t arg_index = 0;
+};
+
+/**
+ * @brief Resolve a token text by index from completion context.
+ */
+std::string ExtractTokenText_(const AMCompletionContext &ctx, size_t index) {
+  if (index >= ctx.tokens.size()) {
+    return "";
+  }
+  const auto &token = ctx.tokens[index];
+  if (token.content_end <= token.content_start ||
+      token.content_end > ctx.input.size()) {
+    return "";
+  }
+  return UnescapeBackticks_(ctx.input.substr(
+      token.content_start, token.content_end - token.content_start));
 }
+
+/**
+ * @brief Resolve command path and positional arg index from token context.
+ */
+CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
+  CommandState state;
+  std::vector<std::string> before;
+  before.reserve(ctx.token_index);
+
+  for (size_t i = 0; i < ctx.tokens.size() && i < ctx.token_index; ++i) {
+    std::string text = ExtractTokenText_(ctx, i);
+    if (!text.empty()) {
+      before.push_back(std::move(text));
+    }
+  }
+
+  if (before.empty()) {
+    return state;
+  }
+
+  state.command_path = before[0];
+  state.command_tokens = 1;
+  if (before.size() >= 2 && IsModuleCommand_(before[0]) &&
+      !StartsWithLongOption_(before[1]) && !StartsWithShortOption_(before[1])) {
+    state.command_path += " " + before[1];
+    state.command_tokens = 2;
+  }
+
+  for (size_t i = state.command_tokens; i < before.size(); ++i) {
+    if (StartsWithLongOption_(before[i]) || StartsWithShortOption_(before[i])) {
+      continue;
+    }
+    ++state.arg_index;
+  }
+  return state;
+}
+
+/**
+ * @brief Return true if a command expects path input at the given arg index.
+ */
+bool IsPathArgumentCommand_(const std::string &command_path, size_t arg_index) {
+  if (command_path == "cd" || command_path == "ls" ||
+      command_path == "realpath") {
+    return arg_index == 0;
+  }
+  if (command_path == "find" || command_path == "walk" ||
+      command_path == "tree") {
+    return arg_index == 0;
+  }
+  if (command_path == "stat" || command_path == "size" ||
+      command_path == "mkdir" || command_path == "rm" || command_path == "cp") {
+    return true;
+  }
+  return false;
+}
+
 } // namespace
 
 /**
@@ -190,7 +254,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
 
   std::string trimmed = AMStr::Strip(request.input);
   if (!trimmed.empty() && trimmed.front() == '!') {
-    ctx.target = AMCompletionTarget::Disabled;
+    ctx.targets = {AMCompletionTarget::Disabled};
     return ctx;
   }
 
@@ -198,8 +262,8 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
 
   AMCompletionToken token;
   size_t token_index = ctx.tokens.size();
-  ctx.has_token = FindTokenAtCursor_(ctx.tokens, request.cursor, &token,
-                                     &token_index);
+  ctx.has_token =
+      FindTokenAtCursor_(ctx.tokens, request.cursor, &token, &token_index);
   if (!ctx.has_token) {
     token = {request.cursor, request.cursor, request.cursor, request.cursor,
              false};
@@ -211,40 +275,81 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   if (token.content_end >= token.content_start &&
       token.content_end <= request.input.size() &&
       token.content_start <= request.input.size()) {
-    ctx.token_raw = request.input.substr(token.content_start,
-                                         token.content_end - token.content_start);
+    ctx.token_raw = request.input.substr(
+        token.content_start, token.content_end - token.content_start);
   }
-  if (request.cursor >= token.content_start && request.cursor <= token.content_end &&
+  if (request.cursor >= token.content_start &&
+      request.cursor <= token.content_end &&
       token.content_start <= request.input.size()) {
-    ctx.token_prefix_raw = request.input.substr(token.content_start,
-                                                request.cursor - token.content_start);
+    ctx.token_prefix_raw = request.input.substr(
+        token.content_start, request.cursor - token.content_start);
   }
   ctx.token_text = UnescapeBackticks_(ctx.token_raw);
   ctx.token_prefix = UnescapeBackticks_(ctx.token_prefix_raw);
 
   if (ctx.token_index == 0) {
-    ctx.target = AMCompletionTarget::TopCommand;
+    ctx.targets = {AMCompletionTarget::TopCommand};
     return ctx;
   }
   if (StartsWithUnescapedDollar_(ctx.token_prefix_raw, ctx.token_raw)) {
-    ctx.target = AMCompletionTarget::VariableName;
+    ctx.targets = {AMCompletionTarget::VariableName};
     return ctx;
   }
   if (StartsWithLongOption_(ctx.token_prefix)) {
-    ctx.target = AMCompletionTarget::LongOption;
+    ctx.targets = {AMCompletionTarget::LongOption};
     return ctx;
   }
   if (StartsWithShortOption_(ctx.token_prefix)) {
-    ctx.target = AMCompletionTarget::ShortOption;
-    return ctx;
-  }
-  if (ctx.token_prefix.find('@') != std::string::npos ||
-      IsPathLikeText_(ctx.token_prefix)) {
-    ctx.target = AMCompletionTarget::Path;
+    ctx.targets = {AMCompletionTarget::ShortOption};
     return ctx;
   }
 
-  ctx.target = AMCompletionTarget::None;
+  const CommandState state = ResolveCommandState_(ctx);
+  std::optional<AMCompletionTarget> internal_target;
+  if (state.command_path == "config get" ||
+      state.command_path == "config edit" ||
+      state.command_path == "config rm") {
+    internal_target = AMCompletionTarget::HostNickname;
+  } else if (state.command_path == "config rn" && state.arg_index == 0) {
+    internal_target = AMCompletionTarget::HostNickname;
+  } else if (state.command_path == "config set") {
+    if (state.arg_index == 0) {
+      internal_target = AMCompletionTarget::HostNickname;
+    } else if (state.arg_index == 1) {
+      internal_target = AMCompletionTarget::HostAttr;
+    }
+  } else if (state.command_path == "connect" && state.arg_index == 0) {
+    internal_target = AMCompletionTarget::HostNickname;
+  } else if (state.command_path == "client check" ||
+             state.command_path == "client rm") {
+    internal_target = AMCompletionTarget::ClientName;
+  } else if (state.command_path == "ch" && state.arg_index == 0) {
+    internal_target = AMCompletionTarget::ClientName;
+  } else if (state.command_path == "task show" ||
+             state.command_path == "task inspect" ||
+             state.command_path == "task terminate" ||
+             state.command_path == "task pause") {
+    internal_target = AMCompletionTarget::TaskId;
+  } else if ((state.command_path == "task retry" ||
+              state.command_path == "retry") &&
+             state.arg_index == 0) {
+    internal_target = AMCompletionTarget::TaskId;
+  }
+
+  if (internal_target.has_value()) {
+    ctx.targets.push_back(*internal_target);
+  }
+
+  const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
+  const bool force_path =
+      IsPathArgumentCommand_(state.command_path, state.arg_index);
+  if (force_path || has_at || IsPathLikeText_(ctx.token_prefix)) {
+    ctx.targets.push_back(AMCompletionTarget::Path);
+  }
+
+  if (ctx.targets.empty()) {
+    ctx.targets = {AMCompletionTarget::Subcommand};
+  }
   return ctx;
 }
 
@@ -253,20 +358,42 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
  */
 void AMCompleteEngine::DispatchCandidates_(
     const AMCompletionContext &ctx, std::vector<AMCompletionCandidate> &out) {
+  if (ctx.targets.empty()) {
+    return;
+  }
+  for (const auto &target : ctx.targets) {
+    if (target == AMCompletionTarget::Disabled) {
+      return;
+    }
+  }
   ConsumeAsyncResults_(ctx, out);
+  if (!out.empty()) {
+    return;
+  }
 
-  auto engines = ResolveSearchEngines_(ctx.target);
-  for (const auto &engine : engines) {
+  std::unordered_set<const AMCompletionSearchEngine *> used_engines;
+  for (const auto &target : ctx.targets) {
+    auto engine = ResolveSearchEngine_(target);
     if (!engine) {
       continue;
     }
+    const auto *engine_ptr = engine.get();
+    if (!used_engines.insert(engine_ptr).second) {
+      continue;
+    }
 
-    AMCompletionCollectResult collected = engine->CollectCandidates(ctx);
+    AMCompletionContext scoped = ctx;
+    scoped.targets.clear();
+    scoped.targets.push_back(target);
+
+    AMCompletionCollectResult collected = engine->CollectCandidates(scoped);
     if (!collected.candidates.empty()) {
-      engine->SortCandidates(ctx, collected.candidates);
       out.insert(out.end(),
                  std::make_move_iterator(collected.candidates.begin()),
                  std::make_move_iterator(collected.candidates.end()));
+      last_result_from_cache_ = collected.from_cache;
+      ConsumeAsyncResults_(scoped, out);
+      return;
     }
 
     if (collected.async_request.has_value()) {
@@ -274,41 +401,14 @@ void AMCompleteEngine::DispatchCandidates_(
       request.request_id = ctx.request_id;
       request.source_engine = engine;
       if (request.target == AMCompletionTarget::Disabled) {
-        continue;
+        request.target = target;
       }
-      if (!request.interrupt_flag) {
-        request.interrupt_flag = std::make_shared<std::atomic<bool>>(false);
+      if (request.target == AMCompletionTarget::Disabled || !request.search) {
+        continue;
       }
       ScheduleAsyncRequest_(std::move(request));
     }
   }
-
-  ConsumeAsyncResults_(ctx, out);
-}
-
-/**
- * @brief Sort merged candidates after collection.
- */
-void AMCompleteEngine::SortCandidates_(std::vector<AMCompletionCandidate> &items) {
-  std::stable_sort(items.begin(), items.end(),
-                   [](const AMCompletionCandidate &a,
-                      const AMCompletionCandidate &b) {
-                     if (a.score != b.score) {
-                       return a.score < b.score;
-                     }
-
-                     const bool a_path = IsPathCandidate_(a.kind);
-                     const bool b_path = IsPathCandidate_(b.kind);
-                     if (a_path && b_path) {
-                       const int ao = PathTypeOrder_(a.path_type);
-                       const int bo = PathTypeOrder_(b.path_type);
-                       if (ao != bo) {
-                         return ao < bo;
-                       }
-                     }
-
-                     return a.insert_text < b.insert_text;
-                   });
 }
 
 /**
@@ -321,6 +421,8 @@ void AMCompleteEngine::EmitCandidates_(
     return;
   }
 
+  ic_set_completion_page_marker(last_result_from_cache_ ? "(cache)" : nullptr);
+
   long delete_before = 0;
   long delete_after = 0;
   if (ctx.has_token && ctx.cursor >= ctx.token.content_start &&
@@ -332,11 +434,9 @@ void AMCompleteEngine::EmitCandidates_(
   for (const auto &candidate : items) {
     const char *display =
         candidate.display.empty() ? nullptr : candidate.display.c_str();
-    const char *help = candidate.help.empty() ? nullptr : candidate.help.c_str();
+    const char *help =
+        candidate.help.empty() ? nullptr : candidate.help.c_str();
     ic_add_completion_prim(cenv, candidate.insert_text.c_str(), display, help,
                            delete_before, delete_after);
   }
 }
-
-
-

@@ -1481,6 +1481,12 @@ struct DispatchResult {
 CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args);
 
 /**
+ * @brief Build the shared command tree from CLI definitions.
+ */
+std::shared_ptr<CommandTree> BuildCommandTree(CLI::App &app,
+                                              CliArgsPool &args);
+
+/**
  * @brief Set the exit code and return.
  */
 void SetCliExitCode(int code);

@@ -32,7 +32,6 @@ ECM ParseTransferPath(AMClientManager &client_manager, const std::string &input,
   }
   std::string resolved_path = parsed_path;
   if (client) {
-
     resolved_path = client_manager.AbsPath(parsed_path, client);
   }
   if (nickname) {
@@ -148,6 +147,11 @@ void PrintTaskResult_(AMPromptManager &prompt,
       FormatSize(total), thread_id, rcm_text));
 }
 
+bool HasWildcard_(const std::string &path) {
+  return path.find('*') != std::string::npos ||
+         (path.find('<') != std::string::npos &&
+          path.find('>') != std::string::npos);
+}
 } // namespace
 
 /**
@@ -156,23 +160,6 @@ void PrintTaskResult_(AMPromptManager &prompt,
 void AMTransferManager::SetPublicResultCallback(PublicResultCallback cb) {
   std::lock_guard<std::mutex> lock(callback_mtx_);
   public_result_cb_ = std::move(cb);
-}
-
-/**
- * @brief Get a copy of transfer history (newest first).
- */
-std::list<std::shared_ptr<TaskInfo>> AMTransferManager::GetHistory() const {
-  std::lock_guard<std::mutex> lock(history_mtx_);
-  return history_;
-}
-
-/**
- * @brief Check whether a path contains wildcard tokens.
- */
-bool AMTransferManager::HasWildcard_(const std::string &path) {
-  return path.find('*') != std::string::npos ||
-         (path.find('<') != std::string::npos &&
-          path.find('>') != std::string::npos);
 }
 
 /**

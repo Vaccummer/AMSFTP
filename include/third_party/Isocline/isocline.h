@@ -420,6 +420,9 @@ bool ic_enable_completion_auto_fill( bool enable );
     Pass NULL or empty to reset to the default indicator. */
 void ic_set_completion_select_sign( const char* sign );
 
+/** Set an optional marker appended to the completion page info line. */
+void ic_set_completion_page_marker( const char* marker );
+
 /// Disable or enable automatic identation of continuation lines in multiline
 /// input so it aligns with the initial prompt.
 /// Returns the previous setting.

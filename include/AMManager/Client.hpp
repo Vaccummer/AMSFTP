@@ -135,7 +135,7 @@ public:
   ECM Init() override {
     SetPasswordCallback();
     SetDisconnectCallback();
-    std::shared_ptr<BaseClient> local_client_base_ = CreateLocalClient_();
+    local_client_base_ = CreateLocalClient_();
     if (!local_client_base_) {
       return Err(EC::ProgrammInitializeFailed, "Failed to create local client");
     }

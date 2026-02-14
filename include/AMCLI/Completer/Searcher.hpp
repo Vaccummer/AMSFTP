@@ -1,12 +1,14 @@
 #pragma once
+#include "AMBase/CommonTools.hpp"
+#include "AMBase/DataClass.hpp"
 #include "AMCLI/Completer/Engine.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Transfer.hpp"
 #include <chrono>
+#include <list>
 #include <mutex>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 class AMConfigManager;
@@ -33,7 +35,6 @@ public:
    * @brief Construct command search engine.
    */
   AMCommandSearchEngine() = default;
-
   /**
    * @brief Collect command-related candidates.
    */
@@ -47,79 +48,7 @@ public:
                       std::vector<AMCompletionCandidate> &items) override;
 
 private:
-  /**
-   * @brief Command tree node used for completion lookups.
-   */
-  struct CommandNode {
-    std::unordered_map<std::string, std::string> subcommands;
-    std::unordered_map<std::string, std::string> long_options;
-    std::unordered_map<char, std::string> short_options;
-  };
-
-  /**
-   * @brief CLI command tree used for command completion lookups.
-   */
-  class CommandTree {
-  public:
-    /**
-     * @brief Construct and build the command tree.
-     */
-    CommandTree();
-
-    /**
-     * @brief Return true when name is a top-level command.
-     */
-    bool IsTopCommand(const std::string &name) const;
-
-    /**
-     * @brief Return true when name is a module (has subcommands).
-     */
-    bool IsModule(const std::string &name) const;
-
-    /**
-     * @brief Find a node by command path.
-     */
-    const CommandNode *FindNode(const std::string &path) const;
-
-    /**
-     * @brief List top-level commands with help text.
-     */
-    std::vector<std::pair<std::string, std::string>> ListTopCommands() const;
-
-    /**
-     * @brief List subcommands for a command path.
-     */
-    std::vector<std::pair<std::string, std::string>>
-    ListSubcommands(const std::string &path) const;
-
-    /**
-     * @brief List long options for a command path.
-     */
-    std::vector<std::pair<std::string, std::string>>
-    ListLongOptions(const std::string &path) const;
-
-    /**
-     * @brief List short options for a command path.
-     */
-    std::vector<std::pair<char, std::string>>
-    ListShortOptions(const std::string &path) const;
-
-  private:
-    /**
-     * @brief Build tree structure from CLI metadata.
-     */
-    void Build();
-
-    /**
-     * @brief Register a command path as top-level command.
-     */
-    void RegisterCommand_(const std::string &path, const std::string &help);
-
-    std::unordered_map<std::string, CommandNode> nodes_;
-    std::unordered_set<std::string> top_commands_;
-    std::unordered_set<std::string> modules_;
-    std::unordered_map<std::string, std::string> top_help_;
-  };
+  using CommandNode = CommandTree::CommandNode;
 
   /**
    * @brief Build styled command/module display text.
@@ -136,7 +65,7 @@ private:
                          const CommandNode **out_node,
                          size_t *out_consumed) const;
 
-  CommandTree command_tree_;
+  std::shared_ptr<CommandTree> command_tree_;
 };
 
 /**
@@ -194,7 +123,65 @@ public:
    */
   void ClearCache() override;
 
+  /**
+   * @brief Clear cached path entries for a specific nickname.
+   */
+  void ClearCacheForNickname(const std::string &nickname);
+
+  /**
+   * @brief Clear cached path entries for all nicknames.
+   */
+  void ClearCacheForAll();
+
+  /**
+   * @brief Cache status summary for a nickname.
+   */
+  struct CacheStatus {
+    size_t entry_count = 0;
+    size_t item_count = 0;
+  };
+
+  /**
+   * @brief Query cache status for a nickname.
+   */
+  bool GetCacheStatusForNickname(const std::string &nickname,
+                                 CacheStatus *status) const;
+
+  /**
+   * @brief Query cache status for all nicknames.
+   */
+  std::unordered_map<std::string, CacheStatus> GetCacheStatusAll() const;
+
 private:
+  /**
+   * @brief Path-engine configuration for a nickname.
+   */
+  struct PathEngineConfig {
+    bool use_async = false;
+    size_t cache_items_threshold = 50;
+    size_t cache_max_entries = 3;
+    int timeout_ms = 5000;
+    ECM rcm = Ok();
+
+    PathEngineConfig() = default;
+    explicit PathEngineConfig(const Json &jsond) { Init(jsond); }
+
+    /**
+     * @brief Initialize config from a JSON object.
+     */
+    ECM Init(const Json &jsond);
+
+    /**
+     * @brief Export config as a JSON object.
+     */
+    [[nodiscard]] Json GetJson() const;
+
+    /**
+     * @brief Return true if config initialization succeeded.
+     */
+    [[nodiscard]] bool IsValid() const { return rcm.first == EC::Success; }
+  };
+
   /**
    * @brief Cache key for path results.
    */
@@ -207,19 +194,6 @@ private:
      */
     bool operator==(const CacheKey &other) const {
       return nickname == other.nickname && dir == other.dir;
-    }
-  };
-
-  /**
-   * @brief Hash helper for CacheKey.
-   */
-  struct CacheKeyHash {
-    /**
-     * @brief Hash cache key.
-     */
-    std::size_t operator()(const CacheKey &key) const {
-      return std::hash<std::string>()(key.nickname) ^
-             (std::hash<std::string>()(key.dir) << 1);
     }
   };
 
@@ -249,16 +223,27 @@ private:
   };
 
   /**
+   * @brief Load per-nickname path-engine configuration.
+   */
+  void LoadPathEngineConfigs_();
+
+  /**
+   * @brief Resolve per-nickname path-engine configuration.
+   */
+  const PathEngineConfig &
+  ResolvePathEngineConfig_(const std::string &nickname) const;
+
+  /**
    * @brief Style a path entry for display.
    */
-  std::string FormatPathDisplay_(const PathInfo &info,
-                                 const std::string &name) const;
+  [[nodiscard]] std::string FormatPathDisplay_(const PathInfo &info,
+                                               const std::string &name) const;
 
   /**
    * @brief Build path context from completion token and mode.
    */
-  PathContext BuildPathContext_(const std::string &token_prefix,
-                                bool force_path) const;
+  [[nodiscard]] PathContext BuildPathContext_(const std::string &token_prefix,
+                                              bool force_path) const;
 
   /**
    * @brief Append filtered path candidates from listed items.
@@ -281,8 +266,12 @@ private:
   AMConfigManager &config_manager_;
   AMClientManage::Manager &client_manager_;
   AMFileSystem &filesystem_;
-  std::mutex cache_mtx_;
-  std::unordered_map<CacheKey, CacheEntry, CacheKeyHash> cache_;
+  mutable std::mutex cache_mtx_;
+  std::unordered_map<std::string, PathEngineConfig> path_engine_configs_;
+  PathEngineConfig default_path_engine_config_{};
+  std::unordered_map<std::string, std::unordered_map<std::string, CacheEntry>>
+      cache_;
+  std::unordered_map<std::string, std::list<std::string>> cache_order_;
 };
 
 /**
