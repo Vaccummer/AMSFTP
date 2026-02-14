@@ -28,19 +28,34 @@ std::string NormalizeStyleTag_(const std::string &raw) {
   }
   return trimmed;
 }
+
+/**
+ * @brief Return true if completion context contains target.
+ */
+bool HasTarget_(const AMCompletionContext &ctx, AMCompletionTarget target) {
+  return std::find(ctx.targets.begin(), ctx.targets.end(), target) !=
+         ctx.targets.end();
+}
 } // namespace
 
 /**
  * @brief Execute the request-specific search routine.
  */
 bool AMCompletionAsyncRequest::Search(AMCompletionAsyncResult *out) const {
-  if (interrupt_flag && interrupt_flag->load(std::memory_order_relaxed)) {
+  if (IsInterrupted()) {
     return false;
   }
   if (!search) {
     return false;
   }
   return search(*this, out);
+}
+
+/**
+ * @brief Return true when the request has been interrupted.
+ */
+bool AMCompletionAsyncRequest::IsInterrupted() const {
+  return interrupt_flag ? interrupt_flag() : true;
 }
 
 /**
@@ -55,6 +70,7 @@ void AMCompleteEngine::Install(void *completion_arg) {
   ic_set_default_completer(&AMCompleter::IsoclineCompleter, completion_arg);
   ic_enable_completion_sort(false);
   ic_enable_completion_preview(true);
+  ic_enable_hint(false);
   const int max_items = args_.complete_max_items;
   if (max_items > 0) {
     ic_set_completion_max_items(max_items);
@@ -99,7 +115,9 @@ void AMCompleteEngine::HandleCompletion(ic_completion_env_t *cenv,
   request.request_id = NextRequestId_(input, cursor);
 
   AMCompletionContext ctx = BuildContext_(request);
-  if (ctx.target == AMCompletionTarget::Disabled) {
+  last_result_from_cache_ = false;
+  ic_set_completion_page_marker(nullptr);
+  if (HasTarget_(ctx, AMCompletionTarget::Disabled)) {
     return;
   }
 
@@ -108,7 +126,6 @@ void AMCompleteEngine::HandleCompletion(ic_completion_env_t *cenv,
   if (candidates.empty()) {
     return;
   }
-  SortCandidates_(candidates);
   EmitCandidates_(cenv, ctx, candidates);
 }
 
@@ -158,18 +175,6 @@ void AMCompleteEngine::LoadConfig() {
   args_.complete_delay_ms = config.ResolveArg<int>(
       DocumentKind::Settings, {"CompleteOption", "complete_delay_ms"}, 100,
       [](int v) { return v < 0 ? 0 : v; });
-
-  args_.cache_min_items = config.ResolveArg<size_t>(
-      DocumentKind::Settings, {"CompleteOption", "cache_min_items"},
-      static_cast<size_t>(100),
-      [](size_t v) { return static_cast<size_t>(v); });
-
-  int max_entries = config.ResolveArg<int>(
-      DocumentKind::Settings, {"CompleteOption", "cache_max_entries"}, 64, {});
-  if (max_entries < 1) {
-    max_entries = 1;
-  }
-  args_.cache_max_entries = static_cast<size_t>(max_entries);
 
   int async_workers = config.ResolveArg<int>(
       DocumentKind::Settings, {"CompleteOption", "async_workers"}, 2,
@@ -230,10 +235,7 @@ void AMCompleteEngine::RegisterSearchEngine(
   }
 
   for (const auto &target : targets) {
-    auto &slot = engines_by_target_[target];
-    if (std::find(slot.begin(), slot.end(), engine) == slot.end()) {
-      slot.push_back(engine);
-    }
+    engines_by_target_[target] = engine;
   }
 }
 
@@ -266,16 +268,25 @@ uint64_t AMCompleteEngine::NextRequestId_(const std::string &input,
 }
 
 /**
- * @brief Resolve the engine list for a routed completion target.
+ * @brief Resolve the engine for a routed completion target.
  */
-std::vector<std::shared_ptr<AMCompletionSearchEngine>>
-AMCompleteEngine::ResolveSearchEngines_(AMCompletionTarget target) {
+std::shared_ptr<AMCompletionSearchEngine>
+AMCompleteEngine::ResolveSearchEngine_(AMCompletionTarget target) {
   std::lock_guard<std::mutex> lock(engines_mtx_);
   auto it = engines_by_target_.find(target);
   if (it == engines_by_target_.end()) {
-    return {};
+    return nullptr;
   }
   return it->second;
+}
+
+/**
+ * @brief Resolve all registered engines.
+ */
+std::vector<std::shared_ptr<AMCompletionSearchEngine>>
+AMCompleteEngine::ResolveAllEngines_() {
+  std::lock_guard<std::mutex> lock(engines_mtx_);
+  return engines_;
 }
 
 /**
@@ -323,24 +334,19 @@ void AMCompleteEngine::RestartAsyncWorkers_() {
  */
 void AMCompleteEngine::ScheduleAsyncRequest_(AMCompletionAsyncRequest request) {
   if (!request.interrupt_flag) {
-    request.interrupt_flag = std::make_shared<std::atomic<bool>>(false);
+    return;
   }
 
-  {
+  if (request.interrupt_cancel) {
     std::lock_guard<std::mutex> lock(async_interrupts_mtx_);
-    async_interrupts_.erase(
-        std::remove_if(async_interrupts_.begin(), async_interrupts_.end(),
-                       [](const std::weak_ptr<std::atomic<bool>> &flag) {
-                         return flag.expired();
-                       }),
-        async_interrupts_.end());
-    async_interrupts_.push_back(request.interrupt_flag);
+    async_interrupts_.push_back(request.interrupt_cancel);
   }
 
   {
     std::lock_guard<std::mutex> lock(async_queue_mtx_);
     async_queue_.push_back(std::move(request));
   }
+
   async_queue_cv_.notify_one();
 }
 
@@ -350,20 +356,14 @@ void AMCompleteEngine::ScheduleAsyncRequest_(AMCompletionAsyncRequest request) {
 void AMCompleteEngine::CancelPendingAsyncRequests_() {
   {
     std::lock_guard<std::mutex> lock(async_queue_mtx_);
-    for (auto &request : async_queue_) {
-      if (request.interrupt_flag) {
-        request.interrupt_flag->store(true, std::memory_order_relaxed);
-      }
-    }
     async_queue_.clear();
   }
 
   {
     std::lock_guard<std::mutex> lock(async_interrupts_mtx_);
-    for (auto &weak_flag : async_interrupts_) {
-      auto flag = weak_flag.lock();
-      if (flag) {
-        flag->store(true, std::memory_order_relaxed);
+    for (auto &cancel : async_interrupts_) {
+      if (cancel) {
+        cancel();
       }
     }
     async_interrupts_.clear();
@@ -380,6 +380,9 @@ void AMCompleteEngine::CancelPendingAsyncRequests_() {
  */
 void AMCompleteEngine::ConsumeAsyncResults_(
     const AMCompletionContext &ctx, std::vector<AMCompletionCandidate> &out) {
+  if (ctx.targets.empty()) {
+    return;
+  }
   std::vector<AMCompletionAsyncResult> consumed;
   {
     std::lock_guard<std::mutex> lock(async_results_mtx_);
@@ -391,7 +394,7 @@ void AMCompleteEngine::ConsumeAsyncResults_(
     auto &bucket = it->second;
     auto keep_it = bucket.begin();
     for (auto iter = bucket.begin(); iter != bucket.end(); ++iter) {
-      if (iter->target == ctx.target) {
+      if (HasTarget_(ctx, iter->target)) {
         consumed.push_back(std::move(*iter));
       } else {
         *keep_it = std::move(*iter);
@@ -407,11 +410,6 @@ void AMCompleteEngine::ConsumeAsyncResults_(
   for (auto &result : consumed) {
     if (result.candidates.empty()) {
       continue;
-    }
-
-    auto owner = result.source_engine.lock();
-    if (owner) {
-      owner->SortCandidates(ctx, result.candidates);
     }
     out.insert(out.end(), std::make_move_iterator(result.candidates.begin()),
                std::make_move_iterator(result.candidates.end()));
@@ -441,16 +439,14 @@ void AMCompleteEngine::AsyncWorkerLoop_() {
     if (request.request_id != CurrentRequestId()) {
       continue;
     }
-    if (request.interrupt_flag &&
-        request.interrupt_flag->load(std::memory_order_relaxed)) {
+    if (request.IsInterrupted()) {
       continue;
     }
 
     if (args_.complete_delay_ms > 0) {
       std::this_thread::sleep_for(
           std::chrono::milliseconds(args_.complete_delay_ms));
-      if (request.interrupt_flag &&
-          request.interrupt_flag->load(std::memory_order_relaxed)) {
+      if (request.IsInterrupted()) {
         continue;
       }
     }
@@ -464,16 +460,15 @@ void AMCompleteEngine::AsyncWorkerLoop_() {
       continue;
     }
 
-    if (request.interrupt_flag &&
-        request.interrupt_flag->load(std::memory_order_relaxed)) {
+    if (request.IsInterrupted()) {
       continue;
     }
 
     if (result.request_id == 0) {
       result.request_id = request.request_id;
     }
-    if (result.target == AMCompletionTarget::None &&
-        request.target != AMCompletionTarget::None) {
+    if (result.target == AMCompletionTarget::Disabled &&
+        request.target != AMCompletionTarget::Disabled) {
       result.target = request.target;
     }
     if (result.source_engine.expired()) {
@@ -488,5 +483,6 @@ void AMCompleteEngine::AsyncWorkerLoop_() {
       std::lock_guard<std::mutex> lock(async_results_mtx_);
       async_results_[result.request_id].push_back(std::move(result));
     }
+    (void)ic_request_completion_menu_async();
   }
 }

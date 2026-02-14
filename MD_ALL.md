@@ -1356,3 +1356,59 @@ logger支持两种类型的log
 logger需要提供两种类型Trace的公开函数, 都是任务提交的异步模式
 
 logger持续打开两个log文件, 不再循环打开关闭
+AMCompleteEngine Improve
+
+Engine Features
+
++ 一类Target只能有一个engine(但允许不同target 共用一个engine)
++ AsyncWorkerLoop_ 最终目标不是将匹配结果写入缓存, 而是直接执行补全
++ engine不进行sort, 该函数由searcher提供
++ AMCompletionAsyncRequest 的interrupt_flag应该是一个函数或者函数指针, 这样的通用性更强
++ 没有设置interrupt_flag的request将被丢弃
+@ src\cli\completer\searcher.cpp
+
+## AMPathSearchEngine Improve
+
+我在setting.toml中新加了如下配置:
+[CompleteOption.Engine.Path."*"]
+use_async = false
+cache_items_threshold = 50
+cache_max_entries = 1000
+timeout_ms = 5000
+[CompleteOption.Engine.Path.local]
+use_async = false  # when lack, set false
+cache_items_threshold = 50  # when lack set 50, when <=0, set to 1
+cache_max_entries = 1000  # default is 3
+timeout_ms = 5000
+[CompleteOption.Engine.Path.wsl]
+use_async = false
+cache_items_threshold = 50
+cache_max_entries = 1000
+timeout_ms = 5000
+"*" 代表默认配置, nickname不存在时使用
+
+在searcher初始化时, 需要读取这些配置到内存中, 以unordered_map `<str, confgi_struct>` 格式存储
+在进行路径搜索时, 根据path对应的nickname读取相应的配置, 并进行搜索
+ps: 不同nickname不共享缓存, 缓存需要以dict `<nickname, dict<path, `cache_struct `>>` 格式存储
+还需要设置一个dict `<nickname, list<path>>` 用于在缓存溢出时决定谁被删除
+
+## AMPathSearchEngine::CollectCandidates Improve
+
+auto [rcm, items] = client->listdir(path.dir_abs, nullptr, timeout_ms, am_ms());
+client->listdir 应该传入一个interupt_flag, 并绑定触发函数到AMCompletionCollectResult上, 而不是在外部检查终止,因为listdir才是主要耗时操作
+另外, 缓存中读取到的匹配结果和实时结果需要进行区分, 在completemenu渲染时也需要标识缓存结果
+
+## Add New Functions
+
+添加函数用于查询各种nickname的cache情况
+
+添加函数用于删除指定nickname或者所有cache的函数
+@include\AMCLI\Completer\Searcher.hpp
+
+@include\AMManager\Host.hpp
+
+improve PathEngineConfig (you can refer to ClientConfig)
+
+add a GetJson() function turn config to json
+
+add init function to enable init with a json

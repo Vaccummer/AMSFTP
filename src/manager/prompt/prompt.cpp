@@ -26,19 +26,19 @@ namespace {
  * @param input Current input text.
  * @param arg Pointer to the token analyzer instance.
  */
-void PromptHighlighter_(ic_highlight_env_t *henv, const char *input,
-                        void *arg) {
-  if (!henv || !input || !arg) {
-    return;
-  }
-  auto *analyzer = static_cast<AMTokenTypeAnalyzer *>(arg);
-  std::string formatted;
-  analyzer->HighlightFormatted(input, &formatted);
-  if (formatted.empty()) {
-    return;
-  }
-  ic_highlight_formatted(henv, input, formatted.c_str());
-}
+// void PromptHighlighter_(ic_highlight_env_t *henv, const char *input,
+//                         void *arg) {
+//   if (!henv || !input || !arg) {
+//     return;
+//   }
+//   AMTokenTypeAnalyzer &analyzer = AMTokenTypeAnalyzer::Instance();
+//   std::string formatted;
+//   analyzer.HighlightFormatted(input, &formatted);
+//   if (formatted.empty()) {
+//     return;
+//   }
+//   ic_highlight_formatted(henv, input, formatted.c_str());
+// }
 
 /**
  * @brief No-op highlighter for prompts that should not show syntax colors.
@@ -320,9 +320,9 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
   }
   auto lock = PrintLock();
   auto hooklock = HookLock();
-  static AMTokenTypeAnalyzer analyzer(AMConfigManager::Instance());
-  char *line = ic_readline_ex(prompt.c_str(), nullptr, nullptr,
-                              &PromptHighlighter_, &analyzer);
+  char *line =
+      ic_readline_ex(prompt.c_str(), nullptr, nullptr,
+                     &AMTokenTypeAnalyzer::PromptHighlighter_, nullptr);
   ic_history_remove_last();
   if (!line) {
     return false;

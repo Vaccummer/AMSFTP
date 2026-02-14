@@ -1,27 +1,22 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
 #include "AMManager/Config.hpp"
-#include <replxx.h>
+#include "AMManager/Var.hpp"
 #include <string>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-namespace CLI {
-class App;
-}
-
-class AMTokenTypeAnalyzer {
+class AMTokenTypeAnalyzer : public NonCopyableNonMovable {
 public:
   /**
    * @brief Construct a token analyzer bound to the config manager.
    */
-  explicit AMTokenTypeAnalyzer(AMConfigManager &config_manager);
+  static AMTokenTypeAnalyzer &Instance() {
+    static AMTokenTypeAnalyzer ins;
+    return ins;
+  }
 
-  /**
-   * @brief Apply syntax highlighting colors to the input.
-   */
-  void Highlight(const std::string &input, ReplxxColor *colors, int size);
+  ~AMTokenTypeAnalyzer() override = default;
 
   /**
    * @brief Build a bbcode-formatted string for isocline highlighting.
@@ -33,29 +28,22 @@ public:
    */
   void RefreshNicknameCache();
 
-private:
-  struct CommandNode {
-    std::unordered_set<std::string> subcommands;
-    std::unordered_set<std::string> long_options;
-    std::unordered_set<char> short_options;
-  };
+  static void PromptHighlighter_(ic_highlight_env_t *henv, const char *input,
+                                 void *arg);
 
+private:
   struct Token {
     size_t start = 0;
     size_t end = 0;
     bool quoted = false;
   };
 
+  using CommandNode = CommandTree::CommandNode;
+
+  AMTokenTypeAnalyzer() = default;
+
   void EnsureCliCache();
   void BuildCliCache();
-  void BuildCliNode(CLI::App *app, const std::string &path, bool is_root);
-  const CommandNode *FindNode(const std::string &path) const;
-
-  void ApplyColor(const AMTokenSpan &span, ReplxxColor *colors,
-                  std::vector<int> &priorities, int size) const;
-  void ApplyRange(size_t start, size_t end, AMTokenType type,
-                  ReplxxColor *colors, std::vector<int> &priorities,
-                  int size) const;
 
   std::vector<Token> Tokenize(const std::string &input) const;
   bool ParseVarTokenAt(const std::string &input, size_t pos, size_t limit,
@@ -63,47 +51,15 @@ private:
   bool ParseVarTokenText(const std::string &token) const;
   bool ParseVarTokenText(const std::string &token, std::string *out_name) const;
 
-  void HighlightVarToken(const std::string &input, size_t token_start,
-                         size_t token_end, ReplxxColor *colors,
-                         std::vector<int> &priorities, int size) const;
-
-  void HighlightVarReferences(const std::string &input,
-                              const std::vector<Token> &tokens,
-                              ReplxxColor *colors, std::vector<int> &priorities,
-                              int size) const;
-
-  void HighlightEscapeSigns(const std::string &input, ReplxxColor *colors,
-                            std::vector<int> &priorities, int size) const;
-
-  void HighlightNicknameAtSign(const std::string &input,
-                               const std::vector<Token> &tokens,
-                               ReplxxColor *colors,
-                               std::vector<int> &priorities, int size) const;
-
-  void HighlightCommandsAndOptions(const std::string &input,
-                                   const std::vector<Token> &tokens,
-                                   ReplxxColor *colors,
-                                   std::vector<int> &priorities, int size,
-                                   const CommandNode **out_node,
-                                   size_t *out_command_tokens) const;
-
-  void HighlightVarCommand(const std::string &input,
-                           const std::vector<Token> &tokens,
-                           ReplxxColor *colors, std::vector<int> &priorities,
-                           int size, bool *handled) const;
-
   AMTokenType VarNameTypeFor(const std::string &name) const;
-  bool VarExists(const std::string &name) const;
 
   bool IsValidOptionToken(const std::string &token,
                           const CommandNode *node) const;
-  ReplxxColor ColorForType(AMTokenType type) const;
   int PriorityForType(AMTokenType type) const;
 
-  AMConfigManager &config_manager_;
+  AMConfigManager &config_manager_ = AMConfigManager::Instance();
+  AMVarManager &var_manager_ = AMVarManager::Instance();
   bool cli_cache_ready_ = false;
-  std::unordered_set<std::string> modules_;
-  std::unordered_set<std::string> top_commands_;
-  std::unordered_map<std::string, CommandNode> command_nodes_;
+  std::shared_ptr<CommandTree> command_tree_ = g_command_tree;
   std::unordered_set<std::string> nicknames_;
 };

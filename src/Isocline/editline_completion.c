@@ -188,8 +188,15 @@ again:
                                indicator_width, (idx == selected));
     }
   }
-  if (page_count > 1) {
-    sbuf_appendf(eb->extra, "\n[ic-info]Page %zd/%zd[/]", page + 1, page_count);
+  if (page_count > 1 ||
+      (env->completion_page_marker != NULL &&
+       env->completion_page_marker[0] != 0)) {
+    sbuf_appendf(eb->extra, "\n[ic-info]Page %zd/%zd", page + 1, page_count);
+    if (env->completion_page_marker != NULL &&
+        env->completion_page_marker[0] != 0) {
+      sbuf_appendf(eb->extra, " %s", env->completion_page_marker);
+    }
+    sbuf_append(eb->extra, "[/]");
   }
   if (more_available) {
     sbuf_appendf(eb->extra, "\n[ic-info](showing first %zd completions)[/]", count);

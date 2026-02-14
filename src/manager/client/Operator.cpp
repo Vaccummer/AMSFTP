@@ -464,20 +464,9 @@ AuthCallback Operator::BuildAuthCallback_(const AuthCallback &auth_cb,
     if (spinner_running) {
       spinner_running->store(false, std::memory_order_relaxed);
     }
-    int prev_client_level = -99999;
-    int prev_program_level = -99999;
-    if (quiet) {
-      prev_client_level = log_manager_.TraceLevel(-99999, false, true, false);
-      prev_program_level = log_manager_.TraceLevel(-99999, true, false, false);
-      log_manager_.TraceLevel(-1, true, true, false);
-    }
     std::optional<std::string> result;
     if (auth_cb) {
       result = auth_cb(info);
-    }
-    if (quiet) {
-      log_manager_.TraceLevel(prev_client_level, false, true, false);
-      log_manager_.TraceLevel(prev_program_level, true, false, false);
     }
     return result;
   };

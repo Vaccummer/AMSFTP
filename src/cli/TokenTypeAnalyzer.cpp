@@ -1,14 +1,8 @@
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMBase/CommonTools.hpp"
-#include "AMCLI/CLIBind.hpp"
-#include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Var.hpp"
-#include <algorithm>
 #include <array>
-#include <cctype>
-#include <limits>
-#include <sstream>
 
 namespace {
 /** Return true when the character is allowed in variable names. */
@@ -93,204 +87,7 @@ size_t FindEqualOutsideQuotes(const std::string &input, size_t start) {
   return std::string::npos;
 }
 
-struct ReplxxPaletteEntry {
-  int r = 0;
-  int g = 0;
-  int b = 0;
-  ReplxxColor color = REPLXX_COLOR_DEFAULT;
-};
-
-const ReplxxPaletteEntry kReplxxPalette[] = {
-    {0, 0, 0, REPLXX_COLOR_BLACK},
-    {128, 0, 0, REPLXX_COLOR_RED},
-    {0, 128, 0, REPLXX_COLOR_GREEN},
-    {128, 128, 0, REPLXX_COLOR_BROWN},
-    {0, 0, 128, REPLXX_COLOR_BLUE},
-    {128, 0, 128, REPLXX_COLOR_MAGENTA},
-    {0, 128, 128, REPLXX_COLOR_CYAN},
-    {192, 192, 192, REPLXX_COLOR_LIGHTGRAY},
-    {128, 128, 128, REPLXX_COLOR_GRAY},
-    {255, 0, 0, REPLXX_COLOR_BRIGHTRED},
-    {0, 255, 0, REPLXX_COLOR_BRIGHTGREEN},
-    {255, 255, 0, REPLXX_COLOR_YELLOW},
-    {0, 0, 255, REPLXX_COLOR_BRIGHTBLUE},
-    {255, 0, 255, REPLXX_COLOR_BRIGHTMAGENTA},
-    {0, 255, 255, REPLXX_COLOR_BRIGHTCYAN},
-    {255, 255, 255, REPLXX_COLOR_WHITE},
-};
-
-bool ParseHexColorToken(const std::string &token, int *r, int *g, int *b) {
-  if (!r || !g || !b) {
-    return false;
-  }
-  if (token.size() != 7 || token[0] != '#') {
-    return false;
-  }
-  for (size_t i = 1; i < token.size(); ++i) {
-    if (!std::isxdigit(static_cast<unsigned char>(token[i]))) {
-      return false;
-    }
-  }
-  try {
-    *r = std::stoi(token.substr(1, 2), nullptr, 16);
-    *g = std::stoi(token.substr(3, 2), nullptr, 16);
-    *b = std::stoi(token.substr(5, 2), nullptr, 16);
-  } catch (...) {
-    return false;
-  }
-  return true;
-}
-
-std::string NormalizeColorToken(const std::string &token) {
-  std::string normalized = AMStr::lowercase(AMStr::Strip(token));
-  normalized.erase(std::remove_if(normalized.begin(), normalized.end(),
-                                  [](char c) { return c == '_' || c == '-'; }),
-                   normalized.end());
-  return normalized;
-}
-
-bool ParseNamedColorToken(const std::string &token, ReplxxColor *color) {
-  if (!color) {
-    return false;
-  }
-  const std::string name = NormalizeColorToken(token);
-  if (name == "black") {
-    *color = REPLXX_COLOR_BLACK;
-    return true;
-  }
-  if (name == "red") {
-    *color = REPLXX_COLOR_RED;
-    return true;
-  }
-  if (name == "green") {
-    *color = REPLXX_COLOR_GREEN;
-    return true;
-  }
-  if (name == "brown") {
-    *color = REPLXX_COLOR_BROWN;
-    return true;
-  }
-  if (name == "blue") {
-    *color = REPLXX_COLOR_BLUE;
-    return true;
-  }
-  if (name == "magenta") {
-    *color = REPLXX_COLOR_MAGENTA;
-    return true;
-  }
-  if (name == "cyan") {
-    *color = REPLXX_COLOR_CYAN;
-    return true;
-  }
-  if (name == "lightgray") {
-    *color = REPLXX_COLOR_LIGHTGRAY;
-    return true;
-  }
-  if (name == "gray") {
-    *color = REPLXX_COLOR_GRAY;
-    return true;
-  }
-  if (name == "brightred") {
-    *color = REPLXX_COLOR_BRIGHTRED;
-    return true;
-  }
-  if (name == "brightgreen") {
-    *color = REPLXX_COLOR_BRIGHTGREEN;
-    return true;
-  }
-  if (name == "yellow") {
-    *color = REPLXX_COLOR_YELLOW;
-    return true;
-  }
-  if (name == "brightblue") {
-    *color = REPLXX_COLOR_BRIGHTBLUE;
-    return true;
-  }
-  if (name == "brightmagenta") {
-    *color = REPLXX_COLOR_BRIGHTMAGENTA;
-    return true;
-  }
-  if (name == "brightcyan") {
-    *color = REPLXX_COLOR_BRIGHTCYAN;
-    return true;
-  }
-  if (name == "white") {
-    *color = REPLXX_COLOR_WHITE;
-    return true;
-  }
-  return false;
-}
-
-ReplxxColor NearestReplxxColor(int r, int g, int b) {
-  double best = std::numeric_limits<double>::max();
-  ReplxxColor best_color = REPLXX_COLOR_DEFAULT;
-  for (const auto &entry : kReplxxPalette) {
-    const double dr = static_cast<double>(r - entry.r);
-    const double dg = static_cast<double>(g - entry.g);
-    const double db = static_cast<double>(b - entry.b);
-    const double dist = dr * dr + dg * dg + db * db;
-    if (dist < best) {
-      best = dist;
-      best_color = entry.color;
-    }
-  }
-  return best_color;
-}
-
-ReplxxColor ParseInputHighlightStyle(const std::string &style,
-                                     ReplxxColor fallback) {
-  std::string trimmed = AMStr::Strip(style);
-  if (trimmed.empty()) {
-    return fallback;
-  }
-  if (trimmed.front() == '[' && trimmed.back() == ']') {
-    trimmed = AMStr::Strip(trimmed.substr(1, trimmed.size() - 2));
-  }
-  if (trimmed.empty()) {
-    return fallback;
-  }
-
-  std::istringstream iss(trimmed);
-  std::string token;
-  bool bold = false;
-  bool has_color = false;
-  ReplxxColor color = fallback;
-
-  while (iss >> token) {
-    if (token.empty()) {
-      continue;
-    }
-    const std::string normalized = NormalizeColorToken(token);
-    if (normalized == "bold") {
-      bold = true;
-      continue;
-    }
-    int r = 0;
-    int g = 0;
-    int b = 0;
-    if (ParseHexColorToken(token, &r, &g, &b)) {
-      color = NearestReplxxColor(r, g, b);
-      has_color = true;
-      continue;
-    }
-    ReplxxColor named = REPLXX_COLOR_DEFAULT;
-    if (ParseNamedColorToken(normalized, &named)) {
-      color = named;
-      has_color = true;
-      continue;
-    }
-  }
-
-  if (!has_color) {
-    color = fallback;
-  }
-  if (bold) {
-    color = replxx_color_bold(color);
-  }
-  return color;
-}
-
-const char *StyleKeyForType(AMTokenType type) {
+const std::string StyleKeyForType(AMTokenType type) {
   switch (type) {
   case AMTokenType::Module:
     return "module";
@@ -322,118 +119,7 @@ const char *StyleKeyForType(AMTokenType type) {
   }
 }
 
-ReplxxColor DefaultColorForType(AMTokenType type) {
-  switch (type) {
-  case AMTokenType::Module:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTMAGENTA);
-  case AMTokenType::Command:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTGREEN);
-  case AMTokenType::VarName:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTBLUE);
-  case AMTokenType::VarNameMissing:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTRED);
-  case AMTokenType::VarValue:
-    return REPLXX_COLOR_YELLOW;
-  case AMTokenType::Nickname:
-    return REPLXX_COLOR_BRIGHTCYAN;
-  case AMTokenType::String:
-    return REPLXX_COLOR_BROWN;
-  case AMTokenType::Option:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTCYAN);
-  case AMTokenType::AtSign:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTMAGENTA);
-  case AMTokenType::DollarSign:
-    return replxx_color_bold(REPLXX_COLOR_BRIGHTMAGENTA);
-  case AMTokenType::EqualSign:
-    return REPLXX_COLOR_BRIGHTRED;
-  case AMTokenType::EscapeSign:
-    return replxx_color_bold(REPLXX_COLOR_YELLOW);
-  case AMTokenType::Common:
-  default:
-    return REPLXX_COLOR_DEFAULT;
-  }
-}
-
 } // namespace
-
-/** Construct the analyzer and prime CLI definition cache. */
-AMTokenTypeAnalyzer::AMTokenTypeAnalyzer(AMConfigManager &config_manager)
-    : config_manager_(config_manager) {
-  EnsureCliCache();
-}
-
-/** Ensure the CLI cache is built once. */
-void AMTokenTypeAnalyzer::EnsureCliCache() {
-  if (cli_cache_ready_) {
-    return;
-  }
-  BuildCliCache();
-  cli_cache_ready_ = true;
-}
-
-/** Build the CLI cache from CLI11 command definitions. */
-void AMTokenTypeAnalyzer::BuildCliCache() {
-  CLI::App app{"AMSFTP CLI", "amsftp"};
-  CliArgsPool args_pool;
-  (void)BindCliOptions(app, args_pool);
-
-  auto subs = app.get_subcommands([](CLI::App *) { return true; });
-  for (auto *sub : subs) {
-    top_commands_.insert(sub->get_name());
-  }
-  for (auto *sub : subs) {
-    auto nested = sub->get_subcommands([](CLI::App *) { return true; });
-    if (!nested.empty()) {
-      modules_.insert(sub->get_name());
-    }
-  }
-
-  BuildCliNode(&app, "", true);
-}
-
-/** Build a command node entry for a CLI11 app path. */
-void AMTokenTypeAnalyzer::BuildCliNode(CLI::App *app, const std::string &path,
-                                       bool is_root) {
-  CommandNode node;
-  auto options = app->get_options();
-  for (auto *opt : options) {
-    for (const auto &lname : opt->get_lnames()) {
-      if (!lname.empty()) {
-        node.long_options.insert("--" + lname);
-      }
-    }
-    for (const auto &sname : opt->get_snames()) {
-      if (!sname.empty()) {
-        node.short_options.insert(sname[0]);
-      }
-    }
-  }
-
-  auto subs = app->get_subcommands([](CLI::App *) { return true; });
-  for (auto *sub : subs) {
-    node.subcommands.insert(sub->get_name());
-  }
-
-  if (!is_root) {
-    command_nodes_[path] = node;
-  }
-
-  for (auto *sub : subs) {
-    std::string next =
-        path.empty() ? sub->get_name() : path + " " + sub->get_name();
-    BuildCliNode(sub, next, false);
-  }
-}
-
-/** Find a cached node by command path. */
-const AMTokenTypeAnalyzer::CommandNode *
-AMTokenTypeAnalyzer::FindNode(const std::string &path) const {
-  auto it = command_nodes_.find(path);
-  if (it == command_nodes_.end()) {
-    return nullptr;
-  }
-  return &it->second;
-}
 
 /** Reload nickname cache from host manager. */
 void AMTokenTypeAnalyzer::RefreshNicknameCache() {
@@ -442,6 +128,21 @@ void AMTokenTypeAnalyzer::RefreshNicknameCache() {
   for (const auto &name : names) {
     nicknames_.insert(name);
   }
+}
+
+void AMTokenTypeAnalyzer::PromptHighlighter_(ic_highlight_env_t *henv,
+                                             const char *input, void *arg) {
+  (void)arg;
+  if (!henv || !input) {
+    return;
+  }
+  static AMTokenTypeAnalyzer &analyzer = AMTokenTypeAnalyzer::Instance();
+  std::string formatted;
+  analyzer.HighlightFormatted(input, &formatted);
+  if (formatted.empty()) {
+    return;
+  }
+  ic_highlight_formatted(henv, input, formatted.c_str());
 }
 
 /** Split input into whitespace-delimited tokens while keeping quoted strings.
@@ -559,14 +260,6 @@ bool AMTokenTypeAnalyzer::ParseVarTokenText(const std::string &token,
   return true;
 }
 
-/** Map token types to replxx colors. */
-ReplxxColor AMTokenTypeAnalyzer::ColorForType(AMTokenType type) const {
-  const char *style_key = StyleKeyForType(type);
-  const std::string style = config_manager_.ResolveArg<std::string>(
-      DocumentKind::Settings, {"style", "InputHighlight", style_key}, "", {});
-  return ParseInputHighlightStyle(style, DefaultColorForType(type));
-}
-
 /** Assign a priority for overlap resolution between token types. */
 int AMTokenTypeAnalyzer::PriorityForType(AMTokenType type) const {
   switch (type) {
@@ -596,159 +289,9 @@ int AMTokenTypeAnalyzer::PriorityForType(AMTokenType type) const {
   }
 }
 
-/** Apply a pre-built token span to the color buffer. */
-void AMTokenTypeAnalyzer::ApplyColor(const AMTokenSpan &span,
-                                     ReplxxColor *colors,
-                                     std::vector<int> &priorities,
-                                     int size) const {
-  ApplyRange(span.start, span.end, span.type, colors, priorities, size);
-}
-
-/** Apply a token type to a specific range with priority checks. */
-void AMTokenTypeAnalyzer::ApplyRange(size_t start, size_t end, AMTokenType type,
-                                     ReplxxColor *colors,
-                                     std::vector<int> &priorities,
-                                     int size) const {
-  if (!colors || size <= 0) {
-    return;
-  }
-  if (start >= end) {
-    return;
-  }
-  if (start >= static_cast<size_t>(size)) {
-    return;
-  }
-  if (end > static_cast<size_t>(size)) {
-    end = static_cast<size_t>(size);
-  }
-  int priority = PriorityForType(type);
-  ReplxxColor color = ColorForType(type);
-  for (size_t i = start; i < end; ++i) {
-    if (priority >= priorities[i]) {
-      priorities[i] = priority;
-      colors[i] = color;
-    }
-  }
-}
-
-/** Highlight a variable token by separating $ and the name. */
-void AMTokenTypeAnalyzer::HighlightVarToken(
-    const std::string &input, size_t token_start, size_t token_end,
-    ReplxxColor *colors, std::vector<int> &priorities, int size) const {
-  if (token_end <= token_start) {
-    return;
-  }
-  if (token_start >= input.size()) {
-    return;
-  }
-  if (token_end > input.size()) {
-    token_end = input.size();
-  }
-  ApplyRange(token_start, token_start + 1, AMTokenType::DollarSign, colors,
-             priorities, size);
-  std::string name;
-  std::string token = input.substr(token_start, token_end - token_start);
-  if (!ParseVarTokenText(token, &name)) {
-    return;
-  }
-  ApplyRange(token_start + 1, token_end, VarNameTypeFor(name), colors,
-             priorities, size);
-}
-
 AMTokenType AMTokenTypeAnalyzer::VarNameTypeFor(const std::string &name) const {
-  return VarExists(name) ? AMTokenType::VarName : AMTokenType::VarNameMissing;
-}
-
-bool AMTokenTypeAnalyzer::VarExists(const std::string &name) const {
-  if (name.empty()) {
-    return false;
-  }
-  auto &var_manager = AMVarManager::Instance();
-  std::string value;
-  return var_manager.Resolve(name, &value);
-}
-
-/** Highlight variable references outside of quoted strings. */
-void AMTokenTypeAnalyzer::HighlightVarReferences(
-    const std::string &input, const std::vector<Token> &tokens,
-    ReplxxColor *colors, std::vector<int> &priorities, int size) const {
-  if (input.empty()) {
-    return;
-  }
-  std::vector<bool> quoted_mask(input.size(), false);
-  for (const auto &token : tokens) {
-    if (token.quoted) {
-      for (size_t i = token.start; i < token.end && i < input.size(); ++i) {
-        quoted_mask[i] = true;
-      }
-    }
-  }
-
-  for (size_t i = 0; i < input.size(); ++i) {
-    if (quoted_mask[i]) {
-      continue;
-    }
-    if (input[i] == '`' && i + 1 < input.size() && input[i + 1] == '$') {
-      ++i;
-      continue;
-    }
-    if (input[i] != '$') {
-      continue;
-    }
-    size_t end = 0;
-    if (!ParseVarTokenAt(input, i, input.size(), &end)) {
-      continue;
-    }
-    HighlightVarToken(input, i, end, colors, priorities, size);
-    i = end - 1;
-  }
-}
-
-/** Highlight backtick escape signs for quotes or variables. */
-void AMTokenTypeAnalyzer::HighlightEscapeSigns(const std::string &input,
-                                               ReplxxColor *colors,
-                                               std::vector<int> &priorities,
-                                               int size) const {
-  if (input.empty()) {
-    return;
-  }
-  for (size_t i = 0; i + 1 < input.size(); ++i) {
-    if (input[i] != '`') {
-      continue;
-    }
-    const char next = input[i + 1];
-    if (next != '$' && next != '"' && next != '\'') {
-      continue;
-    }
-    ApplyRange(i, i + 1, AMTokenType::EscapeSign, colors, priorities, size);
-  }
-}
-
-/** Highlight nickname and @ when the nickname exists in cache. */
-void AMTokenTypeAnalyzer::HighlightNicknameAtSign(
-    const std::string &input, const std::vector<Token> &tokens,
-    ReplxxColor *colors, std::vector<int> &priorities, int size) const {
-  for (const auto &token : tokens) {
-    if (token.quoted) {
-      continue;
-    }
-    std::string text = input.substr(token.start, token.end - token.start);
-    size_t at_pos = text.find('@');
-    if (at_pos == std::string::npos || at_pos == 0) {
-      continue;
-    }
-    std::string prefix = text.substr(0, at_pos);
-    if (nicknames_.find(prefix) == nicknames_.end()) {
-      continue;
-    }
-    size_t nick_start = token.start;
-    size_t nick_end = token.start + at_pos;
-    size_t at_index = nick_end;
-    ApplyRange(nick_start, nick_end, AMTokenType::Nickname, colors, priorities,
-               size);
-    ApplyRange(at_index, at_index + 1, AMTokenType::AtSign, colors, priorities,
-               size);
-  }
+  return var_manager_.Resolve(name) ? AMTokenType::VarName
+                                    : AMTokenType::VarNameMissing;
 }
 
 /** Validate a token against the option set for a command node. */
@@ -777,212 +320,6 @@ bool AMTokenTypeAnalyzer::IsValidOptionToken(const std::string &token,
   return true;
 }
 
-/** Highlight command/module tokens and valid options for the command path. */
-void AMTokenTypeAnalyzer::HighlightCommandsAndOptions(
-    const std::string &input, const std::vector<Token> &tokens,
-    ReplxxColor *colors, std::vector<int> &priorities, int size,
-    const CommandNode **out_node, size_t *out_command_tokens) const {
-  const CommandNode *node = nullptr;
-  size_t consumed = 0;
-  std::string path;
-  bool parsing = true;
-
-  for (size_t i = 0; i < tokens.size(); ++i) {
-    const auto &token = tokens[i];
-    if (token.quoted) {
-      continue;
-    }
-    std::string text = input.substr(token.start, token.end - token.start);
-    if (text.empty()) {
-      continue;
-    }
-    if (parsing) {
-      if (path.empty()) {
-        if (modules_.find(text) != modules_.end()) {
-          ApplyRange(token.start, token.end, AMTokenType::Module, colors,
-                     priorities, size);
-          path = text;
-          node = FindNode(path);
-          consumed = i + 1;
-          continue;
-        }
-        if (top_commands_.find(text) != top_commands_.end()) {
-          ApplyRange(token.start, token.end, AMTokenType::Command, colors,
-                     priorities, size);
-          path = text;
-          node = FindNode(path);
-          consumed = i + 1;
-          if (!node || node->subcommands.empty()) {
-            parsing = false;
-          }
-          continue;
-        }
-        parsing = false;
-      } else if (node &&
-                 node->subcommands.find(text) != node->subcommands.end()) {
-        ApplyRange(token.start, token.end, AMTokenType::Command, colors,
-                   priorities, size);
-        path += " " + text;
-        node = FindNode(path);
-        consumed = i + 1;
-        if (!node || node->subcommands.empty()) {
-          parsing = false;
-        }
-        continue;
-      } else {
-        parsing = false;
-      }
-    }
-  }
-
-  if (out_node) {
-    *out_node = node;
-  }
-  if (out_command_tokens) {
-    *out_command_tokens = consumed;
-  }
-
-  if (!node) {
-    return;
-  }
-  for (const auto &token : tokens) {
-    if (token.quoted) {
-      continue;
-    }
-    std::string text = input.substr(token.start, token.end - token.start);
-    if (IsValidOptionToken(text, node)) {
-      ApplyRange(token.start, token.end, AMTokenType::Option, colors,
-                 priorities, size);
-    }
-  }
-}
-
-/** Highlight var/del commands and handle assignment/value spans. */
-void AMTokenTypeAnalyzer::HighlightVarCommand(const std::string &input,
-                                              const std::vector<Token> &tokens,
-                                              ReplxxColor *colors,
-                                              std::vector<int> &priorities,
-                                              int size, bool *handled) const {
-  if (handled) {
-    *handled = false;
-  }
-  size_t first_index = 0;
-  while (first_index < tokens.size() && tokens[first_index].quoted) {
-    ++first_index;
-  }
-  if (first_index >= tokens.size()) {
-    return;
-  }
-  const auto &first = tokens[first_index];
-  std::string first_text = input.substr(first.start, first.end - first.start);
-  if (first_text != "var" && first_text != "del") {
-    return;
-  }
-  if (handled) {
-    *handled = true;
-  }
-  ApplyRange(first.start, first.end, AMTokenType::Command, colors, priorities,
-             size);
-
-  size_t remainder_start = first.end;
-  size_t eq_pos = FindEqualOutsideQuotes(input, remainder_start);
-  if (first_text == "var" && eq_pos != std::string::npos) {
-    ApplyRange(eq_pos, eq_pos + 1, AMTokenType::EqualSign, colors, priorities,
-               size);
-    ApplyRange(eq_pos + 1, input.size(), AMTokenType::VarValue, colors,
-               priorities, size);
-
-    size_t dollar = remainder_start;
-    while (true) {
-      dollar = input.find('$', dollar);
-      if (dollar == std::string::npos || dollar >= eq_pos) {
-        break;
-      }
-      if (dollar > 0 && input[dollar - 1] == '`') {
-        ++dollar;
-        continue;
-      }
-      size_t end = 0;
-      if (ParseVarTokenAt(input, dollar, eq_pos, &end)) {
-        HighlightVarToken(input, dollar, end, colors, priorities, size);
-      }
-      break;
-    }
-    return;
-  }
-
-  for (size_t i = first_index + 1; i < tokens.size(); ++i) {
-    const auto &token = tokens[i];
-    if (token.quoted) {
-      continue;
-    }
-    std::string text = input.substr(token.start, token.end - token.start);
-    if (!ParseVarTokenText(text)) {
-      continue;
-    }
-    HighlightVarToken(input, token.start, token.end, colors, priorities, size);
-  }
-}
-
-/** Main highlighter entrypoint for replxx. */
-void AMTokenTypeAnalyzer::Highlight(const std::string &input,
-                                    ReplxxColor *colors, int size) {
-  if (!colors || size <= 0) {
-    return;
-  }
-  for (int i = 0; i < size; ++i) {
-    colors[i] = REPLXX_COLOR_DEFAULT;
-  }
-  std::vector<int> priorities(static_cast<size_t>(size), 0);
-
-  RefreshNicknameCache();
-  EnsureCliCache();
-
-  std::vector<Token> tokens = Tokenize(input);
-
-  HighlightEscapeSigns(input, colors, priorities, size);
-
-  for (const auto &token : tokens) {
-    if (token.quoted) {
-      ApplyRange(token.start, token.end, AMTokenType::String, colors,
-                 priorities, size);
-    }
-  }
-
-  bool handled = false;
-  HighlightVarCommand(input, tokens, colors, priorities, size, &handled);
-  if (handled) {
-    HighlightVarReferences(input, tokens, colors, priorities, size);
-    return;
-  }
-
-  std::string trimmed = AMStr::Strip(input);
-  if (!trimmed.empty() && trimmed.front() == '$') {
-    size_t offset = input.find('$');
-    size_t eq_pos = FindEqualOutsideQuotes(input, offset);
-    if (eq_pos != std::string::npos) {
-      ApplyRange(eq_pos, eq_pos + 1, AMTokenType::EqualSign, colors, priorities,
-                 size);
-      ApplyRange(eq_pos + 1, input.size(), AMTokenType::VarValue, colors,
-                 priorities, size);
-      size_t end = 0;
-      if (ParseVarTokenAt(input, offset, eq_pos, &end)) {
-        HighlightVarToken(input, offset, end, colors, priorities, size);
-      }
-      HighlightVarReferences(input, tokens, colors, priorities, size);
-      return;
-    }
-  }
-
-  const CommandNode *node = nullptr;
-  size_t consumed = 0;
-  HighlightCommandsAndOptions(input, tokens, colors, priorities, size, &node,
-                              &consumed);
-
-  HighlightNicknameAtSign(input, tokens, colors, priorities, size);
-  HighlightVarReferences(input, tokens, colors, priorities, size);
-}
-
 /** Main highlighter entrypoint for isocline bbcode formatting. */
 void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
                                              std::string *formatted) {
@@ -999,7 +336,6 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
   std::vector<int> priorities(size, 0);
 
   RefreshNicknameCache();
-  EnsureCliCache();
 
   std::vector<Token> tokens = Tokenize(input);
 
@@ -1113,6 +449,16 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     std::string path;
     bool parsing = true;
 
+    if (!command_tree_) {
+      if (out_node) {
+        *out_node = nullptr;
+      }
+      if (out_command_tokens) {
+        *out_command_tokens = 0;
+      }
+      return;
+    }
+
     for (size_t i = 0; i < tokens.size(); ++i) {
       const auto &token = tokens[i];
       if (token.quoted) {
@@ -1124,17 +470,17 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
       }
       if (parsing) {
         if (path.empty()) {
-          if (modules_.find(text) != modules_.end()) {
+          if (command_tree_->IsModule(text)) {
             apply_range(token.start, token.end, AMTokenType::Module);
             path = text;
-            node = FindNode(path);
+            node = command_tree_->FindNode(path);
             consumed = i + 1;
             continue;
           }
-          if (top_commands_.find(text) != top_commands_.end()) {
+          if (command_tree_->IsTopCommand(text)) {
             apply_range(token.start, token.end, AMTokenType::Command);
             path = text;
-            node = FindNode(path);
+            node = command_tree_->FindNode(path);
             consumed = i + 1;
             if (!node || node->subcommands.empty()) {
               parsing = false;
@@ -1146,7 +492,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
                    node->subcommands.find(text) != node->subcommands.end()) {
           apply_range(token.start, token.end, AMTokenType::Command);
           path += " " + text;
-          node = FindNode(path);
+          node = command_tree_->FindNode(path);
           consumed = i + 1;
           if (!node || node->subcommands.empty()) {
             parsing = false;
@@ -1283,11 +629,11 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
       static_cast<size_t>(AMTokenType::EscapeSign) + 1;
   std::array<std::string, kTokenTypeCount> style_tags;
   for (size_t i = 0; i < kTokenTypeCount; ++i) {
-    AMTokenType type = static_cast<AMTokenType>(i);
-    const char *style_key = StyleKeyForType(type);
     style_tags[i] = NormalizeStyleTag_(config_manager_.ResolveArg<std::string>(
-        DocumentKind::Settings, {"style", "InputHighlight", style_key}, "",
-        {}));
+        DocumentKind::Settings,
+        {"style", "InputHighlight",
+         StyleKeyForType(static_cast<AMTokenType>(i))},
+        "", {}));
   }
 
   formatted->reserve(input.size() + 16);

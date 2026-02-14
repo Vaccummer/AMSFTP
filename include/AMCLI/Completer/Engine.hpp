@@ -21,7 +21,6 @@ using ic_completion_env_t = ic_completion_env_s;
  * @brief Completion target classification used for search-engine routing.
  */
 enum class AMCompletionTarget {
-  None,
   Disabled,
   TopCommand,
   Subcommand,
@@ -74,8 +73,6 @@ struct AMCompletionArgs {
   bool complete_auto_fill = true;
   std::string complete_select_sign;
   int complete_delay_ms = 100;
-  size_t cache_min_items = 100;
-  size_t cache_max_entries = 64;
   size_t complete_async_workers = 2;
   std::string input_tag_command;
   std::string input_tag_module;
@@ -108,7 +105,8 @@ struct AMCompletionContext {
   std::string token_prefix_raw;
   std::string token_prefix;
   bool token_quoted = false;
-  AMCompletionTarget target = AMCompletionTarget::None;
+  std::vector<AMCompletionTarget> targets;
+  bool forbid_cache = false;
   const AMCompletionArgs *args = nullptr;
 };
 
@@ -119,7 +117,7 @@ class AMCompletionSearchEngine;
  */
 struct AMCompletionAsyncResult {
   uint64_t request_id = 0;
-  AMCompletionTarget target = AMCompletionTarget::None;
+  AMCompletionTarget target = AMCompletionTarget::Disabled;
   std::vector<AMCompletionCandidate> candidates;
   std::weak_ptr<AMCompletionSearchEngine> source_engine;
 };
@@ -130,8 +128,9 @@ struct AMCompletionAsyncResult {
 struct AMCompletionAsyncRequest {
   uint64_t request_id = 0;
   int timeout_ms = 5000;
-  AMCompletionTarget target = AMCompletionTarget::None;
-  std::shared_ptr<std::atomic<bool>> interrupt_flag;
+  AMCompletionTarget target = AMCompletionTarget::Disabled;
+  std::function<bool()> interrupt_flag;
+  std::function<void()> interrupt_cancel;
   std::weak_ptr<AMCompletionSearchEngine> source_engine;
   std::function<bool(const AMCompletionAsyncRequest &request,
                      AMCompletionAsyncResult *out)>
@@ -144,6 +143,11 @@ struct AMCompletionAsyncRequest {
    * @return True when a result is produced.
    */
   bool Search(AMCompletionAsyncResult *out) const;
+
+  /**
+   * @brief Return true when the request has been interrupted.
+   */
+  bool IsInterrupted() const;
 };
 
 /**
@@ -152,6 +156,7 @@ struct AMCompletionAsyncRequest {
 struct AMCompletionCollectResult {
   std::vector<AMCompletionCandidate> candidates;
   std::optional<AMCompletionAsyncRequest> async_request;
+  bool from_cache = false;
 };
 
 /**
@@ -217,7 +222,6 @@ struct AMCompletionTargetHash {
  */
 class AMCompleteEngine {
 public:
-
   AMCompleteEngine() {
     StartAsyncWorkers_();
     Init();
@@ -275,12 +279,15 @@ public:
   /**
    * @brief Register a search engine for one or more completion targets.
    *
+   * Each target keeps exactly one engine; later registrations replace earlier
+   * bindings for the same target.
+   *
    * @param targets Target list routed to this engine.
    * @param engine Search engine instance.
    */
-  void RegisterSearchEngine(
-      const std::vector<AMCompletionTarget> &targets,
-      const std::shared_ptr<AMCompletionSearchEngine> &engine);
+  void
+  RegisterSearchEngine(const std::vector<AMCompletionTarget> &targets,
+                       const std::shared_ptr<AMCompletionSearchEngine> &engine);
 
 private:
   /**
@@ -291,8 +298,7 @@ private:
   /**
    * @brief Tokenize input into completion tokens.
    */
-  std::vector<AMCompletionToken> TokenizeInput_(
-      const std::string &input) const;
+  std::vector<AMCompletionToken> TokenizeInput_(const std::string &input) const;
 
   /**
    * @brief Find the token that owns the cursor.
@@ -311,11 +317,6 @@ private:
    */
   void DispatchCandidates_(const AMCompletionContext &ctx,
                            std::vector<AMCompletionCandidate> &out);
-
-  /**
-   * @brief Sort merged candidates after collection.
-   */
-  void SortCandidates_(std::vector<AMCompletionCandidate> &items);
 
   /**
    * @brief Emit candidates to isocline with delete ranges.
@@ -361,10 +362,15 @@ private:
                             std::vector<AMCompletionCandidate> &out);
 
   /**
-   * @brief Resolve the engine list for a routed completion target.
+   * @brief Resolve the engine for a routed completion target.
    */
-  std::vector<std::shared_ptr<AMCompletionSearchEngine>>
-  ResolveSearchEngines_(AMCompletionTarget target);
+  std::shared_ptr<AMCompletionSearchEngine>
+  ResolveSearchEngine_(AMCompletionTarget target);
+
+  /**
+   * @brief Resolve all registered engines.
+   */
+  std::vector<std::shared_ptr<AMCompletionSearchEngine>> ResolveAllEngines_();
 
   AMCompletionArgs args_{};
   std::atomic<uint64_t> request_counter_{0};
@@ -376,7 +382,7 @@ private:
 
   std::mutex engines_mtx_;
   std::unordered_map<AMCompletionTarget,
-                     std::vector<std::shared_ptr<AMCompletionSearchEngine>>,
+                     std::shared_ptr<AMCompletionSearchEngine>,
                      AMCompletionTargetHash>
       engines_by_target_;
   std::vector<std::shared_ptr<AMCompletionSearchEngine>> engines_;
@@ -392,6 +398,7 @@ private:
       async_results_;
 
   std::mutex async_interrupts_mtx_;
-  std::vector<std::weak_ptr<std::atomic<bool>>> async_interrupts_;
-};
+  std::vector<std::function<void()>> async_interrupts_;
 
+  bool last_result_from_cache_ = false;
+};

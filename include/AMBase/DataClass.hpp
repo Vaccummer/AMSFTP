@@ -3,10 +3,15 @@
 #include <chrono>
 #include <filesystem>
 #include <iomanip>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <sstream>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
+#include <utility>
+#include <vector>
 
 // project header
 #include "AMBase/Enum.hpp"
@@ -18,6 +23,90 @@
 
 struct TransferTask; // Forward declaration
 class InterruptFlag; // Forward declaration
+namespace CLI {
+class App;
+}
+
+/**
+ * @brief CLI command tree used for completion and highlighting.
+ */
+class CommandTree {
+public:
+  /**
+   * @brief Command tree node used for completion lookups.
+   */
+  struct CommandNode {
+    std::unordered_map<std::string, std::string> subcommands;
+    std::unordered_map<std::string, std::string> long_options;
+    std::unordered_map<char, std::string> short_options;
+  };
+
+  /**
+   * @brief Construct an empty command tree.
+   */
+  CommandTree() = default;
+
+  /**
+   * @brief Build tree structure from CLI metadata.
+   */
+  void Build(CLI::App &app);
+
+  /**
+   * @brief Return true when name is a top-level command.
+   */
+  [[nodiscard]] bool IsTopCommand(const std::string &name) const;
+
+  /**
+   * @brief Return true when name is a module (has subcommands).
+   */
+  [[nodiscard]] bool IsModule(const std::string &name) const;
+
+  /**
+   * @brief Find a node by command path.
+   */
+  [[nodiscard]] const CommandNode *FindNode(const std::string &path) const;
+
+  /**
+   * @brief List top-level commands with help text.
+   */
+  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
+  ListTopCommands() const;
+
+  /**
+   * @brief List subcommands for a command path.
+   */
+  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
+  ListSubcommands(const std::string &path) const;
+
+  /**
+   * @brief List long options for a command path.
+   */
+  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
+  ListLongOptions(const std::string &path) const;
+
+  /**
+   * @brief List short options for a command path.
+   */
+  [[nodiscard]] std::vector<std::pair<char, std::string>>
+  ListShortOptions(const std::string &path) const;
+
+private:
+  /**
+   * @brief Register a command path as top-level command.
+   */
+  void RegisterCommand_(const std::string &path, const std::string &help);
+
+  std::unordered_map<std::string, CommandNode> nodes_;
+  std::unordered_set<std::string> top_commands_;
+  std::unordered_set<std::string> modules_;
+  std::unordered_map<std::string, std::string> top_help_;
+};
+
+/**
+ * @brief Global shared command tree pointer.
+ */
+inline static const std::shared_ptr<CommandTree> g_command_tree =
+    std::make_shared<CommandTree>();
 
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;

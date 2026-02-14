@@ -1,3 +1,4 @@
+#include "AMBase/DataClass.hpp"
 #include "AMCLI/CLIBind.hpp"
 #include "AMCLI/InteractiveLoop.hpp"
 #include "AMClient/IOCore.hpp"
@@ -121,6 +122,7 @@ int main(int argc, char **argv) {
     DispatchResult dispatch = DispatchCliCommands(cli_commands, managers);
     if (dispatch.enter_interactive) {
       prompt_manager.LoadHistory(client_manager.CurrentNickname());
+      g_command_tree->Build(app);
       RunInteractiveLoop(app_name, managers);
     }
     if (dispatch.rcm.first != EC::Success) {

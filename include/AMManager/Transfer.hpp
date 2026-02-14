@@ -46,7 +46,7 @@ public:
   void SetPublicResultCallback(PublicResultCallback cb = {});
   [[nodiscard]] TaskInfo::ResultCallback
   BindResultCallback(UserResultCallback user_cb);
-  std::list<std::shared_ptr<TaskInfo>> GetHistory() const;
+
   void ResultCallback(std::shared_ptr<TaskInfo> task_info,
                       PublicResultCallback public_cb,
                       UserResultCallback user_cb);
@@ -282,8 +282,6 @@ private:
    * @brief Construct transfer manager using singleton managers.
    */
   AMTransferManager() = default;
-
-  static bool HasWildcard_(const std::string &path);
 
   bool ConfirmWildcard_(const std::vector<PathInfo> &matches,
                         const std::string &src_host,

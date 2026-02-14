@@ -3,7 +3,6 @@
 #include <type_traits>
 
 int g_cli_exit_code = 0;
-
 namespace {
 /**
  * @brief Bind a CLI11 callback that stores the selected argument struct.
@@ -468,6 +467,200 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
   BindCompleteCommands(app, args, commands);
   BindTaskCommands(app, args, commands);
   return commands;
+}
+
+/**
+ * @brief Build tree structure from CLI metadata.
+ */
+void CommandTree::Build(CLI::App &app) {
+  nodes_.clear();
+  top_commands_.clear();
+  modules_.clear();
+  top_help_.clear();
+
+  auto subs = app.get_subcommands([](CLI::App *) { return true; });
+  for (auto *sub : subs) {
+    if (!sub) {
+      continue;
+    }
+    RegisterCommand_(sub->get_name(), sub->get_description());
+  }
+  for (auto *sub : subs) {
+    if (!sub) {
+      continue;
+    }
+    auto nested = sub->get_subcommands([](CLI::App *) { return true; });
+    if (!nested.empty()) {
+      modules_.insert(sub->get_name());
+    }
+  }
+
+  auto build_node = [&](auto &&self, CLI::App *node_app,
+                        const std::string &path, bool is_root) -> void {
+    if (!node_app) {
+      return;
+    }
+
+    CommandNode node;
+    auto options = node_app->get_options();
+    for (auto *opt : options) {
+      if (!opt) {
+        continue;
+      }
+      const std::string desc = opt->get_description();
+      for (const auto &lname : opt->get_lnames()) {
+        if (!lname.empty()) {
+          node.long_options.emplace("--" + lname, desc);
+        }
+      }
+      for (const auto &sname : opt->get_snames()) {
+        if (!sname.empty()) {
+          node.short_options.emplace(sname[0], desc);
+        }
+      }
+    }
+
+    auto subs_local =
+        node_app->get_subcommands([](CLI::App *) { return true; });
+    for (auto *sub : subs_local) {
+      if (!sub) {
+        continue;
+      }
+      node.subcommands.emplace(sub->get_name(), sub->get_description());
+    }
+
+    if (!is_root) {
+      nodes_[path] = node;
+    }
+
+    for (auto *sub : subs_local) {
+      if (!sub) {
+        continue;
+      }
+      std::string next =
+          path.empty() ? sub->get_name() : path + " " + sub->get_name();
+      self(self, sub, next, false);
+    }
+  };
+
+  build_node(build_node, &app, "", true);
+}
+
+/**
+ * @brief Return true when name is a top-level command.
+ */
+bool CommandTree::IsTopCommand(const std::string &name) const {
+  return top_commands_.find(name) != top_commands_.end();
+}
+
+/**
+ * @brief Return true when name is a module (has subcommands).
+ */
+bool CommandTree::IsModule(const std::string &name) const {
+  return modules_.find(name) != modules_.end();
+}
+
+/**
+ * @brief Find a node by command path.
+ */
+const CommandTree::CommandNode *
+CommandTree::FindNode(const std::string &path) const {
+  auto it = nodes_.find(path);
+  if (it == nodes_.end()) {
+    return nullptr;
+  }
+  return &it->second;
+}
+
+/**
+ * @brief List top-level commands with help text.
+ */
+std::vector<std::pair<std::string, std::string>>
+CommandTree::ListTopCommands() const {
+  std::vector<std::pair<std::string, std::string>> out;
+  out.reserve(top_help_.size());
+  for (const auto &entry : top_help_) {
+    out.emplace_back(entry.first, entry.second);
+  }
+  return out;
+}
+
+/**
+ * @brief List subcommands for a command path.
+ */
+std::vector<std::pair<std::string, std::string>>
+CommandTree::ListSubcommands(const std::string &path) const {
+  std::vector<std::pair<std::string, std::string>> out;
+  auto it = nodes_.find(path);
+  if (it == nodes_.end()) {
+    return out;
+  }
+  out.reserve(it->second.subcommands.size());
+  for (const auto &entry : it->second.subcommands) {
+    out.emplace_back(entry.first, entry.second);
+  }
+  return out;
+}
+
+/**
+ * @brief List long options for a command path.
+ */
+std::vector<std::pair<std::string, std::string>>
+CommandTree::ListLongOptions(const std::string &path) const {
+  std::vector<std::pair<std::string, std::string>> out;
+  auto it = nodes_.find(path);
+  if (it == nodes_.end()) {
+    return out;
+  }
+  out.reserve(it->second.long_options.size());
+  for (const auto &entry : it->second.long_options) {
+    out.emplace_back(entry.first, entry.second);
+  }
+  return out;
+}
+
+/**
+ * @brief List short options for a command path.
+ */
+std::vector<std::pair<char, std::string>>
+CommandTree::ListShortOptions(const std::string &path) const {
+  std::vector<std::pair<char, std::string>> out;
+  auto it = nodes_.find(path);
+  if (it == nodes_.end()) {
+    return out;
+  }
+  out.reserve(it->second.short_options.size());
+  for (const auto &entry : it->second.short_options) {
+    out.emplace_back(entry.first, entry.second);
+  }
+  return out;
+}
+
+/**
+ * @brief Register a command path as top-level command.
+ */
+void CommandTree::RegisterCommand_(const std::string &path,
+                                   const std::string &help) {
+  if (path.empty()) {
+    return;
+  }
+  top_commands_.insert(path);
+  top_help_[path] = help;
+}
+
+/**
+ * @brief Build the shared command tree from CLI definitions.
+ */
+std::shared_ptr<CommandTree> BuildCommandTree(CLI::App &app,
+                                              CliArgsPool &args) {
+  auto subs = app.get_subcommands([](CLI::App *) { return true; });
+  if (subs.empty()) {
+    (void)BindCliOptions(app, args);
+  }
+
+  auto tree = std::make_shared<CommandTree>();
+  tree->Build(app);
+  return tree;
 }
 
 /**

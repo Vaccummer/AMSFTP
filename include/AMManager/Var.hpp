@@ -33,8 +33,13 @@ public:
   /**
    * @brief Resolve a variable value from memory or settings.
    */
-  bool Resolve(const std::string &name, std::string *value,
+  bool Resolve(const std::string &name, std::string *value = nullptr,
                VarSource *source = nullptr) const;
+
+  /**
+   * @brief Query an in-memory variable.
+   */
+  bool GetMemVar(const std::string &name, std::string *value) const;
 
   /**
    * @brief Query a persistent variable from storage.

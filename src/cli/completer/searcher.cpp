@@ -1,10 +1,9 @@
 #include "AMCLI/Completer/Searcher.hpp"
 #include "AMBase/CommonTools.hpp"
-#include "AMCLI/CLIBind.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/FileSystem.hpp"
-#include "CLI/CLI.hpp"
+#include "AMManager/Var.hpp"
 #include <algorithm>
 #include <cctype>
 #include <utility>
@@ -208,6 +207,14 @@ bool IsModuleCommand_(const std::string &name) {
 }
 
 /**
+ * @brief Return true if completion context contains target.
+ */
+bool HasTarget_(const AMCompletionContext &ctx, AMCompletionTarget target) {
+  return std::find(ctx.targets.begin(), ctx.targets.end(), target) !=
+         ctx.targets.end();
+}
+
+/**
  * @brief Parsed command/argument state from tokens before cursor.
  */
 struct CommandState {
@@ -262,6 +269,9 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
 AMCompletionCollectResult
 AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   AMCompletionCollectResult result;
+  if (!command_tree_) {
+    return result;
+  }
   const std::string prefix = ctx.token_prefix;
 
   std::string command_path;
@@ -269,9 +279,7 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   size_t command_tokens = 0;
   ParseCommandPath_(ctx, &command_path, &node, &command_tokens);
 
-  const bool wants_top =
-      ctx.target == AMCompletionTarget::TopCommand ||
-      (ctx.target == AMCompletionTarget::None && ctx.token_index == 0);
+  const bool wants_top = HasTarget_(ctx, AMCompletionTarget::TopCommand);
 
   if (wants_top) {
     struct ItemInfo {
@@ -280,13 +288,13 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       bool is_module = false;
     };
     std::vector<ItemInfo> items;
-    auto tops = command_tree_.ListTopCommands();
+    auto tops = command_tree_->ListTopCommands();
     for (const auto &item : tops) {
       if (!prefix.empty() && item.first.rfind(prefix, 0) != 0) {
         continue;
       }
       items.push_back(
-          {item.first, item.second, command_tree_.IsModule(item.first)});
+          {item.first, item.second, command_tree_->IsModule(item.first)});
     }
 
     size_t max_len = 0;
@@ -307,8 +315,7 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     }
   }
 
-  const bool wants_subcommand = ctx.target == AMCompletionTarget::Subcommand ||
-                                ctx.target == AMCompletionTarget::None;
+  const bool wants_subcommand = HasTarget_(ctx, AMCompletionTarget::Subcommand);
   if (wants_subcommand && node && !node->subcommands.empty() &&
       ctx.token_index == command_tokens) {
     struct ItemInfo {
@@ -316,7 +323,7 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       std::string help;
     };
     std::vector<ItemInfo> items;
-    auto subs = command_tree_.ListSubcommands(command_path);
+    auto subs = command_tree_->ListSubcommands(command_path);
     for (const auto &item : subs) {
       if (!prefix.empty() && item.first.rfind(prefix, 0) != 0) {
         continue;
@@ -341,10 +348,9 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   const bool wants_long_option =
-      ctx.target == AMCompletionTarget::LongOption ||
-      (ctx.target == AMCompletionTarget::None && StartsWithLongOption_(prefix));
+      HasTarget_(ctx, AMCompletionTarget::LongOption);
   if (wants_long_option && node) {
-    auto options = command_tree_.ListLongOptions(command_path);
+    auto options = command_tree_->ListLongOptions(command_path);
     for (const auto &item : options) {
       if (!prefix.empty() && item.first.rfind(prefix, 0) != 0) {
         continue;
@@ -359,11 +365,9 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   const bool wants_short_option =
-      ctx.target == AMCompletionTarget::ShortOption ||
-      (ctx.target == AMCompletionTarget::None &&
-       StartsWithShortOption_(prefix));
+      HasTarget_(ctx, AMCompletionTarget::ShortOption);
   if (wants_short_option && node) {
-    auto options = command_tree_.ListShortOptions(command_path);
+    auto options = command_tree_->ListShortOptions(command_path);
     for (const auto &item : options) {
       const std::string name = std::string("-") + item.first;
       if (!prefix.empty() && name.rfind(prefix, 0) != 0) {
@@ -378,6 +382,9 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     }
   }
 
+  if (!result.candidates.empty()) {
+    SortCandidates(ctx, result.candidates);
+  }
   return result;
 }
 
@@ -421,6 +428,18 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
                                               std::string *out_path,
                                               const CommandNode **out_node,
                                               size_t *out_consumed) const {
+  if (!command_tree_) {
+    if (out_path) {
+      out_path->clear();
+    }
+    if (out_node) {
+      *out_node = nullptr;
+    }
+    if (out_consumed) {
+      *out_consumed = 0;
+    }
+    return;
+  }
   std::string path;
   const CommandNode *node = nullptr;
   size_t consumed = 0;
@@ -437,9 +456,9 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
     }
 
     if (path.empty()) {
-      if (command_tree_.IsModule(text) || command_tree_.IsTopCommand(text)) {
+      if (command_tree_->IsModule(text) || command_tree_->IsTopCommand(text)) {
         path = text;
-        node = command_tree_.FindNode(path);
+        node = command_tree_->FindNode(path);
         consumed = i + 1;
         continue;
       }
@@ -448,7 +467,7 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
 
     if (node && node->subcommands.find(text) != node->subcommands.end()) {
       path += " " + text;
-      node = command_tree_.FindNode(path);
+      node = command_tree_->FindNode(path);
       consumed = i + 1;
       continue;
     }
@@ -468,236 +487,16 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
 }
 
 /**
- * @brief Construct and build the command tree.
- */
-AMCommandSearchEngine::CommandTree::CommandTree() { Build(); }
-
-/**
- * @brief Return true when name is a top-level command.
- */
-bool AMCommandSearchEngine::CommandTree::IsTopCommand(
-    const std::string &name) const {
-  return top_commands_.find(name) != top_commands_.end();
-}
-
-/**
- * @brief Return true when name is a module (has subcommands).
- */
-bool AMCommandSearchEngine::CommandTree::IsModule(
-    const std::string &name) const {
-  return modules_.find(name) != modules_.end();
-}
-
-/**
- * @brief Find a node by command path.
- */
-const AMCommandSearchEngine::CommandNode *
-AMCommandSearchEngine::CommandTree::FindNode(const std::string &path) const {
-  auto it = nodes_.find(path);
-  if (it == nodes_.end()) {
-    return nullptr;
-  }
-  return &it->second;
-}
-
-/**
- * @brief List top-level commands with help text.
- */
-std::vector<std::pair<std::string, std::string>>
-AMCommandSearchEngine::CommandTree::ListTopCommands() const {
-  std::vector<std::pair<std::string, std::string>> out;
-  out.reserve(top_commands_.size());
-  for (const auto &item : top_commands_) {
-    auto it = top_help_.find(item);
-    out.emplace_back(item, it == top_help_.end() ? "" : it->second);
-  }
-  std::sort(out.begin(), out.end(),
-            [](const auto &a, const auto &b) { return a.first < b.first; });
-  return out;
-}
-
-/**
- * @brief List subcommands for a command path.
- */
-std::vector<std::pair<std::string, std::string>>
-AMCommandSearchEngine::CommandTree::ListSubcommands(
-    const std::string &path) const {
-  std::vector<std::pair<std::string, std::string>> out;
-  const auto *node = FindNode(path);
-  if (!node) {
-    return out;
-  }
-
-  out.reserve(node->subcommands.size());
-  for (const auto &item : node->subcommands) {
-    out.emplace_back(item.first, item.second);
-  }
-  std::sort(out.begin(), out.end(),
-            [](const auto &a, const auto &b) { return a.first < b.first; });
-  return out;
-}
-/**
- * @brief List long options for a command path.
- */
-std::vector<std::pair<std::string, std::string>>
-AMCommandSearchEngine::CommandTree::ListLongOptions(
-    const std::string &path) const {
-  std::vector<std::pair<std::string, std::string>> out;
-  const auto *node = FindNode(path);
-  if (!node) {
-    return out;
-  }
-
-  out.reserve(node->long_options.size());
-  for (const auto &item : node->long_options) {
-    out.emplace_back(item.first, item.second);
-  }
-  std::sort(out.begin(), out.end(),
-            [](const auto &a, const auto &b) { return a.first < b.first; });
-  return out;
-}
-
-/**
- * @brief List short options for a command path.
- */
-std::vector<std::pair<char, std::string>>
-AMCommandSearchEngine::CommandTree::ListShortOptions(
-    const std::string &path) const {
-  std::vector<std::pair<char, std::string>> out;
-  const auto *node = FindNode(path);
-  if (!node) {
-    return out;
-  }
-
-  out.reserve(node->short_options.size());
-  for (const auto &item : node->short_options) {
-    out.emplace_back(item.first, item.second);
-  }
-  std::sort(out.begin(), out.end(),
-            [](const auto &a, const auto &b) { return a.first < b.first; });
-  return out;
-}
-
-/**
- * @brief Build tree structure from CLI metadata.
- */
-void AMCommandSearchEngine::CommandTree::Build() {
-  CLI::App app;
-  CliArgsPool args_pool;
-  (void)BindCliOptions(app, args_pool);
-
-  auto build_node = [&](auto &&self, CLI::App *node,
-                        const std::string &path) -> void {
-    CommandNode info;
-    auto options = node->get_options();
-    for (auto *opt : options) {
-      const std::string desc = opt ? opt->get_description() : "";
-      for (const auto &lname : opt->get_lnames()) {
-        if (!lname.empty()) {
-          info.long_options["--" + lname] = desc;
-        }
-      }
-      for (const auto &sname : opt->get_snames()) {
-        if (!sname.empty()) {
-          info.short_options[sname[0]] = desc;
-        }
-      }
-    }
-
-    auto subs = node->get_subcommands([](CLI::App *) { return true; });
-    for (auto *sub : subs) {
-      if (sub) {
-        info.subcommands[sub->get_name()] = sub->get_description();
-      }
-    }
-
-    nodes_[path] = info;
-    if (path.find(' ') == std::string::npos && !info.subcommands.empty()) {
-      modules_.insert(path);
-    }
-
-    for (auto *sub : subs) {
-      if (!sub) {
-        continue;
-      }
-      const std::string next =
-          path.empty() ? sub->get_name() : path + " " + sub->get_name();
-      self(self, sub, next);
-    }
-  };
-
-  auto subs = app.get_subcommands([](CLI::App *) { return true; });
-  for (auto *sub : subs) {
-    if (!sub) {
-      continue;
-    }
-    const std::string name = sub->get_name();
-    RegisterCommand_(name, sub->get_description());
-    build_node(build_node, sub, name);
-  }
-}
-
-/**
- * @brief Register a command path as top-level command.
- */
-void AMCommandSearchEngine::CommandTree::RegisterCommand_(
-    const std::string &path, const std::string &help) {
-  if (path.empty()) {
-    return;
-  }
-  top_commands_.insert(path);
-  if (!help.empty()) {
-    top_help_[path] = help;
-  }
-}
-
-/**
  * @brief Collect internal-value candidates.
  */
 AMCompletionCollectResult
 AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   AMCompletionCollectResult result;
 
-  AMCompletionTarget target = AMCompletionTarget::None;
-  if (ctx.target == AMCompletionTarget::VariableName ||
-      StartsWithUnescapedDollar_(ctx.token_prefix_raw, ctx.token_raw)) {
-    target = AMCompletionTarget::VariableName;
-  } else {
-    const CommandState state = ResolveCommandState_(ctx);
-
-    if (state.command_path == "config get" ||
-        state.command_path == "config edit" ||
-        state.command_path == "config rm") {
-      target = AMCompletionTarget::HostNickname;
-    } else if (state.command_path == "config rn" && state.arg_index == 0) {
-      target = AMCompletionTarget::HostNickname;
-    } else if (state.command_path == "config set") {
-      if (state.arg_index == 0) {
-        target = AMCompletionTarget::HostNickname;
-      } else if (state.arg_index == 1) {
-        target = AMCompletionTarget::HostAttr;
-      }
-    } else if (state.command_path == "connect" && state.arg_index == 0) {
-      target = AMCompletionTarget::HostNickname;
-    } else if (state.command_path == "client check" ||
-               state.command_path == "client rm") {
-      target = AMCompletionTarget::ClientName;
-    } else if (state.command_path == "ch" && state.arg_index == 0) {
-      target = AMCompletionTarget::ClientName;
-    } else if (state.command_path == "task show" ||
-               state.command_path == "task inspect" ||
-               state.command_path == "task terminate" ||
-               state.command_path == "task pause") {
-      target = AMCompletionTarget::TaskId;
-    } else if ((state.command_path == "task retry" ||
-                state.command_path == "retry") &&
-               state.arg_index == 0) {
-      target = AMCompletionTarget::TaskId;
-    }
-  }
+  const bool wants_var = HasTarget_(ctx, AMCompletionTarget::VariableName);
 
   const std::string prefix = ctx.token_prefix;
-  if (target == AMCompletionTarget::VariableName) {
+  if (wants_var) {
     AMVarManager &var_manager = AMVarManager::Instance();
     auto names = var_manager.ListNames();
     for (const auto &name : names) {
@@ -711,10 +510,13 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.kind = AMCompletionKind::VariableName;
       result.candidates.push_back(std::move(candidate));
     }
+    if (!result.candidates.empty()) {
+      SortCandidates(ctx, result.candidates);
+    }
     return result;
   }
 
-  if (target == AMCompletionTarget::ClientName) {
+  if (HasTarget_(ctx, AMCompletionTarget::ClientName)) {
     auto names = client_manager_.GetClientNames();
     for (const auto &name : names) {
       if (!prefix.empty() && name.rfind(prefix, 0) != 0) {
@@ -726,10 +528,13 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.kind = AMCompletionKind::ClientName;
       result.candidates.push_back(std::move(candidate));
     }
+    if (!result.candidates.empty()) {
+      SortCandidates(ctx, result.candidates);
+    }
     return result;
   }
 
-  if (target == AMCompletionTarget::HostNickname) {
+  if (HasTarget_(ctx, AMCompletionTarget::HostNickname)) {
     auto names = host_manager_.ListNames();
     for (const auto &name : names) {
       if (!prefix.empty() && name.rfind(prefix, 0) != 0) {
@@ -741,10 +546,13 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.kind = AMCompletionKind::HostNickname;
       result.candidates.push_back(std::move(candidate));
     }
+    if (!result.candidates.empty()) {
+      SortCandidates(ctx, result.candidates);
+    }
     return result;
   }
 
-  if (target == AMCompletionTarget::HostAttr) {
+  if (HasTarget_(ctx, AMCompletionTarget::HostAttr)) {
     for (const auto &field : kHostConfigFields) {
       if (!prefix.empty() && field.rfind(prefix, 0) != 0) {
         continue;
@@ -755,10 +563,13 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.kind = AMCompletionKind::HostAttr;
       result.candidates.push_back(std::move(candidate));
     }
+    if (!result.candidates.empty()) {
+      SortCandidates(ctx, result.candidates);
+    }
     return result;
   }
 
-  if (target == AMCompletionTarget::TaskId) {
+  if (HasTarget_(ctx, AMCompletionTarget::TaskId)) {
     auto ids = transfer_manager_.ListTaskIds();
     for (const auto &id : ids) {
       if (!prefix.empty() && id.rfind(prefix, 0) != 0) {
@@ -772,6 +583,9 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     }
   }
 
+  if (!result.candidates.empty()) {
+    SortCandidates(ctx, result.candidates);
+  }
   return result;
 }
 
@@ -795,7 +609,9 @@ void AMInternalSearchEngine::SortCandidates(
 AMPathSearchEngine::AMPathSearchEngine()
     : config_manager_(AMConfigManager::Instance()),
       client_manager_(AMClientManager::Instance()),
-      filesystem_(AMFileSystem::Instance()) {}
+      filesystem_(AMFileSystem::Instance()) {
+  LoadPathEngineConfigs_();
+}
 
 /**
  * @brief Collect path candidates or async path requests.
@@ -803,8 +619,7 @@ AMPathSearchEngine::AMPathSearchEngine()
 AMCompletionCollectResult
 AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   AMCompletionCollectResult result;
-  if (ctx.target != AMCompletionTarget::Path &&
-      ctx.target != AMCompletionTarget::None) {
+  if (!HasTarget_(ctx, AMCompletionTarget::Path)) {
     return result;
   }
 
@@ -821,23 +636,31 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
+  const PathEngineConfig &engine_config =
+      ResolvePathEngineConfig_(path.nickname);
+  const int timeout_ms = engine_config.timeout_ms > 0
+                             ? engine_config.timeout_ms
+                             : default_path_engine_config_.timeout_ms;
+  const size_t cache_min =
+      std::max<size_t>(1, engine_config.cache_items_threshold);
+  const size_t cache_max = std::max<size_t>(1, engine_config.cache_max_entries);
+  const bool use_async = engine_config.use_async;
+
   CacheKey key{path.nickname, path.dir_abs};
   std::vector<PathInfo> listed;
-  if (LookupCache_(key, &listed)) {
+  if (!ctx.forbid_cache && LookupCache_(key, &listed)) {
     AppendPathCandidates_(path, listed, &result.candidates);
-    return result;
+    if (!result.candidates.empty()) {
+      SortCandidates(ctx, result.candidates);
+      result.from_cache = true;
+      return result;
+    }
   }
 
-  const int timeout_ms = config_manager_.ResolveArg<int>(
-      DocumentKind::Settings, {"CompleteOption", "timeout_ms"}, 5000,
-      [](int value) { return value > 0 ? value : 5000; });
-  const size_t cache_min =
-      ctx.args ? ctx.args->cache_min_items : static_cast<size_t>(100);
-  const size_t cache_max =
-      ctx.args ? ctx.args->cache_max_entries : static_cast<size_t>(64);
-
-  if (!path.remote) {
-    auto client = client_manager_.LocalClient();
+  if (!use_async) {
+    std::shared_ptr<BaseClient> client =
+        path.remote ? client_manager_.Clients().GetHost(path.nickname)
+                    : client_manager_.LocalClient();
     if (!client) {
       return result;
     }
@@ -852,37 +675,42 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       StoreCache_(key, items, cache_max);
     }
     AppendPathCandidates_(path, items, &result.candidates);
+    if (!result.candidates.empty()) {
+      SortCandidates(ctx, result.candidates);
+    }
     return result;
   }
 
   AMCompletionAsyncRequest request;
   request.request_id = ctx.request_id;
   request.timeout_ms = timeout_ms;
-  request.target = ctx.target;
-  request.interrupt_flag = std::make_shared<std::atomic<bool>>(false);
+  request.target = AMCompletionTarget::Path;
+  auto interrupt_flag = std::make_shared<InterruptFlag>();
+  request.interrupt_flag = [flag = interrupt_flag]() { return flag->check(); };
+  request.interrupt_cancel = [flag = interrupt_flag]() { flag->set(true); };
 
-  request.search = [this, path, cache_min,
-                    cache_max](const AMCompletionAsyncRequest &request,
-                               AMCompletionAsyncResult *out) -> bool {
-    if (request.interrupt_flag &&
-        request.interrupt_flag->load(std::memory_order_relaxed)) {
+  request.search = [this, path, cache_min, cache_max,
+                    interrupt_flag](const AMCompletionAsyncRequest &request,
+                                    AMCompletionAsyncResult *out) -> bool {
+    if (request.IsInterrupted()) {
       return false;
     }
 
-    auto client = client_manager_.Clients().GetHost(path.nickname);
+    std::shared_ptr<BaseClient> client =
+        path.remote ? client_manager_.Clients().GetHost(path.nickname)
+                    : client_manager_.LocalClient();
     if (!client) {
       return false;
     }
 
     const int timeout = request.timeout_ms > 0 ? request.timeout_ms : 5000;
     auto [rcm, items] =
-        client->listdir(path.dir_abs, nullptr, timeout, am_ms());
+        client->listdir(path.dir_abs, interrupt_flag, timeout, am_ms());
     if (rcm.first != EC::Success) {
       return false;
     }
 
-    if (request.interrupt_flag &&
-        request.interrupt_flag->load(std::memory_order_relaxed)) {
+    if (request.IsInterrupted()) {
       return false;
     }
 
@@ -893,6 +721,9 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
     std::vector<AMCompletionCandidate> candidates;
     AppendPathCandidates_(path, items, &candidates);
+    if (!candidates.empty()) {
+      SortCandidates(AMCompletionContext{}, candidates);
+    }
 
     if (out) {
       out->request_id = request.request_id;
@@ -929,9 +760,176 @@ void AMPathSearchEngine::SortCandidates(
 /**
  * @brief Clear internal path cache.
  */
-void AMPathSearchEngine::ClearCache() {
+void AMPathSearchEngine::ClearCache() { ClearCacheForAll(); }
+
+/**
+ * @brief Clear cached path entries for a specific nickname.
+ */
+void AMPathSearchEngine::ClearCacheForNickname(const std::string &nickname) {
+  std::lock_guard<std::mutex> lock(cache_mtx_);
+  cache_.erase(nickname);
+  cache_order_.erase(nickname);
+}
+
+/**
+ * @brief Clear cached path entries for all nicknames.
+ */
+void AMPathSearchEngine::ClearCacheForAll() {
   std::lock_guard<std::mutex> lock(cache_mtx_);
   cache_.clear();
+  cache_order_.clear();
+}
+
+/**
+ * @brief Query cache status for a nickname.
+ */
+bool AMPathSearchEngine::GetCacheStatusForNickname(const std::string &nickname,
+                                                   CacheStatus *status) const {
+  std::lock_guard<std::mutex> lock(cache_mtx_);
+  auto it = cache_.find(nickname);
+  if (it == cache_.end()) {
+    return false;
+  }
+
+  CacheStatus local{};
+  local.entry_count = it->second.size();
+  size_t item_count = 0;
+  for (const auto &entry : it->second) {
+    item_count += entry.second.items.size();
+  }
+  local.item_count = item_count;
+
+  if (status) {
+    *status = local;
+  }
+  return true;
+}
+
+/**
+ * @brief Query cache status for all nicknames.
+ */
+std::unordered_map<std::string, AMPathSearchEngine::CacheStatus>
+AMPathSearchEngine::GetCacheStatusAll() const {
+  std::unordered_map<std::string, CacheStatus> out;
+  std::lock_guard<std::mutex> lock(cache_mtx_);
+  for (const auto &bucket : cache_) {
+    CacheStatus status{};
+    status.entry_count = bucket.second.size();
+    size_t item_count = 0;
+    for (const auto &entry : bucket.second) {
+      item_count += entry.second.items.size();
+    }
+    status.item_count = item_count;
+    out.emplace(bucket.first, status);
+  }
+  return out;
+}
+
+/**
+ * @brief Initialize config from a JSON object.
+ */
+ECM AMPathSearchEngine::PathEngineConfig::Init(const Json &jsond) {
+  rcm = Ok();
+  if (!jsond.is_object()) {
+    rcm = {EC::InvalidArg, "config is not an object"};
+    return rcm;
+  }
+
+  bool async_value = use_async;
+  if (QueryKey(jsond, {"use_async"}, &async_value)) {
+    use_async = async_value;
+  }
+
+  int cache_items_value = static_cast<int>(cache_items_threshold);
+  if (QueryKey(jsond, {"cache_items_threshold"}, &cache_items_value)) {
+    if (cache_items_value <= 0) {
+      cache_items_value = 1;
+    }
+    cache_items_threshold = static_cast<size_t>(cache_items_value);
+  }
+
+  int cache_max_value = static_cast<int>(cache_max_entries);
+  if (QueryKey(jsond, {"cache_max_entries"}, &cache_max_value)) {
+    if (cache_max_value <= 0) {
+      cache_max_value = 1;
+    }
+    cache_max_entries = static_cast<size_t>(cache_max_value);
+  }
+
+  int timeout_value = timeout_ms;
+  if (QueryKey(jsond, {"timeout_ms"}, &timeout_value)) {
+    if (timeout_value <= 0) {
+      timeout_value = 5000;
+    }
+    timeout_ms = timeout_value;
+  }
+
+  return rcm;
+}
+
+/**
+ * @brief Export config as a JSON object.
+ */
+Json AMPathSearchEngine::PathEngineConfig::GetJson() const {
+  Json json = Json::object();
+  json["use_async"] = use_async;
+  json["cache_items_threshold"] = cache_items_threshold;
+  json["cache_max_entries"] = cache_max_entries;
+  json["timeout_ms"] = timeout_ms;
+  return json;
+}
+
+/**
+ * @brief Load per-nickname path-engine configuration.
+ */
+void AMPathSearchEngine::LoadPathEngineConfigs_() {
+  const PathEngineConfig defaults{};
+  path_engine_configs_.clear();
+  default_path_engine_config_ = defaults;
+
+  Json config = config_manager_.ResolveArg<Json>(
+      DocumentKind::Settings, {"CompleteOption", "Engine", "Path"},
+      Json::object(), {});
+  if (!config.is_object()) {
+    path_engine_configs_["*"] = defaults;
+    return;
+  }
+
+  for (auto it = config.begin(); it != config.end(); ++it) {
+    if (!it.value().is_object()) {
+      continue;
+    }
+
+    PathEngineConfig entry = defaults;
+    if (entry.Init(it.value()).first != EC::Success) {
+      continue;
+    }
+    path_engine_configs_[it.key()] = entry;
+  }
+
+  auto def_it = path_engine_configs_.find("*");
+  if (def_it != path_engine_configs_.end()) {
+    default_path_engine_config_ = def_it->second;
+  } else {
+    path_engine_configs_["*"] = defaults;
+  }
+}
+
+/**
+ * @brief Resolve per-nickname path-engine configuration.
+ */
+const AMPathSearchEngine::PathEngineConfig &
+AMPathSearchEngine::ResolvePathEngineConfig_(
+    const std::string &nickname) const {
+  auto it = path_engine_configs_.find(nickname);
+  if (it != path_engine_configs_.end()) {
+    return it->second;
+  }
+  auto def_it = path_engine_configs_.find("*");
+  if (def_it != path_engine_configs_.end()) {
+    return def_it->second;
+  }
+  return default_path_engine_config_;
 }
 
 /**
@@ -998,11 +996,7 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
       }
     } else {
       path_part = token_prefix;
-      if (current_remote && current_client) {
-        nickname = current_client->GetNickname();
-      } else {
-        nickname = "local";
-      }
+      nickname = current_client->GetNickname();
     }
   }
 
@@ -1105,8 +1099,12 @@ void AMPathSearchEngine::AppendPathCandidates_(
 bool AMPathSearchEngine::LookupCache_(const CacheKey &key,
                                       std::vector<PathInfo> *items) {
   std::lock_guard<std::mutex> lock(cache_mtx_);
-  auto it = cache_.find(key);
-  if (it == cache_.end()) {
+  auto nick_it = cache_.find(key.nickname);
+  if (nick_it == cache_.end()) {
+    return false;
+  }
+  auto it = nick_it->second.find(key.dir);
+  if (it == nick_it->second.end()) {
     return false;
   }
   if (items) {
@@ -1122,19 +1120,33 @@ void AMPathSearchEngine::StoreCache_(const CacheKey &key,
                                      const std::vector<PathInfo> &items,
                                      size_t max_entries) {
   std::lock_guard<std::mutex> lock(cache_mtx_);
-  cache_[key] = CacheEntry{items, std::chrono::steady_clock::now()};
-  if (cache_.size() <= max_entries) {
+  if (max_entries < 1) {
+    max_entries = 1;
+  }
+
+  auto &bucket = cache_[key.nickname];
+  bucket[key.dir] = CacheEntry{items, std::chrono::steady_clock::now()};
+
+  auto &order = cache_order_[key.nickname];
+  order.remove(key.dir);
+  order.push_back(key.dir);
+
+  if (bucket.size() <= max_entries) {
     return;
   }
 
-  while (cache_.size() > max_entries) {
-    auto oldest = cache_.begin();
-    for (auto iter = cache_.begin(); iter != cache_.end(); ++iter) {
-      if (iter->second.timestamp < oldest->second.timestamp) {
-        oldest = iter;
-      }
+  while (bucket.size() > max_entries && !order.empty()) {
+    const std::string evict = order.front();
+    order.pop_front();
+    auto it = bucket.find(evict);
+    if (it != bucket.end()) {
+      bucket.erase(it);
     }
-    cache_.erase(oldest);
+  }
+
+  if (bucket.empty()) {
+    cache_.erase(key.nickname);
+    cache_order_.erase(key.nickname);
   }
 }
 
@@ -1148,18 +1160,18 @@ AMBuildDefaultSearchEngineRegistrations() {
   auto command_engine = std::make_shared<AMCommandSearchEngine>();
   out.push_back(
       {{AMCompletionTarget::TopCommand, AMCompletionTarget::Subcommand,
-        AMCompletionTarget::LongOption, AMCompletionTarget::ShortOption,
-        AMCompletionTarget::None},
+        AMCompletionTarget::LongOption, AMCompletionTarget::ShortOption},
        command_engine});
 
   auto internal_engine = std::make_shared<AMInternalSearchEngine>();
-  out.push_back({{AMCompletionTarget::VariableName, AMCompletionTarget::None},
-                 internal_engine});
+  out.push_back(
+      {{AMCompletionTarget::VariableName, AMCompletionTarget::ClientName,
+        AMCompletionTarget::HostNickname, AMCompletionTarget::HostAttr,
+        AMCompletionTarget::TaskId},
+       internal_engine});
 
   auto path_engine = std::make_shared<AMPathSearchEngine>();
-  out.push_back(
-      {{AMCompletionTarget::Path, AMCompletionTarget::None}, path_engine});
-
+  out.push_back({{AMCompletionTarget::Path}, path_engine});
   return out;
 }
 
