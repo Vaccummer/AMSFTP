@@ -5,6 +5,7 @@
 #include <unordered_set>
 
 // 自身依赖
+#include "AMBase/CommonTools.hpp"
 #include "AMClient/Base.hpp"
 // 自身依赖
 
@@ -352,11 +353,11 @@ public:
 
 #ifdef _WIN32
     if (AMFS::is_readonly(AMStr::wstr(pathf))) {
-      info.mode_int = 0333;
-      info.mode_str = "r-xr-xr-x";
+      info.mode_int = 0300;
+      info.mode_str = "r--------";
     } else {
-      info.mode_int = 0666;
-      info.mode_str = "rwxrwxrwx";
+      info.mode_int = 0600;
+      info.mode_str = "rwx------";
     }
 
     auto [create_time, access_time, modify_time] =

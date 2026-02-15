@@ -781,7 +781,7 @@ public:
   }
 
   virtual CR ConductCmd([[maybe_unused]] const std::string &cmd,
-                        [[maybe_unused]] int max_time_s = -1,
+                        [[maybe_unused]] int max_time_s = 3000,
                         [[maybe_unused]] amf interrupt_flag = nullptr) {
     throw UnimplementedMethodException(AMStr::amfmt(
         "{} Client doesn't implement funtion: ConductCmd", GetProtocolName()));
