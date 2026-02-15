@@ -344,7 +344,7 @@ public:
   double access_time = 0;
   double modify_time = 0;
   PathType type = PathType::FILE;
-  size_t mode_int = 0777;
+  size_t mode_int = 00;
   std::string mode_str = "r--------";
   PathInfo() : name(""), path(""), dir(""), owner(""), mode_int(0) {}
 

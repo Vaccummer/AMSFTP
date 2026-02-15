@@ -1,0 +1,165 @@
+## :schema ./settings.schema.json
+
+[FileSystem]
+max_cd_history = 20
+
+[InputSet]
+builtin_prompt_color = "#FFFFFF"
+prompt_marker = ""
+continuation_prompt_marker = ">"
+max_history_count = 30
+enable_multiline = true
+enable_history_duplicates = true
+
+[ClientManager]
+heartbeat_interval_s = 60
+trace_num = 10
+
+[TransferManager]
+init_thread_num = 1
+max_thread_num = 16
+refresh_interval_ms = 200
+
+[LogManager]
+client_trace_level = 4
+program_trace_level = 4
+
+[AutoConfigBackup]
+last_backup_time_s = 1771079039
+enabled = true
+interval_s = 1800
+max_backup_count = 5
+
+[CompleteOption.style]
+maxnum = 999
+maxrows_perpage = 5
+item_select_sign = "▶"
+number_pick = false
+auto_fillin = false
+complete_delay_ms = 100
+
+[CompleteOption.Engine.Path."*"]
+use_async = false
+cache_items_threshold = 50
+cache_max_entries = 1000
+timeout_ms = 5000
+
+[CompleteOption.Engine.Path.local]
+use_async = false
+cache_items_threshold = 50
+cache_max_entries = 1000
+timeout_ms = 5000
+
+[CompleteOption.Engine.Path.wsl]
+use_async = false
+cache_items_threshold = 50
+cache_max_entries = 1000
+timeout_ms = 5000
+
+[style.Table]
+color = "#00adb5"
+left_padding = 1
+right_padding = 1
+top_padding = 0
+bottom_padding = 0
+refresh_interval_ms = 300
+speed_window_size = 25
+
+[style.ProgressBar]
+lborder = ""
+rborder = ""
+fill = "█"
+head = "▓"
+remain = " "
+color = "#08d9d6"
+refresh_interval_ms = 300
+speed_window_size = 25
+bar_width = 10
+width_offset = 12
+show_percentage = true
+show_elapsed_time = true
+show_remaining_time = true
+
+# The style has greater number in key will override the former style.If no number in key, it means no conflict
+# [font_color on bg_color b(bold) i(italic) u(underline)]
+[style.Icons]
+windows = "[#3490de]󰨡[/]"
+linux = "[#f08a5d][/]"
+macos = "[#FFFFFF][/]"
+
+[style.Prompt]
+# 󰨡 am@localhost  49349ms  ❌ ConfigCanceled
+# (local)d:/CodeLib $
+# Available variables:
+# $sysicon $username $hostname $nickname $cwd $elapsed $success $ec_name $task_running $task_pending $time_now
+# Define color styles in [style.Prompt] and using names in format to style the variables.
+# use ` to escape { }  $ ` [ ]
+un = "[#3490de]"
+at = "[#CC7C33]"
+hn = "[#5e63b6]"
+en = "[#FFC66C]"
+nn = "[#17b978]"
+cwd = "[#3490de]"
+ds = "[#5e63b6]"
+white = "[#FFFFFF]"
+format = """
+{$sysicon} [un]{$username}[/][at]@[/][hn]{$hostname}[/]  {$elapsed}  {if{$task_pending > 0}{Pending: {$task_pending}  }{}}{if{$task_running > 0}{Running: {$task_running}  }{}}[en]{if{$success}{✅}{❌ {$ec_name}}}[/]
+[nn]({$nickname})[/] [cwd]{$cwd}[/] [ds]`$ [/]"""
+
+[style.Prompt.icons]
+windows = "[#3490de]󰨡[/]"
+linux = "[#f08a5d][/]"
+macos = "[#FFFFFF][/]"
+
+[style.InputHighlight]
+protocol = "[#5e63b6 b]"
+abort = "[#b8b0b0 i]"
+error = "[#ff5f5f b]"
+warning = "[#f08a5d b]"
+success = "[#17b978 b]"
+info = "[#3490de]"
+debug = "[#537780]"
+trace = "[#b8b0b0]"
+fatal = "[#ff5f5f b]"
+critical = "[#ff5f5f b]"
+common = "[#FFFFFF]"
+module = "[#00b8a9]"
+command = "[#FFC66C]"
+option = "[#b8b0b0]"
+string = "[#618D5B]"
+exist_varname = "[#5e63b6]"
+inmemory_varname = "[#5e63b6]"
+store_varname = "[#5e63b6]"
+nonexist_varname = "[#537780]"
+varvalue = "[#a393eb]"
+nickname = "[#17b978]"
+username = "[#0A632E b]"
+atsign = "[#CC7C33]"
+dollarsign = "[#5e63b6]"
+equalsign = "[#CC7C33]"
+escapedsign = "[#CC7C33]"
+cwd = "[#033415 b]"
+number = "[#033415]"
+timestamp = "[#033415]"
+
+[style.Path1]
+dir = "[#7dace4]"
+regular = "[#FFFFFF]"
+symlink = "[#17b978]"
+otherspecial = "[#de95ba]"
+
+[style.File2]
+"tar.gz" = "[#b80d57]"
+"exe" = "[#8971d0]"
+
+[style.PathExtraStyle]
+nowrite = "u"
+hidden = "i"
+nonexist = "s"
+
+[UserVars]
+dsk = "D:/Document/Desktop/11"
+yes = "2"
+var = "yesy"
+iou = "123"
+haah2 = "2"

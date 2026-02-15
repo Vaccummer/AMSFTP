@@ -1,9 +1,8 @@
 #pragma once
 // standard library
-#include <algorithm>
+#include "AMBase/Enum.hpp"
 #include <array>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
@@ -1830,19 +1829,37 @@ private:
     return true;
   }
 
+  std::string GetPathOnwer(const std::string &path,
+                           const LIBSSH2_SFTP_ATTRIBUTES &attrs) {
+
+    if (GetOSType() == OS_TYPE::Windows) {
+      auto cmd_f = AMStr::amfmt("powershell -NoProfile -Command \"(Get-Acl "
+                                "-LiteralPath '{}').Owner \"",
+                                path);
+      auto [rcm, cr] = ConductCmd(cmd_f);
+      if (!isok(rcm) || cr.second != 0) {
+        return "unknown";
+      }
+      int pos = cr.first.find_last_of("\\");
+      if (pos != std::string::npos && pos + 1 < cr.first.size()) {
+        return cr.first.substr(pos + 1);
+      } else {
+        return cr.first;
+      }
+    } else if (attrs.flags & LIBSSH2_SFTP_ATTR_UIDGID) {
+      long uid = attrs.uid;
+      return StrUid(uid);
+    } else {
+      return "unknown";
+    }
+  }
+
   PathInfo FormatStat(const std::string &path,
                       const LIBSSH2_SFTP_ATTRIBUTES &attrs) {
     PathInfo info;
     info.path = path;
     info.name = AMPathStr::basename(path);
     info.dir = AMPathStr::dirname(path);
-    long uid = attrs.uid;
-    std::string user_name = StrUid(uid);
-    if (user_name.empty()) {
-      info.owner = res_data.username;
-    } else {
-      info.owner = user_name;
-    }
 
     if (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE) {
       info.size = attrs.filesize;
@@ -1851,6 +1868,13 @@ private:
     if (attrs.flags & LIBSSH2_SFTP_ATTR_ACMODTIME) {
       info.access_time = attrs.atime;
       info.modify_time = attrs.mtime;
+    }
+
+    if (GetOSType() != OS_TYPE::Windows &&
+        attrs.flags & LIBSSH2_SFTP_ATTR_UIDGID) {
+      info.owner = StrUid(attrs.uid);
+    } else {
+      info.owner = "";
     }
 
     if (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) {
@@ -1882,10 +1906,11 @@ private:
         info.type = PathType::Unknown;
         break;
       }
-      info.mode_int = mode & 0777;
-      info.mode_str = AMStr::ModeTrans(info.mode_int);
+      if (GetOSType() != OS_TYPE::Windows) {
+        info.mode_int = mode & 0777;
+        info.mode_str = AMStr::ModeTrans(info.mode_int);
+      }
     }
-
     return info;
   }
 
@@ -2401,7 +2426,7 @@ public:
     return sum / rtts.size();
   }
 
-  CR ConductCmd(const std::string &cmd, int max_time_ms = -1,
+  CR ConductCmd(const std::string &cmd, int max_time_ms = 3000,
                 amf interrupt_flag = nullptr) override {
     std::lock_guard<std::recursive_mutex> lock(mtx);
     amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
@@ -2558,11 +2583,10 @@ public:
       terminal_output_cb = std::move(output_cb);
     }
 
-    amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
-    start_time = start_time == -1 ? am_ms() : start_time;
-    if (flag && flag->check()) {
-      terminal_channel.reset();
-      return {EC::Terminate, "Terminal init interrupted"};
+    amf flag = interrupt_flag ? interrupt_flag :
+  this->terminal_interrupt_flag; start_time = start_time == -1 ? am_ms() :
+  start_time; if (flag && flag->check()) { terminal_channel.reset(); return
+  {EC::Terminate, "Terminal init interrupted"};
     }
 
     terminal_channel.reset();
@@ -2578,8 +2602,8 @@ public:
     WaitResult wr = WaitResult::Ready;
     while ((rc = libssh2_channel_request_pty_ex(
                 terminal_channel->channel, terminal_window.term.c_str(),
-                static_cast<unsigned int>(terminal_window.term.size()), nullptr,
-                0, terminal_window.cols, terminal_window.rows,
+                static_cast<unsigned int>(terminal_window.term.size()),
+  nullptr, 0, terminal_window.cols, terminal_window.rows,
                 terminal_window.width, terminal_window.height)) ==
            LIBSSH2_ERROR_EAGAIN) {
       wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
@@ -2631,11 +2655,10 @@ public:
       return {EC::NoConnection, "Terminal not initialized"};
     }
 
-    amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
-    start_time = start_time == -1 ? am_ms() : start_time;
-    if (flag && flag->check()) {
-      terminal_channel.reset();
-      return {EC::Terminate, "Terminal interrupted"};
+    amf flag = interrupt_flag ? interrupt_flag :
+  this->terminal_interrupt_flag; start_time = start_time == -1 ? am_ms() :
+  start_time; if (flag && flag->check()) { terminal_channel.reset(); return
+  {EC::Terminate, "Terminal interrupted"};
     }
 
     libssh2_session_set_blocking(session, 0);
@@ -2647,11 +2670,9 @@ public:
         goto cleanup;
       }
       ssize_t rc =
-          libssh2_channel_write(terminal_channel->channel, msg.data() + offset,
-                                static_cast<int>(msg.size() - offset));
-      if (rc > 0) {
-        offset += static_cast<size_t>(rc);
-        continue;
+          libssh2_channel_write(terminal_channel->channel, msg.data() +
+  offset, static_cast<int>(msg.size() - offset)); if (rc > 0) { offset +=
+  static_cast<size_t>(rc); continue;
       }
       if (rc == LIBSSH2_ERROR_EAGAIN) {
         wr = wait_for_socket(SocketWaitType::Write, MakeInterruptCb(flag),
@@ -2690,11 +2711,10 @@ public:
       return {ECM{EC::NoConnection, "Terminal not initialized"}, ""};
     }
 
-    amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
-    start_time = start_time == -1 ? am_ms() : start_time;
-    if (flag && flag->check()) {
-      terminal_channel.reset();
-      return {ECM{EC::Terminate, "Terminal interrupted"}, ""};
+    amf flag = interrupt_flag ? interrupt_flag :
+  this->terminal_interrupt_flag; start_time = start_time == -1 ? am_ms() :
+  start_time; if (flag && flag->check()) { terminal_channel.reset(); return
+  {ECM{EC::Terminate, "Terminal interrupted"}, ""};
     }
 
     libssh2_session_set_blocking(session, 0);
@@ -2767,8 +2787,9 @@ public:
     if (cmd.empty()) {
       return {ECM{EC::InvalidArg, "Empty command"}, {"", -1}};
     }
-    amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    amf flag = interrupt_flag ? interrupt_flag :
+  this->terminal_interrupt_flag; start_time = start_time == -1 ? am_ms() :
+  start_time;
 
     static std::atomic<size_t> marker_seq{0};
     const size_t seq = ++marker_seq;
@@ -2839,11 +2860,10 @@ public:
       return {ECM{EC::NoConnection, "Terminal not initialized"}, ""};
     }
 
-    amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
-    start_time = start_time == -1 ? am_ms() : start_time;
-    if (flag && flag->check()) {
-      terminal_channel.reset();
-      return {ECM{EC::Terminate, "Terminal interrupted"}, ""};
+    amf flag = interrupt_flag ? interrupt_flag :
+  this->terminal_interrupt_flag; start_time = start_time == -1 ? am_ms() :
+  start_time; if (flag && flag->check()) { terminal_channel.reset(); return
+  {ECM{EC::Terminate, "Terminal interrupted"}, ""};
     }
 
     libssh2_session_set_blocking(session, 0);
@@ -2856,11 +2876,9 @@ public:
         goto cleanup;
       }
       ssize_t rc =
-          libssh2_channel_write(terminal_channel->channel, msg.data() + offset,
-                                static_cast<int>(msg.size() - offset));
-      if (rc > 0) {
-        offset += static_cast<size_t>(rc);
-        continue;
+          libssh2_channel_write(terminal_channel->channel, msg.data() +
+  offset, static_cast<int>(msg.size() - offset)); if (rc > 0) { offset +=
+  static_cast<size_t>(rc); continue;
       }
       if (rc == LIBSSH2_ERROR_EAGAIN) {
         wr = wait_for_socket(SocketWaitType::Write, MakeInterruptCb(flag),
@@ -2870,7 +2888,8 @@ public:
       }
       libssh2_session_set_blocking(session, 1);
       return {ECM{GetLastEC(),
-                  AMStr::amfmt("Terminal write failed: {}", GetLastErrorMsg())},
+                  AMStr::amfmt("Terminal write failed: {}",
+  GetLastErrorMsg())},
               ""};
     }
 
@@ -2902,8 +2921,8 @@ public:
       }
       libssh2_session_set_blocking(session, 1);
       return {ECM{GetLastEC(),
-                  AMStr::amfmt("Terminal read failed: {}", GetLastErrorMsg())},
-              output};
+                  AMStr::amfmt("Terminal read failed: {}",
+  GetLastErrorMsg())}, output};
     }
 
     libssh2_session_set_blocking(session, 1);
@@ -2941,7 +2960,10 @@ public:
     if (os_type != OS_TYPE::Uncertain && !update) {
       return os_type;
     }
-    auto [rcm2, out2] = ConductCmd("cmd /c ver");
+    auto [rcm2, out2] =
+        ConductCmd("powershell -NoProfile -Command "
+                   "\"[System.Environment]::OSVersion.VersionString\"",
+                   3000);
     int code = out2.second;
     std::string out_str = out2.first;
     if (out_str.find("Windows") != std::string::npos) {
@@ -2949,23 +2971,20 @@ public:
       return os_type;
     }
 
-    auto [rcm, out] = ConductCmd("uname -s");
+    auto [rcm, out] = ConductCmd("uname -s", 3000);
     if (rcm.first != EC::Success) {
       os_type = OS_TYPE::Uncertain;
       return os_type;
     }
     code = out.second;
     if (code == 0) {
-      out_str = out.first;
-      // 将out_str转换为小写
-      std::transform(out_str.begin(), out_str.end(), out_str.begin(),
-                     ::tolower);
-      if (out_str.find("linux") != std::string::npos) {
-        os_type = OS_TYPE::Linux;
+      out_str = AMStr::lowercase(out.first);
+      if (out_str.find("cygwin") != std::string::npos) {
+        os_type = OS_TYPE::Windows;
       } else if (out_str.find("darwin") != std::string::npos) {
         os_type = OS_TYPE::MacOS;
-      } else if (out_str.find("cygwin") != std::string::npos) {
-        os_type = OS_TYPE::Windows;
+      } else if (out_str.find("linux") != std::string::npos) {
+        os_type = OS_TYPE::Linux;
       } else if (out_str.find("mingw") != std::string::npos) {
         os_type = OS_TYPE::Windows;
       } else if (out_str.find("msys") != std::string::npos) {
@@ -2989,10 +3008,10 @@ public:
     std::string cmd = AMStr::amfmt("id -un {}", std::to_string(uid));
     auto [rcm, cr] = ConductCmd(cmd, 3000);
     if (rcm.first != EC::Success) {
-      return "unkown";
+      return "unknown";
     }
     if (cr.second != 0) {
-      return "unkown";
+      return "unknown";
     } else {
       user_id_map[uid] = cr.first;
       return cr.first;
@@ -3391,7 +3410,8 @@ public:
     std::string dstf = dst;
     if (srcf.empty() || dstf.empty()) {
       return std::make_pair(EC::InvalidArg,
-                            AMStr::amfmt("Invalid path: {} or {}", srcf, dstf));
+                            AMStr::amfmt("Invalid path: {} or {}", srcf,
+  dstf));
     }
     auto [rcm, br] = exists(srcf);
     if (rcm.first != EC::Success) {
@@ -3442,10 +3462,9 @@ public:
     if (resp.second != 0) {
       std::string msg =
           AMStr::amfmt("Copy cmd conducted failed with exit code: {}, error:
-  {}", resp.second, resp.first); trace(TraceLevel::Error, EC::InhostCopyFailed,
-            AMStr::amfmt("{}@{}->{}", res_data.nickname, srcf, dstf), "Copy",
-            msg);
-      return {EC::InhostCopyFailed, msg};
+  {}", resp.second, resp.first); trace(TraceLevel::Error,
+  EC::InhostCopyFailed, AMStr::amfmt("{}@{}->{}", res_data.nickname, srcf,
+  dstf), "Copy", msg); return {EC::InhostCopyFailed, msg};
     }
 
     return {EC::Success, ""};
