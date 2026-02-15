@@ -65,19 +65,18 @@ void PromptNoComplete_(ic_completion_env_t *cenv, const char *prefix) {
   (void)prefix;
 }
 
-static const std::string inputsetroot = "InputSet";
-static const std::vector<std::string> color_p = {inputsetroot,
+static const std::vector<std::string> color_p = {"Options", "InputSet",
                                                  "builtin_prompt_color"};
-static const std::vector<std::string> prompt_marker_p = {inputsetroot,
+static const std::vector<std::string> prompt_marker_p = {"Options", "InputSet",
                                                          "prompt_marker"};
 static const std::vector<std::string> continuation_prompt_marker_p = {
-    inputsetroot, "continuation_prompt_marker"};
+    "Options", "InputSet", "continuation_prompt_marker"};
 static const std::vector<std::string> max_history_count_p = {
-    inputsetroot, "max_history_count"};
-static const std::vector<std::string> enable_multiline_p = {inputsetroot,
-                                                            "enable_multiline"};
+    "Options", "InputSet", "max_history_count"};
+static const std::vector<std::string> enable_multiline_p = {
+    "Options", "InputSet", "enable_multiline"};
 static const std::vector<std::string> enable_history_duplicates_p = {
-    inputsetroot, "enable_history_duplicates"};
+    "Options", "InputSet", "enable_history_duplicates"};
 static const std::string default_promtpt_color = "#FFFFFF";
 static const std::string ickey = "ic-prompt";
 

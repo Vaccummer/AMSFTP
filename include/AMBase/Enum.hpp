@@ -245,7 +245,7 @@ enum class AMTokenType {
   VarNameMissing = 11,
   EscapeSign = 12,
   Path = 13,
-  Unexistpath = 14,
+  Nonexistentpath = 14,
   File = 15,
   Dir = 16,
   Special = 17

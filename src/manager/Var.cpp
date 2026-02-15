@@ -1,11 +1,67 @@
 #include "AMManager/Var.hpp"
+#include "AMManager/Var.hpp"
 #include "AMBase/CommonTools.hpp"
+#include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include <algorithm>
 #include <unordered_set>
 
 using EC = ErrorCode;
 using Json = nlohmann::ordered_json;
+
+namespace {
+constexpr const char *kPublicScope = "*";
+
+/**
+ * @brief Resolve the active nickname for private variables.
+ */
+std::string ResolvePrivateScope_() {
+  auto current = AMClientManager::Instance().CurrentClient();
+  std::string nickname = current ? current->GetNickname() : std::string();
+  if (nickname.empty()) {
+    nickname = "local";
+  }
+  return nickname;
+}
+
+/**
+ * @brief Resolve a scoped variable from settings.
+ */
+bool ResolveScopedVar_(AMConfigManager &config_manager,
+                       const std::string &scope, const std::string &name,
+                       std::string *value) {
+  std::string parsed;
+  if (!config_manager.ResolveArg(DocumentKind::Settings,
+                                 {"UserVars", scope, name}, &parsed)) {
+    return false;
+  }
+  if (value) {
+    *value = std::move(parsed);
+  }
+  return true;
+}
+
+/**
+ * @brief Resolve private then public user variables.
+ */
+bool ResolveUserVar_(AMConfigManager &config_manager, const std::string &name,
+                     std::string *value, AMVarManager::VarSource *source) {
+  const std::string nickname = ResolvePrivateScope_();
+  if (ResolveScopedVar_(config_manager, nickname, name, value)) {
+    if (source) {
+      *source = AMVarManager::VarSource::Private;
+    }
+    return true;
+  }
+  if (ResolveScopedVar_(config_manager, kPublicScope, name, value)) {
+    if (source) {
+      *source = AMVarManager::VarSource::Public;
+    }
+    return true;
+  }
+  return false;
+}
+} // namespace
 
 /**
  * @brief Return true if an in-memory variable exists.
@@ -79,13 +135,14 @@ bool AMVarManager::Resolve(const std::string &name, std::string *value,
     return true;
   }
 
-  std::string builtin_value;
-  if (GetUserVar(name, &builtin_value)) {
+  std::string storage_value;
+  VarSource storage_source = VarSource::Public;
+  if (ResolveUserVar_(config_manager_, name, &storage_value, &storage_source)) {
     if (value) {
-      *value = builtin_value;
+      *value = storage_value;
     }
     if (source) {
-      *source = VarSource::Builtin;
+      *source = storage_source;
     }
     return true;
   }
@@ -101,15 +158,7 @@ bool AMVarManager::GetUserVar(const std::string &name,
   if (name.empty()) {
     return false;
   }
-  std::string parsed;
-  if (!config_manager_.ResolveArg(DocumentKind::Settings, {"UserVars", name},
-                                  &parsed)) {
-    return false;
-  }
-  if (value) {
-    *value = std::move(parsed);
-  }
-  return true;
+  return ResolveUserVar_(config_manager_, name, value, nullptr);
 }
 
 /**
@@ -118,22 +167,36 @@ bool AMVarManager::GetUserVar(const std::string &name,
 std::vector<std::pair<std::string, std::string>>
 AMVarManager::ListUserVars() const {
   std::vector<std::pair<std::string, std::string>> entries;
+  std::unordered_map<std::string, std::string> merged;
+  const std::string nickname = ResolvePrivateScope_();
 
-  Json user_vars;
-  if (!config_manager_.ResolveArg(DocumentKind::Settings, {"UserVars"},
-                                  &user_vars)) {
-    return entries;
-  }
-  if (!user_vars.is_object()) {
-    return entries;
-  }
-
-  entries.reserve(user_vars.size());
-  for (auto it = user_vars.begin(); it != user_vars.end(); ++it) {
-    std::string parsed;
-    if (QueryKey(user_vars, {it.key()}, &parsed)) {
-      entries.emplace_back(it.key(), std::move(parsed));
+  Json public_vars;
+  if (config_manager_.ResolveArg(DocumentKind::Settings,
+                                 {"UserVars", kPublicScope}, &public_vars) &&
+      public_vars.is_object()) {
+    for (auto it = public_vars.begin(); it != public_vars.end(); ++it) {
+      std::string parsed;
+      if (QueryKey(public_vars, {it.key()}, &parsed)) {
+        merged.emplace(it.key(), std::move(parsed));
+      }
     }
+  }
+
+  Json private_vars;
+  if (config_manager_.ResolveArg(DocumentKind::Settings,
+                                 {"UserVars", nickname}, &private_vars) &&
+      private_vars.is_object()) {
+    for (auto it = private_vars.begin(); it != private_vars.end(); ++it) {
+      std::string parsed;
+      if (QueryKey(private_vars, {it.key()}, &parsed)) {
+        merged[it.key()] = std::move(parsed);
+      }
+    }
+  }
+
+  entries.reserve(merged.size());
+  for (const auto &item : merged) {
+    entries.emplace_back(item.first, item.second);
   }
   return entries;
 }
@@ -146,8 +209,8 @@ ECM AMVarManager::SetUserVar(const std::string &name, const std::string &value,
   if (name.empty()) {
     return Err(EC::InvalidArg, "Empty variable name");
   }
-  if (!config_manager_.SetArg(DocumentKind::Settings, {"UserVars", name},
-                              value)) {
+  if (!config_manager_.SetArg(DocumentKind::Settings,
+                              {"UserVars", kPublicScope, name}, value)) {
     return Err(EC::ConfigInvalid, "failed to set UserVars");
   }
   if (dump_now) {
@@ -168,12 +231,20 @@ ECM AMVarManager::RemoveUserVar(const std::string &name, bool dump_now) {
   if (!config_manager_.ResolveArg(DocumentKind::Settings, {}, &settings_json)) {
     return Err(EC::ConfigNotInitialized, "settings document not initialized");
   }
+  const std::string nickname = ResolvePrivateScope_();
   std::string parsed;
-  if (!QueryKey(settings_json, {"UserVars", name}, &parsed)) {
+  const bool has_private =
+      QueryKey(settings_json, {"UserVars", nickname, name}, &parsed);
+  const bool has_public =
+      QueryKey(settings_json, {"UserVars", kPublicScope, name}, &parsed);
+  if (!has_private && !has_public) {
     return Err(EC::InvalidArg, "Variable not found");
   }
 
-  if (!config_manager_.DelArg(DocumentKind::Settings, {"UserVars", name})) {
+  const std::vector<std::string> target_path =
+      has_private ? std::vector<std::string>{"UserVars", nickname, name}
+                  : std::vector<std::string>{"UserVars", kPublicScope, name};
+  if (!config_manager_.DelArg(DocumentKind::Settings, target_path)) {
     return Err(EC::ConfigInvalid, "failed to remove UserVars");
   }
   if (dump_now) {
@@ -193,9 +264,11 @@ ECM AMVarManager::SetMemoryVar(const std::string &name,
   }
 
   const bool has_memory = HasMemoryVar(name);
-  const bool has_builtin = GetUserVar(name, nullptr);
-  if (confirm_overwrite && (has_memory || has_builtin)) {
-    VarSource source = has_memory ? VarSource::Memory : VarSource::Builtin;
+  VarSource storage_source = VarSource::Public;
+  const bool has_storage =
+      ResolveUserVar_(config_manager_, name, nullptr, &storage_source);
+  if (confirm_overwrite && (has_memory || has_storage)) {
+    VarSource source = has_memory ? VarSource::Memory : storage_source;
     ECM confirm = ConfirmOverwrite(name, source);
     if (confirm.first != EC::Success) {
       return confirm;
@@ -220,9 +293,11 @@ ECM AMVarManager::SetPersistentVar(const std::string &name,
   }
 
   const bool has_memory = HasMemoryVar(name);
-  const bool has_builtin = GetUserVar(name, nullptr);
-  if (confirm_overwrite && (has_memory || has_builtin)) {
-    VarSource source = has_memory ? VarSource::Memory : VarSource::Builtin;
+  VarSource storage_source = VarSource::Public;
+  const bool has_storage =
+      ResolveUserVar_(config_manager_, name, nullptr, &storage_source);
+  if (confirm_overwrite && (has_memory || has_storage)) {
+    VarSource source = has_memory ? VarSource::Memory : storage_source;
     ECM confirm = ConfirmOverwrite(name, source);
     if (confirm.first != EC::Success) {
       return confirm;

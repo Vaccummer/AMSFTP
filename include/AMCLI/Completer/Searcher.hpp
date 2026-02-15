@@ -2,6 +2,7 @@
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMCLI/Completer/Engine.hpp"
+#include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Transfer.hpp"
@@ -153,34 +154,7 @@ public:
   std::unordered_map<std::string, CacheStatus> GetCacheStatusAll() const;
 
 private:
-  /**
-   * @brief Path-engine configuration for a nickname.
-   */
-  struct PathEngineConfig {
-    bool use_async = false;
-    size_t cache_items_threshold = 50;
-    size_t cache_max_entries = 3;
-    int timeout_ms = 5000;
-    ECM rcm = Ok();
-
-    PathEngineConfig() = default;
-    explicit PathEngineConfig(const Json &jsond) { Init(jsond); }
-
-    /**
-     * @brief Initialize config from a JSON object.
-     */
-    ECM Init(const Json &jsond);
-
-    /**
-     * @brief Export config as a JSON object.
-     */
-    [[nodiscard]] Json GetJson() const;
-
-    /**
-     * @brief Return true if config initialization succeeded.
-     */
-    [[nodiscard]] bool IsValid() const { return rcm.first == EC::Success; }
-  };
+  using PathEngineConfig = AMTokenTypeAnalyzer::PathEngineConfig;
 
   /**
    * @brief Cache key for path results.
@@ -228,12 +202,6 @@ private:
   void LoadPathEngineConfigs_();
 
   /**
-   * @brief Resolve per-nickname path-engine configuration.
-   */
-  const PathEngineConfig &
-  ResolvePathEngineConfig_(const std::string &nickname) const;
-
-  /**
    * @brief Style a path entry for display.
    */
   [[nodiscard]] std::string FormatPathDisplay_(const PathInfo &info,
@@ -266,9 +234,8 @@ private:
   AMConfigManager &config_manager_;
   AMClientManage::Manager &client_manager_;
   AMFileSystem &filesystem_;
+  AMTokenTypeAnalyzer &token_analyzer_ = AMTokenTypeAnalyzer::Instance();
   mutable std::mutex cache_mtx_;
-  std::unordered_map<std::string, PathEngineConfig> path_engine_configs_;
-  PathEngineConfig default_path_engine_config_{};
   std::unordered_map<std::string, std::unordered_map<std::string, CacheEntry>>
       cache_;
   std::unordered_map<std::string, std::list<std::string>> cache_order_;

@@ -723,7 +723,13 @@ ECM AMConfigStorage::BackupIfNeeded() {
       changed = true;
     }
 
-    Json &backup_cfg = settings_doc->json["AutoConfigBackup"];
+    Json &options_cfg = settings_doc->json["Options"];
+    if (!options_cfg.is_object()) {
+      options_cfg = Json::object();
+      changed = true;
+    }
+
+    Json &backup_cfg = options_cfg["AutoConfigBackup"];
     if (!backup_cfg.is_object()) {
       backup_cfg = Json::object();
       changed = true;
@@ -792,9 +798,18 @@ ECM AMConfigStorage::BackupIfNeeded() {
     int64_t max_backup_count = kDefaultMaxBackupCount;
     {
       std::lock_guard<std::mutex> lock(settings_doc->mtx);
-      const Json &backup_cfg = settings_doc->json["AutoConfigBackup"];
-      if (auto v = GetIntField(backup_cfg, "max_backup_count")) {
-        max_backup_count = *v;
+      const Json *backup_cfg = nullptr;
+      auto opt_it = settings_doc->json.find("Options");
+      if (opt_it != settings_doc->json.end() && opt_it->is_object()) {
+        auto bc_it = opt_it->find("AutoConfigBackup");
+        if (bc_it != opt_it->end() && bc_it->is_object()) {
+          backup_cfg = &(*bc_it);
+        }
+      }
+      if (backup_cfg) {
+        if (auto v = GetIntField(*backup_cfg, "max_backup_count")) {
+          max_backup_count = *v;
+        }
       }
     }
     PruneBackupFiles_(backup_dir, "config-", ".toml.bak", max_backup_count);
@@ -810,15 +825,24 @@ ECM AMConfigStorage::BackupIfNeeded() {
   auto now_s = static_cast<int64_t>(timenow());
   {
     std::lock_guard<std::mutex> lock(settings_doc->mtx);
-    const Json &backup_cfg = settings_doc->json["AutoConfigBackup"];
-    if (auto v = GetBoolField(backup_cfg, "enabled")) {
-      enabled = *v;
+    const Json *backup_cfg = nullptr;
+    auto opt_it = settings_doc->json.find("Options");
+    if (opt_it != settings_doc->json.end() && opt_it->is_object()) {
+      auto bc_it = opt_it->find("AutoConfigBackup");
+      if (bc_it != opt_it->end() && bc_it->is_object()) {
+        backup_cfg = &(*bc_it);
+      }
     }
-    if (auto v = GetIntField(backup_cfg, "interval_s")) {
-      interval_s = *v;
-    }
-    if (auto v = GetIntField(backup_cfg, "last_backup_time_s")) {
-      last_backup_time_s = *v;
+    if (backup_cfg) {
+      if (auto v = GetBoolField(*backup_cfg, "enabled")) {
+        enabled = *v;
+      }
+      if (auto v = GetIntField(*backup_cfg, "interval_s")) {
+        interval_s = *v;
+      }
+      if (auto v = GetIntField(*backup_cfg, "last_backup_time_s")) {
+        last_backup_time_s = *v;
+      }
     }
   }
 
@@ -870,7 +894,8 @@ ECM AMConfigStorage::BackupIfNeeded() {
 
   {
     std::lock_guard<std::mutex> lock(settings_doc->mtx);
-    settings_doc->json["AutoConfigBackup"]["last_backup_time_s"] = now_s;
+    settings_doc->json["Options"]["AutoConfigBackup"]["last_backup_time_s"] =
+        now_s;
     settings_doc->dirty = true;
   }
 

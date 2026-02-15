@@ -2,7 +2,9 @@
 #include "AMBase/DataClass.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Var.hpp"
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -41,6 +43,28 @@ public:
     AMTokenType type = AMTokenType::Unset;
   };
 
+  /**
+   * @brief Per-nickname path engine configuration loaded from HostSet.
+   */
+  struct PathEngineConfig {
+    bool use_async = false;
+    bool use_cache = false;
+    size_t cache_items_threshold = 50;
+    size_t cache_max_entries = 15;
+    int timeout_ms = 3000;
+  };
+
+  /**
+   * @brief Reload HostSet configuration from settings.
+   */
+  void RefreshHostSet();
+
+  /**
+   * @brief Resolve path engine config for a nickname (private overrides "*").
+   */
+  [[nodiscard]] PathEngineConfig
+  ResolvePathEngineConfig(const std::string &nickname) const;
+
 private:
   using CommandNode = CommandTree::CommandNode;
 
@@ -62,9 +86,15 @@ private:
                           const CommandNode *node) const;
   int PriorityForType(AMTokenType type) const;
 
+  void EnsureHostSetLoaded_() const;
+
   AMConfigManager &config_manager_ = AMConfigManager::Instance();
   AMVarManager &var_manager_ = AMVarManager::Instance();
   bool cli_cache_ready_ = false;
   std::shared_ptr<CommandTree> command_tree_ = g_command_tree;
   std::unordered_set<std::string> nicknames_;
+  mutable std::mutex hostset_mtx_;
+  mutable bool hostset_ready_ = false;
+  mutable std::unordered_map<std::string, PathEngineConfig> hostset_path_;
+  mutable PathEngineConfig hostset_default_{};
 };

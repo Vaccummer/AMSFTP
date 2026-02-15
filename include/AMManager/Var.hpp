@@ -8,7 +8,7 @@
 
 class AMVarManager : private NonCopyableNonMovable {
 public:
-  enum class VarSource { Builtin, Memory };
+  enum class VarSource { Public, Private, Memory };
 
   /**
    * @brief Return the singleton variable manager bound to a config manager.

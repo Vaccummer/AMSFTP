@@ -1412,3 +1412,29 @@ improve PathEngineConfig (you can refer to ClientConfig)
 add a GetJson() function turn config to json
 
 add init function to enable init with a json
+@config\settings.toml
+
+以下为原先版本的备份, 你可以用来参考
+
+@bak.toml
+我对settings.toml的数据排布进行了修改, 这种修改有的只是单纯的key变换, 但有些改变需要更改原先的config管理代码
+
+[Options] 内的设置为单纯的key位置变换, 更新读取函数的key即可
+
+
+[Style] 大部分是单出的位置修改, 但有些例外
+
++ [Style.CompleteMenu] 是新加的属性
++ [Style.Path] 进行简化, 不再多级匹配
+
+
+
+[UserVars] 存储方式以及VarManager都需要升级
+
++ 变量不再区分mem和storage, 而是分公有和私有
++ 公有的变量存在[UserVars."*"]中, 私有的变量存在[UserVars.nickname]中, nickname是client的名称
++ 读取顺序: 优先读取私有变量区, 未找到再读公有变量区
++ 命名规则:
+  + 名称字符范围不变
+  + 同一区内, 变量名不可相同. 跨区允许名称相同
++ CLI接口修改: 暂时不修改, 等VarManager稳定再修改

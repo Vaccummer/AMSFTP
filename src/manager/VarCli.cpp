@@ -397,8 +397,10 @@ ECM AMVarManager::Enumerate() {
  */
 ECM AMVarManager::ConfirmOverwrite(const std::string &name,
                                    VarSource source) const {
-  const std::string source_label =
-      source == VarSource::Builtin ? "built-in" : "in-memory";
+  std::string source_label = "storage";
+  if (source == VarSource::Memory) {
+    source_label = "in-memory";
+  }
   const std::string prompt = AMStr::amfmt(
       "Variable '{}' already exists ({}). Overwrite? (y/N): ", name,
       source_label);

@@ -462,7 +462,8 @@ ECM AMTransferManager::QueryCachedUserSet(size_t set_index) const {
 
 ECM AMTransferManager::Thread(int num) {
   static const int max_threads = config_.ResolveArg<int>(
-      DocumentKind::Settings, {"TransferManager", "max_thread_num"}, (int)16,
+      DocumentKind::Settings, {"Options", "TransferManager", "max_thread_num"},
+      (int)16,
       [](int val) { return std::max(1, std::min(val, (int)999999)); });
 
   if (num == -1) {
