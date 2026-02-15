@@ -32,7 +32,7 @@ public:
   ECM Init() override {
     int init_thread_num = 1;
     config_.ResolveArg(DocumentKind::Settings,
-                       {"TransferManager", "init_thread_num"},
+                       {"Options", "TransferManager", "init_thread_num"},
                        &init_thread_num);
 
     init_thread_num = std::min(std::max(1, init_thread_num), 128);

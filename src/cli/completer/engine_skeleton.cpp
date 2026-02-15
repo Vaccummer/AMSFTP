@@ -135,15 +135,17 @@ void AMCompleteEngine::HandleCompletion(ic_completion_env_t *cenv,
 void AMCompleteEngine::LoadConfig() {
   AMConfigManager &config = AMConfigManager::Instance();
 
-  int max_items = config.ResolveArg<int>(DocumentKind::Settings,
-                                         {"CompleteOption", "maxnum"}, -1, {});
+  int max_items =
+      config.ResolveArg<int>(DocumentKind::Settings,
+                             {"Style", "CompleteMenu", "maxnum"}, -1, {});
   if (max_items <= 0) {
     max_items = -1;
   }
   args_.complete_max_items = max_items;
 
   int max_rows = config.ResolveArg<int>(
-      DocumentKind::Settings, {"CompleteOption", "maxrows_perpage"}, 9, {});
+      DocumentKind::Settings, {"Style", "CompleteMenu", "maxrows_perpage"}, 9,
+      {});
   if (max_rows == 0) {
     max_rows = 9;
   }
@@ -167,17 +169,19 @@ void AMCompleteEngine::LoadConfig() {
   };
 
   args_.complete_number_pick =
-      read_bool({"CompleteOption", "number_pick"}, true);
-  args_.complete_auto_fill = read_bool({"CompleteOption", "auto_fillin"}, true);
+      read_bool({"Style", "CompleteMenu", "number_pick"}, true);
+  args_.complete_auto_fill =
+      read_bool({"Style", "CompleteMenu", "auto_fillin"}, true);
   args_.complete_select_sign = config.ResolveArg<std::string>(
-      DocumentKind::Settings, {"CompleteOption", "item_select_sign"}, "", {});
+      DocumentKind::Settings, {"Style", "CompleteMenu", "item_select_sign"}, "",
+      {});
 
   args_.complete_delay_ms = config.ResolveArg<int>(
-      DocumentKind::Settings, {"CompleteOption", "complete_delay_ms"}, 100,
-      [](int v) { return v < 0 ? 0 : v; });
+      DocumentKind::Settings, {"Style", "CompleteMenu", "complete_delay_ms"},
+      100, [](int v) { return v < 0 ? 0 : v; });
 
   int async_workers = config.ResolveArg<int>(
-      DocumentKind::Settings, {"CompleteOption", "async_workers"}, 2,
+      DocumentKind::Settings, {"Style", "CompleteMenu", "async_workers"}, 2,
       [](int v) { return v < 1 ? 1 : v; });
   if (async_workers < 1) {
     async_workers = 1;
@@ -188,12 +192,12 @@ void AMCompleteEngine::LoadConfig() {
 
   std::string command_tag = "";
   config.ResolveArg(DocumentKind::Settings,
-                    {"style", "InputHighlight", "command"}, &command_tag);
+                    {"Style", "InputHighlight", "command"}, &command_tag);
   args_.input_tag_command = NormalizeStyleTag_(command_tag);
 
   std::string module_tag = "";
   config.ResolveArg(DocumentKind::Settings,
-                    {"style", "InputHighlight", "module"}, &module_tag);
+                    {"Style", "InputHighlight", "module"}, &module_tag);
   args_.input_tag_module = NormalizeStyleTag_(module_tag);
 
   if (worker_changed) {

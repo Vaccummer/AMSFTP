@@ -636,19 +636,18 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
-  const PathEngineConfig &engine_config =
-      ResolvePathEngineConfig_(path.nickname);
-  const int timeout_ms = engine_config.timeout_ms > 0
-                             ? engine_config.timeout_ms
-                             : default_path_engine_config_.timeout_ms;
+  const PathEngineConfig engine_config =
+      token_analyzer_.ResolvePathEngineConfig(path.nickname);
+  const int timeout_ms = engine_config.timeout_ms;
   const size_t cache_min =
       std::max<size_t>(1, engine_config.cache_items_threshold);
   const size_t cache_max = std::max<size_t>(1, engine_config.cache_max_entries);
+  const bool use_cache = engine_config.use_cache;
   const bool use_async = engine_config.use_async;
 
   CacheKey key{path.nickname, path.dir_abs};
   std::vector<PathInfo> listed;
-  if (!ctx.forbid_cache && LookupCache_(key, &listed)) {
+  if (use_cache && !ctx.forbid_cache && LookupCache_(key, &listed)) {
     AppendPathCandidates_(path, listed, &result.candidates);
     if (!result.candidates.empty()) {
       SortCandidates(ctx, result.candidates);
@@ -671,7 +670,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       return result;
     }
 
-    if (items.size() >= cache_min) {
+    if (use_cache && items.size() >= cache_min) {
       StoreCache_(key, items, cache_max);
     }
     AppendPathCandidates_(path, items, &result.candidates);
@@ -689,7 +688,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   request.interrupt_flag = [flag = interrupt_flag]() { return flag->check(); };
   request.interrupt_cancel = [flag = interrupt_flag]() { flag->set(true); };
 
-  request.search = [this, path, cache_min, cache_max,
+  request.search = [this, path, cache_min, cache_max, use_cache,
                     interrupt_flag](const AMCompletionAsyncRequest &request,
                                     AMCompletionAsyncResult *out) -> bool {
     if (request.IsInterrupted()) {
@@ -714,7 +713,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       return false;
     }
 
-    if (items.size() >= cache_min) {
+    if (use_cache && items.size() >= cache_min) {
       CacheKey key{path.nickname, path.dir_abs};
       StoreCache_(key, items, cache_max);
     }
@@ -826,110 +825,10 @@ AMPathSearchEngine::GetCacheStatusAll() const {
 }
 
 /**
- * @brief Initialize config from a JSON object.
- */
-ECM AMPathSearchEngine::PathEngineConfig::Init(const Json &jsond) {
-  rcm = Ok();
-  if (!jsond.is_object()) {
-    rcm = {EC::InvalidArg, "config is not an object"};
-    return rcm;
-  }
-
-  bool async_value = use_async;
-  if (QueryKey(jsond, {"use_async"}, &async_value)) {
-    use_async = async_value;
-  }
-
-  int cache_items_value = static_cast<int>(cache_items_threshold);
-  if (QueryKey(jsond, {"cache_items_threshold"}, &cache_items_value)) {
-    if (cache_items_value <= 0) {
-      cache_items_value = 1;
-    }
-    cache_items_threshold = static_cast<size_t>(cache_items_value);
-  }
-
-  int cache_max_value = static_cast<int>(cache_max_entries);
-  if (QueryKey(jsond, {"cache_max_entries"}, &cache_max_value)) {
-    if (cache_max_value <= 0) {
-      cache_max_value = 1;
-    }
-    cache_max_entries = static_cast<size_t>(cache_max_value);
-  }
-
-  int timeout_value = timeout_ms;
-  if (QueryKey(jsond, {"timeout_ms"}, &timeout_value)) {
-    if (timeout_value <= 0) {
-      timeout_value = 5000;
-    }
-    timeout_ms = timeout_value;
-  }
-
-  return rcm;
-}
-
-/**
- * @brief Export config as a JSON object.
- */
-Json AMPathSearchEngine::PathEngineConfig::GetJson() const {
-  Json json = Json::object();
-  json["use_async"] = use_async;
-  json["cache_items_threshold"] = cache_items_threshold;
-  json["cache_max_entries"] = cache_max_entries;
-  json["timeout_ms"] = timeout_ms;
-  return json;
-}
-
-/**
  * @brief Load per-nickname path-engine configuration.
  */
 void AMPathSearchEngine::LoadPathEngineConfigs_() {
-  const PathEngineConfig defaults{};
-  path_engine_configs_.clear();
-  default_path_engine_config_ = defaults;
-
-  Json config = config_manager_.ResolveArg<Json>(
-      DocumentKind::Settings, {"CompleteOption", "Engine", "Path"},
-      Json::object(), {});
-  if (!config.is_object()) {
-    path_engine_configs_["*"] = defaults;
-    return;
-  }
-
-  for (auto it = config.begin(); it != config.end(); ++it) {
-    if (!it.value().is_object()) {
-      continue;
-    }
-
-    PathEngineConfig entry = defaults;
-    if (entry.Init(it.value()).first != EC::Success) {
-      continue;
-    }
-    path_engine_configs_[it.key()] = entry;
-  }
-
-  auto def_it = path_engine_configs_.find("*");
-  if (def_it != path_engine_configs_.end()) {
-    default_path_engine_config_ = def_it->second;
-  } else {
-    path_engine_configs_["*"] = defaults;
-  }
-}
-
-/**
- * @brief Resolve per-nickname path-engine configuration.
- */
-const AMPathSearchEngine::PathEngineConfig &
-AMPathSearchEngine::ResolvePathEngineConfig_(
-    const std::string &nickname) const {
-  auto it = path_engine_configs_.find(nickname);
-  if (it != path_engine_configs_.end()) {
-    return it->second;
-  }
-  auto def_it = path_engine_configs_.find("*");
-  if (def_it != path_engine_configs_.end()) {
-    return def_it->second;
-  }
-  return default_path_engine_config_;
+  token_analyzer_.RefreshHostSet();
 }
 
 /**

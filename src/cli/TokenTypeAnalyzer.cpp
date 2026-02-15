@@ -5,6 +5,7 @@
 #include <array>
 
 namespace {
+constexpr const char *kHostSetDefault = "*";
 /** Return true when the character is allowed in variable names. */
 inline bool IsVarNameChar(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -22,6 +23,38 @@ bool IsValidVarName(const std::string &name) {
     }
   }
   return true;
+}
+
+AMTokenTypeAnalyzer::PathEngineConfig ApplyPathEngineDefaults_(
+    const Json &jsond, const AMTokenTypeAnalyzer::PathEngineConfig &defaults) {
+  AMTokenTypeAnalyzer::PathEngineConfig config = defaults;
+  bool async_value = config.use_async;
+  if (QueryKey(jsond, {"use_async"}, &async_value)) {
+    config.use_async = async_value;
+  }
+
+  bool cache_value = config.use_cache;
+  if (QueryKey(jsond, {"use_cache"}, &cache_value)) {
+    config.use_cache = cache_value;
+  }
+
+  int cache_items_value = 0;
+  if (QueryKey(jsond, {"cache_items_threshold"}, &cache_items_value) &&
+      cache_items_value > 0) {
+    config.cache_items_threshold = static_cast<size_t>(cache_items_value);
+  }
+
+  int cache_max_value = 0;
+  if (QueryKey(jsond, {"cache_max_entries"}, &cache_max_value) &&
+      cache_max_value > 0) {
+    config.cache_max_entries = static_cast<size_t>(cache_max_value);
+  }
+
+  int timeout_value = config.timeout_ms;
+  if (QueryKey(jsond, {"timeout_ms"}, &timeout_value) && timeout_value > 0) {
+    config.timeout_ms = timeout_value;
+  }
+  return config;
 }
 
 /** Return true when the character begins or ends a quoted string token. */
@@ -94,7 +127,7 @@ const std::string StyleKeyForType(AMTokenType type) {
   case AMTokenType::Command:
     return "command";
   case AMTokenType::VarName:
-    return "exist_varname";
+    return "public_varname";
   case AMTokenType::VarNameMissing:
     return "nonexist_varname";
   case AMTokenType::VarValue:
@@ -128,6 +161,72 @@ void AMTokenTypeAnalyzer::RefreshNicknameCache() {
   for (const auto &name : names) {
     nicknames_.insert(name);
   }
+}
+
+void AMTokenTypeAnalyzer::RefreshHostSet() {
+  std::lock_guard<std::mutex> lock(hostset_mtx_);
+  hostset_path_.clear();
+  PathEngineConfig defaults{};
+
+  Json host_set = config_manager_.ResolveArg<Json>(
+      DocumentKind::Settings, {"HostSet"}, Json::object(), {});
+  if (host_set.is_object()) {
+    Json default_path_cfg;
+    if (QueryKey(host_set,
+                 {kHostSetDefault, "CompleteOption", "Searcher", "Path"},
+                 &default_path_cfg) &&
+        default_path_cfg.is_object()) {
+      defaults = ApplyPathEngineDefaults_(default_path_cfg, defaults);
+    }
+
+    hostset_default_ = defaults;
+    hostset_path_.emplace(kHostSetDefault, defaults);
+
+    for (auto it = host_set.begin(); it != host_set.end(); ++it) {
+      if (!it.value().is_object()) {
+        continue;
+      }
+      Json path_cfg;
+      if (!QueryKey(it.value(), {"CompleteOption", "Searcher", "Path"},
+                    &path_cfg) ||
+          !path_cfg.is_object()) {
+        continue;
+      }
+      PathEngineConfig entry = ApplyPathEngineDefaults_(path_cfg, defaults);
+      hostset_path_[it.key()] = entry;
+    }
+  } else {
+    hostset_default_ = defaults;
+    hostset_path_.emplace(kHostSetDefault, defaults);
+  }
+  hostset_ready_ = true;
+}
+
+void AMTokenTypeAnalyzer::EnsureHostSetLoaded_() const {
+  {
+    std::lock_guard<std::mutex> lock(hostset_mtx_);
+    if (hostset_ready_) {
+      return;
+    }
+  }
+  auto *self = const_cast<AMTokenTypeAnalyzer *>(this);
+  self->RefreshHostSet();
+}
+
+AMTokenTypeAnalyzer::PathEngineConfig
+AMTokenTypeAnalyzer::ResolvePathEngineConfig(
+    const std::string &nickname) const {
+  EnsureHostSetLoaded_();
+  std::lock_guard<std::mutex> lock(hostset_mtx_);
+  auto it = hostset_path_.find(nickname);
+  if (it != hostset_path_.end()) {
+    return it->second;
+  }
+  auto def_it = hostset_path_.find(kHostSetDefault);
+  if (def_it != hostset_path_.end()) {
+    return def_it->second;
+  }
+  return hostset_default_;
 }
 
 void AMTokenTypeAnalyzer::PromptHighlighter_(ic_highlight_env_t *henv,
@@ -737,7 +836,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
   for (size_t i = 0; i < kTokenTypeCount; ++i) {
     style_tags[i] = NormalizeStyleTag_(config_manager_.ResolveArg<std::string>(
         DocumentKind::Settings,
-        {"style", "InputHighlight",
+        {"Style", "InputHighlight",
          StyleKeyForType(static_cast<AMTokenType>(i))},
         "", {}));
   }

@@ -22,10 +22,12 @@ public:
   /** Resolve paths, create the log directory, and open both log files. */
   ECM Init() override {
     int client_level = config_.ResolveArg<int>(
-        DocumentKind::Settings, {"LogManager", "client_trace_level"}, 4,
+        DocumentKind::Settings, {"Options", "LogManager", "client_trace_level"},
+        4,
         [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
     int program_level = config_.ResolveArg<int>(
-        DocumentKind::Settings, {"LogManager", "program_trace_level"}, 4,
+        DocumentKind::Settings,
+        {"Options", "LogManager", "program_trace_level"}, 4,
         [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
     client_trace_level_.store(client_level, std::memory_order_relaxed);
     program_trace_level_.store(program_level, std::memory_order_relaxed);

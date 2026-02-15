@@ -1429,7 +1429,8 @@ void AMFileSystem::UpdateHistory(const std::string &nickname,
     return;
   }
   static const int max_history = config_manager_.ResolveArg<int>(
-      DocumentKind::Settings, {"FileSystem", "max_cd_history"}, (int)5,
+      DocumentKind::Settings, {"Options", "FileSystem", "max_cd_history"},
+      (int)5,
       [](int v) -> int { return std::max<int>(1, v); });
 
   const std::string entry = nickname + "@" + path;

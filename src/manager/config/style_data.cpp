@@ -1,5 +1,4 @@
 #include "AMBase/CommonTools.hpp"
-#include "AMBase/Path.hpp"
 #include "AMManager/Config.hpp"
 
 using cls = AMConfigManager;
@@ -89,9 +88,9 @@ std::string cls::Format(const std::string &ori_str_f,
     if (name.empty()) {
       return text;
     }
-    std::vector<std::string> key = {"style", "InputHighlight", name};
+    std::vector<std::string> key = {"Style", "InputHighlight", name};
     if (name.rfind("Prompt.", 0) == 0) {
-      key = {"style", "Prompt", name.substr(7)};
+      key = {"Style", "Prompt", name.substr(7)};
     }
     std::string raw = AMStr::Strip(
         ResolveArg<std::string>(DocumentKind::Settings, key, "", {}));
@@ -128,60 +127,19 @@ std::string cls::Format(const std::string &ori_str_f,
   }
 
   std::string main_tag = NormalizeStyleTag_(ResolveArg<std::string>(
-      DocumentKind::Settings, {"style", "Path1", base_key}, "", {}));
-  const std::string path_name =
-      !path_info->name.empty()
-          ? path_info->name
-          : (ori_str_f.empty() ? std::string()
-                               : AMPathStr::basename(ori_str_f));
-  if (path_info->type == PathType::FILE) {
-    const std::string ext = AMPathStr::extname(path_name);
-    if (!ext.empty()) {
-      std::string ext_tag = NormalizeStyleTag_(ResolveArg<std::string>(
-          DocumentKind::Settings, {"style", "File2", ext}, "", {}));
-      if (!ext_tag.empty()) {
-        main_tag = ext_tag;
-      }
-    }
-  }
+      DocumentKind::Settings, {"Style", "Path", base_key}, "", {}));
 
-  std::string styled = main_tag.empty() ? apply_input_style(style_name, ori_str)
-                                        : ApplyStyleTag_(main_tag, ori_str);
-
-  const bool is_hidden = !path_name.empty() && path_name.front() == '.';
-  const bool is_nowrite =
-      path_info->mode_int != 0 && (path_info->mode_int & 0222) == 0;
   const bool is_exist = !path_info->path.empty();
-
-  auto resolve_extra = [&](const std::string &key) -> std::string {
-    std::string tag = NormalizeStyleTag_(ResolveArg<std::string>(
-        DocumentKind::Settings, {"style", "PathExtraStyle", key}, "", {}));
-    if (!tag.empty()) {
-      return tag;
-    }
-    return NormalizeStyleTag_(ResolveArg<std::string>(
-        DocumentKind::Settings, {"style", "PathSpecific3", key}, "", {}));
-  };
-
   if (!is_exist) {
-    const std::string extra_tag = resolve_extra("nonexist");
-    if (!extra_tag.empty()) {
-      styled = ApplyStyleTag_(extra_tag, styled);
+    std::string missing_tag = NormalizeStyleTag_(ResolveArg<std::string>(
+        DocumentKind::Settings, {"Style", "Path", "nonexistent"}, "", {}));
+    if (!missing_tag.empty()) {
+      main_tag = std::move(missing_tag);
     }
   }
-  if (is_hidden) {
-    const std::string extra_tag = resolve_extra("hidden");
-    if (!extra_tag.empty()) {
-      styled = ApplyStyleTag_(extra_tag, styled);
-    }
-  }
-  if (is_nowrite) {
-    const std::string extra_tag = resolve_extra("nowrite");
-    if (!extra_tag.empty()) {
-      styled = ApplyStyleTag_(extra_tag, styled);
-    }
-  }
-  return styled;
+
+  return main_tag.empty() ? apply_input_style(style_name, ori_str)
+                          : ApplyStyleTag_(main_tag, ori_str);
 }
 
 /**
@@ -202,7 +160,7 @@ std::string
 cls::FormatUtf8Table(const std::vector<std::string> &keys,
                      const std::vector<std::vector<std::string>> &rows) const {
   auto skeleton_color = ResolveArg<std::string>(
-      DocumentKind::Settings, {"style", "Table", "color"}, "", {});
+      DocumentKind::Settings, {"Style", "Table", "color"}, "", {});
 
   auto clamp_padding = [](int value, size_t fallback) -> size_t {
     if (value < 0) {
@@ -212,13 +170,13 @@ cls::FormatUtf8Table(const std::vector<std::string> &keys,
   };
 
   auto pad_left_raw = ResolveArg<int64_t>(
-      DocumentKind::Settings, {"style", "Table", "left_padding"}, 1, {});
+      DocumentKind::Settings, {"Style", "Table", "left_padding"}, 1, {});
   auto pad_right_raw = ResolveArg<int64_t>(
-      DocumentKind::Settings, {"style", "Table", "right_padding"}, 1, {});
+      DocumentKind::Settings, {"Style", "Table", "right_padding"}, 1, {});
   auto pad_top_raw = ResolveArg<int64_t>(
-      DocumentKind::Settings, {"style", "Table", "top_padding"}, 0, {});
+      DocumentKind::Settings, {"Style", "Table", "top_padding"}, 0, {});
   auto pad_bottom_raw = ResolveArg<int64_t>(
-      DocumentKind::Settings, {"style", "Table", "bottom_padding"}, 0, {});
+      DocumentKind::Settings, {"Style", "Table", "bottom_padding"}, 0, {});
   const size_t pad_left = clamp_padding(static_cast<int>(pad_left_raw), 0);
   const size_t pad_right = clamp_padding(static_cast<int>(pad_right_raw), 0);
   const size_t pad_top = clamp_padding(static_cast<int>(pad_top_raw), 0);
@@ -237,46 +195,46 @@ cls::FormatUtf8Table(const std::vector<std::string> &keys,
 BarStyle cls::BuildProgressBarStyle_() const {
   BarStyle style;
   int width = static_cast<int>(ResolveArg<int64_t>(
-      DocumentKind::Settings, {"style", "ProgressBar", "bar_width"}, -1, {}));
+      DocumentKind::Settings, {"Style", "ProgressBar", "bar_width"}, -1, {}));
   if (width <= 0) {
     width = static_cast<int>(ResolveArg<int64_t>(
-        DocumentKind::Settings, {"style", "ProgressBar", "Width"}, -1, {}));
+        DocumentKind::Settings, {"Style", "ProgressBar", "Width"}, -1, {}));
   }
   if (width > 0) {
     style.bar_width = static_cast<size_t>(width);
   }
   style.width_offset = static_cast<int>(
       ResolveArg<int64_t>(DocumentKind::Settings,
-                          {"style", "ProgressBar", "width_offset"}, 30, {}));
+                          {"Style", "ProgressBar", "width_offset"}, 30, {}));
 
   style.start = ResolveArg<std::string>(
-      DocumentKind::Settings, {"style", "ProgressBar", "lborder"}, "", {});
+      DocumentKind::Settings, {"Style", "ProgressBar", "lborder"}, "", {});
 
   style.end = ResolveArg<std::string>(
-      DocumentKind::Settings, {"style", "ProgressBar", "rborder"}, "", {});
+      DocumentKind::Settings, {"Style", "ProgressBar", "rborder"}, "", {});
 
   auto fill = ResolveArg<std::string>(
-      DocumentKind::Settings, {"style", "ProgressBar", "fill"}, "▓", {});
+      DocumentKind::Settings, {"Style", "ProgressBar", "fill"}, "▓", {});
   style.fill = fill.empty() ? "█" : fill;
   auto lead = ResolveArg<std::string>(
-      DocumentKind::Settings, {"style", "ProgressBar", "head"}, "█", {});
+      DocumentKind::Settings, {"Style", "ProgressBar", "head"}, "█", {});
   style.lead = lead.empty() ? "▓" : lead;
 
   style.remainder = ResolveArg<std::string>(
-      DocumentKind::Settings, {"style", "ProgressBar", "remain"}, " ", {});
+      DocumentKind::Settings, {"Style", "ProgressBar", "remain"}, " ", {});
 
   style.color = ParseProgressBarColor(ResolveArg<std::string>(
-      DocumentKind::Settings, {"style", "ProgressBar", "color"}, "#FFFFFF",
+      DocumentKind::Settings, {"Style", "ProgressBar", "color"}, "#FFFFFF",
       {}));
 
   style.show_percentage = ResolveArg<bool>(
-      DocumentKind::Settings, {"style", "ProgressBar", "show_percentage"},
+      DocumentKind::Settings, {"Style", "ProgressBar", "show_percentage"},
       style.show_percentage, {});
   style.show_elapsed_time = ResolveArg<bool>(
-      DocumentKind::Settings, {"style", "ProgressBar", "show_elapsed_time"},
+      DocumentKind::Settings, {"Style", "ProgressBar", "show_elapsed_time"},
       style.show_elapsed_time, {});
   style.show_remaining_time = ResolveArg<bool>(
-      DocumentKind::Settings, {"style", "ProgressBar", "show_remaining_time"},
+      DocumentKind::Settings, {"Style", "ProgressBar", "show_remaining_time"},
       style.show_remaining_time, {});
 
   return style;

@@ -498,7 +498,7 @@ int GetRefreshIntervalMs_() {
     return std::max<int>(para, 5);
   };
   static const int refresh_ms = AMConfigManager::Instance().ResolveArg(
-      DocumentKind::Settings, {"style", "ProgressBar", "refresh_interval_ms"},
+      DocumentKind::Settings, {"Style", "ProgressBar", "refresh_interval_ms"},
       300, funcf);
   return refresh_ms;
 }
@@ -511,8 +511,7 @@ size_t GetSpeedWindowSize() {
   };
   static const size_t speed_window_size =
       AMConfigManager::Instance().ResolveArg(
-          DocumentKind::Settings,
-          {"style", "ProgressBar", "speed_cal_window_size"},
+          DocumentKind::Settings, {"Style", "ProgressBar", "speed_window_size"},
           static_cast<size_t>(300), funct);
   return speed_window_size;
 }
