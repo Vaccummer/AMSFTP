@@ -1,5 +1,6 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
+#include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Var.hpp"
 #include <mutex>
@@ -64,8 +65,8 @@ public:
   /**
    * @brief Resolve path engine config for a nickname (private overrides "*").
    */
-  [[nodiscard]] PathEngineConfig ResolvePathEngineConfig(
-      const std::string &nickname);
+  [[nodiscard]] PathEngineConfig
+  ResolvePathEngineConfig(const std::string &nickname);
 
 private:
   using CommandNode = CommandTree::CommandNode;
@@ -92,6 +93,7 @@ private:
 
   AMConfigManager &config_manager_ = AMConfigManager::Instance();
   AMVarManager &var_manager_ = AMVarManager::Instance();
+  AMClientManager &client_manager_ = AMClientManager::Instance();
   bool cli_cache_ready_ = false;
   std::shared_ptr<CommandTree> command_tree_ = g_command_tree;
   std::unordered_set<std::string> nicknames_;
