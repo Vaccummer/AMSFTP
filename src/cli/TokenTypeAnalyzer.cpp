@@ -526,7 +526,7 @@ AMTokenTypeAnalyzer::Tokenize(const std::string &input, bool analyse_type) {
   const CommandNode *node = nullptr;
   std::string command_path;
   size_t command_tokens = 0;
-  if (g_command_tree) {
+  if (command_tree_) {
     bool parsing = true;
     for (size_t idx = 0; idx < tokens.size(); ++idx) {
       auto &token = tokens[idx];
@@ -589,8 +589,7 @@ AMTokenTypeAnalyzer::Tokenize(const std::string &input, bool analyse_type) {
     }
   }
 
-  AMClientManager &client_manager = AMClientManager::Instance();
-  std::shared_ptr<BaseClient> current_client = client_manager.CurrentClient();
+  std::shared_ptr<BaseClient> current_client = client_manager_.CurrentClient();
   std::string current_nickname = "local";
   if (current_client) {
     current_nickname = current_client->GetNickname();
@@ -685,13 +684,13 @@ AMTokenTypeAnalyzer::Tokenize(const std::string &input, bool analyse_type) {
     std::shared_ptr<BaseClient> path_client;
     if (explicit_target) {
       if (explicit_local) {
-        path_client = client_manager.LocalClient();
+        path_client = client_manager_.LocalClient();
       } else {
-        path_client = client_manager.Clients().GetHost(nickname_for_lookup);
+        path_client = client_manager_.Clients().GetHost(nickname_for_lookup);
       }
     } else {
       path_client =
-          current_client ? current_client : client_manager.LocalClient();
+          current_client ? current_client : client_manager_.LocalClient();
     }
 
     if (!path_client) {
@@ -702,7 +701,7 @@ AMTokenTypeAnalyzer::Tokenize(const std::string &input, bool analyse_type) {
 
     const std::string path_part = UnescapeBackticks_(path_part_raw);
     const std::string abs_path =
-        client_manager.BuildPath(path_client, path_part);
+        client_manager_.BuildPath(path_client, path_part);
     const int timeout_ms = path_cfg.highlight_timeout_ms > 0
                                ? path_cfg.highlight_timeout_ms
                                : 1000;
@@ -914,19 +913,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     if (input.empty()) {
       return;
     }
-    std::vector<bool> quoted_mask(input.size(), false);
-    for (const auto &token : tokens) {
-      if (token.quoted) {
-        for (size_t i = token.start; i < token.end && i < input.size(); ++i) {
-          quoted_mask[i] = true;
-        }
-      }
-    }
-
     for (size_t i = 0; i < input.size(); ++i) {
-      if (quoted_mask[i]) {
-        continue;
-      }
       if (input[i] == '`' && i + 1 < input.size() && input[i + 1] == '$') {
         ++i;
         continue;
