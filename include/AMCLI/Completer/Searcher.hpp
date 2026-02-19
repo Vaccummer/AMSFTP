@@ -1,5 +1,4 @@
 #pragma once
-#include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMCLI/Completer/Engine.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"

@@ -52,6 +52,8 @@ public:
     size_t cache_items_threshold = 50;
     size_t cache_max_entries = 15;
     int timeout_ms = 3000;
+    bool highlight_use_check = true;
+    int highlight_timeout_ms = 1000;
   };
 
   /**
@@ -62,8 +64,8 @@ public:
   /**
    * @brief Resolve path engine config for a nickname (private overrides "*").
    */
-  [[nodiscard]] PathEngineConfig
-  ResolvePathEngineConfig(const std::string &nickname) const;
+  [[nodiscard]] PathEngineConfig ResolvePathEngineConfig(
+      const std::string &nickname);
 
 private:
   using CommandNode = CommandTree::CommandNode;
@@ -74,7 +76,7 @@ private:
   void BuildCliCache();
 
   std::vector<AMToken> Tokenize(const std::string &input,
-                                bool analyse_type = false) const;
+                                bool analyse_type = false);
   bool ParseVarTokenAt(const std::string &input, size_t pos, size_t limit,
                        size_t *out_end) const;
   bool ParseVarTokenText(const std::string &token,
@@ -86,15 +88,15 @@ private:
                           const CommandNode *node) const;
   int PriorityForType(AMTokenType type) const;
 
-  void EnsureHostSetLoaded_() const;
+  void EnsureHostSetLoaded_();
 
   AMConfigManager &config_manager_ = AMConfigManager::Instance();
   AMVarManager &var_manager_ = AMVarManager::Instance();
   bool cli_cache_ready_ = false;
   std::shared_ptr<CommandTree> command_tree_ = g_command_tree;
   std::unordered_set<std::string> nicknames_;
-  mutable std::mutex hostset_mtx_;
-  mutable bool hostset_ready_ = false;
-  mutable std::unordered_map<std::string, PathEngineConfig> hostset_path_;
-  mutable PathEngineConfig hostset_default_{};
+  std::mutex hostset_mtx_;
+  bool hostset_ready_ = false;
+  std::unordered_map<std::string, PathEngineConfig> hostset_path_;
+  PathEngineConfig hostset_default_{};
 };

@@ -1,8 +1,10 @@
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMBase/CommonTools.hpp"
+#include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Var.hpp"
 #include <array>
+#include <cctype>
 
 namespace {
 constexpr const char *kHostSetDefault = "*";
@@ -25,7 +27,96 @@ bool IsValidVarName(const std::string &name) {
   return true;
 }
 
-AMTokenTypeAnalyzer::PathEngineConfig ApplyPathEngineDefaults_(
+/** Return true when the nickname resolves to local-client scope. */
+inline bool IsLocalNickname_(const std::string &nickname) {
+  const std::string lowered = AMStr::lowercase(AMStr::Strip(nickname));
+  return lowered.empty() || lowered == "local";
+}
+
+/** Find first unescaped char in text. */
+size_t FindUnescapedChar_(const std::string &text, char target) {
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (text[i] == '`' && i + 1 < text.size()) {
+      ++i;
+      continue;
+    }
+    if (text[i] == target) {
+      return i;
+    }
+  }
+  return std::string::npos;
+}
+
+/** Remove backtick escapes for selected special characters. */
+std::string UnescapeBackticks_(const std::string &text) {
+  if (text.empty()) {
+    return text;
+  }
+  std::string out;
+  out.reserve(text.size());
+  for (size_t i = 0; i < text.size(); ++i) {
+    if (text[i] == '`' && i + 1 < text.size()) {
+      const char next = text[i + 1];
+      if (next == '$' || next == '@' || next == '"' || next == '\'' ||
+          next == '`') {
+        out.push_back(next);
+        ++i;
+        continue;
+      }
+    }
+    out.push_back(text[i]);
+  }
+  return out;
+}
+
+/** Return true when text looks like path input. */
+bool IsPathLikeText_(const std::string &text) {
+  if (text.empty()) {
+    return false;
+  }
+  if (text[0] == '/' || text[0] == '\\' || text[0] == '~' || text[0] == '.') {
+    return true;
+  }
+  if (text.size() >= 2 && std::isalpha(static_cast<unsigned char>(text[0])) &&
+      text[1] == ':') {
+    return true;
+  }
+  return text.find('/') != std::string::npos ||
+         text.find('\\') != std::string::npos;
+}
+
+/** Return true if command path expects a path argument at arg index. */
+bool IsPathArgumentCommand_(const std::string &command_path, size_t arg_index) {
+  if (command_path == "cd" || command_path == "ls" ||
+      command_path == "realpath") {
+    return arg_index == 0;
+  }
+  if (command_path == "find" || command_path == "walk" ||
+      command_path == "tree") {
+    return arg_index == 0;
+  }
+  if (command_path == "stat" || command_path == "size" ||
+      command_path == "mkdir" || command_path == "rm" || command_path == "cp") {
+    return true;
+  }
+  return false;
+}
+
+/** Convert concrete filesystem type to AMTokenType path variants. */
+AMTokenType ToPathTokenType_(PathType type) {
+  switch (type) {
+  case PathType::FILE:
+    return AMTokenType::File;
+  case PathType::DIR:
+    return AMTokenType::Dir;
+  case PathType::SYMLINK:
+    return AMTokenType::Symlink;
+  default:
+    return AMTokenType::Special;
+  }
+}
+
+AMTokenTypeAnalyzer::PathEngineConfig ApplyPathSearcherDefaults_(
     const Json &jsond, const AMTokenTypeAnalyzer::PathEngineConfig &defaults) {
   AMTokenTypeAnalyzer::PathEngineConfig config = defaults;
   bool async_value = config.use_async;
@@ -53,6 +144,22 @@ AMTokenTypeAnalyzer::PathEngineConfig ApplyPathEngineDefaults_(
   int timeout_value = config.timeout_ms;
   if (QueryKey(jsond, {"timeout_ms"}, &timeout_value) && timeout_value > 0) {
     config.timeout_ms = timeout_value;
+  }
+  return config;
+}
+
+AMTokenTypeAnalyzer::PathEngineConfig ApplyPathHighlightDefaults_(
+    const Json &jsond, const AMTokenTypeAnalyzer::PathEngineConfig &defaults) {
+  AMTokenTypeAnalyzer::PathEngineConfig config = defaults;
+
+  bool use_check_value = config.highlight_use_check;
+  if (QueryKey(jsond, {"use_check"}, &use_check_value)) {
+    config.highlight_use_check = use_check_value;
+  }
+
+  int timeout_value = config.highlight_timeout_ms;
+  if (QueryKey(jsond, {"timeout_ms"}, &timeout_value) && timeout_value > 0) {
+    config.highlight_timeout_ms = timeout_value;
   }
   return config;
 }
@@ -146,9 +253,53 @@ const std::string StyleKeyForType(AMTokenType type) {
     return "equalsign";
   case AMTokenType::EscapeSign:
     return "escapedsign";
+  case AMTokenType::Path:
+    return "path_like";
+  case AMTokenType::Nonexistentpath:
+    return "nonexistentpath";
+  case AMTokenType::File:
+    return "file";
+  case AMTokenType::Dir:
+    return "dir";
+  case AMTokenType::Symlink:
+    return "symlink";
+  case AMTokenType::Special:
+    return "special";
   case AMTokenType::Common:
   default:
     return "common";
+  }
+}
+
+/**
+ * @brief Resolve style tag for a token type with path-style fallback.
+ */
+std::string ResolveStyleTagForType_(AMConfigManager &config_manager,
+                                    AMTokenType type) {
+  auto resolve_tag = [&](const std::vector<std::string> &path) -> std::string {
+    return NormalizeStyleTag_(config_manager.ResolveArg<std::string>(
+        DocumentKind::Settings, path, "", {}));
+  };
+
+  const std::string from_input =
+      resolve_tag({"Style", "InputHighlight", StyleKeyForType(type)});
+  if (!from_input.empty()) {
+    return from_input;
+  }
+
+  switch (type) {
+  case AMTokenType::File:
+    return resolve_tag({"Style", "Path", "regular"});
+  case AMTokenType::Dir:
+    return resolve_tag({"Style", "Path", "dir"});
+  case AMTokenType::Symlink:
+    return resolve_tag({"Style", "Path", "symlink"});
+  case AMTokenType::Special:
+    return resolve_tag({"Style", "Path", "otherspecial"});
+  case AMTokenType::Nonexistentpath:
+    return resolve_tag({"Style", "Path", "nonexistent"});
+  default:
+    return "";
   }
 }
 
@@ -176,7 +327,14 @@ void AMTokenTypeAnalyzer::RefreshHostSet() {
                  {kHostSetDefault, "CompleteOption", "Searcher", "Path"},
                  &default_path_cfg) &&
         default_path_cfg.is_object()) {
-      defaults = ApplyPathEngineDefaults_(default_path_cfg, defaults);
+      defaults = ApplyPathSearcherDefaults_(default_path_cfg, defaults);
+    }
+
+    Json default_highlight_cfg;
+    if (QueryKey(host_set, {kHostSetDefault, "Highlight", "Path"},
+                 &default_highlight_cfg) &&
+        default_highlight_cfg.is_object()) {
+      defaults = ApplyPathHighlightDefaults_(default_highlight_cfg, defaults);
     }
 
     hostset_default_ = defaults;
@@ -192,7 +350,13 @@ void AMTokenTypeAnalyzer::RefreshHostSet() {
           !path_cfg.is_object()) {
         continue;
       }
-      PathEngineConfig entry = ApplyPathEngineDefaults_(path_cfg, defaults);
+      PathEngineConfig entry = ApplyPathSearcherDefaults_(path_cfg, defaults);
+
+      Json highlight_cfg;
+      if (QueryKey(it.value(), {"Highlight", "Path"}, &highlight_cfg) &&
+          highlight_cfg.is_object()) {
+        entry = ApplyPathHighlightDefaults_(highlight_cfg, entry);
+      }
       hostset_path_[it.key()] = entry;
     }
   } else {
@@ -202,20 +366,18 @@ void AMTokenTypeAnalyzer::RefreshHostSet() {
   hostset_ready_ = true;
 }
 
-void AMTokenTypeAnalyzer::EnsureHostSetLoaded_() const {
+void AMTokenTypeAnalyzer::EnsureHostSetLoaded_() {
   {
     std::lock_guard<std::mutex> lock(hostset_mtx_);
     if (hostset_ready_) {
       return;
     }
   }
-  auto *self = const_cast<AMTokenTypeAnalyzer *>(this);
-  self->RefreshHostSet();
+  RefreshHostSet();
 }
 
 AMTokenTypeAnalyzer::PathEngineConfig
-AMTokenTypeAnalyzer::ResolvePathEngineConfig(
-    const std::string &nickname) const {
+AMTokenTypeAnalyzer::ResolvePathEngineConfig(const std::string &nickname) {
   EnsureHostSetLoaded_();
   std::lock_guard<std::mutex> lock(hostset_mtx_);
   auto it = hostset_path_.find(nickname);
@@ -249,8 +411,7 @@ void AMTokenTypeAnalyzer::PromptHighlighter_(ic_highlight_env_t *henv,
  * strings, optionally analyzing token type.
  */
 std::vector<AMTokenTypeAnalyzer::AMToken>
-AMTokenTypeAnalyzer::Tokenize(const std::string &input,
-                              bool analyse_type) const {
+AMTokenTypeAnalyzer::Tokenize(const std::string &input, bool analyse_type) {
   std::vector<AMToken> tokens;
   size_t i = 0;
   while (i < input.size()) {
@@ -301,41 +462,14 @@ AMTokenTypeAnalyzer::Tokenize(const std::string &input,
     texts.push_back(input.substr(token.start, token.end - token.start));
   }
 
-  for (size_t idx = 0; idx < tokens.size(); ++idx) {
-    auto &token = tokens[idx];
-    if (token.quoted) {
-      token.type = AMTokenType::String;
-      continue;
-    }
-
-    const std::string &text = texts[idx];
-    if (text.empty()) {
-      token.type = AMTokenType::Common;
-      continue;
-    }
-    std::string name;
-    if (ParseVarTokenText(text, &name)) {
-      token.type = VarNameTypeFor(name);
-      continue;
-    }
-
-    if (text.rfind("--", 0) == 0 || (text.size() >= 2 && text[0] == '-')) {
-      token.type = AMTokenType::Option;
-      continue;
-    }
-
-    size_t at_pos = text.find('@');
-    if (at_pos != std::string::npos && at_pos > 0) {
-      const std::string prefix = text.substr(0, at_pos);
-      if (nicknames_.find(prefix) != nicknames_.end()) {
-        token.type = AMTokenType::Nickname;
-      }
-    }
+  for (auto &token : tokens) {
+    token.type = token.quoted ? AMTokenType::String : AMTokenType::Common;
   }
 
+  const CommandNode *node = nullptr;
+  std::string command_path;
+  size_t command_tokens = 0;
   if (command_tree_) {
-    const CommandNode *node = nullptr;
-    std::string path;
     bool parsing = true;
     for (size_t idx = 0; idx < tokens.size(); ++idx) {
       auto &token = tokens[idx];
@@ -346,51 +480,187 @@ AMTokenTypeAnalyzer::Tokenize(const std::string &input,
       if (text.empty()) {
         continue;
       }
-      if (parsing) {
-        if (path.empty()) {
-          if (command_tree_->IsModule(text)) {
-            token.type = AMTokenType::Module;
-            path = text;
-            node = command_tree_->FindNode(path);
-            continue;
-          }
-          if (command_tree_->IsTopCommand(text)) {
-            token.type = AMTokenType::Command;
-            path = text;
-            node = command_tree_->FindNode(path);
-            if (!node || node->subcommands.empty()) {
-              parsing = false;
-            }
-            continue;
-          }
-          parsing = false;
-        } else if (node &&
-                   node->subcommands.find(text) != node->subcommands.end()) {
+      if (!parsing) {
+        continue;
+      }
+
+      if (command_path.empty()) {
+        if (command_tree_->IsModule(text)) {
+          token.type = AMTokenType::Module;
+          command_path = text;
+          node = command_tree_->FindNode(command_path);
+          command_tokens = idx + 1;
+          continue;
+        }
+        if (command_tree_->IsTopCommand(text)) {
           token.type = AMTokenType::Command;
-          path += " " + text;
-          node = command_tree_->FindNode(path);
+          command_path = text;
+          node = command_tree_->FindNode(command_path);
+          command_tokens = idx + 1;
           if (!node || node->subcommands.empty()) {
             parsing = false;
           }
           continue;
-        } else {
+        }
+        parsing = false;
+        continue;
+      }
+
+      if (node && node->subcommands.find(text) != node->subcommands.end()) {
+        token.type = AMTokenType::Command;
+        command_path += " " + text;
+        node = command_tree_->FindNode(command_path);
+        command_tokens = idx + 1;
+        if (!node || node->subcommands.empty()) {
           parsing = false;
         }
+        continue;
+      }
+      parsing = false;
+    }
+  }
+
+  if (node) {
+    for (size_t idx = 0; idx < tokens.size(); ++idx) {
+      auto &token = tokens[idx];
+      if (token.quoted || token.type != AMTokenType::Common) {
+        continue;
+      }
+      if (IsValidOptionToken(texts[idx], node)) {
+        token.type = AMTokenType::Option;
+      }
+    }
+  }
+
+  AMClientManager &client_manager = AMClientManager::Instance();
+  std::shared_ptr<BaseClient> current_client = client_manager.CurrentClient();
+  std::string current_nickname = "local";
+  if (current_client) {
+    current_nickname = current_client->GetNickname();
+    if (current_nickname.empty()) {
+      current_nickname = "local";
+    }
+  }
+
+  size_t arg_index = 0;
+  for (size_t idx = 0; idx < tokens.size(); ++idx) {
+    auto &token = tokens[idx];
+    if (idx < command_tokens) {
+      continue;
+    }
+    if (token.quoted) {
+      ++arg_index;
+      continue;
+    }
+
+    const std::string &raw_text = texts[idx];
+    if (raw_text.empty()) {
+      continue;
+    }
+    if (token.type == AMTokenType::Option) {
+      continue;
+    }
+
+    std::string name;
+    if (token.type == AMTokenType::Common &&
+        ParseVarTokenText(raw_text, &name)) {
+      token.type = VarNameTypeFor(name);
+      ++arg_index;
+      continue;
+    }
+
+    const size_t at_pos = FindUnescapedChar_(raw_text, '@');
+    const bool has_unescaped_at = at_pos != std::string::npos;
+
+    if (token.type == AMTokenType::Common && has_unescaped_at && at_pos > 0) {
+      const std::string prefix = UnescapeBackticks_(raw_text.substr(0, at_pos));
+      if (nicknames_.find(prefix) != nicknames_.end()) {
+        token.type = AMTokenType::Nickname;
       }
     }
 
-    if (node) {
-      for (size_t idx = 0; idx < tokens.size(); ++idx) {
-        auto &token = tokens[idx];
-        if (token.quoted || token.type != AMTokenType::Common) {
-          continue;
-        }
-        const std::string &text = texts[idx];
-        if (IsValidOptionToken(text, node)) {
-          token.type = AMTokenType::Option;
-        }
-      }
+    const std::string unescaped_text = UnescapeBackticks_(raw_text);
+    const bool force_path = IsPathArgumentCommand_(command_path, arg_index);
+    const bool treat_as_path =
+        force_path || has_unescaped_at || IsPathLikeText_(unescaped_text);
+    if (!treat_as_path) {
+      ++arg_index;
+      continue;
     }
+
+    std::string nickname_for_cfg = current_nickname;
+    std::string nickname_for_lookup = current_nickname;
+    std::string path_part_raw = raw_text;
+    bool explicit_target = false;
+    bool explicit_local = false;
+
+    if (!raw_text.empty() && raw_text.front() == '@') {
+      explicit_target = true;
+      explicit_local = true;
+      nickname_for_cfg = "local";
+      nickname_for_lookup = "local";
+      path_part_raw = raw_text.substr(1);
+    } else if (has_unescaped_at) {
+      explicit_target = true;
+      std::string prefix_raw = raw_text.substr(0, at_pos);
+      std::string prefix = AMStr::Strip(UnescapeBackticks_(prefix_raw));
+      path_part_raw = raw_text.substr(at_pos + 1);
+      if (IsLocalNickname_(prefix)) {
+        explicit_local = true;
+        nickname_for_cfg = "local";
+        nickname_for_lookup = "local";
+      } else if (!prefix.empty()) {
+        nickname_for_cfg = prefix;
+        nickname_for_lookup = prefix;
+      }
+    } else if (IsLocalNickname_(current_nickname)) {
+      nickname_for_cfg = "local";
+      nickname_for_lookup = "local";
+    }
+
+    const PathEngineConfig path_cfg = ResolvePathEngineConfig(nickname_for_cfg);
+    if (!path_cfg.highlight_use_check) {
+      token.type = AMTokenType::Path;
+      ++arg_index;
+      continue;
+    }
+
+    std::shared_ptr<BaseClient> path_client;
+    if (explicit_target) {
+      if (explicit_local) {
+        path_client = client_manager.LocalClient();
+      } else {
+        path_client = client_manager.Clients().GetHost(nickname_for_lookup);
+      }
+    } else {
+      path_client =
+          current_client ? current_client : client_manager.LocalClient();
+    }
+
+    if (!path_client) {
+      token.type = AMTokenType::Nonexistentpath;
+      ++arg_index;
+      continue;
+    }
+
+    const std::string path_part = UnescapeBackticks_(path_part_raw);
+    const std::string abs_path =
+        client_manager.BuildPath(path_client, path_part);
+    const int timeout_ms = path_cfg.highlight_timeout_ms > 0
+                               ? path_cfg.highlight_timeout_ms
+                               : 1000;
+
+    auto [rcm, info] =
+        path_client->stat(abs_path, false, nullptr, timeout_ms, am_ms());
+    if (rcm.first == EC::Success) {
+      token.type = ToPathTokenType_(info.type);
+    } else if (rcm.first == EC::FileNotExist || rcm.first == EC::PathNotExist) {
+      token.type = AMTokenType::Nonexistentpath;
+    } else {
+      token.type = AMTokenType::Special;
+    }
+
+    ++arg_index;
   }
 
   return tokens;
@@ -486,6 +756,13 @@ int AMTokenTypeAnalyzer::PriorityForType(AMTokenType type) const {
   case AMTokenType::Module:
   case AMTokenType::Command:
     return 50;
+  case AMTokenType::Path:
+  case AMTokenType::Nonexistentpath:
+  case AMTokenType::File:
+  case AMTokenType::Dir:
+  case AMTokenType::Symlink:
+  case AMTokenType::Special:
+    return 40;
   case AMTokenType::String:
     return 20;
   case AMTokenType::Common:
@@ -542,7 +819,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
 
   RefreshNicknameCache();
 
-  std::vector<AMToken> tokens = Tokenize(input);
+  std::vector<AMToken> tokens = Tokenize(input, true);
 
   auto apply_range = [&](size_t start, size_t end, AMTokenType type) {
     if (start >= end || start >= size) {
@@ -618,7 +895,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
         continue;
       }
       const char next = input[i + 1];
-      if (next != '$' && next != '"' && next != '\'') {
+      if (next != '$' && next != '@' && next != '"' && next != '\'') {
         continue;
       }
       apply_range(i, i + 1, AMTokenType::EscapeSign);
@@ -631,11 +908,11 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
         continue;
       }
       std::string text = input.substr(token.start, token.end - token.start);
-      size_t at_pos = text.find('@');
+      size_t at_pos = FindUnescapedChar_(text, '@');
       if (at_pos == std::string::npos || at_pos == 0) {
         continue;
       }
-      std::string prefix = text.substr(0, at_pos);
+      std::string prefix = UnescapeBackticks_(text.substr(0, at_pos));
       if (nicknames_.find(prefix) == nicknames_.end()) {
         continue;
       }
@@ -797,6 +1074,24 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     }
   }
 
+  for (const auto &token : tokens) {
+    if (token.quoted) {
+      continue;
+    }
+    switch (token.type) {
+    case AMTokenType::Path:
+    case AMTokenType::Nonexistentpath:
+    case AMTokenType::File:
+    case AMTokenType::Dir:
+    case AMTokenType::Symlink:
+    case AMTokenType::Special:
+      apply_range(token.start, token.end, token.type);
+      break;
+    default:
+      break;
+    }
+  }
+
   bool handled = false;
   highlight_var_command(&handled);
   if (handled) {
@@ -831,14 +1126,11 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
   }
 
   constexpr size_t kTokenTypeCount =
-      static_cast<size_t>(AMTokenType::EscapeSign) + 1;
+      static_cast<size_t>(AMTokenType::Special) + 1;
   std::array<std::string, kTokenTypeCount> style_tags;
   for (size_t i = 0; i < kTokenTypeCount; ++i) {
-    style_tags[i] = NormalizeStyleTag_(config_manager_.ResolveArg<std::string>(
-        DocumentKind::Settings,
-        {"Style", "InputHighlight",
-         StyleKeyForType(static_cast<AMTokenType>(i))},
-        "", {}));
+    style_tags[i] =
+        ResolveStyleTagForType_(config_manager_, static_cast<AMTokenType>(i));
   }
 
   formatted->reserve(input.size() + 16);

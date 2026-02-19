@@ -248,7 +248,8 @@ enum class AMTokenType {
   Nonexistentpath = 14,
   File = 15,
   Dir = 16,
-  Special = 17
+  Symlink = 17,
+  Special = 18
 
 };
 
