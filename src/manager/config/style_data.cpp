@@ -111,32 +111,27 @@ std::string cls::Format(const std::string &ori_str_f,
   }
 
   std::string base_key = "regular";
-  switch (path_info->type) {
-  case PathType::DIR:
-    base_key = "dir";
-    break;
-  case PathType::SYMLINK:
-    base_key = "symlink";
-    break;
-  case PathType::FILE:
-    base_key = "regular";
-    break;
-  default:
-    base_key = "otherspecial";
-    break;
+  if (path_info->path.empty()) {
+    base_key = "nonexistent";
+  } else {
+    switch (path_info->type) {
+    case PathType::DIR:
+      base_key = "dir";
+      break;
+    case PathType::SYMLINK:
+      base_key = "symlink";
+      break;
+    case PathType::FILE:
+      base_key = "regular";
+      break;
+    default:
+      base_key = "otherspecial";
+      break;
+    }
   }
 
   std::string main_tag = NormalizeStyleTag_(ResolveArg<std::string>(
       DocumentKind::Settings, {"Style", "Path", base_key}, "", {}));
-
-  const bool is_exist = !path_info->path.empty();
-  if (!is_exist) {
-    std::string missing_tag = NormalizeStyleTag_(ResolveArg<std::string>(
-        DocumentKind::Settings, {"Style", "Path", "nonexistent"}, "", {}));
-    if (!missing_tag.empty()) {
-      main_tag = std::move(missing_tag);
-    }
-  }
 
   return main_tag.empty() ? apply_input_style(style_name, ori_str)
                           : ApplyStyleTag_(main_tag, ori_str);

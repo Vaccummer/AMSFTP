@@ -303,6 +303,62 @@ std::string ResolveStyleTagForType_(AMConfigManager &config_manager,
   }
 }
 
+/** Return true if token type should be rendered using path formatter. */
+bool IsPathRenderType_(AMTokenType type) {
+  switch (type) {
+  case AMTokenType::Path:
+  case AMTokenType::Nonexistentpath:
+  case AMTokenType::File:
+  case AMTokenType::Dir:
+  case AMTokenType::Symlink:
+  case AMTokenType::Special:
+    return true;
+  default:
+    return false;
+  }
+}
+
+/** Build path info used by AMConfigManager::Format for path token rendering. */
+PathInfo BuildPathInfoForTokenType_(AMTokenType type) {
+  PathInfo info;
+  info.path = ".";
+  switch (type) {
+  case AMTokenType::File:
+    info.type = PathType::FILE;
+    break;
+  case AMTokenType::Dir:
+    info.type = PathType::DIR;
+    break;
+  case AMTokenType::Symlink:
+    info.type = PathType::SYMLINK;
+    break;
+  case AMTokenType::Special:
+    info.type = PathType::Unknown;
+    break;
+  case AMTokenType::Nonexistentpath:
+    info.type = PathType::FILE;
+    info.path.clear();
+    break;
+  default:
+    info.type = PathType::FILE;
+    break;
+  }
+  return info;
+}
+
+/** Render a path-like token segment through config formatter. */
+std::string FormatPathSegment_(AMConfigManager &config_manager,
+                               const std::string &segment, AMTokenType type) {
+  if (segment.empty()) {
+    return segment;
+  }
+  if (type == AMTokenType::Path) {
+    return config_manager.Format(segment, "path_like", nullptr);
+  }
+  PathInfo info = BuildPathInfoForTokenType_(type);
+  return config_manager.Format(segment, "path_like", &info);
+}
+
 } // namespace
 
 /** Reload nickname cache from host manager. */
@@ -1136,6 +1192,22 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
   formatted->reserve(input.size() + 16);
   std::string current_tag;
   for (size_t i = 0; i < size; ++i) {
+    const AMTokenType cur_type = types[i];
+    if (IsPathRenderType_(cur_type)) {
+      size_t end = i + 1;
+      while (end < size && types[end] == cur_type) {
+        ++end;
+      }
+      if (!current_tag.empty()) {
+        formatted->append("[/]");
+        current_tag.clear();
+      }
+      formatted->append(
+          FormatPathSegment_(config_manager_, input.substr(i, end - i), cur_type));
+      i = end - 1;
+      continue;
+    }
+
     const std::string &tag = style_tags[static_cast<size_t>(types[i])];
     if (tag != current_tag) {
       if (!current_tag.empty()) {
