@@ -1,5 +1,6 @@
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMBase/CommonTools.hpp"
+#include "AMBase/DataClass.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Var.hpp"
@@ -525,7 +526,7 @@ AMTokenTypeAnalyzer::Tokenize(const std::string &input, bool analyse_type) {
   const CommandNode *node = nullptr;
   std::string command_path;
   size_t command_tokens = 0;
-  if (command_tree_) {
+  if (g_command_tree) {
     bool parsing = true;
     for (size_t idx = 0; idx < tokens.size(); ++idx) {
       auto &token = tokens[idx];
@@ -1202,8 +1203,8 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
         formatted->append("[/]");
         current_tag.clear();
       }
-      formatted->append(
-          FormatPathSegment_(config_manager_, input.substr(i, end - i), cur_type));
+      formatted->append(FormatPathSegment_(config_manager_,
+                                           input.substr(i, end - i), cur_type));
       i = end - 1;
       continue;
     }
