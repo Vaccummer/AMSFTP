@@ -105,7 +105,7 @@ private:
 /**
  * @brief Global shared command tree pointer.
  */
-inline static const std::shared_ptr<CommandTree> g_command_tree =
+inline const std::shared_ptr<CommandTree> g_command_tree =
     std::make_shared<CommandTree>();
 
 using EC = ErrorCode;
