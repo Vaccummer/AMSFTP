@@ -6,6 +6,7 @@
 #include "AMManager/FileSystem.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Prompt.hpp"
+#include "AMManager/Set.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Transfer.hpp"
 #include "AMManager/Var.hpp"
@@ -274,6 +275,81 @@ struct ConfigSaveArgs {
   }
   /**
    * @brief Reset config-save arguments to defaults.
+   */
+  void reset() {}
+};
+
+/**
+ * @brief CLI argument container for config hostset add.
+ */
+struct ConfigHostSetAddArgs {
+  std::string nickname;
+  /**
+   * @brief Execute config hostset add.
+   */
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
+    (void)managers;
+    (void)ctx;
+    return AMSetCLI::Instance().Add(nickname);
+  }
+  /**
+   * @brief Reset config hostset add arguments to defaults.
+   */
+  void reset() { nickname.clear(); }
+};
+
+/**
+ * @brief CLI argument container for config hostset edit.
+ */
+struct ConfigHostSetEditArgs {
+  std::string nickname;
+  /**
+   * @brief Execute config hostset edit.
+   */
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
+    (void)managers;
+    (void)ctx;
+    return AMSetCLI::Instance().Modify(nickname);
+  }
+  /**
+   * @brief Reset config hostset edit arguments to defaults.
+   */
+  void reset() { nickname.clear(); }
+};
+
+/**
+ * @brief CLI argument container for config hostset remove.
+ */
+struct ConfigHostSetRemoveArgs {
+  std::vector<std::string> nicknames;
+  /**
+   * @brief Execute config hostset rm.
+   */
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
+    (void)managers;
+    (void)ctx;
+    return AMSetCLI::Instance().Delete(nicknames);
+  }
+  /**
+   * @brief Reset config hostset remove arguments to defaults.
+   */
+  void reset() { nicknames.clear(); }
+};
+
+/**
+ * @brief CLI argument container for config hostset save.
+ */
+struct ConfigHostSetSaveArgs {
+  /**
+   * @brief Execute config hostset save.
+   */
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
+    (void)managers;
+    (void)ctx;
+    return AMSetCLI::Instance().SaveSettings();
+  }
+  /**
+   * @brief Reset config hostset save arguments to defaults.
    */
   void reset() {}
 };
@@ -1335,14 +1411,15 @@ struct TaskRetryArgs {
 using CommonArg = std::variant<
     std::monostate, ConfigLsArgs, ConfigKeysArgs, ConfigDataArgs, ConfigGetArgs,
     ConfigAddArgs, ConfigEditArgs, ConfigRenameArgs, ConfigRemoveArgs,
-    ConfigSetArgs, ConfigSaveArgs, StatArgs, LsArgs, SizeArgs, FindArgs,
-    MkdirArgs, RmArgs, WalkArgs, TreeArgs, RealpathArgs, RttArgs, ClearArgs,
-    CpArgs, SftpArgs, FtpArgs, ClientsArgs, CheckArgs, ChangeClientArgs,
-    DisconnectArgs, CdArgs, ConnectArgs, BashArgs, VarArgs, DelArgs,
-    CompleteCacheClearArgs, TaskListArgs, TaskShowArgs, TaskInspectArgs,
-    TaskThreadArgs, TaskCacheAddArgs, TaskCacheRmArgs, TaskCacheClearArgs,
-    TaskCacheSubmitArgs, TaskUserSetArgs, TaskEntryArgs, TaskControlArgs,
-    TaskRetryArgs>;
+    ConfigSetArgs, ConfigSaveArgs, ConfigHostSetAddArgs, ConfigHostSetEditArgs,
+    ConfigHostSetRemoveArgs, ConfigHostSetSaveArgs, StatArgs, LsArgs, SizeArgs,
+    FindArgs, MkdirArgs, RmArgs, WalkArgs, TreeArgs, RealpathArgs, RttArgs,
+    ClearArgs, CpArgs, SftpArgs, FtpArgs, ClientsArgs, CheckArgs,
+    ChangeClientArgs, DisconnectArgs, CdArgs, ConnectArgs, BashArgs, VarArgs,
+    DelArgs, CompleteCacheClearArgs, TaskListArgs, TaskShowArgs,
+    TaskInspectArgs, TaskThreadArgs, TaskCacheAddArgs, TaskCacheRmArgs,
+    TaskCacheClearArgs, TaskCacheSubmitArgs, TaskUserSetArgs, TaskEntryArgs,
+    TaskControlArgs, TaskRetryArgs>;
 
 /**
  * @brief Pool of all CLI argument structs.
@@ -1358,6 +1435,10 @@ struct CliArgsPool {
   ConfigRemoveArgs config_rm;
   ConfigSetArgs config_set;
   ConfigSaveArgs config_save;
+  ConfigHostSetAddArgs config_hostset_add;
+  ConfigHostSetEditArgs config_hostset_edit;
+  ConfigHostSetRemoveArgs config_hostset_rm;
+  ConfigHostSetSaveArgs config_hostset_save;
   StatArgs stat;
   LsArgs ls;
   SizeArgs size;
@@ -1415,6 +1496,11 @@ struct CliCommands {
   CLI::App *config_rm = nullptr;
   CLI::App *config_set = nullptr;
   CLI::App *config_save = nullptr;
+  CLI::App *config_hostset_cmd = nullptr;
+  CLI::App *config_hostset_add = nullptr;
+  CLI::App *config_hostset_edit = nullptr;
+  CLI::App *config_hostset_rm = nullptr;
+  CLI::App *config_hostset_save = nullptr;
   CLI::App *stat_cmd = nullptr;
   CLI::App *ls_cmd = nullptr;
   CLI::App *size_cmd = nullptr;

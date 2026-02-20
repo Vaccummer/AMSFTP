@@ -42,6 +42,16 @@ void BindConfigCommands(CLI::App &app, CliArgsPool &args,
   commands.config_set = commands.config_cmd->add_subcommand("set", "Set host");
   commands.config_save =
       commands.config_cmd->add_subcommand("save", "Save config");
+  commands.config_hostset_cmd =
+      commands.config_cmd->add_subcommand("hostset", "Manage HostSet");
+  commands.config_hostset_add =
+      commands.config_hostset_cmd->add_subcommand("add", "Create host set");
+  commands.config_hostset_edit =
+      commands.config_hostset_cmd->add_subcommand("edit", "Modify host set");
+  commands.config_hostset_rm =
+      commands.config_hostset_cmd->add_subcommand("rm", "Delete host set");
+  commands.config_hostset_save =
+      commands.config_hostset_cmd->add_subcommand("save", "Save HostSet");
 
   commands.config_get
       ->add_option("nicknames", args.config_get.nicknames, "Host nicknames")
@@ -66,6 +76,18 @@ void BindConfigCommands(CLI::App &app, CliArgsPool &args,
   commands.config_set
       ->add_option("value", args.config_set.value, "Host property value")
       ->required();
+  commands.config_hostset_add
+      ->add_option("nickname", args.config_hostset_add.nickname,
+                   "Host nickname")
+      ->required();
+  commands.config_hostset_edit
+      ->add_option("nickname", args.config_hostset_edit.nickname,
+                   "Host nickname")
+      ->required();
+  commands.config_hostset_rm
+      ->add_option("nicknames", args.config_hostset_rm.nicknames,
+                   "Host nicknames")
+      ->expected(1, -1);
 
   BindArgSelection_(commands.config_ls, args, &CliArgsPool::config_ls);
   BindArgSelection_(commands.config_keys, args, &CliArgsPool::config_keys);
@@ -77,6 +99,14 @@ void BindConfigCommands(CLI::App &app, CliArgsPool &args,
   BindArgSelection_(commands.config_rm, args, &CliArgsPool::config_rm);
   BindArgSelection_(commands.config_set, args, &CliArgsPool::config_set);
   BindArgSelection_(commands.config_save, args, &CliArgsPool::config_save);
+  BindArgSelection_(commands.config_hostset_add, args,
+                    &CliArgsPool::config_hostset_add);
+  BindArgSelection_(commands.config_hostset_edit, args,
+                    &CliArgsPool::config_hostset_edit);
+  BindArgSelection_(commands.config_hostset_rm, args,
+                    &CliArgsPool::config_hostset_rm);
+  BindArgSelection_(commands.config_hostset_save, args,
+                    &CliArgsPool::config_hostset_save);
 }
 
 /**
