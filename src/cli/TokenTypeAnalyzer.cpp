@@ -10,6 +10,9 @@
 
 namespace {
 constexpr const char *kHostSetDefault = "*";
+using TokenCacheValue = std::vector<AMTokenTypeAnalyzer::AMToken>;
+std::unordered_map<std::string, TokenCacheValue> g_split_token_cache;
+std::unordered_map<std::string, TokenCacheValue> g_style_token_cache;
 /** Return true when the character is allowed in variable names. */
 inline bool IsVarNameChar(char c) {
   return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -463,19 +466,22 @@ void AMTokenTypeAnalyzer::PromptHighlighter_(ic_highlight_env_t *henv,
   ic_highlight_formatted(henv, input, formatted.c_str());
 }
 
+void AMTokenTypeAnalyzer::ClearTokenCache() {
+  g_split_token_cache.clear();
+  g_style_token_cache.clear();
+}
+
 /**
  * @brief Split input into shell-level tokens without semantic typing.
  */
 std::vector<AMTokenTypeAnalyzer::AMToken>
 AMTokenTypeAnalyzer::SplitToken(const std::string &input) {
-  static std::string input_caches = "";
-  static std::vector<AMToken> tokens = {};
-  if (input_caches == input) {
-    return tokens;
-  } else {
-    input_caches = input;
-    tokens.clear();
+  auto cache_it = g_split_token_cache.find(input);
+  if (cache_it != g_split_token_cache.end()) {
+    return cache_it->second;
   }
+
+  std::vector<AMToken> tokens;
   size_t i = 0;
   while (i < input.size()) {
     while (i < input.size() && AMStr::IsWhitespace(input[i])) {
@@ -527,6 +533,7 @@ AMTokenTypeAnalyzer::SplitToken(const std::string &input) {
     token.content_end = token.end;
     tokens.push_back(token);
   }
+  g_split_token_cache[input] = tokens;
   return tokens;
 }
 
@@ -534,9 +541,13 @@ AMTokenTypeAnalyzer::SplitToken(const std::string &input) {
  * @brief Analyze split tokens into style-level token types.
  */
 std::vector<AMTokenTypeAnalyzer::AMToken>
-AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input,
-                                   const std::vector<AMToken> &split_tokens) {
-  std::vector<AMToken> tokens = split_tokens;
+AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
+  auto cache_it = g_style_token_cache.find(input);
+  if (cache_it != g_style_token_cache.end()) {
+    return cache_it->second;
+  }
+
+  std::vector<AMToken> tokens = SplitToken(input);
   std::vector<std::string> texts;
   texts.reserve(tokens.size());
   for (const auto &token : tokens) {
@@ -744,6 +755,7 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input,
     ++arg_index;
   }
 
+  g_style_token_cache[input] = tokens;
   return tokens;
 }
 
@@ -905,8 +917,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
 
   RefreshNicknameCache();
 
-  std::vector<AMToken> split_tokens = SplitToken(input);
-  std::vector<AMToken> tokens = TokenizeStyle(input, split_tokens);
+  std::vector<AMToken> tokens = TokenizeStyle(input);
 
   auto apply_range = [&](size_t start, size_t end, AMTokenType type) {
     if (start >= end || start >= size) {

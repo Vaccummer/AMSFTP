@@ -55,6 +55,11 @@ public:
   static std::vector<AMToken> SplitToken(const std::string &input);
 
   /**
+   * @brief Clear SplitToken/TokenizeStyle caches.
+   */
+  static void ClearTokenCache();
+
+  /**
    * @brief Per-nickname path engine configuration loaded from HostSet.
    */
   struct PathEngineConfig {
@@ -86,8 +91,7 @@ private:
   void EnsureCliCache();
   void BuildCliCache();
 
-  std::vector<AMToken> TokenizeStyle(const std::string &input,
-                                     const std::vector<AMToken> &split_tokens);
+  std::vector<AMToken> TokenizeStyle(const std::string &input);
   bool ParseVarTokenAt(const std::string &input, size_t pos, size_t limit,
                        size_t *out_end) const;
   bool ParseVarTokenText(const std::string &token,
