@@ -184,13 +184,13 @@ ECM AMSetCLI::Add(const std::string &nickname) {
     return Err(EC::KeyAlreadyExists, "host set already exists");
   }
 
-  AMHostSetPathConfig cfg = ResolvePathSet(target);
+  AMHostSetPathConfig cfg = ResolvePathSet(target).value;
   ECM rcm = PromptPathSet_(target, cfg, &cfg);
   if (rcm.first != EC::Success) {
     return rcm;
   }
 
-  rcm = CreateHostSet(target, BuildPathSetTable_(cfg), false);
+  rcm = CreateHostSet(target, cfg, false);
   if (rcm.first != EC::Success) {
     prompt_.ErrorFormat(rcm);
     return rcm;
@@ -217,13 +217,13 @@ ECM AMSetCLI::Modify(const std::string &nickname) {
     return Err(EC::HostConfigNotFound, "host set not found");
   }
 
-  AMHostSetPathConfig cfg = ResolvePathSet(target);
+  AMHostSetPathConfig cfg = ResolvePathSet(target).value;
   ECM rcm = PromptPathSet_(target, cfg, &cfg);
   if (rcm.first != EC::Success) {
     return rcm;
   }
 
-  rcm = ModifyHostSet(target, BuildPathSetTable_(cfg), false);
+  rcm = ModifyHostSet(target, cfg, false);
   if (rcm.first != EC::Success) {
     prompt_.ErrorFormat(rcm);
     return rcm;

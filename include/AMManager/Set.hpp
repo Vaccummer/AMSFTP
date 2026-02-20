@@ -4,6 +4,7 @@
 #include "AMManager/Prompt.hpp"
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace hostsetkn {
@@ -38,6 +39,17 @@ struct AMHostSetPathConfig {
   int timeout_ms = 3000;
   bool highlight_use_check = true;
   int highlight_timeout_ms = 1000;
+
+  /**
+   * @brief Serialize path-set config into HostSet JSON shape.
+   */
+  [[nodiscard]] Json GetJson() const;
+
+  /**
+   * @brief Build path-set config from JSON with fallback defaults.
+   */
+  static AMHostSetPathConfig FromJson(const Json &jsond,
+                                      const AMHostSetPathConfig &defaults);
 };
 
 class AMSetCLI;
@@ -68,40 +80,6 @@ public:
   [[nodiscard]] Json Snapshot() const;
 
   /**
-   * @brief Resolve one attribute for a host, with "*" fallback.
-   */
-  template <typename T>
-  [[nodiscard]] AMHostSetAttrResult<T>
-  ResolveHostAttr(const std::string &nickname,
-                  const AMConfigStorage::Path &path,
-                  const T &default_value) const {
-    static_assert(kValueTypeSupported<T>, "T is not supported");
-    AMHostSetAttrResult<T> result{};
-    result.value = default_value;
-    result.fallback_to_default = true;
-
-    const_cast<AMSetManager *>(this)->EnsureLoaded_();
-    std::lock_guard<std::mutex> lock(mtx_);
-
-    T parsed{};
-    const Json *host_entry = FindHostEntryNoLock_(nickname);
-    if (host_entry && QueryKey(*host_entry, path, &parsed)) {
-      result.value = parsed;
-      result.fallback_to_default = false;
-      return result;
-    }
-
-    const Json *default_entry = FindDefaultEntryNoLock_();
-    if (default_entry && QueryKey(*default_entry, path, &parsed)) {
-      result.value = parsed;
-      result.fallback_to_default = true;
-      return result;
-    }
-
-    return result;
-  }
-
-  /**
    * @brief Resolve merged host set table (host overrides "*").
    */
   [[nodiscard]] AMHostSetTableResult
@@ -110,7 +88,7 @@ public:
   /**
    * @brief Resolve path-related typed HostSet configuration.
    */
-  [[nodiscard]] AMHostSetPathConfig
+  [[nodiscard]] AMHostSetAttrResult<AMHostSetPathConfig>
   ResolvePathSet(const std::string &nickname) const;
 
   /**
@@ -127,13 +105,15 @@ public:
   /**
    * @brief Create one host set table in cache.
    */
-  ECM CreateHostSet(const std::string &nickname, const Json &set_table,
+  ECM CreateHostSet(const std::string &nickname,
+                    const AMHostSetPathConfig &set_config,
                     bool overwrite = false);
 
   /**
    * @brief Replace one host set table in cache.
    */
-  ECM ModifyHostSet(const std::string &nickname, const Json &set_table,
+  ECM ModifyHostSet(const std::string &nickname,
+                    const AMHostSetPathConfig &set_config,
                     bool create_when_missing = false);
 
   /**
@@ -152,11 +132,6 @@ protected:
    */
   AMSetManager() = default;
 
-  /**
-   * @brief Build HostSet table JSON from typed path settings.
-   */
-  static Json BuildPathSetTable_(const AMHostSetPathConfig &config);
-
 private:
   /**
    * @brief Ensure HostSet cache is initialized.
@@ -166,24 +141,19 @@ private:
   /**
    * @brief Return host table pointer while lock is held.
    */
-  [[nodiscard]] const Json *
+  [[nodiscard]] const AMHostSetPathConfig *
   FindHostEntryNoLock_(const std::string &nickname) const;
 
   /**
    * @brief Return default "*" table pointer while lock is held.
    */
-  [[nodiscard]] const Json *FindDefaultEntryNoLock_() const;
-
-  /**
-   * @brief Deep-merge two JSON objects.
-   */
-  static Json MergeObjects_(const Json &base, const Json &overlay);
+  [[nodiscard]] const AMHostSetPathConfig *FindDefaultEntryNoLock_() const;
 
   AMConfigManager &config_manager_ = AMConfigManager::Instance();
   mutable std::mutex mtx_;
   bool ready_ = false;
   bool dirty_ = false;
-  Json host_sets_ = Json::object();
+  std::unordered_map<std::string, AMHostSetPathConfig> host_sets_ = {};
 };
 
 /**

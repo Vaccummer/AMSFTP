@@ -3,12 +3,82 @@
 
 using EC = ErrorCode;
 
-namespace {
 /**
- * @brief Return true when a JSON value is an object.
+ * @brief Serialize path-set config into HostSet JSON shape.
  */
-bool IsObject_(const Json &jsond) { return jsond.is_object(); }
-} // namespace
+Json AMHostSetPathConfig::GetJson() const {
+  Json jsond = Json::object();
+  jsond["CompleteOption"]["Searcher"]["Path"]["use_async"] = use_async;
+  jsond["CompleteOption"]["Searcher"]["Path"]["use_cache"] = use_cache;
+  jsond["CompleteOption"]["Searcher"]["Path"]["cache_items_threshold"] =
+      static_cast<int64_t>(cache_items_threshold);
+  jsond["CompleteOption"]["Searcher"]["Path"]["cache_max_entries"] =
+      static_cast<int64_t>(cache_max_entries);
+  jsond["CompleteOption"]["Searcher"]["Path"]["timeout_ms"] = timeout_ms;
+  jsond["Highlight"]["Path"]["use_check"] = highlight_use_check;
+  jsond["Highlight"]["Path"]["timeout_ms"] = highlight_timeout_ms;
+  return jsond;
+}
+
+/**
+ * @brief Build path-set config from JSON with fallback defaults.
+ */
+AMHostSetPathConfig
+AMHostSetPathConfig::FromJson(const Json &jsond,
+                              const AMHostSetPathConfig &defaults) {
+  AMHostSetPathConfig config = defaults;
+  if (!jsond.is_object()) {
+    return config;
+  }
+
+  bool use_async_value = config.use_async;
+  if (QueryKey(jsond, {"CompleteOption", "Searcher", "Path", "use_async"},
+               &use_async_value)) {
+    config.use_async = use_async_value;
+  }
+
+  bool use_cache_value = config.use_cache;
+  if (QueryKey(jsond, {"CompleteOption", "Searcher", "Path", "use_cache"},
+               &use_cache_value)) {
+    config.use_cache = use_cache_value;
+  }
+
+  int cache_items_value = 0;
+  if (QueryKey(jsond,
+               {"CompleteOption", "Searcher", "Path", "cache_items_threshold"},
+               &cache_items_value) &&
+      cache_items_value > 0) {
+    config.cache_items_threshold = static_cast<size_t>(cache_items_value);
+  }
+
+  int cache_max_value = 0;
+  if (QueryKey(jsond,
+               {"CompleteOption", "Searcher", "Path", "cache_max_entries"},
+               &cache_max_value) &&
+      cache_max_value > 0) {
+    config.cache_max_entries = static_cast<size_t>(cache_max_value);
+  }
+
+  int timeout_value = config.timeout_ms;
+  if (QueryKey(jsond, {"CompleteOption", "Searcher", "Path", "timeout_ms"},
+               &timeout_value) &&
+      timeout_value > 0) {
+    config.timeout_ms = timeout_value;
+  }
+
+  bool use_check_value = config.highlight_use_check;
+  if (QueryKey(jsond, {"Highlight", "Path", "use_check"}, &use_check_value)) {
+    config.highlight_use_check = use_check_value;
+  }
+
+  int highlight_timeout_value = config.highlight_timeout_ms;
+  if (QueryKey(jsond, {"Highlight", "Path", "timeout_ms"},
+               &highlight_timeout_value) &&
+      highlight_timeout_value > 0) {
+    config.highlight_timeout_ms = highlight_timeout_value;
+  }
+  return config;
+}
 
 /**
  * @brief Return the shared HostSet manager.
@@ -24,8 +94,27 @@ ECM AMSetManager::Reload() {
   if (!host_set.is_object()) {
     host_set = Json::object();
   }
+
+  AMHostSetPathConfig default_cfg{};
+  Json default_json;
+  if (QueryKey(host_set, {hostsetkn::kDefaultHost}, &default_json) &&
+      default_json.is_object()) {
+    default_cfg = AMHostSetPathConfig::FromJson(default_json, default_cfg);
+  }
+
+  std::unordered_map<std::string, AMHostSetPathConfig> parsed = {};
+  parsed.reserve(host_set.size() + 1);
+  parsed[hostsetkn::kDefaultHost] = default_cfg;
+
+  for (auto it = host_set.begin(); it != host_set.end(); ++it) {
+    if (it.key() == hostsetkn::kDefaultHost || !it.value().is_object()) {
+      continue;
+    }
+    parsed[it.key()] = AMHostSetPathConfig::FromJson(it.value(), default_cfg);
+  }
+
   std::lock_guard<std::mutex> lock(mtx_);
-  host_sets_ = std::move(host_set);
+  host_sets_ = std::move(parsed);
   ready_ = true;
   dirty_ = false;
   return Ok();
@@ -37,7 +126,11 @@ ECM AMSetManager::Reload() {
 Json AMSetManager::Snapshot() const {
   const_cast<AMSetManager *>(this)->EnsureLoaded_();
   std::lock_guard<std::mutex> lock(mtx_);
-  return host_sets_;
+  Json snapshot = Json::object();
+  for (const auto &item : host_sets_) {
+    snapshot[item.first] = item.second.GetJson();
+  }
+  return snapshot;
 }
 
 /**
@@ -45,74 +138,37 @@ Json AMSetManager::Snapshot() const {
  */
 AMHostSetTableResult AMSetManager::ResolveHostSet(const std::string &nickname) const {
   AMHostSetTableResult result{};
-  result.value = Json::object();
-  result.fallback_to_default = true;
-
-  const_cast<AMSetManager *>(this)->EnsureLoaded_();
-  std::lock_guard<std::mutex> lock(mtx_);
-
-  const Json *default_entry = FindDefaultEntryNoLock_();
-  Json merged = (default_entry && default_entry->is_object()) ? *default_entry
-                                                              : Json::object();
-
-  const Json *host_entry = FindHostEntryNoLock_(nickname);
-  if (host_entry && host_entry->is_object()) {
-    merged = MergeObjects_(merged, *host_entry);
-    result.fallback_to_default = false;
-  }
-
-  result.value = std::move(merged);
+  auto cfg_result = ResolvePathSet(nickname);
+  result.value = cfg_result.value.GetJson();
+  result.fallback_to_default = cfg_result.fallback_to_default;
   return result;
 }
 
 /**
  * @brief Resolve path-related typed HostSet configuration.
  */
-AMHostSetPathConfig AMSetManager::ResolvePathSet(const std::string &nickname) const {
-  AMHostSetPathConfig cfg{};
+AMHostSetAttrResult<AMHostSetPathConfig>
+AMSetManager::ResolvePathSet(const std::string &nickname) const {
+  AMHostSetAttrResult<AMHostSetPathConfig> result{};
+  result.value = AMHostSetPathConfig{};
+  result.fallback_to_default = true;
 
-  const auto use_async = ResolveHostAttr<bool>(
-      nickname, {"CompleteOption", "Searcher", "Path", "use_async"},
-      cfg.use_async);
-  cfg.use_async = use_async.value;
+  const_cast<AMSetManager *>(this)->EnsureLoaded_();
+  std::lock_guard<std::mutex> lock(mtx_);
 
-  const auto use_cache = ResolveHostAttr<bool>(
-      nickname, {"CompleteOption", "Searcher", "Path", "use_cache"},
-      cfg.use_cache);
-  cfg.use_cache = use_cache.value;
-
-  const auto cache_items = ResolveHostAttr<int64_t>(
-      nickname, {"CompleteOption", "Searcher", "Path", "cache_items_threshold"},
-      static_cast<int64_t>(cfg.cache_items_threshold));
-  if (cache_items.value > 0) {
-    cfg.cache_items_threshold = static_cast<size_t>(cache_items.value);
+  const AMHostSetPathConfig *entry = FindHostEntryNoLock_(nickname);
+  if (entry) {
+    result.value = *entry;
+    result.fallback_to_default = false;
+    return result;
   }
 
-  const auto cache_max = ResolveHostAttr<int64_t>(
-      nickname, {"CompleteOption", "Searcher", "Path", "cache_max_entries"},
-      static_cast<int64_t>(cfg.cache_max_entries));
-  if (cache_max.value > 0) {
-    cfg.cache_max_entries = static_cast<size_t>(cache_max.value);
+  const AMHostSetPathConfig *defaults = FindDefaultEntryNoLock_();
+  if (defaults) {
+    result.value = *defaults;
   }
-
-  const auto timeout_ms = ResolveHostAttr<int>(
-      nickname, {"CompleteOption", "Searcher", "Path", "timeout_ms"},
-      cfg.timeout_ms);
-  if (timeout_ms.value > 0) {
-    cfg.timeout_ms = timeout_ms.value;
-  }
-
-  const auto use_check = ResolveHostAttr<bool>(
-      nickname, {"Highlight", "Path", "use_check"}, cfg.highlight_use_check);
-  cfg.highlight_use_check = use_check.value;
-
-  const auto highlight_timeout = ResolveHostAttr<int>(
-      nickname, {"Highlight", "Path", "timeout_ms"}, cfg.highlight_timeout_ms);
-  if (highlight_timeout.value > 0) {
-    cfg.highlight_timeout_ms = highlight_timeout.value;
-  }
-
-  return cfg;
+  result.fallback_to_default = true;
+  return result;
 }
 
 /**
@@ -134,18 +190,12 @@ std::vector<std::string> AMSetManager::ListSetNames(bool include_default) const 
   const_cast<AMSetManager *>(this)->EnsureLoaded_();
   std::vector<std::string> names;
   std::lock_guard<std::mutex> lock(mtx_);
-  if (!host_sets_.is_object()) {
-    return names;
-  }
   names.reserve(host_sets_.size());
-  for (auto it = host_sets_.begin(); it != host_sets_.end(); ++it) {
-    if (!it.value().is_object()) {
+  for (const auto &item : host_sets_) {
+    if (!include_default && item.first == hostsetkn::kDefaultHost) {
       continue;
     }
-    if (!include_default && it.key() == hostsetkn::kDefaultHost) {
-      continue;
-    }
-    names.push_back(it.key());
+    names.push_back(item.first);
   }
   std::sort(names.begin(), names.end());
   return names;
@@ -154,13 +204,11 @@ std::vector<std::string> AMSetManager::ListSetNames(bool include_default) const 
 /**
  * @brief Create one host set table in cache.
  */
-ECM AMSetManager::CreateHostSet(const std::string &nickname, const Json &set_table,
+ECM AMSetManager::CreateHostSet(const std::string &nickname,
+                                const AMHostSetPathConfig &set_config,
                                 bool overwrite) {
   if (nickname.empty()) {
     return Err(EC::InvalidArg, "empty host nickname");
-  }
-  if (!set_table.is_object()) {
-    return Err(EC::InvalidArg, "host set must be an object");
   }
   EnsureLoaded_();
   std::lock_guard<std::mutex> lock(mtx_);
@@ -168,7 +216,7 @@ ECM AMSetManager::CreateHostSet(const std::string &nickname, const Json &set_tab
   if (it != host_sets_.end() && !overwrite) {
     return Err(EC::KeyAlreadyExists, "host set already exists");
   }
-  host_sets_[nickname] = set_table;
+  host_sets_[nickname] = set_config;
   dirty_ = true;
   return Ok();
 }
@@ -176,13 +224,11 @@ ECM AMSetManager::CreateHostSet(const std::string &nickname, const Json &set_tab
 /**
  * @brief Replace one host set table in cache.
  */
-ECM AMSetManager::ModifyHostSet(const std::string &nickname, const Json &set_table,
+ECM AMSetManager::ModifyHostSet(const std::string &nickname,
+                                const AMHostSetPathConfig &set_config,
                                 bool create_when_missing) {
   if (nickname.empty()) {
     return Err(EC::InvalidArg, "empty host nickname");
-  }
-  if (!set_table.is_object()) {
-    return Err(EC::InvalidArg, "host set must be an object");
   }
   EnsureLoaded_();
   std::lock_guard<std::mutex> lock(mtx_);
@@ -190,7 +236,7 @@ ECM AMSetManager::ModifyHostSet(const std::string &nickname, const Json &set_tab
   if (it == host_sets_.end() && !create_when_missing) {
     return Err(EC::HostConfigNotFound, "host set not found");
   }
-  host_sets_[nickname] = set_table;
+  host_sets_[nickname] = set_config;
   dirty_ = true;
   return Ok();
 }
@@ -204,9 +250,6 @@ ECM AMSetManager::DeleteHostSet(const std::string &nickname) {
   }
   EnsureLoaded_();
   std::lock_guard<std::mutex> lock(mtx_);
-  if (!host_sets_.is_object()) {
-    return Err(EC::HostConfigNotFound, "host set not found");
-  }
   auto it = host_sets_.find(nickname);
   if (it == host_sets_.end()) {
     return Err(EC::HostConfigNotFound, "host set not found");
@@ -227,7 +270,9 @@ ECM AMSetManager::Save(bool async) {
     if (!dirty_) {
       return Ok();
     }
-    snapshot = host_sets_;
+    for (const auto &item : host_sets_) {
+      snapshot[item.first] = item.second.GetJson();
+    }
   }
 
   if (!config_manager_.SetArg(DocumentKind::Settings, {hostsetkn::kHostSetRoot},
@@ -242,23 +287,6 @@ ECM AMSetManager::Save(bool async) {
   std::lock_guard<std::mutex> lock(mtx_);
   dirty_ = false;
   return Ok();
-}
-
-/**
- * @brief Build HostSet table JSON from typed path settings.
- */
-Json AMSetManager::BuildPathSetTable_(const AMHostSetPathConfig &config) {
-  Json jsond = Json::object();
-  jsond["CompleteOption"]["Searcher"]["Path"]["use_async"] = config.use_async;
-  jsond["CompleteOption"]["Searcher"]["Path"]["use_cache"] = config.use_cache;
-  jsond["CompleteOption"]["Searcher"]["Path"]["cache_items_threshold"] =
-      static_cast<int64_t>(config.cache_items_threshold);
-  jsond["CompleteOption"]["Searcher"]["Path"]["cache_max_entries"] =
-      static_cast<int64_t>(config.cache_max_entries);
-  jsond["CompleteOption"]["Searcher"]["Path"]["timeout_ms"] = config.timeout_ms;
-  jsond["Highlight"]["Path"]["use_check"] = config.highlight_use_check;
-  jsond["Highlight"]["Path"]["timeout_ms"] = config.highlight_timeout_ms;
-  return jsond;
 }
 
 /**
@@ -277,46 +305,25 @@ void AMSetManager::EnsureLoaded_() {
 /**
  * @brief Return host table pointer while lock is held.
  */
-const Json *AMSetManager::FindHostEntryNoLock_(const std::string &nickname) const {
-  if (nickname.empty() || !IsObject_(host_sets_)) {
+const AMHostSetPathConfig *
+AMSetManager::FindHostEntryNoLock_(const std::string &nickname) const {
+  if (nickname.empty()) {
     return nullptr;
   }
   auto it = host_sets_.find(nickname);
-  if (it == host_sets_.end() || !it.value().is_object()) {
+  if (it == host_sets_.end()) {
     return nullptr;
   }
-  return &it.value();
+  return &it->second;
 }
 
 /**
  * @brief Return default "*" table pointer while lock is held.
  */
-const Json *AMSetManager::FindDefaultEntryNoLock_() const {
-  if (!IsObject_(host_sets_)) {
-    return nullptr;
-  }
+const AMHostSetPathConfig *AMSetManager::FindDefaultEntryNoLock_() const {
   auto it = host_sets_.find(hostsetkn::kDefaultHost);
-  if (it == host_sets_.end() || !it.value().is_object()) {
+  if (it == host_sets_.end()) {
     return nullptr;
   }
-  return &it.value();
-}
-
-/**
- * @brief Deep-merge two JSON objects.
- */
-Json AMSetManager::MergeObjects_(const Json &base, const Json &overlay) {
-  Json merged = base.is_object() ? base : Json::object();
-  if (!overlay.is_object()) {
-    return merged;
-  }
-  for (auto it = overlay.begin(); it != overlay.end(); ++it) {
-    auto existing = merged.find(it.key());
-    if (existing != merged.end() && existing->is_object() && it->is_object()) {
-      merged[it.key()] = MergeObjects_(*existing, *it);
-    } else {
-      merged[it.key()] = *it;
-    }
-  }
-  return merged;
+  return &it->second;
 }
