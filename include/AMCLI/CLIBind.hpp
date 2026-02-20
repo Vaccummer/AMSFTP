@@ -932,43 +932,99 @@ struct BashArgs {
 };
 
 /**
- * @brief CLI argument container for var.
+ * @brief CLI argument container for `var get`.
  */
-struct VarArgs {
-  std::vector<std::string> tokens;
+struct VarGetArgs {
+  std::string varname;
   /**
-   * @brief Execute var query or assignment.
+   * @brief Execute `var get`.
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
-    AMVarManager &var_manager = AMVarManager::Instance();
-    return var_manager.ExecuteVarTokens(tokens);
+    return VarCLISet::Instance().QueryByName(varname);
   }
   /**
-   * @brief Reset var arguments to defaults.
+   * @brief Reset args to defaults.
    */
-  void reset() { tokens.clear(); }
+  void reset() { varname.clear(); }
 };
 
 /**
- * @brief CLI argument container for del.
+ * @brief CLI argument container for `var def`.
  */
-struct DelArgs {
-  std::vector<std::string> tokens;
+struct VarDefArgs {
+  bool global = false;
+  std::string varname;
+  std::string value;
   /**
-   * @brief Execute delete for variable tokens.
+   * @brief Execute `var def`.
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
-    AMVarManager &var_manager = AMVarManager::Instance();
-    return var_manager.ExecuteDelTokens(tokens);
+    return VarCLISet::Instance().DefineVar(global, varname, value);
   }
   /**
-   * @brief Reset del arguments to defaults.
+   * @brief Reset args to defaults.
    */
-  void reset() { tokens.clear(); }
+  void reset() {
+    global = false;
+    varname.clear();
+    value.clear();
+  }
+};
+
+/**
+ * @brief CLI argument container for `var del`.
+ */
+struct VarDelArgs {
+  bool all = false;
+  std::vector<std::string> tokens;
+  /**
+   * @brief Execute `var del`.
+   */
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
+    (void)managers;
+    (void)ctx;
+    std::string section = "";
+    std::string varname = "";
+    if (tokens.size() == 1) {
+      varname = tokens[0];
+    } else if (tokens.size() == 2) {
+      section = tokens[0];
+      varname = tokens[1];
+    } else {
+      return Err(EC::InvalidArg, "var del requires: [$section] $varname");
+    }
+    return VarCLISet::Instance().DeleteVarByCli(all, section, varname);
+  }
+  /**
+   * @brief Reset args to defaults.
+   */
+  void reset() {
+    all = false;
+    tokens.clear();
+  }
+};
+
+/**
+ * @brief CLI argument container for `var ls`.
+ */
+struct VarLsArgs {
+  std::vector<std::string> sections;
+  /**
+   * @brief Execute `var ls`.
+   */
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
+    (void)managers;
+    (void)ctx;
+    return VarCLISet::Instance().ListVars(sections);
+  }
+  /**
+   * @brief Reset args to defaults.
+   */
+  void reset() { sections.clear(); }
 };
 
 /**
@@ -1415,8 +1471,9 @@ using CommonArg = std::variant<
     ConfigHostSetRemoveArgs, ConfigHostSetSaveArgs, StatArgs, LsArgs, SizeArgs,
     FindArgs, MkdirArgs, RmArgs, WalkArgs, TreeArgs, RealpathArgs, RttArgs,
     ClearArgs, CpArgs, SftpArgs, FtpArgs, ClientsArgs, CheckArgs,
-    ChangeClientArgs, DisconnectArgs, CdArgs, ConnectArgs, BashArgs, VarArgs,
-    DelArgs, CompleteCacheClearArgs, TaskListArgs, TaskShowArgs,
+    ChangeClientArgs, DisconnectArgs, CdArgs, ConnectArgs, BashArgs, VarGetArgs,
+    VarDefArgs, VarDelArgs, VarLsArgs, CompleteCacheClearArgs, TaskListArgs,
+    TaskShowArgs,
     TaskInspectArgs, TaskThreadArgs, TaskCacheAddArgs, TaskCacheRmArgs,
     TaskCacheClearArgs, TaskCacheSubmitArgs, TaskUserSetArgs, TaskEntryArgs,
     TaskControlArgs, TaskRetryArgs>;
@@ -1460,8 +1517,10 @@ struct CliArgsPool {
   CdArgs cd;
   ConnectArgs connect;
   BashArgs bash;
-  VarArgs var;
-  DelArgs del;
+  VarGetArgs var_get;
+  VarDefArgs var_def;
+  VarDelArgs var_del;
+  VarLsArgs var_ls;
   CompleteCacheClearArgs complete_cache_clear;
   TaskListArgs task_list;
   TaskShowArgs task_show;
@@ -1523,6 +1582,10 @@ struct CliCommands {
   CLI::App *cd_cmd = nullptr;
   CLI::App *connect_cmd = nullptr;
   CLI::App *var_cmd = nullptr;
+  CLI::App *var_get_cmd = nullptr;
+  CLI::App *var_def_cmd = nullptr;
+  CLI::App *var_del_cmd = nullptr;
+  CLI::App *var_ls_cmd = nullptr;
   CLI::App *del_cmd = nullptr;
   CLI::App *bash_cmd = nullptr;
   CLI::App *complete_cmd = nullptr;

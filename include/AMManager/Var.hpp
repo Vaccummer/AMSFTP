@@ -1,4 +1,5 @@
 #pragma once
+#include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
 #include <mutex>
@@ -6,138 +7,228 @@
 #include <unordered_map>
 #include <vector>
 
+namespace varsetkn {
+inline constexpr const char *kRoot = "UserVars";
+inline constexpr const char *kPublic = "*";
+} // namespace varsetkn
+
+/**
+ * @brief Single variable record identified by domain + var name.
+ */
+struct VarInfo {
+  std::string domain = "";
+  std::string varname = "";
+  std::string varvalue = "";
+
+  /**
+   * @brief Return true when this variable belongs to public domain.
+   */
+  [[nodiscard]] bool IsPublic() const { return domain == varsetkn::kPublic; }
+
+  /**
+   * @brief Validate whether this VarInfo is initialized and usable.
+   */
+  [[nodiscard]] ECM IsValid() const {
+    if (domain.empty() || varname.empty()) {
+      return Err(EC::InvalidArg, "uninitialized VarInfo");
+    }
+    return Ok();
+  }
+};
+
+class VarCLISet;
+
 class AMVarManager : private NonCopyableNonMovable {
 public:
-  enum class VarSource { Public, Private, Memory };
+  enum class VarSource { Public, Private };
+  using DomainVars = std::unordered_map<std::string, std::string>;
+  using DomainDict = std::unordered_map<std::string, DomainVars>;
 
   /**
-   * @brief Return the singleton variable manager bound to a config manager.
+   * @brief Return the singleton variable manager.
    */
-  static AMVarManager &Instance() {
-    static AMVarManager instance;
-    return instance;
-  };
+  static AMVarManager &Instance();
 
   /**
-   * @brief Set or overwrite an in-memory variable, confirming overwrites.
+   * @brief Initialize in-memory variable dict from ConfigManager.
    */
-  ECM SetMemoryVar(const std::string &name, const std::string &value,
-                   bool confirm_overwrite = true);
+  ECM Init() override { return Reload(); }
 
   /**
-   * @brief Set or overwrite a persistent variable in storage only.
+   * @brief Reload [UserVars] from ConfigManager into domain dict.
    */
-  ECM SetPersistentVar(const std::string &name, const std::string &value,
-                       bool confirm_overwrite = true);
+  ECM Reload();
 
   /**
-   * @brief Resolve a variable value from memory or settings.
+   * @brief Persist variable dict to settings json and settings.toml.
+   */
+  ECM Save(bool async = true);
+
+  /**
+   * @brief Resolve variable by current scope (private first, then public).
    */
   bool Resolve(const std::string &name, std::string *value = nullptr,
                VarSource *source = nullptr) const;
 
   /**
-   * @brief Query an in-memory variable.
+   * @brief Return one variable from a specified domain.
    */
-  bool GetMemVar(const std::string &name, std::string *value) const;
+  [[nodiscard]] VarInfo GetVar(const std::string &domain,
+                               const std::string &name) const;
 
   /**
-   * @brief Query a persistent variable from storage.
+   * @brief Find all variables with the given name across all domains.
    */
-  bool GetUserVar(const std::string &name, std::string *value) const;
+  [[nodiscard]] std::vector<VarInfo> FindByName(const std::string &name) const;
 
   /**
-   * @brief List all persistent variables from storage.
+   * @brief List variables under one domain.
    */
-  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
-  ListUserVars() const;
+  [[nodiscard]] std::vector<VarInfo>
+  ListByDomain(const std::string &domain) const;
 
   /**
-   * @brief Set a persistent variable and optionally dump settings.
+   * @brief List all domain names.
    */
-  ECM SetUserVar(const std::string &name, const std::string &value,
-                 bool dump_now = true);
+  [[nodiscard]] std::vector<std::string> ListDomains() const;
 
   /**
-   * @brief Remove a persistent variable and optionally dump settings.
+   * @brief Return true if one domain exists in the dict.
    */
-  ECM RemoveUserVar(const std::string &name, bool dump_now = true);
+  [[nodiscard]] bool HasDomain(const std::string &domain) const;
 
   /**
-   * @brief Query variables in memory and storage, printing results.
+   * @brief Return true if one variable exists in a domain.
    */
-  ECM Query(const std::vector<std::string> &names);
+  [[nodiscard]] bool HasVar(const std::string &domain,
+                            const std::string &name) const;
 
   /**
-   * @brief Execute `var` command tokens (enumerate/query/assignment).
+   * @brief Upsert one variable into a target domain.
    */
-  ECM ExecuteVarTokens(const std::vector<std::string> &tokens);
+  ECM SetVar(const VarInfo &info, bool create_domain = true);
 
   /**
-   * @brief Execute `del` command tokens (parse names then delete).
+   * @brief Delete one variable from target domain.
    */
-  ECM ExecuteDelTokens(const std::vector<std::string> &tokens);
+  ECM DeleteVar(const std::string &domain, const std::string &name);
 
   /**
-   * @brief Delete variables from memory and storage, confirming per key.
+   * @brief Delete one variable from every domain.
    */
-  ECM Delete(const std::vector<std::string> &names);
+  ECM DeleteVarAll(const std::string &name, std::vector<VarInfo> *removed);
 
   /**
-   * @brief Enumerate variables, printing memory entries then storage entries.
+   * @brief Return all variable names deduplicated.
    */
-  ECM Enumerate();
+  [[nodiscard]] std::vector<std::string> ListNames() const;
 
   /**
-   * @brief Return true if an in-memory variable exists.
+   * @brief Return current private domain (current host nickname or local).
    */
-  bool HasMemoryVar(const std::string &name) const;
+  [[nodiscard]] std::string CurrentDomain() const;
 
   /**
-   * @brief List variable names from memory and storage.
+   * @brief Legacy wrapper: set public variable.
    */
-  std::vector<std::string> ListNames() const;
+  ECM SetPersistentVar(const std::string &name, const std::string &value,
+                       bool confirm_overwrite = true);
 
-private:
   /**
-   * @brief Construct a variable manager tied to the config manager.
+   * @brief Legacy wrapper: set current private variable.
+   */
+  ECM SetMemoryVar(const std::string &name, const std::string &value,
+                   bool confirm_overwrite = true);
+
+protected:
+  /**
+   * @brief Construct a variable manager.
    */
   explicit AMVarManager() = default;
 
   /**
-   * @brief Ask the user to confirm overwriting an existing variable.
+   * @brief Return true for valid domain names.
    */
-  ECM ConfirmOverwrite(const std::string &name, VarSource source) const;
+  [[nodiscard]] bool IsValidDomainName_(const std::string &domain) const;
 
   /**
-   * @brief Ask the user to confirm deleting a variable.
+   * @brief Return true for valid variable names.
    */
-  ECM ConfirmDelete(const std::string &name, bool has_memory,
-                    bool has_storage) const;
+  [[nodiscard]] bool IsValidVarName_(const std::string &name) const;
 
   /**
-   * @brief Format a variable key/value using the UserVars style.
+   * @brief Ensure manager is loaded before access.
    */
-  std::string FormatUserVarText(const std::string &text) const;
-
-  /**
-   * @brief Print a formatted query line.
-   */
-  void PrintQueryLine(const std::string &scope, const std::string &name,
-                      const std::string &value) const;
-
-  /**
-   * @brief Print a formatted entry without a scope label.
-   */
-  void PrintEntry(const std::string &name, const std::string &value) const;
-
-  /**
-   * @brief Log a per-variable not found error.
-   */
-  void LogNotFound(const std::string &name) const;
+  void EnsureLoaded_() const;
 
   AMConfigManager &config_manager_ = AMConfigManager::Instance();
   AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
+  AMClientManager &client_manager_ = AMClientManager::Instance();
   mutable std::mutex mutex_;
-  std::unordered_map<std::string, std::string> memory_vars_;
+  mutable bool ready_ = false;
+  bool dirty_ = false;
+  DomainDict vars_by_domain_ = {};
+};
+
+/**
+ * @brief CLI helper built on AMVarManager.
+ */
+class VarCLISet : public AMVarManager {
+public:
+  /**
+   * @brief Return singleton CLI helper.
+   */
+  static VarCLISet &Instance() {
+    static VarCLISet instance;
+    return instance;
+  }
+
+  /**
+   * @brief Handle `var get $name`.
+   */
+  ECM QueryByName(const std::string &token_name) const;
+
+  /**
+   * @brief Handle `var def [-g] $name value`.
+   */
+  ECM DefineVar(bool global, const std::string &token_name,
+                const std::string &value);
+
+  /**
+   * @brief Handle `var del [-a] [domain] $name`.
+   */
+  ECM DeleteVarByCli(bool all, const std::string &domain,
+                     const std::string &token_name);
+
+  /**
+   * @brief Handle `var ls [domain ...]`.
+   */
+  ECM ListVars(const std::vector<std::string> &domains) const;
+
+private:
+  /**
+   * @brief Construct CLI helper.
+   */
+  VarCLISet() = default;
+
+  /**
+   * @brief Parse `$name` token into raw variable name.
+   */
+  static ECM ParseVarToken_(const std::string &token, std::string *name);
+
+  /**
+   * @brief Format variable output style.
+   */
+  [[nodiscard]] std::string FormatVarText_(const std::string &text) const;
+
+  /**
+   * @brief Format output value with empty-string rule.
+   */
+  [[nodiscard]] std::string RenderValue_(const std::string &value) const;
+
+  /**
+   * @brief Print one section with aligned `$name` column.
+   */
+  void PrintSection_(const std::string &domain,
+                     const std::vector<VarInfo> &entries) const;
 };
