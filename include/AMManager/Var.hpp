@@ -10,8 +10,19 @@
 namespace varsetkn {
 inline constexpr const char *kRoot = "UserVars";
 inline constexpr const char *kPublic = "*";
+inline bool IsValidVarname(std::string_view varname) {
+  if (varname.empty())
+    return false;
+  for (const auto &ch : varname) {
+    if (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' ||
+        ch == '-') {
+      continue;
+    }
+    return false;
+  }
+  return true;
+}
 } // namespace varsetkn
-
 /**
  * @brief Single variable record identified by domain + var name.
  */
@@ -36,18 +47,18 @@ struct VarInfo {
   }
 };
 
-class VarCLISet;
-
 class AMVarManager : private NonCopyableNonMovable {
 public:
-  enum class VarSource { Public, Private };
   using DomainVars = std::unordered_map<std::string, std::string>;
   using DomainDict = std::unordered_map<std::string, DomainVars>;
 
   /**
    * @brief Return the singleton variable manager.
    */
-  static AMVarManager &Instance();
+  static AMVarManager &Instance() {
+    static AMVarManager varm;
+    return varm;
+  };
 
   /**
    * @brief Initialize in-memory variable dict from ConfigManager.
@@ -63,12 +74,6 @@ public:
    * @brief Persist variable dict to settings json and settings.toml.
    */
   ECM Save(bool async = true);
-
-  /**
-   * @brief Resolve variable by current scope (private first, then public).
-   */
-  bool Resolve(const std::string &name, std::string *value = nullptr,
-               VarSource *source = nullptr) const;
 
   /**
    * @brief Return one variable from a specified domain.
@@ -128,18 +133,6 @@ public:
    */
   [[nodiscard]] std::string CurrentDomain() const;
 
-  /**
-   * @brief Legacy wrapper: set public variable.
-   */
-  ECM SetPersistentVar(const std::string &name, const std::string &value,
-                       bool confirm_overwrite = true);
-
-  /**
-   * @brief Legacy wrapper: set current private variable.
-   */
-  ECM SetMemoryVar(const std::string &name, const std::string &value,
-                   bool confirm_overwrite = true);
-
 protected:
   /**
    * @brief Construct a variable manager.
@@ -150,11 +143,6 @@ protected:
    * @brief Return true for valid domain names.
    */
   [[nodiscard]] bool IsValidDomainName_(const std::string &domain) const;
-
-  /**
-   * @brief Return true for valid variable names.
-   */
-  [[nodiscard]] bool IsValidVarName_(const std::string &name) const;
 
   /**
    * @brief Ensure manager is loaded before access.
@@ -210,11 +198,6 @@ private:
    * @brief Construct CLI helper.
    */
   VarCLISet() = default;
-
-  /**
-   * @brief Parse `$name` token into raw variable name.
-   */
-  static ECM ParseVarToken_(const std::string &token, std::string *name);
 
   /**
    * @brief Format variable output style.

@@ -1,4 +1,5 @@
 #include "AMBase/CommonTools.hpp"
+#include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMCLI/Completer/Engine.hpp"
 #include "Isocline/isocline.h"
 #include <cctype>
@@ -6,11 +7,6 @@
 #include <unordered_set>
 
 namespace {
-/**
- * @brief Return true if character is a quote.
- */
-bool IsQuoteChar(char c) { return c == '"' || c == '\''; }
-
 /**
  * @brief Unescape backtick-escaped sequences.
  */
@@ -174,46 +170,12 @@ bool IsPathArgumentCommand_(const std::string &command_path, size_t arg_index) {
 std::vector<AMCompletionToken>
 AMCompleteEngine::TokenizeInput_(const std::string &input) const {
   std::vector<AMCompletionToken> tokens;
-  size_t i = 0;
-  while (i < input.size()) {
-    while (i < input.size() &&
-           std::isspace(static_cast<unsigned char>(input[i])) != 0) {
-      ++i;
-    }
-    if (i >= input.size()) {
-      break;
-    }
-
-    const size_t start = i;
-    if (IsQuoteChar(input[i])) {
-      const char quote = input[i];
-      ++i;
-      const size_t content_start = i;
-      while (i < input.size()) {
-        if (input[i] == '`' && i + 1 < input.size() && input[i + 1] == quote) {
-          i += 2;
-          continue;
-        }
-        if (input[i] == quote) {
-          break;
-        }
-        ++i;
-      }
-      const size_t content_end = i;
-      if (i < input.size() && input[i] == quote) {
-        ++i;
-      }
-      const size_t end = i;
-      tokens.push_back({start, end, content_start, content_end, true});
-      continue;
-    }
-
-    while (i < input.size() &&
-           std::isspace(static_cast<unsigned char>(input[i])) == 0) {
-      ++i;
-    }
-    const size_t end = i;
-    tokens.push_back({start, end, start, end, false});
+  std::vector<AMTokenTypeAnalyzer::AMToken> split =
+      AMTokenTypeAnalyzer::SplitToken(input);
+  tokens.reserve(split.size());
+  for (const auto &item : split) {
+    tokens.push_back({item.start, item.end, item.content_start,
+                      item.content_end, item.quoted});
   }
   return tokens;
 }

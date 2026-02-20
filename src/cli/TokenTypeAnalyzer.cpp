@@ -366,8 +366,7 @@ std::string FormatPathSegment_(AMConfigManager &config_manager,
 /** Reload nickname cache from host manager. */
 void AMTokenTypeAnalyzer::RefreshNicknameCache() {
   nicknames_.clear();
-  auto names = AMHostManager::Instance().ListNames();
-  for (const auto &name : names) {
+  for (const auto &name : host_manager_.ListNames()) {
     nicknames_.insert(name);
   }
 }
@@ -465,12 +464,18 @@ void AMTokenTypeAnalyzer::PromptHighlighter_(ic_highlight_env_t *henv,
 }
 
 /**
- * @brief Split input into whitespace-delimited tokens while keeping quoted
- * strings, optionally analyzing token type.
+ * @brief Split input into shell-level tokens without semantic typing.
  */
 std::vector<AMTokenTypeAnalyzer::AMToken>
-AMTokenTypeAnalyzer::Tokenize(const std::string &input, bool analyse_type) {
-  std::vector<AMToken> tokens;
+AMTokenTypeAnalyzer::SplitToken(const std::string &input) {
+  static std::string input_caches = "";
+  static std::vector<AMToken> tokens = {};
+  if (input_caches == input) {
+    return tokens;
+  } else {
+    input_caches = input;
+    tokens.clear();
+  }
   size_t i = 0;
   while (i < input.size()) {
     while (i < input.size() && AMStr::IsWhitespace(input[i])) {
@@ -479,12 +484,21 @@ AMTokenTypeAnalyzer::Tokenize(const std::string &input, bool analyse_type) {
     if (i >= input.size()) {
       break;
     }
-    size_t start = i;
-    bool quoted = false;
+
+    AMToken token;
+    token.start = i;
+    token.content_start = i;
+    token.content_end = i;
+    token.end = i;
+    token.quoted = false;
+    token.type = AMTokenType::Unset;
+
     if (IsQuoted(input[i])) {
-      quoted = true;
-      char quote = input[i];
+      token.quoted = true;
+      const char quote = input[i];
       ++i;
+      token.content_start = i;
+
       while (i < input.size()) {
         if (input[i] == '`' && i + 1 < input.size() &&
             (input[i + 1] == '"' || input[i + 1] == '\'')) {
@@ -492,32 +506,42 @@ AMTokenTypeAnalyzer::Tokenize(const std::string &input, bool analyse_type) {
           continue;
         }
         if (input[i] == quote) {
-          ++i;
           break;
         }
         ++i;
       }
-    } else {
-      while (i < input.size() && !AMStr::IsWhitespace(input[i])) {
+      token.content_end = i;
+      if (i < input.size() && input[i] == quote) {
         ++i;
       }
+      token.end = i;
+      tokens.push_back(token);
+      continue;
     }
-    AMToken token;
-    token.start = start;
+
+    while (i < input.size() && !AMStr::IsWhitespace(input[i])) {
+      ++i;
+    }
     token.end = i;
-    token.quoted = quoted;
-    token.type = analyse_type ? AMTokenType::Common : AMTokenType::Unset;
+    token.content_start = token.start;
+    token.content_end = token.end;
     tokens.push_back(token);
   }
+  return tokens;
+}
 
-  if (!analyse_type) {
-    return tokens;
-  }
-
+/**
+ * @brief Analyze split tokens into style-level token types.
+ */
+std::vector<AMTokenTypeAnalyzer::AMToken>
+AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input,
+                                   const std::vector<AMToken> &split_tokens) {
+  std::vector<AMToken> tokens = split_tokens;
   std::vector<std::string> texts;
   texts.reserve(tokens.size());
   for (const auto &token : tokens) {
-    texts.push_back(input.substr(token.start, token.end - token.start));
+    texts.push_back(input.substr(token.content_start,
+                                 token.content_end - token.content_start));
   }
 
   for (auto &token : tokens) {
@@ -829,8 +853,13 @@ int AMTokenTypeAnalyzer::PriorityForType(AMTokenType type) const {
 }
 
 AMTokenType AMTokenTypeAnalyzer::VarNameTypeFor(const std::string &name) const {
-  return var_manager_.Resolve(name) ? AMTokenType::VarName
-                                    : AMTokenType::VarNameMissing;
+  VarInfo scoped = var_manager_.GetVar(var_manager_.CurrentDomain(), name);
+  if (scoped.IsValid().first == EC::Success) {
+    return AMTokenType::VarName;
+  }
+  VarInfo pub = var_manager_.GetVar(varsetkn::kPublic, name);
+  return pub.IsValid().first == EC::Success ? AMTokenType::VarName
+                                            : AMTokenType::VarNameMissing;
 }
 
 /** Validate a token against the option set for a command node. */
@@ -876,7 +905,8 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
 
   RefreshNicknameCache();
 
-  std::vector<AMToken> tokens = Tokenize(input, true);
+  std::vector<AMToken> split_tokens = SplitToken(input);
+  std::vector<AMToken> tokens = TokenizeStyle(input, split_tokens);
 
   auto apply_range = [&](size_t start, size_t end, AMTokenType type) {
     if (start >= end || start >= size) {
