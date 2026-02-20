@@ -3,6 +3,7 @@
 #include "AMBase/DataClass.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
+#include "AMManager/Set.hpp"
 #include "AMManager/Var.hpp"
 #include <array>
 #include <cctype>
@@ -375,9 +376,9 @@ void AMTokenTypeAnalyzer::RefreshHostSet() {
   std::lock_guard<std::mutex> lock(hostset_mtx_);
   hostset_path_.clear();
   PathEngineConfig defaults{};
-
-  Json host_set = config_manager_.ResolveArg<Json>(
-      DocumentKind::Settings, {"HostSet"}, Json::object(), {});
+  AMSetManager &set_manager = AMSetManager::Instance();
+  (void)set_manager.Reload();
+  Json host_set = set_manager.Snapshot();
   if (host_set.is_object()) {
     Json default_path_cfg;
     if (QueryKey(host_set,

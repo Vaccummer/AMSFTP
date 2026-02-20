@@ -1,4 +1,3 @@
-
 # Translation
 
 Finally, all functions need to be bound to the CLI. Users can invoke the program in two ways:
@@ -114,8 +113,8 @@ No subcommand required; callable directly.
   - With argument: sets the trash directory
     - On success, updates the configuration accordingly
 + `buffersize`: behaves similarly to `trashdir`
++ 
 
-+
 @./tomlread
 
 @include\AMConfigManager.hpp
@@ -143,7 +142,7 @@ error[E0382]: use of moved value: `item`
 
 I have nlohmann-json for json-parse
 
-expose rust functions to C++, and use these functions to improve 
+expose rust functions to C++, and use these functions to improve
 
 configprocessor in @include\base\AMCommonTools.hpp
 
@@ -172,6 +171,7 @@ produce a format json shcuema file
       // Return false if the path does not exist or the value type mismatches.
   }
   ```
+
   ```cpp
   template<typename T>
   bool SetKey(Settings/config, AMConfigProcessor::Path, T value) {
@@ -181,7 +181,7 @@ produce a format json shcuema file
   ```
 - Enhance `AMConfigManager::Delete` to accept **multiple targets** (space-separated).
 - Enhance `AMConfigManager::Query` to accept **multiple targets** (space-separated).
-@include\AMFileSystem.hpp
+  @include\AMFileSystem.hpp
 
 @src\AMFileSystem.cpp
 
@@ -231,7 +231,7 @@ If no client name is provided, query the current client; raise an error if the c
 
 + `SetTrashDir`: Change the client's trash directory. Note: after successful update, the configuration file must also be modified accordingly.
 + `SetBufferSize`: Modify the client's buffer size.
-@include\AMClientManager.hpp
+  @include\AMClientManager.hpp
 
 ## Improve AMClientManager
 
@@ -243,7 +243,6 @@ I want to support passing a `quiet` parameter when creating a client.
 
   where `{dynamic indicator}` is a rotating spinner or similar visual cue that updates in place.
 - When `quiet` is **true**, suppress all such output. Additionally, temporarily suspend any logging during the authentication callback (`authcb`) phase.
-
 
 @include\AMFileSystem.hpp
 
@@ -261,7 +260,8 @@ AMFileSystem::change_client
 AMFileSystem::cd
 
 + cd - 时, 直接清空last_cd_, 在调用一次cd last_cd_(copied)即可, 减少代码复杂度
-+
++ 
+
 # Improve ClientManager
 
 @include\AMClientManager.hpp
@@ -291,6 +291,7 @@ AMFileSystem::cd
 - Remove `AMFileSystem::NormalizeNickname`; replace all usages with `AMStr::lowercase()`.
 - Remove `AMFileSystem::PromptYesNo`; use the confirmation prompt functionality provided by `PromptManager` instead.
 - Replace `AMFileSystem::IsAbsolutePath` with `AMPathStr::IsAbs`.
+
 ## 优化AMSFTPCli.cpp
 
 每个函数拥有自己的参数的struct
@@ -314,6 +315,7 @@ timeout_ms(也不包括, 因为可以随时终止, timeout_ms意义不大了)
 
 将绑定参数的操作独立出来成一个新文件AMCLIBind.hpp
 封装一个函数: 参数为cli_commands, 以及一个存储各个manager的共享指针的struct, 在函数中根据指令执行操作, 返回值暂时设置为void
+
 # Non-Interactive Improve
 
 部分非交互的cli函数比较特殊, 因为它们是交互模式的入口, 所以需要修改并新添部分函数, 可通过DispatchCliCommands函数的返回值设定
@@ -357,6 +359,7 @@ AMFileSystem::cd
 # clients
 
 AMFileSystem::print_clients
+
 # Improve Transfer Manager
 
 取消初始化参数, 因为各类manager都是单例模式, 可以直接通过函数获取
@@ -374,6 +377,7 @@ tm需要增添一些功能
   + terminate
   + resume
   + pause
+
 # Non-Interactive Improve
 
 部分非交互的cli函数比较特殊, 因为它们是交互模式的入口, 所以需要修改并新添部分函数, 可通过DispatchCliCommands函数的返回值设定
@@ -418,8 +422,6 @@ AMFileSystem::cd
 
 AMFileSystem::print_clients: 该函数需要新加detail 的option, 设置时才需要打印状态, 不设置只需要打印名称即可
 
-
-
 # task 子命令
 
 以下函数在task子命令下
@@ -452,10 +454,9 @@ AMFileSystem::print_clients: 该函数需要新加detail 的option, 设置时才
   + 所有任务控制函数都支持批量操作, 而且每个需要打印结果
 + pause
 + resume
-命令的解析使用CLI11, 但是在交互模式下, 需要对用户输入的原始命令字符串进行预处理解析
+  命令的解析使用CLI11, 但是在交互模式下, 需要对用户输入的原始命令字符串进行预处理解析
 
 所以需要有一个指令的预处理系统
-
 
 # var函数
 
@@ -564,8 +565,8 @@ Built-in symbols must be parsed and replaced **before** the command string is pa
 + **`&` at the end**Used for asynchronous execution when the command is `cp` or `task submit`.
 
   + If conditions are not met (wrong command or position), return an error; do not treat `&` as literal input.
-
   + example
+
     + cp path1 path2 &  -> cp path1 path2
     + cp path1 path2& ->  cp path1 path2&    (& not a token, it's in the path)
     + ls  path1& ->  ls  path1&
@@ -632,6 +633,7 @@ Built-in symbols must be parsed and replaced **before** the command string is pa
     + $a = b
     + $b = c
     + $a expands to $b (literal), not c
+
 ## TokenType Analyser
 
 replxx::Replxx rx;
@@ -657,6 +659,7 @@ option(-f -d)
 atsign(只是真实生效的@, 即前面的nickname在config中)
 
 dollarsign(`不包括转义的$, 且在后面跟着的变量名合法时生效, 但不检测变量是否存在`)
+
 ## DispatchCliCommands优化:
 
 返回类型改为ECM
@@ -709,7 +712,7 @@ dollarsign(`不包括转义的$, 且在后面跟着的变量名合法时生效, 
      3.2 如果amgif的is_interrupted触发, 则打印信息告诉用户如何退出(输入exit), 然后continue
   7. 获取input后需要沉默COREPROMPT
   8. 如果用户输入内容为空或者全是空字符, continue
-@InteractiveLoop.cpp
+     @InteractiveLoop.cpp
 
 line 276 monitor.ResumeHook("COREPROMPT");
 
@@ -797,6 +800,7 @@ real_func:
 ## clients
 
 `AMFileSystem::print_clients`: This function requires a new `detail` option. When enabled, it should print the client status; otherwise, it should print only the client names.
+
 ## Input History
 
 需要对交互模式的input新加一个历史命令功能
@@ -827,15 +831,11 @@ PrompManager负责将历史数据写入replxx中
 程序退出时,获取replxx的history写回.AMSFTP_History.toml
 sftp, ch, ftp, connect连接成功后, 或切换到该client
 
-
-
 CLI11在非交互模式下无法通过-h打印使用说明,  而是返回This should be caught in your main function, see examples
-
 
 新设一个CLIBind.cpp, 将CLIBind.hpp中函数的具体定义移到其中
 
 CliCommands中存一个CLI的app的指针, DispatchCliCommands中获取const bool any_parsed =可以用app.get_subcommands()方法(去查header找函数)
-
 
 # 以下是关于CLI绑定及其对应工作函数的修改
 
@@ -853,12 +853,9 @@ nickname不存在, 属性名不存在, 或者属性值非法 都报错
 
 更改成功时需要提示, 案例:  wsl.username:   am  ->   haha
 
-
 config绑定一个save函数, 对应dump, 无需参数
 
-
 host的config新加一个compression的字段, 字段排序(打印或者询问用户时)
-
 
 nickname="wsl"
 
@@ -882,7 +879,6 @@ keyfile=""
 
 compression=false
 
-
 新增一个client subcommand(和config, task类似 ), 并在该子命令下添加子命令
 
 ls (支持-l, --list选项)对应原绑定:
@@ -905,13 +901,11 @@ rm 对应原绑定:
 
   commands.disconnect_cmd ->add_option("nicknames", args.disconnect.nicknames, "Client nicknames to disconnect")->expected(1, -1);
 
-
 以下指令我做了修改, 你保证其他地方一致性
 
   commands.task_list_cmd=commands.task_cmd->add_subcommand("list", "List tasks");
 
   commands.task_inspect_cmd=commands.task_cmd->add_subcommand("inspect", "Inspect a task");
-
 
   commands.task_userset_cmd
 
@@ -922,7 +916,6 @@ rm 对应原绑定:
 可接收任意数量的index, 但需要对index进行去重
 
 没有index传入打印所有cached的userset
-
 
   commands.task_taskentry_cmd=
 
@@ -976,6 +969,7 @@ resume接收两个参数
 
 分析需要的clients, 调用CollectClients创建maintainer, 若失败直接报错
 调用workermanager的cre_taskinfo创建Taskinfo, 根据is_async 调用相关的transfer函数
+
 ## Completor Blueprint
 
 ### 1) 高层架构
@@ -1051,6 +1045,7 @@ resume接收两个参数
 - 任务ID：来自 `AMWorkManager`（进行中/执行中/历史）
 - 客户端名称：来自 `ClientMaintainer`
 - 主机配置昵称：来自 `ConfigManager`（即使未连接也提供）
+
 + Bug1: path recognise error
   (local)D:/Document/Desktop/1 $ cd ./aad
   ❌ cd: Path not found: aad
@@ -1103,7 +1098,7 @@ given in CompleteOption.item_select_sign
 + Improve8: add switch for auto fill in
 
 when there's only one candidate or candidates have a same prefix,  auto fill in happened
-but 
+but
 
 + bug3:
 
@@ -1117,6 +1112,7 @@ Unix path parse seems has problem
 ❌ cd: Get stat failed: File does not exist
  am@172.26.36.83  5ms  ❌ FileNotExist
 (wsl)/home/am/yes/home/am $
+
 # Improve To Completor
 
 # Align Command Complete
@@ -1163,13 +1159,14 @@ but if there's only one candidate, it triggers auto fill in, that's not I want
 
 Now all element style (except path and debugger) is defined in [style.InputHighlight]
 
-debugger style 
+debugger style
 
 path style is defined in [style.Path1]  [style.File2]  the one has greater number override small one
 
 [style.PathExtraStyle] is extra style when path met certain demand(default is empty string, means no user extra style)
 
 [style.File2] define files have certain extension name styles, overide style in [style.Path1]
+
 # Improves
 
 ## tab行为修改
@@ -1253,13 +1250,12 @@ public:
    2. 各种callback函数的定义与绑定
 3. Path操作类
    1. BuildPath, GetOrInitWorkdir, AbsPath, ParsePath 等与路径操作相关的函数
-@include\AMManager\Client.hpp
-adjust class arrage structure to inherit mode
+      @include\AMManager\Client.hpp
+      adjust class arrage structure to inherit mode
 
 AMClientInfoReader->AMClientOperator->AMClientPathOps
 
 set memeber function DefaultPasswordCallback and DefaultDisconnectCallback as builtin value for password_cb_ and disconnect_cb_
-
 
 wrapp class of include\AMManager\Client.hpp in namespace AMClientManage
 rename AMClientInfoReader -> Reader
@@ -1274,7 +1270,6 @@ function in different classes implemented in different src files stored in src\m
 @include\AMManager\Config.hpp
 
 remove AMConfigCoreData, cause specific config read won't be implement in configMANAGER
-
 
 make class structure to inherit type
 
@@ -1292,7 +1287,6 @@ AMConfigStorage suply interface to set the callback
 @include\AMManager\Config.hpp
 
 remove AMConfigCoreData, cause specific config read won't be implement in configMANAGER
-
 
 make class structure to inherit type
 
@@ -1338,7 +1332,7 @@ AMCompleteEngine Improve
 
       1. Cache 之类的由SearchEngine自行管理
    3. AMCompleteEngine不必再持有config_manager_, client_manager_, filesystem_, transfer_manager_, 因为它不需要实现具体的补全搜索逻辑
-@include\AMBase\DataClass.hpp
+      @include\AMBase\DataClass.hpp
 
 @include\AMManager\Logger.hpp
 
@@ -1365,7 +1359,7 @@ Engine Features
 + engine不进行sort, 该函数由searcher提供
 + AMCompletionAsyncRequest 的interrupt_flag应该是一个函数或者函数指针, 这样的通用性更强
 + 没有设置interrupt_flag的request将被丢弃
-@ src\cli\completer\searcher.cpp
+  @ src\cli\completer\searcher.cpp
 
 ## AMPathSearchEngine Improve
 
@@ -1421,13 +1415,10 @@ add init function to enable init with a json
 
 [Options] 内的设置为单纯的key位置变换, 更新读取函数的key即可
 
-
 [Style] 大部分是单出的位置修改, 但有些例外
 
 + [Style.CompleteMenu] 是新加的属性
 + [Style.Path] 进行简化, 不再多级匹配
-
-
 
 [UserVars] 存储方式以及VarManager都需要升级
 
@@ -1438,7 +1429,7 @@ add init function to enable init with a json
   + 名称字符范围不变
   + 同一区内, 变量名不可相同. 跨区允许名称相同
 + CLI接口修改: 暂时不修改, 等VarManager稳定再修改
-@include\AMCLI\TokenTypeAnalyzer.hpp
+  @include\AMCLI\TokenTypeAnalyzer.hpp
 
 AMTokenTypeAnalyzer Problem
 
@@ -1467,13 +1458,11 @@ Highlight.Path.timeout_ms=1000  # default 1000, when <=0, set to default
 only if path_cfg is a json object, it's a valid config
 if some value missing, use "*" config values
 
-
 AMTokenTypeAnalyzer::Tokenize Problem
 
 didn't take ` to escape $ or @ into account
 
 so casual on distiguishing option, you should determine command first then judge whether an option is valid
-
 
 AMTokenTypeAnalyzer::Tokenize Improve
 
@@ -1489,3 +1478,19 @@ Dir: ...
 Symlink: ...
 
 Special: other special path token when Highlight.Path.use_check is true
+新建一个SetManager类
+
+该类与HostManager平级, 负责管理settings.toml中的[HostSet]
+
+整体的读取逻辑与TokenAnalyzer中现有的逻辑类似
+
+Setanager 提供方便的接口供其他类读取指定host的set的指定属性, 或者是整个config(如果host的set不存在, 需要返回*对应的值, 并且返回标志提示当前值为默认值回退)
+
+在SetManager的基础上, 建立一个子类SetCLI, 该类主要用于实现一个供CLI绑定的函数:
+
++ 建立某个host的set
++ 修改某host的set
++ 删除某host的set
++ 将SetManager管理的config写回ConfigManager的json中并保存到settings.toml
+
+交互逻辑可以参考HostManager的CLI函数
