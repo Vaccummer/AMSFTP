@@ -143,17 +143,42 @@ void BindClientCommands(CLI::App &app, CliArgsPool &args,
  */
 void BindVarCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
   commands.var_cmd = app.add_subcommand("var", "Variable manager");
-  commands.var_cmd
-      ->add_option("tokens", args.var.tokens,
-                   "Variable references or assignments")
+  commands.var_get_cmd =
+      commands.var_cmd->add_subcommand("get", "Query variable by name");
+  commands.var_get_cmd->add_option("varname", args.var_get.varname, "$varname")
+      ->required()
+      ->expected(1, 1);
+
+  commands.var_def_cmd =
+      commands.var_cmd->add_subcommand("def", "Define variable");
+  commands.var_def_cmd->add_flag("-g,--global", args.var_def.global,
+                                 "Define in public section");
+  commands.var_def_cmd->add_option("varname", args.var_def.varname, "$varname")
+      ->required()
+      ->expected(1, 1);
+  commands.var_def_cmd->add_option("value", args.var_def.value, "varvalue")
+      ->required()
+      ->expected(1, 1);
+
+  commands.var_del_cmd =
+      commands.var_cmd->add_subcommand("del", "Delete variable");
+  commands.var_del_cmd->add_flag("-a,--all", args.var_del.all,
+                                 "Delete from all sections");
+  commands.var_del_cmd
+      ->add_option("tokens", args.var_del.tokens, "[section] $varname")
+      ->required()
+      ->expected(1, 2);
+
+  commands.var_ls_cmd =
+      commands.var_cmd->add_subcommand("ls", "List variables by section");
+  commands.var_ls_cmd
+      ->add_option("sections", args.var_ls.sections, "section names")
       ->expected(0, -1);
 
-  commands.del_cmd = app.add_subcommand("del", "Delete variables");
-  commands.del_cmd->add_option("tokens", args.del.tokens, "Variable references")
-      ->expected(0, -1);
-
-  BindArgSelection_(commands.var_cmd, args, &CliArgsPool::var);
-  BindArgSelection_(commands.del_cmd, args, &CliArgsPool::del);
+  BindArgSelection_(commands.var_get_cmd, args, &CliArgsPool::var_get);
+  BindArgSelection_(commands.var_def_cmd, args, &CliArgsPool::var_def);
+  BindArgSelection_(commands.var_del_cmd, args, &CliArgsPool::var_del);
+  BindArgSelection_(commands.var_ls_cmd, args, &CliArgsPool::var_ls);
 }
 
 /**
