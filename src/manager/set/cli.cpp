@@ -69,10 +69,10 @@ bool PromptBool_(AMPromptManager &prompt, const std::string &label,
 }
 
 /**
- * @brief Prompt and parse one positive integer value.
+ * @brief Prompt and parse one positive size_t value.
  */
-bool PromptPositiveInt_(AMPromptManager &prompt, const std::string &label,
-                        int current, int *out_value) {
+bool PromptPositiveSizeT_(AMPromptManager &prompt, const std::string &label,
+                          size_t current, size_t *out_value) {
   if (!out_value) {
     return false;
   }
@@ -83,16 +83,21 @@ bool PromptPositiveInt_(AMPromptManager &prompt, const std::string &label,
     }
     input = AMStr::Strip(input);
     if (input.empty()) {
+      if (current == 0) {
+        prompt.ErrorFormat(
+            Err(EC::InvalidArg, "value must be a positive integer"));
+        continue;
+      }
       *out_value = current;
       return true;
     }
-    int parsed = 0;
+    int64_t parsed = 0;
     if (!StrValueParse(input, &parsed) || parsed <= 0) {
       prompt.ErrorFormat(
           Err(EC::InvalidArg, "value must be a positive integer"));
       continue;
     }
-    *out_value = parsed;
+    *out_value = static_cast<size_t>(parsed);
     return true;
   }
 }
@@ -132,26 +137,22 @@ ECM AMSetCLI::PromptPathSet_(const std::string &nickname,
     return Err(EC::ConfigCanceled, "set prompt canceled");
   }
 
-  int cache_items = static_cast<int>(output->cache_items_threshold);
-  if (!PromptPositiveInt_(prompt_,
-                          "CompleteOption.Searcher.Path.cache_items_threshold: ",
-                          cache_items, &cache_items)) {
+  if (!PromptPositiveSizeT_(
+          prompt_, "CompleteOption.Searcher.Path.cache_items_threshold: ",
+          output->cache_items_threshold, &output->cache_items_threshold)) {
     print_abort();
     return Err(EC::ConfigCanceled, "set prompt canceled");
   }
-  output->cache_items_threshold = static_cast<size_t>(cache_items);
 
-  int cache_max = static_cast<int>(output->cache_max_entries);
-  if (!PromptPositiveInt_(prompt_,
-                          "CompleteOption.Searcher.Path.cache_max_entries: ",
-                          cache_max, &cache_max)) {
+  if (!PromptPositiveSizeT_(
+          prompt_, "CompleteOption.Searcher.Path.cache_max_entries: ",
+          output->cache_max_entries, &output->cache_max_entries)) {
     print_abort();
     return Err(EC::ConfigCanceled, "set prompt canceled");
   }
-  output->cache_max_entries = static_cast<size_t>(cache_max);
 
-  if (!PromptPositiveInt_(prompt_, "CompleteOption.Searcher.Path.timeout_ms: ",
-                          output->timeout_ms, &output->timeout_ms)) {
+  if (!PromptPositiveSizeT_(prompt_, "CompleteOption.Searcher.Path.timeout_ms: ",
+                            output->timeout_ms, &output->timeout_ms)) {
     print_abort();
     return Err(EC::ConfigCanceled, "set prompt canceled");
   }
@@ -160,9 +161,9 @@ ECM AMSetCLI::PromptPathSet_(const std::string &nickname,
     print_abort();
     return Err(EC::ConfigCanceled, "set prompt canceled");
   }
-  if (!PromptPositiveInt_(prompt_, "Highlight.Path.timeout_ms: ",
-                          output->highlight_timeout_ms,
-                          &output->highlight_timeout_ms)) {
+  if (!PromptPositiveSizeT_(prompt_, "Highlight.Path.timeout_ms: ",
+                            output->highlight_timeout_ms,
+                            &output->highlight_timeout_ms)) {
     print_abort();
     return Err(EC::ConfigCanceled, "set prompt canceled");
   }

@@ -3,10 +3,9 @@
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
+#include "AMManager/Set.hpp"
 #include "AMManager/Var.hpp"
-#include <mutex>
 #include <string>
-#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -67,9 +66,9 @@ public:
     bool use_cache = false;
     size_t cache_items_threshold = 50;
     size_t cache_max_entries = 15;
-    int timeout_ms = 3000;
+    size_t timeout_ms = 3000;
     bool highlight_use_check = true;
-    int highlight_timeout_ms = 1000;
+    size_t highlight_timeout_ms = 1000;
   };
 
   /**
@@ -101,19 +100,14 @@ private:
 
   bool IsValidOptionToken(const std::string &token,
                           const CommandNode *node) const;
-  int PriorityForType(AMTokenType type) const;
-
-  void EnsureHostSetLoaded_();
+  [[nodiscard]] int PriorityForType(AMTokenType type) const;
 
   AMConfigManager &config_manager_ = AMConfigManager::Instance();
   AMHostManager &host_manager_ = AMHostManager::Instance();
   AMVarManager &var_manager_ = AMVarManager::Instance();
   AMClientManager &client_manager_ = AMClientManager::Instance();
+  AMSetManager &set_manager_ = AMSetManager::Instance();
   bool cli_cache_ready_ = false;
   std::shared_ptr<CommandTree> command_tree_ = g_command_tree;
   std::unordered_set<std::string> nicknames_;
-  std::mutex hostset_mtx_;
-  bool hostset_ready_ = false;
-  std::unordered_map<std::string, PathEngineConfig> hostset_path_;
-  PathEngineConfig hostset_default_{};
 };

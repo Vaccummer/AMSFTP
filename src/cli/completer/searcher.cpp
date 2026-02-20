@@ -6,6 +6,7 @@
 #include "AMManager/Var.hpp"
 #include <algorithm>
 #include <cctype>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -212,6 +213,21 @@ bool IsModuleCommand_(const std::string &name) {
 bool HasTarget_(const AMCompletionContext &ctx, AMCompletionTarget target) {
   return std::find(ctx.targets.begin(), ctx.targets.end(), target) !=
          ctx.targets.end();
+}
+
+/**
+ * @brief Convert timeout value to int for client API calls.
+ */
+int ToClientTimeoutMs_(size_t timeout_ms, int fallback_ms) {
+  if (timeout_ms == 0) {
+    return fallback_ms;
+  }
+  constexpr size_t kIntMax =
+      static_cast<size_t>(std::numeric_limits<int>::max());
+  if (timeout_ms > kIntMax) {
+    return std::numeric_limits<int>::max();
+  }
+  return static_cast<int>(timeout_ms);
 }
 
 /**
@@ -638,7 +654,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
   const PathEngineConfig engine_config =
       token_analyzer_.ResolvePathEngineConfig(path.nickname);
-  const int timeout_ms = engine_config.timeout_ms;
+  const int timeout_ms = ToClientTimeoutMs_(engine_config.timeout_ms, 0);
   const size_t cache_min =
       std::max<size_t>(1, engine_config.cache_items_threshold);
   const size_t cache_max = std::max<size_t>(1, engine_config.cache_max_entries);

@@ -51,7 +51,7 @@ inline const static std::string login_dir = "login_dir";
 inline const static std::string keyfile = "keyfile";
 inline const static std::string compression = "compression";
 
-inline const std::array<std::string, 10> fileds = {
+inline static const std::array<std::string, 10> fileds = {
     configkn::hostname,    configkn::username,  configkn::port,
     configkn::password,    configkn::protocol,  configkn::buffer_size,
     configkn::trash_dir,   configkn::login_dir, configkn::keyfile,
