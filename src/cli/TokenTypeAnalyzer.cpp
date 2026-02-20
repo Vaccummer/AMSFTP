@@ -7,9 +7,9 @@
 #include "AMManager/Var.hpp"
 #include <array>
 #include <cctype>
+#include <limits>
 
 namespace {
-constexpr const char *kHostSetDefault = "*";
 using TokenCacheValue = std::vector<AMTokenTypeAnalyzer::AMToken>;
 std::unordered_map<std::string, TokenCacheValue> g_split_token_cache;
 std::unordered_map<std::string, TokenCacheValue> g_style_token_cache;
@@ -121,52 +121,32 @@ AMTokenType ToPathTokenType_(PathType type) {
   }
 }
 
-AMTokenTypeAnalyzer::PathEngineConfig ApplyPathSearcherDefaults_(
-    const Json &jsond, const AMTokenTypeAnalyzer::PathEngineConfig &defaults) {
-  AMTokenTypeAnalyzer::PathEngineConfig config = defaults;
-  bool async_value = config.use_async;
-  if (QueryKey(jsond, {"use_async"}, &async_value)) {
-    config.use_async = async_value;
+/**
+ * @brief Convert timeout value to int for client API calls.
+ */
+int ToClientTimeoutMs_(size_t timeout_ms, int fallback_ms) {
+  if (timeout_ms == 0) {
+    return fallback_ms;
   }
-
-  bool cache_value = config.use_cache;
-  if (QueryKey(jsond, {"use_cache"}, &cache_value)) {
-    config.use_cache = cache_value;
+  constexpr size_t kIntMax =
+      static_cast<size_t>(std::numeric_limits<int>::max());
+  if (timeout_ms > kIntMax) {
+    return std::numeric_limits<int>::max();
   }
-
-  int cache_items_value = 0;
-  if (QueryKey(jsond, {"cache_items_threshold"}, &cache_items_value) &&
-      cache_items_value > 0) {
-    config.cache_items_threshold = static_cast<size_t>(cache_items_value);
-  }
-
-  int cache_max_value = 0;
-  if (QueryKey(jsond, {"cache_max_entries"}, &cache_max_value) &&
-      cache_max_value > 0) {
-    config.cache_max_entries = static_cast<size_t>(cache_max_value);
-  }
-
-  int timeout_value = config.timeout_ms;
-  if (QueryKey(jsond, {"timeout_ms"}, &timeout_value) && timeout_value > 0) {
-    config.timeout_ms = timeout_value;
-  }
-  return config;
+  return static_cast<int>(timeout_ms);
 }
 
-AMTokenTypeAnalyzer::PathEngineConfig ApplyPathHighlightDefaults_(
-    const Json &jsond, const AMTokenTypeAnalyzer::PathEngineConfig &defaults) {
-  AMTokenTypeAnalyzer::PathEngineConfig config = defaults;
-
-  bool use_check_value = config.highlight_use_check;
-  if (QueryKey(jsond, {"use_check"}, &use_check_value)) {
-    config.highlight_use_check = use_check_value;
-  }
-
-  int timeout_value = config.highlight_timeout_ms;
-  if (QueryKey(jsond, {"timeout_ms"}, &timeout_value) && timeout_value > 0) {
-    config.highlight_timeout_ms = timeout_value;
-  }
-  return config;
+AMTokenTypeAnalyzer::PathEngineConfig
+ToPathEngineConfig_(const AMHostSetPathConfig &src) {
+  AMTokenTypeAnalyzer::PathEngineConfig out;
+  out.use_async = src.use_async;
+  out.use_cache = src.use_cache;
+  out.cache_items_threshold = src.cache_items_threshold;
+  out.cache_max_entries = src.cache_max_entries;
+  out.timeout_ms = src.timeout_ms;
+  out.highlight_use_check = src.highlight_use_check;
+  out.highlight_timeout_ms = src.highlight_timeout_ms;
+  return out;
 }
 
 /** Return true when the character begins or ends a quoted string token. */
@@ -375,80 +355,14 @@ void AMTokenTypeAnalyzer::RefreshNicknameCache() {
 }
 
 void AMTokenTypeAnalyzer::RefreshHostSet() {
-  std::lock_guard<std::mutex> lock(hostset_mtx_);
-  hostset_path_.clear();
-  PathEngineConfig defaults{};
-  AMSetManager &set_manager = AMSetManager::Instance();
-  (void)set_manager.Reload();
-  Json host_set = set_manager.Snapshot();
-  if (host_set.is_object()) {
-    Json default_path_cfg;
-    if (QueryKey(host_set,
-                 {kHostSetDefault, "CompleteOption", "Searcher", "Path"},
-                 &default_path_cfg) &&
-        default_path_cfg.is_object()) {
-      defaults = ApplyPathSearcherDefaults_(default_path_cfg, defaults);
-    }
-
-    Json default_highlight_cfg;
-    if (QueryKey(host_set, {kHostSetDefault, "Highlight", "Path"},
-                 &default_highlight_cfg) &&
-        default_highlight_cfg.is_object()) {
-      defaults = ApplyPathHighlightDefaults_(default_highlight_cfg, defaults);
-    }
-
-    hostset_default_ = defaults;
-    hostset_path_.emplace(kHostSetDefault, defaults);
-
-    for (auto it = host_set.begin(); it != host_set.end(); ++it) {
-      if (!it.value().is_object()) {
-        continue;
-      }
-      Json path_cfg;
-      if (!QueryKey(it.value(), {"CompleteOption", "Searcher", "Path"},
-                    &path_cfg) ||
-          !path_cfg.is_object()) {
-        continue;
-      }
-      PathEngineConfig entry = ApplyPathSearcherDefaults_(path_cfg, defaults);
-
-      Json highlight_cfg;
-      if (QueryKey(it.value(), {"Highlight", "Path"}, &highlight_cfg) &&
-          highlight_cfg.is_object()) {
-        entry = ApplyPathHighlightDefaults_(highlight_cfg, entry);
-      }
-      hostset_path_[it.key()] = entry;
-    }
-  } else {
-    hostset_default_ = defaults;
-    hostset_path_.emplace(kHostSetDefault, defaults);
-  }
-  hostset_ready_ = true;
-}
-
-void AMTokenTypeAnalyzer::EnsureHostSetLoaded_() {
-  {
-    std::lock_guard<std::mutex> lock(hostset_mtx_);
-    if (hostset_ready_) {
-      return;
-    }
-  }
-  RefreshHostSet();
+  (void)set_manager_.Reload();
+  ClearTokenCache();
 }
 
 AMTokenTypeAnalyzer::PathEngineConfig
 AMTokenTypeAnalyzer::ResolvePathEngineConfig(const std::string &nickname) {
-  EnsureHostSetLoaded_();
-  std::lock_guard<std::mutex> lock(hostset_mtx_);
-  auto it = hostset_path_.find(nickname);
-  if (it != hostset_path_.end()) {
-    return it->second;
-  }
-  auto def_it = hostset_path_.find(kHostSetDefault);
-  if (def_it != hostset_path_.end()) {
-    return def_it->second;
-  }
-  return hostset_default_;
+  const AMHostSetAttrResult result = set_manager_.ResolvePathSet(nickname);
+  return ToPathEngineConfig_(result.value);
 }
 
 void AMTokenTypeAnalyzer::PromptHighlighter_(ic_highlight_env_t *henv,
@@ -710,7 +624,9 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
       nickname_for_lookup = "local";
     }
 
-    const PathEngineConfig path_cfg = ResolvePathEngineConfig(nickname_for_cfg);
+    const AMHostSetAttrResult path_result =
+        set_manager_.ResolvePathSet(nickname_for_cfg);
+    const AMHostSetPathConfig &path_cfg = path_result.value;
     if (!path_cfg.highlight_use_check) {
       token.type = AMTokenType::Path;
       ++arg_index;
@@ -738,9 +654,8 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     const std::string path_part = UnescapeBackticks_(path_part_raw);
     const std::string abs_path =
         client_manager_.BuildPath(path_client, path_part);
-    const int timeout_ms = path_cfg.highlight_timeout_ms > 0
-                               ? path_cfg.highlight_timeout_ms
-                               : 1000;
+    const int timeout_ms =
+        ToClientTimeoutMs_(path_cfg.highlight_timeout_ms, 1000);
 
     auto [rcm, info] =
         path_client->stat(abs_path, false, nullptr, timeout_ms, am_ms());
@@ -981,10 +896,12 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
         continue;
       }
       const char next = input[i + 1];
-      if (next != '$' && next != '@' && next != '"' && next != '\'') {
+      if (next != '$' && next != '@' && next != '"' && next != '\'' &&
+          next != '`') {
         continue;
       }
-      apply_range(i, i + 1, AMTokenType::EscapeSign);
+      apply_range(i, i + 2, AMTokenType::EscapeSign);
+      ++i;
     }
   };
 

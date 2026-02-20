@@ -14,9 +14,11 @@ Json AMHostSetPathConfig::GetJson() const {
       static_cast<int64_t>(cache_items_threshold);
   jsond["CompleteOption"]["Searcher"]["Path"]["cache_max_entries"] =
       static_cast<int64_t>(cache_max_entries);
-  jsond["CompleteOption"]["Searcher"]["Path"]["timeout_ms"] = timeout_ms;
+  jsond["CompleteOption"]["Searcher"]["Path"]["timeout_ms"] =
+      static_cast<int64_t>(timeout_ms);
   jsond["Highlight"]["Path"]["use_check"] = highlight_use_check;
-  jsond["Highlight"]["Path"]["timeout_ms"] = highlight_timeout_ms;
+  jsond["Highlight"]["Path"]["timeout_ms"] =
+      static_cast<int64_t>(highlight_timeout_ms);
   return jsond;
 }
 
@@ -43,26 +45,23 @@ AMHostSetPathConfig::FromJson(const Json &jsond,
     config.use_cache = use_cache_value;
   }
 
-  int cache_items_value = 0;
+  size_t cache_items_value = config.cache_items_threshold;
   if (QueryKey(jsond,
                {"CompleteOption", "Searcher", "Path", "cache_items_threshold"},
-               &cache_items_value) &&
-      cache_items_value > 0) {
-    config.cache_items_threshold = static_cast<size_t>(cache_items_value);
+               &cache_items_value)) {
+    config.cache_items_threshold = cache_items_value;
   }
 
-  int cache_max_value = 0;
+  size_t cache_max_value = config.cache_max_entries;
   if (QueryKey(jsond,
                {"CompleteOption", "Searcher", "Path", "cache_max_entries"},
-               &cache_max_value) &&
-      cache_max_value > 0) {
-    config.cache_max_entries = static_cast<size_t>(cache_max_value);
+               &cache_max_value)) {
+    config.cache_max_entries = cache_max_value;
   }
 
-  int timeout_value = config.timeout_ms;
+  size_t timeout_value = config.timeout_ms;
   if (QueryKey(jsond, {"CompleteOption", "Searcher", "Path", "timeout_ms"},
-               &timeout_value) &&
-      timeout_value > 0) {
+               &timeout_value)) {
     config.timeout_ms = timeout_value;
   }
 
@@ -71,10 +70,9 @@ AMHostSetPathConfig::FromJson(const Json &jsond,
     config.highlight_use_check = use_check_value;
   }
 
-  int highlight_timeout_value = config.highlight_timeout_ms;
+  size_t highlight_timeout_value = config.highlight_timeout_ms;
   if (QueryKey(jsond, {"Highlight", "Path", "timeout_ms"},
-               &highlight_timeout_value) &&
-      highlight_timeout_value > 0) {
+               &highlight_timeout_value)) {
     config.highlight_timeout_ms = highlight_timeout_value;
   }
   return config;
@@ -147,9 +145,8 @@ AMHostSetTableResult AMSetManager::ResolveHostSet(const std::string &nickname) c
 /**
  * @brief Resolve path-related typed HostSet configuration.
  */
-AMHostSetAttrResult<AMHostSetPathConfig>
-AMSetManager::ResolvePathSet(const std::string &nickname) const {
-  AMHostSetAttrResult<AMHostSetPathConfig> result{};
+AMHostSetAttrResult AMSetManager::ResolvePathSet(const std::string &nickname) const {
+  AMHostSetAttrResult result{};
   result.value = AMHostSetPathConfig{};
   result.fallback_to_default = true;
 

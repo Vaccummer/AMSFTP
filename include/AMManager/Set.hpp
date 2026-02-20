@@ -13,22 +13,6 @@ inline constexpr const char *kDefaultHost = "*";
 } // namespace hostsetkn
 
 /**
- * @brief Result wrapper for resolving one HostSet attribute.
- */
-template <typename T> struct AMHostSetAttrResult {
-  T value{};
-  bool fallback_to_default = false;
-};
-
-/**
- * @brief Result wrapper for resolving one host HostSet table.
- */
-struct AMHostSetTableResult {
-  Json value = Json::object();
-  bool fallback_to_default = false;
-};
-
-/**
  * @brief Typed HostSet fields used by path completion/highlight.
  */
 struct AMHostSetPathConfig {
@@ -36,9 +20,9 @@ struct AMHostSetPathConfig {
   bool use_cache = false;
   size_t cache_items_threshold = 50;
   size_t cache_max_entries = 15;
-  int timeout_ms = 3000;
+  size_t timeout_ms = 3000;
   bool highlight_use_check = true;
-  int highlight_timeout_ms = 1000;
+  size_t highlight_timeout_ms = 1000;
 
   /**
    * @brief Serialize path-set config into HostSet JSON shape.
@@ -50,6 +34,22 @@ struct AMHostSetPathConfig {
    */
   static AMHostSetPathConfig FromJson(const Json &jsond,
                                       const AMHostSetPathConfig &defaults);
+};
+
+/**
+ * @brief Result wrapper for resolving path-related HostSet config.
+ */
+struct AMHostSetAttrResult {
+  AMHostSetPathConfig value{};
+  bool fallback_to_default = false;
+};
+
+/**
+ * @brief Result wrapper for resolving one host HostSet table.
+ */
+struct AMHostSetTableResult {
+  Json value = Json::object();
+  bool fallback_to_default = false;
 };
 
 class AMSetCLI;
@@ -88,8 +88,7 @@ public:
   /**
    * @brief Resolve path-related typed HostSet configuration.
    */
-  [[nodiscard]] AMHostSetAttrResult<AMHostSetPathConfig>
-  ResolvePathSet(const std::string &nickname) const;
+  [[nodiscard]] AMHostSetAttrResult ResolvePathSet(const std::string &nickname) const;
 
   /**
    * @brief Return whether a specific host set table exists in cache.
