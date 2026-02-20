@@ -67,7 +67,7 @@ ECM AMVarManager::Reload() {
     DomainVars vars;
     vars.reserve(it.value().size());
     for (auto vit = it.value().begin(); vit != it.value().end(); ++vit) {
-      if (!IsValidVarName_(vit.key())) {
+      if (!varsetkn::IsValidVarname(vit.key())) {
         continue;
       }
       vars[vit.key()] = ToStringScalar_(vit.value());
@@ -118,53 +118,11 @@ ECM AMVarManager::Save(bool async) {
 }
 
 /**
- * @brief Resolve variable by current scope (private first, then public).
- */
-bool AMVarManager::Resolve(const std::string &name, std::string *value,
-                           VarSource *source) const {
-  if (!IsValidVarName_(name)) {
-    return false;
-  }
-  EnsureLoaded_();
-  std::lock_guard<std::mutex> lock(mutex_);
-
-  const std::string current_domain = CurrentDomain();
-  auto domain_it = vars_by_domain_.find(current_domain);
-  if (domain_it != vars_by_domain_.end()) {
-    auto it = domain_it->second.find(name);
-    if (it != domain_it->second.end()) {
-      if (value) {
-        *value = it->second;
-      }
-      if (source) {
-        *source = VarSource::Private;
-      }
-      return true;
-    }
-  }
-
-  auto public_it = vars_by_domain_.find(varsetkn::kPublic);
-  if (public_it != vars_by_domain_.end()) {
-    auto it = public_it->second.find(name);
-    if (it != public_it->second.end()) {
-      if (value) {
-        *value = it->second;
-      }
-      if (source) {
-        *source = VarSource::Public;
-      }
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
  * @brief Return one variable from a specified domain.
  */
 VarInfo AMVarManager::GetVar(const std::string &domain,
                              const std::string &name) const {
-  if (!IsValidDomainName_(domain) || !IsValidVarName_(name)) {
+  if (!IsValidDomainName_(domain) || !varsetkn::IsValidVarname(name)) {
     return {};
   }
   EnsureLoaded_();
@@ -186,7 +144,7 @@ VarInfo AMVarManager::GetVar(const std::string &domain,
  */
 std::vector<VarInfo> AMVarManager::FindByName(const std::string &name) const {
   std::vector<VarInfo> out;
-  if (!IsValidVarName_(name)) {
+  if (!varsetkn::IsValidVarname(name)) {
     return out;
   }
   EnsureLoaded_();
@@ -262,7 +220,7 @@ bool AMVarManager::HasDomain(const std::string &domain) const {
  */
 bool AMVarManager::HasVar(const std::string &domain,
                           const std::string &name) const {
-  if (!IsValidDomainName_(domain) || !IsValidVarName_(name)) {
+  if (!IsValidDomainName_(domain) || !varsetkn::IsValidVarname(name)) {
     return false;
   }
   EnsureLoaded_();
@@ -285,7 +243,7 @@ ECM AMVarManager::SetVar(const VarInfo &info, bool create_domain) {
   if (!IsValidDomainName_(info.domain)) {
     return Err(EC::InvalidArg, "invalid domain");
   }
-  if (!IsValidVarName_(info.varname)) {
+  if (!varsetkn::IsValidVarname(info.varname)) {
     return Err(EC::InvalidArg, "invalid variable name");
   }
   EnsureLoaded_();
@@ -304,7 +262,7 @@ ECM AMVarManager::SetVar(const VarInfo &info, bool create_domain) {
  */
 ECM AMVarManager::DeleteVar(const std::string &domain,
                             const std::string &name) {
-  if (!IsValidDomainName_(domain) || !IsValidVarName_(name)) {
+  if (!IsValidDomainName_(domain) || !varsetkn::IsValidVarname(name)) {
     return Err(EC::InvalidArg, "invalid domain or variable name");
   }
   EnsureLoaded_();
@@ -327,7 +285,7 @@ ECM AMVarManager::DeleteVar(const std::string &domain,
  */
 ECM AMVarManager::DeleteVarAll(const std::string &name,
                                std::vector<VarInfo> *removed) {
-  if (!IsValidVarName_(name)) {
+  if (!varsetkn::IsValidVarname(name)) {
     return Err(EC::InvalidArg, "invalid variable name");
   }
   EnsureLoaded_();
@@ -374,60 +332,11 @@ std::vector<std::string> AMVarManager::ListNames() const {
  * @brief Return current private domain (current host nickname or local).
  */
 std::string AMVarManager::CurrentDomain() const {
-  return client_manager_.CurrentNickname();
-}
-
-/**
- * @brief Legacy wrapper: set public variable.
- */
-ECM AMVarManager::SetPersistentVar(const std::string &name,
-                                   const std::string &value,
-                                   bool confirm_overwrite) {
-  if (!IsValidVarName_(name)) {
-    return Err(EC::InvalidArg, "invalid variable name");
+  std::string nickname = AMStr::Strip(client_manager_.CurrentNickname());
+  if (nickname.empty()) {
+    nickname = "local";
   }
-  if (confirm_overwrite && HasVar(varsetkn::kPublic, name)) {
-    bool canceled = false;
-    const bool overwrite = prompt_manager_.PromptYesNo(
-        AMStr::amfmt("Variable [{}].${} exists. Overwrite? (y/N): ",
-                     varsetkn::kPublic, name),
-        &canceled);
-    if (canceled || !overwrite) {
-      return Err(EC::Terminate, "operation canceled");
-    }
-  }
-  ECM rcm = SetVar({varsetkn::kPublic, name, value}, true);
-  if (rcm.first != EC::Success) {
-    return rcm;
-  }
-  return Save(true);
-}
-
-/**
- * @brief Legacy wrapper: set current private variable.
- */
-ECM AMVarManager::SetMemoryVar(const std::string &name,
-                               const std::string &value,
-                               bool confirm_overwrite) {
-  if (!IsValidVarName_(name)) {
-    return Err(EC::InvalidArg, "invalid variable name");
-  }
-  const std::string domain = CurrentDomain();
-  if (confirm_overwrite && HasVar(domain, name)) {
-    bool canceled = false;
-    const bool overwrite = prompt_manager_.PromptYesNo(
-        AMStr::amfmt("Variable [{}].${} exists. Overwrite? (y/N): ", domain,
-                     name),
-        &canceled);
-    if (canceled || !overwrite) {
-      return Err(EC::Terminate, "operation canceled");
-    }
-  }
-  ECM rcm = SetVar({domain, name, value}, true);
-  if (rcm.first != EC::Success) {
-    return rcm;
-  }
-  return Save(true);
+  return nickname;
 }
 
 /**
@@ -438,21 +347,6 @@ bool AMVarManager::IsValidDomainName_(const std::string &domain) const {
     return true;
   }
   return configkn::ValidateNickname(domain);
-}
-
-/**
- * @brief Return true for valid variable names.
- */
-bool AMVarManager::IsValidVarName_(const std::string &name) const {
-  if (name.empty()) {
-    return false;
-  }
-  for (char c : name) {
-    if (!IsVarChar_(c)) {
-      return false;
-    }
-  }
-  return true;
 }
 
 /**

@@ -2,6 +2,7 @@
 #include "AMBase/DataClass.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
+#include "AMManager/Host.hpp"
 #include "AMManager/Var.hpp"
 #include <mutex>
 #include <string>
@@ -35,14 +36,23 @@ public:
                                  void *arg);
 
   /**
-   * @brief Token parsed from input, optionally annotated with type.
+   * @brief Token parsed from input split stage.
    */
   struct AMToken {
     size_t start = 0;
     size_t end = 0;
+    size_t content_start = 0;
+    size_t content_end = 0;
     bool quoted = false;
     AMTokenType type = AMTokenType::Unset;
   };
+
+  /**
+   * @brief Split input into shell-level tokens (whitespace/quotes only).
+   *
+   * This function does not perform style/semantic classification.
+   */
+  static std::vector<AMToken> SplitToken(const std::string &input);
 
   /**
    * @brief Per-nickname path engine configuration loaded from HostSet.
@@ -76,8 +86,8 @@ private:
   void EnsureCliCache();
   void BuildCliCache();
 
-  std::vector<AMToken> Tokenize(const std::string &input,
-                                bool analyse_type = false);
+  std::vector<AMToken> TokenizeStyle(const std::string &input,
+                                     const std::vector<AMToken> &split_tokens);
   bool ParseVarTokenAt(const std::string &input, size_t pos, size_t limit,
                        size_t *out_end) const;
   bool ParseVarTokenText(const std::string &token,
@@ -92,6 +102,7 @@ private:
   void EnsureHostSetLoaded_();
 
   AMConfigManager &config_manager_ = AMConfigManager::Instance();
+  AMHostManager &host_manager_ = AMHostManager::Instance();
   AMVarManager &var_manager_ = AMVarManager::Instance();
   AMClientManager &client_manager_ = AMClientManager::Instance();
   bool cli_cache_ready_ = false;

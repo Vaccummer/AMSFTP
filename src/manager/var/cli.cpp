@@ -5,10 +5,11 @@
 
 using EC = ErrorCode;
 
+namespace {
 /**
  * @brief Parse `$name` token into raw variable name.
  */
-ECM VarCLISet::ParseVarToken_(const std::string &token, std::string *name) {
+ECM ParseVarToken_(const std::string &token, std::string *name) {
   if (!name) {
     return Err(EC::InvalidArg, "null output variable");
   }
@@ -37,6 +38,7 @@ ECM VarCLISet::ParseVarToken_(const std::string &token, std::string *name) {
   *name = trimmed;
   return Ok();
 }
+} // namespace
 
 /**
  * @brief Format variable output style.

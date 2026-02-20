@@ -327,10 +327,18 @@ static AMCommandPreprocessor::ECM SubstituteVariables(const std::string &input,
         continue;
       }
       std::string value;
-      if (var_manager.Resolve(name, &value)) {
+      VarInfo scoped = var_manager.GetVar(var_manager.CurrentDomain(), name);
+      if (scoped.IsValid().first == EC::Success) {
+        value = scoped.varvalue;
         output->append(value);
       } else {
-        output->append(input.substr(i, close - i + 1));
+        VarInfo pub = var_manager.GetVar(varsetkn::kPublic, name);
+        if (pub.IsValid().first == EC::Success) {
+          value = pub.varvalue;
+          output->append(value);
+        } else {
+          output->append(input.substr(i, close - i + 1));
+        }
       }
       i = close;
       continue;
@@ -347,11 +355,18 @@ static AMCommandPreprocessor::ECM SubstituteVariables(const std::string &input,
     }
     const std::string name = input.substr(start, pos - start);
     std::string value;
-    if (var_manager.Resolve(name, &value)) {
+    VarInfo scoped = var_manager.GetVar(var_manager.CurrentDomain(), name);
+    if (scoped.IsValid().first == EC::Success) {
+      value = scoped.varvalue;
       output->append(value);
     } else {
-      output->append("$");
-      output->append(name);
+      VarInfo pub = var_manager.GetVar(varsetkn::kPublic, name);
+      if (pub.IsValid().first == EC::Success) {
+        output->append(pub.varvalue);
+      } else {
+        output->append("$");
+        output->append(name);
+      }
     }
     i = pos - 1;
   }
@@ -476,7 +491,10 @@ AMCommandPreprocessor::Preprocess(const std::string &input) {
         if (result.rcm.first != EC::Success) {
           return result;
         }
-        result.rcm = var_manager_.SetPersistentVar(name, value, true);
+        result.rcm = var_manager_.SetVar({varsetkn::kPublic, name, value}, true);
+        if (result.rcm.first == EC::Success) {
+          result.rcm = var_manager_.Save(true);
+        }
         result.action = Action::Handled;
         return result;
       }
@@ -492,7 +510,11 @@ AMCommandPreprocessor::Preprocess(const std::string &input) {
       return result;
     }
     if (is_definition) {
-      result.rcm = var_manager_.SetMemoryVar(name, value, true);
+      result.rcm =
+          var_manager_.SetVar({var_manager_.CurrentDomain(), name, value}, true);
+      if (result.rcm.first == EC::Success) {
+        result.rcm = var_manager_.Save(true);
+      }
       result.action = Action::Handled;
       return result;
     }
