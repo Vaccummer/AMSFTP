@@ -4,6 +4,7 @@
 #include "AMManager/Prompt.hpp"
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -14,8 +15,7 @@ inline bool IsValidVarname(std::string_view varname) {
   if (varname.empty())
     return false;
   for (const auto &ch : varname) {
-    if (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_' ||
-        ch == '-') {
+    if (std::isalnum(static_cast<unsigned char>(ch)) || ch == '_') {
       continue;
     }
     return false;
@@ -132,6 +132,16 @@ public:
    * @brief Return current private domain (current host nickname or local).
    */
   [[nodiscard]] std::string CurrentDomain() const;
+
+  /**
+   * @brief Replace one path-like argument using current-domain variables.
+   */
+  [[nodiscard]] std::string SubstitutePathLike(const std::string &input) const;
+
+  /**
+   * @brief Replace path-like arguments in place using current-domain variables.
+   */
+  void SubstitutePathLike(std::vector<std::string> *inputs) const;
 
 protected:
   /**

@@ -340,6 +340,109 @@ std::string AMVarManager::CurrentDomain() const {
 }
 
 /**
+ * @brief Replace one path-like argument using current-domain variables.
+ */
+std::string AMVarManager::SubstitutePathLike(const std::string &input) const {
+  if (input.empty()) {
+    return input;
+  }
+  EnsureLoaded_();
+  const std::string domain = CurrentDomain();
+  std::string output;
+  output.reserve(input.size());
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto append_lookup = [&](const std::string &name,
+                           const std::string &fallback) {
+    auto domain_it = vars_by_domain_.find(domain);
+    if (domain_it != vars_by_domain_.end()) {
+      auto var_it = domain_it->second.find(name);
+      if (var_it != domain_it->second.end()) {
+        output.append(var_it->second);
+        return;
+      }
+    }
+    auto public_it = vars_by_domain_.find(varsetkn::kPublic);
+    if (public_it != vars_by_domain_.end()) {
+      auto var_it = public_it->second.find(name);
+      if (var_it != public_it->second.end()) {
+        output.append(var_it->second);
+        return;
+      }
+    }
+    output.append(fallback);
+  };
+
+  for (size_t i = 0; i < input.size(); ++i) {
+    const char ch = input[i];
+    if (ch == '`' && i + 1 < input.size() && input[i + 1] == '$') {
+      // Preserve escaped '$' as literal and never expand.
+      output.push_back('$');
+      ++i;
+      continue;
+    }
+    if (ch != '$') {
+      output.push_back(ch);
+      continue;
+    }
+    if (i + 1 >= input.size()) {
+      output.push_back('$');
+      continue;
+    }
+
+    if (input[i + 1] == '{') {
+      const size_t close = input.find('}', i + 2);
+      if (close == std::string::npos) {
+        output.append(input.substr(i));
+        break;
+      }
+      const std::string token = input.substr(i, close - i + 1);
+      const std::string name =
+          AMStr::Strip(input.substr(i + 2, close - i - 2));
+      if (!varsetkn::IsValidVarname(name)) {
+        output.append(token);
+      } else {
+        append_lookup(name, token);
+      }
+      i = close;
+      continue;
+    }
+
+    size_t start = i + 1;
+    size_t pos = start;
+    while (pos < input.size() && IsVarChar_(input[pos])) {
+      ++pos;
+    }
+    if (pos == start) {
+      output.push_back('$');
+      continue;
+    }
+    const std::string name = input.substr(start, pos - start);
+    const std::string token = "$" + name;
+    if (!varsetkn::IsValidVarname(name)) {
+      output.append(token);
+    } else {
+      append_lookup(name, token);
+    }
+    i = pos - 1;
+  }
+
+  return output;
+}
+
+/**
+ * @brief Replace path-like arguments in place using current-domain variables.
+ */
+void AMVarManager::SubstitutePathLike(std::vector<std::string> *inputs) const {
+  if (!inputs) {
+    return;
+  }
+  for (std::string &item : *inputs) {
+    item = SubstitutePathLike(item);
+  }
+}
+
+/**
  * @brief Return true for valid domain names.
  */
 bool AMVarManager::IsValidDomainName_(const std::string &domain) const {

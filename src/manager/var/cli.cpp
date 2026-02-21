@@ -28,12 +28,9 @@ ECM ParseVarToken_(const std::string &token, std::string *name) {
   if (trimmed.empty()) {
     return Err(EC::InvalidArg, "empty variable name");
   }
-  for (char c : trimmed) {
-    const unsigned char ch = static_cast<unsigned char>(c);
-    if (!std::isalnum(ch) && c != '_') {
-      return Err(EC::InvalidArg,
-                 "invalid variable name: only [A-Za-z0-9_] allowed");
-    }
+  if (!varsetkn::IsValidVarname(trimmed)) {
+    return Err(EC::InvalidArg,
+               "invalid variable name: only [A-Za-z0-9_] allowed");
   }
   *name = trimmed;
   return Ok();
