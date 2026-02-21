@@ -249,7 +249,9 @@ enum class AMTokenType {
   File = 15,
   Dir = 16,
   Symlink = 17,
-  Special = 18
+  Special = 18,
+  BangSign = 19,
+  ShellCmd = 20
 
 };
 

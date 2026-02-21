@@ -56,6 +56,23 @@ inline void PrintRunError_(const ECM &rcm) {
 }
 
 /**
+ * @brief Substitute variables for one path-like CLI argument.
+ */
+inline std::string SubstitutePathLikeArg_(const std::string &raw) {
+  return AMVarManager::Instance().SubstitutePathLike(raw);
+}
+
+/**
+ * @brief Substitute variables for path-like CLI arguments.
+ */
+inline std::vector<std::string>
+SubstitutePathLikeArgs_(const std::vector<std::string> &raw) {
+  std::vector<std::string> out = raw;
+  AMVarManager::Instance().SubstitutePathLike(&out);
+  return out;
+}
+
+/**
  * @brief Enforce interactive mode for task-like commands.
  */
 inline ECM EnsureInteractive_(const CliRunContext &ctx) {
@@ -364,7 +381,8 @@ struct StatArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    return managers.filesystem->stat(paths, amgif);
+    const std::vector<std::string> resolved = SubstitutePathLikeArgs_(paths);
+    return managers.filesystem->stat(resolved, amgif);
   }
   /**
    * @brief Reset stat arguments to defaults.
@@ -386,7 +404,7 @@ struct LsArgs {
     (void)ctx;
     auto &client_manager = *managers.client_manager;
     auto &filesystem = *managers.filesystem;
-    std::string query_path = AMStr::Strip(path);
+    std::string query_path = AMStr::Strip(SubstitutePathLikeArg_(path));
     if (query_path.empty()) {
       auto client = client_manager.CurrentClient();
       if (client) {
@@ -420,7 +438,8 @@ struct SizeArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    ECM rcm = managers.filesystem->getsize(paths, amgif);
+    const std::vector<std::string> resolved = SubstitutePathLikeArgs_(paths);
+    ECM rcm = managers.filesystem->getsize(resolved, amgif);
     PrintRunError_(rcm);
     return rcm;
   }
@@ -440,7 +459,8 @@ struct FindArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    ECM rcm = managers.filesystem->find(path, SearchType::All, amgif);
+    const std::string resolved = SubstitutePathLikeArg_(path);
+    ECM rcm = managers.filesystem->find(resolved, SearchType::All, amgif);
     PrintRunError_(rcm);
     return rcm;
   }
@@ -460,7 +480,8 @@ struct MkdirArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    ECM rcm = managers.filesystem->mkdir(paths, amgif);
+    const std::vector<std::string> resolved = SubstitutePathLikeArgs_(paths);
+    ECM rcm = managers.filesystem->mkdir(resolved, amgif);
     PrintRunError_(rcm);
     return rcm;
   }
@@ -482,7 +503,9 @@ struct RmArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    ECM rcm = managers.filesystem->rm(paths, permanent, false, quiet, amgif);
+    const std::vector<std::string> resolved = SubstitutePathLikeArgs_(paths);
+    ECM rcm =
+        managers.filesystem->rm(resolved, permanent, false, quiet, amgif);
     PrintRunError_(rcm);
     return rcm;
   }
@@ -511,7 +534,8 @@ struct WalkArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    ECM rcm = managers.filesystem->walk(path, only_file, only_dir, show_all,
+    const std::string resolved = SubstitutePathLikeArg_(path);
+    ECM rcm = managers.filesystem->walk(resolved, only_file, only_dir, show_all,
                                         !include_special, quiet, amgif);
     PrintRunError_(rcm);
     return rcm;
@@ -544,7 +568,8 @@ struct TreeArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    ECM rcm = managers.filesystem->tree(path, depth, only_dir, show_all,
+    const std::string resolved = SubstitutePathLikeArg_(path);
+    ECM rcm = managers.filesystem->tree(resolved, depth, only_dir, show_all,
                                         !include_special, quiet, amgif);
     PrintRunError_(rcm);
     return rcm;
@@ -572,7 +597,8 @@ struct RealpathArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    return managers.filesystem->realpath(path, amgif);
+    const std::string resolved = SubstitutePathLikeArg_(path);
+    return managers.filesystem->realpath(resolved, amgif);
   }
   /**
    * @brief Reset realpath arguments to defaults.
@@ -637,22 +663,33 @@ struct CpArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
-    if (srcs.empty()) {
+    std::vector<std::string> raw_srcs = srcs;
+    bool run_async = false;
+    if (!raw_srcs.empty() && raw_srcs.back() == "&") {
+      run_async = true;
+      raw_srcs.pop_back();
+    }
+
+    if (raw_srcs.empty()) {
       return {EC::InvalidArg, "cp requires at least one source"};
     }
 
+    const std::vector<std::string> resolved_srcs =
+        SubstitutePathLikeArgs_(raw_srcs);
+    const std::string resolved_output = SubstitutePathLikeArg_(output);
+
     std::vector<std::string> transfer_srcs;
     std::string transfer_dst;
-    if (output.empty()) {
-      if (srcs.size() != 2) {
+    if (resolved_output.empty()) {
+      if (resolved_srcs.size() != 2) {
         return {EC::InvalidArg,
                 "cp requires exactly 2 paths when --output is omitted"};
       }
-      transfer_srcs = {srcs.front()};
-      transfer_dst = srcs.back();
+      transfer_srcs = {resolved_srcs.front()};
+      transfer_dst = resolved_srcs.back();
     } else {
-      transfer_srcs = srcs;
-      transfer_dst = output;
+      transfer_srcs = resolved_srcs;
+      transfer_dst = resolved_output;
     }
 
     UserTransferSet transfer_set;
@@ -666,7 +703,7 @@ struct CpArgs {
 
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
     ECM rcm =
-        ctx.async
+        (ctx.async || run_async)
             ? transfer_manager.transfer_async({transfer_set}, quiet, amgif)
             : transfer_manager.transfer({transfer_set}, quiet, amgif);
     PrintRunError_(rcm);
@@ -868,7 +905,8 @@ struct CdArgs {
    * @brief Execute cd.
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
-    ECM rcm = managers.filesystem->cd(path, amgif, false);
+    const std::string resolved = SubstitutePathLikeArg_(path);
+    ECM rcm = managers.filesystem->cd(resolved, amgif, false);
     if (rcm.first == EC::Success) {
       SetEnterInteractive_(ctx, true);
     }
@@ -1202,19 +1240,23 @@ struct TaskCacheAddArgs {
       return {EC::InvalidArg, "task cache add requires at least one source"};
     }
 
+    const std::vector<std::string> resolved_srcs =
+        SubstitutePathLikeArgs_(srcs);
+    const std::string resolved_output = SubstitutePathLikeArg_(output);
+
     std::vector<std::string> transfer_srcs;
     std::string transfer_dst;
-    if (output.empty()) {
-      if (srcs.size() != 2) {
+    if (resolved_output.empty()) {
+      if (resolved_srcs.size() != 2) {
         return {EC::InvalidArg,
                 "task cache add requires exactly 2 paths when --output is "
                 "omitted"};
       }
-      transfer_srcs = {srcs.front()};
-      transfer_dst = srcs.back();
+      transfer_srcs = {resolved_srcs.front()};
+      transfer_dst = resolved_srcs.back();
     } else {
-      transfer_srcs = srcs;
-      transfer_dst = output;
+      transfer_srcs = resolved_srcs;
+      transfer_dst = resolved_output;
     }
 
     UserTransferSet transfer_set;
@@ -1307,6 +1349,7 @@ struct TaskCacheClearArgs {
 struct TaskCacheSubmitArgs {
   bool is_async = false;
   bool quiet = false;
+  std::string async_suffix;
   /**
    * @brief Execute task cache submit.
    */
@@ -1316,8 +1359,17 @@ struct TaskCacheSubmitArgs {
       return ready;
     }
     (void)managers;
+    bool suffix_async = false;
+    if (!async_suffix.empty()) {
+      if (async_suffix != "&") {
+        return Err(EC::InvalidArg,
+                   "task cache submit: trailing arg must be &");
+      }
+      suffix_async = true;
+    }
     return AMTransferManager::Instance().SubmitCachedTransferSets(quiet, amgif,
-                                                                  is_async);
+                                                                  is_async ||
+                                                                      suffix_async);
   }
   /**
    * @brief Reset task-cache-submit arguments to defaults.
@@ -1325,6 +1377,7 @@ struct TaskCacheSubmitArgs {
   void reset() {
     is_async = false;
     quiet = false;
+    async_suffix.clear();
   }
 };
 

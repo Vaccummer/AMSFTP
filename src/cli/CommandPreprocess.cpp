@@ -1,543 +1,81 @@
 #include "AMCLI/CommandPreprocess.hpp"
 #include "AMBase/CommonTools.hpp"
-#include <cstdint>
-#include <vector>
+#include "AMCLI/TokenTypeAnalyzer.hpp"
 
 using EC = ErrorCode;
 
+namespace {
 /**
- * @brief Return true if a character is valid inside a variable name.
+ * @brief Restore backtick escapes for CLI tokens while preserving `` `$``.
  */
-static bool IsVarNameChar(char c) {
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-         (c >= '0' && c <= '9') || c == '_';
-}
-
-/**
- * @brief Return true if a variable name is non-empty and valid.
- */
-static bool IsValidVarName(const std::string &name) {
-  if (name.empty()) {
-    return false;
+std::string UnescapeCliToken_(const std::string &token) {
+  if (token.empty()) {
+    return token;
   }
-  for (char c : name) {
-    if (!IsVarNameChar(c)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * @brief Normalize a raw value by trimming and stripping paired quotes.
- */
-static AMCommandPreprocessor::ECM ParseValue(const std::string &input,
-                                             std::string *value) {
-  if (!value) {
-    return {EC::InvalidArg, "Null output pointer"};
-  }
-  std::string trimmed = AMStr::Strip(input);
-  if (trimmed.empty()) {
-    *value = "";
-    return {EC::Success, ""};
-  }
-
-  const char first = trimmed.front();
-  const char last = trimmed.back();
-  const bool starts_quote = first == '"' || first == '\'';
-  const bool ends_quote = last == '"' || last == '\'';
-
-  if (starts_quote || ends_quote) {
-    if (trimmed.size() < 2 || first != last) {
-      return {EC::InvalidArg, "Malformed quoted value"};
-    }
-    *value = trimmed.substr(1, trimmed.size() - 2);
-    if (!value->empty()) {
-      std::string unescaped;
-      unescaped.reserve(value->size());
-      for (size_t i = 0; i < value->size(); ++i) {
-        if ((*value)[i] == '`' && i + 1 < value->size() &&
-            ((*value)[i + 1] == '"' || (*value)[i + 1] == '\'')) {
-          unescaped.push_back((*value)[i + 1]);
-          ++i;
-          continue;
-        }
-        unescaped.push_back((*value)[i]);
+  std::string out;
+  out.reserve(token.size());
+  for (size_t i = 0; i < token.size(); ++i) {
+    const char c = token[i];
+    if (c == '`' && i + 1 < token.size()) {
+      const char next = token[i + 1];
+      if (next == '$') {
+        out.push_back('`');
+        out.push_back('$');
+      } else {
+        out.push_back(next);
       }
-      *value = std::move(unescaped);
-    }
-    return {EC::Success, ""};
-  }
-
-  if (!trimmed.empty()) {
-    std::string unescaped;
-    unescaped.reserve(trimmed.size());
-    for (size_t i = 0; i < trimmed.size(); ++i) {
-      if (trimmed[i] == '`' && i + 1 < trimmed.size() &&
-          (trimmed[i + 1] == '"' || trimmed[i + 1] == '\'')) {
-        unescaped.push_back(trimmed[i + 1]);
-        ++i;
-        continue;
-      }
-      unescaped.push_back(trimmed[i]);
-    }
-    *value = std::move(unescaped);
-  } else {
-    *value = trimmed;
-  }
-  return {EC::Success, ""};
-}
-
-/**
- * @brief Parse a persistent definition ($name= or ${name}=) from the text.
- */
-static AMCommandPreprocessor::ECM
-ParsePersistentDefinition(const std::string &text, std::string *name,
-                          std::string *value) {
-  if (!name || !value) {
-    return {EC::InvalidArg, "Null output pointer"};
-  }
-  std::string trimmed = AMStr::Strip(text);
-  if (trimmed.size() < 2 || trimmed[0] != '$') {
-    return {EC::InvalidArg, "Persistent definition must start with $"};
-  }
-
-  std::string name_part;
-  size_t pos = 1;
-  if (pos < trimmed.size() && trimmed[pos] == '{') {
-    const size_t close = trimmed.find('}', pos + 1);
-    if (close == std::string::npos) {
-      return {EC::InvalidArg, "Unclosed ${...} expression"};
-    }
-    name_part = AMStr::Strip(trimmed.substr(pos + 1, close - pos - 1));
-    pos = close + 1;
-  } else {
-    const size_t start = pos;
-    while (pos < trimmed.size() && IsVarNameChar(trimmed[pos])) {
-      ++pos;
-    }
-    if (pos == start) {
-      return {EC::InvalidArg,
-              "Invalid variable name: only letters, digits, and _ are allowed"};
-    }
-    name_part = trimmed.substr(start, pos - start);
-  }
-
-  if (!IsValidVarName(name_part)) {
-    return {EC::InvalidArg,
-            "Invalid variable name: only letters, digits, and _ are allowed"};
-  }
-
-  while (pos < trimmed.size() && AMStr::IsWhitespace(trimmed[pos])) {
-    ++pos;
-  }
-  if (pos >= trimmed.size() || trimmed[pos] != '=') {
-    return {EC::InvalidArg, "Variable definition requires '='"};
-  }
-  ++pos;
-  AMCommandPreprocessor::ECM rcm = ParseValue(trimmed.substr(pos), value);
-  if (rcm.first != EC::Success) {
-    return rcm;
-  }
-  *name = name_part;
-  return {EC::Success, ""};
-}
-
-/**
- * @brief Detect and parse a $name=value definition if present.
- */
-static AMCommandPreprocessor::ECM ParseMemoryDefinition(const std::string &text,
-                                                        std::string *name,
-                                                        std::string *value,
-                                                        bool *is_definition) {
-  if (!name || !value || !is_definition) {
-    return {EC::InvalidArg, "Null output pointer"};
-  }
-  *is_definition = false;
-  if (text.empty() || text.front() != '$') {
-    return {EC::Success, ""};
-  }
-
-  const size_t eq_pos = text.find('=');
-  if (eq_pos == std::string::npos) {
-    return {EC::Success, ""};
-  }
-
-  size_t pos = 1;
-  size_t start = pos;
-  while (pos < eq_pos && IsVarNameChar(text[pos])) {
-    ++pos;
-  }
-
-  if (start == pos) {
-    *is_definition = true;
-    return {EC::InvalidArg,
-            "Invalid variable name: only letters, digits, and _ are allowed"};
-  }
-
-  for (size_t scan = pos; scan < eq_pos; ++scan) {
-    if (!AMStr::IsWhitespace(text[scan])) {
-      *is_definition = true;
-      return {EC::InvalidArg,
-              "Invalid variable name: only letters, digits, and _ are allowed"};
-    }
-  }
-
-  std::string name_part = text.substr(start, pos - start);
-  *is_definition = true;
-  AMCommandPreprocessor::ECM rcm = ParseValue(text.substr(eq_pos + 1), value);
-  if (rcm.first != EC::Success) {
-    return rcm;
-  }
-  *name = name_part;
-  return {EC::Success, ""};
-}
-
-/**
- * @brief Tokenize a command line, honoring simple quotes, up to max tokens.
- */
-static std::vector<std::string> SplitTokens(const std::string &input,
-                                            size_t max_tokens) {
-  std::vector<std::string> tokens;
-  std::string current;
-  bool in_single = false;
-  bool in_double = false;
-
-  for (size_t i = 0; i < input.size(); ++i) {
-    const char c = input[i];
-    if (c == '`' && i + 1 < input.size() &&
-        (input[i + 1] == '"' || input[i + 1] == '\'')) {
-      current.push_back(input[i + 1]);
       ++i;
       continue;
     }
-    if (in_single) {
-      if (c == '\'') {
-        in_single = false;
-      } else {
-        current.push_back(c);
-      }
-      continue;
-    }
-    if (in_double) {
-      if (c == '"') {
-        in_double = false;
-      } else {
-        current.push_back(c);
-      }
-      continue;
-    }
-
-    if (AMStr::IsWhitespace(c)) {
-      if (!current.empty()) {
-        tokens.push_back(current);
-        current.clear();
-        if (tokens.size() >= max_tokens) {
-          return tokens;
-        }
-      }
-      continue;
-    }
-
-    if (c == '\'') {
-      in_single = true;
-      continue;
-    }
-    if (c == '"') {
-      in_double = true;
-      continue;
-    }
-    current.push_back(c);
+    out.push_back(c);
   }
-
-  if (!current.empty() && tokens.size() < max_tokens) {
-    tokens.push_back(current);
-  }
-  return tokens;
+  return out;
 }
+} // namespace
 
 /**
- * @brief Return true if the first token is a variable reference command.
+ * @brief Detect `!` shell prefix from one interactive command line.
  */
-static bool IsVarReferenceCommand(const std::string &input) {
-  std::vector<std::string> tokens = SplitTokens(input, 1);
-  if (tokens.empty()) {
-    return false;
+ECM AMInputPreprocess::ParseShellPrefix(const std::string &input,
+                                        std::string *shell_command,
+                                        bool *is_shell) {
+  if (!shell_command || !is_shell) {
+    return Err(EC::InvalidArg, "null output pointer");
   }
-  const std::string head = AMStr::lowercase(tokens[0]);
-  return head == "var" || head == "del";
+  *shell_command = "";
+  *is_shell = false;
+  const std::string trimmed = AMStr::Strip(input);
+  if (trimmed.empty() || trimmed.front() != '!') {
+    return Ok();
+  }
+  const std::string shell = AMStr::Strip(trimmed.substr(1));
+  if (shell.empty()) {
+    return Err(EC::InvalidArg, "Empty shell command");
+  }
+  *shell_command = shell;
+  *is_shell = true;
+  return Ok();
 }
 
 /**
- * @brief Return true if the command supports async '&' suffix.
- */
-static bool IsAsyncAllowed(const std::string &command) {
-  std::vector<std::string> tokens = SplitTokens(command, 2);
-  if (tokens.empty()) {
-    return false;
-  }
-  const std::string head = AMStr::lowercase(tokens[0]);
-  if (head == "cp") {
-    return true;
-  }
-  if (head == "task" && tokens.size() >= 2 &&
-      AMStr::lowercase(tokens[1]) == "submit") {
-    return true;
-  }
-  return false;
-}
-
-/**
- * @brief Apply variable substitution with backtick escapes.
- */
-static AMCommandPreprocessor::ECM SubstituteVariables(const std::string &input,
-                                                      AMVarManager &var_manager,
-                                                      std::string *output) {
-  if (!output) {
-    return {EC::InvalidArg, "Null output pointer"};
-  }
-  output->clear();
-  for (size_t i = 0; i < input.size(); ++i) {
-    const char c = input[i];
-    if (c == '`' && i + 1 < input.size() && input[i + 1] == '$') {
-      output->push_back('$');
-      ++i;
-      continue;
-    }
-    if (c != '$') {
-      output->push_back(c);
-      continue;
-    }
-
-    if (i + 1 >= input.size()) {
-      output->push_back('$');
-      continue;
-    }
-
-    if (input[i + 1] == '{') {
-      const size_t close = input.find('}', i + 2);
-      if (close == std::string::npos) {
-        return {EC::InvalidArg, "Unclosed ${...} expression"};
-      }
-      const std::string name_raw = input.substr(i + 2, close - (i + 2));
-      const std::string name = AMStr::Strip(name_raw);
-      if (!IsValidVarName(name)) {
-        output->append(input.substr(i, close - i + 1));
-        i = close;
-        continue;
-      }
-      std::string value;
-      VarInfo scoped = var_manager.GetVar(var_manager.CurrentDomain(), name);
-      if (scoped.IsValid().first == EC::Success) {
-        value = scoped.varvalue;
-        output->append(value);
-      } else {
-        VarInfo pub = var_manager.GetVar(varsetkn::kPublic, name);
-        if (pub.IsValid().first == EC::Success) {
-          value = pub.varvalue;
-          output->append(value);
-        } else {
-          output->append(input.substr(i, close - i + 1));
-        }
-      }
-      i = close;
-      continue;
-    }
-
-    size_t start = i + 1;
-    size_t pos = start;
-    while (pos < input.size() && IsVarNameChar(input[pos])) {
-      ++pos;
-    }
-    if (pos == start) {
-      output->push_back('$');
-      continue;
-    }
-    const std::string name = input.substr(start, pos - start);
-    std::string value;
-    VarInfo scoped = var_manager.GetVar(var_manager.CurrentDomain(), name);
-    if (scoped.IsValid().first == EC::Success) {
-      value = scoped.varvalue;
-      output->append(value);
-    } else {
-      VarInfo pub = var_manager.GetVar(varsetkn::kPublic, name);
-      if (pub.IsValid().first == EC::Success) {
-        output->append(pub.varvalue);
-      } else {
-        output->append("$");
-        output->append(name);
-      }
-    }
-    i = pos - 1;
-  }
-  return {EC::Success, ""};
-}
-
-/**
- * @brief Apply variable substitution after the first token only.
- */
-static AMCommandPreprocessor::ECM
-SubstituteAfterFirstToken(const std::string &input, AMVarManager &var_manager,
-                          std::string *output) {
-  if (!output) {
-    return {EC::InvalidArg, "Null output pointer"};
-  }
-  *output = "";
-  if (input.empty()) {
-    return {EC::Success, ""};
-  }
-
-  size_t pos = 0;
-  while (pos < input.size() && AMStr::IsWhitespace(input[pos])) {
-    ++pos;
-  }
-  size_t start = pos;
-  while (pos < input.size() && !AMStr::IsWhitespace(input[pos])) {
-    ++pos;
-  }
-  const std::string head = input.substr(0, pos);
-  const std::string tail = input.substr(pos);
-
-  std::string substituted_tail;
-  AMCommandPreprocessor::ECM rcm =
-      SubstituteVariables(tail, var_manager, &substituted_tail);
-  if (rcm.first != EC::Success) {
-    return rcm;
-  }
-  *output = head + substituted_tail;
-  return {EC::Success, ""};
-}
-
-/**
- * @brief Strip a trailing '&' token and mark async execution when allowed.
- */
-static AMCommandPreprocessor::ECM HandleAsyncSuffix(const std::string &input,
-                                                    std::string *command,
-                                                    bool *async_flag) {
-  if (!command || !async_flag) {
-    return {EC::InvalidArg, "Null output pointer"};
-  }
-  *async_flag = false;
-  std::string trimmed = AMStr::Strip(input);
-  if (trimmed.empty()) {
-    *command = "";
-    return {EC::Success, ""};
-  }
-  if (trimmed.back() != '&') {
-    *command = trimmed;
-    return {EC::Success, ""};
-  }
-
-  if (trimmed.size() < 2 || !AMStr::IsWhitespace(trimmed[trimmed.size() - 2])) {
-    *command = trimmed;
-    return {EC::Success, ""};
-  }
-
-  std::string base = AMStr::Strip(trimmed.substr(0, trimmed.size() - 1));
-  if (base.empty()) {
-    return {EC::InvalidArg, "Empty command before &"};
-  }
-  if (!IsAsyncAllowed(base)) {
-    return {EC::InvalidArg,
-            "& not permitted in functions except cp and task submit"};
-  }
-
-  *async_flag = true;
-  *command = base;
-  return {EC::Success, ""};
-}
-
-/**
- * @brief Split a command line into CLI tokens for interactive parsing.
+ * @brief Split interactive command text into CLI11 argument tokens.
  */
 std::vector<std::string>
-AMCommandPreprocessor::SplitCliTokens(const std::string &input) {
-  return SplitTokens(input, SIZE_MAX - 1);
-}
-
-/**
- * @brief Preprocess a raw interactive command line according to rules.
- */
-AMCommandPreprocessor::Result
-AMCommandPreprocessor::Preprocess(const std::string &input) {
-  Result result;
-  std::string trimmed = AMStr::Strip(input);
-  if (trimmed.empty()) {
-    return result;
-  }
-
-  if (!trimmed.empty() && trimmed.front() == '!') {
-    std::string shell = AMStr::Strip(trimmed.substr(1));
-    if (shell.empty()) {
-      result.rcm = {EC::InvalidArg, "Empty shell command"};
-      return result;
+AMInputPreprocess::SplitCliTokens(const std::string &input) {
+  std::vector<std::string> out;
+  const auto split = AMTokenTypeAnalyzer::SplitToken(input);
+  out.reserve(split.size());
+  for (const auto &token : split) {
+    if (token.content_end < token.content_start ||
+        token.content_end > input.size()) {
+      continue;
     }
-    result.action = Action::Shell;
-    result.command = shell;
-    return result;
-  }
-
-  if (trimmed.size() >= 2 && trimmed[0] == '$' && trimmed[1] == '{') {
-    size_t close = trimmed.find('}', 2);
-    if (close != std::string::npos) {
-      size_t pos = close + 1;
-      while (pos < trimmed.size() && AMStr::IsWhitespace(trimmed[pos])) {
-        ++pos;
-      }
-      if (pos < trimmed.size() && trimmed[pos] == '=') {
-        std::string name;
-        std::string value;
-        result.rcm = ParsePersistentDefinition(trimmed, &name, &value);
-        if (result.rcm.first != EC::Success) {
-          return result;
-        }
-        result.rcm = var_manager_.SetVar({varsetkn::kPublic, name, value}, true);
-        if (result.rcm.first == EC::Success) {
-          result.rcm = var_manager_.Save(true);
-        }
-        result.action = Action::Handled;
-        return result;
-      }
+    const std::string raw = input.substr(
+        token.content_start, token.content_end - token.content_start);
+    const std::string normalized = UnescapeCliToken_(raw);
+    if (!normalized.empty()) {
+      out.push_back(normalized);
     }
   }
-
-  {
-    std::string name;
-    std::string value;
-    bool is_definition = false;
-    result.rcm = ParseMemoryDefinition(trimmed, &name, &value, &is_definition);
-    if (result.rcm.first != EC::Success) {
-      return result;
-    }
-    if (is_definition) {
-      result.rcm =
-          var_manager_.SetVar({var_manager_.CurrentDomain(), name, value}, true);
-      if (result.rcm.first == EC::Success) {
-        result.rcm = var_manager_.Save(true);
-      }
-      result.action = Action::Handled;
-      return result;
-    }
-  }
-
-  std::string command_input = trimmed;
-  if (!IsVarReferenceCommand(trimmed)) {
-    result.rcm =
-        SubstituteAfterFirstToken(trimmed, var_manager_, &command_input);
-    if (result.rcm.first != EC::Success) {
-      return result;
-    }
-  }
-
-  bool async_flag = false;
-  std::string command;
-  result.rcm = HandleAsyncSuffix(command_input, &command, &async_flag);
-  if (result.rcm.first != EC::Success) {
-    return result;
-  }
-
-  result.action = Action::Cli;
-  result.command = command;
-  result.async = async_flag;
-  return result;
+  return out;
 }

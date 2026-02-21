@@ -1426,13 +1426,10 @@ int RunInteractiveLoop(const std::string &app_name,
   AMPromptManager &prompt = AMPromptManager::Instance();
   AMConfigManager &config_manager = *managers.config_manager;
   AMClientManager &client_manager = *managers.client_manager;
-  AMFileSystem &filesystem = *managers.filesystem;
-  AMTransferManager &transfer_manager = AMTransferManager::Instance();
 
   AMCompleter completer{};
   completer.Install();
 
-  AMCommandPreprocessor preprocessor = AMCommandPreprocessor::Instance();
   PromptState prompt_state;
 
   while (true) {
@@ -1498,28 +1495,21 @@ int RunInteractiveLoop(const std::string &app_name,
       break;
     }
 
-    AMCommandPreprocessor::Result pre_result = preprocessor.Preprocess(trimmed);
-
-    if (pre_result.rcm.first != EC::Success) {
-      PrintECM_(prompt, pre_result.rcm);
-      SetCliExitCode(static_cast<int>(pre_result.rcm.first));
+    bool is_shell = false;
+    std::string shell_command;
+    ECM shell_parse =
+        AMInputPreprocess::ParseShellPrefix(trimmed, &shell_command, &is_shell);
+    if (shell_parse.first != EC::Success) {
+      PrintECM_(prompt, shell_parse);
+      SetCliExitCode(static_cast<int>(shell_parse.first));
       const auto iter_end = std::chrono::steady_clock::now();
-      UpdatePromptState_(prompt_state, pre_result.rcm,
-                         iter_end - input_confirmed);
+      UpdatePromptState_(prompt_state, shell_parse, iter_end - input_confirmed);
       continue;
     }
 
-    if (pre_result.action == AMCommandPreprocessor::Action::Handled) {
-      SetCliExitCode(static_cast<int>(pre_result.rcm.first));
-      const auto iter_end = std::chrono::steady_clock::now();
-      UpdatePromptState_(prompt_state, pre_result.rcm,
-                         iter_end - input_confirmed);
-      continue;
-    }
-
-    if (pre_result.action == AMCommandPreprocessor::Action::Shell) {
+    if (is_shell) {
       CR shell_result = ExecuteShellCommand_(client_manager, config_manager,
-                                             pre_result.command);
+                                             shell_command);
       if (shell_result.first.first == EC::Success) {
         const std::string &msg = shell_result.second.first;
         if (!msg.empty()) {
@@ -1537,21 +1527,16 @@ int RunInteractiveLoop(const std::string &app_name,
       continue;
     }
 
-    if (pre_result.action != AMCommandPreprocessor::Action::Cli) {
-      continue;
-    }
-
-    if (pre_result.command.empty()) {
-      continue;
-    }
-
     CLI::App app{"AMSFTP Interactive", app_name};
     CliArgsPool args_pool;
     CliCommands cli_commands = BindCliOptions(app, args_pool);
 
     try {
       std::vector<std::string> cli_args =
-          AMCommandPreprocessor::SplitCliTokens(pre_result.command);
+          AMInputPreprocess::SplitCliTokens(trimmed);
+      if (cli_args.empty()) {
+        continue;
+      }
       // CLI11 consumes args via pop_back, so reverse to preserve order.
       std::reverse(cli_args.begin(), cli_args.end());
       app.parse(cli_args);
@@ -1587,7 +1572,7 @@ int RunInteractiveLoop(const std::string &app_name,
     }
 
     DispatchResult dispatch =
-        DispatchCliCommands(cli_commands, managers, pre_result.async, true);
+        DispatchCliCommands(cli_commands, managers, false, true);
     const auto exec_end = std::chrono::steady_clock::now();
     if (amgif) {
       amgif->reset();

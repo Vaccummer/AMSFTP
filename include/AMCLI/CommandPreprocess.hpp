@@ -1,40 +1,26 @@
 #pragma once
-#include "AMBase/Enum.hpp"
-#include "AMManager/Var.hpp"
+#include "AMBase/CommonTools.hpp"
 #include <string>
-#include <utility>
 #include <vector>
 
-class AMCommandPreprocessor {
-public:
-  using ECM = std::pair<ErrorCode, std::string>;
+namespace AMInputPreprocess {
+/**
+ * @brief Detect `!` shell prefix from one interactive command line.
+ *
+ * @param input Raw interactive input text.
+ * @param shell_command Output shell command without heading `!`.
+ * @param is_shell Output flag indicating shell dispatch.
+ * @return Success when parsing completes; invalid arg when `!` is empty.
+ */
+ECM ParseShellPrefix(const std::string &input, std::string *shell_command,
+                     bool *is_shell);
 
-  enum class Action { NoOp, Shell, Cli, Handled };
-
-  struct Result {
-    ECM rcm = {ErrorCode::Success, ""};
-    Action action = Action::NoOp;
-    std::string command;
-    bool async = false;
-  };
-
-  AMCommandPreprocessor() = default;
-
-  static AMCommandPreprocessor &Instance() {
-    static AMCommandPreprocessor instance;
-    return instance;
-  }
-
-  /**
-   * @brief Preprocess a raw interactive command line according to rules.
-   */
-  Result Preprocess(const std::string &input);
-
-  /**
-   * @brief Split an interactive command line into CLI argument tokens.
-   */
-  static std::vector<std::string> SplitCliTokens(const std::string &input);
-
-private:
-  AMVarManager &var_manager_ = AMVarManager::Instance();
-};
+/**
+ * @brief Split interactive command text into CLI11 argument tokens.
+ *
+ * Quote wrappers are removed, and backtick escapes are restored for every
+ * escaped character except `$` (`` `$`` is preserved for post-parse var
+ * substitution).
+ */
+std::vector<std::string> SplitCliTokens(const std::string &input);
+} // namespace AMInputPreprocess

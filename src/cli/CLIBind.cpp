@@ -394,6 +394,10 @@ void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
   commands.task_cache_submit->add_flag("-q,--quiet",
                                        args.task_cache_submit.quiet,
                                        "Suppress output and confirmation");
+  commands.task_cache_submit
+      ->add_option("tail", args.task_cache_submit.async_suffix,
+                   "Optional '&' async suffix")
+      ->expected(0, 1);
   commands.task_userset_cmd =
       commands.task_cmd->add_subcommand("userset", "Inspect cached transfer");
   commands.task_userset_cmd

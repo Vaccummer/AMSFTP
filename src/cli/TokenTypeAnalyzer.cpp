@@ -8,6 +8,7 @@
 #include <array>
 #include <cctype>
 #include <limits>
+#include <string_view>
 
 namespace {
 using TokenCacheValue = std::vector<AMTokenTypeAnalyzer::AMToken>;
@@ -15,21 +16,13 @@ std::unordered_map<std::string, TokenCacheValue> g_split_token_cache;
 std::unordered_map<std::string, TokenCacheValue> g_style_token_cache;
 /** Return true when the character is allowed in variable names. */
 inline bool IsVarNameChar(char c) {
-  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-         (c >= '0' && c <= '9') || c == '_';
+  const char token[1] = {c};
+  return varsetkn::IsValidVarname(std::string_view(token, 1));
 }
 
 /** Validate a full variable name string using the allowed character set. */
 bool IsValidVarName(const std::string &name) {
-  if (name.empty()) {
-    return false;
-  }
-  for (char c : name) {
-    if (!IsVarNameChar(c)) {
-      return false;
-    }
-  }
-  return true;
+  return varsetkn::IsValidVarname(name);
 }
 
 /** Return true when the nickname resolves to local-client scope. */
@@ -250,6 +243,10 @@ const std::string StyleKeyForType(AMTokenType type) {
     return "symlink";
   case AMTokenType::Special:
     return "special";
+  case AMTokenType::BangSign:
+    return "bangsign";
+  case AMTokenType::ShellCmd:
+    return "shell_cmd";
   case AMTokenType::Common:
   default:
     return "common";
@@ -748,6 +745,10 @@ int AMTokenTypeAnalyzer::PriorityForType(AMTokenType type) const {
   switch (type) {
   case AMTokenType::EscapeSign:
     return 100;
+  case AMTokenType::BangSign:
+    return 99;
+  case AMTokenType::ShellCmd:
+    return 98;
   case AMTokenType::EqualSign:
     return 95;
   case AMTokenType::VarValue:
@@ -1128,8 +1129,20 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     }
   }
 
+  size_t shell_head = 0;
+  while (shell_head < size && AMStr::IsWhitespace(input[shell_head])) {
+    ++shell_head;
+  }
+  const bool shell_mode = shell_head < size && input[shell_head] == '!';
+  if (shell_mode) {
+    apply_range(shell_head, shell_head + 1, AMTokenType::BangSign);
+    if (shell_head + 1 < size) {
+      apply_range(shell_head + 1, size, AMTokenType::ShellCmd);
+    }
+  }
+
   constexpr size_t kTokenTypeCount =
-      static_cast<size_t>(AMTokenType::Special) + 1;
+      static_cast<size_t>(AMTokenType::ShellCmd) + 1;
   std::array<std::string, kTokenTypeCount> style_tags;
   for (size_t i = 0; i < kTokenTypeCount; ++i) {
     style_tags[i] =
