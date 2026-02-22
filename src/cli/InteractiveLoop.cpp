@@ -1536,6 +1536,7 @@ int RunInteractiveLoop(const std::string &app_name,
       if (cli_args.empty()) {
         continue;
       }
+      (void)AMInputPreprocess::ExpandVarShortcutTokens(&cli_args);
       // CLI11 consumes args via pop_back, so reverse to preserve order.
       std::reverse(cli_args.begin(), cli_args.end());
       app.parse(cli_args);

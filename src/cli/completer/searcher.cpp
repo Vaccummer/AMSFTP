@@ -3,6 +3,7 @@
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/FileSystem.hpp"
+#include "AMManager/Set.hpp"
 #include "AMManager/Var.hpp"
 #include <algorithm>
 #include <cctype>
@@ -628,9 +629,7 @@ void AMInternalSearchEngine::SortCandidates(
 AMPathSearchEngine::AMPathSearchEngine()
     : config_manager_(AMConfigManager::Instance()),
       client_manager_(AMClientManager::Instance()),
-      filesystem_(AMFileSystem::Instance()) {
-  LoadPathEngineConfigs_();
-}
+      filesystem_(AMFileSystem::Instance()) {}
 
 /**
  * @brief Collect path candidates or async path requests.
@@ -655,8 +654,8 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
-  const PathEngineConfig engine_config =
-      token_analyzer_.ResolvePathEngineConfig(path.nickname);
+  const AMHostSetPathConfig engine_config =
+      set_manager_.ResolvePathSet(path.nickname).value;
   const int timeout_ms = ToClientTimeoutMs_(engine_config.timeout_ms, 0);
   const size_t cache_min =
       std::max<size_t>(1, engine_config.cache_items_threshold);
@@ -841,13 +840,6 @@ AMPathSearchEngine::GetCacheStatusAll() const {
     out.emplace(bucket.first, status);
   }
   return out;
-}
-
-/**
- * @brief Load per-nickname path-engine configuration.
- */
-void AMPathSearchEngine::LoadPathEngineConfigs_() {
-  token_analyzer_.RefreshHostSet();
 }
 
 /**

@@ -129,19 +129,6 @@ int ToClientTimeoutMs_(size_t timeout_ms, int fallback_ms) {
   return static_cast<int>(timeout_ms);
 }
 
-AMTokenTypeAnalyzer::PathEngineConfig
-ToPathEngineConfig_(const AMHostSetPathConfig &src) {
-  AMTokenTypeAnalyzer::PathEngineConfig out;
-  out.use_async = src.use_async;
-  out.use_cache = src.use_cache;
-  out.cache_items_threshold = src.cache_items_threshold;
-  out.cache_max_entries = src.cache_max_entries;
-  out.timeout_ms = src.timeout_ms;
-  out.highlight_use_check = src.highlight_use_check;
-  out.highlight_timeout_ms = src.highlight_timeout_ms;
-  return out;
-}
-
 /** Return true when the character begins or ends a quoted string token. */
 inline bool IsQuoted(char c) { return c == '"' || c == '\''; }
 
@@ -328,17 +315,6 @@ void AMTokenTypeAnalyzer::RefreshNicknameCache() {
   for (const auto &name : host_manager_.ListNames()) {
     nicknames_.insert(name);
   }
-}
-
-void AMTokenTypeAnalyzer::RefreshHostSet() {
-  (void)set_manager_.Reload();
-  ClearTokenCache();
-}
-
-AMTokenTypeAnalyzer::PathEngineConfig
-AMTokenTypeAnalyzer::ResolvePathEngineConfig(const std::string &nickname) {
-  const AMHostSetAttrResult result = set_manager_.ResolvePathSet(nickname);
-  return ToPathEngineConfig_(result.value);
 }
 
 void AMTokenTypeAnalyzer::PromptHighlighter_(ic_highlight_env_t *henv,
@@ -867,6 +843,66 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     }
   };
 
+  /**
+   * @brief Highlight `$var=...` / `$var = ...` shortcut assignment segments.
+   */
+  auto highlight_var_shortcut_define = [&]() {
+    if (tokens.empty()) {
+      return;
+    }
+    const AMToken &first = tokens.front();
+    if (first.quoted || first.content_start >= size ||
+        first.content_end <= first.content_start || first.content_end > size) {
+      return;
+    }
+
+    size_t var_end = 0;
+    if (!ParseVarTokenAt(input, first.content_start, first.content_end,
+                         &var_end)) {
+      return;
+    }
+
+    auto apply_define_tail = [&](size_t eq_pos, size_t value_begin) {
+      if (eq_pos < size) {
+        apply_range(eq_pos, eq_pos + 1, AMTokenType::EqualSign);
+      }
+      if (value_begin < size) {
+        apply_range(value_begin, size, AMTokenType::VarValue);
+      }
+    };
+
+    if (var_end < first.content_end && input[var_end] == '=') {
+      apply_define_tail(var_end, var_end + 1);
+      return;
+    }
+    if (tokens.size() < 2) {
+      return;
+    }
+
+    const AMToken &second = tokens[1];
+    if (second.quoted || second.content_start >= size ||
+        second.content_end <= second.content_start ||
+        second.content_end > size) {
+      return;
+    }
+    const std::string second_text = input.substr(
+        second.content_start, second.content_end - second.content_start);
+    if (second_text == "=") {
+      size_t value_begin = size;
+      if (tokens.size() >= 3) {
+        const AMToken &value_token = tokens[2];
+        if (value_token.content_start < size) {
+          value_begin = value_token.content_start;
+        }
+      }
+      apply_define_tail(second.content_start, value_begin);
+      return;
+    }
+    if (!second_text.empty() && second_text.front() == '=') {
+      apply_define_tail(second.content_start, second.content_start + 1);
+    }
+  };
+
   auto highlight_escape_signs = [&]() {
     if (input.empty()) {
       return;
@@ -1019,6 +1055,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
   highlight_commands_and_options(nullptr, nullptr);
   highlight_nickname_at_sign();
   highlight_var_references();
+  highlight_var_shortcut_define();
 
   size_t shell_head = 0;
   while (shell_head < size && AMStr::IsWhitespace(input[shell_head])) {
