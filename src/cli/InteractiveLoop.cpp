@@ -1416,11 +1416,93 @@ void UpdatePromptState_(PromptState &state, const ECM &rcm,
 } // namespace
 
 /**
+ * @brief Return singleton registry instance.
+ */
+AMInteractiveLoop::EventRegistry &AMInteractiveLoop::EventRegistry::Instance() {
+  static EventRegistry ins;
+  return ins;
+}
+
+/**
+ * @brief Register callback into one callback vector.
+ */
+void AMInteractiveLoop::EventRegistry::RegisterCallback_(
+    std::vector<std::function<void()> *> *callbacks,
+    std::function<void()> *clear_fn) {
+  if (!callbacks || !clear_fn) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (std::find(callbacks->begin(), callbacks->end(), clear_fn) !=
+      callbacks->end()) {
+    return;
+  }
+  callbacks->push_back(clear_fn);
+}
+
+/**
+ * @brief Register callback for PromptCore-return phase.
+ */
+void AMInteractiveLoop::EventRegistry::RegisterOnCorePromptReturn(
+    std::function<void()> *clear_fn) {
+  RegisterCallback_(&core_prompt_return_callbacks_, clear_fn);
+}
+
+/**
+ * @brief Register callback for interactive-loop-exit phase.
+ */
+void AMInteractiveLoop::EventRegistry::RegisterOnInteractiveLoopExit(
+    std::function<void()> *clear_fn) {
+  RegisterCallback_(&interactive_loop_exit_callbacks_, clear_fn);
+}
+
+/**
+ * @brief Execute callbacks from one callback vector.
+ */
+void AMInteractiveLoop::EventRegistry::RunCallbacks_(
+    const std::vector<std::function<void()> *> &callbacks) {
+  for (auto *fn : callbacks) {
+    if (!fn || !(*fn)) {
+      continue;
+    }
+    try {
+      (*fn)();
+    } catch (...) {
+    }
+  }
+}
+
+/**
+ * @brief Execute all callbacks for PromptCore-return phase.
+ */
+void AMInteractiveLoop::EventRegistry::RunOnCorePromptReturn() {
+  std::vector<std::function<void()> *> callbacks;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    callbacks = core_prompt_return_callbacks_;
+  }
+  RunCallbacks_(callbacks);
+}
+
+/**
+ * @brief Execute all callbacks for interactive-loop-exit phase.
+ */
+void AMInteractiveLoop::EventRegistry::RunOnInteractiveLoopExit() {
+  std::vector<std::function<void()> *> callbacks;
+  {
+    std::lock_guard<std::mutex> lock(mutex_);
+    callbacks = interactive_loop_exit_callbacks_;
+  }
+  RunCallbacks_(callbacks);
+}
+
+/**
  * @brief Run the core interactive loop until the user exits.
  */
 int RunInteractiveLoop(const std::string &app_name,
                        const CliManagers &managers) {
   AMIsInteractive.store(true, std::memory_order_relaxed);
+  bool skip_loop_exit_callbacks = false;
 
   AMPromptManager &prompt = AMPromptManager::Instance();
   AMConfigManager &config_manager = *managers.config_manager;
@@ -1470,6 +1552,7 @@ int RunInteractiveLoop(const std::string &app_name,
 
     monitor.SilenceHook("COREPROMPT");
     // monitor.ResumeHook("GLOBAL");
+    AMInteractiveLoop::EventRegistry::Instance().RunOnCorePromptReturn();
 
     if (amgif && amgif->iskill()) {
       break;
@@ -1490,10 +1573,6 @@ int RunInteractiveLoop(const std::string &app_name,
     }
     prompt.AddHistoryEntry(trimmed);
 
-    if (AMStr::lowercase(trimmed) == "exit") {
-      break;
-    }
-
     bool is_shell = false;
     std::string shell_command;
     ECM shell_parse =
@@ -1507,8 +1586,8 @@ int RunInteractiveLoop(const std::string &app_name,
     }
 
     if (is_shell) {
-      CR shell_result = ExecuteShellCommand_(client_manager, config_manager,
-                                             shell_command);
+      CR shell_result =
+          ExecuteShellCommand_(client_manager, config_manager, shell_command);
       if (shell_result.first.first == EC::Success) {
         const std::string &msg = shell_result.second.first;
         if (!msg.empty()) {
@@ -1578,9 +1657,16 @@ int RunInteractiveLoop(const std::string &app_name,
       amgif->reset();
     }
     UpdatePromptState_(prompt_state, dispatch.rcm, exec_end - input_confirmed);
+    if (dispatch.request_exit) {
+      skip_loop_exit_callbacks = dispatch.skip_loop_exit_callbacks;
+      break;
+    }
   }
 
   prompt.FlushHistory();
+  if (!skip_loop_exit_callbacks) {
+    AMInteractiveLoop::EventRegistry::Instance().RunOnInteractiveLoopExit();
+  }
   AMIsInteractive.store(false, std::memory_order_relaxed);
   return g_cli_exit_code;
 }

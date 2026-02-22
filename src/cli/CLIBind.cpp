@@ -314,6 +314,10 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
                                  "Rebuild and replace existing client");
 
   commands.bash_cmd = app.add_subcommand("bash", "Enter interactive mode");
+  commands.exit_cmd = app.add_subcommand("exit", "Exit interactive mode");
+  commands.exit_cmd->add_flag(
+      "-f,--force", args.exit.force,
+      "Exit immediately without interactive-loop exit callbacks");
 
   BindArgSelection_(commands.stat_cmd, args, &CliArgsPool::stat);
   BindArgSelection_(commands.ls_cmd, args, &CliArgsPool::ls);
@@ -333,6 +337,7 @@ void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
   BindArgSelection_(commands.cd_cmd, args, &CliArgsPool::cd);
   BindArgSelection_(commands.connect_cmd, args, &CliArgsPool::connect);
   BindArgSelection_(commands.bash_cmd, args, &CliArgsPool::bash);
+  BindArgSelection_(commands.exit_cmd, args, &CliArgsPool::exit);
 }
 
 /**
@@ -786,6 +791,8 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   run_ctx.enforce_interactive = enforce_interactive;
   run_ctx.command_name = command_name;
   run_ctx.enter_interactive = &result.enter_interactive;
+  run_ctx.request_exit = &result.request_exit;
+  run_ctx.skip_loop_exit_callbacks = &result.skip_loop_exit_callbacks;
 
   result.rcm = std::visit(
       [&](const auto &selected) -> ECM {
