@@ -35,6 +35,8 @@ struct CliRunContext {
   bool enforce_interactive = false;
   std::string command_name;
   bool *enter_interactive = nullptr;
+  bool *request_exit = nullptr;
+  bool *skip_loop_exit_callbacks = nullptr;
 };
 
 /**
@@ -43,6 +45,24 @@ struct CliRunContext {
 inline void SetEnterInteractive_(const CliRunContext &ctx, bool value) {
   if (ctx.enter_interactive) {
     *ctx.enter_interactive = value;
+  }
+}
+
+/**
+ * @brief Set interactive-loop exit request when context carries destination.
+ */
+inline void SetRequestExit_(const CliRunContext &ctx, bool value) {
+  if (ctx.request_exit) {
+    *ctx.request_exit = value;
+  }
+}
+
+/**
+ * @brief Set whether interactive-loop exit callbacks should be skipped.
+ */
+inline void SetSkipLoopExitCallbacks_(const CliRunContext &ctx, bool value) {
+  if (ctx.skip_loop_exit_callbacks) {
+    *ctx.skip_loop_exit_callbacks = value;
   }
 }
 
@@ -970,6 +990,26 @@ struct BashArgs {
 };
 
 /**
+ * @brief CLI argument container for exit.
+ */
+struct ExitArgs {
+  bool force = false;
+  /**
+   * @brief Request interactive-loop exit.
+   */
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
+    (void)managers;
+    SetRequestExit_(ctx, true);
+    SetSkipLoopExitCallbacks_(ctx, force);
+    return {EC::Success, ""};
+  }
+  /**
+   * @brief Reset exit arguments to defaults.
+   */
+  void reset() { force = false; }
+};
+
+/**
  * @brief CLI argument container for `var get`.
  */
 struct VarGetArgs {
@@ -1524,12 +1564,11 @@ using CommonArg = std::variant<
     ConfigHostSetRemoveArgs, ConfigHostSetSaveArgs, StatArgs, LsArgs, SizeArgs,
     FindArgs, MkdirArgs, RmArgs, WalkArgs, TreeArgs, RealpathArgs, RttArgs,
     ClearArgs, CpArgs, SftpArgs, FtpArgs, ClientsArgs, CheckArgs,
-    ChangeClientArgs, DisconnectArgs, CdArgs, ConnectArgs, BashArgs, VarGetArgs,
-    VarDefArgs, VarDelArgs, VarLsArgs, CompleteCacheClearArgs, TaskListArgs,
-    TaskShowArgs,
-    TaskInspectArgs, TaskThreadArgs, TaskCacheAddArgs, TaskCacheRmArgs,
-    TaskCacheClearArgs, TaskCacheSubmitArgs, TaskUserSetArgs, TaskEntryArgs,
-    TaskControlArgs, TaskRetryArgs>;
+    ChangeClientArgs, DisconnectArgs, CdArgs, ConnectArgs, BashArgs, ExitArgs,
+    VarGetArgs, VarDefArgs, VarDelArgs, VarLsArgs, CompleteCacheClearArgs,
+    TaskListArgs, TaskShowArgs, TaskInspectArgs, TaskThreadArgs,
+    TaskCacheAddArgs, TaskCacheRmArgs, TaskCacheClearArgs, TaskCacheSubmitArgs,
+    TaskUserSetArgs, TaskEntryArgs, TaskControlArgs, TaskRetryArgs>;
 
 /**
  * @brief Pool of all CLI argument structs.
@@ -1570,6 +1609,7 @@ struct CliArgsPool {
   CdArgs cd;
   ConnectArgs connect;
   BashArgs bash;
+  ExitArgs exit;
   VarGetArgs var_get;
   VarDefArgs var_def;
   VarDelArgs var_del;
@@ -1634,6 +1674,7 @@ struct CliCommands {
   CLI::App *client_rm_cmd = nullptr;
   CLI::App *cd_cmd = nullptr;
   CLI::App *connect_cmd = nullptr;
+  CLI::App *exit_cmd = nullptr;
   CLI::App *var_cmd = nullptr;
   CLI::App *var_get_cmd = nullptr;
   CLI::App *var_def_cmd = nullptr;
@@ -1675,6 +1716,8 @@ extern int g_cli_exit_code;
 struct DispatchResult {
   ECM rcm = {EC::Success, ""};
   bool enter_interactive = false;
+  bool request_exit = false;
+  bool skip_loop_exit_callbacks = false;
 };
 
 /**
