@@ -1,6 +1,6 @@
 #include "AMBase/CommonTools.hpp"
-#include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMCLI/Completer/Engine.hpp"
+#include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "Isocline/isocline.h"
 #include <cctype>
 #include <iterator>
@@ -79,7 +79,7 @@ bool IsPathLikeText_(const std::string &text) {
  * @brief Return true when command name is a module command.
  */
 bool IsModuleCommand_(const std::string &name) {
-  return name == "config" || name == "client" || name == "task";
+  return g_command_tree && g_command_tree->IsModule(name);
 }
 
 /**

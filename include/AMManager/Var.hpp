@@ -53,14 +53,6 @@ public:
   using DomainDict = std::unordered_map<std::string, DomainVars>;
 
   /**
-   * @brief Return the singleton variable manager.
-   */
-  static AMVarManager &Instance() {
-    static AMVarManager varm;
-    return varm;
-  };
-
-  /**
    * @brief Initialize in-memory variable dict from ConfigManager.
    */
   ECM Init() override { return Reload(); }

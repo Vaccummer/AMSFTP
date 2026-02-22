@@ -184,27 +184,6 @@ void AppendEscapedBbcodeChar_(std::string &out, char c) {
   }
 }
 
-/** Find the first '=' outside of quotes starting from a position. */
-size_t FindEqualOutsideQuotes(const std::string &input, size_t start) {
-  bool in_single = false;
-  bool in_double = false;
-  for (size_t i = start; i < input.size(); ++i) {
-    char c = input[i];
-    if (!in_double && c == '\'') {
-      in_single = !in_single;
-      continue;
-    }
-    if (!in_single && c == '"') {
-      in_double = !in_double;
-      continue;
-    }
-    if (!in_single && !in_double && c == '=') {
-      return i;
-    }
-  }
-  return std::string::npos;
-}
-
 const std::string StyleKeyForType(AMTokenType type) {
   switch (type) {
   case AMTokenType::Module:
@@ -1011,65 +990,6 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     }
   };
 
-  auto highlight_var_command = [&](bool *handled) {
-    if (handled) {
-      *handled = false;
-    }
-    size_t first_index = 0;
-    while (first_index < tokens.size() && tokens[first_index].quoted) {
-      ++first_index;
-    }
-    if (first_index >= tokens.size()) {
-      return;
-    }
-    const auto &first = tokens[first_index];
-    std::string first_text = input.substr(first.start, first.end - first.start);
-    if (first_text != "var" && first_text != "del") {
-      return;
-    }
-    if (handled) {
-      *handled = true;
-    }
-    apply_range(first.start, first.end, AMTokenType::Command);
-
-    size_t remainder_start = first.end;
-    size_t eq_pos = FindEqualOutsideQuotes(input, remainder_start);
-    if (first_text == "var" && eq_pos != std::string::npos) {
-      apply_range(eq_pos, eq_pos + 1, AMTokenType::EqualSign);
-      apply_range(eq_pos + 1, input.size(), AMTokenType::VarValue);
-
-      size_t dollar = remainder_start;
-      while (true) {
-        dollar = input.find('$', dollar);
-        if (dollar == std::string::npos || dollar >= eq_pos) {
-          break;
-        }
-        if (dollar > 0 && input[dollar - 1] == '`') {
-          ++dollar;
-          continue;
-        }
-        size_t end = 0;
-        if (ParseVarTokenAt(input, dollar, eq_pos, &end)) {
-          highlight_var_token(dollar, end);
-        }
-        break;
-      }
-      return;
-    }
-
-    for (size_t i = first_index + 1; i < tokens.size(); ++i) {
-      const auto &token = tokens[i];
-      if (token.quoted) {
-        continue;
-      }
-      std::string text = input.substr(token.start, token.end - token.start);
-      if (!ParseVarTokenText(text)) {
-        continue;
-      }
-      highlight_var_token(token.start, token.end);
-    }
-  };
-
   highlight_escape_signs();
 
   for (const auto &token : tokens) {
@@ -1096,38 +1016,9 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     }
   }
 
-  bool handled = false;
-  highlight_var_command(&handled);
-  if (handled) {
-    highlight_var_references();
-  } else {
-    std::string trimmed = AMStr::Strip(input);
-    if (!trimmed.empty() && trimmed.front() == '$') {
-      size_t offset = input.find('$');
-      size_t eq_pos = FindEqualOutsideQuotes(input, offset);
-      if (eq_pos != std::string::npos) {
-        apply_range(eq_pos, eq_pos + 1, AMTokenType::EqualSign);
-        apply_range(eq_pos + 1, input.size(), AMTokenType::VarValue);
-        size_t end = 0;
-        if (ParseVarTokenAt(input, offset, eq_pos, &end)) {
-          highlight_var_token(offset, end);
-        }
-        highlight_var_references();
-      } else {
-        const CommandNode *node = nullptr;
-        size_t consumed = 0;
-        highlight_commands_and_options(&node, &consumed);
-        highlight_nickname_at_sign();
-        highlight_var_references();
-      }
-    } else {
-      const CommandNode *node = nullptr;
-      size_t consumed = 0;
-      highlight_commands_and_options(&node, &consumed);
-      highlight_nickname_at_sign();
-      highlight_var_references();
-    }
-  }
+  highlight_commands_and_options(nullptr, nullptr);
+  highlight_nickname_at_sign();
+  highlight_var_references();
 
   size_t shell_head = 0;
   while (shell_head < size && AMStr::IsWhitespace(input[shell_head])) {

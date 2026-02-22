@@ -59,7 +59,7 @@ inline void PrintRunError_(const ECM &rcm) {
  * @brief Substitute variables for one path-like CLI argument.
  */
 inline std::string SubstitutePathLikeArg_(const std::string &raw) {
-  return AMVarManager::Instance().SubstitutePathLike(raw);
+  return VarCLISet::Instance().SubstitutePathLike(raw);
 }
 
 /**
@@ -68,7 +68,7 @@ inline std::string SubstitutePathLikeArg_(const std::string &raw) {
 inline std::vector<std::string>
 SubstitutePathLikeArgs_(const std::vector<std::string> &raw) {
   std::vector<std::string> out = raw;
-  AMVarManager::Instance().SubstitutePathLike(&out);
+  VarCLISet::Instance().SubstitutePathLike(&out);
   return out;
 }
 

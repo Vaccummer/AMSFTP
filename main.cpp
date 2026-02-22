@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
     hostm.Init();
     auto &setm = AMSetManager::Instance();
     setm.Init();
-    auto &varm = AMVarManager::Instance();
+    auto &varm = VarCLISet::Instance();
     varm.Init();
     auto &client_manager = AMClientManager::Instance();
     client_manager.Init();

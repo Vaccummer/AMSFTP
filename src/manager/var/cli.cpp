@@ -1,7 +1,6 @@
-#include "AMManager/Var.hpp"
 #include "AMBase/CommonTools.hpp"
+#include "AMManager/Var.hpp"
 #include <algorithm>
-#include <cctype>
 
 using EC = ErrorCode;
 
@@ -59,7 +58,7 @@ std::string VarCLISet::RenderValue_(const std::string &value) const {
  */
 void VarCLISet::PrintSection_(const std::string &domain,
                               const std::vector<VarInfo> &entries) const {
-  prompt_manager_.Print(AMStr::amfmt("[{}]", domain));
+  prompt_manager_.Print(AMStr::amfmt("\\[{}]", domain));
   size_t max_width = 0;
   for (const auto &item : entries) {
     max_width = std::max(max_width, item.varname.size() + 1);
@@ -71,7 +70,8 @@ void VarCLISet::PrintSection_(const std::string &domain,
       key.append(max_width - key.size(), ' ');
     }
     prompt_manager_.Print(
-        AMStr::amfmt("{} = {}", FormatVarText_(key), FormatVarText_(RenderValue_(item.varvalue))));
+        AMStr::amfmt("{} = {}", FormatVarText_(key),
+                     FormatVarText_(RenderValue_(item.varvalue))));
   }
 }
 
@@ -79,20 +79,22 @@ void VarCLISet::PrintSection_(const std::string &domain,
  * @brief Handle `var get $name`.
  */
 ECM VarCLISet::QueryByName(const std::string &token_name) const {
+  VarCLISet &var_manager = VarCLISet::Instance();
   std::string name;
   ECM parsed = ParseVarToken_(token_name, &name);
   if (parsed.first != EC::Success) {
     return parsed;
   }
 
-  auto entries = FindByName(name);
+  auto entries = var_manager.FindByName(name);
   if (entries.empty()) {
-    return Err(EC::InvalidArg, AMStr::amfmt("variable not found: {}", token_name));
+    return Err(EC::InvalidArg,
+               AMStr::amfmt("variable not found: {}", token_name));
   }
   for (const auto &item : entries) {
-    prompt_manager_.Print(AMStr::amfmt("[{}] {} = {}", item.domain,
-                                       FormatVarText_("$" + item.varname),
-                                       FormatVarText_(RenderValue_(item.varvalue))));
+    prompt_manager_.Print(AMStr::amfmt(
+        "\\[{}] {} = {}", item.domain, FormatVarText_("$" + item.varname),
+        FormatVarText_(RenderValue_(item.varvalue))));
   }
   return Ok();
 }
@@ -102,20 +104,22 @@ ECM VarCLISet::QueryByName(const std::string &token_name) const {
  */
 ECM VarCLISet::DefineVar(bool global, const std::string &token_name,
                          const std::string &value) {
+  VarCLISet &var_manager = VarCLISet::Instance();
   std::string name;
   ECM parsed = ParseVarToken_(token_name, &name);
   if (parsed.first != EC::Success) {
     return parsed;
   }
 
-  const std::string domain = global ? std::string(varsetkn::kPublic) : CurrentDomain();
+  const std::string domain =
+      global ? std::string(varsetkn::kPublic) : var_manager.CurrentDomain();
 
   if (!global) {
-    VarInfo old = GetVar(domain, name);
+    VarInfo old = var_manager.GetVar(domain, name);
     if (old.IsValid().first == EC::Success) {
-      prompt_manager_.Print(AMStr::amfmt("[{}] {} = {}", old.domain,
-                                         FormatVarText_("$" + old.varname),
-                                         FormatVarText_(RenderValue_(old.varvalue))));
+      prompt_manager_.Print(AMStr::amfmt(
+          "[{}] {} = {}", old.domain, FormatVarText_("$" + old.varname),
+          FormatVarText_(RenderValue_(old.varvalue))));
       bool canceled = false;
       const bool overwrite = prompt_manager_.PromptYesNo(
           AMStr::amfmt("Overwrite [{}].${}? (y/N): ", domain, name), &canceled);
@@ -125,11 +129,11 @@ ECM VarCLISet::DefineVar(bool global, const std::string &token_name,
     }
   }
 
-  ECM rcm = SetVar({domain, name, value}, true);
+  ECM rcm = var_manager.SetVar({domain, name, value}, true);
   if (rcm.first != EC::Success) {
     return rcm;
   }
-  return Save(true);
+  return var_manager.Save(true);
 }
 
 /**
@@ -137,6 +141,7 @@ ECM VarCLISet::DefineVar(bool global, const std::string &token_name,
  */
 ECM VarCLISet::DeleteVarByCli(bool all, const std::string &domain,
                               const std::string &token_name) {
+  VarCLISet &var_manager = VarCLISet::Instance();
   std::string name;
   ECM parsed = ParseVarToken_(token_name, &name);
   if (parsed.first != EC::Success) {
@@ -149,54 +154,55 @@ ECM VarCLISet::DeleteVarByCli(bool all, const std::string &domain,
   }
 
   if (all) {
-    auto matches = FindByName(name);
+    auto matches = var_manager.FindByName(name);
     if (matches.empty()) {
       return Err(EC::InvalidArg, "variable not found");
     }
     for (const auto &item : matches) {
-      prompt_manager_.Print(AMStr::amfmt("[{}] {} = {}", item.domain,
-                                         FormatVarText_("$" + item.varname),
-                                         FormatVarText_(RenderValue_(item.varvalue))));
+      prompt_manager_.Print(AMStr::amfmt(
+          "[{}] {} = {}", item.domain, FormatVarText_("$" + item.varname),
+          FormatVarText_(RenderValue_(item.varvalue))));
     }
     bool canceled = false;
-    const bool confirmed =
-        prompt_manager_.PromptYesNo(AMStr::amfmt("Delete {} matched item(s)? (y/N): ",
-                                                 matches.size()),
-                                    &canceled);
+    const bool confirmed = prompt_manager_.PromptYesNo(
+        AMStr::amfmt("Delete {} matched item(s)? (y/N): ", matches.size()),
+        &canceled);
     if (canceled || !confirmed) {
       return Err(EC::Terminate, "operation canceled");
     }
     std::vector<VarInfo> removed;
-    ECM rcm = DeleteVarAll(name, &removed);
+    ECM rcm = var_manager.DeleteVarAll(name, &removed);
     if (rcm.first != EC::Success) {
       return rcm;
     }
-    return Save(true);
+    return var_manager.Save(true);
   }
 
   std::string target_domain = trimmed_domain;
   if (target_domain.empty()) {
-    target_domain = CurrentDomain();
+    target_domain = var_manager.CurrentDomain();
   }
-  if (!HasDomain(target_domain)) {
-    return Err(EC::InvalidArg, AMStr::amfmt("invalid section: {}", target_domain));
+  if (!var_manager.HasDomain(target_domain)) {
+    return Err(EC::InvalidArg,
+               AMStr::amfmt("invalid section: {}", target_domain));
   }
-  ECM rcm = DeleteVar(target_domain, name);
+  ECM rcm = var_manager.DeleteVar(target_domain, name);
   if (rcm.first != EC::Success) {
     return rcm;
   }
-  return Save(true);
+  return var_manager.Save(true);
 }
 
 /**
  * @brief Handle `var ls [domain ...]`.
  */
 ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
+  VarCLISet &var_manager = VarCLISet::Instance();
   std::vector<std::string> targets = domains;
   ECM last = Ok();
 
   if (targets.empty()) {
-    targets = ListDomains();
+    targets = var_manager.ListDomains();
   } else {
     targets = VectorDedup(targets);
   }
@@ -205,7 +211,7 @@ ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
   valid_targets.reserve(targets.size());
   for (const auto &raw : targets) {
     const std::string domain = AMStr::Strip(raw);
-    if (!HasDomain(domain)) {
+    if (!var_manager.HasDomain(domain)) {
       last = Err(EC::InvalidArg, AMStr::amfmt("invalid section: {}", raw));
       prompt_manager_.ErrorFormat(last);
       continue;
@@ -214,11 +220,12 @@ ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
   }
 
   if (valid_targets.empty()) {
-    return last.first == EC::Success ? Err(EC::InvalidArg, "no valid section") : last;
+    return last.first == EC::Success ? Err(EC::InvalidArg, "no valid section")
+                                     : last;
   }
 
   for (size_t i = 0; i < valid_targets.size(); ++i) {
-    auto entries = ListByDomain(valid_targets[i]);
+    auto entries = var_manager.ListByDomain(valid_targets[i]);
     PrintSection_(valid_targets[i], entries);
     if (i + 1 < valid_targets.size()) {
       prompt_manager_.Print("");
