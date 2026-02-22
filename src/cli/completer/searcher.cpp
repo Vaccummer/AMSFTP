@@ -204,7 +204,7 @@ std::string ExtractTokenText_(const AMCompletionContext &ctx, size_t index) {
  * @brief Return true when command name is a module command.
  */
 bool IsModuleCommand_(const std::string &name) {
-  return name == "config" || name == "client" || name == "task";
+  return g_command_tree && g_command_tree->IsModule(name);
 }
 
 /**
@@ -285,6 +285,9 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
 AMCompletionCollectResult
 AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   AMCompletionCollectResult result;
+  if (!command_tree_) {
+    command_tree_ = g_command_tree;
+  }
   if (!command_tree_) {
     return result;
   }
@@ -513,7 +516,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
   const std::string prefix = ctx.token_prefix;
   if (wants_var) {
-    AMVarManager &var_manager = AMVarManager::Instance();
+    VarCLISet &var_manager = VarCLISet::Instance();
     auto names = var_manager.ListNames();
     for (const auto &name : names) {
       const std::string full = "$" + name;

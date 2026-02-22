@@ -58,21 +58,25 @@ ECM AMVarManager::Reload() {
   parsed[varsetkn::kPublic] = DomainVars{};
 
   for (auto it = user_vars.begin(); it != user_vars.end(); ++it) {
-    if (!IsValidDomainName_(it.key())) {
-      continue;
-    }
-    if (!it.value().is_object()) {
-      continue;
-    }
-    DomainVars vars;
-    vars.reserve(it.value().size());
-    for (auto vit = it.value().begin(); vit != it.value().end(); ++vit) {
-      if (!varsetkn::IsValidVarname(vit.key())) {
+    if (it.value().is_object()) {
+      if (!IsValidDomainName_(it.key())) {
         continue;
       }
-      vars[vit.key()] = ToStringScalar_(vit.value());
+      DomainVars &vars = parsed[it.key()];
+      for (auto vit = it.value().begin(); vit != it.value().end(); ++vit) {
+        if (!varsetkn::IsValidVarname(vit.key())) {
+          continue;
+        }
+        vars[vit.key()] = ToStringScalar_(vit.value());
+      }
+      continue;
     }
-    parsed[it.key()] = std::move(vars);
+
+    // Backward compatibility: old [UserVars] flat entries are public vars.
+    if (!varsetkn::IsValidVarname(it.key())) {
+      continue;
+    }
+    parsed[varsetkn::kPublic][it.key()] = ToStringScalar_(it.value());
   }
 
   std::lock_guard<std::mutex> lock(mutex_);

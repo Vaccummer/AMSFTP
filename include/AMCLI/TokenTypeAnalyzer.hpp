@@ -58,30 +58,6 @@ public:
    */
   static void ClearTokenCache();
 
-  /**
-   * @brief Per-nickname path engine configuration loaded from HostSet.
-   */
-  struct PathEngineConfig {
-    bool use_async = false;
-    bool use_cache = false;
-    size_t cache_items_threshold = 50;
-    size_t cache_max_entries = 15;
-    size_t timeout_ms = 3000;
-    bool highlight_use_check = true;
-    size_t highlight_timeout_ms = 1000;
-  };
-
-  /**
-   * @brief Reload HostSet configuration from settings.
-   */
-  void RefreshHostSet();
-
-  /**
-   * @brief Resolve path engine config for a nickname (private overrides "*").
-   */
-  [[nodiscard]] PathEngineConfig
-  ResolvePathEngineConfig(const std::string &nickname);
-
 private:
   using CommandNode = CommandTree::CommandNode;
 
@@ -104,7 +80,7 @@ private:
 
   AMConfigManager &config_manager_ = AMConfigManager::Instance();
   AMHostManager &host_manager_ = AMHostManager::Instance();
-  AMVarManager &var_manager_ = AMVarManager::Instance();
+  VarCLISet &var_manager_ = VarCLISet::Instance();
   AMClientManager &client_manager_ = AMClientManager::Instance();
   AMSetManager &set_manager_ = AMSetManager::Instance();
   bool cli_cache_ready_ = false;
