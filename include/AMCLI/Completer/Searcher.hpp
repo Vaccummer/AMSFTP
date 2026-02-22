@@ -4,6 +4,7 @@
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
+#include "AMManager/Set.hpp"
 #include "AMManager/Transfer.hpp"
 #include <chrono>
 #include <list>
@@ -153,8 +154,6 @@ public:
   std::unordered_map<std::string, CacheStatus> GetCacheStatusAll() const;
 
 private:
-  using PathEngineConfig = AMTokenTypeAnalyzer::PathEngineConfig;
-
   /**
    * @brief Cache key for path results.
    */
@@ -195,10 +194,7 @@ private:
     bool trailing_sep = false;
   };
 
-  /**
-   * @brief Load per-nickname path-engine configuration.
-   */
-  void LoadPathEngineConfigs_();
+
 
   /**
    * @brief Style a path entry for display.
@@ -234,6 +230,7 @@ private:
   AMClientManage::Manager &client_manager_;
   AMFileSystem &filesystem_;
   AMTokenTypeAnalyzer &token_analyzer_ = AMTokenTypeAnalyzer::Instance();
+  AMSetManager &set_manager_ = AMSetManager::Instance();
   mutable std::mutex cache_mtx_;
   std::unordered_map<std::string, std::unordered_map<std::string, CacheEntry>>
       cache_;

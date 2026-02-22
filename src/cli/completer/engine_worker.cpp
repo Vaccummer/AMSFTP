@@ -1,6 +1,7 @@
 #include "AMBase/CommonTools.hpp"
 #include "AMCLI/Completer/Engine.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
+#include "AMManager/Var.hpp"
 #include "Isocline/isocline.h"
 #include <cctype>
 #include <iterator>
@@ -58,6 +59,63 @@ bool StartsWithShortOption_(const std::string &text) {
 }
 
 /**
+ * @brief Return true when a raw token starts with escaped dollar syntax.
+ */
+bool StartsWithEscapedDollar_(const std::string &raw_token) {
+  return raw_token.size() >= 2 && raw_token[0] == '`' && raw_token[1] == '$';
+}
+
+/**
+ * @brief Parse one shorthand variable token and normalize it as `$name`.
+ */
+bool ParseShortcutVarToken_(const std::string &raw_token,
+                            const std::string &token_text,
+                            std::string *normalized_token) {
+  if (StartsWithEscapedDollar_(raw_token)) {
+    return false;
+  }
+  std::string trimmed = AMStr::Strip(token_text);
+  if (trimmed.empty() || trimmed.front() != '$' || trimmed.size() < 2) {
+    return false;
+  }
+
+  std::string name;
+  if (trimmed.size() >= 3 && trimmed[1] == '{' && trimmed.back() == '}') {
+    name = AMStr::Strip(trimmed.substr(2, trimmed.size() - 3));
+  } else {
+    name = trimmed.substr(1);
+  }
+  if (!varsetkn::IsValidVarname(name)) {
+    return false;
+  }
+  if (normalized_token) {
+    *normalized_token = "$" + name;
+  }
+  return true;
+}
+
+/**
+ * @brief Resolve a raw token text by index from completion context.
+ */
+std::string ExtractTokenRaw_(const AMCompletionContext &ctx, size_t index) {
+  if (index >= ctx.tokens.size()) {
+    return "";
+  }
+  const auto &token = ctx.tokens[index];
+  if (token.content_end <= token.content_start ||
+      token.content_end > ctx.input.size()) {
+    return "";
+  }
+  return ctx.input.substr(token.content_start,
+                          token.content_end - token.content_start);
+}
+
+/**
+ * @brief Shortcut mode for `$var` / `$var=...` parsing.
+ */
+enum class VarShortcutMode { None, Query, Define };
+
+/**
  * @brief Return true if text looks like path input.
  */
 bool IsPathLikeText_(const std::string &text) {
@@ -105,6 +163,43 @@ std::string ExtractTokenText_(const AMCompletionContext &ctx, size_t index) {
   }
   return UnescapeBackticks_(ctx.input.substr(
       token.content_start, token.content_end - token.content_start));
+}
+
+/**
+ * @brief Detect whether the input is a variable shorthand query/define form.
+ */
+VarShortcutMode DetectVarShortcutMode_(const AMCompletionContext &ctx) {
+  if (ctx.tokens.empty()) {
+    return VarShortcutMode::None;
+  }
+
+  const std::string first_raw = ExtractTokenRaw_(ctx, 0);
+  const std::string first_text = ExtractTokenText_(ctx, 0);
+  if (first_text.empty()) {
+    return VarShortcutMode::None;
+  }
+
+  const size_t first_eq = first_text.find('=');
+  if (first_eq != std::string::npos) {
+    const std::string lhs = first_text.substr(0, first_eq);
+    return ParseShortcutVarToken_(first_raw, lhs, nullptr)
+               ? VarShortcutMode::Define
+               : VarShortcutMode::None;
+  }
+
+  if (!ParseShortcutVarToken_(first_raw, first_text, nullptr)) {
+    return VarShortcutMode::None;
+  }
+  if (ctx.tokens.size() == 1) {
+    return VarShortcutMode::Query;
+  }
+
+  const std::string second_text = ExtractTokenText_(ctx, 1);
+  if (second_text == "=" ||
+      (!second_text.empty() && second_text.front() == '=')) {
+    return VarShortcutMode::Define;
+  }
+  return VarShortcutMode::None;
 }
 
 /**
@@ -249,12 +344,43 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   ctx.token_text = UnescapeBackticks_(ctx.token_raw);
   ctx.token_prefix = UnescapeBackticks_(ctx.token_prefix_raw);
 
-  if (ctx.token_index == 0) {
-    ctx.targets = {AMCompletionTarget::TopCommand};
+  const VarShortcutMode shortcut_mode = DetectVarShortcutMode_(ctx);
+  const bool starts_with_unescaped_dollar =
+      StartsWithUnescapedDollar_(ctx.token_prefix_raw, ctx.token_raw);
+  if (starts_with_unescaped_dollar) {
+    if (shortcut_mode == VarShortcutMode::Define) {
+      const size_t eq = ctx.token_prefix.find('=');
+      if (eq != std::string::npos && eq + 1 <= ctx.token_prefix.size()) {
+        const std::string rhs_prefix = ctx.token_prefix.substr(eq + 1);
+        const bool rhs_has_at = rhs_prefix.find('@') != std::string::npos;
+        if (rhs_has_at || IsPathLikeText_(rhs_prefix)) {
+          ctx.targets = {AMCompletionTarget::Path};
+        } else {
+          ctx.targets = {AMCompletionTarget::Disabled};
+        }
+        return ctx;
+      }
+    }
+    ctx.targets = {AMCompletionTarget::VariableName};
     return ctx;
   }
-  if (StartsWithUnescapedDollar_(ctx.token_prefix_raw, ctx.token_raw)) {
-    ctx.targets = {AMCompletionTarget::VariableName};
+
+  if (shortcut_mode == VarShortcutMode::Query) {
+    ctx.targets = {AMCompletionTarget::Disabled};
+    return ctx;
+  }
+  if (shortcut_mode == VarShortcutMode::Define) {
+    const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
+    if (has_at || IsPathLikeText_(ctx.token_prefix)) {
+      ctx.targets = {AMCompletionTarget::Path};
+    } else {
+      ctx.targets = {AMCompletionTarget::Disabled};
+    }
+    return ctx;
+  }
+
+  if (ctx.token_index == 0) {
+    ctx.targets = {AMCompletionTarget::TopCommand};
     return ctx;
   }
   if (StartsWithLongOption_(ctx.token_prefix)) {
