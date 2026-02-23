@@ -16,6 +16,76 @@ void BindArgSelection_(CLI::App *command, CliArgsPool &args,
   command->callback([&args, member]() { args.common_arg = args.*member; });
 }
 
+/**
+ * @brief Normalize a long option name to `--name` format.
+ */
+std::string NormalizeLongOptionName_(const std::string &name) {
+  if (name.empty()) {
+    return "";
+  }
+  if (name.rfind("--", 0) == 0) {
+    return name;
+  }
+  if (name.size() >= 2 && name[0] == '-' && name[1] != '-') {
+    return "--" + name.substr(1);
+  }
+  return "--" + name;
+}
+
+/**
+ * @brief Register command-argument completion semantics onto the tree.
+ */
+void RegisterCompletionRules_(CommandTree *tree) {
+  if (!tree) {
+    return;
+  }
+  using Sem = AMCommandArgSemantic;
+  auto add_pos = [&](const std::string &path, size_t index, Sem semantic,
+                     bool repeat_tail = false) {
+    tree->AddPositionalRule(path, index, semantic, repeat_tail);
+  };
+  auto add_opt = [&](const std::string &path, const std::string &long_name,
+                     char short_name, Sem semantic, size_t value_count = 1,
+                     bool repeat_tail = false) {
+    tree->AddOptionValueRule(path, long_name, short_name, semantic, value_count,
+                             repeat_tail);
+  };
+
+  add_pos("config get", 0, Sem::HostNickname, true);
+  add_pos("config edit", 0, Sem::HostNickname, true);
+  add_pos("config rm", 0, Sem::HostNickname, true);
+  add_pos("config rn", 0, Sem::HostNickname);
+  add_pos("config set", 0, Sem::HostNickname);
+  add_pos("config set", 1, Sem::HostAttr);
+
+  add_pos("connect", 0, Sem::HostNickname);
+  add_pos("client check", 0, Sem::ClientName, true);
+  add_pos("client rm", 0, Sem::ClientName, true);
+  add_pos("ch", 0, Sem::ClientName);
+
+  add_pos("task show", 0, Sem::TaskId, true);
+  add_pos("task inspect", 0, Sem::TaskId, true);
+  add_pos("task terminate", 0, Sem::TaskId, true);
+  add_pos("task pause", 0, Sem::TaskId, true);
+  add_pos("task retry", 0, Sem::TaskId);
+  add_pos("retry", 0, Sem::TaskId);
+
+  add_pos("cd", 0, Sem::Path);
+  add_pos("ls", 0, Sem::Path);
+  add_pos("realpath", 0, Sem::Path);
+  add_pos("find", 0, Sem::Path);
+  add_pos("walk", 0, Sem::Path);
+  add_pos("tree", 0, Sem::Path);
+  add_pos("stat", 0, Sem::Path, true);
+  add_pos("size", 0, Sem::Path, true);
+  add_pos("mkdir", 0, Sem::Path, true);
+  add_pos("rm", 0, Sem::Path, true);
+  add_pos("cp", 0, Sem::Path, true);
+  add_opt("cp", "--output", 'o', Sem::Path);
+  add_pos("task cache add", 0, Sem::Path, true);
+  add_opt("task cache add", "--output", 'o', Sem::Path);
+}
+
 } // namespace
 
 /**
@@ -701,6 +771,124 @@ CommandTree::ListShortOptions(const std::string &path) const {
 }
 
 /**
+ * @brief Add one positional semantic rule for a command path.
+ */
+void CommandTree::AddPositionalRule(const std::string &path, size_t index,
+                                    AMCommandArgSemantic semantic,
+                                    bool repeat_tail) {
+  if (path.empty() || semantic == AMCommandArgSemantic::None) {
+    return;
+  }
+  auto it = nodes_.find(path);
+  if (it == nodes_.end()) {
+    return;
+  }
+  auto &rules = it->second.positional_rules;
+  for (auto &rule : rules) {
+    if (rule.index == index && rule.repeat_tail == repeat_tail) {
+      rule.semantic = semantic;
+      return;
+    }
+  }
+  rules.push_back({index, semantic, repeat_tail});
+}
+
+/**
+ * @brief Add one option-value semantic rule for a command path.
+ */
+void CommandTree::AddOptionValueRule(const std::string &path,
+                                     const std::string &long_name,
+                                     char short_name,
+                                     AMCommandArgSemantic semantic,
+                                     size_t value_count, bool repeat_tail) {
+  if (path.empty() || semantic == AMCommandArgSemantic::None) {
+    return;
+  }
+  auto it = nodes_.find(path);
+  if (it == nodes_.end()) {
+    return;
+  }
+  const std::string normalized_long = NormalizeLongOptionName_(long_name);
+  if (normalized_long.empty() && short_name == '\0') {
+    return;
+  }
+  if (value_count == 0) {
+    value_count = 1;
+  }
+  auto &rules = it->second.option_value_rules;
+  for (auto &rule : rules) {
+    if (rule.long_option == normalized_long && rule.short_option == short_name) {
+      rule.semantic = semantic;
+      rule.value_count = value_count;
+      rule.repeat_tail = repeat_tail;
+      return;
+    }
+  }
+  rules.push_back(
+      {normalized_long, short_name, semantic, value_count, repeat_tail});
+}
+
+/**
+ * @brief Resolve positional semantic at a given argument index.
+ */
+std::optional<AMCommandArgSemantic>
+CommandTree::ResolvePositionalSemantic(const std::string &path,
+                                       size_t index) const {
+  auto it = nodes_.find(path);
+  if (it == nodes_.end()) {
+    return std::nullopt;
+  }
+  const auto &rules = it->second.positional_rules;
+  size_t best_tail_index = 0;
+  std::optional<AMCommandArgSemantic> best_tail;
+  for (const auto &rule : rules) {
+    if (rule.semantic == AMCommandArgSemantic::None) {
+      continue;
+    }
+    if (rule.index == index) {
+      return rule.semantic;
+    }
+    if (rule.repeat_tail && rule.index <= index &&
+        (!best_tail.has_value() || rule.index >= best_tail_index)) {
+      best_tail = rule.semantic;
+      best_tail_index = rule.index;
+    }
+  }
+  return best_tail;
+}
+
+/**
+ * @brief Resolve option-value rule for a concrete option token.
+ */
+std::optional<CommandTree::OptionValueRule>
+CommandTree::ResolveOptionValueRule(const std::string &path,
+                                    const std::string &long_name,
+                                    char short_name, size_t value_index) const {
+  auto it = nodes_.find(path);
+  if (it == nodes_.end()) {
+    return std::nullopt;
+  }
+  const std::string normalized_long = NormalizeLongOptionName_(long_name);
+  const auto &rules = it->second.option_value_rules;
+  for (const auto &rule : rules) {
+    bool matched = false;
+    if (!normalized_long.empty() && rule.long_option == normalized_long) {
+      matched = true;
+    }
+    if (short_name != '\0' && rule.short_option == short_name) {
+      matched = true;
+    }
+    if (!matched || rule.semantic == AMCommandArgSemantic::None) {
+      continue;
+    }
+    if (value_index < rule.value_count || rule.repeat_tail) {
+      return rule;
+    }
+  }
+  return std::nullopt;
+}
+
+/**
  * @brief Register a command path as top-level command.
  */
 void CommandTree::RegisterCommand_(const std::string &path,
@@ -724,6 +912,7 @@ std::shared_ptr<CommandTree> BuildCommandTree(CLI::App &app,
 
   auto tree = std::make_shared<CommandTree>();
   tree->Build(app);
+  RegisterCompletionRules_(tree.get());
   return tree;
 }
 
