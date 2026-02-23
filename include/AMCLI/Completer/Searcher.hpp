@@ -194,7 +194,10 @@ private:
     bool trailing_sep = false;
   };
 
-
+  /**
+   * @brief Load per-nickname path-engine configuration.
+   */
+  void LoadPathEngineConfigs_();
 
   /**
    * @brief Style a path entry for display.

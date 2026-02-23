@@ -115,15 +115,14 @@ void AMCompleteEngine::HandleCompletion(ic_completion_env_t *cenv,
   request.request_id = NextRequestId_(input, cursor);
 
   AMCompletionContext ctx = BuildContext_(request);
-  last_result_from_cache_ = false;
   ic_set_completion_page_marker(nullptr);
   if (HasTarget_(ctx, AMCompletionTarget::Disabled)) {
     return;
   }
 
-  std::vector<AMCompletionCandidate> candidates;
+  AMCompletionCandidates candidates;
   DispatchCandidates_(ctx, candidates);
-  if (candidates.empty()) {
+  if (candidates.items.empty()) {
     return;
   }
   EmitCandidates_(cenv, ctx, candidates);
@@ -135,9 +134,8 @@ void AMCompleteEngine::HandleCompletion(ic_completion_env_t *cenv,
 void AMCompleteEngine::LoadConfig() {
   AMConfigManager &config = AMConfigManager::Instance();
 
-  int max_items =
-      config.ResolveArg<int>(DocumentKind::Settings,
-                             {"Style", "CompleteMenu", "maxnum"}, -1, {});
+  int max_items = config.ResolveArg<int>(
+      DocumentKind::Settings, {"Style", "CompleteMenu", "maxnum"}, -1, {});
   if (max_items <= 0) {
     max_items = -1;
   }
@@ -206,16 +204,6 @@ void AMCompleteEngine::LoadConfig() {
 }
 
 /**
- * @brief Get current completion arguments.
- */
-const AMCompletionArgs &AMCompleteEngine::GetArgs() const { return args_; }
-
-/**
- * @brief Get mutable completion arguments.
- */
-AMCompletionArgs &AMCompleteEngine::MutableArgs() { return args_; }
-
-/**
  * @brief Get the current request id.
  */
 uint64_t AMCompleteEngine::CurrentRequestId() const {
@@ -241,14 +229,6 @@ void AMCompleteEngine::RegisterSearchEngine(
   for (const auto &target : targets) {
     engines_by_target_[target] = engine;
   }
-}
-
-/**
- * @brief Hash enum value.
- */
-std::size_t
-AMCompletionTargetHash::operator()(AMCompletionTarget target) const {
-  return static_cast<std::size_t>(target);
 }
 
 /**
@@ -382,8 +362,8 @@ void AMCompleteEngine::CancelPendingAsyncRequests_() {
 /**
  * @brief Consume finished async results for the current context target.
  */
-void AMCompleteEngine::ConsumeAsyncResults_(
-    const AMCompletionContext &ctx, std::vector<AMCompletionCandidate> &out) {
+void AMCompleteEngine::ConsumeAsyncResults_(const AMCompletionContext &ctx,
+                                            AMCompletionCandidates &out) {
   if (ctx.targets.empty()) {
     return;
   }
@@ -415,8 +395,9 @@ void AMCompleteEngine::ConsumeAsyncResults_(
     if (result.candidates.empty()) {
       continue;
     }
-    out.insert(out.end(), std::make_move_iterator(result.candidates.begin()),
-               std::make_move_iterator(result.candidates.end()));
+    out.items.insert(out.items.end(),
+                     std::make_move_iterator(result.candidates.begin()),
+                     std::make_move_iterator(result.candidates.end()));
   }
 }
 

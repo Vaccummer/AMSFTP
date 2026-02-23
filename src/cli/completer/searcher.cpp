@@ -411,7 +411,8 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       AMCompletionCandidate candidate;
       candidate.insert_text = item.name;
       candidate.display = FormatCommandDisplay_(
-          item.name, item.is_module ? "module" : "command", max_len, ctx.args);
+          item.name, item.is_module ? "module" : "command", max_len,
+          ctx.completion_args);
       candidate.help = item.help;
       candidate.kind =
           item.is_module ? AMCompletionKind::Module : AMCompletionKind::Command;
@@ -445,7 +446,8 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       AMCompletionCandidate candidate;
       candidate.insert_text = item.name;
       candidate.display =
-          FormatCommandDisplay_(item.name, "command", max_len, ctx.args);
+          FormatCommandDisplay_(item.name, "command", max_len,
+                                ctx.completion_args);
       candidate.help = item.help;
       candidate.kind = AMCompletionKind::Command;
       result.candidates.push_back(std::move(candidate));
@@ -622,13 +624,24 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   if (HasTarget_(ctx, AMCompletionTarget::ClientName)) {
+    bool append_at = false;
+    std::string client_prefix = prefix;
+    if (HasTarget_(ctx, AMCompletionTarget::Path)) {
+      const size_t at_pos = prefix.find('@');
+      if (at_pos != std::string::npos) {
+        client_prefix = prefix.substr(0, at_pos);
+        append_at = true;
+      } else if (prefix.empty() || !IsPathLikeText_(prefix)) {
+        append_at = true;
+      }
+    }
     auto names = client_manager_.GetClientNames();
     for (const auto &name : names) {
-      if (!prefix.empty() && name.rfind(prefix, 0) != 0) {
+      if (!client_prefix.empty() && name.rfind(client_prefix, 0) != 0) {
         continue;
       }
       AMCompletionCandidate candidate;
-      candidate.insert_text = name;
+      candidate.insert_text = append_at ? name + "@" : name;
       candidate.display = name;
       candidate.kind = AMCompletionKind::ClientName;
       result.candidates.push_back(std::move(candidate));
@@ -640,13 +653,24 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   if (HasTarget_(ctx, AMCompletionTarget::HostNickname)) {
+    bool append_at = false;
+    std::string host_prefix = prefix;
+    if (HasTarget_(ctx, AMCompletionTarget::Path)) {
+      const size_t at_pos = prefix.find('@');
+      if (at_pos != std::string::npos) {
+        host_prefix = prefix.substr(0, at_pos);
+        append_at = true;
+      } else if (prefix.empty() || !IsPathLikeText_(prefix)) {
+        append_at = true;
+      }
+    }
     auto names = host_manager_.ListNames();
     for (const auto &name : names) {
-      if (!prefix.empty() && name.rfind(prefix, 0) != 0) {
+      if (!host_prefix.empty() && name.rfind(host_prefix, 0) != 0) {
         continue;
       }
       AMCompletionCandidate candidate;
-      candidate.insert_text = name;
+      candidate.insert_text = append_at ? name + "@" : name;
       candidate.display = name;
       candidate.kind = AMCompletionKind::HostNickname;
       result.candidates.push_back(std::move(candidate));
@@ -990,7 +1014,7 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
       }
     } else {
       path_part = token_prefix;
-      nickname = current_client->GetNickname();
+      nickname = current_client ? current_client->GetNickname() : "local";
     }
   }
 
