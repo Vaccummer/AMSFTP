@@ -159,9 +159,8 @@ struct AMCompletionAsyncRequest {
  * @brief Search collection output for sync + async paths.
  */
 struct AMCompletionCollectResult {
-  std::vector<AMCompletionCandidate> candidates;
+  AMCompletionCandidates candidates;
   std::optional<AMCompletionAsyncRequest> async_request;
-  bool from_cache = false;
 };
 
 /**
@@ -209,6 +208,20 @@ struct AMCompletionRequest {
 };
 
 /**
+ * @brief Registration tuple used to bind targets to search engines.
+ */
+struct AMSearchEngineRegistration {
+  std::vector<AMCompletionTarget> targets;
+  std::shared_ptr<AMCompletionSearchEngine> engine;
+};
+
+/**
+ * @brief Build the default completion search-engine registration set.
+ */
+std::vector<AMSearchEngineRegistration>
+AMBuildDefaultSearchEngineRegistrations();
+
+/**
  * @brief Core completion engine that orchestrates parsing, dispatch, and async
  * execution.
  */
@@ -219,7 +232,15 @@ public:
     Init();
   }
 
-  void Init();
+  /**
+   * @brief Register built-in search engines.
+   */
+  void Init() {
+    auto registrations = AMBuildDefaultSearchEngineRegistrations();
+    for (const auto &entry : registrations) {
+      RegisterSearchEngine(entry.targets, entry.engine);
+    }
+  }
 
   /**
    * @brief Stop async workers and release resources.
@@ -377,3 +398,5 @@ private:
   std::mutex async_interrupts_mtx_;
   std::vector<std::function<void()>> async_interrupts_;
 };
+
+#include "AMCLI/Completer/Searcher.hpp"

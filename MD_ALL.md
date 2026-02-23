@@ -1613,3 +1613,58 @@ My expected protocol:
 4. find where cursor is, get prefix and postfix
 5. get AMCommandArgSemantic according to module, cmd, option record and any other neccessary context
 6. transit AMCommandArgSemantic to targets according to prefix and any other neccessary context
+New features to be implement, do you have any questions?
+
+@src\cli\completer\searcher.cpp
+
+@include\AMCLI\Completer\Engine.hpp
+
+### Some little improve
+
+AMCompletionCollectResult use AMCompletionCandidates instead of AMCompletionCandidate
+
+move AMSearchEngineRegistration to engine's header file
+
+move AMBuildDefaultSearchEngineRegistrations to searcher's header as inline function
+
+move AMCompleteEngine::Init() to engine's header
+
+### Searcher File Structure Change
+
+implement different search in different cpp and store in src\cli\searcher
+
+
+Gerneral match rule (when prefix not empty)
+
++ Need case match
+  + find item starts with prefix
+  + find item has prefix (lower score, can't duplicate with the former)
++ No-case match (only when case-sensitive match empty trigger)
+  + find item starts with prefix
+  + find item has prefix (lower score, can't duplicate with the former)
+
+### AMCommandSearchEngine 
+
+use Gerneral match rule
+
+### AMInternalSearchEngine 
+
+use Gerneral match rule
+
+hold reference of VarManager
+
+search varnames in pulic zone and current private zone
+
+candidate's help should has value
+
+display string should be styled
+
+### AMPathSearchEngine
+
+use Gerneral match rule
+
+set init function as default, set manager using AMConfigManager &config_manager_ = AMConfigManager::Instance();
+
+set an temp cache like current cache, trigger all the time, but clear when CorePrompt return(use register)
+
+hold a ref to VarManager, path sometimes has var, need resolve it

@@ -817,7 +817,8 @@ void CommandTree::AddOptionValueRule(const std::string &path,
   }
   auto &rules = it->second.option_value_rules;
   for (auto &rule : rules) {
-    if (rule.long_option == normalized_long && rule.short_option == short_name) {
+    if (rule.long_option == normalized_long &&
+        rule.short_option == short_name) {
       rule.semantic = semantic;
       rule.value_count = value_count;
       rule.repeat_tail = repeat_tail;

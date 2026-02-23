@@ -1,5 +1,6 @@
 #include "AMCLI/Completer/Proxy.hpp"
 #include "AMCLI/Completer/Engine.hpp"
+#include "AMCLI/Completer/Searcher.hpp"
 #include "Isocline/isocline.h"
 #include <atomic>
 #include <string>

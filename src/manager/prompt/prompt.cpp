@@ -324,11 +324,61 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
                      &AMTokenTypeAnalyzer::PromptHighlighter_, nullptr);
   ic_history_remove_last();
   if (!line) {
+    NotifyCorePromptReturnCallbacks_();
     return false;
   }
   *out_input = std::string(line);
   ic_free(line);
+  NotifyCorePromptReturnCallbacks_();
   return true;
+}
+
+/**
+ * @brief Register a callback invoked when PromptCore returns.
+ */
+bool AMPromptManager::RegisterCorePromptReturnCallback(
+    const std::string &name, std::function<void()> callback) {
+  if (name.empty() || !callback) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(core_prompt_callbacks_mtx_);
+  auto [it, inserted] =
+      core_prompt_callbacks_.emplace(name, std::move(callback));
+  if (!inserted) {
+    it->second = std::move(callback);
+  }
+  return true;
+}
+
+/**
+ * @brief Remove a PromptCore-return callback.
+ */
+bool AMPromptManager::UnregisterCorePromptReturnCallback(
+    const std::string &name) {
+  if (name.empty()) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(core_prompt_callbacks_mtx_);
+  return core_prompt_callbacks_.erase(name) > 0;
+}
+
+/**
+ * @brief Notify registered PromptCore-return callbacks.
+ */
+void AMPromptManager::NotifyCorePromptReturnCallbacks_() {
+  std::vector<std::function<void()>> callbacks;
+  {
+    std::lock_guard<std::mutex> lock(core_prompt_callbacks_mtx_);
+    callbacks.reserve(core_prompt_callbacks_.size());
+    for (const auto &entry : core_prompt_callbacks_) {
+      if (entry.second) {
+        callbacks.push_back(entry.second);
+      }
+    }
+  }
+  for (const auto &callback : callbacks) {
+    callback();
+  }
 }
 
 bool AMPromptManager::SecurePrompt(const std::string &prompt,
