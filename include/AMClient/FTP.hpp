@@ -1111,8 +1111,7 @@ public:
     return rcm;
   }
 
-  // 获取 RTT (Round Trip Time)，返回平均值（毫秒）
-  // 通过执行轻量级 LIST 请求来测量
+  // return in uint ms, -1 for error
   double GetRTT(ssize_t times = 5, amf interrupt_flag = nullptr) override {
     if (times <= 0) {
       times = 1;
@@ -1140,13 +1139,13 @@ public:
       curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
       curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
-      int64_t start_time = am_ms();
+      double start_time = am_s();
       auto nb_res = nb_perform(flag, -1, start_time);
-      int64_t end_time = am_ms();
+      double end_time = am_s();
       free(chunk.memory);
 
       if (nb_res.ok() && nb_res.value == CURLE_OK) {
-        rtts.push_back(static_cast<double>(end_time - start_time));
+        rtts.push_back(end_time - start_time);
       } else if (nb_res.status == WaitResult::Interrupted) {
         break;
       }
@@ -1159,7 +1158,7 @@ public:
     for (double v : rtts) {
       sum += v;
     }
-    return sum / static_cast<double>(rtts.size());
+    return sum * (double)1000.0 / static_cast<double>(rtts.size());
   }
 
   ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,

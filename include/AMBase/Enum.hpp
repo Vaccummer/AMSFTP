@@ -252,7 +252,10 @@ enum class AMTokenType {
   Special = 18,
   BangSign = 19,
   ShellCmd = 20,
-  IllegalCommand = 21
+  IllegalCommand = 21,
+  UnestablishedNickname = 22,
+  NonexistentNickname = 23,
+  BuiltinArg = 24
 
 };
 
