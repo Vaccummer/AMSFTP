@@ -2389,7 +2389,7 @@ public:
         break;
       }
 
-      int64_t start = am_ms();
+      double start = am_s();
       int rc = 0;
       WaitResult wr = WaitResult::Ready;
 
@@ -2407,8 +2407,8 @@ public:
       }
 
       if (rc == 0) {
-        int64_t end = am_ms();
-        rtts.push_back(static_cast<double>(end - start));
+        double end = am_s();
+        rtts.push_back(end - start);
       }
     }
 
@@ -2423,7 +2423,7 @@ public:
     for (double rtt : rtts) {
       sum += rtt;
     }
-    return sum / rtts.size();
+    return sum * (double)1000.0 / static_cast<double>(rtts.size());
   }
 
   CR ConductCmd(const std::string &cmd, int max_time_ms = 3000,

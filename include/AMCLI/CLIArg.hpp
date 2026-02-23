@@ -524,8 +524,7 @@ struct RmArgs {
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     const std::vector<std::string> resolved = SubstitutePathLikeArgs_(paths);
-    ECM rcm =
-        managers.filesystem->rm(resolved, permanent, false, quiet, amgif);
+    ECM rcm = managers.filesystem->rm(resolved, permanent, false, quiet, amgif);
     PrintRunError_(rcm);
     return rcm;
   }
@@ -1199,11 +1198,11 @@ struct TaskInspectArgs {
     }
     (void)managers;
     if (id.empty() && !set && !entry) {
-      ShowTaskInspectInfo();
+      // ShowTaskInspectInfo();
       return {EC::Success, ""};
     }
     if (id.empty()) {
-      ShowTaskInspectInfo();
+      // ShowTaskInspectInfo();
       return {EC::InvalidArg, "Task id required"};
     }
 
@@ -1402,14 +1401,12 @@ struct TaskCacheSubmitArgs {
     bool suffix_async = false;
     if (!async_suffix.empty()) {
       if (async_suffix != "&") {
-        return Err(EC::InvalidArg,
-                   "task cache submit: trailing arg must be &");
+        return Err(EC::InvalidArg, "task cache submit: trailing arg must be &");
       }
       suffix_async = true;
     }
-    return AMTransferManager::Instance().SubmitCachedTransferSets(quiet, amgif,
-                                                                  is_async ||
-                                                                      suffix_async);
+    return AMTransferManager::Instance().SubmitCachedTransferSets(
+        quiet, amgif, is_async || suffix_async);
   }
   /**
    * @brief Reset task-cache-submit arguments to defaults.
@@ -1719,4 +1716,3 @@ struct DispatchResult {
   bool request_exit = false;
   bool skip_loop_exit_callbacks = false;
 };
-
