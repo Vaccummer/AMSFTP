@@ -64,11 +64,12 @@ int main(int argc, char **argv) {
     auto time_start = std::chrono::steady_clock::now();
     const std::string app_name =
         fs::path(argc > 0 ? argv[0] : "amsftp").filename().string();
-    CLI::App app{"AMSFTP CLI", app_name};
+    CLI::App app{"AMSFTP CLI\nauthor: Vaccummer\ngithub: "
+                 "https://github.com/Vaccummer/AMSFTP",
+                 app_name};
 
     CliArgsPool args_pool;
     CliCommands cli_commands = BindCliOptions(app, args_pool);
-    BuildCommandTree(app, args_pool);
     try {
       app.parse(argc, argv);
     } catch (const CLI::CallForHelp &e) {

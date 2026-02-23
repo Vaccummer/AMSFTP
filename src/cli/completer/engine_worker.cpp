@@ -143,7 +143,7 @@ struct CommandState {
   std::string command_path;
   size_t command_tokens = 0;
   size_t arg_index = 0;
-  std::optional<CommandTree::OptionValueRule> pending_value_rule;
+  std::optional<CommandNode::OptionValueRule> pending_value_rule;
   size_t pending_value_index = 0;
   bool has_module = false;
   bool has_cmd = false;
@@ -210,7 +210,7 @@ VarShortcutMode DetectVarShortcutMode_(const AMCompletionContext &ctx) {
  */
 CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
   CommandState state;
-  CommandTree &command_tree = CommandTree::Instance();
+  CommandNode &command_tree = CommandNode::Instance();
   std::vector<std::string> before;
   before.reserve(ctx.token_index);
 
@@ -225,7 +225,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
     return state;
   }
 
-  const CommandTree::CommandNode *node = nullptr;
+  const CommandNode *node = nullptr;
   for (size_t i = 0; i < before.size(); ++i) {
     const std::string &text = before[i];
     if (text.empty()) {
@@ -285,7 +285,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
     return true;
   };
 
-  auto set_pending_option_value = [&](const CommandTree::OptionValueRule &rule,
+  auto set_pending_option_value = [&](const CommandNode::OptionValueRule &rule,
                                       size_t consumed) {
     if (!rule.repeat_tail && consumed >= rule.value_count) {
       state.pending_value_rule.reset();
@@ -453,7 +453,7 @@ bool AMCompleteEngine::FindTokenAtCursor_(
 AMCompletionContext
 AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   AMCompletionContext ctx;
-  CommandTree &command_tree = CommandTree::Instance();
+  CommandNode &command_tree = CommandNode::Instance();
   ctx.input = request.input;
   ctx.cursor = request.cursor;
   ctx.request_id = request.request_id;
@@ -610,7 +610,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   bool cursor_valid_long_option = false;
   bool cursor_long_has_inline_value = false;
   std::string cursor_long_name;
-  std::optional<CommandTree::OptionValueRule> cursor_long_value_rule;
+  std::optional<CommandNode::OptionValueRule> cursor_long_value_rule;
   bool cursor_valid_short_option = false;
   bool cursor_short_bundle = false;
   char cursor_short_name = '\0';
@@ -841,3 +841,4 @@ void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
                            delete_before, delete_after);
   }
 }
+

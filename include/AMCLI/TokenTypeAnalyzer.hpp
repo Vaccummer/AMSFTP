@@ -60,7 +60,7 @@ public:
   static void ClearTokenCache();
 
 private:
-  using CommandNode = CommandTree::CommandNode;
+  using CommandNode = ::CommandNode;
 
   AMTokenTypeAnalyzer() = default;
 
@@ -85,6 +85,7 @@ private:
   AMClientManager &client_manager_ = AMClientManager::Instance();
   AMSetManager &set_manager_ = AMSetManager::Instance();
   bool cli_cache_ready_ = false;
-  CommandTree *command_tree_ = &CommandTree::Instance();
+  CommandNode *command_tree_ = &CommandNode::Instance();
   std::unordered_set<std::string> nicknames_;
 };
+
