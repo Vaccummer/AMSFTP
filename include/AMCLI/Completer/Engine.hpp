@@ -398,5 +398,3 @@ private:
   std::mutex async_interrupts_mtx_;
   std::vector<std::function<void()>> async_interrupts_;
 };
-
-#include "AMCLI/Completer/Searcher.hpp"

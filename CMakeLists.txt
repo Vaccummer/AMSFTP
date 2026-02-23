@@ -2,11 +2,11 @@ cmake_minimum_required(VERSION 3.20)
 project(AMSFTP LANGUAGES C CXX)
 
 
-# ========= C++ 标准 =========
+# ========= C++ Standard =========
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ========= vcpkg 包（MSVC / x64-windows） =========
+# ========= vcpkg Packages (MSVC / x64-windows) =========
 find_package(OpenSSL REQUIRED)
 find_package(ZLIB REQUIRED)
 find_package(CURL CONFIG REQUIRED)
@@ -17,13 +17,13 @@ find_package(libssh2 CONFIG REQUIRED)
 find_package(Threads REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 
-# ========= MSVC 运行库（/MD /MDd） =========
+# ========= MSVC Runtime (/MD /MDd) =========
 if (MSVC)
   set(CMAKE_MSVC_RUNTIME_LIBRARY
       "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 endif()
 
-# ========= 源文件 =========
+# ========= Source Files =========
 file(GLOB_RECURSE AMSFTP_SOURCES CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/main.cpp"
   "${PROJECT_SOURCE_DIR}/src/cli/*.cpp"
@@ -46,7 +46,7 @@ target_include_directories(amsftp PRIVATE
   "${PROJECT_SOURCE_DIR}/include/third_party"
 )
 
-# ========= 链接（全部用 vcpkg target） =========
+# ========= Link (all via vcpkg targets) =========
 target_link_libraries(amsftp PRIVATE
   OpenSSL::SSL
   OpenSSL::Crypto
@@ -71,7 +71,7 @@ add_compile_definitions(NOMINMAX)
 # target_compile_options(ctrlc_trigger PRIVATE
 #   $<$<CXX_COMPILER_ID:MSVC>:/Zi /Od /W4>
 # )
-# # ========= 测试程序 =========
+# # ========= Test Program =========
 # file(GLOB_RECURSE AMTEST_SOURCES CONFIGURE_DEPENDS
 #   "${PROJECT_SOURCE_DIR}/test/*.cpp"
 #   "${PROJECT_SOURCE_DIR}/test/*.cc"
@@ -117,7 +117,7 @@ else()
   message(WARNING "cfgffi library not found; build may fail if not linked elsewhere.")
 endif()
 
-# ========= 编译选项 =========
+# ========= Compile Options =========
 target_compile_options(amsftp PRIVATE
   $<$<CXX_COMPILER_ID:MSVC>:/Zi /Od /W4>
 )

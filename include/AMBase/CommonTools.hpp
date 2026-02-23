@@ -35,7 +35,7 @@
 #include "Isocline/isocline.h"
 #include "third_party/indicators/color.hpp"
 #include "third_party/indicators/cursor_control.hpp"
-#include "third_party/indicators/progress_bar.hpp" // win 平台上该库会包含 windows.h
+#include "third_party/indicators/progress_bar.hpp" // On Windows, this library includes windows.h
 #include "third_party/indicators/setting.hpp"
 #include "third_party/indicators/terminal_size.hpp"
 
@@ -48,25 +48,25 @@ public:
         show_eta_(show_eta), colored_(colored),
         start_time_(std::chrono::steady_clock::now()) {}
 
-  // ✅ 新增：动态设置总大小（可选是否重置计时器）
+  // Added: dynamically set total size (optionally reset timer)
   void set_total(size_t new_total, bool reset_timer = false) {
     total_ = new_total;
     if (reset_timer) {
       start_time_ = std::chrono::steady_clock::now();
     }
-    // 如果当前进度超过新 total，自动修正
+    // If current progress exceeds new total, adjust automatically
     if (current_ > total_) {
       current_ = total_;
     }
     redraw();
   }
 
-  // 更新当前进度
+  // Update current progress
   void update(size_t current) {
     if (total_ == 0) {
-      // 如果 total 未知，以 current 作为“已知最大值”估算
+      // If total is unknown, estimate using current as a known maximum
       if (current > current_) {
-        total_ = current * 2; // 启发式：假设最终是当前的2倍
+        total_ = current * 2; // Heuristic: assume final total is 2x current
       }
     }
     if (current > total_)
@@ -77,7 +77,7 @@ public:
 
   void finish() {
     if (total_ == 0)
-      total_ = current_; // 防止除零
+      total_ = current_; // Prevent division by zero
     update(total_);
     std::cout << "\n";
   }
@@ -549,7 +549,7 @@ inline void vuppercase(std::string &str) {
 }
 
 inline std::string lowercase(const std::string &str) {
-  // 遍历字符串（C++98兼容的迭代器写法）
+  // Iterate over string (C++98-compatible iterator style)
   std::string str_f = str;
   vlowercase(str_f);
   return str_f;
@@ -589,7 +589,7 @@ inline size_t CharNum(const std::string &utf8_str) {
       ++char_count;
       ++idx;
     } else if ((current & 0xE0) == 0xC0 && idx + 1 < str_len) {
-      // 尝试匹配2字节字符，无效则按单字节计数
+      // Try matching 2-byte character; if invalid, count as single byte
       const uint8_t next = static_cast<uint8_t>(utf8_str[idx + 1]);
       if ((next & 0xC0) == 0x80) {
         ++char_count;
@@ -599,7 +599,7 @@ inline size_t CharNum(const std::string &utf8_str) {
       ++char_count;
       ++idx;
     } else if ((current & 0xF0) == 0xE0 && idx + 2 < str_len) {
-      // 尝试匹配3字节字符
+      // Try matching 3-byte character
       const uint8_t next1 = static_cast<uint8_t>(utf8_str[idx + 1]);
       const uint8_t next2 = static_cast<uint8_t>(utf8_str[idx + 2]);
       if ((next1 & 0xC0) == 0x80 && (next2 & 0xC0) == 0x80) {
@@ -610,7 +610,7 @@ inline size_t CharNum(const std::string &utf8_str) {
       ++char_count;
       ++idx;
     } else if ((current & 0xF8) == 0xF0 && idx + 3 < str_len) {
-      // 尝试匹配4字节字符
+      // Try matching 4-byte character
       const uint8_t next1 = static_cast<uint8_t>(utf8_str[idx + 1]);
       const uint8_t next2 = static_cast<uint8_t>(utf8_str[idx + 2]);
       const uint8_t next3 = static_cast<uint8_t>(utf8_str[idx + 3]);
@@ -623,7 +623,7 @@ inline size_t CharNum(const std::string &utf8_str) {
       ++char_count;
       ++idx;
     } else {
-      // 无效字节，按单字符计数
+      // Invalid byte; count as single character
       ++char_count;
       ++idx;
     }
@@ -792,7 +792,7 @@ inline std::pair<bool, int> endswith(const std::string &str,
 }
 
 inline std::string ModeTrans(size_t mode_int) {
-  // 把mode_int转换为8进制字符串, 长度为9
+  // Convert mode_int to octal string, length 9
   if (mode_int > 0777 || mode_int == 0777) {
     return "rwxrwxrwx";
   }
@@ -942,9 +942,9 @@ inline void vreplace_all(std::string &str, const std::string &old_sub,
   size_t pos = 0;
   while ((pos = str.find(old_sub, pos)) != std::string::npos) {
     str.replace(pos, old_sub.size(), new_sub);
-    // 跳过替换后的内容，避免重复替换（如old_sub是new_sub的子串）
+    // Skip replaced content to avoid repeated replacement (e.g. old_sub is a substring of new_sub)
     pos += new_sub.size();
-    // 如果允许重复替换（比如把"a"换成"aa"），则pos不移动，保持pos不变
+    // If repeated replacement is allowed (e.g. replace "a" with "aa"), keep pos unchanged
   }
 }
 
@@ -953,9 +953,9 @@ inline std::string replace_all(std::string str, const std::string &old_sub,
   size_t pos = 0;
   while ((pos = str.find(old_sub, pos)) != std::string::npos) {
     str.replace(pos, old_sub.size(), new_sub);
-    // 跳过替换后的内容，避免重复替换（如old_sub是new_sub的子串）
+    // Skip replaced content to avoid repeated replacement (e.g. old_sub is a substring of new_sub)
     pos += new_sub.size();
-    // 如果允许重复替换（比如把"a"换成"aa"），则pos不移动，保持pos不变
+    // If repeated replacement is allowed (e.g. replace "a" with "aa"), keep pos unchanged
   }
   return str;
 }
@@ -1008,7 +1008,7 @@ inline size_t CountLines(const std::string &text) {
   return lines;
 }
 
-// 导出amfmt函数
+// Export amfmt function
 } // namespace AMStr
 #define AM_ENUM_NAME(x) std::string(magic_enum::enum_name(x))
 

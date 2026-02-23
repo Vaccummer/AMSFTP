@@ -2,8 +2,8 @@
 // standard library
 #ifdef _WIN32
 #define _WINSOCKAPI_
-#include <accctrl.h> // 定义 SE_OBJECT_TYPE 枚举
-#include <aclapi.h>  // 定义安全操作函数
+#include <accctrl.h> // Define SE_OBJECT_TYPE enum
+#include <aclapi.h>  // Define security operation APIs
 #include <shlobj.h>
 #include <windows.h>
 #endif
@@ -42,12 +42,12 @@ inline std::string GetPathSep(const std::string &path) {
 }
 
 inline std::string RegexEscape(const std::string &input) {
-  // 返回转义
+  // Return escaped text
   std::string escaped;
-  escaped.reserve(input.size() * 2); // 预分配内存优化性能
+  escaped.reserve(input.size() * 2); // Pre-allocate memory for performance
 
   for (char c : input) {
-    // 匹配需要转义的正则元字符
+    // Match regex metacharacters that require escaping
     switch (c) {
     case '\\':
     case '^':
@@ -63,12 +63,12 @@ inline std::string RegexEscape(const std::string &input) {
     case ']':
     case '{':
     case '}':
-      escaped += '\\'; // 添加转义符
+      escaped += '\\'; // Add escape char
       break;
     default:
       break;
     }
-    escaped += c; // 追加当前字符
+    escaped += c; // Append current character
   }
 
   return escaped;
@@ -143,7 +143,7 @@ split_basename(const std::string &basename) {
   if (dot_pos != std::string::npos) {
     ext = base.substr(dot_pos + 1);
     std::string test_ext = ".tar." + ext;
-    // 检测base是否已test_ext结尾
+    // Check whether base already ends with test_ext
     auto [check, pos] = AMStr::endswith(base, test_ext);
     if (check) {
       return {base.substr(0, pos), test_ext.substr(1)};
@@ -161,13 +161,13 @@ inline std::vector<std::string> split(const std::string &path) {
     return {pathf};
   }
   std::vector<std::string> result{};
-  // AMStr::CharNum(pathf) >= 3, 防止substr越界
+  // AMStr::CharNum(pathf) >= 3, prevent substr out-of-range
   std::string head = pathf.substr(0, 2);
   if (head == "//" || head == "\\\\") {
-    // 匹配网络路径
+    // Match network path
     pathf = pathf.substr(2);
   } else if (head[0] == '/') {
-    // 匹配unix根目录
+    // Match unix root directory
     result.emplace_back("/");
     pathf = pathf.substr(1);
     head.clear();
@@ -474,12 +474,11 @@ inline std::string basename(const std::string &path) {
 } // namespace AMPathStr
 
 namespace AMFS {
-
 #ifdef _WIN32
 struct FileTimes {
-  double creation_time; // 创建时间
-  double modify_time;   // 修改时间
-  double access_time;   // 最近访问时间
+  double creation_time; // Creation time
+  double modify_time;   // Modification time
+  double access_time;   // Last access time
 };
 
 inline bool is_valid_utf8(const std::string &str) {
@@ -491,13 +490,13 @@ inline bool is_valid_utf8(const std::string &str) {
       --remaining;
     } else {
       if ((c & 0x80) == 0x00)
-        continue; // 单字节 0xxxxxxx
+        continue; // Single byte 0xxxxxxx
       else if ((c & 0xE0) == 0xC0)
-        remaining = 1; // 双字节 110xxxxx
+        remaining = 1; // Two-byte 110xxxxx
       else if ((c & 0xF0) == 0xE0)
-        remaining = 2; // 三字节 1110xxxx
+        remaining = 2; // Three-byte 1110xxxx
       else if ((c & 0xF8) == 0xF0)
-        remaining = 3; // 四字节 11110xxx
+        remaining = 3; // Four-byte 11110xxx
       else
         return false;
     }
@@ -507,7 +506,7 @@ inline bool is_valid_utf8(const std::string &str) {
 
 inline double FileTimeToUnixTime(const FILETIME &ft) {
   const int64_t UNIX_EPOCH_DIFF =
-      11644473600LL; // 1601-01-01 到 1970-01-01 的秒数
+      11644473600LL; // Seconds from 1601-01-01 to 1970-01-01
   int64_t filetime_100ns =
       (static_cast<int64_t>(ft.dwHighDateTime) << 32) | ft.dwLowDateTime;
   return static_cast<double>(filetime_100ns) / 1e7 - UNIX_EPOCH_DIFF;
@@ -550,7 +549,7 @@ inline std::string GetFileOwner(const std::wstring &path) {
 inline std::tuple<double, double, double> GetTime(const std::wstring &path) {
   std::wstring wpath(path.begin(), path.end());
 
-  // 使用 FindFirstFile 获取文件信息（支持文件和目录）
+  // Use FindFirstFile to get file info (supports files and directories)
   WIN32_FIND_DATAW find_data;
   HANDLE hFind = FindFirstFileW(wpath.c_str(), &find_data);
   if (hFind == INVALID_HANDLE_VALUE) {
@@ -610,7 +609,6 @@ inline std::string HomePath() {
 
 inline std::string CWD() { return fs::current_path().string(); }
 
-// 将路径转换为绝对路径，支持解析~ . ..符号， 不要求路径存在
 inline std::string abspath(const std::string &path,
                            const bool parsing_home = true,
                            const std::string &home = "",
@@ -777,26 +775,26 @@ inline std::pair<ECM, PathInfo> stat(const std::string &path,
   info.owner = GetFileOwner(AMStr::wstr(path));
 #else
   struct stat file_stat;
-  // 调用 stat 获取文件元数据（支持符号链接，若需跟随链接用 stat 而非 lstat）
+  // Call stat to get file metadata (supports symlinks; use stat instead of lstat to follow links)
   if (stat(path.c_str(), &file_stat) == -1) {
     return std::make_pair("Fail to stat file: " + std::string(strerror(errno)),
                           info);
   }
 
-  // 1. 拥有者和组（通过 UID/GID 转换）
-  struct passwd *pw = getpwuid(file_stat.st_uid); // UID -> 用户名
+  // 1. Owner and group (via UID/GID conversion)
+  struct passwd *pw = getpwuid(file_stat.st_uid); // UID -> username
   info.owner = pw ? pw->pw_name : std::to_string(file_stat.st_uid);
 
-  // 2. 八进制权限（0777格式）
+  // 2. Octal permissions (0777 format)
   info.mode_int = file_stat.st_mode & 0777;
   info.mode_str = ModeTrans(info.mode_int);
 
-  // 3. 访问时间（access time）和修改时间（modify time）
-  // 使用 struct timespec 成员（包含秒和纳秒，POSIX 标准）
+  // 3. Access time and modification time
+  // Use struct timespec fields (seconds + nanoseconds, POSIX standard)
   info.access_time =
-      timespec_to_double(file_stat.st_atim); // st_atim 是 timespec 类型
+      timespec_to_double(file_stat.st_atim); // st_atim is timespec type
   info.modify_time =
-      timespec_to_double(file_stat.st_mtim); // st_mtim 是 timespec 类型
+      timespec_to_double(file_stat.st_mtim); // st_mtim is timespec type
 #endif
 #ifdef __APPLE__
   info.create_time = timespec_to_double(file_stat.st_birthtimespec);

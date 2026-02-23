@@ -181,10 +181,10 @@ pub extern "C" fn cfgffi_write(
         }
     };
 
-    // 写回前按 schema 过滤（避免引入未知字段）
+    // Filter by schema before writing back (avoid introducing unknown fields)
     filter_json_by_schema(&mut j, &h.schema);
 
-    // 应用更新：允许新增，但新增追加到末尾
+    // Apply updates: allow new keys, append new keys to the end
     apply_json_updates_append_new(h.doc.as_item_mut(), &j);
     // Hide intermediate parent tables when they only contain nested tables.
     // This keeps output compact for path-shaped maps (for example known_hosts).
@@ -483,7 +483,7 @@ fn apply_json_updates_append_new(item: &mut Item, j: &J) {
                     if let Some(child) = t.get_mut(k) {
                         apply_json_updates_append_new(child, v);
                     } else if let Some(new_item) = json_to_item(v) {
-                        t.insert(k, new_item); // 追加到末尾
+                        t.insert(k, new_item); // append to the end
                     }
                 }
             }
@@ -495,9 +495,9 @@ fn apply_json_updates_append_new(item: &mut Item, j: &J) {
         },
 
         J::Array(arr) => match item {
-            // ✅ 修正点：ArrayOfTables 不用索引 aot[i]
+            // Fix: for ArrayOfTables, do not index with aot[i]
             Item::ArrayOfTables(aot) => {
-                // 先更新已有（按顺序 zip）
+                // Update existing entries first (ordered zip)
                 for (t, v) in aot.iter_mut().zip(arr.iter()) {
                     if let J::Object(obj) = v {
                         for (k, vv) in obj {
@@ -510,7 +510,7 @@ fn apply_json_updates_append_new(item: &mut Item, j: &J) {
                     }
                 }
 
-                // 追加多出来的 table
+                // Append extra tables
                 let existing = aot.len();
                 if arr.len() > existing {
                     for v in arr.iter().skip(existing) {

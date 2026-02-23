@@ -1,5 +1,5 @@
 #pragma once
-// 标准库
+// Standard library
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
@@ -13,12 +13,12 @@
 #include <sstream>
 #include <string>
 
-// 自身依赖
+// Internal dependencies
 #include "AMClient/Base.hpp"
 
-// 自身依赖
+// Internal dependencies
 
-// 第三方库
+// Third-party libraries
 #include <curl/curl.h>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -31,57 +31,57 @@ struct MemoryStruct {
   char *memory;
   size_t size;
 };
-// 解析 IIS/DOS 格式的目录列表行
-// 格式: 03-03-25  11:27AM                90624 zlib1.dll
+// Parse IIS/DOS directory listing line
+// Format: 03-03-25  11:27AM                90624 zlib1.dll
 //       01-10-26  12:01PM       <DIR>          AMSFTP
 inline PathInfo ParseDOSListLine(const std::string &line,
                                  const std::string &dir_path) {
   PathInfo info;
   info.type = PathType::Unknown;
 
-  // 跳过前导空格
+  // Skip leading spaces
   size_t pos = 0;
   while (pos < line.size() && std::isspace(line[pos]))
     pos++;
   if (pos >= line.size())
     return info;
 
-  // 解析日期 (MM-DD-YY)
+  // Parse date (MM-DD-YY)
   size_t date_start = pos;
   size_t date_end = line.find_first_of(" \t", pos);
   if (date_end == std::string::npos)
     return info;
   std::string date_str = line.substr(date_start, date_end - date_start);
 
-  // 跳过空格到时间
+  // Skip spaces until time field
   pos = date_end;
   while (pos < line.size() && std::isspace(line[pos]))
     pos++;
   if (pos >= line.size())
     return info;
 
-  // 解析时间 (HH:MMAM/PM)
+  // Parse time (HH:MMAM/PM)
   size_t time_start = pos;
   size_t time_end = line.find_first_of(" \t", pos);
   if (time_end == std::string::npos)
     return info;
   std::string time_str = line.substr(time_start, time_end - time_start);
 
-  // 解析日期和时间为 Unix 时间戳
+  // Parse date/time to Unix timestamp
   try {
-    // 解析日期 MM-DD-YY
+    // Parse date MM-DD-YY
     int month = 0, day = 0, year = 0;
     if (sscanf_s(date_str.c_str(), "%d-%d-%d", &month, &day, &year) == 3) {
-      // 处理两位年份
+      // Handle two-digit year
       if (year < 100) {
         year += (year >= 70) ? 1900 : 2000;
       }
 
-      // 解析时间 HH:MMAM/PM
+      // Parse time HH:MMAM/PM
       int hour = 0, minute = 0;
       std::array<char, 3> ampm = {0};
       if (sscanf_s(time_str.c_str(), "%d:%d%2s", &hour, &minute, ampm) >= 2) {
-        // 转换 12 小时制为 24 小时制
+        // Convert 12-hour clock to 24-hour
         std::string ampm_str(ampm.data());
         std::transform(ampm_str.begin(), ampm_str.end(), ampm_str.begin(),
                        ::toupper);
@@ -91,7 +91,7 @@ inline PathInfo ParseDOSListLine(const std::string &line,
           hour = 0;
         }
 
-        // 构建 tm 结构并转换为 time_t
+        // Build tm struct and convert to time_t
         struct tm tm_time = {};
         tm_time.tm_year = year - 1900;
         tm_time.tm_mon = month - 1;
@@ -99,7 +99,7 @@ inline PathInfo ParseDOSListLine(const std::string &line,
         tm_time.tm_hour = hour;
         tm_time.tm_min = minute;
         tm_time.tm_sec = 0;
-        tm_time.tm_isdst = -1; // 让系统自动判断夏令时
+        tm_time.tm_isdst = -1; // Let system decide DST automatically
 
         time_t unix_time = mktime(&tm_time);
         if (unix_time != -1) {
@@ -108,23 +108,23 @@ inline PathInfo ParseDOSListLine(const std::string &line,
       }
     }
   } catch (...) {
-    // 解析失败，保持 modify_time 为 0
+    // Parse failed; keep modify_time as 0
   }
 
-  // 跳过空格到 <DIR> 或文件大小
+  // Skip spaces until <DIR> or file size
   pos = time_end;
   while (pos < line.size() && std::isspace(line[pos]))
     pos++;
   if (pos >= line.size())
     return info;
 
-  // 检查是否是目录 (<DIR>) 或文件大小
+  // Check whether it is a directory (<DIR>) or file size
   if (line.substr(pos, 5) == "<DIR>") {
     info.type = PathType::DIR;
     info.size = 0;
     pos += 5;
   } else {
-    // 解析文件大小
+    // Parse file size
     size_t size_end = line.find_first_of(" \t", pos);
     if (size_end == std::string::npos)
       return info;
@@ -138,15 +138,15 @@ inline PathInfo ParseDOSListLine(const std::string &line,
     pos = size_end;
   }
 
-  // 跳过空格到文件名
+  // Skip spaces until filename
   while (pos < line.size() && std::isspace(line[pos]))
     pos++;
   if (pos >= line.size())
     return info;
 
-  // 剩余部分是文件名
+  // The remaining part is filename
   std::string name = line.substr(pos);
-  // 去除尾部空格和 \r
+  // Trim trailing spaces and \r
   while (!name.empty() && (std::isspace(name.back()) || name.back() == '\r')) {
     name.pop_back();
   }
@@ -161,8 +161,8 @@ inline PathInfo ParseDOSListLine(const std::string &line,
   return info;
 }
 
-// 解析 Unix 格式的目录列表行
-// 格式: -rw-r--r-- 1 owner group size month day time filename
+// Parse Unix directory listing line
+// Format: -rw-r--r-- 1 owner group size month day time filename
 //       drwxr-xr-x 1 owner group size month day time filename
 inline PathInfo ParseUnixListLine(const std::string &line,
                                   const std::string &dir_path) {
@@ -185,7 +185,7 @@ inline PathInfo ParseUnixListLine(const std::string &line,
     name.pop_back();
   }
 
-  // 处理符号链接 (name -> target)
+  // Handle symlink (name -> target)
   if (!name.empty() && perms.size() > 0 && perms[0] == 'l') {
     size_t arrow_pos = name.find(" -> ");
     if (arrow_pos != std::string::npos) {
@@ -226,15 +226,15 @@ inline PathInfo ParseUnixListLine(const std::string &line,
   return info;
 }
 
-// 自动检测并解析目录列表行
+// Auto-detect and parse directory listing line
 inline PathInfo ParseListLine(const std::string &line,
                               const std::string &dir_path) {
-  // 跳过空行
+  // Skip empty lines
   if (line.empty())
     return {};
 
-  // 检测行格式：DOS/IIS 格式通常以数字（日期）开头
-  // Unix 格式以权限字符（d, -, l 等）开头
+  // Detect line format: DOS/IIS usually starts with digits (date)
+  // Unix format starts with permission chars (d, -, l, etc.)
   size_t first_nonspace = 0;
   while (first_nonspace < line.size() && std::isspace(line[first_nonspace]))
     first_nonspace++;
@@ -244,30 +244,30 @@ inline PathInfo ParseListLine(const std::string &line,
 
   char first_char = line[first_nonspace];
 
-  // DOS/IIS 格式以数字开头 (日期如 01-10-26)
+  // DOS/IIS format starts with digits (date like 01-10-26)
   if (std::isdigit(first_char)) {
     return ParseDOSListLine(line, dir_path);
   }
 
-  // Unix 格式以权限字符开头 (d, -, l, c, b, p, s)
+  // Unix format starts with permission chars (d, -, l, c, b, p, s)
   if (first_char == 'd' || first_char == '-' || first_char == 'l' ||
       first_char == 'c' || first_char == 'b' || first_char == 'p' ||
       first_char == 's') {
     return ParseUnixListLine(line, dir_path);
   }
 
-  // 未知格式
+  // Unknown format
   return {};
 }
 
-// 解析 MLSD 行（目录列表）
-// 格式: type=file;size=1024;modify=20210315120000;perm=rwx; filename
-// 与 MLST 不同，MLSD 每行包含文件名，需要从行中提取
+// Parse MLSD line (directory listing)
+// Format: type=file;size=1024;modify=20210315120000;perm=rwx; filename
+// Unlike MLST, each MLSD line includes filename and must be extracted
 inline PathInfo ParseMLSDLine(const std::string &line,
                               const std::string &dir_path) {
   PathInfo info;
 
-  // 查找 facts 和 filename 的分隔（最后一个空格后是文件名）
+  // Find separator between facts and filename (filename after last space)
   size_t space_pos = line.rfind(' ');
   if (space_pos == std::string::npos) {
     info.type = PathType::Unknown;
@@ -277,7 +277,7 @@ inline PathInfo ParseMLSDLine(const std::string &line,
   std::string facts = line.substr(0, space_pos);
   std::string filename = line.substr(space_pos + 1);
 
-  // 去除文件名的回车
+  // Remove carriage return from filename
   if (!filename.empty() && filename.back() == '\r') {
     filename.pop_back();
   }
@@ -286,7 +286,7 @@ inline PathInfo ParseMLSDLine(const std::string &line,
   info.dir = dir_path;
   info.path = AMPathStr::join(dir_path, filename, SepType::Unix);
 
-  // 解析 facts (;分隔的 key=value)
+  // Parse facts (;-separated key=value)
   std::istringstream ss(facts);
   std::string fact;
   while (std::getline(ss, fact, ';')) {
@@ -300,7 +300,7 @@ inline PathInfo ParseMLSDLine(const std::string &line,
     std::string key = fact.substr(0, eq_pos);
     std::string value = fact.substr(eq_pos + 1);
 
-    // 转小写比较
+    // Compare in lowercase
     std::transform(key.begin(), key.end(), key.begin(), ::tolower);
 
     if (key == "type") {
@@ -310,7 +310,7 @@ inline PathInfo ParseMLSDLine(const std::string &line,
       } else if (value == "dir") {
         info.type = PathType::DIR;
       } else if (value == "cdir" || value == "pdir") {
-        // 当前目录和父目录，跳过
+        // Current/parent directory, skip
         info.type = PathType::Unknown;
       } else if (value == "os.unix=symlink" || value == "os.unix=slink") {
         info.type = PathType::SYMLINK;
@@ -361,8 +361,8 @@ inline PathInfo ParseMLSDLine(const std::string &line,
   return info;
 }
 
-// 解析 MLST 响应格式
-// 格式: type=file;size=1024;modify=20210315120000;perm=rwx; filename
+// Parse MLST response format
+// Format: type=file;size=1024;modify=20210315120000;perm=rwx; filename
 inline PathInfo ParseMLSTLine(const std::string &line,
                               const std::string &path) {
   PathInfo info;
@@ -370,7 +370,7 @@ inline PathInfo ParseMLSTLine(const std::string &line,
   info.name = AMPathStr::basename(path);
   info.dir = AMPathStr::dirname(path);
 
-  // 查找 facts 和 filename 的分隔（最后一个空格后是文件名）
+  // Find separator between facts and filename (filename after last space)
   size_t space_pos = line.rfind(' ');
   if (space_pos == std::string::npos) {
     info.type = PathType::Unknown;
@@ -379,7 +379,7 @@ inline PathInfo ParseMLSTLine(const std::string &line,
 
   std::string facts = line.substr(0, space_pos);
 
-  // 解析 facts (;分隔的 key=value)
+  // Parse facts (;-separated key=value)
   std::istringstream ss(facts);
   std::string fact;
   while (std::getline(ss, fact, ';')) {
@@ -393,7 +393,7 @@ inline PathInfo ParseMLSTLine(const std::string &line,
     std::string key = fact.substr(0, eq_pos);
     std::string value = fact.substr(eq_pos + 1);
 
-    // 转小写比较
+    // Compare in lowercase
     std::transform(key.begin(), key.end(), key.begin(), ::tolower);
 
     if (key == "type") {
@@ -414,7 +414,7 @@ inline PathInfo ParseMLSTLine(const std::string &line,
         info.size = 0;
       }
     } else if (key == "modify") {
-      // 格式: YYYYMMDDHHMMSS 或 YYYYMMDDHHMMSS.sss
+      // Format: YYYYMMDDHHMMSS or YYYYMMDDHHMMSS.sss
       if (value.length() >= 14) {
         struct tm tm = {};
         tm.tm_year = std::stoi(value.substr(0, 4)) - 1900;
@@ -454,13 +454,13 @@ inline PathInfo ParseMLSTLine(const std::string &line,
 
 inline std::string MlistPath(const std::string &path, bool is_dir = false) {
   std::string pathf = AMPathStr::UnifyPathSep(path, "/");
-  // 替换空格为%20
+  // Replace spaces with %20
   AMStr::vreplace_all(pathf, " ", "%20");
   while (!pathf.empty() && (pathf.back() == '/' || pathf.back() == '\\')) {
     pathf.pop_back();
   }
   if (is_dir) {
-    pathf += "/"; // 目录总是以 / 结尾，包括空路径（根目录）
+    pathf += "/"; // Directory always ends with /, including empty path (root)
   }
   if (!pathf.empty() && pathf.front() != '/') {
     pathf = "/" + pathf;
@@ -515,18 +515,18 @@ class AMFTPClient : public BaseClient {
 
 private:
   CURL *curl = nullptr;
-  CURLM *multi = nullptr; // 复用的 multi handle
+  CURLM *multi = nullptr; // Reused multi handle
   std::atomic<bool> connected = false;
-  std::atomic<bool> mlst_supported = true; // 是否支持 MLST，默认先尝试
-  std::atomic<bool> mlst_checked = false;  // 是否已检测过 MLST 支持
+  std::atomic<bool> mlst_supported = true; // Whether MLST is supported; try by default first
+  std::atomic<bool> mlst_checked = false;  // Whether MLST support has been checked
   std::regex ftp_url_pattern = std::regex("^ftp://.*$");
   std::string url = "";
-  std::string current_url = ""; // 保持 CURLOPT_URL 字符串的生命周期
+  std::string current_url = ""; // Keep CURLOPT_URL string lifetime valid
   std::string session_password_plain_;
   AuthCallback auth_cb_ = {};
   bool auth_cb_enabled_ = false;
-  // 非阻塞执行 curl 请求，支持中断和超时
-  // poll_interval_ms: 每次轮询间隔，越小响应越快，但 CPU 占用越高
+  // Execute curl request non-blocking; supports interrupt and timeout
+  // poll_interval_ms: Polling interval each round; smaller is faster but uses more CPU
 
   NBResult<CURLcode> nb_perform(amf interrupt_flag, int timeout_ms,
                                 int64_t start_time) {
@@ -534,7 +534,7 @@ private:
       return {CURLE_FAILED_INIT, WaitResult::Error};
     }
 
-    // 确保 curl 没有遗留在 multi 中（防止之前的操作没有正确清理）
+    // Ensure curl is not left in multi (avoid leftovers from previous operations)
     // curl_multi_remove_handle(multi, curl);
 
     CURLMcode add_result = curl_multi_add_handle(multi, curl);
@@ -558,19 +558,19 @@ private:
       if (!still_running)
         break;
 
-      // 检查中断
+      // Check interrupt
       if (interrupt_flag && interrupt_flag->check()) {
         wait_result = WaitResult::Interrupted;
         break;
       }
 
-      // 检查超时
+      // Check timeout
       if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
         wait_result = WaitResult::Timeout;
         break;
       }
 
-      // 非阻塞等待 socket 事件
+      // Wait for socket events non-blocking
       int numfds = 0;
       mc = curl_multi_poll(multi, nullptr, 0, poll_interval_ms, &numfds);
 
@@ -581,7 +581,7 @@ private:
       }
     }
 
-    // 获取真实结果
+    // Get actual result
     if (wait_result == WaitResult::Ready) {
       CURLMsg *msg;
       int msgs_left;
@@ -593,8 +593,8 @@ private:
     }
 
     curl_multi_remove_handle(multi, curl);
-    // 不在这里调用 curl_easy_reset，让调用者可以通过 curl_easy_getinfo
-    // 获取文件信息 SetupPath 会在下次操作前调用 curl_easy_reset 来重置状态
+    // Do not call curl_easy_reset here so caller can use curl_easy_getinfo
+    // Get file info; SetupPath will call curl_easy_reset before next operation
 
     return {result, wait_result};
   }
@@ -645,17 +645,17 @@ private:
     return realsize;
   }
 
-  // 使用 MLST 命令获取文件信息（现代方法）
+  // Use MLST to get file info (modern method)
   SR try_mlst(const std::string &path, amf interrupt_flag, int timeout_ms,
               int64_t start_time) {
     if (!curl || !multi) {
       return {ECM{EC::NoConnection, "CURL not initialized"}, PathInfo()};
     }
 
-    // 重置 curl 选项
+    // Reset curl options
     SetupPath(path);
 
-    // 设置 MLST 命令
+    // Set MLST command
     struct curl_slist *commands = nullptr;
     std::string command = AMStr::amfmt("MLST {}", MlistPath(path));
     commands = curl_slist_append(commands, command.c_str());
@@ -663,7 +663,7 @@ private:
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
-    // 捕获 header（MLST 响应在 header 中）
+    // Capture header (MLST response is in header)
     struct MemoryStruct header_chunk;
     header_chunk.memory = (char *)malloc(1);
     header_chunk.size = 0;
@@ -689,14 +689,14 @@ private:
       return {rcm, PathInfo()};
     }
 
-    // 解析响应
+    // Parse response
     std::string response(header_chunk.memory, header_chunk.size);
     free(header_chunk.memory);
 
-    // 查找 250- 开头的行（MLST 数据行）或直接的 facts 行
-    // 格式:
+    // Find line starting with 250- (MLST data line) or direct facts line
+    // Format:
     // 250- Listing path
-    //  type=file;size=123; filename    <- 注意开头有空格
+    //  type=file;size=123; filename    <- note leading space
     // 250 End
     PathInfo info;
     std::istringstream iss(response);
@@ -704,14 +704,14 @@ private:
     bool found = false;
 
     while (std::getline(iss, line)) {
-      // 去掉 \r
+      // Remove \r
       if (!line.empty() && line.back() == '\r') {
         line.pop_back();
       }
 
-      // MLST 数据行以空格开头
+      // MLST data line starts with a space
       if (!line.empty() && (line[0] == ' ' || line[0] == '\t')) {
-        line = line.substr(1); // 去掉开头空格
+        line = line.substr(1); // Remove leading space
         info = ParseMLSTLine(line, path);
         found = true;
         break;
@@ -726,12 +726,12 @@ private:
     return {ECM{EC::Success, ""}, info};
   }
 
-  // 传统 stat 方法（回退用）
-  // 步骤：1. 尝试作为目录  2. 尝试 SIZE 命令获取文件信息
+  // Legacy stat method (fallback)
+  // Steps: 1) try as directory 2) try SIZE to get file info
   SR stat_legacy(const std::string &path, amf interrupt_flag, int timeout_ms,
                  int64_t start_time) {
 
-    // 步骤 1：尝试作为目录（通过列出目录内容判断）
+    // Step 1: try as directory (judge by listing)
     ECM ecm = SetupPath(path, true);
     if (ecm.first != EC::Success) {
       return {ecm, PathInfo()};
@@ -761,8 +761,8 @@ private:
       return {NBResultToECM(nb_res), {}};
     }
 
-    // 步骤 2：尝试作为文件（NOBODY 模式会触发 SIZE 命令）
-    // SIZE 命令对不存在的文件会返回错误，不会返回 0
+    // Step 2: try as file (NOBODY mode triggers SIZE)
+    // SIZE returns error for nonexistent file, not 0
     ecm = SetupPath(path, false);
     if (ecm.first != EC::Success) {
       return {ecm, {}};
@@ -779,12 +779,12 @@ private:
     nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
     free(chunk.memory);
 
-    // 处理中断/超时
+    // Handle interrupt/timeout
     if (!nb_res.ok()) {
       return {NBResultToECM(nb_res), {}};
     }
 
-    // SIZE 成功 → 是文件
+    // SIZE success -> file
     if (nb_res.value == CURLE_OK) {
       PathInfo info;
       info.path = path;
@@ -805,14 +805,14 @@ private:
       return {ECM{EC::Success, ""}, info};
     }
 
-    // SIZE 失败 → 路径不存在
+    // SIZE failed -> path does not exist
     return {ECM{GetFTPErrorCode(nb_res.value),
                 AMStr::amfmt("legacy_stat {} error: {}", path,
                              curl_easy_strerror(nb_res.value))},
             {}};
   }
 
-  // 使用 MLSD 命令列出目录（现代方法）
+  // Use MLSD to list directory (modern method)
   std::pair<ECM, std::vector<PathInfo>> try_mlsd(const std::string &path,
                                                  amf interrupt_flag,
                                                  int timeout_ms,
@@ -820,10 +820,10 @@ private:
     if (!curl || !multi) {
       return {ECM{EC::NoConnection, "CURL not initialized"}, {}};
     }
-    // 使用 MLSD URL 格式
+    // Use MLSD URL format
     SetupPath(path, true);
 
-    // 使用 MLSD 自定义请求
+    // Use MLSD custom request
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "MLSD");
 
     struct MemoryStruct chunk;
@@ -834,7 +834,7 @@ private:
 
     auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
 
-    // 重置自定义请求
+    // Reset custom request
     curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, nullptr);
 
     if (!nb_res.ok()) {
@@ -847,7 +847,7 @@ private:
       long response_code = 0;
       curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
 
-      // 500/502 = 命令不支持, 550 = 目录不存在
+      // 500/502 = command unsupported, 550 = directory does not exist
       if (response_code == 500 || response_code == 502 ||
           nb_res.value == CURLE_QUOTE_ERROR ||
           nb_res.value == CURLE_FTP_COULDNT_RETR_FILE) {
@@ -863,7 +863,7 @@ private:
       return {ECM{EC::FTPListFailed, curl_easy_strerror(nb_res.value)}, {}};
     }
 
-    // 解析 MLSD 响应
+    // Parse MLSD response
     std::string listing(chunk.memory, chunk.size);
     free(chunk.memory);
 
@@ -871,7 +871,7 @@ private:
     std::istringstream iss(listing);
     std::string line;
 
-    // 去除路径末尾的 /
+    // Remove trailing / from path
     std::string dir_path = path;
     if (!dir_path.empty() && dir_path.back() == '/') {
       dir_path.pop_back();
@@ -885,7 +885,7 @@ private:
         continue;
 
       PathInfo info = ParseMLSDLine(line, dir_path);
-      // 过滤掉无效项和 . ..
+      // Filter invalid entries and . ..
       if (info.type != PathType::Unknown && info.name != "." &&
           info.name != "..") {
         file_list.push_back(info);
@@ -1027,7 +1027,7 @@ public:
     if (connected && force) {
       connected = false;
       AMAuth::SecureZero(session_password_plain_);
-      // 清理旧的 handles
+      // Clean up old handles
       if (multi) {
         if (curl) {
           curl_multi_remove_handle(multi, curl);
@@ -1166,7 +1166,7 @@ public:
     start_time = start_time == -1 ? am_ms() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    std::lock_guard<std::recursive_mutex> lock(mtx); // 防止并发访问 curl
+    std::lock_guard<std::recursive_mutex> lock(mtx); // Prevent concurrent curl access
     ECM ecm = SetupPath("", true);
     if (ecm.first != EC::Success) {
       return ecm;
@@ -1214,7 +1214,7 @@ public:
       return {ECM{EC::Terminate, "Interrupted by user"}, PathInfo()};
     }
 
-    // 优先使用 MLST（现代方法）
+    // Prefer MLST (modern method)
     /*
     if (mlst_supported.load(std::memory_order_relaxed)) {
       auto [ecm, info] =
@@ -1225,21 +1225,21 @@ public:
         return {ecm, info};
       }
 
-      // MLST 不支持，标记并回退
+      // MLST unsupported; mark and fall back
       if (ecm.first == EC::OperationUnsupported) {
         mlst_supported.store(false, std::memory_order_relaxed);
         mlst_checked.store(true, std::memory_order_relaxed);
-        // 继续使用传统方法
+        // Continue using legacy method
       } else if (ecm.first == EC::Terminate ||
                  ecm.first == EC::OperationTimeout) {
-        // 中断或超时，直接返回
+        // Interrupted or timed out; return directly
         return {ecm, PathInfo()};
       } else if (ecm.first == EC::PathNotExist) {
-        // 路径不存在
+        // Path does not exist
 
         return {ecm, PathInfo()};
       }
-      // 其他错误也回退到传统方法
+      // Other errors also fall back to legacy method
     }*/
     auto [rcm, info] =
         stat_legacy(path, interrupt_flag, timeout_ms, start_time);
@@ -1272,7 +1272,7 @@ public:
       return {ECM{EC::Terminate, "Interrupted by user"}, {}};
     }
 
-    // 优先使用 MLSD（现代方法）
+    // Prefer MLSD (modern method)
     if (false) {
       auto [ecm, file_list] =
           try_mlsd(pathf, interrupt_flag, max_time_ms, start_time);
@@ -1282,27 +1282,27 @@ public:
         return {ecm, file_list};
       }
 
-      // MLSD 不支持，标记并回退
+      // MLSD unsupported; mark and fall back
       if (ecm.first == EC::OperationUnsupported) {
         mlst_supported.store(false, std::memory_order_relaxed);
         mlst_checked.store(true, std::memory_order_relaxed);
-        // 继续使用传统方法
+        // Continue using legacy method
       } else if (ecm.first == EC::Terminate ||
                  ecm.first == EC::OperationTimeout) {
-        // 中断或超时，直接返回
+        // Interrupted or timed out; return directly
         return {ecm, {}};
       } else if (ecm.first == EC::PathNotExist) {
-        // 路径不存在
+        // Path does not exist
         return {ecm, {}};
       }
-      // 其他错误也回退到传统方法
+      // Other errors also fall back to legacy method
     }
 
-    // 传统方法
+    // Legacy method
     return listdir(pathf, interrupt_flag, max_time_ms, start_time);
   }
 
-  // 传统 LIST 方法（回退用）
+  // Legacy LIST method (fallback)
   std::pair<ECM, std::vector<PathInfo>>
   listdir(const std::string &path, amf interrupt_flag = nullptr,
           int timeout_ms = -1, int64_t start_time = -1) override {
@@ -1362,7 +1362,7 @@ public:
     return {ECM{EC::Success, ""}, file_list};
   }
 
-  // 将iwalk定义在基类，因为几乎所有iwalk都是基于listdir的
+  // Define iwalk in base class since almost all iwalks are based on listdir
   void _iwalk(const PathInfo &info, WRV &result, RMR &errors,
               bool show_all = false, bool ignore_special_file = true,
               AMFS::WalkErrorCallback error_callback = nullptr,
@@ -1561,7 +1561,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     // Check if already exists
     //
-    // 使用 MKD 命令创建目录
+    // Use MKD command to create directory
     ECM ecm = SetupPath("", true);
     if (ecm.first != EC::Success) {
       return ecm;

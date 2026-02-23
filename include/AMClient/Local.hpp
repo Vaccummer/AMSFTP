@@ -4,12 +4,12 @@
 #include <unordered_map>
 #include <unordered_set>
 
-// 自身依赖
+// Internal dependencies
 #include "AMBase/CommonTools.hpp"
 #include "AMClient/Base.hpp"
-// 自身依赖
+// Internal dependencies
 
-// 第三方库
+// Third-party libraries
 #include <curl/curl.h>
 #include <libssh2.h>
 #include <libssh2_sftp.h>
@@ -368,27 +368,27 @@ public:
     info.owner = AMFS::GetFileOwner(AMStr::wstr(pathf));
 #else
     struct stat file_stat;
-    // 调用 stat 获取文件元数据（支持符号链接，若需跟随链接用 stat 而非
+    // Call stat to get file metadata (supports symlinks; use stat to follow links,
     // lstat）
     if (stat(path.c_str(), &file_stat) == -1) {
       return std::make_pair(
           "Fail to stat file: " + std::string(strerror(errno)), info);
     }
 
-    // 1. 拥有者和组（通过 UID/GID 转换）
-    struct passwd *pw = getpwuid(file_stat.st_uid); // UID -> 用户名
+    // 1. Owner and group (via UID/GID conversion)
+    struct passwd *pw = getpwuid(file_stat.st_uid); // UID -> username
     info.owner = pw ? pw->pw_name : std::to_string(file_stat.st_uid);
 
-    // 2. 八进制权限（0777格式）
+    // 2. Octal permissions (0777 format)
     info.mode_int = file_stat.st_mode & 0777;
     info.mode_str = ModeTrans(info.mode_int);
 
-    // 3. 访问时间（access time）和修改时间（modify time）
-    // 使用 struct timespec 成员（包含秒和纳秒，POSIX 标准）
+    // 3. Access time and modification time
+    // Use struct timespec fields (seconds + nanoseconds, POSIX standard)
     info.access_time =
-        timespec_to_double(file_stat.st_atim); // st_atim 是 timespec 类型
+        timespec_to_double(file_stat.st_atim); // st_atim is timespec type
     info.modify_time =
-        timespec_to_double(file_stat.st_mtim); // st_mtim 是 timespec 类型
+        timespec_to_double(file_stat.st_mtim); // st_mtim is timespec type
 #endif
 
 #ifdef __APPLE__
@@ -427,7 +427,7 @@ public:
       if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
         return {ECM{EC::OperationTimeout, "Listdir timeout"}, result};
       }
-      // 如果出现错误，则跳过当前文件
+      // If an error occurs, skip current file
       if (ec) {
         ec.clear();
         continue;
@@ -461,8 +461,8 @@ public:
     if (info.type != PathType::DIR) {
       return {error, {WRV{info}, errors}};
     }
-    std::unordered_set<std::string> all_dirs;   // 存储所有目录
-    std::unordered_set<std::string> has_subdir; // 存储有子目录的目录（非末级）
+    std::unordered_set<std::string> all_dirs;   // Store all directories
+    std::unordered_set<std::string> has_subdir; // Store directories that have subdirectories (non-leaf)
     const bool filter_hidden = !show_all;
     const bool filter_special = !show_all && ignore_sepcial_file;
     const auto is_hidden_name = [](const std::string &name) {
@@ -875,7 +875,7 @@ public:
 
     fs::rename(fs::path(src), fs::path(dst), ec);
     if (ec == std::errc::cross_device_link) {
-      // 跨文件系统：复制 + 删除
+      // Cross-filesystem: copy + delete
       ec.clear();
       if (fs::is_directory(src, ec)) {
         fs::copy(src, dst,
@@ -1041,7 +1041,7 @@ public:
       base_ext = base_info.second;
     }
 
-    // 获取当前时间，以2026-01-01-19-06格式
+    // Get current time in format 2026-01-01-19-06
     std::string current_time =
         FormatTime(std::time(nullptr), "%Y-%m-%d-%H-%M-%S");
 

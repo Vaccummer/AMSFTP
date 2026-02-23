@@ -1,5 +1,5 @@
 #pragma once
-// 标准库
+// Standard library
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -18,7 +18,7 @@
 #include <unordered_set>
 #include <vector>
 
-// 自身依赖
+// Internal dependencies
 #include "AMBase/CommonTools.hpp"
 #include "AMClient/Base.hpp"
 #include "AMClient/FTP.hpp"
@@ -426,7 +426,7 @@ private:
     int millsecond = 0;
     ECM rcm;
     while (true) {
-      // 遍历hosts字典
+      // Traverse hosts dictionary
       {
         std::lock_guard<std::recursive_mutex> lock(beat_mtx);
         for (auto &host : hosts) {
@@ -479,7 +479,7 @@ public:
                    std::shared_ptr<BaseClient> local_client = nullptr,
                    std::unordered_map<std::string, std::shared_ptr<BaseClient>>
                        init_hosts = {}) {
-    // 初始化本地客户端
+    // Initialize local client
     if (local_client && local_client->GetProtocol() == ClientProtocol::LOCAL) {
       this->local_client = std::move(local_client);
     } else {
@@ -586,7 +586,7 @@ public:
 
   void remove_client(const std::string &nickname) {
     if (nickname.empty() || AMStr::lowercase(nickname) == "local") {
-      // 不允许删除默认本地客户端
+      // Do not allow deleting the default local client
       return;
     }
     std::lock_guard<std::recursive_mutex> lock(beat_mtx);
@@ -2356,7 +2356,7 @@ public:
     start_time = start_time == -1 ? am_ms() : start_time;
     WRV result = {};
     TASKS tasks = {};
-    // 去除src的dst左右端的空格
+    // Trim leading/trailing spaces from src and dst
 
     auto [rc1, src_client] = hostm->test_client(src_host, false, interrupt_flag,
                                                 timeout_ms, start_time);
@@ -2383,7 +2383,7 @@ public:
               tasks};
     }
 
-    // 检查是否为 src_file -> dst_file 的传输
+    // Check whether this is src_file -> dst_file transfer
     auto dstf = dst;
     auto srcf = src;
     bool is_dst_file = false;
@@ -2393,7 +2393,7 @@ public:
     if (clone) {
       is_dst_file = true;
     } else if (src_stat.type == PathType::FILE) {
-      // 检查dst的扩展名和src扩展名是否相同
+      // Check whether dst extension matches src extension
 
       std::string dst_ext = AMPathStr::extname(dstf);
       if (AMPathStr::extname(srcf) == dst_ext && !dst_ext.empty()) {
@@ -2444,7 +2444,7 @@ public:
         dstf = AMPathStr::join(dstf, AMPathStr::basename(srcf));
       }
 
-      // 检测dst的父级目录是否存在
+      // Check whether parent directory of dst exists
       auto [rcm4, dst_parent_info] =
           dst_client->stat(AMPathStr::dirname(dstf), false, interrupt_flag,
                            timeout_ms, start_time);
@@ -2465,7 +2465,7 @@ public:
       if (rcm4.first == EC::Success) {
         auto [rcm5, dst_info] = dst_client->stat(dstf, false, interrupt_flag,
                                                  timeout_ms, start_time);
-        // 检验目标路径是否存在
+        // Verify whether destination path exists
         if (rcm5.first == EC::Success) {
           if (dst_info.type == PathType::DIR) {
             return {ECM(EC::NotAFile,

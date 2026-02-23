@@ -149,8 +149,8 @@ enum class ErrorCode {
 
 enum class WaitResult {
   Ready,       // Socket is ready for read/write
-  ReadReady,   // Socket is ready for read (仅 ReadOrWrite 模式)
-  WriteReady,  // Socket is ready for write (仅 ReadOrWrite 模式)
+  ReadReady,   // Socket is ready for read (ReadOrWrite mode only)
+  WriteReady,  // Socket is ready for write (ReadOrWrite mode only)
   Timeout,     // Operation timed out
   Interrupted, // Operation was interrupted by flag
   Error        // Socket error occurred
