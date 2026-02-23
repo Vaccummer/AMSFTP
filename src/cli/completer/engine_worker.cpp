@@ -426,10 +426,6 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
 } // namespace
 
 /**
- * @brief Tokenize input into completion tokens.
- */
-
-/**
  * @brief Find the token that owns the cursor.
  */
 bool AMCompleteEngine::FindTokenAtCursor_(
@@ -439,7 +435,9 @@ bool AMCompleteEngine::FindTokenAtCursor_(
     const auto &tok = tokens[i];
     const size_t begin = tok.quoted ? tok.content_start : tok.start;
     const size_t end = tok.quoted ? tok.content_end : tok.end;
-    if (cursor >= begin && cursor <= end) {
+    const bool in_token_body = cursor > begin && cursor < end;
+    const bool at_last_token_end = cursor == end && (i + 1 == tokens.size());
+    if (in_token_body || at_last_token_end) {
       if (out) {
         *out = tok;
       }
@@ -480,7 +478,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     for (size_t i = 0; i < all_tokens.size(); ++i) {
       const auto &tok = all_tokens[i];
       const size_t begin = tok.quoted ? tok.content_start : tok.start;
-      if (request.cursor < begin) {
+      if (request.cursor <= begin) {
         token_index = i;
         break;
       }
@@ -791,11 +789,12 @@ void AMCompleteEngine::DispatchCandidates_(const AMCompletionContext &ctx,
     scoped.targets.push_back(target);
 
     AMCompletionCollectResult collected = engine->CollectCandidates(scoped);
-    if (!collected.candidates.empty()) {
-      out.items.insert(out.items.end(),
-                       std::make_move_iterator(collected.candidates.begin()),
-                       std::make_move_iterator(collected.candidates.end()));
-      out.from_cache = collected.from_cache;
+    if (!collected.candidates.items.empty()) {
+      out.items.insert(
+          out.items.end(),
+          std::make_move_iterator(collected.candidates.items.begin()),
+          std::make_move_iterator(collected.candidates.items.end()));
+      out.from_cache = collected.candidates.from_cache;
       ConsumeAsyncResults_(scoped, out);
       return;
     }

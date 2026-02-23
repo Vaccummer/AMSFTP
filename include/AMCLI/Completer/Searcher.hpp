@@ -4,8 +4,10 @@
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
+#include "AMManager/FileSystem.hpp"
 #include "AMManager/Set.hpp"
 #include "AMManager/Transfer.hpp"
+#include "AMManager/Var.hpp"
 #include <chrono>
 #include <list>
 #include <mutex>
@@ -15,17 +17,6 @@
 class AMConfigManager;
 class AMFileSystem;
 class AMTransferManager;
-namespace AMClientManage {
-class Manager;
-}
-
-/**
- * @brief Registration tuple used to bind targets to search engines.
- */
-struct AMSearchEngineRegistration {
-  std::vector<AMCompletionTarget> targets;
-  std::shared_ptr<AMCompletionSearchEngine> engine;
-};
 
 /**
  * @brief Command and option completion search engine.
@@ -92,9 +83,11 @@ public:
                       std::vector<AMCompletionCandidate> &items) override;
 
 private:
+  AMConfigManager &config_manager_ = AMConfigManager::Instance();
   AMHostManager &host_manager_ = AMHostManager::Instance();
   AMClientManager &client_manager_ = AMClientManager::Instance();
   AMTransferManager &transfer_manager_ = AMTransferManager::Instance();
+  VarCLISet &var_manager_ = VarCLISet::Instance();
 };
 
 /**
@@ -105,7 +98,12 @@ public:
   /**
    * @brief Construct path search engine.
    */
-  AMPathSearchEngine();
+  AMPathSearchEngine() = default;
+
+  /**
+   * @brief Destroy path search engine and unregister temporary hooks.
+   */
+  ~AMPathSearchEngine() override;
 
   /**
    * @brief Collect path candidates or async path requests.
@@ -178,6 +176,13 @@ private:
   };
 
   /**
+   * @brief Temporary cache entry for one prompt session.
+   */
+  struct TempCacheEntry {
+    std::vector<PathInfo> items;
+  };
+
+  /**
    * @brief Parsed path context derived from input token.
    */
   struct PathContext {
@@ -195,9 +200,14 @@ private:
   };
 
   /**
-   * @brief Load per-nickname path-engine configuration.
+   * @brief Ensure the prompt-return callback is registered once.
    */
-  void LoadPathEngineConfigs_();
+  void EnsureTempCacheHookRegistered_();
+
+  /**
+   * @brief Clear temporary path cache.
+   */
+  void ClearTempCache_();
 
   /**
    * @brief Style a path entry for display.
@@ -224,20 +234,36 @@ private:
   bool LookupCache_(const CacheKey &key, std::vector<PathInfo> *items);
 
   /**
+   * @brief Lookup temporary path cache entries.
+   */
+  bool LookupTempCache_(const CacheKey &key, std::vector<PathInfo> *items);
+
+  /**
    * @brief Store path cache entries and prune old entries.
    */
   void StoreCache_(const CacheKey &key, const std::vector<PathInfo> &items,
                    size_t max_entries);
 
-  AMConfigManager &config_manager_;
-  AMClientManage::Manager &client_manager_;
-  AMFileSystem &filesystem_;
+  /**
+   * @brief Store temporary path cache entries.
+   */
+  void StoreTempCache_(const CacheKey &key, const std::vector<PathInfo> &items);
+
+  AMConfigManager &config_manager_ = AMConfigManager::Instance();
+  AMClientManage::Manager &client_manager_ = AMClientManager::Instance();
+  AMFileSystem &filesystem_ = AMFileSystem::Instance();
   AMTokenTypeAnalyzer &token_analyzer_ = AMTokenTypeAnalyzer::Instance();
   AMSetManager &set_manager_ = AMSetManager::Instance();
+  VarCLISet &var_manager_ = VarCLISet::Instance();
+  AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
   mutable std::mutex cache_mtx_;
   std::unordered_map<std::string, std::unordered_map<std::string, CacheEntry>>
       cache_;
   std::unordered_map<std::string, std::list<std::string>> cache_order_;
+  std::unordered_map<std::string, std::unordered_map<std::string, TempCacheEntry>>
+      temp_cache_;
+  std::string temp_cache_hook_name_;
+  bool temp_cache_hook_registered_ = false;
 };
 
 /**
@@ -245,3 +271,25 @@ private:
  */
 std::vector<AMSearchEngineRegistration>
 AMBuildDefaultSearchEngineRegistrations();
+
+inline std::vector<AMSearchEngineRegistration>
+AMBuildDefaultSearchEngineRegistrations() {
+  std::vector<AMSearchEngineRegistration> out;
+
+  auto command_engine = std::make_shared<AMCommandSearchEngine>();
+  out.push_back(
+      {{AMCompletionTarget::TopCommand, AMCompletionTarget::Subcommand,
+        AMCompletionTarget::LongOption, AMCompletionTarget::ShortOption},
+       command_engine});
+
+  auto internal_engine = std::make_shared<AMInternalSearchEngine>();
+  out.push_back(
+      {{AMCompletionTarget::VariableName, AMCompletionTarget::ClientName,
+        AMCompletionTarget::HostNickname, AMCompletionTarget::HostAttr,
+        AMCompletionTarget::TaskId},
+       internal_engine});
+
+  auto path_engine = std::make_shared<AMPathSearchEngine>();
+  out.push_back({{AMCompletionTarget::Path}, path_engine});
+  return out;
+}

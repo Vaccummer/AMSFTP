@@ -173,12 +173,31 @@ public:
    */
   bool PromptCore(const std::string &prompt, std::string *out_input);
 
+  /**
+   * @brief Register a callback invoked when PromptCore returns.
+   */
+  bool RegisterCorePromptReturnCallback(const std::string &name,
+                                        std::function<void()> callback);
+
+  /**
+   * @brief Remove a PromptCore-return callback.
+   */
+  bool UnregisterCorePromptReturnCallback(const std::string &name);
+
 private:
+  /**
+   * @brief Notify registered PromptCore-return callbacks.
+   */
+  void NotifyCorePromptReturnCallbacks_();
+
   void InitIsoclineConfig();
   std::mutex print_mutex_;
   std::string cached_output_;
   std::mutex cached_output_mutex_;
   std::atomic<int> cache_output_lock_depth_{0};
+  std::mutex core_prompt_callbacks_mtx_;
+  std::unordered_map<std::string, std::function<void()>>
+      core_prompt_callbacks_;
 };
 
 class AMPrintLockGuard : NonCopyableNonMovable {

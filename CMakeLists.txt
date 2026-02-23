@@ -27,6 +27,8 @@ endif()
 file(GLOB_RECURSE AMSFTP_SOURCES CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/main.cpp"
   "${PROJECT_SOURCE_DIR}/src/cli/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/cli/completer/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/cli/searcher/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/manager/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/manager/client/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/manager/config/*.cpp"
