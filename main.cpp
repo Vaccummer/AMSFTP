@@ -68,6 +68,7 @@ int main(int argc, char **argv) {
 
     CliArgsPool args_pool;
     CliCommands cli_commands = BindCliOptions(app, args_pool);
+    BuildCommandTree(app, args_pool);
     try {
       app.parse(argc, argv);
     } catch (const CLI::CallForHelp &e) {
@@ -128,7 +129,6 @@ int main(int argc, char **argv) {
     DispatchResult dispatch = DispatchCliCommands(cli_commands, managers);
     if (dispatch.enter_interactive) {
       prompt_manager.LoadHistory(client_manager.CurrentNickname());
-      g_command_tree->Build(app);
       RunInteractiveLoop(app_name, managers);
     }
     if (dispatch.rcm.first != EC::Success) {

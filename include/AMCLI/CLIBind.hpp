@@ -1,5 +1,6 @@
 #pragma once
 #include "AMBase/CommonTools.hpp"
+#include "AMCLI/CommandTree.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
@@ -1726,10 +1727,9 @@ struct DispatchResult {
 CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args);
 
 /**
- * @brief Build the shared command tree from CLI definitions.
+ * @brief Build the singleton command tree from CLI definitions.
  */
-std::shared_ptr<CommandTree> BuildCommandTree(CLI::App &app,
-                                              CliArgsPool &args);
+void BuildCommandTree(CLI::App &app, CliArgsPool &args);
 
 /**
  * @brief Set the exit code and return.

@@ -210,6 +210,7 @@ VarShortcutMode DetectVarShortcutMode_(const AMCompletionContext &ctx) {
  */
 CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
   CommandState state;
+  CommandTree &command_tree = CommandTree::Instance();
   std::vector<std::string> before;
   before.reserve(ctx.token_index);
 
@@ -230,25 +231,21 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
     if (text.empty()) {
       continue;
     }
-    if (!g_command_tree) {
-      state.unknown_before_command = true;
-      return state;
-    }
     if (state.command_path.empty()) {
-      if (g_command_tree->IsModule(text)) {
+      if (command_tree.IsModule(text)) {
         state.module = text;
         state.has_module = true;
         state.command_path = text;
         state.command_tokens = i + 1;
-        node = g_command_tree->FindNode(state.command_path);
+        node = command_tree.FindNode(state.command_path);
         continue;
       }
-      if (g_command_tree->IsTopCommand(text)) {
+      if (command_tree.IsTopCommand(text)) {
         state.cmd = text;
         state.has_cmd = true;
         state.command_path = text;
         state.command_tokens = i + 1;
-        node = g_command_tree->FindNode(state.command_path);
+        node = command_tree.FindNode(state.command_path);
         continue;
       }
       state.unknown_before_command = true;
@@ -260,7 +257,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
       state.cmd = state.command_path;
       state.has_cmd = true;
       state.command_tokens = i + 1;
-      node = g_command_tree->FindNode(state.command_path);
+      node = command_tree.FindNode(state.command_path);
       continue;
     }
 
@@ -323,7 +320,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
         ++state.arg_index;
         continue;
       }
-      const auto value_rule = g_command_tree->ResolveOptionValueRule(
+      const auto value_rule = command_tree.ResolveOptionValueRule(
           state.command_path, option_name, '\0', 0);
       if (eq_pos != std::string::npos) {
         if (!value_rule.has_value()) {
@@ -358,7 +355,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
           all_known = false;
           break;
         }
-        const auto rule = g_command_tree->ResolveOptionValueRule(
+        const auto rule = command_tree.ResolveOptionValueRule(
             state.command_path, "", c, 0);
         if (rule.has_value()) {
           any_value_rule = true;
@@ -372,7 +369,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
       }
 
       if (body.size() == 1) {
-        const auto rule = g_command_tree->ResolveOptionValueRule(
+        const auto rule = command_tree.ResolveOptionValueRule(
             state.command_path, "", body[0], 0);
         state.options.push_back(std::string("-") + body[0]);
         if (rule.has_value()) {
@@ -456,6 +453,7 @@ bool AMCompleteEngine::FindTokenAtCursor_(
 AMCompletionContext
 AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   AMCompletionContext ctx;
+  CommandTree &command_tree = CommandTree::Instance();
   ctx.input = request.input;
   ctx.cursor = request.cursor;
   ctx.request_id = request.request_id;
@@ -558,22 +556,21 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
 
   CommandState state = ResolveCommandState_(ctx);
   const std::string current_prefix = ctx.has_token ? ctx.token_prefix : "";
-  if (!current_prefix.empty() && g_command_tree &&
-      ctx.token_index == state.command_tokens) {
+  if (!current_prefix.empty() && ctx.token_index == state.command_tokens) {
     if (!state.has_module && !state.has_cmd) {
-      if (g_command_tree->IsModule(current_prefix)) {
+      if (command_tree.IsModule(current_prefix)) {
         state.module = current_prefix;
         state.has_module = true;
         state.command_path = current_prefix;
         state.command_tokens = ctx.token_index + 1;
-      } else if (g_command_tree->IsTopCommand(current_prefix)) {
+      } else if (command_tree.IsTopCommand(current_prefix)) {
         state.cmd = current_prefix;
         state.has_cmd = true;
         state.command_path = current_prefix;
         state.command_tokens = ctx.token_index + 1;
       }
     } else if (state.has_module && !state.has_cmd) {
-      const auto *node = g_command_tree->FindNode(state.command_path);
+      const auto *node = command_tree.FindNode(state.command_path);
       if (node &&
           node->subcommands.find(current_prefix) != node->subcommands.end()) {
         state.command_path += " " + current_prefix;
@@ -601,8 +598,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     return ctx;
   }
 
-  const auto *cmd_node =
-      g_command_tree ? g_command_tree->FindNode(state.command_path) : nullptr;
+  const auto *cmd_node = command_tree.FindNode(state.command_path);
   const bool cursor_is_bare_dashdash =
       ctx.has_token && ctx.token_prefix == "--";
   const bool cursor_is_long_option_prefix =
@@ -628,8 +624,8 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     cursor_valid_long_option =
         cmd_node && cmd_node->long_options.find(cursor_long_name) !=
                         cmd_node->long_options.end();
-    if (cursor_valid_long_option && g_command_tree) {
-      cursor_long_value_rule = g_command_tree->ResolveOptionValueRule(
+    if (cursor_valid_long_option) {
+      cursor_long_value_rule = command_tree.ResolveOptionValueRule(
           state.command_path, cursor_long_name, '\0', 0);
       if (cursor_long_has_inline_value && !cursor_long_value_rule.has_value()) {
         cursor_valid_long_option = false;
@@ -655,7 +651,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
           all_known = false;
           break;
         }
-        const auto rule = g_command_tree->ResolveOptionValueRule(
+        const auto rule = command_tree.ResolveOptionValueRule(
             state.command_path, "", c, 0);
         if (rule.has_value()) {
           any_value_rule = true;
@@ -693,7 +689,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     semantic = state.pending_value_rule->semantic;
   }
   if (!semantic.has_value() && cursor_is_long_option_prefix &&
-      cursor_valid_long_option && g_command_tree) {
+      cursor_valid_long_option) {
     if (cursor_long_has_inline_value) {
       if (cursor_long_value_rule.has_value()) {
         semantic = cursor_long_value_rule->semantic;
@@ -708,9 +704,10 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     ctx.targets = {AMCompletionTarget::ShortOption};
     return ctx;
   }
-  if (!semantic.has_value() && g_command_tree && !state.command_path.empty()) {
-    semantic = g_command_tree->ResolvePositionalSemantic(state.command_path,
-                                                         state.arg_index);
+  if (!semantic.has_value() && !state.command_path.empty()) {
+    semantic =
+        command_tree.ResolvePositionalSemantic(state.command_path,
+                                               state.arg_index);
   }
 
   const auto semantic_target =

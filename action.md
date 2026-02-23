@@ -1,5 +1,9 @@
-# CommandTree Improve
+# BindHelper Class
 
-Set this class as a singleton like manager
+AddModule(str name, str help)
 
-move this class to a solo hearder file and implement in solo src
+AddFunction(vector `<str>` path, std::help)
+
+AddFlag(vector `<str>` path, str flag_name, str help)
+
+AddOption(vector `<str>` path, str option_name, size_t min_num, size_t max_num, ArgType)

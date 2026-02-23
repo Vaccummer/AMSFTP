@@ -1,5 +1,6 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
+#include "AMCLI/CommandTree.hpp"
 #include "AMCLI/Completer/Engine.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Client.hpp"
@@ -57,7 +58,7 @@ private:
                          const CommandNode **out_node,
                          size_t *out_consumed) const;
 
-  std::shared_ptr<CommandTree> command_tree_;
+  CommandTree *command_tree_ = &CommandTree::Instance();
 };
 
 /**
