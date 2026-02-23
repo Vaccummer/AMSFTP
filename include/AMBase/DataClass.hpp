@@ -31,8 +31,8 @@ using amf = std::shared_ptr<InterruptFlag>;
 namespace fs = std::filesystem;
 
 template <typename T> struct NBResult {
-  T value;           // 函数返回值
-  WaitResult status; // 等待状态
+  T value;           // Function return value
+  WaitResult status; // Wait state
 
   [[nodiscard]] bool ok() const { return status == WaitResult::Ready; }
   [[nodiscard]] bool is_timeout() const {
@@ -82,7 +82,7 @@ inline std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn, Args &&...args) {
 }
 
 inline double timenow() {
-  // 获取unix参考时间，以秒为单位返回double
+  // Get Unix reference time and return it as seconds in double
   return std::chrono::duration<double>(
              std::chrono::system_clock::now().time_since_epoch())
       .count();
@@ -91,7 +91,7 @@ inline double timenow() {
       .count();
 }
 
-// 获取从steady_clock纪元到当前的毫秒数（整数）
+// Get milliseconds from steady_clock epoch to now (integer)
 inline std::int64_t am_ms() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
@@ -170,7 +170,7 @@ inline PathType cast_fs_type(const fs::file_type &type) {
 inline EC fec(const std::error_code &ec) {
   if (!ec)
     return EC::Success;
-  // 使用 std::errc 进行跨平台映射
+  // Use std::errc for cross-platform mapping
   auto errc = static_cast<std::errc>(ec.value());
 
   switch (errc) {
@@ -246,7 +246,7 @@ public:
   }
 };
 
-// 非阻塞调用结果
+// Non-blocking call result
 
 class PathInfo {
 public:
@@ -656,8 +656,8 @@ private:
    */
   std::array<char, static_cast<size_t>(AMMaxBufferSize)> buffer_{};
   size_t capacity_ = 0;
-  std::atomic<size_t> head_{0}; // 消费者读取位置
-  std::atomic<size_t> tail_{0}; // 生产者写入位置
+  std::atomic<size_t> head_{0}; // Consumer read position
+  std::atomic<size_t> tail_{0}; // Producer write position
 
 public:
   /**
@@ -691,7 +691,7 @@ public:
     size_t pos = t % capacity_;
     size_t used = t - h;
     size_t free_space = capacity_ - used;
-    // 连续可写 = min(到末尾的距离, 空闲空间)
+    // Contiguous writable = min(distance to end, free space)
     size_t contig = capacity_ - pos > free_space ? free_space : capacity_ - pos;
     return {buffer_.data() + pos, contig};
   }
@@ -711,7 +711,7 @@ public:
     size_t t = tail_.load(std::memory_order_acquire);
     size_t pos = h % capacity_;
     size_t avail = t - h;
-    // 连续可读 = min(到末尾的距离, 可用数据)
+    // Contiguous readable = min(distance to end, available data)
     size_t contig = capacity_ - pos > avail ? avail : capacity_ - pos;
     return {buffer_.data() + pos, contig};
   }

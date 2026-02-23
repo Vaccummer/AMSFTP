@@ -63,7 +63,7 @@ inline std::string GenerateUID(int length = 10) {
   length = length < 1 ? 1 : length;
   length = length > 32 ? 32 : length;
   size_t uid = GenerateUIDInt();
-  // 用AMcharset生成一个字符串
+  // Generate a string using AMcharset
   std::string uid_str;
   uid_str.reserve(static_cast<size_t>(length));
   for (int i = 0; i < length; i++) {
@@ -132,7 +132,7 @@ private:
     }
 
     if (path.type != PathType::DIR) {
-      // 当前路径已经是文件，无法继续匹配
+      // Current path is already a file; cannot continue matching
       return;
     }
 
@@ -164,7 +164,7 @@ private:
       }
       return;
     }
-    // 处理不匹配模式
+    // Handle non-matching mode
     else if (cur_pattern.find("*") == std::string::npos &&
              (cur_pattern.find("<") == std::string::npos ||
               cur_pattern.find(">") == std::string::npos)) {
@@ -188,7 +188,7 @@ private:
         }
       }
     }
-    // 进入匹配模式
+    // Enter matching mode
     else {
       auto new_parts3 = match_parts;
       new_parts3.erase(new_parts3.begin());
@@ -217,12 +217,12 @@ private:
                    const std::string &to) {
     std::string result = str;
     if (from.empty())
-      return result; // 避免空字符串导致无限循环
+      return result; // Avoid infinite loop caused by empty string
     size_t pos = 0;
     while ((pos = result.find(from, pos)) != std::string::npos) {
       result.replace(pos, from.length(), to);
       pos +=
-          to.length(); // 跳过替换后的内容，防止重复替换（比如from是to的子串）
+          to.length(); // Skip replaced content to prevent repeated replacement (e.g. from is a substring of to)
     }
     return result;
   }
@@ -241,7 +241,7 @@ public:
   }
 
   bool name_match(const std::string &name, const std::string &pattern) {
-    // 将pattern中的*换成star_rep，<换成less_rep，>换成greater_rep
+    // Replace * in pattern with star_rep, < with less_rep, and > with greater_rep
     static const std::string star_rep = "XKSOX1S";
     static const std::string less_rep = "SORBVs8";
     static const std::string greater_rep = "YNBSkdu8";
@@ -251,7 +251,7 @@ public:
     pattern_new = _rep(pattern_new, "<", less_rep);
     pattern_new = _rep(pattern_new, ">", greater_rep);
     pattern_new = AMPathStr::RegexEscape(pattern_new);
-    // 将path中的star_rep换成.*，less_rep换成[，greater_rep换成], 不要用正则替换
+    // Replace star_rep in path with .*, less_rep with [, and greater_rep with ]; do not use regex replacement
     pattern_new = _rep(pattern_new, star_rep, ".*");
     pattern_new = _rep(pattern_new, less_rep, "[");
     pattern_new = _rep(pattern_new, greater_rep, "]");
@@ -310,7 +310,7 @@ public:
     std::vector<std::string> match_parts = {};
 
     for (size_t i = 1; i < parts.size(); i++) {
-      // 没有* < >时，链接到cur_path
+      // When there is no * < >, join with cur_path
       if (parts[i].find("*") == std::string::npos &&
           parts[i].find("<") == std::string::npos &&
           parts[i].find(">") == std::string::npos && !is_stop) {
@@ -321,7 +321,7 @@ public:
       }
     }
 
-    // 检查cur_path是否存在
+    // Check whether cur_path exists
     auto [error, info] =
         stat(cur_path, false, interrupt_flag, timeout_ms, start_time);
     if (error.first != EC::Success) {
@@ -506,12 +506,12 @@ public:
 class SafeChannel {
 public:
   LIBSSH2_CHANNEL *channel = nullptr;
-  bool closed = false; // 标记是否已正常关闭
+  bool closed = false; // Mark whether it has been closed normally
 
   ~SafeChannel() {
     if (channel) {
       if (!closed) {
-        // 未正常关闭，需要发信号终止远程进程
+        // Not closed normally; need to send signal to terminate remote process
         libssh2_channel_send_eof(channel);
         libssh2_channel_signal(channel, "TERM");
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -523,8 +523,8 @@ public:
     }
   }
 
-  // 正常关闭 channel（阻塞模式）
-  // 成功返回 true，失败返回 false
+  // Close channel normally (blocking mode)
+  // Return true on success, false on failure
   bool close() {
     if (!channel || closed) {
       return closed;
@@ -536,7 +536,7 @@ public:
     return closed;
   }
 
-  // 发送退出信号（不等待关闭）
+  // Send exit signal (do not wait for close)
   void request_exit() {
     if (!channel) {
       return;
@@ -545,7 +545,7 @@ public:
     libssh2_channel_signal(channel, "TERM");
   }
 
-  // 强制终止并关闭（阻塞模式）
+  // Force terminate and close (blocking mode)
   bool terminate_and_close(int wait_ms = 50) {
     if (!channel || closed) {
       return closed;
@@ -557,8 +557,8 @@ public:
     return close();
   }
 
-  // 非阻塞关闭，需配合 wait_for_socket 使用
-  // 返回值: 0=成功, EAGAIN=需等待, <0=错误
+  // Non-blocking close; use with wait_for_socket
+  // Return values: 0=success, EAGAIN=wait required, <0=error
   int close_nonblock() {
     if (!channel)
       return -1;
@@ -609,7 +609,7 @@ public:
              TraceCallback trace_cb = {})
       : AMTracer(request, buffer_capacity, std::move(trace_cb)),
         BasePathMatch() {
-    // 生成一个随机uid
+    // Generate a random uid
     this->uid = GenerateUID();
   }
 
@@ -656,8 +656,8 @@ public:
 
   ECM GetState() { return this->state; };
 
-  // 对远程服务器move是不能跨文件系统的，本地可以直接move
-  // 远程move得用transfer再删除
+  // On remote servers, move cannot cross filesystems; local move can
+  // Remote move must use transfer then delete
   ECM move(const std::string &src, const std::string &dst,
            bool need_mkdir = false, bool force_write = false,
            amf interrupt_flag = nullptr, int timeout_ms = -1,
@@ -668,8 +668,8 @@ public:
                   start_time);
   }
 
-  // 获取某一路径下的所有文件和底层目录的总大小,
-  // 但是在读取时遇到错误不会throw，也不会记录其大小，可能存在偏差
+  // Get total size of all files and nested directories under a path,
+  // If read errors occur, no throw and no size accounting; result may be biased
   virtual int64_t getsize(const std::string &path,
                           bool ignore_sepcial_file = true,
                           amf interrupt_flag = nullptr, int timeout_ms = -1,
@@ -701,7 +701,7 @@ public:
     return {rcm, path_info.type};
   }
 
-  // 判断路径是否存在，自带AMFS::abspath
+  // Check whether path exists (with AMFS::abspath)
   std::pair<ECM, bool> exists(const std::string &path,
                               amf interrupt_flag = nullptr, int timeout_ms = -1,
                               int64_t start_time = -1) {

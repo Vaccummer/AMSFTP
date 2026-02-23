@@ -44,11 +44,11 @@ enum class SocketWaitType {
   Read,        // Wait for socket readable
   Write,       // Wait for socket writable
   ReadWrite,   // Wait for both readable and writable
-  ReadOrWrite, // Wait for readable or writable, 返回 ReadReady/WriteReady
+  ReadOrWrite, // Wait for readable or writable, returns ReadReady/WriteReady
   Auto         // Determine from libssh2_session_block_directions
 };
 
-// 跨平台Socket连接器
+// Cross-platform socket connector
 class SocketConnector {
 public:
   SOCKET sock = INVALID_SOCKET;
@@ -85,9 +85,9 @@ public:
       return false;
     }
 
-    // 1. DNS解析 - 使用 AF_UNSPEC 支持 IPv4 和 IPv6
+    // 1. DNS resolve - use AF_UNSPEC for IPv4/IPv6
     addrinfo hints{}, *result = nullptr;
-    hints.ai_family = AF_UNSPEC; // 支持 IPv4 和 IPv6
+    hints.ai_family = AF_UNSPEC; // support IPv4 and IPv6
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_protocol = IPPROTO_TCP;
 
@@ -113,7 +113,7 @@ public:
       return false;
     }
 
-    // 2. 遍历所有地址尝试连接（支持 IPv4/IPv6 双栈）
+    // 2. Try connecting all resolved addresses (IPv4/IPv6 dual-stack)
     addrinfo *rp = nullptr;
     for (rp = result; rp != nullptr; rp = rp->ai_next) {
       if (is_interrupted()) {
@@ -124,10 +124,10 @@ public:
 
       sock = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
       if (sock == INVALID_SOCKET) {
-        continue; // 尝试下一个地址
+        continue; // Try next address
       }
 
-      // 3. 设置非阻塞模式
+      // 3. Set non-blocking mode
       if (!SetNonBlocking(true)) {
         closesocket(sock);
         sock = INVALID_SOCKET;
@@ -142,7 +142,7 @@ public:
         return false;
       }
 
-      // 4. 发起连接
+      // 4. Start connection
       int conn_result = connect(sock, rp->ai_addr, (int)rp->ai_addrlen);
 
 #ifdef _WIN32
@@ -153,7 +153,7 @@ public:
 #endif
 
       if (conn_result == 0) {
-        // 立即成功（本地连接可能发生）
+        // Immediate success (can happen on local connection)
         if (is_interrupted()) {
           mark_interrupted();
           closesocket(sock);
@@ -169,10 +169,10 @@ public:
       if (!in_progress) {
         closesocket(sock);
         sock = INVALID_SOCKET;
-        continue; // 尝试下一个地址
+        continue; // Try next address
       }
 
-      // 5. 使用select等待连接完成
+      // 5. Use select to wait for connection complete
       const int64_t total_timeout_ms = timeout_ms > 0 ? timeout_ms : 6000;
       const int64_t start_ms = am_ms();
       int64_t remaining_ms = total_timeout_ms;
@@ -225,10 +225,10 @@ public:
       if (select_result <= 0 || timed_out) {
         closesocket(sock);
         sock = INVALID_SOCKET;
-        continue; // 尝试下一个地址
+        continue; // Try next address
       }
 
-      // 6. 检查socket错误
+      // 6. Check socket errors
       int sock_error = 0;
       socklen_t len = sizeof(sock_error);
       if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (char *)&sock_error, &len) <
@@ -236,10 +236,10 @@ public:
           sock_error != 0) {
         closesocket(sock);
         sock = INVALID_SOCKET;
-        continue; // 尝试下一个地址
+        continue; // Try next address
       }
 
-      // 7. 恢复阻塞模式，连接成功
+      // 7. Restore blocking mode, connection successful
       if (is_interrupted()) {
         mark_interrupted();
         closesocket(sock);
@@ -252,7 +252,7 @@ public:
       return true;
     }
 
-    // 所有地址都尝试失败
+    // All addresses failed
     freeaddrinfo(result);
     error_msg = "Socket connect failed for all addresses";
     error_code = EC::SocketConnectFailed;
@@ -346,7 +346,7 @@ inline void AMInitWSA() {
 inline void AMInitWSA();
 
 inline void cleanup_wsa() {
-  // 清理wsa，如果wsa已经初始化，则清理wsa
+  // Cleanup WSA if initialized
   if (is_wsa_initialized.load(std::memory_order_relaxed)) {
     WSACleanup();
     is_wsa_initialized.store(false, std::memory_order_relaxed);
@@ -412,12 +412,12 @@ inline bool IsValidKey(const std::string &key) {
   std::string line;
   std::getline(file, line);
 
-  // 匹配所有SSH私钥的标准开头标记
+  // Match standard header markers of all SSH private keys
   const std::vector<std::string> private_key_headers = {
       "-----BEGIN OPENSSH PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----",
       "-----BEGIN EC PRIVATE KEY-----", "-----BEGIN DSA PRIVATE KEY-----"};
   for (const auto &header : private_key_headers) {
-    if (line.find(header) == 0) { // 开头匹配
+    if (line.find(header) == 0) { // Prefix match
       return true;
     }
   }
@@ -463,14 +463,14 @@ protected:
   ECM ErrorRecord(const NBResult<T> &result, TraceLevel level,
                   const std::string &target, const std::string &action,
                   std::string prompt = "") {
-    // 1. 超时
+    // 1. Timeout
     if (result.is_timeout()) {
       std::string msg = AMStr::amfmt("{} on {} timeout", action, target);
       trace(level, EC::OperationTimeout, target, action, msg);
       return {EC::OperationTimeout, msg};
     }
 
-    // 2. 终止
+    // 2. Terminate
     if (result.is_interrupted()) {
       std::string msg =
           AMStr::amfmt("{} on {} interrupted by user", action, target);
@@ -486,12 +486,12 @@ protected:
       return {EC::SocketRecvError, msg};
     }
 
-    // 4 & 5. 执行完成 - 检查返回值判断是否报错
-    // 对于 int/ssize_t: < 0 表示失败（但 LIBSSH2 中 0 表示成功）
-    // 对于指针: nullptr 表示失败
+    // 4 & 5. Execution finished - check return value for errors
+    // For int/ssize_t: <0 means failure (while LIBSSH2 uses 0 as success)
+    // For pointers: nullptr means failure
     if constexpr (std::is_same_v<T, int> || std::is_same_v<T, ssize_t>) {
       if (result.value < 0) {
-        // 执行完成但报错
+        // Execution finished but failed
         auto ec = GetLastEC();
         auto errmsg = GetLastErrorMsg();
         std::string msg = prompt.empty() ? AMStr::amfmt("{} on {} error: {}",
@@ -518,7 +518,7 @@ protected:
       }
     }
 
-    // 5. 执行成功
+    // 5. Success
     return {EC::Success, ""};
   }
 
@@ -801,7 +801,7 @@ public:
 #endif
 
       if (rc > 0) {
-        // ReadOrWrite 模式下返回具体的读写状态
+        // ReadOrWrite return specific read/write state in this mode
         if (is_read_or_write) {
           if (FD_ISSET(sock, &readfds)) {
             return WaitResult::ReadReady;
@@ -875,7 +875,7 @@ public:
                                            password_enc, password_correct));
     };
 
-    // 使用SocketConnector建立连接
+    // Use SocketConnector to establish connection
     SocketConnector connector;
 
     if (!connector.Connect(res_data.hostname, res_data.port, timeout_ms,
@@ -887,7 +887,7 @@ public:
     }
     sock = connector.sock;
 
-    // 检查中断/超时
+    // Check interrupt/timeout
     if (interrupt_flag && interrupt_flag->check()) {
       return {EC::Terminate, "Connection interrupted"};
     }
@@ -904,7 +904,7 @@ public:
       return {EC::SessionCreateFailed, "Libssh2 Session initialization failed"};
     }
 
-    // 设置非阻塞模式进行握手
+    // Set non-blocking mode for handshake
     libssh2_session_set_blocking(session, 0);
 
     if (res_data.compression) {
@@ -913,7 +913,7 @@ public:
                                   "zlib@openssh.com,zlib,none");
     }
 
-    // 非阻塞握手
+    // Non-blocking handshake
     while (true) {
       rcr = libssh2_session_handshake(session, sock);
       wr =
@@ -943,7 +943,7 @@ public:
       return rcm;
     }
 
-    // 获取认证列表（非阻塞）
+    // Get auth list (non-blocking)
 
     while ((auth_list =
                 libssh2_userauth_list(session, res_data.username.c_str(),
@@ -967,15 +967,15 @@ public:
           "libssh2_userauth_list",
           AMStr::amfmt("Authentication methods: {}", auth_list));
 
-    // ========== 进入认证阶段，不再检测 timeout ==========
-    // 切换到阻塞模式，简化认证流程（认证可能涉及用户交互）
+    // ========== Enter authentication stage; stop timeout checks ==========
+    // Switch to blocking mode to simplify auth flow (auth may involve user interaction)
     libssh2_session_set_blocking(session, 1);
 
     password_auth = (strstr(auth_list, "password") != nullptr);
 
-    // 专用私钥认证
+    // Dedicated private key auth
     if (!res_data.keyfile.empty()) {
-      // 检查中断（不检查超时）
+      // Check interrupt (without timeout check)
       if (interrupt_flag && interrupt_flag->check()) {
         return {EC::Terminate, "Authentication interrupted"};
       }
@@ -998,7 +998,7 @@ public:
       }
     }
 
-    // 密码认证
+    // Password authentication
     if (!stored_password_enc.empty() && password_auth) {
       if (interrupt_flag && interrupt_flag->check()) {
         return {EC::Terminate, "Authentication interrupted"};
@@ -1020,7 +1020,7 @@ public:
       }
     }
 
-    // 共享私钥认证
+    // Shared private key authentication
     if (!private_keys.empty()) {
       for (auto private_key : private_keys) {
         if (interrupt_flag && interrupt_flag->check()) {
@@ -1047,7 +1047,7 @@ public:
       }
     }
 
-    // 交互式密码认证回调
+    // Interactive password authentication callback
     if (password_auth_cb && password_auth) {
       trace(TraceLevel::Info, EC::Success, "Interactive", "PasswordAuthorize",
             "Using password authentication callback to get another password");
@@ -1094,7 +1094,7 @@ public:
     rcm.second = "All authorize methods failed";
 
   OK:
-    // 检查中断
+    // Check interrupt
     if (rcm.first != EC::Success) {
       Disconnect();
       return rcm;
@@ -2110,7 +2110,7 @@ protected:
               AMFS::WalkErrorCallback error_callback = nullptr,
               amf interrupt_flag = nullptr, int timeout_ms = -1,
               int64_t start_time = -1) {
-    // 搜索目录下所有最深层的路径, 用于递归传输路径
+    // Find all deepest paths under directory for recursive transfer
     if (interrupt_flag && interrupt_flag->check()) {
       return;
     }
@@ -2122,7 +2122,7 @@ protected:
     };
 
     if (!isdir(attrs)) {
-      // 非目录直接加入
+      // Add directly if not a directory
       if (filter_hidden && is_hidden_name(AMPathStr::basename(path))) {
         return;
       }
@@ -2146,7 +2146,7 @@ protected:
     }
 
     if (attrs_list.empty()) {
-      // 末级空目录直接加入
+      // Add leaf empty directory directly
       result.push_back(FormatStat(path, attrs));
       return;
     }
@@ -2365,8 +2365,8 @@ public:
     }
   }
 
-  // 获取 RTT (Round Trip Time)，返回平均值（毫秒）
-  // 通过执行简单的 SFTP 操作来测量
+  // Get RTT (Round Trip Time), return average (ms)
+  // Measure via a simple SFTP operation
   double GetRTT(ssize_t times = 5, amf interrupt_flag = nullptr) override {
     if (times <= 0)
       times = 1;
@@ -2379,7 +2379,7 @@ public:
     std::vector<double> rtts;
     rtts.reserve(times);
 
-    // 使用 libssh2_sftp_stat 测量 RTT（最小开销的 SFTP 操作）
+    // Use libssh2_sftp_stat to measure RTT (minimal-overhead SFTP op)
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     libssh2_session_set_blocking(session, 0);
@@ -2418,7 +2418,7 @@ public:
       return -1.0;
     }
 
-    // 计算平均值
+    // Compute average
     double sum = 0.0;
     for (double rtt : rtts) {
       sum += rtt;
@@ -2464,10 +2464,10 @@ public:
       }
     };
 
-    // 设置非阻塞模式
+    // Set non-blocking mode
     libssh2_session_set_blocking(session, 0);
 
-    // 1. 执行命令
+    // 1. Execute command
     while ((rc = libssh2_channel_exec(sf.channel, cmd.c_str())) ==
            LIBSSH2_ERROR_EAGAIN) {
       wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
@@ -2484,7 +2484,7 @@ public:
     }
     stage = CmdStage::AwaitOutput;
 
-    // 2. 读取输出
+    // 2. Read output
     while (true) {
       ssize_t nbytes =
           libssh2_channel_read(sf.channel, buffer.data(), buffer.size() - 1);
@@ -2510,13 +2510,13 @@ public:
       }
     }
 
-    // 3. 清理输出末尾空白
+    // 3. Trim trailing output whitespace
     while (!output.empty() &&
            (output.back() == '\n' || output.back() == '\r')) {
       output.pop_back();
     }
 
-    // 4. 非阻塞关闭通道
+    // 4. Close channel non-blocking
     while ((rc = sf.close_nonblock()) == LIBSSH2_ERROR_EAGAIN) {
       wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
                            time_start, max_time_ms);
@@ -2525,7 +2525,7 @@ public:
       }
     }
 
-    // 5. 获取退出状态
+    // 5. Get exit status
     exit_status = libssh2_channel_get_exit_status(sf.channel);
 
     libssh2_session_set_blocking(session, 1);
@@ -3059,8 +3059,8 @@ public:
     return ecm;
   }
 
-  // 解析并返回绝对路径,
-  // ~在client中解析，..和.其他由服务器解析，有这些符号时需要路径真实存在
+  // Parse and return absolute path,
+  // ~ is resolved in client; .. and . are resolved by server; such symbols require path to exist
   std::pair<ECM, std::string> realpath(const std::string &path,
                                        amf interrupt_flag = nullptr,
                                        int timeout_ms = -1,
@@ -3071,7 +3071,7 @@ public:
       return {rcm, ""};
     }
     if (std::regex_search(path, std::regex("^~[\\\\/]"))) {
-      // 解析~符号
+      // Resolve ~ symbol
       pathf = AMPathStr::join(GetHomeDir(), pathf.substr(1), SepType::Unix);
     } else if (path == "~") {
       return {ECM{EC::Success, ""}, GetHomeDir()};
@@ -3086,7 +3086,7 @@ public:
       return {rcm2, ""};
     }
     if (GetOSType() == OS_TYPE::Windows) {
-      // windows server返回的路径会在前面加个/或\，需要去掉
+      // Windows server may prepend / or \ to path; remove it
       return {rcm2, path_t.substr(1)};
     }
     return {rcm2, path_t};
@@ -3144,7 +3144,7 @@ public:
     return {ECM{EC::Success, ""}, ecm_map};
   }
 
-  // 获取路径信息，自带AMFS::abspath
+  // Get path info (with AMFS::abspath)
   SR stat(const std::string &path, bool trace_link = false,
           amf interrupt_flag = nullptr, int timeout_ms = -1,
           int64_t start_time = -1) override {
@@ -3189,7 +3189,7 @@ public:
     return {rcm2, file_list};
   }
 
-  // 创建一级目录，自带AMFS::abspath
+  // Create one-level directory (with AMFS::abspath)
   ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
             int timeout_ms = -1, int64_t start_time = -1) override {
     ECM rcm = _precheck(path);
@@ -3213,7 +3213,7 @@ public:
     return lib_mkdir(path, interrupt_flag, timeout_ms, start_time);
   }
 
-  // 递归创建多级目录，直到报错为止，自带AMFS::abspath
+  // Recursively create nested directories until error (with AMFS::abspath)
   ECM mkdirs(const std::string &path, amf interrupt_flag = nullptr,
              int timeout_ms = -1, int64_t start_time = -1) override {
     ECM rcm = _precheck(path);
@@ -3280,7 +3280,7 @@ public:
     return lib_rmdir(path, interrupt_flag, timeout_ms, start_time);
   }
 
-  // 删除文件或目录，自带AMFS::abspath
+  // Delete file or directory (with AMFS::abspath)
   std::pair<ECM, RMR> remove(const std::string &path,
                              AMFS::WalkErrorCallback error_callback = nullptr,
                              amf interrupt_flag = nullptr, int timeout_ms = -1,
@@ -3307,7 +3307,7 @@ public:
     return {ECM{EC::Success, ""}, errors};
   }
 
-  // 将原路径变成新路径，自带AMFS::abspath
+  // Rename original path to new path (with AMFS::abspath)
   ECM rename(const std::string &src, const std::string &dst, bool mkdir = true,
              bool overwrite = false, amf interrupt_flag = nullptr,
              int timeout_ms = -1, int64_t start_time = -1) override {
@@ -3334,7 +3334,7 @@ public:
                       start_time);
   }
 
-  // 安全删除文件或目录，将目录移动到trash_dir中
+  // Safely delete file/dir by moving into trash_dir
   ECM saferm(const std::string &path, amf interrupt_flag = nullptr,
              int timeout_ms = -1, int64_t start_time = -1) override {
     ECM rcm0 = _precheck(path);
@@ -3364,7 +3364,7 @@ public:
       base_ext = base_info.second;
     }
 
-    // 获取当前时间，以2026-01-01-19-06格式
+    // Get current time in format 2026-01-01-19-06
     std::string current_time =
         FormatTime(std::time(nullptr), "%Y-%m-%d-%H-%M-%S");
 
@@ -3397,7 +3397,7 @@ public:
                       start_time);
   }
 
-  // 将源路径移动到目标文件夹
+  // Move source path to destination folder
 
   /*
   ECM copy(const std::string &src, const std::string &dst,
@@ -3470,7 +3470,7 @@ public:
     return {EC::Success, ""};
   }*/
 
-  // 递归遍历某一路径下的所有文件和底层目录，返回PathInfo的vector
+  // Recursively walk all files and nested dirs under a path, return vector<PathInfo>
   std::pair<ECM, WRI> iwalk(const std::string &path, bool show_all = false,
                             bool ignore_sepcial_file = true,
                             AMFS::WalkErrorCallback error_callback = nullptr,
@@ -3517,7 +3517,7 @@ public:
     return {ECM{EC::Success, ""}, {result, errors}};
   }
 
-  // 真实的walk函数，返回([root_path, part1, part2, ...], PathInfo)的vector
+  // Actual walk function, returns vector of ([root_path, part1, part2, ...], PathInfo)
   std::pair<ECM, WRDR> walk(const std::string &path, int max_depth = -1,
                             bool show_all = false,
                             bool ignore_special_file = false,
@@ -3556,7 +3556,7 @@ public:
     _walk(parts, result_dict, errors, 0, max_depth, show_all,
           ignore_special_file, error_callback, interrupt_flag, timeout_ms,
           start_time);
-    // 打印result_dict的类型
+    // Print type of result_dict
     if (interrupt_flag && interrupt_flag->check()) {
       ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
       if (error_callback && *error_callback) {
