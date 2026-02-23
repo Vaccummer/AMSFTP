@@ -1,5 +1,6 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
+#include "AMCLI/CommandTree.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
@@ -84,6 +85,6 @@ private:
   AMClientManager &client_manager_ = AMClientManager::Instance();
   AMSetManager &set_manager_ = AMSetManager::Instance();
   bool cli_cache_ready_ = false;
-  std::shared_ptr<CommandTree> command_tree_ = g_command_tree;
+  CommandTree *command_tree_ = &CommandTree::Instance();
   std::unordered_set<std::string> nicknames_;
 };

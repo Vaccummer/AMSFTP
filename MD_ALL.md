@@ -1668,3 +1668,22 @@ set init function as default, set manager using AMConfigManager &config_manager_
 set an temp cache like current cache, trigger all the time, but clear when CorePrompt return(use register)
 
 hold a ref to VarManager, path sometimes has var, need resolve it
+# CommandTree Improve
+
+Set this class as a singleton like manager(built once at startup only, no thread-safe because changes happen in main thread), remove
+
+inlineconststd::shared_ptr`<CommandTree>` g_command_tree =
+
+    std::make_shared`<CommandTree>`();
+
+use Instance() to get ref of the class
+
+move this class to a solo hearder file and implement in solo src file(command_tree.cpp)
+
+std::unordered_map<std::string, CommandNode> nodes_; key should be {part1, part2} like instead of join by space (set a simple hash func)
+
++ variable-length,case-sensitive
+
+CommandNode add str help to store help info of current node
+
++ live only in CommandNode

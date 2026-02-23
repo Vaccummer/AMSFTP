@@ -15,7 +15,7 @@ AMCompletionCollectResult
 AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   AMCompletionCollectResult result;
   if (!command_tree_) {
-    command_tree_ = g_command_tree;
+    command_tree_ = &CommandTree::Instance();
   }
   if (!command_tree_) {
     return result;
