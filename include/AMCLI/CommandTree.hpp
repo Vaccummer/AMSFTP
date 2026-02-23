@@ -1,6 +1,7 @@
 #pragma once
-#include "AMBase/Enum.hpp"
+#include "AMBase/DataClass.hpp"
 #include <cstddef>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -28,19 +29,9 @@ enum class AMCommandArgSemantic {
 /**
  * @brief CLI command tree used for completion and highlighting.
  */
-class CommandTree {
+class CommandTree : public NonCopyableNonMovable {
 public:
   using CommandPath = std::vector<std::string>;
-
-  /**
-   * @brief Hash functor for variable-length command-path keys.
-   */
-  struct CommandPathHash {
-    /**
-     * @brief Hash a command path using a simple combine strategy.
-     */
-    size_t operator()(const CommandPath &path) const noexcept;
-  };
 
   /**
    * @brief Positional-argument completion rule.
@@ -63,15 +54,42 @@ public:
   };
 
   /**
-   * @brief Command tree node used for completion lookups.
+   * @brief Chain node used for completion lookups.
    */
   struct CommandNode {
+    std::string name;
     std::string help;
-    std::unordered_set<std::string> subcommands;
+    std::unordered_map<std::string, std::shared_ptr<CommandNode>> subcommands;
     std::unordered_map<std::string, std::string> long_options;
     std::unordered_map<char, std::string> short_options;
     std::vector<PositionalRule> positional_rules;
     std::vector<OptionValueRule> option_value_rules;
+
+    /**
+     * @brief Add one positional semantic rule on this node.
+     */
+    void AddPositionalRule(size_t index, AMCommandArgSemantic semantic,
+                           bool repeat_tail);
+
+    /**
+     * @brief Add one option-value semantic rule on this node.
+     */
+    void AddOptionValueRule(const std::string &long_name, char short_name,
+                            AMCommandArgSemantic semantic, size_t value_count,
+                            bool repeat_tail);
+
+    /**
+     * @brief Resolve positional semantic at a given argument index.
+     */
+    [[nodiscard]] std::optional<AMCommandArgSemantic>
+    ResolvePositionalSemantic(size_t index) const;
+
+    /**
+     * @brief Resolve option-value rule for a concrete option token.
+     */
+    [[nodiscard]] std::optional<OptionValueRule>
+    ResolveOptionValueRule(const std::string &long_name, char short_name,
+                           size_t value_index) const;
   };
 
   /**
@@ -183,16 +201,11 @@ public:
    * @brief Resolve option-value rule for a concrete option token.
    */
   [[nodiscard]] std::optional<OptionValueRule>
-  ResolveOptionValueRule(const CommandPath &path,
-                         const std::string &long_name, char short_name,
-                         size_t value_index) const;
+  ResolveOptionValueRule(const CommandPath &path, const std::string &long_name,
+                         char short_name, size_t value_index) const;
 
 private:
   CommandTree() = default;
-  CommandTree(const CommandTree &) = delete;
-  CommandTree &operator=(const CommandTree &) = delete;
-  CommandTree(CommandTree &&) = delete;
-  CommandTree &operator=(CommandTree &&) = delete;
 
   /**
    * @brief Split whitespace-delimited command path into components.
@@ -200,19 +213,9 @@ private:
   static CommandPath SplitPath_(const std::string &path);
 
   /**
-   * @brief Normalize a long option name to `--name` format.
-   */
-  static std::string NormalizeLongOptionName_(const std::string &name);
-
-  /**
    * @brief Find a mutable node by command path.
    */
   CommandNode *FindNodeMutable_(const CommandPath &path);
-
-  /**
-   * @brief Ensure a node exists for command path and return it.
-   */
-  CommandNode *EnsureNode_(const CommandPath &path);
 
   /**
    * @brief Find a node by command path.
@@ -222,9 +225,9 @@ private:
   /**
    * @brief Register top-level command metadata.
    */
-  void RegisterTopCommand_(const std::string &name, const std::string &help);
+  std::shared_ptr<CommandNode> RegisterTopCommand_(const std::string &name,
+                                                   const std::string &help);
 
-  std::unordered_map<CommandPath, CommandNode, CommandPathHash> nodes_;
-  std::unordered_set<std::string> top_commands_;
+  std::unordered_map<std::string, std::shared_ptr<CommandNode>> nodes_;
   std::unordered_set<std::string> modules_;
 };
