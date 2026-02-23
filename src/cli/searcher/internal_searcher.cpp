@@ -1,6 +1,6 @@
+#include "AMBase/CommonTools.hpp"
 #include "AMCLI/Completer/Searcher.hpp"
 #include "AMCLI/Completer/SearcherCommon.hpp"
-#include "AMBase/CommonTools.hpp"
 #include <algorithm>
 #include <unordered_map>
 
@@ -59,10 +59,10 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       const auto &item = items[match.index];
       AMCompletionCandidate candidate;
       candidate.insert_text = "$" + item.varname;
-      candidate.display = config_manager_.Format(candidate.insert_text,
-                                                 "public_varname");
-      candidate.help = AMStr::amfmt("[{}] {}", item.domain,
-                                    RenderVarValue_(item.varvalue));
+      candidate.display =
+          config_manager_.Format(candidate.insert_text, "public_varname");
+      candidate.help =
+          AMStr::amfmt("[{}] {}", item.domain, RenderVarValue_(item.varvalue));
       candidate.kind = AMCompletionKind::VariableName;
       candidate.score = match.score_bias;
       result.candidates.items.push_back(std::move(candidate));
