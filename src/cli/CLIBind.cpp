@@ -3,601 +3,822 @@
 #include <type_traits>
 
 int g_cli_exit_code = 0;
-namespace {
-/**
- * @brief Bind a CLI11 callback that stores the selected argument struct.
- */
-template <typename T>
-void BindArgSelection_(CLI::App *command, CliArgsPool &args,
-                       T CliArgsPool::*member) {
-  if (!command) {
-    return;
-  }
-  command->callback([&args, member]() { args.common_arg = args.*member; });
-}
-
-/**
- * @brief Register command-argument completion semantics onto the tree.
- */
-void RegisterCompletionRules_(CommandTree *tree) {
-  if (!tree) {
-    return;
-  }
-  using Sem = AMCommandArgSemantic;
-  auto add_pos = [&](const std::string &path, size_t index, Sem semantic,
-                     bool repeat_tail = false) {
-    tree->AddPositionalRule(path, index, semantic, repeat_tail);
-  };
-  auto add_opt = [&](const std::string &path, const std::string &long_name,
-                     char short_name, Sem semantic, size_t value_count = 1,
-                     bool repeat_tail = false) {
-    tree->AddOptionValueRule(path, long_name, short_name, semantic, value_count,
-                             repeat_tail);
-  };
-
-  add_pos("config get", 0, Sem::HostNickname, true);
-  add_pos("config edit", 0, Sem::HostNickname, true);
-  add_pos("config rm", 0, Sem::HostNickname, true);
-  add_pos("config rn", 0, Sem::HostNickname);
-  add_pos("config set", 0, Sem::HostNickname);
-  add_pos("config set", 1, Sem::HostAttr);
-
-  add_pos("connect", 0, Sem::HostNickname);
-  add_pos("client check", 0, Sem::ClientName, true);
-  add_pos("client rm", 0, Sem::ClientName, true);
-  add_pos("ch", 0, Sem::ClientName);
-
-  add_pos("task show", 0, Sem::TaskId, true);
-  add_pos("task inspect", 0, Sem::TaskId, true);
-  add_pos("task terminate", 0, Sem::TaskId, true);
-  add_pos("task pause", 0, Sem::TaskId, true);
-  add_pos("task retry", 0, Sem::TaskId);
-  add_pos("retry", 0, Sem::TaskId);
-
-  add_pos("cd", 0, Sem::Path);
-  add_pos("ls", 0, Sem::Path);
-  add_pos("realpath", 0, Sem::Path);
-  add_pos("find", 0, Sem::Path);
-  add_pos("walk", 0, Sem::Path);
-  add_pos("tree", 0, Sem::Path);
-  add_pos("stat", 0, Sem::Path, true);
-  add_pos("size", 0, Sem::Path, true);
-  add_pos("mkdir", 0, Sem::Path, true);
-  add_pos("rm", 0, Sem::Path, true);
-  add_pos("cp", 0, Sem::Path, true);
-  add_opt("cp", "--output", 'o', Sem::Path);
-  add_pos("task cache add", 0, Sem::Path, true);
-  add_opt("task cache add", "--output", 'o', Sem::Path);
-}
-
-} // namespace
 
 /**
  * @brief Bind config-related CLI commands.
  */
-void BindConfigCommands(CLI::App &app, CliArgsPool &args,
+void BindConfigCommands(CommandNode *root, CliArgsPool &args,
                         CliCommands &commands) {
-  commands.config_cmd = app.add_subcommand("config", "Config manager");
-  commands.config_ls =
-      commands.config_cmd->add_subcommand("ls", "List configs");
-  commands.config_ls->add_flag("-l,--list", args.config_ls.detail,
-                               "Show detailed list");
-  commands.config_keys =
-      commands.config_cmd->add_subcommand("keys", "List keys");
-  commands.config_data =
-      commands.config_cmd->add_subcommand("data", "Show config");
-  commands.config_get =
-      commands.config_cmd->add_subcommand("get", "Query host");
-  commands.config_add = commands.config_cmd->add_subcommand("add", "Add host");
-  commands.config_edit =
-      commands.config_cmd->add_subcommand("edit", "Edit host");
-  commands.config_rn = commands.config_cmd->add_subcommand("rn", "Rename host");
-  commands.config_rm = commands.config_cmd->add_subcommand("rm", "Remove host");
-  commands.config_set = commands.config_cmd->add_subcommand("set", "Set host");
-  commands.config_save =
-      commands.config_cmd->add_subcommand("save", "Save config");
+  using Sem = AMCommandArgSemantic;
+  if (!root) {
+    return;
+  }
+
+  CommandNode *config_node = root->AddFunction("config", "Config manager");
+  if (!config_node) {
+    return;
+  }
+  commands.config_cmd = config_node->app;
+
+  CommandNode *config_ls_node =
+      config_node->AddFunction("ls", "List configs", args, &CliArgsPool::config_ls);
+  commands.config_ls = config_ls_node ? config_ls_node->app : nullptr;
+  if (config_ls_node) {
+    config_ls_node->AddFlag("-l", "--list", args.config_ls.detail,
+                            "Show detailed list");
+  }
+
+  CommandNode *config_keys_node = config_node->AddFunction(
+      "keys", "List keys", args, &CliArgsPool::config_keys);
+  commands.config_keys = config_keys_node ? config_keys_node->app : nullptr;
+
+  CommandNode *config_data_node = config_node->AddFunction(
+      "data", "Show config", args, &CliArgsPool::config_data);
+  commands.config_data = config_data_node ? config_data_node->app : nullptr;
+
+  CommandNode *config_get_node = config_node->AddFunction(
+      "get", "Query host", args, &CliArgsPool::config_get);
+  commands.config_get = config_get_node ? config_get_node->app : nullptr;
+
+  CommandNode *config_add_node = config_node->AddFunction(
+      "add", "Add host", args, &CliArgsPool::config_add);
+  commands.config_add = config_add_node ? config_add_node->app : nullptr;
+
+  CommandNode *config_edit_node = config_node->AddFunction(
+      "edit", "Edit host", args, &CliArgsPool::config_edit);
+  commands.config_edit = config_edit_node ? config_edit_node->app : nullptr;
+
+  CommandNode *config_rn_node = config_node->AddFunction(
+      "rn", "Rename host", args, &CliArgsPool::config_rn);
+  commands.config_rn = config_rn_node ? config_rn_node->app : nullptr;
+
+  CommandNode *config_rm_node = config_node->AddFunction(
+      "rm", "Remove host", args, &CliArgsPool::config_rm);
+  commands.config_rm = config_rm_node ? config_rm_node->app : nullptr;
+
+  CommandNode *config_set_node = config_node->AddFunction(
+      "set", "Set host", args, &CliArgsPool::config_set);
+  commands.config_set = config_set_node ? config_set_node->app : nullptr;
+
+  CommandNode *config_save_node = config_node->AddFunction(
+      "save", "Save config", args, &CliArgsPool::config_save);
+  commands.config_save = config_save_node ? config_save_node->app : nullptr;
+
+  CommandNode *config_hostset_node =
+      config_node->AddFunction("hostset", "Manage HostSet");
   commands.config_hostset_cmd =
-      commands.config_cmd->add_subcommand("hostset", "Manage HostSet");
+      config_hostset_node ? config_hostset_node->app : nullptr;
+
+  CommandNode *config_hostset_add_node =
+      config_hostset_node ? config_hostset_node->AddFunction(
+                                "add", "Create host set", args,
+                                &CliArgsPool::config_hostset_add)
+                          : nullptr;
   commands.config_hostset_add =
-      commands.config_hostset_cmd->add_subcommand("add", "Create host set");
+      config_hostset_add_node ? config_hostset_add_node->app : nullptr;
+
+  CommandNode *config_hostset_edit_node =
+      config_hostset_node ? config_hostset_node->AddFunction(
+                                "edit", "Modify host set", args,
+                                &CliArgsPool::config_hostset_edit)
+                          : nullptr;
   commands.config_hostset_edit =
-      commands.config_hostset_cmd->add_subcommand("edit", "Modify host set");
+      config_hostset_edit_node ? config_hostset_edit_node->app : nullptr;
+
+  CommandNode *config_hostset_rm_node =
+      config_hostset_node ? config_hostset_node->AddFunction(
+                                "rm", "Delete host set", args,
+                                &CliArgsPool::config_hostset_rm)
+                          : nullptr;
   commands.config_hostset_rm =
-      commands.config_hostset_cmd->add_subcommand("rm", "Delete host set");
+      config_hostset_rm_node ? config_hostset_rm_node->app : nullptr;
+
+  CommandNode *config_hostset_save_node =
+      config_hostset_node ? config_hostset_node->AddFunction(
+                                "save", "Save HostSet", args,
+                                &CliArgsPool::config_hostset_save)
+                          : nullptr;
   commands.config_hostset_save =
-      commands.config_hostset_cmd->add_subcommand("save", "Save HostSet");
+      config_hostset_save_node ? config_hostset_save_node->app : nullptr;
 
-  commands.config_get
-      ->add_option("nicknames", args.config_get.nicknames, "Host nicknames")
-      ->expected(0, -1);
-  commands.config_edit
-      ->add_option("nickname", args.config_edit.nickname, "Host nickname")
-      ->required();
-  commands.config_rn->add_option("old", args.config_rn.old_name, "Old nickname")
-      ->required();
-  commands.config_rn->add_option("new", args.config_rn.new_name, "New nickname")
-      ->required();
-  commands.config_rm
-      ->add_option("nicknames", args.config_rm.names,
-                   "Host nicknames to remove")
-      ->expected(1, -1);
-  commands.config_set
-      ->add_option("nickname", args.config_set.nickname, "Host nickname")
-      ->required();
-  commands.config_set
-      ->add_option("attrname", args.config_set.attrname, "Host property name")
-      ->required();
-  commands.config_set
-      ->add_option("value", args.config_set.value, "Host property value")
-      ->required();
-  commands.config_hostset_add
-      ->add_option("nickname", args.config_hostset_add.nickname,
-                   "Host nickname")
-      ->required();
-  commands.config_hostset_edit
-      ->add_option("nickname", args.config_hostset_edit.nickname,
-                   "Host nickname")
-      ->required();
-  commands.config_hostset_rm
-      ->add_option("nicknames", args.config_hostset_rm.nicknames,
-                   "Host nicknames")
-      ->expected(1, -1);
+  if (commands.config_get) {
+    commands.config_get
+        ->add_option("nicknames", args.config_get.nicknames, "Host nicknames")
+        ->expected(0, -1);
+  }
+  if (commands.config_edit) {
+    commands.config_edit
+        ->add_option("nickname", args.config_edit.nickname, "Host nickname")
+        ->required();
+  }
+  if (commands.config_rn) {
+    commands.config_rn
+        ->add_option("old", args.config_rn.old_name, "Old nickname")
+        ->required();
+    commands.config_rn
+        ->add_option("new", args.config_rn.new_name, "New nickname")
+        ->required();
+  }
+  if (commands.config_rm) {
+    commands.config_rm
+        ->add_option("nicknames", args.config_rm.names, "Host nicknames to remove")
+        ->expected(1, -1);
+  }
+  if (commands.config_set) {
+    commands.config_set
+        ->add_option("nickname", args.config_set.nickname, "Host nickname")
+        ->required();
+    commands.config_set
+        ->add_option("attrname", args.config_set.attrname, "Host property name")
+        ->required();
+    commands.config_set
+        ->add_option("value", args.config_set.value, "Host property value")
+        ->required();
+  }
+  if (commands.config_hostset_add) {
+    commands.config_hostset_add
+        ->add_option("nickname", args.config_hostset_add.nickname, "Host nickname")
+        ->required();
+  }
+  if (commands.config_hostset_edit) {
+    commands.config_hostset_edit
+        ->add_option("nickname", args.config_hostset_edit.nickname, "Host nickname")
+        ->required();
+  }
+  if (commands.config_hostset_rm) {
+    commands.config_hostset_rm
+        ->add_option("nicknames", args.config_hostset_rm.nicknames,
+                     "Host nicknames")
+        ->expected(1, -1);
+  }
 
-  BindArgSelection_(commands.config_ls, args, &CliArgsPool::config_ls);
-  BindArgSelection_(commands.config_keys, args, &CliArgsPool::config_keys);
-  BindArgSelection_(commands.config_data, args, &CliArgsPool::config_data);
-  BindArgSelection_(commands.config_get, args, &CliArgsPool::config_get);
-  BindArgSelection_(commands.config_add, args, &CliArgsPool::config_add);
-  BindArgSelection_(commands.config_edit, args, &CliArgsPool::config_edit);
-  BindArgSelection_(commands.config_rn, args, &CliArgsPool::config_rn);
-  BindArgSelection_(commands.config_rm, args, &CliArgsPool::config_rm);
-  BindArgSelection_(commands.config_set, args, &CliArgsPool::config_set);
-  BindArgSelection_(commands.config_save, args, &CliArgsPool::config_save);
-  BindArgSelection_(commands.config_hostset_add, args,
-                    &CliArgsPool::config_hostset_add);
-  BindArgSelection_(commands.config_hostset_edit, args,
-                    &CliArgsPool::config_hostset_edit);
-  BindArgSelection_(commands.config_hostset_rm, args,
-                    &CliArgsPool::config_hostset_rm);
-  BindArgSelection_(commands.config_hostset_save, args,
-                    &CliArgsPool::config_hostset_save);
+  if (config_get_node) {
+    config_get_node->AddPositionalRule(0, Sem::HostNickname, true);
+  }
+  if (config_edit_node) {
+    config_edit_node->AddPositionalRule(0, Sem::HostNickname, true);
+  }
+  if (config_rm_node) {
+    config_rm_node->AddPositionalRule(0, Sem::HostNickname, true);
+  }
+  if (config_rn_node) {
+    config_rn_node->AddPositionalRule(0, Sem::HostNickname, false);
+  }
+  if (config_set_node) {
+    config_set_node->AddPositionalRule(0, Sem::HostNickname, false);
+    config_set_node->AddPositionalRule(1, Sem::HostAttr, false);
+  }
 }
 
 /**
  * @brief Bind client-related CLI commands.
  */
-void BindClientCommands(CLI::App &app, CliArgsPool &args,
+void BindClientCommands(CommandNode *root, CliArgsPool &args,
                         CliCommands &commands) {
-  commands.client_cmd = app.add_subcommand("client", "Client manager");
-  commands.client_ls_cmd =
-      commands.client_cmd->add_subcommand("ls", "List client names");
-  commands.client_ls_cmd->add_flag("-d,--detail", args.clients.detail,
-                                   "Show full status details");
-  commands.client_check_cmd =
-      commands.client_cmd->add_subcommand("check", "Check client status");
-  commands.client_check_cmd
-      ->add_option("nicknames", args.check.nicknames, "Client nicknames")
-      ->expected(0, -1);
-  commands.client_check_cmd->add_flag("-d,--detail", args.check.detail,
-                                      "Show client details");
-  commands.client_rm_cmd =
-      commands.client_cmd->add_subcommand("rm", "Disconnect clients");
-  commands.client_rm_cmd
-      ->add_option("nicknames", args.disconnect.nicknames,
-                   "Client nicknames to disconnect")
-      ->expected(1, -1);
+  using Sem = AMCommandArgSemantic;
+  if (!root) {
+    return;
+  }
 
-  BindArgSelection_(commands.client_ls_cmd, args, &CliArgsPool::clients);
-  BindArgSelection_(commands.client_check_cmd, args, &CliArgsPool::check);
-  BindArgSelection_(commands.client_rm_cmd, args, &CliArgsPool::disconnect);
+  CommandNode *client_node = root->AddFunction("client", "Client manager");
+  if (!client_node) {
+    return;
+  }
+  commands.client_cmd = client_node->app;
+
+  CommandNode *client_ls_node = client_node->AddFunction(
+      "ls", "List client names", args, &CliArgsPool::clients);
+  commands.client_ls_cmd = client_ls_node ? client_ls_node->app : nullptr;
+  if (client_ls_node) {
+    client_ls_node->AddFlag("-d", "--detail", args.clients.detail,
+                            "Show full status details");
+  }
+
+  CommandNode *client_check_node = client_node->AddFunction(
+      "check", "Check client status", args, &CliArgsPool::check);
+  commands.client_check_cmd =
+      client_check_node ? client_check_node->app : nullptr;
+  if (commands.client_check_cmd) {
+    commands.client_check_cmd
+        ->add_option("nicknames", args.check.nicknames, "Client nicknames")
+        ->expected(0, -1);
+  }
+  if (client_check_node) {
+    client_check_node->AddFlag("-d", "--detail", args.check.detail,
+                               "Show client details");
+    client_check_node->AddPositionalRule(0, Sem::ClientName, true);
+  }
+
+  CommandNode *client_rm_node = client_node->AddFunction(
+      "rm", "Disconnect clients", args, &CliArgsPool::disconnect);
+  commands.client_rm_cmd = client_rm_node ? client_rm_node->app : nullptr;
+  if (commands.client_rm_cmd) {
+    commands.client_rm_cmd
+        ->add_option("nicknames", args.disconnect.nicknames,
+                     "Client nicknames to disconnect")
+        ->expected(1, -1);
+  }
+  if (client_rm_node) {
+    client_rm_node->AddPositionalRule(0, Sem::ClientName, true);
+  }
 }
 
 /**
  * @brief Bind variable-related CLI commands.
  */
-void BindVarCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
-  commands.var_cmd = app.add_subcommand("var", "Variable manager");
-  commands.var_get_cmd =
-      commands.var_cmd->add_subcommand("get", "Query variable by name");
-  commands.var_get_cmd->add_option("varname", args.var_get.varname, "$varname")
-      ->required()
-      ->expected(1, 1);
+void BindVarCommands(CommandNode *root, CliArgsPool &args,
+                     CliCommands &commands) {
+  if (!root) {
+    return;
+  }
+  CommandNode *var_node = root->AddFunction("var", "Variable manager");
+  if (!var_node) {
+    return;
+  }
+  commands.var_cmd = var_node->app;
 
-  commands.var_def_cmd =
-      commands.var_cmd->add_subcommand("def", "Define variable");
-  commands.var_def_cmd->add_flag("-g,--global", args.var_def.global,
-                                 "Define in public section");
-  commands.var_def_cmd->add_option("varname", args.var_def.varname, "$varname")
-      ->required()
-      ->expected(1, 1);
-  commands.var_def_cmd->add_option("value", args.var_def.value, "varvalue")
-      ->required()
-      ->expected(1, 1);
+  CommandNode *var_get_node = var_node->AddFunction(
+      "get", "Query variable by name", args, &CliArgsPool::var_get);
+  commands.var_get_cmd = var_get_node ? var_get_node->app : nullptr;
+  if (commands.var_get_cmd) {
+    commands.var_get_cmd
+        ->add_option("varname", args.var_get.varname, "$varname")
+        ->required()
+        ->expected(1, 1);
+  }
 
-  commands.var_del_cmd =
-      commands.var_cmd->add_subcommand("del", "Delete variable");
-  commands.var_del_cmd->add_flag("-a,--all", args.var_del.all,
-                                 "Delete from all sections");
-  commands.var_del_cmd
-      ->add_option("tokens", args.var_del.tokens, "[section] $varname")
-      ->required()
-      ->expected(1, 2);
+  CommandNode *var_def_node = var_node->AddFunction(
+      "def", "Define variable", args, &CliArgsPool::var_def);
+  commands.var_def_cmd = var_def_node ? var_def_node->app : nullptr;
+  if (var_def_node) {
+    var_def_node->AddFlag("-g", "--global", args.var_def.global,
+                          "Define in public section");
+  }
+  if (commands.var_def_cmd) {
+    commands.var_def_cmd
+        ->add_option("varname", args.var_def.varname, "$varname")
+        ->required()
+        ->expected(1, 1);
+    commands.var_def_cmd
+        ->add_option("value", args.var_def.value, "varvalue")
+        ->required()
+        ->expected(1, 1);
+  }
 
-  commands.var_ls_cmd =
-      commands.var_cmd->add_subcommand("ls", "List variables by section");
-  commands.var_ls_cmd
-      ->add_option("sections", args.var_ls.sections, "section names")
-      ->expected(0, -1);
+  CommandNode *var_del_node = var_node->AddFunction(
+      "del", "Delete variable", args, &CliArgsPool::var_del);
+  commands.var_del_cmd = var_del_node ? var_del_node->app : nullptr;
+  if (var_del_node) {
+    var_del_node->AddFlag("-a", "--all", args.var_del.all,
+                          "Delete from all sections");
+  }
+  if (commands.var_del_cmd) {
+    commands.var_del_cmd
+        ->add_option("tokens", args.var_del.tokens, "[section] $varname")
+        ->required()
+        ->expected(1, 2);
+  }
 
-  BindArgSelection_(commands.var_get_cmd, args, &CliArgsPool::var_get);
-  BindArgSelection_(commands.var_def_cmd, args, &CliArgsPool::var_def);
-  BindArgSelection_(commands.var_del_cmd, args, &CliArgsPool::var_del);
-  BindArgSelection_(commands.var_ls_cmd, args, &CliArgsPool::var_ls);
+  CommandNode *var_ls_node = var_node->AddFunction(
+      "ls", "List variables by section", args, &CliArgsPool::var_ls);
+  commands.var_ls_cmd = var_ls_node ? var_ls_node->app : nullptr;
+  if (commands.var_ls_cmd) {
+    commands.var_ls_cmd
+        ->add_option("sections", args.var_ls.sections, "section names")
+        ->expected(0, -1);
+  }
 }
 
 /**
  * @brief Bind filesystem-related CLI commands.
  */
-void BindFilesystemCommands(CLI::App &app, CliArgsPool &args,
+void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
                             CliCommands &commands) {
-  commands.stat_cmd = app.add_subcommand("stat", "Print path info");
-  commands.stat_cmd->add_option("paths", args.stat.paths, "Paths to stat")
-      ->expected(1, -1);
+  using Sem = AMCommandArgSemantic;
+  if (!root) {
+    return;
+  }
 
-  commands.ls_cmd = app.add_subcommand("ls", "List directory");
-  commands.ls_cmd->add_option("path", args.ls.path, "Path to list")
-      ->expected(0, 1);
-  commands.ls_cmd->add_flag("-l", args.ls.list_like, "List like");
-  commands.ls_cmd->add_flag("-a", args.ls.show_all, "Show all entries");
+  CommandNode *stat_node =
+      root->AddFunction("stat", "Print path info", args, &CliArgsPool::stat);
+  commands.stat_cmd = stat_node ? stat_node->app : nullptr;
+  if (commands.stat_cmd) {
+    commands.stat_cmd->add_option("paths", args.stat.paths, "Paths to stat")
+        ->expected(1, -1);
+  }
+  if (stat_node) {
+    stat_node->AddPositionalRule(0, Sem::Path, true);
+  }
 
-  commands.size_cmd = app.add_subcommand("size", "Get total size");
-  commands.size_cmd->add_option("paths", args.size.paths, "Paths to size")
-      ->expected(1, -1);
+  CommandNode *ls_node =
+      root->AddFunction("ls", "List directory", args, &CliArgsPool::ls);
+  commands.ls_cmd = ls_node ? ls_node->app : nullptr;
+  if (commands.ls_cmd) {
+    commands.ls_cmd->add_option("path", args.ls.path, "Path to list")
+        ->expected(0, 1);
+  }
+  if (ls_node) {
+    ls_node->AddFlag("-l", "", args.ls.list_like, "List like");
+    ls_node->AddFlag("-a", "", args.ls.show_all, "Show all entries");
+    ls_node->AddPositionalRule(0, Sem::Path, false);
+  }
 
-  commands.find_cmd = app.add_subcommand("find", "Find paths");
-  commands.find_cmd->add_option("path", args.find.path, "Path to find")
-      ->required()
-      ->expected(1, 1);
+  CommandNode *size_node =
+      root->AddFunction("size", "Get total size", args, &CliArgsPool::size);
+  commands.size_cmd = size_node ? size_node->app : nullptr;
+  if (commands.size_cmd) {
+    commands.size_cmd->add_option("paths", args.size.paths, "Paths to size")
+        ->expected(1, -1);
+  }
+  if (size_node) {
+    size_node->AddPositionalRule(0, Sem::Path, true);
+  }
 
-  commands.mkdir_cmd = app.add_subcommand("mkdir", "Create directories");
-  commands.mkdir_cmd->add_option("paths", args.mkdir.paths, "Paths to create")
-      ->expected(1, -1);
+  CommandNode *find_node =
+      root->AddFunction("find", "Find paths", args, &CliArgsPool::find);
+  commands.find_cmd = find_node ? find_node->app : nullptr;
+  if (commands.find_cmd) {
+    commands.find_cmd->add_option("path", args.find.path, "Path to find")
+        ->required()
+        ->expected(1, 1);
+  }
+  if (find_node) {
+    find_node->AddPositionalRule(0, Sem::Path, false);
+  }
 
-  commands.rm_cmd = app.add_subcommand("rm", "Remove paths");
-  commands.rm_cmd->add_option("paths", args.rm.paths, "Paths to remove")
-      ->expected(1, -1);
-  commands.rm_cmd->add_flag("-p,--permanent", args.rm.permanent,
-                            "Delete permanently");
-  commands.rm_cmd->add_flag("-q,--quiet", args.rm.quiet,
-                            "Suppress error output");
+  CommandNode *mkdir_node = root->AddFunction("mkdir", "Create directories", args,
+                                              &CliArgsPool::mkdir);
+  commands.mkdir_cmd = mkdir_node ? mkdir_node->app : nullptr;
+  if (commands.mkdir_cmd) {
+    commands.mkdir_cmd->add_option("paths", args.mkdir.paths, "Paths to create")
+        ->expected(1, -1);
+  }
+  if (mkdir_node) {
+    mkdir_node->AddPositionalRule(0, Sem::Path, true);
+  }
 
-  commands.walk_cmd = app.add_subcommand("walk", "Walk paths");
-  commands.walk_cmd->add_option("path", args.walk.path, "Path to walk")
-      ->required()
-      ->expected(1, 1);
-  commands.walk_cmd->add_flag("-f,--file", args.walk.only_file,
-                              "Only show files");
-  commands.walk_cmd->add_flag("-d,--dir", args.walk.only_dir,
-                              "Only show directories");
-  commands.walk_cmd->add_flag("-a,--all", args.walk.show_all,
-                              "Show hidden entries");
-  commands.walk_cmd->add_flag("-s,--special", args.walk.include_special,
-                              "Include special files");
-  commands.walk_cmd->add_flag("-q,--quiet", args.walk.quiet,
-                              "Suppress error output");
+  CommandNode *rm_node =
+      root->AddFunction("rm", "Remove paths", args, &CliArgsPool::rm);
+  commands.rm_cmd = rm_node ? rm_node->app : nullptr;
+  if (commands.rm_cmd) {
+    commands.rm_cmd->add_option("paths", args.rm.paths, "Paths to remove")
+        ->expected(1, -1);
+  }
+  if (rm_node) {
+    rm_node->AddFlag("-p", "--permanent", args.rm.permanent,
+                     "Delete permanently");
+    rm_node->AddFlag("-q", "--quiet", args.rm.quiet, "Suppress error output");
+    rm_node->AddPositionalRule(0, Sem::Path, true);
+  }
 
-  commands.tree_cmd = app.add_subcommand("tree", "Print directory tree");
-  commands.tree_cmd->add_option("path", args.tree.path, "Path to tree")
-      ->required()
-      ->expected(1, 1);
-  commands.tree_cmd->add_option("-d,--depth", args.tree.depth,
-                                "Max depth (default: -1)");
-  commands.tree_cmd->add_flag("-o,--onlydir", args.tree.only_dir,
-                              "Only show directories");
-  commands.tree_cmd->add_flag("-a,--all", args.tree.show_all,
-                              "Show hidden entries");
-  commands.tree_cmd->add_flag("-s,--special", args.tree.include_special,
-                              "Include special files");
-  commands.tree_cmd->add_flag("-q,--quiet", args.tree.quiet,
-                              "Suppress error output");
+  CommandNode *walk_node =
+      root->AddFunction("walk", "Walk paths", args, &CliArgsPool::walk);
+  commands.walk_cmd = walk_node ? walk_node->app : nullptr;
+  if (commands.walk_cmd) {
+    commands.walk_cmd->add_option("path", args.walk.path, "Path to walk")
+        ->required()
+        ->expected(1, 1);
+  }
+  if (walk_node) {
+    walk_node->AddFlag("-f", "--file", args.walk.only_file, "Only show files");
+    walk_node->AddFlag("-d", "--dir", args.walk.only_dir,
+                       "Only show directories");
+    walk_node->AddFlag("-a", "--all", args.walk.show_all,
+                       "Show hidden entries");
+    walk_node->AddFlag("-s", "--special", args.walk.include_special,
+                       "Include special files");
+    walk_node->AddFlag("-q", "--quiet", args.walk.quiet,
+                       "Suppress error output");
+    walk_node->AddPositionalRule(0, Sem::Path, false);
+  }
 
-  commands.realpath_cmd = app.add_subcommand("realpath", "Print absolute path");
-  commands.realpath_cmd
-      ->add_option("path", args.realpath.path, "Path to resolve")
-      ->expected(0, 1);
+  CommandNode *tree_node =
+      root->AddFunction("tree", "Print directory tree", args, &CliArgsPool::tree);
+  commands.tree_cmd = tree_node ? tree_node->app : nullptr;
+  if (commands.tree_cmd) {
+    commands.tree_cmd->add_option("path", args.tree.path, "Path to tree")
+        ->required()
+        ->expected(1, 1);
+  }
+  if (tree_node) {
+    tree_node->AddOption("-d", "--depth", args.tree.depth, 1, 1, Sem::None,
+                         "Max depth (default: -1)");
+    tree_node->AddFlag("-o", "--onlydir", args.tree.only_dir,
+                       "Only show directories");
+    tree_node->AddFlag("-a", "--all", args.tree.show_all,
+                       "Show hidden entries");
+    tree_node->AddFlag("-s", "--special", args.tree.include_special,
+                       "Include special files");
+    tree_node->AddFlag("-q", "--quiet", args.tree.quiet,
+                       "Suppress error output");
+    tree_node->AddPositionalRule(0, Sem::Path, false);
+  }
 
-  commands.rtt_cmd = app.add_subcommand("rtt", "Measure current client RTT");
-  commands.rtt_cmd->add_option("times", args.rtt.times, "Samples (default: 1)")
-      ->expected(0, 1);
+  CommandNode *realpath_node = root->AddFunction("realpath", "Print absolute path",
+                                                 args, &CliArgsPool::realpath);
+  commands.realpath_cmd = realpath_node ? realpath_node->app : nullptr;
+  if (commands.realpath_cmd) {
+    commands.realpath_cmd
+        ->add_option("path", args.realpath.path, "Path to resolve")
+        ->expected(0, 1);
+  }
+  if (realpath_node) {
+    realpath_node->AddPositionalRule(0, Sem::Path, false);
+  }
 
-  commands.clear_cmd = app.add_subcommand("clear", "Clear screen");
-  commands.clear_cmd->add_flag("-a,--all", args.clear.all,
-                               "Clear scrollback buffer");
+  CommandNode *rtt_node = root->AddFunction("rtt", "Measure current client RTT",
+                                            args, &CliArgsPool::rtt);
+  commands.rtt_cmd = rtt_node ? rtt_node->app : nullptr;
+  if (commands.rtt_cmd) {
+    commands.rtt_cmd->add_option("times", args.rtt.times, "Samples (default: 1)")
+        ->expected(0, 1);
+  }
 
-  commands.cp_cmd = app.add_subcommand("cp", "Transfer files/directories");
-  commands.cp_cmd->add_option("src", args.cp.srcs, "Source paths")
-      ->expected(1, -1);
-  commands.cp_cmd->add_option("-o,--output", args.cp.output,
-                              "Destination path (optional)");
-  commands.cp_cmd->add_flag("-f,--force", args.cp.overwrite,
-                            "Overwrite existing targets");
-  commands.cp_cmd->add_flag("-n,--no-mkdir", args.cp.no_mkdir,
-                            "Do not create missing directories");
-  commands.cp_cmd->add_flag("-c,--clone", args.cp.clone,
-                            "Clone instead of transfer");
-  commands.cp_cmd->add_flag("-s,--special", args.cp.include_special,
-                            "Include special files");
-  commands.cp_cmd->add_flag("-r,--resume", args.cp.resume,
-                            "Resume from existing destination file");
-  commands.cp_cmd->add_flag("-q,--quiet", args.cp.quiet,
-                            "Suppress transfer output");
+  CommandNode *clear_node =
+      root->AddFunction("clear", "Clear screen", args, &CliArgsPool::clear);
+  commands.clear_cmd = clear_node ? clear_node->app : nullptr;
+  if (clear_node) {
+    clear_node->AddFlag("-a", "--all", args.clear.all, "Clear scrollback buffer");
+  }
 
-  commands.sftp_cmd = app.add_subcommand("sftp", "Connect to SFTP host");
-  commands.sftp_cmd
-      ->add_option("targets", args.sftp.targets,
-                   "nickname user@host | user@host")
-      ->required()
-      ->expected(1, 2);
-  commands.sftp_cmd->add_option("-p,--port", args.sftp.port, "Port");
-  commands.sftp_cmd->add_option("--keyfile", args.sftp.keyfile, "Keyfile");
+  CommandNode *cp_node = root->AddFunction("cp", "Transfer files/directories",
+                                           args, &CliArgsPool::cp);
+  commands.cp_cmd = cp_node ? cp_node->app : nullptr;
+  if (commands.cp_cmd) {
+    commands.cp_cmd->add_option("src", args.cp.srcs, "Source paths")
+        ->expected(1, -1);
+  }
+  if (cp_node) {
+    cp_node->AddOption("-o", "--output", args.cp.output, 1, 1, Sem::Path,
+                       "Destination path (optional)");
+    cp_node->AddFlag("-f", "--force", args.cp.overwrite,
+                     "Overwrite existing targets");
+    cp_node->AddFlag("-n", "--no-mkdir", args.cp.no_mkdir,
+                     "Do not create missing directories");
+    cp_node->AddFlag("-c", "--clone", args.cp.clone,
+                     "Clone instead of transfer");
+    cp_node->AddFlag("-s", "--special", args.cp.include_special,
+                     "Include special files");
+    cp_node->AddFlag("-r", "--resume", args.cp.resume,
+                     "Resume from existing destination file");
+    cp_node->AddFlag("-q", "--quiet", args.cp.quiet,
+                     "Suppress transfer output");
+    cp_node->AddPositionalRule(0, Sem::Path, true);
+  }
 
-  commands.ftp_cmd = app.add_subcommand("ftp", "Connect to FTP host");
-  commands.ftp_cmd
-      ->add_option("targets", args.ftp.targets,
-                   "nickname user@host | user@host")
-      ->required()
-      ->expected(1, 2);
-  commands.ftp_cmd->add_option("-p,--port", args.ftp.port, "Port");
-  commands.ftp_cmd->add_option("--keyfile", args.ftp.keyfile, "Keyfile");
+  CommandNode *sftp_node = root->AddFunction("sftp", "Connect to SFTP host",
+                                             args, &CliArgsPool::sftp);
+  commands.sftp_cmd = sftp_node ? sftp_node->app : nullptr;
+  if (commands.sftp_cmd) {
+    commands.sftp_cmd
+        ->add_option("targets", args.sftp.targets, "nickname user@host | user@host")
+        ->required()
+        ->expected(1, 2);
+  }
+  if (sftp_node) {
+    sftp_node->AddOption("-p", "--port", args.sftp.port, 1, 1, Sem::None, "Port");
+    sftp_node->AddOption("", "--keyfile", args.sftp.keyfile, 1, 1, Sem::None,
+                         "Keyfile");
+  }
 
-  commands.ch_cmd = app.add_subcommand("ch", "Change current client");
-  commands.ch_cmd->add_option("nickname", args.ch.nickname, "Client nickname")
-      ->required()
-      ->expected(1, 1);
+  CommandNode *ftp_node =
+      root->AddFunction("ftp", "Connect to FTP host", args, &CliArgsPool::ftp);
+  commands.ftp_cmd = ftp_node ? ftp_node->app : nullptr;
+  if (commands.ftp_cmd) {
+    commands.ftp_cmd
+        ->add_option("targets", args.ftp.targets, "nickname user@host | user@host")
+        ->required()
+        ->expected(1, 2);
+  }
+  if (ftp_node) {
+    ftp_node->AddOption("-p", "--port", args.ftp.port, 1, 1, Sem::None, "Port");
+    ftp_node->AddOption("", "--keyfile", args.ftp.keyfile, 1, 1, Sem::None,
+                        "Keyfile");
+  }
 
-  commands.cd_cmd = app.add_subcommand("cd", "Change working directory");
-  commands.cd_cmd->add_option("path", args.cd.path, "Target path")
-      ->expected(0, 1);
+  CommandNode *ch_node =
+      root->AddFunction("ch", "Change current client", args, &CliArgsPool::ch);
+  commands.ch_cmd = ch_node ? ch_node->app : nullptr;
+  if (commands.ch_cmd) {
+    commands.ch_cmd
+        ->add_option("nickname", args.ch.nickname, "Client nickname")
+        ->required()
+        ->expected(1, 1);
+  }
+  if (ch_node) {
+    ch_node->AddPositionalRule(0, Sem::ClientName, false);
+  }
 
-  commands.connect_cmd = app.add_subcommand("connect", "Connect to a host");
-  commands.connect_cmd
-      ->add_option("nickname", args.connect.nickname, "Host nickname")
-      ->required()
-      ->expected(1, 1);
-  commands.connect_cmd->add_flag("-f,--force", args.connect.force,
-                                 "Rebuild and replace existing client");
+  CommandNode *cd_node = root->AddFunction("cd", "Change working directory",
+                                           args, &CliArgsPool::cd);
+  commands.cd_cmd = cd_node ? cd_node->app : nullptr;
+  if (commands.cd_cmd) {
+    commands.cd_cmd->add_option("path", args.cd.path, "Target path")->expected(0, 1);
+  }
+  if (cd_node) {
+    cd_node->AddPositionalRule(0, Sem::Path, false);
+  }
 
-  commands.bash_cmd = app.add_subcommand("bash", "Enter interactive mode");
-  commands.exit_cmd = app.add_subcommand("exit", "Exit interactive mode");
-  commands.exit_cmd->add_flag(
-      "-f,--force", args.exit.force,
-      "Exit immediately without interactive-loop exit callbacks");
+  CommandNode *connect_node =
+      root->AddFunction("connect", "Connect to a host", args, &CliArgsPool::connect);
+  commands.connect_cmd = connect_node ? connect_node->app : nullptr;
+  if (commands.connect_cmd) {
+    commands.connect_cmd
+        ->add_option("nickname", args.connect.nickname, "Host nickname")
+        ->required()
+        ->expected(1, 1);
+  }
+  if (connect_node) {
+    connect_node->AddFlag("-f", "--force", args.connect.force,
+                          "Rebuild and replace existing client");
+    connect_node->AddPositionalRule(0, Sem::HostNickname, false);
+  }
 
-  BindArgSelection_(commands.stat_cmd, args, &CliArgsPool::stat);
-  BindArgSelection_(commands.ls_cmd, args, &CliArgsPool::ls);
-  BindArgSelection_(commands.size_cmd, args, &CliArgsPool::size);
-  BindArgSelection_(commands.find_cmd, args, &CliArgsPool::find);
-  BindArgSelection_(commands.mkdir_cmd, args, &CliArgsPool::mkdir);
-  BindArgSelection_(commands.rm_cmd, args, &CliArgsPool::rm);
-  BindArgSelection_(commands.walk_cmd, args, &CliArgsPool::walk);
-  BindArgSelection_(commands.tree_cmd, args, &CliArgsPool::tree);
-  BindArgSelection_(commands.realpath_cmd, args, &CliArgsPool::realpath);
-  BindArgSelection_(commands.rtt_cmd, args, &CliArgsPool::rtt);
-  BindArgSelection_(commands.clear_cmd, args, &CliArgsPool::clear);
-  BindArgSelection_(commands.cp_cmd, args, &CliArgsPool::cp);
-  BindArgSelection_(commands.sftp_cmd, args, &CliArgsPool::sftp);
-  BindArgSelection_(commands.ftp_cmd, args, &CliArgsPool::ftp);
-  BindArgSelection_(commands.ch_cmd, args, &CliArgsPool::ch);
-  BindArgSelection_(commands.cd_cmd, args, &CliArgsPool::cd);
-  BindArgSelection_(commands.connect_cmd, args, &CliArgsPool::connect);
-  BindArgSelection_(commands.bash_cmd, args, &CliArgsPool::bash);
-  BindArgSelection_(commands.exit_cmd, args, &CliArgsPool::exit);
+  CommandNode *bash_node = root->AddFunction("bash", "Enter interactive mode", args,
+                                             &CliArgsPool::bash);
+  commands.bash_cmd = bash_node ? bash_node->app : nullptr;
+
+  CommandNode *exit_node = root->AddFunction("exit", "Exit interactive mode", args,
+                                             &CliArgsPool::exit);
+  commands.exit_cmd = exit_node ? exit_node->app : nullptr;
+  if (exit_node) {
+    exit_node->AddFlag("-f", "--force", args.exit.force,
+                       "Exit immediately without interactive-loop exit callbacks");
+  }
 }
 
 /**
  * @brief Bind completion-related CLI commands.
  */
-void BindCompleteCommands(CLI::App &app, CliArgsPool &args,
+void BindCompleteCommands(CommandNode *root, CliArgsPool &args,
                           CliCommands &commands) {
-  (void)args;
-  commands.complete_cmd =
-      app.add_subcommand("complete", "Completion utilities");
-  commands.complete_cache_cmd =
-      commands.complete_cmd->add_subcommand("cache", "Manage completion cache");
-  commands.complete_cache_clear = commands.complete_cache_cmd->add_subcommand(
-      "clear", "Clear completion cache");
-  BindArgSelection_(commands.complete_cache_clear, args,
-                    &CliArgsPool::complete_cache_clear);
+  if (!root) {
+    return;
+  }
+  CommandNode *complete_node =
+      root->AddFunction("complete", "Completion utilities");
+  commands.complete_cmd = complete_node ? complete_node->app : nullptr;
+
+  CommandNode *cache_node =
+      complete_node ? complete_node->AddFunction("cache", "Manage completion cache")
+                    : nullptr;
+  commands.complete_cache_cmd = cache_node ? cache_node->app : nullptr;
+
+  CommandNode *clear_node =
+      cache_node ? cache_node->AddFunction("clear", "Clear completion cache",
+                                           args, &CliArgsPool::complete_cache_clear)
+                 : nullptr;
+  commands.complete_cache_clear = clear_node ? clear_node->app : nullptr;
 }
 
 /**
  * @brief Bind task-related CLI commands.
  */
-void BindTaskCommands(CLI::App &app, CliArgsPool &args, CliCommands &commands) {
-  commands.task_cmd = app.add_subcommand("task", "Task manager");
-  commands.task_cache_cmd =
-      commands.task_cmd->add_subcommand("cache", "Manage task cache");
+void BindTaskCommands(CommandNode *root, CliArgsPool &args, CliCommands &commands) {
+  using Sem = AMCommandArgSemantic;
+  if (!root) {
+    return;
+  }
+  CommandNode *task_node = root->AddFunction("task", "Task manager");
+  if (!task_node) {
+    return;
+  }
+  commands.task_cmd = task_node->app;
+
+  CommandNode *task_cache_node =
+      task_node->AddFunction("cache", "Manage task cache");
+  commands.task_cache_cmd = task_cache_node ? task_cache_node->app : nullptr;
+
+  CommandNode *task_cache_add_node = task_cache_node
+                                         ? task_cache_node->AddFunction(
+                                               "add", "Add transfer set", args,
+                                               &CliArgsPool::task_cache_add)
+                                         : nullptr;
   commands.task_cache_add =
-      commands.task_cache_cmd->add_subcommand("add", "Add transfer set");
-  commands.task_cache_add
-      ->add_option("src", args.task_cache_add.srcs, "Source paths")
-      ->expected(1, -1);
-  commands.task_cache_add->add_option("-o,--output", args.task_cache_add.output,
-                                      "Destination path (optional)");
-  commands.task_cache_add->add_flag("-f,--force", args.task_cache_add.overwrite,
-                                    "Overwrite existing targets");
-  commands.task_cache_add->add_flag("-n,--no-mkdir",
-                                    args.task_cache_add.no_mkdir,
-                                    "Do not create missing directories");
-  commands.task_cache_add->add_flag("-c,--clone", args.task_cache_add.clone,
-                                    "Clone instead of transfer");
-  commands.task_cache_add->add_flag("-s,--special",
-                                    args.task_cache_add.include_special,
-                                    "Include special files");
-  commands.task_cache_add->add_flag("-r,--resume", args.task_cache_add.resume,
-                                    "Resume from existing destination file");
+      task_cache_add_node ? task_cache_add_node->app : nullptr;
+  if (commands.task_cache_add) {
+    commands.task_cache_add
+        ->add_option("src", args.task_cache_add.srcs, "Source paths")
+        ->expected(1, -1);
+  }
+  if (task_cache_add_node) {
+    task_cache_add_node->AddOption("-o", "--output", args.task_cache_add.output, 1,
+                                   1, Sem::Path, "Destination path (optional)");
+    task_cache_add_node->AddFlag("-f", "--force", args.task_cache_add.overwrite,
+                                 "Overwrite existing targets");
+    task_cache_add_node->AddFlag("-n", "--no-mkdir", args.task_cache_add.no_mkdir,
+                                 "Do not create missing directories");
+    task_cache_add_node->AddFlag("-c", "--clone", args.task_cache_add.clone,
+                                 "Clone instead of transfer");
+    task_cache_add_node->AddFlag("-s", "--special",
+                                 args.task_cache_add.include_special,
+                                 "Include special files");
+    task_cache_add_node->AddFlag("-r", "--resume", args.task_cache_add.resume,
+                                 "Resume from existing destination file");
+    task_cache_add_node->AddPositionalRule(0, Sem::Path, true);
+  }
 
-  commands.task_cache_rm =
-      commands.task_cache_cmd->add_subcommand("rm", "Remove cached sets");
-  commands.task_cache_rm
-      ->add_option("indices", args.task_cache_rm.indices, "Cache indices")
-      ->expected(1, -1);
+  CommandNode *task_cache_rm_node =
+      task_cache_node ? task_cache_node->AddFunction(
+                            "rm", "Remove cached sets", args,
+                            &CliArgsPool::task_cache_rm)
+                      : nullptr;
+  commands.task_cache_rm = task_cache_rm_node ? task_cache_rm_node->app : nullptr;
+  if (commands.task_cache_rm) {
+    commands.task_cache_rm
+        ->add_option("indices", args.task_cache_rm.indices, "Cache indices")
+        ->expected(1, -1);
+  }
 
+  CommandNode *task_cache_clear_node =
+      task_cache_node ? task_cache_node->AddFunction(
+                            "clear", "Clear cache", args,
+                            &CliArgsPool::task_cache_clear)
+                      : nullptr;
   commands.task_cache_clear =
-      commands.task_cache_cmd->add_subcommand("clear", "Clear cache");
+      task_cache_clear_node ? task_cache_clear_node->app : nullptr;
 
+  CommandNode *task_cache_submit_node =
+      task_cache_node ? task_cache_node->AddFunction(
+                            "submit", "Submit cached tasks", args,
+                            &CliArgsPool::task_cache_submit)
+                      : nullptr;
   commands.task_cache_submit =
-      commands.task_cache_cmd->add_subcommand("submit", "Submit cached tasks");
-  commands.task_cache_submit->add_flag(
-      "-a,--async", args.task_cache_submit.is_async, "Submit as async task");
-  commands.task_cache_submit->add_flag("-q,--quiet",
-                                       args.task_cache_submit.quiet,
-                                       "Suppress output and confirmation");
-  commands.task_cache_submit
-      ->add_option("tail", args.task_cache_submit.async_suffix,
-                   "Optional '&' async suffix")
-      ->expected(0, 1);
-  commands.task_userset_cmd =
-      commands.task_cmd->add_subcommand("userset", "Inspect cached transfer");
-  commands.task_userset_cmd
-      ->add_option("index", args.task_userset.indices, "Cache index")
-      ->expected(0, -1);
+      task_cache_submit_node ? task_cache_submit_node->app : nullptr;
+  if (task_cache_submit_node) {
+    task_cache_submit_node->AddFlag("-a", "--async", args.task_cache_submit.is_async,
+                                    "Submit as async task");
+    task_cache_submit_node->AddFlag("-q", "--quiet", args.task_cache_submit.quiet,
+                                    "Suppress output and confirmation");
+  }
+  if (commands.task_cache_submit) {
+    commands.task_cache_submit
+        ->add_option("tail", args.task_cache_submit.async_suffix,
+                     "Optional '&' async suffix")
+        ->expected(0, 1);
+  }
 
-  commands.task_list_cmd =
-      commands.task_cmd->add_subcommand("ls", "List tasks");
-  commands.task_list_cmd->add_flag("-p,--pending", args.task_list.pending,
-                                   "Show pending tasks");
-  commands.task_list_cmd->add_flag("-s,--suspend", args.task_list.suspend,
-                                   "Show paused tasks");
-  commands.task_list_cmd->add_flag("-f,--finished", args.task_list.finished,
-                                   "Show finished tasks");
-  commands.task_list_cmd->add_flag("-c,--conducting", args.task_list.conducting,
-                                   "Show conducting tasks");
+  CommandNode *task_userset_node = task_node->AddFunction(
+      "userset", "Inspect cached transfer", args, &CliArgsPool::task_userset);
+  commands.task_userset_cmd = task_userset_node ? task_userset_node->app : nullptr;
+  if (commands.task_userset_cmd) {
+    commands.task_userset_cmd
+        ->add_option("index", args.task_userset.indices, "Cache index")
+        ->expected(0, -1);
+  }
 
-  commands.task_show_cmd =
-      commands.task_cmd->add_subcommand("show", "Show task status");
-  commands.task_show_cmd->add_option("id", args.task_show.ids, "Task ID")
-      ->required()
-      ->expected(1, -1);
+  CommandNode *task_list_node =
+      task_node->AddFunction("ls", "List tasks", args, &CliArgsPool::task_list);
+  commands.task_list_cmd = task_list_node ? task_list_node->app : nullptr;
+  if (task_list_node) {
+    task_list_node->AddFlag("-p", "--pending", args.task_list.pending,
+                            "Show pending tasks");
+    task_list_node->AddFlag("-s", "--suspend", args.task_list.suspend,
+                            "Show paused tasks");
+    task_list_node->AddFlag("-f", "--finished", args.task_list.finished,
+                            "Show finished tasks");
+    task_list_node->AddFlag("-c", "--conducting", args.task_list.conducting,
+                            "Show conducting tasks");
+  }
 
-  commands.task_thread_cmd =
-      commands.task_cmd->add_subcommand("thread", "Get or set thread count");
-  commands.task_thread_cmd
-      ->add_option("num", args.task_thread.num, "Thread count (optional)")
-      ->expected(0, 1);
+  CommandNode *task_show_node = task_node->AddFunction(
+      "show", "Show task status", args, &CliArgsPool::task_show);
+  commands.task_show_cmd = task_show_node ? task_show_node->app : nullptr;
+  if (commands.task_show_cmd) {
+    commands.task_show_cmd->add_option("id", args.task_show.ids, "Task ID")
+        ->required()
+        ->expected(1, -1);
+  }
+  if (task_show_node) {
+    task_show_node->AddPositionalRule(0, Sem::TaskId, true);
+  }
 
+  CommandNode *task_thread_node = task_node->AddFunction(
+      "thread", "Get or set thread count", args, &CliArgsPool::task_thread);
+  commands.task_thread_cmd = task_thread_node ? task_thread_node->app : nullptr;
+  if (commands.task_thread_cmd) {
+    commands.task_thread_cmd
+        ->add_option("num", args.task_thread.num, "Thread count (optional)")
+        ->expected(0, 1);
+  }
+
+  CommandNode *task_inspect_node = task_node->AddFunction(
+      "inspect", "Inspect a task", args, &CliArgsPool::task_inspect);
   commands.task_inspect_cmd =
-      commands.task_cmd->add_subcommand("inspect", "Inspect a task");
-  commands.task_inspect_cmd->add_option("id", args.task_inspect.id, "Task ID");
-  commands.task_inspect_cmd->add_flag("-s, --set", args.task_inspect.set,
-                                      "Show transfer sets");
-  commands.task_inspect_cmd->add_flag("-e,--entry", args.task_inspect.entry,
-                                      "Show task entries");
+      task_inspect_node ? task_inspect_node->app : nullptr;
+  if (commands.task_inspect_cmd) {
+    commands.task_inspect_cmd->add_option("id", args.task_inspect.id, "Task ID");
+  }
+  if (task_inspect_node) {
+    task_inspect_node->AddFlag("-s", "--set", args.task_inspect.set,
+                               "Show transfer sets");
+    task_inspect_node->AddFlag("-e", "--entry", args.task_inspect.entry,
+                               "Show task entries");
+    task_inspect_node->AddPositionalRule(0, Sem::TaskId, true);
+  }
 
-  commands.task_query_cmd =
-      commands.task_cmd->add_subcommand("query", "Inspect task entry");
-  commands.task_query_cmd->add_option("id", args.task_entry.ids, "Entry ID")
-      ->required()
-      ->expected(1, -1);
+  CommandNode *task_query_node = task_node->AddFunction(
+      "query", "Inspect task entry", args, &CliArgsPool::task_entry);
+  commands.task_query_cmd = task_query_node ? task_query_node->app : nullptr;
+  if (commands.task_query_cmd) {
+    commands.task_query_cmd->add_option("id", args.task_entry.ids, "Entry ID")
+        ->required()
+        ->expected(1, -1);
+  }
 
+  CommandNode *task_terminate_node = task_node->AddFunction(
+      "terminate", "Terminate task(s)", args, &CliArgsPool::task_terminate);
   commands.task_terminate_cmd =
-      commands.task_cmd->add_subcommand("terminate", "Terminate task(s)");
-  commands.task_terminate_cmd
-      ->add_option("id", args.task_terminate.ids, "Task IDs")
-      ->expected(1, -1);
+      task_terminate_node ? task_terminate_node->app : nullptr;
+  if (commands.task_terminate_cmd) {
+    commands.task_terminate_cmd
+        ->add_option("id", args.task_terminate.ids, "Task IDs")
+        ->expected(1, -1);
+  }
+  if (task_terminate_node) {
+    task_terminate_node->AddPositionalRule(0, Sem::TaskId, true);
+  }
 
-  commands.task_pause_cmd =
-      commands.task_cmd->add_subcommand("pause", "Pause task(s)");
-  commands.task_pause_cmd->add_option("id", args.task_pause.ids, "Task IDs")
-      ->expected(1, -1);
+  CommandNode *task_pause_node =
+      task_node->AddFunction("pause", "Pause task(s)", args, &CliArgsPool::task_pause);
+  commands.task_pause_cmd = task_pause_node ? task_pause_node->app : nullptr;
+  if (commands.task_pause_cmd) {
+    commands.task_pause_cmd->add_option("id", args.task_pause.ids, "Task IDs")
+        ->expected(1, -1);
+  }
+  if (task_pause_node) {
+    task_pause_node->AddPositionalRule(0, Sem::TaskId, true);
+  }
 
-  commands.task_resume_cmd =
-      commands.task_cmd->add_subcommand("resume", "Resume paused task(s)");
-  commands.task_resume_cmd->add_option("id", args.task_resume.ids, "Task IDs")
-      ->expected(1, -1);
+  CommandNode *task_resume_node = task_node->AddFunction(
+      "resume", "Resume paused task(s)", args, &CliArgsPool::task_resume);
+  commands.task_resume_cmd = task_resume_node ? task_resume_node->app : nullptr;
+  if (commands.task_resume_cmd) {
+    commands.task_resume_cmd->add_option("id", args.task_resume.ids, "Task IDs")
+        ->expected(1, -1);
+  }
 
-  commands.task_retry_cmd = commands.task_cmd->add_subcommand(
-      "retry", "Retry a completed task (retry failed entries)");
-  commands.task_retry_cmd->add_flag("-a,--async", args.task_retry.is_async,
-                                    "Submit task asynchronously");
-  commands.task_retry_cmd->add_flag("-q,--quiet", args.task_retry.quiet,
-                                    "Suppress output");
-  commands.task_retry_cmd->add_option("id", args.task_retry.id, "Task ID")
-      ->required()
-      ->expected(1, 1);
-  commands.task_retry_cmd
-      ->add_option("-i,--index", args.task_retry.indices,
-                   "1-based task indices to retry")
-      ->expected(0, -1);
+  CommandNode *task_retry_node = task_node->AddFunction(
+      "retry", "Retry a completed task (retry failed entries)", args,
+      &CliArgsPool::task_retry);
+  commands.task_retry_cmd = task_retry_node ? task_retry_node->app : nullptr;
+  if (task_retry_node) {
+    task_retry_node->AddFlag("-a", "--async", args.task_retry.is_async,
+                             "Submit task asynchronously");
+    task_retry_node->AddFlag("-q", "--quiet", args.task_retry.quiet,
+                             "Suppress output");
+    task_retry_node->AddOption("-i", "--index", args.task_retry.indices, 0,
+                               static_cast<size_t>(-1), Sem::None,
+                               "1-based task indices to retry");
+    task_retry_node->AddPositionalRule(0, Sem::TaskId, false);
+  }
+  if (commands.task_retry_cmd) {
+    commands.task_retry_cmd->add_option("id", args.task_retry.id, "Task ID")
+        ->required()
+        ->expected(1, 1);
+  }
 
-  commands.resume_cmd = app.add_subcommand(
-      "retry", "Retry a completed but failed task (retry failed entries)");
-  commands.resume_cmd->add_flag("-a,--async", args.task_retry.is_async,
-                                "Submit task asynchronously");
-  commands.resume_cmd->add_flag("-q,--quiet", args.task_retry.quiet,
-                                "Suppress output");
-  commands.resume_cmd->add_option("id", args.task_retry.id, "Task ID")
-      ->required()
-      ->expected(1, 1);
-  commands.resume_cmd
-      ->add_option("-i,--index", args.task_retry.indices,
-                   "1-based task indices to retry")
-      ->expected(0, -1);
+  CommandNode *retry_node = root->AddFunction(
+      "retry", "Retry a completed but failed task (retry failed entries)", args,
+      &CliArgsPool::task_retry);
+  commands.resume_cmd = retry_node ? retry_node->app : nullptr;
+  if (retry_node) {
+    retry_node->AddFlag("-a", "--async", args.task_retry.is_async,
+                        "Submit task asynchronously");
+    retry_node->AddFlag("-q", "--quiet", args.task_retry.quiet, "Suppress output");
+    retry_node->AddOption("-i", "--index", args.task_retry.indices, 0,
+                          static_cast<size_t>(-1), Sem::None,
+                          "1-based task indices to retry");
+    retry_node->AddPositionalRule(0, Sem::TaskId, false);
+  }
+  if (commands.resume_cmd) {
+    commands.resume_cmd->add_option("id", args.task_retry.id, "Task ID")
+        ->required()
+        ->expected(1, 1);
+  }
 
   args.task_terminate.action = TaskControlArgs::Action::Terminate;
   args.task_pause.action = TaskControlArgs::Action::Pause;
   args.task_resume.action = TaskControlArgs::Action::Resume;
-
-  BindArgSelection_(commands.task_cache_add, args,
-                    &CliArgsPool::task_cache_add);
-  BindArgSelection_(commands.task_cache_rm, args, &CliArgsPool::task_cache_rm);
-  BindArgSelection_(commands.task_cache_clear, args,
-                    &CliArgsPool::task_cache_clear);
-  BindArgSelection_(commands.task_cache_submit, args,
-                    &CliArgsPool::task_cache_submit);
-  BindArgSelection_(commands.task_list_cmd, args, &CliArgsPool::task_list);
-  BindArgSelection_(commands.task_show_cmd, args, &CliArgsPool::task_show);
-  BindArgSelection_(commands.task_inspect_cmd, args,
-                    &CliArgsPool::task_inspect);
-  BindArgSelection_(commands.task_thread_cmd, args, &CliArgsPool::task_thread);
-  BindArgSelection_(commands.task_userset_cmd, args,
-                    &CliArgsPool::task_userset);
-  BindArgSelection_(commands.task_query_cmd, args, &CliArgsPool::task_entry);
-  BindArgSelection_(commands.task_terminate_cmd, args,
-                    &CliArgsPool::task_terminate);
-  BindArgSelection_(commands.task_pause_cmd, args, &CliArgsPool::task_pause);
-  BindArgSelection_(commands.task_resume_cmd, args, &CliArgsPool::task_resume);
-  BindArgSelection_(commands.task_retry_cmd, args, &CliArgsPool::task_retry);
-  BindArgSelection_(commands.resume_cmd, args, &CliArgsPool::task_retry);
 }
 
 /**
  * @brief Bind all CLI options into the argument pool.
  */
 CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
+  auto &tree = CommandNode::Instance();
+  tree.Init(app);
+
   CliCommands commands;
   commands.app = &app;
   commands.args = &args;
-  BindConfigCommands(app, args, commands);
-  BindClientCommands(app, args, commands);
-  BindVarCommands(app, args, commands);
-  BindFilesystemCommands(app, args, commands);
-  BindCompleteCommands(app, args, commands);
-  BindTaskCommands(app, args, commands);
+  BindConfigCommands(&tree, args, commands);
+  BindClientCommands(&tree, args, commands);
+  BindVarCommands(&tree, args, commands);
+  BindFilesystemCommands(&tree, args, commands);
+  BindCompleteCommands(&tree, args, commands);
+  BindTaskCommands(&tree, args, commands);
   return commands;
-}
-
-/**
- * @brief Build the singleton command tree from CLI definitions.
- */
-void BuildCommandTree(CLI::App &app, CliArgsPool &args) {
-  auto subs = app.get_subcommands([](CLI::App *) { return true; });
-  if (subs.empty()) {
-    (void)BindCliOptions(app, args);
-  }
-  auto &tree = CommandTree::Instance();
-  tree.Build(app);
-  RegisterCompletionRules_(&tree);
 }
 
 /**
@@ -681,3 +902,4 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   SetCliExitCode(static_cast<int>(result.rcm.first));
   return result;
 }
+

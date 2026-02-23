@@ -582,7 +582,7 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     }
   }
 
-  std::optional<CommandTree::OptionValueRule> pending_value_rule;
+  std::optional<CommandNode::OptionValueRule> pending_value_rule;
   size_t pending_value_index = 0;
   auto consume_option_value = [&]() -> std::optional<AMCommandArgSemantic> {
     if (!pending_value_rule.has_value()) {
@@ -597,7 +597,7 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     }
     return semantic;
   };
-  auto set_pending_option_value = [&](const CommandTree::OptionValueRule &rule,
+  auto set_pending_option_value = [&](const CommandNode::OptionValueRule &rule,
                                       size_t consumed) {
     if (!rule.repeat_tail && consumed >= rule.value_count) {
       pending_value_rule.reset();
@@ -1281,3 +1281,4 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     formatted->append("[/]");
   }
 }
+

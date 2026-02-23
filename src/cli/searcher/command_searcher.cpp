@@ -5,7 +5,7 @@
 using namespace AMSearcherDetail;
 
 namespace {
-using CommandNode = CommandTree::CommandNode;
+using CommandNode = ::CommandNode;
 }
 
 /**
@@ -15,7 +15,7 @@ AMCompletionCollectResult
 AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   AMCompletionCollectResult result;
   if (!command_tree_) {
-    command_tree_ = &CommandTree::Instance();
+    command_tree_ = &CommandNode::Instance();
   }
   if (!command_tree_) {
     return result;
@@ -253,3 +253,4 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
     *out_consumed = consumed;
   }
 }
+

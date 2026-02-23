@@ -41,7 +41,7 @@ public:
                       std::vector<AMCompletionCandidate> &items) override;
 
 private:
-  using CommandNode = CommandTree::CommandNode;
+  using CommandNode = ::CommandNode;
 
   /**
    * @brief Build styled command/module display text.
@@ -58,7 +58,7 @@ private:
                          const CommandNode **out_node,
                          size_t *out_consumed) const;
 
-  CommandTree *command_tree_ = &CommandTree::Instance();
+  CommandNode *command_tree_ = &CommandNode::Instance();
 };
 
 /**
@@ -294,3 +294,4 @@ AMBuildDefaultSearchEngineRegistrations() {
   out.push_back({{AMCompletionTarget::Path}, path_engine});
   return out;
 }
+

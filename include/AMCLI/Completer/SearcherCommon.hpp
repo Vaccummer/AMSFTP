@@ -268,7 +268,7 @@ struct CommandState {
   std::string command_path;
   size_t command_tokens = 0;
   size_t arg_index = 0;
-  std::optional<CommandTree::OptionValueRule> pending_value_rule;
+  std::optional<CommandNode::OptionValueRule> pending_value_rule;
   size_t pending_value_index = 0;
 };
 
@@ -277,7 +277,7 @@ struct CommandState {
  */
 inline CommandState ResolveCommandState(const AMCompletionContext &ctx) {
   CommandState state;
-  CommandTree &command_tree = CommandTree::Instance();
+  CommandNode &command_tree = CommandNode::Instance();
   std::vector<std::string> before;
   before.reserve(ctx.token_index);
   for (size_t i = 0; i < ctx.tokens.size() && i < ctx.token_index; ++i) {
@@ -310,7 +310,7 @@ inline CommandState ResolveCommandState(const AMCompletionContext &ctx) {
     }
     return true;
   };
-  auto set_pending_option_value = [&](const CommandTree::OptionValueRule &rule,
+  auto set_pending_option_value = [&](const CommandNode::OptionValueRule &rule,
                                       size_t consumed) {
     if (!rule.repeat_tail && consumed >= rule.value_count) {
       state.pending_value_rule.reset();
@@ -374,7 +374,7 @@ inline bool IsPathSemanticState(const CommandState &state) {
   if (state.command_path.empty()) {
     return false;
   }
-  CommandTree &command_tree = CommandTree::Instance();
+  CommandNode &command_tree = CommandNode::Instance();
   if (state.pending_value_rule.has_value()) {
     return IsPathSemantic(state.pending_value_rule->semantic);
   }
@@ -385,3 +385,4 @@ inline bool IsPathSemanticState(const CommandState &state) {
 }
 
 } // namespace AMSearcherDetail
+
