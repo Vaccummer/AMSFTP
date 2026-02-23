@@ -99,6 +99,26 @@ bool IsPathSemantic_(AMCommandArgSemantic semantic) {
   return semantic == AMCommandArgSemantic::Path;
 }
 
+/** Convert nickname classification into token highlight type. */
+AMTokenType ClassifyNicknameTokenType_(const std::string &nickname_raw,
+                                       AMHostManager &host_manager,
+                                       AMClientManager &client_manager) {
+  const std::string nickname = AMStr::Strip(nickname_raw);
+  if (IsLocalNickname_(nickname)) {
+    return AMTokenType::Nickname;
+  }
+
+  const bool client_exists =
+      static_cast<bool>(client_manager.Clients().GetHost(nickname));
+  if (client_exists) {
+    return AMTokenType::Nickname;
+  }
+  if (host_manager.HostExists(nickname)) {
+    return AMTokenType::UnestablishedNickname;
+  }
+  return AMTokenType::NonexistentNickname;
+}
+
 /** Return true when token text is `$var=...` or `${var}=...` shorthand. */
 bool IsVarShortcutDefineToken_(const std::string &raw_text) {
   if (raw_text.size() >= 2 && raw_text[0] == '`' && raw_text[1] == '$') {
@@ -209,6 +229,12 @@ const std::string StyleKeyForType(AMTokenType type) {
     return "varvalue";
   case AMTokenType::Nickname:
     return "nickname";
+  case AMTokenType::UnestablishedNickname:
+    return "unestablished_nickname";
+  case AMTokenType::NonexistentNickname:
+    return "nonexistent_nickname";
+  case AMTokenType::BuiltinArg:
+    return "builtin_arg";
   case AMTokenType::String:
     return "string";
   case AMTokenType::Option:
@@ -682,6 +708,28 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
       continue;
     }
 
+    const std::string unescaped_text = UnescapeBackticks_(raw_text);
+    if (token.type == AMTokenType::Common && semantic_hint.has_value()) {
+      if (*semantic_hint == AMCommandArgSemantic::HostAttr ||
+          *semantic_hint == AMCommandArgSemantic::TaskId) {
+        token.type = AMTokenType::BuiltinArg;
+        if (positional_consumed) {
+          ++arg_index;
+        }
+        continue;
+      }
+
+      if (*semantic_hint == AMCommandArgSemantic::HostNickname ||
+          *semantic_hint == AMCommandArgSemantic::ClientName) {
+        token.type = ClassifyNicknameTokenType_(unescaped_text, host_manager_,
+                                                client_manager_);
+        if (positional_consumed) {
+          ++arg_index;
+        }
+        continue;
+      }
+    }
+
     std::string name;
     if (token.type == AMTokenType::Common &&
         ParseVarTokenText(raw_text, &name)) {
@@ -694,15 +742,6 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
 
     const size_t at_pos = FindUnescapedChar_(raw_text, '@');
     const bool has_unescaped_at = at_pos != std::string::npos;
-
-    if (token.type == AMTokenType::Common && has_unescaped_at && at_pos > 0) {
-      const std::string prefix = UnescapeBackticks_(raw_text.substr(0, at_pos));
-      if (nicknames_.find(prefix) != nicknames_.end()) {
-        token.type = AMTokenType::Nickname;
-      }
-    }
-
-    const std::string unescaped_text = UnescapeBackticks_(raw_text);
     const bool force_path =
         semantic_hint.has_value() && IsPathSemantic_(*semantic_hint);
     const bool treat_as_path =
@@ -872,6 +911,8 @@ bool AMTokenTypeAnalyzer::ParseVarTokenText(const std::string &token,
 /** Assign a priority for overlap resolution between token types. */
 int AMTokenTypeAnalyzer::PriorityForType(AMTokenType type) const {
   switch (type) {
+  case AMTokenType::IllegalCommand:
+    return 200;
   case AMTokenType::EscapeSign:
     return 100;
   case AMTokenType::BangSign:
@@ -888,14 +929,16 @@ int AMTokenTypeAnalyzer::PriorityForType(AMTokenType type) const {
     return 80;
   case AMTokenType::AtSign:
   case AMTokenType::Nickname:
+  case AMTokenType::UnestablishedNickname:
+  case AMTokenType::NonexistentNickname:
     return 70;
+  case AMTokenType::BuiltinArg:
+    return 65;
   case AMTokenType::Option:
     return 60;
   case AMTokenType::Module:
   case AMTokenType::Command:
     return 50;
-  case AMTokenType::IllegalCommand:
-    return 49;
   case AMTokenType::Path:
   case AMTokenType::Nonexistentpath:
   case AMTokenType::File:
@@ -1108,13 +1151,15 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
         continue;
       }
       std::string prefix = UnescapeBackticks_(text.substr(0, at_pos));
-      if (nicknames_.find(prefix) == nicknames_.end()) {
+      if (prefix.empty()) {
         continue;
       }
       size_t nick_start = token.start;
       size_t nick_end = token.start + at_pos;
       size_t at_index = nick_end;
-      apply_range(nick_start, nick_end, AMTokenType::Nickname);
+      const AMTokenType nick_type =
+          ClassifyNicknameTokenType_(prefix, host_manager_, client_manager_);
+      apply_range(nick_start, nick_end, nick_type);
       apply_range(at_index, at_index + 1, AMTokenType::AtSign);
     }
   };
@@ -1208,6 +1253,12 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     case AMTokenType::IllegalCommand:
       apply_range(token.start, token.end, token.type);
       break;
+    case AMTokenType::Nickname:
+    case AMTokenType::UnestablishedNickname:
+    case AMTokenType::NonexistentNickname:
+    case AMTokenType::BuiltinArg:
+      apply_range(token.start, token.end, token.type);
+      break;
     case AMTokenType::Path:
     case AMTokenType::Nonexistentpath:
     case AMTokenType::File:
@@ -1239,7 +1290,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
   }
 
   constexpr size_t kTokenTypeCount =
-      static_cast<size_t>(AMTokenType::IllegalCommand) + 1;
+      static_cast<size_t>(AMTokenType::BuiltinArg) + 1;
   std::array<std::string, kTokenTypeCount> style_tags;
   for (size_t i = 0; i < kTokenTypeCount; ++i) {
     style_tags[i] =
