@@ -1,10 +1,9 @@
 #pragma once
 #include "AMBase/CommonTools.hpp"
-#include "AMCLI/Completer/Searcher.hpp"
+#include "AMCLI/Completer/Engine.hpp"
 #include <algorithm>
 #include <cctype>
 #include <limits>
-#include <unordered_set>
 
 namespace AMSearcherDetail {
 /**
@@ -183,15 +182,15 @@ inline std::string ExtractTokenText(const AMCompletionContext &ctx,
       token.content_end > ctx.input.size()) {
     return "";
   }
-  return UnescapeBackticks(ctx.input.substr(token.content_start,
-                                            token.content_end -
-                                                token.content_start));
+  return UnescapeBackticks(ctx.input.substr(
+      token.content_start, token.content_end - token.content_start));
 }
 
 /**
  * @brief Return true when completion context contains target.
  */
-inline bool HasTarget(const AMCompletionContext &ctx, AMCompletionTarget target) {
+inline bool HasTarget(const AMCompletionContext &ctx,
+                      AMCompletionTarget target) {
   return std::find(ctx.targets.begin(), ctx.targets.end(), target) !=
          ctx.targets.end();
 }
@@ -226,38 +225,52 @@ BuildGeneralMatch(const std::vector<std::string> &keys,
     return out;
   }
 
-  std::unordered_set<size_t> seen;
-  auto push_if = [&](auto &&pred, int bias) {
+  auto collect_if = [&](auto &&pred, int bias) {
+    std::vector<GeneralMatchEntry> matches;
+    matches.reserve(keys.size());
     for (size_t i = 0; i < keys.size(); ++i) {
-      if (seen.find(i) != seen.end()) {
-        continue;
-      }
       if (!pred(keys[i])) {
         continue;
       }
-      seen.insert(i);
-      out.push_back({i, bias});
+      matches.push_back({i, bias});
     }
+    return matches;
   };
 
-  push_if([&](const std::string &key) { return key.rfind(prefix, 0) == 0; }, 0);
-  push_if([&](const std::string &key) {
-    return key.find(prefix) != std::string::npos;
-  },
-          10);
+  // Case-sensitive: prefix-starts-with first.
+  out = collect_if(
+      [&](const std::string &key) { return key.rfind(prefix, 0) == 0; }, 0);
   if (!out.empty()) {
     return out;
   }
 
+  // Case-sensitive: contains only when starts-with is empty.
+  out = collect_if(
+      [&](const std::string &key) {
+        return key.find(prefix) != std::string::npos;
+      },
+      10);
+  if (!out.empty()) {
+    return out;
+  }
+
+  // No-case matching is enabled only when all case-sensitive matching is empty.
   const std::string lower_prefix = AMStr::lowercase(prefix);
-  push_if([&](const std::string &key) {
-    return AMStr::lowercase(key).rfind(lower_prefix, 0) == 0;
-  },
-          20);
-  push_if([&](const std::string &key) {
-    return AMStr::lowercase(key).find(lower_prefix) != std::string::npos;
-  },
-          30);
+  out = collect_if(
+      [&](const std::string &key) {
+        return AMStr::lowercase(key).rfind(lower_prefix, 0) == 0;
+      },
+      20);
+  if (!out.empty()) {
+    return out;
+  }
+
+  // No-case contains only when no-case starts-with is empty.
+  out = collect_if(
+      [&](const std::string &key) {
+        return AMStr::lowercase(key).find(lower_prefix) != std::string::npos;
+      },
+      30);
   return out;
 }
 
@@ -340,10 +353,9 @@ inline CommandState ResolveCommandState(const AMCompletionContext &ctx) {
       const auto rule = command_tree.ResolveOptionValueRule(
           state.command_path, option_name, '\0', 0);
       if (rule.has_value()) {
-        set_pending_option_value(*rule,
-                                 eq_pos != std::string::npos && eq_pos + 1 < token.size()
-                                     ? 1
-                                     : 0);
+        set_pending_option_value(
+            *rule,
+            eq_pos != std::string::npos && eq_pos + 1 < token.size() ? 1 : 0);
       }
       continue;
     }
@@ -378,11 +390,9 @@ inline bool IsPathSemanticState(const CommandState &state) {
   if (state.pending_value_rule.has_value()) {
     return IsPathSemantic(state.pending_value_rule->semantic);
   }
-  const auto semantic =
-      command_tree.ResolvePositionalSemantic(state.command_path,
-                                             state.arg_index);
+  const auto semantic = command_tree.ResolvePositionalSemantic(
+      state.command_path, state.arg_index);
   return semantic.has_value() && IsPathSemantic(*semantic);
 }
 
 } // namespace AMSearcherDetail
-
