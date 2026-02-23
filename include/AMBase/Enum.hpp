@@ -251,7 +251,8 @@ enum class AMTokenType {
   Symlink = 17,
   Special = 18,
   BangSign = 19,
-  ShellCmd = 20
+  ShellCmd = 20,
+  IllegalCommand = 21
 
 };
 

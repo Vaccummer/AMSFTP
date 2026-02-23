@@ -83,21 +83,45 @@ bool IsPathLikeText_(const std::string &text) {
          text.find('\\') != std::string::npos;
 }
 
-/** Return true if command path expects a path argument at arg index. */
-bool IsPathArgumentCommand_(const std::string &command_path, size_t arg_index) {
-  if (command_path == "cd" || command_path == "ls" ||
-      command_path == "realpath") {
-    return arg_index == 0;
+/** Return true if string begins with "--". */
+bool StartsWithLongOption_(const std::string &text) {
+  return text.size() >= 2 && text[0] == '-' && text[1] == '-';
+}
+
+/** Return true if string begins with "-" but not "--". */
+bool StartsWithShortOption_(const std::string &text) {
+  return text.size() >= 1 && text[0] == '-' &&
+         !(text.size() >= 2 && text[1] == '-');
+}
+
+/** Return true when semantic value indicates a path token. */
+bool IsPathSemantic_(AMCommandArgSemantic semantic) {
+  return semantic == AMCommandArgSemantic::Path;
+}
+
+/** Return true when token text is `$var=...` or `${var}=...` shorthand. */
+bool IsVarShortcutDefineToken_(const std::string &raw_text) {
+  if (raw_text.size() >= 2 && raw_text[0] == '`' && raw_text[1] == '$') {
+    return false;
   }
-  if (command_path == "find" || command_path == "walk" ||
-      command_path == "tree") {
-    return arg_index == 0;
+  const std::string text = UnescapeBackticks_(raw_text);
+  if (text.size() < 3 || text.front() != '$') {
+    return false;
   }
-  if (command_path == "stat" || command_path == "size" ||
-      command_path == "mkdir" || command_path == "rm" || command_path == "cp") {
-    return true;
+  const size_t eq = text.find('=');
+  if (eq == std::string::npos || eq <= 1) {
+    return false;
   }
-  return false;
+  if (text[1] == '{') {
+    const size_t close = text.find('}', 2);
+    if (close == std::string::npos || close + 1 != eq) {
+      return false;
+    }
+    const std::string name = AMStr::Strip(text.substr(2, close - 2));
+    return !name.empty() && varsetkn::IsValidVarname(name);
+  }
+  const std::string name = text.substr(1, eq - 1);
+  return !name.empty() && varsetkn::IsValidVarname(name);
 }
 
 /** Convert concrete filesystem type to AMTokenType path variants. */
@@ -213,6 +237,8 @@ const std::string StyleKeyForType(AMTokenType type) {
     return "bangsign";
   case AMTokenType::ShellCmd:
     return "shell_cmd";
+  case AMTokenType::IllegalCommand:
+    return "illegal_command";
   case AMTokenType::Common:
   default:
     return "common";
@@ -479,6 +505,24 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     }
   }
 
+  if (command_tree_) {
+    size_t first_legal_index = tokens.size();
+    for (size_t idx = 0; idx < tokens.size(); ++idx) {
+      if (tokens[idx].type == AMTokenType::Module ||
+          tokens[idx].type == AMTokenType::Command) {
+        first_legal_index = idx;
+        break;
+      }
+    }
+    if (first_legal_index > 0 && first_legal_index < tokens.size()) {
+      const size_t prev = first_legal_index - 1;
+      if (!tokens[prev].quoted && tokens[prev].type == AMTokenType::Common &&
+          !IsVarShortcutDefineToken_(texts[prev])) {
+        tokens[prev].type = AMTokenType::IllegalCommand;
+      }
+    }
+  }
+
   if (node) {
     for (size_t idx = 0; idx < tokens.size(); ++idx) {
       auto &token = tokens[idx];
@@ -500,14 +544,36 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     }
   }
 
+  std::optional<CommandTree::OptionValueRule> pending_value_rule;
+  size_t pending_value_index = 0;
+  auto consume_option_value = [&]() -> std::optional<AMCommandArgSemantic> {
+    if (!pending_value_rule.has_value()) {
+      return std::nullopt;
+    }
+    const AMCommandArgSemantic semantic = pending_value_rule->semantic;
+    ++pending_value_index;
+    if (!pending_value_rule->repeat_tail &&
+        pending_value_index >= pending_value_rule->value_count) {
+      pending_value_rule.reset();
+      pending_value_index = 0;
+    }
+    return semantic;
+  };
+  auto set_pending_option_value = [&](const CommandTree::OptionValueRule &rule,
+                                      size_t consumed) {
+    if (!rule.repeat_tail && consumed >= rule.value_count) {
+      pending_value_rule.reset();
+      pending_value_index = 0;
+      return;
+    }
+    pending_value_rule = rule;
+    pending_value_index = consumed;
+  };
+
   size_t arg_index = 0;
   for (size_t idx = 0; idx < tokens.size(); ++idx) {
     auto &token = tokens[idx];
     if (idx < command_tokens) {
-      continue;
-    }
-    if (token.quoted) {
-      ++arg_index;
       continue;
     }
 
@@ -515,7 +581,66 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     if (raw_text.empty()) {
       continue;
     }
-    if (token.type == AMTokenType::Option) {
+
+    bool positional_consumed = false;
+    bool option_definition = false;
+    std::optional<AMCommandArgSemantic> semantic_hint = consume_option_value();
+
+    if (!semantic_hint.has_value() && command_tree_ && !command_path.empty() &&
+        !token.quoted) {
+      if (StartsWithLongOption_(raw_text)) {
+        option_definition = true;
+        const size_t eq_pos = raw_text.find('=');
+        const std::string option_name =
+            eq_pos == std::string::npos ? raw_text : raw_text.substr(0, eq_pos);
+        const auto rule = command_tree_->ResolveOptionValueRule(
+            command_path, option_name, '\0', 0);
+        if (rule.has_value()) {
+          if (eq_pos == std::string::npos) {
+            set_pending_option_value(*rule, 0);
+          } else if (eq_pos + 1 < raw_text.size()) {
+            set_pending_option_value(*rule, 1);
+          } else {
+            set_pending_option_value(*rule, 0);
+          }
+        }
+      } else if (StartsWithShortOption_(raw_text)) {
+        option_definition = true;
+        const std::string body = raw_text.substr(1);
+        for (size_t cidx = 0; cidx < body.size(); ++cidx) {
+          const auto rule = command_tree_->ResolveOptionValueRule(
+              command_path, "", body[cidx], 0);
+          if (!rule.has_value()) {
+            continue;
+          }
+          if (cidx + 1 < body.size()) {
+            set_pending_option_value(*rule, 1);
+          } else {
+            set_pending_option_value(*rule, 0);
+          }
+          break;
+        }
+      }
+    }
+
+    if (!semantic_hint.has_value() && !option_definition && command_tree_ &&
+        !command_path.empty()) {
+      semantic_hint = command_tree_->ResolvePositionalSemantic(command_path,
+                                                               arg_index);
+      positional_consumed = true;
+    } else if (!option_definition) {
+      positional_consumed = true;
+    }
+
+    if (token.quoted) {
+      if (positional_consumed) {
+        ++arg_index;
+      }
+      continue;
+    }
+
+    if ((token.type == AMTokenType::Option || option_definition) &&
+        !semantic_hint.has_value()) {
       continue;
     }
 
@@ -523,7 +648,9 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     if (token.type == AMTokenType::Common &&
         ParseVarTokenText(raw_text, &name)) {
       token.type = VarNameTypeFor(name);
-      ++arg_index;
+      if (positional_consumed) {
+        ++arg_index;
+      }
       continue;
     }
 
@@ -538,11 +665,14 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     }
 
     const std::string unescaped_text = UnescapeBackticks_(raw_text);
-    const bool force_path = IsPathArgumentCommand_(command_path, arg_index);
+    const bool force_path =
+        semantic_hint.has_value() && IsPathSemantic_(*semantic_hint);
     const bool treat_as_path =
         force_path || has_unescaped_at || IsPathLikeText_(unescaped_text);
     if (!treat_as_path) {
-      ++arg_index;
+      if (positional_consumed) {
+        ++arg_index;
+      }
       continue;
     }
 
@@ -581,7 +711,9 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     const AMHostSetPathConfig &path_cfg = path_result.value;
     if (!path_cfg.highlight_use_check) {
       token.type = AMTokenType::Path;
-      ++arg_index;
+      if (positional_consumed) {
+        ++arg_index;
+      }
       continue;
     }
 
@@ -599,7 +731,9 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
 
     if (!path_client) {
       token.type = AMTokenType::Nonexistentpath;
-      ++arg_index;
+      if (positional_consumed) {
+        ++arg_index;
+      }
       continue;
     }
 
@@ -619,7 +753,9 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
       token.type = AMTokenType::Special;
     }
 
-    ++arg_index;
+    if (positional_consumed) {
+      ++arg_index;
+    }
   }
 
   g_style_token_cache[input] = tokens;
@@ -720,6 +856,8 @@ int AMTokenTypeAnalyzer::PriorityForType(AMTokenType type) const {
   case AMTokenType::Module:
   case AMTokenType::Command:
     return 50;
+  case AMTokenType::IllegalCommand:
+    return 49;
   case AMTokenType::Path:
   case AMTokenType::Nonexistentpath:
   case AMTokenType::File:
@@ -1039,6 +1177,9 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
       continue;
     }
     switch (token.type) {
+    case AMTokenType::IllegalCommand:
+      apply_range(token.start, token.end, token.type);
+      break;
     case AMTokenType::Path:
     case AMTokenType::Nonexistentpath:
     case AMTokenType::File:
@@ -1070,7 +1211,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
   }
 
   constexpr size_t kTokenTypeCount =
-      static_cast<size_t>(AMTokenType::ShellCmd) + 1;
+      static_cast<size_t>(AMTokenType::IllegalCommand) + 1;
   std::array<std::string, kTokenTypeCount> style_tags;
   for (size_t i = 0; i < kTokenTypeCount; ++i) {
     style_tags[i] =

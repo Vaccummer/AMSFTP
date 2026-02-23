@@ -98,22 +98,10 @@ bool IsPathLikeText_(const std::string &text) {
 }
 
 /**
- * @brief Return true if a command expects path input at the given arg index.
+ * @brief Return true when semantic value indicates a path.
  */
-bool IsPathArgumentCommand_(const std::string &command_path, size_t arg_index) {
-  if (command_path == "cd" || command_path == "ls" ||
-      command_path == "realpath") {
-    return arg_index == 0;
-  }
-  if (command_path == "find" || command_path == "walk" ||
-      command_path == "tree") {
-    return arg_index == 0;
-  }
-  if (command_path == "stat" || command_path == "size" ||
-      command_path == "mkdir" || command_path == "rm" || command_path == "cp") {
-    return true;
-  }
-  return false;
+bool IsPathSemantic_(AMCommandArgSemantic semantic) {
+  return semantic == AMCommandArgSemantic::Path;
 }
 
 /**
@@ -238,6 +226,8 @@ struct CommandState {
   std::string command_path;
   size_t command_tokens = 0;
   size_t arg_index = 0;
+  std::optional<CommandTree::OptionValueRule> pending_value_rule;
+  size_t pending_value_index = 0;
 };
 
 /**
@@ -267,14 +257,109 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
     state.command_tokens = 2;
   }
 
+  auto consume_option_value = [&]() {
+    if (!state.pending_value_rule.has_value()) {
+      return false;
+    }
+    ++state.pending_value_index;
+    if (!state.pending_value_rule->repeat_tail &&
+        state.pending_value_index >= state.pending_value_rule->value_count) {
+      state.pending_value_rule.reset();
+      state.pending_value_index = 0;
+    }
+    return true;
+  };
+
+  auto set_pending_option_value = [&](const CommandTree::OptionValueRule &rule,
+                                      size_t consumed) {
+    if (!rule.repeat_tail && consumed >= rule.value_count) {
+      state.pending_value_rule.reset();
+      state.pending_value_index = 0;
+      return;
+    }
+    state.pending_value_rule = rule;
+    state.pending_value_index = consumed;
+  };
+
   for (size_t i = state.command_tokens; i < before.size(); ++i) {
-    if (StartsWithLongOption_(before[i]) || StartsWithShortOption_(before[i])) {
+    const std::string &token = before[i];
+    if (consume_option_value()) {
       continue;
     }
+
+    if (!g_command_tree || state.command_path.empty()) {
+      if (StartsWithLongOption_(token) || StartsWithShortOption_(token)) {
+        continue;
+      }
+      ++state.arg_index;
+      continue;
+    }
+
+    if (StartsWithLongOption_(token)) {
+      const size_t eq_pos = token.find('=');
+      const std::string option_name =
+          eq_pos == std::string::npos ? token : token.substr(0, eq_pos);
+      const auto rule = g_command_tree->ResolveOptionValueRule(
+          state.command_path, option_name, '\0', 0);
+      if (rule.has_value()) {
+        if (eq_pos == std::string::npos) {
+          set_pending_option_value(*rule, 0);
+        } else if (eq_pos + 1 < token.size()) {
+          set_pending_option_value(*rule, 1);
+        } else {
+          set_pending_option_value(*rule, 0);
+        }
+        continue;
+      }
+      continue;
+    }
+
+    if (StartsWithShortOption_(token)) {
+      bool option_like = true;
+      const std::string body = token.substr(1);
+      if (body.empty()) {
+        option_like = false;
+      } else {
+        for (size_t cidx = 0; cidx < body.size(); ++cidx) {
+          const auto rule = g_command_tree->ResolveOptionValueRule(
+              state.command_path, "", body[cidx], 0);
+          if (!rule.has_value()) {
+            continue;
+          }
+          if (cidx + 1 < body.size()) {
+            set_pending_option_value(*rule, 1);
+          } else {
+            set_pending_option_value(*rule, 0);
+          }
+          break;
+        }
+      }
+      if (option_like) {
+        continue;
+      }
+    }
+
     ++state.arg_index;
   }
   return state;
 }
+
+/**
+ * @brief Return true when current argument state expects a path value.
+ */
+bool IsPathSemanticState_(const CommandState &state) {
+  if (!g_command_tree || state.command_path.empty()) {
+    return false;
+  }
+  if (state.pending_value_rule.has_value()) {
+    return IsPathSemantic_(state.pending_value_rule->semantic);
+  }
+  const auto semantic =
+      g_command_tree->ResolvePositionalSemantic(state.command_path,
+                                                state.arg_index);
+  return semantic.has_value() && IsPathSemantic_(*semantic);
+}
+
 } // namespace
 /**
  * @brief Construct command search engine.
@@ -642,8 +727,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   const CommandState state = ResolveCommandState_(ctx);
-  const bool force_path =
-      IsPathArgumentCommand_(state.command_path, state.arg_index);
+  const bool force_path = IsPathSemanticState_(state);
   const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
   if (!force_path && !has_at && !IsPathLikeText_(ctx.token_prefix)) {
     return result;

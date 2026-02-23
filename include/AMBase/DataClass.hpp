@@ -28,10 +28,43 @@ class App;
 }
 
 /**
+ * @brief Semantic type for command argument completion/highlight routing.
+ */
+enum class AMCommandArgSemantic {
+  None = 0,
+  Path,
+  HostNickname,
+  HostAttr,
+  ClientName,
+  TaskId,
+  VariableName,
+};
+
+/**
  * @brief CLI command tree used for completion and highlighting.
  */
 class CommandTree {
 public:
+  /**
+   * @brief Positional-argument completion rule.
+   */
+  struct PositionalRule {
+    size_t index = 0;
+    AMCommandArgSemantic semantic = AMCommandArgSemantic::None;
+    bool repeat_tail = false;
+  };
+
+  /**
+   * @brief Option-value completion rule.
+   */
+  struct OptionValueRule {
+    std::string long_option;
+    char short_option = '\0';
+    AMCommandArgSemantic semantic = AMCommandArgSemantic::None;
+    size_t value_count = 1;
+    bool repeat_tail = false;
+  };
+
   /**
    * @brief Command tree node used for completion lookups.
    */
@@ -39,6 +72,8 @@ public:
     std::unordered_map<std::string, std::string> subcommands;
     std::unordered_map<std::string, std::string> long_options;
     std::unordered_map<char, std::string> short_options;
+    std::vector<PositionalRule> positional_rules;
+    std::vector<OptionValueRule> option_value_rules;
   };
 
   /**
@@ -89,6 +124,32 @@ public:
    */
   [[nodiscard]] std::vector<std::pair<char, std::string>>
   ListShortOptions(const std::string &path) const;
+
+  /**
+   * @brief Add one positional semantic rule for a command path.
+   */
+  void AddPositionalRule(const std::string &path, size_t index,
+                         AMCommandArgSemantic semantic, bool repeat_tail);
+
+  /**
+   * @brief Add one option-value semantic rule for a command path.
+   */
+  void AddOptionValueRule(const std::string &path, const std::string &long_name,
+                          char short_name, AMCommandArgSemantic semantic,
+                          size_t value_count, bool repeat_tail);
+
+  /**
+   * @brief Resolve positional semantic at a given argument index.
+   */
+  [[nodiscard]] std::optional<AMCommandArgSemantic>
+  ResolvePositionalSemantic(const std::string &path, size_t index) const;
+
+  /**
+   * @brief Resolve option-value rule for a concrete option token.
+   */
+  [[nodiscard]] std::optional<OptionValueRule>
+  ResolveOptionValueRule(const std::string &path, const std::string &long_name,
+                         char short_name, size_t value_index) const;
 
 private:
   /**

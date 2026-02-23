@@ -3,6 +3,7 @@
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Var.hpp"
 #include "Isocline/isocline.h"
+#include <algorithm>
 #include <cctype>
 #include <iterator>
 #include <unordered_set>
@@ -147,6 +148,8 @@ struct CommandState {
   std::string command_path;
   size_t command_tokens = 0;
   size_t arg_index = 0;
+  std::optional<CommandTree::OptionValueRule> pending_value_rule;
+  size_t pending_value_index = 0;
 };
 
 /**
@@ -229,32 +232,130 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
     state.command_tokens = 2;
   }
 
+  auto consume_option_value = [&]() {
+    if (!state.pending_value_rule.has_value()) {
+      return false;
+    }
+    ++state.pending_value_index;
+    if (!state.pending_value_rule->repeat_tail &&
+        state.pending_value_index >= state.pending_value_rule->value_count) {
+      state.pending_value_rule.reset();
+      state.pending_value_index = 0;
+    }
+    return true;
+  };
+
+  auto set_pending_option_value = [&](const CommandTree::OptionValueRule &rule,
+                                      size_t consumed) {
+    if (!rule.repeat_tail && consumed >= rule.value_count) {
+      state.pending_value_rule.reset();
+      state.pending_value_index = 0;
+      return;
+    }
+    state.pending_value_rule = rule;
+    state.pending_value_index = consumed;
+  };
+
   for (size_t i = state.command_tokens; i < before.size(); ++i) {
-    if (StartsWithLongOption_(before[i]) || StartsWithShortOption_(before[i])) {
+    const std::string &token = before[i];
+    if (consume_option_value()) {
       continue;
     }
+
+    if (!g_command_tree || state.command_path.empty()) {
+      if (StartsWithLongOption_(token) || StartsWithShortOption_(token)) {
+        continue;
+      }
+      ++state.arg_index;
+      continue;
+    }
+
+    if (StartsWithLongOption_(token)) {
+      const size_t eq_pos = token.find('=');
+      const std::string option_name =
+          eq_pos == std::string::npos ? token : token.substr(0, eq_pos);
+      const auto rule = g_command_tree->ResolveOptionValueRule(
+          state.command_path, option_name, '\0', 0);
+      if (rule.has_value()) {
+        if (eq_pos == std::string::npos) {
+          set_pending_option_value(*rule, 0);
+        } else if (eq_pos + 1 < token.size()) {
+          set_pending_option_value(*rule, 1);
+        } else {
+          set_pending_option_value(*rule, 0);
+        }
+        continue;
+      }
+      continue;
+    }
+
+    if (StartsWithShortOption_(token)) {
+      bool option_like = true;
+      const std::string body = token.substr(1);
+      if (body.empty()) {
+        option_like = false;
+      } else {
+        for (size_t cidx = 0; cidx < body.size(); ++cidx) {
+          const auto rule = g_command_tree->ResolveOptionValueRule(
+              state.command_path, "", body[cidx], 0);
+          if (!rule.has_value()) {
+            continue;
+          }
+          if (cidx + 1 < body.size()) {
+            set_pending_option_value(*rule, 1);
+          } else {
+            set_pending_option_value(*rule, 0);
+          }
+          break;
+        }
+      }
+      if (option_like) {
+        continue;
+      }
+    }
+
     ++state.arg_index;
   }
   return state;
 }
 
 /**
- * @brief Return true if a command expects path input at the given arg index.
+ * @brief Map command argument semantic to completion target.
  */
-bool IsPathArgumentCommand_(const std::string &command_path, size_t arg_index) {
-  if (command_path == "cd" || command_path == "ls" ||
-      command_path == "realpath") {
-    return arg_index == 0;
+std::optional<AMCompletionTarget>
+MapSemanticToTarget_(AMCommandArgSemantic semantic) {
+  switch (semantic) {
+  case AMCommandArgSemantic::Path:
+    return AMCompletionTarget::Path;
+  case AMCommandArgSemantic::HostNickname:
+    return AMCompletionTarget::HostNickname;
+  case AMCommandArgSemantic::HostAttr:
+    return AMCompletionTarget::HostAttr;
+  case AMCommandArgSemantic::ClientName:
+    return AMCompletionTarget::ClientName;
+  case AMCommandArgSemantic::TaskId:
+    return AMCompletionTarget::TaskId;
+  case AMCommandArgSemantic::VariableName:
+    return AMCompletionTarget::VariableName;
+  case AMCommandArgSemantic::None:
+  default:
+    return std::nullopt;
   }
-  if (command_path == "find" || command_path == "walk" ||
-      command_path == "tree") {
-    return arg_index == 0;
+}
+
+/**
+ * @brief Resolve semantic for the current token from command-state context.
+ */
+std::optional<AMCommandArgSemantic>
+ResolveCurrentSemantic_(const CommandState &state) {
+  if (!g_command_tree || state.command_path.empty()) {
+    return std::nullopt;
   }
-  if (command_path == "stat" || command_path == "size" ||
-      command_path == "mkdir" || command_path == "rm" || command_path == "cp") {
-    return true;
+  if (state.pending_value_rule.has_value()) {
+    return state.pending_value_rule->semantic;
   }
-  return false;
+  return g_command_tree->ResolvePositionalSemantic(state.command_path,
+                                                   state.arg_index);
 }
 
 } // namespace
@@ -379,6 +480,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     return ctx;
   }
 
+  const CommandState state = ResolveCommandState_(ctx);
   if (ctx.token_index == 0) {
     ctx.targets = {AMCompletionTarget::TopCommand};
     return ctx;
@@ -392,47 +494,26 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     return ctx;
   }
 
-  const CommandState state = ResolveCommandState_(ctx);
-  std::optional<AMCompletionTarget> internal_target;
-  if (state.command_path == "config get" ||
-      state.command_path == "config edit" ||
-      state.command_path == "config rm") {
-    internal_target = AMCompletionTarget::HostNickname;
-  } else if (state.command_path == "config rn" && state.arg_index == 0) {
-    internal_target = AMCompletionTarget::HostNickname;
-  } else if (state.command_path == "config set") {
-    if (state.arg_index == 0) {
-      internal_target = AMCompletionTarget::HostNickname;
-    } else if (state.arg_index == 1) {
-      internal_target = AMCompletionTarget::HostAttr;
+  const auto semantic = ResolveCurrentSemantic_(state);
+  const auto semantic_target = semantic.has_value()
+                                   ? MapSemanticToTarget_(*semantic)
+                                   : std::nullopt;
+  auto push_target = [&](AMCompletionTarget target) {
+    if (std::find(ctx.targets.begin(), ctx.targets.end(), target) ==
+        ctx.targets.end()) {
+      ctx.targets.push_back(target);
     }
-  } else if (state.command_path == "connect" && state.arg_index == 0) {
-    internal_target = AMCompletionTarget::HostNickname;
-  } else if (state.command_path == "client check" ||
-             state.command_path == "client rm") {
-    internal_target = AMCompletionTarget::ClientName;
-  } else if (state.command_path == "ch" && state.arg_index == 0) {
-    internal_target = AMCompletionTarget::ClientName;
-  } else if (state.command_path == "task show" ||
-             state.command_path == "task inspect" ||
-             state.command_path == "task terminate" ||
-             state.command_path == "task pause") {
-    internal_target = AMCompletionTarget::TaskId;
-  } else if ((state.command_path == "task retry" ||
-              state.command_path == "retry") &&
-             state.arg_index == 0) {
-    internal_target = AMCompletionTarget::TaskId;
-  }
-
-  if (internal_target.has_value()) {
-    ctx.targets.push_back(*internal_target);
+  };
+  if (semantic_target.has_value() &&
+      *semantic_target != AMCompletionTarget::Path) {
+    push_target(*semantic_target);
   }
 
   const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
-  const bool force_path =
-      IsPathArgumentCommand_(state.command_path, state.arg_index);
-  if (force_path || has_at || IsPathLikeText_(ctx.token_prefix)) {
-    ctx.targets.push_back(AMCompletionTarget::Path);
+  const bool semantic_path = semantic_target.has_value() &&
+                             *semantic_target == AMCompletionTarget::Path;
+  if (semantic_path || has_at || IsPathLikeText_(ctx.token_prefix)) {
+    push_target(AMCompletionTarget::Path);
   }
 
   if (ctx.targets.empty()) {
