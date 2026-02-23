@@ -1,4 +1,5 @@
 #pragma once
+#include "AMCLI/TokenTypeAnalyzer.hpp"
 #include <AMBase/Enum.hpp>
 #include <atomic>
 #include <condition_variable>
@@ -21,17 +22,17 @@ using ic_completion_env_t = ic_completion_env_s;
  * @brief Completion target classification used for search-engine routing.
  */
 enum class AMCompletionTarget {
-  Disabled,
-  TopCommand,
-  Subcommand,
-  LongOption,
-  ShortOption,
-  VariableName,
-  ClientName,
-  HostNickname,
-  HostAttr,
-  TaskId,
-  Path,
+  Disabled = 0,
+  TopCommand = 1,
+  Subcommand = 2,
+  LongOption = 3,
+  ShortOption = 4,
+  VariableName = 5,
+  ClientName = 6,
+  HostNickname = 7,
+  HostAttr = 8,
+  TaskId = 9,
+  Path = 10,
 };
 
 /**
@@ -64,6 +65,14 @@ struct AMCompletionCandidate {
 };
 
 /**
+ * @brief Completion candidate container with response metadata.
+ */
+struct AMCompletionCandidates {
+  std::vector<AMCompletionCandidate> items;
+  bool from_cache = false;
+};
+
+/**
  * @brief Runtime/completion arguments loaded from settings.
  */
 struct AMCompletionArgs {
@@ -79,35 +88,31 @@ struct AMCompletionArgs {
 };
 
 /**
- * @brief Token span for completion parsing.
- */
-struct AMCompletionToken {
-  size_t start = 0;
-  size_t end = 0;
-  size_t content_start = 0;
-  size_t content_end = 0;
-  bool quoted = false;
-};
-
-/**
  * @brief Parsed completion context shared with search engines.
  */
 struct AMCompletionContext {
   std::string input;
   size_t cursor = 0;
   uint64_t request_id = 0;
-  std::vector<AMCompletionToken> tokens;
+  std::vector<AMTokenTypeAnalyzer::AMToken> tokens;
   size_t token_index = 0;
   bool has_token = false;
-  AMCompletionToken token;
+  bool cursor_in_token = false;
+  AMTokenTypeAnalyzer::AMToken token;
   std::string token_raw;
   std::string token_text;
   std::string token_prefix_raw;
   std::string token_prefix;
+  std::string token_postfix_raw;
+  std::string token_postfix;
   bool token_quoted = false;
+  std::string module;
+  std::string cmd;
+  std::vector<std::string> options;
+  std::vector<std::string> args;
   std::vector<AMCompletionTarget> targets;
   bool forbid_cache = false;
-  const AMCompletionArgs *args = nullptr;
+  const AMCompletionArgs *completion_args = nullptr;
 };
 
 class AMCompletionSearchEngine;
@@ -204,19 +209,6 @@ struct AMCompletionRequest {
 };
 
 /**
- * @brief Hash helper for AMCompletionTarget enum usage in unordered_map.
- */
-struct AMCompletionTargetHash {
-  /**
-   * @brief Hash enum value.
-   *
-   * @param target Completion target.
-   * @return Hash value.
-   */
-  std::size_t operator()(AMCompletionTarget target) const;
-};
-
-/**
  * @brief Core completion engine that orchestrates parsing, dispatch, and async
  * execution.
  */
@@ -262,16 +254,6 @@ public:
   void LoadConfig();
 
   /**
-   * @brief Get current completion arguments.
-   */
-  const AMCompletionArgs &GetArgs() const;
-
-  /**
-   * @brief Get mutable completion arguments.
-   */
-  AMCompletionArgs &MutableArgs();
-
-  /**
    * @brief Get the current request id.
    */
   uint64_t CurrentRequestId() const;
@@ -296,16 +278,12 @@ private:
   uint64_t NextRequestId_(const std::string &input, size_t cursor);
 
   /**
-   * @brief Tokenize input into completion tokens.
-   */
-  std::vector<AMCompletionToken> TokenizeInput_(const std::string &input) const;
-
-  /**
    * @brief Find the token that owns the cursor.
    */
-  bool FindTokenAtCursor_(const std::vector<AMCompletionToken> &tokens,
-                          size_t cursor, AMCompletionToken *out,
-                          size_t *out_index) const;
+  bool
+  FindTokenAtCursor_(const std::vector<AMTokenTypeAnalyzer::AMToken> &tokens,
+                     size_t cursor, AMTokenTypeAnalyzer::AMToken *out,
+                     size_t *out_index) const;
 
   /**
    * @brief Build the completion context for the current input.
@@ -316,14 +294,14 @@ private:
    * @brief Dispatch completion requests to registered search engines.
    */
   void DispatchCandidates_(const AMCompletionContext &ctx,
-                           std::vector<AMCompletionCandidate> &out);
+                           AMCompletionCandidates &out);
 
   /**
    * @brief Emit candidates to isocline with delete ranges.
    */
   void EmitCandidates_(ic_completion_env_t *cenv,
                        const AMCompletionContext &ctx,
-                       const std::vector<AMCompletionCandidate> &items);
+                       const AMCompletionCandidates &items);
 
   /**
    * @brief Start async worker threads.
@@ -359,7 +337,7 @@ private:
    * @brief Consume finished async results for the current context target.
    */
   void ConsumeAsyncResults_(const AMCompletionContext &ctx,
-                            std::vector<AMCompletionCandidate> &out);
+                            AMCompletionCandidates &out);
 
   /**
    * @brief Resolve the engine for a routed completion target.
@@ -382,8 +360,7 @@ private:
 
   std::mutex engines_mtx_;
   std::unordered_map<AMCompletionTarget,
-                     std::shared_ptr<AMCompletionSearchEngine>,
-                     AMCompletionTargetHash>
+                     std::shared_ptr<AMCompletionSearchEngine>>
       engines_by_target_;
   std::vector<std::shared_ptr<AMCompletionSearchEngine>> engines_;
 
@@ -399,6 +376,4 @@ private:
 
   std::mutex async_interrupts_mtx_;
   std::vector<std::function<void()>> async_interrupts_;
-
-  bool last_result_from_cache_ = false;
 };

@@ -506,19 +506,57 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
   }
 
   if (command_tree_) {
-    size_t first_legal_index = tokens.size();
+    std::vector<size_t> legal_indexes;
+    legal_indexes.reserve(tokens.size());
+    const CommandNode *scan_node = nullptr;
+    std::string scan_path;
+
     for (size_t idx = 0; idx < tokens.size(); ++idx) {
-      if (tokens[idx].type == AMTokenType::Module ||
-          tokens[idx].type == AMTokenType::Command) {
-        first_legal_index = idx;
-        break;
+      if (tokens[idx].quoted) {
+        continue;
+      }
+      const std::string &text = texts[idx];
+      if (text.empty()) {
+        continue;
+      }
+
+      if (scan_path.empty()) {
+        if (command_tree_->IsModule(text)) {
+          legal_indexes.push_back(idx);
+          scan_path = text;
+          scan_node = command_tree_->FindNode(scan_path);
+          continue;
+        }
+        if (command_tree_->IsTopCommand(text)) {
+          legal_indexes.push_back(idx);
+          scan_path = text;
+          scan_node = command_tree_->FindNode(scan_path);
+          continue;
+        }
+        continue;
+      }
+
+      if (scan_node &&
+          scan_node->subcommands.find(text) != scan_node->subcommands.end()) {
+        legal_indexes.push_back(idx);
+        scan_path += " " + text;
+        scan_node = command_tree_->FindNode(scan_path);
       }
     }
-    if (first_legal_index > 0 && first_legal_index < tokens.size()) {
-      const size_t prev = first_legal_index - 1;
-      if (!tokens[prev].quoted && tokens[prev].type == AMTokenType::Common &&
-          !IsVarShortcutDefineToken_(texts[prev])) {
-        tokens[prev].type = AMTokenType::IllegalCommand;
+
+    if (!legal_indexes.empty()) {
+      size_t segment_begin = 0;
+      for (const size_t legal_index : legal_indexes) {
+        for (size_t idx = segment_begin; idx < legal_index; ++idx) {
+          if (tokens[idx].quoted || tokens[idx].type != AMTokenType::Common) {
+            continue;
+          }
+          if (IsVarShortcutDefineToken_(texts[idx])) {
+            continue;
+          }
+          tokens[idx].type = AMTokenType::IllegalCommand;
+        }
+        segment_begin = legal_index + 1;
       }
     }
   }
@@ -625,8 +663,8 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
 
     if (!semantic_hint.has_value() && !option_definition && command_tree_ &&
         !command_path.empty()) {
-      semantic_hint = command_tree_->ResolvePositionalSemantic(command_path,
-                                                               arg_index);
+      semantic_hint =
+          command_tree_->ResolvePositionalSemantic(command_path, arg_index);
       positional_consumed = true;
     } else if (!option_definition) {
       positional_consumed = true;
@@ -1086,7 +1124,6 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     const CommandNode *node = nullptr;
     size_t consumed = 0;
     std::string path;
-    bool parsing = true;
 
     if (!command_tree_) {
       if (out_node) {
@@ -1107,39 +1144,30 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
       if (text.empty()) {
         continue;
       }
-      if (parsing) {
-        if (path.empty()) {
-          if (command_tree_->IsModule(text)) {
-            apply_range(token.start, token.end, AMTokenType::Module);
-            path = text;
-            node = command_tree_->FindNode(path);
-            consumed = i + 1;
-            continue;
-          }
-          if (command_tree_->IsTopCommand(text)) {
-            apply_range(token.start, token.end, AMTokenType::Command);
-            path = text;
-            node = command_tree_->FindNode(path);
-            consumed = i + 1;
-            if (!node || node->subcommands.empty()) {
-              parsing = false;
-            }
-            continue;
-          }
-          parsing = false;
-        } else if (node &&
-                   node->subcommands.find(text) != node->subcommands.end()) {
-          apply_range(token.start, token.end, AMTokenType::Command);
-          path += " " + text;
+
+      if (path.empty()) {
+        if (command_tree_->IsModule(text)) {
+          apply_range(token.start, token.end, AMTokenType::Module);
+          path = text;
           node = command_tree_->FindNode(path);
           consumed = i + 1;
-          if (!node || node->subcommands.empty()) {
-            parsing = false;
-          }
           continue;
-        } else {
-          parsing = false;
         }
+        if (command_tree_->IsTopCommand(text)) {
+          apply_range(token.start, token.end, AMTokenType::Command);
+          path = text;
+          node = command_tree_->FindNode(path);
+          consumed = i + 1;
+          continue;
+        }
+        continue;
+      }
+
+      if (node && node->subcommands.find(text) != node->subcommands.end()) {
+        apply_range(token.start, token.end, AMTokenType::Command);
+        path += " " + text;
+        node = command_tree_->FindNode(path);
+        consumed = i + 1;
       }
     }
 

@@ -135,21 +135,21 @@ bool IsPathLikeText_(const std::string &text) {
 }
 
 /**
- * @brief Return true when command name is a module command.
- */
-bool IsModuleCommand_(const std::string &name) {
-  return g_command_tree && g_command_tree->IsModule(name);
-}
-
-/**
  * @brief Parsed command/argument state from tokens before cursor.
  */
 struct CommandState {
+  std::string module;
+  std::string cmd;
   std::string command_path;
   size_t command_tokens = 0;
   size_t arg_index = 0;
   std::optional<CommandTree::OptionValueRule> pending_value_rule;
   size_t pending_value_index = 0;
+  bool has_module = false;
+  bool has_cmd = false;
+  bool unknown_before_command = false;
+  std::vector<std::string> options;
+  std::vector<std::string> args;
 };
 
 /**
@@ -224,12 +224,55 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
     return state;
   }
 
-  state.command_path = before[0];
-  state.command_tokens = 1;
-  if (before.size() >= 2 && IsModuleCommand_(before[0]) &&
-      !StartsWithLongOption_(before[1]) && !StartsWithShortOption_(before[1])) {
-    state.command_path += " " + before[1];
-    state.command_tokens = 2;
+  const CommandTree::CommandNode *node = nullptr;
+  for (size_t i = 0; i < before.size(); ++i) {
+    const std::string &text = before[i];
+    if (text.empty()) {
+      continue;
+    }
+    if (!g_command_tree) {
+      state.unknown_before_command = true;
+      return state;
+    }
+    if (state.command_path.empty()) {
+      if (g_command_tree->IsModule(text)) {
+        state.module = text;
+        state.has_module = true;
+        state.command_path = text;
+        state.command_tokens = i + 1;
+        node = g_command_tree->FindNode(state.command_path);
+        continue;
+      }
+      if (g_command_tree->IsTopCommand(text)) {
+        state.cmd = text;
+        state.has_cmd = true;
+        state.command_path = text;
+        state.command_tokens = i + 1;
+        node = g_command_tree->FindNode(state.command_path);
+        continue;
+      }
+      state.unknown_before_command = true;
+      return state;
+    }
+
+    if (node && node->subcommands.find(text) != node->subcommands.end()) {
+      state.command_path += " " + text;
+      state.cmd = state.command_path;
+      state.has_cmd = true;
+      state.command_tokens = i + 1;
+      node = g_command_tree->FindNode(state.command_path);
+      continue;
+    }
+
+    if (state.has_module && !state.has_cmd) {
+      state.unknown_before_command = true;
+      return state;
+    }
+    break;
+  }
+
+  if (!state.has_cmd) {
+    return state;
   }
 
   auto consume_option_value = [&]() {
@@ -259,13 +302,12 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
   for (size_t i = state.command_tokens; i < before.size(); ++i) {
     const std::string &token = before[i];
     if (consume_option_value()) {
+      state.args.push_back(token);
       continue;
     }
 
-    if (!g_command_tree || state.command_path.empty()) {
-      if (StartsWithLongOption_(token) || StartsWithShortOption_(token)) {
-        continue;
-      }
+    if (token == "--") {
+      state.args.push_back(token);
       ++state.arg_index;
       continue;
     }
@@ -274,46 +316,84 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
       const size_t eq_pos = token.find('=');
       const std::string option_name =
           eq_pos == std::string::npos ? token : token.substr(0, eq_pos);
-      const auto rule = g_command_tree->ResolveOptionValueRule(
+      const bool option_exists = node && node->long_options.find(option_name) !=
+                                             node->long_options.end();
+      if (!option_exists) {
+        state.args.push_back(token);
+        ++state.arg_index;
+        continue;
+      }
+      const auto value_rule = g_command_tree->ResolveOptionValueRule(
           state.command_path, option_name, '\0', 0);
-      if (rule.has_value()) {
-        if (eq_pos == std::string::npos) {
-          set_pending_option_value(*rule, 0);
-        } else if (eq_pos + 1 < token.size()) {
-          set_pending_option_value(*rule, 1);
-        } else {
-          set_pending_option_value(*rule, 0);
+      if (eq_pos != std::string::npos) {
+        if (!value_rule.has_value()) {
+          state.args.push_back(token);
+          ++state.arg_index;
+          continue;
         }
+        state.options.push_back(option_name);
+        continue;
+      }
+
+      state.options.push_back(option_name);
+      if (value_rule.has_value()) {
+        set_pending_option_value(*value_rule, 0);
         continue;
       }
       continue;
     }
 
     if (StartsWithShortOption_(token)) {
-      bool option_like = true;
       const std::string body = token.substr(1);
       if (body.empty()) {
-        option_like = false;
-      } else {
-        for (size_t cidx = 0; cidx < body.size(); ++cidx) {
-          const auto rule = g_command_tree->ResolveOptionValueRule(
-              state.command_path, "", body[cidx], 0);
-          if (!rule.has_value()) {
-            continue;
-          }
-          if (cidx + 1 < body.size()) {
-            set_pending_option_value(*rule, 1);
-          } else {
-            set_pending_option_value(*rule, 0);
-          }
-          break;
-        }
-      }
-      if (option_like) {
+        state.args.push_back(token);
+        ++state.arg_index;
         continue;
       }
+
+      bool all_known = true;
+      bool any_value_rule = false;
+      for (char c : body) {
+        if (!node || node->short_options.find(c) == node->short_options.end()) {
+          all_known = false;
+          break;
+        }
+        const auto rule = g_command_tree->ResolveOptionValueRule(
+            state.command_path, "", c, 0);
+        if (rule.has_value()) {
+          any_value_rule = true;
+        }
+      }
+
+      if (!all_known) {
+        state.args.push_back(token);
+        ++state.arg_index;
+        continue;
+      }
+
+      if (body.size() == 1) {
+        const auto rule = g_command_tree->ResolveOptionValueRule(
+            state.command_path, "", body[0], 0);
+        state.options.push_back(std::string("-") + body[0]);
+        if (rule.has_value()) {
+          set_pending_option_value(*rule, 0);
+        }
+        continue;
+      }
+
+      if (!any_value_rule) {
+        for (char c : body) {
+          state.options.push_back(std::string("-") + c);
+        }
+        continue;
+      }
+
+      state.args.push_back(token);
+      ++state.arg_index;
+      continue;
     }
 
+    state.args.push_back(token);
     ++state.arg_index;
   }
   return state;
@@ -343,45 +423,18 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
   }
 }
 
-/**
- * @brief Resolve semantic for the current token from command-state context.
- */
-std::optional<AMCommandArgSemantic>
-ResolveCurrentSemantic_(const CommandState &state) {
-  if (!g_command_tree || state.command_path.empty()) {
-    return std::nullopt;
-  }
-  if (state.pending_value_rule.has_value()) {
-    return state.pending_value_rule->semantic;
-  }
-  return g_command_tree->ResolvePositionalSemantic(state.command_path,
-                                                   state.arg_index);
-}
-
 } // namespace
 
 /**
  * @brief Tokenize input into completion tokens.
  */
-std::vector<AMCompletionToken>
-AMCompleteEngine::TokenizeInput_(const std::string &input) const {
-  std::vector<AMCompletionToken> tokens;
-  std::vector<AMTokenTypeAnalyzer::AMToken> split =
-      AMTokenTypeAnalyzer::SplitToken(input);
-  tokens.reserve(split.size());
-  for (const auto &item : split) {
-    tokens.push_back({item.start, item.end, item.content_start,
-                      item.content_end, item.quoted});
-  }
-  return tokens;
-}
 
 /**
  * @brief Find the token that owns the cursor.
  */
 bool AMCompleteEngine::FindTokenAtCursor_(
-    const std::vector<AMCompletionToken> &tokens, size_t cursor,
-    AMCompletionToken *out, size_t *out_index) const {
+    const std::vector<AMTokenTypeAnalyzer::AMToken> &tokens, size_t cursor,
+    AMTokenTypeAnalyzer::AMToken *out, size_t *out_index) const {
   for (size_t i = 0; i < tokens.size(); ++i) {
     const auto &tok = tokens[i];
     const size_t begin = tok.quoted ? tok.content_start : tok.start;
@@ -408,7 +461,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   ctx.input = request.input;
   ctx.cursor = request.cursor;
   ctx.request_id = request.request_id;
-  ctx.args = &args_;
+  ctx.completion_args = &args_;
 
   std::string trimmed = AMStr::Strip(request.input);
   if (!trimmed.empty() && trimmed.front() == '!') {
@@ -416,15 +469,37 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     return ctx;
   }
 
-  ctx.tokens = TokenizeInput_(request.input);
+  const std::vector<AMTokenTypeAnalyzer::AMToken> all_tokens =
+      AMTokenTypeAnalyzer::SplitToken(request.input);
+  AMTokenTypeAnalyzer::AMToken token;
+  size_t token_index = all_tokens.size();
+  const bool has_token =
+      FindTokenAtCursor_(all_tokens, request.cursor, &token, &token_index);
+  if (!has_token) {
+    token_index = all_tokens.size();
+    for (size_t i = 0; i < all_tokens.size(); ++i) {
+      const auto &tok = all_tokens[i];
+      const size_t begin = tok.quoted ? tok.content_start : tok.start;
+      if (request.cursor < begin) {
+        token_index = i;
+        break;
+      }
+    }
+  }
+  const size_t keep_count = has_token
+                                ? std::min(all_tokens.size(), token_index + 1)
+                                : std::min(all_tokens.size(), token_index);
+  ctx.tokens.assign(all_tokens.begin(), all_tokens.begin() + keep_count);
 
-  AMCompletionToken token;
-  size_t token_index = ctx.tokens.size();
-  ctx.has_token =
-      FindTokenAtCursor_(ctx.tokens, request.cursor, &token, &token_index);
-  if (!ctx.has_token) {
-    token = {request.cursor, request.cursor, request.cursor, request.cursor,
-             false};
+  ctx.has_token = has_token;
+  ctx.cursor_in_token = has_token;
+  if (!has_token) {
+    token.start = request.cursor;
+    token.end = request.cursor;
+    token.content_start = request.cursor;
+    token.content_end = request.cursor;
+    token.quoted = false;
+    token.type = AMTokenType::Unset;
   }
   ctx.token = token;
   ctx.token_index = token_index;
@@ -441,9 +516,12 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
       token.content_start <= request.input.size()) {
     ctx.token_prefix_raw = request.input.substr(
         token.content_start, request.cursor - token.content_start);
+    ctx.token_postfix_raw = request.input.substr(
+        request.cursor, token.content_end - request.cursor);
   }
   ctx.token_text = UnescapeBackticks_(ctx.token_raw);
   ctx.token_prefix = UnescapeBackticks_(ctx.token_prefix_raw);
+  ctx.token_postfix = UnescapeBackticks_(ctx.token_postfix_raw);
 
   const VarShortcutMode shortcut_mode = DetectVarShortcutMode_(ctx);
   const bool starts_with_unescaped_dollar =
@@ -480,24 +558,165 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     return ctx;
   }
 
-  const CommandState state = ResolveCommandState_(ctx);
-  if (ctx.token_index == 0) {
+  CommandState state = ResolveCommandState_(ctx);
+  const std::string current_prefix = ctx.has_token ? ctx.token_prefix : "";
+  if (!current_prefix.empty() && g_command_tree &&
+      ctx.token_index == state.command_tokens) {
+    if (!state.has_module && !state.has_cmd) {
+      if (g_command_tree->IsModule(current_prefix)) {
+        state.module = current_prefix;
+        state.has_module = true;
+        state.command_path = current_prefix;
+        state.command_tokens = ctx.token_index + 1;
+      } else if (g_command_tree->IsTopCommand(current_prefix)) {
+        state.cmd = current_prefix;
+        state.has_cmd = true;
+        state.command_path = current_prefix;
+        state.command_tokens = ctx.token_index + 1;
+      }
+    } else if (state.has_module && !state.has_cmd) {
+      const auto *node = g_command_tree->FindNode(state.command_path);
+      if (node &&
+          node->subcommands.find(current_prefix) != node->subcommands.end()) {
+        state.command_path += " " + current_prefix;
+        state.cmd = state.command_path;
+        state.has_cmd = true;
+        state.command_tokens = ctx.token_index + 1;
+      }
+    }
+  }
+  ctx.module = state.module;
+  ctx.cmd = state.cmd;
+  ctx.options = state.options;
+  ctx.args = state.args;
+
+  if (state.unknown_before_command) {
+    ctx.targets = {AMCompletionTarget::Disabled};
+    return ctx;
+  }
+  if (!state.has_module && !state.has_cmd) {
     ctx.targets = {AMCompletionTarget::TopCommand};
     return ctx;
   }
-  if (StartsWithLongOption_(ctx.token_prefix)) {
-    ctx.targets = {AMCompletionTarget::LongOption};
-    return ctx;
-  }
-  if (StartsWithShortOption_(ctx.token_prefix)) {
-    ctx.targets = {AMCompletionTarget::ShortOption};
+  if (state.has_module && !state.has_cmd) {
+    ctx.targets = {AMCompletionTarget::Subcommand};
     return ctx;
   }
 
-  const auto semantic = ResolveCurrentSemantic_(state);
-  const auto semantic_target = semantic.has_value()
-                                   ? MapSemanticToTarget_(*semantic)
-                                   : std::nullopt;
+  const auto *cmd_node =
+      g_command_tree ? g_command_tree->FindNode(state.command_path) : nullptr;
+  const bool cursor_is_bare_dashdash =
+      ctx.has_token && ctx.token_prefix == "--";
+  const bool cursor_is_long_option_prefix =
+      ctx.has_token && !cursor_is_bare_dashdash &&
+      StartsWithLongOption_(ctx.token_prefix);
+  const bool cursor_is_short_option_prefix =
+      ctx.has_token && StartsWithShortOption_(ctx.token_prefix);
+
+  bool cursor_valid_long_option = false;
+  bool cursor_long_has_inline_value = false;
+  std::string cursor_long_name;
+  std::optional<CommandTree::OptionValueRule> cursor_long_value_rule;
+  bool cursor_valid_short_option = false;
+  bool cursor_short_bundle = false;
+  char cursor_short_name = '\0';
+
+  if (cursor_is_long_option_prefix) {
+    const size_t eq_pos = ctx.token_prefix.find('=');
+    cursor_long_has_inline_value = eq_pos != std::string::npos;
+    cursor_long_name = eq_pos == std::string::npos
+                           ? ctx.token_prefix
+                           : ctx.token_prefix.substr(0, eq_pos);
+    cursor_valid_long_option =
+        cmd_node && cmd_node->long_options.find(cursor_long_name) !=
+                        cmd_node->long_options.end();
+    if (cursor_valid_long_option && g_command_tree) {
+      cursor_long_value_rule = g_command_tree->ResolveOptionValueRule(
+          state.command_path, cursor_long_name, '\0', 0);
+      if (cursor_long_has_inline_value && !cursor_long_value_rule.has_value()) {
+        cursor_valid_long_option = false;
+      }
+    }
+  }
+
+  if (cursor_is_short_option_prefix) {
+    const std::string body = ctx.token_prefix.substr(1);
+    if (body.empty()) {
+      cursor_valid_short_option = true;
+    } else if (body.size() == 1) {
+      cursor_short_name = body[0];
+      cursor_valid_short_option =
+          cmd_node && cmd_node->short_options.find(cursor_short_name) !=
+                          cmd_node->short_options.end();
+    } else {
+      bool all_known = true;
+      bool any_value_rule = false;
+      for (char c : body) {
+        if (!cmd_node ||
+            cmd_node->short_options.find(c) == cmd_node->short_options.end()) {
+          all_known = false;
+          break;
+        }
+        const auto rule = g_command_tree->ResolveOptionValueRule(
+            state.command_path, "", c, 0);
+        if (rule.has_value()) {
+          any_value_rule = true;
+        }
+      }
+      if (all_known && !any_value_rule) {
+        cursor_valid_short_option = true;
+        cursor_short_bundle = true;
+      }
+    }
+  }
+
+  const bool cursor_as_option =
+      (cursor_is_long_option_prefix && cursor_valid_long_option) ||
+      (cursor_is_short_option_prefix && cursor_valid_short_option);
+  if (ctx.has_token && !ctx.token_prefix.empty() &&
+      ctx.token_index >= state.command_tokens) {
+    if (cursor_as_option) {
+      if (cursor_is_long_option_prefix) {
+        ctx.options.push_back(cursor_long_name);
+      } else if (!cursor_short_bundle) {
+        ctx.options.push_back(std::string("-") + cursor_short_name);
+      } else {
+        for (char c : ctx.token_prefix.substr(1)) {
+          ctx.options.push_back(std::string("-") + c);
+        }
+      }
+    } else {
+      ctx.args.push_back(ctx.token_prefix);
+    }
+  }
+
+  std::optional<AMCommandArgSemantic> semantic;
+  if (state.pending_value_rule.has_value()) {
+    semantic = state.pending_value_rule->semantic;
+  }
+  if (!semantic.has_value() && cursor_is_long_option_prefix &&
+      cursor_valid_long_option && g_command_tree) {
+    if (cursor_long_has_inline_value) {
+      if (cursor_long_value_rule.has_value()) {
+        semantic = cursor_long_value_rule->semantic;
+      }
+    } else {
+      ctx.targets = {AMCompletionTarget::LongOption};
+      return ctx;
+    }
+  }
+  if (!semantic.has_value() && cursor_is_short_option_prefix &&
+      cursor_valid_short_option) {
+    ctx.targets = {AMCompletionTarget::ShortOption};
+    return ctx;
+  }
+  if (!semantic.has_value() && g_command_tree && !state.command_path.empty()) {
+    semantic = g_command_tree->ResolvePositionalSemantic(state.command_path,
+                                                         state.arg_index);
+  }
+
+  const auto semantic_target =
+      semantic.has_value() ? MapSemanticToTarget_(*semantic) : std::nullopt;
   auto push_target = [&](AMCompletionTarget target) {
     if (std::find(ctx.targets.begin(), ctx.targets.end(), target) ==
         ctx.targets.end()) {
@@ -509,10 +728,27 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     push_target(*semantic_target);
   }
 
+  const bool prefix_starts_with_path_sign =
+      !ctx.token_prefix.empty() &&
+      (ctx.token_prefix.front() == '@' || ctx.token_prefix.front() == '~' ||
+       ctx.token_prefix.front() == '/' || ctx.token_prefix.front() == '\\' ||
+       ctx.token_prefix.front() == '.');
   const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
   const bool semantic_path = semantic_target.has_value() &&
                              *semantic_target == AMCompletionTarget::Path;
-  if (semantic_path || has_at || IsPathLikeText_(ctx.token_prefix)) {
+  const bool prefix_has_path_sign = prefix_starts_with_path_sign || has_at ||
+                                    IsPathLikeText_(ctx.token_prefix);
+  if (semantic_path) {
+    if (ctx.token_prefix.empty()) {
+      push_target(AMCompletionTarget::ClientName);
+      push_target(AMCompletionTarget::Path);
+    } else if (prefix_has_path_sign) {
+      push_target(AMCompletionTarget::Path);
+    } else {
+      push_target(AMCompletionTarget::ClientName);
+      push_target(AMCompletionTarget::Path);
+    }
+  } else if (has_at || IsPathLikeText_(ctx.token_prefix)) {
     push_target(AMCompletionTarget::Path);
   }
 
@@ -525,8 +761,8 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
 /**
  * @brief Dispatch completion requests to registered search engines.
  */
-void AMCompleteEngine::DispatchCandidates_(
-    const AMCompletionContext &ctx, std::vector<AMCompletionCandidate> &out) {
+void AMCompleteEngine::DispatchCandidates_(const AMCompletionContext &ctx,
+                                           AMCompletionCandidates &out) {
   if (ctx.targets.empty()) {
     return;
   }
@@ -536,7 +772,7 @@ void AMCompleteEngine::DispatchCandidates_(
     }
   }
   ConsumeAsyncResults_(ctx, out);
-  if (!out.empty()) {
+  if (!out.items.empty()) {
     return;
   }
 
@@ -546,8 +782,7 @@ void AMCompleteEngine::DispatchCandidates_(
     if (!engine) {
       continue;
     }
-    const auto *engine_ptr = engine.get();
-    if (!used_engines.insert(engine_ptr).second) {
+    if (!used_engines.insert(engine.get()).second) {
       continue;
     }
 
@@ -557,10 +792,10 @@ void AMCompleteEngine::DispatchCandidates_(
 
     AMCompletionCollectResult collected = engine->CollectCandidates(scoped);
     if (!collected.candidates.empty()) {
-      out.insert(out.end(),
-                 std::make_move_iterator(collected.candidates.begin()),
-                 std::make_move_iterator(collected.candidates.end()));
-      last_result_from_cache_ = collected.from_cache;
+      out.items.insert(out.items.end(),
+                       std::make_move_iterator(collected.candidates.begin()),
+                       std::make_move_iterator(collected.candidates.end()));
+      out.from_cache = collected.from_cache;
       ConsumeAsyncResults_(scoped, out);
       return;
     }
@@ -576,6 +811,7 @@ void AMCompleteEngine::DispatchCandidates_(
         continue;
       }
       ScheduleAsyncRequest_(std::move(request));
+      return;
     }
   }
 }
@@ -583,14 +819,14 @@ void AMCompleteEngine::DispatchCandidates_(
 /**
  * @brief Emit candidates to isocline with delete ranges.
  */
-void AMCompleteEngine::EmitCandidates_(
-    ic_completion_env_t *cenv, const AMCompletionContext &ctx,
-    const std::vector<AMCompletionCandidate> &items) {
+void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
+                                       const AMCompletionContext &ctx,
+                                       const AMCompletionCandidates &items) {
   if (!cenv) {
     return;
   }
 
-  ic_set_completion_page_marker(last_result_from_cache_ ? "(cache)" : nullptr);
+  ic_set_completion_page_marker(items.from_cache ? "(cache)" : nullptr);
 
   long delete_before = 0;
   long delete_after = 0;
@@ -600,7 +836,7 @@ void AMCompleteEngine::EmitCandidates_(
     delete_after = static_cast<long>(ctx.token.content_end - ctx.cursor);
   }
 
-  for (const auto &candidate : items) {
+  for (const auto &candidate : items.items) {
     const char *display =
         candidate.display.empty() ? nullptr : candidate.display.c_str();
     const char *help =

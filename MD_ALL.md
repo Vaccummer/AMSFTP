@@ -1569,3 +1569,47 @@ $var3 = value3
 
 + 注意$varname的对齐
 + 值为空字符串时, 需要打印为"", 而不是空白
+
+## Completion Refactor Plan (BuildContext_)
+1. Tokenize with `AMTokenTypeAnalyzer::SplitToken`.
+2. Keep only tokens before cursor plus token-at-cursor.
+3. Parse and store `module`, `cmd`, `options`, `args` in `AMCompletionContext`.
+   - Keep `$var` and `$var=value` shortcut branch as highest-priority path.
+4. Detect cursor placement (`in token` vs `outside token`) and keep token index.
+5. Store cursor token prefix/postfix (raw + unescaped).
+6. Target selection rules:
+   - If no certain module/cmd yet: top command target.
+   - If module is certain but cmd not certain: subcommand target under module.
+   - If prefix is `-` / `--`: short/long option target.
+   - If prefix is `--name=`: option-value semantic target.
+   - If cursor is after an option requiring value: option-value semantic target.
+   - Else use command arg semantic from `CommandTree` for current arg index.
+7. Behavior constraints:
+   - Unknown token before legal command/module => `Disabled`.
+   - `-ov` does not treat `v` as option value.
+   - Bare `--` is treated as common positional arg.
+   - Command/module certainty precedes option/arg interpretation (except var shorthand).
+what do you think of plan blow
+
+@src\cli\completer\engine_worker.cpp
+
+remove AMCompletionToken, use AMTokenTypeAnalyzer::AMToken
+
+AMCompleteEngine::BuildContext_ Improve
+
+My expected protocol:
+
+1. use AMTokenTypeAnalyzer::SplitToken to split
+2. analyse short-hand expression (independent flow, won't go on with the protocol)
+3. get module and cmd option( exclude named arg)
+   1. module and cmd must be determined first, all other tokens are invalid, and will cause abort in completion
+      1. but if this is the first nonempty token, complete module/top cmd
+      2. if this is the first nonempty token after valid module, complete its cmds
+   2. option must be valid for the cmd, if option is not exist, will be viewed as arg, but allow duplicate
+      1. -ov if o exists but v not,  viewed as arg
+   3. named arg only suport expression like: -n value; --name value; --name=value
+      1. ilegal expression viewed as arg
+   4. ilegal arg like token will be viewed as arg, but won't stop option parse
+4. find where cursor is, get prefix and postfix
+5. get AMCommandArgSemantic according to module, cmd, option record and any other neccessary context
+6. transit AMCommandArgSemantic to targets according to prefix and any other neccessary context
