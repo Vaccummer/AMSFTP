@@ -2,6 +2,7 @@
 #include "AMCLI/Completer/Engine.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
 #include "AMCLI/Completer/Searcher.hpp"
+#include "AMCLI/InteractiveLoop.hpp"
 #include "AMManager/Config.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
@@ -321,6 +322,20 @@ void AMCompleteEngine::StopAsyncWorkers_() {
 void AMCompleteEngine::RestartAsyncWorkers_() {
   StopAsyncWorkers_();
   StartAsyncWorkers_();
+}
+
+/**
+ * @brief Register callback to cancel async completion tasks after each
+ * PromptCore return.
+ */
+void AMCompleteEngine::EnsurePromptReturnCancelHookRegistered_() {
+  if (prompt_return_cancel_hook_registered_) {
+    return;
+  }
+  prompt_return_cancel_callback_ = [this]() { CancelPendingAsyncRequests_(); };
+  auto &registry = AMInteractiveLoop::EventRegistry::Instance();
+  registry.RegisterOnCorePromptReturn(&prompt_return_cancel_callback_);
+  prompt_return_cancel_hook_registered_ = true;
 }
 
 /**

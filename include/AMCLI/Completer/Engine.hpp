@@ -251,6 +251,7 @@ public:
     for (const auto &entry : registrations) {
       RegisterSearchEngine(entry.targets, entry.engine);
     }
+    EnsurePromptReturnCancelHookRegistered_();
   }
 
   /**
@@ -350,6 +351,12 @@ private:
   void RestartAsyncWorkers_();
 
   /**
+   * @brief Register callback to cancel async completion tasks after each
+   * PromptCore return.
+   */
+  void EnsurePromptReturnCancelHookRegistered_();
+
+  /**
    * @brief Async worker loop body.
    */
   void AsyncWorkerLoop_();
@@ -408,4 +415,7 @@ private:
 
   std::mutex async_interrupts_mtx_;
   std::vector<std::function<void()>> async_interrupts_;
+
+  std::function<void()> prompt_return_cancel_callback_;
+  bool prompt_return_cancel_hook_registered_ = false;
 };
