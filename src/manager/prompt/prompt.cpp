@@ -291,7 +291,6 @@ bool AMPromptManager::Prompt(const std::string &prompt,
   if (!out_input) {
     return true;
   }
-
   auto lock = PrintLock();
   auto hooklock = HookLock();
   auto highlight_lock = HighlightLock(false);
@@ -323,13 +322,14 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
       ic_readline_ex(prompt.c_str(), nullptr, nullptr,
                      &AMTokenTypeAnalyzer::PromptHighlighter_, nullptr);
   ic_history_remove_last();
+  NotifyCorePromptReturnCallbacks_();
   if (!line) {
-    NotifyCorePromptReturnCallbacks_();
+
     return false;
   }
   *out_input = std::string(line);
   ic_free(line);
-  NotifyCorePromptReturnCallbacks_();
+
   return true;
 }
 
