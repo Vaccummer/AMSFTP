@@ -1,5 +1,7 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
+#include "AMCLI/Completer/Proxy.hpp"
+#include "Isocline/isocline.h"
 #include "AMManager/Config.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include <atomic>
@@ -10,9 +12,6 @@
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
-
-struct ic_profile_s;
-typedef struct ic_profile_s ic_profile_t;
 
 namespace AMPromptDetail {
 template <typename T> struct IsStringLike : std::false_type {};
@@ -36,7 +35,39 @@ template <typename T> std::string ToString(T &&value) {
 
 } // namespace AMPromptDetail
 
-class AMHistoryManager {
+/**
+ * @brief Input arguments applied to one prompt profile.
+ */
+struct AMPromptInputProfileArgs {
+  std::string builtin_prompt_color = "#FFFFFF";
+  std::string prompt_marker = "";
+  std::string continuation_prompt_marker = "";
+  int max_history_count = 10;
+  bool enable_multiline = false;
+  bool enable_history_duplicates = false;
+  int hint_render_delay_ms = 800;
+  int complete_search_delay_ms = 0;
+};
+
+/**
+ * @brief Path-related arguments applied to one prompt profile.
+ */
+struct AMPromptPathProfileArgs {
+  bool use_async = false;
+  size_t timeout_ms = 3000;
+  bool highlight_use_check = true;
+  size_t highlight_timeout_ms = 1000;
+};
+
+/**
+ * @brief Full prompt profile argument bundle.
+ */
+struct AMPromptProfileArgs {
+  AMPromptInputProfileArgs input{};
+  AMPromptPathProfileArgs path{};
+};
+
+class AMProfileManager {
 public:
   /**
    * @brief Enable or disable history navigation for arrow keys.
@@ -44,38 +75,56 @@ public:
   void SetHistoryEnabled(bool enabled);
 
   /**
-   * @brief Flush current history back into ConfigManager.
-   */
-  void FlushHistory();
-
-  /**
    * @brief Add a history entry to the readline history.
    */
   void AddHistoryEntry(const std::string &line);
 
   /**
-   * @brief Load history data from .AMSFTP_History.toml into memory.
+   * @brief Reload prompt profile args from settings.
    */
-  ECM LoadHistory(const std::string &nickname);
+  ECM ReloadPromptProfiles();
+
+  /**
+   * @brief Resolve prompt profile args for a client nickname.
+   *
+   * Falls back to the star profile when the nickname profile is missing.
+   */
+  [[nodiscard]] const AMPromptProfileArgs &
+  ResolvePromptProfileArgs(const std::string &nickname) const;
 
 protected:
-  AMHistoryManager() = default;
-  ~AMHistoryManager() = default;
+  AMProfileManager() = default;
+  virtual ~AMProfileManager() = default;
 
   /**
    * @brief Collect current history into a list.
    */
   void CollectHistory_();
 
+  /**
+   * @brief Ensure prompt profiles are loaded.
+   */
+  void EnsurePromptProfilesLoaded_();
+
+  /**
+   * @brief Build profile args from one JSON object with fallback defaults.
+   */
+  [[nodiscard]] AMPromptProfileArgs
+  BuildPromptProfileArgs_(const Json &jsond,
+                          const AMPromptProfileArgs &defaults) const;
+
   AMConfigManager &config_ = AMConfigManager::Instance();
+  mutable std::mutex profile_mtx_;
+  bool profiles_loaded_ = false;
+  AMPromptProfileArgs default_prompt_profile_args_{};
+  std::unordered_map<std::string, AMPromptProfileArgs> prompt_profiles_;
   std::unordered_map<std::string, std::vector<std::string>> history_map_;
-  std::string history_nickname_;
   bool history_enabled_ = true;
   bool history_loaded_ = false;
   int max_history_count_ = 10;
 };
 
-class AMPromptManager : public AMHistoryManager, NonCopyableNonMovable {
+class AMPromptManager : public AMProfileManager, NonCopyableNonMovable {
 public:
   static AMPromptManager &Instance() {
     static AMPromptManager instance;
@@ -172,44 +221,60 @@ public:
   bool Prompt(const std::string &prompt, const std::string &placeholder,
               std::string *out_input);
   /**
+   * @brief Flush current history back into ConfigManager.
+   */
+  void FlushHistory();
+  /**
+   * @brief Switch CorePrompt profile/history to the specified client nickname.
+   */
+  ECM ChangeClient(const std::string &nickname);
+  /**
    * @brief Prompt for a command line using the shared readline handle.
    */
   bool PromptCore(const std::string &prompt, std::string *out_input);
-
-  /**
-   * @brief Register a callback invoked when PromptCore returns.
-   */
-  bool RegisterCorePromptReturnCallback(const std::string &name,
-                                        std::function<void()> callback);
-
-  /**
-   * @brief Remove a PromptCore-return callback.
-   */
-  bool UnregisterCorePromptReturnCallback(const std::string &name);
 
 private:
   /**
    * @brief Ensure the main CLI prompt profile exists.
    */
   ic_profile_t *EnsureCorePromptProfile_();
+  /**
+   * @brief Ensure the specified client has a dedicated CorePrompt profile.
+   */
+  ic_profile_t *EnsureCorePromptProfileForClient_(const std::string &nickname);
+  /**
+   * @brief Ensure the specified client has a stable isocline completion arg.
+   */
+  AMCompleterIsoclineArg *
+  EnsureCoreCompletionArgForClient_(const std::string &nickname);
+  /**
+   * @brief Capture active profile history back to in-memory history_map_.
+   */
+  void CaptureActiveCoreHistory_();
+  /**
+   * @brief Seed active profile history from in-memory history_map_.
+   */
+  void SeedCoreHistoryFromMap_(const std::string &nickname);
 
   /**
    * @brief Switch active isocline profile to the main CLI prompt profile.
    */
   bool UseCorePromptProfile_();
-
   /**
-   * @brief Notify registered PromptCore-return callbacks.
+   * @brief Switch active isocline profile to the target client CorePrompt
+   * profile.
    */
-  void NotifyCorePromptReturnCallbacks_();
+  bool UseCorePromptProfileForClient_(const std::string &nickname);
 
   void InitIsoclineConfig();
   std::mutex print_mutex_;
   std::string cached_output_;
   std::mutex cached_output_mutex_;
   std::atomic<int> cache_output_lock_depth_{0};
-  std::mutex core_prompt_callbacks_mtx_;
-  std::unordered_map<std::string, std::function<void()>> core_prompt_callbacks_;
+  std::unordered_map<std::string, ic_profile_t *> core_prompt_profiles_;
+  std::unordered_map<std::string, std::unique_ptr<AMCompleterIsoclineArg>>
+      core_prompt_completion_args_;
+  std::string active_core_nickname_ = "local";
   ic_profile_t *core_prompt_profile_ = nullptr;
 };
 

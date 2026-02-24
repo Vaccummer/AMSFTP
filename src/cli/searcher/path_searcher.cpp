@@ -1,20 +1,11 @@
 #include "AMCLI/Completer/Searcher.hpp"
 #include "AMCLI/Completer/SearcherCommon.hpp"
+#include "AMCLI/InteractiveLoop.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMManager/FileSystem.hpp"
 #include <algorithm>
 
 using namespace AMSearcherDetail;
-
-/**
- * @brief Destroy path search engine and unregister temporary hooks.
- */
-AMPathSearchEngine::~AMPathSearchEngine() {
-  if (!temp_cache_hook_registered_ || temp_cache_hook_name_.empty()) {
-    return;
-  }
-  prompt_manager_.UnregisterCorePromptReturnCallback(temp_cache_hook_name_);
-}
 
 /**
  * @brief Collect path candidates or async path requests.
@@ -39,27 +30,14 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
-  const AMHostSetPathConfig engine_config =
-      set_manager_.ResolvePathSet(path.nickname).value;
-  const int timeout_ms = ToClientTimeoutMs(engine_config.timeout_ms, 0);
-  const size_t cache_min =
-      std::max<size_t>(1, engine_config.cache_items_threshold);
-  const size_t cache_max = std::max<size_t>(1, engine_config.cache_max_entries);
-  const bool use_cache = engine_config.use_cache;
-  const bool use_async = engine_config.use_async;
+  const AMPromptPathProfileArgs &path_profile =
+      prompt_manager_.ResolvePromptProfileArgs(path.nickname).path;
+  const int timeout_ms = ToClientTimeoutMs(path_profile.timeout_ms, 0);
+  const bool use_async = path_profile.use_async;
 
   CacheKey key{path.nickname, path.dir_abs};
   std::vector<PathInfo> listed;
   if (LookupTempCache_(key, &listed)) {
-    AppendPathCandidates_(path, listed, &result.candidates.items);
-    if (!result.candidates.items.empty()) {
-      SortCandidates(ctx, result.candidates.items);
-      result.candidates.from_cache = true;
-      return result;
-    }
-  }
-
-  if (use_cache && !ctx.forbid_cache && LookupCache_(key, &listed)) {
     AppendPathCandidates_(path, listed, &result.candidates.items);
     if (!result.candidates.items.empty()) {
       SortCandidates(ctx, result.candidates.items);
@@ -82,9 +60,6 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     }
 
     StoreTempCache_(key, items);
-    if (use_cache && items.size() >= cache_min) {
-      StoreCache_(key, items, cache_max);
-    }
     AppendPathCandidates_(path, items, &result.candidates.items);
     if (!result.candidates.items.empty()) {
       SortCandidates(ctx, result.candidates.items);
@@ -100,8 +75,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   request.interrupt_flag = [flag = interrupt_flag]() { return flag->check(); };
   request.interrupt_cancel = [flag = interrupt_flag]() { flag->set(true); };
 
-  request.search = [this, path, key, cache_min, cache_max,
-                    use_cache, interrupt_flag](
+  request.search = [this, path, key, interrupt_flag](
                        const AMCompletionAsyncRequest &request,
                        AMCompletionAsyncResult *out) -> bool {
     if (request.IsInterrupted()) {
@@ -123,9 +97,6 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     }
 
     StoreTempCache_(key, items);
-    if (use_cache && items.size() >= cache_min) {
-      StoreCache_(key, items, cache_max);
-    }
 
     std::vector<AMCompletionCandidate> candidates;
     AppendPathCandidates_(path, items, &candidates);
@@ -241,14 +212,11 @@ void AMPathSearchEngine::EnsureTempCacheHookRegistered_() {
   if (temp_cache_hook_registered_) {
     return;
   }
-  if (temp_cache_hook_name_.empty()) {
-    temp_cache_hook_name_ =
-        AMStr::amfmt("COMPLETE_PATH_TEMP_CACHE_{}",
-                     reinterpret_cast<size_t>(this));
-  }
-  const bool ok = prompt_manager_.RegisterCorePromptReturnCallback(
-      temp_cache_hook_name_, [this]() { ClearTempCache_(); });
-  temp_cache_hook_registered_ = ok;
+  temp_cache_clear_callback_ = [this]() { ClearTempCache_(); };
+  auto &registry = AMInteractiveLoop::EventRegistry::Instance();
+  registry.RegisterOnCorePromptReturn(&temp_cache_clear_callback_);
+  registry.RegisterOnInteractiveLoopExit(&temp_cache_clear_callback_);
+  temp_cache_hook_registered_ = true;
 }
 
 /**

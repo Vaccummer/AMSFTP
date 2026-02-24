@@ -1524,7 +1524,10 @@ int RunInteractiveLoop(const std::string &app_name,
     if (history_nickname.empty()) {
       history_nickname = "local";
     }
-    prompt.LoadHistory(history_nickname);
+    ECM change_rcm = prompt.ChangeClient(history_nickname);
+    if (change_rcm.first != EC::Success) {
+      PrintECM_(prompt, change_rcm);
+    }
 
     const std::string prompt_text =
         BuildPrompt_(prompt_state, client_manager, config_manager);

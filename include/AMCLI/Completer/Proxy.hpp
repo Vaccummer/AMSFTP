@@ -1,8 +1,17 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
+#include <string>
 
 class AMCompleteEngine;
 struct ic_completion_env_s;
+
+/**
+ * @brief Isocline completion argument payload for profile-scoped completer data.
+ */
+struct AMCompleterIsoclineArg {
+  class AMCompleter *owner = nullptr;
+  std::string client_nickname;
+};
 
 /**
  * @brief Completion coordinator for interactive input.
@@ -19,9 +28,6 @@ public:
    */
   ~AMCompleter() override;
 
-  /**
-   * @brief Initialize completer state.
-   */
   /**
    * @brief Initialize completer state.
    */
@@ -56,4 +62,5 @@ public:
 
 private:
   std::unique_ptr<AMCompleteEngine> engine_;
+  AMCompleterIsoclineArg default_completion_arg_;
 };

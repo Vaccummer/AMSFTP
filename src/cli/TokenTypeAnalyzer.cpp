@@ -3,7 +3,6 @@
 #include "AMBase/DataClass.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
-#include "AMManager/Set.hpp"
 #include "AMManager/Var.hpp"
 #include <array>
 #include <cctype>
@@ -783,9 +782,8 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
       nickname_for_lookup = "local";
     }
 
-    const AMHostSetAttrResult path_result =
-        set_manager_.ResolvePathSet(nickname_for_cfg);
-    const AMHostSetPathConfig &path_cfg = path_result.value;
+    const AMPromptPathProfileArgs &path_cfg =
+        prompt_manager_.ResolvePromptProfileArgs(nickname_for_cfg).path;
     if (!path_cfg.highlight_use_check) {
       token.type = AMTokenType::Path;
       if (positional_consumed) {
