@@ -4,7 +4,7 @@
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
-#include "AMManager/Set.hpp"
+#include "AMManager/Prompt.hpp"
 #include "AMManager/Var.hpp"
 #include <string>
 #include <unordered_set>
@@ -83,7 +83,7 @@ private:
   AMHostManager &host_manager_ = AMHostManager::Instance();
   VarCLISet &var_manager_ = VarCLISet::Instance();
   AMClientManager &client_manager_ = AMClientManager::Instance();
-  AMSetManager &set_manager_ = AMSetManager::Instance();
+  AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
   bool cli_cache_ready_ = false;
   CommandNode *command_tree_ = &CommandNode::Instance();
   std::unordered_set<std::string> nicknames_;

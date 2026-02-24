@@ -6,10 +6,11 @@
 #include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/FileSystem.hpp"
-#include "AMManager/Set.hpp"
+#include "AMManager/Prompt.hpp"
 #include "AMManager/Transfer.hpp"
 #include "AMManager/Var.hpp"
 #include <chrono>
+#include <functional>
 #include <list>
 #include <mutex>
 #include <unordered_map>
@@ -100,11 +101,6 @@ public:
    * @brief Construct path search engine.
    */
   AMPathSearchEngine() = default;
-
-  /**
-   * @brief Destroy path search engine and unregister temporary hooks.
-   */
-  ~AMPathSearchEngine() override;
 
   /**
    * @brief Collect path candidates or async path requests.
@@ -254,16 +250,15 @@ private:
   AMClientManage::Manager &client_manager_ = AMClientManager::Instance();
   AMFileSystem &filesystem_ = AMFileSystem::Instance();
   AMTokenTypeAnalyzer &token_analyzer_ = AMTokenTypeAnalyzer::Instance();
-  AMSetManager &set_manager_ = AMSetManager::Instance();
-  VarCLISet &var_manager_ = VarCLISet::Instance();
   AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
+  VarCLISet &var_manager_ = VarCLISet::Instance();
   mutable std::mutex cache_mtx_;
   std::unordered_map<std::string, std::unordered_map<std::string, CacheEntry>>
       cache_;
   std::unordered_map<std::string, std::list<std::string>> cache_order_;
   std::unordered_map<std::string, std::unordered_map<std::string, TempCacheEntry>>
       temp_cache_;
-  std::string temp_cache_hook_name_;
+  std::function<void()> temp_cache_clear_callback_;
   bool temp_cache_hook_registered_ = false;
 };
 

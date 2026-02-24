@@ -88,7 +88,8 @@ public:
   /**
    * @brief Resolve path-related typed HostSet configuration.
    */
-  [[nodiscard]] AMHostSetAttrResult ResolvePathSet(const std::string &nickname) const;
+  [[nodiscard]] AMHostSetAttrResult
+  ResolvePathSet(const std::string &nickname) const;
 
   /**
    * @brief Return whether a specific host set table exists in cache.

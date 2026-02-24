@@ -5,6 +5,7 @@
 #include "AMManager/Config.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "Isocline/isocline.h"
+#include <algorithm>
 #include <cstdlib>
 #include <mutex>
 #include <sstream>
@@ -65,24 +66,24 @@ void PromptNoComplete_(ic_completion_env_t *cenv, const char *prefix) {
   (void)prefix;
 }
 
-static const std::vector<std::string> color_p = {"Options", "InputSet",
-                                                 "builtin_prompt_color"};
-static const std::vector<std::string> prompt_marker_p = {"Options", "InputSet",
-                                                         "prompt_marker"};
-static const std::vector<std::string> continuation_prompt_marker_p = {
-    "Options", "InputSet", "continuation_prompt_marker"};
-static const std::vector<std::string> max_history_count_p = {
-    "Options", "InputSet", "max_history_count"};
-static const std::vector<std::string> enable_multiline_p = {
-    "Options", "InputSet", "enable_multiline"};
-static const std::vector<std::string> enable_history_duplicates_p = {
-    "Options", "InputSet", "enable_history_duplicates"};
-static const std::vector<std::string> hint_render_delay_ms_p = {
-    "Options", "InputSet", "hint_render_delay_ms"};
-static const std::vector<std::string> complete_search_delay_ms_p = {
-    "Options", "InputSet", "complete_search_delay_ms"};
-static const std::string default_promtpt_color = "#FFFFFF";
 static const std::string ickey = "ic-prompt";
+
+/**
+ * @brief Apply CorePrompt profile-local isocline settings.
+ */
+void ApplyCoreProfileSettings_(const AMPromptProfileArgs &profile) {
+  const AMPromptInputProfileArgs &input = profile.input;
+  ic_set_prompt_marker(input.prompt_marker.c_str(),
+                       input.continuation_prompt_marker.c_str());
+  ic_style_def(ickey.c_str(), input.builtin_prompt_color.c_str());
+  ic_enable_multiline(input.enable_multiline);
+  ic_enable_history_duplicates(input.enable_history_duplicates);
+
+  int max_history = std::min(std::max(1, input.max_history_count), 150);
+  ic_set_history(nullptr, max_history);
+  ic_set_hint_delay(std::max(0, input.hint_render_delay_ms));
+  ic_set_hint_search_delay(std::max(0, input.complete_search_delay_ms));
+}
 
 } // namespace
 
@@ -92,14 +93,71 @@ static const std::string ickey = "ic-prompt";
  * @return Core prompt profile pointer, or nullptr on allocation failure.
  */
 ic_profile_t *AMPromptManager::EnsureCorePromptProfile_() {
-  if (core_prompt_profile_ != nullptr) {
-    return core_prompt_profile_;
+  if (!active_core_nickname_.empty()) {
+    return EnsureCorePromptProfileForClient_(active_core_nickname_);
   }
-  core_prompt_profile_ = ic_profile_new();
-  if (!core_prompt_profile_) {
-    core_prompt_profile_ = ic_profile_current();
+  return EnsureCorePromptProfileForClient_("local");
+}
+
+/**
+ * @brief Ensure the specified client has a stable isocline completion arg.
+ *
+ * The arg is heap-backed so its pointer remains stable even if maps grow.
+ */
+AMCompleterIsoclineArg *
+AMPromptManager::EnsureCoreCompletionArgForClient_(const std::string &nickname) {
+  auto it = core_prompt_completion_args_.find(nickname);
+  if (it != core_prompt_completion_args_.end() && it->second) {
+    return it->second.get();
   }
-  return core_prompt_profile_;
+  auto arg = std::make_unique<AMCompleterIsoclineArg>();
+  arg->owner = AMCompleter::Active();
+  arg->client_nickname = nickname;
+  AMCompleterIsoclineArg *raw = arg.get();
+  core_prompt_completion_args_[nickname] = std::move(arg);
+  return raw;
+}
+
+/**
+ * @brief Ensure the specified client has a dedicated CorePrompt profile.
+ */
+ic_profile_t *AMPromptManager::EnsureCorePromptProfileForClient_(
+    const std::string &nickname) {
+  auto it = core_prompt_profiles_.find(nickname);
+  if (it != core_prompt_profiles_.end() && it->second) {
+    return it->second;
+  }
+
+  ic_profile_t *profile = ic_profile_new();
+  if (!profile) {
+    profile = ic_profile_current();
+  }
+  if (!profile) {
+    return nullptr;
+  }
+  if (!ic_profile_use(profile)) {
+    return nullptr;
+  }
+
+  const AMPromptProfileArgs &profile_args = ResolvePromptProfileArgs(nickname);
+  ApplyCoreProfileSettings_(profile_args);
+  max_history_count_ = std::min(std::max(1, profile_args.input.max_history_count),
+                                150);
+
+  auto *active_completer = AMCompleter::Active();
+  if (active_completer) {
+    active_completer->Install();
+  }
+  auto *arg = EnsureCoreCompletionArgForClient_(nickname);
+  if (arg) {
+    arg->owner = AMCompleter::Active();
+    arg->client_nickname = nickname;
+    ic_set_default_completer(&AMCompleter::IsoclineCompleter, arg);
+  }
+
+  core_prompt_profiles_[nickname] = profile;
+  core_prompt_profile_ = profile;
+  return profile;
 }
 
 /**
@@ -108,44 +166,46 @@ ic_profile_t *AMPromptManager::EnsureCorePromptProfile_() {
  * @return true when switch succeeds.
  */
 bool AMPromptManager::UseCorePromptProfile_() {
-  EnsureCorePromptProfile_();
+  if (!active_core_nickname_.empty()) {
+    return UseCorePromptProfileForClient_(active_core_nickname_);
+  }
+  return UseCorePromptProfileForClient_("local");
+}
+
+/**
+ * @brief Switch active isocline profile to the target client CorePrompt profile.
+ */
+bool AMPromptManager::UseCorePromptProfileForClient_(
+    const std::string &nickname) {
+  core_prompt_profile_ = EnsureCorePromptProfileForClient_(nickname);
   if (!core_prompt_profile_) {
     return false;
   }
-  return ic_profile_use(core_prompt_profile_);
+  if (!ic_profile_use(core_prompt_profile_)) {
+    return false;
+  }
+  const AMPromptProfileArgs &profile_args = ResolvePromptProfileArgs(nickname);
+  ApplyCoreProfileSettings_(profile_args);
+  max_history_count_ = std::min(std::max(1, profile_args.input.max_history_count),
+                                150);
+
+  auto *arg = EnsureCoreCompletionArgForClient_(nickname);
+  if (arg) {
+    arg->owner = AMCompleter::Active();
+    arg->client_nickname = nickname;
+    ic_set_default_completer(&AMCompleter::IsoclineCompleter, arg);
+  }
+  active_core_nickname_ = nickname;
+  return true;
 }
 
 void AMPromptManager::InitIsoclineConfig() {
-  (void)UseCorePromptProfile_();
-  std::string a = "";
-  std::string b = "";
-  config_.ResolveArg(DocumentKind::Settings, prompt_marker_p, &a);
-  config_.ResolveArg(DocumentKind::Settings, continuation_prompt_marker_p, &b);
-  ic_set_prompt_marker(a.c_str(), b.c_str());
-  a = default_promtpt_color;
-  config_.ResolveArg(DocumentKind::Settings, color_p, &a);
-  ic_style_def(ickey.c_str(), a.c_str());
-
-  bool tmp_bool = false;
-  config_.ResolveArg(DocumentKind::Settings, enable_multiline_p, &tmp_bool);
-  ic_enable_multiline(tmp_bool);
-  config_.ResolveArg(DocumentKind::Settings, enable_history_duplicates_p,
-                     &tmp_bool);
-  ic_enable_history_duplicates(tmp_bool);
-
-  int tmp_int = 10;
-  config_.ResolveArg(DocumentKind::Settings, max_history_count_p, &tmp_int);
-  tmp_int = std::min(std::max(1, tmp_int), 150);
-  ic_set_history(nullptr, tmp_int);
-
-  tmp_int = 800;
-  config_.ResolveArg(DocumentKind::Settings, hint_render_delay_ms_p, &tmp_int);
-  ic_set_hint_delay(tmp_int);
-
-  tmp_int = 0;
-  config_.ResolveArg(DocumentKind::Settings, complete_search_delay_ms_p,
-                     &tmp_int);
-  ic_set_hint_search_delay(tmp_int);
+  EnsurePromptProfilesLoaded_();
+  (void)UseCorePromptProfileForClient_("local");
+  const AMPromptProfileArgs &default_profile = ResolvePromptProfileArgs("*");
+  max_history_count_ =
+      std::min(std::max(1, default_profile.input.max_history_count), 150);
+  ApplyCoreProfileSettings_(default_profile);
 
   AMCliSignalMonitor::SignalHook hook;
   hook.interrupt_flag = nullptr;
@@ -334,6 +394,7 @@ bool AMPromptManager::Prompt(const std::string &prompt,
   if (!out_input) {
     return true;
   }
+  UseCorePromptProfile_();
   auto lock = PrintLock();
   auto hooklock = HookLock();
   auto highlight_lock = HighlightLock(false);
@@ -366,7 +427,6 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
       ic_readline_ex(prompt.c_str(), nullptr, nullptr,
                      &AMTokenTypeAnalyzer::PromptHighlighter_, nullptr);
   ic_history_remove_last();
-  NotifyCorePromptReturnCallbacks_();
   if (!line) {
 
     return false;
@@ -375,54 +435,6 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
   ic_free(line);
 
   return true;
-}
-
-/**
- * @brief Register a callback invoked when PromptCore returns.
- */
-bool AMPromptManager::RegisterCorePromptReturnCallback(
-    const std::string &name, std::function<void()> callback) {
-  if (name.empty() || !callback) {
-    return false;
-  }
-  std::lock_guard<std::mutex> lock(core_prompt_callbacks_mtx_);
-  auto [it, inserted] =
-      core_prompt_callbacks_.emplace(name, std::move(callback));
-  if (!inserted) {
-    it->second = std::move(callback);
-  }
-  return true;
-}
-
-/**
- * @brief Remove a PromptCore-return callback.
- */
-bool AMPromptManager::UnregisterCorePromptReturnCallback(
-    const std::string &name) {
-  if (name.empty()) {
-    return false;
-  }
-  std::lock_guard<std::mutex> lock(core_prompt_callbacks_mtx_);
-  return core_prompt_callbacks_.erase(name) > 0;
-}
-
-/**
- * @brief Notify registered PromptCore-return callbacks.
- */
-void AMPromptManager::NotifyCorePromptReturnCallbacks_() {
-  std::vector<std::function<void()>> callbacks;
-  {
-    std::lock_guard<std::mutex> lock(core_prompt_callbacks_mtx_);
-    callbacks.reserve(core_prompt_callbacks_.size());
-    for (const auto &entry : core_prompt_callbacks_) {
-      if (entry.second) {
-        callbacks.push_back(entry.second);
-      }
-    }
-  }
-  for (const auto &callback : callbacks) {
-    callback();
-  }
 }
 
 bool AMPromptManager::SecurePrompt(const std::string &prompt,
