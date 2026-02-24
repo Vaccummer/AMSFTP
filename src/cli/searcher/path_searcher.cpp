@@ -277,32 +277,33 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
 
   bool force_local = false;
   std::string nickname;
-  std::string path_part;
+  std::string path_part_raw;
   std::string header;
 
   if (!token_prefix.empty() && token_prefix.front() == '@') {
     force_local = true;
     nickname = "local";
-    path_part = token_prefix.substr(1);
+    path_part_raw = token_prefix.substr(1);
     header = "@";
   } else {
     const size_t at_pos = token_prefix.find('@');
     if (at_pos != std::string::npos) {
       nickname = token_prefix.substr(0, at_pos);
-      path_part = token_prefix.substr(at_pos + 1);
+      path_part_raw = token_prefix.substr(at_pos + 1);
       header = nickname + "@";
       if (nickname.empty() || AMStr::lowercase(nickname) == "local") {
         force_local = true;
         nickname = "local";
       }
     } else {
-      path_part = token_prefix;
+      path_part_raw = token_prefix;
       nickname = current_client ? current_client->GetNickname() : "local";
     }
   }
 
-  path_part = var_manager_.SubstitutePathLike(path_part);
-  if (header.empty() && !force_path && !IsPathLikeText(path_part)) {
+  const std::string path_part_resolved =
+      var_manager_.SubstitutePathLike(path_part_raw);
+  if (header.empty() && !force_path && !IsPathLikeText(path_part_resolved)) {
     return path;
   }
 
@@ -311,14 +312,25 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
                  AMStr::lowercase(nickname) != "local");
   path.nickname = nickname.empty() ? "local" : nickname;
   path.header = header;
-  path.raw_path = path_part;
-  path.sep = DetectPathSep(path_part, path.remote);
-  SplitPath(path_part, &path.dir_raw, &path.leaf_prefix, &path.trailing_sep);
+  path.raw_path = path_part_raw;
+  path.sep = DetectPathSep(
+      path_part_raw.empty() ? path_part_resolved : path_part_raw, path.remote);
 
-  if (path_part.size() == 2 &&
-      std::isalpha(static_cast<unsigned char>(path_part[0])) &&
-      path_part[1] == ':') {
-    path.dir_raw = path_part + path.sep;
+  // Keep raw base for insertion text so `$var/...` form is preserved.
+  std::string resolved_dir_raw;
+  SplitPath(path_part_raw, &path.dir_raw, nullptr, &path.trailing_sep);
+  SplitPath(path_part_resolved, &resolved_dir_raw, &path.leaf_prefix, nullptr);
+
+  if (path_part_raw.size() == 2 &&
+      std::isalpha(static_cast<unsigned char>(path_part_raw[0])) &&
+      path_part_raw[1] == ':') {
+    path.dir_raw = path_part_raw + path.sep;
+    path.trailing_sep = true;
+  }
+  if (path_part_resolved.size() == 2 &&
+      std::isalpha(static_cast<unsigned char>(path_part_resolved[0])) &&
+      path_part_resolved[1] == ':') {
+    resolved_dir_raw = path_part_resolved + path.sep;
     path.leaf_prefix.clear();
     path.trailing_sep = true;
   }
@@ -330,7 +342,7 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
   if (!client) {
     return path;
   }
-  path.dir_abs = client_manager_.BuildPath(client, path.dir_raw);
+  path.dir_abs = client_manager_.BuildPath(client, resolved_dir_raw);
   path.valid = true;
   return path;
 }
