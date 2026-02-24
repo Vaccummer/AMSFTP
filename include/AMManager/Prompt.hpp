@@ -11,6 +11,9 @@
 #include <unordered_map>
 #include <vector>
 
+struct ic_profile_s;
+typedef struct ic_profile_s ic_profile_t;
+
 namespace AMPromptDetail {
 template <typename T> struct IsStringLike : std::false_type {};
 template <> struct IsStringLike<std::string> : std::true_type {};
@@ -186,6 +189,16 @@ public:
 
 private:
   /**
+   * @brief Ensure the main CLI prompt profile exists.
+   */
+  ic_profile_t *EnsureCorePromptProfile_();
+
+  /**
+   * @brief Switch active isocline profile to the main CLI prompt profile.
+   */
+  bool UseCorePromptProfile_();
+
+  /**
    * @brief Notify registered PromptCore-return callbacks.
    */
   void NotifyCorePromptReturnCallbacks_();
@@ -197,6 +210,7 @@ private:
   std::atomic<int> cache_output_lock_depth_{0};
   std::mutex core_prompt_callbacks_mtx_;
   std::unordered_map<std::string, std::function<void()>> core_prompt_callbacks_;
+  ic_profile_t *core_prompt_profile_ = nullptr;
 };
 
 class AMPrintLockGuard : NonCopyableNonMovable {
