@@ -6,6 +6,7 @@
 #include "Isocline/isocline.h"
 #include <algorithm>
 #include <chrono>
+#include <climits>
 #include <iterator>
 
 namespace {
@@ -70,10 +71,13 @@ void AMCompleteEngine::Install(void *completion_arg) {
   ic_set_default_completer(&AMCompleter::IsoclineCompleter, completion_arg);
   ic_enable_completion_sort(false);
   ic_enable_completion_preview(true);
-  ic_enable_hint(false);
+  ic_enable_hint(true);
+  ic_set_hint_delay(0);
   const int max_items = args_.complete_max_items;
   if (max_items > 0) {
     ic_set_completion_max_items(max_items);
+  } else {
+    ic_set_completion_max_items(LONG_MAX);
   }
   ic_set_completion_max_rows(args_.complete_max_rows);
   ic_enable_completion_number_pick(args_.complete_number_pick);

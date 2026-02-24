@@ -355,8 +355,8 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
           all_known = false;
           break;
         }
-        const auto rule = command_tree.ResolveOptionValueRule(
-            state.command_path, "", c, 0);
+        const auto rule =
+            command_tree.ResolveOptionValueRule(state.command_path, "", c, 0);
         if (rule.has_value()) {
           any_value_rule = true;
         }
@@ -651,8 +651,8 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
           all_known = false;
           break;
         }
-        const auto rule = command_tree.ResolveOptionValueRule(
-            state.command_path, "", c, 0);
+        const auto rule =
+            command_tree.ResolveOptionValueRule(state.command_path, "", c, 0);
         if (rule.has_value()) {
           any_value_rule = true;
         }
@@ -705,9 +705,8 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     return ctx;
   }
   if (!semantic.has_value() && !state.command_path.empty()) {
-    semantic =
-        command_tree.ResolvePositionalSemantic(state.command_path,
-                                               state.arg_index);
+    semantic = command_tree.ResolvePositionalSemantic(state.command_path,
+                                                      state.arg_index);
   }
 
   const auto semantic_target =
@@ -841,4 +840,3 @@ void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
                            delete_before, delete_after);
   }
 }
-

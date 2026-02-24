@@ -196,8 +196,7 @@ private:
   std::mutex cached_output_mutex_;
   std::atomic<int> cache_output_lock_depth_{0};
   std::mutex core_prompt_callbacks_mtx_;
-  std::unordered_map<std::string, std::function<void()>>
-      core_prompt_callbacks_;
+  std::unordered_map<std::string, std::function<void()>> core_prompt_callbacks_;
 };
 
 class AMPrintLockGuard : NonCopyableNonMovable {
