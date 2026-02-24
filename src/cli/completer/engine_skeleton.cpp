@@ -109,12 +109,14 @@ void AMCompleteEngine::ClearCache() {
  */
 void AMCompleteEngine::HandleCompletion(ic_completion_env_t *cenv,
                                         const std::string &input,
-                                        size_t cursor) {
+                                        size_t cursor,
+                                        AMCompletionSource source) {
   AMCompletionRequest request;
   request.cenv = cenv;
   request.input = input;
   request.cursor = cursor;
-  request.request_id = NextRequestId_(input, cursor);
+  request.request_id = NextRequestId_(input, cursor, source);
+  request.source = source;
 
   AMCompletionContext ctx = BuildContext_(request);
   ic_set_completion_page_marker(nullptr);
@@ -237,14 +239,20 @@ void AMCompleteEngine::RegisterSearchEngine(
  * @brief Generate or reuse request ID for the input.
  */
 uint64_t AMCompleteEngine::NextRequestId_(const std::string &input,
-                                          size_t cursor) {
+                                          size_t cursor,
+                                          AMCompletionSource source) {
+  const AMCompletionSource normalized_source =
+      (source == AMCompletionSource::Unknown) ? AMCompletionSource::Tab
+                                              : source;
   std::lock_guard<std::mutex> lock(request_mtx_);
-  if (input == last_input_ && cursor == last_cursor_) {
+  if (input == last_input_ && cursor == last_cursor_ &&
+      normalized_source == last_source_) {
     return last_request_id_;
   }
 
   last_input_ = input;
   last_cursor_ = cursor;
+  last_source_ = normalized_source;
   last_request_id_ =
       request_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   current_request_id_.store(last_request_id_, std::memory_order_relaxed);

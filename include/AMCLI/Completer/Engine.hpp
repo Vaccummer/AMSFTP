@@ -52,6 +52,15 @@ enum class AMCompletionKind {
 };
 
 /**
+ * @brief Completion request source from isocline.
+ */
+enum class AMCompletionSource {
+  Unknown = 0,
+  Tab = 1,
+  InlineHint = 2,
+};
+
+/**
  * @brief Single completion candidate.
  */
 struct AMCompletionCandidate {
@@ -94,6 +103,7 @@ struct AMCompletionContext {
   std::string input;
   size_t cursor = 0;
   uint64_t request_id = 0;
+  AMCompletionSource source = AMCompletionSource::Unknown;
   std::vector<AMTokenTypeAnalyzer::AMToken> tokens;
   size_t token_index = 0;
   bool has_token = false;
@@ -205,6 +215,7 @@ struct AMCompletionRequest {
   std::string input;
   size_t cursor = 0;
   uint64_t request_id = 0;
+  AMCompletionSource source = AMCompletionSource::Unknown;
 };
 
 /**
@@ -265,7 +276,7 @@ public:
    * @param cursor Cursor position.
    */
   void HandleCompletion(ic_completion_env_t *cenv, const std::string &input,
-                        size_t cursor);
+                        size_t cursor, AMCompletionSource source);
 
   /**
    * @brief Load completion configuration from settings.
@@ -294,7 +305,8 @@ private:
   /**
    * @brief Generate or reuse request ID for the input.
    */
-  uint64_t NextRequestId_(const std::string &input, size_t cursor);
+  uint64_t NextRequestId_(const std::string &input, size_t cursor,
+                          AMCompletionSource source);
 
   /**
    * @brief Find the token that owns the cursor.
@@ -376,6 +388,7 @@ private:
   std::string last_input_;
   size_t last_cursor_ = 0;
   uint64_t last_request_id_ = 0;
+  AMCompletionSource last_source_ = AMCompletionSource::Unknown;
 
   std::mutex engines_mtx_;
   std::unordered_map<AMCompletionTarget,

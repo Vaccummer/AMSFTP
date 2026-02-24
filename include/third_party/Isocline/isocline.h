@@ -197,6 +197,13 @@ struct ic_completion_env_s;
 /// A completion environment
 typedef struct ic_completion_env_s ic_completion_env_t;
 
+/// Completion request source.
+typedef enum ic_completion_source_e {
+  IC_COMPLETION_SOURCE_UNKNOWN = 0,
+  IC_COMPLETION_SOURCE_TAB = 1,
+  IC_COMPLETION_SOURCE_INLINE_HINT = 2
+} ic_completion_source_t;
+
 /// A completion callback that is called by isocline when tab is pressed.
 /// It is passed a completion environment (containing the current input and the current cursor position), 
 /// the current input up-to the cursor (`prefix`)
@@ -522,6 +529,9 @@ const char* ic_completion_input( ic_completion_env_t* cenv, long* cursor );
 
 /// Get the completion argument passed to `ic_set_completer`.
 void* ic_completion_arg( const ic_completion_env_t* cenv );
+
+/// Get completion request source (tab/menu or inline-hint).
+ic_completion_source_t ic_completion_source(const ic_completion_env_t* cenv);
 
 /// Do we have already some completions?
 bool ic_has_completions( const ic_completion_env_t* cenv );

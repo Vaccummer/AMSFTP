@@ -113,6 +113,8 @@ void AMPromptProfileArgs::Init(const Json &jsond,
   (void)QueryKey(jsond, {"InlineHint", "delay_ms"}, &inline_hint.delay_ms);
   (void)QueryKey(jsond, {"InlineHint", "search_delay_ms"},
                  &inline_hint.search_delay_ms);
+  (void)QueryKey(jsond, {"InlineHint", "Path", "enable"},
+                 &inline_hint.path.enable);
   (void)QueryKey(jsond, {"InlineHint", "Path", "use_async"},
                  &inline_hint.path.use_async);
   (void)QueryKey(jsond, {"InlineHint", "Path", "timeout_ms"},
@@ -159,6 +161,7 @@ Json AMPromptProfileArgs::GetJson() const {
   jsond["InlineHint"]["enable"] = inline_hint.enable;
   jsond["InlineHint"]["delay_ms"] = inline_hint.delay_ms;
   jsond["InlineHint"]["search_delay_ms"] = inline_hint.search_delay_ms;
+  jsond["InlineHint"]["Path"]["enable"] = inline_hint.path.enable;
   jsond["InlineHint"]["Path"]["use_async"] = inline_hint.path.use_async;
   jsond["InlineHint"]["Path"]["timeout_ms"] = inline_hint.path.timeout_ms;
 
