@@ -1,7 +1,7 @@
+#include "AMBase/CommonTools.hpp"
 #include "AMCLI/Completer/Searcher.hpp"
 #include "AMCLI/Completer/SearcherCommon.hpp"
 #include "AMCLI/InteractiveLoop.hpp"
-#include "AMBase/CommonTools.hpp"
 #include "AMManager/FileSystem.hpp"
 #include <algorithm>
 
@@ -75,9 +75,9 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   request.interrupt_flag = [flag = interrupt_flag]() { return flag->check(); };
   request.interrupt_cancel = [flag = interrupt_flag]() { flag->set(true); };
 
-  request.search = [this, path, key, interrupt_flag](
-                       const AMCompletionAsyncRequest &request,
-                       AMCompletionAsyncResult *out) -> bool {
+  request.search = [this, path, key,
+                    interrupt_flag](const AMCompletionAsyncRequest &request,
+                                    AMCompletionAsyncResult *out) -> bool {
     if (request.IsInterrupted()) {
       return false;
     }
@@ -445,4 +445,26 @@ void AMPathSearchEngine::StoreTempCache_(const CacheKey &key,
                                          const std::vector<PathInfo> &items) {
   std::lock_guard<std::mutex> lock(cache_mtx_);
   temp_cache_[key.nickname][key.dir] = TempCacheEntry{items};
+}
+
+std::vector<AMSearchEngineRegistration>
+AMBuildDefaultSearchEngineRegistrations() {
+  std::vector<AMSearchEngineRegistration> out;
+
+  auto command_engine = std::make_shared<AMCommandSearchEngine>();
+  out.push_back(
+      {{AMCompletionTarget::TopCommand, AMCompletionTarget::Subcommand,
+        AMCompletionTarget::LongOption, AMCompletionTarget::ShortOption},
+       command_engine});
+
+  auto internal_engine = std::make_shared<AMInternalSearchEngine>();
+  out.push_back(
+      {{AMCompletionTarget::VariableName, AMCompletionTarget::ClientName,
+        AMCompletionTarget::HostNickname, AMCompletionTarget::HostAttr,
+        AMCompletionTarget::TaskId},
+       internal_engine});
+
+  auto path_engine = std::make_shared<AMPathSearchEngine>();
+  out.push_back({{AMCompletionTarget::Path}, path_engine});
+  return out;
 }

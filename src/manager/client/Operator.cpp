@@ -91,6 +91,20 @@ std::vector<std::shared_ptr<BaseClient>> Operator::GetClients() {
                   : std::vector<std::shared_ptr<BaseClient>>{};
 }
 
+/**
+ * @brief Return one managed client by nickname.
+ */
+std::shared_ptr<BaseClient>
+Operator::GetClient(const std::string &nickname) const {
+  if (clients_) {
+    return clients_->get_client(nickname);
+  }
+  if (IsLocalNickname_(nickname)) {
+    return LocalClient();
+  }
+  return nullptr;
+}
+
 std::shared_ptr<BaseClient> Operator::LocalClient() const {
   return local_client_base_;
 }

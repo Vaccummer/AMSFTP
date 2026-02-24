@@ -1,4 +1,5 @@
 #include "AMCLI/TokenTypeAnalyzer.hpp"
+#include "AMCLI/InteractiveLoop.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMManager/Client.hpp"
@@ -6,13 +7,27 @@
 #include "AMManager/Var.hpp"
 #include <array>
 #include <cctype>
+#include <functional>
 #include <limits>
+#include <mutex>
 #include <string_view>
 
 namespace {
 using TokenCacheValue = std::vector<AMTokenTypeAnalyzer::AMToken>;
 std::unordered_map<std::string, TokenCacheValue> g_split_token_cache;
-std::unordered_map<std::string, TokenCacheValue> g_style_token_cache;
+std::once_flag g_token_cache_hook_once;
+std::function<void()> g_token_cache_clear_callback = []() {
+  AMTokenTypeAnalyzer::ClearTokenCache();
+};
+
+/** Register token-cache clear callback for each PromptCore return. */
+void EnsureTokenCacheClearHookRegistered_() {
+  std::call_once(g_token_cache_hook_once, []() {
+    auto &registry = AMInteractiveLoop::EventRegistry::Instance();
+    registry.RegisterOnCorePromptReturn(&g_token_cache_clear_callback);
+  });
+}
+
 /** Return true when the character is allowed in variable names. */
 inline bool IsVarNameChar(char c) {
   const char token[1] = {c};
@@ -107,8 +122,7 @@ AMTokenType ClassifyNicknameTokenType_(const std::string &nickname_raw,
     return AMTokenType::Nickname;
   }
 
-  const bool client_exists =
-      static_cast<bool>(client_manager.Clients().GetHost(nickname));
+  const bool client_exists = static_cast<bool>(client_manager.GetClient(nickname));
   if (client_exists) {
     return AMTokenType::Nickname;
   }
@@ -360,12 +374,9 @@ std::string FormatPathSegment_(AMConfigManager &config_manager,
 
 } // namespace
 
-/** Reload nickname cache from host manager. */
+/** Realtime nickname checks are used; no cache to refresh. */
 void AMTokenTypeAnalyzer::RefreshNicknameCache() {
-  nicknames_.clear();
-  for (const auto &name : host_manager_.ListNames()) {
-    nicknames_.insert(name);
-  }
+  // no-op
 }
 
 void AMTokenTypeAnalyzer::PromptHighlighter_(ic_highlight_env_t *henv,
@@ -385,7 +396,6 @@ void AMTokenTypeAnalyzer::PromptHighlighter_(ic_highlight_env_t *henv,
 
 void AMTokenTypeAnalyzer::ClearTokenCache() {
   g_split_token_cache.clear();
-  g_style_token_cache.clear();
 }
 
 /**
@@ -459,11 +469,6 @@ AMTokenTypeAnalyzer::SplitToken(const std::string &input) {
  */
 std::vector<AMTokenTypeAnalyzer::AMToken>
 AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
-  auto cache_it = g_style_token_cache.find(input);
-  if (cache_it != g_style_token_cache.end()) {
-    return cache_it->second;
-  }
-
   std::vector<AMToken> tokens = SplitToken(input);
   std::vector<std::string> texts;
   texts.reserve(tokens.size());
@@ -797,7 +802,7 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
       if (explicit_local) {
         path_client = client_manager_.LocalClient();
       } else {
-        path_client = client_manager_.Clients().GetHost(nickname_for_lookup);
+        path_client = client_manager_.GetClient(nickname_for_lookup);
       }
     } else {
       path_client =
@@ -833,7 +838,6 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     }
   }
 
-  g_style_token_cache[input] = tokens;
   return tokens;
 }
 
@@ -994,6 +998,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
   if (!formatted) {
     return;
   }
+  EnsureTokenCacheClearHookRegistered_();
   formatted->clear();
   const size_t size = input.size();
   if (size == 0) {
@@ -1002,8 +1007,6 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
 
   std::vector<AMTokenType> types(size, AMTokenType::Common);
   std::vector<int> priorities(size, 0);
-
-  RefreshNicknameCache();
 
   std::vector<AMToken> tokens = TokenizeStyle(input);
 

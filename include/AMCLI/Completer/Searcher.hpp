@@ -4,8 +4,8 @@
 #include "AMCLI/Completer/Engine.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Client.hpp"
-#include "AMManager/Host.hpp"
 #include "AMManager/FileSystem.hpp"
+#include "AMManager/Host.hpp"
 #include "AMManager/Prompt.hpp"
 #include "AMManager/Transfer.hpp"
 #include "AMManager/Var.hpp"
@@ -256,37 +256,9 @@ private:
   std::unordered_map<std::string, std::unordered_map<std::string, CacheEntry>>
       cache_;
   std::unordered_map<std::string, std::list<std::string>> cache_order_;
-  std::unordered_map<std::string, std::unordered_map<std::string, TempCacheEntry>>
+  std::unordered_map<std::string,
+                     std::unordered_map<std::string, TempCacheEntry>>
       temp_cache_;
   std::function<void()> temp_cache_clear_callback_;
   bool temp_cache_hook_registered_ = false;
 };
-
-/**
- * @brief Build the default completion search-engine registration set.
- */
-std::vector<AMSearchEngineRegistration>
-AMBuildDefaultSearchEngineRegistrations();
-
-inline std::vector<AMSearchEngineRegistration>
-AMBuildDefaultSearchEngineRegistrations() {
-  std::vector<AMSearchEngineRegistration> out;
-
-  auto command_engine = std::make_shared<AMCommandSearchEngine>();
-  out.push_back(
-      {{AMCompletionTarget::TopCommand, AMCompletionTarget::Subcommand,
-        AMCompletionTarget::LongOption, AMCompletionTarget::ShortOption},
-       command_engine});
-
-  auto internal_engine = std::make_shared<AMInternalSearchEngine>();
-  out.push_back(
-      {{AMCompletionTarget::VariableName, AMCompletionTarget::ClientName,
-        AMCompletionTarget::HostNickname, AMCompletionTarget::HostAttr,
-        AMCompletionTarget::TaskId},
-       internal_engine});
-
-  auto path_engine = std::make_shared<AMPathSearchEngine>();
-  out.push_back({{AMCompletionTarget::Path}, path_engine});
-  return out;
-}
-
