@@ -97,6 +97,23 @@ bool IsPathLikeText_(const std::string &text) {
          text.find('\\') != std::string::npos;
 }
 
+/** Return true when input contains a clear user-intended path sign. */
+bool HasClearPathSign_(const std::string &text) {
+  if (text.empty()) {
+    return false;
+  }
+  if (text[0] == '@' || text[0] == '~' || text[0] == '/' || text[0] == '\\' ||
+      text[0] == '.') {
+    return true;
+  }
+  if (text.size() >= 2 && std::isalpha(static_cast<unsigned char>(text[0])) &&
+      text[1] == ':') {
+    return true;
+  }
+  return text.find('/') != std::string::npos ||
+         text.find('\\') != std::string::npos;
+}
+
 /** Return true if string begins with "--". */
 bool StartsWithLongOption_(const std::string &text) {
   return text.size() >= 2 && text[0] == '-' && text[1] == '-';
@@ -748,8 +765,26 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     const bool has_unescaped_at = at_pos != std::string::npos;
     const bool force_path =
         semantic_hint.has_value() && IsPathSemantic_(*semantic_hint);
+    const bool has_clear_path_sign =
+        has_unescaped_at || HasClearPathSign_(unescaped_text);
+
+    // Path semantic without clear path sign: prefer nickname classification.
+    if (token.type == AMTokenType::Common && force_path && !has_clear_path_sign) {
+      const AMTokenType nick_type =
+          ClassifyNicknameTokenType_(unescaped_text, host_manager_,
+                                     client_manager_);
+      if (nick_type == AMTokenType::Nickname ||
+          nick_type == AMTokenType::UnestablishedNickname) {
+        token.type = nick_type;
+        if (positional_consumed) {
+          ++arg_index;
+        }
+        continue;
+      }
+    }
+
     const bool treat_as_path =
-        force_path || has_unescaped_at || IsPathLikeText_(unescaped_text);
+        force_path || has_clear_path_sign || IsPathLikeText_(unescaped_text);
     if (!treat_as_path) {
       if (positional_consumed) {
         ++arg_index;

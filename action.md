@@ -1,23 +1,18 @@
-@config\settings.toml
+Var process in complete Improve
 
-I changed [Style.Prompt] to [Style.CLIPrompt]
+exp: ls $dsk/
 
-i add [Style.ValueQueryHighlight] for latter use
+completer should resolve varname before search for canditates when arg type is path
 
-@src\manager\prompt\prompt.cpp
+Var process in highlight Improve
 
-PromptManager::Prompt Improve
+when a token is Path arg type:
+if no clear path sign:
 
-PromptManager::Prompt is used for query user's input for some arg's value
-  it have brand-new complete and highlight from CorePrompt
+1. check it's client name
+2. check it's config nickname
+3. viewed as current client path
 
-Extra Args: 
+if  has clear path sign: viewed as path
 
-+ checker: bool(std::string)
-+ candidates: vector `<string>`
-
-checker is a func to judge whether input is valid: use style in Style.ValueQueryHighlight
-
-candidates is the complete source
-
-checker and candidates both could be empty
+when arg include $varname $varname use var style but the remains use path style

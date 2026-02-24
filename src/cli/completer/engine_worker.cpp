@@ -96,6 +96,57 @@ bool ParseShortcutVarToken_(const std::string &raw_token,
 }
 
 /**
+ * @brief Parse leading `$name`/`${name}` token and return boundary.
+ *
+ * Returns true when a valid variable name prefix is present. `out_end` points
+ * to the first byte after the variable reference inside @p text.
+ */
+bool ParseLeadingVarToken_(const std::string &text, size_t *out_end) {
+  if (text.empty() || text.front() != '$' || text.size() < 2) {
+    return false;
+  }
+
+  if (text[1] == '{') {
+    const size_t close = text.find('}', 2);
+    if (close == std::string::npos) {
+      const std::string inner = AMStr::Strip(text.substr(2));
+      if (inner.empty() || !varsetkn::IsValidVarname(inner)) {
+        return false;
+      }
+      if (out_end) {
+        *out_end = text.size();
+      }
+      return true;
+    }
+
+    const std::string inner = AMStr::Strip(text.substr(2, close - 2));
+    if (inner.empty() || !varsetkn::IsValidVarname(inner)) {
+      return false;
+    }
+    if (out_end) {
+      *out_end = close + 1;
+    }
+    return true;
+  }
+
+  size_t pos = 1;
+  while (pos < text.size()) {
+    const char ch = text[pos];
+    if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_') {
+      break;
+    }
+    ++pos;
+  }
+  if (pos <= 1) {
+    return false;
+  }
+  if (out_end) {
+    *out_end = pos;
+  }
+  return true;
+}
+
+/**
  * @brief Resolve a raw token text by index from completion context.
  */
 std::string ExtractTokenRaw_(const AMCompletionContext &ctx, size_t index) {
@@ -539,8 +590,16 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
         return ctx;
       }
     }
-    ctx.targets = {AMCompletionTarget::VariableName};
-    return ctx;
+    if (ctx.token_prefix == "$" || ctx.token_prefix == "${") {
+      ctx.targets = {AMCompletionTarget::VariableName};
+      return ctx;
+    }
+    size_t var_end = 0;
+    if (ParseLeadingVarToken_(ctx.token_prefix, &var_end) &&
+        var_end == ctx.token_prefix.size()) {
+      ctx.targets = {AMCompletionTarget::VariableName};
+      return ctx;
+    }
   }
 
   if (shortcut_mode == VarShortcutMode::Query) {
