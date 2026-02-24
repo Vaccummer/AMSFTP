@@ -108,11 +108,11 @@ ic_profile_t *AMPromptManager::EnsureCorePromptProfile_() {
  * @return true when switch succeeds.
  */
 bool AMPromptManager::UseCorePromptProfile_() {
-  ic_profile_t *profile = EnsureCorePromptProfile_();
-  if (!profile) {
+  EnsureCorePromptProfile_();
+  if (!core_prompt_profile_) {
     return false;
   }
-  return ic_profile_use(profile);
+  return ic_profile_use(core_prompt_profile_);
 }
 
 void AMPromptManager::InitIsoclineConfig() {
