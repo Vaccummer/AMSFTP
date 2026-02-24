@@ -17,6 +17,10 @@ extern "C" {
 #include <stdint.h>    // uint32_t
 #include <stdarg.h>    // term_vprintf
 
+/// Opaque Isocline profile object.
+struct ic_profile_s;
+typedef struct ic_profile_s ic_profile_t;
+
 
 /*! \mainpage
 Isocline C API reference.
@@ -46,6 +50,29 @@ Contents:
 
 /// Isocline version: 102 = 1.0.2.
 #define IC_VERSION   (104)  
+
+/// \defgroup profile Profiles
+/// Runtime-only isolated profiles for completion/history/highlight/options.
+/// \{
+///
+/// Isocline keeps one active profile at a time. Existing `ic_*` APIs operate on the
+/// active profile. Profiles are independent, but interactive readline should still be
+/// used one prompt at a time on a single terminal.
+///
+/// Create a new profile with default settings.
+ic_profile_t* ic_profile_new(void);
+///
+/// Destroy a previously created profile. Passing NULL is ignored.
+void ic_profile_free(ic_profile_t* profile);
+///
+/// Make `profile` active. Pass NULL to switch back to the default profile.
+/// Returns false if `profile` is invalid.
+bool ic_profile_use(ic_profile_t* profile);
+///
+/// Get the current active profile (lazily creates the default profile if needed).
+ic_profile_t* ic_profile_current(void);
+///
+/// \}
 
 
 /// Read input from the user using rich editing abilities.
@@ -449,6 +476,10 @@ bool ic_enable_hint(bool enable);
 /// Set millisecond delay before a hint is displayed. Can be zero. (500ms by default).
 long ic_set_hint_delay(long delay_ms);
 
+/// Set millisecond delay before hint completion search starts. Can be zero.
+/// While waiting, typing input cancels the pending search for the old line state.
+long ic_set_hint_search_delay(long delay_ms);
+
 /// Disable or enable syntax highlighting (enabled by default).
 /// This applies regardless whether a syntax highlighter callback was set (`ic_set_highlighter`)
 /// Returns the previous setting.
@@ -691,6 +722,8 @@ typedef void  (ic_free_fun_t)( void* p );
 /// Initialize with custom allocation functions.
 /// This must be called as the first function in a program!
 void ic_init_custom_alloc( ic_malloc_fun_t* _malloc, ic_realloc_fun_t* _realloc, ic_free_fun_t* _free );
+/// Deprecated compatibility alias for older code.
+void ic_init_custom_malloc( ic_malloc_fun_t* _malloc, ic_realloc_fun_t* _realloc, ic_free_fun_t* _free );
 
 /// Free a potentially custom alloc'd pointer (in particular, the result returned from `ic_readline`)
 void ic_free( void* p );

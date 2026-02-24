@@ -51,6 +51,25 @@
 #define IC_DEFAULT_COMPLETION_MAX_COLUMNS (4)
 #define IC_DEFAULT_COMPLETION_MAX_ROWS (9)
 
+/** Runtime profile that owns one independent Isocline environment. */
+struct ic_profile_s {
+  ic_env_t* env;
+  struct ic_profile_s* next;
+};
+
+/** Linked list of registered runtime profiles. */
+static ic_profile_t* ic_profiles = NULL;
+/** Current active runtime profile. */
+static ic_profile_t* ic_current_profile = NULL;
+/** Lazily created default runtime profile. */
+static ic_profile_t* ic_default_profile = NULL;
+/** Ensure atexit registration happens once. */
+static bool ic_atexit_registered = false;
+/** Optional custom allocation callbacks used for new profiles. */
+static ic_malloc_fun_t* ic_custom_malloc = NULL;
+static ic_realloc_fun_t* ic_custom_realloc = NULL;
+static ic_free_fun_t* ic_custom_free = NULL;
+
 
 //-------------------------------------------------------------
 // Readline
@@ -425,6 +444,15 @@ ic_public long ic_set_hint_delay(long delay_ms) {
   return prev;
 }
 
+/** Set delay before running hint completion search. */
+ic_public long ic_set_hint_search_delay(long delay_ms) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return false;
+  long prev = env->hint_search_delay;
+  env->hint_search_delay =
+      (delay_ms < 0 ? 0 : (delay_ms > 5000 ? 5000 : delay_ms));
+  return prev;
+}
+
 ic_public void ic_set_tty_esc_delay(long initial_delay_ms, long followup_delay_ms ) {
   ic_env_t* env = ic_get_env(); if (env==NULL) return;
   if (env->tty == NULL) return;
@@ -676,6 +704,13 @@ ic_public char* ic_readline_ex_with_initial(const char* prompt_text,
 //-------------------------------------------------------------
 
 static void ic_atexit(void);
+static void ic_register_atexit_(void);
+static void ic_ensure_default_profile_(void);
+static ic_profile_t* ic_profile_create_internal_(ic_malloc_fun_t* _malloc,
+                                                 ic_realloc_fun_t* _realloc,
+                                                 ic_free_fun_t* _free);
+static bool ic_profile_contains_(const ic_profile_t* profile);
+static bool ic_profile_unregister_(ic_profile_t* profile);
 
 static void ic_env_free(ic_env_t* env) {
   if (env == NULL) return;
@@ -728,6 +763,7 @@ static ic_env_t* ic_env_create( ic_malloc_fun_t* _malloc, ic_realloc_fun_t* _rea
   env->completions = completions_new(env->mem);
   env->bbcode      = bbcode_new(env->mem, env->term);
   env->hint_delay  = 400;   
+  env->hint_search_delay = 0;
   env->complete_max_items = IC_MAX_COMPLETIONS_TO_SHOW;
   env->complete_max_columns = IC_DEFAULT_COMPLETION_MAX_COLUMNS;
   env->complete_max_rows = IC_DEFAULT_COMPLETION_MAX_ROWS;
@@ -764,33 +800,225 @@ static ic_env_t* ic_env_create( ic_malloc_fun_t* _malloc, ic_realloc_fun_t* _rea
   return env;
 }
 
-static ic_env_t* rpenv;
-
-static void ic_atexit(void) {
-  if (rpenv != NULL) {
-    ic_env_free(rpenv);
-    rpenv = NULL;
+/**
+ * @brief Register a process-exit cleanup once.
+ */
+static void ic_register_atexit_(void) {
+  if (!ic_atexit_registered) {
+    atexit(&ic_atexit);
+    ic_atexit_registered = true;
   }
 }
 
-ic_private ic_env_t* ic_get_env(void) {  
-  if (rpenv==NULL) {
-    rpenv = ic_env_create( NULL, NULL, NULL );
-    if (rpenv != NULL) { atexit( &ic_atexit ); }
+/**
+ * @brief Create a profile and its environment.
+ */
+static ic_profile_t* ic_profile_create_internal_(ic_malloc_fun_t* _malloc,
+                                                 ic_realloc_fun_t* _realloc,
+                                                 ic_free_fun_t* _free) {
+  ic_env_t* env = ic_env_create(_malloc, _realloc, _free);
+  if (env == NULL) {
+    return NULL;
   }
-  return rpenv;
+  ic_profile_t* profile = (ic_profile_t*)malloc(sizeof(ic_profile_t));
+  if (profile == NULL) {
+    ic_env_free(env);
+    return NULL;
+  }
+  profile->env = env;
+  profile->next = NULL;
+  return profile;
 }
 
-ic_public void ic_init_custom_malloc( ic_malloc_fun_t* _malloc, ic_realloc_fun_t* _realloc, ic_free_fun_t* _free ) {
-  assert(rpenv == NULL);
-  if (rpenv != NULL) {
-    ic_env_free(rpenv);    
-    rpenv = ic_env_create( _malloc, _realloc, _free ); 
+/**
+ * @brief Return true when profile belongs to the global profile list.
+ */
+static bool ic_profile_contains_(const ic_profile_t* profile) {
+  if (profile == NULL) {
+    return false;
   }
-  else {
-    rpenv = ic_env_create( _malloc, _realloc, _free ); 
-    if (rpenv != NULL) {
-      atexit( &ic_atexit );
+  for (const ic_profile_t* it = ic_profiles; it != NULL; it = it->next) {
+    if (it == profile) {
+      return true;
     }
   }
+  return false;
+}
+
+/**
+ * @brief Remove profile from the global profile list.
+ */
+static bool ic_profile_unregister_(ic_profile_t* profile) {
+  if (profile == NULL) {
+    return false;
+  }
+  ic_profile_t* prev = NULL;
+  ic_profile_t* it = ic_profiles;
+  while (it != NULL) {
+    if (it == profile) {
+      if (prev == NULL) {
+        ic_profiles = it->next;
+      } else {
+        prev->next = it->next;
+      }
+      it->next = NULL;
+      return true;
+    }
+    prev = it;
+    it = it->next;
+  }
+  return false;
+}
+
+/**
+ * @brief Ensure there is always a default profile for backward-compatible APIs.
+ */
+static void ic_ensure_default_profile_(void) {
+  if (ic_default_profile != NULL) {
+    if (ic_current_profile == NULL) {
+      ic_current_profile = ic_default_profile;
+    }
+    return;
+  }
+
+  ic_profile_t* profile = ic_profile_create_internal_(
+      ic_custom_malloc, ic_custom_realloc, ic_custom_free);
+  if (profile == NULL) {
+    return;
+  }
+  profile->next = ic_profiles;
+  ic_profiles = profile;
+  ic_default_profile = profile;
+  ic_current_profile = profile;
+  ic_register_atexit_();
+}
+
+/**
+ * @brief Free all profiles at process exit.
+ */
+static void ic_atexit(void) {
+  ic_profile_t* it = ic_profiles;
+  while (it != NULL) {
+    ic_profile_t* next = it->next;
+    ic_env_free(it->env);
+    free(it);
+    it = next;
+  }
+  ic_profiles = NULL;
+  ic_current_profile = NULL;
+  ic_default_profile = NULL;
+}
+
+/**
+ * @brief Create a new runtime-only profile with isolated Isocline state.
+ */
+ic_public ic_profile_t* ic_profile_new(void) {
+  ic_profile_t* profile = ic_profile_create_internal_(
+      ic_custom_malloc, ic_custom_realloc, ic_custom_free);
+  if (profile == NULL) {
+    return NULL;
+  }
+
+  profile->next = ic_profiles;
+  ic_profiles = profile;
+  if (ic_default_profile == NULL) {
+    ic_default_profile = profile;
+  }
+  if (ic_current_profile == NULL) {
+    ic_current_profile = profile;
+  }
+  ic_register_atexit_();
+  return profile;
+}
+
+/**
+ * @brief Destroy a profile and release its isolated Isocline state.
+ */
+ic_public void ic_profile_free(ic_profile_t* profile) {
+  if (profile == NULL) {
+    return;
+  }
+  if (!ic_profile_unregister_(profile)) {
+    return;
+  }
+
+  if (ic_current_profile == profile) {
+    ic_current_profile = (ic_default_profile != profile ? ic_default_profile : NULL);
+    if (ic_current_profile == NULL) {
+      ic_current_profile = ic_profiles;
+    }
+  }
+  if (ic_default_profile == profile) {
+    ic_default_profile = ic_profiles;
+  }
+
+  ic_env_free(profile->env);
+  free(profile);
+
+  if (ic_current_profile == NULL) {
+    ic_ensure_default_profile_();
+  }
+}
+
+/**
+ * @brief Switch active profile used by all `ic_*` APIs.
+ */
+ic_public bool ic_profile_use(ic_profile_t* profile) {
+  if (profile == NULL) {
+    ic_ensure_default_profile_();
+    if (ic_default_profile == NULL) {
+      return false;
+    }
+    ic_current_profile = ic_default_profile;
+    return true;
+  }
+  if (!ic_profile_contains_(profile)) {
+    return false;
+  }
+  ic_current_profile = profile;
+  return true;
+}
+
+/**
+ * @brief Get current active profile.
+ */
+ic_public ic_profile_t* ic_profile_current(void) {
+  ic_ensure_default_profile_();
+  return ic_current_profile;
+}
+
+/**
+ * @brief Get active environment for legacy global API calls.
+ */
+ic_private ic_env_t* ic_get_env(void) {
+  ic_profile_t* profile = ic_profile_current();
+  if (profile == NULL) {
+    return NULL;
+  }
+  return profile->env;
+}
+
+/**
+ * @brief Set custom allocators for all subsequently created profiles.
+ */
+ic_public void ic_init_custom_alloc(ic_malloc_fun_t* _malloc,
+                                    ic_realloc_fun_t* _realloc,
+                                    ic_free_fun_t* _free) {
+  assert(ic_profiles == NULL);
+  if (ic_profiles != NULL) {
+    return;
+  }
+  ic_custom_malloc = _malloc;
+  ic_custom_realloc = _realloc;
+  ic_custom_free = _free;
+  ic_ensure_default_profile_();
+}
+
+/**
+ * @brief Deprecated compatibility alias.
+ */
+ic_public void ic_init_custom_malloc(ic_malloc_fun_t* _malloc,
+                                     ic_realloc_fun_t* _realloc,
+                                     ic_free_fun_t* _free) {
+  ic_init_custom_alloc(_malloc, _realloc, _free);
 }

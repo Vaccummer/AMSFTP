@@ -77,12 +77,46 @@ static const std::vector<std::string> enable_multiline_p = {
     "Options", "InputSet", "enable_multiline"};
 static const std::vector<std::string> enable_history_duplicates_p = {
     "Options", "InputSet", "enable_history_duplicates"};
+static const std::vector<std::string> hint_render_delay_ms_p = {
+    "Options", "InputSet", "hint_render_delay_ms"};
+static const std::vector<std::string> complete_search_delay_ms_p = {
+    "Options", "InputSet", "complete_search_delay_ms"};
 static const std::string default_promtpt_color = "#FFFFFF";
 static const std::string ickey = "ic-prompt";
 
 } // namespace
 
+/**
+ * @brief Ensure the main CLI prompt profile exists.
+ *
+ * @return Core prompt profile pointer, or nullptr on allocation failure.
+ */
+ic_profile_t *AMPromptManager::EnsureCorePromptProfile_() {
+  if (core_prompt_profile_ != nullptr) {
+    return core_prompt_profile_;
+  }
+  core_prompt_profile_ = ic_profile_new();
+  if (!core_prompt_profile_) {
+    core_prompt_profile_ = ic_profile_current();
+  }
+  return core_prompt_profile_;
+}
+
+/**
+ * @brief Switch active isocline profile to the main CLI prompt profile.
+ *
+ * @return true when switch succeeds.
+ */
+bool AMPromptManager::UseCorePromptProfile_() {
+  ic_profile_t *profile = EnsureCorePromptProfile_();
+  if (!profile) {
+    return false;
+  }
+  return ic_profile_use(profile);
+}
+
 void AMPromptManager::InitIsoclineConfig() {
+  (void)UseCorePromptProfile_();
   std::string a = "";
   std::string b = "";
   config_.ResolveArg(DocumentKind::Settings, prompt_marker_p, &a);
@@ -104,11 +138,20 @@ void AMPromptManager::InitIsoclineConfig() {
   tmp_int = std::min(std::max(1, tmp_int), 150);
   ic_set_history(nullptr, tmp_int);
 
+  tmp_int = 800;
+  config_.ResolveArg(DocumentKind::Settings, hint_render_delay_ms_p, &tmp_int);
+  ic_set_hint_delay(tmp_int);
+
+  tmp_int = 0;
+  config_.ResolveArg(DocumentKind::Settings, complete_search_delay_ms_p,
+                     &tmp_int);
+  ic_set_hint_search_delay(tmp_int);
+
   AMCliSignalMonitor::SignalHook hook;
   hook.interrupt_flag = nullptr;
   hook.callback = [this]([[maybe_unused]] int signum) {
     (void)this;
-    ic_async_stop();
+    // ic_async_stop();
   };
   hook.is_silenced = true;
   hook.priority = 100;
@@ -119,7 +162,7 @@ void AMPromptManager::InitIsoclineConfig() {
   core_hook.interrupt_flag = amgif;
   core_hook.callback = [this]([[maybe_unused]] int signum) {
     (void)this;
-    ic_async_stop();
+    // ic_async_stop();
   };
   core_hook.is_silenced = true;
   core_hook.priority = 100;
@@ -316,6 +359,7 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
   if (!out_input) {
     return true;
   }
+  (void)UseCorePromptProfile_();
   auto lock = PrintLock();
   auto hooklock = HookLock();
   char *line =

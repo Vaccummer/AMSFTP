@@ -31,6 +31,7 @@ typedef struct editor_s {
   stringbuf_t *extra;     // extra displayed info (for completion menu etc)
   stringbuf_t *hint;      // hint displayed as part of the input
   stringbuf_t *hint_help; // help for a hint.
+  bool hint_search_pending; // delayed hint search is pending.
   ssize_t pos;            // current cursor position in the input
   ssize_t cur_rows; // current used rows to display our content (including extra
                     // content)
@@ -491,16 +492,17 @@ static void editor_append_hint_help(editor_t *eb, const char *help) {
   }
 }
 
-// refresh with possible hint
-static void edit_refresh_hint(ic_env_t *env, editor_t *eb) {
-  if (env->no_hint || env->hint_delay > 0) {
-    // refresh without hint first
-    edit_refresh(env, eb);
-    if (env->no_hint)
-      return;
-  }
+// clear current hint and help text.
+static void editor_clear_hint(editor_t *eb) {
+  sbuf_clear(eb->hint);
+  sbuf_clear(eb->hint_help);
+}
 
-  // and see if we can construct a hint (displayed after a delay)
+// generate inline hint text for current input state.
+static void edit_generate_hint(ic_env_t *env, editor_t *eb) {
+  editor_clear_hint(eb);
+
+  // and see if we can construct a hint
   ssize_t count = completions_generate(env, env->completions,
                                        sbuf_string(eb->input), eb->pos, 2);
   if (count == 1) {
@@ -538,6 +540,26 @@ static void edit_refresh_hint(ic_env_t *env, editor_t *eb) {
       }
     }
   }
+}
+
+// refresh with possible hint
+static void edit_refresh_hint(ic_env_t *env, editor_t *eb) {
+  eb->hint_search_pending = false;
+  editor_clear_hint(eb);
+
+  if (env->no_hint || env->hint_delay > 0 || env->hint_search_delay > 0) {
+    // refresh without hint first
+    edit_refresh(env, eb);
+    if (env->no_hint)
+      return;
+  }
+
+  if (env->hint_search_delay > 0) {
+    eb->hint_search_pending = true;
+    return;
+  }
+
+  edit_generate_hint(env, eb);
 
   if (env->hint_delay <= 0) {
     // refresh with hint directly
@@ -964,6 +986,60 @@ static void edit_insert_char(ic_env_t *env, editor_t *eb, char c) {
 // Edit line: main edit loop
 //-------------------------------------------------------------
 
+// read one key while handling delayed hint search/render.
+static code_t edit_read_key(ic_env_t *env, editor_t *eb) {
+  code_t c;
+  while (true) {
+    term_flush(env->term);
+
+    if (eb->hint_search_pending && env->hint_search_delay <= 0) {
+      eb->hint_search_pending = false;
+      edit_generate_hint(env, eb);
+      if (sbuf_len(eb->hint) > 0 && env->hint_delay <= 0) {
+        edit_refresh(env, eb);
+      }
+      continue;
+    }
+
+    const bool wait_search =
+        (eb->hint_search_pending && env->hint_search_delay > 0);
+    const bool wait_render =
+        (!wait_search && env->hint_delay > 0 && sbuf_len(eb->hint) > 0);
+
+    if (!wait_search && !wait_render) {
+      return tty_read(env->tty);
+    }
+
+    const long timeout_ms =
+        (wait_search ? env->hint_search_delay : env->hint_delay);
+    if (!tty_read_timeout(env->tty, timeout_ms, &c)) {
+      // timeout
+      if (wait_search) {
+        eb->hint_search_pending = false;
+        edit_generate_hint(env, eb);
+        if (sbuf_len(eb->hint) > 0 && env->hint_delay <= 0) {
+          // render immediately when there is no render delay configured
+          edit_refresh(env, eb);
+        }
+      } else {
+        // render delayed hint and then resume blocking reads
+        if (sbuf_len(eb->hint) > 0) {
+          edit_refresh(env, eb);
+        }
+        return tty_read(env->tty);
+      }
+      continue;
+    }
+
+    // key received before timeout: cancel pending/delayed hint display.
+    if (wait_search) {
+      eb->hint_search_pending = false;
+    }
+    editor_clear_hint(eb);
+    return c;
+  }
+}
+
 static char *edit_line(ic_env_t *env, const char *prompt_text,
                        const char *initial_text) {
   // set up an edit buffer
@@ -1012,26 +1088,8 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
   // process keys
   code_t c; // current key code
   while (true) {
-    // read a character
-    term_flush(env->term);
-    if (env->hint_delay <= 0 || sbuf_len(eb.hint) == 0) {
-      // blocking read
-      c = tty_read(env->tty);
-    } else {
-      // timeout to display hint
-      if (!tty_read_timeout(env->tty, env->hint_delay, &c)) {
-        // timed-out
-        if (sbuf_len(eb.hint) > 0) {
-          // display hint
-          edit_refresh(env, &eb);
-        }
-        c = tty_read(env->tty);
-      } else {
-        // clear the pending hint if we got input before the delay expired
-        sbuf_clear(eb.hint);
-        sbuf_clear(eb.hint_help);
-      }
-    }
+    // read a character (possibly handling delayed hint search/render first)
+    c = edit_read_key(env, &eb);
 
     // update terminal in case of a resize
     if (tty_term_resize_event(env->tty)) {
@@ -1041,8 +1099,7 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
     // clear hint only after a potential resize (so resize row calculations are
     // correct)
     const bool had_hint = (sbuf_len(eb.hint) > 0);
-    sbuf_clear(eb.hint);
-    sbuf_clear(eb.hint_help);
+    editor_clear_hint(&eb);
 
     // if the user tries to move into a hint with left-cursor or end, we
     // complete it first

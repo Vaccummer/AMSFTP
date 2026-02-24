@@ -60,6 +60,7 @@ struct ic_env_s {
   bool            no_autobrace;     // enable automatic brace insertion?
   bool            no_lscolors;      // use LSCOLORS/LS_COLORS to colorize file name completions?
   long            hint_delay;       // delay before displaying a hint in milliseconds
+  long            hint_search_delay; // delay before running hint completion search in milliseconds
 };
 
 ic_private char*        ic_editline(ic_env_t* env, const char* prompt_text,

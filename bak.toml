@@ -10,6 +10,8 @@ continuation_prompt_marker = ">"
 max_history_count = 30
 enable_multiline = true
 enable_history_duplicates = true
+hint_render_delay_ms = 800
+complete_search_delay_ms = 0
 
 [ClientManager]
 heartbeat_interval_s = 60
