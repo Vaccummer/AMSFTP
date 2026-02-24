@@ -7,7 +7,6 @@
 #include "AMManager/Prompt.hpp"
 #include "AMManager/Var.hpp"
 #include <string>
-#include <unordered_set>
 #include <vector>
 
 class AMTokenTypeAnalyzer : public NonCopyableNonMovable {
@@ -28,7 +27,7 @@ public:
   void HighlightFormatted(const std::string &input, std::string *formatted);
 
   /**
-   * @brief Refresh nickname cache from host manager.
+   * @brief Deprecated no-op; nickname checks are realtime.
    */
   void RefreshNicknameCache();
 
@@ -86,6 +85,5 @@ private:
   AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
   bool cli_cache_ready_ = false;
   CommandNode *command_tree_ = &CommandNode::Instance();
-  std::unordered_set<std::string> nicknames_;
 };
 

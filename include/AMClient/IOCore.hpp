@@ -486,7 +486,9 @@ public:
       this->local_client =
           std::make_shared<AMLocalClient>(ConRequst("local", "", ""));
     }
+
     hosts = std::move(init_hosts);
+    hosts["local"] = this->local_client;
     this->disconnect_cb = std::move(disconnect_cb);
     this->is_disconnect_cb = static_cast<bool>(this->disconnect_cb);
 

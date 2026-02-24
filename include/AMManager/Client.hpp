@@ -33,6 +33,13 @@ public:
   ClientMaintainer &Clients();
   [[nodiscard]] std::vector<std::string> GetClientNames();
   [[nodiscard]] std::vector<std::shared_ptr<BaseClient>> GetClients();
+  /**
+   * @brief Return one managed client by nickname.
+   *
+   * Empty/"local" resolves to local client.
+   */
+  [[nodiscard]] std::shared_ptr<BaseClient>
+  GetClient(const std::string &nickname) const;
   [[nodiscard]] std::shared_ptr<BaseClient> LocalClient() const;
   [[nodiscard]] std::shared_ptr<BaseClient> CurrentClient() const;
   [[nodiscard]] std::string CurrentNickname() const;
