@@ -852,9 +852,11 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
       continue;
     }
 
-    const std::string path_part = UnescapeBackticks_(path_part_raw);
+    const std::string path_part_unescaped = UnescapeBackticks_(path_part_raw);
+    const std::string path_part_resolved =
+        var_manager_.SubstitutePathLike(path_part_unescaped);
     const std::string abs_path =
-        client_manager_.BuildPath(path_client, path_part);
+        client_manager_.BuildPath(path_client, path_part_resolved);
     const int timeout_ms =
         ToClientTimeoutMs_(profile.highlight.path.timeout_ms, 1000);
 
