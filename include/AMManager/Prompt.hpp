@@ -9,6 +9,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -298,8 +299,16 @@ public:
    */
   void UseAlternateScreen(bool enable);
 
+  /**
+   * @brief Prompt for one value with optional checker and completion source.
+   *
+   * checker: validates current input for query-mode highlighting.
+   * candidates: query-mode completion source.
+   */
   bool Prompt(const std::string &prompt, const std::string &placeholder,
-              std::string *out_input);
+              std::string *out_input,
+              const std::function<bool(const std::string &)> &checker = {},
+              const std::vector<std::string> &candidates = {});
   /**
    * @brief Flush current history back into ConfigManager.
    */

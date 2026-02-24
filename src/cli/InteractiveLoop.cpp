@@ -277,7 +277,7 @@ bool ResolvePromptStyleAnsi_(AMConfigManager &config_manager,
   }
 
   auto raw = config_manager.ResolveArg<std::string>(
-      DocumentKind::Settings, {"Style", "Prompt", trimmed}, "", {});
+      DocumentKind::Settings, {"Style", "CLIPrompt", trimmed}, "", {});
   if (raw.empty()) {
     return false;
   }
@@ -1221,7 +1221,7 @@ std::string ResolveSysIcon_(AMConfigManager &config_manager, OS_TYPE os_type) {
   }
 
   std::string icon = config_manager.ResolveArg<std::string>(
-      DocumentKind::Settings, {"Style", "Prompt", "icons", key}, "", {});
+      DocumentKind::Settings, {"Style", "CLIPrompt", "icons", key}, "", {});
   if (icon.empty()) {
     icon = "💻";
   }
@@ -1264,9 +1264,9 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
     state.cached_username = username;
     state.cached_hostname = hostname;
     std::string styled_user = ApplyStyleFromConfig_(
-        config_manager, {"Style", "Prompt", "username"}, username);
+        config_manager, {"Style", "CLIPrompt", "username"}, username);
     std::string styled_host = ApplyStyleFromConfig_(
-        config_manager, {"Style", "Prompt", "hostname"}, hostname);
+        config_manager, {"Style", "CLIPrompt", "hostname"}, hostname);
     state.cached_prefix =
         AMStr::amfmt("{} {}@{}", sysicon, styled_user, styled_host);
     state.last_nickname = nickname;
@@ -1285,7 +1285,7 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
   }
 
   const std::string format = config_manager.ResolveArg<std::string>(
-      DocumentKind::Settings, {"Style", "Prompt", "format"}, "", {});
+      DocumentKind::Settings, {"Style", "CLIPrompt", "format"}, "", {});
   if (!format.empty()) {
     std::unordered_map<std::string, std::string> vars;
     vars["$sysicon"] = state.cached_sysicon;
@@ -1329,11 +1329,11 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
   }
 
   const std::string styled_nickname = ApplyStyleFromConfig_(
-      config_manager, {"Style", "Prompt", "nickname"}, nickname);
+      config_manager, {"Style", "CLIPrompt", "nickname"}, nickname);
   const std::string styled_cwd = ApplyStyleFromConfig_(
-      config_manager, {"Style", "Prompt", "cwd"}, workdir);
+      config_manager, {"Style", "CLIPrompt", "cwd"}, workdir);
   const std::string styled_dollar = ApplyStyleFromConfig_(
-      config_manager, {"Style", "Prompt", "dollarsign"}, "$");
+      config_manager, {"Style", "CLIPrompt", "dollarsign"}, "$");
   std::string line2 =
       AMStr::amfmt("({}){} {}", styled_nickname, styled_cwd, styled_dollar);
   return line1 + "\n" + line2 + " ";

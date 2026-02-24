@@ -6,6 +6,7 @@
 #include "AMManager/SignalMonitor.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <mutex>
 #include <sstream>
@@ -64,6 +65,131 @@ void PromptNoHighlight_(ic_highlight_env_t *henv, const char *input,
 void PromptNoComplete_(ic_completion_env_t *cenv, const char *prefix) {
   (void)cenv;
   (void)prefix;
+}
+
+/**
+ * @brief Query-mode prompt callback context.
+ */
+struct PromptValueQueryContext {
+  const std::function<bool(const std::string &)> *checker = nullptr;
+  const std::vector<std::string> *candidates = nullptr;
+  std::string valid_tag;
+  std::string invalid_tag;
+};
+
+/**
+ * @brief Normalize a configured style into a bbcode opening tag.
+ */
+std::string NormalizeStyleTag_(const std::string &raw) {
+  std::string trimmed = AMStr::Strip(raw);
+  if (trimmed.empty()) {
+    return "";
+  }
+  if (trimmed.find("[/") != std::string::npos) {
+    return "";
+  }
+  if (trimmed.front() != '[') {
+    trimmed.insert(trimmed.begin(), '[');
+  }
+  if (trimmed.back() != ']') {
+    trimmed.push_back(']');
+  }
+  return trimmed;
+}
+
+/**
+ * @brief Escape bbcode-sensitive characters for formatted highlight output.
+ */
+std::string EscapeBbcodeText_(const std::string &text) {
+  std::string escaped;
+  escaped.reserve(text.size() * 2);
+  for (char c : text) {
+    if (c == '\\') {
+      escaped.append("\\\\");
+    } else if (c == '[') {
+      escaped.append("\\[");
+    } else {
+      escaped.push_back(c);
+    }
+  }
+  return escaped;
+}
+
+/**
+ * @brief Query-mode highlighter that marks valid/invalid input values.
+ */
+void PromptValueQueryHighlight_(ic_highlight_env_t *henv, const char *input,
+                                void *arg) {
+  if (!henv || !input || !arg) {
+    return;
+  }
+  const auto *ctx = static_cast<const PromptValueQueryContext *>(arg);
+  if (!ctx->checker || !(*ctx->checker)) {
+    return;
+  }
+
+  const std::string text(input);
+  const bool is_valid = (*ctx->checker)(text);
+  const std::string &tag = is_valid ? ctx->valid_tag : ctx->invalid_tag;
+  if (tag.empty()) {
+    return;
+  }
+
+  std::string formatted;
+  formatted.reserve(text.size() + tag.size() + 4);
+  formatted.append(tag);
+  formatted.append(EscapeBbcodeText_(text));
+  formatted.append("[/]");
+  ic_highlight_formatted(henv, input, formatted.c_str());
+}
+
+/**
+ * @brief Query-mode completer that uses explicit candidate strings.
+ */
+void PromptValueQueryComplete_(ic_completion_env_t *cenv, const char *prefix) {
+  if (!cenv) {
+    return;
+  }
+  (void)prefix;
+
+  auto *ctx = static_cast<const PromptValueQueryContext *>(ic_completion_arg(cenv));
+  if (!ctx || !ctx->candidates || ctx->candidates->empty()) {
+    return;
+  }
+
+  long cursor = 0;
+  const char *input_c = ic_completion_input(cenv, &cursor);
+  if (!input_c || cursor < 0) {
+    return;
+  }
+  std::string input(input_c);
+  size_t cur = static_cast<size_t>(cursor);
+  if (cur > input.size()) {
+    cur = input.size();
+  }
+
+  size_t token_start = cur;
+  while (token_start > 0 &&
+         !std::isspace(static_cast<unsigned char>(input[token_start - 1]))) {
+    --token_start;
+  }
+  size_t token_end = cur;
+  while (token_end < input.size() &&
+         !std::isspace(static_cast<unsigned char>(input[token_end]))) {
+    ++token_end;
+  }
+
+  const std::string token_prefix = input.substr(token_start, cur - token_start);
+  const long delete_before = static_cast<long>(cur - token_start);
+  const long delete_after = static_cast<long>(token_end - cur);
+
+  for (const auto &candidate : *ctx->candidates) {
+    if (!token_prefix.empty() && candidate.rfind(token_prefix, 0) != 0) {
+      continue;
+    }
+    ic_add_completion_prim(cenv, candidate.c_str(), nullptr, nullptr,
+                           delete_before, delete_after);
+  }
 }
 
 static const std::string ickey = "ic-prompt";
@@ -348,7 +474,9 @@ bool AMPromptManager::PromptLine(const std::string &prompt, std::string *out,
 
 bool AMPromptManager::Prompt(const std::string &prompt,
                              const std::string &placeholder,
-                             std::string *out_input) {
+                             std::string *out_input,
+                             const std::function<bool(const std::string &)> &checker,
+                             const std::vector<std::string> &candidates) {
 
   if (!out_input) {
     return true;
@@ -356,12 +484,40 @@ bool AMPromptManager::Prompt(const std::string &prompt,
   const std::string target =
       active_core_nickname_.empty() ? "local" : active_core_nickname_;
   (void)UseCorePromptProfileForClient_(target);
+
+  PromptValueQueryContext query_ctx;
+  query_ctx.checker = checker ? &checker : nullptr;
+  query_ctx.candidates = candidates.empty() ? nullptr : &candidates;
+  if (query_ctx.checker) {
+    std::string valid_raw = config_.ResolveArg<std::string>(
+        DocumentKind::Settings, {"Style", "ValueQueryHighlight", "valid_value"},
+        "", {});
+    std::string invalid_raw = config_.ResolveArg<std::string>(
+        DocumentKind::Settings,
+        {"Style", "ValueQueryHighlight", "invalid_value"}, "", {});
+    query_ctx.valid_tag = NormalizeStyleTag_(valid_raw);
+    query_ctx.invalid_tag = NormalizeStyleTag_(invalid_raw);
+  }
+
+  ic_completer_fun_t *completer = &PromptNoComplete_;
+  void *completer_arg = nullptr;
+  if (query_ctx.candidates) {
+    completer = &PromptValueQueryComplete_;
+    completer_arg = &query_ctx;
+  }
+  ic_highlight_fun_t *highlighter = &PromptNoHighlight_;
+  void *highlighter_arg = nullptr;
+  if (query_ctx.checker) {
+    highlighter = &PromptValueQueryHighlight_;
+    highlighter_arg = &query_ctx;
+  }
+
   auto lock = PrintLock();
   auto hooklock = HookLock();
   const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
-  char *line =
-      ic_readline_ex_with_initial(prompt.c_str(), &PromptNoComplete_, nullptr,
-                                  &PromptNoHighlight_, nullptr, initial);
+  char *line = ic_readline_ex_with_initial(prompt.c_str(), completer,
+                                           completer_arg, highlighter,
+                                           highlighter_arg, initial);
   if (!line) {
     return false;
   }
