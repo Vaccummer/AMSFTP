@@ -129,7 +129,7 @@ int main(int argc, char **argv) {
 
     DispatchResult dispatch = DispatchCliCommands(cli_commands, managers);
     if (dispatch.enter_interactive) {
-      prompt_manager.LoadHistory(client_manager.CurrentNickname());
+      prompt_manager.ChangeClient(client_manager.CurrentNickname());
       RunInteractiveLoop(app_name, managers);
     }
     if (dispatch.rcm.first != EC::Success) {

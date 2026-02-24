@@ -2,6 +2,7 @@
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Path.hpp"
+#include "AMCLI/CLIBind.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Transfer.hpp"

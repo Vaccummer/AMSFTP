@@ -1,6 +1,6 @@
 #include "AMCLI/Completer/Proxy.hpp"
 #include "AMCLI/Completer/Engine.hpp"
-#include "AMCLI/Completer/Searcher.hpp"
+// #include "AMCLI/Completer/Searcher.hpp"
 #include "Isocline/isocline.h"
 #include <atomic>
 #include <string>
@@ -17,8 +17,6 @@ std::atomic<AMCompleter *> g_active_completer{nullptr};
  */
 AMCompleter::AMCompleter() {
   engine_ = std::make_unique<AMCompleteEngine>();
-  default_completion_arg_.owner = this;
-  default_completion_arg_.client_nickname.clear();
   SetActive(this);
 }
 
@@ -32,8 +30,7 @@ AMCompleter::~AMCompleter() { SetActive(nullptr); }
  */
 void AMCompleter::Install() {
   engine_->LoadConfig();
-  default_completion_arg_.owner = this;
-  engine_->Install(&default_completion_arg_);
+  engine_->Install();
 }
 
 /**
@@ -64,11 +61,7 @@ void AMCompleter::IsoclineCompleter(ic_completion_env_t *cenv,
   if (!cenv) {
     return;
   }
-  auto *arg = static_cast<AMCompleterIsoclineArg *>(ic_completion_arg(cenv));
-  AMCompleter *self = arg ? arg->owner : nullptr;
-  if (!self) {
-    self = Active();
-  }
+  AMCompleter *self = Active();
   if (!self) {
     return;
   }

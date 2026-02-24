@@ -249,10 +249,8 @@ public:
 
   /**
    * @brief Install the completer into isocline.
-   *
-   * @param completion_arg User pointer passed back by isocline.
    */
-  void Install(void *completion_arg);
+  void Install();
 
   /**
    * @brief Clear completion caches managed by registered search engines.
