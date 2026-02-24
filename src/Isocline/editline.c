@@ -504,7 +504,8 @@ static void edit_generate_hint(ic_env_t *env, editor_t *eb) {
 
   // and see if we can construct a hint
   ssize_t count = completions_generate(env, env->completions,
-                                       sbuf_string(eb->input), eb->pos, 2);
+                                       sbuf_string(eb->input), eb->pos, 2,
+                                       IC_COMPLETION_SOURCE_INLINE_HINT);
   if (count == 1) {
     const char *help = NULL;
     const char *hint = completions_get_hint(env->completions, 0, &help);
@@ -524,7 +525,8 @@ static void edit_generate_hint(ic_env_t *env, editor_t *eb) {
               break;
             pos = newpos;
             count = completions_generate(env, env->completions, sbuf_string(sb),
-                                         pos, 2);
+                                         pos, 2,
+                                         IC_COMPLETION_SOURCE_INLINE_HINT);
             if (count == 1) {
               const char *extra_help = NULL;
               extra_hint =

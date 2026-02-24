@@ -25,7 +25,7 @@ ic_private void        completions_free(completions_t* cms);
 ic_private void        completions_clear(completions_t* cms);
 ic_private bool        completions_add(completions_t* cms , const char* replacement, const char* display, const char* help, ssize_t delete_before, ssize_t delete_after);
 ic_private ssize_t     completions_count(completions_t* cms);
-ic_private ssize_t     completions_generate(struct ic_env_s* env, completions_t* cms , const char* input, ssize_t pos, ssize_t max);
+ic_private ssize_t     completions_generate(struct ic_env_s* env, completions_t* cms , const char* input, ssize_t pos, ssize_t max, ic_completion_source_t source);
 ic_private void        completions_sort(completions_t* cms);
 ic_private void        completions_set_completer(completions_t* cms, ic_completer_fun_t* completer, void* arg);
 ic_private const char* completions_get_display(completions_t* cms , ssize_t index, const char** help);
@@ -45,6 +45,7 @@ struct ic_completion_env_s {
   const char* input;     // current full input
   long        cursor;    // current cursor position
   void*       arg;       // argument given to `ic_set_completer`
+  ic_completion_source_t source; // request source (tab or inline-hint)
   void*       closure;   // free variables for function composition
   ic_completion_fun_t* complete;  // function that adds a completion
 };

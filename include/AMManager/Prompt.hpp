@@ -59,6 +59,7 @@ struct AMPromptHistoryProfileArgs {
  * @brief InlineHint path arguments for one profile.
  */
 struct AMPromptInlineHintPathProfileArgs {
+  bool enable = true;
   bool use_async = false;
   size_t timeout_ms = 600;
 };

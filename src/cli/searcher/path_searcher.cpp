@@ -32,8 +32,15 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
   const AMPromptProfileArgs &profile =
       prompt_manager_.ResolvePromptProfileArgs(path.nickname);
-  const int timeout_ms = ToClientTimeoutMs(profile.complete.path.timeout_ms, 0);
-  const bool use_async = profile.complete.path.use_async;
+  const bool hint_request = (ctx.source == AMCompletionSource::InlineHint);
+  if (hint_request && !profile.inline_hint.path.enable) {
+    return result;
+  }
+  const size_t configured_timeout =
+      hint_request ? profile.inline_hint.path.timeout_ms
+                   : profile.complete.path.timeout_ms;
+  const int timeout_ms = ToClientTimeoutMs(configured_timeout, 0);
+  const bool use_async = hint_request ? false : profile.complete.path.use_async;
 
   CacheKey key{path.nickname, path.dir_abs};
   std::vector<PathInfo> listed;

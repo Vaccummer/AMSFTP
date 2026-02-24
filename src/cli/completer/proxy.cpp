@@ -10,6 +10,22 @@ namespace {
  * @brief Active completer singleton.
  */
 std::atomic<AMCompleter *> g_active_completer{nullptr};
+
+/**
+ * @brief Map isocline completion source to AMSFTP completion source.
+ *
+ * Unknown source is treated as tab/menu source.
+ */
+AMCompletionSource MapCompletionSource_(ic_completion_source_t source) {
+  switch (source) {
+  case IC_COMPLETION_SOURCE_INLINE_HINT:
+    return AMCompletionSource::InlineHint;
+  case IC_COMPLETION_SOURCE_TAB:
+  case IC_COMPLETION_SOURCE_UNKNOWN:
+  default:
+    return AMCompletionSource::Tab;
+  }
+}
 } // namespace
 
 /**
@@ -70,6 +86,8 @@ void AMCompleter::IsoclineCompleter(ic_completion_env_t *cenv,
   if (!input || cursor < 0) {
     return;
   }
+  const AMCompletionSource source =
+      MapCompletionSource_(ic_completion_source(cenv));
   self->engine_->HandleCompletion(cenv, std::string(input),
-                                  static_cast<size_t>(cursor));
+                                  static_cast<size_t>(cursor), source);
 }

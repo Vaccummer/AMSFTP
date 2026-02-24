@@ -457,6 +457,9 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   ctx.input = request.input;
   ctx.cursor = request.cursor;
   ctx.request_id = request.request_id;
+  ctx.source = (request.source == AMCompletionSource::Unknown)
+                   ? AMCompletionSource::Tab
+                   : request.source;
   ctx.completion_args = &args_;
 
   std::string trimmed = AMStr::Strip(request.input);
@@ -769,6 +772,7 @@ void AMCompleteEngine::DispatchCandidates_(const AMCompletionContext &ctx,
   if (!out.items.empty()) {
     return;
   }
+  const bool force_sync = (ctx.source == AMCompletionSource::InlineHint);
 
   std::unordered_set<const AMCompletionSearchEngine *> used_engines;
   for (const auto &target : ctx.targets) {
@@ -803,6 +807,20 @@ void AMCompleteEngine::DispatchCandidates_(const AMCompletionContext &ctx,
         request.target = target;
       }
       if (request.target == AMCompletionTarget::Disabled || !request.search) {
+        continue;
+      }
+      if (force_sync) {
+        AMCompletionAsyncResult sync_result;
+        sync_result.request_id = request.request_id;
+        sync_result.target = request.target;
+        sync_result.source_engine = engine;
+        if (request.Search(&sync_result) && !sync_result.candidates.empty()) {
+          out.items.insert(
+              out.items.end(),
+              std::make_move_iterator(sync_result.candidates.begin()),
+              std::make_move_iterator(sync_result.candidates.end()));
+          return;
+        }
         continue;
       }
       ScheduleAsyncRequest_(std::move(request));

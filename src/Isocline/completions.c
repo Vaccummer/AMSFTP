@@ -186,6 +186,11 @@ ic_public void *ic_completion_arg(const ic_completion_env_t *cenv) {
   return (cenv == NULL ? NULL : cenv->env->completions->completer_arg);
 }
 
+ic_public ic_completion_source_t
+ic_completion_source(const ic_completion_env_t *cenv) {
+  return (cenv == NULL ? IC_COMPLETION_SOURCE_UNKNOWN : cenv->source);
+}
+
 ic_public bool ic_has_completions(const ic_completion_env_t *cenv) {
   return (cenv == NULL ? false : cenv->env->completions->count > 0);
 }
@@ -351,7 +356,8 @@ ic_public void ic_set_default_completer(ic_completer_fun_t *completer,
 
 ic_private ssize_t completions_generate(struct ic_env_s *env,
                                         completions_t *cms, const char *input,
-                                        ssize_t pos, ssize_t max) {
+                                        ssize_t pos, ssize_t max,
+                                        ic_completion_source_t source) {
   completions_clear(cms);
   if (cms->completer == NULL || input == NULL || ic_strlen(input) < pos)
     return 0;
@@ -361,6 +367,7 @@ ic_private ssize_t completions_generate(struct ic_env_s *env,
   cenv.env = env;
   cenv.input = input, cenv.cursor = (long)pos;
   cenv.arg = cms->completer_arg;
+  cenv.source = source;
   cenv.complete = &prim_add_completion;
   cenv.closure = NULL;
   const char *prefix = mem_strndup(cms->mem, input, pos);

@@ -359,7 +359,7 @@ static void edit_generate_completions(ic_env_t* env, editor_t* eb, bool autotab)
   long max_items = env->complete_max_items;
   if (max_items <= 0) max_items = IC_MAX_COMPLETIONS_TO_SHOW;
   if (max_items > IC_MAX_COMPLETIONS_TO_SHOW) max_items = IC_MAX_COMPLETIONS_TO_SHOW;
-  ssize_t count = completions_generate(env, env->completions, sbuf_string(eb->input), eb->pos, max_items);
+  ssize_t count = completions_generate(env, env->completions, sbuf_string(eb->input), eb->pos, max_items, IC_COMPLETION_SOURCE_TAB);
   bool more_available = (count >= max_items);
   if (count <= 0) {
     // no completions
