@@ -1,28 +1,23 @@
-# Improve Prompt Arg Store Pattern
+@config\settings.toml
 
-## Already done
+I changed [Style.Prompt] to [Style.CLIPrompt]
 
-i remove InputSet and rename HostSet to PromptProfile
+i add [Style.ValueQueryHighlight] for latter use
 
-remove path searcher's cache option, deprecate persist cache
+@src\manager\prompt\prompt.cpp
 
-## Changes to be done
+PromptManager::Prompt Improve
 
-Remove SetManager, input arg now managed by promptmanager's base class AMProfileManager(replace legacy HistoryManager)
+PromptManager::Prompt is used for query user's input for some arg's value
+  it have brand-new complete and highlight from CorePrompt
 
-ProfileManager( need to create and store PromptProfile args
+Extra Args: 
 
-add a class to store pofile, you can split fields
++ checker: bool(std::string)
++ candidates: vector `<string>`
 
-the star-name profile is to store default value, use when
+checker is a func to judge whether input is valid: use style in Style.ValueQueryHighlight
 
-+ client don't have any profile
-+ client's profile some attr missing
+candidates is the complete source
 
-start-name profile must be ensured, current star-name profile is default value(using when provide value is invalid or missing)
-
-base class AMHistoryManager should be deprecated
-
-remove history change function, change to chang client function
-
-remove ReturnCallback related function, that's not promptmanager's business
+checker and candidates both could be empty

@@ -1,5 +1,5 @@
-#include "AMManager/Prompt.hpp"
 #include "AMBase/CommonTools.hpp"
+#include "AMManager/Prompt.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
 #include <string>
@@ -14,6 +14,13 @@ inline constexpr const char *kDefaultPromptProfile = "*";
  */
 std::string NormalizeProfileNickname_(const std::string &nickname) {
   std::string key = AMStr::Strip(nickname);
+  if (key.size() >= 2) {
+    const char first = key.front();
+    const char last = key.back();
+    if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+      key = key.substr(1, key.size() - 2);
+    }
+  }
   if (key.empty()) {
     key = "local";
   }
@@ -21,22 +28,42 @@ std::string NormalizeProfileNickname_(const std::string &nickname) {
 }
 
 /**
- * @brief Read one setting value from the first existing path.
+ * @brief Normalize a raw profile key from settings.
  */
-template <typename T>
-void ReadProfileValue_(const Json &node,
-                       const std::vector<std::vector<std::string>> &paths,
-                       T *value) {
-  if (!value) {
-    return;
-  }
-  for (const auto &path : paths) {
-    T candidate = *value;
-    if (QueryKey(node, path, &candidate)) {
-      *value = candidate;
-      return;
+std::string NormalizeProfileKey_(const std::string &raw_key) {
+  std::string key = AMStr::Strip(raw_key);
+  if (key.size() >= 2) {
+    const char first = key.front();
+    const char last = key.back();
+    if ((first == '"' && last == '"') || (first == '\'' && last == '\'')) {
+      key = key.substr(1, key.size() - 2);
     }
   }
+  return key;
+}
+
+/**
+ * @brief Find default profile node for `[PromptProfile."*"]`.
+ */
+const Json *FindDefaultProfileNode_(const Json &profile_root) {
+  if (!profile_root.is_object()) {
+    return nullptr;
+  }
+
+  auto direct = profile_root.find(kDefaultPromptProfile);
+  if (direct != profile_root.end() && direct->is_object()) {
+    return &(*direct);
+  }
+
+  for (auto it = profile_root.begin(); it != profile_root.end(); ++it) {
+    if (!it.value().is_object()) {
+      continue;
+    }
+    if (NormalizeProfileKey_(it.key()) == kDefaultPromptProfile) {
+      return &it.value();
+    }
+  }
+  return nullptr;
 }
 
 /**
@@ -60,92 +87,118 @@ std::vector<std::string> GetIsoRecords_() {
 } // namespace
 
 /**
- * @brief Enable or disable history navigation for arrow keys.
+ * @brief Initialize prompt profile args from JSON with fallback defaults.
  */
-void AMProfileManager::SetHistoryEnabled(bool enabled) {
-  history_enabled_ = enabled;
+void AMPromptProfileArgs::Init(const Json &jsond,
+                               const AMPromptProfileArgs &defaults) {
+  *this = defaults;
+  if (!jsond.is_object()) {
+    return;
+  }
+
+  (void)QueryKey(jsond, {"Prompt", "default_style"},
+                 &prompt.default_style);
+  (void)QueryKey(jsond, {"Prompt", "marker"}, &prompt.marker);
+  (void)QueryKey(jsond, {"Prompt", "continuation_marker"},
+                 &prompt.continuation_marker);
+  (void)QueryKey(jsond, {"Prompt", "enable_muiltiline"},
+                 &prompt.enable_multiline);
+
+  (void)QueryKey(jsond, {"History", "enable"}, &history.enable);
+  (void)QueryKey(jsond, {"History", "enable_duplicates"},
+                 &history.enable_duplicates);
+  (void)QueryKey(jsond, {"History", "max_count"}, &history.max_count);
+
+  (void)QueryKey(jsond, {"InlineHint", "enable"}, &inline_hint.enable);
+  (void)QueryKey(jsond, {"InlineHint", "delay_ms"}, &inline_hint.delay_ms);
+  (void)QueryKey(jsond, {"InlineHint", "search_delay_ms"},
+                 &inline_hint.search_delay_ms);
+  (void)QueryKey(jsond, {"InlineHint", "Path", "use_async"},
+                 &inline_hint.path.use_async);
+  (void)QueryKey(jsond, {"InlineHint", "Path", "timeout_ms"},
+                 &inline_hint.path.timeout_ms);
+
+  (void)QueryKey(jsond, {"Complete", "Searcher", "Path", "use_async"},
+                 &complete.path.use_async);
+  (void)QueryKey(jsond, {"Complete", "Searcher", "Path", "timeout_ms"},
+                 &complete.path.timeout_ms);
+  (void)QueryKey(jsond, {"Highlight", "Path", "enable"},
+                 &highlight.path.enable);
+  (void)QueryKey(jsond, {"Highlight", "Path", "timeout_ms"},
+                 &highlight.path.timeout_ms);
+
+  history.max_count = std::min(std::max(1, history.max_count), 200);
+  inline_hint.delay_ms = std::max(0, inline_hint.delay_ms);
+  inline_hint.search_delay_ms = std::max(0, inline_hint.search_delay_ms);
+
+  if (inline_hint.path.timeout_ms < 1) {
+    inline_hint.path.timeout_ms = defaults.inline_hint.path.timeout_ms;
+  }
+  if (complete.path.timeout_ms < 1) {
+    complete.path.timeout_ms = defaults.complete.path.timeout_ms;
+  }
+  if (highlight.path.timeout_ms < 1) {
+    highlight.path.timeout_ms = defaults.highlight.path.timeout_ms;
+  }
 }
 
 /**
- * @brief Add a history entry to the readline history.
+ * @brief Dump prompt profile args to JSON with the current schema.
  */
-void AMProfileManager::AddHistoryEntry(const std::string &line) {
-  if (!history_enabled_ || line.empty()) {
-    return;
+Json AMPromptProfileArgs::GetJson() const {
+  Json jsond = Json::object();
+  jsond["Prompt"]["default_style"] = prompt.default_style;
+  jsond["Prompt"]["marker"] = prompt.marker;
+  jsond["Prompt"]["continuation_marker"] = prompt.continuation_marker;
+  jsond["Prompt"]["enable_muiltiline"] = prompt.enable_multiline;
+
+  jsond["History"]["enable"] = history.enable;
+  jsond["History"]["enable_duplicates"] = history.enable_duplicates;
+  jsond["History"]["max_count"] = history.max_count;
+
+  jsond["InlineHint"]["enable"] = inline_hint.enable;
+  jsond["InlineHint"]["delay_ms"] = inline_hint.delay_ms;
+  jsond["InlineHint"]["search_delay_ms"] = inline_hint.search_delay_ms;
+  jsond["InlineHint"]["Path"]["use_async"] = inline_hint.path.use_async;
+  jsond["InlineHint"]["Path"]["timeout_ms"] = inline_hint.path.timeout_ms;
+
+  jsond["Complete"]["Searcher"]["Path"]["use_async"] = complete.path.use_async;
+  jsond["Complete"]["Searcher"]["Path"]["timeout_ms"] = complete.path.timeout_ms;
+
+  jsond["Highlight"]["Path"]["enable"] = highlight.path.enable;
+  jsond["Highlight"]["Path"]["timeout_ms"] = highlight.path.timeout_ms;
+  return jsond;
+}
+
+/**
+ * @brief Release all owned isocline profile handles.
+ */
+AMProfileManager::~AMProfileManager() {
+  std::unordered_set<ic_profile_t *> released;
+  auto release_one = [&released](AMPromptProfileArgs &profile) {
+    if (!profile.ic_profile) {
+      return;
+    }
+    if (released.insert(profile.ic_profile).second) {
+      ic_profile_free(profile.ic_profile);
+    }
+    profile.ic_profile = nullptr;
+  };
+
+  std::lock_guard<std::mutex> lock(profile_mtx_);
+  for (auto &pair : prompt_profiles_) {
+    release_one(pair.second);
   }
-  ic_history_add(line.c_str());
+  release_one(default_prompt_profile_args_);
 }
 
 /**
  * @brief Build profile args from one JSON object with fallback defaults.
  */
-AMPromptProfileArgs
-AMProfileManager::BuildPromptProfileArgs_(const Json &jsond,
-                                          const AMPromptProfileArgs &defaults)
-    const {
-  AMPromptProfileArgs out = defaults;
-  if (!jsond.is_object()) {
-    return out;
-  }
-
-  ReadProfileValue_(jsond, {{"builtin_prompt_color"},
-                            {"Input", "builtin_prompt_color"},
-                            {"Options", "InputSet", "builtin_prompt_color"}},
-                    &out.input.builtin_prompt_color);
-  ReadProfileValue_(jsond,
-                    {{"prompt_marker"},
-                     {"Input", "prompt_marker"},
-                     {"Options", "InputSet", "prompt_marker"}},
-                    &out.input.prompt_marker);
-  ReadProfileValue_(jsond, {{"continuation_prompt_marker"},
-                            {"Input", "continuation_prompt_marker"},
-                            {"Options", "InputSet", "continuation_prompt_marker"}},
-                    &out.input.continuation_prompt_marker);
-  ReadProfileValue_(jsond, {{"max_history_count"},
-                            {"Input", "max_history_count"},
-                            {"Options", "InputSet", "max_history_count"}},
-                    &out.input.max_history_count);
-  ReadProfileValue_(jsond, {{"enable_multiline"},
-                            {"Input", "enable_multiline"},
-                            {"Options", "InputSet", "enable_multiline"}},
-                    &out.input.enable_multiline);
-  ReadProfileValue_(jsond, {{"enable_history_duplicates"},
-                            {"Input", "enable_history_duplicates"},
-                            {"Options", "InputSet", "enable_history_duplicates"}},
-                    &out.input.enable_history_duplicates);
-  ReadProfileValue_(jsond, {{"hint_render_delay_ms"},
-                            {"Input", "hint_render_delay_ms"},
-                            {"Options", "InputSet", "hint_render_delay_ms"}},
-                    &out.input.hint_render_delay_ms);
-  ReadProfileValue_(jsond, {{"complete_search_delay_ms"},
-                            {"Input", "complete_search_delay_ms"},
-                            {"Options", "InputSet", "complete_search_delay_ms"}},
-                    &out.input.complete_search_delay_ms);
-
-  ReadProfileValue_(jsond, {{"Path", "use_async"},
-                            {"CompleteOption", "Searcher", "Path", "use_async"}},
-                    &out.path.use_async);
-  ReadProfileValue_(jsond, {{"Path", "timeout_ms"},
-                            {"CompleteOption", "Searcher", "Path", "timeout_ms"}},
-                    &out.path.timeout_ms);
-  ReadProfileValue_(jsond, {{"Path", "highlight_use_check"},
-                            {"Highlight", "Path", "use_check"}},
-                    &out.path.highlight_use_check);
-  ReadProfileValue_(jsond, {{"Path", "highlight_timeout_ms"},
-                            {"Highlight", "Path", "timeout_ms"}},
-                    &out.path.highlight_timeout_ms);
-
-  out.input.max_history_count =
-      std::min(std::max(1, out.input.max_history_count), 150);
-  out.input.hint_render_delay_ms = std::max(0, out.input.hint_render_delay_ms);
-  out.input.complete_search_delay_ms =
-      std::max(0, out.input.complete_search_delay_ms);
-  if (out.path.timeout_ms < 1) {
-    out.path.timeout_ms = defaults.path.timeout_ms;
-  }
-  if (out.path.highlight_timeout_ms < 1) {
-    out.path.highlight_timeout_ms = defaults.path.highlight_timeout_ms;
-  }
+AMPromptProfileArgs AMProfileManager::BuildPromptProfileArgs_(
+    const Json &jsond, const AMPromptProfileArgs &defaults) const {
+  AMPromptProfileArgs out{};
+  out.Init(jsond, defaults);
   return out;
 }
 
@@ -160,22 +213,35 @@ ECM AMProfileManager::ReloadPromptProfiles() {
   }
 
   AMPromptProfileArgs builtin_defaults{};
+  builtin_defaults.name = kDefaultPromptProfile;
+  builtin_defaults.from_default = false;
+  builtin_defaults.ic_profile = nullptr;
   AMPromptProfileArgs star_profile = builtin_defaults;
-  Json star_json;
-  if (QueryKey(profile_root, {kDefaultPromptProfile}, &star_json) &&
-      star_json.is_object()) {
-    star_profile = BuildPromptProfileArgs_(star_json, builtin_defaults);
+  const Json *default_node = FindDefaultProfileNode_(profile_root);
+  if (default_node) {
+    star_profile = BuildPromptProfileArgs_(*default_node, builtin_defaults);
   }
+  star_profile.name = kDefaultPromptProfile;
+  star_profile.from_default = false;
+  star_profile.ic_profile = nullptr;
 
   std::unordered_map<std::string, AMPromptProfileArgs> parsed;
   parsed.reserve(profile_root.size() + 1);
   parsed[kDefaultPromptProfile] = star_profile;
 
   for (auto it = profile_root.begin(); it != profile_root.end(); ++it) {
-    if (it.key() == kDefaultPromptProfile || !it.value().is_object()) {
+    if (!it.value().is_object()) {
       continue;
     }
-    parsed[it.key()] = BuildPromptProfileArgs_(it.value(), star_profile);
+    const std::string key = NormalizeProfileKey_(it.key());
+    if (key.empty() || key == kDefaultPromptProfile) {
+      continue;
+    }
+    AMPromptProfileArgs item = BuildPromptProfileArgs_(it.value(), star_profile);
+    item.name = key;
+    item.from_default = false;
+    item.ic_profile = nullptr;
+    parsed[key] = std::move(item);
   }
 
   {
@@ -184,18 +250,41 @@ ECM AMProfileManager::ReloadPromptProfiles() {
     default_prompt_profile_args_ = star_profile;
     profiles_loaded_ = true;
   }
-  max_history_count_ =
-      std::min(std::max(1, default_prompt_profile_args_.input.max_history_count),
-               150);
   return Ok();
+}
+
+/**
+ * @brief Ensure runtime profile entry exists for one client.
+ */
+AMPromptProfileArgs &
+AMProfileManager::EnsurePromptProfileForClient_(const std::string &nickname) {
+  EnsurePromptProfilesLoaded_();
+  const std::string key = NormalizeProfileNickname_(nickname);
+  std::lock_guard<std::mutex> lock(profile_mtx_);
+  auto it = prompt_profiles_.find(key);
+  if (it != prompt_profiles_.end()) {
+    return it->second;
+  }
+
+  AMPromptProfileArgs created = default_prompt_profile_args_;
+  auto star_it = prompt_profiles_.find(kDefaultPromptProfile);
+  if (star_it != prompt_profiles_.end()) {
+    created = star_it->second;
+  }
+  created.name = key;
+  created.from_default = true;
+  created.ic_profile = nullptr;
+
+  auto [insert_it, _] = prompt_profiles_.emplace(key, std::move(created));
+  return insert_it->second;
 }
 
 /**
  * @brief Resolve prompt profile args for one nickname.
  */
-const AMPromptProfileArgs &
-AMProfileManager::ResolvePromptProfileArgs(const std::string &nickname) const {
-  const_cast<AMProfileManager *>(this)->EnsurePromptProfilesLoaded_();
+AMPromptProfileArgs &
+AMProfileManager::ResolvePromptProfileArgs(const std::string &nickname) {
+  EnsurePromptProfilesLoaded_();
   const std::string key = NormalizeProfileNickname_(nickname);
   std::lock_guard<std::mutex> lock(profile_mtx_);
   auto it = prompt_profiles_.find(key);
@@ -207,6 +296,29 @@ AMProfileManager::ResolvePromptProfileArgs(const std::string &nickname) const {
     return star_it->second;
   }
   return default_prompt_profile_args_;
+}
+
+/**
+ * @brief Return current active prompt profile args.
+ */
+AMPromptProfileArgs *AMProfileManager::GetCurrentPromptProfileArgs() {
+  EnsurePromptProfilesLoaded_();
+  if (active_core_nickname_.empty()) {
+    return nullptr;
+  }
+  std::lock_guard<std::mutex> lock(profile_mtx_);
+  auto it = prompt_profiles_.find(active_core_nickname_);
+  if (it == prompt_profiles_.end()) {
+    return nullptr;
+  }
+  return &it->second;
+}
+
+/**
+ * @brief Return current active prompt profile args (const overload).
+ */
+const AMPromptProfileArgs *AMProfileManager::GetCurrentPromptProfileArgs() const {
+  return const_cast<AMProfileManager *>(this)->GetCurrentPromptProfileArgs();
 }
 
 /**
@@ -226,12 +338,11 @@ void AMProfileManager::EnsurePromptProfilesLoaded_() {
  * @brief Collect persisted history map from history document.
  */
 void AMProfileManager::CollectHistory_() {
-  history_loaded_ = true;
+  history_map_.clear();
   Json jsond;
   if (!config_.GetJson(DocumentKind::History, &jsond) || !jsond.is_object()) {
     return;
   }
-  history_map_.clear();
   for (auto it = jsond.begin(); it != jsond.end(); ++it) {
     const auto &node = it.value();
     if (!node.is_object()) {
@@ -252,36 +363,43 @@ void AMProfileManager::CollectHistory_() {
 }
 
 /**
- * @brief Capture active CorePrompt profile history back into in-memory map.
+ * @brief Enable or disable history for the current active client.
  */
-void AMPromptManager::CaptureActiveCoreHistory_() {
-  if (active_core_nickname_.empty()) {
+void AMPromptManager::SetHistoryEnabled(bool enabled) {
+  AMPromptProfileArgs *profile = GetCurrentPromptProfileArgs();
+  if (!profile) {
     return;
   }
-  auto it = core_prompt_profiles_.find(active_core_nickname_);
-  if (it == core_prompt_profiles_.end() || !it->second) {
+  profile->history.enable = enabled;
+  if (!core_prompt_profile_) {
     return;
   }
-  if (!ic_profile_use(it->second)) {
+  if (!ic_profile_use(core_prompt_profile_)) {
     return;
   }
-  history_map_[active_core_nickname_] = GetIsoRecords_();
+  const int max_history = std::min(std::max(1, profile->history.max_count), 200);
+  ic_set_history(nullptr, max_history);
+  ic_enable_history_duplicates(profile->history.enable_duplicates);
+  if (!enabled) {
+    ic_history_clear();
+  }
 }
 
 /**
- * @brief Seed active profile history from in-memory history map.
+ * @brief Add one history entry to the current active client.
  */
-void AMPromptManager::SeedCoreHistoryFromMap_(const std::string &nickname) {
-  ic_set_history(nullptr, max_history_count_);
-  ic_history_clear();
-  auto it = history_map_.find(nickname);
-  if (it == history_map_.end()) {
-    history_map_[nickname] = {};
+void AMPromptManager::AddHistoryEntry(const std::string &line) {
+  if (line.empty()) {
     return;
   }
-  for (const auto &cmd : it->second) {
-    ic_history_add(cmd.c_str());
+  AMPromptProfileArgs *profile = GetCurrentPromptProfileArgs();
+  if (!profile || !profile->history.enable || !core_prompt_profile_) {
+    return;
   }
+  if (!ic_profile_use(core_prompt_profile_)) {
+    return;
+  }
+  ic_history_add(line.c_str());
 }
 
 /**
@@ -291,25 +409,13 @@ ECM AMPromptManager::ChangeClient(const std::string &nickname) {
   const std::string target = NormalizeProfileNickname_(nickname);
   if (active_core_nickname_ == target && core_prompt_profile_) {
     (void)UseCorePromptProfileForClient_(target);
-    history_loaded_ = true;
     return Ok();
   }
 
-  if (history_loaded_ && !active_core_nickname_.empty()) {
-    CaptureActiveCoreHistory_();
-  }
-
-  const bool existed = core_prompt_profiles_.find(target) !=
-                       core_prompt_profiles_.end();
   if (!UseCorePromptProfileForClient_(target)) {
     return Err(EC::UnknownError,
                "failed to switch CorePrompt profile for nickname: " + target);
   }
-  if (!existed) {
-    SeedCoreHistoryFromMap_(target);
-  }
-
-  history_loaded_ = true;
   return Ok();
 }
 
@@ -317,10 +423,26 @@ ECM AMPromptManager::ChangeClient(const std::string &nickname) {
  * @brief Flush current history back into history document.
  */
 void AMPromptManager::FlushHistory() {
-  if (!history_loaded_) {
-    return;
+  ic_profile_t *restore_profile = core_prompt_profile_;
+  if (!restore_profile) {
+    restore_profile = ic_profile_current();
   }
-  CaptureActiveCoreHistory_();
+
+  for (auto &pair : prompt_profiles_) {
+    AMPromptProfileArgs &profile = pair.second;
+    if (!profile.ic_profile) {
+      continue;
+    }
+    if (!ic_profile_use(profile.ic_profile)) {
+      continue;
+    }
+    history_map_[pair.first] = GetIsoRecords_();
+  }
+
+  if (restore_profile) {
+    (void)ic_profile_use(restore_profile);
+  }
+
   Json jsond = Json::object();
   for (const auto &pair : history_map_) {
     jsond[pair.first]["commands"] = pair.second;

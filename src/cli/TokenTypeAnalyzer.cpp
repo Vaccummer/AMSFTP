@@ -782,9 +782,9 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
       nickname_for_lookup = "local";
     }
 
-    const AMPromptPathProfileArgs &path_cfg =
-        prompt_manager_.ResolvePromptProfileArgs(nickname_for_cfg).path;
-    if (!path_cfg.highlight_use_check) {
+    const AMPromptProfileArgs &profile =
+        prompt_manager_.ResolvePromptProfileArgs(nickname_for_cfg);
+    if (!profile.highlight.path.enable) {
       token.type = AMTokenType::Path;
       if (positional_consumed) {
         ++arg_index;
@@ -816,7 +816,7 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     const std::string abs_path =
         client_manager_.BuildPath(path_client, path_part);
     const int timeout_ms =
-        ToClientTimeoutMs_(path_cfg.highlight_timeout_ms, 1000);
+        ToClientTimeoutMs_(profile.highlight.path.timeout_ms, 1000);
 
     auto [rcm, info] =
         path_client->stat(abs_path, false, nullptr, timeout_ms, am_ms());

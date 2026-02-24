@@ -1,6 +1,7 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
-#include "AMCLI/CLIBind.hpp"
+// #include "AMCLI/CLIBind.hpp"
+#include "AMCLI/CLIArg.hpp"
 #include <functional>
 #include <mutex>
 #include <string>

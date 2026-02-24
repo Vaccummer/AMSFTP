@@ -1,9 +1,8 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
-#include "AMCLI/Completer/Proxy.hpp"
-#include "Isocline/isocline.h"
 #include "AMManager/Config.hpp"
 #include "AMManager/SignalMonitor.hpp"
+#include "Isocline/isocline.h"
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -11,6 +10,7 @@
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace AMPromptDetail {
@@ -36,49 +36,101 @@ template <typename T> std::string ToString(T &&value) {
 } // namespace AMPromptDetail
 
 /**
- * @brief Input arguments applied to one prompt profile.
+ * @brief Prompt rendering arguments for one profile.
  */
-struct AMPromptInputProfileArgs {
-  std::string builtin_prompt_color = "#FFFFFF";
-  std::string prompt_marker = "";
-  std::string continuation_prompt_marker = "";
-  int max_history_count = 10;
+struct AMPromptPromptProfileArgs {
+  std::string default_style = "#FFFFFF";
+  std::string marker = "";
+  std::string continuation_marker = ">";
   bool enable_multiline = false;
-  bool enable_history_duplicates = false;
-  int hint_render_delay_ms = 800;
-  int complete_search_delay_ms = 0;
 };
 
 /**
- * @brief Path-related arguments applied to one prompt profile.
+ * @brief History arguments for one profile.
  */
-struct AMPromptPathProfileArgs {
+struct AMPromptHistoryProfileArgs {
+  bool enable = true;
+  bool enable_duplicates = true;
+  int max_count = 30;
+};
+
+/**
+ * @brief InlineHint path arguments for one profile.
+ */
+struct AMPromptInlineHintPathProfileArgs {
+  bool use_async = false;
+  size_t timeout_ms = 600;
+};
+
+/**
+ * @brief InlineHint arguments for one profile.
+ */
+struct AMPromptInlineHintProfileArgs {
+  bool enable = true;
+  int delay_ms = 30;
+  int search_delay_ms = 0;
+  AMPromptInlineHintPathProfileArgs path{};
+};
+
+/**
+ * @brief Completion searcher path arguments for one profile.
+ */
+struct AMPromptCompletePathProfileArgs {
   bool use_async = false;
   size_t timeout_ms = 3000;
-  bool highlight_use_check = true;
-  size_t highlight_timeout_ms = 1000;
+};
+
+/**
+ * @brief Completion arguments for one profile.
+ */
+struct AMPromptCompleteProfileArgs {
+  AMPromptCompletePathProfileArgs path{};
+};
+
+/**
+ * @brief Highlight path arguments for one profile.
+ */
+struct AMPromptHighlightPathProfileArgs {
+  bool enable = true;
+  size_t timeout_ms = 1000;
+};
+
+/**
+ * @brief Highlight arguments for one profile.
+ */
+struct AMPromptHighlightProfileArgs {
+  AMPromptHighlightPathProfileArgs path{};
 };
 
 /**
  * @brief Full prompt profile argument bundle.
  */
 struct AMPromptProfileArgs {
-  AMPromptInputProfileArgs input{};
-  AMPromptPathProfileArgs path{};
+  std::string name = "*";
+  bool from_default = false;
+  ic_profile_t *ic_profile = nullptr;
+  AMPromptPromptProfileArgs prompt{};
+  AMPromptHistoryProfileArgs history{};
+  AMPromptInlineHintProfileArgs inline_hint{};
+  AMPromptCompleteProfileArgs complete{};
+  AMPromptHighlightProfileArgs highlight{};
+
+  /**
+   * @brief Initialize this profile from JSON with fallback defaults.
+   *
+   * The object is reset to @p defaults first, then known keys from @p jsond
+   * are read and applied.
+   */
+  void Init(const Json &jsond, const AMPromptProfileArgs &defaults);
+
+  /**
+   * @brief Serialize this profile to JSON with the current schema layout.
+   */
+  [[nodiscard]] Json GetJson() const;
 };
 
 class AMProfileManager {
 public:
-  /**
-   * @brief Enable or disable history navigation for arrow keys.
-   */
-  void SetHistoryEnabled(bool enabled);
-
-  /**
-   * @brief Add a history entry to the readline history.
-   */
-  void AddHistoryEntry(const std::string &line);
-
   /**
    * @brief Reload prompt profile args from settings.
    */
@@ -89,17 +141,45 @@ public:
    *
    * Falls back to the star profile when the nickname profile is missing.
    */
-  [[nodiscard]] const AMPromptProfileArgs &
-  ResolvePromptProfileArgs(const std::string &nickname) const;
+  [[nodiscard]] AMPromptProfileArgs &
+  ResolvePromptProfileArgs(const std::string &nickname);
+  /**
+   * @brief Return current active prompt profile args.
+   *
+   * Returns nullptr when there is no active client profile entry.
+   */
+  [[nodiscard]] AMPromptProfileArgs *GetCurrentPromptProfileArgs();
+  /**
+   * @brief Return current active prompt profile args (const overload).
+   *
+   * Returns nullptr when there is no active client profile entry.
+   */
+  [[nodiscard]] const AMPromptProfileArgs *GetCurrentPromptProfileArgs() const;
 
 protected:
   AMProfileManager() = default;
-  virtual ~AMProfileManager() = default;
+  virtual ~AMProfileManager();
 
   /**
    * @brief Collect current history into a list.
    */
   void CollectHistory_();
+  /**
+   * @brief Ensure runtime profile entry exists for one client.
+   *
+   * Missing clients are created from star profile and marked `from_default`.
+   */
+  AMPromptProfileArgs &
+  EnsurePromptProfileForClient_(const std::string &nickname);
+  /**
+   * @brief Ensure the specified client has a dedicated CorePrompt profile.
+   */
+  ic_profile_t *EnsureCorePromptProfileForClient_(const std::string &nickname);
+  /**
+   * @brief Switch active isocline profile to the target client CorePrompt
+   * profile.
+   */
+  bool UseCorePromptProfileForClient_(const std::string &nickname);
 
   /**
    * @brief Ensure prompt profiles are loaded.
@@ -119,9 +199,9 @@ protected:
   AMPromptProfileArgs default_prompt_profile_args_{};
   std::unordered_map<std::string, AMPromptProfileArgs> prompt_profiles_;
   std::unordered_map<std::string, std::vector<std::string>> history_map_;
-  bool history_enabled_ = true;
-  bool history_loaded_ = false;
-  int max_history_count_ = 10;
+  std::unordered_set<std::string> history_seeded_clients_;
+  std::string active_core_nickname_ = "local";
+  ic_profile_t *core_prompt_profile_ = nullptr;
 };
 
 class AMPromptManager : public AMProfileManager, NonCopyableNonMovable {
@@ -134,8 +214,8 @@ public:
   ~AMPromptManager() override = default;
 
   ECM Init() override {
-    InitIsoclineConfig();
     CollectHistory_();
+    InitIsoclineConfig();
     return Ok();
   }
 
@@ -225,6 +305,14 @@ public:
    */
   void FlushHistory();
   /**
+   * @brief Enable or disable history for the current active client.
+   */
+  void SetHistoryEnabled(bool enabled);
+  /**
+   * @brief Add a history entry to the current active client.
+   */
+  void AddHistoryEntry(const std::string &line);
+  /**
    * @brief Switch CorePrompt profile/history to the specified client nickname.
    */
   ECM ChangeClient(const std::string &nickname);
@@ -234,48 +322,11 @@ public:
   bool PromptCore(const std::string &prompt, std::string *out_input);
 
 private:
-  /**
-   * @brief Ensure the main CLI prompt profile exists.
-   */
-  ic_profile_t *EnsureCorePromptProfile_();
-  /**
-   * @brief Ensure the specified client has a dedicated CorePrompt profile.
-   */
-  ic_profile_t *EnsureCorePromptProfileForClient_(const std::string &nickname);
-  /**
-   * @brief Ensure the specified client has a stable isocline completion arg.
-   */
-  AMCompleterIsoclineArg *
-  EnsureCoreCompletionArgForClient_(const std::string &nickname);
-  /**
-   * @brief Capture active profile history back to in-memory history_map_.
-   */
-  void CaptureActiveCoreHistory_();
-  /**
-   * @brief Seed active profile history from in-memory history_map_.
-   */
-  void SeedCoreHistoryFromMap_(const std::string &nickname);
-
-  /**
-   * @brief Switch active isocline profile to the main CLI prompt profile.
-   */
-  bool UseCorePromptProfile_();
-  /**
-   * @brief Switch active isocline profile to the target client CorePrompt
-   * profile.
-   */
-  bool UseCorePromptProfileForClient_(const std::string &nickname);
-
   void InitIsoclineConfig();
   std::mutex print_mutex_;
   std::string cached_output_;
   std::mutex cached_output_mutex_;
   std::atomic<int> cache_output_lock_depth_{0};
-  std::unordered_map<std::string, ic_profile_t *> core_prompt_profiles_;
-  std::unordered_map<std::string, std::unique_ptr<AMCompleterIsoclineArg>>
-      core_prompt_completion_args_;
-  std::string active_core_nickname_ = "local";
-  ic_profile_t *core_prompt_profile_ = nullptr;
 };
 
 class AMPrintLockGuard : NonCopyableNonMovable {
@@ -301,16 +352,5 @@ struct AMPromptHookGuard {
   }
 };
 
-struct HighlightGuard {
-  bool previous = true;
-  explicit HighlightGuard(bool enable) {
-    previous = ic_enable_highlight(enable);
-  }
-  ~HighlightGuard() { ic_enable_highlight(previous); }
-};
-
 inline AMPrintLockGuard PrintLock() { return AMPrintLockGuard(); }
 inline AMPromptHookGuard HookLock() { return AMPromptHookGuard(); }
-inline HighlightGuard HighlightLock(bool enable) {
-  return HighlightGuard(enable);
-}

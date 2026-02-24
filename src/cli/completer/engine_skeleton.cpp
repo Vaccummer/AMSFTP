@@ -67,12 +67,11 @@ void AMCompletionSearchEngine::ClearCache() {}
 /**
  * @brief Install the completer into isocline.
  */
-void AMCompleteEngine::Install(void *completion_arg) {
-  ic_set_default_completer(&AMCompleter::IsoclineCompleter, completion_arg);
+void AMCompleteEngine::Install() {
+  ic_set_default_completer(&AMCompleter::IsoclineCompleter, nullptr);
   ic_enable_completion_sort(false);
   ic_enable_completion_preview(true);
   const int max_items = args_.complete_max_items;
-  ic_enable_hint(true);
   if (max_items > 0) {
     ic_set_completion_max_items(max_items);
   } else {

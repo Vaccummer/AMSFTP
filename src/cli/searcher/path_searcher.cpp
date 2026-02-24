@@ -30,10 +30,10 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
-  const AMPromptPathProfileArgs &path_profile =
-      prompt_manager_.ResolvePromptProfileArgs(path.nickname).path;
-  const int timeout_ms = ToClientTimeoutMs(path_profile.timeout_ms, 0);
-  const bool use_async = path_profile.use_async;
+  const AMPromptProfileArgs &profile =
+      prompt_manager_.ResolvePromptProfileArgs(path.nickname);
+  const int timeout_ms = ToClientTimeoutMs(profile.complete.path.timeout_ms, 0);
+  const bool use_async = profile.complete.path.use_async;
 
   CacheKey key{path.nickname, path.dir_abs};
   std::vector<PathInfo> listed;
