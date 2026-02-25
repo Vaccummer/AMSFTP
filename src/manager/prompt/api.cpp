@@ -73,6 +73,7 @@ void PromptNoComplete_(ic_completion_env_t *cenv, const char *prefix) {
 struct PromptValueQueryContext {
   const std::function<bool(const std::string &)> *checker = nullptr;
   const std::vector<std::string> *candidates = nullptr;
+  const std::map<std::string, std::string> *literals = nullptr;
   std::string valid_tag;
   std::string invalid_tag;
 };
@@ -152,8 +153,9 @@ void PromptValueQueryComplete_(ic_completion_env_t *cenv, const char *prefix) {
   }
   (void)prefix;
 
-  auto *ctx = static_cast<const PromptValueQueryContext *>(ic_completion_arg(cenv));
-  if (!ctx || !ctx->candidates || ctx->candidates->empty()) {
+  auto *ctx =
+      static_cast<const PromptValueQueryContext *>(ic_completion_arg(cenv));
+  if (!ctx) {
     return;
   }
 
@@ -183,6 +185,22 @@ void PromptValueQueryComplete_(ic_completion_env_t *cenv, const char *prefix) {
   const long delete_before = static_cast<long>(cur - token_start);
   const long delete_after = static_cast<long>(token_end - cur);
 
+  if (ctx->literals && !ctx->literals->empty()) {
+    for (const auto &entry : *ctx->literals) {
+      const std::string &candidate = entry.first;
+      if (!token_prefix.empty() && candidate.rfind(token_prefix, 0) != 0) {
+        continue;
+      }
+      const char *help = entry.second.empty() ? nullptr : entry.second.c_str();
+      ic_add_completion_prim(cenv, candidate.c_str(), nullptr, help,
+                             delete_before, delete_after);
+    }
+    return;
+  }
+
+  if (!ctx->candidates || ctx->candidates->empty()) {
+    return;
+  }
   for (const auto &candidate : *ctx->candidates) {
     if (!token_prefix.empty() && candidate.rfind(token_prefix, 0) != 0) {
       continue;
@@ -502,6 +520,68 @@ bool AMPromptManager::Prompt(const std::string &prompt,
   ic_completer_fun_t *completer = &PromptNoComplete_;
   void *completer_arg = nullptr;
   if (query_ctx.candidates) {
+    completer = &PromptValueQueryComplete_;
+    completer_arg = &query_ctx;
+  }
+  ic_highlight_fun_t *highlighter = &PromptNoHighlight_;
+  void *highlighter_arg = nullptr;
+  if (query_ctx.checker) {
+    highlighter = &PromptValueQueryHighlight_;
+    highlighter_arg = &query_ctx;
+  }
+
+  auto lock = PrintLock();
+  auto hooklock = HookLock();
+  const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
+  char *line = ic_readline_ex_with_initial(prompt.c_str(), completer,
+                                           completer_arg, highlighter,
+                                           highlighter_arg, initial);
+  if (!line) {
+    return false;
+  }
+  ic_history_remove_last();
+  *out_input = std::string(line);
+  ic_free(line);
+  return true;
+}
+
+/**
+ * @brief Prompt for one literal value using a literal->help dictionary.
+ */
+bool AMPromptManager::LiteralPrompt(
+    const std::string &prompt, const std::string &placeholder,
+    std::string *out_input, const std::map<std::string, std::string> &literals) {
+  if (!out_input) {
+    return true;
+  }
+  const std::string target =
+      active_core_nickname_.empty() ? "local" : active_core_nickname_;
+  (void)UseCorePromptProfileForClient_(target);
+
+  std::function<bool(const std::string &)> literal_checker;
+  if (!literals.empty()) {
+    literal_checker = [&literals](const std::string &text) {
+      return literals.find(AMStr::Strip(text)) != literals.end();
+    };
+  }
+
+  PromptValueQueryContext query_ctx;
+  query_ctx.checker = literal_checker ? &literal_checker : nullptr;
+  query_ctx.literals = literals.empty() ? nullptr : &literals;
+  if (query_ctx.checker) {
+    std::string valid_raw = config_.ResolveArg<std::string>(
+        DocumentKind::Settings, {"Style", "ValueQueryHighlight", "valid_value"},
+        "", {});
+    std::string invalid_raw = config_.ResolveArg<std::string>(
+        DocumentKind::Settings,
+        {"Style", "ValueQueryHighlight", "invalid_value"}, "", {});
+    query_ctx.valid_tag = NormalizeStyleTag_(valid_raw);
+    query_ctx.invalid_tag = NormalizeStyleTag_(invalid_raw);
+  }
+
+  ic_completer_fun_t *completer = &PromptNoComplete_;
+  void *completer_arg = nullptr;
+  if (query_ctx.literals) {
     completer = &PromptValueQueryComplete_;
     completer_arg = &query_ctx;
   }

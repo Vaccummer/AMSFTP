@@ -84,28 +84,29 @@ public:
       // SFTP file
       std::lock_guard<std::recursive_mutex> lock(client->mtx);
       libssh2_session_set_blocking(client->session, 0);
+      const amf task_interrupt_flag = pd ? pd->GetInterruptFlag() : nullptr;
+      NBResult<LIBSSH2_SFTP_HANDLE *> nb_res{nullptr, WaitResult::Ready};
 
       if (is_write) {
         int flags = LIBSSH2_FXF_WRITE;
         if (truncate) {
           flags |= LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_CREAT;
         }
-        auto nb_res = client->nb_call(
-            pd ? std::function<bool()>([this]() { return pd->is_terminate(); })
-               : std::function<bool()>(),
-            -1, am_ms(), [&]() {
-              return libssh2_sftp_open(client->sftp, path.c_str(), flags, 0744);
-            });
+        nb_res = client->nb_call(task_interrupt_flag, -1, am_ms(), [&]() {
+          return libssh2_sftp_open(client->sftp, path.c_str(), flags, 0744);
+        });
         sftp_handle = nb_res.value;
       } else {
-        auto nb_res = client->nb_call(
-            pd ? std::function<bool()>([this]() { return pd->is_terminate(); })
-               : std::function<bool()>(),
-            -1, am_ms(), [&]() {
-              return libssh2_sftp_open(client->sftp, path.c_str(),
-                                       LIBSSH2_FXF_READ, 0400);
-            });
+        nb_res = client->nb_call(task_interrupt_flag, -1, am_ms(), [&]() {
+          return libssh2_sftp_open(client->sftp, path.c_str(),
+                                   LIBSSH2_FXF_READ, 0400);
+        });
         sftp_handle = nb_res.value;
+      }
+      if (nb_res.status == WaitResult::Interrupted) {
+        return pd ? pd->InterruptECM("Task paused before opening file",
+                                     "Task terminated before opening file")
+                  : ECM{EC::Terminate, "Task terminated before opening file"};
       }
       if (!sftp_handle) {
         EC rc = client->GetLastEC();
@@ -239,17 +240,17 @@ public:
             return {0, {EC::EndOfFile, "End of file"}};
           }
           if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
-            WaitResult wr =
-                client->wait_for_socket(SocketWaitType::Read, [this]() {
-                  return pd && pd->is_terminate();
-                });
+            WaitResult wr = client->wait_for_socket(
+                SocketWaitType::Read, std::function<bool()>(), am_ms(), 200,
+                20, pd ? pd->GetInterruptFlag() : nullptr);
             if (wr == WaitResult::Error) {
               return {
                   -1,
                   {wait_result_to_error_code(wr), "SFTP read socket error"}};
             }
             if (wr == WaitResult::Interrupted) {
-              return {-1, {EC::Terminate, "Task terminated by user"}};
+              return {-1, pd ? pd->InterruptECM()
+                             : ECM{EC::Terminate, "Task terminated by user"}};
             }
             continue;
           }
@@ -331,15 +332,16 @@ public:
           }
           if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
             WaitResult wr = client->wait_for_socket(
-                SocketWaitType::Write,
-                [this]() { return pd && pd->is_terminate(); }, am_ms(), 200);
+                SocketWaitType::Write, std::function<bool()>(), am_ms(), 200,
+                20, pd ? pd->GetInterruptFlag() : nullptr);
             if (wr == WaitResult::Error) {
               return {
                   LIBSSH2_ERROR_EAGAIN,
                   {wait_result_to_error_code(wr), "SFTP write socket error"}};
             }
             if (wr == WaitResult::Interrupted) {
-              return {-1, {EC::Terminate, "Task terminated by user"}};
+              return {-1, pd ? pd->InterruptECM()
+                             : ECM{EC::Terminate, "Task terminated by user"}};
             }
             continue;
           }
@@ -1017,12 +1019,14 @@ private:
       return rcm;
     }
 
-    auto src_open = client->nb_call(
-        std::function<bool()>([&]() { return pd.is_terminate(); }), -1, am_ms(),
-        [&]() {
-          return libssh2_sftp_open(client->sftp, task->src.c_str(),
-                                   LIBSSH2_FXF_READ, 0400);
-        });
+    auto src_open = client->nb_call(pd.GetInterruptFlag(), -1, am_ms(), [&]() {
+      return libssh2_sftp_open(client->sftp, task->src.c_str(),
+                               LIBSSH2_FXF_READ, 0400);
+    });
+    if (src_open.status == WaitResult::Interrupted) {
+      return pd.InterruptECM("Transfer paused while opening source file",
+                             "Transfer interrupted while opening source file");
+    }
     LIBSSH2_SFTP_HANDLE *srcFile = src_open.value;
     if (!srcFile) {
       EC rc = client->GetLastEC();
@@ -1036,12 +1040,16 @@ private:
     if (resume_offset == 0) {
       dst_flags |= LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC;
     }
-    auto dst_open = client->nb_call(
-        std::function<bool()>([&]() { return pd.is_terminate(); }), -1, am_ms(),
-        [&]() {
-          return libssh2_sftp_open(client->sftp, task->dst.c_str(), dst_flags,
-                                   0744);
-        });
+    auto dst_open = client->nb_call(pd.GetInterruptFlag(), -1, am_ms(), [&]() {
+      return libssh2_sftp_open(client->sftp, task->dst.c_str(), dst_flags,
+                               0744);
+    });
+    if (dst_open.status == WaitResult::Interrupted) {
+      libssh2_sftp_close_handle(srcFile);
+      return pd.InterruptECM(
+          "Transfer paused while opening destination file",
+          "Transfer interrupted while opening destination file");
+    }
     LIBSSH2_SFTP_HANDLE *dstFile = dst_open.value;
     if (!dstFile) {
       libssh2_sftp_close_handle(srcFile);
@@ -1065,7 +1073,8 @@ private:
 
     while (total_written < task->size) {
       if (pd.is_terminate()) {
-        rcm = {EC::Terminate, "Transfer interrupted by user"};
+        rcm = pd.InterruptECM("Task paused by user",
+                              "Transfer interrupted by user");
         goto clean;
       }
       while (pd.is_pause() && !pd.is_terminate()) {
@@ -1084,10 +1093,11 @@ private:
           break;
         } else if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
           WaitResult wr = client->wait_for_socket(
-              SocketWaitType::Read, [&]() { return pd.is_terminate(); },
-              am_ms(), 200);
+              SocketWaitType::Read, std::function<bool()>(), am_ms(), 200, 20,
+              pd.GetInterruptFlag());
           if (wr == WaitResult::Interrupted) {
-            rcm = {EC::Terminate, "Transfer interrupted by user"};
+            rcm = pd.InterruptECM("Task paused by user",
+                                  "Transfer interrupted by user");
             goto clean;
           }
           if (wr == WaitResult::Error) {
@@ -1126,10 +1136,11 @@ private:
           break;
         } else if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
           WaitResult wr = client->wait_for_socket(
-              SocketWaitType::Write, [&]() { return pd.is_terminate(); },
-              am_ms(), 200);
+              SocketWaitType::Write, std::function<bool()>(), am_ms(), 200, 20,
+              pd.GetInterruptFlag());
           if (wr == WaitResult::Interrupted) {
-            rcm = {EC::Terminate, "Transfer interrupted by user"};
+            rcm = pd.InterruptECM("Task paused by user",
+                                  "Transfer interrupted by user");
             goto clean;
           }
           if (wr == WaitResult::Error) {

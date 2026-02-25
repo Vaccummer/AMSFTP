@@ -8,6 +8,7 @@
 #include <ctime>
 #include <fcntl.h>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <regex>
 #include <sstream>
@@ -525,14 +526,14 @@ private:
   std::string session_password_plain_;
   AuthCallback auth_cb_ = {};
   bool auth_cb_enabled_ = false;
-  // Execute curl request non-blocking; supports interrupt and timeout
-  // poll_interval_ms: Polling interval each round; smaller is faster but uses more CPU
-
+  // Execute curl request non-blocking; supports interrupt and timeout.
+  // Wait strategy is event-driven by libcurl socket state and internal timers.
   NBResult<CURLcode> nb_perform(amf interrupt_flag, int timeout_ms,
                                 int64_t start_time) {
     if (!multi || !curl) {
       return {CURLE_FAILED_INIT, WaitResult::Error};
     }
+    start_time = start_time == -1 ? am_ms() : start_time;
 
     // Ensure curl is not left in multi (avoid leftovers from previous operations)
     // curl_multi_remove_handle(multi, curl);
@@ -542,9 +543,37 @@ private:
       return {CURLE_FAILED_INIT, WaitResult::Error};
     }
 
+    size_t wakeup_token = 0;
+#if LIBCURL_VERSION_NUM >= 0x074400
+    if (interrupt_flag) {
+      wakeup_token = interrupt_flag->RegisterWakeup([this]() {
+        if (multi) {
+          curl_multi_wakeup(multi);
+        }
+      });
+    }
+#endif
+
     int still_running = 1;
     CURLcode result = CURLE_OK;
     WaitResult wait_result = WaitResult::Ready;
+
+    auto cleanup_wakeup = [&]() {
+      if (interrupt_flag && wakeup_token != 0) {
+        interrupt_flag->UnregisterWakeup(wakeup_token);
+      }
+    };
+
+    auto remaining_timeout_ms = [&]() -> int64_t {
+      if (timeout_ms <= 0) {
+        return -1;
+      }
+      const int64_t elapsed = am_ms() - start_time;
+      if (elapsed >= static_cast<int64_t>(timeout_ms)) {
+        return 0;
+      }
+      return static_cast<int64_t>(timeout_ms) - elapsed;
+    };
 
     while (still_running) {
       CURLMcode mc = curl_multi_perform(multi, &still_running);
@@ -564,15 +593,33 @@ private:
         break;
       }
 
-      // Check timeout
-      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+      const int64_t remaining_ms = remaining_timeout_ms();
+      if (remaining_ms == 0) {
         wait_result = WaitResult::Timeout;
         break;
       }
 
-      // Wait for socket events non-blocking
+      long curl_wait_ms = -1;
+      mc = curl_multi_timeout(multi, &curl_wait_ms);
+      if (mc != CURLM_OK) {
+        result = CURLE_FAILED_INIT;
+        wait_result = WaitResult::Error;
+        break;
+      }
+
+      int wait_ms = std::numeric_limits<int>::max();
+      if (curl_wait_ms >= 0) {
+        wait_ms = static_cast<int>(
+            std::min<long>(curl_wait_ms, std::numeric_limits<int>::max()));
+      }
+      if (remaining_ms > 0) {
+        wait_ms =
+            static_cast<int>(std::min<int64_t>(wait_ms, remaining_ms));
+      }
+
+      // Wait for socket events based on libcurl timer/socket state.
       int numfds = 0;
-      mc = curl_multi_poll(multi, nullptr, 0, poll_interval_ms, &numfds);
+      mc = curl_multi_poll(multi, nullptr, 0, wait_ms, &numfds);
 
       if (mc != CURLM_OK) {
         result = CURLE_FAILED_INIT;
@@ -580,6 +627,8 @@ private:
         break;
       }
     }
+
+    cleanup_wakeup();
 
     // Get actual result
     if (wait_result == WaitResult::Ready) {
