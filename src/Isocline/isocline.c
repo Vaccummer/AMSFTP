@@ -467,6 +467,14 @@ ic_public bool ic_enable_highlight(bool enable) {
   return !prev;
 }
 
+ic_public long ic_set_highlight_delay(long delay_ms) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return 0;
+  long prev = env->highlight_delay;
+  env->highlight_delay =
+      (delay_ms < 0 ? 0 : (delay_ms > 5000 ? 5000 : delay_ms));
+  return prev;
+}
+
 ic_public bool ic_enable_inline_help(bool enable) {
   ic_env_t* env = ic_get_env(); if (env==NULL) return false;
   bool prev = env->no_help;
@@ -764,6 +772,7 @@ static ic_env_t* ic_env_create( ic_malloc_fun_t* _malloc, ic_realloc_fun_t* _rea
   env->bbcode      = bbcode_new(env->mem, env->term);
   env->hint_delay  = 400;   
   env->hint_search_delay = 0;
+  env->highlight_delay = 0;
   env->complete_max_items = IC_MAX_COMPLETIONS_TO_SHOW;
   env->complete_max_columns = IC_DEFAULT_COMPLETION_MAX_COLUMNS;
   env->complete_max_rows = IC_DEFAULT_COMPLETION_MAX_ROWS;

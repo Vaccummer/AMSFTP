@@ -124,6 +124,8 @@ void AMPromptProfileArgs::Init(const Json &jsond,
                  &complete.path.use_async);
   (void)QueryKey(jsond, {"Complete", "Searcher", "Path", "timeout_ms"},
                  &complete.path.timeout_ms);
+  (void)QueryKey(jsond, {"Highlight", "delay_ms"},
+                 &highlight.delay_ms);
   (void)QueryKey(jsond, {"Highlight", "Path", "enable"},
                  &highlight.path.enable);
   (void)QueryKey(jsond, {"Highlight", "Path", "timeout_ms"},
@@ -132,6 +134,7 @@ void AMPromptProfileArgs::Init(const Json &jsond,
   history.max_count = std::min(std::max(1, history.max_count), 200);
   inline_hint.delay_ms = std::max(0, inline_hint.delay_ms);
   inline_hint.search_delay_ms = std::max(0, inline_hint.search_delay_ms);
+  highlight.delay_ms = std::max(0, highlight.delay_ms);
 
   if (inline_hint.path.timeout_ms < 1) {
     inline_hint.path.timeout_ms = defaults.inline_hint.path.timeout_ms;
@@ -168,6 +171,7 @@ Json AMPromptProfileArgs::GetJson() const {
   jsond["Complete"]["Searcher"]["Path"]["use_async"] = complete.path.use_async;
   jsond["Complete"]["Searcher"]["Path"]["timeout_ms"] = complete.path.timeout_ms;
 
+  jsond["Highlight"]["delay_ms"] = highlight.delay_ms;
   jsond["Highlight"]["Path"]["enable"] = highlight.path.enable;
   jsond["Highlight"]["Path"]["timeout_ms"] = highlight.path.timeout_ms;
   return jsond;
