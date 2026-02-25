@@ -9,6 +9,78 @@
 #include <unordered_map>
 
 namespace configkn {
+/**
+ * @brief Host config attribute selector for unified value validation.
+ */
+enum class HostAttr {
+  Nickname,
+  Hostname,
+  Username,
+  Port,
+  Password,
+  Protocol,
+  BufferSize,
+  TrashDir,
+  LoginDir,
+  Keyfile,
+  Compression,
+};
+
+/**
+ * @brief Parse a host attribute name into HostAttr.
+ */
+inline bool ParseHostAttr(const std::string &attr_name, HostAttr *out_attr) {
+  if (!out_attr) {
+    return false;
+  }
+  const std::string key = AMStr::lowercase(AMStr::Strip(attr_name));
+  if (key == "nickname") {
+    *out_attr = HostAttr::Nickname;
+    return true;
+  }
+  if (key == "hostname") {
+    *out_attr = HostAttr::Hostname;
+    return true;
+  }
+  if (key == "username") {
+    *out_attr = HostAttr::Username;
+    return true;
+  }
+  if (key == "port") {
+    *out_attr = HostAttr::Port;
+    return true;
+  }
+  if (key == "password") {
+    *out_attr = HostAttr::Password;
+    return true;
+  }
+  if (key == "protocol") {
+    *out_attr = HostAttr::Protocol;
+    return true;
+  }
+  if (key == "buffer_size") {
+    *out_attr = HostAttr::BufferSize;
+    return true;
+  }
+  if (key == "trash_dir") {
+    *out_attr = HostAttr::TrashDir;
+    return true;
+  }
+  if (key == "login_dir") {
+    *out_attr = HostAttr::LoginDir;
+    return true;
+  }
+  if (key == "keyfile") {
+    *out_attr = HostAttr::Keyfile;
+    return true;
+  }
+  if (key == "compression") {
+    *out_attr = HostAttr::Compression;
+    return true;
+  }
+  return false;
+}
+
 inline bool ValidateNickname(const std::string &nickname) {
   if (nickname.empty())
     return false;
@@ -35,6 +107,26 @@ inline ClientProtocol StrToProtocol(const std::string &protocol_str) {
     return ClientProtocol::SFTP;
   }
 }
+
+/**
+ * @brief Validate one host attribute value.
+ *
+ * @param attr Attribute selector.
+ * @param value Input raw value.
+ * @param normalized Optional normalized output value.
+ * @param error_msg Optional validation error message.
+ * @param allow_exists_hostname Whether existing hostnames in config are
+ * allowed.
+ * @param allow_local_hostname Whether local hostnames are allowed.
+ * @param code Optional output error code.
+ * @return true if input value is valid for the given attribute.
+ */
+bool ValidateHostAttrValue(HostAttr attr, const std::string &value,
+                           std::string *normalized = nullptr,
+                           std::string *error_msg = nullptr,
+                           bool allow_exists_hostname = true,
+                           bool allow_local_hostname = true,
+                           EC *code = nullptr);
 inline constexpr int DefaultSFTPPort = 22;
 inline constexpr int DefaultFTPPort = 21;
 inline const static std::string fingerprint = "fingerprint";
@@ -52,8 +144,8 @@ inline const static std::string keyfile = "keyfile";
 inline const static std::string compression = "compression";
 
 inline static const std::array<std::string, 10> fileds = {
-    configkn::hostname,    configkn::username,  configkn::port,
-    configkn::password,    configkn::protocol,  configkn::buffer_size,
+    configkn::hostname,    configkn::username,  configkn::protocol,
+    configkn::port,        configkn::password,  configkn::buffer_size,
     configkn::trash_dir,   configkn::login_dir, configkn::keyfile,
     configkn::compression,
 };

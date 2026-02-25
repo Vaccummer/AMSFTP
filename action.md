@@ -1,18 +1,6 @@
-Var process in complete Improve
+@src\manager\host\core.cpp
 
-exp: ls $dsk/
+write a check func in namespace configkn to check whether a given string is valid for certain host attr,  use a enum to decide which attr
 
-completer should resolve varname before search for canditates when arg type is path
-
-Var process in highlight Improve
-
-when a token is Path arg type:
-if no clear path sign:
-
-1. check it's client name
-2. check it's config nickname
-3. viewed as current client path
-
-if  has clear path sign: viewed as path
-
-when arg include $varname $varname use var style but the remains use path style
+add check func in AMHostManager::PromptAddFields_ and AMHostManager::PromptModifyFields_
+in AMHostManager::PromptAddFields_, if an attr has default value, set default as placeholder

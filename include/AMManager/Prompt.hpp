@@ -4,6 +4,7 @@
 #include "AMManager/SignalMonitor.hpp"
 #include "Isocline/isocline.h"
 #include <atomic>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -310,6 +311,16 @@ public:
               std::string *out_input,
               const std::function<bool(const std::string &)> &checker = {},
               const std::vector<std::string> &candidates = {});
+  /**
+   * @brief Prompt for one literal value using a literal->help dictionary.
+   *
+   * The same literal map is used for:
+   * - validation/highlight (valid when input matches one literal key)
+   * - completion source (insert key, show help from value)
+   */
+  bool LiteralPrompt(const std::string &prompt, const std::string &placeholder,
+                     std::string *out_input,
+                     const std::map<std::string, std::string> &literals);
   /**
    * @brief Flush current history back into ConfigManager.
    */

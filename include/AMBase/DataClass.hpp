@@ -1,7 +1,9 @@
 #pragma once
 // standard library
+#include <atomic>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <iomanip>
 #include <memory>
 #include <mutex>
@@ -225,6 +227,28 @@ class InterruptFlag {
 private:
   std::atomic<bool> is_interrupted = false;
   std::atomic<bool> is_killed = false;
+  std::atomic<size_t> wake_token_seed_ = 1;
+  std::mutex wake_cb_mtx_;
+  std::unordered_map<size_t, std::function<void()>> wake_callbacks_;
+
+  /**
+   * @brief Notify all registered wake-up callbacks.
+   */
+  inline void NotifyWakeCallbacks_() {
+    std::vector<std::function<void()>> callbacks;
+    {
+      std::lock_guard<std::mutex> lock(wake_cb_mtx_);
+      callbacks.reserve(wake_callbacks_.size());
+      for (const auto &[_, cb] : wake_callbacks_) {
+        if (cb) {
+          callbacks.push_back(cb);
+        }
+      }
+    }
+    for (auto &cb : callbacks) {
+      cb();
+    }
+  }
 
 public:
   /**
@@ -236,6 +260,9 @@ public:
   inline bool check() { return is_interrupted.load(std::memory_order_relaxed); }
   inline void set(bool value) {
     is_interrupted.store(value, std::memory_order_relaxed);
+    if (value) {
+      NotifyWakeCallbacks_();
+    }
   }
   inline void reset() {
     is_interrupted.store(false, std::memory_order_relaxed);
@@ -243,6 +270,51 @@ public:
   inline void kill() {
     is_interrupted.store(true, std::memory_order_relaxed);
     is_killed.store(true, std::memory_order_relaxed);
+    NotifyWakeCallbacks_();
+  }
+
+  /**
+   * @brief Register a callback used to wake blocking waiters when interrupted.
+   *
+   * @param wake_cb Wake callback to invoke on interrupt.
+   * @return Callback token for unregister.
+   */
+  inline size_t RegisterWakeup(std::function<void()> wake_cb) {
+    if (!wake_cb) {
+      return 0;
+    }
+    size_t token = wake_token_seed_.fetch_add(1, std::memory_order_relaxed);
+    {
+      std::lock_guard<std::mutex> lock(wake_cb_mtx_);
+      wake_callbacks_[token] = std::move(wake_cb);
+    }
+    if (check()) {
+      std::function<void()> cb;
+      {
+        std::lock_guard<std::mutex> lock(wake_cb_mtx_);
+        auto it = wake_callbacks_.find(token);
+        if (it != wake_callbacks_.end()) {
+          cb = it->second;
+        }
+      }
+      if (cb) {
+        cb();
+      }
+    }
+    return token;
+  }
+
+  /**
+   * @brief Remove a previously registered wake callback.
+   *
+   * @param token Token from RegisterWakeup.
+   */
+  inline void UnregisterWakeup(size_t token) {
+    if (token == 0) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(wake_cb_mtx_);
+    wake_callbacks_.erase(token);
   }
 };
 
@@ -751,6 +823,7 @@ struct WkProgressData {
   std::atomic<int> control_sign{0}; // 0=Running, 1=Pause, 2=Terminate
   double cb_time = timenow();
   std::shared_ptr<StreamRingBuffer> ring_buffer = nullptr;
+  amf interrupt_flag = std::make_shared<InterruptFlag>();
   std::function<void(bool)> inner_callback = {};
 
   WkProgressData() = default;
@@ -781,14 +854,40 @@ struct WkProgressData {
   void set_terminate() {
     control_sign.store(static_cast<int>(ControlSignal::Terminate),
                        std::memory_order_release);
+    if (interrupt_flag) {
+      interrupt_flag->set(true);
+    }
   }
   void set_pause() {
     control_sign.store(static_cast<int>(ControlSignal::Pause),
                        std::memory_order_release);
+    if (interrupt_flag) {
+      interrupt_flag->set(true);
+    }
   }
   void set_running() {
     control_sign.store(static_cast<int>(ControlSignal::Running),
                        std::memory_order_release);
+    if (interrupt_flag) {
+      interrupt_flag->reset();
+    }
+  }
+
+  /**
+   * @brief Return the interrupt flag used by blocking I/O waits.
+   */
+  amf GetInterruptFlag() const { return interrupt_flag; }
+
+  /**
+   * @brief Translate interrupt to pause/terminate error according to state.
+   */
+  ECM InterruptECM(const std::string &pause_msg = "Task paused by user",
+                   const std::string &terminate_msg =
+                       "Task terminated by user") const {
+    if (is_pause_only()) {
+      return {EC::TransferPause, pause_msg};
+    }
+    return {EC::Terminate, terminate_msg};
   }
 
   void CallInnerCallback(bool force = false) {

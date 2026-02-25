@@ -18,3 +18,4 @@ AMATrial*
 config/
 !src/manager/config/
 !src/manager/config/**
+trashes/
