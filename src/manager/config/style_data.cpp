@@ -140,8 +140,7 @@ std::string cls::Format(const std::string &ori_str_f,
 /**
  * @brief Create a progress bar using the current style configuration.
  */
-Bar cls::CreateProgressBar(int64_t total_size,
-                           const std::string &prefix) const {
+Bar cls::CreateProgressBar(int64_t total_size, const std::string &prefix) {
   if (!progress_bar_style_) {
     progress_bar_style_ = BuildProgressBarStyle_();
   }

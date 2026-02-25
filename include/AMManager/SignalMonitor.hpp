@@ -79,6 +79,7 @@ public:
    * @brief Start the background worker thread.
    */
   void Start() {
+    EnsureGlobalHook_();
     if (running_.exchange(true, std::memory_order_acq_rel)) {
       return;
     }
@@ -86,13 +87,7 @@ public:
   }
 
   ECM Init() override {
-    SignalHook global;
-    global.interrupt_flag = amgif;
-    global.callback = {};
-    global.is_silenced = false;
-    global.priority = 0;
-    global.consume = false;
-    hooks_["GLOBAL"] = std::move(global);
+    EnsureGlobalHook_();
     Start();
     return Ok();
   }
@@ -222,6 +217,27 @@ private:
   AMCliSignalMonitor() = default;
 
   /**
+   * @brief Ensure GLOBAL hook exists and keeps canonical defaults.
+   */
+  void EnsureGlobalHook_() {
+    std::lock_guard<std::mutex> lock(hooks_mtx_);
+    auto it = hooks_.find("GLOBAL");
+    if (it == hooks_.end()) {
+      SignalHook global;
+      global.interrupt_flag = amgif;
+      global.callback = {};
+      global.is_silenced = false;
+      global.priority = 0;
+      global.consume = false;
+      hooks_["GLOBAL"] = std::move(global);
+      return;
+    }
+    it->second.interrupt_flag = amgif;
+    it->second.priority = 0;
+    it->second.consume = false;
+  }
+
+  /**
    * @brief Worker loop that consumes recorded signals.
    */
   void Run_() {
@@ -255,7 +271,7 @@ private:
             break;
           }
         }
-        if (signum == SIGTERM && amgif) {
+        if ((signum == SIGINT || signum == SIGTERM) && amgif) {
           amgif->set(true);
         }
       }
