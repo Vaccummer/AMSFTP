@@ -405,8 +405,8 @@ public:
    * @param prefix Prefix label displayed before the bar.
    * @return Configured progress bar instance.
    */
-  [[nodiscard]] AMProgressBar
-  CreateProgressBar(int64_t total_size, const std::string &prefix) const;
+  [[nodiscard]] AMProgressBar CreateProgressBar(int64_t total_size,
+                                                const std::string &prefix);
 
   /**
    * @brief Format a UTF-8 table using configured style defaults.

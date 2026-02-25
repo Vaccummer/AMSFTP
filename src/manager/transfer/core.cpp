@@ -3,14 +3,19 @@
 #include "AMBase/Path.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
+#include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Transfer.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <exception>
+#include <functional>
 #include <memory>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -145,6 +150,84 @@ void PrintTaskResult_(AMPromptManager &prompt,
       "TaskResult  {} ID: {}; Files: {}/{}; Size: {}/{}; ThreadID: {};{}",
       prefix, task_id, success_num, filenum, FormatSize(transferred),
       FormatSize(total), thread_id, rcm_text));
+}
+
+/**
+ * @brief Build a progress bar prefix from the current transfer task.
+ */
+std::string
+BuildTransferProgressPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
+  if (!task_info) {
+    return "Task";
+  }
+  TransferTask task_copy;
+  bool has_task = false;
+  {
+    std::lock_guard<std::mutex> lock(task_info->mtx);
+    if (task_info->cur_task) {
+      task_copy = *task_info->cur_task;
+      has_task = true;
+    }
+  }
+  if (!has_task) {
+    return AMStr::amfmt("Task {}", task_info->id);
+  }
+  const std::string src_host =
+      task_copy.src_host.empty() ? "local" : task_copy.src_host;
+  const std::string dst_host =
+      task_copy.dst_host.empty() ? "local" : task_copy.dst_host;
+  const std::string src_name = AMPathStr::basename(task_copy.src);
+  const std::string dst_name = AMPathStr::basename(task_copy.dst);
+  return AMStr::amfmt("{}@{} -> {}@{}", src_host, src_name, dst_host, dst_name);
+}
+
+/**
+ * @brief Read refresh interval for progress rendering.
+ */
+int GetTransferProgressRefreshMs_() {
+  std::function<int(int)> clamp_refresh = [](int value) {
+    if (value < 30) {
+      return 30;
+    }
+    return value;
+  };
+  return AMConfigManager::Instance().ResolveArg(
+      DocumentKind::Settings, {"Style", "ProgressBar", "refresh_interval_ms"},
+      300, clamp_refresh);
+}
+
+/**
+ * @brief Read speed window size for progress rendering.
+ */
+size_t GetTransferProgressSpeedWindow_() {
+  std::function<size_t(size_t)> clamp_window = [](size_t value) {
+    return std::max<size_t>(1, value);
+  };
+  return AMConfigManager::Instance().ResolveArg(
+      DocumentKind::Settings, {"Style", "ProgressBar", "speed_window_size"},
+      static_cast<size_t>(300), clamp_window);
+}
+
+/**
+ * @brief Update and print one progress frame.
+ */
+void UpdateTransferProgressBar_(AMProgressBar *bar,
+                                const std::shared_ptr<TaskInfo> &task_info,
+                                bool finish = false) {
+  if (!bar || !task_info) {
+    return;
+  }
+  const size_t total = task_info->total_size.load(std::memory_order_relaxed);
+  const size_t transferred =
+      task_info->total_transferred_size.load(std::memory_order_relaxed);
+  bar->SetTotal(static_cast<int64_t>(total));
+  bar->SetProgress(static_cast<int64_t>(transferred));
+  bar->SetPrefix(BuildTransferProgressPrefix_(task_info));
+  if (finish) {
+    bar->Finish();
+    return;
+  }
+  bar->Print();
 }
 
 bool HasWildcard_(const std::string &path) {
@@ -340,7 +423,8 @@ ECM AMTransferManager::transfer(
     return {EC::InvalidArg, "Resume transfer requires a single transfer set"};
   }
   auto flag =
-      interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
+      interrupt_flag ? interrupt_flag
+                     : (amgif ? amgif : std::make_shared<InterruptFlag>());
   auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
   if (rcm.first != EC::Success) {
     return rcm;
@@ -367,8 +451,9 @@ ECM AMTransferManager::transfer(
   }
 
   auto flag =
-      interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
-  const int refresh_interval_ms = 300;
+      interrupt_flag ? interrupt_flag
+                     : (amgif ? amgif : std::make_shared<InterruptFlag>());
+  const int refresh_interval_ms = GetTransferProgressRefreshMs_();
 
   std::mutex done_mtx;
   std::condition_variable done_cv;
@@ -406,13 +491,44 @@ ECM AMTransferManager::transfer(
     return submit_rcm;
   }
 
+  const bool show_progress = !task_info->quiet;
+  AMProgressBar progress_bar =
+      config_.CreateProgressBar(static_cast<int64_t>(task_info->total_size.load(
+                                    std::memory_order_relaxed)),
+                                BuildTransferProgressPrefix_(task_info));
+  std::unique_ptr<AMPrintLockGuard> print_guard;
+  (void)print_guard;
+  if (show_progress) {
+    progress_bar.SetSpeedWindowSize(GetTransferProgressSpeedWindow_());
+    const double start_time =
+        task_info->start_time.load(std::memory_order_relaxed);
+    if (start_time > 0.0) {
+      progress_bar.SetStartTimeEpoch(start_time);
+    }
+    print_guard = std::make_unique<AMPrintLockGuard>();
+  }
+
   bool all_finished = false;
   while (!all_finished) {
-    if (flag && flag->check()) {
+    const bool interrupted = (flag && flag->check()) || (amgif && amgif->check());
+    if (interrupted) {
+      if (flag && !flag->check()) {
+        flag->set(true);
+      }
+      if (show_progress) {
+        progress_bar.EndDisplay();
+      }
       (void)worker_.terminate(task_info->id, 1000);
       return {EC::Terminate, "Transfer interrupted during progress polling"};
     }
+    if (show_progress) {
+      UpdateTransferProgressBar_(&progress_bar, task_info, false);
+    }
     all_finished = task_info->GetStatus() == TaskStatus::Finished;
+    if (all_finished && show_progress) {
+      UpdateTransferProgressBar_(&progress_bar, task_info, true);
+      progress_bar.EndDisplay();
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(refresh_interval_ms));
   }
 
@@ -445,7 +561,8 @@ ECM AMTransferManager::transfer_async(
     return {EC::InvalidArg, "Resume transfer requires a single transfer set"};
   }
   auto flag =
-      interrupt_flag ? interrupt_flag : std::make_shared<InterruptFlag>();
+      interrupt_flag ? interrupt_flag
+                     : (amgif ? amgif : std::make_shared<InterruptFlag>());
   auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
   if (rcm.first != EC::Success) {
     return rcm;
