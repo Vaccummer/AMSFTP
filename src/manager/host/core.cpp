@@ -35,11 +35,17 @@ GetHostAttrLiterals_(configkn::HostAttr attr) {
       {"ftp", "FTP protocol"},
       {"local", "Local protocol"},
   };
+  static const std::map<std::string, std::string> compression_literals = {
+      {"true", "Enable compression"},
+      {"false", "Disable compression"},
+  };
   static const std::map<std::string, std::string> empty_literals = {};
 
   switch (attr) {
   case configkn::HostAttr::Protocol:
     return protocol_literals;
+  case configkn::HostAttr::Compression:
+    return compression_literals;
   default:
     return empty_literals;
   }
@@ -50,13 +56,110 @@ GetHostAttrLiterals_(configkn::HostAttr attr) {
  */
 bool PromptHostAttr_(AMPromptManager &prompt_mgr, configkn::HostAttr attr,
                      const std::string &prompt_text,
-                     const std::string &placeholder, std::string *out_input) {
+                     const std::string &placeholder, std::string *out_input,
+                     bool allow_empty = true) {
   const auto &literals = GetHostAttrLiterals_(attr);
   if (!literals.empty()) {
     return prompt_mgr.LiteralPrompt(prompt_text, placeholder, out_input,
                                     literals);
   }
-  return prompt_mgr.Prompt(prompt_text, placeholder, out_input);
+
+  std::function<bool(const std::string &)> checker = {};
+  std::vector<std::string> candidates = {};
+
+  auto add_candidate = [&candidates](const std::string &item) {
+    if (item.empty()) {
+      return;
+    }
+    for (const auto &existing : candidates) {
+      if (existing == item) {
+        return;
+      }
+    }
+    candidates.push_back(item);
+  };
+
+  switch (attr) {
+  case configkn::HostAttr::Nickname:
+    checker = [allow_empty](const std::string &text) {
+      const std::string v = AMStr::Strip(text);
+      if (v.empty()) {
+        return allow_empty;
+      }
+      if (!configkn::ValidateNickname(v)) {
+        return false;
+      }
+      if (AMStr::lowercase(v) == "local") {
+        return false;
+      }
+      return !AMHostManager::Instance().HostExists(v);
+    };
+    break;
+  case configkn::HostAttr::Hostname:
+    checker = [allow_empty](const std::string &text) {
+      const std::string v = AMStr::Strip(text);
+      return allow_empty ? true : !v.empty();
+    };
+    add_candidate("localhost");
+    break;
+  case configkn::HostAttr::Username:
+    checker = [allow_empty](const std::string &text) {
+      const std::string v = AMStr::Strip(text);
+      return allow_empty ? true : !v.empty();
+    };
+    add_candidate(GetLocalUsername_());
+    break;
+  case configkn::HostAttr::Port:
+    checker = [allow_empty](const std::string &text) {
+      const std::string v = AMStr::Strip(text);
+      if (v.empty()) {
+        return allow_empty;
+      }
+      int64_t parsed = 0;
+      return StrValueParse(v, &parsed) && parsed > 0 && parsed <= 65535;
+    };
+    add_candidate(placeholder);
+    add_candidate(std::to_string(configkn::DefaultSFTPPort));
+    add_candidate(std::to_string(configkn::DefaultFTPPort));
+    break;
+  case configkn::HostAttr::BufferSize:
+    checker = [allow_empty](const std::string &text) {
+      const std::string v = AMStr::Strip(text);
+      if (v.empty()) {
+        return allow_empty;
+      }
+      int64_t parsed = 0;
+      if (!StrValueParse(v, &parsed)) {
+        return false;
+      }
+      return parsed >= AMMinBufferSize && parsed <= AMMaxBufferSize;
+    };
+    add_candidate(placeholder);
+    add_candidate(std::to_string(AMMinBufferSize));
+    add_candidate(std::to_string(AMMaxBufferSize));
+    break;
+  case configkn::HostAttr::Keyfile:
+    checker = [allow_empty](const std::string &text) {
+      const std::string v = AMStr::Strip(text);
+      if (v.empty()) {
+        return allow_empty;
+      }
+      auto [rcm, info] = AMFS::stat(v, false);
+      return isok(rcm) && info.type == PathType::FILE;
+    };
+    break;
+  case configkn::HostAttr::TrashDir:
+  case configkn::HostAttr::LoginDir:
+  case configkn::HostAttr::Password:
+    checker = {};
+    break;
+  default:
+    checker = {};
+    break;
+  }
+
+  return prompt_mgr.Prompt(prompt_text, placeholder, out_input, checker,
+                           candidates);
 }
 
 /**
@@ -136,7 +239,7 @@ bool ValidateHostAttrValue(HostAttr attr, const std::string &value,
   case HostAttr::Nickname: {
     const std::string v = AMStr::Strip(value);
     if (!ValidateNickname(v)) {
-      return fail(EC::InvalidArg, "Nickname must match [A-Za-z0-9_-]+");
+      return fail(EC::InvalidArg, "Nickname must match \\[A-Za-z0-9_-]+");
     }
     set_norm(v);
     return true;
@@ -383,7 +486,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
 
   while (entry.request.nickname.empty()) {
     if (!PromptHostAttr_(prompt_, configkn::HostAttr::Nickname,
-                         "Nickname: ", "", &entry.request.nickname)) {
+                         "Nickname: ", "", &entry.request.nickname, false)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -396,6 +499,11 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
       if (!AMStr::Strip(entry.request.nickname).empty()) {
         prompt_.ErrorFormat(ECM{err_code, err_msg});
       }
+      entry.request.nickname.clear();
+      continue;
+    }
+    if (AMStr::lowercase(normalized) == "local") {
+      prompt_.ErrorFormat(ECM{EC::InvalidArg, "Nickname 'local' is reserved"});
       entry.request.nickname.clear();
       continue;
     }
@@ -412,13 +520,16 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     }
     entry.request.nickname = normalized;
   }
+  if (AMStr::lowercase(entry.request.nickname) == "local") {
+    return Err(EC::InvalidArg, "Nickname 'local' is reserved");
+  }
   if (HostExists(entry.request.nickname)) {
     return Err(EC::InvalidArg, "Nickname already exists");
   }
 
   while (true) {
     if (!PromptHostAttr_(prompt_, configkn::HostAttr::Hostname,
-                         "Hostname: ", "", &entry.request.hostname)) {
+                         "Hostname: ", "", &entry.request.hostname, false)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -436,7 +547,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
 
   while (true) {
     if (!PromptHostAttr_(prompt_, configkn::HostAttr::Username,
-                         "Username: ", "", &entry.request.username)) {
+                         "Username: ", "", &entry.request.username, false)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -454,8 +565,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
 
   std::string protocol = default_protocol_placeholder;
   while (true) {
-    if (!PromptHostAttr_(prompt_, configkn::HostAttr::Protocol,
-                         "Protocol (sftp/ftp/local): ",
+    if (!PromptHostAttr_(prompt_, configkn::HostAttr::Protocol, "Protocol: ",
                          default_protocol_placeholder, &protocol)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
@@ -479,7 +589,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
   entry.request.port = protocol_default_port;
   while (true) {
     const std::string port_prompt =
-        AMStr::amfmt("port: ", protocol_default_port);
+        AMStr::amfmt("port(default {}): ", protocol_default_port);
     if (!PromptHostAttr_(prompt_, configkn::HostAttr::Port, port_prompt,
                          default_port_for_protocol, &port_input)) {
       print_abort();
@@ -551,6 +661,12 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     }
     int64_t parsed_buffer = entry.buffer_size;
     StrValueParse(normalized, &parsed_buffer);
+    if (parsed_buffer < AMMinBufferSize || parsed_buffer > AMMaxBufferSize) {
+      prompt_.ErrorFormat(ECM{
+          EC::InvalidArg, AMStr::amfmt("Buffer size must be between {} and {}",
+                                       AMMinBufferSize, AMMaxBufferSize)});
+      continue;
+    }
     entry.buffer_size = parsed_buffer;
     break;
   }
@@ -567,19 +683,49 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     print_abort();
     return Err(EC::ConfigCanceled, "add canceled");
   }
-  if (!PromptHostAttr_(prompt_, configkn::HostAttr::Keyfile,
-                       "keyfile(optional): ", entry.request.keyfile,
-                       &entry.request.keyfile)) {
-    print_abort();
-    return Err(EC::ConfigCanceled, "add canceled");
+  while (true) {
+    if (!PromptHostAttr_(prompt_, configkn::HostAttr::Keyfile,
+                         "keyfile(optional): ", entry.request.keyfile,
+                         &entry.request.keyfile)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "add canceled");
+    }
+    const std::string keyfile = AMStr::Strip(entry.request.keyfile);
+    if (keyfile.empty()) {
+      entry.request.keyfile.clear();
+      break;
+    }
+    auto [key_rcm, key_info] = AMFS::stat(keyfile, false);
+    if (!isok(key_rcm) || key_info.type != PathType::FILE) {
+      prompt_.ErrorFormat(
+          ECM{EC::InvalidArg, "keyfile must be an existing file path"});
+      continue;
+    }
+    entry.request.keyfile = keyfile;
+    break;
   }
 
-  bool canceled = false;
-  entry.request.compression =
-      prompt_.PromptYesNo("Enable compression? (y/N): ", &canceled);
-  if (canceled) {
-    print_abort();
-    return Err(EC::ConfigCanceled, "add canceled");
+  std::string compression_input = entry.request.compression ? "true" : "false";
+  while (true) {
+    if (!PromptHostAttr_(prompt_, configkn::HostAttr::Compression,
+                         "compression: ", compression_input,
+                         &compression_input)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "add canceled");
+    }
+    std::string normalized;
+    std::string err_msg;
+    EC err_code = EC::InvalidArg;
+    if (!configkn::ValidateHostAttrValue(configkn::HostAttr::Compression,
+                                         compression_input, &normalized,
+                                         &err_msg, true, true, &err_code)) {
+      prompt_.ErrorFormat(ECM{err_code, err_msg});
+      continue;
+    }
+    bool parsed = false;
+    StrValueParse(normalized, &parsed);
+    entry.request.compression = parsed;
+    break;
   }
   return Ok();
 }
