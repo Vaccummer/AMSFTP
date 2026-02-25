@@ -492,6 +492,9 @@ long ic_set_hint_search_delay(long delay_ms);
 /// Returns the previous setting.
 bool ic_enable_highlight(bool enable);
 
+/// Set millisecond delay before applying syntax highlighting. Can be zero.
+long ic_set_highlight_delay(long delay_ms);
+
 
 /// Set millisecond delay for reading escape sequences in order to distinguish
 /// a lone ESC from the start of a escape sequence. The defaults are 100ms and 10ms, 

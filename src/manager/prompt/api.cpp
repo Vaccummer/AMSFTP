@@ -227,6 +227,7 @@ void ApplyCoreProfileSettings_(const AMPromptProfileArgs &profile) {
   ic_enable_hint(profile.inline_hint.enable);
   ic_set_hint_delay(std::max(0, profile.inline_hint.delay_ms));
   ic_set_hint_search_delay(std::max(0, profile.inline_hint.search_delay_ms));
+  ic_set_highlight_delay(std::max(0, profile.highlight.delay_ms));
 }
 
 } // namespace

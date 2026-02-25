@@ -102,6 +102,7 @@ struct AMPromptHighlightPathProfileArgs {
  * @brief Highlight arguments for one profile.
  */
 struct AMPromptHighlightProfileArgs {
+  int delay_ms = 0;
   AMPromptHighlightPathProfileArgs path{};
 };
 

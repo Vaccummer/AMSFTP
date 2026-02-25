@@ -32,6 +32,7 @@ typedef struct editor_s {
   stringbuf_t *hint;      // hint displayed as part of the input
   stringbuf_t *hint_help; // help for a hint.
   bool hint_search_pending; // delayed hint search is pending.
+  bool highlight_pending; // delayed semantic highlight is pending.
   ssize_t pos;            // current cursor position in the input
   ssize_t cur_rows; // current used rows to display our content (including extra
                     // content)
@@ -57,6 +58,8 @@ typedef struct editor_s {
 static char *edit_line(ic_env_t *env, const char *prompt_text,
                        const char *initial_text); // defined at bottom
 static void edit_refresh(ic_env_t *env, editor_t *eb);
+static void edit_refresh_ex(ic_env_t *env, editor_t *eb,
+                            bool force_highlight);
 
 ic_private char *ic_editline(ic_env_t *env, const char *prompt_text,
                              const char *initial_text) {
@@ -279,15 +282,38 @@ static void edit_refresh_rows(ic_env_t *env, editor_t *eb, stringbuf_t *input,
                     &edit_refresh_rows_iter, &info, NULL);
 }
 
-static void edit_refresh(ic_env_t *env, editor_t *eb) {
+static bool edit_should_delay_highlight(ic_env_t *env, editor_t *eb,
+                                        bool force_highlight) {
+  if (env == NULL || eb == NULL || force_highlight) {
+    return false;
+  }
+  if (eb->attrs == NULL || env->highlight_delay <= 0) {
+    return false;
+  }
+  if (env->no_highlight || env->highlighter == NULL) {
+    return false;
+  }
+  return true;
+}
+
+static void edit_refresh_ex(ic_env_t *env, editor_t *eb,
+                            bool force_highlight) {
   // calculate the new cursor row and total rows needed
   ssize_t promptw, cpromptw;
   edit_get_prompt_width(env, eb, false, &promptw, &cpromptw);
 
+  ic_highlight_fun_t *highlighter =
+      (env->no_highlight ? NULL : env->highlighter);
+  if (edit_should_delay_highlight(env, eb, force_highlight)) {
+    highlighter = NULL;
+    eb->highlight_pending = true;
+  } else {
+    eb->highlight_pending = false;
+  }
+
   if (eb->attrs != NULL) {
     highlight(env->mem, env->bbcode, sbuf_string(eb->input), eb->attrs,
-              (env->no_highlight ? NULL : env->highlighter),
-              env->highlighter_arg);
+              highlighter, env->highlighter_arg);
   }
 
   // highlight matching braces
@@ -403,6 +429,10 @@ static void edit_refresh(ic_env_t *env, editor_t *eb) {
   // update previous
   eb->cur_rows = rows;
   eb->cur_row = rc.row;
+}
+
+static void edit_refresh(ic_env_t *env, editor_t *eb) {
+  edit_refresh_ex(env, eb, false);
 }
 
 // clear current output
@@ -988,11 +1018,17 @@ static void edit_insert_char(ic_env_t *env, editor_t *eb, char c) {
 // Edit line: main edit loop
 //-------------------------------------------------------------
 
-// read one key while handling delayed hint search/render.
+// read one key while handling delayed hint/highlight search/render.
 static code_t edit_read_key(ic_env_t *env, editor_t *eb) {
   code_t c;
   while (true) {
     term_flush(env->term);
+
+    if (eb->highlight_pending && env->highlight_delay <= 0) {
+      eb->highlight_pending = false;
+      edit_refresh_ex(env, eb, true);
+      continue;
+    }
 
     if (eb->hint_search_pending && env->hint_search_delay <= 0) {
       eb->hint_search_pending = false;
@@ -1007,13 +1043,18 @@ static code_t edit_read_key(ic_env_t *env, editor_t *eb) {
         (eb->hint_search_pending && env->hint_search_delay > 0);
     const bool wait_render =
         (!wait_search && env->hint_delay > 0 && sbuf_len(eb->hint) > 0);
+    const bool wait_highlight =
+        (!wait_search && !wait_render && eb->highlight_pending &&
+         env->highlight_delay > 0);
 
-    if (!wait_search && !wait_render) {
+    if (!wait_search && !wait_render && !wait_highlight) {
       return tty_read(env->tty);
     }
 
-    const long timeout_ms =
-        (wait_search ? env->hint_search_delay : env->hint_delay);
+    const long timeout_ms = (wait_search
+                                 ? env->hint_search_delay
+                                 : (wait_render ? env->hint_delay
+                                                : env->highlight_delay));
     if (!tty_read_timeout(env->tty, timeout_ms, &c)) {
       // timeout
       if (wait_search) {
@@ -1024,11 +1065,28 @@ static code_t edit_read_key(ic_env_t *env, editor_t *eb) {
           edit_refresh(env, eb);
         }
       } else {
-        // render delayed hint and then resume blocking reads
-        if (sbuf_len(eb->hint) > 0) {
+        if (wait_highlight) {
+          eb->highlight_pending = false;
+          edit_refresh_ex(env, eb, true);
+          continue;
+        }
+        // render delayed hint
+        if (wait_render && sbuf_len(eb->hint) > 0) {
           edit_refresh(env, eb);
         }
-        return tty_read(env->tty);
+        if (eb->highlight_pending && env->highlight_delay > 0) {
+          if (!tty_read_timeout(env->tty, env->highlight_delay, &c)) {
+            eb->highlight_pending = false;
+            edit_refresh_ex(env, eb, true);
+            continue;
+          }
+          eb->highlight_pending = false;
+          editor_clear_hint(eb);
+          return c;
+        }
+        if (wait_render) {
+          return tty_read(env->tty);
+        }
       }
       continue;
     }
@@ -1037,6 +1095,7 @@ static code_t edit_read_key(ic_env_t *env, editor_t *eb) {
     if (wait_search) {
       eb->hint_search_pending = false;
     }
+    eb->highlight_pending = false;
     editor_clear_hint(eb);
     return c;
   }
@@ -1290,7 +1349,7 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
   // refresh once more but without brace matching
   bool bm = env->no_bracematch;
   env->no_bracematch = true;
-  edit_refresh(env, &eb);
+  edit_refresh_ex(env, &eb, true);
   env->no_bracematch = bm;
 
   // save result
