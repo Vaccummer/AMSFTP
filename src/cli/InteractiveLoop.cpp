@@ -1395,9 +1395,10 @@ CR ExecuteShellCommand_(AMClientManager &client_manager,
   if (!client) {
     return {ECM{EC::ClientNotFound, "No active client"}, {"", -1}};
   }
-  if (client->GetProtocol() != ClientProtocol::SFTP) {
+  const ClientProtocol protocol = client->GetProtocol();
+  if (protocol != ClientProtocol::SFTP && protocol != ClientProtocol::LOCAL) {
     return {ECM{EC::OperationUnsupported,
-                "Shell command only supported by SFTP client"},
+                "Shell command only supported by SFTP/local client"},
             {"", -1}};
   }
 

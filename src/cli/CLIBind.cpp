@@ -503,14 +503,14 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
   commands.connect_cmd = connect_node ? connect_node->app : nullptr;
   if (commands.connect_cmd) {
     commands.connect_cmd
-        ->add_option("nickname", args.connect.nickname, "Host nickname")
+        ->add_option("nicknames", args.connect.nicknames, "Host nicknames")
         ->required()
-        ->expected(1, 1);
+        ->expected(1, -1);
   }
   if (connect_node) {
     connect_node->AddFlag("-f", "--force", args.connect.force,
                           "Rebuild and replace existing client");
-    connect_node->AddPositionalRule(0, Sem::HostNickname, false);
+    connect_node->AddPositionalRule(0, Sem::HostNickname, true);
   }
 
   CommandNode *bash_node = root->AddFunction("bash", "Enter interactive mode",
