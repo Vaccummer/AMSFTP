@@ -140,7 +140,8 @@ AMTokenType ClassifyNicknameTokenType_(const std::string &nickname_raw,
 
 /** Convert var-zone token to highlight type. */
 AMTokenType ClassifyVarZoneTokenType_(const std::string &zone_raw,
-                                      VarCLISet &var_manager) {
+                                      VarCLISet &var_manager,
+                                      AMHostManager &host_manager) {
   const std::string zone = AMStr::Strip(zone_raw);
   if (zone.empty()) {
     return AMTokenType::NonexistentNickname;
@@ -148,8 +149,13 @@ AMTokenType ClassifyVarZoneTokenType_(const std::string &zone_raw,
   if (zone == varsetkn::kPublic) {
     return AMTokenType::Nickname;
   }
-  return var_manager.HasDomain(zone) ? AMTokenType::Nickname
-                                     : AMTokenType::NonexistentNickname;
+  if (var_manager.HasDomain(zone)) {
+    return AMTokenType::Nickname;
+  }
+  if (host_manager.HostExists(zone)) {
+    return AMTokenType::UnestablishedNickname;
+  }
+  return AMTokenType::NonexistentNickname;
 }
 
 /** Return true when token text is `$var=...` or `${var}=...` shorthand. */
@@ -752,7 +758,8 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
       }
 
       if (*semantic_hint == AMCommandArgSemantic::VarZone) {
-        token.type = ClassifyVarZoneTokenType_(unescaped_text, var_manager_);
+        token.type = ClassifyVarZoneTokenType_(unescaped_text, var_manager_,
+                                               host_manager_);
         if (positional_consumed) {
           ++arg_index;
         }
@@ -1079,7 +1086,9 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
       const size_t zone_end = std::min(zone_begin + zone_token.size(),
                                        token_start + local_end);
       if (zone_end > zone_begin) {
-        apply_range(zone_begin, zone_end, AMTokenType::Nickname);
+        const AMTokenType zone_type = ClassifyVarZoneTokenType_(
+            zone_token, var_manager_, host_manager_);
+        apply_range(zone_begin, zone_end, zone_type);
       }
       cursor = zone_end;
       if (cursor < token_start + local_end) {

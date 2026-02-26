@@ -571,19 +571,28 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
         return ctx;
       }
     }
-    if (ctx.token_prefix == "$") {
+    const bool prefix_has_colon =
+        ctx.token_prefix.find(':') != std::string::npos;
+    const bool postfix_has_colon =
+        ctx.token_postfix.find(':') != std::string::npos;
+
+    // Rule:
+    // - if prefix has ':' OR postfix has no ':' -> complete varname
+    // - else -> complete zone name
+    if (!prefix_has_colon && postfix_has_colon) {
       ctx.targets = {AMCompletionTarget::VarZone};
       return ctx;
     }
+
+    if (ctx.token_prefix == "$" || ctx.token_prefix == "${") {
+      ctx.targets = {AMCompletionTarget::VariableName};
+      return ctx;
+    }
+
     size_t var_end = 0;
-    varsetkn::VarRef var_ref{};
-    if (ParseLeadingVarRef_(ctx.token_prefix, &var_end, &var_ref) &&
+    if (ParseLeadingVarRef_(ctx.token_prefix, &var_end, nullptr) &&
         var_end == ctx.token_prefix.size()) {
-      if (var_ref.explicit_domain && var_ref.varname.empty()) {
-        ctx.targets = {AMCompletionTarget::Disabled};
-      } else {
-        ctx.targets = {AMCompletionTarget::VariableName};
-      }
+      ctx.targets = {AMCompletionTarget::VariableName};
       return ctx;
     }
   }
