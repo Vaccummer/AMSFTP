@@ -484,8 +484,8 @@ bool AMCompleteEngine::FindTokenAtCursor_(
     const size_t begin = tok.quoted ? tok.content_start : tok.start;
     const size_t end = tok.quoted ? tok.content_end : tok.end;
     const bool in_token_body = cursor > begin && cursor < end;
-    const bool at_last_token_end = cursor == end && (i + 1 == tokens.size());
-    if (in_token_body || at_last_token_end) {
+    const bool at_token_end = cursor == end;
+    if (in_token_body || at_token_end) {
       if (out) {
         *out = tok;
       }

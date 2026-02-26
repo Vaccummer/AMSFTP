@@ -102,11 +102,11 @@ void PrintTaskSubmit_(AMPromptManager &prompt,
 /**
  * @brief Print task result information after completion.
  */
-void PrintTaskResult_(AMPromptManager &prompt,
-                      const std::shared_ptr<TaskInfo> &task_info) {
+void PrintTaskResult_(const std::shared_ptr<TaskInfo> &task_info) {
   if (!task_info) {
     return;
   }
+  auto &prompt = AMPromptManager::Instance();
   size_t transferred = 0;
   size_t total = 0;
   int thread_id = 0;
@@ -385,7 +385,6 @@ void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
   if (!task_info) {
     return;
   }
-  PrintTaskResult_(prompt_, task_info);
   if (task_info->hostm) {
     ReturnClientsToIdle_(task_info->hostm);
     task_info->hostm.reset();
@@ -422,9 +421,9 @@ ECM AMTransferManager::transfer(
   if (has_resume && transfer_sets.size() != 1) {
     return {EC::InvalidArg, "Resume transfer requires a single transfer set"};
   }
-  auto flag =
-      interrupt_flag ? interrupt_flag
-                     : (amgif ? amgif : std::make_shared<InterruptFlag>());
+  auto flag = interrupt_flag
+                  ? interrupt_flag
+                  : (amgif ? amgif : std::make_shared<InterruptFlag>());
   auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
   if (rcm.first != EC::Success) {
     return rcm;
@@ -450,9 +449,9 @@ ECM AMTransferManager::transfer(
     return {EC::Success, ""};
   }
 
-  auto flag =
-      interrupt_flag ? interrupt_flag
-                     : (amgif ? amgif : std::make_shared<InterruptFlag>());
+  auto flag = interrupt_flag
+                  ? interrupt_flag
+                  : (amgif ? amgif : std::make_shared<InterruptFlag>());
   const int refresh_interval_ms = GetTransferProgressRefreshMs_();
 
   std::mutex done_mtx;
@@ -461,10 +460,6 @@ ECM AMTransferManager::transfer(
 
   UserResultCallback user_callback = [this, &remaining, &done_cv, &done_mtx](
                                          std::shared_ptr<TaskInfo> task_info) {
-    if (task_info) {
-      PrintTaskResult_(prompt_, task_info);
-    }
-
     UserResultCallback user_cb;
     {
       std::lock_guard<std::mutex> lock(callback_mtx_);
@@ -510,16 +505,14 @@ ECM AMTransferManager::transfer(
 
   bool all_finished = false;
   while (!all_finished) {
-    const bool interrupted = (flag && flag->check()) || (amgif && amgif->check());
+    const bool interrupted =
+        (flag && flag->check()) || (amgif && amgif->check());
     if (interrupted) {
-      if (flag && !flag->check()) {
-        flag->set(true);
-      }
       if (show_progress) {
         progress_bar.EndDisplay();
       }
       (void)worker_.terminate(task_info->id, 1000);
-      return {EC::Terminate, "Transfer interrupted during progress polling"};
+      break;
     }
     if (show_progress) {
       UpdateTransferProgressBar_(&progress_bar, task_info, false);
@@ -537,6 +530,7 @@ ECM AMTransferManager::transfer(
     done_cv.wait(
         lock, [&]() { return remaining.load(std::memory_order_relaxed) <= 0; });
   }
+  PrintTaskResult_(task_info);
   return task_info->GetResult();
 }
 
@@ -560,9 +554,9 @@ ECM AMTransferManager::transfer_async(
   if (has_resume && transfer_sets.size() != 1) {
     return {EC::InvalidArg, "Resume transfer requires a single transfer set"};
   }
-  auto flag =
-      interrupt_flag ? interrupt_flag
-                     : (amgif ? amgif : std::make_shared<InterruptFlag>());
+  auto flag = interrupt_flag
+                  ? interrupt_flag
+                  : (amgif ? amgif : std::make_shared<InterruptFlag>());
   auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
   if (rcm.first != EC::Success) {
     return rcm;
@@ -589,7 +583,20 @@ ECM AMTransferManager::transfer_async(
     return {EC::InvalidArg, "Task List is empty"};
   }
 
-  task_info->result_callback = BindResultCallback({});
+  UserResultCallback user_callback =
+      [this](const std::shared_ptr<TaskInfo> &finished_task_info) {
+        PrintTaskResult_(finished_task_info);
+
+        UserResultCallback user_cb;
+        {
+          std::lock_guard<std::mutex> lock(callback_mtx_);
+          user_cb = user_result_cb_;
+        }
+        if (user_cb) {
+          CallCallbackSafe(user_cb, finished_task_info);
+        }
+      };
+  task_info->result_callback = BindResultCallback(std::move(user_callback));
 
   auto submit_rcm = worker_.submit(task_info);
   if (submit_rcm.first != EC::Success) {
