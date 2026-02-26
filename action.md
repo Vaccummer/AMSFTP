@@ -1,6 +1,7 @@
-@src\manager\host\core.cpp
 
-write a check func in namespace configkn to check whether a given string is valid for certain host attr,  use a enum to decide which attr
+› extra demand
 
-add check func in AMHostManager::PromptAddFields_ and AMHostManager::PromptModifyFields_
-in AMHostManager::PromptAddFields_, if an attr has default value, set default as placeholder
+1. support ${zone:varname} too
+2. the "{}" of var should has style its too(set in [Style.InputHighlight])
+3. $zone:varname  zone use nickname style  : use single style(set in [Style.InputHighlight]) varname use varname style
+4.

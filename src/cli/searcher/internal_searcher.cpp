@@ -13,6 +13,13 @@ namespace {
 std::string RenderVarValue_(const std::string &value) {
   return value.empty() ? "\"\"" : value;
 }
+
+/**
+ * @brief Return true when nickname completion is requested in path context.
+ */
+bool IsPathNicknameContext_(const AMCompletionContext &ctx) {
+  return HasTarget(ctx, AMCompletionTarget::Path);
+}
 } // namespace
 
 /**
@@ -74,15 +81,12 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   if (HasTarget(ctx, AMCompletionTarget::ClientName)) {
-    bool append_at = false;
+    const bool path_nickname_context = IsPathNicknameContext_(ctx);
     std::string client_prefix = prefix;
-    if (HasTarget(ctx, AMCompletionTarget::Path)) {
+    if (path_nickname_context) {
       const size_t at_pos = prefix.find('@');
       if (at_pos != std::string::npos) {
         client_prefix = prefix.substr(0, at_pos);
-        append_at = true;
-      } else if (prefix.empty() || !IsPathLikeText(prefix)) {
-        append_at = true;
       }
     }
     auto names = client_manager_.GetClientNames();
@@ -90,7 +94,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     for (const auto &match : BuildGeneralMatch(keys, client_prefix)) {
       const std::string &name = names[match.index];
       AMCompletionCandidate candidate;
-      candidate.insert_text = append_at ? name + "@" : name;
+      candidate.insert_text = path_nickname_context ? name + "@" : name;
       candidate.display = name;
       candidate.kind = AMCompletionKind::ClientName;
       candidate.score = match.score_bias;
@@ -103,15 +107,12 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   if (HasTarget(ctx, AMCompletionTarget::HostNickname)) {
-    bool append_at = false;
+    const bool path_nickname_context = IsPathNicknameContext_(ctx);
     std::string host_prefix = prefix;
-    if (HasTarget(ctx, AMCompletionTarget::Path)) {
+    if (path_nickname_context) {
       const size_t at_pos = prefix.find('@');
       if (at_pos != std::string::npos) {
         host_prefix = prefix.substr(0, at_pos);
-        append_at = true;
-      } else if (prefix.empty() || !IsPathLikeText(prefix)) {
-        append_at = true;
       }
     }
     auto names = host_manager_.ListNames();
@@ -119,7 +120,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     for (const auto &match : BuildGeneralMatch(keys, host_prefix)) {
       const std::string &name = names[match.index];
       AMCompletionCandidate candidate;
-      candidate.insert_text = append_at ? name + "@" : name;
+      candidate.insert_text = path_nickname_context ? name + "@" : name;
       candidate.display = name;
       candidate.kind = AMCompletionKind::HostNickname;
       candidate.score = match.score_bias;
