@@ -131,18 +131,17 @@ static ssize_t edit_completions_max_width( ic_env_t* env, ssize_t count ) {
 
 static void edit_completion_menu(ic_env_t* env, editor_t* eb, bool more_available) {
   ssize_t count = completions_count(env->completions);
-  assert(count > 0);
   ssize_t twidth = term_get_width(env->term) - 1;
   if (twidth < 20) twidth = 20;
 
-  ssize_t max_columns = env->complete_max_columns;
-  if (max_columns <= 0) max_columns = 1;
-  if (max_columns > count) max_columns = count;
+  long max_items = env->complete_max_items;
+  if (max_items <= 0) max_items = IC_MAX_COMPLETIONS_TO_SHOW;
+  if (max_items > IC_MAX_COMPLETIONS_TO_SHOW) max_items = IC_MAX_COMPLETIONS_TO_SHOW;
+
   const ssize_t default_max_rows = 9;
   ssize_t max_rows = env->complete_max_rows;
   if (max_rows == 0) max_rows = default_max_rows;
   if (max_rows > 0 && max_rows < 3) max_rows = 3;
-  if (max_rows < 0) max_rows = count;
   const char* indicator_on = env->complete_select_sign;
   if (indicator_on == NULL || indicator_on[0] == 0) {
     indicator_on = (tty_is_utf8(env->tty) ? "\xE2\x86\x92" : "*");
@@ -168,33 +167,58 @@ static void edit_completion_menu(ic_env_t* env, editor_t* eb, bool more_availabl
       indicator_width = 1;
     }
   }
-  ssize_t max_item_width = edit_completions_max_width(env, count);
+
   ssize_t columns = 1;
   ssize_t rows = 1;
   ssize_t number_width = 1;
+  ssize_t items_per_page = 1;
+  ssize_t page_count = 1;
+  ssize_t selected = (env->complete_nopreview ? 0 : -1); // select first or none
+  ssize_t page = (selected >= 0 ? selected : 0);
+  code_t c = 0;
 
-  for (ssize_t c = max_columns; c >= 1; c--) {
-    ssize_t r = (count + c - 1) / c;
-    if (r > max_rows) r = max_rows;
+layout:
+  if (count <= 0) {
+    completions_clear(env->completions);
+    edit_refresh(env,eb);
+    c = 0;
+    goto done;
+  }
+  ssize_t max_columns = env->complete_max_columns;
+  if (max_columns <= 0) max_columns = 1;
+  if (max_columns > count) max_columns = count;
+  ssize_t use_max_rows = max_rows;
+  if (use_max_rows < 0) use_max_rows = count;
+  ssize_t max_item_width = edit_completions_max_width(env, count);
+  columns = 1;
+  rows = 1;
+  number_width = 1;
+  for (ssize_t col_count = max_columns; col_count >= 1; col_count--) {
+    ssize_t r = (count + col_count - 1) / col_count;
+    if (r > use_max_rows) r = use_max_rows;
     if (r < 1) r = 1;
-    ssize_t items_per_page = r * c;
-    ssize_t num_width = edit_completion_digits(items_per_page);
+    ssize_t this_items_per_page = r * col_count;
+    ssize_t num_width = edit_completion_digits(this_items_per_page);
     ssize_t prefix_width = num_width + indicator_width + 1;
     ssize_t cw = prefix_width + max_item_width;
-    ssize_t total_width = c * cw + (c - 1) * 2;
-    if (total_width <= twidth || c == 1) {
-      columns = c;
+    ssize_t total_width = col_count * cw + (col_count - 1) * 2;
+    if (total_width <= twidth || col_count == 1) {
+      columns = col_count;
       rows = r;
       number_width = num_width;
       break;
     }
   }
-
-  ssize_t items_per_page = rows * columns;
+  items_per_page = rows * columns;
   if (items_per_page < 1) items_per_page = 1;
-  ssize_t page_count = (count + items_per_page - 1) / items_per_page;
-  ssize_t selected = (env->complete_nopreview ? 0 : -1); // select first or none
-  ssize_t page = (selected >= 0 ? selected / items_per_page : 0);
+  page_count = (count + items_per_page - 1) / items_per_page;
+  if (page_count < 1) page_count = 1;
+  if (selected >= count) selected = count - 1;
+  if (selected >= 0) {
+    page = selected / items_per_page;
+  }
+  if (page < 0) page = 0;
+  if (page >= page_count) page = page_count - 1;
 
 again:
   ssize_t page_start = page * items_per_page;
@@ -271,7 +295,7 @@ again:
   }
 
   // read here; if not a valid key, push it back and return to main event loop
-  code_t c = tty_read(env->tty);
+  c = tty_read(env->tty);
   if (tty_term_resize_event(env->tty)) {
     edit_resize(env, eb);
   }
@@ -297,9 +321,25 @@ again:
     }
   }
   else if (c == KEY_LEFT || c == KEY_RIGHT) {
+    if (c == KEY_RIGHT) {
+      edit_cursor_right(env, eb);
+    }
+    else {
+      edit_cursor_left(env, eb);
+    }
+    count = completions_generate(env, env->completions, sbuf_string(eb->input), eb->pos, max_items, IC_COMPLETION_SOURCE_TAB);
+    more_available = (count >= max_items);
+    if (!env->complete_nosort) {
+      completions_sort(env->completions);
+    }
+    selected = (env->complete_nopreview ? 0 : -1);
+    page = 0;
+    goto layout;
+  }
+  else if (c == KEY_CTRL_LEFT || c == KEY_CTRL_RIGHT) {
     if (page_count > 0) {
       ssize_t sel_offset = (selected >= page_start && selected < page_end ? selected - page_start : -1);
-      if (c == KEY_RIGHT) {
+      if (c == KEY_CTRL_RIGHT) {
         if (page + 1 < page_count) {
           page++;
         }
@@ -406,6 +446,7 @@ again:
       edit_refresh(env,eb);
     }
   }
+done:
   if (indicator_off != indicator_off_buf) {
     mem_free(env->mem, indicator_off);
   }
@@ -442,9 +483,11 @@ static void edit_generate_completions(ic_env_t* env, editor_t* eb, bool autotab)
   }
   else {
     //term_beep(env->term); 
-    if (env->complete_auto_fill && !more_available) { 
-      edit_complete_longest_prefix(env,eb);
-    }    
+    if (!autotab) {
+      if (edit_complete_longest_prefix(env,eb)) {
+        return;
+      }
+    }
     if (!env->complete_nosort) {
       completions_sort(env->completions);
     }
