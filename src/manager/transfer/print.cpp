@@ -87,7 +87,7 @@ struct TaskRowData {
  */
 std::string FormatTableSize_(size_t bytes) {
   static const std::vector<std::string> units = {"B", "KB", "MB", "GB", "TB"};
-  constexpr double kUnitSwitch = 1000.0;
+  constexpr double kUnitSwitch = 1024.0;
   constexpr size_t kMaxUnit = 4;
   constexpr size_t kWidth = 7;
   double value = static_cast<double>(bytes);
@@ -127,7 +127,7 @@ std::string FormatSpeedBps_(double bps) {
     return AMStr::PadLeftAscii("-", kWidth);
   }
   static const std::vector<std::string> units = {"B", "KB", "MB", "GB", "TB"};
-  constexpr double kUnitSwitch = 1000.0;
+  constexpr double kUnitSwitch = 1024.0;
   constexpr size_t kMaxUnit = 4;
   double value = std::max<double>(0.0, bps);
   size_t idx = 0;
