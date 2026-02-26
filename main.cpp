@@ -85,8 +85,7 @@ int main(int argc, char **argv) {
     }
     time_start = std::chrono::steady_clock::now();
     auto &signal_monitor = AMCliSignalMonitor::Instance();
-    signal_monitor.InstallHandlers();
-    signal_monitor.Start();
+    signal_monitor.Init();
 
     auto &config_manager = AMConfigManager::Instance();
     config_manager.Init();

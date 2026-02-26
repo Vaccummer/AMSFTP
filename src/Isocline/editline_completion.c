@@ -312,11 +312,37 @@ again:
 
   // process commands
   if (c == KEY_TAB || c == KEY_SHIFT_TAB) {
-    if (edit_complete_longest_prefix(env, eb)) {
-      c = KEY_EVENT_COMPLETE;
+    if (count <= 0) {
+      completions_clear(env->completions);
+      edit_refresh(env,eb);
+      c = 0;
     }
-    else {
-      term_beep(env->term);
+    else if (count == 1) {
+      c = 0;
+      edit_complete(env, eb, 0);
+    }
+    else if (edit_complete_longest_prefix(env, eb)) {
+      c = 0;
+    }
+    else if (page_count > 1) {
+      ssize_t sel_offset =
+          (selected >= page_start && selected < page_end ? selected - page_start
+                                                          : -1);
+      if (c == KEY_SHIFT_TAB) {
+        page = (page > 0 ? page - 1 : page_count - 1);
+      } else {
+        page = (page + 1 < page_count ? page + 1 : 0);
+      }
+      if (sel_offset >= 0) {
+        ssize_t new_start = page * items_per_page;
+        ssize_t new_end = new_start + items_per_page;
+        if (new_end > count) new_end = count;
+        if (sel_offset >= new_end - new_start)
+          sel_offset = new_end - new_start - 1;
+        selected = (sel_offset >= 0 ? new_start + sel_offset : -1);
+      }
+      goto again;
+    } else {
       goto again;
     }
   }
@@ -464,21 +490,12 @@ static void edit_generate_completions(ic_env_t* env, editor_t* eb, bool autotab)
   ssize_t count = completions_generate(env, env->completions, sbuf_string(eb->input), eb->pos, max_items, IC_COMPLETION_SOURCE_TAB);
   bool more_available = (count >= max_items);
   if (count <= 0) {
-    // no completions
-    if (!autotab) { term_beep(env->term); }
+    // no completions: keep input unchanged
   }
   else if (count == 1) {
-    if (autotab) {
-      if (!env->complete_nosort) {
-        completions_sort(env->completions);
-      }
-      edit_completion_menu( env, eb, more_available);
-    }
-    else {
-      // complete if only one match (manual tab always fills)
-      if (edit_complete(env,eb,0 /*idx*/) && env->complete_autotab) {
-        tty_code_pushback(env->tty,KEY_EVENT_AUTOTAB);
-      }
+    // complete immediately for a single match
+    if (edit_complete(env,eb,0 /*idx*/) && env->complete_autotab) {
+      tty_code_pushback(env->tty,KEY_EVENT_AUTOTAB);
     }
   }
   else {
