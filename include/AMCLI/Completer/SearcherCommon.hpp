@@ -216,6 +216,9 @@ inline int ToClientTimeoutMs(size_t timeout_ms, int fallback_ms) {
 inline std::vector<GeneralMatchEntry>
 BuildGeneralMatch(const std::vector<std::string> &keys,
                   const std::string &prefix) {
+  // Keep contains-match logic behind a single switch so it can be restored
+  // quickly without touching call sites.
+  constexpr bool kEnableContainsFallback = false;
   std::vector<GeneralMatchEntry> out;
   out.reserve(keys.size());
   if (prefix.empty()) {
@@ -244,17 +247,19 @@ BuildGeneralMatch(const std::vector<std::string> &keys,
     return out;
   }
 
-  // Case-sensitive: contains only when starts-with is empty.
-  out = collect_if(
-      [&](const std::string &key) {
-        return key.find(prefix) != std::string::npos;
-      },
-      10);
-  if (!out.empty()) {
-    return out;
+  if constexpr (kEnableContainsFallback) {
+    // Case-sensitive: contains only when starts-with is empty.
+    out = collect_if(
+        [&](const std::string &key) {
+          return key.find(prefix) != std::string::npos;
+        },
+        10);
+    if (!out.empty()) {
+      return out;
+    }
   }
 
-  // No-case matching is enabled only when all case-sensitive matching is empty.
+  // No-case matching is enabled only when case-sensitive starts-with is empty.
   const std::string lower_prefix = AMStr::lowercase(prefix);
   out = collect_if(
       [&](const std::string &key) {
@@ -265,12 +270,15 @@ BuildGeneralMatch(const std::vector<std::string> &keys,
     return out;
   }
 
-  // No-case contains only when no-case starts-with is empty.
-  out = collect_if(
-      [&](const std::string &key) {
-        return AMStr::lowercase(key).find(lower_prefix) != std::string::npos;
-      },
-      30);
+  if constexpr (kEnableContainsFallback) {
+    // No-case contains only when no-case starts-with is empty.
+    out = collect_if(
+        [&](const std::string &key) {
+          return AMStr::lowercase(key).find(lower_prefix) !=
+                 std::string::npos;
+        },
+        30);
+  }
   return out;
 }
 
