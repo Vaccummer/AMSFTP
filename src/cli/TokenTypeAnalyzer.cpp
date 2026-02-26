@@ -28,17 +28,6 @@ void EnsureTokenCacheClearHookRegistered_() {
   });
 }
 
-/** Return true when the character is allowed in variable names. */
-inline bool IsVarNameChar(char c) {
-  const char token[1] = {c};
-  return varsetkn::IsValidVarname(std::string_view(token, 1));
-}
-
-/** Validate a full variable name string using the allowed character set. */
-bool IsValidVarName(const std::string &name) {
-  return varsetkn::IsValidVarname(name);
-}
-
 /** Return true when the nickname resolves to local-client scope. */
 inline bool IsLocalNickname_(const std::string &nickname) {
   const std::string lowered = AMStr::lowercase(AMStr::Strip(nickname));
@@ -162,16 +151,8 @@ bool IsVarShortcutDefineToken_(const std::string &raw_text) {
   if (eq == std::string::npos || eq <= 1) {
     return false;
   }
-  if (text[1] == '{') {
-    const size_t close = text.find('}', 2);
-    if (close == std::string::npos || close + 1 != eq) {
-      return false;
-    }
-    const std::string name = AMStr::Strip(text.substr(2, close - 2));
-    return !name.empty() && varsetkn::IsValidVarname(name);
-  }
-  const std::string name = text.substr(1, eq - 1);
-  return !name.empty() && varsetkn::IsValidVarname(name);
+  const std::string lhs = text.substr(0, eq);
+  return varsetkn::ParseVarToken(lhs);
 }
 
 /** Convert concrete filesystem type to AMTokenType path variants. */
@@ -254,7 +235,7 @@ const std::string StyleKeyForType(AMTokenType type) {
   case AMTokenType::VarName:
     return "public_varname";
   case AMTokenType::VarNameMissing:
-    return "nonexist_varname";
+    return "nonexistent_varname";
   case AMTokenType::VarValue:
     return "varvalue";
   case AMTokenType::Nickname:
@@ -273,6 +254,12 @@ const std::string StyleKeyForType(AMTokenType type) {
     return "atsign";
   case AMTokenType::DollarSign:
     return "dollarsign";
+  case AMTokenType::LeftBraceSign:
+    return "leftbrace";
+  case AMTokenType::RightBraceSign:
+    return "rightbrace";
+  case AMTokenType::ColonSign:
+    return "colonsign";
   case AMTokenType::EqualSign:
     return "equalsign";
   case AMTokenType::EscapeSign:
@@ -751,10 +738,18 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
       }
     }
 
-    std::string name;
+    varsetkn::VarRef ref{};
     if (token.type == AMTokenType::Common &&
-        ParseVarTokenText(raw_text, &name)) {
-      token.type = VarNameTypeFor(name);
+        varsetkn::ParseVarToken(raw_text, &ref) && ref.valid &&
+        !ref.varname.empty()) {
+      if (ref.explicit_domain) {
+        const VarInfo scoped = var_manager_.GetVar(ref.domain, ref.varname);
+        token.type = scoped.IsValid().first == EC::Success
+                         ? AMTokenType::VarName
+                         : AMTokenType::VarNameMissing;
+      } else {
+        token.type = VarNameTypeFor(ref.varname);
+      }
       if (positional_consumed) {
         ++arg_index;
       }
@@ -881,36 +876,15 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
 /** Parse a variable token at a given position within a limit. */
 bool AMTokenTypeAnalyzer::ParseVarTokenAt(const std::string &input, size_t pos,
                                           size_t limit, size_t *out_end) const {
-  if (pos >= input.size() || input[pos] != '$') {
-    return false;
-  }
-  if (pos + 1 >= input.size()) {
-    return false;
-  }
-  if (input[pos + 1] == '{') {
-    size_t close = input.find('}', pos + 2);
-    if (close == std::string::npos || close >= limit) {
-      return false;
-    }
-    std::string inner = AMStr::Strip(input.substr(pos + 2, close - pos - 2));
-    if (!IsValidVarName(inner)) {
-      return false;
-    }
-    if (out_end) {
-      *out_end = close + 1;
-    }
-    return true;
-  }
-
-  size_t cur = pos + 1;
-  while (cur < input.size() && IsVarNameChar(input[cur])) {
-    ++cur;
-  }
-  if (cur == pos + 1 || cur > limit) {
+  size_t parsed_end = 0;
+  varsetkn::VarRef ref{};
+  if (!varsetkn::ParseVarRefAt(input, pos, limit, true, true, &parsed_end,
+                               &ref) ||
+      !ref.valid) {
     return false;
   }
   if (out_end) {
-    *out_end = cur;
+    *out_end = parsed_end;
   }
   return true;
 }
@@ -918,31 +892,13 @@ bool AMTokenTypeAnalyzer::ParseVarTokenAt(const std::string &input, size_t pos,
 /** Validate whether a complete token is a variable reference and extract. */
 bool AMTokenTypeAnalyzer::ParseVarTokenText(const std::string &token,
                                             std::string *out_name) const {
-  if (token.empty() || token[0] != '$') {
-    return false;
-  }
-  if (token.size() < 2) {
-    return false;
-  }
-  if (token[1] == '{') {
-    if (token.back() != '}') {
-      return false;
-    }
-    std::string inner = AMStr::Strip(token.substr(2, token.size() - 3));
-    if (!IsValidVarName(inner)) {
-      return false;
-    }
-    if (out_name) {
-      *out_name = inner;
-    }
-    return true;
-  }
-  std::string inner = token.substr(1);
-  if (!IsValidVarName(inner)) {
+  varsetkn::VarRef ref{};
+  if (!varsetkn::ParseVarToken(token, &ref) || !ref.valid ||
+      ref.varname.empty()) {
     return false;
   }
   if (out_name) {
-    *out_name = inner;
+    *out_name = ref.varname;
   }
   return true;
 }
@@ -965,6 +921,9 @@ int AMTokenTypeAnalyzer::PriorityForType(AMTokenType type) const {
   case AMTokenType::VarName:
   case AMTokenType::VarNameMissing:
   case AMTokenType::DollarSign:
+  case AMTokenType::LeftBraceSign:
+  case AMTokenType::RightBraceSign:
+  case AMTokenType::ColonSign:
     return 80;
   case AMTokenType::AtSign:
   case AMTokenType::Nickname:
@@ -1070,13 +1029,67 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     if (token_end > input.size()) {
       token_end = input.size();
     }
-    apply_range(token_start, token_start + 1, AMTokenType::DollarSign);
-    std::string name;
-    std::string token = input.substr(token_start, token_end - token_start);
-    if (!ParseVarTokenText(token, &name)) {
+
+    const std::string token = input.substr(token_start, token_end - token_start);
+    size_t parsed_end = 0;
+    varsetkn::VarRef ref{};
+    if (!varsetkn::ParseVarRefAt(token, 0, token.size(), true, true,
+                                 &parsed_end, &ref) ||
+        !ref.valid || parsed_end == 0) {
       return;
     }
-    apply_range(token_start + 1, token_end, VarNameTypeFor(name));
+    const size_t local_end = std::min(parsed_end, token.size());
+    const bool braced = ref.braced;
+    const bool explicit_domain = ref.explicit_domain;
+    const std::string zone_token = ref.zone_token;
+    const std::string varname = ref.varname;
+
+    apply_range(token_start, token_start + 1, AMTokenType::DollarSign);
+    size_t cursor = token_start + 1;
+
+    if (braced && cursor < token_start + local_end) {
+      apply_range(cursor, cursor + 1, AMTokenType::LeftBraceSign);
+      ++cursor;
+    }
+
+    if (explicit_domain) {
+      const size_t zone_begin = cursor;
+      const size_t zone_end = std::min(zone_begin + zone_token.size(),
+                                       token_start + local_end);
+      if (zone_end > zone_begin) {
+        apply_range(zone_begin, zone_end, AMTokenType::Nickname);
+      }
+      cursor = zone_end;
+      if (cursor < token_start + local_end) {
+        apply_range(cursor, cursor + 1, AMTokenType::ColonSign);
+        ++cursor;
+      }
+    }
+
+    const AMTokenType var_type = [&]() {
+      if (varname.empty()) {
+        return AMTokenType::VarNameMissing;
+      }
+      if (explicit_domain) {
+        const VarInfo scoped = var_manager_.GetVar(ref.domain, varname);
+        return scoped.IsValid().first == EC::Success ? AMTokenType::VarName
+                                                     : AMTokenType::VarNameMissing;
+      }
+      return VarNameTypeFor(varname);
+    }();
+    const size_t var_end =
+        std::min(cursor + varname.size(), token_start + local_end);
+    if (var_end > cursor) {
+      apply_range(cursor, var_end, var_type);
+      cursor = var_end;
+    }
+
+    if (braced && ref.has_closing_brace && token_start + local_end > token_start) {
+      const size_t close_pos = token_start + local_end - 1;
+      if (close_pos >= token_start + 1) {
+        apply_range(close_pos, close_pos + 1, AMTokenType::RightBraceSign);
+      }
+    }
   };
 
   auto highlight_var_references = [&]() {
@@ -1328,7 +1341,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
   }
 
   constexpr size_t kTokenTypeCount =
-      static_cast<size_t>(AMTokenType::BuiltinArg) + 1;
+      static_cast<size_t>(AMTokenType::ColonSign) + 1;
   std::array<std::string, kTokenTypeCount> style_tags;
   for (size_t i = 0; i < kTokenTypeCount; ++i) {
     style_tags[i] =

@@ -255,7 +255,10 @@ enum class AMTokenType {
   IllegalCommand = 21,
   UnestablishedNickname = 22,
   NonexistentNickname = 23,
-  BuiltinArg = 24
+  BuiltinArg = 24,
+  LeftBraceSign = 25,
+  RightBraceSign = 26,
+  ColonSign = 27
 
 };
 

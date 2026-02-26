@@ -57,8 +57,10 @@ function  fcommit { param([string]$message)"...}
 
 **User instructions will be placed in a file named **`action.md`. The file path remains unchanged, but the user will modify its content before each execution. If the user simply requests "execute my instruction," you should read and carry out the task specified in `action.md`. If the user provides explicit, concrete instructions instead, follow those instructions directly.
 
-Don't Build Without My Specific Command!
+## Don't Build Without My Specific Command!
 
-Don't Build Without My Specific Command!
+## Don't Build Without My Specific Command!
 
-Don't Build Without My Specific Command!
+## Ask user if you have any questions about the demand before conduct!
+
+## Ask user if you have any questions about the demand before conduct!

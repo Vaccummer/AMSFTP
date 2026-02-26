@@ -20,6 +20,45 @@ std::string RenderVarValue_(const std::string &value) {
 bool IsPathNicknameContext_(const AMCompletionContext &ctx) {
   return HasTarget(ctx, AMCompletionTarget::Path);
 }
+
+/**
+ * @brief Parse variable completion prefix from token prefix text.
+ */
+bool ParseVarCompletionPrefix_(const std::string &prefix,
+                               varsetkn::VarRef *out_ref) {
+  if (!out_ref || prefix.empty() || prefix.front() != '$') {
+    return false;
+  }
+  if (prefix == "$") {
+    out_ref->valid = true;
+    out_ref->braced = false;
+    out_ref->has_closing_brace = false;
+    out_ref->explicit_domain = false;
+    out_ref->domain.clear();
+    out_ref->zone_token.clear();
+    out_ref->varname.clear();
+    return true;
+  }
+  if (prefix == "${") {
+    out_ref->valid = true;
+    out_ref->braced = true;
+    out_ref->has_closing_brace = false;
+    out_ref->explicit_domain = false;
+    out_ref->domain.clear();
+    out_ref->zone_token.clear();
+    out_ref->varname.clear();
+    return true;
+  }
+  size_t end = 0;
+  varsetkn::VarRef ref{};
+  if (!varsetkn::ParseVarRefAt(prefix, 0, prefix.size(), true, true, &end,
+                               &ref) ||
+      !ref.valid || end != prefix.size()) {
+    return false;
+  }
+  *out_ref = std::move(ref);
+  return true;
+}
 } // namespace
 
 /**
@@ -31,41 +70,50 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   const std::string prefix = ctx.token_prefix;
 
   if (HasTarget(ctx, AMCompletionTarget::VariableName)) {
-    const std::string current_domain = var_manager_.CurrentDomain();
-    std::unordered_map<std::string, VarInfo> by_name;
-    auto private_vars = var_manager_.ListByDomain(current_domain);
-    for (const auto &item : private_vars) {
-      by_name[item.varname] = item;
-    }
-    auto public_vars = var_manager_.ListByDomain(varsetkn::kPublic);
-    for (const auto &item : public_vars) {
-      if (by_name.find(item.varname) == by_name.end()) {
-        by_name[item.varname] = item;
-      }
+    varsetkn::VarRef prefix_ref{};
+    if (!ParseVarCompletionPrefix_(prefix, &prefix_ref)) {
+      return result;
     }
 
     std::vector<VarInfo> items;
-    std::vector<std::string> keys;
-    items.reserve(by_name.size());
-    keys.reserve(by_name.size());
-    for (const auto &entry : by_name) {
-      items.push_back(entry.second);
-      keys.push_back("$" + entry.second.varname);
-    }
-    std::sort(items.begin(), items.end(),
-              [](const VarInfo &lhs, const VarInfo &rhs) {
-                return lhs.varname < rhs.varname;
-              });
-    keys.clear();
-    keys.reserve(items.size());
-    for (const auto &item : items) {
-      keys.push_back("$" + item.varname);
+    if (prefix_ref.explicit_domain) {
+      items = var_manager_.ListByDomain(prefix_ref.domain);
+    } else {
+      const std::string current_domain = var_manager_.CurrentDomain();
+      std::unordered_map<std::string, VarInfo> by_name;
+      auto private_vars = var_manager_.ListByDomain(current_domain);
+      for (const auto &item : private_vars) {
+        by_name[item.varname] = item;
+      }
+      auto public_vars = var_manager_.ListByDomain(varsetkn::kPublic);
+      for (const auto &item : public_vars) {
+        if (by_name.find(item.varname) == by_name.end()) {
+          by_name[item.varname] = item;
+        }
+      }
+      items.reserve(by_name.size());
+      for (const auto &entry : by_name) {
+        items.push_back(entry.second);
+      }
+      std::sort(items.begin(), items.end(),
+                [](const VarInfo &lhs, const VarInfo &rhs) {
+                  return lhs.varname < rhs.varname;
+                });
     }
 
-    for (const auto &match : BuildGeneralMatch(keys, prefix)) {
+    std::vector<std::string> keys;
+    keys.reserve(items.size());
+    for (const auto &item : items) {
+      keys.push_back(item.varname);
+    }
+
+    const std::string name_prefix = prefix_ref.varname;
+    for (const auto &match : BuildGeneralMatch(keys, name_prefix)) {
       const auto &item = items[match.index];
+      varsetkn::VarRef candidate_ref = prefix_ref;
+      candidate_ref.varname = item.varname;
       AMCompletionCandidate candidate;
-      candidate.insert_text = "$" + item.varname;
+      candidate.insert_text = varsetkn::BuildVarToken(candidate_ref, true);
       candidate.display =
           config_manager_.Format(candidate.insert_text, "public_varname");
       candidate.help =
