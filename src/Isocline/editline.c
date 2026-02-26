@@ -45,6 +45,8 @@ typedef struct editor_s {
   ssize_t history_idx;     // current index in the history
   editstate_t *undo;       // undo buffer
   editstate_t *redo;       // redo buffer
+  char *highlight_input_snapshot; // last input used for semantic highlight
+  ssize_t highlight_input_snapshot_len;
   const char *prompt_text; // text of the prompt before the prompt marker
   alloc_t *mem;            // allocator
   // caches
@@ -282,15 +284,95 @@ static void edit_refresh_rows(ic_env_t *env, editor_t *eb, stringbuf_t *input,
                     &edit_refresh_rows_iter, &info, NULL);
 }
 
+static bool edit_is_highlight_input_changed(editor_t *eb) {
+  const char *input = NULL;
+  ssize_t len = 0;
+  if (eb == NULL || eb->input == NULL) {
+    return false;
+  }
+  input = sbuf_string(eb->input);
+  len = sbuf_len(eb->input);
+  if (input == NULL) {
+    input = "";
+    len = 0;
+  }
+  if (eb->highlight_input_snapshot == NULL) {
+    return true;
+  }
+  if (len != eb->highlight_input_snapshot_len) {
+    return true;
+  }
+  if (len <= 0) {
+    return false;
+  }
+  return (memcmp(eb->highlight_input_snapshot, input, to_size_t(len)) != 0);
+}
+
+static void edit_update_highlight_input_snapshot(editor_t *eb) {
+  const char *input = NULL;
+  ssize_t len = 0;
+  char *copy = NULL;
+  if (eb == NULL || eb->mem == NULL || eb->input == NULL) {
+    return;
+  }
+  input = sbuf_string(eb->input);
+  len = sbuf_len(eb->input);
+  if (input == NULL) {
+    input = "";
+    len = 0;
+  }
+  copy = mem_strdup(eb->mem, input);
+  if (copy == NULL) {
+    return;
+  }
+  mem_free(eb->mem, eb->highlight_input_snapshot);
+  eb->highlight_input_snapshot = copy;
+  eb->highlight_input_snapshot_len = len;
+}
+
 static bool edit_should_delay_highlight(ic_env_t *env, editor_t *eb,
                                         bool force_highlight) {
+  const char *input = NULL;
+  bool maybe_expensive = false;
   if (env == NULL || eb == NULL || force_highlight) {
+    return false;
+  }
+  if (eb->input == NULL || sbuf_len(eb->input) <= 0) {
     return false;
   }
   if (eb->attrs == NULL || env->highlight_delay <= 0) {
     return false;
   }
   if (env->no_highlight || env->highlighter == NULL) {
+    return false;
+  }
+  if (!edit_is_highlight_input_changed(eb)) {
+    return false;
+  }
+  input = sbuf_string(eb->input);
+  if (input == NULL) {
+    return false;
+  }
+  // Keep command/module typing responsive and stable (no delayed repaint flicker)
+  // and reserve delay for likely expensive path/variable-aware highlighting.
+  for (const char *p = input; *p != 0; ++p) {
+    switch (*p) {
+    case '/':
+    case '\\':
+    case '~':
+    case '@':
+    case '$':
+    case ':':
+      maybe_expensive = true;
+      break;
+    default:
+      break;
+    }
+    if (maybe_expensive) {
+      break;
+    }
+  }
+  if (!maybe_expensive) {
     return false;
   }
   return true;
@@ -314,6 +396,9 @@ static void edit_refresh_ex(ic_env_t *env, editor_t *eb,
   if (eb->attrs != NULL) {
     highlight(env->mem, env->bbcode, sbuf_string(eb->input), eb->attrs,
               highlighter, env->highlighter_arg);
+    if (highlighter != NULL) {
+      edit_update_highlight_input_snapshot(eb);
+    }
   }
 
   // highlight matching braces
@@ -1072,12 +1157,16 @@ static code_t edit_read_key(ic_env_t *env, editor_t *eb) {
         }
         // render delayed hint
         if (wait_render && sbuf_len(eb->hint) > 0) {
-          edit_refresh(env, eb);
+          // Render hint with full highlight to avoid a second delayed repaint.
+          edit_refresh_ex(env, eb, true);
         }
         if (eb->highlight_pending && env->highlight_delay > 0) {
           if (!tty_read_timeout(env->tty, env->highlight_delay, &c)) {
             eb->highlight_pending = false;
             edit_refresh_ex(env, eb, true);
+            if (wait_render) {
+              return tty_read(env->tty);
+            }
             continue;
           }
           eb->highlight_pending = false;
@@ -1378,6 +1467,7 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
   sbuf_free(eb.extra);
   sbuf_free(eb.hint);
   sbuf_free(eb.hint_help);
+  mem_free(eb.mem, eb.highlight_input_snapshot);
   env->edit_active = false;
   env->refresh_request = false;
 

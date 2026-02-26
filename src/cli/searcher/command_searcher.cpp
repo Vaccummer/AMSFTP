@@ -3,10 +3,9 @@
 #include <algorithm>
 
 using namespace AMSearcherDetail;
-
 namespace {
 using CommandNode = ::CommandNode;
-}
+} // namespace
 
 /**
  * @brief Collect command-related candidates.
@@ -253,4 +252,3 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
     *out_consumed = consumed;
   }
 }
-

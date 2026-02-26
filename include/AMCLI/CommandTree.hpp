@@ -335,5 +335,3 @@ private:
    */
   CLI::App *root_app_ = nullptr;
 };
-
-using CommandTree = CommandNode;
