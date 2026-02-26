@@ -17,8 +17,61 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
+#ifdef _WIN32
+/**
+ * @brief Temporarily ensure STDIN has ENABLE_PROCESSED_INPUT on Windows.
+ *
+ * This guarantees Ctrl+C is delivered as CTRL_C_EVENT while blocking sync
+ * transfer is running, then restores the original console mode on scope exit.
+ */
+class ScopedProcessedInputMode_ {
+public:
+  /**
+   * @brief Capture current mode and enable processed input when possible.
+   */
+  ScopedProcessedInputMode_() {
+    input_handle_ = GetStdHandle(STD_INPUT_HANDLE);
+    if (input_handle_ == INVALID_HANDLE_VALUE || input_handle_ == nullptr) {
+      return;
+    }
+    if (!GetConsoleMode(input_handle_, &original_mode_)) {
+      return;
+    }
+    const DWORD desired_mode = original_mode_ | ENABLE_PROCESSED_INPUT;
+    if (desired_mode == original_mode_) {
+      return;
+    }
+    if (!SetConsoleMode(input_handle_, desired_mode)) {
+      return;
+    }
+    applied_ = true;
+  }
+
+  /**
+   * @brief Restore original console mode when this guard changed it.
+   */
+  ~ScopedProcessedInputMode_() {
+    if (!applied_) {
+      return;
+    }
+    if (input_handle_ == INVALID_HANDLE_VALUE || input_handle_ == nullptr) {
+      return;
+    }
+    (void)SetConsoleMode(input_handle_, original_mode_);
+  }
+
+private:
+  HANDLE input_handle_ = INVALID_HANDLE_VALUE;
+  DWORD original_mode_ = 0;
+  bool applied_ = false;
+};
+#endif
+
 /**
  * @brief Parse a transfer path into nickname and path using client manager.
  *
@@ -436,6 +489,10 @@ ECM AMTransferManager::transfer(
 ECM AMTransferManager::transfer(
     const std::shared_ptr<TaskInfo> &task_info,
     const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+#ifdef _WIN32
+  ScopedProcessedInputMode_ processed_input_guard;
+  (void)processed_input_guard;
+#endif
   if (!task_info) {
     return {EC::Success, ""};
   }
