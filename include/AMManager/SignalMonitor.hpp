@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <csignal>
+#include <iostream>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -23,7 +24,6 @@
  * @brief Global signal code observed by the CLI signal monitor.
  */
 inline std::atomic<int> GlobalSignalInt = 0;
-inline std::shared_ptr<InterruptFlag> amgif = std::make_shared<InterruptFlag>();
 
 /**
  * @brief Signal monitor that safely transfers signal events to a worker thread.
@@ -79,7 +79,6 @@ public:
    * @brief Start the background worker thread.
    */
   void Start() {
-    EnsureGlobalHook_();
     if (running_.exchange(true, std::memory_order_acq_rel)) {
       return;
     }
@@ -88,6 +87,7 @@ public:
 
   ECM Init() override {
     EnsureGlobalHook_();
+    InstallHandlers();
     Start();
     return Ok();
   }
@@ -245,6 +245,8 @@ private:
       int signum = GlobalSignalInt.exchange(0);
       if (signum != 0) {
         last_handled_signal_.store(signum, std::memory_order_relaxed);
+        std::cout << "Signal " << last_handled_signal_
+                  << " received, processing hooks..." << std::endl;
         std::vector<SignalHook> hooks;
         {
           std::lock_guard<std::mutex> lock(hooks_mtx_);
@@ -266,6 +268,9 @@ private:
           }
           if (hook.interrupt_flag) {
             hook.interrupt_flag->set(true);
+            std::cout << "Signal " << signum
+                      << " received, interrupt flag set by hook callback."
+                      << std::endl;
           }
           if (hook.consume) {
             break;

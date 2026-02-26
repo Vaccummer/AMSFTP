@@ -3,7 +3,6 @@
 #include "AMBase/Path.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
-#include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Transfer.hpp"
 #include <algorithm>
 #include <atomic>

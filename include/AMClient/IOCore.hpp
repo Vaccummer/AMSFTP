@@ -98,8 +98,8 @@ public:
         sftp_handle = nb_res.value;
       } else {
         nb_res = client->nb_call(task_interrupt_flag, -1, am_ms(), [&]() {
-          return libssh2_sftp_open(client->sftp, path.c_str(),
-                                   LIBSSH2_FXF_READ, 0400);
+          return libssh2_sftp_open(client->sftp, path.c_str(), LIBSSH2_FXF_READ,
+                                   0400);
         });
         sftp_handle = nb_res.value;
       }
@@ -241,8 +241,8 @@ public:
           }
           if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
             WaitResult wr = client->wait_for_socket(
-                SocketWaitType::Read, std::function<bool()>(), am_ms(), 200,
-                20, pd ? pd->GetInterruptFlag() : nullptr);
+                SocketWaitType::Read, std::function<bool()>(), am_ms(), 200, 20,
+                pd ? pd->GetInterruptFlag() : nullptr);
             if (wr == WaitResult::Error) {
               return {
                   -1,

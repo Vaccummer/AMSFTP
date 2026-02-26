@@ -6,7 +6,6 @@
 #include "AMManager/FileSystem.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Prompt.hpp"
-#include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Transfer.hpp"
 #include "AMManager/Var.hpp"
 #include "CLI/CLI.hpp"

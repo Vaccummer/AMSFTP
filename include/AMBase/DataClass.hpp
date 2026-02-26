@@ -258,6 +258,7 @@ public:
     return is_killed.load(std::memory_order_relaxed);
   }
   inline bool check() { return is_interrupted.load(std::memory_order_relaxed); }
+
   inline void set(bool value) {
     is_interrupted.store(value, std::memory_order_relaxed);
     if (value) {
@@ -318,6 +319,7 @@ public:
   }
 };
 
+inline std::shared_ptr<InterruptFlag> amgif = std::make_shared<InterruptFlag>();
 // Non-blocking call result
 
 class PathInfo {
@@ -881,9 +883,9 @@ struct WkProgressData {
   /**
    * @brief Translate interrupt to pause/terminate error according to state.
    */
-  ECM InterruptECM(const std::string &pause_msg = "Task paused by user",
-                   const std::string &terminate_msg =
-                       "Task terminated by user") const {
+  ECM InterruptECM(
+      const std::string &pause_msg = "Task paused by user",
+      const std::string &terminate_msg = "Task terminated by user") const {
     if (is_pause_only()) {
       return {EC::TransferPause, pause_msg};
     }
