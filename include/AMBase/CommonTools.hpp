@@ -1419,8 +1419,8 @@ private:
     const char *suffixes[] = {"B", "KB", "MB", "GB", "TB"};
     double size = static_cast<double>(std::max<int64_t>(0, bytes));
     int idx = 0;
-    while (size >= 1000.0 && idx < 4) {
-      size /= 1000.0;
+    while (size >= 1024.0 && idx < 4) {
+      size /= 1024.0;
       ++idx;
     }
     std::ostringstream oss;
@@ -1437,8 +1437,8 @@ private:
     const char *suffixes[] = {"B", "KB", "MB", "GB", "TB"};
     double size = static_cast<double>(std::max<int64_t>(0, bytes));
     int idx = 0;
-    while (size >= 1000.0 && idx < 4) {
-      size /= 1000.0;
+    while (size >= 1024.0 && idx < 4) {
+      size /= 1024.0;
       ++idx;
     }
     std::ostringstream oss;

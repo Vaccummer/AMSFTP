@@ -1020,7 +1020,7 @@ struct CdArgs {
  * @brief CLI argument container for connect.
  */
 struct ConnectArgs {
-  std::string nickname;
+  std::vector<std::string> nicknames;
   bool force = false;
   /**
    * @brief Execute connect.
@@ -1029,22 +1029,48 @@ struct ConnectArgs {
     auto &filesystem = *managers.filesystem;
     const bool is_interactive = ctx.enforce_interactive ||
                                 AMIsInteractive.load(std::memory_order_relaxed);
-    ECM rcm = filesystem.connect(nickname, force, amgif, false);
-    if (rcm.first != EC::Success) {
+    const std::vector<std::string> targets = UniqueTargetsKeepOrder(nicknames);
+    if (targets.empty()) {
+      ECM rcm = {EC::InvalidArg, "connect requires at least one nickname"};
       PrintRunError_(rcm);
       return rcm;
     }
-    if (!is_interactive) {
-      rcm = filesystem.change_client("local", amgif);
+
+    ECM last = {EC::Success, ""};
+    bool any_success = false;
+    for (const auto &nickname : targets) {
+      if (nickname.empty()) {
+        ECM rcm = {EC::InvalidArg, "Empty nickname"};
+        PrintRunError_(rcm);
+        last = rcm;
+        continue;
+      }
+      ECM rcm = filesystem.connect(nickname, force, amgif, false);
+      if (rcm.first != EC::Success) {
+        PrintRunError_(rcm);
+        last = rcm;
+        continue;
+      }
+      any_success = true;
+    }
+
+    if (!is_interactive && any_success) {
+      ECM rcm = filesystem.change_client("local", amgif);
+      if (rcm.first != EC::Success) {
+        PrintRunError_(rcm);
+        if (last.first == EC::Success) {
+          last = rcm;
+        }
+      }
       SetEnterInteractive_(ctx, rcm.first == EC::Success);
     }
-    return rcm;
+    return last;
   }
   /**
    * @brief Reset connect arguments to defaults.
    */
   void reset() {
-    nickname.clear();
+    nicknames.clear();
     force = false;
   }
 };
