@@ -7,6 +7,12 @@
 using namespace AMSearcherDetail;
 
 namespace {
+enum class VarZonePrefixMode {
+  Plain = 0,
+  Dollar,
+  BracedDollar,
+};
+
 /**
  * @brief Return display value for variable help (empty -> "").
  */
@@ -64,24 +70,40 @@ bool ParseVarCompletionPrefix_(const std::string &prefix,
  * @brief Parse zone-name completion prefix for shorthand `$...` mode.
  */
 bool ParseVarZonePrefix_(const std::string &prefix, std::string *out_prefix,
-                         bool *out_shortcut_mode) {
-  if (!out_prefix || !out_shortcut_mode) {
+                         VarZonePrefixMode *out_mode) {
+  if (!out_prefix || !out_mode) {
     return false;
   }
   *out_prefix = prefix;
-  *out_shortcut_mode = false;
+  *out_mode = VarZonePrefixMode::Plain;
   if (prefix.empty()) {
+    return true;
+  }
+  if (prefix.size() >= 2 && prefix[0] == '$' && prefix[1] == '{') {
+    *out_mode = VarZonePrefixMode::BracedDollar;
+    *out_prefix = prefix.substr(2);
     return true;
   }
   if (prefix.front() != '$') {
     return true;
   }
-  if (prefix.size() >= 2 && prefix[1] == '{') {
-    return false;
-  }
-  *out_shortcut_mode = true;
+  *out_mode = VarZonePrefixMode::Dollar;
   *out_prefix = prefix.substr(1);
   return true;
+}
+
+/**
+ * @brief Classify one zone name into style key.
+ */
+std::string ZoneStyleKey_(const std::string &zone, bool domain_exists,
+                          bool host_exists) {
+  if (domain_exists || zone == varsetkn::kPublic) {
+    return "nickname";
+  }
+  if (host_exists) {
+    return "unestablished_nickname";
+  }
+  return "nonexistent_nickname";
 }
 } // namespace
 
@@ -154,25 +176,66 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
   if (HasTarget(ctx, AMCompletionTarget::VarZone)) {
     std::string zone_prefix;
-    bool shortcut_mode = false;
-    if (!ParseVarZonePrefix_(prefix, &zone_prefix, &shortcut_mode)) {
+    VarZonePrefixMode mode = VarZonePrefixMode::Plain;
+    if (!ParseVarZonePrefix_(prefix, &zone_prefix, &mode)) {
       return result;
     }
 
-    auto domains = var_manager_.ListDomains();
-    std::vector<std::string> keys = domains;
-    for (const auto &match : BuildGeneralMatch(keys, zone_prefix)) {
-      const std::string &domain = domains[match.index];
-      AMCompletionCandidate candidate;
-      if (shortcut_mode) {
-        candidate.insert_text =
-            (domain == varsetkn::kPublic) ? "$:" : ("$" + domain + ":");
-      } else {
-        candidate.insert_text = domain;
+    struct ZoneInfo {
+      std::string zone;
+      bool domain_exists = false;
+      bool host_exists = false;
+    };
+    std::vector<ZoneInfo> zones;
+    std::unordered_map<std::string, size_t> zone_index;
+    zones.reserve(16);
+
+    auto append_zone = [&](const std::string &zone, bool domain_exists,
+                           bool host_exists) {
+      const auto it = zone_index.find(zone);
+      if (it != zone_index.end()) {
+        auto &existing = zones[it->second];
+        existing.domain_exists = existing.domain_exists || domain_exists;
+        existing.host_exists = existing.host_exists || host_exists;
+        return;
       }
-      candidate.display = config_manager_.Format(domain, "nickname");
+      zone_index[zone] = zones.size();
+      zones.push_back({zone, domain_exists, host_exists});
+    };
+
+    const auto domains = var_manager_.ListDomains();
+    for (const auto &domain : domains) {
+      append_zone(domain, true, host_manager_.HostExists(domain));
+    }
+    const auto hosts = host_manager_.ListNames();
+    for (const auto &host : hosts) {
+      append_zone(host, var_manager_.HasDomain(host), true);
+    }
+    append_zone(varsetkn::kPublic, true, true);
+
+    std::vector<std::string> keys;
+    keys.reserve(zones.size());
+    for (const auto &item : zones) {
+      keys.push_back(item.zone);
+    }
+
+    for (const auto &match : BuildGeneralMatch(keys, zone_prefix)) {
+      const auto &item = zones[match.index];
+      AMCompletionCandidate candidate;
+      if (mode == VarZonePrefixMode::Dollar) {
+        candidate.insert_text =
+            (item.zone == varsetkn::kPublic) ? "$:" : ("$" + item.zone + ":");
+      } else if (mode == VarZonePrefixMode::BracedDollar) {
+        candidate.insert_text =
+            (item.zone == varsetkn::kPublic) ? "${:" : ("${" + item.zone + ":");
+      } else {
+        candidate.insert_text = item.zone;
+      }
+      const std::string style_key =
+          ZoneStyleKey_(item.zone, item.domain_exists, item.host_exists);
+      candidate.display = config_manager_.Format(item.zone, style_key);
       candidate.kind = AMCompletionKind::VarZone;
-      candidate.help = "var zone";
+      candidate.help.clear();
       candidate.score = match.score_bias;
       result.candidates.items.push_back(std::move(candidate));
     }
