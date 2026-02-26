@@ -32,6 +32,25 @@ std::string NormalizeStyleTag_(const std::string &raw) {
 }
 
 /**
+ * @brief Normalize style string for ic_style_def.
+ *
+ * Accept both "#RRGGBB b" and "[#RRGGBB b]" formats.
+ */
+std::string NormalizeStyleForIc_(const std::string &raw) {
+  std::string trimmed = AMStr::Strip(raw);
+  if (trimmed.empty()) {
+    return "";
+  }
+  if (trimmed.find("[/") != std::string::npos) {
+    return "";
+  }
+  if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']') {
+    trimmed = AMStr::Strip(trimmed.substr(1, trimmed.size() - 2));
+  }
+  return trimmed;
+}
+
+/**
  * @brief Return true if completion context contains target.
  */
 bool HasTarget_(const AMCompletionContext &ctx, AMCompletionTarget target) {
@@ -72,6 +91,14 @@ void AMCompleteEngine::Install() {
   ic_set_default_completer(&AMCompleter::IsoclineCompleter, nullptr);
   ic_enable_completion_sort(false);
   ic_enable_completion_preview(true);
+  const std::string order_num_style =
+      args_.complete_order_num_style.empty() ? "ansi-darkgray"
+                                             : args_.complete_order_num_style;
+  const std::string help_style =
+      args_.complete_help_style.empty() ? "ansi-darkgray"
+                                        : args_.complete_help_style;
+  ic_style_def("ic-comp-order", order_num_style.c_str());
+  ic_style_def("ic-comp-help", help_style.c_str());
   const int max_items = args_.complete_max_items;
   if (max_items > 0) {
     ic_set_completion_max_items(max_items);
@@ -178,6 +205,14 @@ void AMCompleteEngine::LoadConfig() {
   args_.complete_select_sign = config.ResolveArg<std::string>(
       DocumentKind::Settings, {"Style", "CompleteMenu", "item_select_sign"}, "",
       {});
+  args_.complete_order_num_style =
+      NormalizeStyleForIc_(config.ResolveArg<std::string>(
+          DocumentKind::Settings, {"Style", "CompleteMenu", "order_num_style"},
+          "", {}));
+  args_.complete_help_style =
+      NormalizeStyleForIc_(config.ResolveArg<std::string>(
+          DocumentKind::Settings, {"Style", "CompleteMenu", "help_style"}, "",
+          {}));
 
   args_.complete_delay_ms = config.ResolveArg<int>(
       DocumentKind::Settings, {"Style", "CompleteMenu", "complete_delay_ms"},

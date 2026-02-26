@@ -90,6 +90,8 @@ struct AMCompletionArgs {
   bool complete_number_pick = true;
   bool complete_auto_fill = true;
   std::string complete_select_sign;
+  std::string complete_order_num_style;
+  std::string complete_help_style;
   int complete_delay_ms = 100;
   size_t complete_async_workers = 2;
   std::string input_tag_command;
