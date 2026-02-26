@@ -75,6 +75,125 @@ inline void PrintRunError_(const ECM &rcm) {
 }
 
 /**
+ * @brief Validate one config-add nickname in non-prompt mode.
+ */
+inline ECM ValidateConfigAddNickname_(const std::string &raw,
+                                      std::string *normalized) {
+  if (!normalized) {
+    return Err(EC::InvalidArg, "null nickname output");
+  }
+  std::string value = AMStr::Strip(raw);
+  std::string err_msg;
+  EC err_code = EC::InvalidArg;
+  if (!configkn::ValidateHostAttrValue(configkn::HostAttr::Nickname, value,
+                                       &value, &err_msg, true, true,
+                                       &err_code)) {
+    return Err(err_code, err_msg);
+  }
+  if (AMStr::lowercase(value) == "local") {
+    return Err(EC::InvalidArg, "Nickname 'local' is reserved");
+  }
+  if (AMHostManager::Instance().HostExists(value)) {
+    return Err(EC::InvalidArg, "Nickname already exists");
+  }
+  *normalized = value;
+  return Ok();
+}
+
+/**
+ * @brief Resolve config-add nickname from argument or interactive prompt.
+ */
+inline ECM ResolveConfigAddNickname_(const std::string &arg_nickname,
+                                     std::string *normalized) {
+  if (!normalized) {
+    return Err(EC::InvalidArg, "null nickname output");
+  }
+  const std::string seeded = AMStr::Strip(arg_nickname);
+  if (!seeded.empty()) {
+    return ValidateConfigAddNickname_(seeded, normalized);
+  }
+
+  AMPromptManager &prompt = AMPromptManager::Instance();
+  while (true) {
+    std::string input;
+    if (!prompt.Prompt("Nickname: ", "", &input)) {
+      return Err(EC::ConfigCanceled, "add canceled");
+    }
+    input = AMStr::Strip(input);
+    if (input.empty()) {
+      continue;
+    }
+    ECM rcm = ValidateConfigAddNickname_(input, normalized);
+    if (isok(rcm)) {
+      return Ok();
+    }
+    prompt.ErrorFormat(rcm);
+  }
+}
+
+/**
+ * @brief Validate one config-profile nickname in non-prompt mode.
+ */
+inline ECM ValidateConfigProfileNickname_(const std::string &raw,
+                                          std::string *normalized) {
+  if (!normalized) {
+    return Err(EC::InvalidArg, "null nickname output");
+  }
+  std::string value = AMStr::Strip(raw);
+  if (value.empty()) {
+    return Err(EC::InvalidArg, "empty profile nickname");
+  }
+  if (value == "*") {
+    *normalized = value;
+    return Ok();
+  }
+  if (!configkn::ValidateNickname(value)) {
+    return Err(EC::InvalidArg, "invalid profile nickname");
+  }
+  if (!AMHostManager::Instance().HostExists(value)) {
+    return Err(EC::HostConfigNotFound,
+               AMStr::amfmt("host nickname not found: {}", value));
+  }
+  *normalized = value;
+  return Ok();
+}
+
+/**
+ * @brief Resolve config-profile nickname from argument or interactive prompt.
+ */
+inline ECM ResolveConfigProfileNickname_(const std::string &arg_nickname,
+                                         std::string *normalized) {
+  if (!normalized) {
+    return Err(EC::InvalidArg, "null nickname output");
+  }
+  const std::string seeded = AMStr::Strip(arg_nickname);
+  if (!seeded.empty()) {
+    return ValidateConfigProfileNickname_(seeded, normalized);
+  }
+
+  AMHostManager &host_manager = AMHostManager::Instance();
+  AMPromptManager &prompt = AMPromptManager::Instance();
+  std::vector<std::string> candidates = host_manager.ListNames();
+  candidates.push_back("*");
+  while (true) {
+    std::string input;
+    if (!prompt.Prompt("Profile nickname(* or host): ", "", &input, {},
+                       candidates)) {
+      return Err(EC::ConfigCanceled, "profile edit canceled");
+    }
+    input = AMStr::Strip(input);
+    if (input.empty()) {
+      continue;
+    }
+    ECM rcm = ValidateConfigProfileNickname_(input, normalized);
+    if (isok(rcm)) {
+      return Ok();
+    }
+    prompt.ErrorFormat(rcm);
+  }
+}
+
+/**
  * @brief Substitute variables for one path-like CLI argument.
  */
 inline std::string SubstitutePathLikeArg_(const std::string &raw) {
@@ -197,18 +316,27 @@ struct ConfigGetArgs {
  * @brief CLI argument container for config add.
  */
 struct ConfigAddArgs {
+  std::string nickname;
   /**
    * @brief Execute config add.
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
-    return AMHostManager::Instance().Add();
+    std::string resolved;
+    ECM rcm = ResolveConfigAddNickname_(nickname, &resolved);
+    if (!isok(rcm)) {
+      PrintRunError_(rcm);
+      return rcm;
+    }
+    rcm = AMHostManager::Instance().Add(resolved);
+    PrintRunError_(rcm);
+    return rcm;
   }
   /**
    * @brief Reset config-add arguments to defaults.
    */
-  void reset() {}
+  void reset() { nickname.clear(); }
 };
 
 /**
@@ -326,16 +454,9 @@ struct ConfigProfileSetArgs {
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)managers;
     (void)ctx;
-    const std::string target = AMStr::Strip(nickname);
-    ECM rcm = Ok();
-    if (target.empty()) {
-      rcm = Err(EC::InvalidArg, "empty profile nickname");
-      PrintRunError_(rcm);
-      return rcm;
-    }
-    if (target != "*" && !AMHostManager::Instance().HostExists(target)) {
-      rcm = Err(EC::HostConfigNotFound,
-                AMStr::amfmt("host nickname not found: {}", target));
+    std::string target;
+    ECM rcm = ResolveConfigProfileNickname_(nickname, &target);
+    if (!isok(rcm)) {
       PrintRunError_(rcm);
       return rcm;
     }

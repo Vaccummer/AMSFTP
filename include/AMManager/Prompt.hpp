@@ -41,7 +41,6 @@ template <typename T> std::string ToString(T &&value) {
  * @brief Prompt rendering arguments for one profile.
  */
 struct AMPromptPromptProfileArgs {
-  std::string default_style = "#FFFFFF";
   std::string marker = "";
   std::string continuation_marker = ">";
   bool enable_multiline = false;

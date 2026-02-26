@@ -1,8 +1,8 @@
-#include "AMManager/Prompt.hpp"
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
+#include "AMManager/Prompt.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
@@ -94,6 +94,19 @@ std::string NormalizeStyleTag_(const std::string &raw) {
   }
   if (trimmed.back() != ']') {
     trimmed.push_back(']');
+  }
+  return trimmed;
+}
+
+/**
+ * @brief Normalize prompt style for ic_style_def.
+ *
+ * Accepts both `#RRGGBB b` and `[#RRGGBB b]` forms.
+ */
+std::string NormalizePromptStyleForIc_(const std::string &raw) {
+  std::string trimmed = AMStr::Strip(raw);
+  if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']') {
+    trimmed = AMStr::Strip(trimmed.substr(1, trimmed.size() - 2));
   }
   return trimmed;
 }
@@ -218,7 +231,6 @@ static const std::string ickey = "ic-prompt";
 void ApplyCoreProfileSettings_(const AMPromptProfileArgs &profile) {
   ic_set_prompt_marker(profile.prompt.marker.c_str(),
                        profile.prompt.continuation_marker.c_str());
-  ic_style_def(ickey.c_str(), profile.prompt.default_style.c_str());
   ic_enable_multiline(profile.prompt.enable_multiline);
   ic_enable_history_duplicates(profile.history.enable_duplicates);
 
@@ -491,11 +503,11 @@ bool AMPromptManager::PromptLine(const std::string &prompt, std::string *out,
 }
 */
 
-bool AMPromptManager::Prompt(const std::string &prompt,
-                             const std::string &placeholder,
-                             std::string *out_input,
-                             const std::function<bool(const std::string &)> &checker,
-                             const std::vector<std::string> &candidates) {
+bool AMPromptManager::Prompt(
+    const std::string &prompt, const std::string &placeholder,
+    std::string *out_input,
+    const std::function<bool(const std::string &)> &checker,
+    const std::vector<std::string> &candidates) {
 
   if (!out_input) {
     return true;
@@ -503,6 +515,14 @@ bool AMPromptManager::Prompt(const std::string &prompt,
   const std::string target =
       active_core_nickname_.empty() ? "local" : active_core_nickname_;
   (void)UseCorePromptProfileForClient_(target);
+  const AMPromptProfileArgs *active_profile = GetCurrentPromptProfileArgs();
+  std::string query_prompt_style = config_.ResolveArg<std::string>(
+      DocumentKind::Settings,
+      {"Style", "ValueQueryHighlight", "prompt_style"}, "", {});
+  query_prompt_style = NormalizePromptStyleForIc_(query_prompt_style);
+  if (!query_prompt_style.empty()) {
+    ic_style_def(ickey.c_str(), query_prompt_style.c_str());
+  }
 
   PromptValueQueryContext query_ctx;
   query_ctx.checker = checker ? &checker : nullptr;
@@ -534,9 +554,12 @@ bool AMPromptManager::Prompt(const std::string &prompt,
   auto lock = PrintLock();
   auto hooklock = HookLock();
   const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
-  char *line = ic_readline_ex_with_initial(prompt.c_str(), completer,
-                                           completer_arg, highlighter,
-                                           highlighter_arg, initial);
+  char *line =
+      ic_readline_ex_with_initial(prompt.c_str(), completer, completer_arg,
+                                  highlighter, highlighter_arg, initial);
+  if (active_profile) {
+    ApplyCoreProfileSettings_(*active_profile);
+  }
   if (!line) {
     return false;
   }
@@ -551,13 +574,22 @@ bool AMPromptManager::Prompt(const std::string &prompt,
  */
 bool AMPromptManager::LiteralPrompt(
     const std::string &prompt, const std::string &placeholder,
-    std::string *out_input, const std::map<std::string, std::string> &literals) {
+    std::string *out_input,
+    const std::map<std::string, std::string> &literals) {
   if (!out_input) {
     return true;
   }
   const std::string target =
       active_core_nickname_.empty() ? "local" : active_core_nickname_;
   (void)UseCorePromptProfileForClient_(target);
+  const AMPromptProfileArgs *active_profile = GetCurrentPromptProfileArgs();
+  std::string query_prompt_style = config_.ResolveArg<std::string>(
+      DocumentKind::Settings,
+      {"Style", "ValueQueryHighlight", "prompt_style"}, "", {});
+  query_prompt_style = NormalizePromptStyleForIc_(query_prompt_style);
+  if (!query_prompt_style.empty()) {
+    ic_style_def(ickey.c_str(), query_prompt_style.c_str());
+  }
 
   std::function<bool(const std::string &)> literal_checker;
   if (!literals.empty()) {
@@ -596,9 +628,12 @@ bool AMPromptManager::LiteralPrompt(
   auto lock = PrintLock();
   auto hooklock = HookLock();
   const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
-  char *line = ic_readline_ex_with_initial(prompt.c_str(), completer,
-                                           completer_arg, highlighter,
-                                           highlighter_arg, initial);
+  char *line =
+      ic_readline_ex_with_initial(prompt.c_str(), completer, completer_arg,
+                                  highlighter, highlighter_arg, initial);
+  if (active_profile) {
+    ApplyCoreProfileSettings_(*active_profile);
+  }
   if (!line) {
     return false;
   }

@@ -75,6 +75,11 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
         ->add_option("nicknames", args.config_get.nicknames, "Host nicknames")
         ->expected(0, -1);
   }
+  if (commands.config_add) {
+    commands.config_add
+        ->add_option("nickname", args.config_add.nickname, "Host nickname")
+        ->expected(0, 1);
+  }
   if (commands.config_edit) {
     commands.config_edit
         ->add_option("nickname", args.config_edit.nickname, "Host nickname")
@@ -109,11 +114,14 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
     commands.config_profile_cmd
         ->add_option("nickname", args.config_profile_set.nickname,
                      "Profile nickname")
-        ->required();
+        ->expected(0, 1);
   }
 
   if (config_get_node) {
     config_get_node->AddPositionalRule(0, Sem::HostNickname, true);
+  }
+  if (config_add_node) {
+    config_add_node->AddPositionalRule(0, Sem::HostNickname, false);
   }
   if (config_edit_node) {
     config_edit_node->AddPositionalRule(0, Sem::HostNickname, true);
