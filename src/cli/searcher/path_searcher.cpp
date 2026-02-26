@@ -480,7 +480,7 @@ AMBuildDefaultSearchEngineRegistrations() {
   out.push_back(
       {{AMCompletionTarget::VariableName, AMCompletionTarget::ClientName,
         AMCompletionTarget::HostNickname, AMCompletionTarget::HostAttr,
-        AMCompletionTarget::TaskId},
+        AMCompletionTarget::TaskId, AMCompletionTarget::VarZone},
        internal_engine});
 
   auto path_engine = std::make_shared<AMPathSearchEngine>();

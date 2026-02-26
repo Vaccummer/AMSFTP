@@ -25,6 +25,7 @@ enum class AMCommandArgSemantic {
   ClientName,
   TaskId,
   VariableName,
+  VarZone,
 };
 
 /**

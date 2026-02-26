@@ -59,6 +59,30 @@ bool ParseVarCompletionPrefix_(const std::string &prefix,
   *out_ref = std::move(ref);
   return true;
 }
+
+/**
+ * @brief Parse zone-name completion prefix for shorthand `$...` mode.
+ */
+bool ParseVarZonePrefix_(const std::string &prefix, std::string *out_prefix,
+                         bool *out_shortcut_mode) {
+  if (!out_prefix || !out_shortcut_mode) {
+    return false;
+  }
+  *out_prefix = prefix;
+  *out_shortcut_mode = false;
+  if (prefix.empty()) {
+    return true;
+  }
+  if (prefix.front() != '$') {
+    return true;
+  }
+  if (prefix.size() >= 2 && prefix[1] == '{') {
+    return false;
+  }
+  *out_shortcut_mode = true;
+  *out_prefix = prefix.substr(1);
+  return true;
+}
 } // namespace
 
 /**
@@ -119,6 +143,36 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.help =
           AMStr::amfmt("[{}] {}", item.domain, RenderVarValue_(item.varvalue));
       candidate.kind = AMCompletionKind::VariableName;
+      candidate.score = match.score_bias;
+      result.candidates.items.push_back(std::move(candidate));
+    }
+    if (!result.candidates.items.empty()) {
+      SortCandidates(ctx, result.candidates.items);
+    }
+    return result;
+  }
+
+  if (HasTarget(ctx, AMCompletionTarget::VarZone)) {
+    std::string zone_prefix;
+    bool shortcut_mode = false;
+    if (!ParseVarZonePrefix_(prefix, &zone_prefix, &shortcut_mode)) {
+      return result;
+    }
+
+    auto domains = var_manager_.ListDomains();
+    std::vector<std::string> keys = domains;
+    for (const auto &match : BuildGeneralMatch(keys, zone_prefix)) {
+      const std::string &domain = domains[match.index];
+      AMCompletionCandidate candidate;
+      if (shortcut_mode) {
+        candidate.insert_text =
+            (domain == varsetkn::kPublic) ? "$:" : ("$" + domain + ":");
+      } else {
+        candidate.insert_text = domain;
+      }
+      candidate.display = config_manager_.Format(domain, "nickname");
+      candidate.kind = AMCompletionKind::VarZone;
+      candidate.help = "var zone";
       candidate.score = match.score_bias;
       result.candidates.items.push_back(std::move(candidate));
     }

@@ -99,12 +99,13 @@ bool ParseShortcutVarToken_(const std::string &raw_token,
 }
 
 /**
- * @brief Parse leading variable token prefix and return boundary.
+ * @brief Parse leading variable token prefix and return parsed ref/boundary.
  *
  * Accepts both complete and incomplete braced prefixes, for example:
  * `$name`, `$zone:name`, `${name`, `${zone:name`.
  */
-bool ParseLeadingVarToken_(const std::string &text, size_t *out_end) {
+bool ParseLeadingVarRef_(const std::string &text, size_t *out_end,
+                         varsetkn::VarRef *out_ref) {
   if (text.empty() || text.front() != '$') {
     return false;
   }
@@ -117,6 +118,9 @@ bool ParseLeadingVarToken_(const std::string &text, size_t *out_end) {
   }
   if (out_end) {
     *out_end = parsed_end;
+  }
+  if (out_ref) {
+    *out_ref = std::move(ref);
   }
   return true;
 }
@@ -440,6 +444,8 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
     return AMCompletionTarget::TaskId;
   case AMCommandArgSemantic::VariableName:
     return AMCompletionTarget::VariableName;
+  case AMCommandArgSemantic::VarZone:
+    return AMCompletionTarget::VarZone;
   case AMCommandArgSemantic::None:
   default:
     return std::nullopt;
@@ -565,14 +571,19 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
         return ctx;
       }
     }
-    if (ctx.token_prefix == "$" || ctx.token_prefix == "${") {
-      ctx.targets = {AMCompletionTarget::VariableName};
+    if (ctx.token_prefix == "$") {
+      ctx.targets = {AMCompletionTarget::VarZone};
       return ctx;
     }
     size_t var_end = 0;
-    if (ParseLeadingVarToken_(ctx.token_prefix, &var_end) &&
+    varsetkn::VarRef var_ref{};
+    if (ParseLeadingVarRef_(ctx.token_prefix, &var_end, &var_ref) &&
         var_end == ctx.token_prefix.size()) {
-      ctx.targets = {AMCompletionTarget::VariableName};
+      if (var_ref.explicit_domain && var_ref.varname.empty()) {
+        ctx.targets = {AMCompletionTarget::Disabled};
+      } else {
+        ctx.targets = {AMCompletionTarget::VariableName};
+      }
       return ctx;
     }
   }

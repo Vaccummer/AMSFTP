@@ -138,6 +138,20 @@ AMTokenType ClassifyNicknameTokenType_(const std::string &nickname_raw,
   return AMTokenType::NonexistentNickname;
 }
 
+/** Convert var-zone token to highlight type. */
+AMTokenType ClassifyVarZoneTokenType_(const std::string &zone_raw,
+                                      VarCLISet &var_manager) {
+  const std::string zone = AMStr::Strip(zone_raw);
+  if (zone.empty()) {
+    return AMTokenType::NonexistentNickname;
+  }
+  if (zone == varsetkn::kPublic) {
+    return AMTokenType::Nickname;
+  }
+  return var_manager.HasDomain(zone) ? AMTokenType::Nickname
+                                     : AMTokenType::NonexistentNickname;
+}
+
 /** Return true when token text is `$var=...` or `${var}=...` shorthand. */
 bool IsVarShortcutDefineToken_(const std::string &raw_text) {
   if (raw_text.size() >= 2 && raw_text[0] == '`' && raw_text[1] == '$') {
@@ -731,6 +745,14 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
           *semantic_hint == AMCommandArgSemantic::ClientName) {
         token.type = ClassifyNicknameTokenType_(unescaped_text, host_manager_,
                                                 client_manager_);
+        if (positional_consumed) {
+          ++arg_index;
+        }
+        continue;
+      }
+
+      if (*semantic_hint == AMCommandArgSemantic::VarZone) {
+        token.type = ClassifyVarZoneTokenType_(unescaped_text, var_manager_);
         if (positional_consumed) {
           ++arg_index;
         }

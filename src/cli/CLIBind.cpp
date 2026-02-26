@@ -199,6 +199,7 @@ void BindClientCommands(CommandNode *root, CliArgsPool &args,
  */
 void BindVarCommands(CommandNode *root, CliArgsPool &args,
                      CliCommands &commands) {
+  using Sem = AMCommandArgSemantic;
   if (!root) {
     return;
   }
@@ -256,6 +257,9 @@ void BindVarCommands(CommandNode *root, CliArgsPool &args,
     commands.var_ls_cmd
         ->add_option("sections", args.var_ls.sections, "section names")
         ->expected(0, -1);
+  }
+  if (var_ls_node) {
+    var_ls_node->AddPositionalRule(0, Sem::VarZone, true);
   }
 }
 

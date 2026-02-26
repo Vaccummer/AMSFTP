@@ -33,6 +33,7 @@ enum class AMCompletionTarget {
   HostAttr = 8,
   TaskId = 9,
   Path = 10,
+  VarZone = 11,
 };
 
 /**
@@ -43,6 +44,7 @@ enum class AMCompletionKind {
   Command,
   Option,
   VariableName,
+  VarZone,
   ClientName,
   HostNickname,
   HostAttr,
