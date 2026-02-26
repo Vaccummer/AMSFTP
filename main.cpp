@@ -3,7 +3,6 @@
 #include "AMCLI/InteractiveLoop.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMClient/SFTP.hpp"
-#include "AMManager/Set.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Var.hpp"
 #include <atomic>
@@ -95,8 +94,6 @@ int main(int argc, char **argv) {
     prompt_manager.Init();
     auto &hostm = AMHostManager::Instance();
     hostm.Init();
-    auto &setm = AMSetManager::Instance();
-    setm.Init();
     auto &varm = VarCLISet::Instance();
     varm.Init();
     auto &client_manager = AMClientManager::Instance();

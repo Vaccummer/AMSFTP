@@ -64,42 +64,11 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
       "save", "Save config", args, &CliArgsPool::config_save);
   commands.config_save = config_save_node ? config_save_node->app : nullptr;
 
-  CommandNode *config_hostset_node =
-      config_node->AddFunction("hostset", "Manage HostSet");
-  commands.config_hostset_cmd =
-      config_hostset_node ? config_hostset_node->app : nullptr;
-
-  CommandNode *config_hostset_add_node =
-      config_hostset_node
-          ? config_hostset_node->AddFunction("add", "Create host set", args,
-                                             &CliArgsPool::config_hostset_add)
-          : nullptr;
-  commands.config_hostset_add =
-      config_hostset_add_node ? config_hostset_add_node->app : nullptr;
-
-  CommandNode *config_hostset_edit_node =
-      config_hostset_node
-          ? config_hostset_node->AddFunction("edit", "Modify host set", args,
-                                             &CliArgsPool::config_hostset_edit)
-          : nullptr;
-  commands.config_hostset_edit =
-      config_hostset_edit_node ? config_hostset_edit_node->app : nullptr;
-
-  CommandNode *config_hostset_rm_node =
-      config_hostset_node
-          ? config_hostset_node->AddFunction("rm", "Delete host set", args,
-                                             &CliArgsPool::config_hostset_rm)
-          : nullptr;
-  commands.config_hostset_rm =
-      config_hostset_rm_node ? config_hostset_rm_node->app : nullptr;
-
-  CommandNode *config_hostset_save_node =
-      config_hostset_node
-          ? config_hostset_node->AddFunction("save", "Save HostSet", args,
-                                             &CliArgsPool::config_hostset_save)
-          : nullptr;
-  commands.config_hostset_save =
-      config_hostset_save_node ? config_hostset_save_node->app : nullptr;
+  CommandNode *config_profile_node = config_node->AddFunction(
+      "profile", "Set prompt profile", args, &CliArgsPool::config_profile_set);
+  commands.config_profile_cmd =
+      config_profile_node ? config_profile_node->app : nullptr;
+  commands.config_profile_set = commands.config_profile_cmd;
 
   if (commands.config_get) {
     commands.config_get
@@ -136,23 +105,11 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
         ->add_option("value", args.config_set.value, "Host property value")
         ->required();
   }
-  if (commands.config_hostset_add) {
-    commands.config_hostset_add
-        ->add_option("nickname", args.config_hostset_add.nickname,
-                     "Host nickname")
+  if (commands.config_profile_cmd) {
+    commands.config_profile_cmd
+        ->add_option("nickname", args.config_profile_set.nickname,
+                     "Profile nickname")
         ->required();
-  }
-  if (commands.config_hostset_edit) {
-    commands.config_hostset_edit
-        ->add_option("nickname", args.config_hostset_edit.nickname,
-                     "Host nickname")
-        ->required();
-  }
-  if (commands.config_hostset_rm) {
-    commands.config_hostset_rm
-        ->add_option("nicknames", args.config_hostset_rm.nicknames,
-                     "Host nicknames")
-        ->expected(1, -1);
   }
 
   if (config_get_node) {
@@ -170,6 +127,9 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
   if (config_set_node) {
     config_set_node->AddPositionalRule(0, Sem::HostNickname, false);
     config_set_node->AddPositionalRule(1, Sem::HostAttr, false);
+  }
+  if (config_profile_node) {
+    config_profile_node->AddPositionalRule(0, Sem::HostNickname, false);
   }
 }
 

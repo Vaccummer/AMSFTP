@@ -139,6 +139,13 @@ public:
    * @brief Reload prompt profile args from settings.
    */
   ECM ReloadPromptProfiles();
+  /**
+   * @brief Interactively edit one prompt profile by nickname.
+   *
+   * Missing profiles are initialized from the star profile and persisted as
+   * explicit entries.
+   */
+  ECM Edit(const std::string &nickname);
 
   /**
    * @brief Resolve prompt profile args for a client nickname.

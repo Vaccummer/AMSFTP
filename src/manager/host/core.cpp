@@ -330,9 +330,26 @@ void AMHostManager::CollectHosts_() const {
   }
   for (auto it = hosts_json.begin(); it != hosts_json.end(); ++it) {
     const std::string nickname = it.key();
+    const std::string lowered = AMStr::lowercase(AMStr::Strip(nickname));
+    const bool is_local = (lowered == "local");
+    const std::string key = is_local ? "local" : nickname;
     auto cfg = ClientConfig(nickname, it.value());
+    if (is_local) {
+      if (cfg.IsValid()) {
+        host_configs[key] = cfg;
+      } else {
+        // Exempt local profile from strict host-json completeness checks:
+        // synthesize a valid local config with runtime defaults.
+        auto [rcm, local_cfg] =
+            const_cast<AMHostManager *>(this)->GetLocalConfig();
+        if (rcm.first == EC::Success && local_cfg.IsValid()) {
+          host_configs[key] = local_cfg;
+        }
+      }
+      continue;
+    }
     if (cfg.IsValid()) {
-      host_configs[nickname] = cfg;
+      host_configs[key] = cfg;
     }
   }
 }

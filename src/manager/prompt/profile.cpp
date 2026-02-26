@@ -261,6 +261,304 @@ ECM AMProfileManager::ReloadPromptProfiles() {
 }
 
 /**
+ * @brief Interactively edit one prompt profile and persist to settings.
+ */
+ECM AMProfileManager::Edit(const std::string &nickname) {
+  EnsurePromptProfilesLoaded_();
+  const std::string target = NormalizeProfileNickname_(nickname);
+  if (target.empty()) {
+    return Err(EC::InvalidArg, "empty profile nickname");
+  }
+
+  AMPromptProfileArgs working{};
+  {
+    std::lock_guard<std::mutex> lock(profile_mtx_);
+    auto it = prompt_profiles_.find(target);
+    if (it != prompt_profiles_.end()) {
+      working = it->second;
+    } else {
+      auto star_it = prompt_profiles_.find(kDefaultPromptProfile);
+      if (star_it != prompt_profiles_.end()) {
+        working = star_it->second;
+      } else {
+        working = default_prompt_profile_args_;
+      }
+      working.name = target;
+      working.from_default = true;
+      working.ic_profile = nullptr;
+    }
+  }
+
+  AMPromptManager &prompt = AMPromptManager::Instance();
+  const AMPromptProfileArgs builtin_defaults{};
+  const auto print_abort = [&prompt, this]() {
+    prompt.Print(AMStr::amfmt("{}\n", config_.Format("Input Abort", "abort")));
+  };
+
+  const std::map<std::string, std::string> bool_literals = {
+      {"true", "enable"}, {"false", "disable"}};
+
+  auto prompt_string = [&prompt](const std::string &label, std::string *value) {
+    if (!value) {
+      return false;
+    }
+    std::string out;
+    if (!prompt.Prompt(label, *value, &out)) {
+      return false;
+    }
+    *value = out;
+    return true;
+  };
+
+  auto prompt_bool = [&prompt, &bool_literals](const std::string &label,
+                                               bool *value) {
+    if (!value) {
+      return false;
+    }
+    while (true) {
+      std::string out;
+      const std::string placeholder = (*value ? "true" : "false");
+      if (!prompt.LiteralPrompt(label, placeholder, &out, bool_literals)) {
+        return false;
+      }
+      out = AMStr::lowercase(AMStr::Strip(out));
+      if (out.empty()) {
+        out = placeholder;
+      }
+      bool parsed = *value;
+      if (StrValueParse(out, &parsed)) {
+        *value = parsed;
+        return true;
+      }
+      prompt.ErrorFormat(ECM{EC::InvalidArg, "value must be true or false"});
+    }
+  };
+
+  auto prompt_int64 = [&prompt](const std::string &label, int64_t min_value,
+                                int64_t max_value, int64_t *value) {
+    if (!value) {
+      return false;
+    }
+    while (true) {
+      const std::string placeholder = std::to_string(*value);
+      std::string out;
+      auto checker = [min_value, max_value,
+                      placeholder](const std::string &text) -> bool {
+        std::string trimmed = AMStr::Strip(text);
+        if (trimmed.empty()) {
+          trimmed = placeholder;
+        }
+        int64_t parsed = 0;
+        if (!StrValueParse(trimmed, &parsed)) {
+          return false;
+        }
+        return parsed >= min_value && parsed <= max_value;
+      };
+      if (!prompt.Prompt(label, placeholder, &out, checker)) {
+        return false;
+      }
+      out = AMStr::Strip(out);
+      if (out.empty()) {
+        out = placeholder;
+      }
+      int64_t parsed = *value;
+      if (!StrValueParse(out, &parsed)) {
+        prompt.ErrorFormat(ECM{EC::InvalidArg, "invalid integer value"});
+        continue;
+      }
+      if (parsed < min_value || parsed > max_value) {
+        prompt.ErrorFormat(
+            ECM{EC::InvalidArg, AMStr::amfmt("value out of range [{}, {}]",
+                                             min_value, max_value)});
+        continue;
+      }
+      *value = parsed;
+      return true;
+    }
+  };
+
+  if (!prompt_string("Prompt.default_style: ", &working.prompt.default_style) ||
+      !prompt_string("Prompt.marker: ", &working.prompt.marker) ||
+      !prompt_string("Prompt.continuation_marker: ",
+                     &working.prompt.continuation_marker)) {
+    print_abort();
+    return Err(EC::ConfigCanceled, "profile edit canceled");
+  }
+  if (!prompt_bool("Prompt.enable_multiline(true/false): ",
+                   &working.prompt.enable_multiline) ||
+      !prompt_bool("History.enable(true/false): ", &working.history.enable)) {
+    print_abort();
+    return Err(EC::ConfigCanceled, "profile edit canceled");
+  }
+
+  if (working.history.enable) {
+    if (!prompt_bool("History.enable_duplicates(true/false): ",
+                     &working.history.enable_duplicates)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "profile edit canceled");
+    }
+    int64_t history_max = static_cast<int64_t>(working.history.max_count);
+    if (!prompt_int64("History.max_count: ", 1, 200, &history_max)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "profile edit canceled");
+    }
+    working.history.max_count = static_cast<int>(history_max);
+  } else {
+    working.history.enable_duplicates = builtin_defaults.history.enable_duplicates;
+    working.history.max_count = builtin_defaults.history.max_count;
+  }
+
+  if (!prompt_bool("InlineHint.enable(true/false): ",
+                   &working.inline_hint.enable)) {
+    print_abort();
+    return Err(EC::ConfigCanceled, "profile edit canceled");
+  }
+
+  if (working.inline_hint.enable) {
+    int64_t inline_delay = static_cast<int64_t>(working.inline_hint.delay_ms);
+    if (!prompt_int64("InlineHint.delay_ms: ", 0, 5000, &inline_delay)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "profile edit canceled");
+    }
+    working.inline_hint.delay_ms = static_cast<int>(inline_delay);
+
+    int64_t inline_search_delay =
+        static_cast<int64_t>(working.inline_hint.search_delay_ms);
+    if (!prompt_int64("InlineHint.search_delay_ms: ", 0, 5000,
+                      &inline_search_delay)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "profile edit canceled");
+    }
+    working.inline_hint.search_delay_ms = static_cast<int>(inline_search_delay);
+
+    if (!prompt_bool("InlineHint.Path.enable(true/false): ",
+                     &working.inline_hint.path.enable)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "profile edit canceled");
+    }
+    if (working.inline_hint.path.enable) {
+      if (!prompt_bool("InlineHint.Path.use_async(true/false): ",
+                       &working.inline_hint.path.use_async)) {
+        print_abort();
+        return Err(EC::ConfigCanceled, "profile edit canceled");
+      }
+      if (working.inline_hint.path.use_async) {
+        int64_t inline_path_timeout =
+            static_cast<int64_t>(working.inline_hint.path.timeout_ms);
+        if (!prompt_int64("InlineHint.Path.timeout_ms: ", 1, 300000,
+                          &inline_path_timeout)) {
+          print_abort();
+          return Err(EC::ConfigCanceled, "profile edit canceled");
+        }
+        working.inline_hint.path.timeout_ms =
+            static_cast<size_t>(inline_path_timeout);
+      } else {
+        working.inline_hint.path.timeout_ms =
+            builtin_defaults.inline_hint.path.timeout_ms;
+      }
+    } else {
+      working.inline_hint.path.use_async =
+          builtin_defaults.inline_hint.path.use_async;
+      working.inline_hint.path.timeout_ms =
+          builtin_defaults.inline_hint.path.timeout_ms;
+    }
+  } else {
+    working.inline_hint.delay_ms = builtin_defaults.inline_hint.delay_ms;
+    working.inline_hint.search_delay_ms =
+        builtin_defaults.inline_hint.search_delay_ms;
+    working.inline_hint.path = builtin_defaults.inline_hint.path;
+  }
+
+  if (!prompt_bool("Complete.Searcher.Path.use_async(true/false): ",
+                   &working.complete.path.use_async)) {
+    print_abort();
+    return Err(EC::ConfigCanceled, "profile edit canceled");
+  }
+  if (working.complete.path.use_async) {
+    int64_t complete_path_timeout =
+        static_cast<int64_t>(working.complete.path.timeout_ms);
+    if (!prompt_int64("Complete.Searcher.Path.timeout_ms: ", 1, 300000,
+                      &complete_path_timeout)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "profile edit canceled");
+    }
+    working.complete.path.timeout_ms =
+        static_cast<size_t>(complete_path_timeout);
+  } else {
+    working.complete.path.timeout_ms = builtin_defaults.complete.path.timeout_ms;
+  }
+
+  int64_t highlight_delay = static_cast<int64_t>(working.highlight.delay_ms);
+  if (!prompt_int64("Highlight.delay_ms: ", 0, 5000, &highlight_delay) ||
+      !prompt_bool("Highlight.Path.enable(true/false): ",
+                   &working.highlight.path.enable)) {
+    print_abort();
+    return Err(EC::ConfigCanceled, "profile edit canceled");
+  }
+  working.highlight.delay_ms = static_cast<int>(highlight_delay);
+
+  if (working.highlight.path.enable) {
+    int64_t highlight_path_timeout =
+        static_cast<int64_t>(working.highlight.path.timeout_ms);
+    if (!prompt_int64("Highlight.Path.timeout_ms: ", 1, 300000,
+                      &highlight_path_timeout)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "profile edit canceled");
+    }
+    working.highlight.path.timeout_ms =
+        static_cast<size_t>(highlight_path_timeout);
+  } else {
+    working.highlight.path.timeout_ms =
+        builtin_defaults.highlight.path.timeout_ms;
+  }
+
+  working.name = target;
+  working.from_default = false;
+
+  {
+    std::lock_guard<std::mutex> lock(profile_mtx_);
+    auto existing = prompt_profiles_.find(target);
+    if (existing != prompt_profiles_.end()) {
+      working.ic_profile = existing->second.ic_profile;
+    }
+    prompt_profiles_[target] = working;
+
+    if (target == kDefaultPromptProfile) {
+      default_prompt_profile_args_ = working;
+      default_prompt_profile_args_.name = kDefaultPromptProfile;
+      default_prompt_profile_args_.from_default = false;
+      default_prompt_profile_args_.ic_profile = nullptr;
+
+      for (auto &pair : prompt_profiles_) {
+        if (pair.first == kDefaultPromptProfile || !pair.second.from_default) {
+          continue;
+        }
+        ic_profile_t *profile_ptr = pair.second.ic_profile;
+        const std::string profile_name = pair.second.name;
+        pair.second = working;
+        pair.second.name = profile_name;
+        pair.second.from_default = true;
+        pair.second.ic_profile = profile_ptr;
+      }
+    }
+  }
+
+  if (!config_.SetArg(DocumentKind::Settings, {kPromptProfileRoot, target},
+                      working.GetJson())) {
+    return Err(EC::CommonFailure, "failed to update PromptProfile");
+  }
+  ECM dump_rcm = config_.Dump(DocumentKind::Settings, "", true);
+  if (dump_rcm.first != EC::Success) {
+    return dump_rcm;
+  }
+
+  if (!active_core_nickname_.empty()) {
+    (void)UseCorePromptProfileForClient_(active_core_nickname_);
+  }
+  return Ok();
+}
+
+/**
  * @brief Ensure runtime profile entry exists for one client.
  */
 AMPromptProfileArgs &
