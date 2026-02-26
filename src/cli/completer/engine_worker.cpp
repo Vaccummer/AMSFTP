@@ -60,6 +60,15 @@ bool StartsWithShortOption_(const std::string &text) {
 }
 
 /**
+ * @brief Return true when completion context contains target.
+ */
+bool ContextHasTarget_(const AMCompletionContext &ctx,
+                       AMCompletionTarget target) {
+  return std::find(ctx.targets.begin(), ctx.targets.end(), target) !=
+         ctx.targets.end();
+}
+
+/**
  * @brief Return true when a raw token starts with escaped dollar syntax.
  */
 bool StartsWithEscapedDollar_(const std::string &raw_token) {
@@ -846,6 +855,11 @@ void AMCompleteEngine::DispatchCandidates_(const AMCompletionContext &ctx,
     AMCompletionContext scoped = ctx;
     scoped.targets.clear();
     scoped.targets.push_back(target);
+    if ((target == AMCompletionTarget::ClientName ||
+         target == AMCompletionTarget::HostNickname) &&
+        ContextHasTarget_(ctx, AMCompletionTarget::Path)) {
+      scoped.targets.push_back(AMCompletionTarget::Path);
+    }
 
     AMCompletionCollectResult collected = engine->CollectCandidates(scoped);
     if (!collected.candidates.items.empty()) {
