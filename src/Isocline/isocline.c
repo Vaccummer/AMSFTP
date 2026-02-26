@@ -791,6 +791,8 @@ static ic_env_t* ic_env_create( ic_malloc_fun_t* _malloc, ic_realloc_fun_t* _rea
   
   bbcode_style_def(env->bbcode, "ic-prompt",    "ansi-green" );
   bbcode_style_def(env->bbcode, "ic-info",      "ansi-darkgray" );
+  bbcode_style_def(env->bbcode, "ic-comp-order","ansi-darkgray" );
+  bbcode_style_def(env->bbcode, "ic-comp-help", "ansi-darkgray" );
   bbcode_style_def(env->bbcode, "ic-diminish",  "ansi-lightgray" );
   bbcode_style_def(env->bbcode, "ic-emphasis",  "#ffffd7" );
   bbcode_style_def(env->bbcode, "ic-hint",      "ansi-darkgray" );

@@ -44,17 +44,13 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     }
 
     const auto matches = BuildGeneralMatch(keys, prefix);
-    size_t max_len = 0;
-    for (const auto &match : matches) {
-      max_len = std::max(max_len, items[match.index].name.size());
-    }
 
     for (const auto &match : matches) {
       const auto &item = items[match.index];
       AMCompletionCandidate candidate;
       candidate.insert_text = item.name;
       candidate.display = FormatCommandDisplay_(
-          item.name, item.is_module ? "module" : "command", max_len,
+          item.name, item.is_module ? "module" : "command", 0,
           ctx.completion_args);
       candidate.help = item.help;
       candidate.kind =
@@ -81,16 +77,12 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     }
 
     const auto matches = BuildGeneralMatch(keys, prefix);
-    size_t max_len = 0;
-    for (const auto &match : matches) {
-      max_len = std::max(max_len, items[match.index].name.size());
-    }
 
     for (const auto &match : matches) {
       const auto &item = items[match.index];
       AMCompletionCandidate candidate;
       candidate.insert_text = item.name;
-      candidate.display = FormatCommandDisplay_(item.name, "command", max_len,
+      candidate.display = FormatCommandDisplay_(item.name, "command", 0,
                                                 ctx.completion_args);
       candidate.help = item.help;
       candidate.kind = AMCompletionKind::Command;
@@ -179,15 +171,12 @@ void AMCommandSearchEngine::SortCandidates(
 std::string AMCommandSearchEngine::FormatCommandDisplay_(
     const std::string &name, const std::string &style_key, size_t pad_width,
     const AMCompletionArgs *args) const {
+  (void)pad_width;
   const std::string command_tag = args ? args->input_tag_command : "";
   const std::string module_tag = args ? args->input_tag_module : "";
   const std::string tag = style_key == "module" ? module_tag : command_tag;
   const std::string escaped = EscapeBbcodeText(name);
-  std::string display = tag.empty() ? escaped : tag + escaped + "[/]";
-  if (pad_width > name.size()) {
-    display.append(pad_width - name.size(), ' ');
-  }
-  return display;
+  return tag.empty() ? escaped : tag + escaped + "[/]";
 }
 
 /**

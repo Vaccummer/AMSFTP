@@ -51,34 +51,67 @@ static ssize_t edit_completion_digits(ssize_t value) {
   return digits;
 }
 
-/** Append one completion entry to the menu buffer with fixed column width and numbering. */
-static void editor_append_completion(ic_env_t* env, editor_t* eb, ssize_t idx, ssize_t col_width,
+/** Append `count` spaces to the string buffer. */
+static void sbuf_append_spaces(stringbuf_t* sb, ssize_t count) {
+  while (count > 0) {
+    sbuf_append_char(sb, ' ');
+    count--;
+  }
+}
+
+/** Measure visible display/help widths for one completion index. */
+static void edit_completion_item_widths(ic_env_t* env, ssize_t idx,
+                                        ssize_t* out_name_width,
+                                        ssize_t* out_help_width) {
+  if (out_name_width != NULL) *out_name_width = 0;
+  if (out_help_width != NULL) *out_help_width = 0;
+  const char* help = NULL;
+  const char* display = completions_get_display(env->completions, idx, &help);
+  if (display == NULL) return;
+  if (out_name_width != NULL) {
+    *out_name_width = bbcode_column_width(env->bbcode, display);
+  }
+  if (out_help_width != NULL && help != NULL && help[0] != 0) {
+    *out_help_width = bbcode_column_width(env->bbcode, help);
+  }
+}
+
+/** Append one completion entry with aligned display/help columns and numbering. */
+static void editor_append_completion(ic_env_t* env, editor_t* eb, ssize_t idx,
                                      ssize_t number_width, ssize_t number, const char* indicator,
-                                     ssize_t indicator_width, bool selected ) {
+                                     ssize_t display_width, ssize_t help_width, bool selected ) {
   const char* help = NULL;
   const char* display = completions_get_display(env->completions, idx, &help);
   if (display == NULL) return;
   if (indicator == NULL) indicator = "";
-  sbuf_append(eb->extra, "[ic-info]");
+  sbuf_append(eb->extra, "[ic-comp-order]");
   sbuf_append(eb->extra, indicator);
   sbuf_appendf(eb->extra, "%*zd ", (int)number_width, number);
   sbuf_append(eb->extra, "[/]");
-  ssize_t prefix_width = indicator_width + number_width + 1;
-  ssize_t content_width = col_width - prefix_width;
-
-  if (content_width > 0) {
-    sbuf_appendf(eb->extra, "[width=\"%zd;left; ;on\"]", content_width );
-  }
   if (selected) {
     sbuf_append(eb->extra, "[ic-emphasis]");
   }
   sbuf_append(eb->extra, display);
   if (selected) { sbuf_append(eb->extra,"[/ic-emphasis]"); }
-  if (help != NULL) {
-    sbuf_append(eb->extra, "  ");
-    sbuf_append_tagged(eb->extra, "ic-info", help );      
+
+  const ssize_t display_used = bbcode_column_width(env->bbcode, display);
+  if (display_width > display_used) {
+    sbuf_append_spaces(eb->extra, display_width - display_used);
   }
-  if (content_width > 0) { sbuf_append(eb->extra,"[/width]"); }  
+
+  const bool has_help = (help != NULL && help[0] != 0);
+  if (help_width > 0 || has_help) {
+    sbuf_append(eb->extra, "  ");
+    ssize_t used_help_width = 0;
+    if (has_help) {
+      sbuf_append_tagged(eb->extra, "ic-comp-help", help );
+      used_help_width = bbcode_column_width(env->bbcode, help);
+    }
+    const ssize_t target_help_width = (help_width > 0 ? help_width : used_help_width);
+    if (target_help_width > used_help_width) {
+      sbuf_append_spaces(eb->extra, target_help_width - used_help_width);
+    }
+  }
 }
 
 static ssize_t edit_completions_max_width( ic_env_t* env, ssize_t count ) {
@@ -139,7 +172,6 @@ static void edit_completion_menu(ic_env_t* env, editor_t* eb, bool more_availabl
   ssize_t columns = 1;
   ssize_t rows = 1;
   ssize_t number_width = 1;
-  ssize_t col_width = max_item_width + number_width + indicator_width + 1;
 
   for (ssize_t c = max_columns; c >= 1; c--) {
     ssize_t r = (count + c - 1) / c;
@@ -154,7 +186,6 @@ static void edit_completion_menu(ic_env_t* env, editor_t* eb, bool more_availabl
       columns = c;
       rows = r;
       number_width = num_width;
-      col_width = cw;
       break;
     }
   }
@@ -175,6 +206,30 @@ again:
   if (needed_rows < rows_page) rows_page = needed_rows;
   if (rows_page < 1) rows_page = 1;
 
+  ssize_t* col_display_widths = mem_malloc_tp_n(env->mem, ssize_t, columns);
+  ssize_t* col_help_widths = mem_malloc_tp_n(env->mem, ssize_t, columns);
+  if (col_display_widths == NULL || col_help_widths == NULL) {
+    if (col_display_widths != NULL) mem_free(env->mem, col_display_widths);
+    if (col_help_widths != NULL) mem_free(env->mem, col_help_widths);
+    col_display_widths = NULL;
+    col_help_widths = NULL;
+  }
+  if (col_display_widths != NULL && col_help_widths != NULL) {
+    for (ssize_t col = 0; col < columns; col++) {
+      col_display_widths[col] = 0;
+      col_help_widths[col] = 0;
+      for (ssize_t row = 0; row < rows_page; row++) {
+        ssize_t idx = page_start + row + col * rows_page;
+        if (idx >= page_end) break;
+        ssize_t name_width = 0;
+        ssize_t help_width = 0;
+        edit_completion_item_widths(env, idx, &name_width, &help_width);
+        if (name_width > col_display_widths[col]) col_display_widths[col] = name_width;
+        if (help_width > col_help_widths[col]) col_help_widths[col] = help_width;
+      }
+    }
+  }
+
   sbuf_clear(eb->extra);
   for (ssize_t row = 0; row < rows_page; row++) {
     if (row > 0) sbuf_append(eb->extra, "\n");
@@ -184,10 +239,16 @@ again:
       if (col > 0) sbuf_append(eb->extra, "  ");
       ssize_t number = (idx - page_start) + 1;
       const char* indicator = (idx == selected ? indicator_on : indicator_off);
-      editor_append_completion(env, eb, idx, col_width, number_width, number, indicator,
-                               indicator_width, (idx == selected));
+      const ssize_t display_width =
+          (col_display_widths != NULL ? col_display_widths[col] : 0);
+      const ssize_t help_width =
+          (col_help_widths != NULL ? col_help_widths[col] : 0);
+      editor_append_completion(env, eb, idx, number_width, number, indicator,
+                               display_width, help_width, (idx == selected));
     }
   }
+  if (col_display_widths != NULL) mem_free(env->mem, col_display_widths);
+  if (col_help_widths != NULL) mem_free(env->mem, col_help_widths);
   if (page_count > 1 ||
       (env->completion_page_marker != NULL &&
        env->completion_page_marker[0] != 0)) {
