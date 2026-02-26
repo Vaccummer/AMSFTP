@@ -334,10 +334,15 @@ static bool edit_should_delay_highlight(ic_env_t *env, editor_t *eb,
                                         bool force_highlight) {
   const char *input = NULL;
   bool maybe_expensive = false;
+  ssize_t input_len = 0;
   if (env == NULL || eb == NULL || force_highlight) {
     return false;
   }
-  if (eb->input == NULL || sbuf_len(eb->input) <= 0) {
+  if (eb->input == NULL) {
+    return false;
+  }
+  input_len = sbuf_len(eb->input);
+  if (input_len <= 0) {
     return false;
   }
   if (eb->attrs == NULL || env->highlight_delay <= 0) {
@@ -348,6 +353,19 @@ static bool edit_should_delay_highlight(ic_env_t *env, editor_t *eb,
   }
   if (!edit_is_highlight_input_changed(eb)) {
     return false;
+  }
+  // Avoid delayed repaint flicker on normal typing/backspace.
+  // Keep delay only for larger edits (for example paste bursts).
+  if (eb->highlight_input_snapshot == NULL) {
+    return false;
+  }
+  {
+    const ssize_t prev_len = eb->highlight_input_snapshot_len;
+    const ssize_t delta =
+        (input_len >= prev_len ? (input_len - prev_len) : (prev_len - input_len));
+    if (delta <= 1) {
+      return false;
+    }
   }
   input = sbuf_string(eb->input);
   if (input == NULL) {
