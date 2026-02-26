@@ -315,7 +315,7 @@ public:
   [[nodiscard]] std::pair<ECM, std::vector<std::string>>
   PrivateKeys(bool print_sign = false) const;
   ECM List(bool detailed = true) const;
-  ECM Add();
+  ECM Add(const std::string &nickname = "");
   ECM Modify(const std::string &nickname);
   ECM Delete(const std::string &nickname);
   ECM Delete(const std::vector<std::string> &targets);

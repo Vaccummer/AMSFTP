@@ -96,8 +96,6 @@ void AMPromptProfileArgs::Init(const Json &jsond,
     return;
   }
 
-  (void)QueryKey(jsond, {"Prompt", "default_style"},
-                 &prompt.default_style);
   (void)QueryKey(jsond, {"Prompt", "marker"}, &prompt.marker);
   (void)QueryKey(jsond, {"Prompt", "continuation_marker"},
                  &prompt.continuation_marker);
@@ -152,7 +150,6 @@ void AMPromptProfileArgs::Init(const Json &jsond,
  */
 Json AMPromptProfileArgs::GetJson() const {
   Json jsond = Json::object();
-  jsond["Prompt"]["default_style"] = prompt.default_style;
   jsond["Prompt"]["marker"] = prompt.marker;
   jsond["Prompt"]["continuation_marker"] = prompt.continuation_marker;
   jsond["Prompt"]["enable_muiltiline"] = prompt.enable_multiline;
@@ -377,8 +374,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
     }
   };
 
-  if (!prompt_string("Prompt.default_style: ", &working.prompt.default_style) ||
-      !prompt_string("Prompt.marker: ", &working.prompt.marker) ||
+  if (!prompt_string("Prompt.marker: ", &working.prompt.marker) ||
       !prompt_string("Prompt.continuation_marker: ",
                      &working.prompt.continuation_marker)) {
     print_abort();

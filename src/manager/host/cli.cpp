@@ -96,9 +96,9 @@ ECM cls::List(bool detailed) const {
 /**
  * @brief Prompt and add one host configuration.
  */
-ECM cls::Add() {
+ECM cls::Add(const std::string &nickname) {
   ClientConfig entry;
-  ECM prompt_status = PromptAddFields_("", entry);
+  ECM prompt_status = PromptAddFields_(nickname, entry);
   if (prompt_status.first != EC::Success) {
     return prompt_status;
   }
