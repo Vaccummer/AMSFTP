@@ -106,9 +106,12 @@ ECM ParseShellPrefix(const std::string &input, std::string *shell_command,
 std::vector<std::string> SplitCliTokens(const std::string &input);
 
 /**
- * @brief Expand variable shorthand tokens into `var get/def` CLI tokens.
+ * @brief Expand variable shorthand tokens into `var get/def/ls` CLI tokens.
  *
  * Supported shorthands:
+ * - `$`
+ * - `$zone:`
+ * - `$:`
  * - `$varname`
  * - `$varname=value`
  * - `$varname = value`

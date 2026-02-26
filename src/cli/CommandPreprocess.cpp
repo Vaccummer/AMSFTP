@@ -34,13 +34,23 @@ std::string UnescapeCliToken_(const std::string &token) {
 }
 
 /**
- * @brief Parse one shorthand variable token and normalize it as `$name`.
+ * @brief Shortcut variable-token classification used by preprocessing.
  */
-bool ParseShortcutVarToken_(const std::string &token,
-                            std::string *normalized_token) {
-  if (!normalized_token) {
+enum class ShortcutVarKind { None, GetVar, ListAll, ListDomain };
+
+/**
+ * @brief Parse one shorthand variable token into command intent.
+ */
+bool ParseShortcutVarToken_(const std::string &token, ShortcutVarKind *out_kind,
+                            std::string *out_var_token,
+                            std::string *out_domain) {
+  if (!out_kind || !out_var_token || !out_domain) {
     return false;
   }
+  *out_kind = ShortcutVarKind::None;
+  out_var_token->clear();
+  out_domain->clear();
+
   std::string trimmed = AMStr::Strip(token);
   if (trimmed.empty()) {
     return false;
@@ -48,20 +58,36 @@ bool ParseShortcutVarToken_(const std::string &token,
   if (trimmed.size() >= 2 && trimmed[0] == '`' && trimmed[1] == '$') {
     return false;
   }
-  if (trimmed.front() != '$' || trimmed.size() < 2) {
+  if (trimmed == "$") {
+    *out_kind = ShortcutVarKind::ListAll;
+    return true;
+  }
+  if (trimmed.front() != '$') {
     return false;
   }
 
-  std::string name;
-  if (trimmed.size() >= 3 && trimmed[1] == '{' && trimmed.back() == '}') {
-    name = AMStr::Strip(trimmed.substr(2, trimmed.size() - 3));
-  } else {
-    name = trimmed.substr(1);
-  }
-  if (!varsetkn::IsValidVarname(name)) {
+  size_t end = 0;
+  varsetkn::VarRef ref{};
+  if (!varsetkn::ParseVarRefAt(trimmed, 0, trimmed.size(), false, true, &end,
+                               &ref) ||
+      !ref.valid || end != trimmed.size()) {
     return false;
   }
-  *normalized_token = "$" + name;
+
+  if (ref.varname.empty()) {
+    if (!ref.explicit_domain) {
+      return false;
+    }
+    *out_kind = ShortcutVarKind::ListDomain;
+    *out_domain = ref.domain;
+    return true;
+  }
+
+  if (!varsetkn::IsValidVarname(ref.varname)) {
+    return false;
+  }
+  *out_kind = ShortcutVarKind::GetVar;
+  *out_var_token = varsetkn::BuildVarToken(ref);
   return true;
 }
 
@@ -152,7 +178,7 @@ AMInputPreprocess::SplitCliTokens(const std::string &input) {
 }
 
 /**
- * @brief Expand `$var` / `$var=...` shorthand into `var get/def` tokens.
+ * @brief Expand variable shorthand into `var get/def/ls` tokens.
  */
 bool AMInputPreprocess::ExpandVarShortcutTokens(
     std::vector<std::string> *tokens) {
@@ -161,19 +187,33 @@ bool AMInputPreprocess::ExpandVarShortcutTokens(
   }
 
   const std::vector<std::string> src = *tokens;
+  ShortcutVarKind kind = ShortcutVarKind::None;
   std::string var_token;
+  std::string zone;
 
   if (src.size() == 1) {
-    if (ParseShortcutVarToken_(src[0], &var_token)) {
-      *tokens = {"var", "get", var_token};
-      return true;
+    if (ParseShortcutVarToken_(src[0], &kind, &var_token, &zone)) {
+      if (kind == ShortcutVarKind::GetVar) {
+        *tokens = {"var", "get", var_token};
+        return true;
+      }
+      if (kind == ShortcutVarKind::ListAll) {
+        *tokens = {"var", "ls"};
+        return true;
+      }
+      if (kind == ShortcutVarKind::ListDomain) {
+        *tokens = {"var", "ls", zone};
+        return true;
+      }
     }
 
     const size_t eq = src[0].find('=');
     if (eq == std::string::npos) {
       return false;
     }
-    if (!ParseShortcutVarToken_(src[0].substr(0, eq), &var_token)) {
+    if (!ParseShortcutVarToken_(src[0].substr(0, eq), &kind, &var_token,
+                                &zone) ||
+        kind != ShortcutVarKind::GetVar) {
       return false;
     }
 
@@ -183,13 +223,16 @@ bool AMInputPreprocess::ExpandVarShortcutTokens(
 
   const size_t first_eq = src[0].find('=');
   if (first_eq != std::string::npos &&
-      ParseShortcutVarToken_(src[0].substr(0, first_eq), &var_token)) {
+      ParseShortcutVarToken_(src[0].substr(0, first_eq), &kind, &var_token,
+                             &zone) &&
+      kind == ShortcutVarKind::GetVar) {
     const std::string first_rhs = src[0].substr(first_eq + 1);
     *tokens = {"var", "def", var_token, JoinValueWithTail_(first_rhs, src, 1)};
     return true;
   }
 
-  if (!ParseShortcutVarToken_(src[0], &var_token)) {
+  if (!ParseShortcutVarToken_(src[0], &kind, &var_token, &zone) ||
+      kind != ShortcutVarKind::GetVar) {
     return false;
   }
   if (src[1] == "=") {
