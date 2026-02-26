@@ -34,13 +34,6 @@ std::string ToStringScalar_(const Json &value) {
   return value.dump();
 }
 
-/**
- * @brief Return true when one character is valid in variable name.
- */
-bool IsVarChar_(char c) {
-  const unsigned char ch = static_cast<unsigned char>(c);
-  return std::isalnum(ch) || c == '_';
-}
 } // namespace
 
 /**
@@ -356,23 +349,39 @@ std::string AMVarManager::SubstitutePathLike(const std::string &input) const {
   output.reserve(input.size());
 
   std::lock_guard<std::mutex> lock(mutex_);
-  auto append_lookup = [&](const std::string &name,
+  auto append_lookup = [&](const varsetkn::VarRef &ref,
                            const std::string &fallback) {
-    auto domain_it = vars_by_domain_.find(domain);
-    if (domain_it != vars_by_domain_.end()) {
-      auto var_it = domain_it->second.find(name);
-      if (var_it != domain_it->second.end()) {
-        output.append(var_it->second);
-        return;
-      }
+    if (ref.varname.empty()) {
+      output.append(fallback);
+      return;
     }
-    auto public_it = vars_by_domain_.find(varsetkn::kPublic);
-    if (public_it != vars_by_domain_.end()) {
-      auto var_it = public_it->second.find(name);
-      if (var_it != public_it->second.end()) {
-        output.append(var_it->second);
+
+    auto append_from_domain = [&](const std::string &target_domain) -> bool {
+      auto domain_it = vars_by_domain_.find(target_domain);
+      if (domain_it == vars_by_domain_.end()) {
+        return false;
+      }
+      auto var_it = domain_it->second.find(ref.varname);
+      if (var_it == domain_it->second.end()) {
+        return false;
+      }
+      output.append(var_it->second);
+      return true;
+    };
+
+    if (ref.explicit_domain) {
+      if (append_from_domain(ref.domain)) {
         return;
       }
+      output.append(fallback);
+      return;
+    }
+
+    if (append_from_domain(domain)) {
+      return;
+    }
+    if (append_from_domain(varsetkn::kPublic)) {
+      return;
     }
     output.append(fallback);
   };
@@ -394,41 +403,18 @@ std::string AMVarManager::SubstitutePathLike(const std::string &input) const {
       continue;
     }
 
-    if (input[i + 1] == '{') {
-      const size_t close = input.find('}', i + 2);
-      if (close == std::string::npos) {
-        output.append(input.substr(i));
-        break;
-      }
-      const std::string token = input.substr(i, close - i + 1);
-      const std::string name =
-          AMStr::Strip(input.substr(i + 2, close - i - 2));
-      if (!varsetkn::IsValidVarname(name)) {
-        output.append(token);
-      } else {
-        append_lookup(name, token);
-      }
-      i = close;
-      continue;
-    }
-
-    size_t start = i + 1;
-    size_t pos = start;
-    while (pos < input.size() && IsVarChar_(input[pos])) {
-      ++pos;
-    }
-    if (pos == start) {
+    size_t ref_end = i;
+    varsetkn::VarRef ref{};
+    if (!varsetkn::ParseVarRefAt(input, i, input.size(), true, true, &ref_end,
+                                 &ref) ||
+        ref_end <= i) {
       output.push_back('$');
       continue;
     }
-    const std::string name = input.substr(start, pos - start);
-    const std::string token = "$" + name;
-    if (!varsetkn::IsValidVarname(name)) {
-      output.append(token);
-    } else {
-      append_lookup(name, token);
-    }
-    i = pos - 1;
+
+    const std::string token = input.substr(i, ref_end - i);
+    append_lookup(ref, token);
+    i = ref_end - 1;
   }
 
   return output;

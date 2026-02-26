@@ -76,7 +76,7 @@ bool StartsWithEscapedDollar_(const std::string &raw_token) {
 }
 
 /**
- * @brief Parse one shorthand variable token and normalize it as `$name`.
+ * @brief Parse one shorthand variable token and normalize it as canonical form.
  */
 bool ParseShortcutVarToken_(const std::string &raw_token,
                             const std::string &token_text,
@@ -84,73 +84,39 @@ bool ParseShortcutVarToken_(const std::string &raw_token,
   if (StartsWithEscapedDollar_(raw_token)) {
     return false;
   }
-  std::string trimmed = AMStr::Strip(token_text);
-  if (trimmed.empty() || trimmed.front() != '$' || trimmed.size() < 2) {
+  const std::string trimmed = AMStr::Strip(token_text);
+  if (trimmed.empty()) {
     return false;
   }
-
-  std::string name;
-  if (trimmed.size() >= 3 && trimmed[1] == '{' && trimmed.back() == '}') {
-    name = AMStr::Strip(trimmed.substr(2, trimmed.size() - 3));
-  } else {
-    name = trimmed.substr(1);
-  }
-  if (!varsetkn::IsValidVarname(name)) {
+  varsetkn::VarRef ref{};
+  if (!varsetkn::ParseVarToken(trimmed, &ref) || !ref.valid) {
     return false;
   }
   if (normalized_token) {
-    *normalized_token = "$" + name;
+    *normalized_token = varsetkn::BuildVarToken(ref);
   }
   return true;
 }
 
 /**
- * @brief Parse leading `$name`/`${name}` token and return boundary.
+ * @brief Parse leading variable token prefix and return boundary.
  *
- * Returns true when a valid variable name prefix is present. `out_end` points
- * to the first byte after the variable reference inside @p text.
+ * Accepts both complete and incomplete braced prefixes, for example:
+ * `$name`, `$zone:name`, `${name`, `${zone:name`.
  */
 bool ParseLeadingVarToken_(const std::string &text, size_t *out_end) {
-  if (text.empty() || text.front() != '$' || text.size() < 2) {
+  if (text.empty() || text.front() != '$') {
     return false;
   }
-
-  if (text[1] == '{') {
-    const size_t close = text.find('}', 2);
-    if (close == std::string::npos) {
-      const std::string inner = AMStr::Strip(text.substr(2));
-      if (inner.empty() || !varsetkn::IsValidVarname(inner)) {
-        return false;
-      }
-      if (out_end) {
-        *out_end = text.size();
-      }
-      return true;
-    }
-
-    const std::string inner = AMStr::Strip(text.substr(2, close - 2));
-    if (inner.empty() || !varsetkn::IsValidVarname(inner)) {
-      return false;
-    }
-    if (out_end) {
-      *out_end = close + 1;
-    }
-    return true;
-  }
-
-  size_t pos = 1;
-  while (pos < text.size()) {
-    const char ch = text[pos];
-    if (!std::isalnum(static_cast<unsigned char>(ch)) && ch != '_') {
-      break;
-    }
-    ++pos;
-  }
-  if (pos <= 1) {
+  size_t parsed_end = 0;
+  varsetkn::VarRef ref{};
+  if (!varsetkn::ParseVarRefAt(text, 0, text.size(), true, true, &parsed_end,
+                               &ref) ||
+      !ref.valid) {
     return false;
   }
   if (out_end) {
-    *out_end = pos;
+    *out_end = parsed_end;
   }
   return true;
 }

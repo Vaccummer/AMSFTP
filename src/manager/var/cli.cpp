@@ -6,32 +6,24 @@ using EC = ErrorCode;
 
 namespace {
 /**
- * @brief Parse `$name` token into raw variable name.
+ * @brief Parse variable token into structured var reference.
  */
-ECM ParseVarToken_(const std::string &token, std::string *name) {
-  if (!name) {
+ECM ParseVarToken_(const std::string &token, varsetkn::VarRef *ref) {
+  if (!ref) {
     return Err(EC::InvalidArg, "null output variable");
   }
   std::string trimmed = AMStr::Strip(token);
   if (trimmed.empty()) {
     return Err(EC::InvalidArg, "empty variable token");
   }
-  if (trimmed.front() != '$') {
-    return Err(EC::InvalidArg, "variable must start with $");
+  varsetkn::VarRef parsed{};
+  if (!varsetkn::ParseVarToken(trimmed, &parsed) || !parsed.valid) {
+    return Err(EC::InvalidArg, "invalid variable token");
   }
-  if (trimmed.size() >= 3 && trimmed[1] == '{' && trimmed.back() == '}') {
-    trimmed = AMStr::Strip(trimmed.substr(2, trimmed.size() - 3));
-  } else {
-    trimmed = trimmed.substr(1);
-  }
-  if (trimmed.empty()) {
+  if (parsed.varname.empty()) {
     return Err(EC::InvalidArg, "empty variable name");
   }
-  if (!varsetkn::IsValidVarname(trimmed)) {
-    return Err(EC::InvalidArg,
-               "invalid variable name: only [A-Za-z0-9_] allowed");
-  }
-  *name = trimmed;
+  *ref = std::move(parsed);
   return Ok();
 }
 } // namespace
@@ -80,22 +72,38 @@ void VarCLISet::PrintSection_(const std::string &domain,
  */
 ECM VarCLISet::QueryByName(const std::string &token_name) const {
   VarCLISet &var_manager = VarCLISet::Instance();
-  std::string name;
-  ECM parsed = ParseVarToken_(token_name, &name);
+  varsetkn::VarRef ref{};
+  ECM parsed = ParseVarToken_(token_name, &ref);
   if (parsed.first != EC::Success) {
     return parsed;
   }
 
-  auto entries = var_manager.FindByName(name);
-  if (entries.empty()) {
-    return Err(EC::InvalidArg,
-               AMStr::amfmt("variable not found: {}", token_name));
-  }
-  for (const auto &item : entries) {
+  if (ref.explicit_domain) {
+    const VarInfo found = var_manager.GetVar(ref.domain, ref.varname);
+    if (found.IsValid().first != EC::Success) {
+      return Err(
+          EC::InvalidArg,
+          AMStr::amfmt("variable not found: {}", varsetkn::BuildVarToken(ref)));
+    }
     prompt_manager_.Print(AMStr::amfmt(
-        "\\[{}] {} = {}", item.domain, FormatVarText_("$" + item.varname),
-        FormatVarText_(RenderValue_(item.varvalue))));
+        "\\[{}] {} = {}", found.domain, FormatVarText_("$" + found.varname),
+        FormatVarText_(RenderValue_(found.varvalue))));
+    return Ok();
   }
+
+  const std::string current_domain = var_manager.CurrentDomain();
+  VarInfo found = var_manager.GetVar(current_domain, ref.varname);
+  if (found.IsValid().first != EC::Success) {
+    found = var_manager.GetVar(varsetkn::kPublic, ref.varname);
+  }
+  if (found.IsValid().first != EC::Success) {
+    return Err(
+        EC::InvalidArg,
+        AMStr::amfmt("variable not found: {}", varsetkn::BuildVarToken(ref)));
+  }
+  prompt_manager_.Print(AMStr::amfmt(
+      "\\[{}] {} = {}", found.domain, FormatVarText_("$" + found.varname),
+      FormatVarText_(RenderValue_(found.varvalue))));
   return Ok();
 }
 
@@ -105,31 +113,37 @@ ECM VarCLISet::QueryByName(const std::string &token_name) const {
 ECM VarCLISet::DefineVar(bool global, const std::string &token_name,
                          const std::string &value) {
   VarCLISet &var_manager = VarCLISet::Instance();
-  std::string name;
-  ECM parsed = ParseVarToken_(token_name, &name);
+  varsetkn::VarRef ref{};
+  ECM parsed = ParseVarToken_(token_name, &ref);
   if (parsed.first != EC::Success) {
     return parsed;
   }
+  if (global && ref.explicit_domain) {
+    return Err(EC::InvalidArg, "cannot use --global with explicit zone token");
+  }
 
   const std::string domain =
-      global ? std::string(varsetkn::kPublic) : var_manager.CurrentDomain();
+      ref.explicit_domain
+          ? ref.domain
+          : (global ? std::string(varsetkn::kPublic) : var_manager.CurrentDomain());
 
-  if (!global) {
-    VarInfo old = var_manager.GetVar(domain, name);
+  if (domain != varsetkn::kPublic) {
+    VarInfo old = var_manager.GetVar(domain, ref.varname);
     if (old.IsValid().first == EC::Success) {
       prompt_manager_.Print(AMStr::amfmt(
           "[{}] {} = {}", old.domain, FormatVarText_("$" + old.varname),
           FormatVarText_(RenderValue_(old.varvalue))));
       bool canceled = false;
       const bool overwrite = prompt_manager_.PromptYesNo(
-          AMStr::amfmt("Overwrite [{}].${}? (y/N): ", domain, name), &canceled);
+          AMStr::amfmt("Overwrite [{}].${}? (y/N): ", domain, ref.varname),
+          &canceled);
       if (canceled || !overwrite) {
         return Err(EC::Terminate, "operation canceled");
       }
     }
   }
 
-  ECM rcm = var_manager.SetVar({domain, name, value}, true);
+  ECM rcm = var_manager.SetVar({domain, ref.varname, value}, true);
   if (rcm.first != EC::Success) {
     return rcm;
   }
@@ -142,19 +156,19 @@ ECM VarCLISet::DefineVar(bool global, const std::string &token_name,
 ECM VarCLISet::DeleteVarByCli(bool all, const std::string &domain,
                               const std::string &token_name) {
   VarCLISet &var_manager = VarCLISet::Instance();
-  std::string name;
-  ECM parsed = ParseVarToken_(token_name, &name);
+  varsetkn::VarRef ref{};
+  ECM parsed = ParseVarToken_(token_name, &ref);
   if (parsed.first != EC::Success) {
     return parsed;
   }
 
   const std::string trimmed_domain = AMStr::Strip(domain);
-  if (all && !trimmed_domain.empty()) {
+  if (all && (!trimmed_domain.empty() || ref.explicit_domain)) {
     return Err(EC::InvalidArg, "nickname cannot be used with --all");
   }
 
   if (all) {
-    auto matches = var_manager.FindByName(name);
+    auto matches = var_manager.FindByName(ref.varname);
     if (matches.empty()) {
       return Err(EC::InvalidArg, "variable not found");
     }
@@ -171,22 +185,30 @@ ECM VarCLISet::DeleteVarByCli(bool all, const std::string &domain,
       return Err(EC::Terminate, "operation canceled");
     }
     std::vector<VarInfo> removed;
-    ECM rcm = var_manager.DeleteVarAll(name, &removed);
+    ECM rcm = var_manager.DeleteVarAll(ref.varname, &removed);
     if (rcm.first != EC::Success) {
       return rcm;
     }
     return var_manager.Save(true);
   }
 
-  std::string target_domain = trimmed_domain;
-  if (target_domain.empty()) {
+  std::string target_domain;
+  if (ref.explicit_domain) {
+    if (!trimmed_domain.empty() && trimmed_domain != ref.domain) {
+      return Err(EC::InvalidArg,
+                 "domain argument conflicts with token explicit zone");
+    }
+    target_domain = ref.domain;
+  } else if (!trimmed_domain.empty()) {
+    target_domain = trimmed_domain;
+  } else {
     target_domain = var_manager.CurrentDomain();
   }
   if (!var_manager.HasDomain(target_domain)) {
     return Err(EC::InvalidArg,
                AMStr::amfmt("invalid section: {}", target_domain));
   }
-  ECM rcm = var_manager.DeleteVar(target_domain, name);
+  ECM rcm = var_manager.DeleteVar(target_domain, ref.varname);
   if (rcm.first != EC::Success) {
     return rcm;
   }
