@@ -61,6 +61,6 @@ function  fcommit { param([string]$message)"...}
 
 ## Don't Build Without My Specific Command!
 
-## Ask user if you have any questions about the demand before conduct!
+## Show your plan and ask questionbefore conduct!
 
-## Ask user if you have any questions about the demand before conduct!
+## Show your plan and ask question before conduct!
