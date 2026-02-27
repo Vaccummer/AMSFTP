@@ -31,7 +31,6 @@ public:
    * @brief Hook container for a signal subscriber.
    */
   struct SignalHook {
-    amf interrupt_flag;
     SignalCallback callback;
     bool is_silenced = false;
     /** Higher values run first. */

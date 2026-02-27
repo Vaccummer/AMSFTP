@@ -347,7 +347,7 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
  */
 std::pair<ECM, std::shared_ptr<BaseClient>>
 AMTransferManager::AcquireClient_(const std::string &nickname,
-                                  const std::shared_ptr<InterruptFlag> &flag) {
+                                  const std::shared_ptr<TaskControlToken> &flag) {
   if (flag && flag->check()) {
     return {ECM{EC::Terminate, "Interrupted during client preparation"},
             nullptr};
@@ -380,7 +380,7 @@ AMTransferManager::AcquireClient_(const std::string &nickname,
  */
 std::pair<ECM, std::shared_ptr<ClientMaintainer>>
 AMTransferManager::CollectClients(const std::vector<std::string> &nicknames,
-                                  const std::shared_ptr<InterruptFlag> &flag) {
+                                  const std::shared_ptr<TaskControlToken> &flag) {
   auto maintainer = std::make_shared<ClientMaintainer>(
       -1, ClientMaintainer::DisconnectCallback(),
       client_manager_.LocalClient());
@@ -458,7 +458,7 @@ void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
  */
 ECM AMTransferManager::transfer(
     const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
   bool has_resume = false;
   for (const auto &set : transfer_sets) {
     if (!set.resume) {
@@ -473,14 +473,15 @@ ECM AMTransferManager::transfer(
   if (has_resume && transfer_sets.size() != 1) {
     return {EC::InvalidArg, "Resume transfer requires a single transfer set"};
   }
-  auto flag = interrupt_flag
-                  ? interrupt_flag
-                  : (amgif ? amgif : std::make_shared<InterruptFlag>());
+  auto flag = interrupt_flag ? interrupt_flag : amgif;
   auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
   if (rcm.first != EC::Success) {
     return rcm;
   }
-  return transfer(task_info, flag);
+  if (task_info) {
+    task_info->control_token = amgif ? amgif : std::make_shared<TaskControlToken>();
+  }
+  return transfer(task_info, task_info ? task_info->control_token : flag);
 }
 
 /**
@@ -488,7 +489,7 @@ ECM AMTransferManager::transfer(
  */
 ECM AMTransferManager::transfer(
     const std::shared_ptr<TaskInfo> &task_info,
-    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
 #ifdef _WIN32
   ScopedProcessedInputMode_ processed_input_guard;
   (void)processed_input_guard;
@@ -505,9 +506,11 @@ ECM AMTransferManager::transfer(
     return {EC::Success, ""};
   }
 
-  auto flag = interrupt_flag
-                  ? interrupt_flag
-                  : (amgif ? amgif : std::make_shared<InterruptFlag>());
+  task_info->control_token = amgif ? amgif : std::make_shared<TaskControlToken>();
+  auto flag = task_info->control_token;
+  if (interrupt_flag && interrupt_flag->check() && flag) {
+    flag->set(true);
+  }
   const int refresh_interval_ms = GetTransferProgressRefreshMs_();
 
   std::mutex done_mtx;
@@ -586,7 +589,7 @@ ECM AMTransferManager::transfer(
  */
 ECM AMTransferManager::transfer_async(
     const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
   bool has_resume = false;
   for (const auto &set : transfer_sets) {
     if (!set.resume) {
@@ -601,14 +604,19 @@ ECM AMTransferManager::transfer_async(
   if (has_resume && transfer_sets.size() != 1) {
     return {EC::InvalidArg, "Resume transfer requires a single transfer set"};
   }
-  auto flag = interrupt_flag
-                  ? interrupt_flag
-                  : (amgif ? amgif : std::make_shared<InterruptFlag>());
+  auto flag = interrupt_flag ? interrupt_flag : amgif;
   auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
   if (rcm.first != EC::Success) {
     return rcm;
   }
-  return transfer_async(task_info, flag);
+  if (task_info) {
+    task_info->control_token = std::make_shared<TaskControlToken>();
+    if (interrupt_flag && interrupt_flag->check()) {
+      task_info->control_token->set(true);
+    }
+  }
+  return transfer_async(task_info,
+                        task_info ? task_info->control_token : flag);
 }
 
 /**
@@ -616,8 +624,7 @@ ECM AMTransferManager::transfer_async(
  */
 ECM AMTransferManager::transfer_async(
     const std::shared_ptr<TaskInfo> &task_info,
-    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
-  (void)interrupt_flag;
+    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
   if (!task_info) {
     return {EC::Success, ""};
   }
@@ -628,6 +635,11 @@ ECM AMTransferManager::transfer_async(
       task_info->hostm.reset();
     }
     return {EC::InvalidArg, "Task List is empty"};
+  }
+
+  task_info->control_token = std::make_shared<TaskControlToken>();
+  if (interrupt_flag && interrupt_flag->check()) {
+    task_info->control_token->set(true);
   }
 
   UserResultCallback user_callback =
@@ -666,7 +678,7 @@ ECM AMTransferManager::transfer_async(
  */
 std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
     const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-    const std::shared_ptr<InterruptFlag> &flag) {
+    const std::shared_ptr<TaskControlToken> &flag) {
   if (transfer_sets.empty()) {
     return {ECM{EC::Success, ""}, nullptr};
   }

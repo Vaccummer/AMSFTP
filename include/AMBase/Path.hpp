@@ -577,7 +577,7 @@ using WalkErrorCallback =
     std::shared_ptr<std::function<void(const std::string &, const ECM &)>>;
 using WRD =
     std::vector<std::pair<std::vector<std::string>, std::vector<PathInfo>>>;
-using amf = std::shared_ptr<InterruptFlag>;
+using amf = std::shared_ptr<TaskControlToken>;
 using EC = ErrorCode;
 using ECM = std::pair<ErrorCode, std::string>;
 using WER = std::vector<std::pair<std::string, ECM>>;

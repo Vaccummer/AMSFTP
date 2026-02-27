@@ -1,8 +1,10 @@
 #pragma once
 // standard library
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
 #include <filesystem>
 #include <functional>
 #include <iomanip>
@@ -23,14 +25,14 @@
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
 
-struct TransferTask; // Forward declaration
-class InterruptFlag; // Forward declaration
+struct TransferTask;    // Forward declaration
+class TaskControlToken; // Forward declaration
 
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
 using TASKS = std::vector<TransferTask>;
-using amf = std::shared_ptr<InterruptFlag>;
+using amf = std::shared_ptr<TaskControlToken>;
 namespace fs = std::filesystem;
 
 template <typename T> struct NBResult {
@@ -54,6 +56,13 @@ struct AMTokenSpan {
 };
 
 enum class ControlSignal : int { Running = 0, Pause = 1, Terminate = 2 };
+
+enum class TaskControlSignal : int {
+  SigInt = SIGINT,
+#ifdef SIGTERM
+  SigTerm = SIGTERM,
+#endif
+};
 
 template <typename Fn, typename... Args>
 inline ECM CallCallbackSafe(const Fn &fn, Args &&...args) {
@@ -224,13 +233,118 @@ inline ECM fecm(const std::error_code &ec) {
   return {fec(ec), ec.message()};
 }
 
-class InterruptFlag {
+/**
+ * @brief Unified task control token for async transfer pause/terminate flow.
+ */
+class TaskControlToken {
+public:
+  using HookFunc =
+      std::function<void(ControlSignal, std::optional<TaskControlSignal>)>;
+
+  /**
+   * @brief Lightweight hook metadata returned by temporary hook guards.
+   */
+  struct HookInfo {
+    size_t id = 0;
+    ControlSignal threshold = ControlSignal::Running;
+    int priority = 0;
+  };
+
+  /**
+   * @brief RAII guard for temporary hook registration.
+   *
+   * When the guard is destroyed, the associated hook is automatically
+   * unregistered.
+   */
+  class TmpHookMutex {
+  public:
+    TmpHookMutex() = default;
+
+    /**
+     * @brief Construct a guard for one registered hook.
+     */
+    TmpHookMutex(TaskControlToken *owner, const HookInfo &info)
+        : owner_(owner), info_(info) {}
+
+    TmpHookMutex(const TmpHookMutex &) = delete;
+    TmpHookMutex &operator=(const TmpHookMutex &) = delete;
+
+    /**
+     * @brief Move constructor; transfers ownership of hook registration.
+     */
+    TmpHookMutex(TmpHookMutex &&other) noexcept
+        : owner_(other.owner_), info_(other.info_) {
+      other.owner_ = nullptr;
+      other.info_.id = 0;
+    }
+
+    /**
+     * @brief Move assignment; releases current hook then adopts source hook.
+     */
+    TmpHookMutex &operator=(TmpHookMutex &&other) noexcept {
+      if (this == &other) {
+        return *this;
+      }
+      unlock();
+      owner_ = other.owner_;
+      info_ = other.info_;
+      other.owner_ = nullptr;
+      other.info_.id = 0;
+      return *this;
+    }
+
+    /**
+     * @brief Destructor that unregisters the guarded hook.
+     */
+    ~TmpHookMutex() { unlock(); }
+
+    /**
+     * @brief Explicitly unregister the guarded hook.
+     */
+    void unlock() {
+      if (owner_ && info_.id != 0) {
+        (void)owner_->UnregisterHook(info_.id);
+        owner_ = nullptr;
+        info_.id = 0;
+      }
+    }
+
+    /**
+     * @brief Return true if this guard currently owns a valid hook.
+     */
+    [[nodiscard]] bool owns_lock() const {
+      return owner_ != nullptr && info_.id != 0;
+    }
+
+    /**
+     * @brief Return hook metadata tracked by this guard.
+     */
+    [[nodiscard]] HookInfo info() const { return info_; }
+
+  private:
+    TaskControlToken *owner_ = nullptr;
+    HookInfo info_ = {};
+  };
+
 private:
-  std::atomic<bool> is_interrupted = false;
-  std::atomic<bool> is_killed = false;
-  std::atomic<size_t> wake_token_seed_ = 1;
+  struct HookEntry {
+    HookFunc func;
+    ControlSignal threshold = ControlSignal::Running;
+    int priority = 0;
+    size_t id = 0;
+  };
+
+  static constexpr int kNoSignal = 0;
+  std::atomic<int> state_{static_cast<int>(ControlSignal::Running)};
+  std::atomic<int> signal_{kNoSignal};
+  std::atomic<bool> interrupted_{false};
+  std::atomic<bool> killed_{false};
+  std::atomic<size_t> wake_token_seed_{1};
   std::mutex wake_cb_mtx_;
   std::unordered_map<size_t, std::function<void()>> wake_callbacks_;
+  std::atomic<size_t> hook_seed_{1};
+  std::mutex hooks_mtx_;
+  std::unordered_map<size_t, HookEntry> hooks_;
 
   /**
    * @brief Notify all registered wake-up callbacks.
@@ -251,29 +365,256 @@ private:
     }
   }
 
-public:
   /**
-   * @brief Return true if the interrupt flag has been marked as killed.
+   * @brief Validate whether a signal value is accepted for terminate semantics.
    */
-  inline bool iskill() const {
-    return is_killed.load(std::memory_order_relaxed);
+  static bool IsSupportedTerminateSignal_(int signum) {
+    if (signum == SIGINT) {
+      return true;
+    }
+#ifdef SIGTERM
+    if (signum == SIGTERM) {
+      return true;
+    }
+#endif
+    return false;
   }
-  inline bool check() { return is_interrupted.load(std::memory_order_relaxed); }
 
-  inline void set(bool value) {
-    is_interrupted.store(value, std::memory_order_relaxed);
-    if (value) {
-      NotifyWakeCallbacks_();
+  /**
+   * @brief Cast an optional raw signal to optional enum representation.
+   */
+  static std::optional<TaskControlSignal>
+  CastSignal_(std::optional<int> signal_value) {
+    if (!signal_value.has_value()) {
+      return std::nullopt;
+    }
+    if (!IsSupportedTerminateSignal_(*signal_value)) {
+      return std::nullopt;
+    }
+    return static_cast<TaskControlSignal>(*signal_value);
+  }
+
+  /**
+   * @brief Trigger hooks whose threshold is met by the new state.
+   */
+  void TriggerHooks_(ControlSignal new_state) {
+    std::vector<HookEntry> pending;
+    {
+      std::lock_guard<std::mutex> lock(hooks_mtx_);
+      pending.reserve(hooks_.size());
+      for (const auto &[_, hook] : hooks_) {
+        if (static_cast<int>(new_state) >= static_cast<int>(hook.threshold)) {
+          pending.push_back(hook);
+        }
+      }
+    }
+
+    std::sort(pending.begin(), pending.end(),
+              [](const HookEntry &a, const HookEntry &b) {
+                const int a_level = static_cast<int>(a.threshold);
+                const int b_level = static_cast<int>(b.threshold);
+                if (a_level != b_level) {
+                  return a_level > b_level;
+                }
+                if (a.priority != b.priority) {
+                  return a.priority > b.priority;
+                }
+                return a.id < b.id;
+              });
+
+    const auto current_signal = GetSignal();
+    for (auto &hook : pending) {
+      (void)CallCallbackSafe(hook.func, new_state, current_signal);
     }
   }
-  inline void reset() {
-    is_interrupted.store(false, std::memory_order_relaxed);
-  }
-  inline void kill() {
-    is_interrupted.store(true, std::memory_order_relaxed);
-    is_killed.store(true, std::memory_order_relaxed);
+
+public:
+  TaskControlToken() = default;
+
+  /**
+   * @brief Request pause state for async transfer execution.
+   */
+  bool Pause() {
+    const int current = state_.load(std::memory_order_acquire);
+    if (current >= static_cast<int>(ControlSignal::Pause)) {
+      return false;
+    }
+    state_.store(static_cast<int>(ControlSignal::Pause),
+                 std::memory_order_release);
+    interrupted_.store(true, std::memory_order_release);
     NotifyWakeCallbacks_();
+    TriggerHooks_(ControlSignal::Pause);
+    return true;
   }
+
+  /**
+   * @brief Request terminate state with an optional source signal.
+   *
+   * @param signal Optional OS signal number; when provided it should be SIGINT
+   *        or SIGTERM.
+   */
+  bool Terminate(std::optional<TaskControlSignal> signal = std::nullopt) {
+    std::optional<int> raw_signal = std::nullopt;
+    if (signal.has_value()) {
+      raw_signal = static_cast<int>(*signal);
+    }
+    return Terminate(raw_signal);
+  }
+
+  /**
+   * @brief Request terminate state with an optional raw signal number.
+   */
+  bool Terminate(std::optional<int> signal) {
+    if (signal.has_value() && !IsSupportedTerminateSignal_(*signal)) {
+      return false;
+    }
+
+    bool changed = false;
+    if (signal.has_value()) {
+      const int old_signal =
+          signal_.exchange(*signal, std::memory_order_acq_rel);
+      changed = changed || old_signal != *signal;
+    }
+
+    const int old_state = state_.exchange(
+        static_cast<int>(ControlSignal::Terminate), std::memory_order_acq_rel);
+    changed =
+        changed || old_state != static_cast<int>(ControlSignal::Terminate);
+
+    interrupted_.store(true, std::memory_order_release);
+    NotifyWakeCallbacks_();
+    if (old_state != static_cast<int>(ControlSignal::Terminate)) {
+      TriggerHooks_(ControlSignal::Terminate);
+    }
+    return changed;
+  }
+
+  /**
+   * @brief Return current control status.
+   */
+  [[nodiscard]] ControlSignal GetStatus() const {
+    const int current = state_.load(std::memory_order_acquire);
+    switch (current) {
+    case static_cast<int>(ControlSignal::Pause):
+      return ControlSignal::Pause;
+    case static_cast<int>(ControlSignal::Terminate):
+      return ControlSignal::Terminate;
+    default:
+      return ControlSignal::Running;
+    }
+  }
+
+  /**
+   * @brief Return true when token control state is running.
+   */
+  [[nodiscard]] bool IsRunning() const {
+    return state_.load() == static_cast<int>(ControlSignal::Running);
+  }
+
+  /**
+   * @brief Return the optional source signal associated with termination.
+   */
+  [[nodiscard]] std::optional<TaskControlSignal> GetSignal() const {
+    const int current = signal_.load(std::memory_order_acquire);
+    return CastSignal_(current == kNoSignal ? std::nullopt
+                                            : std::optional<int>{current});
+  }
+
+  /**
+   * @brief Reset state and signal back to running/no-signal.
+   */
+  bool Reset() {
+    const int old_state = state_.exchange(
+        static_cast<int>(ControlSignal::Running), std::memory_order_acq_rel);
+    const int old_signal =
+        signal_.exchange(kNoSignal, std::memory_order_acq_rel);
+    killed_.store(false, std::memory_order_release);
+    interrupted_.store(false, std::memory_order_release);
+    return old_state != static_cast<int>(ControlSignal::Running) ||
+           old_signal != kNoSignal;
+  }
+
+  /**
+   * @brief Force killed termination (legacy compatibility).
+   */
+  bool Kill(std::optional<TaskControlSignal> signal = std::nullopt) {
+    const bool changed = Terminate(signal);
+    killed_.store(true, std::memory_order_release);
+    interrupted_.store(true, std::memory_order_release);
+    NotifyWakeCallbacks_();
+    return changed;
+  }
+
+  /**
+   * @brief Register one state hook with threshold and priority.
+   *
+   * @return Unique hook id; 0 means invalid callback.
+   */
+  size_t RegisterHook(HookFunc func,
+                      ControlSignal threshold = ControlSignal::Running,
+                      int priority = 0) {
+    if (!func) {
+      return 0;
+    }
+    const size_t id = hook_seed_.fetch_add(1, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> lock(hooks_mtx_);
+    hooks_[id] = HookEntry{std::move(func), threshold, priority, id};
+    return id;
+  }
+
+  /**
+   * @brief Unregister hook by unique id.
+   */
+  bool UnregisterHook(size_t id) {
+    if (id == 0) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(hooks_mtx_);
+    return hooks_.erase(id) > 0;
+  }
+
+  /**
+   * @brief Register a temporary hook with RAII-based auto-unregister.
+   */
+  TmpHookMutex TmpHook(HookFunc func,
+                       ControlSignal threshold = ControlSignal::Running,
+                       int priority = 0) {
+    const size_t id = RegisterHook(std::move(func), threshold, priority);
+    return TmpHookMutex(this, HookInfo{id, threshold, priority});
+  }
+
+  /**
+   * @brief Legacy compatibility: return true when interrupted.
+   */
+  bool check() {
+    return interrupted_.load(std::memory_order_acquire) || !IsRunning();
+  }
+
+  /**
+   * @brief Legacy compatibility: set interrupt state.
+   */
+  void set(bool value) {
+    if (value) {
+      (void)Terminate(std::optional<TaskControlSignal>{});
+    } else {
+      (void)Reset();
+    }
+  }
+
+  /**
+   * @brief Legacy compatibility: return true when killed.
+   */
+  bool iskill() const { return killed_.load(std::memory_order_acquire); }
+
+  /**
+   * @brief Legacy compatibility: lowercase reset API.
+   */
+  void reset() { (void)Reset(); }
+
+  /**
+   * @brief Legacy compatibility: lowercase kill API.
+   */
+  void kill() { (void)Kill(); }
 
   /**
    * @brief Register a callback used to wake blocking waiters when interrupted.
@@ -320,8 +661,8 @@ public:
   }
 };
 
-inline std::shared_ptr<InterruptFlag> amgif = std::make_shared<InterruptFlag>();
-// Non-blocking call result
+inline std::shared_ptr<TaskControlToken> amgif =
+    std::make_shared<TaskControlToken>();
 
 class PathInfo {
 public:
@@ -821,84 +1162,7 @@ class ClientMaintainer; // Forward declaration
 // New ProgressData that holds weak_ptr to TaskInfo to avoid cycle reference
 // Reads/writes directly on TaskInfo for progress tracking
 
-struct WkProgressData {
-  std::weak_ptr<TaskInfo> task_info;
-  std::atomic<int> control_sign{0}; // 0=Running, 1=Pause, 2=Terminate
-  double cb_time = timenow();
-  std::shared_ptr<StreamRingBuffer> ring_buffer = nullptr;
-  amf interrupt_flag = std::make_shared<InterruptFlag>();
-  std::function<void(bool)> inner_callback = {};
-
-  WkProgressData() = default;
-  explicit WkProgressData(std::shared_ptr<TaskInfo> ti) : task_info(ti) {}
-
-  // Control signal helpers
-  bool is_terminate() const {
-    return control_sign.load(std::memory_order_acquire) !=
-           static_cast<int>(ControlSignal::Running);
-  }
-  bool is_terminate_only() const {
-    return control_sign.load(std::memory_order_acquire) ==
-           static_cast<int>(ControlSignal::Terminate);
-  }
-  bool is_pause_only() const {
-    return control_sign.load(std::memory_order_acquire) ==
-           static_cast<int>(ControlSignal::Pause);
-  }
-  bool is_pause() const {
-    return control_sign.load(std::memory_order_acquire) ==
-           static_cast<int>(ControlSignal::Pause);
-  }
-  bool is_running() const {
-    return control_sign.load(std::memory_order_acquire) ==
-           static_cast<int>(ControlSignal::Running);
-  }
-
-  void set_terminate() {
-    control_sign.store(static_cast<int>(ControlSignal::Terminate),
-                       std::memory_order_release);
-    if (interrupt_flag) {
-      interrupt_flag->set(true);
-    }
-  }
-  void set_pause() {
-    control_sign.store(static_cast<int>(ControlSignal::Pause),
-                       std::memory_order_release);
-    if (interrupt_flag) {
-      interrupt_flag->set(true);
-    }
-  }
-  void set_running() {
-    control_sign.store(static_cast<int>(ControlSignal::Running),
-                       std::memory_order_release);
-    if (interrupt_flag) {
-      interrupt_flag->reset();
-    }
-  }
-
-  /**
-   * @brief Return the interrupt flag used by blocking I/O waits.
-   */
-  amf GetInterruptFlag() const { return interrupt_flag; }
-
-  /**
-   * @brief Translate interrupt to pause/terminate error according to state.
-   */
-  ECM InterruptECM(
-      const std::string &pause_msg = "Task paused by user",
-      const std::string &terminate_msg = "Task terminated by user") const {
-    if (is_pause_only()) {
-      return {EC::TransferPause, pause_msg};
-    }
-    return {EC::Terminate, terminate_msg};
-  }
-
-  void CallInnerCallback(bool force = false) {
-    if (inner_callback) {
-      inner_callback(force);
-    }
-  }
-};
+class WkProgressData;
 
 struct TaskInfo {
   /**
@@ -1050,6 +1314,11 @@ struct TaskInfo {
   std::shared_ptr<WkProgressData> pd;
 
   /**
+   * @brief Unified control token for this task.
+   */
+  amf control_token = nullptr;
+
+  /**
    * @brief Construct a task info with optional quiet flag.
    */
   explicit TaskInfo(bool quiet_mode = false) : quiet(quiet_mode) {}
@@ -1086,9 +1355,8 @@ struct TaskInfo {
     }
     std::unique_lock<std::mutex> lock(status_wait_mtx);
     if (timeout_ms < 0) {
-      status_cv.wait(lock, [this]() {
-        return GetStatus() == TaskStatus::Finished;
-      });
+      status_cv.wait(lock,
+                     [this]() { return GetStatus() == TaskStatus::Finished; });
       return true;
     }
     return status_cv.wait_for(
@@ -1199,6 +1467,113 @@ struct TaskInfo {
    */
   void ResetCompletionDispatch() {
     completion_dispatched.store(false, std::memory_order_release);
+  }
+};
+
+struct WkProgressData {
+  std::weak_ptr<TaskInfo> task_info;
+  double cb_time = timenow();
+  std::shared_ptr<StreamRingBuffer> ring_buffer = nullptr;
+  mutable amf interrupt_flag = nullptr;
+  std::function<void(bool)> inner_callback = {};
+
+  explicit WkProgressData(std::shared_ptr<TaskInfo> ti) : task_info(ti) {
+    if (ti) {
+      interrupt_flag = ti->control_token;
+    }
+  }
+
+private:
+  /**
+   * @brief Resolve control token from owning TaskInfo.
+   */
+  amf ResolveInterruptFlag_() const {
+    auto ti = task_info.lock();
+    if (ti) {
+      if (interrupt_flag != ti->control_token) {
+        interrupt_flag = ti->control_token;
+      }
+    }
+    return interrupt_flag;
+  }
+
+public:
+  /**
+   * @brief Sync cached interrupt token pointer from owning TaskInfo.
+   */
+  void SyncInterruptFlagFromTaskInfo() { (void)ResolveInterruptFlag_(); }
+
+  // Control signal helpers
+  bool is_terminate() const {
+    auto flag = ResolveInterruptFlag_();
+    if (!flag) {
+      return false;
+    }
+    return flag->GetStatus() != ControlSignal::Running;
+  }
+  bool is_terminate_only() const {
+    auto flag = ResolveInterruptFlag_();
+    if (!flag) {
+      return false;
+    }
+    return flag->GetStatus() == ControlSignal::Terminate;
+  }
+  bool is_pause_only() const {
+    auto flag = ResolveInterruptFlag_();
+    if (!flag) {
+      return false;
+    }
+    return flag->GetStatus() == ControlSignal::Pause;
+  }
+  bool is_pause() const { return is_pause_only(); }
+  bool is_running() const {
+    auto flag = ResolveInterruptFlag_();
+    if (!flag) {
+      return true;
+    }
+    return flag->GetStatus() == ControlSignal::Running;
+  }
+
+  void set_terminate() {
+    auto interrupt_flag = ResolveInterruptFlag_();
+    if (interrupt_flag) {
+      (void)interrupt_flag->Terminate(std::optional<TaskControlSignal>{});
+    }
+  }
+  void set_pause() {
+    auto interrupt_flag = ResolveInterruptFlag_();
+    if (interrupt_flag) {
+      (void)interrupt_flag->Pause();
+    }
+  }
+  void set_running() {
+    auto interrupt_flag = ResolveInterruptFlag_();
+    if (interrupt_flag) {
+      (void)interrupt_flag->Reset();
+    }
+  }
+
+  /**
+   * @brief Return the interrupt flag used by blocking I/O waits.
+   */
+  amf GetInterruptFlag() const { return ResolveInterruptFlag_(); }
+
+  /**
+   * @brief Translate interrupt to pause/terminate error according to state.
+   */
+  ECM InterruptECM(
+      const std::string &pause_msg = "Task paused by user",
+      const std::string &terminate_msg = "Task terminated by user") const {
+    if (is_pause_only()) {
+      return {EC::TransferPause, pause_msg};
+    }
+    return {EC::Terminate, terminate_msg};
+  }
+
+  void CallInnerCallback(bool force = false) {
+    if (inner_callback) {
+      inner_callback(force);
+    }
   }
 };
 

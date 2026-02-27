@@ -78,7 +78,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   request.request_id = ctx.request_id;
   request.timeout_ms = timeout_ms;
   request.target = AMCompletionTarget::Path;
-  auto interrupt_flag = std::make_shared<InterruptFlag>();
+  auto interrupt_flag = std::make_shared<TaskControlToken>();
   request.interrupt_flag = [flag = interrupt_flag]() { return flag->check(); };
   request.interrupt_cancel = [flag = interrupt_flag]() { flag->set(true); };
 
