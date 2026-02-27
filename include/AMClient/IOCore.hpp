@@ -655,6 +655,7 @@ private:
   std::unordered_map<TaskId, std::shared_ptr<TaskInfo>> results_;
 
   mutable std::mutex conducting_mtx_;
+  std::condition_variable conducting_cv_;
   std::unordered_set<TaskId> conducting_tasks_;
   std::vector<TaskId> conducting_by_thread_;
   std::vector<std::shared_ptr<TaskInfo>> conducting_infos_;
@@ -831,6 +832,9 @@ private:
    * @brief Store a completed task or invoke its result callback.
    */
   void HandleCompletedTask(const std::shared_ptr<TaskInfo> &task_info) {
+    if (!task_info || !task_info->TryMarkCompletionDispatched()) {
+      return;
+    }
     if (task_info->result_callback) {
       CallCallbackSafe(task_info->result_callback, task_info);
       return;
@@ -858,14 +862,21 @@ private:
    * @brief Clear conducting state for a worker thread.
    */
   void ClearConducting(size_t thread_index) {
-    std::lock_guard<std::mutex> lock(conducting_mtx_);
-    if (thread_index < conducting_by_thread_.size()) {
-      const TaskId id = conducting_by_thread_[thread_index];
-      if (!id.empty()) {
-        conducting_tasks_.erase(id);
+    bool removed_task = false;
+    {
+      std::lock_guard<std::mutex> lock(conducting_mtx_);
+      if (thread_index < conducting_by_thread_.size()) {
+        const TaskId id = conducting_by_thread_[thread_index];
+        if (!id.empty()) {
+          conducting_tasks_.erase(id);
+          removed_task = true;
+        }
+        conducting_by_thread_[thread_index].clear();
+        conducting_infos_[thread_index] = nullptr;
       }
-      conducting_by_thread_[thread_index].clear();
-      conducting_infos_[thread_index] = nullptr;
+    }
+    if (removed_task) {
+      conducting_cv_.notify_all();
     }
   }
 
@@ -1859,12 +1870,18 @@ public:
       }
     }
 
-    const int64_t start = am_ms();
-    while (is_conducting()) {
-      if (timeout_ms >= 0 && (am_ms() - start) > timeout_ms) {
-        return {EC::OperationTimeout, "Graceful terminate timed out"};
+    {
+      std::unique_lock<std::mutex> lock(conducting_mtx_);
+      if (timeout_ms < 0) {
+        conducting_cv_.wait(lock, [this]() { return conducting_tasks_.empty(); });
+      } else {
+        const bool no_conducting = conducting_cv_.wait_for(
+            lock, std::chrono::milliseconds(timeout_ms),
+            [this]() { return conducting_tasks_.empty(); });
+        if (!no_conducting) {
+          return {EC::OperationTimeout, "Graceful terminate timed out"};
+        }
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     for (auto &thread : worker_threads_) {
@@ -1965,6 +1982,7 @@ public:
     if (task_info->id.empty() || IsTaskIdUsed_(task_info->id)) {
       task_info->id = GenerateTaskId_();
     }
+    task_info->ResetCompletionDispatch();
     task_info->submit_time.store(timenow(), std::memory_order_relaxed);
     task_info->SetStatus(TaskStatus::Pending);
 
@@ -2247,15 +2265,8 @@ public:
       existing->pd->set_terminate();
     }
 
-    const int64_t start = am_ms();
-    while (timeout_ms < 0 || (am_ms() - start) < timeout_ms) {
-      if (existing->GetStatus() == TaskStatus::Finished) {
-        if (existing->hostm) {
-          HandleCompletedTask(existing);
-        }
-        return {existing, {EC::Success, ""}};
-      }
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    if (existing->WaitFinished(timeout_ms)) {
+      return {existing, {EC::Success, ""}};
     }
     return {
         existing,

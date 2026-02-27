@@ -516,15 +516,6 @@ ECM AMTransferManager::transfer(
 
   UserResultCallback user_callback = [this, &remaining, &done_cv, &done_mtx](
                                          std::shared_ptr<TaskInfo> task_info) {
-    UserResultCallback user_cb;
-    {
-      std::lock_guard<std::mutex> lock(callback_mtx_);
-      user_cb = user_result_cb_;
-    }
-    if (user_cb) {
-      CallCallbackSafe(user_cb, task_info);
-    }
-
     --remaining;
     std::lock_guard<std::mutex> lock(done_mtx);
     done_cv.notify_all();
