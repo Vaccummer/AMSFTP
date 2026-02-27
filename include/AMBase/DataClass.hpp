@@ -2,6 +2,7 @@
 // standard library
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <functional>
 #include <iomanip>
@@ -911,6 +912,12 @@ struct TaskInfo {
   mutable std::mutex mtx;
 
   /**
+   * @brief Mutex/condition variable pair for waiting on status transitions.
+   */
+  mutable std::mutex status_wait_mtx;
+  mutable std::condition_variable status_cv;
+
+  /**
    * @brief Unique task identifier.
    */
   std::string id = "";
@@ -996,6 +1003,11 @@ struct TaskInfo {
   ResultCallback result_callback = {};
 
   /**
+   * @brief Guard to ensure completion dispatch/callback runs only once.
+   */
+  std::atomic<bool> completion_dispatched{false};
+
+  /**
    * @brief Requested logical thread affinity ID (-1 means public/unassigned).
    *
    * Thread 0 is intrinsic and cannot be removed.
@@ -1052,6 +1064,7 @@ struct TaskInfo {
    */
   void SetStatus(TaskStatus new_status) {
     status.store(new_status, std::memory_order_release);
+    status_cv.notify_all();
   }
 
   /**
@@ -1059,6 +1072,28 @@ struct TaskInfo {
    */
   TaskStatus GetStatus() const {
     return status.load(std::memory_order_acquire);
+  }
+
+  /**
+   * @brief Wait until the task reaches Finished status.
+   *
+   * @param timeout_ms Timeout in milliseconds. Negative waits forever.
+   * @return True if task is finished before timeout, otherwise false.
+   */
+  bool WaitFinished(int timeout_ms = -1) const {
+    if (GetStatus() == TaskStatus::Finished) {
+      return true;
+    }
+    std::unique_lock<std::mutex> lock(status_wait_mtx);
+    if (timeout_ms < 0) {
+      status_cv.wait(lock, [this]() {
+        return GetStatus() == TaskStatus::Finished;
+      });
+      return true;
+    }
+    return status_cv.wait_for(
+        lock, std::chrono::milliseconds(timeout_ms),
+        [this]() { return GetStatus() == TaskStatus::Finished; });
   }
 
   /**
@@ -1148,6 +1183,22 @@ struct TaskInfo {
   void DeleteProgressData() {
     std::lock_guard<std::mutex> lock(mtx);
     this->pd = nullptr;
+  }
+
+  /**
+   * @brief Mark completion dispatch state and return true only for first call.
+   */
+  bool TryMarkCompletionDispatched() {
+    bool expected = false;
+    return completion_dispatched.compare_exchange_strong(
+        expected, true, std::memory_order_acq_rel);
+  }
+
+  /**
+   * @brief Reset completion dispatch state before resubmitting the task.
+   */
+  void ResetCompletionDispatch() {
+    completion_dispatched.store(false, std::memory_order_release);
   }
 };
 
