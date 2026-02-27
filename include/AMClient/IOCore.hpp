@@ -730,9 +730,13 @@ private:
    * @brief Ensure progress data and inner callback are prepared.
    */
   void EnsureProgressData(const std::shared_ptr<TaskInfo> &task_info) {
+    if (!task_info->control_token) {
+      task_info->control_token = std::make_shared<TaskControlToken>();
+    }
     if (!task_info->pd) {
       task_info->pd = std::make_shared<WkProgressData>(task_info);
     }
+    task_info->pd->interrupt_flag = task_info->control_token;
     if (!task_info->pd->inner_callback) {
       std::weak_ptr<TaskInfo> ti_w = task_info;
       std::weak_ptr<WkProgressData> pd_w = task_info->pd;
@@ -746,6 +750,7 @@ private:
       };
     }
     task_info->pd->task_info = task_info;
+    task_info->pd->SyncInterruptFlagFromTaskInfo();
   }
 
   /**

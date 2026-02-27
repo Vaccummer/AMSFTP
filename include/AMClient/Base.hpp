@@ -507,31 +507,61 @@ class SafeChannel {
 public:
   LIBSSH2_CHANNEL *channel = nullptr;
   bool closed = false; // Mark whether it has been closed normally
+  bool is_init = false;
+  amf init_interrupt_flag = nullptr;
+  int64_t init_start_time = -1;
+  int init_timeout_ms = -1;
+
+private:
+  /**
+   * @brief Persist initialization context used by retryable operations.
+   */
+  void StoreInitContext_(const amf &interrupt_flag, int timeout_ms,
+                         int64_t start_time) {
+    init_interrupt_flag = interrupt_flag;
+    init_timeout_ms = timeout_ms;
+    init_start_time = start_time == -1 ? am_ms() : start_time;
+  }
+
+  /**
+   * @brief Check interruption/timeout state for retry operations.
+   */
+  ECM CheckControlState_(const std::string &action) const {
+    if (init_interrupt_flag && init_interrupt_flag->check()) {
+      return {EC::Terminate, AMStr::amfmt("{} interrupted", action)};
+    }
+    if (init_timeout_ms >= 0 && init_start_time >= 0 &&
+        (am_ms() - init_start_time) >= init_timeout_ms) {
+      return {EC::OperationTimeout, AMStr::amfmt("{} timed out", action)};
+    }
+    return {EC::Success, ""};
+  }
+
+public:
 
   ~SafeChannel() {
     if (channel) {
       if (!closed) {
-        // Not closed normally; need to send signal to terminate remote process
-        libssh2_channel_send_eof(channel);
-        libssh2_channel_signal(channel, "TERM");
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        libssh2_channel_signal(channel, "KILL");
-        libssh2_channel_close(channel);
+        // Best-effort graceful stop before releasing the channel handle.
+        (void)graceful_exit(true, 50, true);
       }
       libssh2_channel_free(channel);
       channel = nullptr;
     }
+    is_init = false;
   }
 
   // Close channel normally (blocking mode)
   // Return true on success, false on failure
   bool close() {
     if (!channel || closed) {
+      is_init = false;
       return closed;
     }
     if (libssh2_channel_close(channel) == 0 &&
         libssh2_channel_wait_closed(channel) == 0) {
       closed = true;
+      is_init = false;
     }
     return closed;
   }
@@ -543,18 +573,6 @@ public:
     }
     libssh2_channel_send_eof(channel);
     libssh2_channel_signal(channel, "TERM");
-  }
-
-  // Force terminate and close (blocking mode)
-  bool terminate_and_close(int wait_ms = 50) {
-    if (!channel || closed) {
-      return closed;
-    }
-    libssh2_channel_send_eof(channel);
-    libssh2_channel_signal(channel, "TERM");
-    std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
-    libssh2_channel_signal(channel, "KILL");
-    return close();
   }
 
   // Non-blocking close; use with wait_for_socket
@@ -570,15 +588,153 @@ public:
       rc = libssh2_channel_wait_closed(channel);
       if (rc == 0) {
         closed = true;
+        is_init = false;
       }
     }
     return rc;
   }
 
-  SafeChannel(LIBSSH2_SESSION *session) {
-    this->channel =
-        libssh2_channel_open_ex(session, "session", sizeof("session") - 1,
-                                4 * AMMB, 32 * AMKB, nullptr, 0);
+  SafeChannel() = default;
+
+  /**
+   * @brief Construct with an existing channel and operation context.
+   */
+  explicit SafeChannel(LIBSSH2_CHANNEL *existing_channel,
+                       amf interrupt_flag = nullptr, int timeout_ms = -1,
+                       int64_t start_time = -1) {
+    channel = existing_channel;
+    closed = false;
+    is_init = existing_channel != nullptr;
+    StoreInitContext_(interrupt_flag, timeout_ms, start_time);
+  }
+
+  /**
+   * @brief Initialize SSH channel with retry support in non-blocking sessions.
+   *
+   * @param session Active libssh2 session.
+   * @param interrupt_flag Optional interruption flag.
+   * @param timeout_ms Timeout in milliseconds; negative waits forever.
+   * @param start_time Start timestamp for timeout budget; -1 uses now.
+   * @return ECM status describing initialization result.
+   */
+  ECM Init(LIBSSH2_SESSION *session, amf interrupt_flag = nullptr,
+           int timeout_ms = -1, int64_t start_time = -1) {
+    StoreInitContext_(interrupt_flag, timeout_ms, start_time);
+    if (!session) {
+      is_init = false;
+      return {EC::NoSession, "Session is null"};
+    }
+    if (channel) {
+      if (!closed) {
+        (void)graceful_exit(true, 50, true);
+      }
+      libssh2_channel_free(channel);
+      channel = nullptr;
+      closed = false;
+      is_init = false;
+    }
+
+    while (true) {
+      ECM control_retry = CheckControlState_("Channel init");
+      if (control_retry.first != EC::Success) {
+        is_init = false;
+        return control_retry;
+      }
+
+      channel = libssh2_channel_open_ex(session, "session",
+                                        sizeof("session") - 1, 4 * AMMB,
+                                        32 * AMKB, nullptr, 0);
+      if (channel) {
+        closed = false;
+        is_init = true;
+        return {EC::Success, ""};
+      }
+
+      const int err = libssh2_session_last_errno(session);
+      if (err != LIBSSH2_ERROR_EAGAIN) {
+        is_init = false;
+        return {EC::NoConnection,
+                AMStr::amfmt("Channel init failed with libssh2 error {}", err)};
+      }
+      ECM control = CheckControlState_("Channel init");
+      if (control.first != EC::Success) {
+        is_init = false;
+        return control;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+  }
+
+  /**
+   * @brief Gracefully terminate a running channel and close it.
+   *
+   * @param send_exit Whether to send EOF/TERM before closing.
+   * @param term_wait_ms Delay after TERM signal before close attempts.
+   * @param force_kill Whether to send KILL if close fails after TERM.
+   * @return ECM status describing exit result.
+   */
+  ECM graceful_exit(bool send_exit = true, int term_wait_ms = 50,
+                    bool force_kill = true) {
+    if (!channel || closed) {
+      is_init = false;
+      return {EC::Success, ""};
+    }
+
+    auto run_nonblocking_op = [&](auto &&op,
+                                  const std::string &action) -> ECM {
+      while (true) {
+        const int rc = op();
+        if (rc == 0) {
+          return {EC::Success, ""};
+        }
+        if (rc != LIBSSH2_ERROR_EAGAIN) {
+          return {EC::NoConnection,
+                  AMStr::amfmt("{} failed with libssh2 error {}", action, rc)};
+        }
+        ECM control = CheckControlState_(action);
+        if (control.first != EC::Success) {
+          return control;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+    };
+
+    if (send_exit) {
+      ECM eof_rcm = run_nonblocking_op(
+          [this]() { return libssh2_channel_send_eof(channel); },
+          "channel send eof");
+      if (eof_rcm.first != EC::Success && eof_rcm.first != EC::Terminate &&
+          eof_rcm.first != EC::OperationTimeout) {
+        return eof_rcm;
+      }
+
+      ECM term_rcm = run_nonblocking_op(
+          [this]() { return libssh2_channel_signal(channel, "TERM"); },
+          "channel signal TERM");
+      if (term_rcm.first != EC::Success && term_rcm.first != EC::Terminate &&
+          term_rcm.first != EC::OperationTimeout) {
+        return term_rcm;
+      }
+
+      if (term_wait_ms > 0) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(term_wait_ms));
+      }
+    }
+
+    ECM close_rcm =
+        run_nonblocking_op([this]() { return close_nonblock(); }, "channel close");
+    if (close_rcm.first == EC::Success) {
+      return close_rcm;
+    }
+
+    if (force_kill && send_exit && channel && !closed) {
+      (void)run_nonblocking_op(
+          [this]() { return libssh2_channel_signal(channel, "KILL"); },
+          "channel signal KILL");
+      close_rcm = run_nonblocking_op([this]() { return close_nonblock(); },
+                                     "channel close");
+    }
+    return close_rcm;
   }
 };
 
@@ -588,7 +744,7 @@ private:
 
 protected:
   int poll_interval_ms = 20;
-  amf ClientInterruptFlag = std::make_shared<InterruptFlag>();
+  amf ClientInterruptFlag = std::make_shared<TaskControlToken>();
   ClientProtocol PROTOCOL = ClientProtocol::Base;
   ECM state = {EC::NoConnection, "Client Not Initialized"};
   std::mutex state_mtx;

@@ -363,7 +363,7 @@ void AMTransferManager::ClearCachedTransferSets() {
  * @brief Submit cached transfer sets as a task.
  */
 ECM AMTransferManager::SubmitCachedTransferSets(
-    bool quiet, const std::shared_ptr<InterruptFlag> &interrupt_flag,
+    bool quiet, const std::shared_ptr<TaskControlToken> &interrupt_flag,
     bool is_async) {
   std::vector<UserTransferSet> transfer_sets;
   {

@@ -65,7 +65,6 @@ bool AMCliSignalMonitor::RegisterHook(const std::string &name,
   }
   hooks_[name] = hook;
   if (name == "GLOBAL") {
-    hooks_[name].interrupt_flag = amgif;
     hooks_[name].priority = 0;
     hooks_[name].consume = false;
   }
@@ -148,7 +147,6 @@ void AMCliSignalMonitor::EnsureGlobalHook_() {
   auto it = hooks_.find("GLOBAL");
   if (it == hooks_.end()) {
     SignalHook global;
-    global.interrupt_flag = amgif;
     global.callback = {};
     global.is_silenced = false;
     global.priority = 0;
@@ -156,7 +154,6 @@ void AMCliSignalMonitor::EnsureGlobalHook_() {
     hooks_["GLOBAL"] = std::move(global);
     return;
   }
-  it->second.interrupt_flag = amgif;
   it->second.priority = 0;
   it->second.consume = false;
 }
@@ -185,15 +182,12 @@ void AMCliSignalMonitor::Run_() {
         if (hook.callback) {
           hook.callback(signum);
         }
-        if (hook.interrupt_flag) {
-          hook.interrupt_flag->set(true);
-        }
         if (hook.consume) {
           break;
         }
       }
       if ((signum == SIGINT || signum == SIGTERM) && amgif) {
-        amgif->set(true);
+        (void)amgif->Terminate(std::optional<int>{signum});
       }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));

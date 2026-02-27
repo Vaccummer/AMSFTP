@@ -324,7 +324,6 @@ void AMPromptManager::InitIsoclineConfig() {
   ApplyCoreProfileSettings_(default_profile);
 
   AMCliSignalMonitor::SignalHook hook;
-  hook.interrupt_flag = nullptr;
   hook.callback = [this]([[maybe_unused]] int signum) {
     (void)this;
     // ic_async_stop();
@@ -335,7 +334,6 @@ void AMPromptManager::InitIsoclineConfig() {
   AMCliSignalMonitor::Instance().RegisterHook("PROMPT", hook);
 
   AMCliSignalMonitor::SignalHook core_hook;
-  core_hook.interrupt_flag = amgif;
   core_hook.callback = [this]([[maybe_unused]] int signum) {
     (void)this;
     // ic_async_stop();

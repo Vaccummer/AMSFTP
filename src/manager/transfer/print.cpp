@@ -216,14 +216,14 @@ int StatusOrder_(const std::string &status) {
   return 4;
 }
 
-inline bool IsInterrupted_(const std::shared_ptr<InterruptFlag> &flag) {
+inline bool IsInterrupted_(const std::shared_ptr<TaskControlToken> &flag) {
   if (flag && flag->check()) {
     return true;
   }
   return false;
 }
 
-inline void ResetInterruptFlag_(const std::shared_ptr<InterruptFlag> &flag) {
+inline void ResetInterruptFlag_(const std::shared_ptr<TaskControlToken> &flag) {
   if (flag && !flag->iskill()) {
     flag->reset();
   }
@@ -517,7 +517,7 @@ size_t GetSpeedWindowSize() {
 }
 
 void PrintTaskProgress_(const std::shared_ptr<TaskInfo> &task_info,
-                        const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+                        const std::shared_ptr<TaskControlToken> &interrupt_flag) {
   if (!task_info) {
     return;
   }
@@ -588,7 +588,7 @@ struct TaskProgressGroupBar {
 
 void PrintTaskProgressGroup_(
     const std::vector<std::shared_ptr<TaskInfo>> &tasks,
-    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
   if (tasks.empty()) {
     return;
   }
@@ -631,13 +631,13 @@ void PrintTaskProgressGroup_(
  * @brief Show task status by ID.
  */
 ECM AMTransferManager::Show(
-    const ID &task_id, const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+    const ID &task_id, const std::shared_ptr<TaskControlToken> &interrupt_flag) {
   return Show(std::vector<ID>{task_id}, interrupt_flag);
 }
 
 ECM AMTransferManager::Show(
     const std::vector<ID> &task_ids,
-    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
   if (task_ids.empty()) {
     return {EC::InvalidArg, "Task id required"};
   }
@@ -708,7 +708,7 @@ ECM AMTransferManager::Show(
  */
 ECM AMTransferManager::List(
     bool pending, bool suspend, bool finished, bool conducting,
-    const std::shared_ptr<InterruptFlag> &interrupt_flag) {
+    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
   if (!pending && !suspend && !finished && !conducting) {
     pending = true;
     suspend = true;

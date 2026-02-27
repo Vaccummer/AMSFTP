@@ -117,7 +117,7 @@ public:
    */
   ECM SubmitCachedTransferSets(
       bool quiet,
-      const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr,
+      const std::shared_ptr<TaskControlToken> &interrupt_flag = nullptr,
       bool is_async = false);
 
   /**
@@ -127,7 +127,7 @@ public:
    * @param interrupt_flag Optional flag to stop progress rendering.
    */
   ECM Show(const ID &task_id,
-           const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+           const std::shared_ptr<TaskControlToken> &interrupt_flag = nullptr);
 
   /**
    * @brief Show task status by multiple IDs.
@@ -139,7 +139,7 @@ public:
    * @param interrupt_flag Optional flag to stop progress rendering.
    */
   ECM Show(const std::vector<ID> &task_ids,
-           const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+           const std::shared_ptr<TaskControlToken> &interrupt_flag = nullptr);
 
   /**
    * @brief List tasks by status.
@@ -151,7 +151,7 @@ public:
    * @param interrupt_flag Optional flag to stop progress rendering.
    */
   ECM List(bool pending, bool suspend, bool finished, bool conducting,
-           const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+           const std::shared_ptr<TaskControlToken> &interrupt_flag = nullptr);
 
   /**
    * @brief Inspect a task by ID.
@@ -248,7 +248,7 @@ public:
    * @param interrupt_flag Optional interrupt flag.
    */
   ECM transfer(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-               const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+               const std::shared_ptr<TaskControlToken> &interrupt_flag = nullptr);
   /**
    * @brief Execute a prepared TaskInfo synchronously.
    *
@@ -256,7 +256,7 @@ public:
    * @param interrupt_flag Optional interrupt flag for cancellation.
    */
   ECM transfer(const std::shared_ptr<TaskInfo> &task_info,
-               const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+               const std::shared_ptr<TaskControlToken> &interrupt_flag = nullptr);
   /**
    * @brief Execute transfer sets asynchronously (non-blocking).
    *
@@ -266,7 +266,7 @@ public:
    */
   ECM transfer_async(
       const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-      const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+      const std::shared_ptr<TaskControlToken> &interrupt_flag = nullptr);
   /**
    * @brief Execute a prepared TaskInfo asynchronously.
    *
@@ -275,7 +275,7 @@ public:
    */
   ECM transfer_async(
       const std::shared_ptr<TaskInfo> &task_info,
-      const std::shared_ptr<InterruptFlag> &interrupt_flag = nullptr);
+      const std::shared_ptr<TaskControlToken> &interrupt_flag = nullptr);
 
 private:
   /**
@@ -288,15 +288,15 @@ private:
                         const std::string &dst_host);
   std::pair<ECM, std::shared_ptr<BaseClient>>
   AcquireClient_(const std::string &nickname,
-                 const std::shared_ptr<InterruptFlag> &flag);
+                 const std::shared_ptr<TaskControlToken> &flag);
   std::pair<ECM, std::shared_ptr<ClientMaintainer>>
   CollectClients(const std::vector<std::string> &nicknames,
-                 const std::shared_ptr<InterruptFlag> &flag);
+                 const std::shared_ptr<TaskControlToken> &flag);
   void
   ReturnClientsToIdle_(const std::shared_ptr<ClientMaintainer> &maintainer);
   std::pair<ECM, std::shared_ptr<TaskInfo>>
   PrepareTasks_(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-                const std::shared_ptr<InterruptFlag> &flag);
+                const std::shared_ptr<TaskControlToken> &flag);
   std::shared_ptr<TaskInfo> FindTaskById_(const ID &task_id) const;
   std::vector<std::shared_ptr<TaskInfo>> SnapshotHistory_() const;
   bool ParseEntryId_(const ID &entry_id, ID *task_id,
