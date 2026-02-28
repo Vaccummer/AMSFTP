@@ -17,12 +17,12 @@ inline void InitClientWorkdir_(const std::shared_ptr<BaseClient> &client) {
   if (!client) {
     return;
   }
-  std::string value;
-  if (client->GetPublicValue("workdir", &value)) {
+  const std::string value = AMPathStr::UnifyPathSep(client->GetCwd(), "/");
+  if (!value.empty()) {
     return;
   }
-  (void)client->SetPublicValue(
-      "workdir", AMPathStr::UnifyPathSep(client->GetHomeDir(), "/"), true);
+  const std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+  client->SetCwd(home);
 }
 
 inline void ApplyLoginDir_(AMHostManager &hostm, const std::string &nickname,
@@ -53,8 +53,8 @@ inline void ApplyLoginDir_(AMHostManager &hostm, const std::string &nickname,
   }
 
   const std::string normalized = AMPathStr::UnifyPathSep(resolved, "/");
-  (void)client->SetPublicValue("workdir", normalized, true);
-  (void)client->SetPublicValue("login_dir", normalized, true);
+  client->SetCwd(normalized);
+  client->SetLoginDir(normalized);
   if (need_persist && !IsLocalNickname_(nickname)) {
     (void)hostm.SetHostValue(nickname, configkn::login_dir, resolved);
   }
@@ -186,6 +186,7 @@ Operator::AddClient(const std::string &nickname,
     }
     auto existing_cfg = hostm_.GetClientConfig(nickname);
     if (existing_cfg.first.first == EC::Success) {
+      existing->SetClientMetaData(existing_cfg.second.metadata);
       ApplyLoginDir_(hostm_, nickname, existing,
                      existing_cfg.second.metadata.login_dir, flag);
     } else {
@@ -250,6 +251,7 @@ Operator::AddClient(const std::string &nickname,
     return {rcm, base_client};
   }
 
+  base_client->SetClientMetaData(client_config.metadata);
   ApplyLoginDir_(hostm_, nickname, base_client, client_config.metadata.login_dir, flag);
   target.add_client(nickname, base_client, true);
   return {Ok(), base_client};
@@ -329,6 +331,7 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
     return {rcm, base_client};
   }
 
+  base_client->SetClientMetaData(client_config.second.metadata);
   ApplyLoginDir_(hostm_, nickname, base_client, client_config.second.metadata.login_dir,
                  flag);
   return {Ok(), base_client};
@@ -424,6 +427,7 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
     return {save_rcm, base_client};
   }
 
+  base_client->SetClientMetaData(entry.metadata);
   ApplyLoginDir_(hostm_, resolved_nickname, base_client, "", flag);
   target.add_client(resolved_nickname, base_client, true);
   return {Ok(), base_client};
@@ -605,10 +609,10 @@ std::shared_ptr<BaseClient> Operator::CreateLocalClient_() {
               << std::endl;
     std::exit(1);
   }
-  (void)client_t->SetPublicValue(
-      "workdir", AMPathStr::UnifyPathSep(cfg.metadata.login_dir, "/"), true);
-  (void)client_t->SetPublicValue(
-      "login_dir", AMPathStr::UnifyPathSep(cfg.metadata.login_dir, "/"), true);
+  ClientMetaData metadata = cfg.metadata;
+  metadata.login_dir = AMPathStr::UnifyPathSep(cfg.metadata.login_dir, "/");
+  metadata.cwd = metadata.login_dir;
+  client_t->SetClientMetaData(metadata);
   return client_t;
 }
 

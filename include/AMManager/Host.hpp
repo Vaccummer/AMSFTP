@@ -164,12 +164,6 @@ inline static const std::array<std::string, 12> fileds = {
 };
 } // namespace configkn
 
-struct ClientMetaData {
-  std::string cmd_prefix = "";
-  bool wrap_cmd = false;
-  std::string login_dir = "";
-};
-
 struct HostConfig {
   ConRequest request = {};
   ClientMetaData metadata = {};

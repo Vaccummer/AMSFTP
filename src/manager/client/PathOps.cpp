@@ -108,25 +108,30 @@ PathOps::GetOrInitWorkdir(const std::shared_ptr<BaseClient> &client) const {
   if (!client) {
     return "";
   }
-  std::string workdir;
-  if (client->GetPublicValue("workdir", &workdir)) {
-    workdir = AMPathStr::UnifyPathSep(workdir, "/");
-    if (workdir.empty()) {
-      workdir = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
-      (void)client->SetPublicValue("workdir", workdir, true);
-      return workdir;
-    }
-    if (!workdir.empty() && !AMPathStr::IsAbs(workdir, "/")) {
+  std::string workdir = AMPathStr::UnifyPathSep(client->GetCwd(), "/");
+  if (!workdir.empty()) {
+    if (!AMPathStr::IsAbs(workdir, "/")) {
       const std::string home =
           AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
       workdir = AMFS::abspath(workdir, true, home, home, "/");
-      (void)client->SetPublicValue("workdir", workdir, true);
+      client->SetCwd(workdir);
     }
     return workdir;
   }
 
+  std::string login_dir = AMPathStr::UnifyPathSep(client->GetLoginDir(), "/");
+  if (!login_dir.empty()) {
+    if (!AMPathStr::IsAbs(login_dir, "/")) {
+      const std::string home =
+          AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+      login_dir = AMFS::abspath(login_dir, true, home, home, "/");
+    }
+    client->SetCwd(login_dir);
+    return login_dir;
+  }
+
   const std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
-  (void)client->SetPublicValue("workdir", home, true);
+  client->SetCwd(home);
   return home;
 }
 
@@ -144,7 +149,7 @@ void PathOps::SetClientWorkdir(const std::shared_ptr<BaseClient> &client,
     const std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
     normalized = AMFS::abspath(normalized, true, home, base, "/");
   }
-  (void)client->SetPublicValue("workdir", normalized, true);
+  client->SetCwd(normalized);
 }
 
 std::string PathOps::BuildPath(const std::shared_ptr<BaseClient> &client,
@@ -165,12 +170,12 @@ void PathOps::InitClientWorkdir(
   if (!client) {
     return;
   }
-  std::string value;
-  if (client->GetPublicValue("workdir", &value)) {
+  const std::string value = AMPathStr::UnifyPathSep(client->GetCwd(), "/");
+  if (!value.empty()) {
     return;
   }
-  (void)client->SetPublicValue(
-      "workdir", AMPathStr::UnifyPathSep(client->GetHomeDir(), "/"), true);
+  const std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+  client->SetCwd(home);
 }
 
 void PathOps::ApplyLoginDir(const std::string &nickname,
@@ -202,8 +207,8 @@ void PathOps::ApplyLoginDir(const std::string &nickname,
   }
 
   const std::string normalized = AMPathStr::UnifyPathSep(resolved, "/");
-  (void)client->SetPublicValue("workdir", normalized, true);
-  (void)client->SetPublicValue("login_dir", normalized, true);
+  client->SetCwd(normalized);
+  client->SetLoginDir(normalized);
 
   if (need_persist && !IsLocalNickname_(nickname)) {
     (void)hostm_.SetHostValue(nickname, configkn::login_dir, resolved);

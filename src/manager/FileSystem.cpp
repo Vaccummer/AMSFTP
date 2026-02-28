@@ -214,9 +214,9 @@ static void PrintClientDetail_(AMPromptManager &prompt_manager,
       "buffer_size", "trash_dir", "login_dir", "keyfile",  "compression",
   };
 
-  std::string login_dir;
-  if (!client->GetPublicValue("login_dir", &login_dir)) {
-    (void)client->GetPublicValue("workdir", &login_dir);
+  std::string login_dir = client->GetLoginDir();
+  if (login_dir.empty()) {
+    login_dir = client->GetCwd();
   }
 
   const ConRequest &request = client->GetRequest();

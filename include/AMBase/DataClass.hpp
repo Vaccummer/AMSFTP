@@ -507,6 +507,13 @@ public:
         mode_int(std::move(mode_int)), mode_str(std::move(mode_str)) {}
 };
 
+struct ClientMetaData {
+  std::string cmd_prefix = "";
+  bool wrap_cmd = false;
+  std::string login_dir = "";
+  std::string cwd = "";
+};
+
 struct ConRequest {
   std::string nickname = "";
   std::string hostname = "";

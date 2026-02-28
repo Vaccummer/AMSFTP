@@ -535,50 +535,6 @@ public:
     return ptr;
   }
 
-  /**
-   * @brief Get a public metadata value by key.
-   * @param key Metadata key.
-   * @param value Output value pointer. When null, only existence is checked.
-   * @return True when key exists.
-   */
-  [[nodiscard]] bool GetPublicValue(const std::string &key,
-                                    std::string *value) const {
-    std::lock_guard<std::mutex> lock(var_cache_mtx_);
-    auto it = named_var_cache_.find(key);
-    if (it == named_var_cache_.end()) {
-      return false;
-    }
-    const std::string *ptr = std::any_cast<std::string>(&(it->second));
-    if (!ptr) {
-      return false;
-    }
-    if (value) {
-      *value = *ptr;
-    }
-    return true;
-  }
-
-  /**
-   * @brief Set a public metadata value.
-   * @param key Metadata key.
-   * @param value Metadata value.
-   * @param force Overwrite when key already exists.
-   * @return True when the value is written.
-   */
-  [[nodiscard]] bool SetPublicValue(const std::string &key,
-                                    const std::string &value, bool force) {
-    std::string tmp = value;
-    return StoreNamedValue<std::string>(key, std::move(tmp), force);
-  }
-
-  /**
-   * @brief Backward-compatible typo method; use SetPublicValue instead.
-   */
-  [[nodiscard]] bool SetPulbicValue(const std::string &key,
-                                    const std::string &value, bool force) {
-    return SetPublicValue(key, value, force);
-  }
-
   AMTracer(const ConRequest &request, int buffer_capacity = 10,
            TraceCallback trace_cb = {})
       : trace_cb(std::move(trace_cb)), res_data(request),
@@ -907,6 +863,8 @@ protected:
   amf ClientInterruptFlag = std::make_shared<TaskControlToken>();
   ECM state = {EC::NoConnection, "Client Not Initialized"};
   std::mutex state_mtx;
+  mutable std::mutex metadata_mtx_;
+  ClientMetaData metadata_ = {};
   // NOLINTNEXTLINE
   void SetState(const ECM &state) {
     std::lock_guard<std::mutex> lock(state_mtx);
@@ -935,6 +893,36 @@ public:
   std::string GetUID() { return this->uid; }
 
   [[nodiscard]] ClientProtocol GetProtocol() const { return res_data.protocol; }
+
+  [[nodiscard]] ClientMetaData GetClientMetaData() const {
+    std::lock_guard<std::mutex> lock(metadata_mtx_);
+    return metadata_;
+  }
+
+  void SetClientMetaData(const ClientMetaData &metadata) {
+    std::lock_guard<std::mutex> lock(metadata_mtx_);
+    metadata_ = metadata;
+  }
+
+  [[nodiscard]] std::string GetCwd() const {
+    std::lock_guard<std::mutex> lock(metadata_mtx_);
+    return metadata_.cwd;
+  }
+
+  void SetCwd(const std::string &cwd) {
+    std::lock_guard<std::mutex> lock(metadata_mtx_);
+    metadata_.cwd = cwd;
+  }
+
+  [[nodiscard]] std::string GetLoginDir() const {
+    std::lock_guard<std::mutex> lock(metadata_mtx_);
+    return metadata_.login_dir;
+  }
+
+  void SetLoginDir(const std::string &login_dir) {
+    std::lock_guard<std::mutex> lock(metadata_mtx_);
+    metadata_.login_dir = login_dir;
+  }
 
   ssize_t TransferRingBufferSize(ssize_t buffer_size = -1) {
     if (buffer_size <= 0) {
