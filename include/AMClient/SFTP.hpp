@@ -111,7 +111,9 @@ public:
                               &hints, &result);
     if (dns_err != 0) {
 #ifdef _WIN32
-      auto dns_err_str = gai_strerrorA(dns_err);
+      const wchar_t *dns_err_w = gai_strerrorW(dns_err);
+      auto dns_err_str =
+          dns_err_w != nullptr ? AMStr::wstr(dns_err_w) : std::string{};
       error_msg = AMStr::fmt("DNS resolve failed: {} (hostname={})",
                                dns_err_str, hostname);
 #else

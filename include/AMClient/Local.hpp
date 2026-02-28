@@ -109,7 +109,7 @@ public:
     }
     SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
 
-    STARTUPINFOA si;
+    STARTUPINFOW si;
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
     si.dwFlags = STARTF_USESTDHANDLES;
@@ -119,11 +119,12 @@ public:
 
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
-    std::vector<char> cmd_buf(cmd.begin(), cmd.end());
-    cmd_buf.push_back('\0');
+    std::wstring wcmd = AMStr::wstr(cmd);
+    std::vector<wchar_t> cmd_buf(wcmd.begin(), wcmd.end());
+    cmd_buf.push_back(L'\0');
 
     BOOL created =
-        CreateProcessA(nullptr, cmd_buf.data(), nullptr, nullptr, TRUE,
+        CreateProcessW(nullptr, cmd_buf.data(), nullptr, nullptr, TRUE,
                        CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi);
     CloseHandle(write_pipe);
 

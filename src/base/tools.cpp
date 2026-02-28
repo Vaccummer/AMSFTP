@@ -665,13 +665,20 @@ bool AMStr::GetEnv(std::string_view key, std::string *target) {
     return false;
   }
 #ifdef _WIN32
-  char *buffer = nullptr;
+  const std::string key_utf8(key);
+  const std::wstring key_w = AMStr::wstr(key_utf8);
   size_t length = 0;
-  if (_dupenv_s(&buffer, &length, key.data()) != 0 || !buffer) {
+  if (_wgetenv_s(&length, nullptr, 0, key_w.c_str()) != 0 || length == 0) {
     return false;
   }
-  *target = std::string(buffer);
-  std::free(buffer);
+  std::wstring value_w(length, L'\0');
+  if (_wgetenv_s(&length, value_w.data(), value_w.size(), key_w.c_str()) != 0) {
+    return false;
+  }
+  if (!value_w.empty() && value_w.back() == L'\0') {
+    value_w.pop_back();
+  }
+  *target = AMStr::wstr(value_w);
   return true;
 #else
   const char *value = std::getenv(key.data());

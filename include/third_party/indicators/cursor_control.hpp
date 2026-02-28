@@ -41,7 +41,7 @@ static inline void erase_line() {
 
   DWORD count = 0;
 
-  FillConsoleOutputCharacterA(hStdout, ' ', csbiInfo.dwSize.X, cursor, &count);
+  FillConsoleOutputCharacterW(hStdout, L' ', csbiInfo.dwSize.X, cursor, &count);
 
   FillConsoleOutputAttribute(hStdout, csbiInfo.wAttributes, csbiInfo.dwSize.X,
                              cursor, &count);
