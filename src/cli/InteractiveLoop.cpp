@@ -1402,6 +1402,9 @@ CR ExecuteShellCommand_(AMClientManager &client_manager,
             {"", -1}};
   }
 
+  if (!amgif) {
+    amgif = std::make_shared<TaskControlToken>();
+  }
   return client->ConductCmd(command, -1, amgif);
 }
 
@@ -1516,7 +1519,7 @@ int RunInteractiveLoop(const std::string &app_name,
   PromptState prompt_state;
 
   while (true) {
-    if (amgif && amgif->iskill()) {
+    if (amgif && amgif->IsKill()) {
       break;
     }
 
@@ -1548,7 +1551,7 @@ int RunInteractiveLoop(const std::string &app_name,
     (void)config_manager.BackupIfNeeded();
 
     if (amgif) {
-      amgif->reset();
+      amgif->Reset();
     }
     // monitor.SilenceHook("GLOBAL");
     monitor.ResumeHook("COREPROMPT");
@@ -1559,10 +1562,10 @@ int RunInteractiveLoop(const std::string &app_name,
     // monitor.ResumeHook("GLOBAL");
     AMInteractiveLoop::EventRegistry::Instance().RunOnCorePromptReturn();
 
-    if (amgif && amgif->iskill()) {
+    if (amgif && amgif->IsKill()) {
       break;
     }
-    if (amgif && amgif->check()) {
+    if (amgif && !amgif->IsRunning()) {
       prompt.Print("Interrupted. Type 'exit' to quit.");
       continue;
     }
@@ -1659,7 +1662,7 @@ int RunInteractiveLoop(const std::string &app_name,
         DispatchCliCommands(cli_commands, managers, false, true);
     const auto exec_end = std::chrono::steady_clock::now();
     if (amgif) {
-      amgif->reset();
+      amgif->Reset();
     }
     UpdatePromptState_(prompt_state, dispatch.rcm, exec_end - input_confirmed);
     if (dispatch.request_exit) {
@@ -1675,3 +1678,4 @@ int RunInteractiveLoop(const std::string &app_name,
   AMIsInteractive.store(false, std::memory_order_relaxed);
   return g_cli_exit_code;
 }
+

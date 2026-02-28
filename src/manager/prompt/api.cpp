@@ -683,7 +683,7 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
 #ifdef _WIN32
   while (true) {
     int ch = _getch();
-    if (ch == 3 || (amgif && amgif->check())) {
+    if (ch == 3 || (amgif && !amgif->IsRunning())) {
       std::cout << "\n";
       return false;
     }
@@ -713,7 +713,7 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
   tcsetattr(STDIN_FILENO, TCSANOW, &newt);
   while (true) {
     int ch = ::getchar();
-    if (ch == 3 || (amgif && amgif->check())) {
+    if (ch == 3 || (amgif && !amgif->IsRunning())) {
       tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
       std::cout << "\n";
       return false;
@@ -737,3 +737,4 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
   *out_input = std::move(password);
   return true;
 }
+

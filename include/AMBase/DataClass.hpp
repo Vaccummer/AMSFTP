@@ -55,7 +55,16 @@ struct AMTokenSpan {
   AMTokenType type = AMTokenType::Common;
 };
 
-enum class ControlSignal : int { Running = 0, Pause = 1, Terminate = 2 };
+enum class ControlSignal : int {
+  Running = 0,
+  Pause = 1,
+  Interrupt = SIGINT,
+#ifdef SIGTERM
+  Kill = SIGTERM,
+#else
+  Kill = SIGINT + 1,
+#endif
+};
 
 enum class TaskControlSignal : int {
   SigInt = SIGINT,
@@ -334,11 +343,7 @@ private:
     size_t id = 0;
   };
 
-  static constexpr int kNoSignal = 0;
-  std::atomic<int> state_{static_cast<int>(ControlSignal::Running)};
-  std::atomic<int> signal_{kNoSignal};
-  std::atomic<bool> interrupted_{false};
-  std::atomic<bool> killed_{false};
+  std::atomic<int> signal_{static_cast<int>(ControlSignal::Running)};
   std::atomic<size_t> wake_token_seed_{1};
   std::mutex wake_cb_mtx_;
   std::unordered_map<size_t, std::function<void()>> wake_callbacks_;
@@ -366,32 +371,18 @@ private:
   }
 
   /**
-   * @brief Validate whether a signal value is accepted for terminate semantics.
+   * @brief Convert a raw state value into optional task signal metadata.
    */
-  static bool IsSupportedTerminateSignal_(int signum) {
-    if (signum == SIGINT) {
-      return true;
+  static std::optional<TaskControlSignal> CastSignal_(int signal_value) {
+    if (signal_value == static_cast<int>(ControlSignal::Interrupt)) {
+      return TaskControlSignal::SigInt;
     }
 #ifdef SIGTERM
-    if (signum == SIGTERM) {
-      return true;
+    if (signal_value == static_cast<int>(ControlSignal::Kill)) {
+      return TaskControlSignal::SigTerm;
     }
 #endif
-    return false;
-  }
-
-  /**
-   * @brief Cast an optional raw signal to optional enum representation.
-   */
-  static std::optional<TaskControlSignal>
-  CastSignal_(std::optional<int> signal_value) {
-    if (!signal_value.has_value()) {
-      return std::nullopt;
-    }
-    if (!IsSupportedTerminateSignal_(*signal_value)) {
-      return std::nullopt;
-    }
-    return static_cast<TaskControlSignal>(*signal_value);
+    return std::nullopt;
   }
 
   /**
@@ -422,7 +413,8 @@ private:
                 return a.id < b.id;
               });
 
-    const auto current_signal = GetSignal();
+    const auto current_signal =
+        CastSignal_(signal_.load(std::memory_order_acquire));
     for (auto &hook : pending) {
       (void)CallCallbackSafe(hook.func, new_state, current_signal);
     }
@@ -435,70 +427,62 @@ public:
    * @brief Request pause state for async transfer execution.
    */
   bool Pause() {
-    const int current = state_.load(std::memory_order_acquire);
-    if (current >= static_cast<int>(ControlSignal::Pause)) {
+    if (!IsRunning()) {
       return false;
     }
-    state_.store(static_cast<int>(ControlSignal::Pause),
-                 std::memory_order_release);
-    interrupted_.store(true, std::memory_order_release);
-    NotifyWakeCallbacks_();
-    TriggerHooks_(ControlSignal::Pause);
+    return SetStatus(ControlSignal::Pause);
+  }
+
+  /**
+   * @brief Set current control status.
+   *
+   * @param status Target control status.
+   * @return True if status changed.
+   */
+  bool SetStatus(ControlSignal status) {
+    const int target = static_cast<int>(status);
+    const int current = signal_.exchange(target, std::memory_order_acq_rel);
+    if (current == target) {
+      return false;
+    }
+    if (status != ControlSignal::Running) {
+      NotifyWakeCallbacks_();
+      TriggerHooks_(status);
+    }
     return true;
   }
 
   /**
    * @brief Request terminate state with an optional source signal.
-   *
-   * @param signal Optional OS signal number; when provided it should be SIGINT
-   *        or SIGTERM.
    */
   bool Terminate(std::optional<TaskControlSignal> signal = std::nullopt) {
-    std::optional<int> raw_signal = std::nullopt;
     if (signal.has_value()) {
-      raw_signal = static_cast<int>(*signal);
+      if (*signal == TaskControlSignal::SigInt) {
+        return SetStatus(ControlSignal::Interrupt);
+      }
+#ifdef SIGTERM
+      if (*signal == TaskControlSignal::SigTerm) {
+        return SetStatus(ControlSignal::Kill);
+      }
+#endif
     }
-    return Terminate(raw_signal);
-  }
-
-  /**
-   * @brief Request terminate state with an optional raw signal number.
-   */
-  bool Terminate(std::optional<int> signal) {
-    if (signal.has_value() && !IsSupportedTerminateSignal_(*signal)) {
-      return false;
-    }
-
-    bool changed = false;
-    if (signal.has_value()) {
-      const int old_signal =
-          signal_.exchange(*signal, std::memory_order_acq_rel);
-      changed = changed || old_signal != *signal;
-    }
-
-    const int old_state = state_.exchange(
-        static_cast<int>(ControlSignal::Terminate), std::memory_order_acq_rel);
-    changed =
-        changed || old_state != static_cast<int>(ControlSignal::Terminate);
-
-    interrupted_.store(true, std::memory_order_release);
-    NotifyWakeCallbacks_();
-    if (old_state != static_cast<int>(ControlSignal::Terminate)) {
-      TriggerHooks_(ControlSignal::Terminate);
-    }
-    return changed;
+    return SetStatus(ControlSignal::Interrupt);
   }
 
   /**
    * @brief Return current control status.
    */
   [[nodiscard]] ControlSignal GetStatus() const {
-    const int current = state_.load(std::memory_order_acquire);
+    const int current = signal_.load(std::memory_order_acquire);
     switch (current) {
+    case static_cast<int>(ControlSignal::Running):
+      return ControlSignal::Running;
     case static_cast<int>(ControlSignal::Pause):
       return ControlSignal::Pause;
-    case static_cast<int>(ControlSignal::Terminate):
-      return ControlSignal::Terminate;
+    case static_cast<int>(ControlSignal::Interrupt):
+      return ControlSignal::Interrupt;
+    case static_cast<int>(ControlSignal::Kill):
+      return ControlSignal::Kill;
     default:
       return ControlSignal::Running;
     }
@@ -508,41 +492,32 @@ public:
    * @brief Return true when token control state is running.
    */
   [[nodiscard]] bool IsRunning() const {
-    return state_.load() == static_cast<int>(ControlSignal::Running);
+    return signal_.load(std::memory_order_acquire) ==
+           static_cast<int>(ControlSignal::Running);
   }
 
   /**
-   * @brief Return the optional source signal associated with termination.
+   * @brief Return true when token state is killed.
    */
-  [[nodiscard]] std::optional<TaskControlSignal> GetSignal() const {
-    const int current = signal_.load(std::memory_order_acquire);
-    return CastSignal_(current == kNoSignal ? std::nullopt
-                                            : std::optional<int>{current});
+  [[nodiscard]] bool IsKill() const {
+    return GetStatus() == ControlSignal::Kill;
   }
 
   /**
    * @brief Reset state and signal back to running/no-signal.
    */
   bool Reset() {
-    const int old_state = state_.exchange(
-        static_cast<int>(ControlSignal::Running), std::memory_order_acq_rel);
-    const int old_signal =
-        signal_.exchange(kNoSignal, std::memory_order_acq_rel);
-    killed_.store(false, std::memory_order_release);
-    interrupted_.store(false, std::memory_order_release);
-    return old_state != static_cast<int>(ControlSignal::Running) ||
-           old_signal != kNoSignal;
+    return SetStatus(ControlSignal::Running);
   }
 
   /**
-   * @brief Force killed termination (legacy compatibility).
+   * @brief Force killed termination.
    */
   bool Kill(std::optional<TaskControlSignal> signal = std::nullopt) {
-    const bool changed = Terminate(signal);
-    killed_.store(true, std::memory_order_release);
-    interrupted_.store(true, std::memory_order_release);
-    NotifyWakeCallbacks_();
-    return changed;
+    if (signal.has_value() && *signal == TaskControlSignal::SigInt) {
+      return SetStatus(ControlSignal::Interrupt);
+    }
+    return SetStatus(ControlSignal::Kill);
   }
 
   /**
@@ -584,39 +559,6 @@ public:
   }
 
   /**
-   * @brief Legacy compatibility: return true when interrupted.
-   */
-  bool check() {
-    return interrupted_.load(std::memory_order_acquire) || !IsRunning();
-  }
-
-  /**
-   * @brief Legacy compatibility: set interrupt state.
-   */
-  void set(bool value) {
-    if (value) {
-      (void)Terminate(std::optional<TaskControlSignal>{});
-    } else {
-      (void)Reset();
-    }
-  }
-
-  /**
-   * @brief Legacy compatibility: return true when killed.
-   */
-  bool iskill() const { return killed_.load(std::memory_order_acquire); }
-
-  /**
-   * @brief Legacy compatibility: lowercase reset API.
-   */
-  void reset() { (void)Reset(); }
-
-  /**
-   * @brief Legacy compatibility: lowercase kill API.
-   */
-  void kill() { (void)Kill(); }
-
-  /**
    * @brief Register a callback used to wake blocking waiters when interrupted.
    *
    * @param wake_cb Wake callback to invoke on interrupt.
@@ -631,7 +573,7 @@ public:
       std::lock_guard<std::mutex> lock(wake_cb_mtx_);
       wake_callbacks_[token] = std::move(wake_cb);
     }
-    if (check()) {
+    if (!IsRunning()) {
       std::function<void()> cb;
       {
         std::lock_guard<std::mutex> lock(wake_cb_mtx_);
@@ -1509,14 +1451,16 @@ public:
     if (!flag) {
       return false;
     }
-    return flag->GetStatus() != ControlSignal::Running;
+    return !flag->IsRunning();
   }
   bool is_terminate_only() const {
     auto flag = ResolveInterruptFlag_();
     if (!flag) {
       return false;
     }
-    return flag->GetStatus() == ControlSignal::Terminate;
+    const auto status = flag->GetStatus();
+    return status == ControlSignal::Interrupt ||
+           status == ControlSignal::Kill;
   }
   bool is_pause_only() const {
     auto flag = ResolveInterruptFlag_();
@@ -1531,13 +1475,13 @@ public:
     if (!flag) {
       return true;
     }
-    return flag->GetStatus() == ControlSignal::Running;
+    return flag->IsRunning();
   }
 
   void set_terminate() {
     auto interrupt_flag = ResolveInterruptFlag_();
     if (interrupt_flag) {
-      (void)interrupt_flag->Terminate(std::optional<TaskControlSignal>{});
+      (void)interrupt_flag->SetStatus(ControlSignal::Interrupt);
     }
   }
   void set_pause() {

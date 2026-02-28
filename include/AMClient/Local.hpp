@@ -93,7 +93,7 @@ public:
                 amf interrupt_flag = nullptr) override {
 #ifdef _WIN32
     amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    if (flag && flag->check()) {
+    if (flag && !flag->IsRunning()) {
       return {ECM{EC::Terminate, "Operation aborted before command sent"},
               {"", -1}};
     }
@@ -142,7 +142,7 @@ public:
     int64_t start_time = am_ms();
 
     while (true) {
-      if (flag && flag->check()) {
+      if (flag && !flag->IsRunning()) {
         TerminateProcess(pi.hProcess, 1);
         finished = true;
         break;
@@ -193,7 +193,7 @@ public:
     return {ECM{EC::Success, ""}, { output, exit_status }};
 #else
     amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    if (flag && flag->check()) {
+    if (flag && !flag->IsRunning()) {
       return {ECM{EC::Terminate, "Operation aborted before command sent"},
               {"", -1}};
     }
@@ -242,7 +242,7 @@ public:
     };
 
     while (true) {
-      if (flag && flag->check()) {
+      if (flag && !flag->IsRunning()) {
         kill_child(SIGKILL);
         break;
       }
@@ -368,8 +368,8 @@ public:
     info.owner = AMFS::GetFileOwner(AMStr::wstr(pathf));
 #else
     struct stat file_stat;
-    // Call stat to get file metadata (supports symlinks; use stat to follow links,
-    // lstat）
+    // Call stat to get file metadata (supports symlinks; use stat to follow
+    // links, lstat）
     if (stat(path.c_str(), &file_stat) == -1) {
       return std::make_pair(
           "Fail to stat file: " + std::string(strerror(errno)), info);
@@ -420,7 +420,7 @@ public:
     std::error_code ec;
 
     for (const auto &entry : fs::directory_iterator(p, ec)) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         print("Interrupted_ls");
         return {ECM{EC::Terminate, "Listdir interrupted by user"}, result};
       }
@@ -461,8 +461,9 @@ public:
     if (info.type != PathType::DIR) {
       return {error, {WRV{info}, errors}};
     }
-    std::unordered_set<std::string> all_dirs;   // Store all directories
-    std::unordered_set<std::string> has_subdir; // Store directories that have subdirectories (non-leaf)
+    std::unordered_set<std::string> all_dirs; // Store all directories
+    std::unordered_set<std::string>
+        has_subdir; // Store directories that have subdirectories (non-leaf)
     const bool filter_hidden = !show_all;
     const bool filter_special = !show_all && ignore_sepcial_file;
     const auto is_hidden_name = [](const std::string &name) {
@@ -472,7 +473,7 @@ public:
     fs::recursive_directory_iterator it(path, ec);
     fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         ECM out = {EC::Terminate, "iwalk interrupted by user"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
@@ -578,7 +579,7 @@ public:
     std::string pathf = AMPathStr::join(parts);
     std::vector<PathInfo> files_info = {};
     bool empty_dir = true;
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       ECM out = {EC::Terminate, "walk interrupted by user"};
       if (error_callback && *error_callback) {
         (*error_callback)(pathf, out);
@@ -600,7 +601,7 @@ public:
       return !name.empty() && name[0] == '.';
     };
     for (const auto &entry : info) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         ECM out = {EC::Terminate, "walk interrupted by user"};
         if (error_callback && *error_callback) {
           (*error_callback)(pathf, out);
@@ -698,7 +699,7 @@ public:
     fs::recursive_directory_iterator it(root_norm, ec);
     fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
@@ -1126,3 +1127,4 @@ private:
   }
 #endif
 };
+

@@ -187,7 +187,8 @@ void AMCliSignalMonitor::Run_() {
         }
       }
       if ((signum == SIGINT || signum == SIGTERM) && amgif) {
-        (void)amgif->Terminate(std::optional<int>{signum});
+        (void)amgif->SetStatus(signum == SIGINT ? ControlSignal::Interrupt
+                                                : ControlSignal::Kill);
       }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));

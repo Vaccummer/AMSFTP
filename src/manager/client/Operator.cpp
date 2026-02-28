@@ -27,7 +27,7 @@ inline void InitClientWorkdir_(const std::shared_ptr<BaseClient> &client) {
 
 inline void ApplyLoginDir_(AMHostManager &hostm, const std::string &nickname,
                            const std::shared_ptr<BaseClient> &client,
-                           const std::string &login_dir, const amf &flag) {
+                           const std::string &login_dir, amf flag) {
   if (!client) {
     return;
   }

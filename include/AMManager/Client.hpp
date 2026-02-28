@@ -132,7 +132,7 @@ public:
 
   void ApplyLoginDir(const std::string &nickname,
                      const std::shared_ptr<BaseClient> &client,
-                     const std::string &login_dir, const amf &flag) const;
+                     const std::string &login_dir, amf flag) const;
 };
 
 class Manager : public PathOps, private NonCopyableNonMovable {

@@ -829,7 +829,7 @@ listdir(const std::string &path, amf interrupt_flag = nullptr,
             result};
   }
   for (const auto &entry : dir_iter) {
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return {ECM{EC::Terminate, "Listdir interrupted by user"}, result};
     }
     if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
@@ -845,3 +845,4 @@ listdir(const std::string &path, amf interrupt_flag = nullptr,
   return {ECM{EC::Success, ""}, result};
 }
 } // namespace AMFS
+

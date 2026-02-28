@@ -348,7 +348,7 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
 std::pair<ECM, std::shared_ptr<BaseClient>>
 AMTransferManager::AcquireClient_(const std::string &nickname,
                                   const std::shared_ptr<TaskControlToken> &flag) {
-  if (flag && flag->check()) {
+  if (flag && !flag->IsRunning()) {
     return {ECM{EC::Terminate, "Interrupted during client preparation"},
             nullptr};
   }
@@ -508,8 +508,8 @@ ECM AMTransferManager::transfer(
 
   task_info->control_token = amgif ? amgif : std::make_shared<TaskControlToken>();
   auto flag = task_info->control_token;
-  if (interrupt_flag && interrupt_flag->check() && flag) {
-    flag->set(true);
+  if (interrupt_flag && !interrupt_flag->IsRunning() && flag) {
+    flag->SetStatus(ControlSignal::Interrupt);
   }
   const int refresh_interval_ms = GetTransferProgressRefreshMs_();
 
@@ -556,7 +556,7 @@ ECM AMTransferManager::transfer(
   bool all_finished = false;
   while (!all_finished) {
     const bool interrupted =
-        (flag && flag->check()) || (amgif && amgif->check());
+        (flag && !flag->IsRunning()) || (amgif && !amgif->IsRunning());
     if (interrupted) {
       if (show_progress) {
         progress_bar.EndDisplay();
@@ -611,8 +611,8 @@ ECM AMTransferManager::transfer_async(
   }
   if (task_info) {
     task_info->control_token = std::make_shared<TaskControlToken>();
-    if (interrupt_flag && interrupt_flag->check()) {
-      task_info->control_token->set(true);
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
+      task_info->control_token->SetStatus(ControlSignal::Interrupt);
     }
   }
   return transfer_async(task_info,
@@ -638,8 +638,8 @@ ECM AMTransferManager::transfer_async(
   }
 
   task_info->control_token = std::make_shared<TaskControlToken>();
-  if (interrupt_flag && interrupt_flag->check()) {
-    task_info->control_token->set(true);
+  if (interrupt_flag && !interrupt_flag->IsRunning()) {
+    task_info->control_token->SetStatus(ControlSignal::Interrupt);
   }
 
   UserResultCallback user_callback =
@@ -750,7 +750,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
       return {dst_rcm, nullptr};
     }
     for (const auto &src : set.srcs) {
-      if (flag && flag->check()) {
+      if (flag && !flag->IsRunning()) {
         ReturnClientsToIdle_(hostm);
         return {ECM{EC::Terminate, "Interrupted before task generation"},
                 nullptr};
@@ -883,3 +883,4 @@ bool AMTransferManager::ParseEntryId_(const ID &entry_id, ID *task_id,
     return false;
   }
 }
+

@@ -217,15 +217,15 @@ int StatusOrder_(const std::string &status) {
 }
 
 inline bool IsInterrupted_(const std::shared_ptr<TaskControlToken> &flag) {
-  if (flag && flag->check()) {
+  if (flag && !flag->IsRunning()) {
     return true;
   }
   return false;
 }
 
 inline void ResetInterruptFlag_(const std::shared_ptr<TaskControlToken> &flag) {
-  if (flag && !flag->iskill()) {
-    flag->reset();
+  if (flag && !flag->IsKill()) {
+    flag->Reset();
   }
 }
 
@@ -516,8 +516,9 @@ size_t GetSpeedWindowSize() {
   return speed_window_size;
 }
 
-void PrintTaskProgress_(const std::shared_ptr<TaskInfo> &task_info,
-                        const std::shared_ptr<TaskControlToken> &interrupt_flag) {
+void PrintTaskProgress_(
+    const std::shared_ptr<TaskInfo> &task_info,
+    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
   if (!task_info) {
     return;
   }
@@ -528,7 +529,7 @@ void PrintTaskProgress_(const std::shared_ptr<TaskInfo> &task_info,
   bool finished = false;
   PrintLock();
   while (true) {
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       break;
     }
     const TaskStatus current_status = progress_printer.Update();
@@ -631,7 +632,8 @@ void PrintTaskProgressGroup_(
  * @brief Show task status by ID.
  */
 ECM AMTransferManager::Show(
-    const ID &task_id, const std::shared_ptr<TaskControlToken> &interrupt_flag) {
+    const ID &task_id,
+    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
   return Show(std::vector<ID>{task_id}, interrupt_flag);
 }
 
@@ -643,7 +645,6 @@ ECM AMTransferManager::Show(
   }
 
   ResetInterruptFlag_(interrupt_flag);
-  ResetInterruptFlag_(amgif);
 
   std::unordered_set<ID> seen;
   std::vector<std::shared_ptr<TaskInfo>> valid_tasks;
@@ -861,3 +862,4 @@ ECM AMTransferManager::List(
   prompt_.FlushCachedOutput();
   return {EC::Success, ""};
 }
+
