@@ -1171,6 +1171,73 @@ AMFileSystem::ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
 }
 
 /**
+ * @brief Run one shell command on current SFTP/local client.
+ *
+ * The final command is built from host config:
+ * - no prefix: cmd
+ * - prefix + "'" + cmd + "'" when wrap_cmd is true
+ * - prefix + cmd when wrap_cmd is false
+ */
+CR AMFileSystem::ShellRun(const std::string &cmd, int max_time_ms,
+                          amf interrupt_flag) {
+  amf flag = interrupt_flag ? interrupt_flag : amgif;
+  if (flag && !flag->IsRunning()) {
+    return {ECM{EC::Terminate, "Interrupted by user"}, {"", -1}};
+  }
+
+  const std::string command = AMStr::Strip(cmd);
+  if (command.empty()) {
+    return {ECM{EC::InvalidArg, "Empty shell command"}, {"", -1}};
+  }
+
+  auto client = client_manager_.CurrentClient();
+  if (!client) {
+    client = client_manager_.LocalClient();
+  }
+  if (!client) {
+    return {ECM{EC::ClientNotFound, "Client not found"}, {"", -1}};
+  }
+
+  const ClientProtocol protocol = client->GetProtocol();
+  if (protocol != ClientProtocol::SFTP && protocol != ClientProtocol::LOCAL) {
+    return {ECM{EC::OperationUnsupported,
+                "Shell command only supported by SFTP/local client"},
+            {"", -1}};
+  }
+
+  std::string nickname = client->GetNickname();
+  if (nickname.empty()) {
+    nickname = "local";
+  }
+
+  std::string cmd_prefix;
+  bool wrap_cmd = false;
+  if (AMStr::lowercase(nickname) == "local") {
+    auto [cfg_rcm, cfg] = hostm_.GetLocalConfig();
+    if (cfg_rcm.first == EC::Success) {
+      cmd_prefix = cfg.cmd_prefix;
+      wrap_cmd = cfg.wrap_cmd;
+    }
+  } else {
+    auto [cfg_rcm, cfg] = hostm_.GetClientConfig(nickname);
+    if (cfg_rcm.first == EC::Success) {
+      cmd_prefix = cfg.cmd_prefix;
+      wrap_cmd = cfg.wrap_cmd;
+    }
+  }
+
+  std::string final_cmd = command;
+  if (!cmd_prefix.empty()) {
+    if (wrap_cmd) {
+      final_cmd = AMStr::amfmt("{}'{}'", cmd_prefix, command);
+    } else {
+      final_cmd = cmd_prefix + command;
+    }
+  }
+  return client->ConductCmd(final_cmd, max_time_ms, flag);
+}
+
+/**
  * @brief Resolve a path using client workdir/home and print the absolute path.
  * @param path Input path supporting "host@path" or a plain path; empty uses the
  *        current client workdir.

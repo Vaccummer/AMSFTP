@@ -1,19 +1,12 @@
-Unify and normalize the use of TaskControlToken
+Great Improve on ConductCmd (sftp/local)
 
-ControlSignal :{Running = 0, Pause = 1, Interupt=SIGINT, Kill=SIGTERM}
+add an str cmd_prefix(you can choose a suitable argname) bool wrap_cmd in HostConfig in config\config.toml, this cmd_prefix is invisible to Client, but should be stored in ClientConfig
 
-remove this overload boolTerminate(std::optional `<int>` signal)
+ConductCmd itself only recept final command and conduct it. remove cmd check in IsCommandAllowed
 
-remove GetSignal()
+add a function in Filesystem ShellRun(str cmd, and other args you think necessary) for CLI bind, it proximately does things:
 
-remove interrupted_  killed_  state_
-
-signal_ == SIGINT -> interrupted ; signal_ == SIGTERM -> killed
-
-remove check(), use IsRunning()
-
-remove set(), add SetStatus(ControlSignal)
-
-rename iskill to IsKill()  
-
-remove reset() kill()
++ build command(if no prefix, just use arg cmd)
+  + prefix'cmd' (if wrap)
+  + prefixcmd
++ call ConductCmd

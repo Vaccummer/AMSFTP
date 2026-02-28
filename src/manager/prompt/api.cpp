@@ -15,12 +15,68 @@
 
 #ifdef _WIN32
 #include <conio.h>
+#include <windows.h>
 #else
 #include <termios.h>
 #include <unistd.h>
 #endif
 
 namespace {
+/**
+ * @brief Temporarily disable ENABLE_PROCESSED_INPUT while Prompt() reads
+ * stdin on Windows.
+ *
+ * This limits Ctrl+C key processing suppression strictly to prompt input
+ * scope and restores the previous console mode on scope exit.
+ */
+class ScopedPromptProcessedInputGuard_ {
+public:
+  /**
+   * @brief Capture stdin mode and clear ENABLE_PROCESSED_INPUT when possible.
+   */
+  ScopedPromptProcessedInputGuard_() {
+#ifdef _WIN32
+    input_handle_ = GetStdHandle(STD_INPUT_HANDLE);
+    if (input_handle_ == INVALID_HANDLE_VALUE || input_handle_ == nullptr) {
+      return;
+    }
+    if (!GetConsoleMode(input_handle_, &original_mode_)) {
+      return;
+    }
+    const DWORD desired_mode = original_mode_ & ~ENABLE_PROCESSED_INPUT;
+    if (desired_mode == original_mode_) {
+      return;
+    }
+    if (!SetConsoleMode(input_handle_, desired_mode)) {
+      return;
+    }
+    applied_ = true;
+#endif
+  }
+
+  /**
+   * @brief Restore stdin console mode when this guard changed it.
+   */
+  ~ScopedPromptProcessedInputGuard_() {
+#ifdef _WIN32
+    if (!applied_) {
+      return;
+    }
+    if (input_handle_ == INVALID_HANDLE_VALUE || input_handle_ == nullptr) {
+      return;
+    }
+    (void)SetConsoleMode(input_handle_, original_mode_);
+#endif
+  }
+
+private:
+#ifdef _WIN32
+  HANDLE input_handle_ = INVALID_HANDLE_VALUE;
+  DWORD original_mode_ = 0;
+  bool applied_ = false;
+#endif
+};
+
 /**
  * @brief Bridge isocline highlight callbacks to the token analyzer.
  *
@@ -551,6 +607,8 @@ bool AMPromptManager::Prompt(
 
   auto lock = PrintLock();
   auto hooklock = HookLock();
+  ScopedPromptProcessedInputGuard_ processed_input_guard;
+  (void)processed_input_guard;
   const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
   char *line =
       ic_readline_ex_with_initial(prompt.c_str(), completer, completer_arg,

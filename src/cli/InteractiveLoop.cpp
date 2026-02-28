@@ -1386,26 +1386,14 @@ void PrintECM_(AMPromptManager &prompt, const ECM &rcm) {
 }
 
 /**
- * @brief Execute a shell command via ConductCmd and return the raw result.
+ * @brief Execute a shell command via filesystem shell runner and return the
+ * raw result.
  */
-CR ExecuteShellCommand_(AMClientManager &client_manager,
-                        AMConfigManager &config_manager,
-                        const std::string &command) {
-  auto client = ResolveActiveClient_(client_manager);
-  if (!client) {
-    return {ECM{EC::ClientNotFound, "No active client"}, {"", -1}};
-  }
-  const ClientProtocol protocol = client->GetProtocol();
-  if (protocol != ClientProtocol::SFTP && protocol != ClientProtocol::LOCAL) {
-    return {ECM{EC::OperationUnsupported,
-                "Shell command only supported by SFTP/local client"},
-            {"", -1}};
-  }
-
+CR ExecuteShellCommand_(AMFileSystem &filesystem, const std::string &command) {
   if (!amgif) {
     amgif = std::make_shared<TaskControlToken>();
   }
-  return client->ConductCmd(command, -1, amgif);
+  return filesystem.ShellRun(command, -1, amgif);
 }
 
 /**
@@ -1512,6 +1500,7 @@ int RunInteractiveLoop(const std::string &app_name,
   AMPromptManager &prompt = AMPromptManager::Instance();
   AMConfigManager &config_manager = *managers.config_manager;
   AMClientManager &client_manager = *managers.client_manager;
+  AMFileSystem &filesystem = *managers.filesystem;
 
   AMCompleter completer{};
   completer.Install();
@@ -1594,8 +1583,7 @@ int RunInteractiveLoop(const std::string &app_name,
     }
 
     if (is_shell) {
-      CR shell_result =
-          ExecuteShellCommand_(client_manager, config_manager, shell_command);
+      CR shell_result = ExecuteShellCommand_(filesystem, shell_command);
       if (shell_result.first.first == EC::Success) {
         const std::string &msg = shell_result.second.first;
         if (!msg.empty()) {

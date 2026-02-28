@@ -426,6 +426,20 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     old_value = updated.request.compression ? "true" : "false";
     updated.request.compression = compression;
     new_value = compression ? "true" : "false";
+  } else if (field == configkn::cmd_prefix) {
+    old_value = updated.cmd_prefix;
+    updated.cmd_prefix = value_str;
+    new_value = value_str;
+  } else if (field == configkn::wrap_cmd) {
+    bool wrap_cmd = false;
+    if (!StrValueParse(value_str, &wrap_cmd)) {
+      set_status = Err(EC::InvalidArg, "wrap_cmd value must be true or false");
+      prompt_.ErrorFormat(set_status);
+      return set_status;
+    }
+    old_value = updated.wrap_cmd ? "true" : "false";
+    updated.wrap_cmd = wrap_cmd;
+    new_value = wrap_cmd ? "true" : "false";
 
   } else if (field == configkn::protocol) {
     std::string protocol = AMStr::lowercase(AMStr::Strip(value_str));
@@ -490,6 +504,10 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     write_ok = config_.SetArg(DocumentKind::Config,
                               {configkn::hosts, nickname, field},
                               updated.request.compression);
+  } else if (field == configkn::wrap_cmd) {
+    write_ok = config_.SetArg(DocumentKind::Config,
+                              {configkn::hosts, nickname, field},
+                              updated.wrap_cmd);
   } else {
     write_ok =
         config_.SetArg(DocumentKind::Config, {configkn::hosts, nickname, field},

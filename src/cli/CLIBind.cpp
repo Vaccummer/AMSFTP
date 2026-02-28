@@ -513,6 +513,19 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
     connect_node->AddPositionalRule(0, Sem::HostNickname, true);
   }
 
+  CommandNode *cmd_node = root->AddFunction("cmd", "Run one shell command",
+                                            args, &CliArgsPool::cmd);
+  commands.cmd_cmd = cmd_node ? cmd_node->app : nullptr;
+  if (commands.cmd_cmd) {
+    commands.cmd_cmd->add_option("cmd_str", args.cmd.cmd_str, "Command string")
+        ->required()
+        ->expected(1, 1);
+  }
+  if (cmd_node) {
+    cmd_node->AddOption("-t", "--timeout_ms", args.cmd.timeout_ms, 1, 1,
+                        Sem::None, "Timeout in milliseconds (default: 5000)");
+  }
+
   CommandNode *bash_node = root->AddFunction("bash", "Enter interactive mode",
                                              args, &CliArgsPool::bash);
   commands.bash_cmd = bash_node ? bash_node->app : nullptr;

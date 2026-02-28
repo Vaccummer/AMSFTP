@@ -1075,6 +1075,53 @@ struct ConnectArgs {
 };
 
 /**
+ * @brief CLI argument container for cmd.
+ */
+struct CmdArgs {
+  int timeout_ms = 5000;
+  std::string cmd_str;
+  /**
+   * @brief Execute one shell command on current SFTP/local client.
+   */
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
+    (void)ctx;
+    if (timeout_ms <= 0) {
+      ECM rcm = {EC::InvalidArg, "timeout_ms must be > 0"};
+      PrintRunError_(rcm);
+      return rcm;
+    }
+
+    const std::string command = AMStr::Strip(cmd_str);
+    if (command.empty()) {
+      ECM rcm = {EC::InvalidArg, "cmd_str cannot be empty"};
+      PrintRunError_(rcm);
+      return rcm;
+    }
+
+    CR shell_result = managers.filesystem->ShellRun(command, timeout_ms, amgif);
+    if (shell_result.first.first != EC::Success) {
+      PrintRunError_(shell_result.first);
+      return shell_result.first;
+    }
+
+    const std::string &msg = shell_result.second.first;
+    if (!msg.empty()) {
+      AMPromptManager::Instance().Print(msg);
+    }
+    AMPromptManager::Instance().Print(
+        AMStr::amfmt("Command exit with code {}", shell_result.second.second));
+    return shell_result.first;
+  }
+  /**
+   * @brief Reset cmd arguments to defaults.
+   */
+  void reset() {
+    timeout_ms = 5000;
+    cmd_str.clear();
+  }
+};
+
+/**
  * @brief CLI argument container for bash.
  */
 struct BashArgs {
@@ -1664,8 +1711,9 @@ using CommonArg = std::variant<
     ConfigSetArgs, ConfigSaveArgs, ConfigProfileSetArgs, StatArgs, LsArgs,
     SizeArgs, FindArgs, MkdirArgs, RmArgs, WalkArgs, TreeArgs, RealpathArgs,
     RttArgs, ClearArgs, CpArgs, SftpArgs, FtpArgs, ClientsArgs, CheckArgs,
-    ChangeClientArgs, DisconnectArgs, CdArgs, ConnectArgs, BashArgs, ExitArgs,
-    VarGetArgs, VarDefArgs, VarDelArgs, VarLsArgs, CompleteCacheClearArgs,
+    ChangeClientArgs, DisconnectArgs, CdArgs, ConnectArgs, CmdArgs, BashArgs,
+    ExitArgs, VarGetArgs, VarDefArgs, VarDelArgs, VarLsArgs,
+    CompleteCacheClearArgs,
     TaskListArgs, TaskShowArgs, TaskInspectArgs, TaskThreadArgs,
     TaskCacheAddArgs, TaskCacheRmArgs, TaskCacheClearArgs, TaskCacheSubmitArgs,
     TaskUserSetArgs, TaskEntryArgs, TaskControlArgs, TaskRetryArgs>;
@@ -1705,6 +1753,7 @@ struct CliArgsPool {
   DisconnectArgs disconnect;
   CdArgs cd;
   ConnectArgs connect;
+  CmdArgs cmd;
   BashArgs bash;
   ExitArgs exit;
   VarGetArgs var_get;
@@ -1768,6 +1817,7 @@ struct CliCommands {
   CLI::App *client_rm_cmd = nullptr;
   CLI::App *cd_cmd = nullptr;
   CLI::App *connect_cmd = nullptr;
+  CLI::App *cmd_cmd = nullptr;
   CLI::App *exit_cmd = nullptr;
   CLI::App *var_cmd = nullptr;
   CLI::App *var_get_cmd = nullptr;

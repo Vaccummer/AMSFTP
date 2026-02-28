@@ -24,6 +24,8 @@ enum class HostAttr {
   LoginDir,
   Keyfile,
   Compression,
+  CmdPrefix,
+  WrapCmd,
 };
 
 /**
@@ -76,6 +78,14 @@ inline bool ParseHostAttr(const std::string &attr_name, HostAttr *out_attr) {
   }
   if (key == "compression") {
     *out_attr = HostAttr::Compression;
+    return true;
+  }
+  if (key == "cmd_prefix") {
+    *out_attr = HostAttr::CmdPrefix;
+    return true;
+  }
+  if (key == "wrap_cmd") {
+    *out_attr = HostAttr::WrapCmd;
     return true;
   }
   return false;
@@ -142,12 +152,14 @@ inline const static std::string trash_dir = "trash_dir";
 inline const static std::string login_dir = "login_dir";
 inline const static std::string keyfile = "keyfile";
 inline const static std::string compression = "compression";
+inline const static std::string cmd_prefix = "cmd_prefix";
+inline const static std::string wrap_cmd = "wrap_cmd";
 
-inline static const std::array<std::string, 10> fileds = {
+inline static const std::array<std::string, 12> fileds = {
     configkn::hostname,    configkn::username,  configkn::protocol,
     configkn::port,        configkn::password,  configkn::buffer_size,
     configkn::trash_dir,   configkn::login_dir, configkn::keyfile,
-    configkn::compression,
+    configkn::compression, configkn::cmd_prefix, configkn::wrap_cmd,
 };
 } // namespace configkn
 
@@ -157,6 +169,8 @@ struct ClientConfig {
   ClientProtocol protocol = ClientProtocol::SFTP;
   int64_t buffer_size = -1;
   std::string login_dir = "";
+  std::string cmd_prefix = "";
+  bool wrap_cmd = false;
 
   [[nodiscard]] std::unordered_map<std::string, std::string>
   GetStrDict() const {
@@ -171,6 +185,8 @@ struct ClientConfig {
         {"login_dir", login_dir},
         {"keyfile", request.keyfile},
         {"compression", request.compression ? "true" : "false"},
+        {"cmd_prefix", cmd_prefix},
+        {"wrap_cmd", wrap_cmd ? "true" : "false"},
     };
   }
 
@@ -186,6 +202,8 @@ struct ClientConfig {
     json[configkn::login_dir] = login_dir;
     json[configkn::keyfile] = request.keyfile;
     json[configkn::compression] = request.compression;
+    json[configkn::cmd_prefix] = cmd_prefix;
+    json[configkn::wrap_cmd] = wrap_cmd;
     return json;
   }
   ClientConfig() = default;
@@ -245,6 +263,8 @@ struct ClientConfig {
     QueryKey(jsond, {configkn::compression}, &this->request.compression);
     QueryKey(jsond, {configkn::trash_dir}, &this->request.trash_dir);
     QueryKey(jsond, {configkn::login_dir}, &this->login_dir);
+    QueryKey(jsond, {configkn::cmd_prefix}, &this->cmd_prefix);
+    QueryKey(jsond, {configkn::wrap_cmd}, &this->wrap_cmd);
 
     int64_t tmp_size = -1;
     QueryKey(jsond, {configkn::buffer_size}, &tmp_size);
