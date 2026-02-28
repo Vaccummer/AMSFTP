@@ -593,12 +593,12 @@ inline std::string HomePath() {
     return AMStr::wstr(path.data());
   }
   std::string userprofile = "";
-  GetEnv("USERPROFILE", &userprofile);
+  AMStr::GetEnv("USERPROFILE", &userprofile);
   return userprofile;
 #else
   // Linux/macOS
   std::string home = "";
-  GetEnv("HOME", &home);
+  AMStr::GetEnv("HOME", &home);
   if (!home.empty())
     return home;
 
@@ -729,7 +729,7 @@ inline ECM mkdirs(const std::string &path) {
   std::error_code ec;
   fs::create_directories(fs::path(path), ec);
   if (ec) {
-    return {fec(ec), AMStr::amfmt("Mkdir {} failed: {}", path, ec.message())};
+    return {fec(ec), AMStr::fmt("Mkdir {} failed: {}", path, ec.message())};
   }
   return ECM{EC::Success, ""};
 }
@@ -751,7 +751,7 @@ inline std::pair<ECM, PathInfo> stat(const std::string &path,
   }
   if (ec) {
     return {
-        ECM{fec(ec), AMStr::amfmt("Stat {} failed: {}", pathf, ec.message())},
+        ECM{fec(ec), AMStr::fmt("Stat {} failed: {}", pathf, ec.message())},
         info};
   }
   info.type = cast_fs_type(status.type());
@@ -814,12 +814,12 @@ listdir(const std::string &path, amf interrupt_flag = nullptr,
   std::vector<PathInfo> result = {};
   fs::path p(pathf);
   if (!fs::exists(p)) {
-    return {ECM{EC::PathNotExist, AMStr::amfmt("Path not found: {}", pathf)},
+    return {ECM{EC::PathNotExist, AMStr::fmt("Path not found: {}", pathf)},
             result};
   }
   if (!fs::is_directory(p)) {
     return {ECM{EC::NotADirectory,
-                AMStr::amfmt("Path is not a directory: {}", pathf)},
+                AMStr::fmt("Path is not a directory: {}", pathf)},
             result};
   }
   std::variant<PathInfo, std::pair<std::string, std::exception>> sr;
@@ -828,7 +828,7 @@ listdir(const std::string &path, amf interrupt_flag = nullptr,
   auto dir_iter = fs::directory_iterator(p, ec);
   if (ec) {
     return {ECM{fec(ec),
-                AMStr::amfmt("Listdir {} failed: {}", pathf, ec.message())},
+                AMStr::fmt("Listdir {} failed: {}", pathf, ec.message())},
             result};
   }
   for (const auto &entry : dir_iter) {
@@ -848,3 +848,4 @@ listdir(const std::string &path, amf interrupt_flag = nullptr,
   return {ECM{EC::Success, ""}, result};
 }
 } // namespace AMFS
+

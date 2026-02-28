@@ -250,32 +250,5 @@ template <typename T> std::vector<T> VectorDedup(const std::vector<T> &input) {
 }
 } // namespace AMJson
 
-using Json = AMJson::Json;
-
-template <class T>
-inline constexpr bool kValueTypeSupported = AMJson::kValueTypeSupported<T>;
-
-template <typename T>
-inline bool QueryKey(const Json &root, const std::vector<std::string> &path,
-                     T *value) {
-  return AMJson::QueryKey(root, path, value);
-}
-
-template <typename T>
-inline bool SetKey(Json &root, const std::vector<std::string> &path, T value) {
-  return AMJson::SetKey(root, path, value);
-}
-
-inline bool DelKey(Json &root, const std::vector<std::string> &path) {
-  return AMJson::DelKey(root, path);
-}
-
-template <typename T>
-inline bool StrValueParse(const std::string &input, T *out) {
-  return AMJson::StrValueParse(input, out);
-}
-
-template <typename T>
-inline std::vector<T> VectorDedup(const std::vector<T> &input) {
-  return AMJson::VectorDedup(input);
-}
+// Compatibility alias for JSON value type.
+using Json = nlohmann::ordered_json;

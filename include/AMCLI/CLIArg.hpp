@@ -163,7 +163,7 @@ inline ECM ValidateConfigProfileNickname_(const std::string &raw,
   }
   if (!AMHostManager::Instance().HostExists(value)) {
     return Err(EC::HostConfigNotFound,
-               AMStr::amfmt("host nickname not found: {}", value));
+               AMStr::fmt("host nickname not found: {}", value));
   }
   *normalized = value;
   return Ok();
@@ -232,7 +232,7 @@ inline ECM EnsureInteractive_(const CliRunContext &ctx) {
   const std::string name =
       ctx.command_name.empty() ? std::string("Command") : ctx.command_name;
   return {EC::OperationUnsupported,
-          AMStr::amfmt("{} not supported in Non-Interactive mode", name)};
+          AMStr::fmt("{} not supported in Non-Interactive mode", name)};
 }
 
 void ShowTaskInspectInfo();
@@ -1040,7 +1040,7 @@ struct ConnectArgs {
     auto &filesystem = *managers.filesystem;
     const bool is_interactive = ctx.enforce_interactive ||
                                 AMIsInteractive.load(std::memory_order_relaxed);
-    const std::vector<std::string> targets = UniqueTargetsKeepOrder(nicknames);
+    const std::vector<std::string> targets = AMStr::UniqueTargetsKeepOrder(nicknames);
     if (targets.empty()) {
       ECM rcm = {EC::InvalidArg, "connect requires at least one nickname"};
       PrintRunError_(rcm);
@@ -1122,7 +1122,7 @@ struct CmdArgs {
       AMPromptManager::Instance().Print(msg);
     }
     AMPromptManager::Instance().Print(
-        AMStr::amfmt("Command exit with code {}", shell_result.second.second));
+        AMStr::fmt("Command exit with code {}", shell_result.second.second));
     return shell_result.first;
   }
   /**
@@ -1474,7 +1474,7 @@ struct TaskCacheAddArgs {
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
     size_t index = transfer_manager.SubmitTransferSet(transfer_set);
     AMPromptManager::Instance().Print(
-        AMStr::amfmt("✅ cache add {}", std::to_string(index)));
+        AMStr::fmt("✅ cache add {}", std::to_string(index)));
     return {EC::Success, ""};
   }
   /**
@@ -1506,14 +1506,14 @@ struct TaskCacheRmArgs {
     }
     (void)managers;
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    std::vector<size_t> deduped = VectorDedup(indices);
+    std::vector<size_t> deduped = AMJson::VectorDedup(indices);
     const size_t removed = transfer_manager.DeleteTransferSets(deduped);
     if (removed < deduped.size()) {
       return {EC::InvalidArg, "Cache index not found"};
     }
     for (size_t index : deduped) {
       AMPromptManager::Instance().Print(
-          AMStr::amfmt("✅ cache rm {}", std::to_string(index)));
+          AMStr::fmt("✅ cache rm {}", std::to_string(index)));
     }
     return {EC::Success, ""};
   }
@@ -1597,7 +1597,7 @@ struct TaskUserSetArgs {
     }
     (void)managers;
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    std::vector<size_t> deduped = VectorDedup(indices);
+    std::vector<size_t> deduped = AMJson::VectorDedup(indices);
     if (deduped.empty()) {
       deduped = transfer_manager.ListTransferSetIds();
     }
@@ -1876,4 +1876,5 @@ struct DispatchResult {
   bool request_exit = false;
   bool skip_loop_exit_callbacks = false;
 };
+
 

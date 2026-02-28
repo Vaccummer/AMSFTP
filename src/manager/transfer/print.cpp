@@ -1,9 +1,7 @@
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Path.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
@@ -60,7 +58,7 @@ std::string BuildTaskPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
     }
   }
   if (!has_task) {
-    return AMStr::amfmt("Task {}", task_info->id);
+    return AMStr::fmt("Task {}", task_info->id);
   }
   const std::string src_host =
       task_copy.src_host.empty() ? "local" : task_copy.src_host;
@@ -68,7 +66,7 @@ std::string BuildTaskPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
       task_copy.dst_host.empty() ? "local" : task_copy.dst_host;
   const std::string src_name = AMPathStr::basename(task_copy.src);
   const std::string dst_name = AMPathStr::basename(task_copy.dst);
-  return AMStr::amfmt("{}@{} -> {}@{}", src_host, src_name, dst_host, dst_name);
+  return AMStr::fmt("{}@{} -> {}@{}", src_host, src_name, dst_host, dst_name);
 }
 
 struct TaskRowData {
@@ -116,7 +114,7 @@ std::string FormatTableSize_(size_t bytes) {
   } else {
     oss << std::fixed << std::setprecision(1) << value;
   }
-  const std::string out = AMStr::amfmt("{}{}", oss.str(), units[idx]);
+  const std::string out = AMStr::fmt("{}{}", oss.str(), units[idx]);
   return AMStr::PadLeftAscii(out, kWidth);
 }
 
@@ -148,7 +146,7 @@ std::string FormatSpeedBps_(double bps) {
     value = std::floor(value);
   }
   const std::string out =
-      AMStr::amfmt("{}{}/s", static_cast<int64_t>(value), units[idx]);
+      AMStr::fmt("{}{}/s", static_cast<int64_t>(value), units[idx]);
   return AMStr::PadLeftAscii(out, kWidth);
 }
 
@@ -275,7 +273,7 @@ TaskRowData BuildTaskRow_(
   const bool is_paused = status == TaskStatus::Paused ||
                          (status == TaskStatus::Conducting && task_info->pd &&
                           task_info->pd->is_pause_only());
-  row.status = is_paused ? "Paused" : std::string(AM_ENUM_NAME(status));
+  row.status = is_paused ? "Paused" : AMStr::ToString(status);
   row.order = StatusOrder_(row.status);
   row.conducting = status == TaskStatus::Conducting;
 
@@ -318,9 +316,9 @@ TaskRowData BuildTaskRow_(
         start_time > 0.0 ? FormatElapsed_(timenow() - start_time) : "-";
   }
 
-  row.files = AMStr::amfmt("{}/{}", success_num, filenum);
-  row.size =
-      AMStr::amfmt("{}/{}", FormatTableSize_(transferred), FormatSize(total));
+  row.files = AMStr::fmt("{}/{}", success_num, filenum);
+  row.size = AMStr::fmt("{}/{}", FormatTableSize_(transferred),
+                          AMStr::FormatSize(total));
   row.speed = FormatSpeedBps_(0.0);
   if (row.status == "Conducting" && speed_map) {
     auto it = speed_map->find(row.id);
@@ -335,7 +333,7 @@ TaskRowData BuildTaskRow_(
     row.task_now = "-";
   }
   if (row.status == "Finished") {
-    row.ec = AM_ENUM_NAME(rcm.first);
+    row.ec = AMStr::ToString(rcm.first);
   } else {
     row.ec = "-";
   }
@@ -401,7 +399,7 @@ std::string BuildTableRefreshOutput_(const std::string &table,
 
   std::string out;
   if (last_lines > 0) {
-    out += AMStr::amfmt("\x1b[{}A", last_lines);
+    out += AMStr::fmt("\x1b[{}A", last_lines);
   }
 
   const size_t extra_lines =
@@ -424,7 +422,7 @@ std::string BuildTableRefreshOutput_(const std::string &table,
       }
     }
     if (extra_lines > 1) {
-      out += AMStr::amfmt("\x1b[{}A", extra_lines - 1);
+      out += AMStr::fmt("\x1b[{}A", extra_lines - 1);
     }
   } else {
     out += "\n";
@@ -664,7 +662,7 @@ ECM AMTransferManager::Show(
     auto task_info = FindTaskById_(id);
     if (!task_info) {
       last_error =
-          ECM{EC::TaskNotFound, AMStr::amfmt("Task not found: {}", id)};
+          ECM{EC::TaskNotFound, AMStr::fmt("Task not found: {}", id)};
       prompt_.ErrorFormat(last_error);
       continue;
     }
@@ -865,5 +863,3 @@ ECM AMTransferManager::List(
   prompt_.FlushCachedOutput();
   return {EC::Success, ""};
 }
-
-

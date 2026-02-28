@@ -14,78 +14,91 @@
 #include <type_traits>
 #include <vector>
 
-#ifndef AM_ENUM_NAME
-#define AM_ENUM_NAME(x) std::string(magic_enum::enum_name(x))
-#endif
-
 namespace AMStr {
 uint32_t NextCodepointUtf8(const std::string &utf8_str, size_t &idx);
 size_t CodepointDisplayWidth(uint32_t cp);
 size_t DisplayWidthUtf8(const std::string &utf8_str);
 
-void amfmt_append(std::string &out, const std::string &value);
-void amfmt_append(std::string &out, const char *value);
-void amfmt_append(std::string &out, char *value);
+namespace detail {
+template <typename T> inline constexpr bool always_false_v = false;
 
-template <typename T,
-          typename std::enable_if<std::is_integral<T>::value, int>::type = 0>
-inline void amfmt_append(std::string &out, T value) {
-  if constexpr (std::is_signed<T>::value) {
-    out += std::to_string(static_cast<long long>(value));
+bool fmt_parse_padding_spec(const std::string &spec, char *align_out,
+                            size_t *width_out);
+std::string fmt_apply_padding(const std::string &value, char align,
+                              size_t width);
+bool fmt_parse_spec_token(const std::string &token, char *align_out,
+                          size_t *width_out);
+size_t fmt_count_placeholders(const std::string &templ);
+} // namespace detail
+
+template <typename T>
+std::string ToString(const T &value, bool full_enum_name = false) {
+  using D = std::decay_t<T>;
+
+  if constexpr (std::is_same_v<D, bool>) {
+    return value ? "true" : "false";
+  } else if constexpr (std::is_same_v<D, std::string>) {
+    return value;
+  } else if constexpr (std::is_same_v<D, std::string_view>) {
+    return std::string(value);
+  } else if constexpr (std::is_same_v<D, const char *> ||
+                       std::is_same_v<D, char *>) {
+    return value ? std::string(value) : std::string();
+  } else if constexpr (std::is_convertible_v<const T &, std::string_view>) {
+    return std::string(std::string_view(value));
+  } else if constexpr (std::is_enum_v<D>) {
+    const std::string enum_name = std::string(magic_enum::enum_name(value));
+    if (!enum_name.empty()) {
+      if (full_enum_name) {
+        const std::string enum_type_name =
+            std::string(magic_enum::enum_type_name<D>());
+        if (!enum_type_name.empty()) {
+          return enum_type_name + "::" + enum_name;
+        }
+      }
+      return enum_name;
+    }
+    using U = std::underlying_type_t<D>;
+    if constexpr (std::is_signed_v<U>) {
+      return std::to_string(static_cast<long long>(static_cast<U>(value)));
+    } else {
+      return std::to_string(
+          static_cast<unsigned long long>(static_cast<U>(value)));
+    }
+  } else if constexpr (std::is_integral_v<D>) {
+    if constexpr (std::is_signed_v<D>) {
+      return std::to_string(static_cast<long long>(value));
+    } else {
+      return std::to_string(static_cast<unsigned long long>(value));
+    }
+  } else if constexpr (std::is_floating_point_v<D>) {
+    std::ostringstream oss;
+    oss << value;
+    return oss.str();
   } else {
-    out += std::to_string(static_cast<unsigned long long>(value));
+    static_assert(detail::always_false_v<D>,
+                  "ToString only supports string-like, enum, bool, and "
+                  "arithmetic types");
+    return {};
   }
 }
 
-template <typename T, typename std::enable_if<std::is_floating_point<T>::value,
-                                              int>::type = 0>
-inline void amfmt_append(std::string &out, T value) {
-  std::ostringstream oss;
-  oss << value;
-  out += oss.str();
-}
-
-template <typename T>
-inline constexpr bool amfmt_allowed_v =
-    std::disjunction_v<std::is_arithmetic<std::decay_t<T>>,
-                       std::is_same<std::decay_t<T>, std::string>,
-                       std::is_same<std::decay_t<T>, const char *>,
-                       std::is_same<std::decay_t<T>, char *>>;
-
-template <typename T> inline std::string amfmt_to_string(T &&value) {
-  static_assert(amfmt_allowed_v<T>,
-                "amfmt only accepts string, char*, or integral types");
-  std::string out;
-  amfmt_append(out, std::forward<T>(value));
-  return out;
-}
-
-bool amfmt_parse_padding_spec(const std::string &spec, char *align_out,
-                              size_t *width_out);
-std::string amfmt_apply_padding(const std::string &value, char align,
-                                size_t width);
-bool amfmt_parse_spec_token(const std::string &token, char *align_out,
-                            size_t *width_out);
-size_t amfmt_count_placeholders(const std::string &templ);
-
 template <typename... Args>
-inline std::string amfmt(const std::string &templ, Args &&...args) {
-  static_assert((amfmt_allowed_v<Args> && ...),
-                "amfmt only accepts string, char*, or integral types");
-  size_t placeholder_count = amfmt_count_placeholders(templ);
+std::string fmt(const std::string &templ, Args &&...args) {
+  size_t placeholder_count = detail::fmt_count_placeholders(templ);
   constexpr size_t arg_count = sizeof...(Args);
   if (placeholder_count == 0) {
     std::string out = templ;
-    (amfmt_append(out, std::forward<Args>(args)), ...);
+    ((out += AMStr::ToString(std::forward<Args>(args))), ...);
     return out;
   }
   if (placeholder_count != arg_count) {
-    throw std::runtime_error("amfmt: argument count mismatch");
+    throw std::runtime_error("fmt: argument count mismatch");
   }
   std::vector<std::string> values;
   values.reserve(arg_count);
   (void)std::initializer_list<int>{
-      (values.push_back(amfmt_to_string(std::forward<Args>(args))), 0)...};
+      (values.push_back(AMStr::ToString(std::forward<Args>(args))), 0)...};
 
   std::string out;
   out.reserve(templ.size());
@@ -103,16 +116,16 @@ inline std::string amfmt(const std::string &templ, Args &&...args) {
       for (; j < templ.size(); ++j) {
         if (templ[j] == '}') {
           if (arg_index >= values.size()) {
-            throw std::runtime_error("amfmt: argument count mismatch");
+            throw std::runtime_error("fmt: argument count mismatch");
           }
           std::string value = values[arg_index++];
           if (!token.empty()) {
             char align = 0;
             size_t width = 0;
-            if (!amfmt_parse_spec_token(token, &align, &width)) {
-              throw std::runtime_error("amfmt: unsupported format specifier");
+            if (!detail::fmt_parse_spec_token(token, &align, &width)) {
+              throw std::runtime_error("fmt: unsupported format specifier");
             }
-            value = amfmt_apply_padding(value, align, width);
+            value = detail::fmt_apply_padding(value, align, width);
           }
           out += value;
           i = j;
@@ -121,7 +134,7 @@ inline std::string amfmt(const std::string &templ, Args &&...args) {
         token.push_back(templ[j]);
       }
       if (j >= templ.size()) {
-        throw std::runtime_error("amfmt: unmatched '{' in template");
+        throw std::runtime_error("fmt: unmatched '{' in template");
       }
     } else if (c == '}' && i + 1 < templ.size() && templ[i + 1] == '}') {
       out.push_back('}');
@@ -133,9 +146,8 @@ inline std::string amfmt(const std::string &templ, Args &&...args) {
   return out;
 }
 
-template <typename... Args>
-inline std::string amfmt(const char *templ, Args &&...args) {
-  return amfmt(std::string(templ ? templ : ""), std::forward<Args>(args)...);
+template <typename... Args> std::string fmt(const char *templ, Args &&...args) {
+  return fmt(std::string(templ ? templ : ""), std::forward<Args>(args)...);
 }
 
 void vlowercase(std::string &str);
@@ -151,93 +163,11 @@ size_t CharNum(const std::string &utf8_str);
 std::string RepeatUtf8(const std::string &token, size_t count);
 std::string PadRightUtf8(const std::string &text, size_t width);
 std::string AnsiColor24(const std::string &hex_color);
-
-inline std::string
-FormatUtf8Table(const std::vector<std::string> &keys,
-                const std::vector<std::vector<std::string>> &rows,
-                const std::string &skeleton_color = "", size_t pad_left = 1,
-                size_t pad_right = 1, size_t pad_top = 0,
-                size_t pad_bottom = 0) {
-  if (keys.empty()) {
-    return "";
-  }
-
-  const size_t col_count = keys.size();
-  std::vector<size_t> widths(col_count, 0);
-  for (size_t c = 0; c < col_count; ++c) {
-    widths[c] = DisplayWidthUtf8(keys[c]);
-  }
-  for (const auto &row : rows) {
-    for (size_t c = 0; c < col_count; ++c) {
-      const std::string &cell = (c < row.size()) ? row[c] : std::string();
-      const size_t cell_len = DisplayWidthUtf8(cell);
-      if (cell_len > widths[c]) {
-        widths[c] = cell_len;
-      }
-    }
-  }
-
-  const std::string color_prefix = AnsiColor24(skeleton_color);
-  const std::string color_suffix = color_prefix.empty() ? "" : "\x1b[0m";
-
-  auto build_border = [&](const std::string &left, const std::string &mid,
-                          const std::string &right) {
-    std::string line = color_prefix + left + color_suffix;
-    for (size_t c = 0; c < col_count; ++c) {
-      line += color_prefix + RepeatUtf8("─", widths[c] + pad_left + pad_right) +
-              color_suffix;
-      line +=
-          color_prefix + ((c + 1 == col_count) ? right : mid) + color_suffix;
-    }
-    return line;
-  };
-
-  auto build_row = [&](const std::vector<std::string> &row) {
-    std::string line = color_prefix + "│" + color_suffix;
-    for (size_t c = 0; c < col_count; ++c) {
-      const std::string &cell = (c < row.size()) ? row[c] : std::string();
-      line += std::string(pad_left, ' ');
-      line += PadRightUtf8(cell, widths[c]);
-      line += std::string(pad_right, ' ');
-      line += color_prefix + "│" + color_suffix;
-    }
-    return line;
-  };
-
-  auto build_empty_row = [&]() {
-    std::string line = color_prefix + "│" + color_suffix;
-    for (size_t c = 0; c < col_count; ++c) {
-      line += std::string(widths[c] + pad_left + pad_right, ' ');
-      line += color_prefix + "│" + color_suffix;
-    }
-    return line;
-  };
-
-  std::ostringstream oss;
-  oss << build_border("┌", "┬", "┐") << "\n";
-  for (size_t i = 0; i < pad_top; ++i) {
-    oss << build_empty_row() << "\n";
-  }
-  oss << build_row(keys) << "\n";
-  for (size_t i = 0; i < pad_bottom; ++i) {
-    oss << build_empty_row() << "\n";
-  }
-  oss << build_border("├", "┼", "┤") << "\n";
-  for (size_t r = 0; r < rows.size(); ++r) {
-    for (size_t i = 0; i < pad_top; ++i) {
-      oss << build_empty_row() << "\n";
-    }
-    oss << build_row(rows[r]);
-    for (size_t i = 0; i < pad_bottom; ++i) {
-      oss << "\n" << build_empty_row();
-    }
-    if (r + 1 < rows.size()) {
-      oss << "\n";
-    }
-  }
-  oss << "\n" << build_border("└", "┴", "┘");
-  return oss.str();
-}
+std::string FormatUtf8Table(const std::vector<std::string> &keys,
+                            const std::vector<std::vector<std::string>> &rows,
+                            const std::string &skeleton_color = "",
+                            size_t pad_left = 1, size_t pad_right = 1,
+                            size_t pad_top = 0, size_t pad_bottom = 0);
 
 std::pair<bool, int> endswith(const std::string &str,
                               const std::string &suffix);
@@ -261,13 +191,11 @@ std::string replace_all(std::string str, const std::string &old_sub,
 std::string join(const std::vector<std::string> &parts, const std::string &sep);
 std::string PadLeftAscii(std::string_view value, size_t width);
 size_t CountLines(const std::string &text);
-} // namespace AMStr
-
 void print(const std::string &str);
 
 template <typename... Args> inline void print(Args &&...args) {
   if constexpr (sizeof...(Args) >= 2) {
-    std::cout << AMStr::amfmt(std::forward<Args>(args)...) << "\n";
+    std::cout << AMStr::fmt(std::forward<Args>(args)...) << "\n";
   } else {
     (std::cout << ... << std::forward<Args>(args)) << "\n";
   }
@@ -290,3 +218,4 @@ std::vector<T> UniqueTargetsKeepOrder(const std::vector<T> &targets) {
   }
   return unique;
 }
+} // namespace AMStr

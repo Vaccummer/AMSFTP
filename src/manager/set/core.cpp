@@ -34,44 +34,44 @@ AMHostSetPathConfig::FromJson(const Json &jsond,
   }
 
   bool use_async_value = config.use_async;
-  if (QueryKey(jsond, {"CompleteOption", "Searcher", "Path", "use_async"},
+  if (AMJson::QueryKey(jsond, {"CompleteOption", "Searcher", "Path", "use_async"},
                &use_async_value)) {
     config.use_async = use_async_value;
   }
 
   bool use_cache_value = config.use_cache;
-  if (QueryKey(jsond, {"CompleteOption", "Searcher", "Path", "use_cache"},
+  if (AMJson::QueryKey(jsond, {"CompleteOption", "Searcher", "Path", "use_cache"},
                &use_cache_value)) {
     config.use_cache = use_cache_value;
   }
 
   size_t cache_items_value = config.cache_items_threshold;
-  if (QueryKey(jsond,
+  if (AMJson::QueryKey(jsond,
                {"CompleteOption", "Searcher", "Path", "cache_items_threshold"},
                &cache_items_value)) {
     config.cache_items_threshold = cache_items_value;
   }
 
   size_t cache_max_value = config.cache_max_entries;
-  if (QueryKey(jsond,
+  if (AMJson::QueryKey(jsond,
                {"CompleteOption", "Searcher", "Path", "cache_max_entries"},
                &cache_max_value)) {
     config.cache_max_entries = cache_max_value;
   }
 
   size_t timeout_value = config.timeout_ms;
-  if (QueryKey(jsond, {"CompleteOption", "Searcher", "Path", "timeout_ms"},
+  if (AMJson::QueryKey(jsond, {"CompleteOption", "Searcher", "Path", "timeout_ms"},
                &timeout_value)) {
     config.timeout_ms = timeout_value;
   }
 
   bool use_check_value = config.highlight_use_check;
-  if (QueryKey(jsond, {"Highlight", "Path", "use_check"}, &use_check_value)) {
+  if (AMJson::QueryKey(jsond, {"Highlight", "Path", "use_check"}, &use_check_value)) {
     config.highlight_use_check = use_check_value;
   }
 
   size_t highlight_timeout_value = config.highlight_timeout_ms;
-  if (QueryKey(jsond, {"Highlight", "Path", "timeout_ms"},
+  if (AMJson::QueryKey(jsond, {"Highlight", "Path", "timeout_ms"},
                &highlight_timeout_value)) {
     config.highlight_timeout_ms = highlight_timeout_value;
   }
@@ -95,7 +95,7 @@ ECM AMSetManager::Reload() {
 
   AMHostSetPathConfig default_cfg{};
   Json default_json;
-  if (QueryKey(host_set, {hostsetkn::kDefaultHost}, &default_json) &&
+  if (AMJson::QueryKey(host_set, {hostsetkn::kDefaultHost}, &default_json) &&
       default_json.is_object()) {
     default_cfg = AMHostSetPathConfig::FromJson(default_json, default_cfg);
   }
@@ -324,3 +324,4 @@ const AMHostSetPathConfig *AMSetManager::FindDefaultEntryNoLock_() const {
   }
   return &it->second;
 }
+

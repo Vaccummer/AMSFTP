@@ -15,6 +15,7 @@
 #include <string>
 
 // Internal dependencies
+#include "AMBase/tools/auth.hpp"
 #include "AMClient/Base.hpp"
 
 // Internal dependencies
@@ -518,8 +519,10 @@ private:
   CURL *curl = nullptr;
   CURLM *multi = nullptr; // Reused multi handle
   std::atomic<bool> connected = false;
-  std::atomic<bool> mlst_supported = true; // Whether MLST is supported; try by default first
-  std::atomic<bool> mlst_checked = false;  // Whether MLST support has been checked
+  std::atomic<bool> mlst_supported =
+      true; // Whether MLST is supported; try by default first
+  std::atomic<bool> mlst_checked =
+      false; // Whether MLST support has been checked
   std::regex ftp_url_pattern = std::regex("^ftp://.*$");
   std::string url = "";
   std::string current_url = ""; // Keep CURLOPT_URL string lifetime valid
@@ -535,8 +538,8 @@ private:
     }
     start_time = start_time == -1 ? am_ms() : start_time;
 
-    // Ensure curl is not left in multi (avoid leftovers from previous operations)
-    // curl_multi_remove_handle(multi, curl);
+    // Ensure curl is not left in multi (avoid leftovers from previous
+    // operations) curl_multi_remove_handle(multi, curl);
 
     CURLMcode add_result = curl_multi_add_handle(multi, curl);
     if (add_result != CURLM_OK) {
@@ -613,8 +616,7 @@ private:
             std::min<long>(curl_wait_ms, std::numeric_limits<int>::max()));
       }
       if (remaining_ms > 0) {
-        wait_ms =
-            static_cast<int>(std::min<int64_t>(wait_ms, remaining_ms));
+        wait_ms = static_cast<int>(std::min<int64_t>(wait_ms, remaining_ms));
       }
 
       // Wait for socket events based on libcurl timer/socket state.
@@ -706,7 +708,7 @@ private:
 
     // Set MLST command
     struct curl_slist *commands = nullptr;
-    std::string command = AMStr::amfmt("MLST {}", MlistPath(path));
+    std::string command = AMStr::fmt("MLST {}", MlistPath(path));
     commands = curl_slist_append(commands, command.c_str());
 
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
@@ -732,7 +734,7 @@ private:
     if (nb_res.value != CURLE_OK) {
       free(header_chunk.memory);
       ECM rcm = {GetFTPErrorCode(nb_res.value),
-                 AMStr::amfmt("MLST {} error: {}", path,
+                 AMStr::fmt("MLST {} error: {}", path,
                               curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, rcm.first, path, "MLST", rcm.second);
       return {rcm, PathInfo()};
@@ -856,7 +858,7 @@ private:
 
     // SIZE failed -> path does not exist
     return {ECM{GetFTPErrorCode(nb_res.value),
-                AMStr::amfmt("legacy_stat {} error: {}", path,
+                AMStr::fmt("legacy_stat {} error: {}", path,
                              curl_easy_strerror(nb_res.value))},
             {}};
   }
@@ -905,7 +907,7 @@ private:
       }
       if (response_code == 550) {
 
-        return {ECM{EC::PathNotExist, AMStr::amfmt("Path not found: {}", path)},
+        return {ECM{EC::PathNotExist, AMStr::fmt("Path not found: {}", path)},
                 {}};
       }
 
@@ -953,7 +955,7 @@ private:
 
     struct curl_slist *commands = nullptr;
     commands =
-        curl_slist_append(commands, AMStr::amfmt("DELE {}", path).c_str());
+        curl_slist_append(commands, AMStr::fmt("DELE {}", path).c_str());
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
@@ -968,7 +970,7 @@ private:
     }
     if (nb_res.value != CURLE_OK) {
       ECM ecm = {GetFTPErrorCode(nb_res.value),
-                 AMStr::amfmt("rmfile {} failed: {}", path,
+                 AMStr::fmt("rmfile {} failed: {}", path,
                               curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, ecm.first, path, "rmfile", ecm.second);
       return ecm;
@@ -985,7 +987,7 @@ private:
     }
 
     struct curl_slist *commands = nullptr;
-    std::string rmd_cmd = AMStr::amfmt("RMD {}", MlistPath(path));
+    std::string rmd_cmd = AMStr::fmt("RMD {}", MlistPath(path));
     commands = curl_slist_append(commands, rmd_cmd.c_str());
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
@@ -1001,7 +1003,7 @@ private:
     }
     if (nb_res.value != CURLE_OK) {
       ECM ecm = {GetFTPErrorCode(nb_res.value),
-                 AMStr::amfmt("rmdir {} failed: {}", path,
+                 AMStr::fmt("rmdir {} failed: {}", path,
                               curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, ecm.first, path, "rmdir", ecm.second);
       return ecm;
@@ -1024,7 +1026,7 @@ public:
       res_data.password = res_data.password.empty() ? "anonymous@example.com"
                                                     : res_data.password;
     }
-    this->url = AMStr::amfmt("ftp://{}:{}", res_data.hostname,
+    this->url = AMStr::fmt("ftp://{}:{}", res_data.hostname,
                              std::to_string(res_data.port));
   }
 
@@ -1053,7 +1055,7 @@ public:
       path_f = MlistPath(path, is_dir);
     }
     curl_easy_reset(curl);
-    current_url = AMStr::amfmt("{}{}", this->url, path_f);
+    current_url = AMStr::fmt("{}{}", this->url, path_f);
     curl_easy_setopt(curl, CURLOPT_URL, current_url.c_str());
     curl_easy_setopt(curl, CURLOPT_USERNAME, res_data.username.c_str());
     const std::string &password_to_use = session_password_plain_.empty()
@@ -1215,7 +1217,8 @@ public:
     start_time = start_time == -1 ? am_ms() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    std::lock_guard<std::recursive_mutex> lock(mtx); // Prevent concurrent curl access
+    std::lock_guard<std::recursive_mutex> lock(
+        mtx); // Prevent concurrent curl access
     ECM ecm = SetupPath("", true);
     if (ecm.first != EC::Success) {
       return ecm;
@@ -1236,7 +1239,7 @@ public:
       return {EC::Success, ""};
     }
     ecm = {GetFTPErrorCode(nb_res.value),
-           AMStr::amfmt("Check error: {}", curl_easy_strerror(nb_res.value))};
+           AMStr::fmt("Check error: {}", curl_easy_strerror(nb_res.value))};
     trace(TraceLevel::Error, ecm.first, "/", "Check", ecm.second);
     return ecm;
   }
@@ -1307,7 +1310,7 @@ public:
     }
     std::string pathf = path;
     if (pathf.empty()) {
-      return {ECM{EC::InvalidArg, AMStr::amfmt("Invalid path: {}", path)}, {}};
+      return {ECM{EC::InvalidArg, AMStr::fmt("Invalid path: {}", path)}, {}};
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
@@ -1382,7 +1385,7 @@ public:
       free(chunk.memory);
       ECM rcm = ECM{
           GetFTPErrorCode(nb_res.value),
-          AMStr::amfmt("List failed: {}", curl_easy_strerror(nb_res.value))};
+          AMStr::fmt("List failed: {}", curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, rcm.first, path, "listdir", rcm.second);
       return {rcm, {}};
     }
@@ -1618,7 +1621,7 @@ public:
 
     struct curl_slist *commands = nullptr;
     commands = curl_slist_append(
-        commands, AMStr::amfmt("MKD {}", MlistPath(path, true)).c_str());
+        commands, AMStr::fmt("MKD {}", MlistPath(path, true)).c_str());
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
@@ -1633,7 +1636,7 @@ public:
     }
     if (nb_res.value != CURLE_OK) {
       ecm = {GetFTPErrorCode(nb_res.value),
-             AMStr::amfmt("mkdir {} failed: {}", path,
+             AMStr::fmt("mkdir {} failed: {}", path,
                           curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, ecm.first, path, "mkdir", ecm.second);
       return ecm;
@@ -1674,7 +1677,7 @@ public:
       return rcm;
     }
     if (info.type != PathType::FILE) {
-      return {EC::NotAFile, AMStr::amfmt("Path is not a file: {}", path)};
+      return {EC::NotAFile, AMStr::fmt("Path is not a file: {}", path)};
     }
     return _librmfile(path);
   }
@@ -1695,7 +1698,7 @@ public:
     }
     if (info.type != PathType::DIR) {
       return {EC::NotADirectory,
-              AMStr::amfmt("Path is not a directory: {}", path)};
+              AMStr::fmt("Path is not a directory: {}", path)};
     }
     return _librmdir(path, interrupt_flag, timeout_ms, start_time);
   }
@@ -1773,7 +1776,7 @@ public:
     std::string dstf = AMFS::abspath(dst, true, home_dir, home_dir);
     if (srcf.empty() || dstf.empty()) {
       return {EC::InvalidArg,
-              AMStr::amfmt("Invalid path: {} or {}", srcf, dstf)};
+              AMStr::fmt("Invalid path: {} or {}", srcf, dstf)};
     }
 
     // Check source exists
@@ -1788,13 +1791,13 @@ public:
     if (rcm2.first == EC::Success) {
       if (sbr2.type != sbr.type) {
         return {EC::PathAlreadyExists,
-                AMStr::amfmt(
+                AMStr::fmt(
                     "Dst already exists and is not the same type as src: {} ",
                     dstf)};
       }
       if (!overwrite) {
         return {EC::PathAlreadyExists,
-                AMStr::amfmt("Dst already exists: {} and overwrite is false",
+                AMStr::fmt("Dst already exists: {} and overwrite is false",
                              dstf)};
       }
     } else {
@@ -1808,7 +1811,7 @@ public:
     }
 
     // Use RNFR and RNTO commands via QUOTE
-    std::string url = AMStr::amfmt("{}{}", this->url, "/");
+    std::string url = AMStr::fmt("{}{}", this->url, "/");
     ECM ecm = SetupPath(url, sbr.type == PathType::DIR);
     if (ecm.first != EC::Success) {
       return ecm;
@@ -1837,7 +1840,7 @@ public:
 
     if (res != CURLE_OK) {
       return {EC::FTPRenameFailed,
-              AMStr::amfmt("Rename failed: {}", curl_easy_strerror(res))};
+              AMStr::fmt("Rename failed: {}", curl_easy_strerror(res))};
     }
 
     return {EC::Success, ""};
@@ -1869,7 +1872,7 @@ public:
   //   } else if (res != CURLE_OK) {
   //     pd->task_info.lock()->cur_task->rcm =
   //         ECM{EC::FTPUploadFailed,
-  //             AMStr::amfmt("Upload failed: {}", curl_easy_strerror(res))};
+  //             AMStr::fmt("Upload failed: {}", curl_easy_strerror(res))};
   //     pd->set_terminate();
   //   }
   // }
@@ -1892,9 +1895,8 @@ public:
   //   } else if (res != CURLE_OK) {
   //     pd->task_info.lock()->cur_task->rcm =
   //         ECM{EC::FTPDownloadFailed,
-  //             AMStr::amfmt("Download failed: {}", curl_easy_strerror(res))};
+  //             AMStr::fmt("Download failed: {}", curl_easy_strerror(res))};
   //     pd->set_terminate();
   //   }
   // }
 };
-

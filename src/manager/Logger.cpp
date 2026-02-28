@@ -20,7 +20,7 @@ void AMLogManager::ClientTrace(const TraceInfo &info) {
     }
     if (!client_log_stream_.is_open()) {
       return Err(EC::LocalFileError,
-                 AMStr::amfmt("Failed to open {}", client_log_path_.string()));
+                 AMStr::fmt("Failed to open {}", client_log_path_.string()));
     }
     WriteLogEntry_(normalized, client_log_stream_);
     return Ok();
@@ -68,7 +68,7 @@ void AMLogManager::ProgramTrace(const TraceInfo &info) {
     }
     if (!program_log_stream_.is_open()) {
       return Err(EC::LocalFileError,
-                 AMStr::amfmt("Failed to open {}", program_log_path_.string()));
+                 AMStr::fmt("Failed to open {}", program_log_path_.string()));
     }
     WriteLogEntry_(normalized, program_log_stream_);
     return Ok();
@@ -91,14 +91,14 @@ AMLogManager::TraceLevel(int value, bool programm, bool client, bool print) {
     if (print) {
       if (client && programm) {
         prompt_manager_.Print(
-            AMStr::amfmt("TraceLevel: client = {}, program = {}", client_level,
+            AMStr::fmt("TraceLevel: client = {}, program = {}", client_level,
                          program_level));
       } else if (client) {
         prompt_manager_.Print(
-            AMStr::amfmt("TraceLevel: client = {}", client_level));
+            AMStr::fmt("TraceLevel: client = {}", client_level));
       } else if (programm) {
         prompt_manager_.Print(
-            AMStr::amfmt("TraceLevel: program = {}", program_level));
+            AMStr::fmt("TraceLevel: program = {}", program_level));
       }
     }
     if (client && programm) {
@@ -122,14 +122,14 @@ AMLogManager::TraceLevel(int value, bool programm, bool client, bool print) {
   }
   if (print) {
     if (client && programm) {
-      prompt_manager_.Print(AMStr::amfmt(
+      prompt_manager_.Print(AMStr::fmt(
           "TraceLevel set: client = {}, program = {}", clamped, clamped));
     } else if (client) {
       prompt_manager_.Print(
-          AMStr::amfmt("TraceLevel set: client = {}", clamped));
+          AMStr::fmt("TraceLevel set: client = {}", clamped));
     } else if (programm) {
       prompt_manager_.Print(
-          AMStr::amfmt("TraceLevel set: program = {}", clamped));
+          AMStr::fmt("TraceLevel set: program = {}", clamped));
     }
   }
   return clamped;
@@ -158,7 +158,7 @@ ECM AMLogManager::EnsureLogStreamsOpen_() {
     client_log_stream_.open(client_log_path_, std::ios::app);
     if (!client_log_stream_.is_open()) {
       return Err(EC::LocalFileError,
-                 AMStr::amfmt("Failed to open {}", client_log_path_.string()));
+                 AMStr::fmt("Failed to open {}", client_log_path_.string()));
     }
   }
   if (!program_log_stream_.is_open()) {
@@ -166,7 +166,7 @@ ECM AMLogManager::EnsureLogStreamsOpen_() {
     program_log_stream_.open(program_log_path_, std::ios::app);
     if (!program_log_stream_.is_open()) {
       return Err(EC::LocalFileError,
-                 AMStr::amfmt("Failed to open {}", program_log_path_.string()));
+                 AMStr::fmt("Failed to open {}", program_log_path_.string()));
     }
   }
   return Ok();

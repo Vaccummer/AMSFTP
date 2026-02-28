@@ -391,7 +391,7 @@ public:
 
     if (ec) {
       auto rcm =
-          ECM{fec(ec), AMStr::amfmt("Stat {} failed: {}", pathf, ec.message())};
+          ECM{fec(ec), AMStr::fmt("Stat {} failed: {}", pathf, ec.message())};
       trace(TraceLevel::Debug, rcm.first, pathf, "stat", rcm.second);
       return {rcm, info};
     }
@@ -458,13 +458,13 @@ public:
     fs::path p(pathf);
     if (!fs::exists(p)) {
       auto rcm =
-          ECM{EC::PathNotExist, AMStr::amfmt("Path not found: {}", pathf)};
+          ECM{EC::PathNotExist, AMStr::fmt("Path not found: {}", pathf)};
       trace(TraceLevel::Debug, EC::PathNotExist, pathf, "listdir", rcm.second);
       return {rcm, result};
     }
     if (!fs::is_directory(p)) {
       auto rcm = ECM{EC::NotADirectory,
-                     AMStr::amfmt("Path is not a directory: {}", pathf)};
+                     AMStr::fmt("Path is not a directory: {}", pathf)};
       trace(TraceLevel::Debug, EC::NotADirectory, pathf, "listdir", rcm.second);
       return {rcm, result};
     }
@@ -474,7 +474,7 @@ public:
 
     for (const auto &entry : fs::directory_iterator(p, ec)) {
       if (interrupt_flag && !interrupt_flag->IsRunning()) {
-        print("Interrupted_ls");
+        AMStr::print("Interrupted_ls");
         return {ECM{EC::Terminate, "Listdir interrupted by user"}, result};
       }
       if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
@@ -700,9 +700,9 @@ public:
       return {error, {result, errors}};
     } else if (info.type != PathType::DIR) {
       trace(TraceLevel::Debug, EC::NotADirectory, path, "walk",
-            AMStr::amfmt("Path is not a directory: {}", path));
+            AMStr::fmt("Path is not a directory: {}", path));
       ECM out = {EC::NotADirectory,
-                 AMStr::amfmt("Path is not a directory: {}", path)};
+                 AMStr::fmt("Path is not a directory: {}", path)};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
       }
@@ -875,7 +875,7 @@ public:
     fs::create_directory(fs::path(path), ec);
     if (ec) {
       ECM rcm =
-          ECM{fec(ec), AMStr::amfmt("mkdir {} failed: {}", path, ec.message())};
+          ECM{fec(ec), AMStr::fmt("mkdir {} failed: {}", path, ec.message())};
       trace(TraceLevel::Debug, rcm.first, path, "mkdir", rcm.second);
       return rcm;
     }
@@ -893,7 +893,7 @@ public:
     fs::create_directories(fs::path(path), ec);
     if (ec) {
       ECM rcm = ECM{fec(ec),
-                    AMStr::amfmt("mkdirs {} failed: {}", path, ec.message())};
+                    AMStr::fmt("mkdirs {} failed: {}", path, ec.message())};
       trace(TraceLevel::Debug, rcm.first, path, "mkdir", rcm.second);
       return rcm;
     }
@@ -912,14 +912,14 @@ public:
     auto [error, info] = stat(src);
     auto [error1, info1] = stat(dst);
     if (error.first != EC::Success) {
-      return ECM{error.first, AMStr::amfmt("src {} not exist", src)};
+      return ECM{error.first, AMStr::fmt("src {} not exist", src)};
     } else if (error1.first == EC::Success) {
       if ((info.type == PathType::DIR && info1.type != PathType::DIR) ||
           (info.type != PathType::DIR && info1.type == PathType::DIR)) {
         return ECM{EC::NotADirectory, "src and dst are not the same type"};
       } else if (!overwrite) {
         return ECM{EC::PathAlreadyExists,
-                   AMStr::amfmt("dst {} already exists", dst)};
+                   AMStr::fmt("dst {} already exists", dst)};
       }
     }
 
@@ -947,7 +947,7 @@ public:
       }
     }
     if (ec) {
-      return ECM{fec(ec), AMStr::amfmt("rename {} to {} failed: {}", src, dst,
+      return ECM{fec(ec), AMStr::fmt("rename {} to {} failed: {}", src, dst,
                                        ec.message())};
     }
     return ECM{EC::Success, ""};
@@ -971,7 +971,7 @@ public:
     fs::remove(fs::path(path), ec);
     if (ec) {
       return ECM{fec(ec),
-                 AMStr::amfmt("rmdir {} failed: {}", path, ec.message())};
+                 AMStr::fmt("rmdir {} failed: {}", path, ec.message())};
     }
     return ECM{EC::Success, ""};
   }
@@ -994,7 +994,7 @@ public:
     fs::remove(fs::path(path), ec);
     if (ec) {
       return ECM{fec(ec),
-                 AMStr::amfmt("rmdir {} failed: {}", path, ec.message())};
+                 AMStr::fmt("rmdir {} failed: {}", path, ec.message())};
     }
     return ECM{EC::Success, ""};
   }
@@ -1020,7 +1020,7 @@ public:
       } else {
         fs::remove(entry.path, ec);
         if (ec) {
-          ECM out = {fec(ec), AMStr::amfmt("remove {} failed: {}", entry.path,
+          ECM out = {fec(ec), AMStr::fmt("remove {} failed: {}", entry.path,
                                            ec.message())};
           if (error_callback && *error_callback) {
             (*error_callback)(entry.path, out);
@@ -1032,7 +1032,7 @@ public:
     fs::remove(fs::path(path), ec);
     if (ec) {
       ECM out = {fec(ec),
-                 AMStr::amfmt("remove {} failed: {}", path, ec.message())};
+                 AMStr::fmt("remove {} failed: {}", path, ec.message())};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
       }
@@ -1062,7 +1062,7 @@ public:
       fs::remove(fs::path(path), ec);
       if (ec) {
         ECM out = {fec(ec),
-                   AMStr::amfmt("remove {} failed: {}", path, ec.message())};
+                   AMStr::fmt("remove {} failed: {}", path, ec.message())};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
         }
@@ -1180,3 +1180,4 @@ private:
   }
 #endif
 };
+

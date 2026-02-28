@@ -115,7 +115,7 @@ public:
         EC rc = client->GetLastEC();
         std::string msg = client->GetLastErrorMsg();
         return {rc,
-                AMStr::amfmt("Open sftp file \"{}\" failed: {}", path, msg)};
+                AMStr::fmt("Open sftp file \"{}\" failed: {}", path, msg)};
       }
     } else {
       // Local file
@@ -132,7 +132,7 @@ public:
 
       if (file_handle == INVALID_HANDLE_VALUE) {
         return {EC::LocalFileOpenError,
-                AMStr::amfmt("Failed to open local file \"{}\": error code {}",
+                AMStr::fmt("Failed to open local file \"{}\": error code {}",
                              path, GetLastError())};
       }
 #else
@@ -144,7 +144,7 @@ public:
 
       if (file_handle == -1) {
         return {EC::LocalFileOpenError,
-                AMStr::amfmt("Failed to open local file \"{}\": {}", path,
+                AMStr::fmt("Failed to open local file \"{}\": {}", path,
                              strerror(errno))};
       }
 #endif
@@ -192,7 +192,7 @@ public:
     LARGE_INTEGER new_pos;
     if (!SetFilePointerEx(file_handle, li, &new_pos, FILE_BEGIN)) {
       return {EC::LocalFileReadError,
-              AMStr::amfmt("Seek local file \"{}\" failed: error code {}", path,
+              AMStr::fmt("Seek local file \"{}\" failed: error code {}", path,
                            GetLastError())};
     }
     offset = static_cast<size_t>(new_pos.QuadPart);
@@ -201,7 +201,7 @@ public:
     off_t res = lseek(file_handle, static_cast<off_t>(new_offset), SEEK_SET);
     if (res == static_cast<off_t>(-1)) {
       return {EC::LocalFileReadError,
-              AMStr::amfmt("Seek local file \"{}\" failed: {}", path,
+              AMStr::fmt("Seek local file \"{}\" failed: {}", path,
                            strerror(errno))};
     }
     offset = static_cast<size_t>(res);
@@ -259,7 +259,7 @@ public:
           }
           return {bytes_read,
                   {client->GetLastEC(),
-                   AMStr::amfmt("Read sftp file \"{}\" failed: {}", path,
+                   AMStr::fmt("Read sftp file \"{}\" failed: {}", path,
                                 client->GetLastErrorMsg())}};
         }
       } else {
@@ -270,7 +270,7 @@ public:
                       &bytes_read, nullptr)) {
           return {-1,
                   {EC::LocalFileReadError,
-                   AMStr::amfmt("Read local file \"{}\" failed: error code {}",
+                   AMStr::fmt("Read local file \"{}\" failed: error code {}",
                                 path, GetLastError())}};
         }
         if (bytes_read > 0) {
@@ -291,7 +291,7 @@ public:
         } else {
           return {-1,
                   {EC::LocalFileReadError,
-                   AMStr::amfmt("Read local file \"{}\" failed: {}", path,
+                   AMStr::fmt("Read local file \"{}\" failed: {}", path,
                                 strerror(errno))}};
         }
 #endif
@@ -351,7 +351,7 @@ public:
           EC rc = client->GetLastEC();
           std::string msg = client->GetLastErrorMsg();
           return {bytes_written,
-                  {rc, AMStr::amfmt("Write sftp file \"{}\" failed: {}", path,
+                  {rc, AMStr::fmt("Write sftp file \"{}\" failed: {}", path,
                                     msg)}};
         }
       } else {
@@ -362,7 +362,7 @@ public:
                        &bytes_written, nullptr)) {
           return {-1,
                   {EC::LocalFileWriteError,
-                   AMStr::amfmt("Write local file \"{}\" failed: error code {}",
+                   AMStr::fmt("Write local file \"{}\" failed: error code {}",
                                 path, GetLastError())}};
         }
         if (bytes_written > 0) {
@@ -383,7 +383,7 @@ public:
         } else {
           return {-1,
                   {EC::LocalFileWriteError,
-                   AMStr::amfmt("Write local file \"{}\" failed: {}", path,
+                   AMStr::fmt("Write local file \"{}\" failed: {}", path,
                                 strerror(errno))}};
         }
 #endif
@@ -616,7 +616,7 @@ public:
     ;
     if (hosts.find(nickname) == hosts.end()) {
       return {ECM{EC::ClientNotFound,
-                  AMStr::amfmt("Client not found: {}", nickname)},
+                  AMStr::fmt("Client not found: {}", nickname)},
               nullptr};
     }
     if (!update) {
@@ -994,14 +994,14 @@ private:
     if (!task.src_host.empty()) {
       src_client = hostm->GetHost(task.src_host);
       if (!src_client) {
-        return {ECM{EC::NoSession, AMStr::amfmt("Source host \"{}\" not found",
+        return {ECM{EC::NoSession, AMStr::fmt("Source host \"{}\" not found",
                                                 task.src_host)},
                 nullptr, nullptr};
       }
       rcm = src_client->Check();
       if (rcm.first != EC::Success) {
         return {
-            ECM{rcm.first, AMStr::amfmt("Source host \"{}\" connection error",
+            ECM{rcm.first, AMStr::fmt("Source host \"{}\" connection error",
                                         task.src_host)},
             nullptr, nullptr};
       }
@@ -1012,14 +1012,14 @@ private:
       dst_client = hostm->GetHost(task.dst_host);
       if (!dst_client) {
         return {
-            ECM{EC::NoSession, AMStr::amfmt("Destination host \"{}\" not found",
+            ECM{EC::NoSession, AMStr::fmt("Destination host \"{}\" not found",
                                             task.dst_host)},
             nullptr, nullptr};
       }
       rcm = dst_client->Check();
       if (rcm.first != EC::Success) {
         return {ECM{rcm.first,
-                    AMStr::amfmt("Destination host \"{}\" connection error",
+                    AMStr::fmt("Destination host \"{}\" connection error",
                                  task.dst_host)},
                 nullptr, nullptr};
       }
@@ -1053,7 +1053,7 @@ private:
     if (!srcFile) {
       EC rc = client->GetLastEC();
       std::string msg = client->GetLastErrorMsg();
-      return {rc, AMStr::amfmt("Failed to open src file \"{}\": {}", task->src,
+      return {rc, AMStr::fmt("Failed to open src file \"{}\": {}", task->src,
                                msg)};
     }
 
@@ -1077,7 +1077,7 @@ private:
       libssh2_sftp_close_handle(srcFile);
       EC rc = client->GetLastEC();
       std::string msg = client->GetLastErrorMsg();
-      return {rc, AMStr::amfmt("Failed to open dst file \"{}\": {}", task->dst,
+      return {rc, AMStr::fmt("Failed to open dst file \"{}\": {}", task->dst,
                                msg)};
     }
 
@@ -1129,7 +1129,7 @@ private:
         } else {
           EC rc = client->GetLastEC();
           std::string msg = client->GetLastErrorMsg();
-          rcm = {rc, AMStr::amfmt("Read error: {}", msg)};
+          rcm = {rc, AMStr::fmt("Read error: {}", msg)};
           goto clean;
         }
       }
@@ -1171,7 +1171,7 @@ private:
         } else {
           EC rc = client->GetLastEC();
           std::string msg = client->GetLastErrorMsg();
-          rcm = {rc, AMStr::amfmt("Write error: {}", msg)};
+          rcm = {rc, AMStr::fmt("Write error: {}", msg)};
           goto clean;
         }
       }
@@ -1531,7 +1531,7 @@ private:
     } else if (res != CURLE_OK) {
       cur_task->rcm =
           ECM{EC::FTPUploadFailed,
-              AMStr::amfmt("Upload failed: {}", curl_easy_strerror(res))};
+              AMStr::fmt("Upload failed: {}", curl_easy_strerror(res))};
       pd->set_terminate();
     }
   }
@@ -1570,7 +1570,7 @@ private:
     } else if (res != CURLE_OK) {
       cur_task->rcm =
           ECM{EC::FTPDownloadFailed,
-              AMStr::amfmt("Download failed: {}", curl_easy_strerror(res))};
+              AMStr::fmt("Download failed: {}", curl_easy_strerror(res))};
       pd->set_terminate();
     }
   }
@@ -2104,19 +2104,19 @@ public:
   ECM pause(const TaskId &id, int timeout_ms = 5000) {
     auto [task_info, active] = get_task(id);
     if (!task_info || !active) {
-      return {EC::TaskNotFound, AMStr::amfmt("Task not found: {}", id)};
+      return {EC::TaskNotFound, AMStr::fmt("Task not found: {}", id)};
     }
     auto status_t = task_info->GetStatus();
     if (status_t == TaskStatus::Pending) {
       return {EC::OperationUnsupported,
-              AMStr::amfmt("Task is still pending: {}", id)};
+              AMStr::fmt("Task is still pending: {}", id)};
     } else if (status_t == TaskStatus::Finished) {
       return {EC::OperationUnsupported,
-              AMStr::amfmt("Task is already finished: {}", id)};
+              AMStr::fmt("Task is already finished: {}", id)};
     }
     if (status_t == TaskStatus::Paused ||
         (task_info->pd && task_info->pd->is_pause_only())) {
-      return {EC::Success, AMStr::amfmt("Task already paused: {}", id)};
+      return {EC::Success, AMStr::fmt("Task already paused: {}", id)};
     }
     if (task_info->pd) {
       task_info->pd->set_pause();
@@ -2129,11 +2129,11 @@ public:
       }
       if (status_t == TaskStatus::Finished) {
         return {EC::OperationUnsupported,
-                AMStr::amfmt("Task is already finished: {}", id)};
+                AMStr::fmt("Task is already finished: {}", id)};
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-    return {EC::OperationTimeout, AMStr::amfmt("Task pause timeout: {}", id)};
+    return {EC::OperationTimeout, AMStr::fmt("Task pause timeout: {}", id)};
   }
 
   /**
@@ -2144,15 +2144,15 @@ public:
   ECM resume(const TaskId &id, int timeout_ms = 5000) {
     auto [task_info, active] = get_task(id);
     if (!task_info || !active) {
-      return {EC::TaskNotFound, AMStr::amfmt("Task not found: {}", id)};
+      return {EC::TaskNotFound, AMStr::fmt("Task not found: {}", id)};
     }
     auto status_t = task_info->GetStatus();
     if (status_t == TaskStatus::Pending) {
       return {EC::OperationUnsupported,
-              AMStr::amfmt("Task is still pending: {}", id)};
+              AMStr::fmt("Task is still pending: {}", id)};
     } else if (status_t == TaskStatus::Finished) {
       return {EC::OperationUnsupported,
-              AMStr::amfmt("Task is already finished: {}", id)};
+              AMStr::fmt("Task is already finished: {}", id)};
     }
     if (task_info->pd && task_info->pd->is_pause_only() &&
         status_t != TaskStatus::Paused) {
@@ -2164,13 +2164,13 @@ public:
         }
         if (status_t == TaskStatus::Finished) {
           return {EC::OperationUnsupported,
-                  AMStr::amfmt("Task is already finished: {}", id)};
+                  AMStr::fmt("Task is already finished: {}", id)};
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
       }
       if (status_t != TaskStatus::Paused) {
         return {EC::OperationTimeout,
-                AMStr::amfmt("Task pause timeout: {}", id)};
+                AMStr::fmt("Task pause timeout: {}", id)};
       }
     }
     status_t = task_info->GetStatus();
@@ -2201,7 +2201,7 @@ public:
       queue_cv_.notify_all();
       return {EC::Success, ""};
     }
-    return {EC::Success, AMStr::amfmt("Task is conducting: {}", id)};
+    return {EC::Success, AMStr::fmt("Task is conducting: {}", id)};
   }
 
   /**
@@ -2214,12 +2214,12 @@ public:
     auto [existing, active] = get_task(id);
     if (!existing) {
       return {nullptr,
-              {EC::TaskNotFound, AMStr::amfmt("Task not found: {}", id)}};
+              {EC::TaskNotFound, AMStr::fmt("Task not found: {}", id)}};
     }
     if (existing->GetStatus() == TaskStatus::Finished) {
       return {existing,
               {EC::OperationUnsupported,
-               AMStr::amfmt("Task already finished: {}", id)}};
+               AMStr::fmt("Task already finished: {}", id)}};
     }
 
     if (existing->GetStatus() == TaskStatus::Paused) {
@@ -2279,7 +2279,7 @@ public:
     }
     return {
         existing,
-        {EC::OperationTimeout, AMStr::amfmt("Task terminate timeout: {}", id)}};
+        {EC::OperationTimeout, AMStr::fmt("Task terminate timeout: {}", id)}};
   }
 
   /**
@@ -2412,7 +2412,7 @@ public:
 
     if (resume && src_stat.type == PathType::DIR) {
       return {ECM{EC::NotAFile,
-                  AMStr::amfmt("Resume requires src to be a file: {}", src)},
+                  AMStr::fmt("Resume requires src to be a file: {}", src)},
               tasks};
     }
 
@@ -2438,7 +2438,7 @@ public:
 
       if (ignore_sepcial_file && src_stat.type != PathType::FILE) {
         return {
-            ECM{EC::NotAFile, AMStr::amfmt("Src is not a common file and "
+            ECM{EC::NotAFile, AMStr::fmt("Src is not a common file and "
                                            "ignore_sepcial_file is true: {}",
                                            srcf)},
             {}};
@@ -2448,25 +2448,25 @@ public:
         if (src_stat.type != PathType::FILE) {
           return {
               ECM{EC::NotAFile,
-                  AMStr::amfmt("Resume requires src to be a file: {}", srcf)},
+                  AMStr::fmt("Resume requires src to be a file: {}", srcf)},
               tasks};
         }
         auto [dst_stat_rcm, dst_info] = dst_client->stat(
             dstf, false, interrupt_flag, timeout_ms, start_time);
         if (dst_stat_rcm.first != EC::Success) {
           return {ECM{EC::PathNotExist,
-                      AMStr::amfmt("Resume requires dst to exist: {}", dstf)},
+                      AMStr::fmt("Resume requires dst to exist: {}", dstf)},
                   tasks};
         }
         if (dst_info.type != PathType::FILE) {
           return {
               ECM{EC::NotAFile,
-                  AMStr::amfmt("Resume requires dst to be a file: {}", dstf)},
+                  AMStr::fmt("Resume requires dst to be a file: {}", dstf)},
               tasks};
         }
         if (dst_info.size > src_stat.size) {
           return {ECM{EC::InvalidArg,
-                      AMStr::amfmt("Resume requires dst size <= src size: "
+                      AMStr::fmt("Resume requires dst size <= src size: "
                                    "{} > {}",
                                    dst_info.size, src_stat.size)},
                   tasks};
@@ -2484,13 +2484,13 @@ public:
 
       if (rcm4.first != EC::Success && !mkdir) {
         return {ECM{EC::ParentDirectoryNotExist,
-                    AMStr::amfmt("Dst parent path not exists: {}",
+                    AMStr::fmt("Dst parent path not exists: {}",
                                  AMPathStr::dirname(dstf))},
                 tasks};
       } else if (rcm4.first == EC::Success &&
                  dst_parent_info.type != PathType::DIR) {
         return {ECM(EC::NotADirectory,
-                    AMStr::amfmt("Dst parent path is not a directory: {}",
+                    AMStr::fmt("Dst parent path is not a directory: {}",
                                  dst_parent_info.path)),
                 tasks};
       }
@@ -2502,12 +2502,12 @@ public:
         if (rcm5.first == EC::Success) {
           if (dst_info.type == PathType::DIR) {
             return {ECM(EC::NotAFile,
-                        AMStr::amfmt(
+                        AMStr::fmt(
                             "Dst already exists and is a directory: {}", dstf)),
                     tasks};
           } else if (!overwrite && !resume) {
             return {ECM{EC::PathAlreadyExists,
-                        AMStr::amfmt("Dst already exists: {}", dstf)},
+                        AMStr::fmt("Dst already exists: {}", dstf)},
                     tasks};
           }
         }
@@ -2522,7 +2522,7 @@ public:
             dst_info.type != PathType::FILE) {
           return {
               ECM{EC::InvalidArg,
-                  AMStr::amfmt("Resume requires dst to be a file: {}", dstf)},
+                  AMStr::fmt("Resume requires dst to be a file: {}", dstf)},
               tasks};
         }
         tasks.back().transferred = dst_info.size;
@@ -2535,11 +2535,11 @@ public:
 
     if (rcm6.first != EC::Success && !mkdir) {
       return {ECM{EC::ParentDirectoryNotExist,
-                  AMStr::amfmt("Dst parent path not exists: {}", dstf)},
+                  AMStr::fmt("Dst parent path not exists: {}", dstf)},
               tasks};
     } else if (rcm6.first == EC::Success && dst_info.type != PathType::DIR) {
       return {ECM(EC::NotADirectory,
-                  AMStr::amfmt("Dst already exists and is not a directory: {}",
+                  AMStr::fmt("Dst already exists and is not a directory: {}",
                                dstf)),
               tasks};
     }

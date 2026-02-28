@@ -53,7 +53,7 @@ std::string VarCLISet::RenderValue_(const std::string &value) const {
  */
 void VarCLISet::PrintSection_(const std::string &domain,
                               const std::vector<VarInfo> &entries) const {
-  prompt_manager_.Print(AMStr::amfmt("\\[{}]", domain));
+  prompt_manager_.Print(AMStr::fmt("\\[{}]", domain));
   size_t max_width = 0;
   for (const auto &item : entries) {
     max_width = std::max(max_width, item.varname.size() + 1);
@@ -65,7 +65,7 @@ void VarCLISet::PrintSection_(const std::string &domain,
       key.append(max_width - key.size(), ' ');
     }
     prompt_manager_.Print(
-        AMStr::amfmt("{} = {}", FormatVarText_(key),
+        AMStr::fmt("{} = {}", FormatVarText_(key),
                      FormatVarText_(RenderValue_(item.varvalue))));
   }
 }
@@ -86,9 +86,9 @@ ECM VarCLISet::QueryByName(const std::string &token_name) const {
     if (found.IsValid().first != EC::Success) {
       return Err(
           EC::InvalidArg,
-          AMStr::amfmt("variable not found: {}", varsetkn::BuildVarToken(ref)));
+          AMStr::fmt("variable not found: {}", varsetkn::BuildVarToken(ref)));
     }
-    prompt_manager_.Print(AMStr::amfmt(
+    prompt_manager_.Print(AMStr::fmt(
         "\\[{}] {} = {}", found.domain, FormatVarText_("$" + found.varname),
         FormatVarText_(RenderValue_(found.varvalue))));
     return Ok();
@@ -102,9 +102,9 @@ ECM VarCLISet::QueryByName(const std::string &token_name) const {
   if (found.IsValid().first != EC::Success) {
     return Err(
         EC::InvalidArg,
-        AMStr::amfmt("variable not found: {}", varsetkn::BuildVarToken(ref)));
+        AMStr::fmt("variable not found: {}", varsetkn::BuildVarToken(ref)));
   }
-  prompt_manager_.Print(AMStr::amfmt(
+  prompt_manager_.Print(AMStr::fmt(
       "\\[{}] {} = {}", found.domain, FormatVarText_("$" + found.varname),
       FormatVarText_(RenderValue_(found.varvalue))));
   return Ok();
@@ -133,12 +133,12 @@ ECM VarCLISet::DefineVar(bool global, const std::string &token_name,
   if (domain != varsetkn::kPublic) {
     VarInfo old = var_manager.GetVar(domain, ref.varname);
     if (old.IsValid().first == EC::Success) {
-      prompt_manager_.Print(AMStr::amfmt(
+      prompt_manager_.Print(AMStr::fmt(
           "[{}] {} = {}", old.domain, FormatVarText_("$" + old.varname),
           FormatVarText_(RenderValue_(old.varvalue))));
       bool canceled = false;
       const bool overwrite = prompt_manager_.PromptYesNo(
-          AMStr::amfmt("Overwrite [{}].${}? (y/N): ", domain, ref.varname),
+          AMStr::fmt("Overwrite [{}].${}? (y/N): ", domain, ref.varname),
           &canceled);
       if (canceled || !overwrite) {
         return Err(EC::Terminate, "operation canceled");
@@ -176,13 +176,13 @@ ECM VarCLISet::DeleteVarByCli(bool all, const std::string &domain,
       return Err(EC::InvalidArg, "variable not found");
     }
     for (const auto &item : matches) {
-      prompt_manager_.Print(AMStr::amfmt(
+      prompt_manager_.Print(AMStr::fmt(
           "[{}] {} = {}", item.domain, FormatVarText_("$" + item.varname),
           FormatVarText_(RenderValue_(item.varvalue))));
     }
     bool canceled = false;
     const bool confirmed = prompt_manager_.PromptYesNo(
-        AMStr::amfmt("Delete {} matched item(s)? (y/N): ", matches.size()),
+        AMStr::fmt("Delete {} matched item(s)? (y/N): ", matches.size()),
         &canceled);
     if (canceled || !confirmed) {
       return Err(EC::Terminate, "operation canceled");
@@ -209,7 +209,7 @@ ECM VarCLISet::DeleteVarByCli(bool all, const std::string &domain,
   }
   if (!var_manager.HasDomain(target_domain)) {
     return Err(EC::InvalidArg,
-               AMStr::amfmt("invalid section: {}", target_domain));
+               AMStr::fmt("invalid section: {}", target_domain));
   }
   ECM rcm = var_manager.DeleteVar(target_domain, ref.varname);
   if (rcm.first != EC::Success) {
@@ -229,7 +229,7 @@ ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
   if (targets.empty()) {
     targets = var_manager.ListDomains();
   } else {
-    targets = VectorDedup(targets);
+    targets = AMJson::VectorDedup(targets);
   }
 
   std::vector<std::string> valid_targets;
@@ -237,7 +237,7 @@ ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
   for (const auto &raw : targets) {
     const std::string domain = AMStr::Strip(raw);
     if (!var_manager.HasDomain(domain)) {
-      last = Err(EC::InvalidArg, AMStr::amfmt("invalid section: {}", raw));
+      last = Err(EC::InvalidArg, AMStr::fmt("invalid section: {}", raw));
       prompt_manager_.ErrorFormat(last);
       continue;
     }
@@ -258,4 +258,5 @@ ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
   }
   return last;
 }
+
 

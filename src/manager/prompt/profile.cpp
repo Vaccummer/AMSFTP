@@ -99,37 +99,37 @@ void AMPromptProfileArgs::Init(const Json &jsond,
     return;
   }
 
-  (void)QueryKey(jsond, {"Prompt", "marker"}, &prompt.marker);
-  (void)QueryKey(jsond, {"Prompt", "continuation_marker"},
+  (void)AMJson::QueryKey(jsond, {"Prompt", "marker"}, &prompt.marker);
+  (void)AMJson::QueryKey(jsond, {"Prompt", "continuation_marker"},
                  &prompt.continuation_marker);
-  (void)QueryKey(jsond, {"Prompt", "enable_muiltiline"},
+  (void)AMJson::QueryKey(jsond, {"Prompt", "enable_muiltiline"},
                  &prompt.enable_multiline);
 
-  (void)QueryKey(jsond, {"History", "enable"}, &history.enable);
-  (void)QueryKey(jsond, {"History", "enable_duplicates"},
+  (void)AMJson::QueryKey(jsond, {"History", "enable"}, &history.enable);
+  (void)AMJson::QueryKey(jsond, {"History", "enable_duplicates"},
                  &history.enable_duplicates);
-  (void)QueryKey(jsond, {"History", "max_count"}, &history.max_count);
+  (void)AMJson::QueryKey(jsond, {"History", "max_count"}, &history.max_count);
 
-  (void)QueryKey(jsond, {"InlineHint", "enable"}, &inline_hint.enable);
-  (void)QueryKey(jsond, {"InlineHint", "delay_ms"}, &inline_hint.delay_ms);
-  (void)QueryKey(jsond, {"InlineHint", "search_delay_ms"},
+  (void)AMJson::QueryKey(jsond, {"InlineHint", "enable"}, &inline_hint.enable);
+  (void)AMJson::QueryKey(jsond, {"InlineHint", "delay_ms"}, &inline_hint.delay_ms);
+  (void)AMJson::QueryKey(jsond, {"InlineHint", "search_delay_ms"},
                  &inline_hint.search_delay_ms);
-  (void)QueryKey(jsond, {"InlineHint", "Path", "enable"},
+  (void)AMJson::QueryKey(jsond, {"InlineHint", "Path", "enable"},
                  &inline_hint.path.enable);
-  (void)QueryKey(jsond, {"InlineHint", "Path", "use_async"},
+  (void)AMJson::QueryKey(jsond, {"InlineHint", "Path", "use_async"},
                  &inline_hint.path.use_async);
-  (void)QueryKey(jsond, {"InlineHint", "Path", "timeout_ms"},
+  (void)AMJson::QueryKey(jsond, {"InlineHint", "Path", "timeout_ms"},
                  &inline_hint.path.timeout_ms);
 
-  (void)QueryKey(jsond, {"Complete", "Searcher", "Path", "use_async"},
+  (void)AMJson::QueryKey(jsond, {"Complete", "Searcher", "Path", "use_async"},
                  &complete.path.use_async);
-  (void)QueryKey(jsond, {"Complete", "Searcher", "Path", "timeout_ms"},
+  (void)AMJson::QueryKey(jsond, {"Complete", "Searcher", "Path", "timeout_ms"},
                  &complete.path.timeout_ms);
-  (void)QueryKey(jsond, {"Highlight", "delay_ms"},
+  (void)AMJson::QueryKey(jsond, {"Highlight", "delay_ms"},
                  &highlight.delay_ms);
-  (void)QueryKey(jsond, {"Highlight", "Path", "enable"},
+  (void)AMJson::QueryKey(jsond, {"Highlight", "Path", "enable"},
                  &highlight.path.enable);
-  (void)QueryKey(jsond, {"Highlight", "Path", "timeout_ms"},
+  (void)AMJson::QueryKey(jsond, {"Highlight", "Path", "timeout_ms"},
                  &highlight.path.timeout_ms);
 
   history.max_count = std::min(std::max(1, history.max_count), 200);
@@ -292,7 +292,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
   AMPromptManager &prompt = AMPromptManager::Instance();
   const AMPromptProfileArgs builtin_defaults{};
   const auto print_abort = [&prompt, this]() {
-    prompt.Print(AMStr::amfmt("{}\n", config_.Format("Input Abort", "abort")));
+    prompt.Print(AMStr::fmt("{}\n", config_.Format("Input Abort", "abort")));
   };
 
   const std::map<std::string, std::string> bool_literals = {
@@ -326,7 +326,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
         out = placeholder;
       }
       bool parsed = *value;
-      if (StrValueParse(out, &parsed)) {
+      if (AMJson::StrValueParse(out, &parsed)) {
         *value = parsed;
         return true;
       }
@@ -349,7 +349,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
           trimmed = placeholder;
         }
         int64_t parsed = 0;
-        if (!StrValueParse(trimmed, &parsed)) {
+        if (!AMJson::StrValueParse(trimmed, &parsed)) {
           return false;
         }
         return parsed >= min_value && parsed <= max_value;
@@ -362,13 +362,13 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
         out = placeholder;
       }
       int64_t parsed = *value;
-      if (!StrValueParse(out, &parsed)) {
+      if (!AMJson::StrValueParse(out, &parsed)) {
         prompt.ErrorFormat(ECM{EC::InvalidArg, "invalid integer value"});
         continue;
       }
       if (parsed < min_value || parsed > max_value) {
         prompt.ErrorFormat(
-            ECM{EC::InvalidArg, AMStr::amfmt("value out of range [{}, {}]",
+            ECM{EC::InvalidArg, AMStr::fmt("value out of range [{}, {}]",
                                              min_value, max_value)});
         continue;
       }
@@ -754,4 +754,5 @@ void AMPromptManager::FlushHistory() {
   config_.SetArg(DocumentKind::History, {}, jsond);
   config_.Dump(DocumentKind::History, "", true);
 }
+
 
