@@ -950,16 +950,14 @@ private:
 public:
   LIBSSH2_SESSION *session = nullptr;
   LIBSSH2_SFTP *sftp = nullptr;
-  ConRequst res_data;
   virtual ~AMSession() { Disconnect(); }
 
-  AMSession(const ConRequst &request,
+  AMSession(const ConRequest &request,
             const std::vector<std::string> &private_keys,
             ssize_t error_num = 10, TraceCallback trace_cb = {},
             AuthCallback auth_cb = {})
       : BaseClient(request, error_num, std::move(trace_cb)),
-        private_keys(private_keys), auth_cb(std::move(auth_cb)),
-        res_data(request) {
+        private_keys(private_keys), auth_cb(std::move(auth_cb)) {
     if (this->auth_cb) {
       this->password_auth_cb = true;
     }
@@ -1211,7 +1209,7 @@ public:
       if (!auth_cb) {
         return;
       }
-      ConRequst request = res_data;
+      ConRequest request = res_data;
       request.password = password_correct ? password_enc : "";
       CallCallbackSafe(auth_cb, AuthCBInfo(need_password, std::move(request),
                                            password_enc, password_correct));
@@ -1797,13 +1795,13 @@ public:
   amf terminal_interrupt_flag = std::make_shared<TaskControlToken>();
   TerminalOutputCallback terminal_output_cb = {};
 
-  AMSFTPTerminal(const ConRequst &request,
+  AMSFTPTerminal(const ConRequest &request,
                  const std::vector<std::string> &keys = {},
                  unsigned int tracer_capacity = 10, TraceCallback trace_cb = {},
                  AuthCallback auth_cb = {})
       : AMSession(request, keys, tracer_capacity, std::move(trace_cb),
                   std::move(auth_cb)) {
-    this->PROTOCOL = ClientProtocol::Base;
+    this->res_data.protocol = ClientProtocol::Base;
   }
 
   ~AMSFTPTerminal() override {
@@ -2705,15 +2703,15 @@ public:
   amf terminal_interrupt_flag = std::make_shared<TaskControlToken>();
   TerminalOutputCallback terminal_output_cb = {};
 
-  AMSFTPClient(const ConRequst &request,
+  AMSFTPClient(const ConRequest &request,
                const std::vector<std::string> &keys = {},
                unsigned int tracer_capacity = 10, TraceCallback trace_cb = {},
                AuthCallback auth_cb = {})
       : AMSession(request, keys, tracer_capacity, std::move(trace_cb),
                   std::move(auth_cb)) {
-    this->PROTOCOL = ClientProtocol::SFTP;
+    this->res_data.protocol = ClientProtocol::SFTP;
     if (request.trash_dir.empty()) {
-      this->trash_dir = ".AMSFTP_Trash";
+      this->res_data.trash_dir = ".AMSFTP_Trash";
     }
   }
 
@@ -3294,7 +3292,7 @@ public:
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     start_time = start_time == -1 ? am_ms() : start_time;
-    if (trash_dir.empty()) {
+    if (res_data.trash_dir.empty()) {
       return {EC::InvalidArg, "Trash directory not set"};
     }
     auto [rcm1, info] =
@@ -3317,8 +3315,8 @@ public:
     std::string current_time =
         FormatTime(std::time(nullptr), "%Y-%m-%d-%H-%M-%S");
 
-    target_path =
-        AMPathStr::join(trash_dir, current_time, base_name + "." + base_ext);
+    target_path = AMPathStr::join(res_data.trash_dir, current_time,
+                                  base_name + "." + base_ext);
     size_t i = 1;
     std::string base_name_tmp = base_name;
 
@@ -3331,12 +3329,12 @@ public:
         break;
       }
       base_name_tmp = base_name + "(" + std::to_string(i) + ")";
-      target_path = AMPathStr::join(trash_dir, current_time,
+      target_path = AMPathStr::join(res_data.trash_dir, current_time,
                                     (base_name_tmp + ".") += base_ext);
       i++;
     }
 
-    rcm0 = mkdirs(AMPathStr::join(trash_dir, current_time), interrupt_flag,
+    rcm0 = mkdirs(AMPathStr::join(res_data.trash_dir, current_time), interrupt_flag,
                   timeout_ms, start_time);
     if (rcm0.first != EC::Success) {
       return rcm0;

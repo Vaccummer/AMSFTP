@@ -1,5 +1,6 @@
 #pragma once
 // standard library
+#include <any>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -15,6 +16,8 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <type_traits>
+#include <typeindex>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -336,9 +339,15 @@ public:
 
 class AMTracer {
 private:
+  using TypeVarStore = std::unordered_map<std::type_index, std::any>;
+  using NamedVarStore = std::unordered_map<std::string, std::any>;
+
   TraceCallback trace_cb;
   std::list<TraceInfo> buffer = {};
   std::mutex buffer_mutex;
+  mutable std::mutex var_cache_mtx_;
+  TypeVarStore type_var_cache_;
+  NamedVarStore named_var_cache_;
   ssize_t capacity = 10;
   std::atomic<bool> is_trace_cb = false;
   std::atomic<bool> is_trace_pause = false;
@@ -367,7 +376,7 @@ private:
   }
 
 protected:
-  ConRequst res_data;
+  ConRequest res_data;
   void push(const TraceInfo &value) {
     std::lock_guard<std::mutex> lock(buffer_mutex);
     if (buffer.size() >= static_cast<size_t>(capacity)) {
@@ -378,10 +387,151 @@ protected:
   std::string nickname;
 
 public:
-  /** Thread-safe public key/value map for client metadata (lock with
-   * public_kv_mtx). */
-  mutable std::mutex public_kv_mtx;
-  std::unordered_map<std::string, std::string> public_kv;
+  enum class NamedVarQueryState {
+    Found = 0,
+    NameNotFound = 1,
+    TypeMismatch = 2,
+  };
+
+  /**
+   * @brief Store one value in type-indexed cache.
+   *
+   * @param value Value to store.
+   * @param overwrite Whether existing value with the same type can be replaced.
+   * @return True when value is written.
+   */
+  template <typename T>
+  [[nodiscard]] bool StoreTypedValue(T &&value, bool overwrite = true) {
+    using ValueT = std::decay_t<T>;
+    static_assert(!std::is_reference_v<ValueT>,
+                  "StoreTypedValue expects value-like type");
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    const std::type_index key(typeid(ValueT));
+    auto it = type_var_cache_.find(key);
+    if (it != type_var_cache_.end() && !overwrite) {
+      return false;
+    }
+    type_var_cache_[key] = std::forward<T>(value);
+    return true;
+  }
+
+  /**
+   * @brief Query one value from type-indexed cache.
+   *
+   * @return Typed pointer when found; otherwise nullptr.
+   */
+  template <typename T> [[nodiscard]] T *QueryTypedValue() {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    auto it = type_var_cache_.find(std::type_index(typeid(ValueT)));
+    if (it == type_var_cache_.end()) {
+      return nullptr;
+    }
+    return std::any_cast<ValueT>(&(it->second));
+  }
+
+  /**
+   * @brief Query one value from type-indexed cache (const overload).
+   *
+   * @return Typed pointer when found; otherwise nullptr.
+   */
+  template <typename T> [[nodiscard]] const T *QueryTypedValue() const {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    auto it = type_var_cache_.find(std::type_index(typeid(ValueT)));
+    if (it == type_var_cache_.end()) {
+      return nullptr;
+    }
+    return std::any_cast<ValueT>(&(it->second));
+  }
+
+  /**
+   * @brief Store one named value in cache.
+   *
+   * @param name Variable name key.
+   * @param value Value to store.
+   * @param overwrite Whether existing value can be replaced.
+   * @return True when value is written.
+   */
+  template <typename T>
+  [[nodiscard]] bool StoreNamedValue(const std::string &name, T &&value,
+                                     bool overwrite = true) {
+    if (name.empty()) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    auto it = named_var_cache_.find(name);
+    if (it != named_var_cache_.end() && !overwrite) {
+      return false;
+    }
+    named_var_cache_[name] = std::forward<T>(value);
+    return true;
+  }
+
+  /**
+   * @brief Query one named value in cache.
+   *
+   * @param name Variable name key.
+   * @param state Optional query state output for not-found/type-mismatch split.
+   * @return Typed pointer when found; otherwise nullptr.
+   */
+  template <typename T>
+  [[nodiscard]] T *QueryNamedValue(const std::string &name,
+                                   NamedVarQueryState *state = nullptr) {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    auto it = named_var_cache_.find(name);
+    if (it == named_var_cache_.end()) {
+      if (state) {
+        *state = NamedVarQueryState::NameNotFound;
+      }
+      return nullptr;
+    }
+    auto *ptr = std::any_cast<ValueT>(&(it->second));
+    if (!ptr) {
+      if (state) {
+        *state = NamedVarQueryState::TypeMismatch;
+      }
+      return nullptr;
+    }
+    if (state) {
+      *state = NamedVarQueryState::Found;
+    }
+    return ptr;
+  }
+
+  /**
+   * @brief Query one named value in cache (const overload).
+   *
+   * @param name Variable name key.
+   * @param state Optional query state output for not-found/type-mismatch split.
+   * @return Typed pointer when found; otherwise nullptr.
+   */
+  template <typename T>
+  [[nodiscard]] const T *
+  QueryNamedValue(const std::string &name,
+                  NamedVarQueryState *state = nullptr) const {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    auto it = named_var_cache_.find(name);
+    if (it == named_var_cache_.end()) {
+      if (state) {
+        *state = NamedVarQueryState::NameNotFound;
+      }
+      return nullptr;
+    }
+    auto *ptr = std::any_cast<ValueT>(&(it->second));
+    if (!ptr) {
+      if (state) {
+        *state = NamedVarQueryState::TypeMismatch;
+      }
+      return nullptr;
+    }
+    if (state) {
+      *state = NamedVarQueryState::Found;
+    }
+    return ptr;
+  }
 
   /**
    * @brief Get a public metadata value by key.
@@ -391,13 +541,17 @@ public:
    */
   [[nodiscard]] bool GetPublicValue(const std::string &key,
                                     std::string *value) const {
-    std::lock_guard<std::mutex> lock(public_kv_mtx);
-    auto it = public_kv.find(key);
-    if (it == public_kv.end()) {
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    auto it = named_var_cache_.find(key);
+    if (it == named_var_cache_.end()) {
+      return false;
+    }
+    const std::string *ptr = std::any_cast<std::string>(&(it->second));
+    if (!ptr) {
       return false;
     }
     if (value) {
-      *value = it->second;
+      *value = *ptr;
     }
     return true;
   }
@@ -409,18 +563,21 @@ public:
    * @param force Overwrite when key already exists.
    * @return True when the value is written.
    */
-  [[nodiscard]] bool SetPulbicValue(const std::string &key,
+  [[nodiscard]] bool SetPublicValue(const std::string &key,
                                     const std::string &value, bool force) {
-    std::lock_guard<std::mutex> lock(public_kv_mtx);
-    auto it = public_kv.find(key);
-    if (it != public_kv.end() && !force) {
-      return false;
-    }
-    public_kv[key] = value;
-    return true;
+    std::string tmp = value;
+    return StoreNamedValue<std::string>(key, std::move(tmp), force);
   }
 
-  AMTracer(const ConRequst &request, int buffer_capacity = 10,
+  /**
+   * @brief Backward-compatible typo method; use SetPublicValue instead.
+   */
+  [[nodiscard]] bool SetPulbicValue(const std::string &key,
+                                    const std::string &value, bool force) {
+    return SetPublicValue(key, value, force);
+  }
+
+  AMTracer(const ConRequest &request, int buffer_capacity = 10,
            TraceCallback trace_cb = {})
       : trace_cb(std::move(trace_cb)), res_data(request),
         nickname(request.nickname) {
@@ -499,9 +656,9 @@ public:
 
   void SetPyTrace(TraceCallback trace = {}) { SetTraceCallback(trace); }
 
-  inline std::string GetNickname() { return this->nickname; }
+  [[nodiscard]] const std::string &GetNickname() const { return nickname; }
 
-  inline ConRequst GetRequest() { return this->res_data; }
+  [[nodiscard]] const ConRequest &GetRequest() const { return res_data; }
 };
 
 class SafeChannel {
@@ -739,7 +896,6 @@ public:
 
 class BaseClient : public AMTracer, public BasePathMatch {
 private:
-  ssize_t buffer_size = AMMB * 8;
   static std::string GenerateUID() {
     static size_t seed = 0;
     return std::to_string(seed++);
@@ -747,7 +903,6 @@ private:
 
 protected:
   amf ClientInterruptFlag = std::make_shared<TaskControlToken>();
-  ClientProtocol PROTOCOL = ClientProtocol::Base;
   ECM state = {EC::NoConnection, "Client Not Initialized"};
   std::mutex state_mtx;
   // NOLINTNEXTLINE
@@ -761,29 +916,34 @@ public:
   std::recursive_mutex mtx;
   OS_TYPE os_type = OS_TYPE::Uncertain;
   std::string home_dir = "";
-  std::string trash_dir = "";
   virtual ~BaseClient() = default;
-  BaseClient(const ConRequst &request, int buffer_capacity = 10,
+  BaseClient(const ConRequest &request, int buffer_capacity = 10,
              TraceCallback trace_cb = {})
       : AMTracer(request, buffer_capacity, std::move(trace_cb)),
         BasePathMatch() {
     this->uid = BaseClient::GenerateUID();
+    if (res_data.buffer_size <= 0) {
+      res_data.buffer_size = 8 * AMMB;
+    }
+    if (res_data.protocol == ClientProtocol::Unknown) {
+      res_data.protocol = ClientProtocol::Base;
+    }
   }
 
   std::string GetUID() { return this->uid; }
 
-  ClientProtocol GetProtocol() { return PROTOCOL; }
+  [[nodiscard]] ClientProtocol GetProtocol() const { return res_data.protocol; }
 
   ssize_t TransferRingBufferSize(ssize_t buffer_size = -1) {
     if (buffer_size <= 0) {
-      return this->buffer_size;
+      return res_data.buffer_size;
     }
-    this->buffer_size = buffer_size;
-    return this->buffer_size;
+    res_data.buffer_size = buffer_size;
+    return res_data.buffer_size;
   }
 
   std::string GetProtocolName() {
-    switch (PROTOCOL) {
+    switch (GetProtocol()) {
     case ClientProtocol::Base:
       return "base";
     case ClientProtocol::SFTP:
@@ -802,11 +962,11 @@ public:
                                           int timeout_ms = -1,
                                           int64_t start_time = -1) {
     if (trash_dir.empty()) {
-      return this->trash_dir;
+      return res_data.trash_dir;
     }
     ECM rcm = mkdirs(trash_dir, interrupt_flag, timeout_ms, start_time);
     if (rcm.first == EC::Success) {
-      this->trash_dir = trash_dir;
+      res_data.trash_dir = trash_dir;
     }
     return rcm;
   }

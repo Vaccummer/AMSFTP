@@ -113,20 +113,20 @@ PathOps::GetOrInitWorkdir(const std::shared_ptr<BaseClient> &client) const {
     workdir = AMPathStr::UnifyPathSep(workdir, "/");
     if (workdir.empty()) {
       workdir = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
-      (void)client->SetPulbicValue("workdir", workdir, true);
+      (void)client->SetPublicValue("workdir", workdir, true);
       return workdir;
     }
     if (!workdir.empty() && !AMPathStr::IsAbs(workdir, "/")) {
       const std::string home =
           AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
       workdir = AMFS::abspath(workdir, true, home, home, "/");
-      (void)client->SetPulbicValue("workdir", workdir, true);
+      (void)client->SetPublicValue("workdir", workdir, true);
     }
     return workdir;
   }
 
   const std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
-  (void)client->SetPulbicValue("workdir", home, true);
+  (void)client->SetPublicValue("workdir", home, true);
   return home;
 }
 
@@ -144,7 +144,7 @@ void PathOps::SetClientWorkdir(const std::shared_ptr<BaseClient> &client,
     const std::string home = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
     normalized = AMFS::abspath(normalized, true, home, base, "/");
   }
-  (void)client->SetPulbicValue("workdir", normalized, true);
+  (void)client->SetPublicValue("workdir", normalized, true);
 }
 
 std::string PathOps::BuildPath(const std::shared_ptr<BaseClient> &client,
@@ -169,7 +169,7 @@ void PathOps::InitClientWorkdir(
   if (client->GetPublicValue("workdir", &value)) {
     return;
   }
-  (void)client->SetPulbicValue(
+  (void)client->SetPublicValue(
       "workdir", AMPathStr::UnifyPathSep(client->GetHomeDir(), "/"), true);
 }
 
@@ -202,8 +202,8 @@ void PathOps::ApplyLoginDir(const std::string &nickname,
   }
 
   const std::string normalized = AMPathStr::UnifyPathSep(resolved, "/");
-  (void)client->SetPulbicValue("workdir", normalized, true);
-  (void)client->SetPulbicValue("login_dir", normalized, true);
+  (void)client->SetPublicValue("workdir", normalized, true);
+  (void)client->SetPublicValue("login_dir", normalized, true);
 
   if (need_persist && !IsLocalNickname_(nickname)) {
     (void)hostm_.SetHostValue(nickname, configkn::login_dir, resolved);

@@ -394,22 +394,24 @@ using ECM = std::pair<ErrorCode, std::string>;
 using EC = ErrorCode;
 
 inline std::shared_ptr<BaseClient>
-CreateClient(const ConRequst &requeset, ClientProtocol protocol,
-             ssize_t trace_num = 10, TraceCallback trace_cb = {},
-             ssize_t buffer_size = 8 * AMMB, std::vector<std::string> keys = {},
+CreateClient(const ConRequest &request, ssize_t trace_num = 10,
+             TraceCallback trace_cb = {}, std::vector<std::string> keys = {},
              AuthCallback auth_cb = {}) {
+  const ClientProtocol protocol = request.protocol;
+  const ssize_t buffer_size =
+      request.buffer_size > 0 ? request.buffer_size : static_cast<ssize_t>(8 * AMMB);
   if (protocol == ClientProtocol::SFTP) {
     auto client = std::make_shared<AMSFTPClient>(
-        requeset, keys, trace_num, std::move(trace_cb), std::move(auth_cb));
+        request, keys, trace_num, std::move(trace_cb), std::move(auth_cb));
     client->TransferRingBufferSize(buffer_size);
     return std::dynamic_pointer_cast<BaseClient>(client);
   } else if (protocol == ClientProtocol::FTP) {
     auto client = std::make_shared<AMFTPClient>(
-        requeset, trace_num, std::move(trace_cb), std::move(auth_cb));
+        request, trace_num, std::move(trace_cb), std::move(auth_cb));
     client->TransferRingBufferSize(buffer_size);
     return std::dynamic_pointer_cast<BaseClient>(client);
   } else if (protocol == ClientProtocol::LOCAL) {
-    auto client = std::make_shared<AMLocalClient>(requeset, trace_num,
+    auto client = std::make_shared<AMLocalClient>(request, trace_num,
                                                   std::move(trace_cb));
     client->TransferRingBufferSize(buffer_size);
     return std::dynamic_pointer_cast<BaseClient>(client);
@@ -485,8 +487,9 @@ public:
     if (local_client && local_client->GetProtocol() == ClientProtocol::LOCAL) {
       this->local_client = std::move(local_client);
     } else {
-      this->local_client =
-          std::make_shared<AMLocalClient>(ConRequst("local", "", ""));
+      this->local_client = std::make_shared<AMLocalClient>(
+          ConRequest{"local", "localhost", "", 64 * AMMB,
+                     ClientProtocol::LOCAL, 22, "local"});
     }
 
     hosts = std::move(init_hosts);

@@ -1164,7 +1164,7 @@ ResolveUserHost_(const std::shared_ptr<BaseClient> &client) {
   std::string username;
   std::string hostname;
   if (client) {
-    ConRequst request = client->GetRequest();
+    ConRequest request = client->GetRequest();
     username = request.username;
     hostname = request.hostname;
   }
