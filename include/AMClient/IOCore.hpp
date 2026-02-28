@@ -241,7 +241,7 @@ public:
           }
           if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
             WaitResult wr = client->wait_for_socket(
-                SocketWaitType::Read, std::function<bool()>(), am_ms(), 200, 20,
+                SocketWaitType::Read, am_ms(), 200,
                 pd ? pd->GetInterruptFlag() : nullptr);
             if (wr == WaitResult::Error) {
               return {
@@ -332,8 +332,8 @@ public:
           }
           if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
             WaitResult wr = client->wait_for_socket(
-                SocketWaitType::Write, std::function<bool()>(), am_ms(), 200,
-                20, pd ? pd->GetInterruptFlag() : nullptr);
+                SocketWaitType::Write, am_ms(), 200,
+                pd ? pd->GetInterruptFlag() : nullptr);
             if (wr == WaitResult::Error) {
               return {
                   LIBSSH2_ERROR_EAGAIN,
@@ -1109,8 +1109,7 @@ private:
           break;
         } else if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
           WaitResult wr = client->wait_for_socket(
-              SocketWaitType::Read, std::function<bool()>(), am_ms(), 200, 20,
-              pd.GetInterruptFlag());
+              SocketWaitType::Read, am_ms(), 200, pd.GetInterruptFlag());
           if (wr == WaitResult::Interrupted) {
             rcm = pd.InterruptECM("Task paused by user",
                                   "Transfer interrupted by user");
@@ -1152,8 +1151,7 @@ private:
           break;
         } else if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
           WaitResult wr = client->wait_for_socket(
-              SocketWaitType::Write, std::function<bool()>(), am_ms(), 200, 20,
-              pd.GetInterruptFlag());
+              SocketWaitType::Write, am_ms(), 200, pd.GetInterruptFlag());
           if (wr == WaitResult::Interrupted) {
             rcm = pd.InterruptECM("Task paused by user",
                                   "Transfer interrupted by user");
@@ -2551,7 +2549,7 @@ public:
     TransferTask taskt;
     std::string dst_n;
     for (auto &item : src_paths) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return {ECM{EC::Terminate, "Load tasks interrupted by user"}, tasks};
       }
       if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
@@ -2586,3 +2584,4 @@ public:
     return {ECM(EC::Success, ""), tasks};
   };
 };
+

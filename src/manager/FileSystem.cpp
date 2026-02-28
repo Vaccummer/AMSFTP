@@ -324,7 +324,7 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
   resolved_clients.reserve(targets.size());
 
   for (const auto &name : targets) {
-    if (flag && flag->check()) {
+    if (flag && !flag->IsRunning()) {
       return {EC::Terminate, "Interrupted by user"};
     }
     ECM resolve_rcm = {EC::Success, ""};
@@ -342,7 +342,7 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
   }
 
   for (const auto &client : resolved_clients) {
-    if (flag && flag->check()) {
+    if (flag && !flag->IsRunning()) {
       return {EC::Terminate, "Interrupted by user"};
     }
     ECM rcm = PrintClientStatus(client, true, flag);
@@ -728,7 +728,7 @@ AMFileSystem::ECM AMFileSystem::stat(const std::vector<std::string> &paths,
   std::vector<PathInfo> infos;
   infos.reserve(targets.size());
   for (const auto &target : targets) {
-    if (flag && flag->check()) {
+    if (flag && !flag->IsRunning()) {
       last = {EC::Terminate, "Interrupted by user"};
       prompt_manager_.ErrorFormat(last);
       break;
@@ -763,7 +763,7 @@ AMFileSystem::ECM AMFileSystem::ls(const std::string &path, bool list_like,
                                    bool show_all, amf interrupt_flag,
                                    int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : amgif;
-  if (flag && flag->check()) {
+  if (flag && !flag->IsRunning()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
     prompt_manager_.ErrorFormat(out);
     return out;
@@ -933,7 +933,7 @@ AMFileSystem::ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
   std::vector<std::pair<std::string, int64_t>> results;
   results.reserve(targets.size());
   for (const auto &target : targets) {
-    if (flag && flag->check()) {
+    if (flag && !flag->IsRunning()) {
       last = {EC::Terminate, "Interrupted by user"};
       prompt_manager_.ErrorFormat(last);
       break;
@@ -1106,7 +1106,7 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
     return AMPathStr::join(a, b);
   };
   AMTree::BuildTreeNodes(abs_path, structure, &nodes, join_parts, join_pair);
-  if (flag && flag->check()) {
+  if (flag && !flag->IsRunning()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
     if (!quiet) {
       prompt_manager_.ErrorFormat(out);
@@ -1114,7 +1114,7 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
     return out;
   }
   AMTree::SortTreeNodes(&nodes);
-  if (flag && flag->check()) {
+  if (flag && !flag->IsRunning()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
     if (!quiet) {
       prompt_manager_.ErrorFormat(out);
@@ -1127,8 +1127,8 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
         return StylePath(info, name);
       },
       [this](const std::string &line) { prompt_manager_.Print(line); },
-      join_pair, [flag]() { return flag && flag->check(); });
-  if (!printed && flag && flag->check()) {
+      join_pair, [flag]() { return flag && !flag->IsRunning(); });
+  if (!printed && flag && !flag->IsRunning()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
     if (!quiet) {
       prompt_manager_.ErrorFormat(out);
@@ -1140,7 +1140,7 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
 
 AMFileSystem::ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : amgif;
-  if (flag && flag->check()) {
+  if (flag && !flag->IsRunning()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
     prompt_manager_.ErrorFormat(out);
     return out;
@@ -1181,7 +1181,7 @@ AMFileSystem::ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
 AMFileSystem::ECM AMFileSystem::realpath(const std::string &path,
                                          amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : amgif;
-  if (flag && flag->check()) {
+  if (flag && !flag->IsRunning()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
     prompt_manager_.ErrorFormat(out);
     return out;
@@ -1283,7 +1283,7 @@ AMFileSystem::ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
   }
   ECM last = {EC::Success, ""};
   for (const auto &target : targets) {
-    if (flag && flag->check()) {
+    if (flag && !flag->IsRunning()) {
       last = {EC::Terminate, "Interrupted by user"};
       prompt_manager_.ErrorFormat(last);
       return last;
@@ -1333,7 +1333,7 @@ AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
   }
   ECM last = {EC::Success, ""};
   for (const auto &target : targets) {
-    if (flag && flag->check()) {
+    if (flag && !flag->IsRunning()) {
       if (!quiet) {
         prompt_manager_.ErrorFormat(ECM{EC::Terminate, "Interrupted by user"});
       }
@@ -1574,3 +1574,4 @@ std::string AMFileSystem::StylePath(const PathInfo &info,
 //   }
 //   return false;
 // }
+

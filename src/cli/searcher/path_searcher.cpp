@@ -79,8 +79,12 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   request.timeout_ms = timeout_ms;
   request.target = AMCompletionTarget::Path;
   auto interrupt_flag = std::make_shared<TaskControlToken>();
-  request.interrupt_flag = [flag = interrupt_flag]() { return flag->check(); };
-  request.interrupt_cancel = [flag = interrupt_flag]() { flag->set(true); };
+  request.interrupt_flag = [flag = interrupt_flag]() {
+    return !flag->IsRunning();
+  };
+  request.interrupt_cancel = [flag = interrupt_flag]() {
+    flag->SetStatus(ControlSignal::Interrupt);
+  };
 
   request.search = [this, path, key,
                     interrupt_flag](const AMCompletionAsyncRequest &request,
@@ -487,3 +491,4 @@ AMBuildDefaultSearchEngineRegistrations() {
   out.push_back({{AMCompletionTarget::Path}, path_engine});
   return out;
 }
+

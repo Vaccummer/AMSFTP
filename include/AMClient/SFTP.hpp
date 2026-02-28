@@ -30,6 +30,9 @@
 #include <cerrno>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#ifdef __linux__
+#include <sys/eventfd.h>
+#endif
 #include <unistd.h>
 #endif
 
@@ -62,220 +65,6 @@ enum class SocketWaitType {
   Auto         // Determine from libssh2_session_block_directions
 };
 
-namespace AMSSHNonBlocking {
-/**
- * @brief Wait for libssh2 socket readiness in non-blocking mode.
- */
-inline WaitResult WaitForSocketCommon(
-    LIBSSH2_SESSION *session, SOCKET sock, SocketWaitType wait_dir,
-    const std::function<bool()> &interrupt_cb = {}, int64_t start_time = -1,
-    int64_t timeout_ms = -1, int poll_interval_ms = 20,
-    const amf &interrupt_flag = nullptr,
-    const std::function<SOCKET()> &prepare_wakeup = {},
-    const std::function<void()> &cleanup_wakeup = {},
-    const std::function<void()> &drain_wakeup = {}) {
-  (void)poll_interval_ms;
-  if (!session || sock == INVALID_SOCKET) {
-    return WaitResult::Error;
-  }
-
-  auto is_interrupted = [&]() -> bool {
-    if (interrupt_cb && interrupt_cb()) {
-      return true;
-    }
-    if (interrupt_flag && interrupt_flag->check()) {
-      return true;
-    }
-    return false;
-  };
-
-  if (is_interrupted()) {
-    return WaitResult::Interrupted;
-  }
-  if (timeout_ms > 0) {
-    start_time = start_time == -1 ? am_ms() : start_time;
-    if (am_ms() - start_time >= timeout_ms) {
-      return WaitResult::Timeout;
-    }
-  }
-
-  if (wait_dir == SocketWaitType::Auto &&
-      libssh2_session_block_directions(session) == 0) {
-    return WaitResult::Ready;
-  }
-
-  bool wait_read = false;
-  bool wait_write = false;
-  const bool is_auto = (wait_dir == SocketWaitType::Auto);
-  const bool is_read_or_write = (wait_dir == SocketWaitType::ReadOrWrite);
-
-  if (!is_auto) {
-    switch (wait_dir) {
-    case SocketWaitType::Read:
-      wait_read = true;
-      break;
-    case SocketWaitType::Write:
-      wait_write = true;
-      break;
-    case SocketWaitType::ReadWrite:
-    case SocketWaitType::ReadOrWrite:
-      wait_read = true;
-      wait_write = true;
-      break;
-    default:
-      break;
-    }
-  }
-
-  fd_set readfds;
-  fd_set writefds;
-  FD_ZERO(&readfds);
-  FD_ZERO(&writefds);
-
-  if (is_auto) {
-    const int dir = libssh2_session_block_directions(session);
-    if (dir == 0) {
-      return WaitResult::Ready;
-    }
-    if (dir & LIBSSH2_SESSION_BLOCK_INBOUND) {
-      FD_SET(sock, &readfds);
-    }
-    if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) {
-      FD_SET(sock, &writefds);
-    }
-  } else {
-    if (wait_read) {
-      FD_SET(sock, &readfds);
-    }
-    if (wait_write) {
-      FD_SET(sock, &writefds);
-    }
-  }
-
-  auto wake_read_sock = INVALID_SOCKET;
-  if (interrupt_flag && prepare_wakeup) {
-    wake_read_sock = prepare_wakeup();
-    if (wake_read_sock != INVALID_SOCKET) {
-      FD_SET(wake_read_sock, &readfds);
-    }
-  }
-
-  const bool watch_socket =
-      FD_ISSET(sock, &readfds) || FD_ISSET(sock, &writefds);
-  const bool watch_wakeup = wake_read_sock != INVALID_SOCKET;
-  if (!watch_socket && !watch_wakeup) {
-    if (cleanup_wakeup) {
-      cleanup_wakeup();
-    }
-    return WaitResult::Ready;
-  }
-
-  auto cleanup = [&]() {
-    if (cleanup_wakeup) {
-      cleanup_wakeup();
-    }
-  };
-
-  timeval tv{};
-  timeval *timeout_ptr = nullptr;
-  if (timeout_ms > 0) {
-    const int64_t remaining = timeout_ms - (am_ms() - start_time);
-    if (remaining <= 0) {
-      cleanup();
-      return WaitResult::Timeout;
-    }
-    tv.tv_sec = static_cast<long>(remaining / 1000);
-    tv.tv_usec = static_cast<long>((remaining % 1000) * 1000);
-    timeout_ptr = &tv;
-  }
-
-#ifdef _WIN32
-  const int rc = select(0, &readfds, &writefds, nullptr, timeout_ptr);
-#else
-  int nfds = static_cast<int>(sock) + 1;
-  if (wake_read_sock != INVALID_SOCKET) {
-    nfds = std::max(nfds, static_cast<int>(wake_read_sock) + 1);
-  }
-  const int rc = select(nfds, &readfds, &writefds, nullptr, timeout_ptr);
-#endif
-
-  cleanup();
-
-  if (rc < 0) {
-    return is_interrupted() ? WaitResult::Interrupted : WaitResult::Error;
-  }
-  if (rc == 0) {
-    return is_interrupted() ? WaitResult::Interrupted : WaitResult::Timeout;
-  }
-
-  if (wake_read_sock != INVALID_SOCKET && FD_ISSET(wake_read_sock, &readfds)) {
-    if (drain_wakeup) {
-      drain_wakeup();
-    }
-    if (is_interrupted()) {
-      return WaitResult::Interrupted;
-    }
-  }
-  if (is_interrupted()) {
-    return WaitResult::Interrupted;
-  }
-
-  if (is_read_or_write) {
-    if (FD_ISSET(sock, &readfds)) {
-      return WaitResult::ReadReady;
-    }
-    if (FD_ISSET(sock, &writefds)) {
-      return WaitResult::WriteReady;
-    }
-  }
-  return WaitResult::Ready;
-}
-
-/**
- * @brief Execute a libssh2 call until completion or wait failure.
- */
-template <typename Func>
-auto NBCallCommon(LIBSSH2_SESSION *session, SOCKET sock,
-                  const std::function<bool()> &interrupt_cb, int64_t timeout_ms,
-                  int64_t start_time, int poll_interval_ms,
-                  const amf &interrupt_flag, Func &&func,
-                  SocketWaitType wait_dir = SocketWaitType::Auto,
-                  const std::function<SOCKET()> &prepare_wakeup = {},
-                  const std::function<void()> &cleanup_wakeup = {},
-                  const std::function<void()> &drain_wakeup = {})
-    -> NBResult<decltype(func())> {
-  using RetType = decltype(func());
-  start_time = start_time == -1 ? am_ms() : start_time;
-
-  RetType rc;
-  while (true) {
-    rc = func();
-
-    bool should_retry = false;
-    if constexpr (std::is_same_v<RetType, int> ||
-                  std::is_same_v<RetType, ssize_t>) {
-      should_retry = (rc == LIBSSH2_ERROR_EAGAIN);
-    } else if constexpr (std::is_pointer_v<RetType>) {
-      should_retry =
-          (rc == nullptr && session != nullptr &&
-           libssh2_session_last_errno(session) == LIBSSH2_ERROR_EAGAIN);
-    }
-
-    if (!should_retry) {
-      return {rc, WaitResult::Ready};
-    }
-
-    WaitResult wr =
-        WaitForSocketCommon(session, sock, wait_dir, interrupt_cb, start_time,
-                            timeout_ms, poll_interval_ms, interrupt_flag,
-                            prepare_wakeup, cleanup_wakeup, drain_wakeup);
-    if (wr != WaitResult::Ready) {
-      return {rc, wr};
-    }
-  }
-}
-} // namespace AMSSHNonBlocking
-
 // Cross-platform socket connector
 class SocketConnector {
 public:
@@ -301,7 +90,7 @@ public:
   bool Connect(const std::string &hostname, int port, int timeout_ms,
                std::shared_ptr<TaskControlToken> interrupt_flag = nullptr) {
     auto is_interrupted = [&]() {
-      return interrupt_flag && interrupt_flag->check();
+      return interrupt_flag && !interrupt_flag->IsRunning();
     };
     auto mark_interrupted = [&]() {
       error_code = EC::Terminate;
@@ -665,10 +454,13 @@ using AuthCallback =
 
 class AMSession : public BaseClient {
 protected:
+  enum class InterruptWakeBackend_ { None, SocketPair, Pipe, EventFd };
+
   std::atomic<bool> has_connected;
   SOCKET sock = INVALID_SOCKET;
   SOCKET interrupt_wake_read_sock_ = INVALID_SOCKET;
   SOCKET interrupt_wake_write_sock_ = INVALID_SOCKET;
+  InterruptWakeBackend_ interrupt_wake_backend_ = InterruptWakeBackend_::None;
   std::mutex interrupt_wake_mtx_;
 
   /**
@@ -710,11 +502,15 @@ protected:
   }
 
   /**
-   * @brief Create a local socket pair used to wake select on interrupt.
+   * @brief Create a local wake object used to wake select on interrupt.
+   *
+   * Linux prefers eventfd (single FD), then falls back to pipe.
+   * Windows uses loopback socket pair.
    */
   bool CreateInterruptWakeSocketPair_() {
     SOCKET read_sock = INVALID_SOCKET;
     SOCKET write_sock = INVALID_SOCKET;
+    InterruptWakeBackend_ backend = InterruptWakeBackend_::None;
 #ifdef _WIN32
     SOCKET listen_sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (listen_sock == INVALID_SOCKET) {
@@ -761,24 +557,39 @@ protected:
       CloseSocketSafe_(write_sock);
       return false;
     }
+    backend = InterruptWakeBackend_::SocketPair;
 #else
-    int sv[2] = {-1, -1};
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, sv) != 0) {
-      return false;
+#ifdef __linux__
+    int efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (efd >= 0) {
+      read_sock = static_cast<SOCKET>(efd);
+      write_sock = static_cast<SOCKET>(efd);
+      backend = InterruptWakeBackend_::EventFd;
     }
-    read_sock = sv[0];
-    write_sock = sv[1];
+#endif
+    if (backend == InterruptWakeBackend_::None) {
+      int pfd[2] = {-1, -1};
+      if (::pipe(pfd) != 0) {
+        return false;
+      }
+      read_sock = static_cast<SOCKET>(pfd[0]);
+      write_sock = static_cast<SOCKET>(pfd[1]);
+      backend = InterruptWakeBackend_::Pipe;
+    }
 #endif
 
     if (!SetSocketNonBlocking_(read_sock) ||
         !SetSocketNonBlocking_(write_sock)) {
       CloseSocketSafe_(read_sock);
-      CloseSocketSafe_(write_sock);
+      if (write_sock != read_sock) {
+        CloseSocketSafe_(write_sock);
+      }
       return false;
     }
 
     interrupt_wake_read_sock_ = read_sock;
     interrupt_wake_write_sock_ = write_sock;
+    interrupt_wake_backend_ = backend;
     return true;
   }
 
@@ -793,6 +604,7 @@ protected:
     }
     CloseSocketSafe_(interrupt_wake_read_sock_);
     CloseSocketSafe_(interrupt_wake_write_sock_);
+    interrupt_wake_backend_ = InterruptWakeBackend_::None;
     return CreateInterruptWakeSocketPair_();
   }
 
@@ -809,8 +621,16 @@ protected:
    */
   void CloseInterruptWakeSocketPair_() {
     std::lock_guard<std::mutex> lock(interrupt_wake_mtx_);
+    if (interrupt_wake_backend_ == InterruptWakeBackend_::EventFd &&
+        interrupt_wake_read_sock_ != INVALID_SOCKET) {
+      CloseSocketSafe_(interrupt_wake_read_sock_);
+      interrupt_wake_write_sock_ = INVALID_SOCKET;
+      interrupt_wake_backend_ = InterruptWakeBackend_::None;
+      return;
+    }
     CloseSocketSafe_(interrupt_wake_read_sock_);
     CloseSocketSafe_(interrupt_wake_write_sock_);
+    interrupt_wake_backend_ = InterruptWakeBackend_::None;
   }
 
   /**
@@ -818,19 +638,37 @@ protected:
    */
   void SignalInterruptWakeSocket_() {
     SOCKET wake_sock = INVALID_SOCKET;
+    InterruptWakeBackend_ backend = InterruptWakeBackend_::None;
     {
       std::lock_guard<std::mutex> lock(interrupt_wake_mtx_);
       wake_sock = interrupt_wake_write_sock_;
+      backend = interrupt_wake_backend_;
     }
     if (wake_sock == INVALID_SOCKET) {
       return;
     }
 
+#ifdef _WIN32
     const char c = 1;
     int rc = send(wake_sock, &c, 1, 0);
     if (rc == SOCKET_ERROR && !IsWouldBlockSocketError_()) {
       return;
     }
+#else
+    if (backend == InterruptWakeBackend_::EventFd) {
+      uint64_t one = 1;
+      ssize_t rc = ::write(wake_sock, &one, sizeof(one));
+      if (rc < 0 && !IsWouldBlockSocketError_()) {
+        return;
+      }
+      return;
+    }
+    const char c = 1;
+    ssize_t rc = ::write(wake_sock, &c, 1);
+    if (rc < 0 && !IsWouldBlockSocketError_()) {
+      return;
+    }
+#endif
   }
 
   /**
@@ -838,14 +676,17 @@ protected:
    */
   void DrainInterruptWakeSocket_() {
     SOCKET wake_sock = INVALID_SOCKET;
+    InterruptWakeBackend_ backend = InterruptWakeBackend_::None;
     {
       std::lock_guard<std::mutex> lock(interrupt_wake_mtx_);
       wake_sock = interrupt_wake_read_sock_;
+      backend = interrupt_wake_backend_;
     }
     if (wake_sock == INVALID_SOCKET) {
       return;
     }
 
+#ifdef _WIN32
     char buffer[64];
     while (true) {
       int rc = recv(wake_sock, buffer, sizeof(buffer), 0);
@@ -863,6 +704,38 @@ protected:
       }
       return;
     }
+#else
+    if (backend == InterruptWakeBackend_::EventFd) {
+      uint64_t value = 0;
+      while (true) {
+        ssize_t rc = ::read(wake_sock, &value, sizeof(value));
+        if (rc == static_cast<ssize_t>(sizeof(value))) {
+          continue;
+        }
+        if (rc < 0 && IsWouldBlockSocketError_()) {
+          return;
+        }
+        return;
+      }
+    }
+    char buffer[64];
+    while (true) {
+      ssize_t rc = ::read(wake_sock, buffer, sizeof(buffer));
+      if (rc > 0) {
+        if (rc < static_cast<ssize_t>(sizeof(buffer))) {
+          return;
+        }
+        continue;
+      }
+      if (rc == 0) {
+        return;
+      }
+      if (rc < 0 && IsWouldBlockSocketError_()) {
+        return;
+      }
+      return;
+    }
+#endif
   }
 
   ECM ErrorRecord(int code, TraceLevel level, const std::string &taregt,
@@ -1096,78 +969,203 @@ public:
     has_connected.store(false, std::memory_order_relaxed);
   }
 
-  inline std::function<bool()> MakeInterruptCb(const amf &flag) const {
-    return [flag]() { return flag && flag->check(); };
-  }
   template <typename Func>
-  auto nb_call(const std::function<bool()> &interrupt_cb, int64_t timeout_ms,
-               int64_t start_time, const amf &interrupt_flag, Func &&func)
-      -> NBResult<decltype(func())> {
-    size_t wake_token = 0;
-    auto prepare_wakeup = [&]() -> SOCKET {
-      if (!(interrupt_flag && EnsureInterruptWakeSocketPair_())) {
-        return INVALID_SOCKET;
-      }
-      DrainInterruptWakeSocket_();
-      SOCKET wake_read_sock = GetInterruptWakeReadSocket_();
-      if (wake_read_sock == INVALID_SOCKET) {
-        return INVALID_SOCKET;
-      }
-      wake_token = interrupt_flag->RegisterWakeup(
-          [this]() { SignalInterruptWakeSocket_(); });
-      return wake_read_sock;
-    };
-    auto cleanup_wakeup = [&]() {
-      if (interrupt_flag && wake_token != 0) {
-        interrupt_flag->UnregisterWakeup(wake_token);
-        wake_token = 0;
-      }
-    };
-    auto drain_wakeup = [&]() { DrainInterruptWakeSocket_(); };
-
-    return AMSSHNonBlocking::NBCallCommon(
-        session, sock, interrupt_cb, timeout_ms, start_time, poll_interval_ms,
-        interrupt_flag, std::forward<Func>(func), SocketWaitType::Auto,
-        prepare_wakeup, cleanup_wakeup, drain_wakeup);
-  }
-
-  template <typename Func>
-  auto nb_call(const amf interrupt_flag, int64_t timeout_ms, int64_t start_time,
+  auto nb_call(amf interrupt_flag, int64_t timeout_ms, int64_t start_time,
                Func &&func) -> NBResult<decltype(func())> {
-    return nb_call(MakeInterruptCb(interrupt_flag), timeout_ms, start_time,
-                   interrupt_flag, std::forward<Func>(func));
+    using RetType = decltype(func());
+    start_time = start_time == -1 ? am_ms() : start_time;
+
+    RetType rc;
+    while (true) {
+      rc = func();
+
+      bool should_retry = false;
+      if constexpr (std::is_same_v<RetType, int> ||
+                    std::is_same_v<RetType, ssize_t>) {
+        should_retry = (rc == LIBSSH2_ERROR_EAGAIN);
+      } else if constexpr (std::is_pointer_v<RetType>) {
+        should_retry =
+            (rc == nullptr && session != nullptr &&
+             libssh2_session_last_errno(session) == LIBSSH2_ERROR_EAGAIN);
+      }
+
+      if (!should_retry) {
+        return {rc, WaitResult::Ready};
+      }
+
+      WaitResult wr = wait_for_socket(SocketWaitType::Auto, start_time,
+                                      timeout_ms, interrupt_flag);
+      if (wr != WaitResult::Ready) {
+        return {rc, wr};
+      }
+    }
   }
 
-  inline WaitResult wait_for_socket(
-      SocketWaitType wait_dir, const std::function<bool()> &interrupt_cb = {},
-      int64_t start_time = -1, int64_t timeout_ms = -1,
-      int poll_interval_ms = 20, const amf &interrupt_flag = nullptr) {
-    size_t wake_token = 0;
-    auto prepare_wakeup = [&]() -> SOCKET {
-      if (!(interrupt_flag && EnsureInterruptWakeSocketPair_())) {
-        return INVALID_SOCKET;
-      }
-      DrainInterruptWakeSocket_();
-      SOCKET wake_read_sock = GetInterruptWakeReadSocket_();
-      if (wake_read_sock == INVALID_SOCKET) {
-        return INVALID_SOCKET;
-      }
-      wake_token = interrupt_flag->RegisterWakeup(
-          [this]() { SignalInterruptWakeSocket_(); });
-      return wake_read_sock;
+  inline WaitResult wait_for_socket(SocketWaitType wait_dir,
+                                    int64_t start_time = -1,
+                                    int64_t timeout_ms = -1,
+                                    amf interrupt_flag = nullptr) {
+    if (!session || sock == INVALID_SOCKET) {
+      return WaitResult::Error;
+    }
+
+    auto is_interrupted = [&]() -> bool {
+      return interrupt_flag && !interrupt_flag->IsRunning();
     };
+
+    if (is_interrupted()) {
+      return WaitResult::Interrupted;
+    }
+    if (timeout_ms > 0) {
+      start_time = start_time == -1 ? am_ms() : start_time;
+      if (am_ms() - start_time >= timeout_ms) {
+        return WaitResult::Timeout;
+      }
+    }
+
+    if (wait_dir == SocketWaitType::Auto &&
+        libssh2_session_block_directions(session) == 0) {
+      return WaitResult::Ready;
+    }
+
+    bool wait_read = false;
+    bool wait_write = false;
+    const bool is_auto = (wait_dir == SocketWaitType::Auto);
+    const bool is_read_or_write = (wait_dir == SocketWaitType::ReadOrWrite);
+
+    if (!is_auto) {
+      switch (wait_dir) {
+      case SocketWaitType::Read:
+        wait_read = true;
+        break;
+      case SocketWaitType::Write:
+        wait_write = true;
+        break;
+      case SocketWaitType::ReadWrite:
+      case SocketWaitType::ReadOrWrite:
+        wait_read = true;
+        wait_write = true;
+        break;
+      default:
+        break;
+      }
+    }
+
+    fd_set readfds;
+    fd_set writefds;
+    FD_ZERO(&readfds);
+    FD_ZERO(&writefds);
+
+    if (is_auto) {
+      const int dir = libssh2_session_block_directions(session);
+      if (dir == 0) {
+        return WaitResult::Ready;
+      }
+      if (dir & LIBSSH2_SESSION_BLOCK_INBOUND) {
+        FD_SET(sock, &readfds);
+      }
+      if (dir & LIBSSH2_SESSION_BLOCK_OUTBOUND) {
+        FD_SET(sock, &writefds);
+      }
+    } else {
+      if (wait_read) {
+        FD_SET(sock, &readfds);
+      }
+      if (wait_write) {
+        FD_SET(sock, &writefds);
+      }
+    }
+
+    size_t wake_token = 0;
     auto cleanup_wakeup = [&]() {
       if (interrupt_flag && wake_token != 0) {
         interrupt_flag->UnregisterWakeup(wake_token);
         wake_token = 0;
       }
     };
-    auto drain_wakeup = [&]() { DrainInterruptWakeSocket_(); };
 
-    return AMSSHNonBlocking::WaitForSocketCommon(
-        session, sock, wait_dir, interrupt_cb, start_time, timeout_ms,
-        poll_interval_ms, interrupt_flag, prepare_wakeup, cleanup_wakeup,
-        drain_wakeup);
+    SOCKET wake_read_sock = INVALID_SOCKET;
+    if (interrupt_flag && EnsureInterruptWakeSocketPair_()) {
+      DrainInterruptWakeSocket_();
+      wake_read_sock = GetInterruptWakeReadSocket_();
+      if (wake_read_sock != INVALID_SOCKET) {
+        wake_token = interrupt_flag->RegisterWakeup(
+            [this]() { SignalInterruptWakeSocket_(); });
+        FD_SET(wake_read_sock, &readfds);
+      }
+    }
+
+    const bool watch_socket =
+        FD_ISSET(sock, &readfds) || FD_ISSET(sock, &writefds);
+    const bool watch_wakeup = wake_read_sock != INVALID_SOCKET;
+    if (!watch_socket && !watch_wakeup) {
+      cleanup_wakeup();
+      return WaitResult::Ready;
+    }
+
+    timeval tv{};
+    timeval *timeout_ptr = nullptr;
+    bool interrupt_poll_fallback = false;
+    if (timeout_ms > 0) {
+      const int64_t remaining = timeout_ms - (am_ms() - start_time);
+      if (remaining <= 0) {
+        cleanup_wakeup();
+        return WaitResult::Timeout;
+      }
+      tv.tv_sec = static_cast<long>(remaining / 1000);
+      tv.tv_usec = static_cast<long>((remaining % 1000) * 1000);
+      timeout_ptr = &tv;
+    } else if (interrupt_flag && wake_read_sock == INVALID_SOCKET) {
+      // Fallback path: when wake socket backend is unavailable, wake select
+      // periodically so Ctrl+C can still be observed for unbounded waits.
+      tv.tv_sec = 0;
+      tv.tv_usec = 100 * 1000; // 100ms
+      timeout_ptr = &tv;
+      interrupt_poll_fallback = true;
+    }
+
+#ifdef _WIN32
+    const int rc = select(0, &readfds, &writefds, nullptr, timeout_ptr);
+#else
+    int nfds = static_cast<int>(sock) + 1;
+    if (wake_read_sock != INVALID_SOCKET) {
+      nfds = std::max(nfds, static_cast<int>(wake_read_sock) + 1);
+    }
+    const int rc = select(nfds, &readfds, &writefds, nullptr, timeout_ptr);
+#endif
+
+    cleanup_wakeup();
+
+    if (rc < 0) {
+      return is_interrupted() ? WaitResult::Interrupted : WaitResult::Error;
+    }
+    if (rc == 0) {
+      if (interrupt_poll_fallback) {
+        return is_interrupted() ? WaitResult::Interrupted : WaitResult::Ready;
+      }
+      return is_interrupted() ? WaitResult::Interrupted : WaitResult::Timeout;
+    }
+
+    if (wake_read_sock != INVALID_SOCKET &&
+        FD_ISSET(wake_read_sock, &readfds)) {
+      DrainInterruptWakeSocket_();
+      if (is_interrupted()) {
+        return WaitResult::Interrupted;
+      }
+    }
+    if (is_interrupted()) {
+      return WaitResult::Interrupted;
+    }
+
+    if (is_read_or_write) {
+      if (FD_ISSET(sock, &readfds)) {
+        return WaitResult::ReadReady;
+      }
+      if (FD_ISSET(sock, &writefds)) {
+        return WaitResult::WriteReady;
+      }
+    }
+    return WaitResult::Ready;
   }
 
   std::vector<std::string> GetKeys() { return this->private_keys; }
@@ -1232,7 +1230,7 @@ public:
     sock = connector.sock;
 
     // Check interrupt/timeout
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return {EC::Terminate, "Connection interrupted"};
     }
     if (timeout_ms > 0) {
@@ -1263,9 +1261,8 @@ public:
       if (rcr != LIBSSH2_ERROR_EAGAIN) {
         break;
       }
-      wr = wait_for_socket(SocketWaitType::Auto,
-                           MakeInterruptCb(interrupt_flag), start_time,
-                           timeout_ms, poll_interval_ms, interrupt_flag);
+      wr = wait_for_socket(SocketWaitType::Auto, start_time, timeout_ms,
+                           interrupt_flag);
       if (wr != WaitResult::Ready) {
         Disconnect();
         switch (wr) {
@@ -1299,12 +1296,10 @@ public:
     }
 
     // Get auth list (non-blocking)
-    auto auth_list_res = nb_call(MakeInterruptCb(interrupt_flag), timeout_ms,
-                                 start_time, interrupt_flag, [&]() {
-                                   return libssh2_userauth_list(
-                                       session, res_data.username.c_str(),
-                                       res_data.username.length());
-                                 });
+    auto auth_list_res = nb_call(interrupt_flag, timeout_ms, start_time, [&]() {
+      return libssh2_userauth_list(session, res_data.username.c_str(),
+                                   res_data.username.length());
+    });
     rcm = ErrorRecord(auth_list_res, TraceLevel::Critical, res_data.username,
                       "libssh2_userauth_list", "Fail to {action} : {error}");
     if (rcm.first != EC::Success) {
@@ -1332,15 +1327,14 @@ public:
     // Dedicated private key auth
     if (!res_data.keyfile.empty()) {
       // Check interrupt (without timeout check)
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return {EC::Terminate, "Authentication interrupted"};
       }
-      auto auth_res = nb_call(MakeInterruptCb(interrupt_flag), -1, am_ms(),
-                              interrupt_flag, [&]() {
-                                return libssh2_userauth_publickey_fromfile(
-                                    session, res_data.username.c_str(), nullptr,
-                                    res_data.keyfile.c_str(), nullptr);
-                              });
+      auto auth_res = nb_call(interrupt_flag, -1, am_ms(), [&]() {
+        return libssh2_userauth_publickey_fromfile(
+            session, res_data.username.c_str(), nullptr,
+            res_data.keyfile.c_str(), nullptr);
+      });
       if (!auth_res.ok()) {
         rcm = ErrorRecord(auth_res, TraceLevel::Error, res_data.username,
                           "libssh2_userauth_publickey_fromfile");
@@ -1366,15 +1360,14 @@ public:
 
     // Password authentication
     if (!stored_password_enc.empty() && password_auth) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return {EC::Terminate, "Authentication interrupted"};
       }
       std::string plain_password = AMAuth::DecryptPassword(stored_password_enc);
-      auto auth_res = nb_call(
-          MakeInterruptCb(interrupt_flag), -1, am_ms(), interrupt_flag, [&]() {
-            return libssh2_userauth_password(session, res_data.username.c_str(),
-                                             plain_password.c_str());
-          });
+      auto auth_res = nb_call(interrupt_flag, -1, am_ms(), [&]() {
+        return libssh2_userauth_password(session, res_data.username.c_str(),
+                                         plain_password.c_str());
+      });
       AMAuth::SecureZero(plain_password);
       if (!auth_res.ok()) {
         rcm = ErrorRecord(auth_res, TraceLevel::Error, res_data.username,
@@ -1399,18 +1392,17 @@ public:
     // Shared private key authentication
     if (!private_keys.empty()) {
       for (auto private_key : private_keys) {
-        if (interrupt_flag && interrupt_flag->check()) {
+        if (interrupt_flag && !interrupt_flag->IsRunning()) {
           return {EC::Terminate, "Authentication interrupted"};
         }
         if (private_key == res_data.keyfile) {
           continue;
         }
-        auto auth_res = nb_call(MakeInterruptCb(interrupt_flag), -1, am_ms(),
-                                interrupt_flag, [&]() {
-                                  return libssh2_userauth_publickey_fromfile(
-                                      session, res_data.username.c_str(),
-                                      nullptr, private_key.c_str(), nullptr);
-                                });
+        auto auth_res = nb_call(interrupt_flag, -1, am_ms(), [&]() {
+          return libssh2_userauth_publickey_fromfile(
+              session, res_data.username.c_str(), nullptr, private_key.c_str(),
+              nullptr);
+        });
         if (!auth_res.ok()) {
           rcm = ErrorRecord(auth_res, TraceLevel::Error, res_data.username,
                             "libssh2_userauth_publickey_fromfile");
@@ -1439,7 +1431,7 @@ public:
             "Using password authentication callback to get another password");
       int trial_times = 0;
       while (trial_times < 2) {
-        if (interrupt_flag && interrupt_flag->check()) {
+        if (interrupt_flag && !interrupt_flag->IsRunning()) {
           return {EC::Terminate, "Authentication interrupted"};
         }
         auto [password_opt, cb_ecm] =
@@ -1459,12 +1451,10 @@ public:
           break;
         }
         const std::string password_enc = AMAuth::EncryptPassword(password_tmp);
-        auto auth_res = nb_call(MakeInterruptCb(interrupt_flag), -1, am_ms(),
-                                interrupt_flag, [&]() {
-                                  return libssh2_userauth_password(
-                                      session, res_data.username.c_str(),
-                                      password_tmp.c_str());
-                                });
+        auto auth_res = nb_call(interrupt_flag, -1, am_ms(), [&]() {
+          return libssh2_userauth_password(session, res_data.username.c_str(),
+                                           password_tmp.c_str());
+        });
         AMAuth::SecureZero(password_tmp);
         if (!auth_res.ok()) {
           rcm = ErrorRecord(auth_res, TraceLevel::Error, res_data.username,
@@ -1497,9 +1487,8 @@ public:
       return rcm;
     }
 
-    auto sftp_init_res =
-        nb_call(MakeInterruptCb(interrupt_flag), -1, am_ms(), interrupt_flag,
-                [&]() { return libssh2_sftp_init(session); });
+    auto sftp_init_res = nb_call(interrupt_flag, -1, am_ms(),
+                                 [&]() { return libssh2_sftp_init(session); });
     rcm =
         ErrorRecord(sftp_init_res, TraceLevel::Critical, "",
                     "libssh2_sftp_init", "SFTP initialization failed: {error}");
@@ -1653,7 +1642,7 @@ private:
         continue;
       }
 
-      if (terminal_interrupt_flag && terminal_interrupt_flag->check()) {
+      if (terminal_interrupt_flag && !terminal_interrupt_flag->IsRunning()) {
         reader_running.store(false, std::memory_order_relaxed);
         break;
       }
@@ -1665,9 +1654,8 @@ private:
 
       int64_t start_time = am_ms();
       int wait_timeout = reader_wait_timeout_ms.load(std::memory_order_relaxed);
-      WaitResult wr = wait_for_socket(
-          SocketWaitType::Read, MakeInterruptCb(terminal_interrupt_flag),
-          start_time, wait_timeout, poll_interval_ms, terminal_interrupt_flag);
+      WaitResult wr = wait_for_socket(SocketWaitType::Read, start_time,
+                                      wait_timeout, terminal_interrupt_flag);
       if (wr == WaitResult::Timeout) {
         continue;
       }
@@ -1737,7 +1725,7 @@ private:
 
     amf flag = interrupt_flag ? interrupt_flag : terminal_interrupt_flag;
     start_time = start_time == -1 ? am_ms() : start_time;
-    if (flag && flag->check()) {
+    if (flag && !flag->IsRunning()) {
       terminal_channel.reset();
       return {EC::Terminate, "Terminal init interrupted"};
     }
@@ -1763,8 +1751,7 @@ private:
                 0, terminal_window.cols, terminal_window.rows,
                 terminal_window.width, terminal_window.height)) ==
            LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
-                           start_time, timeout_ms, poll_interval_ms, flag);
+      wr = wait_for_socket(SocketWaitType::Auto, start_time, timeout_ms, flag);
       if (wr != WaitResult::Ready) {
         goto cleanup;
       }
@@ -1777,8 +1764,7 @@ private:
 
     while ((rc = libssh2_channel_shell(terminal_channel->channel)) ==
            LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
-                           start_time, timeout_ms, poll_interval_ms, flag);
+      wr = wait_for_socket(SocketWaitType::Auto, start_time, timeout_ms, flag);
       if (wr != WaitResult::Ready) {
         goto cleanup;
       }
@@ -1873,7 +1859,7 @@ public:
   ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
             int64_t start_time = -1) override {
     amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    if (flag && flag->check()) {
+    if (flag && !flag->IsRunning()) {
       ECM rcm = {EC::Terminate, "Check interrupted"};
       SetState(rcm);
       return rcm;
@@ -1947,8 +1933,8 @@ public:
                   terminal_channel->channel, terminal_window.cols,
                   terminal_window.rows, terminal_window.width,
                   terminal_window.height)) == LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
-                             start_time, timeout_ms, poll_interval_ms, flag);
+        wr =
+            wait_for_socket(SocketWaitType::Auto, start_time, timeout_ms, flag);
         if (wr != WaitResult::Ready) {
           goto cleanup;
         }
@@ -1985,7 +1971,7 @@ public:
 
     amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
     start_time = start_time == -1 ? am_ms() : start_time;
-    if (flag && flag->check()) {
+    if (flag && !flag->IsRunning()) {
       return {EC::Terminate, "Terminal interrupted"};
     }
 
@@ -1993,7 +1979,7 @@ public:
     size_t offset = 0;
     WaitResult wr = WaitResult::Ready;
     while (offset < msg.size()) {
-      if (flag && flag->check()) {
+      if (flag && !flag->IsRunning()) {
         wr = WaitResult::Interrupted;
         goto cleanup;
       }
@@ -2005,8 +1991,8 @@ public:
         continue;
       }
       if (rc == LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Write, MakeInterruptCb(flag),
-                             start_time, timeout_ms, poll_interval_ms, flag);
+        wr = wait_for_socket(SocketWaitType::Write, start_time, timeout_ms,
+                             flag);
         if (wr != WaitResult::Ready) {
           goto cleanup;
         }
@@ -2083,7 +2069,7 @@ public:
             int64_t start_time = -1) override {
     (void)timeout_ms;
     (void)start_time;
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return {EC::Terminate, "Check interrupted"};
     }
     if (closed.load(std::memory_order_relaxed)) {
@@ -2145,7 +2131,7 @@ public:
     }
     start_time = start_time == -1 ? am_ms() : start_time;
 
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return {EC::Terminate, "Terminal interrupted"};
     }
 
@@ -2156,7 +2142,7 @@ public:
 
     std::array<char, 4096> buffer;
     while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         ClosePipe(pipe);
         return {EC::Terminate, "Terminal interrupted"};
       }
@@ -2457,7 +2443,7 @@ private:
                   AMStr::amfmt("Path: {} readdir timeout", path)};
         break;
       }
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         rcm = ECM{EC::Terminate,
                   AMStr::amfmt("Path: {} readdir interrupted by user", path)};
         break;
@@ -2501,7 +2487,7 @@ protected:
               amf interrupt_flag = nullptr, int timeout_ms = -1,
               int64_t start_time = -1) {
     // Find all deepest paths under directory for recursive transfer
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return;
     }
 
@@ -2541,7 +2527,7 @@ protected:
       return;
     }
     for (auto &attrs : attrs_list) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return;
       }
       if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
@@ -2566,7 +2552,7 @@ protected:
     if (max_depth != -1 && cur_depth > max_depth) {
       return;
     }
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return;
     }
     std::string pathf = AMPathStr::join(parts);
@@ -2594,7 +2580,7 @@ protected:
     };
     std::vector<PathInfo> files_info = {};
     for (auto &[path, attrs] : list_info) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return;
       }
       if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
@@ -2627,7 +2613,7 @@ protected:
            RMR &errors, AMFS::WalkErrorCallback error_callback = nullptr,
            amf interrupt_flag = nullptr, int timeout_ms = -1,
            int64_t start_time = -1) {
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return;
     }
     if (!isdir(attrs)) {
@@ -2651,12 +2637,12 @@ protected:
       return;
     }
 
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return;
     }
 
     for (auto &file : file_list) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return;
       }
       _rm(file.first, file.second, errors, error_callback, interrupt_flag,
@@ -2676,7 +2662,7 @@ protected:
               std::unordered_map<std::string, ECM> &errors,
               LIBSSH2_SFTP_ATTRIBUTES attrs, amf interrupt_flag = nullptr,
               int timeout_ms = -1, int64_t start_time = -1) {
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return;
     }
     ECM rcm;
@@ -2714,7 +2700,7 @@ protected:
         return;
       }
       for (auto &item : list) {
-        if (interrupt_flag && interrupt_flag->check()) {
+        if (interrupt_flag && !interrupt_flag->IsRunning()) {
           return;
         }
         if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
@@ -2775,7 +2761,7 @@ public:
     libssh2_session_set_blocking(session, 0);
 
     for (ssize_t i = 0; i < times; i++) {
-      if (flag && flag->check()) {
+      if (flag && !flag->IsRunning()) {
         break;
       }
 
@@ -2785,8 +2771,7 @@ public:
 
       while ((rc = libssh2_sftp_stat(sftp, "/", &attrs)) ==
              LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag), start,
-                             -1, poll_interval_ms, flag);
+        wr = wait_for_socket(SocketWaitType::Auto, start, -1, flag);
         if (wr != WaitResult::Ready) {
           break;
         }
@@ -2822,7 +2807,7 @@ public:
     if (!IsCommandAllowed(cmd, &reason)) {
       return {ECM{EC::InvalidArg, reason}, {"", -1}};
     }
-    if (flag && flag->check()) {
+    if (flag && !flag->IsRunning()) {
       return {ECM{EC::Terminate, "Operation aborted before command sent"},
               {"", -1}};
     }
@@ -2834,9 +2819,12 @@ public:
     int exit_status = -1;
     bool has_output = false;
     std::string output;
-    std::array<char, 4096> buffer;
+    std::array<char, 32 * AMKB> buffer;
     WaitResult wr = WaitResult::Ready;
-    int rc = 0;
+    ssize_t nbytes = 0;
+    NBResult<int> exec_res{0, WaitResult::Ready};
+    NBResult<ssize_t> read_res{0, WaitResult::Ready};
+    NBResult<int> close_res{0, WaitResult::Ready};
 
     // Set non-blocking mode
     libssh2_session_set_blocking(session, 0);
@@ -2852,25 +2840,30 @@ public:
     };
 
     // 1. Execute command
-    while ((rc = libssh2_channel_exec(sf.channel, cmd.c_str())) ==
-           LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
-                           time_start, max_time_ms, poll_interval_ms, flag);
-      if (wr != WaitResult::Ready) {
-        goto cleanup;
-      }
+    exec_res = nb_call(flag, max_time_ms, time_start, [&] {
+      return libssh2_channel_exec(sf.channel, cmd.c_str());
+    });
+    if (!exec_res.ok()) {
+      wr = exec_res.status;
+      goto cleanup;
     }
-    if (rc < 0) {
+    if (exec_res.value < 0) {
       return {ECM{GetLastEC(),
                   AMStr::amfmt("Channel exec failed: {}", GetLastErrorMsg())},
               {"", -1}};
     }
     stage = CmdStage::AwaitOutput;
-
     // 2. Read output
     while (true) {
-      ssize_t nbytes =
-          libssh2_channel_read(sf.channel, buffer.data(), buffer.size() - 1);
+      read_res = nb_call(flag, max_time_ms, time_start, [&] {
+        return libssh2_channel_read(sf.channel, buffer.data(),
+                                    buffer.size() - 1);
+      });
+      if (!read_res.ok()) {
+        wr = read_res.status;
+        goto cleanup;
+      }
+      nbytes = read_res.value;
 
       if (nbytes > 0) {
         output.append(buffer.data(), static_cast<size_t>(nbytes));
@@ -2879,12 +2872,6 @@ public:
       } else if (nbytes == 0) {
         stage = CmdStage::AwaitExit;
         break; // EOF
-      } else if (nbytes == LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
-                             time_start, max_time_ms, poll_interval_ms, flag);
-        if (wr != WaitResult::Ready) {
-          goto cleanup;
-        }
       } else {
         return {ECM{GetLastEC(),
                     AMStr::amfmt("Channel read failed: {}", GetLastErrorMsg())},
@@ -2899,12 +2886,18 @@ public:
     }
 
     // 4. Close channel non-blocking
-    while ((rc = sf.close_nonblock()) == LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
-                           time_start, max_time_ms, poll_interval_ms, flag);
-      if (wr != WaitResult::Ready) {
-        goto cleanup;
-      }
+    close_res = nb_call(flag, max_time_ms, time_start,
+                        [&] { return sf.close_nonblock(); });
+
+    if (!close_res.ok()) {
+      wr = close_res.status;
+      goto cleanup;
+    }
+
+    if (close_res.value < 0) {
+      return {ECM{GetLastEC(),
+                  AMStr::amfmt("Channel close failed: {}", GetLastErrorMsg())},
+              {output, -1}};
     }
 
     // 5. Get exit status
@@ -2966,7 +2959,7 @@ public:
 
     amf flag = interrupt_flag ? interrupt_flag :
   this->terminal_interrupt_flag; start_time = start_time == -1 ? am_ms() :
-  start_time; if (flag && flag->check()) { terminal_channel.reset(); return
+  start_time; if (flag && !flag->IsRunning()) { terminal_channel.reset(); return
   {EC::Terminate, "Terminal init interrupted"};
     }
 
@@ -2987,9 +2980,8 @@ public:
   nullptr, 0, terminal_window.cols, terminal_window.rows,
                 terminal_window.width, terminal_window.height)) ==
            LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
-  start_time, timeout_ms, poll_interval_ms, flag); if (wr != WaitResult::Ready)
-  { goto cleanup;
+      wr = wait_for_socket(SocketWaitType::Auto, start_time, timeout_ms, flag);
+  if (wr != WaitResult::Ready) { goto cleanup;
       }
     }
     if (rc != 0) {
@@ -3001,9 +2993,8 @@ public:
 
     while ((rc = libssh2_channel_shell(terminal_channel->channel)) ==
            LIBSSH2_ERROR_EAGAIN) {
-      wr = wait_for_socket(SocketWaitType::Auto, MakeInterruptCb(flag),
-  start_time, timeout_ms, poll_interval_ms, flag); if (wr != WaitResult::Ready)
-  { goto cleanup;
+      wr = wait_for_socket(SocketWaitType::Auto, start_time, timeout_ms, flag);
+  if (wr != WaitResult::Ready) { goto cleanup;
       }
     }
     if (rc != 0) {
@@ -3040,7 +3031,7 @@ public:
 
     amf flag = interrupt_flag ? interrupt_flag :
   this->terminal_interrupt_flag; start_time = start_time == -1 ? am_ms() :
-  start_time; if (flag && flag->check()) { terminal_channel.reset(); return
+  start_time; if (flag && !flag->IsRunning()) { terminal_channel.reset(); return
   {EC::Terminate, "Terminal interrupted"};
     }
 
@@ -3048,7 +3039,7 @@ public:
     size_t offset = 0;
     WaitResult wr = WaitResult::Ready;
     while (offset < msg.size()) {
-      if (flag && flag->check()) {
+      if (flag && !flag->IsRunning()) {
         wr = WaitResult::Interrupted;
         goto cleanup;
       }
@@ -3058,9 +3049,8 @@ public:
   static_cast<size_t>(rc); continue;
       }
       if (rc == LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Write, MakeInterruptCb(flag),
-  start_time, timeout_ms, poll_interval_ms, flag); if (wr != WaitResult::Ready)
-  { goto cleanup;
+        wr = wait_for_socket(SocketWaitType::Write, start_time, timeout_ms,
+  flag); if (wr != WaitResult::Ready) { goto cleanup;
         }
         continue;
       }
@@ -3097,7 +3087,7 @@ public:
 
     amf flag = interrupt_flag ? interrupt_flag :
   this->terminal_interrupt_flag; start_time = start_time == -1 ? am_ms() :
-  start_time; if (flag && flag->check()) { terminal_channel.reset(); return
+  start_time; if (flag && !flag->IsRunning()) { terminal_channel.reset(); return
   {ECM{EC::Terminate, "Terminal interrupted"}, ""};
     }
 
@@ -3108,14 +3098,13 @@ public:
     WaitResult wr = WaitResult::Ready;
 
     if (wait_for_data) {
-      wr = wait_for_socket(SocketWaitType::Read, MakeInterruptCb(flag),
-  start_time, timeout_ms, poll_interval_ms, flag); if (wr != WaitResult::Ready)
-  { goto cleanup;
+      wr = wait_for_socket(SocketWaitType::Read, start_time, timeout_ms, flag);
+  if (wr != WaitResult::Ready) { goto cleanup;
       }
     }
 
     while (true) {
-      if (flag && flag->check()) {
+      if (flag && !flag->IsRunning()) {
         wr = WaitResult::Interrupted;
         goto cleanup;
       }
@@ -3204,7 +3193,7 @@ public:
       }
       auto pos = output.find(marker);
       if (pos == std::string::npos) {
-        if (flag && flag->check()) {
+        if (flag && !flag->IsRunning()) {
           return {ECM{EC::Terminate, "Terminal interrupted"}, {output, -1}};
         }
         if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
@@ -3247,7 +3236,7 @@ public:
 
     amf flag = interrupt_flag ? interrupt_flag :
   this->terminal_interrupt_flag; start_time = start_time == -1 ? am_ms() :
-  start_time; if (flag && flag->check()) { terminal_channel.reset(); return
+  start_time; if (flag && !flag->IsRunning()) { terminal_channel.reset(); return
   {ECM{EC::Terminate, "Terminal interrupted"}, ""};
     }
 
@@ -3256,7 +3245,7 @@ public:
     size_t offset = 0;
     WaitResult wr = WaitResult::Ready;
     while (offset < msg.size()) {
-      if (flag && flag->check()) {
+      if (flag && !flag->IsRunning()) {
         wr = WaitResult::Interrupted;
         goto cleanup;
       }
@@ -3266,9 +3255,8 @@ public:
   static_cast<size_t>(rc); continue;
       }
       if (rc == LIBSSH2_ERROR_EAGAIN) {
-        wr = wait_for_socket(SocketWaitType::Write, MakeInterruptCb(flag),
-  start_time, timeout_ms, poll_interval_ms, flag); if (wr != WaitResult::Ready)
-  { goto cleanup;
+        wr = wait_for_socket(SocketWaitType::Write, start_time, timeout_ms,
+  flag); if (wr != WaitResult::Ready) { goto cleanup;
         }
         continue;
       }
@@ -3282,7 +3270,7 @@ public:
     std::string output;
     std::array<char, 4096> buffer;
     while (true) {
-      if (flag && flag->check()) {
+      if (flag && !flag->IsRunning()) {
         wr = WaitResult::Interrupted;
         goto cleanup;
       }
@@ -3502,7 +3490,7 @@ public:
               {}};
     }
 
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
               {}};
     }
@@ -3895,7 +3883,7 @@ public:
     WRV result = {};
     _iwalk(path, attrs, result, errors, show_all, ignore_sepcial_file,
            error_callback, interrupt_flag, timeout_ms, start_time);
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       ECM out = {EC::Terminate, "Interrupted by user"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -3946,7 +3934,7 @@ public:
           ignore_special_file, error_callback, interrupt_flag, timeout_ms,
           start_time);
     // Print type of result_dict
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -3956,3 +3944,4 @@ public:
     return {ECM{EC::Success, ""}, {result_dict, errors}};
   }
 };
+

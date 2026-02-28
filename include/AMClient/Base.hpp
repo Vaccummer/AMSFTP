@@ -146,7 +146,7 @@ private:
         return;
       }
       for (auto &sub : sub_pack.first) {
-        if (interrupt_flag && interrupt_flag->check()) {
+        if (interrupt_flag && !interrupt_flag->IsRunning()) {
           return;
         }
         if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
@@ -176,7 +176,7 @@ private:
         return;
       }
       for (auto &sub : sub_list2) {
-        if (interrupt_flag && interrupt_flag->check()) {
+        if (interrupt_flag && !interrupt_flag->IsRunning()) {
           return;
         }
         if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
@@ -198,7 +198,7 @@ private:
         return;
       }
       for (auto &sub : sub_list3) {
-        if (interrupt_flag && interrupt_flag->check()) {
+        if (interrupt_flag && !interrupt_flag->IsRunning()) {
           return;
         }
         if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
@@ -516,7 +516,7 @@ private:
   /**
    * @brief Persist initialization context used by retryable operations.
    */
-  void StoreInitContext_(const amf &interrupt_flag, int timeout_ms,
+  void StoreInitContext_(amf interrupt_flag, int timeout_ms,
                          int64_t start_time) {
     init_interrupt_flag = interrupt_flag;
     init_timeout_ms = timeout_ms;
@@ -527,7 +527,7 @@ private:
    * @brief Check interruption/timeout state for retry operations.
    */
   ECM CheckControlState_(const std::string &action) const {
-    if (init_interrupt_flag && init_interrupt_flag->check()) {
+    if (init_interrupt_flag && !init_interrupt_flag->IsRunning()) {
       return {EC::Terminate, AMStr::amfmt("{} interrupted", action)};
     }
     if (init_timeout_ms >= 0 && init_start_time >= 0 &&
@@ -743,7 +743,6 @@ private:
   ssize_t buffer_size = AMMB * 8;
 
 protected:
-  int poll_interval_ms = 20;
   amf ClientInterruptFlag = std::make_shared<TaskControlToken>();
   ClientProtocol PROTOCOL = ClientProtocol::Base;
   ECM state = {EC::NoConnection, "Client Not Initialized"};
@@ -835,7 +834,7 @@ public:
     if (rcm.first != EC::Success) {
       return -1;
     }
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return -1;
     }
     size_t size = 0;
@@ -1079,3 +1078,4 @@ public:
         "{} Client doesn't implement funtion: walk", GetProtocolName()));
   }
 };
+

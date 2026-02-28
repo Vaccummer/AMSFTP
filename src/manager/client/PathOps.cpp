@@ -176,7 +176,7 @@ void PathOps::InitClientWorkdir(
 void PathOps::ApplyLoginDir(const std::string &nickname,
                             const std::shared_ptr<BaseClient> &client,
                             const std::string &login_dir,
-                            const amf &flag) const {
+                            amf flag) const {
   if (!client) {
     return;
   }

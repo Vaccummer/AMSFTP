@@ -588,7 +588,7 @@ private:
         break;
 
       // Check interrupt
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         wait_result = WaitResult::Interrupted;
         break;
       }
@@ -1174,7 +1174,7 @@ public:
     rtts.reserve(static_cast<size_t>(times));
 
     for (ssize_t i = 0; i < times; i++) {
-      if (flag && flag->check()) {
+      if (flag && !flag->IsRunning()) {
         break;
       }
       ECM ecm = SetupPath("", true);
@@ -1259,7 +1259,7 @@ public:
               PathInfo()};
     }
 
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return {ECM{EC::Terminate, "Interrupted by user"}, PathInfo()};
     }
 
@@ -1317,7 +1317,7 @@ public:
       return {ECM{EC::NoConnection, "CURL not initialized"}, {}};
     }
 
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return {ECM{EC::Terminate, "Interrupted by user"}, {}};
     }
 
@@ -1437,7 +1437,7 @@ public:
     };
     bool no_subdir = true;
     for (auto &item : list_info) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return;
       }
       if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
@@ -1499,7 +1499,7 @@ public:
     }
     _iwalk(info, result, errors, show_all, ignore_special_file, error_callback,
            interrupt_flag, timeout_ms, start_time);
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       ECM out = {EC::Terminate, "iwalk interrupted by user"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -1542,7 +1542,7 @@ public:
     };
     std::vector<PathInfo> files_info = {};
     for (auto &info : list_info) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return;
       }
       if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
@@ -1593,7 +1593,7 @@ public:
     _walk(parts, result_dict, errors, 0, max_depth, show_all,
           ignore_special_file, error_callback, interrupt_flag, timeout_ms,
           start_time);
-    if (interrupt_flag && interrupt_flag->check()) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
       ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -1721,7 +1721,7 @@ public:
       return;
     }
     for (const auto &itemf : file_list) {
-      if (interrupt_flag && interrupt_flag->check()) {
+      if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return;
       }
       if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
@@ -1897,3 +1897,4 @@ public:
   //   }
   // }
 };
+
