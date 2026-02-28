@@ -127,7 +127,7 @@ bool detail::fmt_parse_padding_spec(const std::string &spec, char *align_out,
 }
 
 std::string detail::fmt_apply_padding(const std::string &value, char align,
-                                        size_t width) {
+                                      size_t width) {
   const size_t current = DisplayWidthUtf8(value);
   if (current >= width) {
     return value;
@@ -145,7 +145,7 @@ std::string detail::fmt_apply_padding(const std::string &value, char align,
 }
 
 bool detail::fmt_parse_spec_token(const std::string &token, char *align_out,
-                                    size_t *width_out) {
+                                  size_t *width_out) {
   if (!align_out || !width_out) {
     return false;
   }
@@ -330,11 +330,11 @@ std::string AnsiColor24(const std::string &hex_color) {
   return AMStr::fmt("\x1b[38;2;{};{};{}m", r, g, b);
 }
 
-std::string
-FormatUtf8Table(const std::vector<std::string> &keys,
-                const std::vector<std::vector<std::string>> &rows,
-                const std::string &skeleton_color, size_t pad_left,
-                size_t pad_right, size_t pad_top, size_t pad_bottom) {
+std::string FormatUtf8Table(const std::vector<std::string> &keys,
+                            const std::vector<std::vector<std::string>> &rows,
+                            const std::string &skeleton_color, size_t pad_left,
+                            size_t pad_right, size_t pad_top,
+                            size_t pad_bottom) {
   if (keys.empty()) {
     return "";
   }
@@ -494,8 +494,7 @@ std::string MergeModeStr(const std::string &base_mode_str,
         fmt("Invalid base mode string: ", base_mode_str));
   }
   if (!std::regex_match(new_mode_str, pattern)) {
-    throw std::invalid_argument(
-        fmt("Invalid new mode string: ", new_mode_str));
+    throw std::invalid_argument(fmt("Invalid new mode string: ", new_mode_str));
   }
 
   std::string mode_str;
@@ -631,11 +630,10 @@ size_t CountLines(const std::string &text) {
   }
   return lines;
 }
-} // namespace AMStr
 
-void AMStr::print(const std::string &str) { std::cout << str << "\n"; }
+void print(const std::string &str) { std::cout << str << "\n"; }
 
-std::string AMStr::FormatSize(size_t size) {
+std::string FormatSize(size_t size) {
   static const std::vector<std::string> units = {"B", "KB", "MB", "GB", "TB"};
   auto value = static_cast<double>(size);
   size_t idx = 0;
@@ -653,14 +651,14 @@ std::string AMStr::FormatSize(size_t size) {
   return oss.str();
 }
 
-std::string AMStr::FormatSize(int64_t size) {
+std::string FormatSize(int64_t size) {
   if (size < 0) {
     return "0B";
   }
   return AMStr::FormatSize(static_cast<size_t>(size));
 }
 
-bool AMStr::GetEnv(std::string_view key, std::string *target) {
+bool GetEnv(std::string_view key, std::string *target) {
   if (!key.data() || !target) {
     return false;
   }
@@ -689,8 +687,10 @@ bool AMStr::GetEnv(std::string_view key, std::string *target) {
   return true;
 #endif
 }
+} // namespace AMStr
 
-bool AMJson::DelKey(AMJson::Json &root, const std::vector<std::string> &path) {
+namespace AMJson {
+bool DelKey(AMJson::Json &root, const std::vector<std::string> &path) {
   if (path.empty()) {
     return false;
   }
@@ -712,8 +712,10 @@ bool AMJson::DelKey(AMJson::Json &root, const std::vector<std::string> &path) {
   }
   return false;
 }
+} // namespace AMJson
 
-std::optional<std::string> AMStr::HexToAnsi(const std::string &value) {
+namespace AMStr {
+std::optional<std::string> HexToAnsi(const std::string &value) {
   std::string token = AMStr::Strip(value);
   if (token.empty()) {
     return std::nullopt;
@@ -736,6 +738,100 @@ std::optional<std::string> AMStr::HexToAnsi(const std::string &value) {
   int b = vals[4] * 16 + vals[5];
   return AMStr::fmt("\x1b[38;2;{};{};{}m", r, g, b);
 }
+} // namespace AMStr
+
+namespace AMAuth {
+void SecureZero(std::string &value) {
+  std::fill(value.begin(), value.end(), '\0');
+  value.clear();
+  value.shrink_to_fit();
+}
+
+bool IsEncrypted(const std::string &value) {
+  return value.rfind(std::string(kEncryptedPrefix), 0) == 0;
+}
+
+std::string HexEncode(const std::string &bytes) {
+  static constexpr char kHex[] = "0123456789ABCDEF";
+  std::string out;
+  out.resize(bytes.size() * 2);
+  for (size_t i = 0; i < bytes.size(); ++i) {
+    const unsigned char b = static_cast<unsigned char>(bytes[i]);
+    out[i * 2] = kHex[(b >> 4) & 0x0F];
+    out[i * 2 + 1] = kHex[b & 0x0F];
+  }
+  return out;
+}
+
+std::string HexDecode(const std::string &hex) {
+  auto hex_to_val = [](char c) -> int {
+    if (c >= '0' && c <= '9') {
+      return c - '0';
+    }
+    if (c >= 'A' && c <= 'F') {
+      return 10 + (c - 'A');
+    }
+    if (c >= 'a' && c <= 'f') {
+      return 10 + (c - 'a');
+    }
+    return -1;
+  };
+
+  if (hex.size() % 2 != 0) {
+    return {};
+  }
+
+  std::string out;
+  out.resize(hex.size() / 2);
+  for (size_t i = 0; i < hex.size(); i += 2) {
+    const int hi = hex_to_val(hex[i]);
+    const int lo = hex_to_val(hex[i + 1]);
+    if (hi < 0 || lo < 0) {
+      return {};
+    }
+    out[i / 2] = static_cast<char>((hi << 4) | lo);
+  }
+  return out;
+}
+
+std::string XorWithKey(const std::string &input) {
+  if (input.empty()) {
+    return {};
+  }
+  std::string out = input;
+  for (size_t i = 0; i < out.size(); ++i) {
+    const char key_ch = kPasswordKey[i % kPasswordKey.size()];
+    out[i] = static_cast<char>(out[i] ^ key_ch);
+  }
+  return out;
+}
+
+std::string EncryptPassword(const std::string &plain) {
+  if (plain.empty()) {
+    return {};
+  }
+  if (IsEncrypted(plain)) {
+    return plain;
+  }
+  const std::string xored = XorWithKey(plain);
+  const std::string encoded = HexEncode(xored);
+  return std::string(kEncryptedPrefix) + encoded;
+}
+
+std::string DecryptPassword(const std::string &stored) {
+  if (stored.empty() || !IsEncrypted(stored)) {
+    return stored;
+  }
+  const std::string payload =
+      stored.substr(std::string(kEncryptedPrefix).size());
+  std::string decoded = HexDecode(payload);
+  if (decoded.empty() && !payload.empty()) {
+    return {};
+  }
+  decoded = XorWithKey(decoded);
+  return decoded;
+}
+} // namespace AMAuth
 
 double timenow() {
   return std::chrono::duration<double>(
@@ -861,97 +957,3 @@ ECM fecm(const std::error_code &ec) {
   }
   return {fec(ec), ec.message()};
 }
-
-namespace AMAuth {
-void SecureZero(std::string &value) {
-  std::fill(value.begin(), value.end(), '\0');
-  value.clear();
-  value.shrink_to_fit();
-}
-
-bool IsEncrypted(const std::string &value) {
-  return value.rfind(std::string(kEncryptedPrefix), 0) == 0;
-}
-
-std::string HexEncode(const std::string &bytes) {
-  static constexpr char kHex[] = "0123456789ABCDEF";
-  std::string out;
-  out.resize(bytes.size() * 2);
-  for (size_t i = 0; i < bytes.size(); ++i) {
-    const unsigned char b = static_cast<unsigned char>(bytes[i]);
-    out[i * 2] = kHex[(b >> 4) & 0x0F];
-    out[i * 2 + 1] = kHex[b & 0x0F];
-  }
-  return out;
-}
-
-std::string HexDecode(const std::string &hex) {
-  auto hex_to_val = [](char c) -> int {
-    if (c >= '0' && c <= '9') {
-      return c - '0';
-    }
-    if (c >= 'A' && c <= 'F') {
-      return 10 + (c - 'A');
-    }
-    if (c >= 'a' && c <= 'f') {
-      return 10 + (c - 'a');
-    }
-    return -1;
-  };
-
-  if (hex.size() % 2 != 0) {
-    return {};
-  }
-
-  std::string out;
-  out.resize(hex.size() / 2);
-  for (size_t i = 0; i < hex.size(); i += 2) {
-    const int hi = hex_to_val(hex[i]);
-    const int lo = hex_to_val(hex[i + 1]);
-    if (hi < 0 || lo < 0) {
-      return {};
-    }
-    out[i / 2] = static_cast<char>((hi << 4) | lo);
-  }
-  return out;
-}
-
-std::string XorWithKey(const std::string &input) {
-  if (input.empty()) {
-    return {};
-  }
-  std::string out = input;
-  for (size_t i = 0; i < out.size(); ++i) {
-    const char key_ch = kPasswordKey[i % kPasswordKey.size()];
-    out[i] = static_cast<char>(out[i] ^ key_ch);
-  }
-  return out;
-}
-
-std::string EncryptPassword(const std::string &plain) {
-  if (plain.empty()) {
-    return {};
-  }
-  if (IsEncrypted(plain)) {
-    return plain;
-  }
-  const std::string xored = XorWithKey(plain);
-  const std::string encoded = HexEncode(xored);
-  return std::string(kEncryptedPrefix) + encoded;
-}
-
-std::string DecryptPassword(const std::string &stored) {
-  if (stored.empty() || !IsEncrypted(stored)) {
-    return stored;
-  }
-  const std::string payload =
-      stored.substr(std::string(kEncryptedPrefix).size());
-  std::string decoded = HexDecode(payload);
-  if (decoded.empty() && !payload.empty()) {
-    return {};
-  }
-  decoded = XorWithKey(decoded);
-  return decoded;
-}
-} // namespace AMAuth
-
