@@ -2740,8 +2740,9 @@ public:
       }
 
       double start = am_s();
-      auto stat_res = nb_call(flag, -1, am_ms(),
-                              [&] { return libssh2_sftp_stat(sftp, "/", &attrs); });
+      auto stat_res = nb_call(flag, -1, am_ms(), [&] {
+        return libssh2_sftp_stat(sftp, "/", &attrs);
+      });
       if (stat_res.status != WaitResult::Ready) {
         break;
       }
@@ -3334,8 +3335,8 @@ public:
       i++;
     }
 
-    rcm0 = mkdirs(AMPathStr::join(res_data.trash_dir, current_time), interrupt_flag,
-                  timeout_ms, start_time);
+    rcm0 = mkdirs(AMPathStr::join(res_data.trash_dir, current_time),
+                  interrupt_flag, timeout_ms, start_time);
     if (rcm0.first != EC::Success) {
       return rcm0;
     }

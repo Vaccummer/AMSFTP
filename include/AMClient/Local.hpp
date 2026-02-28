@@ -121,8 +121,7 @@ public:
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
 
-    std::string cmdline = cmd;
-    std::vector<char> cmd_buf(cmdline.begin(), cmdline.end());
+    std::vector<char> cmd_buf(cmd.begin(), cmd.end());
     cmd_buf.push_back('\0');
 
     BOOL created =
@@ -138,11 +137,13 @@ public:
     HANDLE job_handle = CreateJobObjectW(nullptr, nullptr);
     if (job_handle != nullptr) {
       JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_limits{};
-      job_limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+      job_limits.BasicLimitInformation.LimitFlags =
+          JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
       const bool configured =
           SetInformationJobObject(job_handle, JobObjectExtendedLimitInformation,
                                   &job_limits, sizeof(job_limits)) != 0;
-      const bool assigned = configured && AssignProcessToJobObject(job_handle, pi.hProcess) != 0;
+      const bool assigned =
+          configured && AssignProcessToJobObject(job_handle, pi.hProcess) != 0;
       if (!assigned) {
         CloseHandle(job_handle);
         job_handle = nullptr;
@@ -1119,9 +1120,8 @@ public:
       i++;
     }
 
-    ECM rcm0 = mkdirs(
-        AMPathStr::join(this->res_data.trash_dir, current_time), interrupt_flag,
-        timeout_ms, start_time);
+    ECM rcm0 = mkdirs(AMPathStr::join(this->res_data.trash_dir, current_time),
+                      interrupt_flag, timeout_ms, start_time);
     if (rcm0.first != EC::Success) {
       return rcm0;
     }
