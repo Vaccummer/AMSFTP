@@ -3,13 +3,13 @@
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
 
-constexpr ssize_t AMKB = 1024;
-constexpr ssize_t AMMB = 1024 * 1024;
-constexpr ssize_t AMGB = 1024 * 1024 * 1024;
-constexpr ssize_t AMDefaultLocalBufferSize = 1024 * 1024 * 16;
-constexpr ssize_t AMDefaultRemoteBufferSize = 1024 * 1024 * 8;
-constexpr ssize_t AMMinBufferSize = 1024 * 512;
-constexpr ssize_t AMMaxBufferSize = 1024 * 1024 * 512;
+inline static constexpr ssize_t AMKB = 1024;
+inline static constexpr ssize_t AMMB = 1024 * 1024;
+inline static constexpr ssize_t AMGB = 1024 * 1024 * 1024;
+inline static constexpr ssize_t AMDefaultLocalBufferSize = 1024 * 1024 * 16;
+inline static constexpr ssize_t AMDefaultRemoteBufferSize = 1024 * 1024 * 8;
+inline static constexpr ssize_t AMMinBufferSize = 1024 * 512;
+inline static constexpr ssize_t AMMaxBufferSize = 1024 * 1024 * 512;
 
 enum class ErrorCode {
   Success = 0,

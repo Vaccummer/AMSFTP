@@ -1,4 +1,7 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMCLI/Completer/Searcher.hpp"
 #include "AMCLI/Completer/SearcherCommon.hpp"
 #include "AMCLI/InteractiveLoop.hpp"
@@ -491,4 +494,5 @@ AMBuildDefaultSearchEngineRegistrations() {
   out.push_back({{AMCompletionTarget::Path}, path_engine});
   return out;
 }
+
 

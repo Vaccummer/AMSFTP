@@ -1,4 +1,7 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMCLI/Completer/Engine.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
 #include "AMCLI/Completer/Searcher.hpp"
@@ -531,3 +534,4 @@ void AMCompleteEngine::AsyncWorkerLoop_() {
     (void)ic_request_completion_menu_async();
   }
 }
+

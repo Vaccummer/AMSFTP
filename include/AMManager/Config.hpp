@@ -1,5 +1,8 @@
 #pragma once
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/RustTomlRead.h"
 #include <condition_variable>
@@ -427,3 +430,4 @@ private:
 
   mutable std::optional<AMProgressBarStyle> progress_bar_style_;
 };
+

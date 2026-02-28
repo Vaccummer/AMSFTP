@@ -1,5 +1,6 @@
-#include "AMBase/CommonTools.hpp"
 #include "AMBase/Path.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/json.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
 #include <algorithm>
@@ -7,6 +8,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+
 
 namespace {
 /**

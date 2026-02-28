@@ -7,11 +7,9 @@
 #include <csignal>
 #include <filesystem>
 #include <functional>
-#include <iomanip>
 #include <memory>
 #include <mutex>
 #include <optional>
-#include <sstream>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -19,6 +17,7 @@
 
 // project header
 #include "AMBase/Enum.hpp"
+#include "AMBase/tools/time.hpp"
 
 // 3rd party library
 #include <libssh2.h>
@@ -74,7 +73,7 @@ enum class TaskControlSignal : int {
 };
 
 template <typename Fn, typename... Args>
-inline ECM CallCallbackSafe(const Fn &fn, Args &&...args) {
+ECM CallCallbackSafe(const Fn &fn, Args &&...args) {
   if (!fn) {
     return {};
   }
@@ -89,7 +88,7 @@ inline ECM CallCallbackSafe(const Fn &fn, Args &&...args) {
 }
 
 template <typename Ret, typename Fn, typename... Args>
-inline std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn, Args &&...args) {
+std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn, Args &&...args) {
   if (!fn) {
     return {Ret{}, {EC::Success, ""}};
   }
@@ -102,145 +101,21 @@ inline std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn, Args &&...args) {
   }
 }
 
-inline double timenow() {
-  // Get Unix reference time and return it as seconds in double
-  return std::chrono::duration<double>(
-             std::chrono::system_clock::now().time_since_epoch())
-      .count();
-  return std::chrono::duration<double>(
-             std::chrono::system_clock::now().time_since_epoch())
-      .count();
-}
-
-// Get milliseconds from steady_clock epoch to now (integer)
-inline std::int64_t am_ms() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
-}
-inline double am_s() {
-  return std::chrono::duration<double>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
-}
-inline std::string FormatTime(const size_t &time,
-                              const std::string &format = "%Y-%m-%d %H:%M:%S") {
-  auto timeT = static_cast<time_t>(time);
-
-  struct tm timeInfo;
-  {
-#ifdef _WIN32
-
-    localtime_s(&timeInfo, &timeT);
-#else
-    localtime_r(&timeT, &timeInfo);
-#endif
-
-    std::ostringstream oss;
-    oss << std::put_time(&timeInfo, format.c_str());
-
-    return oss.str();
-  };
-}
-
-/**
- * @brief Format a unix timestamp as "HH:MM".
- */
-inline std::string FormatTimeHM(double timestamp) {
-  if (timestamp <= 0.0) {
-    return "-";
-  }
-  return FormatTime(static_cast<size_t>(timestamp), "%H:%M");
-}
-
-inline bool isok(const ECM &ecm) { return ecm.first == EC::Success; }
+bool isok(const ECM &ecm);
 
 /** @brief Return a success ECM. */
-inline ECM Ok() {
-  const static ECM ok_instance{EC::Success, ""};
-  return ok_instance;
-}
+ECM Ok();
 
 /** @brief Build an error ECM with message. */
-inline ECM Err(EC code, const std::string &msg) { return {code, msg}; }
+ECM Err(EC code, const std::string &msg);
 
-inline PathType cast_fs_type(const fs::file_type &type) {
-  switch (type) {
-  case fs::file_type::directory:
-    return PathType::DIR;
-  case fs::file_type::symlink:
-    return PathType::SYMLINK;
-  case fs::file_type::regular:
-    return PathType::FILE;
-  case fs::file_type::block:
-    return PathType::BlockDevice;
-  case fs::file_type::character:
-    return PathType::CharacterDevice;
-  case fs::file_type::fifo:
-    return PathType::FIFO;
-  case fs::file_type::socket:
-    return PathType::Socket;
-  case fs::file_type::unknown:
-    return PathType::Unknown;
-  default:
-    return PathType::Unknown;
-  }
-}
+PathType cast_fs_type(const fs::file_type &type);
 
 // turn std::error_code to ErrorCode
-inline EC fec(const std::error_code &ec) {
-  if (!ec)
-    return EC::Success;
-  // Use std::errc for cross-platform mapping
-  auto errc = static_cast<std::errc>(ec.value());
-
-  switch (errc) {
-  case std::errc::no_such_file_or_directory:
-    return EC::FileNotExist;
-  case std::errc::permission_denied:
-    return EC::PermissionDenied;
-  case std::errc::file_exists:
-    return EC::PathAlreadyExists;
-  case std::errc::not_a_directory:
-    return EC::NotADirectory;
-  case std::errc::is_a_directory:
-    return EC::NotAFile;
-  case std::errc::directory_not_empty:
-    return EC::DirNotEmpty;
-  case std::errc::no_space_on_device:
-    return EC::FilesystemNoSpace;
-  case std::errc::read_only_file_system:
-    return EC::FileWriteProtected;
-  case std::errc::too_many_symbolic_link_levels:
-    return EC::SymlinkLoop;
-  case std::errc::filename_too_long:
-    return EC::InvalidFilename;
-  case std::errc::invalid_argument:
-    return EC::InvalidArg;
-  case std::errc::io_error:
-    return EC::LocalFileError;
-  case std::errc::not_supported:
-  case std::errc::operation_not_supported:
-    return EC::OperationUnsupported;
-  case std::errc::timed_out:
-    return EC::OperationTimeout;
-  case std::errc::connection_refused:
-  case std::errc::network_unreachable:
-  case std::errc::host_unreachable:
-    return EC::NoConnection;
-  case std::errc::connection_reset:
-    return EC::ConnectionLost;
-  default:
-    return EC::UnknownError;
-  }
-}
+EC fec(const std::error_code &ec);
 
 // Custom std::error_code to ECM
-inline ECM fecm(const std::error_code &ec) {
-  if (!ec)
-    return {EC::Success, ""};
-  return {fec(ec), ec.message()};
-}
+ECM fecm(const std::error_code &ec);
 
 /**
  * @brief Unified task control token for async transfer pause/terminate flow.
@@ -800,128 +675,6 @@ struct ErrorCBInfo {
               std::string dst, std::string src_host, std::string dst_host)
       : ecm(ecm), src(src), dst(dst), src_host(src_host), dst_host(dst_host) {}
 };
-
-namespace AMAuth {
-/**
- * @brief Fixed compile-time key used for password obfuscation at rest.
- */
-inline constexpr std::string_view kPasswordKey =
-    "AMSFTP::FixedCompileTimeKey::DoNotReuse";
-
-/**
- * @brief Prefix marking encrypted password payloads.
- */
-inline constexpr std::string_view kEncryptedPrefix = "enc:";
-
-/**
- * @brief Securely zero a string's underlying storage.
- */
-inline void SecureZero(std::string &value) {
-  std::fill(value.begin(), value.end(), '\0');
-  value.clear();
-  value.shrink_to_fit();
-}
-
-/**
- * @brief Check whether a password string is already encrypted.
- */
-inline bool IsEncrypted(const std::string &value) {
-  return value.rfind(std::string(kEncryptedPrefix), 0) == 0;
-}
-
-/**
- * @brief Hex-encode a byte buffer.
- */
-inline std::string HexEncode(const std::string &bytes) {
-  static constexpr char kHex[] = "0123456789ABCDEF";
-  std::string out;
-  out.resize(bytes.size() * 2);
-  for (size_t i = 0; i < bytes.size(); ++i) {
-    const unsigned char b = static_cast<unsigned char>(bytes[i]);
-    out[i * 2] = kHex[(b >> 4) & 0x0F];
-    out[i * 2 + 1] = kHex[b & 0x0F];
-  }
-  return out;
-}
-
-/**
- * @brief Decode a hex string into raw bytes. Returns empty on invalid input.
- */
-inline std::string HexDecode(const std::string &hex) {
-  auto hex_to_val = [](char c) -> int {
-    if (c >= '0' && c <= '9')
-      return c - '0';
-    if (c >= 'A' && c <= 'F')
-      return 10 + (c - 'A');
-    if (c >= 'a' && c <= 'f')
-      return 10 + (c - 'a');
-    return -1;
-  };
-
-  if (hex.size() % 2 != 0) {
-    return {};
-  }
-
-  std::string out;
-  out.resize(hex.size() / 2);
-  for (size_t i = 0; i < hex.size(); i += 2) {
-    const int hi = hex_to_val(hex[i]);
-    const int lo = hex_to_val(hex[i + 1]);
-    if (hi < 0 || lo < 0) {
-      return {};
-    }
-    out[i / 2] = static_cast<char>((hi << 4) | lo);
-  }
-  return out;
-}
-
-/**
- * @brief XOR-obfuscate bytes using the fixed compile-time key.
- */
-inline std::string XorWithKey(const std::string &input) {
-  if (input.empty()) {
-    return {};
-  }
-  std::string out = input;
-  for (size_t i = 0; i < out.size(); ++i) {
-    const char key_ch = kPasswordKey[i % kPasswordKey.size()];
-    out[i] = static_cast<char>(out[i] ^ key_ch);
-  }
-  return out;
-}
-
-/**
- * @brief Encrypt a plaintext password for storage.
- */
-inline std::string EncryptPassword(const std::string &plain) {
-  if (plain.empty()) {
-    return {};
-  }
-  if (IsEncrypted(plain)) {
-    return plain;
-  }
-  const std::string xored = XorWithKey(plain);
-  const std::string encoded = HexEncode(xored);
-  return std::string(kEncryptedPrefix) + encoded;
-}
-
-/**
- * @brief Decrypt a stored password. Returns input if not encrypted.
- */
-inline std::string DecryptPassword(const std::string &stored) {
-  if (stored.empty() || !IsEncrypted(stored)) {
-    return stored;
-  }
-  const std::string payload =
-      stored.substr(std::string(kEncryptedPrefix).size());
-  std::string decoded = HexDecode(payload);
-  if (decoded.empty() && !payload.empty()) {
-    return {};
-  }
-  decoded = XorWithKey(decoded);
-  return decoded;
-}
-} // namespace AMAuth
 
 struct AuthCBInfo {
   /**

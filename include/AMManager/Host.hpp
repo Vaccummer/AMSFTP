@@ -1,12 +1,13 @@
 #pragma once
-#include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
+#include "AMBase/tools/json.hpp"
 #include "AMClient/SFTP.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
 #include <cstdint>
 #include <unordered_map>
+
 
 namespace configkn {
 /**

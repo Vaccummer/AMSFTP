@@ -5,7 +5,6 @@
 #include <unordered_set>
 
 // Internal dependencies
-#include "AMBase/CommonTools.hpp"
 #include "AMClient/Base.hpp"
 // Internal dependencies
 
@@ -120,7 +119,6 @@ public:
 
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
-
     std::vector<char> cmd_buf(cmd.begin(), cmd.end());
     cmd_buf.push_back('\0');
 

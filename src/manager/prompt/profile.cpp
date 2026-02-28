@@ -1,4 +1,7 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMManager/Prompt.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
@@ -751,3 +754,4 @@ void AMPromptManager::FlushHistory() {
   config_.SetArg(DocumentKind::History, {}, jsond);
   config_.Dump(DocumentKind::History, "", true);
 }
+

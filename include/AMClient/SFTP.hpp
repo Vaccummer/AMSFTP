@@ -37,10 +37,9 @@
 #endif
 
 // project headers
-#include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
+#include "AMBase/tools/auth.hpp"
 #include "AMClient/Base.hpp"
-
 #include <curl/curl.h>
 #include <libssh2.h>
 #include <libssh2_sftp.h>

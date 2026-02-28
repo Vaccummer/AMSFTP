@@ -1,4 +1,7 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Prompt.hpp"
@@ -694,3 +697,4 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
   *out_input = std::move(password);
   return true;
 }
+

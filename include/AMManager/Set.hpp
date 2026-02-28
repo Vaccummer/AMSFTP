@@ -1,5 +1,8 @@
 #pragma once
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
 #include <mutex>
@@ -209,3 +212,4 @@ private:
 
   AMPromptManager &prompt_ = AMPromptManager::Instance();
 };
+

@@ -1,4 +1,7 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Path.hpp"
 #include "AMClient/IOCore.hpp"
@@ -883,4 +886,5 @@ bool AMTransferManager::ParseEntryId_(const ID &entry_id, ID *task_id,
     return false;
   }
 }
+
 

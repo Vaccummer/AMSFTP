@@ -1,4 +1,7 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMCLI/Completer/Searcher.hpp"
 #include "AMCLI/Completer/SearcherCommon.hpp"
 #include <algorithm>
@@ -349,3 +352,4 @@ void AMInternalSearchEngine::SortCandidates(
                      return lhs.insert_text < rhs.insert_text;
                    });
 }
+
