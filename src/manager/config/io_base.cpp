@@ -1,8 +1,6 @@
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
+#include "AMBase/Path.hpp"
 #include "AMBase/tools/json.hpp"
 #include "AMBase/tools/time.hpp"
-#include "AMBase/Path.hpp"
 #include "AMManager/Config.hpp"
 #include <fstream>
 #include <limits>
@@ -541,7 +539,7 @@ ECM AMConfigStorage::LoadDocument_(DocumentKind kind, DocumentState *doc) {
   std::string error;
   if (!EnsureFileExists(doc->path, &error)) {
     return Err(EC::ConfigLoadFailed,
-               "failed to create " + AM_ENUM_NAME(kind) + " file: " + error);
+               "failed to create " + AMStr::ToString(kind) + " file: " + error);
   }
   std::string schema_json;
   if (kind == DocumentKind::History) {
@@ -565,7 +563,7 @@ ECM AMConfigStorage::LoadDocument_(DocumentKind kind, DocumentState *doc) {
       cfgffi_free_string(err);
     }
     return Err(EC::ConfigLoadFailed,
-               "failed to parse " + AM_ENUM_NAME(kind) + ": " + msg);
+               "failed to parse " + AMStr::ToString(kind) + ": " + msg);
   }
   if (err) {
     cfgffi_free_string(err);
@@ -573,14 +571,14 @@ ECM AMConfigStorage::LoadDocument_(DocumentKind kind, DocumentState *doc) {
   char *json_c = cfgffi_get_json(doc->handle);
   if (!json_c) {
     return Err(EC::ConfigLoadFailed,
-               "failed to read " + AM_ENUM_NAME(kind) + " json");
+               "failed to read " + AMStr::ToString(kind) + " json");
   }
   std::string json_str(json_c);
   cfgffi_free_string(json_c);
   Json parsed;
   if (!ParseJsonString(json_str, &parsed, &error)) {
     return Err(EC::ConfigLoadFailed,
-               "failed to parse " + AM_ENUM_NAME(kind) + " json: " + error);
+               "failed to parse " + AMStr::ToString(kind) + " json: " + error);
   }
   {
     std::lock_guard<std::mutex> lock(doc->mtx);
@@ -679,7 +677,7 @@ ECM AMConfigStorage::Dump(DocumentKind kind, const std::string &path,
     if (ec) {
       ECM rcm = Err(
           EC::ConfigDumpFailed,
-          AMStr::amfmt("failed to create config directory: {}", ec.message()));
+          AMStr::fmt("failed to create config directory: {}", ec.message()));
       NotifyDumpError_(rcm);
       return rcm;
     }
@@ -1099,10 +1097,10 @@ const DocumentState *AMConfigStorage::GetDoc_(DocumentKind kind) const {
  * @brief Write JSON content into a cfgffi handle and refresh the cache.
  */
 ECM AMConfigStorage::WriteHandleJson_(DocumentState *doc, DocumentKind kind) {
-  const std::string label = std::string(AM_ENUM_NAME(kind));
+  const std::string label = std::string(AMStr::ToString(kind));
   if (!doc || !doc->handle) {
     return Err(EC::ConfigNotInitialized,
-               AMStr::amfmt("{} handle not initialized", label));
+               AMStr::fmt("{} handle not initialized", label));
   }
   nlohmann::ordered_json snapshot;
   {
@@ -1119,8 +1117,8 @@ ECM AMConfigStorage::WriteHandleJson_(DocumentState *doc, DocumentKind kind) {
       if (err) {
         cfgffi_free_string(err);
       }
-      return Err(EC::ConfigDumpFailed, AMStr::amfmt("Failed to dump to {}: {}",
-                                                    doc->path.string(), msg));
+      return Err(EC::ConfigDumpFailed, AMStr::fmt("Failed to dump to {}: {}",
+                                                  doc->path.string(), msg));
     }
     if (err) {
       cfgffi_free_string(err);
@@ -1198,4 +1196,3 @@ std::filesystem::path AMConfigStorage::ProjectRoot() const { return root_dir_; }
  * @brief Backup config/settings/known_hosts when the interval elapses.
  */
 ECM AMConfigStorage::ConfigBackupIfNeeded() { return BackupIfNeeded(); }
-

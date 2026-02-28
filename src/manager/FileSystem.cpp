@@ -196,7 +196,7 @@ static std::string BuildShellCommandWithPrefix_(const std::string &command,
   if (!wrap_cmd) {
     return cmd_prefix + command;
   }
-  return AMStr::amfmt("{}\"{}\"", cmd_prefix,
+  return AMStr::fmt("{}\"{}\"", cmd_prefix,
                       AMStr::replace_all(command, "\"", "'"));
 }
 
@@ -225,7 +225,7 @@ static void PrintClientDetail_(AMPromptManager &prompt_manager,
   values["username"] = request.username;
   values["port"] = std::to_string(request.port);
   values["password"] = request.password;
-  values["protocol"] = AM_ENUM_NAME(request.protocol);
+  values["protocol"] = AMStr::ToString(request.protocol);
   values["buffer_size"] = std::to_string(request.buffer_size);
   values["trash_dir"] = request.trash_dir;
   values["login_dir"] = login_dir;
@@ -260,7 +260,7 @@ ECM AMFileSystem::check(const std::string &nickname, bool detail,
 ECM AMFileSystem::check(const std::vector<std::string> &nicknames, bool detail,
                         amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
-  std::vector<std::string> targets = UniqueTargetsKeepOrder(nicknames);
+  std::vector<std::string> targets = AMStr::UniqueTargetsKeepOrder(nicknames);
   if (targets.empty()) {
     const std::string current = client_manager_.CurrentNickname();
     targets.push_back(current.empty() ? "local" : current);
@@ -297,10 +297,10 @@ ECM AMFileSystem::check(const std::vector<std::string> &nicknames, bool detail,
         const std::string styled = config_manager_.Format(nickname, "nickname");
         if (hostm_.HostExists(nickname)) {
           *out_error = {EC::ClientNotFound,
-                        AMStr::amfmt("Client not established: {}", styled)};
+                        AMStr::fmt("Client not established: {}", styled)};
         } else {
           *out_error = {EC::HostConfigNotFound,
-                        AMStr::amfmt("Config not found: {}", styled)};
+                        AMStr::fmt("Config not found: {}", styled)};
         }
       }
       return result;
@@ -357,7 +357,7 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
     return {EC::InvalidArg, msg};
   }
 
-  std::vector<std::string> unique_targets = UniqueTargetsKeepOrder(targets);
+  std::vector<std::string> unique_targets = AMStr::UniqueTargetsKeepOrder(targets);
   const std::string current =
       client_manager_.CurrentClient()
           ? client_manager_.CurrentClient()->GetNickname()
@@ -405,7 +405,7 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
     std::string resolved = find_client_name(target);
     if (resolved.empty()) {
       const std::string msg =
-          AMStr::amfmt("Client not established: {}", styled);
+          AMStr::fmt("Client not established: {}", styled);
       last = {EC::ClientNotFound, msg};
       prompt_manager_.ErrorFormat(ECM{EC::ClientNotFound, msg});
       continue;
@@ -429,11 +429,11 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
     target_line += styled_targets[i];
   }
   const std::string question =
-      AMStr::amfmt("Remove clients: {} ? (y/N): ", target_line);
+      AMStr::fmt("Remove clients: {} ? (y/N): ", target_line);
   if (!prompt_manager_.PromptYesNo(question, &canceled) || canceled) {
     const std::string msg = "Remove clients canceled";
     prompt_manager_.Print(
-        AMStr::amfmt("🚫  {}\n", config_manager_.Format(msg, "abort")));
+        AMStr::fmt("🚫  {}\n", config_manager_.Format(msg, "abort")));
     prompt_manager_.ErrorFormat(ECM{EC::ConfigCanceled, msg});
     return {EC::Terminate, msg};
   }
@@ -706,7 +706,7 @@ ECM AMFileSystem::stat(const std::string &path, amf interrupt_flag,
 ECM AMFileSystem::stat(const std::vector<std::string> &paths,
                        amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
-  std::vector<std::string> targets = UniqueTargetsKeepOrder(paths);
+  std::vector<std::string> targets = AMStr::UniqueTargetsKeepOrder(paths);
   if (targets.empty()) {
     targets.emplace_back(".");
   }
@@ -863,7 +863,7 @@ ECM AMFileSystem::ls(const std::string &path, bool list_like, bool show_all,
 
     owner_width = std::max<size_t>(owner_width, info.owner.size());
 
-    std::string size_str = FormatSize(info.size);
+    std::string size_str = AMStr::FormatSize(info.size);
     size_width = std::max<size_t>(size_width, size_str.size());
 
     std::string time_str = FormatTimestamp(info.modify_time);
@@ -880,7 +880,7 @@ ECM AMFileSystem::ls(const std::string &path, bool list_like, bool show_all,
       type_char = 'l';
     }
     std::string mode = std::string(1, type_char) + info.mode_str;
-    std::string size_str = FormatSize(info.size);
+    std::string size_str = AMStr::FormatSize(info.size);
     std::string time_str = i < time_values.size()
                                ? time_values[i]
                                : FormatTimestamp(info.modify_time);
@@ -908,7 +908,7 @@ ECM AMFileSystem::getsize(const std::string &path, amf interrupt_flag,
 ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
                           amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
-  std::vector<std::string> targets = UniqueTargetsKeepOrder(paths);
+  std::vector<std::string> targets = AMStr::UniqueTargetsKeepOrder(paths);
   if (targets.empty()) {
     ECM out = {EC::InvalidArg, "Empty path"};
     prompt_manager_.ErrorFormat(out);
@@ -950,8 +950,8 @@ ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
     results.emplace_back(abs_path, size);
   }
   for (const auto &item : results) {
-    prompt_manager_.Print(AMStr::amfmt(
-        "{}  {}", item.first, FormatSize(static_cast<size_t>(item.second))));
+    prompt_manager_.Print(AMStr::fmt(
+        "{}  {}", item.first, AMStr::FormatSize(static_cast<size_t>(item.second))));
   }
   return last;
 }
@@ -1069,7 +1069,7 @@ ECM AMFileSystem::tree(const std::string &path, int max_depth, bool only_dir,
   if (!quiet && !error_cb) {
     for (const auto &err : pack.second) {
       const std::string msg =
-          AMStr::amfmt("{} : {}", err.first, err.second.second);
+          AMStr::fmt("{} : {}", err.first, err.second.second);
       prompt_manager_.ErrorFormat(ECM{err.second.first, msg});
     }
   }
@@ -1150,7 +1150,7 @@ ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
     prompt_manager_.ErrorFormat(out);
     return out;
   }
-  prompt_manager_.Print(AMStr::amfmt("{} ms", rtt));
+  prompt_manager_.Print(AMStr::fmt("{} ms", rtt));
   return {EC::Success, ""};
 }
 
@@ -1255,14 +1255,14 @@ ECM AMFileSystem::realpath(const std::string &path, amf interrupt_flag,
       auto cfg = hostm_.GetClientConfig(nickname);
       if (cfg.first.first != EC::Success) {
         ECM out = {EC::HostConfigNotFound,
-                   AMStr::amfmt("Config not found: {}", nickname)};
+                   AMStr::fmt("Config not found: {}", nickname)};
         prompt_manager_.ErrorFormat(out);
         return out;
       }
       client_ptr = client_manager_.Clients().GetHost(nickname);
       if (!client_ptr) {
         ECM out = {EC::ClientNotFound,
-                   AMStr::amfmt("Client not established: {}", nickname)};
+                   AMStr::fmt("Client not established: {}", nickname)};
         prompt_manager_.ErrorFormat(out);
         return out;
       }
@@ -1273,13 +1273,13 @@ ECM AMFileSystem::realpath(const std::string &path, amf interrupt_flag,
     if (rcm.first != EC::Success || !client_ptr) {
       if (rcm.first == EC::HostConfigNotFound) {
         ECM out = {EC::HostConfigNotFound,
-                   AMStr::amfmt("Config not found: {}", nickname)};
+                   AMStr::fmt("Config not found: {}", nickname)};
         prompt_manager_.ErrorFormat(out);
         return out;
       }
       if (rcm.first == EC::ClientNotFound) {
         ECM out = {EC::ClientNotFound,
-                   AMStr::amfmt("Client not established: {}", nickname)};
+                   AMStr::fmt("Client not established: {}", nickname)};
         prompt_manager_.ErrorFormat(out);
         return out;
       }
@@ -1316,7 +1316,7 @@ ECM AMFileSystem::mkdir(const std::string &path, amf interrupt_flag,
 ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
                         amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
-  std::vector<std::string> targets = UniqueTargetsKeepOrder(paths);
+  std::vector<std::string> targets = AMStr::UniqueTargetsKeepOrder(paths);
   if (targets.empty()) {
     ECM out = {EC::InvalidArg, "Empty path"};
     prompt_manager_.ErrorFormat(out);
@@ -1367,7 +1367,7 @@ ECM AMFileSystem::rm(const std::vector<std::string> &paths, bool permanent,
                      bool force, bool quiet, amf interrupt_flag,
                      int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
-  std::vector<std::string> targets = UniqueTargetsKeepOrder(paths);
+  std::vector<std::string> targets = AMStr::UniqueTargetsKeepOrder(paths);
   if (targets.empty()) {
     return {EC::InvalidArg, "Empty path"};
   }
@@ -1383,8 +1383,8 @@ ECM AMFileSystem::rm(const std::vector<std::string> &paths, bool permanent,
       bool canceled = false;
       std::string prompt =
           permanent
-              ? AMStr::amfmt("Remove path permanently? [{}] (y/N): ", target)
-              : AMStr::amfmt("Remove path? [{}] (y/N): ", target);
+              ? AMStr::fmt("Remove path permanently? [{}] (y/N): ", target)
+              : AMStr::fmt("Remove path? [{}] (y/N): ", target);
       if (!prompt_manager_.PromptYesNo(prompt, &canceled)) {
         last = {EC::Terminate, "Remove canceled"};
         if (!quiet) {
@@ -1488,7 +1488,7 @@ ECM AMFileSystem::PrintClientStatus(const ClientRef &client, bool update,
       update ? client.client->Check(flag, -1, -1) : client.client->GetState();
   std::string cwd = client_manager_.GetOrInitWorkdir(client.client);
   const std::string proto_label =
-      "[" + std::string(AM_ENUM_NAME(client.client->GetProtocol())) + "]";
+      "[" + std::string(AMStr::ToString(client.client->GetProtocol())) + "]";
   const std::string styled_proto =
       config_manager_.Format(proto_label, "protocol");
   const std::string styled_nickname =
@@ -1510,7 +1510,7 @@ ECM AMFileSystem::PrintClientStatus(const ClientRef &client, bool update,
   const std::string styled_ec = config_manager_.Format(ec_name, "error");
   const std::string styled_msg = config_manager_.Format(rcm.second, "error");
   std::string line =
-      AMStr::amfmt("{}  {}  {}", header.str(), styled_ec, styled_msg);
+      AMStr::fmt("{}  {}  {}", header.str(), styled_ec, styled_msg);
   prompt_manager_.Print(line);
   return rcm;
 }
@@ -1529,13 +1529,13 @@ std::string AMFileSystem::FormatStatOutput(const PathInfo &info) const {
   out << display_path << "\n\n";
 
   out << std::left << std::setw(static_cast<int>(width)) << "type" << " : "
-      << AM_ENUM_NAME(info.type) << "\n";
+      << AMStr::ToString(info.type) << "\n";
   out << std::left << std::setw(static_cast<int>(width)) << "owner" << " : "
       << info.owner << "\n";
   out << std::left << std::setw(static_cast<int>(width)) << "mode" << " : "
       << info.mode_str << "\n";
   out << std::left << std::setw(static_cast<int>(width)) << "size" << " : "
-      << FormatSize(info.size) << "\n\n";
+      << AMStr::FormatSize(info.size) << "\n\n";
 
   out << std::left << std::setw(static_cast<int>(width)) << "create_time"
       << " : " << FormatTimestamp(info.create_time) << "\n";
@@ -1561,7 +1561,7 @@ AMFileSystem::MakeWalkErrorCallback(const std::string &func_name,
         }
         std::string msg = rcm.second;
         if (!func_name.empty()) {
-          msg = AMStr::amfmt("{} error: {}", func_name, msg);
+          msg = AMStr::fmt("{} error: {}", func_name, msg);
         }
         prompt_manager_.ErrorFormat(ECM{rcm.first, msg});
       });
@@ -1581,3 +1581,5 @@ std::string AMFileSystem::StylePath(const PathInfo &info,
   const std::string display_path = AMPathStr::UnifyPathSep(path, "/");
   return config_manager_.Format(display_path, base_key, &info);
 }
+
+

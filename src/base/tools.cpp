@@ -6,6 +6,22 @@
 #include <iomanip>
 #include <regex>
 #include <sstream>
+
+namespace {
+int HexToInt_(char c) {
+  if (c >= '0' && c <= '9') {
+    return c - '0';
+  }
+  if (c >= 'a' && c <= 'f') {
+    return 10 + (c - 'a');
+  }
+  if (c >= 'A' && c <= 'F') {
+    return 10 + (c - 'A');
+  }
+  return -1;
+}
+} // namespace
+
 namespace AMStr {
 uint32_t NextCodepointUtf8(const std::string &utf8_str, size_t &idx) {
   const size_t str_len = utf8_str.size();
@@ -79,26 +95,8 @@ size_t DisplayWidthUtf8(const std::string &utf8_str) {
   return width;
 }
 
-void amfmt_append(std::string &out, const std::string &value) { out += value; }
-
-void amfmt_append(std::string &out, const char *value) {
-  if (value) {
-    out += value;
-  } else {
-    out += "(null)";
-  }
-}
-
-void amfmt_append(std::string &out, char *value) {
-  if (value) {
-    out += value;
-  } else {
-    out += "(null)";
-  }
-}
-
-bool amfmt_parse_padding_spec(const std::string &spec, char *align_out,
-                              size_t *width_out) {
+bool detail::fmt_parse_padding_spec(const std::string &spec, char *align_out,
+                                    size_t *width_out) {
   if (!align_out || !width_out) {
     return false;
   }
@@ -128,8 +126,8 @@ bool amfmt_parse_padding_spec(const std::string &spec, char *align_out,
   return true;
 }
 
-std::string amfmt_apply_padding(const std::string &value, char align,
-                                size_t width) {
+std::string detail::fmt_apply_padding(const std::string &value, char align,
+                                        size_t width) {
   const size_t current = DisplayWidthUtf8(value);
   if (current >= width) {
     return value;
@@ -146,8 +144,8 @@ std::string amfmt_apply_padding(const std::string &value, char align,
   return std::string(left, ' ') + value + std::string(right, ' ');
 }
 
-bool amfmt_parse_spec_token(const std::string &token, char *align_out,
-                            size_t *width_out) {
+bool detail::fmt_parse_spec_token(const std::string &token, char *align_out,
+                                    size_t *width_out) {
   if (!align_out || !width_out) {
     return false;
   }
@@ -156,12 +154,12 @@ bool amfmt_parse_spec_token(const std::string &token, char *align_out,
   }
   if (token.front() == ':') {
     const std::string inner = token.substr(1);
-    return amfmt_parse_padding_spec(inner, align_out, width_out);
+    return fmt_parse_padding_spec(inner, align_out, width_out);
   }
-  return amfmt_parse_padding_spec(token, align_out, width_out);
+  return fmt_parse_padding_spec(token, align_out, width_out);
 }
 
-size_t amfmt_count_placeholders(const std::string &templ) {
+size_t detail::fmt_count_placeholders(const std::string &templ) {
   size_t count = 0;
   std::string key;
   for (size_t i = 0; i < templ.size(); ++i) {
@@ -182,7 +180,7 @@ size_t amfmt_count_placeholders(const std::string &templ) {
         key.push_back(templ[j]);
       }
       if (j >= templ.size()) {
-        throw std::runtime_error("amfmt: unmatched '{' in template");
+        throw std::runtime_error("fmt: unmatched '{' in template");
       }
     } else if (c == '}' && i + 1 < templ.size() && templ[i + 1] == '}') {
       ++i;
@@ -329,7 +327,93 @@ std::string AnsiColor24(const std::string &hex_color) {
   const int r = vals[0] * 16 + vals[1];
   const int g = vals[2] * 16 + vals[3];
   const int b = vals[4] * 16 + vals[5];
-  return AMStr::amfmt("\x1b[38;2;{};{};{}m", r, g, b);
+  return AMStr::fmt("\x1b[38;2;{};{};{}m", r, g, b);
+}
+
+std::string
+FormatUtf8Table(const std::vector<std::string> &keys,
+                const std::vector<std::vector<std::string>> &rows,
+                const std::string &skeleton_color, size_t pad_left,
+                size_t pad_right, size_t pad_top, size_t pad_bottom) {
+  if (keys.empty()) {
+    return "";
+  }
+
+  const size_t col_count = keys.size();
+  std::vector<size_t> widths(col_count, 0);
+  for (size_t c = 0; c < col_count; ++c) {
+    widths[c] = DisplayWidthUtf8(keys[c]);
+  }
+  for (const auto &row : rows) {
+    for (size_t c = 0; c < col_count; ++c) {
+      const std::string &cell = (c < row.size()) ? row[c] : std::string();
+      const size_t cell_len = DisplayWidthUtf8(cell);
+      if (cell_len > widths[c]) {
+        widths[c] = cell_len;
+      }
+    }
+  }
+
+  const std::string color_prefix = AnsiColor24(skeleton_color);
+  const std::string color_suffix = color_prefix.empty() ? "" : "\x1b[0m";
+
+  auto build_border = [&](const std::string &left, const std::string &mid,
+                          const std::string &right) {
+    std::string line = color_prefix + left + color_suffix;
+    for (size_t c = 0; c < col_count; ++c) {
+      line += color_prefix + RepeatUtf8("─", widths[c] + pad_left + pad_right) +
+              color_suffix;
+      line +=
+          color_prefix + ((c + 1 == col_count) ? right : mid) + color_suffix;
+    }
+    return line;
+  };
+
+  auto build_row = [&](const std::vector<std::string> &row) {
+    std::string line = color_prefix + "│" + color_suffix;
+    for (size_t c = 0; c < col_count; ++c) {
+      const std::string &cell = (c < row.size()) ? row[c] : std::string();
+      line += std::string(pad_left, ' ');
+      line += PadRightUtf8(cell, widths[c]);
+      line += std::string(pad_right, ' ');
+      line += color_prefix + "│" + color_suffix;
+    }
+    return line;
+  };
+
+  auto build_empty_row = [&]() {
+    std::string line = color_prefix + "│" + color_suffix;
+    for (size_t c = 0; c < col_count; ++c) {
+      line += std::string(widths[c] + pad_left + pad_right, ' ');
+      line += color_prefix + "│" + color_suffix;
+    }
+    return line;
+  };
+
+  std::ostringstream oss;
+  oss << build_border("┌", "┬", "┐") << "\n";
+  for (size_t i = 0; i < pad_top; ++i) {
+    oss << build_empty_row() << "\n";
+  }
+  oss << build_row(keys) << "\n";
+  for (size_t i = 0; i < pad_bottom; ++i) {
+    oss << build_empty_row() << "\n";
+  }
+  oss << build_border("├", "┼", "┤") << "\n";
+  for (size_t r = 0; r < rows.size(); ++r) {
+    for (size_t i = 0; i < pad_top; ++i) {
+      oss << build_empty_row() << "\n";
+    }
+    oss << build_row(rows[r]);
+    for (size_t i = 0; i < pad_bottom; ++i) {
+      oss << "\n" << build_empty_row();
+    }
+    if (r + 1 < rows.size()) {
+      oss << "\n";
+    }
+  }
+  oss << "\n" << build_border("└", "┴", "┘");
+  return oss.str();
 }
 
 std::pair<bool, int> endswith(const std::string &str,
@@ -388,7 +472,7 @@ size_t ModeTrans(std::string mode_str) {
   std::regex pattern(
       R"(^[r?\-][w?\-][x?\-][r?\-][w?\-][x?\-][r?\-][w?\-][x?\-]$)");
   if (!std::regex_match(mode_str, pattern)) {
-    throw std::invalid_argument(amfmt("Invalid mode string: ", mode_str));
+    throw std::invalid_argument(fmt("Invalid mode string: ", mode_str));
   }
   size_t mode_int = 0;
   for (int i = 0; i < 9; i++) {
@@ -407,11 +491,11 @@ std::string MergeModeStr(const std::string &base_mode_str,
 
   if (!std::regex_match(base_mode_str, pattern)) {
     throw std::invalid_argument(
-        amfmt("Invalid base mode string: ", base_mode_str));
+        fmt("Invalid base mode string: ", base_mode_str));
   }
   if (!std::regex_match(new_mode_str, pattern)) {
     throw std::invalid_argument(
-        amfmt("Invalid new mode string: ", new_mode_str));
+        fmt("Invalid new mode string: ", new_mode_str));
   }
 
   std::string mode_str;
@@ -549,9 +633,9 @@ size_t CountLines(const std::string &text) {
 }
 } // namespace AMStr
 
-void print(const std::string &str) { std::cout << str << "\n"; }
+void AMStr::print(const std::string &str) { std::cout << str << "\n"; }
 
-std::string FormatSize(size_t size) {
+std::string AMStr::FormatSize(size_t size) {
   static const std::vector<std::string> units = {"B", "KB", "MB", "GB", "TB"};
   auto value = static_cast<double>(size);
   size_t idx = 0;
@@ -569,14 +653,14 @@ std::string FormatSize(size_t size) {
   return oss.str();
 }
 
-std::string FormatSize(int64_t size) {
+std::string AMStr::FormatSize(int64_t size) {
   if (size < 0) {
     return "0B";
   }
-  return FormatSize(static_cast<size_t>(size));
+  return AMStr::FormatSize(static_cast<size_t>(size));
 }
 
-bool GetEnv(std::string_view key, std::string *target) {
+bool AMStr::GetEnv(std::string_view key, std::string *target) {
   if (!key.data() || !target) {
     return false;
   }
@@ -622,7 +706,7 @@ bool AMJson::DelKey(AMJson::Json &root, const std::vector<std::string> &path) {
   return false;
 }
 
-std::optional<std::string> HexToAnsi(const std::string &value) {
+std::optional<std::string> AMStr::HexToAnsi(const std::string &value) {
   std::string token = AMStr::Strip(value);
   if (token.empty()) {
     return std::nullopt;
@@ -633,21 +717,9 @@ std::optional<std::string> HexToAnsi(const std::string &value) {
   if (token.size() != 6) {
     return std::nullopt;
   }
-  auto hex_to_int = [](char c) -> int {
-    if (c >= '0' && c <= '9') {
-      return c - '0';
-    }
-    if (c >= 'a' && c <= 'f') {
-      return 10 + (c - 'a');
-    }
-    if (c >= 'A' && c <= 'F') {
-      return 10 + (c - 'A');
-    }
-    return -1;
-  };
   std::array<int, 6> vals;
   for (size_t i = 0; i < 6; ++i) {
-    vals[i] = hex_to_int(token[i]);
+    vals[i] = HexToInt_(token[i]);
     if (vals[i] < 0) {
       return std::nullopt;
     }
@@ -655,7 +727,7 @@ std::optional<std::string> HexToAnsi(const std::string &value) {
   int r = vals[0] * 16 + vals[1];
   int g = vals[2] * 16 + vals[3];
   int b = vals[4] * 16 + vals[5];
-  return AMStr::amfmt("\x1b[38;2;{};{};{}m", r, g, b);
+  return AMStr::fmt("\x1b[38;2;{};{};{}m", r, g, b);
 }
 
 double timenow() {
@@ -875,3 +947,4 @@ std::string DecryptPassword(const std::string &stored) {
   return decoded;
 }
 } // namespace AMAuth
+

@@ -32,14 +32,14 @@ PathOps::ParsePath(const std::string &input) {
   if (cfg.first.first != EC::Success) {
     return {prefix, path, nullptr,
             Err(EC::HostConfigNotFound,
-                AMStr::amfmt("Host config not found: {}", prefix))};
+                AMStr::fmt("Host config not found: {}", prefix))};
   }
 
   auto existing = Clients().GetHost(prefix);
   if (!existing) {
     return {prefix, path, nullptr,
             Err(EC::ClientNotFound,
-                AMStr::amfmt("Client not created: {}", prefix))};
+                AMStr::fmt("Client not created: {}", prefix))};
   }
   return {prefix, path, existing, Ok()};
 }
@@ -67,7 +67,7 @@ PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
   if (cfg.first.first != EC::Success) {
     return {prefix, path, nullptr,
             Err(EC::HostConfigNotFound,
-                AMStr::amfmt("Host config not found: {}", prefix))};
+                AMStr::fmt("Host config not found: {}", prefix))};
   }
 
   auto existing = Clients().GetHost(prefix);
@@ -78,7 +78,7 @@ PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
                                &canceled)) {
         return {prefix, path, nullptr,
                 Err(EC::Terminate,
-                    AMStr::amfmt("Aborted creating client: {}", prefix))};
+                    AMStr::fmt("Aborted creating client: {}", prefix))};
       }
     }
     auto created = AddClient(prefix, nullptr, false, false, {}, interrupt_flag);

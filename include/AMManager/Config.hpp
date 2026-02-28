@@ -1,14 +1,13 @@
 #pragma once
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/RustTomlRead.h"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
 #include <condition_variable>
 #include <handleapi.h>
 #include <queue>
 #include <thread>
+
 
 /**
  * @brief Configuration document types tracked by storage.
@@ -226,14 +225,14 @@ public:
   template <typename T>
   T ResolveArg(DocumentKind kind, const Path &path, const T &default_value,
                const std::function<T(T)> &post_process) const {
-    static_assert(kValueTypeSupported<T>, "T is not supported");
+    static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
     const DocumentState *doc = GetDoc_(kind);
     if (!doc) {
       return default_value;
     }
     std::lock_guard<std::mutex> lock(doc->mtx);
     T value = {};
-    if (!QueryKey(doc->GetJsonConstRef(), path, &value)) {
+    if (!AMJson::QueryKey(doc->GetJsonConstRef(), path, &value)) {
       return default_value;
     }
     if (post_process) {
@@ -243,10 +242,10 @@ public:
   }
   template <typename T>
   bool ResolveArg(DocumentKind kind, const Path &path, T *data) {
-    static_assert(kValueTypeSupported<T>, "T is not supported");
+    static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
     const DocumentState *doc = GetDoc_(kind);
     std::lock_guard<std::mutex> lock(doc->mtx);
-    if (!QueryKey(doc->GetJsonConstRef(), path, data)) {
+    if (!AMJson::QueryKey(doc->GetJsonConstRef(), path, data)) {
       return false;
     }
     return true;
@@ -272,7 +271,7 @@ public:
 
   template <typename T>
   bool SetArg(DocumentKind kind, const Path &path, T value) {
-    static_assert(kValueTypeSupported<T>, "T is not supported");
+    static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
     DocumentState *doc = GetDoc_(kind);
     if (!doc) {
       return false;
@@ -281,7 +280,7 @@ public:
     if (!doc->json.is_object()) {
       doc->json = nlohmann::ordered_json::object();
     }
-    if (!SetKey(doc->json, path, value)) {
+    if (!AMJson::SetKey(doc->json, path, value)) {
       return false;
     }
     doc->dirty = true;
@@ -297,7 +296,7 @@ public:
     if (!doc->json.is_object()) {
       return false;
     }
-    if (!DelKey(doc->json, path)) {
+    if (!AMJson::DelKey(doc->json, path)) {
       return false;
     }
     doc->dirty = true;
@@ -384,7 +383,7 @@ public:
   };
   ECM Init() override {
     std::string root_dir = "";
-    if (!GetEnv("AMSFTP_ROOT", &root_dir)) {
+    if (!AMStr::GetEnv("AMSFTP_ROOT", &root_dir)) {
       return Err(EC::ProgrammInitializeFailed,
                  "Failed to get $AMSFTP_ROOT environment variable");
     }

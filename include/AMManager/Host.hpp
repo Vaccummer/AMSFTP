@@ -2,12 +2,12 @@
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
 #include "AMBase/tools/json.hpp"
+#include "AMBase/tools/string.hpp"
 #include "AMClient/SFTP.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
 #include <cstdint>
 #include <unordered_map>
-
 
 namespace configkn {
 /**
@@ -179,10 +179,10 @@ struct HostConfig {
     return {
         {"hostname", request.hostname},
         {"username", request.username},
-        {"port", std::to_string(request.port)},
+        {"port", AMStr::ToString(request.port)},
         {"password", request.password},
-        {"protocol", AM_ENUM_NAME(request.protocol)},
-        {"buffer_size", std::to_string(request.buffer_size)},
+        {"protocol", AMStr::ToString(request.protocol)},
+        {"buffer_size", AMStr::ToString(request.buffer_size)},
         {"trash_dir", request.trash_dir},
         {"login_dir", metadata.login_dir},
         {"keyfile", request.keyfile},
@@ -198,7 +198,7 @@ struct HostConfig {
     json[configkn::username] = request.username;
     json[configkn::port] = request.port;
     json[configkn::password] = request.password;
-    json[configkn::protocol] = AMStr::lowercase(AM_ENUM_NAME(request.protocol));
+    json[configkn::protocol] = AMStr::lowercase(AMStr::ToString(request.protocol));
     json[configkn::buffer_size] = request.buffer_size;
     json[configkn::trash_dir] = request.trash_dir;
     json[configkn::login_dir] = metadata.login_dir;
@@ -215,14 +215,14 @@ struct HostConfig {
       return;
     }
     this->request.nickname = nickname;
-    QueryKey(jsond, {configkn::hostname}, &this->request.hostname);
-    QueryKey(jsond, {configkn::username}, &this->request.username);
+    AMJson::QueryKey(jsond, {configkn::hostname}, &this->request.hostname);
+    AMJson::QueryKey(jsond, {configkn::username}, &this->request.username);
     std::string protocol_str;
-    QueryKey(jsond, {configkn::protocol}, &protocol_str);
+    AMJson::QueryKey(jsond, {configkn::protocol}, &protocol_str);
     request.protocol = configkn::StrToProtocol(protocol_str);
 
     int tmp_port = -1;
-    QueryKey(jsond, {configkn::port}, &tmp_port);
+    AMJson::QueryKey(jsond, {configkn::port}, &tmp_port);
     if (tmp_port <= 0 || tmp_port > 65535) {
       this->request.port = (this->request.protocol == ClientProtocol::FTP)
                                ? configkn::DefaultFTPPort
@@ -231,16 +231,17 @@ struct HostConfig {
       this->request.port = tmp_port;
     }
 
-    QueryKey(jsond, {configkn::password}, &this->request.password);
-    QueryKey(jsond, {configkn::keyfile}, &this->request.keyfile);
-    QueryKey(jsond, {configkn::compression}, &this->request.compression);
-    QueryKey(jsond, {configkn::trash_dir}, &this->request.trash_dir);
-    QueryKey(jsond, {configkn::login_dir}, &metadata.login_dir);
-    QueryKey(jsond, {configkn::cmd_prefix}, &metadata.cmd_prefix);
-    QueryKey(jsond, {configkn::wrap_cmd}, &metadata.wrap_cmd);
+    AMJson::QueryKey(jsond, {configkn::password}, &this->request.password);
+    AMJson::QueryKey(jsond, {configkn::keyfile}, &this->request.keyfile);
+    AMJson::QueryKey(jsond, {configkn::compression},
+                     &this->request.compression);
+    AMJson::QueryKey(jsond, {configkn::trash_dir}, &this->request.trash_dir);
+    AMJson::QueryKey(jsond, {configkn::login_dir}, &metadata.login_dir);
+    AMJson::QueryKey(jsond, {configkn::cmd_prefix}, &metadata.cmd_prefix);
+    AMJson::QueryKey(jsond, {configkn::wrap_cmd}, &metadata.wrap_cmd);
 
     int64_t tmp_size = -1;
-    QueryKey(jsond, {configkn::buffer_size}, &tmp_size);
+    AMJson::QueryKey(jsond, {configkn::buffer_size}, &tmp_size);
     if (tmp_size <= 0) {
       this->request.buffer_size = AMDefaultRemoteBufferSize;
     } else {
@@ -281,10 +282,10 @@ struct KnownHostEntry {
     if (!jsond.is_object()) {
       return;
     }
-    QueryKey(jsond, {configkn::hostname}, &hostname);
-    QueryKey(jsond, {configkn::port}, &port);
-    QueryKey(jsond, {configkn::protocol}, &protocol);
-    QueryKey(jsond, {configkn::fingerprint}, &fingerprint);
+    AMJson::QueryKey(jsond, {configkn::hostname}, &hostname);
+    AMJson::QueryKey(jsond, {configkn::port}, &port);
+    AMJson::QueryKey(jsond, {configkn::protocol}, &protocol);
+    AMJson::QueryKey(jsond, {configkn::fingerprint}, &fingerprint);
   }
   [[nodiscard]] bool IsValid() const {
     return !hostname.empty() && port > 0 && port <= 65535 &&
@@ -349,3 +350,4 @@ private:
   AMConfigManager &config_ = AMConfigManager::Instance();
   AMPromptManager &prompt_ = AMPromptManager::Instance();
 };
+

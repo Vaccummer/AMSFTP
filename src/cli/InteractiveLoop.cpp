@@ -244,10 +244,10 @@ bool TryBuildAnsiStyleCode_(const std::string &raw, std::string *ansi_code) {
     append_code("7");
   }
   if (fg_r >= 0) {
-    append_code(AMStr::amfmt("38;2;{};{};{}", fg_r, fg_g, fg_b));
+    append_code(AMStr::fmt("38;2;{};{};{}", fg_r, fg_g, fg_b));
   }
   if (bg_r >= 0) {
-    append_code(AMStr::amfmt("48;2;{};{};{}", bg_r, bg_g, bg_b));
+    append_code(AMStr::fmt("48;2;{};{};{}", bg_r, bg_g, bg_b));
   }
 
   oss << "m";
@@ -1074,10 +1074,10 @@ bool TryConvertTaggedTextToAnsi_(const std::string &tagged,
     append_code("7");
   }
   if (fg_r >= 0) {
-    append_code(AMStr::amfmt("38;2;{};{};{}", fg_r, fg_g, fg_b));
+    append_code(AMStr::fmt("38;2;{};{};{}", fg_r, fg_g, fg_b));
   }
   if (bg_r >= 0) {
-    append_code(AMStr::amfmt("48;2;{};{};{}", bg_r, bg_g, bg_b));
+    append_code(AMStr::fmt("48;2;{};{};{}", bg_r, bg_g, bg_b));
   }
 
   oss << "m" << content << "\x1b[0m";
@@ -1174,7 +1174,7 @@ ResolveUserHost_(const std::shared_ptr<BaseClient> &client) {
 
   auto read_env = [](const char *key) {
     std::string value;
-    if (GetEnv(key, &value)) {
+    if (AMStr::GetEnv(key, &value)) {
       return value;
     }
     return std::string();
@@ -1271,7 +1271,7 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
     std::string styled_host = ApplyStyleFromConfig_(
         config_manager, {"Style", "CLIPrompt", "hostname"}, hostname);
     state.cached_prefix =
-        AMStr::amfmt("{} {}@{}", sysicon, styled_user, styled_host);
+        AMStr::fmt("{} {}@{}", sysicon, styled_user, styled_host);
     state.last_nickname = nickname;
   }
 
@@ -1323,7 +1323,7 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
   const std::string styled_status = ApplyStyleFromConfig_(
       config_manager, {"Style", "SystemInfo", ok ? "success" : "error"},
       status);
-  std::string line1 = AMStr::amfmt("{}  {}  {}", state.cached_prefix,
+  std::string line1 = AMStr::fmt("{}  {}  {}", state.cached_prefix,
                                    styled_elapsed, styled_status);
   if (!ec_name.empty()) {
     const std::string styled_ec = ApplyStyleFromConfig_(
@@ -1338,7 +1338,7 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
   const std::string styled_dollar = ApplyStyleFromConfig_(
       config_manager, {"Style", "CLIPrompt", "dollarsign"}, "$");
   std::string line2 =
-      AMStr::amfmt("({}){} {}", styled_nickname, styled_cwd, styled_dollar);
+      AMStr::fmt("({}){} {}", styled_nickname, styled_cwd, styled_dollar);
   return line1 + "\n" + line2 + " ";
 }
 
@@ -1382,10 +1382,10 @@ void PrintECM_(AMPromptManager &prompt, const ECM &rcm) {
   }
   std::string name = std::string(magic_enum::enum_name(rcm.first));
   if (rcm.second.empty()) {
-    prompt.Print(AMStr::amfmt("❌ {}", name));
+    prompt.Print(AMStr::fmt("❌ {}", name));
     return;
   }
-  prompt.Print(AMStr::amfmt("❌ {}: {}", name, rcm.second));
+  prompt.Print(AMStr::fmt("❌ {}: {}", name, rcm.second));
 }
 
 /**
@@ -1404,7 +1404,7 @@ void UpdatePromptState_(PromptState &state, const ECM &rcm,
   state.last_rcm = rcm;
   const auto ms =
       std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
-  state.last_elapsed = AMStr::amfmt("{}ms", ms);
+  state.last_elapsed = AMStr::fmt("{}ms", ms);
 }
 } // namespace
 
@@ -1589,7 +1589,7 @@ int RunInteractiveLoop(const std::string &app_name,
         if (!msg.empty()) {
           prompt.Print(msg);
         }
-        prompt.Print(AMStr::amfmt("\nCommand exit with code {}",
+        prompt.Print(AMStr::fmt("\nCommand exit with code {}",
                                   shell_result.second.second));
       } else {
         PrintECM_(prompt, shell_result.first);
@@ -1666,5 +1666,6 @@ int RunInteractiveLoop(const std::string &app_name,
   AMIsInteractive.store(false, std::memory_order_relaxed);
   return g_cli_exit_code;
 }
+
 
 

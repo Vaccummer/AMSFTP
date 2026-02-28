@@ -1,7 +1,6 @@
 #pragma once
 #define _WINSOCKAPI_
 #include <atomic>
-#include <csignal>
 #ifdef _WIN32
 #include <windows.h>
 #else

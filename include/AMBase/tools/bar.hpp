@@ -465,7 +465,7 @@ private:
         (speed_bps > 0.0) ? static_cast<int64_t>(remaining_bytes / speed_bps)
                           : 0;
 
-    std::string size_part = AMStr::amfmt("{}/{}", FormatSize_(current_size_, 2),
+    std::string size_part = AMStr::fmt("{}/{}", FormatSize_(current_size_, 2),
                                          FormatSize_(total_size_, 2));
     std::vector<std::string> bracket_parts;
     if (show_elapsed_time_ || show_remaining_time_) {
@@ -492,10 +492,10 @@ private:
       bracket_oss << bracket_parts[i];
     }
     if (show_percentage_) {
-      postfix_ = AMStr::amfmt("{} | {} [{}]", FormatPercent_(percent),
+      postfix_ = AMStr::fmt("{} | {} [{}]", FormatPercent_(percent),
                               size_part, bracket_oss.str());
     } else {
-      postfix_ = AMStr::amfmt("{} [{}]", size_part, bracket_oss.str());
+      postfix_ = AMStr::fmt("{} [{}]", size_part, bracket_oss.str());
     }
   }
 
@@ -581,7 +581,7 @@ private:
     } else {
       oss << std::fixed << std::setprecision(precision) << size;
     }
-    std::string out = AMStr::amfmt("{}{}", oss.str(), suffixes[idx]);
+    std::string out = AMStr::fmt("{}{}", oss.str(), suffixes[idx]);
     return PadLeft_(out, 7);
   }
 
@@ -599,7 +599,7 @@ private:
     } else {
       oss << std::fixed << std::setprecision(precision) << size;
     }
-    const std::string out = AMStr::amfmt("{}{}", oss.str(), suffixes[idx]);
+    const std::string out = AMStr::fmt("{}{}", oss.str(), suffixes[idx]);
     return PadLeft_(out, 7);
   }
 

@@ -52,7 +52,7 @@ ParseProgressBarColor(const std::string &value) {
     return indicators::Color::unspecified;
   }
   if (!trimmed.empty() && trimmed[0] == '#') {
-    auto ansi = HexToAnsi(trimmed);
+    auto ansi = AMStr::HexToAnsi(trimmed);
     if (ansi) {
       return *ansi;
     }
@@ -236,4 +236,5 @@ BarStyle cls::BuildProgressBarStyle_() const {
 
   return style;
 }
+
 

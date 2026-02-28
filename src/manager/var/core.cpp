@@ -29,7 +29,7 @@ std::string ToStringScalar_(const Json &value) {
     return std::to_string(value.get<size_t>());
   }
   if (value.is_number_float()) {
-    return AMStr::amfmt("{}", value.get<double>());
+    return AMStr::fmt("{}", value.get<double>());
   }
   if (value.is_null()) {
     return "";

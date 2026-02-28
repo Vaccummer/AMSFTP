@@ -383,7 +383,7 @@ void AMPromptManager::ErrorFormat(const std::string &error_name,
 
 void AMPromptManager::ErrorFormat(const std::pair<ErrorCode, std::string> &rcm,
                                   bool is_exit) {
-  ErrorFormat(AM_ENUM_NAME(rcm.first), rcm.second, is_exit,
+  ErrorFormat(AMStr::ToString(rcm.first), rcm.second, is_exit,
               static_cast<int>(rcm.first));
 }
 
@@ -432,7 +432,7 @@ bool AMPromptManager::PromptLine(const std::string &prompt, std::string *out,
 
   std::string display_prompt = prompt;
   if (show_default && !default_value.empty()) {
-    display_prompt = AMStr::amfmt("{}[!e][{}][/e] ", prompt, default_value);
+    display_prompt = AMStr::fmt("{}[!e][{}][/e] ", prompt, default_value);
   }
 
   std::string placeholder_value;
@@ -697,4 +697,5 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
   *out_input = std::move(password);
   return true;
 }
+
 

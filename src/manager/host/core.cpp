@@ -17,9 +17,9 @@ namespace {
 std::string GetLocalUsername_() {
   std::string local_user = "";
 #ifdef _WIN32
-  GetEnv("USERNAME", &local_user);
+  AMStr::GetEnv("USERNAME", &local_user);
 #else
-  GetEnv("USER", &local_user);
+  AMStr::GetEnv("USER", &local_user);
 #endif
   if (local_user.empty()) {
     local_user = "local";
@@ -118,7 +118,7 @@ bool PromptHostAttr_(AMPromptManager &prompt_mgr, configkn::HostAttr attr,
         return allow_empty;
       }
       int64_t parsed = 0;
-      return StrValueParse(v, &parsed) && parsed > 0 && parsed <= 65535;
+      return AMJson::StrValueParse(v, &parsed) && parsed > 0 && parsed <= 65535;
     };
     add_candidate(placeholder);
     add_candidate(std::to_string(configkn::DefaultSFTPPort));
@@ -131,7 +131,7 @@ bool PromptHostAttr_(AMPromptManager &prompt_mgr, configkn::HostAttr attr,
         return allow_empty;
       }
       int64_t parsed = 0;
-      if (!StrValueParse(v, &parsed)) {
+      if (!AMJson::StrValueParse(v, &parsed)) {
         return false;
       }
       return parsed >= AMMinBufferSize && parsed <= AMMaxBufferSize;
@@ -200,7 +200,7 @@ bool HostnameExistsInConfig_(const std::string &hostname) {
       continue;
     }
     std::string existing_hostname;
-    QueryKey(it.value(), {configkn::hostname}, &existing_hostname);
+    AMJson::QueryKey(it.value(), {configkn::hostname}, &existing_hostname);
     if (AMStr::lowercase(AMStr::Strip(existing_hostname)) == target) {
       return true;
     }
@@ -271,7 +271,7 @@ bool ValidateHostAttrValue(HostAttr attr, const std::string &value,
   case HostAttr::Port: {
     const std::string v = AMStr::Strip(value);
     int64_t parsed = 0;
-    if (!StrValueParse(v, &parsed) || parsed <= 0 || parsed > 65535) {
+    if (!AMJson::StrValueParse(v, &parsed) || parsed <= 0 || parsed > 65535) {
       return fail(EC::InvalidArg,
                   "Port must be an integer between 1 and 65535");
     }
@@ -289,7 +289,7 @@ bool ValidateHostAttrValue(HostAttr attr, const std::string &value,
   case HostAttr::BufferSize: {
     const std::string v = AMStr::Strip(value);
     int64_t parsed = 0;
-    if (!StrValueParse(v, &parsed) || parsed <= 0) {
+    if (!AMJson::StrValueParse(v, &parsed) || parsed <= 0) {
       return fail(EC::InvalidArg, "Buffer size must be a positive integer");
     }
     set_norm(std::to_string(parsed));
@@ -298,7 +298,7 @@ bool ValidateHostAttrValue(HostAttr attr, const std::string &value,
   case HostAttr::Compression: {
     const std::string v = AMStr::Strip(value);
     bool parsed = false;
-    if (!StrValueParse(v, &parsed)) {
+    if (!AMJson::StrValueParse(v, &parsed)) {
       return fail(EC::InvalidArg, "Compression must be true or false");
     }
     set_norm(parsed ? "true" : "false");
@@ -310,7 +310,7 @@ bool ValidateHostAttrValue(HostAttr attr, const std::string &value,
   case HostAttr::WrapCmd: {
     const std::string v = AMStr::Strip(value);
     bool parsed = false;
-    if (!StrValueParse(v, &parsed)) {
+    if (!AMJson::StrValueParse(v, &parsed)) {
       return fail(EC::InvalidArg, "wrap_cmd must be true or false");
     }
     set_norm(parsed ? "true" : "false");
@@ -373,7 +373,7 @@ std::pair<ECM, HostConfig>
 AMHostManager::GetClientConfig(const std::string &nickname) {
   if (!HostExists(nickname)) {
     return {Err(EC::HostConfigNotFound,
-                AMStr::amfmt("host config not found: {}", nickname)),
+                AMStr::fmt("host config not found: {}", nickname)),
             {}};
   }
   return {Ok(), host_configs[nickname]};
@@ -389,7 +389,7 @@ std::pair<ECM, HostConfig> AMHostManager::GetLocalConfig() {
   const std::string fallback_home = AMFS::HomePath();
 
   std::string root_dir = "";
-  if (!GetEnv("AMSFTP_ROOT", &root_dir) || root_dir.empty()) {
+  if (!AMStr::GetEnv("AMSFTP_ROOT", &root_dir) || root_dir.empty()) {
     root_dir = config_.ProjectRoot().string();
   }
   const std::string fallback_trash = AMPathStr::join(root_dir, "trash");
@@ -510,7 +510,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
                                     HostConfig &entry) {
   entry = HostConfig{};
   auto print_abort = [this]() {
-    prompt_.Print(AMStr::amfmt("{}\n", config_.Format("Input Abort", "abort")));
+    prompt_.Print(AMStr::fmt("{}\n", config_.Format("Input Abort", "abort")));
   };
 
   entry.request.nickname = nickname;
@@ -623,7 +623,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
   entry.request.port = protocol_default_port;
   while (true) {
     const std::string port_prompt =
-        AMStr::amfmt("port(default {}): ", protocol_default_port);
+        AMStr::fmt("port(default {}): ", protocol_default_port);
     if (!PromptHostAttr_(prompt_, configkn::HostAttr::Port, port_prompt,
                          default_port_for_protocol, &port_input)) {
       print_abort();
@@ -643,7 +643,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
       continue;
     }
     int parsed_port = protocol_default_port;
-    StrValueParse(normalized, &parsed_port);
+    AMJson::StrValueParse(normalized, &parsed_port);
     entry.request.port = parsed_port;
     break;
   }
@@ -694,10 +694,10 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
       continue;
     }
     int64_t parsed_buffer = entry.request.buffer_size;
-    StrValueParse(normalized, &parsed_buffer);
+    AMJson::StrValueParse(normalized, &parsed_buffer);
     if (parsed_buffer < AMMinBufferSize || parsed_buffer > AMMaxBufferSize) {
       prompt_.ErrorFormat(ECM{
-          EC::InvalidArg, AMStr::amfmt("Buffer size must be between {} and {}",
+          EC::InvalidArg, AMStr::fmt("Buffer size must be between {} and {}",
                                        AMMinBufferSize, AMMaxBufferSize)});
       continue;
     }
@@ -757,7 +757,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
       continue;
     }
     bool parsed = false;
-    StrValueParse(normalized, &parsed);
+    AMJson::StrValueParse(normalized, &parsed);
     entry.request.compression = parsed;
     break;
   }
@@ -768,7 +768,7 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
                                        HostConfig &entry) {
   (void)nickname;
   static auto print_abort = [this]() {
-    prompt_.Print(AMStr::amfmt("{}\n", config_.Format("Input Abort", "abort")));
+    prompt_.Print(AMStr::fmt("{}\n", config_.Format("Input Abort", "abort")));
   };
 
   std::string hostname = entry.request.hostname;
@@ -813,7 +813,7 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     username = normalized;
   }
 
-  std::string protocol = AMStr::lowercase(AM_ENUM_NAME(entry.request.protocol));
+  std::string protocol = AMStr::lowercase(AMStr::ToString(entry.request.protocol));
 
   while (true) {
     if (!PromptHostAttr_(prompt_, configkn::HostAttr::Protocol,
@@ -841,7 +841,7 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
   while (true) {
     std::string port_input = default_port_for_protocol;
     const std::string port_prompt =
-        AMStr::amfmt("port(default {}): ", protocol_default_port);
+        AMStr::fmt("port(default {}): ", protocol_default_port);
     if (!PromptHostAttr_(prompt_, configkn::HostAttr::Port, port_prompt,
                          default_port_for_protocol, &port_input)) {
       print_abort();
@@ -861,7 +861,7 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
       continue;
     }
     int parsed_port = protocol_default_port;
-    StrValueParse(normalized, &parsed_port);
+    AMJson::StrValueParse(normalized, &parsed_port);
     port = parsed_port;
     break;
   }
@@ -920,7 +920,7 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
       continue;
     }
     int64_t parsed_buffer = buffer_size;
-    StrValueParse(normalized, &parsed_buffer);
+    AMJson::StrValueParse(normalized, &parsed_buffer);
     buffer_size = parsed_buffer;
     break;
   }
@@ -964,7 +964,7 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
       prompt_.ErrorFormat(ECM{err_code, err_msg});
       continue;
     }
-    if (StrValueParse(normalized, &compression)) {
+    if (AMJson::StrValueParse(normalized, &compression)) {
       break;
     }
     prompt_.ErrorFormat(
@@ -1028,3 +1028,5 @@ ECM AMHostManager::RemoveHost_(const std::string &nickname) {
   }
   return Ok();
 }
+
+

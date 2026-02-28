@@ -59,7 +59,7 @@ bool PromptBool_(AMPromptManager &prompt, const std::string &label,
       return true;
     }
     bool parsed = false;
-    if (!StrValueParse(input, &parsed)) {
+    if (!AMJson::StrValueParse(input, &parsed)) {
       prompt.ErrorFormat(Err(EC::InvalidArg, "value must be true/false"));
       continue;
     }
@@ -92,7 +92,7 @@ bool PromptPositiveSizeT_(AMPromptManager &prompt, const std::string &label,
       return true;
     }
     int64_t parsed = 0;
-    if (!StrValueParse(input, &parsed) || parsed <= 0) {
+    if (!AMJson::StrValueParse(input, &parsed) || parsed <= 0) {
       prompt.ErrorFormat(
           Err(EC::InvalidArg, "value must be a positive integer"));
       continue;
@@ -124,7 +124,7 @@ ECM AMSetCLI::PromptPathSet_(const std::string &nickname,
     prompt_.Print(AMConfigManager::Instance().Format("Input Abort", "abort"));
   };
 
-  prompt_.Print(AMStr::amfmt("HostSet ({})",
+  prompt_.Print(AMStr::fmt("HostSet ({})",
                              AMConfigManager::Instance().Format(nickname, "nickname")));
   if (!PromptBool_(prompt_, "CompleteOption.Searcher.Path.use_async: ",
                    output->use_async, &output->use_async)) {
@@ -201,7 +201,7 @@ ECM AMSetCLI::Add(const std::string &nickname) {
     prompt_.ErrorFormat(rcm);
     return rcm;
   }
-  prompt_.Print(AMStr::amfmt("hostset added: {}",
+  prompt_.Print(AMStr::fmt("hostset added: {}",
                              AMConfigManager::Instance().Format(target, "nickname")));
   return Ok();
 }
@@ -235,7 +235,7 @@ ECM AMSetCLI::Modify(const std::string &nickname) {
     return rcm;
   }
   prompt_.Print(
-      AMStr::amfmt("hostset updated: {}",
+      AMStr::fmt("hostset updated: {}",
                    AMConfigManager::Instance().Format(target, "nickname")));
   return Ok();
 }
@@ -254,7 +254,7 @@ ECM AMSetCLI::Delete(const std::string &nickname) {
  * @brief Delete multiple host set entries.
  */
 ECM AMSetCLI::Delete(const std::vector<std::string> &targets) {
-  std::vector<std::string> deduped = VectorDedup(targets);
+  std::vector<std::string> deduped = AMJson::VectorDedup(targets);
   std::vector<std::string> valid_targets;
   valid_targets.reserve(deduped.size());
   ECM last = Ok();
@@ -262,13 +262,13 @@ ECM AMSetCLI::Delete(const std::vector<std::string> &targets) {
   for (const std::string &raw : deduped) {
     const std::string target = AMStr::Strip(raw);
     if (!ValidateHostSetNickname_(target)) {
-      last = Err(EC::InvalidArg, AMStr::amfmt("invalid host nickname: {}", raw));
+      last = Err(EC::InvalidArg, AMStr::fmt("invalid host nickname: {}", raw));
       prompt_.ErrorFormat(last);
       continue;
     }
     if (!HasHostSet(target)) {
       last = Err(EC::HostConfigNotFound,
-                 AMStr::amfmt("host set not found: {}", target));
+                 AMStr::fmt("host set not found: {}", target));
       prompt_.ErrorFormat(last);
       continue;
     }
@@ -289,7 +289,7 @@ ECM AMSetCLI::Delete(const std::vector<std::string> &targets) {
 
   bool canceled = false;
   bool confirmed = prompt_.PromptYesNo(
-      AMStr::amfmt("Delete {} hostset(s): {} ? (y/N): ", valid_targets.size(),
+      AMStr::fmt("Delete {} hostset(s): {} ? (y/N): ", valid_targets.size(),
                    listing),
       &canceled);
   if (canceled || !confirmed) {
@@ -323,3 +323,4 @@ ECM AMSetCLI::Delete(const std::vector<std::string> &targets) {
  * @brief Persist cached HostSet data to settings.toml.
  */
 ECM AMSetCLI::SaveSettings() { return Save(true); }
+

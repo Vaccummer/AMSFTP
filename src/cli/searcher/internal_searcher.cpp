@@ -166,7 +166,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.display =
           config_manager_.Format(candidate.insert_text, "public_varname");
       candidate.help =
-          AMStr::amfmt("[{}] {}", item.domain, RenderVarValue_(item.varvalue));
+          AMStr::fmt("[{}] {}", item.domain, RenderVarValue_(item.varvalue));
       candidate.kind = AMCompletionKind::VariableName;
       candidate.score = match.score_bias;
       result.candidates.items.push_back(std::move(candidate));

@@ -149,9 +149,9 @@ void PrintTaskSubmit_(AMPromptManager &prompt,
   if (nickname_str.empty()) {
     nickname_str = "local";
   }
-  prompt.Print(AMStr::amfmt(
+  prompt.Print(AMStr::fmt(
       "SubmitInfo ID: {}; FileNum: {}; TotalSize: {}; Clients: {}",
-      task_info->id, file_num, FormatSize(total_size), nickname_str));
+      task_info->id, file_num, AMStr::FormatSize(total_size), nickname_str));
 }
 
 /**
@@ -199,12 +199,12 @@ void PrintTaskResult_(const std::shared_ptr<TaskInfo> &task_info) {
   std::string rcm_text =
       success
           ? ""
-          : AMStr::amfmt(" {}: {}", AM_ENUM_NAME(result.first), result.second);
+          : AMStr::fmt(" {}: {}", AMStr::ToString(result.first), result.second);
 
-  prompt.Print(AMStr::amfmt(
+  prompt.Print(AMStr::fmt(
       "TaskResult  {} ID: {}; Files: {}/{}; Size: {}/{}; ThreadID: {};{}",
-      prefix, task_id, success_num, filenum, FormatSize(transferred),
-      FormatSize(total), thread_id, rcm_text));
+      prefix, task_id, success_num, filenum, AMStr::FormatSize(transferred),
+      AMStr::FormatSize(total), thread_id, rcm_text));
 }
 
 /**
@@ -225,7 +225,7 @@ BuildTransferProgressPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
     }
   }
   if (!has_task) {
-    return AMStr::amfmt("Task {}", task_info->id);
+    return AMStr::fmt("Task {}", task_info->id);
   }
   const std::string src_host =
       task_copy.src_host.empty() ? "local" : task_copy.src_host;
@@ -233,7 +233,7 @@ BuildTransferProgressPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
       task_copy.dst_host.empty() ? "local" : task_copy.dst_host;
   const std::string src_name = AMPathStr::basename(task_copy.src);
   const std::string dst_name = AMPathStr::basename(task_copy.dst);
-  return AMStr::amfmt("{}@{} -> {}@{}", src_host, src_name, dst_host, dst_name);
+  return AMStr::fmt("{}@{} -> {}@{}", src_host, src_name, dst_host, dst_name);
 }
 
 /**
@@ -311,7 +311,7 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
   }
   std::string host_name = src_host.empty() ? "local" : src_host;
   std::string dst_name = dst_host.empty() ? "local" : dst_host;
-  prompt_.Print(AMStr::amfmt("Found {} paths to transfer",
+  prompt_.Print(AMStr::fmt("Found {} paths to transfer",
                              std::to_string(matches.size())));
 
   std::vector<PathInfo> sorted = matches;
@@ -322,14 +322,14 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
 
   for (const auto &path : sorted) {
     if (path.type == PathType::DIR) {
-      prompt_.Print(AMStr::amfmt("📁   {}@{}", host_name, path.path));
+      prompt_.Print(AMStr::fmt("📁   {}@{}", host_name, path.path));
     } else {
-      prompt_.Print(AMStr::amfmt("📑   {}@{}", host_name, path.path));
+      prompt_.Print(AMStr::fmt("📑   {}@{}", host_name, path.path));
     }
   }
 
   std::string input;
-  const std::string prompt = AMStr::amfmt(
+  const std::string prompt = AMStr::fmt(
       "Are you sure to transfer these paths to {}? (y/n): ", dst_name);
   if (!prompt_.Prompt(prompt, "", &input)) {
     return false;
@@ -886,5 +886,7 @@ bool AMTransferManager::ParseEntryId_(const ID &entry_id, ID *task_id,
     return false;
   }
 }
+
+
 
 

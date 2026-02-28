@@ -31,7 +31,7 @@ cls::PrivateKeys(bool print_sign) const {
   ECM rcm = Ok();
   if (!config_.ResolveArg(DocumentKind::Config, {configkn::keys}, &keys)) {
     rcm = {EC::CommonFailure,
-           AMStr::amfmt("Fail to read config attribute: {}", configkn::keys)};
+           AMStr::fmt("Fail to read config attribute: {}", configkn::keys)};
     prompt_.ErrorFormat(rcm);
     return {rcm, keys};
   }
@@ -39,7 +39,7 @@ cls::PrivateKeys(bool print_sign) const {
     return {rcm, keys};
   }
   static const std::string key_sign =
-      AMStr::BBCEscape(AMStr::amfmt("[{}]", configkn::keys));
+      AMStr::BBCEscape(AMStr::fmt("[{}]", configkn::keys));
   auto info = PathInfo();
   for (auto &key : keys) {
     info = AMFS::stat(key).second;
@@ -150,7 +150,7 @@ ECM cls::Delete(const std::string &nickname) {
  * @brief Delete hosts from explicit target names.
  */
 ECM cls::Delete(const std::vector<std::string> &targets) {
-  std::vector<std::string> uniq_targets = VectorDedup(targets);
+  std::vector<std::string> uniq_targets = AMJson::VectorDedup(targets);
 
   if (uniq_targets.empty()) {
     return Ok();
@@ -161,7 +161,7 @@ ECM cls::Delete(const std::vector<std::string> &targets) {
   for (const auto &name : uniq_targets) {
     if (!HostExists(name)) {
       rcm =
-          Err(EC::InvalidArg, AMStr::amfmt("invalid host nickname: {}", name));
+          Err(EC::InvalidArg, AMStr::fmt("invalid host nickname: {}", name));
       prompt_.ErrorFormat(rcm);
       continue;
     }
@@ -181,7 +181,7 @@ ECM cls::Delete(const std::vector<std::string> &targets) {
 
   bool canceled = false;
   const bool confirmed = prompt_.PromptYesNo(
-      AMStr::amfmt("Delete {} host(s): {} ? (y/N): ", uniq_targets.size(),
+      AMStr::fmt("Delete {} host(s): {} ? (y/N): ", uniq_targets.size(),
                    listing),
       &canceled);
 
@@ -197,7 +197,7 @@ ECM cls::Delete(const std::vector<std::string> &targets) {
       return rcm;
     }
     // prompt_.Print(
-    //     AMStr::amfmt("Deleted host: {}", config_.Format(name, "nickname")));
+    //     AMStr::fmt("Deleted host: {}", config_.Format(name, "nickname")));
   }
 
   return config_.Dump(DocumentKind::Config, "", true);
@@ -221,7 +221,7 @@ ECM cls::Query(const std::vector<std::string> &targets) const {
     return rcm;
   }
 
-  std::vector<std::string> uniq_targets = VectorDedup(targets);
+  std::vector<std::string> uniq_targets = AMJson::VectorDedup(targets);
   std::vector<std::string> valid_targets = {};
 
   for (const std::string &nickname : uniq_targets) {
@@ -229,7 +229,7 @@ ECM cls::Query(const std::vector<std::string> &targets) const {
     if (it == host_configs.end()) {
       const std::string styled = config_.Format(nickname, "nickname");
       ECM err = Err(EC::HostConfigNotFound,
-                    AMStr::amfmt("Host {} not found", styled));
+                    AMStr::fmt("Host {} not found", styled));
       prompt_.ErrorFormat(err);
       return err;
     }
@@ -325,14 +325,14 @@ ECM cls::Src() const {
     config_path = config_path_obj.string();
     auto [config_rcm, config_info] = AMFS::stat(config_path, false);
     prompt_.Print(
-        AMStr::amfmt("{} = {}", config_label,
+        AMStr::fmt("{} = {}", config_label,
                      config_.Format(config_path, "dir", &config_info)));
   }
   if (config_.GetDataPath(DocumentKind::Settings, &settings_path_obj)) {
     settings_path = settings_path_obj.string();
     auto [settings_rcm, settings_info] = AMFS::stat(settings_path, false);
     prompt_.Print(
-        AMStr::amfmt("{} = {}", settings_label,
+        AMStr::fmt("{} = {}", settings_label,
                      config_.Format(settings_path, "dir", &settings_info)));
   }
   return Ok();
@@ -393,7 +393,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     new_value = value_str;
   } else if (field == configkn::port) {
     int64_t port = 0;
-    if (!StrValueParse(value_str, &port) || port <= 0 || port > 65535) {
+    if (!AMJson::StrValueParse(value_str, &port) || port <= 0 || port > 65535) {
       set_status = Err(EC::InvalidArg, "invalid port value");
       prompt_.ErrorFormat(set_status);
       return set_status;
@@ -403,14 +403,14 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     new_value = std::to_string(port);
   } else if (field == configkn::buffer_size) {
     int64_t buffer_size = 0;
-    if (!StrValueParse(value_str, &buffer_size)) {
+    if (!AMJson::StrValueParse(value_str, &buffer_size)) {
       set_status =
           Err(EC::InvalidArg, "Buffer size must be an positive integer");
       prompt_.ErrorFormat(set_status);
       return set_status;
     } else if (buffer_size < AMMinBufferSize || buffer_size > AMMaxBufferSize) {
       set_status = Err(EC::InvalidArg,
-                       AMStr::amfmt("Buffer size must be between {} and {}",
+                       AMStr::fmt("Buffer size must be between {} and {}",
                                     AMMinBufferSize, AMMaxBufferSize));
       prompt_.ErrorFormat(set_status);
       return set_status;
@@ -420,7 +420,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     new_value = std::to_string(buffer_size);
   } else if (field == configkn::compression) {
     bool compression = false;
-    if (!StrValueParse(value_str, &compression)) {
+    if (!AMJson::StrValueParse(value_str, &compression)) {
       set_status =
           Err(EC::InvalidArg, "compression value must be true or false");
       prompt_.ErrorFormat(set_status);
@@ -435,7 +435,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     new_value = value_str;
   } else if (field == configkn::wrap_cmd) {
     bool wrap_cmd = false;
-    if (!StrValueParse(value_str, &wrap_cmd)) {
+    if (!AMJson::StrValueParse(value_str, &wrap_cmd)) {
       set_status = Err(EC::InvalidArg, "wrap_cmd value must be true or false");
       prompt_.ErrorFormat(set_status);
       return set_status;
@@ -451,9 +451,9 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
       prompt_.ErrorFormat(set_status);
       return set_status;
     }
-    old_value = AMStr::lowercase(AM_ENUM_NAME(updated.request.protocol));
+    old_value = AMStr::lowercase(AMStr::ToString(updated.request.protocol));
     updated.request.protocol = configkn::StrToProtocol(protocol);
-    new_value = AMStr::lowercase(AM_ENUM_NAME(updated.request.protocol));
+    new_value = AMStr::lowercase(AMStr::ToString(updated.request.protocol));
 
   } else if (field == configkn::password) {
     std::string tmp_pswd = AMStr::Strip(value_str);
@@ -489,7 +489,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     new_value = value_str;
   } else {
     set_status = Err(EC::InvalidArg,
-                     AMStr::amfmt("unsupported property name: {}", field));
+                     AMStr::fmt("unsupported property name: {}", field));
     prompt_.ErrorFormat(set_status);
     return set_status;
   }
@@ -525,7 +525,9 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
 
   config_.Dump(DocumentKind::Config, "", true);
   prompt_.Print(
-      AMStr::amfmt("{}.{}: {} -> {}", nickname, field, old_value, new_value));
+      AMStr::fmt("{}.{}: {} -> {}", nickname, field, old_value, new_value));
   return set_status;
 }
+
+
 

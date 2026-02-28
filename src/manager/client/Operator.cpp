@@ -218,8 +218,8 @@ Operator::AddClient(const std::string &nickname,
   size_t spinner_line_len = 0;
   if (!quiet) {
     const std::string protocol_label =
-        std::string(AM_ENUM_NAME(base_client->GetProtocol()));
-    const std::string spinner_line = AMStr::amfmt(
+        std::string(AMStr::ToString(base_client->GetProtocol()));
+    const std::string spinner_line = AMStr::fmt(
         "Connecting to {} Server   [{}]", protocol_label, nickname);
     spinner_line_len = spinner_line.size() + 3;
     SetSpinnerLineLen(spinner_line_len);
@@ -297,8 +297,8 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
   size_t spinner_line_len = 0;
   if (!quiet) {
     const std::string protocol_label =
-        std::string(AM_ENUM_NAME(base_client->GetProtocol()));
-    const std::string spinner_line = AMStr::amfmt(
+        std::string(AMStr::ToString(base_client->GetProtocol()));
+    const std::string spinner_line = AMStr::fmt(
         "Connecting to {} Server   [{}]", protocol_label, nickname);
     spinner_line_len = spinner_line.size() + 3;
     SetSpinnerLineLen(spinner_line_len);
@@ -511,10 +511,10 @@ void Operator::ApplyKnownHostCallback_(
       bool canceled = false;
       bool accepted = true;
       if (AMIsInteractive.load(std::memory_order_relaxed)) {
-        prompt_.Print(AMStr::amfmt(
+        prompt_.Print(AMStr::fmt(
             "Unknown host: {}:{}  User: {} Protocol: [!se][{}][/se]",
             query.hostname, query.port, query.username, query.protocol));
-        prompt_.Print(AMStr::amfmt("Fingerprint: {}",
+        prompt_.Print(AMStr::fmt("Fingerprint: {}",
                                    AMStr::Strip(query.GetFingerprint())));
         accepted =
             prompt_.PromptYesNo("Trust this host key? (y/N): ", &canceled);
@@ -532,7 +532,7 @@ void Operator::ApplyKnownHostCallback_(
     const std::string actual = AMStr::Strip(query.GetFingerprint());
     if (expected != actual) {
       return Err(EC::HostFingerprintMismatch,
-                 AMStr::amfmt("{}:{} {} fingerprint mismatches", query.hostname,
+                 AMStr::fmt("{}:{} {} fingerprint mismatches", query.hostname,
                               query.port, query.protocol));
     }
     return Ok();
@@ -548,7 +548,7 @@ Operator::DefaultPasswordCallback(const AuthCBInfo &info) {
 
   if (info.NeedPassword) {
     const std::string prompt =
-        AMStr::amfmt("Password required [{}]: ", client_name);
+        AMStr::fmt("Password required [{}]: ", client_name);
     std::string password;
     if (!prompt_.SecurePrompt(prompt, &password)) {
       return std::string();
@@ -560,7 +560,7 @@ Operator::DefaultPasswordCallback(const AuthCBInfo &info) {
     if (info.password_n.empty()) {
       return std::nullopt;
     }
-    prompt_.Print(AMStr::amfmt("Wrong password [{}]", client_name));
+    prompt_.Print(AMStr::fmt("Wrong password [{}]", client_name));
     return std::nullopt;
   }
 
@@ -579,8 +579,8 @@ void Operator::DefaultDisconnectCallback(
   }
   prompt_.ErrorFormat(
       ECM{ecm.first,
-          AMStr::amfmt("Client disconnected [{}]: {}", client->GetNickname(),
-                       ecm.second.empty() ? std::string(AM_ENUM_NAME(ecm.first))
+          AMStr::fmt("Client disconnected [{}]: {}", client->GetNickname(),
+                       ecm.second.empty() ? std::string(AMStr::ToString(ecm.first))
                                           : ecm.second)});
 }
 
@@ -613,3 +613,4 @@ std::shared_ptr<BaseClient> Operator::CreateLocalClient_() {
 }
 
 } // namespace AMClientManage
+
