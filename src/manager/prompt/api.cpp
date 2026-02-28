@@ -1,15 +1,11 @@
 #include "AMBase/CommonTools.hpp"
-#include "AMBase/DataClass.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
-#include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Prompt.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
-#include <mutex>
-#include <sstream>
 #include <string>
 #include <sys/stat.h>
 

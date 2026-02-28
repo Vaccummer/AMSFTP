@@ -1,9 +1,7 @@
 #include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
-#include "AMCLI/Completer/Proxy.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Prompt.hpp"
-#include "AMManager/SignalMonitor.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
 #include <cctype>
@@ -470,8 +468,8 @@ bool AMPromptManager::Prompt(
   (void)UseCorePromptProfileForClient_(target);
   const AMPromptProfileArgs *active_profile = GetCurrentPromptProfileArgs();
   std::string query_prompt_style = config_.ResolveArg<std::string>(
-      DocumentKind::Settings,
-      {"Style", "ValueQueryHighlight", "prompt_style"}, "", {});
+      DocumentKind::Settings, {"Style", "ValueQueryHighlight", "prompt_style"},
+      "", {});
   query_prompt_style = NormalizePromptStyleForIc_(query_prompt_style);
   if (!query_prompt_style.empty()) {
     ic_style_def(ickey.c_str(), query_prompt_style.c_str());
@@ -539,8 +537,8 @@ bool AMPromptManager::LiteralPrompt(
   (void)UseCorePromptProfileForClient_(target);
   const AMPromptProfileArgs *active_profile = GetCurrentPromptProfileArgs();
   std::string query_prompt_style = config_.ResolveArg<std::string>(
-      DocumentKind::Settings,
-      {"Style", "ValueQueryHighlight", "prompt_style"}, "", {});
+      DocumentKind::Settings, {"Style", "ValueQueryHighlight", "prompt_style"},
+      "", {});
   query_prompt_style = NormalizePromptStyleForIc_(query_prompt_style);
   if (!query_prompt_style.empty()) {
     ic_style_def(ickey.c_str(), query_prompt_style.c_str());
@@ -640,7 +638,8 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
 #ifdef _WIN32
   while (true) {
     int ch = _getch();
-    if (ch == 3 || (TaskControlToken::Instance() && !TaskControlToken::Instance()->IsRunning())) {
+    if (ch == 3 || (TaskControlToken::Instance() &&
+                    !TaskControlToken::Instance()->IsRunning())) {
       std::cout << "\n";
       return false;
     }
@@ -670,7 +669,8 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
   tcsetattr(STDIN_FILENO, TCSANOW, &newt);
   while (true) {
     int ch = ::getchar();
-    if (ch == 3 || (TaskControlToken::Instance() && !TaskControlToken::Instance()->IsRunning())) {
+    if (ch == 3 || (TaskControlToken::Instance() &&
+                    !TaskControlToken::Instance()->IsRunning())) {
       tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
       std::cout << "\n";
       return false;
@@ -694,4 +694,3 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
   *out_input = std::move(password);
   return true;
 }
-

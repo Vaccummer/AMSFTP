@@ -32,10 +32,10 @@
 // Wait result for non-blocking socket operations
 class AMLocalClient : public BaseClient {
 public:
-  AMLocalClient(ConRequst request, int buffer_capacity = 10,
+  AMLocalClient(ConRequest request, int buffer_capacity = 10,
                 TraceCallback trace_cb = {})
       : BaseClient(request, buffer_capacity, std::move(trace_cb)) {
-    this->PROTOCOL = ClientProtocol::LOCAL;
+    this->res_data.protocol = ClientProtocol::LOCAL;
   }
 
   ECM Check([[maybe_unused]] amf interrupt_flag = nullptr,
@@ -1078,7 +1078,7 @@ public:
     if (path.empty()) {
       return ECM{EC::InvalidArg, "Invalid empty path"};
     }
-    if (this->trash_dir.empty()) {
+    if (this->res_data.trash_dir.empty()) {
       return ECM{EC::PathNotExist, "Trash directory is not set"};
     }
     auto [error, info] = stat(path);
@@ -1100,8 +1100,8 @@ public:
     std::string current_time =
         FormatTime(std::time(nullptr), "%Y-%m-%d-%H-%M-%S");
 
-    target_path =
-        AMPathStr::join(trash_dir, current_time, base_name + "." + base_ext);
+    target_path = AMPathStr::join(this->res_data.trash_dir, current_time,
+                                  base_name + "." + base_ext);
     size_t i = 1;
     std::string base_name_tmp = base_name;
 
@@ -1114,13 +1114,14 @@ public:
         break;
       }
       base_name_tmp = base_name + "(" + std::to_string(i) + ")";
-      target_path = AMPathStr::join(trash_dir, current_time,
+      target_path = AMPathStr::join(this->res_data.trash_dir, current_time,
                                     (base_name_tmp + ".") += base_ext);
       i++;
     }
 
-    ECM rcm0 = mkdirs(AMPathStr::join(trash_dir, current_time), interrupt_flag,
-                      timeout_ms, start_time);
+    ECM rcm0 = mkdirs(
+        AMPathStr::join(this->res_data.trash_dir, current_time), interrupt_flag,
+        timeout_ms, start_time);
     if (rcm0.first != EC::Success) {
       return rcm0;
     }

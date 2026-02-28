@@ -33,7 +33,7 @@ int main2() {
   }
   is_wsa_initialized.store(true, std::memory_order_relaxed);
 #endif
-  auto wsl_con = ConRequst("wsl", "172.26.36.83", "am", 22, "1984");
+  auto wsl_con = ConRequest("wsl", "172.26.36.83", "am", 22, "1984");
   auto wsl = std::make_shared<AMSFTPClient>(wsl_con);
 
   auto rcm = wsl->Connect();

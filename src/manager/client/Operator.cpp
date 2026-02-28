@@ -21,7 +21,7 @@ inline void InitClientWorkdir_(const std::shared_ptr<BaseClient> &client) {
   if (client->GetPublicValue("workdir", &value)) {
     return;
   }
-  (void)client->SetPulbicValue(
+  (void)client->SetPublicValue(
       "workdir", AMPathStr::UnifyPathSep(client->GetHomeDir(), "/"), true);
 }
 
@@ -53,8 +53,8 @@ inline void ApplyLoginDir_(AMHostManager &hostm, const std::string &nickname,
   }
 
   const std::string normalized = AMPathStr::UnifyPathSep(resolved, "/");
-  (void)client->SetPulbicValue("workdir", normalized, true);
-  (void)client->SetPulbicValue("login_dir", normalized, true);
+  (void)client->SetPublicValue("workdir", normalized, true);
+  (void)client->SetPublicValue("login_dir", normalized, true);
   if (need_persist && !IsLocalNickname_(nickname)) {
     (void)hostm.SetHostValue(nickname, configkn::login_dir, resolved);
   }
@@ -186,8 +186,8 @@ Operator::AddClient(const std::string &nickname,
     }
     auto existing_cfg = hostm_.GetClientConfig(nickname);
     if (existing_cfg.first.first == EC::Success) {
-      ApplyLoginDir_(hostm_, nickname, existing, existing_cfg.second.login_dir,
-                     flag);
+      ApplyLoginDir_(hostm_, nickname, existing,
+                     existing_cfg.second.metadata.login_dir, flag);
     } else {
       InitClientWorkdir_(existing);
     }
@@ -207,9 +207,8 @@ Operator::AddClient(const std::string &nickname,
   std::atomic<bool> spinner_running(false);
   ResetSpinnerState();
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, &spinner_running);
-  auto base_client = CreateClient(
-      client_config.request, client_config.protocol, 10, std::move(trace_cb),
-      client_config.buffer_size, keys_result.second, std::move(auth_cb));
+  auto base_client = CreateClient(client_config.request, 10, std::move(trace_cb),
+                                  keys_result.second, std::move(auth_cb));
   if (!base_client) {
     return {Err(EC::OperationUnsupported, "Unsupported protocol"), nullptr};
   }
@@ -251,7 +250,7 @@ Operator::AddClient(const std::string &nickname,
     return {rcm, base_client};
   }
 
-  ApplyLoginDir_(hostm_, nickname, base_client, client_config.login_dir, flag);
+  ApplyLoginDir_(hostm_, nickname, base_client, client_config.metadata.login_dir, flag);
   target.add_client(nickname, base_client, true);
   return {Ok(), base_client};
 }
@@ -286,10 +285,9 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
   std::atomic<bool> spinner_running(false);
   ResetSpinnerState();
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, &spinner_running);
-  auto base_client =
-      CreateClient(client_config.second.request, client_config.second.protocol,
-                   10, std::move(trace_cb), client_config.second.buffer_size,
-                   keys_result.second, std::move(auth_cb));
+  auto base_client = CreateClient(client_config.second.request, 10,
+                                  std::move(trace_cb), keys_result.second,
+                                  std::move(auth_cb));
   if (!base_client) {
     return {Err(EC::OperationUnsupported, "Unsupported protocol"), nullptr};
   }
@@ -331,7 +329,7 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
     return {rcm, base_client};
   }
 
-  ApplyLoginDir_(hostm_, nickname, base_client, client_config.second.login_dir,
+  ApplyLoginDir_(hostm_, nickname, base_client, client_config.second.metadata.login_dir,
                  flag);
   return {Ok(), base_client};
 }
@@ -389,15 +387,23 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
     password_enc = AMAuth::EncryptPassword(password_enc);
   }
 
-  ConRequst request(resolved_nickname, hostname, username,
-                    static_cast<int>(port), password_enc, keyfile, false, "");
+  ConRequest request = {};
+  request.nickname = resolved_nickname;
+  request.hostname = hostname;
+  request.username = username;
+  request.port = static_cast<int>(port);
+  request.password = password_enc;
+  request.keyfile = keyfile;
+  request.compression = false;
+  request.trash_dir = "";
+  request.buffer_size = AMDefaultRemoteBufferSize;
+  request.protocol = protocol;
   if (!trace_cb) {
     trace_cb = log_manager_.TraceCallbackFunc();
   }
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, nullptr);
-  auto base_client = CreateClient(request, protocol, 10, std::move(trace_cb),
-                                  AMDefaultRemoteBufferSize, std::move(keys),
-                                  std::move(auth_cb));
+  auto base_client = CreateClient(request, 10, std::move(trace_cb),
+                                  std::move(keys), std::move(auth_cb));
   if (!base_client) {
     return {Err(EC::OperationUnsupported, "Unsupported protocol"), nullptr};
   }
@@ -408,11 +414,11 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
     return {rcm, base_client};
   }
 
-  ClientConfig entry;
+  HostConfig entry;
   entry.request = request;
-  entry.protocol = protocol;
-  entry.buffer_size = AMDefaultRemoteBufferSize;
-  entry.login_dir = "";
+  entry.request.protocol = protocol;
+  entry.request.buffer_size = AMDefaultRemoteBufferSize;
+  entry.metadata.login_dir = "";
   ECM save_rcm = hostm_.UpsertHost(entry, true);
   if (save_rcm.first != EC::Success) {
     return {save_rcm, base_client};
@@ -591,18 +597,18 @@ Operator::DisconnectCallback Operator::BuiltinDisconnectCallback_() {
 
 std::shared_ptr<BaseClient> Operator::CreateLocalClient_() {
   auto [rcm, cfg] = hostm_.GetLocalConfig();
-  auto client_t = CreateClient(cfg.request, ClientProtocol::LOCAL, 10,
-                               std::move(log_manager_.TraceCallbackFunc()),
-                               cfg.buffer_size, {}, {});
+  auto client_t = CreateClient(cfg.request, 10,
+                               std::move(log_manager_.TraceCallbackFunc()), {},
+                               {});
   if (!client_t) {
     std::cerr << "Failed to create local client: Unsupported protocol"
               << std::endl;
     std::exit(1);
   }
-  (void)client_t->SetPulbicValue(
-      "workdir", AMPathStr::UnifyPathSep(cfg.login_dir, "/"), true);
-  (void)client_t->SetPulbicValue(
-      "login_dir", AMPathStr::UnifyPathSep(cfg.login_dir, "/"), true);
+  (void)client_t->SetPublicValue(
+      "workdir", AMPathStr::UnifyPathSep(cfg.metadata.login_dir, "/"), true);
+  (void)client_t->SetPublicValue(
+      "login_dir", AMPathStr::UnifyPathSep(cfg.metadata.login_dir, "/"), true);
   return client_t;
 }
 

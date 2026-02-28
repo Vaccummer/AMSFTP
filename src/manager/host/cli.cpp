@@ -97,7 +97,7 @@ ECM cls::List(bool detailed) const {
  * @brief Prompt and add one host configuration.
  */
 ECM cls::Add(const std::string &nickname) {
-  ClientConfig entry;
+  HostConfig entry;
   ECM prompt_status = PromptAddFields_(nickname, entry);
   if (prompt_status.first != EC::Success) {
     return prompt_status;
@@ -118,7 +118,7 @@ ECM cls::Modify(const std::string &nickname) {
   if (!HostExists(nickname)) {
     return Err(EC::HostConfigNotFound, "host not found");
   }
-  ClientConfig updated = host_configs[nickname];
+  HostConfig updated = host_configs[nickname];
   ECM prompt_status = PromptModifyFields_(nickname, updated);
   if (prompt_status.first != EC::Success) {
     return prompt_status;
@@ -286,7 +286,7 @@ ECM cls::Rename(const std::string &old_nickname,
     return rcm;
   }
 
-  ClientConfig moved = host_configs[old_nickname];
+  HostConfig moved = host_configs[old_nickname];
   moved.request.nickname = new_nickname;
 
   host_configs[new_nickname] = moved;
@@ -366,7 +366,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     return err;
   }
 
-  ClientConfig &updated = host_configs[nickname];
+  HostConfig &updated = host_configs[nickname];
   std::string old_value = "";
   std::string new_value = "";
   ECM set_status = Ok();
@@ -412,8 +412,8 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
       prompt_.ErrorFormat(set_status);
       return set_status;
     }
-    old_value = std::to_string(updated.buffer_size);
-    updated.buffer_size = buffer_size;
+    old_value = std::to_string(updated.request.buffer_size);
+    updated.request.buffer_size = buffer_size;
     new_value = std::to_string(buffer_size);
   } else if (field == configkn::compression) {
     bool compression = false;
@@ -427,8 +427,8 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     updated.request.compression = compression;
     new_value = compression ? "true" : "false";
   } else if (field == configkn::cmd_prefix) {
-    old_value = updated.cmd_prefix;
-    updated.cmd_prefix = value_str;
+    old_value = updated.metadata.cmd_prefix;
+    updated.metadata.cmd_prefix = value_str;
     new_value = value_str;
   } else if (field == configkn::wrap_cmd) {
     bool wrap_cmd = false;
@@ -437,8 +437,8 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
       prompt_.ErrorFormat(set_status);
       return set_status;
     }
-    old_value = updated.wrap_cmd ? "true" : "false";
-    updated.wrap_cmd = wrap_cmd;
+    old_value = updated.metadata.wrap_cmd ? "true" : "false";
+    updated.metadata.wrap_cmd = wrap_cmd;
     new_value = wrap_cmd ? "true" : "false";
 
   } else if (field == configkn::protocol) {
@@ -448,9 +448,9 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
       prompt_.ErrorFormat(set_status);
       return set_status;
     }
-    old_value = AMStr::lowercase(AM_ENUM_NAME(updated.protocol));
-    updated.protocol = configkn::StrToProtocol(protocol);
-    new_value = AMStr::lowercase(AM_ENUM_NAME(updated.protocol));
+    old_value = AMStr::lowercase(AM_ENUM_NAME(updated.request.protocol));
+    updated.request.protocol = configkn::StrToProtocol(protocol);
+    new_value = AMStr::lowercase(AM_ENUM_NAME(updated.request.protocol));
 
   } else if (field == configkn::password) {
     std::string tmp_pswd = AMStr::Strip(value_str);
@@ -481,8 +481,8 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     updated.request.trash_dir = value_str;
     new_value = value_str;
   } else if (field == configkn::login_dir) {
-    old_value = updated.login_dir;
-    updated.login_dir = value_str;
+    old_value = updated.metadata.login_dir;
+    updated.metadata.login_dir = value_str;
     new_value = value_str;
   } else {
     set_status = Err(EC::InvalidArg,
@@ -499,7 +499,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
   } else if (field == configkn::buffer_size) {
     write_ok = config_.SetArg(DocumentKind::Config,
                               {configkn::hosts, nickname, field},
-                              static_cast<int64_t>(updated.buffer_size));
+                              static_cast<int64_t>(updated.request.buffer_size));
   } else if (field == configkn::compression) {
     write_ok = config_.SetArg(DocumentKind::Config,
                               {configkn::hosts, nickname, field},
@@ -507,7 +507,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
   } else if (field == configkn::wrap_cmd) {
     write_ok = config_.SetArg(DocumentKind::Config,
                               {configkn::hosts, nickname, field},
-                              updated.wrap_cmd);
+                              updated.metadata.wrap_cmd);
   } else {
     write_ok =
         config_.SetArg(DocumentKind::Config, {configkn::hosts, nickname, field},

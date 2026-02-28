@@ -345,7 +345,7 @@ void AMHostManager::CollectHosts_() const {
     const std::string lowered = AMStr::lowercase(AMStr::Strip(nickname));
     const bool is_local = (lowered == "local");
     const std::string key = is_local ? "local" : nickname;
-    auto cfg = ClientConfig(nickname, it.value());
+    auto cfg = HostConfig(nickname, it.value());
     if (is_local) {
       if (cfg.IsValid()) {
         host_configs[key] = cfg;
@@ -366,7 +366,7 @@ void AMHostManager::CollectHosts_() const {
   }
 }
 
-std::pair<ECM, ClientConfig>
+std::pair<ECM, HostConfig>
 AMHostManager::GetClientConfig(const std::string &nickname) {
   if (!HostExists(nickname)) {
     return {Err(EC::HostConfigNotFound,
@@ -379,8 +379,8 @@ AMHostManager::GetClientConfig(const std::string &nickname) {
 /**
  * @brief Get local client config from config storage or use defaults.
  */
-std::pair<ECM, ClientConfig> AMHostManager::GetLocalConfig() {
-  ClientConfig result;
+std::pair<ECM, HostConfig> AMHostManager::GetLocalConfig() {
+  HostConfig result;
 
   const std::string local_user = GetLocalUsername_();
   const std::string fallback_home = AMFS::HomePath();
@@ -395,7 +395,7 @@ std::pair<ECM, ClientConfig> AMHostManager::GetLocalConfig() {
   if (config_.ResolveArg(DocumentKind::Config, {configkn::hosts, "local"},
                          &host_json) &&
       host_json.is_object()) {
-    ClientConfig stored("local", host_json);
+    HostConfig stored("local", host_json);
     if (stored.IsValid()) {
       result = stored;
     }
@@ -414,18 +414,19 @@ std::pair<ECM, ClientConfig> AMHostManager::GetLocalConfig() {
     result.request.port = configkn::DefaultSFTPPort;
   }
 
-  result.protocol = ClientProtocol::LOCAL;
+  result.request.protocol = ClientProtocol::LOCAL;
 
-  if (result.buffer_size <= 0) {
-    result.buffer_size = 64 * AMMB;
+  if (result.request.buffer_size <= 0) {
+    result.request.buffer_size = 64 * AMMB;
   } else {
-    result.buffer_size = std::min(
-        std::max(result.buffer_size, static_cast<int64_t>(AMMinBufferSize)),
+    result.request.buffer_size = std::min(
+        std::max(result.request.buffer_size,
+                 static_cast<int64_t>(AMMinBufferSize)),
         static_cast<int64_t>(AMMaxBufferSize));
   }
 
-  if (result.login_dir.empty()) {
-    result.login_dir = fallback_home;
+  if (result.metadata.login_dir.empty()) {
+    result.metadata.login_dir = fallback_home;
   }
   if (result.request.trash_dir.empty()) {
     result.request.trash_dir = fallback_trash;
@@ -434,7 +435,7 @@ std::pair<ECM, ClientConfig> AMHostManager::GetLocalConfig() {
   return {Ok(), result};
 }
 
-ECM AMHostManager::UpsertHost(const ClientConfig &entry, bool dump_now) {
+ECM AMHostManager::UpsertHost(const HostConfig &entry, bool dump_now) {
   if (!entry.IsValid()) {
     return Err(EC::InvalidArg, "invalid host config");
   }
@@ -503,8 +504,8 @@ std::vector<std::string> AMHostManager::ListNames() const {
 }
 
 ECM AMHostManager::PromptAddFields_(const std::string &nickname,
-                                    ClientConfig &entry) {
-  entry = ClientConfig{};
+                                    HostConfig &entry) {
+  entry = HostConfig{};
   auto print_abort = [this]() {
     prompt_.Print(AMStr::amfmt("{}\n", config_.Format("Input Abort", "abort")));
   };
@@ -605,13 +606,13 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     if (configkn::ValidateHostAttrValue(configkn::HostAttr::Protocol, protocol,
                                         &normalized, &err_msg, true, true,
                                         &err_code)) {
-      entry.protocol = configkn::StrToProtocol(normalized);
+      entry.request.protocol = configkn::StrToProtocol(normalized);
       break;
     }
     prompt_.ErrorFormat(ECM{err_code, err_msg});
   }
 
-  const int protocol_default_port = DefaultPortForProtocol_(entry.protocol);
+  const int protocol_default_port = DefaultPortForProtocol_(entry.request.protocol);
   const std::string default_port_for_protocol =
       std::to_string(protocol_default_port);
   std::string port_input;
@@ -667,7 +668,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
   AMAuth::SecureZero(password);
 
   std::string buffer_input;
-  entry.buffer_size = 24 * AMMB;
+  entry.request.buffer_size = 24 * AMMB;
   while (true) {
     if (!PromptHostAttr_(prompt_, configkn::HostAttr::BufferSize,
                          "Buffer size: ", default_buffer_placeholder,
@@ -688,7 +689,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
       prompt_.ErrorFormat(ECM{err_code, err_msg});
       continue;
     }
-    int64_t parsed_buffer = entry.buffer_size;
+    int64_t parsed_buffer = entry.request.buffer_size;
     StrValueParse(normalized, &parsed_buffer);
     if (parsed_buffer < AMMinBufferSize || parsed_buffer > AMMaxBufferSize) {
       prompt_.ErrorFormat(ECM{
@@ -696,7 +697,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
                                        AMMinBufferSize, AMMaxBufferSize)});
       continue;
     }
-    entry.buffer_size = parsed_buffer;
+    entry.request.buffer_size = parsed_buffer;
     break;
   }
 
@@ -707,8 +708,8 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     return Err(EC::ConfigCanceled, "add canceled");
   }
   if (!PromptHostAttr_(prompt_, configkn::HostAttr::LoginDir,
-                       "login_dir(optional): ", entry.login_dir,
-                       &entry.login_dir)) {
+                       "login_dir(optional): ", entry.metadata.login_dir,
+                       &entry.metadata.login_dir)) {
     print_abort();
     return Err(EC::ConfigCanceled, "add canceled");
   }
@@ -760,7 +761,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
 }
 
 ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
-                                       ClientConfig &entry) {
+                                       HostConfig &entry) {
   (void)nickname;
   static auto print_abort = [this]() {
     prompt_.Print(AMStr::amfmt("{}\n", config_.Format("Input Abort", "abort")));
@@ -808,7 +809,7 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     username = normalized;
   }
 
-  std::string protocol = AMStr::lowercase(AM_ENUM_NAME(entry.protocol));
+  std::string protocol = AMStr::lowercase(AM_ENUM_NAME(entry.request.protocol));
 
   while (true) {
     if (!PromptHostAttr_(prompt_, configkn::HostAttr::Protocol,
@@ -892,7 +893,7 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     }
   }
 
-  int64_t buffer_size = entry.buffer_size > 0 ? entry.buffer_size : 24 * AMMB;
+  int64_t buffer_size = entry.request.buffer_size > 0 ? entry.request.buffer_size : 24 * AMMB;
   while (true) {
     std::string buffer_input = std::to_string(buffer_size);
     if (!PromptHostAttr_(prompt_, configkn::HostAttr::BufferSize,
@@ -926,7 +927,7 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
-  std::string login_dir = entry.login_dir;
+  std::string login_dir = entry.metadata.login_dir;
   if (!PromptHostAttr_(prompt_, configkn::HostAttr::LoginDir,
                        "login_dir(optional): ", login_dir, &login_dir)) {
     print_abort();
@@ -968,17 +969,17 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
   entry.request.hostname = hostname;
   entry.request.username = username;
   entry.request.port = port;
-  entry.protocol = configkn::StrToProtocol(protocol);
-  entry.buffer_size = buffer_size;
+  entry.request.protocol = configkn::StrToProtocol(protocol);
+  entry.request.buffer_size = buffer_size;
   entry.request.trash_dir = trash_dir;
-  entry.login_dir = login_dir;
+  entry.metadata.login_dir = login_dir;
   entry.request.keyfile = keyfile;
   entry.request.compression = compression;
   return Ok();
 }
 
 ECM AMHostManager::PrintHost_(const std::string &nickname,
-                              const ClientConfig &entry) const {
+                              const HostConfig &entry) const {
   prompt_.Print("[!pre][" + nickname + "][/pre]");
   size_t width = 0;
   for (const auto &field : configkn::fileds)
@@ -999,7 +1000,7 @@ ECM AMHostManager::PrintHost_(const std::string &nickname,
 }
 
 ECM AMHostManager::AddHost_(const std::string &nickname,
-                            const ClientConfig &entry) {
+                            const HostConfig &entry) {
   host_configs[nickname] = entry;
   auto json_entry = entry.GetJson();
   if (!config_.SetArg(DocumentKind::Config, {configkn::hosts, nickname},

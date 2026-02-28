@@ -156,21 +156,22 @@ inline const static std::string cmd_prefix = "cmd_prefix";
 inline const static std::string wrap_cmd = "wrap_cmd";
 
 inline static const std::array<std::string, 12> fileds = {
-    configkn::hostname,    configkn::username,  configkn::protocol,
-    configkn::port,        configkn::password,  configkn::buffer_size,
-    configkn::trash_dir,   configkn::login_dir, configkn::keyfile,
+    configkn::hostname,    configkn::username,   configkn::protocol,
+    configkn::port,        configkn::password,   configkn::buffer_size,
+    configkn::trash_dir,   configkn::login_dir,  configkn::keyfile,
     configkn::compression, configkn::cmd_prefix, configkn::wrap_cmd,
 };
 } // namespace configkn
 
-struct ClientConfig {
-  ECM rcm = Ok();
-  ConRequst request = {};
-  ClientProtocol protocol = ClientProtocol::SFTP;
-  int64_t buffer_size = -1;
-  std::string login_dir = "";
+struct ClientMetaData {
   std::string cmd_prefix = "";
   bool wrap_cmd = false;
+  std::string login_dir = "";
+};
+
+struct HostConfig {
+  ConRequest request = {};
+  ClientMetaData metadata = {};
 
   [[nodiscard]] std::unordered_map<std::string, std::string>
   GetStrDict() const {
@@ -179,14 +180,14 @@ struct ClientConfig {
         {"username", request.username},
         {"port", std::to_string(request.port)},
         {"password", request.password},
-        {"protocol", AM_ENUM_NAME(protocol)},
-        {"buffer_size", std::to_string(buffer_size)},
+        {"protocol", AM_ENUM_NAME(request.protocol)},
+        {"buffer_size", std::to_string(request.buffer_size)},
         {"trash_dir", request.trash_dir},
-        {"login_dir", login_dir},
+        {"login_dir", metadata.login_dir},
         {"keyfile", request.keyfile},
         {"compression", request.compression ? "true" : "false"},
-        {"cmd_prefix", cmd_prefix},
-        {"wrap_cmd", wrap_cmd ? "true" : "false"},
+        {"cmd_prefix", metadata.cmd_prefix},
+        {"wrap_cmd", metadata.wrap_cmd ? "true" : "false"},
     };
   }
 
@@ -196,62 +197,56 @@ struct ClientConfig {
     json[configkn::username] = request.username;
     json[configkn::port] = request.port;
     json[configkn::password] = request.password;
-    json[configkn::protocol] = AMStr::lowercase(AM_ENUM_NAME(protocol));
-    json[configkn::buffer_size] = buffer_size;
+    json[configkn::protocol] = AMStr::lowercase(AM_ENUM_NAME(request.protocol));
+    json[configkn::buffer_size] = request.buffer_size;
     json[configkn::trash_dir] = request.trash_dir;
-    json[configkn::login_dir] = login_dir;
+    json[configkn::login_dir] = metadata.login_dir;
     json[configkn::keyfile] = request.keyfile;
     json[configkn::compression] = request.compression;
-    json[configkn::cmd_prefix] = cmd_prefix;
-    json[configkn::wrap_cmd] = wrap_cmd;
+    json[configkn::cmd_prefix] = metadata.cmd_prefix;
+    json[configkn::wrap_cmd] = metadata.wrap_cmd;
     return json;
   }
-  ClientConfig() = default;
+  HostConfig() = default;
 
-  ClientConfig(const std::string &nickname, const Json &jsond) {
+  HostConfig(const std::string &nickname, const Json &jsond) {
     if (!jsond.is_object()) {
-      rcm = {EC::InvalidArg, "config is not an object"};
       return;
     }
 
     if (!configkn::ValidateNickname(nickname)) {
-      rcm = {EC::InvalidArg, "invalid nickname"};
       return;
     }
 
     this->request.nickname = nickname;
 
     if (!QueryKey(jsond, {configkn::hostname}, &this->request.hostname)) {
-      rcm = {EC::InvalidArg, "hostname not found"};
       return;
     }
 
     if (this->request.hostname.empty()) {
-      rcm = {EC::InvalidArg, "hostname is empty"};
       return;
     }
 
     if (!QueryKey(jsond, {configkn::username}, &this->request.username)) {
-      rcm = {EC::InvalidArg, "username not found"};
       return;
     }
 
     if (this->request.username.empty()) {
-      rcm = {EC::InvalidArg, "username is empty"};
       return;
     }
 
     std::string protocol_str;
     if (!QueryKey(jsond, {configkn::protocol}, &protocol_str)) {
-      this->protocol = ClientProtocol::SFTP;
+      request.protocol = ClientProtocol::SFTP;
     } else {
-      this->protocol = configkn::StrToProtocol(protocol_str);
+      request.protocol = configkn::StrToProtocol(protocol_str);
     }
 
     int tmp_port = -1;
     QueryKey(jsond, {configkn::port}, &tmp_port);
     if (tmp_port <= 0 || tmp_port > 65535) {
-      this->request.port = (this->protocol == ClientProtocol::FTP)
+      this->request.port = (this->request.protocol == ClientProtocol::FTP)
                                ? configkn::DefaultFTPPort
                                : configkn::DefaultSFTPPort;
     } else {
@@ -262,24 +257,29 @@ struct ClientConfig {
     QueryKey(jsond, {configkn::keyfile}, &this->request.keyfile);
     QueryKey(jsond, {configkn::compression}, &this->request.compression);
     QueryKey(jsond, {configkn::trash_dir}, &this->request.trash_dir);
-    QueryKey(jsond, {configkn::login_dir}, &this->login_dir);
-    QueryKey(jsond, {configkn::cmd_prefix}, &this->cmd_prefix);
-    QueryKey(jsond, {configkn::wrap_cmd}, &this->wrap_cmd);
+    QueryKey(jsond, {configkn::login_dir}, &metadata.login_dir);
+    QueryKey(jsond, {configkn::cmd_prefix}, &metadata.cmd_prefix);
+    QueryKey(jsond, {configkn::wrap_cmd}, &metadata.wrap_cmd);
 
     int64_t tmp_size = -1;
     QueryKey(jsond, {configkn::buffer_size}, &tmp_size);
     if (tmp_size <= 0) {
-      this->buffer_size = AMDefaultRemoteBufferSize;
+      this->request.buffer_size = AMDefaultRemoteBufferSize;
     } else {
-      this->buffer_size = std::min(std::max(tmp_size, static_cast<int64_t>(1)),
-                                   static_cast<int64_t>(AMMaxBufferSize));
+      this->request.buffer_size =
+          std::min(std::max(tmp_size, static_cast<int64_t>(1)),
+                   static_cast<int64_t>(AMMaxBufferSize));
     }
   };
 
   [[nodiscard]] bool IsValid() const {
-    return request.IsValid() && protocol != ClientProtocol::Unknown;
+    return request.IsValid() && request.protocol != ClientProtocol::Unknown &&
+           request.buffer_size > 0;
   }
 };
+
+/** @brief Backward-compatible alias. Prefer HostConfig. */
+using ClientConfig = HostConfig;
 
 struct KnownHostEntry {
   std::string nickname = "";
@@ -315,13 +315,13 @@ public:
     return Ok();
   };
 
-  [[nodiscard]] std::pair<ECM, ClientConfig>
+  [[nodiscard]] std::pair<ECM, HostConfig>
   GetClientConfig(const std::string &nickname);
   /**
    * @brief Fetch local client config from storage and fall back to defaults.
    */
-  [[nodiscard]] std::pair<ECM, ClientConfig> GetLocalConfig();
-  ECM UpsertHost(const ClientConfig &entry, bool dump_now = true);
+  [[nodiscard]] std::pair<ECM, HostConfig> GetLocalConfig();
+  ECM UpsertHost(const HostConfig &entry, bool dump_now = true);
 
   [[nodiscard]] ECM FindKnownHost(KnownHostQuery &query) const;
   ECM UpsertKnownHost(const KnownHostQuery &query, bool dump_now = true);
@@ -349,13 +349,13 @@ public:
   [[nodiscard]] ECM Save();
 
 private:
-  mutable std::unordered_map<std::string, ClientConfig> host_configs = {};
+  mutable std::unordered_map<std::string, HostConfig> host_configs = {};
   mutable std::unordered_map<std::string, KnownHostEntry> known_hosts = {};
   [[nodiscard]] ECM PrintHost_(const std::string &nickname,
-                               const ClientConfig &entry) const;
-  ECM PromptAddFields_(const std::string &nickname, ClientConfig &entry);
-  ECM PromptModifyFields_(const std::string &nickname, ClientConfig &entry);
-  ECM AddHost_(const std::string &nickname, const ClientConfig &entry);
+                               const HostConfig &entry) const;
+  ECM PromptAddFields_(const std::string &nickname, HostConfig &entry);
+  ECM PromptModifyFields_(const std::string &nickname, HostConfig &entry);
+  ECM AddHost_(const std::string &nickname, const HostConfig &entry);
   ECM RemoveHost_(const std::string &nickname);
   AMConfigManager &config_ = AMConfigManager::Instance();
   AMPromptManager &prompt_ = AMPromptManager::Instance();

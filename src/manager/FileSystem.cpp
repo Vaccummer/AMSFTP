@@ -213,27 +213,18 @@ static void PrintClientDetail_(AMPromptManager &prompt_manager,
   };
 
   std::string login_dir;
-  {
-    std::lock_guard<std::mutex> lock(client->public_kv_mtx);
-    auto it = client->public_kv.find("login_dir");
-    if (it != client->public_kv.end()) {
-      login_dir = it->second;
-    } else {
-      auto workdir_it = client->public_kv.find("workdir");
-      if (workdir_it != client->public_kv.end()) {
-        login_dir = workdir_it->second;
-      }
-    }
+  if (!client->GetPublicValue("login_dir", &login_dir)) {
+    (void)client->GetPublicValue("workdir", &login_dir);
   }
 
-  const ConRequst request = client->GetRequest();
+  const ConRequest &request = client->GetRequest();
   std::unordered_map<std::string, std::string> values;
   values["hostname"] = request.hostname;
   values["username"] = request.username;
   values["port"] = std::to_string(request.port);
   values["password"] = request.password;
-  values["protocol"] = AM_ENUM_NAME(client->GetProtocol());
-  values["buffer_size"] = std::to_string(client->TransferRingBufferSize());
+  values["protocol"] = AM_ENUM_NAME(request.protocol);
+  values["buffer_size"] = std::to_string(request.buffer_size);
   values["trash_dir"] = request.trash_dir;
   values["login_dir"] = login_dir;
   values["keyfile"] = request.keyfile;
@@ -1215,14 +1206,14 @@ CR AMFileSystem::ShellRun(const std::string &cmd, int max_time_ms,
   if (AMStr::lowercase(nickname) == "local") {
     auto [cfg_rcm, cfg] = hostm_.GetLocalConfig();
     if (cfg_rcm.first == EC::Success) {
-      cmd_prefix = cfg.cmd_prefix;
-      wrap_cmd = cfg.wrap_cmd;
+      cmd_prefix = cfg.metadata.cmd_prefix;
+      wrap_cmd = cfg.metadata.wrap_cmd;
     }
   } else {
     auto [cfg_rcm, cfg] = hostm_.GetClientConfig(nickname);
     if (cfg_rcm.first == EC::Success) {
-      cmd_prefix = cfg.cmd_prefix;
-      wrap_cmd = cfg.wrap_cmd;
+      cmd_prefix = cfg.metadata.cmd_prefix;
+      wrap_cmd = cfg.metadata.wrap_cmd;
     }
   }
 

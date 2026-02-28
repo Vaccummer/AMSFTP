@@ -1,13 +1,35 @@
-# Refactor the whole HostConfig and realted codes
-
 ## Client Init config
 
-Client 的构造函数额外需要 Conrequest, UserArgs
+Conrequest change to has attrs: nickname,hostname,trash_dir,buffer_size,protocol,port,username,password,keyfile,compression
 
-Conrequest 包含: nickname,hostname,trash_dir,buffer_size,protocol,port,username,password,keyfile,compression
+when Client need diretly read and write attr in Conrequest instead of maintaing a copy
 
-UserArgs 实际上为模板类型, 是用于传入用户自己的参数class
+Client only supply public interface to get const ref of Conrequest
 
-Conrequest 在client只向外提供常引用
+HostConfig in HostManager contains {Conrequest, ClientMetaData}
 
-UserArgs 提供
+ClientMetaData contains cmd_prefix wrap_cmd login_dir
+
+# AMTracer Var cache system refactor
+
+use two store container :
+
+std::**unordered_map**<std::**type_index**, std::**any**>
+
+std::**unordered_map**<std::**string**, std::**any**>
+
+the former can directly pass value to store, and use type to get
+
+the latter use name and type to query, use name and value to store
+
+operation protocol
+
+store rules:
+
+bool(is written) store(... bool overwrite)
+
+query rules:
+
+need to return pointer type
+
+when using name to query, need to distinguish name not exists and type mismatch

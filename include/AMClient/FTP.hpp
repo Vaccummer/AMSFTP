@@ -1012,11 +1012,11 @@ private:
 public:
   std::shared_ptr<AMFTPClient> mirror_client = nullptr;
 
-  AMFTPClient(const ConRequst &request, ssize_t buffer_capacity = 10,
+  AMFTPClient(const ConRequest &request, ssize_t buffer_capacity = 10,
               TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
       : BaseClient(request, buffer_capacity, std::move(trace_cb)),
         auth_cb_(std::move(auth_cb)) {
-    this->PROTOCOL = ClientProtocol::FTP;
+    this->res_data.protocol = ClientProtocol::FTP;
     auth_cb_enabled_ = static_cast<bool>(auth_cb_);
 
     if (res_data.username.empty()) {
@@ -1110,7 +1110,7 @@ public:
       if (!auth_cb_enabled_) {
         return;
       }
-      ConRequst request = res_data;
+      ConRequest request = res_data;
       request.password = password_correct ? password_enc : "";
       CallCallbackSafe(auth_cb_, AuthCBInfo(need_password, std::move(request),
                                             password_enc, password_correct));

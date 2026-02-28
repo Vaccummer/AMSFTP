@@ -632,33 +632,53 @@ public:
         mode_int(std::move(mode_int)), mode_str(std::move(mode_str)) {}
 };
 
-struct ConRequst {
-  std::string nickname;
-  std::string hostname;
-  std::string username;
-  std::string password;
-  std::string keyfile;
-  bool compression;
-  int port;
+struct ConRequest {
+  std::string nickname = "";
+  std::string hostname = "";
   std::string trash_dir = "";
-  ConRequst()
-      : nickname(""), hostname(""), username(""), password(""), keyfile(""),
-        compression(false), port(22), trash_dir("") {}
-  ConRequst(std::string nickname, std::string hostname, std::string username,
-            int port = 22, std::string password = "", std::string keyfile = "",
-            bool compression = false, std::string trash_dir = "")
+  int64_t buffer_size = 0;
+  ClientProtocol protocol = ClientProtocol::SFTP;
+  int port = 22;
+  std::string username = "";
+  std::string password = "";
+  std::string keyfile = "";
+  bool compression = false;
+
+  ConRequest() = default;
+
+  /**
+   * @brief Canonical constructor for client connection/config request.
+   */
+  ConRequest(std::string nickname, std::string hostname,
+             std::string trash_dir, int64_t buffer_size,
+             ClientProtocol protocol, int port, std::string username,
+             std::string password = "", std::string keyfile = "",
+             bool compression = false)
       : nickname(std::move(nickname)), hostname(std::move(hostname)),
-        username(std::move(username)), password(std::move(password)),
-        keyfile(std::move(keyfile)), compression(compression), port(port),
-        trash_dir(std::move(trash_dir)) {}
+        trash_dir(std::move(trash_dir)), buffer_size(buffer_size),
+        protocol(protocol), port(port), username(std::move(username)),
+        password(std::move(password)), keyfile(std::move(keyfile)),
+        compression(compression) {}
+
+  /**
+   * @brief Backward-compatible constructor with username/port-leading order.
+   */
+  ConRequest(std::string nickname, std::string hostname, std::string username,
+             int port = 22, std::string password = "",
+             std::string keyfile = "", bool compression = false,
+             std::string trash_dir = "", int64_t buffer_size = 0,
+             ClientProtocol protocol = ClientProtocol::SFTP)
+      : nickname(std::move(nickname)), hostname(std::move(hostname)),
+        trash_dir(std::move(trash_dir)), buffer_size(buffer_size),
+        protocol(protocol), port(port), username(std::move(username)),
+        password(std::move(password)), keyfile(std::move(keyfile)),
+        compression(compression) {}
+
   [[nodiscard]] bool IsValid() const {
     return !nickname.empty() && !hostname.empty() && !username.empty() &&
-           port > 0 && port <= 65535;
+           port > 0 && port <= 65535 && protocol != ClientProtocol::Unknown;
   }
 };
-
-/** @brief Canonical alias of the connection request type used by tracing. */
-using ConRequest = ConRequst;
 
 struct ProgressCBInfo {
   std::string src;
@@ -867,7 +887,7 @@ struct AuthCBInfo {
   /**
    * @brief Connection request context for the callback.
    */
-  ConRequst request;
+  ConRequest request;
 
   /**
    * @brief The password being used in this authentication step (encrypted).
@@ -882,7 +902,7 @@ struct AuthCBInfo {
   /**
    * @brief Construct a callback info payload.
    */
-  AuthCBInfo(bool need_password, ConRequst request, std::string password_n,
+  AuthCBInfo(bool need_password, ConRequest request, std::string password_n,
              bool iscorrect)
       : NeedPassword(need_password), request(std::move(request)),
         password_n(std::move(password_n)), iscorrect(iscorrect) {}
