@@ -1715,3 +1715,15 @@ AddFunction 新加两个参数: CliArgsPool&args, T CliArgsPool::*member, 用于
 AddFlag 需要新加一个参数: bool & 用于CLI11绑定参数存储位置
 
 AddOption需要设置为模版函数, 设置一个T&value用于CLI11绑定参数存储位置
+Great Improve on ConductCmd (sftp/local)
+
+add an str cmd_prefix(you can choose a suitable argname) bool wrap_cmd in HostConfig in config\config.toml, this cmd_prefix is invisible to Client, but should be stored in ClientConfig
+
+ConductCmd itself only recept final command and conduct it. remove cmd check in IsCommandAllowed
+
+add a function in Filesystem ShellRun(str cmd, and other args you think necessary) for CLI bind, it proximately does things:
+
++ build command(if no prefix, just use arg cmd)
+  + prefix'cmd' (if wrap)
+  + prefixcmd
++ call ConductCmd

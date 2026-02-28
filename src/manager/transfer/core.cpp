@@ -473,13 +473,13 @@ ECM AMTransferManager::transfer(
   if (has_resume && transfer_sets.size() != 1) {
     return {EC::InvalidArg, "Resume transfer requires a single transfer set"};
   }
-  auto flag = interrupt_flag ? interrupt_flag : amgif;
+  auto flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
   if (rcm.first != EC::Success) {
     return rcm;
   }
   if (task_info) {
-    task_info->control_token = amgif ? amgif : std::make_shared<TaskControlToken>();
+    task_info->control_token = TaskControlToken::Instance() ? TaskControlToken::Instance() : std::make_shared<TaskControlToken>();
   }
   return transfer(task_info, task_info ? task_info->control_token : flag);
 }
@@ -506,7 +506,7 @@ ECM AMTransferManager::transfer(
     return {EC::Success, ""};
   }
 
-  task_info->control_token = amgif ? amgif : std::make_shared<TaskControlToken>();
+  task_info->control_token = TaskControlToken::Instance() ? TaskControlToken::Instance() : std::make_shared<TaskControlToken>();
   auto flag = task_info->control_token;
   if (interrupt_flag && !interrupt_flag->IsRunning() && flag) {
     flag->SetStatus(ControlSignal::Interrupt);
@@ -556,7 +556,7 @@ ECM AMTransferManager::transfer(
   bool all_finished = false;
   while (!all_finished) {
     const bool interrupted =
-        (flag && !flag->IsRunning()) || (amgif && !amgif->IsRunning());
+        (flag && !flag->IsRunning()) || (TaskControlToken::Instance() && !TaskControlToken::Instance()->IsRunning());
     if (interrupted) {
       if (show_progress) {
         progress_bar.EndDisplay();
@@ -604,7 +604,7 @@ ECM AMTransferManager::transfer_async(
   if (has_resume && transfer_sets.size() != 1) {
     return {EC::InvalidArg, "Resume transfer requires a single transfer set"};
   }
-  auto flag = interrupt_flag ? interrupt_flag : amgif;
+  auto flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   auto [rcm, task_info] = PrepareTasks_(transfer_sets, quiet, flag);
   if (rcm.first != EC::Success) {
     return rcm;
