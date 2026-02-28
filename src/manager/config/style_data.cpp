@@ -1,9 +1,12 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMManager/Config.hpp"
 
 using cls = AMConfigManager;
-using Bar = AMProgressBar;
-using BarStyle = AMProgressBarStyle;
+using Bar = AMBar::AMProgressBar;
+using BarStyle = AMBar::AMProgressBarStyle;
 
 namespace {
 
@@ -233,3 +236,4 @@ BarStyle cls::BuildProgressBarStyle_() const {
 
   return style;
 }
+

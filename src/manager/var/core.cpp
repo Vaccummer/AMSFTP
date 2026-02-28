@@ -1,4 +1,7 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Var.hpp"
@@ -454,3 +457,4 @@ void AMVarManager::EnsureLoaded_() const {
   }
   (void)const_cast<AMVarManager *>(this)->Reload();
 }
+

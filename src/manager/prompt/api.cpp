@@ -1,4 +1,7 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
 #include "AMManager/Prompt.hpp"
 #include "AMManager/SignalMonitor.hpp"
@@ -395,3 +398,4 @@ void AMPromptManager::InitIsoclineConfig() {
   core_hook.consume = true;
   AMCliSignalMonitor::Instance().RegisterHook("COREPROMPT", core_hook);
 }
+

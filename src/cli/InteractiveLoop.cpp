@@ -1,5 +1,8 @@
 #include "AMCLI/InteractiveLoop.hpp"
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Path.hpp"
 #include "AMCLI/CLIBind.hpp"
@@ -1663,4 +1666,5 @@ int RunInteractiveLoop(const std::string &app_name,
   AMIsInteractive.store(false, std::memory_order_relaxed);
   return g_cli_exit_code;
 }
+
 

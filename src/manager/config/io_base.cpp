@@ -1,4 +1,7 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMBase/Path.hpp"
 #include "AMManager/Config.hpp"
 #include <fstream>
@@ -1195,3 +1198,4 @@ std::filesystem::path AMConfigStorage::ProjectRoot() const { return root_dir_; }
  * @brief Backup config/settings/known_hosts when the interval elapses.
  */
 ECM AMConfigStorage::ConfigBackupIfNeeded() { return BackupIfNeeded(); }
+

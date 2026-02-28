@@ -1,5 +1,7 @@
 #pragma once
 // standard library
+#include <regex>
+#include <variant>
 #ifdef _WIN32
 #define _WINSOCKAPI_
 #include <accctrl.h> // Define SE_OBJECT_TYPE enum
@@ -9,9 +11,9 @@
 #endif
 
 // project header
-#include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
+#include "AMBase/tools/string.hpp"
 
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
@@ -775,7 +777,8 @@ inline std::pair<ECM, PathInfo> stat(const std::string &path,
   info.owner = GetFileOwner(AMStr::wstr(path));
 #else
   struct stat file_stat;
-  // Call stat to get file metadata (supports symlinks; use stat instead of lstat to follow links)
+  // Call stat to get file metadata (supports symlinks; use stat instead of
+  // lstat to follow links)
   if (stat(path.c_str(), &file_stat) == -1) {
     return std::make_pair("Fail to stat file: " + std::string(strerror(errno)),
                           info);
@@ -845,4 +848,3 @@ listdir(const std::string &path, amf interrupt_flag = nullptr,
   return {ECM{EC::Success, ""}, result};
 }
 } // namespace AMFS
-

@@ -1,5 +1,8 @@
 #pragma once
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMCLI/Completer/Engine.hpp"
 #include <algorithm>
 #include <cctype>
@@ -404,3 +407,4 @@ inline bool IsPathSemanticState(const CommandState &state) {
 }
 
 } // namespace AMSearcherDetail
+

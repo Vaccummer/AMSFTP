@@ -1,4 +1,7 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMManager/Var.hpp"
 #include <algorithm>
 
@@ -255,3 +258,4 @@ ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
   }
   return last;
 }
+

@@ -1,6 +1,9 @@
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMCLI/InteractiveLoop.hpp"
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
@@ -1424,4 +1427,5 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     formatted->append("[/]");
   }
 }
+
 

@@ -1,8 +1,8 @@
 #include "AMManager/FileSystem.hpp"
-#include "AMBase/CommonTools.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
 #include "AMBase/Path.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMManager/Config.hpp"
 #include <algorithm>
 #include <cctype>
@@ -14,9 +14,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
+
 using EC = ErrorCode;
 
-namespace AMTree {
+namespace AMPathTree {
 struct TreeNode {
   std::vector<std::string> children;
   std::vector<PathInfo> files;
@@ -173,38 +174,13 @@ inline bool PrintTree(
 
   return walk_tree(root, "");
 }
-} // namespace AMTree
-
-/**
- * @brief Convert protocol enum into config-style string.
- */
-static std::string ProtocolToConfigName_(ClientProtocol protocol) {
-  switch (protocol) {
-  case ClientProtocol::SFTP:
-    return "sftp";
-  case ClientProtocol::FTP:
-    return "ftp";
-  case ClientProtocol::LOCAL:
-    return "local";
-  default:
-    return "unknown";
-  }
-}
+} // namespace AMPathTree
 
 /**
  * @brief Convert a boolean to a lowercase string value.
  */
 static std::string BoolToString_(bool value) {
   return value ? "true" : "false";
-}
-
-/**
- * @brief Return true when command prefix targets PowerShell -Command.
- */
-static bool IsPowerShellCommandPrefix_(const std::string &cmd_prefix) {
-  const std::string lowered = AMStr::lowercase(AMStr::Strip(cmd_prefix));
-  return lowered.find("powershell") != std::string::npos &&
-         lowered.find("-command") != std::string::npos;
 }
 
 /**
@@ -220,16 +196,8 @@ static std::string BuildShellCommandWithPrefix_(const std::string &command,
   if (!wrap_cmd) {
     return cmd_prefix + command;
   }
-
-  // PowerShell -Command with single quotes evaluates to a string literal.
-  // Use double-quoted command text on local Windows profile so command runs.
-  if (protocol == ClientProtocol::LOCAL &&
-      IsPowerShellCommandPrefix_(cmd_prefix)) {
-    std::string escaped = AMStr::replace_all(command, "\"", "`\"");
-    return AMStr::amfmt("{}\"{}\"", cmd_prefix, escaped);
-  }
-
-  return AMStr::amfmt("{}'{}'", cmd_prefix, command);
+  return AMStr::amfmt("{}\"{}\"", cmd_prefix,
+                      AMStr::replace_all(command, "\"", "'"));
 }
 
 /**
@@ -282,15 +250,15 @@ static void PrintClientDetail_(AMPromptManager &prompt_manager,
   }
 }
 
-AMFileSystem::ECM AMFileSystem::check(const std::string &nickname, bool detail,
-                                      amf interrupt_flag) {
+ECM AMFileSystem::check(const std::string &nickname, bool detail,
+                        amf interrupt_flag) {
   std::vector<std::string> targets = SplitTargets(nickname);
   return check(targets, detail, interrupt_flag);
 }
 
 /** Check whether clients exist from nickname list. */
-AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
-                                      bool detail, amf interrupt_flag) {
+ECM AMFileSystem::check(const std::vector<std::string> &nicknames, bool detail,
+                        amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   std::vector<std::string> targets = UniqueTargetsKeepOrder(nicknames);
   if (targets.empty()) {
@@ -381,7 +349,7 @@ AMFileSystem::ECM AMFileSystem::check(const std::vector<std::string> &nicknames,
   return last;
 }
 
-AMFileSystem::ECM AMFileSystem::remove_client(const std::string &nickname) {
+ECM AMFileSystem::remove_client(const std::string &nickname) {
   std::vector<std::string> targets = SplitTargets(nickname);
   if (targets.empty()) {
     const std::string msg = "Empty nickname";
@@ -480,7 +448,7 @@ AMFileSystem::ECM AMFileSystem::remove_client(const std::string &nickname) {
   return last;
 }
 
-AMFileSystem::ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
+ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   std::vector<std::string> seen;
 
@@ -521,8 +489,8 @@ AMFileSystem::ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
   return {EC::Success, ""};
 }
 
-AMFileSystem::ECM AMFileSystem::change_client(const std::string &nickname,
-                                              amf interrupt_flag) {
+ECM AMFileSystem::change_client(const std::string &nickname,
+                                amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (nickname.empty()) {
     const std::string msg = "Empty nickname";
@@ -567,9 +535,8 @@ AMFileSystem::ECM AMFileSystem::change_client(const std::string &nickname,
   return {EC::Success, ""};
 }
 
-AMFileSystem::ECM AMFileSystem::connect(const std::string &nickname, bool force,
-                                        amf interrupt_flag,
-                                        bool switch_client) {
+ECM AMFileSystem::connect(const std::string &nickname, bool force,
+                          amf interrupt_flag, bool switch_client) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (!force) {
     auto result =
@@ -612,12 +579,10 @@ AMFileSystem::ECM AMFileSystem::connect(const std::string &nickname, bool force,
   return {EC::Success, ""};
 }
 
-AMFileSystem::ECM AMFileSystem::sftp(const std::string &nickname,
-                                     const std::string &hostname,
-                                     const std::string &username, int64_t port,
-                                     const std::string &password,
-                                     const std::string &keyfile,
-                                     amf interrupt_flag) {
+ECM AMFileSystem::sftp(const std::string &nickname, const std::string &hostname,
+                       const std::string &username, int64_t port,
+                       const std::string &password, const std::string &keyfile,
+                       amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   auto result = client_manager_.Connect(nickname, hostname, username,
                                         ClientProtocol::SFTP, port, password,
@@ -629,11 +594,10 @@ AMFileSystem::ECM AMFileSystem::sftp(const std::string &nickname,
   return change_client(result.second->GetNickname(), flag);
 }
 
-AMFileSystem::ECM AMFileSystem::sftp(const std::string &nickname,
-                                     const std::string &user_at_host,
-                                     int64_t port, const std::string &password,
-                                     const std::string &keyfile,
-                                     amf interrupt_flag) {
+ECM AMFileSystem::sftp(const std::string &nickname,
+                       const std::string &user_at_host, int64_t port,
+                       const std::string &password, const std::string &keyfile,
+                       amf interrupt_flag) {
   auto pos = user_at_host.find('@');
   if (pos == std::string::npos || pos == 0 || pos + 1 >= user_at_host.size()) {
     return {EC::InvalidArg, "Invalid user@host format"};
@@ -644,12 +608,10 @@ AMFileSystem::ECM AMFileSystem::sftp(const std::string &nickname,
               interrupt_flag);
 }
 
-AMFileSystem::ECM AMFileSystem::ftp(const std::string &nickname,
-                                    const std::string &hostname,
-                                    const std::string &username, int64_t port,
-                                    const std::string &password,
-                                    const std::string &keyfile,
-                                    amf interrupt_flag) {
+ECM AMFileSystem::ftp(const std::string &nickname, const std::string &hostname,
+                      const std::string &username, int64_t port,
+                      const std::string &password, const std::string &keyfile,
+                      amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   auto result = client_manager_.Connect(nickname, hostname, username,
                                         ClientProtocol::FTP, port, password,
@@ -661,11 +623,10 @@ AMFileSystem::ECM AMFileSystem::ftp(const std::string &nickname,
   return change_client(result.second->GetNickname(), flag);
 }
 
-AMFileSystem::ECM AMFileSystem::ftp(const std::string &nickname,
-                                    const std::string &user_at_host,
-                                    int64_t port, const std::string &password,
-                                    const std::string &keyfile,
-                                    amf interrupt_flag) {
+ECM AMFileSystem::ftp(const std::string &nickname,
+                      const std::string &user_at_host, int64_t port,
+                      const std::string &password, const std::string &keyfile,
+                      amf interrupt_flag) {
   auto pos = user_at_host.find('@');
   if (pos == std::string::npos || pos == 0 || pos + 1 >= user_at_host.size()) {
     return {EC::InvalidArg, "Invalid user@host format"};
@@ -676,8 +637,8 @@ AMFileSystem::ECM AMFileSystem::ftp(const std::string &nickname,
              interrupt_flag);
 }
 
-AMFileSystem::ECM AMFileSystem::cd(const std::string &path, amf interrupt_flag,
-                                   bool from_history) {
+ECM AMFileSystem::cd(const std::string &path, amf interrupt_flag,
+                     bool from_history) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (path.empty()) {
     return {EC::Success, ""};
@@ -735,15 +696,15 @@ AMFileSystem::ECM AMFileSystem::cd(const std::string &path, amf interrupt_flag,
   return {EC::Success, ""};
 }
 
-AMFileSystem::ECM AMFileSystem::stat(const std::string &path,
-                                     amf interrupt_flag, int timeout_ms) {
+ECM AMFileSystem::stat(const std::string &path, amf interrupt_flag,
+                       int timeout_ms) {
   std::vector<std::string> targets = SplitTargets(path);
   return stat(targets, interrupt_flag, timeout_ms);
 }
 
 /** Print stat info for multiple paths. */
-AMFileSystem::ECM AMFileSystem::stat(const std::vector<std::string> &paths,
-                                     amf interrupt_flag, int timeout_ms) {
+ECM AMFileSystem::stat(const std::vector<std::string> &paths,
+                       amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   std::vector<std::string> targets = UniqueTargetsKeepOrder(paths);
   if (targets.empty()) {
@@ -784,9 +745,8 @@ AMFileSystem::ECM AMFileSystem::stat(const std::vector<std::string> &paths,
   return last;
 }
 
-AMFileSystem::ECM AMFileSystem::ls(const std::string &path, bool list_like,
-                                   bool show_all, amf interrupt_flag,
-                                   int timeout_ms) {
+ECM AMFileSystem::ls(const std::string &path, bool list_like, bool show_all,
+                     amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (flag && !flag->IsRunning()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
@@ -938,15 +898,15 @@ AMFileSystem::ECM AMFileSystem::ls(const std::string &path, bool list_like,
   return {EC::Success, ""};
 }
 
-AMFileSystem::ECM AMFileSystem::getsize(const std::string &path,
-                                        amf interrupt_flag, int timeout_ms) {
+ECM AMFileSystem::getsize(const std::string &path, amf interrupt_flag,
+                          int timeout_ms) {
   std::vector<std::string> targets = SplitTargets(path);
   return getsize(targets, interrupt_flag, timeout_ms);
 }
 
 /** Print total size for multiple paths. */
-AMFileSystem::ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
-                                        amf interrupt_flag, int timeout_ms) {
+ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
+                          amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   std::vector<std::string> targets = UniqueTargetsKeepOrder(paths);
   if (targets.empty()) {
@@ -996,8 +956,8 @@ AMFileSystem::ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
   return last;
 }
 
-AMFileSystem::ECM AMFileSystem::find(const std::string &path, SearchType type,
-                                     amf interrupt_flag, int timeout_ms) {
+ECM AMFileSystem::find(const std::string &path, SearchType type,
+                       amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   auto [nickname, resolved_path, client_ptr, rcm] =
       client_manager_.ParsePath(path, flag);
@@ -1022,10 +982,9 @@ AMFileSystem::ECM AMFileSystem::find(const std::string &path, SearchType type,
 }
 
 /** Walk a path and print entries based on filters. */
-AMFileSystem::ECM AMFileSystem::walk(const std::string &path, bool only_file,
-                                     bool only_dir, bool show_all,
-                                     bool ignore_special_file, bool quiet,
-                                     amf interrupt_flag, int timeout_ms) {
+ECM AMFileSystem::walk(const std::string &path, bool only_file, bool only_dir,
+                       bool show_all, bool ignore_special_file, bool quiet,
+                       amf interrupt_flag, int timeout_ms) {
   if (only_file && only_dir) {
     return {EC::InvalidArg, "Conflicting filters: both file and dir"};
   }
@@ -1076,10 +1035,9 @@ AMFileSystem::ECM AMFileSystem::walk(const std::string &path, bool only_file,
 
 /** Print a directory tree using the client walk output with optional filters.
  */
-AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
-                                     bool only_dir, bool show_all,
-                                     bool ignore_special_file, bool quiet,
-                                     amf interrupt_flag, int timeout_ms) {
+ECM AMFileSystem::tree(const std::string &path, int max_depth, bool only_dir,
+                       bool show_all, bool ignore_special_file, bool quiet,
+                       amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   auto [nickname, resolved_path, client_ptr, rcm] =
       client_manager_.ParsePath(path, flag);
@@ -1123,14 +1081,15 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
     }
   }
 
-  AMTree::TreeNodeMap nodes;
+  AMPathTree::TreeNodeMap nodes;
   const auto join_parts = [](const std::vector<std::string> &parts) {
     return AMPathStr::join(parts);
   };
   const auto join_pair = [](const std::string &a, const std::string &b) {
     return AMPathStr::join(a, b);
   };
-  AMTree::BuildTreeNodes(abs_path, structure, &nodes, join_parts, join_pair);
+  AMPathTree::BuildTreeNodes(abs_path, structure, &nodes, join_parts,
+                             join_pair);
   if (flag && !flag->IsRunning()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
     if (!quiet) {
@@ -1138,7 +1097,7 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
     }
     return out;
   }
-  AMTree::SortTreeNodes(&nodes);
+  AMPathTree::SortTreeNodes(&nodes);
   if (flag && !flag->IsRunning()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
     if (!quiet) {
@@ -1146,7 +1105,7 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
     }
     return out;
   }
-  const bool printed = AMTree::PrintTree(
+  const bool printed = AMPathTree::PrintTree(
       abs_path, nodes,
       [this](const PathInfo &info, const std::string &name) {
         return StylePath(info, name);
@@ -1163,7 +1122,7 @@ AMFileSystem::ECM AMFileSystem::tree(const std::string &path, int max_depth,
   return {EC::Success, ""};
 }
 
-AMFileSystem::ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
+ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (flag && !flag->IsRunning()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
@@ -1251,8 +1210,9 @@ CR AMFileSystem::ShellRun(const std::string &cmd, int max_time_ms,
     }
   }
 
-  std::string final_cmd = BuildShellCommandWithPrefix_(
-      command, cmd_prefix, wrap_cmd, protocol);
+  std::string final_cmd =
+      BuildShellCommandWithPrefix_(command, cmd_prefix, wrap_cmd, protocol);
+  prompt_manager_.Print(final_cmd);
   return client->ConductCmd(final_cmd, max_time_ms, flag);
 }
 
@@ -1264,14 +1224,9 @@ CR AMFileSystem::ShellRun(const std::string &cmd, int max_time_ms,
  * @param timeout_ms Reserved for interface compatibility (unused).
  * @return ECM status describing success or failure.
  */
-AMFileSystem::ECM AMFileSystem::realpath(const std::string &path,
-                                         amf interrupt_flag, int timeout_ms) {
-  amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
-  if (flag && !flag->IsRunning()) {
-    ECM out = {EC::Terminate, "Interrupted by user"};
-    prompt_manager_.ErrorFormat(out);
-    return out;
-  }
+ECM AMFileSystem::realpath(const std::string &path, amf interrupt_flag,
+                           int timeout_ms) {
+  (void)interrupt_flag;
   (void)timeout_ms;
 
   std::string input = AMStr::Strip(path);
@@ -1351,15 +1306,15 @@ AMFileSystem::ECM AMFileSystem::realpath(const std::string &path,
   return {EC::Success, ""};
 }
 
-AMFileSystem::ECM AMFileSystem::mkdir(const std::string &path,
-                                      amf interrupt_flag, int timeout_ms) {
+ECM AMFileSystem::mkdir(const std::string &path, amf interrupt_flag,
+                        int timeout_ms) {
   std::vector<std::string> targets = SplitTargets(path);
   return mkdir(targets, interrupt_flag, timeout_ms);
 }
 
 /** Create directories (recursive) for multiple paths. */
-AMFileSystem::ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
-                                      amf interrupt_flag, int timeout_ms) {
+ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
+                        amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   std::vector<std::string> targets = UniqueTargetsKeepOrder(paths);
   if (targets.empty()) {
@@ -1395,23 +1350,22 @@ AMFileSystem::ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
   return last;
 }
 
-AMFileSystem::ECM AMFileSystem::rm(const std::string &path, bool quiet,
-                                   amf interrupt_flag, int timeout_ms) {
+ECM AMFileSystem::rm(const std::string &path, bool quiet, amf interrupt_flag,
+                     int timeout_ms) {
   std::vector<std::string> targets = SplitTargets(path);
   return rm(targets, false, false, quiet, interrupt_flag, timeout_ms);
 }
 
 /** Remove paths using safe removal. */
-AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
-                                   bool quiet, amf interrupt_flag,
-                                   int timeout_ms) {
+ECM AMFileSystem::rm(const std::vector<std::string> &paths, bool quiet,
+                     amf interrupt_flag, int timeout_ms) {
   return rm(paths, false, false, quiet, interrupt_flag, timeout_ms);
 }
 
 /** Remove paths using safe or permanent removal with optional force. */
-AMFileSystem::ECM AMFileSystem::rm(const std::vector<std::string> &paths,
-                                   bool permanent, bool force, bool quiet,
-                                   amf interrupt_flag, int timeout_ms) {
+ECM AMFileSystem::rm(const std::vector<std::string> &paths, bool permanent,
+                     bool force, bool quiet, amf interrupt_flag,
+                     int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   std::vector<std::string> targets = UniqueTargetsKeepOrder(paths);
   if (targets.empty()) {
@@ -1527,9 +1481,8 @@ void AMFileSystem::UpdateHistory(const std::string &nickname,
   }
 }
 
-AMFileSystem::ECM AMFileSystem::PrintClientStatus(const ClientRef &client,
-                                                  bool update,
-                                                  amf interrupt_flag) {
+ECM AMFileSystem::PrintClientStatus(const ClientRef &client, bool update,
+                                    amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   ECM rcm =
       update ? client.client->Check(flag, -1, -1) : client.client->GetState();
@@ -1628,36 +1581,3 @@ std::string AMFileSystem::StylePath(const PathInfo &info,
   const std::string display_path = AMPathStr::UnifyPathSep(path, "/");
   return config_manager_.Format(display_path, base_key, &info);
 }
-
-// bool AMFileSystem::PromptYesNo(const std::string &prompt,
-//                                bool default_no) const {
-//   std::string answer;
-//   if (!prompt_manager_.Prompt(prompt, "", &answer)) {
-//     return false;
-//   }
-//   AMStr::VStrip(answer);
-//   if (answer.empty()) {
-//     return !default_no;
-//   }
-//   std::string lower = answer;
-//   std::transform(
-//       lower.begin(), lower.end(), lower.begin(),
-//       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-//   return lower == "y" || lower == "yes";
-// }
-
-// bool AMFileSystem::IsAbsolutePath(const std::string &path) const {
-//   if (path.empty()) {
-//     return false;
-//   }
-//   if (path[0] == '/' || path[0] == '\\') {
-//     return true;
-//   }
-//   if (path.size() >= 2 && std::isalpha(static_cast<unsigned char>(path[0]))
-//   &&
-//       path[1] == ':') {
-//     return true;
-//   }
-//   return false;
-// }
-

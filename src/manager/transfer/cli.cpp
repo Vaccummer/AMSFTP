@@ -1,4 +1,7 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Path.hpp"
 #include "AMClient/IOCore.hpp"
@@ -815,3 +818,4 @@ ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
   }
   return transfer(task_info);
 }
+

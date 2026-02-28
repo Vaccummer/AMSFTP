@@ -1,4 +1,7 @@
-#include "AMBase/CommonTools.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
 #include "AMBase/Path.hpp"
@@ -525,3 +528,4 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
       AMStr::amfmt("{}.{}: {} -> {}", nickname, field, old_value, new_value));
   return set_status;
 }
+

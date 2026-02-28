@@ -14,6 +14,7 @@
 #include <list>
 #include <memory>
 #include <mutex>
+#include <regex>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -21,6 +22,7 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
 
 // project header
 #include "AMBase/DataClass.hpp"
