@@ -2,7 +2,7 @@ trial*
 test*
 .history/
 .vscode/
-build/*
+build
 debug*
 *.dll
 *.pyd
