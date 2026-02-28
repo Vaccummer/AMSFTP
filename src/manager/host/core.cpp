@@ -348,6 +348,7 @@ void AMHostManager::CollectHosts_() const {
     auto cfg = HostConfig(nickname, it.value());
     if (is_local) {
       if (cfg.IsValid()) {
+        cfg.request.username = GetLocalUsername_();
         host_configs[key] = cfg;
       } else {
         // Exempt local profile from strict host-json completeness checks:
@@ -419,10 +420,10 @@ std::pair<ECM, HostConfig> AMHostManager::GetLocalConfig() {
   if (result.request.buffer_size <= 0) {
     result.request.buffer_size = 64 * AMMB;
   } else {
-    result.request.buffer_size = std::min(
-        std::max(result.request.buffer_size,
-                 static_cast<int64_t>(AMMinBufferSize)),
-        static_cast<int64_t>(AMMaxBufferSize));
+    result.request.buffer_size =
+        std::min(std::max(result.request.buffer_size,
+                          static_cast<int64_t>(AMMinBufferSize)),
+                 static_cast<int64_t>(AMMaxBufferSize));
   }
 
   if (result.metadata.login_dir.empty()) {
@@ -612,7 +613,8 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     prompt_.ErrorFormat(ECM{err_code, err_msg});
   }
 
-  const int protocol_default_port = DefaultPortForProtocol_(entry.request.protocol);
+  const int protocol_default_port =
+      DefaultPortForProtocol_(entry.request.protocol);
   const std::string default_port_for_protocol =
       std::to_string(protocol_default_port);
   std::string port_input;
@@ -893,7 +895,8 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     }
   }
 
-  int64_t buffer_size = entry.request.buffer_size > 0 ? entry.request.buffer_size : 24 * AMMB;
+  int64_t buffer_size =
+      entry.request.buffer_size > 0 ? entry.request.buffer_size : 24 * AMMB;
   while (true) {
     std::string buffer_input = std::to_string(buffer_size);
     if (!PromptHostAttr_(prompt_, configkn::HostAttr::BufferSize,

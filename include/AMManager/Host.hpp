@@ -213,35 +213,12 @@ struct HostConfig {
     if (!jsond.is_object()) {
       return;
     }
-
-    if (!configkn::ValidateNickname(nickname)) {
-      return;
-    }
-
     this->request.nickname = nickname;
-
-    if (!QueryKey(jsond, {configkn::hostname}, &this->request.hostname)) {
-      return;
-    }
-
-    if (this->request.hostname.empty()) {
-      return;
-    }
-
-    if (!QueryKey(jsond, {configkn::username}, &this->request.username)) {
-      return;
-    }
-
-    if (this->request.username.empty()) {
-      return;
-    }
-
+    QueryKey(jsond, {configkn::hostname}, &this->request.hostname);
+    QueryKey(jsond, {configkn::username}, &this->request.username);
     std::string protocol_str;
-    if (!QueryKey(jsond, {configkn::protocol}, &protocol_str)) {
-      request.protocol = ClientProtocol::SFTP;
-    } else {
-      request.protocol = configkn::StrToProtocol(protocol_str);
-    }
+    QueryKey(jsond, {configkn::protocol}, &protocol_str);
+    request.protocol = configkn::StrToProtocol(protocol_str);
 
     int tmp_port = -1;
     QueryKey(jsond, {configkn::port}, &tmp_port);
@@ -272,9 +249,20 @@ struct HostConfig {
     }
   };
 
-  [[nodiscard]] bool IsValid() const {
-    return request.IsValid() && request.protocol != ClientProtocol::Unknown &&
-           request.buffer_size > 0;
+  [[nodiscard]] bool IsValid(std::string *error_info = nullptr) const {
+    if (error_info) {
+      error_info->clear();
+    }
+    if (!request.IsValid(error_info)) {
+      return false;
+    }
+    if (!configkn::ValidateNickname(request.nickname)) {
+      if (error_info) {
+        *error_info = "nickname contains invalid characters";
+      }
+      return false;
+    }
+    return true;
   }
 };
 

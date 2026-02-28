@@ -649,34 +649,80 @@ struct ConRequest {
   /**
    * @brief Canonical constructor for client connection/config request.
    */
-  ConRequest(std::string nickname, std::string hostname,
-             std::string trash_dir, int64_t buffer_size,
-             ClientProtocol protocol, int port, std::string username,
-             std::string password = "", std::string keyfile = "",
-             bool compression = false)
+  ConRequest(std::string nickname, std::string hostname, std::string trash_dir,
+             int64_t buffer_size, ClientProtocol protocol, int port,
+             std::string username, std::string password = "",
+             std::string keyfile = "", bool compression = false)
       : nickname(std::move(nickname)), hostname(std::move(hostname)),
         trash_dir(std::move(trash_dir)), buffer_size(buffer_size),
         protocol(protocol), port(port), username(std::move(username)),
         password(std::move(password)), keyfile(std::move(keyfile)),
-        compression(compression) {}
+        compression(std::move(compression)) {}
 
   /**
    * @brief Backward-compatible constructor with username/port-leading order.
    */
   ConRequest(std::string nickname, std::string hostname, std::string username,
-             int port = 22, std::string password = "",
-             std::string keyfile = "", bool compression = false,
-             std::string trash_dir = "", int64_t buffer_size = 0,
+             int port = 22, std::string password = "", std::string keyfile = "",
+             bool compression = false, std::string trash_dir = "",
+             int64_t buffer_size = 0,
              ClientProtocol protocol = ClientProtocol::SFTP)
       : nickname(std::move(nickname)), hostname(std::move(hostname)),
         trash_dir(std::move(trash_dir)), buffer_size(buffer_size),
         protocol(protocol), port(port), username(std::move(username)),
         password(std::move(password)), keyfile(std::move(keyfile)),
-        compression(compression) {}
+        compression(std::move(compression)) {}
 
-  [[nodiscard]] bool IsValid() const {
-    return !nickname.empty() && !hostname.empty() && !username.empty() &&
-           port > 0 && port <= 65535 && protocol != ClientProtocol::Unknown;
+  /**
+   * @brief Validate connection request fields.
+   *
+   * Validation order:
+   * 1) protocol
+   * 2) nickname
+   * 3) hostname (except local protocol) and username
+   * 4) port range
+   *
+   * @param error_info Optional detailed failure message.
+   * @return true when request is valid.
+   */
+  [[nodiscard]] bool IsValid(std::string *error_info = nullptr) const {
+    if (error_info) {
+      error_info->clear();
+    }
+    if (protocol == ClientProtocol::Unknown) {
+      if (error_info) {
+        *error_info = "protocol cannot be unknown";
+      }
+      return false;
+    }
+    if (nickname.empty()) {
+      if (error_info) {
+        *error_info = "nickname cannot be empty";
+      }
+      return false;
+    }
+    if (protocol == ClientProtocol::LOCAL) {
+      return true;
+    }
+    if (hostname.empty()) {
+      if (error_info) {
+        *error_info = "hostname cannot be empty when protocol is not local";
+      }
+      return false;
+    }
+    if (username.empty()) {
+      if (error_info) {
+        *error_info = "username cannot be empty";
+      }
+      return false;
+    }
+    if (port <= 0 || port > 65535) {
+      if (error_info) {
+        *error_info = "port out of range (1-65535)";
+      }
+      return false;
+    }
+    return true;
   }
 };
 
@@ -689,12 +735,11 @@ struct ProgressCBInfo {
   size_t file_size;
   size_t accumulated_size;
   size_t total_size;
-  ProgressCBInfo(const std::string &src, const std::string &dst,
-                 const std::string &src_host, const std::string &dst_host,
-                 size_t this_size, size_t file_size,
-                 const size_t &accumulated_size, const size_t &total_size)
-      : src(src), dst(dst), src_host(src_host), dst_host(dst_host),
-        this_size(this_size), file_size(file_size),
+  ProgressCBInfo(std::string src, std::string dst, std::string src_host,
+                 std::string dst_host, size_t this_size, size_t file_size,
+                 size_t accumulated_size, size_t total_size)
+      : src(std::move(src)), dst(std::move(dst)), src_host(std::move(src_host)),
+        dst_host(dst_host), this_size(this_size), file_size(file_size),
         accumulated_size(accumulated_size), total_size(total_size) {}
 };
 

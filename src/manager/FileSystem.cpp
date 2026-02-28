@@ -199,6 +199,40 @@ static std::string BoolToString_(bool value) {
 }
 
 /**
+ * @brief Return true when command prefix targets PowerShell -Command.
+ */
+static bool IsPowerShellCommandPrefix_(const std::string &cmd_prefix) {
+  const std::string lowered = AMStr::lowercase(AMStr::Strip(cmd_prefix));
+  return lowered.find("powershell") != std::string::npos &&
+         lowered.find("-command") != std::string::npos;
+}
+
+/**
+ * @brief Build wrapped command text for configured command prefix.
+ */
+static std::string BuildShellCommandWithPrefix_(const std::string &command,
+                                                const std::string &cmd_prefix,
+                                                bool wrap_cmd,
+                                                ClientProtocol protocol) {
+  if (cmd_prefix.empty()) {
+    return command;
+  }
+  if (!wrap_cmd) {
+    return cmd_prefix + command;
+  }
+
+  // PowerShell -Command with single quotes evaluates to a string literal.
+  // Use double-quoted command text on local Windows profile so command runs.
+  if (protocol == ClientProtocol::LOCAL &&
+      IsPowerShellCommandPrefix_(cmd_prefix)) {
+    std::string escaped = AMStr::replace_all(command, "\"", "`\"");
+    return AMStr::amfmt("{}\"{}\"", cmd_prefix, escaped);
+  }
+
+  return AMStr::amfmt("{}'{}'", cmd_prefix, command);
+}
+
+/**
  * @brief Print host-like detail using runtime client data.
  */
 static void PrintClientDetail_(AMPromptManager &prompt_manager,
@@ -1166,7 +1200,7 @@ AMFileSystem::ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
  *
  * The final command is built from host config:
  * - no prefix: cmd
- * - prefix + "'" + cmd + "'" when wrap_cmd is true
+ * - prefix + wrapped cmd when wrap_cmd is true
  * - prefix + cmd when wrap_cmd is false
  */
 CR AMFileSystem::ShellRun(const std::string &cmd, int max_time_ms,
@@ -1217,14 +1251,8 @@ CR AMFileSystem::ShellRun(const std::string &cmd, int max_time_ms,
     }
   }
 
-  std::string final_cmd = command;
-  if (!cmd_prefix.empty()) {
-    if (wrap_cmd) {
-      final_cmd = AMStr::amfmt("{}'{}'", cmd_prefix, command);
-    } else {
-      final_cmd = cmd_prefix + command;
-    }
-  }
+  std::string final_cmd = BuildShellCommandWithPrefix_(
+      command, cmd_prefix, wrap_cmd, protocol);
   return client->ConductCmd(final_cmd, max_time_ms, flag);
 }
 
