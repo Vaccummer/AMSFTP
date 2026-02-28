@@ -302,6 +302,18 @@ bool ValidateHostAttrValue(HostAttr attr, const std::string &value,
     set_norm(parsed ? "true" : "false");
     return true;
   }
+  case HostAttr::CmdPrefix:
+    set_norm(value);
+    return true;
+  case HostAttr::WrapCmd: {
+    const std::string v = AMStr::Strip(value);
+    bool parsed = false;
+    if (!StrValueParse(v, &parsed)) {
+      return fail(EC::InvalidArg, "wrap_cmd must be true or false");
+    }
+    set_norm(parsed ? "true" : "false");
+    return true;
+  }
   case HostAttr::Password:
   case HostAttr::TrashDir:
   case HostAttr::LoginDir:

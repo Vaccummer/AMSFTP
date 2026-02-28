@@ -123,6 +123,12 @@ public:
   /** Print the home directory for a client (defaults to current). */
   ECM HomeDir(const std::string &nickname = "", amf interrupt_flag = nullptr,
               int timeout_ms = -1);
+  /**
+   * @brief Run a shell command on current SFTP/local client with optional host
+   * command prefix wrapping.
+   */
+  CR ShellRun(const std::string &cmd, int max_time_ms = -1,
+              amf interrupt_flag = nullptr);
   /** Update the trash directory and persist it in config. */
   ECM SetTrashDir(const std::string &trash_dir,
                   const std::string &nickname = "",
