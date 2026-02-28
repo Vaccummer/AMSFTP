@@ -1,12 +1,13 @@
-Great Improve on ConductCmd (sftp/local)
+# Refactor the whole HostConfig and realted codes
 
-add an str cmd_prefix(you can choose a suitable argname) bool wrap_cmd in HostConfig in config\config.toml, this cmd_prefix is invisible to Client, but should be stored in ClientConfig
+## Client Init config
 
-ConductCmd itself only recept final command and conduct it. remove cmd check in IsCommandAllowed
+Client 的构造函数额外需要 Conrequest, UserArgs
 
-add a function in Filesystem ShellRun(str cmd, and other args you think necessary) for CLI bind, it proximately does things:
+Conrequest 包含: nickname,hostname,trash_dir,buffer_size,protocol,port,username,password,keyfile,compression
 
-+ build command(if no prefix, just use arg cmd)
-  + prefix'cmd' (if wrap)
-  + prefixcmd
-+ call ConductCmd
+UserArgs 实际上为模板类型, 是用于传入用户自己的参数class
+
+Conrequest 在client只向外提供常引用
+
+UserArgs 提供

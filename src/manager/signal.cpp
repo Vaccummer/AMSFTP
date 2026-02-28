@@ -186,8 +186,8 @@ void AMCliSignalMonitor::Run_() {
           break;
         }
       }
-      if ((signum == SIGINT || signum == SIGTERM) && amgif) {
-        (void)amgif->SetStatus(signum == SIGINT ? ControlSignal::Interrupt
+      if ((signum == SIGINT || signum == SIGTERM) && TaskControlToken::Instance()) {
+        (void)TaskControlToken::Instance()->SetStatus(signum == SIGINT ? ControlSignal::Interrupt
                                                 : ControlSignal::Kill);
       }
     }

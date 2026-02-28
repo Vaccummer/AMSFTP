@@ -121,7 +121,7 @@ public:
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
 
-    std::string cmdline = "cmd /c " + cmd;
+    std::string cmdline = cmd;
     std::vector<char> cmd_buf(cmdline.begin(), cmdline.end());
     cmd_buf.push_back('\0');
 
@@ -135,20 +135,46 @@ public:
       return {ECM{EC::UnknownError, "CreateProcess failed"}, {"", -1}};
     }
 
+    HANDLE job_handle = CreateJobObjectW(nullptr, nullptr);
+    if (job_handle != nullptr) {
+      JOBOBJECT_EXTENDED_LIMIT_INFORMATION job_limits{};
+      job_limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+      const bool configured =
+          SetInformationJobObject(job_handle, JobObjectExtendedLimitInformation,
+                                  &job_limits, sizeof(job_limits)) != 0;
+      const bool assigned = configured && AssignProcessToJobObject(job_handle, pi.hProcess) != 0;
+      if (!assigned) {
+        CloseHandle(job_handle);
+        job_handle = nullptr;
+      }
+    }
+
     std::string output;
     std::array<char, 4096> buffer;
     int exit_status = -1;
     bool finished = false;
+    bool interrupted = false;
+    bool timed_out = false;
     int64_t start_time = am_ms();
 
     while (true) {
       if (flag && !flag->IsRunning()) {
-        TerminateProcess(pi.hProcess, 1);
+        if (job_handle) {
+          (void)TerminateJobObject(job_handle, 1);
+        } else {
+          (void)TerminateProcess(pi.hProcess, 1);
+        }
+        interrupted = true;
         finished = true;
         break;
       }
       if (max_time_ms > 0 && am_ms() - start_time >= max_time_ms) {
-        TerminateProcess(pi.hProcess, 1);
+        if (job_handle) {
+          (void)TerminateJobObject(job_handle, 1);
+        } else {
+          (void)TerminateProcess(pi.hProcess, 1);
+        }
+        timed_out = true;
         finished = true;
         break;
       }
@@ -156,9 +182,12 @@ public:
       DWORD available = 0;
       if (PeekNamedPipe(read_pipe, nullptr, 0, nullptr, &available, nullptr) &&
           available > 0) {
+        const DWORD chunk_size = available < static_cast<DWORD>(buffer.size())
+                                     ? available
+                                     : static_cast<DWORD>(buffer.size());
         DWORD read_bytes = 0;
-        if (ReadFile(read_pipe, buffer.data(),
-                     static_cast<DWORD>(buffer.size()), &read_bytes, nullptr) &&
+        if (ReadFile(read_pipe, buffer.data(), chunk_size, &read_bytes,
+                     nullptr) &&
             read_bytes > 0) {
           output.append(buffer.data(), static_cast<size_t>(read_bytes));
         }
@@ -176,20 +205,45 @@ public:
       if (GetExitCodeProcess(pi.hProcess, &code)) {
         exit_status = static_cast<int>(code);
       }
-      // Drain remaining output
-      DWORD read_bytes = 0;
-      while (ReadFile(read_pipe, buffer.data(),
-                      static_cast<DWORD>(buffer.size()), &read_bytes,
-                      nullptr) &&
-             read_bytes > 0) {
+
+      // Non-blocking drain to avoid hanging when descendants keep pipe handles.
+      while (true) {
+        DWORD available = 0;
+        if (!PeekNamedPipe(read_pipe, nullptr, 0, nullptr, &available,
+                           nullptr) ||
+            available == 0) {
+          break;
+        }
+        const DWORD chunk_size = available < static_cast<DWORD>(buffer.size())
+                                     ? available
+                                     : static_cast<DWORD>(buffer.size());
+        DWORD read_bytes = 0;
+        if (!ReadFile(read_pipe, buffer.data(), chunk_size, &read_bytes,
+                      nullptr) ||
+            read_bytes == 0) {
+          break;
+        }
         output.append(buffer.data(), static_cast<size_t>(read_bytes));
       }
     }
 
     CloseHandle(read_pipe);
+    if (job_handle) {
+      CloseHandle(job_handle);
+    }
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
+    if (interrupted) {
+      return {ECM{EC::Terminate, "Command interrupted"},
+              { output,
+                exit_status }};
+    }
+    if (timed_out) {
+      return {ECM{EC::OperationTimeout, "Command timed out"},
+              { output,
+                exit_status }};
+    }
     return {ECM{EC::Success, ""}, { output, exit_status }};
 #else
     amf flag = interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;

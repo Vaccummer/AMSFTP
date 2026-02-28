@@ -1390,10 +1390,7 @@ void PrintECM_(AMPromptManager &prompt, const ECM &rcm) {
  * raw result.
  */
 CR ExecuteShellCommand_(AMFileSystem &filesystem, const std::string &command) {
-  if (!amgif) {
-    amgif = std::make_shared<TaskControlToken>();
-  }
-  return filesystem.ShellRun(command, -1, amgif);
+  return filesystem.ShellRun(command, -1, TaskControlToken::Instance());
 }
 
 /**
@@ -1508,7 +1505,7 @@ int RunInteractiveLoop(const std::string &app_name,
   PromptState prompt_state;
 
   while (true) {
-    if (amgif && amgif->IsKill()) {
+    if (TaskControlToken::Instance() && TaskControlToken::Instance()->IsKill()) {
       break;
     }
 
@@ -1539,8 +1536,8 @@ int RunInteractiveLoop(const std::string &app_name,
     AMCliSignalMonitor &monitor = AMCliSignalMonitor::Instance();
     (void)config_manager.BackupIfNeeded();
 
-    if (amgif) {
-      amgif->Reset();
+    if (TaskControlToken::Instance()) {
+      TaskControlToken::Instance()->Reset();
     }
     // monitor.SilenceHook("GLOBAL");
     monitor.ResumeHook("COREPROMPT");
@@ -1551,10 +1548,10 @@ int RunInteractiveLoop(const std::string &app_name,
     // monitor.ResumeHook("GLOBAL");
     AMInteractiveLoop::EventRegistry::Instance().RunOnCorePromptReturn();
 
-    if (amgif && amgif->IsKill()) {
+    if (TaskControlToken::Instance() && TaskControlToken::Instance()->IsKill()) {
       break;
     }
-    if (amgif && !amgif->IsRunning()) {
+    if (TaskControlToken::Instance() && !TaskControlToken::Instance()->IsRunning()) {
       prompt.Print("Interrupted. Type 'exit' to quit.");
       continue;
     }
@@ -1649,8 +1646,8 @@ int RunInteractiveLoop(const std::string &app_name,
     DispatchResult dispatch =
         DispatchCliCommands(cli_commands, managers, false, true);
     const auto exec_end = std::chrono::steady_clock::now();
-    if (amgif) {
-      amgif->Reset();
+    if (TaskControlToken::Instance()) {
+      TaskControlToken::Instance()->Reset();
     }
     UpdatePromptState_(prompt_state, dispatch.rcm, exec_end - input_confirmed);
     if (dispatch.request_exit) {

@@ -20,6 +20,7 @@ class App;
 enum class AMCommandArgSemantic {
   None = 0,
   Path,
+  ShellCmd,
   HostNickname,
   HostAttr,
   ClientName,

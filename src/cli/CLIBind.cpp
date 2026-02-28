@@ -524,6 +524,7 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
   if (cmd_node) {
     cmd_node->AddOption("-t", "--timeout_ms", args.cmd.timeout_ms, 1, 1,
                         Sem::None, "Timeout in milliseconds (default: 5000)");
+    cmd_node->AddPositionalRule(0, Sem::ShellCmd, false);
   }
 
   CommandNode *bash_node = root->AddFunction("bash", "Enter interactive mode",

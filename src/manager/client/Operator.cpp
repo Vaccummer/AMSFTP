@@ -165,7 +165,7 @@ std::pair<ECM, std::shared_ptr<BaseClient>>
 Operator::AddClient(const std::string &nickname,
                     std::shared_ptr<ClientMaintainer> maintainer, bool force,
                     bool quiet, TraceCallback trace_cb, amf interrupt_flag) {
-  amf flag = interrupt_flag ? interrupt_flag : amgif;
+  amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   ClientMaintainer &target = maintainer ? *maintainer : Clients();
 
   if (!trace_cb) {
@@ -265,7 +265,7 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
                      interrupt_flag);
   }
 
-  amf flag = interrupt_flag ? interrupt_flag : amgif;
+  amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (IsLocalNickname_(nickname)) {
     return {Ok(), LocalClient()};
   }
@@ -343,7 +343,7 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
                   const std::string &keyfile,
                   std::shared_ptr<ClientMaintainer> maintainer, bool quiet,
                   TraceCallback trace_cb, amf interrupt_flag) {
-  amf flag = interrupt_flag ? interrupt_flag : amgif;
+  amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   ClientMaintainer &target = maintainer ? *maintainer : Clients();
 
   if (protocol == ClientProtocol::LOCAL ||
@@ -442,14 +442,14 @@ Operator::CheckClient(const std::string &nickname,
                       const std::shared_ptr<ClientMaintainer> &maintainer,
                       bool update, amf interrupt_flag, int timeout_ms,
                       int64_t start_time) {
-  amf flag = interrupt_flag ? interrupt_flag : amgif;
+  amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   ClientMaintainer &target = maintainer ? *maintainer : Clients();
   return target.test_client(nickname, update, flag, timeout_ms, start_time);
 }
 
 std::pair<ECM, std::shared_ptr<BaseClient>>
 Operator::EnsureClient(const std::string &nickname, amf interrupt_flag) {
-  amf flag = interrupt_flag ? interrupt_flag : amgif;
+  amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (IsLocalNickname_(nickname)) {
     return {Ok(), LocalClient()};
   }

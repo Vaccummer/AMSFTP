@@ -249,7 +249,6 @@ class TaskControlToken {
 public:
   using HookFunc =
       std::function<void(ControlSignal, std::optional<TaskControlSignal>)>;
-
   /**
    * @brief Lightweight hook metadata returned by temporary hook guards.
    */
@@ -258,6 +257,7 @@ public:
     ControlSignal threshold = ControlSignal::Running;
     int priority = 0;
   };
+  inline static std::shared_ptr<TaskControlToken> Instance() { return Global; }
 
   /**
    * @brief RAII guard for temporary hook registration.
@@ -342,6 +342,7 @@ private:
     int priority = 0;
     size_t id = 0;
   };
+  static const std::shared_ptr<TaskControlToken> Global;
 
   std::atomic<int> signal_{static_cast<int>(ControlSignal::Running)};
   std::atomic<size_t> wake_token_seed_{1};
@@ -506,9 +507,7 @@ public:
   /**
    * @brief Reset state and signal back to running/no-signal.
    */
-  bool Reset() {
-    return SetStatus(ControlSignal::Running);
-  }
+  bool Reset() { return SetStatus(ControlSignal::Running); }
 
   /**
    * @brief Force killed termination.
@@ -603,7 +602,7 @@ public:
   }
 };
 
-inline std::shared_ptr<TaskControlToken> amgif =
+inline const std::shared_ptr<TaskControlToken> TaskControlToken::Global =
     std::make_shared<TaskControlToken>();
 
 class PathInfo {
@@ -1459,8 +1458,7 @@ public:
       return false;
     }
     const auto status = flag->GetStatus();
-    return status == ControlSignal::Interrupt ||
-           status == ControlSignal::Kill;
+    return status == ControlSignal::Interrupt || status == ControlSignal::Kill;
   }
   bool is_pause_only() const {
     auto flag = ResolveInterruptFlag_();

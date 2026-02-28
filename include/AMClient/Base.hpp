@@ -1,6 +1,5 @@
 #pragma once
 // standard library
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -14,7 +13,6 @@
 #include <list>
 #include <memory>
 #include <mutex>
-#include <random>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -37,7 +35,7 @@
 // #define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR // in case mutex constructor is
 // not constexpr in some environments (like pybind11's embedded MSVC 2015),
 // which causes static initialization failure
-
+/*
 inline size_t GenerateUIDInt() {
   try {
     std::random_device rd;
@@ -73,6 +71,7 @@ inline std::string GenerateUID(int length = 10) {
   std::reverse(uid_str.begin(), uid_str.end());
   return uid_str;
 }
+*/
 
 class UnimplementedMethodException : public std::exception {
 public:
@@ -221,8 +220,8 @@ private:
     size_t pos = 0;
     while ((pos = result.find(from, pos)) != std::string::npos) {
       result.replace(pos, from.length(), to);
-      pos +=
-          to.length(); // Skip replaced content to prevent repeated replacement (e.g. from is a substring of to)
+      pos += to.length(); // Skip replaced content to prevent repeated
+                          // replacement (e.g. from is a substring of to)
     }
     return result;
   }
@@ -241,7 +240,8 @@ public:
   }
 
   bool name_match(const std::string &name, const std::string &pattern) {
-    // Replace * in pattern with star_rep, < with less_rep, and > with greater_rep
+    // Replace * in pattern with star_rep, < with less_rep, and > with
+    // greater_rep
     static const std::string star_rep = "XKSOX1S";
     static const std::string less_rep = "SORBVs8";
     static const std::string greater_rep = "YNBSkdu8";
@@ -251,7 +251,8 @@ public:
     pattern_new = _rep(pattern_new, "<", less_rep);
     pattern_new = _rep(pattern_new, ">", greater_rep);
     pattern_new = AMPathStr::RegexEscape(pattern_new);
-    // Replace star_rep in path with .*, less_rep with [, and greater_rep with ]; do not use regex replacement
+    // Replace star_rep in path with .*, less_rep with [, and greater_rep with
+    // ]; do not use regex replacement
     pattern_new = _rep(pattern_new, star_rep, ".*");
     pattern_new = _rep(pattern_new, less_rep, "[");
     pattern_new = _rep(pattern_new, greater_rep, "]");
@@ -538,7 +539,6 @@ private:
   }
 
 public:
-
   ~SafeChannel() {
     if (channel) {
       if (!closed) {
@@ -641,9 +641,9 @@ public:
         return control_retry;
       }
 
-      channel = libssh2_channel_open_ex(session, "session",
-                                        sizeof("session") - 1, 4 * AMMB,
-                                        32 * AMKB, nullptr, 0);
+      channel =
+          libssh2_channel_open_ex(session, "session", sizeof("session") - 1,
+                                  4 * AMMB, 32 * AMKB, nullptr, 0);
       if (channel) {
         closed = false;
         is_init = true;
@@ -680,8 +680,7 @@ public:
       return {EC::Success, ""};
     }
 
-    auto run_nonblocking_op = [&](auto &&op,
-                                  const std::string &action) -> ECM {
+    auto run_nonblocking_op = [&](auto &&op, const std::string &action) -> ECM {
       while (true) {
         const int rc = op();
         if (rc == 0) {
@@ -721,8 +720,8 @@ public:
       }
     }
 
-    ECM close_rcm =
-        run_nonblocking_op([this]() { return close_nonblock(); }, "channel close");
+    ECM close_rcm = run_nonblocking_op([this]() { return close_nonblock(); },
+                                       "channel close");
     if (close_rcm.first == EC::Success) {
       return close_rcm;
     }
@@ -741,6 +740,10 @@ public:
 class BaseClient : public AMTracer, public BasePathMatch {
 private:
   ssize_t buffer_size = AMMB * 8;
+  static std::string GenerateUID() {
+    static size_t seed = 0;
+    return std::to_string(seed++);
+  };
 
 protected:
   amf ClientInterruptFlag = std::make_shared<TaskControlToken>();
@@ -764,8 +767,7 @@ public:
              TraceCallback trace_cb = {})
       : AMTracer(request, buffer_capacity, std::move(trace_cb)),
         BasePathMatch() {
-    // Generate a random uid
-    this->uid = GenerateUID();
+    this->uid = BaseClient::GenerateUID();
   }
 
   std::string GetUID() { return this->uid; }
@@ -1078,4 +1080,3 @@ public:
         "{} Client doesn't implement funtion: walk", GetProtocolName()));
   }
 };
-

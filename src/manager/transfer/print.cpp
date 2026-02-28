@@ -699,7 +699,7 @@ ECM AMTransferManager::Show(
   }
 
   ResetInterruptFlag_(interrupt_flag);
-  ResetInterruptFlag_(amgif);
+  ResetInterruptFlag_(TaskControlToken::Instance());
 
   return last_error.first == EC::Success ? ECM{EC::Success, ""} : last_error;
 }

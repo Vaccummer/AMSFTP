@@ -676,6 +676,7 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
 
     bool positional_consumed = false;
     bool option_definition = false;
+    const bool option_value_token = pending_value_rule.has_value();
     std::optional<AMCommandArgSemantic> semantic_hint = consume_option_value();
 
     if (!semantic_hint.has_value() && command_tree_ && !command_path.empty() &&
@@ -715,12 +716,13 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
       }
     }
 
-    if (!semantic_hint.has_value() && !option_definition && command_tree_ &&
+    if (!option_value_token && !semantic_hint.has_value() && !option_definition &&
+        command_tree_ &&
         !command_path.empty()) {
       semantic_hint =
           command_tree_->ResolvePositionalSemantic(command_path, arg_index);
       positional_consumed = true;
-    } else if (!option_definition) {
+    } else if (!option_definition && !option_value_token) {
       positional_consumed = true;
     }
 
@@ -760,6 +762,14 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
       if (*semantic_hint == AMCommandArgSemantic::VarZone) {
         token.type = ClassifyVarZoneTokenType_(unescaped_text, var_manager_,
                                                host_manager_);
+        if (positional_consumed) {
+          ++arg_index;
+        }
+        continue;
+      }
+
+      if (*semantic_hint == AMCommandArgSemantic::ShellCmd) {
+        token.type = AMTokenType::ShellCmd;
         if (positional_consumed) {
           ++arg_index;
         }

@@ -312,9 +312,6 @@ void CommandNode::AddOptionValueRule(const std::string &long_name,
                                      char short_name,
                                      AMCommandArgSemantic semantic,
                                      size_t value_count, bool repeat_tail) {
-  if (semantic == AMCommandArgSemantic::None) {
-    return;
-  }
   const std::string normalized_long = NormalizeLongName_(long_name);
   if (normalized_long.empty() && short_name == '\0') {
     return;
@@ -400,7 +397,7 @@ CommandNode::ResolveOptionValueRule(const std::string &long_name,
     if (short_name != '\0' && rule.short_option == short_name) {
       matched = true;
     }
-    if (!matched || rule.semantic == AMCommandArgSemantic::None) {
+    if (!matched) {
       continue;
     }
     if (value_index < rule.value_count || rule.repeat_tail) {
