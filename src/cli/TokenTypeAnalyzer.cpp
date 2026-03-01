@@ -25,7 +25,7 @@ std::function<void()> g_token_cache_clear_callback = []() {
 /** Register token-cache clear callback for each PromptCore return. */
 void EnsureTokenCacheClearHookRegistered_() {
   std::call_once(g_token_cache_hook_once, []() {
-    auto &registry = AMInteractiveLoop::EventRegistry::Instance();
+    auto &registry = AMInteractiveEventRegistry::Instance();
     registry.RegisterOnCorePromptReturn(&g_token_cache_clear_callback);
   });
 }

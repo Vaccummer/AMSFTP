@@ -3,6 +3,7 @@
 #include "AMBase/Path.hpp"
 #include "AMBase/tools/time.hpp"
 #include "AMCLI/CLIBind.hpp"
+#include "AMCLI/CommandPreprocess.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
@@ -1412,15 +1413,15 @@ void UpdatePromptState_(PromptState &state, const ECM &rcm,
 /**
  * @brief Return singleton registry instance.
  */
-AMInteractiveLoop::EventRegistry &AMInteractiveLoop::EventRegistry::Instance() {
-  static EventRegistry ins;
+AMInteractiveEventRegistry &AMInteractiveEventRegistry::Instance() {
+  static AMInteractiveEventRegistry ins;
   return ins;
 }
 
 /**
  * @brief Register callback into one callback vector.
  */
-void AMInteractiveLoop::EventRegistry::RegisterCallback_(
+void AMInteractiveEventRegistry::RegisterCallback_(
     std::vector<std::function<void()> *> *callbacks,
     std::function<void()> *clear_fn) {
   if (!callbacks || !clear_fn) {
@@ -1437,7 +1438,7 @@ void AMInteractiveLoop::EventRegistry::RegisterCallback_(
 /**
  * @brief Register callback for PromptCore-return phase.
  */
-void AMInteractiveLoop::EventRegistry::RegisterOnCorePromptReturn(
+void AMInteractiveEventRegistry::RegisterOnCorePromptReturn(
     std::function<void()> *clear_fn) {
   RegisterCallback_(&core_prompt_return_callbacks_, clear_fn);
 }
@@ -1445,7 +1446,7 @@ void AMInteractiveLoop::EventRegistry::RegisterOnCorePromptReturn(
 /**
  * @brief Register callback for interactive-loop-exit phase.
  */
-void AMInteractiveLoop::EventRegistry::RegisterOnInteractiveLoopExit(
+void AMInteractiveEventRegistry::RegisterOnInteractiveLoopExit(
     std::function<void()> *clear_fn) {
   RegisterCallback_(&interactive_loop_exit_callbacks_, clear_fn);
 }
@@ -1453,7 +1454,7 @@ void AMInteractiveLoop::EventRegistry::RegisterOnInteractiveLoopExit(
 /**
  * @brief Execute callbacks from one callback vector.
  */
-void AMInteractiveLoop::EventRegistry::RunCallbacks_(
+void AMInteractiveEventRegistry::RunCallbacks_(
     const std::vector<std::function<void()> *> &callbacks) {
   for (auto *fn : callbacks) {
     if (!fn || !(*fn)) {
@@ -1469,7 +1470,7 @@ void AMInteractiveLoop::EventRegistry::RunCallbacks_(
 /**
  * @brief Execute all callbacks for PromptCore-return phase.
  */
-void AMInteractiveLoop::EventRegistry::RunOnCorePromptReturn() {
+void AMInteractiveEventRegistry::RunOnCorePromptReturn() {
   std::vector<std::function<void()> *> callbacks;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1481,7 +1482,7 @@ void AMInteractiveLoop::EventRegistry::RunOnCorePromptReturn() {
 /**
  * @brief Execute all callbacks for interactive-loop-exit phase.
  */
-void AMInteractiveLoop::EventRegistry::RunOnInteractiveLoopExit() {
+void AMInteractiveEventRegistry::RunOnInteractiveLoopExit() {
   std::vector<std::function<void()> *> callbacks;
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -1551,7 +1552,7 @@ int RunInteractiveLoop(const std::string &app_name,
 
     monitor.SilenceHook("COREPROMPT");
     // monitor.ResumeHook("GLOBAL");
-    AMInteractiveLoop::EventRegistry::Instance().RunOnCorePromptReturn();
+    AMInteractiveEventRegistry::Instance().RunOnCorePromptReturn();
 
     if (TaskControlToken::Instance() &&
         TaskControlToken::Instance()->IsKill()) {
@@ -1665,7 +1666,7 @@ int RunInteractiveLoop(const std::string &app_name,
 
   prompt.FlushHistory();
   if (!skip_loop_exit_callbacks) {
-    AMInteractiveLoop::EventRegistry::Instance().RunOnInteractiveLoopExit();
+    AMInteractiveEventRegistry::Instance().RunOnInteractiveLoopExit();
   }
   AMIsInteractive.store(false, std::memory_order_relaxed);
   return g_cli_exit_code;

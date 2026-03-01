@@ -1,12 +1,8 @@
 #pragma once
+#include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
-#include "AMManager/Client.hpp"
-#include <cstdint>
-#include <list>
-#include <string>
-#include <utility>
-#include <vector>
 
+class BaseClient;
 class AMFileSystem : public NonCopyableNonMovable {
 public:
   using ECM = std::pair<ErrorCode, std::string>;
@@ -124,8 +120,9 @@ public:
    * @brief Run a shell command on current SFTP/local client with optional host
    * command prefix wrapping.
    */
-  CR ShellRun(const std::string &cmd, int max_time_ms = -1,
-              amf interrupt_flag = nullptr);
+  std::pair<ECM, std::pair<std::string, int>>
+  ShellRun(const std::string &cmd, int max_time_ms = -1,
+           amf interrupt_flag = nullptr);
   /** Update the trash directory and persist it in config. */
   ECM SetTrashDir(const std::string &trash_dir,
                   const std::string &nickname = "",
@@ -138,9 +135,11 @@ public:
                                       const std::string &path) const;
 
 private:
+  using WalkErrorCallback =
+      std::shared_ptr<std::function<void(const std::string &, const ECM &)>>;
   AMFileSystem() = default;
-
   /** Resolved client reference helper. */
+
   struct ClientRef {
     std::string nickname;
     std::shared_ptr<BaseClient> client;
@@ -169,8 +168,7 @@ private:
    * @param quiet When true, suppress callback creation.
    * @return WalkErrorCallback instance or nullptr when quiet.
    */
-  [[nodiscard]] AMFS::WalkErrorCallback
+  [[nodiscard]] WalkErrorCallback
   MakeWalkErrorCallback(const std::string &func_name, bool quiet) const;
-
   std::list<std::string> cd_history_;
 };

@@ -1,6 +1,5 @@
 #include "AMCLI/Completer/Searcher.hpp"
 #include "AMCLI/Completer/SearcherCommon.hpp"
-#include "AMCLI/CommandTree.hpp"
 #include <algorithm>
 
 using namespace AMSearcherDetail;

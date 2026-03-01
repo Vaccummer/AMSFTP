@@ -10,10 +10,6 @@
 #include <utility>
 #include <vector>
 
-namespace CLI {
-class App;
-}
-
 /**
  * @brief Semantic type for command argument completion/highlight routing.
  */

@@ -36,9 +36,6 @@ int main(int argc, char **argv) {
     auto &managers = CliManagers::Instance();
     ECM init_rcm = managers.Init();
     if (!isok(init_rcm)) {
-      if (!init_rcm.second.empty()) {
-        std::cerr << init_rcm.second << std::endl;
-      }
       return static_cast<int>(init_rcm.first);
     }
     AMIsInteractive.store(false, std::memory_order_relaxed);
@@ -61,7 +58,8 @@ int main(int argc, char **argv) {
 
     DispatchResult dispatch = DispatchCliCommands(cli_commands, managers);
     if (dispatch.enter_interactive) {
-      managers.prompt_manager.ChangeClient(managers.client_manager.CurrentNickname());
+      managers.prompt_manager.ChangeClient(
+          managers.client_manager.CurrentNickname());
       RunInteractiveLoop(app_name, managers);
     }
     if (dispatch.rcm.first != EC::Success) {
@@ -69,7 +67,7 @@ int main(int argc, char **argv) {
     }
     return g_cli_exit_code;
   } catch (const std::runtime_error &e) {
-    std::cerr << "Uncatched RuntimeError: " << e.what() << std::endl;
+    std::cerr << "❌Uncatched RuntimeError: " << e.what() << "\n";
     return static_cast<int>(EC::UnknownError);
   }
 }

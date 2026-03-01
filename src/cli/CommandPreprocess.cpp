@@ -1,4 +1,5 @@
-#include "AMCLI/InteractiveLoop.hpp"
+#include "AMCLI/CommandPreprocess.hpp"
+#include "AMBase/tools/string.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Var.hpp"
 
