@@ -1,11 +1,11 @@
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
 #include "AMBase/tools/time.hpp"
 #include "AMCLI/Completer/Searcher.hpp"
 #include "AMCLI/Completer/SearcherCommon.hpp"
 #include "AMCLI/InteractiveLoop.hpp"
+#include "AMManager/Client.hpp"
 #include "AMManager/FileSystem.hpp"
+#include "AMManager/Prompt.hpp"
+#include "AMManager/Var.hpp"
 #include <algorithm>
 
 using namespace AMSearcherDetail;
@@ -34,14 +34,14 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   const AMPromptProfileArgs &profile =
-      prompt_manager_.ResolvePromptProfileArgs(path.nickname);
+      AMPromptManager::Instance().ResolvePromptProfileArgs(path.nickname);
   const bool hint_request = (ctx.source == AMCompletionSource::InlineHint);
   if (hint_request && !profile.inline_hint.path.enable) {
     return result;
   }
-  const size_t configured_timeout =
-      hint_request ? profile.inline_hint.path.timeout_ms
-                   : profile.complete.path.timeout_ms;
+  const size_t configured_timeout = hint_request
+                                        ? profile.inline_hint.path.timeout_ms
+                                        : profile.complete.path.timeout_ms;
   const int timeout_ms = ToClientTimeoutMs(configured_timeout, 0);
   const bool use_async = hint_request ? false : profile.complete.path.use_async;
 
@@ -58,8 +58,8 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
   if (!use_async) {
     std::shared_ptr<BaseClient> client =
-        path.remote ? client_manager_.Clients().GetHost(path.nickname)
-                    : client_manager_.LocalClient();
+        path.remote ? AMClientManager::Instance().Clients().GetHost(path.nickname)
+                    : AMClientManager::Instance().LocalClient();
     if (!client) {
       return result;
     }
@@ -97,8 +97,8 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     }
 
     std::shared_ptr<BaseClient> client =
-        path.remote ? client_manager_.Clients().GetHost(path.nickname)
-                    : client_manager_.LocalClient();
+        path.remote ? AMClientManager::Instance().Clients().GetHost(path.nickname)
+                    : AMClientManager::Instance().LocalClient();
     if (!client) {
       return false;
     }
@@ -263,7 +263,7 @@ AMPathSearchEngine::FormatPathDisplay_(const PathInfo &info,
     return result;
   };
 
-  const std::string styled = filesystem_.StylePath(info, name);
+  const std::string styled = AMFileSystem::Instance().StylePath(info, name);
   return wrap_pre(styled, name);
 }
 
@@ -278,7 +278,7 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
     return path;
   }
 
-  const auto current_client = client_manager_.CurrentClient();
+  const auto current_client = AMClientManager::Instance().CurrentClient();
   const bool current_remote =
       current_client && current_client->GetProtocol() != ClientProtocol::LOCAL;
 
@@ -309,7 +309,7 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
   }
 
   const std::string path_part_resolved =
-      var_manager_.SubstitutePathLike(path_part_raw);
+      VarCLISet::Instance().SubstitutePathLike(path_part_raw);
   if (header.empty() && !force_path && !IsPathLikeText(path_part_resolved)) {
     return path;
   }
@@ -344,12 +344,12 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
   path.base = path.header + path.dir_raw;
 
   std::shared_ptr<BaseClient> client =
-      path.remote ? client_manager_.Clients().GetHost(path.nickname)
-                  : client_manager_.LocalClient();
+      path.remote ? AMClientManager::Instance().Clients().GetHost(path.nickname)
+                  : AMClientManager::Instance().LocalClient();
   if (!client) {
     return path;
   }
-  path.dir_abs = client_manager_.BuildPath(client, resolved_dir_raw);
+  path.dir_abs = AMClientManager::Instance().BuildPath(client, resolved_dir_raw);
   path.valid = true;
   return path;
 }
@@ -494,5 +494,4 @@ AMBuildDefaultSearchEngineRegistrations() {
   out.push_back({{AMCompletionTarget::Path}, path_engine});
   return out;
 }
-
 

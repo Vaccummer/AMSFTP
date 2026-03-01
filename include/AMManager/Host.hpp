@@ -4,10 +4,13 @@
 #include "AMBase/tools/json.hpp"
 #include "AMBase/tools/string.hpp"
 #include "AMClient/SFTP.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Prompt.hpp"
+#include <algorithm>
+#include <array>
+#include <cctype>
 #include <cstdint>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace configkn {
 /**
@@ -341,7 +344,5 @@ private:
   ECM PromptModifyFields_(const std::string &nickname, HostConfig &entry);
   ECM AddHost_(const std::string &nickname, const HostConfig &entry);
   ECM RemoveHost_(const std::string &nickname);
-  AMConfigManager &config_ = AMConfigManager::Instance();
-  AMPromptManager &prompt_ = AMPromptManager::Instance();
 };
 

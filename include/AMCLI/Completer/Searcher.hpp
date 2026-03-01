@@ -1,14 +1,6 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
-#include "AMCLI/CommandTree.hpp"
 #include "AMCLI/Completer/Engine.hpp"
-#include "AMCLI/TokenTypeAnalyzer.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/FileSystem.hpp"
-#include "AMManager/Host.hpp"
-#include "AMManager/Prompt.hpp"
-#include "AMManager/Transfer.hpp"
-#include "AMManager/Var.hpp"
 #include <chrono>
 #include <functional>
 #include <list>
@@ -16,9 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-class AMConfigManager;
-class AMFileSystem;
-class AMTransferManager;
+class CommandNode;
 
 /**
  * @brief Command and option completion search engine.
@@ -59,7 +49,6 @@ private:
                          const CommandNode **out_node,
                          size_t *out_consumed) const;
 
-  CommandNode *command_tree_ = &CommandNode::Instance();
 };
 
 /**
@@ -85,11 +74,6 @@ public:
                       std::vector<AMCompletionCandidate> &items) override;
 
 private:
-  AMConfigManager &config_manager_ = AMConfigManager::Instance();
-  AMHostManager &host_manager_ = AMHostManager::Instance();
-  AMClientManager &client_manager_ = AMClientManager::Instance();
-  AMTransferManager &transfer_manager_ = AMTransferManager::Instance();
-  VarCLISet &var_manager_ = VarCLISet::Instance();
 };
 
 /**
@@ -246,12 +230,6 @@ private:
    */
   void StoreTempCache_(const CacheKey &key, const std::vector<PathInfo> &items);
 
-  AMConfigManager &config_manager_ = AMConfigManager::Instance();
-  AMClientManage::Manager &client_manager_ = AMClientManager::Instance();
-  AMFileSystem &filesystem_ = AMFileSystem::Instance();
-  AMTokenTypeAnalyzer &token_analyzer_ = AMTokenTypeAnalyzer::Instance();
-  AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
-  VarCLISet &var_manager_ = VarCLISet::Instance();
   mutable std::mutex cache_mtx_;
   std::unordered_map<std::string, std::unordered_map<std::string, CacheEntry>>
       cache_;

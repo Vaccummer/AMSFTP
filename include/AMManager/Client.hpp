@@ -3,15 +3,14 @@
 #include "AMBase/Path.hpp"
 #include "AMClient/Base.hpp"
 #include "AMClient/IOCore.hpp"
-#include "AMManager/Host.hpp"
-#include "AMManager/Logger.hpp"
-#include "AMManager/Prompt.hpp"
 #include <atomic>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #ifdef _WIN32
 #include <conio.h>
@@ -84,9 +83,6 @@ public:
   EnsureClient(const std::string &nickname, amf interrupt_flag = nullptr);
 
 protected:
-  AMHostManager &hostm_ = AMHostManager::Instance();
-  AMLogManager &log_manager_ = AMLogManager::Instance();
-  AMPromptManager &prompt_ = AMPromptManager::Instance();
   std::shared_ptr<BaseClient> current_client_;
   std::shared_ptr<BaseClient> local_client_base_;
   std::shared_ptr<ClientMaintainer> clients_;

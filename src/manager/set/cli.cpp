@@ -1,5 +1,7 @@
 #include "AMManager/Set.hpp"
+#include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
+#include "AMManager/Prompt.hpp"
 #include <sstream>
 
 using EC = ErrorCode;
@@ -121,47 +123,47 @@ ECM AMSetCLI::PromptPathSet_(const std::string &nickname,
   output->highlight_timeout_ms = base.highlight_timeout_ms;
 
   auto print_abort = [this]() {
-    prompt_.Print(AMConfigManager::Instance().Format("Input Abort", "abort"));
+    AMPromptManager::Instance().Print(AMConfigManager::Instance().Format("Input Abort", "abort"));
   };
 
-  prompt_.Print(AMStr::fmt("HostSet ({})",
+  AMPromptManager::Instance().Print(AMStr::fmt("HostSet ({})",
                              AMConfigManager::Instance().Format(nickname, "nickname")));
-  if (!PromptBool_(prompt_, "CompleteOption.Searcher.Path.use_async: ",
+  if (!PromptBool_(AMPromptManager::Instance(), "CompleteOption.Searcher.Path.use_async: ",
                    output->use_async, &output->use_async)) {
     print_abort();
     return Err(EC::ConfigCanceled, "set prompt canceled");
   }
-  if (!PromptBool_(prompt_, "CompleteOption.Searcher.Path.use_cache: ",
+  if (!PromptBool_(AMPromptManager::Instance(), "CompleteOption.Searcher.Path.use_cache: ",
                    output->use_cache, &output->use_cache)) {
     print_abort();
     return Err(EC::ConfigCanceled, "set prompt canceled");
   }
 
   if (!PromptPositiveSizeT_(
-          prompt_, "CompleteOption.Searcher.Path.cache_items_threshold: ",
+          AMPromptManager::Instance(), "CompleteOption.Searcher.Path.cache_items_threshold: ",
           output->cache_items_threshold, &output->cache_items_threshold)) {
     print_abort();
     return Err(EC::ConfigCanceled, "set prompt canceled");
   }
 
   if (!PromptPositiveSizeT_(
-          prompt_, "CompleteOption.Searcher.Path.cache_max_entries: ",
+          AMPromptManager::Instance(), "CompleteOption.Searcher.Path.cache_max_entries: ",
           output->cache_max_entries, &output->cache_max_entries)) {
     print_abort();
     return Err(EC::ConfigCanceled, "set prompt canceled");
   }
 
-  if (!PromptPositiveSizeT_(prompt_, "CompleteOption.Searcher.Path.timeout_ms: ",
+  if (!PromptPositiveSizeT_(AMPromptManager::Instance(), "CompleteOption.Searcher.Path.timeout_ms: ",
                             output->timeout_ms, &output->timeout_ms)) {
     print_abort();
     return Err(EC::ConfigCanceled, "set prompt canceled");
   }
-  if (!PromptBool_(prompt_, "Highlight.Path.use_check: ",
+  if (!PromptBool_(AMPromptManager::Instance(), "Highlight.Path.use_check: ",
                    output->highlight_use_check, &output->highlight_use_check)) {
     print_abort();
     return Err(EC::ConfigCanceled, "set prompt canceled");
   }
-  if (!PromptPositiveSizeT_(prompt_, "Highlight.Path.timeout_ms: ",
+  if (!PromptPositiveSizeT_(AMPromptManager::Instance(), "Highlight.Path.timeout_ms: ",
                             output->highlight_timeout_ms,
                             &output->highlight_timeout_ms)) {
     print_abort();
@@ -193,15 +195,15 @@ ECM AMSetCLI::Add(const std::string &nickname) {
 
   rcm = CreateHostSet(target, cfg, false);
   if (rcm.first != EC::Success) {
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
   rcm = SaveSettings();
   if (rcm.first != EC::Success) {
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
-  prompt_.Print(AMStr::fmt("hostset added: {}",
+  AMPromptManager::Instance().Print(AMStr::fmt("hostset added: {}",
                              AMConfigManager::Instance().Format(target, "nickname")));
   return Ok();
 }
@@ -226,15 +228,15 @@ ECM AMSetCLI::Modify(const std::string &nickname) {
 
   rcm = ModifyHostSet(target, cfg, false);
   if (rcm.first != EC::Success) {
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
   rcm = SaveSettings();
   if (rcm.first != EC::Success) {
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
-  prompt_.Print(
+  AMPromptManager::Instance().Print(
       AMStr::fmt("hostset updated: {}",
                    AMConfigManager::Instance().Format(target, "nickname")));
   return Ok();
@@ -263,13 +265,13 @@ ECM AMSetCLI::Delete(const std::vector<std::string> &targets) {
     const std::string target = AMStr::Strip(raw);
     if (!ValidateHostSetNickname_(target)) {
       last = Err(EC::InvalidArg, AMStr::fmt("invalid host nickname: {}", raw));
-      prompt_.ErrorFormat(last);
+      AMPromptManager::Instance().ErrorFormat(last);
       continue;
     }
     if (!HasHostSet(target)) {
       last = Err(EC::HostConfigNotFound,
                  AMStr::fmt("host set not found: {}", target));
-      prompt_.ErrorFormat(last);
+      AMPromptManager::Instance().ErrorFormat(last);
       continue;
     }
     valid_targets.push_back(target);
@@ -288,12 +290,12 @@ ECM AMSetCLI::Delete(const std::vector<std::string> &targets) {
   }
 
   bool canceled = false;
-  bool confirmed = prompt_.PromptYesNo(
+  bool confirmed = AMPromptManager::Instance().PromptYesNo(
       AMStr::fmt("Delete {} hostset(s): {} ? (y/N): ", valid_targets.size(),
                    listing),
       &canceled);
   if (canceled || !confirmed) {
-    prompt_.Print("Delete aborted.");
+    AMPromptManager::Instance().Print("Delete aborted.");
     return Ok();
   }
 
@@ -301,7 +303,7 @@ ECM AMSetCLI::Delete(const std::vector<std::string> &targets) {
   for (const std::string &target : valid_targets) {
     ECM rcm = DeleteHostSet(target);
     if (rcm.first != EC::Success) {
-      prompt_.ErrorFormat(rcm);
+      AMPromptManager::Instance().ErrorFormat(rcm);
       last = rcm;
       continue;
     }
@@ -313,7 +315,7 @@ ECM AMSetCLI::Delete(const std::vector<std::string> &targets) {
   }
   ECM save_rcm = SaveSettings();
   if (save_rcm.first != EC::Success) {
-    prompt_.ErrorFormat(save_rcm);
+    AMPromptManager::Instance().ErrorFormat(save_rcm);
     return save_rcm;
   }
   return last;
@@ -323,4 +325,3 @@ ECM AMSetCLI::Delete(const std::vector<std::string> &targets) {
  * @brief Persist cached HostSet data to settings.toml.
  */
 ECM AMSetCLI::SaveSettings() { return Save(true); }
-

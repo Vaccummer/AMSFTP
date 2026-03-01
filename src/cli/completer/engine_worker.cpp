@@ -1,4 +1,5 @@
 #include "AMCLI/Completer/Engine.hpp"
+#include "AMCLI/CommandTree.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Var.hpp"
 #include "Isocline/isocline.h"

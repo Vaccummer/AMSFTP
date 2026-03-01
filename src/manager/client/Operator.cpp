@@ -1,5 +1,8 @@
 #include "AMClient/Base.hpp"
 #include "AMManager/Client.hpp"
+#include "AMManager/Host.hpp"
+#include "AMManager/Logger.hpp"
+#include "AMManager/Prompt.hpp"
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -169,7 +172,7 @@ Operator::AddClient(const std::string &nickname,
   ClientMaintainer &target = maintainer ? *maintainer : Clients();
 
   if (!trace_cb) {
-    trace_cb = log_manager_.TraceCallbackFunc();
+    trace_cb = AMLogManager::Instance().TraceCallbackFunc();
   }
   if (IsLocalNickname_(nickname)) {
     return {Ok(), LocalClient()};
@@ -184,10 +187,10 @@ Operator::AddClient(const std::string &nickname,
     if (rcm.first != EC::Success) {
       return {rcm, existing};
     }
-    auto existing_cfg = hostm_.GetClientConfig(nickname);
+    auto existing_cfg = AMHostManager::Instance().GetClientConfig(nickname);
     if (existing_cfg.first.first == EC::Success) {
       existing->SetClientMetaData(existing_cfg.second.metadata);
-      ApplyLoginDir_(hostm_, nickname, existing,
+      ApplyLoginDir_(AMHostManager::Instance(), nickname, existing,
                      existing_cfg.second.metadata.login_dir, flag);
     } else {
       InitClientWorkdir_(existing);
@@ -195,12 +198,12 @@ Operator::AddClient(const std::string &nickname,
     return {Ok(), existing};
   }
 
-  auto [rcm2, client_config] = hostm_.GetClientConfig(nickname);
+  auto [rcm2, client_config] = AMHostManager::Instance().GetClientConfig(nickname);
   if (rcm2.first != EC::Success) {
     return {rcm2, nullptr};
   }
 
-  auto keys_result = hostm_.PrivateKeys(false);
+  auto keys_result = AMHostManager::Instance().PrivateKeys(false);
   if (keys_result.first.first != EC::Success) {
     return {keys_result.first, nullptr};
   }
@@ -252,7 +255,7 @@ Operator::AddClient(const std::string &nickname,
   }
 
   base_client->SetClientMetaData(client_config.metadata);
-  ApplyLoginDir_(hostm_, nickname, base_client, client_config.metadata.login_dir, flag);
+  ApplyLoginDir_(AMHostManager::Instance(), nickname, base_client, client_config.metadata.login_dir, flag);
   target.add_client(nickname, base_client, true);
   return {Ok(), base_client};
 }
@@ -271,15 +274,15 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
     return {Ok(), LocalClient()};
   }
   if (!trace_cb) {
-    trace_cb = log_manager_.TraceCallbackFunc();
+    trace_cb = AMLogManager::Instance().TraceCallbackFunc();
   }
 
-  auto client_config = hostm_.GetClientConfig(nickname);
+  auto client_config = AMHostManager::Instance().GetClientConfig(nickname);
   if (client_config.first.first != EC::Success) {
     return {client_config.first, nullptr};
   }
 
-  auto keys_result = hostm_.PrivateKeys(false);
+  auto keys_result = AMHostManager::Instance().PrivateKeys(false);
   if (keys_result.first.first != EC::Success) {
     return {keys_result.first, nullptr};
   }
@@ -332,7 +335,7 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
   }
 
   base_client->SetClientMetaData(client_config.second.metadata);
-  ApplyLoginDir_(hostm_, nickname, base_client, client_config.second.metadata.login_dir,
+  ApplyLoginDir_(AMHostManager::Instance(), nickname, base_client, client_config.second.metadata.login_dir,
                  flag);
   return {Ok(), base_client};
 }
@@ -367,8 +370,8 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
     if (error.empty()) {
       break;
     }
-    prompt_.ErrorFormat(Err(EC::InvalidArg, error));
-    if (!prompt_.Prompt("Enter a legal nickname: ", "", &resolved_nickname)) {
+    AMPromptManager::Instance().ErrorFormat(Err(EC::InvalidArg, error));
+    if (!AMPromptManager::Instance().Prompt("Enter a legal nickname: ", "", &resolved_nickname)) {
       return {Err(EC::ConfigCanceled, "Nickname input canceled"), nullptr};
     }
     resolved_nickname = AMStr::Strip(resolved_nickname);
@@ -376,7 +379,7 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
 
   std::vector<std::string> keys;
   if (keyfile.empty()) {
-    auto keys_result = hostm_.PrivateKeys(false);
+    auto keys_result = AMHostManager::Instance().PrivateKeys(false);
     if (keys_result.first.first != EC::Success) {
       return {keys_result.first, nullptr};
     }
@@ -402,7 +405,7 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
   request.buffer_size = AMDefaultRemoteBufferSize;
   request.protocol = protocol;
   if (!trace_cb) {
-    trace_cb = log_manager_.TraceCallbackFunc();
+    trace_cb = AMLogManager::Instance().TraceCallbackFunc();
   }
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, nullptr);
   auto base_client = CreateClient(request, 10, std::move(trace_cb),
@@ -422,13 +425,13 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
   entry.request.protocol = protocol;
   entry.request.buffer_size = AMDefaultRemoteBufferSize;
   entry.metadata.login_dir = "";
-  ECM save_rcm = hostm_.UpsertHost(entry, true);
+  ECM save_rcm = AMHostManager::Instance().UpsertHost(entry, true);
   if (save_rcm.first != EC::Success) {
     return {save_rcm, base_client};
   }
 
   base_client->SetClientMetaData(entry.metadata);
-  ApplyLoginDir_(hostm_, resolved_nickname, base_client, "", flag);
+  ApplyLoginDir_(AMHostManager::Instance(), resolved_nickname, base_client, "", flag);
   target.add_client(resolved_nickname, base_client, true);
   return {Ok(), base_client};
 }
@@ -510,23 +513,23 @@ void Operator::ApplyKnownHostCallback_(
       return Err(EC::InvalidArg, "invalid known host query");
     }
     KnownHostQuery stored = query;
-    ECM find_rcm = hostm_.FindKnownHost(stored);
+    ECM find_rcm = AMHostManager::Instance().FindKnownHost(stored);
     if (find_rcm.first != EC::Success) {
       bool canceled = false;
       bool accepted = true;
       if (AMIsInteractive.load(std::memory_order_relaxed)) {
-        prompt_.Print(AMStr::fmt(
+        AMPromptManager::Instance().Print(AMStr::fmt(
             "Unknown host: {}:{}  User: {} Protocol: [!se][{}][/se]",
             query.hostname, query.port, query.username, query.protocol));
-        prompt_.Print(AMStr::fmt("Fingerprint: {}",
+        AMPromptManager::Instance().Print(AMStr::fmt("Fingerprint: {}",
                                    AMStr::Strip(query.GetFingerprint())));
         accepted =
-            prompt_.PromptYesNo("Trust this host key? (y/N): ", &canceled);
+            AMPromptManager::Instance().PromptYesNo("Trust this host key? (y/N): ", &canceled);
       }
       if (canceled || !accepted) {
         return Err(EC::ConfigCanceled, "Known host fingerprint add canceled");
       }
-      return hostm_.UpsertKnownHost(query, true);
+      return AMHostManager::Instance().UpsertKnownHost(query, true);
     }
     if (find_rcm.first != EC::Success) {
       return find_rcm;
@@ -554,7 +557,7 @@ Operator::DefaultPasswordCallback(const AuthCBInfo &info) {
     const std::string prompt =
         AMStr::fmt("Password required [{}]: ", client_name);
     std::string password;
-    if (!prompt_.SecurePrompt(prompt, &password)) {
+    if (!AMPromptManager::Instance().SecurePrompt(prompt, &password)) {
       return std::string();
     }
     return password;
@@ -564,14 +567,14 @@ Operator::DefaultPasswordCallback(const AuthCBInfo &info) {
     if (info.password_n.empty()) {
       return std::nullopt;
     }
-    prompt_.Print(AMStr::fmt("Wrong password [{}]", client_name));
+    AMPromptManager::Instance().Print(AMStr::fmt("Wrong password [{}]", client_name));
     return std::nullopt;
   }
 
-  auto cfg = hostm_.GetClientConfig(client_name);
+  auto cfg = AMHostManager::Instance().GetClientConfig(client_name);
   if (cfg.first.first == EC::Success) {
     cfg.second.request.password = info.password_n;
-    (void)hostm_.UpsertHost(cfg.second, true);
+    (void)AMHostManager::Instance().UpsertHost(cfg.second, true);
   }
   return std::nullopt;
 }
@@ -581,7 +584,7 @@ void Operator::DefaultDisconnectCallback(
   if (!client || ecm.first == EC::Success) {
     return;
   }
-  prompt_.ErrorFormat(
+  AMPromptManager::Instance().ErrorFormat(
       ECM{ecm.first,
           AMStr::fmt("Client disconnected [{}]: {}", client->GetNickname(),
                        ecm.second.empty() ? std::string(AMStr::ToString(ecm.first))
@@ -600,9 +603,9 @@ Operator::DisconnectCallback Operator::BuiltinDisconnectCallback_() {
 }
 
 std::shared_ptr<BaseClient> Operator::CreateLocalClient_() {
-  auto [rcm, cfg] = hostm_.GetLocalConfig();
+  auto [rcm, cfg] = AMHostManager::Instance().GetLocalConfig();
   auto client_t = CreateClient(cfg.request, 10,
-                               std::move(log_manager_.TraceCallbackFunc()), {},
+                               std::move(AMLogManager::Instance().TraceCallbackFunc()), {},
                                {});
   if (!client_t) {
     std::cerr << "Failed to create local client: Unsupported protocol"
@@ -617,4 +620,3 @@ std::shared_ptr<BaseClient> Operator::CreateLocalClient_() {
 }
 
 } // namespace AMClientManage
-

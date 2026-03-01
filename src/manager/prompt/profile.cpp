@@ -2,6 +2,7 @@
 #include "AMBase/tools/bar.hpp"
 #include "AMBase/tools/json.hpp"
 #include "AMBase/tools/time.hpp"
+#include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
@@ -213,7 +214,7 @@ AMPromptProfileArgs AMProfileManager::BuildPromptProfileArgs_(
  * @brief Reload prompt profile args from settings.
  */
 ECM AMProfileManager::ReloadPromptProfiles() {
-  Json profile_root = config_.ResolveArg<Json>(
+  Json profile_root = AMConfigManager::Instance().ResolveArg<Json>(
       DocumentKind::Settings, {kPromptProfileRoot}, Json::object(), {});
   if (!profile_root.is_object()) {
     profile_root = Json::object();
@@ -292,7 +293,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
   AMPromptManager &prompt = AMPromptManager::Instance();
   const AMPromptProfileArgs builtin_defaults{};
   const auto print_abort = [&prompt, this]() {
-    prompt.Print(AMStr::fmt("{}\n", config_.Format("Input Abort", "abort")));
+    prompt.Print(AMStr::fmt("{}\n", AMConfigManager::Instance().Format("Input Abort", "abort")));
   };
 
   const std::map<std::string, std::string> bool_literals = {
@@ -542,11 +543,11 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
     }
   }
 
-  if (!config_.SetArg(DocumentKind::Settings, {kPromptProfileRoot, target},
+  if (!AMConfigManager::Instance().SetArg(DocumentKind::Settings, {kPromptProfileRoot, target},
                       working.GetJson())) {
     return Err(EC::CommonFailure, "failed to update PromptProfile");
   }
-  ECM dump_rcm = config_.Dump(DocumentKind::Settings, "", true);
+  ECM dump_rcm = AMConfigManager::Instance().Dump(DocumentKind::Settings, "", true);
   if (dump_rcm.first != EC::Success) {
     return dump_rcm;
   }
@@ -644,7 +645,7 @@ void AMProfileManager::EnsurePromptProfilesLoaded_() {
 void AMProfileManager::CollectHistory_() {
   history_map_.clear();
   Json jsond;
-  if (!config_.GetJson(DocumentKind::History, &jsond) || !jsond.is_object()) {
+  if (!AMConfigManager::Instance().GetJson(DocumentKind::History, &jsond) || !jsond.is_object()) {
     return;
   }
   for (auto it = jsond.begin(); it != jsond.end(); ++it) {
@@ -751,8 +752,6 @@ void AMPromptManager::FlushHistory() {
   for (const auto &pair : history_map_) {
     jsond[pair.first]["commands"] = pair.second;
   }
-  config_.SetArg(DocumentKind::History, {}, jsond);
-  config_.Dump(DocumentKind::History, "", true);
+  AMConfigManager::Instance().SetArg(DocumentKind::History, {}, jsond);
+  AMConfigManager::Instance().Dump(DocumentKind::History, "", true);
 }
-
-

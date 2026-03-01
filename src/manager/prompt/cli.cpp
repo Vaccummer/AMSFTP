@@ -4,6 +4,7 @@
 #include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
+#include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
@@ -470,7 +471,7 @@ bool AMPromptManager::Prompt(
       active_core_nickname_.empty() ? "local" : active_core_nickname_;
   (void)UseCorePromptProfileForClient_(target);
   const AMPromptProfileArgs *active_profile = GetCurrentPromptProfileArgs();
-  std::string query_prompt_style = config_.ResolveArg<std::string>(
+  std::string query_prompt_style = AMConfigManager::Instance().ResolveArg<std::string>(
       DocumentKind::Settings, {"Style", "ValueQueryHighlight", "prompt_style"},
       "", {});
   query_prompt_style = NormalizePromptStyleForIc_(query_prompt_style);
@@ -482,10 +483,10 @@ bool AMPromptManager::Prompt(
   query_ctx.checker = checker ? &checker : nullptr;
   query_ctx.candidates = candidates.empty() ? nullptr : &candidates;
   if (query_ctx.checker) {
-    std::string valid_raw = config_.ResolveArg<std::string>(
+    std::string valid_raw = AMConfigManager::Instance().ResolveArg<std::string>(
         DocumentKind::Settings, {"Style", "ValueQueryHighlight", "valid_value"},
         "", {});
-    std::string invalid_raw = config_.ResolveArg<std::string>(
+    std::string invalid_raw = AMConfigManager::Instance().ResolveArg<std::string>(
         DocumentKind::Settings,
         {"Style", "ValueQueryHighlight", "invalid_value"}, "", {});
     query_ctx.valid_tag = NormalizeStyleTag_(valid_raw);
@@ -539,7 +540,7 @@ bool AMPromptManager::LiteralPrompt(
       active_core_nickname_.empty() ? "local" : active_core_nickname_;
   (void)UseCorePromptProfileForClient_(target);
   const AMPromptProfileArgs *active_profile = GetCurrentPromptProfileArgs();
-  std::string query_prompt_style = config_.ResolveArg<std::string>(
+  std::string query_prompt_style = AMConfigManager::Instance().ResolveArg<std::string>(
       DocumentKind::Settings, {"Style", "ValueQueryHighlight", "prompt_style"},
       "", {});
   query_prompt_style = NormalizePromptStyleForIc_(query_prompt_style);
@@ -558,10 +559,10 @@ bool AMPromptManager::LiteralPrompt(
   query_ctx.checker = literal_checker ? &literal_checker : nullptr;
   query_ctx.literals = literals.empty() ? nullptr : &literals;
   if (query_ctx.checker) {
-    std::string valid_raw = config_.ResolveArg<std::string>(
+    std::string valid_raw = AMConfigManager::Instance().ResolveArg<std::string>(
         DocumentKind::Settings, {"Style", "ValueQueryHighlight", "valid_value"},
         "", {});
-    std::string invalid_raw = config_.ResolveArg<std::string>(
+    std::string invalid_raw = AMConfigManager::Instance().ResolveArg<std::string>(
         DocumentKind::Settings,
         {"Style", "ValueQueryHighlight", "invalid_value"}, "", {});
     query_ctx.valid_tag = NormalizeStyleTag_(valid_raw);
@@ -697,5 +698,3 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
   *out_input = std::move(password);
   return true;
 }
-
-

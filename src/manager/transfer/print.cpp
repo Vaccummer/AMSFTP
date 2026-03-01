@@ -663,7 +663,7 @@ ECM AMTransferManager::Show(
     if (!task_info) {
       last_error =
           ECM{EC::TaskNotFound, AMStr::fmt("Task not found: {}", id)};
-      prompt_.ErrorFormat(last_error);
+      AMPromptManager::Instance().ErrorFormat(last_error);
       continue;
     }
     valid_tasks.push_back(task_info);
@@ -688,7 +688,7 @@ ECM AMTransferManager::Show(
 
   const std::string table = BuildTaskTable_(non_conducting, false);
   if (!table.empty()) {
-    prompt_.Print(table);
+    AMPromptManager::Instance().Print(table);
   }
 
   if (!conducting.empty()) {
@@ -807,12 +807,12 @@ ECM AMTransferManager::List(
                      finished_tasks.end());
     const std::string table = BuildTaskTable_(all_tasks, true, &speed_map);
     if (!table.empty()) {
-      prompt_.Print(table);
+      AMPromptManager::Instance().Print(table);
     }
     return {EC::Success, ""};
   }
 
-  prompt_.SetCacheOutputOnly(true);
+  AMPromptManager::Instance().SetCacheOutputOnly(true);
   static const int refresh_ms = GetRefreshIntervalMs_();
   SignalHookGuard hook_guard;
   size_t last_lines = 0;
@@ -841,7 +841,7 @@ ECM AMTransferManager::List(
                      finished_tasks.end());
     const std::string table = BuildTaskTable_(all_tasks, true, &speed_map);
     if (table.empty()) {
-      prompt_.Print("table is empty");
+      AMPromptManager::Instance().Print("table is empty");
       break;
     }
 
@@ -849,7 +849,7 @@ ECM AMTransferManager::List(
       size_t new_lines = 0;
       const std::string output =
           BuildTableRefreshOutput_(table, last_lines, &new_lines);
-      prompt_.PrintRaw(output, false);
+      AMPromptManager::Instance().PrintRaw(output, false);
       last_lines = new_lines;
       last_table = table;
     }
@@ -859,7 +859,7 @@ ECM AMTransferManager::List(
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
   }
-  prompt_.SetCacheOutputOnly(false);
-  prompt_.FlushCachedOutput();
+  AMPromptManager::Instance().SetCacheOutputOnly(false);
+  AMPromptManager::Instance().FlushCachedOutput();
   return {EC::Success, ""};
 }

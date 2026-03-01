@@ -1,4 +1,5 @@
 #include "AMManager/Set.hpp"
+#include "AMManager/Config.hpp"
 #include <algorithm>
 
 using EC = ErrorCode;
@@ -87,7 +88,7 @@ AMSetManager &AMSetManager::Instance() { return AMSetCLI::Instance(); }
  * @brief Reload HostSet from ConfigManager settings JSON.
  */
 ECM AMSetManager::Reload() {
-  Json host_set = config_manager_.ResolveArg<Json>(
+  Json host_set = AMConfigManager::Instance().ResolveArg<Json>(
       DocumentKind::Settings, {hostsetkn::kHostSetRoot}, Json::object(), {});
   if (!host_set.is_object()) {
     host_set = Json::object();
@@ -272,11 +273,11 @@ ECM AMSetManager::Save(bool async) {
     }
   }
 
-  if (!config_manager_.SetArg(DocumentKind::Settings, {hostsetkn::kHostSetRoot},
+  if (!AMConfigManager::Instance().SetArg(DocumentKind::Settings, {hostsetkn::kHostSetRoot},
                               snapshot)) {
     return Err(EC::CommonFailure, "failed to write HostSet into settings");
   }
-  ECM rcm = config_manager_.Dump(DocumentKind::Settings, "", async);
+  ECM rcm = AMConfigManager::Instance().Dump(DocumentKind::Settings, "", async);
   if (rcm.first != EC::Success) {
     return rcm;
   }
@@ -324,4 +325,3 @@ const AMHostSetPathConfig *AMSetManager::FindDefaultEntryNoLock_() const {
   }
   return &it->second;
 }
-

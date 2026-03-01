@@ -1,9 +1,28 @@
 #include "AMManager/Logger.hpp"
 #include "AMBase/Enum.hpp"
 #include "AMManager/Config.hpp"
+#include "AMManager/Prompt.hpp"
 #include <magic_enum/magic_enum.hpp>
 #include <sstream>
 #include <utility>
+
+/** Resolve paths, create the log directory, and open both log files. */
+ECM AMLogManager::Init() {
+  auto &config = AMConfigManager::Instance();
+  int client_level = config.ResolveArg<int>(
+      DocumentKind::Settings, {"Options", "LogManager", "client_trace_level"},
+      4,
+      [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
+  int program_level = config.ResolveArg<int>(
+      DocumentKind::Settings, {"Options", "LogManager", "program_trace_level"},
+      4,
+      [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
+  client_trace_level_.store(client_level, std::memory_order_relaxed);
+  program_trace_level_.store(program_level, std::memory_order_relaxed);
+  std::lock_guard<std::mutex> lock(stream_mtx_);
+  ResolveLogPaths_();
+  return EnsureLogStreamsOpen_();
+}
 
 /** Enqueue a client trace entry for asynchronous logging. */
 void AMLogManager::Enqueue(const TraceInfo &info) { ClientTrace(info); }
@@ -12,7 +31,7 @@ void AMLogManager::Enqueue(const TraceInfo &info) { ClientTrace(info); }
 void AMLogManager::ClientTrace(const TraceInfo &info) {
   TraceInfo normalized = info;
   normalized.source = TraceSource::Client;
-  config_.SubmitWriteTask([this, normalized]() -> ECM {
+  AMConfigManager::Instance().SubmitWriteTask([this, normalized]() -> ECM {
     std::lock_guard<std::mutex> lock(stream_mtx_);
     ECM open_rcm = EnsureLogStreamsOpen_();
     if (!isok(open_rcm)) {
@@ -60,7 +79,7 @@ void AMLogManager::ProgramTrace(const TraceInfo &info) {
   TraceInfo normalized = info;
   normalized.source = TraceSource::Programm;
   normalized.request = std::nullopt;
-  config_.SubmitWriteTask([this, normalized]() -> ECM {
+  AMConfigManager::Instance().SubmitWriteTask([this, normalized]() -> ECM {
     std::lock_guard<std::mutex> lock(stream_mtx_);
     ECM open_rcm = EnsureLogStreamsOpen_();
     if (!isok(open_rcm)) {
@@ -90,14 +109,14 @@ AMLogManager::TraceLevel(int value, bool programm, bool client, bool print) {
   if (value == -99999) {
     if (print) {
       if (client && programm) {
-        prompt_manager_.Print(
+        AMPromptManager::Instance().Print(
             AMStr::fmt("TraceLevel: client = {}, program = {}", client_level,
                          program_level));
       } else if (client) {
-        prompt_manager_.Print(
+        AMPromptManager::Instance().Print(
             AMStr::fmt("TraceLevel: client = {}", client_level));
       } else if (programm) {
-        prompt_manager_.Print(
+        AMPromptManager::Instance().Print(
             AMStr::fmt("TraceLevel: program = {}", program_level));
       }
     }
@@ -122,13 +141,13 @@ AMLogManager::TraceLevel(int value, bool programm, bool client, bool print) {
   }
   if (print) {
     if (client && programm) {
-      prompt_manager_.Print(AMStr::fmt(
+      AMPromptManager::Instance().Print(AMStr::fmt(
           "TraceLevel set: client = {}, program = {}", clamped, clamped));
     } else if (client) {
-      prompt_manager_.Print(
+      AMPromptManager::Instance().Print(
           AMStr::fmt("TraceLevel set: client = {}", clamped));
     } else if (programm) {
-      prompt_manager_.Print(
+      AMPromptManager::Instance().Print(
           AMStr::fmt("TraceLevel set: program = {}", clamped));
     }
   }
@@ -137,7 +156,7 @@ AMLogManager::TraceLevel(int value, bool programm, bool client, bool print) {
 
 /** Resolve `Client.log` and `Program.log` paths from the project root. */
 void AMLogManager::ResolveLogPaths_() {
-  const auto root = config_.ProjectRoot();
+  const auto root = AMConfigManager::Instance().ProjectRoot();
   const auto base =
       root.empty() ? std::filesystem::path(".") : std::filesystem::path(root);
   client_log_path_ = base / "log" / "Client.log";
@@ -223,9 +242,9 @@ void AMLogManager::WriteLogEntry_(const TraceInfo &info,
     stream << line.str() << std::endl;
     stream.flush();
   } catch (const std::exception &ex) {
-    prompt_manager_.ErrorFormat("LogWriteError", ex.what());
+    AMPromptManager::Instance().ErrorFormat("LogWriteError", ex.what());
   } catch (...) {
-    prompt_manager_.ErrorFormat("LogWriteError", "Unknown Error");
+    AMPromptManager::Instance().ErrorFormat("LogWriteError", "Unknown Error");
   }
 }
 

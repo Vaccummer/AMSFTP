@@ -3,8 +3,8 @@
 #include "AMBase/tools/bar.hpp"
 #include "AMBase/tools/json.hpp"
 #include "AMBase/tools/time.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Prompt.hpp"
+#include "AMBase/DataClass.hpp"
+#include <cstddef>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -152,7 +152,6 @@ private:
    */
   [[nodiscard]] const AMHostSetPathConfig *FindDefaultEntryNoLock_() const;
 
-  AMConfigManager &config_manager_ = AMConfigManager::Instance();
   mutable std::mutex mtx_;
   bool ready_ = false;
   bool dirty_ = false;
@@ -210,6 +209,5 @@ private:
                      const AMHostSetPathConfig &base,
                      AMHostSetPathConfig *output) const;
 
-  AMPromptManager &prompt_ = AMPromptManager::Instance();
 };
 

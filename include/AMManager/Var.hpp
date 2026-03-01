@@ -1,7 +1,5 @@
 #pragma once
-#include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Prompt.hpp"
+#include "AMBase/DataClass.hpp"
 #include <cctype>
 #include <mutex>
 #include <string>
@@ -448,9 +446,6 @@ protected:
    */
   void EnsureLoaded_() const;
 
-  AMConfigManager &config_manager_ = AMConfigManager::Instance();
-  AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
-  AMClientManager &client_manager_ = AMClientManager::Instance();
   mutable std::mutex mutex_;
   mutable bool ready_ = false;
   bool dirty_ = false;

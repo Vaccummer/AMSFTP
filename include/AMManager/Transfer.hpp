@@ -2,8 +2,6 @@
 #include "AMBase/DataClass.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Prompt.hpp"
 #include <deque>
 #include <functional>
 #include <list>
@@ -29,16 +27,7 @@ public:
     return instance;
   };
 
-  ECM Init() override {
-    int init_thread_num = 1;
-    config_.ResolveArg(DocumentKind::Settings,
-                       {"Options", "TransferManager", "init_thread_num"},
-                       &init_thread_num);
-
-    init_thread_num = std::min(std::max(1, init_thread_num), 128);
-    worker_.ThreadCount(init_thread_num);
-    return Ok();
-  }
+  ECM Init() override;
 
   /**
    * @brief Set the public result callback wrapper for all task completions.
@@ -303,9 +292,6 @@ private:
                      size_t *entry_index) const;
 
 private:
-  AMConfigManager &config_ = AMConfigManager::Instance();
-  AMClientManager &client_manager_ = AMClientManager::Instance();
-  AMPromptManager &prompt_ = AMPromptManager::Instance();
   AMWorkManager worker_;
   mutable std::mutex idle_mtx_;
   std::unordered_map<ID, std::list<std::shared_ptr<BaseClient>>> idle_pool_;

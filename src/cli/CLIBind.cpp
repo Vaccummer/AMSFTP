@@ -1,5 +1,6 @@
 
 #include "AMCLI/CLIBind.hpp"
+#include "AMCLI/CommandTree.hpp"
 #include <type_traits>
 
 int g_cli_exit_code = 0;

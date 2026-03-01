@@ -1,4 +1,6 @@
 #include "AMManager/Client.hpp"
+#include "AMManager/Host.hpp"
+#include "AMManager/Prompt.hpp"
 #include <filesystem>
 
 namespace AMClientManage {
@@ -28,7 +30,7 @@ PathOps::ParsePath(const std::string &input) {
     return {"local", path, LocalClient(), Ok()};
   }
 
-  auto cfg = hostm_.GetClientConfig(prefix);
+  auto cfg = AMHostManager::Instance().GetClientConfig(prefix);
   if (cfg.first.first != EC::Success) {
     return {prefix, path, nullptr,
             Err(EC::HostConfigNotFound,
@@ -63,7 +65,7 @@ PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
     return {"local", path, LocalClient(), Ok()};
   }
 
-  auto cfg = hostm_.GetClientConfig(prefix);
+  auto cfg = AMHostManager::Instance().GetClientConfig(prefix);
   if (cfg.first.first != EC::Success) {
     return {prefix, path, nullptr,
             Err(EC::HostConfigNotFound,
@@ -74,7 +76,7 @@ PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
   if (!existing) {
     if (AMIsInteractive.load(std::memory_order_relaxed)) {
       bool canceled = false;
-      if (!prompt_.PromptYesNo("Client not found. Create it? (y/N): ",
+      if (!AMPromptManager::Instance().PromptYesNo("Client not found. Create it? (y/N): ",
                                &canceled)) {
         return {prefix, path, nullptr,
                 Err(EC::Terminate,
@@ -211,7 +213,7 @@ void PathOps::ApplyLoginDir(const std::string &nickname,
   client->SetLoginDir(normalized);
 
   if (need_persist && !IsLocalNickname_(nickname)) {
-    (void)hostm_.SetHostValue(nickname, configkn::login_dir, resolved);
+    (void)AMHostManager::Instance().SetHostValue(nickname, configkn::login_dir, resolved);
   }
 }
 

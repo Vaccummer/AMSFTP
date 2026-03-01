@@ -1,8 +1,5 @@
 #pragma once
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
+#include "AMCLI/CommandTree.hpp"
 #include "AMCLI/Completer/Engine.hpp"
 #include <algorithm>
 #include <cctype>
@@ -277,8 +274,7 @@ BuildGeneralMatch(const std::vector<std::string> &keys,
     // No-case contains only when no-case starts-with is empty.
     out = collect_if(
         [&](const std::string &key) {
-          return AMStr::lowercase(key).find(lower_prefix) !=
-                 std::string::npos;
+          return AMStr::lowercase(key).find(lower_prefix) != std::string::npos;
         },
         30);
   }
@@ -407,4 +403,3 @@ inline bool IsPathSemanticState(const CommandState &state) {
 }
 
 } // namespace AMSearcherDetail
-

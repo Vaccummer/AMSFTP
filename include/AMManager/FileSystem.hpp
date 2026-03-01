@@ -1,9 +1,6 @@
 #pragma once
 #include "AMBase/Enum.hpp"
 #include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Host.hpp"
-#include "AMManager/Prompt.hpp"
 #include <cstdint>
 #include <list>
 #include <string>
@@ -175,9 +172,5 @@ private:
   [[nodiscard]] AMFS::WalkErrorCallback
   MakeWalkErrorCallback(const std::string &func_name, bool quiet) const;
 
-  AMClientManager &client_manager_ = AMClientManager::Instance();
-  AMConfigManager &config_manager_ = AMConfigManager::Instance();
-  AMHostManager &hostm_ = AMHostManager::Instance();
-  AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
   std::list<std::string> cd_history_;
 };

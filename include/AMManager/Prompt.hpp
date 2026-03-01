@@ -1,6 +1,5 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
-#include "AMManager/Config.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "Isocline/isocline.h"
 #include <atomic>
@@ -203,7 +202,6 @@ protected:
   BuildPromptProfileArgs_(const Json &jsond,
                           const AMPromptProfileArgs &defaults) const;
 
-  AMConfigManager &config_ = AMConfigManager::Instance();
   mutable std::mutex profile_mtx_;
   bool profiles_loaded_ = false;
   AMPromptProfileArgs default_prompt_profile_args_{};

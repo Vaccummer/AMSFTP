@@ -3,6 +3,7 @@
 #include "AMBase/tools/json.hpp"
 #include "AMBase/tools/time.hpp"
 #include "AMManager/Client.hpp"
+#include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Var.hpp"
 #include <algorithm>
@@ -43,7 +44,7 @@ std::string ToStringScalar_(const Json &value) {
  * @brief Reload [UserVars] from ConfigManager into domain dict.
  */
 ECM AMVarManager::Reload() {
-  Json user_vars = config_manager_.ResolveArg<Json>(
+  Json user_vars = AMConfigManager::Instance().ResolveArg<Json>(
       DocumentKind::Settings, {varsetkn::kRoot}, Json::object(), {});
   if (!user_vars.is_object()) {
     user_vars = Json::object();
@@ -102,12 +103,12 @@ ECM AMVarManager::Save(bool async) {
     }
   }
 
-  if (!config_manager_.SetArg(DocumentKind::Settings, {varsetkn::kRoot},
+  if (!AMConfigManager::Instance().SetArg(DocumentKind::Settings, {varsetkn::kRoot},
                               snapshot)) {
     return Err(EC::CommonFailure, "failed to write UserVars into settings");
   }
 
-  ECM rcm = config_manager_.Dump(DocumentKind::Settings, "", async);
+  ECM rcm = AMConfigManager::Instance().Dump(DocumentKind::Settings, "", async);
   if (rcm.first != EC::Success) {
     return rcm;
   }
@@ -332,7 +333,7 @@ std::vector<std::string> AMVarManager::ListNames() const {
  * @brief Return current private domain (current host nickname or local).
  */
 std::string AMVarManager::CurrentDomain() const {
-  std::string nickname = AMStr::Strip(client_manager_.CurrentNickname());
+  std::string nickname = AMStr::Strip(AMClientManager::Instance().CurrentNickname());
   if (nickname.empty()) {
     nickname = "local";
   }
@@ -457,4 +458,3 @@ void AMVarManager::EnsureLoaded_() const {
   }
   (void)const_cast<AMVarManager *>(this)->Reload();
 }
-
