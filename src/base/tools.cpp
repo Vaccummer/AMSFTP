@@ -833,6 +833,9 @@ std::string DecryptPassword(const std::string &stored) {
 }
 } // namespace AMAuth
 
+const std::shared_ptr<TaskControlToken> TaskControlToken::Global =
+    std::make_shared<TaskControlToken>();
+
 double timenow() {
   return std::chrono::duration<double>(
              std::chrono::system_clock::now().time_since_epoch())

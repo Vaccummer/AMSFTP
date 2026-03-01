@@ -10,7 +10,9 @@ using EC = ErrorCode;
 
 namespace {
 /**
- * @brief Restore backtick escapes for CLI tokens while preserving `` `$``.
+ * @brief Restore backtick escapes and strip syntactic quote delimiters.
+ *
+ * Keep `` `$`` intact so escaped variable shorthand is not expanded later.
  */
 std::string UnescapeCliToken_(const std::string &token) {
   if (token.empty()) {
@@ -18,6 +20,7 @@ std::string UnescapeCliToken_(const std::string &token) {
   }
   std::string out;
   out.reserve(token.size());
+  char active_quote = 0;
   for (size_t i = 0; i < token.size(); ++i) {
     const char c = token[i];
     if (c == '`' && i + 1 < token.size()) {
@@ -30,6 +33,16 @@ std::string UnescapeCliToken_(const std::string &token) {
       }
       ++i;
       continue;
+    }
+    if (c == '"' || c == '\'') {
+      if (active_quote == 0) {
+        active_quote = c;
+        continue;
+      }
+      if (active_quote == c) {
+        active_quote = 0;
+        continue;
+      }
     }
     out.push_back(c);
   }

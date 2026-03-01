@@ -1,21 +1,21 @@
 #pragma once
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
+#include "AMBase/DataClass.hpp"
 #include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/FileSystem.hpp"
 #include "AMManager/Host.hpp"
+#include "AMManager/Logger.hpp"
 #include "AMManager/Prompt.hpp"
+#include "AMManager/Set.hpp"
+#include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Transfer.hpp"
 #include "AMManager/Var.hpp"
 #include "CLI/CLI.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
-#include <memory>
 #include <string>
 #include <variant>
 #include <vector>
@@ -23,11 +23,86 @@
 /**
  * @brief Manager references for CLI dispatch.
  */
-struct CliManagers {
-  std::shared_ptr<AMFileSystem> filesystem;
-  std::shared_ptr<AMClientManager> client_manager;
-  std::shared_ptr<AMConfigManager> config_manager;
+struct CliManagers : public NonCopyableNonMovable {
+  /**
+   * @brief Return the singleton manager bundle used by CLI entry points.
+   */
+  static CliManagers &Instance() {
+    static CliManagers instance;
+    return instance;
+  }
+
+  /**
+   * @brief Initialize all manager singletons in dependency-safe order.
+   */
+  ECM Init() override {
+    ECM rcm = signal_monitor.Init();
+    if (!isok(rcm)) {
+      return rcm;
+    }
+    rcm = config_manager.Init();
+    if (!isok(rcm)) {
+      return rcm;
+    }
+    rcm = prompt_manager.Init();
+    if (!isok(rcm)) {
+      return rcm;
+    }
+    rcm = host_manager.Init();
+    if (!isok(rcm)) {
+      return rcm;
+    }
+    rcm = var_manager.Init();
+    if (!isok(rcm)) {
+      return rcm;
+    }
+    rcm = log_manager.Init();
+    if (!isok(rcm)) {
+      return rcm;
+    }
+    rcm = client_manager.Init();
+    if (!isok(rcm)) {
+      return rcm;
+    }
+    rcm = transfer_manager.Init();
+    if (!isok(rcm)) {
+      return rcm;
+    }
+    rcm = set_manager.Init();
+    if (!isok(rcm)) {
+      return rcm;
+    }
+    return filesystem.Init();
+  }
+
+  AMCliSignalMonitor &signal_monitor;
+  AMConfigManager &config_manager;
+  AMPromptManager &prompt_manager;
+  AMHostManager &host_manager;
+  VarCLISet &var_manager;
+  AMLogManager &log_manager;
+  AMClientManager &client_manager;
+  AMTransferManager &transfer_manager;
+  AMSetManager &set_manager;
+  AMFileSystem &filesystem;
+
+private:
+  /**
+   * @brief Bind all references to their corresponding singleton instances.
+   */
+  CliManagers()
+      : signal_monitor(AMCliSignalMonitor::Instance()),
+        config_manager(AMConfigManager::Instance()),
+        prompt_manager(AMPromptManager::Instance()),
+        host_manager(AMHostManager::Instance()),
+        var_manager(VarCLISet::Instance()),
+        log_manager(AMLogManager::Instance()),
+        client_manager(AMClientManager::Instance()),
+        transfer_manager(AMTransferManager::Instance()),
+        set_manager(AMSetManager::Instance()),
+        filesystem(AMFileSystem::Instance()) {}
 };
+
 /**
  * @brief Runtime context for invoking Args::Run.
  */
@@ -305,7 +380,7 @@ struct ConfigGetArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    auto &client_manager = *managers.client_manager;
+    auto &client_manager = managers.client_manager;
     std::vector<std::string> targets = nicknames;
     if (targets.empty()) {
       std::string current = client_manager.CurrentNickname();
@@ -492,7 +567,7 @@ struct StatArgs {
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     const std::vector<std::string> resolved = SubstitutePathLikeArgs_(paths);
-    return managers.filesystem->stat(resolved, TaskControlToken::Instance());
+    return managers.filesystem.stat(resolved, TaskControlToken::Instance());
   }
   /**
    * @brief Reset stat arguments to defaults.
@@ -512,8 +587,8 @@ struct LsArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    auto &client_manager = *managers.client_manager;
-    auto &filesystem = *managers.filesystem;
+    auto &client_manager = managers.client_manager;
+    auto &filesystem = managers.filesystem;
     std::string query_path = AMStr::Strip(SubstitutePathLikeArg_(path));
     if (query_path.empty()) {
       auto client = client_manager.CurrentClient();
@@ -524,7 +599,8 @@ struct LsArgs {
     if (query_path.empty()) {
       query_path = "/";
     }
-    ECM rcm = filesystem.ls(query_path, list_like, show_all, TaskControlToken::Instance());
+    ECM rcm = filesystem.ls(query_path, list_like, show_all,
+                            TaskControlToken::Instance());
     PrintRunError_(rcm);
     return rcm;
   }
@@ -549,7 +625,8 @@ struct SizeArgs {
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     const std::vector<std::string> resolved = SubstitutePathLikeArgs_(paths);
-    ECM rcm = managers.filesystem->getsize(resolved, TaskControlToken::Instance());
+    ECM rcm =
+        managers.filesystem.getsize(resolved, TaskControlToken::Instance());
     PrintRunError_(rcm);
     return rcm;
   }
@@ -570,7 +647,8 @@ struct FindArgs {
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     const std::string resolved = SubstitutePathLikeArg_(path);
-    ECM rcm = managers.filesystem->find(resolved, SearchType::All, TaskControlToken::Instance());
+    ECM rcm = managers.filesystem.find(resolved, SearchType::All,
+                                        TaskControlToken::Instance());
     PrintRunError_(rcm);
     return rcm;
   }
@@ -591,7 +669,8 @@ struct MkdirArgs {
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     const std::vector<std::string> resolved = SubstitutePathLikeArgs_(paths);
-    ECM rcm = managers.filesystem->mkdir(resolved, TaskControlToken::Instance());
+    ECM rcm =
+        managers.filesystem.mkdir(resolved, TaskControlToken::Instance());
     PrintRunError_(rcm);
     return rcm;
   }
@@ -614,7 +693,8 @@ struct RmArgs {
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     const std::vector<std::string> resolved = SubstitutePathLikeArgs_(paths);
-    ECM rcm = managers.filesystem->rm(resolved, permanent, false, quiet, TaskControlToken::Instance());
+    ECM rcm = managers.filesystem.rm(resolved, permanent, false, quiet,
+                                      TaskControlToken::Instance());
     PrintRunError_(rcm);
     return rcm;
   }
@@ -644,8 +724,9 @@ struct WalkArgs {
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     const std::string resolved = SubstitutePathLikeArg_(path);
-    ECM rcm = managers.filesystem->walk(resolved, only_file, only_dir, show_all,
-                                        !include_special, quiet, TaskControlToken::Instance());
+    ECM rcm = managers.filesystem.walk(resolved, only_file, only_dir, show_all,
+                                        !include_special, quiet,
+                                        TaskControlToken::Instance());
     PrintRunError_(rcm);
     return rcm;
   }
@@ -678,8 +759,9 @@ struct TreeArgs {
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     const std::string resolved = SubstitutePathLikeArg_(path);
-    ECM rcm = managers.filesystem->tree(resolved, depth, only_dir, show_all,
-                                        !include_special, quiet, TaskControlToken::Instance());
+    ECM rcm = managers.filesystem.tree(resolved, depth, only_dir, show_all,
+                                        !include_special, quiet,
+                                        TaskControlToken::Instance());
     PrintRunError_(rcm);
     return rcm;
   }
@@ -707,7 +789,8 @@ struct RealpathArgs {
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
     const std::string resolved = SubstitutePathLikeArg_(path);
-    return managers.filesystem->realpath(resolved, TaskControlToken::Instance());
+    return managers.filesystem.realpath(resolved,
+                                         TaskControlToken::Instance());
   }
   /**
    * @brief Reset realpath arguments to defaults.
@@ -725,7 +808,7 @@ struct RttArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    ECM rcm = managers.filesystem->TestRTT(times, TaskControlToken::Instance());
+    ECM rcm = managers.filesystem.TestRTT(times, TaskControlToken::Instance());
     PrintRunError_(rcm);
     return rcm;
   }
@@ -811,10 +894,11 @@ struct CpArgs {
     transfer_set.resume = resume;
 
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    ECM rcm =
-        (ctx.async || run_async)
-            ? transfer_manager.transfer_async({transfer_set}, quiet, TaskControlToken::Instance())
-            : transfer_manager.transfer({transfer_set}, quiet, TaskControlToken::Instance());
+    ECM rcm = (ctx.async || run_async)
+                  ? transfer_manager.transfer_async(
+                        {transfer_set}, quiet, TaskControlToken::Instance())
+                  : transfer_manager.transfer({transfer_set}, quiet,
+                                              TaskControlToken::Instance());
     PrintRunError_(rcm);
     return rcm;
   }
@@ -844,7 +928,7 @@ struct SftpArgs {
    * @brief Execute sftp connection.
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
-    auto &filesystem = *managers.filesystem;
+    auto &filesystem = managers.filesystem;
     std::string user_at_host;
     std::string nickname;
     if (targets.size() == 1) {
@@ -859,7 +943,8 @@ struct SftpArgs {
       return {EC::InvalidArg, "Invalid user@host format"};
     }
 
-    ECM rcm = filesystem.sftp(nickname, user_at_host, port, "", keyfile, TaskControlToken::Instance());
+    ECM rcm = filesystem.sftp(nickname, user_at_host, port, "", keyfile,
+                              TaskControlToken::Instance());
     PrintRunError_(rcm);
     *(ctx.enter_interactive) = rcm.first == EC::Success;
     return rcm;
@@ -885,7 +970,7 @@ struct FtpArgs {
    * @brief Execute ftp connection.
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
-    auto &filesystem = *managers.filesystem;
+    auto &filesystem = managers.filesystem;
     std::string user_at_host;
     std::string nickname;
     if (targets.size() == 1) {
@@ -900,7 +985,8 @@ struct FtpArgs {
       return {EC::InvalidArg, "Invalid user@host format"};
     }
 
-    ECM rcm = filesystem.ftp(nickname, user_at_host, port, "", keyfile, TaskControlToken::Instance());
+    ECM rcm = filesystem.ftp(nickname, user_at_host, port, "", keyfile,
+                             TaskControlToken::Instance());
     PrintRunError_(rcm);
     SetEnterInteractive_(ctx, rcm.first == EC::Success);
     return rcm;
@@ -925,7 +1011,8 @@ struct ClientsArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    return managers.filesystem->print_clients(detail, TaskControlToken::Instance());
+    return managers.filesystem.print_clients(detail,
+                                              TaskControlToken::Instance());
   }
   /**
    * @brief Reset clients arguments to defaults.
@@ -944,7 +1031,8 @@ struct CheckArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     (void)ctx;
-    return managers.filesystem->check(nicknames, detail, TaskControlToken::Instance());
+    return managers.filesystem.check(nicknames, detail,
+                                      TaskControlToken::Instance());
   }
   /**
    * @brief Reset check arguments to defaults.
@@ -964,13 +1052,14 @@ struct ChangeClientArgs {
    * @brief Execute client change.
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
-    auto &filesystem = *managers.filesystem;
+    auto &filesystem = managers.filesystem;
     const bool is_interactive = ctx.enforce_interactive ||
                                 AMIsInteractive.load(std::memory_order_relaxed);
     if (is_interactive) {
       return filesystem.change_client(nickname, TaskControlToken::Instance());
     }
-    ECM rcm = filesystem.connect(nickname, false, TaskControlToken::Instance(), true);
+    ECM rcm =
+        filesystem.connect(nickname, false, TaskControlToken::Instance(), true);
     SetEnterInteractive_(ctx, rcm.first == EC::Success);
     return rcm;
   }
@@ -997,7 +1086,7 @@ struct DisconnectArgs {
       }
       joined += nicknames[i];
     }
-    return managers.filesystem->remove_client(joined);
+    return managers.filesystem.remove_client(joined);
   }
   /**
    * @brief Reset disconnect arguments to defaults.
@@ -1015,7 +1104,8 @@ struct CdArgs {
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
     const std::string resolved = SubstitutePathLikeArg_(path);
-    ECM rcm = managers.filesystem->cd(resolved, TaskControlToken::Instance(), false);
+    ECM rcm =
+        managers.filesystem.cd(resolved, TaskControlToken::Instance(), false);
     if (rcm.first == EC::Success) {
       SetEnterInteractive_(ctx, true);
     }
@@ -1037,10 +1127,11 @@ struct ConnectArgs {
    * @brief Execute connect.
    */
   ECM Run(const CliManagers &managers, const CliRunContext &ctx) const {
-    auto &filesystem = *managers.filesystem;
+    auto &filesystem = managers.filesystem;
     const bool is_interactive = ctx.enforce_interactive ||
                                 AMIsInteractive.load(std::memory_order_relaxed);
-    const std::vector<std::string> targets = AMStr::UniqueTargetsKeepOrder(nicknames);
+    const std::vector<std::string> targets =
+        AMStr::UniqueTargetsKeepOrder(nicknames);
     if (targets.empty()) {
       ECM rcm = {EC::InvalidArg, "connect requires at least one nickname"};
       PrintRunError_(rcm);
@@ -1056,7 +1147,8 @@ struct ConnectArgs {
         last = rcm;
         continue;
       }
-      ECM rcm = filesystem.connect(nickname, force, TaskControlToken::Instance(), false);
+      ECM rcm = filesystem.connect(nickname, force,
+                                   TaskControlToken::Instance(), false);
       if (rcm.first != EC::Success) {
         PrintRunError_(rcm);
         last = rcm;
@@ -1110,8 +1202,8 @@ struct CmdArgs {
       return rcm;
     }
 
-    CR shell_result =
-        RunShellCommandViaFilesystem_(*managers.filesystem, command, timeout_ms);
+    CR shell_result = RunShellCommandViaFilesystem_(managers.filesystem,
+                                                    command, timeout_ms);
     if (shell_result.first.first != EC::Success) {
       PrintRunError_(shell_result.first);
       return shell_result.first;
@@ -1310,7 +1402,8 @@ struct TaskListArgs {
     }
     (void)managers;
     AMTransferManager &transfer_manager = AMTransferManager::Instance();
-    return transfer_manager.List(pending, suspend, finished, conducting, TaskControlToken::Instance());
+    return transfer_manager.List(pending, suspend, finished, conducting,
+                                 TaskControlToken::Instance());
   }
   /**
    * @brief Reset task-list arguments to defaults.
@@ -1337,7 +1430,8 @@ struct TaskShowArgs {
       return ready;
     }
     (void)managers;
-    return AMTransferManager::Instance().Show(ids, TaskControlToken::Instance());
+    return AMTransferManager::Instance().Show(ids,
+                                              TaskControlToken::Instance());
   }
   /**
    * @brief Reset task-show arguments to defaults.
@@ -1726,10 +1820,10 @@ using CommonArg = std::variant<
     RttArgs, ClearArgs, CpArgs, SftpArgs, FtpArgs, ClientsArgs, CheckArgs,
     ChangeClientArgs, DisconnectArgs, CdArgs, ConnectArgs, CmdArgs, BashArgs,
     ExitArgs, VarGetArgs, VarDefArgs, VarDelArgs, VarLsArgs,
-    CompleteCacheClearArgs,
-    TaskListArgs, TaskShowArgs, TaskInspectArgs, TaskThreadArgs,
-    TaskCacheAddArgs, TaskCacheRmArgs, TaskCacheClearArgs, TaskCacheSubmitArgs,
-    TaskUserSetArgs, TaskEntryArgs, TaskControlArgs, TaskRetryArgs>;
+    CompleteCacheClearArgs, TaskListArgs, TaskShowArgs, TaskInspectArgs,
+    TaskThreadArgs, TaskCacheAddArgs, TaskCacheRmArgs, TaskCacheClearArgs,
+    TaskCacheSubmitArgs, TaskUserSetArgs, TaskEntryArgs, TaskControlArgs,
+    TaskRetryArgs>;
 
 /**
  * @brief Pool of all CLI argument structs.
@@ -1876,5 +1970,4 @@ struct DispatchResult {
   bool request_exit = false;
   bool skip_loop_exit_callbacks = false;
 };
-
 

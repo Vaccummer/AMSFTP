@@ -477,9 +477,6 @@ public:
   }
 };
 
-inline const std::shared_ptr<TaskControlToken> TaskControlToken::Global =
-    std::make_shared<TaskControlToken>();
-
 class PathInfo {
 public:
   std::string name;
@@ -922,7 +919,6 @@ public:
 };
 
 struct TaskInfo; // Forward declaration
-                 //
 
 class ClientMaintainer; // Forward declaration
 // New ProgressData that holds weak_ptr to TaskInfo to avoid cycle reference
