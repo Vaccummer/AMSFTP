@@ -1,40 +1,22 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
+#include "AMBase/tools/enum_related.hpp"
+#include "AMBase/tools/json.hpp"
+#include "AMBase/tools/string.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "Isocline/isocline.h"
 #include <atomic>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
 #include <string>
-#include <string_view>
-#include <type_traits>
-#include <functional>
+
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
-namespace AMPromptDetail {
-template <typename T> struct IsStringLike : std::false_type {};
-template <> struct IsStringLike<std::string> : std::true_type {};
-template <> struct IsStringLike<std::string_view> : std::true_type {};
-template <> struct IsStringLike<const char *> : std::true_type {};
-template <> struct IsStringLike<char *> : std::true_type {};
-
-template <typename T>
-inline constexpr bool IsStringLikeV = IsStringLike<std::decay_t<T>>::value;
-
-template <typename T> std::string ToString(T &&value) {
-  if constexpr (IsStringLikeV<T>) {
-    return std::string(std::forward<T>(value));
-  } else {
-    static_assert(IsStringLikeV<T>,
-                  "AMPromptManager::Print only accepts string-like arguments");
-    return {};
-  }
-}
-
-} // namespace AMPromptDetail
+namespace AMPromptDetail {} // namespace AMPromptDetail
 
 /**
  * @brief Prompt rendering arguments for one profile.
@@ -214,7 +196,7 @@ protected:
 
 class AMPromptManager : public AMProfileManager, NonCopyableNonMovable {
 public:
-  static AMPromptManager &Instance() {
+  inline static AMPromptManager &Instance() {
     static AMPromptManager instance;
     return instance;
   }
@@ -227,30 +209,11 @@ public:
     return Ok();
   }
 
-  void Print(const std::vector<std::string> &items,
-             const std::string &sep = " ", const std::string &end = "\n");
+  void Print(const std::string &text);
 
-  template <typename... Args,
-            typename std::enable_if_t<
-                (AMPromptDetail::IsStringLikeV<Args> && ...), int> = 0>
-  void Print(Args &&...args) {
-    std::vector<std::string> items;
-    items.reserve(sizeof...(Args));
-    (items.emplace_back(AMPromptDetail::ToString(std::forward<Args>(args))),
-     ...);
-    Print(items);
-  }
-
-  template <typename... Args,
-            typename std::enable_if_t<
-                (AMPromptDetail::IsStringLikeV<Args> && ...), int> = 0>
-  void PrintWith(const std::string &sep, const std::string &end,
-                 Args &&...args) {
-    std::vector<std::string> items;
-    items.reserve(sizeof...(Args));
-    (items.emplace_back(AMPromptDetail::ToString(std::forward<Args>(args))),
-     ...);
-    Print(items, sep, end);
+  template <typename... Args> void FmtPrint(Args &&...args) {
+    std::string output = AMStr::fmt(std::forward<Args>(args)...);
+    Print(output); // Print now recieve a single string, no sep or end needed
   }
 
   void ErrorFormat(const std::string &error_name, const std::string &error_msg,
@@ -267,11 +230,6 @@ public:
    */
   bool SecurePrompt(const std::string &prompt, std::string *out_input);
 
-  // /** Placeholder task result printer; format TBD. */
-  // void resultprint(const std::shared_ptr<TaskInfo> &task_info);
-  // /** Placeholder task metadata printer; format TBD. */
-  // void taskprint(const std::shared_ptr<TaskInfo> &task_info);
-
   void PrintTaskResult(const std::shared_ptr<TaskInfo> &task_info);
 
   /**
@@ -286,6 +244,7 @@ public:
    * enabled=false -> lock depth -1 (clamped at 0)
    */
   void SetCacheOutputOnly(bool enabled);
+
   /**
    * @brief Return whether Print currently caches output only.
    */

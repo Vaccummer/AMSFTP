@@ -160,9 +160,9 @@ void PrintTaskSubmit_(AMPromptManager &prompt,
   if (nickname_str.empty()) {
     nickname_str = "local";
   }
-  prompt.Print(AMStr::fmt(
+  prompt.FmtPrint(
       "SubmitInfo ID: {}; FileNum: {}; TotalSize: {}; Clients: {}",
-      task_info->id, file_num, AMStr::FormatSize(total_size), nickname_str));
+      task_info->id, file_num, AMStr::FormatSize(total_size), nickname_str);
 }
 
 /**
@@ -212,10 +212,10 @@ void PrintTaskResult_(const std::shared_ptr<TaskInfo> &task_info) {
           ? ""
           : AMStr::fmt(" {}: {}", AMStr::ToString(result.first), result.second);
 
-  prompt.Print(AMStr::fmt(
+  prompt.FmtPrint(
       "TaskResult  {} ID: {}; Files: {}/{}; Size: {}/{}; ThreadID: {};{}",
       prefix, task_id, success_num, filenum, AMStr::FormatSize(transferred),
-      AMStr::FormatSize(total), thread_id, rcm_text));
+      AMStr::FormatSize(total), thread_id, rcm_text);
 }
 
 /**
@@ -322,8 +322,7 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
   }
   std::string host_name = src_host.empty() ? "local" : src_host;
   std::string dst_name = dst_host.empty() ? "local" : dst_host;
-  AMPromptManager::Instance().Print(
-      AMStr::fmt("Found {} paths to transfer", std::to_string(matches.size())));
+  AMPromptManager::Instance().FmtPrint("Found {} paths to transfer", std::to_string(matches.size()));
 
   std::vector<PathInfo> sorted = matches;
   std::sort(sorted.begin(), sorted.end(),
@@ -333,11 +332,9 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
 
   for (const auto &path : sorted) {
     if (path.type == PathType::DIR) {
-      AMPromptManager::Instance().Print(
-          AMStr::fmt("📁   {}@{}", host_name, path.path));
+      AMPromptManager::Instance().FmtPrint("📁   {}@{}", host_name, path.path);
     } else {
-      AMPromptManager::Instance().Print(
-          AMStr::fmt("📑   {}@{}", host_name, path.path));
+      AMPromptManager::Instance().FmtPrint("📑   {}@{}", host_name, path.path);
     }
   }
 
@@ -904,3 +901,4 @@ bool AMTransferManager::ParseEntryId_(const ID &entry_id, ID *task_id,
     return false;
   }
 }
+

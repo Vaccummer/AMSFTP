@@ -1,4 +1,5 @@
 #include "AMCLI/CommandPreprocess.hpp"
+#include "AMBase/tools/enum_related.hpp"
 #include "AMBase/tools/string.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Var.hpp"

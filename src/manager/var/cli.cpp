@@ -55,7 +55,7 @@ std::string VarCLISet::RenderValue_(const std::string &value) const {
  */
 void VarCLISet::PrintSection_(const std::string &domain,
                               const std::vector<VarInfo> &entries) const {
-  AMPromptManager::Instance().Print(AMStr::fmt("\\[{}]", domain));
+  AMPromptManager::Instance().FmtPrint("\\[{}]", domain);
   size_t max_width = 0;
   for (const auto &item : entries) {
     max_width = std::max(max_width, item.varname.size() + 1);
@@ -66,9 +66,8 @@ void VarCLISet::PrintSection_(const std::string &domain,
     if (key.size() < max_width) {
       key.append(max_width - key.size(), ' ');
     }
-    AMPromptManager::Instance().Print(
-        AMStr::fmt("{} = {}", FormatVarText_(key),
-                     FormatVarText_(RenderValue_(item.varvalue))));
+    AMPromptManager::Instance().FmtPrint("{} = {}", FormatVarText_(key),
+                     FormatVarText_(RenderValue_(item.varvalue)));
   }
 }
 
@@ -90,9 +89,9 @@ ECM VarCLISet::QueryByName(const std::string &token_name) const {
           EC::InvalidArg,
           AMStr::fmt("variable not found: {}", varsetkn::BuildVarToken(ref)));
     }
-    AMPromptManager::Instance().Print(AMStr::fmt(
+    AMPromptManager::Instance().FmtPrint(
         "\\[{}] {} = {}", found.domain, FormatVarText_("$" + found.varname),
-        FormatVarText_(RenderValue_(found.varvalue))));
+        FormatVarText_(RenderValue_(found.varvalue)));
     return Ok();
   }
 
@@ -106,9 +105,9 @@ ECM VarCLISet::QueryByName(const std::string &token_name) const {
         EC::InvalidArg,
         AMStr::fmt("variable not found: {}", varsetkn::BuildVarToken(ref)));
   }
-  AMPromptManager::Instance().Print(AMStr::fmt(
+  AMPromptManager::Instance().FmtPrint(
       "\\[{}] {} = {}", found.domain, FormatVarText_("$" + found.varname),
-      FormatVarText_(RenderValue_(found.varvalue))));
+      FormatVarText_(RenderValue_(found.varvalue)));
   return Ok();
 }
 
@@ -135,9 +134,9 @@ ECM VarCLISet::DefineVar(bool global, const std::string &token_name,
   if (domain != varsetkn::kPublic) {
     VarInfo old = var_manager.GetVar(domain, ref.varname);
     if (old.IsValid().first == EC::Success) {
-      AMPromptManager::Instance().Print(AMStr::fmt(
+      AMPromptManager::Instance().FmtPrint(
           "[{}] {} = {}", old.domain, FormatVarText_("$" + old.varname),
-          FormatVarText_(RenderValue_(old.varvalue))));
+          FormatVarText_(RenderValue_(old.varvalue)));
       bool canceled = false;
       const bool overwrite = AMPromptManager::Instance().PromptYesNo(
           AMStr::fmt("Overwrite [{}].${}? (y/N): ", domain, ref.varname),
@@ -178,9 +177,9 @@ ECM VarCLISet::DeleteVarByCli(bool all, const std::string &domain,
       return Err(EC::InvalidArg, "variable not found");
     }
     for (const auto &item : matches) {
-      AMPromptManager::Instance().Print(AMStr::fmt(
+      AMPromptManager::Instance().FmtPrint(
           "[{}] {} = {}", item.domain, FormatVarText_("$" + item.varname),
-          FormatVarText_(RenderValue_(item.varvalue))));
+          FormatVarText_(RenderValue_(item.varvalue)));
     }
     bool canceled = false;
     const bool confirmed = AMPromptManager::Instance().PromptYesNo(
@@ -260,3 +259,4 @@ ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
   }
   return last;
 }
+

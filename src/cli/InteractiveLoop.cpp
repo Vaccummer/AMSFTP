@@ -1384,10 +1384,10 @@ void PrintECM_(AMPromptManager &prompt, const ECM &rcm) {
   }
   std::string name = std::string(magic_enum::enum_name(rcm.first));
   if (rcm.second.empty()) {
-    prompt.Print(AMStr::fmt("❌ {}", name));
+    prompt.FmtPrint("❌ {}", name);
     return;
   }
-  prompt.Print(AMStr::fmt("❌ {}: {}", name, rcm.second));
+  prompt.FmtPrint("❌ {}: {}", name, rcm.second);
 }
 
 /**
@@ -1594,8 +1594,8 @@ int RunInteractiveLoop(const std::string &app_name,
         if (!msg.empty()) {
           prompt.Print(msg);
         }
-        prompt.Print(AMStr::fmt("\nCommand exit with code {}",
-                                shell_result.second.second));
+        prompt.FmtPrint("\nCommand exit with code {}",
+                                shell_result.second.second);
       } else {
         PrintECM_(prompt, shell_result.first);
       }
@@ -1671,3 +1671,4 @@ int RunInteractiveLoop(const std::string &app_name,
   AMIsInteractive.store(false, std::memory_order_relaxed);
   return g_cli_exit_code;
 }
+

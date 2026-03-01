@@ -1,7 +1,3 @@
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Config.hpp"
@@ -301,6 +297,7 @@ void ApplyCoreProfileSettings_(const AMPromptProfileArgs &profile) {
 }
 
 } // namespace
+
 void AMPromptManager::PrintRaw(const std::string &text, bool append_newline) {
   std::string out = text;
   if (append_newline && (out.empty() || out.back() != '\n')) {
@@ -311,18 +308,11 @@ void AMPromptManager::PrintRaw(const std::string &text, bool append_newline) {
   ic_term_flush();
 }
 
-void AMPromptManager::Print(const std::vector<std::string> &items,
-                            const std::string &sep, const std::string &end) {
-  std::ostringstream oss;
-  for (size_t i = 0; i < items.size(); ++i) {
-    if (i > 0) {
-      oss << sep;
-    }
-    oss << items[i];
+void AMPromptManager::Print(const std::string &text) {
+  std::string output = text;
+  if (output.empty() || output.back() != '\n') {
+    output.push_back('\n');
   }
-  oss << end;
-
-  const std::string output = oss.str();
 
   if (IsCacheOutputOnly()) {
     std::lock_guard<std::mutex> lock(cached_output_mutex_);
@@ -471,9 +461,10 @@ bool AMPromptManager::Prompt(
       active_core_nickname_.empty() ? "local" : active_core_nickname_;
   (void)UseCorePromptProfileForClient_(target);
   const AMPromptProfileArgs *active_profile = GetCurrentPromptProfileArgs();
-  std::string query_prompt_style = AMConfigManager::Instance().ResolveArg<std::string>(
-      DocumentKind::Settings, {"Style", "ValueQueryHighlight", "prompt_style"},
-      "", {});
+  std::string query_prompt_style =
+      AMConfigManager::Instance().ResolveArg<std::string>(
+          DocumentKind::Settings,
+          {"Style", "ValueQueryHighlight", "prompt_style"}, "", {});
   query_prompt_style = NormalizePromptStyleForIc_(query_prompt_style);
   if (!query_prompt_style.empty()) {
     ic_style_def(ickey.c_str(), query_prompt_style.c_str());
@@ -486,9 +477,10 @@ bool AMPromptManager::Prompt(
     std::string valid_raw = AMConfigManager::Instance().ResolveArg<std::string>(
         DocumentKind::Settings, {"Style", "ValueQueryHighlight", "valid_value"},
         "", {});
-    std::string invalid_raw = AMConfigManager::Instance().ResolveArg<std::string>(
-        DocumentKind::Settings,
-        {"Style", "ValueQueryHighlight", "invalid_value"}, "", {});
+    std::string invalid_raw =
+        AMConfigManager::Instance().ResolveArg<std::string>(
+            DocumentKind::Settings,
+            {"Style", "ValueQueryHighlight", "invalid_value"}, "", {});
     query_ctx.valid_tag = NormalizeStyleTag_(valid_raw);
     query_ctx.invalid_tag = NormalizeStyleTag_(invalid_raw);
   }
@@ -540,9 +532,10 @@ bool AMPromptManager::LiteralPrompt(
       active_core_nickname_.empty() ? "local" : active_core_nickname_;
   (void)UseCorePromptProfileForClient_(target);
   const AMPromptProfileArgs *active_profile = GetCurrentPromptProfileArgs();
-  std::string query_prompt_style = AMConfigManager::Instance().ResolveArg<std::string>(
-      DocumentKind::Settings, {"Style", "ValueQueryHighlight", "prompt_style"},
-      "", {});
+  std::string query_prompt_style =
+      AMConfigManager::Instance().ResolveArg<std::string>(
+          DocumentKind::Settings,
+          {"Style", "ValueQueryHighlight", "prompt_style"}, "", {});
   query_prompt_style = NormalizePromptStyleForIc_(query_prompt_style);
   if (!query_prompt_style.empty()) {
     ic_style_def(ickey.c_str(), query_prompt_style.c_str());
@@ -562,9 +555,10 @@ bool AMPromptManager::LiteralPrompt(
     std::string valid_raw = AMConfigManager::Instance().ResolveArg<std::string>(
         DocumentKind::Settings, {"Style", "ValueQueryHighlight", "valid_value"},
         "", {});
-    std::string invalid_raw = AMConfigManager::Instance().ResolveArg<std::string>(
-        DocumentKind::Settings,
-        {"Style", "ValueQueryHighlight", "invalid_value"}, "", {});
+    std::string invalid_raw =
+        AMConfigManager::Instance().ResolveArg<std::string>(
+            DocumentKind::Settings,
+            {"Style", "ValueQueryHighlight", "invalid_value"}, "", {});
     query_ctx.valid_tag = NormalizeStyleTag_(valid_raw);
     query_ctx.invalid_tag = NormalizeStyleTag_(invalid_raw);
   }

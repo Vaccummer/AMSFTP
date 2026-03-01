@@ -435,8 +435,7 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
       AMStr::fmt("Remove clients: {} ? (y/N): ", target_line);
   if (!AMPromptManager::Instance().PromptYesNo(question, &canceled) || canceled) {
     const std::string msg = "Remove clients canceled";
-    AMPromptManager::Instance().Print(
-        AMStr::fmt("🚫  {}\n", AMConfigManager::Instance().Format(msg, "abort")));
+    AMPromptManager::Instance().FmtPrint("🚫  {}\n", AMConfigManager::Instance().Format(msg, "abort"));
     AMPromptManager::Instance().ErrorFormat(ECM{EC::ConfigCanceled, msg});
     return {EC::Terminate, msg};
   }
@@ -953,8 +952,8 @@ ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
     results.emplace_back(abs_path, size);
   }
   for (const auto &item : results) {
-    AMPromptManager::Instance().Print(AMStr::fmt(
-        "{}  {}", item.first, AMStr::FormatSize(static_cast<size_t>(item.second))));
+    AMPromptManager::Instance().FmtPrint(
+        "{}  {}", item.first, AMStr::FormatSize(static_cast<size_t>(item.second)));
   }
   return last;
 }
@@ -1153,7 +1152,7 @@ ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
     AMPromptManager::Instance().ErrorFormat(out);
     return out;
   }
-  AMPromptManager::Instance().Print(AMStr::fmt("{} ms", rtt));
+  AMPromptManager::Instance().FmtPrint("{} ms", rtt);
   return {EC::Success, ""};
 }
 
@@ -1584,3 +1583,4 @@ std::string AMFileSystem::StylePath(const PathInfo &info,
   const std::string display_path = AMPathStr::UnifyPathSep(path, "/");
   return AMConfigManager::Instance().Format(display_path, base_key, &info);
 }
+

@@ -126,8 +126,8 @@ ECM AMSetCLI::PromptPathSet_(const std::string &nickname,
     AMPromptManager::Instance().Print(AMConfigManager::Instance().Format("Input Abort", "abort"));
   };
 
-  AMPromptManager::Instance().Print(AMStr::fmt("HostSet ({})",
-                             AMConfigManager::Instance().Format(nickname, "nickname")));
+  AMPromptManager::Instance().FmtPrint("HostSet ({})",
+                             AMConfigManager::Instance().Format(nickname, "nickname"));
   if (!PromptBool_(AMPromptManager::Instance(), "CompleteOption.Searcher.Path.use_async: ",
                    output->use_async, &output->use_async)) {
     print_abort();
@@ -203,8 +203,8 @@ ECM AMSetCLI::Add(const std::string &nickname) {
     AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
-  AMPromptManager::Instance().Print(AMStr::fmt("hostset added: {}",
-                             AMConfigManager::Instance().Format(target, "nickname")));
+  AMPromptManager::Instance().FmtPrint("hostset added: {}",
+                             AMConfigManager::Instance().Format(target, "nickname"));
   return Ok();
 }
 
@@ -236,9 +236,8 @@ ECM AMSetCLI::Modify(const std::string &nickname) {
     AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
-  AMPromptManager::Instance().Print(
-      AMStr::fmt("hostset updated: {}",
-                   AMConfigManager::Instance().Format(target, "nickname")));
+  AMPromptManager::Instance().FmtPrint("hostset updated: {}",
+                   AMConfigManager::Instance().Format(target, "nickname"));
   return Ok();
 }
 
@@ -325,3 +324,4 @@ ECM AMSetCLI::Delete(const std::vector<std::string> &targets) {
  * @brief Persist cached HostSet data to settings.toml.
  */
 ECM AMSetCLI::SaveSettings() { return Save(true); }
+
