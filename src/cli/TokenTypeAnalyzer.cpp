@@ -922,7 +922,7 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
         ToClientTimeoutMs_(profile.highlight.path.timeout_ms, 1000);
 
     auto [rcm, info] =
-        path_client->stat(abs_path, false, nullptr, timeout_ms, am_ms());
+        path_client->stat(abs_path, false, nullptr, timeout_ms, AMTime::miliseconds());
     if (rcm.first == EC::Success) {
       token.type = ToPathTokenType_(info.type);
     } else if (rcm.first == EC::FileNotExist || rcm.first == EC::PathNotExist) {

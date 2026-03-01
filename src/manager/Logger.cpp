@@ -218,7 +218,7 @@ void AMLogManager::WriteLogEntry_(const TraceInfo &info,
     return;
   }
   try {
-    const double stamp = info.timestamp > 0 ? info.timestamp : timenow();
+    const double stamp = info.timestamp > 0 ? info.timestamp : AMTime::seconds();
     const std::string time_str =
         FormatTime(static_cast<size_t>(stamp), "%Y/%m/%d %H:%M:%S");
     std::ostringstream line;

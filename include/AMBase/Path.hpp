@@ -6,14 +6,18 @@
 #define _WINSOCKAPI_
 #include <accctrl.h> // Define SE_OBJECT_TYPE enum
 #include <aclapi.h>  // Define security operation APIs
+#include <filesystem>
 #include <shlobj.h>
 #include <windows.h>
+
 #endif
 
 // project header
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
+#include "AMBase/tools/enum_related.hpp"
 #include "AMBase/tools/string.hpp"
+
 
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
@@ -750,9 +754,8 @@ inline std::pair<ECM, PathInfo> stat(const std::string &path,
     status = fs::symlink_status(p, ec);
   }
   if (ec) {
-    return {
-        ECM{fec(ec), AMStr::fmt("Stat {} failed: {}", pathf, ec.message())},
-        info};
+    return {ECM{fec(ec), AMStr::fmt("Stat {} failed: {}", pathf, ec.message())},
+            info};
   }
   info.type = cast_fs_type(status.type());
 
@@ -827,9 +830,9 @@ listdir(const std::string &path, amf interrupt_flag = nullptr,
   std::error_code ec;
   auto dir_iter = fs::directory_iterator(p, ec);
   if (ec) {
-    return {ECM{fec(ec),
-                AMStr::fmt("Listdir {} failed: {}", pathf, ec.message())},
-            result};
+    return {
+        ECM{fec(ec), AMStr::fmt("Listdir {} failed: {}", pathf, ec.message())},
+        result};
   }
   for (const auto &entry : dir_iter) {
     if (interrupt_flag && !interrupt_flag->IsRunning()) {
@@ -848,4 +851,3 @@ listdir(const std::string &path, amf interrupt_flag = nullptr,
   return {ECM{EC::Success, ""}, result};
 }
 } // namespace AMFS
-

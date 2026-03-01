@@ -92,12 +92,12 @@ public:
         if (truncate) {
           flags |= LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_CREAT;
         }
-        nb_res = client->nb_call(task_interrupt_flag, -1, am_ms(), [&]() {
+        nb_res = client->nb_call(task_interrupt_flag, -1, AMTime::miliseconds(), [&]() {
           return libssh2_sftp_open(client->sftp, path.c_str(), flags, 0744);
         });
         sftp_handle = nb_res.value;
       } else {
-        nb_res = client->nb_call(task_interrupt_flag, -1, am_ms(), [&]() {
+        nb_res = client->nb_call(task_interrupt_flag, -1, AMTime::miliseconds(), [&]() {
           return libssh2_sftp_open(client->sftp, path.c_str(), LIBSSH2_FXF_READ,
                                    0400);
         });
@@ -240,7 +240,7 @@ public:
           }
           if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
             WaitResult wr =
-                client->wait_for_socket(SocketWaitType::Read, am_ms(), 200,
+                client->wait_for_socket(SocketWaitType::Read, AMTime::miliseconds(), 200,
                                         pd ? pd->GetInterruptFlag() : nullptr);
             if (wr == WaitResult::Error) {
               return {
@@ -331,7 +331,7 @@ public:
           }
           if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
             WaitResult wr =
-                client->wait_for_socket(SocketWaitType::Write, am_ms(), 200,
+                client->wait_for_socket(SocketWaitType::Write, AMTime::miliseconds(), 200,
                                         pd ? pd->GetInterruptFlag() : nullptr);
             if (wr == WaitResult::Error) {
               return {
@@ -609,7 +609,7 @@ public:
     if (nickname.empty() || AMStr::lowercase(nickname) == "local") {
       return {ECM{EC::Success, ""}, local_client};
     }
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     ;
     if (hosts.find(nickname) == hosts.end()) {
       return {
@@ -903,7 +903,7 @@ private:
       return;
     }
 
-    auto time_now = timenow();
+    auto time_now = AMTime::seconds();
     if (!force &&
         ((time_now - pd.cb_time) <= task_info->callback.cb_interval_s)) {
       return;
@@ -949,7 +949,7 @@ private:
     if (task_info->pd && task_info->pd->is_terminate_only()) {
       task_info->SetResult({EC::Terminate, "Task terminated before start"});
       task_info->SetStatus(TaskStatus::Finished);
-      task_info->finished_time.store(timenow(), std::memory_order_relaxed);
+      task_info->finished_time.store(AMTime::seconds(), std::memory_order_relaxed);
       return true;
     }
     return false;
@@ -1037,7 +1037,7 @@ private:
       return rcm;
     }
 
-    auto src_open = client->nb_call(pd.GetInterruptFlag(), -1, am_ms(), [&]() {
+    auto src_open = client->nb_call(pd.GetInterruptFlag(), -1, AMTime::miliseconds(), [&]() {
       return libssh2_sftp_open(client->sftp, task->src.c_str(),
                                LIBSSH2_FXF_READ, 0400);
     });
@@ -1058,7 +1058,7 @@ private:
     if (resume_offset == 0) {
       dst_flags |= LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC;
     }
-    auto dst_open = client->nb_call(pd.GetInterruptFlag(), -1, am_ms(), [&]() {
+    auto dst_open = client->nb_call(pd.GetInterruptFlag(), -1, AMTime::miliseconds(), [&]() {
       return libssh2_sftp_open(client->sftp, task->dst.c_str(), dst_flags,
                                0744);
     });
@@ -1110,7 +1110,7 @@ private:
         } else if (bytes_read == 0) {
           break;
         } else if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
-          WaitResult wr = client->wait_for_socket(SocketWaitType::Read, am_ms(),
+          WaitResult wr = client->wait_for_socket(SocketWaitType::Read, AMTime::miliseconds(),
                                                   200, pd.GetInterruptFlag());
           if (wr == WaitResult::Interrupted) {
             rcm = pd.InterruptECM("Task paused by user",
@@ -1153,7 +1153,7 @@ private:
           break;
         } else if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
           WaitResult wr = client->wait_for_socket(
-              SocketWaitType::Write, am_ms(), 200, pd.GetInterruptFlag());
+              SocketWaitType::Write, AMTime::miliseconds(), 200, pd.GetInterruptFlag());
           if (wr == WaitResult::Interrupted) {
             rcm = pd.InterruptECM("Task paused by user",
                                   "Transfer interrupted by user");
@@ -1674,7 +1674,7 @@ private:
     task_info->SetStatus(TaskStatus::Conducting);
     if (!task_info->keep_start_time.load(std::memory_order_relaxed) ||
         task_info->start_time.load(std::memory_order_relaxed) <= 0.0) {
-      task_info->start_time.store(timenow(), std::memory_order_relaxed);
+      task_info->start_time.store(AMTime::seconds(), std::memory_order_relaxed);
     }
 
     if (task_info->callback.need_total_size_cb) {
@@ -1688,7 +1688,7 @@ private:
     if (!task_info->tasks) {
       task_info->SetStatus(TaskStatus::Finished);
       task_info->SetResult({EC::InvalidArg, "No task is provided"});
-      task_info->finished_time.store(timenow(), std::memory_order_relaxed);
+      task_info->finished_time.store(AMTime::seconds(), std::memory_order_relaxed);
       return;
     }
 
@@ -1834,7 +1834,7 @@ private:
       task_info->SetResult({EC::Terminate, "Task terminated by user"});
     }
     task_info->SetStatus(TaskStatus::Finished);
-    task_info->finished_time.store(timenow(), std::memory_order_relaxed);
+    task_info->finished_time.store(AMTime::seconds(), std::memory_order_relaxed);
   }
 
 public:
@@ -1989,7 +1989,7 @@ public:
       task_info->id = GenerateTaskId_();
     }
     task_info->ResetCompletionDispatch();
-    task_info->submit_time.store(timenow(), std::memory_order_relaxed);
+    task_info->submit_time.store(AMTime::seconds(), std::memory_order_relaxed);
     task_info->SetStatus(TaskStatus::Pending);
 
     task_info->CalTotalSize();
@@ -2118,8 +2118,8 @@ public:
     if (task_info->pd) {
       task_info->pd->set_pause();
     }
-    const int64_t start = am_ms();
-    while (timeout_ms < 0 || (am_ms() - start) < timeout_ms) {
+    const int64_t start = AMTime::miliseconds();
+    while (timeout_ms < 0 || (AMTime::miliseconds() - start) < timeout_ms) {
       status_t = task_info->GetStatus();
       if (status_t == TaskStatus::Paused) {
         return {EC::Success, ""};
@@ -2153,8 +2153,8 @@ public:
     }
     if (task_info->pd && task_info->pd->is_pause_only() &&
         status_t != TaskStatus::Paused) {
-      const int64_t start = am_ms();
-      while (timeout_ms < 0 || (am_ms() - start) < timeout_ms) {
+      const int64_t start = AMTime::miliseconds();
+      while (timeout_ms < 0 || (AMTime::miliseconds() - start) < timeout_ms) {
         status_t = task_info->GetStatus();
         if (status_t == TaskStatus::Paused) {
           break;
@@ -2228,7 +2228,7 @@ public:
         }
         task_info->SetResult({EC::Terminate, "Task terminated while paused"});
         task_info->SetStatus(TaskStatus::Finished);
-        task_info->finished_time.store(timenow(), std::memory_order_relaxed);
+        task_info->finished_time.store(AMTime::seconds(), std::memory_order_relaxed);
         task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
         HandleCompletedTask(task_info);
         task_registry_.erase(it);
@@ -2258,7 +2258,7 @@ public:
         }
         task_info->SetResult({EC::Terminate, "Task terminated before start"});
         task_info->SetStatus(TaskStatus::Finished);
-        task_info->finished_time.store(timenow(), std::memory_order_relaxed);
+        task_info->finished_time.store(AMTime::seconds(), std::memory_order_relaxed);
         task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
         queue_cv_.notify_all();
         HandleCompletedTask(task_info);
@@ -2382,7 +2382,7 @@ public:
              bool ignore_sepcial_file = true, bool resume = false,
              amf interrupt_flag = nullptr, int timeout_ms = -1,
              int64_t start_time = -1) {
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     WRV result = {};
     TASKS tasks = {};
     // Trim leading/trailing spaces from src and dst
@@ -2550,7 +2550,7 @@ public:
       if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return {ECM{EC::Terminate, "Load tasks interrupted by user"}, tasks};
       }
-      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+      if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
         return {ECM{EC::OperationTimeout, "Load tasks timeout"}, tasks};
       }
       const std::string base_path = clone ? srcf : AMPathStr::dirname(srcf);

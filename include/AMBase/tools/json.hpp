@@ -11,7 +11,6 @@
 
 namespace AMJson {
 using Json = nlohmann::ordered_json;
-
 template <class T>
 inline constexpr bool kValueTypeSupported =
     std::is_arithmetic_v<std::decay_t<T>> ||

@@ -1306,7 +1306,7 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
     AMTransferManager::Instance().GetTaskCounts(&pending_count, &running_count);
     const size_t total_tasks = pending_count + running_count;
     const std::string time_now =
-        FormatTime(static_cast<size_t>(timenow()), "%H:%M:%S");
+        FormatTime(static_cast<size_t>(AMTime::seconds()), "%H:%M:%S");
 
     vars["$task_pending"] = std::to_string(pending_count);
     vars["$task_running"] = std::to_string(running_count);

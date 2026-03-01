@@ -836,44 +836,71 @@ std::string DecryptPassword(const std::string &stored) {
 const std::shared_ptr<TaskControlToken> TaskControlToken::Global =
     std::make_shared<TaskControlToken>();
 
-double timenow() {
+namespace AMTime {
+double seconds() {
   return std::chrono::duration<double>(
              std::chrono::system_clock::now().time_since_epoch())
       .count();
 }
 
-int64_t am_ms() {
+int64_t miliseconds() {
   return std::chrono::duration_cast<std::chrono::milliseconds>(
              std::chrono::steady_clock::now().time_since_epoch())
       .count();
 }
 
-double am_s() {
-  return std::chrono::duration<double>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
-}
+std::string Str(std::string_view format, std::optional<double> timestamp) {
+  const double stamp = timestamp.has_value() ? *timestamp : seconds();
+  const std::time_t time_t_value = static_cast<std::time_t>(stamp);
 
-std::string FormatTime(const size_t &time, const std::string &format) {
-  auto timeT = static_cast<time_t>(time);
-
-  struct tm timeInfo;
+  std::tm time_info{};
 #ifdef _WIN32
-  localtime_s(&timeInfo, &timeT);
+  localtime_s(&time_info, &time_t_value);
 #else
-  localtime_r(&timeT, &timeInfo);
+  localtime_r(&time_t_value, &time_info);
 #endif
 
   std::ostringstream oss;
-  oss << std::put_time(&timeInfo, format.c_str());
+  oss << std::put_time(&time_info, format.data());
   return oss.str();
+}
+
+std::chrono::steady_clock::time_point SteadyNow() {
+  return std::chrono::steady_clock::now();
+}
+
+double IntervalS(const std::chrono::steady_clock::time_point &start,
+                 const std::chrono::steady_clock::time_point &end) {
+  return std::chrono::duration<double>(end - start).count();
+}
+
+double IntervalMS(const std::chrono::steady_clock::time_point &start,
+                  const std::chrono::steady_clock::time_point &end) {
+  return std::chrono::duration<double, std::milli>(end - start).count();
+}
+} // namespace AMTime
+
+double timenow() {
+  return AMTime::seconds();
+}
+
+int64_t am_ms() {
+  return AMTime::miliseconds();
+}
+
+double am_s() {
+  return static_cast<double>(AMTime::miliseconds()) / 1000.0;
+}
+
+std::string FormatTime(const size_t &time, const std::string &format) {
+  return AMTime::Str(format, static_cast<double>(time));
 }
 
 std::string FormatTimeHM(double timestamp) {
   if (timestamp <= 0.0) {
     return "-";
   }
-  return FormatTime(static_cast<size_t>(timestamp), "%H:%M");
+  return AMTime::Str("%H:%M", timestamp);
 }
 
 bool isok(const ECM &ecm) { return ecm.first == EC::Success; }

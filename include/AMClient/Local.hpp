@@ -155,7 +155,7 @@ public:
     bool finished = false;
     bool interrupted = false;
     bool timed_out = false;
-    int64_t start_time = am_ms();
+    int64_t start_time = AMTime::miliseconds();
 
     while (true) {
       if (flag && !flag->IsRunning()) {
@@ -168,7 +168,7 @@ public:
         finished = true;
         break;
       }
-      if (max_time_ms > 0 && am_ms() - start_time >= max_time_ms) {
+      if (max_time_ms > 0 && AMTime::miliseconds() - start_time >= max_time_ms) {
         if (job_handle) {
           (void)TerminateJobObject(job_handle, 1);
         } else {
@@ -287,7 +287,7 @@ public:
     std::array<char, 4096> buffer;
     int exit_status = -1;
     bool child_exited = false;
-    int64_t start_time = am_ms();
+    int64_t start_time = AMTime::miliseconds();
 
     auto kill_child = [&](int sig) {
       if (!child_exited) {
@@ -300,7 +300,7 @@ public:
         kill_child(SIGKILL);
         break;
       }
-      if (max_time_ms > 0 && am_ms() - start_time >= max_time_ms) {
+      if (max_time_ms > 0 && AMTime::miliseconds() - start_time >= max_time_ms) {
         kill_child(SIGKILL);
         break;
       }
@@ -478,7 +478,7 @@ public:
         AMStr::print("Interrupted_ls");
         return {ECM{EC::Terminate, "Listdir interrupted by user"}, result};
       }
-      if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
+      if (timeout_ms > 0 && AMTime::miliseconds() - start_time > timeout_ms) {
         return {ECM{EC::OperationTimeout, "Listdir timeout"}, result};
       }
       // If an error occurs, skip current file
@@ -534,7 +534,7 @@ public:
         }
         return {out, {result, errors}};
       }
-      if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
+      if (timeout_ms > 0 && AMTime::miliseconds() - start_time > timeout_ms) {
         ECM out = {EC::OperationTimeout, "iwalk timeout"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
@@ -761,7 +761,7 @@ public:
         errors.emplace_back(path, out);
         return {out, {result, errors}};
       }
-      if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
+      if (timeout_ms > 0 && AMTime::miliseconds() - start_time > timeout_ms) {
         ECM out = {EC::OperationTimeout, "walk timeout"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);

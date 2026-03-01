@@ -192,7 +192,7 @@ public:
 
       // 5. Use select to wait for connection complete
       const int64_t total_timeout_ms = timeout_ms > 0 ? timeout_ms : 6000;
-      const int64_t start_ms = am_ms();
+      const int64_t start_ms = AMTime::miliseconds();
       int64_t remaining_ms = total_timeout_ms;
       int select_result = 0;
       bool timed_out = false;
@@ -233,7 +233,7 @@ public:
           break;
         }
 
-        remaining_ms = total_timeout_ms - (am_ms() - start_ms);
+        remaining_ms = total_timeout_ms - (AMTime::miliseconds() - start_ms);
       }
 
       if (remaining_ms <= 0) {
@@ -972,7 +972,7 @@ public:
   auto nb_call(amf interrupt_flag, int64_t timeout_ms, int64_t start_time,
                Func &&func) -> NBResult<decltype(func())> {
     using RetType = decltype(func());
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
 
     RetType rc;
     while (true) {
@@ -1016,8 +1016,8 @@ public:
       return WaitResult::Interrupted;
     }
     if (timeout_ms > 0) {
-      start_time = start_time == -1 ? am_ms() : start_time;
-      if (am_ms() - start_time >= timeout_ms) {
+      start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
+      if (AMTime::miliseconds() - start_time >= timeout_ms) {
         return WaitResult::Timeout;
       }
     }
@@ -1106,7 +1106,7 @@ public:
     timeval *timeout_ptr = nullptr;
     bool interrupt_poll_fallback = false;
     if (timeout_ms > 0) {
-      const int64_t remaining = timeout_ms - (am_ms() - start_time);
+      const int64_t remaining = timeout_ms - (AMTime::miliseconds() - start_time);
       if (remaining <= 0) {
         cleanup_wakeup();
         return WaitResult::Timeout;
@@ -1184,7 +1184,7 @@ public:
                   int64_t start_time = -1, int timeout_ms = -1) {
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (has_connected.load(std::memory_order_relaxed)) {
       if (!force) {
@@ -1233,7 +1233,7 @@ public:
       return {EC::Terminate, "Connection interrupted"};
     }
     if (timeout_ms > 0) {
-      if (am_ms() - start_time >= timeout_ms) {
+      if (AMTime::miliseconds() - start_time >= timeout_ms) {
         return {EC::OperationTimeout, "Connection timed out"};
       }
     }
@@ -1329,7 +1329,7 @@ public:
       if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return {EC::Terminate, "Authentication interrupted"};
       }
-      auto auth_res = nb_call(interrupt_flag, -1, am_ms(), [&]() {
+      auto auth_res = nb_call(interrupt_flag, -1, AMTime::miliseconds(), [&]() {
         return libssh2_userauth_publickey_fromfile(
             session, res_data.username.c_str(), nullptr,
             res_data.keyfile.c_str(), nullptr);
@@ -1363,7 +1363,7 @@ public:
         return {EC::Terminate, "Authentication interrupted"};
       }
       std::string plain_password = AMAuth::DecryptPassword(stored_password_enc);
-      auto auth_res = nb_call(interrupt_flag, -1, am_ms(), [&]() {
+      auto auth_res = nb_call(interrupt_flag, -1, AMTime::miliseconds(), [&]() {
         return libssh2_userauth_password(session, res_data.username.c_str(),
                                          plain_password.c_str());
       });
@@ -1397,7 +1397,7 @@ public:
         if (private_key == res_data.keyfile) {
           continue;
         }
-        auto auth_res = nb_call(interrupt_flag, -1, am_ms(), [&]() {
+        auto auth_res = nb_call(interrupt_flag, -1, AMTime::miliseconds(), [&]() {
           return libssh2_userauth_publickey_fromfile(
               session, res_data.username.c_str(), nullptr, private_key.c_str(),
               nullptr);
@@ -1450,7 +1450,7 @@ public:
           break;
         }
         const std::string password_enc = AMAuth::EncryptPassword(password_tmp);
-        auto auth_res = nb_call(interrupt_flag, -1, am_ms(), [&]() {
+        auto auth_res = nb_call(interrupt_flag, -1, AMTime::miliseconds(), [&]() {
           return libssh2_userauth_password(session, res_data.username.c_str(),
                                            password_tmp.c_str());
         });
@@ -1486,7 +1486,7 @@ public:
       return rcm;
     }
 
-    auto sftp_init_res = nb_call(interrupt_flag, -1, am_ms(),
+    auto sftp_init_res = nb_call(interrupt_flag, -1, AMTime::miliseconds(),
                                  [&]() { return libssh2_sftp_init(session); });
     rcm =
         ErrorRecord(sftp_init_res, TraceLevel::Critical, "",
@@ -1651,7 +1651,7 @@ private:
         continue;
       }
 
-      int64_t start_time = am_ms();
+      int64_t start_time = AMTime::miliseconds();
       int wait_timeout = reader_wait_timeout_ms.load(std::memory_order_relaxed);
       WaitResult wr = wait_for_socket(SocketWaitType::Read, start_time,
                                       wait_timeout, terminal_interrupt_flag);
@@ -1723,7 +1723,7 @@ private:
     }
 
     amf flag = interrupt_flag ? interrupt_flag : terminal_interrupt_flag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     if (flag && !flag->IsRunning()) {
       terminal_channel.reset();
       return {EC::Terminate, "Terminal init interrupted"};
@@ -1814,7 +1814,7 @@ public:
               int timeout_ms = -1, int64_t start_time = -1) override {
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
 
     if (has_connected.load(std::memory_order_relaxed) && session && !force) {
       ECM chk = Check(interrupt_flag, timeout_ms, start_time);
@@ -1920,7 +1920,7 @@ public:
     }
 
     amf flag = interrupt_flag ? interrupt_flag : terminal_interrupt_flag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     int rc = 0;
     WaitResult wr = WaitResult::Ready;
 
@@ -1969,7 +1969,7 @@ public:
     }
 
     amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     if (flag && !flag->IsRunning()) {
       return {EC::Terminate, "Terminal interrupted"};
     }
@@ -2128,7 +2128,7 @@ public:
     if (timeout_ms <= 0) {
       timeout_ms = reader_wait_timeout_ms.load(std::memory_order_relaxed);
     }
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
 
     if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return {EC::Terminate, "Terminal interrupted"};
@@ -2145,7 +2145,7 @@ public:
         ClosePipe(pipe);
         return {EC::Terminate, "Terminal interrupted"};
       }
-      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+      if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
         ClosePipe(pipe);
         return {EC::OperationTimeout, "Terminal write timed out"};
       }
@@ -2413,7 +2413,7 @@ private:
     NBResult<int> read_res;
 
     while (true) {
-      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+      if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
         rcm = ECM{EC::OperationTimeout,
                   AMStr::fmt("Path: {} readdir timeout", path)};
         break;
@@ -2505,7 +2505,7 @@ protected:
       if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return;
       }
-      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+      if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
         return;
       }
       const std::string base_name = AMPathStr::basename(attrs.first);
@@ -2558,7 +2558,7 @@ protected:
       if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return;
       }
-      if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+      if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
         return;
       }
       const std::string base_name = AMPathStr::basename(path);
@@ -2678,7 +2678,7 @@ protected:
         if (interrupt_flag && !interrupt_flag->IsRunning()) {
           return;
         }
-        if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+        if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
           return;
         }
         _chmod(item.first, mode, recursive, errors, item.second, interrupt_flag,
@@ -2740,8 +2740,8 @@ public:
         break;
       }
 
-      double start = am_s();
-      auto stat_res = nb_call(flag, -1, am_ms(), [&] {
+      double start = (static_cast<double>(AMTime::miliseconds()) / 1000.0);
+      auto stat_res = nb_call(flag, -1, AMTime::miliseconds(), [&] {
         return libssh2_sftp_stat(sftp, "/", &attrs);
       });
       if (stat_res.status != WaitResult::Ready) {
@@ -2749,7 +2749,7 @@ public:
       }
 
       if (stat_res.value == 0) {
-        double end = am_s();
+        double end = (static_cast<double>(AMTime::miliseconds()) / 1000.0);
         rtts.push_back(end - start);
       }
     }
@@ -2778,7 +2778,7 @@ public:
     enum class CmdStage { BeforeSend, AwaitOutput, ReadingOutput, AwaitExit };
     CmdStage stage = CmdStage::BeforeSend;
 
-    int64_t time_start = am_ms();
+    int64_t time_start = AMTime::miliseconds();
     int exit_status = -1;
     bool has_output = false;
     std::string output;
@@ -3027,7 +3027,7 @@ public:
     }
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
 
     auto [rcm2, path_t] =
         lib_realpath(path, interrupt_flag, timeout_ms, start_time);
@@ -3051,7 +3051,7 @@ public:
     }
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     std::lock_guard<std::recursive_mutex> lock(mtx);
     auto [rcm, attrs] =
         lib_getstat(path, false, interrupt_flag, timeout_ms, start_time);
@@ -3104,7 +3104,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     auto [rcm2, attrs] =
         lib_getstat(path, trace_link, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
@@ -3125,7 +3125,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     auto [rcm2, attr_list] =
         lib_listdir(path, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
@@ -3148,7 +3148,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     auto [rcm2, attrs] =
         lib_getstat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first == EC::Success) {
@@ -3172,7 +3172,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     std::vector<std::string> parts = AMPathStr::split(path);
     if (parts.empty()) {
       return {EC::InvalidArg,
@@ -3212,7 +3212,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     return lib_unlink(path, interrupt_flag, timeout_ms, start_time);
   }
 
@@ -3225,7 +3225,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     return lib_rmdir(path, interrupt_flag, timeout_ms, start_time);
   }
 
@@ -3271,7 +3271,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     if (mkdir) {
       rcm0 = mkdirs(AMPathStr::dirname(dst), interrupt_flag, timeout_ms,
                     start_time);
@@ -3293,7 +3293,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     if (res_data.trash_dir.empty()) {
       return {EC::InvalidArg, "Trash directory not set"};
     }
@@ -3437,7 +3437,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     auto [rcm2, attrs] =
         lib_getstat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
@@ -3486,7 +3486,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     auto [rcm, br] = stat(path, false, interrupt_flag, timeout_ms, start_time);
     if (rcm.first != EC::Success) {
       if (error_callback && *error_callback) {
