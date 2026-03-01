@@ -293,7 +293,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
   AMPromptManager &prompt = AMPromptManager::Instance();
   const AMPromptProfileArgs builtin_defaults{};
   const auto print_abort = [&prompt, this]() {
-    prompt.Print(AMStr::fmt("{}\n", AMConfigManager::Instance().Format("Input Abort", "abort")));
+    prompt.FmtPrint("{}\n", AMConfigManager::Instance().Format("Input Abort", "abort"));
   };
 
   const std::map<std::string, std::string> bool_literals = {
@@ -755,3 +755,4 @@ void AMPromptManager::FlushHistory() {
   AMConfigManager::Instance().SetArg(DocumentKind::History, {}, jsond);
   AMConfigManager::Instance().Dump(DocumentKind::History, "", true);
 }
+

@@ -511,7 +511,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
                                     HostConfig &entry) {
   entry = HostConfig{};
   auto print_abort = [this]() {
-    AMPromptManager::Instance().Print(AMStr::fmt("{}\n", AMConfigManager::Instance().Format("Input Abort", "abort")));
+    AMPromptManager::Instance().FmtPrint("{}\n", AMConfigManager::Instance().Format("Input Abort", "abort"));
   };
 
   entry.request.nickname = nickname;
@@ -769,7 +769,7 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
                                        HostConfig &entry) {
   (void)nickname;
   static auto print_abort = [this]() {
-    AMPromptManager::Instance().Print(AMStr::fmt("{}\n", AMConfigManager::Instance().Format("Input Abort", "abort")));
+    AMPromptManager::Instance().FmtPrint("{}\n", AMConfigManager::Instance().Format("Input Abort", "abort"));
   };
 
   std::string hostname = entry.request.hostname;
@@ -1029,3 +1029,4 @@ ECM AMHostManager::RemoveHost_(const std::string &nickname) {
   }
   return Ok();
 }
+

@@ -518,11 +518,11 @@ void Operator::ApplyKnownHostCallback_(
       bool canceled = false;
       bool accepted = true;
       if (AMIsInteractive.load(std::memory_order_relaxed)) {
-        AMPromptManager::Instance().Print(AMStr::fmt(
+        AMPromptManager::Instance().FmtPrint(
             "Unknown host: {}:{}  User: {} Protocol: [!se][{}][/se]",
-            query.hostname, query.port, query.username, query.protocol));
-        AMPromptManager::Instance().Print(AMStr::fmt("Fingerprint: {}",
-                                   AMStr::Strip(query.GetFingerprint())));
+            query.hostname, query.port, query.username, query.protocol);
+        AMPromptManager::Instance().FmtPrint("Fingerprint: {}",
+                                   AMStr::Strip(query.GetFingerprint()));
         accepted =
             AMPromptManager::Instance().PromptYesNo("Trust this host key? (y/N): ", &canceled);
       }
@@ -567,7 +567,7 @@ Operator::DefaultPasswordCallback(const AuthCBInfo &info) {
     if (info.password_n.empty()) {
       return std::nullopt;
     }
-    AMPromptManager::Instance().Print(AMStr::fmt("Wrong password [{}]", client_name));
+    AMPromptManager::Instance().FmtPrint("Wrong password [{}]", client_name);
     return std::nullopt;
   }
 
@@ -620,3 +620,4 @@ std::shared_ptr<BaseClient> Operator::CreateLocalClient_() {
 }
 
 } // namespace AMClientManage
+

@@ -759,8 +759,7 @@ ECM CmdArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   if (!msg.empty()) {
     AMPromptManager::Instance().Print(msg);
   }
-  AMPromptManager::Instance().Print(
-      AMStr::fmt("Command exit with code {}", shell_result.second.second));
+  AMPromptManager::Instance().FmtPrint("Command exit with code {}", shell_result.second.second);
   return shell_result.first;
 }
 
@@ -985,8 +984,7 @@ ECM TaskCacheAddArgs::Run(const CliManagers &managers,
 
   AMTransferManager &transfer_manager = AMTransferManager::Instance();
   size_t index = transfer_manager.SubmitTransferSet(transfer_set);
-  AMPromptManager::Instance().Print(
-      AMStr::fmt("✅ cache add {}", std::to_string(index)));
+  AMPromptManager::Instance().FmtPrint("✅ cache add {}", std::to_string(index));
   return {EC::Success, ""};
 }
 
@@ -1015,9 +1013,9 @@ ECM TaskCacheRmArgs::Run(const CliManagers &managers,
                             "not found"};
   }
   for (size_t index : deduped) {
-    AMPromptManager::Instance().Print(AMStr::fmt("✅ cache rm "
+    AMPromptManager::Instance().FmtPrint("✅ cache rm "
                                                  "{}",
-                                                 std::to_string(index)));
+                                                 std::to_string(index));
   }
   return {EC::Success, ""};
 }
@@ -1157,3 +1155,4 @@ void TaskRetryArgs::reset() {
   quiet = false;
   indices.clear();
 }
+

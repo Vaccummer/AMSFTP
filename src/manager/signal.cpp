@@ -1,5 +1,5 @@
+#include "AMBase/tools/enum_related.hpp"
 #include "AMManager/SignalMonitor.hpp"
-
 #include <algorithm>
 #include <chrono>
 #include <utility>
@@ -18,7 +18,7 @@ void AMCliSignalMonitor::InstallHandlers() {
 #ifdef _WIN32
   SetConsoleCtrlHandler(AMCliSignalMonitor::ConsoleCtrlHandler_, TRUE);
 #else
-  struct sigaction sa {};
+  struct sigaction sa{};
   sa.sa_handler = AMCliSignalMonitor::SignalHandler;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART;
@@ -105,7 +105,8 @@ bool AMCliSignalMonitor::ResumeHook(const std::string &name) {
   return true;
 }
 
-bool AMCliSignalMonitor::SetHookPriority(const std::string &name, int priority) {
+bool AMCliSignalMonitor::SetHookPriority(const std::string &name,
+                                         int priority) {
   if (name.empty() || name == "GLOBAL") {
     return false;
   }
@@ -186,9 +187,10 @@ void AMCliSignalMonitor::Run_() {
           break;
         }
       }
-      if ((signum == SIGINT || signum == SIGTERM) && TaskControlToken::Instance()) {
-        (void)TaskControlToken::Instance()->SetStatus(signum == SIGINT ? ControlSignal::Interrupt
-                                                : ControlSignal::Kill);
+      if ((signum == SIGINT || signum == SIGTERM) &&
+          TaskControlToken::Instance()) {
+        (void)TaskControlToken::Instance()->SetStatus(
+            signum == SIGINT ? ControlSignal::Interrupt : ControlSignal::Kill);
       }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));

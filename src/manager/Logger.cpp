@@ -1,7 +1,7 @@
 #include "AMManager/Logger.hpp"
 #include "AMBase/Enum.hpp"
+#include "AMBase/tools/enum_related.hpp"
 #include "AMManager/Config.hpp"
-#include "AMManager/Prompt.hpp"
 #include <magic_enum/magic_enum.hpp>
 #include <sstream>
 #include <utility>
@@ -11,12 +11,10 @@ ECM AMLogManager::Init() {
   auto &config = AMConfigManager::Instance();
   int client_level = config.ResolveArg<int>(
       DocumentKind::Settings, {"Options", "LogManager", "client_trace_level"},
-      4,
-      [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
+      4, [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
   int program_level = config.ResolveArg<int>(
       DocumentKind::Settings, {"Options", "LogManager", "program_trace_level"},
-      4,
-      [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
+      4, [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
   client_trace_level_.store(client_level, std::memory_order_relaxed);
   program_trace_level_.store(program_level, std::memory_order_relaxed);
   std::lock_guard<std::mutex> lock(stream_mtx_);
@@ -97,6 +95,7 @@ void AMLogManager::ProgramTrace(const TraceInfo &info) {
 /** Get or set trace levels for selected targets. */
 std::variant<int, std::pair<int, int>>
 AMLogManager::TraceLevel(int value, bool programm, bool client, bool print) {
+  (void)print;
   if (!programm && !client) {
     programm = true;
     client = true;
@@ -107,19 +106,6 @@ AMLogManager::TraceLevel(int value, bool programm, bool client, bool print) {
       program_trace_level_.load(std::memory_order_relaxed);
 
   if (value == -99999) {
-    if (print) {
-      if (client && programm) {
-        AMPromptManager::Instance().Print(
-            AMStr::fmt("TraceLevel: client = {}, program = {}", client_level,
-                         program_level));
-      } else if (client) {
-        AMPromptManager::Instance().Print(
-            AMStr::fmt("TraceLevel: client = {}", client_level));
-      } else if (programm) {
-        AMPromptManager::Instance().Print(
-            AMStr::fmt("TraceLevel: program = {}", program_level));
-      }
-    }
     if (client && programm) {
       return std::pair(client_level, program_level);
     }
@@ -138,18 +124,6 @@ AMLogManager::TraceLevel(int value, bool programm, bool client, bool print) {
   }
   if (programm) {
     program_trace_level_.store(clamped, std::memory_order_relaxed);
-  }
-  if (print) {
-    if (client && programm) {
-      AMPromptManager::Instance().Print(AMStr::fmt(
-          "TraceLevel set: client = {}, program = {}", clamped, clamped));
-    } else if (client) {
-      AMPromptManager::Instance().Print(
-          AMStr::fmt("TraceLevel set: client = {}", clamped));
-    } else if (programm) {
-      AMPromptManager::Instance().Print(
-          AMStr::fmt("TraceLevel set: program = {}", clamped));
-    }
   }
   return clamped;
 }
@@ -218,7 +192,8 @@ void AMLogManager::WriteLogEntry_(const TraceInfo &info,
     return;
   }
   try {
-    const double stamp = info.timestamp > 0 ? info.timestamp : AMTime::seconds();
+    const double stamp =
+        info.timestamp > 0 ? info.timestamp : AMTime::seconds();
     const std::string time_str =
         FormatTime(static_cast<size_t>(stamp), "%Y/%m/%d %H:%M:%S");
     std::ostringstream line;
@@ -242,9 +217,8 @@ void AMLogManager::WriteLogEntry_(const TraceInfo &info,
     stream << line.str() << std::endl;
     stream.flush();
   } catch (const std::exception &ex) {
-    AMPromptManager::Instance().ErrorFormat("LogWriteError", ex.what());
+    (void)ex;
   } catch (...) {
-    AMPromptManager::Instance().ErrorFormat("LogWriteError", "Unknown Error");
   }
 }
 

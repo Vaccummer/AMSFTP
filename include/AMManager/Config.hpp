@@ -2,12 +2,12 @@
 #include "AMBase/DataClass.hpp"
 #include "AMBase/RustTomlRead.h"
 #include "AMBase/tools/bar.hpp"
+#include "AMBase/tools/enum_related.hpp"
 #include "AMBase/tools/json.hpp"
 #include <condition_variable>
 #include <handleapi.h>
 #include <queue>
 #include <thread>
-
 
 /**
  * @brief Configuration document types tracked by storage.
@@ -429,4 +429,3 @@ private:
 
   mutable std::optional<AMProgressBarStyle> progress_bar_style_;
 };
-
