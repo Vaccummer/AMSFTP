@@ -1,12 +1,12 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Prompt.hpp"
 #include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <mutex>
+#include <optional>
+#include <variant>
 
 class AMLogManager : private NonCopyableNonMovable {
 public:
@@ -20,21 +20,7 @@ public:
   }
 
   /** Resolve paths, create the log directory, and open both log files. */
-  ECM Init() override {
-    int client_level = config_.ResolveArg<int>(
-        DocumentKind::Settings, {"Options", "LogManager", "client_trace_level"},
-        4,
-        [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
-    int program_level = config_.ResolveArg<int>(
-        DocumentKind::Settings,
-        {"Options", "LogManager", "program_trace_level"}, 4,
-        [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
-    client_trace_level_.store(client_level, std::memory_order_relaxed);
-    program_trace_level_.store(program_level, std::memory_order_relaxed);
-    std::lock_guard<std::mutex> lock(stream_mtx_);
-    ResolveLogPaths_();
-    return EnsureLogStreamsOpen_();
-  };
+  ECM Init() override;
 
   /** Enqueue a client trace entry for asynchronous logging. */
   void Enqueue(const TraceInfo &info);
@@ -94,8 +80,6 @@ private:
   /** Convert trace level enum to integer severity. */
   static int ToLevelInt(enum TraceLevel level);
 
-  AMConfigManager &config_ = AMConfigManager::Instance();
-  AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
   std::filesystem::path client_log_path_;
   std::filesystem::path program_log_path_;
   std::ofstream client_log_stream_;

@@ -1,9 +1,10 @@
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
 #include "AMCLI/Completer/Searcher.hpp"
 #include "AMCLI/Completer/SearcherCommon.hpp"
+#include "AMManager/Client.hpp"
+#include "AMManager/Config.hpp"
+#include "AMManager/Host.hpp"
+#include "AMManager/Transfer.hpp"
+#include "AMManager/Var.hpp"
 #include <algorithm>
 #include <unordered_map>
 
@@ -126,15 +127,15 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
     std::vector<VarInfo> items;
     if (prefix_ref.explicit_domain) {
-      items = var_manager_.ListByDomain(prefix_ref.domain);
+      items = VarCLISet::Instance().ListByDomain(prefix_ref.domain);
     } else {
-      const std::string current_domain = var_manager_.CurrentDomain();
+      const std::string current_domain = VarCLISet::Instance().CurrentDomain();
       std::unordered_map<std::string, VarInfo> by_name;
-      auto private_vars = var_manager_.ListByDomain(current_domain);
+      auto private_vars = VarCLISet::Instance().ListByDomain(current_domain);
       for (const auto &item : private_vars) {
         by_name[item.varname] = item;
       }
-      auto public_vars = var_manager_.ListByDomain(varsetkn::kPublic);
+      auto public_vars = VarCLISet::Instance().ListByDomain(varsetkn::kPublic);
       for (const auto &item : public_vars) {
         if (by_name.find(item.varname) == by_name.end()) {
           by_name[item.varname] = item;
@@ -164,7 +165,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       AMCompletionCandidate candidate;
       candidate.insert_text = varsetkn::BuildVarToken(candidate_ref, true);
       candidate.display =
-          config_manager_.Format(candidate.insert_text, "public_varname");
+          AMConfigManager::Instance().Format(candidate.insert_text, "public_varname");
       candidate.help =
           AMStr::fmt("[{}] {}", item.domain, RenderVarValue_(item.varvalue));
       candidate.kind = AMCompletionKind::VariableName;
@@ -206,13 +207,13 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       zones.push_back({zone, domain_exists, host_exists});
     };
 
-    const auto domains = var_manager_.ListDomains();
+    const auto domains = VarCLISet::Instance().ListDomains();
     for (const auto &domain : domains) {
-      append_zone(domain, true, host_manager_.HostExists(domain));
+      append_zone(domain, true, AMHostManager::Instance().HostExists(domain));
     }
-    const auto hosts = host_manager_.ListNames();
+    const auto hosts = AMHostManager::Instance().ListNames();
     for (const auto &host : hosts) {
-      append_zone(host, var_manager_.HasDomain(host), true);
+      append_zone(host, VarCLISet::Instance().HasDomain(host), true);
     }
     append_zone(varsetkn::kPublic, true, true);
 
@@ -236,7 +237,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       }
       const std::string style_key =
           ZoneStyleKey_(item.zone, item.domain_exists, item.host_exists);
-      candidate.display = config_manager_.Format(item.zone, style_key);
+      candidate.display = AMConfigManager::Instance().Format(item.zone, style_key);
       candidate.kind = AMCompletionKind::VarZone;
       candidate.help.clear();
       candidate.score = match.score_bias;
@@ -257,7 +258,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
         client_prefix = prefix.substr(0, at_pos);
       }
     }
-    auto names = client_manager_.GetClientNames();
+    auto names = AMClientManager::Instance().GetClientNames();
     std::vector<std::string> keys = names;
     for (const auto &match : BuildGeneralMatch(keys, client_prefix)) {
       const std::string &name = names[match.index];
@@ -283,7 +284,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
         host_prefix = prefix.substr(0, at_pos);
       }
     }
-    auto names = host_manager_.ListNames();
+    auto names = AMHostManager::Instance().ListNames();
     std::vector<std::string> keys = names;
     for (const auto &match : BuildGeneralMatch(keys, host_prefix)) {
       const std::string &name = names[match.index];
@@ -319,7 +320,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   if (HasTarget(ctx, AMCompletionTarget::TaskId)) {
-    auto ids = transfer_manager_.ListTaskIds();
+    auto ids = AMTransferManager::Instance().ListTaskIds();
     std::vector<std::string> keys = ids;
     for (const auto &match : BuildGeneralMatch(keys, prefix)) {
       const std::string &id = ids[match.index];

@@ -6,6 +6,7 @@
 #include "AMBase/Path.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Config.hpp"
+#include "AMManager/Prompt.hpp"
 #include "AMManager/Transfer.hpp"
 #include <algorithm>
 #include <atomic>
@@ -341,10 +342,10 @@ AMTransferManager::DeleteTransferSets(const std::vector<size_t> &set_indices) {
     if (index >= cached_sets_.size()) {
       msg =
           AMStr::fmt("Get index {}, but max is ", index, cached_sets_.size());
-      prompt_.ErrorFormat(ECM{EC::IndexOutOfRange, msg});
+      AMPromptManager::Instance().ErrorFormat(ECM{EC::IndexOutOfRange, msg});
       continue;
     } else if (!cached_sets_[index].has_value()) {
-      prompt_.ErrorFormat(
+      AMPromptManager::Instance().ErrorFormat(
           ECM{EC::TaskNotFound,
               AMStr::fmt("Index {} is already deleted", index)});
     }
@@ -381,7 +382,7 @@ ECM AMTransferManager::SubmitCachedTransferSets(
 
   if (transfer_sets.empty()) {
     std::string msg = "Cached transfer set is empty";
-    prompt_.ErrorFormat(ECM{EC::InvalidArg, msg});
+    AMPromptManager::Instance().ErrorFormat(ECM{EC::InvalidArg, msg});
     return {EC::InvalidArg, msg};
   }
 
@@ -389,12 +390,12 @@ ECM AMTransferManager::SubmitCachedTransferSets(
     auto temp = std::make_shared<TaskInfo>(true);
     temp->transfer_sets =
         std::make_shared<std::vector<UserTransferSet>>(transfer_sets);
-    PrintInspectTransferSets_(prompt_, temp);
+    PrintInspectTransferSets_(AMPromptManager::Instance(), temp);
     bool canceled = false;
-    if (!prompt_.PromptYesNo("Submit cached transfer sets? (y/N): ",
+    if (!AMPromptManager::Instance().PromptYesNo("Submit cached transfer sets? (y/N): ",
                              &canceled)) {
-      prompt_.Print(
-          AMStr::fmt("🚫  {}\n", config_.Format("Add Canceled", "abort")));
+      AMPromptManager::Instance().Print(
+          AMStr::fmt("🚫  {}\n", AMConfigManager::Instance().Format("Add Canceled", "abort")));
       return {EC::Terminate, "Task submission canceled"};
     }
   }
@@ -404,7 +405,7 @@ ECM AMTransferManager::SubmitCachedTransferSets(
   if (rcm.first == EC::Success) {
     ClearCachedTransferSets();
   }
-  prompt_.ErrorFormat(rcm);
+  AMPromptManager::Instance().ErrorFormat(rcm);
   return rcm;
 }
 
@@ -417,7 +418,7 @@ ECM AMTransferManager::Inspect(const ID &task_id, bool show_sets,
   if (!task_info) {
     return {EC::TaskNotFound, AMStr::fmt("Task ID not found: {}", task_id)};
   }
-  PrintInspectTask_(prompt_, task_info, show_entries, show_sets);
+  PrintInspectTask_(AMPromptManager::Instance(), task_info, show_entries, show_sets);
   return {EC::Success, ""};
 }
 
@@ -429,7 +430,7 @@ ECM AMTransferManager::InspectTransferSets(const ID &task_id) const {
   if (!task_info) {
     return {EC::TaskNotFound, AMStr::fmt("Task ID not found: {}", task_id)};
   }
-  PrintInspectTransferSets_(prompt_, task_info);
+  PrintInspectTransferSets_(AMPromptManager::Instance(), task_info);
   return {EC::Success, ""};
 }
 
@@ -441,7 +442,7 @@ ECM AMTransferManager::InspectTaskEntries(const ID &task_id) const {
   if (!task_info) {
     return {EC::TaskNotFound, AMStr::fmt("Task ID not found: {}", task_id)};
   }
-  PrintInspectTaskEntries_(prompt_, task_info);
+  PrintInspectTaskEntries_(AMPromptManager::Instance(), task_info);
   return {EC::Success, ""};
 }
 
@@ -452,44 +453,44 @@ ECM AMTransferManager::QueryCachedUserSet(size_t set_index) const {
   UserTransferSet transfer_set;
   ECM rcm = QueryTransferSet(set_index, &transfer_set);
   if (rcm.first != EC::Success) {
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
 
   auto temp = std::make_shared<TaskInfo>(true);
   temp->transfer_sets = std::make_shared<std::vector<UserTransferSet>>(
       std::vector<UserTransferSet>{transfer_set});
-  PrintInspectTransferSets_(prompt_, temp);
+  PrintInspectTransferSets_(AMPromptManager::Instance(), temp);
   return {EC::Success, ""};
 }
 
 ECM AMTransferManager::Thread(int num) {
-  static const int max_threads = config_.ResolveArg<int>(
+  static const int max_threads = AMConfigManager::Instance().ResolveArg<int>(
       DocumentKind::Settings, {"Options", "TransferManager", "max_thread_num"},
       (int)16,
       [](int val) { return std::max(1, std::min(val, (int)999999)); });
 
   if (num == -1) {
     const size_t current = worker_.ThreadCount(0);
-    prompt_.Print(AMStr::fmt("Current ThreadNum: {}", current));
+    AMPromptManager::Instance().Print(AMStr::fmt("Current ThreadNum: {}", current));
     return {EC::Success, ""};
   }
   ECM rcm = {EC::Success, ""};
   if (num <= 0) {
     rcm = {EC::InvalidArg,
            AMStr::fmt("ThreadNum must be positive, but recieve {}", num)};
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   } else if (num > max_threads) {
     rcm = {EC::InvalidArg,
            AMStr::fmt("ThreadNum too large, max is {}, but recieve {}",
                         max_threads, num)};
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
 
   const size_t applied = worker_.ThreadCount(static_cast<size_t>(num));
-  prompt_.Print(AMStr::fmt("Set ThreadNum to : {}", applied));
+  AMPromptManager::Instance().Print(AMStr::fmt("Set ThreadNum to : {}", applied));
   return rcm;
 }
 
@@ -515,7 +516,7 @@ ECM AMTransferManager::QuerySetEntry(const ID &entry_id) const {
   }
 
   const auto &task = task_info->tasks->at(entry_index - 1);
-  PrintTaskEntry_(prompt_, task, entry_index);
+  PrintTaskEntry_(AMPromptManager::Instance(), task, entry_index);
   return {EC::Success, ""};
 }
 
@@ -527,18 +528,18 @@ ECM AMTransferManager::Terminate(const ID &task_id, int timeout_ms) {
   if (!result.first) {
     if (result.second.first != EC::Success) {
       if (result.second.second.empty()) {
-        prompt_.ErrorFormat(result.second);
+        AMPromptManager::Instance().ErrorFormat(result.second);
       } else {
-        prompt_.ErrorFormat(result.second);
+        AMPromptManager::Instance().ErrorFormat(result.second);
       }
     }
     return result.second;
   }
   if (result.second.first != EC::Success) {
-    prompt_.ErrorFormat(result.second);
+    AMPromptManager::Instance().ErrorFormat(result.second);
     return result.second;
   } else if (!result.second.second.empty()) {
-    prompt_.Print(result.second.second);
+    AMPromptManager::Instance().Print(result.second.second);
   }
   return result.second;
 }
@@ -574,9 +575,9 @@ ECM AMTransferManager::Pause(const ID &task_id) {
   ECM rcm = worker_.pause(single_id);
   if (rcm.first != EC::Success) {
     if (rcm.second.empty()) {
-      prompt_.ErrorFormat(rcm);
+      AMPromptManager::Instance().ErrorFormat(rcm);
     } else if (!rcm.second.empty()) {
-      prompt_.Print(rcm.second);
+      AMPromptManager::Instance().Print(rcm.second);
     }
   }
   return rcm;
@@ -613,9 +614,9 @@ ECM AMTransferManager::Resume(const ID &task_id) {
   ECM rcm = worker_.resume(single_id);
   if (rcm.first != EC::Success) {
     if (rcm.second.empty()) {
-      prompt_.ErrorFormat(rcm);
+      AMPromptManager::Instance().ErrorFormat(rcm);
     } else if (!rcm.second.empty()) {
-      prompt_.Print(rcm.second);
+      AMPromptManager::Instance().Print(rcm.second);
     }
   }
   return rcm;
@@ -700,7 +701,7 @@ ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
   auto original = FindTaskById_(task_id);
   if (!original || !original->tasks) {
     ECM rcm = {EC::TaskNotFound, AMStr::fmt("Task not found: {}", task_id)};
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
 
@@ -709,7 +710,7 @@ ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
     const std::string status_name = std::string(magic_enum::enum_name(status));
     ECM rcm = {EC::InvalidArg, AMStr::fmt("Task not finished: {} (status {})",
                                             task_id, status_name)};
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
 
@@ -736,12 +737,12 @@ ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
       for (int idx : invalid_indices) {
         invalid_text.push_back(std::to_string(idx));
       }
-      prompt_.Print(AMStr::fmt("Warning: invalid retry indices ignored: {}",
+      AMPromptManager::Instance().Print(AMStr::fmt("Warning: invalid retry indices ignored: {}",
                                  AMStr::join(invalid_text, ", ")));
     }
     if (selected_indices.empty()) {
       ECM rcm = {EC::InvalidArg, "No valid task indices to retry"};
-      prompt_.ErrorFormat(rcm);
+      AMPromptManager::Instance().ErrorFormat(rcm);
       return {EC::InvalidArg, "No valid task indices to retry"};
     }
   }
@@ -770,7 +771,7 @@ ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
   }
 
   if (tasks_ptr->empty()) {
-    prompt_.Print("retry: all selected tasks already succeeded");
+    AMPromptManager::Instance().Print("retry: all selected tasks already succeeded");
     return {EC::Success, ""};
   }
 
@@ -798,7 +799,7 @@ ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
 
   auto [host_rcm, hostm] = CollectClients(nickname_list, nullptr);
   if (host_rcm.first != EC::Success || !hostm) {
-    prompt_.ErrorFormat(host_rcm);
+    AMPromptManager::Instance().ErrorFormat(host_rcm);
     return host_rcm;
   }
 
@@ -818,5 +819,3 @@ ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
   }
   return transfer(task_info);
 }
-
-

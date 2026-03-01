@@ -1,11 +1,9 @@
 #include "AMCLI/Completer/Searcher.hpp"
 #include "AMCLI/Completer/SearcherCommon.hpp"
+#include "AMCLI/CommandTree.hpp"
 #include <algorithm>
 
 using namespace AMSearcherDetail;
-namespace {
-using CommandNode = ::CommandNode;
-} // namespace
 
 /**
  * @brief Collect command-related candidates.
@@ -13,12 +11,7 @@ using CommandNode = ::CommandNode;
 AMCompletionCollectResult
 AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   AMCompletionCollectResult result;
-  if (!command_tree_) {
-    command_tree_ = &CommandNode::Instance();
-  }
-  if (!command_tree_) {
-    return result;
-  }
+  CommandNode &command_tree = CommandNode::Instance();
   const std::string prefix = ctx.token_prefix;
 
   std::string command_path;
@@ -34,12 +27,12 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     };
     std::vector<ItemInfo> items;
     std::vector<std::string> keys;
-    auto tops = command_tree_->ListTopCommands();
+    auto tops = command_tree.ListTopCommands();
     items.reserve(tops.size());
     keys.reserve(tops.size());
     for (const auto &item : tops) {
       items.push_back(
-          {item.first, item.second, command_tree_->IsModule(item.first)});
+          {item.first, item.second, command_tree.IsModule(item.first)});
       keys.push_back(item.first);
     }
 
@@ -68,7 +61,7 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     };
     std::vector<ItemInfo> items;
     std::vector<std::string> keys;
-    auto subs = command_tree_->ListSubcommands(command_path);
+    auto subs = command_tree.ListSubcommands(command_path);
     items.reserve(subs.size());
     keys.reserve(subs.size());
     for (const auto &item : subs) {
@@ -82,8 +75,8 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       const auto &item = items[match.index];
       AMCompletionCandidate candidate;
       candidate.insert_text = item.name;
-      candidate.display = FormatCommandDisplay_(item.name, "command", 0,
-                                                ctx.completion_args);
+      candidate.display =
+          FormatCommandDisplay_(item.name, "command", 0, ctx.completion_args);
       candidate.help = item.help;
       candidate.kind = AMCompletionKind::Command;
       candidate.score = match.score_bias;
@@ -98,7 +91,7 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     };
     std::vector<ItemInfo> items;
     std::vector<std::string> keys;
-    auto options = command_tree_->ListLongOptions(command_path);
+    auto options = command_tree.ListLongOptions(command_path);
     items.reserve(options.size());
     keys.reserve(options.size());
     for (const auto &item : options) {
@@ -124,7 +117,7 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     };
     std::vector<ItemInfo> items;
     std::vector<std::string> keys;
-    auto options = command_tree_->ListShortOptions(command_path);
+    auto options = command_tree.ListShortOptions(command_path);
     items.reserve(options.size());
     keys.reserve(options.size());
     for (const auto &item : options) {
@@ -186,18 +179,7 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
                                               std::string *out_path,
                                               const CommandNode **out_node,
                                               size_t *out_consumed) const {
-  if (!command_tree_) {
-    if (out_path) {
-      out_path->clear();
-    }
-    if (out_node) {
-      *out_node = nullptr;
-    }
-    if (out_consumed) {
-      *out_consumed = 0;
-    }
-    return;
-  }
+  CommandNode &command_tree = CommandNode::Instance();
 
   std::string path;
   const CommandNode *node = nullptr;
@@ -214,9 +196,9 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
       break;
     }
     if (path.empty()) {
-      if (command_tree_->IsModule(text) || command_tree_->IsTopCommand(text)) {
+      if (command_tree.IsModule(text) || command_tree.IsTopCommand(text)) {
         path = text;
-        node = command_tree_->FindNode(path);
+        node = command_tree.FindNode(path);
         consumed = i + 1;
         continue;
       }
@@ -224,7 +206,7 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
     }
     if (node && node->subcommands.find(text) != node->subcommands.end()) {
       path += " " + text;
-      node = command_tree_->FindNode(path);
+      node = command_tree.FindNode(path);
       consumed = i + 1;
       continue;
     }

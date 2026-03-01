@@ -1,12 +1,13 @@
 #include "AMCLI/InteractiveLoop.hpp"
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Path.hpp"
+#include "AMBase/tools/time.hpp"
 #include "AMCLI/CLIBind.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
+#include "AMManager/Client.hpp"
+#include "AMManager/Config.hpp"
+#include "AMManager/FileSystem.hpp"
+#include "AMManager/Prompt.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Transfer.hpp"
 #include <algorithm>
@@ -1324,7 +1325,7 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
       config_manager, {"Style", "SystemInfo", ok ? "success" : "error"},
       status);
   std::string line1 = AMStr::fmt("{}  {}  {}", state.cached_prefix,
-                                   styled_elapsed, styled_status);
+                                 styled_elapsed, styled_status);
   if (!ec_name.empty()) {
     const std::string styled_ec = ApplyStyleFromConfig_(
         config_manager, {"Style", "SystemInfo", "error"}, ec_name);
@@ -1508,7 +1509,8 @@ int RunInteractiveLoop(const std::string &app_name,
   PromptState prompt_state;
 
   while (true) {
-    if (TaskControlToken::Instance() && TaskControlToken::Instance()->IsKill()) {
+    if (TaskControlToken::Instance() &&
+        TaskControlToken::Instance()->IsKill()) {
       break;
     }
 
@@ -1551,10 +1553,12 @@ int RunInteractiveLoop(const std::string &app_name,
     // monitor.ResumeHook("GLOBAL");
     AMInteractiveLoop::EventRegistry::Instance().RunOnCorePromptReturn();
 
-    if (TaskControlToken::Instance() && TaskControlToken::Instance()->IsKill()) {
+    if (TaskControlToken::Instance() &&
+        TaskControlToken::Instance()->IsKill()) {
       break;
     }
-    if (TaskControlToken::Instance() && !TaskControlToken::Instance()->IsRunning()) {
+    if (TaskControlToken::Instance() &&
+        !TaskControlToken::Instance()->IsRunning()) {
       prompt.Print("Interrupted. Type 'exit' to quit.");
       continue;
     }
@@ -1590,7 +1594,7 @@ int RunInteractiveLoop(const std::string &app_name,
           prompt.Print(msg);
         }
         prompt.Print(AMStr::fmt("\nCommand exit with code {}",
-                                  shell_result.second.second));
+                                shell_result.second.second));
       } else {
         PrintECM_(prompt, shell_result.first);
       }
@@ -1666,6 +1670,3 @@ int RunInteractiveLoop(const std::string &app_name,
   AMIsInteractive.store(false, std::memory_order_relaxed);
   return g_cli_exit_code;
 }
-
-
-

@@ -7,6 +7,7 @@
 #include "AMBase/Path.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
+#include "AMManager/Prompt.hpp"
 #include <sstream>
 #include <string>
 #include <vector>
@@ -29,10 +30,10 @@ std::pair<ECM, std::vector<std::string>>
 cls::PrivateKeys(bool print_sign) const {
   std::vector<std::string> keys = {};
   ECM rcm = Ok();
-  if (!config_.ResolveArg(DocumentKind::Config, {configkn::keys}, &keys)) {
+  if (!AMConfigManager::Instance().ResolveArg(DocumentKind::Config, {configkn::keys}, &keys)) {
     rcm = {EC::CommonFailure,
            AMStr::fmt("Fail to read config attribute: {}", configkn::keys)};
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return {rcm, keys};
   }
   if (!print_sign) {
@@ -43,7 +44,7 @@ cls::PrivateKeys(bool print_sign) const {
   auto info = PathInfo();
   for (auto &key : keys) {
     info = AMFS::stat(key).second;
-    prompt_.Print(config_.Format(key, "", &info));
+    AMPromptManager::Instance().Print(AMConfigManager::Instance().Format(key, "", &info));
   }
   return {rcm, keys};
 }
@@ -53,7 +54,7 @@ cls::PrivateKeys(bool print_sign) const {
  */
 ECM cls::List(bool detailed) const {
   if (host_configs.empty()) {
-    prompt_.Print("");
+    AMPromptManager::Instance().Print("");
     return Ok();
   }
 
@@ -63,12 +64,12 @@ ECM cls::List(bool detailed) const {
     std::ostringstream line;
     for (auto it = host_configs.begin(); it != host_configs.end(); ++it) {
       const std::string &nickname = it->first;
-      const std::string styled = config_.Format(nickname, "nickname");
+      const std::string styled = AMConfigManager::Instance().Format(nickname, "nickname");
       const size_t display_len = nickname.size();
       const size_t separator_len = current_width == 0 ? 0 : 3;
       if (current_width + separator_len + display_len > max_width &&
           current_width > 0) {
-        prompt_.Print(line.str());
+        AMPromptManager::Instance().Print(line.str());
         line.str(std::string());
         line.clear();
         current_width = 0;
@@ -81,7 +82,7 @@ ECM cls::List(bool detailed) const {
       current_width += display_len;
     }
     if (current_width > 0) {
-      prompt_.Print(line.str());
+      AMPromptManager::Instance().Print(line.str());
     }
     return Ok();
   }
@@ -91,7 +92,7 @@ ECM cls::List(bool detailed) const {
     if (print_status.first != EC::Success) {
       return print_status;
     }
-    prompt_.Print("");
+    AMPromptManager::Instance().Print("");
   }
   return Ok();
 }
@@ -107,10 +108,10 @@ ECM cls::Add(const std::string &nickname) {
   }
   prompt_status = AddHost_(entry.request.nickname, entry);
   if (prompt_status.first != EC::Success) {
-    prompt_.ErrorFormat(prompt_status);
+    AMPromptManager::Instance().ErrorFormat(prompt_status);
     return prompt_status;
   }
-  config_.Dump(DocumentKind::Config, "", true);
+  AMConfigManager::Instance().Dump(DocumentKind::Config, "", true);
   return prompt_status;
 }
 
@@ -129,10 +130,10 @@ ECM cls::Modify(const std::string &nickname) {
 
   prompt_status = AddHost_(updated.request.nickname, updated);
   if (prompt_status.first != EC::Success) {
-    prompt_.ErrorFormat(prompt_status);
+    AMPromptManager::Instance().ErrorFormat(prompt_status);
     return prompt_status;
   }
-  config_.Dump(DocumentKind::Config, "", true);
+  AMConfigManager::Instance().Dump(DocumentKind::Config, "", true);
   return prompt_status;
 }
 
@@ -162,7 +163,7 @@ ECM cls::Delete(const std::vector<std::string> &targets) {
     if (!HostExists(name)) {
       rcm =
           Err(EC::InvalidArg, AMStr::fmt("invalid host nickname: {}", name));
-      prompt_.ErrorFormat(rcm);
+      AMPromptManager::Instance().ErrorFormat(rcm);
       continue;
     }
     valid_targets.push_back(name);
@@ -176,31 +177,31 @@ ECM cls::Delete(const std::vector<std::string> &targets) {
     if (i > 0) {
       listing += ", ";
     }
-    listing += config_.Format(uniq_targets[i], "nickname");
+    listing += AMConfigManager::Instance().Format(uniq_targets[i], "nickname");
   }
 
   bool canceled = false;
-  const bool confirmed = prompt_.PromptYesNo(
+  const bool confirmed = AMPromptManager::Instance().PromptYesNo(
       AMStr::fmt("Delete {} host(s): {} ? (y/N): ", uniq_targets.size(),
                    listing),
       &canceled);
 
   if (canceled || !confirmed) {
-    prompt_.Print("Delete aborted.");
+    AMPromptManager::Instance().Print("Delete aborted.");
     return Ok();
   }
 
   for (const auto &name : uniq_targets) {
     ECM rcm = RemoveHost_(name);
     if (rcm.first != EC::Success) {
-      prompt_.ErrorFormat(rcm);
+      AMPromptManager::Instance().ErrorFormat(rcm);
       return rcm;
     }
-    // prompt_.Print(
-    //     AMStr::fmt("Deleted host: {}", config_.Format(name, "nickname")));
+    // AMPromptManager::Instance().Print(
+    //     AMStr::fmt("Deleted host: {}", AMConfigManager::Instance().Format(name, "nickname")));
   }
 
-  return config_.Dump(DocumentKind::Config, "", true);
+  return AMConfigManager::Instance().Dump(DocumentKind::Config, "", true);
 }
 
 /**
@@ -217,7 +218,7 @@ ECM cls::Query(const std::vector<std::string> &targets) const {
   ECM rcm = Ok();
   if (host_configs.empty()) {
     rcm = Err(EC::HostConfigNotFound, "no hosts configured");
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
 
@@ -227,10 +228,10 @@ ECM cls::Query(const std::vector<std::string> &targets) const {
   for (const std::string &nickname : uniq_targets) {
     auto it = host_configs.find(nickname);
     if (it == host_configs.end()) {
-      const std::string styled = config_.Format(nickname, "nickname");
+      const std::string styled = AMConfigManager::Instance().Format(nickname, "nickname");
       ECM err = Err(EC::HostConfigNotFound,
                     AMStr::fmt("Host {} not found", styled));
-      prompt_.ErrorFormat(err);
+      AMPromptManager::Instance().ErrorFormat(err);
       return err;
     }
     valid_targets.push_back(nickname);
@@ -244,10 +245,10 @@ ECM cls::Query(const std::vector<std::string> &targets) const {
     auto it = host_configs.find(nickname);
     print_status = PrintHost_(it->first, it->second);
     if (print_status.first != EC::Success) {
-      prompt_.ErrorFormat(print_status);
+      AMPromptManager::Instance().ErrorFormat(print_status);
       rcm = print_status;
     }
-    prompt_.Print("");
+    AMPromptManager::Instance().Print("");
   }
   return rcm;
 }
@@ -260,32 +261,32 @@ ECM cls::Rename(const std::string &old_nickname,
   ECM rcm = Ok();
   if (old_nickname.empty() || new_nickname.empty()) {
     rcm = Err(EC::InvalidArg, "empty nickname");
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
 
   if (old_nickname == new_nickname) {
     rcm = Err(EC::InvalidArg, "new nickname same as old nickname");
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
 
   if (!configkn::ValidateNickname(new_nickname)) {
     rcm =
         Err(EC::InvalidArg, "invalid new nickname, pattern is [a-zA-Z0-9_-]+");
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
 
   if (HostExists(new_nickname)) {
     rcm = Err(EC::KeyAlreadyExists, "new nickname already exists");
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
 
   if (!HostExists(old_nickname)) {
     rcm = Err(EC::HostConfigNotFound, "old nickname not found");
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   }
 
@@ -296,7 +297,7 @@ ECM cls::Rename(const std::string &old_nickname,
   rcm = AddHost_(new_nickname, moved);
 
   if (rcm.first != EC::Success) {
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
     host_configs.erase(new_nickname);
     return rcm;
   }
@@ -305,7 +306,7 @@ ECM cls::Rename(const std::string &old_nickname,
 
   rcm = RemoveHost_(old_nickname);
   if (rcm.first != EC::Success) {
-    prompt_.ErrorFormat(rcm);
+    AMPromptManager::Instance().ErrorFormat(rcm);
   }
   return rcm;
 }
@@ -321,19 +322,19 @@ ECM cls::Src() const {
   std::string config_path = "";
   std::string settings_path = "";
 
-  if (config_.GetDataPath(DocumentKind::Config, &config_path_obj)) {
+  if (AMConfigManager::Instance().GetDataPath(DocumentKind::Config, &config_path_obj)) {
     config_path = config_path_obj.string();
     auto [config_rcm, config_info] = AMFS::stat(config_path, false);
-    prompt_.Print(
+    AMPromptManager::Instance().Print(
         AMStr::fmt("{} = {}", config_label,
-                     config_.Format(config_path, "dir", &config_info)));
+                     AMConfigManager::Instance().Format(config_path, "dir", &config_info)));
   }
-  if (config_.GetDataPath(DocumentKind::Settings, &settings_path_obj)) {
+  if (AMConfigManager::Instance().GetDataPath(DocumentKind::Settings, &settings_path_obj)) {
     settings_path = settings_path_obj.string();
     auto [settings_rcm, settings_info] = AMFS::stat(settings_path, false);
-    prompt_.Print(
+    AMPromptManager::Instance().Print(
         AMStr::fmt("{} = {}", settings_label,
-                     config_.Format(settings_path, "dir", &settings_info)));
+                     AMConfigManager::Instance().Format(settings_path, "dir", &settings_info)));
   }
   return Ok();
 }
@@ -346,12 +347,12 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
   const std::string field = AMStr::lowercase(attrname);
   if (nickname.empty()) {
     ECM err = Err(EC::InvalidArg, "empty nickname");
-    prompt_.ErrorFormat(err);
+    AMPromptManager::Instance().ErrorFormat(err);
     return err;
   }
   if (!HostExists(nickname)) {
     ECM err = Err(EC::HostConfigNotFound, "host not found");
-    prompt_.ErrorFormat(err);
+    AMPromptManager::Instance().ErrorFormat(err);
     return err;
   }
   bool field_validated = false;
@@ -365,7 +366,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
 
   if (!field_validated) {
     ECM err = Err(EC::InvalidArg, "unsupported property name");
-    prompt_.ErrorFormat(err);
+    AMPromptManager::Instance().ErrorFormat(err);
     return err;
   }
 
@@ -376,7 +377,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
   if (field == configkn::hostname) {
     if (value_str.empty()) {
       set_status = Err(EC::InvalidArg, "hostname cannot be empty");
-      prompt_.ErrorFormat(set_status);
+      AMPromptManager::Instance().ErrorFormat(set_status);
       return set_status;
     }
     old_value = updated.request.hostname;
@@ -385,7 +386,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
   } else if (field == configkn::username) {
     if (value_str.empty()) {
       set_status = Err(EC::InvalidArg, "username cannot be empty");
-      prompt_.ErrorFormat(set_status);
+      AMPromptManager::Instance().ErrorFormat(set_status);
       return set_status;
     }
     old_value = updated.request.username;
@@ -395,7 +396,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     int64_t port = 0;
     if (!AMJson::StrValueParse(value_str, &port) || port <= 0 || port > 65535) {
       set_status = Err(EC::InvalidArg, "invalid port value");
-      prompt_.ErrorFormat(set_status);
+      AMPromptManager::Instance().ErrorFormat(set_status);
       return set_status;
     }
     old_value = std::to_string(updated.request.port);
@@ -406,13 +407,13 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     if (!AMJson::StrValueParse(value_str, &buffer_size)) {
       set_status =
           Err(EC::InvalidArg, "Buffer size must be an positive integer");
-      prompt_.ErrorFormat(set_status);
+      AMPromptManager::Instance().ErrorFormat(set_status);
       return set_status;
     } else if (buffer_size < AMMinBufferSize || buffer_size > AMMaxBufferSize) {
       set_status = Err(EC::InvalidArg,
                        AMStr::fmt("Buffer size must be between {} and {}",
                                     AMMinBufferSize, AMMaxBufferSize));
-      prompt_.ErrorFormat(set_status);
+      AMPromptManager::Instance().ErrorFormat(set_status);
       return set_status;
     }
     old_value = std::to_string(updated.request.buffer_size);
@@ -423,7 +424,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     if (!AMJson::StrValueParse(value_str, &compression)) {
       set_status =
           Err(EC::InvalidArg, "compression value must be true or false");
-      prompt_.ErrorFormat(set_status);
+      AMPromptManager::Instance().ErrorFormat(set_status);
       return set_status;
     }
     old_value = updated.request.compression ? "true" : "false";
@@ -437,7 +438,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     bool wrap_cmd = false;
     if (!AMJson::StrValueParse(value_str, &wrap_cmd)) {
       set_status = Err(EC::InvalidArg, "wrap_cmd value must be true or false");
-      prompt_.ErrorFormat(set_status);
+      AMPromptManager::Instance().ErrorFormat(set_status);
       return set_status;
     }
     old_value = updated.metadata.wrap_cmd ? "true" : "false";
@@ -448,7 +449,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     std::string protocol = AMStr::lowercase(AMStr::Strip(value_str));
     if (protocol != "sftp" && protocol != "ftp" && protocol != "local") {
       set_status = Err(EC::InvalidArg, "protocol must be sftp, ftp or local");
-      prompt_.ErrorFormat(set_status);
+      AMPromptManager::Instance().ErrorFormat(set_status);
       return set_status;
     }
     old_value = AMStr::lowercase(AMStr::ToString(updated.request.protocol));
@@ -458,15 +459,15 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
   } else if (field == configkn::password) {
     std::string tmp_pswd = AMStr::Strip(value_str);
     if (tmp_pswd.empty()) {
-      if (!prompt_.SecurePrompt("Password: ", &tmp_pswd)) {
+      if (!AMPromptManager::Instance().SecurePrompt("Password: ", &tmp_pswd)) {
         set_status = Err(EC::ConfigCanceled, "password input canceled");
-        prompt_.ErrorFormat(set_status);
+        AMPromptManager::Instance().ErrorFormat(set_status);
         return set_status;
       }
     }
     if (tmp_pswd.empty()) {
       set_status = Err(EC::InvalidArg, "password cannot be empty");
-      prompt_.ErrorFormat(set_status);
+      AMPromptManager::Instance().ErrorFormat(set_status);
       return set_status;
     }
     if (!AMAuth::IsEncrypted(tmp_pswd)) {
@@ -490,44 +491,41 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
   } else {
     set_status = Err(EC::InvalidArg,
                      AMStr::fmt("unsupported property name: {}", field));
-    prompt_.ErrorFormat(set_status);
+    AMPromptManager::Instance().ErrorFormat(set_status);
     return set_status;
   }
 
   bool write_ok = false;
   if (field == configkn::port) {
-    write_ok = config_.SetArg(DocumentKind::Config,
+    write_ok = AMConfigManager::Instance().SetArg(DocumentKind::Config,
                               {configkn::hosts, nickname, field},
                               static_cast<int64_t>(updated.request.port));
   } else if (field == configkn::buffer_size) {
-    write_ok = config_.SetArg(DocumentKind::Config,
+    write_ok = AMConfigManager::Instance().SetArg(DocumentKind::Config,
                               {configkn::hosts, nickname, field},
                               static_cast<int64_t>(updated.request.buffer_size));
   } else if (field == configkn::compression) {
-    write_ok = config_.SetArg(DocumentKind::Config,
+    write_ok = AMConfigManager::Instance().SetArg(DocumentKind::Config,
                               {configkn::hosts, nickname, field},
                               updated.request.compression);
   } else if (field == configkn::wrap_cmd) {
-    write_ok = config_.SetArg(DocumentKind::Config,
+    write_ok = AMConfigManager::Instance().SetArg(DocumentKind::Config,
                               {configkn::hosts, nickname, field},
                               updated.metadata.wrap_cmd);
   } else {
     write_ok =
-        config_.SetArg(DocumentKind::Config, {configkn::hosts, nickname, field},
+        AMConfigManager::Instance().SetArg(DocumentKind::Config, {configkn::hosts, nickname, field},
                        new_value);
   }
 
   if (!write_ok) {
     set_status = Err(EC::CommonFailure, "failed to write config");
-    prompt_.ErrorFormat(set_status);
+    AMPromptManager::Instance().ErrorFormat(set_status);
     return set_status;
   }
 
-  config_.Dump(DocumentKind::Config, "", true);
-  prompt_.Print(
+  AMConfigManager::Instance().Dump(DocumentKind::Config, "", true);
+  AMPromptManager::Instance().Print(
       AMStr::fmt("{}.{}: {} -> {}", nickname, field, old_value, new_value));
   return set_status;
 }
-
-
-

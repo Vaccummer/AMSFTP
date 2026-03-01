@@ -6,6 +6,8 @@
 #include "AMBase/Path.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
+#include "AMManager/Config.hpp"
+#include "AMManager/Prompt.hpp"
 #include "AMManager/Transfer.hpp"
 #include <algorithm>
 #include <atomic>
@@ -23,6 +25,17 @@
 #ifdef _WIN32
 #include <windows.h>
 #endif
+
+ECM AMTransferManager::Init() {
+  int init_thread_num = 1;
+  AMConfigManager::Instance().ResolveArg(
+      DocumentKind::Settings, {"Options", "TransferManager", "init_thread_num"},
+      &init_thread_num);
+
+  init_thread_num = std::min(std::max(1, init_thread_num), 128);
+  worker_.ThreadCount(init_thread_num);
+  return Ok();
+}
 
 namespace {
 #ifdef _WIN32
@@ -311,7 +324,7 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
   }
   std::string host_name = src_host.empty() ? "local" : src_host;
   std::string dst_name = dst_host.empty() ? "local" : dst_host;
-  prompt_.Print(AMStr::fmt("Found {} paths to transfer",
+  AMPromptManager::Instance().Print(AMStr::fmt("Found {} paths to transfer",
                              std::to_string(matches.size())));
 
   std::vector<PathInfo> sorted = matches;
@@ -322,16 +335,16 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
 
   for (const auto &path : sorted) {
     if (path.type == PathType::DIR) {
-      prompt_.Print(AMStr::fmt("📁   {}@{}", host_name, path.path));
+      AMPromptManager::Instance().Print(AMStr::fmt("📁   {}@{}", host_name, path.path));
     } else {
-      prompt_.Print(AMStr::fmt("📑   {}@{}", host_name, path.path));
+      AMPromptManager::Instance().Print(AMStr::fmt("📑   {}@{}", host_name, path.path));
     }
   }
 
   std::string input;
   const std::string prompt = AMStr::fmt(
       "Are you sure to transfer these paths to {}? (y/n): ", dst_name);
-  if (!prompt_.Prompt(prompt, "", &input)) {
+  if (!AMPromptManager::Instance().Prompt(prompt, "", &input)) {
     return false;
   }
   std::string lowered = input;
@@ -339,7 +352,7 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
       lowered.begin(), lowered.end(), lowered.begin(),
       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
   if (lowered != "y") {
-    prompt_.Print("Transfer cancelled");
+    AMPromptManager::Instance().Print("Transfer cancelled");
     return false;
   }
   return true;
@@ -371,7 +384,7 @@ AMTransferManager::AcquireClient_(const std::string &nickname,
   }
 
   auto created =
-      client_manager_.AddClient(nickname, false, true, {}, flag, false);
+      AMClientManager::Instance().AddClient(nickname, false, true, {}, flag, false);
   if (created.first.first != EC::Success || !created.second) {
     return created;
   }
@@ -386,7 +399,7 @@ AMTransferManager::CollectClients(const std::vector<std::string> &nicknames,
                                   const std::shared_ptr<TaskControlToken> &flag) {
   auto maintainer = std::make_shared<ClientMaintainer>(
       -1, ClientMaintainer::DisconnectCallback(),
-      client_manager_.LocalClient());
+      AMClientManager::Instance().LocalClient());
   for (const auto &name : nicknames) {
     if (name.empty() || name == "local") {
       continue;
@@ -531,7 +544,7 @@ ECM AMTransferManager::transfer(
 
   auto submit_rcm = worker_.submit(task_info);
   if (submit_rcm.first != EC::Success) {
-    prompt_.ErrorFormat(submit_rcm);
+    AMPromptManager::Instance().ErrorFormat(submit_rcm);
     if (task_info->hostm) {
       ReturnClientsToIdle_(task_info->hostm);
       task_info->hostm.reset();
@@ -541,7 +554,7 @@ ECM AMTransferManager::transfer(
 
   const bool show_progress = !task_info->quiet;
   AMProgressBar progress_bar =
-      config_.CreateProgressBar(static_cast<int64_t>(task_info->total_size.load(
+      AMConfigManager::Instance().CreateProgressBar(static_cast<int64_t>(task_info->total_size.load(
                                     std::memory_order_relaxed)),
                                 BuildTransferProgressPrefix_(task_info));
   std::unique_ptr<AMPrintLockGuard> print_guard;
@@ -662,7 +675,7 @@ ECM AMTransferManager::transfer_async(
 
   auto submit_rcm = worker_.submit(task_info);
   if (submit_rcm.first != EC::Success) {
-    prompt_.ErrorFormat(submit_rcm);
+    AMPromptManager::Instance().ErrorFormat(submit_rcm);
     if (task_info->hostm) {
       ReturnClientsToIdle_(task_info->hostm);
       task_info->hostm.reset();
@@ -671,7 +684,7 @@ ECM AMTransferManager::transfer_async(
   }
 
   if (!task_info->quiet) {
-    PrintTaskSubmit_(prompt_, task_info);
+    PrintTaskSubmit_(AMPromptManager::Instance(), task_info);
   }
   return {EC::Success, ""};
 }
@@ -693,7 +706,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
   for (const auto &set : transfer_sets) {
     std::string dst_host;
     std::string dst_path;
-    auto dst_rcm = ParseTransferPath(client_manager_, set.dst, nullptr,
+    auto dst_rcm = ParseTransferPath(AMClientManager::Instance(), set.dst, nullptr,
                                      &dst_host, &dst_path);
     if (dst_rcm.first != EC::Success) {
       return {dst_rcm, nullptr};
@@ -706,7 +719,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
     for (const auto &src : set.srcs) {
       std::string src_host;
       std::string src_path;
-      auto src_rcm = ParseTransferPath(client_manager_, src, nullptr, &src_host,
+      auto src_rcm = ParseTransferPath(AMClientManager::Instance(), src, nullptr, &src_host,
                                        &src_path);
       if (src_rcm.first != EC::Success) {
         return {src_rcm, nullptr};
@@ -733,7 +746,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
   for (const auto &set : transfer_sets) {
     std::string dst_host;
     std::string dst_path;
-    auto dst_parse = ParseTransferPath(client_manager_, set.dst, nullptr,
+    auto dst_parse = ParseTransferPath(AMClientManager::Instance(), set.dst, nullptr,
                                        &dst_host, &dst_path);
     if (dst_parse.first != EC::Success) {
       ReturnClientsToIdle_(hostm);
@@ -746,7 +759,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
       return {ECM{EC::ClientNotFound, "Destination client not available"},
               nullptr};
     }
-    auto dst_rcm = ParseTransferPath(client_manager_, set.dst, dst_client,
+    auto dst_rcm = ParseTransferPath(AMClientManager::Instance(), set.dst, dst_client,
                                      &dst_host, &dst_path);
     if (dst_rcm.first != EC::Success) {
       ReturnClientsToIdle_(hostm);
@@ -761,7 +774,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
 
       std::string src_host;
       std::string src_path;
-      auto src_parse = ParseTransferPath(client_manager_, src, nullptr,
+      auto src_parse = ParseTransferPath(AMClientManager::Instance(), src, nullptr,
                                          &src_host, &src_path);
       if (src_parse.first != EC::Success) {
         ReturnClientsToIdle_(hostm);
@@ -774,7 +787,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
         return {ECM{EC::ClientNotFound, "Source client not available"},
                 nullptr};
       }
-      auto src_rcm = ParseTransferPath(client_manager_, src, src_client,
+      auto src_rcm = ParseTransferPath(AMClientManager::Instance(), src, src_client,
                                        &src_host, &src_path);
       if (src_rcm.first != EC::Success) {
         ReturnClientsToIdle_(hostm);
@@ -801,7 +814,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
             set.overwrite, set.mkdir, set.ignore_special_file, set.resume, flag,
             10000);
         if (rcm.first != EC::Success) {
-          prompt_.ErrorFormat(rcm);
+          AMPromptManager::Instance().ErrorFormat(rcm);
           continue;
         }
         tasks_ptr->insert(tasks_ptr->end(), tasks.begin(), tasks.end());
@@ -886,7 +899,3 @@ bool AMTransferManager::ParseEntryId_(const ID &entry_id, ID *task_id,
     return false;
   }
 }
-
-
-
-

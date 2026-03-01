@@ -2,6 +2,8 @@
 #include "AMBase/tools/bar.hpp"
 #include "AMBase/tools/json.hpp"
 #include "AMBase/tools/time.hpp"
+#include "AMManager/Config.hpp"
+#include "AMManager/Prompt.hpp"
 #include "AMManager/Var.hpp"
 #include <algorithm>
 
@@ -35,7 +37,7 @@ ECM ParseVarToken_(const std::string &token, varsetkn::VarRef *ref) {
  * @brief Format variable output style.
  */
 std::string VarCLISet::FormatVarText_(const std::string &text) const {
-  return config_manager_.Format(text, "UserVars");
+  return AMConfigManager::Instance().Format(text, "UserVars");
 }
 
 /**
@@ -53,7 +55,7 @@ std::string VarCLISet::RenderValue_(const std::string &value) const {
  */
 void VarCLISet::PrintSection_(const std::string &domain,
                               const std::vector<VarInfo> &entries) const {
-  prompt_manager_.Print(AMStr::fmt("\\[{}]", domain));
+  AMPromptManager::Instance().Print(AMStr::fmt("\\[{}]", domain));
   size_t max_width = 0;
   for (const auto &item : entries) {
     max_width = std::max(max_width, item.varname.size() + 1);
@@ -64,7 +66,7 @@ void VarCLISet::PrintSection_(const std::string &domain,
     if (key.size() < max_width) {
       key.append(max_width - key.size(), ' ');
     }
-    prompt_manager_.Print(
+    AMPromptManager::Instance().Print(
         AMStr::fmt("{} = {}", FormatVarText_(key),
                      FormatVarText_(RenderValue_(item.varvalue))));
   }
@@ -88,7 +90,7 @@ ECM VarCLISet::QueryByName(const std::string &token_name) const {
           EC::InvalidArg,
           AMStr::fmt("variable not found: {}", varsetkn::BuildVarToken(ref)));
     }
-    prompt_manager_.Print(AMStr::fmt(
+    AMPromptManager::Instance().Print(AMStr::fmt(
         "\\[{}] {} = {}", found.domain, FormatVarText_("$" + found.varname),
         FormatVarText_(RenderValue_(found.varvalue))));
     return Ok();
@@ -104,7 +106,7 @@ ECM VarCLISet::QueryByName(const std::string &token_name) const {
         EC::InvalidArg,
         AMStr::fmt("variable not found: {}", varsetkn::BuildVarToken(ref)));
   }
-  prompt_manager_.Print(AMStr::fmt(
+  AMPromptManager::Instance().Print(AMStr::fmt(
       "\\[{}] {} = {}", found.domain, FormatVarText_("$" + found.varname),
       FormatVarText_(RenderValue_(found.varvalue))));
   return Ok();
@@ -133,11 +135,11 @@ ECM VarCLISet::DefineVar(bool global, const std::string &token_name,
   if (domain != varsetkn::kPublic) {
     VarInfo old = var_manager.GetVar(domain, ref.varname);
     if (old.IsValid().first == EC::Success) {
-      prompt_manager_.Print(AMStr::fmt(
+      AMPromptManager::Instance().Print(AMStr::fmt(
           "[{}] {} = {}", old.domain, FormatVarText_("$" + old.varname),
           FormatVarText_(RenderValue_(old.varvalue))));
       bool canceled = false;
-      const bool overwrite = prompt_manager_.PromptYesNo(
+      const bool overwrite = AMPromptManager::Instance().PromptYesNo(
           AMStr::fmt("Overwrite [{}].${}? (y/N): ", domain, ref.varname),
           &canceled);
       if (canceled || !overwrite) {
@@ -176,12 +178,12 @@ ECM VarCLISet::DeleteVarByCli(bool all, const std::string &domain,
       return Err(EC::InvalidArg, "variable not found");
     }
     for (const auto &item : matches) {
-      prompt_manager_.Print(AMStr::fmt(
+      AMPromptManager::Instance().Print(AMStr::fmt(
           "[{}] {} = {}", item.domain, FormatVarText_("$" + item.varname),
           FormatVarText_(RenderValue_(item.varvalue))));
     }
     bool canceled = false;
-    const bool confirmed = prompt_manager_.PromptYesNo(
+    const bool confirmed = AMPromptManager::Instance().PromptYesNo(
         AMStr::fmt("Delete {} matched item(s)? (y/N): ", matches.size()),
         &canceled);
     if (canceled || !confirmed) {
@@ -238,7 +240,7 @@ ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
     const std::string domain = AMStr::Strip(raw);
     if (!var_manager.HasDomain(domain)) {
       last = Err(EC::InvalidArg, AMStr::fmt("invalid section: {}", raw));
-      prompt_manager_.ErrorFormat(last);
+      AMPromptManager::Instance().ErrorFormat(last);
       continue;
     }
     valid_targets.push_back(domain);
@@ -253,10 +255,8 @@ ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
     auto entries = var_manager.ListByDomain(valid_targets[i]);
     PrintSection_(valid_targets[i], entries);
     if (i + 1 < valid_targets.size()) {
-      prompt_manager_.Print("");
+      AMPromptManager::Instance().Print("");
     }
   }
   return last;
 }
-
-

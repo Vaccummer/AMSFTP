@@ -1,16 +1,25 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
-#include "AMCLI/CommandTree.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Host.hpp"
-#include "AMManager/Prompt.hpp"
-#include "AMManager/Var.hpp"
+#include "Isocline/isocline.h"
 #include <string>
 #include <vector>
 
+class CommandNode;
+
 class AMTokenTypeAnalyzer : public NonCopyableNonMovable {
 public:
+  /**
+   * @brief Token parsed from input split stage.
+   */
+  struct AMToken {
+    size_t start = 0;
+    size_t end = 0;
+    size_t content_start = 0;
+    size_t content_end = 0;
+    bool quoted = false;
+    AMTokenType type = AMTokenType::Unset;
+  };
+
   /**
    * @brief Construct a token analyzer bound to the config manager.
    */
@@ -35,18 +44,6 @@ public:
                                  void *arg);
 
   /**
-   * @brief Token parsed from input split stage.
-   */
-  struct AMToken {
-    size_t start = 0;
-    size_t end = 0;
-    size_t content_start = 0;
-    size_t content_end = 0;
-    bool quoted = false;
-    AMTokenType type = AMTokenType::Unset;
-  };
-
-  /**
    * @brief Split input into shell-level tokens (whitespace/quotes only).
    *
    * This function does not perform style/semantic classification.
@@ -59,8 +56,6 @@ public:
   static void ClearTokenCache();
 
 private:
-  using CommandNode = ::CommandNode;
-
   AMTokenTypeAnalyzer() = default;
 
   void EnsureCliCache();
@@ -78,12 +73,5 @@ private:
                           const CommandNode *node) const;
   [[nodiscard]] int PriorityForType(AMTokenType type) const;
 
-  AMConfigManager &config_manager_ = AMConfigManager::Instance();
-  AMHostManager &host_manager_ = AMHostManager::Instance();
-  VarCLISet &var_manager_ = VarCLISet::Instance();
-  AMClientManager &client_manager_ = AMClientManager::Instance();
-  AMPromptManager &prompt_manager_ = AMPromptManager::Instance();
   bool cli_cache_ready_ = false;
-  CommandNode *command_tree_ = &CommandNode::Instance();
 };
-

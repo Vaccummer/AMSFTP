@@ -1,7 +1,3 @@
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
 #include "AMCLI/Completer/Engine.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
 #include "AMCLI/Completer/Searcher.hpp"
@@ -94,12 +90,12 @@ void AMCompleteEngine::Install() {
   ic_set_default_completer(&AMCompleter::IsoclineCompleter, nullptr);
   ic_enable_completion_sort(false);
   ic_enable_completion_preview(true);
-  const std::string order_num_style =
-      args_.complete_order_num_style.empty() ? "ansi-darkgray"
-                                             : args_.complete_order_num_style;
-  const std::string help_style =
-      args_.complete_help_style.empty() ? "ansi-darkgray"
-                                        : args_.complete_help_style;
+  const std::string order_num_style = args_.complete_order_num_style.empty()
+                                          ? "ansi-darkgray"
+                                          : args_.complete_order_num_style;
+  const std::string help_style = args_.complete_help_style.empty()
+                                     ? "ansi-darkgray"
+                                     : args_.complete_help_style;
   ic_style_def("ic-comp-order", order_num_style.c_str());
   ic_style_def("ic-comp-help", help_style.c_str());
   const int max_items = args_.complete_max_items;
@@ -139,8 +135,7 @@ void AMCompleteEngine::ClearCache() {
  * @brief Handle a completion request from isocline.
  */
 void AMCompleteEngine::HandleCompletion(ic_completion_env_t *cenv,
-                                        const std::string &input,
-                                        size_t cursor,
+                                        const std::string &input, size_t cursor,
                                         AMCompletionSource source) {
   AMCompletionRequest request;
   request.cenv = cenv;
@@ -534,4 +529,3 @@ void AMCompleteEngine::AsyncWorkerLoop_() {
     (void)ic_request_completion_menu_async();
   }
 }
-
