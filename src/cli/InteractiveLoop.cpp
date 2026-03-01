@@ -1498,9 +1498,9 @@ int RunInteractiveLoop(const std::string &app_name,
   bool skip_loop_exit_callbacks = false;
 
   AMPromptManager &prompt = AMPromptManager::Instance();
-  AMConfigManager &config_manager = *managers.config_manager;
-  AMClientManager &client_manager = *managers.client_manager;
-  AMFileSystem &filesystem = *managers.filesystem;
+  AMConfigManager &config_manager = managers.config_manager;
+  AMClientManager &client_manager = managers.client_manager;
+  AMFileSystem &filesystem = managers.filesystem;
 
   AMCompleter completer{};
   completer.Install();

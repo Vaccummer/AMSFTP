@@ -453,38 +453,64 @@ AMTokenTypeAnalyzer::SplitToken(const std::string &input) {
     token.quoted = false;
     token.type = AMTokenType::Unset;
 
-    if (IsQuoted(input[i])) {
-      token.quoted = true;
-      const char quote = input[i];
-      ++i;
-      token.content_start = i;
-
-      while (i < input.size()) {
-        if (input[i] == '`' && i + 1 < input.size() &&
-            (input[i + 1] == '"' || input[i + 1] == '\'')) {
-          i += 2;
-          continue;
-        }
-        if (input[i] == quote) {
-          break;
+    char active_quote = 0;
+    bool saw_quote = false;
+    while (i < input.size()) {
+      const char c = input[i];
+      if (c == '`' && i + 1 < input.size()) {
+        i += 2;
+        continue;
+      }
+      if (active_quote != 0) {
+        if (c == active_quote) {
+          active_quote = 0;
+          saw_quote = true;
         }
         ++i;
+        continue;
       }
-      token.content_end = i;
-      if (i < input.size() && input[i] == quote) {
+      if (IsQuoted(c)) {
+        active_quote = c;
+        saw_quote = true;
         ++i;
+        continue;
       }
-      token.end = i;
-      tokens.push_back(token);
-      continue;
-    }
-
-    while (i < input.size() && !AMStr::IsWhitespace(input[i])) {
+      if (AMStr::IsWhitespace(c)) {
+        break;
+      }
       ++i;
     }
     token.end = i;
     token.content_start = token.start;
     token.content_end = token.end;
+    token.quoted = saw_quote;
+
+    if (token.start < token.end && IsQuoted(input[token.start])) {
+      const char outer_quote = input[token.start];
+      size_t close = token.start + 1;
+      bool found_close = false;
+      while (close < token.end) {
+        if (input[close] == '`' && close + 1 < token.end) {
+          close += 2;
+          continue;
+        }
+        if (input[close] == outer_quote) {
+          found_close = true;
+          break;
+        }
+        ++close;
+      }
+
+      token.quoted = true;
+      if (found_close && close + 1 == token.end) {
+        token.content_start = token.start + 1;
+        token.content_end = close;
+      } else if (!found_close) {
+        token.content_start = std::min(token.start + 1, token.end);
+        token.content_end = token.end;
+      }
+    }
+
     tokens.push_back(token);
   }
   g_split_token_cache[input] = tokens;
@@ -1237,19 +1263,29 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
 
   auto highlight_nickname_at_sign = [&]() {
     for (const auto &token : tokens) {
-      if (token.quoted) {
+      if (token.start >= input.size()) {
         continue;
       }
       std::string text = input.substr(token.start, token.end - token.start);
-      size_t at_pos = FindUnescapedChar_(text, '@');
-      if (at_pos == std::string::npos || at_pos == 0) {
+      size_t prefix_offset = 0;
+      if (token.start < token.end && IsQuoted(input[token.start])) {
+        prefix_offset = 1;
+      }
+      if (prefix_offset >= text.size()) {
         continue;
       }
-      std::string prefix = UnescapeBackticks_(text.substr(0, at_pos));
+
+      const std::string scan = text.substr(prefix_offset);
+      size_t at_pos_local = FindUnescapedChar_(scan, '@');
+      if (at_pos_local == std::string::npos || at_pos_local == 0) {
+        continue;
+      }
+      const size_t at_pos = prefix_offset + at_pos_local;
+      std::string prefix = UnescapeBackticks_(scan.substr(0, at_pos_local));
       if (prefix.empty()) {
         continue;
       }
-      size_t nick_start = token.start;
+      size_t nick_start = token.start + prefix_offset;
       size_t nick_end = token.start + at_pos;
       size_t at_index = nick_end;
       const AMTokenType nick_type =

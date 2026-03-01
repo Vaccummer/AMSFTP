@@ -59,6 +59,97 @@ bool StartsWithShortOption_(const std::string &text) {
 }
 
 /**
+ * @brief Return true when text contains at least one whitespace character.
+ */
+bool HasWhitespace_(const std::string &text) {
+  for (const char c : text) {
+    if (std::isspace(static_cast<unsigned char>(c))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @brief Escape one string for insertion inside double quotes.
+ *
+ * Use backtick escapes to match the CLI tokenizer behavior.
+ */
+std::string EscapeForDoubleQuote_(const std::string &text) {
+  std::string out;
+  out.reserve(text.size());
+  for (const char c : text) {
+    if (c == '"' || c == '`') {
+      out.push_back('`');
+    }
+    out.push_back(c);
+  }
+  return out;
+}
+
+/**
+ * @brief Return true when cursor token already starts with a quote delimiter.
+ */
+bool InPureQuotedToken_(const AMCompletionContext &ctx) {
+  if (!ctx.has_token || ctx.token.start >= ctx.input.size()) {
+    return false;
+  }
+  const char c = ctx.input[ctx.token.start];
+  return c == '"' || c == '\'';
+}
+
+/**
+ * @brief Quote path insert text when it contains spaces.
+ *
+ * For `nickname@path` forms, only the path part is wrapped:
+ * `nickname@"path with spaces"`.
+ */
+std::string QuotePathInsertTextIfNeeded_(const std::string &insert_text) {
+  if (insert_text.empty() || !HasWhitespace_(insert_text)) {
+    return insert_text;
+  }
+
+  auto wrap_path = [&](const std::string &header,
+                       const std::string &path) -> std::string {
+    if (path.empty()) {
+      return insert_text;
+    }
+    if (path.size() >= 2 && path.front() == '"' && path.back() == '"') {
+      return header + path;
+    }
+    return header + "\"" + EscapeForDoubleQuote_(path) + "\"";
+  };
+
+  if (insert_text.front() == '@') {
+    return wrap_path("@", insert_text.substr(1));
+  }
+
+  const size_t first_sep = insert_text.find_first_of("/\\");
+  const size_t at_pos = insert_text.find('@');
+  if (at_pos != std::string::npos &&
+      (first_sep == std::string::npos || at_pos < first_sep)) {
+    return wrap_path(insert_text.substr(0, at_pos + 1),
+                     insert_text.substr(at_pos + 1));
+  }
+
+  return wrap_path("", insert_text);
+}
+
+/**
+ * @brief Resolve final insert text for one completion candidate.
+ */
+std::string BuildCandidateInsertText_(const AMCompletionContext &ctx,
+                                      const AMCompletionCandidate &candidate) {
+  const bool is_path_candidate =
+      candidate.kind == AMCompletionKind::PathLocal ||
+      candidate.kind == AMCompletionKind::PathRemote;
+  if (!is_path_candidate || InPureQuotedToken_(ctx)) {
+    return candidate.insert_text;
+  }
+  return QuotePathInsertTextIfNeeded_(candidate.insert_text);
+}
+
+/**
  * @brief Return true when completion context contains target.
  */
 bool ContextHasTarget_(const AMCompletionContext &ctx,
@@ -910,11 +1001,12 @@ void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
   }
 
   for (const auto &candidate : items.items) {
+    const std::string insert_text = BuildCandidateInsertText_(ctx, candidate);
     const char *display =
         candidate.display.empty() ? nullptr : candidate.display.c_str();
     const char *help =
         candidate.help.empty() ? nullptr : candidate.help.c_str();
-    ic_add_completion_prim(cenv, candidate.insert_text.c_str(), display, help,
+    ic_add_completion_prim(cenv, insert_text.c_str(), display, help,
                            delete_before, delete_after);
   }
 }
