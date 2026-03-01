@@ -5,7 +5,6 @@
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
-#include <filesystem>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -22,7 +21,6 @@
 // 3rd party library
 #include <libssh2.h>
 #include <libssh2_sftp.h>
-#include <magic_enum/magic_enum.hpp>
 
 struct TransferTask;    // Forward declaration
 class TaskControlToken; // Forward declaration
@@ -100,22 +98,6 @@ std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn, Args &&...args) {
     return {Ret{}, {EC::PyCBError, "Unknown callback error"}};
   }
 }
-
-bool isok(const ECM &ecm);
-
-/** @brief Return a success ECM. */
-ECM Ok();
-
-/** @brief Build an error ECM with message. */
-ECM Err(EC code, const std::string &msg);
-
-PathType cast_fs_type(const fs::file_type &type);
-
-// turn std::error_code to ErrorCode
-EC fec(const std::error_code &ec);
-
-// Custom std::error_code to ECM
-ECM fecm(const std::error_code &ec);
 
 /**
  * @brief Unified task control token for async transfer pause/terminate flow.
@@ -724,7 +706,7 @@ struct TraceInfo {
   TraceInfo()
       : level(TraceLevel::Info), error_code(EC::Success), nickname(""),
         target(""), action(""), message(""), request(std::nullopt),
-        timestamp(timenow()) {}
+        timestamp(AMTime::seconds()) {}
   TraceInfo(TraceLevel level, ErrorCode error_code, std::string nickname,
             std::string target, std::string action, std::string message,
             std::optional<ConRequest> request = std::nullopt,
@@ -733,7 +715,7 @@ struct TraceInfo {
         error_code(std::move(error_code)), nickname(std::move(nickname)),
         target(std::move(target)), action(std::move(action)),
         message(std::move(message)), request(std::move(request)),
-        timestamp(timenow()) {}
+        timestamp(AMTime::seconds()) {}
 };
 
 struct TransferCallback {
@@ -1234,7 +1216,7 @@ struct TaskInfo {
 
 struct WkProgressData {
   std::weak_ptr<TaskInfo> task_info;
-  double cb_time = timenow();
+  double cb_time = AMTime::seconds();
   std::shared_ptr<StreamRingBuffer> ring_buffer = nullptr;
   mutable amf interrupt_flag = nullptr;
   std::function<void(bool)> inner_callback = {};

@@ -165,7 +165,7 @@ void UpdateSpeedCache_(
   }
 
   out_speed->clear();
-  const double now = timenow();
+  const double now = AMTime::seconds();
   std::unordered_set<std::string> active_ids;
   active_ids.reserve(conducting_tasks.size());
 
@@ -313,7 +313,7 @@ TaskRowData BuildTaskRow_(
     }
   } else {
     row.elapsed =
-        start_time > 0.0 ? FormatElapsed_(timenow() - start_time) : "-";
+        start_time > 0.0 ? FormatElapsed_(AMTime::seconds() - start_time) : "-";
   }
 
   row.files = AMStr::fmt("{}/{}", success_num, filenum);

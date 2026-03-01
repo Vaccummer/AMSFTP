@@ -732,7 +732,7 @@ ECM AMFileSystem::stat(const std::vector<std::string> &paths,
 
     ClientRef client{nickname, client_ptr};
     std::string abs_path = BuildPath(client, resolved_path);
-    int64_t start_time = am_ms();
+    int64_t start_time = AMTime::miliseconds();
     auto [rcm2, info] =
         client.client->stat(abs_path, false, flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
@@ -765,7 +765,7 @@ ECM AMFileSystem::ls(const std::string &path, bool list_like, bool show_all,
   ClientRef client{nickname, client_ptr};
   std::string target_path = resolved_path.empty() ? "." : resolved_path;
   std::string abs_path = BuildPath(client, target_path);
-  int64_t start_time = am_ms();
+  int64_t start_time = AMTime::miliseconds();
   auto [rcm2, list] =
       client.client->listdir(abs_path, flag, timeout_ms, start_time);
   if (rcm2.first != EC::Success) {
@@ -942,7 +942,7 @@ ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
     }
     ClientRef client{nickname, client_ptr};
     std::string abs_path = BuildPath(client, resolved_path);
-    int64_t start_time = am_ms();
+    int64_t start_time = AMTime::miliseconds();
     int64_t size =
         client.client->getsize(abs_path, true, flag, timeout_ms, start_time);
     if (size < 0) {
@@ -975,7 +975,7 @@ ECM AMFileSystem::find(const std::string &path, SearchType type,
   }
   ClientRef client{nickname, client_ptr};
   std::string abs_path = BuildPath(client, resolved_path);
-  int64_t start_time = am_ms();
+  int64_t start_time = AMTime::miliseconds();
   auto results =
       client.client->find(abs_path, type, flag, timeout_ms, start_time);
   for (const auto &info : results) {
@@ -1009,7 +1009,7 @@ ECM AMFileSystem::walk(const std::string &path, bool only_file, bool only_dir,
   }
   ClientRef client{nickname, client_ptr};
   std::string abs_path = BuildPath(client, resolved_path);
-  int64_t start_time = am_ms();
+  int64_t start_time = AMTime::miliseconds();
   AMFS::WalkErrorCallback error_cb = MakeWalkErrorCallback("walk", quiet);
   auto [rcm2, pack] =
       client.client->iwalk(abs_path, show_all, ignore_special_file, error_cb,
@@ -1060,7 +1060,7 @@ ECM AMFileSystem::tree(const std::string &path, int max_depth, bool only_dir,
   }
   ClientRef client{nickname, client_ptr};
   std::string abs_path = BuildPath(client, resolved_path);
-  int64_t start_time = am_ms();
+  int64_t start_time = AMTime::miliseconds();
   AMFS::WalkErrorCallback error_cb = MakeWalkErrorCallback("tree", quiet);
   auto [rcm2, pack] =
       client.client->walk(abs_path, max_depth, show_all, ignore_special_file,
@@ -1344,7 +1344,7 @@ ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
     }
     ClientRef client{nickname, client_ptr};
     std::string abs_path = BuildPath(client, resolved_path);
-    int64_t start_time = am_ms();
+    int64_t start_time = AMTime::miliseconds();
     ECM rcm2 = client.client->mkdirs(abs_path, flag, timeout_ms, start_time);
     if (rcm2.first != EC::Success) {
       last = rcm2;
@@ -1418,7 +1418,7 @@ ECM AMFileSystem::rm(const std::vector<std::string> &paths, bool permanent,
     ClientRef client{nickname, client_ptr};
     std::string abs_path = BuildPath(client, resolved_path);
     try {
-      int64_t start_time = am_ms();
+      int64_t start_time = AMTime::miliseconds();
       ECM rcm;
       RMR errors = {};
       if (permanent) {

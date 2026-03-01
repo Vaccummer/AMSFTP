@@ -663,7 +663,7 @@ ECM AMConfigStorage::BackupIfNeeded() {
     }
     backup_cfg["max_backup_count"] = max_backup_count;
 
-    auto now_s = static_cast<int64_t>(timenow());
+    auto now_s = static_cast<int64_t>(AMTime::seconds());
     int64_t last_backup_time_s = kDefaultLastBackupS;
     if (auto v = GetIntField(backup_cfg, "last_backup_time_s")) {
       last_backup_time_s = *v;
@@ -712,7 +712,7 @@ ECM AMConfigStorage::BackupIfNeeded() {
   bool enabled = kDefaultEnabled;
   int64_t interval_s = kNegativeIntervalFallbackS;
   int64_t last_backup_time_s = kDefaultLastBackupS;
-  auto now_s = static_cast<int64_t>(timenow());
+  auto now_s = static_cast<int64_t>(AMTime::seconds());
   {
     std::lock_guard<std::mutex> lock(settings_doc->mtx);
     const Json *backup_cfg = nullptr;

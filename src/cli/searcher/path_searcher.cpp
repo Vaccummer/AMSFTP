@@ -64,7 +64,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       return result;
     }
     auto [rcm, items] =
-        client->listdir(path.dir_abs, nullptr, timeout_ms, am_ms());
+        client->listdir(path.dir_abs, nullptr, timeout_ms, AMTime::miliseconds());
     if (rcm.first != EC::Success) {
       return result;
     }
@@ -105,7 +105,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
     const int timeout = request.timeout_ms > 0 ? request.timeout_ms : 5000;
     auto [rcm, items] =
-        client->listdir(path.dir_abs, interrupt_flag, timeout, am_ms());
+        client->listdir(path.dir_abs, interrupt_flag, timeout, AMTime::miliseconds());
     if (rcm.first != EC::Success || request.IsInterrupted()) {
       return false;
     }

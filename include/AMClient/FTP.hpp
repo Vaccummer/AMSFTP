@@ -536,7 +536,7 @@ private:
     if (!multi || !curl) {
       return {CURLE_FAILED_INIT, WaitResult::Error};
     }
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
 
     // Ensure curl is not left in multi (avoid leftovers from previous
     // operations) curl_multi_remove_handle(multi, curl);
@@ -571,7 +571,7 @@ private:
       if (timeout_ms <= 0) {
         return -1;
       }
-      const int64_t elapsed = am_ms() - start_time;
+      const int64_t elapsed = AMTime::miliseconds() - start_time;
       if (elapsed >= static_cast<int64_t>(timeout_ms)) {
         return 0;
       }
@@ -1190,9 +1190,9 @@ public:
       curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
       curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
-      double start_time = am_s();
+      double start_time = (static_cast<double>(AMTime::miliseconds()) / 1000.0);
       auto nb_res = nb_perform(flag, -1, start_time);
-      double end_time = am_s();
+      double end_time = (static_cast<double>(AMTime::miliseconds()) / 1000.0);
       free(chunk.memory);
 
       if (nb_res.ok() && nb_res.value == CURLE_OK) {
@@ -1214,7 +1214,7 @@ public:
 
   ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
             int64_t start_time = -1) override {
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(
@@ -1247,7 +1247,7 @@ public:
   SR stat(const std::string &path, bool trace_link = false,
           amf interrupt_flag = nullptr, int timeout_ms = -1,
           int64_t start_time = -1) override {
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1306,7 +1306,7 @@ public:
   listdir_combine(const std::string &path, amf interrupt_flag = nullptr,
                   int max_time_ms = -1, int64_t start_time = -1) {
     if (start_time == -1) {
-      start_time = am_ms();
+      start_time = AMTime::miliseconds();
     }
     std::string pathf = path;
     if (pathf.empty()) {
@@ -1363,7 +1363,7 @@ public:
     if (ecm.first != EC::Success) {
       return {ecm, {}};
     }
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1443,7 +1443,7 @@ public:
       if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return;
       }
-      if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
+      if (timeout_ms > 0 && AMTime::miliseconds() - start_time > timeout_ms) {
         return;
       }
       if (filter_hidden && is_hidden_name(item.name)) {
@@ -1473,7 +1473,7 @@ public:
                             amf interrupt_flag = nullptr, int timeout_ms = -1,
                             int64_t start_time = -1) override {
     if (start_time == -1) {
-      start_time = am_ms();
+      start_time = AMTime::miliseconds();
     }
 
     if (path.empty()) {
@@ -1485,7 +1485,7 @@ public:
     }
     WRV result = {};
     RMR errors = {};
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1548,7 +1548,7 @@ public:
       if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return;
       }
-      if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
+      if (timeout_ms > 0 && AMTime::miliseconds() - start_time > timeout_ms) {
         return;
       }
       if (filter_hidden && is_hidden_name(info.name)) {
@@ -1578,7 +1578,7 @@ public:
                             AMFS::WalkErrorCallback error_callback = nullptr,
                             amf interrupt_flag = nullptr, int timeout_ms = -1,
                             int64_t start_time = -1) override {
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1607,7 +1607,7 @@ public:
   }
   ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
             int timeout_ms = -1, int64_t start_time = -1) override {
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1667,7 +1667,7 @@ public:
 
   ECM rmfile(const std::string &path, amf interrupt_flag = nullptr,
              int timeout_ms = -1, int64_t start_time = -1) override {
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1685,7 +1685,7 @@ public:
   ECM rmdir(const std::string &path, amf interrupt_flag = nullptr,
             int timeout_ms = -1, int64_t start_time = -1) override {
     if (start_time == -1) {
-      start_time = am_ms();
+      start_time = AMTime::miliseconds();
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
 
@@ -1727,7 +1727,7 @@ public:
       if (interrupt_flag && !interrupt_flag->IsRunning()) {
         return;
       }
-      if (timeout_ms > 0 && am_ms() - start_time > timeout_ms) {
+      if (timeout_ms > 0 && AMTime::miliseconds() - start_time > timeout_ms) {
         return;
       }
       _rm(itemf, errors, error_callback, interrupt_flag, timeout_ms,
@@ -1747,7 +1747,7 @@ public:
                              AMFS::WalkErrorCallback error_callback = nullptr,
                              amf interrupt_flag = nullptr, int timeout_ms = -1,
                              int64_t start_time = -1) override {
-    start_time = start_time == -1 ? am_ms() : start_time;
+    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
@@ -1768,7 +1768,7 @@ public:
              bool overwrite = false, amf interrupt_flag = nullptr,
              int timeout_ms = -1, int64_t start_time = -1) override {
     if (start_time == -1) {
-      start_time = am_ms();
+      start_time = AMTime::miliseconds();
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
 

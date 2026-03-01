@@ -153,7 +153,7 @@ private:
         if (interrupt_flag && !interrupt_flag->IsRunning()) {
           return;
         }
-        if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+        if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
           return;
         }
         if ((sub.type == PathType::DIR && type == SearchType::File) ||
@@ -183,7 +183,7 @@ private:
         if (interrupt_flag && !interrupt_flag->IsRunning()) {
           return;
         }
-        if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+        if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
           return;
         }
         if (sub.name == cur_pattern) {
@@ -205,7 +205,7 @@ private:
         if (interrupt_flag && !interrupt_flag->IsRunning()) {
           return;
         }
-        if (timeout_ms > 0 && am_ms() - start_time >= timeout_ms) {
+        if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
           return;
         }
         if (name_match(sub.name, cur_pattern)) {
@@ -370,7 +370,7 @@ private:
     } else {
       sign = "ℹ️";
     }
-    auto time_now = FormatTime(timenow(), "%Y/%m/%d %H:%M:%S");
+    auto time_now = FormatTime(AMTime::seconds(), "%Y/%m/%d %H:%M:%S");
     auto out = time_now + " " + sign + " " +
                std::string(magic_enum::enum_name(trace_info.level)) + " " +
                std::string(trace_info.message);
@@ -636,7 +636,7 @@ private:
                          int64_t start_time) {
     init_interrupt_flag = interrupt_flag;
     init_timeout_ms = timeout_ms;
-    init_start_time = start_time == -1 ? am_ms() : start_time;
+    init_start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
   }
 
   /**
@@ -647,7 +647,7 @@ private:
       return {EC::Terminate, AMStr::fmt("{} interrupted", action)};
     }
     if (init_timeout_ms >= 0 && init_start_time >= 0 &&
-        (am_ms() - init_start_time) >= init_timeout_ms) {
+        (AMTime::miliseconds() - init_start_time) >= init_timeout_ms) {
       return {EC::OperationTimeout, AMStr::fmt("{} timed out", action)};
     }
     return {EC::Success, ""};

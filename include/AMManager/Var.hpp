@@ -165,7 +165,7 @@ inline bool IsVarNameChar(char c) {
  * @param out_ref Optional parsed output.
  * @return True when parsing succeeds.
  */
-inline bool ParseVarRefAt(const std::string &text, size_t pos, size_t limit,
+inline bool ParseVarRefAt(std::string_view text, size_t pos, size_t limit,
                           bool allow_incomplete_brace, bool allow_empty_varname,
                           size_t *out_end, VarRef *out_ref) {
   if (pos >= text.size() || pos >= limit || text[pos] != '$') {
@@ -244,7 +244,8 @@ inline bool ParseVarRefAt(const std::string &text, size_t pos, size_t limit,
   }
 
   size_t seg_end = start;
-  while (seg_end < limit && seg_end < text.size() && IsZoneNameChar(text[seg_end])) {
+  while (seg_end < limit && seg_end < text.size() &&
+         IsZoneNameChar(text[seg_end])) {
     ++seg_end;
   }
   if (seg_end == start) {
@@ -274,7 +275,8 @@ inline bool ParseVarRefAt(const std::string &text, size_t pos, size_t limit,
   }
 
   size_t var_end = start;
-  while (var_end < limit && var_end < text.size() && IsVarNameChar(text[var_end])) {
+  while (var_end < limit && var_end < text.size() &&
+         IsVarNameChar(text[var_end])) {
     ++var_end;
   }
   const std::string_view inner(text.data() + start, var_end - start);
@@ -300,7 +302,7 @@ inline bool ParseVarRefAt(const std::string &text, size_t pos, size_t limit,
  * @param out_ref Optional parsed output.
  * @return True when token is a valid complete var token.
  */
-inline bool ParseVarToken(const std::string &token, VarRef *out_ref = nullptr) {
+inline bool ParseVarToken(std::string_view token, VarRef *out_ref = nullptr) {
   if (token.empty()) {
     return false;
   }
@@ -321,6 +323,7 @@ inline bool ParseVarToken(const std::string &token, VarRef *out_ref = nullptr) {
 /**
  * @brief Single variable record identified by domain + var name.
  */
+
 struct VarInfo {
   std::string domain = "";
   std::string varname = "";

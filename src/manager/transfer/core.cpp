@@ -1,9 +1,6 @@
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Path.hpp"
+#include "AMBase/tools/bar.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
@@ -22,6 +19,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -324,8 +322,8 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
   }
   std::string host_name = src_host.empty() ? "local" : src_host;
   std::string dst_name = dst_host.empty() ? "local" : dst_host;
-  AMPromptManager::Instance().Print(AMStr::fmt("Found {} paths to transfer",
-                             std::to_string(matches.size())));
+  AMPromptManager::Instance().Print(
+      AMStr::fmt("Found {} paths to transfer", std::to_string(matches.size())));
 
   std::vector<PathInfo> sorted = matches;
   std::sort(sorted.begin(), sorted.end(),
@@ -335,9 +333,11 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
 
   for (const auto &path : sorted) {
     if (path.type == PathType::DIR) {
-      AMPromptManager::Instance().Print(AMStr::fmt("📁   {}@{}", host_name, path.path));
+      AMPromptManager::Instance().Print(
+          AMStr::fmt("📁   {}@{}", host_name, path.path));
     } else {
-      AMPromptManager::Instance().Print(AMStr::fmt("📑   {}@{}", host_name, path.path));
+      AMPromptManager::Instance().Print(
+          AMStr::fmt("📑   {}@{}", host_name, path.path));
     }
   }
 
@@ -361,9 +361,9 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
 /**
  * @brief Acquire or create a validated client for a nickname.
  */
-std::pair<ECM, std::shared_ptr<BaseClient>>
-AMTransferManager::AcquireClient_(const std::string &nickname,
-                                  const std::shared_ptr<TaskControlToken> &flag) {
+std::pair<ECM, std::shared_ptr<BaseClient>> AMTransferManager::AcquireClient_(
+    const std::string &nickname,
+    const std::shared_ptr<TaskControlToken> &flag) {
   if (flag && !flag->IsRunning()) {
     return {ECM{EC::Terminate, "Interrupted during client preparation"},
             nullptr};
@@ -383,8 +383,8 @@ AMTransferManager::AcquireClient_(const std::string &nickname,
     }
   }
 
-  auto created =
-      AMClientManager::Instance().AddClient(nickname, false, true, {}, flag, false);
+  auto created = AMClientManager::Instance().AddClient(nickname, false, true,
+                                                       {}, flag, false);
   if (created.first.first != EC::Success || !created.second) {
     return created;
   }
@@ -395,8 +395,9 @@ AMTransferManager::AcquireClient_(const std::string &nickname,
  * @brief Collect clients and build a maintainer for required nicknames.
  */
 std::pair<ECM, std::shared_ptr<ClientMaintainer>>
-AMTransferManager::CollectClients(const std::vector<std::string> &nicknames,
-                                  const std::shared_ptr<TaskControlToken> &flag) {
+AMTransferManager::CollectClients(
+    const std::vector<std::string> &nicknames,
+    const std::shared_ptr<TaskControlToken> &flag) {
   auto maintainer = std::make_shared<ClientMaintainer>(
       -1, ClientMaintainer::DisconnectCallback(),
       AMClientManager::Instance().LocalClient());
@@ -495,7 +496,9 @@ ECM AMTransferManager::transfer(
     return rcm;
   }
   if (task_info) {
-    task_info->control_token = TaskControlToken::Instance() ? TaskControlToken::Instance() : std::make_shared<TaskControlToken>();
+    task_info->control_token = TaskControlToken::Instance()
+                                   ? TaskControlToken::Instance()
+                                   : std::make_shared<TaskControlToken>();
   }
   return transfer(task_info, task_info ? task_info->control_token : flag);
 }
@@ -522,7 +525,9 @@ ECM AMTransferManager::transfer(
     return {EC::Success, ""};
   }
 
-  task_info->control_token = TaskControlToken::Instance() ? TaskControlToken::Instance() : std::make_shared<TaskControlToken>();
+  task_info->control_token = TaskControlToken::Instance()
+                                 ? TaskControlToken::Instance()
+                                 : std::make_shared<TaskControlToken>();
   auto flag = task_info->control_token;
   if (interrupt_flag && !interrupt_flag->IsRunning() && flag) {
     flag->SetStatus(ControlSignal::Interrupt);
@@ -553,10 +558,10 @@ ECM AMTransferManager::transfer(
   }
 
   const bool show_progress = !task_info->quiet;
-  AMProgressBar progress_bar =
-      AMConfigManager::Instance().CreateProgressBar(static_cast<int64_t>(task_info->total_size.load(
-                                    std::memory_order_relaxed)),
-                                BuildTransferProgressPrefix_(task_info));
+  AMProgressBar progress_bar = AMConfigManager::Instance().CreateProgressBar(
+      static_cast<int64_t>(
+          task_info->total_size.load(std::memory_order_relaxed)),
+      BuildTransferProgressPrefix_(task_info));
   std::unique_ptr<AMPrintLockGuard> print_guard;
   (void)print_guard;
   if (show_progress) {
@@ -571,8 +576,9 @@ ECM AMTransferManager::transfer(
 
   bool all_finished = false;
   while (!all_finished) {
-    const bool interrupted =
-        (flag && !flag->IsRunning()) || (TaskControlToken::Instance() && !TaskControlToken::Instance()->IsRunning());
+    const bool interrupted = (flag && !flag->IsRunning()) ||
+                             (TaskControlToken::Instance() &&
+                              !TaskControlToken::Instance()->IsRunning());
     if (interrupted) {
       if (show_progress) {
         progress_bar.EndDisplay();
@@ -631,8 +637,7 @@ ECM AMTransferManager::transfer_async(
       task_info->control_token->SetStatus(ControlSignal::Interrupt);
     }
   }
-  return transfer_async(task_info,
-                        task_info ? task_info->control_token : flag);
+  return transfer_async(task_info, task_info ? task_info->control_token : flag);
 }
 
 /**
@@ -706,8 +711,8 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
   for (const auto &set : transfer_sets) {
     std::string dst_host;
     std::string dst_path;
-    auto dst_rcm = ParseTransferPath(AMClientManager::Instance(), set.dst, nullptr,
-                                     &dst_host, &dst_path);
+    auto dst_rcm = ParseTransferPath(AMClientManager::Instance(), set.dst,
+                                     nullptr, &dst_host, &dst_path);
     if (dst_rcm.first != EC::Success) {
       return {dst_rcm, nullptr};
     }
@@ -719,8 +724,8 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
     for (const auto &src : set.srcs) {
       std::string src_host;
       std::string src_path;
-      auto src_rcm = ParseTransferPath(AMClientManager::Instance(), src, nullptr, &src_host,
-                                       &src_path);
+      auto src_rcm = ParseTransferPath(AMClientManager::Instance(), src,
+                                       nullptr, &src_host, &src_path);
       if (src_rcm.first != EC::Success) {
         return {src_rcm, nullptr};
       }
@@ -746,8 +751,8 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
   for (const auto &set : transfer_sets) {
     std::string dst_host;
     std::string dst_path;
-    auto dst_parse = ParseTransferPath(AMClientManager::Instance(), set.dst, nullptr,
-                                       &dst_host, &dst_path);
+    auto dst_parse = ParseTransferPath(AMClientManager::Instance(), set.dst,
+                                       nullptr, &dst_host, &dst_path);
     if (dst_parse.first != EC::Success) {
       ReturnClientsToIdle_(hostm);
       return {dst_parse, nullptr};
@@ -759,8 +764,8 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
       return {ECM{EC::ClientNotFound, "Destination client not available"},
               nullptr};
     }
-    auto dst_rcm = ParseTransferPath(AMClientManager::Instance(), set.dst, dst_client,
-                                     &dst_host, &dst_path);
+    auto dst_rcm = ParseTransferPath(AMClientManager::Instance(), set.dst,
+                                     dst_client, &dst_host, &dst_path);
     if (dst_rcm.first != EC::Success) {
       ReturnClientsToIdle_(hostm);
       return {dst_rcm, nullptr};
@@ -774,8 +779,8 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
 
       std::string src_host;
       std::string src_path;
-      auto src_parse = ParseTransferPath(AMClientManager::Instance(), src, nullptr,
-                                         &src_host, &src_path);
+      auto src_parse = ParseTransferPath(AMClientManager::Instance(), src,
+                                         nullptr, &src_host, &src_path);
       if (src_parse.first != EC::Success) {
         ReturnClientsToIdle_(hostm);
         return {src_parse, nullptr};
@@ -787,8 +792,8 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
         return {ECM{EC::ClientNotFound, "Source client not available"},
                 nullptr};
       }
-      auto src_rcm = ParseTransferPath(AMClientManager::Instance(), src, src_client,
-                                       &src_host, &src_path);
+      auto src_rcm = ParseTransferPath(AMClientManager::Instance(), src,
+                                       src_client, &src_host, &src_path);
       if (src_rcm.first != EC::Success) {
         ReturnClientsToIdle_(hostm);
         return {src_rcm, nullptr};
