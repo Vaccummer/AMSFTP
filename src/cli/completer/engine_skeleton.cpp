@@ -1,6 +1,5 @@
 #include "AMCLI/Completer/Engine.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
-#include "AMCLI/Completer/Searcher.hpp"
 #include "AMCLI/InteractiveLoop.hpp"
 #include "AMManager/Config.hpp"
 #include "Isocline/isocline.h"
@@ -366,7 +365,7 @@ void AMCompleteEngine::EnsurePromptReturnCancelHookRegistered_() {
     return;
   }
   prompt_return_cancel_callback_ = [this]() { CancelPendingAsyncRequests_(); };
-  auto &registry = AMInteractiveLoop::EventRegistry::Instance();
+  auto &registry = AMInteractiveEventRegistry::Instance();
   registry.RegisterOnCorePromptReturn(&prompt_return_cancel_callback_);
   prompt_return_cancel_hook_registered_ = true;
 }

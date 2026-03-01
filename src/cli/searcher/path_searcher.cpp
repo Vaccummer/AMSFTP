@@ -227,7 +227,7 @@ void AMPathSearchEngine::EnsureTempCacheHookRegistered_() {
     return;
   }
   temp_cache_clear_callback_ = [this]() { ClearTempCache_(); };
-  auto &registry = AMInteractiveLoop::EventRegistry::Instance();
+  auto &registry = AMInteractiveEventRegistry::Instance();
   registry.RegisterOnCorePromptReturn(&temp_cache_clear_callback_);
   registry.RegisterOnInteractiveLoopExit(&temp_cache_clear_callback_);
   temp_cache_hook_registered_ = true;
