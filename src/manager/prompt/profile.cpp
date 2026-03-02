@@ -112,7 +112,11 @@ void AMPromptProfileArgs::Init(const Json &jsond,
   (void)AMJson::QueryKey(jsond, {"History", "max_count"}, &history.max_count);
 
   (void)AMJson::QueryKey(jsond, {"InlineHint", "enable"}, &inline_hint.enable);
-  (void)AMJson::QueryKey(jsond, {"InlineHint", "delay_ms"}, &inline_hint.delay_ms);
+  if (!AMJson::QueryKey(jsond, {"InlineHint", "render_delay_ms"},
+                        &inline_hint.render_delay_ms)) {
+    (void)AMJson::QueryKey(jsond, {"InlineHint", "delay_ms"},
+                           &inline_hint.render_delay_ms);
+  }
   (void)AMJson::QueryKey(jsond, {"InlineHint", "search_delay_ms"},
                  &inline_hint.search_delay_ms);
   (void)AMJson::QueryKey(jsond, {"InlineHint", "Path", "enable"},
@@ -134,7 +138,7 @@ void AMPromptProfileArgs::Init(const Json &jsond,
                  &highlight.path.timeout_ms);
 
   history.max_count = std::min(std::max(1, history.max_count), 200);
-  inline_hint.delay_ms = std::max(0, inline_hint.delay_ms);
+  inline_hint.render_delay_ms = std::max(0, inline_hint.render_delay_ms);
   inline_hint.search_delay_ms = std::max(0, inline_hint.search_delay_ms);
   highlight.delay_ms = std::max(0, highlight.delay_ms);
 
@@ -163,7 +167,7 @@ Json AMPromptProfileArgs::GetJson() const {
   jsond["History"]["max_count"] = history.max_count;
 
   jsond["InlineHint"]["enable"] = inline_hint.enable;
-  jsond["InlineHint"]["delay_ms"] = inline_hint.delay_ms;
+  jsond["InlineHint"]["render_delay_ms"] = inline_hint.render_delay_ms;
   jsond["InlineHint"]["search_delay_ms"] = inline_hint.search_delay_ms;
   jsond["InlineHint"]["Path"]["enable"] = inline_hint.path.enable;
   jsond["InlineHint"]["Path"]["use_async"] = inline_hint.path.use_async;
@@ -415,12 +419,14 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
   }
 
   if (working.inline_hint.enable) {
-    int64_t inline_delay = static_cast<int64_t>(working.inline_hint.delay_ms);
-    if (!prompt_int64("InlineHint.delay_ms: ", 0, 5000, &inline_delay)) {
+    int64_t inline_delay =
+        static_cast<int64_t>(working.inline_hint.render_delay_ms);
+    if (!prompt_int64("InlineHint.render_delay_ms: ", 0, 5000,
+                      &inline_delay)) {
       print_abort();
       return Err(EC::ConfigCanceled, "profile edit canceled");
     }
-    working.inline_hint.delay_ms = static_cast<int>(inline_delay);
+    working.inline_hint.render_delay_ms = static_cast<int>(inline_delay);
 
     int64_t inline_search_delay =
         static_cast<int64_t>(working.inline_hint.search_delay_ms);
@@ -463,7 +469,8 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
           builtin_defaults.inline_hint.path.timeout_ms;
     }
   } else {
-    working.inline_hint.delay_ms = builtin_defaults.inline_hint.delay_ms;
+    working.inline_hint.render_delay_ms =
+        builtin_defaults.inline_hint.render_delay_ms;
     working.inline_hint.search_delay_ms =
         builtin_defaults.inline_hint.search_delay_ms;
     working.inline_hint.path = builtin_defaults.inline_hint.path;

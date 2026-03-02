@@ -15,6 +15,7 @@
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
 #include <iostream>
 #include <magic_enum/magic_enum.hpp>
 #include <sstream>
@@ -284,9 +285,37 @@ bool ResolvePromptStyleAnsi_(AMConfigManager &config_manager,
   auto raw = config_manager.ResolveArg<std::string>(
       DocumentKind::Settings, {"Style", "CLIPrompt", trimmed}, "", {});
   if (raw.empty()) {
+    raw = config_manager.ResolveArg<std::string>(
+        DocumentKind::Settings, {"Style", "CLIPrompt", "shortcut", trimmed},
+        "", {});
+  }
+  if (raw.empty()) {
     return false;
   }
   return TryBuildAnsiStyleCode_(raw, ansi_code);
+}
+
+/**
+ * @brief Resolve the interactive prompt format string from settings.
+ *
+ * Supports both legacy `Style.CLIPrompt.format` and the newer
+ * `Style.CLIPrompt.templete.core_prompt` layout.
+ */
+std::string ResolveCorePromptFormat_(AMConfigManager &config_manager) {
+  std::string format = config_manager.ResolveArg<std::string>(
+      DocumentKind::Settings,
+      {"Style", "CLIPrompt", "templete", "core_prompt"}, "", {});
+  if (!format.empty()) {
+    return format;
+  }
+  format = config_manager.ResolveArg<std::string>(
+      DocumentKind::Settings,
+      {"Style", "CLIPrompt", "template", "core_prompt"}, "", {});
+  if (!format.empty()) {
+    return format;
+  }
+  return config_manager.ResolveArg<std::string>(
+      DocumentKind::Settings, {"Style", "CLIPrompt", "format"}, "", {});
 }
 
 /**
@@ -1289,8 +1318,7 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
     workdir = client_manager.GetOrInitWorkdir(client);
   }
 
-  const std::string format = config_manager.ResolveArg<std::string>(
-      DocumentKind::Settings, {"Style", "CLIPrompt", "format"}, "", {});
+  const std::string format = ResolveCorePromptFormat_(config_manager);
   if (!format.empty()) {
     std::unordered_map<std::string, std::string> vars;
     vars["$sysicon"] = state.cached_sysicon;
@@ -1342,6 +1370,51 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
   std::string line2 =
       AMStr::fmt("({}){} {}", styled_nickname, styled_cwd, styled_dollar);
   return line1 + "\n" + line2 + " ";
+}
+
+/**
+ * @brief Reload settings when `settings.toml` changed on disk.
+ *
+ * This makes external edits effective without requiring process restart.
+ */
+ECM ReloadSettingsIfUpdated_(AMConfigManager &config_manager,
+                             AMPromptManager &prompt) {
+  std::filesystem::path settings_path;
+  if (!config_manager.GetDataPath(DocumentKind::Settings, &settings_path) ||
+      settings_path.empty()) {
+    return Ok();
+  }
+
+  std::error_code ec;
+  const auto current_write_time =
+      std::filesystem::last_write_time(settings_path, ec);
+  if (ec) {
+    return Ok();
+  }
+
+  static std::filesystem::file_time_type last_write_time{};
+  static bool has_last_write_time = false;
+  if (!has_last_write_time) {
+    last_write_time = current_write_time;
+    has_last_write_time = true;
+    return Ok();
+  }
+  if (current_write_time <= last_write_time) {
+    return Ok();
+  }
+
+  // Avoid clobbering in-memory updates that have not been dumped yet.
+  if (config_manager.IsDirty(DocumentKind::Settings)) {
+    return Ok();
+  }
+
+  ECM load_rcm = config_manager.Load(DocumentKind::Settings, true);
+  if (load_rcm.first != EC::Success) {
+    return load_rcm;
+  }
+  (void)prompt.ReloadPromptProfiles();
+  last_write_time = current_write_time;
+  return Ok();
 }
 
 /**
@@ -1515,6 +1588,11 @@ int RunInteractiveLoop(const std::string &app_name,
     if (TaskControlToken::Instance() &&
         TaskControlToken::Instance()->IsKill()) {
       break;
+    }
+
+    ECM reload_settings_rcm = ReloadSettingsIfUpdated_(config_manager, prompt);
+    if (reload_settings_rcm.first != EC::Success) {
+      PrintECM_(prompt, reload_settings_rcm);
     }
 
     auto history_client = ResolveActiveClient_(client_manager);

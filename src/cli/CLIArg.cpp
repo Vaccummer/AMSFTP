@@ -949,7 +949,7 @@ ECM TaskCacheAddArgs::Run(const CliManagers &managers,
   }
   (void)managers;
   if (srcs.empty()) {
-    return {EC::InvalidArg, "task cache add "
+    return {EC::InvalidArg, "job add "
                             "requires at least "
                             "one source"};
   }
@@ -961,7 +961,7 @@ ECM TaskCacheAddArgs::Run(const CliManagers &managers,
   std::string transfer_dst;
   if (resolved_output.empty()) {
     if (resolved_srcs.size() != 2) {
-      return {EC::InvalidArg, "task cache add "
+      return {EC::InvalidArg, "job add "
                               "requires "
                               "exactly 2 paths "
                               "when --output "
@@ -986,7 +986,7 @@ ECM TaskCacheAddArgs::Run(const CliManagers &managers,
 
   AMTransferManager &transfer_manager = AMTransferManager::Instance();
   size_t index = transfer_manager.SubmitTransferSet(transfer_set);
-  AMPromptManager::Instance().FmtPrint("✅ cache add {}",
+  AMPromptManager::Instance().FmtPrint("✅ job add {}",
                                        std::to_string(index));
   return {EC::Success, ""};
 }
@@ -1016,7 +1016,7 @@ ECM TaskCacheRmArgs::Run(const CliManagers &managers,
                             "not found"};
   }
   for (size_t index : deduped) {
-    AMPromptManager::Instance().FmtPrint("✅ cache rm "
+    AMPromptManager::Instance().FmtPrint("✅ job rm "
                                          "{}",
                                          std::to_string(index));
   }
@@ -1033,7 +1033,7 @@ ECM TaskCacheClearArgs::Run(const CliManagers &managers,
   }
   (void)managers;
   AMTransferManager::Instance().ClearCachedTransferSets();
-  AMPromptManager::Instance().Print("✅ cache "
+  AMPromptManager::Instance().Print("✅ job "
                                     "cleared");
   return {EC::Success, ""};
 }
@@ -1050,7 +1050,7 @@ ECM TaskCacheSubmitArgs::Run(const CliManagers &managers,
   bool suffix_async = false;
   if (!async_suffix.empty()) {
     if (async_suffix != "&") {
-      return Err(EC::InvalidArg, "task cache "
+      return Err(EC::InvalidArg, "job "
                                  "submit: "
                                  "trailing "
                                  "arg must be "

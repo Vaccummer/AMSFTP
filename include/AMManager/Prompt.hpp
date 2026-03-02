@@ -50,7 +50,7 @@ struct AMPromptInlineHintPathProfileArgs {
  */
 struct AMPromptInlineHintProfileArgs {
   bool enable = true;
-  int delay_ms = 30;
+  int render_delay_ms = 30;
   int search_delay_ms = 0;
   AMPromptInlineHintPathProfileArgs path{};
 };

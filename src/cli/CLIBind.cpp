@@ -570,76 +570,62 @@ void BindTaskCommands(CommandNode *root, CliArgsPool &args,
   }
   commands.task_cmd = task_node->app;
 
-  CommandNode *task_cache_node =
-      task_node->AddFunction("cache", "Manage task cache");
-  commands.task_cache_cmd = task_cache_node ? task_cache_node->app : nullptr;
+  CommandNode *job_node = root->AddFunction("job", "Manage transfer jobs");
+  commands.task_cache_cmd = job_node ? job_node->app : nullptr;
 
-  CommandNode *task_cache_add_node =
-      task_cache_node
-          ? task_cache_node->AddFunction("add", "Add transfer set", args,
-                                         &CliArgsPool::task_cache_add)
-          : nullptr;
-  commands.task_cache_add =
-      task_cache_add_node ? task_cache_add_node->app : nullptr;
+  CommandNode *job_add_node =
+      job_node ? job_node->AddFunction("add", "Add transfer set", args,
+                                       &CliArgsPool::task_cache_add)
+               : nullptr;
+  commands.task_cache_add = job_add_node ? job_add_node->app : nullptr;
   if (commands.task_cache_add) {
     commands.task_cache_add
         ->add_option("src", args.task_cache_add.srcs, "Source paths")
         ->expected(1, -1);
   }
-  if (task_cache_add_node) {
-    task_cache_add_node->AddOption("-o", "--output", args.task_cache_add.output,
-                                   1, 1, Sem::Path,
-                                   "Destination path (optional)");
-    task_cache_add_node->AddFlag("-f", "--force", args.task_cache_add.overwrite,
-                                 "Overwrite existing targets");
-    task_cache_add_node->AddFlag("-n", "--no-mkdir",
-                                 args.task_cache_add.no_mkdir,
-                                 "Do not create missing directories");
-    task_cache_add_node->AddFlag("-c", "--clone", args.task_cache_add.clone,
-                                 "Clone instead of transfer");
-    task_cache_add_node->AddFlag("-s", "--special",
-                                 args.task_cache_add.include_special,
-                                 "Include special files");
-    task_cache_add_node->AddFlag("-r", "--resume", args.task_cache_add.resume,
-                                 "Resume from existing destination file");
-    task_cache_add_node->AddPositionalRule(0, Sem::Path, true);
+  if (job_add_node) {
+    job_add_node->AddOption("-o", "--output", args.task_cache_add.output, 1, 1,
+                            Sem::Path, "Destination path (optional)");
+    job_add_node->AddFlag("-f", "--force", args.task_cache_add.overwrite,
+                          "Overwrite existing targets");
+    job_add_node->AddFlag("-n", "--no-mkdir", args.task_cache_add.no_mkdir,
+                          "Do not create missing directories");
+    job_add_node->AddFlag("-c", "--clone", args.task_cache_add.clone,
+                          "Clone instead of transfer");
+    job_add_node->AddFlag("-s", "--special", args.task_cache_add.include_special,
+                          "Include special files");
+    job_add_node->AddFlag("-r", "--resume", args.task_cache_add.resume,
+                          "Resume from existing destination file");
+    job_add_node->AddPositionalRule(0, Sem::Path, true);
   }
 
-  CommandNode *task_cache_rm_node =
-      task_cache_node
-          ? task_cache_node->AddFunction("rm", "Remove cached sets", args,
-                                         &CliArgsPool::task_cache_rm)
-          : nullptr;
-  commands.task_cache_rm =
-      task_cache_rm_node ? task_cache_rm_node->app : nullptr;
+  CommandNode *job_rm_node =
+      job_node ? job_node->AddFunction("rm", "Remove cached sets", args,
+                                       &CliArgsPool::task_cache_rm)
+               : nullptr;
+  commands.task_cache_rm = job_rm_node ? job_rm_node->app : nullptr;
   if (commands.task_cache_rm) {
     commands.task_cache_rm
-        ->add_option("indices", args.task_cache_rm.indices, "Cache indices")
+        ->add_option("indices", args.task_cache_rm.indices, "Job indices")
         ->expected(1, -1);
   }
 
-  CommandNode *task_cache_clear_node =
-      task_cache_node
-          ? task_cache_node->AddFunction("clear", "Clear cache", args,
-                                         &CliArgsPool::task_cache_clear)
-          : nullptr;
-  commands.task_cache_clear =
-      task_cache_clear_node ? task_cache_clear_node->app : nullptr;
+  CommandNode *job_clear_node =
+      job_node ? job_node->AddFunction("clear", "Clear jobs", args,
+                                       &CliArgsPool::task_cache_clear)
+               : nullptr;
+  commands.task_cache_clear = job_clear_node ? job_clear_node->app : nullptr;
 
-  CommandNode *task_cache_submit_node =
-      task_cache_node
-          ? task_cache_node->AddFunction("submit", "Submit cached tasks", args,
-                                         &CliArgsPool::task_cache_submit)
-          : nullptr;
-  commands.task_cache_submit =
-      task_cache_submit_node ? task_cache_submit_node->app : nullptr;
-  if (task_cache_submit_node) {
-    task_cache_submit_node->AddFlag("-a", "--async",
-                                    args.task_cache_submit.is_async,
-                                    "Submit as async task");
-    task_cache_submit_node->AddFlag("-q", "--quiet",
-                                    args.task_cache_submit.quiet,
-                                    "Suppress output and confirmation");
+  CommandNode *job_submit_node =
+      job_node ? job_node->AddFunction("submit", "Submit cached jobs", args,
+                                       &CliArgsPool::task_cache_submit)
+               : nullptr;
+  commands.task_cache_submit = job_submit_node ? job_submit_node->app : nullptr;
+  if (job_submit_node) {
+    job_submit_node->AddFlag("-a", "--async", args.task_cache_submit.is_async,
+                             "Submit as async task");
+    job_submit_node->AddFlag("-q", "--quiet", args.task_cache_submit.quiet,
+                             "Suppress output and confirmation");
   }
   if (commands.task_cache_submit) {
     commands.task_cache_submit
@@ -648,13 +634,15 @@ void BindTaskCommands(CommandNode *root, CliArgsPool &args,
         ->expected(0, 1);
   }
 
-  CommandNode *task_userset_node = task_node->AddFunction(
-      "userset", "Inspect cached transfer", args, &CliArgsPool::task_userset);
+  CommandNode *task_userset_node = job_node ? job_node->AddFunction(
+                                                 "get", "Inspect cached transfer",
+                                                 args, &CliArgsPool::task_userset)
+                                           : nullptr;
   commands.task_userset_cmd =
       task_userset_node ? task_userset_node->app : nullptr;
   if (commands.task_userset_cmd) {
     commands.task_userset_cmd
-        ->add_option("index", args.task_userset.indices, "Cache index")
+        ->add_option("index", args.task_userset.indices, "Job index")
         ->expected(0, -1);
   }
 
