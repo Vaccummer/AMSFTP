@@ -2,6 +2,16 @@
 #include "AMCLI/Completer/Proxy.hpp"
 #include <iostream>
 
+CliManagers &CliManagers::Instance() {
+  static CliManagers instance;
+  return instance;
+}
+
+CliRunContext &CliRunContext::Instance() {
+  static CliRunContext instance;
+  return instance;
+}
+
 namespace {
 void SetEnterInteractive_(const CliRunContext &ctx, bool value) {
   if (ctx.enter_interactive) {
@@ -151,8 +161,11 @@ SubstitutePathLikeArgs_(const std::vector<std::string> &raw) {
 }
 
 ECM EnsureInteractive_(const CliRunContext &ctx) {
-  if (ctx.enforce_interactive ||
-      AMIsInteractive.load(std::memory_order_relaxed)) {
+  const bool interactive =
+      ctx.enforce_interactive ||
+      (ctx.is_interactive &&
+       ctx.is_interactive->load(std::memory_order_relaxed));
+  if (interactive) {
     return {EC::Success, ""};
   }
   const std::string name =
@@ -162,11 +175,6 @@ ECM EnsureInteractive_(const CliRunContext &ctx) {
 }
 
 } // namespace
-
-CliManagers &CliManagers::Instance() {
-  static CliManagers instance;
-  return instance;
-}
 
 ECM CliManagers::Init() {
   ECM rcm = signal_monitor.Init();
@@ -207,17 +215,6 @@ ECM CliManagers::Init() {
   }
   return filesystem.Init();
 }
-
-CliManagers::CliManagers()
-    : signal_monitor(AMCliSignalMonitor::Instance()),
-      config_manager(AMConfigManager::Instance()),
-      prompt_manager(AMPromptManager::Instance()),
-      host_manager(AMHostManager::Instance()),
-      var_manager(VarCLISet::Instance()), log_manager(AMLogManager::Instance()),
-      client_manager(AMClientManager::Instance()),
-      transfer_manager(AMTransferManager::Instance()),
-      set_manager(AMSetManager::Instance()),
-      filesystem(AMFileSystem::Instance()) {}
 
 ECM ConfigLsArgs::Run(const CliManagers &managers,
                       const CliRunContext &ctx) const {
@@ -579,7 +576,7 @@ ECM SftpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   ECM rcm = filesystem.sftp(nickname, user_at_host, port, "", keyfile,
                             TaskControlToken::Instance());
   PrintRunError_(rcm);
-  *(ctx.enter_interactive) = rcm.first == EC::Success;
+  SetEnterInteractive_(ctx, rcm.first == EC::Success);
   return rcm;
 }
 
@@ -642,8 +639,10 @@ void CheckArgs::reset() {
 ECM ChangeClientArgs::Run(const CliManagers &managers,
                           const CliRunContext &ctx) const {
   auto &filesystem = managers.filesystem;
-  const bool is_interactive = ctx.enforce_interactive ||
-                              AMIsInteractive.load(std::memory_order_relaxed);
+  const bool is_interactive =
+      ctx.enforce_interactive ||
+      (ctx.is_interactive &&
+       ctx.is_interactive->load(std::memory_order_relaxed));
   if (is_interactive) {
     return filesystem.change_client(nickname, TaskControlToken::Instance());
   }
@@ -685,8 +684,10 @@ void CdArgs::reset() { path.clear(); }
 ECM ConnectArgs::Run(const CliManagers &managers,
                      const CliRunContext &ctx) const {
   auto &filesystem = managers.filesystem;
-  const bool is_interactive = ctx.enforce_interactive ||
-                              AMIsInteractive.load(std::memory_order_relaxed);
+  const bool is_interactive =
+      ctx.enforce_interactive ||
+      (ctx.is_interactive &&
+       ctx.is_interactive->load(std::memory_order_relaxed));
   const std::vector<std::string> targets =
       AMStr::UniqueTargetsKeepOrder(nicknames);
   if (targets.empty()) {
@@ -759,7 +760,8 @@ ECM CmdArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   if (!msg.empty()) {
     AMPromptManager::Instance().Print(msg);
   }
-  AMPromptManager::Instance().FmtPrint("Command exit with code {}", shell_result.second.second);
+  AMPromptManager::Instance().FmtPrint("Command exit with code {}",
+                                       shell_result.second.second);
   return shell_result.first;
 }
 
@@ -984,7 +986,8 @@ ECM TaskCacheAddArgs::Run(const CliManagers &managers,
 
   AMTransferManager &transfer_manager = AMTransferManager::Instance();
   size_t index = transfer_manager.SubmitTransferSet(transfer_set);
-  AMPromptManager::Instance().FmtPrint("✅ cache add {}", std::to_string(index));
+  AMPromptManager::Instance().FmtPrint("✅ cache add {}",
+                                       std::to_string(index));
   return {EC::Success, ""};
 }
 
@@ -1014,8 +1017,8 @@ ECM TaskCacheRmArgs::Run(const CliManagers &managers,
   }
   for (size_t index : deduped) {
     AMPromptManager::Instance().FmtPrint("✅ cache rm "
-                                                 "{}",
-                                                 std::to_string(index));
+                                         "{}",
+                                         std::to_string(index));
   }
   return {EC::Success, ""};
 }
@@ -1155,4 +1158,3 @@ void TaskRetryArgs::reset() {
   quiet = false;
   indices.clear();
 }
-

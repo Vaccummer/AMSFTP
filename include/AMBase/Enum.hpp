@@ -258,7 +258,9 @@ enum class AMTokenType {
   BuiltinArg = 24,
   LeftBraceSign = 25,
   RightBraceSign = 26,
-  ColonSign = 27
+  ColonSign = 27,
+  ValidValue = 28,
+  InvalidValue = 29
 
 };
 

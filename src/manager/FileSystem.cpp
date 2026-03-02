@@ -17,10 +17,15 @@
 #include <unordered_map>
 #include <unordered_set>
 
-
 using EC = ErrorCode;
 
 namespace AMPathTree {
+enum class TreeStyleRole {
+  Root,
+  NodeDirName,
+  Filename,
+};
+
 struct TreeNode {
   std::vector<std::string> children;
   std::vector<PathInfo> files;
@@ -111,7 +116,8 @@ inline void SortTreeNodes(TreeNodeMap *nodes) {
  */
 inline bool PrintTree(
     const std::string &root, const TreeNodeMap &nodes,
-    const std::function<std::string(const PathInfo &, const std::string &)>
+    const std::function<
+        std::string(TreeStyleRole, const PathInfo &, const std::string &)>
         &style_path,
     const std::function<void(const std::string &)> &print_line,
     const JoinPairFn &join_pair,
@@ -121,7 +127,9 @@ inline bool PrintTree(
   }
   PathInfo dir_info;
   dir_info.type = PathType::DIR;
-  const std::string root_line = style_path ? style_path(dir_info, root) : root;
+  dir_info.path = root;
+  const std::string root_line =
+      style_path ? style_path(TreeStyleRole::Root, dir_info, root) : root;
   if (should_stop && should_stop()) {
     return false;
   }
@@ -149,8 +157,10 @@ inline bool PrintTree(
           const std::string connector = last ? "└── " : "├── ";
           const std::string next_prefix = prefix + (last ? "    " : "│   ");
           const std::string child_name = children[i];
-          const std::string styled =
-              style_path ? style_path(dir_info, child_name) : child_name;
+          const std::string styled = style_path
+                                         ? style_path(TreeStyleRole::NodeDirName,
+                                                      dir_info, child_name)
+                                         : child_name;
           print_line(prefix + connector + styled);
           if (join_pair) {
             const std::string child_path = join_pair(dir_path, child_name);
@@ -169,7 +179,9 @@ inline bool PrintTree(
           const std::string connector = (i + 1 == file_count) ? "└── " : "├── ";
           const auto &info = files[i];
           const std::string styled =
-              style_path ? style_path(info, info.name) : info.name;
+              style_path
+                  ? style_path(TreeStyleRole::Filename, info, info.name)
+                  : info.name;
           print_line(prefix + connector + styled);
         }
         return true;
@@ -180,10 +192,44 @@ inline bool PrintTree(
 } // namespace AMPathTree
 
 /**
- * @brief Convert a boolean to a lowercase string value.
+ * @brief Normalize one configured tree style into a single opening bbcode tag.
  */
-static std::string BoolToString_(bool value) {
-  return value ? "true" : "false";
+static std::string NormalizeTreeStyleTag_(const std::string &raw) {
+  std::string trimmed = AMStr::Strip(raw);
+  if (trimmed.empty()) {
+    return "";
+  }
+  if (trimmed.find("[/") != std::string::npos) {
+    return "";
+  }
+  if (trimmed.front() != '[') {
+    trimmed.insert(trimmed.begin(), '[');
+  }
+  if (trimmed.back() != ']') {
+    trimmed.push_back(']');
+  }
+  return trimmed;
+}
+
+/**
+ * @brief Apply one normalized bbcode tag to text.
+ */
+static std::string ApplyTreeStyleTag_(const std::string &tag,
+                                      const std::string &text) {
+  if (tag.empty()) {
+    return text;
+  }
+  return tag + text + "[/]";
+}
+
+/**
+ * @brief Right-pad text with spaces to target width.
+ */
+static std::string PadRight_(const std::string &text, size_t width) {
+  if (text.size() >= width) {
+    return text;
+  }
+  return text + std::string(width - text.size(), ' ');
 }
 
 /**
@@ -200,7 +246,7 @@ static std::string BuildShellCommandWithPrefix_(const std::string &command,
     return cmd_prefix + command;
   }
   return AMStr::fmt("{}\"{}\"", cmd_prefix,
-                      AMStr::replace_all(command, "\"", "'"));
+                    AMStr::replace_all(command, "\"", "'"));
 }
 
 /**
@@ -208,49 +254,75 @@ static std::string BuildShellCommandWithPrefix_(const std::string &command,
  */
 static void PrintClientDetail_(AMPromptManager &prompt_manager,
                                const std::string &nickname,
-                               const std::shared_ptr<BaseClient> &client) {
+                               const std::shared_ptr<BaseClient> &client,
+                               bool print_title = true) {
   if (!client) {
     return;
   }
-  const std::vector<std::string> fields = {
-      "hostname",    "username",  "port",      "password", "protocol",
-      "buffer_size", "trash_dir", "login_dir", "keyfile",  "compression",
-  };
-
+  ClientMetaData metadata = client->GetClientMetaData();
+  std::string cwd = client->GetCwd();
+  if (cwd.empty()) {
+    cwd = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");
+  }
   std::string login_dir = client->GetLoginDir();
   if (login_dir.empty()) {
-    login_dir = client->GetCwd();
+    login_dir = cwd;
   }
+  metadata.login_dir = login_dir;
+  metadata.cwd = cwd;
 
   const ConRequest &request = client->GetRequest();
-  std::unordered_map<std::string, std::string> values;
-  values["hostname"] = request.hostname;
-  values["username"] = request.username;
-  values["port"] = std::to_string(request.port);
-  values["password"] = request.password;
-  values["protocol"] = AMStr::ToString(request.protocol);
-  values["buffer_size"] = std::to_string(request.buffer_size);
-  values["trash_dir"] = request.trash_dir;
-  values["login_dir"] = login_dir;
-  values["keyfile"] = request.keyfile;
-  values["compression"] = BoolToString_(request.compression);
+  auto values = request.GetStrDict();
+  auto metadata_values = metadata.GetStrDict();
+  values.insert(values.end(), metadata_values.begin(), metadata_values.end());
 
-  prompt_manager.Print("[!pre][" + nickname + "][/pre]");
-  size_t width = 0;
-  for (const auto &field : fields) {
-    width = std::max<size_t>(width, field.size());
+  if (print_title) {
+    prompt_manager.Print("[!pre][" + nickname + "][/pre]");
   }
-  for (const auto &field : fields) {
-    auto it = values.find(field);
-    if (it == values.end()) {
+  size_t width = 0;
+  for (const auto &field : values) {
+    if (field.first == "nickname") {
       continue;
     }
-    std::string value = it->second;
+    width = std::max<size_t>(width, field.first.size());
+  }
+  for (const auto &field : values) {
+    if (field.first == "nickname") {
+      continue;
+    }
+    std::string render_value = field.second;
+    if (field.first == "cmd_prefix") {
+      render_value = "\"" + render_value + "\"";
+    } else if (render_value.empty()) {
+      render_value = "\"\"";
+    }
     std::ostringstream line;
-    line << std::left << std::setw(static_cast<int>(width)) << field << " :   "
-         << (value.empty() ? "\"\"" : value);
+    line << std::left << std::setw(static_cast<int>(width)) << field.first
+         << " :   " << render_value;
     prompt_manager.Print(line.str());
   }
+}
+
+/**
+ * @brief Print one check-detail block with status and optional error info.
+ */
+static void PrintCheckDetail_(AMPromptManager &prompt_manager,
+                              const std::string &nickname,
+                              const std::shared_ptr<BaseClient> &client,
+                              const ECM &rcm) {
+  const std::string status = (rcm.first == EC::Success) ? "✅" : "❌";
+  prompt_manager.Print(AMStr::fmt("[{}] {}", nickname, status));
+
+  if (rcm.first != EC::Success) {
+    const std::string ec_name = std::string(magic_enum::enum_name(rcm.first));
+    const std::string msg = rcm.second.empty()
+                                ? std::string(AMStr::ToString(rcm.first))
+                                : rcm.second;
+    prompt_manager.Print(AMStr::fmt("error_code :   {}", ec_name));
+    prompt_manager.Print(AMStr::fmt("error_msg  :   {}", msg));
+  }
+
+  PrintClientDetail_(prompt_manager, nickname, client, false);
 }
 
 ECM AMFileSystem::check(const std::string &nickname, bool detail,
@@ -297,7 +369,8 @@ ECM AMFileSystem::check(const std::vector<std::string> &nicknames, bool detail,
 
     if (!client) {
       if (out_error) {
-        const std::string styled = AMConfigManager::Instance().Format(nickname, "nickname");
+        const std::string styled =
+            AMConfigManager::Instance().Format(nickname, "nickname");
         if (AMHostManager::Instance().HostExists(nickname)) {
           *out_error = {EC::ClientNotFound,
                         AMStr::fmt("Client not established: {}", styled)};
@@ -337,16 +410,22 @@ ECM AMFileSystem::check(const std::vector<std::string> &nicknames, bool detail,
     AMPromptManager::Instance().ErrorFormat(err);
   }
 
+  const ClientStatusFormat table_format =
+      BuildClientStatusFormat_(resolved_clients);
   for (const auto &client : resolved_clients) {
     if (flag && !flag->IsRunning()) {
       return {EC::Terminate, "Interrupted by user"};
     }
-    ECM rcm = PrintClientStatus(client, true, flag);
+    ECM rcm = {EC::Success, ""};
+    if (detail) {
+      rcm = client.client->Check(flag, -1, -1);
+      PrintCheckDetail_(AMPromptManager::Instance(), client.nickname,
+                        client.client, rcm);
+    } else {
+      rcm = PrintClientStatus(client, true, flag, &table_format);
+    }
     if (rcm.first != EC::Success) {
       last = rcm;
-    }
-    if (detail) {
-      PrintClientDetail_(AMPromptManager::Instance(), client.nickname, client.client);
     }
   }
   return last;
@@ -360,7 +439,8 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
     return {EC::InvalidArg, msg};
   }
 
-  std::vector<std::string> unique_targets = AMStr::UniqueTargetsKeepOrder(targets);
+  std::vector<std::string> unique_targets =
+      AMStr::UniqueTargetsKeepOrder(targets);
   const std::string current =
       AMClientManager::Instance().CurrentClient()
           ? AMClientManager::Instance().CurrentClient()->GetNickname()
@@ -386,7 +466,8 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
 
   for (const auto &target : unique_targets) {
     const std::string lowered = AMStr::lowercase(target);
-    const std::string styled = AMConfigManager::Instance().Format(target, "nickname");
+    const std::string styled =
+        AMConfigManager::Instance().Format(target, "nickname");
     if (target.empty()) {
       const std::string msg = "Invalid Empty Client Name";
       last = {EC::InvalidArg, msg};
@@ -407,14 +488,14 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
     }
     std::string resolved = find_client_name(target);
     if (resolved.empty()) {
-      const std::string msg =
-          AMStr::fmt("Client not established: {}", styled);
+      const std::string msg = AMStr::fmt("Client not established: {}", styled);
       last = {EC::ClientNotFound, msg};
       AMPromptManager::Instance().ErrorFormat(ECM{EC::ClientNotFound, msg});
       continue;
     }
     valid_targets.push_back(resolved);
-    styled_targets.push_back(AMConfigManager::Instance().Format(resolved, "nickname"));
+    styled_targets.push_back(
+        AMConfigManager::Instance().Format(resolved, "nickname"));
   }
 
   if (styled_targets.empty()) {
@@ -433,9 +514,11 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
   }
   const std::string question =
       AMStr::fmt("Remove clients: {} ? (y/N): ", target_line);
-  if (!AMPromptManager::Instance().PromptYesNo(question, &canceled) || canceled) {
+  if (!AMPromptManager::Instance().PromptYesNo(question, &canceled) ||
+      canceled) {
     const std::string msg = "Remove clients canceled";
-    AMPromptManager::Instance().FmtPrint("🚫  {}\n", AMConfigManager::Instance().Format(msg, "abort"));
+    AMPromptManager::Instance().FmtPrint(
+        "🚫  {}\n", AMConfigManager::Instance().Format(msg, "abort"));
     AMPromptManager::Instance().ErrorFormat(ECM{EC::ConfigCanceled, msg});
     return {EC::Terminate, msg};
   }
@@ -453,8 +536,9 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
 ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   std::vector<std::string> seen;
+  std::vector<ClientRef> resolved_clients;
 
-  auto add_unique = [&, flag, detail](const std::string &name) {
+  auto add_unique = [&](const std::string &name) {
     std::string lowered = AMStr::lowercase(name);
     if (std::find(seen.begin(), seen.end(), lowered) != seen.end()) {
       return;
@@ -475,17 +559,28 @@ ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
       }
     }
     if (client.is_valid()) {
-      PrintClientStatus(client, true, flag);
-      if (detail) {
-        PrintClientDetail_(AMPromptManager::Instance(), client.nickname, client.client);
-      }
+      resolved_clients.push_back(std::move(client));
     }
   };
 
   add_unique("local");
 
-  for (const auto &name : AMClientManager::Instance().Clients().get_nicknames()) {
+  for (const auto &name :
+       AMClientManager::Instance().Clients().get_nicknames()) {
     add_unique(name);
+  }
+
+  const ClientStatusFormat table_format =
+      BuildClientStatusFormat_(resolved_clients);
+  for (const auto &client : resolved_clients) {
+    if (flag && !flag->IsRunning()) {
+      return {EC::Terminate, "Interrupted by user"};
+    }
+    PrintClientStatus(client, true, flag, &table_format);
+    if (detail) {
+      PrintClientDetail_(AMPromptManager::Instance(), client.nickname,
+                         client.client);
+    }
   }
 
   return {EC::Success, ""};
@@ -516,14 +611,14 @@ ECM AMFileSystem::change_client(const std::string &nickname,
   }
   if (!client.is_valid()) {
     bool canceled = false;
-    if (!AMPromptManager::Instance().PromptYesNo("Client not found. Create it? (y/N): ",
-                                     &canceled)) {
+    if (!AMPromptManager::Instance().PromptYesNo(
+            "Client not found. Create it? (y/N): ", &canceled)) {
       const std::string msg = "Operation aborted";
       AMPromptManager::Instance().ErrorFormat(ECM{EC::ConfigCanceled, msg});
       return {EC::Terminate, msg};
     }
-    auto added =
-        AMClientManager::Instance().AddClient(nickname, nullptr, false, false, {}, flag);
+    auto added = AMClientManager::Instance().AddClient(nickname, nullptr, false,
+                                                       false, {}, flag);
     if (added.first.first != EC::Success) {
       AMPromptManager::Instance().ErrorFormat(added.first);
       return added.first;
@@ -541,8 +636,8 @@ ECM AMFileSystem::connect(const std::string &nickname, bool force,
                           amf interrupt_flag, bool switch_client) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (!force) {
-    auto result =
-        AMClientManager::Instance().AddClient(nickname, nullptr, false, false, {}, flag);
+    auto result = AMClientManager::Instance().AddClient(nickname, nullptr,
+                                                        false, false, {}, flag);
     if (result.first.first != EC::Success) {
       return result.first;
     }
@@ -555,8 +650,8 @@ ECM AMFileSystem::connect(const std::string &nickname, bool force,
 
   auto existing = AMClientManager::Instance().Clients().GetHost(nickname);
   if (!existing) {
-    auto result =
-        AMClientManager::Instance().AddClient(nickname, nullptr, false, false, {}, flag);
+    auto result = AMClientManager::Instance().AddClient(nickname, nullptr,
+                                                        false, false, {}, flag);
     if (result.first.first != EC::Success) {
       return result.first;
     }
@@ -567,13 +662,14 @@ ECM AMFileSystem::connect(const std::string &nickname, bool force,
     return {EC::Success, ""};
   }
 
-  auto rebuilt =
-      AMClientManager::Instance().AddClient(nickname, true, false, {}, flag, false);
+  auto rebuilt = AMClientManager::Instance().AddClient(nickname, true, false,
+                                                       {}, flag, false);
   if (rebuilt.first.first != EC::Success || !rebuilt.second) {
     return rebuilt.first;
   }
 
-  AMClientManager::Instance().Clients().add_client(nickname, rebuilt.second, true);
+  AMClientManager::Instance().Clients().add_client(nickname, rebuilt.second,
+                                                   true);
   AMClientManager::Instance().InitClientWorkdir(rebuilt.second);
   if (switch_client && rebuilt.second) {
     return change_client(rebuilt.second->GetNickname(), flag);
@@ -586,9 +682,9 @@ ECM AMFileSystem::sftp(const std::string &nickname, const std::string &hostname,
                        const std::string &password, const std::string &keyfile,
                        amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
-  auto result = AMClientManager::Instance().Connect(nickname, hostname, username,
-                                        ClientProtocol::SFTP, port, password,
-                                        keyfile, nullptr, false, {}, flag);
+  auto result = AMClientManager::Instance().Connect(
+      nickname, hostname, username, ClientProtocol::SFTP, port, password,
+      keyfile, nullptr, false, {}, flag);
   if (result.first.first != EC::Success || !result.second) {
     return result.first;
   }
@@ -615,9 +711,9 @@ ECM AMFileSystem::ftp(const std::string &nickname, const std::string &hostname,
                       const std::string &password, const std::string &keyfile,
                       amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
-  auto result = AMClientManager::Instance().Connect(nickname, hostname, username,
-                                        ClientProtocol::FTP, port, password,
-                                        keyfile, nullptr, false, {}, flag);
+  auto result = AMClientManager::Instance().Connect(
+      nickname, hostname, username, ClientProtocol::FTP, port, password,
+      keyfile, nullptr, false, {}, flag);
   if (result.first.first != EC::Success || !result.second) {
     return result.first;
   }
@@ -649,7 +745,8 @@ ECM AMFileSystem::cd(const std::string &path, amf interrupt_flag,
   bool from_history_flag = from_history;
   if (path == "-") {
     if (cd_history_.empty()) {
-      AMPromptManager::Instance().ErrorFormat(ECM{EC::InvalidArg, "No previous directory"});
+      AMPromptManager::Instance().ErrorFormat(
+          ECM{EC::InvalidArg, "No previous directory"});
       return {EC::InvalidArg, "No previous directory"};
     }
     std::string target = cd_history_.back();
@@ -688,7 +785,8 @@ ECM AMFileSystem::cd(const std::string &path, amf interrupt_flag,
     return {EC::NotADirectory, "Path is not a directory"};
   }
 
-  std::string prev_cwd = AMClientManager::Instance().GetOrInitWorkdir(client.client);
+  std::string prev_cwd =
+      AMClientManager::Instance().GetOrInitWorkdir(client.client);
   if (!from_history_flag && abs_path != prev_cwd) {
     UpdateHistory(client.nickname, prev_cwd);
   }
@@ -953,7 +1051,8 @@ ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
   }
   for (const auto &item : results) {
     AMPromptManager::Instance().FmtPrint(
-        "{}  {}", item.first, AMStr::FormatSize(static_cast<size_t>(item.second)));
+        "{}  {}", item.first,
+        AMStr::FormatSize(static_cast<size_t>(item.second)));
   }
   return last;
 }
@@ -1109,10 +1208,35 @@ ECM AMFileSystem::tree(const std::string &path, int max_depth, bool only_dir,
   }
   const bool printed = AMPathTree::PrintTree(
       abs_path, nodes,
-      [this](const PathInfo &info, const std::string &name) {
+      [this](AMPathTree::TreeStyleRole role, const PathInfo &info,
+             const std::string &name) {
+        std::vector<std::string> style_key = {"Style", "Path"};
+        switch (role) {
+        case AMPathTree::TreeStyleRole::Root:
+          style_key.push_back("root");
+          break;
+        case AMPathTree::TreeStyleRole::NodeDirName:
+          style_key.push_back("node_dir_name");
+          break;
+        case AMPathTree::TreeStyleRole::Filename:
+          style_key.push_back("filename");
+          break;
+        default:
+          break;
+        }
+        const std::string tag = NormalizeTreeStyleTag_(
+            AMConfigManager::Instance().ResolveArg<std::string>(
+                DocumentKind::Settings, style_key, "", {}));
+        if (!tag.empty()) {
+          const std::string display_name = AMStr::BBCEscape(
+              AMPathStr::UnifyPathSep(name, "/"));
+          return ApplyTreeStyleTag_(tag, display_name);
+        }
         return StylePath(info, name);
       },
-      [this](const std::string &line) { AMPromptManager::Instance().Print(line); },
+      [this](const std::string &line) {
+        AMPromptManager::Instance().Print(line);
+      },
       join_pair, [flag]() { return flag && !flag->IsRunning(); });
   if (!printed && flag && !flag->IsRunning()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
@@ -1377,7 +1501,8 @@ ECM AMFileSystem::rm(const std::vector<std::string> &paths, bool permanent,
   for (const auto &target : targets) {
     if (flag && !flag->IsRunning()) {
       if (!quiet) {
-        AMPromptManager::Instance().ErrorFormat(ECM{EC::Terminate, "Interrupted by user"});
+        AMPromptManager::Instance().ErrorFormat(
+            ECM{EC::Terminate, "Interrupted by user"});
       }
       return {EC::Terminate, "Interrupted by user"};
     }
@@ -1483,23 +1608,54 @@ void AMFileSystem::UpdateHistory(const std::string &nickname,
   }
 }
 
+/**
+ * @brief Build aligned status table widths from resolved client rows.
+ */
+AMFileSystem::ClientStatusFormat AMFileSystem::BuildClientStatusFormat_(
+    const std::vector<ClientRef> &clients) const {
+  ClientStatusFormat format;
+  for (const auto &entry : clients) {
+    if (!entry.client) {
+      continue;
+    }
+    const std::string protocol =
+        "[" + std::string(AMStr::ToString(entry.client->GetProtocol())) + "]";
+    const std::string nickname = entry.nickname;
+    const std::string cwd =
+        AMClientManager::Instance().GetOrInitWorkdir(entry.client);
+    format.protocol_width = std::max(format.protocol_width, protocol.size());
+    format.nickname_width = std::max(format.nickname_width, nickname.size());
+    format.cwd_width = std::max(format.cwd_width, cwd.size());
+  }
+  return format;
+}
+
 ECM AMFileSystem::PrintClientStatus(const ClientRef &client, bool update,
-                                    amf interrupt_flag) {
+                                    amf interrupt_flag,
+                                    const ClientStatusFormat *format) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   ECM rcm =
       update ? client.client->Check(flag, -1, -1) : client.client->GetState();
   std::string cwd = AMClientManager::Instance().GetOrInitWorkdir(client.client);
   const std::string proto_label =
       "[" + std::string(AMStr::ToString(client.client->GetProtocol())) + "]";
+  const std::string nickname_label = client.nickname;
+  const std::string padded_proto =
+      format ? PadRight_(proto_label, format->protocol_width) : proto_label;
+  const std::string padded_nickname =
+      format ? PadRight_(nickname_label, format->nickname_width)
+             : nickname_label;
+  const std::string padded_cwd =
+      format ? PadRight_(cwd, format->cwd_width) : cwd;
   const std::string styled_proto =
-      AMConfigManager::Instance().Format(proto_label, "protocol");
+      AMConfigManager::Instance().Format(padded_proto, "protocol");
   const std::string styled_nickname =
-      AMConfigManager::Instance().Format(client.nickname, "nickname");
+      AMConfigManager::Instance().Format(padded_nickname, "nickname");
   PathInfo cwd_info;
   cwd_info.type = PathType::DIR;
   cwd_info.path = cwd;
   cwd_info.name = AMPathStr::basename(cwd);
-  std::string styled_cwd = StylePath(cwd_info, cwd);
+  std::string styled_cwd = StylePath(cwd_info, padded_cwd);
 
   std::ostringstream header;
   header << (rcm.first == EC::Success ? "✅  " : "❌  ") << styled_proto << "  "
@@ -1509,8 +1665,10 @@ ECM AMFileSystem::PrintClientStatus(const ClientRef &client, bool update,
     return rcm;
   }
   std::string ec_name = std::string(magic_enum::enum_name(rcm.first));
-  const std::string styled_ec = AMConfigManager::Instance().Format(ec_name, "error");
-  const std::string styled_msg = AMConfigManager::Instance().Format(rcm.second, "error");
+  const std::string styled_ec =
+      AMConfigManager::Instance().Format(ec_name, "error");
+  const std::string styled_msg =
+      AMConfigManager::Instance().Format(rcm.second, "error");
   std::string line =
       AMStr::fmt("{}  {}  {}", header.str(), styled_ec, styled_msg);
   AMPromptManager::Instance().Print(line);
@@ -1528,7 +1686,7 @@ std::string AMFileSystem::FormatStatOutput(const PathInfo &info) const {
   const size_t width = 12;
   std::ostringstream out;
   const std::string display_path = AMPathStr::UnifyPathSep(info.path, "/");
-  out << display_path << "\n\n";
+  out << display_path << "\n";
 
   out << std::left << std::setw(static_cast<int>(width)) << "type" << " : "
       << AMStr::ToString(info.type) << "\n";
@@ -1537,7 +1695,7 @@ std::string AMFileSystem::FormatStatOutput(const PathInfo &info) const {
   out << std::left << std::setw(static_cast<int>(width)) << "mode" << " : "
       << info.mode_str << "\n";
   out << std::left << std::setw(static_cast<int>(width)) << "size" << " : "
-      << AMStr::FormatSize(info.size) << "\n\n";
+      << AMStr::FormatSize(info.size) << "\n";
 
   out << std::left << std::setw(static_cast<int>(width)) << "create_time"
       << " : " << FormatTimestamp(info.create_time) << "\n";
@@ -1583,4 +1741,3 @@ std::string AMFileSystem::StylePath(const PathInfo &info,
   const std::string display_path = AMPathStr::UnifyPathSep(path, "/");
   return AMConfigManager::Instance().Format(display_path, base_key, &info);
 }
-

@@ -4,6 +4,22 @@
 
 using namespace AMSearcherDetail;
 
+namespace {
+/**
+ * @brief Return command candidate group rank for sorting.
+ */
+int CommandKindRank_(AMCompletionKind kind) {
+  switch (kind) {
+  case AMCompletionKind::Module:
+    return 0;
+  case AMCompletionKind::Command:
+    return 1;
+  default:
+    return 2;
+  }
+}
+} // namespace
+
 /**
  * @brief Collect command-related candidates.
  */
@@ -150,6 +166,14 @@ void AMCommandSearchEngine::SortCandidates(
   (void)ctx;
   std::stable_sort(items.begin(), items.end(),
                    [](const auto &lhs, const auto &rhs) {
+                     const int lhs_rank = CommandKindRank_(lhs.kind);
+                     const int rhs_rank = CommandKindRank_(rhs.kind);
+                     if (lhs_rank != rhs_rank) {
+                       return lhs_rank < rhs_rank;
+                     }
+                     if (lhs_rank <= 1) {
+                       return lhs.insert_text < rhs.insert_text;
+                     }
                      if (lhs.score != rhs.score) {
                        return lhs.score < rhs.score;
                      }

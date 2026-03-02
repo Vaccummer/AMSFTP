@@ -479,6 +479,25 @@ Operator::EnsureClient(const std::string &nickname, amf interrupt_flag) {
   return {Ok(), existing};
 }
 
+void Operator::SetIsInteractiveFlag(
+    const std::shared_ptr<std::atomic<bool>> &is_interactive) {
+  if (!is_interactive) {
+    return;
+  }
+  is_interactive_ = is_interactive;
+}
+
+bool Operator::IsInteractive() const {
+  if (!is_interactive_) {
+    return false;
+  }
+  return is_interactive_->load(std::memory_order_relaxed);
+}
+
+std::shared_ptr<std::atomic<bool>> Operator::GetIsInteractiveFlag() const {
+  return is_interactive_;
+}
+
 AuthCallback Operator::BuildAuthCallback_(const AuthCallback &auth_cb,
                                           bool quiet,
                                           std::atomic<bool> *spinner_running) {
@@ -517,7 +536,7 @@ void Operator::ApplyKnownHostCallback_(
     if (find_rcm.first != EC::Success) {
       bool canceled = false;
       bool accepted = true;
-      if (AMIsInteractive.load(std::memory_order_relaxed)) {
+      if (IsInteractive()) {
         AMPromptManager::Instance().FmtPrint(
             "Unknown host: {}:{}  User: {} Protocol: [!se][{}][/se]",
             query.hostname, query.port, query.username, query.protocol);

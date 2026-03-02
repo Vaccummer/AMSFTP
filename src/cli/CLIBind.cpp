@@ -122,7 +122,7 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
     config_get_node->AddPositionalRule(0, Sem::HostNickname, true);
   }
   if (config_add_node) {
-    config_add_node->AddPositionalRule(0, Sem::HostNickname, false);
+    config_add_node->AddPositionalRule(0, Sem::HostNicknameNew, false);
   }
   if (config_edit_node) {
     config_edit_node->AddPositionalRule(0, Sem::HostNickname, true);
@@ -132,6 +132,7 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
   }
   if (config_rn_node) {
     config_rn_node->AddPositionalRule(0, Sem::HostNickname, false);
+    config_rn_node->AddPositionalRule(1, Sem::HostNicknameNew, false);
   }
   if (config_set_node) {
     config_set_node->AddPositionalRule(0, Sem::HostNickname, false);
@@ -822,7 +823,8 @@ void SetCliExitCode(int code) { g_cli_exit_code = code; }
  * @brief Dispatch CLI commands based on parsed state.
  */
 DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
-                                   const CliManagers &managers, bool async,
+                                   const CliManagers &managers,
+                                   CliRunContext &ctx, bool async,
                                    bool enforce_interactive) {
   DispatchResult result;
   const CliArgsPool &args = *cli_commands.args;
@@ -862,13 +864,12 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     return result;
   }
 
-  CliRunContext run_ctx;
-  run_ctx.async = async;
-  run_ctx.enforce_interactive = enforce_interactive;
-  run_ctx.command_name = command_name;
-  run_ctx.enter_interactive = &result.enter_interactive;
-  run_ctx.request_exit = &result.request_exit;
-  run_ctx.skip_loop_exit_callbacks = &result.skip_loop_exit_callbacks;
+  ctx.async = async;
+  ctx.enforce_interactive = enforce_interactive;
+  ctx.command_name = command_name;
+  ctx.enter_interactive = &result.enter_interactive;
+  ctx.request_exit = &result.request_exit;
+  ctx.skip_loop_exit_callbacks = &result.skip_loop_exit_callbacks;
 
   result.rcm = std::visit(
       [&](const auto &selected) -> ECM {
@@ -876,11 +877,19 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
         if constexpr (std::is_same_v<T, std::monostate>) {
           return {EC::InvalidArg, "No valid command provided"};
         } else {
-          return selected.Run(managers, run_ctx);
+          return selected.Run(managers, ctx);
         }
       },
       args.common_arg);
 
+  ctx.rcm = result.rcm;
   SetCliExitCode(static_cast<int>(result.rcm.first));
+  if (ctx.exit_code) {
+    ctx.exit_code->store(static_cast<int>(result.rcm.first),
+                         std::memory_order_relaxed);
+  }
+  ctx.enter_interactive = nullptr;
+  ctx.request_exit = nullptr;
+  ctx.skip_loop_exit_callbacks = nullptr;
   return result;
 }

@@ -17,5 +17,6 @@ void SetCliExitCode(int code);
  */
 DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
                                    const CliManagers &managers,
+                                   CliRunContext &ctx,
                                    bool async = false,
                                    bool enforce_interactive = false);

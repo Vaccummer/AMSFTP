@@ -141,6 +141,27 @@ AMTokenType ClassifyNicknameTokenType_(const std::string &nickname_raw,
   return AMTokenType::NonexistentNickname;
 }
 
+/** Convert new-host-nickname token to valid/invalid value highlight type. */
+AMTokenType ClassifyNewHostNicknameTokenType_(const std::string &nickname_raw,
+                                              AMHostManager &host_manager) {
+  const std::string nickname = AMStr::Strip(nickname_raw);
+  std::string normalized;
+  std::string error_msg;
+  EC code = EC::InvalidArg;
+  if (!configkn::ValidateHostAttrValue(configkn::HostAttr::Nickname, nickname,
+                                       &normalized, &error_msg, true, true,
+                                       &code)) {
+    return AMTokenType::InvalidValue;
+  }
+  if (AMStr::lowercase(normalized) == "local") {
+    return AMTokenType::InvalidValue;
+  }
+  if (host_manager.HostExists(normalized)) {
+    return AMTokenType::InvalidValue;
+  }
+  return AMTokenType::ValidValue;
+}
+
 /** Convert var-zone token to highlight type. */
 AMTokenType ClassifyVarZoneTokenType_(const std::string &zone_raw,
                                       VarCLISet &var_manager,
@@ -269,6 +290,10 @@ const std::string StyleKeyForType(AMTokenType type) {
     return "nonexistent_nickname";
   case AMTokenType::BuiltinArg:
     return "builtin_arg";
+  case AMTokenType::ValidValue:
+    return "valid_new_nickname";
+  case AMTokenType::InvalidValue:
+    return "invalid_new_nickname";
   case AMTokenType::String:
     return "string";
   case AMTokenType::Option:
@@ -767,6 +792,15 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
 
     const std::string unescaped_text = UnescapeBackticks_(raw_text);
     if (token.type == AMTokenType::Common && semantic_hint.has_value()) {
+      if (*semantic_hint == AMCommandArgSemantic::HostNicknameNew) {
+        token.type = ClassifyNewHostNicknameTokenType_(
+            unescaped_text, AMHostManager::Instance());
+        if (positional_consumed) {
+          ++arg_index;
+        }
+        continue;
+      }
+
       if (*semantic_hint == AMCommandArgSemantic::HostAttr ||
           *semantic_hint == AMCommandArgSemantic::TaskId) {
         token.type = AMTokenType::BuiltinArg;
@@ -986,6 +1020,8 @@ int AMTokenTypeAnalyzer::PriorityForType(AMTokenType type) const {
     return 90;
   case AMTokenType::VarName:
   case AMTokenType::VarNameMissing:
+  case AMTokenType::ValidValue:
+  case AMTokenType::InvalidValue:
   case AMTokenType::DollarSign:
   case AMTokenType::LeftBraceSign:
   case AMTokenType::RightBraceSign:
@@ -1390,6 +1426,8 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     case AMTokenType::UnestablishedNickname:
     case AMTokenType::NonexistentNickname:
     case AMTokenType::BuiltinArg:
+    case AMTokenType::ValidValue:
+    case AMTokenType::InvalidValue:
       apply_range(token.start, token.end, token.type);
       break;
     case AMTokenType::Path:
@@ -1423,7 +1461,7 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
   }
 
   constexpr size_t kTokenTypeCount =
-      static_cast<size_t>(AMTokenType::ColonSign) + 1;
+      static_cast<size_t>(AMTokenType::InvalidValue) + 1;
   std::array<std::string, kTokenTypeCount> style_tags;
   for (size_t i = 0; i < kTokenTypeCount; ++i) {
     style_tags[i] =

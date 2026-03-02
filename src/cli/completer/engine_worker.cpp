@@ -529,6 +529,8 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
     return std::nullopt;
   case AMCommandArgSemantic::HostNickname:
     return AMCompletionTarget::HostNickname;
+  case AMCommandArgSemantic::HostNicknameNew:
+    return AMCompletionTarget::Disabled;
   case AMCommandArgSemantic::HostAttr:
     return AMCompletionTarget::HostAttr;
   case AMCommandArgSemantic::ClientName:
