@@ -65,11 +65,6 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
       "save", "Save config", args, &CliArgsPool::config_save);
   commands.config_save = config_save_node ? config_save_node->app : nullptr;
 
-  CommandNode *config_profile_node = config_node->AddFunction(
-      "profile", "Set prompt profile", args, &CliArgsPool::config_profile_set);
-  commands.config_profile_cmd =
-      config_profile_node ? config_profile_node->app : nullptr;
-  commands.config_profile_set = commands.config_profile_cmd;
 
   if (commands.config_get) {
     commands.config_get
@@ -111,12 +106,6 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
         ->add_option("value", args.config_set.value, "Host property value")
         ->required();
   }
-  if (commands.config_profile_cmd) {
-    commands.config_profile_cmd
-        ->add_option("nickname", args.config_profile_set.nickname,
-                     "Profile nickname")
-        ->expected(0, 1);
-  }
 
   if (config_get_node) {
     config_get_node->AddPositionalRule(0, Sem::HostNickname, true);
@@ -138,8 +127,49 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
     config_set_node->AddPositionalRule(0, Sem::HostNickname, false);
     config_set_node->AddPositionalRule(1, Sem::HostAttr, false);
   }
-  if (config_profile_node) {
-    config_profile_node->AddPositionalRule(0, Sem::HostNickname, false);
+}
+
+/**
+ * @brief Bind profile-related CLI commands.
+ */
+void BindProfileCommands(CommandNode *root, CliArgsPool &args,
+                         CliCommands &commands) {
+  using Sem = AMCommandArgSemantic;
+  if (!root) {
+    return;
+  }
+
+  CommandNode *profile_node = root->AddFunction("profile", "Profile manager");
+  if (!profile_node) {
+    return;
+  }
+  commands.profile_cmd = profile_node->app;
+
+  CommandNode *profile_edit_node = profile_node->AddFunction(
+      "edit", "Edit host profile", args, &CliArgsPool::profile_edit);
+  commands.profile_edit_cmd =
+      profile_edit_node ? profile_edit_node->app : nullptr;
+  if (commands.profile_edit_cmd) {
+    commands.profile_edit_cmd
+        ->add_option("nickname", args.profile_edit.nickname, "Host nickname")
+        ->required()
+        ->expected(1, 1);
+  }
+  if (profile_edit_node) {
+    profile_edit_node->AddPositionalRule(0, Sem::HostNickname, false);
+  }
+
+  CommandNode *profile_get_node = profile_node->AddFunction(
+      "get", "Query host profile", args, &CliArgsPool::profile_get);
+  commands.profile_get_cmd = profile_get_node ? profile_get_node->app : nullptr;
+  if (commands.profile_get_cmd) {
+    commands.profile_get_cmd
+        ->add_option("nicknames", args.profile_get.nicknames, "Host nicknames")
+        ->required()
+        ->expected(1, -1);
+  }
+  if (profile_get_node) {
+    profile_get_node->AddPositionalRule(0, Sem::HostNickname, true);
   }
 }
 
@@ -794,6 +824,7 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
   commands.app = &app;
   commands.args = &args;
   BindConfigCommands(&tree, args, commands);
+  BindProfileCommands(&tree, args, commands);
   BindClientCommands(&tree, args, commands);
   BindVarCommands(&tree, args, commands);
   BindFilesystemCommands(&tree, args, commands);

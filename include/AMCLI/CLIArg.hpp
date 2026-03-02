@@ -241,6 +241,36 @@ struct ConfigProfileSetArgs {
 };
 
 /**
+ * @brief CLI argument container for profile edit.
+ */
+struct ProfileEditArgs {
+  std::string nickname;
+  /**
+   * @brief Execute profile edit for a host nickname.
+   */
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  /**
+   * @brief Reset profile-edit arguments to defaults.
+   */
+  void reset();
+};
+
+/**
+ * @brief CLI argument container for profile get.
+ */
+struct ProfileGetArgs {
+  std::vector<std::string> nicknames;
+  /**
+   * @brief Execute profile get for one or more host nicknames.
+   */
+  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  /**
+   * @brief Reset profile-get arguments to defaults.
+   */
+  void reset();
+};
+
+/**
  * @brief CLI argument container for stat.
  */
 struct StatArgs {
@@ -892,15 +922,15 @@ struct TaskRetryArgs {
 using CommonArg = std::variant<
     std::monostate, ConfigLsArgs, ConfigKeysArgs, ConfigDataArgs, ConfigGetArgs,
     ConfigAddArgs, ConfigEditArgs, ConfigRenameArgs, ConfigRemoveArgs,
-    ConfigSetArgs, ConfigSaveArgs, ConfigProfileSetArgs, StatArgs, LsArgs,
-    SizeArgs, FindArgs, MkdirArgs, RmArgs, WalkArgs, TreeArgs, RealpathArgs,
-    RttArgs, ClearArgs, CpArgs, SftpArgs, FtpArgs, ClientsArgs, CheckArgs,
-    ChangeClientArgs, DisconnectArgs, CdArgs, ConnectArgs, CmdArgs, BashArgs,
-    ExitArgs, VarGetArgs, VarDefArgs, VarDelArgs, VarLsArgs,
-    CompleteCacheClearArgs, TaskListArgs, TaskShowArgs, TaskInspectArgs,
-    TaskThreadArgs, TaskCacheAddArgs, TaskCacheRmArgs, TaskCacheClearArgs,
-    TaskCacheSubmitArgs, TaskUserSetArgs, TaskEntryArgs, TaskControlArgs,
-    TaskRetryArgs>;
+    ConfigSetArgs, ConfigSaveArgs, ConfigProfileSetArgs, ProfileEditArgs,
+    ProfileGetArgs, StatArgs, LsArgs, SizeArgs, FindArgs, MkdirArgs, RmArgs,
+    WalkArgs, TreeArgs, RealpathArgs, RttArgs, ClearArgs, CpArgs, SftpArgs,
+    FtpArgs, ClientsArgs, CheckArgs, ChangeClientArgs, DisconnectArgs, CdArgs,
+    ConnectArgs, CmdArgs, BashArgs, ExitArgs, VarGetArgs, VarDefArgs,
+    VarDelArgs, VarLsArgs, CompleteCacheClearArgs, TaskListArgs, TaskShowArgs,
+    TaskInspectArgs, TaskThreadArgs, TaskCacheAddArgs, TaskCacheRmArgs,
+    TaskCacheClearArgs, TaskCacheSubmitArgs, TaskUserSetArgs, TaskEntryArgs,
+    TaskControlArgs, TaskRetryArgs>;
 
 /**
  * @brief Pool of all CLI argument structs.
@@ -917,6 +947,8 @@ struct CliArgsPool {
   ConfigSetArgs config_set;
   ConfigSaveArgs config_save;
   ConfigProfileSetArgs config_profile_set;
+  ProfileEditArgs profile_edit;
+  ProfileGetArgs profile_get;
   StatArgs stat;
   LsArgs ls;
   SizeArgs size;
@@ -980,6 +1012,9 @@ struct CliCommands {
   CLI::App *config_save = nullptr;
   CLI::App *config_profile_cmd = nullptr;
   CLI::App *config_profile_set = nullptr;
+  CLI::App *profile_cmd = nullptr;
+  CLI::App *profile_edit_cmd = nullptr;
+  CLI::App *profile_get_cmd = nullptr;
   CLI::App *stat_cmd = nullptr;
   CLI::App *ls_cmd = nullptr;
   CLI::App *size_cmd = nullptr;

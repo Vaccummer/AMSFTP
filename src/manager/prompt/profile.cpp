@@ -3,6 +3,7 @@
 #include "AMBase/tools/json.hpp"
 #include "AMBase/tools/time.hpp"
 #include "AMManager/Config.hpp"
+#include "AMManager/Host.hpp"
 #include "AMManager/Prompt.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
@@ -524,11 +525,24 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
 
   {
     std::lock_guard<std::mutex> lock(profile_mtx_);
+    const auto release_runtime_profile = [this](AMPromptProfileArgs &profile) {
+      if (profile.ic_profile) {
+        if (profile.ic_profile == core_prompt_profile_) {
+          core_prompt_profile_ = nullptr;
+        }
+        ic_profile_free(profile.ic_profile);
+        profile.ic_profile = nullptr;
+      }
+      history_seeded_clients_.erase(profile.name);
+    };
+
     auto existing = prompt_profiles_.find(target);
     if (existing != prompt_profiles_.end()) {
-      working.ic_profile = existing->second.ic_profile;
+      release_runtime_profile(existing->second);
     }
+    working.ic_profile = nullptr;
     prompt_profiles_[target] = working;
+    history_seeded_clients_.erase(target);
 
     if (target == kDefaultPromptProfile) {
       default_prompt_profile_args_ = working;
@@ -540,12 +554,12 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
         if (pair.first == kDefaultPromptProfile || !pair.second.from_default) {
           continue;
         }
-        ic_profile_t *profile_ptr = pair.second.ic_profile;
         const std::string profile_name = pair.second.name;
+        release_runtime_profile(pair.second);
         pair.second = working;
         pair.second.name = profile_name;
         pair.second.from_default = true;
-        pair.second.ic_profile = profile_ptr;
+        pair.second.ic_profile = nullptr;
       }
     }
   }
@@ -559,9 +573,78 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
     return dump_rcm;
   }
 
+  if (target != kDefaultPromptProfile) {
+    (void)EnsureCorePromptProfileForClient_(target);
+  }
   if (!active_core_nickname_.empty()) {
     (void)UseCorePromptProfileForClient_(active_core_nickname_);
   }
+  return Ok();
+}
+
+/**
+ * @brief Edit one host prompt profile for CLI usage.
+ */
+ECM AMProfileCLI::Edit(const std::string &nickname) {
+  const std::string target = NormalizeProfileNickname_(nickname);
+  if (target.empty()) {
+    return Err(EC::InvalidArg, "empty profile nickname");
+  }
+  if (target == kDefaultPromptProfile) {
+    return Err(EC::InvalidArg, "profile nickname must be a host nickname");
+  }
+  if (!AMHostManager::Instance().HostExists(target)) {
+    return Err(EC::HostConfigNotFound,
+               AMStr::fmt("host nickname not found: {}", target));
+  }
+  return AMProfileManager::Edit(target);
+}
+
+/**
+ * @brief Query prompt profile JSON for one or more host nicknames.
+ */
+ECM AMProfileCLI::Get(const std::vector<std::string> &nicknames) {
+  if (nicknames.empty()) {
+    return Err(EC::InvalidArg, "profile get requires at least one nickname");
+  }
+
+  std::vector<std::string> targets;
+  targets.reserve(nicknames.size());
+  for (const auto &name : nicknames) {
+    const std::string target = NormalizeProfileNickname_(name);
+    if (target.empty()) {
+      return Err(EC::InvalidArg, "empty profile nickname");
+    }
+    if (target == kDefaultPromptProfile) {
+      return Err(EC::InvalidArg, "profile nickname must be a host nickname");
+    }
+    if (!AMHostManager::Instance().HostExists(target)) {
+      return Err(EC::HostConfigNotFound,
+                 AMStr::fmt("host nickname not found: {}", target));
+    }
+    targets.push_back(target);
+  }
+
+  EnsurePromptProfilesLoaded_();
+  Json out = Json::object();
+  {
+    std::lock_guard<std::mutex> lock(profile_mtx_);
+    for (const auto &target : targets) {
+      auto it = prompt_profiles_.find(target);
+      if (it != prompt_profiles_.end()) {
+        out[target] = it->second.GetJson();
+        continue;
+      }
+      auto star_it = prompt_profiles_.find(kDefaultPromptProfile);
+      if (star_it != prompt_profiles_.end()) {
+        out[target] = star_it->second.GetJson();
+      } else {
+        out[target] = default_prompt_profile_args_.GetJson();
+      }
+    }
+  }
+
+  AMPromptManager::Instance().Print(out.dump(2));
   return Ok();
 }
 
