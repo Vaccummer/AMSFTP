@@ -62,6 +62,12 @@ std::function<void(const TraceInfo &)> AMLogManager::TraceCallbackFunc() {
   return callback;
 }
 
+/** Set a callback to report logging write failures. */
+void AMLogManager::SetErrorReporter(ErrorReporter reporter) {
+  std::lock_guard<std::mutex> lock(reporter_mtx_);
+  error_reporter_ = std::move(reporter);
+}
+
 /** Submit a structured program trace asynchronously. */
 void AMLogManager::ProgramTrace(enum TraceLevel level, EC error_code,
                                 const std::string &target,
@@ -189,37 +195,59 @@ void AMLogManager::WriteLogEntry_(const TraceInfo &info,
     return;
   }
   if (!stream.is_open()) {
+    ReportWriteError_(info, Err(EC::LocalFileError, "Log stream is not open"));
     return;
   }
-  try {
-    const double stamp =
-        info.timestamp > 0 ? info.timestamp : AMTime::seconds();
-    const std::string time_str =
-        FormatTime(static_cast<size_t>(stamp), "%Y/%m/%d %H:%M:%S");
-    std::ostringstream line;
-    line << time_str << " [" << std::string(magic_enum::enum_name(info.source))
-         << "] [" << std::string(magic_enum::enum_name(info.level)) << "]";
-    if (!info.nickname.empty()) {
-      line << " [nick:" << info.nickname << "]";
-    }
-    if (!info.action.empty()) {
-      line << " [action:" << info.action << "]";
-    }
-    if (!info.target.empty()) {
-      line << " [target:" << info.target << "]";
-    }
-    if (info.request.has_value() && !info.request->hostname.empty()) {
-      line << " [host:" << info.request->hostname << "]";
-    }
-    if (!info.message.empty()) {
-      line << " " << info.message;
-    }
-    stream << line.str() << std::endl;
-    stream.flush();
-  } catch (const std::exception &ex) {
-    (void)ex;
-  } catch (...) {
+
+  const double stamp = info.timestamp > 0 ? info.timestamp : AMTime::seconds();
+  const std::string time_str =
+      FormatTime(static_cast<size_t>(stamp), "%Y/%m/%d %H:%M:%S");
+  std::ostringstream line;
+  line << time_str << " [" << std::string(magic_enum::enum_name(info.source))
+       << "] [" << std::string(magic_enum::enum_name(info.level)) << "]";
+  if (!info.nickname.empty()) {
+    line << " [nick:" << info.nickname << "]";
   }
+  if (!info.action.empty()) {
+    line << " [action:" << info.action << "]";
+  }
+  if (!info.target.empty()) {
+    line << " [target:" << info.target << "]";
+  }
+  if (info.request.has_value() && !info.request->hostname.empty()) {
+    line << " [host:" << info.request->hostname << "]";
+  }
+  if (!info.message.empty()) {
+    line << " " << info.message;
+  }
+
+  stream << line.str() << std::endl;
+  stream.flush();
+
+  const bool failed = stream.fail() || stream.bad();
+  if (failed) {
+    ECM rcm = Err(EC::LocalFileError, "Failed to write log entry");
+    if (stream.bad()) {
+      rcm.second = "Failed to write log entry: badbit set";
+    } else if (stream.fail()) {
+      rcm.second = "Failed to write log entry: failbit set";
+    }
+    ReportWriteError_(info, rcm);
+    stream.clear();
+  }
+}
+
+/** Notify error reporter when a logging write failure occurs. */
+void AMLogManager::ReportWriteError_(const TraceInfo &info, const ECM &rcm) {
+  ErrorReporter reporter = {};
+  {
+    std::lock_guard<std::mutex> lock(reporter_mtx_);
+    reporter = error_reporter_;
+  }
+  if (!reporter) {
+    return;
+  }
+  reporter(info, rcm);
 }
 
 /** Clamp the trace level into the valid range [-1, 4]. */

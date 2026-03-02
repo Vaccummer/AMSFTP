@@ -578,9 +578,6 @@ ECM AMConfigStorage::Dump(DocumentKind kind, const std::string &path,
   }
   if (path.empty()) {
     ECM rcm = WriteHandleJson_(doc, kind);
-    if (rcm.first != EC::Success) {
-      NotifyDumpError_(rcm);
-    }
     return rcm;
   }
 
@@ -993,8 +990,11 @@ const DocumentState *AMConfigStorage::GetDoc_(DocumentKind kind) const {
 ECM AMConfigStorage::WriteHandleJson_(DocumentState *doc, DocumentKind kind) {
   const std::string label = std::string(AMStr::ToString(kind));
   if (!doc || !doc->handle) {
-    return Err(EC::ConfigNotInitialized,
-               AMStr::fmt("{} handle not initialized", label));
+    ECM rcm =
+        Err(EC::ConfigNotInitialized,
+            AMStr::fmt("{} handle not initialized", label));
+    NotifyDumpError_(rcm);
+    return rcm;
   }
   nlohmann::ordered_json snapshot;
   {
@@ -1011,8 +1011,11 @@ ECM AMConfigStorage::WriteHandleJson_(DocumentState *doc, DocumentKind kind) {
       if (err) {
         cfgffi_free_string(err);
       }
-      return Err(EC::ConfigDumpFailed, AMStr::fmt("Failed to dump to {}: {}",
-                                                  doc->path.string(), msg));
+      ECM rcm = Err(EC::ConfigDumpFailed,
+                    AMStr::fmt("Failed to dump to {}: {}", doc->path.string(),
+                               msg));
+      NotifyDumpError_(rcm);
+      return rcm;
     }
     if (err) {
       cfgffi_free_string(err);
@@ -1043,21 +1046,32 @@ void AMConfigStorage::WriteSnapshotToPath_(
     ConfigHandle *handle, std::string_view json,
     const std::filesystem::path &out_path) const {
   if (!handle) {
+    NotifyDumpError_(
+        Err(EC::ConfigNotInitialized, "config handle not initialized"));
     return;
   }
   char *err = nullptr;
-  int rc = cfgffi_write(handle, out_path.string().c_str(), json.data(), &err);
+  const int rc = cfgffi_write(handle, out_path.string().c_str(), json.data(),
+                              &err);
+  const std::string err_msg = err ? err : "";
   if (err) {
     cfgffi_free_string(err);
   }
-  (void)rc;
+  if (rc != 0 || !err_msg.empty()) {
+    const std::string msg =
+        err_msg.empty() ? AMStr::fmt("cfgffi_write failed with code {}", rc)
+                        : err_msg;
+    NotifyDumpError_(Err(EC::ConfigDumpFailed,
+                         AMStr::fmt("Failed to write snapshot to {}: {}",
+                                    out_path.string(), msg)));
+  }
 }
 
 /**
  * @brief Worker loop that processes queued write tasks.
  */
 void AMConfigStorage::WriteThreadLoop_() {
-  for (;;) {
+  while (true) {
     std::function<ECM()> task;
     {
       std::unique_lock<std::mutex> lock(write_mtx_);
@@ -1073,10 +1087,7 @@ void AMConfigStorage::WriteThreadLoop_() {
       write_queue_.pop();
     }
     if (task) {
-      try {
-        (void)task();
-      } catch (...) {
-      }
+      task();
     }
   }
 }

@@ -2,10 +2,10 @@
 #include "AMCLI/CLIBind.hpp"
 #include "AMCLI/InteractiveLoop.hpp"
 #include <atomic>
+#include <exception>
 #include <filesystem>
 #include <iostream>
 #include <memory>
-#include <stdexcept>
 
 int main(int argc, char **argv) {
   try {
@@ -58,11 +58,6 @@ int main(int argc, char **argv) {
 
 #ifdef _WIN32
     AMInitWSA();
-    std::atexit([]() {
-      if (is_wsa_initialized.exchange(false)) {
-        WSACleanup();
-      }
-    });
 #endif
 
     auto time_end = std::chrono::steady_clock::now();
@@ -72,7 +67,8 @@ int main(int argc, char **argv) {
                      .count()
               << "ms" << std::endl;
 
-    DispatchResult dispatch = DispatchCliCommands(cli_commands, managers, run_ctx);
+    DispatchResult dispatch =
+        DispatchCliCommands(cli_commands, managers, run_ctx);
     if (dispatch.enter_interactive) {
       managers.prompt_manager.ChangeClient(
           managers.client_manager.CurrentNickname());
@@ -84,7 +80,7 @@ int main(int argc, char **argv) {
     return run_ctx.exit_code
                ? run_ctx.exit_code->load(std::memory_order_relaxed)
                : 0;
-  } catch (const std::runtime_error &e) {
+  } catch (const std::exception &e) {
     std::cerr << "❌Uncatched RuntimeError: " << e.what() << "\n";
     return static_cast<int>(EC::UnknownError);
   }

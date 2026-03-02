@@ -168,7 +168,8 @@ public:
         finished = true;
         break;
       }
-      if (max_time_ms > 0 && AMTime::miliseconds() - start_time >= max_time_ms) {
+      if (max_time_ms > 0 &&
+          AMTime::miliseconds() - start_time >= max_time_ms) {
         if (job_handle) {
           (void)TerminateJobObject(job_handle, 1);
         } else {
@@ -300,7 +301,8 @@ public:
         kill_child(SIGKILL);
         break;
       }
-      if (max_time_ms > 0 && AMTime::miliseconds() - start_time >= max_time_ms) {
+      if (max_time_ms > 0 &&
+          AMTime::miliseconds() - start_time >= max_time_ms) {
         kill_child(SIGKILL);
         break;
       }
@@ -393,7 +395,7 @@ public:
     if (ec) {
       auto rcm =
           ECM{fec(ec), AMStr::fmt("Stat {} failed: {}", pathf, ec.message())};
-      trace(TraceLevel::Debug, rcm.first, pathf, "stat", rcm.second);
+      trace(TraceLevel::Error, rcm.first, pathf, "stat", rcm.second);
       return {rcm, info};
     }
 
@@ -458,15 +460,14 @@ public:
     std::vector<PathInfo> result = {};
     fs::path p(pathf);
     if (!fs::exists(p)) {
-      auto rcm =
-          ECM{EC::PathNotExist, AMStr::fmt("Path not found: {}", pathf)};
-      trace(TraceLevel::Debug, EC::PathNotExist, pathf, "listdir", rcm.second);
+      auto rcm = ECM{EC::PathNotExist, AMStr::fmt("Path not found: {}", pathf)};
+      trace(TraceLevel::Error, EC::PathNotExist, pathf, "listdir", rcm.second);
       return {rcm, result};
     }
     if (!fs::is_directory(p)) {
       auto rcm = ECM{EC::NotADirectory,
                      AMStr::fmt("Path is not a directory: {}", pathf)};
-      trace(TraceLevel::Debug, EC::NotADirectory, pathf, "listdir", rcm.second);
+      trace(TraceLevel::Error, EC::NotADirectory, pathf, "listdir", rcm.second);
       return {rcm, result};
     }
     std::variant<PathInfo, std::pair<std::string, std::exception>> sr;
@@ -700,7 +701,7 @@ public:
       errors.emplace_back(path, error);
       return {error, {result, errors}};
     } else if (info.type != PathType::DIR) {
-      trace(TraceLevel::Debug, EC::NotADirectory, path, "walk",
+      trace(TraceLevel::Error, EC::NotADirectory, path, "walk",
             AMStr::fmt("Path is not a directory: {}", path));
       ECM out = {EC::NotADirectory,
                  AMStr::fmt("Path is not a directory: {}", path)};
@@ -877,7 +878,7 @@ public:
     if (ec) {
       ECM rcm =
           ECM{fec(ec), AMStr::fmt("mkdir {} failed: {}", path, ec.message())};
-      trace(TraceLevel::Debug, rcm.first, path, "mkdir", rcm.second);
+      trace(TraceLevel::Error, rcm.first, path, "mkdir", rcm.second);
       return rcm;
     }
     return ECM{EC::Success, ""};
@@ -893,9 +894,9 @@ public:
     std::error_code ec;
     fs::create_directories(fs::path(path), ec);
     if (ec) {
-      ECM rcm = ECM{fec(ec),
-                    AMStr::fmt("mkdirs {} failed: {}", path, ec.message())};
-      trace(TraceLevel::Debug, rcm.first, path, "mkdir", rcm.second);
+      ECM rcm =
+          ECM{fec(ec), AMStr::fmt("mkdirs {} failed: {}", path, ec.message())};
+      trace(TraceLevel::Error, rcm.first, path, "mkdir", rcm.second);
       return rcm;
     }
     return ECM{EC::Success, ""};
@@ -949,7 +950,7 @@ public:
     }
     if (ec) {
       return ECM{fec(ec), AMStr::fmt("rename {} to {} failed: {}", src, dst,
-                                       ec.message())};
+                                     ec.message())};
     }
     return ECM{EC::Success, ""};
   }
@@ -1022,7 +1023,7 @@ public:
         fs::remove(entry.path, ec);
         if (ec) {
           ECM out = {fec(ec), AMStr::fmt("remove {} failed: {}", entry.path,
-                                           ec.message())};
+                                         ec.message())};
           if (error_callback && *error_callback) {
             (*error_callback)(entry.path, out);
           }
@@ -1181,4 +1182,3 @@ private:
   }
 #endif
 };
-

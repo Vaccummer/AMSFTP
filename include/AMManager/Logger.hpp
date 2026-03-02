@@ -10,6 +10,8 @@
 
 class AMLogManager : private NonCopyableNonMovable {
 public:
+  using ErrorReporter = std::function<void(const TraceInfo &, const ECM &)>;
+
   /** Cleanup log manager resources and close log streams. */
   ~AMLogManager() override { CloseLogStreams_(); }
 
@@ -47,6 +49,9 @@ public:
   /** Return a client-bound trace callback that submits client traces. */
   std::function<void(const TraceInfo &)> TraceCallbackFunc();
 
+  /** Set a callback to report logging write failures. */
+  void SetErrorReporter(ErrorReporter reporter);
+
   /**
    * Get or set trace levels with per-target selectors.
    * Selectors default to false. If both `programm` and `client` are false,
@@ -80,11 +85,16 @@ private:
   /** Convert trace level enum to integer severity. */
   static int ToLevelInt(enum TraceLevel level);
 
+  /** Notify error reporter when a logging write failure occurs. */
+  void ReportWriteError_(const TraceInfo &info, const ECM &rcm);
+
   std::filesystem::path client_log_path_;
   std::filesystem::path program_log_path_;
   std::ofstream client_log_stream_;
   std::ofstream program_log_stream_;
   std::mutex stream_mtx_;
+  std::mutex reporter_mtx_;
+  ErrorReporter error_reporter_ = {};
   std::atomic<int> client_trace_level_{4};
   std::atomic<int> program_trace_level_{4};
 };
