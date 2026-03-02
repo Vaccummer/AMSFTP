@@ -76,9 +76,18 @@ ECM ResolveConfigAddNickname_(const std::string &arg_nickname,
   }
 
   AMPromptManager &prompt = AMPromptManager::Instance();
+  auto checker = [](const std::string &text) -> bool {
+    const std::string candidate = AMStr::Strip(text);
+    if (candidate.empty()) {
+      return true;
+    }
+    std::string normalized;
+    ECM rcm = ValidateConfigAddNickname_(candidate, &normalized);
+    return rcm.first == EC::Success;
+  };
   while (true) {
     std::string input;
-    if (!prompt.Prompt("Nickname: ", "", &input)) {
+    if (!prompt.Prompt("Nickname: ", "", &input, checker)) {
       return Err(EC::ConfigCanceled, "add canceled");
     }
     input = AMStr::Strip(input);
@@ -1154,7 +1163,6 @@ ECM TaskControlArgs::Run(const CliManagers &managers,
 
 void TaskControlArgs::reset() {
   ids.clear();
-  action = Action::Terminate;
 }
 
 ECM TaskRetryArgs::Run(const CliManagers &managers,

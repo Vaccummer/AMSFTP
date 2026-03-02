@@ -16,7 +16,6 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <variant>
 #include <vector>
 
 struct CliRunContext;
@@ -76,9 +75,25 @@ private:
 void ShowTaskInspectInfo();
 
 /**
+ * @brief Base interface for all parsed CLI argument payload structs.
+ */
+struct BaseArgStruct {
+  virtual ~BaseArgStruct() = default;
+  /**
+   * @brief Execute this parsed command payload.
+   */
+  virtual ECM Run(const CliManagers &managers, const CliRunContext &ctx) const =
+      0;
+  /**
+   * @brief Reset this payload to parser defaults.
+   */
+  virtual void reset() = 0;
+};
+
+/**
  * @brief CLI argument container for config ls.
  */
-struct ConfigLsArgs {
+struct ConfigLsArgs : BaseArgStruct {
   bool detail = false;
   /**
    * @brief Execute config ls with optional detail flag.
@@ -93,7 +108,7 @@ struct ConfigLsArgs {
 /**
  * @brief CLI argument container for config keys.
  */
-struct ConfigKeysArgs {
+struct ConfigKeysArgs : BaseArgStruct {
   /**
    * @brief Execute config keys.
    */
@@ -107,7 +122,7 @@ struct ConfigKeysArgs {
 /**
  * @brief CLI argument container for config data.
  */
-struct ConfigDataArgs {
+struct ConfigDataArgs : BaseArgStruct {
   /**
    * @brief Execute config data.
    */
@@ -121,7 +136,7 @@ struct ConfigDataArgs {
 /**
  * @brief CLI argument container for config get.
  */
-struct ConfigGetArgs {
+struct ConfigGetArgs : BaseArgStruct {
   std::vector<std::string> nicknames;
   /**
    * @brief Execute config get with optional nickname list.
@@ -136,7 +151,7 @@ struct ConfigGetArgs {
 /**
  * @brief CLI argument container for config add.
  */
-struct ConfigAddArgs {
+struct ConfigAddArgs : BaseArgStruct {
   std::string nickname;
   /**
    * @brief Execute config add.
@@ -151,7 +166,7 @@ struct ConfigAddArgs {
 /**
  * @brief CLI argument container for config edit.
  */
-struct ConfigEditArgs {
+struct ConfigEditArgs : BaseArgStruct {
   std::string nickname;
   /**
    * @brief Execute config edit for a nickname.
@@ -166,7 +181,7 @@ struct ConfigEditArgs {
 /**
  * @brief CLI argument container for config rename.
  */
-struct ConfigRenameArgs {
+struct ConfigRenameArgs : BaseArgStruct {
   std::string old_name;
   std::string new_name;
   /**
@@ -182,7 +197,7 @@ struct ConfigRenameArgs {
 /**
  * @brief CLI argument container for config remove.
  */
-struct ConfigRemoveArgs {
+struct ConfigRemoveArgs : BaseArgStruct {
   std::vector<std::string> names;
   /**
    * @brief Execute config remove for target names.
@@ -197,7 +212,7 @@ struct ConfigRemoveArgs {
 /**
  * @brief CLI argument container for config set.
  */
-struct ConfigSetArgs {
+struct ConfigSetArgs : BaseArgStruct {
   std::string nickname;
   std::string attrname;
   std::string value;
@@ -214,7 +229,7 @@ struct ConfigSetArgs {
 /**
  * @brief CLI argument container for config save.
  */
-struct ConfigSaveArgs {
+struct ConfigSaveArgs : BaseArgStruct {
   /**
    * @brief Execute config save.
    */
@@ -228,7 +243,7 @@ struct ConfigSaveArgs {
 /**
  * @brief CLI argument container for config profile set.
  */
-struct ConfigProfileSetArgs {
+struct ConfigProfileSetArgs : BaseArgStruct {
   std::string nickname;
   /**
    * @brief Execute config profile set.
@@ -243,7 +258,7 @@ struct ConfigProfileSetArgs {
 /**
  * @brief CLI argument container for profile edit.
  */
-struct ProfileEditArgs {
+struct ProfileEditArgs : BaseArgStruct {
   std::string nickname;
   /**
    * @brief Execute profile edit for a host nickname.
@@ -258,7 +273,7 @@ struct ProfileEditArgs {
 /**
  * @brief CLI argument container for profile get.
  */
-struct ProfileGetArgs {
+struct ProfileGetArgs : BaseArgStruct {
   std::vector<std::string> nicknames;
   /**
    * @brief Execute profile get for one or more host nicknames.
@@ -273,7 +288,7 @@ struct ProfileGetArgs {
 /**
  * @brief CLI argument container for stat.
  */
-struct StatArgs {
+struct StatArgs : BaseArgStruct {
   std::vector<std::string> paths;
   /**
    * @brief Execute stat for target paths.
@@ -288,7 +303,7 @@ struct StatArgs {
 /**
  * @brief CLI argument container for ls.
  */
-struct LsArgs {
+struct LsArgs : BaseArgStruct {
   std::string path;
   bool list_like = false;
   bool show_all = false;
@@ -305,7 +320,7 @@ struct LsArgs {
 /**
  * @brief CLI argument container for size.
  */
-struct SizeArgs {
+struct SizeArgs : BaseArgStruct {
   std::vector<std::string> paths;
   /**
    * @brief Execute size for target paths.
@@ -320,7 +335,7 @@ struct SizeArgs {
 /**
  * @brief CLI argument container for find.
  */
-struct FindArgs {
+struct FindArgs : BaseArgStruct {
   std::string path;
   /**
    * @brief Execute find for a path.
@@ -335,7 +350,7 @@ struct FindArgs {
 /**
  * @brief CLI argument container for mkdir.
  */
-struct MkdirArgs {
+struct MkdirArgs : BaseArgStruct {
   std::vector<std::string> paths;
   /**
    * @brief Execute mkdir for target paths.
@@ -350,7 +365,7 @@ struct MkdirArgs {
 /**
  * @brief CLI argument container for rm.
  */
-struct RmArgs {
+struct RmArgs : BaseArgStruct {
   std::vector<std::string> paths;
   bool permanent = false;
   bool quiet = false;
@@ -367,7 +382,7 @@ struct RmArgs {
 /**
  * @brief CLI argument container for walk.
  */
-struct WalkArgs {
+struct WalkArgs : BaseArgStruct {
   std::string path;
   bool only_file = false;
   bool only_dir = false;
@@ -387,7 +402,7 @@ struct WalkArgs {
 /**
  * @brief CLI argument container for tree.
  */
-struct TreeArgs {
+struct TreeArgs : BaseArgStruct {
   std::string path;
   int depth = -1;
   bool only_dir = false;
@@ -407,7 +422,7 @@ struct TreeArgs {
 /**
  * @brief CLI argument container for realpath.
  */
-struct RealpathArgs {
+struct RealpathArgs : BaseArgStruct {
   std::string path;
   /**
    * @brief Execute realpath for a target path.
@@ -422,7 +437,7 @@ struct RealpathArgs {
 /**
  * @brief CLI argument container for rtt.
  */
-struct RttArgs {
+struct RttArgs : BaseArgStruct {
   int times = 1;
   /**
    * @brief Execute rtt with sample count.
@@ -437,7 +452,7 @@ struct RttArgs {
 /**
  * @brief CLI argument container for clear.
  */
-struct ClearArgs {
+struct ClearArgs : BaseArgStruct {
   bool all = false;
   /**
    * @brief Execute clear screen.
@@ -452,7 +467,7 @@ struct ClearArgs {
 /**
  * @brief CLI argument container for cp (transfer).
  */
-struct CpArgs {
+struct CpArgs : BaseArgStruct {
   std::vector<std::string> srcs;
   std::string output;
   bool overwrite = false;
@@ -474,7 +489,7 @@ struct CpArgs {
 /**
  * @brief CLI argument container for sftp.
  */
-struct SftpArgs {
+struct SftpArgs : BaseArgStruct {
   std::vector<std::string> targets;
   int64_t port = 22;
   std::string keyfile;
@@ -491,7 +506,7 @@ struct SftpArgs {
 /**
  * @brief CLI argument container for ftp.
  */
-struct FtpArgs {
+struct FtpArgs : BaseArgStruct {
   std::vector<std::string> targets;
   int64_t port = 21;
   std::string keyfile;
@@ -508,7 +523,7 @@ struct FtpArgs {
 /**
  * @brief CLI argument container for clients.
  */
-struct ClientsArgs {
+struct ClientsArgs : BaseArgStruct {
   bool detail = false;
   /**
    * @brief Execute clients list.
@@ -523,7 +538,7 @@ struct ClientsArgs {
 /**
  * @brief CLI argument container for check.
  */
-struct CheckArgs {
+struct CheckArgs : BaseArgStruct {
   std::vector<std::string> nicknames;
   bool detail = false;
   /**
@@ -539,7 +554,7 @@ struct CheckArgs {
 /**
  * @brief CLI argument container for ch.
  */
-struct ChangeClientArgs {
+struct ChangeClientArgs : BaseArgStruct {
   std::string nickname;
   /**
    * @brief Execute client change.
@@ -554,7 +569,7 @@ struct ChangeClientArgs {
 /**
  * @brief CLI argument container for disconnect.
  */
-struct DisconnectArgs {
+struct DisconnectArgs : BaseArgStruct {
   std::vector<std::string> nicknames;
   /**
    * @brief Execute client disconnect.
@@ -569,7 +584,7 @@ struct DisconnectArgs {
 /**
  * @brief CLI argument container for cd.
  */
-struct CdArgs {
+struct CdArgs : BaseArgStruct {
   std::string path;
   /**
    * @brief Execute cd.
@@ -584,7 +599,7 @@ struct CdArgs {
 /**
  * @brief CLI argument container for connect.
  */
-struct ConnectArgs {
+struct ConnectArgs : BaseArgStruct {
   std::vector<std::string> nicknames;
   bool force = false;
   /**
@@ -600,7 +615,7 @@ struct ConnectArgs {
 /**
  * @brief CLI argument container for cmd.
  */
-struct CmdArgs {
+struct CmdArgs : BaseArgStruct {
   int timeout_ms = 5000;
   std::string cmd_str;
   /**
@@ -616,7 +631,7 @@ struct CmdArgs {
 /**
  * @brief CLI argument container for bash.
  */
-struct BashArgs {
+struct BashArgs : BaseArgStruct {
   /**
    * @brief Enter interactive mode.
    */
@@ -630,7 +645,7 @@ struct BashArgs {
 /**
  * @brief CLI argument container for exit.
  */
-struct ExitArgs {
+struct ExitArgs : BaseArgStruct {
   bool force = false;
   /**
    * @brief Request interactive-loop exit.
@@ -645,7 +660,7 @@ struct ExitArgs {
 /**
  * @brief CLI argument container for `var get`.
  */
-struct VarGetArgs {
+struct VarGetArgs : BaseArgStruct {
   std::string varname;
   /**
    * @brief Execute `var get`.
@@ -660,7 +675,7 @@ struct VarGetArgs {
 /**
  * @brief CLI argument container for `var def`.
  */
-struct VarDefArgs {
+struct VarDefArgs : BaseArgStruct {
   bool global = false;
   std::string varname;
   std::string value;
@@ -677,7 +692,7 @@ struct VarDefArgs {
 /**
  * @brief CLI argument container for `var del`.
  */
-struct VarDelArgs {
+struct VarDelArgs : BaseArgStruct {
   bool all = false;
   std::vector<std::string> tokens;
   /**
@@ -693,7 +708,7 @@ struct VarDelArgs {
 /**
  * @brief CLI argument container for `var ls`.
  */
-struct VarLsArgs {
+struct VarLsArgs : BaseArgStruct {
   std::vector<std::string> sections;
   /**
    * @brief Execute `var ls`.
@@ -708,7 +723,7 @@ struct VarLsArgs {
 /**
  * @brief CLI argument container for complete cache clear.
  */
-struct CompleteCacheClearArgs {
+struct CompleteCacheClearArgs : BaseArgStruct {
   /**
    * @brief Execute completion cache clear.
    */
@@ -722,7 +737,7 @@ struct CompleteCacheClearArgs {
 /**
  * @brief CLI argument container for task list.
  */
-struct TaskListArgs {
+struct TaskListArgs : BaseArgStruct {
   bool pending = false;
   bool suspend = false;
   bool finished = false;
@@ -740,7 +755,7 @@ struct TaskListArgs {
 /**
  * @brief CLI argument container for task show.
  */
-struct TaskShowArgs {
+struct TaskShowArgs : BaseArgStruct {
   std::vector<std::string> ids;
   /**
    * @brief Execute task show.
@@ -755,7 +770,7 @@ struct TaskShowArgs {
 /**
  * @brief CLI argument container for task inspect.
  */
-struct TaskInspectArgs {
+struct TaskInspectArgs : BaseArgStruct {
   std::string id;
   bool set = false;
   bool entry = false;
@@ -772,7 +787,7 @@ struct TaskInspectArgs {
 /**
  * @brief CLI argument container for task thread.
  */
-struct TaskThreadArgs {
+struct TaskThreadArgs : BaseArgStruct {
   int num = -1;
   /**
    * @brief Execute task thread update/query.
@@ -787,7 +802,7 @@ struct TaskThreadArgs {
 /**
  * @brief CLI argument container for task cache add.
  */
-struct TaskCacheAddArgs {
+struct TaskCacheAddArgs : BaseArgStruct {
   std::vector<std::string> srcs;
   std::string output;
   bool overwrite = false;
@@ -808,7 +823,7 @@ struct TaskCacheAddArgs {
 /**
  * @brief CLI argument container for task cache rm.
  */
-struct TaskCacheRmArgs {
+struct TaskCacheRmArgs : BaseArgStruct {
   std::vector<size_t> indices;
   /**
    * @brief Execute task cache remove.
@@ -823,7 +838,7 @@ struct TaskCacheRmArgs {
 /**
  * @brief CLI argument container for task cache clear.
  */
-struct TaskCacheClearArgs {
+struct TaskCacheClearArgs : BaseArgStruct {
   /**
    * @brief Execute task cache clear.
    */
@@ -837,7 +852,7 @@ struct TaskCacheClearArgs {
 /**
  * @brief CLI argument container for task cache submit.
  */
-struct TaskCacheSubmitArgs {
+struct TaskCacheSubmitArgs : BaseArgStruct {
   bool is_async = false;
   bool quiet = false;
   std::string async_suffix;
@@ -854,7 +869,7 @@ struct TaskCacheSubmitArgs {
 /**
  * @brief CLI argument container for task userset.
  */
-struct TaskUserSetArgs {
+struct TaskUserSetArgs : BaseArgStruct {
   std::vector<size_t> indices;
   /**
    * @brief Execute task userset query.
@@ -869,7 +884,7 @@ struct TaskUserSetArgs {
 /**
  * @brief CLI argument container for task query.
  */
-struct TaskEntryArgs {
+struct TaskEntryArgs : BaseArgStruct {
   std::vector<std::string> ids;
   /**
    * @brief Execute task entry query.
@@ -884,7 +899,7 @@ struct TaskEntryArgs {
 /**
  * @brief CLI argument container for task control.
  */
-struct TaskControlArgs {
+struct TaskControlArgs : BaseArgStruct {
   enum class Action { Terminate, Pause, Resume };
   std::vector<std::string> ids;
   Action action = Action::Terminate;
@@ -901,7 +916,7 @@ struct TaskControlArgs {
 /**
  * @brief CLI argument container for task retry (failed tasks).
  */
-struct TaskRetryArgs {
+struct TaskRetryArgs : BaseArgStruct {
   std::string id;
   bool is_async = false;
   bool quiet = false;
@@ -917,81 +932,86 @@ struct TaskRetryArgs {
 };
 
 /**
- * @brief Variant wrapper for selected parsed CLI argument payload.
- */
-using CommonArg = std::variant<
-    std::monostate, ConfigLsArgs, ConfigKeysArgs, ConfigDataArgs, ConfigGetArgs,
-    ConfigAddArgs, ConfigEditArgs, ConfigRenameArgs, ConfigRemoveArgs,
-    ConfigSetArgs, ConfigSaveArgs, ConfigProfileSetArgs, ProfileEditArgs,
-    ProfileGetArgs, StatArgs, LsArgs, SizeArgs, FindArgs, MkdirArgs, RmArgs,
-    WalkArgs, TreeArgs, RealpathArgs, RttArgs, ClearArgs, CpArgs, SftpArgs,
-    FtpArgs, ClientsArgs, CheckArgs, ChangeClientArgs, DisconnectArgs, CdArgs,
-    ConnectArgs, CmdArgs, BashArgs, ExitArgs, VarGetArgs, VarDefArgs,
-    VarDelArgs, VarLsArgs, CompleteCacheClearArgs, TaskListArgs, TaskShowArgs,
-    TaskInspectArgs, TaskThreadArgs, TaskCacheAddArgs, TaskCacheRmArgs,
-    TaskCacheClearArgs, TaskCacheSubmitArgs, TaskUserSetArgs, TaskEntryArgs,
-    TaskControlArgs, TaskRetryArgs>;
-
-/**
  * @brief Pool of all CLI argument structs.
  */
 struct CliArgsPool {
-  ConfigLsArgs config_ls;
-  ConfigKeysArgs config_keys;
-  ConfigDataArgs config_data;
-  ConfigGetArgs config_get;
-  ConfigAddArgs config_add;
-  ConfigEditArgs config_edit;
-  ConfigRenameArgs config_rn;
-  ConfigRemoveArgs config_rm;
-  ConfigSetArgs config_set;
-  ConfigSaveArgs config_save;
-  ConfigProfileSetArgs config_profile_set;
-  ProfileEditArgs profile_edit;
-  ProfileGetArgs profile_get;
-  StatArgs stat;
-  LsArgs ls;
-  SizeArgs size;
-  FindArgs find;
-  MkdirArgs mkdir;
-  RmArgs rm;
-  WalkArgs walk;
-  TreeArgs tree;
-  RealpathArgs realpath;
-  RttArgs rtt;
-  ClearArgs clear;
-  CpArgs cp;
-  SftpArgs sftp;
-  FtpArgs ftp;
-  ClientsArgs clients;
-  CheckArgs check;
-  ChangeClientArgs ch;
-  DisconnectArgs disconnect;
-  CdArgs cd;
-  ConnectArgs connect;
-  CmdArgs cmd;
-  BashArgs bash;
-  ExitArgs exit;
-  VarGetArgs var_get;
-  VarDefArgs var_def;
-  VarDelArgs var_del;
-  VarLsArgs var_ls;
-  CompleteCacheClearArgs complete_cache_clear;
-  TaskListArgs task_list;
-  TaskShowArgs task_show;
-  TaskInspectArgs task_inspect;
-  TaskThreadArgs task_thread;
-  TaskCacheAddArgs task_cache_add;
-  TaskCacheRmArgs task_cache_rm;
-  TaskCacheClearArgs task_cache_clear;
-  TaskCacheSubmitArgs task_cache_submit;
-  TaskUserSetArgs task_userset;
-  TaskEntryArgs task_entry;
-  TaskControlArgs task_terminate;
-  TaskControlArgs task_pause;
-  TaskControlArgs task_resume;
-  TaskRetryArgs task_retry;
-  CommonArg common_arg = std::monostate{};
+  std::shared_ptr<ConfigLsArgs> config_ls = std::make_shared<ConfigLsArgs>();
+  std::shared_ptr<ConfigKeysArgs> config_keys =
+      std::make_shared<ConfigKeysArgs>();
+  std::shared_ptr<ConfigDataArgs> config_data =
+      std::make_shared<ConfigDataArgs>();
+  std::shared_ptr<ConfigGetArgs> config_get = std::make_shared<ConfigGetArgs>();
+  std::shared_ptr<ConfigAddArgs> config_add = std::make_shared<ConfigAddArgs>();
+  std::shared_ptr<ConfigEditArgs> config_edit =
+      std::make_shared<ConfigEditArgs>();
+  std::shared_ptr<ConfigRenameArgs> config_rn =
+      std::make_shared<ConfigRenameArgs>();
+  std::shared_ptr<ConfigRemoveArgs> config_rm =
+      std::make_shared<ConfigRemoveArgs>();
+  std::shared_ptr<ConfigSetArgs> config_set = std::make_shared<ConfigSetArgs>();
+  std::shared_ptr<ConfigSaveArgs> config_save =
+      std::make_shared<ConfigSaveArgs>();
+  std::shared_ptr<ConfigProfileSetArgs> config_profile_set =
+      std::make_shared<ConfigProfileSetArgs>();
+  std::shared_ptr<ProfileEditArgs> profile_edit =
+      std::make_shared<ProfileEditArgs>();
+  std::shared_ptr<ProfileGetArgs> profile_get =
+      std::make_shared<ProfileGetArgs>();
+  std::shared_ptr<StatArgs> stat = std::make_shared<StatArgs>();
+  std::shared_ptr<LsArgs> ls = std::make_shared<LsArgs>();
+  std::shared_ptr<SizeArgs> size = std::make_shared<SizeArgs>();
+  std::shared_ptr<FindArgs> find = std::make_shared<FindArgs>();
+  std::shared_ptr<MkdirArgs> mkdir = std::make_shared<MkdirArgs>();
+  std::shared_ptr<RmArgs> rm = std::make_shared<RmArgs>();
+  std::shared_ptr<WalkArgs> walk = std::make_shared<WalkArgs>();
+  std::shared_ptr<TreeArgs> tree = std::make_shared<TreeArgs>();
+  std::shared_ptr<RealpathArgs> realpath = std::make_shared<RealpathArgs>();
+  std::shared_ptr<RttArgs> rtt = std::make_shared<RttArgs>();
+  std::shared_ptr<ClearArgs> clear = std::make_shared<ClearArgs>();
+  std::shared_ptr<CpArgs> cp = std::make_shared<CpArgs>();
+  std::shared_ptr<SftpArgs> sftp = std::make_shared<SftpArgs>();
+  std::shared_ptr<FtpArgs> ftp = std::make_shared<FtpArgs>();
+  std::shared_ptr<ClientsArgs> clients = std::make_shared<ClientsArgs>();
+  std::shared_ptr<CheckArgs> check = std::make_shared<CheckArgs>();
+  std::shared_ptr<ChangeClientArgs> ch = std::make_shared<ChangeClientArgs>();
+  std::shared_ptr<DisconnectArgs> disconnect =
+      std::make_shared<DisconnectArgs>();
+  std::shared_ptr<CdArgs> cd = std::make_shared<CdArgs>();
+  std::shared_ptr<ConnectArgs> connect = std::make_shared<ConnectArgs>();
+  std::shared_ptr<CmdArgs> cmd = std::make_shared<CmdArgs>();
+  std::shared_ptr<BashArgs> bash = std::make_shared<BashArgs>();
+  std::shared_ptr<ExitArgs> exit = std::make_shared<ExitArgs>();
+  std::shared_ptr<VarGetArgs> var_get = std::make_shared<VarGetArgs>();
+  std::shared_ptr<VarDefArgs> var_def = std::make_shared<VarDefArgs>();
+  std::shared_ptr<VarDelArgs> var_del = std::make_shared<VarDelArgs>();
+  std::shared_ptr<VarLsArgs> var_ls = std::make_shared<VarLsArgs>();
+  std::shared_ptr<CompleteCacheClearArgs> complete_cache_clear =
+      std::make_shared<CompleteCacheClearArgs>();
+  std::shared_ptr<TaskListArgs> task_list = std::make_shared<TaskListArgs>();
+  std::shared_ptr<TaskShowArgs> task_show = std::make_shared<TaskShowArgs>();
+  std::shared_ptr<TaskInspectArgs> task_inspect =
+      std::make_shared<TaskInspectArgs>();
+  std::shared_ptr<TaskThreadArgs> task_thread =
+      std::make_shared<TaskThreadArgs>();
+  std::shared_ptr<TaskCacheAddArgs> task_cache_add =
+      std::make_shared<TaskCacheAddArgs>();
+  std::shared_ptr<TaskCacheRmArgs> task_cache_rm =
+      std::make_shared<TaskCacheRmArgs>();
+  std::shared_ptr<TaskCacheClearArgs> task_cache_clear =
+      std::make_shared<TaskCacheClearArgs>();
+  std::shared_ptr<TaskCacheSubmitArgs> task_cache_submit =
+      std::make_shared<TaskCacheSubmitArgs>();
+  std::shared_ptr<TaskUserSetArgs> task_userset =
+      std::make_shared<TaskUserSetArgs>();
+  std::shared_ptr<TaskEntryArgs> task_entry = std::make_shared<TaskEntryArgs>();
+  std::shared_ptr<TaskControlArgs> task_terminate =
+      std::make_shared<TaskControlArgs>();
+  std::shared_ptr<TaskControlArgs> task_pause =
+      std::make_shared<TaskControlArgs>();
+  std::shared_ptr<TaskControlArgs> task_resume =
+      std::make_shared<TaskControlArgs>();
+  std::shared_ptr<TaskRetryArgs> task_retry = std::make_shared<TaskRetryArgs>();
+  BaseArgStruct *active = nullptr;
 };
 
 /**
@@ -1065,7 +1085,7 @@ struct CliCommands {
   CLI::App *task_resume_cmd = nullptr;
   CLI::App *task_retry_cmd = nullptr;
   CLI::App *resume_cmd = nullptr;
-  const CliArgsPool *args = nullptr;
+  CliArgsPool *args = nullptr;
 };
 
 /**
@@ -1082,3 +1102,4 @@ struct DispatchResult {
   bool request_exit = false;
   bool skip_loop_exit_callbacks = false;
 };
+

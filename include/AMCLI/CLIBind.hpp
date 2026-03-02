@@ -1,6 +1,5 @@
 #pragma once
 #include "AMCLI/CLIArg.hpp"
-#include "AMCLI/CommandTree.hpp"
 
 /**
  * @brief Bind all CLI options into the argument pool.
@@ -17,6 +16,5 @@ void SetCliExitCode(int code);
  */
 DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
                                    const CliManagers &managers,
-                                   CliRunContext &ctx,
-                                   bool async = false,
+                                   CliRunContext &ctx, bool async = false,
                                    bool enforce_interactive = false);

@@ -528,7 +528,7 @@ void PrintTaskProgress_(
   static const int refresh_ms = GetRefreshIntervalMs_();
 
   bool finished = false;
-  PrintLock();
+  auto lock = AMPrintLockGuard::Lock();
   while (true) {
     if (interrupt_flag && !interrupt_flag->IsRunning()) {
       break;
@@ -607,7 +607,7 @@ void PrintTaskProgressGroup_(
   }
 
   static const int refresh_ms = GetRefreshIntervalMs_();
-  PrintLock();
+  auto lock = AMPrintLockGuard::Lock();
   while (true) {
     if (IsInterrupted_(interrupt_flag)) {
       break;

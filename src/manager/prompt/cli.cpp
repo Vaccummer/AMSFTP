@@ -571,8 +571,8 @@ bool AMPromptManager::Prompt(
     highlighter_arg = &query_ctx;
   }
 
-  auto lock = PrintLock();
-  auto hooklock = HookLock();
+  auto lock = AMPrintLockGuard::Lock();
+  auto hooklock = AMPromptHookGuard::Lock();
   ScopedPromptProcessedInputGuard_ processed_input_guard;
   (void)processed_input_guard;
   const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
@@ -650,8 +650,8 @@ bool AMPromptManager::LiteralPrompt(
     highlighter_arg = &query_ctx;
   }
 
-  auto lock = PrintLock();
-  auto hooklock = HookLock();
+  auto lock = AMPrintLockGuard::Lock();
+  auto hooklock = AMPromptHookGuard::Lock();
   const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
   char *line =
       ic_readline_ex_with_initial(prompt.c_str(), completer, completer_arg,
@@ -680,8 +680,8 @@ bool AMPromptManager::PromptCore(const std::string &prompt,
   const std::string target =
       active_core_nickname_.empty() ? "local" : active_core_nickname_;
   (void)UseCorePromptProfileForClient_(target);
-  auto lock = PrintLock();
-  auto hooklock = HookLock();
+  auto lock = AMPrintLockGuard::Lock();
+  auto hooklock = AMPromptHookGuard::Lock();
   char *line =
       ic_readline_ex(prompt.c_str(), nullptr, nullptr,
                      &AMTokenTypeAnalyzer::PromptHighlighter_, nullptr);
@@ -703,8 +703,8 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
     return true;
   }
   out_input->clear();
-  auto lock = PrintLock();
-  auto hooklock = HookLock();
+  auto lock = AMPrintLockGuard::Lock();
+  auto hooklock = AMPromptHookGuard::Lock();
   std::string password;
   std::cout << prompt << std::flush;
 #ifdef _WIN32
