@@ -487,25 +487,60 @@ public:
 };
 
 struct ClientMetaData {
-  std::string cmd_prefix = "";
-  bool wrap_cmd = false;
   std::string login_dir = "";
   std::string cwd = "";
+  std::string cmd_prefix = "";
+  bool wrap_cmd = false;
+
+  /**
+   * @brief Return ordered metadata fields as key-value pairs.
+   *
+   * The returned order follows member declaration order in this struct.
+   */
+  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
+  GetStrDict() const {
+    return {
+        {"login_dir", login_dir},
+        {"cwd", cwd},
+        {"cmd_prefix", cmd_prefix},
+        {"wrap_cmd", wrap_cmd ? "true" : "false"},
+    };
+  }
 };
 
 struct ConRequest {
   std::string nickname = "";
-  std::string hostname = "";
-  std::string trash_dir = "";
-  int64_t buffer_size = 0;
   ClientProtocol protocol = ClientProtocol::SFTP;
-  int port = 22;
+  std::string hostname = "";
   std::string username = "";
+  int port = 22;
   std::string password = "";
   std::string keyfile = "";
+  int64_t buffer_size = 0;
   bool compression = false;
-
+  std::string trash_dir = "";
   ConRequest() = default;
+
+  /**
+   * @brief Return ordered request fields as key-value pairs.
+   *
+   * The returned order follows member declaration order in this struct.
+   */
+  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
+  GetStrDict() const {
+    return {
+        {"nickname", nickname},
+        {"protocol", std::string(magic_enum::enum_name(protocol))},
+        {"hostname", hostname},
+        {"username", username},
+        {"port", std::to_string(port)},
+        {"password", password},
+        {"keyfile", keyfile},
+        {"buffer_size", std::to_string(buffer_size)},
+        {"compression", compression ? "true" : "false"},
+        {"trash_dir", trash_dir},
+    };
+  }
 
   /**
    * @brief Canonical constructor for client connection/config request.

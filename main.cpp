@@ -4,6 +4,7 @@
 #include <atomic>
 #include <filesystem>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 
 int main(int argc, char **argv) {
@@ -38,7 +39,22 @@ int main(int argc, char **argv) {
     if (!isok(init_rcm)) {
       return static_cast<int>(init_rcm.first);
     }
-    AMIsInteractive.store(false, std::memory_order_relaxed);
+    auto &run_ctx = CliRunContext::Instance();
+    run_ctx.rcm = {EC::Success, ""};
+    run_ctx.async = false;
+    run_ctx.enforce_interactive = false;
+    run_ctx.command_name.clear();
+    run_ctx.enter_interactive = nullptr;
+    run_ctx.request_exit = nullptr;
+    run_ctx.skip_loop_exit_callbacks = nullptr;
+    if (!run_ctx.exit_code) {
+      run_ctx.exit_code = std::make_shared<std::atomic<int>>(0);
+    }
+    run_ctx.exit_code->store(0, std::memory_order_relaxed);
+    run_ctx.is_interactive = managers.client_manager.GetIsInteractiveFlag();
+    if (run_ctx.is_interactive) {
+      run_ctx.is_interactive->store(false, std::memory_order_relaxed);
+    }
 
 #ifdef _WIN32
     AMInitWSA();
@@ -56,11 +72,11 @@ int main(int argc, char **argv) {
                      .count()
               << "ms" << std::endl;
 
-    DispatchResult dispatch = DispatchCliCommands(cli_commands, managers);
+    DispatchResult dispatch = DispatchCliCommands(cli_commands, managers, run_ctx);
     if (dispatch.enter_interactive) {
       managers.prompt_manager.ChangeClient(
           managers.client_manager.CurrentNickname());
-      RunInteractiveLoop(app_name, managers);
+      RunInteractiveLoop(app_name, managers, run_ctx);
     }
     if (dispatch.rcm.first != EC::Success) {
       return static_cast<int>(dispatch.rcm.first);

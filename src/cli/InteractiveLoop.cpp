@@ -1495,8 +1495,10 @@ void AMInteractiveEventRegistry::RunOnInteractiveLoopExit() {
  * @brief Run the core interactive loop until the user exits.
  */
 int RunInteractiveLoop(const std::string &app_name,
-                       const CliManagers &managers) {
-  AMIsInteractive.store(true, std::memory_order_relaxed);
+                       const CliManagers &managers, CliRunContext &ctx) {
+  if (ctx.is_interactive) {
+    ctx.is_interactive->store(true, std::memory_order_relaxed);
+  }
   bool skip_loop_exit_callbacks = false;
 
   AMPromptManager &prompt = AMPromptManager::Instance();
@@ -1652,7 +1654,7 @@ int RunInteractiveLoop(const std::string &app_name,
     }
 
     DispatchResult dispatch =
-        DispatchCliCommands(cli_commands, managers, false, true);
+        DispatchCliCommands(cli_commands, managers, ctx, false, true);
     const auto exec_end = std::chrono::steady_clock::now();
     if (TaskControlToken::Instance()) {
       TaskControlToken::Instance()->Reset();
@@ -1668,7 +1670,9 @@ int RunInteractiveLoop(const std::string &app_name,
   if (!skip_loop_exit_callbacks) {
     AMInteractiveEventRegistry::Instance().RunOnInteractiveLoopExit();
   }
-  AMIsInteractive.store(false, std::memory_order_relaxed);
+  if (ctx.is_interactive) {
+    ctx.is_interactive->store(false, std::memory_order_relaxed);
+  }
   return g_cli_exit_code;
 }
 

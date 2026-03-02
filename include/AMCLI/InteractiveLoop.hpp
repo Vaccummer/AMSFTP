@@ -14,7 +14,7 @@
  * @return Exit code to use when terminating the program.
  */
 int RunInteractiveLoop(const std::string &app_name,
-                       const CliManagers &managers);
+                       const CliManagers &managers, CliRunContext &ctx);
 
 /**
  * @brief Registry for interactive-loop lifecycle clear callbacks.

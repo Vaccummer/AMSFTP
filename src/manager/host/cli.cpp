@@ -6,6 +6,7 @@
 #include "AMBase/Enum.hpp"
 #include "AMBase/Path.hpp"
 #include "AMManager/Config.hpp"
+#include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Prompt.hpp"
 #include <sstream>
@@ -39,12 +40,15 @@ cls::PrivateKeys(bool print_sign) const {
   if (!print_sign) {
     return {rcm, keys};
   }
-  static const std::string key_sign =
-      AMStr::BBCEscape(AMStr::fmt("[{}]", configkn::keys));
-  auto info = PathInfo();
-  for (auto &key : keys) {
-    info = AMFS::stat(key).second;
-    AMPromptManager::Instance().Print(AMConfigManager::Instance().Format(key, "", &info));
+
+  AMPromptManager::Instance().Print("[SSH Private Keys]");
+  for (size_t i = 0; i < keys.size(); ++i) {
+    const std::string abs_path = AMFS::abspath(keys[i], true, AMFS::HomePath());
+    auto [stat_rcm, info] = AMFS::stat(abs_path, false);
+    const PathInfo *info_ptr = (stat_rcm.first == EC::Success) ? &info : nullptr;
+    const std::string styled_path =
+        AMConfigManager::Instance().Format(abs_path, "", info_ptr);
+    AMPromptManager::Instance().Print(AMStr::fmt("[{}]  {}", i, styled_path));
   }
   return {rcm, keys};
 }
@@ -64,7 +68,12 @@ ECM cls::List(bool detailed) const {
     std::ostringstream line;
     for (auto it = host_configs.begin(); it != host_configs.end(); ++it) {
       const std::string &nickname = it->first;
-      const std::string styled = AMConfigManager::Instance().Format(nickname, "nickname");
+      const bool created =
+          static_cast<bool>(AMClientManager::Instance().GetClient(nickname));
+      const std::string style_key =
+          created ? "nickname" : "unestablished_nickname";
+      const std::string styled =
+          AMConfigManager::Instance().Format(nickname, style_key);
       const size_t display_len = nickname.size();
       const size_t separator_len = current_width == 0 ? 0 : 3;
       if (current_width + separator_len + display_len > max_width &&

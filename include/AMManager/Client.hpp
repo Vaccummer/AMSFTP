@@ -19,8 +19,6 @@
 #include <unistd.h>
 #endif
 
-inline std::atomic<bool> AMIsInteractive = false;
-
 namespace AMClientManage {
 class Operator {
 public:
@@ -82,10 +80,19 @@ public:
   std::pair<ECM, std::shared_ptr<BaseClient>>
   EnsureClient(const std::string &nickname, amf interrupt_flag = nullptr);
 
+  void SetIsInteractiveFlag(
+      const std::shared_ptr<std::atomic<bool>> &is_interactive);
+
+  bool IsInteractive() const;
+
+  std::shared_ptr<std::atomic<bool>> GetIsInteractiveFlag() const;
+
 protected:
   std::shared_ptr<BaseClient> current_client_;
   std::shared_ptr<BaseClient> local_client_base_;
   std::shared_ptr<ClientMaintainer> clients_;
+  std::shared_ptr<std::atomic<bool>> is_interactive_ =
+      std::make_shared<std::atomic<bool>>(false);
   AuthCallback password_cb_ = {};
   DisconnectCallback disconnect_cb_ = {};
   mutable std::mutex auth_io_mtx_;

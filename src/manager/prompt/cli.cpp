@@ -166,6 +166,22 @@ std::string NormalizePromptStyleForIc_(const std::string &raw) {
 }
 
 /**
+ * @brief Apply abort style to isocline warning channel for query prompts.
+ *
+ * The warning style is used by isocline diagnostics (including Ctrl+C abort
+ * notices in query-mode input paths).
+ */
+void ApplyQueryAbortWarningStyle_() {
+  std::string abort_style = AMConfigManager::Instance().ResolveArg<std::string>(
+      DocumentKind::Settings, {"Style", "InputHighlight", "abort"}, "", {});
+  abort_style = NormalizePromptStyleForIc_(abort_style);
+  if (abort_style.empty()) {
+    return;
+  }
+  ic_style_def("warning", abort_style.c_str());
+}
+
+/**
  * @brief Escape bbcode-sensitive characters for formatted highlight output.
  */
 std::string EscapeBbcodeText_(const std::string &text) {
@@ -288,8 +304,6 @@ void ApplyCoreProfileSettings_(const AMPromptProfileArgs &profile) {
   ic_enable_multiline(profile.prompt.enable_multiline);
   ic_enable_history_duplicates(profile.history.enable_duplicates);
 
-  int max_history = std::min(std::max(1, profile.history.max_count), 200);
-  ic_set_history(nullptr, max_history);
   ic_enable_hint(profile.inline_hint.enable);
   ic_set_hint_delay(std::max(0, profile.inline_hint.delay_ms));
   ic_set_hint_search_delay(std::max(0, profile.inline_hint.search_delay_ms));
@@ -469,6 +483,7 @@ bool AMPromptManager::Prompt(
   if (!query_prompt_style.empty()) {
     ic_style_def(ickey.c_str(), query_prompt_style.c_str());
   }
+  ApplyQueryAbortWarningStyle_();
 
   PromptValueQueryContext query_ctx;
   query_ctx.checker = checker ? &checker : nullptr;
@@ -540,6 +555,7 @@ bool AMPromptManager::LiteralPrompt(
   if (!query_prompt_style.empty()) {
     ic_style_def(ickey.c_str(), query_prompt_style.c_str());
   }
+  ApplyQueryAbortWarningStyle_();
 
   std::function<bool(const std::string &)> literal_checker;
   if (!literals.empty()) {

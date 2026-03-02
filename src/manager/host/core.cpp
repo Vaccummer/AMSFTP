@@ -1,6 +1,7 @@
 #include "AMBase/Path.hpp"
 #include "AMBase/tools/auth.hpp"
 #include "AMBase/tools/json.hpp"
+#include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Prompt.hpp"
@@ -986,20 +987,35 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
 
 ECM AMHostManager::PrintHost_(const std::string &nickname,
                               const HostConfig &entry) const {
-  AMPromptManager::Instance().Print("[!pre][" + nickname + "][/pre]");
+  const bool created =
+      static_cast<bool>(AMClientManager::Instance().GetClient(nickname));
+  const std::string style_key =
+      created ? "nickname" : "unestablished_nickname";
+  const std::string styled_nickname =
+      AMConfigManager::Instance().Format(nickname, style_key);
+  AMPromptManager::Instance().Print("[" + styled_nickname + "]");
+  const auto dict_f = entry.GetStrDict();
   size_t width = 0;
-  for (const auto &field : configkn::fileds)
-    width = std::max(width, field.size());
-
-  auto dict_f = entry.GetStrDict();
-
-  for (const auto &field : configkn::fileds) {
-    auto it = dict_f.find(field);
-    if (it == dict_f.end())
+  for (const auto &field : dict_f) {
+    if (field.first == "nickname") {
       continue;
+    }
+    width = std::max(width, field.first.size());
+  }
+
+  for (const auto &field : dict_f) {
+    if (field.first == "nickname") {
+      continue;
+    }
+    std::string render_value = field.second;
+    if (field.first == "cmd_prefix") {
+      render_value = "\"" + render_value + "\"";
+    } else if (render_value.empty()) {
+      render_value = "\"\"";
+    }
     std::ostringstream line;
-    line << std::left << std::setw(static_cast<int>(width)) << field << " :   "
-         << (it->second.empty() ? "\"\"" : it->second);
+    line << std::left << std::setw(static_cast<int>(width)) << field.first
+         << " :   " << render_value;
     AMPromptManager::Instance().Print(line.str());
   }
   return Ok();

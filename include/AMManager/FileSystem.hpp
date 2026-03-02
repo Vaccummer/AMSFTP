@@ -147,6 +147,13 @@ private:
     [[nodiscard]] bool is_valid() const { return static_cast<bool>(client); }
   };
 
+  /** Client status table widths for aligned protocol/nickname/cwd output. */
+  struct ClientStatusFormat {
+    size_t protocol_width = 0;
+    size_t nickname_width = 0;
+    size_t cwd_width = 0;
+  };
+
   /** Split a whitespace separated target list. */
   [[nodiscard]] std::vector<std::string>
   SplitTargets(const std::string &input) const;
@@ -155,9 +162,13 @@ private:
                                       const std::string &path) const;
   /** Update cd history. */
   void UpdateHistory(const std::string &nickname, const std::string &path);
+  /** Build aligned status table widths from resolved client rows. */
+  [[nodiscard]] ClientStatusFormat
+  BuildClientStatusFormat_(const std::vector<ClientRef> &clients) const;
   /** Print a client status line. */
   ECM PrintClientStatus(const ClientRef &client, bool update = true,
-                        amf interrupt_flag = nullptr);
+                        amf interrupt_flag = nullptr,
+                        const ClientStatusFormat *format = nullptr);
   /** Format unix timestamp to printable time. */
   [[nodiscard]] std::string FormatTimestamp(double value) const;
   /** Format stat output block. */

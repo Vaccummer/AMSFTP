@@ -18,6 +18,7 @@ enum class AMCommandArgSemantic {
   Path,
   ShellCmd,
   HostNickname,
+  HostNicknameNew,
   HostAttr,
   ClientName,
   TaskId,

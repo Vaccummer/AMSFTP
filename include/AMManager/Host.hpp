@@ -171,22 +171,12 @@ struct HostConfig {
   ConRequest request = {};
   ClientMetaData metadata = {};
 
-  [[nodiscard]] std::unordered_map<std::string, std::string>
+  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
   GetStrDict() const {
-    return {
-        {"hostname", request.hostname},
-        {"username", request.username},
-        {"port", AMStr::ToString(request.port)},
-        {"password", request.password},
-        {"protocol", AMStr::ToString(request.protocol)},
-        {"buffer_size", AMStr::ToString(request.buffer_size)},
-        {"trash_dir", request.trash_dir},
-        {"login_dir", metadata.login_dir},
-        {"keyfile", request.keyfile},
-        {"compression", request.compression ? "true" : "false"},
-        {"cmd_prefix", metadata.cmd_prefix},
-        {"wrap_cmd", metadata.wrap_cmd ? "true" : "false"},
-    };
+    auto pairs = request.GetStrDict();
+    auto metadata_pairs = metadata.GetStrDict();
+    pairs.insert(pairs.end(), metadata_pairs.begin(), metadata_pairs.end());
+    return pairs;
   }
 
   [[nodiscard]] Json GetJson() const {
@@ -195,7 +185,8 @@ struct HostConfig {
     json[configkn::username] = request.username;
     json[configkn::port] = request.port;
     json[configkn::password] = request.password;
-    json[configkn::protocol] = AMStr::lowercase(AMStr::ToString(request.protocol));
+    json[configkn::protocol] =
+        AMStr::lowercase(AMStr::ToString(request.protocol));
     json[configkn::buffer_size] = request.buffer_size;
     json[configkn::trash_dir] = request.trash_dir;
     json[configkn::login_dir] = metadata.login_dir;
@@ -345,4 +336,3 @@ private:
   ECM AddHost_(const std::string &nickname, const HostConfig &entry);
   ECM RemoveHost_(const std::string &nickname);
 };
-

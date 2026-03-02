@@ -289,8 +289,6 @@ void ApplyCoreProfileSettings_(const AMPromptProfileArgs &profile) {
   ic_enable_multiline(profile.prompt.enable_multiline);
   ic_enable_history_duplicates(profile.history.enable_duplicates);
 
-  int max_history = std::min(std::max(1, profile.history.max_count), 200);
-  ic_set_history(nullptr, max_history);
   ic_enable_hint(profile.inline_hint.enable);
   ic_set_hint_delay(std::max(0, profile.inline_hint.delay_ms));
   ic_set_hint_search_delay(std::max(0, profile.inline_hint.search_delay_ms));

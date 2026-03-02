@@ -89,12 +89,12 @@ void AMCompleteEngine::Install() {
   ic_set_default_completer(&AMCompleter::IsoclineCompleter, nullptr);
   ic_enable_completion_sort(false);
   ic_enable_completion_preview(true);
-  const std::string order_num_style = args_.complete_order_num_style.empty()
-                                          ? "ansi-darkgray"
-                                          : args_.complete_order_num_style;
-  const std::string help_style = args_.complete_help_style.empty()
-                                     ? "ansi-darkgray"
-                                     : args_.complete_help_style;
+  const std::string order_num_style = NormalizeStyleForIc_(
+      args_.complete_order_num_style.empty() ? "[ansi-darkgray]"
+                                             : args_.complete_order_num_style);
+  const std::string help_style = NormalizeStyleForIc_(
+      args_.complete_help_style.empty() ? "[ansi-darkgray]"
+                                        : args_.complete_help_style);
   ic_style_def("ic-comp-order", order_num_style.c_str());
   ic_style_def("ic-comp-help", help_style.c_str());
   const int max_items = args_.complete_max_items;

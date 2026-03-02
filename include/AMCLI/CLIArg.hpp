@@ -11,11 +11,15 @@
 #include "AMManager/Transfer.hpp"
 #include "AMManager/Var.hpp"
 #include "CLI/CLI.hpp"
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <variant>
 #include <vector>
+
+struct CliRunContext;
 
 /**
  * @brief Manager references for CLI dispatch.
@@ -31,34 +35,42 @@ struct CliManagers : public NonCopyableNonMovable {
    */
   ECM Init() override;
 
-  AMCliSignalMonitor &signal_monitor;
-  AMConfigManager &config_manager;
-  AMPromptManager &prompt_manager;
-  AMHostManager &host_manager;
-  VarCLISet &var_manager;
-  AMLogManager &log_manager;
-  AMClientManager &client_manager;
-  AMTransferManager &transfer_manager;
-  AMSetManager &set_manager;
-  AMFileSystem &filesystem;
+  AMCliSignalMonitor &signal_monitor = AMCliSignalMonitor::Instance();
+  AMConfigManager &config_manager = AMConfigManager::Instance();
+  AMPromptManager &prompt_manager = AMPromptManager::Instance();
+  AMHostManager &host_manager = AMHostManager::Instance();
+  VarCLISet &var_manager = VarCLISet::Instance();
+  AMLogManager &log_manager = AMLogManager::Instance();
+  AMClientManager &client_manager = AMClientManager::Instance();
+  AMTransferManager &transfer_manager = AMTransferManager::Instance();
+  AMSetManager &set_manager = AMSetManager::Instance();
+  AMFileSystem &filesystem = AMFileSystem::Instance();
 
 private:
   /**
    * @brief Bind all references to their corresponding singleton instances.
    */
-  CliManagers();
+  CliManagers() = default;
 };
 
 /**
  * @brief Runtime context for invoking Args::Run.
  */
-struct CliRunContext {
+struct CliRunContext : NonCopyableNonMovable {
+  ~CliRunContext() override = default;
+  static CliRunContext &Instance();
+  ECM rcm = {EC::Success, ""};
   bool async = false;
   bool enforce_interactive = false;
   std::string command_name;
   bool *enter_interactive = nullptr;
   bool *request_exit = nullptr;
   bool *skip_loop_exit_callbacks = nullptr;
+  std::shared_ptr<std::atomic<int>> exit_code;
+  std::shared_ptr<std::atomic<bool>> is_interactive = nullptr;
+
+private:
+  CliRunContext() = default;
 };
 
 void ShowTaskInspectInfo();

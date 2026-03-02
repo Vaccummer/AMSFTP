@@ -7,6 +7,7 @@
 #include "AMManager/Var.hpp"
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 
 using namespace AMSearcherDetail;
 
@@ -29,6 +30,47 @@ std::string RenderVarValue_(const std::string &value) {
  */
 bool IsPathNicknameContext_(const AMCompletionContext &ctx) {
   return HasTarget(ctx, AMCompletionTarget::Path);
+}
+
+/**
+ * @brief Collect merged host/client nicknames with created-first ordering.
+ */
+struct HostLikeNameInfo {
+  std::string name;
+  bool created = false;
+};
+
+/**
+ * @brief Build unified nickname list: created clients first, then uncreated
+ * configured hosts.
+ */
+std::vector<HostLikeNameInfo> CollectHostLikeNames_() {
+  std::vector<HostLikeNameInfo> names;
+  std::unordered_set<std::string> seen;
+
+  auto add_name = [&](const std::string &name, bool created) {
+    const std::string key = AMStr::lowercase(name);
+    if (key.empty() || !seen.insert(key).second) {
+      return;
+    }
+    names.push_back({name, created});
+  };
+
+  std::vector<std::string> created_names =
+      AMClientManager::Instance().GetClientNames();
+  std::sort(created_names.begin(), created_names.end());
+  for (const auto &name : created_names) {
+    add_name(name, true);
+  }
+  add_name("local", true);
+
+  std::vector<std::string> configured_names = AMHostManager::Instance().ListNames();
+  std::sort(configured_names.begin(), configured_names.end());
+  for (const auto &name : configured_names) {
+    add_name(name, false);
+  }
+
+  return names;
 }
 
 /**
@@ -258,15 +300,26 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
         client_prefix = prefix.substr(0, at_pos);
       }
     }
-    auto names = AMClientManager::Instance().GetClientNames();
-    std::vector<std::string> keys = names;
+
+    std::vector<HostLikeNameInfo> names = CollectHostLikeNames_();
+
+    std::vector<std::string> keys;
+    keys.reserve(names.size());
+    for (const auto &item : names) {
+      keys.push_back(item.name);
+    }
+
     for (const auto &match : BuildGeneralMatch(keys, client_prefix)) {
-      const std::string &name = names[match.index];
+      const auto &name_item = names[match.index];
       AMCompletionCandidate candidate;
-      candidate.insert_text = path_nickname_context ? name + "@" : name;
-      candidate.display = name;
+      candidate.insert_text =
+          path_nickname_context ? name_item.name + "@" : name_item.name;
+      const std::string style_key =
+          name_item.created ? "nickname" : "unestablished_nickname";
+      candidate.display = AMConfigManager::Instance().Format(name_item.name, style_key);
       candidate.kind = AMCompletionKind::ClientName;
-      candidate.score = match.score_bias;
+      const int uncreated_bias = name_item.created ? 0 : 100;
+      candidate.score = match.score_bias + uncreated_bias;
       result.candidates.items.push_back(std::move(candidate));
     }
     if (!result.candidates.items.empty()) {
@@ -284,15 +337,24 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
         host_prefix = prefix.substr(0, at_pos);
       }
     }
-    auto names = AMHostManager::Instance().ListNames();
-    std::vector<std::string> keys = names;
+    std::vector<HostLikeNameInfo> names = CollectHostLikeNames_();
+    std::vector<std::string> keys;
+    keys.reserve(names.size());
+    for (const auto &item : names) {
+      keys.push_back(item.name);
+    }
     for (const auto &match : BuildGeneralMatch(keys, host_prefix)) {
-      const std::string &name = names[match.index];
+      const auto &name_item = names[match.index];
       AMCompletionCandidate candidate;
-      candidate.insert_text = path_nickname_context ? name + "@" : name;
-      candidate.display = name;
+      candidate.insert_text =
+          path_nickname_context ? name_item.name + "@" : name_item.name;
+      const std::string style_key =
+          name_item.created ? "nickname" : "unestablished_nickname";
+      candidate.display =
+          AMConfigManager::Instance().Format(name_item.name, style_key);
       candidate.kind = AMCompletionKind::HostNickname;
-      candidate.score = match.score_bias;
+      const int uncreated_bias = name_item.created ? 0 : 100;
+      candidate.score = match.score_bias + uncreated_bias;
       result.candidates.items.push_back(std::move(candidate));
     }
     if (!result.candidates.items.empty()) {

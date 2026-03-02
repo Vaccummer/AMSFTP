@@ -39,9 +39,9 @@ PathOps::ParsePath(const std::string &input) {
 
   auto existing = Clients().GetHost(prefix);
   if (!existing) {
-    return {prefix, path, nullptr,
-            Err(EC::ClientNotFound,
-                AMStr::fmt("Client not created: {}", prefix))};
+    return {
+        prefix, path, nullptr,
+        Err(EC::ClientNotFound, AMStr::fmt("Client not created: {}", prefix))};
   }
   return {prefix, path, existing, Ok()};
 }
@@ -74,10 +74,10 @@ PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
 
   auto existing = Clients().GetHost(prefix);
   if (!existing) {
-    if (AMIsInteractive.load(std::memory_order_relaxed)) {
+    if (IsInteractive()) {
       bool canceled = false;
-      if (!AMPromptManager::Instance().PromptYesNo("Client not found. Create it? (y/N): ",
-                               &canceled)) {
+      if (!AMPromptManager::Instance().PromptYesNo(
+              "Client not found. Create it? (y/N): ", &canceled)) {
         return {prefix, path, nullptr,
                 Err(EC::Terminate,
                     AMStr::fmt("Aborted creating client: {}", prefix))};
@@ -182,8 +182,7 @@ void PathOps::InitClientWorkdir(
 
 void PathOps::ApplyLoginDir(const std::string &nickname,
                             const std::shared_ptr<BaseClient> &client,
-                            const std::string &login_dir,
-                            amf flag) const {
+                            const std::string &login_dir, amf flag) const {
   if (!client) {
     return;
   }
@@ -213,7 +212,8 @@ void PathOps::ApplyLoginDir(const std::string &nickname,
   client->SetLoginDir(normalized);
 
   if (need_persist && !IsLocalNickname_(nickname)) {
-    (void)AMHostManager::Instance().SetHostValue(nickname, configkn::login_dir, resolved);
+    (void)AMHostManager::Instance().SetHostValue(nickname, configkn::login_dir,
+                                                 resolved);
   }
 }
 
