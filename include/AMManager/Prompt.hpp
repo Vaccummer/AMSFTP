@@ -16,88 +16,70 @@
 #include <unordered_set>
 #include <vector>
 
-namespace AMPromptDetail {} // namespace AMPromptDetail
-
-/**
- * @brief Prompt rendering arguments for one profile.
- */
-struct AMPromptPromptProfileArgs {
-  std::string marker = "";
-  std::string continuation_marker = ">";
-  bool enable_multiline = false;
-};
-
-/**
- * @brief History arguments for one profile.
- */
-struct AMPromptHistoryProfileArgs {
-  bool enable = true;
-  bool enable_duplicates = true;
-  int max_count = 30;
-};
-
-/**
- * @brief InlineHint path arguments for one profile.
- */
-struct AMPromptInlineHintPathProfileArgs {
-  bool enable = true;
-  bool use_async = false;
-  size_t timeout_ms = 600;
-};
-
-/**
- * @brief InlineHint arguments for one profile.
- */
-struct AMPromptInlineHintProfileArgs {
-  bool enable = true;
-  int render_delay_ms = 30;
-  int search_delay_ms = 0;
-  AMPromptInlineHintPathProfileArgs path{};
-};
-
-/**
- * @brief Completion searcher path arguments for one profile.
- */
-struct AMPromptCompletePathProfileArgs {
-  bool use_async = false;
-  size_t timeout_ms = 3000;
-};
-
-/**
- * @brief Completion arguments for one profile.
- */
-struct AMPromptCompleteProfileArgs {
-  AMPromptCompletePathProfileArgs path{};
-};
-
-/**
- * @brief Highlight path arguments for one profile.
- */
-struct AMPromptHighlightPathProfileArgs {
-  bool enable = true;
-  size_t timeout_ms = 1000;
-};
-
-/**
- * @brief Highlight arguments for one profile.
- */
-struct AMPromptHighlightProfileArgs {
-  int delay_ms = 0;
-  AMPromptHighlightPathProfileArgs path{};
-};
-
 /**
  * @brief Full prompt profile argument bundle.
  */
 struct AMPromptProfileArgs {
+  /** Prompt rendering arguments for one profile. */
+  struct Prompt {
+    std::string marker = "";
+    std::string continuation_marker = ">";
+    bool enable_multiline = false;
+  };
+
+  /** History arguments for one profile. */
+  struct History {
+    bool enable = true;
+    bool enable_duplicates = true;
+    int max_count = 30;
+  };
+
+  /** InlineHint arguments for one profile. */
+  struct InlineHint {
+    /** InlineHint path arguments for one profile. */
+    struct Path {
+      bool enable = true;
+      bool use_async = false;
+      size_t timeout_ms = 600;
+    };
+
+    bool enable = true;
+    int render_delay_ms = 30;
+    int search_delay_ms = 0;
+    Path path{};
+  };
+
+  /** Completion arguments for one profile. */
+  struct Complete {
+    /** Completion searcher path arguments for one profile. */
+    struct Path {
+      bool use_async = false;
+      size_t timeout_ms = 3000;
+    };
+
+    Path path{};
+  };
+
+  /** Highlight arguments for one profile. */
+  struct Highlight {
+    /** Highlight path arguments for one profile. */
+    struct Path {
+      bool enable = true;
+      size_t timeout_ms = 1000;
+    };
+
+    int delay_ms = 0;
+    Path path{};
+  };
+
   std::string name = "*";
   bool from_default = false;
   ic_profile_t *ic_profile = nullptr;
-  AMPromptPromptProfileArgs prompt{};
-  AMPromptHistoryProfileArgs history{};
-  AMPromptInlineHintProfileArgs inline_hint{};
-  AMPromptCompleteProfileArgs complete{};
-  AMPromptHighlightProfileArgs highlight{};
+  Prompt prompt{};
+  History history{};
+  InlineHint inline_hint{};
+  Complete complete{};
+  Highlight highlight{};
 
   /**
    * @brief Initialize this profile from JSON with fallback defaults.
@@ -337,6 +319,8 @@ private:
 
 class AMPrintLockGuard : NonCopyableNonMovable {
 public:
+  static AMPrintLockGuard Lock() { return AMPrintLockGuard(); }
+
   explicit AMPrintLockGuard() : prompt_(AMPromptManager::Instance()) {
     prompt_.SetCacheOutputOnly(true);
   }
@@ -356,7 +340,5 @@ struct AMPromptHookGuard {
     AMCliSignalMonitor::Instance().ResumeHook("GLOBAL");
     AMCliSignalMonitor::Instance().SilenceHook("PROMPT");
   }
+  static AMPromptHookGuard Lock() { return AMPromptHookGuard(); }
 };
-
-inline AMPrintLockGuard PrintLock() { return AMPrintLockGuard(); }
-inline AMPromptHookGuard HookLock() { return AMPromptHookGuard(); }

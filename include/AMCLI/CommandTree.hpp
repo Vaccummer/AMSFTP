@@ -78,12 +78,16 @@ public:
    */
   template <typename T>
   CommandNode *AddFunction(const std::string &name, const std::string &help,
-                           CliArgsPool &args, T CliArgsPool::*member) {
+                           CliArgsPool &args,
+                           std::shared_ptr<T> CliArgsPool::*member) {
     CommandNode *child = AddFunction(name, help);
     if (!child || !child->app) {
       return child;
     }
-    child->app->callback([&args, member]() { args.common_arg = args.*member; });
+    child->app->callback([&args, member]() {
+      const auto &slot = args.*member;
+      args.active = slot ? slot.get() : nullptr;
+    });
     return child;
   }
 
