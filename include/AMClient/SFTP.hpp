@@ -115,11 +115,11 @@ public:
       auto dns_err_str =
           dns_err_w != nullptr ? AMStr::wstr(dns_err_w) : std::string{};
       error_msg = AMStr::fmt("DNS resolve failed: {} (hostname={})",
-                               dns_err_str, hostname);
+                             dns_err_str, hostname);
 #else
       auto dns_err_str = gai_strerror(dns_err);
       error_msg = AMStr::fmt("DNS resolve failed: {} (hostname={})",
-                               dns_err_str, hostname);
+                             dns_err_str, hostname);
 #endif
       error_code = EC::DNSResolveError;
       return false;
@@ -352,17 +352,6 @@ private:
 
 #ifdef _WIN32
 inline static std::atomic<bool> is_wsa_initialized(false);
-
-inline void AMInitWSA() {
-  WSADATA wsaData;
-  int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
-  if (result != 0) {
-    throw std::runtime_error("WSAStartup failed");
-  }
-  is_wsa_initialized.store(true, std::memory_order_relaxed);
-}
-inline void AMInitWSA();
-
 inline void cleanup_wsa() {
   // Cleanup WSA if initialized
   if (is_wsa_initialized.load(std::memory_order_relaxed)) {
@@ -370,6 +359,16 @@ inline void cleanup_wsa() {
     is_wsa_initialized.store(false, std::memory_order_relaxed);
   }
 }
+inline void AMInitWSA() {
+  WSADATA wsaData;
+  int result = WSAStartup(MAKEWORD(2, 2), &wsaData);
+  if (result != 0) {
+    throw std::runtime_error("WSAStartup failed");
+  }
+  is_wsa_initialized.store(true, std::memory_order_relaxed);
+  std::atexit(cleanup_wsa);
+}
+
 #endif
 
 inline std::string GetLibssh2Version() {
@@ -431,7 +430,7 @@ inline bool IsValidKey(const std::string &key) {
   std::getline(file, line);
 
   // Match standard header markers of all SSH private keys
-  const std::vector<std::string> private_key_headers = {
+  static const std::vector<std::string> private_key_headers = {
       "-----BEGIN OPENSSH PRIVATE KEY-----", "-----BEGIN RSA PRIVATE KEY-----",
       "-----BEGIN EC PRIVATE KEY-----", "-----BEGIN DSA PRIVATE KEY-----"};
   for (const auto &header : private_key_headers) {
@@ -779,7 +778,7 @@ protected:
     // 3. Socket error
     if (result.is_error()) {
       std::string msg = AMStr::fmt("Encountered socket error during {} on {}",
-                                     action, target);
+                                   action, target);
       trace(level, EC::SocketRecvError, target, action, msg);
       return {EC::SocketRecvError, msg};
     }
@@ -793,7 +792,7 @@ protected:
         auto ec = GetLastEC();
         auto errmsg = GetLastErrorMsg();
         std::string msg = prompt.empty() ? AMStr::fmt("{} on {} error: {}",
-                                                        action, target, errmsg)
+                                                      action, target, errmsg)
                                          : prompt;
         AMStr::vreplace(msg, "{action}", action);
         AMStr::vreplace(msg, "{target}", target);
@@ -806,7 +805,7 @@ protected:
         auto ec = GetLastEC();
         auto errmsg = GetLastErrorMsg();
         std::string msg = prompt.empty() ? AMStr::fmt("{} on {} error: {}",
-                                                        action, target, errmsg)
+                                                      action, target, errmsg)
                                          : prompt;
         AMStr::vreplace(msg, "{action}", action);
         AMStr::vreplace(msg, "{target}", target);
@@ -1106,7 +1105,8 @@ public:
     timeval *timeout_ptr = nullptr;
     bool interrupt_poll_fallback = false;
     if (timeout_ms > 0) {
-      const int64_t remaining = timeout_ms - (AMTime::miliseconds() - start_time);
+      const int64_t remaining =
+          timeout_ms - (AMTime::miliseconds() - start_time);
       if (remaining <= 0) {
         cleanup_wakeup();
         return WaitResult::Timeout;
@@ -1345,14 +1345,14 @@ public:
         trace(TraceLevel::Info, EC::Success, "Success",
               "PrivatedKeyAuthorizeResult",
               AMStr::fmt("Dedicated private key \"{}\" authorize success",
-                           res_data.keyfile));
+                         res_data.keyfile));
         NotifyAuth(false, "", true);
         goto OK;
       } else {
-        trace(TraceLevel::Debug, EC::PublickeyAuthFailed, res_data.keyfile,
+        trace(TraceLevel::Error, EC::PublickeyAuthFailed, res_data.keyfile,
               "DedicatedPrivateKeyAuthorizeResult",
               AMStr::fmt("Dedicated private key \"{}\" authorize failed",
-                           res_data.keyfile));
+                         res_data.keyfile));
         NotifyAuth(false, "", false);
       }
     }
@@ -1382,7 +1382,7 @@ public:
         NotifyAuth(false, stored_password_enc, true);
         goto OK;
       } else {
-        trace(TraceLevel::Debug, EC::AuthFailed, "password", "PasswordAuth",
+        trace(TraceLevel::Error, EC::AuthFailed, "", "PasswordAuth",
               "Password authentication failed");
         NotifyAuth(false, stored_password_enc, false);
       }
@@ -1397,11 +1397,12 @@ public:
         if (private_key == res_data.keyfile) {
           continue;
         }
-        auto auth_res = nb_call(interrupt_flag, -1, AMTime::miliseconds(), [&]() {
-          return libssh2_userauth_publickey_fromfile(
-              session, res_data.username.c_str(), nullptr, private_key.c_str(),
-              nullptr);
-        });
+        auto auth_res =
+            nb_call(interrupt_flag, -1, AMTime::miliseconds(), [&]() {
+              return libssh2_userauth_publickey_fromfile(
+                  session, res_data.username.c_str(), nullptr,
+                  private_key.c_str(), nullptr);
+            });
         if (!auth_res.ok()) {
           rcm = ErrorRecord(auth_res, TraceLevel::Error, res_data.username,
                             "libssh2_userauth_publickey_fromfile");
@@ -1413,11 +1414,11 @@ public:
           trace(TraceLevel::Info, EC::Success, private_key,
                 "PrivatedKeyAuthorizeResult",
                 AMStr::fmt("Shared private key \"{}\" authorize success",
-                             private_key));
+                           private_key));
           NotifyAuth(false, "", true);
           goto OK;
         } else {
-          trace(TraceLevel::Debug, EC::PrivateKeyAuthFailed, "Failed",
+          trace(TraceLevel::Error, EC::PrivateKeyAuthFailed, private_key,
                 "PrivatedKeyAuthorizeResult", rcm.second);
           NotifyAuth(false, "", false);
         }
@@ -1426,7 +1427,7 @@ public:
 
     // Interactive password authentication callback
     if (password_auth_cb && password_auth) {
-      trace(TraceLevel::Info, EC::Success, "Interactive", "PasswordAuthorize",
+      trace(TraceLevel::Debug, EC::Success, "Interactive", "PasswordAuthorize",
             "Using password authentication callback to get another password");
       int trial_times = 0;
       while (trial_times < 2) {
@@ -1450,10 +1451,11 @@ public:
           break;
         }
         const std::string password_enc = AMAuth::EncryptPassword(password_tmp);
-        auto auth_res = nb_call(interrupt_flag, -1, AMTime::miliseconds(), [&]() {
-          return libssh2_userauth_password(session, res_data.username.c_str(),
-                                           password_tmp.c_str());
-        });
+        auto auth_res =
+            nb_call(interrupt_flag, -1, AMTime::miliseconds(), [&]() {
+              return libssh2_userauth_password(
+                  session, res_data.username.c_str(), password_tmp.c_str());
+            });
         AMAuth::SecureZero(password_tmp);
         if (!auth_res.ok()) {
           rcm = ErrorRecord(auth_res, TraceLevel::Error, res_data.username,
@@ -1470,7 +1472,7 @@ public:
           NotifyAuth(false, password_enc, true);
           goto OK;
         } else {
-          trace(TraceLevel::Debug, EC::AuthFailed, "Failed",
+          trace(TraceLevel::Error, EC::AuthFailed, "",
                 "PasswordAuthorizeResult", "Wrong password");
           NotifyAuth(false, password_enc, false);
         }
@@ -1735,9 +1737,8 @@ private:
         terminal_channel->Init(session, flag, timeout_ms, start_time);
     if (init_rcm.first != EC::Success) {
       terminal_channel.reset();
-      return {init_rcm.first,
-              AMStr::fmt("Terminal channel not initialized: {}",
-                           init_rcm.second)};
+      return {init_rcm.first, AMStr::fmt("Terminal channel not initialized: {}",
+                                         init_rcm.second)};
     }
 
     libssh2_session_set_blocking(session, 0);
@@ -1757,8 +1758,8 @@ private:
     }
     if (rc != 0) {
       terminal_channel.reset();
-      return {GetLastEC(), AMStr::fmt("Terminal request pty failed: {}",
-                                        GetLastErrorMsg())};
+      return {GetLastEC(),
+              AMStr::fmt("Terminal request pty failed: {}", GetLastErrorMsg())};
     }
 
     while ((rc = libssh2_channel_shell(terminal_channel->channel)) ==
@@ -1770,8 +1771,8 @@ private:
     }
     if (rc != 0) {
       terminal_channel.reset();
-      return {GetLastEC(), AMStr::fmt("Terminal start shell failed: {}",
-                                        GetLastErrorMsg())};
+      return {GetLastEC(),
+              AMStr::fmt("Terminal start shell failed: {}", GetLastErrorMsg())};
     }
 
     libssh2_session_set_blocking(session, 0);
@@ -2185,8 +2186,8 @@ private:
 
     if (GetOSType() == OS_TYPE::Windows) {
       auto cmd_f = AMStr::fmt("powershell -NoProfile -Command \"(Get-Acl "
-                                "-LiteralPath '{}').Owner \"",
-                                path);
+                              "-LiteralPath '{}').Owner \"",
+                              path);
       auto [rcm, cr] = ConductCmd(cmd_f);
       if (!isok(rcm) || cr.second != 0) {
         return "unknown";
@@ -2276,7 +2277,7 @@ private:
     auto nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
       return libssh2_sftp_realpath(sftp, path.c_str(), path_t, sizeof(path_t));
     });
-    return {ErrorRecord(nb_res, TraceLevel::Debug, path,
+    return {ErrorRecord(nb_res, TraceLevel::Error, path,
                         "libssh2_sftp_realpath",
                         "Realpath \"{target}\" failed: {error}"),
             std::string(path_t)};
@@ -2296,7 +2297,7 @@ private:
                                       LIBSSH2_SFTP_RENAME_NATIVE);
       });
       return ErrorRecord(
-          nb_res, TraceLevel::Debug, AMStr::fmt("{} -> {}", src, dst),
+          nb_res, TraceLevel::Error, AMStr::fmt("{} -> {}", src, dst),
           "libssh2_sftp_rename_ex", "Rename {target} failed: {error}");
     } else {
       auto nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
@@ -2305,7 +2306,7 @@ private:
             LIBSSH2_SFTP_RENAME_OVERWRITE | LIBSSH2_SFTP_RENAME_NATIVE);
       });
       return ErrorRecord(
-          nb_res, TraceLevel::Debug, AMStr::fmt("{} -> {}", src, dst),
+          nb_res, TraceLevel::Error, AMStr::fmt("{} -> {}", src, dst),
           "libssh2_sftp_rename_ex", "Rename {target} failed: {error}");
     }
   }
@@ -2329,7 +2330,7 @@ private:
         return libssh2_sftp_lstat(sftp, path.c_str(), &attrs);
       });
     }
-    ECM rcm = ErrorRecord(nb_res, TraceLevel::Debug, path, "libssh2_sftp_stat",
+    ECM rcm = ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_stat",
                           "Get stat failed: {error}");
     return {rcm, attrs};
   }
@@ -2344,7 +2345,7 @@ private:
     auto nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
       return libssh2_sftp_setstat(sftp, path.c_str(), &attrs);
     });
-    return ErrorRecord(nb_res, TraceLevel::Debug, path, "libssh2_sftp_setstat",
+    return ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_setstat",
                        "Set stat failed: {error}");
   }
 
@@ -2357,7 +2358,7 @@ private:
     auto nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
       return libssh2_sftp_unlink(sftp, path.c_str());
     });
-    return ErrorRecord(nb_res, TraceLevel::Debug, path, "libssh2_sftp_unlink",
+    return ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_unlink",
                        "Unlink \"{target}\" failed: {error}");
   }
 
@@ -2370,7 +2371,7 @@ private:
     auto nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
       return libssh2_sftp_rmdir(sftp, path.c_str());
     });
-    return ErrorRecord(nb_res, TraceLevel::Debug, path, "libssh2_sftp_rmdir",
+    return ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_rmdir",
                        "Remove directory failed: {error}");
   }
 
@@ -2383,7 +2384,7 @@ private:
     NBResult<int> nb_res = nb_call(interrupt_flag, timeout_ms, start_time, [&] {
       return libssh2_sftp_mkdir_ex(sftp, path.c_str(), path.size(), 0740);
     });
-    return ErrorRecord(nb_res, TraceLevel::Debug, path, "libssh2_sftp_mkdir_ex",
+    return ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_mkdir_ex",
                        "Create directory \"{target}\" failed: {error}");
   }
 
@@ -2404,7 +2405,7 @@ private:
       return libssh2_sftp_open_ex(sftp, path.c_str(), path.size(), 0,
                                   LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
     });
-    rcm = ErrorRecord(oepn_res, TraceLevel::Debug, path, "libssh2_sftp_open_ex",
+    rcm = ErrorRecord(oepn_res, TraceLevel::Error, path, "libssh2_sftp_open_ex",
                       "Open directory {target} failed: {error}");
     if (rcm.first != EC::Success) {
       return {rcm, {}};
@@ -2430,7 +2431,7 @@ private:
       if (read_res.value == 0) {
         break;
       }
-      rcm = ErrorRecord(read_res, TraceLevel::Debug, path,
+      rcm = ErrorRecord(read_res, TraceLevel::Error, path,
                         "libssh2_sftp_readdir_ex",
                         "Path: {} readdir failed: {error}");
       if (rcm.first != EC::Success) {
@@ -2678,7 +2679,8 @@ protected:
         if (interrupt_flag && !interrupt_flag->IsRunning()) {
           return;
         }
-        if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
+        if (timeout_ms > 0 &&
+            AMTime::miliseconds() - start_time >= timeout_ms) {
           return;
         }
         _chmod(item.first, mode, recursive, errors, item.second, interrupt_flag,
@@ -3073,7 +3075,7 @@ public:
     if (std::holds_alternative<std::string>(mode)) {
       if (!AMStr::IsModeValid(std::get<std::string>(mode))) {
         return {ECM{EC::InvalidArg, AMStr::fmt("Invalid mode: {}",
-                                                 std::get<std::string>(mode))},
+                                               std::get<std::string>(mode))},
                 {}};
       }
       mode_int = AMStr::ModeTrans(std::get<std::string>(mode));
@@ -3081,7 +3083,7 @@ public:
       if (!AMStr::IsModeValid(std::get<size_t>(mode))) {
         return {ECM{EC::InvalidArg,
                     AMStr::fmt("Invalid mode: {}",
-                                 std::to_string(std::get<size_t>(mode)))},
+                               std::to_string(std::get<size_t>(mode)))},
                 {}};
       }
       mode_int = std::get<size_t>(mode);
@@ -3192,7 +3194,7 @@ public:
         } else {
           return {EC::PathAlreadyExists,
                   AMStr::fmt("Path exists and is not a directory: {}",
-                               current_path)};
+                             current_path)};
         }
       }
       rcm = lib_mkdir(current_path, interrupt_flag, timeout_ms, start_time);
