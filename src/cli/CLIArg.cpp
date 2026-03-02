@@ -102,10 +102,6 @@ ECM ValidateConfigProfileNickname_(const std::string &raw,
   if (value.empty()) {
     return Err(EC::InvalidArg, "empty profile nickname");
   }
-  if (value == "*") {
-    *normalized = value;
-    return Ok();
-  }
   if (!configkn::ValidateNickname(value)) {
     return Err(EC::InvalidArg, "invalid profile nickname");
   }
@@ -130,10 +126,9 @@ ECM ResolveConfigProfileNickname_(const std::string &arg_nickname,
   AMHostManager &host_manager = AMHostManager::Instance();
   AMPromptManager &prompt = AMPromptManager::Instance();
   std::vector<std::string> candidates = host_manager.ListNames();
-  candidates.push_back("*");
   while (true) {
     std::string input;
-    if (!prompt.Prompt("Profile nickname(* or host): ", "", &input, {},
+    if (!prompt.Prompt("Profile nickname(host): ", "", &input, {},
                        candidates)) {
       return Err(EC::ConfigCanceled, "profile edit canceled");
     }
@@ -348,6 +343,28 @@ ECM ConfigProfileSetArgs::Run(const CliManagers &managers,
 }
 
 void ConfigProfileSetArgs::reset() { nickname.clear(); }
+
+ECM ProfileEditArgs::Run(const CliManagers &managers,
+                         const CliRunContext &ctx) const {
+  (void)managers;
+  (void)ctx;
+  ECM rcm = AMPromptManager::Instance().Edit(nickname);
+  PrintRunError_(rcm);
+  return rcm;
+}
+
+void ProfileEditArgs::reset() { nickname.clear(); }
+
+ECM ProfileGetArgs::Run(const CliManagers &managers,
+                        const CliRunContext &ctx) const {
+  (void)managers;
+  (void)ctx;
+  ECM rcm = AMPromptManager::Instance().Get(nicknames);
+  PrintRunError_(rcm);
+  return rcm;
+}
+
+void ProfileGetArgs::reset() { nicknames.clear(); }
 
 ECM StatArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;

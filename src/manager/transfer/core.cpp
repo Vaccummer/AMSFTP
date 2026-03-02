@@ -360,7 +360,7 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
  */
 std::pair<ECM, std::shared_ptr<BaseClient>> AMTransferManager::AcquireClient_(
     const std::string &nickname,
-    const std::shared_ptr<TaskControlToken> &flag) {
+    std::shared_ptr<TaskControlToken> flag) {
   if (flag && !flag->IsRunning()) {
     return {ECM{EC::Terminate, "Interrupted during client preparation"},
             nullptr};
@@ -394,7 +394,7 @@ std::pair<ECM, std::shared_ptr<BaseClient>> AMTransferManager::AcquireClient_(
 std::pair<ECM, std::shared_ptr<ClientMaintainer>>
 AMTransferManager::CollectClients(
     const std::vector<std::string> &nicknames,
-    const std::shared_ptr<TaskControlToken> &flag) {
+    std::shared_ptr<TaskControlToken> flag) {
   auto maintainer = std::make_shared<ClientMaintainer>(
       -1, ClientMaintainer::DisconnectCallback(),
       AMClientManager::Instance().LocalClient());
@@ -472,7 +472,7 @@ void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
  */
 ECM AMTransferManager::transfer(
     const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
+    std::shared_ptr<TaskControlToken> interrupt_flag) {
   bool has_resume = false;
   for (const auto &set : transfer_sets) {
     if (!set.resume) {
@@ -505,7 +505,7 @@ ECM AMTransferManager::transfer(
  */
 ECM AMTransferManager::transfer(
     const std::shared_ptr<TaskInfo> &task_info,
-    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
+    std::shared_ptr<TaskControlToken> interrupt_flag) {
 #ifdef _WIN32
   ScopedProcessedInputMode_ processed_input_guard;
   (void)processed_input_guard;
@@ -608,7 +608,7 @@ ECM AMTransferManager::transfer(
  */
 ECM AMTransferManager::transfer_async(
     const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
+    std::shared_ptr<TaskControlToken> interrupt_flag) {
   bool has_resume = false;
   for (const auto &set : transfer_sets) {
     if (!set.resume) {
@@ -642,7 +642,7 @@ ECM AMTransferManager::transfer_async(
  */
 ECM AMTransferManager::transfer_async(
     const std::shared_ptr<TaskInfo> &task_info,
-    const std::shared_ptr<TaskControlToken> &interrupt_flag) {
+    std::shared_ptr<TaskControlToken> interrupt_flag) {
   if (!task_info) {
     return {EC::Success, ""};
   }
@@ -696,7 +696,7 @@ ECM AMTransferManager::transfer_async(
  */
 std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
     const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-    const std::shared_ptr<TaskControlToken> &flag) {
+    std::shared_ptr<TaskControlToken> flag) {
   if (transfer_sets.empty()) {
     return {ECM{EC::Success, ""}, nullptr};
   }

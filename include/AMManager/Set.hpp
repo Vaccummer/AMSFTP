@@ -1,9 +1,6 @@
 #pragma once
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
+#include "AMBase/tools/json.hpp"
 #include <cstddef>
 #include <mutex>
 #include <string>
@@ -208,6 +205,4 @@ private:
   ECM PromptPathSet_(const std::string &nickname,
                      const AMHostSetPathConfig &base,
                      AMHostSetPathConfig *output) const;
-
 };
-

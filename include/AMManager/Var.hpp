@@ -339,9 +339,9 @@ struct VarInfo {
    */
   [[nodiscard]] ECM IsValid() const {
     if (domain.empty() || varname.empty()) {
-      return Err(EC::InvalidArg, "uninitialized VarInfo");
+      return {EC::InvalidArg, "uninitialized VarInfo"};
     }
-    return Ok();
+    return {EC::Success, ""};
   }
 };
 

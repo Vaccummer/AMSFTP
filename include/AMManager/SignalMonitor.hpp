@@ -16,11 +16,6 @@
 #include "AMBase/DataClass.hpp"
 
 /**
- * @brief Global signal code observed by the CLI signal monitor.
- */
-extern std::atomic<int> GlobalSignalInt;
-
-/**
  * @brief Signal monitor that safely transfers signal events to a worker thread.
  */
 class AMCliSignalMonitor : private NonCopyableNonMovable {

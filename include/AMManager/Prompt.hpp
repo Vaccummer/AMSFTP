@@ -194,7 +194,28 @@ protected:
   ic_profile_t *core_prompt_profile_ = nullptr;
 };
 
-class AMPromptManager : public AMProfileManager, NonCopyableNonMovable {
+class AMProfileCLI : public AMProfileManager {
+public:
+  /**
+   * @brief Edit one host prompt profile for CLI usage.
+   *
+   * The nickname must exist in HostManager.
+   */
+  ECM Edit(const std::string &nickname);
+
+  /**
+   * @brief Query prompt profile JSON for one or more host nicknames.
+   *
+   * Every nickname must exist in HostManager.
+   */
+  ECM Get(const std::vector<std::string> &nicknames);
+
+protected:
+  AMProfileCLI() = default;
+  ~AMProfileCLI() override = default;
+};
+
+class AMPromptManager : public AMProfileCLI, NonCopyableNonMovable {
 public:
   inline static AMPromptManager &Instance() {
     static AMPromptManager instance;
