@@ -6,7 +6,6 @@
 #include "AMManager/Host.hpp"
 #include "AMManager/Logger.hpp"
 #include "AMManager/Prompt.hpp"
-#include "AMManager/Set.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Transfer.hpp"
 #include "AMManager/Var.hpp"
@@ -42,7 +41,6 @@ struct CliManagers : public NonCopyableNonMovable {
   AMLogManager &log_manager = AMLogManager::Instance();
   AMClientManager &client_manager = AMClientManager::Instance();
   AMTransferManager &transfer_manager = AMTransferManager::Instance();
-  AMSetManager &set_manager = AMSetManager::Instance();
   AMFileSystem &filesystem = AMFileSystem::Instance();
 
 private:
@@ -72,8 +70,6 @@ private:
   CliRunContext() = default;
 };
 
-void ShowTaskInspectInfo();
-
 /**
  * @brief Base interface for all parsed CLI argument payload structs.
  */
@@ -82,8 +78,8 @@ struct BaseArgStruct {
   /**
    * @brief Execute this parsed command payload.
    */
-  virtual ECM Run(const CliManagers &managers, const CliRunContext &ctx) const =
-      0;
+  [[nodiscard]] virtual ECM Run(const CliManagers &managers,
+                                const CliRunContext &ctx) const = 0;
   /**
    * @brief Reset this payload to parser defaults.
    */
@@ -98,11 +94,11 @@ struct ConfigLsArgs : BaseArgStruct {
   /**
    * @brief Execute config ls with optional detail flag.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-ls arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -112,11 +108,11 @@ struct ConfigKeysArgs : BaseArgStruct {
   /**
    * @brief Execute config keys.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-keys arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -126,11 +122,11 @@ struct ConfigDataArgs : BaseArgStruct {
   /**
    * @brief Execute config data.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-data arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -141,11 +137,11 @@ struct ConfigGetArgs : BaseArgStruct {
   /**
    * @brief Execute config get with optional nickname list.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-get arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -156,11 +152,11 @@ struct ConfigAddArgs : BaseArgStruct {
   /**
    * @brief Execute config add.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-add arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -171,11 +167,11 @@ struct ConfigEditArgs : BaseArgStruct {
   /**
    * @brief Execute config edit for a nickname.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-edit arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -187,11 +183,11 @@ struct ConfigRenameArgs : BaseArgStruct {
   /**
    * @brief Execute config rename.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-rename arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -202,11 +198,11 @@ struct ConfigRemoveArgs : BaseArgStruct {
   /**
    * @brief Execute config remove for target names.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-remove arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -219,11 +215,12 @@ struct ConfigSetArgs : BaseArgStruct {
   /**
    * @brief Execute config set for a host attribute.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers,
+                        const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-set arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -233,11 +230,11 @@ struct ConfigSaveArgs : BaseArgStruct {
   /**
    * @brief Execute config save.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-save arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -248,11 +245,11 @@ struct ConfigProfileSetArgs : BaseArgStruct {
   /**
    * @brief Execute config profile set.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset config profile set arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -263,11 +260,11 @@ struct ProfileEditArgs : BaseArgStruct {
   /**
    * @brief Execute profile edit for a host nickname.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset profile-edit arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -278,11 +275,11 @@ struct ProfileGetArgs : BaseArgStruct {
   /**
    * @brief Execute profile get for one or more host nicknames.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset profile-get arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -293,11 +290,11 @@ struct StatArgs : BaseArgStruct {
   /**
    * @brief Execute stat for target paths.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset stat arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -310,11 +307,11 @@ struct LsArgs : BaseArgStruct {
   /**
    * @brief Execute ls for a path or current workdir.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset ls arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -325,11 +322,11 @@ struct SizeArgs : BaseArgStruct {
   /**
    * @brief Execute size for target paths.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset size arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -340,11 +337,11 @@ struct FindArgs : BaseArgStruct {
   /**
    * @brief Execute find for a path.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset find arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -355,11 +352,11 @@ struct MkdirArgs : BaseArgStruct {
   /**
    * @brief Execute mkdir for target paths.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset mkdir arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -372,11 +369,11 @@ struct RmArgs : BaseArgStruct {
   /**
    * @brief Execute rm for target paths.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset rm arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -392,11 +389,11 @@ struct WalkArgs : BaseArgStruct {
   /**
    * @brief Execute walk for a path.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset walk arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -412,11 +409,11 @@ struct TreeArgs : BaseArgStruct {
   /**
    * @brief Execute tree for a path.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset tree arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -427,11 +424,11 @@ struct RealpathArgs : BaseArgStruct {
   /**
    * @brief Execute realpath for a target path.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset realpath arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -442,11 +439,11 @@ struct RttArgs : BaseArgStruct {
   /**
    * @brief Execute rtt with sample count.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset rtt arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -457,11 +454,11 @@ struct ClearArgs : BaseArgStruct {
   /**
    * @brief Execute clear screen.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset clear arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -479,11 +476,11 @@ struct CpArgs : BaseArgStruct {
   /**
    * @brief Execute cp transfer.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset cp arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -496,11 +493,11 @@ struct SftpArgs : BaseArgStruct {
   /**
    * @brief Execute sftp connection.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset sftp arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -513,11 +510,11 @@ struct FtpArgs : BaseArgStruct {
   /**
    * @brief Execute ftp connection.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset ftp arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -528,11 +525,11 @@ struct ClientsArgs : BaseArgStruct {
   /**
    * @brief Execute clients list.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset clients arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -544,11 +541,11 @@ struct CheckArgs : BaseArgStruct {
   /**
    * @brief Execute client check.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset check arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -559,11 +556,11 @@ struct ChangeClientArgs : BaseArgStruct {
   /**
    * @brief Execute client change.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset change-client arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -574,11 +571,11 @@ struct DisconnectArgs : BaseArgStruct {
   /**
    * @brief Execute client disconnect.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset disconnect arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -589,11 +586,11 @@ struct CdArgs : BaseArgStruct {
   /**
    * @brief Execute cd.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset cd arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -605,11 +602,11 @@ struct ConnectArgs : BaseArgStruct {
   /**
    * @brief Execute connect.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset connect arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -621,11 +618,11 @@ struct CmdArgs : BaseArgStruct {
   /**
    * @brief Execute one shell command on current SFTP/local client.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset cmd arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -635,11 +632,11 @@ struct BashArgs : BaseArgStruct {
   /**
    * @brief Enter interactive mode.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset bash arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -650,11 +647,11 @@ struct ExitArgs : BaseArgStruct {
   /**
    * @brief Request interactive-loop exit.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset exit arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -665,11 +662,11 @@ struct VarGetArgs : BaseArgStruct {
   /**
    * @brief Execute `var get`.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset args to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -682,11 +679,11 @@ struct VarDefArgs : BaseArgStruct {
   /**
    * @brief Execute `var def`.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset args to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -698,11 +695,11 @@ struct VarDelArgs : BaseArgStruct {
   /**
    * @brief Execute `var del`.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset args to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -713,11 +710,11 @@ struct VarLsArgs : BaseArgStruct {
   /**
    * @brief Execute `var ls`.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset args to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -727,11 +724,11 @@ struct CompleteCacheClearArgs : BaseArgStruct {
   /**
    * @brief Execute completion cache clear.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset completion cache clear arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -745,11 +742,11 @@ struct TaskListArgs : BaseArgStruct {
   /**
    * @brief Execute task list.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-list arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -760,11 +757,11 @@ struct TaskShowArgs : BaseArgStruct {
   /**
    * @brief Execute task show.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-show arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -777,11 +774,11 @@ struct TaskInspectArgs : BaseArgStruct {
   /**
    * @brief Execute task inspect.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-inspect arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -792,11 +789,11 @@ struct TaskThreadArgs : BaseArgStruct {
   /**
    * @brief Execute task thread update/query.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-thread arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -813,11 +810,11 @@ struct TaskCacheAddArgs : BaseArgStruct {
   /**
    * @brief Execute task cache add.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-cache-add arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -828,11 +825,11 @@ struct TaskCacheRmArgs : BaseArgStruct {
   /**
    * @brief Execute task cache remove.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-cache-rm arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -842,11 +839,11 @@ struct TaskCacheClearArgs : BaseArgStruct {
   /**
    * @brief Execute task cache clear.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-cache-clear arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -859,11 +856,11 @@ struct TaskCacheSubmitArgs : BaseArgStruct {
   /**
    * @brief Execute task cache submit.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-cache-submit arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -874,11 +871,11 @@ struct TaskUserSetArgs : BaseArgStruct {
   /**
    * @brief Execute task userset query.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-userset arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -889,11 +886,11 @@ struct TaskEntryArgs : BaseArgStruct {
   /**
    * @brief Execute task entry query.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-entry arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -906,11 +903,11 @@ struct TaskControlArgs : BaseArgStruct {
   /**
    * @brief Execute task control action.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-control arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -924,11 +921,11 @@ struct TaskRetryArgs : BaseArgStruct {
   /**
    * @brief Execute task retry.
    */
-  ECM Run(const CliManagers &managers, const CliRunContext &ctx) const;
+  [[nodiscard]] ECM Run(const CliManagers &managers, const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-retry arguments to defaults.
    */
-  void reset();
+  void reset() override;
 };
 
 /**
@@ -1087,11 +1084,6 @@ struct CliCommands {
   CLI::App *resume_cmd = nullptr;
   CliArgsPool *args = nullptr;
 };
-
-/**
- * @brief Exit code storage for CLI dispatch.
- */
-extern int g_cli_exit_code;
 
 /**
  * @brief Dispatch result for CLI execution.

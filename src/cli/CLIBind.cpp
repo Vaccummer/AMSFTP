@@ -2,8 +2,6 @@
 #include "AMCLI/CLIBind.hpp"
 #include "AMCLI/CommandTree.hpp"
 
-int g_cli_exit_code = 0;
-
 /**
  * @brief Bind config-related CLI commands.
  */
@@ -833,11 +831,6 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
 }
 
 /**
- * @brief Set the exit code and return.
- */
-void SetCliExitCode(int code) { g_cli_exit_code = code; }
-
-/**
  * @brief Dispatch CLI commands based on parsed state.
  */
 DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
@@ -845,11 +838,16 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
                                    CliRunContext &ctx, bool async,
                                    bool enforce_interactive) {
   DispatchResult result;
+  auto store_exit_code = [&ctx](int code) {
+    if (ctx.exit_code) {
+      ctx.exit_code->store(code, std::memory_order_relaxed);
+    }
+  };
   if (!cli_commands.args) {
     const std::string msg = "CLI args pool is not initialized";
     std::cerr << msg << std::endl;
     result.rcm = {EC::UnknownError, msg};
-    SetCliExitCode(static_cast<int>(result.rcm.first));
+    store_exit_code(static_cast<int>(result.rcm.first));
     return result;
   }
   CliArgsPool &args = *cli_commands.args;
@@ -868,7 +866,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     std::string msg = "No valid command provided";
     std::cerr << msg << std::endl;
     result.rcm = {EC::InvalidArg, msg};
-    SetCliExitCode(static_cast<int>(result.rcm.first));
+    store_exit_code(static_cast<int>(result.rcm.first));
     args.active = nullptr;
     return result;
   }
@@ -886,7 +884,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     }
     std::cerr << msg << std::endl;
     result.rcm = {EC::InvalidArg, msg};
-    SetCliExitCode(static_cast<int>(result.rcm.first));
+    store_exit_code(static_cast<int>(result.rcm.first));
     args.active = nullptr;
     return result;
   }
@@ -904,11 +902,7 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   args.active = nullptr;
 
   ctx.rcm = result.rcm;
-  SetCliExitCode(static_cast<int>(result.rcm.first));
-  if (ctx.exit_code) {
-    ctx.exit_code->store(static_cast<int>(result.rcm.first),
-                         std::memory_order_relaxed);
-  }
+  store_exit_code(static_cast<int>(result.rcm.first));
   ctx.enter_interactive = nullptr;
   ctx.request_exit = nullptr;
   ctx.skip_loop_exit_callbacks = nullptr;

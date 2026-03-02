@@ -7,11 +7,6 @@
 CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args);
 
 /**
- * @brief Set the exit code and return.
- */
-void SetCliExitCode(int code);
-
-/**
  * @brief Dispatch CLI commands based on parsed state.
  */
 DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
