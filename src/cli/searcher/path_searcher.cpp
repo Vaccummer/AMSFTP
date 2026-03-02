@@ -58,13 +58,14 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
   if (!use_async) {
     std::shared_ptr<BaseClient> client =
-        path.remote ? AMClientManager::Instance().Clients().GetHost(path.nickname)
-                    : AMClientManager::Instance().LocalClient();
+        path.remote
+            ? AMClientManager::Instance().Clients().GetHost(path.nickname)
+            : AMClientManager::Instance().LocalClient();
     if (!client) {
       return result;
     }
-    auto [rcm, items] =
-        client->listdir(path.dir_abs, nullptr, timeout_ms, AMTime::miliseconds());
+    auto [rcm, items] = client->listdir(path.dir_abs, nullptr, timeout_ms,
+                                        AMTime::miliseconds());
     if (rcm.first != EC::Success) {
       return result;
     }
@@ -97,15 +98,16 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     }
 
     std::shared_ptr<BaseClient> client =
-        path.remote ? AMClientManager::Instance().Clients().GetHost(path.nickname)
-                    : AMClientManager::Instance().LocalClient();
+        path.remote
+            ? AMClientManager::Instance().Clients().GetHost(path.nickname)
+            : AMClientManager::Instance().LocalClient();
     if (!client) {
       return false;
     }
 
     const int timeout = request.timeout_ms > 0 ? request.timeout_ms : 5000;
-    auto [rcm, items] =
-        client->listdir(path.dir_abs, interrupt_flag, timeout, AMTime::miliseconds());
+    auto [rcm, items] = client->listdir(path.dir_abs, interrupt_flag, timeout,
+                                        AMTime::miliseconds());
     if (rcm.first != EC::Success || request.IsInterrupted()) {
       return false;
     }
@@ -349,7 +351,8 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
   if (!client) {
     return path;
   }
-  path.dir_abs = AMClientManager::Instance().BuildPath(client, resolved_dir_raw);
+  path.dir_abs =
+      AMClientManager::Instance().BuildPath(client, resolved_dir_raw);
   path.valid = true;
   return path;
 }
@@ -494,4 +497,3 @@ AMBuildDefaultSearchEngineRegistrations() {
   out.push_back({{AMCompletionTarget::Path}, path_engine});
   return out;
 }
-

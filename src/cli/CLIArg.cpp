@@ -213,10 +213,6 @@ ECM CliManagers::Init() {
   if (!isok(rcm)) {
     return rcm;
   }
-  rcm = set_manager.Init();
-  if (!isok(rcm)) {
-    return rcm;
-  }
   return filesystem.Init();
 }
 
@@ -923,11 +919,9 @@ ECM TaskInspectArgs::Run(const CliManagers &managers,
   }
   (void)managers;
   if (id.empty() && !set && !entry) {
-    // ShowTaskInspectInfo();
     return {EC::Success, ""};
   }
   if (id.empty()) {
-    // ShowTaskInspectInfo();
     return {EC::InvalidArg, "Task id required"};
   }
 

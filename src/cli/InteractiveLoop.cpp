@@ -1573,6 +1573,11 @@ int RunInteractiveLoop(const std::string &app_name,
     ctx.is_interactive->store(true, std::memory_order_relaxed);
   }
   bool skip_loop_exit_callbacks = false;
+  auto store_exit_code = [&ctx](int code) {
+    if (ctx.exit_code) {
+      ctx.exit_code->store(code, std::memory_order_relaxed);
+    }
+  };
 
   AMPromptManager &prompt = AMPromptManager::Instance();
   AMConfigManager &config_manager = managers.config_manager;
@@ -1661,7 +1666,7 @@ int RunInteractiveLoop(const std::string &app_name,
         AMInputPreprocess::ParseShellPrefix(trimmed, &shell_command, &is_shell);
     if (shell_parse.first != EC::Success) {
       PrintECM_(prompt, shell_parse);
-      SetCliExitCode(static_cast<int>(shell_parse.first));
+      store_exit_code(static_cast<int>(shell_parse.first));
       const auto iter_end = std::chrono::steady_clock::now();
       UpdatePromptState_(prompt_state, shell_parse, iter_end - input_confirmed);
       continue;
@@ -1679,7 +1684,7 @@ int RunInteractiveLoop(const std::string &app_name,
       } else {
         PrintECM_(prompt, shell_result.first);
       }
-      SetCliExitCode(static_cast<int>(shell_result.first.first));
+      store_exit_code(static_cast<int>(shell_result.first.first));
       const auto shell_end = std::chrono::steady_clock::now();
       UpdatePromptState_(prompt_state, shell_result.first,
                          shell_end - input_confirmed);
@@ -1703,21 +1708,21 @@ int RunInteractiveLoop(const std::string &app_name,
     } catch (const CLI::CallForHelp &e) {
       prompt.Print(app.help());
       ECM parse_rcm = {EC::Success, ""};
-      SetCliExitCode(e.get_exit_code());
+      store_exit_code(e.get_exit_code());
       const auto iter_end = std::chrono::steady_clock::now();
       UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
       continue;
     } catch (const CLI::CallForAllHelp &e) {
       prompt.Print(app.help("", CLI::AppFormatMode::All));
       ECM parse_rcm = {EC::Success, ""};
-      SetCliExitCode(e.get_exit_code());
+      store_exit_code(e.get_exit_code());
       const auto iter_end = std::chrono::steady_clock::now();
       UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
       continue;
     } catch (const CLI::CallForVersion &e) {
       prompt.Print(app.version());
       ECM parse_rcm = {EC::Success, ""};
-      SetCliExitCode(e.get_exit_code());
+      store_exit_code(e.get_exit_code());
       const auto iter_end = std::chrono::steady_clock::now();
       UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
       continue;
@@ -1725,7 +1730,7 @@ int RunInteractiveLoop(const std::string &app_name,
       const std::string parse_msg = e.what();
       prompt.Print(parse_msg);
       ECM parse_rcm = {EC::InvalidArg, parse_msg};
-      SetCliExitCode(static_cast<int>(parse_rcm.first));
+      store_exit_code(static_cast<int>(parse_rcm.first));
       const auto iter_end = std::chrono::steady_clock::now();
       UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
       continue;
@@ -1751,6 +1756,6 @@ int RunInteractiveLoop(const std::string &app_name,
   if (ctx.is_interactive) {
     ctx.is_interactive->store(false, std::memory_order_relaxed);
   }
-  return g_cli_exit_code;
+  return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;
 }
 

@@ -81,7 +81,9 @@ int main(int argc, char **argv) {
     if (dispatch.rcm.first != EC::Success) {
       return static_cast<int>(dispatch.rcm.first);
     }
-    return g_cli_exit_code;
+    return run_ctx.exit_code
+               ? run_ctx.exit_code->load(std::memory_order_relaxed)
+               : 0;
   } catch (const std::runtime_error &e) {
     std::cerr << "❌Uncatched RuntimeError: " << e.what() << "\n";
     return static_cast<int>(EC::UnknownError);
