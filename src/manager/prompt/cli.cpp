@@ -166,6 +166,61 @@ std::string NormalizePromptStyleForIc_(const std::string &raw) {
 }
 
 /**
+ * @brief Apply CLIPrompt shortcut styles as isocline named styles.
+ */
+void ApplyPromptShortcutStyles_() {
+  Json settings;
+  if (!AMConfigManager::Instance().GetJson(DocumentKind::Settings, &settings) ||
+      !settings.is_object()) {
+    return;
+  }
+
+  auto style_it = settings.find("Style");
+  if (style_it == settings.end() || !style_it->is_object()) {
+    return;
+  }
+  auto cli_prompt_it = style_it->find("CLIPrompt");
+  if (cli_prompt_it == style_it->end() || !cli_prompt_it->is_object()) {
+    return;
+  }
+  auto shortcut_it = cli_prompt_it->find("shortcut");
+  if (shortcut_it == cli_prompt_it->end() || !shortcut_it->is_object()) {
+    return;
+  }
+
+  for (auto it = shortcut_it->begin(); it != shortcut_it->end(); ++it) {
+    if (!it.value().is_string()) {
+      continue;
+    }
+    const std::string fmt = NormalizePromptStyleForIc_(it.value().get<std::string>());
+    if (fmt.empty()) {
+      continue;
+    }
+    ic_style_def(it.key().c_str(), fmt.c_str());
+  }
+}
+
+/**
+ * @brief Resolve incremental history-search prompt text from settings.
+ */
+std::string ResolveHistorySearchPrompt_() {
+  AMConfigManager &config = AMConfigManager::Instance();
+  std::string prompt = config.ResolveArg<std::string>(
+      DocumentKind::Settings,
+      {"Style", "CLIPrompt", "templete", "history_search_prompt"}, "", {});
+  if (!prompt.empty()) {
+    return prompt;
+  }
+  prompt = config.ResolveArg<std::string>(
+      DocumentKind::Settings,
+      {"Style", "CLIPrompt", "template", "history_search_prompt"}, "", {});
+  if (!prompt.empty()) {
+    return prompt;
+  }
+  return "history search";
+}
+
+/**
  * @brief Apply abort style to isocline warning channel for query prompts.
  *
  * The warning style is used by isocline diagnostics (including Ctrl+C abort
@@ -301,11 +356,14 @@ static const std::string ickey = "ic-prompt";
 void ApplyCoreProfileSettings_(const AMPromptProfileArgs &profile) {
   ic_set_prompt_marker(profile.prompt.marker.c_str(),
                        profile.prompt.continuation_marker.c_str());
+  ApplyPromptShortcutStyles_();
+  const std::string history_search_prompt = ResolveHistorySearchPrompt_();
+  ic_set_history_search_prompt(history_search_prompt.c_str());
   ic_enable_multiline(profile.prompt.enable_multiline);
   ic_enable_history_duplicates(profile.history.enable_duplicates);
 
   ic_enable_hint(profile.inline_hint.enable);
-  ic_set_hint_delay(std::max(0, profile.inline_hint.delay_ms));
+  ic_set_hint_delay(std::max(0, profile.inline_hint.render_delay_ms));
   ic_set_hint_search_delay(std::max(0, profile.inline_hint.search_delay_ms));
   ic_set_highlight_delay(std::max(0, profile.highlight.delay_ms));
 }

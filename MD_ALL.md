@@ -807,7 +807,7 @@ real_func:
 
 使用上下键可以切换历史指令(注意不能和补全菜单冲突, 有补全菜单时优先选择补全项目, 沉默历史指令选择)
 
-历史命令存在项目根目录的.AMSFTP_History.toml中
+历史命令存在项目目录的config/internal/history.toml中
 
 注意需要以 nickname = list(cmd)的形式保存, 不同client不共享历史命令
 
@@ -828,7 +828,7 @@ PrompManager负责将历史数据写入replxx中
 
 在input返回且内容不为空且COREPROMPT钩子没有被触发时, 加入prompt到历史中
 
-程序退出时,获取replxx的history写回.AMSFTP_History.toml
+程序退出时,获取replxx的history写回config/internal/history.toml
 sftp, ch, ftp, connect连接成功后, 或切换到该client
 
 CLI11在非交互模式下无法通过-h打印使用说明,  而是返回This should be caught in your main function, see examples

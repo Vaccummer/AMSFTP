@@ -101,7 +101,9 @@ static void edit_history_search(ic_env_t* env, editor_t* eb, char* initial ) {
   eb->disable_undo = true;
   bool old_hint = ic_enable_hint(false);  
   const char* prompt_text = eb->prompt_text;
-  eb->prompt_text = "history search";
+  eb->prompt_text = (env->history_search_prompt != NULL
+                         ? env->history_search_prompt
+                         : "history search");
   
   // search state
   hsearch_t* hs = NULL;        // search undo 

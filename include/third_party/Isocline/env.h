@@ -36,6 +36,7 @@ struct ic_env_s {
   const char*     match_braces;     // matching braces, e.g "()[]{}"
   const char*     auto_braces;      // auto insertion braces, e.g "()[]{}\"\"''"
   const char*     line_prefix;      // fixed prefix displayed after line breaks
+  const char*     history_search_prompt; // prompt text shown during incremental history search
   char            multiline_eol;    // character used for multiline input ("\") (set to 0 to disable)
   bool            initialized;      // are we initialized?
   bool            noedit;           // is rich editing possible (tty != NULL)

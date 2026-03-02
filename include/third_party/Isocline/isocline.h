@@ -470,6 +470,10 @@ void ic_set_line_prefix( const char* prefix );
 /** Get the current line prefix (may be an empty string). */
 const char* ic_get_line_prefix(void);
 
+/** Set prompt text used by incremental history search (Ctrl+R).
+    Pass NULL or empty to reset to the default "history search". */
+void ic_set_history_search_prompt( const char* prompt_text );
+
 /// Disable or enable display of short help messages for history search etc.
 /// (full help is always dispayed when pressing F1 regardless of this setting)
 /// @returns the previous setting.

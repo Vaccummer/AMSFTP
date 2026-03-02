@@ -312,7 +312,7 @@ void PruneBackupFiles_(const std::filesystem::path &dir,
 }
 } // namespace
 
-/** @brief JSON schema used to validate .AMSFTP_History.toml. */
+/** @brief JSON schema used to validate config/internal/history.toml. */
 inline constexpr char kHistorySchemaJson[250] = R"json(
 {
   "type": "object",
@@ -340,14 +340,17 @@ ECM AMConfigStorage::AMInit(const std::filesystem::path &root_dir) {
 
   paths[DocumentKind::Config] = root_dir / "config" / "config.toml";
   paths[DocumentKind::Settings] = root_dir / "config" / "settings.toml";
-  paths[DocumentKind::KnownHosts] = root_dir / "config" / "known_hosts.toml";
-  paths[DocumentKind::History] = root_dir / ".AMSFTP_History.toml";
+  paths[DocumentKind::KnownHosts] =
+      root_dir / "config" / "internal" / "known_hosts.toml";
+  paths[DocumentKind::History] =
+      root_dir / "config" / "internal" / "history.toml";
 
-  schemas[DocumentKind::Config] = root_dir / "config" / "config.schema.json";
+  schemas[DocumentKind::Config] =
+      root_dir / "config" / "schema" / "config.schema.json";
   schemas[DocumentKind::Settings] =
-      root_dir / "config" / "settings.schema.json";
+      root_dir / "config" / "schema" / "settings.schema.json";
   schemas[DocumentKind::KnownHosts] =
-      root_dir / "config" / "known_hosts.schema.json";
+      root_dir / "config" / "schema" / "known_hosts.schema.json";
 
   return AMInit(root_dir, paths, schemas);
 }
@@ -377,12 +380,14 @@ ECM AMConfigStorage::AMInit(
   };
 
   init_doc(DocumentKind::Config, root_dir / "config" / "config.toml",
-           root_dir / "config" / "config.schema.json");
+           root_dir / "config" / "schema" / "config.schema.json");
   init_doc(DocumentKind::Settings, root_dir / "config" / "settings.toml",
-           root_dir / "config" / "settings.schema.json");
-  init_doc(DocumentKind::KnownHosts, root_dir / "config" / "known_hosts.toml",
-           root_dir / "config" / "known_hosts.schema.json");
-  init_doc(DocumentKind::History, root_dir / ".AMSFTP_History.toml", {});
+           root_dir / "config" / "schema" / "settings.schema.json");
+  init_doc(DocumentKind::KnownHosts,
+           root_dir / "config" / "internal" / "known_hosts.toml",
+           root_dir / "config" / "schema" / "known_hosts.schema.json");
+  init_doc(DocumentKind::History,
+           root_dir / "config" / "internal" / "history.toml", {});
 
   backup_prune_checked_ = false;
   shutdown_requested_.store(false, std::memory_order_relaxed);

@@ -430,6 +430,16 @@ ic_public const char* ic_get_line_prefix(void) {
   return (env->line_prefix == NULL ? "" : env->line_prefix);
 }
 
+/** Set prompt text used by incremental history search (Ctrl+R). */
+ic_public void ic_set_history_search_prompt( const char* prompt_text ) {
+  ic_env_t* env = ic_get_env(); if (env==NULL) return;
+  mem_free(env->mem, env->history_search_prompt);
+  if (prompt_text == NULL || prompt_text[0] == 0) {
+    prompt_text = "history search";
+  }
+  env->history_search_prompt = mem_strdup(env->mem, prompt_text);
+}
+
 ic_public bool ic_enable_hint(bool enable) {
   ic_env_t* env = ic_get_env(); if (env==NULL) return false;
   bool prev = env->no_hint;
@@ -729,6 +739,7 @@ static void ic_env_free(ic_env_t* env) {
   term_free(env->term);
   tty_free(env->tty);
   mem_free(env->mem, env->line_prefix);
+  mem_free(env->mem, env->history_search_prompt);
   mem_free(env->mem, env->cprompt_marker);
   mem_free(env->mem,env->prompt_marker);
   mem_free(env->mem, env->match_braces);
@@ -780,6 +791,7 @@ static ic_env_t* ic_env_create( ic_malloc_fun_t* _malloc, ic_realloc_fun_t* _rea
   env->complete_auto_fill = true;
   env->complete_select_sign = NULL;
   env->line_prefix = mem_strdup(env->mem, "");
+  env->history_search_prompt = mem_strdup(env->mem, "history search");
   
   if (env->tty == NULL || env->term==NULL ||
       env->completions == NULL || env->history == NULL || env->bbcode == NULL ||
