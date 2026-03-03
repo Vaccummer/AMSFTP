@@ -132,6 +132,11 @@ public:
    */
   std::unordered_map<std::string, CacheStatus> GetCacheStatusAll() const;
 
+  /**
+   * @brief Register temp-cache clear callbacks for PromptCore return/exit.
+   */
+  void RegisterCacheClearOnCorePromptReturn();
+
 private:
   /**
    * @brief Cache key for path results.

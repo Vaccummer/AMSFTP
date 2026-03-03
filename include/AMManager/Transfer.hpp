@@ -17,6 +17,7 @@ public:
   using PublicResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
   using ResultCallbackFn = std::function<void(
       std::shared_ptr<TaskInfo>, PublicResultCallback, UserResultCallback)>;
+  ~AMTransferManager() override = default;
 
   /**
    * @brief Return the singleton instance.
@@ -104,8 +105,7 @@ public:
    * @param is_async Whether to submit as an async task.
    */
   ECM SubmitCachedTransferSets(
-      bool quiet,
-      std::shared_ptr<TaskControlToken> interrupt_flag = nullptr,
+      bool quiet, std::shared_ptr<TaskControlToken> interrupt_flag = nullptr,
       bool is_async = false);
 
   /**
@@ -235,18 +235,16 @@ public:
    * @param quiet Whether to suppress output.
    * @param interrupt_flag Optional interrupt flag.
    */
-  ECM transfer(
-      const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-      std::shared_ptr<TaskControlToken> interrupt_flag = nullptr);
+  ECM transfer(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
+               std::shared_ptr<TaskControlToken> interrupt_flag = nullptr);
   /**
    * @brief Execute a prepared TaskInfo synchronously.
    *
    * @param task_info Prepared task info containing tasks and host maintainer.
    * @param interrupt_flag Optional interrupt flag for cancellation.
    */
-  ECM transfer(
-      const std::shared_ptr<TaskInfo> &task_info,
-      std::shared_ptr<TaskControlToken> interrupt_flag = nullptr);
+  ECM transfer(const std::shared_ptr<TaskInfo> &task_info,
+               std::shared_ptr<TaskControlToken> interrupt_flag = nullptr);
   /**
    * @brief Execute transfer sets asynchronously (non-blocking).
    *

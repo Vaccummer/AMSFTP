@@ -395,8 +395,10 @@ std::pair<ECM, std::shared_ptr<ClientMaintainer>>
 AMTransferManager::CollectClients(
     const std::vector<std::string> &nicknames,
     std::shared_ptr<TaskControlToken> flag) {
+  const int heartbeat_timeout_ms =
+      AMClientManage::ResolveHeartbeatTimeoutMsFromSettings();
   auto maintainer = std::make_shared<ClientMaintainer>(
-      -1, ClientMaintainer::DisconnectCallback(),
+      -1, heartbeat_timeout_ms, ClientMaintainer::DisconnectCallback(),
       AMClientManager::Instance().LocalClient());
   for (const auto &name : nicknames) {
     if (name.empty() || name == "local") {

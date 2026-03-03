@@ -1,7 +1,4 @@
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
 #include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Prompt.hpp"
@@ -103,13 +100,13 @@ void AMPromptProfileArgs::Init(const Json &jsond,
 
   (void)AMJson::QueryKey(jsond, {"Prompt", "marker"}, &prompt.marker);
   (void)AMJson::QueryKey(jsond, {"Prompt", "continuation_marker"},
-                 &prompt.continuation_marker);
+                         &prompt.continuation_marker);
   (void)AMJson::QueryKey(jsond, {"Prompt", "enable_muiltiline"},
-                 &prompt.enable_multiline);
+                         &prompt.enable_multiline);
 
   (void)AMJson::QueryKey(jsond, {"History", "enable"}, &history.enable);
   (void)AMJson::QueryKey(jsond, {"History", "enable_duplicates"},
-                 &history.enable_duplicates);
+                         &history.enable_duplicates);
   (void)AMJson::QueryKey(jsond, {"History", "max_count"}, &history.max_count);
 
   (void)AMJson::QueryKey(jsond, {"InlineHint", "enable"}, &inline_hint.enable);
@@ -119,24 +116,23 @@ void AMPromptProfileArgs::Init(const Json &jsond,
                            &inline_hint.render_delay_ms);
   }
   (void)AMJson::QueryKey(jsond, {"InlineHint", "search_delay_ms"},
-                 &inline_hint.search_delay_ms);
+                         &inline_hint.search_delay_ms);
   (void)AMJson::QueryKey(jsond, {"InlineHint", "Path", "enable"},
-                 &inline_hint.path.enable);
+                         &inline_hint.path.enable);
   (void)AMJson::QueryKey(jsond, {"InlineHint", "Path", "use_async"},
-                 &inline_hint.path.use_async);
+                         &inline_hint.path.use_async);
   (void)AMJson::QueryKey(jsond, {"InlineHint", "Path", "timeout_ms"},
-                 &inline_hint.path.timeout_ms);
+                         &inline_hint.path.timeout_ms);
 
   (void)AMJson::QueryKey(jsond, {"Complete", "Searcher", "Path", "use_async"},
-                 &complete.path.use_async);
+                         &complete.path.use_async);
   (void)AMJson::QueryKey(jsond, {"Complete", "Searcher", "Path", "timeout_ms"},
-                 &complete.path.timeout_ms);
-  (void)AMJson::QueryKey(jsond, {"Highlight", "delay_ms"},
-                 &highlight.delay_ms);
+                         &complete.path.timeout_ms);
+  (void)AMJson::QueryKey(jsond, {"Highlight", "delay_ms"}, &highlight.delay_ms);
   (void)AMJson::QueryKey(jsond, {"Highlight", "Path", "enable"},
-                 &highlight.path.enable);
+                         &highlight.path.enable);
   (void)AMJson::QueryKey(jsond, {"Highlight", "Path", "timeout_ms"},
-                 &highlight.path.timeout_ms);
+                         &highlight.path.timeout_ms);
 
   history.max_count = std::min(std::max(1, history.max_count), 200);
   inline_hint.render_delay_ms = std::max(0, inline_hint.render_delay_ms);
@@ -175,7 +171,8 @@ Json AMPromptProfileArgs::GetJson() const {
   jsond["InlineHint"]["Path"]["timeout_ms"] = inline_hint.path.timeout_ms;
 
   jsond["Complete"]["Searcher"]["Path"]["use_async"] = complete.path.use_async;
-  jsond["Complete"]["Searcher"]["Path"]["timeout_ms"] = complete.path.timeout_ms;
+  jsond["Complete"]["Searcher"]["Path"]["timeout_ms"] =
+      complete.path.timeout_ms;
 
   jsond["Highlight"]["delay_ms"] = highlight.delay_ms;
   jsond["Highlight"]["Path"]["enable"] = highlight.path.enable;
@@ -250,7 +247,8 @@ ECM AMProfileManager::ReloadPromptProfiles() {
     if (key.empty() || key == kDefaultPromptProfile) {
       continue;
     }
-    AMPromptProfileArgs item = BuildPromptProfileArgs_(it.value(), star_profile);
+    AMPromptProfileArgs item =
+        BuildPromptProfileArgs_(it.value(), star_profile);
     item.name = key;
     item.from_default = false;
     item.ic_profile = nullptr;
@@ -298,7 +296,8 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
   AMPromptManager &prompt = AMPromptManager::Instance();
   const AMPromptProfileArgs builtin_defaults{};
   const auto print_abort = [&prompt, this]() {
-    prompt.FmtPrint("{}\n", AMConfigManager::Instance().Format("Input Abort", "abort"));
+    prompt.FmtPrint("{}\n",
+                    AMConfigManager::Instance().Format("Input Abort", "abort"));
   };
 
   const std::map<std::string, std::string> bool_literals = {
@@ -375,7 +374,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
       if (parsed < min_value || parsed > max_value) {
         prompt.ErrorFormat(
             ECM{EC::InvalidArg, AMStr::fmt("value out of range [{}, {}]",
-                                             min_value, max_value)});
+                                           min_value, max_value)});
         continue;
       }
       *value = parsed;
@@ -409,7 +408,8 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
     }
     working.history.max_count = static_cast<int>(history_max);
   } else {
-    working.history.enable_duplicates = builtin_defaults.history.enable_duplicates;
+    working.history.enable_duplicates =
+        builtin_defaults.history.enable_duplicates;
     working.history.max_count = builtin_defaults.history.max_count;
   }
 
@@ -422,8 +422,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
   if (working.inline_hint.enable) {
     int64_t inline_delay =
         static_cast<int64_t>(working.inline_hint.render_delay_ms);
-    if (!prompt_int64("InlineHint.render_delay_ms: ", 0, 5000,
-                      &inline_delay)) {
+    if (!prompt_int64("InlineHint.render_delay_ms: ", 0, 5000, &inline_delay)) {
       print_abort();
       return Err(EC::ConfigCanceled, "profile edit canceled");
     }
@@ -493,7 +492,8 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
     working.complete.path.timeout_ms =
         static_cast<size_t>(complete_path_timeout);
   } else {
-    working.complete.path.timeout_ms = builtin_defaults.complete.path.timeout_ms;
+    working.complete.path.timeout_ms =
+        builtin_defaults.complete.path.timeout_ms;
   }
 
   int64_t highlight_delay = static_cast<int64_t>(working.highlight.delay_ms);
@@ -564,11 +564,13 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
     }
   }
 
-  if (!AMConfigManager::Instance().SetArg(DocumentKind::Settings, {kPromptProfileRoot, target},
-                      working.GetJson())) {
+  if (!AMConfigManager::Instance().SetArg(DocumentKind::Settings,
+                                          {kPromptProfileRoot, target},
+                                          working.GetJson())) {
     return Err(EC::CommonFailure, "failed to update PromptProfile");
   }
-  ECM dump_rcm = AMConfigManager::Instance().Dump(DocumentKind::Settings, "", true);
+  ECM dump_rcm =
+      AMConfigManager::Instance().Dump(DocumentKind::Settings, "", true);
   if (dump_rcm.first != EC::Success) {
     return dump_rcm;
   }
@@ -712,7 +714,8 @@ AMPromptProfileArgs *AMProfileManager::GetCurrentPromptProfileArgs() {
 /**
  * @brief Return current active prompt profile args (const overload).
  */
-const AMPromptProfileArgs *AMProfileManager::GetCurrentPromptProfileArgs() const {
+const AMPromptProfileArgs *
+AMProfileManager::GetCurrentPromptProfileArgs() const {
   return const_cast<AMProfileManager *>(this)->GetCurrentPromptProfileArgs();
 }
 
@@ -735,7 +738,8 @@ void AMProfileManager::EnsurePromptProfilesLoaded_() {
 void AMProfileManager::CollectHistory_() {
   history_map_.clear();
   Json jsond;
-  if (!AMConfigManager::Instance().GetJson(DocumentKind::History, &jsond) || !jsond.is_object()) {
+  if (!AMConfigManager::Instance().GetJson(DocumentKind::History, &jsond) ||
+      !jsond.is_object()) {
     return;
   }
   for (auto it = jsond.begin(); it != jsond.end(); ++it) {
@@ -772,7 +776,8 @@ void AMPromptManager::SetHistoryEnabled(bool enabled) {
   if (!ic_profile_use(core_prompt_profile_)) {
     return;
   }
-  const int max_history = std::min(std::max(1, profile->history.max_count), 200);
+  const int max_history =
+      std::min(std::max(1, profile->history.max_count), 200);
   ic_set_history(nullptr, max_history);
   ic_enable_history_duplicates(profile->history.enable_duplicates);
   if (!enabled) {
@@ -845,4 +850,3 @@ void AMPromptManager::FlushHistory() {
   AMConfigManager::Instance().SetArg(DocumentKind::History, {}, jsond);
   AMConfigManager::Instance().Dump(DocumentKind::History, "", true);
 }
-

@@ -421,20 +421,42 @@ CreateClient(const ConRequest &request, ssize_t trace_num = 10,
 
 class ClientMaintainer {
 private:
-  std::atomic<bool> is_heartbeat;
+  std::atomic<bool> is_heartbeat{false};
   std::thread heartbeat_thread;
-
   std::recursive_mutex beat_mtx;
+  std::mutex heartbeat_wait_mtx_;
+  std::condition_variable heartbeat_cv_;
 
-  void HeartbeatAct(int interval_s) {
-    int millsecond = 0;
+  /**
+   * @brief Clamp heartbeat check timeout to [10, 10000] ms.
+   */
+  static int ClampHeartbeatTimeoutMs_(int value) {
+    if (value < 10) {
+      return 10;
+    }
+    if (value > 10000) {
+      return 10000;
+    }
+    return value;
+  }
+
+  /**
+   * @brief Heartbeat worker loop for periodic client health checks.
+   */
+  void HeartbeatAct(int interval_s, int heartbeat_timeout_ms) {
+    const auto wait_interval =
+        std::chrono::milliseconds(std::max(1, interval_s) * 1000);
     ECM rcm;
-    while (true) {
+    while (is_heartbeat.load(std::memory_order_acquire)) {
       // Traverse hosts dictionary
       {
         std::lock_guard<std::recursive_mutex> lock(beat_mtx);
         for (auto &host : hosts) {
-          rcm = host.second->Check();
+          if (!host.second) {
+            continue;
+          }
+          rcm = host.second->Check(nullptr, heartbeat_timeout_ms,
+                                   AMTime::miliseconds());
           if (rcm.first != EC::Success) {
             if (is_disconnect_cb) {
               CallCallbackSafe(disconnect_cb, host.second, rcm);
@@ -442,14 +464,13 @@ private:
           }
         }
       }
-      while (millsecond < interval_s * 1000) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        millsecond += 100;
-        if (!is_heartbeat.load(std::memory_order_acquire)) {
-          return;
-        }
+
+      std::unique_lock<std::mutex> wait_lock(heartbeat_wait_mtx_);
+      if (heartbeat_cv_.wait_for(wait_lock, wait_interval, [this]() {
+            return !is_heartbeat.load(std::memory_order_acquire);
+          })) {
+        return;
       }
-      millsecond = 0;
     }
   }
 
@@ -462,6 +483,7 @@ public:
   std::shared_ptr<BaseClient> local_client;
   ~ClientMaintainer() {
     is_heartbeat.store(false, std::memory_order_relaxed);
+    heartbeat_cv_.notify_all();
     if (heartbeat_thread.joinable()) {
       heartbeat_thread.join();
     }
@@ -479,6 +501,7 @@ public:
   }
 
   ClientMaintainer(int heartbeat_interval_s = 60,
+                   int heartbeat_timeout_ms = 100,
                    DisconnectCallback disconnect_cb = {},
                    std::shared_ptr<BaseClient> local_client = nullptr,
                    std::unordered_map<std::string, std::shared_ptr<BaseClient>>
@@ -502,9 +525,12 @@ public:
       return;
     }
 
+    heartbeat_timeout_ms = ClampHeartbeatTimeoutMs_(heartbeat_timeout_ms);
     this->is_heartbeat.store(true, std::memory_order_relaxed);
-    heartbeat_thread = std::thread(
-        [this, heartbeat_interval_s]() { HeartbeatAct(heartbeat_interval_s); });
+    heartbeat_thread =
+        std::thread([this, heartbeat_interval_s, heartbeat_timeout_ms]() {
+          HeartbeatAct(heartbeat_interval_s, heartbeat_timeout_ms);
+        });
   }
 
   /**
@@ -727,6 +753,50 @@ private:
       }
     }
     return false;
+  }
+
+  /**
+   * @brief Cancel all pending (not yet conducting) tasks during shutdown.
+   */
+  void CancelPendingTasksOnExit_(
+      const std::string &reason = "Task canceled while shutting down") {
+    std::vector<std::shared_ptr<TaskInfo>> canceled_tasks;
+    {
+      std::scoped_lock<std::mutex, std::mutex> lock(registry_mtx_, queue_mtx_);
+      auto cancel_one = [&](const TaskId &task_id) {
+        auto it = task_registry_.find(task_id);
+        if (it == task_registry_.end() || !it->second) {
+          return;
+        }
+        auto task_info = it->second;
+        task_registry_.erase(it);
+        if (task_info->pd) {
+          task_info->pd->set_terminate();
+        }
+        task_info->SetResult({EC::Terminate, reason});
+        task_info->SetStatus(TaskStatus::Finished);
+        task_info->finished_time.store(AMTime::seconds(),
+                                       std::memory_order_relaxed);
+        task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
+        canceled_tasks.push_back(std::move(task_info));
+      };
+
+      for (const auto &task_id : public_queue_) {
+        cancel_one(task_id);
+      }
+      public_queue_.clear();
+
+      for (auto &queue : affinity_queues_) {
+        for (const auto &task_id : queue) {
+          cancel_one(task_id);
+        }
+        queue.clear();
+      }
+    }
+
+    for (const auto &task_info : canceled_tasks) {
+      HandleCompletedTask(task_info);
+    }
   }
 
   /**
@@ -1851,7 +1921,7 @@ public:
   /**
    * @brief Stop all workers and join their threads.
    */
-  ~AMWorkManager() { GracefulTerminate(); }
+  ~AMWorkManager() { (void)GracefulTerminate(-1); }
 
   /**
    * @brief Gracefully terminate pending/conducting tasks and stop workers.
@@ -1865,6 +1935,7 @@ public:
       return {EC::Success, ""};
     }
     running_.store(false, std::memory_order_relaxed);
+    CancelPendingTasksOnExit_();
     queue_cv_.notify_all();
     {
       std::lock_guard<std::mutex> lock(conducting_mtx_);
@@ -1980,6 +2051,9 @@ public:
   ECM submit(std::shared_ptr<TaskInfo> task_info) {
     if (!task_info) {
       return {EC::InvalidArg, "TaskInfo is nullptr"};
+    }
+    if (!running_.load(std::memory_order_acquire)) {
+      return {EC::OperationUnsupported, "Work manager is shutting down"};
     }
     if (!task_info->tasks || task_info->tasks->empty()) {
       return {EC::InvalidArg, "Tasks is nullptr or empty"};
