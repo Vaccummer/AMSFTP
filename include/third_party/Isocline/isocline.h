@@ -116,10 +116,10 @@ char* ic_readline_with_initial(const char* prompt_text,
 /// Properties that can be assigned are:
 /// * `color=` _clr_, `bgcolor=` _clr_: where _clr_ is either a hex value `#`RRGGBB or `#`RGB, a
 ///    standard HTML color name, or an ANSI palette name, like `ansi-maroon`, `ansi-default`, etc.
-/// * `bold`,`italic`,`reverse`,`underline`: can be `on` or `off`. 
+/// * `bold`,`italic`,`reverse`,`underline`,`strike`: can be `on` or `off`. 
 /// * everything else is a style; all HTML and ANSI color names are also a style (so we can just use `red`
 ///   instead of `color=red`, or `on red` instead of `bgcolor=red`), and there are
-///   the `b`, `i`, `u`, and `r` styles for bold, italic, underline, and reverse.
+///   the `b`, `i`, `u`, `r`, and `s` styles for bold, italic, underline, reverse, and strike.
 /// 
 /// See [here](https://github.com/daanx/isocline#bbcode-format) for a description of the full bbcode format.
 void ic_print( const char* s );

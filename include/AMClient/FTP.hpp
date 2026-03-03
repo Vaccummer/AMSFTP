@@ -2,6 +2,7 @@
 // Standard library
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -262,103 +263,196 @@ inline PathInfo ParseListLine(const std::string &line,
   return {};
 }
 
+inline std::string ToLowerAscii_(const std::string &value) {
+  std::string lowered = value;
+  std::transform(
+      lowered.begin(), lowered.end(), lowered.begin(),
+      [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return lowered;
+}
+
+inline double ParseMListTime_(const std::string &value) {
+  if (value.length() < 14) {
+    return 0.0;
+  }
+  try {
+    struct tm tm = {};
+    tm.tm_year = std::stoi(value.substr(0, 4)) - 1900;
+    tm.tm_mon = std::stoi(value.substr(4, 2)) - 1;
+    tm.tm_mday = std::stoi(value.substr(6, 2));
+    tm.tm_hour = std::stoi(value.substr(8, 2));
+    tm.tm_min = std::stoi(value.substr(10, 2));
+    tm.tm_sec = std::stoi(value.substr(12, 2));
+    return static_cast<double>(mktime(&tm));
+  } catch (...) {
+    return 0.0;
+  }
+}
+
+inline bool SplitMLSDFactsAndName_(const std::string &line, std::string *facts,
+                                   std::string *filename) {
+  if (!facts || !filename) {
+    return false;
+  }
+
+  std::string linef = line;
+  if (!linef.empty() && linef.back() == '\r') {
+    linef.pop_back();
+  }
+  const size_t first_non_space = linef.find_first_not_of(" \t");
+  if (first_non_space == std::string::npos) {
+    return false;
+  }
+  linef = linef.substr(first_non_space);
+
+  const size_t split_pos = linef.find_first_of(" \t");
+  if (split_pos == std::string::npos) {
+    return false;
+  }
+
+  const size_t name_pos = linef.find_first_not_of(" \t", split_pos);
+  if (name_pos == std::string::npos) {
+    return false;
+  }
+
+  *facts = linef.substr(0, split_pos);
+  *filename = linef.substr(name_pos);
+  return (!facts->empty() && !filename->empty());
+}
+
+inline size_t MListPermToUnixMode_(const std::string &perm_text,
+                                   PathType type) {
+  const std::string lowered = ToLowerAscii_(perm_text);
+  auto has = [&lowered](char c) {
+    return lowered.find(c) != std::string::npos;
+  };
+
+  bool can_read = false;
+  bool can_write = false;
+  bool can_exec = false;
+
+  if (type == PathType::DIR) {
+    // MLST/MLSD directory perms: list -> read, enter -> execute, mutation ->
+    // write
+    can_read = has('l');
+    can_exec = has('e');
+    can_write = has('c') || has('m') || has('p') || has('f') || has('d');
+  } else if (type == PathType::FILE) {
+    // File perms: retrieve -> read, store/append/delete/rename -> write
+    can_read = has('r');
+    can_write = has('w') || has('a') || has('d') || has('f');
+    can_exec = false;
+  } else {
+    // Unknown type: conservative union
+    can_read = has('r') || has('l');
+    can_exec = has('e');
+    can_write = has('w') || has('a') || has('d') || has('f') || has('c') ||
+                has('m') || has('p');
+  }
+
+  size_t mode = 0;
+  if (can_read) {
+    mode |= 0400;
+  }
+  if (can_write) {
+    mode |= 0200;
+  }
+  if (can_exec) {
+    mode |= 0100;
+  }
+  return mode;
+}
+
+inline void ParseMListFacts_(const std::string &facts, PathInfo *info,
+                             bool treat_cdir_pdir_as_dir) {
+  if (!info) {
+    return;
+  }
+  std::string perm_text = "";
+  bool has_unix_mode = false;
+
+  std::istringstream ss(facts);
+  std::string fact;
+  while (std::getline(ss, fact, ';')) {
+    fact = AMStr::Strip(fact);
+    if (fact.empty()) {
+      continue;
+    }
+
+    const size_t eq_pos = fact.find('=');
+    if (eq_pos == std::string::npos) {
+      continue;
+    }
+
+    const std::string key = ToLowerAscii_(AMStr::Strip(fact.substr(0, eq_pos)));
+    const std::string value = AMStr::Strip(fact.substr(eq_pos + 1));
+    if (value.empty()) {
+      continue;
+    }
+
+    if (key == "type") {
+      const std::string type_value = ToLowerAscii_(value);
+      if (type_value == "file") {
+        info->type = PathType::FILE;
+      } else if (type_value == "dir") {
+        info->type = PathType::DIR;
+      } else if (type_value == "cdir" || type_value == "pdir") {
+        info->type =
+            (treat_cdir_pdir_as_dir ? PathType::DIR : PathType::Unknown);
+      } else if (type_value.rfind("os.unix=symlink", 0) == 0 ||
+                 type_value.rfind("os.unix=slink", 0) == 0) {
+        info->type = PathType::SYMLINK;
+      } else {
+        info->type = PathType::Unknown;
+      }
+    } else if (key == "size") {
+      try {
+        info->size = std::stoull(value);
+      } catch (...) {
+        info->size = 0;
+      }
+    } else if (key == "modify") {
+      info->modify_time = ParseMListTime_(value);
+    } else if (key == "create") {
+      info->create_time = ParseMListTime_(value);
+    } else if (key == "perm" || key == "perms") {
+      perm_text = value;
+    } else if (key == "unix.mode") {
+      try {
+        info->mode_int = std::stoul(value, nullptr, 8);
+        info->mode_str = AMStr::ModeTrans(info->mode_int);
+        has_unix_mode = true;
+      } catch (...) {
+      }
+    } else if (key == "unix.owner") {
+      info->owner = value;
+    }
+  }
+
+  if (!has_unix_mode && !perm_text.empty()) {
+    info->mode_int = MListPermToUnixMode_(perm_text, info->type);
+    info->mode_str = AMStr::ModeTrans(info->mode_int);
+  }
+}
+
 // Parse MLSD line (directory listing)
 // Format: type=file;size=1024;modify=20210315120000;perm=rwx; filename
 // Unlike MLST, each MLSD line includes filename and must be extracted
 inline PathInfo ParseMLSDLine(const std::string &line,
                               const std::string &dir_path) {
   PathInfo info;
+  info.type = PathType::Unknown;
 
-  // Find separator between facts and filename (filename after last space)
-  size_t space_pos = line.rfind(' ');
-  if (space_pos == std::string::npos) {
-    info.type = PathType::Unknown;
+  std::string facts;
+  std::string filename;
+  if (!SplitMLSDFactsAndName_(line, &facts, &filename)) {
     return info;
-  }
-
-  std::string facts = line.substr(0, space_pos);
-  std::string filename = line.substr(space_pos + 1);
-
-  // Remove carriage return from filename
-  if (!filename.empty() && filename.back() == '\r') {
-    filename.pop_back();
   }
 
   info.name = filename;
   info.dir = dir_path;
   info.path = AMPathStr::join(dir_path, filename, SepType::Unix);
-
-  // Parse facts (;-separated key=value)
-  std::istringstream ss(facts);
-  std::string fact;
-  while (std::getline(ss, fact, ';')) {
-    if (fact.empty())
-      continue;
-
-    size_t eq_pos = fact.find('=');
-    if (eq_pos == std::string::npos)
-      continue;
-
-    std::string key = fact.substr(0, eq_pos);
-    std::string value = fact.substr(eq_pos + 1);
-
-    // Compare in lowercase
-    std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-
-    if (key == "type") {
-      std::transform(value.begin(), value.end(), value.begin(), ::tolower);
-      if (value == "file") {
-        info.type = PathType::FILE;
-      } else if (value == "dir") {
-        info.type = PathType::DIR;
-      } else if (value == "cdir" || value == "pdir") {
-        // Current/parent directory, skip
-        info.type = PathType::Unknown;
-      } else if (value == "os.unix=symlink" || value == "os.unix=slink") {
-        info.type = PathType::SYMLINK;
-      } else {
-        info.type = PathType::Unknown;
-      }
-    } else if (key == "size") {
-      try {
-        info.size = std::stoull(value);
-      } catch (...) {
-        info.size = 0;
-      }
-    } else if (key == "modify") {
-      if (value.length() >= 14) {
-        struct tm tm = {};
-        tm.tm_year = std::stoi(value.substr(0, 4)) - 1900;
-        tm.tm_mon = std::stoi(value.substr(4, 2)) - 1;
-        tm.tm_mday = std::stoi(value.substr(6, 2));
-        tm.tm_hour = std::stoi(value.substr(8, 2));
-        tm.tm_min = std::stoi(value.substr(10, 2));
-        tm.tm_sec = std::stoi(value.substr(12, 2));
-        info.modify_time = static_cast<double>(mktime(&tm));
-      }
-    } else if (key == "create") {
-      if (value.length() >= 14) {
-        struct tm tm = {};
-        tm.tm_year = std::stoi(value.substr(0, 4)) - 1900;
-        tm.tm_mon = std::stoi(value.substr(4, 2)) - 1;
-        tm.tm_mday = std::stoi(value.substr(6, 2));
-        tm.tm_hour = std::stoi(value.substr(8, 2));
-        tm.tm_min = std::stoi(value.substr(10, 2));
-        tm.tm_sec = std::stoi(value.substr(12, 2));
-        info.create_time = static_cast<double>(mktime(&tm));
-      }
-    } else if (key == "perm") {
-      info.mode_str = value;
-    } else if (key == "unix.mode") {
-      try {
-        info.mode_int = std::stoul(value, nullptr, 8);
-        info.mode_str = AMStr::ModeTrans(info.mode_int);
-      } catch (...) {
-      }
-    } else if (key == "unix.owner") {
-      info.owner = value;
-    }
-  }
+  ParseMListFacts_(facts, &info, false);
 
   return info;
 }
@@ -368,88 +462,25 @@ inline PathInfo ParseMLSDLine(const std::string &line,
 inline PathInfo ParseMLSTLine(const std::string &line,
                               const std::string &path) {
   PathInfo info;
+  info.type = PathType::Unknown;
   info.path = path;
   info.name = AMPathStr::basename(path);
   info.dir = AMPathStr::dirname(path);
 
-  // Find separator between facts and filename (filename after last space)
-  size_t space_pos = line.rfind(' ');
-  if (space_pos == std::string::npos) {
-    info.type = PathType::Unknown;
+  std::string linef = line;
+  if (!linef.empty() && linef.back() == '\r') {
+    linef.pop_back();
+  }
+  const size_t first_non_space = linef.find_first_not_of(" \t");
+  if (first_non_space == std::string::npos) {
     return info;
   }
+  linef = linef.substr(first_non_space);
 
-  std::string facts = line.substr(0, space_pos);
-
-  // Parse facts (;-separated key=value)
-  std::istringstream ss(facts);
-  std::string fact;
-  while (std::getline(ss, fact, ';')) {
-    if (fact.empty())
-      continue;
-
-    size_t eq_pos = fact.find('=');
-    if (eq_pos == std::string::npos)
-      continue;
-
-    std::string key = fact.substr(0, eq_pos);
-    std::string value = fact.substr(eq_pos + 1);
-
-    // Compare in lowercase
-    std::transform(key.begin(), key.end(), key.begin(), ::tolower);
-
-    if (key == "type") {
-      std::transform(value.begin(), value.end(), value.begin(), ::tolower);
-      if (value == "file") {
-        info.type = PathType::FILE;
-      } else if (value == "dir" || value == "cdir" || value == "pdir") {
-        info.type = PathType::DIR;
-      } else if (value == "os.unix=symlink" || value == "os.unix=slink") {
-        info.type = PathType::SYMLINK;
-      } else {
-        info.type = PathType::Unknown;
-      }
-    } else if (key == "size") {
-      try {
-        info.size = std::stoull(value);
-      } catch (...) {
-        info.size = 0;
-      }
-    } else if (key == "modify") {
-      // Format: YYYYMMDDHHMMSS or YYYYMMDDHHMMSS.sss
-      if (value.length() >= 14) {
-        struct tm tm = {};
-        tm.tm_year = std::stoi(value.substr(0, 4)) - 1900;
-        tm.tm_mon = std::stoi(value.substr(4, 2)) - 1;
-        tm.tm_mday = std::stoi(value.substr(6, 2));
-        tm.tm_hour = std::stoi(value.substr(8, 2));
-        tm.tm_min = std::stoi(value.substr(10, 2));
-        tm.tm_sec = std::stoi(value.substr(12, 2));
-        info.modify_time = static_cast<double>(mktime(&tm));
-      }
-    } else if (key == "create") {
-      if (value.length() >= 14) {
-        struct tm tm = {};
-        tm.tm_year = std::stoi(value.substr(0, 4)) - 1900;
-        tm.tm_mon = std::stoi(value.substr(4, 2)) - 1;
-        tm.tm_mday = std::stoi(value.substr(6, 2));
-        tm.tm_hour = std::stoi(value.substr(8, 2));
-        tm.tm_min = std::stoi(value.substr(10, 2));
-        tm.tm_sec = std::stoi(value.substr(12, 2));
-        info.create_time = static_cast<double>(mktime(&tm));
-      }
-    } else if (key == "perm") {
-      info.mode_str = value;
-    } else if (key == "unix.mode") {
-      try {
-        info.mode_int = std::stoul(value, nullptr, 8);
-        info.mode_str = AMStr::ModeTrans(info.mode_int);
-      } catch (...) {
-      }
-    } else if (key == "unix.owner") {
-      info.owner = value;
-    }
-  }
+  const size_t fact_end = linef.find_first_of(" \t");
+  const std::string facts =
+      (fact_end == std::string::npos ? linef : linef.substr(0, fact_end));
+  ParseMListFacts_(facts, &info, true);
 
   return info;
 }
@@ -524,6 +555,10 @@ private:
       true; // Whether MLST is supported; try by default first
   std::atomic<bool> mlst_checked =
       false; // Whether MLST support has been checked
+  std::atomic<bool> mlsd_supported =
+      true; // Whether MLSD is supported; try by default first
+  std::atomic<bool> mlsd_checked =
+      false; // Whether MLSD support has been checked
   std::regex ftp_url_pattern = std::regex("^ftp://.*$");
   std::string url = "";
   std::string current_url = ""; // Keep CURLOPT_URL string lifetime valid
@@ -695,6 +730,102 @@ private:
     mem->memory[mem->size] = 0;
 
     return realsize;
+  }
+
+  static OS_TYPE ParseSystResponseToOs_(const std::string &response) {
+    const std::string lowered = ToLowerAscii_(response);
+    if (lowered.empty()) {
+      return OS_TYPE::Unknown;
+    }
+    // FileZilla on Windows often reports "UNIX emulated by FileZilla".
+    if (lowered.find("filezilla") != std::string::npos &&
+        lowered.find("unix") != std::string::npos) {
+      return OS_TYPE::Unix;
+    }
+    if (lowered.find("windows") != std::string::npos ||
+        lowered.find("win32") != std::string::npos ||
+        lowered.find("win64") != std::string::npos ||
+        lowered.find("ms-dos") != std::string::npos ||
+        lowered.find("microsoft") != std::string::npos) {
+      return OS_TYPE::Windows;
+    }
+    if (lowered.find("freebsd") != std::string::npos) {
+      return OS_TYPE::FreeBSD;
+    }
+    if (lowered.find("darwin") != std::string::npos ||
+        lowered.find("macos") != std::string::npos ||
+        lowered.find("mac os") != std::string::npos) {
+      return OS_TYPE::MacOS;
+    }
+    if (lowered.find("linux") != std::string::npos) {
+      return OS_TYPE::Linux;
+    }
+    if (lowered.find("unix") != std::string::npos ||
+        lowered.find("type: l8") != std::string::npos) {
+      return OS_TYPE::Unix;
+    }
+    return OS_TYPE::Unknown;
+  }
+
+  std::pair<ECM, std::string> query_syst(amf interrupt_flag, int timeout_ms,
+                                         int64_t start_time) {
+    if (!curl || !multi) {
+      return {{EC::NoConnection, "CURL not initialized"}, ""};
+    }
+    ECM ecm = SetupPath("", true);
+    if (ecm.first != EC::Success) {
+      return {ecm, ""};
+    }
+
+    struct MemoryStruct header_chunk;
+    header_chunk.memory = (char *)malloc(1);
+    header_chunk.size = 0;
+
+    struct curl_slist *commands = nullptr;
+    commands = curl_slist_append(commands, "SYST");
+    curl_easy_setopt(curl, CURLOPT_QUOTE, commands);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl, CURLOPT_HEADERDATA, (void *)&header_chunk);
+
+    const auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
+
+    curl_easy_setopt(curl, CURLOPT_QUOTE, nullptr);
+    curl_slist_free_all(commands);
+
+    if (!nb_res.ok()) {
+      free(header_chunk.memory);
+      return {NBResultToECM(nb_res), ""};
+    }
+    if (nb_res.value != CURLE_OK) {
+      free(header_chunk.memory);
+      return {{GetFTPErrorCode(nb_res.value),
+               AMStr::fmt("SYST failed: {}", curl_easy_strerror(nb_res.value))},
+              ""};
+    }
+
+    std::string response(header_chunk.memory, header_chunk.size);
+    free(header_chunk.memory);
+
+    std::istringstream iss(response);
+    std::string line;
+    while (std::getline(iss, line)) {
+      line = AMStr::Strip(line);
+      if (line.empty()) {
+        continue;
+      }
+      if (line.size() >= 3 &&
+          std::isdigit(static_cast<unsigned char>(line[0])) &&
+          std::isdigit(static_cast<unsigned char>(line[1])) &&
+          std::isdigit(static_cast<unsigned char>(line[2]))) {
+        return {{EC::Success, ""}, line};
+      }
+    }
+    response = AMStr::Strip(response);
+    if (!response.empty()) {
+      return {{EC::Success, ""}, response};
+    }
+    return {{EC::CommonFailure, "SYST returned empty response"}, ""};
   }
 
   // Use MLST to get file info (modern method)
@@ -944,6 +1075,64 @@ private:
       }
     }
 
+    return {ECM{EC::Success, ""}, file_list};
+  }
+
+  // Legacy LIST method (fallback)
+  std::pair<ECM, std::vector<PathInfo>>
+  listdir_legacy(const std::string &path, amf interrupt_flag = nullptr,
+                 int timeout_ms = -1, int64_t start_time = -1) {
+    ECM ecm = SetupPath(path, true);
+    if (ecm.first != EC::Success) {
+      return {ecm, {}};
+    }
+
+    struct MemoryStruct chunk;
+    chunk.memory = (char *)malloc(1);
+    chunk.size = 0;
+
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
+
+    auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
+
+    if (!nb_res.ok()) {
+      free(chunk.memory);
+      return {NBResultToECM(nb_res), {}};
+    }
+
+    if (nb_res.value != CURLE_OK) {
+      free(chunk.memory);
+      return {
+          ECM{GetFTPErrorCode(nb_res.value),
+              AMStr::fmt("List failed: {}", curl_easy_strerror(nb_res.value))},
+          {}};
+    }
+
+    std::string listing(chunk.memory, chunk.size);
+    free(chunk.memory);
+
+    std::string dir_path = path;
+    if (!dir_path.empty() && dir_path.back() == '/') {
+      dir_path.pop_back();
+    }
+
+    std::vector<PathInfo> file_list;
+    std::istringstream iss(listing);
+    std::string line;
+    while (std::getline(iss, line)) {
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      if (line.empty()) {
+        continue;
+      }
+      PathInfo info = ParseListLine(line, dir_path);
+      if (info.type != PathType::Unknown && info.name != "." &&
+          info.name != "..") {
+        file_list.push_back(info);
+      }
+    }
     return {ECM{EC::Success, ""}, file_list};
   }
 
@@ -1212,6 +1401,30 @@ public:
     return sum * (double)1000.0 / static_cast<double>(rtts.size());
   }
 
+  OS_TYPE GetOSType(bool update = false) override {
+    if (os_type != OS_TYPE::Uncertain && !update) {
+      return os_type;
+    }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!curl || !multi) {
+      os_type = OS_TYPE::Unknown;
+      return os_type;
+    }
+    amf interrupt_flag = this->ClientInterruptFlag
+                             ? this->ClientInterruptFlag
+                             : std::make_shared<TaskControlToken>();
+    auto [rcm, syst_line] =
+        query_syst(interrupt_flag, 5000, AMTime::miliseconds());
+    if (rcm.first != EC::Success) {
+      os_type = OS_TYPE::Unknown;
+      return os_type;
+    }
+    os_type = ParseSystResponseToOs_(syst_line);
+    return os_type;
+  }
+
+  std::string GetHomeDir() override { return "/"; }
+
   ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
             int64_t start_time = -1) override {
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
@@ -1267,10 +1480,9 @@ public:
     }
 
     // Prefer MLST (modern method)
-    /*
+
     if (mlst_supported.load(std::memory_order_relaxed)) {
-      auto [ecm, info] =
-          try_mlst(pathf, interrupt_flag, timeout_ms, start_time);
+      auto [ecm, info] = try_mlst(path, interrupt_flag, timeout_ms, start_time);
 
       if (ecm.first == EC::Success) {
         mlst_checked.store(true, std::memory_order_relaxed);
@@ -1292,7 +1504,7 @@ public:
         return {ecm, PathInfo()};
       }
       // Other errors also fall back to legacy method
-    }*/
+    }
     auto [rcm, info] =
         stat_legacy(path, interrupt_flag, timeout_ms, start_time);
     if (rcm.first == EC::Success) {
@@ -1305,113 +1517,51 @@ public:
   std::pair<ECM, std::vector<PathInfo>>
   listdir_combine(const std::string &path, amf interrupt_flag = nullptr,
                   int max_time_ms = -1, int64_t start_time = -1) {
-    if (start_time == -1) {
-      start_time = AMTime::miliseconds();
-    }
-    std::string pathf = path;
-    if (pathf.empty()) {
-      return {ECM{EC::InvalidArg, AMStr::fmt("Invalid path: {}", path)}, {}};
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    interrupt_flag =
-        interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
-
-    if (!curl) {
-      return {ECM{EC::NoConnection, "CURL not initialized"}, {}};
-    }
-
-    if (interrupt_flag && !interrupt_flag->IsRunning()) {
-      return {ECM{EC::Terminate, "Interrupted by user"}, {}};
-    }
-
-    // Prefer MLSD (modern method)
-    if (false) {
-      auto [ecm, file_list] =
-          try_mlsd(pathf, interrupt_flag, max_time_ms, start_time);
-
-      if (ecm.first == EC::Success) {
-        mlst_checked.store(true, std::memory_order_relaxed);
-        return {ecm, file_list};
-      }
-
-      // MLSD unsupported; mark and fall back
-      if (ecm.first == EC::OperationUnsupported) {
-        mlst_supported.store(false, std::memory_order_relaxed);
-        mlst_checked.store(true, std::memory_order_relaxed);
-        // Continue using legacy method
-      } else if (ecm.first == EC::Terminate ||
-                 ecm.first == EC::OperationTimeout) {
-        // Interrupted or timed out; return directly
-        return {ecm, {}};
-      } else if (ecm.first == EC::PathNotExist) {
-        // Path does not exist
-        return {ecm, {}};
-      }
-      // Other errors also fall back to legacy method
-    }
-
-    // Legacy method
-    return listdir(pathf, interrupt_flag, max_time_ms, start_time);
+    return listdir(path, interrupt_flag, max_time_ms, start_time);
   }
 
-  // Legacy LIST method (fallback)
+  // Prefer MLSD first, then fallback to legacy LIST.
   std::pair<ECM, std::vector<PathInfo>>
   listdir(const std::string &path, amf interrupt_flag = nullptr,
           int timeout_ms = -1, int64_t start_time = -1) override {
-    ECM ecm = SetupPath(path, true);
-
-    if (ecm.first != EC::Success) {
-      return {ecm, {}};
-    }
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     interrupt_flag =
         interrupt_flag ? interrupt_flag : this->ClientInterruptFlag;
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    struct MemoryStruct chunk;
-    chunk.memory = (char *)malloc(1);
-    chunk.size = 0;
-
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
-
-    auto nb_res = nb_perform(interrupt_flag, timeout_ms, start_time);
-
-    if (!nb_res.ok()) {
-      free(chunk.memory);
-      return {NBResultToECM(nb_res), {}};
+    if (path.empty()) {
+      return {ECM{EC::InvalidArg, AMStr::fmt("Invalid path: {}", path)}, {}};
+    }
+    if (!curl) {
+      return {ECM{EC::NoConnection, "CURL not initialized"}, {}};
+    }
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
+      return {ECM{EC::Terminate, "Interrupted by user"}, {}};
     }
 
-    if (nb_res.value != CURLE_OK) {
-      free(chunk.memory);
-      ECM rcm =
-          ECM{GetFTPErrorCode(nb_res.value),
-              AMStr::fmt("List failed: {}", curl_easy_strerror(nb_res.value))};
-      trace(TraceLevel::Error, rcm.first, path, "listdir", rcm.second);
-      return {rcm, {}};
-    }
-
-    std::string listing(chunk.memory, chunk.size);
-    free(chunk.memory);
-
-    std::vector<PathInfo> file_list;
-    std::istringstream iss(listing);
-    std::string line;
-
-    while (std::getline(iss, line)) {
-      if (!line.empty() && line.back() == '\r') {
-        line.pop_back();
+    if (mlsd_supported.load(std::memory_order_relaxed)) {
+      auto [ecm, file_list] =
+          try_mlsd(path, interrupt_flag, timeout_ms, start_time);
+      if (ecm.first == EC::Success) {
+        mlsd_checked.store(true, std::memory_order_relaxed);
+        return {ecm, file_list};
       }
-
-      if (line.empty())
-        continue;
-      PathInfo info = ParseListLine(line, path);
-      if (info.type != PathType::Unknown && info.name != "." &&
-          info.name != "..") {
-        file_list.push_back(info);
+      if (ecm.first == EC::OperationUnsupported) {
+        mlsd_supported.store(false, std::memory_order_relaxed);
+        mlsd_checked.store(true, std::memory_order_relaxed);
+      } else if (ecm.first == EC::Terminate ||
+                 ecm.first == EC::OperationTimeout ||
+                 ecm.first == EC::PathNotExist) {
+        return {ecm, {}};
       }
     }
 
-    return {ECM{EC::Success, ""}, file_list};
+    auto [rcm, file_list] =
+        listdir_legacy(path, interrupt_flag, timeout_ms, start_time);
+    if (rcm.first == EC::Success) {
+      return {rcm, file_list};
+    }
+    trace(TraceLevel::Error, rcm.first, path, "listdir", rcm.second);
+    return {rcm, {}};
   }
 
   // Define iwalk in base class since almost all iwalks are based on listdir

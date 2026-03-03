@@ -138,6 +138,10 @@ ic_private void term_italic(term_t *term, bool on) {
   term_write(term, on ? IC_CSI "3m" : IC_CSI "23m");
 }
 
+ic_private void term_strike(term_t *term, bool on) {
+  term_write(term, on ? IC_CSI "9m" : IC_CSI "29m");
+}
+
 ic_private void term_writeln(term_t *term, const char *s) {
   term_write(term, s);
   term_write(term, "\n");
@@ -183,6 +187,9 @@ ic_private void term_set_attr(term_t *term, attr_t attr) {
   if (attr.x.italic != term->attr.x.italic && attr.x.italic != IC_NONE) {
     term_italic(term, attr.x.italic == IC_ON);
   }
+  if (attr.x.strike != term->attr.x.strike && attr.x.strike != IC_NONE) {
+    term_strike(term, attr.x.strike == IC_ON);
+  }
   assert(attr.x.color == term->attr.x.color || attr.x.color == IC_COLOR_NONE);
   assert(attr.x.bgcolor == term->attr.x.bgcolor ||
          attr.x.bgcolor == IC_COLOR_NONE);
@@ -191,6 +198,7 @@ ic_private void term_set_attr(term_t *term, attr_t attr) {
   assert(attr.x.underline == term->attr.x.underline ||
          attr.x.underline == IC_NONE);
   assert(attr.x.italic == term->attr.x.italic || attr.x.italic == IC_NONE);
+  assert(attr.x.strike == term->attr.x.strike || attr.x.strike == IC_NONE);
 }
 
 /*

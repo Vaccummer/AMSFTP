@@ -148,6 +148,7 @@ bool TryBuildAnsiStyleCode_(const std::string &raw, std::string *ansi_code) {
   bool italic = false;
   bool underline = false;
   bool reverse = false;
+  bool strike = false;
   bool expect_bg = false;
   bool has_style = false;
   int fg_r = -1;
@@ -181,6 +182,11 @@ bool TryBuildAnsiStyleCode_(const std::string &raw, std::string *ansi_code) {
     }
     if (token == "r") {
       reverse = true;
+      has_style = true;
+      continue;
+    }
+    if (token == "s") {
+      strike = true;
       has_style = true;
       continue;
     }
@@ -245,6 +251,9 @@ bool TryBuildAnsiStyleCode_(const std::string &raw, std::string *ansi_code) {
   }
   if (reverse) {
     append_code("7");
+  }
+  if (strike) {
+    append_code("9");
   }
   if (fg_r >= 0) {
     append_code(AMStr::fmt("38;2;{};{};{}", fg_r, fg_g, fg_b));
@@ -1006,6 +1015,7 @@ bool TryConvertTaggedTextToAnsi_(const std::string &tagged,
   bool italic = false;
   bool underline = false;
   bool reverse = false;
+  bool strike = false;
   bool expect_bg = false;
   bool has_style = false;
   int fg_r = -1;
@@ -1039,6 +1049,11 @@ bool TryConvertTaggedTextToAnsi_(const std::string &tagged,
     }
     if (token == "r") {
       reverse = true;
+      has_style = true;
+      continue;
+    }
+    if (token == "s") {
+      strike = true;
       has_style = true;
       continue;
     }
@@ -1103,6 +1118,9 @@ bool TryConvertTaggedTextToAnsi_(const std::string &tagged,
   }
   if (reverse) {
     append_code("7");
+  }
+  if (strike) {
+    append_code("9");
   }
   if (fg_r >= 0) {
     append_code(AMStr::fmt("38;2;{};{};{}", fg_r, fg_g, fg_b));
