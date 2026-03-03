@@ -78,8 +78,10 @@ void Operator::SetDisconnectCallback(DisconnectCallback cb) {
 
 ClientMaintainer &Operator::Clients() {
   if (!clients_) {
-    clients_ =
-        std::make_shared<ClientMaintainer>(60, disconnect_cb_, LocalClient());
+    const int heartbeat_timeout_ms =
+        ResolveHeartbeatTimeoutMsFromSettings();
+    clients_ = std::make_shared<ClientMaintainer>(
+        60, heartbeat_timeout_ms, disconnect_cb_, LocalClient());
   }
   return *clients_;
 }

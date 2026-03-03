@@ -59,7 +59,6 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
     AMInitWSA();
 #endif
-
     auto time_end = std::chrono::steady_clock::now();
     std::cout << "Init time: "
               << std::chrono::duration_cast<std::chrono::milliseconds>(

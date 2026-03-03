@@ -1074,7 +1074,7 @@ void AMConfigStorage::WriteThreadLoop_() {
   while (true) {
     std::function<ECM()> task;
     {
-      std::unique_lock<std::mutex> lock(write_mtx_);
+      std::unique_lock<std::mutex> lock(write_queue_mtx_);
       write_cv_.wait(lock, [&]() {
         return shutdown_requested_.load(std::memory_order_relaxed) ||
                !write_queue_.empty();

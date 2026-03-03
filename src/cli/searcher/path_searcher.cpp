@@ -20,7 +20,6 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
-  EnsureTempCacheHookRegistered_();
   const CommandState state = ResolveCommandState(ctx);
   const bool force_path = IsPathSemanticState(state);
   const bool has_at = ctx.token_prefix.find('@') != std::string::npos;
@@ -219,6 +218,13 @@ AMPathSearchEngine::GetCacheStatusAll() const {
     out.emplace(bucket.first, status);
   }
   return out;
+}
+
+/**
+ * @brief Register temp-cache clear callbacks for PromptCore return/exit.
+ */
+void AMPathSearchEngine::RegisterCacheClearOnCorePromptReturn() {
+  EnsureTempCacheHookRegistered_();
 }
 
 /**
@@ -494,6 +500,7 @@ AMBuildDefaultSearchEngineRegistrations() {
        internal_engine});
 
   auto path_engine = std::make_shared<AMPathSearchEngine>();
+  path_engine->RegisterCacheClearOnCorePromptReturn();
   out.push_back({{AMCompletionTarget::Path}, path_engine});
   return out;
 }

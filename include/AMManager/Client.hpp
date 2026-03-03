@@ -3,6 +3,7 @@
 #include "AMBase/Path.hpp"
 #include "AMClient/Base.hpp"
 #include "AMClient/IOCore.hpp"
+#include "AMManager/Config.hpp"
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -20,6 +21,24 @@
 #endif
 
 namespace AMClientManage {
+/**
+ * @brief Resolve heartbeat check timeout from settings with clamped range.
+ */
+inline int ResolveHeartbeatTimeoutMsFromSettings() {
+  auto clamp_timeout = [](int value) {
+    if (value < 10) {
+      return 10;
+    }
+    if (value > 10000) {
+      return 10000;
+    }
+    return value;
+  };
+  return AMConfigManager::Instance().ResolveArg(
+      DocumentKind::Settings, {"Options", "ClientManager", "heartbeat_timeout_ms"},
+      100, clamp_timeout);
+}
+
 class Operator {
 public:
   using DisconnectCallback =
@@ -149,8 +168,9 @@ public:
     if (!local_client_base_) {
       return Err(EC::ProgrammInitializeFailed, "Failed to create local client");
     }
-    clients_ = std::make_shared<ClientMaintainer>(60, disconnect_cb_,
-                                                  local_client_base_);
+    const int heartbeat_timeout_ms = ResolveHeartbeatTimeoutMsFromSettings();
+    clients_ = std::make_shared<ClientMaintainer>(
+        60, heartbeat_timeout_ms, disconnect_cb_, local_client_base_);
     clients_->disconnect_cb = disconnect_cb_;
     clients_->is_disconnect_cb = static_cast<bool>(disconnect_cb_);
     current_client_ = local_client_base_;
