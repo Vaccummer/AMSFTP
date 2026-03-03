@@ -5,12 +5,6 @@
 #include "AMCLI/CLIBind.hpp"
 #include "AMCLI/CommandPreprocess.hpp"
 #include "AMCLI/Completer/Proxy.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/FileSystem.hpp"
-#include "AMManager/Prompt.hpp"
-#include "AMManager/SignalMonitor.hpp"
-#include "AMManager/Transfer.hpp"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -1617,13 +1611,7 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
       PrintECM_(prompt, reload_settings_rcm);
     }
 
-    auto history_client = ResolveActiveClient_(client_manager);
-    std::string history_nickname =
-        history_client ? history_client->GetNickname() : "local";
-    if (history_nickname.empty()) {
-      history_nickname = "local";
-    }
-    ECM change_rcm = prompt.ChangeClient(history_nickname);
+    ECM change_rcm = prompt.ChangeClient(client_manager.CurrentNickname());
     if (change_rcm.first != EC::Success) {
       PrintECM_(prompt, change_rcm);
     }
@@ -1640,10 +1628,8 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
     }
 
     std::string line;
-    AMCliSignalMonitor &monitor = AMCliSignalMonitor::Instance();
     (void)config_manager.BackupIfNeeded();
 
-    TaskControlToken::Instance()->Reset();
     // monitor.SilenceHook("GLOBAL");
     // monitor.ResumeHook("COREPROMPT");
 
@@ -1652,10 +1638,6 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
     // monitor.SilenceHook("COREPROMPT");
     // monitor.ResumeHook("GLOBAL");
     AMInteractiveEventRegistry::Instance().RunOnCorePromptReturn();
-
-    if (TaskControlToken::Instance()->IsKill()) {
-      break;
-    }
 
     if (canceled) {
       continue;
@@ -1744,14 +1726,15 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
       UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
       continue;
     }
-
-    DispatchCliCommands(cli_commands, managers, ctx, false, true);
-    const auto exec_end = std::chrono::steady_clock::now();
     TaskControlToken::Instance()->Reset();
-    UpdatePromptState_(prompt_state, ctx.rcm, exec_end - input_confirmed);
+    DispatchCliCommands(cli_commands, managers, ctx, false, true);
     if (TaskControlToken::Instance()->IsKill()) {
       break;
     }
+    const auto exec_end = std::chrono::steady_clock::now();
+    TaskControlToken::Instance()->Reset();
+    UpdatePromptState_(prompt_state, ctx.rcm, exec_end - input_confirmed);
+
     if (ctx.request_exit) {
       skip_loop_exit_callbacks = ctx.skip_loop_exit_callbacks;
       break;
