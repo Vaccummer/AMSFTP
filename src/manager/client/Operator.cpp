@@ -1,5 +1,7 @@
 #include "AMClient/Base.hpp"
+#include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
+#include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Logger.hpp"
 #include "AMManager/Prompt.hpp"
@@ -11,6 +13,24 @@
 
 namespace AMClientManage {
 namespace {
+/**
+ * @brief Resolve heartbeat check timeout from settings with clamped range.
+ */
+int ResolveHeartbeatTimeoutMsFromSettings_() {
+  std::function<int(int)> clamp_timeout = [](int value) -> int {
+    if (value < 10) {
+      return 10;
+    }
+    if (value > 10000) {
+      return 10000;
+    }
+    return value;
+  };
+  return AMConfigManager::Instance().ResolveArg(
+      DocumentKind::Settings,
+      {"Options", "ClientManager", "heartbeat_timeout_ms"}, 100, clamp_timeout);
+}
+
 inline bool IsLocalNickname_(const std::string &nickname) {
   const std::string lowered = AMStr::lowercase(AMStr::Strip(nickname));
   return lowered.empty() || lowered == "local";
@@ -64,6 +84,22 @@ inline void ApplyLoginDir_(AMHostManager &hostm, const std::string &nickname,
 }
 } // namespace
 
+ECM Manager::Init() {
+  SetPasswordCallback();
+  SetDisconnectCallback();
+  local_client_base_ = CreateLocalClient_();
+  if (!local_client_base_) {
+    return Err(EC::ProgrammInitializeFailed, "Failed to create local client");
+  }
+  const int heartbeat_timeout_ms = ResolveHeartbeatTimeoutMsFromSettings_();
+  clients_ = std::make_shared<ClientMaintainer>(
+      60, heartbeat_timeout_ms, disconnect_cb_, local_client_base_);
+  clients_->disconnect_cb = disconnect_cb_;
+  clients_->is_disconnect_cb = static_cast<bool>(disconnect_cb_);
+  current_client_ = local_client_base_;
+  return Ok();
+}
+
 void Operator::SetPasswordCallback(AuthCallback cb) {
   password_cb_ = cb ? std::move(cb) : BuiltinPasswordCallback_();
 }
@@ -78,8 +114,7 @@ void Operator::SetDisconnectCallback(DisconnectCallback cb) {
 
 ClientMaintainer &Operator::Clients() {
   if (!clients_) {
-    const int heartbeat_timeout_ms =
-        ResolveHeartbeatTimeoutMsFromSettings();
+    const int heartbeat_timeout_ms = ResolveHeartbeatTimeoutMsFromSettings_();
     clients_ = std::make_shared<ClientMaintainer>(
         60, heartbeat_timeout_ms, disconnect_cb_, LocalClient());
   }

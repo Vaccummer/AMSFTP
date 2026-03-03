@@ -793,6 +793,16 @@ AMTokenTypeAnalyzer::TokenizeStyle(const std::string &input) {
     const std::string unescaped_text = UnescapeBackticks_(raw_text);
     if (token.type == AMTokenType::Common && semantic_hint.has_value()) {
       if (*semantic_hint == AMCommandArgSemantic::HostNicknameNew) {
+        const bool is_sftp_or_ftp =
+            (command_path == "sftp" || command_path == "ftp");
+        const bool is_user_at_host =
+            FindUnescapedChar_(raw_text, '@') != std::string::npos;
+        if (is_sftp_or_ftp && is_user_at_host) {
+          if (positional_consumed) {
+            ++arg_index;
+          }
+          continue;
+        }
         token.type = ClassifyNewHostNicknameTokenType_(
             unescaped_text, AMHostManager::Instance());
         if (positional_consumed) {

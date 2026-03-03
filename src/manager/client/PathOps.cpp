@@ -1,3 +1,4 @@
+#include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Prompt.hpp"

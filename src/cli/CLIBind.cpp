@@ -482,10 +482,13 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
         ->expected(1, 2);
   }
   if (sftp_node) {
-    sftp_node->AddOption("-p", "--port", args.sftp->port, 1, 1, Sem::None,
+    sftp_node->AddOption("-P", "--port", args.sftp->port, 1, 1, Sem::None,
                          "Port");
-    sftp_node->AddOption("", "--keyfile", args.sftp->keyfile, 1, 1, Sem::None,
+    sftp_node->AddOption("-p", "--password", args.sftp->password, 1, 1,
+                         Sem::None, "Password");
+    sftp_node->AddOption("-k", "--keyfile", args.sftp->keyfile, 1, 1, Sem::None,
                          "Keyfile");
+    sftp_node->AddPositionalRule(0, Sem::HostNicknameNew, false);
   }
 
   CommandNode *ftp_node =
@@ -499,9 +502,11 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
         ->expected(1, 2);
   }
   if (ftp_node) {
-    ftp_node->AddOption("-p", "--port", args.ftp->port, 1, 1, Sem::None, "Port");
-    ftp_node->AddOption("", "--keyfile", args.ftp->keyfile, 1, 1, Sem::None,
-                        "Keyfile");
+    ftp_node->AddOption("-P", "--port", args.ftp->port, 1, 1, Sem::None,
+                        "Port");
+    ftp_node->AddOption("-p", "--password", args.ftp->password, 1, 1,
+                        Sem::None, "Password");
+    ftp_node->AddPositionalRule(0, Sem::HostNicknameNew, false);
   }
 
   CommandNode *ch_node =
