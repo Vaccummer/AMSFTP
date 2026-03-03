@@ -192,7 +192,8 @@ void ApplyPromptShortcutStyles_() {
     if (!it.value().is_string()) {
       continue;
     }
-    const std::string fmt = NormalizePromptStyleForIc_(it.value().get<std::string>());
+    const std::string fmt =
+        NormalizePromptStyleForIc_(it.value().get<std::string>());
     if (fmt.empty()) {
       continue;
     }
@@ -673,6 +674,7 @@ bool AMPromptManager::LiteralPrompt(
  */
 bool AMPromptManager::PromptCore(const std::string &prompt,
                                  std::string *out_input) {
+  AMPromptHookGuard::Lock();
 
   if (!out_input) {
     return true;

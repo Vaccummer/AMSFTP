@@ -295,8 +295,8 @@ bool ResolvePromptStyleAnsi_(AMConfigManager &config_manager,
       DocumentKind::Settings, {"Style", "CLIPrompt", trimmed}, "", {});
   if (raw.empty()) {
     raw = config_manager.ResolveArg<std::string>(
-        DocumentKind::Settings, {"Style", "CLIPrompt", "shortcut", trimmed},
-        "", {});
+        DocumentKind::Settings, {"Style", "CLIPrompt", "shortcut", trimmed}, "",
+        {});
   }
   if (raw.empty()) {
     return false;
@@ -312,14 +312,14 @@ bool ResolvePromptStyleAnsi_(AMConfigManager &config_manager,
  */
 std::string ResolveCorePromptFormat_(AMConfigManager &config_manager) {
   std::string format = config_manager.ResolveArg<std::string>(
-      DocumentKind::Settings,
-      {"Style", "CLIPrompt", "templete", "core_prompt"}, "", {});
+      DocumentKind::Settings, {"Style", "CLIPrompt", "templete", "core_prompt"},
+      "", {});
   if (!format.empty()) {
     return format;
   }
   format = config_manager.ResolveArg<std::string>(
-      DocumentKind::Settings,
-      {"Style", "CLIPrompt", "template", "core_prompt"}, "", {});
+      DocumentKind::Settings, {"Style", "CLIPrompt", "template", "core_prompt"},
+      "", {});
   if (!format.empty()) {
     return format;
   }
@@ -1585,8 +1585,8 @@ void AMInteractiveEventRegistry::RunOnInteractiveLoopExit() {
 /**
  * @brief Run the core interactive loop until the user exits.
  */
-int RunInteractiveLoop(const std::string &app_name,
-                       const CliManagers &managers, CliRunContext &ctx) {
+int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
+                       CliRunContext &ctx) {
   if (ctx.is_interactive) {
     ctx.is_interactive->store(true, std::memory_order_relaxed);
   }
@@ -1597,7 +1597,7 @@ int RunInteractiveLoop(const std::string &app_name,
     }
   };
 
-  AMPromptManager &prompt = AMPromptManager::Instance();
+  AMPromptManager &prompt = managers.prompt_manager;
   AMConfigManager &config_manager = managers.config_manager;
   AMClientManager &client_manager = managers.client_manager;
   AMFileSystem &filesystem = managers.filesystem;
@@ -1608,8 +1608,7 @@ int RunInteractiveLoop(const std::string &app_name,
   PromptState prompt_state;
 
   while (true) {
-    if (TaskControlToken::Instance() &&
-        TaskControlToken::Instance()->IsKill()) {
+    if (TaskControlToken::Instance()->IsKill()) {
       break;
     }
 
@@ -1632,7 +1631,6 @@ int RunInteractiveLoop(const std::string &app_name,
     const std::string prompt_text =
         BuildPrompt_(prompt_state, client_manager, config_manager);
 
-    prompt.FlushCachedOutput();
     std::string prompt_header;
     std::string prompt_line;
     SplitPromptForReadline_(prompt_text, &prompt_header, &prompt_line);
@@ -1645,27 +1643,20 @@ int RunInteractiveLoop(const std::string &app_name,
     AMCliSignalMonitor &monitor = AMCliSignalMonitor::Instance();
     (void)config_manager.BackupIfNeeded();
 
-    if (TaskControlToken::Instance()) {
-      TaskControlToken::Instance()->Reset();
-    }
+    TaskControlToken::Instance()->Reset();
     // monitor.SilenceHook("GLOBAL");
-    monitor.ResumeHook("COREPROMPT");
+    // monitor.ResumeHook("COREPROMPT");
 
     bool canceled = !prompt.PromptCore(prompt_line, &line);
 
-    monitor.SilenceHook("COREPROMPT");
+    // monitor.SilenceHook("COREPROMPT");
     // monitor.ResumeHook("GLOBAL");
     AMInteractiveEventRegistry::Instance().RunOnCorePromptReturn();
 
-    if (TaskControlToken::Instance() &&
-        TaskControlToken::Instance()->IsKill()) {
+    if (TaskControlToken::Instance()->IsKill()) {
       break;
     }
-    if (TaskControlToken::Instance() &&
-        !TaskControlToken::Instance()->IsRunning()) {
-      prompt.Print("Interrupted. Type 'exit' to quit.");
-      continue;
-    }
+
     if (canceled) {
       continue;
     }
@@ -1676,7 +1667,7 @@ int RunInteractiveLoop(const std::string &app_name,
     if (trimmed.empty()) {
       continue;
     }
-    prompt.AddHistoryEntry(trimmed);
+    prompt.AddHistoryEntry(line);
 
     bool is_shell = false;
     std::string shell_command;
@@ -1698,7 +1689,7 @@ int RunInteractiveLoop(const std::string &app_name,
           prompt.Print(msg);
         }
         prompt.FmtPrint("\nCommand exit with code {}",
-                                shell_result.second.second);
+                        shell_result.second.second);
       } else {
         PrintECM_(prompt, shell_result.first);
       }
@@ -1709,7 +1700,7 @@ int RunInteractiveLoop(const std::string &app_name,
       continue;
     }
 
-    CLI::App app{"AMSFTP Interactive", app_name};
+    CLI::App app{"AMSFTP Interactive Terminal", app_name};
     CliArgsPool args_pool;
     CliCommands cli_commands = BindCliOptions(app, args_pool);
 
@@ -1754,15 +1745,15 @@ int RunInteractiveLoop(const std::string &app_name,
       continue;
     }
 
-    DispatchResult dispatch =
-        DispatchCliCommands(cli_commands, managers, ctx, false, true);
+    DispatchCliCommands(cli_commands, managers, ctx, false, true);
     const auto exec_end = std::chrono::steady_clock::now();
-    if (TaskControlToken::Instance()) {
-      TaskControlToken::Instance()->Reset();
+    TaskControlToken::Instance()->Reset();
+    UpdatePromptState_(prompt_state, ctx.rcm, exec_end - input_confirmed);
+    if (TaskControlToken::Instance()->IsKill()) {
+      break;
     }
-    UpdatePromptState_(prompt_state, dispatch.rcm, exec_end - input_confirmed);
-    if (dispatch.request_exit) {
-      skip_loop_exit_callbacks = dispatch.skip_loop_exit_callbacks;
+    if (ctx.request_exit) {
+      skip_loop_exit_callbacks = ctx.skip_loop_exit_callbacks;
       break;
     }
   }
@@ -1776,4 +1767,3 @@ int RunInteractiveLoop(const std::string &app_name,
   }
   return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;
 }
-

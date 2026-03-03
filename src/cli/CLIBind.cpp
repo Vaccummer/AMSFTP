@@ -3,7 +3,7 @@
 #include "AMCLI/CommandTree.hpp"
 
 /**
- * @brief Bind config-related CLI commands.
+ * @brief Bind host-related CLI commands.
  */
 void BindConfigCommands(CommandNode *root, CliArgsPool &args,
                         CliCommands &commands) {
@@ -12,14 +12,14 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
     return;
   }
 
-  CommandNode *config_node = root->AddFunction("config", "Config manager");
+  CommandNode *config_node = root->AddFunction("host", "Host manager");
   if (!config_node) {
     return;
   }
   commands.config_cmd = config_node->app;
 
-  CommandNode *config_ls_node = config_node->AddFunction(
-      "ls", "List configs", args, &CliArgsPool::config_ls);
+  CommandNode *config_ls_node =
+      config_node->AddFunction("ls", "List hosts", args, &CliArgsPool::config_ls);
   commands.config_ls = config_ls_node ? config_ls_node->app : nullptr;
   if (config_ls_node) {
     config_ls_node->AddFlag("-l", "--list", args.config_ls->detail,
@@ -31,7 +31,7 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
   commands.config_keys = config_keys_node ? config_keys_node->app : nullptr;
 
   CommandNode *config_data_node = config_node->AddFunction(
-      "data", "Show config", args, &CliArgsPool::config_data);
+      "data", "Show host config source", args, &CliArgsPool::config_data);
   commands.config_data = config_data_node ? config_data_node->app : nullptr;
 
   CommandNode *config_get_node = config_node->AddFunction(
@@ -59,7 +59,7 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
   commands.config_set = config_set_node ? config_set_node->app : nullptr;
 
   CommandNode *config_save_node = config_node->AddFunction(
-      "save", "Save config", args, &CliArgsPool::config_save);
+      "save", "Save host config", args, &CliArgsPool::config_save);
   commands.config_save = config_save_node ? config_save_node->app : nullptr;
 
 
@@ -838,11 +838,17 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args) {
 /**
  * @brief Dispatch CLI commands based on parsed state.
  */
-DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
-                                   const CliManagers &managers,
-                                   CliRunContext &ctx, bool async,
-                                   bool enforce_interactive) {
-  DispatchResult result;
+void DispatchCliCommands(const CliCommands &cli_commands,
+                         const CliManagers &managers, CliRunContext &ctx,
+                         bool async, bool enforce_interactive) {
+  ctx.rcm = {EC::Success, ""};
+  ctx.enter_interactive = false;
+  ctx.request_exit = false;
+  ctx.skip_loop_exit_callbacks = false;
+  ctx.async = async;
+  ctx.enforce_interactive = enforce_interactive;
+  ctx.command_name.clear();
+
   auto store_exit_code = [&ctx](int code) {
     if (ctx.exit_code) {
       ctx.exit_code->store(code, std::memory_order_relaxed);
@@ -851,9 +857,9 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   if (!cli_commands.args) {
     const std::string msg = "CLI args pool is not initialized";
     std::cerr << msg << std::endl;
-    result.rcm = {EC::UnknownError, msg};
-    store_exit_code(static_cast<int>(result.rcm.first));
-    return result;
+    ctx.rcm = {EC::UnknownError, msg};
+    store_exit_code(static_cast<int>(ctx.rcm.first));
+    return;
   }
   CliArgsPool &args = *cli_commands.args;
   bool any_parsed = false;
@@ -870,10 +876,10 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
   if (!any_parsed) {
     std::string msg = "No valid command provided";
     std::cerr << msg << std::endl;
-    result.rcm = {EC::InvalidArg, msg};
-    store_exit_code(static_cast<int>(result.rcm.first));
+    ctx.rcm = {EC::InvalidArg, msg};
+    store_exit_code(static_cast<int>(ctx.rcm.first));
     args.active = nullptr;
-    return result;
+    return;
   }
   command_name = command_name.empty()
                      ? command_name
@@ -883,34 +889,24 @@ DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
     if (cli_commands.complete_cmd && cli_commands.complete_cmd->parsed()) {
       msg = "Invalid complete command";
     } else if (cli_commands.config_cmd && cli_commands.config_cmd->parsed()) {
-      msg = "Invalid config command";
+      msg = "Invalid host command";
     } else if (cli_commands.client_cmd && cli_commands.client_cmd->parsed()) {
       msg = "Invalid client command";
     }
     std::cerr << msg << std::endl;
-    result.rcm = {EC::InvalidArg, msg};
-    store_exit_code(static_cast<int>(result.rcm.first));
+    ctx.rcm = {EC::InvalidArg, msg};
+    store_exit_code(static_cast<int>(ctx.rcm.first));
     args.active = nullptr;
-    return result;
+    return;
   }
 
-  ctx.async = async;
-  ctx.enforce_interactive = enforce_interactive;
   ctx.command_name = command_name;
-  ctx.enter_interactive = &result.enter_interactive;
-  ctx.request_exit = &result.request_exit;
-  ctx.skip_loop_exit_callbacks = &result.skip_loop_exit_callbacks;
 
   BaseArgStruct *selected = args.active;
-  result.rcm = selected->Run(managers, ctx);
+  ctx.rcm = selected->Run(managers, ctx);
   selected->reset();
   args.active = nullptr;
-
-  ctx.rcm = result.rcm;
-  store_exit_code(static_cast<int>(result.rcm.first));
-  ctx.enter_interactive = nullptr;
-  ctx.request_exit = nullptr;
-  ctx.skip_loop_exit_callbacks = nullptr;
-  return result;
+  store_exit_code(static_cast<int>(ctx.rcm.first));
+  return;
 }
 

@@ -177,6 +177,16 @@ int DefaultPortForProtocol_(ClientProtocol protocol) {
 }
 
 /**
+ * @brief Return protocol-based default username.
+ */
+std::string DefaultUsernameForProtocol_(ClientProtocol protocol) {
+  if (protocol == ClientProtocol::FTP) {
+    return "anonymous";
+  }
+  return GetLocalUsername_();
+}
+
+/**
  * @brief Return whether the input is a local-loopback hostname.
  */
 bool IsLocalHostname_(const std::string &hostname) {
@@ -562,53 +572,17 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     return Err(EC::InvalidArg, "Nickname already exists");
   }
 
-  while (true) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Hostname,
-                         "Hostname: ", "", &entry.request.hostname, false)) {
-      print_abort();
-      return Err(EC::ConfigCanceled, "add canceled");
-    }
-    std::string normalized;
-    std::string err_msg;
-    EC err_code = EC::InvalidArg;
-    if (configkn::ValidateHostAttrValue(configkn::HostAttr::Hostname,
-                                        entry.request.hostname, &normalized,
-                                        &err_msg, true, true, &err_code)) {
-      entry.request.hostname = normalized;
-      break;
-    }
-    AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
-  }
-
-  while (true) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Username,
-                         "Username: ", "", &entry.request.username, false)) {
-      print_abort();
-      return Err(EC::ConfigCanceled, "add canceled");
-    }
-    std::string normalized;
-    std::string err_msg;
-    EC err_code = EC::InvalidArg;
-    if (configkn::ValidateHostAttrValue(configkn::HostAttr::Username,
-                                        entry.request.username, &normalized,
-                                        &err_msg, true, true, &err_code)) {
-      entry.request.username = normalized;
-      break;
-    }
-    AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
-  }
-
-  std::string protocol = default_protocol_placeholder;
+  std::string protocol_input = default_protocol_placeholder;
   while (true) {
     if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Protocol, "Protocol: ",
-                         default_protocol_placeholder, &protocol)) {
+                         default_protocol_placeholder, &protocol_input)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
     }
     std::string normalized;
     std::string err_msg;
     EC err_code = EC::InvalidArg;
-    if (configkn::ValidateHostAttrValue(configkn::HostAttr::Protocol, protocol,
+    if (configkn::ValidateHostAttrValue(configkn::HostAttr::Protocol, protocol_input,
                                         &normalized, &err_msg, true, true,
                                         &err_code)) {
       entry.request.protocol = configkn::StrToProtocol(normalized);
@@ -617,15 +591,82 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
   }
 
+  const bool hostname_required = entry.request.protocol != ClientProtocol::LOCAL;
   const int protocol_default_port =
       DefaultPortForProtocol_(entry.request.protocol);
   const std::string default_port_for_protocol =
       std::to_string(protocol_default_port);
-  std::string port_input;
+  const std::string default_username_for_protocol =
+      DefaultUsernameForProtocol_(entry.request.protocol);
+
+  entry.request.username = default_username_for_protocol;
   entry.request.port = protocol_default_port;
+
   while (true) {
-    const std::string port_prompt =
-        AMStr::fmt("port(default {}): ", protocol_default_port);
+    std::string hostname_input = entry.request.hostname;
+    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Hostname,
+                         "Hostname: ", hostname_input, &hostname_input, true)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "add canceled");
+    }
+    hostname_input = AMStr::Strip(hostname_input);
+    if (hostname_input.empty()) {
+      if (!hostname_required) {
+        entry.request.hostname.clear();
+        break;
+      }
+      AMPromptManager::Instance().ErrorFormat(
+          ECM{EC::InvalidArg, "Hostname cannot be empty"});
+      continue;
+    }
+    std::string normalized;
+    std::string err_msg;
+    EC err_code = EC::InvalidArg;
+    if (configkn::ValidateHostAttrValue(configkn::HostAttr::Hostname,
+                                        hostname_input, &normalized,
+                                        &err_msg, true, true, &err_code)) {
+      entry.request.hostname = normalized;
+      break;
+    }
+    AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
+  }
+
+  while (true) {
+    std::string username_input = entry.request.username;
+    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Username,
+                         "Username: ", default_username_for_protocol,
+                         &username_input, true)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "add canceled");
+    }
+    username_input = AMStr::Strip(username_input);
+    if (username_input.empty()) {
+      username_input = default_username_for_protocol;
+    }
+    if (username_input.empty() && hostname_required) {
+      AMPromptManager::Instance().ErrorFormat(
+          ECM{EC::InvalidArg, "Username cannot be empty"});
+      continue;
+    }
+    if (username_input.empty()) {
+      entry.request.username.clear();
+      break;
+    }
+    std::string normalized;
+    std::string err_msg;
+    EC err_code = EC::InvalidArg;
+    if (configkn::ValidateHostAttrValue(configkn::HostAttr::Username,
+                                        username_input, &normalized,
+                                        &err_msg, true, true, &err_code)) {
+      entry.request.username = normalized;
+      break;
+    }
+    AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
+  }
+
+  std::string port_input;
+  while (true) {
+    const std::string port_prompt = AMStr::fmt("Port(default {}): ", protocol_default_port);
     if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Port, port_prompt,
                          default_port_for_protocol, &port_input)) {
       print_abort();
@@ -673,6 +714,28 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
   entry.request.password = AMAuth::EncryptPassword(password);
   AMAuth::SecureZero(password);
 
+  while (true) {
+    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Keyfile,
+                         "keyfile(optional): ", entry.request.keyfile,
+                         &entry.request.keyfile)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "add canceled");
+    }
+    const std::string keyfile = AMStr::Strip(entry.request.keyfile);
+    if (keyfile.empty()) {
+      entry.request.keyfile.clear();
+      break;
+    }
+    auto [key_rcm, key_info] = AMFS::stat(keyfile, false);
+    if (!isok(key_rcm) || key_info.type != PathType::FILE) {
+      AMPromptManager::Instance().ErrorFormat(
+          ECM{EC::InvalidArg, "keyfile must be an existing file path"});
+      continue;
+    }
+    entry.request.keyfile = keyfile;
+    break;
+  }
+
   std::string buffer_input;
   entry.request.buffer_size = 24 * AMMB;
   while (true) {
@@ -707,40 +770,6 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     break;
   }
 
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::TrashDir,
-                       "trash_dir(optional): ", entry.request.trash_dir,
-                       &entry.request.trash_dir)) {
-    print_abort();
-    return Err(EC::ConfigCanceled, "add canceled");
-  }
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::LoginDir,
-                       "login_dir(optional): ", entry.metadata.login_dir,
-                       &entry.metadata.login_dir)) {
-    print_abort();
-    return Err(EC::ConfigCanceled, "add canceled");
-  }
-  while (true) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Keyfile,
-                         "keyfile(optional): ", entry.request.keyfile,
-                         &entry.request.keyfile)) {
-      print_abort();
-      return Err(EC::ConfigCanceled, "add canceled");
-    }
-    const std::string keyfile = AMStr::Strip(entry.request.keyfile);
-    if (keyfile.empty()) {
-      entry.request.keyfile.clear();
-      break;
-    }
-    auto [key_rcm, key_info] = AMFS::stat(keyfile, false);
-    if (!isok(key_rcm) || key_info.type != PathType::FILE) {
-      AMPromptManager::Instance().ErrorFormat(
-          ECM{EC::InvalidArg, "keyfile must be an existing file path"});
-      continue;
-    }
-    entry.request.keyfile = keyfile;
-    break;
-  }
-
   std::string compression_input = entry.request.compression ? "true" : "false";
   while (true) {
     if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Compression,
@@ -763,6 +792,51 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     entry.request.compression = parsed;
     break;
   }
+
+  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::TrashDir,
+                       "trash_dir(optional): ", entry.request.trash_dir,
+                       &entry.request.trash_dir)) {
+    print_abort();
+    return Err(EC::ConfigCanceled, "add canceled");
+  }
+  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::LoginDir,
+                       "login_dir(optional): ", entry.metadata.login_dir,
+                       &entry.metadata.login_dir)) {
+    print_abort();
+    return Err(EC::ConfigCanceled, "add canceled");
+  }
+  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::CmdPrefix,
+                       "cmd_prefix(optional): ", entry.metadata.cmd_prefix,
+                       &entry.metadata.cmd_prefix)) {
+    print_abort();
+    return Err(EC::ConfigCanceled, "add canceled");
+  }
+  std::string wrap_cmd_input = entry.metadata.wrap_cmd ? "true" : "false";
+  while (true) {
+    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::WrapCmd,
+                         "wrap_cmd(true/false): ", wrap_cmd_input,
+                         &wrap_cmd_input)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "add canceled");
+    }
+    std::string normalized;
+    std::string err_msg;
+    EC err_code = EC::InvalidArg;
+    if (!configkn::ValidateHostAttrValue(configkn::HostAttr::WrapCmd,
+                                         wrap_cmd_input, &normalized,
+                                         &err_msg, true, true, &err_code)) {
+      AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
+      continue;
+    }
+    bool parsed = false;
+    if (!AMJson::StrValueParse(normalized, &parsed)) {
+      AMPromptManager::Instance().ErrorFormat(
+          ECM{EC::InvalidArg, "wrap_cmd must be true or false"});
+      continue;
+    }
+    entry.metadata.wrap_cmd = parsed;
+    break;
+  }
   return Ok();
 }
 
@@ -773,50 +847,7 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     AMPromptManager::Instance().FmtPrint("{}\n", AMConfigManager::Instance().Format("Input Abort", "abort"));
   };
 
-  std::string hostname = entry.request.hostname;
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Hostname,
-                       "Hostname: ", hostname, &hostname)) {
-    print_abort();
-    return Err(EC::ConfigCanceled, "modify canceled");
-  }
-  if (AMStr::Strip(hostname).empty()) {
-    hostname = entry.request.hostname;
-  }
-  {
-    std::string normalized;
-    std::string err_msg;
-    EC err_code = EC::InvalidArg;
-    if (!configkn::ValidateHostAttrValue(configkn::HostAttr::Hostname, hostname,
-                                         &normalized, &err_msg, true, true,
-                                         &err_code)) {
-      return Err(err_code, err_msg);
-    }
-    hostname = normalized;
-  }
-
-  std::string username = entry.request.username;
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Username,
-                       "Username: ", username, &username)) {
-    print_abort();
-    return Err(EC::ConfigCanceled, "modify canceled");
-  }
-  if (AMStr::Strip(username).empty()) {
-    username = entry.request.username;
-  }
-  {
-    std::string normalized;
-    std::string err_msg;
-    EC err_code = EC::InvalidArg;
-    if (!configkn::ValidateHostAttrValue(configkn::HostAttr::Username, username,
-                                         &normalized, &err_msg, true, true,
-                                         &err_code)) {
-      return Err(err_code, err_msg);
-    }
-    username = normalized;
-  }
-
   std::string protocol = AMStr::lowercase(AMStr::ToString(entry.request.protocol));
-
   while (true) {
     if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Protocol,
                          "Protocol: ", protocol, &protocol)) {
@@ -835,15 +866,89 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
   }
 
-  const int protocol_default_port =
-      DefaultPortForProtocol_(configkn::StrToProtocol(protocol));
-  int port = protocol_default_port;
+  const ClientProtocol selected_protocol = configkn::StrToProtocol(protocol);
+  const bool protocol_changed = selected_protocol != entry.request.protocol;
+  const bool hostname_required = selected_protocol != ClientProtocol::LOCAL;
+  const std::string protocol_default_username =
+      DefaultUsernameForProtocol_(selected_protocol);
+  const int protocol_default_port = DefaultPortForProtocol_(selected_protocol);
+
+  std::string hostname = entry.request.hostname;
+  while (true) {
+    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Hostname,
+                         "Hostname: ", hostname, &hostname, true)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "modify canceled");
+    }
+    hostname = AMStr::Strip(hostname);
+    if (hostname.empty()) {
+      if (!hostname_required) {
+        break;
+      }
+      AMPromptManager::Instance().ErrorFormat(
+          ECM{EC::InvalidArg, "Hostname cannot be empty"});
+      hostname = entry.request.hostname;
+      continue;
+    }
+    std::string normalized;
+    std::string err_msg;
+    EC err_code = EC::InvalidArg;
+    if (!configkn::ValidateHostAttrValue(configkn::HostAttr::Hostname, hostname,
+                                         &normalized, &err_msg, true, true,
+                                         &err_code)) {
+      AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
+      hostname = entry.request.hostname;
+      continue;
+    }
+    hostname = normalized;
+    break;
+  }
+
+  std::string username = entry.request.username;
+  if (protocol_changed || username.empty()) {
+    username = protocol_default_username;
+  }
+  while (true) {
+    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Username,
+                         "Username: ", username, &username, true)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "modify canceled");
+    }
+    username = AMStr::Strip(username);
+    if (username.empty()) {
+      username = protocol_default_username;
+    }
+    if (username.empty() && hostname_required) {
+      AMPromptManager::Instance().ErrorFormat(
+          ECM{EC::InvalidArg, "Username cannot be empty"});
+      continue;
+    }
+    if (username.empty()) {
+      break;
+    }
+    std::string normalized;
+    std::string err_msg;
+    EC err_code = EC::InvalidArg;
+    if (!configkn::ValidateHostAttrValue(configkn::HostAttr::Username, username,
+                                         &normalized, &err_msg, true, true,
+                                         &err_code)) {
+      AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
+      continue;
+    }
+    username = normalized;
+    break;
+  }
+
+  int port = entry.request.port;
+  if (port <= 0 || port > 65535 || protocol_changed) {
+    port = protocol_default_port;
+  }
   const std::string default_port_for_protocol =
       std::to_string(protocol_default_port);
   while (true) {
-    std::string port_input = default_port_for_protocol;
+    std::string port_input = std::to_string(port);
     const std::string port_prompt =
-        AMStr::fmt("port(default {}): ", protocol_default_port);
+        AMStr::fmt("Port(default {}): ", protocol_default_port);
     if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Port, port_prompt,
                          default_port_for_protocol, &port_input)) {
       print_abort();
@@ -899,6 +1004,26 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     }
   }
 
+  std::string keyfile = entry.request.keyfile;
+  while (true) {
+    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Keyfile,
+                         "keyfile(optional): ", keyfile, &keyfile)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "modify canceled");
+    }
+    keyfile = AMStr::Strip(keyfile);
+    if (keyfile.empty()) {
+      break;
+    }
+    auto [key_rcm, key_info] = AMFS::stat(keyfile, false);
+    if (!isok(key_rcm) || key_info.type != PathType::FILE) {
+      AMPromptManager::Instance().ErrorFormat(
+          ECM{EC::InvalidArg, "keyfile must be an existing file path"});
+      continue;
+    }
+    break;
+  }
+
   int64_t buffer_size =
       entry.request.buffer_size > 0 ? entry.request.buffer_size : 24 * AMMB;
   while (true) {
@@ -927,27 +1052,6 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     break;
   }
 
-  std::string trash_dir = entry.request.trash_dir;
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::TrashDir,
-                       "trash_dir(optional): ", trash_dir, &trash_dir)) {
-    print_abort();
-    return Err(EC::ConfigCanceled, "modify canceled");
-  }
-
-  std::string login_dir = entry.metadata.login_dir;
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::LoginDir,
-                       "login_dir(optional): ", login_dir, &login_dir)) {
-    print_abort();
-    return Err(EC::ConfigCanceled, "modify canceled");
-  }
-
-  std::string keyfile = entry.request.keyfile;
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Keyfile,
-                       "keyfile(optional): ", keyfile, &keyfile)) {
-    print_abort();
-    return Err(EC::ConfigCanceled, "modify canceled");
-  }
-
   bool compression = entry.request.compression;
   while (true) {
     std::string compression_input = compression ? "true" : "false";
@@ -973,15 +1077,62 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
         ECM{EC::InvalidArg, "Compression must be true or false"});
   }
 
+  std::string trash_dir = entry.request.trash_dir;
+  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::TrashDir,
+                       "trash_dir(optional): ", trash_dir, &trash_dir)) {
+    print_abort();
+    return Err(EC::ConfigCanceled, "modify canceled");
+  }
+
+  std::string login_dir = entry.metadata.login_dir;
+  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::LoginDir,
+                       "login_dir(optional): ", login_dir, &login_dir)) {
+    print_abort();
+    return Err(EC::ConfigCanceled, "modify canceled");
+  }
+
+  std::string cmd_prefix = entry.metadata.cmd_prefix;
+  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::CmdPrefix,
+                       "cmd_prefix(optional): ", cmd_prefix, &cmd_prefix)) {
+    print_abort();
+    return Err(EC::ConfigCanceled, "modify canceled");
+  }
+  bool wrap_cmd = entry.metadata.wrap_cmd;
+  while (true) {
+    std::string wrap_cmd_input = wrap_cmd ? "true" : "false";
+    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::WrapCmd,
+                         "wrap_cmd(true/false): ", wrap_cmd_input,
+                         &wrap_cmd_input)) {
+      print_abort();
+      return Err(EC::ConfigCanceled, "modify canceled");
+    }
+    std::string normalized;
+    std::string err_msg;
+    EC err_code = EC::InvalidArg;
+    if (!configkn::ValidateHostAttrValue(configkn::HostAttr::WrapCmd,
+                                         wrap_cmd_input, &normalized,
+                                         &err_msg, true, true, &err_code)) {
+      AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
+      continue;
+    }
+    if (AMJson::StrValueParse(normalized, &wrap_cmd)) {
+      break;
+    }
+    AMPromptManager::Instance().ErrorFormat(
+        ECM{EC::InvalidArg, "wrap_cmd must be true or false"});
+  }
+
   entry.request.hostname = hostname;
   entry.request.username = username;
   entry.request.port = port;
-  entry.request.protocol = configkn::StrToProtocol(protocol);
+  entry.request.protocol = selected_protocol;
   entry.request.buffer_size = buffer_size;
   entry.request.trash_dir = trash_dir;
   entry.metadata.login_dir = login_dir;
   entry.request.keyfile = keyfile;
   entry.request.compression = compression;
+  entry.metadata.cmd_prefix = cmd_prefix;
+  entry.metadata.wrap_cmd = wrap_cmd;
   return Ok();
 }
 

@@ -9,7 +9,7 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args);
 /**
  * @brief Dispatch CLI commands based on parsed state.
  */
-DispatchResult DispatchCliCommands(const CliCommands &cli_commands,
-                                   const CliManagers &managers,
-                                   CliRunContext &ctx, bool async = false,
-                                   bool enforce_interactive = false);
+void DispatchCliCommands(const CliCommands &cli_commands,
+                         const CliManagers &managers, CliRunContext &ctx,
+                         bool async = false,
+                         bool enforce_interactive = false);
