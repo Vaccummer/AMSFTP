@@ -833,9 +833,6 @@ std::string DecryptPassword(const std::string &stored) {
 }
 } // namespace AMAuth
 
-const std::shared_ptr<TaskControlToken> TaskControlToken::Global =
-    std::make_shared<TaskControlToken>();
-
 namespace AMTime {
 double seconds() {
   return std::chrono::duration<double>(
@@ -880,17 +877,11 @@ double IntervalMS(const std::chrono::steady_clock::time_point &start,
 }
 } // namespace AMTime
 
-double timenow() {
-  return AMTime::seconds();
-}
+double timenow() { return AMTime::seconds(); }
 
-int64_t am_ms() {
-  return AMTime::miliseconds();
-}
+int64_t am_ms() { return AMTime::miliseconds(); }
 
-double am_s() {
-  return static_cast<double>(AMTime::miliseconds()) / 1000.0;
-}
+double am_s() { return static_cast<double>(AMTime::miliseconds()) / 1000.0; }
 
 std::string FormatTime(const size_t &time, const std::string &format) {
   return AMTime::Str(format, static_cast<double>(time));
