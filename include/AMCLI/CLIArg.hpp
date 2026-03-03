@@ -489,6 +489,7 @@ struct CpArgs : BaseArgStruct {
 struct SftpArgs : BaseArgStruct {
   std::vector<std::string> targets;
   int64_t port = 22;
+  std::string password;
   std::string keyfile;
   /**
    * @brief Execute sftp connection.
@@ -506,6 +507,7 @@ struct SftpArgs : BaseArgStruct {
 struct FtpArgs : BaseArgStruct {
   std::vector<std::string> targets;
   int64_t port = 21;
+  std::string password;
   std::string keyfile;
   /**
    * @brief Execute ftp connection.

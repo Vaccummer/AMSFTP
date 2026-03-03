@@ -595,7 +595,7 @@ ECM SftpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
     return {EC::InvalidArg, "Invalid user@host format"};
   }
 
-  ECM rcm = filesystem.sftp(nickname, user_at_host, port, "", keyfile,
+  ECM rcm = filesystem.sftp(nickname, user_at_host, port, password, keyfile,
                             TaskControlToken::Instance());
   PrintRunError_(rcm);
   SetEnterInteractive_(ctx, rcm.first == EC::Success);
@@ -605,6 +605,7 @@ ECM SftpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
 void SftpArgs::reset() {
   targets.clear();
   port = 22;
+  password.clear();
   keyfile.clear();
 }
 
@@ -624,7 +625,7 @@ ECM FtpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
     return {EC::InvalidArg, "Invalid user@host format"};
   }
 
-  ECM rcm = filesystem.ftp(nickname, user_at_host, port, "", keyfile,
+  ECM rcm = filesystem.ftp(nickname, user_at_host, port, password, keyfile,
                            TaskControlToken::Instance());
   PrintRunError_(rcm);
   SetEnterInteractive_(ctx, rcm.first == EC::Success);
@@ -634,6 +635,7 @@ ECM FtpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
 void FtpArgs::reset() {
   targets.clear();
   port = 21;
+  password.clear();
   keyfile.clear();
 }
 

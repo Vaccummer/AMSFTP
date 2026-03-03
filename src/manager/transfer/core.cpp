@@ -36,6 +36,24 @@ ECM AMTransferManager::Init() {
 }
 
 namespace {
+/**
+ * @brief Resolve client manager heartbeat timeout from settings.
+ */
+int ResolveHeartbeatTimeoutMsFromSettings_() {
+  std::function<int(int)> clamp_timeout = [](int value) -> int {
+    if (value < 10) {
+      return 10;
+    }
+    if (value > 10000) {
+      return 10000;
+    }
+    return value;
+  };
+  return AMConfigManager::Instance().ResolveArg(
+      DocumentKind::Settings,
+      {"Options", "ClientManager", "heartbeat_timeout_ms"}, 100, clamp_timeout);
+}
+
 #ifdef _WIN32
 /**
  * @brief Temporarily ensure STDIN has ENABLE_PROCESSED_INPUT on Windows.
@@ -395,8 +413,7 @@ std::pair<ECM, std::shared_ptr<ClientMaintainer>>
 AMTransferManager::CollectClients(
     const std::vector<std::string> &nicknames,
     std::shared_ptr<TaskControlToken> flag) {
-  const int heartbeat_timeout_ms =
-      AMClientManage::ResolveHeartbeatTimeoutMsFromSettings();
+  const int heartbeat_timeout_ms = ResolveHeartbeatTimeoutMsFromSettings_();
   auto maintainer = std::make_shared<ClientMaintainer>(
       -1, heartbeat_timeout_ms, ClientMaintainer::DisconnectCallback(),
       AMClientManager::Instance().LocalClient());

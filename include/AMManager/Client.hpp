@@ -1,9 +1,5 @@
 #pragma once
 #include "AMBase/DataClass.hpp"
-#include "AMBase/Path.hpp"
-#include "AMClient/Base.hpp"
-#include "AMClient/IOCore.hpp"
-#include "AMManager/Config.hpp"
 #include <atomic>
 #include <functional>
 #include <memory>
@@ -20,24 +16,13 @@
 #include <unistd.h>
 #endif
 
+class BaseClient;
+class ClientMaintainer;
+
 namespace AMClientManage {
-/**
- * @brief Resolve heartbeat check timeout from settings with clamped range.
- */
-inline int ResolveHeartbeatTimeoutMsFromSettings() {
-  auto clamp_timeout = [](int value) {
-    if (value < 10) {
-      return 10;
-    }
-    if (value > 10000) {
-      return 10000;
-    }
-    return value;
-  };
-  return AMConfigManager::Instance().ResolveArg(
-      DocumentKind::Settings, {"Options", "ClientManager", "heartbeat_timeout_ms"},
-      100, clamp_timeout);
-}
+using AuthCallback =
+    std::function<std::optional<std::string>(const AuthCBInfo &)>;
+using TraceCallback = std::function<void(const TraceInfo &)>;
 
 class Operator {
 public:
@@ -161,21 +146,7 @@ class Manager : public PathOps, private NonCopyableNonMovable {
 public:
   explicit Manager() = default;
 
-  ECM Init() override {
-    SetPasswordCallback();
-    SetDisconnectCallback();
-    local_client_base_ = CreateLocalClient_();
-    if (!local_client_base_) {
-      return Err(EC::ProgrammInitializeFailed, "Failed to create local client");
-    }
-    const int heartbeat_timeout_ms = ResolveHeartbeatTimeoutMsFromSettings();
-    clients_ = std::make_shared<ClientMaintainer>(
-        60, heartbeat_timeout_ms, disconnect_cb_, local_client_base_);
-    clients_->disconnect_cb = disconnect_cb_;
-    clients_->is_disconnect_cb = static_cast<bool>(disconnect_cb_);
-    current_client_ = local_client_base_;
-    return Ok();
-  }
+  ECM Init() override;
 
   static Manager &Instance() {
     static Manager instance;

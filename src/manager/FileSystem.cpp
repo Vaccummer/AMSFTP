@@ -3,6 +3,7 @@
 #include "AMBase/Enum.hpp"
 #include "AMBase/Path.hpp"
 #include "AMBase/tools/time.hpp"
+#include "AMClient/IOCore.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
@@ -16,6 +17,7 @@
 #include <sstream>
 #include <unordered_map>
 #include <unordered_set>
+
 
 using EC = ErrorCode;
 
@@ -114,14 +116,13 @@ inline void SortTreeNodes(TreeNodeMap *nodes) {
  * @brief Print a tree using a style callback and line printer.
  * @return True if the tree is fully printed; false if stopped early.
  */
-inline bool PrintTree(
-    const std::string &root, const TreeNodeMap &nodes,
-    const std::function<
-        std::string(TreeStyleRole, const PathInfo &, const std::string &)>
-        &style_path,
-    const std::function<void(const std::string &)> &print_line,
-    const JoinPairFn &join_pair,
-    const std::function<bool()> &should_stop = {}) {
+inline bool
+PrintTree(const std::string &root, const TreeNodeMap &nodes,
+          const std::function<std::string(TreeStyleRole, const PathInfo &,
+                                          const std::string &)> &style_path,
+          const std::function<void(const std::string &)> &print_line,
+          const JoinPairFn &join_pair,
+          const std::function<bool()> &should_stop = {}) {
   if (!print_line) {
     return true;
   }
@@ -157,10 +158,10 @@ inline bool PrintTree(
           const std::string connector = last ? "└── " : "├── ";
           const std::string next_prefix = prefix + (last ? "    " : "│   ");
           const std::string child_name = children[i];
-          const std::string styled = style_path
-                                         ? style_path(TreeStyleRole::NodeDirName,
-                                                      dir_info, child_name)
-                                         : child_name;
+          const std::string styled =
+              style_path
+                  ? style_path(TreeStyleRole::NodeDirName, dir_info, child_name)
+                  : child_name;
           print_line(prefix + connector + styled);
           if (join_pair) {
             const std::string child_path = join_pair(dir_path, child_name);
@@ -179,9 +180,8 @@ inline bool PrintTree(
           const std::string connector = (i + 1 == file_count) ? "└── " : "├── ";
           const auto &info = files[i];
           const std::string styled =
-              style_path
-                  ? style_path(TreeStyleRole::Filename, info, info.name)
-                  : info.name;
+              style_path ? style_path(TreeStyleRole::Filename, info, info.name)
+                         : info.name;
           print_line(prefix + connector + styled);
         }
         return true;
@@ -1228,8 +1228,8 @@ ECM AMFileSystem::tree(const std::string &path, int max_depth, bool only_dir,
             AMConfigManager::Instance().ResolveArg<std::string>(
                 DocumentKind::Settings, style_key, "", {}));
         if (!tag.empty()) {
-          const std::string display_name = AMStr::BBCEscape(
-              AMPathStr::UnifyPathSep(name, "/"));
+          const std::string display_name =
+              AMStr::BBCEscape(AMPathStr::UnifyPathSep(name, "/"));
           return ApplyTreeStyleTag_(tag, display_name);
         }
         return StylePath(info, name);
