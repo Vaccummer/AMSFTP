@@ -496,6 +496,7 @@ inline EC GetFTPErrorCode(CURLcode curl_code) {
   case CURLE_FTP_ACCESS_DENIED:
     return EC::PermissionDenied;
   case CURLE_FTP_USER_PASSWORD_INCORRECT:
+  case CURLE_LOGIN_DENIED:
     return EC::AuthFailed;
   case CURLE_FTP_QUOTE_ERROR:
   case CURLE_FTP_PRET_FAILED:
@@ -735,7 +736,7 @@ private:
       free(header_chunk.memory);
       ECM rcm = {GetFTPErrorCode(nb_res.value),
                  AMStr::fmt("MLST {} error: {}", path,
-                              curl_easy_strerror(nb_res.value))};
+                            curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, rcm.first, path, "MLST", rcm.second);
       return {rcm, PathInfo()};
     }
@@ -859,7 +860,7 @@ private:
     // SIZE failed -> path does not exist
     return {ECM{GetFTPErrorCode(nb_res.value),
                 AMStr::fmt("legacy_stat {} error: {}", path,
-                             curl_easy_strerror(nb_res.value))},
+                           curl_easy_strerror(nb_res.value))},
             {}};
   }
 
@@ -954,8 +955,7 @@ private:
     }
 
     struct curl_slist *commands = nullptr;
-    commands =
-        curl_slist_append(commands, AMStr::fmt("DELE {}", path).c_str());
+    commands = curl_slist_append(commands, AMStr::fmt("DELE {}", path).c_str());
     curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
 
@@ -971,7 +971,7 @@ private:
     if (nb_res.value != CURLE_OK) {
       ECM ecm = {GetFTPErrorCode(nb_res.value),
                  AMStr::fmt("rmfile {} failed: {}", path,
-                              curl_easy_strerror(nb_res.value))};
+                            curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, ecm.first, path, "rmfile", ecm.second);
       return ecm;
     }
@@ -1004,7 +1004,7 @@ private:
     if (nb_res.value != CURLE_OK) {
       ECM ecm = {GetFTPErrorCode(nb_res.value),
                  AMStr::fmt("rmdir {} failed: {}", path,
-                              curl_easy_strerror(nb_res.value))};
+                            curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, ecm.first, path, "rmdir", ecm.second);
       return ecm;
     }
@@ -1027,7 +1027,7 @@ public:
                                                     : res_data.password;
     }
     this->url = AMStr::fmt("ftp://{}:{}", res_data.hostname,
-                             std::to_string(res_data.port));
+                           std::to_string(res_data.port));
   }
 
   ~AMFTPClient() {
@@ -1383,9 +1383,9 @@ public:
 
     if (nb_res.value != CURLE_OK) {
       free(chunk.memory);
-      ECM rcm = ECM{
-          GetFTPErrorCode(nb_res.value),
-          AMStr::fmt("List failed: {}", curl_easy_strerror(nb_res.value))};
+      ECM rcm =
+          ECM{GetFTPErrorCode(nb_res.value),
+              AMStr::fmt("List failed: {}", curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, rcm.first, path, "listdir", rcm.second);
       return {rcm, {}};
     }
@@ -1637,7 +1637,7 @@ public:
     if (nb_res.value != CURLE_OK) {
       ecm = {GetFTPErrorCode(nb_res.value),
              AMStr::fmt("mkdir {} failed: {}", path,
-                          curl_easy_strerror(nb_res.value))};
+                        curl_easy_strerror(nb_res.value))};
       trace(TraceLevel::Error, ecm.first, path, "mkdir", ecm.second);
       return ecm;
     }
@@ -1775,8 +1775,7 @@ public:
     std::string srcf = AMFS::abspath(src, true, home_dir, home_dir);
     std::string dstf = AMFS::abspath(dst, true, home_dir, home_dir);
     if (srcf.empty() || dstf.empty()) {
-      return {EC::InvalidArg,
-              AMStr::fmt("Invalid path: {} or {}", srcf, dstf)};
+      return {EC::InvalidArg, AMStr::fmt("Invalid path: {} or {}", srcf, dstf)};
     }
 
     // Check source exists
@@ -1796,9 +1795,9 @@ public:
                     dstf)};
       }
       if (!overwrite) {
-        return {EC::PathAlreadyExists,
-                AMStr::fmt("Dst already exists: {} and overwrite is false",
-                             dstf)};
+        return {
+            EC::PathAlreadyExists,
+            AMStr::fmt("Dst already exists: {} and overwrite is false", dstf)};
       }
     } else {
       if (mkdir) {
