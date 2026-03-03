@@ -359,7 +359,7 @@ private:
   std::filesystem::path root_dir_;
   std::unordered_map<DocumentKind, DocumentState> docs_;
   std::mutex handle_mtx_;
-  std::mutex write_mtx_; // protects write-thread start/stop lifecycle
+  std::mutex write_mtx_;       // protects write-thread start/stop lifecycle
   std::mutex write_queue_mtx_; // protects the write task queue
   std::condition_variable write_cv_;
   std::queue<std::function<ECM()>> write_queue_;

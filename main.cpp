@@ -44,9 +44,9 @@ int main(int argc, char **argv) {
     run_ctx.async = false;
     run_ctx.enforce_interactive = false;
     run_ctx.command_name.clear();
-    run_ctx.enter_interactive = nullptr;
-    run_ctx.request_exit = nullptr;
-    run_ctx.skip_loop_exit_callbacks = nullptr;
+    run_ctx.enter_interactive = false;
+    run_ctx.request_exit = false;
+    run_ctx.skip_loop_exit_callbacks = false;
     if (!run_ctx.exit_code) {
       run_ctx.exit_code = std::make_shared<std::atomic<int>>(0);
     }
@@ -66,15 +66,14 @@ int main(int argc, char **argv) {
                      .count()
               << "ms" << std::endl;
 
-    DispatchResult dispatch =
-        DispatchCliCommands(cli_commands, managers, run_ctx);
-    if (dispatch.enter_interactive) {
+    DispatchCliCommands(cli_commands, managers, run_ctx);
+    if (run_ctx.enter_interactive) {
       managers.prompt_manager.ChangeClient(
           managers.client_manager.CurrentNickname());
       RunInteractiveLoop(app_name, managers, run_ctx);
     }
-    if (dispatch.rcm.first != EC::Success) {
-      return static_cast<int>(dispatch.rcm.first);
+    if (run_ctx.rcm.first != EC::Success) {
+      return static_cast<int>(run_ctx.rcm.first);
     }
     return run_ctx.exit_code
                ? run_ctx.exit_code->load(std::memory_order_relaxed)

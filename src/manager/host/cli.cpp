@@ -1,17 +1,16 @@
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
 #include "AMBase/DataClass.hpp"
 #include "AMBase/Enum.hpp"
 #include "AMBase/Path.hpp"
-#include "AMManager/Config.hpp"
+#include "AMBase/tools/auth.hpp"
+#include "AMBase/tools/json.hpp"
 #include "AMManager/Client.hpp"
+#include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Prompt.hpp"
 #include <sstream>
 #include <string>
 #include <vector>
+
 
 using cls = AMHostManager;
 
@@ -31,7 +30,8 @@ std::pair<ECM, std::vector<std::string>>
 cls::PrivateKeys(bool print_sign) const {
   std::vector<std::string> keys = {};
   ECM rcm = Ok();
-  if (!AMConfigManager::Instance().ResolveArg(DocumentKind::Config, {configkn::keys}, &keys)) {
+  if (!AMConfigManager::Instance().ResolveArg(DocumentKind::Config,
+                                              {configkn::keys}, &keys)) {
     rcm = {EC::CommonFailure,
            AMStr::fmt("Fail to read config attribute: {}", configkn::keys)};
     AMPromptManager::Instance().ErrorFormat(rcm);
@@ -45,7 +45,8 @@ cls::PrivateKeys(bool print_sign) const {
   for (size_t i = 0; i < keys.size(); ++i) {
     const std::string abs_path = AMFS::abspath(keys[i], true, AMFS::HomePath());
     auto [stat_rcm, info] = AMFS::stat(abs_path, false);
-    const PathInfo *info_ptr = (stat_rcm.first == EC::Success) ? &info : nullptr;
+    const PathInfo *info_ptr =
+        (stat_rcm.first == EC::Success) ? &info : nullptr;
     const std::string styled_path =
         AMConfigManager::Instance().Format(abs_path, "", info_ptr);
     AMPromptManager::Instance().Print(AMStr::fmt("[{}]  {}", i, styled_path));
@@ -170,8 +171,7 @@ ECM cls::Delete(const std::vector<std::string> &targets) {
 
   for (const auto &name : uniq_targets) {
     if (!HostExists(name)) {
-      rcm =
-          Err(EC::InvalidArg, AMStr::fmt("invalid host nickname: {}", name));
+      rcm = Err(EC::InvalidArg, AMStr::fmt("invalid host nickname: {}", name));
       AMPromptManager::Instance().ErrorFormat(rcm);
       continue;
     }
@@ -192,7 +192,7 @@ ECM cls::Delete(const std::vector<std::string> &targets) {
   bool canceled = false;
   const bool confirmed = AMPromptManager::Instance().PromptYesNo(
       AMStr::fmt("Delete {} host(s): {} ? (y/N): ", uniq_targets.size(),
-                   listing),
+                 listing),
       &canceled);
 
   if (canceled || !confirmed) {
@@ -207,7 +207,8 @@ ECM cls::Delete(const std::vector<std::string> &targets) {
       return rcm;
     }
     // AMPromptManager::Instance().Print(
-    //     AMStr::fmt("Deleted host: {}", AMConfigManager::Instance().Format(name, "nickname")));
+    //     AMStr::fmt("Deleted host: {}",
+    //     AMConfigManager::Instance().Format(name, "nickname")));
   }
 
   return AMConfigManager::Instance().Dump(DocumentKind::Config, "", true);
@@ -237,9 +238,10 @@ ECM cls::Query(const std::vector<std::string> &targets) const {
   for (const std::string &nickname : uniq_targets) {
     auto it = host_configs.find(nickname);
     if (it == host_configs.end()) {
-      const std::string styled = AMConfigManager::Instance().Format(nickname, "nickname");
-      ECM err = Err(EC::HostConfigNotFound,
-                    AMStr::fmt("Host {} not found", styled));
+      const std::string styled =
+          AMConfigManager::Instance().Format(nickname, "nickname");
+      ECM err =
+          Err(EC::HostConfigNotFound, AMStr::fmt("Host {} not found", styled));
       AMPromptManager::Instance().ErrorFormat(err);
       return err;
     }
@@ -331,19 +333,22 @@ ECM cls::Src() const {
   std::string config_path = "";
   std::string settings_path = "";
 
-  if (AMConfigManager::Instance().GetDataPath(DocumentKind::Config, &config_path_obj)) {
+  if (AMConfigManager::Instance().GetDataPath(DocumentKind::Config,
+                                              &config_path_obj)) {
     config_path = config_path_obj.string();
     auto [config_rcm, config_info] = AMFS::stat(config_path, false);
-    AMPromptManager::Instance().Print(
-        AMStr::fmt("{} = {}", config_label,
-                     AMConfigManager::Instance().Format(config_path, "dir", &config_info)));
+    AMPromptManager::Instance().Print(AMStr::fmt(
+        "{} = {}", config_label,
+        AMConfigManager::Instance().Format(config_path, "dir", &config_info)));
   }
-  if (AMConfigManager::Instance().GetDataPath(DocumentKind::Settings, &settings_path_obj)) {
+  if (AMConfigManager::Instance().GetDataPath(DocumentKind::Settings,
+                                              &settings_path_obj)) {
     settings_path = settings_path_obj.string();
     auto [settings_rcm, settings_info] = AMFS::stat(settings_path, false);
     AMPromptManager::Instance().Print(
         AMStr::fmt("{} = {}", settings_label,
-                     AMConfigManager::Instance().Format(settings_path, "dir", &settings_info)));
+                   AMConfigManager::Instance().Format(settings_path, "dir",
+                                                      &settings_info)));
   }
   return Ok();
 }
@@ -421,7 +426,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     } else if (buffer_size < AMMinBufferSize || buffer_size > AMMaxBufferSize) {
       set_status = Err(EC::InvalidArg,
                        AMStr::fmt("Buffer size must be between {} and {}",
-                                    AMMinBufferSize, AMMaxBufferSize));
+                                  AMMinBufferSize, AMMaxBufferSize));
       AMPromptManager::Instance().ErrorFormat(set_status);
       return set_status;
     }
@@ -498,33 +503,32 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     updated.metadata.login_dir = value_str;
     new_value = value_str;
   } else {
-    set_status = Err(EC::InvalidArg,
-                     AMStr::fmt("unsupported property name: {}", field));
+    set_status =
+        Err(EC::InvalidArg, AMStr::fmt("unsupported property name: {}", field));
     AMPromptManager::Instance().ErrorFormat(set_status);
     return set_status;
   }
 
   bool write_ok = false;
   if (field == configkn::port) {
-    write_ok = AMConfigManager::Instance().SetArg(DocumentKind::Config,
-                              {configkn::hosts, nickname, field},
-                              static_cast<int64_t>(updated.request.port));
+    write_ok = AMConfigManager::Instance().SetArg(
+        DocumentKind::Config, {configkn::hosts, nickname, field},
+        static_cast<int64_t>(updated.request.port));
   } else if (field == configkn::buffer_size) {
-    write_ok = AMConfigManager::Instance().SetArg(DocumentKind::Config,
-                              {configkn::hosts, nickname, field},
-                              static_cast<int64_t>(updated.request.buffer_size));
+    write_ok = AMConfigManager::Instance().SetArg(
+        DocumentKind::Config, {configkn::hosts, nickname, field},
+        static_cast<int64_t>(updated.request.buffer_size));
   } else if (field == configkn::compression) {
-    write_ok = AMConfigManager::Instance().SetArg(DocumentKind::Config,
-                              {configkn::hosts, nickname, field},
-                              updated.request.compression);
+    write_ok = AMConfigManager::Instance().SetArg(
+        DocumentKind::Config, {configkn::hosts, nickname, field},
+        updated.request.compression);
   } else if (field == configkn::wrap_cmd) {
-    write_ok = AMConfigManager::Instance().SetArg(DocumentKind::Config,
-                              {configkn::hosts, nickname, field},
-                              updated.metadata.wrap_cmd);
+    write_ok = AMConfigManager::Instance().SetArg(
+        DocumentKind::Config, {configkn::hosts, nickname, field},
+        updated.metadata.wrap_cmd);
   } else {
-    write_ok =
-        AMConfigManager::Instance().SetArg(DocumentKind::Config, {configkn::hosts, nickname, field},
-                       new_value);
+    write_ok = AMConfigManager::Instance().SetArg(
+        DocumentKind::Config, {configkn::hosts, nickname, field}, new_value);
   }
 
   if (!write_ok) {

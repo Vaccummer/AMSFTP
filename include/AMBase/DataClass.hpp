@@ -114,7 +114,12 @@ public:
     ControlSignal threshold = ControlSignal::Running;
     int priority = 0;
   };
-  inline static std::shared_ptr<TaskControlToken> Instance() { return Global; }
+
+  inline static std::shared_ptr<TaskControlToken> Instance() {
+    static const std::shared_ptr<TaskControlToken> Global =
+        std::make_shared<TaskControlToken>();
+    return Global;
+  }
 
   /**
    * @brief RAII guard for temporary hook registration.
@@ -199,7 +204,6 @@ private:
     int priority = 0;
     size_t id = 0;
   };
-  static const std::shared_ptr<TaskControlToken> Global;
 
   std::atomic<int> signal_{static_cast<int>(ControlSignal::Running)};
   std::atomic<size_t> wake_token_seed_{1};

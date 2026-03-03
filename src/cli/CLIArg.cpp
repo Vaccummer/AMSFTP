@@ -14,21 +14,15 @@ CliRunContext &CliRunContext::Instance() {
 
 namespace {
 void SetEnterInteractive_(const CliRunContext &ctx, bool value) {
-  if (ctx.enter_interactive) {
-    *ctx.enter_interactive = value;
-  }
+  ctx.enter_interactive = value;
 }
 
 void SetRequestExit_(const CliRunContext &ctx, bool value) {
-  if (ctx.request_exit) {
-    *ctx.request_exit = value;
-  }
+  ctx.request_exit = value;
 }
 
 void SetSkipLoopExitCallbacks_(const CliRunContext &ctx, bool value) {
-  if (ctx.skip_loop_exit_callbacks) {
-    *ctx.skip_loop_exit_callbacks = value;
-  }
+  ctx.skip_loop_exit_callbacks = value;
 }
 
 void PrintRunError_(const ECM &rcm) {
