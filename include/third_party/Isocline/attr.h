@@ -27,12 +27,15 @@ typedef union attr_s {
     unsigned int  color:28;
     signed int    bold:2;
     signed int    reverse:2;
-    unsigned int  bgcolor:28;
+    unsigned int  bgcolor:26;
     signed int    underline:2;
     signed int    italic:2;
+    signed int    strike:2;
   } x;
   uint64_t        value;
 } attr_t;
+
+typedef char attr_t_size_check[(sizeof(attr_t) == sizeof(uint64_t)) ? 1 : -1];
 
 ic_private attr_t attr_none(void);
 ic_private attr_t attr_default(void);

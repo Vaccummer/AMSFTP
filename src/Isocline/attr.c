@@ -29,6 +29,7 @@ ic_private attr_t attr_default(void) {
   attr.x.underline = IC_OFF; 
   attr.x.reverse = IC_OFF;
   attr.x.italic = IC_OFF; 
+  attr.x.strike = IC_OFF;
   return attr;
 }
 
@@ -55,6 +56,7 @@ ic_private attr_t attr_update_with( attr_t oldattr, attr_t newattr ) {
   if (newattr.x.italic != IC_NONE)        { attr.x.italic = newattr.x.italic; }
   if (newattr.x.reverse != IC_NONE)       { attr.x.reverse = newattr.x.reverse; }
   if (newattr.x.underline != IC_NONE)     { attr.x.underline = newattr.x.underline; }
+  if (newattr.x.strike != IC_NONE)        { attr.x.strike = newattr.x.strike; }
   return attr;
 }
 
@@ -109,10 +111,12 @@ ic_private attr_t attr_from_sgr( const char* s, ssize_t len) {
       case  3: attr.x.italic = IC_ON; break;
       case  4: attr.x.underline = IC_ON; break;
       case  7: attr.x.reverse = IC_ON; break;
+      case  9: attr.x.strike = IC_ON; break;
       case 22: attr.x.bold = IC_OFF; break;
       case 23: attr.x.italic = IC_OFF; break;
       case 24: attr.x.underline = IC_OFF; break;
       case 27: attr.x.reverse = IC_OFF; break;
+      case 29: attr.x.strike = IC_OFF; break;
       case 39: attr.x.color = IC_ANSI_DEFAULT; break;
       case 49: attr.x.bgcolor = IC_ANSI_DEFAULT; break;
       default: {

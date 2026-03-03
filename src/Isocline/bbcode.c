@@ -346,6 +346,13 @@ static const char* attr_update_property( tag_t* tag, const char* attr_name, cons
     if (b != IC_NONE) { tag->attr.x.reverse = b; }
     return fname;
   }
+  fname = "strike";
+  if (strcmp(attr_name,fname) == 0) {
+    signed int b = IC_NONE;
+    attr_update_bool(fname,&b, value);
+    if (b != IC_NONE) { tag->attr.x.strike = b; }
+    return fname;
+  }
   fname = "color";
   if (strcmp(attr_name,fname) == 0) {
     unsigned int color = IC_COLOR_NONE;
@@ -395,13 +402,14 @@ static const char* attr_update_property( tag_t* tag, const char* attr_name, cons
 }
 
 static const style_t builtin_styles[] = {
-  { "b",  { { IC_COLOR_NONE, IC_ON  , IC_NONE, IC_COLOR_NONE, IC_NONE, IC_NONE } } },
-  { "r",  { { IC_COLOR_NONE, IC_NONE, IC_ON  , IC_COLOR_NONE, IC_NONE, IC_NONE } } },
-  { "u",  { { IC_COLOR_NONE, IC_NONE, IC_NONE, IC_COLOR_NONE, IC_ON  , IC_NONE } } },
-  { "i",  { { IC_COLOR_NONE, IC_NONE, IC_NONE, IC_COLOR_NONE, IC_NONE, IC_ON   } } },
-  { "em", { { IC_COLOR_NONE, IC_ON  , IC_NONE, IC_COLOR_NONE, IC_NONE, IC_NONE } } }, // bold
-  { "url",{ { IC_COLOR_NONE, IC_NONE, IC_NONE, IC_COLOR_NONE, IC_ON,   IC_NONE } } }, // underline
-  { NULL, { { IC_COLOR_NONE, IC_NONE, IC_NONE, IC_COLOR_NONE, IC_NONE, IC_NONE } } }
+  { "b",  { { IC_COLOR_NONE, IC_ON  , IC_NONE, IC_COLOR_NONE, IC_NONE, IC_NONE, IC_NONE } } },
+  { "r",  { { IC_COLOR_NONE, IC_NONE, IC_ON  , IC_COLOR_NONE, IC_NONE, IC_NONE, IC_NONE } } },
+  { "u",  { { IC_COLOR_NONE, IC_NONE, IC_NONE, IC_COLOR_NONE, IC_ON  , IC_NONE, IC_NONE } } },
+  { "i",  { { IC_COLOR_NONE, IC_NONE, IC_NONE, IC_COLOR_NONE, IC_NONE, IC_ON  , IC_NONE } } },
+  { "s",  { { IC_COLOR_NONE, IC_NONE, IC_NONE, IC_COLOR_NONE, IC_NONE, IC_NONE, IC_ON   } } },
+  { "em", { { IC_COLOR_NONE, IC_ON  , IC_NONE, IC_COLOR_NONE, IC_NONE, IC_NONE, IC_NONE } } }, // bold
+  { "url",{ { IC_COLOR_NONE, IC_NONE, IC_NONE, IC_COLOR_NONE, IC_ON,   IC_NONE, IC_NONE } } }, // underline
+  { NULL, { { IC_COLOR_NONE, IC_NONE, IC_NONE, IC_COLOR_NONE, IC_NONE, IC_NONE, IC_NONE } } }
 };
 
 static void attr_update_with_styles( tag_t* tag, const char* attr_name, const char* value, 
