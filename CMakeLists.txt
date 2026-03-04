@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 project(AMSFTP LANGUAGES C CXX)
 
+option(AMSFTP_ENABLE_LAYER_CHECK
+       "Enable Workflow-0 layered include dependency check target"
+       ON)
 
 # ========= C++ Standard =========
 set(CMAKE_CXX_STANDARD 17)
@@ -125,3 +128,23 @@ target_compile_options(amsftp PRIVATE
 # target_compile_options(amtest PRIVATE
 #   $<$<CXX_COMPILER_ID:MSVC>:/Zi /Od /W4>
 # )
+
+# ========= Architecture Guardrail (Workflow-0) =========
+if (AMSFTP_ENABLE_LAYER_CHECK)
+  find_program(POWERSHELL_EXECUTABLE NAMES pwsh powershell)
+  if (POWERSHELL_EXECUTABLE)
+    add_custom_target(check_layers
+      COMMAND "${POWERSHELL_EXECUTABLE}"
+              -NoProfile
+              -ExecutionPolicy Bypass
+              -File "${PROJECT_SOURCE_DIR}/tools/check_layers.ps1"
+              -RepoRoot "${PROJECT_SOURCE_DIR}"
+      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+      COMMENT "Run layered include dependency checks (Workflow-0 guardrail)"
+      VERBATIM
+    )
+  else()
+    message(WARNING
+      "PowerShell executable not found; check_layers target is unavailable.")
+  endif()
+endif()
