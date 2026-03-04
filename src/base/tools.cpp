@@ -1,6 +1,6 @@
-#include "AMBase/DataClass.hpp"
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/json.hpp"
+#include "foundation/DataClass.hpp"
+#include "foundation/tools/auth.hpp"
+#include "foundation/tools/json.hpp"
 #include <array>
 #include <ctime>
 #include <iomanip>
