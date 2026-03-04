@@ -1,5 +1,5 @@
-#include "AMBase/tools/enum_related.hpp"
-#include "AMManager/SignalMonitor.hpp"
+#include "foundation/tools/enum_related.hpp"
+#include "infrastructure/SignalMonitor.hpp"
 #include <algorithm>
 #include <chrono>
 #include <utility>
@@ -7,19 +7,15 @@
 
 std::atomic<int> GlobalSignalInt{0};
 
-AMCliSignalMonitor &AMCliSignalMonitor::Instance() {
-  static AMCliSignalMonitor instance;
-  return instance;
-}
+/** Stop worker resources during teardown. */
+AMInfraCliSignalMonitor::~AMInfraCliSignalMonitor() { Stop(); }
 
-AMCliSignalMonitor::~AMCliSignalMonitor() { Stop(); }
-
-void AMCliSignalMonitor::InstallHandlers() {
+void AMInfraCliSignalMonitor::InstallHandlers() {
 #ifdef _WIN32
-  SetConsoleCtrlHandler(AMCliSignalMonitor::ConsoleCtrlHandler_, TRUE);
+  SetConsoleCtrlHandler(AMInfraCliSignalMonitor::ConsoleCtrlHandler_, TRUE);
 #else
   struct sigaction sa{};
-  sa.sa_handler = AMCliSignalMonitor::SignalHandler;
+  sa.sa_handler = AMInfraCliSignalMonitor::SignalHandler;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART;
   sigaction(SIGINT, &sa, nullptr);
@@ -29,33 +25,33 @@ void AMCliSignalMonitor::InstallHandlers() {
 #endif
 }
 
-void AMCliSignalMonitor::Start() {
+void AMInfraCliSignalMonitor::Start() {
   if (running_.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
   worker_ = std::thread([this]() { Run_(); });
 }
 
-ECM AMCliSignalMonitor::Init() {
+ECM AMInfraCliSignalMonitor::Init() {
   EnsureGlobalHook_();
   InstallHandlers();
   Start();
   return Ok();
 }
 
-void AMCliSignalMonitor::Stop() {
+void AMInfraCliSignalMonitor::Stop() {
   running_.store(false, std::memory_order_release);
   if (worker_.joinable()) {
     worker_.join();
   }
 }
 
-int AMCliSignalMonitor::LastSignal() const {
+int AMInfraCliSignalMonitor::LastSignal() const {
   return last_handled_signal_.load(std::memory_order_relaxed);
 }
 
-bool AMCliSignalMonitor::RegisterHook(const std::string &name,
-                                      const SignalHook &hook) {
+bool AMInfraCliSignalMonitor::RegisterHook(const std::string &name,
+                                           const SignalHook &hook) {
   if (name.empty()) {
     return false;
   }
@@ -71,7 +67,7 @@ bool AMCliSignalMonitor::RegisterHook(const std::string &name,
   return true;
 }
 
-bool AMCliSignalMonitor::UnregisterHook(const std::string &name) {
+bool AMInfraCliSignalMonitor::UnregisterHook(const std::string &name) {
   if (name.empty() || name == "GLOBAL") {
     return false;
   }
@@ -79,7 +75,7 @@ bool AMCliSignalMonitor::UnregisterHook(const std::string &name) {
   return hooks_.erase(name) > 0;
 }
 
-bool AMCliSignalMonitor::SilenceHook(const std::string &name) {
+bool AMInfraCliSignalMonitor::SilenceHook(const std::string &name) {
   if (name.empty()) {
     return false;
   }
@@ -92,7 +88,7 @@ bool AMCliSignalMonitor::SilenceHook(const std::string &name) {
   return true;
 }
 
-bool AMCliSignalMonitor::ResumeHook(const std::string &name) {
+bool AMInfraCliSignalMonitor::ResumeHook(const std::string &name) {
   if (name.empty()) {
     return false;
   }
@@ -105,8 +101,8 @@ bool AMCliSignalMonitor::ResumeHook(const std::string &name) {
   return true;
 }
 
-bool AMCliSignalMonitor::SetHookPriority(const std::string &name,
-                                         int priority) {
+bool AMInfraCliSignalMonitor::SetHookPriority(const std::string &name,
+                                              int priority) {
   if (name.empty() || name == "GLOBAL") {
     return false;
   }
@@ -119,12 +115,31 @@ bool AMCliSignalMonitor::SetHookPriority(const std::string &name,
   return true;
 }
 
-void AMCliSignalMonitor::SignalHandler(int signum) {
+/** Bind a task-control token for signal propagation. */
+void AMInfraCliSignalMonitor::BindTaskControlToken(
+    const std::shared_ptr<TaskControlToken> &token) {
+  std::lock_guard<std::mutex> lock(token_mtx_);
+  task_control_token_ = token;
+}
+
+/** Clear the currently bound task-control token. */
+void AMInfraCliSignalMonitor::ClearTaskControlToken() {
+  std::lock_guard<std::mutex> lock(token_mtx_);
+  task_control_token_.reset();
+}
+
+/** Return the currently bound task-control token. */
+std::shared_ptr<TaskControlToken> AMInfraCliSignalMonitor::BoundTaskControlToken()
+    const {
+  return ResolveTaskControlToken_();
+}
+
+void AMInfraCliSignalMonitor::SignalHandler(int signum) {
   GlobalSignalInt.store(signum);
 }
 
 #ifdef _WIN32
-BOOL WINAPI AMCliSignalMonitor::ConsoleCtrlHandler_(DWORD type) {
+BOOL WINAPI AMInfraCliSignalMonitor::ConsoleCtrlHandler_(DWORD type) {
   switch (type) {
   case CTRL_C_EVENT:
     GlobalSignalInt.store(SIGINT);
@@ -141,9 +156,9 @@ BOOL WINAPI AMCliSignalMonitor::ConsoleCtrlHandler_(DWORD type) {
 }
 #endif
 
-AMCliSignalMonitor::AMCliSignalMonitor() = default;
+AMInfraCliSignalMonitor::AMInfraCliSignalMonitor() = default;
 
-void AMCliSignalMonitor::EnsureGlobalHook_() {
+void AMInfraCliSignalMonitor::EnsureGlobalHook_() {
   std::lock_guard<std::mutex> lock(hooks_mtx_);
   auto it = hooks_.find("GLOBAL");
   if (it == hooks_.end()) {
@@ -159,7 +174,14 @@ void AMCliSignalMonitor::EnsureGlobalHook_() {
   it->second.consume = false;
 }
 
-void AMCliSignalMonitor::Run_() {
+/** Resolve the weak task-control token binding to a strong pointer. */
+std::shared_ptr<TaskControlToken>
+AMInfraCliSignalMonitor::ResolveTaskControlToken_() const {
+  std::lock_guard<std::mutex> lock(token_mtx_);
+  return task_control_token_.lock();
+}
+
+void AMInfraCliSignalMonitor::Run_() {
   while (running_.load(std::memory_order_acquire)) {
     const int signum = GlobalSignalInt.exchange(0);
     if (signum != 0) {
@@ -187,10 +209,10 @@ void AMCliSignalMonitor::Run_() {
           break;
         }
       }
-      if ((signum == SIGINT || signum == SIGTERM) &&
-          TaskControlToken::Instance()) {
-        (void)TaskControlToken::Instance()->SetStatus(
-            signum == SIGINT ? ControlSignal::Interrupt : ControlSignal::Kill);
+      auto token = ResolveTaskControlToken_();
+      if ((signum == SIGINT || signum == SIGTERM) && token) {
+        (void)token->SetStatus(signum == SIGINT ? ControlSignal::Interrupt
+                                                : ControlSignal::Kill);
       }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));

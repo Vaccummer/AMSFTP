@@ -175,6 +175,8 @@ ECM EnsureInteractive_(const CliRunContext &ctx) {
 } // namespace
 
 ECM CliManagers::Init() {
+  AMCliSignalMonitor::SetCompatibilityTaskControlToken(
+      TaskControlToken::Instance());
   ECM rcm = signal_monitor.Init();
   if (!isok(rcm)) {
     return rcm;

@@ -33,9 +33,10 @@ file(GLOB_RECURSE AMSFTP_SOURCES CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/src/cli/completer/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/cli/searcher/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/base/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/infrastructure/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/infrastructure/config/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/manager/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/manager/client/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/manager/config/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/manager/host/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/manager/var/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/Isocline/isocline.c"
@@ -143,8 +144,30 @@ if (AMSFTP_ENABLE_LAYER_CHECK)
       COMMENT "Run layered include dependency checks (Workflow-0 guardrail)"
       VERBATIM
     )
+
+    add_custom_target(check_wf7_cutover
+      COMMAND "${POWERSHELL_EXECUTABLE}"
+              -NoProfile
+              -ExecutionPolicy Bypass
+              -File "${PROJECT_SOURCE_DIR}/tools/check_wf7_cutover.ps1"
+              -RepoRoot "${PROJECT_SOURCE_DIR}"
+      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+      COMMENT "Run WF-7 bridged-header cutover regression check"
+      VERBATIM
+    )
+
+    add_custom_target(report_legacy_includes
+      COMMAND "${POWERSHELL_EXECUTABLE}"
+              -NoProfile
+              -ExecutionPolicy Bypass
+              -File "${PROJECT_SOURCE_DIR}/tools/report_legacy_includes.ps1"
+              -RepoRoot "${PROJECT_SOURCE_DIR}"
+      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+      COMMENT "Report legacy include usage counts (Workflow-7 metric)"
+      VERBATIM
+    )
   else()
     message(WARNING
-      "PowerShell executable not found; check_layers target is unavailable.")
+      "PowerShell executable not found; check_layers/check_wf7_cutover/report_legacy_includes targets are unavailable.")
   endif()
 endif()

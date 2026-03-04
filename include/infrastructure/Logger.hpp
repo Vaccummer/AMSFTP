@@ -1,0 +1,112 @@
+#pragma once
+#include "foundation/DataClass.hpp"
+#include "infrastructure/Config.hpp"
+#include <atomic>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <mutex>
+#include <optional>
+#include <variant>
+
+class AMInfraLogManager : private NonCopyableNonMovable {
+public:
+  using ErrorReporter = std::function<void(const TraceInfo &, const ECM &)>;
+
+  /**
+   * @brief Construct an infrastructure logger with explicit external bindings.
+   */
+  AMInfraLogManager() = default;
+
+  /** Cleanup log manager resources and close log streams. */
+  ~AMInfraLogManager() override { CloseLogStreams_(); }
+
+  /**
+   * @brief Bind the config adapter used by logger I/O workflows.
+   * @param config_manager Non-owning config adapter pointer.
+   */
+  void BindConfigManager(AMInfraConfigManager *config_manager);
+
+  /**
+   * @brief Get the currently bound config adapter pointer.
+   * @return Non-owning config adapter pointer or nullptr.
+   */
+  [[nodiscard]] AMInfraConfigManager *BoundConfigManager() const;
+
+  /** Resolve paths, create the log directory, and open both log files. */
+  ECM Init() override;
+
+  /** Enqueue a client trace entry for asynchronous logging. */
+  void Enqueue(const TraceInfo &info);
+
+  /** Submit a client trace entry asynchronously to `log/Client.log`. */
+  void ClientTrace(const TraceInfo &info);
+
+  /** Submit a client trace entry from fields asynchronously. */
+  void ClientTrace(TraceLevel level, EC error_code,
+                   const std::string &nickname = "",
+                   const std::string &target = "",
+                   const std::string &action = "", const std::string &msg = "",
+                   std::optional<ConRequest> request = std::nullopt);
+
+  /** Submit a program trace entry asynchronously to `log/Program.log`. */
+  void ProgramTrace(const TraceInfo &info);
+
+  /** Submit a structured program trace asynchronously. */
+  void ProgramTrace(TraceLevel level, EC error_code,
+                    const std::string &target = "",
+                    const std::string &action = "",
+                    const std::string &msg = "");
+
+  /** Return a client-bound trace callback that submits client traces. */
+  std::function<void(const TraceInfo &)> TraceCallbackFunc();
+
+  /** Set a callback to report logging write failures. */
+  void SetErrorReporter(ErrorReporter reporter);
+
+  /**
+   * Get or set trace levels with per-target selectors.
+   * Selectors default to false. If both `programm` and `client` are false,
+   * both are treated as true.
+   * `print` controls whether this API call prints the selected level info.
+   * When value == -99999, returns current level for the selected target.
+   */
+  std::variant<int, std::pair<int, int>> TraceLevel(int value = -99999,
+                                                    bool programm = false,
+                                                    bool client = false,
+                                                    bool print = false);
+
+private:
+  /** Resolve `Client.log` and `Program.log` paths from the project root. */
+  void ResolveLogPaths_();
+
+  /** Ensure both log streams are opened in append mode. */
+  ECM EnsureLogStreamsOpen_();
+
+  /** Close both log streams if they are currently open. */
+  void CloseLogStreams_();
+
+  /** Write one formatted log entry into an already-open output stream. */
+  void WriteLogEntry_(const TraceInfo &info, std::ofstream &stream);
+
+  /** Clamp trace level to the valid range [-1, 4]. */
+  static int ClampTraceLevel(int value);
+
+  /** Convert trace level enum to integer severity. */
+  static int ToLevelInt(enum TraceLevel level);
+
+  /** Notify error reporter when a logging write failure occurs. */
+  void ReportWriteError_(const TraceInfo &info, const ECM &rcm);
+
+  std::filesystem::path client_log_path_;
+  std::filesystem::path program_log_path_;
+  std::ofstream client_log_stream_;
+  std::ofstream program_log_stream_;
+  std::mutex stream_mtx_;
+  std::mutex reporter_mtx_;
+  std::mutex config_mtx_;
+  AMInfraConfigManager *config_manager_ = nullptr;
+  ErrorReporter error_reporter_ = {};
+  std::atomic<int> client_trace_level_{4};
+  std::atomic<int> program_trace_level_{4};
+};
