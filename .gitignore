@@ -11,11 +11,15 @@ experience.md
 autosave
 *.pdb
 .*
-md/
+md/*
+!md/refactor_workflow0_status.md
+!md/refactor_wf7*.md
 test/
 AMBind*
 AMATrial*
 config/
 !src/manager/config/
 !src/manager/config/**
+!src/infrastructure/config/
+!src/infrastructure/config/**
 trashes/

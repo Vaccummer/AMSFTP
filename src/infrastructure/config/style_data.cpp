@@ -1,10 +1,10 @@
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
-#include "AMManager/Config.hpp"
+#include "foundation/tools/auth.hpp"
+#include "foundation/tools/bar.hpp"
+#include "foundation/tools/json.hpp"
+#include "foundation/tools/time.hpp"
+#include "infrastructure/Config.hpp"
 
-using cls = AMConfigManager;
+using cls = AMInfraConfigManager;
 using Bar = AMBar::AMProgressBar;
 using BarStyle = AMBar::AMProgressBarStyle;
 

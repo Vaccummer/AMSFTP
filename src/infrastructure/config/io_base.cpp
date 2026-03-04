@@ -1,7 +1,7 @@
-#include "AMBase/Path.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
-#include "AMManager/Config.hpp"
+#include "foundation/Path.hpp"
+#include "foundation/tools/json.hpp"
+#include "foundation/tools/time.hpp"
+#include "infrastructure/Config.hpp"
 #include <fstream>
 #include <limits>
 #include <optional>
@@ -334,7 +334,7 @@ inline constexpr char kHistorySchemaJson[250] = R"json(
 /**
  * @brief Initialize storage paths from a project root directory.
  */
-ECM AMConfigStorage::AMInit(const std::filesystem::path &root_dir) {
+ECM AMInfraConfigStorage::AMInit(const std::filesystem::path &root_dir) {
   std::unordered_map<DocumentKind, std::filesystem::path> paths;
   std::unordered_map<DocumentKind, std::filesystem::path> schemas;
 
@@ -358,7 +358,7 @@ ECM AMConfigStorage::AMInit(const std::filesystem::path &root_dir) {
 /**
  * @brief Initialize storage with explicit document paths and schemas.
  */
-ECM AMConfigStorage::AMInit(
+ECM AMInfraConfigStorage::AMInit(
     const std::filesystem::path &root_dir,
     const std::unordered_map<DocumentKind, std::filesystem::path> &paths,
     const std::unordered_map<DocumentKind, std::filesystem::path> &schemas) {
@@ -399,7 +399,7 @@ ECM AMConfigStorage::AMInit(
 /**
  * @brief Load a document from disk, or all documents when kind is nullopt.
  */
-ECM AMConfigStorage::Load(std::optional<DocumentKind> kind, bool force) {
+ECM AMInfraConfigStorage::Load(std::optional<DocumentKind> kind, bool force) {
   auto load_single = [&](DocumentKind target_kind) -> ECM {
     DocumentState *doc = GetDoc_(target_kind);
     if (!doc) {
@@ -426,7 +426,7 @@ ECM AMConfigStorage::Load(std::optional<DocumentKind> kind, bool force) {
 /**
  * @brief Load a document into memory using cfgffi.
  */
-ECM AMConfigStorage::LoadDocument_(DocumentKind kind, DocumentState *doc) {
+ECM AMInfraConfigStorage::LoadDocument_(DocumentKind kind, DocumentState *doc) {
   if (!doc) {
     return Err(EC::ConfigNotInitialized, "document not initialized");
   }
@@ -486,7 +486,7 @@ ECM AMConfigStorage::LoadDocument_(DocumentKind kind, DocumentState *doc) {
 /**
  * @brief Release cfgffi handles and reset pointers without dumping.
  */
-void AMConfigStorage::CloseHandles() {
+void AMInfraConfigStorage::CloseHandles() {
   StopWriteThread();
   std::lock_guard<std::mutex> lock(handle_mtx_);
   for (auto &entry : docs_) {
@@ -502,7 +502,7 @@ void AMConfigStorage::CloseHandles() {
 /**
  * @brief Report whether a document has pending changes.
  */
-bool AMConfigStorage::IsDirty(DocumentKind kind) const {
+bool AMInfraConfigStorage::IsDirty(DocumentKind kind) const {
   const DocumentState *doc = GetDoc_(kind);
   if (!doc) {
     return false;
@@ -514,7 +514,7 @@ bool AMConfigStorage::IsDirty(DocumentKind kind) const {
 /**
  * @brief Persist all document snapshots to disk.
  */
-ECM AMConfigStorage::DumpAll(bool async) {
+ECM AMInfraConfigStorage::DumpAll(bool async) {
   if (async) {
     SubmitWriteTask([this]() -> ECM { return DumpAll(false); });
     return Ok();
@@ -542,7 +542,7 @@ ECM AMConfigStorage::DumpAll(bool async) {
 /**
  * @brief Persist a single document snapshot to disk.
  */
-ECM AMConfigStorage::Dump(DocumentKind kind, const std::string &path,
+ECM AMInfraConfigStorage::Dump(DocumentKind kind, const std::string &path,
                           bool async) {
   if (async) {
     std::string path_copy = path;
@@ -593,7 +593,7 @@ ECM AMConfigStorage::Dump(DocumentKind kind, const std::string &path,
 /**
  * @brief Trigger backup logic when needed.
  */
-ECM AMConfigStorage::BackupIfNeeded() {
+ECM AMInfraConfigStorage::BackupIfNeeded() {
   constexpr bool kDefaultEnabled = true;
   constexpr int64_t kDefaultLastBackupS = 0;
   constexpr int64_t kDefaultMaxBackupCount = 3;
@@ -858,7 +858,7 @@ ECM AMConfigStorage::BackupIfNeeded() {
 /**
  * @brief Start the background writer thread if not running.
  */
-void AMConfigStorage::StartWriteThread() {
+void AMInfraConfigStorage::StartWriteThread() {
   std::lock_guard<std::mutex> lock(write_mtx_);
   if (write_running_.load(std::memory_order_relaxed)) {
     return;
@@ -871,7 +871,7 @@ void AMConfigStorage::StartWriteThread() {
 /**
  * @brief Stop the background writer thread and drain pending tasks.
  */
-void AMConfigStorage::StopWriteThread() {
+void AMInfraConfigStorage::StopWriteThread() {
   shutdown_requested_.store(true, std::memory_order_relaxed);
   write_running_.store(false, std::memory_order_relaxed);
   write_cv_.notify_all();
@@ -883,7 +883,7 @@ void AMConfigStorage::StopWriteThread() {
 /**
  * @brief Submit a write task to the background queue.
  */
-void AMConfigStorage::SubmitWriteTask(std::function<ECM()> task) {
+void AMInfraConfigStorage::SubmitWriteTask(std::function<ECM()> task) {
   if (!task) {
     return;
   }
@@ -901,14 +901,14 @@ void AMConfigStorage::SubmitWriteTask(std::function<ECM()> task) {
 /**
  * @brief Register a callback invoked on dump errors.
  */
-void AMConfigStorage::SetDumpErrorCallback(DumpErrorCallback cb) {
+void AMInfraConfigStorage::SetDumpErrorCallback(DumpErrorCallback cb) {
   dump_error_cb_ = std::move(cb);
 }
 
 /**
  * @brief Return a thread-safe copy of a document JSON.
  */
-bool AMConfigStorage::GetJson(DocumentKind kind,
+bool AMInfraConfigStorage::GetJson(DocumentKind kind,
                               nlohmann::ordered_json *value) const {
   if (!value) {
     return false;
@@ -924,7 +924,7 @@ bool AMConfigStorage::GetJson(DocumentKind kind,
 /**
  * @brief Return a thread-safe serialized JSON string of a document.
  */
-bool AMConfigStorage::GetJsonStr(DocumentKind kind, std::string *value,
+bool AMInfraConfigStorage::GetJsonStr(DocumentKind kind, std::string *value,
                                  int indent) const {
   if (!value) {
     return false;
@@ -940,7 +940,7 @@ bool AMConfigStorage::GetJsonStr(DocumentKind kind, std::string *value,
 /**
  * @brief Return the config data path tracked for a document.
  */
-bool AMConfigStorage::GetDataPath(DocumentKind kind,
+bool AMInfraConfigStorage::GetDataPath(DocumentKind kind,
                                   std::filesystem::path *value) const {
   if (!value) {
     return false;
@@ -956,7 +956,7 @@ bool AMConfigStorage::GetDataPath(DocumentKind kind,
 /**
  * @brief Locate a document state by kind.
  */
-DocumentState *AMConfigStorage::GetDoc_(DocumentKind kind) {
+DocumentState *AMInfraConfigStorage::GetDoc_(DocumentKind kind) {
   auto it = docs_.find(kind);
   if (it == docs_.end()) {
     return nullptr;
@@ -967,7 +967,7 @@ DocumentState *AMConfigStorage::GetDoc_(DocumentKind kind) {
 /**
  * @brief Notify any registered dump-error callback.
  */
-void AMConfigStorage::NotifyDumpError_(const ECM &err) const {
+void AMInfraConfigStorage::NotifyDumpError_(const ECM &err) const {
   if (dump_error_cb_) {
     dump_error_cb_(err);
   }
@@ -976,7 +976,7 @@ void AMConfigStorage::NotifyDumpError_(const ECM &err) const {
 /**
  * @brief Locate a document state by kind (const).
  */
-const DocumentState *AMConfigStorage::GetDoc_(DocumentKind kind) const {
+const DocumentState *AMInfraConfigStorage::GetDoc_(DocumentKind kind) const {
   auto it = docs_.find(kind);
   if (it == docs_.end()) {
     return nullptr;
@@ -987,7 +987,7 @@ const DocumentState *AMConfigStorage::GetDoc_(DocumentKind kind) const {
 /**
  * @brief Write JSON content into a cfgffi handle and refresh the cache.
  */
-ECM AMConfigStorage::WriteHandleJson_(DocumentState *doc, DocumentKind kind) {
+ECM AMInfraConfigStorage::WriteHandleJson_(DocumentState *doc, DocumentKind kind) {
   const std::string label = std::string(AMStr::ToString(kind));
   if (!doc || !doc->handle) {
     ECM rcm =
@@ -1042,7 +1042,7 @@ ECM AMConfigStorage::WriteHandleJson_(DocumentState *doc, DocumentKind kind) {
 /**
  * @brief Write a TOML snapshot to a target path using the given handle.
  */
-void AMConfigStorage::WriteSnapshotToPath_(
+void AMInfraConfigStorage::WriteSnapshotToPath_(
     ConfigHandle *handle, std::string_view json,
     const std::filesystem::path &out_path) const {
   if (!handle) {
@@ -1070,7 +1070,7 @@ void AMConfigStorage::WriteSnapshotToPath_(
 /**
  * @brief Worker loop that processes queued write tasks.
  */
-void AMConfigStorage::WriteThreadLoop_() {
+void AMInfraConfigStorage::WriteThreadLoop_() {
   while (true) {
     std::function<ECM()> task;
     {
@@ -1095,9 +1095,9 @@ void AMConfigStorage::WriteThreadLoop_() {
 /**
  * @brief Return the project root directory path.
  */
-std::filesystem::path AMConfigStorage::ProjectRoot() const { return root_dir_; }
+std::filesystem::path AMInfraConfigStorage::ProjectRoot() const { return root_dir_; }
 
 /**
  * @brief Backup config/settings/known_hosts when the interval elapses.
  */
-ECM AMConfigStorage::ConfigBackupIfNeeded() { return BackupIfNeeded(); }
+ECM AMInfraConfigStorage::ConfigBackupIfNeeded() { return BackupIfNeeded(); }
