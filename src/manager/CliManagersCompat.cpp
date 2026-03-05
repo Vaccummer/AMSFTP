@@ -1,11 +1,11 @@
 #include "interface/CLIArg.hpp"
 #include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
 #include "AMManager/FileSystem.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Transfer.hpp"
 #include "AMManager/Var.hpp"
 #include "foundation/tools/enum_related.hpp"
+#include "infrastructure/Config.hpp"
 #include "infrastructure/Logger.hpp"
 #include "infrastructure/SignalMonitor.hpp"
 
@@ -13,7 +13,7 @@
  * @brief Bind manager references for CLI dispatch.
  */
 CliManagers::CliManagers(AMInfraCliSignalMonitor &signal_monitor_ref,
-                         AMConfigManager &config_manager_ref,
+                         AMInfraConfigManager &config_manager_ref,
                          AMPromptManager &prompt_manager_ref,
                          AMHostManager &host_manager_ref,
                          VarCLISet &var_manager_ref,
@@ -30,8 +30,11 @@ CliManagers::CliManagers(AMInfraCliSignalMonitor &signal_monitor_ref,
 /**
  * @brief Initialize all bound managers in dependency-safe order.
  */
-ECM CliManagers::Init() {
-  signal_monitor.BindTaskControlToken(TaskControlToken::Instance());
+ECM CliManagers::Init(const amf &task_control_token) {
+  if (!task_control_token) {
+    return Err(EC::InvalidArg, "CliManagers::Init requires task control token");
+  }
+  signal_monitor.BindTaskControlToken(task_control_token);
   ECM rcm = signal_monitor.Init();
   if (!isok(rcm)) {
     return rcm;
@@ -52,6 +55,7 @@ ECM CliManagers::Init() {
   if (!isok(rcm)) {
     return rcm;
   }
+  log_manager.BindConfigManager(&config_manager);
   rcm = log_manager.Init();
   if (!isok(rcm)) {
     return rcm;

@@ -11,12 +11,18 @@
 #include "application/var/VarWorkflows.hpp"
 #include <iostream>
 
-CliRunContext &CliRunContext::Instance() {
-  static CliRunContext instance;
-  return instance;
+namespace {
+/**
+ * @brief Resolve the task-control token from session context.
+ */
+amf ResolveTaskControlToken_(const CliRunContext &ctx) {
+  if (ctx.task_control_token) {
+    return ctx.task_control_token;
+  }
+  static const amf fallback = TaskControlToken::CreateShared();
+  return fallback;
 }
 
-namespace {
 void SetEnterInteractive_(const CliRunContext &ctx, bool value) {
   ctx.enter_interactive = value;
 }
@@ -341,7 +347,7 @@ ECM StatArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   const std::vector<std::string> resolved =
       SubstitutePathLikeArgs_(var_gateway, paths);
   return AMApplication::ClientWorkflow::ExecuteStatPaths(
-      gateway, resolved, TaskControlToken::Instance());
+      gateway, resolved, ResolveTaskControlToken_(ctx));
 }
 
 void StatArgs::reset() { paths.clear(); }
@@ -362,7 +368,7 @@ ECM LsArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
     query_path = "/";
   }
   ECM rcm = AMApplication::ClientWorkflow::ExecuteListPath(
-      gateway, query_path, list_like, show_all, TaskControlToken::Instance());
+      gateway, query_path, list_like, show_all, ResolveTaskControlToken_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -381,7 +387,7 @@ ECM SizeArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   const std::vector<std::string> resolved =
       SubstitutePathLikeArgs_(var_gateway, paths);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteGetSize(
-      gateway, resolved, TaskControlToken::Instance());
+      gateway, resolved, ResolveTaskControlToken_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -395,7 +401,7 @@ ECM FindArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
       managers.filesystem);
   const std::string resolved = SubstitutePathLikeArg_(var_gateway, path);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteFind(
-      gateway, resolved, SearchType::All, TaskControlToken::Instance());
+      gateway, resolved, SearchType::All, ResolveTaskControlToken_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -411,7 +417,7 @@ ECM MkdirArgs::Run(const CliManagers &managers,
   const std::vector<std::string> resolved =
       SubstitutePathLikeArgs_(var_gateway, paths);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteMkdir(
-      gateway, resolved, TaskControlToken::Instance());
+      gateway, resolved, ResolveTaskControlToken_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -426,7 +432,7 @@ ECM RmArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   const std::vector<std::string> resolved =
       SubstitutePathLikeArgs_(var_gateway, paths);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteRemove(
-      gateway, resolved, permanent, false, quiet, TaskControlToken::Instance());
+      gateway, resolved, permanent, false, quiet, ResolveTaskControlToken_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -445,7 +451,7 @@ ECM WalkArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   const std::string resolved = SubstitutePathLikeArg_(var_gateway, path);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteWalk(
       gateway, resolved, only_file, only_dir, show_all, !include_special, quiet,
-      TaskControlToken::Instance());
+      ResolveTaskControlToken_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -467,7 +473,7 @@ ECM TreeArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   const std::string resolved = SubstitutePathLikeArg_(var_gateway, path);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteTree(
       gateway, resolved, depth, only_dir, show_all, !include_special, quiet,
-      TaskControlToken::Instance());
+      ResolveTaskControlToken_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -489,7 +495,7 @@ ECM RealpathArgs::Run(const CliManagers &managers,
       managers.filesystem);
   const std::string resolved = SubstitutePathLikeArg_(var_gateway, path);
   return AMApplication::FileCommandWorkflow::ExecuteRealpath(
-      gateway, resolved, TaskControlToken::Instance());
+      gateway, resolved, ResolveTaskControlToken_(ctx));
 }
 
 void RealpathArgs::reset() { path.clear(); }
@@ -499,7 +505,7 @@ ECM RttArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::FileCommandGateway gateway(
       managers.filesystem);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteRtt(
-      gateway, times, TaskControlToken::Instance());
+      gateway, times, ResolveTaskControlToken_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -535,7 +541,7 @@ ECM CpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TransferExecutorPort executor(
       managers.transfer_manager);
   auto result = AMApplication::TransferWorkflow::ExecuteTransfer(
-      args, options, substitutor, executor, TaskControlToken::Instance());
+      args, options, substitutor, executor, ResolveTaskControlToken_(ctx));
   PrintRunError_(result.rcm);
   return result.rcm;
 }
@@ -556,7 +562,7 @@ ECM SftpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
       managers.filesystem);
   auto result = AMApplication::ClientWorkflow::ConnectProtocolClient(
       gateway, ClientProtocol::SFTP, targets, port, password, keyfile,
-      TaskControlToken::Instance());
+      ResolveTaskControlToken_(ctx));
   PrintRunError_(result.rcm);
   SetEnterInteractive_(ctx, result.enter_interactive);
   return result.rcm;
@@ -574,7 +580,7 @@ ECM FtpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
       managers.filesystem);
   auto result = AMApplication::ClientWorkflow::ConnectProtocolClient(
       gateway, ClientProtocol::FTP, targets, port, password, keyfile,
-      TaskControlToken::Instance());
+      ResolveTaskControlToken_(ctx));
   PrintRunError_(result.rcm);
   SetEnterInteractive_(ctx, result.enter_interactive);
   return result.rcm;
@@ -593,7 +599,7 @@ ECM ClientsArgs::Run(const CliManagers &managers,
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
       managers.filesystem);
   return AMApplication::ClientWorkflow::ExecuteClientList(
-      gateway, detail, TaskControlToken::Instance());
+      gateway, detail, ResolveTaskControlToken_(ctx));
 }
 
 void ClientsArgs::reset() { detail = false; }
@@ -604,7 +610,7 @@ ECM CheckArgs::Run(const CliManagers &managers,
   AMInterface::ApplicationAdapters::FileCommandGateway gateway(
       managers.filesystem);
   return AMApplication::FileCommandWorkflow::ExecuteCheckClients(
-      gateway, nicknames, detail, TaskControlToken::Instance());
+      gateway, nicknames, detail, ResolveTaskControlToken_(ctx));
 }
 
 void CheckArgs::reset() {
@@ -618,7 +624,7 @@ ECM ChangeClientArgs::Run(const CliManagers &managers,
       managers.filesystem);
   const auto result = AMApplication::ClientWorkflow::ChangeClient(
       gateway, nickname, BuildClientSessionMode_(ctx),
-      TaskControlToken::Instance());
+      ResolveTaskControlToken_(ctx));
   SetEnterInteractive_(ctx, result.enter_interactive);
   return result.rcm;
 }
@@ -642,7 +648,7 @@ ECM CdArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
       managers.filesystem);
   const std::string resolved = SubstitutePathLikeArg_(var_gateway, path);
   const auto result = AMApplication::FileCommandWorkflow::ExecuteCd(
-      gateway, resolved, TaskControlToken::Instance(), false);
+      gateway, resolved, ResolveTaskControlToken_(ctx), false);
   SetEnterInteractive_(ctx, result.enter_interactive);
   return result.rcm;
 }
@@ -655,7 +661,7 @@ ECM ConnectArgs::Run(const CliManagers &managers,
       managers.filesystem);
   const auto result = AMApplication::ClientWorkflow::ConnectNicknames(
       gateway, nicknames, force, BuildClientSessionMode_(ctx),
-      TaskControlToken::Instance());
+      ResolveTaskControlToken_(ctx));
   PrintRunError_(result.rcm);
   SetEnterInteractive_(ctx, result.enter_interactive);
   return result.rcm;
@@ -671,7 +677,7 @@ ECM CmdArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::FileCommandGateway gateway(
       managers.filesystem);
   const auto result = AMApplication::FileCommandWorkflow::ExecuteShellCommand(
-      gateway, timeout_ms, cmd_str, TaskControlToken::Instance());
+      gateway, timeout_ms, cmd_str, ResolveTaskControlToken_(ctx));
   if (!isok(result.rcm)) {
     PrintRunError_(result.rcm);
     return result.rcm;
@@ -776,7 +782,7 @@ ECM TaskListArgs::Run(const CliManagers &managers,
   filter.finished = finished;
   filter.conducting = conducting;
   return AMApplication::TaskWorkflow::ExecuteTaskList(
-      gateway, filter, BuildTaskSessionMode_(ctx), TaskControlToken::Instance());
+      gateway, filter, BuildTaskSessionMode_(ctx), ResolveTaskControlToken_(ctx));
 }
 
 void TaskListArgs::reset() {
@@ -791,7 +797,7 @@ ECM TaskShowArgs::Run(const CliManagers &managers,
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_manager);
   return AMApplication::TaskWorkflow::ExecuteTaskShow(
-      gateway, ids, BuildTaskSessionMode_(ctx), TaskControlToken::Instance());
+      gateway, ids, BuildTaskSessionMode_(ctx), ResolveTaskControlToken_(ctx));
 }
 
 void TaskShowArgs::reset() { ids.clear(); }
@@ -897,7 +903,7 @@ ECM TaskCacheSubmitArgs::Run(const CliManagers &managers,
   options.quiet = quiet;
   options.async_suffix = async_suffix;
   return AMApplication::TaskWorkflow::ExecuteJobCacheSubmit(
-      gateway, options, BuildTaskSessionMode_(ctx), TaskControlToken::Instance());
+      gateway, options, BuildTaskSessionMode_(ctx), ResolveTaskControlToken_(ctx));
 }
 
 void TaskCacheSubmitArgs::reset() {

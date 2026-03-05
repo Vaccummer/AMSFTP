@@ -866,6 +866,16 @@ void DispatchCliCommands(const CliCommands &cli_commands,
     store_exit_code(static_cast<int>(ctx.rcm.first));
     return;
   }
+  if (!ctx.task_control_token) {
+    const std::string msg = "CLI session task control token is not initialized";
+    std::cerr << msg << std::endl;
+    ctx.rcm = {EC::InvalidArg, msg};
+    store_exit_code(static_cast<int>(ctx.rcm.first));
+    if (cli_commands.args) {
+      cli_commands.args->active = nullptr;
+    }
+    return;
+  }
   CliArgsPool &args = *cli_commands.args;
   bool any_parsed = false;
   std::string command_name = "";
