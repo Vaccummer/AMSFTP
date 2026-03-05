@@ -8,7 +8,7 @@
 #include <vector>
 
 class AMInfraCliSignalMonitor;
-class AMConfigManager;
+class AMInfraConfigManager;
 class AMPromptManager;
 class AMHostManager;
 class VarCLISet;
@@ -30,7 +30,7 @@ struct CliManagers : public NonCopyableNonMovable {
    * @brief Bind manager references used by CLI entry points.
    */
   CliManagers(AMInfraCliSignalMonitor &signal_monitor,
-              AMConfigManager &config_manager,
+              AMInfraConfigManager &config_manager,
               AMPromptManager &prompt_manager, AMHostManager &host_manager,
               VarCLISet &var_manager, AMInfraLogManager &log_manager,
               AMClientManager &client_manager,
@@ -39,10 +39,10 @@ struct CliManagers : public NonCopyableNonMovable {
   /**
    * @brief Initialize all bound managers in dependency-safe order.
    */
-  ECM Init() override;
+  ECM Init(const amf &task_control_token);
 
   AMInfraCliSignalMonitor &signal_monitor;
-  AMConfigManager &config_manager;
+  AMInfraConfigManager &config_manager;
   AMPromptManager &prompt_manager;
   AMHostManager &host_manager;
   VarCLISet &var_manager;
@@ -56,8 +56,8 @@ struct CliManagers : public NonCopyableNonMovable {
  * @brief Runtime context for invoking Args::Run.
  */
 struct CliRunContext : NonCopyableNonMovable {
+  CliRunContext() = default;
   ~CliRunContext() override = default;
-  static CliRunContext &Instance();
   ECM rcm = {EC::Success, ""};
   bool async = false;
   bool enforce_interactive = false;
@@ -65,11 +65,9 @@ struct CliRunContext : NonCopyableNonMovable {
   mutable bool enter_interactive = false;
   mutable bool request_exit = false;
   mutable bool skip_loop_exit_callbacks = false;
+  amf task_control_token = nullptr;
   std::shared_ptr<std::atomic<int>> exit_code;
   std::shared_ptr<std::atomic<bool>> is_interactive = nullptr;
-
-private:
-  CliRunContext() = default;
 };
 
 /**

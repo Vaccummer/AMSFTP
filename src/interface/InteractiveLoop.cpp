@@ -5,6 +5,7 @@
 #include "interface/CLIBind.hpp"
 #include "interface/CommandPreprocess.hpp"
 #include "interface/Completer/Proxy.hpp"
+#include "infrastructure/Config.hpp"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -269,7 +270,7 @@ bool TryBuildAnsiStyleCode_(const std::string &raw, std::string *ansi_code) {
  * @param ansi_code Output ANSI escape sequence when resolved.
  * @return True if a style was resolved; false otherwise.
  */
-bool ResolvePromptStyleAnsi_(AMConfigManager &config_manager,
+bool ResolvePromptStyleAnsi_(AMInfraConfigManager &config_manager,
                              const std::string &tag_name,
                              std::string *ansi_code) {
   if (!ansi_code) {
@@ -304,7 +305,7 @@ bool ResolvePromptStyleAnsi_(AMConfigManager &config_manager,
  * Supports both legacy `Style.CLIPrompt.format` and the newer
  * `Style.CLIPrompt.templete.core_prompt` layout.
  */
-std::string ResolveCorePromptFormat_(AMConfigManager &config_manager) {
+std::string ResolveCorePromptFormat_(AMInfraConfigManager &config_manager) {
   std::string format = config_manager.ResolveArg<std::string>(
       DocumentKind::Settings, {"Style", "CLIPrompt", "templete", "core_prompt"},
       "", {});
@@ -816,7 +817,7 @@ bool EvaluatePromptExpression_(const std::string &expression) {
  */
 std::string
 RenderPromptSegment_(const std::string &format, size_t *index,
-                     AMConfigManager &config_manager,
+                     AMInfraConfigManager &config_manager,
                      const std::unordered_map<std::string, std::string> &vars,
                      std::vector<std::string> *style_stack, bool enable_styles,
                      bool stop_on_brace) {
@@ -959,7 +960,7 @@ RenderPromptSegment_(const std::string &format, size_t *index,
  * @return Rendered prompt string with ANSI escape sequences.
  */
 std::string
-RenderPromptFormat_(AMConfigManager &config_manager, const std::string &format,
+RenderPromptFormat_(AMInfraConfigManager &config_manager, const std::string &format,
                     const std::unordered_map<std::string, std::string> &vars) {
   size_t index = 0;
   std::vector<std::string> style_stack;
@@ -1162,8 +1163,8 @@ bool TryExtractTaggedText_(const std::string &tagged, std::string *extracted) {
  * @param text Raw text to style.
  * @return Styled text with ANSI escape sequences when possible.
  */
-std::string ApplyStyleFromConfig_(AMConfigManager &config_manager,
-                                  const AMConfigManager::Path &path,
+std::string ApplyStyleFromConfig_(AMInfraConfigManager &config_manager,
+                                  const AMInfraConfigManager::Path &path,
                                   const std::string &text) {
   if (text.empty()) {
     return text;
@@ -1249,7 +1250,7 @@ ResolveUserHost_(const std::shared_ptr<BaseClient> &client) {
 /**
  * @brief Select the system icon from settings based on OS type.
  */
-std::string ResolveSysIcon_(AMConfigManager &config_manager, OS_TYPE os_type) {
+std::string ResolveSysIcon_(AMInfraConfigManager &config_manager, OS_TYPE os_type) {
   std::string key = "windows";
   switch (os_type) {
   case OS_TYPE::Windows:
@@ -1286,7 +1287,8 @@ std::string ResolveSysIcon_(AMConfigManager &config_manager, OS_TYPE os_type) {
  * @brief Build the prompt string and update cached prefix when needed.
  */
 std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
-                         AMConfigManager &config_manager) {
+                         AMInfraConfigManager &config_manager,
+                         AMTransferManager &transfer_manager) {
   auto client = ResolveActiveClient_(client_manager);
   std::string nickname = client ? client->GetNickname() : std::string("local");
   if (nickname.empty()) {
@@ -1343,7 +1345,7 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
     vars["$ec_name"] = ec_name;
     size_t pending_count = 0;
     size_t running_count = 0;
-    AMTransferManager::Instance().GetTaskCounts(&pending_count, &running_count);
+    transfer_manager.GetTaskCounts(&pending_count, &running_count);
     const size_t total_tasks = pending_count + running_count;
     const std::string time_now =
         FormatTime(static_cast<size_t>(AMTime::seconds()), "%H:%M:%S");
@@ -1389,7 +1391,7 @@ std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
  *
  * This makes external edits effective without requiring process restart.
  */
-ECM ReloadSettingsIfUpdated_(AMConfigManager &config_manager,
+ECM ReloadSettingsIfUpdated_(AMInfraConfigManager &config_manager,
                              AMPromptManager &prompt) {
   std::filesystem::path settings_path;
   if (!config_manager.GetDataPath(DocumentKind::Settings, &settings_path) ||
@@ -1479,8 +1481,9 @@ void PrintECM_(AMPromptManager &prompt, const ECM &rcm) {
  * @brief Execute a shell command via filesystem shell runner and return the
  * raw result.
  */
-CR ExecuteShellCommand_(AMFileSystem &filesystem, const std::string &command) {
-  return filesystem.ShellRun(command, -1, TaskControlToken::Instance());
+CR ExecuteShellCommand_(AMFileSystem &filesystem, const std::string &command,
+                        const amf &task_control_token) {
+  return filesystem.ShellRun(command, -1, task_control_token);
 }
 
 /**
@@ -1592,9 +1595,16 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
   };
 
   AMPromptManager &prompt = managers.prompt_manager;
-  AMConfigManager &config_manager = managers.config_manager;
+  AMInfraConfigManager &config_manager = managers.config_manager;
   AMClientManager &client_manager = managers.client_manager;
+  AMTransferManager &transfer_manager = managers.transfer_manager;
   AMFileSystem &filesystem = managers.filesystem;
+  const amf task_control_token = ctx.task_control_token;
+  if (!task_control_token) {
+    ctx.rcm = Err(EC::InvalidArg, "Session task control token is not bound");
+    store_exit_code(static_cast<int>(ctx.rcm.first));
+    return static_cast<int>(EC::InvalidArg);
+  }
 
   AMCompleter completer{};
   completer.Install();
@@ -1602,7 +1612,7 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
   PromptState prompt_state;
 
   while (true) {
-    if (TaskControlToken::Instance()->IsKill()) {
+    if (task_control_token->IsKill()) {
       break;
     }
 
@@ -1617,7 +1627,8 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
     }
 
     const std::string prompt_text =
-        BuildPrompt_(prompt_state, client_manager, config_manager);
+        BuildPrompt_(prompt_state, client_manager, config_manager,
+                     transfer_manager);
 
     std::string prompt_header;
     std::string prompt_line;
@@ -1664,7 +1675,8 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
     }
 
     if (is_shell) {
-      CR shell_result = ExecuteShellCommand_(filesystem, shell_command);
+      CR shell_result =
+          ExecuteShellCommand_(filesystem, shell_command, task_control_token);
       if (shell_result.first.first == EC::Success) {
         const std::string &msg = shell_result.second.first;
         if (!msg.empty()) {
@@ -1726,13 +1738,13 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
       UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
       continue;
     }
-    TaskControlToken::Instance()->Reset();
+    task_control_token->Reset();
     DispatchCliCommands(cli_commands, managers, ctx, false, true);
-    if (TaskControlToken::Instance()->IsKill()) {
+    if (task_control_token->IsKill()) {
       break;
     }
     const auto exec_end = std::chrono::steady_clock::now();
-    TaskControlToken::Instance()->Reset();
+    task_control_token->Reset();
     UpdatePromptState_(prompt_state, ctx.rcm, exec_end - input_confirmed);
 
     if (ctx.request_exit) {
@@ -1750,3 +1762,4 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
   }
   return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;
 }
+
