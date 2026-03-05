@@ -16,6 +16,7 @@
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 // Internal dependencies
@@ -24,6 +25,43 @@
 #include "infrastructure/client/ftp/FTP.hpp"
 #include "infrastructure/client/local/Local.hpp"
 #include "infrastructure/client/sftp/SFTP.hpp"
+
+namespace AMInfra::ClientRuntime {
+/**
+ * @brief Build one concrete client instance from protocol request data.
+ *
+ * This is an infrastructure runtime factory that selects protocol-specific
+ * adapters and applies normalized transfer buffer sizing.
+ */
+inline std::shared_ptr<BaseClient>
+CreateClient(const ConRequest &request, ssize_t trace_num = 10,
+             TraceCallback trace_cb = {}, std::vector<std::string> keys = {},
+             AuthCallback auth_cb = {}) {
+  const ClientProtocol protocol = request.protocol;
+  const ssize_t buffer_size = request.buffer_size > 0
+                                  ? request.buffer_size
+                                  : static_cast<ssize_t>(8 * AMMB);
+  if (protocol == ClientProtocol::SFTP) {
+    auto client = std::make_shared<AMSFTPClient>(
+        request, keys, trace_num, std::move(trace_cb), std::move(auth_cb));
+    client->TransferRingBufferSize(buffer_size);
+    return std::dynamic_pointer_cast<BaseClient>(client);
+  }
+  if (protocol == ClientProtocol::FTP) {
+    auto client = std::make_shared<AMFTPClient>(
+        request, trace_num, std::move(trace_cb), std::move(auth_cb));
+    client->TransferRingBufferSize(buffer_size);
+    return std::dynamic_pointer_cast<BaseClient>(client);
+  }
+  if (protocol == ClientProtocol::LOCAL) {
+    auto client =
+        std::make_shared<AMLocalClient>(request, trace_num, std::move(trace_cb));
+    client->TransferRingBufferSize(buffer_size);
+    return std::dynamic_pointer_cast<BaseClient>(client);
+  }
+  return nullptr;
+}
+} // namespace AMInfra::ClientRuntime
 
 class UnionFileHandle {
 public:
@@ -92,15 +130,17 @@ public:
         if (truncate) {
           flags |= LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_CREAT;
         }
-        nb_res = client->nb_call(task_interrupt_flag, -1, AMTime::miliseconds(), [&]() {
-          return libssh2_sftp_open(client->sftp, path.c_str(), flags, 0744);
-        });
+        nb_res = client->nb_call(
+            task_interrupt_flag, -1, AMTime::miliseconds(), [&]() {
+              return libssh2_sftp_open(client->sftp, path.c_str(), flags, 0744);
+            });
         sftp_handle = nb_res.value;
       } else {
-        nb_res = client->nb_call(task_interrupt_flag, -1, AMTime::miliseconds(), [&]() {
-          return libssh2_sftp_open(client->sftp, path.c_str(), LIBSSH2_FXF_READ,
-                                   0400);
-        });
+        nb_res = client->nb_call(
+            task_interrupt_flag, -1, AMTime::miliseconds(), [&]() {
+              return libssh2_sftp_open(client->sftp, path.c_str(),
+                                       LIBSSH2_FXF_READ, 0400);
+            });
         sftp_handle = nb_res.value;
       }
       if (nb_res.status == WaitResult::Interrupted) {
@@ -239,9 +279,9 @@ public:
             return {0, {EC::EndOfFile, "End of file"}};
           }
           if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
-            WaitResult wr =
-                client->wait_for_socket(SocketWaitType::Read, AMTime::miliseconds(), 200,
-                                        pd ? pd->GetInterruptFlag() : nullptr);
+            WaitResult wr = client->wait_for_socket(
+                SocketWaitType::Read, AMTime::miliseconds(), 200,
+                pd ? pd->GetInterruptFlag() : nullptr);
             if (wr == WaitResult::Error) {
               return {
                   -1,
@@ -330,9 +370,9 @@ public:
             return {0, {EC::EndOfFile, "End of file"}};
           }
           if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
-            WaitResult wr =
-                client->wait_for_socket(SocketWaitType::Write, AMTime::miliseconds(), 200,
-                                        pd ? pd->GetInterruptFlag() : nullptr);
+            WaitResult wr = client->wait_for_socket(
+                SocketWaitType::Write, AMTime::miliseconds(), 200,
+                pd ? pd->GetInterruptFlag() : nullptr);
             if (wr == WaitResult::Error) {
               return {
                   LIBSSH2_ERROR_EAGAIN,
@@ -448,7 +488,7 @@ private:
   }
 
 public:
-  using ClientHandle = std::shared_ptr<AMApplication::ClientPort::IClientPort>;
+  using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
   using DisconnectCallback =
       std::function<void(const ClientHandle &, const ECM &)>;
   ~ClientMaintainer() {
@@ -463,9 +503,7 @@ public:
     return GetHost_(nickname);
   }
 
-  ClientHandle LocalClient() const {
-    return local_client;
-  }
+  ClientHandle LocalClient() const { return local_client; }
 
 private:
   std::unordered_map<std::string, ClientHandle> hosts;
@@ -486,12 +524,11 @@ private:
   }
 
 public:
-  ClientMaintainer(int heartbeat_interval_s = 60,
-                   int heartbeat_timeout_ms = 100,
-                   DisconnectCallback disconnect_cb = {},
-                   ClientHandle local_client = nullptr,
-                   std::unordered_map<std::string, ClientHandle> init_hosts =
-                       {}) {
+  ClientMaintainer(
+      int heartbeat_interval_s = 60, int heartbeat_timeout_ms = 100,
+      DisconnectCallback disconnect_cb = {},
+      ClientHandle local_client = nullptr,
+      std::unordered_map<std::string, ClientHandle> init_hosts = {}) {
     // Initialize local client
     if (local_client && local_client->GetProtocol() == ClientProtocol::LOCAL) {
       this->local_client = std::move(local_client);
@@ -544,8 +581,7 @@ public:
   /**
    * @brief Snapshot managed hosts.
    */
-  std::unordered_map<std::string, ClientHandle>
-  GetHostsSnapshot() {
+  std::unordered_map<std::string, ClientHandle> GetHostsSnapshot() {
     std::lock_guard<std::recursive_mutex> lock(beat_mtx);
     std::unordered_map<std::string, ClientHandle> snapshot;
     snapshot.reserve(hosts.size());
@@ -580,8 +616,8 @@ public:
     return client_list;
   }
 
-  void add_client(const std::string &nickname,
-                  ClientHandle client, bool overwrite = false) {
+  void add_client(const std::string &nickname, ClientHandle client,
+                  bool overwrite = false) {
     if (nickname.empty() || AMStr::lowercase(nickname) == "local") {
       return;
     }
@@ -742,8 +778,7 @@ private:
   /**
    * @brief Get host maintainer snapshot for one task id.
    */
-  std::shared_ptr<ClientMaintainer> GetTaskHost_(
-      const TaskId &task_id) const {
+  std::shared_ptr<ClientMaintainer> GetTaskHost_(const TaskId &task_id) const {
     if (task_id.empty()) {
       return nullptr;
     }
@@ -1036,7 +1071,8 @@ private:
     if (task_info->pd && task_info->pd->is_terminate_only()) {
       task_info->SetResult({EC::Terminate, "Task terminated before start"});
       task_info->SetStatus(TaskStatus::Finished);
-      task_info->finished_time.store(AMTime::seconds(), std::memory_order_relaxed);
+      task_info->finished_time.store(AMTime::seconds(),
+                                     std::memory_order_relaxed);
       return true;
     }
     return false;
@@ -1075,8 +1111,8 @@ private:
     if (!hostm) {
       return nullptr;
     }
-    const auto client = nickname.empty() ? hostm->LocalClient()
-                                         : hostm->GetHost(nickname);
+    const auto client =
+        nickname.empty() ? hostm->LocalClient() : hostm->GetHost(nickname);
     return std::dynamic_pointer_cast<BaseClient>(client);
   }
 
@@ -1135,10 +1171,11 @@ private:
       return rcm;
     }
 
-    auto src_open = client->nb_call(pd.GetInterruptFlag(), -1, AMTime::miliseconds(), [&]() {
-      return libssh2_sftp_open(client->sftp, task->src.c_str(),
-                               LIBSSH2_FXF_READ, 0400);
-    });
+    auto src_open = client->nb_call(
+        pd.GetInterruptFlag(), -1, AMTime::miliseconds(), [&]() {
+          return libssh2_sftp_open(client->sftp, task->src.c_str(),
+                                   LIBSSH2_FXF_READ, 0400);
+        });
     if (src_open.status == WaitResult::Interrupted) {
       return pd.InterruptECM("Transfer paused while opening source file",
                              "Transfer interrupted while opening source file");
@@ -1156,10 +1193,11 @@ private:
     if (resume_offset == 0) {
       dst_flags |= LIBSSH2_FXF_CREAT | LIBSSH2_FXF_TRUNC;
     }
-    auto dst_open = client->nb_call(pd.GetInterruptFlag(), -1, AMTime::miliseconds(), [&]() {
-      return libssh2_sftp_open(client->sftp, task->dst.c_str(), dst_flags,
-                               0744);
-    });
+    auto dst_open = client->nb_call(
+        pd.GetInterruptFlag(), -1, AMTime::miliseconds(), [&]() {
+          return libssh2_sftp_open(client->sftp, task->dst.c_str(), dst_flags,
+                                   0744);
+        });
     if (dst_open.status == WaitResult::Interrupted) {
       libssh2_sftp_close_handle(srcFile);
       return pd.InterruptECM(
@@ -1208,8 +1246,9 @@ private:
         } else if (bytes_read == 0) {
           break;
         } else if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
-          WaitResult wr = client->wait_for_socket(SocketWaitType::Read, AMTime::miliseconds(),
-                                                  200, pd.GetInterruptFlag());
+          WaitResult wr = client->wait_for_socket(SocketWaitType::Read,
+                                                  AMTime::miliseconds(), 200,
+                                                  pd.GetInterruptFlag());
           if (wr == WaitResult::Interrupted) {
             rcm = pd.InterruptECM("Task paused by user",
                                   "Transfer interrupted by user");
@@ -1250,8 +1289,9 @@ private:
         } else if (bytes_written == 0) {
           break;
         } else if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
-          WaitResult wr = client->wait_for_socket(
-              SocketWaitType::Write, AMTime::miliseconds(), 200, pd.GetInterruptFlag());
+          WaitResult wr = client->wait_for_socket(SocketWaitType::Write,
+                                                  AMTime::miliseconds(), 200,
+                                                  pd.GetInterruptFlag());
           if (wr == WaitResult::Interrupted) {
             rcm = pd.InterruptECM("Task paused by user",
                                   "Transfer interrupted by user");
@@ -1786,7 +1826,8 @@ private:
     if (!task_info->tasks) {
       task_info->SetStatus(TaskStatus::Finished);
       task_info->SetResult({EC::InvalidArg, "No task is provided"});
-      task_info->finished_time.store(AMTime::seconds(), std::memory_order_relaxed);
+      task_info->finished_time.store(AMTime::seconds(),
+                                     std::memory_order_relaxed);
       return;
     }
 
@@ -1932,7 +1973,8 @@ private:
       task_info->SetResult({EC::Terminate, "Task terminated by user"});
     }
     task_info->SetStatus(TaskStatus::Finished);
-    task_info->finished_time.store(AMTime::seconds(), std::memory_order_relaxed);
+    task_info->finished_time.store(AMTime::seconds(),
+                                   std::memory_order_relaxed);
   }
 
 public:
@@ -2338,7 +2380,8 @@ public:
         }
         task_info->SetResult({EC::Terminate, "Task terminated while paused"});
         task_info->SetStatus(TaskStatus::Finished);
-        task_info->finished_time.store(AMTime::seconds(), std::memory_order_relaxed);
+        task_info->finished_time.store(AMTime::seconds(),
+                                       std::memory_order_relaxed);
         task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
         HandleCompletedTask(task_info);
         task_registry_.erase(it);
@@ -2368,7 +2411,8 @@ public:
         }
         task_info->SetResult({EC::Terminate, "Task terminated before start"});
         task_info->SetStatus(TaskStatus::Finished);
-        task_info->finished_time.store(AMTime::seconds(), std::memory_order_relaxed);
+        task_info->finished_time.store(AMTime::seconds(),
+                                       std::memory_order_relaxed);
         task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
         queue_cv_.notify_all();
         HandleCompletedTask(task_info);
@@ -2512,15 +2556,15 @@ public:
     // Trim leading/trailing spaces from src and dst
 
     auto resolve_ready_client = [&](const std::string &nickname)
-        -> std::pair<ECM, ClientHandle> {
+        -> std::pair<ECM, ClientMaintainer::ClientHandle> {
       const bool is_local =
           nickname.empty() || AMStr::lowercase(nickname) == "local";
       auto client = is_local ? hostm->LocalClient() : hostm->GetHost(nickname);
       const std::string display = is_local ? "local" : nickname;
       if (!client) {
-        return {
-            ECM{EC::ClientNotFound, AMStr::fmt("Client not found: {}", display)},
-            nullptr};
+        return {ECM{EC::ClientNotFound,
+                    AMStr::fmt("Client not found: {}", display)},
+                nullptr};
       }
       ECM rcm = client->GetState();
       if (rcm.first != EC::Success) {

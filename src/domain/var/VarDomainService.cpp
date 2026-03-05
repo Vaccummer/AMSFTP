@@ -1,5 +1,4 @@
 #include "domain/var/VarDomainService.hpp"
-#include "domain/host/HostModel.hpp"
 #include <algorithm>
 #include <unordered_set>
 
@@ -299,3 +298,4 @@ bool VarDomainService::IsValidDomainName_(const std::string &domain) const {
   return configkn::ValidateNickname(domain);
 }
 } // namespace AMDomain::var
+

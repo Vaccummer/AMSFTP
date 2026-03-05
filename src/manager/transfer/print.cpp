@@ -1,12 +1,13 @@
 #include "foundation/DataClass.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/bar.hpp"
 #include "foundation/tools/time.hpp"
 #include "infrastructure/client/runtime/IOCore.hpp"
-#include "AMManager/Config.hpp"
+#include "infrastructure/Config.hpp"
 #include "interface/Prompt.hpp"
-#include "AMManager/SignalMonitor.hpp"
-#include "AMManager/Transfer.hpp"
+#include "infrastructure/SignalMonitor.hpp"
+#include "domain/transfer/TransferManager.hpp"
 #include "third_party/indicators/dynamic_progress.hpp"
 #include <algorithm>
 #include <atomic>
@@ -371,7 +372,7 @@ std::string BuildTaskTable_(
     lines.push_back({row.id, row.status, row.elapsed, row.size, row.speed,
                      row.files, row.task_now, row.ec});
   }
-  return AMConfigManager::Instance().FormatUtf8Table(keys, lines);
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().FormatUtf8Table(keys, lines);
 }
 
 /**
@@ -433,7 +434,7 @@ std::string BuildTableRefreshOutput_(const std::string &table,
 
 /**
  * @brief Progress bar wrapper for task status display in
- * AMTransferManager::Show.
+ * AMDomain::transfer::AMTransferManager::Show.
  */
 class TaskInfoProgressPrinter {
 public:
@@ -443,7 +444,7 @@ public:
    */
   explicit TaskInfoProgressPrinter(const std::shared_ptr<TaskInfo> &task_info)
       : task_info_(task_info),
-        bar_(AMConfigManager::Instance().CreateProgressBar(
+        bar_(AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().CreateProgressBar(
             static_cast<int64_t>(task_info ? task_info->total_size.load(
                                                  std::memory_order_relaxed)
                                            : 0),
@@ -498,7 +499,7 @@ int GetRefreshIntervalMs_() {
       return 300;
     return std::max<int>(para, 5);
   };
-  static const int refresh_ms = AMConfigManager::Instance().ResolveArg(
+  static const int refresh_ms = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(
       DocumentKind::Settings, {"Style", "ProgressBar", "refresh_interval_ms"},
       300, funcf);
   return refresh_ms;
@@ -511,7 +512,7 @@ size_t GetSpeedWindowSize() {
     return std::max<size_t>(1, para);
   };
   static const size_t speed_window_size =
-      AMConfigManager::Instance().ResolveArg(
+      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(
           DocumentKind::Settings, {"Style", "ProgressBar", "speed_window_size"},
           static_cast<size_t>(300), funct);
   return speed_window_size;
@@ -550,7 +551,7 @@ struct TaskProgressGroupBar {
 
   explicit TaskProgressGroupBar(const std::shared_ptr<TaskInfo> &task)
       : task_info(task),
-        bar(AMConfigManager::Instance().CreateProgressBar(
+        bar(AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().CreateProgressBar(
             task ? task->total_size.load(std::memory_order_relaxed) : 0,
             BuildTaskPrefix_(task))) {
     if (task) {
@@ -632,13 +633,13 @@ void PrintTaskProgressGroup_(
 /**
  * @brief Show task status by ID.
  */
-ECM AMTransferManager::Show(
+ECM AMDomain::transfer::AMTransferManager::Show(
     const ID &task_id,
     std::shared_ptr<TaskControlToken> interrupt_flag) {
   return Show(std::vector<ID>{task_id}, interrupt_flag);
 }
 
-ECM AMTransferManager::Show(
+ECM AMDomain::transfer::AMTransferManager::Show(
     const std::vector<ID> &task_ids,
     std::shared_ptr<TaskControlToken> interrupt_flag) {
   if (task_ids.empty()) {
@@ -708,7 +709,7 @@ ECM AMTransferManager::Show(
 /**
  * @brief List tasks by status.
  */
-ECM AMTransferManager::List(
+ECM AMDomain::transfer::AMTransferManager::List(
     bool pending, bool suspend, bool finished, bool conducting,
     std::shared_ptr<TaskControlToken> interrupt_flag) {
   if (!pending && !suspend && !finished && !conducting) {
@@ -863,4 +864,9 @@ ECM AMTransferManager::List(
   AMPromptManager::Instance().FlushCachedOutput();
   return {EC::Success, ""};
 }
+
+
+
+
+
 

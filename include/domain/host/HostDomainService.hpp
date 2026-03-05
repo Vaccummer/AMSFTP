@@ -1,5 +1,6 @@
 #pragma once
 #include "domain/host/HostModel.hpp"
+#include "domain/host/KnownHostQuery.hpp"
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -83,3 +84,4 @@ public:
                                             std::string *fingerprint) const;
 };
 } // namespace AMDomain::host
+

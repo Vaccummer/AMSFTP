@@ -1,12 +1,13 @@
-#include "AMManager/FileSystem.hpp"
+#include "domain/filesystem/FileSystemManager.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/Enum.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/time.hpp"
 #include "infrastructure/client/runtime/IOCore.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Host.hpp"
+#include "domain/client/ClientManager.hpp"
+#include "infrastructure/Config.hpp"
+#include "domain/host/HostManager.hpp"
 #include "interface/Prompt.hpp"
 #include <algorithm>
 #include <cctype>
@@ -255,7 +256,7 @@ static std::string BuildShellCommandWithPrefix_(const std::string &command,
 static void PrintClientDetail_(AMPromptManager &prompt_manager,
                                const std::string &nickname,
                                const std::shared_ptr<
-                                   AMApplication::ClientPort::IClientPort>
+                                   AMDomain::client::IClientPort>
                                    &client,
                                bool print_title = true) {
   if (!client) {
@@ -265,7 +266,7 @@ static void PrintClientDetail_(AMPromptManager &prompt_manager,
   bool metadata_exists = false;
   const ClientMetaData *metadata_ptr =
       client->QueryNamedValue<ClientMetaData>(
-          AMApplication::ClientPort::kClientMetadataStoreName,
+          AMDomain::client::kClientMetadataStoreName,
           metadata_exists);
   if (metadata_exists && metadata_ptr) {
     metadata = *metadata_ptr;
@@ -319,7 +320,7 @@ static void PrintClientDetail_(AMPromptManager &prompt_manager,
 static void PrintCheckDetail_(AMPromptManager &prompt_manager,
                               const std::string &nickname,
                               const std::shared_ptr<
-                                  AMApplication::ClientPort::IClientPort>
+                                  AMDomain::client::IClientPort>
                                   &client,
                               const ECM &rcm) {
   const std::string status = (rcm.first == EC::Success) ? "✅" : "❌";
@@ -337,19 +338,19 @@ static void PrintCheckDetail_(AMPromptManager &prompt_manager,
   PrintClientDetail_(prompt_manager, nickname, client, false);
 }
 
-ECM AMFileSystem::check(const std::string &nickname, bool detail,
+ECM AMDomain::filesystem::AMFileSystem::check(const std::string &nickname, bool detail,
                         amf interrupt_flag) {
   std::vector<std::string> targets = SplitTargets(nickname);
   return check(targets, detail, interrupt_flag);
 }
 
 /** Check whether clients exist from nickname list. */
-ECM AMFileSystem::check(const std::vector<std::string> &nicknames, bool detail,
+ECM AMDomain::filesystem::AMFileSystem::check(const std::vector<std::string> &nicknames, bool detail,
                         amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   std::vector<std::string> targets = AMStr::UniqueTargetsKeepOrder(nicknames);
   if (targets.empty()) {
-    const std::string current = AMClientManager::Instance().CurrentNickname();
+    const std::string current = AMDomain::client::AMClientManager::Instance().CurrentNickname();
     targets.push_back(current.empty() ? "local" : current);
   }
 
@@ -362,18 +363,18 @@ ECM AMFileSystem::check(const std::vector<std::string> &nicknames, bool detail,
     std::string lowered = AMStr::lowercase(nickname);
     if (lowered.empty() || AMStr::lowercase(nickname) == "local") {
       result.nickname = "local";
-      result.client = AMClientManager::Instance().LocalClient();
+      result.client = AMDomain::client::AMClientManager::Instance().LocalClient();
       return result;
     }
 
     std::string resolved_name = nickname;
-    auto client = AMClientManager::Instance().Clients().GetHost(resolved_name);
+    auto client = AMDomain::client::AMClientManager::Instance().Clients().GetHost(resolved_name);
     if (!client) {
-      auto names = AMClientManager::Instance().Clients().GetNicknames();
+      auto names = AMDomain::client::AMClientManager::Instance().Clients().GetNicknames();
       for (const auto &name : names) {
         if (AMStr::lowercase(name) == lowered) {
           resolved_name = name;
-          client = AMClientManager::Instance().Clients().GetHost(name);
+          client = AMDomain::client::AMClientManager::Instance().Clients().GetHost(name);
           break;
         }
       }
@@ -382,8 +383,8 @@ ECM AMFileSystem::check(const std::vector<std::string> &nicknames, bool detail,
     if (!client) {
       if (out_error) {
         const std::string styled =
-            AMConfigManager::Instance().Format(nickname, "nickname");
-        if (AMHostManager::Instance().HostExists(nickname)) {
+            AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(nickname, "nickname");
+        if (AMDomain::host::AMHostManager::Instance().HostExists(nickname)) {
           *out_error = {EC::ClientNotFound,
                         AMStr::fmt("Client not established: {}", styled)};
         } else {
@@ -443,7 +444,7 @@ ECM AMFileSystem::check(const std::vector<std::string> &nicknames, bool detail,
   return last;
 }
 
-ECM AMFileSystem::remove_client(const std::string &nickname) {
+ECM AMDomain::filesystem::AMFileSystem::remove_client(const std::string &nickname) {
   std::vector<std::string> targets = SplitTargets(nickname);
   if (targets.empty()) {
     const std::string msg = "Empty nickname";
@@ -454,11 +455,11 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
   std::vector<std::string> unique_targets =
       AMStr::UniqueTargetsKeepOrder(targets);
   const std::string current =
-      AMClientManager::Instance().CurrentClient()
-          ? AMClientManager::Instance().CurrentClient()->GetNickname()
+      AMDomain::client::AMClientManager::Instance().CurrentClient()
+          ? AMDomain::client::AMClientManager::Instance().CurrentClient()->GetNickname()
           : "";
   const std::string current_lower = AMStr::lowercase(current);
-  const auto names = AMClientManager::Instance().Clients().GetNicknames();
+  const auto names = AMDomain::client::AMClientManager::Instance().Clients().GetNicknames();
 
   ECM last = {EC::Success, ""};
   std::vector<std::string> valid_targets;
@@ -479,7 +480,7 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
   for (const auto &target : unique_targets) {
     const std::string lowered = AMStr::lowercase(target);
     const std::string styled =
-        AMConfigManager::Instance().Format(target, "nickname");
+        AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(target, "nickname");
     if (target.empty()) {
       const std::string msg = "Invalid Empty Client Name";
       last = {EC::InvalidArg, msg};
@@ -507,7 +508,7 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
     }
     valid_targets.push_back(resolved);
     styled_targets.push_back(
-        AMConfigManager::Instance().Format(resolved, "nickname"));
+        AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(resolved, "nickname"));
   }
 
   if (styled_targets.empty()) {
@@ -530,13 +531,13 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
       canceled) {
     const std::string msg = "Remove clients canceled";
     AMPromptManager::Instance().FmtPrint(
-        "🚫  {}\n", AMConfigManager::Instance().Format(msg, "abort"));
+        "🚫  {}\n", AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(msg, "abort"));
     AMPromptManager::Instance().ErrorFormat(ECM{EC::ConfigCanceled, msg});
     return {EC::Terminate, msg};
   }
 
   for (const auto &target : valid_targets) {
-    ECM rcm = AMClientManager::Instance().RemoveClient(target);
+    ECM rcm = AMDomain::client::AMClientManager::Instance().RemoveClient(target);
     if (rcm.first != EC::Success) {
       AMPromptManager::Instance().ErrorFormat(rcm);
       last = rcm;
@@ -545,7 +546,7 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
   return last;
 }
 
-ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
+ECM AMDomain::filesystem::AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   std::vector<std::string> seen;
   std::vector<ClientRef> resolved_clients;
@@ -559,13 +560,13 @@ ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
     ClientRef client;
     if (lowered.empty() || lowered == "local") {
       client.nickname = "local";
-      client.client = AMClientManager::Instance().LocalClient();
+      client.client = AMDomain::client::AMClientManager::Instance().LocalClient();
     } else {
-      auto names = AMClientManager::Instance().Clients().GetNicknames();
+      auto names = AMDomain::client::AMClientManager::Instance().Clients().GetNicknames();
       for (const auto &item : names) {
         if (AMStr::lowercase(item) == lowered) {
           client.nickname = item;
-          client.client = AMClientManager::Instance().Clients().GetHost(item);
+          client.client = AMDomain::client::AMClientManager::Instance().Clients().GetHost(item);
           break;
         }
       }
@@ -578,7 +579,7 @@ ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
   add_unique("local");
 
   for (const auto &name :
-       AMClientManager::Instance().Clients().GetNicknames()) {
+       AMDomain::client::AMClientManager::Instance().Clients().GetNicknames()) {
     add_unique(name);
   }
 
@@ -598,7 +599,7 @@ ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
   return {EC::Success, ""};
 }
 
-ECM AMFileSystem::change_client(const std::string &nickname,
+ECM AMDomain::filesystem::AMFileSystem::change_client(const std::string &nickname,
                                 amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (nickname.empty()) {
@@ -610,13 +611,13 @@ ECM AMFileSystem::change_client(const std::string &nickname,
   ClientRef client;
   if (lowered.empty() || lowered == "local") {
     client.nickname = "local";
-    client.client = AMClientManager::Instance().LocalClient();
+    client.client = AMDomain::client::AMClientManager::Instance().LocalClient();
   } else {
-    auto names = AMClientManager::Instance().Clients().GetNicknames();
+    auto names = AMDomain::client::AMClientManager::Instance().Clients().GetNicknames();
     for (const auto &name : names) {
       if (AMStr::lowercase(name) == lowered) {
         client.nickname = name;
-        client.client = AMClientManager::Instance().Clients().GetHost(name);
+        client.client = AMDomain::client::AMClientManager::Instance().Clients().GetHost(name);
         break;
       }
     }
@@ -629,7 +630,7 @@ ECM AMFileSystem::change_client(const std::string &nickname,
       AMPromptManager::Instance().ErrorFormat(ECM{EC::ConfigCanceled, msg});
       return {EC::Terminate, msg};
     }
-    auto added = AMClientManager::Instance().AddClient(nickname, nullptr, false,
+    auto added = AMDomain::client::AMClientManager::Instance().AddClient(nickname, nullptr, false,
                                                        false, {}, flag);
     if (added.first.first != EC::Success) {
       AMPromptManager::Instance().ErrorFormat(added.first);
@@ -638,73 +639,73 @@ ECM AMFileSystem::change_client(const std::string &nickname,
     client.nickname = nickname;
     client.client = added.second;
   }
-  AMClientManager::Instance().SetCurrentClient(client.client);
-  std::string cwd = AMClientManager::Instance().GetOrInitWorkdir(client.client);
-  AMClientManager::Instance().SetClientWorkdir(client.client, cwd);
+  AMDomain::client::AMClientManager::Instance().SetCurrentClient(client.client);
+  std::string cwd = AMDomain::client::AMClientManager::Instance().GetOrInitWorkdir(client.client);
+  AMDomain::client::AMClientManager::Instance().SetClientWorkdir(client.client, cwd);
   return {EC::Success, ""};
 }
 
-ECM AMFileSystem::connect(const std::string &nickname, bool force,
+ECM AMDomain::filesystem::AMFileSystem::connect(const std::string &nickname, bool force,
                           amf interrupt_flag, bool switch_client) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (!force) {
-    auto result = AMClientManager::Instance().AddClient(nickname, nullptr,
+    auto result = AMDomain::client::AMClientManager::Instance().AddClient(nickname, nullptr,
                                                         false, false, {}, flag);
     if (result.first.first != EC::Success) {
       return result.first;
     }
-    AMClientManager::Instance().InitClientWorkdir(result.second);
+    AMDomain::client::AMClientManager::Instance().InitClientWorkdir(result.second);
     if (switch_client && result.second) {
       return change_client(result.second->GetNickname(), flag);
     }
     return {EC::Success, ""};
   }
 
-  auto existing = AMClientManager::Instance().Clients().GetHost(nickname);
+  auto existing = AMDomain::client::AMClientManager::Instance().Clients().GetHost(nickname);
   if (!existing) {
-    auto result = AMClientManager::Instance().AddClient(nickname, nullptr,
+    auto result = AMDomain::client::AMClientManager::Instance().AddClient(nickname, nullptr,
                                                         false, false, {}, flag);
     if (result.first.first != EC::Success) {
       return result.first;
     }
-    AMClientManager::Instance().InitClientWorkdir(result.second);
+    AMDomain::client::AMClientManager::Instance().InitClientWorkdir(result.second);
     if (switch_client && result.second) {
       return change_client(result.second->GetNickname(), flag);
     }
     return {EC::Success, ""};
   }
 
-  auto rebuilt = AMClientManager::Instance().AddClient(nickname, true, false,
+  auto rebuilt = AMDomain::client::AMClientManager::Instance().AddClient(nickname, true, false,
                                                        {}, flag, false);
   if (rebuilt.first.first != EC::Success || !rebuilt.second) {
     return rebuilt.first;
   }
 
-  AMClientManager::Instance().Clients().add_client(nickname, rebuilt.second,
+  AMDomain::client::AMClientManager::Instance().Clients().add_client(nickname, rebuilt.second,
                                                    true);
-  AMClientManager::Instance().InitClientWorkdir(rebuilt.second);
+  AMDomain::client::AMClientManager::Instance().InitClientWorkdir(rebuilt.second);
   if (switch_client && rebuilt.second) {
     return change_client(rebuilt.second->GetNickname(), flag);
   }
   return {EC::Success, ""};
 }
 
-ECM AMFileSystem::sftp(const std::string &nickname, const std::string &hostname,
+ECM AMDomain::filesystem::AMFileSystem::sftp(const std::string &nickname, const std::string &hostname,
                        const std::string &username, int64_t port,
                        const std::string &password, const std::string &keyfile,
                        amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
-  auto result = AMClientManager::Instance().Connect(
+  auto result = AMDomain::client::AMClientManager::Instance().Connect(
       nickname, hostname, username, ClientProtocol::SFTP, port, password,
       keyfile, nullptr, false, {}, flag);
   if (result.first.first != EC::Success || !result.second) {
     return result.first;
   }
-  AMClientManager::Instance().InitClientWorkdir(result.second);
+  AMDomain::client::AMClientManager::Instance().InitClientWorkdir(result.second);
   return change_client(result.second->GetNickname(), flag);
 }
 
-ECM AMFileSystem::sftp(const std::string &nickname,
+ECM AMDomain::filesystem::AMFileSystem::sftp(const std::string &nickname,
                        const std::string &user_at_host, int64_t port,
                        const std::string &password, const std::string &keyfile,
                        amf interrupt_flag) {
@@ -718,22 +719,22 @@ ECM AMFileSystem::sftp(const std::string &nickname,
               interrupt_flag);
 }
 
-ECM AMFileSystem::ftp(const std::string &nickname, const std::string &hostname,
+ECM AMDomain::filesystem::AMFileSystem::ftp(const std::string &nickname, const std::string &hostname,
                       const std::string &username, int64_t port,
                       const std::string &password, const std::string &keyfile,
                       amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
-  auto result = AMClientManager::Instance().Connect(
+  auto result = AMDomain::client::AMClientManager::Instance().Connect(
       nickname, hostname, username, ClientProtocol::FTP, port, password,
       keyfile, nullptr, false, {}, flag);
   if (result.first.first != EC::Success || !result.second) {
     return result.first;
   }
-  AMClientManager::Instance().InitClientWorkdir(result.second);
+  AMDomain::client::AMClientManager::Instance().InitClientWorkdir(result.second);
   return change_client(result.second->GetNickname(), flag);
 }
 
-ECM AMFileSystem::ftp(const std::string &nickname,
+ECM AMDomain::filesystem::AMFileSystem::ftp(const std::string &nickname,
                       const std::string &user_at_host, int64_t port,
                       const std::string &password, const std::string &keyfile,
                       amf interrupt_flag) {
@@ -747,7 +748,7 @@ ECM AMFileSystem::ftp(const std::string &nickname,
              interrupt_flag);
 }
 
-ECM AMFileSystem::cd(const std::string &path, amf interrupt_flag,
+ECM AMDomain::filesystem::AMFileSystem::cd(const std::string &path, amf interrupt_flag,
                      bool from_history) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (path.empty()) {
@@ -767,7 +768,7 @@ ECM AMFileSystem::cd(const std::string &path, amf interrupt_flag,
   }
 
   auto [nickname, resolved_path, client_ptr, rcm] =
-      AMClientManager::Instance().ParsePath(path, flag);
+      AMDomain::client::AMClientManager::Instance().ParsePath(path, flag);
   if (rcm.first != EC::Success || !client_ptr) {
     AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
@@ -798,24 +799,24 @@ ECM AMFileSystem::cd(const std::string &path, amf interrupt_flag,
   }
 
   std::string prev_cwd =
-      AMClientManager::Instance().GetOrInitWorkdir(client.client);
+      AMDomain::client::AMClientManager::Instance().GetOrInitWorkdir(client.client);
   if (!from_history_flag && abs_path != prev_cwd) {
     UpdateHistory(client.nickname, prev_cwd);
   }
 
-  AMClientManager::Instance().SetClientWorkdir(client.client, abs_path);
-  AMClientManager::Instance().SetCurrentClient(client.client);
+  AMDomain::client::AMClientManager::Instance().SetClientWorkdir(client.client, abs_path);
+  AMDomain::client::AMClientManager::Instance().SetCurrentClient(client.client);
   return {EC::Success, ""};
 }
 
-ECM AMFileSystem::stat(const std::string &path, amf interrupt_flag,
+ECM AMDomain::filesystem::AMFileSystem::stat(const std::string &path, amf interrupt_flag,
                        int timeout_ms) {
   std::vector<std::string> targets = SplitTargets(path);
   return stat(targets, interrupt_flag, timeout_ms);
 }
 
 /** Print stat info for multiple paths. */
-ECM AMFileSystem::stat(const std::vector<std::string> &paths,
+ECM AMDomain::filesystem::AMFileSystem::stat(const std::vector<std::string> &paths,
                        amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   std::vector<std::string> targets = AMStr::UniqueTargetsKeepOrder(paths);
@@ -832,7 +833,7 @@ ECM AMFileSystem::stat(const std::vector<std::string> &paths,
       break;
     }
     auto [nickname, resolved_path, client_ptr, rcm] =
-        AMClientManager::Instance().ParsePath(target, flag);
+        AMDomain::client::AMClientManager::Instance().ParsePath(target, flag);
     if (rcm.first != EC::Success || !client_ptr) {
       last = rcm;
       AMPromptManager::Instance().ErrorFormat(last);
@@ -857,7 +858,7 @@ ECM AMFileSystem::stat(const std::vector<std::string> &paths,
   return last;
 }
 
-ECM AMFileSystem::ls(const std::string &path, bool list_like, bool show_all,
+ECM AMDomain::filesystem::AMFileSystem::ls(const std::string &path, bool list_like, bool show_all,
                      amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (flag && !flag->IsRunning()) {
@@ -866,7 +867,7 @@ ECM AMFileSystem::ls(const std::string &path, bool list_like, bool show_all,
     return out;
   }
   auto [nickname, resolved_path, client_ptr, rcm] =
-      AMClientManager::Instance().ParsePath(path, flag);
+      AMDomain::client::AMClientManager::Instance().ParsePath(path, flag);
   if (rcm.first != EC::Success || !client_ptr) {
     AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
@@ -1010,14 +1011,14 @@ ECM AMFileSystem::ls(const std::string &path, bool list_like, bool show_all,
   return {EC::Success, ""};
 }
 
-ECM AMFileSystem::getsize(const std::string &path, amf interrupt_flag,
+ECM AMDomain::filesystem::AMFileSystem::getsize(const std::string &path, amf interrupt_flag,
                           int timeout_ms) {
   std::vector<std::string> targets = SplitTargets(path);
   return getsize(targets, interrupt_flag, timeout_ms);
 }
 
 /** Print total size for multiple paths. */
-ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
+ECM AMDomain::filesystem::AMFileSystem::getsize(const std::vector<std::string> &paths,
                           amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   std::vector<std::string> targets = AMStr::UniqueTargetsKeepOrder(paths);
@@ -1036,7 +1037,7 @@ ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
       break;
     }
     auto [nickname, resolved_path, client_ptr, rcm] =
-        AMClientManager::Instance().ParsePath(target, flag);
+        AMDomain::client::AMClientManager::Instance().ParsePath(target, flag);
     if (rcm.first != EC::Success || !client_ptr) {
       last = rcm.first == EC::Success
                  ? ECM{EC::ClientNotFound, "Client not found"}
@@ -1069,11 +1070,11 @@ ECM AMFileSystem::getsize(const std::vector<std::string> &paths,
   return last;
 }
 
-ECM AMFileSystem::find(const std::string &path, SearchType type,
+ECM AMDomain::filesystem::AMFileSystem::find(const std::string &path, SearchType type,
                        amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   auto [nickname, resolved_path, client_ptr, rcm] =
-      AMClientManager::Instance().ParsePath(path, flag);
+      AMDomain::client::AMClientManager::Instance().ParsePath(path, flag);
   if (rcm.first != EC::Success) {
     AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
@@ -1095,7 +1096,7 @@ ECM AMFileSystem::find(const std::string &path, SearchType type,
 }
 
 /** Walk a path and print entries based on filters. */
-ECM AMFileSystem::walk(const std::string &path, bool only_file, bool only_dir,
+ECM AMDomain::filesystem::AMFileSystem::walk(const std::string &path, bool only_file, bool only_dir,
                        bool show_all, bool ignore_special_file, bool quiet,
                        amf interrupt_flag, int timeout_ms) {
   if (only_file && only_dir) {
@@ -1103,7 +1104,7 @@ ECM AMFileSystem::walk(const std::string &path, bool only_file, bool only_dir,
   }
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   auto [nickname, resolved_path, client_ptr, rcm] =
-      AMClientManager::Instance().ParsePath(path, flag);
+      AMDomain::client::AMClientManager::Instance().ParsePath(path, flag);
   if (rcm.first != EC::Success || !client_ptr) {
     if (!quiet) {
       AMPromptManager::Instance().ErrorFormat(rcm);
@@ -1148,12 +1149,12 @@ ECM AMFileSystem::walk(const std::string &path, bool only_file, bool only_dir,
 
 /** Print a directory tree using the client walk output with optional filters.
  */
-ECM AMFileSystem::tree(const std::string &path, int max_depth, bool only_dir,
+ECM AMDomain::filesystem::AMFileSystem::tree(const std::string &path, int max_depth, bool only_dir,
                        bool show_all, bool ignore_special_file, bool quiet,
                        amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   auto [nickname, resolved_path, client_ptr, rcm] =
-      AMClientManager::Instance().ParsePath(path, flag);
+      AMDomain::client::AMClientManager::Instance().ParsePath(path, flag);
   if (rcm.first != EC::Success || !client_ptr) {
     ECM out = rcm.first == EC::Success
                   ? ECM{EC::ClientNotFound, "Client not found"}
@@ -1237,7 +1238,7 @@ ECM AMFileSystem::tree(const std::string &path, int max_depth, bool only_dir,
           break;
         }
         const std::string tag = NormalizeTreeStyleTag_(
-            AMConfigManager::Instance().ResolveArg<std::string>(
+            AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<std::string>(
                 DocumentKind::Settings, style_key, "", {}));
         if (!tag.empty()) {
           const std::string display_name =
@@ -1260,7 +1261,7 @@ ECM AMFileSystem::tree(const std::string &path, int max_depth, bool only_dir,
   return {EC::Success, ""};
 }
 
-ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
+ECM AMDomain::filesystem::AMFileSystem::TestRTT(int times, amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (flag && !flag->IsRunning()) {
     ECM out = {EC::Terminate, "Interrupted by user"};
@@ -1268,7 +1269,7 @@ ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
     return out;
   }
 
-  auto client = AMClientManager::Instance().CurrentClient();
+  auto client = AMDomain::client::AMClientManager::Instance().CurrentClient();
   if (!client) {
     ECM out = {EC::ClientNotFound, "Client not found"};
     AMPromptManager::Instance().ErrorFormat(out);
@@ -1300,7 +1301,7 @@ ECM AMFileSystem::TestRTT(int times, amf interrupt_flag) {
  * - prefix + wrapped cmd when wrap_cmd is true
  * - prefix + cmd when wrap_cmd is false
  */
-CR AMFileSystem::ShellRun(const std::string &cmd, int max_time_ms,
+CR AMDomain::filesystem::AMFileSystem::ShellRun(const std::string &cmd, int max_time_ms,
                           amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (flag && !flag->IsRunning()) {
@@ -1312,9 +1313,9 @@ CR AMFileSystem::ShellRun(const std::string &cmd, int max_time_ms,
     return {ECM{EC::InvalidArg, "Empty shell command"}, {"", -1}};
   }
 
-  auto client = AMClientManager::Instance().CurrentClient();
+  auto client = AMDomain::client::AMClientManager::Instance().CurrentClient();
   if (!client) {
-    client = AMClientManager::Instance().LocalClient();
+    client = AMDomain::client::AMClientManager::Instance().LocalClient();
   }
   if (!client) {
     return {ECM{EC::ClientNotFound, "Client not found"}, {"", -1}};
@@ -1335,13 +1336,13 @@ CR AMFileSystem::ShellRun(const std::string &cmd, int max_time_ms,
   std::string cmd_prefix;
   bool wrap_cmd = false;
   if (AMStr::lowercase(nickname) == "local") {
-    auto [cfg_rcm, cfg] = AMHostManager::Instance().GetLocalConfig();
+    auto [cfg_rcm, cfg] = AMDomain::host::AMHostManager::Instance().GetLocalConfig();
     if (cfg_rcm.first == EC::Success) {
       cmd_prefix = cfg.metadata.cmd_prefix;
       wrap_cmd = cfg.metadata.wrap_cmd;
     }
   } else {
-    auto [cfg_rcm, cfg] = AMHostManager::Instance().GetClientConfig(nickname);
+    auto [cfg_rcm, cfg] = AMDomain::host::AMHostManager::Instance().GetClientConfig(nickname);
     if (cfg_rcm.first == EC::Success) {
       cmd_prefix = cfg.metadata.cmd_prefix;
       wrap_cmd = cfg.metadata.wrap_cmd;
@@ -1362,7 +1363,7 @@ CR AMFileSystem::ShellRun(const std::string &cmd, int max_time_ms,
  * @param timeout_ms Reserved for interface compatibility (unused).
  * @return ECM status describing success or failure.
  */
-ECM AMFileSystem::realpath(const std::string &path, amf interrupt_flag,
+ECM AMDomain::filesystem::AMFileSystem::realpath(const std::string &path, amf interrupt_flag,
                            int timeout_ms) {
   (void)interrupt_flag;
   (void)timeout_ms;
@@ -1370,13 +1371,13 @@ ECM AMFileSystem::realpath(const std::string &path, amf interrupt_flag,
   std::string input = AMStr::Strip(path);
   std::string nickname;
   std::string resolved_path;
-  AMClientManage::ClientHandle client_ptr;
+  AMDomain::client::AMClientOperator::ClientHandle client_ptr;
   ECM rcm = {EC::Success, ""};
 
   if (input.empty()) {
-    client_ptr = AMClientManager::Instance().CurrentClient()
-                     ? AMClientManager::Instance().CurrentClient()
-                     : AMClientManager::Instance().LocalClient();
+    client_ptr = AMDomain::client::AMClientManager::Instance().CurrentClient()
+                     ? AMDomain::client::AMClientManager::Instance().CurrentClient()
+                     : AMDomain::client::AMClientManager::Instance().LocalClient();
     if (!client_ptr) {
       ECM out = {EC::ClientNotFound, "Client not found"};
       AMPromptManager::Instance().ErrorFormat(out);
@@ -1388,16 +1389,16 @@ ECM AMFileSystem::realpath(const std::string &path, amf interrupt_flag,
     std::string lowered = AMStr::lowercase(nickname);
     if (nickname.empty() || lowered == "local") {
       nickname = "local";
-      client_ptr = AMClientManager::Instance().LocalClient();
+      client_ptr = AMDomain::client::AMClientManager::Instance().LocalClient();
     } else {
-      auto cfg = AMHostManager::Instance().GetClientConfig(nickname);
+      auto cfg = AMDomain::host::AMHostManager::Instance().GetClientConfig(nickname);
       if (cfg.first.first != EC::Success) {
         ECM out = {EC::HostConfigNotFound,
                    AMStr::fmt("Config not found: {}", nickname)};
         AMPromptManager::Instance().ErrorFormat(out);
         return out;
       }
-      client_ptr = AMClientManager::Instance().Clients().GetHost(nickname);
+      client_ptr = AMDomain::client::AMClientManager::Instance().Clients().GetHost(nickname);
       if (!client_ptr) {
         ECM out = {EC::ClientNotFound,
                    AMStr::fmt("Client not established: {}", nickname)};
@@ -1407,7 +1408,7 @@ ECM AMFileSystem::realpath(const std::string &path, amf interrupt_flag,
     }
   } else {
     std::tie(nickname, resolved_path, client_ptr, rcm) =
-        AMClientManager::Instance().ParsePath(input);
+        AMDomain::client::AMClientManager::Instance().ParsePath(input);
     if (rcm.first != EC::Success || !client_ptr) {
       if (rcm.first == EC::HostConfigNotFound) {
         ECM out = {EC::HostConfigNotFound,
@@ -1431,7 +1432,7 @@ ECM AMFileSystem::realpath(const std::string &path, amf interrupt_flag,
     }
   }
 
-  std::string cwd = AMClientManager::Instance().GetOrInitWorkdir(client_ptr);
+  std::string cwd = AMDomain::client::AMClientManager::Instance().GetOrInitWorkdir(client_ptr);
   if (resolved_path.empty()) {
     AMPromptManager::Instance().Print(cwd);
     return {EC::Success, ""};
@@ -1444,14 +1445,14 @@ ECM AMFileSystem::realpath(const std::string &path, amf interrupt_flag,
   return {EC::Success, ""};
 }
 
-ECM AMFileSystem::mkdir(const std::string &path, amf interrupt_flag,
+ECM AMDomain::filesystem::AMFileSystem::mkdir(const std::string &path, amf interrupt_flag,
                         int timeout_ms) {
   std::vector<std::string> targets = SplitTargets(path);
   return mkdir(targets, interrupt_flag, timeout_ms);
 }
 
 /** Create directories (recursive) for multiple paths. */
-ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
+ECM AMDomain::filesystem::AMFileSystem::mkdir(const std::vector<std::string> &paths,
                         amf interrupt_flag, int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   std::vector<std::string> targets = AMStr::UniqueTargetsKeepOrder(paths);
@@ -1468,7 +1469,7 @@ ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
       return last;
     }
     auto [nickname, resolved_path, client_ptr, rcm] =
-        AMClientManager::Instance().ParsePath(target, flag);
+        AMDomain::client::AMClientManager::Instance().ParsePath(target, flag);
     if (rcm.first != EC::Success || !client_ptr) {
       last = rcm;
       continue;
@@ -1488,20 +1489,20 @@ ECM AMFileSystem::mkdir(const std::vector<std::string> &paths,
   return last;
 }
 
-ECM AMFileSystem::rm(const std::string &path, bool quiet, amf interrupt_flag,
+ECM AMDomain::filesystem::AMFileSystem::rm(const std::string &path, bool quiet, amf interrupt_flag,
                      int timeout_ms) {
   std::vector<std::string> targets = SplitTargets(path);
   return rm(targets, false, false, quiet, interrupt_flag, timeout_ms);
 }
 
 /** Remove paths using safe removal. */
-ECM AMFileSystem::rm(const std::vector<std::string> &paths, bool quiet,
+ECM AMDomain::filesystem::AMFileSystem::rm(const std::vector<std::string> &paths, bool quiet,
                      amf interrupt_flag, int timeout_ms) {
   return rm(paths, false, false, quiet, interrupt_flag, timeout_ms);
 }
 
 /** Remove paths using safe or permanent removal with optional force. */
-ECM AMFileSystem::rm(const std::vector<std::string> &paths, bool permanent,
+ECM AMDomain::filesystem::AMFileSystem::rm(const std::vector<std::string> &paths, bool permanent,
                      bool force, bool quiet, amf interrupt_flag,
                      int timeout_ms) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
@@ -1534,7 +1535,7 @@ ECM AMFileSystem::rm(const std::vector<std::string> &paths, bool permanent,
       }
     }
     auto [nickname, resolved_path, client_ptr, rcm] =
-        AMClientManager::Instance().ParsePath(target, flag);
+        AMDomain::client::AMClientManager::Instance().ParsePath(target, flag);
     if (rcm.first != EC::Success || !client_ptr) {
       last = rcm.first == EC::Success
                  ? ECM{EC::ClientNotFound, "Client not found"}
@@ -1586,7 +1587,7 @@ ECM AMFileSystem::rm(const std::vector<std::string> &paths, bool permanent,
 }
 
 std::vector<std::string>
-AMFileSystem::SplitTargets(const std::string &input) const {
+AMDomain::filesystem::AMFileSystem::SplitTargets(const std::string &input) const {
   std::vector<std::string> targets;
   std::istringstream iss(input);
   std::string token;
@@ -1596,17 +1597,17 @@ AMFileSystem::SplitTargets(const std::string &input) const {
   return targets;
 }
 
-std::string AMFileSystem::BuildPath(const ClientRef &client,
+std::string AMDomain::filesystem::AMFileSystem::BuildPath(const ClientRef &client,
                                     const std::string &path) const {
-  return AMClientManager::Instance().BuildPath(client.client, path);
+  return AMDomain::client::AMClientManager::Instance().BuildPath(client.client, path);
 }
 
-void AMFileSystem::UpdateHistory(const std::string &nickname,
+void AMDomain::filesystem::AMFileSystem::UpdateHistory(const std::string &nickname,
                                  const std::string &path) {
   if (path.empty()) {
     return;
   }
-  static const int max_history = AMConfigManager::Instance().ResolveArg<int>(
+  static const int max_history = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<int>(
       DocumentKind::Settings, {"Options", "FileSystem", "max_cd_history"},
       (int)5, [](int v) -> int { return std::max<int>(1, v); });
 
@@ -1623,7 +1624,7 @@ void AMFileSystem::UpdateHistory(const std::string &nickname,
 /**
  * @brief Build aligned status table widths from resolved client rows.
  */
-AMFileSystem::ClientStatusFormat AMFileSystem::BuildClientStatusFormat_(
+AMDomain::filesystem::AMFileSystem::ClientStatusFormat AMDomain::filesystem::AMFileSystem::BuildClientStatusFormat_(
     const std::vector<ClientRef> &clients) const {
   ClientStatusFormat format;
   for (const auto &entry : clients) {
@@ -1634,7 +1635,7 @@ AMFileSystem::ClientStatusFormat AMFileSystem::BuildClientStatusFormat_(
         "[" + std::string(AMStr::ToString(entry.client->GetProtocol())) + "]";
     const std::string nickname = entry.nickname;
     const std::string cwd =
-        AMClientManager::Instance().GetOrInitWorkdir(entry.client);
+        AMDomain::client::AMClientManager::Instance().GetOrInitWorkdir(entry.client);
     format.protocol_width = std::max(format.protocol_width, protocol.size());
     format.nickname_width = std::max(format.nickname_width, nickname.size());
     format.cwd_width = std::max(format.cwd_width, cwd.size());
@@ -1642,13 +1643,13 @@ AMFileSystem::ClientStatusFormat AMFileSystem::BuildClientStatusFormat_(
   return format;
 }
 
-ECM AMFileSystem::PrintClientStatus(const ClientRef &client, bool update,
+ECM AMDomain::filesystem::AMFileSystem::PrintClientStatus(const ClientRef &client, bool update,
                                     amf interrupt_flag,
                                     const ClientStatusFormat *format) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   ECM rcm =
       update ? client.client->Check(flag, -1, -1) : client.client->GetState();
-  std::string cwd = AMClientManager::Instance().GetOrInitWorkdir(client.client);
+  std::string cwd = AMDomain::client::AMClientManager::Instance().GetOrInitWorkdir(client.client);
   const std::string proto_label =
       "[" + std::string(AMStr::ToString(client.client->GetProtocol())) + "]";
   const std::string nickname_label = client.nickname;
@@ -1660,9 +1661,9 @@ ECM AMFileSystem::PrintClientStatus(const ClientRef &client, bool update,
   const std::string padded_cwd =
       format ? PadRight_(cwd, format->cwd_width) : cwd;
   const std::string styled_proto =
-      AMConfigManager::Instance().Format(padded_proto, "protocol");
+      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(padded_proto, "protocol");
   const std::string styled_nickname =
-      AMConfigManager::Instance().Format(padded_nickname, "nickname");
+      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(padded_nickname, "nickname");
   PathInfo cwd_info;
   cwd_info.type = PathType::DIR;
   cwd_info.path = cwd;
@@ -1678,23 +1679,23 @@ ECM AMFileSystem::PrintClientStatus(const ClientRef &client, bool update,
   }
   std::string ec_name = std::string(magic_enum::enum_name(rcm.first));
   const std::string styled_ec =
-      AMConfigManager::Instance().Format(ec_name, "error");
+      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(ec_name, "error");
   const std::string styled_msg =
-      AMConfigManager::Instance().Format(rcm.second, "error");
+      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(rcm.second, "error");
   std::string line =
       AMStr::fmt("{}  {}  {}", header.str(), styled_ec, styled_msg);
   AMPromptManager::Instance().Print(line);
   return rcm;
 }
 
-std::string AMFileSystem::FormatTimestamp(double value) const {
+std::string AMDomain::filesystem::AMFileSystem::FormatTimestamp(double value) const {
   if (value <= 0) {
     return "";
   }
   return FormatTime(static_cast<size_t>(value), "%Y/%m/%d %H:%M:%S");
 }
 
-std::string AMFileSystem::FormatStatOutput(const PathInfo &info) const {
+std::string AMDomain::filesystem::AMFileSystem::FormatStatOutput(const PathInfo &info) const {
   const size_t width = 12;
   std::ostringstream out;
   const std::string display_path = AMPathStr::UnifyPathSep(info.path, "/");
@@ -1720,7 +1721,7 @@ std::string AMFileSystem::FormatStatOutput(const PathInfo &info) const {
 
 /** Create a walk error callback that prints formatted errors. */
 AMFS::WalkErrorCallback
-AMFileSystem::MakeWalkErrorCallback(const std::string &func_name,
+AMDomain::filesystem::AMFileSystem::MakeWalkErrorCallback(const std::string &func_name,
                                     bool quiet) const {
   if (quiet) {
     return nullptr;
@@ -1739,7 +1740,7 @@ AMFileSystem::MakeWalkErrorCallback(const std::string &func_name,
       });
 }
 
-std::string AMFileSystem::StylePath(const PathInfo &info,
+std::string AMDomain::filesystem::AMFileSystem::StylePath(const PathInfo &info,
                                     const std::string &path) const {
   std::string base_key = "regular";
   if (info.type == PathType::DIR) {
@@ -1751,5 +1752,7 @@ std::string AMFileSystem::StylePath(const PathInfo &info,
   }
 
   const std::string display_path = AMPathStr::UnifyPathSep(path, "/");
-  return AMConfigManager::Instance().Format(display_path, base_key, &info);
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(display_path, base_key, &info);
 }
+
+

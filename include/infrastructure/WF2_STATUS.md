@@ -47,15 +47,9 @@
 - Explicit dependency binding APIs:
   - `AMInfraLogManager::BindConfigManager(...)`
   - `AMInfraCliSignalMonitor::BindTaskControlToken(...)`
-- Legacy public headers remain stable and now forward:
-  - `AMManager/Config.hpp` exposes compatibility `AMConfigManager::Instance()`
-    wrapper over `AMInfraConfigManager`.
-  - `AMManager/Logger.hpp` exposes compatibility `AMLogManager::Instance()`
-    wrapper over `AMInfraLogManager`.
-  - `AMManager/SignalMonitor.hpp` exposes compatibility
-    `AMCliSignalMonitor::Instance()` wrapper over `AMInfraCliSignalMonitor`
-    with explicit compatibility token setter methods (no deprecated
-    global-token accessor usage inside wrapper).
+- Legacy include prefixes are removed from first-party sources; compatibility
+  calls route through explicit runtime bindings (`ApplicationAdapters::Runtime`)
+  instead of legacy singleton wrappers.
 
 ## 5) Migration Method
 
@@ -66,8 +60,9 @@
 ## 6) Compatibility Impact / Rollback
 
 - Compatibility impact:
-  - Existing singleton callsites remain valid through `AMManager/*` wrappers.
-  - Infrastructure API itself no longer exposes singleton entrypoints.
+  - Existing manager code uses runtime-bound infrastructure dependencies during
+    migration.
+  - Infrastructure API itself does not reintroduce legacy singleton wrappers.
   - Legacy signal wrapper requires explicit compatibility token binding when
     kill/interrupt propagation to task token is needed.
 - Rollback:

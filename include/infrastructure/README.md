@@ -14,8 +14,22 @@ Client adapter headers are now canonical under:
 - `include/infrastructure/client/runtime/IOCore.hpp`
 
 `BaseClient` in `common/Base.hpp` implements
-`application/client/ClientPort.hpp` as the current application-facing client
+`domain/client/ClientPort.hpp` as the current domain-facing client
 port contract.
 
 Legacy `include/AMClient/*.hpp` headers are compatibility shims for migration
 only and should not be used for new includes.
+
+## Manager Adapter Canonical Paths
+
+Manager-type headers used by CLI bootstrap/compatibility wiring are canonical
+under:
+
+- `include/infrastructure/manager/Client.hpp`
+- `include/infrastructure/manager/Host.hpp`
+- `include/infrastructure/manager/Transfer.hpp`
+- `include/infrastructure/manager/Var.hpp`
+- `include/infrastructure/manager/FileSystem.hpp`
+
+Legacy `include/AMManager/*.hpp` include prefixes are removed from first-party
+sources and should not be reintroduced.

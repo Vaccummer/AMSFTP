@@ -1,11 +1,13 @@
-#include "foundation/tools/json.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Host.hpp"
-#include "interface/Prompt.hpp"
 #include "Isocline/isocline.h"
+#include "interface/ApplicationAdapters.hpp"
+#include "foundation/tools/json.hpp"
+#include "infrastructure/Config.hpp"
+#include "domain/host/HostManager.hpp"
+#include "interface/Prompt.hpp"
 #include <algorithm>
 #include <string>
 #include <vector>
+
 
 namespace {
 inline constexpr const char *kPromptProfileRoot = "PromptProfile";
@@ -216,7 +218,7 @@ AMPromptProfileArgs AMProfileManager::BuildPromptProfileArgs_(
  * @brief Reload prompt profile args from settings.
  */
 ECM AMProfileManager::ReloadPromptProfiles() {
-  Json profile_root = AMConfigManager::Instance().ResolveArg<Json>(
+  Json profile_root = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<Json>(
       DocumentKind::Settings, {kPromptProfileRoot}, Json::object(), {});
   if (!profile_root.is_object()) {
     profile_root = Json::object();
@@ -297,7 +299,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
   const AMPromptProfileArgs builtin_defaults{};
   const auto print_abort = [&prompt, this]() {
     prompt.FmtPrint("{}\n",
-                    AMConfigManager::Instance().Format("Input Abort", "abort"));
+                    AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format("Input Abort", "abort"));
   };
 
   const std::map<std::string, std::string> bool_literals = {
@@ -564,13 +566,13 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
     }
   }
 
-  if (!AMConfigManager::Instance().SetArg(DocumentKind::Settings,
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(DocumentKind::Settings,
                                           {kPromptProfileRoot, target},
                                           working.GetJson())) {
     return Err(EC::CommonFailure, "failed to update PromptProfile");
   }
   ECM dump_rcm =
-      AMConfigManager::Instance().Dump(DocumentKind::Settings, "", true);
+      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(DocumentKind::Settings, "", true);
   if (dump_rcm.first != EC::Success) {
     return dump_rcm;
   }
@@ -595,7 +597,7 @@ ECM AMProfileCLI::Edit(const std::string &nickname) {
   if (target == kDefaultPromptProfile) {
     return Err(EC::InvalidArg, "profile nickname must be a host nickname");
   }
-  if (!AMHostManager::Instance().HostExists(target)) {
+  if (!AMDomain::host::AMHostManager::Instance().HostExists(target)) {
     return Err(EC::HostConfigNotFound,
                AMStr::fmt("host nickname not found: {}", target));
   }
@@ -620,7 +622,7 @@ ECM AMProfileCLI::Get(const std::vector<std::string> &nicknames) {
     if (target == kDefaultPromptProfile) {
       return Err(EC::InvalidArg, "profile nickname must be a host nickname");
     }
-    if (!AMHostManager::Instance().HostExists(target)) {
+    if (!AMDomain::host::AMHostManager::Instance().HostExists(target)) {
       return Err(EC::HostConfigNotFound,
                  AMStr::fmt("host nickname not found: {}", target));
     }
@@ -738,7 +740,7 @@ void AMProfileManager::EnsurePromptProfilesLoaded_() {
 void AMProfileManager::CollectHistory_() {
   history_map_.clear();
   Json jsond;
-  if (!AMConfigManager::Instance().GetJson(DocumentKind::History, &jsond) ||
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().GetJson(DocumentKind::History, &jsond) ||
       !jsond.is_object()) {
     return;
   }
@@ -847,7 +849,9 @@ void AMPromptManager::FlushHistory() {
   for (const auto &pair : history_map_) {
     jsond[pair.first]["commands"] = pair.second;
   }
-  AMConfigManager::Instance().SetArg(DocumentKind::History, {}, jsond);
-  AMConfigManager::Instance().Dump(DocumentKind::History, "", true);
+  AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(DocumentKind::History, {}, jsond);
+  AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(DocumentKind::History, "", true);
 }
+
+
 

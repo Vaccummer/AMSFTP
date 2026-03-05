@@ -7,7 +7,7 @@ Current headers:
 - `application/config/ConfigWorkflows.hpp`
 - `application/config/HostProfileWorkflows.hpp`
 - `application/client/ClientSessionWorkflows.hpp`
-- `application/client/ClientPort.hpp`
+- `domain/client/ClientPort.hpp`
 - `application/client/FileCommandWorkflows.hpp`
 - `application/var/VarWorkflows.hpp`
 - `application/completion/CompletionWorkflows.hpp`

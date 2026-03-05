@@ -377,6 +377,7 @@ class AMInfraConfigManager : public AMInfraConfigStorage,
                              NonCopyableNonMovable {
 public:
   AMInfraConfigManager() = default;
+
   ECM Init() override {
     std::string root_dir = "";
     if (!AMStr::GetEnv("AMSFTP_ROOT", &root_dir)) {

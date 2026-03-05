@@ -1199,7 +1199,7 @@ std::string ApplyStyleFromConfig_(AMInfraConfigManager &config_manager,
  * @brief Return the active client or the local client fallback.
  */
 std::shared_ptr<BaseClient>
-ResolveActiveClient_(AMClientManager &client_manager) {
+ResolveActiveClient_(AMDomain::client::AMClientManager &client_manager) {
   return client_manager.CurrentClient();
 }
 
@@ -1286,9 +1286,9 @@ std::string ResolveSysIcon_(AMInfraConfigManager &config_manager, OS_TYPE os_typ
 /**
  * @brief Build the prompt string and update cached prefix when needed.
  */
-std::string BuildPrompt_(PromptState &state, AMClientManager &client_manager,
+std::string BuildPrompt_(PromptState &state, AMDomain::client::AMClientManager &client_manager,
                          AMInfraConfigManager &config_manager,
-                         AMTransferManager &transfer_manager) {
+                         AMDomain::transfer::AMTransferManager &transfer_manager) {
   auto client = ResolveActiveClient_(client_manager);
   std::string nickname = client ? client->GetNickname() : std::string("local");
   if (nickname.empty()) {
@@ -1481,7 +1481,7 @@ void PrintECM_(AMPromptManager &prompt, const ECM &rcm) {
  * @brief Execute a shell command via filesystem shell runner and return the
  * raw result.
  */
-CR ExecuteShellCommand_(AMFileSystem &filesystem, const std::string &command,
+CR ExecuteShellCommand_(AMDomain::filesystem::AMFileSystem &filesystem, const std::string &command,
                         const amf &task_control_token) {
   return filesystem.ShellRun(command, -1, task_control_token);
 }
@@ -1596,9 +1596,9 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
 
   AMPromptManager &prompt = managers.prompt_manager;
   AMInfraConfigManager &config_manager = managers.config_manager;
-  AMClientManager &client_manager = managers.client_manager;
-  AMTransferManager &transfer_manager = managers.transfer_manager;
-  AMFileSystem &filesystem = managers.filesystem;
+  AMDomain::client::AMClientManager &client_manager = managers.client_manager;
+  AMDomain::transfer::AMTransferManager &transfer_manager = managers.transfer_manager;
+  AMDomain::filesystem::AMFileSystem &filesystem = managers.filesystem;
   const amf task_control_token = ctx.task_control_token;
   if (!task_control_token) {
     ctx.rcm = Err(EC::InvalidArg, "Session task control token is not bound");

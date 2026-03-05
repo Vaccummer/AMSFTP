@@ -410,3 +410,4 @@ void AMInternalSearchEngine::SortCandidates(
                      return lhs.insert_text < rhs.insert_text;
                    });
 }
+

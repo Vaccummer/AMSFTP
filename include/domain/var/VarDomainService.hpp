@@ -103,3 +103,4 @@ private:
   DomainDict vars_by_domain_ = {{varsetkn::kPublic, DomainVars{}}};
 };
 } // namespace AMDomain::var
+

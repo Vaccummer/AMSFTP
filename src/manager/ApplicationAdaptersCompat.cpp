@@ -1,20 +1,21 @@
 #include "interface/ApplicationAdapters.hpp"
 #include "interface/Completer/Proxy.hpp"
 #include "interface/Prompt.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/FileSystem.hpp"
-#include "AMManager/Host.hpp"
-#include "AMManager/Transfer.hpp"
-#include "AMManager/Var.hpp"
+#include "domain/client/ClientManager.hpp"
+#include "domain/filesystem/FileSystemManager.hpp"
+#include "domain/host/HostManager.hpp"
+#include "domain/transfer/TransferManager.hpp"
+#include "domain/var/VarManager.hpp"
 #include "infrastructure/Config.hpp"
 #include "infrastructure/SignalMonitor.hpp"
 #include <atomic>
+#include <stdexcept>
 
 namespace AMInterface::ApplicationAdapters {
 /**
  * @brief Construct host/profile gateway from legacy managers.
  */
-HostProfileGateway::HostProfileGateway(AMHostManager &host_manager,
+HostProfileGateway::HostProfileGateway(AMDomain::host::AMHostManager &host_manager,
                                        AMPromptManager &prompt_manager)
     : host_manager_(host_manager), prompt_manager_(prompt_manager) {}
 
@@ -118,7 +119,7 @@ std::vector<std::string> HostProfileGateway::ListHostNames() const {
 /**
  * @brief Construct current-client reader from client manager.
  */
-CurrentClientPort::CurrentClientPort(AMClientManager &client_manager)
+CurrentClientPort::CurrentClientPort(AMDomain::client::AMClientManager &client_manager)
     : client_manager_(client_manager) {}
 
 /**
@@ -131,7 +132,7 @@ std::string CurrentClientPort::CurrentNickname() const {
 /**
  * @brief Construct path helper from client manager.
  */
-ClientPathGateway::ClientPathGateway(AMClientManager &client_manager)
+ClientPathGateway::ClientPathGateway(AMDomain::client::AMClientManager &client_manager)
     : client_manager_(client_manager) {}
 
 /**
@@ -148,7 +149,7 @@ std::string ClientPathGateway::CurrentWorkdir() const {
 /**
  * @brief Construct host config saver from host manager.
  */
-HostConfigSaver::HostConfigSaver(AMHostManager &host_manager)
+HostConfigSaver::HostConfigSaver(AMDomain::host::AMHostManager &host_manager)
     : host_manager_(host_manager) {}
 
 /**
@@ -159,7 +160,7 @@ ECM HostConfigSaver::SaveHostConfig() { return host_manager_.Save(); }
 /**
  * @brief Construct var config saver from var manager.
  */
-VarConfigSaver::VarConfigSaver(VarCLISet &var_manager)
+VarConfigSaver::VarConfigSaver(AMDomain::var::VarCLISet &var_manager)
     : var_manager_(var_manager) {}
 
 /**
@@ -191,7 +192,7 @@ ECM PromptConfigSaver::SavePromptConfig(bool dump_now) {
 /**
  * @brief Construct client-session gateway from filesystem manager.
  */
-ClientSessionGateway::ClientSessionGateway(AMFileSystem &filesystem)
+ClientSessionGateway::ClientSessionGateway(AMDomain::filesystem::AMFileSystem &filesystem)
     : filesystem_(filesystem) {}
 
 /**
@@ -277,7 +278,7 @@ ECM ClientSessionGateway::ListPath(const std::string &path, bool list_like,
 /**
  * @brief Construct filesystem command gateway from filesystem manager.
  */
-FileCommandGateway::FileCommandGateway(AMFileSystem &filesystem)
+FileCommandGateway::FileCommandGateway(AMDomain::filesystem::AMFileSystem &filesystem)
     : filesystem_(filesystem) {}
 
 /**
@@ -428,7 +429,7 @@ FileCommandGateway::JoinNicknames_(const std::vector<std::string> &nicknames) co
 /**
  * @brief Construct path-substitution port from var manager.
  */
-PathSubstitutionPort::PathSubstitutionPort(VarCLISet &var_manager)
+PathSubstitutionPort::PathSubstitutionPort(AMDomain::var::VarCLISet &var_manager)
     : var_manager_(var_manager) {}
 
 /**
@@ -453,7 +454,7 @@ PathSubstitutionPort::SubstitutePathLike(
 /**
  * @brief Construct variable gateway from var manager.
  */
-VarGateway::VarGateway(VarCLISet &var_manager) : var_manager_(var_manager) {}
+VarGateway::VarGateway(AMDomain::var::VarCLISet &var_manager) : var_manager_(var_manager) {}
 
 /**
  * @brief Substitute one path-like token.
@@ -522,7 +523,7 @@ void CompletionGateway::ClearActiveCompleterCache() const {
 /**
  * @brief Construct transfer executor from transfer manager.
  */
-TransferExecutorPort::TransferExecutorPort(AMTransferManager &transfer_manager)
+TransferExecutorPort::TransferExecutorPort(AMDomain::transfer::AMTransferManager &transfer_manager)
     : transfer_manager_(transfer_manager) {}
 
 /**
@@ -545,7 +546,7 @@ ECM TransferExecutorPort::TransferAsync(
 /**
  * @brief Construct task gateway from transfer manager.
  */
-TaskGateway::TaskGateway(AMTransferManager &transfer_manager)
+TaskGateway::TaskGateway(AMDomain::transfer::AMTransferManager &transfer_manager)
     : transfer_manager_(transfer_manager) {}
 
 /**
@@ -678,14 +679,14 @@ namespace {
  * @brief Runtime dependency slots bound once from startup wiring.
  */
 struct RuntimeBindingState {
-  std::atomic<AMHostManager *> host_manager{nullptr};
-  std::atomic<AMClientManager *> client_manager{nullptr};
-  std::atomic<AMTransferManager *> transfer_manager{nullptr};
-  std::atomic<VarCLISet *> var_manager{nullptr};
+  std::atomic<AMDomain::host::AMHostManager *> host_manager{nullptr};
+  std::atomic<AMDomain::client::AMClientManager *> client_manager{nullptr};
+  std::atomic<AMDomain::transfer::AMTransferManager *> transfer_manager{nullptr};
+  std::atomic<AMDomain::var::VarCLISet *> var_manager{nullptr};
   std::atomic<AMInfraCliSignalMonitor *> signal_monitor{nullptr};
   std::atomic<AMPromptManager *> prompt_manager{nullptr};
   std::atomic<AMInfraConfigManager *> config_manager{nullptr};
-  std::atomic<AMFileSystem *> filesystem{nullptr};
+  std::atomic<AMDomain::filesystem::AMFileSystem *> filesystem{nullptr};
 };
 
 /**
@@ -744,10 +745,22 @@ bool Runtime::IsBound() {
 }
 
 /**
+ * @brief Return bound config manager reference or throw when unbound.
+ */
+AMInfraConfigManager &Runtime::ConfigManagerOrThrow() {
+  AMInfraConfigManager *config_manager =
+      RuntimeBindingState_().config_manager.load(std::memory_order_acquire);
+  if (!config_manager) {
+    throw std::runtime_error("Runtime config manager is not bound");
+  }
+  return *config_manager;
+}
+
+/**
  * @brief Return true when a configured host nickname exists.
  */
 bool Runtime::HostExists(const std::string &nickname) {
-  AMHostManager *host_manager =
+  AMDomain::host::AMHostManager *host_manager =
       RuntimeBindingState_().host_manager.load(std::memory_order_acquire);
   return host_manager ? host_manager->HostExists(nickname) : false;
 }
@@ -756,7 +769,7 @@ bool Runtime::HostExists(const std::string &nickname) {
  * @brief Return configured host nicknames.
  */
 std::vector<std::string> Runtime::ListHostNames() {
-  AMHostManager *host_manager =
+  AMDomain::host::AMHostManager *host_manager =
       RuntimeBindingState_().host_manager.load(std::memory_order_acquire);
   return host_manager ? host_manager->ListNames() : std::vector<std::string>{};
 }
@@ -765,7 +778,7 @@ std::vector<std::string> Runtime::ListHostNames() {
  * @brief Return created/connected client nicknames.
  */
 std::vector<std::string> Runtime::ListClientNames() {
-  AMClientManager *client_manager =
+  AMDomain::client::AMClientManager *client_manager =
       RuntimeBindingState_().client_manager.load(std::memory_order_acquire);
   return client_manager ? client_manager->GetClientNames()
                         : std::vector<std::string>{};
@@ -775,7 +788,7 @@ std::vector<std::string> Runtime::ListClientNames() {
  * @brief Return tracked transfer task IDs.
  */
 std::vector<std::string> Runtime::ListTaskIds() {
-  AMTransferManager *transfer_manager =
+  AMDomain::transfer::AMTransferManager *transfer_manager =
       RuntimeBindingState_().transfer_manager.load(std::memory_order_acquire);
   return transfer_manager ? transfer_manager->ListTaskIds()
                           : std::vector<std::string>{};
@@ -785,7 +798,7 @@ std::vector<std::string> Runtime::ListTaskIds() {
  * @brief Resolve one client by nickname.
  */
 Runtime::ClientHandle Runtime::GetClient(const std::string &nickname) {
-  AMClientManager *client_manager =
+  AMDomain::client::AMClientManager *client_manager =
       RuntimeBindingState_().client_manager.load(std::memory_order_acquire);
   return client_manager ? client_manager->GetClient(nickname) : nullptr;
 }
@@ -794,7 +807,7 @@ Runtime::ClientHandle Runtime::GetClient(const std::string &nickname) {
  * @brief Resolve one host client from client-maintainer by nickname.
  */
 Runtime::ClientHandle Runtime::GetHostClient(const std::string &nickname) {
-  AMClientManager *client_manager =
+  AMDomain::client::AMClientManager *client_manager =
       RuntimeBindingState_().client_manager.load(std::memory_order_acquire);
   return client_manager ? client_manager->Clients().GetHost(nickname) : nullptr;
 }
@@ -803,7 +816,7 @@ Runtime::ClientHandle Runtime::GetHostClient(const std::string &nickname) {
  * @brief Return local client instance.
  */
 Runtime::ClientHandle Runtime::LocalClient() {
-  AMClientManager *client_manager =
+  AMDomain::client::AMClientManager *client_manager =
       RuntimeBindingState_().client_manager.load(std::memory_order_acquire);
   return client_manager ? client_manager->LocalClient() : nullptr;
 }
@@ -812,7 +825,7 @@ Runtime::ClientHandle Runtime::LocalClient() {
  * @brief Return current active client.
  */
 Runtime::ClientHandle Runtime::CurrentClient() {
-  AMClientManager *client_manager =
+  AMDomain::client::AMClientManager *client_manager =
       RuntimeBindingState_().client_manager.load(std::memory_order_acquire);
   return client_manager ? client_manager->CurrentClient() : nullptr;
 }
@@ -822,7 +835,7 @@ Runtime::ClientHandle Runtime::CurrentClient() {
  */
 std::string Runtime::BuildPath(const Runtime::ClientHandle &client,
                                const std::string &path) {
-  AMClientManager *client_manager =
+  AMDomain::client::AMClientManager *client_manager =
       RuntimeBindingState_().client_manager.load(std::memory_order_acquire);
   return client_manager ? client_manager->BuildPath(client, path) : path;
 }
@@ -831,7 +844,7 @@ std::string Runtime::BuildPath(const Runtime::ClientHandle &client,
  * @brief Substitute path-like variable segments in one raw token.
  */
 std::string Runtime::SubstitutePathLike(const std::string &raw) {
-  VarCLISet *var_manager =
+  AMDomain::var::VarCLISet *var_manager =
       RuntimeBindingState_().var_manager.load(std::memory_order_acquire);
   return var_manager ? var_manager->SubstitutePathLike(raw) : raw;
 }
@@ -840,7 +853,7 @@ std::string Runtime::SubstitutePathLike(const std::string &raw) {
  * @brief Return true when one variable domain exists.
  */
 bool Runtime::HasVarDomain(const std::string &domain) {
-  VarCLISet *var_manager =
+  AMDomain::var::VarCLISet *var_manager =
       RuntimeBindingState_().var_manager.load(std::memory_order_acquire);
   return var_manager ? var_manager->HasDomain(domain) : false;
 }
@@ -849,7 +862,7 @@ bool Runtime::HasVarDomain(const std::string &domain) {
  * @brief Return all available variable domains.
  */
 std::vector<std::string> Runtime::ListVarDomains() {
-  VarCLISet *var_manager =
+  AMDomain::var::VarCLISet *var_manager =
       RuntimeBindingState_().var_manager.load(std::memory_order_acquire);
   return var_manager ? var_manager->ListDomains() : std::vector<std::string>{};
 }
@@ -858,7 +871,7 @@ std::vector<std::string> Runtime::ListVarDomains() {
  * @brief Return variables in one domain.
  */
 std::vector<VarInfo> Runtime::ListVarsByDomain(const std::string &domain) {
-  VarCLISet *var_manager =
+  AMDomain::var::VarCLISet *var_manager =
       RuntimeBindingState_().var_manager.load(std::memory_order_acquire);
   return var_manager ? var_manager->ListByDomain(domain) : std::vector<VarInfo>{};
 }
@@ -867,7 +880,7 @@ std::vector<VarInfo> Runtime::ListVarsByDomain(const std::string &domain) {
  * @brief Return current variable domain.
  */
 std::string Runtime::CurrentVarDomain() {
-  VarCLISet *var_manager =
+  AMDomain::var::VarCLISet *var_manager =
       RuntimeBindingState_().var_manager.load(std::memory_order_acquire);
   return var_manager ? var_manager->CurrentDomain() : "";
 }
@@ -876,7 +889,7 @@ std::string Runtime::CurrentVarDomain() {
  * @brief Query one variable value by domain/name.
  */
 VarInfo Runtime::GetVar(const std::string &domain, const std::string &name) {
-  VarCLISet *var_manager =
+  AMDomain::var::VarCLISet *var_manager =
       RuntimeBindingState_().var_manager.load(std::memory_order_acquire);
   return var_manager ? var_manager->GetVar(domain, name) : VarInfo{};
 }
@@ -965,8 +978,11 @@ void Runtime::ResumeSignalHook(const std::string &name) {
  * @brief Style one filesystem path display item.
  */
 std::string Runtime::StylePath(const PathInfo &info, const std::string &name) {
-  AMFileSystem *filesystem =
+  AMDomain::filesystem::AMFileSystem *filesystem =
       RuntimeBindingState_().filesystem.load(std::memory_order_acquire);
   return filesystem ? filesystem->StylePath(info, name) : name;
 }
 } // namespace AMInterface::ApplicationAdapters
+
+
+

@@ -183,3 +183,4 @@ ECM ExecuteProfileGet(IHostProfileGateway &gateway,
   return gateway.GetProfiles(nicknames);
 }
 } // namespace AMApplication::HostProfileWorkflow
+
