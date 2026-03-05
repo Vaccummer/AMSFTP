@@ -2,9 +2,9 @@
 #include "foundation/Path.hpp"
 #include "foundation/tools/bar.hpp"
 #include "foundation/tools/time.hpp"
-#include "AMClient/IOCore.hpp"
+#include "infrastructure/client/runtime/IOCore.hpp"
 #include "AMManager/Config.hpp"
-#include "AMManager/Prompt.hpp"
+#include "interface/Prompt.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "AMManager/Transfer.hpp"
 #include "third_party/indicators/dynamic_progress.hpp"
@@ -863,3 +863,4 @@ ECM AMTransferManager::List(
   AMPromptManager::Instance().FlushCachedOutput();
   return {EC::Success, ""};
 }
+

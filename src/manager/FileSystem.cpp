@@ -3,11 +3,11 @@
 #include "foundation/Enum.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/time.hpp"
-#include "AMClient/IOCore.hpp"
+#include "infrastructure/client/runtime/IOCore.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
-#include "AMManager/Prompt.hpp"
+#include "interface/Prompt.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
@@ -254,7 +254,9 @@ static std::string BuildShellCommandWithPrefix_(const std::string &command,
  */
 static void PrintClientDetail_(AMPromptManager &prompt_manager,
                                const std::string &nickname,
-                               const std::shared_ptr<BaseClient> &client,
+                               const std::shared_ptr<
+                                   AMApplication::ClientPort::IClientPort>
+                                   &client,
                                bool print_title = true) {
   if (!client) {
     return;
@@ -308,7 +310,9 @@ static void PrintClientDetail_(AMPromptManager &prompt_manager,
  */
 static void PrintCheckDetail_(AMPromptManager &prompt_manager,
                               const std::string &nickname,
-                              const std::shared_ptr<BaseClient> &client,
+                              const std::shared_ptr<
+                                  AMApplication::ClientPort::IClientPort>
+                                  &client,
                               const ECM &rcm) {
   const std::string status = (rcm.first == EC::Success) ? "✅" : "❌";
   prompt_manager.Print(AMStr::fmt("[{}] {}", nickname, status));
@@ -357,7 +361,7 @@ ECM AMFileSystem::check(const std::vector<std::string> &nicknames, bool detail,
     std::string resolved_name = nickname;
     auto client = AMClientManager::Instance().Clients().GetHost(resolved_name);
     if (!client) {
-      auto names = AMClientManager::Instance().Clients().get_nicknames();
+      auto names = AMClientManager::Instance().Clients().GetNicknames();
       for (const auto &name : names) {
         if (AMStr::lowercase(name) == lowered) {
           resolved_name = name;
@@ -446,7 +450,7 @@ ECM AMFileSystem::remove_client(const std::string &nickname) {
           ? AMClientManager::Instance().CurrentClient()->GetNickname()
           : "";
   const std::string current_lower = AMStr::lowercase(current);
-  const auto names = AMClientManager::Instance().Clients().get_nicknames();
+  const auto names = AMClientManager::Instance().Clients().GetNicknames();
 
   ECM last = {EC::Success, ""};
   std::vector<std::string> valid_targets;
@@ -549,7 +553,7 @@ ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
       client.nickname = "local";
       client.client = AMClientManager::Instance().LocalClient();
     } else {
-      auto names = AMClientManager::Instance().Clients().get_nicknames();
+      auto names = AMClientManager::Instance().Clients().GetNicknames();
       for (const auto &item : names) {
         if (AMStr::lowercase(item) == lowered) {
           client.nickname = item;
@@ -566,7 +570,7 @@ ECM AMFileSystem::print_clients(bool detail, amf interrupt_flag) {
   add_unique("local");
 
   for (const auto &name :
-       AMClientManager::Instance().Clients().get_nicknames()) {
+       AMClientManager::Instance().Clients().GetNicknames()) {
     add_unique(name);
   }
 
@@ -600,7 +604,7 @@ ECM AMFileSystem::change_client(const std::string &nickname,
     client.nickname = "local";
     client.client = AMClientManager::Instance().LocalClient();
   } else {
-    auto names = AMClientManager::Instance().Clients().get_nicknames();
+    auto names = AMClientManager::Instance().Clients().GetNicknames();
     for (const auto &name : names) {
       if (AMStr::lowercase(name) == lowered) {
         client.nickname = name;
@@ -1358,7 +1362,7 @@ ECM AMFileSystem::realpath(const std::string &path, amf interrupt_flag,
   std::string input = AMStr::Strip(path);
   std::string nickname;
   std::string resolved_path;
-  std::shared_ptr<BaseClient> client_ptr;
+  AMClientManage::ClientHandle client_ptr;
   ECM rcm = {EC::Success, ""};
 
   if (input.empty()) {

@@ -2,9 +2,9 @@
 #include "foundation/Path.hpp"
 #include "foundation/tools/time.hpp"
 #include "domain/transfer/TransferCacheDomainService.hpp"
-#include "AMClient/IOCore.hpp"
+#include "infrastructure/client/runtime/IOCore.hpp"
 #include "AMManager/Config.hpp"
-#include "AMManager/Prompt.hpp"
+#include "interface/Prompt.hpp"
 #include "AMManager/Transfer.hpp"
 #include <algorithm>
 #include <atomic>
@@ -779,3 +779,4 @@ ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
   }
   return transfer(task_info);
 }
+

@@ -1,10 +1,10 @@
 #include "foundation/DataClass.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/bar.hpp"
-#include "AMClient/IOCore.hpp"
+#include "infrastructure/client/runtime/IOCore.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
-#include "AMManager/Prompt.hpp"
+#include "interface/Prompt.hpp"
 #include "AMManager/Transfer.hpp"
 #include <algorithm>
 #include <atomic>
@@ -111,7 +111,8 @@ private:
  * so that transfer can create them later.
  */
 ECM ParseTransferPath(AMClientManager &client_manager, const std::string &input,
-                      const std::shared_ptr<BaseClient> &client,
+                      const std::shared_ptr<
+                          AMApplication::ClientPort::IClientPort> &client,
                       std::string *nickname, std::string *path) {
 
   auto [parsed_name, parsed_path, _client, rcm] =
@@ -376,7 +377,7 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
 /**
  * @brief Acquire or create a validated client for a nickname.
  */
-std::pair<ECM, std::shared_ptr<BaseClient>> AMTransferManager::AcquireClient_(
+std::pair<ECM, AMTransferManager::ClientHandle> AMTransferManager::AcquireClient_(
     const std::string &nickname,
     std::shared_ptr<TaskControlToken> flag) {
   if (flag && !flag->IsRunning()) {
@@ -401,7 +402,7 @@ std::pair<ECM, std::shared_ptr<BaseClient>> AMTransferManager::AcquireClient_(
   auto created = AMClientManager::Instance().AddClient(nickname, false, true,
                                                        {}, flag, false);
   if (created.first.first != EC::Success || !created.second) {
-    return created;
+    return {created.first, nullptr};
   }
   return {ECM{EC::Success, ""}, created.second};
 }
@@ -443,12 +444,24 @@ void AMTransferManager::ReturnClientsToIdle_(
   if (!maintainer) {
     return;
   }
+  const auto hosts = maintainer->GetHostsSnapshot();
   std::lock_guard<std::mutex> lock(idle_mtx_);
-  for (const auto &pair : maintainer->hosts) {
+  for (const auto &pair : hosts) {
     if (!pair.second) {
       continue;
     }
     idle_pool_[pair.first].push_front(pair.second);
+  }
+}
+
+void AMTransferManager::ReleaseTaskClients_(
+    const std::shared_ptr<TaskInfo> &task_info) {
+  if (!task_info) {
+    return;
+  }
+  auto hostm = worker_.take_task_host(task_info->id);
+  if (hostm) {
+    ReturnClientsToIdle_(hostm);
   }
 }
 
@@ -470,10 +483,7 @@ void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
   if (!task_info) {
     return;
   }
-  if (task_info->hostm) {
-    ReturnClientsToIdle_(task_info->hostm);
-    task_info->hostm.reset();
-  }
+  ReleaseTaskClients_(task_info);
   {
     std::lock_guard<std::mutex> lock(history_mtx_);
     history_.push_front(task_info);
@@ -534,10 +544,7 @@ ECM AMTransferManager::transfer(
   }
 
   if (!task_info->tasks || task_info->tasks->empty()) {
-    if (task_info->hostm) {
-      ReturnClientsToIdle_(task_info->hostm);
-      task_info->hostm.reset();
-    }
+    ReleaseTaskClients_(task_info);
     return {EC::Success, ""};
   }
 
@@ -566,10 +573,7 @@ ECM AMTransferManager::transfer(
   auto submit_rcm = worker_.submit(task_info);
   if (submit_rcm.first != EC::Success) {
     AMPromptManager::Instance().ErrorFormat(submit_rcm);
-    if (task_info->hostm) {
-      ReturnClientsToIdle_(task_info->hostm);
-      task_info->hostm.reset();
-    }
+    ReleaseTaskClients_(task_info);
     return submit_rcm;
   }
 
@@ -667,10 +671,7 @@ ECM AMTransferManager::transfer_async(
   }
 
   if (!task_info->tasks || task_info->tasks->empty()) {
-    if (task_info->hostm) {
-      ReturnClientsToIdle_(task_info->hostm);
-      task_info->hostm.reset();
-    }
+    ReleaseTaskClients_(task_info);
     return {EC::InvalidArg, "Task List is empty"};
   }
 
@@ -697,10 +698,7 @@ ECM AMTransferManager::transfer_async(
   auto submit_rcm = worker_.submit(task_info);
   if (submit_rcm.first != EC::Success) {
     AMPromptManager::Instance().ErrorFormat(submit_rcm);
-    if (task_info->hostm) {
-      ReturnClientsToIdle_(task_info->hostm);
-      task_info->hostm.reset();
-    }
+    ReleaseTaskClients_(task_info);
     return submit_rcm;
   }
 
@@ -774,7 +772,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
       return {dst_parse, nullptr};
     }
     auto dst_client =
-        dst_host.empty() ? hostm->local_client : hostm->GetHost(dst_host);
+        dst_host.empty() ? hostm->LocalClient() : hostm->GetHost(dst_host);
     if (!dst_client) {
       ReturnClientsToIdle_(hostm);
       return {ECM{EC::ClientNotFound, "Destination client not available"},
@@ -802,7 +800,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
         return {src_parse, nullptr};
       }
       auto src_client =
-          src_host.empty() ? hostm->local_client : hostm->GetHost(src_host);
+          src_host.empty() ? hostm->LocalClient() : hostm->GetHost(src_host);
       if (!src_client) {
         ReturnClientsToIdle_(hostm);
         return {ECM{EC::ClientNotFound, "Source client not available"},

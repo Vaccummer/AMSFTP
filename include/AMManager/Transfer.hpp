@@ -1,6 +1,7 @@
 #pragma once
+#include "application/client/ClientPort.hpp"
 #include "foundation/DataClass.hpp"
-#include "AMClient/IOCore.hpp"
+#include "infrastructure/client/runtime/IOCore.hpp"
 #include <deque>
 #include <functional>
 #include <list>
@@ -240,7 +241,7 @@ public:
   /**
    * @brief Execute a prepared TaskInfo synchronously.
    *
-   * @param task_info Prepared task info containing tasks and host maintainer.
+   * @param task_info Prepared task info containing transfer tasks.
    * @param interrupt_flag Optional interrupt flag for cancellation.
    */
   ECM transfer(const std::shared_ptr<TaskInfo> &task_info,
@@ -258,7 +259,7 @@ public:
   /**
    * @brief Execute a prepared TaskInfo asynchronously.
    *
-   * @param task_info Prepared task info containing tasks and host maintainer.
+   * @param task_info Prepared task info containing transfer tasks.
    * @param interrupt_flag Optional interrupt flag (unused).
    */
   ECM transfer_async(
@@ -266,6 +267,7 @@ public:
       std::shared_ptr<TaskControlToken> interrupt_flag = nullptr);
 
 private:
+  using ClientHandle = std::shared_ptr<AMApplication::ClientPort::IClientPort>;
   /**
    * @brief Construct transfer manager using singleton managers.
    */
@@ -274,7 +276,7 @@ private:
   bool ConfirmWildcard_(const std::vector<PathInfo> &matches,
                         const std::string &src_host,
                         const std::string &dst_host);
-  std::pair<ECM, std::shared_ptr<BaseClient>>
+  std::pair<ECM, ClientHandle>
   AcquireClient_(const std::string &nickname,
                  std::shared_ptr<TaskControlToken> flag);
   std::pair<ECM, std::shared_ptr<ClientMaintainer>>
@@ -282,6 +284,7 @@ private:
                  std::shared_ptr<TaskControlToken> flag);
   void
   ReturnClientsToIdle_(const std::shared_ptr<ClientMaintainer> &maintainer);
+  void ReleaseTaskClients_(const std::shared_ptr<TaskInfo> &task_info);
   std::pair<ECM, std::shared_ptr<TaskInfo>>
   PrepareTasks_(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
                 std::shared_ptr<TaskControlToken> flag);
@@ -293,7 +296,7 @@ private:
 private:
   AMWorkManager worker_;
   mutable std::mutex idle_mtx_;
-  std::unordered_map<ID, std::list<std::shared_ptr<BaseClient>>> idle_pool_;
+  std::unordered_map<ID, std::list<ClientHandle>> idle_pool_;
   mutable std::mutex history_mtx_;
   std::list<std::shared_ptr<TaskInfo>> history_;
   mutable std::mutex cache_mtx_;

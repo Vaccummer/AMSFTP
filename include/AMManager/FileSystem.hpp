@@ -1,8 +1,8 @@
 #pragma once
+#include "application/client/ClientPort.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/Enum.hpp"
 
-class BaseClient;
 class AMFileSystem : public NonCopyableNonMovable {
 public:
   using ECM = std::pair<ErrorCode, std::string>;
@@ -135,6 +135,7 @@ public:
                                       const std::string &path) const;
 
 private:
+  using ClientHandle = std::shared_ptr<AMApplication::ClientPort::IClientPort>;
   using WalkErrorCallback =
       std::shared_ptr<std::function<void(const std::string &, const ECM &)>>;
   AMFileSystem() = default;
@@ -142,7 +143,7 @@ private:
 
   struct ClientRef {
     std::string nickname;
-    std::shared_ptr<BaseClient> client;
+    ClientHandle client;
     /** Return true if client is valid. */
     [[nodiscard]] bool is_valid() const { return static_cast<bool>(client); }
   };

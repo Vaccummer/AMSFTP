@@ -961,7 +961,6 @@ public:
 
 struct TaskInfo; // Forward declaration
 
-class ClientMaintainer; // Forward declaration
 // New ProgressData that holds weak_ptr to TaskInfo to avoid cycle reference
 // Reads/writes directly on TaskInfo for progress tracking
 
@@ -1095,11 +1094,6 @@ struct TaskInfo {
    * @brief Transfer callbacks.
    */
   TransferCallback callback;
-
-  /**
-   * @brief Host maintainer reference.
-   */
-  std::shared_ptr<ClientMaintainer> hostm;
 
   /**
    * @brief Cached client nicknames for display and resume.

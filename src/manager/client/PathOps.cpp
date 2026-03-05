@@ -1,7 +1,7 @@
-#include "AMClient/IOCore.hpp"
+#include "infrastructure/client/runtime/IOCore.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Host.hpp"
-#include "AMManager/Prompt.hpp"
+#include "interface/Prompt.hpp"
 #include <filesystem>
 
 namespace AMClientManage {
@@ -12,7 +12,7 @@ inline bool IsLocalNickname_(const std::string &nickname) {
 }
 } // namespace
 
-std::tuple<std::string, std::string, std::shared_ptr<BaseClient>, ECM>
+std::tuple<std::string, std::string, ClientHandle, ECM>
 PathOps::ParsePath(const std::string &input) {
   if (!input.empty() && input.front() == '@') {
     return {"local", input.substr(1), LocalClient(), Ok()};
@@ -20,7 +20,7 @@ PathOps::ParsePath(const std::string &input) {
 
   const auto pos = input.find('@');
   if (pos == std::string::npos || pos + 1 >= input.size()) {
-    std::shared_ptr<BaseClient> current = CurrentClient();
+    ClientHandle current = CurrentClient();
     const std::string nickname = current ? current->GetNickname() : "local";
     return {nickname, input, current, Ok()};
   }
@@ -47,7 +47,7 @@ PathOps::ParsePath(const std::string &input) {
   return {prefix, path, existing, Ok()};
 }
 
-std::tuple<std::string, std::string, std::shared_ptr<BaseClient>, ECM>
+std::tuple<std::string, std::string, ClientHandle, ECM>
 PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
   if (!input.empty() && input.front() == '@') {
     return {"local", input.substr(1), LocalClient(), Ok()};
@@ -55,7 +55,7 @@ PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
 
   const auto pos = input.find('@');
   if (pos == std::string::npos || pos + 1 >= input.size()) {
-    std::shared_ptr<BaseClient> current = CurrentClient();
+    ClientHandle current = CurrentClient();
     const std::string nickname = current ? current->GetNickname() : "local";
     return {nickname, input, current, Ok()};
   }
@@ -94,7 +94,7 @@ PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
 }
 
 std::string PathOps::AbsPath(const std::string &path,
-                             const std::shared_ptr<BaseClient> &client) const {
+                             const ClientHandle &client) const {
   if (!client) {
     return path;
   }
@@ -107,7 +107,7 @@ std::string PathOps::AbsPath(const std::string &path,
 }
 
 std::string
-PathOps::GetOrInitWorkdir(const std::shared_ptr<BaseClient> &client) const {
+PathOps::GetOrInitWorkdir(const ClientHandle &client) const {
   if (!client) {
     return "";
   }
@@ -138,7 +138,7 @@ PathOps::GetOrInitWorkdir(const std::shared_ptr<BaseClient> &client) const {
   return home;
 }
 
-void PathOps::SetClientWorkdir(const std::shared_ptr<BaseClient> &client,
+void PathOps::SetClientWorkdir(const ClientHandle &client,
                                const std::string &path) const {
   if (!client) {
     return;
@@ -155,7 +155,7 @@ void PathOps::SetClientWorkdir(const std::shared_ptr<BaseClient> &client,
   client->SetCwd(normalized);
 }
 
-std::string PathOps::BuildPath(const std::shared_ptr<BaseClient> &client,
+std::string PathOps::BuildPath(const ClientHandle &client,
                                const std::string &path) const {
   if (!client) {
     return path;
@@ -169,7 +169,7 @@ std::string PathOps::BuildPath(const std::shared_ptr<BaseClient> &client,
 }
 
 void PathOps::InitClientWorkdir(
-    const std::shared_ptr<BaseClient> &client) const {
+    const ClientHandle &client) const {
   if (!client) {
     return;
   }
@@ -182,7 +182,7 @@ void PathOps::InitClientWorkdir(
 }
 
 void PathOps::ApplyLoginDir(const std::string &nickname,
-                            const std::shared_ptr<BaseClient> &client,
+                            const ClientHandle &client,
                             const std::string &login_dir, amf flag) const {
   if (!client) {
     return;
