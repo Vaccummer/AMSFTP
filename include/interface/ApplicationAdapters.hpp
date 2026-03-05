@@ -4,6 +4,8 @@
 #include "application/config/ConfigWorkflows.hpp"
 #include "application/config/HostProfileWorkflows.hpp"
 #include "application/client/FileCommandWorkflows.hpp"
+#include "application/var/VarWorkflows.hpp"
+#include "application/completion/CompletionWorkflows.hpp"
 #include "application/transfer/TaskWorkflows.hpp"
 #include "application/transfer/TransferWorkflows.hpp"
 #include "domain/var/VarModel.hpp"
@@ -328,7 +330,7 @@ private:
 /**
  * @brief Variable-command adapter backed by var manager.
  */
-class VarGateway final {
+class VarGateway final : public AMApplication::VarWorkflow::IVarGateway {
 public:
   /**
    * @brief Construct variable gateway from var manager.
@@ -349,27 +351,43 @@ public:
   /**
    * @brief Query one variable by token name.
    */
-  ECM QueryByName(const std::string &token_name) const;
+  ECM QueryByName(const std::string &token_name) const override;
 
   /**
    * @brief Define one variable.
    */
   ECM DefineVar(bool global, const std::string &name,
-                const std::string &value) const;
+                const std::string &value) const override;
 
   /**
    * @brief Delete one variable by CLI args.
    */
   ECM DeleteVarByCli(bool all, const std::string &section,
-                     const std::string &varname) const;
+                     const std::string &varname) const override;
 
   /**
    * @brief List variables by domain filters.
    */
-  ECM ListVars(const std::vector<std::string> &domains) const;
+  ECM ListVars(const std::vector<std::string> &domains) const override;
 
 private:
   VarCLISet &var_manager_;
+};
+
+/**
+ * @brief Completion workflow gateway backed by active completer runtime.
+ */
+class CompletionGateway final
+    : public AMApplication::CompletionWorkflow::ICompletionGateway {
+public:
+  /**
+   * @brief Construct completion gateway.
+   */
+  CompletionGateway() = default;
+  ~CompletionGateway() override = default;
+
+  [[nodiscard]] bool HasActiveCompleter() const override;
+  void ClearActiveCompleterCache() const override;
 };
 
 /**

@@ -9,6 +9,8 @@ Current headers:
 - `application/client/ClientSessionWorkflows.hpp`
 - `application/client/ClientPort.hpp`
 - `application/client/FileCommandWorkflows.hpp`
+- `application/var/VarWorkflows.hpp`
+- `application/completion/CompletionWorkflows.hpp`
 - `application/transfer/TransferWorkflows.hpp`
 - `application/transfer/TaskWorkflows.hpp`
 
