@@ -24,9 +24,9 @@
 #include <vector>
 
 // project header
-#include "AMBase/DataClass.hpp"
-#include "AMBase/Enum.hpp"
-#include "AMBase/Path.hpp"
+#include "foundation/DataClass.hpp"
+#include "foundation/Enum.hpp"
+#include "foundation/Path.hpp"
 
 // 3rd party library
 #include <curl/curl.h>

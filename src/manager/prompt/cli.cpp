@@ -1,4 +1,4 @@
-#include "AMBase/DataClass.hpp"
+#include "foundation/DataClass.hpp"
 #include "AMCLI/TokenTypeAnalyzer.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"

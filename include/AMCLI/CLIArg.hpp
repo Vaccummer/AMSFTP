@@ -1,5 +1,5 @@
 #pragma once
-#include "AMBase/DataClass.hpp"
+#include "foundation/DataClass.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/FileSystem.hpp"

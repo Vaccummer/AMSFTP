@@ -1,8 +1,8 @@
 #pragma once
-#include "AMBase/DataClass.hpp"
-#include "AMBase/tools/enum_related.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/string.hpp"
+#include "foundation/DataClass.hpp"
+#include "foundation/tools/enum_related.hpp"
+#include "foundation/tools/json.hpp"
+#include "foundation/tools/string.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "Isocline/isocline.h"
 #include <atomic>

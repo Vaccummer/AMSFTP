@@ -1,6 +1,6 @@
 #include "AMCLI/TokenTypeAnalyzer.hpp"
-#include "AMBase/DataClass.hpp"
-#include "AMBase/tools/time.hpp"
+#include "foundation/DataClass.hpp"
+#include "foundation/tools/time.hpp"
 #include "AMCLI/CommandTree.hpp"
 #include "AMCLI/InteractiveLoop.hpp"
 #include "AMManager/Client.hpp"

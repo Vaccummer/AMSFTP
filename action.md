@@ -409,3 +409,10 @@ Milestone D:
 Milestone E:
 
 - Legacy compatibility removed or intentionally minimized with documented rationale.
+
+  refer to action.md, get to know what to do
+  you can separate task to many phrase and you can continue without my confirmation, conduct until no work remains
+  Remeber you are assigned WF4
+  Remeber you are assigned WF4
+  Remeber you are assigned WF4
+  there's another agent conducting WF5

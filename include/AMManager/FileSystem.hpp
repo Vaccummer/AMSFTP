@@ -1,6 +1,6 @@
 #pragma once
-#include "AMBase/DataClass.hpp"
-#include "AMBase/Enum.hpp"
+#include "foundation/DataClass.hpp"
+#include "foundation/Enum.hpp"
 
 class BaseClient;
 class AMFileSystem : public NonCopyableNonMovable {

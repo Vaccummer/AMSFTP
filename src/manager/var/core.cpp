@@ -1,14 +1,9 @@
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/bar.hpp"
-#include "AMBase/tools/json.hpp"
-#include "AMBase/tools/time.hpp"
+#include "foundation/tools/json.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Var.hpp"
 #include <algorithm>
-#include <cctype>
-#include <unordered_set>
 
 using EC = ErrorCode;
 
@@ -37,7 +32,6 @@ std::string ToStringScalar_(const Json &value) {
   }
   return value.dump();
 }
-
 } // namespace
 
 /**
@@ -76,8 +70,12 @@ ECM AMVarManager::Reload() {
     parsed[varsetkn::kPublic][it.key()] = ToStringScalar_(it.value());
   }
 
+  ECM apply_rcm = domain_service_.ReplaceAll(std::move(parsed));
+  if (apply_rcm.first != EC::Success) {
+    return apply_rcm;
+  }
+
   std::lock_guard<std::mutex> lock(mutex_);
-  vars_by_domain_ = std::move(parsed);
   ready_ = true;
   dirty_ = false;
   return Ok();
@@ -88,23 +86,26 @@ ECM AMVarManager::Reload() {
  */
 ECM AMVarManager::Save(bool async) {
   EnsureLoaded_();
-  Json snapshot = Json::object();
+
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!dirty_) {
       return Ok();
     }
-    for (const auto &domain_entry : vars_by_domain_) {
-      Json section = Json::object();
-      for (const auto &var_entry : domain_entry.second) {
-        section[var_entry.first] = var_entry.second;
-      }
-      snapshot[domain_entry.first] = std::move(section);
-    }
   }
 
-  if (!AMConfigManager::Instance().SetArg(DocumentKind::Settings, {varsetkn::kRoot},
-                              snapshot)) {
+  Json snapshot = Json::object();
+  auto vars_snapshot = domain_service_.Snapshot();
+  for (const auto &domain_entry : vars_snapshot) {
+    Json section = Json::object();
+    for (const auto &var_entry : domain_entry.second) {
+      section[var_entry.first] = var_entry.second;
+    }
+    snapshot[domain_entry.first] = std::move(section);
+  }
+
+  if (!AMConfigManager::Instance().SetArg(DocumentKind::Settings,
+                                          {varsetkn::kRoot}, snapshot)) {
     return Err(EC::CommonFailure, "failed to write UserVars into settings");
   }
 
@@ -127,41 +128,18 @@ VarInfo AMVarManager::GetVar(const std::string &domain,
     return {};
   }
   EnsureLoaded_();
-  std::lock_guard<std::mutex> lock(mutex_);
-
-  auto domain_it = vars_by_domain_.find(domain);
-  if (domain_it == vars_by_domain_.end()) {
-    return {};
-  }
-  auto var_it = domain_it->second.find(name);
-  if (var_it == domain_it->second.end()) {
-    return {};
-  }
-  return {domain, name, var_it->second};
+  return domain_service_.GetVar(domain, name);
 }
 
 /**
  * @brief Find all variables with the given name across all domains.
  */
 std::vector<VarInfo> AMVarManager::FindByName(const std::string &name) const {
-  std::vector<VarInfo> out;
   if (!varsetkn::IsValidVarname(name)) {
-    return out;
+    return {};
   }
   EnsureLoaded_();
-  std::lock_guard<std::mutex> lock(mutex_);
-  out.reserve(vars_by_domain_.size());
-  for (const auto &domain_entry : vars_by_domain_) {
-    auto it = domain_entry.second.find(name);
-    if (it == domain_entry.second.end()) {
-      continue;
-    }
-    out.push_back({domain_entry.first, name, it->second});
-  }
-  std::sort(out.begin(), out.end(), [](const VarInfo &a, const VarInfo &b) {
-    return a.domain < b.domain;
-  });
-  return out;
+  return domain_service_.FindByName(name);
 }
 
 /**
@@ -169,24 +147,11 @@ std::vector<VarInfo> AMVarManager::FindByName(const std::string &name) const {
  */
 std::vector<VarInfo>
 AMVarManager::ListByDomain(const std::string &domain) const {
-  std::vector<VarInfo> out;
   if (!IsValidDomainName_(domain)) {
-    return out;
+    return {};
   }
   EnsureLoaded_();
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto domain_it = vars_by_domain_.find(domain);
-  if (domain_it == vars_by_domain_.end()) {
-    return out;
-  }
-  out.reserve(domain_it->second.size());
-  for (const auto &item : domain_it->second) {
-    out.push_back({domain, item.first, item.second});
-  }
-  std::sort(out.begin(), out.end(), [](const VarInfo &a, const VarInfo &b) {
-    return a.varname < b.varname;
-  });
-  return out;
+  return domain_service_.ListByDomain(domain);
 }
 
 /**
@@ -194,14 +159,7 @@ AMVarManager::ListByDomain(const std::string &domain) const {
  */
 std::vector<std::string> AMVarManager::ListDomains() const {
   EnsureLoaded_();
-  std::lock_guard<std::mutex> lock(mutex_);
-  std::vector<std::string> domains;
-  domains.reserve(vars_by_domain_.size());
-  for (const auto &item : vars_by_domain_) {
-    domains.push_back(item.first);
-  }
-  std::sort(domains.begin(), domains.end());
-  return domains;
+  return domain_service_.ListDomains();
 }
 
 /**
@@ -212,8 +170,7 @@ bool AMVarManager::HasDomain(const std::string &domain) const {
     return false;
   }
   EnsureLoaded_();
-  std::lock_guard<std::mutex> lock(mutex_);
-  return vars_by_domain_.find(domain) != vars_by_domain_.end();
+  return domain_service_.HasDomain(domain);
 }
 
 /**
@@ -225,12 +182,7 @@ bool AMVarManager::HasVar(const std::string &domain,
     return false;
   }
   EnsureLoaded_();
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto domain_it = vars_by_domain_.find(domain);
-  if (domain_it == vars_by_domain_.end()) {
-    return false;
-  }
-  return domain_it->second.find(name) != domain_it->second.end();
+  return domain_service_.HasVar(domain, name);
 }
 
 /**
@@ -247,13 +199,14 @@ ECM AMVarManager::SetVar(const VarInfo &info, bool create_domain) {
   if (!varsetkn::IsValidVarname(info.varname)) {
     return Err(EC::InvalidArg, "invalid variable name");
   }
+
   EnsureLoaded_();
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto domain_it = vars_by_domain_.find(info.domain);
-  if (domain_it == vars_by_domain_.end() && !create_domain) {
-    return Err(EC::InvalidArg, "domain not found");
+  ECM rcm = domain_service_.SetVar(info, create_domain);
+  if (rcm.first != EC::Success) {
+    return rcm;
   }
-  vars_by_domain_[info.domain][info.varname] = info.varvalue;
+
+  std::lock_guard<std::mutex> lock(mutex_);
   dirty_ = true;
   return Ok();
 }
@@ -266,17 +219,14 @@ ECM AMVarManager::DeleteVar(const std::string &domain,
   if (!IsValidDomainName_(domain) || !varsetkn::IsValidVarname(name)) {
     return Err(EC::InvalidArg, "invalid domain or variable name");
   }
+
   EnsureLoaded_();
+  ECM rcm = domain_service_.DeleteVar(domain, name);
+  if (rcm.first != EC::Success) {
+    return rcm;
+  }
+
   std::lock_guard<std::mutex> lock(mutex_);
-  auto domain_it = vars_by_domain_.find(domain);
-  if (domain_it == vars_by_domain_.end()) {
-    return Err(EC::InvalidArg, "domain not found");
-  }
-  auto var_it = domain_it->second.find(name);
-  if (var_it == domain_it->second.end()) {
-    return Err(EC::InvalidArg, "variable not found");
-  }
-  domain_it->second.erase(var_it);
   dirty_ = true;
   return Ok();
 }
@@ -289,23 +239,14 @@ ECM AMVarManager::DeleteVarAll(const std::string &name,
   if (!varsetkn::IsValidVarname(name)) {
     return Err(EC::InvalidArg, "invalid variable name");
   }
+
   EnsureLoaded_();
+  ECM rcm = domain_service_.DeleteVarAll(name, removed);
+  if (rcm.first != EC::Success) {
+    return rcm;
+  }
+
   std::lock_guard<std::mutex> lock(mutex_);
-  bool any_removed = false;
-  for (auto &domain_entry : vars_by_domain_) {
-    auto it = domain_entry.second.find(name);
-    if (it == domain_entry.second.end()) {
-      continue;
-    }
-    if (removed) {
-      removed->push_back({domain_entry.first, it->first, it->second});
-    }
-    domain_entry.second.erase(it);
-    any_removed = true;
-  }
-  if (!any_removed) {
-    return Err(EC::InvalidArg, "variable not found");
-  }
   dirty_ = true;
   return Ok();
 }
@@ -315,18 +256,7 @@ ECM AMVarManager::DeleteVarAll(const std::string &name,
  */
 std::vector<std::string> AMVarManager::ListNames() const {
   EnsureLoaded_();
-  std::lock_guard<std::mutex> lock(mutex_);
-  std::unordered_set<std::string> seen;
-  std::vector<std::string> names;
-  for (const auto &domain_entry : vars_by_domain_) {
-    for (const auto &item : domain_entry.second) {
-      if (seen.insert(item.first).second) {
-        names.push_back(item.first);
-      }
-    }
-  }
-  std::sort(names.begin(), names.end());
-  return names;
+  return domain_service_.ListNames();
 }
 
 /**
@@ -348,80 +278,7 @@ std::string AMVarManager::SubstitutePathLike(const std::string &input) const {
     return input;
   }
   EnsureLoaded_();
-  const std::string domain = CurrentDomain();
-  std::string output;
-  output.reserve(input.size());
-
-  std::lock_guard<std::mutex> lock(mutex_);
-  auto append_lookup = [&](const varsetkn::VarRef &ref,
-                           const std::string &fallback) {
-    if (ref.varname.empty()) {
-      output.append(fallback);
-      return;
-    }
-
-    auto append_from_domain = [&](const std::string &target_domain) -> bool {
-      auto domain_it = vars_by_domain_.find(target_domain);
-      if (domain_it == vars_by_domain_.end()) {
-        return false;
-      }
-      auto var_it = domain_it->second.find(ref.varname);
-      if (var_it == domain_it->second.end()) {
-        return false;
-      }
-      output.append(var_it->second);
-      return true;
-    };
-
-    if (ref.explicit_domain) {
-      if (append_from_domain(ref.domain)) {
-        return;
-      }
-      output.append(fallback);
-      return;
-    }
-
-    if (append_from_domain(domain)) {
-      return;
-    }
-    if (append_from_domain(varsetkn::kPublic)) {
-      return;
-    }
-    output.append(fallback);
-  };
-
-  for (size_t i = 0; i < input.size(); ++i) {
-    const char ch = input[i];
-    if (ch == '`' && i + 1 < input.size() && input[i + 1] == '$') {
-      // Preserve escaped '$' as literal and never expand.
-      output.push_back('$');
-      ++i;
-      continue;
-    }
-    if (ch != '$') {
-      output.push_back(ch);
-      continue;
-    }
-    if (i + 1 >= input.size()) {
-      output.push_back('$');
-      continue;
-    }
-
-    size_t ref_end = i;
-    varsetkn::VarRef ref{};
-    if (!varsetkn::ParseVarRefAt(input, i, input.size(), true, true, &ref_end,
-                                 &ref) ||
-        ref_end <= i) {
-      output.push_back('$');
-      continue;
-    }
-
-    const std::string token = input.substr(i, ref_end - i);
-    append_lookup(ref, token);
-    i = ref_end - 1;
-  }
-
-  return output;
+  return domain_service_.SubstitutePathLike(input, CurrentDomain());
 }
 
 /**
@@ -431,9 +288,8 @@ void AMVarManager::SubstitutePathLike(std::vector<std::string> *inputs) const {
   if (!inputs) {
     return;
   }
-  for (std::string &item : *inputs) {
-    item = SubstitutePathLike(item);
-  }
+  EnsureLoaded_();
+  domain_service_.SubstitutePathLike(inputs, CurrentDomain());
 }
 
 /**

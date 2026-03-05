@@ -1,5 +1,5 @@
 #pragma once
-#include "AMBase/DataClass.hpp"
+#include "foundation/DataClass.hpp"
 #include "AMCLI/CLIArg.hpp"
 #include <functional>
 #include <mutex>

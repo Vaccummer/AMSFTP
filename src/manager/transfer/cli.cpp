@@ -1,6 +1,7 @@
-#include "AMBase/DataClass.hpp"
-#include "AMBase/Path.hpp"
-#include "AMBase/tools/time.hpp"
+#include "foundation/DataClass.hpp"
+#include "foundation/Path.hpp"
+#include "foundation/tools/time.hpp"
+#include "domain/transfer/TransferCacheDomainService.hpp"
 #include "AMClient/IOCore.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Prompt.hpp"
@@ -13,6 +14,13 @@
 #include <unordered_set>
 
 namespace {
+/**
+ * @brief Return shared transfer-cache domain service instance.
+ */
+AMDomain::transfer::TransferCacheDomainService &TransferCacheService_() {
+  static AMDomain::transfer::TransferCacheDomainService service;
+  return service;
+}
 
 /**
  * @brief Print one transfer task entry.
@@ -187,8 +195,7 @@ void PrintInspectTask_(AMPromptManager &prompt,
 size_t
 AMTransferManager::SubmitTransferSet(const UserTransferSet &transfer_set) {
   std::lock_guard<std::mutex> lock(cache_mtx_);
-  cached_sets_.emplace_back(transfer_set);
-  return cached_sets_.size() - 1;
+  return TransferCacheService_().SubmitTransferSet(&cached_sets_, transfer_set);
 }
 
 /**
@@ -196,14 +203,9 @@ AMTransferManager::SubmitTransferSet(const UserTransferSet &transfer_set) {
  */
 std::vector<size_t> AMTransferManager::SubmitTransferSets(
     const std::vector<UserTransferSet> &transfer_sets) {
-  std::vector<size_t> ids;
-  ids.reserve(transfer_sets.size());
   std::lock_guard<std::mutex> lock(cache_mtx_);
-  for (const auto &set : transfer_sets) {
-    cached_sets_.emplace_back(set);
-    ids.push_back(cached_sets_.size() - 1);
-  }
-  return ids;
+  return TransferCacheService_().SubmitTransferSets(&cached_sets_,
+                                                    transfer_sets);
 }
 
 /**
@@ -211,37 +213,17 @@ std::vector<size_t> AMTransferManager::SubmitTransferSets(
  */
 ECM AMTransferManager::QueryTransferSet(size_t set_index,
                                         UserTransferSet *out_set) const {
-  if (!out_set) {
-    return {EC::InvalidArg, "Output reciever is nullptr"};
-  }
   std::lock_guard<std::mutex> lock(cache_mtx_);
-  if (set_index >= cached_sets_.size()) {
-    return {EC::IndexOutOfRange,
-            AMStr::fmt("Max is {}, but recieve {}", set_index,
-                       cached_sets_.size() - 1)};
-  }
-  const auto &entry = cached_sets_[set_index];
-  if (!entry.has_value()) {
-    return {EC::TaskNotFound,
-            AMStr::fmt("Index {} is already dleted", set_index)};
-  }
-  *out_set = *entry;
-  return {EC::Success, ""};
+  return TransferCacheService_().QueryTransferSet(cached_sets_, set_index,
+                                                  out_set);
 }
 
 /**
  * @brief List all cached transfer set IDs.
  */
 std::vector<size_t> AMTransferManager::ListTransferSetIds() const {
-  std::vector<size_t> indices;
   std::lock_guard<std::mutex> lock(cache_mtx_);
-  indices.reserve(cached_sets_.size());
-  for (size_t i = 0; i < cached_sets_.size(); ++i) {
-    if (cached_sets_[i].has_value()) {
-      indices.push_back(i);
-    }
-  }
-  return indices;
+  return TransferCacheService_().ListTransferSetIds(cached_sets_);
 }
 
 /**
@@ -325,26 +307,12 @@ void AMTransferManager::GetTaskCounts(size_t *pending_count,
  */
 size_t
 AMTransferManager::DeleteTransferSets(const std::vector<size_t> &set_indices) {
-  if (set_indices.empty()) {
-    return 0;
-  }
-  const std::vector<size_t> unique_indices =
-      AMStr::UniqueTargetsKeepOrder(set_indices);
-
-  size_t removed = 0;
   std::lock_guard<std::mutex> lock(cache_mtx_);
-  std::string msg = "";
-  for (size_t index : unique_indices) {
-    if (index >= cached_sets_.size()) {
-      msg = AMStr::fmt("Get index {}, but max is ", index, cached_sets_.size());
-      AMPromptManager::Instance().ErrorFormat(ECM{EC::IndexOutOfRange, msg});
-      continue;
-    } else if (!cached_sets_[index].has_value()) {
-      AMPromptManager::Instance().ErrorFormat(ECM{
-          EC::TaskNotFound, AMStr::fmt("Index {} is already deleted", index)});
-    }
-    cached_sets_[index].reset();
-    removed++;
+  std::vector<ECM> warnings;
+  const size_t removed = TransferCacheService_().DeleteTransferSets(
+      &cached_sets_, set_indices, &warnings);
+  for (const auto &warning : warnings) {
+    AMPromptManager::Instance().ErrorFormat(warning);
   }
   return removed;
 }
@@ -354,7 +322,7 @@ AMTransferManager::DeleteTransferSets(const std::vector<size_t> &set_indices) {
  */
 void AMTransferManager::ClearCachedTransferSets() {
   std::lock_guard<std::mutex> lock(cache_mtx_);
-  cached_sets_.clear();
+  TransferCacheService_().Clear(&cached_sets_);
 }
 
 /**
@@ -366,12 +334,7 @@ ECM AMTransferManager::SubmitCachedTransferSets(
   std::vector<UserTransferSet> transfer_sets;
   {
     std::lock_guard<std::mutex> lock(cache_mtx_);
-    transfer_sets.reserve(cached_sets_.size());
-    for (const auto &entry : cached_sets_) {
-      if (entry.has_value()) {
-        transfer_sets.push_back(*entry);
-      }
-    }
+    transfer_sets = TransferCacheService_().SnapshotValidSets(cached_sets_);
   }
 
   if (transfer_sets.empty()) {
@@ -473,12 +436,12 @@ ECM AMTransferManager::Thread(int num) {
   ECM rcm = {EC::Success, ""};
   if (num <= 0) {
     rcm = {EC::InvalidArg,
-           AMStr::fmt("ThreadNum must be positive, but recieve {}", num)};
+           AMStr::fmt("ThreadNum must be positive, but receive {}", num)};
     AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;
   } else if (num > max_threads) {
     rcm = {EC::InvalidArg,
-           AMStr::fmt("ThreadNum too large, max is {}, but recieve {}",
+           AMStr::fmt("ThreadNum too large, max is {}, but receive {}",
                       max_threads, num)};
     AMPromptManager::Instance().ErrorFormat(rcm);
     return rcm;

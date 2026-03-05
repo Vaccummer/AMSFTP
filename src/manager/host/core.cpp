@@ -1,6 +1,7 @@
-#include "AMBase/Path.hpp"
-#include "AMBase/tools/auth.hpp"
-#include "AMBase/tools/json.hpp"
+#include "foundation/Path.hpp"
+#include "foundation/tools/auth.hpp"
+#include "foundation/tools/json.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
@@ -27,6 +28,14 @@ std::string GetLocalUsername_() {
     local_user = "local";
   }
   return local_user;
+}
+
+/**
+ * @brief Return shared host domain service instance.
+ */
+AMDomain::host::HostDomainService &HostDomainService_() {
+  static AMDomain::host::HostDomainService service;
+  return service;
 }
 
 /**
@@ -187,14 +196,6 @@ std::string DefaultUsernameForProtocol_(ClientProtocol protocol) {
 }
 
 /**
- * @brief Return whether the input is a local-loopback hostname.
- */
-bool IsLocalHostname_(const std::string &hostname) {
-  const std::string v = AMStr::lowercase(AMStr::Strip(hostname));
-  return v == "localhost" || v == "127.0.0.1" || v == "::1";
-}
-
-/**
  * @brief Return whether one hostname already exists in configured host entries.
  */
 bool HostnameExistsInConfig_(const std::string &hostname) {
@@ -219,184 +220,47 @@ bool HostnameExistsInConfig_(const std::string &hostname) {
   }
   return false;
 }
-} // namespace
 
-namespace configkn {
 /**
- * @brief Validate one host attribute value.
+ * @brief Bind manager-side hostname existence checker into domain validator.
  */
-bool ValidateHostAttrValue(HostAttr attr, const std::string &value,
-                           std::string *normalized, std::string *error_msg,
-                           bool allow_exists_hostname,
-                           bool allow_local_hostname, EC *code) {
-  auto fail = [&error_msg, &code](EC ec, const std::string &msg) -> bool {
-    if (code) {
-      *code = ec;
-    }
-    if (error_msg) {
-      *error_msg = msg;
-    }
-    return false;
-  };
-
-  auto set_norm = [&normalized](const std::string &v) {
-    if (normalized) {
-      *normalized = v;
-    }
-  };
-
-  if (code) {
-    *code = EC::Success;
-  }
-
-  switch (attr) {
-  case HostAttr::Nickname: {
-    const std::string v = AMStr::Strip(value);
-    if (!ValidateNickname(v)) {
-      return fail(EC::InvalidArg, "Nickname must match \\[A-Za-z0-9_-]+");
-    }
-    set_norm(v);
-    return true;
-  }
-  case HostAttr::Hostname: {
-    const std::string v = AMStr::Strip(value);
-    if (v.empty()) {
-      return fail(EC::InvalidArg, "Hostname cannot be empty");
-    }
-    if (!allow_local_hostname && IsLocalHostname_(v)) {
-      return fail(EC::InvalidArg, "Local hostname is not allowed");
-    }
-    if (!allow_exists_hostname && HostnameExistsInConfig_(v)) {
-      return fail(EC::KeyAlreadyExists, "Hostname already exists");
-    }
-    set_norm(v);
-    return true;
-  }
-  case HostAttr::Username: {
-    const std::string v = AMStr::Strip(value);
-    if (v.empty()) {
-      return fail(EC::InvalidArg, "Username cannot be empty");
-    }
-    set_norm(v);
-    return true;
-  }
-  case HostAttr::Port: {
-    const std::string v = AMStr::Strip(value);
-    int64_t parsed = 0;
-    if (!AMJson::StrValueParse(v, &parsed) || parsed <= 0 || parsed > 65535) {
-      return fail(EC::InvalidArg,
-                  "Port must be an integer between 1 and 65535");
-    }
-    set_norm(std::to_string(parsed));
-    return true;
-  }
-  case HostAttr::Protocol: {
-    const std::string v = AMStr::lowercase(AMStr::Strip(value));
-    if (v == "sftp" || v == "ftp" || v == "local") {
-      set_norm(v);
-      return true;
-    }
-    return fail(EC::InvalidArg, "Protocol must be sftp, ftp, or local");
-  }
-  case HostAttr::BufferSize: {
-    const std::string v = AMStr::Strip(value);
-    int64_t parsed = 0;
-    if (!AMJson::StrValueParse(v, &parsed) || parsed <= 0) {
-      return fail(EC::InvalidArg, "Buffer size must be a positive integer");
-    }
-    set_norm(std::to_string(parsed));
-    return true;
-  }
-  case HostAttr::Compression: {
-    const std::string v = AMStr::Strip(value);
-    bool parsed = false;
-    if (!AMJson::StrValueParse(v, &parsed)) {
-      return fail(EC::InvalidArg, "Compression must be true or false");
-    }
-    set_norm(parsed ? "true" : "false");
-    return true;
-  }
-  case HostAttr::CmdPrefix:
-    set_norm(value);
-    return true;
-  case HostAttr::WrapCmd: {
-    const std::string v = AMStr::Strip(value);
-    bool parsed = false;
-    if (!AMJson::StrValueParse(v, &parsed)) {
-      return fail(EC::InvalidArg, "wrap_cmd must be true or false");
-    }
-    set_norm(parsed ? "true" : "false");
-    return true;
-  }
-  case HostAttr::Password:
-  case HostAttr::TrashDir:
-  case HostAttr::LoginDir:
-  case HostAttr::Keyfile:
-    set_norm(value);
-    return true;
-  default:
-    return fail(EC::InvalidArg, "unsupported host attribute");
-  }
-}
-} // namespace configkn
+const bool kBindHostnameExistsChecker_ = []() {
+  configkn::SetHostnameExistsChecker(HostnameExistsInConfig_);
+  return true;
+}();
+} // namespace
 
 ECM AMHostManager::Save() {
   return AMConfigManager::Instance().Dump(DocumentKind::Config, "", true);
 }
 
 void AMHostManager::CollectHosts_() const {
-  host_configs.clear();
   Json hosts_json;
   if (!AMConfigManager::Instance().ResolveArg(DocumentKind::Config, {configkn::hosts},
                           &hosts_json)) {
+    host_configs.clear();
     return;
   }
-  if (!hosts_json.is_object()) {
-    return;
+
+  HostConfig local_fallback;
+  auto [local_rcm, local_cfg] = const_cast<AMHostManager *>(this)->GetLocalConfig();
+  if (local_rcm.first == EC::Success && local_cfg.IsValid()) {
+    local_fallback = local_cfg;
   }
-  for (auto it = hosts_json.begin(); it != hosts_json.end(); ++it) {
-    const std::string nickname = it.key();
-    const std::string lowered = AMStr::lowercase(AMStr::Strip(nickname));
-    const bool is_local = (lowered == "local");
-    const std::string key = is_local ? "local" : nickname;
-    auto cfg = HostConfig(nickname, it.value());
-    if (is_local) {
-      if (cfg.IsValid()) {
-        cfg.request.username = GetLocalUsername_();
-        host_configs[key] = cfg;
-      } else {
-        // Exempt local profile from strict host-json completeness checks:
-        // synthesize a valid local config with runtime defaults.
-        auto [rcm, local_cfg] =
-            const_cast<AMHostManager *>(this)->GetLocalConfig();
-        if (rcm.first == EC::Success && local_cfg.IsValid()) {
-          host_configs[key] = local_cfg;
-        }
-      }
-      continue;
-    }
-    if (cfg.IsValid()) {
-      host_configs[key] = cfg;
-    }
-  }
+
+  host_configs = HostDomainService_().CollectHosts(hosts_json, local_fallback,
+                                                   GetLocalUsername_());
 }
 
 std::pair<ECM, HostConfig>
 AMHostManager::GetClientConfig(const std::string &nickname) {
-  if (!HostExists(nickname)) {
-    return {Err(EC::HostConfigNotFound,
-                AMStr::fmt("host config not found: {}", nickname)),
-            {}};
-  }
-  return {Ok(), host_configs[nickname]};
+  return HostDomainService_().GetClientConfig(host_configs, nickname);
 }
 
 /**
  * @brief Get local client config from config storage or use defaults.
  */
 std::pair<ECM, HostConfig> AMHostManager::GetLocalConfig() {
-  HostConfig result;
-
   const std::string local_user = GetLocalUsername_();
   const std::string fallback_home = AMFS::HomePath();
 
@@ -407,55 +271,21 @@ std::pair<ECM, HostConfig> AMHostManager::GetLocalConfig() {
   const std::string fallback_trash = AMPathStr::join(root_dir, "trash");
 
   Json host_json;
-  if (AMConfigManager::Instance().ResolveArg(DocumentKind::Config, {configkn::hosts, "local"},
-                         &host_json) &&
+  Json *local_ptr = nullptr;
+  if (AMConfigManager::Instance().ResolveArg(
+          DocumentKind::Config, {configkn::hosts, "local"}, &host_json) &&
       host_json.is_object()) {
-    HostConfig stored("local", host_json);
-    if (stored.IsValid()) {
-      result = stored;
-    }
+    local_ptr = &host_json;
   }
 
-  if (result.request.nickname.empty()) {
-    result.request.nickname = "local";
-  }
-  if (result.request.hostname.empty()) {
-    result.request.hostname = "localhost";
-  }
-  if (result.request.username.empty()) {
-    result.request.username = local_user;
-  }
-  if (result.request.port <= 0 || result.request.port > 65535) {
-    result.request.port = configkn::DefaultSFTPPort;
-  }
-
-  result.request.protocol = ClientProtocol::LOCAL;
-
-  if (result.request.buffer_size <= 0) {
-    result.request.buffer_size = 64 * AMMB;
-  } else {
-    result.request.buffer_size =
-        std::min(std::max(result.request.buffer_size,
-                          static_cast<int64_t>(AMMinBufferSize)),
-                 static_cast<int64_t>(AMMaxBufferSize));
-  }
-
-  if (result.metadata.login_dir.empty()) {
-    result.metadata.login_dir = fallback_home;
-  }
-  if (result.request.trash_dir.empty()) {
-    result.request.trash_dir = fallback_trash;
-  }
-
-  return {Ok(), result};
+  return HostDomainService_().BuildLocalConfig(local_ptr, local_user,
+                                               fallback_home, fallback_trash);
 }
 
 ECM AMHostManager::UpsertHost(const HostConfig &entry, bool dump_now) {
-  if (!entry.IsValid()) {
-    return Err(EC::InvalidArg, "invalid host config");
-  }
-  if (!configkn::ValidateNickname(entry.request.nickname)) {
-    return Err(EC::InvalidArg, "invalid nickname");
+  ECM validate_rcm = HostDomainService_().ValidateHostUpsert(entry);
+  if (validate_rcm.first != EC::Success) {
+    return validate_rcm;
   }
   ECM rcm = AddHost_(entry.request.nickname, entry);
   if (rcm.first != EC::Success) {
@@ -468,29 +298,21 @@ ECM AMHostManager::UpsertHost(const HostConfig &entry, bool dump_now) {
 }
 
 ECM AMHostManager::FindKnownHost(KnownHostQuery &query) const {
-  if (!query.IsValid()) {
-    return ECM{EC::InvalidArg, "invalid query args"};
-  }
   std::string fingerprint = "";
   if (!AMConfigManager::Instance().ResolveArg(DocumentKind::KnownHosts, query.GetPath(),
                           &fingerprint)) {
     return ECM{EC::HostConfigNotFound,
                "fingerprint not found for given host query"};
   }
-  if (fingerprint.empty()) {
-    return ECM{EC::InvalidArg, "fingerprint is found but empty"};
-  }
-  query.SetFingerprint(fingerprint);
-  return Ok();
+  return HostDomainService_().ResolveKnownHostQuery(&query, fingerprint);
 }
 
 ECM AMHostManager::UpsertKnownHost(const KnownHostQuery &query, bool dump_now) {
-  if (!query.IsValid()) {
-    return Err(EC::InvalidArg, "invalid known-host query");
-  }
-  const std::string fingerprint = AMStr::Strip(query.GetFingerprint());
-  if (fingerprint.empty()) {
-    return Err(EC::InvalidArg, "empty fingerprint");
+  std::string fingerprint;
+  ECM validate_rcm =
+      HostDomainService_().ValidateKnownHostUpsert(query, &fingerprint);
+  if (validate_rcm.first != EC::Success) {
+    return validate_rcm;
   }
   if (!AMConfigManager::Instance().SetArg(DocumentKind::KnownHosts, query.GetPath(), fingerprint)) {
     return Err(EC::CommonFailure, "failed to write known_hosts data");
@@ -502,20 +324,11 @@ ECM AMHostManager::UpsertKnownHost(const KnownHostQuery &query, bool dump_now) {
 }
 
 bool AMHostManager::HostExists(const std::string &nickname) const {
-  if (nickname.empty()) {
-    return false;
-  }
-  return host_configs.find(nickname) != host_configs.end();
+  return HostDomainService_().HostExists(host_configs, nickname);
 }
 
 std::vector<std::string> AMHostManager::ListNames() const {
-  std::vector<std::string> names;
-  names.reserve(host_configs.size());
-  for (const auto &pair : host_configs) {
-    names.push_back(pair.first);
-  }
-  std::sort(names.begin(), names.end());
-  return names;
+  return HostDomainService_().ListNames(host_configs);
 }
 
 ECM AMHostManager::PromptAddFields_(const std::string &nickname,
@@ -1174,7 +987,11 @@ ECM AMHostManager::PrintHost_(const std::string &nickname,
 
 ECM AMHostManager::AddHost_(const std::string &nickname,
                             const HostConfig &entry) {
-  host_configs[nickname] = entry;
+  ECM memory_rcm =
+      HostDomainService_().UpsertHostInMemory(&host_configs, nickname, entry);
+  if (memory_rcm.first != EC::Success) {
+    return memory_rcm;
+  }
   auto json_entry = entry.GetJson();
   if (!AMConfigManager::Instance().SetArg(DocumentKind::Config, {configkn::hosts, nickname},
                       json_entry)) {
@@ -1185,11 +1002,9 @@ ECM AMHostManager::AddHost_(const std::string &nickname,
 
 ECM AMHostManager::RemoveHost_(const std::string &nickname) {
   CollectHosts_();
-  if (nickname.empty()) {
-    return Err(EC::InvalidArg, "empty host name");
-  }
-  if (host_configs.erase(nickname) == 0) {
-    return Err(EC::HostConfigNotFound, "host config not found");
+  ECM memory_rcm = HostDomainService_().RemoveHostInMemory(&host_configs, nickname);
+  if (memory_rcm.first != EC::Success) {
+    return memory_rcm;
   }
   if (!AMConfigManager::Instance().DelArg(DocumentKind::Config, {configkn::hosts, nickname})) {
     return Err(EC::CommonFailure, "failed to remove config in memory data");

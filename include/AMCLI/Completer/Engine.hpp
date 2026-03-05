@@ -1,6 +1,6 @@
 #pragma once
 #include "AMCLI/TokenTypeAnalyzer.hpp"
-#include <AMBase/Enum.hpp>
+#include <foundation/Enum.hpp>
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
