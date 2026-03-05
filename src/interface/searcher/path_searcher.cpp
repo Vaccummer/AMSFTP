@@ -1,14 +1,12 @@
 #include "foundation/tools/time.hpp"
-#include "AMCLI/Completer/Searcher.hpp"
-#include "AMCLI/Completer/SearcherCommon.hpp"
-#include "AMCLI/InteractiveLoop.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/FileSystem.hpp"
-#include "AMManager/Prompt.hpp"
-#include "AMManager/Var.hpp"
+#include "interface/Completer/Searcher.hpp"
+#include "interface/Completer/SearcherCommon.hpp"
+#include "interface/ApplicationAdapters.hpp"
+#include "interface/InteractiveLoop.hpp"
 #include <algorithm>
 
 using namespace AMSearcherDetail;
+namespace Runtime = AMInterface::ApplicationAdapters::Runtime;
 
 /**
  * @brief Collect path candidates or async path requests.
@@ -32,17 +30,16 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
-  const AMPromptProfileArgs &profile =
-      AMPromptManager::Instance().ResolvePromptProfileArgs(path.nickname);
+  const auto profile = Runtime::ResolvePromptPathOptions(path.nickname);
   const bool hint_request = (ctx.source == AMCompletionSource::InlineHint);
-  if (hint_request && !profile.inline_hint.path.enable) {
+  if (hint_request && !profile.inline_hint_enable) {
     return result;
   }
   const size_t configured_timeout = hint_request
-                                        ? profile.inline_hint.path.timeout_ms
-                                        : profile.complete.path.timeout_ms;
+                                        ? profile.inline_hint_timeout_ms
+                                        : profile.complete_timeout_ms;
   const int timeout_ms = ToClientTimeoutMs(configured_timeout, 0);
-  const bool use_async = hint_request ? false : profile.complete.path.use_async;
+  const bool use_async = hint_request ? false : profile.complete_use_async;
 
   CacheKey key{path.nickname, path.dir_abs};
   std::vector<PathInfo> listed;
@@ -56,10 +53,9 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   if (!use_async) {
-    std::shared_ptr<BaseClient> client =
-        path.remote
-            ? AMClientManager::Instance().Clients().GetHost(path.nickname)
-            : AMClientManager::Instance().LocalClient();
+    Runtime::ClientHandle client =
+        path.remote ? Runtime::GetHostClient(path.nickname)
+                    : Runtime::LocalClient();
     if (!client) {
       return result;
     }
@@ -96,10 +92,9 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       return false;
     }
 
-    std::shared_ptr<BaseClient> client =
-        path.remote
-            ? AMClientManager::Instance().Clients().GetHost(path.nickname)
-            : AMClientManager::Instance().LocalClient();
+    Runtime::ClientHandle client =
+        path.remote ? Runtime::GetHostClient(path.nickname)
+                    : Runtime::LocalClient();
     if (!client) {
       return false;
     }
@@ -271,7 +266,7 @@ AMPathSearchEngine::FormatPathDisplay_(const PathInfo &info,
     return result;
   };
 
-  const std::string styled = AMFileSystem::Instance().StylePath(info, name);
+  const std::string styled = Runtime::StylePath(info, name);
   return wrap_pre(styled, name);
 }
 
@@ -286,7 +281,7 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
     return path;
   }
 
-  const auto current_client = AMClientManager::Instance().CurrentClient();
+  const auto current_client = Runtime::CurrentClient();
   const bool current_remote =
       current_client && current_client->GetProtocol() != ClientProtocol::LOCAL;
 
@@ -317,7 +312,7 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
   }
 
   const std::string path_part_resolved =
-      VarCLISet::Instance().SubstitutePathLike(path_part_raw);
+      Runtime::SubstitutePathLike(path_part_raw);
   if (header.empty() && !force_path && !IsPathLikeText(path_part_resolved)) {
     return path;
   }
@@ -351,14 +346,13 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
   }
   path.base = path.header + path.dir_raw;
 
-  std::shared_ptr<BaseClient> client =
-      path.remote ? AMClientManager::Instance().Clients().GetHost(path.nickname)
-                  : AMClientManager::Instance().LocalClient();
+  Runtime::ClientHandle client =
+      path.remote ? Runtime::GetHostClient(path.nickname)
+                  : Runtime::LocalClient();
   if (!client) {
     return path;
   }
-  path.dir_abs =
-      AMClientManager::Instance().BuildPath(client, resolved_dir_raw);
+  path.dir_abs = Runtime::BuildPath(client, resolved_dir_raw);
   path.valid = true;
   return path;
 }

@@ -29,12 +29,14 @@ endif()
 # ========= Source Files =========
 file(GLOB_RECURSE AMSFTP_SOURCES CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/main.cpp"
-  "${PROJECT_SOURCE_DIR}/src/cli/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/cli/completer/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/cli/searcher/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/interface/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/interface/completer/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/interface/searcher/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/base/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/domain/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/domain/*/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/application/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/application/*/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/infrastructure/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/infrastructure/config/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/manager/*.cpp"

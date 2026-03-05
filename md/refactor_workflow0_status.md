@@ -31,18 +31,18 @@ every refactor workflow.
 | Module Scope | Current Status | Target Layer | Owner Workflow | Notes |
 |---|---|---|---|---|
 | `include/AMBase/*` | bridged | foundation | WF-1/WF-7 | Strict compatibility forwarders (`pragma once` + canonical `foundation/*` include only) |
-| `include/AMManager/*` | bridged | domain + infrastructure | WF-2/WF-3/WF-7 | `Config/Logger/SignalMonitor` now act as compatibility singleton wrappers over `infrastructure/*`; signal wrapper uses explicit compatibility token binding instead of deprecated global re-bind; remaining headers still legacy |
-| `include/AMCLI/*` | legacy | interface | WF-5/WF-7 | CLI contracts/loop/render; cutover tracked by WF-7 |
+| `include/AMManager/*` | bridged | domain + infrastructure + interface | WF-2/WF-3/WF-5/WF-7 | `Config/Logger/SignalMonitor` compatibility wrappers over `infrastructure/*`; `Prompt.hpp` compatibility forwarder to `interface/Prompt.hpp`; remaining business headers still legacy |
+| `include/AMCLI/*` | bridged | interface | WF-5/WF-7 | Strict compatibility forwarders to `include/interface/*` canonical headers |
 | `include/AMClient/*` | legacy | infrastructure + domain ports | WF-2/WF-3/WF-7 | Adapter + domain boundary cleanup, compatibility tracked by WF-7 |
 | `src/base/*` | bridged | foundation | WF-1 | Utility implementations remain in legacy path but include `foundation/*` APIs |
 | `src/manager/*` | legacy | domain + infrastructure | WF-2/WF-3 | Refactor by business vs adapter concerns |
-| `src/cli/*` | legacy | interface | WF-5 | Presentation/input/completion layer |
+| `src/cli/*` | bridged | interface | WF-5 | CLI implementation has been relocated to `src/interface/*`; path retained as compatibility/transition scope |
 | `src/application/*` | legacy | application | WF-4 | Keep orchestration-only behavior |
 | `include/foundation/*` | migrated | foundation | WF-1 | Canonical shared base; no `AMBase/*` includes; singleton accessor now transitional/deprecated |
 | `include/infrastructure/*` | bridged | infrastructure | WF-2 | `Config/Logger/SignalMonitor` adapters migrated; infra API switched to explicit non-singleton classes with binding APIs; logger/signal constructors are publicly constructible for DI; config friend coupling to host removed |
 | `include/domain/*` | bridged | domain | WF-3 | Placeholder root created in WF-0 |
 | `include/application/*` | bridged | application | WF-4 | Placeholder root created in WF-0 |
-| `include/interface/*` | bridged | interface | WF-5 | Placeholder root created in WF-0 |
+| `include/interface/*` | bridged | interface | WF-5 | Canonical CLI contract headers published; header-level `AMManager/*` includes removed; interface runtime/prompt guard sources are manager-header clean; manager-coupled compatibility implementations are isolated in `src/manager/*Compat.cpp` and other legacy implementation paths |
 | `include/bootstrap/*` | bridged | bootstrap | WF-6 | Placeholder root created in WF-0 |
 
 ## Enforcement Notes

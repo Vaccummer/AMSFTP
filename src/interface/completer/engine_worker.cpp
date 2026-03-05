@@ -1,7 +1,7 @@
-#include "AMCLI/CommandTree.hpp"
-#include "AMCLI/Completer/Engine.hpp"
-#include "AMCLI/TokenTypeAnalyzer.hpp"
-#include "AMManager/Var.hpp"
+#include "interface/CommandTree.hpp"
+#include "interface/Completer/Engine.hpp"
+#include "interface/TokenTypeAnalyzer.hpp"
+#include "domain/var/VarModel.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
 #include <cctype>
@@ -1013,3 +1013,4 @@ void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
                            delete_before, delete_after);
   }
 }
+

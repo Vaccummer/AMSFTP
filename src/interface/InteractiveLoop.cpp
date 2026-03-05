@@ -1,10 +1,10 @@
-#include "AMCLI/InteractiveLoop.hpp"
+#include "interface/InteractiveLoop.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/time.hpp"
-#include "AMCLI/CLIBind.hpp"
-#include "AMCLI/CommandPreprocess.hpp"
-#include "AMCLI/Completer/Proxy.hpp"
+#include "interface/CLIBind.hpp"
+#include "interface/CommandPreprocess.hpp"
+#include "interface/Completer/Proxy.hpp"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -1750,3 +1750,4 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
   }
   return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;
 }
+

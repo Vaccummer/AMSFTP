@@ -1,6 +1,6 @@
-#include "AMCLI/Completer/Proxy.hpp"
-#include "AMCLI/Completer/Engine.hpp"
-// #include "AMCLI/Completer/Searcher.hpp"
+#include "interface/Completer/Proxy.hpp"
+#include "interface/Completer/Engine.hpp"
+// #include "interface/Completer/Searcher.hpp"
 #include "Isocline/isocline.h"
 #include <atomic>
 #include <string>
@@ -91,3 +91,4 @@ void AMCompleter::IsoclineCompleter(ic_completion_env_t *cenv,
   self->engine_->HandleCompletion(cenv, std::string(input),
                                   static_cast<size_t>(cursor), source);
 }
+
