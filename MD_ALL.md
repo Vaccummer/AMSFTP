@@ -1727,3 +1727,30 @@ add a function in Filesystem ShellRun(str cmd, and other args you think necessar
   + prefix'cmd' (if wrap)
   + prefixcmd
 + call ConductCmd
+There are many layer responsibility confusion and namespace confusion in this project
+
+# foundation layer
+
++ include\foundation\client\ClientPort.hpp
+
+using AMApplication::ClientPort namespace but is in foundation layer itself
+
+and clientport should be placed in domain layer
+
++ include\foundation\host\HostModel.hpp include\foundation\host\KnownHostQuery.hpp
+
+refer  to AMDomain::host (domain namespace)
+
+KnownHostQuery and KnownHostEntry almost same, use one is ok
+
++ include\foundation\var\VarModel.hpp
+
+refer to AMDomain::var
+
+# Infrastrue layer
+
+OK
+
+# Domain layer
+
+all managers in domain layer not in AMDomain namespace

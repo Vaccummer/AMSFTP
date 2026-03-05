@@ -172,6 +172,18 @@ if (AMSFTP_ENABLE_LAYER_CHECK)
       VERBATIM
     )
 
+    add_custom_target(check_wf7_cutover_manager
+      COMMAND "${POWERSHELL_EXECUTABLE}"
+              -NoProfile
+              -ExecutionPolicy Bypass
+              -File "${PROJECT_SOURCE_DIR}/tools/check_wf7_cutover.ps1"
+              -RepoRoot "${PROJECT_SOURCE_DIR}"
+              -IncludeManagerCompat
+      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+      COMMENT "Run WF-7 manager-compat cutover check (fail on AMManager/* includes)"
+      VERBATIM
+    )
+
     add_custom_target(report_legacy_includes
       COMMAND "${POWERSHELL_EXECUTABLE}"
               -NoProfile
@@ -184,6 +196,6 @@ if (AMSFTP_ENABLE_LAYER_CHECK)
     )
   else()
     message(WARNING
-      "PowerShell executable not found; check_layers/check_wf7_cutover/report_legacy_includes targets are unavailable.")
+      "PowerShell executable not found; check_layers/check_wf7_cutover/check_wf7_cutover_strict/check_wf7_cutover_manager/report_legacy_includes targets are unavailable.")
   endif()
 endif()
