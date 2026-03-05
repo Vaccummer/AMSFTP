@@ -5,3 +5,16 @@ Use-cases and orchestration that coordinate domain services and ports.
 Current headers:
 
 - `application/config/ConfigWorkflows.hpp`
+- `application/config/HostProfileWorkflows.hpp`
+- `application/client/ClientSessionWorkflows.hpp`
+- `application/client/ClientPort.hpp`
+- `application/client/FileCommandWorkflows.hpp`
+- `application/transfer/TransferWorkflows.hpp`
+- `application/transfer/TaskWorkflows.hpp`
+
+WF4 notes:
+
+- Application workflows are written against explicit ports (no singleton access).
+- Interface-layer command handlers should map parser/runtime state into these
+  workflow payloads.
+- Bootstrap/WF6 is responsible for wiring concrete adapters to these ports.

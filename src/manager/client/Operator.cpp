@@ -1,10 +1,11 @@
-#include "AMClient/Base.hpp"
-#include "AMClient/IOCore.hpp"
+#include "infrastructure/client/common/Base.hpp"
+#include "infrastructure/client/runtime/IOCore.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
 #include "AMManager/Logger.hpp"
-#include "AMManager/Prompt.hpp"
+#include "bootstrap/ClientFactory.hpp"
+#include "interface/Prompt.hpp"
 #include <chrono>
 #include <filesystem>
 #include <iostream>
@@ -36,7 +37,12 @@ inline bool IsLocalNickname_(const std::string &nickname) {
   return lowered.empty() || lowered == "local";
 }
 
-inline void InitClientWorkdir_(const std::shared_ptr<BaseClient> &client) {
+inline ClientMaintainer::DisconnectCallback
+BuildMaintainerDisconnectCallback_(const Operator::DisconnectCallback &cb) {
+  return cb;
+}
+
+inline void InitClientWorkdir_(const ClientHandle &client) {
   if (!client) {
     return;
   }
@@ -49,7 +55,7 @@ inline void InitClientWorkdir_(const std::shared_ptr<BaseClient> &client) {
 }
 
 inline void ApplyLoginDir_(AMHostManager &hostm, const std::string &nickname,
-                           const std::shared_ptr<BaseClient> &client,
+                           const ClientHandle &client,
                            const std::string &login_dir, amf flag) {
   if (!client) {
     return;
@@ -93,9 +99,11 @@ ECM Manager::Init() {
   }
   const int heartbeat_timeout_ms = ResolveHeartbeatTimeoutMsFromSettings_();
   clients_ = std::make_shared<ClientMaintainer>(
-      60, heartbeat_timeout_ms, disconnect_cb_, local_client_base_);
-  clients_->disconnect_cb = disconnect_cb_;
-  clients_->is_disconnect_cb = static_cast<bool>(disconnect_cb_);
+      60, heartbeat_timeout_ms,
+      BuildMaintainerDisconnectCallback_(disconnect_cb_),
+      local_client_base_);
+  clients_->SetDisconnectCallback(
+      BuildMaintainerDisconnectCallback_(disconnect_cb_));
   current_client_ = local_client_base_;
   return Ok();
 }
@@ -107,8 +115,8 @@ void Operator::SetPasswordCallback(AuthCallback cb) {
 void Operator::SetDisconnectCallback(DisconnectCallback cb) {
   disconnect_cb_ = cb ? std::move(cb) : BuiltinDisconnectCallback_();
   if (clients_) {
-    clients_->disconnect_cb = disconnect_cb_;
-    clients_->is_disconnect_cb = static_cast<bool>(disconnect_cb_);
+    clients_->SetDisconnectCallback(
+        BuildMaintainerDisconnectCallback_(disconnect_cb_));
   }
 }
 
@@ -116,27 +124,27 @@ ClientMaintainer &Operator::Clients() {
   if (!clients_) {
     const int heartbeat_timeout_ms = ResolveHeartbeatTimeoutMsFromSettings_();
     clients_ = std::make_shared<ClientMaintainer>(
-        60, heartbeat_timeout_ms, disconnect_cb_, LocalClient());
+        60, heartbeat_timeout_ms,
+        BuildMaintainerDisconnectCallback_(disconnect_cb_),
+        LocalClient());
   }
   return *clients_;
 }
 
 std::vector<std::string> Operator::GetClientNames() {
-  return clients_ ? clients_->get_nicknames() : std::vector<std::string>{};
+  return clients_ ? clients_->GetNicknames() : std::vector<std::string>{};
 }
 
-std::vector<std::shared_ptr<BaseClient>> Operator::GetClients() {
-  return clients_ ? clients_->get_clients()
-                  : std::vector<std::shared_ptr<BaseClient>>{};
+std::vector<ClientHandle> Operator::GetClients() {
+  return clients_ ? clients_->GetClients() : std::vector<ClientHandle>{};
 }
 
 /**
  * @brief Return one managed client by nickname.
  */
-std::shared_ptr<BaseClient>
-Operator::GetClient(const std::string &nickname) const {
+ClientHandle Operator::GetClient(const std::string &nickname) const {
   if (clients_) {
-    return clients_->get_client(nickname);
+    return clients_->GetClient(nickname);
   }
   if (IsLocalNickname_(nickname)) {
     return LocalClient();
@@ -144,7 +152,7 @@ Operator::GetClient(const std::string &nickname) const {
   return nullptr;
 }
 
-std::shared_ptr<BaseClient> Operator::LocalClient() const {
+ClientHandle Operator::LocalClient() const {
   return local_client_base_;
 }
 
@@ -152,7 +160,7 @@ std::string Operator::CurrentNickname() const {
   return current_client_->GetNickname();
 }
 
-std::shared_ptr<BaseClient> Operator::CurrentClient() const {
+ClientHandle Operator::CurrentClient() const {
   if (current_client_) {
     return current_client_;
   } else {
@@ -160,21 +168,21 @@ std::shared_ptr<BaseClient> Operator::CurrentClient() const {
   }
 }
 
-void Operator::SetCurrentClient(const std::shared_ptr<BaseClient> &client) {
+void Operator::SetCurrentClient(const ClientHandle &client) {
   current_client_ = client;
 }
 
 // void Operator::ConfigureState(
 //     const std::shared_ptr<ClientMaintainer> &clients,
-//     const std::shared_ptr<BaseClient> &local_client_base, ssize_t trace_num)
+//     const ClientHandle &local_client_base, ssize_t trace_num)
 //     {
 //   clients_ = clients;
 //   local_client_base_ = local_client_base;
 //   current_client_ = local_client_base;
 //   trace_num_ = trace_num;
 //   if (clients_) {
-//     clients_->disconnect_cb = disconnect_cb_;
-//     clients_->is_disconnect_cb = static_cast<bool>(disconnect_cb_);
+//     clients_->SetDisconnectCallback(
+//         BuildMaintainerDisconnectCallback_(disconnect_cb_));
 //   }
 // }
 
@@ -201,7 +209,7 @@ void Operator::RequestSpinnerStop() {
   }
 }
 
-std::pair<ECM, std::shared_ptr<BaseClient>>
+std::pair<ECM, ClientHandle>
 Operator::AddClient(const std::string &nickname,
                     std::shared_ptr<ClientMaintainer> maintainer, bool force,
                     bool quiet, TraceCallback trace_cb, amf interrupt_flag) {
@@ -248,8 +256,9 @@ Operator::AddClient(const std::string &nickname,
   std::atomic<bool> spinner_running(false);
   ResetSpinnerState();
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, &spinner_running);
-  auto base_client = CreateClient(client_config.request, 10, std::move(trace_cb),
-                                  keys_result.second, std::move(auth_cb));
+  auto base_client = AMBootstrap::CreateClient(
+      client_config.request, 10, std::move(trace_cb), keys_result.second,
+      std::move(auth_cb));
   if (!base_client) {
     return {Err(EC::OperationUnsupported, "Unsupported protocol"), nullptr};
   }
@@ -297,7 +306,7 @@ Operator::AddClient(const std::string &nickname,
   return {Ok(), base_client};
 }
 
-std::pair<ECM, std::shared_ptr<BaseClient>>
+std::pair<ECM, ClientHandle>
 Operator::AddClient(const std::string &nickname, bool force, bool quiet,
                     TraceCallback trace_cb, amf interrupt_flag,
                     bool register_to_manager) {
@@ -327,9 +336,9 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
   std::atomic<bool> spinner_running(false);
   ResetSpinnerState();
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, &spinner_running);
-  auto base_client = CreateClient(client_config.second.request, 10,
-                                  std::move(trace_cb), keys_result.second,
-                                  std::move(auth_cb));
+  auto base_client = AMBootstrap::CreateClient(
+      client_config.second.request, 10, std::move(trace_cb),
+      keys_result.second, std::move(auth_cb));
   if (!base_client) {
     return {Err(EC::OperationUnsupported, "Unsupported protocol"), nullptr};
   }
@@ -377,7 +386,7 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
   return {Ok(), base_client};
 }
 
-std::pair<ECM, std::shared_ptr<BaseClient>>
+std::pair<ECM, ClientHandle>
 Operator::Connect(const std::string &nickname, const std::string &hostname,
                   const std::string &username, ClientProtocol protocol,
                   int64_t port, const std::string &password,
@@ -445,8 +454,8 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
     trace_cb = AMLogManager::Instance().TraceCallbackFunc();
   }
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, nullptr);
-  auto base_client = CreateClient(request, 10, std::move(trace_cb),
-                                  std::move(keys), std::move(auth_cb));
+  auto base_client = AMBootstrap::CreateClient(
+      request, 10, std::move(trace_cb), std::move(keys), std::move(auth_cb));
   if (!base_client) {
     return {Err(EC::OperationUnsupported, "Unsupported protocol"), nullptr};
   }
@@ -487,17 +496,34 @@ ECM Operator::RemoveClient(const std::string &nickname,
   return Ok();
 }
 
-std::pair<ECM, std::shared_ptr<BaseClient>>
+std::pair<ECM, ClientHandle>
 Operator::CheckClient(const std::string &nickname,
                       const std::shared_ptr<ClientMaintainer> &maintainer,
                       bool update, amf interrupt_flag, int timeout_ms,
                       int64_t start_time) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   ClientMaintainer &target = maintainer ? *maintainer : Clients();
-  return target.test_client(nickname, update, flag, timeout_ms, start_time);
+  auto client = target.GetClient(nickname);
+  if (!client) {
+    const std::string display =
+        AMStr::Strip(nickname).empty() ? "local" : AMStr::Strip(nickname);
+    return {Err(EC::ClientNotFound, AMStr::fmt("Client not found: {}", display)),
+            nullptr};
+  }
+
+  const int64_t begin_time =
+      start_time == -1 ? AMTime::miliseconds() : start_time;
+  if (!update) {
+    ECM rcm = client->GetState();
+    if (rcm.first != EC::Success) {
+      rcm = client->Check(flag, timeout_ms, begin_time);
+    }
+    return {rcm, client};
+  }
+  return {client->Check(flag, timeout_ms, begin_time), client};
 }
 
-std::pair<ECM, std::shared_ptr<BaseClient>>
+std::pair<ECM, ClientHandle>
 Operator::EnsureClient(const std::string &nickname, amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (IsLocalNickname_(nickname)) {
@@ -555,7 +581,7 @@ AuthCallback Operator::BuildAuthCallback_(const AuthCallback &auth_cb,
 }
 
 void Operator::ApplyKnownHostCallback_(
-    const std::shared_ptr<BaseClient> &client) {
+    const ClientHandle &client) {
   if (!client || client->GetProtocol() != ClientProtocol::SFTP) {
     return;
   }
@@ -636,7 +662,7 @@ Operator::DefaultPasswordCallback(const AuthCBInfo &info) {
 }
 
 void Operator::DefaultDisconnectCallback(
-    const std::shared_ptr<BaseClient> &client, const ECM &ecm) {
+    const ClientHandle &client, const ECM &ecm) {
   if (!client || ecm.first == EC::Success) {
     return;
   }
@@ -653,16 +679,16 @@ AuthCallback Operator::BuiltinPasswordCallback_() {
 }
 
 Operator::DisconnectCallback Operator::BuiltinDisconnectCallback_() {
-  return [this](const std::shared_ptr<BaseClient> &client, const ECM &ecm) {
+  return [this](const ClientHandle &client, const ECM &ecm) {
     DefaultDisconnectCallback(client, ecm);
   };
 }
 
-std::shared_ptr<BaseClient> Operator::CreateLocalClient_() {
+ClientHandle Operator::CreateLocalClient_() {
   auto [rcm, cfg] = AMHostManager::Instance().GetLocalConfig();
-  auto client_t = CreateClient(cfg.request, 10,
-                               std::move(AMLogManager::Instance().TraceCallbackFunc()), {},
-                               {});
+  auto client_t = AMBootstrap::CreateClient(
+      cfg.request, 10, std::move(AMLogManager::Instance().TraceCallbackFunc()),
+      {}, {});
   if (!client_t) {
     std::cerr << "Failed to create local client: Unsupported protocol"
               << std::endl;
@@ -676,4 +702,3 @@ std::shared_ptr<BaseClient> Operator::CreateLocalClient_() {
 }
 
 } // namespace AMClientManage
-
