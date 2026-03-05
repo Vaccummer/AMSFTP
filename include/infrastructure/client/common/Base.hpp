@@ -278,10 +278,10 @@ public:
     return true;
   }
 
-  std::vector<PathInfo>
-  find(const std::string &path, SearchType type = SearchType::All,
-       amf interrupt_flag = nullptr, int timeout_ms = -1,
-       int64_t start_time = -1) override {
+  std::vector<PathInfo> find(const std::string &path,
+                             SearchType type = SearchType::All,
+                             amf interrupt_flag = nullptr, int timeout_ms = -1,
+                             int64_t start_time = -1) {
     std::vector<PathInfo> results = {};
     auto parts = AMPathStr::split(path);
     if (parts.empty()) {
@@ -389,6 +389,61 @@ public:
   /**
    * @brief Store one value in type-indexed cache.
    *
+   * @param type_key Type-index key.
+   * @param value Value payload.
+   * @param overwrite Whether existing value with the same type can be replaced.
+   * @return True when value is written.
+   */
+  [[nodiscard]] bool StoreTypedData(const std::type_index &type_key,
+                                    std::any value, bool overwrite = true) {
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    auto it = type_var_cache_.find(type_key);
+    if (it != type_var_cache_.end() && !overwrite) {
+      return false;
+    }
+    type_var_cache_[type_key] = std::move(value);
+    return true;
+  }
+
+  /**
+   * @brief Query one value from type-indexed cache by pointer.
+   *
+   * @param type_key Type-index key.
+   * @param type_exists Set to true when type key exists.
+   * @return std::any pointer when key exists; otherwise nullptr.
+   */
+  [[nodiscard]] std::any *QueryTypedData(const std::type_index &type_key,
+                                         bool &type_exists) {
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    auto it = type_var_cache_.find(type_key);
+    type_exists = (it != type_var_cache_.end());
+    if (!type_exists) {
+      return nullptr;
+    }
+    return &(it->second);
+  }
+
+  /**
+   * @brief Query one value from type-indexed cache by pointer (const overload).
+   *
+   * @param type_key Type-index key.
+   * @param type_exists Set to true when type key exists.
+   * @return const std::any pointer when key exists; otherwise nullptr.
+   */
+  [[nodiscard]] const std::any *
+  QueryTypedData(const std::type_index &type_key, bool &type_exists) const {
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    auto it = type_var_cache_.find(type_key);
+    type_exists = (it != type_var_cache_.end());
+    if (!type_exists) {
+      return nullptr;
+    }
+    return &(it->second);
+  }
+
+  /**
+   * @brief Store one value in type-indexed cache.
+   *
    * @param value Value to store.
    * @param overwrite Whether existing value with the same type can be replaced.
    * @return True when value is written.
@@ -398,14 +453,8 @@ public:
     using ValueT = std::decay_t<T>;
     static_assert(!std::is_reference_v<ValueT>,
                   "StoreTypedValue expects value-like type");
-    std::lock_guard<std::mutex> lock(var_cache_mtx_);
-    const std::type_index key(typeid(ValueT));
-    auto it = type_var_cache_.find(key);
-    if (it != type_var_cache_.end() && !overwrite) {
-      return false;
-    }
-    type_var_cache_[key] = std::forward<T>(value);
-    return true;
+    return StoreTypedData(std::type_index(typeid(ValueT)),
+                          std::any(std::forward<T>(value)), overwrite);
   }
 
   /**
@@ -414,13 +463,25 @@ public:
    * @return Typed pointer when found; otherwise nullptr.
    */
   template <typename T> [[nodiscard]] T *QueryTypedValue() {
+    bool type_exists = false;
+    return QueryTypedValue<T>(type_exists);
+  }
+
+  /**
+   * @brief Query one value from type-indexed cache.
+   *
+   * @param type_exists Set to true when type key exists.
+   * @return Typed pointer when found; otherwise nullptr.
+   */
+  template <typename T>
+  [[nodiscard]] T *QueryTypedValue(bool &type_exists) {
     using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
-    std::lock_guard<std::mutex> lock(var_cache_mtx_);
-    auto it = type_var_cache_.find(std::type_index(typeid(ValueT)));
-    if (it == type_var_cache_.end()) {
+    std::any *payload =
+        QueryTypedData(std::type_index(typeid(ValueT)), type_exists);
+    if (!payload) {
       return nullptr;
     }
-    return std::any_cast<ValueT>(&(it->second));
+    return std::any_cast<ValueT>(payload);
   }
 
   /**
@@ -429,13 +490,25 @@ public:
    * @return Typed pointer when found; otherwise nullptr.
    */
   template <typename T> [[nodiscard]] const T *QueryTypedValue() const {
+    bool type_exists = false;
+    return QueryTypedValue<T>(type_exists);
+  }
+
+  /**
+   * @brief Query one value from type-indexed cache (const overload).
+   *
+   * @param type_exists Set to true when type key exists.
+   * @return Typed pointer when found; otherwise nullptr.
+   */
+  template <typename T>
+  [[nodiscard]] const T *QueryTypedValue(bool &type_exists) const {
     using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
-    std::lock_guard<std::mutex> lock(var_cache_mtx_);
-    auto it = type_var_cache_.find(std::type_index(typeid(ValueT)));
-    if (it == type_var_cache_.end()) {
+    const std::any *payload =
+        QueryTypedData(std::type_index(typeid(ValueT)), type_exists);
+    if (!payload) {
       return nullptr;
     }
-    return std::any_cast<ValueT>(&(it->second));
+    return std::any_cast<ValueT>(payload);
   }
 
   /**
@@ -449,16 +522,61 @@ public:
   template <typename T>
   [[nodiscard]] bool StoreNamedValue(const std::string &name, T &&value,
                                      bool overwrite = true) {
-    if (name.empty()) {
-      return false;
-    }
+    return StoreNamedData(name, std::any(std::forward<T>(value)), overwrite);
+  }
+
+  /**
+   * @brief Query one named runtime blob by pointer.
+   *
+   * @param name Variable name key.
+   * @param name_exists Set to true when the name key exists.
+   * @return Pointer to stored payload; nullptr when key does not exist.
+   */
+  [[nodiscard]] std::any *QueryNamedData(const std::string &name,
+                                         bool &name_exists) {
     std::lock_guard<std::mutex> lock(var_cache_mtx_);
     auto it = named_var_cache_.find(name);
-    if (it != named_var_cache_.end() && !overwrite) {
-      return false;
+    name_exists = (it != named_var_cache_.end());
+    if (!name_exists) {
+      return nullptr;
     }
-    named_var_cache_[name] = std::forward<T>(value);
-    return true;
+    return &(it->second);
+  }
+
+  /**
+   * @brief Query one named runtime blob by pointer (const overload).
+   *
+   * @param name Variable name key.
+   * @param name_exists Set to true when the name key exists.
+   * @return Pointer to stored payload; nullptr when key does not exist.
+   */
+  [[nodiscard]] const std::any *QueryNamedData(const std::string &name,
+                                               bool &name_exists) const {
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    auto it = named_var_cache_.find(name);
+    name_exists = (it != named_var_cache_.end());
+    if (!name_exists) {
+      return nullptr;
+    }
+    return &(it->second);
+  }
+
+  /**
+   * @brief Query one named value in cache.
+   *
+   * @param name Variable name key.
+   * @param name_exists Set to true when the name key exists.
+   * @return Typed pointer when found; otherwise nullptr.
+   */
+  template <typename T>
+  [[nodiscard]] T *QueryNamedValue(const std::string &name,
+                                   bool &name_exists) {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    std::any *payload = QueryNamedData(name, name_exists);
+    if (!payload) {
+      return nullptr;
+    }
+    return std::any_cast<ValueT>(payload);
   }
 
   /**
@@ -471,23 +589,16 @@ public:
   template <typename T>
   [[nodiscard]] T *QueryNamedValue(const std::string &name,
                                    NamedVarQueryState *state = nullptr) {
-    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
-    std::lock_guard<std::mutex> lock(var_cache_mtx_);
-    auto it = named_var_cache_.find(name);
-    if (it == named_var_cache_.end()) {
-      if (state) {
-        *state = NamedVarQueryState::NameNotFound;
-      }
-      return nullptr;
+    bool name_exists = false;
+    auto *ptr = QueryNamedValue<T>(name, name_exists);
+    if (!state) {
+      return ptr;
     }
-    auto *ptr = std::any_cast<ValueT>(&(it->second));
-    if (!ptr) {
-      if (state) {
-        *state = NamedVarQueryState::TypeMismatch;
-      }
-      return nullptr;
-    }
-    if (state) {
+    if (!name_exists) {
+      *state = NamedVarQueryState::NameNotFound;
+    } else if (!ptr) {
+      *state = NamedVarQueryState::TypeMismatch;
+    } else {
       *state = NamedVarQueryState::Found;
     }
     return ptr;
@@ -502,28 +613,91 @@ public:
    */
   template <typename T>
   [[nodiscard]] const T *
+  QueryNamedValue(const std::string &name, bool &name_exists) const {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    const std::any *payload = QueryNamedData(name, name_exists);
+    if (!payload) {
+      return nullptr;
+    }
+    return std::any_cast<ValueT>(payload);
+  }
+
+  /**
+   * @brief Query one named value in cache (const overload).
+   *
+   * @param name Variable name key.
+   * @param name_exists Set to true when the name key exists.
+   * @return Typed pointer when found; otherwise nullptr.
+   */
+  template <typename T>
+  [[nodiscard]] const T *
   QueryNamedValue(const std::string &name,
                   NamedVarQueryState *state = nullptr) const {
-    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
-    std::lock_guard<std::mutex> lock(var_cache_mtx_);
-    auto it = named_var_cache_.find(name);
-    if (it == named_var_cache_.end()) {
-      if (state) {
-        *state = NamedVarQueryState::NameNotFound;
-      }
-      return nullptr;
+    bool name_exists = false;
+    const T *ptr = QueryNamedValue<T>(name, name_exists);
+    if (!state) {
+      return ptr;
     }
-    auto *ptr = std::any_cast<ValueT>(&(it->second));
-    if (!ptr) {
-      if (state) {
-        *state = NamedVarQueryState::TypeMismatch;
-      }
-      return nullptr;
-    }
-    if (state) {
+    if (!name_exists) {
+      *state = NamedVarQueryState::NameNotFound;
+    } else if (!ptr) {
+      *state = NamedVarQueryState::TypeMismatch;
+    } else {
       *state = NamedVarQueryState::Found;
     }
     return ptr;
+  }
+
+  /**
+   * @brief Store one named runtime blob with std::any payload.
+   *
+   * @param name Variable name key.
+   * @param value Arbitrary payload.
+   * @param overwrite Whether existing value can be replaced.
+   * @return True when value is written.
+   */
+  [[nodiscard]] bool StoreNamedData(const std::string &name, std::any value,
+                                    bool overwrite = true) {
+    if (name.empty()) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    auto it = named_var_cache_.find(name);
+    if (it != named_var_cache_.end() && !overwrite) {
+      return false;
+    }
+    named_var_cache_[name] = std::move(value);
+    return true;
+  }
+
+  /**
+   * @brief Query one named runtime blob with std::any payload.
+   *
+   * @param name Variable name key.
+   * @return Pair of found-flag and payload copy.
+   */
+  [[nodiscard]] std::pair<bool, std::any>
+  QueryNamedData(const std::string &name) const {
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    auto it = named_var_cache_.find(name);
+    if (it == named_var_cache_.end()) {
+      return {false, std::any{}};
+    }
+    return {true, it->second};
+  }
+
+  /**
+   * @brief Erase one named runtime blob.
+   *
+   * @param name Variable name key.
+   * @return True when erased.
+   */
+  [[nodiscard]] bool EraseNamedData(const std::string &name) {
+    if (name.empty()) {
+      return false;
+    }
+    std::lock_guard<std::mutex> lock(var_cache_mtx_);
+    return named_var_cache_.erase(name) > 0;
   }
 
   AMTracer(const ConRequest &request, int buffer_capacity = 10,
@@ -883,36 +1057,76 @@ public:
     }
   }
 
-  std::string GetUID() { return this->uid; }
+  std::string GetUID() override { return this->uid; }
 
-  [[nodiscard]] ClientProtocol GetProtocol() const { return res_data.protocol; }
-
-  [[nodiscard]] ClientMetaData GetClientMetaData() const {
-    std::lock_guard<std::mutex> lock(metadata_mtx_);
-    return metadata_;
+  [[nodiscard]] const std::string &GetNickname() const override {
+    return AMTracer::GetNickname();
   }
 
-  void SetClientMetaData(const ClientMetaData &metadata) {
-    std::lock_guard<std::mutex> lock(metadata_mtx_);
-    metadata_ = metadata;
+  [[nodiscard]] const ConRequest &GetRequest() const override {
+    return AMTracer::GetRequest();
   }
 
-  [[nodiscard]] std::string GetCwd() const {
+  [[nodiscard]] ClientProtocol GetProtocol() const override {
+    return res_data.protocol;
+  }
+
+  bool StoreNamedData(const std::string &name, std::any value,
+                      bool overwrite = true) override {
+    return AMTracer::StoreNamedData(name, std::move(value), overwrite);
+  }
+
+  bool StoreTypedData(const std::type_index &type_key, std::any value,
+                      bool overwrite = true) override {
+    return AMTracer::StoreTypedData(type_key, std::move(value), overwrite);
+  }
+
+  [[nodiscard]] std::pair<bool, std::any>
+  QueryNamedData(const std::string &name) const override {
+    return AMTracer::QueryNamedData(name);
+  }
+
+  [[nodiscard]] std::any *QueryNamedData(const std::string &name,
+                                         bool &name_exists) override {
+    return AMTracer::QueryNamedData(name, name_exists);
+  }
+
+  [[nodiscard]] const std::any *
+  QueryNamedData(const std::string &name, bool &name_exists) const override {
+    return AMTracer::QueryNamedData(name, name_exists);
+  }
+
+  [[nodiscard]] std::any *QueryTypedData(const std::type_index &type_key,
+                                         bool &type_exists) override {
+    return AMTracer::QueryTypedData(type_key, type_exists);
+  }
+
+  [[nodiscard]] const std::any *
+  QueryTypedData(const std::type_index &type_key,
+                 bool &type_exists) const override {
+    return AMTracer::QueryTypedData(type_key, type_exists);
+  }
+
+  bool EraseNamedData(const std::string &name) override {
+    return AMTracer::EraseNamedData(name);
+  }
+
+  [[nodiscard]] std::string GetCwd() const override {
     std::lock_guard<std::mutex> lock(metadata_mtx_);
     return metadata_.cwd;
   }
 
-  void SetCwd(const std::string &cwd) {
+  void SetCwd(const std::string &cwd) override {
     std::lock_guard<std::mutex> lock(metadata_mtx_);
     metadata_.cwd = cwd;
   }
 
-  [[nodiscard]] std::string GetLoginDir() const {
+  [[nodiscard]] std::string GetLoginDir() const override {
     std::lock_guard<std::mutex> lock(metadata_mtx_);
     return metadata_.login_dir;
   }
 
-  void SetLoginDir(const std::string &login_dir) {
+  void SetLoginDir(const std::string &login_dir) override {
     std::lock_guard<std::mutex> lock(metadata_mtx_);
     metadata_.login_dir = login_dir;
   }
@@ -986,6 +1200,14 @@ public:
       size += item.size;
     }
     return size;
+  }
+
+  std::vector<PathInfo> find(const std::string &path,
+                             SearchType type = SearchType::All,
+                             amf interrupt_flag = nullptr, int timeout_ms = -1,
+                             int64_t start_time = -1) override {
+    return BasePathMatch::find(path, type, interrupt_flag, timeout_ms,
+                               start_time);
   }
 
   std::pair<ECM, PathType> get_path_type(const std::string &path,
