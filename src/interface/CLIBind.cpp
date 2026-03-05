@@ -1,6 +1,7 @@
-
 #include "interface/CLIBind.hpp"
+#include "CLI/App.hpp"
 #include "interface/CommandTree.hpp"
+
 
 /**
  * @brief Bind host-related CLI commands.
@@ -18,8 +19,8 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
   }
   commands.config_cmd = config_node->app;
 
-  CommandNode *config_ls_node =
-      config_node->AddFunction("ls", "List hosts", args, &CliArgsPool::config_ls);
+  CommandNode *config_ls_node = config_node->AddFunction(
+      "ls", "List hosts", args, &CliArgsPool::config_ls);
   commands.config_ls = config_ls_node ? config_ls_node->app : nullptr;
   if (config_ls_node) {
     config_ls_node->AddFlag("-l", "--list", args.config_ls->detail,
@@ -62,7 +63,6 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
       "save", "Save host config", args, &CliArgsPool::config_save);
   commands.config_save = config_save_node ? config_save_node->app : nullptr;
 
-
   if (commands.config_get) {
     commands.config_get
         ->add_option("nicknames", args.config_get->nicknames, "Host nicknames")
@@ -97,7 +97,8 @@ void BindConfigCommands(CommandNode *root, CliArgsPool &args,
         ->add_option("nickname", args.config_set->nickname, "Host nickname")
         ->required();
     commands.config_set
-        ->add_option("attrname", args.config_set->attrname, "Host property name")
+        ->add_option("attrname", args.config_set->attrname,
+                     "Host property name")
         ->required();
     commands.config_set
         ->add_option("value", args.config_set->value, "Host property value")
@@ -353,7 +354,8 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
                                               args, &CliArgsPool::mkdir);
   commands.mkdir_cmd = mkdir_node ? mkdir_node->app : nullptr;
   if (commands.mkdir_cmd) {
-    commands.mkdir_cmd->add_option("paths", args.mkdir->paths, "Paths to create")
+    commands.mkdir_cmd
+        ->add_option("paths", args.mkdir->paths, "Paths to create")
         ->expected(1, -1);
   }
   if (mkdir_node) {
@@ -504,8 +506,8 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
   if (ftp_node) {
     ftp_node->AddOption("-P", "--port", args.ftp->port, 1, 1, Sem::None,
                         "Port");
-    ftp_node->AddOption("-p", "--password", args.ftp->password, 1, 1,
-                        Sem::None, "Password");
+    ftp_node->AddOption("-p", "--password", args.ftp->password, 1, 1, Sem::None,
+                        "Password");
     ftp_node->AddPositionalRule(0, Sem::HostNicknameNew, false);
   }
 
@@ -513,7 +515,8 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
       root->AddFunction("ch", "Change current client", args, &CliArgsPool::ch);
   commands.ch_cmd = ch_node ? ch_node->app : nullptr;
   if (commands.ch_cmd) {
-    commands.ch_cmd->add_option("nickname", args.ch->nickname, "Client nickname")
+    commands.ch_cmd
+        ->add_option("nickname", args.ch->nickname, "Client nickname")
         ->required()
         ->expected(1, 1);
   }
@@ -624,7 +627,8 @@ void BindTaskCommands(CommandNode *root, CliArgsPool &args,
                           "Do not create missing directories");
     job_add_node->AddFlag("-c", "--clone", args.task_cache_add->clone,
                           "Clone instead of transfer");
-    job_add_node->AddFlag("-s", "--special", args.task_cache_add->include_special,
+    job_add_node->AddFlag("-s", "--special",
+                          args.task_cache_add->include_special,
                           "Include special files");
     job_add_node->AddFlag("-r", "--resume", args.task_cache_add->resume,
                           "Resume from existing destination file");
@@ -666,10 +670,10 @@ void BindTaskCommands(CommandNode *root, CliArgsPool &args,
         ->expected(0, 1);
   }
 
-  CommandNode *task_userset_node = job_node ? job_node->AddFunction(
-                                                 "get", "Inspect cached transfer",
-                                                 args, &CliArgsPool::task_userset)
-                                           : nullptr;
+  CommandNode *task_userset_node =
+      job_node ? job_node->AddFunction("get", "Inspect cached transfer", args,
+                                       &CliArgsPool::task_userset)
+               : nullptr;
   commands.task_userset_cmd =
       task_userset_node ? task_userset_node->app : nullptr;
   if (commands.task_userset_cmd) {
@@ -766,7 +770,8 @@ void BindTaskCommands(CommandNode *root, CliArgsPool &args,
       "resume", "Resume paused task(s)", args, &CliArgsPool::task_resume);
   commands.task_resume_cmd = task_resume_node ? task_resume_node->app : nullptr;
   if (commands.task_resume_cmd) {
-    commands.task_resume_cmd->add_option("id", args.task_resume->ids, "Task IDs")
+    commands.task_resume_cmd
+        ->add_option("id", args.task_resume->ids, "Task IDs")
         ->expected(1, -1);
   }
 
@@ -909,5 +914,3 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   store_exit_code(static_cast<int>(ctx.rcm.first));
   return;
 }
-
-

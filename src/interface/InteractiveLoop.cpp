@@ -1750,4 +1750,3 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
   }
   return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;
 }
-

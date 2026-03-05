@@ -198,7 +198,6 @@ SessionWorkflowResult ExecuteCd(IFileCommandGateway &gateway,
  * @brief Execute shell-command workflow.
  */
 ShellCommandResult ExecuteShellCommand(IFileCommandGateway &gateway,
-                                       int timeout_ms,
-                                       const std::string &cmd,
+                                       int timeout_ms, const std::string &cmd,
                                        amf interrupt_flag = nullptr);
 } // namespace AMApplication::FileCommandWorkflow

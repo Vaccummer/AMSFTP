@@ -5,7 +5,7 @@
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
-#include "AMManager/Prompt.hpp"
+#include "interface/Prompt.hpp"
 #include <algorithm>
 #include <iomanip>
 #include <map>
@@ -1011,4 +1011,5 @@ ECM AMHostManager::RemoveHost_(const std::string &nickname) {
   }
   return Ok();
 }
+
 

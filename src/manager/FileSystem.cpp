@@ -261,7 +261,15 @@ static void PrintClientDetail_(AMPromptManager &prompt_manager,
   if (!client) {
     return;
   }
-  ClientMetaData metadata = client->GetClientMetaData();
+  ClientMetaData metadata = {};
+  bool metadata_exists = false;
+  const ClientMetaData *metadata_ptr =
+      client->QueryNamedValue<ClientMetaData>(
+          AMApplication::ClientPort::kClientMetadataStoreName,
+          metadata_exists);
+  if (metadata_exists && metadata_ptr) {
+    metadata = *metadata_ptr;
+  }
   std::string cwd = client->GetCwd();
   if (cwd.empty()) {
     cwd = AMPathStr::UnifyPathSep(client->GetHomeDir(), "/");

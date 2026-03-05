@@ -3,7 +3,7 @@
 #include "foundation/tools/json.hpp"
 #include "foundation/tools/time.hpp"
 #include "AMManager/Config.hpp"
-#include "AMManager/Prompt.hpp"
+#include "interface/Prompt.hpp"
 #include "AMManager/Var.hpp"
 #include <algorithm>
 
@@ -259,4 +259,5 @@ ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
   }
   return last;
 }
+
 

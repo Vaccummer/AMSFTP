@@ -1,5 +1,5 @@
-#include "interface/Prompt.hpp"
 #include "interface/ApplicationAdapters.hpp"
+#include "interface/Prompt.hpp"
 
 /**
  * @brief Silence global hooks and enable prompt-scope hook handlers.

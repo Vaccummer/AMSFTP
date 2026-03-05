@@ -1,6 +1,5 @@
 #pragma once
 #include "foundation/DataClass.hpp"
-#include "foundation/Enum.hpp"
 #include <string>
 #include <utility>
 #include <vector>

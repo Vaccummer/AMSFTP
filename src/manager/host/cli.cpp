@@ -6,7 +6,7 @@
 #include "AMManager/Client.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
-#include "AMManager/Prompt.hpp"
+#include "interface/Prompt.hpp"
 #include <sstream>
 #include <string>
 #include <vector>
@@ -542,3 +542,4 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
       AMStr::fmt("{}.{}: {} -> {}", nickname, field, old_value, new_value));
   return set_status;
 }
+

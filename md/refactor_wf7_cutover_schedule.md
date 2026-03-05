@@ -60,6 +60,14 @@ Tracking command:
 - `cmake --build <build-dir> --target report_legacy_includes`
 - `pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check_wf7_cutover.ps1 -RepoRoot .`
 - `cmake --build <build-dir> --target check_wf7_cutover`
+- `pwsh -NoProfile -ExecutionPolicy Bypass -File tools/check_wf7_cutover.ps1 -RepoRoot . -IncludeSingletonCompat`
+- `cmake --build <build-dir> --target check_wf7_cutover_strict`
+
+Note:
+
+- default check excludes `AMManager/{Config,Logger,SignalMonitor}.hpp` because
+  these singleton compatibility wrappers are gated on WF-6 completion.
+- strict check includes those headers and is the target state after WF-6.
 
 ### Batch WF7-D: Strictness Ramp
 

@@ -156,7 +156,19 @@ if (AMSFTP_ENABLE_LAYER_CHECK)
               -File "${PROJECT_SOURCE_DIR}/tools/check_wf7_cutover.ps1"
               -RepoRoot "${PROJECT_SOURCE_DIR}"
       WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-      COMMENT "Run WF-7 bridged-header cutover regression check"
+      COMMENT "Run WF-7 bridged-header cutover regression check (default phase)"
+      VERBATIM
+    )
+
+    add_custom_target(check_wf7_cutover_strict
+      COMMAND "${POWERSHELL_EXECUTABLE}"
+              -NoProfile
+              -ExecutionPolicy Bypass
+              -File "${PROJECT_SOURCE_DIR}/tools/check_wf7_cutover.ps1"
+              -RepoRoot "${PROJECT_SOURCE_DIR}"
+              -IncludeSingletonCompat
+      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+      COMMENT "Run WF-7 strict cutover check including singleton-compat headers"
       VERBATIM
     )
 

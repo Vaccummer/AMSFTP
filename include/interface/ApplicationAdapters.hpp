@@ -1,15 +1,16 @@
 #pragma once
 
+#include "application/client/ClientPort.hpp"
 #include "application/client/ClientSessionWorkflows.hpp"
+#include "application/client/FileCommandWorkflows.hpp"
+#include "application/completion/CompletionWorkflows.hpp"
 #include "application/config/ConfigWorkflows.hpp"
 #include "application/config/HostProfileWorkflows.hpp"
-#include "application/client/FileCommandWorkflows.hpp"
-#include "application/var/VarWorkflows.hpp"
-#include "application/completion/CompletionWorkflows.hpp"
 #include "application/transfer/TaskWorkflows.hpp"
 #include "application/transfer/TransferWorkflows.hpp"
-#include "domain/var/VarModel.hpp"
+#include "application/var/VarWorkflows.hpp"
 #include "domain/transfer/TransferPorts.hpp"
+#include "domain/var/VarModel.hpp"
 #include "foundation/DataClass.hpp"
 #include <memory>
 #include <string>
@@ -23,9 +24,6 @@ class VarCLISet;
 class AMClientManager;
 class AMTransferManager;
 class AMFileSystem;
-namespace AMApplication::ClientPort {
-class IClientPort;
-}
 
 namespace AMInterface::ApplicationAdapters {
 /**
@@ -107,7 +105,8 @@ private:
 /**
  * @brief Host-config saver workflow port backed by host manager.
  */
-class HostConfigSaver final : public AMApplication::ConfigWorkflow::IHostConfigSaver {
+class HostConfigSaver final
+    : public AMApplication::ConfigWorkflow::IHostConfigSaver {
 public:
   /**
    * @brief Construct saver from host manager.
@@ -124,7 +123,8 @@ private:
 /**
  * @brief Var-config saver workflow port backed by var manager.
  */
-class VarConfigSaver final : public AMApplication::ConfigWorkflow::IVarConfigSaver {
+class VarConfigSaver final
+    : public AMApplication::ConfigWorkflow::IVarConfigSaver {
 public:
   /**
    * @brief Construct saver from var manager.
@@ -246,8 +246,8 @@ public:
   /**
    * @brief Create directories for one or more paths.
    */
-  ECM Mkdir(const std::vector<std::string> &paths,
-            amf interrupt_flag = nullptr, int timeout_ms = -1) override;
+  ECM Mkdir(const std::vector<std::string> &paths, amf interrupt_flag = nullptr,
+            int timeout_ms = -1) override;
 
   /**
    * @brief Remove one or more paths.

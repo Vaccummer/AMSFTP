@@ -83,11 +83,17 @@ using RMR = std::vector<std::pair<std::string, ECM>>; // rm func return type
 using BR = std::pair<bool, ECM>;                      // is_dir func return type
 using SR = std::pair<ECM, PathInfo>;                  // stat func return type
 using WRV = std::vector<PathInfo>;                    // iwalk func return type
-using WRD = AMFS::WRD;                                // walk func return type
-using WRI = std::pair<WRV, AMFS::WER>;                // iwalk data + errors
-using WRDR = std::pair<WRD, AMFS::WER>;               // walk data + errors
-using WR = std::pair<ECM, WRI>;                       // iwalk func return type
-using SIZER = std::pair<ECM, size_t>; // getsize func return type
+using CB =
+    std::shared_ptr<std::function<void(std::string, std::string, std::string)>>;
+using WalkErrorCallback =
+    std::shared_ptr<std::function<void(const std::string &, const ECM &)>>;
+using WRD =
+    std::vector<std::pair<std::vector<std::string>,
+                          std::vector<PathInfo>>>; // walk func return type
+using WRI = std::pair<WRV, AMFS::WER>;             // iwalk data + errors
+using WRDR = std::pair<WRD, AMFS::WER>;            // walk data + errors
+using WR = std::pair<ECM, WRI>;                    // iwalk func return type
+using SIZER = std::pair<ECM, size_t>;              // getsize func return type
 using TraceCallback = std::function<void(const TraceInfo &)>;
 using CR =
     std::pair<ECM, std::pair<std::string, int>>; // ConductCmd func return type
@@ -430,8 +436,8 @@ public:
    * @param type_exists Set to true when type key exists.
    * @return const std::any pointer when key exists; otherwise nullptr.
    */
-  [[nodiscard]] const std::any *
-  QueryTypedData(const std::type_index &type_key, bool &type_exists) const {
+  [[nodiscard]] const std::any *QueryTypedData(const std::type_index &type_key,
+                                               bool &type_exists) const {
     std::lock_guard<std::mutex> lock(var_cache_mtx_);
     auto it = type_var_cache_.find(type_key);
     type_exists = (it != type_var_cache_.end());
@@ -473,8 +479,7 @@ public:
    * @param type_exists Set to true when type key exists.
    * @return Typed pointer when found; otherwise nullptr.
    */
-  template <typename T>
-  [[nodiscard]] T *QueryTypedValue(bool &type_exists) {
+  template <typename T> [[nodiscard]] T *QueryTypedValue(bool &type_exists) {
     using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
     std::any *payload =
         QueryTypedData(std::type_index(typeid(ValueT)), type_exists);
@@ -569,8 +574,7 @@ public:
    * @return Typed pointer when found; otherwise nullptr.
    */
   template <typename T>
-  [[nodiscard]] T *QueryNamedValue(const std::string &name,
-                                   bool &name_exists) {
+  [[nodiscard]] T *QueryNamedValue(const std::string &name, bool &name_exists) {
     using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
     std::any *payload = QueryNamedData(name, name_exists);
     if (!payload) {
@@ -612,8 +616,8 @@ public:
    * @return Typed pointer when found; otherwise nullptr.
    */
   template <typename T>
-  [[nodiscard]] const T *
-  QueryNamedValue(const std::string &name, bool &name_exists) const {
+  [[nodiscard]] const T *QueryNamedValue(const std::string &name,
+                                         bool &name_exists) const {
     using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
     const std::any *payload = QueryNamedData(name, name_exists);
     if (!payload) {
@@ -1275,22 +1279,22 @@ public:
             path_info.type == PathType::SYMLINK ? true : false};
   }
 
-  virtual ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
-                    int64_t start_time = -1) = 0;
+  ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
+            int64_t start_time = -1) override = 0;
 
-  virtual ECM Connect(bool force = false, amf interrupt_flag = nullptr,
-                      int timeout_ms = -1, int64_t start_time = -1) = 0;
+  ECM Connect(bool force = false, amf interrupt_flag = nullptr,
+              int timeout_ms = -1, int64_t start_time = -1) override = 0;
 
-  virtual OS_TYPE GetOSType([[maybe_unused]] bool update = false) = 0;
+  OS_TYPE GetOSType([[maybe_unused]] bool update = false) override = 0;
 
-  virtual double GetRTT([[maybe_unused]] ssize_t times = 5,
-                        [[maybe_unused]] amf interrupt_flag = nullptr) {
+  double GetRTT([[maybe_unused]] ssize_t times = 5,
+                [[maybe_unused]] amf interrupt_flag = nullptr) override {
     return -1.0;
   }
 
-  virtual CR ConductCmd([[maybe_unused]] const std::string &cmd,
-                        [[maybe_unused]] int max_time_s = 3000,
-                        [[maybe_unused]] amf interrupt_flag = nullptr) {
+  CR ConductCmd([[maybe_unused]] const std::string &cmd,
+                [[maybe_unused]] int max_time_ms = 3000,
+                [[maybe_unused]] amf interrupt_flag = nullptr) override {
     ECM ecm = {EC::OperationUnsupported,
                AMStr::fmt("{} Client doesn't support function: ConductCmd",
                           GetProtocolName())};
@@ -1299,26 +1303,26 @@ public:
 
   virtual std::string StrUid([[maybe_unused]] const long &uid) { return ""; }
 
-  virtual std::string GetHomeDir() = 0;
+  std::string GetHomeDir() override = 0;
 
-  virtual std::pair<ECM, std::string>
+  std::pair<ECM, std::string>
   realpath([[maybe_unused]] const std::string &path,
            [[maybe_unused]] amf interrupt_flag = nullptr,
            [[maybe_unused]] int timeout_ms = -1,
-           [[maybe_unused]] int64_t start_time = -1) {
+           [[maybe_unused]] int64_t start_time = -1) override {
     return {{EC::OperationUnsupported,
              AMStr::fmt("{} Client doesn't support function: realpath",
                         GetProtocolName())},
             ""};
   }
 
-  virtual std::pair<ECM, std::unordered_map<std::string, ECM>>
+  std::pair<ECM, std::unordered_map<std::string, ECM>>
   chmod([[maybe_unused]] const std::string &path,
         [[maybe_unused]] std::variant<std::string, size_t> mode,
         [[maybe_unused]] bool recursive = false,
         [[maybe_unused]] amf interrupt_flag = nullptr,
         [[maybe_unused]] int timeout_ms = -1,
-        [[maybe_unused]] int64_t start_time = -1) {
+        [[maybe_unused]] int64_t start_time = -1) override {
     return {{EC::OperationUnsupported,
              AMStr::fmt("{} Client doesn't support function: chmod",
                         GetProtocolName())},
@@ -1333,43 +1337,41 @@ public:
   listdir(const std::string &path, amf interrupt_flag = nullptr,
           int timeout_ms = -1, int64_t start_time = -1) override = 0;
 
-  virtual ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
-                    int timeout_ms = -1, int64_t start_time = -1) = 0;
+  ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
+            int timeout_ms = -1, int64_t start_time = -1) override = 0;
 
-  virtual ECM mkdirs(const std::string &path, amf interrupt_flag = nullptr,
-                     int timeout_ms = -1, int64_t start_time = -1) = 0;
+  ECM mkdirs(const std::string &path, amf interrupt_flag = nullptr,
+             int timeout_ms = -1, int64_t start_time = -1) override = 0;
 
-  virtual ECM rmdir(const std::string &path, amf interrupt_flag = nullptr,
-                    int timeout_ms = -1, int64_t start_time = -1) = 0;
+  ECM rmdir(const std::string &path, amf interrupt_flag = nullptr,
+            int timeout_ms = -1, int64_t start_time = -1) override = 0;
 
-  virtual ECM rmfile(const std::string &path, amf interrupt_flag = nullptr,
-                     int timeout_ms = -1, int64_t start_time = -1) = 0;
+  ECM rmfile(const std::string &path, amf interrupt_flag = nullptr,
+             int timeout_ms = -1, int64_t start_time = -1) override = 0;
 
-  virtual ECM rename(const std::string &src, const std::string &dst,
-                     bool mkdir = true, bool overwrite = false,
-                     amf interrupt_flag = nullptr, int timeout_ms = -1,
-                     int64_t start_time = -1) = 0;
+  ECM rename(const std::string &src, const std::string &dst, bool mkdir = true,
+             bool overwrite = false, amf interrupt_flag = nullptr,
+             int timeout_ms = -1, int64_t start_time = -1) override = 0;
 
-  virtual std::pair<ECM, RMR>
-  remove(const std::string &path,
-         AMFS::WalkErrorCallback error_callback = nullptr,
-         amf interrupt_flag = nullptr, int timeout_ms = -1,
-         int64_t start_time = -1) = 0;
+  std::pair<ECM, RMR> remove(const std::string &path,
+                             WalkErrorCallback error_callback = nullptr,
+                             amf interrupt_flag = nullptr, int timeout_ms = -1,
+                             int64_t start_time = -1) override = 0;
 
-  virtual ECM saferm([[maybe_unused]] const std::string &path,
-                     [[maybe_unused]] amf interrupt_flag = nullptr,
-                     [[maybe_unused]] int timeout_ms = -1,
-                     [[maybe_unused]] int64_t start_time = -1) {
+  ECM saferm([[maybe_unused]] const std::string &path,
+             [[maybe_unused]] amf interrupt_flag = nullptr,
+             [[maybe_unused]] int timeout_ms = -1,
+             [[maybe_unused]] int64_t start_time = -1) override {
     return {EC::OperationUnsupported,
             AMStr::fmt("{} Client doesn't support function: saferm",
                        GetProtocolName())};
   }
 
-  virtual ECM copy([[maybe_unused]] const std::string &src,
-                   [[maybe_unused]] const std::string &dst,
-                   [[maybe_unused]] bool need_mkdir = false,
-                   [[maybe_unused]] int timeout_ms = -1,
-                   [[maybe_unused]] amf interrupt_flag = nullptr) {
+  ECM copy([[maybe_unused]] const std::string &src,
+           [[maybe_unused]] const std::string &dst,
+           [[maybe_unused]] bool need_mkdir = false,
+           [[maybe_unused]] int timeout_ms = -1,
+           [[maybe_unused]] amf interrupt_flag = nullptr) override {
     return {EC::OperationUnsupported,
             AMStr::fmt("{} Client doesn't support function: copy",
                        GetProtocolName())};
@@ -1377,14 +1379,14 @@ public:
 
   std::pair<ECM, WRI> iwalk(const std::string &path, bool show_all = false,
                             bool ignore_special_file = true,
-                            AMFS::WalkErrorCallback error_callback = nullptr,
+                            WalkErrorCallback error_callback = nullptr,
                             amf interrupt_flag = nullptr, int timeout_ms = -1,
                             int64_t start_time = -1) override = 0;
 
-  virtual std::pair<ECM, WRDR>
-  walk(const std::string &path, int max_depth = -1, bool show_all = false,
-       bool ignore_special_file = false,
-       AMFS::WalkErrorCallback error_callback = nullptr,
-       amf interrupt_flag = nullptr, int timeout_ms = -1,
-       int64_t start_time = -1) = 0;
+  std::pair<ECM, WRDR> walk(const std::string &path, int max_depth = -1,
+                            bool show_all = false,
+                            bool ignore_special_file = false,
+                            WalkErrorCallback error_callback = nullptr,
+                            amf interrupt_flag = nullptr, int timeout_ms = -1,
+                            int64_t start_time = -1) override = 0;
 };

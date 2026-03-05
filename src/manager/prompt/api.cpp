@@ -1,7 +1,7 @@
 #include "foundation/tools/json.hpp"
-#include "AMCLI/Completer/Proxy.hpp"
+#include "interface/Completer/Proxy.hpp"
 #include "AMManager/Config.hpp"
-#include "AMManager/Prompt.hpp"
+#include "interface/Prompt.hpp"
 #include "AMManager/SignalMonitor.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
@@ -467,3 +467,5 @@ void AMPromptManager::InitIsoclineConfig() {
   core_hook.consume = true;
   AMCliSignalMonitor::Instance().RegisterHook("COREPROMPT", core_hook);
 }
+
+

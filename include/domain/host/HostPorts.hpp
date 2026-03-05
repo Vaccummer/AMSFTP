@@ -1,5 +1,6 @@
 #pragma once
 #include "domain/host/HostModel.hpp"
+#include "domain/host/KnownHostQuery.hpp"
 #include <string>
 #include <utility>
 #include <vector>
