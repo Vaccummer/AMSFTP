@@ -31,10 +31,20 @@ foreach ($root in $legacyRoots) {
 $headers = $headers | Sort-Object -Unique
 
 $searchScopes = @("main.cpp", "src", "include")
+$codeGlobs = @(
+    "-g", "*.h",
+    "-g", "*.hpp",
+    "-g", "*.hh",
+    "-g", "*.hxx",
+    "-g", "*.c",
+    "-g", "*.cc",
+    "-g", "*.cpp",
+    "-g", "*.cxx"
+)
 $rows = @()
 foreach ($header in $headers) {
     $pattern = '#\s*include\s*[\"<]' + [regex]::Escape($header) + '[\">]'
-    $count = (rg -n $pattern @searchScopes | Measure-Object).Count
+    $count = (rg -n $pattern @codeGlobs @searchScopes | Measure-Object).Count
     $prefix = ($header -split '/')[0]
     $rows += [pscustomobject]@{
         Header = $header

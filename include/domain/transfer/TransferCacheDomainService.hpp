@@ -1,7 +1,6 @@
 #pragma once
 #include "foundation/DataClass.hpp"
 #include <optional>
-#include <unordered_set>
 #include <vector>
 
 namespace AMDomain::transfer {
@@ -15,7 +14,8 @@ public:
   /**
    * @brief Append one transfer set and return new cache index.
    */
-  size_t SubmitTransferSet(Cache *cache, const UserTransferSet &transfer_set) const;
+  size_t SubmitTransferSet(Cache *cache,
+                           const UserTransferSet &transfer_set) const;
 
   /**
    * @brief Append multiple transfer sets and return their cache indices.
@@ -43,7 +43,8 @@ public:
    * @param warnings Optional warnings for invalid/already-deleted indices.
    * @return Number of entries that transitioned from valid to deleted.
    */
-  size_t DeleteTransferSets(Cache *cache, const std::vector<size_t> &set_indices,
+  size_t DeleteTransferSets(Cache *cache,
+                            const std::vector<size_t> &set_indices,
                             std::vector<ECM> *warnings = nullptr) const;
 
   /**

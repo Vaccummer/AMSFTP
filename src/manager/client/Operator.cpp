@@ -88,6 +88,15 @@ inline void ApplyLoginDir_(AMHostManager &hostm, const std::string &nickname,
     (void)hostm.SetHostValue(nickname, configkn::login_dir, resolved);
   }
 }
+
+inline void StoreClientMetadata_(const ClientHandle &client,
+                                 const ClientMetaData &metadata) {
+  if (!client) {
+    return;
+  }
+  (void)client->StoreNamedData(AMApplication::ClientPort::kClientMetadataStoreName,
+                               metadata, true);
+}
 } // namespace
 
 ECM Manager::Init() {
@@ -234,7 +243,7 @@ Operator::AddClient(const std::string &nickname,
     }
     auto existing_cfg = AMHostManager::Instance().GetClientConfig(nickname);
     if (existing_cfg.first.first == EC::Success) {
-      existing->SetClientMetaData(existing_cfg.second.metadata);
+      StoreClientMetadata_(existing, existing_cfg.second.metadata);
       ApplyLoginDir_(AMHostManager::Instance(), nickname, existing,
                      existing_cfg.second.metadata.login_dir, flag);
     } else {
@@ -300,7 +309,7 @@ Operator::AddClient(const std::string &nickname,
     return {rcm, base_client};
   }
 
-  base_client->SetClientMetaData(client_config.metadata);
+  StoreClientMetadata_(base_client, client_config.metadata);
   ApplyLoginDir_(AMHostManager::Instance(), nickname, base_client, client_config.metadata.login_dir, flag);
   target.add_client(nickname, base_client, true);
   return {Ok(), base_client};
@@ -380,7 +389,7 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
     return {rcm, base_client};
   }
 
-  base_client->SetClientMetaData(client_config.second.metadata);
+  StoreClientMetadata_(base_client, client_config.second.metadata);
   ApplyLoginDir_(AMHostManager::Instance(), nickname, base_client, client_config.second.metadata.login_dir,
                  flag);
   return {Ok(), base_client};
@@ -476,7 +485,7 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
     return {save_rcm, base_client};
   }
 
-  base_client->SetClientMetaData(entry.metadata);
+  StoreClientMetadata_(base_client, entry.metadata);
   ApplyLoginDir_(AMHostManager::Instance(), resolved_nickname, base_client, "", flag);
   target.add_client(resolved_nickname, base_client, true);
   return {Ok(), base_client};
@@ -697,7 +706,9 @@ ClientHandle Operator::CreateLocalClient_() {
   ClientMetaData metadata = cfg.metadata;
   metadata.login_dir = AMPathStr::UnifyPathSep(cfg.metadata.login_dir, "/");
   metadata.cwd = metadata.login_dir;
-  client_t->SetClientMetaData(metadata);
+  StoreClientMetadata_(client_t, metadata);
+  client_t->SetLoginDir(metadata.login_dir);
+  client_t->SetCwd(metadata.cwd);
   return client_t;
 }
 

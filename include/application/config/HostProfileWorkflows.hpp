@@ -104,8 +104,7 @@ public:
  * @brief Validate nickname for config-add flow.
  */
 ECM ValidateConfigAddNickname(const IHostProfileGateway &gateway,
-                              const std::string &raw,
-                              std::string *normalized);
+                              const std::string &raw, std::string *normalized);
 
 /**
  * @brief Validate nickname for profile-set flow.

@@ -1,6 +1,6 @@
 # Workflow-7 Blockers Inventory
 
-Date: 2026-03-04
+Date: 2026-03-05
 
 ## Purpose
 
@@ -16,23 +16,23 @@ workflow handoffs required to unblock WF-7 caller migration/removal.
 | `AMManager/Var.hpp` | legacy | no `include/domain/Var.hpp` contract published | WF-3 | same |
 | `AMManager/Transfer.hpp` | legacy | no `include/domain/Transfer.hpp` contract published | WF-3 | same |
 | `AMManager/FileSystem.hpp` | legacy | no `include/domain/FileSystem.hpp` contract published | WF-3 | same |
-| `AMManager/Prompt.hpp` | legacy | no `include/interface/Prompt*` contract published | WF-5 | prompt include migration blocked |
-| `AMCLI/*` | legacy | `include/interface/` currently only has `README.md` (no replacement headers) | WF-5 | all CLI include migration blocked |
-| `AMClient/Base.hpp` | legacy | no domain/infrastructure split headers published | WF-2/WF-3 | adapter/port migration blocked |
-| `AMClient/IOCore.hpp` | legacy | no `include/infrastructure/IOCore.hpp` replacement published | WF-2 | migration blocked |
-| `AMClient/FTP.hpp` | legacy | no layered FTP adapter header published | WF-2 | migration blocked |
-| `AMClient/Local.hpp` | legacy | no layered Local adapter header published | WF-2 | migration blocked |
-| `AMClient/SFTP.hpp` | legacy | no layered SFTP adapter header published | WF-2 | migration blocked |
+| `AMManager/{Config,Logger,SignalMonitor}.hpp` | bridged | still used by singleton compatibility runtime paths (`AM*::Instance()`) | WF-6 | strict cutover cannot pass until singleton removal is complete |
 
 ## Already Unblocked and Guarded
 
 - `AMBase/*` is bridged to `foundation/*` and has zero first-party legacy include usage.
+- `AMCLI/*` is bridged to `interface/*` and has zero first-party legacy include usage.
+- `AMClient/*` is bridged to `infrastructure/client/*` and has zero first-party legacy include usage.
+- `AMManager/Prompt.hpp` is bridged to `interface/Prompt.hpp` and has zero
+  first-party legacy include usage.
 - `AMManager/Config.hpp`, `AMManager/Logger.hpp`,
-  `AMManager/SignalMonitor.hpp` are bridged to `infrastructure/*` and also at
-  zero first-party legacy include usage.
+  `AMManager/SignalMonitor.hpp` are bridged to `infrastructure/*`; caller
+  migration is still in progress.
 - Regression guard is available via:
   - `tools/check_wf7_cutover.ps1`
   - CMake target: `check_wf7_cutover`
+  - strict mode / target: `check_wf7_cutover.ps1 -IncludeSingletonCompat` /
+    `check_wf7_cutover_strict`
 
 ## Exit Conditions (Per Blocker Group)
 

@@ -1,7 +1,7 @@
 #include "foundation/DataClass.hpp"
-#include "AMCLI/TokenTypeAnalyzer.hpp"
+#include "interface/TokenTypeAnalyzer.hpp"
 #include "AMManager/Config.hpp"
-#include "AMManager/Prompt.hpp"
+#include "interface/Prompt.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
 #include <cctype>
@@ -768,3 +768,5 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
   *out_input = std::move(password);
   return true;
 }
+
+

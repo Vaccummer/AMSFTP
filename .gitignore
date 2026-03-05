@@ -17,7 +17,7 @@ md/*
 test/
 AMBind*
 AMATrial*
-config/
+/config/
 !src/manager/config/
 !src/manager/config/**
 !src/infrastructure/config/

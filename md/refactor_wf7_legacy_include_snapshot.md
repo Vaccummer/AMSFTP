@@ -58,8 +58,12 @@ Command:
 
 - This snapshot reflects WF5 interface-header decoupling plus runtime adapter extraction for completer/highlighter/searcher flows.
 - `AMCLI` includes are zero and `AMManager/Prompt.hpp` include usage remains zero.
+- `AMClient/*` includes are zero after infrastructure client header cutover.
 - `src/interface/{TokenTypeAnalyzer,searcher/internal_searcher,searcher/path_searcher,completer/engine_skeleton}` no longer include `AMManager/*`.
 - `src/interface/CLIArg.cpp` no longer includes `AMManager/FileSystem.hpp`; filesystem command calls now route through `interface/ApplicationAdapters::FileCommandGateway`.
 - `src/interface/PromptGuards.cpp` now routes signal-hook toggles through `interface/ApplicationAdapters::Runtime` and no longer includes `AMManager/SignalMonitor.hpp` directly.
 - Remaining `AMManager/*` includes are concentrated in `main.cpp` bootstrap
   wiring and `src/manager/*` compatibility/legacy implementation paths.
+- `tools/check_wf7_cutover.ps1` passes in default mode and fails in strict
+  mode only on `AMManager/{Config,Logger,SignalMonitor}.hpp` singleton-compat
+  callsites, which is expected before WF-6 cleanup.

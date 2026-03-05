@@ -1,5 +1,5 @@
 #pragma once
-#include "domain/host/KnownHostQuery.hpp"
+
 #include "foundation/DataClass.hpp"
 #include "foundation/Enum.hpp"
 #include "foundation/tools/json.hpp"

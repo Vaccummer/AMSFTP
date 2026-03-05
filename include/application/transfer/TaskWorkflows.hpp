@@ -194,7 +194,8 @@ public:
   /**
    * @brief List cached transfer set indices.
    */
-  [[nodiscard]] virtual std::vector<size_t> ListCachedTransferSetIds() const = 0;
+  [[nodiscard]] virtual std::vector<size_t>
+  ListCachedTransferSetIds() const = 0;
 };
 
 /**
@@ -262,9 +263,9 @@ ExecuteJobCacheAdd(ITaskGateway &gateway,
 /**
  * @brief Run job cache remove workflow.
  */
-JobCacheRemoveResult
-ExecuteJobCacheRemove(ITaskGateway &gateway, const std::vector<size_t> &indices,
-                      const SessionMode &mode);
+JobCacheRemoveResult ExecuteJobCacheRemove(ITaskGateway &gateway,
+                                           const std::vector<size_t> &indices,
+                                           const SessionMode &mode);
 
 /**
  * @brief Run job cache clear workflow.
@@ -282,7 +283,7 @@ ECM ExecuteJobCacheSubmit(ITaskGateway &gateway,
 /**
  * @brief Run job cache query workflow.
  */
-JobCacheQueryResult
-ExecuteJobCacheQuery(ITaskGateway &gateway, const std::vector<size_t> &indices,
-                     const SessionMode &mode);
+JobCacheQueryResult ExecuteJobCacheQuery(ITaskGateway &gateway,
+                                         const std::vector<size_t> &indices,
+                                         const SessionMode &mode);
 } // namespace AMApplication::TaskWorkflow

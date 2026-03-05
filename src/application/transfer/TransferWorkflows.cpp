@@ -1,6 +1,5 @@
 #include "application/transfer/TransferWorkflows.hpp"
 #include "foundation/tools/enum_related.hpp"
-#include "foundation/tools/string.hpp"
 
 namespace AMApplication::TransferWorkflow {
 /**
@@ -46,7 +45,8 @@ ECM BuildTransferSet(const TransferBuildArgs &args,
 
   const std::vector<std::string> resolved_srcs =
       substitutor.SubstitutePathLike(raw_srcs);
-  const std::string resolved_output = substitutor.SubstitutePathLike(args.output);
+  const std::string resolved_output =
+      substitutor.SubstitutePathLike(args.output);
 
   std::vector<std::string> transfer_srcs;
   std::string transfer_dst;
@@ -78,12 +78,10 @@ ECM BuildTransferSet(const TransferBuildArgs &args,
 /**
  * @brief Execute transfer workflow using domain transfer executor port.
  */
-TransferExecutionResult
-ExecuteTransfer(const TransferBuildArgs &args,
-                const TransferExecutionOptions &options,
-                const IPathSubstitutionPort &substitutor,
-                AMDomain::transfer::ITransferExecutorPort &executor,
-                amf interrupt_flag) {
+TransferExecutionResult ExecuteTransfer(
+    const TransferBuildArgs &args, const TransferExecutionOptions &options,
+    const IPathSubstitutionPort &substitutor,
+    AMDomain::transfer::ITransferExecutorPort &executor, amf interrupt_flag) {
   TransferExecutionResult out = {};
   bool suffix_async = false;
   out.rcm = BuildTransferSet(args, substitutor, options.accept_ampersand_suffix,
@@ -99,7 +97,8 @@ ExecuteTransfer(const TransferBuildArgs &args,
     return out;
   }
 
-  out.rcm = executor.Transfer({out.transfer_set}, options.quiet, interrupt_flag);
+  out.rcm =
+      executor.Transfer({out.transfer_set}, options.quiet, interrupt_flag);
   return out;
 }
 } // namespace AMApplication::TransferWorkflow

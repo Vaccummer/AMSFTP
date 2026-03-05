@@ -1,7 +1,7 @@
 #include "foundation/tools/json.hpp"
 #include "AMManager/Config.hpp"
 #include "AMManager/Host.hpp"
-#include "AMManager/Prompt.hpp"
+#include "interface/Prompt.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
 #include <string>
@@ -850,3 +850,4 @@ void AMPromptManager::FlushHistory() {
   AMConfigManager::Instance().SetArg(DocumentKind::History, {}, jsond);
   AMConfigManager::Instance().Dump(DocumentKind::History, "", true);
 }
+

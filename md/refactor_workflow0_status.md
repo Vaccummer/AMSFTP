@@ -25,6 +25,7 @@ every refactor workflow.
 - [x] WF-7 include snapshot baseline: `md/refactor_wf7_legacy_include_snapshot.md`
 - [x] WF-7 blocker inventory: `md/refactor_wf7_blockers.md`
 - [x] WF-7 cutover regression checker: `tools/check_wf7_cutover.ps1`
+- [x] WF-7 strict singleton-compat checker mode: `check_wf7_cutover.ps1 -IncludeSingletonCompat`
 
 ## Module Migration Status
 
@@ -33,7 +34,7 @@ every refactor workflow.
 | `include/AMBase/*` | bridged | foundation | WF-1/WF-7 | Strict compatibility forwarders (`pragma once` + canonical `foundation/*` include only) |
 | `include/AMManager/*` | bridged | domain + infrastructure + interface | WF-2/WF-3/WF-5/WF-7 | `Config/Logger/SignalMonitor` compatibility wrappers over `infrastructure/*`; `Prompt.hpp` compatibility forwarder to `interface/Prompt.hpp`; remaining business headers still legacy |
 | `include/AMCLI/*` | bridged | interface | WF-5/WF-7 | Strict compatibility forwarders to `include/interface/*` canonical headers |
-| `include/AMClient/*` | legacy | infrastructure + domain ports | WF-2/WF-3/WF-7 | Adapter + domain boundary cleanup, compatibility tracked by WF-7 |
+| `include/AMClient/*` | bridged | infrastructure + domain ports | WF-2/WF-3/WF-7 | Strict compatibility forwarders to `include/infrastructure/client/*` canonical headers |
 | `src/base/*` | bridged | foundation | WF-1 | Utility implementations remain in legacy path but include `foundation/*` APIs |
 | `src/manager/*` | legacy | domain + infrastructure | WF-2/WF-3 | Refactor by business vs adapter concerns |
 | `src/cli/*` | bridged | interface | WF-5 | CLI implementation has been relocated to `src/interface/*`; path retained as compatibility/transition scope |

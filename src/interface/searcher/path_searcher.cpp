@@ -1,9 +1,11 @@
+#include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include "interface/Completer/Searcher.hpp"
 #include "interface/Completer/SearcherCommon.hpp"
-#include "interface/ApplicationAdapters.hpp"
 #include "interface/InteractiveLoop.hpp"
 #include <algorithm>
+
 
 using namespace AMSearcherDetail;
 namespace Runtime = AMInterface::ApplicationAdapters::Runtime;
@@ -53,9 +55,9 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   if (!use_async) {
-    Runtime::ClientHandle client =
-        path.remote ? Runtime::GetHostClient(path.nickname)
-                    : Runtime::LocalClient();
+    Runtime::ClientHandle client = path.remote
+                                       ? Runtime::GetHostClient(path.nickname)
+                                       : Runtime::LocalClient();
     if (!client) {
       return result;
     }
@@ -92,9 +94,9 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       return false;
     }
 
-    Runtime::ClientHandle client =
-        path.remote ? Runtime::GetHostClient(path.nickname)
-                    : Runtime::LocalClient();
+    Runtime::ClientHandle client = path.remote
+                                       ? Runtime::GetHostClient(path.nickname)
+                                       : Runtime::LocalClient();
     if (!client) {
       return false;
     }
@@ -346,9 +348,9 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
   }
   path.base = path.header + path.dir_raw;
 
-  Runtime::ClientHandle client =
-      path.remote ? Runtime::GetHostClient(path.nickname)
-                  : Runtime::LocalClient();
+  Runtime::ClientHandle client = path.remote
+                                     ? Runtime::GetHostClient(path.nickname)
+                                     : Runtime::LocalClient();
   if (!client) {
     return path;
   }

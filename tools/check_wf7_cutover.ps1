@@ -1,5 +1,6 @@
 param(
-    [string]$RepoRoot = "."
+    [string]$RepoRoot = ".",
+    [switch]$IncludeSingletonCompat
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,11 +14,24 @@ $repoFull = (Resolve-Path $RepoRoot).Path
 Set-Location $repoFull
 
 $searchScopes = @("main.cpp", "src", "include")
+$codeGlobs = @(
+    "-g", "*.h",
+    "-g", "*.hpp",
+    "-g", "*.hh",
+    "-g", "*.hxx",
+    "-g", "*.c",
+    "-g", "*.cc",
+    "-g", "*.cpp",
+    "-g", "*.cxx"
+)
 
 # WF-7 cutover set:
 # 1) all AMBase headers are bridged and should no longer be directly included.
-# 2) these AMManager adapter headers are bridged and should no longer be
-#    directly included.
+# 2) all AMCLI headers are bridged and should no longer be directly included.
+# 3) all AMClient headers are bridged and should no longer be directly included.
+# 4) AMManager/Prompt.hpp is bridged and should no longer be directly included.
+# 5) singleton compatibility wrappers are optional strict checks:
+#    AMManager/{Config,Logger,SignalMonitor}.hpp
 $targetHeaders = @()
 if (Test-Path "include/AMBase") {
     $targetHeaders += Get-ChildItem -File -Recurse "include/AMBase" |
@@ -26,16 +40,33 @@ if (Test-Path "include/AMBase") {
         }
 }
 $targetHeaders += @(
-    "AMManager/Config.hpp",
-    "AMManager/Logger.hpp",
-    "AMManager/SignalMonitor.hpp"
+    "AMManager/Prompt.hpp"
 )
+if (Test-Path "include/AMCLI") {
+    $targetHeaders += Get-ChildItem -File -Recurse "include/AMCLI" |
+        ForEach-Object {
+            Normalize-HeaderPath $_.FullName.Substring($repoFull.Length + 1)
+        }
+}
+if (Test-Path "include/AMClient") {
+    $targetHeaders += Get-ChildItem -File -Recurse "include/AMClient" |
+        ForEach-Object {
+            Normalize-HeaderPath $_.FullName.Substring($repoFull.Length + 1)
+        }
+}
+if ($IncludeSingletonCompat) {
+    $targetHeaders += @(
+        "AMManager/Config.hpp",
+        "AMManager/Logger.hpp",
+        "AMManager/SignalMonitor.hpp"
+    )
+}
 $targetHeaders = $targetHeaders | Sort-Object -Unique
 
 $violations = @()
 foreach ($header in $targetHeaders) {
     $pattern = '#\s*include\s*[\"<]' + [regex]::Escape($header) + '[\">]'
-    $matches = rg -n $pattern @searchScopes
+    $matches = rg -n $pattern @codeGlobs @searchScopes
     foreach ($line in $matches) {
         $violations += [pscustomobject]@{
             Header = $header
