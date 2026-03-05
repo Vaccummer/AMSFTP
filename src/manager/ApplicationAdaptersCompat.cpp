@@ -1,4 +1,5 @@
 #include "interface/ApplicationAdapters.hpp"
+#include "interface/Completer/Proxy.hpp"
 #include "interface/Prompt.hpp"
 #include "AMManager/Client.hpp"
 #include "AMManager/FileSystem.hpp"
@@ -499,6 +500,23 @@ ECM VarGateway::DeleteVarByCli(bool all, const std::string &section,
  */
 ECM VarGateway::ListVars(const std::vector<std::string> &domains) const {
   return var_manager_.ListVars(domains);
+}
+
+/**
+ * @brief Return true when an active completer instance exists.
+ */
+bool CompletionGateway::HasActiveCompleter() const {
+  return AMCompleter::Active() != nullptr;
+}
+
+/**
+ * @brief Clear active completer cache.
+ */
+void CompletionGateway::ClearActiveCompleterCache() const {
+  AMCompleter *completer = AMCompleter::Active();
+  if (completer) {
+    completer->ClearCache();
+  }
 }
 
 /**

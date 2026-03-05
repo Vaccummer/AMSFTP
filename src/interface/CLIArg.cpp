@@ -1,13 +1,14 @@
 #include "interface/CLIArg.hpp"
 #include "interface/ApplicationAdapters.hpp"
-#include "interface/Completer/Proxy.hpp"
 #include "interface/Prompt.hpp"
 #include "application/client/FileCommandWorkflows.hpp"
 #include "application/client/ClientSessionWorkflows.hpp"
+#include "application/completion/CompletionWorkflows.hpp"
 #include "application/config/ConfigWorkflows.hpp"
 #include "application/config/HostProfileWorkflows.hpp"
 #include "application/transfer/TaskWorkflows.hpp"
 #include "application/transfer/TransferWorkflows.hpp"
+#include "application/var/VarWorkflows.hpp"
 #include <iostream>
 
 CliRunContext &CliRunContext::Instance() {
@@ -710,7 +711,7 @@ ECM VarGetArgs::Run(const CliManagers &managers,
                     const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
-  return var_gateway.QueryByName(varname);
+  return AMApplication::VarWorkflow::ExecuteVarGet(var_gateway, varname);
 }
 
 void VarGetArgs::reset() { varname.clear(); }
@@ -719,7 +720,8 @@ ECM VarDefArgs::Run(const CliManagers &managers,
                     const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
-  return var_gateway.DefineVar(global, varname, value);
+  return AMApplication::VarWorkflow::ExecuteVarDef(var_gateway, global, varname,
+                                                   value);
 }
 
 void VarDefArgs::reset() {
@@ -732,18 +734,7 @@ ECM VarDelArgs::Run(const CliManagers &managers,
                     const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
-  std::string section = "";
-  std::string varname = "";
-  if (tokens.size() == 1) {
-    varname = tokens[0];
-  } else if (tokens.size() == 2) {
-    section = tokens[0];
-    varname = tokens[1];
-  } else {
-    return Err(EC::InvalidArg, "var del requires: "
-                               "[$section] $varname");
-  }
-  return var_gateway.DeleteVarByCli(all, section, varname);
+  return AMApplication::VarWorkflow::ExecuteVarDel(var_gateway, all, tokens);
 }
 
 void VarDelArgs::reset() {
@@ -755,7 +746,7 @@ ECM VarLsArgs::Run(const CliManagers &managers,
                    const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
-  return var_gateway.ListVars(sections);
+  return AMApplication::VarWorkflow::ExecuteVarLs(var_gateway, sections);
 }
 
 void VarLsArgs::reset() { sections.clear(); }
@@ -763,15 +754,14 @@ void VarLsArgs::reset() { sections.clear(); }
 ECM CompleteCacheClearArgs::Run(const CliManagers &managers,
                                 const CliRunContext &ctx) const {
   (void)ctx;
-  auto *completer = AMCompleter::Active();
-  if (!completer) {
-    return {EC::InvalidArg, "Completer is not "
-                            "active"};
+  AMInterface::ApplicationAdapters::CompletionGateway gateway;
+  ECM rcm = AMApplication::CompletionWorkflow::ExecuteCompleteCacheClear(gateway);
+  if (!isok(rcm)) {
+    return rcm;
   }
-  completer->ClearCache();
   managers.prompt_manager.Print("Completion cache "
                                 "cleared.");
-  return {EC::Success, ""};
+  return Ok();
 }
 
 void CompleteCacheClearArgs::reset() {}
