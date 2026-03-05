@@ -1,5 +1,5 @@
 #pragma once
-#include "AMBase/DataClass.hpp"
+#include "foundation/DataClass.hpp"
 #include <atomic>
 #include <functional>
 #include <memory>

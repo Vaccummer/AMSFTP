@@ -19,7 +19,7 @@
 #include <vector>
 
 // Internal dependencies
-#include "AMBase/tools/time.hpp"
+#include "foundation/tools/time.hpp"
 #include "AMClient/Base.hpp"
 #include "AMClient/FTP.hpp"
 #include "AMClient/Local.hpp"

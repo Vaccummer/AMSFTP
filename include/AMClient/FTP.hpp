@@ -16,7 +16,7 @@
 #include <string>
 
 // Internal dependencies
-#include "AMBase/tools/auth.hpp"
+#include "foundation/tools/auth.hpp"
 #include "AMClient/Base.hpp"
 
 // Internal dependencies

@@ -1,4 +1,4 @@
-#include "AMBase/DataClass.hpp"
+#include "foundation/DataClass.hpp"
 #include "AMCLI/CLIBind.hpp"
 #include "AMCLI/InteractiveLoop.hpp"
 #include <atomic>

@@ -1,6 +1,6 @@
 #pragma once
-#include "AMBase/DataClass.hpp"
-#include "AMBase/tools/enum_related.hpp"
+#include "foundation/DataClass.hpp"
+#include "foundation/tools/enum_related.hpp"
 
 class AMCompleteEngine;
 struct ic_completion_env_s;

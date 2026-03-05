@@ -1,6 +1,6 @@
 #pragma once
 // standard library
-#include "AMBase/Enum.hpp"
+#include "foundation/Enum.hpp"
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -37,8 +37,8 @@
 #endif
 
 // project headers
-#include "AMBase/DataClass.hpp"
-#include "AMBase/tools/auth.hpp"
+#include "foundation/DataClass.hpp"
+#include "foundation/tools/auth.hpp"
 #include "AMClient/Base.hpp"
 #include <curl/curl.h>
 #include <libssh2.h>
