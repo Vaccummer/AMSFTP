@@ -1,6 +1,6 @@
 
-#include "AMCLI/CLIBind.hpp"
-#include "AMCLI/CommandTree.hpp"
+#include "interface/CLIBind.hpp"
+#include "interface/CommandTree.hpp"
 
 /**
  * @brief Bind host-related CLI commands.
@@ -909,4 +909,5 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   store_exit_code(static_cast<int>(ctx.rcm.first));
   return;
 }
+
 

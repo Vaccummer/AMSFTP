@@ -1,8 +1,8 @@
-#include "AMCLI/CommandPreprocess.hpp"
+#include "interface/CommandPreprocess.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
-#include "AMCLI/TokenTypeAnalyzer.hpp"
-#include "AMManager/Var.hpp"
+#include "domain/var/VarModel.hpp"
+#include "interface/TokenTypeAnalyzer.hpp"
 
 using EC = ErrorCode;
 
@@ -260,3 +260,4 @@ bool AMInputPreprocess::ExpandVarShortcutTokens(
   }
   return false;
 }
+

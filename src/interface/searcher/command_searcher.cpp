@@ -1,5 +1,5 @@
-#include "AMCLI/Completer/Searcher.hpp"
-#include "AMCLI/Completer/SearcherCommon.hpp"
+#include "interface/Completer/Searcher.hpp"
+#include "interface/Completer/SearcherCommon.hpp"
 #include <algorithm>
 
 using namespace AMSearcherDetail;
@@ -246,3 +246,4 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
     *out_consumed = consumed;
   }
 }
+

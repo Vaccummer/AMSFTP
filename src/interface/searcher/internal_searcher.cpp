@@ -1,15 +1,13 @@
-#include "AMCLI/Completer/Searcher.hpp"
-#include "AMCLI/Completer/SearcherCommon.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Host.hpp"
-#include "AMManager/Transfer.hpp"
-#include "AMManager/Var.hpp"
+#include "interface/Completer/Searcher.hpp"
+#include "interface/Completer/SearcherCommon.hpp"
+#include "domain/host/HostModel.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 
 using namespace AMSearcherDetail;
+namespace Runtime = AMInterface::ApplicationAdapters::Runtime;
 
 namespace {
 enum class VarZonePrefixMode {
@@ -56,15 +54,14 @@ std::vector<HostLikeNameInfo> CollectHostLikeNames_() {
     names.push_back({name, created});
   };
 
-  std::vector<std::string> created_names =
-      AMClientManager::Instance().GetClientNames();
+  std::vector<std::string> created_names = Runtime::ListClientNames();
   std::sort(created_names.begin(), created_names.end());
   for (const auto &name : created_names) {
     add_name(name, true);
   }
   add_name("local", true);
 
-  std::vector<std::string> configured_names = AMHostManager::Instance().ListNames();
+  std::vector<std::string> configured_names = Runtime::ListHostNames();
   std::sort(configured_names.begin(), configured_names.end());
   for (const auto &name : configured_names) {
     add_name(name, false);
@@ -169,15 +166,15 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
     std::vector<VarInfo> items;
     if (prefix_ref.explicit_domain) {
-      items = VarCLISet::Instance().ListByDomain(prefix_ref.domain);
+      items = Runtime::ListVarsByDomain(prefix_ref.domain);
     } else {
-      const std::string current_domain = VarCLISet::Instance().CurrentDomain();
+      const std::string current_domain = Runtime::CurrentVarDomain();
       std::unordered_map<std::string, VarInfo> by_name;
-      auto private_vars = VarCLISet::Instance().ListByDomain(current_domain);
+      auto private_vars = Runtime::ListVarsByDomain(current_domain);
       for (const auto &item : private_vars) {
         by_name[item.varname] = item;
       }
-      auto public_vars = VarCLISet::Instance().ListByDomain(varsetkn::kPublic);
+      auto public_vars = Runtime::ListVarsByDomain(varsetkn::kPublic);
       for (const auto &item : public_vars) {
         if (by_name.find(item.varname) == by_name.end()) {
           by_name[item.varname] = item;
@@ -206,8 +203,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate_ref.varname = item.varname;
       AMCompletionCandidate candidate;
       candidate.insert_text = varsetkn::BuildVarToken(candidate_ref, true);
-      candidate.display =
-          AMConfigManager::Instance().Format(candidate.insert_text, "public_varname");
+      candidate.display = Runtime::Format(candidate.insert_text, "public_varname");
       candidate.help =
           AMStr::fmt("[{}] {}", item.domain, RenderVarValue_(item.varvalue));
       candidate.kind = AMCompletionKind::VariableName;
@@ -249,13 +245,13 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       zones.push_back({zone, domain_exists, host_exists});
     };
 
-    const auto domains = VarCLISet::Instance().ListDomains();
+    const auto domains = Runtime::ListVarDomains();
     for (const auto &domain : domains) {
-      append_zone(domain, true, AMHostManager::Instance().HostExists(domain));
+      append_zone(domain, true, Runtime::HostExists(domain));
     }
-    const auto hosts = AMHostManager::Instance().ListNames();
+    const auto hosts = Runtime::ListHostNames();
     for (const auto &host : hosts) {
-      append_zone(host, VarCLISet::Instance().HasDomain(host), true);
+      append_zone(host, Runtime::HasVarDomain(host), true);
     }
     append_zone(varsetkn::kPublic, true, true);
 
@@ -279,7 +275,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       }
       const std::string style_key =
           ZoneStyleKey_(item.zone, item.domain_exists, item.host_exists);
-      candidate.display = AMConfigManager::Instance().Format(item.zone, style_key);
+      candidate.display = Runtime::Format(item.zone, style_key);
       candidate.kind = AMCompletionKind::VarZone;
       candidate.help.clear();
       candidate.score = match.score_bias;
@@ -316,7 +312,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
           path_nickname_context ? name_item.name + "@" : name_item.name;
       const std::string style_key =
           name_item.created ? "nickname" : "unestablished_nickname";
-      candidate.display = AMConfigManager::Instance().Format(name_item.name, style_key);
+      candidate.display = Runtime::Format(name_item.name, style_key);
       candidate.kind = AMCompletionKind::ClientName;
       const int uncreated_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + uncreated_bias;
@@ -350,8 +346,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
           path_nickname_context ? name_item.name + "@" : name_item.name;
       const std::string style_key =
           name_item.created ? "nickname" : "unestablished_nickname";
-      candidate.display =
-          AMConfigManager::Instance().Format(name_item.name, style_key);
+      candidate.display = Runtime::Format(name_item.name, style_key);
       candidate.kind = AMCompletionKind::HostNickname;
       const int uncreated_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + uncreated_bias;
@@ -382,7 +377,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   if (HasTarget(ctx, AMCompletionTarget::TaskId)) {
-    auto ids = AMTransferManager::Instance().ListTaskIds();
+    auto ids = Runtime::ListTaskIds();
     std::vector<std::string> keys = ids;
     for (const auto &match : BuildGeneralMatch(keys, prefix)) {
       const std::string &id = ids[match.index];
@@ -415,4 +410,3 @@ void AMInternalSearchEngine::SortCandidates(
                      return lhs.insert_text < rhs.insert_text;
                    });
 }
-

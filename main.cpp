@@ -1,6 +1,15 @@
 #include "foundation/DataClass.hpp"
-#include "AMCLI/CLIBind.hpp"
-#include "AMCLI/InteractiveLoop.hpp"
+#include "interface/ApplicationAdapters.hpp"
+#include "interface/CLIBind.hpp"
+#include "interface/InteractiveLoop.hpp"
+#include "AMManager/Client.hpp"
+#include "AMManager/Config.hpp"
+#include "AMManager/FileSystem.hpp"
+#include "AMManager/Host.hpp"
+#include "AMManager/Logger.hpp"
+#include "AMManager/SignalMonitor.hpp"
+#include "AMManager/Transfer.hpp"
+#include "AMManager/Var.hpp"
 #include <atomic>
 #include <exception>
 #include <filesystem>
@@ -34,11 +43,33 @@ int main(int argc, char **argv) {
       return app.exit(e);
     }
     time_start = std::chrono::steady_clock::now();
-    auto &managers = CliManagers::Instance();
+    auto &signal_monitor = AMCliSignalMonitor::Instance();
+    auto &config_manager = AMConfigManager::Instance();
+    auto &prompt_manager = AMPromptManager::Instance();
+    auto &host_manager = AMHostManager::Instance();
+    auto &var_manager = VarCLISet::Instance();
+    auto &log_manager = AMLogManager::Instance();
+    auto &client_manager = AMClientManager::Instance();
+    auto &transfer_manager = AMTransferManager::Instance();
+    auto &filesystem = AMFileSystem::Instance();
+    CliManagers managers(signal_monitor, config_manager, prompt_manager,
+                         host_manager, var_manager, log_manager, client_manager,
+                         transfer_manager, filesystem);
     ECM init_rcm = managers.Init();
     if (!isok(init_rcm)) {
       return static_cast<int>(init_rcm.first);
     }
+    AMInterface::ApplicationAdapters::Runtime::RuntimeBindings runtime_bindings{};
+    runtime_bindings.host_manager = &managers.host_manager;
+    runtime_bindings.client_manager = &managers.client_manager;
+    runtime_bindings.transfer_manager = &managers.transfer_manager;
+    runtime_bindings.var_manager = &managers.var_manager;
+    runtime_bindings.signal_monitor = &managers.signal_monitor;
+    runtime_bindings.prompt_manager = &managers.prompt_manager;
+    runtime_bindings.config_manager = &managers.config_manager;
+    runtime_bindings.filesystem = &managers.filesystem;
+    AMInterface::ApplicationAdapters::Runtime::Bind(runtime_bindings);
+
     auto &run_ctx = CliRunContext::Instance();
     run_ctx.rcm = {EC::Success, ""};
     run_ctx.async = false;
@@ -83,3 +114,4 @@ int main(int argc, char **argv) {
     return static_cast<int>(EC::UnknownError);
   }
 }
+
