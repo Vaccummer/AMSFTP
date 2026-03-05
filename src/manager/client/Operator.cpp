@@ -1,10 +1,10 @@
 #include "infrastructure/client/common/Base.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include "infrastructure/client/runtime/IOCore.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Host.hpp"
-#include "AMManager/Logger.hpp"
-#include "bootstrap/ClientFactory.hpp"
+#include "domain/client/ClientManager.hpp"
+#include "infrastructure/Config.hpp"
+#include "domain/host/HostManager.hpp"
+#include "infrastructure/Logger.hpp"
 #include "interface/Prompt.hpp"
 #include <chrono>
 #include <filesystem>
@@ -12,7 +12,10 @@
 #include <string>
 #include <thread>
 
-namespace AMClientManage {
+using ClientHandle = AMDomain::client::AMClientOperator::ClientHandle;
+using AuthCallback = AMDomain::client::AMClientOperator::AuthCallback;
+using TraceCallback = AMDomain::client::AMClientOperator::TraceCallback;
+
 namespace {
 /**
  * @brief Resolve heartbeat check timeout from settings with clamped range.
@@ -27,7 +30,7 @@ int ResolveHeartbeatTimeoutMsFromSettings_() {
     }
     return value;
   };
-  return AMConfigManager::Instance().ResolveArg(
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(
       DocumentKind::Settings,
       {"Options", "ClientManager", "heartbeat_timeout_ms"}, 100, clamp_timeout);
 }
@@ -38,7 +41,8 @@ inline bool IsLocalNickname_(const std::string &nickname) {
 }
 
 inline ClientMaintainer::DisconnectCallback
-BuildMaintainerDisconnectCallback_(const Operator::DisconnectCallback &cb) {
+BuildMaintainerDisconnectCallback_(
+    const AMDomain::client::AMClientOperator::DisconnectCallback &cb) {
   return cb;
 }
 
@@ -54,7 +58,7 @@ inline void InitClientWorkdir_(const ClientHandle &client) {
   client->SetCwd(home);
 }
 
-inline void ApplyLoginDir_(AMHostManager &hostm, const std::string &nickname,
+inline void ApplyLoginDir_(AMDomain::host::AMHostManager &hostm, const std::string &nickname,
                            const ClientHandle &client,
                            const std::string &login_dir, amf flag) {
   if (!client) {
@@ -94,12 +98,12 @@ inline void StoreClientMetadata_(const ClientHandle &client,
   if (!client) {
     return;
   }
-  (void)client->StoreNamedData(AMApplication::ClientPort::kClientMetadataStoreName,
+  (void)client->StoreNamedData(AMDomain::client::kClientMetadataStoreName,
                                metadata, true);
 }
 } // namespace
 
-ECM Manager::Init() {
+ECM AMDomain::client::AMClientManager::Init() {
   SetPasswordCallback();
   SetDisconnectCallback();
   local_client_base_ = CreateLocalClient_();
@@ -117,11 +121,11 @@ ECM Manager::Init() {
   return Ok();
 }
 
-void Operator::SetPasswordCallback(AuthCallback cb) {
+void AMDomain::client::AMClientOperator::SetPasswordCallback(AuthCallback cb) {
   password_cb_ = cb ? std::move(cb) : BuiltinPasswordCallback_();
 }
 
-void Operator::SetDisconnectCallback(DisconnectCallback cb) {
+void AMDomain::client::AMClientOperator::SetDisconnectCallback(DisconnectCallback cb) {
   disconnect_cb_ = cb ? std::move(cb) : BuiltinDisconnectCallback_();
   if (clients_) {
     clients_->SetDisconnectCallback(
@@ -129,7 +133,7 @@ void Operator::SetDisconnectCallback(DisconnectCallback cb) {
   }
 }
 
-ClientMaintainer &Operator::Clients() {
+ClientMaintainer &AMDomain::client::AMClientOperator::Clients() {
   if (!clients_) {
     const int heartbeat_timeout_ms = ResolveHeartbeatTimeoutMsFromSettings_();
     clients_ = std::make_shared<ClientMaintainer>(
@@ -140,18 +144,18 @@ ClientMaintainer &Operator::Clients() {
   return *clients_;
 }
 
-std::vector<std::string> Operator::GetClientNames() {
+std::vector<std::string> AMDomain::client::AMClientOperator::GetClientNames() {
   return clients_ ? clients_->GetNicknames() : std::vector<std::string>{};
 }
 
-std::vector<ClientHandle> Operator::GetClients() {
+std::vector<ClientHandle> AMDomain::client::AMClientOperator::GetClients() {
   return clients_ ? clients_->GetClients() : std::vector<ClientHandle>{};
 }
 
 /**
  * @brief Return one managed client by nickname.
  */
-ClientHandle Operator::GetClient(const std::string &nickname) const {
+ClientHandle AMDomain::client::AMClientOperator::GetClient(const std::string &nickname) const {
   if (clients_) {
     return clients_->GetClient(nickname);
   }
@@ -161,15 +165,15 @@ ClientHandle Operator::GetClient(const std::string &nickname) const {
   return nullptr;
 }
 
-ClientHandle Operator::LocalClient() const {
+ClientHandle AMDomain::client::AMClientOperator::LocalClient() const {
   return local_client_base_;
 }
 
-std::string Operator::CurrentNickname() const {
+std::string AMDomain::client::AMClientOperator::CurrentNickname() const {
   return current_client_->GetNickname();
 }
 
-ClientHandle Operator::CurrentClient() const {
+ClientHandle AMDomain::client::AMClientOperator::CurrentClient() const {
   if (current_client_) {
     return current_client_;
   } else {
@@ -177,11 +181,11 @@ ClientHandle Operator::CurrentClient() const {
   }
 }
 
-void Operator::SetCurrentClient(const ClientHandle &client) {
+void AMDomain::client::AMClientOperator::SetCurrentClient(const ClientHandle &client) {
   current_client_ = client;
 }
 
-// void Operator::ConfigureState(
+// void AMDomain::client::AMClientOperator::ConfigureState(
 //     const std::shared_ptr<ClientMaintainer> &clients,
 //     const ClientHandle &local_client_base, ssize_t trace_num)
 //     {
@@ -195,20 +199,20 @@ void Operator::SetCurrentClient(const ClientHandle &client) {
 //   }
 // }
 
-void Operator::ResetSpinnerState() {
+void AMDomain::client::AMClientOperator::ResetSpinnerState() {
   spinner_stop_requested_.store(false, std::memory_order_relaxed);
   spinner_line_len_.store(0, std::memory_order_relaxed);
 }
 
-void Operator::SetSpinnerLineLen(size_t line_len) {
+void AMDomain::client::AMClientOperator::SetSpinnerLineLen(size_t line_len) {
   spinner_line_len_.store(line_len, std::memory_order_relaxed);
 }
 
-bool Operator::SpinnerStopRequested() const {
+bool AMDomain::client::AMClientOperator::SpinnerStopRequested() const {
   return spinner_stop_requested_.load(std::memory_order_relaxed);
 }
 
-void Operator::RequestSpinnerStop() {
+void AMDomain::client::AMClientOperator::RequestSpinnerStop() {
   if (spinner_stop_requested_.exchange(true, std::memory_order_relaxed)) {
     return;
   }
@@ -219,9 +223,10 @@ void Operator::RequestSpinnerStop() {
 }
 
 std::pair<ECM, ClientHandle>
-Operator::AddClient(const std::string &nickname,
-                    std::shared_ptr<ClientMaintainer> maintainer, bool force,
-                    bool quiet, TraceCallback trace_cb, amf interrupt_flag) {
+AMDomain::client::AMClientOperator::AddClient(const std::string &nickname,
+                           std::shared_ptr<ClientMaintainer> maintainer,
+                           bool force, bool quiet, TraceCallback trace_cb,
+                           amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   ClientMaintainer &target = maintainer ? *maintainer : Clients();
 
@@ -241,10 +246,10 @@ Operator::AddClient(const std::string &nickname,
     if (rcm.first != EC::Success) {
       return {rcm, existing};
     }
-    auto existing_cfg = AMHostManager::Instance().GetClientConfig(nickname);
+    auto existing_cfg = AMDomain::host::AMHostManager::Instance().GetClientConfig(nickname);
     if (existing_cfg.first.first == EC::Success) {
       StoreClientMetadata_(existing, existing_cfg.second.metadata);
-      ApplyLoginDir_(AMHostManager::Instance(), nickname, existing,
+      ApplyLoginDir_(AMDomain::host::AMHostManager::Instance(), nickname, existing,
                      existing_cfg.second.metadata.login_dir, flag);
     } else {
       InitClientWorkdir_(existing);
@@ -252,12 +257,12 @@ Operator::AddClient(const std::string &nickname,
     return {Ok(), existing};
   }
 
-  auto [rcm2, client_config] = AMHostManager::Instance().GetClientConfig(nickname);
+  auto [rcm2, client_config] = AMDomain::host::AMHostManager::Instance().GetClientConfig(nickname);
   if (rcm2.first != EC::Success) {
     return {rcm2, nullptr};
   }
 
-  auto keys_result = AMHostManager::Instance().PrivateKeys(false);
+  auto keys_result = AMDomain::host::AMHostManager::Instance().PrivateKeys(false);
   if (keys_result.first.first != EC::Success) {
     return {keys_result.first, nullptr};
   }
@@ -265,7 +270,7 @@ Operator::AddClient(const std::string &nickname,
   std::atomic<bool> spinner_running(false);
   ResetSpinnerState();
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, &spinner_running);
-  auto base_client = AMBootstrap::CreateClient(
+  auto base_client = AMInfra::ClientRuntime::CreateClient(
       client_config.request, 10, std::move(trace_cb), keys_result.second,
       std::move(auth_cb));
   if (!base_client) {
@@ -310,15 +315,15 @@ Operator::AddClient(const std::string &nickname,
   }
 
   StoreClientMetadata_(base_client, client_config.metadata);
-  ApplyLoginDir_(AMHostManager::Instance(), nickname, base_client, client_config.metadata.login_dir, flag);
+  ApplyLoginDir_(AMDomain::host::AMHostManager::Instance(), nickname, base_client, client_config.metadata.login_dir, flag);
   target.add_client(nickname, base_client, true);
   return {Ok(), base_client};
 }
 
 std::pair<ECM, ClientHandle>
-Operator::AddClient(const std::string &nickname, bool force, bool quiet,
-                    TraceCallback trace_cb, amf interrupt_flag,
-                    bool register_to_manager) {
+AMDomain::client::AMClientOperator::AddClient(const std::string &nickname, bool force,
+                           bool quiet, TraceCallback trace_cb,
+                           amf interrupt_flag, bool register_to_manager) {
   if (register_to_manager) {
     return AddClient(nickname, nullptr, force, quiet, std::move(trace_cb),
                      interrupt_flag);
@@ -332,12 +337,12 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
     trace_cb = AMLogManager::Instance().TraceCallbackFunc();
   }
 
-  auto client_config = AMHostManager::Instance().GetClientConfig(nickname);
+  auto client_config = AMDomain::host::AMHostManager::Instance().GetClientConfig(nickname);
   if (client_config.first.first != EC::Success) {
     return {client_config.first, nullptr};
   }
 
-  auto keys_result = AMHostManager::Instance().PrivateKeys(false);
+  auto keys_result = AMDomain::host::AMHostManager::Instance().PrivateKeys(false);
   if (keys_result.first.first != EC::Success) {
     return {keys_result.first, nullptr};
   }
@@ -345,7 +350,7 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
   std::atomic<bool> spinner_running(false);
   ResetSpinnerState();
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, &spinner_running);
-  auto base_client = AMBootstrap::CreateClient(
+  auto base_client = AMInfra::ClientRuntime::CreateClient(
       client_config.second.request, 10, std::move(trace_cb),
       keys_result.second, std::move(auth_cb));
   if (!base_client) {
@@ -390,18 +395,21 @@ Operator::AddClient(const std::string &nickname, bool force, bool quiet,
   }
 
   StoreClientMetadata_(base_client, client_config.second.metadata);
-  ApplyLoginDir_(AMHostManager::Instance(), nickname, base_client, client_config.second.metadata.login_dir,
+  ApplyLoginDir_(AMDomain::host::AMHostManager::Instance(), nickname, base_client, client_config.second.metadata.login_dir,
                  flag);
   return {Ok(), base_client};
 }
 
 std::pair<ECM, ClientHandle>
-Operator::Connect(const std::string &nickname, const std::string &hostname,
-                  const std::string &username, ClientProtocol protocol,
-                  int64_t port, const std::string &password,
-                  const std::string &keyfile,
-                  std::shared_ptr<ClientMaintainer> maintainer, bool quiet,
-                  TraceCallback trace_cb, amf interrupt_flag) {
+AMDomain::client::AMClientOperator::Connect(const std::string &nickname,
+                         const std::string &hostname,
+                         const std::string &username,
+                         ClientProtocol protocol, int64_t port,
+                         const std::string &password,
+                         const std::string &keyfile,
+                         std::shared_ptr<ClientMaintainer> maintainer,
+                         bool quiet, TraceCallback trace_cb,
+                         amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   ClientMaintainer &target = maintainer ? *maintainer : Clients();
 
@@ -434,7 +442,7 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
 
   std::vector<std::string> keys;
   if (keyfile.empty()) {
-    auto keys_result = AMHostManager::Instance().PrivateKeys(false);
+    auto keys_result = AMDomain::host::AMHostManager::Instance().PrivateKeys(false);
     if (keys_result.first.first != EC::Success) {
       return {keys_result.first, nullptr};
     }
@@ -463,7 +471,7 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
     trace_cb = AMLogManager::Instance().TraceCallbackFunc();
   }
   auto auth_cb = BuildAuthCallback_(password_cb_, quiet, nullptr);
-  auto base_client = AMBootstrap::CreateClient(
+  auto base_client = AMInfra::ClientRuntime::CreateClient(
       request, 10, std::move(trace_cb), std::move(keys), std::move(auth_cb));
   if (!base_client) {
     return {Err(EC::OperationUnsupported, "Unsupported protocol"), nullptr};
@@ -480,19 +488,19 @@ Operator::Connect(const std::string &nickname, const std::string &hostname,
   entry.request.protocol = protocol;
   entry.request.buffer_size = AMDefaultRemoteBufferSize;
   entry.metadata.login_dir = "";
-  ECM save_rcm = AMHostManager::Instance().UpsertHost(entry, true);
+  ECM save_rcm = AMDomain::host::AMHostManager::Instance().UpsertHost(entry, true);
   if (save_rcm.first != EC::Success) {
     return {save_rcm, base_client};
   }
 
   StoreClientMetadata_(base_client, entry.metadata);
-  ApplyLoginDir_(AMHostManager::Instance(), resolved_nickname, base_client, "", flag);
+  ApplyLoginDir_(AMDomain::host::AMHostManager::Instance(), resolved_nickname, base_client, "", flag);
   target.add_client(resolved_nickname, base_client, true);
   return {Ok(), base_client};
 }
 
-ECM Operator::RemoveClient(const std::string &nickname,
-                           std::shared_ptr<ClientMaintainer> maintainer) {
+ECM AMDomain::client::AMClientOperator::RemoveClient(
+    const std::string &nickname, std::shared_ptr<ClientMaintainer> maintainer) {
   if (IsLocalNickname_(nickname)) {
     return Err(EC::InvalidArg, "Local client cannot be removed");
   }
@@ -506,10 +514,10 @@ ECM Operator::RemoveClient(const std::string &nickname,
 }
 
 std::pair<ECM, ClientHandle>
-Operator::CheckClient(const std::string &nickname,
-                      const std::shared_ptr<ClientMaintainer> &maintainer,
-                      bool update, amf interrupt_flag, int timeout_ms,
-                      int64_t start_time) {
+AMDomain::client::AMClientOperator::CheckClient(const std::string &nickname,
+                             const std::shared_ptr<ClientMaintainer> &maintainer,
+                             bool update, amf interrupt_flag, int timeout_ms,
+                             int64_t start_time) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   ClientMaintainer &target = maintainer ? *maintainer : Clients();
   auto client = target.GetClient(nickname);
@@ -533,7 +541,8 @@ Operator::CheckClient(const std::string &nickname,
 }
 
 std::pair<ECM, ClientHandle>
-Operator::EnsureClient(const std::string &nickname, amf interrupt_flag) {
+AMDomain::client::AMClientOperator::EnsureClient(const std::string &nickname,
+                               amf interrupt_flag) {
   amf flag = interrupt_flag ? interrupt_flag : TaskControlToken::Instance();
   if (IsLocalNickname_(nickname)) {
     return {Ok(), LocalClient()};
@@ -551,7 +560,7 @@ Operator::EnsureClient(const std::string &nickname, amf interrupt_flag) {
   return {Ok(), existing};
 }
 
-void Operator::SetIsInteractiveFlag(
+void AMDomain::client::AMClientOperator::SetIsInteractiveFlag(
     const std::shared_ptr<std::atomic<bool>> &is_interactive) {
   if (!is_interactive) {
     return;
@@ -559,20 +568,21 @@ void Operator::SetIsInteractiveFlag(
   is_interactive_ = is_interactive;
 }
 
-bool Operator::IsInteractive() const {
+bool AMDomain::client::AMClientOperator::IsInteractive() const {
   if (!is_interactive_) {
     return false;
   }
   return is_interactive_->load(std::memory_order_relaxed);
 }
 
-std::shared_ptr<std::atomic<bool>> Operator::GetIsInteractiveFlag() const {
+std::shared_ptr<std::atomic<bool>> AMDomain::client::AMClientOperator::GetIsInteractiveFlag()
+    const {
   return is_interactive_;
 }
 
-AuthCallback Operator::BuildAuthCallback_(const AuthCallback &auth_cb,
-                                          bool quiet,
-                                          std::atomic<bool> *spinner_running) {
+AuthCallback AMDomain::client::AMClientOperator::BuildAuthCallback_(
+    const AuthCallback &auth_cb, bool quiet,
+    std::atomic<bool> *spinner_running) {
   if (!auth_cb) {
     return {};
   }
@@ -589,8 +599,7 @@ AuthCallback Operator::BuildAuthCallback_(const AuthCallback &auth_cb,
   };
 }
 
-void Operator::ApplyKnownHostCallback_(
-    const ClientHandle &client) {
+void AMDomain::client::AMClientOperator::ApplyKnownHostCallback_(const ClientHandle &client) {
   if (!client || client->GetProtocol() != ClientProtocol::SFTP) {
     return;
   }
@@ -604,7 +613,7 @@ void Operator::ApplyKnownHostCallback_(
       return Err(EC::InvalidArg, "invalid known host query");
     }
     KnownHostQuery stored = query;
-    ECM find_rcm = AMHostManager::Instance().FindKnownHost(stored);
+    ECM find_rcm = AMDomain::host::AMHostManager::Instance().FindKnownHost(stored);
     if (find_rcm.first != EC::Success) {
       bool canceled = false;
       bool accepted = true;
@@ -620,7 +629,7 @@ void Operator::ApplyKnownHostCallback_(
       if (canceled || !accepted) {
         return Err(EC::ConfigCanceled, "Known host fingerprint add canceled");
       }
-      return AMHostManager::Instance().UpsertKnownHost(query, true);
+      return AMDomain::host::AMHostManager::Instance().UpsertKnownHost(query, true);
     }
     if (find_rcm.first != EC::Success) {
       return find_rcm;
@@ -638,7 +647,7 @@ void Operator::ApplyKnownHostCallback_(
 }
 
 std::optional<std::string>
-Operator::DefaultPasswordCallback(const AuthCBInfo &info) {
+AMDomain::client::AMClientOperator::DefaultPasswordCallback(const AuthCBInfo &info) {
   std::lock_guard<std::mutex> lock(auth_io_mtx_);
 
   const std::string client_name =
@@ -662,15 +671,15 @@ Operator::DefaultPasswordCallback(const AuthCBInfo &info) {
     return std::nullopt;
   }
 
-  auto cfg = AMHostManager::Instance().GetClientConfig(client_name);
+  auto cfg = AMDomain::host::AMHostManager::Instance().GetClientConfig(client_name);
   if (cfg.first.first == EC::Success) {
     cfg.second.request.password = info.password_n;
-    (void)AMHostManager::Instance().UpsertHost(cfg.second, true);
+    (void)AMDomain::host::AMHostManager::Instance().UpsertHost(cfg.second, true);
   }
   return std::nullopt;
 }
 
-void Operator::DefaultDisconnectCallback(
+void AMDomain::client::AMClientOperator::DefaultDisconnectCallback(
     const ClientHandle &client, const ECM &ecm) {
   if (!client || ecm.first == EC::Success) {
     return;
@@ -682,20 +691,21 @@ void Operator::DefaultDisconnectCallback(
                                           : ecm.second)});
 }
 
-AuthCallback Operator::BuiltinPasswordCallback_() {
+AuthCallback AMDomain::client::AMClientOperator::BuiltinPasswordCallback_() {
   return
       [this](const AuthCBInfo &info) { return DefaultPasswordCallback(info); };
 }
 
-Operator::DisconnectCallback Operator::BuiltinDisconnectCallback_() {
+AMDomain::client::AMClientOperator::DisconnectCallback
+AMDomain::client::AMClientOperator::BuiltinDisconnectCallback_() {
   return [this](const ClientHandle &client, const ECM &ecm) {
     DefaultDisconnectCallback(client, ecm);
   };
 }
 
-ClientHandle Operator::CreateLocalClient_() {
-  auto [rcm, cfg] = AMHostManager::Instance().GetLocalConfig();
-  auto client_t = AMBootstrap::CreateClient(
+ClientHandle AMDomain::client::AMClientOperator::CreateLocalClient_() {
+  auto [rcm, cfg] = AMDomain::host::AMHostManager::Instance().GetLocalConfig();
+  auto client_t = AMInfra::ClientRuntime::CreateClient(
       cfg.request, 10, std::move(AMLogManager::Instance().TraceCallbackFunc()),
       {}, {});
   if (!client_t) {
@@ -712,4 +722,5 @@ ClientHandle Operator::CreateLocalClient_() {
   return client_t;
 }
 
-} // namespace AMClientManage
+
+

@@ -10,7 +10,7 @@
 #include <variant>
 #include <vector>
 
-namespace AMApplication::ClientPort {
+namespace AMDomain::client {
 using CB =
     std::shared_ptr<std::function<void(std::string, std::string, std::string)>>;
 using WalkErrorCallback =
@@ -32,7 +32,7 @@ using CommandResult = std::pair<ECM, std::pair<std::string, int>>;
 inline constexpr const char *kClientMetadataStoreName = "client.metadata";
 
 /**
- * @brief Application-level client capability port.
+ * @brief Domain-level client capability port.
  *
  * Infrastructure client adapters implement this interface.
  */
@@ -372,4 +372,4 @@ public:
                           amf interrupt_flag = nullptr, int timeout_ms = -1,
                           int64_t start_time = -1) = 0;
 };
-} // namespace AMApplication::ClientPort
+} // namespace AMDomain::client

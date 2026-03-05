@@ -1,10 +1,11 @@
 #include "infrastructure/client/runtime/IOCore.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/Host.hpp"
+#include "domain/client/ClientManager.hpp"
+#include "domain/host/HostManager.hpp"
 #include "interface/Prompt.hpp"
 #include <filesystem>
 
-namespace AMClientManage {
+using ClientHandle = AMDomain::client::AMClientOperator::ClientHandle;
+
 namespace {
 inline bool IsLocalNickname_(const std::string &nickname) {
   const std::string lowered = AMStr::lowercase(AMStr::Strip(nickname));
@@ -13,7 +14,7 @@ inline bool IsLocalNickname_(const std::string &nickname) {
 } // namespace
 
 std::tuple<std::string, std::string, ClientHandle, ECM>
-PathOps::ParsePath(const std::string &input) {
+AMDomain::client::AMClientPathOps::ParsePath(const std::string &input) {
   if (!input.empty() && input.front() == '@') {
     return {"local", input.substr(1), LocalClient(), Ok()};
   }
@@ -31,7 +32,7 @@ PathOps::ParsePath(const std::string &input) {
     return {"local", path, LocalClient(), Ok()};
   }
 
-  auto cfg = AMHostManager::Instance().GetClientConfig(prefix);
+  auto cfg = AMDomain::host::AMHostManager::Instance().GetClientConfig(prefix);
   if (cfg.first.first != EC::Success) {
     return {prefix, path, nullptr,
             Err(EC::HostConfigNotFound,
@@ -48,7 +49,7 @@ PathOps::ParsePath(const std::string &input) {
 }
 
 std::tuple<std::string, std::string, ClientHandle, ECM>
-PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
+AMDomain::client::AMClientPathOps::ParsePath(const std::string &input, amf interrupt_flag) {
   if (!input.empty() && input.front() == '@') {
     return {"local", input.substr(1), LocalClient(), Ok()};
   }
@@ -66,7 +67,7 @@ PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
     return {"local", path, LocalClient(), Ok()};
   }
 
-  auto cfg = AMHostManager::Instance().GetClientConfig(prefix);
+  auto cfg = AMDomain::host::AMHostManager::Instance().GetClientConfig(prefix);
   if (cfg.first.first != EC::Success) {
     return {prefix, path, nullptr,
             Err(EC::HostConfigNotFound,
@@ -93,8 +94,8 @@ PathOps::ParsePath(const std::string &input, amf interrupt_flag) {
   return {prefix, path, existing, Ok()};
 }
 
-std::string PathOps::AbsPath(const std::string &path,
-                             const ClientHandle &client) const {
+std::string AMDomain::client::AMClientPathOps::AbsPath(const std::string &path,
+                                     const ClientHandle &client) const {
   if (!client) {
     return path;
   }
@@ -107,7 +108,7 @@ std::string PathOps::AbsPath(const std::string &path,
 }
 
 std::string
-PathOps::GetOrInitWorkdir(const ClientHandle &client) const {
+AMDomain::client::AMClientPathOps::GetOrInitWorkdir(const ClientHandle &client) const {
   if (!client) {
     return "";
   }
@@ -138,8 +139,8 @@ PathOps::GetOrInitWorkdir(const ClientHandle &client) const {
   return home;
 }
 
-void PathOps::SetClientWorkdir(const ClientHandle &client,
-                               const std::string &path) const {
+void AMDomain::client::AMClientPathOps::SetClientWorkdir(const ClientHandle &client,
+                                       const std::string &path) const {
   if (!client) {
     return;
   }
@@ -155,8 +156,8 @@ void PathOps::SetClientWorkdir(const ClientHandle &client,
   client->SetCwd(normalized);
 }
 
-std::string PathOps::BuildPath(const ClientHandle &client,
-                               const std::string &path) const {
+std::string AMDomain::client::AMClientPathOps::BuildPath(const ClientHandle &client,
+                                       const std::string &path) const {
   if (!client) {
     return path;
   }
@@ -168,7 +169,7 @@ std::string PathOps::BuildPath(const ClientHandle &client,
   return AMFS::abspath(path, true, home, cwd, "/");
 }
 
-void PathOps::InitClientWorkdir(
+void AMDomain::client::AMClientPathOps::InitClientWorkdir(
     const ClientHandle &client) const {
   if (!client) {
     return;
@@ -181,9 +182,10 @@ void PathOps::InitClientWorkdir(
   client->SetCwd(home);
 }
 
-void PathOps::ApplyLoginDir(const std::string &nickname,
-                            const ClientHandle &client,
-                            const std::string &login_dir, amf flag) const {
+void AMDomain::client::AMClientPathOps::ApplyLoginDir(const std::string &nickname,
+                                    const ClientHandle &client,
+                                    const std::string &login_dir,
+                                    amf flag) const {
   if (!client) {
     return;
   }
@@ -213,9 +215,11 @@ void PathOps::ApplyLoginDir(const std::string &nickname,
   client->SetLoginDir(normalized);
 
   if (need_persist && !IsLocalNickname_(nickname)) {
-    (void)AMHostManager::Instance().SetHostValue(nickname, configkn::login_dir,
+    (void)AMDomain::host::AMHostManager::Instance().SetHostValue(nickname, configkn::login_dir,
                                                  resolved);
   }
 }
 
-} // namespace AMClientManage
+
+
+

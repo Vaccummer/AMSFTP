@@ -1014,3 +1014,4 @@ void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
   }
 }
 
+

@@ -1,18 +1,19 @@
 #include "foundation/DataClass.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include "foundation/Enum.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/auth.hpp"
 #include "foundation/tools/json.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Host.hpp"
+#include "domain/client/ClientManager.hpp"
+#include "infrastructure/Config.hpp"
+#include "domain/host/HostManager.hpp"
 #include "interface/Prompt.hpp"
 #include <sstream>
 #include <string>
 #include <vector>
 
 
-using cls = AMHostManager;
+using cls = AMDomain::host::AMHostManager;
 
 std::vector<std::string> SplitTokens(const std::string &text) {
   std::istringstream iss(text);
@@ -30,7 +31,7 @@ std::pair<ECM, std::vector<std::string>>
 cls::PrivateKeys(bool print_sign) const {
   std::vector<std::string> keys = {};
   ECM rcm = Ok();
-  if (!AMConfigManager::Instance().ResolveArg(DocumentKind::Config,
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(DocumentKind::Config,
                                               {configkn::keys}, &keys)) {
     rcm = {EC::CommonFailure,
            AMStr::fmt("Fail to read config attribute: {}", configkn::keys)};
@@ -48,7 +49,7 @@ cls::PrivateKeys(bool print_sign) const {
     const PathInfo *info_ptr =
         (stat_rcm.first == EC::Success) ? &info : nullptr;
     const std::string styled_path =
-        AMConfigManager::Instance().Format(abs_path, "", info_ptr);
+        AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(abs_path, "", info_ptr);
     AMPromptManager::Instance().Print(AMStr::fmt("[{}]  {}", i, styled_path));
   }
   return {rcm, keys};
@@ -70,11 +71,11 @@ ECM cls::List(bool detailed) const {
     for (auto it = host_configs.begin(); it != host_configs.end(); ++it) {
       const std::string &nickname = it->first;
       const bool created =
-          static_cast<bool>(AMClientManager::Instance().GetClient(nickname));
+          static_cast<bool>(AMDomain::client::AMClientManager::Instance().GetClient(nickname));
       const std::string style_key =
           created ? "nickname" : "unestablished_nickname";
       const std::string styled =
-          AMConfigManager::Instance().Format(nickname, style_key);
+          AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(nickname, style_key);
       const size_t display_len = nickname.size();
       const size_t separator_len = current_width == 0 ? 0 : 3;
       if (current_width + separator_len + display_len > max_width &&
@@ -121,7 +122,7 @@ ECM cls::Add(const std::string &nickname) {
     AMPromptManager::Instance().ErrorFormat(prompt_status);
     return prompt_status;
   }
-  AMConfigManager::Instance().Dump(DocumentKind::Config, "", true);
+  AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(DocumentKind::Config, "", true);
   return prompt_status;
 }
 
@@ -143,7 +144,7 @@ ECM cls::Modify(const std::string &nickname) {
     AMPromptManager::Instance().ErrorFormat(prompt_status);
     return prompt_status;
   }
-  AMConfigManager::Instance().Dump(DocumentKind::Config, "", true);
+  AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(DocumentKind::Config, "", true);
   return prompt_status;
 }
 
@@ -186,7 +187,7 @@ ECM cls::Delete(const std::vector<std::string> &targets) {
     if (i > 0) {
       listing += ", ";
     }
-    listing += AMConfigManager::Instance().Format(uniq_targets[i], "nickname");
+    listing += AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(uniq_targets[i], "nickname");
   }
 
   bool canceled = false;
@@ -208,10 +209,10 @@ ECM cls::Delete(const std::vector<std::string> &targets) {
     }
     // AMPromptManager::Instance().Print(
     //     AMStr::fmt("Deleted host: {}",
-    //     AMConfigManager::Instance().Format(name, "nickname")));
+    //     AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(name, "nickname")));
   }
 
-  return AMConfigManager::Instance().Dump(DocumentKind::Config, "", true);
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(DocumentKind::Config, "", true);
 }
 
 /**
@@ -239,7 +240,7 @@ ECM cls::Query(const std::vector<std::string> &targets) const {
     auto it = host_configs.find(nickname);
     if (it == host_configs.end()) {
       const std::string styled =
-          AMConfigManager::Instance().Format(nickname, "nickname");
+          AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(nickname, "nickname");
       ECM err =
           Err(EC::HostConfigNotFound, AMStr::fmt("Host {} not found", styled));
       AMPromptManager::Instance().ErrorFormat(err);
@@ -333,21 +334,21 @@ ECM cls::Src() const {
   std::string config_path = "";
   std::string settings_path = "";
 
-  if (AMConfigManager::Instance().GetDataPath(DocumentKind::Config,
+  if (AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().GetDataPath(DocumentKind::Config,
                                               &config_path_obj)) {
     config_path = config_path_obj.string();
     auto [config_rcm, config_info] = AMFS::stat(config_path, false);
     AMPromptManager::Instance().Print(AMStr::fmt(
         "{} = {}", config_label,
-        AMConfigManager::Instance().Format(config_path, "dir", &config_info)));
+        AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(config_path, "dir", &config_info)));
   }
-  if (AMConfigManager::Instance().GetDataPath(DocumentKind::Settings,
+  if (AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().GetDataPath(DocumentKind::Settings,
                                               &settings_path_obj)) {
     settings_path = settings_path_obj.string();
     auto [settings_rcm, settings_info] = AMFS::stat(settings_path, false);
     AMPromptManager::Instance().Print(
         AMStr::fmt("{} = {}", settings_label,
-                   AMConfigManager::Instance().Format(settings_path, "dir",
+                   AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(settings_path, "dir",
                                                       &settings_info)));
   }
   return Ok();
@@ -511,23 +512,23 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
 
   bool write_ok = false;
   if (field == configkn::port) {
-    write_ok = AMConfigManager::Instance().SetArg(
+    write_ok = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(
         DocumentKind::Config, {configkn::hosts, nickname, field},
         static_cast<int64_t>(updated.request.port));
   } else if (field == configkn::buffer_size) {
-    write_ok = AMConfigManager::Instance().SetArg(
+    write_ok = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(
         DocumentKind::Config, {configkn::hosts, nickname, field},
         static_cast<int64_t>(updated.request.buffer_size));
   } else if (field == configkn::compression) {
-    write_ok = AMConfigManager::Instance().SetArg(
+    write_ok = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(
         DocumentKind::Config, {configkn::hosts, nickname, field},
         updated.request.compression);
   } else if (field == configkn::wrap_cmd) {
-    write_ok = AMConfigManager::Instance().SetArg(
+    write_ok = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(
         DocumentKind::Config, {configkn::hosts, nickname, field},
         updated.metadata.wrap_cmd);
   } else {
-    write_ok = AMConfigManager::Instance().SetArg(
+    write_ok = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(
         DocumentKind::Config, {configkn::hosts, nickname, field}, new_value);
   }
 
@@ -537,9 +538,14 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     return set_status;
   }
 
-  AMConfigManager::Instance().Dump(DocumentKind::Config, "", true);
+  AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(DocumentKind::Config, "", true);
   AMPromptManager::Instance().Print(
       AMStr::fmt("{}.{}: {} -> {}", nickname, field, old_value, new_value));
   return set_status;
 }
+
+
+
+
+
 

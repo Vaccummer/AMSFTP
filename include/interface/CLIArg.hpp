@@ -10,12 +10,22 @@
 class AMInfraCliSignalMonitor;
 class AMInfraConfigManager;
 class AMPromptManager;
-class AMHostManager;
-class VarCLISet;
 class AMInfraLogManager;
+namespace AMDomain::host {
+class AMHostManager;
+}
+namespace AMDomain::var {
+class VarCLISet;
+}
+namespace AMDomain::client {
 class AMClientManager;
+}
+namespace AMDomain::transfer {
 class AMTransferManager;
+}
+namespace AMDomain::filesystem {
 class AMFileSystem;
+}
 namespace CLI {
 class App;
 }
@@ -31,10 +41,10 @@ struct CliManagers : public NonCopyableNonMovable {
    */
   CliManagers(AMInfraCliSignalMonitor &signal_monitor,
               AMInfraConfigManager &config_manager,
-              AMPromptManager &prompt_manager, AMHostManager &host_manager,
-              VarCLISet &var_manager, AMInfraLogManager &log_manager,
-              AMClientManager &client_manager,
-              AMTransferManager &transfer_manager, AMFileSystem &filesystem);
+              AMPromptManager &prompt_manager, AMDomain::host::AMHostManager &host_manager,
+              AMDomain::var::VarCLISet &var_manager, AMInfraLogManager &log_manager,
+              AMDomain::client::AMClientManager &client_manager,
+              AMDomain::transfer::AMTransferManager &transfer_manager, AMDomain::filesystem::AMFileSystem &filesystem);
 
   /**
    * @brief Initialize all bound managers in dependency-safe order.
@@ -44,12 +54,12 @@ struct CliManagers : public NonCopyableNonMovable {
   AMInfraCliSignalMonitor &signal_monitor;
   AMInfraConfigManager &config_manager;
   AMPromptManager &prompt_manager;
-  AMHostManager &host_manager;
-  VarCLISet &var_manager;
+  AMDomain::host::AMHostManager &host_manager;
+  AMDomain::var::VarCLISet &var_manager;
   AMInfraLogManager &log_manager;
-  AMClientManager &client_manager;
-  AMTransferManager &transfer_manager;
-  AMFileSystem &filesystem;
+  AMDomain::client::AMClientManager &client_manager;
+  AMDomain::transfer::AMTransferManager &transfer_manager;
+  AMDomain::filesystem::AMFileSystem &filesystem;
 };
 
 /**
@@ -1138,5 +1148,3 @@ struct CliCommands {
   CLI::App *resume_cmd = nullptr;
   CliArgsPool *args = nullptr;
 };
-
-

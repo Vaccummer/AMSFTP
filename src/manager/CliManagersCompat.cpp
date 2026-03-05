@@ -1,9 +1,9 @@
 #include "interface/CLIArg.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/FileSystem.hpp"
-#include "AMManager/Host.hpp"
-#include "AMManager/Transfer.hpp"
-#include "AMManager/Var.hpp"
+#include "domain/client/ClientManager.hpp"
+#include "domain/filesystem/FileSystemManager.hpp"
+#include "domain/host/HostManager.hpp"
+#include "domain/transfer/TransferManager.hpp"
+#include "domain/var/VarManager.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "infrastructure/Config.hpp"
 #include "infrastructure/Logger.hpp"
@@ -15,12 +15,12 @@
 CliManagers::CliManagers(AMInfraCliSignalMonitor &signal_monitor_ref,
                          AMInfraConfigManager &config_manager_ref,
                          AMPromptManager &prompt_manager_ref,
-                         AMHostManager &host_manager_ref,
-                         VarCLISet &var_manager_ref,
+                         AMDomain::host::AMHostManager &host_manager_ref,
+                         AMDomain::var::VarCLISet &var_manager_ref,
                          AMInfraLogManager &log_manager_ref,
-                         AMClientManager &client_manager_ref,
-                         AMTransferManager &transfer_manager_ref,
-                         AMFileSystem &filesystem_ref)
+                         AMDomain::client::AMClientManager &client_manager_ref,
+                         AMDomain::transfer::AMTransferManager &transfer_manager_ref,
+                         AMDomain::filesystem::AMFileSystem &filesystem_ref)
     : signal_monitor(signal_monitor_ref), config_manager(config_manager_ref),
       prompt_manager(prompt_manager_ref), host_manager(host_manager_ref),
       var_manager(var_manager_ref), log_manager(log_manager_ref),
@@ -70,3 +70,6 @@ ECM CliManagers::Init(const amf &task_control_token) {
   }
   return filesystem.Init();
 }
+
+
+

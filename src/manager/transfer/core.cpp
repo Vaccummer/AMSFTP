@@ -1,11 +1,12 @@
 #include "foundation/DataClass.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/bar.hpp"
 #include "infrastructure/client/runtime/IOCore.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
+#include "domain/client/ClientManager.hpp"
+#include "infrastructure/Config.hpp"
 #include "interface/Prompt.hpp"
-#include "AMManager/Transfer.hpp"
+#include "domain/transfer/TransferManager.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -24,9 +25,9 @@
 #include <windows.h>
 #endif
 
-ECM AMTransferManager::Init() {
+ECM AMDomain::transfer::AMTransferManager::Init() {
   int init_thread_num = 1;
-  AMConfigManager::Instance().ResolveArg(
+  AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(
       DocumentKind::Settings, {"Options", "TransferManager", "init_thread_num"},
       &init_thread_num);
 
@@ -49,7 +50,7 @@ int ResolveHeartbeatTimeoutMsFromSettings_() {
     }
     return value;
   };
-  return AMConfigManager::Instance().ResolveArg(
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(
       DocumentKind::Settings,
       {"Options", "ClientManager", "heartbeat_timeout_ms"}, 100, clamp_timeout);
 }
@@ -110,9 +111,9 @@ private:
  * Host config not found is treated as an error; missing clients are allowed
  * so that transfer can create them later.
  */
-ECM ParseTransferPath(AMClientManager &client_manager, const std::string &input,
+ECM ParseTransferPath(AMDomain::client::AMClientManager &client_manager, const std::string &input,
                       const std::shared_ptr<
-                          AMApplication::ClientPort::IClientPort> &client,
+                          AMDomain::client::IClientPort> &client,
                       std::string *nickname, std::string *path) {
 
   auto [parsed_name, parsed_path, _client, rcm] =
@@ -276,7 +277,7 @@ int GetTransferProgressRefreshMs_() {
     }
     return value;
   };
-  return AMConfigManager::Instance().ResolveArg(
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(
       DocumentKind::Settings, {"Style", "ProgressBar", "refresh_interval_ms"},
       300, clamp_refresh);
 }
@@ -288,7 +289,7 @@ size_t GetTransferProgressSpeedWindow_() {
   std::function<size_t(size_t)> clamp_window = [](size_t value) {
     return std::max<size_t>(1, value);
   };
-  return AMConfigManager::Instance().ResolveArg(
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(
       DocumentKind::Settings, {"Style", "ProgressBar", "speed_window_size"},
       static_cast<size_t>(300), clamp_window);
 }
@@ -325,7 +326,7 @@ bool HasWildcard_(const std::string &path) {
 /**
  * @brief Set the public result callback wrapper for all task completions.
  */
-void AMTransferManager::SetPublicResultCallback(PublicResultCallback cb) {
+void AMDomain::transfer::AMTransferManager::SetPublicResultCallback(PublicResultCallback cb) {
   std::lock_guard<std::mutex> lock(callback_mtx_);
   public_result_cb_ = std::move(cb);
 }
@@ -333,7 +334,7 @@ void AMTransferManager::SetPublicResultCallback(PublicResultCallback cb) {
 /**
  * @brief Prompt the user to confirm matched wildcard results.
  */
-bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
+bool AMDomain::transfer::AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
                                          const std::string &src_host,
                                          const std::string &dst_host) {
   if (matches.empty()) {
@@ -377,7 +378,7 @@ bool AMTransferManager::ConfirmWildcard_(const std::vector<PathInfo> &matches,
 /**
  * @brief Acquire or create a validated client for a nickname.
  */
-std::pair<ECM, AMTransferManager::ClientHandle> AMTransferManager::AcquireClient_(
+std::pair<ECM, AMDomain::transfer::AMTransferManager::ClientHandle> AMDomain::transfer::AMTransferManager::AcquireClient_(
     const std::string &nickname,
     std::shared_ptr<TaskControlToken> flag) {
   if (flag && !flag->IsRunning()) {
@@ -399,7 +400,7 @@ std::pair<ECM, AMTransferManager::ClientHandle> AMTransferManager::AcquireClient
     }
   }
 
-  auto created = AMClientManager::Instance().AddClient(nickname, false, true,
+  auto created = AMDomain::client::AMClientManager::Instance().AddClient(nickname, false, true,
                                                        {}, flag, false);
   if (created.first.first != EC::Success || !created.second) {
     return {created.first, nullptr};
@@ -411,13 +412,13 @@ std::pair<ECM, AMTransferManager::ClientHandle> AMTransferManager::AcquireClient
  * @brief Collect clients and build a maintainer for required nicknames.
  */
 std::pair<ECM, std::shared_ptr<ClientMaintainer>>
-AMTransferManager::CollectClients(
+AMDomain::transfer::AMTransferManager::CollectClients(
     const std::vector<std::string> &nicknames,
     std::shared_ptr<TaskControlToken> flag) {
   const int heartbeat_timeout_ms = ResolveHeartbeatTimeoutMsFromSettings_();
   auto maintainer = std::make_shared<ClientMaintainer>(
       -1, heartbeat_timeout_ms, ClientMaintainer::DisconnectCallback(),
-      AMClientManager::Instance().LocalClient());
+      AMDomain::client::AMClientManager::Instance().LocalClient());
   for (const auto &name : nicknames) {
     if (name.empty() || name == "local") {
       continue;
@@ -439,7 +440,7 @@ AMTransferManager::CollectClients(
 /**
  * @brief Return all maintainer clients to the idle pool.
  */
-void AMTransferManager::ReturnClientsToIdle_(
+void AMDomain::transfer::AMTransferManager::ReturnClientsToIdle_(
     const std::shared_ptr<ClientMaintainer> &maintainer) {
   if (!maintainer) {
     return;
@@ -454,7 +455,7 @@ void AMTransferManager::ReturnClientsToIdle_(
   }
 }
 
-void AMTransferManager::ReleaseTaskClients_(
+void AMDomain::transfer::AMTransferManager::ReleaseTaskClients_(
     const std::shared_ptr<TaskInfo> &task_info) {
   if (!task_info) {
     return;
@@ -466,7 +467,7 @@ void AMTransferManager::ReleaseTaskClients_(
 }
 
 TaskInfo::ResultCallback
-AMTransferManager::BindResultCallback(UserResultCallback user_cb) {
+AMDomain::transfer::AMTransferManager::BindResultCallback(UserResultCallback user_cb) {
   return [this, user_cb](std::shared_ptr<TaskInfo> task_info) {
     PublicResultCallback public_cb;
     {
@@ -477,7 +478,7 @@ AMTransferManager::BindResultCallback(UserResultCallback user_cb) {
   };
 }
 
-void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
+void AMDomain::transfer::AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
                                        PublicResultCallback public_cb,
                                        UserResultCallback user_cb) {
   if (!task_info) {
@@ -499,7 +500,7 @@ void AMTransferManager::ResultCallback(std::shared_ptr<TaskInfo> task_info,
 /**
  * @brief Blocking transfer entry point.
  */
-ECM AMTransferManager::transfer(
+ECM AMDomain::transfer::AMTransferManager::transfer(
     const std::vector<UserTransferSet> &transfer_sets, bool quiet,
     std::shared_ptr<TaskControlToken> interrupt_flag) {
   bool has_resume = false;
@@ -532,7 +533,7 @@ ECM AMTransferManager::transfer(
 /**
  * @brief Blocking transfer entry point for prepared task info.
  */
-ECM AMTransferManager::transfer(
+ECM AMDomain::transfer::AMTransferManager::transfer(
     const std::shared_ptr<TaskInfo> &task_info,
     std::shared_ptr<TaskControlToken> interrupt_flag) {
 #ifdef _WIN32
@@ -578,7 +579,7 @@ ECM AMTransferManager::transfer(
   }
 
   const bool show_progress = !task_info->quiet;
-  AMProgressBar progress_bar = AMConfigManager::Instance().CreateProgressBar(
+  AMProgressBar progress_bar = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().CreateProgressBar(
       static_cast<int64_t>(
           task_info->total_size.load(std::memory_order_relaxed)),
       BuildTransferProgressPrefix_(task_info));
@@ -629,7 +630,7 @@ ECM AMTransferManager::transfer(
 /**
  * @brief Non-blocking transfer entry point.
  */
-ECM AMTransferManager::transfer_async(
+ECM AMDomain::transfer::AMTransferManager::transfer_async(
     const std::vector<UserTransferSet> &transfer_sets, bool quiet,
     std::shared_ptr<TaskControlToken> interrupt_flag) {
   bool has_resume = false;
@@ -663,7 +664,7 @@ ECM AMTransferManager::transfer_async(
 /**
  * @brief Non-blocking transfer entry point for prepared task info.
  */
-ECM AMTransferManager::transfer_async(
+ECM AMDomain::transfer::AMTransferManager::transfer_async(
     const std::shared_ptr<TaskInfo> &task_info,
     std::shared_ptr<TaskControlToken> interrupt_flag) {
   if (!task_info) {
@@ -711,7 +712,7 @@ ECM AMTransferManager::transfer_async(
 /**
  * @brief Prepare host maintainer and TaskInfo from user transfer sets.
  */
-std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
+std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager::PrepareTasks_(
     const std::vector<UserTransferSet> &transfer_sets, bool quiet,
     std::shared_ptr<TaskControlToken> flag) {
   if (transfer_sets.empty()) {
@@ -725,7 +726,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
   for (const auto &set : transfer_sets) {
     std::string dst_host;
     std::string dst_path;
-    auto dst_rcm = ParseTransferPath(AMClientManager::Instance(), set.dst,
+    auto dst_rcm = ParseTransferPath(AMDomain::client::AMClientManager::Instance(), set.dst,
                                      nullptr, &dst_host, &dst_path);
     if (dst_rcm.first != EC::Success) {
       return {dst_rcm, nullptr};
@@ -738,7 +739,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
     for (const auto &src : set.srcs) {
       std::string src_host;
       std::string src_path;
-      auto src_rcm = ParseTransferPath(AMClientManager::Instance(), src,
+      auto src_rcm = ParseTransferPath(AMDomain::client::AMClientManager::Instance(), src,
                                        nullptr, &src_host, &src_path);
       if (src_rcm.first != EC::Success) {
         return {src_rcm, nullptr};
@@ -765,7 +766,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
   for (const auto &set : transfer_sets) {
     std::string dst_host;
     std::string dst_path;
-    auto dst_parse = ParseTransferPath(AMClientManager::Instance(), set.dst,
+    auto dst_parse = ParseTransferPath(AMDomain::client::AMClientManager::Instance(), set.dst,
                                        nullptr, &dst_host, &dst_path);
     if (dst_parse.first != EC::Success) {
       ReturnClientsToIdle_(hostm);
@@ -778,7 +779,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
       return {ECM{EC::ClientNotFound, "Destination client not available"},
               nullptr};
     }
-    auto dst_rcm = ParseTransferPath(AMClientManager::Instance(), set.dst,
+    auto dst_rcm = ParseTransferPath(AMDomain::client::AMClientManager::Instance(), set.dst,
                                      dst_client, &dst_host, &dst_path);
     if (dst_rcm.first != EC::Success) {
       ReturnClientsToIdle_(hostm);
@@ -793,7 +794,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
 
       std::string src_host;
       std::string src_path;
-      auto src_parse = ParseTransferPath(AMClientManager::Instance(), src,
+      auto src_parse = ParseTransferPath(AMDomain::client::AMClientManager::Instance(), src,
                                          nullptr, &src_host, &src_path);
       if (src_parse.first != EC::Success) {
         ReturnClientsToIdle_(hostm);
@@ -806,7 +807,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
         return {ECM{EC::ClientNotFound, "Source client not available"},
                 nullptr};
       }
-      auto src_rcm = ParseTransferPath(AMClientManager::Instance(), src,
+      auto src_rcm = ParseTransferPath(AMDomain::client::AMClientManager::Instance(), src,
                                        src_client, &src_host, &src_path);
       if (src_rcm.first != EC::Success) {
         ReturnClientsToIdle_(hostm);
@@ -859,7 +860,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMTransferManager::PrepareTasks_(
  * @brief Find a task by ID across pending, conducting, and history caches.
  */
 std::shared_ptr<TaskInfo>
-AMTransferManager::FindTaskById_(const ID &task_id) const {
+AMDomain::transfer::AMTransferManager::FindTaskById_(const ID &task_id) const {
   if (task_id.empty()) {
     return nullptr;
   }
@@ -880,7 +881,7 @@ AMTransferManager::FindTaskById_(const ID &task_id) const {
  * @brief Snapshot completed task history.
  */
 std::vector<std::shared_ptr<TaskInfo>>
-AMTransferManager::SnapshotHistory_() const {
+AMDomain::transfer::AMTransferManager::SnapshotHistory_() const {
   std::vector<std::shared_ptr<TaskInfo>> items;
   std::lock_guard<std::mutex> lock(history_mtx_);
   items.reserve(history_.size());
@@ -895,7 +896,7 @@ AMTransferManager::SnapshotHistory_() const {
 /**
  * @brief Parse an entry ID of the form "<task_id>:<index>" (1-based index).
  */
-bool AMTransferManager::ParseEntryId_(const ID &entry_id, ID *task_id,
+bool AMDomain::transfer::AMTransferManager::ParseEntryId_(const ID &entry_id, ID *task_id,
                                       size_t *entry_index) const {
   if (!task_id || !entry_index) {
     return false;
@@ -918,4 +919,9 @@ bool AMTransferManager::ParseEntryId_(const ID &entry_id, ID *task_id,
     return false;
   }
 }
+
+
+
+
+
 

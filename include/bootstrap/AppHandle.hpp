@@ -1,5 +1,6 @@
 #pragma once
 
+#include "foundation//tools/enum_related.hpp"
 #include "interface/ApplicationAdapters.hpp"
 #include "interface/CLIArg.hpp"
 
@@ -13,10 +14,10 @@ struct AppHandle : NonCopyableNonMovable {
    */
   AppHandle(AMInfraCliSignalMonitor &signal_monitor,
             AMInfraConfigManager &config_manager,
-            AMPromptManager &prompt_manager,
-            AMHostManager &host_manager, VarCLISet &var_manager,
-            AMInfraLogManager &log_manager, AMClientManager &client_manager,
-            AMTransferManager &transfer_manager, AMFileSystem &filesystem)
+            AMPromptManager &prompt_manager, AMDomain::host::AMHostManager &host_manager,
+            AMDomain::var::VarCLISet &var_manager, AMInfraLogManager &log_manager,
+            AMDomain::client::AMClientManager &client_manager,
+            AMDomain::transfer::AMTransferManager &transfer_manager, AMDomain::filesystem::AMFileSystem &filesystem)
       : managers(signal_monitor, config_manager, prompt_manager, host_manager,
                  var_manager, log_manager, client_manager, transfer_manager,
                  filesystem) {}
@@ -25,10 +26,6 @@ struct AppHandle : NonCopyableNonMovable {
    * @brief Initialize process-lifetime services and bind runtime adapters.
    */
   ECM Init(const amf &task_control_token) {
-    ECM rcm = managers.Init(task_control_token);
-    if (!isok(rcm)) {
-      return rcm;
-    }
     AMInterface::ApplicationAdapters::Runtime::RuntimeBindings bindings{};
     bindings.host_manager = &managers.host_manager;
     bindings.client_manager = &managers.client_manager;
@@ -39,6 +36,11 @@ struct AppHandle : NonCopyableNonMovable {
     bindings.config_manager = &managers.config_manager;
     bindings.filesystem = &managers.filesystem;
     AMInterface::ApplicationAdapters::Runtime::Bind(bindings);
+    ECM rcm = managers.Init(task_control_token);
+    if (!isok(rcm)) {
+      AMInterface::ApplicationAdapters::Runtime::Reset();
+      return rcm;
+    }
     return Ok();
   }
 

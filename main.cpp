@@ -1,16 +1,17 @@
+#include "CLI/CLI.hpp"
 #include "bootstrap/AppHandle.hpp"
 #include "bootstrap/SessionHandle.hpp"
 #include "foundation/DataClass.hpp"
-#include "interface/CLIBind.hpp"
-#include "interface/InteractiveLoop.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/FileSystem.hpp"
-#include "AMManager/Host.hpp"
-#include "AMManager/Transfer.hpp"
-#include "AMManager/Var.hpp"
 #include "infrastructure/Config.hpp"
 #include "infrastructure/Logger.hpp"
 #include "infrastructure/SignalMonitor.hpp"
+#include "domain/client/ClientManager.hpp"
+#include "domain/filesystem/FileSystemManager.hpp"
+#include "domain/host/HostManager.hpp"
+#include "domain/transfer/TransferManager.hpp"
+#include "domain/var/VarManager.hpp"
+#include "interface/CLIBind.hpp"
+#include "interface/InteractiveLoop.hpp"
 #include <atomic>
 #include <exception>
 #include <filesystem>
@@ -47,12 +48,12 @@ int main(int argc, char **argv) {
     AMInfraCliSignalMonitor signal_monitor{};
     AMInfraConfigManager config_manager{};
     auto &prompt_manager = AMPromptManager::Instance();
-    auto &host_manager = AMHostManager::Instance();
-    auto &var_manager = VarCLISet::Instance();
+    auto &host_manager = AMDomain::host::AMHostManager::Instance();
+    auto &var_manager = AMDomain::var::VarCLISet::Instance();
     AMInfraLogManager log_manager{};
-    auto &client_manager = AMClientManager::Instance();
-    auto &transfer_manager = AMTransferManager::Instance();
-    auto &filesystem = AMFileSystem::Instance();
+    auto &client_manager = AMDomain::client::AMClientManager::Instance();
+    auto &transfer_manager = AMDomain::transfer::AMTransferManager::Instance();
+    auto &filesystem = AMDomain::filesystem::AMFileSystem::Instance();
     AMBootstrap::AppHandle app_handle(
         signal_monitor, config_manager, prompt_manager, host_manager,
         var_manager, log_manager, client_manager, transfer_manager, filesystem);
@@ -107,4 +108,5 @@ int main(int argc, char **argv) {
     return static_cast<int>(EC::UnknownError);
   }
 }
+
 

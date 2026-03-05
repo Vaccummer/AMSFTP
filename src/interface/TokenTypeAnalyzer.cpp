@@ -376,7 +376,7 @@ bool IsPathRenderType_(AMTokenType type) {
   }
 }
 
-/** Build path info used by AMConfigManager::Format for path token rendering. */
+/** Build path info used by Runtime::Format for path token rendering. */
 PathInfo BuildPathInfoForTokenType_(AMTokenType type) {
   PathInfo info;
   info.path = ".";
@@ -1498,3 +1498,4 @@ void AMTokenTypeAnalyzer::HighlightFormatted(const std::string &input,
     formatted->append("[/]");
   }
 }
+

@@ -59,3 +59,4 @@ public:
                               bool dump_now = true) = 0;
 };
 } // namespace AMDomain::host
+

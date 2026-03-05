@@ -1,8 +1,9 @@
 #include "foundation/tools/json.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Host.hpp"
-#include "AMManager/Var.hpp"
+#include "interface/ApplicationAdapters.hpp"
+#include "domain/client/ClientManager.hpp"
+#include "infrastructure/Config.hpp"
+#include "domain/host/HostManager.hpp"
+#include "domain/var/VarManager.hpp"
 #include <algorithm>
 
 using EC = ErrorCode;
@@ -37,8 +38,8 @@ std::string ToStringScalar_(const Json &value) {
 /**
  * @brief Reload [UserVars] from ConfigManager into domain dict.
  */
-ECM AMVarManager::Reload() {
-  Json user_vars = AMConfigManager::Instance().ResolveArg<Json>(
+ECM AMDomain::var::AMVarManager::Reload() {
+  Json user_vars = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<Json>(
       DocumentKind::Settings, {varsetkn::kRoot}, Json::object(), {});
   if (!user_vars.is_object()) {
     user_vars = Json::object();
@@ -84,7 +85,7 @@ ECM AMVarManager::Reload() {
 /**
  * @brief Persist variable dict to settings json and settings.toml.
  */
-ECM AMVarManager::Save(bool async) {
+ECM AMDomain::var::AMVarManager::Save(bool async) {
   EnsureLoaded_();
 
   {
@@ -104,12 +105,12 @@ ECM AMVarManager::Save(bool async) {
     snapshot[domain_entry.first] = std::move(section);
   }
 
-  if (!AMConfigManager::Instance().SetArg(DocumentKind::Settings,
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(DocumentKind::Settings,
                                           {varsetkn::kRoot}, snapshot)) {
     return Err(EC::CommonFailure, "failed to write UserVars into settings");
   }
 
-  ECM rcm = AMConfigManager::Instance().Dump(DocumentKind::Settings, "", async);
+  ECM rcm = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(DocumentKind::Settings, "", async);
   if (rcm.first != EC::Success) {
     return rcm;
   }
@@ -122,7 +123,7 @@ ECM AMVarManager::Save(bool async) {
 /**
  * @brief Return one variable from a specified domain.
  */
-VarInfo AMVarManager::GetVar(const std::string &domain,
+VarInfo AMDomain::var::AMVarManager::GetVar(const std::string &domain,
                              const std::string &name) const {
   if (!IsValidDomainName_(domain) || !varsetkn::IsValidVarname(name)) {
     return {};
@@ -134,7 +135,7 @@ VarInfo AMVarManager::GetVar(const std::string &domain,
 /**
  * @brief Find all variables with the given name across all domains.
  */
-std::vector<VarInfo> AMVarManager::FindByName(const std::string &name) const {
+std::vector<VarInfo> AMDomain::var::AMVarManager::FindByName(const std::string &name) const {
   if (!varsetkn::IsValidVarname(name)) {
     return {};
   }
@@ -146,7 +147,7 @@ std::vector<VarInfo> AMVarManager::FindByName(const std::string &name) const {
  * @brief List variables under one domain.
  */
 std::vector<VarInfo>
-AMVarManager::ListByDomain(const std::string &domain) const {
+AMDomain::var::AMVarManager::ListByDomain(const std::string &domain) const {
   if (!IsValidDomainName_(domain)) {
     return {};
   }
@@ -157,7 +158,7 @@ AMVarManager::ListByDomain(const std::string &domain) const {
 /**
  * @brief List all domain names.
  */
-std::vector<std::string> AMVarManager::ListDomains() const {
+std::vector<std::string> AMDomain::var::AMVarManager::ListDomains() const {
   EnsureLoaded_();
   return domain_service_.ListDomains();
 }
@@ -165,7 +166,7 @@ std::vector<std::string> AMVarManager::ListDomains() const {
 /**
  * @brief Return true if one domain exists in the dict.
  */
-bool AMVarManager::HasDomain(const std::string &domain) const {
+bool AMDomain::var::AMVarManager::HasDomain(const std::string &domain) const {
   if (!IsValidDomainName_(domain)) {
     return false;
   }
@@ -176,7 +177,7 @@ bool AMVarManager::HasDomain(const std::string &domain) const {
 /**
  * @brief Return true if one variable exists in a domain.
  */
-bool AMVarManager::HasVar(const std::string &domain,
+bool AMDomain::var::AMVarManager::HasVar(const std::string &domain,
                           const std::string &name) const {
   if (!IsValidDomainName_(domain) || !varsetkn::IsValidVarname(name)) {
     return false;
@@ -188,7 +189,7 @@ bool AMVarManager::HasVar(const std::string &domain,
 /**
  * @brief Upsert one variable into a target domain.
  */
-ECM AMVarManager::SetVar(const VarInfo &info, bool create_domain) {
+ECM AMDomain::var::AMVarManager::SetVar(const VarInfo &info, bool create_domain) {
   ECM valid = info.IsValid();
   if (valid.first != EC::Success) {
     return valid;
@@ -214,7 +215,7 @@ ECM AMVarManager::SetVar(const VarInfo &info, bool create_domain) {
 /**
  * @brief Delete one variable from target domain.
  */
-ECM AMVarManager::DeleteVar(const std::string &domain,
+ECM AMDomain::var::AMVarManager::DeleteVar(const std::string &domain,
                             const std::string &name) {
   if (!IsValidDomainName_(domain) || !varsetkn::IsValidVarname(name)) {
     return Err(EC::InvalidArg, "invalid domain or variable name");
@@ -234,7 +235,7 @@ ECM AMVarManager::DeleteVar(const std::string &domain,
 /**
  * @brief Delete one variable from every domain.
  */
-ECM AMVarManager::DeleteVarAll(const std::string &name,
+ECM AMDomain::var::AMVarManager::DeleteVarAll(const std::string &name,
                                std::vector<VarInfo> *removed) {
   if (!varsetkn::IsValidVarname(name)) {
     return Err(EC::InvalidArg, "invalid variable name");
@@ -254,7 +255,7 @@ ECM AMVarManager::DeleteVarAll(const std::string &name,
 /**
  * @brief Return all variable names deduplicated.
  */
-std::vector<std::string> AMVarManager::ListNames() const {
+std::vector<std::string> AMDomain::var::AMVarManager::ListNames() const {
   EnsureLoaded_();
   return domain_service_.ListNames();
 }
@@ -262,8 +263,8 @@ std::vector<std::string> AMVarManager::ListNames() const {
 /**
  * @brief Return current private domain (current host nickname or local).
  */
-std::string AMVarManager::CurrentDomain() const {
-  std::string nickname = AMStr::Strip(AMClientManager::Instance().CurrentNickname());
+std::string AMDomain::var::AMVarManager::CurrentDomain() const {
+  std::string nickname = AMStr::Strip(AMDomain::client::AMClientManager::Instance().CurrentNickname());
   if (nickname.empty()) {
     nickname = "local";
   }
@@ -273,7 +274,7 @@ std::string AMVarManager::CurrentDomain() const {
 /**
  * @brief Replace one path-like argument using current-domain variables.
  */
-std::string AMVarManager::SubstitutePathLike(const std::string &input) const {
+std::string AMDomain::var::AMVarManager::SubstitutePathLike(const std::string &input) const {
   if (input.empty()) {
     return input;
   }
@@ -284,7 +285,7 @@ std::string AMVarManager::SubstitutePathLike(const std::string &input) const {
 /**
  * @brief Replace path-like arguments in place using current-domain variables.
  */
-void AMVarManager::SubstitutePathLike(std::vector<std::string> *inputs) const {
+void AMDomain::var::AMVarManager::SubstitutePathLike(std::vector<std::string> *inputs) const {
   if (!inputs) {
     return;
   }
@@ -295,7 +296,7 @@ void AMVarManager::SubstitutePathLike(std::vector<std::string> *inputs) const {
 /**
  * @brief Return true for valid domain names.
  */
-bool AMVarManager::IsValidDomainName_(const std::string &domain) const {
+bool AMDomain::var::AMVarManager::IsValidDomainName_(const std::string &domain) const {
   if (domain == varsetkn::kPublic) {
     return true;
   }
@@ -305,12 +306,17 @@ bool AMVarManager::IsValidDomainName_(const std::string &domain) const {
 /**
  * @brief Ensure manager is loaded before access.
  */
-void AMVarManager::EnsureLoaded_() const {
+void AMDomain::var::AMVarManager::EnsureLoaded_() const {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (ready_) {
       return;
     }
   }
-  (void)const_cast<AMVarManager *>(this)->Reload();
+  (void)const_cast<AMDomain::var::AMVarManager *>(this)->Reload();
 }
+
+
+
+
+

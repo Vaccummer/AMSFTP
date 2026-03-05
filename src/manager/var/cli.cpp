@@ -1,10 +1,11 @@
 #include "foundation/tools/auth.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include "foundation/tools/bar.hpp"
 #include "foundation/tools/json.hpp"
 #include "foundation/tools/time.hpp"
-#include "AMManager/Config.hpp"
+#include "infrastructure/Config.hpp"
 #include "interface/Prompt.hpp"
-#include "AMManager/Var.hpp"
+#include "domain/var/VarManager.hpp"
 #include <algorithm>
 
 using EC = ErrorCode;
@@ -36,14 +37,14 @@ ECM ParseVarToken_(const std::string &token, varsetkn::VarRef *ref) {
 /**
  * @brief Format variable output style.
  */
-std::string VarCLISet::FormatVarText_(const std::string &text) const {
-  return AMConfigManager::Instance().Format(text, "UserVars");
+std::string AMDomain::var::VarCLISet::FormatVarText_(const std::string &text) const {
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(text, "UserVars");
 }
 
 /**
  * @brief Format output value with empty-string rule.
  */
-std::string VarCLISet::RenderValue_(const std::string &value) const {
+std::string AMDomain::var::VarCLISet::RenderValue_(const std::string &value) const {
   if (value.empty()) {
     return "\"\"";
   }
@@ -53,7 +54,7 @@ std::string VarCLISet::RenderValue_(const std::string &value) const {
 /**
  * @brief Print one section with aligned `$name` column.
  */
-void VarCLISet::PrintSection_(const std::string &domain,
+void AMDomain::var::VarCLISet::PrintSection_(const std::string &domain,
                               const std::vector<VarInfo> &entries) const {
   AMPromptManager::Instance().FmtPrint("\\[{}]", domain);
   size_t max_width = 0;
@@ -74,8 +75,8 @@ void VarCLISet::PrintSection_(const std::string &domain,
 /**
  * @brief Handle `var get $name`.
  */
-ECM VarCLISet::QueryByName(const std::string &token_name) const {
-  VarCLISet &var_manager = VarCLISet::Instance();
+ECM AMDomain::var::VarCLISet::QueryByName(const std::string &token_name) const {
+  AMDomain::var::VarCLISet &var_manager = AMDomain::var::VarCLISet::Instance();
   varsetkn::VarRef ref{};
   ECM parsed = ParseVarToken_(token_name, &ref);
   if (parsed.first != EC::Success) {
@@ -114,9 +115,9 @@ ECM VarCLISet::QueryByName(const std::string &token_name) const {
 /**
  * @brief Handle `var def [-g] $name value`.
  */
-ECM VarCLISet::DefineVar(bool global, const std::string &token_name,
+ECM AMDomain::var::VarCLISet::DefineVar(bool global, const std::string &token_name,
                          const std::string &value) {
-  VarCLISet &var_manager = VarCLISet::Instance();
+  AMDomain::var::VarCLISet &var_manager = AMDomain::var::VarCLISet::Instance();
   varsetkn::VarRef ref{};
   ECM parsed = ParseVarToken_(token_name, &ref);
   if (parsed.first != EC::Success) {
@@ -157,9 +158,9 @@ ECM VarCLISet::DefineVar(bool global, const std::string &token_name,
 /**
  * @brief Handle `var del [-a] [domain] $name`.
  */
-ECM VarCLISet::DeleteVarByCli(bool all, const std::string &domain,
+ECM AMDomain::var::VarCLISet::DeleteVarByCli(bool all, const std::string &domain,
                               const std::string &token_name) {
-  VarCLISet &var_manager = VarCLISet::Instance();
+  AMDomain::var::VarCLISet &var_manager = AMDomain::var::VarCLISet::Instance();
   varsetkn::VarRef ref{};
   ECM parsed = ParseVarToken_(token_name, &ref);
   if (parsed.first != EC::Success) {
@@ -222,8 +223,8 @@ ECM VarCLISet::DeleteVarByCli(bool all, const std::string &domain,
 /**
  * @brief Handle `var ls [domain ...]`.
  */
-ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
-  VarCLISet &var_manager = VarCLISet::Instance();
+ECM AMDomain::var::VarCLISet::ListVars(const std::vector<std::string> &domains) const {
+  AMDomain::var::VarCLISet &var_manager = AMDomain::var::VarCLISet::Instance();
   std::vector<std::string> targets = domains;
   ECM last = Ok();
 
@@ -259,5 +260,10 @@ ECM VarCLISet::ListVars(const std::vector<std::string> &domains) const {
   }
   return last;
 }
+
+
+
+
+
 
 

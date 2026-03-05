@@ -1,11 +1,12 @@
 #include "foundation/DataClass.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/time.hpp"
 #include "domain/transfer/TransferCacheDomainService.hpp"
 #include "infrastructure/client/runtime/IOCore.hpp"
-#include "AMManager/Config.hpp"
+#include "infrastructure/Config.hpp"
 #include "interface/Prompt.hpp"
-#include "AMManager/Transfer.hpp"
+#include "domain/transfer/TransferManager.hpp"
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -193,7 +194,7 @@ void PrintInspectTask_(AMPromptManager &prompt,
  * @brief Submit a transfer set into the cache pool.
  */
 size_t
-AMTransferManager::SubmitTransferSet(const UserTransferSet &transfer_set) {
+AMDomain::transfer::AMTransferManager::SubmitTransferSet(const UserTransferSet &transfer_set) {
   std::lock_guard<std::mutex> lock(cache_mtx_);
   return TransferCacheService_().SubmitTransferSet(&cached_sets_, transfer_set);
 }
@@ -201,7 +202,7 @@ AMTransferManager::SubmitTransferSet(const UserTransferSet &transfer_set) {
 /**
  * @brief Submit multiple transfer sets into the cache pool.
  */
-std::vector<size_t> AMTransferManager::SubmitTransferSets(
+std::vector<size_t> AMDomain::transfer::AMTransferManager::SubmitTransferSets(
     const std::vector<UserTransferSet> &transfer_sets) {
   std::lock_guard<std::mutex> lock(cache_mtx_);
   return TransferCacheService_().SubmitTransferSets(&cached_sets_,
@@ -211,7 +212,7 @@ std::vector<size_t> AMTransferManager::SubmitTransferSets(
 /**
  * @brief Query a cached transfer set by ID.
  */
-ECM AMTransferManager::QueryTransferSet(size_t set_index,
+ECM AMDomain::transfer::AMTransferManager::QueryTransferSet(size_t set_index,
                                         UserTransferSet *out_set) const {
   std::lock_guard<std::mutex> lock(cache_mtx_);
   return TransferCacheService_().QueryTransferSet(cached_sets_, set_index,
@@ -221,7 +222,7 @@ ECM AMTransferManager::QueryTransferSet(size_t set_index,
 /**
  * @brief List all cached transfer set IDs.
  */
-std::vector<size_t> AMTransferManager::ListTransferSetIds() const {
+std::vector<size_t> AMDomain::transfer::AMTransferManager::ListTransferSetIds() const {
   std::lock_guard<std::mutex> lock(cache_mtx_);
   return TransferCacheService_().ListTransferSetIds(cached_sets_);
 }
@@ -229,7 +230,7 @@ std::vector<size_t> AMTransferManager::ListTransferSetIds() const {
 /**
  * @brief List task IDs across pending, conducting, and finished tasks.
  */
-std::vector<AMTransferManager::ID> AMTransferManager::ListTaskIds() const {
+std::vector<AMDomain::transfer::AMTransferManager::ID> AMDomain::transfer::AMTransferManager::ListTaskIds() const {
   std::unordered_set<ID> seen;
   std::vector<ID> ids;
 
@@ -280,7 +281,7 @@ std::vector<AMTransferManager::ID> AMTransferManager::ListTaskIds() const {
  * @param pending_count Output count of pending tasks (nullable).
  * @param conducting_count Output count of conducting tasks (nullable).
  */
-void AMTransferManager::GetTaskCounts(size_t *pending_count,
+void AMDomain::transfer::AMTransferManager::GetTaskCounts(size_t *pending_count,
                                       size_t *conducting_count) const {
   if (pending_count) {
     *pending_count = 0;
@@ -306,7 +307,7 @@ void AMTransferManager::GetTaskCounts(size_t *pending_count,
  * @brief Delete cached transfer sets by indices.
  */
 size_t
-AMTransferManager::DeleteTransferSets(const std::vector<size_t> &set_indices) {
+AMDomain::transfer::AMTransferManager::DeleteTransferSets(const std::vector<size_t> &set_indices) {
   std::lock_guard<std::mutex> lock(cache_mtx_);
   std::vector<ECM> warnings;
   const size_t removed = TransferCacheService_().DeleteTransferSets(
@@ -320,7 +321,7 @@ AMTransferManager::DeleteTransferSets(const std::vector<size_t> &set_indices) {
 /**
  * @brief Clear all cached transfer sets.
  */
-void AMTransferManager::ClearCachedTransferSets() {
+void AMDomain::transfer::AMTransferManager::ClearCachedTransferSets() {
   std::lock_guard<std::mutex> lock(cache_mtx_);
   TransferCacheService_().Clear(&cached_sets_);
 }
@@ -328,7 +329,7 @@ void AMTransferManager::ClearCachedTransferSets() {
 /**
  * @brief Submit cached transfer sets as a task.
  */
-ECM AMTransferManager::SubmitCachedTransferSets(
+ECM AMDomain::transfer::AMTransferManager::SubmitCachedTransferSets(
     bool quiet, std::shared_ptr<TaskControlToken> interrupt_flag,
     bool is_async) {
   std::vector<UserTransferSet> transfer_sets;
@@ -353,7 +354,7 @@ ECM AMTransferManager::SubmitCachedTransferSets(
             "Submit cached transfer sets? (y/N): ", &canceled)) {
       AMPromptManager::Instance().FmtPrint(
           "🚫  {}\n",
-          AMConfigManager::Instance().Format("Add Canceled", "abort"));
+          AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format("Add Canceled", "abort"));
       return {EC::Terminate, "Task submission canceled"};
     }
   }
@@ -370,7 +371,7 @@ ECM AMTransferManager::SubmitCachedTransferSets(
 /**
  * @brief Inspect a task by ID.
  */
-ECM AMTransferManager::Inspect(const ID &task_id, bool show_sets,
+ECM AMDomain::transfer::AMTransferManager::Inspect(const ID &task_id, bool show_sets,
                                bool show_entries) const {
   auto task_info = FindTaskById_(task_id);
   if (!task_info) {
@@ -384,7 +385,7 @@ ECM AMTransferManager::Inspect(const ID &task_id, bool show_sets,
 /**
  * @brief Inspect only transfer sets for a task by ID.
  */
-ECM AMTransferManager::InspectTransferSets(const ID &task_id) const {
+ECM AMDomain::transfer::AMTransferManager::InspectTransferSets(const ID &task_id) const {
   auto task_info = FindTaskById_(task_id);
   if (!task_info) {
     return {EC::TaskNotFound, AMStr::fmt("Task ID not found: {}", task_id)};
@@ -396,7 +397,7 @@ ECM AMTransferManager::InspectTransferSets(const ID &task_id) const {
 /**
  * @brief Inspect only task entries for a task by ID.
  */
-ECM AMTransferManager::InspectTaskEntries(const ID &task_id) const {
+ECM AMDomain::transfer::AMTransferManager::InspectTaskEntries(const ID &task_id) const {
   auto task_info = FindTaskById_(task_id);
   if (!task_info) {
     return {EC::TaskNotFound, AMStr::fmt("Task ID not found: {}", task_id)};
@@ -408,7 +409,7 @@ ECM AMTransferManager::InspectTaskEntries(const ID &task_id) const {
 /**
  * @brief Inspect a cached user transfer set by cache ID.
  */
-ECM AMTransferManager::QueryCachedUserSet(size_t set_index) const {
+ECM AMDomain::transfer::AMTransferManager::QueryCachedUserSet(size_t set_index) const {
   UserTransferSet transfer_set;
   ECM rcm = QueryTransferSet(set_index, &transfer_set);
   if (rcm.first != EC::Success) {
@@ -423,8 +424,8 @@ ECM AMTransferManager::QueryCachedUserSet(size_t set_index) const {
   return {EC::Success, ""};
 }
 
-ECM AMTransferManager::Thread(int num) {
-  static const int max_threads = AMConfigManager::Instance().ResolveArg<int>(
+ECM AMDomain::transfer::AMTransferManager::Thread(int num) {
+  static const int max_threads = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<int>(
       DocumentKind::Settings, {"Options", "TransferManager", "max_thread_num"},
       (int)16, [](int val) { return std::max(1, std::min(val, (int)999999)); });
 
@@ -455,7 +456,7 @@ ECM AMTransferManager::Thread(int num) {
 /**
  * @brief Inspect a single task entry by entry ID.
  */
-ECM AMTransferManager::QuerySetEntry(const ID &entry_id) const {
+ECM AMDomain::transfer::AMTransferManager::QuerySetEntry(const ID &entry_id) const {
   ID task_id;
   size_t entry_index = 0;
   if (!ParseEntryId_(entry_id, &task_id, &entry_index)) {
@@ -481,7 +482,7 @@ ECM AMTransferManager::QuerySetEntry(const ID &entry_id) const {
 /**
  * @brief Terminate a running task by ID.
  */
-ECM AMTransferManager::Terminate(const ID &task_id, int timeout_ms) {
+ECM AMDomain::transfer::AMTransferManager::Terminate(const ID &task_id, int timeout_ms) {
   auto result = worker_.terminate(task_id, timeout_ms);
   if (!result.first) {
     if (result.second.first != EC::Success) {
@@ -505,7 +506,7 @@ ECM AMTransferManager::Terminate(const ID &task_id, int timeout_ms) {
 /**
  * @brief Pause a running task by ID.
  */
-ECM AMTransferManager::Pause(const ID &task_id) {
+ECM AMDomain::transfer::AMTransferManager::Pause(const ID &task_id) {
   std::vector<ID> ids;
   ids.reserve(2);
   std::string token;
@@ -544,7 +545,7 @@ ECM AMTransferManager::Pause(const ID &task_id) {
 /**
  * @brief Resume a paused task by ID.
  */
-ECM AMTransferManager::Resume(const ID &task_id) {
+ECM AMDomain::transfer::AMTransferManager::Resume(const ID &task_id) {
   std::vector<ID> ids;
   ids.reserve(2);
   std::string token;
@@ -583,7 +584,7 @@ ECM AMTransferManager::Resume(const ID &task_id) {
 /**
  * @brief Terminate tasks in batch by IDs.
  */
-ECM AMTransferManager::Terminate(const std::vector<ID> &task_ids,
+ECM AMDomain::transfer::AMTransferManager::Terminate(const std::vector<ID> &task_ids,
                                  int timeout_ms) {
   ECM last = {EC::Success, ""};
   ECM rcm = {EC::Success, ""};
@@ -607,7 +608,7 @@ ECM AMTransferManager::Terminate(const std::vector<ID> &task_ids,
 /**
  * @brief Pause tasks in batch by IDs.
  */
-ECM AMTransferManager::Pause(const std::vector<ID> &task_ids) {
+ECM AMDomain::transfer::AMTransferManager::Pause(const std::vector<ID> &task_ids) {
   ECM last = {EC::Success, ""};
   ECM rcm = {EC::Success, ""};
   std::unordered_set<ID> seen;
@@ -630,7 +631,7 @@ ECM AMTransferManager::Pause(const std::vector<ID> &task_ids) {
 /**
  * @brief Resume tasks in batch by IDs.
  */
-ECM AMTransferManager::Resume(const std::vector<ID> &task_ids) {
+ECM AMDomain::transfer::AMTransferManager::Resume(const std::vector<ID> &task_ids) {
   ECM last = {EC::Success, ""};
   ECM rcm = {EC::Success, ""};
   std::unordered_set<ID> seen;
@@ -653,7 +654,7 @@ ECM AMTransferManager::Resume(const std::vector<ID> &task_ids) {
 /**
  * @brief Retry a completed task by rebuilding failed entries.
  */
-ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
+ECM AMDomain::transfer::AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
                              const std::vector<int> &indices) {
 
   auto original = FindTaskById_(task_id);
@@ -779,4 +780,9 @@ ECM AMTransferManager::retry(const ID &task_id, bool is_async, bool quiet,
   }
   return transfer(task_info);
 }
+
+
+
+
+
 

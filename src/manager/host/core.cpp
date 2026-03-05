@@ -1,17 +1,17 @@
+#include "domain/host/HostDomainService.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/auth.hpp"
 #include "foundation/tools/json.hpp"
-#include "domain/host/HostDomainService.hpp"
-#include "AMManager/Client.hpp"
-#include "AMManager/Config.hpp"
-#include "AMManager/Host.hpp"
+#include "infrastructure/Config.hpp"
+#include "domain/client/ClientManager.hpp"
+#include "domain/host/HostManager.hpp"
 #include "interface/Prompt.hpp"
 #include <algorithm>
 #include <iomanip>
 #include <map>
 #include <sstream>
 #include <string>
-
 
 namespace {
 /**
@@ -105,7 +105,7 @@ bool PromptHostAttr_(AMPromptManager &prompt_mgr, configkn::HostAttr attr,
       if (AMStr::lowercase(v) == "local") {
         return false;
       }
-      return !AMHostManager::Instance().HostExists(v);
+      return !AMDomain::host::AMHostManager::Instance().HostExists(v);
     };
     break;
   case configkn::HostAttr::Hostname:
@@ -200,7 +200,7 @@ std::string DefaultUsernameForProtocol_(ClientProtocol protocol) {
  */
 bool HostnameExistsInConfig_(const std::string &hostname) {
   Json hosts_json;
-  AMConfigManager &config = AMConfigManager::Instance();
+  AMInfraConfigManager &config = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow();
   if (!config.ResolveArg(DocumentKind::Config, {configkn::hosts},
                          &hosts_json) ||
       !hosts_json.is_object()) {
@@ -230,20 +230,21 @@ const bool kBindHostnameExistsChecker_ = []() {
 }();
 } // namespace
 
-ECM AMHostManager::Save() {
-  return AMConfigManager::Instance().Dump(DocumentKind::Config, "", true);
+ECM AMDomain::host::AMHostManager::Save() {
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(DocumentKind::Config, "", true);
 }
 
-void AMHostManager::CollectHosts_() const {
+void AMDomain::host::AMHostManager::CollectHosts_() const {
   Json hosts_json;
-  if (!AMConfigManager::Instance().ResolveArg(DocumentKind::Config, {configkn::hosts},
-                          &hosts_json)) {
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(DocumentKind::Config,
+                                              {configkn::hosts}, &hosts_json)) {
     host_configs.clear();
     return;
   }
 
   HostConfig local_fallback;
-  auto [local_rcm, local_cfg] = const_cast<AMHostManager *>(this)->GetLocalConfig();
+  auto [local_rcm, local_cfg] =
+      const_cast<AMDomain::host::AMHostManager *>(this)->GetLocalConfig();
   if (local_rcm.first == EC::Success && local_cfg.IsValid()) {
     local_fallback = local_cfg;
   }
@@ -253,26 +254,26 @@ void AMHostManager::CollectHosts_() const {
 }
 
 std::pair<ECM, HostConfig>
-AMHostManager::GetClientConfig(const std::string &nickname) {
+AMDomain::host::AMHostManager::GetClientConfig(const std::string &nickname) {
   return HostDomainService_().GetClientConfig(host_configs, nickname);
 }
 
 /**
  * @brief Get local client config from config storage or use defaults.
  */
-std::pair<ECM, HostConfig> AMHostManager::GetLocalConfig() {
+std::pair<ECM, HostConfig> AMDomain::host::AMHostManager::GetLocalConfig() {
   const std::string local_user = GetLocalUsername_();
   const std::string fallback_home = AMFS::HomePath();
 
   std::string root_dir = "";
   if (!AMStr::GetEnv("AMSFTP_ROOT", &root_dir) || root_dir.empty()) {
-    root_dir = AMConfigManager::Instance().ProjectRoot().string();
+    root_dir = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ProjectRoot().string();
   }
   const std::string fallback_trash = AMPathStr::join(root_dir, "trash");
 
   Json host_json;
   Json *local_ptr = nullptr;
-  if (AMConfigManager::Instance().ResolveArg(
+  if (AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(
           DocumentKind::Config, {configkn::hosts, "local"}, &host_json) &&
       host_json.is_object()) {
     local_ptr = &host_json;
@@ -282,7 +283,7 @@ std::pair<ECM, HostConfig> AMHostManager::GetLocalConfig() {
                                                fallback_home, fallback_trash);
 }
 
-ECM AMHostManager::UpsertHost(const HostConfig &entry, bool dump_now) {
+ECM AMDomain::host::AMHostManager::UpsertHost(const HostConfig &entry, bool dump_now) {
   ECM validate_rcm = HostDomainService_().ValidateHostUpsert(entry);
   if (validate_rcm.first != EC::Success) {
     return validate_rcm;
@@ -294,48 +295,50 @@ ECM AMHostManager::UpsertHost(const HostConfig &entry, bool dump_now) {
   if (!dump_now) {
     return Ok();
   }
-  return AMConfigManager::Instance().Dump(DocumentKind::Config, "", true);
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(DocumentKind::Config, "", true);
 }
 
-ECM AMHostManager::FindKnownHost(KnownHostQuery &query) const {
+ECM AMDomain::host::AMHostManager::FindKnownHost(KnownHostQuery &query) const {
   std::string fingerprint = "";
-  if (!AMConfigManager::Instance().ResolveArg(DocumentKind::KnownHosts, query.GetPath(),
-                          &fingerprint)) {
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(DocumentKind::KnownHosts,
+                                              query.GetPath(), &fingerprint)) {
     return ECM{EC::HostConfigNotFound,
                "fingerprint not found for given host query"};
   }
   return HostDomainService_().ResolveKnownHostQuery(&query, fingerprint);
 }
 
-ECM AMHostManager::UpsertKnownHost(const KnownHostQuery &query, bool dump_now) {
+ECM AMDomain::host::AMHostManager::UpsertKnownHost(const KnownHostQuery &query, bool dump_now) {
   std::string fingerprint;
   ECM validate_rcm =
       HostDomainService_().ValidateKnownHostUpsert(query, &fingerprint);
   if (validate_rcm.first != EC::Success) {
     return validate_rcm;
   }
-  if (!AMConfigManager::Instance().SetArg(DocumentKind::KnownHosts, query.GetPath(), fingerprint)) {
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(DocumentKind::KnownHosts,
+                                          query.GetPath(), fingerprint)) {
     return Err(EC::CommonFailure, "failed to write known_hosts data");
   }
   if (!dump_now) {
     return Ok();
   }
-  return AMConfigManager::Instance().Dump(DocumentKind::KnownHosts, "", true);
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(DocumentKind::KnownHosts, "", true);
 }
 
-bool AMHostManager::HostExists(const std::string &nickname) const {
+bool AMDomain::host::AMHostManager::HostExists(const std::string &nickname) const {
   return HostDomainService_().HostExists(host_configs, nickname);
 }
 
-std::vector<std::string> AMHostManager::ListNames() const {
+std::vector<std::string> AMDomain::host::AMHostManager::ListNames() const {
   return HostDomainService_().ListNames(host_configs);
 }
 
-ECM AMHostManager::PromptAddFields_(const std::string &nickname,
+ECM AMDomain::host::AMHostManager::PromptAddFields_(const std::string &nickname,
                                     HostConfig &entry) {
   entry = HostConfig{};
   auto print_abort = [this]() {
-    AMPromptManager::Instance().FmtPrint("{}\n", AMConfigManager::Instance().Format("Input Abort", "abort"));
+    AMPromptManager::Instance().FmtPrint(
+        "{}\n", AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format("Input Abort", "abort"));
   };
 
   entry.request.nickname = nickname;
@@ -343,8 +346,9 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
   const std::string default_buffer_placeholder = std::to_string(24 * AMMB);
 
   while (entry.request.nickname.empty()) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Nickname,
-                         "Nickname: ", "", &entry.request.nickname, false)) {
+    if (!PromptHostAttr_(AMPromptManager::Instance(),
+                         configkn::HostAttr::Nickname, "Nickname: ", "",
+                         &entry.request.nickname, false)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -361,7 +365,8 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
       continue;
     }
     if (AMStr::lowercase(normalized) == "local") {
-      AMPromptManager::Instance().ErrorFormat(ECM{EC::InvalidArg, "Nickname 'local' is reserved"});
+      AMPromptManager::Instance().ErrorFormat(
+          ECM{EC::InvalidArg, "Nickname 'local' is reserved"});
       entry.request.nickname.clear();
       continue;
     }
@@ -387,24 +392,26 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
 
   std::string protocol_input = default_protocol_placeholder;
   while (true) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Protocol, "Protocol: ",
-                         default_protocol_placeholder, &protocol_input)) {
+    if (!PromptHostAttr_(
+            AMPromptManager::Instance(), configkn::HostAttr::Protocol,
+            "Protocol: ", default_protocol_placeholder, &protocol_input)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
     }
     std::string normalized;
     std::string err_msg;
     EC err_code = EC::InvalidArg;
-    if (configkn::ValidateHostAttrValue(configkn::HostAttr::Protocol, protocol_input,
-                                        &normalized, &err_msg, true, true,
-                                        &err_code)) {
+    if (configkn::ValidateHostAttrValue(configkn::HostAttr::Protocol,
+                                        protocol_input, &normalized, &err_msg,
+                                        true, true, &err_code)) {
       entry.request.protocol = configkn::StrToProtocol(normalized);
       break;
     }
     AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
   }
 
-  const bool hostname_required = entry.request.protocol != ClientProtocol::LOCAL;
+  const bool hostname_required =
+      entry.request.protocol != ClientProtocol::LOCAL;
   const int protocol_default_port =
       DefaultPortForProtocol_(entry.request.protocol);
   const std::string default_port_for_protocol =
@@ -417,7 +424,8 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
 
   while (true) {
     std::string hostname_input = entry.request.hostname;
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Hostname,
+    if (!PromptHostAttr_(AMPromptManager::Instance(),
+                         configkn::HostAttr::Hostname,
                          "Hostname: ", hostname_input, &hostname_input, true)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
@@ -436,8 +444,8 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     std::string err_msg;
     EC err_code = EC::InvalidArg;
     if (configkn::ValidateHostAttrValue(configkn::HostAttr::Hostname,
-                                        hostname_input, &normalized,
-                                        &err_msg, true, true, &err_code)) {
+                                        hostname_input, &normalized, &err_msg,
+                                        true, true, &err_code)) {
       entry.request.hostname = normalized;
       break;
     }
@@ -446,7 +454,8 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
 
   while (true) {
     std::string username_input = entry.request.username;
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Username,
+    if (!PromptHostAttr_(AMPromptManager::Instance(),
+                         configkn::HostAttr::Username,
                          "Username: ", default_username_for_protocol,
                          &username_input, true)) {
       print_abort();
@@ -469,8 +478,8 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     std::string err_msg;
     EC err_code = EC::InvalidArg;
     if (configkn::ValidateHostAttrValue(configkn::HostAttr::Username,
-                                        username_input, &normalized,
-                                        &err_msg, true, true, &err_code)) {
+                                        username_input, &normalized, &err_msg,
+                                        true, true, &err_code)) {
       entry.request.username = normalized;
       break;
     }
@@ -479,9 +488,10 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
 
   std::string port_input;
   while (true) {
-    const std::string port_prompt = AMStr::fmt("Port(default {}): ", protocol_default_port);
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Port, port_prompt,
-                         default_port_for_protocol, &port_input)) {
+    const std::string port_prompt =
+        AMStr::fmt("Port(default {}): ", protocol_default_port);
+    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Port,
+                         port_prompt, default_port_for_protocol, &port_input)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -508,10 +518,12 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
   while (true) {
     std::string first;
     std::string second;
-    if (!AMPromptManager::Instance().SecurePrompt("password(optional): ", &first)) {
+    if (!AMPromptManager::Instance().SecurePrompt("password(optional): ",
+                                                  &first)) {
       return Err(EC::ConfigCanceled, "password input canceled");
     }
-    if (!AMPromptManager::Instance().SecurePrompt("confirm password: ", &second)) {
+    if (!AMPromptManager::Instance().SecurePrompt("confirm password: ",
+                                                  &second)) {
       AMAuth::SecureZero(first);
       return Err(EC::ConfigCanceled, "password input canceled");
     }
@@ -522,15 +534,16 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     }
     AMAuth::SecureZero(first);
     AMAuth::SecureZero(second);
-    AMPromptManager::Instance().ErrorFormat(ECM{EC::InvalidArg, "Passwords do not match"});
+    AMPromptManager::Instance().ErrorFormat(
+        ECM{EC::InvalidArg, "Passwords do not match"});
   }
   entry.request.password = AMAuth::EncryptPassword(password);
   AMAuth::SecureZero(password);
 
   while (true) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Keyfile,
-                         "keyfile(optional): ", entry.request.keyfile,
-                         &entry.request.keyfile)) {
+    if (!PromptHostAttr_(AMPromptManager::Instance(),
+                         configkn::HostAttr::Keyfile, "keyfile(optional): ",
+                         entry.request.keyfile, &entry.request.keyfile)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -552,9 +565,9 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
   std::string buffer_input;
   entry.request.buffer_size = 24 * AMMB;
   while (true) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::BufferSize,
-                         "Buffer size: ", default_buffer_placeholder,
-                         &buffer_input)) {
+    if (!PromptHostAttr_(
+            AMPromptManager::Instance(), configkn::HostAttr::BufferSize,
+            "Buffer size: ", default_buffer_placeholder, &buffer_input)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -576,7 +589,7 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     if (parsed_buffer < AMMinBufferSize || parsed_buffer > AMMaxBufferSize) {
       AMPromptManager::Instance().ErrorFormat(ECM{
           EC::InvalidArg, AMStr::fmt("Buffer size must be between {} and {}",
-                                       AMMinBufferSize, AMMaxBufferSize)});
+                                     AMMinBufferSize, AMMaxBufferSize)});
       continue;
     }
     entry.request.buffer_size = parsed_buffer;
@@ -585,9 +598,9 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
 
   std::string compression_input = entry.request.compression ? "true" : "false";
   while (true) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Compression,
-                         "compression: ", compression_input,
-                         &compression_input)) {
+    if (!PromptHostAttr_(
+            AMPromptManager::Instance(), configkn::HostAttr::Compression,
+            "compression: ", compression_input, &compression_input)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -606,29 +619,29 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     break;
   }
 
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::TrashDir,
-                       "trash_dir(optional): ", entry.request.trash_dir,
-                       &entry.request.trash_dir)) {
+  if (!PromptHostAttr_(AMPromptManager::Instance(),
+                       configkn::HostAttr::TrashDir, "trash_dir(optional): ",
+                       entry.request.trash_dir, &entry.request.trash_dir)) {
     print_abort();
     return Err(EC::ConfigCanceled, "add canceled");
   }
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::LoginDir,
-                       "login_dir(optional): ", entry.metadata.login_dir,
-                       &entry.metadata.login_dir)) {
+  if (!PromptHostAttr_(AMPromptManager::Instance(),
+                       configkn::HostAttr::LoginDir, "login_dir(optional): ",
+                       entry.metadata.login_dir, &entry.metadata.login_dir)) {
     print_abort();
     return Err(EC::ConfigCanceled, "add canceled");
   }
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::CmdPrefix,
-                       "cmd_prefix(optional): ", entry.metadata.cmd_prefix,
-                       &entry.metadata.cmd_prefix)) {
+  if (!PromptHostAttr_(AMPromptManager::Instance(),
+                       configkn::HostAttr::CmdPrefix, "cmd_prefix(optional): ",
+                       entry.metadata.cmd_prefix, &entry.metadata.cmd_prefix)) {
     print_abort();
     return Err(EC::ConfigCanceled, "add canceled");
   }
   std::string wrap_cmd_input = entry.metadata.wrap_cmd ? "true" : "false";
   while (true) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::WrapCmd,
-                         "wrap_cmd(true/false): ", wrap_cmd_input,
-                         &wrap_cmd_input)) {
+    if (!PromptHostAttr_(
+            AMPromptManager::Instance(), configkn::HostAttr::WrapCmd,
+            "wrap_cmd(true/false): ", wrap_cmd_input, &wrap_cmd_input)) {
       print_abort();
       return Err(EC::ConfigCanceled, "add canceled");
     }
@@ -636,8 +649,8 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
     std::string err_msg;
     EC err_code = EC::InvalidArg;
     if (!configkn::ValidateHostAttrValue(configkn::HostAttr::WrapCmd,
-                                         wrap_cmd_input, &normalized,
-                                         &err_msg, true, true, &err_code)) {
+                                         wrap_cmd_input, &normalized, &err_msg,
+                                         true, true, &err_code)) {
       AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
       continue;
     }
@@ -653,17 +666,20 @@ ECM AMHostManager::PromptAddFields_(const std::string &nickname,
   return Ok();
 }
 
-ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
+ECM AMDomain::host::AMHostManager::PromptModifyFields_(const std::string &nickname,
                                        HostConfig &entry) {
   (void)nickname;
   static auto print_abort = [this]() {
-    AMPromptManager::Instance().FmtPrint("{}\n", AMConfigManager::Instance().Format("Input Abort", "abort"));
+    AMPromptManager::Instance().FmtPrint(
+        "{}\n", AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format("Input Abort", "abort"));
   };
 
-  std::string protocol = AMStr::lowercase(AMStr::ToString(entry.request.protocol));
+  std::string protocol =
+      AMStr::lowercase(AMStr::ToString(entry.request.protocol));
   while (true) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Protocol,
-                         "Protocol: ", protocol, &protocol)) {
+    if (!PromptHostAttr_(AMPromptManager::Instance(),
+                         configkn::HostAttr::Protocol, "Protocol: ", protocol,
+                         &protocol)) {
       print_abort();
       return Err(EC::ConfigCanceled, "modify canceled");
     }
@@ -688,8 +704,9 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
 
   std::string hostname = entry.request.hostname;
   while (true) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Hostname,
-                         "Hostname: ", hostname, &hostname, true)) {
+    if (!PromptHostAttr_(AMPromptManager::Instance(),
+                         configkn::HostAttr::Hostname, "Hostname: ", hostname,
+                         &hostname, true)) {
       print_abort();
       return Err(EC::ConfigCanceled, "modify canceled");
     }
@@ -722,8 +739,9 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     username = protocol_default_username;
   }
   while (true) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Username,
-                         "Username: ", username, &username, true)) {
+    if (!PromptHostAttr_(AMPromptManager::Instance(),
+                         configkn::HostAttr::Username, "Username: ", username,
+                         &username, true)) {
       print_abort();
       return Err(EC::ConfigCanceled, "modify canceled");
     }
@@ -762,8 +780,8 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     std::string port_input = std::to_string(port);
     const std::string port_prompt =
         AMStr::fmt("Port(default {}): ", protocol_default_port);
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Port, port_prompt,
-                         default_port_for_protocol, &port_input)) {
+    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Port,
+                         port_prompt, default_port_for_protocol, &port_input)) {
       print_abort();
       return Err(EC::ConfigCanceled, "modify canceled");
     }
@@ -787,8 +805,8 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
   }
 
   bool canceled = false;
-  const bool change_password =
-      AMPromptManager::Instance().PromptYesNo("Change password? (y/N): ", &canceled);
+  const bool change_password = AMPromptManager::Instance().PromptYesNo(
+      "Change password? (y/N): ", &canceled);
   if (canceled) {
     print_abort();
     return Err(EC::ConfigCanceled, "modify canceled");
@@ -797,10 +815,12 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     while (true) {
       std::string first;
       std::string second;
-      if (!AMPromptManager::Instance().SecurePrompt("password(optional): ", &first)) {
+      if (!AMPromptManager::Instance().SecurePrompt("password(optional): ",
+                                                    &first)) {
         return Err(EC::ConfigCanceled, "Password entry canceled");
       }
-      if (!AMPromptManager::Instance().SecurePrompt("confirm password: ", &second)) {
+      if (!AMPromptManager::Instance().SecurePrompt("confirm password: ",
+                                                    &second)) {
         AMAuth::SecureZero(first);
         return Err(EC::ConfigCanceled, "Password entry canceled");
       }
@@ -819,7 +839,8 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
 
   std::string keyfile = entry.request.keyfile;
   while (true) {
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Keyfile,
+    if (!PromptHostAttr_(AMPromptManager::Instance(),
+                         configkn::HostAttr::Keyfile,
                          "keyfile(optional): ", keyfile, &keyfile)) {
       print_abort();
       return Err(EC::ConfigCanceled, "modify canceled");
@@ -841,7 +862,8 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
       entry.request.buffer_size > 0 ? entry.request.buffer_size : 24 * AMMB;
   while (true) {
     std::string buffer_input = std::to_string(buffer_size);
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::BufferSize,
+    if (!PromptHostAttr_(AMPromptManager::Instance(),
+                         configkn::HostAttr::BufferSize,
                          "Buffer size: ", buffer_input, &buffer_input)) {
       print_abort();
       return Err(EC::ConfigCanceled, "modify canceled");
@@ -868,7 +890,8 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
   bool compression = entry.request.compression;
   while (true) {
     std::string compression_input = compression ? "true" : "false";
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::Compression,
+    if (!PromptHostAttr_(AMPromptManager::Instance(),
+                         configkn::HostAttr::Compression,
                          "Compression (true/false): ", compression_input,
                          &compression_input)) {
       print_abort();
@@ -891,21 +914,24 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
   }
 
   std::string trash_dir = entry.request.trash_dir;
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::TrashDir,
+  if (!PromptHostAttr_(AMPromptManager::Instance(),
+                       configkn::HostAttr::TrashDir,
                        "trash_dir(optional): ", trash_dir, &trash_dir)) {
     print_abort();
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string login_dir = entry.metadata.login_dir;
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::LoginDir,
+  if (!PromptHostAttr_(AMPromptManager::Instance(),
+                       configkn::HostAttr::LoginDir,
                        "login_dir(optional): ", login_dir, &login_dir)) {
     print_abort();
     return Err(EC::ConfigCanceled, "modify canceled");
   }
 
   std::string cmd_prefix = entry.metadata.cmd_prefix;
-  if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::CmdPrefix,
+  if (!PromptHostAttr_(AMPromptManager::Instance(),
+                       configkn::HostAttr::CmdPrefix,
                        "cmd_prefix(optional): ", cmd_prefix, &cmd_prefix)) {
     print_abort();
     return Err(EC::ConfigCanceled, "modify canceled");
@@ -913,9 +939,9 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
   bool wrap_cmd = entry.metadata.wrap_cmd;
   while (true) {
     std::string wrap_cmd_input = wrap_cmd ? "true" : "false";
-    if (!PromptHostAttr_(AMPromptManager::Instance(), configkn::HostAttr::WrapCmd,
-                         "wrap_cmd(true/false): ", wrap_cmd_input,
-                         &wrap_cmd_input)) {
+    if (!PromptHostAttr_(
+            AMPromptManager::Instance(), configkn::HostAttr::WrapCmd,
+            "wrap_cmd(true/false): ", wrap_cmd_input, &wrap_cmd_input)) {
       print_abort();
       return Err(EC::ConfigCanceled, "modify canceled");
     }
@@ -923,8 +949,8 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
     std::string err_msg;
     EC err_code = EC::InvalidArg;
     if (!configkn::ValidateHostAttrValue(configkn::HostAttr::WrapCmd,
-                                         wrap_cmd_input, &normalized,
-                                         &err_msg, true, true, &err_code)) {
+                                         wrap_cmd_input, &normalized, &err_msg,
+                                         true, true, &err_code)) {
       AMPromptManager::Instance().ErrorFormat(ECM{err_code, err_msg});
       continue;
     }
@@ -949,14 +975,13 @@ ECM AMHostManager::PromptModifyFields_(const std::string &nickname,
   return Ok();
 }
 
-ECM AMHostManager::PrintHost_(const std::string &nickname,
+ECM AMDomain::host::AMHostManager::PrintHost_(const std::string &nickname,
                               const HostConfig &entry) const {
   const bool created =
-      static_cast<bool>(AMClientManager::Instance().GetClient(nickname));
-  const std::string style_key =
-      created ? "nickname" : "unestablished_nickname";
+      static_cast<bool>(AMDomain::client::AMClientManager::Instance().GetClient(nickname));
+  const std::string style_key = created ? "nickname" : "unestablished_nickname";
   const std::string styled_nickname =
-      AMConfigManager::Instance().Format(nickname, style_key);
+      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(nickname, style_key);
   AMPromptManager::Instance().Print("[" + styled_nickname + "]");
   const auto dict_f = entry.GetStrDict();
   size_t width = 0;
@@ -985,7 +1010,7 @@ ECM AMHostManager::PrintHost_(const std::string &nickname,
   return Ok();
 }
 
-ECM AMHostManager::AddHost_(const std::string &nickname,
+ECM AMDomain::host::AMHostManager::AddHost_(const std::string &nickname,
                             const HostConfig &entry) {
   ECM memory_rcm =
       HostDomainService_().UpsertHostInMemory(&host_configs, nickname, entry);
@@ -993,23 +1018,26 @@ ECM AMHostManager::AddHost_(const std::string &nickname,
     return memory_rcm;
   }
   auto json_entry = entry.GetJson();
-  if (!AMConfigManager::Instance().SetArg(DocumentKind::Config, {configkn::hosts, nickname},
-                      json_entry)) {
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(
+          DocumentKind::Config, {configkn::hosts, nickname}, json_entry)) {
     return Err(EC::CommonFailure, "failed to set config in memory data");
   }
   return Ok();
 }
 
-ECM AMHostManager::RemoveHost_(const std::string &nickname) {
+ECM AMDomain::host::AMHostManager::RemoveHost_(const std::string &nickname) {
   CollectHosts_();
-  ECM memory_rcm = HostDomainService_().RemoveHostInMemory(&host_configs, nickname);
+  ECM memory_rcm =
+      HostDomainService_().RemoveHostInMemory(&host_configs, nickname);
   if (memory_rcm.first != EC::Success) {
     return memory_rcm;
   }
-  if (!AMConfigManager::Instance().DelArg(DocumentKind::Config, {configkn::hosts, nickname})) {
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().DelArg(DocumentKind::Config,
+                                          {configkn::hosts, nickname})) {
     return Err(EC::CommonFailure, "failed to remove config in memory data");
   }
   return Ok();
 }
+
 
 

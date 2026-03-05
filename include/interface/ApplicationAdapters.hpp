@@ -1,6 +1,6 @@
 #pragma once
 
-#include "application/client/ClientPort.hpp"
+#include "domain/client/ClientPort.hpp"
 #include "application/client/ClientSessionWorkflows.hpp"
 #include "application/client/FileCommandWorkflows.hpp"
 #include "application/completion/CompletionWorkflows.hpp"
@@ -16,14 +16,24 @@
 #include <string>
 #include <vector>
 
-class AMHostManager;
 class AMPromptManager;
 class AMInfraCliSignalMonitor;
 class AMInfraConfigManager;
+namespace AMDomain::host {
+class AMHostManager;
+}
+namespace AMDomain::var {
 class VarCLISet;
+}
+namespace AMDomain::client {
 class AMClientManager;
+}
+namespace AMDomain::transfer {
 class AMTransferManager;
+}
+namespace AMDomain::filesystem {
 class AMFileSystem;
+}
 
 namespace AMInterface::ApplicationAdapters {
 /**
@@ -35,7 +45,7 @@ public:
   /**
    * @brief Construct gateway from host and prompt managers.
    */
-  HostProfileGateway(AMHostManager &host_manager,
+  HostProfileGateway(AMDomain::host::AMHostManager &host_manager,
                      AMPromptManager &prompt_manager);
   ~HostProfileGateway() override = default;
 
@@ -61,7 +71,7 @@ public:
   [[nodiscard]] std::vector<std::string> ListHostNames() const;
 
 private:
-  AMHostManager &host_manager_;
+  AMDomain::host::AMHostManager &host_manager_;
   AMPromptManager &prompt_manager_;
 };
 
@@ -74,13 +84,13 @@ public:
   /**
    * @brief Construct reader from client manager.
    */
-  explicit CurrentClientPort(AMClientManager &client_manager);
+  explicit CurrentClientPort(AMDomain::client::AMClientManager &client_manager);
   ~CurrentClientPort() override = default;
 
   [[nodiscard]] std::string CurrentNickname() const override;
 
 private:
-  AMClientManager &client_manager_;
+  AMDomain::client::AMClientManager &client_manager_;
 };
 
 /**
@@ -91,7 +101,7 @@ public:
   /**
    * @brief Construct path helper from client manager.
    */
-  explicit ClientPathGateway(AMClientManager &client_manager);
+  explicit ClientPathGateway(AMDomain::client::AMClientManager &client_manager);
 
   /**
    * @brief Return current workdir or empty string when unavailable.
@@ -99,7 +109,7 @@ public:
   [[nodiscard]] std::string CurrentWorkdir() const;
 
 private:
-  AMClientManager &client_manager_;
+  AMDomain::client::AMClientManager &client_manager_;
 };
 
 /**
@@ -111,13 +121,13 @@ public:
   /**
    * @brief Construct saver from host manager.
    */
-  explicit HostConfigSaver(AMHostManager &host_manager);
+  explicit HostConfigSaver(AMDomain::host::AMHostManager &host_manager);
   ~HostConfigSaver() override = default;
 
   ECM SaveHostConfig() override;
 
 private:
-  AMHostManager &host_manager_;
+  AMDomain::host::AMHostManager &host_manager_;
 };
 
 /**
@@ -129,13 +139,13 @@ public:
   /**
    * @brief Construct saver from var manager.
    */
-  explicit VarConfigSaver(VarCLISet &var_manager);
+  explicit VarConfigSaver(AMDomain::var::VarCLISet &var_manager);
   ~VarConfigSaver() override = default;
 
   ECM SaveVarConfig(bool dump_now) override;
 
 private:
-  VarCLISet &var_manager_;
+  AMDomain::var::VarCLISet &var_manager_;
 };
 
 /**
@@ -165,7 +175,7 @@ public:
   /**
    * @brief Construct gateway from filesystem manager.
    */
-  explicit ClientSessionGateway(AMFileSystem &filesystem);
+  explicit ClientSessionGateway(AMDomain::filesystem::AMFileSystem &filesystem);
   ~ClientSessionGateway() override = default;
 
   ECM ConnectNickname(const std::string &nickname, bool force,
@@ -189,7 +199,7 @@ public:
                amf interrupt_flag = nullptr) override;
 
 private:
-  AMFileSystem &filesystem_;
+  AMDomain::filesystem::AMFileSystem &filesystem_;
 };
 
 /**
@@ -201,7 +211,7 @@ public:
   /**
    * @brief Construct gateway from filesystem manager.
    */
-  explicit FileCommandGateway(AMFileSystem &filesystem);
+  explicit FileCommandGateway(AMDomain::filesystem::AMFileSystem &filesystem);
 
   /**
    * @brief Check clients by nickname list.
@@ -303,7 +313,7 @@ private:
   [[nodiscard]] std::string
   JoinNicknames_(const std::vector<std::string> &nicknames) const;
 
-  AMFileSystem &filesystem_;
+  AMDomain::filesystem::AMFileSystem &filesystem_;
 };
 
 /**
@@ -315,7 +325,7 @@ public:
   /**
    * @brief Construct path substitutor from var manager.
    */
-  explicit PathSubstitutionPort(VarCLISet &var_manager);
+  explicit PathSubstitutionPort(AMDomain::var::VarCLISet &var_manager);
   ~PathSubstitutionPort() override = default;
 
   [[nodiscard]] std::string
@@ -324,7 +334,7 @@ public:
   SubstitutePathLike(const std::vector<std::string> &raw) const override;
 
 private:
-  VarCLISet &var_manager_;
+  AMDomain::var::VarCLISet &var_manager_;
 };
 
 /**
@@ -335,7 +345,7 @@ public:
   /**
    * @brief Construct variable gateway from var manager.
    */
-  explicit VarGateway(VarCLISet &var_manager);
+  explicit VarGateway(AMDomain::var::VarCLISet &var_manager);
 
   /**
    * @brief Substitute one path-like token.
@@ -371,7 +381,7 @@ public:
   ECM ListVars(const std::vector<std::string> &domains) const override;
 
 private:
-  VarCLISet &var_manager_;
+  AMDomain::var::VarCLISet &var_manager_;
 };
 
 /**
@@ -399,7 +409,7 @@ public:
   /**
    * @brief Construct executor from transfer manager.
    */
-  explicit TransferExecutorPort(AMTransferManager &transfer_manager);
+  explicit TransferExecutorPort(AMDomain::transfer::AMTransferManager &transfer_manager);
   ~TransferExecutorPort() override = default;
 
   ECM Transfer(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
@@ -408,7 +418,7 @@ public:
                     bool quiet, amf interrupt_flag = nullptr) override;
 
 private:
-  AMTransferManager &transfer_manager_;
+  AMDomain::transfer::AMTransferManager &transfer_manager_;
 };
 
 /**
@@ -419,7 +429,7 @@ public:
   /**
    * @brief Construct gateway from transfer manager.
    */
-  explicit TaskGateway(AMTransferManager &transfer_manager);
+  explicit TaskGateway(AMDomain::transfer::AMTransferManager &transfer_manager);
   ~TaskGateway() override = default;
 
   ECM ListTasks(bool pending, bool suspend, bool finished, bool conducting,
@@ -446,7 +456,7 @@ public:
   [[nodiscard]] std::vector<size_t> ListCachedTransferSetIds() const override;
 
 private:
-  AMTransferManager &transfer_manager_;
+  AMDomain::transfer::AMTransferManager &transfer_manager_;
 };
 
 /**
@@ -462,19 +472,19 @@ struct PromptPathOptions {
 };
 
 namespace Runtime {
-using ClientHandle = std::shared_ptr<AMApplication::ClientPort::IClientPort>;
+using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
 /**
  * @brief Explicit runtime dependency bindings for completion/highlight helpers.
  */
 struct RuntimeBindings {
-  AMHostManager *host_manager = nullptr;
-  AMClientManager *client_manager = nullptr;
-  AMTransferManager *transfer_manager = nullptr;
-  VarCLISet *var_manager = nullptr;
+  AMDomain::host::AMHostManager *host_manager = nullptr;
+  AMDomain::client::AMClientManager *client_manager = nullptr;
+  AMDomain::transfer::AMTransferManager *transfer_manager = nullptr;
+  AMDomain::var::VarCLISet *var_manager = nullptr;
   AMInfraCliSignalMonitor *signal_monitor = nullptr;
   AMPromptManager *prompt_manager = nullptr;
   AMInfraConfigManager *config_manager = nullptr;
-  AMFileSystem *filesystem = nullptr;
+  AMDomain::filesystem::AMFileSystem *filesystem = nullptr;
 };
 
 /**
@@ -491,6 +501,13 @@ void Reset();
  * @brief Return whether all runtime dependencies are bound.
  */
 [[nodiscard]] bool IsBound();
+
+/**
+ * @brief Return bound config manager reference.
+ *
+ * @throws std::runtime_error when runtime bindings are incomplete.
+ */
+AMInfraConfigManager &ConfigManagerOrThrow();
 
 /**
  * @brief Return true when a configured host nickname exists.
@@ -612,3 +629,4 @@ void SilenceSignalHook(const std::string &name);
 void ResumeSignalHook(const std::string &name);
 } // namespace Runtime
 } // namespace AMInterface::ApplicationAdapters
+

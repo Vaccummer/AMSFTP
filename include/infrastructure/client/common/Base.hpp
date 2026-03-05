@@ -24,7 +24,7 @@
 #include <vector>
 
 // project header
-#include "application/client/ClientPort.hpp"
+#include "domain/client/ClientPort.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/Enum.hpp"
 #include "foundation/Path.hpp"
@@ -1023,7 +1023,7 @@ public:
 
 class BaseClient : public AMTracer,
                    public BasePathMatch,
-                   public AMApplication::ClientPort::IClientPort {
+                   public AMDomain::client::IClientPort {
 private:
   static std::string GenerateUID() {
     static size_t seed = 0;
@@ -1390,3 +1390,4 @@ public:
                             amf interrupt_flag = nullptr, int timeout_ms = -1,
                             int64_t start_time = -1) override = 0;
 };
+
