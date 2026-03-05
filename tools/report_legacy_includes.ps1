@@ -5,31 +5,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-function Normalize-PathForRegex {
-    param([string]$Path)
-    return (($Path -replace '^include[\\/]', '') -replace '\\', '/')
-}
-
 $repoFull = (Resolve-Path $RepoRoot).Path
 Set-Location $repoFull
 
-$legacyRoots = @(
-    "include/AMBase",
-    "include/AMManager",
-    "include/AMCLI",
-    "include/AMClient"
-)
-
-$headers = @()
-foreach ($root in $legacyRoots) {
-    if (Test-Path $root) {
-        $headers += Get-ChildItem -File -Recurse $root | ForEach-Object {
-            Normalize-PathForRegex $_.FullName.Substring($repoFull.Length + 1)
-        }
-    }
-}
-$headers = $headers | Sort-Object -Unique
-
+$legacyPrefixes = @("AMBase", "AMManager", "AMCLI", "AMClient")
 $searchScopes = @("main.cpp", "src", "include")
 $codeGlobs = @(
     "-g", "*.h",
@@ -41,28 +20,53 @@ $codeGlobs = @(
     "-g", "*.cpp",
     "-g", "*.cxx"
 )
+
+$pattern = '#\s*include\s*[\"<](AMBase|AMManager|AMCLI|AMClient)[/\\][^\">]+[\">]'
+$matches = rg -n $pattern @codeGlobs @searchScopes
+
+$headerCounts = @{}
+foreach ($line in $matches) {
+    $parsed = [regex]::Match($line, '^[^:]+:\d+:(?<text>.*)$')
+    if (-not $parsed.Success) {
+        continue
+    }
+
+    $text = $parsed.Groups["text"].Value
+    $includeMatch = [regex]::Match($text, '#\s*include\s*[\"<](?<header>[^\">]+)[\">]')
+    if (-not $includeMatch.Success) {
+        continue
+    }
+
+    $header = ($includeMatch.Groups["header"].Value -replace '\\', '/')
+    if (-not $headerCounts.ContainsKey($header)) {
+        $headerCounts[$header] = 0
+    }
+    $headerCounts[$header] += 1
+}
+
 $rows = @()
-foreach ($header in $headers) {
-    $pattern = '#\s*include\s*[\"<]' + [regex]::Escape($header) + '[\">]'
-    $count = (rg -n $pattern @codeGlobs @searchScopes | Measure-Object).Count
+foreach ($header in ($headerCounts.Keys | Sort-Object)) {
     $prefix = ($header -split '/')[0]
     $rows += [pscustomobject]@{
         Header = $header
         Prefix = $prefix
-        Count  = $count
+        Count  = $headerCounts[$header]
     }
 }
 
 $rows = $rows | Sort-Object -Property @{Expression = "Count"; Descending = $true }, Header
-$prefixSummary = $rows |
-    Group-Object Prefix |
-    Sort-Object Name |
-    ForEach-Object {
-        [pscustomobject]@{
-            Prefix = $_.Name
-            Count  = ($_.Group | Measure-Object -Property Count -Sum).Sum
-        }
+$prefixSummary = @()
+foreach ($prefix in $legacyPrefixes) {
+    $sum = ($rows | Where-Object { $_.Prefix -eq $prefix } |
+        Measure-Object -Property Count -Sum).Sum
+    if ($null -eq $sum) {
+        $sum = 0
     }
+    $prefixSummary += [pscustomobject]@{
+        Prefix = $prefix
+        Count  = $sum
+    }
+}
 
 if ($AsMarkdown) {
     Write-Output "| Header | Prefix | Include Count |"
