@@ -1,20 +1,35 @@
 #pragma once
 
 #include "foundation/DataClass.hpp"
+#include <any>
 #include <string>
+#include <typeindex>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
 namespace AMApplication::ClientPort {
+using CB =
+    std::shared_ptr<std::function<void(std::string, std::string, std::string)>>;
+using WalkErrorCallback =
+    std::shared_ptr<std::function<void(const std::string &, const ECM &)>>;
+using WRD =
+    std::vector<std::pair<std::vector<std::string>, std::vector<PathInfo>>>;
+using amf = std::shared_ptr<TaskControlToken>;
+using EC = ErrorCode;
+using ECM = std::pair<ErrorCode, std::string>;
+using WER = std::vector<std::pair<std::string, ECM>>;
+using WRI = std::pair<std::vector<PathInfo>, WER>;
 using RemoveErrors = std::vector<std::pair<std::string, ECM>>;
 using StatResult = std::pair<ECM, PathInfo>;
 using ListResult = std::pair<ECM, std::vector<PathInfo>>;
-using IWalkResult = std::pair<ECM, AMFS::WRI>;
-using WalkResult = std::pair<ECM, std::pair<AMFS::WRD, AMFS::WER>>;
+using IWalkResult = std::pair<ECM, WRI>;
+using WalkResult = std::pair<ECM, std::pair<WRD, WER>>;
 using ChmodResult = std::pair<ECM, std::unordered_map<std::string, ECM>>;
 using CommandResult = std::pair<ECM, std::pair<std::string, int>>;
+inline constexpr const char *kClientMetadataStoreName = "client.metadata";
 
 /**
  * @brief Application-level client capability port.
@@ -49,14 +64,134 @@ public:
   [[nodiscard]] virtual ClientProtocol GetProtocol() const = 0;
 
   /**
-   * @brief Return metadata snapshot.
+   * @brief Store one named runtime data blob.
    */
-  [[nodiscard]] virtual ClientMetaData GetClientMetaData() const = 0;
+  virtual bool StoreNamedData(const std::string &name, std::any value,
+                              bool overwrite = true) = 0;
 
   /**
-   * @brief Replace metadata snapshot.
+   * @brief Store one type-indexed runtime data blob.
    */
-  virtual void SetClientMetaData(const ClientMetaData &metadata) = 0;
+  virtual bool StoreTypedData(const std::type_index &type_key, std::any value,
+                              bool overwrite = true) = 0;
+
+  /**
+   * @brief Query one named runtime data blob.
+   */
+  [[nodiscard]] virtual std::pair<bool, std::any>
+  QueryNamedData(const std::string &name) const = 0;
+
+  /**
+   * @brief Query one named runtime blob by pointer.
+   *
+   * @param name Variable name key.
+   * @param name_exists Set to true when the name key exists.
+   * @return Pointer to stored payload; nullptr when key does not exist.
+   */
+  [[nodiscard]] virtual std::any *
+  QueryNamedData(const std::string &name, bool &name_exists) = 0;
+
+  /**
+   * @brief Query one named runtime blob by pointer (const overload).
+   *
+   * @param name Variable name key.
+   * @param name_exists Set to true when the name key exists.
+   * @return Pointer to stored payload; nullptr when key does not exist.
+   */
+  [[nodiscard]] virtual const std::any *
+  QueryNamedData(const std::string &name, bool &name_exists) const = 0;
+
+  /**
+   * @brief Query one type-indexed runtime blob by pointer.
+   *
+   * @param type_key Type-index key.
+   * @param type_exists Set to true when the type key exists.
+   * @return Pointer to stored payload; nullptr when key does not exist.
+   */
+  [[nodiscard]] virtual std::any *
+  QueryTypedData(const std::type_index &type_key, bool &type_exists) = 0;
+
+  /**
+   * @brief Query one type-indexed runtime blob by pointer (const overload).
+   *
+   * @param type_key Type-index key.
+   * @param type_exists Set to true when the type key exists.
+   * @return Pointer to stored payload; nullptr when key does not exist.
+   */
+  [[nodiscard]] virtual const std::any *
+  QueryTypedData(const std::type_index &type_key, bool &type_exists) const = 0;
+
+  /**
+   * @brief Store one typed runtime value.
+   */
+  template <typename T>
+  [[nodiscard]] bool StoreTypedValue(T &&value, bool overwrite = true) {
+    using ValueT = std::decay_t<T>;
+    static_assert(!std::is_reference_v<ValueT>,
+                  "StoreTypedValue expects value-like type");
+    return StoreTypedData(std::type_index(typeid(ValueT)),
+                          std::any(std::forward<T>(value)), overwrite);
+  }
+
+  /**
+   * @brief Query one typed runtime value.
+   */
+  template <typename T> [[nodiscard]] T *QueryTypedValue(bool &type_exists) {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    std::any *payload = QueryTypedData(std::type_index(typeid(ValueT)),
+                                       type_exists);
+    if (!payload) {
+      return nullptr;
+    }
+    return std::any_cast<ValueT>(payload);
+  }
+
+  /**
+   * @brief Query one typed runtime value (const overload).
+   */
+  template <typename T>
+  [[nodiscard]] const T *QueryTypedValue(bool &type_exists) const {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    const std::any *payload =
+        QueryTypedData(std::type_index(typeid(ValueT)), type_exists);
+    if (!payload) {
+      return nullptr;
+    }
+    return std::any_cast<ValueT>(payload);
+  }
+
+  /**
+   * @brief Query one named typed runtime value.
+   */
+  template <typename T>
+  [[nodiscard]] T *QueryNamedValue(const std::string &name,
+                                   bool &name_exists) {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    std::any *payload = QueryNamedData(name, name_exists);
+    if (!payload) {
+      return nullptr;
+    }
+    return std::any_cast<ValueT>(payload);
+  }
+
+  /**
+   * @brief Query one named typed runtime value (const overload).
+   */
+  template <typename T>
+  [[nodiscard]] const T *QueryNamedValue(const std::string &name,
+                                         bool &name_exists) const {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    const std::any *payload = QueryNamedData(name, name_exists);
+    if (!payload) {
+      return nullptr;
+    }
+    return std::any_cast<ValueT>(payload);
+  }
+
+  /**
+   * @brief Erase one named runtime data blob.
+   */
+  virtual bool EraseNamedData(const std::string &name) = 0;
 
   /**
    * @brief Return current working directory.
@@ -201,8 +336,7 @@ public:
    * @brief Remove one path recursively.
    */
   virtual std::pair<ECM, RemoveErrors>
-  remove(const std::string &path,
-         AMFS::WalkErrorCallback error_callback = nullptr,
+  remove(const std::string &path, WalkErrorCallback error_callback = nullptr,
          amf interrupt_flag = nullptr, int timeout_ms = -1,
          int64_t start_time = -1) = 0;
 
@@ -224,7 +358,7 @@ public:
    */
   virtual IWalkResult iwalk(const std::string &path, bool show_all = false,
                             bool ignore_special_file = true,
-                            AMFS::WalkErrorCallback error_callback = nullptr,
+                            WalkErrorCallback error_callback = nullptr,
                             amf interrupt_flag = nullptr, int timeout_ms = -1,
                             int64_t start_time = -1) = 0;
 
@@ -234,7 +368,7 @@ public:
   virtual WalkResult walk(const std::string &path, int max_depth = -1,
                           bool show_all = false,
                           bool ignore_special_file = false,
-                          AMFS::WalkErrorCallback error_callback = nullptr,
+                          WalkErrorCallback error_callback = nullptr,
                           amf interrupt_flag = nullptr, int timeout_ms = -1,
                           int64_t start_time = -1) = 0;
 };
