@@ -2,13 +2,14 @@
 #include "domain/client/ClientManager.hpp"
 #include "domain/filesystem/FileSystemManager.hpp"
 #include "domain/host/HostManager.hpp"
+#include "domain/signal/SignalMonitorPort.hpp"
 #include "domain/transfer/TransferManager.hpp"
 #include "domain/var/VarManager.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/json.hpp"
 #include "infrastructure/Config.hpp"
 #include "infrastructure/Logger.hpp"
-#include "infrastructure/SignalMonitor.hpp"
+#include <csignal>
 
 namespace {
 /**
@@ -70,12 +71,44 @@ AMDomain::var::AMVarManager::DomainDict ParseUserVarsDict_(
   }
   return parsed;
 }
+/**
+ * @brief Hook name used to bridge process signals into session token state.
+ */
+constexpr const char *kSessionControlHook = "SESSION_CONTROL_TOKEN";
+
+/**
+ * @brief Build hook callback that updates the bound session token status.
+ */
+AMSignalMonitorPort::SignalHook BuildSessionControlHook_(
+    const amf &task_control_token) {
+  AMSignalMonitorPort::SignalHook hook;
+  hook.callback = [token_weak = std::weak_ptr<TaskControlToken>(task_control_token)](
+                      int signum) {
+    const std::shared_ptr<TaskControlToken> token = token_weak.lock();
+    if (!token) {
+      return;
+    }
+    if (signum == SIGINT) {
+      (void)token->SetStatus(ControlSignal::Interrupt);
+      return;
+    }
+#ifdef SIGTERM
+    if (signum == SIGTERM) {
+      (void)token->SetStatus(ControlSignal::Kill);
+    }
+#endif
+  };
+  hook.is_silenced = false;
+  hook.priority = 500;
+  hook.consume = false;
+  return hook;
+}
 } // namespace
 
 /**
  * @brief Bind manager references for CLI dispatch.
  */
-CliManagers::CliManagers(AMInfraCliSignalMonitor &signal_monitor_ref,
+CliManagers::CliManagers(AMSignalMonitorPort &signal_monitor_ref,
                          AMInfraConfigManager &config_manager_ref,
                          AMPromptManager &prompt_manager_ref,
                          AMDomain::host::AMHostManager &host_manager_ref,
@@ -97,7 +130,9 @@ ECM CliManagers::Init(const amf &task_control_token) {
   if (!task_control_token) {
     return Err(EC::InvalidArg, "CliManagers::Init requires task control token");
   }
-  signal_monitor.BindTaskControlToken(task_control_token);
+  (void)signal_monitor.UnregisterHook(kSessionControlHook);
+  (void)signal_monitor.RegisterHook(kSessionControlHook,
+                                    BuildSessionControlHook_(task_control_token));
   ECM rcm = signal_monitor.Init();
   if (!isok(rcm)) {
     return rcm;

@@ -12,7 +12,7 @@ struct AppHandle : NonCopyableNonMovable {
   /**
    * @brief Construct app handle from explicit manager references.
    */
-  AppHandle(AMInfraCliSignalMonitor &signal_monitor,
+  AppHandle(AMSignalMonitorPort &signal_monitor,
             AMInfraConfigManager &config_manager,
             AMPromptManager &prompt_manager, AMDomain::host::AMHostManager &host_manager,
             AMDomain::var::VarCLISet &var_manager, AMInfraLogManager &log_manager,

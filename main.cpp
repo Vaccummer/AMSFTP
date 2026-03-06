@@ -4,7 +4,7 @@
 #include "foundation/DataClass.hpp"
 #include "infrastructure/Config.hpp"
 #include "infrastructure/Logger.hpp"
-#include "infrastructure/SignalMonitor.hpp"
+#include "infrastructure/signal_monitor/SignalMonitor.hpp"
 #include "domain/client/ClientManager.hpp"
 #include "domain/filesystem/FileSystemManager.hpp"
 #include "domain/host/HostManager.hpp"

@@ -6,7 +6,6 @@
 #include "infrastructure/client/runtime/IOCore.hpp"
 #include "infrastructure/Config.hpp"
 #include "interface/Prompt.hpp"
-#include "infrastructure/SignalMonitor.hpp"
 #include "domain/transfer/TransferManager.hpp"
 #include "third_party/indicators/dynamic_progress.hpp"
 #include <algorithm>
@@ -233,19 +232,16 @@ inline void ResetInterruptFlag_(std::shared_ptr<TaskControlToken> flag) {
 
 class SignalHookGuard {
 public:
-  SignalHookGuard() : monitor_(AMCliSignalMonitor::Instance()) {
-    monitor_.ResumeHook("GLOBAL");
-    monitor_.SilenceHook("PROMPT");
-    monitor_.SilenceHook("COREPROMPT");
+  SignalHookGuard() {
+    AMInterface::ApplicationAdapters::Runtime::ResumeSignalHook("GLOBAL");
+    AMInterface::ApplicationAdapters::Runtime::SilenceSignalHook("PROMPT");
+    AMInterface::ApplicationAdapters::Runtime::SilenceSignalHook("COREPROMPT");
   }
   ~SignalHookGuard() {
-    monitor_.ResumeHook("GLOBAL");
-    monitor_.SilenceHook("PROMPT");
-    monitor_.SilenceHook("COREPROMPT");
+    AMInterface::ApplicationAdapters::Runtime::ResumeSignalHook("GLOBAL");
+    AMInterface::ApplicationAdapters::Runtime::SilenceSignalHook("PROMPT");
+    AMInterface::ApplicationAdapters::Runtime::SilenceSignalHook("COREPROMPT");
   }
-
-private:
-  AMCliSignalMonitor &monitor_;
 };
 
 /**

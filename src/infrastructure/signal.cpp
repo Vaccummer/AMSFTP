@@ -1,5 +1,5 @@
 #include "foundation/tools/enum_related.hpp"
-#include "infrastructure/SignalMonitor.hpp"
+#include "infrastructure/signal_monitor/SignalMonitor.hpp"
 #include <algorithm>
 #include <chrono>
 #include <utility>
@@ -33,7 +33,6 @@ void AMInfraCliSignalMonitor::Start() {
 }
 
 ECM AMInfraCliSignalMonitor::Init() {
-  EnsureGlobalHook_();
   InstallHandlers();
   Start();
   return Ok();
@@ -115,25 +114,6 @@ bool AMInfraCliSignalMonitor::SetHookPriority(const std::string &name,
   return true;
 }
 
-/** Bind a task-control token for signal propagation. */
-void AMInfraCliSignalMonitor::BindTaskControlToken(
-    const std::shared_ptr<TaskControlToken> &token) {
-  std::lock_guard<std::mutex> lock(token_mtx_);
-  task_control_token_ = token;
-}
-
-/** Clear the currently bound task-control token. */
-void AMInfraCliSignalMonitor::ClearTaskControlToken() {
-  std::lock_guard<std::mutex> lock(token_mtx_);
-  task_control_token_.reset();
-}
-
-/** Return the currently bound task-control token. */
-std::shared_ptr<TaskControlToken> AMInfraCliSignalMonitor::BoundTaskControlToken()
-    const {
-  return ResolveTaskControlToken_();
-}
-
 void AMInfraCliSignalMonitor::SignalHandler(int signum) {
   GlobalSignalInt.store(signum);
 }
@@ -157,29 +137,6 @@ BOOL WINAPI AMInfraCliSignalMonitor::ConsoleCtrlHandler_(DWORD type) {
 #endif
 
 AMInfraCliSignalMonitor::AMInfraCliSignalMonitor() = default;
-
-void AMInfraCliSignalMonitor::EnsureGlobalHook_() {
-  std::lock_guard<std::mutex> lock(hooks_mtx_);
-  auto it = hooks_.find("GLOBAL");
-  if (it == hooks_.end()) {
-    SignalHook global;
-    global.callback = {};
-    global.is_silenced = false;
-    global.priority = 0;
-    global.consume = false;
-    hooks_["GLOBAL"] = std::move(global);
-    return;
-  }
-  it->second.priority = 0;
-  it->second.consume = false;
-}
-
-/** Resolve the weak task-control token binding to a strong pointer. */
-std::shared_ptr<TaskControlToken>
-AMInfraCliSignalMonitor::ResolveTaskControlToken_() const {
-  std::lock_guard<std::mutex> lock(token_mtx_);
-  return task_control_token_.lock();
-}
 
 void AMInfraCliSignalMonitor::Run_() {
   while (running_.load(std::memory_order_acquire)) {
@@ -208,11 +165,6 @@ void AMInfraCliSignalMonitor::Run_() {
         if (hook.consume) {
           break;
         }
-      }
-      auto token = ResolveTaskControlToken_();
-      if ((signum == SIGINT || signum == SIGTERM) && token) {
-        (void)token->SetStatus(signum == SIGINT ? ControlSignal::Interrupt
-                                                : ControlSignal::Kill);
       }
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));

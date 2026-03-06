@@ -1,86 +1,53 @@
-**Refactor Plan: `AMInfraConfigManager` -> domain `ConfigManager`**
 
-1. **Create domain config model + API contracts**
+**Concrete Plan**
 
-- Add [DocumentKind.hpp](d:/CodeLib/CPP/AMSFTP/include/domain/config/DocumentKind.hpp) (move/define `DocumentKind` here).
-- Add [ConfigManager.hpp](d:/CodeLib/CPP/AMSFTP/include/domain/config/ConfigManager.hpp).
-- Add [ConfigManager.cpp](d:/CodeLib/CPP/AMSFTP/src/domain/config/ConfigManager.cpp).
-- Define:
-  - `using Path = std::vector<std::string>;`
-  - `struct DocumentInitSpec { std::filesystem::path json_path; std::filesystem::path schema_path; std::string schema_data; };`
-  - `struct DocumentState { std::filesystem::path json_path; std::filesystem::path schema_path; std::string schema_data; std::shared_ptr<AMInfraConfigHandlePort> handle; };`
-- `AMDomainConfigManager` holds `std::unordered_map<DocumentKind, DocumentState> docs_` and non-owning `AMAsyncWriteSchedulerPort* writer_`.
+1. Define a typed style payload model in interface layer.
+   Files: [StyleModel.hpp](d:/CodeLib/CPP/AMSFTP/include/interface/style/StyleModel.hpp), [StyleModel.cpp](d:/CodeLib/CPP/AMSFTP/src/interface/style/StyleModel.cpp)
+   Model split:
 
-2. **Define init API exactly around your requirement**
+- Fixed schema sections: `CompleteMenu`, `Table`, `ProgressBar`, `CLIPrompt.templete/template`, `CLIPrompt.icons`, `InputHighlight`, `ValueQueryHighlight`, `Path`.
+- Dynamic section: `CLIPrompt.shortcut` as `std::map<std::string, std::string>` (runtime keys).
+- Keep `Json extras` for unknown keys so dump is round-trip safe.
 
-- `ECM Init(const std::unordered_map<DocumentKind, DocumentInitSpec>& specs, AMAsyncWriteSchedulerPort* writer);`
-- Behavior:
-  - Validate all required `DocumentKind` entries exist.
-  - Persist `schema_data` into `DocumentState` always.
-  - Initialize each underlying `SuperTomlHandle` using `schema_data` first; fallback to schema file read only when schema_data empty.
+2. Implement `AMStyleManager` in interface layer with init arg `std::shared_ptr<AMConfigSyncPort>`.
+   Files: [StyleManager.hpp](d:/CodeLib/CPP/AMSFTP/include/interface/style/StyleManager.hpp), [StyleManager.cpp](d:/CodeLib/CPP/AMSFTP/src/interface/style/StyleManager.cpp)
+   Core API:
 
-3. **Implement domain read/write API (SuperHandle-like + DocumentKind arg)**
+- `ECM Init(std::shared_ptr<AMConfigSyncPort> port)`
+- `std::string Format(...)`
+- `std::string FormatUtf8Table(...)`
+- `AMProgressBar CreateProgressBar(...)`
+- optional prompt helpers: `ResolveCorePromptTemplate()`, `ResolveHistorySearchPrompt()`, `ResolveShortcutStyle(name)`.
 
-- Add methods with same semantics as handle port, keyed by `DocumentKind`:
-  - `bool GetJson(DocumentKind kind, Json* out) const;`
-  - `bool ReadValue(DocumentKind kind, const Path& path, JsonValue* out) const;`
-  - `bool WriteValue(DocumentKind kind, const Path& path, const JsonValue& value);`
-  - `bool DeleteValue(DocumentKind kind, const Path& path);`
-  - `bool GetSchemaJson(DocumentKind kind, std::string* out) const;`
-  - `bool GetSchemaJson(DocumentKind kind, Json* out) const;`
-- Add typed helpers:
-  - `template<typename T> bool Resolve(DocumentKind, const Path&, T* out) const;`
-  - `template<typename T> bool Set(DocumentKind, const Path&, const T& value);`
+3. In `Init`, load JSON from sync port, parse to typed state, normalize/clamp, then register dump callback.
+   Callback shape:
 
-4. **Implement dump/load API with `DocumentKind` + `async`**
+- `port->RegisterDumpCallback([this](Json &j){ j = snapshot_.ToJson(); });`
+  This satisfies “register dump callback to AMConfigSyncPort”.
 
-- Add:
-  - `ECM Load(std::optional<DocumentKind> kind = std::nullopt, bool force = false);`
-  - `ECM Dump(DocumentKind kind, bool async = false, const std::string& dst_path = "");`
-  - `ECM DumpAll(bool async = false);`
-- Async path:
-  - If `async == true`, enqueue task through `writer_->Submit(...)`.
-  - If writer missing/not running, execute synchronously.
-- Keep error callback hook in domain manager:
-  - `void SetDumpErrorCallback(std::function<void(ECM)> cb);`
+4. Wire manager lifecycle in bootstrap before prompt init.
+   Likely edits: [AppHandle.hpp](d:/CodeLib/CPP/AMSFTP/include/bootstrap/AppHandle.hpp), [CLIArg.hpp](d:/CodeLib/CPP/AMSFTP/include/interface/CLIArg.hpp), [CliManagersBootstrap.cpp](d:/CodeLib/CPP/AMSFTP/src/bootstrap/CliManagersBootstrap.cpp), [main.cpp](d:/CodeLib/CPP/AMSFTP/main.cpp)
+   Flow:
 
-5. **Make infra config layer a thin adapter/composer**
+- `config_manager.Init()`
+- `style_port = config_manager.CreateOrGetSyncPort(DocumentKind::Settings, {"Style"}, Json::object())`
+- `style_manager.Init(style_port)`
+- then `prompt_manager.Init()`.
 
-- Refactor [Config.hpp](d:/CodeLib/CPP/AMSFTP/include/infrastructure/Config.hpp):
-  - Remove storage-heavy responsibilities from `AMInfraConfigStorage`.
-  - Keep style/UI helpers (`Format`, `CreateProgressBar`, `FormatUtf8Table`) in infra manager.
-  - Compose domain manager instance instead of owning raw docs map.
-- Refactor [io_base.cpp](d:/CodeLib/CPP/AMSFTP/src/infrastructure/config/io_base.cpp):
-  - Build `DocumentInitSpec` map and call domain `Init`.
-  - Delegate `ResolveArg/SetArg/DelArg/GetJson/GetJsonStr/Dump/Load` to domain manager.
+5. Expose style manager through runtime bindings and migrate call sites.
+   Files: [ApplicationAdapters.hpp](d:/CodeLib/CPP/AMSFTP/include/interface/ApplicationAdapters.hpp), [RuntimeBindings.cpp](d:/CodeLib/CPP/AMSFTP/src/bootstrap/RuntimeBindings.cpp)
+   Then migrate existing readers in:
 
-6. **Preserve existing external behavior during transition**
+- [InteractiveLoop.cpp](d:/CodeLib/CPP/AMSFTP/src/interface/InteractiveLoop.cpp)
+- [PromptApi.cpp](d:/CodeLib/CPP/AMSFTP/src/interface/prompt/PromptApi.cpp)
+- [TransferPrint.cpp](d:/CodeLib/CPP/AMSFTP/src/interface/transfer/TransferPrint.cpp)
 
-- Keep existing public methods in infra config manager as passthrough wrappers so current callers (including logger) do not break.
-- Do not refactor logger in this stage; it continues calling `SubmitWriteTask(...)` on config manager wrapper.
+**Questions Before I Implement**
 
-7. **Schema handling rules**
+1. Do you want full migration now (all style reads go through `StyleManager`) or staged migration (new manager + compatibility wrappers first)? no change or migration, implement this class first
+2. For prompt template key, should dump always write canonical `template` and still read legacy `templete`? if there's spell errors in any file, correct it and tell me
+3. Should I update `settings.schema.json` in this task, or keep schema changes separate? leave schema alone
 
-- `DocumentState::schema_data` is canonical runtime schema source.
-- `schema_path` is treated as output/reference path for future hardcoded schema strategy.
-- Add API: `bool GetSchemaData(DocumentKind kind, std::string* out) const;`
+**Extra Demmand**
 
-8. **File-level implementation order**
-
-- First add domain files and compile-ready class skeleton.
-- Then move `DocumentKind`.
-- Then migrate core logic from infra `io_base.cpp` into domain `ConfigManager.cpp`.
-- Then reduce infra `Config.hpp/io_base.cpp` to wrapper/delegation.
-- Finally delete dead helpers from infra implementation.
-
-9. **Acceptance criteria**
-
-- Domain manager owns document map and schema string per doc.
-- All JSON read/write operations require `DocumentKind`.
-- Dump API supports `DocumentKind + async`.
-- Async scheduler used only via `AMAsyncWriteSchedulerPort`.
-- No behavior change for current logger/config call sites.
-
-10. **Questions before conduct**
-11. Should I move `DocumentKind` to domain now (`include/domain/config/DocumentKind.hpp`) and replace all current includes immediately? move but don't replace all
-12. Preferred domain class name: `AMDomainConfigManager` or `AMConfigManager`? `AMConfigManager` but in domain namespace
+leave schema alone and now don't concern with compatability problem, implement this class first

@@ -4,7 +4,7 @@
 #include "foundation/tools/bar.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/json.hpp"
-#include "infrastructure/config/WriteDispatcher.hpp"
+#include "infrastructure/writer/WriteDispatcher.hpp"
 
 /**
  * @brief Low-level config storage adapter that delegates core logic to domain.

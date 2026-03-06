@@ -3,10 +3,10 @@
 #include "domain/client/ClientManager.hpp"
 #include "domain/filesystem/FileSystemManager.hpp"
 #include "domain/host/HostManager.hpp"
+#include "domain/signal/SignalMonitorPort.hpp"
 #include "domain/transfer/TransferManager.hpp"
 #include "domain/var/VarManager.hpp"
 #include "infrastructure/Config.hpp"
-#include "infrastructure/SignalMonitor.hpp"
 #include <atomic>
 #include <stdexcept>
 
@@ -20,7 +20,7 @@ struct RuntimeBindingState {
   std::atomic<AMDomain::client::AMClientManager *> client_manager{nullptr};
   std::atomic<AMDomain::transfer::AMTransferManager *> transfer_manager{nullptr};
   std::atomic<AMDomain::var::VarCLISet *> var_manager{nullptr};
-  std::atomic<AMInfraCliSignalMonitor *> signal_monitor{nullptr};
+  std::atomic<AMSignalMonitorPort *> signal_monitor{nullptr};
   std::atomic<AMPromptManager *> prompt_manager{nullptr};
   std::atomic<AMInfraConfigManager *> config_manager{nullptr};
   std::atomic<AMDomain::filesystem::AMFileSystem *> filesystem{nullptr};
@@ -327,10 +327,39 @@ std::string Runtime::Format(const std::string &text,
 }
 
 /**
+ * @brief Register one named signal hook.
+ */
+bool Runtime::RegisterSignalHook(
+    const std::string &name, const AMSignalMonitorPort::SignalHook &hook) {
+  AMSignalMonitorPort *signal_monitor =
+      RuntimeBindingState_().signal_monitor.load(std::memory_order_acquire);
+  return signal_monitor ? signal_monitor->RegisterHook(name, hook) : false;
+}
+
+/**
+ * @brief Unregister one named signal hook.
+ */
+bool Runtime::UnregisterSignalHook(const std::string &name) {
+  AMSignalMonitorPort *signal_monitor =
+      RuntimeBindingState_().signal_monitor.load(std::memory_order_acquire);
+  return signal_monitor ? signal_monitor->UnregisterHook(name) : false;
+}
+
+/**
+ * @brief Set signal-hook priority.
+ */
+bool Runtime::SetSignalHookPriority(const std::string &name, int priority) {
+  AMSignalMonitorPort *signal_monitor =
+      RuntimeBindingState_().signal_monitor.load(std::memory_order_acquire);
+  return signal_monitor ? signal_monitor->SetHookPriority(name, priority)
+                        : false;
+}
+
+/**
  * @brief Silence one registered CLI signal hook.
  */
 void Runtime::SilenceSignalHook(const std::string &name) {
-  AMInfraCliSignalMonitor *signal_monitor =
+  AMSignalMonitorPort *signal_monitor =
       RuntimeBindingState_().signal_monitor.load(std::memory_order_acquire);
   if (signal_monitor) {
     signal_monitor->SilenceHook(name);
@@ -341,7 +370,7 @@ void Runtime::SilenceSignalHook(const std::string &name) {
  * @brief Resume one registered CLI signal hook.
  */
 void Runtime::ResumeSignalHook(const std::string &name) {
-  AMInfraCliSignalMonitor *signal_monitor =
+  AMSignalMonitorPort *signal_monitor =
       RuntimeBindingState_().signal_monitor.load(std::memory_order_acquire);
   if (signal_monitor) {
     signal_monitor->ResumeHook(name);

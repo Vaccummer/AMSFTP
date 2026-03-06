@@ -12,6 +12,14 @@
 
 namespace AMDomain::log {
 /**
+ * @brief Typed logger key for selecting one registered writer channel.
+ */
+enum class LoggerKey {
+  Client = 0,
+  Program = 1,
+};
+
+/**
  * @brief Domain logger manager with business logic and async scheduling.
  */
 class AMLoggerManager : public NonCopyableNonMovable {
@@ -43,17 +51,17 @@ public:
   /**
    * @brief Register or replace one concrete writer by logger key.
    */
-  bool SetLogger(int logger_key, WriterPtr writer);
+  bool SetLogger(LoggerKey logger_key, WriterPtr writer);
 
   /**
    * @brief Remove one writer by logger key.
    */
-  bool RemoveLogger(int logger_key);
+  bool RemoveLogger(LoggerKey logger_key);
 
   /**
    * @brief Return whether one writer is registered.
    */
-  [[nodiscard]] bool HasLogger(int logger_key) const;
+  [[nodiscard]] bool HasLogger(LoggerKey logger_key) const;
 
   /**
    * @brief Remove all writers and per-logger trace-level settings.
@@ -68,22 +76,22 @@ public:
   /**
    * @brief Get trace level for one logger key (default is 4).
    */
-  [[nodiscard]] int GetTraceLevel(int logger_key) const;
+  [[nodiscard]] int GetTraceLevel(LoggerKey logger_key) const;
 
   /**
    * @brief Set trace level for one logger key and return clamped value.
    */
-  int SetTraceLevel(int logger_key, int value);
+  int SetTraceLevel(LoggerKey logger_key, int value);
 
   /**
    * @brief Submit one structured trace through logger business workflow.
    */
-  ECM Trace(int logger_key, const TraceInfo &info);
+  ECM Trace(LoggerKey logger_key, const TraceInfo &info);
 
   /**
    * @brief Build one trace and submit through logger business workflow.
    */
-  ECM Trace(int logger_key, TraceLevel level, EC error_code,
+  ECM Trace(LoggerKey logger_key, TraceLevel level, EC error_code,
             const std::string &nickname = "",
             const std::string &target = "",
             const std::string &action = "", const std::string &msg = "",
@@ -93,7 +101,7 @@ public:
    * @brief Return callback helper that writes traces to one logger key.
    */
   [[nodiscard]] std::function<void(const TraceInfo &)>
-  TraceCallbackFunc(int logger_key);
+  TraceCallbackFunc(LoggerKey logger_key);
 
   /**
    * @brief Clamp trace level to valid range [-1, 4].
@@ -109,7 +117,7 @@ private:
   /**
    * @brief Resolve default source by logger key.
    */
-  static TraceSource ResolveSource_(int logger_key);
+  static TraceSource ResolveSource_(LoggerKey logger_key);
 
   /**
    * @brief Build one log line text from structured trace info.
@@ -123,8 +131,8 @@ private:
                            const TraceInfo &info, const ECM &rcm);
 
   mutable std::mutex mtx_;
-  std::unordered_map<int, WriterPtr> logger_map_;
-  std::unordered_map<int, int> trace_levels_;
+  std::unordered_map<LoggerKey, WriterPtr> logger_map_;
+  std::unordered_map<LoggerKey, int> trace_levels_;
   std::shared_ptr<AMAsyncWriteSchedulerPort> scheduler_ = nullptr;
   ErrorReporter error_reporter_ = {};
 };

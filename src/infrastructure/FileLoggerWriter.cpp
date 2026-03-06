@@ -8,7 +8,16 @@
  */
 AMInfraFileLoggerWriter::AMInfraFileLoggerWriter(
     const std::filesystem::path &path)
-    : path_(path) {}
+    : path_(path) {
+  if (path_.empty()) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(mtx_);
+  ECM open_rcm = EnsureStreamOpen_();
+  if (!isok(open_rcm)) {
+    SetLastError_(open_rcm);
+  }
+}
 
 /**
  * @brief Bind one output path used by this writer.
@@ -16,6 +25,7 @@ AMInfraFileLoggerWriter::AMInfraFileLoggerWriter(
 ECM AMInfraFileLoggerWriter::SetPath(const std::filesystem::path &path) {
   if (path.empty()) {
     ECM invalid = Err(EC::InvalidArg, "Logger writer path cannot be empty");
+    SetLastError_(invalid);
     ReportError_(invalid);
     return invalid;
   }
@@ -25,6 +35,7 @@ ECM AMInfraFileLoggerWriter::SetPath(const std::filesystem::path &path) {
   }
   CloseUnlocked_();
   path_ = path;
+  SetLastError_({EC::Success, ""});
   return Ok();
 }
 
@@ -43,6 +54,7 @@ ECM AMInfraFileLoggerWriter::Write(const std::string &line) {
   std::lock_guard<std::mutex> lock(mtx_);
   ECM open_rcm = EnsureStreamOpen_();
   if (!isok(open_rcm)) {
+    SetLastError_(open_rcm);
     ReportError_(open_rcm);
     return open_rcm;
   }
@@ -54,9 +66,11 @@ ECM AMInfraFileLoggerWriter::Write(const std::string &line) {
                                    path_.string().empty() ? "<empty>"
                                                           : path_.string()));
     stream_.clear();
+    SetLastError_(write_rcm);
     ReportError_(write_rcm);
     return write_rcm;
   }
+  SetLastError_({EC::Success, ""});
   return Ok();
 }
 
