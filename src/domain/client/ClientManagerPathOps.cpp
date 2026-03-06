@@ -1,7 +1,6 @@
-#include "infrastructure/client/runtime/IOCore.hpp"
 #include "domain/client/ClientManager.hpp"
 #include "domain/host/HostManager.hpp"
-#include "interface/Prompt.hpp"
+#include "infrastructure/client/runtime/IOCore.hpp"
 #include <filesystem>
 
 using ClientHandle = AMDomain::client::AMClientOperator::ClientHandle;
@@ -49,7 +48,8 @@ AMDomain::client::AMClientPathOps::ParsePath(const std::string &input) {
 }
 
 std::tuple<std::string, std::string, ClientHandle, ECM>
-AMDomain::client::AMClientPathOps::ParsePath(const std::string &input, amf interrupt_flag) {
+AMDomain::client::AMClientPathOps::ParsePath(const std::string &input,
+                                             amf interrupt_flag) {
   if (!input.empty() && input.front() == '@') {
     return {"local", input.substr(1), LocalClient(), Ok()};
   }
@@ -75,27 +75,28 @@ AMDomain::client::AMClientPathOps::ParsePath(const std::string &input, amf inter
   }
 
   auto existing = Clients().GetHost(prefix);
-  if (!existing) {
-    if (IsInteractive()) {
-      bool canceled = false;
-      if (!AMPromptManager::Instance().PromptYesNo(
-              "Client not found. Create it? (y/N): ", &canceled)) {
-        return {prefix, path, nullptr,
-                Err(EC::Terminate,
-                    AMStr::fmt("Aborted creating client: {}", prefix))};
-      }
-    }
-    auto created = AddClient(prefix, nullptr, false, false, {}, interrupt_flag);
-    if (created.first.first != EC::Success) {
-      return {prefix, path, created.second, created.first};
-    }
-    return {prefix, path, created.second, Ok()};
-  }
+  // if (!existing) {
+  //   if (IsInteractive()) {
+  //     bool canceled = false;
+  //     if (!AMPromptManager::Instance().PromptYesNo(
+  //             "Client not found. Create it? (y/N): ", &canceled)) {
+  //       return {prefix, path, nullptr,
+  //               Err(EC::Terminate,
+  //                   AMStr::fmt("Aborted creating client: {}", prefix))};
+  //     }
+  //   }
+  //   auto created = AddClient(prefix, nullptr, false, false, {},
+  //   interrupt_flag); if (created.first.first != EC::Success) {
+  //     return {prefix, path, created.second, created.first};
+  //   }
+  //   return {prefix, path, created.second, Ok()};
+  // }
   return {prefix, path, existing, Ok()};
 }
 
-std::string AMDomain::client::AMClientPathOps::AbsPath(const std::string &path,
-                                     const ClientHandle &client) const {
+std::string
+AMDomain::client::AMClientPathOps::AbsPath(const std::string &path,
+                                           const ClientHandle &client) const {
   if (!client) {
     return path;
   }
@@ -107,8 +108,8 @@ std::string AMDomain::client::AMClientPathOps::AbsPath(const std::string &path,
   return AMFS::abspath(path, true, home, cwd, "/");
 }
 
-std::string
-AMDomain::client::AMClientPathOps::GetOrInitWorkdir(const ClientHandle &client) const {
+std::string AMDomain::client::AMClientPathOps::GetOrInitWorkdir(
+    const ClientHandle &client) const {
   if (!client) {
     return "";
   }
@@ -139,8 +140,8 @@ AMDomain::client::AMClientPathOps::GetOrInitWorkdir(const ClientHandle &client) 
   return home;
 }
 
-void AMDomain::client::AMClientPathOps::SetClientWorkdir(const ClientHandle &client,
-                                       const std::string &path) const {
+void AMDomain::client::AMClientPathOps::SetClientWorkdir(
+    const ClientHandle &client, const std::string &path) const {
   if (!client) {
     return;
   }
@@ -156,8 +157,9 @@ void AMDomain::client::AMClientPathOps::SetClientWorkdir(const ClientHandle &cli
   client->SetCwd(normalized);
 }
 
-std::string AMDomain::client::AMClientPathOps::BuildPath(const ClientHandle &client,
-                                       const std::string &path) const {
+std::string
+AMDomain::client::AMClientPathOps::BuildPath(const ClientHandle &client,
+                                             const std::string &path) const {
   if (!client) {
     return path;
   }
@@ -182,10 +184,9 @@ void AMDomain::client::AMClientPathOps::InitClientWorkdir(
   client->SetCwd(home);
 }
 
-void AMDomain::client::AMClientPathOps::ApplyLoginDir(const std::string &nickname,
-                                    const ClientHandle &client,
-                                    const std::string &login_dir,
-                                    amf flag) const {
+void AMDomain::client::AMClientPathOps::ApplyLoginDir(
+    const std::string &nickname, const ClientHandle &client,
+    const std::string &login_dir, amf flag) const {
   if (!client) {
     return;
   }
@@ -215,11 +216,7 @@ void AMDomain::client::AMClientPathOps::ApplyLoginDir(const std::string &nicknam
   client->SetLoginDir(normalized);
 
   if (need_persist && !IsLocalNickname_(nickname)) {
-    (void)AMDomain::host::AMHostManager::Instance().SetHostValue(nickname, configkn::login_dir,
-                                                 resolved);
+    (void)AMDomain::host::AMHostManager::Instance().SetHostValue(
+        nickname, configkn::login_dir, resolved);
   }
 }
-
-
-
-

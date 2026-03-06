@@ -1,8 +1,7 @@
 #include "Isocline/isocline.h"
-#include "interface/ApplicationAdapters.hpp"
 #include "foundation/tools/json.hpp"
 #include "infrastructure/Config.hpp"
-#include "infrastructure/SignalMonitor.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include "interface/Completer/Proxy.hpp"
 #include "interface/Prompt.hpp"
 #include <algorithm>
@@ -10,7 +9,6 @@
 #include <cstdlib>
 #include <string>
 #include <sys/stat.h>
-
 
 #ifdef _WIN32
 #include <conio.h>
@@ -299,7 +297,8 @@ static const std::string ickey = "ic-prompt";
  */
 void ApplyPromptShortcutStyles_() {
   Json settings;
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().GetJson(DocumentKind::Settings, &settings) ||
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow()
+           .GetJson(DocumentKind::Settings, &settings) ||
       !settings.is_object()) {
     return;
   }
@@ -334,7 +333,8 @@ void ApplyPromptShortcutStyles_() {
  * @brief Resolve incremental history-search prompt text from settings.
  */
 std::string ResolveHistorySearchPrompt_() {
-  AMInfraConfigManager &config = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow();
+  AMInfraConfigManager &config =
+      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow();
   std::string prompt = config.ResolveArg<std::string>(
       DocumentKind::Settings,
       {"Style", "CLIPrompt", "templete", "history_search_prompt"}, "", {});
@@ -469,4 +469,3 @@ void AMPromptManager::InitIsoclineConfig() {
   core_hook.consume = true;
   AMCliSignalMonitor::Instance().RegisterHook("COREPROMPT", core_hook);
 }
-

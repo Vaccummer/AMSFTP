@@ -1,6 +1,5 @@
 #pragma once
 
-#include "domain/client/ClientPort.hpp"
 #include "application/client/ClientSessionWorkflows.hpp"
 #include "application/client/FileCommandWorkflows.hpp"
 #include "application/completion/CompletionWorkflows.hpp"
@@ -9,9 +8,12 @@
 #include "application/transfer/TaskWorkflows.hpp"
 #include "application/transfer/TransferWorkflows.hpp"
 #include "application/var/VarWorkflows.hpp"
+#include "domain/client/ClientPort.hpp"
+#include "domain/config/DocumentKind.hpp"
 #include "domain/transfer/TransferPorts.hpp"
-#include "domain/var/VarModel.hpp"
 #include "foundation/DataClass.hpp"
+#include "foundation/var/VarModel.hpp"
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -409,7 +411,8 @@ public:
   /**
    * @brief Construct executor from transfer manager.
    */
-  explicit TransferExecutorPort(AMDomain::transfer::AMTransferManager &transfer_manager);
+  explicit TransferExecutorPort(
+      AMDomain::transfer::AMTransferManager &transfer_manager);
   ~TransferExecutorPort() override = default;
 
   ECM Transfer(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
@@ -474,7 +477,8 @@ struct PromptPathOptions {
 namespace Runtime {
 using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
 /**
- * @brief Explicit runtime dependency bindings for completion/highlight helpers.
+ * @brief Explicit runtime dependency bindings for completion/highlight
+ * helpers.
  */
 struct RuntimeBindings {
   AMDomain::host::AMHostManager *host_manager = nullptr;
@@ -606,6 +610,27 @@ ResolveSettingString(const std::vector<std::string> &path,
                                     int fallback);
 
 /**
+ * @brief Execute config backup when pending writes exceed threshold.
+ */
+ECM BackupConfigIfNeeded();
+
+/**
+ * @brief Resolve one config document storage path.
+ */
+[[nodiscard]] bool GetConfigDataPath(DocumentKind kind,
+                                     std::filesystem::path *out_path);
+
+/**
+ * @brief Return whether one config document has unsaved mutations.
+ */
+[[nodiscard]] bool IsConfigDirty(DocumentKind kind);
+
+/**
+ * @brief Load one config document from storage.
+ */
+ECM LoadConfig(DocumentKind kind, bool strict);
+
+/**
  * @brief Format text through ConfigManager style formatter.
  */
 [[nodiscard]] std::string Format(const std::string &text,
@@ -629,4 +654,3 @@ void SilenceSignalHook(const std::string &name);
 void ResumeSignalHook(const std::string &name);
 } // namespace Runtime
 } // namespace AMInterface::ApplicationAdapters
-

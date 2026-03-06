@@ -1571,6 +1571,7 @@ $var3 = value3
 + 值为空字符串时, 需要打印为"", 而不是空白
 
 ## Completion Refactor Plan (BuildContext_)
+
 1. Tokenize with `AMTokenTypeAnalyzer::SplitToken`.
 2. Keep only tokens before cursor plus token-at-cursor.
 3. Parse and store `module`, `cmd`, `options`, `args` in `AMCompletionContext`.
@@ -1589,7 +1590,7 @@ $var3 = value3
    - `-ov` does not treat `v` as option value.
    - Bare `--` is treated as common positional arg.
    - Command/module certainty precedes option/arg interpretation (except var shorthand).
-what do you think of plan blow
+     what do you think of plan blow
 
 @src\cli\completer\engine_worker.cpp
 
@@ -1613,7 +1614,7 @@ My expected protocol:
 4. find where cursor is, get prefix and postfix
 5. get AMCommandArgSemantic according to module, cmd, option record and any other neccessary context
 6. transit AMCommandArgSemantic to targets according to prefix and any other neccessary context
-New features to be implement, do you have any questions?
+   New features to be implement, do you have any questions?
 
 @src\cli\completer\searcher.cpp
 
@@ -1633,7 +1634,6 @@ move AMCompleteEngine::Init() to engine's header
 
 implement different search in different cpp and store in src\cli\searcher
 
-
 Gerneral match rule (when prefix not empty)
 
 + Need case match
@@ -1643,11 +1643,11 @@ Gerneral match rule (when prefix not empty)
   + find item starts with prefix
   + find item has prefix (lower score, can't duplicate with the former)
 
-### AMCommandSearchEngine 
+### AMCommandSearchEngine
 
 use Gerneral match rule
 
-### AMInternalSearchEngine 
+### AMInternalSearchEngine
 
 use Gerneral match rule
 
@@ -1668,11 +1668,12 @@ set init function as default, set manager using AMConfigManager &config_manager_
 set an temp cache like current cache, trigger all the time, but clear when CorePrompt return(use register)
 
 hold a ref to VarManager, path sometimes has var, need resolve it
+
 # CommandTree Improve
 
 Set this class as a singleton like manager(built once at startup only, no thread-safe because changes happen in main thread), remove
 
-inlineconststd::shared_ptr`<CommandTree>` g_command_tree =
+inlineconststd::shared_ptr `<CommandTree>` g_command_tree =
 
     std::make_shared`<CommandTree>`();
 
@@ -1687,8 +1688,8 @@ std::unordered_map<std::string, CommandNode> nodes_; key should be {part1, part2
 CommandNode add str help to store help info of current node
 
 + live only in CommandNode
-I have a new improve plan, do you have any suggestion?
-@src\cli\CLIBind.cpp
+  I have a new improve plan, do you have any suggestion?
+  @src\cli\CLIBind.cpp
 
 @include\AMCLI\CommandTree.hpp
 
@@ -1706,7 +1707,7 @@ I have a new improve plan, do you have any suggestion?
 
 将CommandNode移出CommandTree, 转换成class
 
-移除CommandNode中AddFunction/Flag/Option 对target是否已经存在的检查, 
+移除CommandNode中AddFunction/Flag/Option 对target是否已经存在的检查,
 
 新建一个find(Path)函数, 用于寻找下级节点
 
@@ -1727,7 +1728,7 @@ add a function in Filesystem ShellRun(str cmd, and other args you think necessar
   + prefix'cmd' (if wrap)
   + prefixcmd
 + call ConductCmd
-There are many layer responsibility confusion and namespace confusion in this project
+  There are many layer responsibility confusion and namespace confusion in this project
 
 # foundation layer
 
@@ -1754,3 +1755,113 @@ OK
 # Domain layer
 
 all managers in domain layer not in AMDomain namespace
+
+**Revised Complete Plan**
+
+1. Baseline/safety
+
+- Re-check current state of [Config.hpp](/d:/CodeLib/CPP/AMSFTP/include/infrastructure/Config.hpp), [io_base.cpp](/d:/CodeLib/CPP/AMSFTP/src/infrastructure/config/io_base.cpp), [json.hpp](/d:/CodeLib/CPP/AMSFTP/include/foundation/tools/json.hpp).
+- Keep `AMInfraConfigStorage` public signatures unchanged.
+
+2. Define base `JsonValue` outside `AMJson`
+
+- In [json.hpp](/d:/CodeLib/CPP/AMSFTP/include/foundation/tools/json.hpp), define:
+- `using JsonValue = std::variant<Json, int64_t, uint64_t, double, bool, std::string>;`
+- Place it at global/project scope (not inside `namespace AMJson`).
+- Keep `AMJson` namespace for helper functions only.
+
+3. Extend foundation JSON helpers
+
+- Add conversion helpers for `JsonValue` <-> JSON node in `AMJson`.
+- Add schema reader utility:
+- `std::string AMJson::ReadSchemaData(const std::filesystem::path&, std::string *error = nullptr);`
+
+4. Add infra base handle port (abstract)
+
+- New: `include/infrastructure/config/HandlePort.hpp`
+- `AMInfraConfigHandlePort` with:
+- protected `mutable std::mutex mtx_;`
+- non-template virtual API:
+  - `Init(path, schema_json)`
+  - `ReadJson(Json*) const`
+  - `ReadValue(path, JsonValue*) const`
+  - `WriteValue(path, const JsonValue&)`
+  - `DeleteValue(path)`
+  - `DumpInplace()`
+  - `DumpTo(dst_path)`
+  - `ReadSchemaJson(std::string *out) const` / `ReadSchemaJson(Json *out) const`
+  - `Close()`
+  - `IsDirty() const`
+  - `LastModified() const`
+
+5. Implement improved `SuperTomlHandle`
+
+- New:
+- `include/infrastructure/config/SuperTomlHandle.hpp`
+- `src/infrastructure/config/SuperTomlHandle.cpp`
+- Members include:
+- `ori_path_`, `schema_json_`, `cfgffi_handle_`, `json_`, `is_dirty_`, `last_modified_`
+- Behavior rules:
+- write/delete success -> `is_dirty_ = true`, `last_modified_ = now`
+- default no-edit state -> `last_modified_` empty/default-constructed
+- successful dump -> `is_dirty_ = false` (timestamp unchanged unless you later want dump-time tracking)
+- Handle stores schema JSON string and provides schema query API.
+
+6. Rewire `AMInfraConfigStorage` internals to handle
+
+- Keep existing external methods.
+- Internally replace direct `doc->json/doc->dirty/doc->handle/doc->mtx` manipulations with handle methods.
+- Existing template `ResolveArg/SetArg` remain but bridge through `JsonValue`.
+
+7. Split write-thread into independent infra class
+
+- New:
+- `include/infrastructure/config/WriteDispatcher.hpp`
+- `src/infrastructure/config/WriteDispatcher.cpp`
+- Move queue/cv/thread/task execution there.
+- `AMInfraConfigStorage` composes and uses dispatcher.
+
+8. `io_base.cpp` refactor
+
+- Use `AMJson::ReadSchemaData(...)`.
+- Initialize handles with schema JSON string.
+- Dump/load/query paths delegate to `SuperTomlHandle`.
+
+9. Verification
+
+- Ensure no stale direct state access outside handle internals.
+- Confirm dirty/timestamp semantics match your revised rules.
+- Confirm build-facing API compatibility for callers.
+
+10. Final report
+
+- List changed files, exact semantics implemented, and any remaining migration follow-ups.
+
+
+**Updated Plan**
+
+1. Add **ConfigSyncPort** interface/class with:
+2. **DocumentKind Kind() const**
+3. **const Path& GetPath() const**
+4. **void SetJson(const Json&)**
+5. **bool GetJson(Json* out) const**
+6. **void RegisterDumpCallback(std::function<void(Json&)>)**
+7. **void TriggerDumpCallback()**
+8. In **AMConfigManager**, store ports with **std::map** backend:
+9. **std::map<DocumentKind, std::map<Path, std::shared_ptr `<ConfigSyncPort>`>> sync_ports_;**
+10. **Path** can be **std::vector[std::string](std::string)** key in **std::map** (lexicographical compare).
+11. Add API exactly as you requested:
+12. **std::shared_ptr `<ConfigSyncPort>` CreateOrGetSyncPort(DocumentKind kind, const Path& path, const Json& fallback);**
+13. Behavior:
+
+    * If exists: return existing port unchanged.
+    * If not exists: create port, set internal json to **fallback**, insert, return.
+14. Dump integration:
+15. Before dumping one document, iterate **sync_ports_[kind]**.
+16. For each port: **TriggerDumpCallback()**.
+17. Read port json and write into manager json at that **Path**.
+18. Continue existing dump-to-file flow.
+19. No-duplicate is naturally guaranteed by [std::map&lt;Path, ...&gt;](https://file+.vscode-resource.vscode-cdn.net/c%3A/Users/am/.vscode/extensions/openai.chatgpt-0.4.74-win32-x64/webview/# "std::map&lt;Path, ...&gt;") key uniqueness under each **DocumentKind**.
+20. Clarification of my previous point:
+21. I meant an optional “load sync” step: after manager loads file, copy loaded values at registered paths into each port’s internal json.
+22. Without this, a newly created port starts from **fallback** only; first save may overwrite file value with fallback/callback result.

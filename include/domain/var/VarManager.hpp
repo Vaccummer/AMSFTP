@@ -1,6 +1,5 @@
 #pragma once
 #include "domain/var/VarDomainService.hpp"
-#include "domain/var/VarModel.hpp"
 #include "foundation/DataClass.hpp"
 #include <mutex>
 #include <string>
@@ -14,19 +13,24 @@ public:
   using DomainDict = std::unordered_map<std::string, DomainVars>;
 
   /**
-   * @brief Initialize in-memory variable dict from ConfigManager.
+   * @brief Initialize in-memory variable dictionary to defaults.
    */
-  ECM Init() override { return Reload(); }
+  ECM Init() override { return Init(DomainDict{}); }
 
   /**
-   * @brief Reload [UserVars] from ConfigManager into domain dict.
+   * @brief Initialize in-memory variable dictionary from an external map.
    */
-  ECM Reload();
+  ECM Init(DomainDict vars_by_domain);
 
   /**
-   * @brief Persist variable dict to settings json and settings.toml.
+   * @brief Reload in-memory dictionary from an external map.
    */
-  ECM Save(bool async = true);
+  ECM Reload(DomainDict vars_by_domain);
+
+  /**
+   * @brief Return a const reference to current in-memory variable dictionary.
+   */
+  [[nodiscard]] const DomainDict &GetVarDict() const;
 
   /**
    * @brief Return one variable from a specified domain.
@@ -115,7 +119,6 @@ protected:
   VarDomainService domain_service_;
   mutable std::mutex mutex_;
   mutable bool ready_ = false;
-  bool dirty_ = false;
 };
 
 /**

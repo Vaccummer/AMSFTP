@@ -1,7 +1,7 @@
 #include "interface/CommandPreprocess.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
-#include "domain/var/VarModel.hpp"
+#include "foundation/var/VarModel.hpp"
 #include "interface/TokenTypeAnalyzer.hpp"
 
 using EC = ErrorCode;

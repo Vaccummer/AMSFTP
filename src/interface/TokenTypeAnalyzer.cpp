@@ -1,6 +1,6 @@
 #include "interface/TokenTypeAnalyzer.hpp"
 #include "domain/host/HostModel.hpp"
-#include "domain/var/VarModel.hpp"
+#include "foundation/var/VarModel.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/tools/time.hpp"
 #include "interface/ApplicationAdapters.hpp"

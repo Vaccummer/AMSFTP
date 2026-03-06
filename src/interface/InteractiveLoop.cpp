@@ -2,10 +2,10 @@
 #include "foundation/DataClass.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/time.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include "interface/CLIBind.hpp"
 #include "interface/CommandPreprocess.hpp"
 #include "interface/Completer/Proxy.hpp"
-#include "infrastructure/Config.hpp"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -265,13 +265,11 @@ bool TryBuildAnsiStyleCode_(const std::string &raw, std::string *ansi_code) {
 /**
  * @brief Resolve a prompt style tag into an ANSI escape sequence.
  *
- * @param config_manager Config manager used for style lookup.
  * @param tag_name Tag name from format (e.g., "un" or "#RRGGBB b").
  * @param ansi_code Output ANSI escape sequence when resolved.
  * @return True if a style was resolved; false otherwise.
  */
-bool ResolvePromptStyleAnsi_(AMInfraConfigManager &config_manager,
-                             const std::string &tag_name,
+bool ResolvePromptStyleAnsi_(const std::string &tag_name,
                              std::string *ansi_code) {
   if (!ansi_code) {
     return false;
@@ -286,12 +284,11 @@ bool ResolvePromptStyleAnsi_(AMInfraConfigManager &config_manager,
     return true;
   }
 
-  auto raw = config_manager.ResolveArg<std::string>(
-      DocumentKind::Settings, {"Style", "CLIPrompt", trimmed}, "", {});
+  auto raw = AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+      {"Style", "CLIPrompt", trimmed}, "");
   if (raw.empty()) {
-    raw = config_manager.ResolveArg<std::string>(
-        DocumentKind::Settings, {"Style", "CLIPrompt", "shortcut", trimmed}, "",
-        {});
+    raw = AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+        {"Style", "CLIPrompt", "shortcut", trimmed}, "");
   }
   if (raw.empty()) {
     return false;
@@ -305,21 +302,20 @@ bool ResolvePromptStyleAnsi_(AMInfraConfigManager &config_manager,
  * Supports both legacy `Style.CLIPrompt.format` and the newer
  * `Style.CLIPrompt.templete.core_prompt` layout.
  */
-std::string ResolveCorePromptFormat_(AMInfraConfigManager &config_manager) {
-  std::string format = config_manager.ResolveArg<std::string>(
-      DocumentKind::Settings, {"Style", "CLIPrompt", "templete", "core_prompt"},
-      "", {});
+std::string ResolveCorePromptFormat_() {
+  std::string format =
+      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+          {"Style", "CLIPrompt", "templete", "core_prompt"}, "");
   if (!format.empty()) {
     return format;
   }
-  format = config_manager.ResolveArg<std::string>(
-      DocumentKind::Settings, {"Style", "CLIPrompt", "template", "core_prompt"},
-      "", {});
+  format = AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+      {"Style", "CLIPrompt", "template", "core_prompt"}, "");
   if (!format.empty()) {
     return format;
   }
-  return config_manager.ResolveArg<std::string>(
-      DocumentKind::Settings, {"Style", "CLIPrompt", "format"}, "", {});
+  return AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+      {"Style", "CLIPrompt", "format"}, "");
 }
 
 /**
@@ -808,7 +804,6 @@ bool EvaluatePromptExpression_(const std::string &expression) {
  *
  * @param format Full format string.
  * @param index Current index in the format string; updated on return.
- * @param config_manager Config manager used to resolve styles.
  * @param vars Variable map (keys include the leading '$').
  * @param style_stack Stack of active ANSI style codes.
  * @param enable_styles Whether to interpret [style] tags as ANSI escapes.
@@ -817,7 +812,6 @@ bool EvaluatePromptExpression_(const std::string &expression) {
  */
 std::string
 RenderPromptSegment_(const std::string &format, size_t *index,
-                     AMInfraConfigManager &config_manager,
                      const std::unordered_map<std::string, std::string> &vars,
                      std::vector<std::string> *style_stack, bool enable_styles,
                      bool stop_on_brace) {
@@ -849,7 +843,7 @@ RenderPromptSegment_(const std::string &format, size_t *index,
         if (cursor < format.size() && format[cursor] == '{') {
           ++cursor;
           std::string cond = RenderPromptSegment_(
-              format, &cursor, config_manager, vars, nullptr, false, true);
+              format, &cursor, vars, nullptr, false, true);
           bool truthy = EvaluatePromptExpression_(cond);
 
           if (cursor >= format.size() || format[cursor] != '{') {
@@ -859,8 +853,8 @@ RenderPromptSegment_(const std::string &format, size_t *index,
           }
           ++cursor;
           std::string branch_true =
-              RenderPromptSegment_(format, &cursor, config_manager, vars,
-                                   style_stack, enable_styles, true);
+              RenderPromptSegment_(format, &cursor, vars, style_stack,
+                                   enable_styles, true);
 
           if (cursor >= format.size() || format[cursor] != '{') {
             output.push_back('{');
@@ -869,8 +863,8 @@ RenderPromptSegment_(const std::string &format, size_t *index,
           }
           ++cursor;
           std::string branch_false =
-              RenderPromptSegment_(format, &cursor, config_manager, vars,
-                                   style_stack, enable_styles, true);
+              RenderPromptSegment_(format, &cursor, vars, style_stack,
+                                   enable_styles, true);
 
           if (cursor < format.size() && format[cursor] == '}') {
             ++cursor;
@@ -931,7 +925,7 @@ RenderPromptSegment_(const std::string &format, size_t *index,
       }
 
       std::string ansi_code;
-      if (ResolvePromptStyleAnsi_(config_manager, tag, &ansi_code)) {
+      if (ResolvePromptStyleAnsi_(tag, &ansi_code)) {
         if (style_stack) {
           style_stack->push_back(ansi_code);
         }
@@ -954,18 +948,17 @@ RenderPromptSegment_(const std::string &format, size_t *index,
 /**
  * @brief Render a prompt format string into ANSI-escaped output.
  *
- * @param config_manager Config manager used to resolve styles.
  * @param format Format string from settings.
  * @param vars Variable map (keys include the leading '$').
  * @return Rendered prompt string with ANSI escape sequences.
  */
 std::string
-RenderPromptFormat_(AMInfraConfigManager &config_manager, const std::string &format,
+RenderPromptFormat_(const std::string &format,
                     const std::unordered_map<std::string, std::string> &vars) {
   size_t index = 0;
   std::vector<std::string> style_stack;
-  std::string rendered = RenderPromptSegment_(format, &index, config_manager,
-                                              vars, &style_stack, true, false);
+  std::string rendered =
+      RenderPromptSegment_(format, &index, vars, &style_stack, true, false);
   for (const auto &style : style_stack) {
     if (!style.empty()) {
       rendered += "\x1b[0m";
@@ -1158,20 +1151,18 @@ bool TryExtractTaggedText_(const std::string &tagged, std::string *extracted) {
 /**
  * @brief Apply a bbcode style tag from settings to text and convert to ANSI.
  *
- * @param config_manager Config manager used to resolve style values.
  * @param path Settings path under the style tree.
  * @param text Raw text to style.
  * @return Styled text with ANSI escape sequences when possible.
  */
-std::string ApplyStyleFromConfig_(AMInfraConfigManager &config_manager,
-                                  const AMInfraConfigManager::Path &path,
+std::string ApplyStyleFromConfig_(const std::vector<std::string> &path,
                                   const std::string &text) {
   if (text.empty()) {
     return text;
   }
 
-  std::string raw = AMStr::Strip(config_manager.ResolveArg<std::string>(
-      DocumentKind::Settings, path, "", {}));
+  std::string raw = AMStr::Strip(
+      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(path, ""));
   if (raw.empty()) {
     return text;
   }
@@ -1250,7 +1241,7 @@ ResolveUserHost_(const std::shared_ptr<BaseClient> &client) {
 /**
  * @brief Select the system icon from settings based on OS type.
  */
-std::string ResolveSysIcon_(AMInfraConfigManager &config_manager, OS_TYPE os_type) {
+std::string ResolveSysIcon_(OS_TYPE os_type) {
   std::string key = "windows";
   switch (os_type) {
   case OS_TYPE::Windows:
@@ -1267,8 +1258,9 @@ std::string ResolveSysIcon_(AMInfraConfigManager &config_manager, OS_TYPE os_typ
     break;
   }
 
-  std::string icon = config_manager.ResolveArg<std::string>(
-      DocumentKind::Settings, {"Style", "CLIPrompt", "icons", key}, "", {});
+  std::string icon =
+      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+          {"Style", "CLIPrompt", "icons", key}, "");
   if (icon.empty()) {
     icon = "💻";
   }
@@ -1287,7 +1279,6 @@ std::string ResolveSysIcon_(AMInfraConfigManager &config_manager, OS_TYPE os_typ
  * @brief Build the prompt string and update cached prefix when needed.
  */
 std::string BuildPrompt_(PromptState &state, AMDomain::client::AMClientManager &client_manager,
-                         AMInfraConfigManager &config_manager,
                          AMDomain::transfer::AMTransferManager &transfer_manager) {
   auto client = ResolveActiveClient_(client_manager);
   std::string nickname = client ? client->GetNickname() : std::string("local");
@@ -1306,15 +1297,15 @@ std::string BuildPrompt_(PromptState &state, AMDomain::client::AMClientManager &
         os_type = OS_TYPE::Unknown;
       }
     }
-    std::string sysicon = ResolveSysIcon_(config_manager, os_type);
+    std::string sysicon = ResolveSysIcon_(os_type);
     auto [username, hostname] = ResolveUserHost_(client);
     state.cached_sysicon = sysicon;
     state.cached_username = username;
     state.cached_hostname = hostname;
-    std::string styled_user = ApplyStyleFromConfig_(
-        config_manager, {"Style", "CLIPrompt", "username"}, username);
-    std::string styled_host = ApplyStyleFromConfig_(
-        config_manager, {"Style", "CLIPrompt", "hostname"}, hostname);
+    std::string styled_user =
+        ApplyStyleFromConfig_({"Style", "CLIPrompt", "username"}, username);
+    std::string styled_host =
+        ApplyStyleFromConfig_({"Style", "CLIPrompt", "hostname"}, hostname);
     state.cached_prefix =
         AMStr::fmt("{} {}@{}", sysicon, styled_user, styled_host);
     state.last_nickname = nickname;
@@ -1332,7 +1323,7 @@ std::string BuildPrompt_(PromptState &state, AMDomain::client::AMClientManager &
     workdir = client_manager.GetOrInitWorkdir(client);
   }
 
-  const std::string format = ResolveCorePromptFormat_(config_manager);
+  const std::string format = ResolveCorePromptFormat_();
   if (!format.empty()) {
     std::unordered_map<std::string, std::string> vars;
     vars["$sysicon"] = state.cached_sysicon;
@@ -1355,32 +1346,30 @@ std::string BuildPrompt_(PromptState &state, AMDomain::client::AMClientManager &
     vars["$time_now"] = time_now;
     vars["$task_num"] = std::to_string(total_tasks);
     vars["$time_clock"] = time_now;
-    const std::string rendered =
-        RenderPromptFormat_(config_manager, format, vars);
+    const std::string rendered = RenderPromptFormat_(format, vars);
     if (!rendered.empty()) {
       return rendered;
     }
   }
 
-  const std::string styled_elapsed = ApplyStyleFromConfig_(
-      config_manager, {"Style", "SystemInfo", "info"}, elapsed);
+  const std::string styled_elapsed =
+      ApplyStyleFromConfig_({"Style", "SystemInfo", "info"}, elapsed);
   const std::string styled_status = ApplyStyleFromConfig_(
-      config_manager, {"Style", "SystemInfo", ok ? "success" : "error"},
-      status);
+      {"Style", "SystemInfo", ok ? "success" : "error"}, status);
   std::string line1 = AMStr::fmt("{}  {}  {}", state.cached_prefix,
                                  styled_elapsed, styled_status);
   if (!ec_name.empty()) {
-    const std::string styled_ec = ApplyStyleFromConfig_(
-        config_manager, {"Style", "SystemInfo", "error"}, ec_name);
+    const std::string styled_ec =
+        ApplyStyleFromConfig_({"Style", "SystemInfo", "error"}, ec_name);
     line1 += " " + styled_ec;
   }
 
-  const std::string styled_nickname = ApplyStyleFromConfig_(
-      config_manager, {"Style", "CLIPrompt", "nickname"}, nickname);
-  const std::string styled_cwd = ApplyStyleFromConfig_(
-      config_manager, {"Style", "CLIPrompt", "cwd"}, workdir);
-  const std::string styled_dollar = ApplyStyleFromConfig_(
-      config_manager, {"Style", "CLIPrompt", "dollarsign"}, "$");
+  const std::string styled_nickname =
+      ApplyStyleFromConfig_({"Style", "CLIPrompt", "nickname"}, nickname);
+  const std::string styled_cwd =
+      ApplyStyleFromConfig_({"Style", "CLIPrompt", "cwd"}, workdir);
+  const std::string styled_dollar =
+      ApplyStyleFromConfig_({"Style", "CLIPrompt", "dollarsign"}, "$");
   std::string line2 =
       AMStr::fmt("({}){} {}", styled_nickname, styled_cwd, styled_dollar);
   return line1 + "\n" + line2 + " ";
@@ -1391,10 +1380,10 @@ std::string BuildPrompt_(PromptState &state, AMDomain::client::AMClientManager &
  *
  * This makes external edits effective without requiring process restart.
  */
-ECM ReloadSettingsIfUpdated_(AMInfraConfigManager &config_manager,
-                             AMPromptManager &prompt) {
+ECM ReloadSettingsIfUpdated_(AMPromptManager &prompt) {
   std::filesystem::path settings_path;
-  if (!config_manager.GetDataPath(DocumentKind::Settings, &settings_path) ||
+  if (!AMInterface::ApplicationAdapters::Runtime::GetConfigDataPath(
+          DocumentKind::Settings, &settings_path) ||
       settings_path.empty()) {
     return Ok();
   }
@@ -1418,11 +1407,13 @@ ECM ReloadSettingsIfUpdated_(AMInfraConfigManager &config_manager,
   }
 
   // Avoid clobbering in-memory updates that have not been dumped yet.
-  if (config_manager.IsDirty(DocumentKind::Settings)) {
+  if (AMInterface::ApplicationAdapters::Runtime::IsConfigDirty(
+          DocumentKind::Settings)) {
     return Ok();
   }
 
-  ECM load_rcm = config_manager.Load(DocumentKind::Settings, true);
+  ECM load_rcm = AMInterface::ApplicationAdapters::Runtime::LoadConfig(
+      DocumentKind::Settings, true);
   if (load_rcm.first != EC::Success) {
     return load_rcm;
   }
@@ -1595,7 +1586,6 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
   };
 
   AMPromptManager &prompt = managers.prompt_manager;
-  AMInfraConfigManager &config_manager = managers.config_manager;
   AMDomain::client::AMClientManager &client_manager = managers.client_manager;
   AMDomain::transfer::AMTransferManager &transfer_manager = managers.transfer_manager;
   AMDomain::filesystem::AMFileSystem &filesystem = managers.filesystem;
@@ -1616,7 +1606,7 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
       break;
     }
 
-    ECM reload_settings_rcm = ReloadSettingsIfUpdated_(config_manager, prompt);
+    ECM reload_settings_rcm = ReloadSettingsIfUpdated_(prompt);
     if (reload_settings_rcm.first != EC::Success) {
       PrintECM_(prompt, reload_settings_rcm);
     }
@@ -1627,8 +1617,7 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
     }
 
     const std::string prompt_text =
-        BuildPrompt_(prompt_state, client_manager, config_manager,
-                     transfer_manager);
+        BuildPrompt_(prompt_state, client_manager, transfer_manager);
 
     std::string prompt_header;
     std::string prompt_line;
@@ -1639,7 +1628,7 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
     }
 
     std::string line;
-    (void)config_manager.BackupIfNeeded();
+    (void)AMInterface::ApplicationAdapters::Runtime::BackupConfigIfNeeded();
 
     // monitor.SilenceHook("GLOBAL");
     // monitor.ResumeHook("COREPROMPT");

@@ -1,12 +1,10 @@
-#include "foundation/tools/auth.hpp"
-#include "interface/ApplicationAdapters.hpp"
-#include "foundation/tools/bar.hpp"
-#include "foundation/tools/json.hpp"
-#include "foundation/tools/time.hpp"
-#include "infrastructure/Config.hpp"
-#include "interface/Prompt.hpp"
 #include "domain/var/VarManager.hpp"
+#include "foundation/tools/json.hpp"
+#include "infrastructure/Config.hpp"
+#include "interface/ApplicationAdapters.hpp"
+#include "interface/Prompt.hpp"
 #include <algorithm>
+
 
 using EC = ErrorCode;
 
@@ -32,19 +30,44 @@ ECM ParseVarToken_(const std::string &token, varsetkn::VarRef *ref) {
   *ref = std::move(parsed);
   return Ok();
 }
+
+/**
+ * @brief Persist var dictionary into settings `UserVars`.
+ */
+ECM PersistVarDict_(const AMDomain::var::AMVarManager::DomainDict &dict,
+                    bool async) {
+  Json snapshot = Json::object();
+  for (const auto &domain_entry : dict) {
+    Json section = Json::object();
+    for (const auto &var_entry : domain_entry.second) {
+      section[var_entry.first] = var_entry.second;
+    }
+    snapshot[domain_entry.first] = std::move(section);
+  }
+
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(
+          DocumentKind::Settings, {varsetkn::kRoot}, snapshot)) {
+    return Err(EC::CommonFailure, "failed to write UserVars into settings");
+  }
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(
+      DocumentKind::Settings, "", async);
+}
 } // namespace
 
 /**
  * @brief Format variable output style.
  */
-std::string AMDomain::var::VarCLISet::FormatVarText_(const std::string &text) const {
-  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format(text, "UserVars");
+std::string
+AMDomain::var::VarCLISet::FormatVarText_(const std::string &text) const {
+  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow()
+      .Format(text, "UserVars");
 }
 
 /**
  * @brief Format output value with empty-string rule.
  */
-std::string AMDomain::var::VarCLISet::RenderValue_(const std::string &value) const {
+std::string
+AMDomain::var::VarCLISet::RenderValue_(const std::string &value) const {
   if (value.empty()) {
     return "\"\"";
   }
@@ -54,8 +77,8 @@ std::string AMDomain::var::VarCLISet::RenderValue_(const std::string &value) con
 /**
  * @brief Print one section with aligned `$name` column.
  */
-void AMDomain::var::VarCLISet::PrintSection_(const std::string &domain,
-                              const std::vector<VarInfo> &entries) const {
+void AMDomain::var::VarCLISet::PrintSection_(
+    const std::string &domain, const std::vector<VarInfo> &entries) const {
   AMPromptManager::Instance().FmtPrint("\\[{}]", domain);
   size_t max_width = 0;
   for (const auto &item : entries) {
@@ -67,8 +90,9 @@ void AMDomain::var::VarCLISet::PrintSection_(const std::string &domain,
     if (key.size() < max_width) {
       key.append(max_width - key.size(), ' ');
     }
-    AMPromptManager::Instance().FmtPrint("{} = {}", FormatVarText_(key),
-                     FormatVarText_(RenderValue_(item.varvalue)));
+    AMPromptManager::Instance().FmtPrint(
+        "{} = {}", FormatVarText_(key),
+        FormatVarText_(RenderValue_(item.varvalue)));
   }
 }
 
@@ -86,9 +110,8 @@ ECM AMDomain::var::VarCLISet::QueryByName(const std::string &token_name) const {
   if (ref.explicit_domain) {
     const VarInfo found = var_manager.GetVar(ref.domain, ref.varname);
     if (found.IsValid().first != EC::Success) {
-      return Err(
-          EC::InvalidArg,
-          AMStr::fmt("variable not found: {}", varsetkn::BuildVarToken(ref)));
+      return Err(EC::InvalidArg, AMStr::fmt("variable not found: {}",
+                                            varsetkn::BuildVarToken(ref)));
     }
     AMPromptManager::Instance().FmtPrint(
         "\\[{}] {} = {}", found.domain, FormatVarText_("$" + found.varname),
@@ -102,9 +125,8 @@ ECM AMDomain::var::VarCLISet::QueryByName(const std::string &token_name) const {
     found = var_manager.GetVar(varsetkn::kPublic, ref.varname);
   }
   if (found.IsValid().first != EC::Success) {
-    return Err(
-        EC::InvalidArg,
-        AMStr::fmt("variable not found: {}", varsetkn::BuildVarToken(ref)));
+    return Err(EC::InvalidArg, AMStr::fmt("variable not found: {}",
+                                          varsetkn::BuildVarToken(ref)));
   }
   AMPromptManager::Instance().FmtPrint(
       "\\[{}] {} = {}", found.domain, FormatVarText_("$" + found.varname),
@@ -115,8 +137,9 @@ ECM AMDomain::var::VarCLISet::QueryByName(const std::string &token_name) const {
 /**
  * @brief Handle `var def [-g] $name value`.
  */
-ECM AMDomain::var::VarCLISet::DefineVar(bool global, const std::string &token_name,
-                         const std::string &value) {
+ECM AMDomain::var::VarCLISet::DefineVar(bool global,
+                                        const std::string &token_name,
+                                        const std::string &value) {
   AMDomain::var::VarCLISet &var_manager = AMDomain::var::VarCLISet::Instance();
   varsetkn::VarRef ref{};
   ECM parsed = ParseVarToken_(token_name, &ref);
@@ -127,10 +150,10 @@ ECM AMDomain::var::VarCLISet::DefineVar(bool global, const std::string &token_na
     return Err(EC::InvalidArg, "cannot use --global with explicit zone token");
   }
 
-  const std::string domain =
-      ref.explicit_domain
-          ? ref.domain
-          : (global ? std::string(varsetkn::kPublic) : var_manager.CurrentDomain());
+  const std::string domain = ref.explicit_domain
+                                 ? ref.domain
+                                 : (global ? std::string(varsetkn::kPublic)
+                                           : var_manager.CurrentDomain());
 
   if (domain != varsetkn::kPublic) {
     VarInfo old = var_manager.GetVar(domain, ref.varname);
@@ -152,14 +175,15 @@ ECM AMDomain::var::VarCLISet::DefineVar(bool global, const std::string &token_na
   if (rcm.first != EC::Success) {
     return rcm;
   }
-  return var_manager.Save(true);
+  return PersistVarDict_(var_manager.GetVarDict(), true);
 }
 
 /**
  * @brief Handle `var del [-a] [domain] $name`.
  */
-ECM AMDomain::var::VarCLISet::DeleteVarByCli(bool all, const std::string &domain,
-                              const std::string &token_name) {
+ECM AMDomain::var::VarCLISet::DeleteVarByCli(bool all,
+                                             const std::string &domain,
+                                             const std::string &token_name) {
   AMDomain::var::VarCLISet &var_manager = AMDomain::var::VarCLISet::Instance();
   varsetkn::VarRef ref{};
   ECM parsed = ParseVarToken_(token_name, &ref);
@@ -194,7 +218,7 @@ ECM AMDomain::var::VarCLISet::DeleteVarByCli(bool all, const std::string &domain
     if (rcm.first != EC::Success) {
       return rcm;
     }
-    return var_manager.Save(true);
+    return PersistVarDict_(var_manager.GetVarDict(), true);
   }
 
   std::string target_domain;
@@ -217,13 +241,14 @@ ECM AMDomain::var::VarCLISet::DeleteVarByCli(bool all, const std::string &domain
   if (rcm.first != EC::Success) {
     return rcm;
   }
-  return var_manager.Save(true);
+  return PersistVarDict_(var_manager.GetVarDict(), true);
 }
 
 /**
  * @brief Handle `var ls [domain ...]`.
  */
-ECM AMDomain::var::VarCLISet::ListVars(const std::vector<std::string> &domains) const {
+ECM AMDomain::var::VarCLISet::ListVars(
+    const std::vector<std::string> &domains) const {
   AMDomain::var::VarCLISet &var_manager = AMDomain::var::VarCLISet::Instance();
   std::vector<std::string> targets = domains;
   ECM last = Ok();
@@ -260,10 +285,3 @@ ECM AMDomain::var::VarCLISet::ListVars(const std::vector<std::string> &domains) 
   }
   return last;
 }
-
-
-
-
-
-
-

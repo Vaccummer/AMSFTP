@@ -13,13 +13,13 @@
 - Owned (WF-7 in this pass):
   - `tools/check_wf7_cutover.ps1`
   - `tools/report_legacy_includes.ps1`
-  - include replacements in `src/manager/*` from
+  - include replacements in `src/{domain,interface,bootstrap}/*` from
     `AMManager/{Config,Logger,SignalMonitor}.hpp` to `infrastructure/*`
-  - recovered canonical manager headers in:
-    - `include/infrastructure/manager/{Client,Host,Transfer,Var,FileSystem}.hpp`
+  - canonical manager headers in:
+    - `include/domain/{client/ClientManager,host/HostManager,transfer/TransferManager,var/VarManager,filesystem/FileSystemManager}.hpp`
   - include replacements in first-party code from
     - `AMManager/{Client,Host,Transfer,Var,FileSystem}.hpp`
-    - to `infrastructure/manager/{Client,Host,Transfer,Var,FileSystem}.hpp`
+    - to `domain/{client/ClientManager,host/HostManager,transfer/TransferManager,var/VarManager,filesystem/FileSystemManager}.hpp`
   - `include/bootstrap/WF7_STATUS.md`
 - No-touch:
   - domain/application/interface behavior.
@@ -48,9 +48,9 @@
   - now reports legacy usage even when legacy header directories are absent.
 - Source include cutover:
   - replaced legacy manager singleton-compat includes with infrastructure
-    includes in `src/manager/{FileSystem,host/*,var/*,client/Operator,prompt/*,transfer/*}.cpp`.
+    includes in `src/{domain,interface,bootstrap}/*`.
   - replaced remaining manager-prefix includes with
-    `infrastructure/manager/*` headers across `main.cpp`, `src/manager/*`, and
+    `domain/*Manager` headers across `main.cpp`, `src/{domain,interface,bootstrap}/*`, and
     compatibility bridge sources.
 
 ## 5) Migration Method
@@ -59,7 +59,7 @@
 - Step 1: tighten WF-7 checks/reporting.
 - Step 2: replace `AMManager/{Config,Logger,SignalMonitor}.hpp` includes with
   infrastructure equivalents while keeping behavior unchanged.
-- Step 3: restore manager type contracts under `infrastructure/manager/*` and
+- Step 3: restore manager type contracts under `include/domain/*` and
   replace all `AMManager/{Client,Host,Transfer,Var,FileSystem}.hpp` includes.
 
 ## 6) Compatibility Impact / Rollback

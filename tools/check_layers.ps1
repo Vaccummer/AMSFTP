@@ -80,7 +80,7 @@ Set-Location $repoFull
 
 $allowedDeps = @{
     foundation     = @("foundation")
-    infrastructure = @("foundation", "infrastructure")
+    infrastructure = @("foundation", "infrastructure", "domain", "application")
     domain         = @("foundation", "domain")
     application    = @("foundation", "domain", "application")
     interface      = @("foundation", "domain", "application", "interface")

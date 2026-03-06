@@ -31,6 +31,10 @@ VarDomainService::DomainDict VarDomainService::Snapshot() const {
   return vars_by_domain_;
 }
 
+const VarDomainService::DomainDict &VarDomainService::ConstRef() const {
+  return vars_by_domain_;
+}
+
 VarInfo VarDomainService::GetVar(const std::string &domain,
                                  const std::string &name) const {
   if (!IsValidDomainName_(domain) || !varsetkn::IsValidVarname(name)) {
