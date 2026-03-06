@@ -5,9 +5,72 @@
 #include "domain/transfer/TransferManager.hpp"
 #include "domain/var/VarManager.hpp"
 #include "foundation/tools/enum_related.hpp"
+#include "foundation/tools/json.hpp"
 #include "infrastructure/Config.hpp"
 #include "infrastructure/Logger.hpp"
 #include "infrastructure/SignalMonitor.hpp"
+
+namespace {
+/**
+ * @brief Convert JSON scalar into string form.
+ */
+std::string ToStringScalar_(const Json &value) {
+  if (value.is_string()) {
+    return value.get<std::string>();
+  }
+  if (value.is_boolean()) {
+    return value.get<bool>() ? "true" : "false";
+  }
+  if (value.is_number_integer()) {
+    return std::to_string(value.get<int64_t>());
+  }
+  if (value.is_number_unsigned()) {
+    return std::to_string(value.get<size_t>());
+  }
+  if (value.is_number_float()) {
+    return AMStr::fmt("{}", value.get<double>());
+  }
+  if (value.is_null()) {
+    return "";
+  }
+  return value.dump();
+}
+
+/**
+ * @brief Parse settings `UserVars` JSON into manager domain dictionary.
+ */
+AMDomain::var::AMVarManager::DomainDict ParseUserVarsDict_(
+    const Json &user_vars) {
+  using DomainDict = AMDomain::var::AMVarManager::DomainDict;
+  using DomainVars = AMDomain::var::AMVarManager::DomainVars;
+  DomainDict parsed;
+  parsed.reserve(user_vars.size() + 1);
+  parsed[varsetkn::kPublic] = DomainVars{};
+
+  for (auto it = user_vars.begin(); it != user_vars.end(); ++it) {
+    if (it.value().is_object()) {
+      if (it.key() != varsetkn::kPublic &&
+          !varsetkn::IsValidZoneName(it.key())) {
+        continue;
+      }
+      DomainVars &vars = parsed[it.key()];
+      for (auto vit = it.value().begin(); vit != it.value().end(); ++vit) {
+        if (!varsetkn::IsValidVarname(vit.key())) {
+          continue;
+        }
+        vars[vit.key()] = ToStringScalar_(vit.value());
+      }
+      continue;
+    }
+
+    if (!varsetkn::IsValidVarname(it.key())) {
+      continue;
+    }
+    parsed[varsetkn::kPublic][it.key()] = ToStringScalar_(it.value());
+  }
+  return parsed;
+}
+} // namespace
 
 /**
  * @brief Bind manager references for CLI dispatch.
@@ -51,7 +114,13 @@ ECM CliManagers::Init(const amf &task_control_token) {
   if (!isok(rcm)) {
     return rcm;
   }
-  rcm = var_manager.Init();
+  Json user_vars = config_manager.ResolveArg<Json>(DocumentKind::Settings,
+                                                   {varsetkn::kRoot},
+                                                   Json::object(), {});
+  if (!user_vars.is_object()) {
+    user_vars = Json::object();
+  }
+  rcm = var_manager.Init(ParseUserVarsDict_(user_vars));
   if (!isok(rcm)) {
     return rcm;
   }

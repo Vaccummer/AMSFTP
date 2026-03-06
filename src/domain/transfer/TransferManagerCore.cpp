@@ -25,14 +25,20 @@
 #include <windows.h>
 #endif
 
+AMDomain::transfer::AMTransferManager::AMTransferManager()
+    : worker_(std::make_shared<AMWorkManager>()) {}
+
 ECM AMDomain::transfer::AMTransferManager::Init() {
+  if (!worker_) {
+    worker_ = std::make_shared<AMWorkManager>();
+  }
   int init_thread_num = 1;
   AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(
       DocumentKind::Settings, {"Options", "TransferManager", "init_thread_num"},
       &init_thread_num);
 
   init_thread_num = std::min(std::max(1, init_thread_num), 128);
-  worker_.ThreadCount(init_thread_num);
+  worker_->ThreadCount(init_thread_num);
   return Ok();
 }
 
@@ -460,7 +466,7 @@ void AMDomain::transfer::AMTransferManager::ReleaseTaskClients_(
   if (!task_info) {
     return;
   }
-  auto hostm = worker_.take_task_host(task_info->id);
+  auto hostm = worker_->take_task_host(task_info->id);
   if (hostm) {
     ReturnClientsToIdle_(hostm);
   }
@@ -571,7 +577,7 @@ ECM AMDomain::transfer::AMTransferManager::transfer(
 
   task_info->result_callback = BindResultCallback(std::move(user_callback));
 
-  auto submit_rcm = worker_.submit(task_info);
+  auto submit_rcm = worker_->submit(task_info);
   if (submit_rcm.first != EC::Success) {
     AMPromptManager::Instance().ErrorFormat(submit_rcm);
     ReleaseTaskClients_(task_info);
@@ -604,7 +610,7 @@ ECM AMDomain::transfer::AMTransferManager::transfer(
       if (show_progress) {
         progress_bar.EndDisplay();
       }
-      (void)worker_.terminate(task_info->id, 1000);
+      (void)worker_->terminate(task_info->id, 1000);
       break;
     }
     if (show_progress) {
@@ -696,7 +702,7 @@ ECM AMDomain::transfer::AMTransferManager::transfer_async(
       };
   task_info->result_callback = BindResultCallback(std::move(user_callback));
 
-  auto submit_rcm = worker_.submit(task_info);
+  auto submit_rcm = worker_->submit(task_info);
   if (submit_rcm.first != EC::Success) {
     AMPromptManager::Instance().ErrorFormat(submit_rcm);
     ReleaseTaskClients_(task_info);
@@ -848,8 +854,8 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
     return {ECM{EC::Success, ""}, nullptr};
   }
 
-  auto task_info =
-      worker_.cre_taskinfo(tasks_ptr, hostm, TransferCallback(), -1, quiet, -1);
+  auto task_info = worker_->cre_taskinfo(tasks_ptr, hostm, TransferCallback(),
+                                         -1, quiet, -1);
   task_info->transfer_sets =
       std::make_shared<std::vector<UserTransferSet>>(std::move(transfer_sets));
   task_info->nicknames = std::move(display_names);
@@ -864,7 +870,7 @@ AMDomain::transfer::AMTransferManager::FindTaskById_(const ID &task_id) const {
   if (task_id.empty()) {
     return nullptr;
   }
-  auto task_info = worker_.get_task(task_id);
+  auto task_info = worker_->get_task(task_id);
   if (task_info.first) {
     return task_info.first;
   }

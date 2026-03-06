@@ -1,7 +1,7 @@
 #include "interface/CommandTree.hpp"
 #include "interface/Completer/Engine.hpp"
 #include "interface/TokenTypeAnalyzer.hpp"
-#include "domain/var/VarModel.hpp"
+#include "foundation/var/VarModel.hpp"
 #include "Isocline/isocline.h"
 #include <algorithm>
 #include <cctype>

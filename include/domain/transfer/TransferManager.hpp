@@ -2,15 +2,18 @@
 
 #include "domain/client/ClientPort.hpp"
 #include "foundation/DataClass.hpp"
-#include "infrastructure/client/runtime/IOCore.hpp"
 #include <deque>
 #include <functional>
 #include <list>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+class AMWorkManager;
+class ClientMaintainer;
 
 namespace AMDomain::transfer {
 class AMTransferManager : private NonCopyableNonMovable {
@@ -273,7 +276,7 @@ private:
   /**
    * @brief Construct transfer manager using singleton managers.
    */
-  AMTransferManager() = default;
+  AMTransferManager();
 
   bool ConfirmWildcard_(const std::vector<PathInfo> &matches,
                         const std::string &src_host,
@@ -296,7 +299,7 @@ private:
                      size_t *entry_index) const;
 
 private:
-  AMWorkManager worker_;
+  std::shared_ptr<AMWorkManager> worker_;
   mutable std::mutex idle_mtx_;
   std::unordered_map<ID, std::list<ClientHandle>> idle_pool_;
   mutable std::mutex history_mtx_;
@@ -310,4 +313,3 @@ private:
   std::unordered_map<ID, std::deque<std::pair<double, size_t>>> speed_samples_;
 };
 } // namespace AMDomain::transfer
-

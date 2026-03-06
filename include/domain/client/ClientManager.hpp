@@ -1,5 +1,4 @@
 #pragma once
-
 #include "domain/client/ClientPort.hpp"
 #include "foundation/DataClass.hpp"
 #include <atomic>
@@ -19,6 +18,7 @@
 #endif
 
 class ClientMaintainer;
+class KnownHostQuery;
 
 namespace AMDomain::client {
 using AMClientAuthCallback =
@@ -31,9 +31,15 @@ public:
   using AuthCallback = AMClientAuthCallback;
   using TraceCallback = AMClientTraceCallback;
   using ClientHandle = AMClientHandle;
+  using KnownHostCallback = std::function<ECM(const KnownHostQuery &)>;
   using DisconnectCallback =
       std::function<void(const ClientHandle &, const ECM &)>;
 
+  void SetHeartbeatTimeoutMs(int timeout_ms);
+  [[nodiscard]] int HeartbeatTimeoutMs() const;
+  void SetKnownHostCallback(KnownHostCallback cb = {});
+  void SetDefaultPasswordCallback(AuthCallback cb = {});
+  void SetDefaultDisconnectCallback(DisconnectCallback cb = {});
   void SetPasswordCallback(AuthCallback cb = {});
   void SetDisconnectCallback(DisconnectCallback cb = {});
   ClientMaintainer &Clients();
@@ -50,8 +56,7 @@ public:
   [[nodiscard]] std::string CurrentNickname() const;
   void SetCurrentClient(const ClientHandle &client);
   void ConfigureState(const std::shared_ptr<ClientMaintainer> &clients,
-                      const ClientHandle &local_client_base,
-                      ssize_t trace_num);
+                      const ClientHandle &local_client_base, ssize_t trace_num);
   void ResetSpinnerState();
   void SetSpinnerLineLen(size_t line_len);
   [[nodiscard]] bool SpinnerStopRequested() const;
@@ -63,10 +68,11 @@ public:
             bool force = false, bool quiet = false, TraceCallback trace_cb = {},
             amf interrupt_flag = nullptr);
 
-  std::pair<ECM, ClientHandle>
-  AddClient(const std::string &nickname, bool force, bool quiet,
-            TraceCallback trace_cb = {}, amf interrupt_flag = nullptr,
-            bool register_to_manager = true);
+  std::pair<ECM, ClientHandle> AddClient(const std::string &nickname,
+                                         bool force, bool quiet,
+                                         TraceCallback trace_cb = {},
+                                         amf interrupt_flag = nullptr,
+                                         bool register_to_manager = true);
 
   std::pair<ECM, ClientHandle>
   Connect(const std::string &nickname, const std::string &hostname,
@@ -101,8 +107,15 @@ protected:
   std::shared_ptr<ClientMaintainer> clients_;
   std::shared_ptr<std::atomic<bool>> is_interactive_ =
       std::make_shared<std::atomic<bool>>(false);
+  int heartbeat_timeout_ms_ = 100;
+  bool heartbeat_timeout_overridden_ = false;
+  KnownHostCallback known_host_cb_ = {};
+  AuthCallback default_password_cb_ = {};
+  DisconnectCallback default_disconnect_cb_ = {};
   AuthCallback password_cb_ = {};
   DisconnectCallback disconnect_cb_ = {};
+  bool use_custom_password_cb_ = false;
+  bool use_custom_disconnect_cb_ = false;
   mutable std::mutex auth_io_mtx_;
   std::atomic<bool> spinner_stop_requested_{false};
   std::atomic<size_t> spinner_line_len_{0};
@@ -110,10 +123,9 @@ protected:
   AuthCallback BuildAuthCallback_(const AuthCallback &auth_cb, bool quiet,
                                   std::atomic<bool> *spinner_running);
   void ApplyKnownHostCallback_(const ClientHandle &client);
+  ECM DefaultKnownHostCallback(const KnownHostQuery &query);
   std::optional<std::string> DefaultPasswordCallback(const AuthCBInfo &info);
   void DefaultDisconnectCallback(const ClientHandle &client, const ECM &ecm);
-  AuthCallback BuiltinPasswordCallback_();
-  DisconnectCallback BuiltinDisconnectCallback_();
   ClientHandle CreateLocalClient_();
 };
 
@@ -125,11 +137,10 @@ public:
   std::tuple<std::string, std::string, ClientHandle, ECM>
   ParsePath(const std::string &input, amf interrupt_flag);
 
-  [[nodiscard]] std::string
-  AbsPath(const std::string &path, const ClientHandle &client = nullptr) const;
+  [[nodiscard]] std::string AbsPath(const std::string &path,
+                                    const ClientHandle &client = nullptr) const;
 
-  [[nodiscard]] std::string
-  GetOrInitWorkdir(const ClientHandle &client) const;
+  [[nodiscard]] std::string GetOrInitWorkdir(const ClientHandle &client) const;
 
   void SetClientWorkdir(const ClientHandle &client,
                         const std::string &path) const;
@@ -155,4 +166,3 @@ public:
   }
 };
 } // namespace AMDomain::client
-

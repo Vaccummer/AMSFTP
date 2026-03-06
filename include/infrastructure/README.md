@@ -20,16 +20,15 @@ port contract.
 Legacy `include/AMClient/*.hpp` headers are compatibility shims for migration
 only and should not be used for new includes.
 
-## Manager Adapter Canonical Paths
+## Manager Contract Canonical Paths
 
-Manager-type headers used by CLI bootstrap/compatibility wiring are canonical
-under:
+Manager contracts used by CLI/bootstrap wiring are canonical under `include/domain`:
 
-- `include/infrastructure/manager/Client.hpp`
-- `include/infrastructure/manager/Host.hpp`
-- `include/infrastructure/manager/Transfer.hpp`
-- `include/infrastructure/manager/Var.hpp`
-- `include/infrastructure/manager/FileSystem.hpp`
+- `include/domain/client/ClientManager.hpp`
+- `include/domain/host/HostManager.hpp`
+- `include/domain/transfer/TransferManager.hpp`
+- `include/domain/var/VarManager.hpp`
+- `include/domain/filesystem/FileSystemManager.hpp`
 
 Legacy `include/AMManager/*.hpp` include prefixes are removed from first-party
 sources and should not be reintroduced.

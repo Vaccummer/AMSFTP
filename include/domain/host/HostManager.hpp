@@ -59,10 +59,6 @@ public:
 
 private:
   mutable std::unordered_map<std::string, HostConfig> host_configs = {};
-  [[nodiscard]] ECM PrintHost_(const std::string &nickname,
-                               const HostConfig &entry) const;
-  ECM PromptAddFields_(const std::string &nickname, HostConfig &entry);
-  ECM PromptModifyFields_(const std::string &nickname, HostConfig &entry);
   ECM AddHost_(const std::string &nickname, const HostConfig &entry);
   ECM RemoveHost_(const std::string &nickname);
 };

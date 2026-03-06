@@ -15,7 +15,7 @@
   - `main.cpp`
   - `include/interface/CLIArg.hpp`
   - `src/interface/{CLIArg,InteractiveLoop}.cpp`
-  - `src/manager/CliManagersCompat.cpp`
+  - `src/bootstrap/CliManagersBootstrap.cpp`
 - No-touch:
   - Domain/application behavior semantics.
   - Legacy manager internal singleton implementations outside bootstrap path.
@@ -62,7 +62,7 @@
 - `TaskControlToken::Instance()` removed from:
   - `src/interface/CLIArg.cpp`
   - `src/interface/InteractiveLoop.cpp`
-  - `src/manager/CliManagersCompat.cpp`
+  - `src/bootstrap/CliManagersBootstrap.cpp`
 - Runtime bindings are reset automatically through bootstrap guard at process
   exit paths.
 - `SessionHandle::ResetRunContext()` resets task-token runtime state.

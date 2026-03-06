@@ -1,5 +1,5 @@
 #pragma once
-#include "domain/var/VarModel.hpp"
+#include "foundation/var/VarModel.hpp"
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -26,6 +26,14 @@ public:
    * @brief Return a full snapshot of current variable dictionary.
    */
   [[nodiscard]] DomainDict Snapshot() const;
+
+  /**
+   * @brief Return an internal const reference of current variable dictionary.
+   *
+   * This accessor is intentionally non-copying. Callers must ensure no
+   * concurrent mutation happens while holding the returned reference.
+   */
+  [[nodiscard]] const DomainDict &ConstRef() const;
 
   /**
    * @brief Return one variable from a specified domain.
@@ -103,4 +111,3 @@ private:
   DomainDict vars_by_domain_ = {{varsetkn::kPublic, DomainVars{}}};
 };
 } // namespace AMDomain::var
-
