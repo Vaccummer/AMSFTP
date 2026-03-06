@@ -1,4 +1,4 @@
-#include "infrastructure/config/WriteDispatcher.hpp"
+#include "infrastructure/writer/WriteDispatcher.hpp"
 
 /**
  * @brief Start worker thread when not already running.

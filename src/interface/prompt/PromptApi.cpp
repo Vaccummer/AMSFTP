@@ -449,7 +449,7 @@ void AMPromptManager::InitIsoclineConfig() {
   const AMPromptProfileArgs &default_profile = ResolvePromptProfileArgs("*");
   ApplyCoreProfileSettings_(default_profile);
 
-  AMCliSignalMonitor::SignalHook hook;
+  AMSignalMonitorPort::SignalHook hook;
   hook.callback = [this]([[maybe_unused]] int signum) {
     (void)this;
     // ic_async_stop();
@@ -457,9 +457,10 @@ void AMPromptManager::InitIsoclineConfig() {
   hook.is_silenced = true;
   hook.priority = 100;
   hook.consume = true;
-  AMCliSignalMonitor::Instance().RegisterHook("PROMPT", hook);
+  (void)AMInterface::ApplicationAdapters::Runtime::RegisterSignalHook("PROMPT",
+                                                                       hook);
 
-  AMCliSignalMonitor::SignalHook core_hook;
+  AMSignalMonitorPort::SignalHook core_hook;
   core_hook.callback = [this]([[maybe_unused]] int signum) {
     (void)this;
     // ic_async_stop();
@@ -467,5 +468,6 @@ void AMPromptManager::InitIsoclineConfig() {
   core_hook.is_silenced = true;
   core_hook.priority = 100;
   core_hook.consume = true;
-  AMCliSignalMonitor::Instance().RegisterHook("COREPROMPT", core_hook);
+  (void)AMInterface::ApplicationAdapters::Runtime::RegisterSignalHook(
+      "COREPROMPT", core_hook);
 }

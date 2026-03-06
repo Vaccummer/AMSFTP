@@ -3,6 +3,7 @@
 #include "foundation/DataClass.hpp"
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <string>
 
 namespace AMDomain::log {
@@ -42,6 +43,32 @@ public:
    * @brief Close underlying stream resources.
    */
   virtual void Close() = 0;
+
+  /**
+   * @brief Return last writer-level ECM state.
+   */
+  [[nodiscard]] ECM LastError() const {
+    std::lock_guard<std::mutex> lock(error_mtx_);
+    return last_error_;
+  }
+
+  /**
+   * @brief Clear last writer-level ECM state to success.
+   */
+  void ClearLastError() { SetLastError_({EC::Success, ""}); }
+
+protected:
+  /**
+   * @brief Update last writer-level ECM state.
+   */
+  void SetLastError_(const ECM &error) {
+    std::lock_guard<std::mutex> lock(error_mtx_);
+    last_error_ = error;
+  }
+
+private:
+  mutable std::mutex error_mtx_;
+  ECM last_error_ = {EC::Success, ""};
 };
 } // namespace AMDomain::log
 

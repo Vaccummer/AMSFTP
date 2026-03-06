@@ -39,7 +39,7 @@ std::shared_ptr<AMAsyncWriteSchedulerPort> AMLoggerManager::Scheduler() const {
 /**
  * @brief Register or replace one concrete writer by logger key.
  */
-bool AMLoggerManager::SetLogger(int logger_key, WriterPtr writer) {
+bool AMLoggerManager::SetLogger(LoggerKey logger_key, WriterPtr writer) {
   if (!writer) {
     return false;
   }
@@ -54,7 +54,7 @@ bool AMLoggerManager::SetLogger(int logger_key, WriterPtr writer) {
 /**
  * @brief Remove one writer by logger key.
  */
-bool AMLoggerManager::RemoveLogger(int logger_key) {
+bool AMLoggerManager::RemoveLogger(LoggerKey logger_key) {
   std::lock_guard<std::mutex> lock(mtx_);
   const bool removed = logger_map_.erase(logger_key) > 0;
   trace_levels_.erase(logger_key);
@@ -64,7 +64,7 @@ bool AMLoggerManager::RemoveLogger(int logger_key) {
 /**
  * @brief Return whether one writer is registered.
  */
-bool AMLoggerManager::HasLogger(int logger_key) const {
+bool AMLoggerManager::HasLogger(LoggerKey logger_key) const {
   std::lock_guard<std::mutex> lock(mtx_);
   return logger_map_.find(logger_key) != logger_map_.end();
 }
@@ -89,7 +89,7 @@ void AMLoggerManager::SetErrorReporter(ErrorReporter reporter) {
 /**
  * @brief Get trace level for one logger key (default is 4).
  */
-int AMLoggerManager::GetTraceLevel(int logger_key) const {
+int AMLoggerManager::GetTraceLevel(LoggerKey logger_key) const {
   std::lock_guard<std::mutex> lock(mtx_);
   auto iter = trace_levels_.find(logger_key);
   if (iter == trace_levels_.end()) {
@@ -101,7 +101,7 @@ int AMLoggerManager::GetTraceLevel(int logger_key) const {
 /**
  * @brief Set trace level for one logger key and return clamped value.
  */
-int AMLoggerManager::SetTraceLevel(int logger_key, int value) {
+int AMLoggerManager::SetTraceLevel(LoggerKey logger_key, int value) {
   const int clamped = ClampTraceLevel(value);
   std::lock_guard<std::mutex> lock(mtx_);
   trace_levels_[logger_key] = clamped;
@@ -111,7 +111,7 @@ int AMLoggerManager::SetTraceLevel(int logger_key, int value) {
 /**
  * @brief Submit one structured trace through logger business workflow.
  */
-ECM AMLoggerManager::Trace(int logger_key, const TraceInfo &info) {
+ECM AMLoggerManager::Trace(LoggerKey logger_key, const TraceInfo &info) {
   WriterPtr writer = nullptr;
   std::shared_ptr<AMAsyncWriteSchedulerPort> scheduler = nullptr;
   ErrorReporter reporter = {};
@@ -156,7 +156,8 @@ ECM AMLoggerManager::Trace(int logger_key, const TraceInfo &info) {
 /**
  * @brief Build one trace and submit through logger business workflow.
  */
-ECM AMLoggerManager::Trace(int logger_key, TraceLevel level, EC error_code,
+ECM AMLoggerManager::Trace(LoggerKey logger_key, TraceLevel level,
+                           EC error_code,
                            const std::string &nickname,
                            const std::string &target,
                            const std::string &action, const std::string &msg,
@@ -170,7 +171,7 @@ ECM AMLoggerManager::Trace(int logger_key, TraceLevel level, EC error_code,
  * @brief Return callback helper that writes traces to one logger key.
  */
 std::function<void(const TraceInfo &)>
-AMLoggerManager::TraceCallbackFunc(int logger_key) {
+AMLoggerManager::TraceCallbackFunc(LoggerKey logger_key) {
   return [this, logger_key](const TraceInfo &info) {
     ECM trace_rcm = Trace(logger_key, info);
     if (!isok(trace_rcm)) {
@@ -207,8 +208,9 @@ int AMLoggerManager::ToLevelInt(enum TraceLevel level) {
 /**
  * @brief Resolve default source by logger key.
  */
-TraceSource AMLoggerManager::ResolveSource_(int logger_key) {
-  return logger_key == 1 ? TraceSource::Programm : TraceSource::Client;
+TraceSource AMLoggerManager::ResolveSource_(LoggerKey logger_key) {
+  return logger_key == LoggerKey::Program ? TraceSource::Programm
+                                          : TraceSource::Client;
 }
 
 /**

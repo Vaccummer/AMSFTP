@@ -10,6 +10,7 @@
 #include "application/var/VarWorkflows.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "domain/config/DocumentKind.hpp"
+#include "domain/signal/SignalMonitorPort.hpp"
 #include "domain/transfer/TransferPorts.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/var/VarModel.hpp"
@@ -19,7 +20,6 @@
 #include <vector>
 
 class AMPromptManager;
-class AMInfraCliSignalMonitor;
 class AMInfraConfigManager;
 namespace AMDomain::host {
 class AMHostManager;
@@ -485,7 +485,7 @@ struct RuntimeBindings {
   AMDomain::client::AMClientManager *client_manager = nullptr;
   AMDomain::transfer::AMTransferManager *transfer_manager = nullptr;
   AMDomain::var::VarCLISet *var_manager = nullptr;
-  AMInfraCliSignalMonitor *signal_monitor = nullptr;
+  AMSignalMonitorPort *signal_monitor = nullptr;
   AMPromptManager *prompt_manager = nullptr;
   AMInfraConfigManager *config_manager = nullptr;
   AMDomain::filesystem::AMFileSystem *filesystem = nullptr;
@@ -642,6 +642,22 @@ ECM LoadConfig(DocumentKind kind, bool strict);
  */
 [[nodiscard]] std::string StylePath(const PathInfo &info,
                                     const std::string &name);
+
+/**
+ * @brief Register one named signal hook.
+ */
+bool RegisterSignalHook(const std::string &name,
+                        const AMSignalMonitorPort::SignalHook &hook);
+
+/**
+ * @brief Unregister one named signal hook.
+ */
+bool UnregisterSignalHook(const std::string &name);
+
+/**
+ * @brief Set signal-hook priority.
+ */
+bool SetSignalHookPriority(const std::string &name, int priority);
 
 /**
  * @brief Silence one registered CLI signal hook.

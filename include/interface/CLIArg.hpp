@@ -1,4 +1,5 @@
 #pragma once
+#include "domain/signal/SignalMonitorPort.hpp"
 #include "foundation/DataClass.hpp"
 #include <atomic>
 #include <cstddef>
@@ -7,7 +8,6 @@
 #include <string>
 #include <vector>
 
-class AMInfraCliSignalMonitor;
 class AMInfraConfigManager;
 class AMPromptManager;
 class AMInfraLogManager;
@@ -39,7 +39,7 @@ struct CliManagers : public NonCopyableNonMovable {
   /**
    * @brief Bind manager references used by CLI entry points.
    */
-  CliManagers(AMInfraCliSignalMonitor &signal_monitor,
+  CliManagers(AMSignalMonitorPort &signal_monitor,
               AMInfraConfigManager &config_manager,
               AMPromptManager &prompt_manager, AMDomain::host::AMHostManager &host_manager,
               AMDomain::var::VarCLISet &var_manager, AMInfraLogManager &log_manager,
@@ -51,7 +51,7 @@ struct CliManagers : public NonCopyableNonMovable {
    */
   ECM Init(const amf &task_control_token);
 
-  AMInfraCliSignalMonitor &signal_monitor;
+  AMSignalMonitorPort &signal_monitor;
   AMInfraConfigManager &config_manager;
   AMPromptManager &prompt_manager;
   AMDomain::host::AMHostManager &host_manager;
