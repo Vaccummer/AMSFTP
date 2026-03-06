@@ -1,13 +1,11 @@
 #pragma once
 #include "foundation/DataClass.hpp"
-#include "foundation/RustTomlRead.h"
 #include "foundation/tools/bar.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/json.hpp"
-#include <condition_variable>
-#include <handleapi.h>
-#include <queue>
-#include <thread>
+#include "domain/config/ConfigHandlePort.hpp"
+#include "infrastructure/config/WriteDispatcher.hpp"
+#include <memory>
 
 /**
  * @brief Configuration document types tracked by storage.
@@ -25,19 +23,18 @@ enum class DocumentKind {
 struct DocumentState {
   std::filesystem::path path;
   std::filesystem::path schema_path;
-  ConfigHandle *handle = nullptr;
-  nlohmann::ordered_json json;
-  mutable std::mutex mtx;
-  bool dirty = false;
-  std::chrono::system_clock::time_point last_modified;
+  std::shared_ptr<AMInfraConfigHandlePort> handle;
 
   /**
    * @brief Return a thread-safe copy of the JSON document.
    * @return Copied JSON payload.
    */
   [[nodiscard]] nlohmann::ordered_json GetJson() const {
-    std::lock_guard<std::mutex> lock(mtx);
-    return json;
+    nlohmann::ordered_json snapshot = nlohmann::ordered_json::object();
+    if (!handle || !handle->GetJson(&snapshot)) {
+      return nlohmann::ordered_json::object();
+    }
+    return snapshot;
   }
 
   /**
@@ -46,24 +43,11 @@ struct DocumentState {
    * @return Serialized JSON text.
    */
   [[nodiscard]] std::string GetJsonStr(int indent = 2) const {
-    std::lock_guard<std::mutex> lock(mtx);
-    return json.dump(indent);
-  }
-
-  /**
-   * @brief Acquire a document mutex lock for guarded JSON access.
-   * @return Unique lock holding the document mutex.
-   */
-  [[nodiscard]] std::unique_lock<std::mutex> LockJson() const {
-    return std::unique_lock<std::mutex>(mtx);
-  }
-
-  /**
-   * @brief Return a const reference to JSON without locking.
-   * @return Const JSON reference. Caller must hold LockJson().
-   */
-  [[nodiscard]] const nlohmann::ordered_json &GetJsonConstRef() const {
-    return json;
+    nlohmann::ordered_json snapshot = nlohmann::ordered_json::object();
+    if (!handle || !handle->GetJson(&snapshot)) {
+      return nlohmann::ordered_json::object().dump(indent);
+    }
+    return snapshot.dump(indent);
   }
 };
 
@@ -227,12 +211,11 @@ public:
                const std::function<T(T)> &post_process) const {
     static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
     const DocumentState *doc = GetDoc_(kind);
-    if (!doc) {
+    if (!doc || !doc->handle) {
       return default_value;
     }
-    std::lock_guard<std::mutex> lock(doc->mtx);
     T value = {};
-    if (!AMJson::QueryKey(doc->GetJsonConstRef(), path, &value)) {
+    if (!doc->handle->Resolve(path, &value)) {
       return default_value;
     }
     if (post_process) {
@@ -244,8 +227,10 @@ public:
   bool ResolveArg(DocumentKind kind, const Path &path, T *data) {
     static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
     const DocumentState *doc = GetDoc_(kind);
-    std::lock_guard<std::mutex> lock(doc->mtx);
-    if (!AMJson::QueryKey(doc->GetJsonConstRef(), path, data)) {
+    if (!doc || !doc->handle || !data) {
+      return false;
+    }
+    if (!doc->handle->Resolve(path, data)) {
       return false;
     }
     return true;
@@ -257,12 +242,15 @@ public:
   ExternaLView(DocumentKind kind,
                const std::function<void(const Json &)> &transform) const {
     const DocumentState *doc = GetDoc_(kind);
-    if (!doc || !transform) {
+    if (!doc || !doc->handle || !transform) {
       return false;
     }
-    std::lock_guard<std::mutex> lock(doc->mtx);
+    Json snapshot = Json::object();
+    if (!doc->handle->GetJson(&snapshot)) {
+      return false;
+    }
     try {
-      transform(doc->GetJsonConstRef());
+      transform(snapshot);
       return true;
     } catch (...) {
       return false;
@@ -273,33 +261,23 @@ public:
   bool SetArg(DocumentKind kind, const Path &path, T value) {
     static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
     DocumentState *doc = GetDoc_(kind);
-    if (!doc) {
+    if (!doc || !doc->handle) {
       return false;
     }
-    std::lock_guard<std::mutex> lock(doc->mtx);
-    if (!doc->json.is_object()) {
-      doc->json = nlohmann::ordered_json::object();
-    }
-    if (!AMJson::SetKey(doc->json, path, value)) {
+    if (!doc->handle->Set(path, value)) {
       return false;
     }
-    doc->dirty = true;
     return true;
   }
 
   bool DelArg(DocumentKind kind, const Path &path) {
     DocumentState *doc = GetDoc_(kind);
-    if (!doc) {
+    if (!doc || !doc->handle) {
       return false;
     }
-    std::lock_guard<std::mutex> lock(doc->mtx);
-    if (!doc->json.is_object()) {
+    if (!doc->handle->DeleteValue(path)) {
       return false;
     }
-    if (!AMJson::DelKey(doc->json, path)) {
-      return false;
-    }
-    doc->dirty = true;
     return true;
   }
 
@@ -333,38 +311,10 @@ private:
    */
   ECM LoadDocument_(DocumentKind kind, DocumentState *doc);
 
-  /**
-   * @brief Write JSON content into a cfgffi handle and refresh the cache.
-   * @param doc Document state to dump.
-   * @param kind Document kind used in error messages.
-   * @return ECM success or failure.
-   */
-  ECM WriteHandleJson_(DocumentState *doc, DocumentKind kind);
-
-  /**
-   * @brief Write a TOML snapshot to a target path using the given handle.
-   * @param handle cfgffi handle pointer.
-   * @param json JSON payload to serialize.
-   * @param out_path Target file path.
-   */
-  void WriteSnapshotToPath_(ConfigHandle *handle, std::string_view json,
-                            const std::filesystem::path &out_path) const;
-
-  /**
-   * @brief Worker loop that processes queued write tasks.
-   */
-  void WriteThreadLoop_();
-
   std::filesystem::path root_dir_;
   std::unordered_map<DocumentKind, DocumentState> docs_;
-  std::mutex handle_mtx_;
-  std::mutex write_mtx_;       // protects write-thread start/stop lifecycle
-  std::mutex write_queue_mtx_; // protects the write task queue
-  std::condition_variable write_cv_;
-  std::queue<std::function<ECM()>> write_queue_;
-  std::thread write_thread_;
-  std::atomic<bool> write_running_{false};
-  std::atomic<bool> shutdown_requested_{false};
+  std::mutex write_mtx_;
+  AMInfraConfigWriteDispatcher write_dispatcher_;
   bool backup_prune_checked_ = false;
   DumpErrorCallback dump_error_cb_;
   bool initialized_ = false;

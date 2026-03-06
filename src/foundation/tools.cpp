@@ -3,6 +3,7 @@
 #include "foundation/tools/json.hpp"
 #include <array>
 #include <ctime>
+#include <fstream>
 #include <iomanip>
 #include <regex>
 #include <sstream>
@@ -711,6 +712,80 @@ bool DelKey(AMJson::Json &root, const std::vector<std::string> &path) {
     node = &(*it);
   }
   return false;
+}
+
+bool ToJsonValue(const Json &node, JsonValue *out) {
+  if (!out) {
+    return false;
+  }
+  if (node.is_object() || node.is_array() || node.is_null()) {
+    *out = node;
+    return true;
+  }
+  if (node.is_boolean()) {
+    *out = node.get<bool>();
+    return true;
+  }
+  if (node.is_number_integer()) {
+    *out = node.get<int64_t>();
+    return true;
+  }
+  if (node.is_number_unsigned()) {
+    *out = node.get<uint64_t>();
+    return true;
+  }
+  if (node.is_number_float()) {
+    *out = node.get<double>();
+    return true;
+  }
+  if (node.is_string()) {
+    *out = node.get<std::string>();
+    return true;
+  }
+  return false;
+}
+
+Json ToJson(const JsonValue &value) {
+  return std::visit(
+      [](const auto &item) -> Json {
+        using V = std::decay_t<decltype(item)>;
+        if constexpr (std::is_same_v<V, Json>) {
+          return item;
+        } else {
+          return Json(item);
+        }
+      },
+      value);
+}
+
+std::string ReadSchemaData(const std::filesystem::path &schema_path,
+                           std::string *error) {
+  if (error) {
+    error->clear();
+  }
+  if (schema_path.empty()) {
+    return "{}";
+  }
+  std::ifstream in(schema_path, std::ios::in | std::ios::binary);
+  if (!in.is_open()) {
+    if (error) {
+      *error = "failed to open schema file";
+    }
+    return "{}";
+  }
+  std::ostringstream oss;
+  oss << in.rdbuf();
+  if (!in.good() && !in.eof()) {
+    if (error) {
+      *error = "failed to read schema file";
+    }
+    return "{}";
+  }
+  std::string content = oss.str();
+  if (content.empty()) {
+    return "{}";
+  }
+  return content;
 }
 } // namespace AMJson
 
