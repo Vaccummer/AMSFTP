@@ -3,14 +3,18 @@
 #include "foundation/tools/string.hpp"
 
 #include <algorithm>
+#include <filesystem>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <type_traits>
 #include <vector>
+#include <variant>
 
-namespace AMJson {
 using Json = nlohmann::ordered_json;
+using JsonValue =
+    std::variant<Json, int64_t, uint64_t, double, bool, std::string>;
+namespace AMJson {
 template <class T>
 inline constexpr bool kValueTypeSupported =
     std::is_arithmetic_v<std::decay_t<T>> ||
@@ -197,6 +201,63 @@ inline bool SetKey(Json &root, const std::vector<std::string> &path, T value) {
 
 bool DelKey(Json &root, const std::vector<std::string> &path);
 
+/**
+ * @brief Convert a Json node into one boxed JsonValue.
+ */
+bool ToJsonValue(const Json &node, JsonValue *out);
+
+/**
+ * @brief Convert one boxed JsonValue into Json node.
+ */
+Json ToJson(const JsonValue &value);
+
+/**
+ * @brief Convert one boxed JsonValue into typed output.
+ */
+template <typename T> bool JsonValueTo(const JsonValue &value, T *out) {
+  static_assert(kValueTypeSupported<T>, "T is not supported");
+  if (!out) {
+    return false;
+  }
+
+  Json node = ToJson(value);
+  std::vector<std::string> root_path = {};
+  return QueryKey(node, root_path, out);
+}
+
+/**
+ * @brief Convert one typed value into boxed JsonValue.
+ */
+template <typename T> bool ToJsonValue(const T &value, JsonValue *out) {
+  static_assert(kValueTypeSupported<T>, "T is not supported");
+  if (!out) {
+    return false;
+  }
+  if constexpr (std::is_same_v<std::decay_t<T>, Json>) {
+    *out = value;
+  } else if constexpr (std::is_same_v<std::decay_t<T>, std::string>) {
+    *out = value;
+  } else if constexpr (std::is_same_v<std::decay_t<T>, bool>) {
+    *out = value;
+  } else if constexpr (std::is_unsigned_v<std::decay_t<T>>) {
+    *out = static_cast<uint64_t>(value);
+  } else if constexpr (std::is_integral_v<std::decay_t<T>>) {
+    *out = static_cast<int64_t>(value);
+  } else if constexpr (std::is_floating_point_v<std::decay_t<T>>) {
+    *out = static_cast<double>(value);
+  } else {
+    Json json_value = value;
+    *out = json_value;
+  }
+  return true;
+}
+
+/**
+ * @brief Read schema file contents as JSON text; fallback "{}" on failure.
+ */
+std::string ReadSchemaData(const std::filesystem::path &schema_path,
+                           std::string *error = nullptr);
+
 template <typename T> bool StrValueParse(const std::string &input, T *out) {
   static_assert(std::is_arithmetic_v<std::decay_t<T>> ||
                     std::is_same_v<std::decay_t<T>, std::string> ||
@@ -248,6 +309,3 @@ template <typename T> std::vector<T> VectorDedup(const std::vector<T> &input) {
   return output;
 }
 } // namespace AMJson
-
-// Compatibility alias for JSON value type.
-using Json = nlohmann::ordered_json;
