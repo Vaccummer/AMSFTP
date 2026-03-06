@@ -1,71 +1,27 @@
 #pragma once
+#include "domain/config/ConfigManager.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/tools/bar.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/json.hpp"
-#include "domain/config/ConfigHandlePort.hpp"
 #include "infrastructure/config/WriteDispatcher.hpp"
-#include <memory>
 
 /**
- * @brief Configuration document types tracked by storage.
- */
-enum class DocumentKind {
-  Config = 1,
-  Settings = 2,
-  KnownHosts = 3,
-  History = 4
-};
-
-/**
- * @brief Per-document storage state for configuration data.
- */
-struct DocumentState {
-  std::filesystem::path path;
-  std::filesystem::path schema_path;
-  std::shared_ptr<AMInfraConfigHandlePort> handle;
-
-  /**
-   * @brief Return a thread-safe copy of the JSON document.
-   * @return Copied JSON payload.
-   */
-  [[nodiscard]] nlohmann::ordered_json GetJson() const {
-    nlohmann::ordered_json snapshot = nlohmann::ordered_json::object();
-    if (!handle || !handle->GetJson(&snapshot)) {
-      return nlohmann::ordered_json::object();
-    }
-    return snapshot;
-  }
-
-  /**
-   * @brief Return a thread-safe serialized JSON string.
-   * @param indent Indent passed to nlohmann::json::dump.
-   * @return Serialized JSON text.
-   */
-  [[nodiscard]] std::string GetJsonStr(int indent = 2) const {
-    nlohmann::ordered_json snapshot = nlohmann::ordered_json::object();
-    if (!handle || !handle->GetJson(&snapshot)) {
-      return nlohmann::ordered_json::object().dump(indent);
-    }
-    return snapshot.dump(indent);
-  }
-};
-
-/**
- * @brief Low-level config storage layer for raw persistence and file I/O.
+ * @brief Low-level config storage adapter that delegates core logic to domain.
  */
 class AMInfraConfigStorage {
 public:
   using Path = std::vector<std::string>;
   using DumpErrorCallback = std::function<void(ECM)>;
+  using SyncPort = AMDomain::config::AMConfigManager::SyncPort;
 
   /**
-   * @brief Construct a storage layer with empty state.
+   * @brief Construct a storage adapter with empty state.
    */
   AMInfraConfigStorage() = default;
 
   /**
-   * @brief Stop the background writer thread on destruction.
+   * @brief Stop background writer and release handles on destruction.
    */
   virtual ~AMInfraConfigStorage() { CloseHandles(); };
 
@@ -77,10 +33,10 @@ public:
   ECM AMInit(const std::filesystem::path &root_dir);
 
   /**
-   * @brief Initialize storage with explicit document paths and schemas.
+   * @brief Initialize storage with explicit document paths and schema paths.
    * @param root_dir Project root directory.
-   * @param paths Document paths keyed by kind.
-   * @param schemas Schema paths keyed by kind.
+   * @param paths Document data paths keyed by kind.
+   * @param schemas Document schema paths keyed by kind.
    * @return ECM success or failure.
    */
   ECM AMInit(
@@ -89,133 +45,99 @@ public:
       const std::unordered_map<DocumentKind, std::filesystem::path> &schemas);
 
   /**
-   * @brief Load a document from disk, or all documents when kind is nullopt.
-   * @param kind Target document kind; nullopt means load all.
-   * @return ECM success or failure.
+   * @brief Load one document or all documents.
    */
   ECM Load(std::optional<DocumentKind> kind = std::nullopt, bool force = false);
 
   /**
-   * @brief Release cfgffi handles and reset pointers without dumping.
+   * @brief Release all active config handles.
    */
   void CloseHandles();
 
   /**
-   * @brief Report whether a document has pending changes.
-   * @param kind Document kind to check.
-   * @return True if the document is dirty.
+   * @brief Return whether one document has pending changes.
    */
   bool IsDirty(DocumentKind kind) const;
 
   /**
-   * @brief Persist all document snapshots to disk.
-   * @return ECM success or failure.
+   * @brief Dump all managed documents.
    */
   ECM DumpAll(bool async = false);
 
   /**
-   * @brief Persist a single document snapshot to disk.
-   * @param kind Document kind to dump.
-   * @param path Override output path (empty uses document path).
-   * @return ECM success or failure.
+   * @brief Dump one document.
    */
   ECM Dump(DocumentKind kind, const std::string &path = "", bool async = false);
 
   /**
    * @brief Trigger backup logic when needed.
-   * @return ECM success or failure.
    */
   ECM BackupIfNeeded();
 
   /**
-   * @brief Start the background writer thread if not running.
+   * @brief Start background writer thread.
    */
   void StartWriteThread();
 
   /**
-   * @brief Stop the background writer thread and drain pending tasks.
+   * @brief Stop background writer thread.
    */
   void StopWriteThread();
 
   /**
-   * @brief Submit a write task to the background queue.
-   * @param task Task returning ECM to execute asynchronously.
+   * @brief Submit one asynchronous write task.
    */
   void SubmitWriteTask(std::function<ECM()> task);
 
   /**
-   * @brief Register a callback invoked on dump errors.
-   * @param cb Callback to receive error ECM.
+   * @brief Bind dump error callback.
    */
   void SetDumpErrorCallback(DumpErrorCallback cb);
 
   /**
-   * @brief Return a thread-safe copy of a document JSON.
-   * @param kind Document kind to snapshot.
-   * @param value Output JSON snapshot copy.
-   * @return True when the document exists and value is written.
+   * @brief Return one document JSON snapshot.
    */
-  [[nodiscard]] bool GetJson(DocumentKind kind,
-                             nlohmann::ordered_json *value) const;
+  [[nodiscard]] bool GetJson(DocumentKind kind, Json *value) const;
 
   /**
-   * @brief Return a thread-safe serialized JSON string of a document.
-   * @param kind Document kind to snapshot.
-   * @param value Output JSON string snapshot.
-   * @param indent Indent passed to nlohmann::json::dump.
-   * @return True when the document exists and value is written.
+   * @brief Return serialized JSON snapshot for one document.
    */
   [[nodiscard]] bool GetJsonStr(DocumentKind kind, std::string *value,
                                 int indent = 2) const;
 
   /**
-   * @brief Return the config data path tracked for a document.
-   * @param kind Document kind to query.
-   * @param value Output path when available.
-   * @return True when the document exists and value is written.
+   * @brief Return data path tracked for one document.
    */
   [[nodiscard]] bool GetDataPath(DocumentKind kind,
                                  std::filesystem::path *value) const;
 
-  /** Return the project root directory path. */
+  /**
+   * @brief Create or return one sync port for one `(kind, path)` key.
+   */
+  [[nodiscard]] SyncPort
+  CreateOrGetSyncPort(DocumentKind kind, const Path &path,
+                      const Json &fallback = Json::object());
+
+  /**
+   * @brief Return one sync port by `(kind, path)` key when registered.
+   */
+  [[nodiscard]] SyncPort GetSyncPort(DocumentKind kind,
+                                     const Path &path) const;
+
+  /** Return project root path tracked by storage adapter. */
   [[nodiscard]] std::filesystem::path ProjectRoot() const;
 
   /**
-   * @brief Backup config/settings/known_hosts when the interval elapses.
+   * @brief Alias of BackupIfNeeded for existing callers.
    */
   ECM ConfigBackupIfNeeded();
-
-  /**
-   * @brief Persist an encrypted password for a given client nickname.
-   */
-  // ECM SetClientPasswordEncrypted(const std::string &nickname,
-  //                                const std::string &encrypted_password,
-  //                                bool dump_now = true);
-  // /** Set a host field and optionally dump config. */
-  // ECM SetHostField(const std::string &nickname, const std::string &field,
-  //                  const Value &value, bool dump_now = true);
-  // /**
-  //  * @brief Validate whether a nickname is legal and not already used.
-  //  */
-  // bool ValidateNickname(const std::string &nickname, std::string *error)
-  // const;
-  // /**
-  //  * @brief Check whether a host nickname exists in the configuration.
-  //  * @param nickname Host nickname.
-  //  * @return True when the nickname is present.
-  //  */
-  // [[nodiscard]] bool HostExists(const std::string &nickname) const;
 
   template <typename T>
   T ResolveArg(DocumentKind kind, const Path &path, const T &default_value,
                const std::function<T(T)> &post_process) const {
     static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
-    const DocumentState *doc = GetDoc_(kind);
-    if (!doc || !doc->handle) {
-      return default_value;
-    }
     T value = {};
-    if (!doc->handle->Resolve(path, &value)) {
+    if (!config_manager_.Resolve(kind, path, &value)) {
       return default_value;
     }
     if (post_process) {
@@ -223,30 +145,24 @@ public:
     }
     return value;
   }
+
   template <typename T>
   bool ResolveArg(DocumentKind kind, const Path &path, T *data) {
     static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
-    const DocumentState *doc = GetDoc_(kind);
-    if (!doc || !doc->handle || !data) {
-      return false;
-    }
-    if (!doc->handle->Resolve(path, data)) {
-      return false;
-    }
-    return true;
+    return config_manager_.Resolve(kind, path, data);
   }
 
-  // conduct a read-only operation on a document's JSON with a provided
-  // transform in lock guard
+  /**
+   * @brief Execute read-only transform over one document JSON snapshot.
+   */
   inline bool
   ExternaLView(DocumentKind kind,
                const std::function<void(const Json &)> &transform) const {
-    const DocumentState *doc = GetDoc_(kind);
-    if (!doc || !doc->handle || !transform) {
+    if (!transform) {
       return false;
     }
     Json snapshot = Json::object();
-    if (!doc->handle->GetJson(&snapshot)) {
+    if (!config_manager_.GetJson(kind, &snapshot)) {
       return false;
     }
     try {
@@ -257,65 +173,26 @@ public:
     }
   }
 
-  template <typename T>
-  bool SetArg(DocumentKind kind, const Path &path, T value) {
+  template <typename T> bool SetArg(DocumentKind kind, const Path &path, T value) {
     static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
-    DocumentState *doc = GetDoc_(kind);
-    if (!doc || !doc->handle) {
-      return false;
-    }
-    if (!doc->handle->Set(path, value)) {
-      return false;
-    }
-    return true;
+    return config_manager_.Set(kind, path, value);
   }
 
   bool DelArg(DocumentKind kind, const Path &path) {
-    DocumentState *doc = GetDoc_(kind);
-    if (!doc || !doc->handle) {
-      return false;
-    }
-    if (!doc->handle->DeleteValue(path)) {
-      return false;
-    }
-    return true;
+    return config_manager_.DeleteValue(kind, path);
   }
 
 protected:
   /**
-   * @brief Notify any registered dump-error callback.
-   * @param err Error ECM to forward.
+   * @brief Notify any registered dump error callback.
    */
   void NotifyDumpError_(const ECM &err) const;
 
 private:
-  /**
-   * @brief Locate a document state by kind.
-   * @param kind Document kind.
-   * @return Pointer to document state or nullptr.
-   */
-  DocumentState *GetDoc_(DocumentKind kind);
-
-  /**
-   * @brief Locate a document state by kind (const).
-   * @param kind Document kind.
-   * @return Pointer to document state or nullptr.
-   */
-  const DocumentState *GetDoc_(DocumentKind kind) const;
-
-  /**
-   * @brief Load a document into memory using cfgffi.
-   * @param kind Document kind.
-   * @param doc Document state to populate.
-   * @return ECM success or failure.
-   */
-  ECM LoadDocument_(DocumentKind kind, DocumentState *doc);
-
   std::filesystem::path root_dir_;
-  std::unordered_map<DocumentKind, DocumentState> docs_;
-  std::mutex write_mtx_;
-  AMInfraConfigWriteDispatcher write_dispatcher_;
-  bool backup_prune_checked_ = false;
+  mutable std::mutex write_mtx_;
+  AMInfraAsyncWriter write_dispatcher_;
+  AMDomain::config::AMConfigManager config_manager_;
   DumpErrorCallback dump_error_cb_;
   bool initialized_ = false;
 };
@@ -338,30 +215,20 @@ public:
   };
 
   /**
-   * @brief Apply a named style to a string with optional path context.
-   * @param ori_str Original string.
-   * @param style_name Style key name.
-   * @param path_info Optional path info for styling decisions.
-   * @return Styled string output.
+   * @brief Apply configured style to one string.
    */
   [[nodiscard]] std::string Format(const std::string &ori_str,
                                    const std::string &style_name,
                                    const PathInfo *path_info = nullptr) const;
 
   /**
-   * @brief Create a progress bar using the current style configuration.
-   * @param total_size Total bytes for the progress bar.
-   * @param prefix Prefix label displayed before the bar.
-   * @return Configured progress bar instance.
+   * @brief Create progress bar from configured style.
    */
   [[nodiscard]] AMProgressBar CreateProgressBar(int64_t total_size,
                                                 const std::string &prefix);
 
   /**
-   * @brief Format a UTF-8 table using configured style defaults.
-   * @param keys Column headers.
-   * @param rows Row data.
-   * @return Formatted table string.
+   * @brief Format UTF-8 table using configured style defaults.
    */
   [[nodiscard]] std::string
   FormatUtf8Table(const std::vector<std::string> &keys,
@@ -370,7 +237,6 @@ public:
 private:
   /**
    * @brief Build progress bar style from settings.
-   * @return Progress bar style configuration.
    */
   AMProgressBarStyle BuildProgressBarStyle_() const;
 

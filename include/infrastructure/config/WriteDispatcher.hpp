@@ -9,7 +9,7 @@
 /**
  * @brief Infrastructure async writer for config/log persistence tasks.
  */
-class AMInfraAsyncWriter final : public AMAsyncWriteSchedulerPort {
+class AMInfraAsyncWriter final : public AMDomain::writer::AMAsyncWriteSchedulerPort {
 public:
   /**
    * @brief Construct an idle dispatcher.
