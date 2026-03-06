@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+namespace AMDomain::config {
 /**
  * @brief Abstract config handle contract for one TOML-backed JSON document.
  */
@@ -108,4 +109,9 @@ public:
 protected:
   mutable std::mutex mtx_;
 };
+} // namespace AMDomain::config
 
+/**
+ * @brief Backward-compatible global alias for gradual migration.
+ */
+using AMInfraConfigHandlePort = AMDomain::config::AMInfraConfigHandlePort;

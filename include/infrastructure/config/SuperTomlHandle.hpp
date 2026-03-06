@@ -5,7 +5,8 @@
 /**
  * @brief Concrete cfgffi-backed TOML handle with in-memory Json cache.
  */
-class AMInfraSuperTomlHandle final : public AMInfraConfigHandlePort {
+class AMInfraSuperTomlHandle final
+    : public AMDomain::config::AMInfraConfigHandlePort {
 public:
   AMInfraSuperTomlHandle() = default;
   ~AMInfraSuperTomlHandle() override { Close(); }

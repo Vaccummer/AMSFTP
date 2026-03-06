@@ -3,6 +3,7 @@
 #include "foundation/DataClass.hpp"
 #include <functional>
 
+namespace AMDomain::writer {
 /**
  * @brief Domain port for asynchronous write task scheduling.
  */
@@ -37,4 +38,9 @@ public:
    */
   [[nodiscard]] virtual bool IsRunning() const = 0;
 };
+} // namespace AMDomain::writer
 
+/**
+ * @brief Backward-compatible global alias for gradual migration.
+ */
+using AMAsyncWriteSchedulerPort = AMDomain::writer::AMAsyncWriteSchedulerPort;
