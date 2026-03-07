@@ -203,7 +203,6 @@ ECM AMConfigManager::Load(std::optional<DocumentKind> kind, bool force) {
     if (rcm.first != EC::Success) {
       return rcm;
     }
-    SyncPortsFromDocument_(target_kind);
     return Ok();
   };
 
@@ -255,11 +254,6 @@ ECM AMConfigManager::Dump(DocumentKind kind, const std::string &dst_path,
     ECM rcm = Err(EC::ConfigNotInitialized, "document not initialized");
     NotifyDumpError_(rcm);
     return rcm;
-  }
-  ECM sync_rcm = SyncPortsToDocument_(kind);
-  if (sync_rcm.first != EC::Success) {
-    NotifyDumpError_(sync_rcm);
-    return sync_rcm;
   }
   if (dst_path.empty() && !doc->handle->IsDirty()) {
     return Ok();
@@ -339,44 +333,26 @@ void AMConfigManager::SubmitWriteTask(std::function<ECM()> task) {
   });
 }
 
-bool AMConfigManager::GetJson(DocumentKind kind, Json *out) const {
+bool AMConfigManager::ReadValue(AMDomain::arg::TypeTag type, void *out) const {
   if (!out) {
     return false;
   }
-  const DocumentState *doc = GetDoc_(kind);
+  const DocumentState *doc = GetDocByType_(type);
   if (!doc || !doc->handle) {
     return false;
   }
-  return doc->handle->GetJson(out);
+  return doc->handle->ReadValue(type, out);
 }
 
-bool AMConfigManager::ReadValue(DocumentKind kind, const Path &path,
-                                JsonValue *out) const {
-  if (!out) {
+bool AMConfigManager::WriteValue(AMDomain::arg::TypeTag type, const void *in) {
+  if (!in) {
     return false;
   }
-  const DocumentState *doc = GetDoc_(kind);
+  DocumentState *doc = GetDocByType_(type);
   if (!doc || !doc->handle) {
     return false;
   }
-  return doc->handle->ReadValue(path, out);
-}
-
-bool AMConfigManager::WriteValue(DocumentKind kind, const Path &path,
-                                 const JsonValue &value) {
-  DocumentState *doc = GetDoc_(kind);
-  if (!doc || !doc->handle) {
-    return false;
-  }
-  return doc->handle->WriteValue(path, value);
-}
-
-bool AMConfigManager::DeleteValue(DocumentKind kind, const Path &path) {
-  DocumentState *doc = GetDoc_(kind);
-  if (!doc || !doc->handle) {
-    return false;
-  }
-  return doc->handle->DeleteValue(path);
+  return doc->handle->WriteValue(type, in);
 }
 
 bool AMConfigManager::GetSchemaData(DocumentKind kind, std::string *out) const {
@@ -430,120 +406,6 @@ bool AMConfigManager::IsDirty(DocumentKind kind) const {
     return false;
   }
   return doc->handle->IsDirty();
-}
-
-/**
- * @brief Create or return one sync port for one `(kind, path)` key.
- */
-AMConfigManager::SyncPort
-AMConfigManager::CreateOrGetSyncPort(DocumentKind kind, const Path &path,
-                                     const Json &fallback) {
-  {
-    std::lock_guard<std::mutex> lock(sync_ports_mtx_);
-    auto kind_it = sync_ports_.find(kind);
-    if (kind_it != sync_ports_.end()) {
-      auto path_it = kind_it->second.find(path);
-      if (path_it != kind_it->second.end()) {
-        return path_it->second;
-      }
-    }
-  }
-
-  Json init_json = fallback;
-  JsonValue loaded_value;
-  if (ReadValue(kind, path, &loaded_value)) {
-    init_json = AMJson::ToJson(loaded_value);
-  }
-  SyncPort created =
-      std::make_shared<AMConfigSyncPort>(kind, Path(path), std::move(init_json));
-
-  std::lock_guard<std::mutex> lock(sync_ports_mtx_);
-  auto [it, inserted] = sync_ports_[kind].emplace(path, created);
-  if (!inserted) {
-    return it->second;
-  }
-  return created;
-}
-
-/**
- * @brief Return one sync port by `(kind, path)` key when registered.
- */
-AMConfigManager::SyncPort AMConfigManager::GetSyncPort(
-    DocumentKind kind, const Path &path) const {
-  std::lock_guard<std::mutex> lock(sync_ports_mtx_);
-  auto kind_it = sync_ports_.find(kind);
-  if (kind_it == sync_ports_.end()) {
-    return nullptr;
-  }
-  auto path_it = kind_it->second.find(path);
-  if (path_it == kind_it->second.end()) {
-    return nullptr;
-  }
-  return path_it->second;
-}
-
-/**
- * @brief Pull latest payload from ports and merge back into manager JSON.
- */
-ECM AMConfigManager::SyncPortsToDocument_(DocumentKind kind) {
-  std::vector<SyncPort> ports;
-  {
-    std::lock_guard<std::mutex> lock(sync_ports_mtx_);
-    auto kind_it = sync_ports_.find(kind);
-    if (kind_it == sync_ports_.end()) {
-      return Ok();
-    }
-    ports.reserve(kind_it->second.size());
-    for (const auto &[_, port] : kind_it->second) {
-      ports.push_back(port);
-    }
-  }
-
-  for (const auto &port : ports) {
-    if (!port) {
-      continue;
-    }
-    if (!port->TriggerDumpCallback()) {
-      return Err(EC::ConfigDumpFailed, "sync port dump callback failed");
-    }
-    Json payload = Json::object();
-    if (!port->GetJson(&payload)) {
-      return Err(EC::ConfigDumpFailed, "failed to read sync port json");
-    }
-    if (!WriteValue(kind, port->GetPath(), payload)) {
-      return Err(EC::ConfigDumpFailed, "failed to merge sync port json");
-    }
-  }
-  return Ok();
-}
-
-/**
- * @brief Load-sync currently loaded manager JSON value into registered ports.
- */
-void AMConfigManager::SyncPortsFromDocument_(DocumentKind kind) {
-  std::vector<SyncPort> ports;
-  {
-    std::lock_guard<std::mutex> lock(sync_ports_mtx_);
-    auto kind_it = sync_ports_.find(kind);
-    if (kind_it == sync_ports_.end()) {
-      return;
-    }
-    ports.reserve(kind_it->second.size());
-    for (const auto &[_, port] : kind_it->second) {
-      ports.push_back(port);
-    }
-  }
-
-  for (const auto &port : ports) {
-    if (!port) {
-      continue;
-    }
-    JsonValue value;
-    if (!ReadValue(kind, port->GetPath(), &value)) {
-      continue;
-    }
-    port->SetJson(AMJson::ToJson(value));
-  }
 }
 
 ECM AMConfigManager::BackupIfNeeded(const std::filesystem::path &root_dir) {
@@ -634,7 +496,12 @@ ECM AMConfigManager::BackupIfNeeded(const std::filesystem::path &root_dir) {
   backup_cfg["last_backup_time_s"] = last_backup_time_s;
 
   if (changed) {
-    settings_doc->handle->Set(std::vector<std::string>{}, settings_json);
+    AMDomain::arg::SettingsArg settings_arg{};
+    settings_arg.value = settings_json;
+    if (!settings_doc->handle->WriteValue(AMDomain::arg::TypeTag::Settings,
+                                          &settings_arg)) {
+      return Err(EC::ConfigDumpFailed, "failed to update settings backup config");
+    }
   }
 
   if (!backup_prune_checked_) {
@@ -669,7 +536,12 @@ ECM AMConfigManager::BackupIfNeeded(const std::filesystem::path &root_dir) {
   }
 
   backup_cfg["last_backup_time_s"] = now_s;
-  settings_doc->handle->Set(std::vector<std::string>{}, settings_json);
+  AMDomain::arg::SettingsArg settings_arg{};
+  settings_arg.value = settings_json;
+  if (!settings_doc->handle->WriteValue(AMDomain::arg::TypeTag::Settings,
+                                        &settings_arg)) {
+    return Err(EC::ConfigDumpFailed, "failed to update settings backup timestamp");
+  }
 
   const std::filesystem::path backup_dir = root_dir / "config" / "bak";
   std::error_code ec;
@@ -733,5 +605,23 @@ AMConfigManager::GetDoc_(DocumentKind kind) const {
     return nullptr;
   }
   return &it->second;
+}
+
+AMConfigManager::DocumentState *
+AMConfigManager::GetDocByType_(AMDomain::arg::TypeTag type) {
+  DocumentKind kind = DocumentKind::Config;
+  if (!AMDomain::arg::FindDocumentKind(type, &kind)) {
+    return nullptr;
+  }
+  return GetDoc_(kind);
+}
+
+const AMConfigManager::DocumentState *
+AMConfigManager::GetDocByType_(AMDomain::arg::TypeTag type) const {
+  DocumentKind kind = DocumentKind::Config;
+  if (!AMDomain::arg::FindDocumentKind(type, &kind)) {
+    return nullptr;
+  }
+  return GetDoc_(kind);
 }
 } // namespace AMDomain::config

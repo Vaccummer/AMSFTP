@@ -1,19 +1,7 @@
 #pragma once
-
-namespace AMDomain::config {
-/**
- * @brief Configuration document kinds handled by config manager.
- */
-enum class DocumentKind {
-  Config = 1,
-  Settings = 2,
-  KnownHosts = 3,
-  History = 4
-};
-} // namespace AMDomain::config
+#include "domain/config/ConfigHandlePort.hpp"
 
 /**
- * @brief Backward-compatible global alias for gradual migration.
+ * @brief Backward-compatible include shim.
  */
 using DocumentKind = AMDomain::config::DocumentKind;
-

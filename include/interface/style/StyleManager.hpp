@@ -1,6 +1,6 @@
 #pragma once
 
-#include "domain/config/ConfigSyncPort.hpp"
+#include "domain/config/ConfigSyncPort.hpp.dep"
 #include "foundation/DataClass.hpp"
 #include "foundation/tools/bar.hpp"
 #include "interface/style/StyleModel.hpp"

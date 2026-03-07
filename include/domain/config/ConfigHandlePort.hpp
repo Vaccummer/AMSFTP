@@ -1,11 +1,57 @@
 #pragma once
 #include "foundation/DataClass.hpp"
-#include "foundation/tools/json.hpp"
 #include <chrono>
 #include <filesystem>
 #include <mutex>
 #include <string>
-#include <vector>
+#include <type_traits>
+
+namespace AMDomain::config {
+/**
+ * @brief Configuration document kinds handled by config manager.
+ */
+enum class DocumentKind {
+  Config = 1,
+  Settings = 2,
+  KnownHosts = 3,
+  History = 4
+};
+
+struct HandleInitSpec {
+  DocumentKind kind = DocumentKind::Config;
+  std::filesystem::path path;
+  std::string schema_json;
+  std::filesystem::path schema_path;
+};
+} // namespace AMDomain::config
+
+#include "domain/arg/ArgTypes.hpp"
+
+namespace AMDomain::arg {
+inline bool FindDocumentKind(TypeTag type, AMDomain::config::DocumentKind *out) {
+  if (!out) {
+    return false;
+  }
+
+  using AMDomain::config::DocumentKind;
+  switch (type) {
+  case TypeTag::Config:
+    *out = DocumentKind::Config;
+    return true;
+  case TypeTag::Settings:
+    *out = DocumentKind::Settings;
+    return true;
+  case TypeTag::KnownHosts:
+    *out = DocumentKind::KnownHosts;
+    return true;
+  case TypeTag::History:
+    *out = DocumentKind::History;
+    return true;
+  default:
+    return false;
+  }
+}
+} // namespace AMDomain::arg
 
 namespace AMDomain::config {
 /**
@@ -13,35 +59,17 @@ namespace AMDomain::config {
  */
 class AMInfraConfigHandlePort : NonCopyableNonMovable {
 public:
-  using Path = std::vector<std::string>;
-
-  virtual ~AMInfraConfigHandlePort() = default;
+  ~AMInfraConfigHandlePort() override = default;
 
   /**
-   * @brief Initialize handle with file path and schema json text.
+   * @brief Initialize handle with input specification.
    */
-  virtual ECM Init(const std::filesystem::path &path,
-                   const std::string &schema_json) = 0;
+  virtual ECM Init(const HandleInitSpec &spec) = 0;
 
   /**
-   * @brief Get full in-memory JSON snapshot.
+   * @brief Return initialization specification currently bound to this handle.
    */
-  virtual bool GetJson(Json *out) const = 0;
-
-  /**
-   * @brief Read value by path as JsonValue.
-   */
-  virtual bool ReadValue(const Path &path, JsonValue *out) const = 0;
-
-  /**
-   * @brief Write value by path.
-   */
-  virtual bool WriteValue(const Path &path, const JsonValue &value) = 0;
-
-  /**
-   * @brief Delete value by path.
-   */
-  virtual bool DeleteValue(const Path &path) = 0;
+  virtual bool GetInitSpec(HandleInitSpec *out) const = 0;
 
   /**
    * @brief Dump current in-memory JSON to original file path.
@@ -52,16 +80,6 @@ public:
    * @brief Dump current in-memory JSON to destination path.
    */
   virtual ECM DumpTo(const std::filesystem::path &dst_path) = 0;
-
-  /**
-   * @brief Return stored schema json string.
-   */
-  virtual bool GetSchemaJson(std::string *out) const = 0;
-
-  /**
-   * @brief Return stored schema json as Json.
-   */
-  virtual bool GetSchemaJson(Json *out) const = 0;
 
   /**
    * @brief Close underlying cfgffi handle and reset state.
@@ -79,34 +97,28 @@ public:
   [[nodiscard]] virtual std::chrono::system_clock::time_point
   LastModified() const = 0;
 
-  /**
-   * @brief Typed read helper based on ReadValue.
-   */
-  template <typename T> bool Resolve(const Path &path, T *out) const {
-    static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
+  template <typename T> bool Read(T *out) const {
+    using ValueT = std::decay_t<T>;
+    static_assert(AMDomain::arg::kSupportedArgType<ValueT>,
+                  "T is not a supported config arg type");
     if (!out) {
       return false;
     }
-    JsonValue value;
-    if (!ReadValue(path, &value)) {
-      return false;
-    }
-    return AMJson::JsonValueTo(value, out);
+    return ReadValue(AMDomain::arg::TypeTagOf<ValueT>::value,
+                     static_cast<void *>(out));
   }
 
-  /**
-   * @brief Typed write helper based on WriteValue.
-   */
-  template <typename T> bool Set(const Path &path, const T &value) {
-    static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
-    JsonValue boxed;
-    if (!AMJson::ToJsonValue(value, &boxed)) {
-      return false;
-    }
-    return WriteValue(path, boxed);
+  template <typename T> bool Write(const T &in) {
+    using ValueT = std::decay_t<T>;
+    static_assert(AMDomain::arg::kSupportedArgType<ValueT>,
+                  "T is not a supported config arg type");
+    return WriteValue(AMDomain::arg::TypeTagOf<ValueT>::value,
+                      static_cast<const void *>(&in));
   }
 
 protected:
+  virtual bool ReadValue(AMDomain::arg::TypeTag type, void *out) const = 0;
+  virtual bool WriteValue(AMDomain::arg::TypeTag type, const void *in) = 0;
   mutable std::mutex mtx_;
 };
 } // namespace AMDomain::config
@@ -115,3 +127,4 @@ protected:
  * @brief Backward-compatible global alias for gradual migration.
  */
 using AMInfraConfigHandlePort = AMDomain::config::AMInfraConfigHandlePort;
+using DocumentKind = AMDomain::config::DocumentKind;

@@ -14,9 +14,8 @@ public:
   ECM Init(const std::filesystem::path &path,
            const std::string &schema_json) override;
   bool GetJson(Json *out) const override;
-  bool ReadValue(const Path &path, JsonValue *out) const override;
-  bool WriteValue(const Path &path, const JsonValue &value) override;
-  bool DeleteValue(const Path &path) override;
+  bool ReadValue(domain::arg::TypeTag type, void *out) const override;
+  bool WriteValue(domain::arg::TypeTag type, const void *in) override;
   ECM DumpInplace() override;
   ECM DumpTo(const std::filesystem::path &dst_path) override;
   bool GetSchemaJson(std::string *out) const override;
