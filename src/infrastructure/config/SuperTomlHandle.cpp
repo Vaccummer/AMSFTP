@@ -5,6 +5,7 @@
 
 namespace {
 using Json = nlohmann::ordered_json;
+using DocumentKind = AMDomain::config::DocumentKind;
 
 /**
  * @brief Ensure target file exists and its parent directory is present.
@@ -52,6 +53,38 @@ bool ParseJson(const std::string &text, Json *out, std::string *error) {
     }
     return false;
   }
+}
+
+/**
+ * @brief Infer document kind by current handle path filename.
+ */
+DocumentKind InferKindFromPath_(const std::filesystem::path &path) {
+  const std::string file = AMStr::lowercase(path.filename().string());
+  if (file == "config.toml") {
+    return DocumentKind::Config;
+  }
+  if (file == "settings.toml") {
+    return DocumentKind::Settings;
+  }
+  if (file == "known_hosts.toml") {
+    return DocumentKind::KnownHosts;
+  }
+  if (file == "history.toml") {
+    return DocumentKind::History;
+  }
+  return DocumentKind::Config;
+}
+
+/**
+ * @brief Return whether one type tag belongs to this handle document.
+ */
+bool IsTypeMatchedByHandle_(domain::arg::TypeTag type,
+                            const std::filesystem::path &path) {
+  DocumentKind expected = DocumentKind::Config;
+  if (!domain::arg::FindDocumentKind(type, &expected)) {
+    return false;
+  }
+  return expected == InferKindFromPath_(path);
 }
 } // namespace
 
@@ -125,57 +158,53 @@ bool AMInfraSuperTomlHandle::GetJson(Json *out) const {
   return true;
 }
 
-/**
- * @brief Read value by path as JsonValue.
- */
-bool AMInfraSuperTomlHandle::ReadValue(const Path &path, JsonValue *out) const {
-  if (!out) {
+bool AMInfraSuperTomlHandle::ReadValue(domain::arg::TypeTag type,
+                                       void *out) const {
+  if (!out || !IsTypeMatchedByHandle_(type, ori_path_)) {
     return false;
   }
   std::lock_guard<std::mutex> lock(mtx_);
-  Json node = Json::object();
-  if (!AMJson::QueryKey(json_, path, &node)) {
+  switch (type) {
+  case domain::arg::TypeTag::Config:
+    static_cast<domain::arg::ConfigArg *>(out)->value = json_;
+    return true;
+  case domain::arg::TypeTag::Settings:
+    static_cast<domain::arg::SettingsArg *>(out)->value = json_;
+    return true;
+  case domain::arg::TypeTag::KnownHosts:
+    static_cast<domain::arg::KnownHostsArg *>(out)->value = json_;
+    return true;
+  case domain::arg::TypeTag::History:
+    static_cast<domain::arg::HistoryArg *>(out)->value = json_;
+    return true;
+  default:
     return false;
   }
-  return AMJson::ToJsonValue(node, out);
 }
 
-/**
- * @brief Write value by path.
- */
-bool AMInfraSuperTomlHandle::WriteValue(const Path &path,
-                                        const JsonValue &value) {
-  std::lock_guard<std::mutex> lock(mtx_);
-  Json node = AMJson::ToJson(value);
-  bool ok = false;
-  if (path.empty()) {
-    json_ = std::move(node);
-    ok = true;
-  } else {
-    if (!json_.is_object()) {
-      json_ = Json::object();
-    }
-    ok = AMJson::SetKey(json_, path, node);
-  }
-  if (!ok) {
+bool AMInfraSuperTomlHandle::WriteValue(domain::arg::TypeTag type,
+                                        const void *in) {
+  if (!in || !IsTypeMatchedByHandle_(type, ori_path_)) {
     return false;
   }
-  is_dirty_ = true;
-  last_modified_ = std::chrono::system_clock::now();
-  return true;
-}
+  std::lock_guard<std::mutex> lock(mtx_);
+  switch (type) {
+  case domain::arg::TypeTag::Config:
+    json_ = static_cast<const domain::arg::ConfigArg *>(in)->value;
+    break;
+  case domain::arg::TypeTag::Settings:
+    json_ = static_cast<const domain::arg::SettingsArg *>(in)->value;
+    break;
+  case domain::arg::TypeTag::KnownHosts:
+    json_ = static_cast<const domain::arg::KnownHostsArg *>(in)->value;
+    break;
+  case domain::arg::TypeTag::History:
+    json_ = static_cast<const domain::arg::HistoryArg *>(in)->value;
+    break;
+  default:
+    return false;
+  }
 
-/**
- * @brief Delete value by path.
- */
-bool AMInfraSuperTomlHandle::DeleteValue(const Path &path) {
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!json_.is_object()) {
-    return false;
-  }
-  if (!AMJson::DelKey(json_, path)) {
-    return false;
-  }
   is_dirty_ = true;
   last_modified_ = std::chrono::system_clock::now();
   return true;

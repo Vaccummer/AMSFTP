@@ -1,4 +1,4 @@
-#include "domain/config/ConfigSyncPort.hpp"
+#include "domain/config/ConfigSyncPort.hpp.dep"
 
 #include <utility>
 
