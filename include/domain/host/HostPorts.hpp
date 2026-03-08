@@ -1,6 +1,5 @@
 #pragma once
 #include "domain/host/HostModel.hpp"
-#include "domain/host/KnownHostQuery.hpp"
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,9 +24,14 @@ public:
   virtual std::pair<ECM, HostConfig> GetLocalConfig() = 0;
 
   /**
-   * @brief Upsert one host configuration entry.
+   * @brief Add one host configuration entry; optionally allow overwrite.
    */
-  virtual ECM UpsertHost(const HostConfig &entry, bool dump_now = true) = 0;
+  virtual ECM AddHost(const HostConfig &entry, bool overwrite = true) = 0;
+
+  /**
+   * @brief Delete one host configuration entry by nickname.
+   */
+  virtual ECM DelHost(const std::string &nickname) = 0;
 
   /**
    * @brief Return whether the nickname exists.
@@ -56,7 +60,9 @@ public:
    * @brief Insert or update one known-host fingerprint.
    */
   virtual ECM UpsertKnownHost(const KnownHostQuery &query,
-                              bool dump_now = true) = 0;
+                              bool overwrite = true) = 0;
 };
 } // namespace AMDomain::host
+
+
 
