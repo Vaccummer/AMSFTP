@@ -1,7 +1,7 @@
 #pragma once
 #include "domain/config/ConfigHandlePort.hpp"
 #include "foundation/RustTomlRead.h"
-#include "foundation/tools/Json.hpp"
+#include "foundation/tools/json.hpp"
 
 /**
  * @brief Concrete cfgffi-backed TOML handle with in-memory Json cache.
@@ -23,6 +23,11 @@ public:
    * @brief Initialize handle with document kind, path and schema.
    */
   ECM Init(const AMDomain::config::HandleInitSpec &spec) override;
+
+  /**
+   * @brief Backward-compatible initializer from path and schema text.
+   */
+  ECM Init(const std::filesystem::path &path, const std::string &schema_json);
 
   /**
    * @brief Return currently bound initialization specification.
@@ -59,6 +64,21 @@ public:
    * @brief Return original TOML path for this handle.
    */
   [[nodiscard]] std::filesystem::path Path() const;
+
+  /**
+   * @brief Return a copy of in-memory json document.
+   */
+  [[nodiscard]] bool GetJson(Json *out) const;
+
+  /**
+   * @brief Return stored schema json string.
+   */
+  [[nodiscard]] bool GetSchemaJson(std::string *out) const;
+
+  /**
+   * @brief Return stored schema json as parsed Json object.
+   */
+  [[nodiscard]] bool GetSchemaJson(Json *out) const;
 
 protected:
   /**
