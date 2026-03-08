@@ -1,76 +1,57 @@
 #pragma once
 #include "domain/host/HostModel.hpp"
-#include "domain/host/KnownHostQuery.hpp"
+#include <map>
 #include <string>
-#include <unordered_map>
-#include <vector>
+#include <utility>
 
 namespace AMDomain::host {
 /**
- * @brief Pure domain service for host model validation and in-memory rules.
- *
- * This service contains no direct dependency on infrastructure storage or CLI.
+ * @brief Domain service for host-manager validation and lookup rules.
  */
-class HostDomainService {
+class HostManagerService {
 public:
-  using HostConfigMap = std::unordered_map<std::string, HostConfig>;
+  using HostConfigMap = std::map<std::string, HostConfig>;
 
   /**
-   * @brief Build normalized host config map from raw host json.
+   * @brief Check whether nickname maps to local profile.
    *
-   * @param hosts_json Raw host object json.
-   * @param local_fallback Prebuilt local fallback config.
-   * @param local_user Runtime local username.
+   * Any case variant of "local" is treated as local nickname.
    */
-  [[nodiscard]] HostConfigMap CollectHosts(const Json &hosts_json,
-                                           const HostConfig &local_fallback,
-                                           const std::string &local_user) const;
+  [[nodiscard]] static bool IsLocalNickname(const std::string &nickname);
 
   /**
-   * @brief Lookup one host config from map by nickname.
+   * @brief Check whether nickname already exists in map/local profile.
    */
-  [[nodiscard]] std::pair<ECM, HostConfig>
-  GetClientConfig(const HostConfigMap &host_configs,
-                  const std::string &nickname) const;
+  [[nodiscard]] static bool
+  NicknameExists(const HostConfigMap &host_configs, const std::string &nickname,
+                 const HostConfig *local_config = nullptr);
 
   /**
-   * @brief Build one local host config from optional local json and defaults.
+   * @brief Validate host config using request checks + nickname rules.
    */
-  [[nodiscard]] std::pair<ECM, HostConfig>
-  BuildLocalConfig(const Json *local_json, const std::string &local_user,
-                   const std::string &fallback_home,
-                   const std::string &fallback_trash) const;
+  [[nodiscard]] static bool IsValidConfig(const HostConfig &config,
+                                          std::string *error_info = nullptr);
 
   /**
-   * @brief Validate host upsert request.
+   * @brief Validate request using existing request checks + nickname rules.
    */
-  [[nodiscard]] ECM ValidateHostUpsert(const HostConfig &entry) const;
+  [[nodiscard]] static bool IsValidConfig(const ConRequest &request,
+                                          std::string *error_info = nullptr);
 
   /**
-   * @brief Return whether nickname exists in host config map.
+   * @brief Get config by nickname from map/local profile.
    */
-  [[nodiscard]] bool HostExists(const HostConfigMap &host_configs,
-                                const std::string &nickname) const;
+  [[nodiscard]] static std::pair<ECM, HostConfig>
+  GetConfigByNickname(const HostConfigMap &host_configs,
+                      const std::string &nickname,
+                      const HostConfig *local_config = nullptr);
+};
 
-  /**
-   * @brief List sorted host nicknames from host config map.
-   */
-  [[nodiscard]] std::vector<std::string>
-  ListNames(const HostConfigMap &host_configs) const;
-
-  /**
-   * @brief Upsert one host config into an in-memory host map.
-   */
-  [[nodiscard]] ECM UpsertHostInMemory(HostConfigMap *host_configs,
-                                       const std::string &nickname,
-                                       const HostConfig &entry) const;
-
-  /**
-   * @brief Remove one host config from an in-memory host map.
-   */
-  [[nodiscard]] ECM RemoveHostInMemory(HostConfigMap *host_configs,
-                                       const std::string &nickname) const;
-
+/**
+ * @brief Domain service for known-host query validation/resolve rules.
+ */
+class KnownHostService {
+public:
   /**
    * @brief Validate and fill known-host query from resolved fingerprint text.
    */
@@ -82,6 +63,19 @@ public:
    */
   [[nodiscard]] ECM ValidateKnownHostUpsert(const KnownHostQuery &query,
                                             std::string *fingerprint) const;
+
+  /**
+   * @brief Check whether one known-host query key already exists in map.
+   */
+  [[nodiscard]] bool QueryExists(const KnownHostMap &known_hosts,
+                                 const KnownHostQuery &query) const;
 };
+
+/**
+ * @brief Backward-compatible alias kept during service rename migration.
+ */
+using HostDomainService = HostManagerService;
 } // namespace AMDomain::host
+
+
 
