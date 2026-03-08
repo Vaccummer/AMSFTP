@@ -1,4 +1,5 @@
 #pragma once
+#include "domain/arg/ArgTypes.hpp"
 #include "foundation/DataClass.hpp"
 #include <chrono>
 #include <filesystem>
@@ -25,10 +26,9 @@ struct HandleInitSpec {
 };
 } // namespace AMDomain::config
 
-#include "domain/arg/ArgTypes.hpp"
-
 namespace AMDomain::arg {
-inline bool FindDocumentKind(TypeTag type, AMDomain::config::DocumentKind *out) {
+inline bool FindDocumentKind(TypeTag type,
+                             AMDomain::config::DocumentKind *out) {
   if (!out) {
     return false;
   }
@@ -46,6 +46,12 @@ inline bool FindDocumentKind(TypeTag type, AMDomain::config::DocumentKind *out) 
     return true;
   case TypeTag::History:
     *out = DocumentKind::History;
+    return true;
+  case TypeTag::HostConfig:
+    *out = DocumentKind::Config;
+    return true;
+  case TypeTag::KnownHostEntry:
+    *out = DocumentKind::KnownHosts;
     return true;
   default:
     return false;
