@@ -39,14 +39,14 @@ std::shared_ptr<AMAsyncWriteSchedulerPort> AMLoggerManager::Scheduler() const {
 /**
  * @brief Register or replace one concrete writer by logger key.
  */
-bool AMLoggerManager::SetLogger(LoggerKey logger_key, WriterPtr writer) {
+bool AMLoggerManager::SetLogger(LoggerType logger_type, WriterPtr writer) {
   if (!writer) {
     return false;
   }
   std::lock_guard<std::mutex> lock(mtx_);
-  logger_map_[logger_key] = std::move(writer);
-  if (trace_levels_.find(logger_key) == trace_levels_.end()) {
-    trace_levels_[logger_key] = kDefaultTraceLevel;
+  logger_map_[logger_type] = std::move(writer);
+  if (trace_levels_.find(logger_type) == trace_levels_.end()) {
+    trace_levels_[logger_type] = kDefaultTraceLevel;
   }
   return true;
 }
@@ -54,19 +54,19 @@ bool AMLoggerManager::SetLogger(LoggerKey logger_key, WriterPtr writer) {
 /**
  * @brief Remove one writer by logger key.
  */
-bool AMLoggerManager::RemoveLogger(LoggerKey logger_key) {
+bool AMLoggerManager::RemoveLogger(LoggerType logger_type) {
   std::lock_guard<std::mutex> lock(mtx_);
-  const bool removed = logger_map_.erase(logger_key) > 0;
-  trace_levels_.erase(logger_key);
+  const bool removed = logger_map_.erase(logger_type) > 0;
+  trace_levels_.erase(logger_type);
   return removed;
 }
 
 /**
  * @brief Return whether one writer is registered.
  */
-bool AMLoggerManager::HasLogger(LoggerKey logger_key) const {
+bool AMLoggerManager::HasLogger(LoggerType logger_type) const {
   std::lock_guard<std::mutex> lock(mtx_);
-  return logger_map_.find(logger_key) != logger_map_.end();
+  return logger_map_.find(logger_type) != logger_map_.end();
 }
 
 /**
@@ -89,9 +89,9 @@ void AMLoggerManager::SetErrorReporter(ErrorReporter reporter) {
 /**
  * @brief Get trace level for one logger key (default is 4).
  */
-int AMLoggerManager::GetTraceLevel(LoggerKey logger_key) const {
+int AMLoggerManager::GetTraceLevel(LoggerType logger_type) const {
   std::lock_guard<std::mutex> lock(mtx_);
-  auto iter = trace_levels_.find(logger_key);
+  auto iter = trace_levels_.find(logger_type);
   if (iter == trace_levels_.end()) {
     return kDefaultTraceLevel;
   }
@@ -101,46 +101,46 @@ int AMLoggerManager::GetTraceLevel(LoggerKey logger_key) const {
 /**
  * @brief Set trace level for one logger key and return clamped value.
  */
-int AMLoggerManager::SetTraceLevel(LoggerKey logger_key, int value) {
+int AMLoggerManager::SetTraceLevel(LoggerType logger_type, int value) {
   const int clamped = ClampTraceLevel(value);
   std::lock_guard<std::mutex> lock(mtx_);
-  trace_levels_[logger_key] = clamped;
+  trace_levels_[logger_type] = clamped;
   return clamped;
 }
 
 /**
  * @brief Submit one structured trace through logger business workflow.
  */
-ECM AMLoggerManager::Trace(LoggerKey logger_key, const TraceInfo &info) {
+ECM AMLoggerManager::Trace(LoggerType logger_type, const TraceInfo &info) {
   WriterPtr writer = nullptr;
   std::shared_ptr<AMAsyncWriteSchedulerPort> scheduler = nullptr;
   ErrorReporter reporter = {};
   int trace_level = kDefaultTraceLevel;
   {
     std::lock_guard<std::mutex> lock(mtx_);
-    auto writer_iter = logger_map_.find(logger_key);
+    auto writer_iter = logger_map_.find(logger_type);
     if (writer_iter == logger_map_.end() || !writer_iter->second) {
       return Err(EC::InvalidArg,
-                 AMStr::fmt("Logger writer {} is not registered", logger_key));
+                 AMStr::fmt("Logger writer {} is not registered", logger_type));
     }
     writer = writer_iter->second;
     scheduler = scheduler_;
     reporter = error_reporter_;
-    auto level_iter = trace_levels_.find(logger_key);
+    auto level_iter = trace_levels_.find(logger_type);
     if (level_iter != trace_levels_.end()) {
       trace_level = level_iter->second;
     }
   }
 
   TraceInfo normalized = info;
-  normalized.source = ResolveSource_(logger_key);
+  normalized.source = ResolveSource_(logger_type);
   if (ToLevelInt(normalized.level) > trace_level) {
     return Ok();
   }
   const std::string line = BuildLogLine_(normalized);
 
   auto write_task = [writer, line, normalized, reporter]() {
-    ECM write_rcm = writer->Write(line);
+    ECM write_rcm = writer->WriteLine(line);
     if (!isok(write_rcm)) {
       ReportError_(reporter, normalized, write_rcm);
     }
@@ -156,24 +156,63 @@ ECM AMLoggerManager::Trace(LoggerKey logger_key, const TraceInfo &info) {
 /**
  * @brief Build one trace and submit through logger business workflow.
  */
-ECM AMLoggerManager::Trace(LoggerKey logger_key, TraceLevel level,
+ECM AMLoggerManager::Trace(LoggerType logger_type, TraceLevel level,
                            EC error_code,
                            const std::string &nickname,
                            const std::string &target,
                            const std::string &action, const std::string &msg,
                            std::optional<ConRequest> request) {
   TraceInfo trace(level, error_code, nickname, target, action, msg,
-                  std::move(request), ResolveSource_(logger_key));
-  return Trace(logger_key, trace);
+                  std::move(request), ResolveSource_(logger_type));
+  return Trace(logger_type, trace);
+}
+
+/**
+ * @brief Submit one raw text line directly to target logger.
+ */
+ECM AMLoggerManager::WriteLine(LoggerType logger_type,
+                               const std::string &line) {
+  WriterPtr writer = nullptr;
+  std::shared_ptr<AMAsyncWriteSchedulerPort> scheduler = nullptr;
+  ErrorReporter reporter = {};
+  {
+    std::lock_guard<std::mutex> lock(mtx_);
+    auto writer_iter = logger_map_.find(logger_type);
+    if (writer_iter == logger_map_.end() || !writer_iter->second) {
+      return Err(EC::InvalidArg, "Logger writer is not registered");
+    }
+    writer = writer_iter->second;
+    scheduler = scheduler_;
+    reporter = error_reporter_;
+  }
+
+  TraceInfo normalized;
+  normalized.source = ResolveSource_(logger_type);
+  normalized.level = TraceLevel::Info;
+  normalized.message = line;
+
+  auto write_task = [writer, line, normalized, reporter]() {
+    ECM write_rcm = writer->WriteLine(line);
+    if (!isok(write_rcm)) {
+      ReportError_(reporter, normalized, write_rcm);
+    }
+  };
+
+  if (scheduler) {
+    scheduler->Submit(std::move(write_task));
+  } else {
+    write_task();
+  }
+  return Ok();
 }
 
 /**
  * @brief Return callback helper that writes traces to one logger key.
  */
 std::function<void(const TraceInfo &)>
-AMLoggerManager::TraceCallbackFunc(LoggerKey logger_key) {
-  return [this, logger_key](const TraceInfo &info) {
-    ECM trace_rcm = Trace(logger_key, info);
+AMLoggerManager::TraceCallbackFunc(LoggerType logger_type) {
+  return [this, logger_type](const TraceInfo &info) {
+    ECM trace_rcm = Trace(logger_type, info);
     if (!isok(trace_rcm)) {
       ErrorReporter reporter = {};
       {
@@ -181,6 +220,31 @@ AMLoggerManager::TraceCallbackFunc(LoggerKey logger_key) {
         reporter = error_reporter_;
       }
       ReportError_(reporter, info, trace_rcm);
+    }
+  };
+}
+
+/**
+ * @brief Return callback helper that writes raw lines to one logger type.
+ */
+std::function<void(const std::string &)>
+AMLoggerManager::WriteLineCallbackFunc(LoggerType logger_type) {
+  return [this, logger_type](const std::string &line) {
+    ECM write_rcm = WriteLine(logger_type, line);
+    if (!isok(write_rcm)) {
+      ErrorReporter reporter = {};
+      {
+        std::lock_guard<std::mutex> lock(mtx_);
+        reporter = error_reporter_;
+      }
+      if (!reporter) {
+        return;
+      }
+      TraceInfo info;
+      info.source = ResolveSource_(logger_type);
+      info.level = TraceLevel::Info;
+      info.message = line;
+      ReportError_(reporter, info, write_rcm);
     }
   };
 }
@@ -201,16 +265,16 @@ int AMLoggerManager::ClampTraceLevel(int value) {
 /**
  * @brief Convert enum trace level into comparable integer severity.
  */
-int AMLoggerManager::ToLevelInt(enum TraceLevel level) {
+int AMLoggerManager::ToLevelInt(TraceLevel level) {
   return static_cast<int>(level);
 }
 
 /**
  * @brief Resolve default source by logger key.
  */
-TraceSource AMLoggerManager::ResolveSource_(LoggerKey logger_key) {
-  return logger_key == LoggerKey::Program ? TraceSource::Programm
-                                          : TraceSource::Client;
+TraceSource AMLoggerManager::ResolveSource_(LoggerType logger_type) {
+  return logger_type == LoggerType::Program ? TraceSource::Programm
+                                             : TraceSource::Client;
 }
 
 /**

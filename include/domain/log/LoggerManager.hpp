@@ -1,8 +1,9 @@
 #pragma once
-
-#include "domain/config/AsyncWriteSchedulerPort.hpp"
-#include "domain/log/LoggerPort.hpp"
+#include "domain/log/LoggerModel.hpp"
+#include "domain/log/LoggerPorts.hpp"
+#include "domain/writer/AsyncWriteSchedulerPort.hpp"
 #include "foundation/DataClass.hpp"
+#include "foundation/tools/enum_related.hpp"
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -12,17 +13,10 @@
 
 namespace AMDomain::log {
 /**
- * @brief Typed logger key for selecting one registered writer channel.
- */
-enum class LoggerKey {
-  Client = 0,
-  Program = 1,
-};
-
-/**
  * @brief Domain logger manager with business logic and async scheduling.
  */
-class AMLoggerManager : public NonCopyableNonMovable {
+class AMLoggerManager : public AMLoggerManagerPort,
+                        public NonCopyableNonMovable {
 public:
   using WriterPtr = std::shared_ptr<AMLoggerWritePort>;
   using ErrorReporter = std::function<void(const TraceInfo &, const ECM &)>;
@@ -41,67 +35,79 @@ public:
   /**
    * @brief Bind or replace async scheduler reference.
    */
-  void SetScheduler(std::shared_ptr<AMAsyncWriteSchedulerPort> scheduler);
+  void
+  SetScheduler(std::shared_ptr<AMAsyncWriteSchedulerPort> scheduler) override;
 
   /**
    * @brief Return current shared async scheduler.
    */
-  [[nodiscard]] std::shared_ptr<AMAsyncWriteSchedulerPort> Scheduler() const;
+  [[nodiscard]] std::shared_ptr<AMAsyncWriteSchedulerPort>
+  Scheduler() const override;
 
   /**
-   * @brief Register or replace one concrete writer by logger key.
+   * @brief Register or replace one concrete writer by logger type.
    */
-  bool SetLogger(LoggerKey logger_key, WriterPtr writer);
+  bool SetLogger(LoggerType logger_type, WriterPtr writer) override;
 
   /**
-   * @brief Remove one writer by logger key.
+   * @brief Remove one writer by logger type.
    */
-  bool RemoveLogger(LoggerKey logger_key);
+  bool RemoveLogger(LoggerType logger_type) override;
 
   /**
    * @brief Return whether one writer is registered.
    */
-  [[nodiscard]] bool HasLogger(LoggerKey logger_key) const;
+  [[nodiscard]] bool HasLogger(LoggerType logger_type) const override;
 
   /**
    * @brief Remove all writers and per-logger trace-level settings.
    */
-  void ClearLoggers();
+  void ClearLoggers() override;
 
   /**
    * @brief Set one manager-level error callback for trace write failures.
    */
-  void SetErrorReporter(ErrorReporter reporter);
+  void SetErrorReporter(ErrorReporter reporter) override;
 
   /**
-   * @brief Get trace level for one logger key (default is 4).
+   * @brief Get trace level for one logger type (default is 4).
    */
-  [[nodiscard]] int GetTraceLevel(LoggerKey logger_key) const;
+  [[nodiscard]] int GetTraceLevel(LoggerType logger_type) const override;
 
   /**
-   * @brief Set trace level for one logger key and return clamped value.
+   * @brief Set trace level for one logger type and return clamped value.
    */
-  int SetTraceLevel(LoggerKey logger_key, int value);
+  int SetTraceLevel(LoggerType logger_type, int value) override;
 
   /**
    * @brief Submit one structured trace through logger business workflow.
    */
-  ECM Trace(LoggerKey logger_key, const TraceInfo &info);
+  ECM Trace(LoggerType logger_type, const TraceInfo &info) override;
 
   /**
    * @brief Build one trace and submit through logger business workflow.
    */
-  ECM Trace(LoggerKey logger_key, TraceLevel level, EC error_code,
-            const std::string &nickname = "",
-            const std::string &target = "",
+  ECM Trace(LoggerType logger_type, TraceLevel level, EC error_code,
+            const std::string &nickname = "", const std::string &target = "",
             const std::string &action = "", const std::string &msg = "",
-            std::optional<ConRequest> request = std::nullopt);
+            std::optional<ConRequest> request = std::nullopt) override;
 
   /**
-   * @brief Return callback helper that writes traces to one logger key.
+   * @brief Submit one raw text line directly to target logger.
+   */
+  ECM WriteLine(LoggerType logger_type, const std::string &line) override;
+
+  /**
+   * @brief Return callback helper that writes traces to one logger type.
    */
   [[nodiscard]] std::function<void(const TraceInfo &)>
-  TraceCallbackFunc(LoggerKey logger_key);
+  TraceCallbackFunc(LoggerType logger_type) override;
+
+  /**
+   * @brief Return callback helper that writes raw lines to one logger type.
+   */
+  [[nodiscard]] std::function<void(const std::string &)>
+  WriteLineCallbackFunc(LoggerType logger_type) override;
 
   /**
    * @brief Clamp trace level to valid range [-1, 4].
@@ -111,13 +117,13 @@ public:
   /**
    * @brief Convert enum trace level into comparable integer severity.
    */
-  static int ToLevelInt(enum TraceLevel level);
+  static int ToLevelInt(TraceLevel level);
 
 private:
   /**
-   * @brief Resolve default source by logger key.
+   * @brief Resolve default source by logger type.
    */
-  static TraceSource ResolveSource_(LoggerKey logger_key);
+  static TraceSource ResolveSource_(LoggerType logger_type);
 
   /**
    * @brief Build one log line text from structured trace info.
@@ -127,12 +133,12 @@ private:
   /**
    * @brief Invoke manager-level error callback when set.
    */
-  static void ReportError_(const ErrorReporter &reporter,
-                           const TraceInfo &info, const ECM &rcm);
+  static void ReportError_(const ErrorReporter &reporter, const TraceInfo &info,
+                           const ECM &rcm);
 
   mutable std::mutex mtx_;
-  std::unordered_map<LoggerKey, WriterPtr> logger_map_;
-  std::unordered_map<LoggerKey, int> trace_levels_;
+  std::unordered_map<LoggerType, WriterPtr> logger_map_;
+  std::unordered_map<LoggerType, int> trace_levels_;
   std::shared_ptr<AMAsyncWriteSchedulerPort> scheduler_ = nullptr;
   ErrorReporter error_reporter_ = {};
 };
