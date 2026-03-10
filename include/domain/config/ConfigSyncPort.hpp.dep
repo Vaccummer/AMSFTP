@@ -1,6 +1,6 @@
 #pragma once
 
-#include "domain/config/DocumentKind.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/tools/json.hpp"
 #include <functional>
@@ -64,3 +64,4 @@ private:
   DumpCallback dump_cb_;
 };
 } // namespace AMDomain::config
+

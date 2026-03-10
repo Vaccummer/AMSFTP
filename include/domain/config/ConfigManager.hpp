@@ -1,9 +1,9 @@
 #pragma once
 
 #include "domain/arg/ArgTypes.hpp"
-#include "domain/config/AsyncWriteSchedulerPort.hpp"
+#include "domain/writer/AsyncWriteSchedulerPort.hpp"
 #include "domain/config/ConfigHandlePort.hpp"
-#include "domain/config/DocumentKind.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include "foundation/DataClass.hpp"
 #include <memory>
 #include <optional>
@@ -104,3 +104,5 @@ private:
   bool backup_prune_checked_ = false;
 };
 } // namespace AMDomain::config
+
+
