@@ -60,8 +60,10 @@ using ClientStatus = AMDomain::client::ClientStatus;
 using ClientState = AMDomain::client::ClientState;
 using AuthCBInfo = AMDomain::client::AuthCBInfo;
 using OS_TYPE = AMDomain::client::OS_TYPE;
+using KnownHostQuery = AMDomain::client::KnownHostQuery;
 using AuthCallback =
     std::function<std::optional<std::string>(const AuthCBInfo &)>;
+using KnownHostCallback = AMDomain::client::KnownHostCallback;
 using RMR = std::vector<std::pair<std::string, ECM>>; // rm func return type
 using BR = std::pair<bool, ECM>;                      // is_dir func return type
 using SR = std::pair<ECM, PathInfo>;                  // stat func return type
@@ -1377,6 +1379,12 @@ public:
     return request_;
   }
 
+  [[nodiscard]] AMAtomic<ClientState> &StateAtomic() override { return state_; }
+
+  [[nodiscard]] const AMAtomic<ClientState> &StateAtomic() const override {
+    return state_;
+  }
+
   void SetRequest(ConRequest request) override {
     auto req = request_.lock();
     req.store(std::move(request));
@@ -1451,6 +1459,7 @@ class ClientIOBase : public AMDomain::client::IClientIOPort {
 protected:
   mutable AMAtomic<TraceCallback> trace_callback_;
   mutable AMAtomic<AuthCallback> auth_callback_;
+  mutable AMAtomic<KnownHostCallback> known_host_callback_;
   AMDomain::client::IClientConfigPort *config_part_ = nullptr;
   AMDomain::client::IClientTaskControlPort *control_part_ = nullptr;
 
@@ -1491,6 +1500,16 @@ public:
     auth_cb.store(AuthCallback{});
   }
 
+  void RegisterKnownHostCallback(KnownHostCallback cb) override {
+    auto known_host_cb = known_host_callback_.lock();
+    known_host_cb.store(std::move(cb));
+  }
+
+  void UnregisterKnownHostCallback() override {
+    auto known_host_cb = known_host_callback_.lock();
+    known_host_cb.store(KnownHostCallback{});
+  }
+
 protected:
   void trace(const TraceInfo &trace_info) const {
     TraceCallback cb;
@@ -1512,6 +1531,22 @@ protected:
     }
     auto [res, _] =
         CallCallbackSafeRet<std::optional<std::string>>(cb, auth_info);
+    return res;
+  }
+
+  [[nodiscard]] ECM known_host(const KnownHostQuery &known_host_info) const {
+    KnownHostCallback cb;
+    {
+      auto known_host_cb = known_host_callback_.lock();
+      cb = known_host_cb.load();
+    }
+    if (!cb) {
+      return {EC::Success, ""};
+    }
+    auto [res, cb_ecm] = CallCallbackSafeRet<ECM>(cb, known_host_info);
+    if (cb_ecm.first != EC::Success) {
+      return cb_ecm;
+    }
     return res;
   }
 };
