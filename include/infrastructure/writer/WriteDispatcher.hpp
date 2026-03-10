@@ -1,5 +1,5 @@
 #pragma once
-#include "domain/config/AsyncWriteSchedulerPort.hpp"
+#include "domain/writer/AsyncWriteSchedulerPort.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -66,3 +66,4 @@ private:
  * @brief Backward compatibility alias used by current config storage code.
  */
 using AMInfraConfigWriteDispatcher = AMInfraAsyncWriter;
+

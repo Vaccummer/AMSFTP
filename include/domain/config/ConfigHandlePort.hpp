@@ -1,63 +1,11 @@
 #pragma once
 #include "domain/arg/ArgTypes.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include "foundation/DataClass.hpp"
 #include <chrono>
 #include <filesystem>
 #include <mutex>
-#include <string>
 #include <type_traits>
-
-namespace AMDomain::config {
-/**
- * @brief Configuration document kinds handled by config manager.
- */
-enum class DocumentKind {
-  Config = 1,
-  Settings = 2,
-  KnownHosts = 3,
-  History = 4
-};
-
-struct HandleInitSpec {
-  DocumentKind kind = DocumentKind::Config;
-  std::filesystem::path path;
-  std::string schema_json;
-  std::filesystem::path schema_path;
-};
-} // namespace AMDomain::config
-
-namespace AMDomain::arg {
-inline bool FindDocumentKind(TypeTag type,
-                             AMDomain::config::DocumentKind *out) {
-  if (!out) {
-    return false;
-  }
-
-  using AMDomain::config::DocumentKind;
-  switch (type) {
-  case TypeTag::Config:
-    *out = DocumentKind::Config;
-    return true;
-  case TypeTag::Settings:
-    *out = DocumentKind::Settings;
-    return true;
-  case TypeTag::KnownHosts:
-    *out = DocumentKind::KnownHosts;
-    return true;
-  case TypeTag::History:
-    *out = DocumentKind::History;
-    return true;
-  case TypeTag::HostConfig:
-    *out = DocumentKind::Config;
-    return true;
-  case TypeTag::KnownHostEntry:
-    *out = DocumentKind::KnownHosts;
-    return true;
-  default:
-    return false;
-  }
-}
-} // namespace AMDomain::arg
 
 namespace AMDomain::config {
 /**
