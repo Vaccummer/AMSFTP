@@ -1817,11 +1817,21 @@ public:
   LIBSSH2_SFTP *sftp = nullptr;
   ~SFTPSessionBase() override { Disconnect(); }
 
+  /**
+   * @brief Expose the transfer serialization mutex for runtime transfer
+   * execution helpers.
+   */
+  std::recursive_mutex &TransferMutex() { return mtx; }
+
+  /**
+   * @brief Expose the transfer serialization mutex for const runtime helpers.
+   */
+  const std::recursive_mutex &TransferMutex() const { return mtx; }
+
   SFTPSessionBase(AMDomain::client::IClientConfigPort *config_port,
                   AMDomain::client::IClientTaskControlPort *control_port,
                   const std::vector<std::string> &private_keys,
-                  ssize_t error_num = 10, TraceCallback trace_cb = {},
-                  AuthCallback auth_cb = {},
+                  TraceCallback trace_cb = {}, AuthCallback auth_cb = {},
                   AMDomain::client::KnownHostCallback known_host_cb = {})
       : ClientIOBase(config_port, control_port),
         request_atomic_((config_port != nullptr)
@@ -1835,7 +1845,6 @@ public:
                                 "SFTPSessionBase requires non-null config "
                                 "port")),
         private_keys(private_keys), auth_cb(std::move(auth_cb)) {
-    (void)error_num;
     if (control_port == nullptr) {
       throw std::invalid_argument(
           "SFTPSessionBase requires non-null task control port");
@@ -2431,7 +2440,7 @@ public:
   }
 };
 
-class AMSFTPClient : public SFTPSessionBase, public BasePathMatch {
+class AMSFTPIOCore : public SFTPSessionBase, public BasePathMatch {
 private:
   std::unordered_map<long, std::string> user_id_map;
 
@@ -2456,7 +2465,7 @@ private:
       long uid = attrs.uid;
       return StrUid(uid);
     } else {
-      return "unknown";
+      return "";
     }
   }
 
@@ -2943,20 +2952,20 @@ protected:
   }
 
 public:
-  AMSFTPClient(AMDomain::client::IClientConfigPort *config_port,
+  AMSFTPIOCore(AMDomain::client::IClientConfigPort *config_port,
                AMDomain::client::IClientTaskControlPort *control_port,
                const std::vector<std::string> &keys = {},
-               unsigned int tracer_capacity = 10, TraceCallback trace_cb = {},
-               AuthCallback auth_cb = {},
+               TraceCallback trace_cb = {}, AuthCallback auth_cb = {},
                AMDomain::client::KnownHostCallback known_host_cb = {})
-      : SFTPSessionBase(config_port, control_port, keys, tracer_capacity,
-                        std::move(trace_cb), std::move(auth_cb),
-                        std::move(known_host_cb)) {
+      : SFTPSessionBase(config_port, control_port, keys, std::move(trace_cb),
+                        std::move(auth_cb), std::move(known_host_cb)) {
     if (config_port == nullptr || control_port == nullptr) {
       throw std::invalid_argument(
-          "AMSFTPClient requires non-null config and control ports");
+          "AMSFTPIOCore requires non-null config and control ports");
     }
+#ifdef _WIN32
     AMInitWSA();
+#endif
     auto req = request_atomic_.lock();
     req->protocol = ClientProtocol::SFTP;
     if (req->trash_dir.empty()) {
@@ -3757,7 +3766,7 @@ public:
   [[nodiscard]] std::pair<ECM, WRV>
   listdir(const std::string &path, int timeout_ms = -1,
           int64_t start_time = -1) const override {
-    return const_cast<AMSFTPClient *>(this)->listdir(path, timeout_ms,
+    return const_cast<AMSFTPIOCore *>(this)->listdir(path, timeout_ms,
                                                      start_time);
   }
 
@@ -3776,7 +3785,7 @@ public:
         bool ignore_special_file = true,
         AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
         int64_t start_time = -1) const override {
-    return const_cast<AMSFTPClient *>(this)->iwalk(
+    return const_cast<AMSFTPIOCore *>(this)->iwalk(
         path, show_all, ignore_special_file, error_callback, timeout_ms,
         start_time);
   }
