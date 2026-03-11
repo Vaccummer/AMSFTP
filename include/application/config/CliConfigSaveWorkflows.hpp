@@ -72,4 +72,3 @@ public:
 ECM SaveAllFromCli(IHostConfigSaver &host_saver, IVarConfigSaver &var_saver,
                    IPromptConfigSaver &prompt_saver);
 } // namespace AMApplication::ConfigWorkflow
-

@@ -4,8 +4,8 @@ Use-cases and orchestration that coordinate domain services and ports.
 
 Current headers:
 
-- `application/config/ConfigWorkflows.hpp`
-- `application/config/HostProfileWorkflows.hpp`
+- `application/config/CliConfigSaveWorkflows.hpp`
+- `application/host/HostProfileWorkflows.hpp`
 - `application/client/ClientSessionWorkflows.hpp`
 - `domain/client/ClientPort.hpp`
 - `application/client/FileCommandWorkflows.hpp`
