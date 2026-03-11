@@ -23,7 +23,7 @@
 #include <unistd.h>
 #endif
 
-class AMLocalClient : public ClientIOBase, BasePathMatch {
+class AMLocalIOCore : public ClientIOBase, BasePathMatch {
 private:
   AMAtomic<ConRequest> &request_atomic_;
   mutable std::recursive_mutex mtx;
@@ -221,22 +221,22 @@ private:
 #endif
 
 public:
-  AMLocalClient(AMDomain::client::IClientConfigPort *config_port,
+  AMLocalIOCore(AMDomain::client::IClientConfigPort *config_port,
                 AMDomain::client::IClientTaskControlPort *control_port,
                 TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
       : ClientIOBase(config_port, control_port),
         request_atomic_((config_port != nullptr)
                             ? config_port->RequestAtomic()
                             : throw std::invalid_argument(
-                                  "AMLocalClient requires non-null config "
+                                  "AMLocalIOCore requires non-null config "
                                   "port")) {
     if (control_port == nullptr) {
       throw std::invalid_argument(
-          "AMLocalClient requires non-null task control port");
+          "AMLocalIOCore requires non-null task control port");
     }
     if (request_atomic_.lock()->protocol != ClientProtocol::LOCAL) {
       throw std::invalid_argument(
-          "AMLocalClient requires LOCAL protocol request");
+          "AMLocalIOCore requires LOCAL protocol request");
     }
     RegisterTraceCallback(std::move(trace_cb));
     RegisterAuthCallback(std::move(auth_cb));
@@ -248,7 +248,7 @@ public:
                {EC::NotInitialized, "Client Not Initialized"}});
   }
 
-  ~AMLocalClient() override = default;
+  ~AMLocalIOCore() override = default;
   OS_TYPE UpdateOSType([[maybe_unused]] int timeout_ms = -1,
                        [[maybe_unused]] int64_t start_time = -1) override {
 #ifdef _WIN32
@@ -882,7 +882,7 @@ public:
   [[nodiscard]] std::pair<ECM, WRV>
   listdir(const std::string &path, int timeout_ms = -1,
           int64_t start_time = -1) const override {
-    return const_cast<AMLocalClient *>(this)->listdir(path, timeout_ms,
+    return const_cast<AMLocalIOCore *>(this)->listdir(path, timeout_ms,
                                                       start_time);
   }
   std::pair<ECM, WRI> iwalk(const std::string &path, bool show_all = false,
@@ -1027,7 +1027,7 @@ public:
         bool ignore_special_file = true,
         AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
         int64_t start_time = -1) const override {
-    return const_cast<AMLocalClient *>(this)->iwalk(
+    return const_cast<AMLocalIOCore *>(this)->iwalk(
         path, show_all, ignore_special_file, error_callback, timeout_ms,
         start_time);
   }
@@ -1559,3 +1559,4 @@ public:
     return {EC::Success, ""};
   }
 };
+

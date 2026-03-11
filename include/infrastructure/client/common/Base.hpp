@@ -1466,7 +1466,7 @@ protected:
 public:
   ClientIOBase(AMDomain::client::IClientConfigPort *config,
                AMDomain::client::IClientTaskControlPort *control) {
-    if (!config_part_ || !control_part_) {
+    if (config == nullptr || control == nullptr) {
       throw std::invalid_argument(
           "ClientIOBase requires non-null config and control ports");
     }
@@ -1553,12 +1553,6 @@ protected:
 
 class BaseClient : public AMDomain::client::IClientPort {
 private:
-  static std::string GenerateUID_() {
-    static std::atomic<size_t> seed{1};
-    return AMStr::fmt("client-{}",
-                      seed.fetch_add(1, std::memory_order_relaxed));
-  }
-
   std::string uid_;
   std::unique_ptr<AMDomain::client::IClientMetaDataPort> metadata_port_;
   std::unique_ptr<AMDomain::client::IClientConfigPort> config_port_;
@@ -1575,11 +1569,9 @@ public:
       std::unique_ptr<AMDomain::client::IClientTaskControlPort> control_port,
       std::unique_ptr<AMDomain::client::IClientIOPort> io_port,
       std::string uid = "") {
-    if (!metadata_port_ || !config_port_ || !control_port_ || !io_port_) {
+    if (!metadata_port || !config_port || !control_port || !io_port) {
       throw std::invalid_argument(
           "AMClient requires non-null metadata/config/control/io ports");
-    } else if (uid.empty()) {
-      throw std::invalid_argument("AMClient UID cannot be empty");
     }
     this->metadata_port_ = std::move(metadata_port);
     this->config_port_ = std::move(config_port);
@@ -1596,9 +1588,23 @@ public:
   /**
    * @brief Return metadata port.
    */
+  [[nodiscard]] AMDomain::client::IClientMetaDataPort &MetaDataPort() override {
+    return *metadata_port_;
+  }
+
+  /**
+   * @brief Return metadata port.
+   */
   [[nodiscard]] const AMDomain::client::IClientMetaDataPort &
   MetaDataPort() const override {
     return *metadata_port_;
+  }
+
+  /**
+   * @brief Return config port.
+   */
+  [[nodiscard]] AMDomain::client::IClientConfigPort &ConfigPort() override {
+    return *config_port_;
   }
 
   /**
@@ -1612,9 +1618,24 @@ public:
   /**
    * @brief Return task-control port.
    */
+  [[nodiscard]] AMDomain::client::IClientTaskControlPort &
+  TaskControlPort() override {
+    return *control_port_;
+  }
+
+  /**
+   * @brief Return task-control port.
+   */
   [[nodiscard]] const AMDomain::client::IClientTaskControlPort &
   TaskControlPort() const override {
     return *control_port_;
+  }
+
+  /**
+   * @brief Return io port.
+   */
+  [[nodiscard]] AMDomain::client::IClientIOPort &IOPort() override {
+    return *io_port_;
   }
 
   /**

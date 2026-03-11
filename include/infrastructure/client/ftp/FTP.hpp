@@ -542,7 +542,7 @@ inline EC GetFTPErrorCode(CURLcode curl_code) {
 } // namespace
 
 // FTP Client using libcurl
-class AMFTPClient : public ClientIOBase, BasePathMatch {
+class AMFTPIOCore : public ClientIOBase, BasePathMatch {
 
 private:
   enum class CapabilityState : int {
@@ -1240,9 +1240,9 @@ private:
   }
 
 public:
-  std::shared_ptr<AMFTPClient> mirror_client = nullptr;
+  std::shared_ptr<AMFTPIOCore> mirror_client = nullptr;
 
-  AMFTPClient(AMDomain::client::IClientConfigPort *config_port,
+  AMFTPIOCore(AMDomain::client::IClientConfigPort *config_port,
               AMDomain::client::IClientTaskControlPort *control_port,
               TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
       : ClientIOBase(config_port, control_port),
@@ -1250,13 +1250,13 @@ public:
             (config_port != nullptr)
                 ? config_port->RequestAtomic()
                 : throw std::invalid_argument(
-                      "AMFTPClient requires non-null config port")) {
+                      "AMFTPIOCore requires non-null config port")) {
     if (control_port == nullptr) {
       throw std::invalid_argument(
-          "AMFTPClient requires non-null task control port");
+          "AMFTPIOCore requires non-null task control port");
     }
     if (request_atomic_.lock()->protocol != ClientProtocol::FTP) {
-      throw std::invalid_argument("AMFTPClient requires FTP protocol request");
+      throw std::invalid_argument("AMFTPIOCore requires FTP protocol request");
     }
     RegisterTraceCallback(std::move(trace_cb));
     RegisterAuthCallback(std::move(auth_cb));
@@ -1265,7 +1265,7 @@ public:
     }
   }
 
-  ~AMFTPClient() override {
+  ~AMFTPIOCore() override {
     if (multi) {
       if (curl) {
         curl_multi_remove_handle(multi, curl);
@@ -1280,7 +1280,7 @@ public:
   ECM SetupPath(const std::string &path, bool is_dir = false) {
     ConRequest request = request_atomic_.lock().load();
     if (request.protocol != ClientProtocol::FTP) {
-      throw std::invalid_argument("AMFTPClient only accepts FTP protocol");
+      throw std::invalid_argument("AMFTPIOCore only accepts FTP protocol");
     }
     if (!curl) {
       return {EC::NoConnection, "CURL not initialized"};
@@ -1303,12 +1303,23 @@ public:
 
   CURL *GetCURL() { return curl; }
 
+  /**
+   * @brief Expose the transfer serialization mutex for runtime transfer
+   * execution helpers.
+   */
+  std::recursive_mutex &TransferMutex() { return mtx; }
+
+  /**
+   * @brief Expose the transfer serialization mutex for const runtime helpers.
+   */
+  const std::recursive_mutex &TransferMutex() const { return mtx; }
+
   ECM Connect(bool force = false, int timeout_ms = -1,
               int64_t start_time = -1) override {
     std::lock_guard<std::recursive_mutex> lock(mtx);
     ConRequest request = request_atomic_.lock().load();
     if (request.protocol != ClientProtocol::FTP) {
-      throw std::invalid_argument("AMFTPClient only accepts FTP protocol");
+      throw std::invalid_argument("AMFTPIOCore only accepts FTP protocol");
     }
 
     const auto state = config_part_->GetState();
@@ -1645,7 +1656,7 @@ public:
   [[nodiscard]] std::pair<ECM, WRV>
   listdir(const std::string &path, int timeout_ms = -1,
           int64_t start_time = -1) const override {
-    return const_cast<AMFTPClient *>(this)->listdir(path, timeout_ms,
+    return const_cast<AMFTPIOCore *>(this)->listdir(path, timeout_ms,
                                                     start_time);
   }
 
@@ -1747,7 +1758,7 @@ public:
         bool ignore_special_file = true,
         AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
         int64_t start_time = -1) const override {
-    return const_cast<AMFTPClient *>(this)->iwalk(
+    return const_cast<AMFTPIOCore *>(this)->iwalk(
         path, show_all, ignore_special_file, error_callback, timeout_ms,
         start_time);
   }
@@ -2167,3 +2178,4 @@ public:
   //   }
   // }
 };
+
