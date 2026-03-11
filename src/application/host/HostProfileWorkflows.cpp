@@ -1,4 +1,5 @@
-#include "application/config/HostProfileWorkflows.hpp"
+#include "application/host/HostProfileWorkflows.hpp"
+
 #include "domain/host/HostModel.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
@@ -183,4 +184,3 @@ ECM ExecuteProfileGet(IHostProfileGateway &gateway,
   return gateway.GetProfiles(nicknames);
 }
 } // namespace AMApplication::HostProfileWorkflow
-
