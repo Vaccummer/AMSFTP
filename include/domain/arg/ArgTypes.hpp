@@ -2,7 +2,6 @@
 #include "foundation/tools/json.hpp"
 
 namespace AMDomain::config {
-struct HandleInitSpec;
 enum class DocumentKind;
 
 } // namespace AMDomain::config
