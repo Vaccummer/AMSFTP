@@ -1,8 +1,8 @@
-#include "domain/config/ConfigHandlePort.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/tools/string.hpp"
-#include "infrastructure/config/DecorderRegistry.hpp"
+#include "internal/ArgCodecRegistry.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <tuple>
@@ -555,7 +555,7 @@ namespace AMInfra::config {
 /**
  * @brief Construct registry with built-in codec strategies.
  */
-DecoderRegistry::DecoderRegistry() {
+ArgCodecRegistry::ArgCodecRegistry() {
   codecs_.push_back(std::make_unique<config_arg_codec::ConfigArgCodec>());
   codecs_.push_back(std::make_unique<settings_arg_codec::SettingsArgCodec>());
   codecs_.push_back(
@@ -577,15 +577,15 @@ DecoderRegistry::DecoderRegistry() {
 /**
  * @brief Return shared singleton registry instance.
  */
-const DecoderRegistry &DecoderRegistry::Instance() {
-  static const DecoderRegistry registry = {};
+const ArgCodecRegistry &ArgCodecRegistry::Instance() {
+  static const ArgCodecRegistry registry = {};
   return registry;
 }
 
 /**
  * @brief Lookup codec by arg runtime type tag.
  */
-const IArgCodec *DecoderRegistry::Find(AMDomain::arg::TypeTag type) const {
+const IArgCodec *ArgCodecRegistry::Find(AMDomain::arg::TypeTag type) const {
   auto it = map_.find(type);
   if (it == map_.end()) {
     return nullptr;
@@ -598,7 +598,7 @@ const IArgCodec *DecoderRegistry::Find(AMDomain::arg::TypeTag type) const {
  */
 bool DecodeArg(AMDomain::arg::TypeTag type, const Json &root, void *out,
                std::string *error) {
-  const IArgCodec *codec = DecoderRegistry::Instance().Find(type);
+  const IArgCodec *codec = ArgCodecRegistry::Instance().Find(type);
   if (!codec) {
     return codec_common::Fail_(error, "codec not found for arg type");
   }
@@ -610,7 +610,7 @@ bool DecodeArg(AMDomain::arg::TypeTag type, const Json &root, void *out,
  */
 bool EncodeArg(AMDomain::arg::TypeTag type, const void *in, Json *root,
                std::string *error) {
-  const IArgCodec *codec = DecoderRegistry::Instance().Find(type);
+  const IArgCodec *codec = ArgCodecRegistry::Instance().Find(type);
   if (!codec) {
     return codec_common::Fail_(error, "codec not found for arg type");
   }

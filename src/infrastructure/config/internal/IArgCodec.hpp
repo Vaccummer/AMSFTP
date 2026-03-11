@@ -1,4 +1,5 @@
 #pragma once
+
 #include "domain/arg/ArgTypes.hpp"
 #include "foundation/tools/json.hpp"
 

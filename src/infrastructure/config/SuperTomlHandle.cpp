@@ -1,7 +1,8 @@
 #include "infrastructure/config/SuperTomlHandle.hpp"
 
+#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
-#include "infrastructure/config/DecorderRegistry.hpp"
+#include "internal/ArgCodecRegistry.hpp"
 
 #include <fstream>
 
@@ -57,26 +58,6 @@ bool ParseJson_(const std::string &text, Json *out, std::string *error) {
 }
 
 /**
- * @brief Infer document kind from file name.
- */
-DocumentKind InferKindFromPath_(const std::filesystem::path &path) {
-  const std::string file = AMStr::lowercase(path.filename().string());
-  if (file == "config.toml") {
-    return DocumentKind::Config;
-  }
-  if (file == "settings.toml") {
-    return DocumentKind::Settings;
-  }
-  if (file == "known_hosts.toml") {
-    return DocumentKind::KnownHosts;
-  }
-  if (file == "history.toml") {
-    return DocumentKind::History;
-  }
-  return DocumentKind::Config;
-}
-
-/**
  * @brief Return whether runtime arg type belongs to current document kind.
  */
 bool IsTypeMatchedByHandle_(AMDomain::arg::TypeTag type,
@@ -90,21 +71,9 @@ bool IsTypeMatchedByHandle_(AMDomain::arg::TypeTag type,
 } // namespace
 
 /**
- * @brief Backward-compatible initializer from path and schema text.
- */
-ECM AMInfraSuperTomlHandle::Init(const std::filesystem::path &path,
-                                 const std::string &schema_json) {
-  AMDomain::config::HandleInitSpec spec = {};
-  spec.kind = InferKindFromPath_(path);
-  spec.path = path;
-  spec.schema_json = schema_json;
-  return Init(spec);
-}
-
-/**
  * @brief Initialize handle with document kind, path and schema.
  */
-ECM AMInfraSuperTomlHandle::Init(const AMDomain::config::HandleInitSpec &spec) {
+ECM AMInfraSuperTomlHandle::Init(const AMInfra::config::ConfigDocumentSpec &spec) {
   std::lock_guard<std::mutex> lock(mtx_);
 
   if (cfgffi_handle_) {
@@ -112,17 +81,14 @@ ECM AMInfraSuperTomlHandle::Init(const AMDomain::config::HandleInitSpec &spec) {
     cfgffi_handle_ = nullptr;
   }
 
-  init_spec_ = spec;
-  if (init_spec_.path.empty()) {
+  spec_ = spec;
+  if (spec_.data_path.empty()) {
     return Err(EC::ConfigLoadFailed, "config path is empty");
   }
 
-  schema_json_ = AMStr::Strip(init_spec_.schema_json);
-  if (schema_json_.empty() && !init_spec_.schema_path.empty()) {
-    schema_json_ = AMJson::ReadSchemaData(init_spec_.schema_path, nullptr);
-  }
-  if (schema_json_.empty()) {
-    schema_json_ = "{}";
+  spec_.schema_json = AMStr::Strip(spec_.schema_json);
+  if (spec_.schema_json.empty()) {
+    spec_.schema_json = "{}";
   }
 
   json_ = Json::object();
@@ -130,15 +96,15 @@ ECM AMInfraSuperTomlHandle::Init(const AMDomain::config::HandleInitSpec &spec) {
   last_modified_ = std::chrono::system_clock::time_point{};
 
   std::string error;
-  if (!EnsureFileExists_(init_spec_.path, &error)) {
+  if (!EnsureFileExists_(spec_.data_path, &error)) {
     return Err(EC::ConfigLoadFailed,
                AMStr::fmt("failed to prepare config file {}: {}",
-                          init_spec_.path.string(), error));
+                          spec_.data_path.string(), error));
   }
 
   char *err = nullptr;
   cfgffi_handle_ =
-      cfgffi_read(init_spec_.path.string().c_str(), schema_json_.c_str(), &err);
+      cfgffi_read(spec_.data_path.string().c_str(), spec_.schema_json.c_str(), &err);
   if (!cfgffi_handle_) {
     std::string msg = err ? err : "cfgffi_read failed";
     if (err) {
@@ -146,7 +112,7 @@ ECM AMInfraSuperTomlHandle::Init(const AMDomain::config::HandleInitSpec &spec) {
     }
     return Err(EC::ConfigLoadFailed,
                AMStr::fmt("failed to read config file {}: {}",
-                          init_spec_.path.string(), msg));
+                          spec_.data_path.string(), msg));
   }
   if (err) {
     cfgffi_free_string(err);
@@ -156,7 +122,7 @@ ECM AMInfraSuperTomlHandle::Init(const AMDomain::config::HandleInitSpec &spec) {
   if (!json_c) {
     return Err(EC::ConfigLoadFailed,
                AMStr::fmt("failed to read config json from {}",
-                          init_spec_.path.string()));
+                          spec_.data_path.string()));
   }
 
   std::string json_text(json_c);
@@ -166,25 +132,11 @@ ECM AMInfraSuperTomlHandle::Init(const AMDomain::config::HandleInitSpec &spec) {
   if (!ParseJson_(json_text, &parsed, &error)) {
     return Err(EC::ConfigLoadFailed,
                AMStr::fmt("failed to parse config json from {}: {}",
-                          init_spec_.path.string(), error));
+                          spec_.data_path.string(), error));
   }
 
   json_ = std::move(parsed);
-  init_spec_.schema_json = schema_json_;
   return Ok();
-}
-
-/**
- * @brief Return currently bound initialization specification.
- */
-bool AMInfraSuperTomlHandle::GetInitSpec(
-    AMDomain::config::HandleInitSpec *out) const {
-  if (!out) {
-    return false;
-  }
-  std::lock_guard<std::mutex> lock(mtx_);
-  *out = init_spec_;
-  return true;
 }
 
 /**
@@ -212,7 +164,7 @@ bool AMInfraSuperTomlHandle::ReadValue(AMDomain::arg::TypeTag type,
   if (!cfgffi_handle_) {
     return false;
   }
-  if (!IsTypeMatchedByHandle_(type, init_spec_.kind)) {
+  if (!IsTypeMatchedByHandle_(type, spec_.kind)) {
     return false;
   }
 
@@ -232,7 +184,7 @@ bool AMInfraSuperTomlHandle::WriteValue(AMDomain::arg::TypeTag type,
   if (!cfgffi_handle_) {
     return false;
   }
-  if (!IsTypeMatchedByHandle_(type, init_spec_.kind)) {
+  if (!IsTypeMatchedByHandle_(type, spec_.kind)) {
     return false;
   }
 
@@ -250,7 +202,7 @@ bool AMInfraSuperTomlHandle::WriteValue(AMDomain::arg::TypeTag type,
 /**
  * @brief Dump current in-memory JSON to original file path.
  */
-ECM AMInfraSuperTomlHandle::DumpInplace() { return DumpTo(init_spec_.path); }
+ECM AMInfraSuperTomlHandle::DumpInplace() { return DumpTo(spec_.data_path); }
 
 /**
  * @brief Dump current in-memory JSON to destination path.
@@ -278,7 +230,7 @@ ECM AMInfraSuperTomlHandle::DumpTo(const std::filesystem::path &dst_path) {
   const std::string payload = json_.dump(2);
   char *err = nullptr;
   int rc = 0;
-  if (dst_path == init_spec_.path) {
+  if (dst_path == spec_.data_path) {
     rc = cfgffi_write_inplace(cfgffi_handle_, payload.c_str(), &err);
   } else {
     rc = cfgffi_write(cfgffi_handle_, dst_path.string().c_str(),
@@ -303,34 +255,6 @@ ECM AMInfraSuperTomlHandle::DumpTo(const std::filesystem::path &dst_path) {
 }
 
 /**
- * @brief Return stored schema json string.
- */
-bool AMInfraSuperTomlHandle::GetSchemaJson(std::string *out) const {
-  if (!out) {
-    return false;
-  }
-  std::lock_guard<std::mutex> lock(mtx_);
-  *out = schema_json_;
-  return true;
-}
-
-/**
- * @brief Return stored schema json as Json.
- */
-bool AMInfraSuperTomlHandle::GetSchemaJson(Json *out) const {
-  if (!out) {
-    return false;
-  }
-  std::lock_guard<std::mutex> lock(mtx_);
-  try {
-    *out = Json::parse(schema_json_);
-    return true;
-  } catch (...) {
-    return false;
-  }
-}
-
-/**
  * @brief Close underlying cfgffi handle and reset state.
  */
 void AMInfraSuperTomlHandle::Close() {
@@ -339,8 +263,7 @@ void AMInfraSuperTomlHandle::Close() {
     cfgffi_free_handle(cfgffi_handle_);
     cfgffi_handle_ = nullptr;
   }
-  init_spec_ = {};
-  schema_json_ = "{}";
+  spec_ = {};
   json_ = Json::object();
   is_dirty_ = false;
   last_modified_ = std::chrono::system_clock::time_point{};
@@ -362,12 +285,3 @@ AMInfraSuperTomlHandle::LastModified() const {
   std::lock_guard<std::mutex> lock(mtx_);
   return last_modified_;
 }
-
-/**
- * @brief Return original TOML path for this handle.
- */
-std::filesystem::path AMInfraSuperTomlHandle::Path() const {
-  std::lock_guard<std::mutex> lock(mtx_);
-  return init_spec_.path;
-}
-
