@@ -1,13 +1,13 @@
 #pragma once
-#include "domain/config/ConfigHandlePort.hpp"
 #include "foundation/RustTomlRead.h"
 #include "foundation/tools/json.hpp"
+#include "infrastructure/config/ConfigDocumentHandle.hpp"
 
 /**
  * @brief Concrete cfgffi-backed TOML handle with in-memory Json cache.
  */
 class AMInfraSuperTomlHandle final
-    : public AMDomain::config::AMInfraConfigHandlePort {
+    : public AMInfra::config::IConfigDocumentHandle {
 public:
   /**
    * @brief Construct an empty TOML handle.
@@ -17,22 +17,12 @@ public:
   /**
    * @brief Release cfgffi resources.
    */
-  ~AMInfraSuperTomlHandle() override { Close(); }
+  ~AMInfraSuperTomlHandle() { Close(); }
 
   /**
    * @brief Initialize handle with document kind, path and schema.
    */
-  ECM Init(const AMDomain::config::HandleInitSpec &spec) override;
-
-  /**
-   * @brief Backward-compatible initializer from path and schema text.
-   */
-  ECM Init(const std::filesystem::path &path, const std::string &schema_json);
-
-  /**
-   * @brief Return currently bound initialization specification.
-   */
-  bool GetInitSpec(AMDomain::config::HandleInitSpec *out) const override;
+  ECM Init(const AMInfra::config::ConfigDocumentSpec &spec) override;
 
   /**
    * @brief Dump in-memory data to original config path.
@@ -61,24 +51,9 @@ public:
   LastModified() const override;
 
   /**
-   * @brief Return original TOML path for this handle.
-   */
-  [[nodiscard]] std::filesystem::path Path() const;
-
-  /**
    * @brief Return a copy of in-memory json document.
    */
   [[nodiscard]] bool GetJson(Json *out) const;
-
-  /**
-   * @brief Return stored schema json string.
-   */
-  [[nodiscard]] bool GetSchemaJson(std::string *out) const;
-
-  /**
-   * @brief Return stored schema json as parsed Json object.
-   */
-  [[nodiscard]] bool GetSchemaJson(Json *out) const;
 
 protected:
   /**
@@ -92,8 +67,7 @@ protected:
   bool WriteValue(AMDomain::arg::TypeTag type, const void *in) override;
 
 private:
-  AMDomain::config::HandleInitSpec init_spec_{};
-  std::string schema_json_ = "{}";
+  AMInfra::config::ConfigDocumentSpec spec_{};
   ConfigHandle *cfgffi_handle_ = nullptr;
   Json json_ = Json::object();
   bool is_dirty_ = false;

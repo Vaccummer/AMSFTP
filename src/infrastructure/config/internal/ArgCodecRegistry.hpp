@@ -1,7 +1,8 @@
 #pragma once
+
 #include "domain/arg/ArgTypes.hpp"
 #include "foundation/tools/json.hpp"
-#include "infrastructure/config/IArgCodec.hpp"
+#include "IArgCodec.hpp"
 
 #include <map>
 #include <memory>
@@ -12,12 +13,12 @@ namespace AMInfra::config {
 /**
  * @brief Immutable registry that maps arg type tags to codec strategies.
  */
-class DecoderRegistry {
+class ArgCodecRegistry {
 public:
   /**
    * @brief Return shared singleton registry instance.
    */
-  [[nodiscard]] static const DecoderRegistry &Instance();
+  [[nodiscard]] static const ArgCodecRegistry &Instance();
 
   /**
    * @brief Lookup codec by arg runtime type tag.
@@ -28,7 +29,7 @@ private:
   /**
    * @brief Construct registry with all built-in codecs.
    */
-  DecoderRegistry();
+  ArgCodecRegistry();
 
   std::vector<std::unique_ptr<IArgCodec>> codecs_ = {};
   std::map<AMDomain::arg::TypeTag, const IArgCodec *> map_ = {};
@@ -45,5 +46,4 @@ private:
  */
 [[nodiscard]] bool EncodeArg(AMDomain::arg::TypeTag type, const void *in,
                              Json *root, std::string *error = nullptr);
-
 } // namespace AMInfra::config

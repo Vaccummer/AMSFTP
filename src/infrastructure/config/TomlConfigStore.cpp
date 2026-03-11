@@ -1,0 +1,332 @@
+#include "infrastructure/config/TomlConfigStore.hpp"
+
+#include "domain/config/ConfigModel.hpp"
+#include "domain/host/HostModel.hpp"
+#include "foundation/tools/enum_related.hpp"
+#include "infrastructure/config/SuperTomlHandle.hpp"
+#include <algorithm>
+#include <array>
+#include <vector>
+
+namespace {
+using DocumentKind = AMDomain::config::DocumentKind;
+
+constexpr std::array<DocumentKind, 4> kRequiredKinds = {
+    DocumentKind::Config, DocumentKind::Settings, DocumentKind::KnownHosts,
+    DocumentKind::History};
+
+/**
+ * @brief Return true when file name matches backup naming pattern.
+ */
+bool MatchBackupName_(const std::string &name, const std::string &prefix,
+                      const std::string &suffix) {
+  if (name.size() < prefix.size() + suffix.size()) {
+    return false;
+  }
+  if (name.compare(0, prefix.size(), prefix) != 0) {
+    return false;
+  }
+  return name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+} // namespace
+
+namespace AMInfra::config {
+ECM AMTomlConfigStore::Configure(const std::filesystem::path &root_dir,
+                                 const ConfigStoreLayout &layout) {
+  Close();
+  root_dir_ = root_dir;
+  layout_ = layout;
+
+  for (const auto kind : kRequiredKinds) {
+    if (layout_.find(kind) == layout_.end()) {
+      return Err(EC::ConfigNotInitialized, "missing document layout");
+    }
+  }
+  writer_.Start();
+  initialized_ = true;
+  return Ok();
+}
+
+ECM AMTomlConfigStore::Load(std::optional<AMDomain::config::DocumentKind> kind,
+                            bool force) {
+  if (!initialized_) {
+    return Err(EC::ConfigNotInitialized, "config store is not initialized");
+  }
+
+  auto load_one = [this, force](AMDomain::config::DocumentKind target) -> ECM {
+    if (!force) {
+      auto existing = GetHandle_(target);
+      if (existing) {
+        return Ok();
+      }
+    }
+    return LoadDocument_(target);
+  };
+
+  if (kind.has_value()) {
+    return load_one(kind.value());
+  }
+  for (const auto current : kRequiredKinds) {
+    ECM rcm = load_one(current);
+    if (!isok(rcm)) {
+      return rcm;
+    }
+  }
+  return Ok();
+}
+
+ECM AMTomlConfigStore::Dump(AMDomain::config::DocumentKind kind,
+                            const std::filesystem::path &dst_path, bool async) {
+  if (async) {
+    const std::filesystem::path dst_copy = dst_path;
+    SubmitWriteTask([this, kind, dst_copy]() -> ECM {
+      return Dump(kind, dst_copy, false);
+    });
+    return Ok();
+  }
+
+  auto handle = GetHandle_(kind);
+  if (!handle) {
+    ECM rcm = Err(EC::ConfigNotInitialized, "document handle not initialized");
+    NotifyDumpError_(rcm);
+    return rcm;
+  }
+  if (dst_path.empty() && !handle->IsDirty()) {
+    return Ok();
+  }
+
+  ECM rcm = dst_path.empty() ? handle->DumpInplace() : handle->DumpTo(dst_path);
+  if (!isok(rcm)) {
+    NotifyDumpError_(rcm);
+  }
+  return rcm;
+}
+
+ECM AMTomlConfigStore::DumpAll(bool async) {
+  if (async) {
+    SubmitWriteTask([this]() -> ECM { return DumpAll(false); });
+    return Ok();
+  }
+  for (const auto kind : kRequiredKinds) {
+    ECM rcm = Dump(kind, {}, false);
+    if (!isok(rcm)) {
+      return rcm;
+    }
+  }
+  return Ok();
+}
+
+void AMTomlConfigStore::Close() {
+  writer_.Stop();
+  std::lock_guard<std::mutex> lock(mtx_);
+  for (auto &[_, handle] : handles_) {
+    if (handle) {
+      handle->Close();
+    }
+  }
+  handles_.clear();
+  layout_.clear();
+  root_dir_.clear();
+  initialized_ = false;
+}
+
+bool AMTomlConfigStore::IsDirty(AMDomain::config::DocumentKind kind) const {
+  auto handle = GetHandle_(kind);
+  return handle && handle->IsDirty();
+}
+
+bool AMTomlConfigStore::GetDataPath(AMDomain::config::DocumentKind kind,
+                                    std::filesystem::path *out) const {
+  if (!out) {
+    return false;
+  }
+  std::lock_guard<std::mutex> lock(mtx_);
+  auto it = layout_.find(kind);
+  if (it == layout_.end()) {
+    return false;
+  }
+  *out = it->second.data_path;
+  return true;
+}
+
+bool AMTomlConfigStore::Read(AMDomain::arg::TypeTag type, void *out) const {
+  if (!out) {
+    return false;
+  }
+  DocumentKind kind = DocumentKind::Config;
+  if (!AMDomain::arg::FindDocumentKind(type, &kind)) {
+    return false;
+  }
+  auto handle = GetHandle_(kind);
+  if (!handle) {
+    return false;
+  }
+  switch (type) {
+  case AMDomain::arg::TypeTag::Config:
+    return handle->Read(static_cast<AMDomain::arg::ConfigArg *>(out));
+  case AMDomain::arg::TypeTag::Settings:
+    return handle->Read(static_cast<AMDomain::arg::SettingsArg *>(out));
+  case AMDomain::arg::TypeTag::KnownHosts:
+    return handle->Read(static_cast<AMDomain::arg::KnownHostsArg *>(out));
+  case AMDomain::arg::TypeTag::History:
+    return handle->Read(static_cast<AMDomain::arg::HistoryArg *>(out));
+  case AMDomain::arg::TypeTag::HostConfig:
+    return handle->Read(static_cast<AMDomain::host::HostConfigArg *>(out));
+  case AMDomain::arg::TypeTag::KnownHostEntry:
+    return handle->Read(static_cast<AMDomain::host::KnownHostEntryArg *>(out));
+  default:
+    return false;
+  }
+}
+
+bool AMTomlConfigStore::Write(AMDomain::arg::TypeTag type, const void *in) {
+  if (!in) {
+    return false;
+  }
+  DocumentKind kind = DocumentKind::Config;
+  if (!AMDomain::arg::FindDocumentKind(type, &kind)) {
+    return false;
+  }
+  auto handle = GetHandle_(kind);
+  if (!handle) {
+    return false;
+  }
+  switch (type) {
+  case AMDomain::arg::TypeTag::Config:
+    return handle->Write(*static_cast<const AMDomain::arg::ConfigArg *>(in));
+  case AMDomain::arg::TypeTag::Settings:
+    return handle->Write(*static_cast<const AMDomain::arg::SettingsArg *>(in));
+  case AMDomain::arg::TypeTag::KnownHosts:
+    return handle->Write(*static_cast<const AMDomain::arg::KnownHostsArg *>(in));
+  case AMDomain::arg::TypeTag::History:
+    return handle->Write(*static_cast<const AMDomain::arg::HistoryArg *>(in));
+  case AMDomain::arg::TypeTag::HostConfig:
+    return handle->Write(*static_cast<const AMDomain::host::HostConfigArg *>(in));
+  case AMDomain::arg::TypeTag::KnownHostEntry:
+    return handle->Write(
+        *static_cast<const AMDomain::host::KnownHostEntryArg *>(in));
+  default:
+    return false;
+  }
+}
+
+void AMTomlConfigStore::SetDumpErrorCallback(DumpErrorCallback cb) {
+  dump_error_cb_ = std::move(cb);
+}
+
+void AMTomlConfigStore::SubmitWriteTask(std::function<ECM()> task) {
+  if (!task) {
+    return;
+  }
+  if (!writer_.IsRunning()) {
+    ECM rcm = task();
+    if (!isok(rcm)) {
+      NotifyDumpError_(rcm);
+    }
+    return;
+  }
+  writer_.Submit([this, task = std::move(task)]() mutable {
+    ECM rcm = task();
+    if (!isok(rcm)) {
+      NotifyDumpError_(rcm);
+    }
+  });
+}
+
+std::filesystem::path AMTomlConfigStore::ProjectRoot() const { return root_dir_; }
+
+ECM AMTomlConfigStore::EnsureDirectory(const std::filesystem::path &dir) {
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  if (ec) {
+    return Err(EC::ConfigDumpFailed, ec.message());
+  }
+  return Ok();
+}
+
+void AMTomlConfigStore::PruneBackupFiles(const std::filesystem::path &dir,
+                                         const std::string &prefix,
+                                         const std::string &suffix,
+                                         int64_t max_count) {
+  if (max_count <= 0) {
+    return;
+  }
+  std::error_code ec;
+  if (!std::filesystem::exists(dir, ec) || ec) {
+    return;
+  }
+  std::vector<std::filesystem::path> items;
+  for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+    if (ec) {
+      break;
+    }
+    if (!entry.is_regular_file(ec) || ec) {
+      continue;
+    }
+    const std::string name = entry.path().filename().string();
+    if (MatchBackupName_(name, prefix, suffix)) {
+      items.push_back(entry.path());
+    }
+  }
+  if (items.size() <= static_cast<size_t>(max_count)) {
+    return;
+  }
+  std::sort(items.begin(), items.end(),
+            [](const std::filesystem::path &a, const std::filesystem::path &b) {
+              return a.filename().string() < b.filename().string();
+            });
+  const size_t remove_count = items.size() - static_cast<size_t>(max_count);
+  for (size_t i = 0; i < remove_count; ++i) {
+    std::filesystem::remove(items[i], ec);
+  }
+}
+
+std::shared_ptr<IConfigDocumentHandle>
+AMTomlConfigStore::GetHandle_(AMDomain::config::DocumentKind kind) {
+  std::lock_guard<std::mutex> lock(mtx_);
+  auto it = handles_.find(kind);
+  if (it == handles_.end()) {
+    return nullptr;
+  }
+  return it->second;
+}
+
+std::shared_ptr<const IConfigDocumentHandle>
+AMTomlConfigStore::GetHandle_(AMDomain::config::DocumentKind kind) const {
+  std::lock_guard<std::mutex> lock(mtx_);
+  auto it = handles_.find(kind);
+  if (it == handles_.end()) {
+    return nullptr;
+  }
+  return it->second;
+}
+
+ECM AMTomlConfigStore::LoadDocument_(AMDomain::config::DocumentKind kind) {
+  ConfigDocumentSpec spec = {};
+  {
+    std::lock_guard<std::mutex> lock(mtx_);
+    auto spec_it = layout_.find(kind);
+    if (spec_it == layout_.end()) {
+      return Err(EC::ConfigNotInitialized, "missing document layout");
+    }
+    spec = spec_it->second;
+  }
+
+  auto handle = std::make_shared<AMInfraSuperTomlHandle>();
+  ECM rcm = handle->Init(spec);
+  if (!isok(rcm)) {
+    return rcm;
+  }
+  {
+    std::lock_guard<std::mutex> lock(mtx_);
+    handles_[kind] = std::move(handle);
+  }
+  return Ok();
+}
+
+void AMTomlConfigStore::NotifyDumpError_(const ECM &err) const {
+  if (dump_error_cb_) {
+    dump_error_cb_(err);
+  }
+}
+} // namespace AMInfra::config
