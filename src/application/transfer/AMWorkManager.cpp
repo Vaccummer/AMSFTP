@@ -66,23 +66,14 @@ AMWorkManager::ECM AMWorkManager::Submit(std::shared_ptr<TaskInfo> task_info) {
 }
 
 /**
- * @brief Create one task info object bound to a host maintainer snapshot.
+ * @brief Create one task info object bound to a transfer client pool.
  */
-std::shared_ptr<TaskInfo>
-AMWorkManager::CreateTaskInfo(std::shared_ptr<TASKS> tasks,
-                              const std::shared_ptr<ClientMaintainer> &hostm,
-                              TransferCallback callback, ssize_t buffer_size,
-                              bool quiet, int thread_id) {
-  return scheduler_->CreateTaskInfo(std::move(tasks), hostm, std::move(callback),
+std::shared_ptr<TaskInfo> AMWorkManager::CreateTaskInfo(
+    std::shared_ptr<TASKS> tasks,
+    const std::shared_ptr<AMApplication::client::ClientPublicPool> &pool,
+    TransferCallback callback, ssize_t buffer_size, bool quiet, int thread_id) {
+  return scheduler_->CreateTaskInfo(std::move(tasks), pool, std::move(callback),
                                     buffer_size, quiet, thread_id);
-}
-
-/**
- * @brief Remove and return the task-bound host maintainer.
- */
-std::shared_ptr<ClientMaintainer>
-AMWorkManager::TakeTaskHost(const TaskId &id) {
-  return scheduler_->TakeTaskHost(id);
 }
 
 /**
@@ -194,7 +185,8 @@ AMWorkManager::GetConductingTasks() const {
  */
 std::pair<AMWorkManager::ECM, TASKS>
 AMWorkManager::LoadTasks(const std::string &src, const std::string &dst,
-                         const std::shared_ptr<ClientMaintainer> &hostm,
+                         AMDomain::client::IClientRuntimePort &runtime_port,
+                         AMDomain::client::IClientLifecyclePort &lifecycle_port,
                          const std::string &src_host,
                          const std::string &dst_host, bool clone,
                          bool overwrite, bool mkdir,
@@ -202,7 +194,7 @@ AMWorkManager::LoadTasks(const std::string &src, const std::string &dst,
                          std::shared_ptr<TaskControlToken> control_token,
                          int timeout_ms, int64_t start_time) {
   return AMApplication::TransferRuntime::TaskPlanner::LoadTasks(
-      src, dst, hostm, src_host, dst_host, clone, overwrite, mkdir,
-      ignore_sepcial_file, resume, std::move(control_token), timeout_ms,
-      start_time);
+      src, dst, runtime_port, lifecycle_port, src_host, dst_host, clone,
+      overwrite, mkdir, ignore_sepcial_file, resume, std::move(control_token),
+      timeout_ms, start_time);
 }

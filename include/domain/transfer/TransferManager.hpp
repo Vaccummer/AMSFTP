@@ -13,7 +13,6 @@
 #include <vector>
 
 class AMWorkManager;
-class ClientMaintainer;
 
 namespace AMDomain::transfer {
 class AMTransferManager : private NonCopyableNonMovable {
@@ -23,7 +22,7 @@ public:
   using PublicResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
   using ResultCallbackFn = std::function<void(
       std::shared_ptr<TaskInfo>, PublicResultCallback, UserResultCallback)>;
-  ~AMTransferManager() override = default;
+  ~AMTransferManager() = default;
 
   /**
    * @brief Return the singleton instance.
@@ -33,7 +32,7 @@ public:
     return instance;
   };
 
-  ECM Init() override;
+  ECM Init();
 
   /**
    * @brief Set the public result callback wrapper for all task completions.
@@ -281,15 +280,6 @@ private:
   bool ConfirmWildcard_(const std::vector<PathInfo> &matches,
                         const std::string &src_host,
                         const std::string &dst_host);
-  std::pair<ECM, ClientHandle>
-  AcquireClient_(const std::string &nickname,
-                 std::shared_ptr<TaskControlToken> flag);
-  std::pair<ECM, std::shared_ptr<ClientMaintainer>>
-  CollectClients(const std::vector<std::string> &nicknames,
-                 std::shared_ptr<TaskControlToken> flag);
-  void
-  ReturnClientsToIdle_(const std::shared_ptr<ClientMaintainer> &maintainer);
-  void ReleaseTaskClients_(const std::shared_ptr<TaskInfo> &task_info);
   std::pair<ECM, std::shared_ptr<TaskInfo>>
   PrepareTasks_(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
                 std::shared_ptr<TaskControlToken> flag);
@@ -300,8 +290,6 @@ private:
 
 private:
   std::shared_ptr<AMWorkManager> worker_;
-  mutable std::mutex idle_mtx_;
-  std::unordered_map<ID, std::list<ClientHandle>> idle_pool_;
   mutable std::mutex history_mtx_;
   std::list<std::shared_ptr<TaskInfo>> history_;
   mutable std::mutex cache_mtx_;

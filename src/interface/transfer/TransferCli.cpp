@@ -2,6 +2,7 @@
 #include "interface/ApplicationAdapters.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/time.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "domain/transfer/TransferCacheDomainService.hpp"
 #include "application/transfer/runtime/AMWorkManager.hpp"
 #include "interface/Prompt.hpp"
@@ -740,7 +741,8 @@ ECM AMDomain::transfer::AMTransferManager::retry(const ID &task_id, bool is_asyn
   std::unordered_set<std::string> nickname_seen;
   bool local_used = false;
   auto record_nickname = [&](const std::string &name) {
-    if (name.empty() || name == "local") {
+    if (name.empty() ||
+        AMDomain::host::HostManagerService::IsLocalNickname(name)) {
       local_used = true;
       return;
     }
@@ -758,18 +760,15 @@ ECM AMDomain::transfer::AMTransferManager::retry(const ID &task_id, bool is_asyn
     display_names.push_back("local");
   }
 
-  auto [host_rcm, hostm] = CollectClients(nickname_list, nullptr);
-  if (host_rcm.first != EC::Success || !hostm) {
-    AMPromptManager::Instance().ErrorFormat(host_rcm);
-    return host_rcm;
-  }
-
   const ssize_t buffer_size =
       original->buffer_size.load(std::memory_order_relaxed);
   const int affinity_thread =
       original->affinity_thread.load(std::memory_order_relaxed);
-  auto task_info = worker_->CreateTaskInfo(tasks_ptr, hostm, original->callback,
-                                        buffer_size, quiet, affinity_thread);
+  auto task_info = worker_->CreateTaskInfo(
+      tasks_ptr,
+      AMInterface::ApplicationAdapters::Runtime::ClientServiceOrThrow()
+          .PublicPool(),
+      original->callback, buffer_size, quiet, affinity_thread);
   if (original->transfer_sets) {
     task_info->transfer_sets = original->transfer_sets;
   }

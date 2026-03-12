@@ -1,5 +1,6 @@
 #include "application/transfer/runtime/TaskPlanner.hpp"
 
+#include "domain/host/HostDomainService.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/time.hpp"
 
@@ -9,29 +10,37 @@
 namespace {
 
 /**
- * @brief Resolve one ready client from the maintainer and ensure the session is
- * usable.
+ * @brief Resolve one ready client from runtime/lifecycle ports and ensure the
+ * session is usable.
  */
 std::pair<AMApplication::TransferRuntime::TaskPlanner::ECM,
-          ClientMaintainer::ClientHandle>
-ResolveReadyClient_(const std::shared_ptr<ClientMaintainer> &hostm,
+          AMDomain::client::ClientHandle>
+ResolveReadyClient_(AMDomain::client::IClientRuntimePort &runtime_port,
+                    AMDomain::client::IClientLifecyclePort &lifecycle_port,
                     const std::string &nickname, int timeout_ms,
                     int64_t start_time) {
   using ECM = AMApplication::TransferRuntime::TaskPlanner::ECM;
-  const bool is_local =
-      nickname.empty() || AMStr::lowercase(nickname) == "local";
-  const std::string key = is_local ? "local" : nickname;
-  auto client = hostm ? hostm->GetClient(key) : nullptr;
-  if (!client) {
-    return {
-        ECM{ErrorCode::ClientNotFound, AMStr::fmt("Client not found: {}", key)},
-        nullptr};
+  using ClientStatus = AMDomain::client::ClientStatus;
+  AMDomain::client::ClientHandle client = nullptr;
+  ECM rcm = {ErrorCode::Success, ""};
+
+  if (AMDomain::host::HostManagerService::IsLocalNickname(nickname)) {
+    client = runtime_port.GetLocalClient();
+    if (!client) {
+      return {ECM{ErrorCode::ClientNotFound, "Local client not found"}, nullptr};
+    }
+  } else {
+    auto ensured = lifecycle_port.EnsureClient(nickname);
+    rcm = ensured.first;
+    client = ensured.second;
+    if (!isok(rcm) || !client) {
+      return {rcm, nullptr};
+    }
   }
 
   const auto state = client->ConfigPort().GetState();
-  ECM rcm = state.second;
-  if (state.first != AMDomain::client::ClientStatus::OK ||
-      rcm.first != ErrorCode::Success) {
+  rcm = state.second;
+  if (state.first != ClientStatus::OK || rcm.first != ErrorCode::Success) {
     rcm = client->IOPort().Check(timeout_ms, start_time);
   }
   return {rcm, client};
@@ -43,11 +52,12 @@ namespace AMApplication::TransferRuntime {
 
 /**
  * @brief Plan concrete transfer tasks from source/destination paths and
- * client context.
+ * client runtime context.
  */
 std::pair<TaskPlanner::ECM, TASKS>
 TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
-                       const std::shared_ptr<ClientMaintainer> &hostm,
+                       AMDomain::client::IClientRuntimePort &runtime_port,
+                       AMDomain::client::IClientLifecyclePort &lifecycle_port,
                        const std::string &src_host, const std::string &dst_host,
                        bool clone, bool overwrite, bool mkdir,
                        bool ignore_sepcial_file, bool resume,
@@ -57,18 +67,14 @@ TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
   start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
   TASKS tasks = {};
 
-  if (!hostm) {
-    return {ECM{EC::InvalidArg, "ClientMaintainer is null"}, tasks};
-  }
-
-  auto [rc1, src_client] =
-      ResolveReadyClient_(hostm, src_host, timeout_ms, start_time);
+  auto [rc1, src_client] = ResolveReadyClient_(
+      runtime_port, lifecycle_port, src_host, timeout_ms, start_time);
   if (rc1.first != EC::Success) {
     return {rc1, tasks};
   }
 
-  auto [rc2, dst_client] =
-      ResolveReadyClient_(hostm, dst_host, timeout_ms, start_time);
+  auto [rc2, dst_client] = ResolveReadyClient_(
+      runtime_port, lifecycle_port, dst_host, timeout_ms, start_time);
   if (rc2.first != EC::Success) {
     return {rc2, tasks};
   }

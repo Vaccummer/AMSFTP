@@ -1,6 +1,8 @@
 
 #include "TaskSchedulerCore.hpp"
 
+#include "domain/client/ClientDomainService.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/time.hpp"
 #include "infrastructure/client/runtime/TransferExecution.hpp"
 
@@ -57,45 +59,53 @@ bool TaskSchedulerCore::HasPendingTasksLocked() const {
   return false;
 }
 
-void TaskSchedulerCore::SetTaskHost_(
-    const TaskId &task_id, const std::shared_ptr<ClientMaintainer> &hostm) {
+void TaskSchedulerCore::SetTaskPool_(
+    const TaskId &task_id,
+    const std::shared_ptr<AMApplication::client::ClientPublicPool> &pool) {
   if (task_id.empty()) {
     return;
   }
-  std::lock_guard<std::mutex> lock(task_host_mtx_);
-  if (hostm) {
-    task_hosts_[task_id] = hostm;
+  std::lock_guard<std::mutex> lock(task_pool_mtx_);
+  if (pool) {
+    task_pools_[task_id] = pool;
   } else {
-    task_hosts_.erase(task_id);
+    task_pools_.erase(task_id);
   }
 }
 
-std::shared_ptr<ClientMaintainer>
-TaskSchedulerCore::GetTaskHost_(const TaskId &task_id) const {
+std::shared_ptr<AMApplication::client::ClientPublicPool>
+TaskSchedulerCore::GetTaskPool_(const TaskId &task_id) const {
   if (task_id.empty()) {
     return nullptr;
   }
-  std::lock_guard<std::mutex> lock(task_host_mtx_);
-  auto it = task_hosts_.find(task_id);
-  if (it == task_hosts_.end()) {
+  std::lock_guard<std::mutex> lock(task_pool_mtx_);
+  auto it = task_pools_.find(task_id);
+  if (it == task_pools_.end()) {
     return nullptr;
   }
   return it->second;
 }
 
-std::shared_ptr<ClientMaintainer>
-TaskSchedulerCore::TakeTaskHost_(const TaskId &task_id) {
+std::shared_ptr<AMApplication::client::ClientPublicPool>
+TaskSchedulerCore::TakeTaskPool_(const TaskId &task_id) {
   if (task_id.empty()) {
     return nullptr;
   }
-  std::lock_guard<std::mutex> lock(task_host_mtx_);
-  auto it = task_hosts_.find(task_id);
-  if (it == task_hosts_.end()) {
+  std::lock_guard<std::mutex> lock(task_pool_mtx_);
+  auto it = task_pools_.find(task_id);
+  if (it == task_pools_.end()) {
     return nullptr;
   }
-  auto hostm = it->second;
-  task_hosts_.erase(it);
-  return hostm;
+  auto pool = it->second;
+  task_pools_.erase(it);
+  return pool;
+}
+
+void TaskSchedulerCore::ReleaseTaskResources_(const TaskId &task_id) {
+  auto pool = TakeTaskPool_(task_id);
+  if (pool) {
+    pool->ReleaseTask(task_id);
+  }
 }
 
 void TaskSchedulerCore::CancelPendingTasksOnExit_(const std::string &reason) {
@@ -134,6 +144,7 @@ void TaskSchedulerCore::CancelPendingTasksOnExit_(const std::string &reason) {
   }
 
   for (const auto &task_info : canceled_tasks) {
+    ReleaseTaskResources_(task_info->id);
     HandleCompletedTask(task_info);
   }
 }
@@ -242,7 +253,6 @@ void TaskSchedulerCore::HandleCompletedTask(
   }
   if (task_info->result_callback) {
     CallCallbackSafe(task_info->result_callback, task_info);
-    (void)TakeTaskHost_(task_info->id);
     return;
   }
   std::lock_guard<std::mutex> lock(result_mtx_);
@@ -384,59 +394,61 @@ ssize_t TaskSchedulerCore::CalculateBufferSize(const ClientHandle &src_client,
                            AMMinBufferSize);
 }
 
-TaskSchedulerCore::ClientHandle TaskSchedulerCore::ResolveClient_(
-    const std::shared_ptr<ClientMaintainer> &hostm,
+std::string TaskSchedulerCore::CanonicalTaskNickname_(
     const std::string &nickname) {
-  if (!hostm) {
-    return nullptr;
+  if (nickname.empty() ||
+      AMDomain::host::HostManagerService::IsLocalNickname(nickname)) {
+    return "local";
   }
-  const bool is_local =
-      nickname.empty() || AMStr::lowercase(nickname) == "local";
-  return hostm->GetClient(is_local ? "local" : nickname);
+  return AMDomain::client::ClientDomainService::NormalizeNickname(nickname);
 }
 
-std::tuple<TaskSchedulerCore::ECM, TaskSchedulerCore::ClientHandle,
-           TaskSchedulerCore::ClientHandle>
-TaskSchedulerCore::TestHost(const TransferTask &task,
-                            const std::shared_ptr<ClientMaintainer> &hostm) {
-  ClientHandle src_client = nullptr;
-  ClientHandle dst_client = nullptr;
-  ECM rcm = ECM{EC::Success, ""};
-  if (!task.src_host.empty()) {
-    src_client = ResolveClient_(hostm, task.src_host);
-    if (!src_client) {
-      return {ECM{EC::NoSession,
-                  AMStr::fmt("Source host \"{}\" not found", task.src_host)},
-              nullptr, nullptr};
-    }
-    rcm = src_client->IOPort().Check();
-    if (rcm.first != EC::Success) {
-      return {ECM{rcm.first, AMStr::fmt("Source host \"{}\" connection error",
-                                        task.src_host)},
-              nullptr, nullptr};
-    }
-  } else {
-    src_client = ResolveClient_(hostm, "");
+std::vector<std::string> TaskSchedulerCore::CollectTaskNicknames_(
+    const std::shared_ptr<TaskInfo> &task_info) const {
+  std::vector<std::string> nicknames;
+  if (!task_info || !task_info->tasks) {
+    return nicknames;
   }
-  if (!task.dst_host.empty()) {
-    dst_client = ResolveClient_(hostm, task.dst_host);
-    if (!dst_client) {
-      return {ECM{EC::NoSession, AMStr::fmt("Destination host \"{}\" not found",
-                                            task.dst_host)},
-              nullptr, nullptr};
+
+  std::unordered_set<std::string> seen;
+  for (const auto &task : *task_info->tasks) {
+    const std::string src_name = CanonicalTaskNickname_(task.src_host);
+    if (!src_name.empty() && seen.insert(src_name).second) {
+      nicknames.push_back(src_name);
     }
-    rcm = dst_client->IOPort().Check();
-    if (rcm.first != EC::Success) {
-      return {
-          ECM{rcm.first, AMStr::fmt("Destination host \"{}\" connection error",
-                                    task.dst_host)},
-          nullptr, nullptr};
+    const std::string dst_name = CanonicalTaskNickname_(task.dst_host);
+    if (!dst_name.empty() && seen.insert(dst_name).second) {
+      nicknames.push_back(dst_name);
     }
-  } else {
-    dst_client = ResolveClient_(hostm, "");
   }
-  return {rcm, src_client, dst_client};
+  return nicknames;
 }
+
+std::pair<TaskSchedulerCore::ECM,
+          std::unordered_map<std::string, TaskSchedulerCore::ClientHandle>>
+TaskSchedulerCore::AcquireTaskClients_(
+    const std::shared_ptr<TaskInfo> &task_info,
+    const std::shared_ptr<AMApplication::client::ClientPublicPool> &pool) {
+  if (!task_info) {
+    return {{EC::InvalidArg, "TaskInfo is nullptr"}, {}};
+  }
+  if (!pool) {
+    return {{EC::InvalidHandle, "Transfer client pool is not bound"}, {}};
+  }
+  return pool->AcquireClients(task_info->id, CollectTaskNicknames_(task_info));
+}
+
+TaskSchedulerCore::ClientHandle TaskSchedulerCore::ResolveTaskClient_(
+    const std::unordered_map<std::string, ClientHandle> &clients,
+    const std::string &nickname) const {
+  const std::string key = CanonicalTaskNickname_(nickname);
+  auto it = clients.find(key);
+  if (it == clients.end()) {
+    return nullptr;
+  }
+  return it->second;
+}
+
 void TaskSchedulerCore::WorkerLoop(size_t thread_index) {
   while (running_.load(std::memory_order_relaxed)) {
     if (thread_index >= desired_thread_count_.load(std::memory_order_relaxed)) {
@@ -464,6 +476,7 @@ void TaskSchedulerCore::WorkerLoop(size_t thread_index) {
         std::lock_guard<std::mutex> registry_lock(registry_mtx_);
         task_registry_.erase(task_id);
       }
+      ReleaseTaskResources_(task_info->id);
       HandleCompletedTask(task_info);
       ClearConducting(thread_index);
       continue;
@@ -478,6 +491,7 @@ void TaskSchedulerCore::WorkerLoop(size_t thread_index) {
         std::lock_guard<std::mutex> registry_lock(registry_mtx_);
         task_registry_.erase(task_info->id);
       }
+      ReleaseTaskResources_(task_info->id);
       HandleCompletedTask(task_info);
     }
     ClearConducting(thread_index);
@@ -509,6 +523,16 @@ void TaskSchedulerCore::ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
     return;
   }
 
+  auto pool = GetTaskPool_(task_info->id);
+  auto [acquire_rcm, task_clients] = AcquireTaskClients_(task_info, pool);
+  if (acquire_rcm.first != EC::Success) {
+    task_info->SetStatus(TaskStatus::Finished);
+    task_info->SetResult(acquire_rcm);
+    task_info->finished_time.store(AMTime::seconds(),
+                                   std::memory_order_relaxed);
+    return;
+  }
+
   for (auto &task : *(task_info->tasks)) {
     if (pd.is_pause_only()) {
       task_info->SetStatus(TaskStatus::Paused);
@@ -525,9 +549,10 @@ void TaskSchedulerCore::ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
       continue;
     }
 
-    auto hostm_locked = GetTaskHost_(task_info->id);
-    if (!hostm_locked) {
-      task.rcm = {EC::ClientNotFound, "ClientMaintainer expired"};
+    auto src_client = ResolveTaskClient_(task_clients, task.src_host);
+    auto dst_client = ResolveTaskClient_(task_clients, task.dst_host);
+    if (!src_client || !dst_client) {
+      task.rcm = {EC::ClientNotFound, "Task client is not available in pool"};
       task.IsFinished = true;
       if (task_info->callback.need_error_cb) {
         task_info->callback.CallError(ErrorCBInfo(
@@ -535,20 +560,6 @@ void TaskSchedulerCore::ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
       }
       continue;
     }
-    auto test_res = TestHost(task, hostm_locked);
-    ECM rcm = std::get<0>(test_res);
-    if (rcm.first != EC::Success) {
-      task.rcm = rcm;
-      task.IsFinished = true;
-      if (task_info->callback.need_error_cb) {
-        task_info->callback.CallError(ErrorCBInfo(
-            task.rcm, task.src, task.dst, task.src_host, task.dst_host));
-      }
-      continue;
-    }
-
-    auto src_client = std::get<1>(test_res);
-    auto dst_client = std::get<2>(test_res);
 
     if (task.path_type == PathType::DIR) {
       task.rcm = dst_client->IOPort().mkdirs(task.dst);
@@ -610,9 +621,9 @@ void TaskSchedulerCore::ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
           task_info->buffer_size.load(std::memory_order_relaxed)));
     }
 
-    task.rcm =
-        execution_engine_->ExecuteSingleFileTransfer(src_client, dst_client,
-                                                     task_info);
+    task.rcm = execution_engine_->ExecuteSingleFileTransfer(src_client,
+                                                            dst_client,
+                                                            task_info);
     if (pd.is_pause_only()) {
       task.rcm = {EC::TransferPause, "Task paused by user"};
       task_info->SetStatus(TaskStatus::Paused);
@@ -813,25 +824,21 @@ TaskSchedulerCore::Submit(std::shared_ptr<TaskInfo> task_info) {
 
 std::shared_ptr<TaskInfo> TaskSchedulerCore::CreateTaskInfo(
     std::shared_ptr<TASKS> tasks,
-    const std::shared_ptr<ClientMaintainer> &hostm, TransferCallback callback,
-    ssize_t buffer_size, bool quiet, int thread_id) {
+    const std::shared_ptr<AMApplication::client::ClientPublicPool> &pool,
+    TransferCallback callback, ssize_t buffer_size, bool quiet, int thread_id) {
   auto task_info = std::make_shared<TaskInfo>(quiet);
   task_info->id = GenerateTaskId_();
   task_info->tasks = tasks;
   task_info->CalTotalSize();
   task_info->CalFileNum();
 
-  SetTaskHost_(task_info->id, hostm);
+  SetTaskPool_(task_info->id, pool);
   task_info->callback = callback;
   task_info->buffer_size.store(buffer_size, std::memory_order_relaxed);
   task_info->affinity_thread.store(thread_id, std::memory_order_relaxed);
   return task_info;
 }
 
-std::shared_ptr<ClientMaintainer>
-TaskSchedulerCore::TakeTaskHost(const TaskId &id) {
-  return TakeTaskHost_(id);
-}
 
 std::optional<TaskStatus> TaskSchedulerCore::GetStatus(const TaskId &id) const {
   {
@@ -861,7 +868,7 @@ std::shared_ptr<TaskInfo> TaskSchedulerCore::GetResult(const TaskId &id,
   auto task_info = it->second;
   if (remove) {
     results_.erase(it);
-    (void)TakeTaskHost_(id);
+    ReleaseTaskResources_(id);
   }
   return task_info;
 }
@@ -1003,6 +1010,7 @@ TaskSchedulerCore::Terminate(const TaskId &id, int timeout_ms) {
                                      std::memory_order_relaxed);
       task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
       task_registry_.erase(it);
+      ReleaseTaskResources_(id);
       HandleCompletedTask(task_info);
       queue_cv_.notify_all();
       return {task_info, {EC::Success, ""}};
@@ -1034,6 +1042,7 @@ TaskSchedulerCore::Terminate(const TaskId &id, int timeout_ms) {
                                      std::memory_order_relaxed);
       task_info->OnWhichThread.store(-1, std::memory_order_relaxed);
       queue_cv_.notify_all();
+      ReleaseTaskResources_(id);
       HandleCompletedTask(task_info);
       return {task_info, {EC::Success, ""}};
     }
@@ -1080,7 +1089,7 @@ void TaskSchedulerCore::ClearResults() {
     results_.clear();
   }
   for (const auto &id : removed_ids) {
-    (void)TakeTaskHost_(id);
+    ReleaseTaskResources_(id);
   }
 }
 
@@ -1088,7 +1097,7 @@ bool TaskSchedulerCore::RemoveResult(const TaskId &id) {
   std::lock_guard<std::mutex> lock(result_mtx_);
   const bool removed = results_.erase(id) > 0;
   if (removed) {
-    (void)TakeTaskHost_(id);
+    ReleaseTaskResources_(id);
   }
   return removed;
 }

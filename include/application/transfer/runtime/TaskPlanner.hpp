@@ -1,6 +1,6 @@
 #pragma once
 
-#include "application/client/runtime/ClientMaintainer.hpp"
+#include "domain/client/ClientPort.hpp"
 #include "foundation/DataClass.hpp"
 
 #include <memory>
@@ -15,11 +15,12 @@ public:
 
   /**
    * @brief Plan concrete transfer tasks from source/destination paths and
-   * client context.
+   * client runtime context.
    */
   static std::pair<ECM, TASKS>
   LoadTasks(const std::string &src, const std::string &dst,
-            const std::shared_ptr<ClientMaintainer> &hostm,
+            AMDomain::client::IClientRuntimePort &runtime_port,
+            AMDomain::client::IClientLifecyclePort &lifecycle_port,
             const std::string &src_host = "", const std::string &dst_host = "",
             bool clone = false, bool overwrite = false, bool mkdir = true,
             bool ignore_sepcial_file = true, bool resume = false,
