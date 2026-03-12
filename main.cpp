@@ -9,8 +9,8 @@
 #include "domain/filesystem/FileSystemManager.hpp"
 #include "domain/host/HostManager.hpp"
 #include "application/transfer/TransferAppService.hpp"
-#include "interface/CLIBind.hpp"
-#include "interface/InteractiveLoop.hpp"
+#include "interface/cli/CLIBind.hpp"
+#include "interface/cli/InteractiveLoop.hpp"
 #include <atomic>
 #include <exception>
 #include <filesystem>

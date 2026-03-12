@@ -3,7 +3,7 @@
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include "domain/host/HostManager.hpp"
-#include "interface/ApplicationAdapters.hpp"
+#include "interface/adapters/ApplicationAdapters.hpp"
 
 namespace AMBootstrap {
 /**

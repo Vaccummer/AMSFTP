@@ -1,5 +1,5 @@
-#include "interface/ApplicationAdapters.hpp"
-#include "interface/Prompt.hpp"
+#include "interface/adapters/ApplicationAdapters.hpp"
+#include "interface/prompt/Prompt.hpp"
 #include "application/client/ClientAppService.hpp"
 #include "application/config/ConfigPayloads.hpp"
 #include "domain/filesystem/FileSystemManager.hpp"

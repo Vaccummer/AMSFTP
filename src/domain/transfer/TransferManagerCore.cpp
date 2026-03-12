@@ -1,11 +1,12 @@
 #include "foundation/DataClass.hpp"
-#include "interface/ApplicationAdapters.hpp"
+#include "interface/adapters/ApplicationAdapters.hpp"
+#include "application/filesystem/PathResolutionService.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/bar.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "application/transfer/runtime/AMWorkManager.hpp"
 #include "domain/config/ConfigModel.hpp"
-#include "interface/Prompt.hpp"
+#include "interface/prompt/Prompt.hpp"
 #include "domain/transfer/TransferManager.hpp"
 #include <algorithm>
 #include <atomic>
@@ -91,73 +92,6 @@ private:
   bool applied_ = false;
 };
 #endif
-
-/**
- * @brief Parse a transfer path into nickname and path using runtime ports.
- *
- * Host config not found is treated as an error; missing clients are allowed
- * so that transfer can create them later.
- */
-ECM ParseTransferPath(const std::string &input,
-                      const std::shared_ptr<AMDomain::client::IClientPort> &client,
-                      std::string *nickname, std::string *path) {
-  auto [parsed_name, parsed_path, _client, rcm] =
-      AMInterface::ApplicationAdapters::Runtime::ParsePath(input);
-  if (rcm.first == EC::HostConfigNotFound) {
-    return rcm;
-  }
-  std::string resolved_path = parsed_path;
-  if (client) {
-    resolved_path =
-        AMInterface::ApplicationAdapters::Runtime::BuildPath(client, parsed_path);
-  }
-  if (nickname) {
-    *nickname = parsed_name;
-  }
-  if (path) {
-    *path = resolved_path;
-  }
-  return {EC::Success, ""};
-}
-
-/**
- * @brief Resolve one ready planning client from runtime lifecycle ports.
- */
-std::pair<ECM, std::shared_ptr<AMDomain::client::IClientPort>>
-ResolvePlanningClient_(AMDomain::client::IClientRuntimePort &runtime_port,
-                       AMDomain::client::IClientLifecyclePort &lifecycle_port,
-                       const std::string &nickname,
-                       std::shared_ptr<TaskControlToken> flag) {
-  if (flag && !flag->IsRunning()) {
-    return {ECM{EC::Terminate, "Interrupted during client preparation"},
-            nullptr};
-  }
-
-  const bool is_local = nickname.empty() ||
-                        AMDomain::host::HostManagerService::IsLocalNickname(
-                            nickname);
-  if (is_local) {
-    auto client = runtime_port.GetLocalClient();
-    if (!client) {
-      return {ECM{EC::ClientNotFound, "Local client not found"}, nullptr};
-    }
-    ECM check_rcm = client->IOPort().Check();
-    if (!isok(check_rcm)) {
-      return {check_rcm, nullptr};
-    }
-    return {Ok(), client};
-  }
-
-  auto ensured = lifecycle_port.EnsureClient(nickname, flag);
-  if (!isok(ensured.first) || !ensured.second) {
-    return {ensured.first, nullptr};
-  }
-  ECM check_rcm = ensured.second->IOPort().Check();
-  if (!isok(check_rcm)) {
-    return {check_rcm, nullptr};
-  }
-  return {Ok(), ensured.second};
-}
 
 /**
  * @brief Build a unique key for a transfer task.
@@ -650,6 +584,8 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
       AMInterface::ApplicationAdapters::Runtime::ClientRuntimePortOrThrow();
   auto &lifecycle_port =
       AMInterface::ApplicationAdapters::Runtime::ClientLifecyclePortOrThrow();
+  auto &path_port =
+      AMInterface::ApplicationAdapters::Runtime::ClientPathPortOrThrow();
   auto &client_service =
       AMInterface::ApplicationAdapters::Runtime::ClientServiceOrThrow();
 
@@ -669,21 +605,21 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
   };
 
   for (const auto &set : transfer_sets) {
-    std::string dst_host;
-    std::string dst_path;
-    auto dst_rcm = ParseTransferPath(set.dst, nullptr, &dst_host, &dst_path);
-    if (dst_rcm.first != EC::Success) {
-      return {dst_rcm, nullptr};
+    auto dst_parsed =
+        AMApplication::filesystem::PathResolutionService::ParsePathTarget(
+            set.dst, runtime_port, path_port, nullptr);
+    if (!isok(dst_parsed.rcm)) {
+      return {dst_parsed.rcm, nullptr};
     }
-    record_nickname(dst_host);
+    record_nickname(dst_parsed.target.nickname);
     for (const auto &src : set.srcs) {
-      std::string src_host;
-      std::string src_path;
-      auto src_rcm = ParseTransferPath(src, nullptr, &src_host, &src_path);
-      if (src_rcm.first != EC::Success) {
-        return {src_rcm, nullptr};
+      auto src_parsed =
+          AMApplication::filesystem::PathResolutionService::ParsePathTarget(
+              src, runtime_port, path_port, nullptr);
+      if (!isok(src_parsed.rcm)) {
+        return {src_parsed.rcm, nullptr};
       }
-      record_nickname(src_host);
+      record_nickname(src_parsed.target.nickname);
     }
   }
 
@@ -694,23 +630,14 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
 
   auto tasks_ptr = std::make_shared<TASKS>();
   for (const auto &set : transfer_sets) {
-    std::string dst_host;
-    std::string dst_path;
-    auto dst_parse = ParseTransferPath(set.dst, nullptr, &dst_host, &dst_path);
-    if (dst_parse.first != EC::Success) {
-      return {dst_parse, nullptr};
+    auto dst_resolved =
+        AMApplication::filesystem::PathResolutionService::ResolveReadyPath(
+            set.dst, runtime_port, lifecycle_port, path_port, flag, 10000);
+    if (!isok(dst_resolved.rcm) || !dst_resolved.client) {
+      return {dst_resolved.rcm, nullptr};
     }
-
-    auto [dst_client_rcm, dst_client] =
-        ResolvePlanningClient_(runtime_port, lifecycle_port, dst_host, flag);
-    if (!isok(dst_client_rcm) || !dst_client) {
-      return {dst_client_rcm, nullptr};
-    }
-
-    auto dst_rcm = ParseTransferPath(set.dst, dst_client, &dst_host, &dst_path);
-    if (dst_rcm.first != EC::Success) {
-      return {dst_rcm, nullptr};
-    }
+    const std::string dst_host = dst_resolved.target.nickname;
+    const std::string dst_path = dst_resolved.abs_path;
 
     for (const auto &src : set.srcs) {
       if (flag && !flag->IsRunning()) {
@@ -718,27 +645,20 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
                 nullptr};
       }
 
-      std::string src_host;
-      std::string src_path;
-      auto src_parse = ParseTransferPath(src, nullptr, &src_host, &src_path);
-      if (src_parse.first != EC::Success) {
-        return {src_parse, nullptr};
+      auto src_resolved =
+          AMApplication::filesystem::PathResolutionService::ResolveReadyPath(
+              src, runtime_port, lifecycle_port, path_port, flag, 10000);
+      if (!isok(src_resolved.rcm) || !src_resolved.client) {
+        return {src_resolved.rcm, nullptr};
       }
-
-      auto [src_client_rcm, src_client] =
-          ResolvePlanningClient_(runtime_port, lifecycle_port, src_host, flag);
-      if (!isok(src_client_rcm) || !src_client) {
-        return {src_client_rcm, nullptr};
-      }
-
-      auto src_rcm = ParseTransferPath(src, src_client, &src_host, &src_path);
-      if (src_rcm.first != EC::Success) {
-        return {src_rcm, nullptr};
-      }
+      const std::string src_host = src_resolved.target.nickname;
+      const std::string src_path = src_resolved.abs_path;
+      auto src_client = src_resolved.client;
 
       std::vector<std::string> src_paths = {src_path};
       if (HasWildcard_(src_path)) {
-        auto matches = src_client->IOPort().find(src_path, SearchType::All, 5000);
+        auto matches =
+            src_client->IOPort().find(src_path, SearchType::All, 5000);
         src_paths.clear();
         for (const auto &m : matches) {
           src_paths.push_back(m.path);
@@ -774,6 +694,14 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
       std::make_shared<std::vector<UserTransferSet>>(std::move(transfer_sets));
   task_info->nicknames = std::move(display_names);
   return {ECM{EC::Success, ""}, task_info};
+}
+
+/**
+ * @brief Resolve one task by identifier across runtime and history storage.
+ */
+std::shared_ptr<TaskInfo>
+AMDomain::transfer::AMTransferManager::FindTask(const ID &task_id) const {
+  return FindTaskById_(task_id);
 }
 
 /**
@@ -839,11 +767,3 @@ bool AMDomain::transfer::AMTransferManager::ParseEntryId_(const ID &entry_id, ID
     return false;
   }
 }
-
-
-
-
-
-
-
-

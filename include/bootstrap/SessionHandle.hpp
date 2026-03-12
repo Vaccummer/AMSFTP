@@ -1,6 +1,6 @@
 #pragma once
 
-#include "interface/CLIArg.hpp"
+#include "interface/cli/CLIArg.hpp"
 #include <atomic>
 #include <memory>
 

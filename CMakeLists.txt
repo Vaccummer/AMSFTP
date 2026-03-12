@@ -31,6 +31,7 @@ file(GLOB_RECURSE AMSFTP_SOURCES CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/main.cpp"
   "${PROJECT_SOURCE_DIR}/src/interface/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/interface/*/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/interface/*/*/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/base/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/domain/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/domain/*/*.cpp"

@@ -1,4 +1,4 @@
-#include "interface/CLIArg.hpp"
+#include "interface/cli/CLIArg.hpp"
 #include "application/client/ClientAppService.hpp"
 #include "application/config/ConfigAppService.hpp"
 #include "application/transfer/TransferAppService.hpp"
@@ -13,7 +13,7 @@
 #include "foundation/tools/string.hpp"
 #include "infrastructure/log/FileLoggerWriter.hpp"
 #include "infrastructure/writer/WriteDispatcher.hpp"
-#include "interface/Prompt.hpp"
+#include "interface/prompt/Prompt.hpp"
 #include <csignal>
 #include <filesystem>
 #include <memory>
