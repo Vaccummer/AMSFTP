@@ -9,8 +9,8 @@ namespace AMDomain::writer {
 class AMAsyncWriteSchedulerPort : NonCopyableNonMovable {
 public:
   using Task = std::function<void()>;
-
-  ~AMAsyncWriteSchedulerPort() override = default;
+  AMAsyncWriteSchedulerPort() = default;
+  virtual ~AMAsyncWriteSchedulerPort() = default;
 
   /**
    * @brief Start the worker loop.
