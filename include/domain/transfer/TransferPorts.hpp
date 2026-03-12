@@ -58,4 +58,45 @@ public:
    */
   virtual ECM Terminate(const std::string &task_id, int timeout_ms = 5000) = 0;
 };
+
+/**
+ * @brief Transfer cache/query port for reusable transfer-set staging.
+ */
+class ITransferCachePort {
+public:
+  virtual ~ITransferCachePort() = default;
+
+  /**
+   * @brief Add one transfer set into cache and return its index.
+   */
+  virtual size_t AddCachedTransferSet(const UserTransferSet &transfer_set) = 0;
+
+  /**
+   * @brief Remove cached transfer sets by indices and return removed count.
+   */
+  virtual size_t
+  RemoveCachedTransferSets(const std::vector<size_t> &set_indices) = 0;
+
+  /**
+   * @brief Clear all cached transfer sets.
+   */
+  virtual void ClearCachedTransferSets() = 0;
+
+  /**
+   * @brief Submit cached transfer sets.
+   */
+  virtual ECM SubmitCachedTransferSets(bool quiet,
+                                       amf interrupt_flag = nullptr,
+                                       bool is_async = false) = 0;
+
+  /**
+   * @brief Query one cached transfer set by index.
+   */
+  virtual ECM QueryCachedTransferSet(size_t set_index) const = 0;
+
+  /**
+   * @brief List cached transfer-set identifiers.
+   */
+  [[nodiscard]] virtual std::vector<size_t> ListCachedTransferSetIds() const = 0;
+};
 } // namespace AMDomain::transfer

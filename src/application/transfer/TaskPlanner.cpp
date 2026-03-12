@@ -1,52 +1,12 @@
 #include "application/transfer/runtime/TaskPlanner.hpp"
 
+#include "application/filesystem/PathResolutionService.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/time.hpp"
 
 #include <filesystem>
 #include <utility>
-
-namespace {
-
-/**
- * @brief Resolve one ready client from runtime/lifecycle ports and ensure the
- * session is usable.
- */
-std::pair<AMApplication::TransferRuntime::TaskPlanner::ECM,
-          AMDomain::client::ClientHandle>
-ResolveReadyClient_(AMDomain::client::IClientRuntimePort &runtime_port,
-                    AMDomain::client::IClientLifecyclePort &lifecycle_port,
-                    const std::string &nickname, int timeout_ms,
-                    int64_t start_time) {
-  using ECM = AMApplication::TransferRuntime::TaskPlanner::ECM;
-  using ClientStatus = AMDomain::client::ClientStatus;
-  AMDomain::client::ClientHandle client = nullptr;
-  ECM rcm = {ErrorCode::Success, ""};
-
-  if (AMDomain::host::HostManagerService::IsLocalNickname(nickname)) {
-    client = runtime_port.GetLocalClient();
-    if (!client) {
-      return {ECM{ErrorCode::ClientNotFound, "Local client not found"}, nullptr};
-    }
-  } else {
-    auto ensured = lifecycle_port.EnsureClient(nickname);
-    rcm = ensured.first;
-    client = ensured.second;
-    if (!isok(rcm) || !client) {
-      return {rcm, nullptr};
-    }
-  }
-
-  const auto state = client->ConfigPort().GetState();
-  rcm = state.second;
-  if (state.first != ClientStatus::OK || rcm.first != ErrorCode::Success) {
-    rcm = client->IOPort().Check(timeout_ms, start_time);
-  }
-  return {rcm, client};
-}
-
-} // namespace
 
 namespace AMApplication::TransferRuntime {
 
@@ -67,14 +27,18 @@ TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
   start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
   TASKS tasks = {};
 
-  auto [rc1, src_client] = ResolveReadyClient_(
-      runtime_port, lifecycle_port, src_host, timeout_ms, start_time);
+  auto [rc1, src_client] =
+      AMApplication::filesystem::PathResolutionService::ResolveReadyClient(
+          runtime_port, lifecycle_port, src_host, control_token, timeout_ms,
+          start_time);
   if (rc1.first != EC::Success) {
     return {rc1, tasks};
   }
 
-  auto [rc2, dst_client] = ResolveReadyClient_(
-      runtime_port, lifecycle_port, dst_host, timeout_ms, start_time);
+  auto [rc2, dst_client] =
+      AMApplication::filesystem::PathResolutionService::ResolveReadyClient(
+          runtime_port, lifecycle_port, dst_host, control_token, timeout_ms,
+          start_time);
   if (rc2.first != EC::Success) {
     return {rc2, tasks};
   }

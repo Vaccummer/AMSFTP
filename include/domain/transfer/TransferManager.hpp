@@ -82,6 +82,11 @@ public:
   std::vector<ID> ListTaskIds() const;
 
   /**
+   * @brief Resolve one task by identifier across runtime and history storage.
+   */
+  [[nodiscard]] std::shared_ptr<TaskInfo> FindTask(const ID &task_id) const;
+
+  /**
    * @brief Get counts of pending and conducting tasks for prompt display.
    *
    * @param pending_count Output count of pending tasks (nullable).
@@ -301,3 +306,4 @@ private:
   std::unordered_map<ID, std::deque<std::pair<double, size_t>>> speed_samples_;
 };
 } // namespace AMDomain::transfer
+
