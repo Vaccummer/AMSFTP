@@ -8,6 +8,7 @@
 #include <vector>
 
 namespace AMDomain::client {
+using ECM = std::pair<ErrorCode, std::string>;
 /**
  * @brief Parsed client-qualified path token (`nickname@path`).
  */
@@ -121,6 +122,16 @@ struct AuthCBInfo {
              std::string password_n, bool iscorrect)
       : NeedPassword(need_password), request(std::move(request)),
         password_n(std::move(password_n)), iscorrect(iscorrect) {}
+};
+
+enum class OS_TYPE {
+  Windows = -1,
+  Unknown = -2,
+  Uncertain = 0,
+  Linux = 1,
+  MacOS = 2,
+  FreeBSD = 3,
+  Unix = 4
 };
 
 /**

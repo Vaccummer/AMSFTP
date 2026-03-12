@@ -11,12 +11,16 @@
 #include <string>
 #include <type_traits>
 #include <typeindex>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
 namespace AMDomain::client {
+class IClientPort;
+using ClientHandle = std::shared_ptr<IClientPort>;
+
 using CB =
     std::shared_ptr<std::function<void(std::string, std::string, std::string)>>;
 using WalkErrorCallback =
@@ -43,12 +47,14 @@ using WalkResult = std::pair<ECM, std::pair<WRD, WER>>;
 using ChmodResult = std::pair<ECM, std::unordered_map<std::string, ECM>>;
 using CommandResult = std::pair<ECM, std::pair<std::string, int>>;
 using ClientProtocol = host::ClientProtocol;
+using KnownHostQuery = host::KnownHostQuery;
+using KnownHostCallback = std::function<ECM(const KnownHostQuery &)>;
 using TraceCallback = std::function<void(const TraceInfo &)>;
 using AuthCallback =
     std::function<std::optional<std::string>(const AuthCBInfo &)>;
 using ConRequest = host::ConRequest;
 using OSType = OS_TYPE;
-inline constexpr const char *kClientMetadataStoreName = "client.metadata";
+using ParsedClientPath = std::tuple<std::string, std::string, ClientHandle, ECM>;
 
 /**
  * @brief Port for runtime metadata access.
@@ -210,6 +216,16 @@ public:
   [[nodiscard]] virtual const AMAtomic<ConRequest> &RequestAtomic() const = 0;
 
   /**
+   * @brief Return atomic state storage for advanced coordinated updates.
+   */
+  [[nodiscard]] virtual AMAtomic<ClientState> &StateAtomic() = 0;
+
+  /**
+   * @brief Return atomic state storage for read-only coordinated access.
+   */
+  [[nodiscard]] virtual const AMAtomic<ClientState> &StateAtomic() const = 0;
+
+  /**
    * @brief Return protocol kind.
    */
   [[nodiscard]] virtual ClientProtocol GetProtocol() const = 0;
@@ -320,6 +336,16 @@ public:
    * @brief Unregister current auth callback.
    */
   virtual void UnregisterAuthCallback() = 0;
+
+  /**
+   * @brief Register one known-host verification callback for IO worker flow.
+   */
+  virtual void RegisterKnownHostCallback(KnownHostCallback known_host_cb) = 0;
+
+  /**
+   * @brief Unregister current known-host verification callback.
+   */
+  virtual void UnregisterKnownHostCallback() = 0;
 
   /**
    * @brief Update and return remote/local OS type.
@@ -482,12 +508,27 @@ public:
   /**
    * @brief Return metadata port.
    */
+  [[nodiscard]] virtual IClientMetaDataPort &MetaDataPort() = 0;
+
+  /**
+   * @brief Return metadata port.
+   */
   [[nodiscard]] virtual const IClientMetaDataPort &MetaDataPort() const = 0;
 
   /**
    * @brief Return config port.
    */
+  [[nodiscard]] virtual IClientConfigPort &ConfigPort() = 0;
+
+  /**
+   * @brief Return config port.
+   */
   [[nodiscard]] virtual const IClientConfigPort &ConfigPort() const = 0;
+
+  /**
+   * @brief Return task-control port.
+   */
+  [[nodiscard]] virtual IClientTaskControlPort &TaskControlPort() = 0;
 
   /**
    * @brief Return task-control port.
@@ -498,7 +539,177 @@ public:
   /**
    * @brief Return IO port.
    */
+  [[nodiscard]] virtual IClientIOPort &IOPort() = 0;
+
+  /**
+   * @brief Return IO port.
+   */
   [[nodiscard]] virtual const IClientIOPort &IOPort() const = 0;
+};
+
+/**
+ * @brief Port for constructing concrete client instances from connection
+ * request data.
+ */
+class IClientFactoryPort {
+public:
+  /**
+   * @brief Virtual destructor for polymorphic use.
+   */
+  virtual ~IClientFactoryPort() = default;
+
+  /**
+   * @brief Create one concrete client by request protocol and request payload.
+   * @param request Connection request payload.
+   * @return Pair of status and constructed client instance.
+   */
+  virtual std::pair<ECM, std::shared_ptr<IClientPort>>
+  CreateClient(const ConRequest &request) = 0;
+};
+
+/**
+ * @brief Port for runtime client registry/session state.
+ */
+class IClientRuntimePort {
+public:
+  /**
+   * @brief Virtual destructor for polymorphic use.
+   */
+  virtual ~IClientRuntimePort() = default;
+
+  /**
+   * @brief Return one client by nickname.
+   */
+  [[nodiscard]] virtual ClientHandle
+  GetClient(const std::string &nickname) const = 0;
+
+  /**
+   * @brief Return local client instance.
+   */
+  [[nodiscard]] virtual ClientHandle GetLocalClient() const = 0;
+
+  /**
+   * @brief Return current active client instance.
+   */
+  [[nodiscard]] virtual ClientHandle GetCurrentClient() const = 0;
+
+  /**
+   * @brief Return current active nickname.
+   */
+  [[nodiscard]] virtual std::string CurrentNickname() const = 0;
+
+  /**
+   * @brief Set current active client instance.
+   */
+  virtual void SetCurrentClient(const ClientHandle &client) = 0;
+
+  /**
+   * @brief Return all current client nicknames.
+   */
+  [[nodiscard]] virtual std::vector<std::string> GetClientNames() const = 0;
+
+  /**
+   * @brief Return all current client handles.
+   */
+  [[nodiscard]] virtual std::vector<ClientHandle> GetClients() const = 0;
+};
+
+/**
+ * @brief Port for runtime client connect/check/remove operations.
+ */
+class IClientLifecyclePort {
+public:
+  /**
+   * @brief Virtual destructor for polymorphic use.
+   */
+  virtual ~IClientLifecyclePort() = default;
+
+  /**
+   * @brief Connect one configured nickname.
+   */
+  virtual std::pair<ECM, ClientHandle>
+  ConnectNickname(const std::string &nickname,
+                  const ClientConnectOptions &options = {},
+                  TraceCallback trace_cb = {},
+                  amf interrupt_flag = nullptr) = 0;
+
+  /**
+   * @brief Connect one explicit request payload.
+   */
+  virtual std::pair<ECM, ClientHandle>
+  ConnectRequest(const ClientConnectContext &context,
+                 TraceCallback trace_cb = {},
+                 amf interrupt_flag = nullptr) = 0;
+
+  /**
+   * @brief Ensure one client exists and is connected.
+   */
+  virtual std::pair<ECM, ClientHandle>
+  EnsureClient(const std::string &nickname,
+               amf interrupt_flag = nullptr) = 0;
+
+  /**
+   * @brief Check one client by nickname.
+   */
+  virtual std::pair<ECM, ClientHandle>
+  CheckClient(const std::string &nickname, bool update = false,
+              amf interrupt_flag = nullptr, int timeout_ms = -1,
+              int64_t start_time = -1) = 0;
+
+  /**
+   * @brief Remove one client from runtime registry.
+   */
+  virtual ECM RemoveClient(const std::string &nickname) = 0;
+};
+
+/**
+ * @brief Port for runtime client path/session-state operations.
+ */
+class IClientPathPort {
+public:
+  /**
+   * @brief Virtual destructor for polymorphic use.
+   */
+  virtual ~IClientPathPort() = default;
+
+  /**
+   * @brief Parse one raw path token into nickname/path/client form.
+   */
+  [[nodiscard]] virtual ParsedClientPath
+  ParseScopedPath(const std::string &input,
+                  amf interrupt_flag = nullptr) = 0;
+
+  /**
+   * @brief Resolve one raw path against a client into absolute path.
+   */
+  [[nodiscard]] virtual std::string
+  ResolveClientPath(const std::string &path,
+                    const ClientHandle &client = nullptr) const = 0;
+
+  /**
+   * @brief Return stored workdir state for one nickname.
+   */
+  [[nodiscard]] virtual ClientWorkdirState
+  GetWorkdirState(const std::string &nickname) const = 0;
+
+  /**
+   * @brief Store workdir state for one nickname.
+   */
+  virtual ECM SetWorkdirState(const std::string &nickname,
+                              const ClientWorkdirState &state) = 0;
+
+  /**
+   * @brief Return current workdir, initializing when absent.
+   */
+  [[nodiscard]] virtual std::string
+  GetOrInitWorkdir(const ClientHandle &client) = 0;
+
+  /**
+   * @brief Build absolute path from client workdir/home context.
+   */
+  [[nodiscard]] virtual std::string
+  BuildAbsolutePath(const ClientHandle &client,
+                    const std::string &path) const = 0;
 };
 
 } // namespace AMDomain::client
