@@ -13,7 +13,7 @@
 - Owned (WF-6):
   - `include/bootstrap/{AppHandle,SessionHandle}.hpp`
   - `main.cpp`
-  - `include/interface/CLIArg.hpp`
+  - `include/interface/cli/CLIArg.hpp`
   - `src/interface/{CLIArg,InteractiveLoop}.cpp`
   - `src/bootstrap/CliManagersBootstrap.cpp`
 - No-touch:
@@ -60,8 +60,8 @@
 - `main.cpp` now wires via `AppHandle` + `SessionHandle`.
 - `CliRunContext::Instance()` removed.
 - `TaskControlToken::Instance()` removed from:
-  - `src/interface/CLIArg.cpp`
-  - `src/interface/InteractiveLoop.cpp`
+  - `src/interface/cli/CLIArg.cpp`
+  - `src/interface/cli/InteractiveLoop.cpp`
   - `src/bootstrap/CliManagersBootstrap.cpp`
 - Runtime bindings are reset automatically through bootstrap guard at process
   exit paths.

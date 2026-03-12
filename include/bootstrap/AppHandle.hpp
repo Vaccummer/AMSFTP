@@ -2,8 +2,8 @@
 
 #include "bootstrap/ConfigAssembly.hpp"
 #include "infrastructure/host/ConfigBackedHostSnapshotStore.hpp"
-#include "interface/ApplicationAdapters.hpp"
-#include "interface/CLIArg.hpp"
+#include "interface/adapters/ApplicationAdapters.hpp"
+#include "interface/cli/CLIArg.hpp"
 
 namespace AMBootstrap {
 /**

@@ -1,9 +1,9 @@
 #include "Isocline/isocline.h"
-#include "interface/ApplicationAdapters.hpp"
+#include "interface/adapters/ApplicationAdapters.hpp"
 #include "foundation/DataClass.hpp"
-#include "interface/Prompt.hpp"
+#include "interface/prompt/Prompt.hpp"
 #include "interface/style/StyleManager.hpp"
-#include "interface/TokenTypeAnalyzer.hpp"
+#include "interface/parser/TokenTypeAnalyzer.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>

@@ -1,10 +1,10 @@
 #include "Isocline/isocline.h"
-#include "interface/ApplicationAdapters.hpp"
+#include "interface/adapters/ApplicationAdapters.hpp"
 #include "domain/config/ConfigModel.hpp"
 #include "application/config/ConfigPayloads.hpp"
 #include <sstream>
 #include "domain/host/HostManager.hpp"
-#include "interface/Prompt.hpp"
+#include "interface/prompt/Prompt.hpp"
 #include <algorithm>
 #include <string>
 #include <vector>

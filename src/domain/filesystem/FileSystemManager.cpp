@@ -1,5 +1,5 @@
 #include "domain/filesystem/FileSystemManager.hpp"
-#include "interface/ApplicationAdapters.hpp"
+#include "interface/adapters/ApplicationAdapters.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/Enum.hpp"
 #include "foundation/Path.hpp"
@@ -7,7 +7,7 @@
 #include "infrastructure/client/runtime/IOCore.hpp"
 #include "domain/config/ConfigModel.hpp"
 #include "domain/host/HostManager.hpp"
-#include "interface/Prompt.hpp"
+#include "interface/prompt/Prompt.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstddef>
