@@ -23,7 +23,7 @@ public:
   /**
    * @brief Stop the worker thread on destruction.
    */
-  ~AMInfraCliSignalMonitor() override;
+  ~AMInfraCliSignalMonitor();
 
   /**
    * @brief Construct signal monitor.
@@ -55,15 +55,16 @@ public:
   /**
    * @brief Register a signal hook (name must be unique).
    */
-  bool RegisterHook(const std::string &name, const SignalHook &hook) override;
+  bool RegisterHook(const std::string &name,
+                    const AMDomain::signal::SignalHook &hook) override;
 
   /**
-   * @brief Unregister a signal hook (GLOBAL cannot be unregistered).
+   * @brief Unregister a signal hook by name.
    */
   bool UnregisterHook(const std::string &name) override;
 
   /**
-   * @brief Silence a hook by name (GLOBAL can be silenced).
+   * @brief Silence a hook by name.
    */
   bool SilenceHook(const std::string &name) override;
 
@@ -73,7 +74,7 @@ public:
   bool ResumeHook(const std::string &name) override;
 
   /**
-   * @brief Update a hook priority (GLOBAL not supported).
+   * @brief Update a hook priority by name.
    */
   bool SetHookPriority(const std::string &name, int priority) override;
 
@@ -99,5 +100,5 @@ private:
   std::atomic<int> last_handled_signal_{0};
   std::thread worker_;
   mutable std::mutex hooks_mtx_;
-  std::unordered_map<std::string, SignalHook> hooks_;
+  std::unordered_map<std::string, AMDomain::signal::SignalHook> hooks_;
 };
