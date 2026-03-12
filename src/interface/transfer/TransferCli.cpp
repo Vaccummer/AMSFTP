@@ -3,8 +3,7 @@
 #include "foundation/Path.hpp"
 #include "foundation/tools/time.hpp"
 #include "domain/transfer/TransferCacheDomainService.hpp"
-#include "infrastructure/client/runtime/IOCore.hpp"
-#include "infrastructure/Config.hpp"
+#include "application/transfer/runtime/AMWorkManager.hpp"
 #include "interface/Prompt.hpp"
 #include "domain/transfer/TransferManager.hpp"
 #include <algorithm>
@@ -243,21 +242,21 @@ std::vector<AMDomain::transfer::AMTransferManager::ID> AMDomain::transfer::AMTra
     }
   };
 
-  auto pending = worker_.get_pending_tasks();
+  auto pending = worker_->GetPendingTasks();
   for (const auto &task : pending) {
     if (task) {
       add_id(task->id);
     }
   }
 
-  auto conducting = worker_.get_conducting_tasks();
+  auto conducting = worker_->GetConductingTasks();
   for (const auto &task : conducting) {
     if (task) {
       add_id(task->id);
     }
   }
 
-  auto result_ids = worker_.get_result_ids();
+  auto result_ids = worker_->GetResultIds();
   for (const auto &id : result_ids) {
     add_id(id);
   }
@@ -293,8 +292,8 @@ void AMDomain::transfer::AMTransferManager::GetTaskCounts(size_t *pending_count,
     return;
   }
 
-  const auto pending = worker_.get_pending_tasks();
-  const auto conducting = worker_.get_conducting_tasks();
+  const auto pending = worker_->GetPendingTasks();
+  const auto conducting = worker_->GetConductingTasks();
   if (pending_count) {
     *pending_count = pending.size();
   }
@@ -354,7 +353,7 @@ ECM AMDomain::transfer::AMTransferManager::SubmitCachedTransferSets(
             "Submit cached transfer sets? (y/N): ", &canceled)) {
       AMPromptManager::Instance().FmtPrint(
           "🚫  {}\n",
-          AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format("Add Canceled", "abort"));
+          AMInterface::ApplicationAdapters::Runtime::Format("Add Canceled", "abort"));
       return {EC::Terminate, "Task submission canceled"};
     }
   }
@@ -425,12 +424,13 @@ ECM AMDomain::transfer::AMTransferManager::QueryCachedUserSet(size_t set_index) 
 }
 
 ECM AMDomain::transfer::AMTransferManager::Thread(int num) {
-  static const int max_threads = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<int>(
-      DocumentKind::Settings, {"Options", "TransferManager", "max_thread_num"},
-      (int)16, [](int val) { return std::max(1, std::min(val, (int)999999)); });
+  static const int max_threads = std::max(
+      1, std::min(AMInterface::ApplicationAdapters::Runtime::ResolveSettingInt(
+                      {"Options", "TransferManager", "max_thread_num"}, 16),
+                  999999));
 
   if (num == -1) {
-    const size_t current = worker_.ThreadCount(0);
+    const size_t current = worker_->ThreadCount(0);
     AMPromptManager::Instance().FmtPrint("Current ThreadNum: {}", current);
     return {EC::Success, ""};
   }
@@ -448,7 +448,7 @@ ECM AMDomain::transfer::AMTransferManager::Thread(int num) {
     return rcm;
   }
 
-  const size_t applied = worker_.ThreadCount(static_cast<size_t>(num));
+  const size_t applied = worker_->ThreadCount(static_cast<size_t>(num));
   AMPromptManager::Instance().FmtPrint("Set ThreadNum to : {}", applied);
   return rcm;
 }
@@ -483,7 +483,7 @@ ECM AMDomain::transfer::AMTransferManager::QuerySetEntry(const ID &entry_id) con
  * @brief Terminate a running task by ID.
  */
 ECM AMDomain::transfer::AMTransferManager::Terminate(const ID &task_id, int timeout_ms) {
-  auto result = worker_.terminate(task_id, timeout_ms);
+  auto result = worker_->Terminate(task_id, timeout_ms);
   if (!result.first) {
     if (result.second.first != EC::Success) {
       if (result.second.second.empty()) {
@@ -531,7 +531,7 @@ ECM AMDomain::transfer::AMTransferManager::Pause(const ID &task_id) {
   }
 
   const ID &single_id = ids.empty() ? task_id : ids.front();
-  ECM rcm = worker_.pause(single_id);
+  ECM rcm = worker_->Pause(single_id);
   if (rcm.first != EC::Success) {
     if (rcm.second.empty()) {
       AMPromptManager::Instance().ErrorFormat(rcm);
@@ -570,7 +570,7 @@ ECM AMDomain::transfer::AMTransferManager::Resume(const ID &task_id) {
   }
 
   const ID &single_id = ids.empty() ? task_id : ids.front();
-  ECM rcm = worker_.resume(single_id);
+  ECM rcm = worker_->Resume(single_id);
   if (rcm.first != EC::Success) {
     if (rcm.second.empty()) {
       AMPromptManager::Instance().ErrorFormat(rcm);
@@ -768,7 +768,7 @@ ECM AMDomain::transfer::AMTransferManager::retry(const ID &task_id, bool is_asyn
       original->buffer_size.load(std::memory_order_relaxed);
   const int affinity_thread =
       original->affinity_thread.load(std::memory_order_relaxed);
-  auto task_info = worker_.cre_taskinfo(tasks_ptr, hostm, original->callback,
+  auto task_info = worker_->CreateTaskInfo(tasks_ptr, hostm, original->callback,
                                         buffer_size, quiet, affinity_thread);
   if (original->transfer_sets) {
     task_info->transfer_sets = original->transfer_sets;
@@ -780,6 +780,8 @@ ECM AMDomain::transfer::AMTransferManager::retry(const ID &task_id, bool is_asyn
   }
   return transfer(task_info);
 }
+
+
 
 
 

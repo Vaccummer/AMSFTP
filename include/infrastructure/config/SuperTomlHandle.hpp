@@ -53,20 +53,15 @@ public:
   /**
    * @brief Return a copy of in-memory json document.
    */
-  [[nodiscard]] bool GetJson(Json *out) const;
-
-protected:
-  /**
-   * @brief Read one typed config arg from this handle.
-   */
-  bool ReadValue(AMDomain::arg::TypeTag type, void *out) const override;
+  [[nodiscard]] bool GetJson(Json *out) const override;
 
   /**
-   * @brief Write one typed config arg into this handle.
+   * @brief Replace the in-memory json document and mark handle dirty.
    */
-  bool WriteValue(AMDomain::arg::TypeTag type, const void *in) override;
+  bool SetJson(const Json &json) override;
 
 private:
+  mutable std::mutex mtx_;
   AMInfra::config::ConfigDocumentSpec spec_{};
   ConfigHandle *cfgffi_handle_ = nullptr;
   Json json_ = Json::object();

@@ -6,6 +6,7 @@
 #include "infrastructure/writer/WriteDispatcher.hpp"
 #include <memory>
 #include <mutex>
+#include <typeindex>
 #include <unordered_map>
 
 namespace AMInfra::config {
@@ -47,9 +48,13 @@ public:
   GetDataPath(AMDomain::config::DocumentKind kind,
               std::filesystem::path *out) const override;
 
-  [[nodiscard]] bool Read(AMDomain::arg::TypeTag type, void *out) const override;
+  [[nodiscard]] bool Read(const std::type_index &type,
+                          void *out) const override;
 
-  [[nodiscard]] bool Write(AMDomain::arg::TypeTag type,
+  [[nodiscard]] bool Write(const std::type_index &type,
+                           const void *in) override;
+
+  [[nodiscard]] bool Erase(const std::type_index &type,
                            const void *in) override;
 
   void SetDumpErrorCallback(DumpErrorCallback cb) override;

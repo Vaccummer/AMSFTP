@@ -3,8 +3,7 @@
 #include "foundation/Path.hpp"
 #include "foundation/tools/bar.hpp"
 #include "foundation/tools/time.hpp"
-#include "infrastructure/client/runtime/IOCore.hpp"
-#include "infrastructure/Config.hpp"
+#include "application/transfer/runtime/AMWorkManager.hpp"
 #include "interface/Prompt.hpp"
 #include "domain/transfer/TransferManager.hpp"
 #include "third_party/indicators/dynamic_progress.hpp"
@@ -368,7 +367,7 @@ std::string BuildTaskTable_(
     lines.push_back({row.id, row.status, row.elapsed, row.size, row.speed,
                      row.files, row.task_now, row.ec});
   }
-  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().FormatUtf8Table(keys, lines);
+  return AMInterface::ApplicationAdapters::Runtime::FormatUtf8Table(keys, lines);
 }
 
 /**
@@ -440,7 +439,7 @@ public:
    */
   explicit TaskInfoProgressPrinter(const std::shared_ptr<TaskInfo> &task_info)
       : task_info_(task_info),
-        bar_(AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().CreateProgressBar(
+        bar_(AMInterface::ApplicationAdapters::Runtime::CreateProgressBar(
             static_cast<int64_t>(task_info ? task_info->total_size.load(
                                                  std::memory_order_relaxed)
                                            : 0),
@@ -495,22 +494,15 @@ int GetRefreshIntervalMs_() {
       return 300;
     return std::max<int>(para, 5);
   };
-  static const int refresh_ms = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(
-      DocumentKind::Settings, {"Style", "ProgressBar", "refresh_interval_ms"},
-      300, funcf);
+  static const int refresh_ms = funcf(AMInterface::ApplicationAdapters::Runtime::ResolveSettingInt(
+      {"Style", "ProgressBar", "refresh_interval_ms"}, 300));
   return refresh_ms;
 }
 
 size_t GetSpeedWindowSize() {
-  std::function<size_t(size_t)> funct = [](size_t para) {
-    if (para < 0)
-      return static_cast<size_t>(5);
-    return std::max<size_t>(1, para);
-  };
-  static const size_t speed_window_size =
-      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg(
-          DocumentKind::Settings, {"Style", "ProgressBar", "speed_window_size"},
-          static_cast<size_t>(300), funct);
+  static const size_t speed_window_size = static_cast<size_t>(std::max(
+      1, AMInterface::ApplicationAdapters::Runtime::ResolveSettingInt(
+             {"Style", "ProgressBar", "speed_window_size"}, 5)));
   return speed_window_size;
 }
 
@@ -547,7 +539,7 @@ struct TaskProgressGroupBar {
 
   explicit TaskProgressGroupBar(const std::shared_ptr<TaskInfo> &task)
       : task_info(task),
-        bar(AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().CreateProgressBar(
+        bar(AMInterface::ApplicationAdapters::Runtime::CreateProgressBar(
             task ? task->total_size.load(std::memory_order_relaxed) : 0,
             BuildTaskPrefix_(task))) {
     if (task) {
@@ -721,7 +713,7 @@ ECM AMDomain::transfer::AMTransferManager::List(
   std::vector<std::shared_ptr<TaskInfo>> conducting_tasks;
 
   auto collect_tasks = [&]() {
-    auto registry_snapshot = worker_.get_registry_copy();
+  auto registry_snapshot = worker_->GetRegistryCopy();
 
     pending_tasks.reserve(registry_snapshot.size());
     paused_tasks.reserve(registry_snapshot.size());
@@ -860,6 +852,8 @@ ECM AMDomain::transfer::AMTransferManager::List(
   AMPromptManager::Instance().FlushCachedOutput();
   return {EC::Success, ""};
 }
+
+
 
 
 

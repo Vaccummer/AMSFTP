@@ -1,7 +1,6 @@
 #pragma once
 
-#include "foundation//tools/enum_related.hpp"
-#include "interface/ApplicationAdapters.hpp"
+#include "bootstrap/ConfigAssembly.hpp"
 #include "interface/CLIArg.hpp"
 
 namespace AMBootstrap {
@@ -13,44 +12,28 @@ struct AppHandle : NonCopyableNonMovable {
    * @brief Construct app handle from explicit manager references.
    */
   AppHandle(AMSignalMonitorPort &signal_monitor,
-            AMInfraConfigManager &config_manager,
-            AMPromptManager &prompt_manager, AMDomain::host::AMHostManager &host_manager,
+            AMPromptManager &prompt_manager,
+            AMDomain::host::AMHostConfigManager &host_config_manager,
+            AMDomain::host::AMKnownHostsManager &known_hosts_manager,
             AMDomain::var::VarCLISet &var_manager, AMInfraLogManager &log_manager,
-            AMDomain::client::AMClientManager &client_manager,
-            AMDomain::transfer::AMTransferManager &transfer_manager, AMDomain::filesystem::AMFileSystem &filesystem)
-      : managers(signal_monitor, config_manager, prompt_manager, host_manager,
-                 var_manager, log_manager, client_manager, transfer_manager,
-                 filesystem) {}
+            AMApplication::client::ClientAppService &client_service,
+            AMDomain::transfer::AMTransferManager &transfer_manager,
+            AMDomain::filesystem::AMFileSystem &filesystem);
 
   /**
    * @brief Initialize process-lifetime services and bind runtime adapters.
    */
-  ECM Init(const amf &task_control_token) {
-    AMInterface::ApplicationAdapters::Runtime::RuntimeBindings bindings{};
-    bindings.host_manager = &managers.host_manager;
-    bindings.client_manager = &managers.client_manager;
-    bindings.transfer_manager = &managers.transfer_manager;
-    bindings.var_manager = &managers.var_manager;
-    bindings.signal_monitor = &managers.signal_monitor;
-    bindings.prompt_manager = &managers.prompt_manager;
-    bindings.config_manager = &managers.config_manager;
-    bindings.filesystem = &managers.filesystem;
-    AMInterface::ApplicationAdapters::Runtime::Bind(bindings);
-    ECM rcm = managers.Init(task_control_token);
-    if (!isok(rcm)) {
-      AMInterface::ApplicationAdapters::Runtime::Reset();
-      return rcm;
-    }
-    return Ok();
-  }
+  ECM Init(const amf &task_control_token);
 
   /**
    * @brief Clear process-lifetime runtime adapter bindings.
    */
-  void ResetRuntimeBindings() {
-    AMInterface::ApplicationAdapters::Runtime::Reset();
-  }
+  void ResetRuntimeBindings();
 
+private:
+  ConfigAssembly config_;
+
+public:
   CliManagers managers;
 };
 } // namespace AMBootstrap

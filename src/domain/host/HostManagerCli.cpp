@@ -1,12 +1,17 @@
 #include "domain/host/HostManager.hpp"
-#include "interface/ApplicationAdapters.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include "foundation/tools/auth.hpp"
-#include "foundation/tools/json.hpp"
+#include "foundation/tools/enum_related.hpp"
+#include "interface/ApplicationAdapters.hpp"
+#include <cstdint>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
-using cls = AMDomain::host::AMHostManager;
+using cls = AMDomain::host::AMHostConfigManager;
+using EC = ErrorCode;
+using DocumentKind = AMDomain::config::DocumentKind;
 
 namespace {
 /**
@@ -23,19 +28,84 @@ std::vector<std::string> SplitTokens_(const std::string &text) {
   }
   return out;
 }
+
+/**
+ * @brief Deduplicate target nicknames while preserving first-seen order.
+ */
+std::vector<std::string> DedupTargets_(const std::vector<std::string> &targets) {
+  std::vector<std::string> out;
+  std::unordered_set<std::string> seen;
+  out.reserve(targets.size());
+  for (const auto &target : targets) {
+    const std::string key = AMStr::Strip(target);
+    if (key.empty()) {
+      continue;
+    }
+    if (seen.insert(key).second) {
+      out.push_back(key);
+    }
+  }
+  return out;
+}
+
+/**
+ * @brief Return true when nickname targets local host profile.
+ */
+bool IsLocalNickname_(const std::string &nickname) {
+  return AMStr::lowercase(AMStr::Strip(nickname)) == "local";
+}
+
+/**
+ * @brief Parse one signed integer from text.
+ */
+bool ParseInt64_(const std::string &text, int64_t *out) {
+  if (!out) {
+    return false;
+  }
+  const std::string trimmed = AMStr::Strip(text);
+  if (trimmed.empty()) {
+    return false;
+  }
+  std::istringstream iss(trimmed);
+  int64_t value = 0;
+  char extra = '\0';
+  if (!(iss >> value)) {
+    return false;
+  }
+  if (iss >> extra) {
+    return false;
+  }
+  *out = value;
+  return true;
+}
+
+/**
+ * @brief Parse one boolean from text.
+ */
+bool ParseBool_(const std::string &text, bool *out) {
+  if (!out) {
+    return false;
+  }
+  const std::string lowered = AMStr::lowercase(AMStr::Strip(text));
+  if (lowered == "true" || lowered == "1" || lowered == "yes" ||
+      lowered == "on") {
+    *out = true;
+    return true;
+  }
+  if (lowered == "false" || lowered == "0" || lowered == "no" ||
+      lowered == "off") {
+    *out = false;
+    return true;
+  }
+  return false;
+}
+
 } // namespace
 
-std::pair<ECM, std::vector<std::string>> cls::PrivateKeys(bool print_sign) const {
-  (void)print_sign;
-  std::vector<std::string> keys = {};
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow()
-           .ResolveArg(DocumentKind::Config, {configkn::keys}, &keys)) {
-    return {Err(EC::CommonFailure,
-                AMStr::fmt("Fail to read config attribute: {}", configkn::keys)),
-            {}};
-  }
-  return {Ok(), keys};
-}
+/**
+ * @brief Return cached private key list.
+ */
+std::vector<std::string> cls::PrivateKeys() const { return private_keys_; }
 
 ECM cls::List(bool detailed) const {
   (void)detailed;
@@ -50,26 +120,33 @@ ECM cls::Delete(const std::string &nickname) {
 }
 
 ECM cls::Delete(const std::vector<std::string> &targets) {
-  std::vector<std::string> uniq_targets = AMJson::VectorDedup(targets);
+  std::vector<std::string> uniq_targets = DedupTargets_(targets);
   if (uniq_targets.empty()) {
     return Ok();
   }
 
+  AMDomain::host::HostConfigArg next = GetInitArg();
   for (const auto &name : uniq_targets) {
     if (!HostExists(name)) {
       return Err(EC::HostConfigNotFound,
                  AMStr::fmt("host nickname not found: {}", name));
     }
-  }
-
-  for (const auto &name : uniq_targets) {
-    ECM rcm = RemoveHost_(name);
-    if (rcm.first != EC::Success) {
-      return rcm;
+    if (IsLocalNickname_(name)) {
+      return Err(EC::OperationUnsupported, "local host cannot be removed");
+    }
+    if (next.host_configs.erase(name) == 0) {
+      return Err(EC::HostConfigNotFound,
+                 AMStr::fmt("host nickname not found: {}", name));
     }
   }
 
-  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(next)) {
+    return Err(EC::CommonFailure, "failed to persist host config snapshot");
+  }
+  host_configs_ = next.host_configs;
+  local_config_ = next.local_config;
+  private_keys_ = next.private_keys;
+  return AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(
       DocumentKind::Config, "", true);
 }
 
@@ -82,9 +159,12 @@ ECM cls::Query(const std::vector<std::string> &targets) const {
     return Ok();
   }
 
-  std::vector<std::string> uniq_targets = AMJson::VectorDedup(targets);
+  std::vector<std::string> uniq_targets = DedupTargets_(targets);
   for (const std::string &nickname : uniq_targets) {
-    if (host_configs.find(nickname) == host_configs.end()) {
+    if (IsLocalNickname_(nickname)) {
+      continue;
+    }
+    if (host_configs_.find(nickname) == host_configs_.end()) {
       return Err(EC::HostConfigNotFound,
                  AMStr::fmt("Host {} not found", nickname));
     }
@@ -100,7 +180,10 @@ ECM cls::Rename(const std::string &old_nickname,
   if (old_nickname == new_nickname) {
     return Err(EC::InvalidArg, "new nickname same as old nickname");
   }
-  if (!configkn::ValidateNickname(new_nickname)) {
+  if (IsLocalNickname_(old_nickname)) {
+    return Err(EC::OperationUnsupported, "local host cannot be renamed");
+  }
+  if (!AMDomain::host::ValidateNickname(new_nickname)) {
     return Err(EC::InvalidArg,
                "invalid new nickname, pattern is [a-zA-Z0-9_-]+");
   }
@@ -111,19 +194,25 @@ ECM cls::Rename(const std::string &old_nickname,
     return Err(EC::HostConfigNotFound, "old nickname not found");
   }
 
-  HostConfig moved = host_configs[old_nickname];
-  moved.request.nickname = new_nickname;
-
-  host_configs[new_nickname] = moved;
-  ECM rcm = AddHost_(new_nickname, moved);
-  if (rcm.first != EC::Success) {
-    host_configs.erase(new_nickname);
-    return rcm;
+  AMDomain::host::HostConfigArg next = GetInitArg();
+  auto old_it = next.host_configs.find(old_nickname);
+  if (old_it == next.host_configs.end()) {
+    return Err(EC::HostConfigNotFound, "old nickname not found");
   }
 
-  host_configs.erase(old_nickname);
-  rcm = RemoveHost_(old_nickname);
-  return rcm;
+  HostConfig moved = old_it->second;
+  moved.request.nickname = new_nickname;
+  next.host_configs.erase(old_it);
+  next.host_configs[new_nickname] = moved;
+
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(next)) {
+    return Err(EC::CommonFailure, "failed to persist host config snapshot");
+  }
+  host_configs_ = next.host_configs;
+  local_config_ = next.local_config;
+  private_keys_ = next.private_keys;
+  return AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(
+      DocumentKind::Config, "", true);
 }
 
 ECM cls::Src() const { return Ok(); }
@@ -138,8 +227,12 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     return Err(EC::HostConfigNotFound, "host not found");
   }
 
+  static const std::vector<std::string> kAllowedFields = {
+      "hostname",   "username",   "port",      "buffer_size",
+      "compression", "cmd_prefix", "wrap_cmd",  "protocol",
+      "password",   "keyfile",    "trash_dir", "login_dir"};
   bool field_validated = false;
-  for (const std::string &allowed : configkn::fileds) {
+  for (const std::string &allowed : kAllowedFields) {
     if (field == allowed) {
       field_validated = true;
       break;
@@ -149,31 +242,39 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     return Err(EC::InvalidArg, "unsupported property name");
   }
 
-  HostConfig &updated = host_configs[nickname];
-  std::string new_value = "";
-  if (field == configkn::hostname) {
+  AMDomain::host::HostConfigArg next = GetInitArg();
+  const bool is_local = IsLocalNickname_(nickname);
+  HostConfig *target_cfg = nullptr;
+  if (is_local) {
+    target_cfg = &next.local_config;
+  } else {
+    auto it = next.host_configs.find(nickname);
+    if (it == next.host_configs.end()) {
+      return Err(EC::HostConfigNotFound, "host not found");
+    }
+    target_cfg = &it->second;
+  }
+
+  HostConfig &updated = *target_cfg;
+  if (field == "hostname") {
     if (value_str.empty()) {
       return Err(EC::InvalidArg, "hostname cannot be empty");
     }
     updated.request.hostname = value_str;
-    new_value = value_str;
-  } else if (field == configkn::username) {
+  } else if (field == "username") {
     if (value_str.empty()) {
       return Err(EC::InvalidArg, "username cannot be empty");
     }
     updated.request.username = value_str;
-    new_value = value_str;
-  } else if (field == configkn::port) {
+  } else if (field == "port") {
     int64_t port = 0;
-    if (!AMJson::StrValueParse(value_str, &port) || port <= 0 ||
-        port > 65535) {
+    if (!ParseInt64_(value_str, &port) || port <= 0 || port > 65535) {
       return Err(EC::InvalidArg, "invalid port value");
     }
     updated.request.port = static_cast<int>(port);
-    new_value = std::to_string(port);
-  } else if (field == configkn::buffer_size) {
+  } else if (field == "buffer_size") {
     int64_t buffer_size = 0;
-    if (!AMJson::StrValueParse(value_str, &buffer_size)) {
+    if (!ParseInt64_(value_str, &buffer_size)) {
       return Err(EC::InvalidArg, "Buffer size must be an positive integer");
     }
     if (buffer_size < AMMinBufferSize || buffer_size > AMMaxBufferSize) {
@@ -182,33 +283,27 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
                             AMMinBufferSize, AMMaxBufferSize));
     }
     updated.request.buffer_size = buffer_size;
-    new_value = std::to_string(buffer_size);
-  } else if (field == configkn::compression) {
+  } else if (field == "compression") {
     bool compression = false;
-    if (!AMJson::StrValueParse(value_str, &compression)) {
-      return Err(EC::InvalidArg,
-                 "compression value must be true or false");
+    if (!ParseBool_(value_str, &compression)) {
+      return Err(EC::InvalidArg, "compression value must be true or false");
     }
     updated.request.compression = compression;
-    new_value = compression ? "true" : "false";
-  } else if (field == configkn::cmd_prefix) {
+  } else if (field == "cmd_prefix") {
     updated.metadata.cmd_prefix = value_str;
-    new_value = value_str;
-  } else if (field == configkn::wrap_cmd) {
+  } else if (field == "wrap_cmd") {
     bool wrap_cmd = false;
-    if (!AMJson::StrValueParse(value_str, &wrap_cmd)) {
+    if (!ParseBool_(value_str, &wrap_cmd)) {
       return Err(EC::InvalidArg, "wrap_cmd value must be true or false");
     }
     updated.metadata.wrap_cmd = wrap_cmd;
-    new_value = wrap_cmd ? "true" : "false";
-  } else if (field == configkn::protocol) {
+  } else if (field == "protocol") {
     std::string protocol = AMStr::lowercase(AMStr::Strip(value_str));
     if (protocol != "sftp" && protocol != "ftp" && protocol != "local") {
       return Err(EC::InvalidArg, "protocol must be sftp, ftp or local");
     }
-    updated.request.protocol = configkn::StrToProtocol(protocol);
-    new_value = protocol;
-  } else if (field == configkn::password) {
+    updated.request.protocol = AMDomain::host::StrToProtocol(protocol);
+  } else if (field == "password") {
     std::string tmp_pswd = AMStr::Strip(value_str);
     if (tmp_pswd.empty()) {
       return Err(EC::InvalidArg, "password cannot be empty");
@@ -217,52 +312,23 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
       tmp_pswd = AMAuth::EncryptPassword(tmp_pswd);
     }
     updated.request.password = tmp_pswd;
-    new_value = tmp_pswd;
-  } else if (field == configkn::keyfile) {
+  } else if (field == "keyfile") {
     updated.request.keyfile = value_str;
-    new_value = value_str;
-  } else if (field == configkn::trash_dir) {
+  } else if (field == "trash_dir") {
     updated.request.trash_dir = value_str;
-    new_value = value_str;
-  } else if (field == configkn::login_dir) {
+  } else if (field == "login_dir") {
     updated.metadata.login_dir = value_str;
-    new_value = value_str;
   } else {
     return Err(EC::InvalidArg,
                AMStr::fmt("unsupported property name: {}", field));
   }
 
-  bool write_ok = false;
-  if (field == configkn::port) {
-    write_ok = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow()
-                   .SetArg(DocumentKind::Config,
-                           {configkn::hosts, nickname, field},
-                           static_cast<int64_t>(updated.request.port));
-  } else if (field == configkn::buffer_size) {
-    write_ok = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow()
-                   .SetArg(DocumentKind::Config,
-                           {configkn::hosts, nickname, field},
-                           static_cast<int64_t>(updated.request.buffer_size));
-  } else if (field == configkn::compression) {
-    write_ok = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow()
-                   .SetArg(DocumentKind::Config,
-                           {configkn::hosts, nickname, field},
-                           updated.request.compression);
-  } else if (field == configkn::wrap_cmd) {
-    write_ok = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow()
-                   .SetArg(DocumentKind::Config,
-                           {configkn::hosts, nickname, field},
-                           updated.metadata.wrap_cmd);
-  } else {
-    write_ok = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow()
-                   .SetArg(DocumentKind::Config,
-                           {configkn::hosts, nickname, field}, new_value);
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(next)) {
+    return Err(EC::CommonFailure, "failed to persist host config snapshot");
   }
-
-  if (!write_ok) {
-    return Err(EC::CommonFailure, "failed to write config");
-  }
-
-  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(
+  host_configs_ = next.host_configs;
+  local_config_ = next.local_config;
+  private_keys_ = next.private_keys;
+  return AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(
       DocumentKind::Config, "", true);
 }

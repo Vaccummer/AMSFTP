@@ -1,34 +1,40 @@
 #pragma once
 
+#include "application/client/ClientAppService.hpp"
 #include "application/client/ClientSessionWorkflows.hpp"
 #include "application/client/FileCommandWorkflows.hpp"
 #include "application/completion/CompletionWorkflows.hpp"
-#include "application/config/ConfigWorkflows.hpp"
-#include "application/config/HostProfileWorkflows.hpp"
+#include "application/config/ConfigAppService.hpp"
+#include "application/config/CliConfigSaveWorkflows.hpp"
+#include "application/host/HostProfileWorkflows.hpp"
 #include "application/transfer/TaskWorkflows.hpp"
 #include "application/transfer/TransferWorkflows.hpp"
 #include "application/var/VarWorkflows.hpp"
 #include "domain/client/ClientPort.hpp"
-#include "domain/config/DocumentKind.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
 #include "domain/transfer/TransferPorts.hpp"
+#include "domain/var/VarModel.hpp"
 #include "foundation/DataClass.hpp"
-#include "foundation/var/VarModel.hpp"
+#include "foundation/tools/bar.hpp"
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
 
 class AMPromptManager;
-class AMInfraConfigManager;
+namespace AMApplication::client {
+class ClientAppService;
+}
+namespace AMInterface::style {
+class AMStyleService;
+}
 namespace AMDomain::host {
-class AMHostManager;
+class AMHostConfigManager;
+class AMKnownHostsManager;
 }
 namespace AMDomain::var {
 class VarCLISet;
-}
-namespace AMDomain::client {
-class AMClientManager;
 }
 namespace AMDomain::transfer {
 class AMTransferManager;
@@ -47,7 +53,7 @@ public:
   /**
    * @brief Construct gateway from host and prompt managers.
    */
-  HostProfileGateway(AMDomain::host::AMHostManager &host_manager,
+  HostProfileGateway(AMDomain::host::AMHostConfigManager &host_config_manager,
                      AMPromptManager &prompt_manager);
   ~HostProfileGateway() override = default;
 
@@ -73,26 +79,26 @@ public:
   [[nodiscard]] std::vector<std::string> ListHostNames() const;
 
 private:
-  AMDomain::host::AMHostManager &host_manager_;
+  AMDomain::host::AMHostConfigManager &host_config_manager_;
   AMPromptManager &prompt_manager_;
 };
 
 /**
- * @brief Current-client workflow port backed by client manager.
+ * @brief Current-client workflow port backed by client app service.
  */
 class CurrentClientPort final
     : public AMApplication::HostProfileWorkflow::ICurrentClientPort {
 public:
   /**
-   * @brief Construct reader from client manager.
+   * @brief Construct reader from client app service.
    */
-  explicit CurrentClientPort(AMDomain::client::AMClientManager &client_manager);
+  explicit CurrentClientPort(AMApplication::client::ClientAppService &client_service);
   ~CurrentClientPort() override = default;
 
   [[nodiscard]] std::string CurrentNickname() const override;
 
 private:
-  AMDomain::client::AMClientManager &client_manager_;
+  AMApplication::client::ClientAppService &client_service_;
 };
 
 /**
@@ -101,9 +107,9 @@ private:
 class ClientPathGateway final {
 public:
   /**
-   * @brief Construct path helper from client manager.
+   * @brief Construct path helper from client app service.
    */
-  explicit ClientPathGateway(AMDomain::client::AMClientManager &client_manager);
+  explicit ClientPathGateway(AMApplication::client::ClientAppService &client_service);
 
   /**
    * @brief Return current workdir or empty string when unavailable.
@@ -111,7 +117,7 @@ public:
   [[nodiscard]] std::string CurrentWorkdir() const;
 
 private:
-  AMDomain::client::AMClientManager &client_manager_;
+  AMApplication::client::ClientAppService &client_service_;
 };
 
 /**
@@ -123,13 +129,13 @@ public:
   /**
    * @brief Construct saver from host manager.
    */
-  explicit HostConfigSaver(AMDomain::host::AMHostManager &host_manager);
+  explicit HostConfigSaver(AMDomain::host::AMHostConfigManager &host_config_manager);
   ~HostConfigSaver() override = default;
 
   ECM SaveHostConfig() override;
 
 private:
-  AMDomain::host::AMHostManager &host_manager_;
+  AMDomain::host::AMHostConfigManager &host_config_manager_;
 };
 
 /**
@@ -169,15 +175,16 @@ private:
 };
 
 /**
- * @brief Client-session workflow gateway backed by filesystem manager.
+ * @brief Client-session workflow gateway backed by client app service.
  */
 class ClientSessionGateway final
     : public AMApplication::ClientWorkflow::IClientSessionGateway {
 public:
   /**
-   * @brief Construct gateway from filesystem manager.
+   * @brief Construct gateway from client app service and filesystem manager.
    */
-  explicit ClientSessionGateway(AMDomain::filesystem::AMFileSystem &filesystem);
+  ClientSessionGateway(AMApplication::client::ClientAppService &client_service,
+                       AMDomain::filesystem::AMFileSystem &filesystem);
   ~ClientSessionGateway() override = default;
 
   ECM ConnectNickname(const std::string &nickname, bool force,
@@ -201,6 +208,7 @@ public:
                amf interrupt_flag = nullptr) override;
 
 private:
+  AMApplication::client::ClientAppService &client_service_;
   AMDomain::filesystem::AMFileSystem &filesystem_;
 };
 
@@ -481,13 +489,15 @@ using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
  * helpers.
  */
 struct RuntimeBindings {
-  AMDomain::host::AMHostManager *host_manager = nullptr;
-  AMDomain::client::AMClientManager *client_manager = nullptr;
+  AMDomain::host::AMHostConfigManager *host_config_manager = nullptr;
+  AMDomain::host::AMKnownHostsManager *known_hosts_manager = nullptr;
+  AMApplication::client::ClientAppService *client_service = nullptr;
   AMDomain::transfer::AMTransferManager *transfer_manager = nullptr;
   AMDomain::var::VarCLISet *var_manager = nullptr;
   AMSignalMonitorPort *signal_monitor = nullptr;
   AMPromptManager *prompt_manager = nullptr;
-  AMInfraConfigManager *config_manager = nullptr;
+  AMApplication::config::AMConfigAppService *config_service = nullptr;
+  AMInterface::style::AMStyleService *style_service = nullptr;
   AMDomain::filesystem::AMFileSystem *filesystem = nullptr;
 };
 
@@ -507,11 +517,54 @@ void Reset();
 [[nodiscard]] bool IsBound();
 
 /**
- * @brief Return bound config manager reference.
+ * @brief Return bound application config service reference.
  *
  * @throws std::runtime_error when runtime bindings are incomplete.
  */
-AMInfraConfigManager &ConfigManagerOrThrow();
+AMApplication::config::AMConfigAppService &ConfigServiceOrThrow();
+
+/**
+ * @brief Return bound style service reference.
+ *
+ * @throws std::runtime_error when runtime bindings are incomplete.
+ */
+AMInterface::style::AMStyleService &StyleServiceOrThrow();
+
+/**
+ * @brief Return bound host-config manager reference.
+ *
+ * @throws std::runtime_error when runtime bindings are incomplete.
+ */
+AMDomain::host::AMHostConfigManager &HostConfigManagerOrThrow();
+
+/**
+ * @brief Return bound known-host manager reference.
+ *
+ * @throws std::runtime_error when runtime bindings are incomplete.
+ */
+AMDomain::host::AMKnownHostsManager &KnownHostsManagerOrThrow();
+
+/**
+ * @brief Return bound client application service reference.
+ *
+ * @throws std::runtime_error when runtime bindings are incomplete.
+ */
+AMApplication::client::ClientAppService &ClientServiceOrThrow();
+
+/**
+ * @brief Return bound client runtime port reference.
+ */
+AMDomain::client::IClientRuntimePort &ClientRuntimePortOrThrow();
+
+/**
+ * @brief Return bound client lifecycle port reference.
+ */
+AMDomain::client::IClientLifecyclePort &ClientLifecyclePortOrThrow();
+
+/**
+ * @brief Return bound client path port reference.
+ */
+AMDomain::client::IClientPathPort &ClientPathPortOrThrow();
 
 /**
  * @brief Return true when a configured host nickname exists.
@@ -552,6 +605,52 @@ AMInfraConfigManager &ConfigManagerOrThrow();
  * @brief Return current active client.
  */
 [[nodiscard]] ClientHandle CurrentClient();
+
+/**
+ * @brief Return current active nickname.
+ */
+[[nodiscard]] std::string CurrentNickname();
+
+/**
+ * @brief Parse one raw path token through bound client path service.
+ */
+[[nodiscard]] AMDomain::client::ParsedClientPath
+ParsePath(const std::string &input, amf interrupt_flag = nullptr);
+
+/**
+ * @brief Return client workdir, initializing when absent.
+ */
+[[nodiscard]] std::string GetOrInitWorkdir(const ClientHandle &client);
+
+/**
+ * @brief Update one client workdir in application session state.
+ */
+ECM SetClientWorkdir(const ClientHandle &client, const std::string &path);
+
+/**
+ * @brief Set current active client instance.
+ */
+void SetCurrentClient(const ClientHandle &client);
+
+/**
+ * @brief Connect one configured nickname through bound lifecycle port.
+ */
+std::pair<ECM, ClientHandle>
+ConnectNickname(const std::string &nickname, bool force = false,
+                bool register_to_manager = true,
+                amf interrupt_flag = nullptr);
+
+/**
+ * @brief Connect one explicit request through bound lifecycle port.
+ */
+std::pair<ECM, ClientHandle>
+ConnectRequest(const AMDomain::client::ClientConnectContext &context,
+               amf interrupt_flag = nullptr);
+
+/**
+ * @brief Remove one client through bound lifecycle port.
+ */
+ECM RemoveClient(const std::string &nickname);
 
 /**
  * @brief Build absolute path from client + raw path.
@@ -617,25 +716,38 @@ ECM BackupConfigIfNeeded();
 /**
  * @brief Resolve one config document storage path.
  */
-[[nodiscard]] bool GetConfigDataPath(DocumentKind kind,
+[[nodiscard]] bool GetConfigDataPath(AMDomain::config::DocumentKind kind,
                                      std::filesystem::path *out_path);
 
 /**
  * @brief Return whether one config document has unsaved mutations.
  */
-[[nodiscard]] bool IsConfigDirty(DocumentKind kind);
+[[nodiscard]] bool IsConfigDirty(AMDomain::config::DocumentKind kind);
 
 /**
  * @brief Load one config document from storage.
  */
-ECM LoadConfig(DocumentKind kind, bool strict);
+ECM LoadConfig(AMDomain::config::DocumentKind kind, bool strict);
 
 /**
- * @brief Format text through ConfigManager style formatter.
+ * @brief Format text through interface style service.
  */
 [[nodiscard]] std::string Format(const std::string &text,
                                  const std::string &style_key,
                                  const PathInfo *path_info = nullptr);
+
+/**
+ * @brief Create one progress bar using style configuration.
+ */
+[[nodiscard]] AMProgressBar CreateProgressBar(int64_t total_size,
+                                              const std::string &prefix);
+
+/**
+ * @brief Format one UTF-8 table using configured style defaults.
+ */
+[[nodiscard]] std::string
+FormatUtf8Table(const std::vector<std::string> &keys,
+                const std::vector<std::vector<std::string>> &rows);
 
 /**
  * @brief Style one filesystem path display item.
@@ -647,7 +759,7 @@ ECM LoadConfig(DocumentKind kind, bool strict);
  * @brief Register one named signal hook.
  */
 bool RegisterSignalHook(const std::string &name,
-                        const AMSignalMonitorPort::SignalHook &hook);
+                        const AMDomain::signal::SignalHook &hook);
 
 /**
  * @brief Unregister one named signal hook.
@@ -670,3 +782,7 @@ void SilenceSignalHook(const std::string &name);
 void ResumeSignalHook(const std::string &name);
 } // namespace Runtime
 } // namespace AMInterface::ApplicationAdapters
+
+
+
+

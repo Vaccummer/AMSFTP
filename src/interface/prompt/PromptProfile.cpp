@@ -1,7 +1,8 @@
 #include "Isocline/isocline.h"
 #include "interface/ApplicationAdapters.hpp"
-#include "foundation/tools/json.hpp"
-#include "infrastructure/Config.hpp"
+#include "domain/config/ConfigModel.hpp"
+#include "application/config/ConfigPayloads.hpp"
+#include <sstream>
 #include "domain/host/HostManager.hpp"
 #include "interface/Prompt.hpp"
 #include <algorithm>
@@ -49,22 +50,17 @@ std::string NormalizeProfileKey_(const std::string &raw_key) {
 /**
  * @brief Find default profile node for `[PromptProfile."*"]`.
  */
-const Json *FindDefaultProfileNode_(const Json &profile_root) {
-  if (!profile_root.is_object()) {
-    return nullptr;
+const AMApplication::config::PromptProfileSettings *
+FindDefaultProfileSettings_(
+    const AMApplication::config::PromptProfileDocument &profile_document) {
+  auto direct = profile_document.profiles.find(kDefaultPromptProfile);
+  if (direct != profile_document.profiles.end()) {
+    return &direct->second;
   }
 
-  auto direct = profile_root.find(kDefaultPromptProfile);
-  if (direct != profile_root.end() && direct->is_object()) {
-    return &(*direct);
-  }
-
-  for (auto it = profile_root.begin(); it != profile_root.end(); ++it) {
-    if (!it.value().is_object()) {
-      continue;
-    }
-    if (NormalizeProfileKey_(it.key()) == kDefaultPromptProfile) {
-      return &it.value();
+  for (const auto &[raw_key, settings] : profile_document.profiles) {
+    if (NormalizeProfileKey_(raw_key) == kDefaultPromptProfile) {
+      return &settings;
     }
   }
   return nullptr;
@@ -88,53 +84,112 @@ std::vector<std::string> GetIsoRecords_() {
   }
   return records;
 }
+
+
+bool TryParseBool_(const std::string &text, bool *out) {
+  if (!out) {
+    return false;
+  }
+  const std::string normalized = AMStr::lowercase(AMStr::Strip(text));
+  if (normalized == "true" || normalized == "1" || normalized == "yes" ||
+      normalized == "y") {
+    *out = true;
+    return true;
+  }
+  if (normalized == "false" || normalized == "0" || normalized == "no" ||
+      normalized == "n") {
+    *out = false;
+    return true;
+  }
+  return false;
+}
+
+bool TryParseInt64_(const std::string &text, int64_t *out) {
+  if (!out) {
+    return false;
+  }
+  const std::string trimmed = AMStr::Strip(text);
+  if (trimmed.empty()) {
+    return false;
+  }
+  try {
+    size_t parsed_size = 0;
+    const long long value = std::stoll(trimmed, &parsed_size, 10);
+    if (parsed_size != trimmed.size()) {
+      return false;
+    }
+    *out = static_cast<int64_t>(value);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+void PrintPromptProfile_(const std::string &name, const AMPromptProfileArgs &profile) {
+  AMPromptManager &prompt = AMPromptManager::Instance();
+  prompt.FmtPrint("[{}]", name);
+  prompt.FmtPrint("Prompt.marker: {}", profile.prompt.marker);
+  prompt.FmtPrint("Prompt.continuation_marker: {}",
+                  profile.prompt.continuation_marker);
+  prompt.FmtPrint("Prompt.enable_multiline: {}",
+                  profile.prompt.enable_multiline ? "true" : "false");
+  prompt.FmtPrint("History.enable: {}",
+                  profile.history.enable ? "true" : "false");
+  prompt.FmtPrint("History.enable_duplicates: {}",
+                  profile.history.enable_duplicates ? "true" : "false");
+  prompt.FmtPrint("History.max_count: {}", profile.history.max_count);
+  prompt.FmtPrint("InlineHint.enable: {}",
+                  profile.inline_hint.enable ? "true" : "false");
+  prompt.FmtPrint("InlineHint.render_delay_ms: {}",
+                  profile.inline_hint.render_delay_ms);
+  prompt.FmtPrint("InlineHint.search_delay_ms: {}",
+                  profile.inline_hint.search_delay_ms);
+  prompt.FmtPrint("InlineHint.Path.enable: {}",
+                  profile.inline_hint.path.enable ? "true" : "false");
+  prompt.FmtPrint("InlineHint.Path.use_async: {}",
+                  profile.inline_hint.path.use_async ? "true" : "false");
+  prompt.FmtPrint("InlineHint.Path.timeout_ms: {}",
+                  profile.inline_hint.path.timeout_ms);
+  prompt.FmtPrint("Complete.Searcher.Path.use_async: {}",
+                  profile.complete.path.use_async ? "true" : "false");
+  prompt.FmtPrint("Complete.Searcher.Path.timeout_ms: {}",
+                  profile.complete.path.timeout_ms);
+  prompt.FmtPrint("Highlight.delay_ms: {}", profile.highlight.delay_ms);
+  prompt.FmtPrint("Highlight.Path.enable: {}",
+                  profile.highlight.path.enable ? "true" : "false");
+  prompt.FmtPrint("Highlight.Path.timeout_ms: {}",
+                  profile.highlight.path.timeout_ms);
+}
 } // namespace
 
 /**
- * @brief Initialize prompt profile args from JSON with fallback defaults.
+ * @brief Initialize prompt profile args from typed settings with fallback defaults.
  */
-void AMPromptProfileArgs::Init(const Json &jsond,
-                               const AMPromptProfileArgs &defaults) {
+void AMPromptProfileArgs::Init(
+    const AMApplication::config::PromptProfileSettings &settings,
+    const AMPromptProfileArgs &defaults) {
   *this = defaults;
-  if (!jsond.is_object()) {
-    return;
-  }
+  prompt.marker = settings.prompt.marker;
+  prompt.continuation_marker = settings.prompt.continuation_marker;
+  prompt.enable_multiline = settings.prompt.enable_multiline;
 
-  (void)AMJson::QueryKey(jsond, {"Prompt", "marker"}, &prompt.marker);
-  (void)AMJson::QueryKey(jsond, {"Prompt", "continuation_marker"},
-                         &prompt.continuation_marker);
-  (void)AMJson::QueryKey(jsond, {"Prompt", "enable_muiltiline"},
-                         &prompt.enable_multiline);
+  history.enable = settings.history.enable;
+  history.enable_duplicates = settings.history.enable_duplicates;
+  history.max_count = settings.history.max_count;
 
-  (void)AMJson::QueryKey(jsond, {"History", "enable"}, &history.enable);
-  (void)AMJson::QueryKey(jsond, {"History", "enable_duplicates"},
-                         &history.enable_duplicates);
-  (void)AMJson::QueryKey(jsond, {"History", "max_count"}, &history.max_count);
+  inline_hint.enable = settings.inline_hint.enable;
+  inline_hint.render_delay_ms = settings.inline_hint.render_delay_ms;
+  inline_hint.search_delay_ms = settings.inline_hint.search_delay_ms;
+  inline_hint.path.enable = settings.inline_hint.path.enable;
+  inline_hint.path.use_async = settings.inline_hint.path.use_async;
+  inline_hint.path.timeout_ms = settings.inline_hint.path.timeout_ms;
 
-  (void)AMJson::QueryKey(jsond, {"InlineHint", "enable"}, &inline_hint.enable);
-  if (!AMJson::QueryKey(jsond, {"InlineHint", "render_delay_ms"},
-                        &inline_hint.render_delay_ms)) {
-    (void)AMJson::QueryKey(jsond, {"InlineHint", "delay_ms"},
-                           &inline_hint.render_delay_ms);
-  }
-  (void)AMJson::QueryKey(jsond, {"InlineHint", "search_delay_ms"},
-                         &inline_hint.search_delay_ms);
-  (void)AMJson::QueryKey(jsond, {"InlineHint", "Path", "enable"},
-                         &inline_hint.path.enable);
-  (void)AMJson::QueryKey(jsond, {"InlineHint", "Path", "use_async"},
-                         &inline_hint.path.use_async);
-  (void)AMJson::QueryKey(jsond, {"InlineHint", "Path", "timeout_ms"},
-                         &inline_hint.path.timeout_ms);
+  complete.path.use_async = settings.complete.path.use_async;
+  complete.path.timeout_ms = settings.complete.path.timeout_ms;
 
-  (void)AMJson::QueryKey(jsond, {"Complete", "Searcher", "Path", "use_async"},
-                         &complete.path.use_async);
-  (void)AMJson::QueryKey(jsond, {"Complete", "Searcher", "Path", "timeout_ms"},
-                         &complete.path.timeout_ms);
-  (void)AMJson::QueryKey(jsond, {"Highlight", "delay_ms"}, &highlight.delay_ms);
-  (void)AMJson::QueryKey(jsond, {"Highlight", "Path", "enable"},
-                         &highlight.path.enable);
-  (void)AMJson::QueryKey(jsond, {"Highlight", "Path", "timeout_ms"},
-                         &highlight.path.timeout_ms);
+  highlight.delay_ms = settings.highlight.delay_ms;
+  highlight.path.enable = settings.highlight.path.enable;
+  highlight.path.timeout_ms = settings.highlight.path.timeout_ms;
 
   history.max_count = std::min(std::max(1, history.max_count), 200);
   inline_hint.render_delay_ms = std::max(0, inline_hint.render_delay_ms);
@@ -153,33 +208,32 @@ void AMPromptProfileArgs::Init(const Json &jsond,
 }
 
 /**
- * @brief Dump prompt profile args to JSON with the current schema.
+ * @brief Convert prompt profile args into one typed config payload.
  */
-Json AMPromptProfileArgs::GetJson() const {
-  Json jsond = Json::object();
-  jsond["Prompt"]["marker"] = prompt.marker;
-  jsond["Prompt"]["continuation_marker"] = prompt.continuation_marker;
-  jsond["Prompt"]["enable_muiltiline"] = prompt.enable_multiline;
+AMApplication::config::PromptProfileSettings AMPromptProfileArgs::ToSettings() const {
+  AMApplication::config::PromptProfileSettings out{};
+  out.prompt.marker = prompt.marker;
+  out.prompt.continuation_marker = prompt.continuation_marker;
+  out.prompt.enable_multiline = prompt.enable_multiline;
 
-  jsond["History"]["enable"] = history.enable;
-  jsond["History"]["enable_duplicates"] = history.enable_duplicates;
-  jsond["History"]["max_count"] = history.max_count;
+  out.history.enable = history.enable;
+  out.history.enable_duplicates = history.enable_duplicates;
+  out.history.max_count = history.max_count;
 
-  jsond["InlineHint"]["enable"] = inline_hint.enable;
-  jsond["InlineHint"]["render_delay_ms"] = inline_hint.render_delay_ms;
-  jsond["InlineHint"]["search_delay_ms"] = inline_hint.search_delay_ms;
-  jsond["InlineHint"]["Path"]["enable"] = inline_hint.path.enable;
-  jsond["InlineHint"]["Path"]["use_async"] = inline_hint.path.use_async;
-  jsond["InlineHint"]["Path"]["timeout_ms"] = inline_hint.path.timeout_ms;
+  out.inline_hint.enable = inline_hint.enable;
+  out.inline_hint.render_delay_ms = inline_hint.render_delay_ms;
+  out.inline_hint.search_delay_ms = inline_hint.search_delay_ms;
+  out.inline_hint.path.enable = inline_hint.path.enable;
+  out.inline_hint.path.use_async = inline_hint.path.use_async;
+  out.inline_hint.path.timeout_ms = inline_hint.path.timeout_ms;
 
-  jsond["Complete"]["Searcher"]["Path"]["use_async"] = complete.path.use_async;
-  jsond["Complete"]["Searcher"]["Path"]["timeout_ms"] =
-      complete.path.timeout_ms;
+  out.complete.path.use_async = complete.path.use_async;
+  out.complete.path.timeout_ms = complete.path.timeout_ms;
 
-  jsond["Highlight"]["delay_ms"] = highlight.delay_ms;
-  jsond["Highlight"]["Path"]["enable"] = highlight.path.enable;
-  jsond["Highlight"]["Path"]["timeout_ms"] = highlight.path.timeout_ms;
-  return jsond;
+  out.highlight.delay_ms = highlight.delay_ms;
+  out.highlight.path.enable = highlight.path.enable;
+  out.highlight.path.timeout_ms = highlight.path.timeout_ms;
+  return out;
 }
 
 /**
@@ -205,12 +259,13 @@ AMProfileManager::~AMProfileManager() {
 }
 
 /**
- * @brief Build profile args from one JSON object with fallback defaults.
+ * @brief Build profile args from one typed settings object with fallback defaults.
  */
 AMPromptProfileArgs AMProfileManager::BuildPromptProfileArgs_(
-    const Json &jsond, const AMPromptProfileArgs &defaults) const {
+    const AMApplication::config::PromptProfileSettings &settings,
+    const AMPromptProfileArgs &defaults) const {
   AMPromptProfileArgs out{};
-  out.Init(jsond, defaults);
+  out.Init(settings, defaults);
   return out;
 }
 
@@ -218,39 +273,33 @@ AMPromptProfileArgs AMProfileManager::BuildPromptProfileArgs_(
  * @brief Reload prompt profile args from settings.
  */
 ECM AMProfileManager::ReloadPromptProfiles() {
-  Json profile_root = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<Json>(
-      DocumentKind::Settings, {kPromptProfileRoot}, Json::object(), {});
-  if (!profile_root.is_object()) {
-    profile_root = Json::object();
-  }
+  AMApplication::config::PromptProfileDocument profile_document = {};
+  (void)AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Read(
+      &profile_document);
 
   AMPromptProfileArgs builtin_defaults{};
   builtin_defaults.name = kDefaultPromptProfile;
   builtin_defaults.from_default = false;
   builtin_defaults.ic_profile = nullptr;
   AMPromptProfileArgs star_profile = builtin_defaults;
-  const Json *default_node = FindDefaultProfileNode_(profile_root);
-  if (default_node) {
-    star_profile = BuildPromptProfileArgs_(*default_node, builtin_defaults);
+  const auto *default_settings = FindDefaultProfileSettings_(profile_document);
+  if (default_settings) {
+    star_profile = BuildPromptProfileArgs_(*default_settings, builtin_defaults);
   }
   star_profile.name = kDefaultPromptProfile;
   star_profile.from_default = false;
   star_profile.ic_profile = nullptr;
 
   std::unordered_map<std::string, AMPromptProfileArgs> parsed;
-  parsed.reserve(profile_root.size() + 1);
+  parsed.reserve(profile_document.profiles.size() + 1);
   parsed[kDefaultPromptProfile] = star_profile;
 
-  for (auto it = profile_root.begin(); it != profile_root.end(); ++it) {
-    if (!it.value().is_object()) {
-      continue;
-    }
-    const std::string key = NormalizeProfileKey_(it.key());
+  for (const auto &[raw_key, settings] : profile_document.profiles) {
+    const std::string key = NormalizeProfileKey_(raw_key);
     if (key.empty() || key == kDefaultPromptProfile) {
       continue;
     }
-    AMPromptProfileArgs item =
-        BuildPromptProfileArgs_(it.value(), star_profile);
+    AMPromptProfileArgs item = BuildPromptProfileArgs_(settings, star_profile);
     item.name = key;
     item.from_default = false;
     item.ic_profile = nullptr;
@@ -299,7 +348,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
   const AMPromptProfileArgs builtin_defaults{};
   const auto print_abort = [&prompt, this]() {
     prompt.FmtPrint("{}\n",
-                    AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Format("Input Abort", "abort"));
+                    AMInterface::ApplicationAdapters::Runtime::Format("Input Abort", "abort"));
   };
 
   const std::map<std::string, std::string> bool_literals = {
@@ -333,7 +382,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
         out = placeholder;
       }
       bool parsed = *value;
-      if (AMJson::StrValueParse(out, &parsed)) {
+      if (TryParseBool_(out, &parsed)) {
         *value = parsed;
         return true;
       }
@@ -356,7 +405,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
           trimmed = placeholder;
         }
         int64_t parsed = 0;
-        if (!AMJson::StrValueParse(trimmed, &parsed)) {
+        if (!TryParseInt64_(trimmed, &parsed)) {
           return false;
         }
         return parsed >= min_value && parsed <= max_value;
@@ -369,7 +418,7 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
         out = placeholder;
       }
       int64_t parsed = *value;
-      if (!AMJson::StrValueParse(out, &parsed)) {
+      if (!TryParseInt64_(out, &parsed)) {
         prompt.ErrorFormat(ECM{EC::InvalidArg, "invalid integer value"});
         continue;
       }
@@ -566,13 +615,16 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
     }
   }
 
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(DocumentKind::Settings,
-                                          {kPromptProfileRoot, target},
-                                          working.GetJson())) {
+  AMApplication::config::PromptProfileDocument profile_document = {};
+  (void)AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Read(
+      &profile_document);
+  profile_document.profiles[target] = working.ToSettings();
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(
+          profile_document)) {
     return Err(EC::CommonFailure, "failed to update PromptProfile");
   }
   ECM dump_rcm =
-      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(DocumentKind::Settings, "", true);
+      AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(AMDomain::config::DocumentKind::Settings, "", true);
   if (dump_rcm.first != EC::Success) {
     return dump_rcm;
   }
@@ -597,7 +649,7 @@ ECM AMProfileCLI::Edit(const std::string &nickname) {
   if (target == kDefaultPromptProfile) {
     return Err(EC::InvalidArg, "profile nickname must be a host nickname");
   }
-  if (!AMDomain::host::AMHostManager::Instance().HostExists(target)) {
+  if (!AMInterface::ApplicationAdapters::Runtime::HostConfigManagerOrThrow().HostExists(target)) {
     return Err(EC::HostConfigNotFound,
                AMStr::fmt("host nickname not found: {}", target));
   }
@@ -605,7 +657,7 @@ ECM AMProfileCLI::Edit(const std::string &nickname) {
 }
 
 /**
- * @brief Query prompt profile JSON for one or more host nicknames.
+ * @brief Query prompt profile settings for one or more host nicknames.
  */
 ECM AMProfileCLI::Get(const std::vector<std::string> &nicknames) {
   if (nicknames.empty()) {
@@ -622,7 +674,7 @@ ECM AMProfileCLI::Get(const std::vector<std::string> &nicknames) {
     if (target == kDefaultPromptProfile) {
       return Err(EC::InvalidArg, "profile nickname must be a host nickname");
     }
-    if (!AMDomain::host::AMHostManager::Instance().HostExists(target)) {
+    if (!AMInterface::ApplicationAdapters::Runtime::HostConfigManagerOrThrow().HostExists(target)) {
       return Err(EC::HostConfigNotFound,
                  AMStr::fmt("host nickname not found: {}", target));
     }
@@ -630,25 +682,30 @@ ECM AMProfileCLI::Get(const std::vector<std::string> &nicknames) {
   }
 
   EnsurePromptProfilesLoaded_();
-  Json out = Json::object();
+  bool first = true;
   {
     std::lock_guard<std::mutex> lock(profile_mtx_);
     for (const auto &target : targets) {
+      const AMPromptProfileArgs *profile = nullptr;
       auto it = prompt_profiles_.find(target);
       if (it != prompt_profiles_.end()) {
-        out[target] = it->second.GetJson();
-        continue;
-      }
-      auto star_it = prompt_profiles_.find(kDefaultPromptProfile);
-      if (star_it != prompt_profiles_.end()) {
-        out[target] = star_it->second.GetJson();
+        profile = &it->second;
       } else {
-        out[target] = default_prompt_profile_args_.GetJson();
+        auto star_it = prompt_profiles_.find(kDefaultPromptProfile);
+        if (star_it != prompt_profiles_.end()) {
+          profile = &star_it->second;
+        } else {
+          profile = &default_prompt_profile_args_;
+        }
       }
+      if (!first) {
+        AMPromptManager::Instance().Print("");
+      }
+      first = false;
+      PrintPromptProfile_(target, *profile);
     }
   }
 
-  AMPromptManager::Instance().Print(out.dump(2));
   return Ok();
 }
 
@@ -739,27 +796,14 @@ void AMProfileManager::EnsurePromptProfilesLoaded_() {
  */
 void AMProfileManager::CollectHistory_() {
   history_map_.clear();
-  Json jsond;
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().GetJson(DocumentKind::History, &jsond) ||
-      !jsond.is_object()) {
+  AMApplication::config::PromptHistoryDocument history_document = {};
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Read(
+          &history_document)) {
     return;
   }
-  for (auto it = jsond.begin(); it != jsond.end(); ++it) {
-    const auto &node = it.value();
-    if (!node.is_object()) {
-      continue;
-    }
-    auto cmd_it = node.find("commands");
-    if (cmd_it == node.end() || !cmd_it->is_array()) {
-      continue;
-    }
-    std::vector<std::string> records;
-    for (const auto &item : *cmd_it) {
-      if (item.is_string()) {
-        records.push_back(item.get<std::string>());
-      }
-    }
-    history_map_[it.key()] = std::move(records);
+  history_map_.clear();
+  for (const auto &[name, commands] : history_document.commands_by_profile) {
+    history_map_[name] = commands;
   }
 }
 
@@ -845,13 +889,18 @@ void AMPromptManager::FlushHistory() {
     (void)ic_profile_use(restore_profile);
   }
 
-  Json jsond = Json::object();
-  for (const auto &pair : history_map_) {
-    jsond[pair.first]["commands"] = pair.second;
+  AMApplication::config::PromptHistoryDocument history_document = {};
+  history_document.commands_by_profile.clear();
+  for (const auto &[name, commands] : history_map_) {
+    history_document.commands_by_profile[name] = commands;
   }
-  AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(DocumentKind::History, {}, jsond);
-  AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(DocumentKind::History, "", true);
+  (void)AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(
+      history_document);
+  (void)AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(
+      AMDomain::config::DocumentKind::History, "", true);
 }
+
+
 
 
 
