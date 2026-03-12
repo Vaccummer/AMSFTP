@@ -1,6 +1,6 @@
 #include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostManager.hpp"
-#include "interface/ApplicationAdapters.hpp"
+#include "foundation/tools/enum_related.hpp"
 #include <algorithm>
 #include <string>
 
@@ -18,19 +18,12 @@ AMDomain::host::KnownHostService &KnownHostService_() {
 bool IsLocalNickname_(const std::string &nickname) {
   return HostDomainService_().IsLocalNickname(nickname);
 }
-
-AMDomain::host::HostConfigArg LoadHostConfigArg_() {
-  AMDomain::host::HostConfigArg out{};
-  (void)AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Read(&out);
-  return out;
-}
-
-AMDomain::host::KnownHostMap LoadKnownHosts_() {
-  AMDomain::host::KnownHostEntryArg out{};
-  (void)AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Read(&out);
-  return out.entries;
-}
 } // namespace
+
+void AMDomain::host::AMHostConfigManager::BindSnapshotStore(
+    IHostConfigSnapshotStore *snapshot_store) {
+  snapshot_store_ = snapshot_store;
+}
 
 ECM AMDomain::host::AMHostConfigManager::Init(
     const HostConfigArg &host_config_arg) {
@@ -67,12 +60,73 @@ ECM AMDomain::host::AMHostConfigManager::Init(
   host_configs_ = host_config_arg.host_configs;
   local_config_ = host_config_arg.local_config;
   private_keys_ = host_config_arg.private_keys;
+  snapshot_loaded_ = true;
   return Ok();
 }
 
+ECM AMDomain::host::AMHostConfigManager::EnsureSnapshotLoaded_() const {
+  if (snapshot_loaded_) {
+    return Ok();
+  }
+  return LoadSnapshot_();
+}
+
+ECM AMDomain::host::AMHostConfigManager::LoadSnapshot_() const {
+  if (!snapshot_store_) {
+    return Err(EC::ConfigNotInitialized, "host snapshot store is not bound");
+  }
+  const auto [load_rcm, snapshot] = snapshot_store_->LoadSnapshot();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+  return const_cast<AMHostConfigManager *>(this)->Init(snapshot);
+}
+
+HostConfigArg AMDomain::host::AMHostConfigManager::SnapshotFromCache_() const {
+  HostConfigArg out{};
+  out.host_configs = host_configs_;
+  out.local_config = local_config_;
+  out.private_keys = private_keys_;
+  return out;
+}
+
+ECM AMDomain::host::AMHostConfigManager::PersistSnapshot_(
+    const HostConfigArg &snapshot, bool dump_async) {
+  if (!snapshot_store_) {
+    return Err(EC::ConfigNotInitialized, "host snapshot store is not bound");
+  }
+
+  const HostConfigArg previous = SnapshotFromCache_();
+  const bool had_snapshot = snapshot_loaded_;
+  ECM init_rcm = Init(snapshot);
+  if (!isok(init_rcm)) {
+    return init_rcm;
+  }
+  ECM save_rcm = snapshot_store_->SaveSnapshot(snapshot, dump_async);
+  if (!isok(save_rcm)) {
+    if (had_snapshot) {
+      (void)Init(previous);
+    } else {
+      ResetSnapshotCache_();
+    }
+    return save_rcm;
+  }
+  return Ok();
+}
+
+void AMDomain::host::AMHostConfigManager::ResetSnapshotCache_() {
+  host_configs_.clear();
+  local_config_ = {};
+  private_keys_.clear();
+  snapshot_loaded_ = false;
+}
+
 ECM AMDomain::host::AMHostConfigManager::Save() {
-  return AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(
-      DocumentKind::Config, "", true);
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+  return PersistSnapshot_(SnapshotFromCache_(), true);
 }
 
 std::pair<ECM, HostConfig> AMDomain::host::AMHostConfigManager::GetClientConfig(
@@ -80,19 +134,19 @@ std::pair<ECM, HostConfig> AMDomain::host::AMHostConfigManager::GetClientConfig(
   if (IsLocalNickname_(nickname)) {
     return GetLocalConfig();
   }
+
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return {load_rcm, {}};
+  }
   return HostDomainService_().GetConfigByNickname(host_configs_, nickname,
                                                   &local_config_);
 }
 
 std::pair<ECM, HostConfig> AMDomain::host::AMHostConfigManager::GetLocalConfig() {
-  if (!local_config_.request.nickname.empty()) {
-    return {Ok(), local_config_};
-  }
-
-  const HostConfigArg host_config_arg = LoadHostConfigArg_();
-  ECM init_rcm = Init(host_config_arg);
-  if (init_rcm.first != EC::Success) {
-    return {init_rcm, {}};
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return {load_rcm, {}};
   }
   if (local_config_.request.nickname.empty()) {
     return {Err(EC::HostConfigNotFound, "local host config not found"), {}};
@@ -102,19 +156,22 @@ std::pair<ECM, HostConfig> AMDomain::host::AMHostConfigManager::GetLocalConfig()
 
 const AMDomain::host::AMHostConfigManager::HostConfigMap &
 AMDomain::host::AMHostConfigManager::HostConfigs() const {
+  (void)EnsureSnapshotLoaded_();
   return host_configs_;
 }
 
 HostConfigArg AMDomain::host::AMHostConfigManager::GetInitArg() const {
-  HostConfigArg out{};
-  out.host_configs = host_configs_;
-  out.local_config = local_config_;
-  out.private_keys = private_keys_;
-  return out;
+  (void)EnsureSnapshotLoaded_();
+  return SnapshotFromCache_();
 }
 
 ECM AMDomain::host::AMHostConfigManager::AddHost(const HostConfig &entry,
                                                  bool overwrite) {
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+
   std::string validate_error;
   if (!HostDomainService_().IsValidConfig(entry, &validate_error)) {
     return Err(EC::InvalidArg,
@@ -130,25 +187,21 @@ ECM AMDomain::host::AMHostConfigManager::AddHost(const HostConfig &entry,
                AMStr::fmt("host nickname already exists: {}", nickname));
   }
 
-  HostConfigArg next = GetInitArg();
+  HostConfigArg next = SnapshotFromCache_();
   if (IsLocalNickname_(nickname)) {
     next.local_config = entry;
   } else {
     next.host_configs[nickname] = entry;
   }
-
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(next)) {
-    return Err(EC::CommonFailure, "failed to persist host config snapshot");
-  }
-
-  host_configs_ = next.host_configs;
-  local_config_ = next.local_config;
-  private_keys_ = next.private_keys;
-  return AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(
-      DocumentKind::Config, "", true);
+  return PersistSnapshot_(next, true);
 }
 
 ECM AMDomain::host::AMHostConfigManager::DelHost(const std::string &nickname) {
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+
   const std::string key = AMStr::Strip(nickname);
   if (key.empty()) {
     return Err(EC::InvalidArg, "empty host name");
@@ -160,26 +213,25 @@ ECM AMDomain::host::AMHostConfigManager::DelHost(const std::string &nickname) {
     return Err(EC::HostConfigNotFound, "host config not found");
   }
 
-  HostConfigArg next = GetInitArg();
+  HostConfigArg next = SnapshotFromCache_();
   next.host_configs.erase(key);
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(next)) {
-    return Err(EC::CommonFailure, "failed to persist host config snapshot");
-  }
-
-  host_configs_ = next.host_configs;
-  local_config_ = next.local_config;
-  private_keys_ = next.private_keys;
-  return AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(
-      DocumentKind::Config, "", true);
+  return PersistSnapshot_(next, true);
 }
 
 bool AMDomain::host::AMHostConfigManager::HostExists(
     const std::string &nickname) const {
+  if (!isok(EnsureSnapshotLoaded_())) {
+    return false;
+  }
   return HostDomainService_().NicknameExists(host_configs_, nickname,
                                              &local_config_);
 }
 
 std::vector<std::string> AMDomain::host::AMHostConfigManager::ListNames() const {
+  if (!isok(EnsureSnapshotLoaded_())) {
+    return {};
+  }
+
   std::vector<std::string> names;
   names.reserve(host_configs_.size() + 1);
   if (!local_config_.request.nickname.empty()) {
@@ -206,46 +258,116 @@ ECM AMDomain::host::AMHostConfigManager::Modify(const std::string &nickname) {
              "Interactive modify is owned by interface layer");
 }
 
-ECM AMDomain::host::AMKnownHostsManager::Init() {
-  known_hosts_ = LoadKnownHosts_();
-  return Ok();
+void AMDomain::host::AMKnownHostsManager::BindSnapshotStore(
+    IKnownHostSnapshotStore *snapshot_store) {
+  snapshot_store_ = snapshot_store;
 }
+
+ECM AMDomain::host::AMKnownHostsManager::Init() { return LoadSnapshot_(); }
 
 ECM AMDomain::host::AMKnownHostsManager::Init(
     const KnownHostMap &known_hosts) {
   known_hosts_ = known_hosts;
+  snapshot_loaded_ = true;
   return Ok();
+}
+
+ECM AMDomain::host::AMKnownHostsManager::EnsureSnapshotLoaded_() const {
+  if (snapshot_loaded_) {
+    return Ok();
+  }
+  return LoadSnapshot_();
+}
+
+ECM AMDomain::host::AMKnownHostsManager::LoadSnapshot_() const {
+  if (!snapshot_store_) {
+    return Err(EC::ConfigNotInitialized,
+               "known-host snapshot store is not bound");
+  }
+  const auto [load_rcm, snapshot] = snapshot_store_->LoadSnapshot();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+  return const_cast<AMKnownHostsManager *>(this)->Init(snapshot.entries);
+}
+
+KnownHostEntryArg AMDomain::host::AMKnownHostsManager::SnapshotFromCache_() const {
+  KnownHostEntryArg out{};
+  out.entries = known_hosts_;
+  return out;
+}
+
+ECM AMDomain::host::AMKnownHostsManager::PersistSnapshot_(
+    const KnownHostEntryArg &snapshot, bool dump_async) {
+  if (!snapshot_store_) {
+    return Err(EC::ConfigNotInitialized,
+               "known-host snapshot store is not bound");
+  }
+
+  const KnownHostEntryArg previous = SnapshotFromCache_();
+  const bool had_snapshot = snapshot_loaded_;
+  ECM init_rcm = Init(snapshot.entries);
+  if (!isok(init_rcm)) {
+    return init_rcm;
+  }
+  ECM save_rcm = snapshot_store_->SaveSnapshot(snapshot, dump_async);
+  if (!isok(save_rcm)) {
+    if (had_snapshot) {
+      (void)Init(previous.entries);
+    } else {
+      ResetSnapshotCache_();
+    }
+    return save_rcm;
+  }
+  return Ok();
+}
+
+void AMDomain::host::AMKnownHostsManager::ResetSnapshotCache_() {
+  known_hosts_.clear();
+  snapshot_loaded_ = false;
 }
 
 const AMDomain::host::KnownHostMap &
 AMDomain::host::AMKnownHostsManager::KnownHosts() const {
+  (void)EnsureSnapshotLoaded_();
   return known_hosts_;
 }
 
 ECM AMDomain::host::AMKnownHostsManager::FindKnownHost(
     KnownHostQuery &query) const {
-  auto it = known_hosts_.find(BuildKnownHostKey(query));
-  if (it != known_hosts_.end()) {
-    return KnownHostService_().ResolveKnownHostQuery(&query,
-                                                     it->second.GetFingerprint());
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
   }
 
-  KnownHostEntryArg snapshot = {};
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Read(&snapshot)) {
-    return ECM{EC::HostConfigNotFound,
-               "fingerprint not found for given host query"};
+  auto resolve_from_cache = [this, &query]() -> ECM {
+    auto it = known_hosts_.find(BuildKnownHostKey(query));
+    if (it == known_hosts_.end()) {
+      return ECM{EC::HostConfigNotFound,
+                 "fingerprint not found for given host query"};
+    }
+    return KnownHostService_().ResolveKnownHostQuery(
+        &query, it->second.GetFingerprint());
+  };
+
+  ECM resolve_rcm = resolve_from_cache();
+  if (isok(resolve_rcm)) {
+    return resolve_rcm;
   }
-  auto loaded_it = snapshot.entries.find(BuildKnownHostKey(query));
-  if (loaded_it == snapshot.entries.end()) {
-    return ECM{EC::HostConfigNotFound,
-               "fingerprint not found for given host query"};
+  load_rcm = LoadSnapshot_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
   }
-  return KnownHostService_().ResolveKnownHostQuery(
-      &query, loaded_it->second.GetFingerprint());
+  return resolve_from_cache();
 }
 
 ECM AMDomain::host::AMKnownHostsManager::UpsertKnownHost(
     const KnownHostQuery &query, bool overwrite) {
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+
   std::string fingerprint;
   ECM validate_rcm =
       KnownHostService_().ValidateKnownHostUpsert(query, &fingerprint);
@@ -260,14 +382,7 @@ ECM AMDomain::host::AMKnownHostsManager::UpsertKnownHost(
   KnownHostQuery stored = query;
   (void)stored.SetFingerprint(fingerprint);
 
-  KnownHostEntryArg snapshot{};
-  snapshot.entries = known_hosts_;
+  KnownHostEntryArg snapshot = SnapshotFromCache_();
   snapshot.entries[BuildKnownHostKey(stored)] = stored;
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(snapshot)) {
-    return Err(EC::CommonFailure, "failed to write known-host snapshot");
-  }
-
-  known_hosts_ = std::move(snapshot.entries);
-  return AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(
-      DocumentKind::KnownHosts, "", true);
+  return PersistSnapshot_(snapshot, true);
 }

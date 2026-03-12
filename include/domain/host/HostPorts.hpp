@@ -1,68 +1,44 @@
 #pragma once
 #include "domain/host/HostModel.hpp"
-#include <string>
 #include <utility>
-#include <vector>
 
 namespace AMDomain::host {
 /**
- * @brief Port for reading and writing host config entries.
+ * @brief Port for loading and saving the full host config snapshot.
  */
-class IHostConfigRepository {
+class IHostConfigSnapshotStore {
 public:
-  virtual ~IHostConfigRepository() = default;
+  virtual ~IHostConfigSnapshotStore() = default;
 
   /**
-   * @brief Get one host configuration by nickname.
+   * @brief Load the full host configuration snapshot.
    */
-  virtual std::pair<ECM, HostConfig>
-  GetClientConfig(const std::string &nickname) = 0;
+  [[nodiscard]] virtual std::pair<ECM, HostConfigArg> LoadSnapshot() const = 0;
 
   /**
-   * @brief Get synthesized local host configuration.
+   * @brief Save the full host configuration snapshot and dump it to disk.
    */
-  virtual std::pair<ECM, HostConfig> GetLocalConfig() = 0;
-
-  /**
-   * @brief Add one host configuration entry; optionally allow overwrite.
-   */
-  virtual ECM AddHost(const HostConfig &entry, bool overwrite = true) = 0;
-
-  /**
-   * @brief Delete one host configuration entry by nickname.
-   */
-  virtual ECM DelHost(const std::string &nickname) = 0;
-
-  /**
-   * @brief Return whether the nickname exists.
-   */
-  [[nodiscard]] virtual bool HostExists(const std::string &nickname) const = 0;
-
-  /**
-   * @brief List all configured host nicknames.
-   */
-  [[nodiscard]] virtual std::vector<std::string> ListNames() const = 0;
+  virtual ECM SaveSnapshot(const HostConfigArg &snapshot,
+                           bool dump_async = true) = 0;
 };
 
 /**
- * @brief Port for known-host fingerprint persistence.
+ * @brief Port for loading and saving the full known-host snapshot.
  */
-class IKnownHostRepository {
+class IKnownHostSnapshotStore {
 public:
-  virtual ~IKnownHostRepository() = default;
+  virtual ~IKnownHostSnapshotStore() = default;
 
   /**
-   * @brief Lookup one known-host fingerprint.
+   * @brief Load the full known-host snapshot.
    */
-  [[nodiscard]] virtual ECM FindKnownHost(KnownHostQuery &query) const = 0;
+  [[nodiscard]] virtual std::pair<ECM, KnownHostEntryArg>
+  LoadSnapshot() const = 0;
 
   /**
-   * @brief Insert or update one known-host fingerprint.
+   * @brief Save the full known-host snapshot and dump it to disk.
    */
-  virtual ECM UpsertKnownHost(const KnownHostQuery &query,
-                              bool overwrite = true) = 0;
+  virtual ECM SaveSnapshot(const KnownHostEntryArg &snapshot,
+                           bool dump_async = true) = 0;
 };
 } // namespace AMDomain::host
-
-
-

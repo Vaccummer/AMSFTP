@@ -1,8 +1,6 @@
 #include "domain/host/HostManager.hpp"
-#include "domain/config/ConfigModel.hpp"
 #include "foundation/tools/auth.hpp"
 #include "foundation/tools/enum_related.hpp"
-#include "interface/ApplicationAdapters.hpp"
 #include <cstdint>
 #include <sstream>
 #include <string>
@@ -11,7 +9,6 @@
 
 using cls = AMDomain::host::AMHostConfigManager;
 using EC = ErrorCode;
-using DocumentKind = AMDomain::config::DocumentKind;
 
 namespace {
 /**
@@ -105,7 +102,10 @@ bool ParseBool_(const std::string &text, bool *out) {
 /**
  * @brief Return cached private key list.
  */
-std::vector<std::string> cls::PrivateKeys() const { return private_keys_; }
+std::vector<std::string> cls::PrivateKeys() const {
+  (void)EnsureSnapshotLoaded_();
+  return private_keys_;
+}
 
 ECM cls::List(bool detailed) const {
   (void)detailed;
@@ -120,12 +120,17 @@ ECM cls::Delete(const std::string &nickname) {
 }
 
 ECM cls::Delete(const std::vector<std::string> &targets) {
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+
   std::vector<std::string> uniq_targets = DedupTargets_(targets);
   if (uniq_targets.empty()) {
     return Ok();
   }
 
-  AMDomain::host::HostConfigArg next = GetInitArg();
+  AMDomain::host::HostConfigArg next = SnapshotFromCache_();
   for (const auto &name : uniq_targets) {
     if (!HostExists(name)) {
       return Err(EC::HostConfigNotFound,
@@ -140,14 +145,7 @@ ECM cls::Delete(const std::vector<std::string> &targets) {
     }
   }
 
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(next)) {
-    return Err(EC::CommonFailure, "failed to persist host config snapshot");
-  }
-  host_configs_ = next.host_configs;
-  local_config_ = next.local_config;
-  private_keys_ = next.private_keys;
-  return AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(
-      DocumentKind::Config, "", true);
+  return PersistSnapshot_(next, true);
 }
 
 ECM cls::Query(const std::string &nickname) const {
@@ -155,6 +153,10 @@ ECM cls::Query(const std::string &nickname) const {
 }
 
 ECM cls::Query(const std::vector<std::string> &targets) const {
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
   if (targets.empty()) {
     return Ok();
   }
@@ -174,6 +176,11 @@ ECM cls::Query(const std::vector<std::string> &targets) const {
 
 ECM cls::Rename(const std::string &old_nickname,
                 const std::string &new_nickname) {
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+
   if (old_nickname.empty() || new_nickname.empty()) {
     return Err(EC::InvalidArg, "empty nickname");
   }
@@ -194,7 +201,7 @@ ECM cls::Rename(const std::string &old_nickname,
     return Err(EC::HostConfigNotFound, "old nickname not found");
   }
 
-  AMDomain::host::HostConfigArg next = GetInitArg();
+  AMDomain::host::HostConfigArg next = SnapshotFromCache_();
   auto old_it = next.host_configs.find(old_nickname);
   if (old_it == next.host_configs.end()) {
     return Err(EC::HostConfigNotFound, "old nickname not found");
@@ -204,21 +211,18 @@ ECM cls::Rename(const std::string &old_nickname,
   moved.request.nickname = new_nickname;
   next.host_configs.erase(old_it);
   next.host_configs[new_nickname] = moved;
-
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(next)) {
-    return Err(EC::CommonFailure, "failed to persist host config snapshot");
-  }
-  host_configs_ = next.host_configs;
-  local_config_ = next.local_config;
-  private_keys_ = next.private_keys;
-  return AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(
-      DocumentKind::Config, "", true);
+  return PersistSnapshot_(next, true);
 }
 
 ECM cls::Src() const { return Ok(); }
 
 ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
                       const std::string &value_str) {
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+
   const std::string field = AMStr::lowercase(attrname);
   if (nickname.empty()) {
     return Err(EC::InvalidArg, "empty nickname");
@@ -228,9 +232,9 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
   }
 
   static const std::vector<std::string> kAllowedFields = {
-      "hostname",   "username",   "port",      "buffer_size",
+      "hostname",    "username",   "port",      "buffer_size",
       "compression", "cmd_prefix", "wrap_cmd",  "protocol",
-      "password",   "keyfile",    "trash_dir", "login_dir"};
+      "password",    "keyfile",    "trash_dir", "login_dir"};
   bool field_validated = false;
   for (const std::string &allowed : kAllowedFields) {
     if (field == allowed) {
@@ -242,7 +246,7 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
     return Err(EC::InvalidArg, "unsupported property name");
   }
 
-  AMDomain::host::HostConfigArg next = GetInitArg();
+  AMDomain::host::HostConfigArg next = SnapshotFromCache_();
   const bool is_local = IsLocalNickname_(nickname);
   HostConfig *target_cfg = nullptr;
   if (is_local) {
@@ -323,12 +327,5 @@ ECM cls::SetHostValue(const std::string &nickname, const std::string &attrname,
                AMStr::fmt("unsupported property name: {}", field));
   }
 
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(next)) {
-    return Err(EC::CommonFailure, "failed to persist host config snapshot");
-  }
-  host_configs_ = next.host_configs;
-  local_config_ = next.local_config;
-  private_keys_ = next.private_keys;
-  return AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(
-      DocumentKind::Config, "", true);
+  return PersistSnapshot_(next, true);
 }

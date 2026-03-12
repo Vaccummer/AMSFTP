@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bootstrap/ConfigAssembly.hpp"
+#include "infrastructure/host/ConfigBackedHostSnapshotStore.hpp"
 #include "interface/CLIArg.hpp"
 
 namespace AMBootstrap {
@@ -33,6 +34,8 @@ struct AppHandle : NonCopyableNonMovable {
 
 private:
   ConfigAssembly config_;
+  AMInfra::host::ConfigBackedHostConfigSnapshotStore host_config_store_;
+  AMInfra::host::ConfigBackedKnownHostSnapshotStore known_host_store_;
 
 public:
   CliManagers managers;

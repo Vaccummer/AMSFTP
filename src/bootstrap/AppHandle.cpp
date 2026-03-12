@@ -17,7 +17,7 @@ AppHandle::AppHandle(AMSignalMonitorPort &signal_monitor,
                      AMApplication::client::ClientAppService &client_service,
                      AMDomain::transfer::AMTransferManager &transfer_manager,
                      AMDomain::filesystem::AMFileSystem &filesystem)
-    : config_(),
+    : config_(), host_config_store_(), known_host_store_(),
       managers(signal_monitor, config_.ConfigService(), config_.StyleService(),
                prompt_manager, host_config_manager, known_hosts_manager,
                var_manager, log_manager, client_service, transfer_manager,
@@ -37,6 +37,11 @@ ECM AppHandle::Init(const amf &task_control_token) {
   if (!isok(rcm)) {
     return rcm;
   }
+
+  host_config_store_.Bind(&config_.ConfigService());
+  known_host_store_.Bind(&config_.ConfigService());
+  managers.host_config_manager.BindSnapshotStore(&host_config_store_);
+  managers.known_hosts_manager.BindSnapshotStore(&known_host_store_);
 
   AMInterface::ApplicationAdapters::Runtime::RuntimeBindings bindings{};
   bindings.host_config_manager = &managers.host_config_manager;

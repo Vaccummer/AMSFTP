@@ -10,12 +10,16 @@ namespace AMDomain::host {
 /**
  * @brief Host configuration manager for host map and local profile state.
  */
-class AMHostConfigManager : public IHostConfigRepository,
-                            public NonCopyableNonMovable {
+class AMHostConfigManager : public NonCopyableNonMovable {
 public:
   using HostConfigMap = std::map<std::string, HostConfig>;
 
   explicit AMHostConfigManager() = default;
+
+  /**
+   * @brief Bind the snapshot persistence store used by this manager.
+   */
+  void BindSnapshotStore(IHostConfigSnapshotStore *snapshot_store);
 
   /**
    * @brief Initialize manager from explicit host config payload.
@@ -26,12 +30,12 @@ public:
    * @brief Return one host config by nickname.
    */
   [[nodiscard]] std::pair<ECM, HostConfig>
-  GetClientConfig(const std::string &nickname) override;
+  GetClientConfig(const std::string &nickname);
 
   /**
    * @brief Return local host config currently cached in manager.
    */
-  [[nodiscard]] std::pair<ECM, HostConfig> GetLocalConfig() override;
+  [[nodiscard]] std::pair<ECM, HostConfig> GetLocalConfig();
 
   /**
    * @brief Return all non-local host configs keyed by nickname.
@@ -43,19 +47,19 @@ public:
    */
   [[nodiscard]] HostConfigArg GetInitArg() const;
 
-  [[nodiscard]] std::vector<std::string> ListNames() const override;
+  [[nodiscard]] std::vector<std::string> ListNames() const;
 
-  [[nodiscard]] bool HostExists(const std::string &nickname) const override;
+  [[nodiscard]] bool HostExists(const std::string &nickname) const;
 
   /**
    * @brief Add one host config into map/storage; optionally allow overwrite.
    */
-  ECM AddHost(const HostConfig &entry, bool overwrite = true) override;
+  ECM AddHost(const HostConfig &entry, bool overwrite = true);
 
   /**
    * @brief Delete one host config by nickname.
    */
-  ECM DelHost(const std::string &nickname) override;
+  ECM DelHost(const std::string &nickname);
 
   [[nodiscard]] std::vector<std::string> PrivateKeys() const;
 
@@ -77,18 +81,35 @@ public:
   // interface layer
 
 private:
+  ECM EnsureSnapshotLoaded_() const;
+  ECM LoadSnapshot_() const;
+  [[nodiscard]] HostConfigArg SnapshotFromCache_() const;
+  ECM PersistSnapshot_(const HostConfigArg &snapshot, bool dump_async = true);
+  void ResetSnapshotCache_();
+
+  IHostConfigSnapshotStore *snapshot_store_ = nullptr;
   mutable HostConfigMap host_configs_ = {};
   mutable HostConfig local_config_ = {};
   mutable std::vector<std::string> private_keys_ = {};
+  mutable bool snapshot_loaded_ = false;
 };
 
 /**
  * @brief Known-host manager for fingerprint query/upsert operations.
  */
-class AMKnownHostsManager : public IKnownHostRepository,
-                            public NonCopyableNonMovable {
+class AMKnownHostsManager : public NonCopyableNonMovable {
 public:
   explicit AMKnownHostsManager() = default;
+
+  /**
+   * @brief Bind the snapshot persistence store used by this manager.
+   */
+  void BindSnapshotStore(IKnownHostSnapshotStore *snapshot_store);
+
+  /**
+   * @brief Initialize manager by loading known-host snapshot from store.
+   */
+  ECM Init();
 
   /**
    * @brief Initialize manager from explicit known-host snapshot.
@@ -100,13 +121,19 @@ public:
    */
   [[nodiscard]] const KnownHostMap &KnownHosts() const;
 
-  [[nodiscard]] ECM FindKnownHost(KnownHostQuery &query) const override;
-  ECM UpsertKnownHost(const KnownHostQuery &query,
-                      bool overwrite = true) override;
+  [[nodiscard]] ECM FindKnownHost(KnownHostQuery &query) const;
+  ECM UpsertKnownHost(const KnownHostQuery &query, bool overwrite = true);
 
 private:
+  ECM EnsureSnapshotLoaded_() const;
+  ECM LoadSnapshot_() const;
+  [[nodiscard]] KnownHostEntryArg SnapshotFromCache_() const;
+  ECM PersistSnapshot_(const KnownHostEntryArg &snapshot,
+                       bool dump_async = true);
+  void ResetSnapshotCache_();
+
+  IKnownHostSnapshotStore *snapshot_store_ = nullptr;
   mutable KnownHostMap known_hosts_ = {};
+  mutable bool snapshot_loaded_ = false;
 };
 } // namespace AMDomain::host
-
-

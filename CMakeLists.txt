@@ -38,6 +38,7 @@ file(GLOB_RECURSE AMSFTP_SOURCES CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/src/application/*/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/infrastructure/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/infrastructure/config/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/infrastructure/host/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/bootstrap/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/bootstrap/*/*.cpp"
   "${PROJECT_SOURCE_DIR}/src/Isocline/isocline.c"
