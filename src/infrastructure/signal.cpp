@@ -59,15 +59,11 @@ bool AMInfraCliSignalMonitor::RegisterHook(const std::string &name,
     return false;
   }
   hooks_[name] = hook;
-  if (name == "GLOBAL") {
-    hooks_[name].priority = 0;
-    hooks_[name].consume = false;
-  }
   return true;
 }
 
 bool AMInfraCliSignalMonitor::UnregisterHook(const std::string &name) {
-  if (name.empty() || name == "GLOBAL") {
+  if (name.empty()) {
     return false;
   }
   std::lock_guard<std::mutex> lock(hooks_mtx_);
@@ -102,7 +98,7 @@ bool AMInfraCliSignalMonitor::ResumeHook(const std::string &name) {
 
 bool AMInfraCliSignalMonitor::SetHookPriority(const std::string &name,
                                               int priority) {
-  if (name.empty() || name == "GLOBAL") {
+  if (name.empty()) {
     return false;
   }
   std::lock_guard<std::mutex> lock(hooks_mtx_);

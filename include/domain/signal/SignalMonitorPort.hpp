@@ -5,26 +5,26 @@
 #include <string>
 
 namespace AMDomain::signal {
+using SignalCallback = std::function<void(int)>;
+struct SignalHook {
+  SignalCallback callback;
+  bool is_silenced = false;
+  /** Higher values run first. */
+  int priority = 0;
+  /** Stop propagation to lower-priority hooks when set. */
+  bool consume = false;
+};
+
 /**
  * @brief Domain port for CLI signal monitor hook orchestration.
  */
 class AMSignalMonitorPort : public NonCopyableNonMovable {
 public:
-  using SignalCallback = std::function<void(int)>;
-
   /**
    * @brief Hook container for one signal subscriber.
    */
-  struct SignalHook {
-    SignalCallback callback;
-    bool is_silenced = false;
-    /** Higher values run first. */
-    int priority = 0;
-    /** Stop propagation to lower-priority hooks when set. */
-    bool consume = false;
-  };
 
-  ~AMSignalMonitorPort() override = default;
+  ~AMSignalMonitorPort() = default;
 
   /**
    * @brief Install handlers and start monitor worker.
@@ -44,7 +44,8 @@ public:
   /**
    * @brief Register one named hook. Name must be unique.
    */
-  virtual bool RegisterHook(const std::string &name, const SignalHook &hook) = 0;
+  virtual bool RegisterHook(const std::string &name,
+                            const SignalHook &hook) = 0;
 
   /**
    * @brief Unregister one named hook.
