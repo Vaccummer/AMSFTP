@@ -1,11 +1,14 @@
 #pragma once
 
+#include "domain/host/HostModel.hpp"
 #include "foundation/DataClass.hpp"
 #include <cstdint>
 #include <string>
 #include <vector>
 
 namespace AMApplication::ClientWorkflow {
+using ClientProtocol = AMDomain::host::ClientProtocol;
+
 /**
  * @brief Session mode flags used by application-level client workflows.
  */

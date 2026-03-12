@@ -3,6 +3,8 @@
 #include "foundation/tools/string.hpp"
 
 namespace AMApplication::ClientWorkflow {
+using ClientProtocol = AMDomain::host::ClientProtocol;
+
 namespace {
 /**
  * @brief Return protocol display name for diagnostics.
