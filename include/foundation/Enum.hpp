@@ -72,6 +72,7 @@ enum class ErrorCode {
   PermissionDenied = 3,
   CommonFailure = 4,
   BadMessageFormat = 5,
+  NotInitialized = 89,
   NoConnection = 6,
   ConnectionLost = 7,
   OperationUnsupported = 8,
@@ -128,6 +129,7 @@ enum class ErrorCode {
   IndexOutOfRange = 107,
   InvalidOffset = 108,
   ProgrammInitializeFailed = 109,
+  TargetAlreadyExists = 110,
 
   // FTP Server Error
   UnsupportFTPProtocol = 47,
@@ -194,24 +196,6 @@ enum class MapType { Read = 0, Write = 1 };
 
 enum class TaskAssignType { Affinity, Public };
 
-enum class OS_TYPE {
-  Windows = -1,
-  Unknown = -2,
-  Uncertain = 0,
-  Linux = 1,
-  MacOS = 2,
-  FreeBSD = 3,
-  Unix = 4
-};
-
-enum class ClientProtocol {
-  Unknown = -1,
-  Base = 0,
-  SFTP = 1,
-  FTP = 2,
-  LOCAL = 3
-};
-
 enum class BufferStatus {
   is_writing = 0,
   is_reading = 1,
@@ -220,14 +204,6 @@ enum class BufferStatus {
 };
 
 enum class TransferControl { Running = 1, Pause = 0, Terminate = -1 };
-
-enum class TraceLevel {
-  Critical = 0,
-  Error = 1,
-  Warning = 2,
-  Info = 3,
-  Debug = 4
-};
 
 enum class AMTokenType {
   Unset = -1,
