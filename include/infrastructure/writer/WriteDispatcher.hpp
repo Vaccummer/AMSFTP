@@ -9,7 +9,8 @@
 /**
  * @brief Infrastructure async writer for config/log persistence tasks.
  */
-class AMInfraAsyncWriter final : public AMDomain::writer::AMAsyncWriteSchedulerPort {
+class AMInfraAsyncWriter final
+    : public AMDomain::writer::AMAsyncWriteSchedulerPort {
 public:
   /**
    * @brief Construct an idle dispatcher.
@@ -19,7 +20,7 @@ public:
   /**
    * @brief Ensure worker thread is stopped before destruction.
    */
-  ~AMInfraAsyncWriter() override { Stop(); }
+  ~AMInfraAsyncWriter() { Stop(); }
 
   /**
    * @brief Start worker thread when not already running.
@@ -66,4 +67,3 @@ private:
  * @brief Backward compatibility alias used by current config storage code.
  */
 using AMInfraConfigWriteDispatcher = AMInfraAsyncWriter;
-
