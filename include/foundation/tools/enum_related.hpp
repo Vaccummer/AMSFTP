@@ -5,10 +5,11 @@
 #include <string>
 #include <system_error>
 #include <utility>
-
 // project header
 #include "foundation/Enum.hpp"
 
+using EC = ErrorCode;
+using ECM = std::pair<ErrorCode, std::string>;
 /**
  * @brief Return true when ECM indicates success.
  */

@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -99,6 +100,74 @@ std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn, Args &&...args) {
   }
 }
 
+template <class T> class AMAtomic {
+public:
+  using value_type = T;
+  using mutex_type = std::mutex;
+
+  AMAtomic() = default;
+
+  template <class... Args,
+            class = std::enable_if_t<std::is_constructible_v<T, Args...>>>
+  explicit AMAtomic(Args &&...args) : value_(std::forward<Args>(args)...) {}
+
+  AMAtomic(const AMAtomic &) = delete;
+  AMAtomic &operator=(const AMAtomic &) = delete;
+  AMAtomic(AMAtomic &&) = delete;
+  AMAtomic &operator=(AMAtomic &&) = delete;
+
+  class Guard {
+  public:
+    Guard(T &value, mutex_type &mutex) : value_(value), lock_(mutex) {}
+
+    Guard(const Guard &) = delete;
+    Guard &operator=(const Guard &) = delete;
+    Guard(Guard &&) noexcept = default;
+    Guard &operator=(Guard &&) noexcept = default;
+    ~Guard() = default;
+
+    T *operator->() noexcept { return &value_; }
+
+    const T *operator->() const noexcept { return &value_; }
+
+    T &operator*() & noexcept { return value_; }
+
+    const T &operator*() const & noexcept { return value_; }
+
+    T &operator*() && = delete;
+    const T &operator*() const && = delete;
+
+    T &get() & noexcept { return value_; }
+
+    const T &get() const & noexcept { return value_; }
+
+    T &get() && = delete;
+    const T &get() const && = delete;
+
+    bool owns_lock() const noexcept { return lock_.owns_lock(); }
+
+    void lock() { lock_.lock(); }
+
+    void unlock() { lock_.unlock(); }
+
+    T load() const { return value_; }
+
+    void store(const T &value) { value_ = value; }
+
+    void store(T &&value) { value_ = std::move(value); }
+
+  private:
+    T &value_;
+    std::unique_lock<mutex_type> lock_;
+  };
+
+  [[nodiscard]] Guard lock() { return Guard(value_, mutex_); }
+
+private:
+  mutex_type mutex_;
+  T value_{};
+};
+
 /**
  * @brief Unified task control token for async transfer pause/terminate flow.
  */
@@ -121,8 +190,7 @@ public:
    * This is the preferred construction path for layered code because ownership
    * is explicit and does not rely on global state.
    */
-  [[nodiscard]] inline static std::shared_ptr<TaskControlToken>
-  CreateShared() {
+  [[nodiscard]] inline static std::shared_ptr<TaskControlToken> CreateShared() {
     return std::make_shared<TaskControlToken>();
   }
 
@@ -134,8 +202,8 @@ public:
    */
   [[deprecated("TaskControlToken::Instance() is deprecated; inject "
                "TaskControlToken explicitly or use CreateShared(). "
-               "TODO(WF6): remove global accessor.")]] inline static
-      std::shared_ptr<TaskControlToken>
+               "TODO(WF6): remove global accessor.")]] inline static std::
+      shared_ptr<TaskControlToken>
       Instance() {
     static const std::shared_ptr<TaskControlToken> Global = CreateShared();
     return Global;
@@ -510,142 +578,6 @@ public:
         mode_int(std::move(mode_int)), mode_str(std::move(mode_str)) {}
 };
 
-struct ClientMetaData {
-  std::string login_dir = "";
-  std::string cwd = "";
-  std::string cmd_prefix = "";
-  bool wrap_cmd = false;
-
-  /**
-   * @brief Return ordered metadata fields as key-value pairs.
-   *
-   * The returned order follows member declaration order in this struct.
-   */
-  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
-  GetStrDict() const {
-    return {
-        {"login_dir", login_dir},
-        {"cwd", cwd},
-        {"cmd_prefix", cmd_prefix},
-        {"wrap_cmd", wrap_cmd ? "true" : "false"},
-    };
-  }
-};
-
-struct ConRequest {
-  std::string nickname = "";
-  ClientProtocol protocol = ClientProtocol::SFTP;
-  std::string hostname = "";
-  std::string username = "";
-  int port = 22;
-  std::string password = "";
-  std::string keyfile = "";
-  int64_t buffer_size = 0;
-  bool compression = false;
-  std::string trash_dir = "";
-  ConRequest() = default;
-
-  /**
-   * @brief Return ordered request fields as key-value pairs.
-   *
-   * The returned order follows member declaration order in this struct.
-   */
-  [[nodiscard]] std::vector<std::pair<std::string, std::string>>
-  GetStrDict() const {
-    return {
-        {"nickname", nickname},
-        {"protocol", std::string(magic_enum::enum_name(protocol))},
-        {"hostname", hostname},
-        {"username", username},
-        {"port", std::to_string(port)},
-        {"password", password},
-        {"keyfile", keyfile},
-        {"buffer_size", std::to_string(buffer_size)},
-        {"compression", compression ? "true" : "false"},
-        {"trash_dir", trash_dir},
-    };
-  }
-
-  /**
-   * @brief Canonical constructor for client connection/config request.
-   */
-  ConRequest(std::string nickname, std::string hostname, std::string trash_dir,
-             int64_t buffer_size, ClientProtocol protocol, int port,
-             std::string username, std::string password = "",
-             std::string keyfile = "", bool compression = false)
-      : nickname(std::move(nickname)), hostname(std::move(hostname)),
-        trash_dir(std::move(trash_dir)), buffer_size(buffer_size),
-        protocol(protocol), port(port), username(std::move(username)),
-        password(std::move(password)), keyfile(std::move(keyfile)),
-        compression(std::move(compression)) {}
-
-  /**
-   * @brief Backward-compatible constructor with username/port-leading order.
-   */
-  ConRequest(std::string nickname, std::string hostname, std::string username,
-             int port = 22, std::string password = "", std::string keyfile = "",
-             bool compression = false, std::string trash_dir = "",
-             int64_t buffer_size = 0,
-             ClientProtocol protocol = ClientProtocol::SFTP)
-      : nickname(std::move(nickname)), hostname(std::move(hostname)),
-        trash_dir(std::move(trash_dir)), buffer_size(buffer_size),
-        protocol(protocol), port(port), username(std::move(username)),
-        password(std::move(password)), keyfile(std::move(keyfile)),
-        compression(std::move(compression)) {}
-
-  /**
-   * @brief Validate connection request fields.
-   *
-   * Validation order:
-   * 1) protocol
-   * 2) nickname
-   * 3) hostname (except local protocol) and username
-   * 4) port range
-   *
-   * @param error_info Optional detailed failure message.
-   * @return true when request is valid.
-   */
-  [[nodiscard]] bool IsValid(std::string *error_info = nullptr) const {
-    if (error_info) {
-      error_info->clear();
-    }
-    if (protocol == ClientProtocol::Unknown) {
-      if (error_info) {
-        *error_info = "protocol cannot be unknown";
-      }
-      return false;
-    }
-    if (nickname.empty()) {
-      if (error_info) {
-        *error_info = "nickname cannot be empty";
-      }
-      return false;
-    }
-    if (protocol == ClientProtocol::LOCAL) {
-      return true;
-    }
-    if (hostname.empty()) {
-      if (error_info) {
-        *error_info = "hostname cannot be empty when protocol is not local";
-      }
-      return false;
-    }
-    if (username.empty()) {
-      if (error_info) {
-        *error_info = "username cannot be empty";
-      }
-      return false;
-    }
-    if (port <= 0 || port > 65535) {
-      if (error_info) {
-        *error_info = "port out of range (1-65535)";
-      }
-      return false;
-    }
-    return true;
-  }
-};
-
 struct ProgressCBInfo {
   std::string src;
   std::string dst;
@@ -719,62 +651,6 @@ struct ErrorCBInfo {
   ErrorCBInfo(std::pair<ErrorCode, std::string> ecm, std::string src,
               std::string dst, std::string src_host, std::string dst_host)
       : ecm(ecm), src(src), dst(dst), src_host(src_host), dst_host(dst_host) {}
-};
-
-struct AuthCBInfo {
-  /**
-   * @brief Whether a password is required for authentication.
-   */
-  bool NeedPassword = false;
-
-  /**
-   * @brief Connection request context for the callback.
-   */
-  ConRequest request;
-
-  /**
-   * @brief The password being used in this authentication step (encrypted).
-   */
-  std::string password_n;
-
-  /**
-   * @brief Whether the provided password is correct.
-   */
-  bool iscorrect = false;
-
-  /**
-   * @brief Construct a callback info payload.
-   */
-  AuthCBInfo(bool need_password, ConRequest request, std::string password_n,
-             bool iscorrect)
-      : NeedPassword(need_password), request(std::move(request)),
-        password_n(std::move(password_n)), iscorrect(iscorrect) {}
-};
-
-struct TraceInfo {
-  TraceSource source = TraceSource::Client;
-  TraceLevel level;
-  ErrorCode error_code;
-  std::string nickname;
-  std::string target;
-  std::string action;
-  std::string message;
-  std::optional<ConRequest> request = std::nullopt;
-  double timestamp;
-
-  TraceInfo()
-      : level(TraceLevel::Info), error_code(EC::Success), nickname(""),
-        target(""), action(""), message(""), request(std::nullopt),
-        timestamp(AMTime::seconds()) {}
-  TraceInfo(TraceLevel level, ErrorCode error_code, std::string nickname,
-            std::string target, std::string action, std::string message,
-            std::optional<ConRequest> request = std::nullopt,
-            TraceSource source = TraceSource::Client)
-      : source(source), level(std::move(level)),
-        error_code(std::move(error_code)), nickname(std::move(nickname)),
-        target(std::move(target)), action(std::move(action)),
-        message(std::move(message)), request(std::move(request)),
-        timestamp(AMTime::seconds()) {}
 };
 
 struct TransferCallback {
@@ -1375,14 +1251,16 @@ public:
   }
 };
 
-struct NonCopyableNonMovable {
+class NonCopyable {
 public:
-  NonCopyableNonMovable() = default;
-  virtual ~NonCopyableNonMovable() = default;
-  NonCopyableNonMovable(const NonCopyableNonMovable &) = delete;
-  NonCopyableNonMovable &operator=(const NonCopyableNonMovable &) = delete;
-  NonCopyableNonMovable(NonCopyableNonMovable &&) = delete;
-  NonCopyableNonMovable &operator=(NonCopyableNonMovable &&) = delete;
-
-  virtual ECM Init() { return {EC::Success, ""}; }
+  NonCopyable(const NonCopyable &) = delete;
+  NonCopyable &operator=(const NonCopyable &) = delete;
 };
+
+class NonMovable {
+public:
+  NonMovable(NonMovable &&) = delete;
+  NonMovable &operator=(NonMovable &&) = delete;
+};
+
+class NonCopyableNonMovable : NonCopyable, NonMovable {};
