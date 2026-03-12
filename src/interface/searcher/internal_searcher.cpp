@@ -9,6 +9,8 @@
 using namespace AMSearcherDetail;
 namespace Runtime = AMInterface::ApplicationAdapters::Runtime;
 
+using AMDomain::var::VarInfo;
+
 namespace {
 enum class VarZonePrefixMode {
   Plain = 0,

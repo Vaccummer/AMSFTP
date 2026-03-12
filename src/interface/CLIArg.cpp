@@ -4,8 +4,8 @@
 #include "application/client/FileCommandWorkflows.hpp"
 #include "application/client/ClientSessionWorkflows.hpp"
 #include "application/completion/CompletionWorkflows.hpp"
-#include "application/config/ConfigWorkflows.hpp"
-#include "application/config/HostProfileWorkflows.hpp"
+#include "application/config/CliConfigSaveWorkflows.hpp"
+#include "application/host/HostProfileWorkflows.hpp"
 #include "application/transfer/TaskWorkflows.hpp"
 #include "application/transfer/TransferWorkflows.hpp"
 #include "application/var/VarWorkflows.hpp"
@@ -124,16 +124,16 @@ ECM ResolveConfigProfileNickname_(
 }
 
 std::string SubstitutePathLikeArg_(
-    const AMInterface::ApplicationAdapters::VarGateway &var_gateway,
+    const AMDomain::var::IVarSubstitutionPort &substitution_port,
     const std::string &raw) {
-  return var_gateway.SubstitutePathLike(raw);
+  return substitution_port.SubstitutePathLike(raw);
 }
 
 std::vector<std::string>
 SubstitutePathLikeArgs_(
-    const AMInterface::ApplicationAdapters::VarGateway &var_gateway,
+    const AMDomain::var::IVarSubstitutionPort &substitution_port,
     const std::vector<std::string> &raw) {
-  return var_gateway.SubstitutePathLike(raw);
+  return substitution_port.SubstitutePathLike(raw);
 }
 
 /**
@@ -167,7 +167,7 @@ ECM ConfigLsArgs::Run(const CliManagers &managers,
                       const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigLs(gateway, detail);
 }
 
@@ -177,7 +177,7 @@ ECM ConfigKeysArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigKeys(gateway, true);
 }
 
@@ -187,7 +187,7 @@ ECM ConfigDataArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigData(gateway);
 }
 
@@ -197,9 +197,9 @@ ECM ConfigGetArgs::Run(const CliManagers &managers,
                        const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_manager);
   AMInterface::ApplicationAdapters::CurrentClientPort client_port(
-      managers.client_manager);
+      managers.client_service);
   return AMApplication::HostProfileWorkflow::ExecuteConfigGet(gateway,
                                                               client_port,
                                                               nicknames);
@@ -210,7 +210,7 @@ ECM ConfigAddArgs::Run(const CliManagers &managers,
                        const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_manager);
   std::string resolved;
   ECM rcm = ResolveConfigAddNickname_(gateway, managers.prompt_manager, nickname,
                                       &resolved);
@@ -229,7 +229,7 @@ ECM ConfigEditArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigEdit(gateway,
                                                                nickname);
 }
@@ -240,7 +240,7 @@ ECM ConfigRenameArgs::Run(const CliManagers &managers,
                           const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigRename(gateway,
                                                                  old_name,
                                                                  new_name);
@@ -255,7 +255,7 @@ ECM ConfigRemoveArgs::Run(const CliManagers &managers,
                           const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigRemove(gateway,
                                                                  names);
 }
@@ -266,7 +266,7 @@ ECM ConfigSetArgs::Run(const CliManagers &managers,
                        const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigSet(
       gateway, nickname, attrname, value);
 }
@@ -281,9 +281,9 @@ ECM ConfigSaveArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostConfigSaver host_saver(
-      managers.host_manager);
+      managers.host_config_manager);
   AMInterface::ApplicationAdapters::VarConfigSaver var_saver(
-      managers.var_manager);
+      managers.var_service);
   AMInterface::ApplicationAdapters::PromptConfigSaver prompt_saver(
       managers.prompt_manager);
   return AMApplication::ConfigWorkflow::SaveAllFromCli(host_saver, var_saver,
@@ -296,7 +296,7 @@ ECM ConfigProfileSetArgs::Run(const CliManagers &managers,
                               const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_manager);
   const std::vector<std::string> candidates = gateway.ListHostNames();
   std::string target;
   ECM rcm = ResolveConfigProfileNickname_(
@@ -317,7 +317,7 @@ ECM ProfileEditArgs::Run(const CliManagers &managers,
                          const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_manager);
   ECM rcm = AMApplication::HostProfileWorkflow::ExecuteProfileEdit(gateway,
                                                                    nickname);
   PrintRunError_(rcm);
@@ -330,7 +330,7 @@ ECM ProfileGetArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_manager);
   ECM rcm = AMApplication::HostProfileWorkflow::ExecuteProfileGet(gateway,
                                                                   nicknames);
   PrintRunError_(rcm);
@@ -341,11 +341,10 @@ void ProfileGetArgs::reset() { nicknames.clear(); }
 
 ECM StatArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.filesystem);
+      managers.client_service, managers.filesystem);
   const std::vector<std::string> resolved =
-      SubstitutePathLikeArgs_(var_gateway, paths);
+      SubstitutePathLikeArgs_(managers.var_service, paths);
   return AMApplication::ClientWorkflow::ExecuteStatPaths(
       gateway, resolved, ResolveTaskControlToken_(ctx));
 }
@@ -354,13 +353,12 @@ void StatArgs::reset() { paths.clear(); }
 
 ECM LsArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
   AMInterface::ApplicationAdapters::ClientPathGateway client_path(
-      managers.client_manager);
+      managers.client_service);
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.filesystem);
+      managers.client_service, managers.filesystem);
   std::string query_path =
-      AMStr::Strip(SubstitutePathLikeArg_(var_gateway, path));
+      AMStr::Strip(SubstitutePathLikeArg_(managers.var_service, path));
   if (query_path.empty()) {
     query_path = client_path.CurrentWorkdir();
   }
@@ -381,11 +379,10 @@ void LsArgs::reset() {
 
 ECM SizeArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
   AMInterface::ApplicationAdapters::FileCommandGateway gateway(
       managers.filesystem);
   const std::vector<std::string> resolved =
-      SubstitutePathLikeArgs_(var_gateway, paths);
+      SubstitutePathLikeArgs_(managers.var_service, paths);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteGetSize(
       gateway, resolved, ResolveTaskControlToken_(ctx));
   PrintRunError_(rcm);
@@ -396,10 +393,9 @@ void SizeArgs::reset() { paths.clear(); }
 
 ECM FindArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
   AMInterface::ApplicationAdapters::FileCommandGateway gateway(
       managers.filesystem);
-  const std::string resolved = SubstitutePathLikeArg_(var_gateway, path);
+  const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteFind(
       gateway, resolved, SearchType::All, ResolveTaskControlToken_(ctx));
   PrintRunError_(rcm);
@@ -411,11 +407,10 @@ void FindArgs::reset() { path.clear(); }
 ECM MkdirArgs::Run(const CliManagers &managers,
                    const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
   AMInterface::ApplicationAdapters::FileCommandGateway gateway(
       managers.filesystem);
   const std::vector<std::string> resolved =
-      SubstitutePathLikeArgs_(var_gateway, paths);
+      SubstitutePathLikeArgs_(managers.var_service, paths);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteMkdir(
       gateway, resolved, ResolveTaskControlToken_(ctx));
   PrintRunError_(rcm);
@@ -426,11 +421,10 @@ void MkdirArgs::reset() { paths.clear(); }
 
 ECM RmArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
   AMInterface::ApplicationAdapters::FileCommandGateway gateway(
       managers.filesystem);
   const std::vector<std::string> resolved =
-      SubstitutePathLikeArgs_(var_gateway, paths);
+      SubstitutePathLikeArgs_(managers.var_service, paths);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteRemove(
       gateway, resolved, permanent, false, quiet, ResolveTaskControlToken_(ctx));
   PrintRunError_(rcm);
@@ -445,10 +439,9 @@ void RmArgs::reset() {
 
 ECM WalkArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
   AMInterface::ApplicationAdapters::FileCommandGateway gateway(
       managers.filesystem);
-  const std::string resolved = SubstitutePathLikeArg_(var_gateway, path);
+  const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteWalk(
       gateway, resolved, only_file, only_dir, show_all, !include_special, quiet,
       ResolveTaskControlToken_(ctx));
@@ -467,10 +460,9 @@ void WalkArgs::reset() {
 
 ECM TreeArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
   AMInterface::ApplicationAdapters::FileCommandGateway gateway(
       managers.filesystem);
-  const std::string resolved = SubstitutePathLikeArg_(var_gateway, path);
+  const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
   ECM rcm = AMApplication::FileCommandWorkflow::ExecuteTree(
       gateway, resolved, depth, only_dir, show_all, !include_special, quiet,
       ResolveTaskControlToken_(ctx));
@@ -490,10 +482,9 @@ void TreeArgs::reset() {
 ECM RealpathArgs::Run(const CliManagers &managers,
                       const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
   AMInterface::ApplicationAdapters::FileCommandGateway gateway(
       managers.filesystem);
-  const std::string resolved = SubstitutePathLikeArg_(var_gateway, path);
+  const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
   return AMApplication::FileCommandWorkflow::ExecuteRealpath(
       gateway, resolved, ResolveTaskControlToken_(ctx));
 }
@@ -537,7 +528,7 @@ ECM CpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   options.accept_ampersand_suffix = true;
 
   AMInterface::ApplicationAdapters::PathSubstitutionPort substitutor(
-      managers.var_manager);
+      managers.var_service);
   AMInterface::ApplicationAdapters::TransferExecutorPort executor(
       managers.transfer_manager);
   auto result = AMApplication::TransferWorkflow::ExecuteTransfer(
@@ -559,7 +550,7 @@ void CpArgs::reset() {
 
 ECM SftpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.filesystem);
+      managers.client_service, managers.filesystem);
   auto result = AMApplication::ClientWorkflow::ConnectProtocolClient(
       gateway, ClientProtocol::SFTP, targets, port, password, keyfile,
       ResolveTaskControlToken_(ctx));
@@ -577,7 +568,7 @@ void SftpArgs::reset() {
 
 ECM FtpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.filesystem);
+      managers.client_service, managers.filesystem);
   auto result = AMApplication::ClientWorkflow::ConnectProtocolClient(
       gateway, ClientProtocol::FTP, targets, port, password, keyfile,
       ResolveTaskControlToken_(ctx));
@@ -597,7 +588,7 @@ ECM ClientsArgs::Run(const CliManagers &managers,
                      const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.filesystem);
+      managers.client_service, managers.filesystem);
   return AMApplication::ClientWorkflow::ExecuteClientList(
       gateway, detail, ResolveTaskControlToken_(ctx));
 }
@@ -621,7 +612,7 @@ void CheckArgs::reset() {
 ECM ChangeClientArgs::Run(const CliManagers &managers,
                           const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.filesystem);
+      managers.client_service, managers.filesystem);
   const auto result = AMApplication::ClientWorkflow::ChangeClient(
       gateway, nickname, BuildClientSessionMode_(ctx),
       ResolveTaskControlToken_(ctx));
@@ -635,7 +626,7 @@ ECM DisconnectArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.filesystem);
+      managers.client_service, managers.filesystem);
   return AMApplication::ClientWorkflow::ExecuteClientDisconnect(gateway,
                                                                 nicknames);
 }
@@ -643,10 +634,9 @@ ECM DisconnectArgs::Run(const CliManagers &managers,
 void DisconnectArgs::reset() { nicknames.clear(); }
 
 ECM CdArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
   AMInterface::ApplicationAdapters::FileCommandGateway gateway(
       managers.filesystem);
-  const std::string resolved = SubstitutePathLikeArg_(var_gateway, path);
+  const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
   const auto result = AMApplication::FileCommandWorkflow::ExecuteCd(
       gateway, resolved, ResolveTaskControlToken_(ctx), false);
   SetEnterInteractive_(ctx, result.enter_interactive);
@@ -658,7 +648,7 @@ void CdArgs::reset() { path.clear(); }
 ECM ConnectArgs::Run(const CliManagers &managers,
                      const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.filesystem);
+      managers.client_service, managers.filesystem);
   const auto result = AMApplication::ClientWorkflow::ConnectNicknames(
       gateway, nicknames, force, BuildClientSessionMode_(ctx),
       ResolveTaskControlToken_(ctx));
@@ -716,8 +706,8 @@ void ExitArgs::reset() { force = false; }
 ECM VarGetArgs::Run(const CliManagers &managers,
                     const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
-  return AMApplication::VarWorkflow::ExecuteVarGet(var_gateway, varname);
+  return AMInterface::ApplicationAdapters::RunVarGet(
+      managers.var_service, managers.prompt_manager, varname);
 }
 
 void VarGetArgs::reset() { varname.clear(); }
@@ -725,9 +715,8 @@ void VarGetArgs::reset() { varname.clear(); }
 ECM VarDefArgs::Run(const CliManagers &managers,
                     const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
-  return AMApplication::VarWorkflow::ExecuteVarDef(var_gateway, global, varname,
-                                                   value);
+  return AMInterface::ApplicationAdapters::RunVarDef(
+      managers.var_service, managers.prompt_manager, global, varname, value);
 }
 
 void VarDefArgs::reset() {
@@ -739,8 +728,8 @@ void VarDefArgs::reset() {
 ECM VarDelArgs::Run(const CliManagers &managers,
                     const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
-  return AMApplication::VarWorkflow::ExecuteVarDel(var_gateway, all, tokens);
+  return AMInterface::ApplicationAdapters::RunVarDel(
+      managers.var_service, managers.prompt_manager, all, tokens);
 }
 
 void VarDelArgs::reset() {
@@ -751,8 +740,8 @@ void VarDelArgs::reset() {
 ECM VarLsArgs::Run(const CliManagers &managers,
                    const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::VarGateway var_gateway(managers.var_manager);
-  return AMApplication::VarWorkflow::ExecuteVarLs(var_gateway, sections);
+  return AMInterface::ApplicationAdapters::RunVarLs(
+      managers.var_service, managers.prompt_manager, sections);
 }
 
 void VarLsArgs::reset() { sections.clear(); }
@@ -835,7 +824,7 @@ ECM TaskCacheAddArgs::Run(const CliManagers &managers,
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_manager);
   AMInterface::ApplicationAdapters::PathSubstitutionPort substitutor(
-      managers.var_manager);
+      managers.var_service);
   AMApplication::TransferWorkflow::TransferBuildArgs build_args{};
   build_args.srcs = srcs;
   build_args.output = output;
@@ -981,4 +970,7 @@ void TaskRetryArgs::reset() {
   quiet = false;
   indices.clear();
 }
+
+
+
 

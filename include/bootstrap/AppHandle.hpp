@@ -2,6 +2,7 @@
 
 #include "bootstrap/ConfigAssembly.hpp"
 #include "infrastructure/host/ConfigBackedHostSnapshotStore.hpp"
+#include "interface/ApplicationAdapters.hpp"
 #include "interface/CLIArg.hpp"
 
 namespace AMBootstrap {
@@ -16,10 +17,9 @@ struct AppHandle : NonCopyableNonMovable {
             AMPromptManager &prompt_manager,
             AMDomain::host::AMHostConfigManager &host_config_manager,
             AMDomain::host::AMKnownHostsManager &known_hosts_manager,
-            AMDomain::var::VarCLISet &var_manager,
             AMLoggerManagerPort &log_manager,
             AMApplication::client::ClientAppService &client_service,
-            AMDomain::transfer::AMTransferManager &transfer_manager,
+            AMApplication::TransferWorkflow::TransferAppService &transfer_manager,
             AMDomain::filesystem::AMFileSystem &filesystem);
 
   /**
@@ -36,8 +36,15 @@ private:
   ConfigAssembly config_;
   AMInfra::host::ConfigBackedHostConfigSnapshotStore host_config_store_;
   AMInfra::host::ConfigBackedKnownHostSnapshotStore known_host_store_;
+  AMInterface::ApplicationAdapters::ConfigBackedVarRepository var_repository_;
+  AMInterface::ApplicationAdapters::CurrentVarDomainProvider
+      current_var_domain_provider_;
 
 public:
+  AMApplication::VarWorkflow::VarAppService var_service;
   CliManagers managers;
 };
 } // namespace AMBootstrap
+
+
+

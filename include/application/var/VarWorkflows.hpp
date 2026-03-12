@@ -1,63 +1,120 @@
 #pragma once
 
+#include "domain/var/VarDomainService.hpp"
+#include "domain/var/VarPorts.hpp"
 #include "foundation/DataClass.hpp"
 #include <string>
 #include <vector>
 
 namespace AMApplication::VarWorkflow {
 /**
- * @brief Application port for variable-related command operations.
+ * @brief Repository-backed var application service.
  */
-class IVarGateway {
+class VarAppService final : public AMDomain::var::IVarQueryPort,
+                            public AMDomain::var::IVarSubstitutionPort,
+                            private NonCopyableNonMovable {
 public:
   /**
-   * @brief Virtual destructor for polymorphic gateway.
+   * @brief Construct service from persistence and current-domain ports.
    */
-  virtual ~IVarGateway() = default;
+  VarAppService(
+      AMDomain::var::IVarRepository &repository,
+      const AMDomain::var::ICurrentDomainProvider &current_domain_provider);
 
   /**
-   * @brief Query one variable by token name.
+   * @brief Load variable state from repository into memory.
    */
-  virtual ECM QueryByName(const std::string &token_name) const = 0;
+  ECM LoadVars();
 
   /**
-   * @brief Define one variable.
+   * @brief Save current variable state into repository storage.
    */
-  virtual ECM DefineVar(bool global, const std::string &name,
-                        const std::string &value) const = 0;
+  ECM SaveVars(bool async = true) const;
 
   /**
-   * @brief Delete one variable by CLI parameters.
+   * @brief Return the current domain-aware lookup result for one variable
+   * token.
    */
-  virtual ECM DeleteVarByCli(bool all, const std::string &section,
-                             const std::string &varname) const = 0;
+  [[nodiscard]] AMDomain::var::VarInfo
+  ResolveToken(const std::string &token_name, ECM *error = nullptr) const;
 
   /**
-   * @brief List variables by domain filters.
+   * @brief Return the explicit-domain target for one define request.
    */
-  virtual ECM ListVars(const std::vector<std::string> &domains) const = 0;
+  [[nodiscard]] ECM ResolveDefineTarget(
+      bool global, const std::string &token_name,
+      AMDomain::var::VarInfo *target) const;
+
+  /**
+   * @brief Define or update one variable and keep it in memory.
+   */
+  ECM DefineVar(const AMDomain::var::VarInfo &info);
+
+  /**
+   * @brief Delete one variable in a specific domain.
+   */
+  ECM DeleteVar(const std::string &domain, const std::string &name);
+
+  /**
+   * @brief Delete one variable from every domain.
+   */
+  ECM DeleteVarAll(const std::string &name,
+                   std::vector<AMDomain::var::VarInfo> *removed);
+
+  /**
+   * @brief Find one variable name across all domains.
+   */
+  [[nodiscard]] std::vector<AMDomain::var::VarInfo>
+  FindByName(const std::string &name) const;
+
+  /**
+   * @brief Return true when one variable domain exists.
+   */
+  [[nodiscard]] bool HasDomain(const std::string &domain) const override;
+
+  /**
+   * @brief Return all available variable domains.
+   */
+  [[nodiscard]] std::vector<std::string> ListDomains() const override;
+
+  /**
+   * @brief Return variables in one domain.
+   */
+  [[nodiscard]] std::vector<AMDomain::var::VarInfo>
+  ListByDomain(const std::string &domain) const override;
+
+  /**
+   * @brief Return the current resolved variable domain.
+   */
+  [[nodiscard]] std::string CurrentDomain() const override;
+
+  /**
+   * @brief Query one variable value by domain/name.
+   */
+  [[nodiscard]] AMDomain::var::VarInfo
+  GetVar(const std::string &domain, const std::string &name) const override;
+
+  /**
+   * @brief Substitute one path-like token using current-domain policy.
+   */
+  [[nodiscard]] std::string
+  SubstitutePathLike(const std::string &raw) const override;
+
+  /**
+   * @brief Substitute path-like tokens in a vector using current-domain policy.
+   */
+  [[nodiscard]] std::vector<std::string>
+  SubstitutePathLike(const std::vector<std::string> &raw) const override;
+
+  /**
+   * @brief Parse one full variable token.
+   */
+  [[nodiscard]] ECM ParseVarToken_(const std::string &token_name,
+                                   AMDomain::var::varsetkn::VarRef *ref) const;
+
+private:
+  AMDomain::var::IVarRepository &repository_;
+  const AMDomain::var::ICurrentDomainProvider &current_domain_provider_;
+  AMDomain::var::VarDomainService domain_service_;
 };
-
-/**
- * @brief Execute `var get` workflow.
- */
-ECM ExecuteVarGet(const IVarGateway &gateway, const std::string &varname);
-
-/**
- * @brief Execute `var def` workflow.
- */
-ECM ExecuteVarDef(const IVarGateway &gateway, bool global,
-                  const std::string &varname, const std::string &value);
-
-/**
- * @brief Execute `var del` workflow.
- */
-ECM ExecuteVarDel(const IVarGateway &gateway, bool all,
-                  const std::vector<std::string> &tokens);
-
-/**
- * @brief Execute `var ls` workflow.
- */
-ECM ExecuteVarLs(const IVarGateway &gateway,
-                 const std::vector<std::string> &sections);
 } // namespace AMApplication::VarWorkflow

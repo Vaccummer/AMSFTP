@@ -1,6 +1,6 @@
 #include "interface/TokenTypeAnalyzer.hpp"
 #include "domain/host/HostModel.hpp"
-#include "foundation/var/VarModel.hpp"
+#include "domain/var/VarModel.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/tools/time.hpp"
 #include "interface/ApplicationAdapters.hpp"
@@ -14,6 +14,8 @@
 
 namespace {
 namespace Runtime = AMInterface::ApplicationAdapters::Runtime;
+
+using AMDomain::var::VarInfo;
 
 using TokenCacheValue = std::vector<AMTokenTypeAnalyzer::AMToken>;
 std::unordered_map<std::string, TokenCacheValue> g_split_token_cache;

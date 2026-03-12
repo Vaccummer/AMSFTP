@@ -2,6 +2,7 @@
 
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
+#include "domain/host/HostManager.hpp"
 #include "interface/ApplicationAdapters.hpp"
 
 namespace AMBootstrap {
@@ -12,15 +13,17 @@ AppHandle::AppHandle(AMSignalMonitorPort &signal_monitor,
                      AMPromptManager &prompt_manager,
                      AMDomain::host::AMHostConfigManager &host_config_manager,
                      AMDomain::host::AMKnownHostsManager &known_hosts_manager,
-                     AMDomain::var::VarCLISet &var_manager,
                      AMLoggerManagerPort &log_manager,
                      AMApplication::client::ClientAppService &client_service,
-                     AMDomain::transfer::AMTransferManager &transfer_manager,
+                     AMApplication::TransferWorkflow::TransferAppService &transfer_manager,
                      AMDomain::filesystem::AMFileSystem &filesystem)
     : config_(), host_config_store_(), known_host_store_(),
+      var_repository_(config_.ConfigService()),
+      current_var_domain_provider_(client_service),
+      var_service(var_repository_, current_var_domain_provider_),
       managers(signal_monitor, config_.ConfigService(), config_.StyleService(),
                prompt_manager, host_config_manager, known_hosts_manager,
-               var_manager, log_manager, client_service, transfer_manager,
+               var_service, log_manager, client_service, transfer_manager,
                filesystem) {}
 
 /**
@@ -48,7 +51,8 @@ ECM AppHandle::Init(const amf &task_control_token) {
   bindings.known_hosts_manager = &managers.known_hosts_manager;
   bindings.client_service = &managers.client_service;
   bindings.transfer_manager = &managers.transfer_manager;
-  bindings.var_manager = &managers.var_manager;
+  bindings.var_query = &var_service;
+  bindings.var_substitution = &var_service;
   bindings.signal_monitor = &managers.signal_monitor;
   bindings.prompt_manager = &managers.prompt_manager;
   bindings.config_service = &config_.ConfigService();
@@ -72,3 +76,7 @@ void AppHandle::ResetRuntimeBindings() {
   AMInterface::ApplicationAdapters::Runtime::Reset();
 }
 } // namespace AMBootstrap
+
+
+
+
