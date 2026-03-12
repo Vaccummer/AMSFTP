@@ -1,16 +1,19 @@
 #include "interface/CLIArg.hpp"
 #include "application/client/ClientAppService.hpp"
+#include "application/config/ConfigAppService.hpp"
+#include "application/transfer/TransferAppService.hpp"
+#include "application/var/VarWorkflows.hpp"
 #include "application/config/ConfigPayloads.hpp"
 #include "domain/filesystem/FileSystemManager.hpp"
 #include "domain/host/HostManager.hpp"
 #include "domain/log/LoggerPorts.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
-#include "domain/transfer/TransferManager.hpp"
-#include "domain/var/VarManager.hpp"
+#include "application/transfer/TransferAppService.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include "infrastructure/log/FileLoggerWriter.hpp"
 #include "infrastructure/writer/WriteDispatcher.hpp"
+#include "interface/Prompt.hpp"
 #include <csignal>
 #include <filesystem>
 #include <memory>
@@ -35,20 +38,6 @@ int ResolveClientHeartbeatTimeoutMs_(
   return value;
 }
 
-/**
- * @brief Convert typed user-vars snapshot into manager domain dictionary.
- */
-AMDomain::var::AMVarManager::DomainDict ParseUserVarsDict_(
-    const AMApplication::config::UserVarsSnapshot &user_vars) {
-  AMDomain::var::AMVarManager::DomainDict parsed = {};
-  for (const auto &[domain, vars] : user_vars.domains) {
-    parsed[domain] = vars;
-  }
-  if (parsed.find(varsetkn::kPublic) == parsed.end()) {
-    parsed[varsetkn::kPublic] = {};
-  }
-  return parsed;
-}
 /**
  * @brief Configure domain logger with infrastructure file writers.
  */
@@ -151,17 +140,17 @@ CliManagers::CliManagers(AMSignalMonitorPort &signal_monitor_ref,
                          AMPromptManager &prompt_manager_ref,
                          AMDomain::host::AMHostConfigManager &host_config_manager_ref,
                          AMDomain::host::AMKnownHostsManager &known_hosts_manager_ref,
-                         AMDomain::var::VarCLISet &var_manager_ref,
+                         AMApplication::VarWorkflow::VarAppService &var_service_ref,
                          AMLoggerManagerPort &log_manager_ref,
                          AMApplication::client::ClientAppService &client_service_ref,
-                         AMDomain::transfer::AMTransferManager &transfer_manager_ref,
+                         AMApplication::TransferWorkflow::TransferAppService &transfer_manager_ref,
                          AMDomain::filesystem::AMFileSystem &filesystem_ref)
     : signal_monitor(signal_monitor_ref), config_service(config_service_ref),
       style_service(style_service_ref),
       prompt_manager(prompt_manager_ref),
       host_config_manager(host_config_manager_ref),
       known_hosts_manager(known_hosts_manager_ref),
-      var_manager(var_manager_ref), log_manager(log_manager_ref),
+      var_service(var_service_ref), log_manager(log_manager_ref),
       client_service(client_service_ref),
       transfer_manager(transfer_manager_ref), filesystem(filesystem_ref) {}
 
@@ -191,9 +180,7 @@ ECM CliManagers::Init(const amf &task_control_token) {
   if (!isok(rcm)) {
     return rcm;
   }
-  AMApplication::config::UserVarsSnapshot user_vars = {};
-  (void)config_service.Read(&user_vars);
-  rcm = var_manager.Init(ParseUserVarsDict_(user_vars));
+  rcm = var_service.LoadVars();
   if (!isok(rcm)) {
     return rcm;
   }
@@ -296,4 +283,8 @@ ECM CliManagers::Init(const amf &task_control_token) {
   }
   return filesystem.Init();
 }
+
+
+
+
 

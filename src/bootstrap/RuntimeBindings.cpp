@@ -5,8 +5,8 @@
 #include "domain/filesystem/FileSystemManager.hpp"
 #include "domain/host/HostManager.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
-#include "domain/transfer/TransferManager.hpp"
-#include "domain/var/VarManager.hpp"
+#include "application/transfer/TransferAppService.hpp"
+#include "domain/var/VarPorts.hpp"
 #include "foundation/tools/string.hpp"
 #include "interface/style/StyleManager.hpp"
 #include <atomic>
@@ -21,8 +21,9 @@ struct RuntimeBindingState {
   std::atomic<AMDomain::host::AMHostConfigManager *> host_config_manager{nullptr};
   std::atomic<AMDomain::host::AMKnownHostsManager *> known_hosts_manager{nullptr};
   std::atomic<AMApplication::client::ClientAppService *> client_service{nullptr};
-  std::atomic<AMDomain::transfer::AMTransferManager *> transfer_manager{nullptr};
-  std::atomic<AMDomain::var::VarCLISet *> var_manager{nullptr};
+  std::atomic<AMApplication::TransferWorkflow::TransferAppService *> transfer_manager{nullptr};
+  std::atomic<const AMDomain::var::IVarQueryPort *> var_query{nullptr};
+  std::atomic<const AMDomain::var::IVarSubstitutionPort *> var_substitution{nullptr};
   std::atomic<AMSignalMonitorPort *> signal_monitor{nullptr};
   std::atomic<AMPromptManager *> prompt_manager{nullptr};
   std::atomic<AMApplication::config::AMConfigAppService *> config_service{
@@ -72,7 +73,9 @@ void Runtime::Bind(const RuntimeBindings &bindings) {
   state.client_service.store(bindings.client_service, std::memory_order_release);
   state.transfer_manager.store(bindings.transfer_manager,
                                std::memory_order_release);
-  state.var_manager.store(bindings.var_manager, std::memory_order_release);
+  state.var_query.store(bindings.var_query, std::memory_order_release);
+  state.var_substitution.store(bindings.var_substitution,
+                               std::memory_order_release);
   state.signal_monitor.store(bindings.signal_monitor, std::memory_order_release);
   state.prompt_manager.store(bindings.prompt_manager, std::memory_order_release);
   state.config_service.store(bindings.config_service, std::memory_order_release);
@@ -89,7 +92,8 @@ void Runtime::Reset() {
   state.known_hosts_manager.store(nullptr, std::memory_order_release);
   state.client_service.store(nullptr, std::memory_order_release);
   state.transfer_manager.store(nullptr, std::memory_order_release);
-  state.var_manager.store(nullptr, std::memory_order_release);
+  state.var_query.store(nullptr, std::memory_order_release);
+  state.var_substitution.store(nullptr, std::memory_order_release);
   state.signal_monitor.store(nullptr, std::memory_order_release);
   state.prompt_manager.store(nullptr, std::memory_order_release);
   state.config_service.store(nullptr, std::memory_order_release);
@@ -106,7 +110,8 @@ bool Runtime::IsBound() {
          state.known_hosts_manager.load(std::memory_order_acquire) &&
          state.client_service.load(std::memory_order_acquire) &&
          state.transfer_manager.load(std::memory_order_acquire) &&
-         state.var_manager.load(std::memory_order_acquire) &&
+         state.var_query.load(std::memory_order_acquire) &&
+         state.var_substitution.load(std::memory_order_acquire) &&
          state.signal_monitor.load(std::memory_order_acquire) &&
          state.prompt_manager.load(std::memory_order_acquire) &&
          state.config_service.load(std::memory_order_acquire) &&
@@ -213,7 +218,7 @@ std::vector<std::string> Runtime::ListClientNames() {
  * @brief Return tracked transfer task IDs.
  */
 std::vector<std::string> Runtime::ListTaskIds() {
-  AMDomain::transfer::AMTransferManager *transfer_manager =
+  AMApplication::TransferWorkflow::TransferAppService *transfer_manager =
       RuntimeBindingState_().transfer_manager.load(std::memory_order_acquire);
   return transfer_manager ? transfer_manager->ListTaskIds()
                           : std::vector<std::string>{};
@@ -366,54 +371,58 @@ std::string Runtime::BuildPath(const Runtime::ClientHandle &client,
  * @brief Substitute path-like variable segments in one raw token.
  */
 std::string Runtime::SubstitutePathLike(const std::string &raw) {
-  AMDomain::var::VarCLISet *var_manager =
-      RuntimeBindingState_().var_manager.load(std::memory_order_acquire);
-  return var_manager ? var_manager->SubstitutePathLike(raw) : raw;
+  const AMDomain::var::IVarSubstitutionPort *var_substitution =
+      RuntimeBindingState_().var_substitution.load(std::memory_order_acquire);
+  return var_substitution ? var_substitution->SubstitutePathLike(raw) : raw;
 }
 
 /**
  * @brief Return true when one variable domain exists.
  */
 bool Runtime::HasVarDomain(const std::string &domain) {
-  AMDomain::var::VarCLISet *var_manager =
-      RuntimeBindingState_().var_manager.load(std::memory_order_acquire);
-  return var_manager ? var_manager->HasDomain(domain) : false;
+  const AMDomain::var::IVarQueryPort *var_query =
+      RuntimeBindingState_().var_query.load(std::memory_order_acquire);
+  return var_query ? var_query->HasDomain(domain) : false;
 }
 
 /**
  * @brief Return all available variable domains.
  */
 std::vector<std::string> Runtime::ListVarDomains() {
-  AMDomain::var::VarCLISet *var_manager =
-      RuntimeBindingState_().var_manager.load(std::memory_order_acquire);
-  return var_manager ? var_manager->ListDomains() : std::vector<std::string>{};
+  const AMDomain::var::IVarQueryPort *var_query =
+      RuntimeBindingState_().var_query.load(std::memory_order_acquire);
+  return var_query ? var_query->ListDomains() : std::vector<std::string>{};
 }
 
 /**
  * @brief Return variables in one domain.
  */
-std::vector<VarInfo> Runtime::ListVarsByDomain(const std::string &domain) {
-  AMDomain::var::VarCLISet *var_manager =
-      RuntimeBindingState_().var_manager.load(std::memory_order_acquire);
-  return var_manager ? var_manager->ListByDomain(domain) : std::vector<VarInfo>{};
+std::vector<AMDomain::var::VarInfo>
+Runtime::ListVarsByDomain(const std::string &domain) {
+  const AMDomain::var::IVarQueryPort *var_query =
+      RuntimeBindingState_().var_query.load(std::memory_order_acquire);
+  return var_query ? var_query->ListByDomain(domain)
+                   : std::vector<AMDomain::var::VarInfo>{};
 }
 
 /**
  * @brief Return current variable domain.
  */
 std::string Runtime::CurrentVarDomain() {
-  AMDomain::var::VarCLISet *var_manager =
-      RuntimeBindingState_().var_manager.load(std::memory_order_acquire);
-  return var_manager ? var_manager->CurrentDomain() : "";
+  const AMDomain::var::IVarQueryPort *var_query =
+      RuntimeBindingState_().var_query.load(std::memory_order_acquire);
+  return var_query ? var_query->CurrentDomain() : "";
 }
 
 /**
  * @brief Query one variable value by domain/name.
  */
-VarInfo Runtime::GetVar(const std::string &domain, const std::string &name) {
-  AMDomain::var::VarCLISet *var_manager =
-      RuntimeBindingState_().var_manager.load(std::memory_order_acquire);
-  return var_manager ? var_manager->GetVar(domain, name) : VarInfo{};
+AMDomain::var::VarInfo Runtime::GetVar(const std::string &domain,
+                                         const std::string &name) {
+  const AMDomain::var::IVarQueryPort *var_query =
+      RuntimeBindingState_().var_query.load(std::memory_order_acquire);
+  return var_query ? var_query->GetVar(domain, name)
+                   : AMDomain::var::VarInfo{};
 }
 
 /**
@@ -721,6 +730,10 @@ std::string Runtime::StylePath(const PathInfo &info, const std::string &name) {
   return filesystem ? filesystem->StylePath(info, name) : name;
 }
 } // namespace AMInterface::ApplicationAdapters
+
+
+
+
 
 
 

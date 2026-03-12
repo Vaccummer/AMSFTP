@@ -1,5 +1,5 @@
 #pragma once
-#include "foundation/var/VarModel.hpp"
+#include "domain/var/VarModel.hpp"
 #include <mutex>
 #include <string>
 #include <unordered_map>

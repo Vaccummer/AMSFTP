@@ -34,10 +34,16 @@ class AMHostConfigManager;
 class AMKnownHostsManager;
 }
 namespace AMDomain::var {
-class VarCLISet;
+class IVarQueryPort;
+class IVarSubstitutionPort;
+class IVarRepository;
+class ICurrentDomainProvider;
 }
-namespace AMDomain::transfer {
-class AMTransferManager;
+namespace AMApplication::VarWorkflow {
+class VarAppService;
+}
+namespace AMApplication::TransferWorkflow {
+class TransferAppService;
 }
 namespace AMDomain::filesystem {
 class AMFileSystem;
@@ -101,6 +107,42 @@ private:
   AMApplication::client::ClientAppService &client_service_;
 };
 
+class ConfigBackedVarRepository final : public AMDomain::var::IVarRepository {
+public:
+  /**
+   * @brief Construct repository from config app service.
+   */
+  explicit ConfigBackedVarRepository(
+      AMApplication::config::AMConfigAppService &config_service);
+  ~ConfigBackedVarRepository() override = default;
+
+  ECM Load(AMDomain::var::VarDomainService::DomainDict *out_vars) override;
+  ECM Save(const AMDomain::var::VarDomainService::DomainDict &vars,
+           bool async = true) override;
+
+private:
+  AMApplication::config::AMConfigAppService &config_service_;
+};
+
+/**
+ * @brief Current-domain provider backed by client app service.
+ */
+class CurrentVarDomainProvider final
+    : public AMDomain::var::ICurrentDomainProvider {
+public:
+  /**
+   * @brief Construct provider from client app service.
+   */
+  explicit CurrentVarDomainProvider(
+      AMApplication::client::ClientAppService &client_service);
+  ~CurrentVarDomainProvider() override = default;
+
+  [[nodiscard]] std::string CurrentDomain() const override;
+
+private:
+  AMApplication::client::ClientAppService &client_service_;
+};
+
 /**
  * @brief Helper adapter for current-client path context queries.
  */
@@ -139,21 +181,21 @@ private:
 };
 
 /**
- * @brief Var-config saver workflow port backed by var manager.
+ * @brief Var-config saver workflow port backed by var app service.
  */
 class VarConfigSaver final
     : public AMApplication::ConfigWorkflow::IVarConfigSaver {
 public:
   /**
-   * @brief Construct saver from var manager.
+   * @brief Construct saver from var app service.
    */
-  explicit VarConfigSaver(AMDomain::var::VarCLISet &var_manager);
+  explicit VarConfigSaver(AMApplication::VarWorkflow::VarAppService &var_service);
   ~VarConfigSaver() override = default;
 
   ECM SaveVarConfig(bool dump_now) override;
 
 private:
-  AMDomain::var::VarCLISet &var_manager_;
+  AMApplication::VarWorkflow::VarAppService &var_service_;
 };
 
 /**
@@ -327,15 +369,16 @@ private:
 };
 
 /**
- * @brief Path-substitution workflow port backed by var manager.
+ * @brief Path-substitution workflow port backed by var substitution port.
  */
 class PathSubstitutionPort final
     : public AMApplication::TransferWorkflow::IPathSubstitutionPort {
 public:
   /**
-   * @brief Construct path substitutor from var manager.
+   * @brief Construct path substitutor from a var substitution port.
    */
-  explicit PathSubstitutionPort(AMDomain::var::VarCLISet &var_manager);
+  explicit PathSubstitutionPort(
+      const AMDomain::var::IVarSubstitutionPort &substitution_port);
   ~PathSubstitutionPort() override = default;
 
   [[nodiscard]] std::string
@@ -344,55 +387,36 @@ public:
   SubstitutePathLike(const std::vector<std::string> &raw) const override;
 
 private:
-  AMDomain::var::VarCLISet &var_manager_;
+  const AMDomain::var::IVarSubstitutionPort &substitution_port_;
 };
 
 /**
- * @brief Variable-command adapter backed by var manager.
+ * @brief Execute CLI `var get` against the var app service.
  */
-class VarGateway final : public AMApplication::VarWorkflow::IVarGateway {
-public:
-  /**
-   * @brief Construct variable gateway from var manager.
-   */
-  explicit VarGateway(AMDomain::var::VarCLISet &var_manager);
+ECM RunVarGet(AMApplication::VarWorkflow::VarAppService &var_service,
+              AMPromptManager &prompt_manager,
+              const std::string &token_name);
 
-  /**
-   * @brief Substitute one path-like token.
-   */
-  [[nodiscard]] std::string SubstitutePathLike(const std::string &raw) const;
+/**
+ * @brief Execute CLI `var def` against the var app service.
+ */
+ECM RunVarDef(AMApplication::VarWorkflow::VarAppService &var_service,
+              AMPromptManager &prompt_manager, bool global,
+              const std::string &token_name, const std::string &value);
 
-  /**
-   * @brief Substitute path-like tokens in one vector.
-   */
-  [[nodiscard]] std::vector<std::string>
-  SubstitutePathLike(const std::vector<std::string> &raw) const;
+/**
+ * @brief Execute CLI `var del` against the var app service.
+ */
+ECM RunVarDel(AMApplication::VarWorkflow::VarAppService &var_service,
+              AMPromptManager &prompt_manager, bool all,
+              const std::vector<std::string> &tokens);
 
-  /**
-   * @brief Query one variable by token name.
-   */
-  ECM QueryByName(const std::string &token_name) const override;
-
-  /**
-   * @brief Define one variable.
-   */
-  ECM DefineVar(bool global, const std::string &name,
-                const std::string &value) const override;
-
-  /**
-   * @brief Delete one variable by CLI args.
-   */
-  ECM DeleteVarByCli(bool all, const std::string &section,
-                     const std::string &varname) const override;
-
-  /**
-   * @brief List variables by domain filters.
-   */
-  ECM ListVars(const std::vector<std::string> &domains) const override;
-
-private:
-  AMDomain::var::VarCLISet &var_manager_;
-};
+/**
+ * @brief Execute CLI `var ls` against the var app service.
+ */
+ECM RunVarLs(AMApplication::VarWorkflow::VarAppService &var_service,
+             AMPromptManager &prompt_manager,
+             const std::vector<std::string> &domains);
 
 /**
  * @brief Completion workflow gateway backed by active completer runtime.
@@ -420,7 +444,7 @@ public:
    * @brief Construct executor from transfer manager.
    */
   explicit TransferExecutorPort(
-      AMDomain::transfer::AMTransferManager &transfer_manager);
+      AMApplication::TransferWorkflow::TransferAppService &transfer_manager);
   ~TransferExecutorPort() override = default;
 
   ECM Transfer(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
@@ -429,7 +453,7 @@ public:
                     bool quiet, amf interrupt_flag = nullptr) override;
 
 private:
-  AMDomain::transfer::AMTransferManager &transfer_manager_;
+  AMApplication::TransferWorkflow::TransferAppService &transfer_manager_;
 };
 
 /**
@@ -440,7 +464,7 @@ public:
   /**
    * @brief Construct gateway from transfer manager.
    */
-  explicit TaskGateway(AMDomain::transfer::AMTransferManager &transfer_manager);
+  explicit TaskGateway(AMApplication::TransferWorkflow::TransferAppService &transfer_manager);
   ~TaskGateway() override = default;
 
   ECM ListTasks(bool pending, bool suspend, bool finished, bool conducting,
@@ -467,7 +491,7 @@ public:
   [[nodiscard]] std::vector<size_t> ListCachedTransferSetIds() const override;
 
 private:
-  AMDomain::transfer::AMTransferManager &transfer_manager_;
+  AMApplication::TransferWorkflow::TransferAppService &transfer_manager_;
 };
 
 /**
@@ -492,8 +516,9 @@ struct RuntimeBindings {
   AMDomain::host::AMHostConfigManager *host_config_manager = nullptr;
   AMDomain::host::AMKnownHostsManager *known_hosts_manager = nullptr;
   AMApplication::client::ClientAppService *client_service = nullptr;
-  AMDomain::transfer::AMTransferManager *transfer_manager = nullptr;
-  AMDomain::var::VarCLISet *var_manager = nullptr;
+  AMApplication::TransferWorkflow::TransferAppService *transfer_manager = nullptr;
+  const AMDomain::var::IVarQueryPort *var_query = nullptr;
+  const AMDomain::var::IVarSubstitutionPort *var_substitution = nullptr;
   AMSignalMonitorPort *signal_monitor = nullptr;
   AMPromptManager *prompt_manager = nullptr;
   AMApplication::config::AMConfigAppService *config_service = nullptr;
@@ -676,7 +701,8 @@ ECM RemoveClient(const std::string &nickname);
 /**
  * @brief Return variables in one domain.
  */
-[[nodiscard]] std::vector<VarInfo> ListVarsByDomain(const std::string &domain);
+[[nodiscard]] std::vector<AMDomain::var::VarInfo>
+ListVarsByDomain(const std::string &domain);
 
 /**
  * @brief Return current variable domain.
@@ -686,8 +712,8 @@ ECM RemoveClient(const std::string &nickname);
 /**
  * @brief Query one variable value by domain/name.
  */
-[[nodiscard]] VarInfo GetVar(const std::string &domain,
-                             const std::string &name);
+[[nodiscard]] AMDomain::var::VarInfo GetVar(const std::string &domain,
+                                             const std::string &name);
 
 /**
  * @brief Resolve prompt-path options for one nickname profile.
@@ -782,6 +808,11 @@ void SilenceSignalHook(const std::string &name);
 void ResumeSignalHook(const std::string &name);
 } // namespace Runtime
 } // namespace AMInterface::ApplicationAdapters
+
+
+
+
+
 
 
 

@@ -23,11 +23,11 @@ namespace AMDomain::host {
 class AMHostConfigManager;
 class AMKnownHostsManager;
 }
-namespace AMDomain::var {
-class VarCLISet;
+namespace AMApplication::VarWorkflow {
+class VarAppService;
 }
-namespace AMDomain::transfer {
-class AMTransferManager;
+namespace AMApplication::TransferWorkflow {
+class TransferAppService;
 }
 namespace AMDomain::filesystem {
 class AMFileSystem;
@@ -51,10 +51,10 @@ struct CliManagers : public NonCopyableNonMovable {
               AMPromptManager &prompt_manager,
               AMDomain::host::AMHostConfigManager &host_config_manager,
               AMDomain::host::AMKnownHostsManager &known_hosts_manager,
-              AMDomain::var::VarCLISet &var_manager,
+              AMApplication::VarWorkflow::VarAppService &var_service,
               AMLoggerManagerPort &log_manager,
               AMApplication::client::ClientAppService &client_service,
-              AMDomain::transfer::AMTransferManager &transfer_manager,
+              AMApplication::TransferWorkflow::TransferAppService &transfer_manager,
               AMDomain::filesystem::AMFileSystem &filesystem);
 
   /**
@@ -68,10 +68,10 @@ struct CliManagers : public NonCopyableNonMovable {
   AMPromptManager &prompt_manager;
   AMDomain::host::AMHostConfigManager &host_config_manager;
   AMDomain::host::AMKnownHostsManager &known_hosts_manager;
-  AMDomain::var::VarCLISet &var_manager;
+  AMApplication::VarWorkflow::VarAppService &var_service;
   AMLoggerManagerPort &log_manager;
   AMApplication::client::ClientAppService &client_service;
-  AMDomain::transfer::AMTransferManager &transfer_manager;
+  AMApplication::TransferWorkflow::TransferAppService &transfer_manager;
   AMDomain::filesystem::AMFileSystem &filesystem;
 };
 
@@ -1161,3 +1161,8 @@ struct CliCommands {
   CLI::App *resume_cmd = nullptr;
   CliArgsPool *args = nullptr;
 };
+
+
+
+
+

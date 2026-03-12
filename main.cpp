@@ -8,8 +8,7 @@
 #include "infrastructure/signal_monitor/SignalMonitor.hpp"
 #include "domain/filesystem/FileSystemManager.hpp"
 #include "domain/host/HostManager.hpp"
-#include "domain/transfer/TransferManager.hpp"
-#include "domain/var/VarManager.hpp"
+#include "application/transfer/TransferAppService.hpp"
 #include "interface/CLIBind.hpp"
 #include "interface/InteractiveLoop.hpp"
 #include <atomic>
@@ -49,18 +48,18 @@ int main(int argc, char **argv) {
     auto &prompt_manager = AMPromptManager::Instance();
     AMDomain::host::AMHostConfigManager host_config_manager{};
     AMDomain::host::AMKnownHostsManager known_hosts_manager{};
-    auto &var_manager = AMDomain::var::VarCLISet::Instance();
     AMLoggerManager log_manager{};
     AMInfra::ClientRuntime::ClientFactoryAdapter client_factory(
         host_config_manager);
     AMApplication::client::ClientAppService client_service(
         host_config_manager, client_factory);
     auto &transfer_manager = AMDomain::transfer::AMTransferManager::Instance();
+    AMApplication::TransferWorkflow::TransferAppService transfer_service(transfer_manager);
     auto &filesystem = AMDomain::filesystem::AMFileSystem::Instance();
     AMBootstrap::AppHandle app_handle(
         signal_monitor, prompt_manager, host_config_manager,
-        known_hosts_manager, var_manager, log_manager, client_service,
-        transfer_manager, filesystem);
+        known_hosts_manager, log_manager, client_service, transfer_service,
+        filesystem);
     AMBootstrap::SessionHandle session_handle;
     ECM init_rcm = app_handle.Init(session_handle.task_control_token);
     if (!isok(init_rcm)) {
@@ -112,5 +111,9 @@ int main(int argc, char **argv) {
     return static_cast<int>(EC::UnknownError);
   }
 }
+
+
+
+
 
 
