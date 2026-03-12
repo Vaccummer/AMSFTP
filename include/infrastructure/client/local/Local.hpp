@@ -26,8 +26,6 @@
 class AMLocalIOCore : public ClientIOBase, BasePathMatch {
 private:
   AMAtomic<ConRequest> &request_atomic_;
-  mutable std::recursive_mutex mtx;
-
   [[nodiscard]] bool IsInterrupted() const override {
     return control_part_ ? control_part_->IsInterrupted() : false;
   }
@@ -272,7 +270,6 @@ public:
 
   std::string UpdateHomeDir([[maybe_unused]] int timeout_ms = -1,
                             [[maybe_unused]] int64_t start_time = -1) override {
-    std::lock_guard<std::recursive_mutex> lock(mtx);
     const std::string home_dir = AMFS::HomePath();
     if (config_part_) {
       config_part_->SetHomeDir(home_dir);
@@ -1559,4 +1556,3 @@ public:
     return {EC::Success, ""};
   }
 };
-
