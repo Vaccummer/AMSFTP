@@ -1,6 +1,7 @@
 #pragma once
 
 #include "application/client/runtime/ClientMaintainer.hpp"
+#include "application/client/runtime/ClientPublicPool.hpp"
 #include "domain/client/ClientPort.hpp"
 #include <atomic>
 #include <functional>
@@ -26,7 +27,8 @@ public:
   using TraceCallback = AMDomain::client::TraceCallback;
   using AuthCallback = AMDomain::client::AuthCallback;
   using KnownHostCallback = AMDomain::client::KnownHostCallback;
-  using DisconnectCallback = std::function<void(const ClientHandle &, const ECM &)>;
+  using DisconnectCallback =
+      std::function<void(const ClientHandle &, const ECM &)>;
   using ClientConnectOptions = AMDomain::client::ClientConnectOptions;
   using ClientConnectContext = AMDomain::client::ClientConnectContext;
   using ClientWorkdirState = AMDomain::client::ClientWorkdirState;
@@ -92,6 +94,18 @@ public:
    * @brief Return current maintainer reference.
    */
   [[nodiscard]] const ClientMaintainer &Maintainer() const;
+
+  /**
+   * @brief Return shared transfer client pool.
+   */
+  [[nodiscard]] std::shared_ptr<ClientPublicPool> PublicPool() const;
+
+  /**
+   * @brief Create one transfer-only client instance by nickname.
+   */
+  std::pair<ECM, ClientHandle>
+  CreateTransferClient(const std::string &nickname, int timeout_ms = -1,
+                       int64_t start_time = -1);
 
   /**
    * @brief Return one client by nickname.

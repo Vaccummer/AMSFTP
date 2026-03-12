@@ -1,6 +1,6 @@
 #pragma once
 
-#include "application/client/runtime/ClientMaintainer.hpp"
+#include "application/client/runtime/ClientPublicPool.hpp"
 #include "foundation/DataClass.hpp"
 
 #include <atomic>
@@ -11,7 +11,6 @@
 #include <optional>
 #include <string>
 #include <thread>
-#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -28,7 +27,7 @@ public:
   using ECM = std::pair<ErrorCode, std::string>;
   using EC = ErrorCode;
   using TaskId = std::string;
-  using ClientHandle = ClientMaintainer::ClientHandle;
+  using ClientHandle = AMDomain::client::ClientHandle;
   using ClientProtocol = AMDomain::client::ClientProtocol;
 
   /**
@@ -72,19 +71,15 @@ public:
   ECM Submit(std::shared_ptr<TaskInfo> task_info);
 
   /**
-   * @brief Build one TaskInfo from transfer tasks and host maintainer.
+   * @brief Build one TaskInfo from transfer tasks and public pool.
    */
   std::shared_ptr<TaskInfo>
   CreateTaskInfo(std::shared_ptr<TASKS> tasks,
-                 const std::shared_ptr<ClientMaintainer> &hostm,
+                 const std::shared_ptr<AMApplication::client::ClientPublicPool>
+                     &pool,
                  TransferCallback callback = TransferCallback(),
                  ssize_t buffer_size = -1, bool quiet = false,
                  int thread_id = -1);
-
-  /**
-   * @brief Remove and return task-bound host maintainer.
-   */
-  std::shared_ptr<ClientMaintainer> TakeTaskHost(const TaskId &id);
 
   /**
    * @brief Query task status by ID.
@@ -190,20 +185,28 @@ private:
   bool HasPendingTasksLocked() const;
 
   /**
-   * @brief Bind one task id to a host maintainer snapshot.
+   * @brief Bind one task id to a transfer pool instance.
    */
-  void SetTaskHost_(const TaskId &task_id,
-                    const std::shared_ptr<ClientMaintainer> &hostm);
+  void SetTaskPool_(const TaskId &task_id,
+                    const std::shared_ptr<AMApplication::client::ClientPublicPool>
+                        &pool);
 
   /**
-   * @brief Get host maintainer snapshot for one task id.
+   * @brief Get transfer pool snapshot for one task id.
    */
-  std::shared_ptr<ClientMaintainer> GetTaskHost_(const TaskId &task_id) const;
+  std::shared_ptr<AMApplication::client::ClientPublicPool>
+  GetTaskPool_(const TaskId &task_id) const;
 
   /**
-   * @brief Remove and return host maintainer binding for one task id.
+   * @brief Remove and return transfer pool binding for one task id.
    */
-  std::shared_ptr<ClientMaintainer> TakeTaskHost_(const TaskId &task_id);
+  std::shared_ptr<AMApplication::client::ClientPublicPool>
+  TakeTaskPool_(const TaskId &task_id);
+
+  /**
+   * @brief Release one task's pooled client leases and pool binding.
+   */
+  void ReleaseTaskResources_(const TaskId &task_id);
 
   /**
    * @brief Cancel all pending tasks during shutdown.
@@ -268,17 +271,30 @@ private:
                               ssize_t provided_size);
 
   /**
-   * @brief Resolve one client handle from the host maintainer.
+   * @brief Normalize one task nickname to canonical transfer-pool key.
    */
-  ClientHandle ResolveClient_(const std::shared_ptr<ClientMaintainer> &hostm,
-                              const std::string &nickname);
+  static std::string CanonicalTaskNickname_(const std::string &nickname);
 
   /**
-   * @brief Validate source and destination client handles for one task.
+   * @brief Collect distinct client nicknames required by one task.
    */
-  std::tuple<ECM, ClientHandle, ClientHandle>
-  TestHost(const TransferTask &task,
-           const std::shared_ptr<ClientMaintainer> &hostm);
+  std::vector<std::string>
+  CollectTaskNicknames_(const std::shared_ptr<TaskInfo> &task_info) const;
+
+  /**
+   * @brief Acquire the pooled clients required by one task execution pass.
+   */
+  std::pair<ECM, std::unordered_map<std::string, ClientHandle>>
+  AcquireTaskClients_(const std::shared_ptr<TaskInfo> &task_info,
+                      const std::shared_ptr<AMApplication::client::ClientPublicPool>
+                          &pool);
+
+  /**
+   * @brief Resolve one client handle from the acquired task client map.
+   */
+  ClientHandle ResolveTaskClient_(
+      const std::unordered_map<std::string, ClientHandle> &clients,
+      const std::string &nickname) const;
 
   /**
    * @brief Run one worker loop for the assigned thread index.
@@ -301,13 +317,14 @@ private:
   std::list<TaskId> public_queue_;
 
   /**
-   * @brief Lock order policy: queue -> registry -> task_host -> result ->
+   * @brief Lock order policy: queue -> registry -> task_pool -> result ->
    * conducting.
    */
   mutable std::mutex registry_mtx_;
   std::unordered_map<TaskId, std::shared_ptr<TaskInfo>> task_registry_;
-  mutable std::mutex task_host_mtx_;
-  std::unordered_map<TaskId, std::shared_ptr<ClientMaintainer>> task_hosts_;
+  mutable std::mutex task_pool_mtx_;
+  std::unordered_map<TaskId, std::shared_ptr<AMApplication::client::ClientPublicPool>>
+      task_pools_;
 
   mutable std::mutex result_mtx_;
   std::unordered_map<TaskId, std::shared_ptr<TaskInfo>> results_;

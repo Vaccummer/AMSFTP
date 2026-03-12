@@ -2,7 +2,7 @@
 #include "interface/ApplicationAdapters.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/bar.hpp"
-#include "application/client/runtime/ClientMaintainer.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "application/transfer/runtime/AMWorkManager.hpp"
 #include "domain/config/ConfigModel.hpp"
 #include "interface/Prompt.hpp"
@@ -42,23 +42,6 @@ ECM AMDomain::transfer::AMTransferManager::Init() {
 }
 
 namespace {
-/**
- * @brief Resolve client manager heartbeat timeout from settings.
- */
-int ResolveHeartbeatTimeoutMsFromSettings_() {
-  std::function<int(int)> clamp_timeout = [](int value) -> int {
-    if (value < 10) {
-      return 10;
-    }
-    if (value > 10000) {
-      return 10000;
-    }
-    return value;
-  };
-  return clamp_timeout(AMInterface::ApplicationAdapters::Runtime::ResolveSettingInt(
-      {"Options", "ClientManager", "heartbeat_timeout_ms"}, 100));
-}
-
 #ifdef _WIN32
 /**
  * @brief Temporarily ensure STDIN has ENABLE_PROCESSED_INPUT on Windows.
@@ -135,6 +118,45 @@ ECM ParseTransferPath(const std::string &input,
     *path = resolved_path;
   }
   return {EC::Success, ""};
+}
+
+/**
+ * @brief Resolve one ready planning client from runtime lifecycle ports.
+ */
+std::pair<ECM, std::shared_ptr<AMDomain::client::IClientPort>>
+ResolvePlanningClient_(AMDomain::client::IClientRuntimePort &runtime_port,
+                       AMDomain::client::IClientLifecyclePort &lifecycle_port,
+                       const std::string &nickname,
+                       std::shared_ptr<TaskControlToken> flag) {
+  if (flag && !flag->IsRunning()) {
+    return {ECM{EC::Terminate, "Interrupted during client preparation"},
+            nullptr};
+  }
+
+  const bool is_local = nickname.empty() ||
+                        AMDomain::host::HostManagerService::IsLocalNickname(
+                            nickname);
+  if (is_local) {
+    auto client = runtime_port.GetLocalClient();
+    if (!client) {
+      return {ECM{EC::ClientNotFound, "Local client not found"}, nullptr};
+    }
+    ECM check_rcm = client->IOPort().Check();
+    if (!isok(check_rcm)) {
+      return {check_rcm, nullptr};
+    }
+    return {Ok(), client};
+  }
+
+  auto ensured = lifecycle_port.EnsureClient(nickname, flag);
+  if (!isok(ensured.first) || !ensured.second) {
+    return {ensured.first, nullptr};
+  }
+  ECM check_rcm = ensured.second->IOPort().Check();
+  if (!isok(check_rcm)) {
+    return {check_rcm, nullptr};
+  }
+  return {Ok(), ensured.second};
 }
 
 /**
@@ -376,106 +398,6 @@ bool AMDomain::transfer::AMTransferManager::ConfirmWildcard_(const std::vector<P
   return true;
 }
 
-/**
- * @brief Acquire or create a validated client for a nickname.
- */
-std::pair<ECM, AMDomain::transfer::AMTransferManager::ClientHandle> AMDomain::transfer::AMTransferManager::AcquireClient_(
-    const std::string &nickname,
-    std::shared_ptr<TaskControlToken> flag) {
-  if (flag && !flag->IsRunning()) {
-    return {ECM{EC::Terminate, "Interrupted during client preparation"},
-            nullptr};
-  }
-
-  const std::string key = nickname.empty() ? "local" : nickname;
-  {
-    std::lock_guard<std::mutex> lock(idle_mtx_);
-    auto it = idle_pool_.find(key);
-    if (it != idle_pool_.end() && !it->second.empty()) {
-      auto client = it->second.front();
-      it->second.pop_front();
-      auto rcm2 = client->IOPort().Check();
-      if (rcm2.first == EC::Success) {
-        return {ECM{EC::Success, ""}, client};
-      }
-    }
-  }
-
-  auto created = AMInterface::ApplicationAdapters::Runtime::ConnectNickname(
-      nickname, false, true, flag);
-  if (created.first.first != EC::Success || !created.second) {
-    return {created.first, nullptr};
-  }
-  return {ECM{EC::Success, ""}, created.second};
-}
-
-/**
- * @brief Collect clients and build a maintainer for required nicknames.
- */
-std::pair<ECM, std::shared_ptr<ClientMaintainer>>
-AMDomain::transfer::AMTransferManager::CollectClients(
-    const std::vector<std::string> &nicknames,
-    std::shared_ptr<TaskControlToken> flag) {
-  const int heartbeat_timeout_ms = ResolveHeartbeatTimeoutMsFromSettings_();
-  std::vector<ClientHandle> init_hosts = {};
-  auto local_client = AMInterface::ApplicationAdapters::Runtime::LocalClient();
-  if (local_client) {
-    init_hosts.push_back(local_client);
-  }
-  auto maintainer = std::make_shared<ClientMaintainer>(
-      -1, heartbeat_timeout_ms, ClientMaintainer::DisconnectCallback(),
-      std::move(init_hosts));
-  for (const auto &name : nicknames) {
-    if (name.empty() || name == "local") {
-      continue;
-    }
-    if (maintainer->GetClient(name)) {
-      continue;
-    }
-    auto [rcm, client] = AcquireClient_(name, flag);
-    if (rcm.first != EC::Success || !client) {
-      ReturnClientsToIdle_(maintainer);
-      return {rcm, nullptr};
-    }
-    auto add_rcm = maintainer->AddClient(client);
-    if (add_rcm.first != EC::Success) {
-      ReturnClientsToIdle_(maintainer);
-      return {add_rcm, nullptr};
-    }
-  }
-
-  return {ECM{EC::Success, ""}, maintainer};
-}
-
-/**
- * @brief Return all maintainer clients to the idle pool.
- */
-void AMDomain::transfer::AMTransferManager::ReturnClientsToIdle_(
-    const std::shared_ptr<ClientMaintainer> &maintainer) {
-  if (!maintainer) {
-    return;
-  }
-  const auto hosts = maintainer->GetHostsSnapshot();
-  std::lock_guard<std::mutex> lock(idle_mtx_);
-  for (const auto &pair : hosts) {
-    if (!pair.second) {
-      continue;
-    }
-    idle_pool_[pair.first].push_front(pair.second);
-  }
-}
-
-void AMDomain::transfer::AMTransferManager::ReleaseTaskClients_(
-    const std::shared_ptr<TaskInfo> &task_info) {
-  if (!task_info) {
-    return;
-  }
-  auto hostm = worker_->TakeTaskHost(task_info->id);
-  if (hostm) {
-    ReturnClientsToIdle_(hostm);
-  }
-}
-
 TaskInfo::ResultCallback
 AMDomain::transfer::AMTransferManager::BindResultCallback(UserResultCallback user_cb) {
   return [this, user_cb](std::shared_ptr<TaskInfo> task_info) {
@@ -494,7 +416,6 @@ void AMDomain::transfer::AMTransferManager::ResultCallback(std::shared_ptr<TaskI
   if (!task_info) {
     return;
   }
-  ReleaseTaskClients_(task_info);
   {
     std::lock_guard<std::mutex> lock(history_mtx_);
     history_.push_front(task_info);
@@ -555,8 +476,7 @@ ECM AMDomain::transfer::AMTransferManager::transfer(
   }
 
   if (!task_info->tasks || task_info->tasks->empty()) {
-    ReleaseTaskClients_(task_info);
-    return {EC::Success, ""};
+      return {EC::Success, ""};
   }
 
   task_info->control_token = TaskControlToken::Instance()
@@ -584,7 +504,6 @@ ECM AMDomain::transfer::AMTransferManager::transfer(
   auto submit_rcm = worker_->Submit(task_info);
   if (submit_rcm.first != EC::Success) {
     AMPromptManager::Instance().ErrorFormat(submit_rcm);
-    ReleaseTaskClients_(task_info);
     return submit_rcm;
   }
 
@@ -682,8 +601,7 @@ ECM AMDomain::transfer::AMTransferManager::transfer_async(
   }
 
   if (!task_info->tasks || task_info->tasks->empty()) {
-    ReleaseTaskClients_(task_info);
-    return {EC::InvalidArg, "Task List is empty"};
+      return {EC::InvalidArg, "Task List is empty"};
   }
 
   task_info->control_token = std::make_shared<TaskControlToken>();
@@ -709,7 +627,6 @@ ECM AMDomain::transfer::AMTransferManager::transfer_async(
   auto submit_rcm = worker_->Submit(task_info);
   if (submit_rcm.first != EC::Success) {
     AMPromptManager::Instance().ErrorFormat(submit_rcm);
-    ReleaseTaskClients_(task_info);
     return submit_rcm;
   }
 
@@ -720,7 +637,7 @@ ECM AMDomain::transfer::AMTransferManager::transfer_async(
 }
 
 /**
- * @brief Prepare host maintainer and TaskInfo from user transfer sets.
+ * @brief Prepare pooled task info from user transfer sets.
  */
 std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager::PrepareTasks_(
     const std::vector<UserTransferSet> &transfer_sets, bool quiet,
@@ -729,9 +646,27 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
     return {ECM{EC::Success, ""}, nullptr};
   }
 
+  auto &runtime_port =
+      AMInterface::ApplicationAdapters::Runtime::ClientRuntimePortOrThrow();
+  auto &lifecycle_port =
+      AMInterface::ApplicationAdapters::Runtime::ClientLifecyclePortOrThrow();
+  auto &client_service =
+      AMInterface::ApplicationAdapters::Runtime::ClientServiceOrThrow();
+
   std::vector<std::string> nickname_list = {};
   std::unordered_set<std::string> nickname_seen = {};
   bool local_used = false;
+
+  auto record_nickname = [&](const std::string &nickname) {
+    if (nickname.empty() ||
+        AMDomain::host::HostManagerService::IsLocalNickname(nickname)) {
+      local_used = true;
+      return;
+    }
+    if (nickname_seen.insert(nickname).second) {
+      nickname_list.push_back(nickname);
+    }
+  };
 
   for (const auto &set : transfer_sets) {
     std::string dst_host;
@@ -740,11 +675,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
     if (dst_rcm.first != EC::Success) {
       return {dst_rcm, nullptr};
     }
-    if (dst_host.empty() || AMStr::lowercase(dst_host) == "local") {
-      local_used = true;
-    } else if (nickname_seen.insert(dst_host).second) {
-      nickname_list.push_back(dst_host);
-    }
+    record_nickname(dst_host);
     for (const auto &src : set.srcs) {
       std::string src_host;
       std::string src_path;
@@ -752,11 +683,7 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
       if (src_rcm.first != EC::Success) {
         return {src_rcm, nullptr};
       }
-      if (src_host.empty() || AMStr::lowercase(src_host) == "local") {
-        local_used = true;
-      } else if (nickname_seen.insert(src_host).second) {
-        nickname_list.push_back(src_host);
-      }
+      record_nickname(src_host);
     }
   }
 
@@ -765,40 +692,28 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
     display_names.emplace_back("local");
   }
 
-  auto [host_rcm, hostm] = CollectClients(nickname_list, flag);
-  if (host_rcm.first != EC::Success || !hostm) {
-    return {host_rcm, nullptr};
-  }
-
   auto tasks_ptr = std::make_shared<TASKS>();
-  auto resolve_maintainer_client =
-      [&](const std::string &nickname) -> ClientHandle {
-    const bool is_local =
-        nickname.empty() || AMStr::lowercase(nickname) == "local";
-    return hostm->GetClient(is_local ? "local" : nickname);
-  };
   for (const auto &set : transfer_sets) {
     std::string dst_host;
     std::string dst_path;
     auto dst_parse = ParseTransferPath(set.dst, nullptr, &dst_host, &dst_path);
     if (dst_parse.first != EC::Success) {
-      ReturnClientsToIdle_(hostm);
       return {dst_parse, nullptr};
     }
-    auto dst_client = resolve_maintainer_client(dst_host);
-    if (!dst_client) {
-      ReturnClientsToIdle_(hostm);
-      return {ECM{EC::ClientNotFound, "Destination client not available"},
-              nullptr};
+
+    auto [dst_client_rcm, dst_client] =
+        ResolvePlanningClient_(runtime_port, lifecycle_port, dst_host, flag);
+    if (!isok(dst_client_rcm) || !dst_client) {
+      return {dst_client_rcm, nullptr};
     }
+
     auto dst_rcm = ParseTransferPath(set.dst, dst_client, &dst_host, &dst_path);
     if (dst_rcm.first != EC::Success) {
-      ReturnClientsToIdle_(hostm);
       return {dst_rcm, nullptr};
     }
+
     for (const auto &src : set.srcs) {
       if (flag && !flag->IsRunning()) {
-        ReturnClientsToIdle_(hostm);
         return {ECM{EC::Terminate, "Interrupted before task generation"},
                 nullptr};
       }
@@ -807,18 +722,17 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
       std::string src_path;
       auto src_parse = ParseTransferPath(src, nullptr, &src_host, &src_path);
       if (src_parse.first != EC::Success) {
-        ReturnClientsToIdle_(hostm);
         return {src_parse, nullptr};
       }
-      auto src_client = resolve_maintainer_client(src_host);
-      if (!src_client) {
-        ReturnClientsToIdle_(hostm);
-        return {ECM{EC::ClientNotFound, "Source client not available"},
-                nullptr};
+
+      auto [src_client_rcm, src_client] =
+          ResolvePlanningClient_(runtime_port, lifecycle_port, src_host, flag);
+      if (!isok(src_client_rcm) || !src_client) {
+        return {src_client_rcm, nullptr};
       }
+
       auto src_rcm = ParseTransferPath(src, src_client, &src_host, &src_path);
       if (src_rcm.first != EC::Success) {
-        ReturnClientsToIdle_(hostm);
         return {src_rcm, nullptr};
       }
 
@@ -830,7 +744,6 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
           src_paths.push_back(m.path);
         }
         if (!quiet && !ConfirmWildcard_(matches, src_host, dst_host)) {
-          ReturnClientsToIdle_(hostm);
           return {ECM{EC::Terminate, "Wildcard transfer canceled by user"},
                   nullptr};
         }
@@ -838,9 +751,9 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
 
       for (const auto &resolved_src : src_paths) {
         auto [rcm, tasks] = AMWorkManager::LoadTasks(
-            resolved_src, dst_path, hostm, src_host, dst_host, set.clone,
-            set.overwrite, set.mkdir, set.ignore_special_file, set.resume, flag,
-            10000);
+            resolved_src, dst_path, runtime_port, lifecycle_port, src_host,
+            dst_host, set.clone, set.overwrite, set.mkdir,
+            set.ignore_special_file, set.resume, flag, 10000);
         if (rcm.first != EC::Success) {
           AMPromptManager::Instance().ErrorFormat(rcm);
           continue;
@@ -852,12 +765,11 @@ std::pair<ECM, std::shared_ptr<TaskInfo>> AMDomain::transfer::AMTransferManager:
 
   DeduplicateTasks_(tasks_ptr.get());
   if (tasks_ptr->empty()) {
-    ReturnClientsToIdle_(hostm);
     return {ECM{EC::Success, ""}, nullptr};
   }
 
-  auto task_info = worker_->CreateTaskInfo(tasks_ptr, hostm, TransferCallback(),
-                                         -1, quiet, -1);
+  auto task_info = worker_->CreateTaskInfo(tasks_ptr, client_service.PublicPool(),
+                                           TransferCallback(), -1, quiet, -1);
   task_info->transfer_sets =
       std::make_shared<std::vector<UserTransferSet>>(std::move(transfer_sets));
   task_info->nicknames = std::move(display_names);

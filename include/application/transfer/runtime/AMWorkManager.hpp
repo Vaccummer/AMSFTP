@@ -1,6 +1,7 @@
 #pragma once
 
-#include "application/client/runtime/ClientMaintainer.hpp"
+#include "application/client/runtime/ClientPublicPool.hpp"
+#include "domain/client/ClientPort.hpp"
 #include "foundation/DataClass.hpp"
 
 #include <memory>
@@ -19,7 +20,7 @@ class AMWorkManager {
 public:
   using ECM = std::pair<ErrorCode, std::string>;
   using TaskId = std::string;
-  using ClientHandle = ClientMaintainer::ClientHandle;
+  using ClientHandle = AMDomain::client::ClientHandle;
 
   /**
    * @brief Construct a work manager backed by the application scheduler core.
@@ -62,19 +63,15 @@ public:
   ECM Submit(std::shared_ptr<TaskInfo> task_info);
 
   /**
-   * @brief Create one task info object bound to a host maintainer snapshot.
+   * @brief Create one task info object bound to a transfer client pool.
    */
   std::shared_ptr<TaskInfo>
   CreateTaskInfo(std::shared_ptr<TASKS> tasks,
-                 const std::shared_ptr<ClientMaintainer> &hostm,
+                 const std::shared_ptr<AMApplication::client::ClientPublicPool>
+                     &pool,
                  TransferCallback callback = TransferCallback(),
                  ssize_t buffer_size = -1, bool quiet = false,
                  int thread_id = -1);
-
-  /**
-   * @brief Remove and return the task-bound host maintainer.
-   */
-  std::shared_ptr<ClientMaintainer> TakeTaskHost(const TaskId &id);
 
   /**
    * @brief Query task status by id.
@@ -160,7 +157,8 @@ public:
    */
   static std::pair<ECM, TASKS>
   LoadTasks(const std::string &src, const std::string &dst,
-            const std::shared_ptr<ClientMaintainer> &hostm,
+            AMDomain::client::IClientRuntimePort &runtime_port,
+            AMDomain::client::IClientLifecyclePort &lifecycle_port,
             const std::string &src_host = "", const std::string &dst_host = "",
             bool clone = false, bool overwrite = false, bool mkdir = true,
             bool ignore_sepcial_file = true, bool resume = false,

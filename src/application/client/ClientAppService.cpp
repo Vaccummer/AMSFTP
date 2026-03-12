@@ -1,6 +1,7 @@
 #include "application/client/ClientAppService.hpp"
 
 #include "domain/client/ClientDomainService.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostManager.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/auth.hpp"
@@ -31,6 +32,21 @@ using ConRequest = AMDomain::client::ConRequest;
  */
 std::string NormalizeNickname_(const std::string &nickname) {
   return AMDomain::client::ClientDomainService::NormalizeNickname(nickname);
+}
+
+/**
+ * @brief Return true when one nickname targets the local profile.
+ */
+bool IsLocalNickname_(const std::string &nickname) {
+  return AMDomain::host::HostManagerService::IsLocalNickname(nickname);
+}
+
+/**
+ * @brief Normalize one nickname to application runtime key form.
+ */
+std::string NormalizeRuntimeNickname_(const std::string &nickname) {
+  return IsLocalNickname_(nickname) ? std::string("local")
+                                    : NormalizeNickname_(nickname);
 }
 
 /**
@@ -92,7 +108,12 @@ public:
   Impl(AMDomain::host::AMHostConfigManager &host_config_manager,
        AMDomain::client::IClientFactoryPort &client_factory)
       : host_config_manager_(host_config_manager),
-        client_factory_(client_factory) {}
+        client_factory_(client_factory),
+        public_pool_(std::make_shared<ClientPublicPool>(
+            [this](const std::string &nickname, int timeout_ms,
+                   int64_t start_time) {
+              return CreateTransferClient_(nickname, timeout_ms, start_time);
+            })) {}
 
   /**
    * @brief Initialize local runtime state and maintainer registry.
@@ -117,16 +138,15 @@ public:
       std::lock_guard<std::mutex> lock(session_mtx_);
       local_client_ = local_client;
       current_client_ = local_client;
-      workdir_states_[NormalizeNickname_(local_cfg.request.nickname)] =
+      workdir_states_[NormalizeRuntimeNickname_(local_cfg.request.nickname)] =
           WorkdirStateFromHostConfig_(local_cfg);
     }
 
     const int timeout_ms =
         AMDomain::client::ClientDomainService::ClampHeartbeatTimeoutMs(
             heartbeat_timeout_ms_);
-    std::vector<ClientHandle> init_hosts = {local_client};
     maintainer_ = std::make_unique<ClientMaintainer>(
-        60, timeout_ms, SnapshotDisconnectCallback_(), std::move(init_hosts));
+        60, timeout_ms, SnapshotDisconnectCallback_());
 
     (void)GetOrInitWorkdir(local_client);
     return Ok();
@@ -207,11 +227,27 @@ public:
   }
 
   /**
+   * @brief Return shared transfer client pool.
+   */
+  [[nodiscard]] std::shared_ptr<ClientPublicPool> PublicPool() const {
+    return public_pool_;
+  }
+
+  /**
+   * @brief Create one transfer-only client instance by nickname.
+   */
+  std::pair<ECM, ClientHandle> CreateTransferClient(const std::string &nickname,
+                                                    int timeout_ms,
+                                                    int64_t start_time) {
+    return CreateTransferClient_(nickname, timeout_ms, start_time);
+  }
+
+  /**
    * @brief Return one client by nickname.
    */
   [[nodiscard]] ClientHandle GetClient(const std::string &nickname) const {
-    const std::string key = NormalizeNickname_(nickname);
-    if (key == "local") {
+    const std::string key = NormalizeRuntimeNickname_(nickname);
+    if (IsLocalNickname_(key)) {
       return GetLocalClient();
     }
     return maintainer_ ? maintainer_->GetClient(key) : nullptr;
@@ -238,7 +274,8 @@ public:
    */
   [[nodiscard]] std::string CurrentNickname() const {
     ClientHandle client = GetCurrentClient();
-    return client ? client->ConfigPort().GetNickname() : std::string("local");
+    return client ? NormalizeRuntimeNickname_(client->ConfigPort().GetNickname())
+                  : std::string("local");
   }
 
   /**
@@ -253,14 +290,40 @@ public:
    * @brief Return all client nicknames.
    */
   [[nodiscard]] std::vector<std::string> GetClientNames() const {
-    return maintainer_ ? maintainer_->GetNicknames() : std::vector<std::string>{};
+    std::vector<std::string> names = {};
+    if (GetLocalClient()) {
+      names.emplace_back("local");
+    }
+    if (!maintainer_) {
+      return names;
+    }
+    auto registered = maintainer_->GetNicknames();
+    for (const auto &name : registered) {
+      if (!IsLocalNickname_(name)) {
+        names.push_back(name);
+      }
+    }
+    return names;
   }
 
   /**
    * @brief Return all client handles.
    */
   [[nodiscard]] std::vector<ClientHandle> GetClients() const {
-    return maintainer_ ? maintainer_->GetClients() : std::vector<ClientHandle>{};
+    std::vector<ClientHandle> clients = {};
+    if (auto local = GetLocalClient()) {
+      clients.push_back(local);
+    }
+    if (!maintainer_) {
+      return clients;
+    }
+    auto registered = maintainer_->GetClients();
+    for (const auto &client : registered) {
+      if (client && !IsLocalNickname_(client->ConfigPort().GetNickname())) {
+        clients.push_back(client);
+      }
+    }
+    return clients;
   }
 
   /**
@@ -274,8 +337,8 @@ public:
       return InterruptedResult_();
     }
 
-    const std::string key = NormalizeNickname_(nickname);
-    if (key == "local") {
+    const std::string key = NormalizeRuntimeNickname_(nickname);
+    if (IsLocalNickname_(key)) {
       return {Ok(), GetLocalClient()};
     }
 
@@ -323,7 +386,7 @@ public:
     }
 
     ConRequest request = context.request;
-    request.nickname = NormalizeNickname_(request.nickname);
+    request.nickname = NormalizeRuntimeNickname_(request.nickname);
     if (request.keyfile.empty() && !context.private_keys.empty()) {
       request.keyfile = context.private_keys.front();
     }
@@ -369,7 +432,15 @@ public:
       return {save_rcm, client};
     }
 
-    if (context.options.register_to_manager && maintainer_) {
+    if (IsLocalNickname_(request.nickname)) {
+      std::lock_guard<std::mutex> lock(session_mtx_);
+      const bool current_is_local =
+          !current_client_ || IsLocalNickname_(current_client_->ConfigPort().GetNickname());
+      local_client_ = client;
+      if (current_is_local) {
+        current_client_ = client;
+      }
+    } else if (context.options.register_to_manager && maintainer_) {
       ECM add_rcm = maintainer_->AddClient(client, true);
       if (!isok(add_rcm)) {
         return {add_rcm, client};
@@ -387,8 +458,8 @@ public:
       return InterruptedResult_();
     }
 
-    const std::string key = NormalizeNickname_(nickname);
-    if (key == "local") {
+    const std::string key = NormalizeRuntimeNickname_(nickname);
+    if (IsLocalNickname_(key)) {
       return {Ok(), GetLocalClient()};
     }
 
@@ -420,7 +491,7 @@ public:
 
     ClientHandle client = GetClient(nickname);
     if (!client) {
-      const std::string display = NormalizeNickname_(nickname);
+      const std::string display = NormalizeRuntimeNickname_(nickname);
       return {Err(EC::ClientNotFound,
                   AMStr::fmt("Client not found: {}", display.empty() ? "local" : display)),
               nullptr};
@@ -441,8 +512,8 @@ public:
    * @brief Remove one client from runtime registry.
    */
   ECM RemoveClient(const std::string &nickname) {
-    const std::string key = NormalizeNickname_(nickname);
-    if (key == "local") {
+    const std::string key = NormalizeRuntimeNickname_(nickname);
+    if (IsLocalNickname_(key)) {
       return Err(EC::InvalidArg, "Local client cannot be removed");
     }
     if (!maintainer_) {
@@ -478,7 +549,7 @@ public:
       return {scoped.nickname, scoped.path, nullptr, validate_rcm};
     }
 
-    if (AMDomain::client::ClientDomainService::IsLocalNickname(scoped.nickname)) {
+    if (IsLocalNickname_(scoped.nickname)) {
       return {"local", scoped.path, GetLocalClient(), Ok()};
     }
 
@@ -511,8 +582,8 @@ public:
    */
   [[nodiscard]] ClientWorkdirState
   GetWorkdirState(const std::string &nickname) const {
-    const std::string key = NormalizeNickname_(nickname.empty() ? CurrentNickname()
-                                                                : nickname);
+    const std::string key = NormalizeRuntimeNickname_(nickname.empty() ? CurrentNickname()
+                                                                       : nickname);
     {
       std::lock_guard<std::mutex> lock(session_mtx_);
       const auto it = workdir_states_.find(key);
@@ -532,8 +603,8 @@ public:
    */
   ECM SetWorkdirState(const std::string &nickname,
                       const ClientWorkdirState &state) {
-    const std::string key = NormalizeNickname_(nickname.empty() ? CurrentNickname()
-                                                                : nickname);
+    const std::string key = NormalizeRuntimeNickname_(nickname.empty() ? CurrentNickname()
+                                                                       : nickname);
     const ClientWorkdirState normalized = NormalizeWorkdirState_(state);
     {
       std::lock_guard<std::mutex> lock(session_mtx_);
@@ -550,7 +621,7 @@ public:
       return {};
     }
 
-    const std::string nickname = NormalizeNickname_(client->ConfigPort().GetNickname());
+    const std::string nickname = NormalizeRuntimeNickname_(client->ConfigPort().GetNickname());
     ClientWorkdirState state = GetWorkdirState(nickname);
     state.home_dir = AMPathStr::UnifyPathSep(client->ConfigPort().GetHomeDir(), "/");
     if (state.home_dir.empty()) {
@@ -645,11 +716,43 @@ private:
   }
 
   /**
+   * @brief Create and connect one transfer-only pooled client by nickname.
+   */
+  std::pair<ECM, ClientHandle>
+  CreateTransferClient_(const std::string &nickname, int timeout_ms,
+                        int64_t start_time) {
+    const std::string key = NormalizeRuntimeNickname_(nickname);
+    auto load_cfg = [&]() -> std::pair<ECM, HostConfig> {
+      if (IsLocalNickname_(key)) {
+        return host_config_manager_.GetLocalConfig();
+      }
+      return host_config_manager_.GetClientConfig(key);
+    };
+
+    auto [cfg_rcm, host_cfg] = load_cfg();
+    if (!isok(cfg_rcm)) {
+      return {cfg_rcm, nullptr};
+    }
+
+    auto [create_rcm, client] = CreateClient_(host_cfg.request);
+    if (!isok(create_rcm) || !client) {
+      return {create_rcm, nullptr};
+    }
+
+    ECM connect_rcm = client->IOPort().Connect(false, timeout_ms,
+                                               ResolveStartTime_(start_time));
+    if (!isok(connect_rcm)) {
+      return {connect_rcm, client};
+    }
+    return {Ok(), client};
+  }
+
+  /**
    * @brief Load persisted workdir state from host config.
    */
   [[nodiscard]] ClientWorkdirState
   LoadPersistedState_(const std::string &nickname) const {
-    if (AMDomain::client::ClientDomainService::IsLocalNickname(nickname)) {
+    if (IsLocalNickname_(nickname)) {
       auto [rcm, cfg] = host_config_manager_.GetLocalConfig();
       return isok(rcm) ? WorkdirStateFromHostConfig_(cfg) : ClientWorkdirState{};
     }
@@ -663,7 +766,7 @@ private:
   ECM PersistWorkdirState_(const std::string &nickname,
                            const ClientWorkdirState &state) {
     auto load_cfg = [&]() -> std::pair<ECM, HostConfig> {
-      if (AMDomain::client::ClientDomainService::IsLocalNickname(nickname)) {
+      if (IsLocalNickname_(nickname)) {
         return host_config_manager_.GetLocalConfig();
       }
       return host_config_manager_.GetClientConfig(nickname);
@@ -765,6 +868,7 @@ private:
   mutable std::unordered_map<std::string, ClientWorkdirState> workdir_states_;
   int heartbeat_timeout_ms_ = 100;
   std::unique_ptr<ClientMaintainer> maintainer_;
+  std::shared_ptr<ClientPublicPool> public_pool_;
 };
 
 /**
@@ -845,6 +949,23 @@ ClientMaintainer &ClientAppService::Maintainer() { return impl_->Maintainer(); }
  */
 const ClientMaintainer &ClientAppService::Maintainer() const {
   return impl_->Maintainer();
+}
+
+/**
+ * @brief Return shared transfer client pool.
+ */
+std::shared_ptr<ClientPublicPool> ClientAppService::PublicPool() const {
+  return impl_->PublicPool();
+}
+
+/**
+ * @brief Create one transfer-only client instance by nickname.
+ */
+std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
+ClientAppService::CreateTransferClient(const std::string &nickname,
+                                       int timeout_ms,
+                                       int64_t start_time) {
+  return impl_->CreateTransferClient(nickname, timeout_ms, start_time);
 }
 
 /**
