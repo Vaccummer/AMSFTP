@@ -1,12 +1,12 @@
 #pragma once
 
-#include "domain/arg/ArgTypes.hpp"
 #include "domain/config/ConfigModel.hpp"
 #include "foundation/DataClass.hpp"
 #include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
+#include <typeindex>
 
 namespace AMApplication::config {
 /**
@@ -53,14 +53,22 @@ public:
               std::filesystem::path *out) const = 0;
 
   /**
-   * @brief Read one typed arg payload from store.
+   * @brief Read one typed payload from store.
    */
-  [[nodiscard]] virtual bool Read(AMDomain::arg::TypeTag type, void *out) const = 0;
+  [[nodiscard]] virtual bool Read(const std::type_index &type,
+                                  void *out) const = 0;
 
   /**
-   * @brief Write one typed arg payload into store.
+   * @brief Write one typed payload into store.
    */
-  [[nodiscard]] virtual bool Write(AMDomain::arg::TypeTag type, const void *in) = 0;
+  [[nodiscard]] virtual bool Write(const std::type_index &type,
+                                   const void *in) = 0;
+
+  /**
+   * @brief Erase one typed payload subtree from store.
+   */
+  [[nodiscard]] virtual bool Erase(const std::type_index &type,
+                                   const void *in) = 0;
 
   /**
    * @brief Bind callback used for async dump/write errors.

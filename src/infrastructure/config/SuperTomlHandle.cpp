@@ -2,13 +2,10 @@
 
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
-#include "internal/ArgCodecRegistry.hpp"
 
 #include <fstream>
 
 namespace {
-using DocumentKind = AMDomain::config::DocumentKind;
-
 /**
  * @brief Ensure target file exists and its parent directory is present.
  */
@@ -55,18 +52,6 @@ bool ParseJson_(const std::string &text, Json *out, std::string *error) {
     }
     return false;
   }
-}
-
-/**
- * @brief Return whether runtime arg type belongs to current document kind.
- */
-bool IsTypeMatchedByHandle_(AMDomain::arg::TypeTag type,
-                            DocumentKind handle_kind) {
-  DocumentKind expected = DocumentKind::Config;
-  if (!AMDomain::arg::FindDocumentKind(type, &expected)) {
-    return false;
-  }
-  return expected == handle_kind;
 }
 } // namespace
 
@@ -152,48 +137,14 @@ bool AMInfraSuperTomlHandle::GetJson(Json *out) const {
 }
 
 /**
- * @brief Read one typed config arg from this handle.
+ * @brief Replace the in-memory json document and mark handle dirty.
  */
-bool AMInfraSuperTomlHandle::ReadValue(AMDomain::arg::TypeTag type,
-                                       void *out) const {
-  if (!out) {
-    return false;
-  }
-
+bool AMInfraSuperTomlHandle::SetJson(const Json &json) {
   std::lock_guard<std::mutex> lock(mtx_);
   if (!cfgffi_handle_) {
     return false;
   }
-  if (!IsTypeMatchedByHandle_(type, spec_.kind)) {
-    return false;
-  }
-
-  return AMInfra::config::DecodeArg(type, json_, out, nullptr);
-}
-
-/**
- * @brief Write one typed config arg into this handle.
- */
-bool AMInfraSuperTomlHandle::WriteValue(AMDomain::arg::TypeTag type,
-                                        const void *in) {
-  if (!in) {
-    return false;
-  }
-
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!cfgffi_handle_) {
-    return false;
-  }
-  if (!IsTypeMatchedByHandle_(type, spec_.kind)) {
-    return false;
-  }
-
-  Json next = Json::object();
-  if (!AMInfra::config::EncodeArg(type, in, &next, nullptr)) {
-    return false;
-  }
-
-  json_ = std::move(next);
+  json_ = json;
   is_dirty_ = true;
   last_modified_ = std::chrono::system_clock::now();
   return true;

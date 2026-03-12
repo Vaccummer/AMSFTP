@@ -1,8 +1,8 @@
 #include "Isocline/isocline.h"
 #include "interface/ApplicationAdapters.hpp"
 #include "foundation/DataClass.hpp"
-#include "infrastructure/Config.hpp"
 #include "interface/Prompt.hpp"
+#include "interface/style/StyleManager.hpp"
 #include "interface/TokenTypeAnalyzer.hpp"
 #include <algorithm>
 #include <cctype>
@@ -171,35 +171,14 @@ std::string NormalizePromptStyleForIc_(const std::string &raw) {
  * @brief Apply CLIPrompt shortcut styles as isocline named styles.
  */
 void ApplyPromptShortcutStyles_() {
-  Json settings;
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().GetJson(DocumentKind::Settings, &settings) ||
-      !settings.is_object()) {
-    return;
-  }
-
-  auto style_it = settings.find("Style");
-  if (style_it == settings.end() || !style_it->is_object()) {
-    return;
-  }
-  auto cli_prompt_it = style_it->find("CLIPrompt");
-  if (cli_prompt_it == style_it->end() || !cli_prompt_it->is_object()) {
-    return;
-  }
-  auto shortcut_it = cli_prompt_it->find("shortcut");
-  if (shortcut_it == cli_prompt_it->end() || !shortcut_it->is_object()) {
-    return;
-  }
-
-  for (auto it = shortcut_it->begin(); it != shortcut_it->end(); ++it) {
-    if (!it.value().is_string()) {
-      continue;
-    }
-    const std::string fmt =
-        NormalizePromptStyleForIc_(it.value().get<std::string>());
+  const auto snapshot =
+      AMInterface::ApplicationAdapters::Runtime::StyleServiceOrThrow().Snapshot();
+  for (const auto &[key, value] : snapshot.cli_prompt.shortcut) {
+    const std::string fmt = NormalizePromptStyleForIc_(value);
     if (fmt.empty()) {
       continue;
     }
-    ic_style_def(it.key().c_str(), fmt.c_str());
+    ic_style_def(key.c_str(), fmt.c_str());
   }
 }
 
@@ -207,16 +186,14 @@ void ApplyPromptShortcutStyles_() {
  * @brief Resolve incremental history-search prompt text from settings.
  */
 std::string ResolveHistorySearchPrompt_() {
-  AMInfraConfigManager &config = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow();
-  std::string prompt = config.ResolveArg<std::string>(
-      DocumentKind::Settings,
-      {"Style", "CLIPrompt", "templete", "history_search_prompt"}, "", {});
+  std::string prompt =
+      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+          {"Style", "CLIPrompt", "template", "history_search_prompt"}, "");
   if (!prompt.empty()) {
     return prompt;
   }
-  prompt = config.ResolveArg<std::string>(
-      DocumentKind::Settings,
-      {"Style", "CLIPrompt", "template", "history_search_prompt"}, "", {});
+  prompt = AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+      {"Style", "CLIPrompt", "templete", "history_search_prompt"}, "");
   if (!prompt.empty()) {
     return prompt;
   }
@@ -230,8 +207,9 @@ std::string ResolveHistorySearchPrompt_() {
  * notices in query-mode input paths).
  */
 void ApplyQueryAbortWarningStyle_() {
-  std::string abort_style = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<std::string>(
-      DocumentKind::Settings, {"Style", "InputHighlight", "abort"}, "", {});
+  std::string abort_style =
+      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+          {"Style", "InputHighlight", "abort"}, "");
   abort_style = NormalizePromptStyleForIc_(abort_style);
   if (abort_style.empty()) {
     return;
@@ -537,9 +515,8 @@ bool AMPromptManager::Prompt(
   (void)UseCorePromptProfileForClient_(target);
   const AMPromptProfileArgs *active_profile = GetCurrentPromptProfileArgs();
   std::string query_prompt_style =
-      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<std::string>(
-          DocumentKind::Settings,
-          {"Style", "ValueQueryHighlight", "prompt_style"}, "", {});
+      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+          {"Style", "ValueQueryHighlight", "prompt_style"}, "");
   query_prompt_style = NormalizePromptStyleForIc_(query_prompt_style);
   if (!query_prompt_style.empty()) {
     ic_style_def(ickey.c_str(), query_prompt_style.c_str());
@@ -550,13 +527,12 @@ bool AMPromptManager::Prompt(
   query_ctx.checker = checker ? &checker : nullptr;
   query_ctx.candidates = candidates.empty() ? nullptr : &candidates;
   if (query_ctx.checker) {
-    std::string valid_raw = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<std::string>(
-        DocumentKind::Settings, {"Style", "ValueQueryHighlight", "valid_value"},
-        "", {});
+    std::string valid_raw =
+        AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+            {"Style", "ValueQueryHighlight", "valid_value"}, "");
     std::string invalid_raw =
-        AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<std::string>(
-            DocumentKind::Settings,
-            {"Style", "ValueQueryHighlight", "invalid_value"}, "", {});
+        AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+            {"Style", "ValueQueryHighlight", "invalid_value"}, "");
     query_ctx.valid_tag = NormalizeStyleTag_(valid_raw);
     query_ctx.invalid_tag = NormalizeStyleTag_(invalid_raw);
   }
@@ -609,9 +585,8 @@ bool AMPromptManager::LiteralPrompt(
   (void)UseCorePromptProfileForClient_(target);
   const AMPromptProfileArgs *active_profile = GetCurrentPromptProfileArgs();
   std::string query_prompt_style =
-      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<std::string>(
-          DocumentKind::Settings,
-          {"Style", "ValueQueryHighlight", "prompt_style"}, "", {});
+      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+          {"Style", "ValueQueryHighlight", "prompt_style"}, "");
   query_prompt_style = NormalizePromptStyleForIc_(query_prompt_style);
   if (!query_prompt_style.empty()) {
     ic_style_def(ickey.c_str(), query_prompt_style.c_str());
@@ -629,13 +604,12 @@ bool AMPromptManager::LiteralPrompt(
   query_ctx.checker = literal_checker ? &literal_checker : nullptr;
   query_ctx.literals = literals.empty() ? nullptr : &literals;
   if (query_ctx.checker) {
-    std::string valid_raw = AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<std::string>(
-        DocumentKind::Settings, {"Style", "ValueQueryHighlight", "valid_value"},
-        "", {});
+    std::string valid_raw =
+        AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+            {"Style", "ValueQueryHighlight", "valid_value"}, "");
     std::string invalid_raw =
-        AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().ResolveArg<std::string>(
-            DocumentKind::Settings,
-            {"Style", "ValueQueryHighlight", "invalid_value"}, "", {});
+        AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+            {"Style", "ValueQueryHighlight", "invalid_value"}, "");
     query_ctx.valid_tag = NormalizeStyleTag_(valid_raw);
     query_ctx.invalid_tag = NormalizeStyleTag_(invalid_raw);
   }
@@ -770,4 +744,5 @@ bool AMPromptManager::SecurePrompt(const std::string &prompt,
   *out_input = std::move(password);
   return true;
 }
+
 

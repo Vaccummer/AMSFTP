@@ -1,22 +1,23 @@
 #pragma once
 
-#include "domain/arg/ArgTypes.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include "foundation/tools/json.hpp"
 
 #include <string>
+#include <typeindex>
 
 namespace AMInfra::config {
 /**
- * @brief Strategy interface for one arg<->json conversion pair.
+ * @brief Strategy interface for one typed payload <-> document-json conversion pair.
  */
 class IArgCodec {
 public:
   virtual ~IArgCodec() = default;
 
   /**
-   * @brief Return runtime arg type tag this codec handles.
+   * @brief Return runtime payload type this codec handles.
    */
-  [[nodiscard]] virtual AMDomain::arg::TypeTag Tag() const = 0;
+  [[nodiscard]] virtual std::type_index Type() const = 0;
 
   /**
    * @brief Return document kind this codec belongs to.
@@ -30,9 +31,15 @@ public:
                                     std::string *error) const = 0;
 
   /**
-   * @brief Encode one arg instance into JSON root.
+   * @brief Encode one payload instance into JSON root.
    */
   [[nodiscard]] virtual bool Encode(const void *in, Json *root,
                                     std::string *error) const = 0;
+
+  /**
+   * @brief Erase one payload subtree from JSON root.
+   */
+  [[nodiscard]] virtual bool Erase(const void *in, Json *root,
+                                   std::string *error) const = 0;
 };
 } // namespace AMInfra::config

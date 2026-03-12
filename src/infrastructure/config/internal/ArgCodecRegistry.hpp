@@ -1,17 +1,17 @@
 #pragma once
 
-#include "domain/arg/ArgTypes.hpp"
 #include "foundation/tools/json.hpp"
 #include "IArgCodec.hpp"
 
-#include <map>
 #include <memory>
 #include <string>
+#include <typeindex>
+#include <unordered_map>
 #include <vector>
 
 namespace AMInfra::config {
 /**
- * @brief Immutable registry that maps arg type tags to codec strategies.
+ * @brief Immutable registry that maps runtime payload types to codec strategies.
  */
 class ArgCodecRegistry {
 public:
@@ -21,9 +21,9 @@ public:
   [[nodiscard]] static const ArgCodecRegistry &Instance();
 
   /**
-   * @brief Lookup codec by arg runtime type tag.
+   * @brief Lookup codec by runtime payload type.
    */
-  [[nodiscard]] const IArgCodec *Find(AMDomain::arg::TypeTag type) const;
+  [[nodiscard]] const IArgCodec *Find(const std::type_index &type) const;
 
 private:
   /**
@@ -32,18 +32,24 @@ private:
   ArgCodecRegistry();
 
   std::vector<std::unique_ptr<IArgCodec>> codecs_ = {};
-  std::map<AMDomain::arg::TypeTag, const IArgCodec *> map_ = {};
+  std::unordered_map<std::type_index, const IArgCodec *> map_ = {};
 };
 
 /**
- * @brief Decode JSON root into typed arg payload by runtime type tag.
+ * @brief Decode JSON root into one typed payload by runtime type.
  */
-[[nodiscard]] bool DecodeArg(AMDomain::arg::TypeTag type, const Json &root,
+[[nodiscard]] bool DecodeArg(const std::type_index &type, const Json &root,
                              void *out, std::string *error = nullptr);
 
 /**
- * @brief Encode typed arg payload into JSON root by runtime type tag.
+ * @brief Encode one typed payload into JSON root by runtime type.
  */
-[[nodiscard]] bool EncodeArg(AMDomain::arg::TypeTag type, const void *in,
+[[nodiscard]] bool EncodeArg(const std::type_index &type, const void *in,
                              Json *root, std::string *error = nullptr);
+
+/**
+ * @brief Erase one typed payload subtree from JSON root by runtime type.
+ */
+[[nodiscard]] bool EraseArg(const std::type_index &type, const void *in,
+                            Json *root, std::string *error = nullptr);
 } // namespace AMInfra::config

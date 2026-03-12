@@ -1,11 +1,11 @@
 #include "CLI/CLI.hpp"
 #include "bootstrap/AppHandle.hpp"
 #include "bootstrap/SessionHandle.hpp"
+#include "application/client/ClientAppService.hpp"
 #include "foundation/DataClass.hpp"
-#include "infrastructure/Config.hpp"
 #include "infrastructure/Logger.hpp"
+#include "infrastructure/client/runtime/ClientFactoryAdapter.hpp"
 #include "infrastructure/signal_monitor/SignalMonitor.hpp"
-#include "domain/client/ClientManager.hpp"
 #include "domain/filesystem/FileSystemManager.hpp"
 #include "domain/host/HostManager.hpp"
 #include "domain/transfer/TransferManager.hpp"
@@ -46,17 +46,21 @@ int main(int argc, char **argv) {
     }
     time_start = std::chrono::steady_clock::now();
     AMInfraCliSignalMonitor signal_monitor{};
-    AMInfraConfigManager config_manager{};
     auto &prompt_manager = AMPromptManager::Instance();
-    auto &host_manager = AMDomain::host::AMHostManager::Instance();
+    AMDomain::host::AMHostConfigManager host_config_manager{};
+    AMDomain::host::AMKnownHostsManager known_hosts_manager{};
     auto &var_manager = AMDomain::var::VarCLISet::Instance();
     AMInfraLogManager log_manager{};
-    auto &client_manager = AMDomain::client::AMClientManager::Instance();
+    AMInfra::ClientRuntime::ClientFactoryAdapter client_factory(
+        host_config_manager);
+    AMApplication::client::ClientAppService client_service(
+        host_config_manager, client_factory);
     auto &transfer_manager = AMDomain::transfer::AMTransferManager::Instance();
     auto &filesystem = AMDomain::filesystem::AMFileSystem::Instance();
     AMBootstrap::AppHandle app_handle(
-        signal_monitor, config_manager, prompt_manager, host_manager,
-        var_manager, log_manager, client_manager, transfer_manager, filesystem);
+        signal_monitor, prompt_manager, host_config_manager,
+        known_hosts_manager, var_manager, log_manager, client_service,
+        transfer_manager, filesystem);
     AMBootstrap::SessionHandle session_handle;
     ECM init_rcm = app_handle.Init(session_handle.task_control_token);
     if (!isok(init_rcm)) {
@@ -76,7 +80,7 @@ int main(int argc, char **argv) {
     session_handle.ResetRunContext();
     CliRunContext &run_ctx = session_handle.run_context;
     run_ctx.is_interactive =
-        app_handle.managers.client_manager.GetIsInteractiveFlag();
+        app_handle.managers.client_service.GetInteractiveFlag();
     if (run_ctx.is_interactive) {
       run_ctx.is_interactive->store(false, std::memory_order_relaxed);
     }
@@ -94,7 +98,7 @@ int main(int argc, char **argv) {
     DispatchCliCommands(cli_commands, app_handle.managers, run_ctx);
     if (run_ctx.enter_interactive) {
       app_handle.managers.prompt_manager.ChangeClient(
-          app_handle.managers.client_manager.CurrentNickname());
+          app_handle.managers.client_service.CurrentNickname());
       RunInteractiveLoop(app_name, app_handle.managers, run_ctx);
     }
     if (run_ctx.rcm.first != EC::Success) {

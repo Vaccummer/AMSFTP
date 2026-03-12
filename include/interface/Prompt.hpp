@@ -1,7 +1,7 @@
 #pragma once
+#include "application/config/ConfigPayloads.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/tools/enum_related.hpp"
-#include "foundation/tools/json.hpp"
 #include "foundation/tools/string.hpp"
 #include "Isocline/isocline.h"
 #include <atomic>
@@ -81,17 +81,15 @@ struct AMPromptProfileArgs {
   Highlight highlight{};
 
   /**
-   * @brief Initialize this profile from JSON with fallback defaults.
-   *
-   * The object is reset to @p defaults first, then known keys from @p jsond
-   * are read and applied.
+   * @brief Initialize this profile from typed settings with fallback defaults.
    */
-  void Init(const Json &jsond, const AMPromptProfileArgs &defaults);
+  void Init(const AMApplication::config::PromptProfileSettings &settings,
+            const AMPromptProfileArgs &defaults);
 
   /**
-   * @brief Serialize this profile to JSON with the current schema layout.
+   * @brief Convert this runtime profile into one typed config payload.
    */
-  [[nodiscard]] Json GetJson() const;
+  [[nodiscard]] AMApplication::config::PromptProfileSettings ToSettings() const;
 };
 
 class AMProfileManager {
@@ -159,11 +157,12 @@ protected:
   void EnsurePromptProfilesLoaded_();
 
   /**
-   * @brief Build profile args from one JSON object with fallback defaults.
+   * @brief Build profile args from one typed settings object with fallback defaults.
    */
   [[nodiscard]] AMPromptProfileArgs
-  BuildPromptProfileArgs_(const Json &jsond,
-                          const AMPromptProfileArgs &defaults) const;
+  BuildPromptProfileArgs_(
+      const AMApplication::config::PromptProfileSettings &settings,
+      const AMPromptProfileArgs &defaults) const;
 
   mutable std::mutex profile_mtx_;
   bool profiles_loaded_ = false;
@@ -185,7 +184,7 @@ public:
   ECM Edit(const std::string &nickname);
 
   /**
-   * @brief Query prompt profile JSON for one or more host nicknames.
+   * @brief Query prompt profile settings for one or more host nicknames.
    *
    * Every nickname must exist in HostManager.
    */

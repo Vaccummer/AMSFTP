@@ -1,12 +1,14 @@
 #include "interface/ApplicationAdapters.hpp"
 #include "interface/Prompt.hpp"
-#include "domain/client/ClientManager.hpp"
+#include "application/client/ClientAppService.hpp"
+#include "application/config/ConfigPayloads.hpp"
 #include "domain/filesystem/FileSystemManager.hpp"
 #include "domain/host/HostManager.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
 #include "domain/transfer/TransferManager.hpp"
 #include "domain/var/VarManager.hpp"
-#include "infrastructure/Config.hpp"
+#include "foundation/tools/string.hpp"
+#include "interface/style/StyleManager.hpp"
 #include <atomic>
 #include <stdexcept>
 
@@ -16,13 +18,16 @@ namespace {
  * @brief Runtime dependency slots bound once from startup wiring.
  */
 struct RuntimeBindingState {
-  std::atomic<AMDomain::host::AMHostManager *> host_manager{nullptr};
-  std::atomic<AMDomain::client::AMClientManager *> client_manager{nullptr};
+  std::atomic<AMDomain::host::AMHostConfigManager *> host_config_manager{nullptr};
+  std::atomic<AMDomain::host::AMKnownHostsManager *> known_hosts_manager{nullptr};
+  std::atomic<AMApplication::client::ClientAppService *> client_service{nullptr};
   std::atomic<AMDomain::transfer::AMTransferManager *> transfer_manager{nullptr};
   std::atomic<AMDomain::var::VarCLISet *> var_manager{nullptr};
   std::atomic<AMSignalMonitorPort *> signal_monitor{nullptr};
   std::atomic<AMPromptManager *> prompt_manager{nullptr};
-  std::atomic<AMInfraConfigManager *> config_manager{nullptr};
+  std::atomic<AMApplication::config::AMConfigAppService *> config_service{
+      nullptr};
+  std::atomic<AMInterface::style::AMStyleService *> style_service{nullptr};
   std::atomic<AMDomain::filesystem::AMFileSystem *> filesystem{nullptr};
 };
 
@@ -33,6 +38,27 @@ RuntimeBindingState &RuntimeBindingState_() {
   static RuntimeBindingState state;
   return state;
 }
+
+bool TryParseInt_(const std::string &text, int *out) {
+  if (!out) {
+    return false;
+  }
+  const std::string trimmed = AMStr::Strip(text);
+  if (trimmed.empty()) {
+    return false;
+  }
+  try {
+    size_t parsed_size = 0;
+    const int value = std::stoi(trimmed, &parsed_size, 10);
+    if (parsed_size != trimmed.size()) {
+      return false;
+    }
+    *out = value;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
 } // namespace
 
 /**
@@ -40,14 +66,17 @@ RuntimeBindingState &RuntimeBindingState_() {
  */
 void Runtime::Bind(const RuntimeBindings &bindings) {
   auto &state = RuntimeBindingState_();
-  state.host_manager.store(bindings.host_manager, std::memory_order_release);
-  state.client_manager.store(bindings.client_manager, std::memory_order_release);
+  state.host_config_manager.store(bindings.host_config_manager, std::memory_order_release);
+  state.known_hosts_manager.store(bindings.known_hosts_manager,
+                                  std::memory_order_release);
+  state.client_service.store(bindings.client_service, std::memory_order_release);
   state.transfer_manager.store(bindings.transfer_manager,
                                std::memory_order_release);
   state.var_manager.store(bindings.var_manager, std::memory_order_release);
   state.signal_monitor.store(bindings.signal_monitor, std::memory_order_release);
   state.prompt_manager.store(bindings.prompt_manager, std::memory_order_release);
-  state.config_manager.store(bindings.config_manager, std::memory_order_release);
+  state.config_service.store(bindings.config_service, std::memory_order_release);
+  state.style_service.store(bindings.style_service, std::memory_order_release);
   state.filesystem.store(bindings.filesystem, std::memory_order_release);
 }
 
@@ -56,13 +85,15 @@ void Runtime::Bind(const RuntimeBindings &bindings) {
  */
 void Runtime::Reset() {
   auto &state = RuntimeBindingState_();
-  state.host_manager.store(nullptr, std::memory_order_release);
-  state.client_manager.store(nullptr, std::memory_order_release);
+  state.host_config_manager.store(nullptr, std::memory_order_release);
+  state.known_hosts_manager.store(nullptr, std::memory_order_release);
+  state.client_service.store(nullptr, std::memory_order_release);
   state.transfer_manager.store(nullptr, std::memory_order_release);
   state.var_manager.store(nullptr, std::memory_order_release);
   state.signal_monitor.store(nullptr, std::memory_order_release);
   state.prompt_manager.store(nullptr, std::memory_order_release);
-  state.config_manager.store(nullptr, std::memory_order_release);
+  state.config_service.store(nullptr, std::memory_order_release);
+  state.style_service.store(nullptr, std::memory_order_release);
   state.filesystem.store(nullptr, std::memory_order_release);
 }
 
@@ -71,53 +102,110 @@ void Runtime::Reset() {
  */
 bool Runtime::IsBound() {
   auto &state = RuntimeBindingState_();
-  return state.host_manager.load(std::memory_order_acquire) &&
-         state.client_manager.load(std::memory_order_acquire) &&
+  return state.host_config_manager.load(std::memory_order_acquire) &&
+         state.known_hosts_manager.load(std::memory_order_acquire) &&
+         state.client_service.load(std::memory_order_acquire) &&
          state.transfer_manager.load(std::memory_order_acquire) &&
          state.var_manager.load(std::memory_order_acquire) &&
          state.signal_monitor.load(std::memory_order_acquire) &&
          state.prompt_manager.load(std::memory_order_acquire) &&
-         state.config_manager.load(std::memory_order_acquire) &&
+         state.config_service.load(std::memory_order_acquire) &&
+         state.style_service.load(std::memory_order_acquire) &&
          state.filesystem.load(std::memory_order_acquire);
 }
 
 /**
- * @brief Return bound config manager reference or throw when unbound.
+ * @brief Return bound config service reference or throw when unbound.
  */
-AMInfraConfigManager &Runtime::ConfigManagerOrThrow() {
-  AMInfraConfigManager *config_manager =
-      RuntimeBindingState_().config_manager.load(std::memory_order_acquire);
-  if (!config_manager) {
-    throw std::runtime_error("Runtime config manager is not bound");
+AMApplication::config::AMConfigAppService &Runtime::ConfigServiceOrThrow() {
+  AMApplication::config::AMConfigAppService *config_service =
+      RuntimeBindingState_().config_service.load(std::memory_order_acquire);
+  if (!config_service) {
+    throw std::runtime_error("Runtime config app service is not bound");
   }
-  return *config_manager;
+  return *config_service;
+}
+
+/**
+ * @brief Return bound style service reference or throw when unbound.
+ */
+AMInterface::style::AMStyleService &Runtime::StyleServiceOrThrow() {
+  AMInterface::style::AMStyleService *style_service =
+      RuntimeBindingState_().style_service.load(std::memory_order_acquire);
+  if (!style_service) {
+    throw std::runtime_error("Runtime style service is not bound");
+  }
+  return *style_service;
+}
+
+/**
+ * @brief Return true when a configured host nickname exists.
+ */
+AMDomain::host::AMHostConfigManager &Runtime::HostConfigManagerOrThrow() {
+  AMDomain::host::AMHostConfigManager *host_config_manager =
+      RuntimeBindingState_().host_config_manager.load(std::memory_order_acquire);
+  if (!host_config_manager) {
+    throw std::runtime_error("Runtime host config manager is not bound");
+  }
+  return *host_config_manager;
+}
+
+AMDomain::host::AMKnownHostsManager &Runtime::KnownHostsManagerOrThrow() {
+  AMDomain::host::AMKnownHostsManager *known_hosts_manager =
+      RuntimeBindingState_().known_hosts_manager.load(std::memory_order_acquire);
+  if (!known_hosts_manager) {
+    throw std::runtime_error("Runtime known hosts manager is not bound");
+  }
+  return *known_hosts_manager;
+}
+
+AMApplication::client::ClientAppService &Runtime::ClientServiceOrThrow() {
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  if (!client_service) {
+    throw std::runtime_error("Runtime client app service is not bound");
+  }
+  return *client_service;
+}
+
+AMDomain::client::IClientRuntimePort &Runtime::ClientRuntimePortOrThrow() {
+  return ClientServiceOrThrow();
+}
+
+AMDomain::client::IClientLifecyclePort &Runtime::ClientLifecyclePortOrThrow() {
+  return ClientServiceOrThrow();
+}
+
+AMDomain::client::IClientPathPort &Runtime::ClientPathPortOrThrow() {
+  return ClientServiceOrThrow();
 }
 
 /**
  * @brief Return true when a configured host nickname exists.
  */
 bool Runtime::HostExists(const std::string &nickname) {
-  AMDomain::host::AMHostManager *host_manager =
-      RuntimeBindingState_().host_manager.load(std::memory_order_acquire);
-  return host_manager ? host_manager->HostExists(nickname) : false;
+  AMDomain::host::AMHostConfigManager *host_config_manager =
+      RuntimeBindingState_().host_config_manager.load(std::memory_order_acquire);
+  return host_config_manager ? host_config_manager->HostExists(nickname) : false;
 }
 
 /**
  * @brief Return configured host nicknames.
  */
 std::vector<std::string> Runtime::ListHostNames() {
-  AMDomain::host::AMHostManager *host_manager =
-      RuntimeBindingState_().host_manager.load(std::memory_order_acquire);
-  return host_manager ? host_manager->ListNames() : std::vector<std::string>{};
+  AMDomain::host::AMHostConfigManager *host_config_manager =
+      RuntimeBindingState_().host_config_manager.load(std::memory_order_acquire);
+  return host_config_manager ? host_config_manager->ListNames()
+                             : std::vector<std::string>{};
 }
 
 /**
  * @brief Return created/connected client nicknames.
  */
 std::vector<std::string> Runtime::ListClientNames() {
-  AMDomain::client::AMClientManager *client_manager =
-      RuntimeBindingState_().client_manager.load(std::memory_order_acquire);
-  return client_manager ? client_manager->GetClientNames()
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  return client_service ? client_service->GetClientNames()
                         : std::vector<std::string>{};
 }
 
@@ -135,36 +223,133 @@ std::vector<std::string> Runtime::ListTaskIds() {
  * @brief Resolve one client by nickname.
  */
 Runtime::ClientHandle Runtime::GetClient(const std::string &nickname) {
-  AMDomain::client::AMClientManager *client_manager =
-      RuntimeBindingState_().client_manager.load(std::memory_order_acquire);
-  return client_manager ? client_manager->GetClient(nickname) : nullptr;
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  return client_service ? client_service->GetClient(nickname) : nullptr;
 }
 
 /**
  * @brief Resolve one host client from client-maintainer by nickname.
  */
 Runtime::ClientHandle Runtime::GetHostClient(const std::string &nickname) {
-  AMDomain::client::AMClientManager *client_manager =
-      RuntimeBindingState_().client_manager.load(std::memory_order_acquire);
-  return client_manager ? client_manager->Clients().GetHost(nickname) : nullptr;
+  return GetClient(nickname);
 }
 
 /**
  * @brief Return local client instance.
  */
 Runtime::ClientHandle Runtime::LocalClient() {
-  AMDomain::client::AMClientManager *client_manager =
-      RuntimeBindingState_().client_manager.load(std::memory_order_acquire);
-  return client_manager ? client_manager->LocalClient() : nullptr;
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  return client_service ? client_service->GetLocalClient() : nullptr;
 }
 
 /**
  * @brief Return current active client.
  */
 Runtime::ClientHandle Runtime::CurrentClient() {
-  AMDomain::client::AMClientManager *client_manager =
-      RuntimeBindingState_().client_manager.load(std::memory_order_acquire);
-  return client_manager ? client_manager->CurrentClient() : nullptr;
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  return client_service ? client_service->GetCurrentClient() : nullptr;
+}
+
+/**
+ * @brief Return current active client nickname.
+ */
+std::string Runtime::CurrentNickname() {
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  return client_service ? client_service->CurrentNickname() : std::string{};
+}
+
+/**
+ * @brief Parse one raw path token through bound client path service.
+ */
+AMDomain::client::ParsedClientPath Runtime::ParsePath(const std::string &input,
+                                                      amf interrupt_flag) {
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  if (!client_service) {
+    return {"", "", nullptr, Err(EC::InvalidHandle, "Runtime client app service is not bound")};
+  }
+  return client_service->ParseScopedPath(input, interrupt_flag);
+}
+
+/**
+ * @brief Return client workdir, initializing when absent.
+ */
+std::string Runtime::GetOrInitWorkdir(const ClientHandle &client) {
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  return client_service ? client_service->GetOrInitWorkdir(client) : std::string{};
+}
+
+/**
+ * @brief Update one client workdir in application session state.
+ */
+ECM Runtime::SetClientWorkdir(const ClientHandle &client,
+                              const std::string &path) {
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  if (!client_service || !client) {
+    return Err(EC::InvalidHandle, "Runtime client app service is not bound");
+  }
+  auto state = client_service->GetWorkdirState(client->ConfigPort().GetNickname());
+  state.cwd = client_service->BuildAbsolutePath(client, path);
+  return client_service->SetWorkdirState(client->ConfigPort().GetNickname(), state);
+}
+
+/**
+ * @brief Set current active client instance.
+ */
+void Runtime::SetCurrentClient(const ClientHandle &client) {
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  if (client_service) {
+    client_service->SetCurrentClient(client);
+  }
+}
+
+/**
+ * @brief Connect one configured nickname through bound lifecycle port.
+ */
+std::pair<ECM, Runtime::ClientHandle>
+Runtime::ConnectNickname(const std::string &nickname, bool force,
+                         bool register_to_manager, amf interrupt_flag) {
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  if (!client_service) {
+    return {Err(EC::InvalidHandle, "Runtime client app service is not bound"), nullptr};
+  }
+  AMDomain::client::ClientConnectOptions options{};
+  options.force = force;
+  options.quiet = true;
+  options.register_to_manager = register_to_manager;
+  return client_service->ConnectNickname(nickname, options, {}, interrupt_flag);
+}
+
+/**
+ * @brief Connect one explicit request through bound lifecycle port.
+ */
+std::pair<ECM, Runtime::ClientHandle>
+Runtime::ConnectRequest(const AMDomain::client::ClientConnectContext &context,
+                        amf interrupt_flag) {
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  if (!client_service) {
+    return {Err(EC::InvalidHandle, "Runtime client app service is not bound"), nullptr};
+  }
+  return client_service->ConnectRequest(context, {}, interrupt_flag);
+}
+
+/**
+ * @brief Remove one client through bound lifecycle port.
+ */
+ECM Runtime::RemoveClient(const std::string &nickname) {
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  return client_service ? client_service->RemoveClient(nickname)
+                        : Err(EC::InvalidHandle, "Runtime client app service is not bound");
 }
 
 /**
@@ -172,9 +357,9 @@ Runtime::ClientHandle Runtime::CurrentClient() {
  */
 std::string Runtime::BuildPath(const Runtime::ClientHandle &client,
                                const std::string &path) {
-  AMDomain::client::AMClientManager *client_manager =
-      RuntimeBindingState_().client_manager.load(std::memory_order_acquire);
-  return client_manager ? client_manager->BuildPath(client, path) : path;
+  AMApplication::client::ClientAppService *client_service =
+      RuntimeBindingState_().client_service.load(std::memory_order_acquire);
+  return client_service ? client_service->BuildAbsolutePath(client, path) : path;
 }
 
 /**
@@ -258,11 +443,132 @@ Runtime::ResolvePromptPathOptions(const std::string &nickname) {
  */
 std::string Runtime::ResolveSettingString(const std::vector<std::string> &path,
                                           const std::string &fallback) {
-  AMInfraConfigManager *config_manager =
-      RuntimeBindingState_().config_manager.load(std::memory_order_acquire);
-  return config_manager ? config_manager->ResolveArg<std::string>(
-                              DocumentKind::Settings, path, fallback, {})
-                        : fallback;
+  AMInterface::style::AMStyleService *style_service =
+      RuntimeBindingState_().style_service.load(std::memory_order_acquire);
+  AMApplication::config::AMConfigAppService *config_service =
+      RuntimeBindingState_().config_service.load(std::memory_order_acquire);
+
+  if (path.size() >= 2 && path[0] == "Style" && style_service) {
+    const auto snapshot = style_service->Snapshot();
+    if (path[1] == "CompleteMenu" && path.size() == 3) {
+      const std::string &field = path[2];
+      if (field == "item_select_sign") {
+        return snapshot.complete_menu.item_select_sign;
+      }
+      if (field == "order_num_style") {
+        return snapshot.complete_menu.order_num_style;
+      }
+      if (field == "help_style") {
+        return snapshot.complete_menu.help_style;
+      }
+      if (field == "number_pick") {
+        return snapshot.complete_menu.number_pick ? "true" : "false";
+      }
+      if (field == "auto_fillin") {
+        return snapshot.complete_menu.auto_fillin ? "true" : "false";
+      }
+    }
+    if (path[1] == "CLIPrompt") {
+      if (path.size() == 3) {
+        const std::string &field = path[2];
+        if (field == "format") {
+          return snapshot.cli_prompt.prompt_template.core_prompt;
+        }
+        auto it = snapshot.cli_prompt.named_styles.find(field);
+        if (it != snapshot.cli_prompt.named_styles.end()) {
+          return it->second;
+        }
+      }
+      if (path.size() == 4 && (path[2] == "template" || path[2] == "templete")) {
+        if (path[3] == "core_prompt") {
+          return snapshot.cli_prompt.prompt_template.core_prompt;
+        }
+        if (path[3] == "history_search_prompt") {
+          return snapshot.cli_prompt.prompt_template.history_search_prompt;
+        }
+      }
+      if (path.size() == 4 && path[2] == "shortcut") {
+        auto it = snapshot.cli_prompt.shortcut.find(path[3]);
+        if (it != snapshot.cli_prompt.shortcut.end()) {
+          return it->second;
+        }
+      }
+      if (path.size() == 4 && path[2] == "icons") {
+        auto it = snapshot.cli_prompt.icons.find(path[3]);
+        if (it != snapshot.cli_prompt.icons.end()) {
+          return it->second;
+        }
+      }
+    }
+    if (path.size() == 3 && path[1] == "InputHighlight") {
+      auto it = snapshot.input_highlight.find(path[2]);
+      if (it != snapshot.input_highlight.end()) {
+        return it->second;
+      }
+    }
+    if (path.size() == 3 && path[1] == "ValueQueryHighlight") {
+      auto it = snapshot.value_query_highlight.find(path[2]);
+      if (it != snapshot.value_query_highlight.end()) {
+        return it->second;
+      }
+    }
+    if (path.size() == 3 && path[1] == "Path") {
+      auto it = snapshot.path.find(path[2]);
+      if (it != snapshot.path.end()) {
+        return it->second;
+      }
+    }
+    if (path.size() == 3 && path[1] == "SystemInfo") {
+      auto it = snapshot.system_info.find(path[2]);
+      if (it != snapshot.system_info.end()) {
+        return it->second;
+      }
+    }
+  }
+
+  if (path.size() >= 2 && path[0] == "Options" && config_service) {
+    AMApplication::config::SettingsOptionsSnapshot options = {};
+    if (config_service->Read(&options)) {
+      if (path.size() == 3 && path[1] == "ClientManager" && path[2] == "heartbeat_timeout_ms") {
+        return std::to_string(options.client_manager.heartbeat_timeout_ms);
+      }
+      if (path.size() == 3 && path[1] == "TransferManager") {
+        if (path[2] == "init_thread_num") {
+          return std::to_string(options.transfer_manager.init_thread_num);
+        }
+        if (path[2] == "max_thread_num") {
+          return std::to_string(options.transfer_manager.max_thread_num);
+        }
+      }
+      if (path.size() == 3 && path[1] == "FileSystem" && path[2] == "max_cd_history") {
+        return std::to_string(options.filesystem.max_cd_history);
+      }
+      if (path.size() == 3 && path[1] == "LogManager") {
+        if (path[2] == "client_trace_level") {
+          return std::to_string(options.log_manager.client_trace_level);
+        }
+        if (path[2] == "program_trace_level") {
+          return std::to_string(options.log_manager.program_trace_level);
+        }
+      }
+      if (path.size() == 3 && path[1] == "AutoConfigBackup") {
+        if (path[2] == "enabled") {
+          return options.auto_config_backup.enabled ? "true" : "false";
+        }
+        if (path[2] == "interval_s") {
+          return std::to_string(options.auto_config_backup.interval_s);
+        }
+        if (path[2] == "max_backup_count") {
+          return std::to_string(options.auto_config_backup.max_backup_count);
+        }
+        if (path[2] == "last_backup_time_s") {
+          return std::to_string(options.auto_config_backup.last_backup_time_s);
+        }
+      }
+    }
+  }
+
+  return fallback;
 }
 
 /**
@@ -270,67 +576,96 @@ std::string Runtime::ResolveSettingString(const std::vector<std::string> &path,
  */
 int Runtime::ResolveSettingInt(const std::vector<std::string> &path,
                                int fallback) {
-  AMInfraConfigManager *config_manager =
-      RuntimeBindingState_().config_manager.load(std::memory_order_acquire);
-  return config_manager ? config_manager->ResolveArg<int>(
-                              DocumentKind::Settings, path, fallback, {})
-                        : fallback;
+  const std::string raw = ResolveSettingString(path, "");
+  if (raw.empty()) {
+    return fallback;
+  }
+  int value = fallback;
+  if (!TryParseInt_(raw, &value)) {
+    return fallback;
+  }
+  return value;
 }
 
 /**
  * @brief Execute config backup when pending writes exceed threshold.
  */
 ECM Runtime::BackupConfigIfNeeded() {
-  AMInfraConfigManager *config_manager =
-      RuntimeBindingState_().config_manager.load(std::memory_order_acquire);
-  return config_manager ? config_manager->BackupIfNeeded() : Ok();
+  AMApplication::config::AMConfigAppService *config_service =
+      RuntimeBindingState_().config_service.load(std::memory_order_acquire);
+  return config_service ? config_service->BackupIfNeeded() : Ok();
 }
 
 /**
  * @brief Resolve one config document storage path.
  */
-bool Runtime::GetConfigDataPath(DocumentKind kind,
+bool Runtime::GetConfigDataPath(AMDomain::config::DocumentKind kind,
                                 std::filesystem::path *out_path) {
-  AMInfraConfigManager *config_manager =
-      RuntimeBindingState_().config_manager.load(std::memory_order_acquire);
-  return config_manager ? config_manager->GetDataPath(kind, out_path) : false;
+  AMApplication::config::AMConfigAppService *config_service =
+      RuntimeBindingState_().config_service.load(std::memory_order_acquire);
+  return config_service ? config_service->GetDataPath(kind, out_path) : false;
 }
 
 /**
  * @brief Return whether one config document has unsaved mutations.
  */
-bool Runtime::IsConfigDirty(DocumentKind kind) {
-  AMInfraConfigManager *config_manager =
-      RuntimeBindingState_().config_manager.load(std::memory_order_acquire);
-  return config_manager ? config_manager->IsDirty(kind) : false;
+bool Runtime::IsConfigDirty(AMDomain::config::DocumentKind kind) {
+  AMApplication::config::AMConfigAppService *config_service =
+      RuntimeBindingState_().config_service.load(std::memory_order_acquire);
+  return config_service ? config_service->IsDirty(kind) : false;
 }
 
 /**
  * @brief Load one config document from storage.
  */
-ECM Runtime::LoadConfig(DocumentKind kind, bool strict) {
-  AMInfraConfigManager *config_manager =
-      RuntimeBindingState_().config_manager.load(std::memory_order_acquire);
-  return config_manager ? config_manager->Load(kind, strict) : Ok();
+ECM Runtime::LoadConfig(AMDomain::config::DocumentKind kind, bool strict) {
+  AMApplication::config::AMConfigAppService *config_service =
+      RuntimeBindingState_().config_service.load(std::memory_order_acquire);
+  return config_service ? config_service->Load(kind, strict) : Ok();
 }
 
 /**
- * @brief Format text through ConfigManager style formatter.
+ * @brief Format text through interface style service.
  */
 std::string Runtime::Format(const std::string &text,
                             const std::string &style_key,
                             const PathInfo *path_info) {
-  AMInfraConfigManager *config_manager =
-      RuntimeBindingState_().config_manager.load(std::memory_order_acquire);
-  return config_manager ? config_manager->Format(text, style_key, path_info)
-                        : text;
+  AMInterface::style::AMStyleService *style_service =
+      RuntimeBindingState_().style_service.load(std::memory_order_acquire);
+  return style_service ? style_service->Format(text, style_key, path_info)
+                       : text;
+}
+
+/**
+ * @brief Create one progress bar using style configuration.
+ */
+AMProgressBar Runtime::CreateProgressBar(int64_t total_size,
+                                         const std::string &prefix) {
+  AMInterface::style::AMStyleService *style_service =
+      RuntimeBindingState_().style_service.load(std::memory_order_acquire);
+  return style_service ? style_service->CreateProgressBar(total_size, prefix)
+                       : AMProgressBar(total_size, prefix);
+}
+
+/**
+ * @brief Format one UTF-8 table using configured style defaults.
+ */
+std::string
+Runtime::FormatUtf8Table(const std::vector<std::string> &keys,
+                         const std::vector<std::vector<std::string>> &rows) {
+  AMInterface::style::AMStyleService *style_service =
+      RuntimeBindingState_().style_service.load(std::memory_order_acquire);
+  if (!style_service) {
+    return AMStr::FormatUtf8Table(keys, rows, "#00adb5");
+  }
+  return style_service->FormatUtf8Table(keys, rows);
 }
 
 /**
  * @brief Register one named signal hook.
  */
 bool Runtime::RegisterSignalHook(
-    const std::string &name, const AMSignalMonitorPort::SignalHook &hook) {
+    const std::string &name, const AMDomain::signal::SignalHook &hook) {
   AMSignalMonitorPort *signal_monitor =
       RuntimeBindingState_().signal_monitor.load(std::memory_order_acquire);
   return signal_monitor ? signal_monitor->RegisterHook(name, hook) : false;
@@ -386,6 +721,10 @@ std::string Runtime::StylePath(const PathInfo &info, const std::string &name) {
   return filesystem ? filesystem->StylePath(info, name) : name;
 }
 } // namespace AMInterface::ApplicationAdapters
+
+
+
+
 
 
 

@@ -1,9 +1,8 @@
 #include "Isocline/isocline.h"
-#include "foundation/tools/json.hpp"
-#include "infrastructure/Config.hpp"
 #include "interface/ApplicationAdapters.hpp"
 #include "interface/Completer/Proxy.hpp"
 #include "interface/Prompt.hpp"
+#include "interface/style/StyleManager.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -296,36 +295,14 @@ static const std::string ickey = "ic-prompt";
  * @brief Apply CLIPrompt shortcut styles as isocline named styles.
  */
 void ApplyPromptShortcutStyles_() {
-  Json settings;
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow()
-           .GetJson(DocumentKind::Settings, &settings) ||
-      !settings.is_object()) {
-    return;
-  }
-
-  auto style_it = settings.find("Style");
-  if (style_it == settings.end() || !style_it->is_object()) {
-    return;
-  }
-  auto cli_prompt_it = style_it->find("CLIPrompt");
-  if (cli_prompt_it == style_it->end() || !cli_prompt_it->is_object()) {
-    return;
-  }
-  auto shortcut_it = cli_prompt_it->find("shortcut");
-  if (shortcut_it == cli_prompt_it->end() || !shortcut_it->is_object()) {
-    return;
-  }
-
-  for (auto it = shortcut_it->begin(); it != shortcut_it->end(); ++it) {
-    if (!it.value().is_string()) {
-      continue;
-    }
-    const std::string fmt =
-        NormalizePromptStyleForIc_(it.value().get<std::string>());
+  const auto snapshot =
+      AMInterface::ApplicationAdapters::Runtime::StyleServiceOrThrow().Snapshot();
+  for (const auto &[key, value] : snapshot.cli_prompt.shortcut) {
+    const std::string fmt = NormalizePromptStyleForIc_(value);
     if (fmt.empty()) {
       continue;
     }
-    ic_style_def(it.key().c_str(), fmt.c_str());
+    ic_style_def(key.c_str(), fmt.c_str());
   }
 }
 
@@ -333,17 +310,14 @@ void ApplyPromptShortcutStyles_() {
  * @brief Resolve incremental history-search prompt text from settings.
  */
 std::string ResolveHistorySearchPrompt_() {
-  AMInfraConfigManager &config =
-      AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow();
-  std::string prompt = config.ResolveArg<std::string>(
-      DocumentKind::Settings,
-      {"Style", "CLIPrompt", "templete", "history_search_prompt"}, "", {});
+  std::string prompt =
+      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+          {"Style", "CLIPrompt", "template", "history_search_prompt"}, "");
   if (!prompt.empty()) {
     return prompt;
   }
-  prompt = config.ResolveArg<std::string>(
-      DocumentKind::Settings,
-      {"Style", "CLIPrompt", "template", "history_search_prompt"}, "", {});
+  prompt = AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+      {"Style", "CLIPrompt", "templete", "history_search_prompt"}, "");
   if (!prompt.empty()) {
     return prompt;
   }
@@ -449,7 +423,7 @@ void AMPromptManager::InitIsoclineConfig() {
   const AMPromptProfileArgs &default_profile = ResolvePromptProfileArgs("*");
   ApplyCoreProfileSettings_(default_profile);
 
-  AMSignalMonitorPort::SignalHook hook;
+  AMDomain::signal::SignalHook hook;
   hook.callback = [this]([[maybe_unused]] int signum) {
     (void)this;
     // ic_async_stop();
@@ -460,7 +434,7 @@ void AMPromptManager::InitIsoclineConfig() {
   (void)AMInterface::ApplicationAdapters::Runtime::RegisterSignalHook("PROMPT",
                                                                        hook);
 
-  AMSignalMonitorPort::SignalHook core_hook;
+  AMDomain::signal::SignalHook core_hook;
   core_hook.callback = [this]([[maybe_unused]] int signum) {
     (void)this;
     // ic_async_stop();
@@ -471,3 +445,5 @@ void AMPromptManager::InitIsoclineConfig() {
   (void)AMInterface::ApplicationAdapters::Runtime::RegisterSignalHook(
       "COREPROMPT", core_hook);
 }
+
+

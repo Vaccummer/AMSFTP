@@ -1,52 +1,47 @@
 #pragma once
 
-#include "domain/config/ConfigSyncPort.hpp.dep"
+#include "application/config/ConfigAppService.hpp"
+#include "application/config/StyleSettings.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/tools/bar.hpp"
-#include "interface/style/StyleModel.hpp"
-#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
 
 namespace AMInterface::style {
+using AMStyleSnapshot = AMApplication::config::AMStyleSnapshot;
+
 /**
- * @brief Interface-layer style service backed by one config sync port.
+ * @brief Interface-layer style service backed by application config service.
  *
- * This manager owns a typed snapshot of `Settings.Style`, provides formatting
- * helpers for CLI rendering, and registers a dump callback so runtime mutations
- * can be serialized back to JSON on config dump.
+ * The service owns a typed snapshot of `Settings.Style` and provides format
+ * helpers for CLI rendering.
  */
-class AMStyleManager : NonCopyableNonMovable {
+class AMStyleService : NonCopyableNonMovable {
 public:
   /**
-   * @brief Construct an empty style manager.
+   * @brief Construct one empty style service.
    */
-  AMStyleManager() = default;
+  AMStyleService() = default;
 
   /**
-   * @brief Unregister dump callback from the sync port on destruction.
+   * @brief Destroy the style service.
    */
-  ~AMStyleManager() override;
+  ~AMStyleService() override = default;
 
   /**
-   * @brief Initialize from one style sync port and bind dump callback.
+   * @brief Bind config service and load style snapshot from settings.
    */
-  ECM Init(std::shared_ptr<AMDomain::config::AMConfigSyncPort> style_port);
+  ECM Init(AMApplication::config::AMConfigAppService *config_service);
 
   /**
-   * @brief Reload snapshot from the currently bound sync port JSON payload.
+   * @brief Reload snapshot from the currently bound config service.
    */
-  ECM ReloadFromSyncPort();
+  ECM ReloadFromConfigService();
 
   /**
    * @brief Apply configured style to one text segment.
-   *
-   * @param ori_str Raw text to style.
-   * @param style_name Input-highlight style key.
-   * @param path_info Optional path metadata for `Style.Path` coloring.
-   * @return Styled text using bbcode tags.
    */
   [[nodiscard]] std::string Format(const std::string &ori_str,
                                    const std::string &style_name,
@@ -106,8 +101,7 @@ private:
   /**
    * @brief Normalize one style token into bbcode opening tag.
    */
-  [[nodiscard]] static std::string
-  NormalizeStyleTag_(const std::string &raw_tag);
+  [[nodiscard]] static std::string NormalizeStyleTag_(const std::string &raw_tag);
 
   /**
    * @brief Apply one bbcode tag around text.
@@ -115,13 +109,8 @@ private:
   [[nodiscard]] static std::string ApplyStyleTag_(const std::string &tag,
                                                   const std::string &text);
 
-  /**
-   * @brief Parse one `Style` JSON node into the in-memory snapshot.
-   */
-  void LoadStyleJson_(const Json &style_json);
-
   mutable std::mutex mtx_;
-  std::shared_ptr<AMDomain::config::AMConfigSyncPort> style_port_;
+  AMApplication::config::AMConfigAppService *config_service_ = nullptr;
   AMStyleSnapshot snapshot_{};
   mutable std::optional<AMProgressBarStyle> progress_bar_style_;
   bool initialized_ = false;

@@ -3,13 +3,12 @@
 #include "application/config/ConfigBackupUseCase.hpp"
 #include "application/config/ConfigStorePort.hpp"
 #include "foundation/DataClass.hpp"
-#include "foundation/tools/json.hpp"
 #include <filesystem>
 #include <functional>
 #include <optional>
 #include <string>
 #include <type_traits>
-#include <vector>
+#include <typeindex>
 
 namespace AMApplication::config {
 /**
@@ -17,7 +16,6 @@ namespace AMApplication::config {
  */
 class AMConfigAppService : NonCopyable {
 public:
-  using Path = std::vector<std::string>;
   using DumpErrorCallback = std::function<void(ECM)>;
 
   /**
@@ -74,18 +72,6 @@ public:
   void SubmitWriteTask(std::function<ECM()> task);
 
   /**
-   * @brief Return one full document JSON snapshot.
-   */
-  [[nodiscard]] bool GetJson(AMDomain::config::DocumentKind kind,
-                             Json *value) const;
-
-  /**
-   * @brief Return pretty serialized JSON for one document.
-   */
-  [[nodiscard]] bool GetJsonStr(AMDomain::config::DocumentKind kind,
-                                std::string *value, int indent = 2) const;
-
-  /**
    * @brief Return data file path for one document.
    */
   [[nodiscard]] bool GetDataPath(AMDomain::config::DocumentKind kind,
@@ -108,84 +94,43 @@ public:
                         const std::string &prefix, const std::string &suffix,
                         int64_t max_count);
 
-  template <typename T>
-  T ResolveArg(AMDomain::config::DocumentKind kind, const Path &path,
-               const T &default_value,
-               const std::function<T(T)> &post_process) const {
-    static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
-    T value = {};
-    if (!ResolveArg(kind, path, &value)) {
-      return default_value;
-    }
-    if (post_process) {
-      return post_process(value);
-    }
-    return value;
-  }
-
-  template <typename T>
-  bool ResolveArg(AMDomain::config::DocumentKind kind, const Path &path,
-                  T *data) const {
-    static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
-    if (!data) {
-      return false;
-    }
-    Json root = Json::object();
-    if (!ReadDocumentJson_(kind, &root)) {
-      return false;
-    }
-    return AMJson::QueryKey(root, path, data);
-  }
-
-  template <typename T>
-  bool SetArg(AMDomain::config::DocumentKind kind, const Path &path, T value) {
-    static_assert(AMJson::kValueTypeSupported<T>, "T is not supported");
-    Json root = Json::object();
-    if (!ReadDocumentJson_(kind, &root)) {
-      return false;
-    }
-    if (!AMJson::SetKey(root, path, value)) {
-      return false;
-    }
-    return WriteDocumentJson_(kind, root);
-  }
-
-  bool DelArg(AMDomain::config::DocumentKind kind, const Path &path);
-
   /**
-   * @brief Read one typed config arg from store.
+   * @brief Read one typed payload from store.
    */
-  template <typename T> [[nodiscard]] bool Resolve(T *out) const {
-    using ValueT = std::decay_t<T>;
-    static_assert(AMDomain::arg::kSupportedArgType<ValueT>,
-                  "T is not a supported config arg type");
+  template <typename T> [[nodiscard]] bool Read(T *out) const {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
     if (!out || !store_) {
       return false;
     }
-    return store_->Read(AMDomain::arg::TypeTagOf<ValueT>::value,
+    return store_->Read(std::type_index(typeid(ValueT)),
                         static_cast<void *>(out));
   }
 
   /**
-   * @brief Write one typed config arg into store.
+   * @brief Write one typed payload into store.
    */
-  template <typename T> [[nodiscard]] bool Set(const T &value) {
-    using ValueT = std::decay_t<T>;
-    static_assert(AMDomain::arg::kSupportedArgType<ValueT>,
-                  "T is not a supported config arg type");
+  template <typename T> [[nodiscard]] bool Write(const T &value) {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
     if (!store_) {
       return false;
     }
-    return store_->Write(AMDomain::arg::TypeTagOf<ValueT>::value,
+    return store_->Write(std::type_index(typeid(ValueT)),
+                         static_cast<const void *>(&value));
+  }
+
+  /**
+   * @brief Erase one typed payload subtree from store.
+   */
+  template <typename T> [[nodiscard]] bool Erase(const T &value) {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    if (!store_) {
+      return false;
+    }
+    return store_->Erase(std::type_index(typeid(ValueT)),
                          static_cast<const void *>(&value));
   }
 
 private:
-  [[nodiscard]] bool ReadDocumentJson_(AMDomain::config::DocumentKind kind,
-                                       Json *out) const;
-  [[nodiscard]] bool WriteDocumentJson_(AMDomain::config::DocumentKind kind,
-                                        const Json &json);
-
   IConfigStorePort *store_ = nullptr;
   AMConfigBackupUseCase *backup_use_case_ = nullptr;
   DumpErrorCallback dump_error_cb_;

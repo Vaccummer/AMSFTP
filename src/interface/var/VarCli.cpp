@@ -1,6 +1,6 @@
 #include "domain/var/VarManager.hpp"
-#include "foundation/tools/json.hpp"
-#include "infrastructure/Config.hpp"
+#include "application/config/ConfigPayloads.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include "interface/ApplicationAdapters.hpp"
 #include "interface/Prompt.hpp"
 #include <algorithm>
@@ -36,21 +36,20 @@ ECM ParseVarToken_(const std::string &token, varsetkn::VarRef *ref) {
  */
 ECM PersistVarDict_(const AMDomain::var::AMVarManager::DomainDict &dict,
                     bool async) {
-  Json snapshot = Json::object();
-  for (const auto &domain_entry : dict) {
-    Json section = Json::object();
-    for (const auto &var_entry : domain_entry.second) {
-      section[var_entry.first] = var_entry.second;
+  AMApplication::config::UserVarsSnapshot snapshot = {};
+  for (const auto &[domain, vars] : dict) {
+    auto &out_vars = snapshot.domains[domain];
+    for (const auto &[name, value] : vars) {
+      out_vars[name] = value;
     }
-    snapshot[domain_entry.first] = std::move(section);
   }
 
-  if (!AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().SetArg(
-          DocumentKind::Settings, {varsetkn::kRoot}, snapshot)) {
+  if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(
+          snapshot)) {
     return Err(EC::CommonFailure, "failed to write UserVars into settings");
   }
-  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow().Dump(
-      DocumentKind::Settings, "", async);
+  return AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Dump(
+      AMDomain::config::DocumentKind::Settings, "", async);
 }
 } // namespace
 
@@ -59,8 +58,7 @@ ECM PersistVarDict_(const AMDomain::var::AMVarManager::DomainDict &dict,
  */
 std::string
 AMDomain::var::VarCLISet::FormatVarText_(const std::string &text) const {
-  return AMInterface::ApplicationAdapters::Runtime::ConfigManagerOrThrow()
-      .Format(text, "UserVars");
+  return AMInterface::ApplicationAdapters::Runtime::Format(text, "UserVars");
 }
 
 /**
@@ -285,3 +283,4 @@ ECM AMDomain::var::VarCLISet::ListVars(
   }
   return last;
 }
+

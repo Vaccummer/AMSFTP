@@ -1,9 +1,8 @@
 #include "infrastructure/config/TomlConfigStore.hpp"
 
-#include "domain/config/ConfigModel.hpp"
-#include "domain/host/HostModel.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "infrastructure/config/SuperTomlHandle.hpp"
+#include "internal/ArgCodecRegistry.hpp"
 #include <algorithm>
 #include <array>
 #include <vector>
@@ -149,65 +148,67 @@ bool AMTomlConfigStore::GetDataPath(AMDomain::config::DocumentKind kind,
   return true;
 }
 
-bool AMTomlConfigStore::Read(AMDomain::arg::TypeTag type, void *out) const {
+bool AMTomlConfigStore::Read(const std::type_index &type, void *out) const {
   if (!out) {
     return false;
   }
-  DocumentKind kind = DocumentKind::Config;
-  if (!AMDomain::arg::FindDocumentKind(type, &kind)) {
+  const IArgCodec *codec = ArgCodecRegistry::Instance().Find(type);
+  if (!codec) {
     return false;
   }
-  auto handle = GetHandle_(kind);
+  auto handle = GetHandle_(codec->Kind());
   if (!handle) {
     return false;
   }
-  switch (type) {
-  case AMDomain::arg::TypeTag::Config:
-    return handle->Read(static_cast<AMDomain::arg::ConfigArg *>(out));
-  case AMDomain::arg::TypeTag::Settings:
-    return handle->Read(static_cast<AMDomain::arg::SettingsArg *>(out));
-  case AMDomain::arg::TypeTag::KnownHosts:
-    return handle->Read(static_cast<AMDomain::arg::KnownHostsArg *>(out));
-  case AMDomain::arg::TypeTag::History:
-    return handle->Read(static_cast<AMDomain::arg::HistoryArg *>(out));
-  case AMDomain::arg::TypeTag::HostConfig:
-    return handle->Read(static_cast<AMDomain::host::HostConfigArg *>(out));
-  case AMDomain::arg::TypeTag::KnownHostEntry:
-    return handle->Read(static_cast<AMDomain::host::KnownHostEntryArg *>(out));
-  default:
+  Json root = Json::object();
+  if (!handle->GetJson(&root)) {
     return false;
   }
+  return DecodeArg(type, root, out, nullptr);
 }
 
-bool AMTomlConfigStore::Write(AMDomain::arg::TypeTag type, const void *in) {
+bool AMTomlConfigStore::Write(const std::type_index &type, const void *in) {
   if (!in) {
     return false;
   }
-  DocumentKind kind = DocumentKind::Config;
-  if (!AMDomain::arg::FindDocumentKind(type, &kind)) {
+  const IArgCodec *codec = ArgCodecRegistry::Instance().Find(type);
+  if (!codec) {
     return false;
   }
-  auto handle = GetHandle_(kind);
+  auto handle = GetHandle_(codec->Kind());
   if (!handle) {
     return false;
   }
-  switch (type) {
-  case AMDomain::arg::TypeTag::Config:
-    return handle->Write(*static_cast<const AMDomain::arg::ConfigArg *>(in));
-  case AMDomain::arg::TypeTag::Settings:
-    return handle->Write(*static_cast<const AMDomain::arg::SettingsArg *>(in));
-  case AMDomain::arg::TypeTag::KnownHosts:
-    return handle->Write(*static_cast<const AMDomain::arg::KnownHostsArg *>(in));
-  case AMDomain::arg::TypeTag::History:
-    return handle->Write(*static_cast<const AMDomain::arg::HistoryArg *>(in));
-  case AMDomain::arg::TypeTag::HostConfig:
-    return handle->Write(*static_cast<const AMDomain::host::HostConfigArg *>(in));
-  case AMDomain::arg::TypeTag::KnownHostEntry:
-    return handle->Write(
-        *static_cast<const AMDomain::host::KnownHostEntryArg *>(in));
-  default:
+  Json root = Json::object();
+  if (!handle->GetJson(&root)) {
     return false;
   }
+  if (!EncodeArg(type, in, &root, nullptr)) {
+    return false;
+  }
+  return handle->SetJson(root);
+}
+
+bool AMTomlConfigStore::Erase(const std::type_index &type, const void *in) {
+  if (!in) {
+    return false;
+  }
+  const IArgCodec *codec = ArgCodecRegistry::Instance().Find(type);
+  if (!codec) {
+    return false;
+  }
+  auto handle = GetHandle_(codec->Kind());
+  if (!handle) {
+    return false;
+  }
+  Json root = Json::object();
+  if (!handle->GetJson(&root)) {
+    return false;
+  }
+  if (!EraseArg(type, in, &root, nullptr)) {
+    return false;
+  }
+  return handle->SetJson(root);
 }
 
 void AMTomlConfigStore::SetDumpErrorCallback(DumpErrorCallback cb) {

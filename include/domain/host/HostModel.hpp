@@ -1,29 +1,26 @@
 #pragma once
 #include "foundation/Enum.hpp"
-#include "foundation/tools/json.hpp"
 #include "foundation/tools/string.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <limits>
+#include <map>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace AMDomain::host {
 using EC = ErrorCode;
 using ECM = std::pair<ErrorCode, std::string>;
 
-enum class ClientProtocol {
-  Unknown = -1,
-  Base = 0,
-  SFTP = 1,
-  FTP = 2,
-  LOCAL = 3
-};
+enum class ClientProtocol { UnInitilized = -1, SFTP = 1, FTP = 2, LOCAL = 3 };
 
 /**
  * @brief Validate host nickname text.
@@ -58,6 +55,59 @@ inline ClientProtocol StrToProtocol(const std::string &protocol_str) {
   }
   return ClientProtocol::SFTP;
 }
+
+namespace detail {
+/**
+ * @brief Parse one boolean from stripped text without JSON helpers.
+ */
+inline bool ParseBoolText(const std::string &text, bool *out) {
+  if (!out) {
+    return false;
+  }
+  const std::string normalized = AMStr::lowercase(AMStr::Strip(text));
+  if (normalized == "true" || normalized == "1" || normalized == "yes" ||
+      normalized == "y" || normalized == "on") {
+    *out = true;
+    return true;
+  }
+  if (normalized == "false" || normalized == "0" || normalized == "no" ||
+      normalized == "n" || normalized == "off") {
+    *out = false;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * @brief Parse one signed integral value from stripped text without JSON helpers.
+ */
+template <typename T>
+inline bool ParseIntegralText(const std::string &text, T *out) {
+  static_assert(std::is_integral_v<T> && !std::is_same_v<T, bool>);
+  if (!out) {
+    return false;
+  }
+  const std::string trimmed = AMStr::Strip(text);
+  if (trimmed.empty()) {
+    return false;
+  }
+  std::istringstream iss(trimmed);
+  long long parsed = 0;
+  char extra = '\0';
+  if (!(iss >> parsed)) {
+    return false;
+  }
+  if (iss >> extra) {
+    return false;
+  }
+  if (parsed < static_cast<long long>(std::numeric_limits<T>::min()) ||
+      parsed > static_cast<long long>(std::numeric_limits<T>::max())) {
+    return false;
+  }
+  *out = static_cast<T>(parsed);
+  return true;
+}
+} // namespace detail
 
 /**
  * @brief Client runtime metadata bound to one host profile.
@@ -171,7 +221,7 @@ struct ClientMetaData {
       }
       if constexpr (kStringLike) {
         bool parsed = false;
-        if (!AMJson::StrValueParse(AMStr::Strip(std::string(value)), &parsed)) {
+        if (!detail::ParseBoolText(std::string(value), &parsed)) {
           return fail(EC::InvalidArg, "wrap_cmd must be true or false");
         }
         return true;
@@ -204,13 +254,23 @@ struct ConRequest {
   ClientProtocol protocol = ClientProtocol::SFTP;
   std::string hostname = "";
   std::string username = "";
-  int port = 22;
+  int64_t port = 22;
   std::string password = "";
   std::string keyfile = "";
   int64_t buffer_size = 0;
   bool compression = false;
   std::string trash_dir = "";
   ConRequest() = default;
+  static constexpr auto FieldNames = magic_enum::enum_values<Attr>();
+  using MemberPtr =
+      std::variant<std::string ConRequest::*, ClientProtocol ConRequest::*,
+                   int64_t ConRequest::*, bool ConRequest::*>;
+  static constexpr std::array<MemberPtr, magic_enum::enum_count<Attr>()>
+      members{&ConRequest::nickname,    &ConRequest::hostname,
+              &ConRequest::username,    &ConRequest::password,
+              &ConRequest::trash_dir,   &ConRequest::keyfile,
+              &ConRequest::protocol,    &ConRequest::port,
+              &ConRequest::buffer_size, &ConRequest::compression};
 
   ConRequest(ClientProtocol protocol, std::string nickname,
              std::string hostname, std::string username, int port = 22,
@@ -242,17 +302,8 @@ struct ConRequest {
     };
   }
 
-  [[nodiscard]] static std::vector<Attr> GetFieldNames() {
-    static const std::vector<Attr> attrs = []() {
-      auto values = magic_enum::enum_values<Attr>();
-      std::vector<Attr> attrs(values.begin(), values.end());
-      return attrs;
-    }();
-    return attrs;
-  }
-
   template <typename T>
-  bool GetFieldValue(Attr attr, T *out_value, ECM *rcm = nullptr) const {
+  bool GetFieldValue2(Attr attr, T *out_value, ECM *rcm = nullptr) const {
     if (!out_value) {
       if (rcm) {
         *rcm = {EC::InvalidArg, "null output pointer"};
@@ -330,6 +381,49 @@ struct ConRequest {
   }
 
   template <typename T>
+  bool GetFieldValue(Attr attr, T *out_value, ECM *rcm = nullptr) const {
+    if (!out_value) {
+      if (rcm)
+        *rcm = {EC::InvalidArg, "null output pointer"};
+      return false;
+    }
+
+    auto idx = magic_enum::enum_index(attr);
+    if (!idx) {
+      if (rcm)
+        *rcm = {EC::InvalidArg, "invalid attr"};
+      return false;
+    }
+
+    const auto &mp = members[*idx];
+
+    bool ok = std::visit(
+        [&](auto member) -> bool {
+          using Field = std::decay_t<decltype(this->*member)>;
+
+          if constexpr (std::is_assignable_v<T &, Field>) {
+            *out_value = this->*member;
+            return true;
+          }
+
+          if constexpr (std::is_integral_v<T> && std::is_integral_v<Field> &&
+                        !std::is_same_v<T, bool>) {
+            *out_value = static_cast<T>(this->*member);
+            return true;
+          }
+
+          return false;
+        },
+        mp);
+
+    if (!ok && rcm) {
+      *rcm = {EC::InvalidArg, "type mismatch"};
+    }
+
+    return ok;
+  }
+
+  template <typename T>
   bool ValidateFieldValue(Attr attr, const T &value, ECM *rcm) {
     if (rcm) {
       *rcm = {EC::Success, ""};
@@ -383,7 +477,7 @@ struct ConRequest {
 
     if (attr == Attr::protocol) {
       if constexpr (std::is_same_v<DT, ClientProtocol>) {
-        if (value == ClientProtocol::Unknown) {
+        if (value == ClientProtocol::UnInitilized) {
           return fail(EC::InvalidArg, "Unsupported protocol");
         }
         return true;
@@ -412,8 +506,7 @@ struct ConRequest {
       }
       if constexpr (kStringLike) {
         int64_t port_value = 0;
-        if (!AMJson::StrValueParse(AMStr::Strip(std::string(value)),
-                                   &port_value) ||
+        if (!detail::ParseIntegralText(std::string(value), &port_value) ||
             port_value <= 0 || port_value > 65535) {
           return fail(EC::InvalidArg,
                       "Port must be an integer between 1 and 65535");
@@ -448,8 +541,7 @@ struct ConRequest {
       }
       if constexpr (kStringLike) {
         int64_t size_value = 0;
-        if (!AMJson::StrValueParse(AMStr::Strip(std::string(value)),
-                                   &size_value) ||
+        if (!detail::ParseIntegralText(std::string(value), &size_value) ||
             size_value <= 0 ||
             size_value > static_cast<int64_t>(AMMaxBufferSize)) {
           return fail(EC::InvalidArg,
@@ -469,8 +561,7 @@ struct ConRequest {
       }
       if constexpr (kStringLike) {
         bool bool_value = false;
-        if (!AMJson::StrValueParse(AMStr::Strip(std::string(value)),
-                                   &bool_value)) {
+        if (!detail::ParseBoolText(std::string(value), &bool_value)) {
           return fail(EC::InvalidArg, "Compression must be true or false");
         }
         return true;
@@ -488,7 +579,7 @@ struct ConRequest {
    * @brief Validate connection request fields.
    */
   [[nodiscard]] bool IsValid(std::string *error_info = nullptr) const {
-    if (protocol == ClientProtocol::Unknown) {
+    if (protocol == ClientProtocol::UnInitilized) {
       if (error_info) {
         error_info->clear();
         *error_info =
@@ -736,7 +827,7 @@ public:
       }
       if constexpr (kStringLike) {
         int64_t v = 0;
-        if (!AMJson::StrValueParse(AMStr::Strip(std::string(value)), &v) ||
+        if (!detail::ParseIntegralText(std::string(value), &v) ||
             v <= 0 || v > 65535) {
           return fail(EC::InvalidArg,
                       "port must be an integer between 1 and 65535");
@@ -807,9 +898,11 @@ using KnownHostMap = std::map<KnownHostKey, KnownHostQuery>;
  * @brief Build normalized known-host map key from one query.
  */
 inline KnownHostKey BuildKnownHostKey(const KnownHostQuery &query) {
-  return {AMStr::Strip(query.hostname), query.port, AMStr::Strip(query.username),
+  return {AMStr::Strip(query.hostname), query.port,
+          AMStr::Strip(query.username),
           AMStr::lowercase(AMStr::Strip(query.protocol))};
 }
+
 struct KnownHostEntryArg {
   KnownHostMap entries = {};
 };
@@ -891,6 +984,3 @@ bool ValidateHostAttrValue(HostAttr attr, const std::string &value,
 /** @brief Backward-compatible alias. Prefer HostConfig. */
 using ClientConfig = HostConfig;
 } // namespace AMDomain::host
-
-
-

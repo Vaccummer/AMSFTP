@@ -1,4 +1,5 @@
 #include "infrastructure/Logger.hpp"
+#include "application/config/ConfigPayloads.hpp"
 #include "foundation/Enum.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include <magic_enum/magic_enum.hpp>
@@ -11,41 +12,44 @@ namespace {
  * @param config Bound config pointer candidate.
  * @return ECM success or dependency-not-ready error.
  */
-ECM ValidateConfigBinding(const AMInfraConfigManager *config) {
+ECM ValidateConfigBinding(
+    const AMApplication::config::AMConfigAppService *config) {
   if (config) {
     return Ok();
   }
   return Err(EC::ConfigNotInitialized,
-             "Log manager requires a bound config adapter");
+             "Log manager requires a bound config service");
 }
 } // namespace
 
 /** Bind the config adapter used by logger I/O workflows. */
-void AMInfraLogManager::BindConfigManager(
-    AMInfraConfigManager *config_manager) {
+void AMInfraLogManager::BindConfigService(
+    AMApplication::config::AMConfigAppService *config_service) {
   std::lock_guard<std::mutex> lock(config_mtx_);
-  config_manager_ = config_manager;
+  config_service_ = config_service;
 }
 
 /** Get the currently bound config adapter pointer. */
-AMInfraConfigManager *AMInfraLogManager::BoundConfigManager() const {
+AMApplication::config::AMConfigAppService *
+AMInfraLogManager::BoundConfigService() const {
   std::lock_guard<std::mutex> lock(config_mtx_);
-  return config_manager_;
+  return config_service_;
 }
 
 /** Resolve paths, create the log directory, and open both log files. */
 ECM AMInfraLogManager::Init() {
-  AMInfraConfigManager *config = BoundConfigManager();
+  AMApplication::config::AMConfigAppService *config = BoundConfigService();
   ECM bind_rcm = ValidateConfigBinding(config);
   if (!isok(bind_rcm)) {
     return bind_rcm;
   }
-  int client_level = config->ResolveArg<int>(
-      DocumentKind::Settings, {"Options", "LogManager", "client_trace_level"},
-      4, [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
-  int program_level = config->ResolveArg<int>(
-      DocumentKind::Settings, {"Options", "LogManager", "program_trace_level"},
-      4, [](int v) { return v < -1 ? -1 : (v > 4 ? 4 : v); });
+  AMApplication::config::SettingsOptionsSnapshot options = {};
+  (void)config->Read(&options);
+  int client_level = options.log_manager.client_trace_level;
+  int program_level = options.log_manager.program_trace_level;
+  client_level = client_level < -1 ? -1 : (client_level > 4 ? 4 : client_level);
+  program_level =
+      program_level < -1 ? -1 : (program_level > 4 ? 4 : program_level);
   client_trace_level_.store(client_level, std::memory_order_relaxed);
   program_trace_level_.store(program_level, std::memory_order_relaxed);
   std::lock_guard<std::mutex> lock(stream_mtx_);
@@ -60,7 +64,7 @@ void AMInfraLogManager::Enqueue(const TraceInfo &info) { ClientTrace(info); }
 void AMInfraLogManager::ClientTrace(const TraceInfo &info) {
   TraceInfo normalized = info;
   normalized.source = TraceSource::Client;
-  AMInfraConfigManager *config = BoundConfigManager();
+  AMApplication::config::AMConfigAppService *config = BoundConfigService();
   ECM bind_rcm = ValidateConfigBinding(config);
   if (!isok(bind_rcm)) {
     ReportWriteError_(normalized, bind_rcm);
@@ -120,7 +124,7 @@ void AMInfraLogManager::ProgramTrace(const TraceInfo &info) {
   TraceInfo normalized = info;
   normalized.source = TraceSource::Programm;
   normalized.request = std::nullopt;
-  AMInfraConfigManager *config = BoundConfigManager();
+  AMApplication::config::AMConfigAppService *config = BoundConfigService();
   ECM bind_rcm = ValidateConfigBinding(config);
   if (!isok(bind_rcm)) {
     ReportWriteError_(normalized, bind_rcm);
@@ -180,7 +184,7 @@ AMInfraLogManager::TraceLevel(int value, bool programm, bool client,
 
 /** Resolve `Client.log` and `Program.log` paths from the project root. */
 void AMInfraLogManager::ResolveLogPaths_() {
-  AMInfraConfigManager *config = BoundConfigManager();
+  AMApplication::config::AMConfigAppService *config = BoundConfigService();
   const auto root = config ? config->ProjectRoot() : std::filesystem::path();
   const auto base =
       root.empty() ? std::filesystem::path(".") : std::filesystem::path(root);
@@ -190,7 +194,7 @@ void AMInfraLogManager::ResolveLogPaths_() {
 
 /** Ensure both log streams are opened in append mode. */
 ECM AMInfraLogManager::EnsureLogStreamsOpen_() {
-  ECM bind_rcm = ValidateConfigBinding(BoundConfigManager());
+  ECM bind_rcm = ValidateConfigBinding(BoundConfigService());
   if (!isok(bind_rcm)) {
     return bind_rcm;
   }

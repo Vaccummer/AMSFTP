@@ -1,6 +1,5 @@
-#include "infrastructure/config/ConfigRuntime.hpp"
+#include "infrastructure/config/ConfigStoreLayoutFactory.hpp"
 
-#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/json.hpp"
 
 namespace {
@@ -36,13 +35,12 @@ std::string ReadSchemaJson_(const std::filesystem::path &schema_path) {
 } // namespace
 
 namespace AMInfra::config {
-AMConfigRuntime::AMConfigRuntime() : app_service_(&store_, &backup_use_case_) {}
-
-AMConfigRuntime::~AMConfigRuntime() { Close(); }
-
-ECM AMConfigRuntime::Init(const std::filesystem::path &root_dir) {
+/**
+ * @brief Build default document layout rooted at one project directory.
+ */
+ConfigStoreLayout
+BuildDefaultConfigStoreLayout(const std::filesystem::path &root_dir) {
   ConfigStoreLayout layout;
-
   layout[AMDomain::config::DocumentKind::Config] = {
       AMDomain::config::DocumentKind::Config,
       root_dir / "config" / "config.toml",
@@ -54,54 +52,12 @@ ECM AMConfigRuntime::Init(const std::filesystem::path &root_dir) {
   layout[AMDomain::config::DocumentKind::KnownHosts] = {
       AMDomain::config::DocumentKind::KnownHosts,
       root_dir / "config" / "internal" / "known_hosts.toml",
-      ReadSchemaJson_(root_dir / "config" / "schema" / "known_hosts.schema.json")};
+      ReadSchemaJson_(root_dir / "config" / "schema" /
+                      "known_hosts.schema.json")};
   layout[AMDomain::config::DocumentKind::History] = {
       AMDomain::config::DocumentKind::History,
       root_dir / "config" / "internal" / "history.toml",
       kHistorySchemaJson};
-
-  return Init(root_dir, layout);
-}
-
-ECM AMConfigRuntime::Init(const std::filesystem::path &root_dir,
-                          const ConfigStoreLayout &layout) {
-  Close();
-  root_dir_ = root_dir;
-  app_service_.SetDumpErrorCallback(
-      [this](const ECM &err) { NotifyDumpError_(err); });
-  ECM rcm = store_.Configure(root_dir, layout);
-  if (!isok(rcm)) {
-    initialized_ = false;
-    return rcm;
-  }
-  rcm = app_service_.Load(std::nullopt, true);
-  initialized_ = isok(rcm);
-  return rcm;
-}
-
-void AMConfigRuntime::Close() {
-  app_service_.CloseHandles();
-  initialized_ = false;
-}
-
-void AMConfigRuntime::SetDumpErrorCallback(DumpErrorCallback cb) {
-  dump_error_cb_ = std::move(cb);
-  app_service_.SetDumpErrorCallback(
-      [this](const ECM &err) { NotifyDumpError_(err); });
-}
-
-AMApplication::config::AMConfigAppService &AMConfigRuntime::AppService() {
-  return app_service_;
-}
-
-const AMApplication::config::AMConfigAppService &
-AMConfigRuntime::AppService() const {
-  return app_service_;
-}
-
-void AMConfigRuntime::NotifyDumpError_(const ECM &err) const {
-  if (dump_error_cb_) {
-    dump_error_cb_(err);
-  }
+  return layout;
 }
 } // namespace AMInfra::config

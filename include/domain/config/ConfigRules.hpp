@@ -1,33 +1,13 @@
 #pragma once
 
-#include "domain/arg/ArgTypes.hpp"
-#include "domain/config/ConfigModel.hpp"
-#include "foundation/tools/json.hpp"
+#include <cstdint>
 
 namespace AMDomain::config {
 /**
- * @brief Pure domain rules for config type/document and value normalization.
+ * @brief Pure domain rules for backup value normalization.
  */
 class AMConfigRules {
 public:
-  /**
-   * @brief Map one document kind to arg runtime type tag.
-   */
-  [[nodiscard]] static bool TypeTagForDocumentKind(
-      DocumentKind kind, AMDomain::arg::TypeTag *out);
-
-  /**
-   * @brief Read root JSON from one typed arg payload.
-   */
-  [[nodiscard]] static bool ReadRootJsonFromArg(AMDomain::arg::TypeTag type,
-                                                const void *arg, Json *out);
-
-  /**
-   * @brief Write root JSON into one typed arg payload.
-   */
-  [[nodiscard]] static bool WriteRootJsonToArg(AMDomain::arg::TypeTag type,
-                                               const Json &json, void *arg);
-
   /**
    * @brief Clamp backup interval seconds to a safe positive value.
    */
@@ -45,4 +25,3 @@ public:
                                                         int64_t now_s);
 };
 } // namespace AMDomain::config
-
