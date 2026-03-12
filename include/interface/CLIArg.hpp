@@ -1,4 +1,5 @@
 #pragma once
+#include "domain/log/LoggerPorts.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
 #include "foundation/DataClass.hpp"
 #include <atomic>
@@ -8,17 +9,22 @@
 #include <string>
 #include <vector>
 
-class AMInfraConfigManager;
+namespace AMApplication::config {
+class AMConfigAppService;
+}
+namespace AMApplication::client {
+class ClientAppService;
+}
+namespace AMInterface::style {
+class AMStyleService;
+}
 class AMPromptManager;
-class AMInfraLogManager;
 namespace AMDomain::host {
-class AMHostManager;
+class AMHostConfigManager;
+class AMKnownHostsManager;
 }
 namespace AMDomain::var {
 class VarCLISet;
-}
-namespace AMDomain::client {
-class AMClientManager;
 }
 namespace AMDomain::transfer {
 class AMTransferManager;
@@ -40,11 +46,16 @@ struct CliManagers : public NonCopyableNonMovable {
    * @brief Bind manager references used by CLI entry points.
    */
   CliManagers(AMSignalMonitorPort &signal_monitor,
-              AMInfraConfigManager &config_manager,
-              AMPromptManager &prompt_manager, AMDomain::host::AMHostManager &host_manager,
-              AMDomain::var::VarCLISet &var_manager, AMInfraLogManager &log_manager,
-              AMDomain::client::AMClientManager &client_manager,
-              AMDomain::transfer::AMTransferManager &transfer_manager, AMDomain::filesystem::AMFileSystem &filesystem);
+              AMApplication::config::AMConfigAppService &config_service,
+              AMInterface::style::AMStyleService &style_service,
+              AMPromptManager &prompt_manager,
+              AMDomain::host::AMHostConfigManager &host_config_manager,
+              AMDomain::host::AMKnownHostsManager &known_hosts_manager,
+              AMDomain::var::VarCLISet &var_manager,
+              AMLoggerManagerPort &log_manager,
+              AMApplication::client::ClientAppService &client_service,
+              AMDomain::transfer::AMTransferManager &transfer_manager,
+              AMDomain::filesystem::AMFileSystem &filesystem);
 
   /**
    * @brief Initialize all bound managers in dependency-safe order.
@@ -52,12 +63,14 @@ struct CliManagers : public NonCopyableNonMovable {
   ECM Init(const amf &task_control_token);
 
   AMSignalMonitorPort &signal_monitor;
-  AMInfraConfigManager &config_manager;
+  AMApplication::config::AMConfigAppService &config_service;
+  AMInterface::style::AMStyleService &style_service;
   AMPromptManager &prompt_manager;
-  AMDomain::host::AMHostManager &host_manager;
+  AMDomain::host::AMHostConfigManager &host_config_manager;
+  AMDomain::host::AMKnownHostsManager &known_hosts_manager;
   AMDomain::var::VarCLISet &var_manager;
-  AMInfraLogManager &log_manager;
-  AMDomain::client::AMClientManager &client_manager;
+  AMLoggerManagerPort &log_manager;
+  AMApplication::client::ClientAppService &client_service;
   AMDomain::transfer::AMTransferManager &transfer_manager;
   AMDomain::filesystem::AMFileSystem &filesystem;
 };

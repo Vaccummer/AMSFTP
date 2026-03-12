@@ -1,7 +1,6 @@
 #include "domain/log/LoggerManager.hpp"
+#include "domain/log/LoggerDomainService.hpp"
 #include "foundation/tools/string.hpp"
-#include "foundation/tools/time.hpp"
-#include <sstream>
 #include <utility>
 
 namespace AMDomain::log {
@@ -102,7 +101,7 @@ int AMLoggerManager::GetTraceLevel(LoggerType logger_type) const {
  * @brief Set trace level for one logger key and return clamped value.
  */
 int AMLoggerManager::SetTraceLevel(LoggerType logger_type, int value) {
-  const int clamped = ClampTraceLevel(value);
+  const int clamped = LoggerDomainService::ClampTraceLevel(value);
   std::lock_guard<std::mutex> lock(mtx_);
   trace_levels_[logger_type] = clamped;
   return clamped;
@@ -133,11 +132,11 @@ ECM AMLoggerManager::Trace(LoggerType logger_type, const TraceInfo &info) {
   }
 
   TraceInfo normalized = info;
-  normalized.source = ResolveSource_(logger_type);
-  if (ToLevelInt(normalized.level) > trace_level) {
+  normalized.source = LoggerDomainService::ResolveSource(logger_type);
+  if (LoggerDomainService::ToLevelInt(normalized.level) > trace_level) {
     return Ok();
   }
-  const std::string line = BuildLogLine_(normalized);
+  const std::string line = LoggerDomainService::BuildLogLine(normalized);
 
   auto write_task = [writer, line, normalized, reporter]() {
     ECM write_rcm = writer->WriteLine(line);
@@ -163,7 +162,8 @@ ECM AMLoggerManager::Trace(LoggerType logger_type, TraceLevel level,
                            const std::string &action, const std::string &msg,
                            std::optional<ConRequest> request) {
   TraceInfo trace(level, error_code, nickname, target, action, msg,
-                  std::move(request), ResolveSource_(logger_type));
+                  std::move(request),
+                  LoggerDomainService::ResolveSource(logger_type));
   return Trace(logger_type, trace);
 }
 
@@ -187,7 +187,7 @@ ECM AMLoggerManager::WriteLine(LoggerType logger_type,
   }
 
   TraceInfo normalized;
-  normalized.source = ResolveSource_(logger_type);
+  normalized.source = LoggerDomainService::ResolveSource(logger_type);
   normalized.level = TraceLevel::Info;
   normalized.message = line;
 
@@ -241,68 +241,12 @@ AMLoggerManager::WriteLineCallbackFunc(LoggerType logger_type) {
         return;
       }
       TraceInfo info;
-      info.source = ResolveSource_(logger_type);
+      info.source = LoggerDomainService::ResolveSource(logger_type);
       info.level = TraceLevel::Info;
       info.message = line;
       ReportError_(reporter, info, write_rcm);
     }
   };
-}
-
-/**
- * @brief Clamp trace level to valid range [-1, 4].
- */
-int AMLoggerManager::ClampTraceLevel(int value) {
-  if (value < -1) {
-    return -1;
-  }
-  if (value > 4) {
-    return 4;
-  }
-  return value;
-}
-
-/**
- * @brief Convert enum trace level into comparable integer severity.
- */
-int AMLoggerManager::ToLevelInt(TraceLevel level) {
-  return static_cast<int>(level);
-}
-
-/**
- * @brief Resolve default source by logger key.
- */
-TraceSource AMLoggerManager::ResolveSource_(LoggerType logger_type) {
-  return logger_type == LoggerType::Program ? TraceSource::Programm
-                                             : TraceSource::Client;
-}
-
-/**
- * @brief Build one log line text from structured trace info.
- */
-std::string AMLoggerManager::BuildLogLine_(const TraceInfo &info) {
-  const double stamp = info.timestamp > 0 ? info.timestamp : AMTime::seconds();
-  const std::string time_str =
-      FormatTime(static_cast<size_t>(stamp), "%Y/%m/%d %H:%M:%S");
-  std::ostringstream line;
-  line << time_str << " [" << AMStr::ToString(info.source) << "]"
-       << " [" << AMStr::ToString(info.level) << "]";
-  if (!info.nickname.empty()) {
-    line << " [nick:" << info.nickname << "]";
-  }
-  if (!info.action.empty()) {
-    line << " [action:" << info.action << "]";
-  }
-  if (!info.target.empty()) {
-    line << " [target:" << info.target << "]";
-  }
-  if (info.request.has_value() && !info.request->hostname.empty()) {
-    line << " [host:" << info.request->hostname << "]";
-  }
-  if (!info.message.empty()) {
-    line << " " << info.message;
-  }
-  return line.str();
 }
 
 /**
