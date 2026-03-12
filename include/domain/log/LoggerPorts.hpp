@@ -21,7 +21,7 @@ public:
   /**
    * @brief Destroy writer port instance.
    */
-  ~AMLoggerWritePort() override = default;
+  virtual ~AMLoggerWritePort() = default;
 
   /**
    * @brief Bind one output path used by this writer.

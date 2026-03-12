@@ -3,13 +3,17 @@
 #include "application/config/ConfigPayloads.hpp"
 #include "domain/filesystem/FileSystemManager.hpp"
 #include "domain/host/HostManager.hpp"
+#include "domain/log/LoggerPorts.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
 #include "domain/transfer/TransferManager.hpp"
 #include "domain/var/VarManager.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
-#include "infrastructure/Logger.hpp"
+#include "infrastructure/log/FileLoggerWriter.hpp"
+#include "infrastructure/writer/WriteDispatcher.hpp"
 #include <csignal>
+#include <filesystem>
+#include <memory>
 
 namespace {
 /**
@@ -45,6 +49,65 @@ AMDomain::var::AMVarManager::DomainDict ParseUserVarsDict_(
   }
   return parsed;
 }
+/**
+ * @brief Configure domain logger with infrastructure file writers.
+ */
+ECM ConfigureLogger_(
+    AMLoggerManagerPort &log_manager,
+    AMApplication::config::AMConfigAppService &config_service) {
+  if (auto scheduler = log_manager.Scheduler()) {
+    scheduler->Stop();
+  }
+
+  AMApplication::config::SettingsOptionsSnapshot options = {};
+  (void)config_service.Read(&options);
+
+  const std::filesystem::path base =
+      config_service.ProjectRoot().empty()
+          ? std::filesystem::path(".")
+          : config_service.ProjectRoot();
+
+  auto scheduler = std::make_shared<AMInfraAsyncWriter>();
+  scheduler->Start();
+
+  auto client_writer = std::make_shared<AMInfraFileLoggerWriter>(
+      base / "log" / "Client.log");
+  ECM rcm = client_writer->LastError();
+  if (!isok(rcm)) {
+    scheduler->Stop();
+    return rcm;
+  }
+
+  auto program_writer = std::make_shared<AMInfraFileLoggerWriter>(
+      base / "log" / "Program.log");
+  rcm = program_writer->LastError();
+  if (!isok(rcm)) {
+    scheduler->Stop();
+    return rcm;
+  }
+
+  log_manager.ClearLoggers();
+  log_manager.SetScheduler(scheduler);
+  if (!log_manager.SetLogger(AMDomain::log::LoggerType::Client,
+                             client_writer)) {
+    scheduler->Stop();
+    return Err(EC::ProgrammInitializeFailed,
+               "Failed to bind client logger writer");
+  }
+  if (!log_manager.SetLogger(AMDomain::log::LoggerType::Program,
+                             program_writer)) {
+    scheduler->Stop();
+    return Err(EC::ProgrammInitializeFailed,
+               "Failed to bind program logger writer");
+  }
+
+  log_manager.SetTraceLevel(AMDomain::log::LoggerType::Client,
+                            options.log_manager.client_trace_level);
+  log_manager.SetTraceLevel(AMDomain::log::LoggerType::Program,
+                            options.log_manager.program_trace_level);
+  return Ok();
+}
+
 /**
  * @brief Hook name used to bridge process signals into session token state.
  */
@@ -89,7 +152,7 @@ CliManagers::CliManagers(AMSignalMonitorPort &signal_monitor_ref,
                          AMDomain::host::AMHostConfigManager &host_config_manager_ref,
                          AMDomain::host::AMKnownHostsManager &known_hosts_manager_ref,
                          AMDomain::var::VarCLISet &var_manager_ref,
-                         AMInfraLogManager &log_manager_ref,
+                         AMLoggerManagerPort &log_manager_ref,
                          AMApplication::client::ClientAppService &client_service_ref,
                          AMDomain::transfer::AMTransferManager &transfer_manager_ref,
                          AMDomain::filesystem::AMFileSystem &filesystem_ref)
@@ -134,8 +197,7 @@ ECM CliManagers::Init(const amf &task_control_token) {
   if (!isok(rcm)) {
     return rcm;
   }
-  log_manager.BindConfigService(&config_service);
-  rcm = log_manager.Init();
+  rcm = ConfigureLogger_(log_manager, config_service);
   if (!isok(rcm)) {
     return rcm;
   }

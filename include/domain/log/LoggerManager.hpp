@@ -109,27 +109,7 @@ public:
   [[nodiscard]] std::function<void(const std::string &)>
   WriteLineCallbackFunc(LoggerType logger_type) override;
 
-  /**
-   * @brief Clamp trace level to valid range [-1, 4].
-   */
-  static int ClampTraceLevel(int value);
-
-  /**
-   * @brief Convert enum trace level into comparable integer severity.
-   */
-  static int ToLevelInt(TraceLevel level);
-
 private:
-  /**
-   * @brief Resolve default source by logger type.
-   */
-  static TraceSource ResolveSource_(LoggerType logger_type);
-
-  /**
-   * @brief Build one log line text from structured trace info.
-   */
-  static std::string BuildLogLine_(const TraceInfo &info);
-
   /**
    * @brief Invoke manager-level error callback when set.
    */

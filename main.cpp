@@ -2,8 +2,8 @@
 #include "bootstrap/AppHandle.hpp"
 #include "bootstrap/SessionHandle.hpp"
 #include "application/client/ClientAppService.hpp"
+#include "domain/log/LoggerManager.hpp"
 #include "foundation/DataClass.hpp"
-#include "infrastructure/Logger.hpp"
 #include "infrastructure/client/runtime/ClientFactoryAdapter.hpp"
 #include "infrastructure/signal_monitor/SignalMonitor.hpp"
 #include "domain/filesystem/FileSystemManager.hpp"
@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
     AMDomain::host::AMHostConfigManager host_config_manager{};
     AMDomain::host::AMKnownHostsManager known_hosts_manager{};
     auto &var_manager = AMDomain::var::VarCLISet::Instance();
-    AMInfraLogManager log_manager{};
+    AMLoggerManager log_manager{};
     AMInfra::ClientRuntime::ClientFactoryAdapter client_factory(
         host_config_manager);
     AMApplication::client::ClientAppService client_service(
