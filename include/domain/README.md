@@ -12,6 +12,6 @@ Current WF-3 modules:
 - `var/VarDomainService.hpp`: in-memory variable domain service.
 - `var/VarPorts.hpp`: variable persistence/current-domain ports.
 - `client/ClientPorts.hpp`: client registry/operator ports.
-- `filesystem/FileSystemPorts.hpp`: filesystem query/mutation ports.
+- `filesystem/FileSystemPorts.hpp`: compatibility placeholder (redundant filesystem domain ports removed).
 - `transfer/TransferPorts.hpp`: transfer task execution/query ports.
 - `transfer/TransferCacheDomainService.hpp`: transfer cache bookkeeping rules.

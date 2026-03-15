@@ -1,5 +1,6 @@
 #include "application/filesystem/PathResolutionService.hpp"
 
+#include "domain/client/ClientDomainService.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "domain/host/HostDomainService.hpp"
 
