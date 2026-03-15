@@ -1,6 +1,8 @@
 param(
     [string]$RepoRoot = ".",
-    [switch]$FailOnLegacyInclude
+    [switch]$FailOnLegacyInclude,
+    [switch]$FailOnFilesystemCompatInActivePath,
+    [switch]$SkipLayerDirectionCheck
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,6 +22,15 @@ function Get-LayerFromFilePath {
         return $Matches[2]
     }
     return ""
+}
+
+function Is-FilesystemActivePath {
+    param([string]$RelativePath)
+    $n = Normalize-PathForCheck $RelativePath
+    if ($n -eq "main.cpp") {
+        return $true
+    }
+    return $n -match '^(include|src)/(application|interface|bootstrap)/'
 }
 
 function Get-RelativePathCompat {
@@ -105,24 +116,51 @@ foreach ($file in $targetFiles) {
 
 $violations = @()
 $legacyWarnings = @()
+$filesystemCompatForbiddenIncludes = @(
+    "domain/filesystem/FileSystemManager.hpp",
+    "domain/filesystem/deprecated/FileSystemManager.hpp",
+    "domain/filesystem/deprecated/FileSystemManagerLegacy.hpp",
+    "domain/filesystem/dep/FileSystemManager.dep.hpp",
+    "application/filesystem/FileSystemWorkflows.hpp",
+    "application/filesystem/dep/FileSystemWorkflows.dep.hpp"
+)
 
 foreach ($entry in $layeredFiles) {
     $includes = Get-IncludeEntries $entry.FilePath
     foreach ($inc in $includes) {
+        $includeNorm = Normalize-PathForCheck $inc.IncludePath
         $toLayer = Get-LayerFromIncludePath $inc.IncludePath
         if (-not [string]::IsNullOrEmpty($toLayer)) {
-            $allowed = $allowedDeps[$entry.Layer]
-            if ($allowed -notcontains $toLayer) {
+            if (-not $SkipLayerDirectionCheck) {
+                $allowed = $allowedDeps[$entry.Layer]
+                if ($allowed -notcontains $toLayer) {
+                    $violations += [pscustomobject]@{
+                        File = $entry.Relative
+                        Line = $inc.Line
+                        FromLayer = $entry.Layer
+                        IncludePath = $inc.IncludePath
+                        ToLayer = $toLayer
+                        Reason = "forbidden dependency direction"
+                    }
+                }
+            }
+            if (-not $FailOnFilesystemCompatInActivePath) {
+                continue
+            }
+        }
+        if ($FailOnFilesystemCompatInActivePath -and (Is-FilesystemActivePath $entry.Relative)) {
+            $isBridgeException = ($entry.Relative -eq "include/application/filesystem/FileSystemWorkflows.hpp" `
+                    -and $includeNorm -eq "application/filesystem/dep/FileSystemWorkflows.dep.hpp")
+            if (($filesystemCompatForbiddenIncludes -contains $includeNorm) -and -not $isBridgeException) {
                 $violations += [pscustomobject]@{
                     File = $entry.Relative
                     Line = $inc.Line
                     FromLayer = $entry.Layer
                     IncludePath = $inc.IncludePath
-                    ToLayer = $toLayer
-                    Reason = "forbidden dependency direction"
+                    ToLayer = "filesystem-compat"
+                    Reason = "filesystem compatibility include not allowed in active path"
                 }
             }
-            continue
         }
 
         if (Is-LegacyInclude $inc.IncludePath) {
@@ -144,10 +182,29 @@ foreach ($entry in $layeredFiles) {
             }
         }
     }
+
+    if ($FailOnFilesystemCompatInActivePath -and (Is-FilesystemActivePath $entry.Relative)) {
+        $lines = Get-Content $entry.FilePath
+        for ($idx = 0; $idx -lt $lines.Count; $idx++) {
+            $lineText = $lines[$idx]
+            if ($lineText -match '\bAMDomain::filesystem::AMFileSystem\b|\bAMFileSystem::Instance\s*\(') {
+                $violations += [pscustomobject]@{
+                    File = $entry.Relative
+                    Line = $idx + 1
+                    FromLayer = $entry.Layer
+                    IncludePath = "AMFileSystem"
+                    ToLayer = "filesystem-compat"
+                    Reason = "legacy filesystem type usage not allowed in active path"
+                }
+            }
+        }
+    }
 }
 
 Write-Host "Layer checker root: $repoFull"
 Write-Host ("Layered files scanned: {0}" -f $layeredFiles.Count)
+Write-Host ("Layer direction check skipped: {0}" -f $SkipLayerDirectionCheck.IsPresent)
+Write-Host ("Filesystem active-path compatibility guard enabled: {0}" -f $FailOnFilesystemCompatInActivePath.IsPresent)
 
 if ($legacyWarnings.Count -gt 0) {
     Write-Host ("Legacy include warnings: {0}" -f $legacyWarnings.Count) -ForegroundColor Yellow

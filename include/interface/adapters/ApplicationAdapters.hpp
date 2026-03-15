@@ -10,6 +10,8 @@
 #include "application/transfer/TaskWorkflows.hpp"
 #include "application/transfer/TransferWorkflows.hpp"
 #include "application/var/VarWorkflows.hpp"
+#include "interface/adapters/FileCommandGateway.dep.hpp"
+#include "interface/adapters/FileSystemAdapter.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "domain/config/ConfigModel.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
@@ -44,14 +46,18 @@ class VarAppService;
 }
 namespace AMApplication::TransferWorkflow {
 class TransferAppService;
+struct TaskSummaryView;
+struct TaskEntryView;
+struct TransferSetView;
+struct TaskView;
 }
-namespace AMDomain::filesystem {
-class AMFileSystem;
+namespace AMApplication::filesystem {
+class FileSystemAppService;
 }
 
 namespace AMInterface::ApplicationAdapters {
 /**
- * @brief Host/profile workflow gateway backed by legacy manager adapters.
+ * @brief Host/profile workflow gateway backed by host config + prompt services.
  */
 class HostProfileGateway final
     : public AMApplication::HostProfileWorkflow::IHostProfileGateway {
@@ -223,10 +229,12 @@ class ClientSessionGateway final
     : public AMApplication::ClientWorkflow::IClientSessionGateway {
 public:
   /**
-   * @brief Construct gateway from client app service and filesystem manager.
+   * @brief Construct gateway from client app service and filesystem app
+   * service.
    */
   ClientSessionGateway(AMApplication::client::ClientAppService &client_service,
-                       AMDomain::filesystem::AMFileSystem &filesystem);
+                       AMApplication::filesystem::FileSystemAppService
+                           &filesystem_service);
   ~ClientSessionGateway() override = default;
 
   ECM ConnectNickname(const std::string &nickname, bool force,
@@ -251,121 +259,7 @@ public:
 
 private:
   AMApplication::client::ClientAppService &client_service_;
-  AMDomain::filesystem::AMFileSystem &filesystem_;
-};
-
-/**
- * @brief Filesystem command adapter backed by filesystem manager.
- */
-class FileCommandGateway final
-    : public AMApplication::FileCommandWorkflow::IFileCommandGateway {
-public:
-  /**
-   * @brief Construct gateway from filesystem manager.
-   */
-  explicit FileCommandGateway(AMDomain::filesystem::AMFileSystem &filesystem);
-
-  /**
-   * @brief Check clients by nickname list.
-   */
-  ECM CheckClients(const std::vector<std::string> &nicknames, bool detail,
-                   amf interrupt_flag = nullptr) override;
-
-  /**
-   * @brief Print current clients.
-   */
-  ECM ListClients(bool detail, amf interrupt_flag = nullptr);
-
-  /**
-   * @brief Disconnect clients by nickname list.
-   */
-  ECM DisconnectClients(const std::vector<std::string> &nicknames);
-
-  /**
-   * @brief Print stat for one or more paths.
-   */
-  ECM StatPaths(const std::vector<std::string> &paths,
-                amf interrupt_flag = nullptr, int timeout_ms = -1);
-
-  /**
-   * @brief List one path.
-   */
-  ECM ListPath(const std::string &path, bool list_like, bool show_all,
-               amf interrupt_flag = nullptr, int timeout_ms = -1);
-
-  /**
-   * @brief Print size for one or more paths.
-   */
-  ECM GetSize(const std::vector<std::string> &paths,
-              amf interrupt_flag = nullptr, int timeout_ms = -1) override;
-
-  /**
-   * @brief Run find on one path.
-   */
-  ECM Find(const std::string &path, SearchType type = SearchType::All,
-           amf interrupt_flag = nullptr, int timeout_ms = -1) override;
-
-  /**
-   * @brief Create directories for one or more paths.
-   */
-  ECM Mkdir(const std::vector<std::string> &paths, amf interrupt_flag = nullptr,
-            int timeout_ms = -1) override;
-
-  /**
-   * @brief Remove one or more paths.
-   */
-  ECM Remove(const std::vector<std::string> &paths, bool permanent, bool force,
-             bool quiet = false, amf interrupt_flag = nullptr,
-             int timeout_ms = -1) override;
-
-  /**
-   * @brief Walk one path.
-   */
-  ECM Walk(const std::string &path, bool only_file = false,
-           bool only_dir = false, bool show_all = false,
-           bool ignore_special_file = true, bool quiet = false,
-           amf interrupt_flag = nullptr, int timeout_ms = -1) override;
-
-  /**
-   * @brief Print one path tree.
-   */
-  ECM Tree(const std::string &path, int max_depth = -1, bool only_dir = false,
-           bool show_all = false, bool ignore_special_file = true,
-           bool quiet = false, amf interrupt_flag = nullptr,
-           int timeout_ms = -1) override;
-
-  /**
-   * @brief Resolve one real path.
-   */
-  ECM Realpath(const std::string &path, amf interrupt_flag = nullptr,
-               int timeout_ms = -1) override;
-
-  /**
-   * @brief Measure RTT for current client.
-   */
-  ECM TestRtt(int times = 1, amf interrupt_flag = nullptr) override;
-
-  /**
-   * @brief Change current workdir.
-   */
-  ECM Cd(const std::string &path, amf interrupt_flag = nullptr,
-         bool from_history = false) override;
-
-  /**
-   * @brief Run one shell command.
-   */
-  std::pair<ECM, std::pair<std::string, int>>
-  ShellRun(const std::string &cmd, int max_time_ms = -1,
-           amf interrupt_flag = nullptr) override;
-
-private:
-  /**
-   * @brief Join nicknames for legacy remove-client API.
-   */
-  [[nodiscard]] std::string
-  JoinNicknames_(const std::vector<std::string> &nicknames) const;
-
-  AMDomain::filesystem::AMFileSystem &filesystem_;
+  AMApplication::filesystem::FileSystemAppService &filesystem_service_;
 };
 
 /**
@@ -435,42 +329,51 @@ public:
 };
 
 /**
- * @brief Transfer-executor workflow port backed by transfer manager.
+ * @brief Transfer-executor workflow port backed by transfer app service.
  */
 class TransferExecutorPort final
     : public AMDomain::transfer::ITransferExecutorPort {
 public:
   /**
-   * @brief Construct executor from transfer manager.
+   * @brief Construct executor from transfer app service.
    */
-  explicit TransferExecutorPort(
-      AMApplication::TransferWorkflow::TransferAppService &transfer_manager);
+  TransferExecutorPort(
+      AMApplication::TransferWorkflow::TransferAppService &transfer_service,
+      AMPromptManager &prompt_manager,
+      AMApplication::TransferWorkflow::TransferConfirmPolicy confirm_policy =
+          AMApplication::TransferWorkflow::TransferConfirmPolicy::RequireConfirm,
+      std::shared_ptr<TaskControlToken> task_control_token = nullptr);
   ~TransferExecutorPort() override = default;
 
-  ECM Transfer(const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-               amf interrupt_flag = nullptr) override;
+  ECM Transfer(const std::vector<UserTransferSet> &transfer_sets,
+               bool quiet) override;
   ECM TransferAsync(const std::vector<UserTransferSet> &transfer_sets,
-                    bool quiet, amf interrupt_flag = nullptr) override;
+                    bool quiet) override;
 
 private:
-  AMApplication::TransferWorkflow::TransferAppService &transfer_manager_;
+  AMApplication::TransferWorkflow::TransferAppService &transfer_service_;
+  AMPromptManager *prompt_manager_ = nullptr;
+  AMApplication::TransferWorkflow::TransferConfirmPolicy confirm_policy_ =
+      AMApplication::TransferWorkflow::TransferConfirmPolicy::RequireConfirm;
+  std::shared_ptr<TaskControlToken> task_control_token_ = nullptr;
 };
 
 /**
- * @brief Task workflow gateway backed by transfer manager.
+ * @brief Task workflow gateway backed by transfer app service.
  */
 class TaskGateway final : public AMApplication::TaskWorkflow::ITaskGateway {
 public:
   /**
-   * @brief Construct gateway from transfer manager.
+   * @brief Construct gateway from transfer app service.
    */
-  explicit TaskGateway(AMApplication::TransferWorkflow::TransferAppService &transfer_manager);
+  TaskGateway(AMApplication::TransferWorkflow::TransferAppService &transfer_service,
+              AMPromptManager &prompt_manager,
+              std::shared_ptr<TaskControlToken> task_control_token = nullptr);
   ~TaskGateway() override = default;
 
-  ECM ListTasks(bool pending, bool suspend, bool finished, bool conducting,
-                amf interrupt_flag = nullptr) override;
-  ECM ShowTasks(const std::vector<std::string> &ids,
-                amf interrupt_flag = nullptr) override;
+  ECM ListTasks(bool pending, bool suspend, bool finished,
+                bool conducting) override;
+  ECM ShowTasks(const std::vector<std::string> &ids) override;
   ECM InspectTask(const std::string &id, bool show_sets,
                   bool show_entries) override;
   ECM InspectTaskSets(const std::string &id) override;
@@ -485,13 +388,22 @@ public:
   size_t AddCachedTransferSet(const UserTransferSet &transfer_set) override;
   size_t RemoveCachedTransferSets(const std::vector<size_t> &indices) override;
   void ClearCachedTransferSets() override;
-  ECM SubmitCachedTransferSets(bool quiet, amf interrupt_flag = nullptr,
-                               bool is_async = false) override;
+  ECM SubmitCachedTransferSets(bool quiet, bool is_async = false) override;
   ECM QueryCachedTransferSet(size_t index) override;
   [[nodiscard]] std::vector<size_t> ListCachedTransferSetIds() const override;
 
 private:
-  AMApplication::TransferWorkflow::TransferAppService &transfer_manager_;
+  void PrintTaskSummary_(
+      const AMApplication::TransferWorkflow::TaskSummaryView &task_summary,
+      bool verbose) const;
+  void PrintTaskEntries_(
+      const AMApplication::TransferWorkflow::TaskView &task_view) const;
+  void PrintTaskSets_(
+      const AMApplication::TransferWorkflow::TaskView &task_view) const;
+
+  AMApplication::TransferWorkflow::TransferAppService &transfer_service_;
+  AMPromptManager *prompt_manager_ = nullptr;
+  std::shared_ptr<TaskControlToken> task_control_token_ = nullptr;
 };
 
 /**
@@ -516,14 +428,14 @@ struct RuntimeBindings {
   AMDomain::host::AMHostConfigManager *host_config_manager = nullptr;
   AMDomain::host::AMKnownHostsManager *known_hosts_manager = nullptr;
   AMApplication::client::ClientAppService *client_service = nullptr;
-  AMApplication::TransferWorkflow::TransferAppService *transfer_manager = nullptr;
+  AMApplication::TransferWorkflow::TransferAppService *transfer_service = nullptr;
   const AMDomain::var::IVarQueryPort *var_query = nullptr;
   const AMDomain::var::IVarSubstitutionPort *var_substitution = nullptr;
   AMSignalMonitorPort *signal_monitor = nullptr;
   AMPromptManager *prompt_manager = nullptr;
   AMApplication::config::AMConfigAppService *config_service = nullptr;
   AMInterface::style::AMStyleService *style_service = nullptr;
-  AMDomain::filesystem::AMFileSystem *filesystem = nullptr;
+  AMApplication::filesystem::FileSystemAppService *filesystem_service = nullptr;
 };
 
 /**

@@ -3,19 +3,23 @@
 #include "interface/prompt/Prompt.hpp"
 #include "application/client/ClientAppService.hpp"
 #include "application/config/ConfigPayloads.hpp"
+#include "application/filesystem/FileSystemAppService.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/auth.hpp"
-#include "domain/filesystem/FileSystemManager.hpp"
+#include "foundation/tools/json.hpp"
 #include "domain/host/HostManager.hpp"
 #include "application/transfer/TransferAppService.hpp"
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <unordered_set>
 
 namespace AMInterface::ApplicationAdapters {
 namespace {
 using AMDomain::host::ClientProtocol;
 using AMDomain::host::HostConfig;
+using AMDomain::config::DocumentKind;
 namespace configkn = AMDomain::host;
 
 bool ParseBool_(const std::string &text, bool *out) {
@@ -712,7 +716,7 @@ ECM PromptEditHostConfig_(AMPromptManager &prompt,
 } // namespace
 
 /**
- * @brief Construct host/profile gateway from legacy managers.
+ * @brief Construct host/profile gateway from host config and prompt services.
  */
 HostProfileGateway::HostProfileGateway(AMDomain::host::AMHostConfigManager &host_config_manager,
                                        AMPromptManager &prompt_manager)
@@ -979,7 +983,10 @@ ECM ConfigBackedVarRepository::Load(
 
   out_vars->clear();
   for (const auto &[domain, vars] : snapshot.domains) {
-    (*out_vars)[domain] = vars;
+    auto &domain_vars = (*out_vars)[domain];
+    for (const auto &[name, value] : vars) {
+      domain_vars[name] = value;
+    }
   }
   if (out_vars->find(varsetkn::kPublic) == out_vars->end()) {
     (*out_vars)[varsetkn::kPublic] = {};
@@ -1090,8 +1097,8 @@ ECM PromptConfigSaver::SavePromptConfig(bool dump_now) {
  */
 ClientSessionGateway::ClientSessionGateway(
     AMApplication::client::ClientAppService &client_service,
-    AMDomain::filesystem::AMFileSystem &filesystem)
-    : client_service_(client_service), filesystem_(filesystem) {}
+    AMApplication::filesystem::FileSystemAppService &filesystem_service)
+    : client_service_(client_service), filesystem_service_(filesystem_service) {}
 
 /**
  * @brief Connect one configured nickname.
@@ -1189,7 +1196,7 @@ ECM ClientSessionGateway::ConnectFtp(const std::string &nickname,
  * @brief Print current client table.
  */
 ECM ClientSessionGateway::ListClients(bool detail, amf interrupt_flag) {
-  return filesystem_.print_clients(detail, interrupt_flag);
+  return filesystem_service_.ListClients(detail, interrupt_flag);
 }
 
 /**
@@ -1212,7 +1219,7 @@ ECM ClientSessionGateway::DisconnectClients(
  */
 ECM ClientSessionGateway::StatPaths(const std::vector<std::string> &paths,
                                     amf interrupt_flag) {
-  return filesystem_.stat(paths, interrupt_flag);
+  return filesystem_service_.QueryStatPaths(paths, interrupt_flag).rcm;
 }
 
 /**
@@ -1220,158 +1227,9 @@ ECM ClientSessionGateway::StatPaths(const std::vector<std::string> &paths,
  */
 ECM ClientSessionGateway::ListPath(const std::string &path, bool list_like,
                                    bool show_all, amf interrupt_flag) {
-  return filesystem_.ls(path, list_like, show_all, interrupt_flag);
-}
-
-/**
- * @brief Construct filesystem command gateway from filesystem manager.
- */
-FileCommandGateway::FileCommandGateway(AMDomain::filesystem::AMFileSystem &filesystem)
-    : filesystem_(filesystem) {}
-
-/**
- * @brief Check clients by nickname list.
- */
-ECM FileCommandGateway::CheckClients(const std::vector<std::string> &nicknames,
-                                     bool detail, amf interrupt_flag) {
-  return filesystem_.check(nicknames, detail, interrupt_flag);
-}
-
-/**
- * @brief Print current clients.
- */
-ECM FileCommandGateway::ListClients(bool detail, amf interrupt_flag) {
-  return filesystem_.print_clients(detail, interrupt_flag);
-}
-
-/**
- * @brief Disconnect clients by nickname list.
- */
-ECM FileCommandGateway::DisconnectClients(
-    const std::vector<std::string> &nicknames) {
-  return filesystem_.remove_client(JoinNicknames_(nicknames));
-}
-
-/**
- * @brief Print stat for one or more paths.
- */
-ECM FileCommandGateway::StatPaths(const std::vector<std::string> &paths,
-                                  amf interrupt_flag, int timeout_ms) {
-  return filesystem_.stat(paths, interrupt_flag, timeout_ms);
-}
-
-/**
- * @brief List one path.
- */
-ECM FileCommandGateway::ListPath(const std::string &path, bool list_like,
-                                 bool show_all, amf interrupt_flag,
-                                 int timeout_ms) {
-  return filesystem_.ls(path, list_like, show_all, interrupt_flag, timeout_ms);
-}
-
-/**
- * @brief Print size for one or more paths.
- */
-ECM FileCommandGateway::GetSize(const std::vector<std::string> &paths,
-                                amf interrupt_flag, int timeout_ms) {
-  return filesystem_.getsize(paths, interrupt_flag, timeout_ms);
-}
-
-/**
- * @brief Run find on one path.
- */
-ECM FileCommandGateway::Find(const std::string &path, SearchType type,
-                             amf interrupt_flag, int timeout_ms) {
-  return filesystem_.find(path, type, interrupt_flag, timeout_ms);
-}
-
-/**
- * @brief Create directories for one or more paths.
- */
-ECM FileCommandGateway::Mkdir(const std::vector<std::string> &paths,
-                              amf interrupt_flag, int timeout_ms) {
-  return filesystem_.mkdir(paths, interrupt_flag, timeout_ms);
-}
-
-/**
- * @brief Remove one or more paths.
- */
-ECM FileCommandGateway::Remove(const std::vector<std::string> &paths,
-                               bool permanent, bool force, bool quiet,
-                               amf interrupt_flag, int timeout_ms) {
-  return filesystem_.rm(paths, permanent, force, quiet, interrupt_flag,
-                        timeout_ms);
-}
-
-/**
- * @brief Walk one path.
- */
-ECM FileCommandGateway::Walk(const std::string &path, bool only_file,
-                             bool only_dir, bool show_all,
-                             bool ignore_special_file, bool quiet,
-                             amf interrupt_flag, int timeout_ms) {
-  return filesystem_.walk(path, only_file, only_dir, show_all,
-                          ignore_special_file, quiet, interrupt_flag,
-                          timeout_ms);
-}
-
-/**
- * @brief Print one path tree.
- */
-ECM FileCommandGateway::Tree(const std::string &path, int max_depth,
-                             bool only_dir, bool show_all,
-                             bool ignore_special_file, bool quiet,
-                             amf interrupt_flag, int timeout_ms) {
-  return filesystem_.tree(path, max_depth, only_dir, show_all,
-                          ignore_special_file, quiet, interrupt_flag,
-                          timeout_ms);
-}
-
-/**
- * @brief Resolve one real path.
- */
-ECM FileCommandGateway::Realpath(const std::string &path, amf interrupt_flag,
-                                 int timeout_ms) {
-  return filesystem_.realpath(path, interrupt_flag, timeout_ms);
-}
-
-/**
- * @brief Measure RTT for current client.
- */
-ECM FileCommandGateway::TestRtt(int times, amf interrupt_flag) {
-  return filesystem_.TestRTT(times, interrupt_flag);
-}
-
-/**
- * @brief Change current workdir.
- */
-ECM FileCommandGateway::Cd(const std::string &path, amf interrupt_flag,
-                           bool from_history) {
-  return filesystem_.cd(path, interrupt_flag, from_history);
-}
-
-/**
- * @brief Run one shell command.
- */
-std::pair<ECM, std::pair<std::string, int>>
-FileCommandGateway::ShellRun(const std::string &cmd, int max_time_ms,
-                             amf interrupt_flag) {
-  return filesystem_.ShellRun(cmd, max_time_ms, interrupt_flag);
-}
-
-/**
- * @brief Join nicknames for legacy remove-client API.
- */
-std::string
-FileCommandGateway::JoinNicknames_(const std::vector<std::string> &nicknames) const {
-  std::string joined;
-  for (size_t i = 0; i < nicknames.size(); ++i) {
-    if (i > 0) {
-      joined += " ";
-    }
-    joined += nicknames[i];
-  }
-  return joined;
+  return filesystem_service_
+      .QueryListPath(path, list_like, show_all, interrupt_flag)
+      .rcm;
 }
 
 /**
@@ -1416,49 +1274,339 @@ void CompletionGateway::ClearActiveCompleterCache() const {
 }
 
 /**
- * @brief Construct transfer executor from transfer manager.
+ * @brief Construct transfer executor from transfer app service.
  */
-TransferExecutorPort::TransferExecutorPort(AMApplication::TransferWorkflow::TransferAppService &transfer_manager)
-    : transfer_manager_(transfer_manager) {}
+TransferExecutorPort::TransferExecutorPort(
+    AMApplication::TransferWorkflow::TransferAppService &transfer_service,
+    AMPromptManager &prompt_manager,
+    AMApplication::TransferWorkflow::TransferConfirmPolicy confirm_policy,
+    std::shared_ptr<TaskControlToken> task_control_token)
+    : transfer_service_(transfer_service), prompt_manager_(&prompt_manager),
+      confirm_policy_(confirm_policy),
+      task_control_token_(std::move(task_control_token)) {}
+
+namespace {
+/**
+ * @brief Convert task status enum to stable display text.
+ */
+const char *TaskStatusText_(TaskStatus status) {
+  switch (status) {
+  case TaskStatus::Pending:
+    return "Pending";
+  case TaskStatus::Conducting:
+    return "Conducting";
+  case TaskStatus::Paused:
+    return "Paused";
+  case TaskStatus::Finished:
+    return "Finished";
+  default:
+    return "Unknown";
+  }
+}
+
+/**
+ * @brief Convert transfer path type to display text.
+ */
+const char *PathTypeText_(PathType type) {
+  switch (type) {
+  case PathType::FILE:
+    return "FILE";
+  case PathType::DIR:
+    return "DIR";
+  default:
+    return "OTHER";
+  }
+}
+
+/**
+ * @brief Convert nickname to display host text with local fallback.
+ */
+std::string DisplayHost_(const std::string &nickname) {
+  return nickname.empty() ? std::string("local") : nickname;
+}
+
+/**
+ * @brief Parse entry id in `<task_id>:<1-based-index>` format.
+ */
+bool ParseEntryId_(const std::string &entry_id, std::string *task_id,
+                   size_t *entry_index) {
+  if (!task_id || !entry_index) {
+    return false;
+  }
+  const size_t pos = entry_id.find(':');
+  if (pos == std::string::npos || pos == 0 || pos + 1 >= entry_id.size()) {
+    return false;
+  }
+  const std::string id_part = entry_id.substr(0, pos);
+  const std::string index_part = entry_id.substr(pos + 1);
+  try {
+    const size_t parsed = static_cast<size_t>(std::stoul(index_part));
+    if (parsed == 0) {
+      return false;
+    }
+    *task_id = id_part;
+    *entry_index = parsed;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+/**
+ * @brief Render one transfer set with current CLI output style.
+ */
+void PrintTransferSet_(AMPromptManager &prompt,
+                       const AMApplication::TransferWorkflow::TransferSetView &set) {
+  for (const auto &src : set.srcs) {
+    prompt.Print(src);
+  }
+  prompt.FmtPrint(" ->  {}", set.dst);
+  prompt.FmtPrint("clone = {}", set.clone ? "true" : "false");
+  prompt.FmtPrint("mkdir = {}", set.mkdir ? "true" : "false");
+  prompt.FmtPrint("overwrite = {}", set.overwrite ? "true" : "false");
+  prompt.FmtPrint("no special = {}", set.ignore_special_file ? "true" : "false");
+  prompt.FmtPrint("resume = {}", set.resume ? "true" : "false");
+}
+
+/**
+ * @brief Build wildcard confirmation callback based on explicit policy.
+ */
+AMApplication::TransferWorkflow::TransferAppService::WildcardConfirmFn
+BuildWildcardConfirmFn_(
+    AMPromptManager *prompt,
+    AMApplication::TransferWorkflow::TransferConfirmPolicy confirm_policy) {
+  if (!prompt ||
+      confirm_policy !=
+          AMApplication::TransferWorkflow::TransferConfirmPolicy::
+              RequireConfirm) {
+    return {};
+  }
+  return [prompt](const std::vector<PathInfo> &matches,
+                  const std::string &src_host, const std::string &dst_host) {
+    if (!prompt || matches.empty()) {
+      return false;
+    }
+    const std::string host_name = src_host.empty() ? "local" : src_host;
+    const std::string dst_name = dst_host.empty() ? "local" : dst_host;
+    prompt->FmtPrint("Found {} paths to transfer", std::to_string(matches.size()));
+
+    std::vector<PathInfo> sorted = matches;
+    std::sort(sorted.begin(), sorted.end(),
+              [](const PathInfo &lhs, const PathInfo &rhs) {
+                return lhs.type == PathType::DIR && rhs.type != PathType::DIR;
+              });
+    for (const auto &path : sorted) {
+      if (path.type == PathType::DIR) {
+        prompt->FmtPrint("📁   {}@{}", host_name, path.path);
+      } else {
+        prompt->FmtPrint("📑   {}@{}", host_name, path.path);
+      }
+    }
+
+    bool canceled = false;
+    const bool accepted = prompt->PromptYesNo(
+        AMStr::fmt("Are you sure to transfer these paths to {}? (y/N): ",
+                   dst_name),
+        &canceled);
+    return accepted && !canceled;
+  };
+}
+} // namespace
 
 /**
  * @brief Execute transfer sets synchronously.
  */
 ECM TransferExecutorPort::Transfer(const std::vector<UserTransferSet> &transfer_sets,
-                                   bool quiet, amf interrupt_flag) {
-  return transfer_manager_.Transfer(transfer_sets, quiet, interrupt_flag);
+                                   bool quiet) {
+  std::vector<ECM> warnings = {};
+  AMApplication::TransferWorkflow::TransferAppService::WildcardConfirmFn confirm =
+      BuildWildcardConfirmFn_(prompt_manager_, confirm_policy_);
+  ECM rcm = transfer_service_.TransferWithControl(
+      transfer_sets, quiet, task_control_token_, confirm_policy_, confirm,
+      &warnings);
+  if (prompt_manager_) {
+    for (const auto &warning : warnings) {
+      prompt_manager_->ErrorFormat(warning);
+    }
+  }
+  return rcm;
 }
 
 /**
  * @brief Execute transfer sets asynchronously.
  */
 ECM TransferExecutorPort::TransferAsync(
-    const std::vector<UserTransferSet> &transfer_sets, bool quiet,
-    amf interrupt_flag) {
-  return transfer_manager_.TransferAsync(transfer_sets, quiet, interrupt_flag);
+    const std::vector<UserTransferSet> &transfer_sets, bool quiet) {
+  std::vector<ECM> warnings = {};
+  AMApplication::TransferWorkflow::TransferAppService::WildcardConfirmFn confirm =
+      BuildWildcardConfirmFn_(prompt_manager_, confirm_policy_);
+  ECM rcm = transfer_service_.TransferAsyncWithControl(
+      transfer_sets, quiet, task_control_token_, confirm_policy_, confirm,
+      &warnings);
+  if (prompt_manager_) {
+    for (const auto &warning : warnings) {
+      prompt_manager_->ErrorFormat(warning);
+    }
+  }
+  return rcm;
 }
 
 /**
- * @brief Construct task gateway from transfer manager.
+ * @brief Construct task gateway from transfer app service.
  */
-TaskGateway::TaskGateway(AMApplication::TransferWorkflow::TransferAppService &transfer_manager)
-    : transfer_manager_(transfer_manager) {}
+TaskGateway::TaskGateway(
+    AMApplication::TransferWorkflow::TransferAppService &transfer_service,
+    AMPromptManager &prompt_manager,
+    std::shared_ptr<TaskControlToken> task_control_token)
+    : transfer_service_(transfer_service), prompt_manager_(&prompt_manager),
+      task_control_token_(std::move(task_control_token)) {}
+
+/**
+ * @brief Print compact task summary line.
+ */
+void TaskGateway::PrintTaskSummary_(
+    const AMApplication::TransferWorkflow::TaskSummaryView &task_summary,
+    bool verbose) const {
+  if (!prompt_manager_) {
+    return;
+  }
+  prompt_manager_->FmtPrint("Task {} [{}] files {}/{} size {}/{} result {} {}",
+                            task_summary.id,
+                            TaskStatusText_(task_summary.status),
+                            std::to_string(task_summary.success_filenum),
+                            std::to_string(task_summary.filenum),
+                            AMStr::FormatSize(task_summary.total_transferred_size),
+                            AMStr::FormatSize(task_summary.total_size),
+                            AMStr::ToString(task_summary.result.first),
+                            task_summary.result.second);
+  if (!verbose) {
+    return;
+  }
+  prompt_manager_->FmtPrint(
+      "  submit={} start={} finish={} thread={}",
+      std::to_string(task_summary.submit_time),
+      std::to_string(task_summary.start_time),
+      std::to_string(task_summary.finished_time),
+      std::to_string(task_summary.running_thread));
+}
+
+/**
+ * @brief Print transfer entry details for one task.
+ */
+void TaskGateway::PrintTaskEntries_(
+    const AMApplication::TransferWorkflow::TaskView &task_view) const {
+  if (!prompt_manager_) {
+    return;
+  }
+  if (task_view.entries.empty()) {
+    prompt_manager_->FmtPrint("Task {} has no entries.", task_view.summary.id);
+    return;
+  }
+  for (const auto &entry : task_view.entries) {
+    prompt_manager_->FmtPrint(
+        "  [{}] {}:{} {}@{} -> {}@{} size={} transferred={} result={} {}",
+        std::to_string(entry.index), task_view.summary.id,
+        PathTypeText_(entry.path_type),
+        DisplayHost_(entry.src_host), entry.src, DisplayHost_(entry.dst_host),
+        entry.dst, AMStr::FormatSize(entry.size),
+        AMStr::FormatSize(entry.transferred),
+        AMStr::ToString(entry.result.first), entry.result.second);
+  }
+}
+
+/**
+ * @brief Print user transfer-set details for one task.
+ */
+void TaskGateway::PrintTaskSets_(
+    const AMApplication::TransferWorkflow::TaskView &task_view) const {
+  if (!prompt_manager_) {
+    return;
+  }
+  if (task_view.transfer_sets.empty()) {
+    prompt_manager_->FmtPrint("Task {} has no transfer sets.",
+                              task_view.summary.id);
+    return;
+  }
+  for (const auto &set : task_view.transfer_sets) {
+    prompt_manager_->FmtPrint(
+        "  Set {} dst={} clone={} mkdir={} overwrite={} ignore_special={} "
+        "resume={}",
+        std::to_string(set.index), set.dst, set.clone ? "true" : "false",
+        set.mkdir ? "true" : "false", set.overwrite ? "true" : "false",
+        set.ignore_special_file ? "true" : "false", set.resume ? "true" : "false");
+    for (const auto &src : set.srcs) {
+      prompt_manager_->FmtPrint("    src: {}", src);
+    }
+  }
+}
 
 /**
  * @brief List task states.
  */
 ECM TaskGateway::ListTasks(bool pending, bool suspend, bool finished,
-                           bool conducting, amf interrupt_flag) {
-  return transfer_manager_.List(pending, suspend, finished, conducting,
-                                interrupt_flag);
+                           bool conducting) {
+  const bool has_filter = pending || suspend || finished || conducting;
+  if (!has_filter) {
+    pending = true;
+    suspend = true;
+    finished = true;
+    conducting = true;
+  }
+  std::vector<AMApplication::TransferWorkflow::TaskSummaryView> task_summaries = {};
+  ECM list_rcm = transfer_service_.ListTaskSummaries(&task_summaries);
+  if (!isok(list_rcm)) {
+    return list_rcm;
+  }
+  size_t shown = 0;
+  for (const auto &task_summary : task_summaries) {
+    if (task_control_token_ && !task_control_token_->IsRunning()) {
+      return Err(EC::Terminate, "Task list interrupted");
+    }
+    const TaskStatus status = task_summary.status;
+    const bool selected =
+        (pending && status == TaskStatus::Pending) ||
+        (suspend && status == TaskStatus::Paused) ||
+        (finished && status == TaskStatus::Finished) ||
+        (conducting && status == TaskStatus::Conducting);
+    if (!selected) {
+      continue;
+    }
+    PrintTaskSummary_(task_summary, false);
+    ++shown;
+  }
+  if (shown == 0 && prompt_manager_) {
+    prompt_manager_->Print("No transfer task matched.");
+  }
+  return Ok();
 }
 
 /**
  * @brief Show one or more tasks.
  */
-ECM TaskGateway::ShowTasks(const std::vector<std::string> &ids,
-                           amf interrupt_flag) {
-  return transfer_manager_.Show(ids, interrupt_flag);
+ECM TaskGateway::ShowTasks(const std::vector<std::string> &ids) {
+  if (ids.empty()) {
+    return ListTasks(true, true, true, true);
+  }
+  ECM first_error = Ok();
+  for (const auto &task_id : ids) {
+    if (task_control_token_ && !task_control_token_->IsRunning()) {
+      return Err(EC::Terminate, "Task show interrupted");
+    }
+    AMApplication::TransferWorkflow::TaskView task_view = {};
+    ECM rcm = transfer_service_.GetTaskView(task_id, false, true, &task_view);
+    if (!isok(rcm)) {
+      if (isok(first_error)) {
+        first_error = rcm;
+      }
+      if (prompt_manager_) {
+        prompt_manager_->ErrorFormat(rcm);
+      }
+      continue;
+    }
+    PrintTaskSummary_(task_view.summary, true);
+    PrintTaskEntries_(task_view);
+  }
+  return first_error;
 }
 
 /**
@@ -1466,54 +1614,125 @@ ECM TaskGateway::ShowTasks(const std::vector<std::string> &ids,
  */
 ECM TaskGateway::InspectTask(const std::string &id, bool show_sets,
                              bool show_entries) {
-  return transfer_manager_.Inspect(id, show_sets, show_entries);
+  const bool include_sets = show_sets || (!show_sets && !show_entries);
+  const bool include_entries = show_entries;
+  AMApplication::TransferWorkflow::TaskView task_view = {};
+  ECM rcm =
+      transfer_service_.GetTaskView(id, include_sets, include_entries, &task_view);
+  if (!isok(rcm)) {
+    return rcm;
+  }
+  PrintTaskSummary_(task_view.summary, true);
+  if (include_sets) {
+    PrintTaskSets_(task_view);
+  }
+  if (include_entries) {
+    PrintTaskEntries_(task_view);
+  }
+  return Ok();
 }
 
 /**
  * @brief Inspect transfer sets of one task.
  */
 ECM TaskGateway::InspectTaskSets(const std::string &id) {
-  return transfer_manager_.InspectTransferSets(id);
+  AMApplication::TransferWorkflow::TaskView task_view = {};
+  ECM rcm = transfer_service_.GetTaskView(id, true, false, &task_view);
+  if (!isok(rcm)) {
+    return rcm;
+  }
+  PrintTaskSets_(task_view);
+  return Ok();
 }
 
 /**
  * @brief Inspect entries of one task.
  */
 ECM TaskGateway::InspectTaskEntries(const std::string &id) {
-  return transfer_manager_.InspectTaskEntries(id);
+  AMApplication::TransferWorkflow::TaskView task_view = {};
+  ECM rcm = transfer_service_.GetTaskView(id, false, true, &task_view);
+  if (!isok(rcm)) {
+    return rcm;
+  }
+  PrintTaskEntries_(task_view);
+  return Ok();
 }
 
 /**
  * @brief Query one task entry by id.
  */
 ECM TaskGateway::QueryTaskEntry(const std::string &entry_id) {
-  return transfer_manager_.QueryTaskEntry(entry_id);
+  std::string task_id = {};
+  size_t index = 0;
+  if (!ParseEntryId_(entry_id, &task_id, &index)) {
+    return Err(EC::InvalidArg, AMStr::fmt("Invalid task entry id: {}", entry_id));
+  }
+  AMApplication::TransferWorkflow::TaskView task_view = {};
+  ECM rcm = transfer_service_.GetTaskView(task_id, false, true, &task_view);
+  if (!isok(rcm)) {
+    return rcm;
+  }
+  if (task_view.entries.empty()) {
+    return Err(EC::TaskNotFound, AMStr::fmt("Task has no entries: {}", task_id));
+  }
+  if (index == 0 || index > task_view.entries.size()) {
+    return Err(EC::InvalidArg,
+               AMStr::fmt("Entry index out of range: {}", entry_id));
+  }
+  const auto &task = task_view.entries.at(index - 1);
+  if (prompt_manager_) {
+    prompt_manager_->FmtPrint(
+        "Entry {}:{} [{}] {}@{} -> {}@{} size={} transferred={} result={} {}",
+        task_id, std::to_string(index), PathTypeText_(task.path_type),
+        DisplayHost_(task.src_host), task.src, DisplayHost_(task.dst_host),
+        task.dst, AMStr::FormatSize(task.size),
+        AMStr::FormatSize(task.transferred), AMStr::ToString(task.result.first),
+        task.result.second);
+  }
+  return Ok();
 }
 
 /**
  * @brief Query or set worker thread count.
  */
-ECM TaskGateway::Thread(int num) { return transfer_manager_.Thread(num); }
+ECM TaskGateway::Thread(int num) {
+  ECM rcm = transfer_service_.Thread(num);
+  if (!isok(rcm)) {
+    return rcm;
+  }
+  if (!prompt_manager_) {
+    return Ok();
+  }
+  if (num < 0) {
+    prompt_manager_->FmtPrint("Current transfer thread count: {}",
+                              rcm.second.empty() ? "0" : rcm.second);
+    return Ok();
+  }
+  prompt_manager_->FmtPrint("Updated transfer thread count: {}",
+                            rcm.second.empty() ? std::to_string(num)
+                                               : rcm.second);
+  return Ok();
+}
 
 /**
  * @brief Terminate tasks by ids.
  */
 ECM TaskGateway::TerminateTasks(const std::vector<std::string> &ids) {
-  return transfer_manager_.Terminate(ids);
+  return transfer_service_.Terminate(ids);
 }
 
 /**
  * @brief Pause tasks by ids.
  */
 ECM TaskGateway::PauseTasks(const std::vector<std::string> &ids) {
-  return transfer_manager_.Pause(ids);
+  return transfer_service_.Pause(ids);
 }
 
 /**
  * @brief Resume tasks by ids.
  */
 ECM TaskGateway::ResumeTasks(const std::vector<std::string> &ids) {
-  return transfer_manager_.Resume(ids);
+  return transfer_service_.Resume(ids);
 }
 
 /**
@@ -1521,14 +1740,14 @@ ECM TaskGateway::ResumeTasks(const std::vector<std::string> &ids) {
  */
 ECM TaskGateway::RetryTask(const std::string &id, bool is_async, bool quiet,
                            const std::vector<int> &indices) {
-  return transfer_manager_.Retry(id, is_async, quiet, indices);
+  return transfer_service_.Retry(id, is_async, quiet, indices);
 }
 
 /**
  * @brief Add one transfer set to cache.
  */
 size_t TaskGateway::AddCachedTransferSet(const UserTransferSet &transfer_set) {
-  return transfer_manager_.AddCachedTransferSet(transfer_set);
+  return transfer_service_.AddCachedTransferSet(transfer_set);
 }
 
 /**
@@ -1536,37 +1755,84 @@ size_t TaskGateway::AddCachedTransferSet(const UserTransferSet &transfer_set) {
  */
 size_t
 TaskGateway::RemoveCachedTransferSets(const std::vector<size_t> &indices) {
-  return transfer_manager_.RemoveCachedTransferSets(indices);
+  std::vector<ECM> warnings = {};
+  const size_t removed =
+      transfer_service_.RemoveCachedTransferSets(indices, &warnings);
+  if (prompt_manager_) {
+    for (const auto &warning : warnings) {
+      prompt_manager_->ErrorFormat(warning);
+    }
+  }
+  return removed;
 }
 
 /**
  * @brief Clear all cached transfer sets.
  */
 void TaskGateway::ClearCachedTransferSets() {
-  transfer_manager_.ClearCachedTransferSets();
+  transfer_service_.ClearCachedTransferSets();
 }
 
 /**
  * @brief Submit cached transfer sets.
  */
-ECM TaskGateway::SubmitCachedTransferSets(bool quiet, amf interrupt_flag,
-                                          bool is_async) {
-  return transfer_manager_.SubmitCachedTransferSets(quiet, interrupt_flag,
-                                                    is_async);
+ECM TaskGateway::SubmitCachedTransferSets(bool quiet, bool is_async) {
+  const auto transfer_set_views = transfer_service_.SnapshotCachedTransferSetViews();
+  if (transfer_set_views.empty()) {
+    return Err(EC::InvalidArg, "Cached transfer set is empty");
+  }
+
+  if (!quiet && prompt_manager_) {
+    for (const auto &set : transfer_set_views) {
+      PrintTransferSet_(*prompt_manager_, set);
+      prompt_manager_->Print("");
+    }
+    bool canceled = false;
+    if (!prompt_manager_->PromptYesNo("Submit cached transfer sets? (y/N): ",
+                                      &canceled)) {
+      prompt_manager_->Print("Canceled.");
+      return Err(EC::Terminate, "Task submission canceled");
+    }
+  }
+
+  std::vector<ECM> warnings = {};
+  const auto confirm_policy =
+      quiet ? AMApplication::TransferWorkflow::TransferConfirmPolicy::AutoApprove
+            : AMApplication::TransferWorkflow::TransferConfirmPolicy::
+                  RequireConfirm;
+  AMApplication::TransferWorkflow::TransferAppService::WildcardConfirmFn confirm =
+      BuildWildcardConfirmFn_(prompt_manager_, confirm_policy);
+
+  ECM rcm = transfer_service_.SubmitCachedTransferSetsWithControl(
+      quiet, is_async, task_control_token_, confirm_policy, confirm, &warnings);
+  if (prompt_manager_) {
+    for (const auto &warning : warnings) {
+      prompt_manager_->ErrorFormat(warning);
+    }
+  }
+  return rcm;
 }
 
 /**
  * @brief Query one cached transfer set.
  */
 ECM TaskGateway::QueryCachedTransferSet(size_t index) {
-  return transfer_manager_.QueryCachedTransferSet(index);
+  AMApplication::TransferWorkflow::TransferSetView transfer_set = {};
+  ECM rcm = transfer_service_.GetCachedTransferSetView(index, &transfer_set);
+  if (!isok(rcm)) {
+    return rcm;
+  }
+  if (prompt_manager_) {
+    PrintTransferSet_(*prompt_manager_, transfer_set);
+  }
+  return Ok();
 }
 
 /**
  * @brief List cached transfer set ids.
  */
 std::vector<size_t> TaskGateway::ListCachedTransferSetIds() const {
-  return transfer_manager_.ListCachedTransferSetIds();
+  return transfer_service_.ListCachedTransferSetIds();
 }
 
 } // namespace AMInterface::ApplicationAdapters

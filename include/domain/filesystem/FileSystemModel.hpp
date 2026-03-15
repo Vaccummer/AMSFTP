@@ -6,6 +6,51 @@
 
 namespace AMDomain::filesystem {
 /**
+ * @brief Explicit confirmation policy passed from interface into application.
+ */
+enum class ConfirmPolicy {
+  /**
+   * @brief Caller requires interactive confirmation before execution.
+   */
+  RequireConfirm = 0,
+
+  /**
+   * @brief Caller already approved operation (force/yes mode).
+   */
+  AutoApprove = 1,
+
+  /**
+   * @brief Caller runs in non-interactive mode and denies risky operations.
+   */
+  DenyIfConfirmNeeded = 2,
+};
+
+/**
+ * @brief Generic filesystem result contract carrying status and typed payload.
+ */
+template <typename T> struct Result {
+  /**
+   * @brief Result status code and detail message.
+   */
+  ECM rcm = {EC::Success, ""};
+
+  /**
+   * @brief Typed result payload data.
+   */
+  T data = {};
+
+  /**
+   * @brief Return true when status is success.
+   */
+  [[nodiscard]] bool ok() const { return rcm.first == EC::Success; }
+};
+
+/**
+ * @brief Empty payload used by status-oriented operations.
+ */
+struct EmptyPayload {};
+
+/**
  * @brief Client handle alias used by filesystem domain contracts.
  */
 using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
@@ -118,6 +163,36 @@ struct RemovePolicy {
 };
 
 /**
+ * @brief Remove request contract with explicit confirmation policy.
+ */
+struct RemoveRequest {
+  /**
+   * @brief Raw input paths passed from caller.
+   */
+  std::vector<std::string> paths = {};
+
+  /**
+   * @brief Use permanent remove instead of saferm/trash.
+   */
+  bool permanent = false;
+
+  /**
+   * @brief Explicit confirmation policy for non-interactive compatibility.
+   */
+  ConfirmPolicy confirm_policy = ConfirmPolicy::RequireConfirm;
+
+  /**
+   * @brief Suppress per-item error output when true.
+   */
+  bool quiet = false;
+
+  /**
+   * @brief IO timeout in milliseconds, `-1` means unlimited/default.
+   */
+  int timeout_ms = -1;
+};
+
+/**
  * @brief Walk operation filtering policy.
  */
 struct WalkPolicy {
@@ -176,4 +251,109 @@ struct TreePolicy {
    */
   bool quiet = false;
 };
+
+/**
+ * @brief One size query record for a resolved path.
+ */
+struct SizeEntry {
+  /**
+   * @brief Original input token.
+   */
+  std::string raw = "";
+
+  /**
+   * @brief Resolved absolute path used in backend execution.
+   */
+  std::string abs_path = "";
+
+  /**
+   * @brief Computed recursive size.
+   */
+  int64_t size = 0;
+};
+
+/**
+ * @brief One realpath resolution record.
+ */
+struct RealpathEntry {
+  /**
+   * @brief Original input token.
+   */
+  std::string raw = "";
+
+  /**
+   * @brief Resolved absolute path.
+   */
+  std::string abs_path = "";
+};
+
+/**
+ * @brief List path payload containing target stat and optional child entries.
+ */
+struct ListPathPayload {
+  /**
+   * @brief Target path metadata returned by stat.
+   */
+  PathInfo target = {};
+
+  /**
+   * @brief Child entries returned when target is directory.
+   */
+  std::vector<PathInfo> entries = {};
+};
+
+/**
+ * @brief Walk/tree query payload with partial data and per-path errors.
+ */
+struct WalkPayload {
+  /**
+   * @brief Flattened path records returned by walk query.
+   */
+  std::vector<PathInfo> items = {};
+
+  /**
+   * @brief Per-path walk errors from backend walk execution.
+   */
+  std::vector<std::pair<std::string, ECM>> errors = {};
+};
+
+/**
+ * @brief Typed result alias for status-oriented remove operation.
+ */
+using RemoveResult = Result<EmptyPayload>;
+
+/**
+ * @brief Typed result alias for stat query.
+ */
+using StatPathsResult = Result<std::vector<PathInfo>>;
+
+/**
+ * @brief Typed result alias for list query.
+ */
+using ListPathResult = Result<ListPathPayload>;
+
+/**
+ * @brief Typed result alias for size query.
+ */
+using GetSizeResult = Result<std::vector<SizeEntry>>;
+
+/**
+ * @brief Typed result alias for find query.
+ */
+using FindResult = Result<std::vector<PathInfo>>;
+
+/**
+ * @brief Typed result alias for walk query.
+ */
+using WalkQueryResult = Result<WalkPayload>;
+
+/**
+ * @brief Typed result alias for tree query.
+ */
+using TreeQueryResult = Result<WalkPayload>;
+
+/**
+ * @brief Typed result alias for realpath query.
+ */
+using RealpathQueryResult = Result<RealpathEntry>;
 } // namespace AMDomain::filesystem
