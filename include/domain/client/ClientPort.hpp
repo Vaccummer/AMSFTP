@@ -9,16 +9,18 @@
 #include <optional>
 #include <shared_mutex>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <typeindex>
-#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
+
 namespace AMDomain::client {
 class IClientPort;
+class IClientTaskControlPort;
 using ClientHandle = std::shared_ptr<IClientPort>;
 
 using CB =
@@ -27,7 +29,7 @@ using WalkErrorCallback =
     std::shared_ptr<std::function<void(const std::string &, const ECM &)>>;
 using WRD =
     std::vector<std::pair<std::vector<std::string>, std::vector<PathInfo>>>;
-using amf = std::shared_ptr<TaskControlToken>;
+using amf = std::shared_ptr<IClientTaskControlPort>;
 using EC = ErrorCode;
 using ECM = std::pair<ErrorCode, std::string>;
 enum class ClientStatus {
@@ -54,7 +56,8 @@ using AuthCallback =
     std::function<std::optional<std::string>(const AuthCBInfo &)>;
 using ConRequest = host::ConRequest;
 using OSType = OS_TYPE;
-using ParsedClientPath = std::tuple<std::string, std::string, ClientHandle, ECM>;
+using ParsedClientPath =
+    std::tuple<std::string, std::string, ClientHandle, ECM>;
 
 /**
  * @brief Port for runtime metadata access.
@@ -388,10 +391,9 @@ public:
   /**
    * @brief Resolve path to real absolute path when supported.
    */
-  virtual std::pair<ECM, std::string> realpath(const std::string &path,
-                                               int timeout_ms = -1,
-                                               int64_t start_time = -1,
-                                               amf interrupt_flag = nullptr) = 0;
+  virtual std::pair<ECM, std::string>
+  realpath(const std::string &path, int timeout_ms = -1,
+           int64_t start_time = -1, amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Change mode for path(s) when supported.
@@ -437,29 +439,25 @@ public:
    * @brief Create one directory.
    */
   virtual ECM mkdir(const std::string &path, int timeout_ms = -1,
-                    int64_t start_time = -1,
-                    amf interrupt_flag = nullptr) = 0;
+                    int64_t start_time = -1, amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Create directory tree.
    */
   virtual ECM mkdirs(const std::string &path, int timeout_ms = -1,
-                     int64_t start_time = -1,
-                     amf interrupt_flag = nullptr) = 0;
+                     int64_t start_time = -1, amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Remove one directory.
    */
   virtual ECM rmdir(const std::string &path, int timeout_ms = -1,
-                    int64_t start_time = -1,
-                    amf interrupt_flag = nullptr) = 0;
+                    int64_t start_time = -1, amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Remove one file.
    */
   virtual ECM rmfile(const std::string &path, int timeout_ms = -1,
-                     int64_t start_time = -1,
-                     amf interrupt_flag = nullptr) = 0;
+                     int64_t start_time = -1, amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Rename or move one path.
@@ -481,8 +479,7 @@ public:
    * @brief Safe-remove one path.
    */
   virtual ECM saferm(const std::string &path, int timeout_ms = -1,
-                     int64_t start_time = -1,
-                     amf interrupt_flag = nullptr) = 0;
+                     int64_t start_time = -1, amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Copy one path in-host when supported.
@@ -648,34 +645,31 @@ public:
   /**
    * @brief Connect one configured nickname.
    */
-  virtual std::pair<ECM, ClientHandle>
-  ConnectNickname(const std::string &nickname,
-                  const ClientConnectOptions &options = {},
-                  TraceCallback trace_cb = {},
-                  amf interrupt_flag = nullptr) = 0;
+  virtual std::pair<ECM, ClientHandle> ConnectNickname(
+      const std::string &nickname, const ClientConnectOptions &options = {},
+      TraceCallback trace_cb = {}, amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Connect one explicit request payload.
    */
   virtual std::pair<ECM, ClientHandle>
   ConnectRequest(const ClientConnectContext &context,
-                 TraceCallback trace_cb = {},
-                 amf interrupt_flag = nullptr) = 0;
+                 TraceCallback trace_cb = {}, amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Ensure one client exists and is connected.
    */
   virtual std::pair<ECM, ClientHandle>
-  EnsureClient(const std::string &nickname,
-               amf interrupt_flag = nullptr) = 0;
+  EnsureClient(const std::string &nickname, amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Check one client by nickname.
    */
-  virtual std::pair<ECM, ClientHandle>
-  CheckClient(const std::string &nickname, bool update = false,
-              amf interrupt_flag = nullptr, int timeout_ms = -1,
-              int64_t start_time = -1) = 0;
+  virtual std::pair<ECM, ClientHandle> CheckClient(const std::string &nickname,
+                                                   bool update = false,
+                                                   amf interrupt_flag = nullptr,
+                                                   int timeout_ms = -1,
+                                                   int64_t start_time = -1) = 0;
 
   /**
    * @brief Remove one client from runtime registry.
@@ -697,8 +691,7 @@ public:
    * @brief Parse one raw path token into nickname/path/client form.
    */
   [[nodiscard]] virtual ParsedClientPath
-  ParseScopedPath(const std::string &input,
-                  amf interrupt_flag = nullptr) = 0;
+  ParseScopedPath(const std::string &input, amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Resolve one raw path against a client into absolute path.
