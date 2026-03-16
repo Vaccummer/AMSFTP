@@ -1,4 +1,8 @@
 #include "interface/cli/InteractiveLoop.hpp"
+#include "application/client/ClientAppService.hpp"
+#include "infrastructure/controller/ClientControlTokenAdapter.hpp"
+#include "application/transfer/TransferAppService.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/time.hpp"
@@ -18,6 +22,8 @@
 #include <vector>
 
 namespace {
+using OS_TYPE = AMDomain::client::OS_TYPE;
+
 /**
  * @brief Track prompt rendering state across iterations.
  */
@@ -1189,20 +1195,20 @@ std::string ApplyStyleFromConfig_(const std::vector<std::string> &path,
 /**
  * @brief Return the active client or the local client fallback.
  */
-std::shared_ptr<BaseClient>
-ResolveActiveClient_(AMDomain::client::AMClientManager &client_manager) {
-  return client_manager.CurrentClient();
+AMDomain::client::ClientHandle
+ResolveActiveClient_(AMApplication::client::ClientAppService &client_service) {
+  return client_service.GetCurrentClient();
 }
 
 /**
  * @brief Resolve prompt username/hostname with environment fallbacks.
  */
 std::pair<std::string, std::string>
-ResolveUserHost_(const std::shared_ptr<BaseClient> &client) {
+ResolveUserHost_(const AMDomain::client::ClientHandle &client) {
   std::string username;
   std::string hostname;
   if (client) {
-    ConRequest request = client->GetRequest();
+    AMDomain::client::ConRequest request = client->ConfigPort().GetRequest();
     username = request.username;
     hostname = request.hostname;
   }
@@ -1278,10 +1284,13 @@ std::string ResolveSysIcon_(OS_TYPE os_type) {
 /**
  * @brief Build the prompt string and update cached prefix when needed.
  */
-std::string BuildPrompt_(PromptState &state, AMDomain::client::AMClientManager &client_manager,
-                         AMDomain::transfer::AMTransferManager &transfer_manager) {
-  auto client = ResolveActiveClient_(client_manager);
-  std::string nickname = client ? client->GetNickname() : std::string("local");
+std::string BuildPrompt_(
+    PromptState &state,
+    AMApplication::client::ClientAppService &client_service,
+    AMApplication::TransferWorkflow::TransferAppService &transfer_service) {
+  auto client = ResolveActiveClient_(client_service);
+  std::string nickname =
+      client ? client->ConfigPort().GetNickname() : std::string("local");
   if (nickname.empty()) {
     nickname = "local";
   }
@@ -1292,7 +1301,7 @@ std::string BuildPrompt_(PromptState &state, AMDomain::client::AMClientManager &
     OS_TYPE os_type = OS_TYPE::Unknown;
     if (client) {
       try {
-        os_type = client->GetOSType();
+        os_type = client->ConfigPort().GetOSType();
       } catch (const std::exception &) {
         os_type = OS_TYPE::Unknown;
       }
@@ -1320,7 +1329,7 @@ std::string BuildPrompt_(PromptState &state, AMDomain::client::AMClientManager &
 
   std::string workdir = "/";
   if (client) {
-    workdir = client_manager.GetOrInitWorkdir(client);
+    workdir = client_service.GetOrInitWorkdir(client);
   }
 
   const std::string format = ResolveCorePromptFormat_();
@@ -1336,7 +1345,7 @@ std::string BuildPrompt_(PromptState &state, AMDomain::client::AMClientManager &
     vars["$ec_name"] = ec_name;
     size_t pending_count = 0;
     size_t running_count = 0;
-    transfer_manager.GetTaskCounts(&pending_count, &running_count);
+    transfer_service.GetTaskCounts(&pending_count, &running_count);
     const size_t total_tasks = pending_count + running_count;
     const std::string time_now =
         FormatTime(static_cast<size_t>(AMTime::seconds()), "%H:%M:%S");
@@ -1383,7 +1392,7 @@ std::string BuildPrompt_(PromptState &state, AMDomain::client::AMClientManager &
 ECM ReloadSettingsIfUpdated_(AMPromptManager &prompt) {
   std::filesystem::path settings_path;
   if (!AMInterface::ApplicationAdapters::Runtime::GetConfigDataPath(
-          DocumentKind::Settings, &settings_path) ||
+          AMDomain::config::DocumentKind::Settings, &settings_path) ||
       settings_path.empty()) {
     return Ok();
   }
@@ -1408,12 +1417,12 @@ ECM ReloadSettingsIfUpdated_(AMPromptManager &prompt) {
 
   // Avoid clobbering in-memory updates that have not been dumped yet.
   if (AMInterface::ApplicationAdapters::Runtime::IsConfigDirty(
-          DocumentKind::Settings)) {
+          AMDomain::config::DocumentKind::Settings)) {
     return Ok();
   }
 
   ECM load_rcm = AMInterface::ApplicationAdapters::Runtime::LoadConfig(
-      DocumentKind::Settings, true);
+      AMDomain::config::DocumentKind::Settings, true);
   if (load_rcm.first != EC::Success) {
     return load_rcm;
   }
@@ -1472,9 +1481,19 @@ void PrintECM_(AMPromptManager &prompt, const ECM &rcm) {
  * @brief Execute a shell command via filesystem shell runner and return the
  * raw result.
  */
-CR ExecuteShellCommand_(AMDomain::filesystem::AMFileSystem &filesystem, const std::string &command,
-                        const amf &task_control_token) {
-  return filesystem.ShellRun(command, -1, task_control_token);
+CR ExecuteShellCommand_(
+    AMApplication::client::ClientAppService &client_service,
+    const std::string &command, amf task_control_token) {
+  const AMDomain::client::amf client_interrupt =
+      AMInfra::controller::AdaptClientInterruptFlag(task_control_token);
+  if (task_control_token && !task_control_token->IsRunning()) {
+    return {Err(EC::Terminate, "Interrupted by user"), {"", -1}};
+  }
+  auto client = client_service.GetCurrentClient();
+  if (!client) {
+    return {Err(EC::ClientNotFound, "Current client not found"), {"", -1}};
+  }
+  return client->IOPort().ConductCmd(command, -1, client_interrupt);
 }
 
 /**
@@ -1586,9 +1605,10 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
   };
 
   AMPromptManager &prompt = managers.prompt_manager;
-  AMDomain::client::AMClientManager &client_manager = managers.client_manager;
-  AMDomain::transfer::AMTransferManager &transfer_manager = managers.transfer_manager;
-  AMDomain::filesystem::AMFileSystem &filesystem = managers.filesystem;
+  AMApplication::client::ClientAppService &client_service =
+      managers.client_service;
+  AMApplication::TransferWorkflow::TransferAppService &transfer_service =
+      managers.transfer_service;
   const amf task_control_token = ctx.task_control_token;
   if (!task_control_token) {
     ctx.rcm = Err(EC::InvalidArg, "Session task control token is not bound");
@@ -1611,13 +1631,13 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
       PrintECM_(prompt, reload_settings_rcm);
     }
 
-    ECM change_rcm = prompt.ChangeClient(client_manager.CurrentNickname());
+    ECM change_rcm = prompt.ChangeClient(client_service.CurrentNickname());
     if (change_rcm.first != EC::Success) {
       PrintECM_(prompt, change_rcm);
     }
 
     const std::string prompt_text =
-        BuildPrompt_(prompt_state, client_manager, transfer_manager);
+        BuildPrompt_(prompt_state, client_service, transfer_service);
 
     std::string prompt_header;
     std::string prompt_line;
@@ -1664,8 +1684,8 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
     }
 
     if (is_shell) {
-      CR shell_result =
-          ExecuteShellCommand_(filesystem, shell_command, task_control_token);
+      CR shell_result = ExecuteShellCommand_(client_service, shell_command,
+                                             task_control_token);
       if (shell_result.first.first == EC::Success) {
         const std::string &msg = shell_result.second.first;
         if (!msg.empty()) {
@@ -1751,4 +1771,5 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
   }
   return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;
 }
+
 

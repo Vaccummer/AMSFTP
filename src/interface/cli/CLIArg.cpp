@@ -1,6 +1,7 @@
 #include "interface/cli/CLIArg.hpp"
 #include "interface/adapters/ApplicationAdapters.hpp"
 #include "interface/prompt/Prompt.hpp"
+#include "infrastructure/controller/ClientControlTokenAdapter.hpp"
 #include "application/client/ClientSessionWorkflows.hpp"
 #include "application/completion/CompletionWorkflows.hpp"
 #include "application/config/CliConfigSaveWorkflows.hpp"
@@ -20,6 +21,14 @@ amf ResolveTaskControlToken_(const CliRunContext &ctx) {
   }
   static const amf fallback = TaskControlToken::CreateShared();
   return fallback;
+}
+
+/**
+ * @brief Resolve transfer/client interrupt token from session control context.
+ */
+AMDomain::client::amf ResolveTransferInterruptFlag_(const CliRunContext &ctx) {
+  return AMInfra::controller::AdaptClientInterruptFlag(
+      ResolveTaskControlToken_(ctx));
 }
 
 void SetEnterInteractive_(const CliRunContext &ctx, bool value) {
@@ -133,6 +142,136 @@ SubstitutePathLikeArgs_(
     const AMDomain::var::IVarSubstitutionPort &substitution_port,
     const std::vector<std::string> &raw) {
   return substitution_port.SubstitutePathLike(raw);
+}
+
+/**
+ * @brief Resolve one raw transfer token into explicit endpoint payload.
+ */
+ECM ResolveTransferEndpoint_(
+    AMApplication::client::ClientAppService &client_service,
+    const AMDomain::var::IVarSubstitutionPort &substitution_port,
+    const std::string &raw, AMDomain::client::amf interrupt_flag,
+    TransferEndpoint *out_endpoint) {
+  if (!out_endpoint) {
+    return Err(EC::InvalidArg, "null transfer endpoint output");
+  }
+
+  const std::string token =
+      AMStr::Strip(substitution_port.SubstitutePathLike(raw));
+  if (token.empty()) {
+    return Err(EC::InvalidArg, "Transfer path is empty");
+  }
+
+  auto parsed = client_service.ParseScopedPath(token, interrupt_flag);
+  ECM parse_rcm = std::get<3>(parsed);
+  if (!isok(parse_rcm)) {
+    return parse_rcm;
+  }
+
+  std::string nickname = std::get<0>(parsed);
+  std::string path = std::get<1>(parsed);
+  AMDomain::client::ClientHandle client = std::get<2>(parsed);
+  if (!client) {
+    client = nickname.empty() ? client_service.GetCurrentClient()
+                              : client_service.GetClient(nickname);
+  }
+  if (!client && nickname.empty()) {
+    client = client_service.GetLocalClient();
+  }
+  if (!client) {
+    return Err(EC::ClientNotFound,
+               AMStr::fmt("Resolved transfer client is null for token: {}",
+                          token));
+  }
+
+  if (path.empty()) {
+    path = ".";
+  }
+  out_endpoint->nickname = client->ConfigPort().GetNickname();
+  if (out_endpoint->nickname.empty()) {
+    out_endpoint->nickname = "local";
+  }
+  out_endpoint->path = client_service.BuildAbsolutePath(client, path);
+  return Ok();
+}
+
+/**
+ * @brief Build explicit transfer args from raw CLI cp/job inputs.
+ */
+struct TransferCliBuildResult {
+  ECM rcm = Ok();
+  AMApplication::TransferWorkflow::TransferBuildArgs build_args = {};
+  bool suffix_async = false;
+};
+
+TransferCliBuildResult BuildTransferArgsFromCli_(
+    AMApplication::client::ClientAppService &client_service,
+    const AMDomain::var::IVarSubstitutionPort &substitution_port,
+    const std::vector<std::string> &raw_srcs, const std::string &raw_output,
+    bool accept_ampersand_suffix, bool overwrite, bool no_mkdir, bool clone,
+    bool include_special, bool resume, AMDomain::client::amf interrupt_flag) {
+  TransferCliBuildResult out = {};
+
+  std::vector<std::string> src_tokens =
+      SubstitutePathLikeArgs_(substitution_port, raw_srcs);
+  if (accept_ampersand_suffix && !src_tokens.empty() &&
+      src_tokens.back() == "&") {
+    out.suffix_async = true;
+    src_tokens.pop_back();
+  }
+
+  if (src_tokens.empty()) {
+    out.rcm = Err(EC::InvalidArg, "cp requires at least one source");
+    return out;
+  }
+
+  const std::string output_token =
+      AMStr::Strip(SubstitutePathLikeArg_(substitution_port, raw_output));
+  std::vector<std::string> normalized_src_tokens = {};
+  std::string normalized_dst_token = {};
+  if (output_token.empty()) {
+    if (src_tokens.size() != 2) {
+      out.rcm =
+          Err(EC::InvalidArg,
+              "cp requires exactly 2 paths when --output is omitted");
+      return out;
+    }
+    normalized_src_tokens = {src_tokens.front()};
+    normalized_dst_token = src_tokens.back();
+  } else {
+    normalized_src_tokens = src_tokens;
+    normalized_dst_token = output_token;
+  }
+
+  out.build_args.srcs.clear();
+  out.build_args.srcs.reserve(normalized_src_tokens.size());
+  for (const auto &token : normalized_src_tokens) {
+    TransferEndpoint endpoint = {};
+    ECM resolve_rcm = ResolveTransferEndpoint_(
+        client_service, substitution_port, token, interrupt_flag, &endpoint);
+    if (!isok(resolve_rcm)) {
+      out.rcm = resolve_rcm;
+      return out;
+    }
+    out.build_args.srcs.push_back(std::move(endpoint));
+  }
+
+  TransferEndpoint dst_endpoint = {};
+  ECM dst_rcm = ResolveTransferEndpoint_(client_service, substitution_port,
+                                         normalized_dst_token, interrupt_flag,
+                                         &dst_endpoint);
+  if (!isok(dst_rcm)) {
+    out.rcm = dst_rcm;
+    return out;
+  }
+
+  out.build_args.output = std::move(dst_endpoint);
+  out.build_args.overwrite = overwrite;
+  out.build_args.no_mkdir = no_mkdir;
+  out.build_args.clone = clone;
+  out.build_args.include_special = include_special;
+  out.build_args.resume = resume;
+  return out;
 }
 
 /**
@@ -361,10 +500,10 @@ void ProfileGetArgs::reset() { nicknames.clear(); }
 ECM StatArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_manager);
   const std::vector<std::string> resolved =
       SubstitutePathLikeArgs_(managers.var_service, paths);
-  ECM rcm = filesystem.StatPaths(resolved, ResolveTaskControlToken_(ctx));
+  ECM rcm = filesystem.StatPaths(resolved, ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -376,7 +515,7 @@ ECM LsArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::ClientPathGateway client_path(
       managers.client_service);
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_manager);
   std::string query_path =
       AMStr::Strip(SubstitutePathLikeArg_(managers.var_service, path));
   if (query_path.empty()) {
@@ -386,7 +525,7 @@ ECM LsArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
     query_path = "/";
   }
   ECM rcm = filesystem.ListPath(query_path, list_like, show_all,
-                                ResolveTaskControlToken_(ctx));
+                                ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -400,10 +539,10 @@ void LsArgs::reset() {
 ECM SizeArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_manager);
   const std::vector<std::string> resolved =
       SubstitutePathLikeArgs_(managers.var_service, paths);
-  ECM rcm = filesystem.GetSize(resolved, ResolveTaskControlToken_(ctx));
+  ECM rcm = filesystem.GetSize(resolved, ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -413,9 +552,10 @@ void SizeArgs::reset() { paths.clear(); }
 ECM FindArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_manager);
   const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
-  ECM rcm = filesystem.Find(resolved, SearchType::All, ResolveTaskControlToken_(ctx));
+  ECM rcm =
+      filesystem.Find(resolved, SearchType::All, ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -426,10 +566,10 @@ ECM MkdirArgs::Run(const CliManagers &managers,
                    const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_manager);
   const std::vector<std::string> resolved =
       SubstitutePathLikeArgs_(managers.var_service, paths);
-  ECM rcm = filesystem.Mkdir(resolved, ResolveTaskControlToken_(ctx));
+  ECM rcm = filesystem.Mkdir(resolved, ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -439,11 +579,11 @@ void MkdirArgs::reset() { paths.clear(); }
 ECM RmArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_manager);
   const std::vector<std::string> resolved =
       SubstitutePathLikeArgs_(managers.var_service, paths);
   ECM rcm = filesystem.Remove(resolved, permanent, quiet,
-                              ResolveTaskControlToken_(ctx));
+                              ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -457,10 +597,11 @@ void RmArgs::reset() {
 ECM WalkArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_manager);
   const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
   ECM rcm = filesystem.Walk(resolved, only_file, only_dir, show_all,
-                            !include_special, quiet, ResolveTaskControlToken_(ctx));
+                            !include_special, quiet,
+                            ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -477,10 +618,11 @@ void WalkArgs::reset() {
 ECM TreeArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_manager);
   const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
   ECM rcm = filesystem.Tree(resolved, depth, only_dir, show_all,
-                            !include_special, quiet, ResolveTaskControlToken_(ctx));
+                            !include_special, quiet,
+                            ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -498,9 +640,9 @@ ECM RealpathArgs::Run(const CliManagers &managers,
                       const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_manager);
   const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
-  return filesystem.Realpath(resolved, ResolveTaskControlToken_(ctx));
+  return filesystem.Realpath(resolved, ResolveTransferInterruptFlag_(ctx));
 }
 
 void RealpathArgs::reset() { path.clear(); }
@@ -508,8 +650,8 @@ void RealpathArgs::reset() { path.clear(); }
 ECM RttArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
-  ECM rcm = filesystem.TestRtt(times, ResolveTaskControlToken_(ctx));
+      managers.client_service, managers.prompt_manager);
+  ECM rcm = filesystem.TestRtt(times, ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -526,29 +668,26 @@ ECM ClearArgs::Run(const CliManagers &managers,
 void ClearArgs::reset() { all = false; }
 
 ECM CpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
-  AMApplication::TransferWorkflow::TransferBuildArgs args{};
-  args.srcs = srcs;
-  args.output = output;
-  args.overwrite = overwrite;
-  args.no_mkdir = no_mkdir;
-  args.clone = clone;
-  args.include_special = include_special;
-  args.resume = resume;
+  auto build = BuildTransferArgsFromCli_(
+      managers.client_service, managers.var_service, srcs, output, true,
+      overwrite, no_mkdir, clone, include_special, resume,
+      ResolveTransferInterruptFlag_(ctx));
+  if (!isok(build.rcm)) {
+    PrintRunError_(build.rcm);
+    return build.rcm;
+  }
 
   AMApplication::TransferWorkflow::TransferExecutionOptions options{};
-  options.run_async_from_context = ctx.async;
+  options.run_async_from_context = ctx.async || build.suffix_async;
   options.quiet = quiet;
-  options.accept_ampersand_suffix = true;
   options.confirm_policy = BuildTransferConfirmPolicy_(ctx, quiet);
 
-  AMInterface::ApplicationAdapters::PathSubstitutionPort substitutor(
-      managers.var_service);
   AMInterface::ApplicationAdapters::TransferExecutorPort executor(
       managers.transfer_service, managers.prompt_manager,
       options.confirm_policy,
-      ResolveTaskControlToken_(ctx));
+      ResolveTransferInterruptFlag_(ctx));
   auto result = AMApplication::TransferWorkflow::ExecuteTransfer(
-      args, options, substitutor, executor);
+      build.build_args, options, executor);
   PrintRunError_(result.rcm);
   return result.rcm;
 }
@@ -566,7 +705,7 @@ void CpArgs::reset() {
 
 ECM SftpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.client_service, managers.filesystem_service);
+      managers.client_service);
   auto result = AMApplication::ClientWorkflow::ConnectProtocolClient(
       gateway, AMDomain::host::ClientProtocol::SFTP, targets, port, password,
       keyfile,
@@ -585,7 +724,7 @@ void SftpArgs::reset() {
 
 ECM FtpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.client_service, managers.filesystem_service);
+      managers.client_service);
   auto result = AMApplication::ClientWorkflow::ConnectProtocolClient(
       gateway, AMDomain::host::ClientProtocol::FTP, targets, port, password,
       keyfile,
@@ -606,7 +745,7 @@ ECM ClientsArgs::Run(const CliManagers &managers,
                      const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.client_service, managers.filesystem_service);
+      managers.client_service);
   return AMApplication::ClientWorkflow::ExecuteClientList(
       gateway, detail, ResolveTaskControlToken_(ctx));
 }
@@ -617,9 +756,9 @@ ECM CheckArgs::Run(const CliManagers &managers,
                    const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_manager);
   ECM rcm =
-      filesystem.CheckClients(nicknames, detail, ResolveTaskControlToken_(ctx));
+      filesystem.CheckClients(nicknames, detail, ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
   return rcm;
 }
@@ -632,7 +771,7 @@ void CheckArgs::reset() {
 ECM ChangeClientArgs::Run(const CliManagers &managers,
                           const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.client_service, managers.filesystem_service);
+      managers.client_service);
   const auto result = AMApplication::ClientWorkflow::ChangeClient(
       gateway, nickname, BuildClientSessionMode_(ctx),
       ResolveTaskControlToken_(ctx));
@@ -646,7 +785,7 @@ ECM DisconnectArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.client_service, managers.filesystem_service);
+      managers.client_service);
   return AMApplication::ClientWorkflow::ExecuteClientDisconnect(gateway,
                                                                 nicknames);
 }
@@ -655,9 +794,9 @@ void DisconnectArgs::reset() { nicknames.clear(); }
 
 ECM CdArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_manager);
   const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
-  ECM rcm = filesystem.Cd(resolved, ResolveTaskControlToken_(ctx), false);
+  ECM rcm = filesystem.Cd(resolved, ResolveTransferInterruptFlag_(ctx), false);
   SetEnterInteractive_(ctx, isok(rcm));
   return rcm;
 }
@@ -667,7 +806,7 @@ void CdArgs::reset() { path.clear(); }
 ECM ConnectArgs::Run(const CliManagers &managers,
                      const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::ClientSessionGateway gateway(
-      managers.client_service, managers.filesystem_service);
+      managers.client_service);
   const auto result = AMApplication::ClientWorkflow::ConnectNicknames(
       gateway, nicknames, force, BuildClientSessionMode_(ctx),
       ResolveTaskControlToken_(ctx));
@@ -684,7 +823,7 @@ void ConnectArgs::reset() {
 ECM CmdArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.filesystem_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_manager);
   if (timeout_ms <= 0) {
     ECM rcm = Err(EC::InvalidArg, "timeout_ms must be > 0");
     PrintRunError_(rcm);
@@ -697,7 +836,7 @@ ECM CmdArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
     return rcm;
   }
   const auto shell = filesystem.ShellRun(command, timeout_ms,
-                                         ResolveTaskControlToken_(ctx));
+                                         ResolveTransferInterruptFlag_(ctx));
   if (!isok(shell.first)) {
     PrintRunError_(shell.first);
     return shell.first;
@@ -795,7 +934,7 @@ ECM TaskListArgs::Run(const CliManagers &managers,
                       const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_service, managers.prompt_manager,
-      ResolveTaskControlToken_(ctx));
+      ResolveTransferInterruptFlag_(ctx));
   AMApplication::TaskWorkflow::TaskListFilter filter{};
   filter.pending = pending;
   filter.suspend = suspend;
@@ -816,7 +955,7 @@ ECM TaskShowArgs::Run(const CliManagers &managers,
                       const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_service, managers.prompt_manager,
-      ResolveTaskControlToken_(ctx));
+      ResolveTransferInterruptFlag_(ctx));
   return AMApplication::TaskWorkflow::ExecuteTaskShow(
       gateway, ids, BuildTaskSessionMode_(ctx));
 }
@@ -827,7 +966,7 @@ ECM TaskInspectArgs::Run(const CliManagers &managers,
                          const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_service, managers.prompt_manager,
-      ResolveTaskControlToken_(ctx));
+      ResolveTransferInterruptFlag_(ctx));
   AMApplication::TaskWorkflow::TaskInspectOptions options{};
   options.id = id;
   options.set = set;
@@ -846,7 +985,7 @@ ECM TaskThreadArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_service, managers.prompt_manager,
-      ResolveTaskControlToken_(ctx));
+      ResolveTransferInterruptFlag_(ctx));
   return AMApplication::TaskWorkflow::ExecuteTaskThread(
       gateway, num, BuildTaskSessionMode_(ctx));
 }
@@ -857,20 +996,17 @@ ECM TaskCacheAddArgs::Run(const CliManagers &managers,
                           const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_service, managers.prompt_manager,
-      ResolveTaskControlToken_(ctx));
-  AMInterface::ApplicationAdapters::PathSubstitutionPort substitutor(
-      managers.var_service);
-  AMApplication::TransferWorkflow::TransferBuildArgs build_args{};
-  build_args.srcs = srcs;
-  build_args.output = output;
-  build_args.overwrite = overwrite;
-  build_args.no_mkdir = no_mkdir;
-  build_args.clone = clone;
-  build_args.include_special = include_special;
-  build_args.resume = resume;
+      ResolveTransferInterruptFlag_(ctx));
+  auto build = BuildTransferArgsFromCli_(
+      managers.client_service, managers.var_service, srcs, output, false,
+      overwrite, no_mkdir, clone, include_special, resume,
+      ResolveTransferInterruptFlag_(ctx));
+  if (!isok(build.rcm)) {
+    return build.rcm;
+  }
 
   auto result = AMApplication::TaskWorkflow::ExecuteJobCacheAdd(
-      gateway, build_args, substitutor, BuildTaskSessionMode_(ctx));
+      gateway, build.build_args, BuildTaskSessionMode_(ctx));
   if (isok(result.rcm)) {
     managers.prompt_manager.FmtPrint("✅ job add {}", std::to_string(result.index));
   }
@@ -891,7 +1027,7 @@ ECM TaskCacheRmArgs::Run(const CliManagers &managers,
                          const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_service, managers.prompt_manager,
-      ResolveTaskControlToken_(ctx));
+      ResolveTransferInterruptFlag_(ctx));
   auto result = AMApplication::TaskWorkflow::ExecuteJobCacheRemove(
       gateway, indices, BuildTaskSessionMode_(ctx));
   if (isok(result.rcm)) {
@@ -908,7 +1044,7 @@ ECM TaskCacheClearArgs::Run(const CliManagers &managers,
                             const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_service, managers.prompt_manager,
-      ResolveTaskControlToken_(ctx));
+      ResolveTransferInterruptFlag_(ctx));
   ECM rcm = AMApplication::TaskWorkflow::ExecuteJobCacheClear(
       gateway, BuildTaskSessionMode_(ctx));
   if (isok(rcm)) {
@@ -924,7 +1060,7 @@ ECM TaskCacheSubmitArgs::Run(const CliManagers &managers,
                              const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_service, managers.prompt_manager,
-      ResolveTaskControlToken_(ctx));
+      ResolveTransferInterruptFlag_(ctx));
   AMApplication::TaskWorkflow::JobCacheSubmitOptions options{};
   options.is_async = is_async;
   options.quiet = quiet;
@@ -943,7 +1079,7 @@ ECM TaskUserSetArgs::Run(const CliManagers &managers,
                          const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_service, managers.prompt_manager,
-      ResolveTaskControlToken_(ctx));
+      ResolveTransferInterruptFlag_(ctx));
   auto result = AMApplication::TaskWorkflow::ExecuteJobCacheQuery(
       gateway, indices, BuildTaskSessionMode_(ctx));
   return result.rcm;
@@ -955,7 +1091,7 @@ ECM TaskEntryArgs::Run(const CliManagers &managers,
                        const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_service, managers.prompt_manager,
-      ResolveTaskControlToken_(ctx));
+      ResolveTransferInterruptFlag_(ctx));
   return AMApplication::TaskWorkflow::ExecuteTaskEntryQuery(
       gateway, ids, BuildTaskSessionMode_(ctx));
 }
@@ -966,7 +1102,7 @@ ECM TaskControlArgs::Run(const CliManagers &managers,
                          const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_service, managers.prompt_manager,
-      ResolveTaskControlToken_(ctx));
+      ResolveTransferInterruptFlag_(ctx));
   AMApplication::TaskWorkflow::TaskControlAction workflow_action =
       AMApplication::TaskWorkflow::TaskControlAction::Terminate;
   switch (action) {
@@ -994,7 +1130,7 @@ ECM TaskRetryArgs::Run(const CliManagers &managers,
                        const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
       managers.transfer_service, managers.prompt_manager,
-      ResolveTaskControlToken_(ctx));
+      ResolveTransferInterruptFlag_(ctx));
   AMApplication::TaskWorkflow::TaskRetryOptions options{};
   options.id = id;
   options.is_async = is_async;
@@ -1012,8 +1148,5 @@ void TaskRetryArgs::reset() {
   quiet = false;
   indices.clear();
 }
-
-
-
 
 
