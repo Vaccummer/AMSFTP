@@ -1457,6 +1457,50 @@ public:
 
 class ClientIOBase : public AMDomain::client::IClientIOPort {
 protected:
+  class TokenControlPortBridge final
+      : public AMDomain::client::IClientTaskControlPort {
+  public:
+    explicit TokenControlPortBridge(amf token) : token_(std::move(token)) {}
+
+    void RequestInterrupt() override {
+      if (!token_) {
+        return;
+      }
+      (void)token_->Kill(TaskControlSignal::SigInt);
+    }
+
+    void ClearInterrupt() override {
+      if (!token_) {
+        return;
+      }
+      (void)token_->Reset();
+    }
+
+    [[nodiscard]] bool IsInterrupted() const override {
+      if (!token_) {
+        return false;
+      }
+      return !token_->IsRunning();
+    }
+
+    size_t RegisterWakeup(std::function<void()> wake_cb) override {
+      if (!token_ || !wake_cb) {
+        return 0;
+      }
+      return token_->RegisterWakeup(std::move(wake_cb));
+    }
+
+    void UnregisterWakeup(size_t token) override {
+      if (!token_ || token == 0) {
+        return;
+      }
+      token_->UnregisterWakeup(token);
+    }
+
+  private:
+    amf token_ = nullptr;
+  };
+
   mutable AMAtomic<TraceCallback> trace_callback_;
   mutable AMAtomic<AuthCallback> auth_callback_;
   mutable AMAtomic<KnownHostCallback> known_host_callback_;
@@ -1511,6 +1555,34 @@ public:
   }
 
 protected:
+  [[nodiscard]] bool
+  IsOperationInterruptedByToken_(const amf &interrupt_flag = nullptr) const {
+    if (interrupt_flag) {
+      TokenControlPortBridge token_port(interrupt_flag);
+      if (token_port.IsInterrupted()) {
+        return true;
+      }
+    }
+    return control_part_ ? control_part_->IsInterrupted() : false;
+  }
+
+  size_t RegisterTokenWakeupBridge_(const amf &interrupt_flag,
+                                    std::function<void()> wake_cb) const {
+    if (!interrupt_flag || !wake_cb) {
+      return 0;
+    }
+    TokenControlPortBridge token_port(interrupt_flag);
+    return token_port.RegisterWakeup(std::move(wake_cb));
+  }
+
+  void UnregisterTokenWakeupBridge_(const amf &interrupt_flag, size_t token) const {
+    if (!interrupt_flag || token == 0) {
+      return;
+    }
+    TokenControlPortBridge token_port(interrupt_flag);
+    token_port.UnregisterWakeup(token);
+  }
+
   void trace(const TraceInfo &trace_info) const {
     TraceCallback cb;
     {

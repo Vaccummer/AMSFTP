@@ -30,7 +30,10 @@ private:
     return control_part_ ? control_part_->IsInterrupted() : false;
   }
 
-  [[nodiscard]] bool IsOperationInterrupted_() const { return IsInterrupted(); }
+  [[nodiscard]] bool
+  IsOperationInterrupted_(const amf &interrupt_flag = nullptr) const {
+    return this->IsOperationInterruptedByToken_(interrupt_flag);
+  }
 
   [[nodiscard]] int64_t NormalizeStartTime_(int64_t start_time) const {
     return start_time == -1 ? AMTime::miliseconds() : start_time;
@@ -102,8 +105,9 @@ private:
 
   void _remove(const std::string &path, RMR &errors,
                AMFS::WalkErrorCallback error_callback = nullptr,
-               int timeout_ms = -1, int64_t start_time = -1) {
-    if (IsOperationInterrupted_()) {
+               int timeout_ms = -1, int64_t start_time = -1,
+               amf interrupt_flag = nullptr) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       ECM out = {EC::Terminate, "Interrupted by user"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -121,7 +125,8 @@ private:
     }
 
     std::error_code ec;
-    auto [error, listing] = listdir(path, timeout_ms, start_time);
+    auto [error, listing] =
+        listdir(path, timeout_ms, start_time, interrupt_flag);
     if (error.first != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, error);
@@ -131,7 +136,7 @@ private:
     }
 
     for (const auto &entry : listing) {
-      if (IsOperationInterrupted_()) {
+      if (IsOperationInterrupted_(interrupt_flag)) {
         ECM out = {EC::Terminate, "Interrupted by user"};
         if (error_callback && *error_callback) {
           (*error_callback)(entry.path, out);
@@ -148,7 +153,8 @@ private:
         return;
       }
       if (entry.type == PathType::DIR) {
-        _remove(entry.path, errors, error_callback, timeout_ms, start_time);
+        _remove(entry.path, errors, error_callback, timeout_ms, start_time,
+                interrupt_flag);
       } else {
         fs::remove(entry.path, ec);
         if (ec) {
@@ -248,7 +254,8 @@ public:
 
   ~AMLocalIOCore() override = default;
   OS_TYPE UpdateOSType([[maybe_unused]] int timeout_ms = -1,
-                       [[maybe_unused]] int64_t start_time = -1) override {
+                       [[maybe_unused]] int64_t start_time = -1,
+                       [[maybe_unused]] amf interrupt_flag = nullptr) override {
 #ifdef _WIN32
     OS_TYPE out = OS_TYPE::Windows;
 #elif defined(_WIN64)
@@ -269,7 +276,8 @@ public:
   }
 
   std::string UpdateHomeDir([[maybe_unused]] int timeout_ms = -1,
-                            [[maybe_unused]] int64_t start_time = -1) override {
+                            [[maybe_unused]] int64_t start_time = -1,
+                            [[maybe_unused]] amf interrupt_flag = nullptr) override {
     const std::string home_dir = AMFS::HomePath();
     if (config_part_) {
       config_part_->SetHomeDir(home_dir);
@@ -277,9 +285,10 @@ public:
     return home_dir;
   }
 
-  ECM Check(int timeout_ms = -1, int64_t start_time = -1) override {
+  ECM Check(int timeout_ms = -1, int64_t start_time = -1,
+            amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
-    if (IsOperationInterrupted_()) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       ECM out = {EC::Terminate, "Check interrupted by user"};
       SetState_({AMDomain::client::ClientStatus::ConnectionBroken, out});
       return out;
@@ -294,21 +303,22 @@ public:
   }
 
   ECM Connect(bool force = false, int timeout_ms = -1,
-              int64_t start_time = -1) override {
+              int64_t start_time = -1,
+              amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     if (!force) {
-      ECM rcm = Check(timeout_ms, start_time);
+      ECM rcm = Check(timeout_ms, start_time, interrupt_flag);
       if (rcm.first == EC::Success) {
-        (void)UpdateOSType(timeout_ms, start_time);
-        (void)UpdateHomeDir(timeout_ms, start_time);
+        (void)UpdateOSType(timeout_ms, start_time, interrupt_flag);
+        (void)UpdateHomeDir(timeout_ms, start_time, interrupt_flag);
         return rcm;
       }
     }
 
-    ECM rcm = Check(timeout_ms, start_time);
+    ECM rcm = Check(timeout_ms, start_time, interrupt_flag);
     if (rcm.first == EC::Success) {
-      (void)UpdateOSType(timeout_ms, start_time);
-      (void)UpdateHomeDir(timeout_ms, start_time);
+      (void)UpdateOSType(timeout_ms, start_time, interrupt_flag);
+      (void)UpdateHomeDir(timeout_ms, start_time, interrupt_flag);
       SetState_({AMDomain::client::ClientStatus::OK, {EC::Success, ""}});
       return {EC::Success, ""};
     }
@@ -323,9 +333,10 @@ public:
 
   double GetRTT([[maybe_unused]] ssize_t times = 5) override { return 0.0; }
 
-  CR ConductCmd(const std::string &cmd, int max_time_ms = 3000) override {
+  CR ConductCmd(const std::string &cmd, int max_time_ms = 3000,
+                amf interrupt_flag = nullptr) override {
     int64_t start_time = AMTime::miliseconds();
-    if (IsOperationInterrupted_()) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {ECM{EC::Terminate, "Operation aborted before command sent"},
               {"", -1}};
     }
@@ -391,7 +402,7 @@ public:
     bool timed_out = false;
 
     while (true) {
-      if (IsOperationInterrupted_()) {
+      if (IsOperationInterrupted_(interrupt_flag)) {
         if (job_handle) {
           (void)TerminateJobObject(job_handle, 1);
         } else {
@@ -524,7 +535,7 @@ public:
     };
 
     while (true) {
-      if (IsOperationInterrupted_()) {
+      if (IsOperationInterrupted_(interrupt_flag)) {
         kill_child(SIGKILL);
         interrupted = true;
         break;
@@ -613,12 +624,13 @@ public:
 
   std::pair<ECM, std::string> realpath(const std::string &path,
                                        int timeout_ms = -1,
-                                       int64_t start_time = -1) override {
+                                       int64_t start_time = -1,
+                                       amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
       return {{EC::InvalidArg, "Invalid empty path"}, ""};
     }
-    if (IsOperationInterrupted_()) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {{EC::Terminate, "Interrupted by user"}, ""};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -651,13 +663,14 @@ public:
                                       std::variant<std::string, size_t> mode,
                                       bool recursive = false,
                                       int timeout_ms = -1,
-                                      int64_t start_time = -1) override {
+                                      int64_t start_time = -1,
+                                      amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     std::unordered_map<std::string, ECM> results = {};
     if (path.empty()) {
       return {{EC::InvalidArg, "Invalid empty path"}, results};
     }
-    if (IsOperationInterrupted_()) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {{EC::Terminate, "Interrupted by user"}, results};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -699,7 +712,7 @@ public:
             results};
       }
       for (; it != end; it.increment(ec)) {
-        if (IsOperationInterrupted_()) {
+        if (IsOperationInterrupted_(interrupt_flag)) {
           return {{EC::Terminate, "Interrupted by user"}, results};
         }
         if (IsTimedOut_(timeout_ms, start_time)) {
@@ -724,13 +737,14 @@ public:
     return {{EC::Success, ""}, results};
   }
 
-  SR stat(const std::string &path, bool trace_link = false, int timeout_ms = -1,
-          int64_t start_time = -1) override {
+  SR stat(const std::string &path, bool trace_link = false,
+          int timeout_ms = -1, int64_t start_time = -1,
+          amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
       return {ECM{EC::InvalidArg, "Invalid empty path"}, PathInfo()};
     }
-    if (IsOperationInterrupted_()) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {ECM{EC::Terminate, "Interrupted by user"}, PathInfo()};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -826,7 +840,7 @@ public:
 
   std::pair<ECM, std::vector<PathInfo>>
   listdir(const std::string &path, int timeout_ms = -1,
-          int64_t start_time = -1) override {
+          int64_t start_time = -1, amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     std::vector<PathInfo> result = {};
     if (path.empty()) {
@@ -859,14 +873,14 @@ public:
     }
 
     for (const auto &entry : it) {
-      if (IsOperationInterrupted_()) {
+      if (IsOperationInterrupted_(interrupt_flag)) {
         return {ECM{EC::Terminate, "Listdir interrupted by user"}, result};
       }
       if (IsTimedOut_(timeout_ms, start_time)) {
         return {ECM{EC::OperationTimeout, "Listdir timeout"}, result};
       }
-      auto [error, info] =
-          stat(entry.path().string(), false, timeout_ms, start_time);
+      auto [error, info] = stat(entry.path().string(), false, timeout_ms,
+                                start_time, interrupt_flag);
       if (error.first != EC::Success) {
         continue;
       }
@@ -880,18 +894,18 @@ public:
   listdir(const std::string &path, int timeout_ms = -1,
           int64_t start_time = -1) const override {
     return const_cast<AMLocalIOCore *>(this)->listdir(path, timeout_ms,
-                                                      start_time);
+                                                      start_time, nullptr);
   }
   std::pair<ECM, WRI> iwalk(const std::string &path, bool show_all = false,
                             bool ignore_special_file = true,
                             AMFS::WalkErrorCallback error_callback = nullptr,
-                            int timeout_ms = -1,
-                            int64_t start_time = -1) override {
+                            int timeout_ms = -1, int64_t start_time = -1,
+                            amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     std::vector<PathInfo> result = {};
     RMR errors = {};
 
-    auto [error, info] = stat(path, false, timeout_ms, start_time);
+    auto [error, info] = stat(path, false, timeout_ms, start_time, interrupt_flag);
     if (error.first != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, error);
@@ -915,7 +929,7 @@ public:
     fs::recursive_directory_iterator it(path, ec);
     fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
-      if (IsOperationInterrupted_()) {
+      if (IsOperationInterrupted_(interrupt_flag)) {
         ECM out = {EC::Terminate, "iwalk interrupted by user"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
@@ -965,8 +979,8 @@ public:
       }
 
       if (is_file) {
-        auto [stat_err, stat_info] =
-            stat(entry_path.string(), false, timeout_ms, start_time);
+        auto [stat_err, stat_info] = stat(entry_path.string(), false, timeout_ms,
+                                          start_time, interrupt_flag);
         if (stat_err.first == EC::Success) {
           result.push_back(stat_info);
         } else {
@@ -1004,7 +1018,8 @@ public:
     }
     for (const auto &dir : all_dirs) {
       if (has_subdir.find(dir) == has_subdir.end()) {
-        auto [stat_err, stat_info] = stat(dir, false, timeout_ms, start_time);
+        auto [stat_err, stat_info] =
+            stat(dir, false, timeout_ms, start_time, interrupt_flag);
         if (stat_err.first == EC::Success) {
           result.push_back(stat_info);
         } else {
@@ -1026,20 +1041,20 @@ public:
         int64_t start_time = -1) const override {
     return const_cast<AMLocalIOCore *>(this)->iwalk(
         path, show_all, ignore_special_file, error_callback, timeout_ms,
-        start_time);
+        start_time, nullptr);
   }
 
   std::pair<ECM, WRDR> walk(const std::string &path, int max_depth = -1,
                             bool show_all = false,
                             bool ignore_special_file = false,
                             AMFS::WalkErrorCallback error_callback = nullptr,
-                            int timeout_ms = -1,
-                            int64_t start_time = -1) override {
+                            int timeout_ms = -1, int64_t start_time = -1,
+                            amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     WRD result = {};
     RMR errors = {};
 
-    auto [error, info] = stat(path, false, timeout_ms, start_time);
+    auto [error, info] = stat(path, false, timeout_ms, start_time, interrupt_flag);
     if (error.first != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, error);
@@ -1101,7 +1116,7 @@ public:
     fs::recursive_directory_iterator it(root_norm, ec);
     fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
-      if (IsOperationInterrupted_()) {
+      if (IsOperationInterrupted_(interrupt_flag)) {
         ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
@@ -1140,8 +1155,8 @@ public:
         continue;
       }
 
-      auto [stat_ecm, entry_info] =
-          stat(entry_path.string(), false, timeout_ms, start_time);
+      auto [stat_ecm, entry_info] = stat(entry_path.string(), false, timeout_ms,
+                                         start_time, interrupt_flag);
       if (stat_ecm.first != EC::Success) {
         const std::string parent_key =
             normalize_key(entry_path.parent_path().lexically_normal().string());
@@ -1215,9 +1230,10 @@ public:
     return {{EC::Success, ""}, {result, errors}};
   }
   int64_t getsize(const std::string &path, bool ignore_special_file = true,
-                  int timeout_ms = -1, int64_t start_time = -1) override {
+                  int timeout_ms = -1, int64_t start_time = -1,
+                  amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
-    auto [rcm, info] = stat(path, false, timeout_ms, start_time);
+    auto [rcm, info] = stat(path, false, timeout_ms, start_time, interrupt_flag);
     if (rcm.first != EC::Success) {
       return -1;
     }
@@ -1226,8 +1242,9 @@ public:
     }
 
     auto [walk_rcm, pack] =
-        iwalk(path, true, ignore_special_file, nullptr, timeout_ms, start_time);
-    if (walk_rcm.first != EC::Success || IsOperationInterrupted_()) {
+        iwalk(path, true, ignore_special_file, nullptr, timeout_ms, start_time,
+              interrupt_flag);
+    if (walk_rcm.first != EC::Success || IsOperationInterrupted_(interrupt_flag)) {
       return -1;
     }
 
@@ -1241,17 +1258,21 @@ public:
   std::vector<PathInfo> find(const std::string &path,
                              SearchType type = SearchType::All,
                              int timeout_ms = -1,
-                             int64_t start_time = -1) override {
+                             int64_t start_time = -1,
+                             amf interrupt_flag = nullptr) override {
+    if (IsOperationInterrupted_(interrupt_flag)) {
+      return {};
+    }
     return BasePathMatch::find(path, type, timeout_ms, start_time);
   }
 
   ECM mkdir(const std::string &path, int timeout_ms = -1,
-            int64_t start_time = -1) override {
+            int64_t start_time = -1, amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    if (IsOperationInterrupted_()) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1271,12 +1292,12 @@ public:
   }
 
   ECM mkdirs(const std::string &path, int timeout_ms = -1,
-             int64_t start_time = -1) override {
+             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    if (IsOperationInterrupted_()) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1297,12 +1318,13 @@ public:
 
   ECM rename(const std::string &src, const std::string &dst,
              bool mkdir_parent = true, bool overwrite = false,
-             int timeout_ms = -1, int64_t start_time = -1) override {
+             int timeout_ms = -1, int64_t start_time = -1,
+             amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     if (src.empty() || dst.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    if (IsOperationInterrupted_()) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1310,8 +1332,10 @@ public:
     }
 
     std::error_code ec;
-    auto [src_ecm, src_info] = stat(src, false, timeout_ms, start_time);
-    auto [dst_ecm, dst_info] = stat(dst, false, timeout_ms, start_time);
+    auto [src_ecm, src_info] =
+        stat(src, false, timeout_ms, start_time, interrupt_flag);
+    auto [dst_ecm, dst_info] =
+        stat(dst, false, timeout_ms, start_time, interrupt_flag);
     if (src_ecm.first != EC::Success) {
       return {src_ecm.first, AMStr::fmt("src {} not exist", src)};
     }
@@ -1327,7 +1351,8 @@ public:
     }
 
     if (mkdir_parent) {
-      ECM mk_rcm = mkdirs(AMPathStr::dirname(dst), timeout_ms, start_time);
+      ECM mk_rcm =
+          mkdirs(AMPathStr::dirname(dst), timeout_ms, start_time, interrupt_flag);
       if (mk_rcm.first != EC::Success) {
         return mk_rcm;
       }
@@ -1359,12 +1384,12 @@ public:
   }
 
   ECM rmdir(const std::string &path, int timeout_ms = -1,
-            int64_t start_time = -1) override {
+            int64_t start_time = -1, amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    auto [error, info] = stat(path, false, timeout_ms, start_time);
+    auto [error, info] = stat(path, false, timeout_ms, start_time, interrupt_flag);
     if (error.first != EC::Success) {
       return error;
     }
@@ -1381,12 +1406,12 @@ public:
   }
 
   ECM rmfile(const std::string &path, int timeout_ms = -1,
-             int64_t start_time = -1) override {
+             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    auto [error, info] = stat(path, false, timeout_ms, start_time);
+    auto [error, info] = stat(path, false, timeout_ms, start_time, interrupt_flag);
     if (error.first != EC::Success) {
       return error;
     }
@@ -1404,14 +1429,14 @@ public:
 
   std::pair<ECM, RMR> remove(const std::string &path,
                              AMFS::WalkErrorCallback error_callback = nullptr,
-                             int timeout_ms = -1,
-                             int64_t start_time = -1) override {
+                             int timeout_ms = -1, int64_t start_time = -1,
+                             amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
       return {ECM{EC::InvalidArg, "Invalid empty path"}, RMR{}};
     }
 
-    auto [error, info] = stat(path, false, timeout_ms, start_time);
+    auto [error, info] = stat(path, false, timeout_ms, start_time, interrupt_flag);
     if (error.first != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, error);
@@ -1422,7 +1447,8 @@ public:
     RMR errors = {};
     std::error_code ec;
     if (info.type == PathType::DIR) {
-      _remove(path, errors, error_callback, timeout_ms, start_time);
+      _remove(path, errors, error_callback, timeout_ms, start_time,
+              interrupt_flag);
     } else {
       fs::remove(fs::path(path), ec);
       if (ec) {
@@ -1435,7 +1461,7 @@ public:
       }
     }
 
-    if (IsOperationInterrupted_()) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {{EC::Terminate, "Interrupted by user"}, errors};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1446,12 +1472,12 @@ public:
   }
 
   ECM saferm(const std::string &path, int timeout_ms = -1,
-             int64_t start_time = -1) override {
+             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    if (IsOperationInterrupted_()) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1463,7 +1489,7 @@ public:
       return {EC::PathNotExist, "Trash directory is not set"};
     }
 
-    auto [error, info] = stat(path, false, timeout_ms, start_time);
+    auto [error, info] = stat(path, false, timeout_ms, start_time, interrupt_flag);
     if (error.first != EC::Success) {
       return error;
     }
@@ -1506,34 +1532,38 @@ public:
     }
 
     ECM mk_rcm = mkdirs(AMPathStr::join(request.trash_dir, current_time),
-                        timeout_ms, start_time);
+                        timeout_ms, start_time, interrupt_flag);
     if (mk_rcm.first != EC::Success) {
       return mk_rcm;
     }
 
-    return rename(path, target_path, false, false, timeout_ms, start_time);
+    return rename(path, target_path, false, false, timeout_ms, start_time,
+                  interrupt_flag);
   }
 
   ECM copy(const std::string &src, const std::string &dst,
-           bool need_mkdir = false, int timeout_ms = -1) override {
+           bool need_mkdir = false, int timeout_ms = -1,
+           amf interrupt_flag = nullptr) override {
     int64_t start_time = AMTime::miliseconds();
     if (src.empty() || dst.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    if (IsOperationInterrupted_()) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
       return {EC::OperationTimeout, "copy timeout"};
     }
 
-    auto [src_ecm, src_info] = stat(src, false, timeout_ms, start_time);
+    auto [src_ecm, src_info] =
+        stat(src, false, timeout_ms, start_time, interrupt_flag);
     if (src_ecm.first != EC::Success) {
       return src_ecm;
     }
 
     if (need_mkdir) {
-      ECM mk_rcm = mkdirs(AMPathStr::dirname(dst), timeout_ms, start_time);
+      ECM mk_rcm =
+          mkdirs(AMPathStr::dirname(dst), timeout_ms, start_time, interrupt_flag);
       if (mk_rcm.first != EC::Success) {
         return mk_rcm;
       }

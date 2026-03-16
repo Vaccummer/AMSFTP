@@ -350,24 +350,28 @@ public:
   /**
    * @brief Update and return remote/local OS type.
    */
-  virtual OSType UpdateOSType(int timeout_ms = -1, int64_t start_time = -1) = 0;
+  virtual OSType UpdateOSType(int timeout_ms = -1, int64_t start_time = -1,
+                              amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Update and return home directory.
    */
   virtual std::string UpdateHomeDir(int timeout_ms = -1,
-                                    int64_t start_time = -1) = 0;
+                                    int64_t start_time = -1,
+                                    amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Validate connection health.
    */
-  virtual ECM Check(int timeout_ms = -1, int64_t start_time = -1) = 0;
+  virtual ECM Check(int timeout_ms = -1, int64_t start_time = -1,
+                    amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Connect or reconnect this client.
    */
   virtual ECM Connect(bool force = false, int timeout_ms = -1,
-                      int64_t start_time = -1) = 0;
+                      int64_t start_time = -1,
+                      amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Measure round trip time when supported.
@@ -378,14 +382,16 @@ public:
    * @brief Execute command and return output + exit code when supported.
    */
   virtual CommandResult ConductCmd(const std::string &cmd,
-                                   int max_time_ms = 3000) = 0;
+                                   int max_time_ms = 3000,
+                                   amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Resolve path to real absolute path when supported.
    */
   virtual std::pair<ECM, std::string> realpath(const std::string &path,
                                                int timeout_ms = -1,
-                                               int64_t start_time = -1) = 0;
+                                               int64_t start_time = -1,
+                                               amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Change mode for path(s) when supported.
@@ -393,26 +399,30 @@ public:
   virtual ChmodResult chmod(const std::string &path,
                             std::variant<std::string, size_t> mode,
                             bool recursive = false, int timeout_ms = -1,
-                            int64_t start_time = -1) = 0;
+                            int64_t start_time = -1,
+                            amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Query path metadata.
    */
   virtual StatResult stat(const std::string &path, bool trace_link = false,
-                          int timeout_ms = -1, int64_t start_time = -1) = 0;
+                          int timeout_ms = -1, int64_t start_time = -1,
+                          amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief List one directory.
    */
   virtual ListResult listdir(const std::string &path, int timeout_ms = -1,
-                             int64_t start_time = -1) = 0;
+                             int64_t start_time = -1,
+                             amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Compute recursive total size for a path.
    */
   virtual int64_t getsize(const std::string &path,
                           bool ignore_special_file = true, int timeout_ms = -1,
-                          int64_t start_time = -1) = 0;
+                          int64_t start_time = -1,
+                          amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Find entries by wildcard path pattern.
@@ -420,57 +430,66 @@ public:
   virtual std::vector<PathInfo> find(const std::string &path,
                                      SearchType type = SearchType::All,
                                      int timeout_ms = -1,
-                                     int64_t start_time = -1) = 0;
+                                     int64_t start_time = -1,
+                                     amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Create one directory.
    */
   virtual ECM mkdir(const std::string &path, int timeout_ms = -1,
-                    int64_t start_time = -1) = 0;
+                    int64_t start_time = -1,
+                    amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Create directory tree.
    */
   virtual ECM mkdirs(const std::string &path, int timeout_ms = -1,
-                     int64_t start_time = -1) = 0;
+                     int64_t start_time = -1,
+                     amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Remove one directory.
    */
   virtual ECM rmdir(const std::string &path, int timeout_ms = -1,
-                    int64_t start_time = -1) = 0;
+                    int64_t start_time = -1,
+                    amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Remove one file.
    */
   virtual ECM rmfile(const std::string &path, int timeout_ms = -1,
-                     int64_t start_time = -1) = 0;
+                     int64_t start_time = -1,
+                     amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Rename or move one path.
    */
   virtual ECM rename(const std::string &src, const std::string &dst,
                      bool mkdir = true, bool overwrite = false,
-                     int timeout_ms = -1, int64_t start_time = -1) = 0;
+                     int timeout_ms = -1, int64_t start_time = -1,
+                     amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Remove one path recursively.
    */
   virtual std::pair<ECM, RemoveErrors>
   remove(const std::string &path, WalkErrorCallback error_callback = nullptr,
-         int timeout_ms = -1, int64_t start_time = -1) = 0;
+         int timeout_ms = -1, int64_t start_time = -1,
+         amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Safe-remove one path.
    */
   virtual ECM saferm(const std::string &path, int timeout_ms = -1,
-                     int64_t start_time = -1) = 0;
+                     int64_t start_time = -1,
+                     amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Copy one path in-host when supported.
    */
   virtual ECM copy(const std::string &src, const std::string &dst,
-                   bool need_mkdir = false, int timeout_ms = -1) = 0;
+                   bool need_mkdir = false, int timeout_ms = -1,
+                   amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Walk and return flattened leaf-oriented view.
@@ -478,7 +497,8 @@ public:
   virtual IWalkResult iwalk(const std::string &path, bool show_all = false,
                             bool ignore_special_file = true,
                             WalkErrorCallback error_callback = nullptr,
-                            int timeout_ms = -1, int64_t start_time = -1) = 0;
+                            int timeout_ms = -1, int64_t start_time = -1,
+                            amf interrupt_flag = nullptr) = 0;
 
   /**
    * @brief Walk and return tree-oriented view.
@@ -487,7 +507,8 @@ public:
                           bool show_all = false,
                           bool ignore_special_file = false,
                           WalkErrorCallback error_callback = nullptr,
-                          int timeout_ms = -1, int64_t start_time = -1) = 0;
+                          int timeout_ms = -1, int64_t start_time = -1,
+                          amf interrupt_flag = nullptr) = 0;
 };
 
 /**
