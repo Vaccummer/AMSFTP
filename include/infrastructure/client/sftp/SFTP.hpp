@@ -143,7 +143,7 @@ private:
         continue;
       }
 
-      if (this->IsOperationInterrupted_(terminal_interrupt_flag)) {
+      if (this->LegacyInterruptCheck_(terminal_interrupt_flag)) {
         reader_running.store(false, std::memory_order_relaxed);
         break;
       }
@@ -223,7 +223,7 @@ lock(mtx); if (!session) { return {EC::NoSession, "Session not initialized"};
 
     amf flag = interrupt_flag ? interrupt_flag : terminal_interrupt_flag;
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    if (this->IsOperationInterrupted_(flag)) {
+    if (this->LegacyInterruptCheck_(flag)) {
       terminal_channel.reset();
       return {EC::Terminate, "Terminal init interrupted"};
     }
@@ -367,7 +367,7 @@ public:
   ECM Check(int timeout_ms = -1,
             int64_t start_time = -1) override {
     amf flag = interrupt_flag;
-    if (this->IsOperationInterrupted_(flag)) {
+    if (this->LegacyInterruptCheck_(flag)) {
       ECM rcm = {EC::Terminate, "Check interrupted"};
       SetState(rcm);
       return rcm;
@@ -476,7 +476,7 @@ public:
 
     amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    if (this->IsOperationInterrupted_(flag)) {
+    if (this->LegacyInterruptCheck_(flag)) {
       return {EC::Terminate, "Terminal interrupted"};
     }
 
@@ -484,7 +484,7 @@ public:
     size_t offset = 0;
     WaitResult wr = WaitResult::Ready;
     while (offset < msg.size()) {
-      if (this->IsOperationInterrupted_(flag)) {
+      if (this->LegacyInterruptCheck_(flag)) {
         wr = WaitResult::Interrupted;
         goto cleanup;
       }
@@ -574,7 +574,7 @@ public:
             int64_t start_time = -1) override {
     (void)timeout_ms;
     (void)start_time;
-    if (this->IsOperationInterrupted_()) {
+    if ((control_part_ && control_part_->IsInterrupted())) {
       return {EC::Terminate, "Check interrupted"};
     }
     if (closed.load(std::memory_order_relaxed)) {
@@ -633,7 +633,7 @@ public:
     }
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
 
-    if (this->IsOperationInterrupted_()) {
+    if ((control_part_ && control_part_->IsInterrupted())) {
       return {EC::Terminate, "Terminal interrupted"};
     }
 
@@ -644,7 +644,7 @@ public:
 
     std::array<char, 4096> buffer;
     while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
-      if (this->IsOperationInterrupted_()) {
+      if ((control_part_ && control_part_->IsInterrupted())) {
         ClosePipe(pipe);
         return {EC::Terminate, "Terminal interrupted"};
       }
@@ -1587,47 +1587,6 @@ protected:
   InterruptWakeBridge interrupt_wake_;
   SOCKET sock = INVALID_SOCKET;
 
-  [[nodiscard]] bool
-  IsOperationInterrupted_(const amf &interrupt_flag = nullptr) const {
-    return this->IsOperationInterruptedByToken_(interrupt_flag);
-  }
-
-  size_t RegisterInterruptWakeup_(std::function<void()> wake_cb) {
-    if (!wake_cb || !control_part_) {
-      return 0;
-    }
-    return control_part_->RegisterWakeup(std::move(wake_cb));
-  }
-
-  size_t RegisterInterruptWakeup_(const amf &interrupt_flag,
-                                  std::function<void()> wake_cb) {
-    if (!wake_cb) {
-      return 0;
-    }
-    if (interrupt_flag) {
-      return this->RegisterTokenWakeupBridge_(interrupt_flag, std::move(wake_cb));
-    }
-    return RegisterInterruptWakeup_(std::move(wake_cb));
-  }
-
-  void UnregisterInterruptWakeup_(size_t token) {
-    if (token == 0 || !control_part_) {
-      return;
-    }
-    control_part_->UnregisterWakeup(token);
-  }
-
-  void UnregisterInterruptWakeup_(const amf &interrupt_flag, size_t token) {
-    if (token == 0) {
-      return;
-    }
-    if (interrupt_flag) {
-      this->UnregisterTokenWakeupBridge_(interrupt_flag, token);
-      return;
-    }
-    UnregisterInterruptWakeup_(token);
-  }
-
   void trace(TraceLevel level, EC error_code, const std::string &target = "",
              const std::string &action = "",
              const std::string &msg = "") const {
@@ -1946,7 +1905,7 @@ public:
     }
 
     auto is_interrupted = [&]() -> bool {
-      return this->IsOperationInterrupted_(interrupt_flag);
+      return ((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()));
     };
 
     if (is_interrupted()) {
@@ -2015,7 +1974,11 @@ public:
     size_t wake_token = 0;
     auto cleanup_wakeup = [&]() {
       if (wake_token != 0) {
-        this->UnregisterInterruptWakeup_(interrupt_flag, wake_token);
+        if (interrupt_flag) {
+          interrupt_flag->UnregisterWakeup(wake_token);
+        } else if (control_part_) {
+          control_part_->UnregisterWakeup(wake_token);
+        }
         wake_token = 0;
       }
     };
@@ -2025,8 +1988,13 @@ public:
       DrainInterruptWakeSocket_();
       wake_read_sock = GetInterruptWakeReadSocket_();
       if (wake_read_sock != INVALID_SOCKET) {
-        wake_token = this->RegisterInterruptWakeup_(
-            interrupt_flag, [this]() { SignalInterruptWakeSocket_(); });
+        if (interrupt_flag) {
+          wake_token = interrupt_flag->RegisterWakeup(
+              [this]() { SignalInterruptWakeSocket_(); });
+        } else if (control_part_) {
+          wake_token = control_part_->RegisterWakeup(
+              [this]() { SignalInterruptWakeSocket_(); });
+        }
         FD_SET(wake_read_sock, &readfds);
       }
     }
@@ -2167,8 +2135,10 @@ public:
     if (!connector.Connect(request.hostname, static_cast<int>(request.port),
                            timeout_ms,
                            [this, interrupt_flag]() {
-                             return this->IsOperationInterrupted_(
-                                 interrupt_flag);
+                             return (interrupt_flag &&
+                                     interrupt_flag->IsInterrupted()) ||
+                                    (control_part_ &&
+                                     control_part_->IsInterrupted());
                            })) {
       trace(TraceLevel::Critical, connector.error_code,
             AMStr::fmt("{}", std::to_string(connector.sock)),
@@ -2177,7 +2147,7 @@ public:
     }
     sock = connector.sock;
 
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {EC::Terminate, "Connection interrupted"};
     }
     if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
@@ -2264,7 +2234,7 @@ public:
     password_auth = (strstr(auth_list, "password") != nullptr);
 
     if (!request.keyfile.empty()) {
-      if (IsOperationInterrupted_(interrupt_flag)) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
         return {EC::Terminate, "Authentication interrupted"};
       }
       auto auth_res = nb_call(-1, AMTime::miliseconds(), [&]() {
@@ -2295,7 +2265,7 @@ public:
     }
 
     if (!stored_password_enc.empty() && password_auth) {
-      if (IsOperationInterrupted_(interrupt_flag)) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
         return {EC::Terminate, "Authentication interrupted"};
       }
       std::string plain_password = AMAuth::DecryptPassword(stored_password_enc);
@@ -2326,7 +2296,7 @@ public:
 
     if (!private_keys.empty()) {
       for (const auto &private_key : private_keys) {
-        if (IsOperationInterrupted_(interrupt_flag)) {
+        if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
           return {EC::Terminate, "Authentication interrupted"};
         }
         if (private_key == request.keyfile) {
@@ -2363,7 +2333,7 @@ public:
             "Using password authentication callback to get another password");
       int trial_times = 0;
       while (trial_times < 2) {
-        if (IsOperationInterrupted_(interrupt_flag)) {
+        if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
           return {EC::Terminate, "Authentication interrupted"};
         }
         auto [password_opt, cb_ecm] =
@@ -2718,7 +2688,7 @@ private:
                   AMStr::fmt("Path: {} readdir timeout", path)};
         break;
       }
-      if (this->IsOperationInterrupted_(interrupt_flag)) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
         rcm = ECM{EC::Terminate,
                   AMStr::fmt("Path: {} readdir interrupted by user", path)};
         break;
@@ -2762,7 +2732,7 @@ protected:
               int timeout_ms = -1, int64_t start_time = -1,
               amf interrupt_flag = nullptr) {
     // Find all deepest paths under directory for recursive transfer
-    if (this->IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return;
     }
 
@@ -2802,7 +2772,7 @@ protected:
       return;
     }
     for (auto &attrs : attrs_list) {
-      if (this->IsOperationInterrupted_(interrupt_flag)) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
         return;
       }
       if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
@@ -2827,7 +2797,7 @@ protected:
     if (max_depth != -1 && cur_depth > max_depth) {
       return;
     }
-    if (this->IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return;
     }
     std::string pathf = AMPathStr::join(parts);
@@ -2855,7 +2825,7 @@ protected:
     };
     std::vector<PathInfo> files_info = {};
     for (auto &[path, attrs] : list_info) {
-      if (this->IsOperationInterrupted_(interrupt_flag)) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
         return;
       }
       if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
@@ -2888,7 +2858,7 @@ protected:
            RMR &errors, AMFS::WalkErrorCallback error_callback = nullptr,
            int timeout_ms = -1, int64_t start_time = -1,
            amf interrupt_flag = nullptr) {
-    if (this->IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return;
     }
     if (!isdir(attrs)) {
@@ -2912,12 +2882,12 @@ protected:
       return;
     }
 
-    if (this->IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return;
     }
 
     for (auto &file : file_list) {
-      if (this->IsOperationInterrupted_(interrupt_flag)) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
         return;
       }
       _rm(file.first, file.second, errors, error_callback, timeout_ms,
@@ -2937,7 +2907,7 @@ protected:
               std::unordered_map<std::string, ECM> &errors,
               LIBSSH2_SFTP_ATTRIBUTES attrs, int timeout_ms = -1,
               int64_t start_time = -1, amf interrupt_flag = nullptr) {
-    if (this->IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return;
     }
     ECM rcm;
@@ -2974,7 +2944,7 @@ protected:
         return;
       }
       for (auto &item : list) {
-        if (this->IsOperationInterrupted_(interrupt_flag)) {
+        if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
           return;
         }
         if (timeout_ms > 0 &&
@@ -2991,7 +2961,7 @@ protected:
     if (path.empty()) {
       return {EC::InvalidArg, AMStr::fmt("Invalid path: {}", path)};
     }
-    if (this->IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (!sftp) {
@@ -3041,7 +3011,7 @@ public:
     libssh2_session_set_blocking(session, 0);
 
     for (ssize_t i = 0; i < times; i++) {
-      if (this->IsOperationInterrupted_()) {
+      if ((control_part_ && control_part_->IsInterrupted())) {
         break;
       }
 
@@ -3074,7 +3044,7 @@ public:
   CR ConductCmd(const std::string &cmd, int max_time_ms = 3000,
                 amf interrupt_flag = nullptr) override {
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    if (this->IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {ECM{EC::Terminate, "Operation aborted before command sent"},
               {"", -1}};
     }
@@ -3100,7 +3070,7 @@ public:
     ECM init_rcm =
         sf.Init(session,
                 [this, interrupt_flag]() {
-                  return this->IsOperationInterrupted_(interrupt_flag);
+                  return ((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()));
                 },
                 max_time_ms, time_start);
     if (init_rcm.first != EC::Success) {
@@ -3380,7 +3350,7 @@ public:
               {}};
     }
 
-    if (this->IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
               {}};
     }
@@ -3758,7 +3728,7 @@ public:
     WRV result = {};
     _iwalk(path, attrs, result, errors, show_all, ignore_sepcial_file,
            error_callback, timeout_ms, start_time, interrupt_flag);
-    if (this->IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       ECM out = {EC::Terminate, "Interrupted by user"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -3807,7 +3777,7 @@ public:
           ignore_special_file, error_callback, timeout_ms, start_time,
           interrupt_flag);
     // Print type of result_dict
-    if (this->IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -3874,7 +3844,7 @@ public:
     auto [rcm, pack] =
         iwalk(path, true, ignore_special_file, nullptr, timeout_ms, start_time,
               interrupt_flag);
-    if (rcm.first != EC::Success || IsOperationInterrupted_(interrupt_flag)) {
+    if (rcm.first != EC::Success || ((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return -1;
     }
     int64_t size = 0;
@@ -3889,9 +3859,11 @@ public:
                              int timeout_ms = -1,
                              int64_t start_time = -1,
                              amf interrupt_flag = nullptr) override {
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {};
     }
     return BasePathMatch::find(path, type, timeout_ms, start_time);
   }
 };
+
+

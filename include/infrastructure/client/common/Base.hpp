@@ -678,18 +678,18 @@ public:
 
 protected:
   [[nodiscard]] bool
-  IsOperationInterrupted_(const amf &interrupt_flag = nullptr) const {
+  LegacyInterruptCheck_(const amf &interrupt_flag = nullptr) const {
     if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return true;
     }
     return control_part_.IsInterrupted();
   }
 
-  size_t RegisterInterruptWakeup_(std::function<void()> wake_cb) {
+  size_t LegacyRegisterWakeup_(std::function<void()> wake_cb) {
     return control_part_.RegisterWakeup(std::move(wake_cb));
   }
 
-  size_t RegisterInterruptWakeup_(const amf &interrupt_flag,
+  size_t LegacyRegisterWakeup_(const amf &interrupt_flag,
                                   std::function<void()> wake_cb) {
     if (interrupt_flag) {
       return interrupt_flag->RegisterWakeup(std::move(wake_cb));
@@ -697,11 +697,11 @@ protected:
     return control_part_.RegisterWakeup(std::move(wake_cb));
   }
 
-  void UnregisterInterruptWakeup_(size_t token) {
+  void LegacyUnregisterWakeup_(size_t token) {
     control_part_.UnregisterWakeup(token);
   }
 
-  void UnregisterInterruptWakeup_(const amf &interrupt_flag, size_t token) {
+  void LegacyUnregisterWakeup_(const amf &interrupt_flag, size_t token) {
     if (token == 0) {
       return;
     }
@@ -761,7 +761,7 @@ public:
                   int64_t start_time = -1) override {
     auto [rcm, pack] = iwalk(path, true, ignore_sepcial_file, nullptr,
                              interrupt_flag, timeout_ms, start_time);
-    if (rcm.first != EC::Success || IsOperationInterrupted_(interrupt_flag)) {
+    if (rcm.first != EC::Success || LegacyInterruptCheck_(interrupt_flag)) {
       return -1;
     }
     int64_t size = 0;
@@ -775,7 +775,7 @@ public:
                              SearchType type = SearchType::All,
                              amf interrupt_flag = nullptr, int timeout_ms = -1,
                              int64_t start_time = -1) override {
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (LegacyInterruptCheck_(interrupt_flag)) {
       return {};
     }
     return BasePathMatch::find(path, type, timeout_ms, start_time);
@@ -1555,34 +1555,6 @@ public:
   }
 
 protected:
-  [[nodiscard]] bool
-  IsOperationInterruptedByToken_(const amf &interrupt_flag = nullptr) const {
-    if (interrupt_flag) {
-      TokenControlPortBridge token_port(interrupt_flag);
-      if (token_port.IsInterrupted()) {
-        return true;
-      }
-    }
-    return control_part_ ? control_part_->IsInterrupted() : false;
-  }
-
-  size_t RegisterTokenWakeupBridge_(const amf &interrupt_flag,
-                                    std::function<void()> wake_cb) const {
-    if (!interrupt_flag || !wake_cb) {
-      return 0;
-    }
-    TokenControlPortBridge token_port(interrupt_flag);
-    return token_port.RegisterWakeup(std::move(wake_cb));
-  }
-
-  void UnregisterTokenWakeupBridge_(const amf &interrupt_flag, size_t token) const {
-    if (!interrupt_flag || token == 0) {
-      return;
-    }
-    TokenControlPortBridge token_port(interrupt_flag);
-    token_port.UnregisterWakeup(token);
-  }
-
   void trace(const TraceInfo &trace_info) const {
     TraceCallback cb;
     {
@@ -1717,3 +1689,4 @@ public:
     return *io_port_;
   }
 };
+

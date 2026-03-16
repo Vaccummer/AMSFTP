@@ -30,11 +30,6 @@ private:
     return control_part_ ? control_part_->IsInterrupted() : false;
   }
 
-  [[nodiscard]] bool
-  IsOperationInterrupted_(const amf &interrupt_flag = nullptr) const {
-    return this->IsOperationInterruptedByToken_(interrupt_flag);
-  }
-
   [[nodiscard]] int64_t NormalizeStartTime_(int64_t start_time) const {
     return start_time == -1 ? AMTime::miliseconds() : start_time;
   }
@@ -107,7 +102,7 @@ private:
                AMFS::WalkErrorCallback error_callback = nullptr,
                int timeout_ms = -1, int64_t start_time = -1,
                amf interrupt_flag = nullptr) {
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       ECM out = {EC::Terminate, "Interrupted by user"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -136,7 +131,7 @@ private:
     }
 
     for (const auto &entry : listing) {
-      if (IsOperationInterrupted_(interrupt_flag)) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
         ECM out = {EC::Terminate, "Interrupted by user"};
         if (error_callback && *error_callback) {
           (*error_callback)(entry.path, out);
@@ -288,7 +283,7 @@ public:
   ECM Check(int timeout_ms = -1, int64_t start_time = -1,
             amf interrupt_flag = nullptr) override {
     start_time = NormalizeStartTime_(start_time);
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       ECM out = {EC::Terminate, "Check interrupted by user"};
       SetState_({AMDomain::client::ClientStatus::ConnectionBroken, out});
       return out;
@@ -336,7 +331,7 @@ public:
   CR ConductCmd(const std::string &cmd, int max_time_ms = 3000,
                 amf interrupt_flag = nullptr) override {
     int64_t start_time = AMTime::miliseconds();
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {ECM{EC::Terminate, "Operation aborted before command sent"},
               {"", -1}};
     }
@@ -402,7 +397,7 @@ public:
     bool timed_out = false;
 
     while (true) {
-      if (IsOperationInterrupted_(interrupt_flag)) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
         if (job_handle) {
           (void)TerminateJobObject(job_handle, 1);
         } else {
@@ -535,7 +530,7 @@ public:
     };
 
     while (true) {
-      if (IsOperationInterrupted_(interrupt_flag)) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
         kill_child(SIGKILL);
         interrupted = true;
         break;
@@ -630,7 +625,7 @@ public:
     if (path.empty()) {
       return {{EC::InvalidArg, "Invalid empty path"}, ""};
     }
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {{EC::Terminate, "Interrupted by user"}, ""};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -670,7 +665,7 @@ public:
     if (path.empty()) {
       return {{EC::InvalidArg, "Invalid empty path"}, results};
     }
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {{EC::Terminate, "Interrupted by user"}, results};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -712,7 +707,7 @@ public:
             results};
       }
       for (; it != end; it.increment(ec)) {
-        if (IsOperationInterrupted_(interrupt_flag)) {
+        if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
           return {{EC::Terminate, "Interrupted by user"}, results};
         }
         if (IsTimedOut_(timeout_ms, start_time)) {
@@ -744,7 +739,7 @@ public:
     if (path.empty()) {
       return {ECM{EC::InvalidArg, "Invalid empty path"}, PathInfo()};
     }
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {ECM{EC::Terminate, "Interrupted by user"}, PathInfo()};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -873,7 +868,7 @@ public:
     }
 
     for (const auto &entry : it) {
-      if (IsOperationInterrupted_(interrupt_flag)) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
         return {ECM{EC::Terminate, "Listdir interrupted by user"}, result};
       }
       if (IsTimedOut_(timeout_ms, start_time)) {
@@ -929,7 +924,7 @@ public:
     fs::recursive_directory_iterator it(path, ec);
     fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
-      if (IsOperationInterrupted_(interrupt_flag)) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
         ECM out = {EC::Terminate, "iwalk interrupted by user"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
@@ -1116,7 +1111,7 @@ public:
     fs::recursive_directory_iterator it(root_norm, ec);
     fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
-      if (IsOperationInterrupted_(interrupt_flag)) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
         ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
@@ -1244,7 +1239,7 @@ public:
     auto [walk_rcm, pack] =
         iwalk(path, true, ignore_special_file, nullptr, timeout_ms, start_time,
               interrupt_flag);
-    if (walk_rcm.first != EC::Success || IsOperationInterrupted_(interrupt_flag)) {
+    if (walk_rcm.first != EC::Success || ((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return -1;
     }
 
@@ -1260,7 +1255,7 @@ public:
                              int timeout_ms = -1,
                              int64_t start_time = -1,
                              amf interrupt_flag = nullptr) override {
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {};
     }
     return BasePathMatch::find(path, type, timeout_ms, start_time);
@@ -1272,7 +1267,7 @@ public:
     if (path.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1297,7 +1292,7 @@ public:
     if (path.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1324,7 +1319,7 @@ public:
     if (src.empty() || dst.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1461,7 +1456,7 @@ public:
       }
     }
 
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {{EC::Terminate, "Interrupted by user"}, errors};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1477,7 +1472,7 @@ public:
     if (path.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1548,7 +1543,7 @@ public:
     if (src.empty() || dst.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    if (IsOperationInterrupted_(interrupt_flag)) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1586,3 +1581,4 @@ public:
     return {EC::Success, ""};
   }
 };
+
