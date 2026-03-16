@@ -573,6 +573,51 @@ private:
     return home_dir;
   }
 
+  [[nodiscard]] bool IsInterrupted() const override {
+    return control_part_ ? control_part_->IsInterrupted() : false;
+  }
+
+  [[nodiscard]] bool
+  IsOperationInterrupted_(const amf &interrupt_flag = nullptr) const {
+    return this->IsOperationInterruptedByToken_(interrupt_flag);
+  }
+
+  size_t RegisterInterruptWakeup_(std::function<void()> wake_cb) {
+    if (!control_part_ || !wake_cb) {
+      return 0;
+    }
+    return control_part_->RegisterWakeup(std::move(wake_cb));
+  }
+
+  size_t RegisterInterruptWakeup_(const amf &interrupt_flag,
+                                  std::function<void()> wake_cb) {
+    if (!wake_cb) {
+      return 0;
+    }
+    if (interrupt_flag) {
+      return this->RegisterTokenWakeupBridge_(interrupt_flag, std::move(wake_cb));
+    }
+    return RegisterInterruptWakeup_(std::move(wake_cb));
+  }
+
+  void UnregisterInterruptWakeup_(size_t token) {
+    if (!control_part_ || token == 0) {
+      return;
+    }
+    control_part_->UnregisterWakeup(token);
+  }
+
+  void UnregisterInterruptWakeup_(const amf &interrupt_flag, size_t token) {
+    if (token == 0) {
+      return;
+    }
+    if (interrupt_flag) {
+      this->UnregisterTokenWakeupBridge_(interrupt_flag, token);
+      return;
+    }
+    UnregisterInterruptWakeup_(token);
+  }
+
   void SetState_(const AMDomain::client::ClientState &state) {
     config_part_->SetState(state);
   }
@@ -604,13 +649,11 @@ private:
 
     size_t wakeup_token = 0;
 #if LIBCURL_VERSION_NUM >= 0x074400
-    if (interrupt_flag) {
-      wakeup_token = interrupt_flag->RegisterWakeup([this]() {
-        if (multi) {
-          curl_multi_wakeup(multi);
-        }
-      });
-    }
+    wakeup_token = RegisterInterruptWakeup_(interrupt_flag, [this]() {
+      if (multi) {
+        curl_multi_wakeup(multi);
+      }
+    });
 #endif
 
     int still_running = 1;
@@ -618,8 +661,8 @@ private:
     WaitResult wait_result = WaitResult::Ready;
 
     auto cleanup_wakeup = [&]() {
-      if (interrupt_flag && wakeup_token != 0) {
-        interrupt_flag->UnregisterWakeup(wakeup_token);
+      if (wakeup_token != 0) {
+        UnregisterInterruptWakeup_(interrupt_flag, wakeup_token);
       }
     };
 
@@ -647,7 +690,7 @@ private:
         break;
 
       // Check interrupt
-      if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+      if (IsOperationInterrupted_(interrupt_flag)) {
         wait_result = WaitResult::Interrupted;
         break;
       }
@@ -1406,6 +1449,9 @@ public:
     rtts.reserve(static_cast<size_t>(times));
 
     for (ssize_t i = 0; i < times; i++) {
+      if (IsOperationInterrupted_()) {
+        break;
+      }
       ECM ecm = SetupPath("", true);
       if (ecm.first != EC::Success) {
         return -1.0;
@@ -1446,7 +1492,7 @@ public:
       config_part_->SetOSType(OS_TYPE::Unknown);
       return config_part_->GetOSType();
     }
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       config_part_->SetOSType(OS_TYPE::Unknown);
       return config_part_->GetOSType();
     }
@@ -1518,7 +1564,7 @@ public:
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     std::lock_guard<std::recursive_mutex> lock(
         mtx); // Prevent concurrent curl access
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {EC::Terminate, "Interrupted by user"};
     }
     ECM ecm = SetupPath("", true);
@@ -1563,7 +1609,7 @@ public:
               PathInfo()};
     }
 
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (this->IsOperationInterrupted_(interrupt_flag)) {
       return {ECM{EC::Terminate, "Interrupted by user"}, PathInfo()};
     }
 
@@ -1620,7 +1666,7 @@ public:
     if (!curl) {
       return {ECM{EC::NoConnection, "CURL not initialized"}, {}};
     }
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (this->IsOperationInterrupted_(interrupt_flag)) {
       return {ECM{EC::Terminate, "Interrupted by user"}, {}};
     }
 
@@ -1652,11 +1698,9 @@ public:
 
   [[nodiscard]] std::pair<ECM, WRV>
   listdir(const std::string &path, int timeout_ms = -1,
-          int64_t start_time = -1,
-          amf interrupt_flag = nullptr) const override {
+          int64_t start_time = -1) const override {
     return const_cast<AMFTPIOCore *>(this)->listdir(path, timeout_ms,
-                                                    start_time,
-                                                    std::move(interrupt_flag));
+                                                    start_time, nullptr);
   }
 
   // Define iwalk in base class since almost all iwalks are based on listdir
@@ -1685,7 +1729,7 @@ public:
     };
     bool no_subdir = true;
     for (auto &item : list_info) {
-      if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+      if (IsOperationInterrupted_(interrupt_flag)) {
         return;
       }
       if (timeout_ms > 0 && AMTime::miliseconds() - start_time > timeout_ms) {
@@ -1744,7 +1788,7 @@ public:
     }
     _iwalk(info, result, errors, show_all, ignore_special_file, error_callback,
            timeout_ms, start_time, interrupt_flag);
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       ECM out = {EC::Terminate, "iwalk interrupted by user"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -1758,10 +1802,10 @@ public:
   iwalk(const std::string &path, bool show_all = false,
         bool ignore_special_file = true,
         AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
-        int64_t start_time = -1, amf interrupt_flag = nullptr) const override {
+        int64_t start_time = -1) const override {
     return const_cast<AMFTPIOCore *>(this)->iwalk(
         path, show_all, ignore_special_file, error_callback, timeout_ms,
-        start_time, std::move(interrupt_flag));
+        start_time, nullptr);
   }
 
   void _walk(const std::vector<std::string> &parts, WRD &result, RMR &errors,
@@ -1797,7 +1841,7 @@ public:
     };
     std::vector<PathInfo> files_info = {};
     for (auto &info : list_info) {
-      if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+      if (IsOperationInterrupted_(interrupt_flag)) {
         return;
       }
       if (timeout_ms > 0 && AMTime::miliseconds() - start_time > timeout_ms) {
@@ -1846,7 +1890,7 @@ public:
     _walk(parts, result_dict, errors, 0, max_depth, show_all,
           ignore_special_file, error_callback, timeout_ms, start_time,
           interrupt_flag);
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -1861,7 +1905,7 @@ public:
                   amf interrupt_flag = nullptr) override {
     auto [rcm, pack] = iwalk(path, true, ignore_special_file, nullptr,
                              timeout_ms, start_time, interrupt_flag);
-    if (rcm.first != EC::Success || (interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (rcm.first != EC::Success || IsOperationInterrupted_(interrupt_flag)) {
       return -1;
     }
     int64_t size = 0;
@@ -1876,11 +1920,10 @@ public:
                              int timeout_ms = -1,
                              int64_t start_time = -1,
                              amf interrupt_flag = nullptr) override {
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {};
     }
-    return BasePathMatch::find(path, type, timeout_ms, start_time,
-                               std::move(interrupt_flag));
+    return BasePathMatch::find(path, type, timeout_ms, start_time);
   }
 
   ECM mkdir(const std::string &path, int timeout_ms = -1,
@@ -1998,7 +2041,7 @@ public:
       return;
     }
     for (const auto &itemf : file_list) {
-      if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+      if (IsOperationInterrupted_(interrupt_flag)) {
         return;
       }
       if (timeout_ms > 0 && AMTime::miliseconds() - start_time > timeout_ms) {
