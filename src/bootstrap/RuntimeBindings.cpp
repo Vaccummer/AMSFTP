@@ -1,8 +1,8 @@
 #include "interface/adapters/ApplicationAdapters.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include "application/client/ClientAppService.hpp"
+#include "infrastructure/controller/ClientControlTokenAdapter.hpp"
 #include "application/config/ConfigPayloads.hpp"
-#include "domain/filesystem/FileSystemManager.hpp"
 #include "domain/host/HostManager.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
 #include "application/transfer/TransferAppService.hpp"
@@ -15,13 +15,18 @@
 namespace AMInterface::ApplicationAdapters {
 namespace {
 /**
+ * @brief Legacy settings key kept for config-schema compatibility.
+ */
+constexpr const char *kTransferOptionsKey = "TransferManager";
+
+/**
  * @brief Runtime dependency slots bound once from startup wiring.
  */
 struct RuntimeBindingState {
   std::atomic<AMDomain::host::AMHostConfigManager *> host_config_manager{nullptr};
   std::atomic<AMDomain::host::AMKnownHostsManager *> known_hosts_manager{nullptr};
   std::atomic<AMApplication::client::ClientAppService *> client_service{nullptr};
-  std::atomic<AMApplication::TransferWorkflow::TransferAppService *> transfer_manager{nullptr};
+  std::atomic<AMApplication::TransferWorkflow::TransferAppService *> transfer_service{nullptr};
   std::atomic<const AMDomain::var::IVarQueryPort *> var_query{nullptr};
   std::atomic<const AMDomain::var::IVarSubstitutionPort *> var_substitution{nullptr};
   std::atomic<AMSignalMonitorPort *> signal_monitor{nullptr};
@@ -29,7 +34,6 @@ struct RuntimeBindingState {
   std::atomic<AMApplication::config::AMConfigAppService *> config_service{
       nullptr};
   std::atomic<AMInterface::style::AMStyleService *> style_service{nullptr};
-  std::atomic<AMDomain::filesystem::AMFileSystem *> filesystem{nullptr};
 };
 
 /**
@@ -71,7 +75,7 @@ void Runtime::Bind(const RuntimeBindings &bindings) {
   state.known_hosts_manager.store(bindings.known_hosts_manager,
                                   std::memory_order_release);
   state.client_service.store(bindings.client_service, std::memory_order_release);
-  state.transfer_manager.store(bindings.transfer_manager,
+  state.transfer_service.store(bindings.transfer_service,
                                std::memory_order_release);
   state.var_query.store(bindings.var_query, std::memory_order_release);
   state.var_substitution.store(bindings.var_substitution,
@@ -80,7 +84,6 @@ void Runtime::Bind(const RuntimeBindings &bindings) {
   state.prompt_manager.store(bindings.prompt_manager, std::memory_order_release);
   state.config_service.store(bindings.config_service, std::memory_order_release);
   state.style_service.store(bindings.style_service, std::memory_order_release);
-  state.filesystem.store(bindings.filesystem, std::memory_order_release);
 }
 
 /**
@@ -91,14 +94,13 @@ void Runtime::Reset() {
   state.host_config_manager.store(nullptr, std::memory_order_release);
   state.known_hosts_manager.store(nullptr, std::memory_order_release);
   state.client_service.store(nullptr, std::memory_order_release);
-  state.transfer_manager.store(nullptr, std::memory_order_release);
+  state.transfer_service.store(nullptr, std::memory_order_release);
   state.var_query.store(nullptr, std::memory_order_release);
   state.var_substitution.store(nullptr, std::memory_order_release);
   state.signal_monitor.store(nullptr, std::memory_order_release);
   state.prompt_manager.store(nullptr, std::memory_order_release);
   state.config_service.store(nullptr, std::memory_order_release);
   state.style_service.store(nullptr, std::memory_order_release);
-  state.filesystem.store(nullptr, std::memory_order_release);
 }
 
 /**
@@ -109,14 +111,13 @@ bool Runtime::IsBound() {
   return state.host_config_manager.load(std::memory_order_acquire) &&
          state.known_hosts_manager.load(std::memory_order_acquire) &&
          state.client_service.load(std::memory_order_acquire) &&
-         state.transfer_manager.load(std::memory_order_acquire) &&
+         state.transfer_service.load(std::memory_order_acquire) &&
          state.var_query.load(std::memory_order_acquire) &&
          state.var_substitution.load(std::memory_order_acquire) &&
          state.signal_monitor.load(std::memory_order_acquire) &&
          state.prompt_manager.load(std::memory_order_acquire) &&
          state.config_service.load(std::memory_order_acquire) &&
-         state.style_service.load(std::memory_order_acquire) &&
-         state.filesystem.load(std::memory_order_acquire);
+         state.style_service.load(std::memory_order_acquire);
 }
 
 /**
@@ -218,9 +219,9 @@ std::vector<std::string> Runtime::ListClientNames() {
  * @brief Return tracked transfer task IDs.
  */
 std::vector<std::string> Runtime::ListTaskIds() {
-  AMApplication::TransferWorkflow::TransferAppService *transfer_manager =
-      RuntimeBindingState_().transfer_manager.load(std::memory_order_acquire);
-  return transfer_manager ? transfer_manager->ListTaskIds()
+  AMApplication::TransferWorkflow::TransferAppService *transfer_service =
+      RuntimeBindingState_().transfer_service.load(std::memory_order_acquire);
+  return transfer_service ? transfer_service->ListTaskIds()
                           : std::vector<std::string>{};
 }
 
@@ -277,7 +278,8 @@ AMDomain::client::ParsedClientPath Runtime::ParsePath(const std::string &input,
   if (!client_service) {
     return {"", "", nullptr, Err(EC::InvalidHandle, "Runtime client app service is not bound")};
   }
-  return client_service->ParseScopedPath(input, interrupt_flag);
+  return client_service->ParseScopedPath(
+      input, AMInfra::controller::AdaptClientInterruptFlag(interrupt_flag));
 }
 
 /**
@@ -330,7 +332,9 @@ Runtime::ConnectNickname(const std::string &nickname, bool force,
   options.force = force;
   options.quiet = true;
   options.register_to_manager = register_to_manager;
-  return client_service->ConnectNickname(nickname, options, {}, interrupt_flag);
+  return client_service->ConnectNickname(
+      nickname, options, {},
+      AMInfra::controller::AdaptClientInterruptFlag(interrupt_flag));
 }
 
 /**
@@ -344,7 +348,8 @@ Runtime::ConnectRequest(const AMDomain::client::ClientConnectContext &context,
   if (!client_service) {
     return {Err(EC::InvalidHandle, "Runtime client app service is not bound"), nullptr};
   }
-  return client_service->ConnectRequest(context, {}, interrupt_flag);
+  return client_service->ConnectRequest(
+      context, {}, AMInfra::controller::AdaptClientInterruptFlag(interrupt_flag));
 }
 
 /**
@@ -541,7 +546,7 @@ std::string Runtime::ResolveSettingString(const std::vector<std::string> &path,
       if (path.size() == 3 && path[1] == "ClientManager" && path[2] == "heartbeat_timeout_ms") {
         return std::to_string(options.client_manager.heartbeat_timeout_ms);
       }
-      if (path.size() == 3 && path[1] == "TransferManager") {
+      if (path.size() == 3 && path[1] == kTransferOptionsKey) {
         if (path[2] == "init_thread_num") {
           return std::to_string(options.transfer_manager.init_thread_num);
         }
@@ -652,8 +657,10 @@ AMProgressBar Runtime::CreateProgressBar(int64_t total_size,
                                          const std::string &prefix) {
   AMInterface::style::AMStyleService *style_service =
       RuntimeBindingState_().style_service.load(std::memory_order_acquire);
-  return style_service ? style_service->CreateProgressBar(total_size, prefix)
-                       : AMProgressBar(total_size, prefix);
+  if (style_service) {
+    return style_service->CreateProgressBar(total_size, prefix);
+  }
+  return AMProgressBar(total_size, prefix);
 }
 
 /**
@@ -725,9 +732,7 @@ void Runtime::ResumeSignalHook(const std::string &name) {
  * @brief Style one filesystem path display item.
  */
 std::string Runtime::StylePath(const PathInfo &info, const std::string &name) {
-  AMDomain::filesystem::AMFileSystem *filesystem =
-      RuntimeBindingState_().filesystem.load(std::memory_order_acquire);
-  return filesystem ? filesystem->StylePath(info, name) : name;
+  return Runtime::Format(name, "", &info);
 }
 } // namespace AMInterface::ApplicationAdapters
 

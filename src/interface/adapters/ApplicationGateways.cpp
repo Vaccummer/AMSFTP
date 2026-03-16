@@ -2,8 +2,8 @@
 #include "interface/completion/Proxy.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include "application/client/ClientAppService.hpp"
+#include "infrastructure/controller/ClientControlTokenAdapter.hpp"
 #include "application/config/ConfigPayloads.hpp"
-#include "application/filesystem/FileSystemAppService.hpp"
 #include "domain/config/ConfigModel.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/auth.hpp"
@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <tuple>
 #include <unordered_set>
 
 namespace AMInterface::ApplicationAdapters {
@@ -59,6 +60,10 @@ bool ParseInt64_(const std::string &text, int64_t *out) {
   }
   *out = value;
   return true;
+}
+
+AMDomain::client::amf ToClientInterrupt_(const amf &interrupt_flag) {
+  return AMInfra::controller::AdaptClientInterruptFlag(interrupt_flag);
 }
 /**
  * @brief Resolve the local username from environment variables.
@@ -1096,9 +1101,8 @@ ECM PromptConfigSaver::SavePromptConfig(bool dump_now) {
  * @brief Construct client-session gateway from client app service.
  */
 ClientSessionGateway::ClientSessionGateway(
-    AMApplication::client::ClientAppService &client_service,
-    AMApplication::filesystem::FileSystemAppService &filesystem_service)
-    : client_service_(client_service), filesystem_service_(filesystem_service) {}
+    AMApplication::client::ClientAppService &client_service)
+    : client_service_(client_service) {}
 
 /**
  * @brief Connect one configured nickname.
@@ -1106,11 +1110,13 @@ ClientSessionGateway::ClientSessionGateway(
 ECM ClientSessionGateway::ConnectNickname(const std::string &nickname,
                                           bool force, bool switch_client,
                                           amf interrupt_flag) {
+  const AMDomain::client::amf client_interrupt =
+      ToClientInterrupt_(interrupt_flag);
   AMDomain::client::ClientConnectOptions options{};
   options.force = force;
   options.register_to_manager = true;
   auto [rcm, client] =
-      client_service_.ConnectNickname(nickname, options, {}, interrupt_flag);
+      client_service_.ConnectNickname(nickname, options, {}, client_interrupt);
   if (!isok(rcm)) {
     return rcm;
   }
@@ -1125,7 +1131,8 @@ ECM ClientSessionGateway::ConnectNickname(const std::string &nickname,
  */
 ECM ClientSessionGateway::ChangeCurrentClient(const std::string &nickname,
                                               amf interrupt_flag) {
-  auto [rcm, client] = client_service_.EnsureClient(nickname, interrupt_flag);
+  auto [rcm, client] =
+      client_service_.EnsureClient(nickname, ToClientInterrupt_(interrupt_flag));
   if (!isok(rcm)) {
     return rcm;
   }
@@ -1142,6 +1149,8 @@ ECM ClientSessionGateway::ConnectSftp(const std::string &nickname,
                                       const std::string &password,
                                       const std::string &keyfile,
                                       amf interrupt_flag) {
+  const AMDomain::client::amf client_interrupt =
+      ToClientInterrupt_(interrupt_flag);
   const size_t at_pos = user_at_host.find('@');
   if (at_pos == std::string::npos || at_pos == 0 ||
       at_pos + 1 >= user_at_host.size()) {
@@ -1155,7 +1164,8 @@ ECM ClientSessionGateway::ConnectSftp(const std::string &nickname,
   context.request.port = port;
   context.request.password = password;
   context.request.keyfile = keyfile;
-  auto [rcm, client] = client_service_.ConnectRequest(context, {}, interrupt_flag);
+  auto [rcm, client] =
+      client_service_.ConnectRequest(context, {}, client_interrupt);
   if (!isok(rcm)) {
     return rcm;
   }
@@ -1171,6 +1181,8 @@ ECM ClientSessionGateway::ConnectFtp(const std::string &nickname,
                                      int64_t port, const std::string &password,
                                      const std::string &keyfile,
                                      amf interrupt_flag) {
+  const AMDomain::client::amf client_interrupt =
+      ToClientInterrupt_(interrupt_flag);
   const size_t at_pos = user_at_host.find('@');
   if (at_pos == std::string::npos || at_pos == 0 ||
       at_pos + 1 >= user_at_host.size()) {
@@ -1184,7 +1196,8 @@ ECM ClientSessionGateway::ConnectFtp(const std::string &nickname,
   context.request.port = port;
   context.request.password = password;
   context.request.keyfile = keyfile;
-  auto [rcm, client] = client_service_.ConnectRequest(context, {}, interrupt_flag);
+  auto [rcm, client] =
+      client_service_.ConnectRequest(context, {}, client_interrupt);
   if (!isok(rcm)) {
     return rcm;
   }
@@ -1196,7 +1209,36 @@ ECM ClientSessionGateway::ConnectFtp(const std::string &nickname,
  * @brief Print current client table.
  */
 ECM ClientSessionGateway::ListClients(bool detail, amf interrupt_flag) {
-  return filesystem_service_.ListClients(detail, interrupt_flag);
+  const AMDomain::client::amf client_interrupt =
+      ToClientInterrupt_(interrupt_flag);
+  if (interrupt_flag && !interrupt_flag->IsRunning()) {
+    return Err(EC::Terminate, "Interrupted by user");
+  }
+
+  const std::vector<std::string> names = client_service_.GetClientNames();
+  if (names.empty()) {
+    return Err(EC::ClientNotFound, "No client found");
+  }
+
+  ECM status = Ok();
+  std::ostringstream report;
+  for (const auto &name : names) {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
+      return Err(EC::Terminate, "Interrupted by user");
+    }
+    auto [check_rcm, _client] =
+        client_service_.CheckClient(name, detail, client_interrupt, -1, -1);
+    if (!isok(check_rcm)) {
+      status = check_rcm;
+      report << name << " : " << check_rcm.second << '\n';
+      continue;
+    }
+    report << name << '\n';
+  }
+  if (isok(status)) {
+    return {EC::Success, report.str()};
+  }
+  return status;
 }
 
 /**
@@ -1219,7 +1261,44 @@ ECM ClientSessionGateway::DisconnectClients(
  */
 ECM ClientSessionGateway::StatPaths(const std::vector<std::string> &paths,
                                     amf interrupt_flag) {
-  return filesystem_service_.QueryStatPaths(paths, interrupt_flag).rcm;
+  const AMDomain::client::amf client_interrupt =
+      ToClientInterrupt_(interrupt_flag);
+  if (paths.empty()) {
+    return Err(EC::InvalidArg, "No path is given");
+  }
+  ECM status = Ok();
+  for (const auto &raw : paths) {
+    const auto parsed = client_service_.ParseScopedPath(raw, client_interrupt);
+    const ECM parse_rcm = std::get<3>(parsed);
+    if (!isok(parse_rcm)) {
+      status = parse_rcm;
+      continue;
+    }
+    std::string nickname = std::get<0>(parsed);
+    std::string path = std::get<1>(parsed);
+    AMDomain::client::ClientHandle client = std::get<2>(parsed);
+    if (!client) {
+      client = nickname.empty() ? client_service_.GetCurrentClient()
+                                : client_service_.GetClient(nickname);
+    }
+    if (!client && nickname.empty()) {
+      client = client_service_.GetLocalClient();
+    }
+    if (!client) {
+      status = Err(EC::ClientNotFound, "Resolved client is null");
+      continue;
+    }
+    if (path.empty()) {
+      path = ".";
+    }
+    const std::string abs_path = client_service_.BuildAbsolutePath(client, path);
+    auto [rcm, _info] =
+        client->IOPort().stat(abs_path, false, -1, -1, client_interrupt);
+    if (!isok(rcm)) {
+      status = rcm;
+    }
+  }
+  return status;
 }
 
 /**
@@ -1227,9 +1306,54 @@ ECM ClientSessionGateway::StatPaths(const std::vector<std::string> &paths,
  */
 ECM ClientSessionGateway::ListPath(const std::string &path, bool list_like,
                                    bool show_all, amf interrupt_flag) {
-  return filesystem_service_
-      .QueryListPath(path, list_like, show_all, interrupt_flag)
-      .rcm;
+  (void)list_like;
+  const AMDomain::client::amf client_interrupt =
+      ToClientInterrupt_(interrupt_flag);
+  const std::string token = path.empty() ? "." : path;
+  const auto parsed = client_service_.ParseScopedPath(token, client_interrupt);
+  const ECM parse_rcm = std::get<3>(parsed);
+  if (!isok(parse_rcm)) {
+    return parse_rcm;
+  }
+  std::string nickname = std::get<0>(parsed);
+  std::string resolved = std::get<1>(parsed);
+  AMDomain::client::ClientHandle client = std::get<2>(parsed);
+  if (!client) {
+    client = nickname.empty() ? client_service_.GetCurrentClient()
+                              : client_service_.GetClient(nickname);
+  }
+  if (!client && nickname.empty()) {
+    client = client_service_.GetLocalClient();
+  }
+  if (!client) {
+    return Err(EC::ClientNotFound, "Resolved client is null");
+  }
+  if (resolved.empty()) {
+    resolved = ".";
+  }
+  const std::string abs_path = client_service_.BuildAbsolutePath(client, resolved);
+  auto [stat_rcm, stat_info] =
+      client->IOPort().stat(abs_path, false, -1, -1, client_interrupt);
+  if (!isok(stat_rcm)) {
+    return stat_rcm;
+  }
+  if (stat_info.type != PathType::DIR) {
+    return Ok();
+  }
+  auto [list_rcm, entries] =
+      client->IOPort().listdir(abs_path, -1, -1, client_interrupt);
+  if (!isok(list_rcm)) {
+    return list_rcm;
+  }
+  if (!show_all) {
+    entries.erase(
+        std::remove_if(entries.begin(), entries.end(),
+                       [](const PathInfo &item) {
+                         return item.name == "." || item.name == "..";
+                       }),
+        entries.end());
+  }
+  return Ok();
 }
 
 /**
@@ -1280,7 +1404,7 @@ TransferExecutorPort::TransferExecutorPort(
     AMApplication::TransferWorkflow::TransferAppService &transfer_service,
     AMPromptManager &prompt_manager,
     AMApplication::TransferWorkflow::TransferConfirmPolicy confirm_policy,
-    std::shared_ptr<TaskControlToken> task_control_token)
+    AMDomain::client::amf task_control_token)
     : transfer_service_(transfer_service), prompt_manager_(&prompt_manager),
       confirm_policy_(confirm_policy),
       task_control_token_(std::move(task_control_token)) {}
@@ -1457,7 +1581,7 @@ ECM TransferExecutorPort::TransferAsync(
 TaskGateway::TaskGateway(
     AMApplication::TransferWorkflow::TransferAppService &transfer_service,
     AMPromptManager &prompt_manager,
-    std::shared_ptr<TaskControlToken> task_control_token)
+    AMDomain::client::amf task_control_token)
     : transfer_service_(transfer_service), prompt_manager_(&prompt_manager),
       task_control_token_(std::move(task_control_token)) {}
 
@@ -1559,7 +1683,7 @@ ECM TaskGateway::ListTasks(bool pending, bool suspend, bool finished,
   }
   size_t shown = 0;
   for (const auto &task_summary : task_summaries) {
-    if (task_control_token_ && !task_control_token_->IsRunning()) {
+    if (task_control_token_ && task_control_token_->IsInterrupted()) {
       return Err(EC::Terminate, "Task list interrupted");
     }
     const TaskStatus status = task_summary.status;
@@ -1589,7 +1713,7 @@ ECM TaskGateway::ShowTasks(const std::vector<std::string> &ids) {
   }
   ECM first_error = Ok();
   for (const auto &task_id : ids) {
-    if (task_control_token_ && !task_control_token_->IsRunning()) {
+    if (task_control_token_ && task_control_token_->IsInterrupted()) {
       return Err(EC::Terminate, "Task show interrupted");
     }
     AMApplication::TransferWorkflow::TaskView task_view = {};
