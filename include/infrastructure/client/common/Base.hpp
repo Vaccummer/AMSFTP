@@ -511,6 +511,424 @@ public:
 };
  */
 
+/*
+class BaseClient : public BasePathMatch {
+private:
+  static std::string GenerateUID() {
+    static std::mutex uid_mtx;
+    static size_t seed = 0;
+    std::lock_guard<std::mutex> lock(uid_mtx);
+    return std::to_string(seed++);
+  }
+
+  ClientMetaDataStore metadata_part_;
+  ClientControl control_part_;
+  ClientConfigStore config_part_;
+  AMAtomic<TraceCallback> trace_callback_;
+  AMAtomic<AuthCallback> auth_callback_;
+  ClientIOBase *io_part_ = nullptr;
+
+protected:
+  ECM state = {EC::NoConnection, "Client Not Initialized"};
+  mutable std::mutex state_mtx;
+  OS_TYPE os_type = OS_TYPE::Uncertain;
+  std::string home_dir;
+  ConRequest res_data;
+  std::string nickname;
+
+  void SetState(const ECM &state_in) {
+    {
+      std::lock_guard<std::mutex> lock(state_mtx);
+      state = state_in;
+    }
+    config_part_.SetState(state_in);
+  }
+
+public:
+  std::string uid;
+  std::recursive_mutex mtx;
+
+  ~BaseClient() = default;
+
+  BaseClient(const ConRequest &request,
+             [[maybe_unused]] int buffer_capacity = 10,
+             TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
+      : metadata_part_(), control_part_(), config_part_(request),
+        trace_callback_(), auth_callback_(), io_part_(nullptr),
+        res_data(request), nickname(request.nickname) {
+    uid = GenerateUID();
+    res_data = config_part_.GetRequest();
+    nickname = res_data.nickname;
+    state = config_part_.GetState();
+    os_type = config_part_.GetOSType();
+    home_dir = config_part_.GetHomeDir();
+    RegisterTraceCallback(std::move(trace_cb));
+    RegisterAuthCallback(std::move(auth_cb));
+  }
+
+  void BindIOPort(ClientIOBase &io_part) {
+    io_part_ = &io_part;
+    {
+      auto trace = trace_callback_.lock();
+      io_part_->RegisterTraceCallback(trace.load());
+    }
+    {
+      auto auth_cb = auth_callback_.lock();
+      io_part_->RegisterAuthCallback(auth_cb.load());
+    }
+  }
+
+  void RegisterTraceCallback(TraceCallback cb) {
+    {
+      auto trace = trace_callback_.lock();
+      trace.store(cb);
+    }
+    if (io_part_ != nullptr) {
+      io_part_->RegisterTraceCallback(std::move(cb));
+    }
+  }
+
+  void UnregisterTraceCallback() {
+    {
+      auto trace = trace_callback_.lock();
+      trace.store(TraceCallback{});
+    }
+    if (io_part_ != nullptr) {
+      io_part_->UnregisterTraceCallback();
+    }
+  }
+
+  void RegisterAuthCallback(AuthCallback cb) {
+    {
+      auto auth_cb = auth_callback_.lock();
+      auth_cb.store(cb);
+    }
+    if (io_part_ != nullptr) {
+      io_part_->RegisterAuthCallback(std::move(cb));
+    }
+  }
+
+  void UnregisterAuthCallback() {
+    {
+      auto auth_cb = auth_callback_.lock();
+      auth_cb.store(AuthCallback{});
+    }
+    if (io_part_ != nullptr) {
+      io_part_->UnregisterAuthCallback();
+    }
+  }
+
+  std::string GetUID() override { return uid; }
+  [[nodiscard]] const std::string &GetNickname() const override {
+    return nickname;
+  }
+  [[nodiscard]] const ConRequest &GetRequest() const override {
+    return res_data;
+  }
+  [[nodiscard]] ClientProtocol GetProtocol() const override {
+    return res_data.protocol;
+  }
+
+  bool StoreNamedData(const std::string &name, std::any value,
+                      bool overwrite = true) override {
+    return metadata_part_.StoreNamedData(name, std::move(value), overwrite);
+  }
+
+  bool StoreTypedData(const std::type_index &type_key, std::any value,
+                      bool overwrite = true) override {
+    return metadata_part_.StoreTypedData(type_key, std::move(value), overwrite);
+  }
+
+  [[nodiscard]] std::pair<bool, std::any>
+  QueryNamedData(const std::string &name) const override {
+    return metadata_part_.QueryNamedData(name);
+  }
+
+  [[nodiscard]] std::any *QueryNamedData(const std::string &name,
+                                         bool &name_exists) override {
+    return metadata_part_.QueryNamedData(name, name_exists);
+  }
+
+  [[nodiscard]] const std::any *
+  QueryNamedData(const std::string &name, bool &name_exists) const override {
+    return metadata_part_.QueryNamedData(name, name_exists);
+  }
+
+  [[nodiscard]] std::any *QueryTypedData(const std::type_index &type_key,
+                                         bool &type_exists) override {
+    return metadata_part_.QueryTypedData(type_key, type_exists);
+  }
+
+  [[nodiscard]] const std::any *
+  QueryTypedData(const std::type_index &type_key,
+                 bool &type_exists) const override {
+    return metadata_part_.QueryTypedData(type_key, type_exists);
+  }
+
+  bool EraseNamedData(const std::string &name) override {
+    return metadata_part_.EraseNamedData(name);
+  }
+
+  void RequestInterrupt() override { control_part_.RequestInterrupt(); }
+  void ClearInterrupt() override { control_part_.ClearInterrupt(); }
+  void ResetInterrupt() { control_part_.ClearInterrupt(); }
+  [[nodiscard]] bool IsInterrupted() const override {
+    return control_part_.IsInterrupted();
+  }
+
+protected:
+  [[nodiscard]] bool
+  IsOperationInterrupted_(const amf &interrupt_flag = nullptr) const {
+    if (interrupt_flag && !interrupt_flag->IsRunning()) {
+      return true;
+    }
+    return control_part_.IsInterrupted();
+  }
+
+  size_t RegisterInterruptWakeup_(std::function<void()> wake_cb) {
+    return control_part_.RegisterWakeup(std::move(wake_cb));
+  }
+
+  size_t RegisterInterruptWakeup_(const amf &interrupt_flag,
+                                  std::function<void()> wake_cb) {
+    if (interrupt_flag) {
+      return interrupt_flag->RegisterWakeup(std::move(wake_cb));
+    }
+    return control_part_.RegisterWakeup(std::move(wake_cb));
+  }
+
+  void UnregisterInterruptWakeup_(size_t token) {
+    control_part_.UnregisterWakeup(token);
+  }
+
+  void UnregisterInterruptWakeup_(const amf &interrupt_flag, size_t token) {
+    if (token == 0) {
+      return;
+    }
+    if (interrupt_flag) {
+      interrupt_flag->UnregisterWakeup(token);
+      return;
+    }
+    control_part_.UnregisterWakeup(token);
+  }
+
+public:
+  ssize_t TransferRingBufferSize(ssize_t buffer_size = -1) {
+    if (buffer_size <= 0) {
+      return res_data.buffer_size;
+    }
+    res_data.buffer_size = buffer_size;
+    {
+      auto req = config_part_.RequestAtomic().lock();
+      req->buffer_size = buffer_size;
+    }
+    return res_data.buffer_size;
+  }
+
+  std::variant<ECM, std::string> TrashDir(const std::string &trash_dir = "",
+                                          int timeout_ms = -1,
+                                          int64_t start_time = -1) {
+    if (trash_dir.empty()) {
+      return res_data.trash_dir;
+    }
+    ECM rcm = mkdirs(trash_dir, nullptr, timeout_ms, start_time);
+    if (rcm.first == EC::Success) {
+      res_data.trash_dir = trash_dir;
+      {
+        auto req = config_part_.RequestAtomic().lock();
+        req->trash_dir = trash_dir;
+      }
+    }
+    return rcm;
+  }
+
+  ECM GetState() const override {
+    std::lock_guard<std::mutex> lock(state_mtx);
+    return state;
+  }
+
+  ECM move(const std::string &src, const std::string &dst,
+           bool need_mkdir = false, bool force_write = false,
+           amf interrupt_flag = nullptr, int timeout_ms = -1,
+           int64_t start_time = -1) {
+    return rename(src, AMPathStr::join(dst, AMPathStr::basename(src)),
+                  need_mkdir, force_write, interrupt_flag, timeout_ms,
+                  start_time);
+  }
+
+  int64_t getsize(const std::string &path, bool ignore_sepcial_file = true,
+                  amf interrupt_flag = nullptr, int timeout_ms = -1,
+                  int64_t start_time = -1) override {
+    auto [rcm, pack] = iwalk(path, true, ignore_sepcial_file, nullptr,
+                             interrupt_flag, timeout_ms, start_time);
+    if (rcm.first != EC::Success || IsOperationInterrupted_(interrupt_flag)) {
+      return -1;
+    }
+    int64_t size = 0;
+    for (auto &item : pack.first) {
+      size += static_cast<int64_t>(item.size);
+    }
+    return size;
+  }
+
+  std::vector<PathInfo> find(const std::string &path,
+                             SearchType type = SearchType::All,
+                             amf interrupt_flag = nullptr, int timeout_ms = -1,
+                             int64_t start_time = -1) override {
+    if (IsOperationInterrupted_(interrupt_flag)) {
+      return {};
+    }
+    return BasePathMatch::find(path, type, timeout_ms, start_time);
+  }
+
+  void trace(TraceLevel level, EC error_code, const std::string &target = "",
+             const std::string &action = "", const std::string &msg = "") {
+    trace(TraceInfo(level, error_code, nickname, target, action, msg, res_data,
+                    TraceSource::Client));
+  }
+
+  void trace(const TraceInfo &trace_info) {
+    if (io_part_ != nullptr) {
+      io_part_->trace(trace_info);
+      return;
+    }
+    TraceCallback cb;
+    {
+      auto trace_cb = trace_callback_.lock();
+      cb = trace_cb.load();
+    }
+    if (cb) {
+      (void)CallCallbackSafe(cb, trace_info);
+    }
+  }
+
+  [[nodiscard]] std::optional<std::string> auth(const AuthCBInfo &auth_info) {
+    if (io_part_ != nullptr) {
+      return io_part_->auth(auth_info);
+    }
+    AuthCallback cb;
+    {
+      auto auth_cb = auth_callback_.lock();
+      cb = auth_cb.load();
+    }
+    auto [res, _] =
+        CallCallbackSafeRet<std::optional<std::string>>(cb, auth_info);
+    return res;
+  }
+
+  void SetTraceState(bool is_pause) {
+    if (is_pause) {
+      UnregisterTraceCallback();
+    }
+  }
+
+  void SetTraceCallback(TraceCallback trace_cb = {}) {
+    if (!trace_cb) {
+      UnregisterTraceCallback();
+      return;
+    }
+    RegisterTraceCallback(std::move(trace_cb));
+  }
+
+  virtual ECM Check(amf interrupt_flag = nullptr, int timeout_ms = -1,
+                    int64_t start_time = -1) = 0;
+  virtual ECM Connect(bool force = false, amf interrupt_flag = nullptr,
+                      int timeout_ms = -1, int64_t start_time = -1) = 0;
+  OS_TYPE GetOSType([[maybe_unused]] bool update = false) override = 0;
+
+  virtual double GetRTT([[maybe_unused]] ssize_t times = 5,
+                        [[maybe_unused]] amf interrupt_flag = nullptr) {
+    return -1.0;
+  }
+
+  virtual CR ConductCmd([[maybe_unused]] const std::string &cmd,
+                        [[maybe_unused]] int max_time_ms = 3000,
+                        [[maybe_unused]] amf interrupt_flag = nullptr) {
+    return {{EC::OperationUnsupported, "ConductCmd not supported"}, {"", -1}};
+  }
+
+  std::string GetHomeDir() override = 0;
+
+  virtual std::pair<ECM, std::string>
+  realpath([[maybe_unused]] const std::string &path,
+           [[maybe_unused]] amf interrupt_flag = nullptr,
+           [[maybe_unused]] int timeout_ms = -1,
+           [[maybe_unused]] int64_t start_time = -1) {
+    return {{EC::OperationUnsupported, "realpath not supported"}, ""};
+  }
+
+  virtual std::pair<ECM, std::unordered_map<std::string, ECM>>
+  chmod([[maybe_unused]] const std::string &path,
+        [[maybe_unused]] std::variant<std::string, size_t> mode,
+        [[maybe_unused]] bool recursive = false,
+        [[maybe_unused]] amf interrupt_flag = nullptr,
+        [[maybe_unused]] int timeout_ms = -1,
+        [[maybe_unused]] int64_t start_time = -1) {
+    return {{EC::OperationUnsupported, "chmod not supported"}, {}};
+  }
+
+  virtual SR stat(const std::string &path, bool trace_link = false,
+                  amf interrupt_flag = nullptr, int timeout_ms = -1,
+                  int64_t start_time = -1) = 0;
+
+  virtual std::pair<ECM, std::vector<PathInfo>>
+  listdir(const std::string &path, amf interrupt_flag = nullptr,
+          int timeout_ms = -1, int64_t start_time = -1) = 0;
+
+  virtual ECM mkdir(const std::string &path, amf interrupt_flag = nullptr,
+                    int timeout_ms = -1, int64_t start_time = -1) = 0;
+
+  virtual ECM mkdirs(const std::string &path, amf interrupt_flag = nullptr,
+                     int timeout_ms = -1, int64_t start_time = -1) = 0;
+
+  virtual ECM rmdir(const std::string &path, amf interrupt_flag = nullptr,
+                    int timeout_ms = -1, int64_t start_time = -1) = 0;
+
+  virtual ECM rmfile(const std::string &path, amf interrupt_flag = nullptr,
+                     int timeout_ms = -1, int64_t start_time = -1) = 0;
+
+  virtual ECM rename(const std::string &src, const std::string &dst,
+                     bool mkdir = true, bool overwrite = false,
+                     amf interrupt_flag = nullptr, int timeout_ms = -1,
+                     int64_t start_time = -1) = 0;
+
+  virtual std::pair<ECM, RMR> remove(const std::string &path,
+                                     WalkErrorCallback error_callback = nullptr,
+                                     amf interrupt_flag = nullptr,
+                                     int timeout_ms = -1,
+                                     int64_t start_time = -1) = 0;
+
+  virtual ECM saferm([[maybe_unused]] const std::string &path,
+                     [[maybe_unused]] amf interrupt_flag = nullptr,
+                     [[maybe_unused]] int timeout_ms = -1,
+                     [[maybe_unused]] int64_t start_time = -1) {
+    return {EC::OperationUnsupported, "saferm not supported"};
+  }
+
+  virtual ECM copy([[maybe_unused]] const std::string &src,
+                   [[maybe_unused]] const std::string &dst,
+                   [[maybe_unused]] bool need_mkdir = false,
+                   [[maybe_unused]] int timeout_ms = -1,
+                   [[maybe_unused]] amf interrupt_flag = nullptr) {
+    return {EC::OperationUnsupported, "copy not supported"};
+  }
+
+  virtual std::pair<ECM, WRI> iwalk(const std::string &path,
+                                    bool show_all = false,
+                                    bool ignore_special_file = true,
+                                    WalkErrorCallback error_callback = nullptr,
+                                    amf interrupt_flag = nullptr,
+                                    int timeout_ms = -1,
+                                    int64_t start_time = -1) = 0;
+
+  virtual std::pair<ECM, WRDR>
+  walk(const std::string &path, int max_depth = -1, bool show_all = false,
+       bool ignore_special_file = false,
+       WalkErrorCallback error_callback = nullptr, amf interrupt_flag = nullptr,
+       int timeout_ms = -1, int64_t start_time = -1) = 0;
+};
+*/
+
 /**
  * @brief BaseClient-local interrupt token independent from TaskControlToken.
  *
@@ -621,33 +1039,26 @@ private:
 class BasePathMatch {
 protected:
   /**
-   * @brief Return true when current operation token is interrupted.
+   * @brief Return true when current client operation is interrupted.
    */
-  [[nodiscard]] static bool
-  IsTokenInterrupted_(AMDomain::client::amf interrupt_flag = nullptr) {
-    return interrupt_flag && interrupt_flag->IsInterrupted();
-  }
+  [[nodiscard]] virtual bool IsInterrupted() const = 0;
   [[nodiscard]] virtual SR stat(const std::string &path,
                                 bool trace_link = false, int timeout_ms = -1,
-                                int64_t start_time = -1,
-                                AMDomain::client::amf interrupt_flag = nullptr) = 0;
+                                int64_t start_time = -1) = 0;
   [[nodiscard]] virtual std::pair<ECM, WRV>
   listdir(const std::string &path, int timeout_ms = -1,
-          int64_t start_time = -1,
-          AMDomain::client::amf interrupt_flag = nullptr) const = 0;
+          int64_t start_time = -1) const = 0;
   [[nodiscard]] virtual std::pair<ECM, WRI>
   iwalk(const std::string &path, bool show_all = false,
         bool ignore_special_file = true,
         AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
-        int64_t start_time = -1,
-        AMDomain::client::amf interrupt_flag = nullptr) const = 0;
+        int64_t start_time = -1) const = 0;
 
 private:
   void _find(std::vector<PathInfo> &results, const PathInfo &path,
              const std::vector<std::string> &match_parts,
              const SearchType &type, const std::string &sep,
-             int timeout_ms = -1, int64_t start_time = -1,
-             AMDomain::client::amf interrupt_flag = nullptr) {
+             int timeout_ms = -1, int64_t start_time = -1) {
     if (match_parts.empty()) {
       if (type == SearchType::All ||
           (type == SearchType::Directory && path.type == PathType::DIR) ||
@@ -667,13 +1078,12 @@ private:
     if (std::regex_search(cur_pattern, std::regex("^\\*\\*+$"))) {
       std::vector<std::string> relative_parts;
       auto [error, sub_pack] =
-          iwalk(path.path, true, true, nullptr, timeout_ms, start_time,
-                interrupt_flag);
+          iwalk(path.path, true, true, nullptr, timeout_ms, start_time);
       if (error.first != EC::Success) {
         return;
       }
       for (auto &sub : sub_pack.first) {
-        if (IsTokenInterrupted_(interrupt_flag)) {
+        if (IsInterrupted()) {
           return;
         }
         if (timeout_ms > 0 &&
@@ -698,13 +1108,12 @@ private:
               cur_pattern.find(">") == std::string::npos)) {
       auto new_parts2 = match_parts;
       new_parts2.erase(new_parts2.begin());
-      auto [error2, sub_list2] =
-          listdir(path.path, timeout_ms, start_time, interrupt_flag);
+      auto [error2, sub_list2] = listdir(path.path, timeout_ms, start_time);
       if (error2.first != EC::Success) {
         return;
       }
       for (auto &sub : sub_list2) {
-        if (IsTokenInterrupted_(interrupt_flag)) {
+        if (IsInterrupted()) {
           return;
         }
         if (timeout_ms > 0 &&
@@ -712,8 +1121,7 @@ private:
           return;
         }
         if (sub.name == cur_pattern) {
-          _find(results, sub, new_parts2, type, sep, timeout_ms, start_time,
-                interrupt_flag);
+          _find(results, sub, new_parts2, type, sep, timeout_ms, start_time);
         }
       }
     }
@@ -721,13 +1129,12 @@ private:
     else {
       auto new_parts3 = match_parts;
       new_parts3.erase(new_parts3.begin());
-      auto [error3, sub_list3] =
-          listdir(path.path, timeout_ms, start_time, interrupt_flag);
+      auto [error3, sub_list3] = listdir(path.path, timeout_ms, start_time);
       if (error3.first != EC::Success) {
         return;
       }
       for (auto &sub : sub_list3) {
-        if (IsTokenInterrupted_(interrupt_flag)) {
+        if (IsInterrupted()) {
           return;
         }
         if (timeout_ms > 0 &&
@@ -735,8 +1142,7 @@ private:
           return;
         }
         if (name_match(sub.name, cur_pattern)) {
-          _find(results, sub, new_parts3, type, sep, timeout_ms, start_time,
-                interrupt_flag);
+          _find(results, sub, new_parts3, type, sep);
         }
       }
     }
@@ -816,15 +1222,13 @@ private:
 public:
   std::vector<PathInfo> find(const std::string &path,
                              SearchType type = SearchType::All,
-                             int timeout_ms = -1, int64_t start_time = -1,
-                             AMDomain::client::amf interrupt_flag = nullptr) {
+                             int timeout_ms = -1, int64_t start_time = -1) {
     std::vector<PathInfo> results = {};
     auto parts = AMPathStr::split(path);
     if (parts.empty()) {
       return results;
     } else if (parts.size() == 1) {
-      auto [error, info] =
-          stat(parts[0], false, timeout_ms, start_time, interrupt_flag);
+      auto [error, info] = stat(parts[0], false, timeout_ms, start_time);
       if (error.first != EC::Success) {
         return {};
       }
@@ -855,13 +1259,11 @@ public:
     }
 
     // Check whether cur_path exists
-    auto [error, info] =
-        stat(cur_path, false, timeout_ms, start_time, interrupt_flag);
+    auto [error, info] = stat(cur_path, false, timeout_ms, start_time);
     if (error.first != EC::Success) {
       return {};
     }
-    _find(results, info, match_parts, type, sep, timeout_ms, start_time,
-          interrupt_flag);
+    _find(results, info, match_parts, type, sep, timeout_ms, start_time);
     return results;
   }
 };
@@ -1055,7 +1457,49 @@ public:
 
 class ClientIOBase : public AMDomain::client::IClientIOPort {
 protected:
-  using amf = AMDomain::client::amf;
+  class TokenControlPortBridge final
+      : public AMDomain::client::IClientTaskControlPort {
+  public:
+    explicit TokenControlPortBridge(amf token) : token_(std::move(token)) {}
+
+    void RequestInterrupt() override {
+      if (!token_) {
+        return;
+      }
+      (void)token_->Kill(TaskControlSignal::SigInt);
+    }
+
+    void ClearInterrupt() override {
+      if (!token_) {
+        return;
+      }
+      (void)token_->Reset();
+    }
+
+    [[nodiscard]] bool IsInterrupted() const override {
+      if (!token_) {
+        return false;
+      }
+      return !token_->IsRunning();
+    }
+
+    size_t RegisterWakeup(std::function<void()> wake_cb) override {
+      if (!token_ || !wake_cb) {
+        return 0;
+      }
+      return token_->RegisterWakeup(std::move(wake_cb));
+    }
+
+    void UnregisterWakeup(size_t token) override {
+      if (!token_ || token == 0) {
+        return;
+      }
+      token_->UnregisterWakeup(token);
+    }
+
+  private:
+    amf token_ = nullptr;
+  };
 
   mutable AMAtomic<TraceCallback> trace_callback_;
   mutable AMAtomic<AuthCallback> auth_callback_;
@@ -1111,6 +1555,34 @@ public:
   }
 
 protected:
+  [[nodiscard]] bool
+  IsOperationInterruptedByToken_(const amf &interrupt_flag = nullptr) const {
+    if (interrupt_flag) {
+      TokenControlPortBridge token_port(interrupt_flag);
+      if (token_port.IsInterrupted()) {
+        return true;
+      }
+    }
+    return control_part_ ? control_part_->IsInterrupted() : false;
+  }
+
+  size_t RegisterTokenWakeupBridge_(const amf &interrupt_flag,
+                                    std::function<void()> wake_cb) const {
+    if (!interrupt_flag || !wake_cb) {
+      return 0;
+    }
+    TokenControlPortBridge token_port(interrupt_flag);
+    return token_port.RegisterWakeup(std::move(wake_cb));
+  }
+
+  void UnregisterTokenWakeupBridge_(const amf &interrupt_flag, size_t token) const {
+    if (!interrupt_flag || token == 0) {
+      return;
+    }
+    TokenControlPortBridge token_port(interrupt_flag);
+    token_port.UnregisterWakeup(token);
+  }
+
   void trace(const TraceInfo &trace_info) const {
     TraceCallback cb;
     {
@@ -1245,4 +1717,3 @@ public:
     return *io_port_;
   }
 };
-

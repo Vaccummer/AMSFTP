@@ -143,7 +143,7 @@ private:
         continue;
       }
 
-      if (this->LegacyInterruptCheck_(terminal_interrupt_flag)) {
+      if (this->IsOperationInterrupted_(terminal_interrupt_flag)) {
         reader_running.store(false, std::memory_order_relaxed);
         break;
       }
@@ -223,7 +223,7 @@ lock(mtx); if (!session) { return {EC::NoSession, "Session not initialized"};
 
     amf flag = interrupt_flag ? interrupt_flag : terminal_interrupt_flag;
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    if (this->LegacyInterruptCheck_(flag)) {
+    if (this->IsOperationInterrupted_(flag)) {
       terminal_channel.reset();
       return {EC::Terminate, "Terminal init interrupted"};
     }
@@ -367,7 +367,7 @@ public:
   ECM Check(int timeout_ms = -1,
             int64_t start_time = -1) override {
     amf flag = interrupt_flag;
-    if (this->LegacyInterruptCheck_(flag)) {
+    if (this->IsOperationInterrupted_(flag)) {
       ECM rcm = {EC::Terminate, "Check interrupted"};
       SetState(rcm);
       return rcm;
@@ -476,7 +476,7 @@ public:
 
     amf flag = interrupt_flag ? interrupt_flag : this->terminal_interrupt_flag;
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    if (this->LegacyInterruptCheck_(flag)) {
+    if (this->IsOperationInterrupted_(flag)) {
       return {EC::Terminate, "Terminal interrupted"};
     }
 
@@ -484,7 +484,7 @@ public:
     size_t offset = 0;
     WaitResult wr = WaitResult::Ready;
     while (offset < msg.size()) {
-      if (this->LegacyInterruptCheck_(flag)) {
+      if (this->IsOperationInterrupted_(flag)) {
         wr = WaitResult::Interrupted;
         goto cleanup;
       }
@@ -574,7 +574,7 @@ public:
             int64_t start_time = -1) override {
     (void)timeout_ms;
     (void)start_time;
-    if (false) {
+    if (this->IsOperationInterrupted_()) {
       return {EC::Terminate, "Check interrupted"};
     }
     if (closed.load(std::memory_order_relaxed)) {
@@ -633,7 +633,7 @@ public:
     }
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
 
-    if (false) {
+    if (this->IsOperationInterrupted_()) {
       return {EC::Terminate, "Terminal interrupted"};
     }
 
@@ -644,7 +644,7 @@ public:
 
     std::array<char, 4096> buffer;
     while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
-      if (false) {
+      if (this->IsOperationInterrupted_()) {
         ClosePipe(pipe);
         return {EC::Terminate, "Terminal interrupted"};
       }
@@ -1587,6 +1587,47 @@ protected:
   InterruptWakeBridge interrupt_wake_;
   SOCKET sock = INVALID_SOCKET;
 
+  [[nodiscard]] bool
+  IsOperationInterrupted_(const amf &interrupt_flag = nullptr) const {
+    return this->IsOperationInterruptedByToken_(interrupt_flag);
+  }
+
+  size_t RegisterInterruptWakeup_(std::function<void()> wake_cb) {
+    if (!wake_cb || !control_part_) {
+      return 0;
+    }
+    return control_part_->RegisterWakeup(std::move(wake_cb));
+  }
+
+  size_t RegisterInterruptWakeup_(const amf &interrupt_flag,
+                                  std::function<void()> wake_cb) {
+    if (!wake_cb) {
+      return 0;
+    }
+    if (interrupt_flag) {
+      return this->RegisterTokenWakeupBridge_(interrupt_flag, std::move(wake_cb));
+    }
+    return RegisterInterruptWakeup_(std::move(wake_cb));
+  }
+
+  void UnregisterInterruptWakeup_(size_t token) {
+    if (token == 0 || !control_part_) {
+      return;
+    }
+    control_part_->UnregisterWakeup(token);
+  }
+
+  void UnregisterInterruptWakeup_(const amf &interrupt_flag, size_t token) {
+    if (token == 0) {
+      return;
+    }
+    if (interrupt_flag) {
+      this->UnregisterTokenWakeupBridge_(interrupt_flag, token);
+      return;
+    }
+    UnregisterInterruptWakeup_(token);
+  }
+
   void trace(TraceLevel level, EC error_code, const std::string &target = "",
              const std::string &action = "",
              const std::string &msg = "") const {
@@ -1851,23 +1892,22 @@ public:
     return req->buffer_size;
   }
 
-  void RequestInterrupt(amf interrupt_flag) {
-    if (!interrupt_flag) {
-      return;
+  void RequestInterrupt() {
+    if (control_part_) {
+      control_part_->RequestInterrupt();
     }
-    interrupt_flag->RequestInterrupt();
   }
 
-  void ClearInterrupt(amf interrupt_flag) {
-    if (!interrupt_flag) {
-      return;
+  void ClearInterrupt() {
+    if (control_part_) {
+      control_part_->ClearInterrupt();
     }
-    interrupt_flag->ClearInterrupt();
   }
 
   template <typename Func>
   auto nb_call(int64_t timeout_ms, int64_t start_time, Func &&func,
-               amf interrupt_flag = nullptr) -> NBResult<decltype(func())> {
+               amf interrupt_flag = nullptr)
+      -> NBResult<decltype(func())> {
     using RetType = decltype(func());
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
 
@@ -1906,7 +1946,7 @@ public:
     }
 
     auto is_interrupted = [&]() -> bool {
-      return (interrupt_flag && interrupt_flag->IsInterrupted());
+      return this->IsOperationInterrupted_(interrupt_flag);
     };
 
     if (is_interrupted()) {
@@ -1974,8 +2014,8 @@ public:
 
     size_t wake_token = 0;
     auto cleanup_wakeup = [&]() {
-      if (interrupt_flag && wake_token != 0) {
-        interrupt_flag->UnregisterWakeup(wake_token);
+      if (wake_token != 0) {
+        this->UnregisterInterruptWakeup_(interrupt_flag, wake_token);
         wake_token = 0;
       }
     };
@@ -1985,10 +2025,8 @@ public:
       DrainInterruptWakeSocket_();
       wake_read_sock = GetInterruptWakeReadSocket_();
       if (wake_read_sock != INVALID_SOCKET) {
-        if (interrupt_flag) {
-          wake_token = interrupt_flag->RegisterWakeup(
-              [this]() { SignalInterruptWakeSocket_(); });
-        }
+        wake_token = this->RegisterInterruptWakeup_(
+            interrupt_flag, [this]() { SignalInterruptWakeSocket_(); });
         FD_SET(wake_read_sock, &readfds);
       }
     }
@@ -2089,7 +2127,8 @@ public:
   }
 
   ECM BaseConnect(bool force = false, int timeout_ms = -1,
-                  int64_t start_time = -1, amf interrupt_flag = nullptr) {
+                  int64_t start_time = -1,
+                  amf interrupt_flag = nullptr) {
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     std::lock_guard<std::recursive_mutex> lock(mtx);
     ConRequest request = request_atomic_.lock().load();
@@ -2126,9 +2165,10 @@ public:
 
     SocketConnector connector;
     if (!connector.Connect(request.hostname, static_cast<int>(request.port),
-                           timeout_ms, [this, interrupt_flag]() {
-                             return interrupt_flag &&
-                                    interrupt_flag->IsInterrupted();
+                           timeout_ms,
+                           [this, interrupt_flag]() {
+                             return this->IsOperationInterrupted_(
+                                 interrupt_flag);
                            })) {
       trace(TraceLevel::Critical, connector.error_code,
             AMStr::fmt("{}", std::to_string(connector.sock)),
@@ -2137,7 +2177,7 @@ public:
     }
     sock = connector.sock;
 
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {EC::Terminate, "Connection interrupted"};
     }
     if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
@@ -2198,13 +2238,10 @@ public:
       return rcm;
     }
 
-    auto auth_list_res = nb_call(
-        timeout_ms, start_time,
-        [&]() {
-          return libssh2_userauth_list(session, request.username.c_str(),
-                                       request.username.length());
-        },
-        interrupt_flag);
+    auto auth_list_res = nb_call(timeout_ms, start_time, [&]() {
+      return libssh2_userauth_list(session, request.username.c_str(),
+                                   request.username.length());
+    }, interrupt_flag);
     rcm = ErrorRecord(auth_list_res, TraceLevel::Critical, request.username,
                       "libssh2_userauth_list", "Fail to {action} : {error}");
     if (rcm.first != EC::Success) {
@@ -2227,17 +2264,14 @@ public:
     password_auth = (strstr(auth_list, "password") != nullptr);
 
     if (!request.keyfile.empty()) {
-      if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+      if (IsOperationInterrupted_(interrupt_flag)) {
         return {EC::Terminate, "Authentication interrupted"};
       }
-      auto auth_res = nb_call(
-          -1, AMTime::miliseconds(),
-          [&]() {
-            return libssh2_userauth_publickey_fromfile(
-                session, request.username.c_str(), nullptr,
-                request.keyfile.c_str(), nullptr);
-          },
-          interrupt_flag);
+      auto auth_res = nb_call(-1, AMTime::miliseconds(), [&]() {
+        return libssh2_userauth_publickey_fromfile(
+            session, request.username.c_str(), nullptr, request.keyfile.c_str(),
+            nullptr);
+      }, interrupt_flag);
       if (!auth_res.ok()) {
         rcm = ErrorRecord(auth_res, TraceLevel::Error, request.username,
                           "libssh2_userauth_publickey_fromfile");
@@ -2261,17 +2295,14 @@ public:
     }
 
     if (!stored_password_enc.empty() && password_auth) {
-      if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+      if (IsOperationInterrupted_(interrupt_flag)) {
         return {EC::Terminate, "Authentication interrupted"};
       }
       std::string plain_password = AMAuth::DecryptPassword(stored_password_enc);
-      auto auth_res = nb_call(
-          -1, AMTime::miliseconds(),
-          [&]() {
-            return libssh2_userauth_password(session, request.username.c_str(),
-                                             plain_password.c_str());
-          },
-          interrupt_flag);
+      auto auth_res = nb_call(-1, AMTime::miliseconds(), [&]() {
+        return libssh2_userauth_password(session, request.username.c_str(),
+                                         plain_password.c_str());
+      }, interrupt_flag);
       AMAuth::SecureZero(plain_password);
       if (!auth_res.ok()) {
         rcm = ErrorRecord(auth_res, TraceLevel::Error, request.username,
@@ -2295,20 +2326,17 @@ public:
 
     if (!private_keys.empty()) {
       for (const auto &private_key : private_keys) {
-        if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+        if (IsOperationInterrupted_(interrupt_flag)) {
           return {EC::Terminate, "Authentication interrupted"};
         }
         if (private_key == request.keyfile) {
           continue;
         }
-        auto auth_res = nb_call(
-            -1, AMTime::miliseconds(),
-            [&]() {
-              return libssh2_userauth_publickey_fromfile(
-                  session, request.username.c_str(), nullptr,
-                  private_key.c_str(), nullptr);
-            },
-            interrupt_flag);
+        auto auth_res = nb_call(-1, AMTime::miliseconds(), [&]() {
+          return libssh2_userauth_publickey_fromfile(
+              session, request.username.c_str(), nullptr, private_key.c_str(),
+              nullptr);
+        }, interrupt_flag);
         if (!auth_res.ok()) {
           rcm = ErrorRecord(auth_res, TraceLevel::Error, request.username,
                             "libssh2_userauth_publickey_fromfile");
@@ -2335,7 +2363,7 @@ public:
             "Using password authentication callback to get another password");
       int trial_times = 0;
       while (trial_times < 2) {
-        if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+        if (IsOperationInterrupted_(interrupt_flag)) {
           return {EC::Terminate, "Authentication interrupted"};
         }
         auto [password_opt, cb_ecm] =
@@ -2351,13 +2379,10 @@ public:
           break;
         }
         const std::string password_enc = AMAuth::EncryptPassword(password_tmp);
-        auto auth_res = nb_call(
-            -1, AMTime::miliseconds(),
-            [&]() {
-              return libssh2_userauth_password(
-                  session, request.username.c_str(), password_tmp.c_str());
-            },
-            interrupt_flag);
+        auto auth_res = nb_call(-1, AMTime::miliseconds(), [&]() {
+          return libssh2_userauth_password(session, request.username.c_str(),
+                                           password_tmp.c_str());
+        }, interrupt_flag);
         AMAuth::SecureZero(password_tmp);
         if (!auth_res.ok()) {
           rcm = ErrorRecord(auth_res, TraceLevel::Error, request.username,
@@ -2390,9 +2415,9 @@ public:
       return rcm;
     }
 
-    auto sftp_init_res = nb_call(
-        -1, AMTime::miliseconds(), [&]() { return libssh2_sftp_init(session); },
-        interrupt_flag);
+    auto sftp_init_res =
+        nb_call(-1, AMTime::miliseconds(),
+                [&]() { return libssh2_sftp_init(session); }, interrupt_flag);
     rcm =
         ErrorRecord(sftp_init_res, TraceLevel::Critical, "",
                     "libssh2_sftp_init", "SFTP initialization failed: {error}");
@@ -2544,13 +2569,9 @@ private:
       return {ECM{EC::NoConnection, "SFTP not initialized"}, ""};
     }
     char path_t[1024] = {0};
-    auto nb_res = nb_call(
-        timeout_ms, start_time,
-        [&] {
-          return libssh2_sftp_realpath(sftp, path.c_str(), path_t,
-                                       sizeof(path_t));
-        },
-        interrupt_flag);
+    auto nb_res = nb_call(timeout_ms, start_time, [&] {
+      return libssh2_sftp_realpath(sftp, path.c_str(), path_t, sizeof(path_t));
+    }, interrupt_flag);
     return {ErrorRecord(nb_res, TraceLevel::Error, path,
                         "libssh2_sftp_realpath",
                         "Realpath \"{target}\" failed: {error}"),
@@ -2565,36 +2586,31 @@ private:
     }
 
     if (!overwrite) {
-      auto nb_res = nb_call(
-          timeout_ms, start_time,
-          [&] {
-            return libssh2_sftp_rename_ex(sftp, src.c_str(), src.size(),
-                                          dst.c_str(), dst.size(),
-                                          LIBSSH2_SFTP_RENAME_NATIVE);
-          },
-          interrupt_flag);
+      auto nb_res = nb_call(timeout_ms, start_time, [&] {
+        return libssh2_sftp_rename_ex(sftp, src.c_str(), src.size(),
+                                      dst.c_str(), dst.size(),
+                                      LIBSSH2_SFTP_RENAME_NATIVE);
+      }, interrupt_flag);
       return ErrorRecord(
           nb_res, TraceLevel::Error, AMStr::fmt("{} -> {}", src, dst),
           "libssh2_sftp_rename_ex", "Rename {target} failed: {error}");
     } else {
-      auto nb_res = nb_call(
-          timeout_ms, start_time,
-          [&] {
-            return libssh2_sftp_rename_ex(
-                sftp, src.c_str(), src.size(), dst.c_str(), dst.size(),
-                LIBSSH2_SFTP_RENAME_OVERWRITE | LIBSSH2_SFTP_RENAME_NATIVE);
-          },
-          interrupt_flag);
+      auto nb_res = nb_call(timeout_ms, start_time, [&] {
+        return libssh2_sftp_rename_ex(
+            sftp, src.c_str(), src.size(), dst.c_str(), dst.size(),
+            LIBSSH2_SFTP_RENAME_OVERWRITE | LIBSSH2_SFTP_RENAME_NATIVE);
+      }, interrupt_flag);
       return ErrorRecord(
           nb_res, TraceLevel::Error, AMStr::fmt("{} -> {}", src, dst),
           "libssh2_sftp_rename_ex", "Rename {target} failed: {error}");
     }
   }
 
-  std::pair<ECM, LIBSSH2_SFTP_ATTRIBUTES>
-  lib_getstat(const std::string &path, bool trace_link = false,
-              int timeout_ms = -1, int64_t start_time = -1,
-              amf interrupt_flag = nullptr) {
+  std::pair<ECM, LIBSSH2_SFTP_ATTRIBUTES> lib_getstat(const std::string &path,
+                                                      bool trace_link = false,
+                                                      int timeout_ms = -1,
+                                                      int64_t start_time = -1,
+                                                      amf interrupt_flag = nullptr) {
     if (!sftp) {
       return {ECM{EC::NoConnection, "SFTP not initialized"},
               LIBSSH2_SFTP_ATTRIBUTES()};
@@ -2602,15 +2618,13 @@ private:
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     NBResult<int> nb_res;
     if (trace_link) {
-      nb_res = nb_call(
-          timeout_ms, start_time,
-          [&] { return libssh2_sftp_stat(sftp, path.c_str(), &attrs); },
-          interrupt_flag);
+      nb_res = nb_call(timeout_ms, start_time, [&] {
+        return libssh2_sftp_stat(sftp, path.c_str(), &attrs);
+      }, interrupt_flag);
     } else {
-      nb_res = nb_call(
-          timeout_ms, start_time,
-          [&] { return libssh2_sftp_lstat(sftp, path.c_str(), &attrs); },
-          interrupt_flag);
+      nb_res = nb_call(timeout_ms, start_time, [&] {
+        return libssh2_sftp_lstat(sftp, path.c_str(), &attrs);
+      }, interrupt_flag);
     }
     ECM rcm = ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_stat",
                           "Get stat failed: {error}");
@@ -2624,53 +2638,51 @@ private:
       return {EC::NoConnection, "SFTP not initialized"};
     }
 
-    auto nb_res = nb_call(
-        timeout_ms, start_time,
-        [&] { return libssh2_sftp_setstat(sftp, path.c_str(), &attrs); },
-        interrupt_flag);
+    auto nb_res = nb_call(timeout_ms, start_time, [&] {
+      return libssh2_sftp_setstat(sftp, path.c_str(), &attrs);
+    }, interrupt_flag);
     return ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_setstat",
                        "Set stat failed: {error}");
   }
 
   ECM lib_unlink(const std::string &path, int timeout_ms = -1,
-                 int64_t start_time = -1, amf interrupt_flag = nullptr) {
+                 int64_t start_time = -1,
+                 amf interrupt_flag = nullptr) {
     if (!sftp) {
       return {EC::NoConnection, "SFTP not initialized"};
     }
 
-    auto nb_res = nb_call(
-        timeout_ms, start_time,
-        [&] { return libssh2_sftp_unlink(sftp, path.c_str()); },
-        interrupt_flag);
+    auto nb_res = nb_call(timeout_ms, start_time, [&] {
+      return libssh2_sftp_unlink(sftp, path.c_str());
+    }, interrupt_flag);
     return ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_unlink",
                        "Unlink \"{target}\" failed: {error}");
   }
 
   ECM lib_rmdir(const std::string &path, int timeout_ms = -1,
-                int64_t start_time = -1, amf interrupt_flag = nullptr) {
+                int64_t start_time = -1,
+                amf interrupt_flag = nullptr) {
     if (!sftp) {
       return {EC::NoConnection, "SFTP not initialized"};
     }
 
-    auto nb_res = nb_call(
-        timeout_ms, start_time,
-        [&] { return libssh2_sftp_rmdir(sftp, path.c_str()); }, interrupt_flag);
+    auto nb_res = nb_call(timeout_ms, start_time, [&] {
+      return libssh2_sftp_rmdir(sftp, path.c_str());
+    }, interrupt_flag);
     return ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_rmdir",
                        "Remove directory failed: {error}");
   }
 
   ECM lib_mkdir(const std::string &path, int timeout_ms = -1,
-                int64_t start_time = -1, amf interrupt_flag = nullptr) {
+                int64_t start_time = -1,
+                amf interrupt_flag = nullptr) {
     if (!sftp) {
       return {EC::NoConnection, "SFTP not initialized"};
     }
 
-    NBResult<int> nb_res = nb_call(
-        timeout_ms, start_time,
-        [&] {
-          return libssh2_sftp_mkdir_ex(sftp, path.c_str(), path.size(), 0740);
-        },
-        interrupt_flag);
+    NBResult<int> nb_res = nb_call(timeout_ms, start_time, [&] {
+      return libssh2_sftp_mkdir_ex(sftp, path.c_str(), path.size(), 0740);
+    }, interrupt_flag);
     return ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_mkdir_ex",
                        "Create directory \"{target}\" failed: {error}");
   }
@@ -2688,13 +2700,10 @@ private:
     ECM rcm;
     const size_t buffer_size = 4096;
     std::vector<char> filename_buffer = std::vector<char>(buffer_size, 0);
-    auto oepn_res = nb_call(
-        timeout_ms, start_time,
-        [&] {
-          return libssh2_sftp_open_ex(sftp, path.c_str(), path.size(), 0,
-                                      LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
-        },
-        interrupt_flag);
+    auto oepn_res = nb_call(timeout_ms, start_time, [&] {
+      return libssh2_sftp_open_ex(sftp, path.c_str(), path.size(), 0,
+                                  LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
+    }, interrupt_flag);
     rcm = ErrorRecord(oepn_res, TraceLevel::Error, path, "libssh2_sftp_open_ex",
                       "Open directory {target} failed: {error}");
     if (rcm.first != EC::Success) {
@@ -2709,18 +2718,15 @@ private:
                   AMStr::fmt("Path: {} readdir timeout", path)};
         break;
       }
-      if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+      if (this->IsOperationInterrupted_(interrupt_flag)) {
         rcm = ECM{EC::Terminate,
                   AMStr::fmt("Path: {} readdir interrupted by user", path)};
         break;
       }
-      read_res = nb_call(
-          timeout_ms, start_time,
-          [&] {
-            return libssh2_sftp_readdir_ex(sftp_handle, filename_buffer.data(),
-                                           buffer_size, nullptr, 0, &attrs);
-          },
-          interrupt_flag);
+      read_res = nb_call(timeout_ms, start_time, [&] {
+        return libssh2_sftp_readdir_ex(sftp_handle, filename_buffer.data(),
+                                       buffer_size, nullptr, 0, &attrs);
+      }, interrupt_flag);
       if (read_res.value == 0) {
         break;
       }
@@ -2756,7 +2762,7 @@ protected:
               int timeout_ms = -1, int64_t start_time = -1,
               amf interrupt_flag = nullptr) {
     // Find all deepest paths under directory for recursive transfer
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (this->IsOperationInterrupted_(interrupt_flag)) {
       return;
     }
 
@@ -2796,7 +2802,7 @@ protected:
       return;
     }
     for (auto &attrs : attrs_list) {
-      if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+      if (this->IsOperationInterrupted_(interrupt_flag)) {
         return;
       }
       if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
@@ -2821,7 +2827,7 @@ protected:
     if (max_depth != -1 && cur_depth > max_depth) {
       return;
     }
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (this->IsOperationInterrupted_(interrupt_flag)) {
       return;
     }
     std::string pathf = AMPathStr::join(parts);
@@ -2849,7 +2855,7 @@ protected:
     };
     std::vector<PathInfo> files_info = {};
     for (auto &[path, attrs] : list_info) {
-      if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+      if (this->IsOperationInterrupted_(interrupt_flag)) {
         return;
       }
       if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
@@ -2882,7 +2888,7 @@ protected:
            RMR &errors, AMFS::WalkErrorCallback error_callback = nullptr,
            int timeout_ms = -1, int64_t start_time = -1,
            amf interrupt_flag = nullptr) {
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (this->IsOperationInterrupted_(interrupt_flag)) {
       return;
     }
     if (!isdir(attrs)) {
@@ -2906,12 +2912,12 @@ protected:
       return;
     }
 
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (this->IsOperationInterrupted_(interrupt_flag)) {
       return;
     }
 
     for (auto &file : file_list) {
-      if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+      if (this->IsOperationInterrupted_(interrupt_flag)) {
         return;
       }
       _rm(file.first, file.second, errors, error_callback, timeout_ms,
@@ -2931,7 +2937,7 @@ protected:
               std::unordered_map<std::string, ECM> &errors,
               LIBSSH2_SFTP_ATTRIBUTES attrs, int timeout_ms = -1,
               int64_t start_time = -1, amf interrupt_flag = nullptr) {
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (this->IsOperationInterrupted_(interrupt_flag)) {
       return;
     }
     ECM rcm;
@@ -2962,14 +2968,13 @@ protected:
     }
 
     if (recursive && file_type == LIBSSH2_SFTP_S_IFDIR) {
-      auto [rcm2, list] =
-          lib_listdir(path, timeout_ms, start_time, interrupt_flag);
+      auto [rcm2, list] = lib_listdir(path, timeout_ms, start_time, interrupt_flag);
       if (rcm2.first != EC::Success) {
         errors[path] = rcm2;
         return;
       }
       for (auto &item : list) {
-        if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+        if (this->IsOperationInterrupted_(interrupt_flag)) {
           return;
         }
         if (timeout_ms > 0 &&
@@ -2986,7 +2991,7 @@ protected:
     if (path.empty()) {
       return {EC::InvalidArg, AMStr::fmt("Invalid path: {}", path)};
     }
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (this->IsOperationInterrupted_(interrupt_flag)) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (!sftp) {
@@ -3036,6 +3041,10 @@ public:
     libssh2_session_set_blocking(session, 0);
 
     for (ssize_t i = 0; i < times; i++) {
+      if (this->IsOperationInterrupted_()) {
+        break;
+      }
+
       double start = (static_cast<double>(AMTime::miliseconds()) / 1000.0);
       auto stat_res = nb_call(-1, AMTime::miliseconds(), [&] {
         return libssh2_sftp_stat(sftp, "/", &attrs);
@@ -3065,7 +3074,7 @@ public:
   CR ConductCmd(const std::string &cmd, int max_time_ms = 3000,
                 amf interrupt_flag = nullptr) override {
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (this->IsOperationInterrupted_(interrupt_flag)) {
       return {ECM{EC::Terminate, "Operation aborted before command sent"},
               {"", -1}};
     }
@@ -3088,12 +3097,12 @@ public:
     libssh2_session_set_blocking(session, 0);
 
     SafeChannel sf;
-    ECM init_rcm = sf.Init(
-        session,
-        [this, interrupt_flag]() {
-          return (interrupt_flag && interrupt_flag->IsInterrupted());
-        },
-        max_time_ms, time_start);
+    ECM init_rcm =
+        sf.Init(session,
+                [this, interrupt_flag]() {
+                  return this->IsOperationInterrupted_(interrupt_flag);
+                },
+                max_time_ms, time_start);
     if (init_rcm.first != EC::Success) {
       return {std::move(init_rcm), {"", -1}};
     }
@@ -3103,10 +3112,9 @@ public:
     };
 
     // 1. Execute command
-    exec_res = nb_call(
-        max_time_ms, time_start,
-        [&] { return libssh2_channel_exec(sf.channel, cmd.c_str()); },
-        interrupt_flag);
+    exec_res = nb_call(max_time_ms, time_start, [&] {
+      return libssh2_channel_exec(sf.channel, cmd.c_str());
+    }, interrupt_flag);
     if (!exec_res.ok()) {
       wr = exec_res.status;
       goto cleanup;
@@ -3119,13 +3127,10 @@ public:
     stage = CmdStage::AwaitOutput;
     // 2. Read output
     while (true) {
-      read_res = nb_call(
-          max_time_ms, time_start,
-          [&] {
-            return libssh2_channel_read(sf.channel, buffer.data(),
-                                        buffer.size() - 1);
-          },
-          interrupt_flag);
+      read_res = nb_call(max_time_ms, time_start, [&] {
+        return libssh2_channel_read(sf.channel, buffer.data(),
+                                    buffer.size() - 1);
+      }, interrupt_flag);
       if (!read_res.ok()) {
         wr = read_res.status;
         goto cleanup;
@@ -3153,9 +3158,8 @@ public:
     }
 
     // 4. Close channel non-blocking
-    close_res = nb_call(
-        max_time_ms, time_start, [&] { return sf.close_nonblock(); },
-        interrupt_flag);
+    close_res = nb_call(max_time_ms, time_start,
+                        [&] { return sf.close_nonblock(); }, interrupt_flag);
 
     if (!close_res.ok()) {
       wr = close_res.status;
@@ -3302,7 +3306,8 @@ public:
     }
   }
 
-  ECM Connect(bool force = false, int timeout_ms = -1, int64_t start_time = -1,
+  ECM Connect(bool force = false, int timeout_ms = -1,
+              int64_t start_time = -1,
               amf interrupt_flag = nullptr) override {
     const AMDomain::client::ClientState prev_state = GetState();
     ECM ecm = BaseConnect(force, timeout_ms, start_time, interrupt_flag);
@@ -3343,8 +3348,7 @@ public:
     }
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
 
-    auto [rcm2, path_t] =
-        lib_realpath(path, timeout_ms, start_time, interrupt_flag);
+    auto [rcm2, path_t] = lib_realpath(path, timeout_ms, start_time, interrupt_flag);
     if (rcm2.first != EC::Success) {
       return {rcm2, ""};
     }
@@ -3357,8 +3361,8 @@ public:
 
   std::pair<ECM, std::unordered_map<std::string, ECM>>
   chmod(const std::string &path, std::variant<std::string, size_t> mode,
-        bool recursive = false, int timeout_ms = -1, int64_t start_time = -1,
-        amf interrupt_flag = nullptr) override {
+        bool recursive = false, int timeout_ms = -1,
+        int64_t start_time = -1, amf interrupt_flag = nullptr) override {
     if (static_cast<int>(UpdateOSTypeCache_()) <= 0) {
       return {ECM{EC::UnImplentedMethod, "Chmod only supported on Unix System"},
               {}};
@@ -3376,7 +3380,7 @@ public:
               {}};
     }
 
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (this->IsOperationInterrupted_(interrupt_flag)) {
       return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
               {}};
     }
@@ -3407,7 +3411,8 @@ public:
 
   // Get path info (with AMFS::abspath)
   SR stat(const std::string &path, bool trace_link = false, int timeout_ms = -1,
-          int64_t start_time = -1, amf interrupt_flag = nullptr) override {
+          int64_t start_time = -1,
+          amf interrupt_flag = nullptr) override {
     ECM rcm = _precheck(path, interrupt_flag);
     if (rcm.first != EC::Success) {
       return {rcm, PathInfo()};
@@ -3423,8 +3428,8 @@ public:
   }
 
   std::pair<ECM, std::vector<PathInfo>>
-  listdir(const std::string &path, int timeout_ms = -1, int64_t start_time = -1,
-          amf interrupt_flag = nullptr) override {
+  listdir(const std::string &path, int timeout_ms = -1,
+          int64_t start_time = -1, amf interrupt_flag = nullptr) override {
     ECM rcm = _precheck(path, interrupt_flag);
 
     if (rcm.first != EC::Success) {
@@ -3486,8 +3491,9 @@ public:
     std::string current_path = parts.front();
     for (size_t i = 1; i < parts.size(); i++) {
       current_path = AMPathStr::join(current_path, parts[i], SepType::Unix);
-      auto [rcm2, attrs] = lib_getstat(current_path, false, timeout_ms,
-                                       start_time, interrupt_flag);
+      auto [rcm2, attrs] =
+          lib_getstat(current_path, false, timeout_ms, start_time,
+                      interrupt_flag);
       if (rcm2.first == EC::Success) {
         if (isdir(attrs)) {
           continue;
@@ -3557,7 +3563,8 @@ public:
   // Rename original path to new path (with AMFS::abspath)
   ECM rename(const std::string &src, const std::string &dst, bool mkdir = true,
              bool overwrite = false, int timeout_ms = -1,
-             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
+             int64_t start_time = -1,
+             amf interrupt_flag = nullptr) override {
     ECM rcm0 = _precheck(src, interrupt_flag);
     if (rcm0.first != EC::Success) {
       return rcm0;
@@ -3581,7 +3588,8 @@ public:
 
   // Safely delete file/dir by moving into trash_dir
   ECM saferm(const std::string &path, int timeout_ms = -1,
-             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
+             int64_t start_time = -1,
+             amf interrupt_flag = nullptr) override {
     ECM rcm0 = _precheck(path, interrupt_flag);
     if (rcm0.first != EC::Success) {
       return rcm0;
@@ -3618,8 +3626,8 @@ public:
     std::string base_name_tmp = base_name;
 
     while (true) {
-      auto [rcm, _] =
-          stat(target_path, false, timeout_ms, start_time, interrupt_flag);
+      auto [rcm, _] = stat(target_path, false, timeout_ms, start_time,
+                           interrupt_flag);
       if (rcm.first == EC::PathNotExist) {
         break;
       }
@@ -3750,7 +3758,7 @@ public:
     WRV result = {};
     _iwalk(path, attrs, result, errors, show_all, ignore_sepcial_file,
            error_callback, timeout_ms, start_time, interrupt_flag);
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (this->IsOperationInterrupted_(interrupt_flag)) {
       ECM out = {EC::Terminate, "Interrupted by user"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -3799,7 +3807,7 @@ public:
           ignore_special_file, error_callback, timeout_ms, start_time,
           interrupt_flag);
     // Print type of result_dict
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (this->IsOperationInterrupted_(interrupt_flag)) {
       ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -3807,6 +3815,10 @@ public:
       return {out, {result_dict, errors}};
     }
     return {ECM{EC::Success, ""}, {result_dict, errors}};
+  }
+
+  [[nodiscard]] bool IsInterrupted() const override {
+    return control_part_ ? control_part_->IsInterrupted() : false;
   }
 
   OS_TYPE UpdateOSType(int timeout_ms = -1, int64_t start_time = -1,
@@ -3828,10 +3840,10 @@ public:
   }
 
   [[nodiscard]] std::pair<ECM, WRV>
-  listdir(const std::string &path, int timeout_ms = -1, int64_t start_time = -1,
-          amf interrupt_flag = nullptr) const override {
-    return const_cast<AMSFTPIOCore *>(this)->listdir(
-        path, timeout_ms, start_time, std::move(interrupt_flag));
+  listdir(const std::string &path, int timeout_ms = -1,
+          int64_t start_time = -1) const override {
+    return const_cast<AMSFTPIOCore *>(this)->listdir(path, timeout_ms,
+                                                     start_time, nullptr);
   }
 
   ECM copy(const std::string &src, const std::string &dst,
@@ -3850,18 +3862,19 @@ public:
   iwalk(const std::string &path, bool show_all = false,
         bool ignore_special_file = true,
         AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
-        int64_t start_time = -1, amf interrupt_flag = nullptr) const override {
+        int64_t start_time = -1) const override {
     return const_cast<AMSFTPIOCore *>(this)->iwalk(
         path, show_all, ignore_special_file, error_callback, timeout_ms,
-        start_time, std::move(interrupt_flag));
+        start_time, nullptr);
   }
 
   int64_t getsize(const std::string &path, bool ignore_special_file = true,
                   int timeout_ms = -1, int64_t start_time = -1,
                   amf interrupt_flag = nullptr) override {
-    auto [rcm, pack] = iwalk(path, true, ignore_special_file, nullptr,
-                             timeout_ms, start_time, interrupt_flag);
-    if (rcm.first != EC::Success || (interrupt_flag && interrupt_flag->IsInterrupted())) {
+    auto [rcm, pack] =
+        iwalk(path, true, ignore_special_file, nullptr, timeout_ms, start_time,
+              interrupt_flag);
+    if (rcm.first != EC::Success || IsOperationInterrupted_(interrupt_flag)) {
       return -1;
     }
     int64_t size = 0;
@@ -3873,12 +3886,12 @@ public:
 
   std::vector<PathInfo> find(const std::string &path,
                              SearchType type = SearchType::All,
-                             int timeout_ms = -1, int64_t start_time = -1,
+                             int timeout_ms = -1,
+                             int64_t start_time = -1,
                              amf interrupt_flag = nullptr) override {
-    if ((interrupt_flag && interrupt_flag->IsInterrupted())) {
+    if (IsOperationInterrupted_(interrupt_flag)) {
       return {};
     }
-    return BasePathMatch::find(path, type, timeout_ms, start_time,
-                               std::move(interrupt_flag));
+    return BasePathMatch::find(path, type, timeout_ms, start_time);
   }
 };
