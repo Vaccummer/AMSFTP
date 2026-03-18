@@ -1,4 +1,5 @@
 #pragma once
+#include "domain/transfer/TransferDomainModel.hpp"
 #include "foundation/DataClass.hpp"
 #include <memory>
 #include <string>
@@ -16,13 +17,13 @@ public:
    * @brief Execute transfer sets synchronously.
    */
   virtual ECM Transfer(const std::vector<UserTransferSet> &transfer_sets,
-                       bool quiet, amf interrupt_flag = nullptr) = 0;
+                       bool quiet) = 0;
 
   /**
    * @brief Execute transfer sets asynchronously.
    */
   virtual ECM TransferAsync(const std::vector<UserTransferSet> &transfer_sets,
-                            bool quiet, amf interrupt_flag = nullptr) = 0;
+                            bool quiet) = 0;
 };
 
 /**
@@ -85,18 +86,17 @@ public:
   /**
    * @brief Submit cached transfer sets.
    */
-  virtual ECM SubmitCachedTransferSets(bool quiet,
-                                       amf interrupt_flag = nullptr,
-                                       bool is_async = false) = 0;
+  virtual ECM SubmitCachedTransferSets(bool quiet, bool is_async = false) = 0;
 
   /**
    * @brief Query one cached transfer set by index.
    */
-  virtual ECM QueryCachedTransferSet(size_t set_index) const = 0;
+  [[nodiscard]] virtual ECM QueryCachedTransferSet(size_t set_index) const = 0;
 
   /**
    * @brief List cached transfer-set identifiers.
    */
-  [[nodiscard]] virtual std::vector<size_t> ListCachedTransferSetIds() const = 0;
+  [[nodiscard]] virtual std::vector<size_t>
+  ListCachedTransferSetIds() const = 0;
 };
 } // namespace AMDomain::transfer
