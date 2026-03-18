@@ -97,7 +97,6 @@ TransferTask *TransferRuntimeProgress::GetCurrentTask() const {
 } // namespace AMInfra::transfer
 
 namespace {
-
 using ECM = std::pair<ErrorCode, std::string>;
 using EC = ErrorCode;
 using ClientHandle = AMInfra::transfer::ClientHandle;
@@ -215,64 +214,6 @@ ClientHandle ResolveTaskClientHelper(const TransferClientContainer &clients,
   }
   return pair_clients.first;
 }
-
-class LocalTaskControlPort final
-    : public AMDomain::client::IClientTaskControlPort {
-public:
-  void RequestInterrupt() override {
-    interrupted_.store(true, std::memory_order_relaxed);
-    NotifyWakeups_();
-  }
-
-  void ClearInterrupt() override {
-    interrupted_.store(false, std::memory_order_relaxed);
-    NotifyWakeups_();
-  }
-
-  [[nodiscard]] bool IsInterrupted() const override {
-    return interrupted_.load(std::memory_order_relaxed);
-  }
-
-  size_t RegisterWakeup(std::function<void()> wake_cb) override {
-    if (!wake_cb) {
-      return 0;
-    }
-    std::lock_guard<std::mutex> lock(mtx_);
-    const size_t id = ++next_id_;
-    wakeups_[id] = std::move(wake_cb);
-    return id;
-  }
-
-  void UnregisterWakeup(size_t token) override {
-    if (token == 0) {
-      return;
-    }
-    std::lock_guard<std::mutex> lock(mtx_);
-    wakeups_.erase(token);
-  }
-
-private:
-  void NotifyWakeups_() {
-    std::vector<std::function<void()>> callbacks;
-    {
-      std::lock_guard<std::mutex> lock(mtx_);
-      callbacks.reserve(wakeups_.size());
-      for (const auto &pair : wakeups_) {
-        if (pair.second) {
-          callbacks.push_back(pair.second);
-        }
-      }
-    }
-    for (const auto &cb : callbacks) {
-      cb();
-    }
-  }
-
-  std::atomic<bool> interrupted_{false};
-  mutable std::mutex mtx_;
-  std::unordered_map<size_t, std::function<void()>> wakeups_ = {};
-  size_t next_id_ = 0;
-};
 
 class UnionFileHandle {
 public:
