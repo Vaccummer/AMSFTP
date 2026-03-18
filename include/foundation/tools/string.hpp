@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <magic_enum/magic_enum.hpp>
 #include <optional>
 #include <sstream>
@@ -201,6 +202,95 @@ template <typename... Args> inline void print(Args &&...args) {
   }
 }
 
+inline bool GetBool(const std::string &text, bool *out) {
+  if (!out) {
+    return false;
+  }
+  const std::string normalized = AMStr::lowercase(AMStr::Strip(text));
+  if (normalized == "true" || normalized == "1" || normalized == "yes" ||
+      normalized == "y" || normalized == "on") {
+    *out = true;
+    return true;
+  }
+  if (normalized == "false" || normalized == "0" || normalized == "no" ||
+      normalized == "n" || normalized == "off") {
+    *out = false;
+    return true;
+  }
+  return false;
+}
+
+template <typename T>
+// support signed and unsigned integer types and floating point types, but not
+// bool.
+inline bool GetNumber(const std::string &text, T *out) {
+  static_assert(std::is_arithmetic_v<T> && !std::is_same_v<T, bool>,
+                "GetNumber only supports non-bool arithmetic types");
+  if (!out) {
+    return false;
+  }
+
+  const std::string trimmed = AMStr::Strip(text);
+  if (trimmed.empty()) {
+    return false;
+  }
+
+  if constexpr (std::is_integral_v<T>) {
+    if constexpr (std::is_unsigned_v<T>) {
+      if (!trimmed.empty() && trimmed.front() == '-') {
+        return false;
+      }
+      std::istringstream iss(trimmed);
+      unsigned long long parsed = 0;
+      char extra = '\0';
+      if (!(iss >> parsed)) {
+        return false;
+      }
+      if (iss >> extra) {
+        return false;
+      }
+      if (parsed >
+          static_cast<unsigned long long>(std::numeric_limits<T>::max())) {
+        return false;
+      }
+      *out = static_cast<T>(parsed);
+      return true;
+    } else {
+      std::istringstream iss(trimmed);
+      long long parsed = 0;
+      char extra = '\0';
+      if (!(iss >> parsed)) {
+        return false;
+      }
+      if (iss >> extra) {
+        return false;
+      }
+      if (parsed < static_cast<long long>(std::numeric_limits<T>::min()) ||
+          parsed > static_cast<long long>(std::numeric_limits<T>::max())) {
+        return false;
+      }
+      *out = static_cast<T>(parsed);
+      return true;
+    }
+  } else {
+    std::istringstream iss(trimmed);
+    long double parsed = 0;
+    char extra = '\0';
+    if (!(iss >> parsed)) {
+      return false;
+    }
+    if (iss >> extra) {
+      return false;
+    }
+    if (parsed < static_cast<long double>(std::numeric_limits<T>::lowest()) ||
+        parsed > static_cast<long double>(std::numeric_limits<T>::max())) {
+      return false;
+    }
+    *out = static_cast<T>(parsed);
+    return true;
+  }
+}
+
 std::string FormatSize(size_t size);
 std::string FormatSize(int64_t size);
 bool GetEnv(std::string_view key, std::string *target);
@@ -218,4 +308,5 @@ std::vector<T> UniqueTargetsKeepOrder(const std::vector<T> &targets) {
   }
   return unique;
 }
+
 } // namespace AMStr
