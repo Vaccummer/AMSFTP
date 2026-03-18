@@ -23,6 +23,37 @@ using ResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
 using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
 enum class TaskStatus { Pending, Conducting, Paused, Finished };
 
+struct ProgressCBInfo {
+  std::string src;
+  std::string dst;
+  std::string src_host;
+  std::string dst_host;
+  size_t this_size;
+  size_t file_size;
+  size_t accumulated_size;
+  size_t total_size;
+  ProgressCBInfo(std::string src, std::string dst, std::string src_host,
+                 std::string dst_host, size_t this_size, size_t file_size,
+                 size_t accumulated_size, size_t total_size)
+      : src(std::move(src)), dst(std::move(dst)), src_host(std::move(src_host)),
+        dst_host(std::move(dst_host)), this_size(std::move(this_size)),
+        file_size(std::move(file_size)),
+        accumulated_size(std::move(accumulated_size)),
+        total_size(std::move(total_size)) {}
+};
+
+struct ErrorCBInfo {
+  std::pair<ErrorCode, std::string> ecm;
+  std::string src;
+  std::string dst;
+  std::string src_host;
+  std::string dst_host;
+  ErrorCBInfo(std::pair<ErrorCode, std::string> ecm, std::string src,
+              std::string dst, std::string src_host, std::string dst_host)
+      : ecm(std::move(ecm)), src(std::move(src)), dst(std::move(dst)),
+        src_host(std::move(src_host)), dst_host(std::move(dst_host)) {}
+};
+
 struct TransferCallback {
   using ErrorCallback = std::function<void(const ErrorCBInfo &)>;
   using ProgressCallback =
