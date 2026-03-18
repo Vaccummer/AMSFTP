@@ -27,8 +27,7 @@
 
 // TransferRuntimeProgress
 namespace AMInfra::transfer {
-TransferRuntimeProgress::TransferRuntimeProgress(
-    TaskHandle task)
+TransferRuntimeProgress::TransferRuntimeProgress(TaskHandle task)
     : task_info(std::move(task)) {}
 
 void TransferRuntimeProgress::CallInnerCallback(bool force) {
@@ -101,7 +100,7 @@ namespace {
 
 using ECM = std::pair<ErrorCode, std::string>;
 using EC = ErrorCode;
-using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
+using ClientHandle = AMInfra::transfer::ClientHandle;
 using RuntimeProgress = AMInfra::transfer::TransferRuntimeProgress;
 using TaskInfo = AMDomain::transfer::TaskInfo;
 using TaskHandle = AMInfra::transfer::TaskHandle;
@@ -114,53 +113,6 @@ using TaskStatus = AMDomain::transfer::TaskStatus;
 using TaskId = TaskInfo::ID;
 using TaskRegistry = AMAtomic<std::unordered_map<TaskId, TaskHandle>>;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
-
-std::mutex g_runtime_progress_mtx;
-std::unordered_map<TaskInfo::ID, std::shared_ptr<RuntimeProgress>>
-    g_runtime_progress;
-
-std::shared_ptr<RuntimeProgress>
-GetRuntimeProgress_(const TaskHandle &task_info) {
-  if (!task_info || task_info->id.empty()) {
-    return nullptr;
-  }
-  std::lock_guard<std::mutex> lock(g_runtime_progress_mtx);
-  auto it = g_runtime_progress.find(task_info->id);
-  return (it == g_runtime_progress.end()) ? nullptr : it->second;
-}
-
-std::shared_ptr<RuntimeProgress>
-GetRuntimeProgressById_(const TaskInfo::ID &task_id) {
-  if (task_id.empty()) {
-    return nullptr;
-  }
-  std::lock_guard<std::mutex> lock(g_runtime_progress_mtx);
-  auto it = g_runtime_progress.find(task_id);
-  return (it == g_runtime_progress.end()) ? nullptr : it->second;
-}
-
-std::shared_ptr<RuntimeProgress>
-EnsureRuntimeProgress_(const TaskHandle &task_info) {
-  if (!task_info || task_info->id.empty()) {
-    return nullptr;
-  }
-  std::lock_guard<std::mutex> lock(g_runtime_progress_mtx);
-  auto &slot = g_runtime_progress[task_info->id];
-  if (!slot) {
-    slot = std::make_shared<RuntimeProgress>(task_info);
-  } else {
-    slot->task_info = task_info;
-  }
-  return slot;
-}
-
-void RemoveRuntimeProgress_(const TaskInfo::ID &task_id) {
-  if (task_id.empty()) {
-    return;
-  }
-  std::lock_guard<std::mutex> lock(g_runtime_progress_mtx);
-  g_runtime_progress.erase(task_id);
-}
 
 bool IsTaskInterrupted_(const RuntimeProgress &pd) {
   return pd.task_info && pd.task_info->Core.control_token &&
@@ -199,8 +151,8 @@ bool IsTaskIdUsedHelper(const TaskId &task_id, TaskRegistry &task_registry,
 }
 
 bool ShouldSkipTaskHelper(const TaskHandle &task_info) {
-  auto pd = GetRuntimeProgress_(task_info);
-  if (pd && IsTaskInterrupted_(*pd)) {
+  if (task_info && task_info->Core.control_token &&
+      task_info->Core.control_token->IsInterrupted()) {
     task_info->SetResult({EC::Terminate, "Task terminated before start"});
     task_info->SetStatus(TaskStatus::Finished);
     task_info->Time.finish.store(AMTime::seconds(), std::memory_order_relaxed);
@@ -244,25 +196,21 @@ ssize_t CalculateBufferSizeHelper(const ClientHandle &src_client,
 ClientHandle ResolveTaskClientHelper(const TransferClientContainer &clients,
                                      const std::string &nickname,
                                      bool prefer_secondary) {
-  const std::string key =
-      (nickname.empty() ||
-       AMDomain::host::HostManagerService::IsLocalNickname(nickname))
-          ? "local"
-          : AMDomain::client::ClientDomainService::NormalizeNickname(nickname);
+  const std::string key = nickname;
   auto it = clients.find(key);
   if (it == clients.end()) {
     return nullptr;
   }
   const auto &holder = it->second;
-  if (std::holds_alternative<std::shared_ptr<AMDomain::client::IClientPort>>(
-          holder)) {
-    return std::get<std::shared_ptr<AMDomain::client::IClientPort>>(holder);
+  if (std::holds_alternative<ClientHandle>(holder)) {
+    if (prefer_secondary) {
+      return nullptr;
+    }
+    return std::get<ClientHandle>(holder);
   }
   const auto &pair_clients =
-      std::get<std::pair<std::shared_ptr<AMDomain::client::IClientPort>,
-                         std::shared_ptr<AMDomain::client::IClientPort>>>(
-          holder);
-  if (prefer_secondary && pair_clients.second) {
+      std::get<std::pair<ClientHandle, ClientHandle>>(holder);
+  if (prefer_secondary) {
     return pair_clients.second;
   }
   return pair_clients.first;
@@ -1175,8 +1123,8 @@ void TransferExecutionPool::CancelPendingTasksOnExit_(
       }
       auto task_info = it->second;
       task_registry->erase(it);
-      if (auto pd = GetRuntimeProgressById_(task_info->id)) {
-        RequestTaskInterrupt_(*pd);
+      if (task_info->Core.control_token) {
+        task_info->Core.control_token->RequestInterrupt();
       }
       task_info->State.rcm.lock().store({EC::Terminate, reason});
       task_info->Time.finish.store(AMTime::seconds(),
@@ -1199,14 +1147,13 @@ void TransferExecutionPool::CancelPendingTasksOnExit_(
   }
 
   for (const auto &task_info : canceled_tasks) {
-    RemoveRuntimeProgress_(task_info->id);
     HandleCompletedTask(task_info);
   }
 }
 
-void TransferExecutionPool::RegisterTask(
-    const TaskHandle &task_info, TaskAssignType assign_type,
-    int affinity_thread) {
+void TransferExecutionPool::RegisterTask(const TaskHandle &task_info,
+                                         TaskAssignType assign_type,
+                                         int affinity_thread) {
   std::lock_guard<std::mutex> queue_lock(queue_mtx_);
   auto task_registry = task_registry_.lock();
   std::list<TaskId> *target_queue = nullptr;
@@ -1308,9 +1255,9 @@ void TransferExecutionPool::HandleCompletedTask(const TaskHandle &task_info) {
   (*results)[task_info->id] = task_info;
 }
 
-void TransferExecutionPool::SetConducting(
-    size_t thread_index, const TaskId &task_id,
-    const TaskHandle &task_info) {
+void TransferExecutionPool::SetConducting(size_t thread_index,
+                                          const TaskId &task_id,
+                                          const TaskHandle &task_info) {
   std::lock_guard<std::mutex> lock(conducting_mtx_);
   if (thread_index >= conducting_by_thread_.size()) {
     conducting_by_thread_.resize(thread_index + 1);
@@ -1372,20 +1319,17 @@ void TransferExecutionPool::WorkerLoop(size_t thread_index) {
         auto task_registry = task_registry_.lock();
         task_registry->erase(task_id);
       }
-      RemoveRuntimeProgress_(task_info->id);
       HandleCompletedTask(task_info);
       ClearConducting(thread_index);
       continue;
     }
 
-    (void)EnsureRuntimeProgress_(task_info);
     ExecuteTask(task_info);
 
     {
       auto task_registry = task_registry_.lock();
       task_registry->erase(task_info->id);
     }
-    RemoveRuntimeProgress_(task_info->id);
     HandleCompletedTask(task_info);
     ClearConducting(thread_index);
   }
@@ -1394,14 +1338,7 @@ void TransferExecutionPool::WorkerLoop(size_t thread_index) {
 }
 
 void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
-  auto pd_h = EnsureRuntimeProgress_(task_info);
-  if (!pd_h) {
-    task_info->SetStatus(TaskStatus::Finished);
-    task_info->SetResult({EC::InvalidHandle, "Runtime progress init failed"});
-    task_info->Time.finish.store(AMTime::seconds(), std::memory_order_relaxed);
-    return;
-  }
-  auto &pd = *pd_h;
+  RuntimeProgress pd(task_info);
 
   task_info->SetStatus(TaskStatus::Conducting);
   if (!task_info->Set.keep_start_time.load(std::memory_order_relaxed) ||
@@ -1525,14 +1462,8 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
               src_client, dst_client,
               task_info->Size.buffer.load(std::memory_order_relaxed)));
 
-      if (!transfer_engine_) {
-        task.rcm = {EC::InvalidHandle,
-                    "Transfer execution engine is not initialized"};
-        task.IsFinished = true;
-        continue;
-      }
       task.rcm =
-          transfer_engine_->TransferSignleFile(src_client, dst_client, pd);
+          transfer_engine_.TransferSignleFile(src_client, dst_client, pd);
       task.IsFinished = true;
       if (task.rcm.first == EC::Success) {
         task_info->Size.success_filenum.fetch_add(1, std::memory_order_relaxed);
@@ -1570,11 +1501,7 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
   task_info->Time.finish.store(AMTime::seconds(), std::memory_order_relaxed);
 }
 
-TransferExecutionPool::TransferExecutionPool(
-    std::unique_ptr<AMDomain::transfer::ITransferExecutionPort>
-        execution_port) {
-  (void)execution_port;
-  transfer_engine_ = std::make_unique<TransferExecutionEngine>();
+TransferExecutionPool::TransferExecutionPool() {
   affinity_queues_.resize(1);
   conducting_by_thread_.resize(1);
   conducting_infos_.resize(1);
@@ -1593,8 +1520,8 @@ ECM TransferExecutionPool::Shutdown(int timeout_ms) {
   {
     std::lock_guard<std::mutex> lock(conducting_mtx_);
     for (const auto &info : conducting_infos_) {
-      if (auto pd = GetRuntimeProgress_(info)) {
-        RequestTaskInterrupt_(*pd);
+      if (info && info->Core.control_token) {
+        info->Core.control_token->RequestInterrupt();
       }
     }
   }
@@ -1795,8 +1722,8 @@ std::pair<TaskHandle, ECM> TransferExecutionPool::Terminate(const TaskId &id,
         public_queue_.remove(id);
       }
       task_registry->erase(it);
-      if (auto pd = GetRuntimeProgress_(task_info)) {
-        RequestTaskInterrupt_(*pd);
+      if (task_info->Core.control_token) {
+        task_info->Core.control_token->RequestInterrupt();
       }
       task_info->SetResult({EC::Terminate, "Task terminated before start"});
       task_info->SetStatus(TaskStatus::Finished);
@@ -1804,14 +1731,13 @@ std::pair<TaskHandle, ECM> TransferExecutionPool::Terminate(const TaskId &id,
                                    std::memory_order_relaxed);
       task_info->Set.OnWhichThread.store(-1, std::memory_order_relaxed);
       queue_cv_.notify_all();
-      RemoveRuntimeProgress_(id);
       HandleCompletedTask(task_info);
       return {task_info, {EC::Success, ""}};
     }
   }
 
-  if (auto pd = GetRuntimeProgress_(existing)) {
-    RequestTaskInterrupt_(*pd);
+  if (existing->Core.control_token) {
+    existing->Core.control_token->RequestInterrupt();
   }
 
   const int64_t start_ms = AMTime::miliseconds();
@@ -1826,30 +1752,20 @@ std::pair<TaskHandle, ECM> TransferExecutionPool::Terminate(const TaskId &id,
 }
 
 void TransferExecutionPool::ClearResults() {
-  std::vector<TaskId> removed_ids = {};
   {
     auto results = results_.lock();
-    removed_ids.reserve(results->size());
-    for (const auto &pair : *results) {
-      removed_ids.push_back(pair.first);
-    }
     results->clear();
-  }
-  for (const auto &id : removed_ids) {
-    RemoveRuntimeProgress_(id);
   }
 }
 
 bool TransferExecutionPool::RemoveResult(const TaskId &id) {
   auto results = results_.lock();
   const bool removed = results->erase(id) > 0;
-  if (removed) {
-    RemoveRuntimeProgress_(id);
-  }
   return removed;
 }
 
-std::unordered_map<TaskId, TaskHandle> TransferExecutionPool::GetRegistryCopy() const {
+std::unordered_map<TaskId, TaskHandle>
+TransferExecutionPool::GetRegistryCopy() const {
   auto task_registry = task_registry_.lock();
   return *task_registry;
 }
@@ -1863,7 +1779,6 @@ TaskHandle TransferExecutionPool::GetResultTask(const TaskId &id, bool remove) {
   TaskHandle task_info = it->second;
   if (remove) {
     results->erase(it);
-    RemoveRuntimeProgress_(id);
   }
   return task_info;
 }
@@ -1928,9 +1843,7 @@ namespace AMDomain::transfer {
 /**
  * @brief Create default infra-backed transfer pool adapter.
  */
-std::unique_ptr<ITransferPoolPort> CreateTransferPoolPort(
-    std::unique_ptr<ITransferExecutionPort> execution_port_) {
-  return std::make_unique<AMInfra::transfer::TransferExecutionPool>(
-      std::move(execution_port_));
+std::unique_ptr<ITransferPoolPort> CreateTransferPoolPort() {
+  return std::make_unique<AMInfra::transfer::TransferExecutionPool>();
 }
 } // namespace AMDomain::transfer
