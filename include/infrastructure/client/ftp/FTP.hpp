@@ -15,6 +15,7 @@
 #include <string>
 
 // Internal dependencies
+#include "domain/client/ClientPort.hpp"
 #include "foundation/tools/auth.hpp"
 #include "infrastructure/client/common/Base.hpp"
 
@@ -28,7 +29,7 @@
 #include <openssl/pem.h>
 #include <openssl/rsa.h>
 
-namespace {
+namespace AMInfra::client::FTP {
 struct MemoryStruct {
   char *memory;
   size_t size;
@@ -539,18 +540,15 @@ inline EC GetFTPErrorCode(CURLcode curl_code) {
     return EC::CommonFailure;
   }
 }
-} // namespace
 
 // FTP Client using libcurl
 class AMFTPIOCore : public ClientIOBase, BasePathMatch {
-
 private:
   enum class CapabilityState : int {
     Unknown = 0,
     Supported = 1,
     Unsupported = 2,
   };
-
   AMAtomic<ConRequest> &request_atomic_;
   CURL *curl = nullptr;
   CURLM *multi = nullptr; // Reused multi handle
@@ -661,7 +659,8 @@ private:
         break;
 
       // Check interrupt
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
+           (control_part_ && control_part_->IsInterrupted()))) {
         wait_result = WaitResult::Interrupted;
         break;
       }
@@ -1241,7 +1240,7 @@ public:
   std::shared_ptr<AMFTPIOCore> mirror_client = nullptr;
 
   AMFTPIOCore(AMDomain::client::IClientConfigPort *config_port,
-              AMDomain::client::IClientTaskControlPort *control_port,
+              AMDomain::client::IClientControlToken *control_port,
               TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
       : ClientIOBase(config_port, control_port),
         request_atomic_(
@@ -1312,8 +1311,7 @@ public:
    */
   const std::recursive_mutex &TransferMutex() const { return mtx; }
 
-  ECM Connect(bool force = false, int timeout_ms = -1,
-              int64_t start_time = -1,
+  ECM Connect(bool force = false, int timeout_ms = -1, int64_t start_time = -1,
               amf interrupt_flag = nullptr) override {
     std::lock_guard<std::recursive_mutex> lock(mtx);
     ConRequest request = request_atomic_.lock().load();
@@ -1463,7 +1461,8 @@ public:
       config_part_->SetOSType(OS_TYPE::Unknown);
       return config_part_->GetOSType();
     }
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
+         (control_part_ && control_part_->IsInterrupted()))) {
       config_part_->SetOSType(OS_TYPE::Unknown);
       return config_part_->GetOSType();
     }
@@ -1514,12 +1513,10 @@ public:
     return {{EC::Success, ""}, resolved};
   }
 
-  AMDomain::client::ChmodResult chmod(const std::string &path,
-                                      std::variant<std::string, size_t> mode,
-                                      bool recursive = false,
-                                      int timeout_ms = -1,
-                                      int64_t start_time = -1,
-                                      amf interrupt_flag = nullptr) override {
+  AMDomain::client::ChmodResult
+  chmod(const std::string &path, std::variant<std::string, size_t> mode,
+        bool recursive = false, int timeout_ms = -1, int64_t start_time = -1,
+        amf interrupt_flag = nullptr) override {
     (void)path;
     (void)mode;
     (void)recursive;
@@ -1535,7 +1532,8 @@ public:
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     std::lock_guard<std::recursive_mutex> lock(
         mtx); // Prevent concurrent curl access
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
+         (control_part_ && control_part_->IsInterrupted()))) {
       return {EC::Terminate, "Interrupted by user"};
     }
     ECM ecm = SetupPath("", true);
@@ -1564,9 +1562,8 @@ public:
     return ecm;
   }
 
-  SR stat(const std::string &path, bool trace_link = false,
-          int timeout_ms = -1, int64_t start_time = -1,
-          amf interrupt_flag = nullptr) override {
+  SR stat(const std::string &path, bool trace_link = false, int timeout_ms = -1,
+          int64_t start_time = -1, amf interrupt_flag = nullptr) override {
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     std::lock_guard<std::recursive_mutex> lock(mtx);
 
@@ -1580,7 +1577,8 @@ public:
               PathInfo()};
     }
 
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
+         (control_part_ && control_part_->IsInterrupted()))) {
       return {ECM{EC::Terminate, "Interrupted by user"}, PathInfo()};
     }
 
@@ -1627,8 +1625,8 @@ public:
 
   // Prefer MLSD first, then fallback to legacy LIST.
   std::pair<ECM, std::vector<PathInfo>>
-  listdir(const std::string &path, int timeout_ms = -1,
-          int64_t start_time = -1, amf interrupt_flag = nullptr) override {
+  listdir(const std::string &path, int timeout_ms = -1, int64_t start_time = -1,
+          amf interrupt_flag = nullptr) override {
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (path.empty()) {
@@ -1637,7 +1635,8 @@ public:
     if (!curl) {
       return {ECM{EC::NoConnection, "CURL not initialized"}, {}};
     }
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
+         (control_part_ && control_part_->IsInterrupted()))) {
       return {ECM{EC::Terminate, "Interrupted by user"}, {}};
     }
 
@@ -1669,9 +1668,10 @@ public:
 
   [[nodiscard]] std::pair<ECM, WRV>
   listdir(const std::string &path, int timeout_ms = -1,
-          int64_t start_time = -1) const override {
+          int64_t start_time = -1, amf interrupt_flag = nullptr) const override {
     return const_cast<AMFTPIOCore *>(this)->listdir(path, timeout_ms,
-                                                    start_time, nullptr);
+                                                    start_time,
+                                                    interrupt_flag);
   }
 
   // Define iwalk in base class since almost all iwalks are based on listdir
@@ -1700,7 +1700,8 @@ public:
     };
     bool no_subdir = true;
     for (auto &item : list_info) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
+           (control_part_ && control_part_->IsInterrupted()))) {
         return;
       }
       if (timeout_ms > 0 && AMTime::miliseconds() - start_time > timeout_ms) {
@@ -1747,7 +1748,8 @@ public:
     RMR errors = {};
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    auto [rcm, info] = stat(path, false, timeout_ms, start_time, interrupt_flag);
+    auto [rcm, info] =
+        stat(path, false, timeout_ms, start_time, interrupt_flag);
     if (rcm.first != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, rcm);
@@ -1759,7 +1761,8 @@ public:
     }
     _iwalk(info, result, errors, show_all, ignore_special_file, error_callback,
            timeout_ms, start_time, interrupt_flag);
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
+         (control_part_ && control_part_->IsInterrupted()))) {
       ECM out = {EC::Terminate, "iwalk interrupted by user"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -1772,11 +1775,12 @@ public:
   [[nodiscard]] std::pair<ECM, WRI>
   iwalk(const std::string &path, bool show_all = false,
         bool ignore_special_file = true,
-        AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
-        int64_t start_time = -1) const override {
+        AMFS::WalkErrorCallback error_callback = nullptr,
+        int timeout_ms = -1, int64_t start_time = -1,
+        amf interrupt_flag = nullptr) const override {
     return const_cast<AMFTPIOCore *>(this)->iwalk(
         path, show_all, ignore_special_file, error_callback, timeout_ms,
-        start_time, nullptr);
+        start_time, interrupt_flag);
   }
 
   void _walk(const std::vector<std::string> &parts, WRD &result, RMR &errors,
@@ -1812,7 +1816,8 @@ public:
     };
     std::vector<PathInfo> files_info = {};
     for (auto &info : list_info) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
+           (control_part_ && control_part_->IsInterrupted()))) {
         return;
       }
       if (timeout_ms > 0 && AMTime::miliseconds() - start_time > timeout_ms) {
@@ -1861,7 +1866,8 @@ public:
     _walk(parts, result_dict, errors, 0, max_depth, show_all,
           ignore_special_file, error_callback, timeout_ms, start_time,
           interrupt_flag);
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
+         (control_part_ && control_part_->IsInterrupted()))) {
       ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
       if (error_callback && *error_callback) {
         (*error_callback)(path, out);
@@ -1876,7 +1882,9 @@ public:
                   amf interrupt_flag = nullptr) override {
     auto [rcm, pack] = iwalk(path, true, ignore_special_file, nullptr,
                              timeout_ms, start_time, interrupt_flag);
-    if (rcm.first != EC::Success || ((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
+    if (rcm.first != EC::Success ||
+        ((interrupt_flag && interrupt_flag->IsInterrupted()) ||
+         (control_part_ && control_part_->IsInterrupted()))) {
       return -1;
     }
     int64_t size = 0;
@@ -1888,13 +1896,14 @@ public:
 
   std::vector<PathInfo> find(const std::string &path,
                              SearchType type = SearchType::All,
-                             int timeout_ms = -1,
-                             int64_t start_time = -1,
+                             int timeout_ms = -1, int64_t start_time = -1,
                              amf interrupt_flag = nullptr) override {
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
+         (control_part_ && control_part_->IsInterrupted()))) {
       return {};
     }
-    return BasePathMatch::find(path, type, timeout_ms, start_time);
+    return BasePathMatch::find(path, type, timeout_ms, start_time,
+                               interrupt_flag);
   }
 
   ECM mkdir(const std::string &path, int timeout_ms = -1,
@@ -1960,7 +1969,8 @@ public:
              int64_t start_time = -1, amf interrupt_flag = nullptr) override {
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    auto [rcm, info] = stat(path, false, timeout_ms, start_time, interrupt_flag);
+    auto [rcm, info] =
+        stat(path, false, timeout_ms, start_time, interrupt_flag);
     if (rcm.first != EC::Success) {
       return rcm;
     }
@@ -1980,7 +1990,8 @@ public:
     if (path.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    auto [rcm, info] = stat(path, false, timeout_ms, start_time, interrupt_flag);
+    auto [rcm, info] =
+        stat(path, false, timeout_ms, start_time, interrupt_flag);
     if (rcm.first != EC::Success) {
       return rcm;
     }
@@ -2012,13 +2023,15 @@ public:
       return;
     }
     for (const auto &itemf : file_list) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) || (control_part_ && control_part_->IsInterrupted()))) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
+           (control_part_ && control_part_->IsInterrupted()))) {
         return;
       }
       if (timeout_ms > 0 && AMTime::miliseconds() - start_time > timeout_ms) {
         return;
       }
-      _rm(itemf, errors, error_callback, timeout_ms, start_time, interrupt_flag);
+      _rm(itemf, errors, error_callback, timeout_ms, start_time,
+          interrupt_flag);
     }
     // Delete directory after removing all contents
     ECM rc = _librmdir(info.path, interrupt_flag, timeout_ms, start_time);
@@ -2037,7 +2050,8 @@ public:
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
     std::lock_guard<std::recursive_mutex> lock(mtx);
     RMR errors = {};
-    auto [rcm, info] = stat(path, false, timeout_ms, start_time, interrupt_flag);
+    auto [rcm, info] =
+        stat(path, false, timeout_ms, start_time, interrupt_flag);
     if (rcm.first != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, rcm);
@@ -2049,8 +2063,7 @@ public:
   }
 
   ECM saferm(const std::string &path, int timeout_ms = -1,
-             int64_t start_time = -1,
-             amf interrupt_flag = nullptr) override {
+             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
     auto [rcm, errors] =
         remove(path, nullptr, timeout_ms, start_time, interrupt_flag);
     if (rcm.first != EC::Success) {
@@ -2066,8 +2079,7 @@ public:
 
   ECM rename(const std::string &src, const std::string &dst, bool mkdir = true,
              bool overwrite = false, int timeout_ms = -1,
-             int64_t start_time = -1,
-             amf interrupt_flag = nullptr) override {
+             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
     if (start_time == -1) {
       start_time = AMTime::miliseconds();
     }
@@ -2087,7 +2099,8 @@ public:
     }
 
     // Check destination
-    auto [rcm2, sbr2] = stat(dstf, false, timeout_ms, start_time, interrupt_flag);
+    auto [rcm2, sbr2] =
+        stat(dstf, false, timeout_ms, start_time, interrupt_flag);
     if (rcm2.first == EC::Success) {
       if (sbr2.type != sbr.type) {
         return {EC::PathAlreadyExists,
@@ -2102,8 +2115,8 @@ public:
       }
     } else {
       if (mkdir) {
-        ECM ecm =
-            mkdirs(AMPathStr::dirname(dstf), timeout_ms, start_time, interrupt_flag);
+        ECM ecm = mkdirs(AMPathStr::dirname(dstf), timeout_ms, start_time,
+                         interrupt_flag);
         if (ecm.first != EC::Success) {
           return ecm;
         }
@@ -2211,5 +2224,4 @@ public:
   //   }
   // }
 };
-
-
+} // namespace AMInfra::client::FTP

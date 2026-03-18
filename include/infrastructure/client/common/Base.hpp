@@ -780,7 +780,8 @@ public:
     if (LegacyInterruptCheck_(interrupt_flag)) {
       return {};
     }
-    return BasePathMatch::find(path, type, timeout_ms, start_time);
+    return BasePathMatch::find(path, type, timeout_ms, start_time,
+                               interrupt_flag);
   }
 
   void trace(TraceLevel level, EC error_code, const std::string &target = "",
@@ -1046,22 +1047,27 @@ protected:
   [[nodiscard]] virtual bool IsInterrupted() const = 0;
   [[nodiscard]] virtual SR stat(const std::string &path,
                                 bool trace_link = false, int timeout_ms = -1,
-                                int64_t start_time = -1) = 0;
+                                int64_t start_time = -1,
+                                amf interrupt_flag = nullptr) = 0;
   [[nodiscard]] virtual std::pair<ECM, WRV>
   listdir(const std::string &path, int timeout_ms = -1,
-          int64_t start_time = -1) const = 0;
+          int64_t start_time = -1, amf interrupt_flag = nullptr) const = 0;
   [[nodiscard]] virtual std::pair<ECM, WRI>
   iwalk(const std::string &path, bool show_all = false,
         bool ignore_special_file = true,
         AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
-        int64_t start_time = -1) const = 0;
+        int64_t start_time = -1, amf interrupt_flag = nullptr) const = 0;
 
 private:
   [[nodiscard]] static bool IsTimedOut_(int timeout_ms, int64_t start_time) {
     return timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms;
   }
 
-  [[nodiscard]] bool ShouldStop_(int timeout_ms, int64_t start_time) const {
+  [[nodiscard]] bool ShouldStop_(amf interrupt_flag, int timeout_ms,
+                                 int64_t start_time) const {
+    if (interrupt_flag && interrupt_flag->IsInterrupted()) {
+      return true;
+    }
     return IsInterrupted() || IsTimedOut_(timeout_ms, start_time);
   }
 
@@ -1078,7 +1084,8 @@ private:
 
   void _find(std::vector<PathInfo> &results, const PathInfo &path,
              const std::vector<std::string> &match_parts, size_t match_index,
-             SearchType type, int timeout_ms = -1, int64_t start_time = -1) {
+             SearchType type, int timeout_ms = -1, int64_t start_time = -1,
+             amf interrupt_flag = nullptr) {
     if (match_index >= match_parts.size()) {
       if (type == SearchType::All ||
           (type == SearchType::Directory && path.type == PathType::DIR) ||
@@ -1098,12 +1105,13 @@ private:
     if (IsDoubleStarPattern_(cur_pattern)) {
       std::vector<std::string> relative_parts;
       auto [error, sub_pack] =
-          iwalk(path.path, true, true, nullptr, timeout_ms, start_time);
+          iwalk(path.path, true, true, nullptr, timeout_ms, start_time,
+                interrupt_flag);
       if (error.first != EC::Success) {
         return;
       }
       for (auto &sub : sub_pack.first) {
-        if (ShouldStop_(timeout_ms, start_time)) {
+        if (ShouldStop_(interrupt_flag, timeout_ms, start_time)) {
           return;
         }
         if ((sub.type == PathType::DIR && type == SearchType::File) ||
@@ -1120,13 +1128,14 @@ private:
     }
 
     const bool is_match_mode = IsMatchPattern_(cur_pattern);
-    auto [error, sub_list] = listdir(path.path, timeout_ms, start_time);
+    auto [error, sub_list] = listdir(path.path, timeout_ms, start_time,
+                                     interrupt_flag);
     if (error.first != EC::Success) {
       return;
     }
 
     for (auto &sub : sub_list) {
-      if (ShouldStop_(timeout_ms, start_time)) {
+      if (ShouldStop_(interrupt_flag, timeout_ms, start_time)) {
         return;
       }
       const bool hit = is_match_mode ? name_match(sub.name, cur_pattern)
@@ -1135,7 +1144,7 @@ private:
         continue;
       }
       _find(results, sub, match_parts, match_index + 1, type, timeout_ms,
-            start_time);
+            start_time, interrupt_flag);
     }
 
     return;
@@ -1278,13 +1287,15 @@ public:
 
   std::vector<PathInfo> find(const std::string &path,
                              SearchType type = SearchType::All,
-                             int timeout_ms = -1, int64_t start_time = -1) {
+                             int timeout_ms = -1, int64_t start_time = -1,
+                             amf interrupt_flag = nullptr) {
     std::vector<PathInfo> results = {};
     auto parts = AMPathStr::split(path);
     if (parts.empty()) {
       return results;
     } else if (parts.size() == 1) {
-      auto [error, info] = stat(parts[0], false, timeout_ms, start_time);
+      auto [error, info] =
+          stat(parts[0], false, timeout_ms, start_time, interrupt_flag);
       if (error.first != EC::Success) {
         return {};
       }
@@ -1313,11 +1324,13 @@ public:
     }
 
     // Check whether cur_path exists
-    auto [error, info] = stat(cur_path, false, timeout_ms, start_time);
+    auto [error, info] =
+        stat(cur_path, false, timeout_ms, start_time, interrupt_flag);
     if (error.first != EC::Success) {
       return {};
     }
-    _find(results, info, match_parts, 0, type, timeout_ms, start_time);
+    _find(results, info, match_parts, 0, type, timeout_ms, start_time,
+          interrupt_flag);
     return results;
   }
 };
@@ -1482,7 +1495,7 @@ public:
   }
 };
 
-class ClientControl : public AMDomain::client::IClientTaskControlPort {
+class ClientControl : public AMDomain::client::IClientControlToken {
 private:
   ClientControlToken client_interrupt_token_;
 
@@ -1515,11 +1528,11 @@ protected:
   mutable AMAtomic<AuthCallback> auth_callback_;
   mutable AMAtomic<KnownHostCallback> known_host_callback_;
   AMDomain::client::IClientConfigPort *config_part_ = nullptr;
-  AMDomain::client::IClientTaskControlPort *control_part_ = nullptr;
+  AMDomain::client::IClientControlToken *control_part_ = nullptr;
 
 public:
   ClientIOBase(AMDomain::client::IClientConfigPort *config,
-               AMDomain::client::IClientTaskControlPort *control) {
+               AMDomain::client::IClientControlToken *control) {
     if (config == nullptr || control == nullptr) {
       throw std::invalid_argument(
           "ClientIOBase requires non-null config and control ports");
@@ -1529,7 +1542,7 @@ public:
   }
 
   void BindPorts(AMDomain::client::IClientConfigPort *config,
-                 AMDomain::client::IClientTaskControlPort *control) {
+                 AMDomain::client::IClientControlToken *control) {
     config_part_ = config;
     control_part_ = control;
   }
@@ -1610,7 +1623,7 @@ private:
   std::string uid_;
   std::unique_ptr<AMDomain::client::IClientMetaDataPort> metadata_port_;
   std::unique_ptr<AMDomain::client::IClientConfigPort> config_port_;
-  std::unique_ptr<AMDomain::client::IClientTaskControlPort> control_port_;
+  std::unique_ptr<AMDomain::client::IClientControlToken> control_port_;
   std::unique_ptr<AMDomain::client::IClientIOPort> io_port_;
 
 public:
@@ -1621,7 +1634,7 @@ public:
   BaseClient(
       std::unique_ptr<AMDomain::client::IClientMetaDataPort> metadata_port,
       std::unique_ptr<AMDomain::client::IClientConfigPort> config_port,
-      std::unique_ptr<AMDomain::client::IClientTaskControlPort> control_port,
+      std::unique_ptr<AMDomain::client::IClientControlToken> control_port,
       std::unique_ptr<AMDomain::client::IClientIOPort> io_port,
       std::string uid = "") {
     if (!metadata_port || !config_port || !control_port || !io_port) {
@@ -1673,7 +1686,7 @@ public:
   /**
    * @brief Return task-control port.
    */
-  [[nodiscard]] AMDomain::client::IClientTaskControlPort &
+  [[nodiscard]] AMDomain::client::IClientControlToken &
   TaskControlPort() override {
     return *control_port_;
   }
@@ -1681,7 +1694,7 @@ public:
   /**
    * @brief Return task-control port.
    */
-  [[nodiscard]] const AMDomain::client::IClientTaskControlPort &
+  [[nodiscard]] const AMDomain::client::IClientControlToken &
   TaskControlPort() const override {
     return *control_port_;
   }
@@ -1701,3 +1714,4 @@ public:
   }
 };
 } // namespace AMInfra::client
+
