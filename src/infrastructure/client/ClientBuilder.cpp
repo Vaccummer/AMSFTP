@@ -16,11 +16,11 @@ namespace AMDomain::client {
  * This runtime factory assembles split metadata/config/control/io parts and
  * returns an aggregate IClientPort implementation.
  */
-std::shared_ptr<AMDomain::client::IClientPort>
-CreateClient(const ConRequest &request, ssize_t trace_num = 10,
-             TraceCallback trace_cb = {}, std::vector<std::string> keys = {},
-             AuthCallback auth_cb = {},
-             AMDomain::client::KnownHostCallback known_host_cb = {}) {
+std::pair<ECM, std::shared_ptr<AMDomain::client::IClientPort>>
+CreateClient(const ConRequest &request,
+             AMDomain::client::KnownHostCallback known_host_cb,
+             TraceCallback trace_cb, AuthCallback auth_cb,
+             const std::vector<std::string> &private_keys) {
   ConRequest normalized = request;
   if (normalized.buffer_size <= 0) {
     normalized.buffer_size = (normalized.protocol == ClientProtocol::LOCAL)
@@ -39,7 +39,7 @@ CreateClient(const ConRequest &request, ssize_t trace_num = 10,
   switch (normalized.protocol) {
   case ClientProtocol::SFTP:
     io_port = std::make_unique<AMInfra::client::SFTP::AMSFTPIOCore>(
-        config_port.get(), control_port.get(), keys, std::move(trace_cb),
+        config_port.get(), control_port.get(), private_keys, std::move(trace_cb),
         std::move(auth_cb), std::move(known_host_cb));
     UID = AMStr::fmt("SFTP-{}",
                      client_counter.fetch_add(1, std::memory_order_relaxed));
@@ -59,12 +59,13 @@ CreateClient(const ConRequest &request, ssize_t trace_num = 10,
                      client_counter.fetch_add(1, std::memory_order_relaxed));
     break;
   default:
-    return nullptr;
+    return {{EC::InvalidArg, "Unsupported client protocol"}, nullptr};
   }
 
-  return std::make_shared<AMInfra::client::BaseClient>(
-      std::move(metadata_port), std::move(config_port), std::move(control_port),
-      std::move(io_port), UID);
+  return {{EC::Success, ""},
+          std::make_shared<AMInfra::client::BaseClient>(
+              std::move(metadata_port), std::move(config_port),
+              std::move(control_port), std::move(io_port), UID)};
 }
 
 } // namespace AMDomain::client

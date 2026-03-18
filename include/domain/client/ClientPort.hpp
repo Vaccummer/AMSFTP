@@ -569,7 +569,8 @@ using ClientName = std::string;
 std::pair<ECM, std::shared_ptr<IClientPort>>
 CreateClient(const ConRequest &request,
              KnownHostCallback known_host_cb = nullptr,
-             TraceCallback trace_cb = nullptr, AuthCallback auth_cb = nullptr);
+             TraceCallback trace_cb = nullptr, AuthCallback auth_cb = nullptr,
+             const std::vector<std::string> &private_keys = {});
 
 class IClientMaintainerPort {
 public:
