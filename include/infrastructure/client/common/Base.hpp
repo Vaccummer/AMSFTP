@@ -8,6 +8,7 @@
 #include "foundation/Path.hpp"
 
 // 3rd party library
+#include <algorithm>
 #include <magic_enum/magic_enum.hpp>
 
 // #define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR // in case mutex constructor is
@@ -51,7 +52,7 @@ inline std::string GenerateUID(int length = 10) {
 }
 */
 
-namespace {
+namespace AMInfra::client {
 namespace fs = std::filesystem;
 using TraceInfo = AMDomain::client::TraceInfo;
 using ConRequest = AMDomain::host::ConRequest;
@@ -82,7 +83,8 @@ using SIZER = std::pair<ECM, size_t>;              // getsize func return type
 using TraceCallback = std::function<void(const TraceInfo &)>;
 using CR =
     std::pair<ECM, std::pair<std::string, int>>; // ConductCmd func return type
-} // namespace
+using amf =
+    AMDomain::client::amf; // atomic shared pointer for interrupt control
 
 /*
 class AMTracer : public virtual AMDomain::client::IClientPort {
@@ -1055,11 +1057,29 @@ protected:
         int64_t start_time = -1) const = 0;
 
 private:
+  [[nodiscard]] static bool IsTimedOut_(int timeout_ms, int64_t start_time) {
+    return timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms;
+  }
+
+  [[nodiscard]] bool ShouldStop_(int timeout_ms, int64_t start_time) const {
+    return IsInterrupted() || IsTimedOut_(timeout_ms, start_time);
+  }
+
+  [[nodiscard]] static bool IsDoubleStarPattern_(const std::string &pattern) {
+    return pattern.size() >= 2 && std::all_of(pattern.begin(), pattern.end(),
+                                              [](char c) { return c == '*'; });
+  }
+
+  [[nodiscard]] static bool IsMatchPattern_(const std::string &pattern) {
+    return pattern.find("*") != std::string::npos ||
+           (pattern.find("<") != std::string::npos &&
+            pattern.find(">") != std::string::npos);
+  }
+
   void _find(std::vector<PathInfo> &results, const PathInfo &path,
-             const std::vector<std::string> &match_parts,
-             const SearchType &type, const std::string &sep,
-             int timeout_ms = -1, int64_t start_time = -1) {
-    if (match_parts.empty()) {
+             const std::vector<std::string> &match_parts, size_t match_index,
+             SearchType type, int timeout_ms = -1, int64_t start_time = -1) {
+    if (match_index >= match_parts.size()) {
       if (type == SearchType::All ||
           (type == SearchType::Directory && path.type == PathType::DIR) ||
           (type == SearchType::File && path.type == PathType::FILE)) {
@@ -1073,9 +1093,9 @@ private:
       return;
     }
 
-    std::string cur_pattern = match_parts[0];
+    const std::string &cur_pattern = match_parts[match_index];
 
-    if (std::regex_search(cur_pattern, std::regex("^\\*\\*+$"))) {
+    if (IsDoubleStarPattern_(cur_pattern)) {
       std::vector<std::string> relative_parts;
       auto [error, sub_pack] =
           iwalk(path.path, true, true, nullptr, timeout_ms, start_time);
@@ -1083,11 +1103,7 @@ private:
         return;
       }
       for (auto &sub : sub_pack.first) {
-        if (IsInterrupted()) {
-          return;
-        }
-        if (timeout_ms > 0 &&
-            AMTime::miliseconds() - start_time >= timeout_ms) {
+        if (ShouldStop_(timeout_ms, start_time)) {
           return;
         }
         if ((sub.type == PathType::DIR && type == SearchType::File) ||
@@ -1096,62 +1112,37 @@ private:
         }
         // sub.path relative to path.path
         relative_parts = AMPathStr::split(sub.path.substr(path.path.size()));
-        if (walk_match(relative_parts, match_parts)) {
+        if (walk_match(relative_parts, match_parts, match_index)) {
           results.push_back(sub);
         }
       }
       return;
     }
-    // Handle non-matching mode
-    else if (cur_pattern.find("*") == std::string::npos &&
-             (cur_pattern.find("<") == std::string::npos ||
-              cur_pattern.find(">") == std::string::npos)) {
-      auto new_parts2 = match_parts;
-      new_parts2.erase(new_parts2.begin());
-      auto [error2, sub_list2] = listdir(path.path, timeout_ms, start_time);
-      if (error2.first != EC::Success) {
-        return;
-      }
-      for (auto &sub : sub_list2) {
-        if (IsInterrupted()) {
-          return;
-        }
-        if (timeout_ms > 0 &&
-            AMTime::miliseconds() - start_time >= timeout_ms) {
-          return;
-        }
-        if (sub.name == cur_pattern) {
-          _find(results, sub, new_parts2, type, sep, timeout_ms, start_time);
-        }
-      }
+
+    const bool is_match_mode = IsMatchPattern_(cur_pattern);
+    auto [error, sub_list] = listdir(path.path, timeout_ms, start_time);
+    if (error.first != EC::Success) {
+      return;
     }
-    // Enter matching mode
-    else {
-      auto new_parts3 = match_parts;
-      new_parts3.erase(new_parts3.begin());
-      auto [error3, sub_list3] = listdir(path.path, timeout_ms, start_time);
-      if (error3.first != EC::Success) {
+
+    for (auto &sub : sub_list) {
+      if (ShouldStop_(timeout_ms, start_time)) {
         return;
       }
-      for (auto &sub : sub_list3) {
-        if (IsInterrupted()) {
-          return;
-        }
-        if (timeout_ms > 0 &&
-            AMTime::miliseconds() - start_time >= timeout_ms) {
-          return;
-        }
-        if (name_match(sub.name, cur_pattern)) {
-          _find(results, sub, new_parts3, type, sep);
-        }
+      const bool hit = is_match_mode ? name_match(sub.name, cur_pattern)
+                                     : (sub.name == cur_pattern);
+      if (!hit) {
+        continue;
       }
+      _find(results, sub, match_parts, match_index + 1, type, timeout_ms,
+            start_time);
     }
 
     return;
   }
 
-  std::string _rep(const std::string &str, const std::string &from,
-                   const std::string &to) {
+  static std::string _rep(const std::string &str, const std::string &from,
+                          const std::string &to) {
     std::string result = str;
     if (from.empty())
       return result; // Avoid infinite loop caused by empty string
@@ -1164,19 +1155,19 @@ private:
     return result;
   }
 
-  bool str_match(const std::string &name, const std::string &pattern) {
+  static bool str_match(const std::string &name, const std::string &pattern) {
     std::string patternf = "^" + pattern + "$";
     std::wstring w_pattern = AMStr::wstr(patternf);
     std::wstring w_name = AMStr::wstr(name);
     try {
-      bool res = std::regex_search(w_name, std::wregex(w_pattern));
+      bool res = std::regex_match(w_name, std::wregex(w_pattern));
       return res;
-    } catch (const std::regex_error) {
+    } catch (const std::regex_error &) {
       return false;
     }
   }
 
-  bool name_match(const std::string &name, const std::string &pattern) {
+  static bool name_match(const std::string &name, const std::string &pattern) {
     // Replace * in pattern with star_rep, < with less_rep, and > with
     // greater_rep
     static const std::string star_rep = "XKSOX1S";
@@ -1196,14 +1187,19 @@ private:
     return str_match(name, pattern_new);
   };
 
-  bool walk_match(const std::vector<std::string> &parts,
-                  const std::vector<std::string> &match_parts) {
-    if (match_parts.size() > parts.size()) {
+  static bool walk_match(const std::vector<std::string> &parts,
+                         const std::vector<std::string> &match_parts,
+                         size_t match_index = 0) {
+    if (match_index >= match_parts.size()) {
+      return true;
+    }
+    if (match_parts.size() - match_index > parts.size()) {
       return false;
     }
     size_t pos = 0;
     bool is_match;
-    for (auto &part : match_parts) {
+    for (size_t mi = match_index; mi < match_parts.size(); ++mi) {
+      const std::string &part = match_parts[mi];
       is_match = false;
       for (size_t i = pos; i < parts.size(); i++) {
         if (name_match(parts[i], part)) {
@@ -1220,6 +1216,66 @@ private:
   }
 
 public:
+  /**
+   * @brief Return current wildcard match rules as plain text.
+   */
+  [[nodiscard]] static std::string MatchRuleText() {
+    return "* matches within one path segment; ** uses legacy recursive "
+           "subsequence matching; <...> maps to character class [...].";
+  }
+
+  /**
+   * @brief Pure string matcher for tests (filesystem-independent).
+   */
+  [[nodiscard]] static bool
+  MatchPathPatternLiteral(const std::string &path, const std::string &pattern) {
+    const std::vector<std::string> path_parts = AMPathStr::split(path);
+    const std::vector<std::string> pattern_parts = AMPathStr::split(pattern);
+    if (path_parts.empty() || pattern_parts.empty()) {
+      return path_parts.empty() && pattern_parts.empty();
+    }
+
+    size_t pi = 0;
+    size_t mi = 0;
+    while (pi < path_parts.size() && mi < pattern_parts.size() &&
+           !IsMatchPattern_(pattern_parts[mi])) {
+      if (path_parts[pi] != pattern_parts[mi]) {
+        return false;
+      }
+      ++pi;
+      ++mi;
+    }
+
+    if (mi >= pattern_parts.size()) {
+      return pi == path_parts.size();
+    }
+    if (pi >= path_parts.size()) {
+      return false;
+    }
+
+    if (IsDoubleStarPattern_(pattern_parts[mi])) {
+      const std::vector<std::string> rel_parts(path_parts.begin() + pi,
+                                               path_parts.end());
+      return walk_match(rel_parts, pattern_parts, mi);
+    }
+
+    while (pi < path_parts.size() && mi < pattern_parts.size()) {
+      const std::string &pat = pattern_parts[mi];
+      const bool hit = IsMatchPattern_(pat) ? name_match(path_parts[pi], pat)
+                                            : (path_parts[pi] == pat);
+      if (!hit) {
+        return false;
+      }
+      ++pi;
+      ++mi;
+    }
+    return pi == path_parts.size() && mi == pattern_parts.size();
+  }
+
+  static bool IsUseMatch(const std::string &pattern) {
+    return IsMatchPattern_(pattern);
+  }
+
   std::vector<PathInfo> find(const std::string &path,
                              SearchType type = SearchType::All,
                              int timeout_ms = -1, int64_t start_time = -1) {
@@ -1241,16 +1297,14 @@ public:
       return results;
     }
 
-    std::string sep = AMPathStr::GetPathSep(path);
     std::string cur_path = parts[0];
     bool is_stop = false;
     std::vector<std::string> match_parts = {};
 
     for (size_t i = 1; i < parts.size(); i++) {
-      // When there is no * < >, join with cur_path
-      if (parts[i].find("*") == std::string::npos &&
-          parts[i].find("<") == std::string::npos &&
-          parts[i].find(">") == std::string::npos && !is_stop) {
+      // When there is no * < >, join with cur_path; otherwise, stop joining and
+      // add to match_parts
+      if (!is_stop && !IsUseMatch(parts[i])) {
         cur_path = AMPathStr::join(cur_path, parts[i]);
       } else {
         is_stop = true;
@@ -1263,7 +1317,7 @@ public:
     if (error.first != EC::Success) {
       return {};
     }
-    _find(results, info, match_parts, type, sep, timeout_ms, start_time);
+    _find(results, info, match_parts, 0, type, timeout_ms, start_time);
     return results;
   }
 };
@@ -1457,50 +1511,6 @@ public:
 
 class ClientIOBase : public AMDomain::client::IClientIOPort {
 protected:
-  class TokenControlPortBridge final
-      : public AMDomain::client::IClientTaskControlPort {
-  public:
-    explicit TokenControlPortBridge(amf token) : token_(std::move(token)) {}
-
-    void RequestInterrupt() override {
-      if (!token_) {
-        return;
-      }
-      (void)token_->Kill(TaskControlSignal::SigInt);
-    }
-
-    void ClearInterrupt() override {
-      if (!token_) {
-        return;
-      }
-      (void)token_->Reset();
-    }
-
-    [[nodiscard]] bool IsInterrupted() const override {
-      if (!token_) {
-        return false;
-      }
-      return !token_->IsRunning();
-    }
-
-    size_t RegisterWakeup(std::function<void()> wake_cb) override {
-      if (!token_ || !wake_cb) {
-        return 0;
-      }
-      return token_->RegisterWakeup(std::move(wake_cb));
-    }
-
-    void UnregisterWakeup(size_t token) override {
-      if (!token_ || token == 0) {
-        return;
-      }
-      token_->UnregisterWakeup(token);
-    }
-
-  private:
-    amf token_ = nullptr;
-  };
-
   mutable AMAtomic<TraceCallback> trace_callback_;
   mutable AMAtomic<AuthCallback> auth_callback_;
   mutable AMAtomic<KnownHostCallback> known_host_callback_;
@@ -1604,6 +1614,7 @@ private:
   std::unique_ptr<AMDomain::client::IClientIOPort> io_port_;
 
 public:
+  using amf = std::shared_ptr<ClientControlToken>;
   /**
    * @brief Construct one assembled client from injected port implementations.
    */
@@ -1689,4 +1700,4 @@ public:
     return *io_port_;
   }
 };
-
+} // namespace AMInfra::client
