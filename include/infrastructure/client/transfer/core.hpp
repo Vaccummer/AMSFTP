@@ -139,7 +139,7 @@ struct TransferRuntimeProgress {
 class TransferExecutionEngine final : NonCopyableNonMovable {
 public:
   using ECM = std::pair<ErrorCode, std::string>;
-  using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
+  using ClientHandle = AMInfra::transfer::ClientHandle;
 
   explicit TransferExecutionEngine();
   ~TransferExecutionEngine() override;
@@ -160,9 +160,7 @@ public:
   using ClientHandle = AMInfra::transfer::ClientHandle;
   using TransferClientContainer = AMInfra::transfer::TransferClientContainer;
 
-  explicit TransferExecutionPool(
-      std::unique_ptr<AMDomain::transfer::ITransferExecutionPort>
-          execution_port = nullptr);
+  explicit TransferExecutionPool();
   ~TransferExecutionPool() override;
 
   ECM Shutdown(int timeout_ms = 5000) override;
@@ -241,7 +239,7 @@ private:
   std::unordered_set<TaskId> conducting_tasks_;
   std::vector<TaskId> conducting_by_thread_;
   std::vector<TaskHandle> conducting_infos_;
-  std::unique_ptr<TransferExecutionEngine> transfer_engine_ = nullptr;
+  TransferExecutionEngine transfer_engine_ = TransferExecutionEngine();
   std::atomic<bool> is_deconstruct{false};
 };
 } // namespace AMInfra::transfer
