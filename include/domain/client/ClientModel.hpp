@@ -9,10 +9,15 @@
 
 namespace AMDomain::client {
 using ECM = std::pair<ErrorCode, std::string>;
+
 /**
  * @brief Parsed client-qualified path token (`nickname@path`).
  */
 struct ScopedPath {
+  /**
+   * @brief True when the path contains a nickname prefix.
+   */
+  bool is_match_forbidden = false;
   /**
    * @brief True when input explicitly specified a nickname prefix.
    */
@@ -151,6 +156,13 @@ enum class TraceLevel {
 enum class TraceSource {
   Client = 0,
   Programm = 1,
+};
+
+enum class ClientStatus {
+  OK = 0,
+  NotInitialized = 1,
+  NoConnection = 2,
+  ConnectionBroken = 3,
 };
 
 /**
