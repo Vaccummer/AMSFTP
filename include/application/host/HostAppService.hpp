@@ -10,21 +10,22 @@ namespace AMDomain::host {
 /**
  * @brief Host configuration manager for host map and local profile state.
  */
-class AMHostConfigManager : public NonCopyableNonMovable {
+class AMHostAppService : public NonCopyableNonMovable {
 public:
   using HostConfigMap = std::map<std::string, HostConfig>;
 
-  explicit AMHostConfigManager() = default;
-
-  /**
-   * @brief Bind the snapshot persistence store used by this manager.
-   */
-  void BindSnapshotStore(IHostConfigSnapshotStore *snapshot_store);
+  explicit AMHostAppService() = default;
+  virtual ~AMHostAppService() override = default;
 
   /**
    * @brief Initialize manager from explicit host config payload.
    */
   ECM Init(const HostConfigArg &host_config_arg);
+
+  /**
+   * @brief Return host config payload including map and local config.
+   */
+  [[nodiscard]] HostConfigArg GetInitArg() const;
 
   /**
    * @brief Return one host config by nickname.
@@ -41,11 +42,6 @@ public:
    * @brief Return all non-local host configs keyed by nickname.
    */
   [[nodiscard]] const HostConfigMap &HostConfigs() const;
-
-  /**
-   * @brief Return host config payload including map and local config.
-   */
-  [[nodiscard]] HostConfigArg GetInitArg() const;
 
   [[nodiscard]] std::vector<std::string> ListNames() const;
 
@@ -97,14 +93,10 @@ private:
 /**
  * @brief Known-host manager for fingerprint query/upsert operations.
  */
-class AMKnownHostsManager : public NonCopyableNonMovable {
+class AMKnownHostsAppService : public NonCopyableNonMovable {
 public:
-  explicit AMKnownHostsManager() = default;
-
-  /**
-   * @brief Bind the snapshot persistence store used by this manager.
-   */
-  void BindSnapshotStore(IKnownHostSnapshotStore *snapshot_store);
+  explicit AMKnownHostsAppService() = default;
+  virtual ~AMKnownHostsAppService() override = default;
 
   /**
    * @brief Initialize manager by loading known-host snapshot from store.
