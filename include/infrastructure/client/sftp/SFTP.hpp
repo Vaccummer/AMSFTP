@@ -12,11 +12,11 @@
 #include <fcntl.h>
 #include <fstream>
 #include <functional>
-#include <memory>
+#include <limits>
 #include <mutex>
-#include <regex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <vector>
@@ -316,13 +316,13 @@ public:
     StoreRequest_(res_data);
   }
 
-  ~AMSFTPTerminal() override {
+  ~AMSFTPTerminal() {
     StopReader();
     TerminalClose();
   }
 
   ECM Connect(bool force = false,
-              int timeout_ms = -1, int64_t start_time = -1) override {
+              int timeout_ms = -1, int64_t start_time = -1) {
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
 
     if (has_connected.load(std::memory_order_relaxed) && session && !force) {
@@ -365,7 +365,7 @@ public:
   }
 
   ECM Check(int timeout_ms = -1,
-            int64_t start_time = -1) override {
+            int64_t start_time = -1) {
     amf flag = interrupt_flag;
     if (this->LegacyInterruptCheck_(flag)) {
       ECM rcm = {EC::Terminate, "Check interrupted"};
@@ -391,17 +391,17 @@ public:
     return {EC::Success, ""};
   }
 
-  void PauseReading() override {
+  void PauseReading() {
     reader_paused.store(true, std::memory_order_relaxed);
   }
 
-  void ResumeReading() override {
+  void ResumeReading() {
     reader_paused.store(false, std::memory_order_relaxed);
     reader_cv.notify_all();
   }
 
   void
-  SetTerminalOutputCallback(TerminalOutputCallback output_cb = {}) override {
+  SetTerminalOutputCallback(TerminalOutputCallback output_cb = {}) {
     {
       std::lock_guard<std::mutex> lock(terminal_cb_mtx);
       terminal_output_cb = std::move(output_cb);
@@ -413,7 +413,7 @@ public:
     }
   }
 
-  void SetReaderWaitTimeoutMs(int timeout_ms) override {
+  void SetReaderWaitTimeoutMs(int timeout_ms) {
     if (timeout_ms < 1) {
       timeout_ms = 1;
     }
@@ -421,7 +421,7 @@ public:
   }
 
   ECM SetTerminalWindowInfo(const TerminalWindowInfo &window, int timeout_ms =
--1, int64_t start_time = -1) override { terminal_window = window; if
+-1, int64_t start_time = -1) { terminal_window = window; if
 (!terminal_channel || !terminal_channel->channel) { return {EC::Success, ""};
     }
 
@@ -468,7 +468,7 @@ public:
   }
 
   ECM TerminalWrite(const std::string &msg,
-                    int timeout_ms = -1, int64_t start_time = -1) override {
+                    int timeout_ms = -1, int64_t start_time = -1) {
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!terminal_channel || !terminal_channel->channel) {
       return {EC::NoConnection, "Terminal not initialized"};
@@ -522,7 +522,7 @@ public:
     }
   }
 
-  ECM TerminalClose() override {
+  ECM TerminalClose() {
     StopReader();
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (!terminal_channel || !terminal_channel->channel) {
@@ -561,7 +561,7 @@ private:
 
 public:
   ECM Connect(bool force = false,
-              int timeout_ms = -1, int64_t start_time = -1) override {
+              int timeout_ms = -1, int64_t start_time = -1) {
     (void)force;
     (void)interrupt_flag;
     (void)timeout_ms;
@@ -571,10 +571,10 @@ public:
   }
 
   ECM Check(int timeout_ms = -1,
-            int64_t start_time = -1) override {
+            int64_t start_time = -1) {
     (void)timeout_ms;
     (void)start_time;
-    if ((control_part_ && control_part_->IsInterrupted())) {
+    if (false) {
       return {EC::Terminate, "Check interrupted"};
     }
     if (closed.load(std::memory_order_relaxed)) {
@@ -583,28 +583,28 @@ public:
     return {EC::Success, ""};
   }
 
-  void PauseReading() override {
+  void PauseReading() {
     paused.store(true, std::memory_order_relaxed);
   }
 
-  void ResumeReading() override {
+  void ResumeReading() {
     paused.store(false, std::memory_order_relaxed);
   }
 
   void
-  SetTerminalOutputCallback(TerminalOutputCallback output_cb = {}) override {
+  SetTerminalOutputCallback(TerminalOutputCallback output_cb = {}) {
     std::lock_guard<std::mutex> lock(terminal_cb_mtx);
     terminal_output_cb = std::move(output_cb);
   }
 
   ECM SetTerminalWindowInfo(const TerminalWindowInfo &window, int timeout_ms =
--1, int64_t start_time = -1) override { (void)window; (void)interrupt_flag;
+-1, int64_t start_time = -1) { (void)window; (void)interrupt_flag;
     (void)timeout_ms;
     (void)start_time;
     return {EC::Success, ""};
   }
 
-  void SetReaderWaitTimeoutMs(int timeout_ms) override {
+  void SetReaderWaitTimeoutMs(int timeout_ms) {
     if (timeout_ms < 1) {
       timeout_ms = 1;
     }
@@ -612,7 +612,7 @@ public:
   }
 
   ECM TerminalWrite(const std::string &msg,
-                    int timeout_ms = -1, int64_t start_time = -1) override {
+                    int timeout_ms = -1, int64_t start_time = -1) {
     if (closed.load(std::memory_order_relaxed)) {
       return {EC::NoConnection, "Terminal closed"};
     }
@@ -633,7 +633,7 @@ public:
     }
     start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
 
-    if ((control_part_ && control_part_->IsInterrupted())) {
+    if (false) {
       return {EC::Terminate, "Terminal interrupted"};
     }
 
@@ -644,7 +644,7 @@ public:
 
     std::array<char, 4096> buffer;
     while (fgets(buffer.data(), static_cast<int>(buffer.size()), pipe)) {
-      if ((control_part_ && control_part_->IsInterrupted())) {
+      if (false) {
         ClosePipe(pipe);
         return {EC::Terminate, "Terminal interrupted"};
       }
@@ -672,7 +672,7 @@ public:
     return {EC::Success, ""};
   }
 
-  ECM TerminalClose() override {
+  ECM TerminalClose() {
     closed.store(true, std::memory_order_relaxed);
     return {EC::Success, ""};
   }
@@ -680,6 +680,7 @@ public:
 */
 
 namespace AMInfra::client::SFTP {
+namespace detail {
 // Socket wait direction
 enum class SocketWaitType {
   Read,        // Wait for socket readable
@@ -1037,12 +1038,6 @@ inline bool isreg(const LIBSSH2_SFTP_ATTRIBUTES &attrs) {
   return (attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS) &&
          (attrs.permissions & LIBSSH2_SFTP_S_IFREG);
 }
-
-using AuthCallback =
-    std::function<std::optional<std::string>(const AuthCBInfo &)>;
-using TraceLevel = AMDomain::client::TraceLevel;
-using KnownHostQuery = AMDomain::host::KnownHostQuery;
-using KnownHostCallback = AMDomain::client::KnownHostCallback;
 
 inline bool IsWouldBlockSocketError_() {
 #ifdef _WIN32
@@ -1578,13 +1573,20 @@ public:
   }
 };
 
+} // namespace detail
+
+using AuthCallback =
+    std::function<std::optional<std::string>(const AuthCBInfo &)>;
+using TraceLevel = AMDomain::client::TraceLevel;
+using KnownHostQuery = AMDomain::host::KnownHostQuery;
+using KnownHostCallback = AMDomain::client::KnownHostCallback;
+
 class SFTPSessionBase : public ClientIOBase {
 protected:
   using amf = AMDomain::client::amf;
-  AMAtomic<ConRequest> &request_atomic_;
   AMAtomic<AMDomain::client::ClientState> &state_atomic_;
   mutable std::recursive_mutex mtx;
-  InterruptWakeBridge interrupt_wake_;
+  detail::InterruptWakeBridge interrupt_wake_;
   SOCKET sock = INVALID_SOCKET;
 
   void trace(TraceLevel level, EC error_code, const std::string &target = "",
@@ -1737,7 +1739,7 @@ private:
       return {EC::HostkeyInitFailed, "Failed to read host key from session"};
     }
 
-    const std::string actual_protocol = HostKeyTypeToProtocol(key_type);
+    const std::string actual_protocol = detail::HostKeyTypeToProtocol(key_type);
     if (actual_protocol.empty()) {
       return {EC::AlgorithmUnsupported, "Unsupported host key algorithm"};
     }
@@ -1747,7 +1749,7 @@ private:
     std::array<unsigned char, SHA256_DIGEST_LENGTH> digest;
     std::string actual_sha = "";
     if (SHA256(key_bytes, key_len, digest.data())) {
-      actual_sha = Base64Encode(digest.data(), SHA256_DIGEST_LENGTH);
+      actual_sha = detail::Base64Encode(digest.data(), SHA256_DIGEST_LENGTH);
     }
 
     KnownHostQuery entry{request.nickname, request.hostname, (int)request.port,
@@ -1762,7 +1764,7 @@ private:
     auto [error, listd] = AMFS::listdir(AMFS::abspath("~/.ssh"));
     for (auto &info : listd) {
       if (info.type == PathType::FILE) {
-        if (IsValidKey(info.path)) {
+        if (detail::IsValidKey(info.path)) {
           this->private_keys.push_back(info.path);
         }
       }
@@ -1797,7 +1799,7 @@ private:
 public:
   LIBSSH2_SESSION *session = nullptr;
   LIBSSH2_SFTP *sftp = nullptr;
-  ~SFTPSessionBase() override { Disconnect(); }
+  ~SFTPSessionBase() { Disconnect(); }
 
   /**
    * @brief Expose the transfer serialization mutex for runtime transfer
@@ -1816,11 +1818,6 @@ public:
                   TraceCallback trace_cb = {}, AuthCallback auth_cb = {},
                   AMDomain::client::KnownHostCallback known_host_cb = {})
       : ClientIOBase(config_port, control_port),
-        request_atomic_((config_port != nullptr)
-                            ? config_port->RequestAtomic()
-                            : throw std::invalid_argument(
-                                  "SFTPSessionBase requires non-null config "
-                                  "port")),
         state_atomic_((config_port != nullptr)
                           ? config_port->StateAtomic()
                           : throw std::invalid_argument(
@@ -1851,23 +1848,16 @@ public:
     return req->buffer_size;
   }
 
-  void RequestInterrupt() {
-    if (control_part_) {
-      control_part_->RequestInterrupt();
-    }
-  }
-
-  void ClearInterrupt() {
-    if (control_part_) {
-      control_part_->ClearInterrupt();
-    }
-  }
-
   template <typename Func>
-  auto nb_call(int64_t timeout_ms, int64_t start_time, Func &&func,
-               amf interrupt_flag = nullptr) -> NBResult<decltype(func())> {
+  auto nb_call(const AMDomain::client::ClientControlComponent &control,
+               Func &&func) -> NBResult<decltype(func())> {
     using RetType = decltype(func());
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
+    if (control.IsInterrupted()) {
+      return {RetType{}, WaitResult::Interrupted};
+    }
+    if (control.IsTimeout()) {
+      return {RetType{}, WaitResult::Timeout};
+    }
 
     RetType rc;
     while (true) {
@@ -1887,57 +1877,49 @@ public:
         return {rc, WaitResult::Ready};
       }
 
-      WaitResult wr = wait_for_socket(SocketWaitType::Auto, start_time,
-                                      timeout_ms, interrupt_flag);
+      WaitResult wr = wait_for_socket(detail::SocketWaitType::Auto, control);
       if (wr != WaitResult::Ready) {
         return {rc, wr};
       }
     }
   }
 
-  inline WaitResult wait_for_socket(SocketWaitType wait_dir,
-                                    int64_t start_time = -1,
-                                    int64_t timeout_ms = -1,
-                                    amf interrupt_flag = nullptr) {
+  inline WaitResult wait_for_socket(
+      detail::SocketWaitType wait_dir,
+      const AMDomain::client::ClientControlComponent &control = {}) {
     if (!session || sock == INVALID_SOCKET) {
       return WaitResult::Error;
     }
+    const amf &interrupt_flag = control.ControlToken();
 
-    auto is_interrupted = [&]() -> bool {
-      return ((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-              (control_part_ && control_part_->IsInterrupted()));
-    };
-
-    if (is_interrupted()) {
+    if (control.IsInterrupted()) {
       return WaitResult::Interrupted;
     }
-    if (timeout_ms > 0) {
-      start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-      if (AMTime::miliseconds() - start_time >= timeout_ms) {
-        return WaitResult::Timeout;
-      }
+    if (control.IsTimeout()) {
+      return WaitResult::Timeout;
     }
 
-    if (wait_dir == SocketWaitType::Auto &&
+    if (wait_dir == detail::SocketWaitType::Auto &&
         libssh2_session_block_directions(session) == 0) {
       return WaitResult::Ready;
     }
 
     bool wait_read = false;
     bool wait_write = false;
-    const bool is_auto = (wait_dir == SocketWaitType::Auto);
-    const bool is_read_or_write = (wait_dir == SocketWaitType::ReadOrWrite);
+    const bool is_auto = (wait_dir == detail::SocketWaitType::Auto);
+    const bool is_read_or_write =
+        (wait_dir == detail::SocketWaitType::ReadOrWrite);
 
     if (!is_auto) {
       switch (wait_dir) {
-      case SocketWaitType::Read:
+      case detail::SocketWaitType::Read:
         wait_read = true;
         break;
-      case SocketWaitType::Write:
+      case detail::SocketWaitType::Write:
         wait_write = true;
         break;
-      case SocketWaitType::ReadWrite:
-      case SocketWaitType::ReadOrWrite:
+      case detail::SocketWaitType::ReadWrite:
+      case detail::SocketWaitType::ReadOrWrite:
         wait_read = true;
         wait_write = true;
         break;
@@ -1976,8 +1958,6 @@ public:
       if (wake_token != 0) {
         if (interrupt_flag) {
           interrupt_flag->UnregisterWakeup(wake_token);
-        } else if (control_part_) {
-          control_part_->UnregisterWakeup(wake_token);
         }
         wake_token = 0;
       }
@@ -1990,9 +1970,6 @@ public:
       if (wake_read_sock != INVALID_SOCKET) {
         if (interrupt_flag) {
           wake_token = interrupt_flag->RegisterWakeup(
-              [this]() { SignalInterruptWakeSocket_(); });
-        } else if (control_part_) {
-          wake_token = control_part_->RegisterWakeup(
               [this]() { SignalInterruptWakeSocket_(); });
         }
         FD_SET(wake_read_sock, &readfds);
@@ -2010,13 +1987,13 @@ public:
     timeval tv{};
     timeval *timeout_ptr = nullptr;
     bool interrupt_poll_fallback = false;
-    if (timeout_ms > 0) {
-      const int64_t remaining =
-          timeout_ms - (AMTime::miliseconds() - start_time);
-      if (remaining <= 0) {
+    const auto remain_opt = control.RemainingTimeMs();
+    if (remain_opt.has_value()) {
+      if (*remain_opt == 0U) {
         cleanup_wakeup();
         return WaitResult::Timeout;
       }
+      const int64_t remaining = static_cast<int64_t>(*remain_opt);
       tv.tv_sec = static_cast<long>(remaining / 1000);
       tv.tv_usec = static_cast<long>((remaining % 1000) * 1000);
       timeout_ptr = &tv;
@@ -2042,24 +2019,24 @@ public:
     cleanup_wakeup();
 
     if (rc < 0) {
-      return is_interrupted() ? WaitResult::Interrupted : WaitResult::Error;
+      return control.IsInterrupted() ? WaitResult::Interrupted
+                                     : WaitResult::Error;
     }
     if (rc == 0) {
       if (interrupt_poll_fallback) {
-        return is_interrupted() ? WaitResult::Interrupted : WaitResult::Ready;
+        return control.IsInterrupted() ? WaitResult::Interrupted
+                                       : WaitResult::Ready;
       }
-      return is_interrupted() ? WaitResult::Interrupted : WaitResult::Timeout;
+      return control.IsInterrupted() ? WaitResult::Interrupted
+                                     : WaitResult::Timeout;
     }
 
     if (wake_read_sock != INVALID_SOCKET &&
         FD_ISSET(wake_read_sock, &readfds)) {
       DrainInterruptWakeSocket_();
-      if (is_interrupted()) {
+      if (control.IsInterrupted()) {
         return WaitResult::Interrupted;
       }
-    }
-    if (is_interrupted()) {
-      return WaitResult::Interrupted;
     }
 
     if (is_read_or_write) {
@@ -2079,9 +2056,23 @@ public:
     this->private_keys = keys;
   }
 
+  [[nodiscard]] static int
+  ResolveTimeoutMs_(const AMDomain::client::ClientControlComponent &control) {
+    const auto remain_opt = control.RemainingTimeMs();
+    if (!remain_opt.has_value()) {
+      return -1;
+    }
+    return static_cast<int>(std::min<unsigned int>(
+        *remain_opt,
+        static_cast<unsigned int>((std::numeric_limits<int>::max)())));
+  }
+
   ECM Check(int timeout_ms = -1, int64_t start_time = -1,
-            amf interrupt_flag = nullptr) override {
-    auto rcm = stat(".", false, timeout_ms, start_time, interrupt_flag).first;
+            amf interrupt_flag = nullptr) {
+    auto rcm = stat(AMFSI::StatArgs{".", false},
+                    AMDomain::client::MakeClientControlComponent(
+                        std::move(interrupt_flag), timeout_ms, start_time))
+                   .rcm;
     AMDomain::client::ClientStatus status =
         rcm.first == EC::Success
             ? AMDomain::client::ClientStatus::OK
@@ -2094,9 +2085,15 @@ public:
     return rcm;
   }
 
-  ECM BaseConnect(bool force = false, int timeout_ms = -1,
-                  int64_t start_time = -1, amf interrupt_flag = nullptr) {
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
+  ECM BaseConnect(bool force,
+                  const AMDomain::client::ClientControlComponent &control) {
+    const int timeout_ms = ResolveTimeoutMs_(control);
+    if (control.IsTimeout()) {
+      return {EC::OperationTimeout, "Operation timed out"};
+    }
+    if (control.IsInterrupted()) {
+      return {EC::Terminate, "Interrupted by user"};
+    }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     ConRequest request = request_atomic_.lock().load();
     const AMDomain::client::ClientState current_state = GetState();
@@ -2130,13 +2127,10 @@ public:
                                   password_enc, password_correct));
     };
 
-    SocketConnector connector;
-    if (!connector.Connect(
-            request.hostname, static_cast<int>(request.port), timeout_ms,
-            [this, interrupt_flag]() {
-              return (interrupt_flag && interrupt_flag->IsInterrupted()) ||
-                     (control_part_ && control_part_->IsInterrupted());
-            })) {
+    detail::SocketConnector connector;
+    if (!connector.Connect(request.hostname, static_cast<int>(request.port),
+                           timeout_ms,
+                           [&control]() { return control.IsInterrupted(); })) {
       trace(TraceLevel::Critical, connector.error_code,
             AMStr::fmt("{}", std::to_string(connector.sock)),
             "SocketConnector.Connect", connector.error_msg);
@@ -2144,11 +2138,10 @@ public:
     }
     sock = connector.sock;
 
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
+    if (control.IsInterrupted()) {
       return {EC::Terminate, "Connection interrupted"};
     }
-    if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
+    if (control.IsTimeout()) {
       return {EC::OperationTimeout, "Connection timed out"};
     }
 
@@ -2171,8 +2164,7 @@ public:
       if (rcr != LIBSSH2_ERROR_EAGAIN) {
         break;
       }
-      wr = wait_for_socket(SocketWaitType::Auto, start_time, timeout_ms,
-                           interrupt_flag);
+      wr = wait_for_socket(detail::SocketWaitType::Auto, control);
       if (wr != WaitResult::Ready) {
         Disconnect();
         switch (wr) {
@@ -2206,13 +2198,10 @@ public:
       return rcm;
     }
 
-    auto auth_list_res = nb_call(
-        timeout_ms, start_time,
-        [&]() {
-          return libssh2_userauth_list(session, request.username.c_str(),
-                                       request.username.length());
-        },
-        interrupt_flag);
+    auto auth_list_res = nb_call(control, [&]() {
+      return libssh2_userauth_list(session, request.username.c_str(),
+                                   request.username.length());
+    });
     rcm = ErrorRecord(auth_list_res, TraceLevel::Critical, request.username,
                       "libssh2_userauth_list", "Fail to {action} : {error}");
     if (rcm.first != EC::Success) {
@@ -2235,18 +2224,14 @@ public:
     password_auth = (strstr(auth_list, "password") != nullptr);
 
     if (!request.keyfile.empty()) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-           (control_part_ && control_part_->IsInterrupted()))) {
+      if (control.IsInterrupted()) {
         return {EC::Terminate, "Authentication interrupted"};
       }
-      auto auth_res = nb_call(
-          -1, AMTime::miliseconds(),
-          [&]() {
-            return libssh2_userauth_publickey_fromfile(
-                session, request.username.c_str(), nullptr,
-                request.keyfile.c_str(), nullptr);
-          },
-          interrupt_flag);
+      auto auth_res = nb_call(control, [&]() {
+        return libssh2_userauth_publickey_fromfile(
+            session, request.username.c_str(), nullptr, request.keyfile.c_str(),
+            nullptr);
+      });
       if (!auth_res.ok()) {
         rcm = ErrorRecord(auth_res, TraceLevel::Error, request.username,
                           "libssh2_userauth_publickey_fromfile");
@@ -2270,18 +2255,14 @@ public:
     }
 
     if (!stored_password_enc.empty() && password_auth) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-           (control_part_ && control_part_->IsInterrupted()))) {
+      if (control.IsInterrupted()) {
         return {EC::Terminate, "Authentication interrupted"};
       }
       std::string plain_password = AMAuth::DecryptPassword(stored_password_enc);
-      auto auth_res = nb_call(
-          -1, AMTime::miliseconds(),
-          [&]() {
-            return libssh2_userauth_password(session, request.username.c_str(),
-                                             plain_password.c_str());
-          },
-          interrupt_flag);
+      auto auth_res = nb_call(control, [&]() {
+        return libssh2_userauth_password(session, request.username.c_str(),
+                                         plain_password.c_str());
+      });
       AMAuth::SecureZero(plain_password);
       if (!auth_res.ok()) {
         rcm = ErrorRecord(auth_res, TraceLevel::Error, request.username,
@@ -2305,21 +2286,17 @@ public:
 
     if (!private_keys.empty()) {
       for (const auto &private_key : private_keys) {
-        if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-             (control_part_ && control_part_->IsInterrupted()))) {
+        if (control.IsInterrupted()) {
           return {EC::Terminate, "Authentication interrupted"};
         }
         if (private_key == request.keyfile) {
           continue;
         }
-        auto auth_res = nb_call(
-            -1, AMTime::miliseconds(),
-            [&]() {
-              return libssh2_userauth_publickey_fromfile(
-                  session, request.username.c_str(), nullptr,
-                  private_key.c_str(), nullptr);
-            },
-            interrupt_flag);
+        auto auth_res = nb_call(control, [&]() {
+          return libssh2_userauth_publickey_fromfile(
+              session, request.username.c_str(), nullptr, private_key.c_str(),
+              nullptr);
+        });
         if (!auth_res.ok()) {
           rcm = ErrorRecord(auth_res, TraceLevel::Error, request.username,
                             "libssh2_userauth_publickey_fromfile");
@@ -2346,8 +2323,7 @@ public:
             "Using password authentication callback to get another password");
       int trial_times = 0;
       while (trial_times < 2) {
-        if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-             (control_part_ && control_part_->IsInterrupted()))) {
+        if (control.IsInterrupted()) {
           return {EC::Terminate, "Authentication interrupted"};
         }
         auto [password_opt, cb_ecm] =
@@ -2363,13 +2339,10 @@ public:
           break;
         }
         const std::string password_enc = AMAuth::EncryptPassword(password_tmp);
-        auto auth_res = nb_call(
-            -1, AMTime::miliseconds(),
-            [&]() {
-              return libssh2_userauth_password(
-                  session, request.username.c_str(), password_tmp.c_str());
-            },
-            interrupt_flag);
+        auto auth_res = nb_call(control, [&]() {
+          return libssh2_userauth_password(session, request.username.c_str(),
+                                           password_tmp.c_str());
+        });
         AMAuth::SecureZero(password_tmp);
         if (!auth_res.ok()) {
           rcm = ErrorRecord(auth_res, TraceLevel::Error, request.username,
@@ -2402,9 +2375,8 @@ public:
       return rcm;
     }
 
-    auto sftp_init_res = nb_call(
-        -1, AMTime::miliseconds(), [&]() { return libssh2_sftp_init(session); },
-        interrupt_flag);
+    auto sftp_init_res =
+        nb_call(control, [&]() { return libssh2_sftp_init(session); });
     rcm =
         ErrorRecord(sftp_init_res, TraceLevel::Critical, "",
                     "libssh2_sftp_init", "SFTP initialization failed: {error}");
@@ -2426,13 +2398,13 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     int ori_code = libssh2_session_last_errno(session);
     if (ori_code != LIBSSH2_ERROR_SFTP_PROTOCOL) {
-      return IntToEC(ori_code);
+      return detail::IntToEC(ori_code);
     } else {
       if (!sftp) {
         return EC::NoConnection;
       }
       int ori_code2 = libssh2_sftp_last_error(sftp);
-      return IntToEC(ori_code2);
+      return detail::IntToEC(ori_code2);
     }
   }
 
@@ -2454,39 +2426,14 @@ public:
       if (!sftp) {
         return "SFTP not initialized";
       }
-      return SSHCodeToString(libssh2_sftp_last_error(sftp));
+      return detail::SSHCodeToString(libssh2_sftp_last_error(sftp));
     }
   }
 };
 
-class AMSFTPIOCore : public SFTPSessionBase, public BasePathMatch {
+class AMSFTPIOCore final : public SFTPSessionBase {
 private:
   std::unordered_map<long, std::string> user_id_map;
-
-  std::string GetPathOnwer(const std::string &path,
-                           const LIBSSH2_SFTP_ATTRIBUTES &attrs) {
-
-    if (config_part_->GetOSType() == OS_TYPE::Windows) {
-      auto cmd_f = AMStr::fmt("powershell -NoProfile -Command \"(Get-Acl "
-                              "-LiteralPath '{}').Owner \"",
-                              path);
-      auto [rcm, cr] = ConductCmd(cmd_f);
-      if (!isok(rcm) || cr.second != 0) {
-        return "unknown";
-      }
-      int pos = cr.first.find_last_of("\\");
-      if (pos != std::string::npos && pos + 1 < cr.first.size()) {
-        return cr.first.substr(pos + 1);
-      } else {
-        return cr.first;
-      }
-    } else if (attrs.flags & LIBSSH2_SFTP_ATTR_UIDGID) {
-      long uid = attrs.uid;
-      return StrUid(uid);
-    } else {
-      return "";
-    }
-  }
 
   PathInfo FormatStat(const std::string &path,
                       const LIBSSH2_SFTP_ATTRIBUTES &attrs) {
@@ -2548,472 +2495,91 @@ private:
     return info;
   }
 
-  std::pair<ECM, std::string> lib_realpath(const std::string &path,
-                                           int timeout_ms = -1,
-                                           int64_t start_time = -1,
-                                           amf interrupt_flag = nullptr) {
-    if (!sftp) {
-      return {ECM{EC::NoConnection, "SFTP not initialized"}, ""};
-    }
-    char path_t[1024] = {0};
-    auto nb_res = nb_call(
-        timeout_ms, start_time,
-        [&] {
-          return libssh2_sftp_realpath(sftp, path.c_str(), path_t,
-                                       sizeof(path_t));
-        },
-        interrupt_flag);
-    return {ErrorRecord(nb_res, TraceLevel::Error, path,
-                        "libssh2_sftp_realpath",
-                        "Realpath \"{target}\" failed: {error}"),
-            std::string(path_t)};
-  }
-
-  ECM lib_rename(const std::string &src, const std::string &dst,
-                 const bool &overwrite, int timeout_ms = -1,
-                 int64_t start_time = -1, amf interrupt_flag = nullptr) {
-    if (!sftp) {
-      return std::make_pair(EC::NoConnection, "SFTP not initialized");
-    }
-
-    if (!overwrite) {
-      auto nb_res = nb_call(
-          timeout_ms, start_time,
-          [&] {
-            return libssh2_sftp_rename_ex(sftp, src.c_str(), src.size(),
-                                          dst.c_str(), dst.size(),
-                                          LIBSSH2_SFTP_RENAME_NATIVE);
-          },
-          interrupt_flag);
-      return ErrorRecord(
-          nb_res, TraceLevel::Error, AMStr::fmt("{} -> {}", src, dst),
-          "libssh2_sftp_rename_ex", "Rename {target} failed: {error}");
-    } else {
-      auto nb_res = nb_call(
-          timeout_ms, start_time,
-          [&] {
-            return libssh2_sftp_rename_ex(
-                sftp, src.c_str(), src.size(), dst.c_str(), dst.size(),
-                LIBSSH2_SFTP_RENAME_OVERWRITE | LIBSSH2_SFTP_RENAME_NATIVE);
-          },
-          interrupt_flag);
-      return ErrorRecord(
-          nb_res, TraceLevel::Error, AMStr::fmt("{} -> {}", src, dst),
-          "libssh2_sftp_rename_ex", "Rename {target} failed: {error}");
-    }
-  }
-
-  std::pair<ECM, LIBSSH2_SFTP_ATTRIBUTES>
-  lib_getstat(const std::string &path, bool trace_link = false,
-              int timeout_ms = -1, int64_t start_time = -1,
-              amf interrupt_flag = nullptr) {
-    if (!sftp) {
-      return {ECM{EC::NoConnection, "SFTP not initialized"},
-              LIBSSH2_SFTP_ATTRIBUTES()};
-    }
-    LIBSSH2_SFTP_ATTRIBUTES attrs;
-    NBResult<int> nb_res;
-    if (trace_link) {
-      nb_res = nb_call(
-          timeout_ms, start_time,
-          [&] { return libssh2_sftp_stat(sftp, path.c_str(), &attrs); },
-          interrupt_flag);
-    } else {
-      nb_res = nb_call(
-          timeout_ms, start_time,
-          [&] { return libssh2_sftp_lstat(sftp, path.c_str(), &attrs); },
-          interrupt_flag);
-    }
-    ECM rcm = ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_stat",
-                          "Get stat failed: {error}");
-    return {rcm, attrs};
-  }
-
-  ECM lib_setstat(const std::string &path, LIBSSH2_SFTP_ATTRIBUTES &attrs,
-                  int timeout_ms = -1, int64_t start_time = -1,
-                  amf interrupt_flag = nullptr) {
-    if (!sftp) {
-      return {EC::NoConnection, "SFTP not initialized"};
-    }
-
-    auto nb_res = nb_call(
-        timeout_ms, start_time,
-        [&] { return libssh2_sftp_setstat(sftp, path.c_str(), &attrs); },
-        interrupt_flag);
-    return ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_setstat",
-                       "Set stat failed: {error}");
-  }
-
-  ECM lib_unlink(const std::string &path, int timeout_ms = -1,
-                 int64_t start_time = -1, amf interrupt_flag = nullptr) {
-    if (!sftp) {
-      return {EC::NoConnection, "SFTP not initialized"};
-    }
-
-    auto nb_res = nb_call(
-        timeout_ms, start_time,
-        [&] { return libssh2_sftp_unlink(sftp, path.c_str()); },
-        interrupt_flag);
-    return ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_unlink",
-                       "Unlink \"{target}\" failed: {error}");
-  }
-
-  ECM lib_rmdir(const std::string &path, int timeout_ms = -1,
-                int64_t start_time = -1, amf interrupt_flag = nullptr) {
-    if (!sftp) {
-      return {EC::NoConnection, "SFTP not initialized"};
-    }
-
-    auto nb_res = nb_call(
-        timeout_ms, start_time,
-        [&] { return libssh2_sftp_rmdir(sftp, path.c_str()); }, interrupt_flag);
-    return ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_rmdir",
-                       "Remove directory failed: {error}");
-  }
-
-  ECM lib_mkdir(const std::string &path, int timeout_ms = -1,
-                int64_t start_time = -1, amf interrupt_flag = nullptr) {
-    if (!sftp) {
-      return {EC::NoConnection, "SFTP not initialized"};
-    }
-
-    NBResult<int> nb_res = nb_call(
-        timeout_ms, start_time,
-        [&] {
-          return libssh2_sftp_mkdir_ex(sftp, path.c_str(), path.size(), 0740);
-        },
-        interrupt_flag);
-    return ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_mkdir_ex",
-                       "Create directory \"{target}\" failed: {error}");
-  }
-
-  std::pair<ECM, std::vector<std::pair<std::string, LIBSSH2_SFTP_ATTRIBUTES>>>
-  lib_listdir(const std::string &path, int timeout_ms = -1,
-              int64_t start_time = -1, amf interrupt_flag = nullptr) {
-    if (!sftp) {
-      return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
-    }
-    LIBSSH2_SFTP_ATTRIBUTES attrs;
-    std::vector<std::pair<std::string, LIBSSH2_SFTP_ATTRIBUTES>> file_list = {};
-    LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
-    std::string name;
-    ECM rcm;
-    const size_t buffer_size = 4096;
-    std::vector<char> filename_buffer = std::vector<char>(buffer_size, 0);
-    auto oepn_res = nb_call(
-        timeout_ms, start_time,
-        [&] {
-          return libssh2_sftp_open_ex(sftp, path.c_str(), path.size(), 0,
-                                      LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
-        },
-        interrupt_flag);
-    rcm = ErrorRecord(oepn_res, TraceLevel::Error, path, "libssh2_sftp_open_ex",
-                      "Open directory {target} failed: {error}");
-    if (rcm.first != EC::Success) {
-      return {rcm, {}};
-    }
-    sftp_handle = oepn_res.value;
-    NBResult<int> read_res;
-
-    while (true) {
-      if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
-        rcm = ECM{EC::OperationTimeout,
-                  AMStr::fmt("Path: {} readdir timeout", path)};
-        break;
-      }
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-           (control_part_ && control_part_->IsInterrupted()))) {
-        rcm = ECM{EC::Terminate,
-                  AMStr::fmt("Path: {} readdir interrupted by user", path)};
-        break;
-      }
-      read_res = nb_call(
-          timeout_ms, start_time,
-          [&] {
-            return libssh2_sftp_readdir_ex(sftp_handle, filename_buffer.data(),
-                                           buffer_size, nullptr, 0, &attrs);
-          },
-          interrupt_flag);
-      if (read_res.value == 0) {
-        break;
-      }
-      rcm = ErrorRecord(read_res, TraceLevel::Error, path,
-                        "libssh2_sftp_readdir_ex",
-                        "Path: {} readdir failed: {error}");
-      if (rcm.first != EC::Success) {
-        if (rcm.first == EC::PermissionDenied) {
-          continue;
-        }
-        break;
-      }
-
-      name.assign(filename_buffer.data(), read_res.value);
-
-      if (name == "." || name == ".." || name.empty()) {
-        continue;
-      }
-      file_list.emplace_back(AMPathStr::join(path, name), attrs);
-    }
-
-    if (sftp_handle) {
-      libssh2_sftp_close_handle(sftp_handle);
-    }
-    return {rcm, file_list};
-  }
-
 protected:
-  void _iwalk(const std::string &path, const LIBSSH2_SFTP_ATTRIBUTES &attrs,
-              WRV &result, RMR &errors, bool show_all = false,
-              bool ignore_sepcial_file = true,
-              AMFS::WalkErrorCallback error_callback = nullptr,
-              int timeout_ms = -1, int64_t start_time = -1,
-              amf interrupt_flag = nullptr) {
-    // Find all deepest paths under directory for recursive transfer
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return;
-    }
+  /*
+   * Deprecated orchestration internals were removed from the active class
+   * surface (walk/iwalk/remove/chmod helper chains).
+   */
 
-    const bool filter_hidden = !show_all;
-    const bool filter_special = !show_all && ignore_sepcial_file;
-    const auto is_hidden_name = [](const std::string &name) {
-      return !name.empty() && name[0] == '.';
-    };
-
-    if (!isdir(attrs)) {
-      // Add directly if not a directory
-      if (filter_hidden && is_hidden_name(AMPathStr::basename(path))) {
-        return;
-      }
-      if (!isreg(attrs) && filter_special) {
-        return;
-      }
-      result.push_back(FormatStat(path, attrs));
-      return;
-    }
-
-    auto [rcm2, attrs_list] =
-        lib_listdir(path, timeout_ms, start_time, interrupt_flag);
-    if (rcm2.first != EC::Success) {
-      if (rcm2.first != EC::OperationTimeout) {
-        if (error_callback && *error_callback) {
-          (*error_callback)(path, rcm2);
-        }
-        errors.emplace_back(path, rcm2);
-      }
-      return;
-    }
-
-    if (attrs_list.empty()) {
-      // Add leaf empty directory directly
-      result.push_back(FormatStat(path, attrs));
-      return;
-    }
-    for (auto &attrs : attrs_list) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-           (control_part_ && control_part_->IsInterrupted()))) {
-        return;
-      }
-      if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
-        return;
-      }
-      const std::string base_name = AMPathStr::basename(attrs.first);
-      if (filter_hidden && is_hidden_name(base_name)) {
-        continue;
-      }
-      _iwalk(attrs.first, attrs.second, result, errors, show_all,
-             ignore_sepcial_file, error_callback, timeout_ms, start_time,
-             interrupt_flag);
-    }
-  }
-
-  void _walk(const std::vector<std::string> &parts, WRD &result, RMR &errors,
-             int cur_depth = 0, int max_depth = -1, bool show_all = false,
-             bool ignore_sepcial_file = true,
-             AMFS::WalkErrorCallback error_callback = nullptr,
-             int timeout_ms = -1, int64_t start_time = -1,
-             amf interrupt_flag = nullptr) {
-    if (max_depth != -1 && cur_depth > max_depth) {
-      return;
-    }
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return;
-    }
-    std::string pathf = AMPathStr::join(parts);
-    auto [rcm2, list_info] =
-        lib_listdir(pathf, timeout_ms, start_time, interrupt_flag);
-    if (rcm2.first != EC::Success) {
-      if (rcm2.first != EC::OperationTimeout) {
-        if (error_callback && *error_callback) {
-          (*error_callback)(pathf, rcm2);
-        }
-        errors.emplace_back(pathf, rcm2);
-      }
-      return;
-    }
-
-    if (list_info.empty()) {
-      result.push_back({parts, {}});
-      return;
-    }
-
-    const bool filter_hidden = !show_all;
-    const bool filter_special = !show_all && ignore_sepcial_file;
-    const auto is_hidden_name = [](const std::string &name) {
-      return !name.empty() && name[0] == '.';
-    };
-    std::vector<PathInfo> files_info = {};
-    for (auto &[path, attrs] : list_info) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-           (control_part_ && control_part_->IsInterrupted()))) {
-        return;
-      }
-      if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
-        return;
-      }
-      const std::string base_name = AMPathStr::basename(path);
-      if (filter_hidden && is_hidden_name(base_name)) {
-        continue;
-      }
-      if (isdir(attrs)) {
-        auto new_parts = parts;
-        new_parts.push_back(AMPathStr::basename(path));
-        _walk(new_parts, result, errors, cur_depth + 1, max_depth, show_all,
-              ignore_sepcial_file, error_callback, timeout_ms, start_time,
-              interrupt_flag);
-      } else {
-        if (filter_special && !isreg(attrs)) {
-          continue;
-        }
-        files_info.push_back(FormatStat(path, attrs));
-      }
-    }
-    if (list_info.empty()) {
-      return;
-    }
-    result.emplace_back(parts, files_info);
-  }
-
-  void _rm(const std::string &path, const LIBSSH2_SFTP_ATTRIBUTES &attrs,
-           RMR &errors, AMFS::WalkErrorCallback error_callback = nullptr,
-           int timeout_ms = -1, int64_t start_time = -1,
-           amf interrupt_flag = nullptr) {
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return;
-    }
-    if (!isdir(attrs)) {
-      ECM ecm = lib_unlink(path, timeout_ms, start_time, interrupt_flag);
-      if (ecm.first != EC::Success) {
-        if (error_callback && *error_callback) {
-          (*error_callback)(path, ecm);
-        }
-        errors.emplace_back(path, ecm);
-      }
-      return;
-    }
-
-    auto [rcm2, file_list] =
-        lib_listdir(path, timeout_ms, start_time, interrupt_flag);
-    if (rcm2.first != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, rcm2);
-      }
-      errors.emplace_back(path, rcm2);
-      return;
-    }
-
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return;
-    }
-
-    for (auto &file : file_list) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-           (control_part_ && control_part_->IsInterrupted()))) {
-        return;
-      }
-      _rm(file.first, file.second, errors, error_callback, timeout_ms,
-          start_time, interrupt_flag);
-    }
-
-    ECM ecm = lib_rmdir(path, timeout_ms, start_time, interrupt_flag);
-    if (ecm.first != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, ecm);
-      }
-      errors.emplace_back(path, ecm);
-    }
-  }
-
-  void _chmod(const std::string &path, size_t mode, bool recursive,
-              std::unordered_map<std::string, ECM> &errors,
-              LIBSSH2_SFTP_ATTRIBUTES attrs, int timeout_ms = -1,
-              int64_t start_time = -1, amf interrupt_flag = nullptr) {
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return;
-    }
-    ECM rcm;
-    if (!(attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS)) {
-      errors[path] = {EC::NoPermissionAttribute,
-                      "stat does not have permission attribute"};
-      return;
-    }
-
-    if (!(attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS)) {
-      errors[path] = {EC::NoPermissionAttribute,
-                      "server didn't return permission attribute"};
-      return;
-    }
-
-    size_t file_type = attrs.permissions & LIBSSH2_SFTP_S_IFMT;
-    size_t new_mode_int = (mode & ~LIBSSH2_SFTP_S_IFMT) | file_type;
-
-    attrs.permissions = new_mode_int;
-    attrs.flags = LIBSSH2_SFTP_ATTR_PERMISSIONS;
-
-    if (((size_t)attrs.permissions & 0777) != (mode & 0777)) {
-      rcm = lib_setstat(path, attrs, timeout_ms, start_time, interrupt_flag);
-      if (rcm.first != EC::Success) {
-        errors[path] = rcm;
-        return;
-      }
-    }
-
-    if (recursive && file_type == LIBSSH2_SFTP_S_IFDIR) {
-      auto [rcm2, list] =
-          lib_listdir(path, timeout_ms, start_time, interrupt_flag);
-      if (rcm2.first != EC::Success) {
-        errors[path] = rcm2;
-        return;
-      }
-      for (auto &item : list) {
-        if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-             (control_part_ && control_part_->IsInterrupted()))) {
-          return;
-        }
-        if (timeout_ms > 0 &&
-            AMTime::miliseconds() - start_time >= timeout_ms) {
-          return;
-        }
-        _chmod(item.first, mode, recursive, errors, item.second, timeout_ms,
-               start_time, interrupt_flag);
-      }
-    }
-  }
-
-  ECM _precheck(const std::string &path, amf interrupt_flag = nullptr) {
+  ECM _precheck(const std::string &path,
+                const AMDomain::client::ClientControlComponent &control) {
     if (path.empty()) {
       return {EC::InvalidArg, AMStr::fmt("Invalid path: {}", path)};
     }
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return {EC::Terminate, "Interrupted by user"};
+    return {EC::Success, ""};
+  }
+
+  std::pair<ECM, std::string> ResolveRealpathCore_(
+      const std::string &path,
+      const AMDomain::client::ClientControlComponent &control) {
+    if (path.empty()) {
+      return {ECM{EC::InvalidArg, "Invalid empty path"}, ""};
+    }
+    if (control.IsInterrupted()) {
+      return {ECM{EC::Terminate, "Interrupted by user"}, ""};
+    }
+    if (control.IsTimeout()) {
+      return {ECM{EC::OperationTimeout, "Operation timed out"}, ""};
     }
     if (!sftp) {
-      return {EC::NoConnection, "SFTP not initialized"};
+      return {ECM{EC::NoConnection, "SFTP not initialized"}, ""};
+    }
+
+    char path_t_buf[1024] = {0};
+    auto nb_res = nb_call(control, [&] {
+      return libssh2_sftp_realpath(sftp, path.c_str(), path_t_buf,
+                                   sizeof(path_t_buf));
+    });
+    ECM rcm =
+        ErrorRecord(nb_res, TraceLevel::Error, path, "libssh2_sftp_realpath",
+                    "Realpath \"{target}\" failed: {error}");
+    if (rcm.first != EC::Success) {
+      return {rcm, ""};
+    }
+    std::string path_t = path_t_buf;
+    if (UpdateOSTypeCache_() == OS_TYPE::Windows && !path_t.empty()) {
+      path_t = path_t.substr(1);
+    }
+    return {rcm, path_t};
+  }
+
+  ECM MkdirsCore_(const std::string &path,
+                  const AMDomain::client::ClientControlComponent &control) {
+    if (path.empty()) {
+      return {EC::Success, ""};
+    }
+    std::vector<std::string> parts = AMPathStr::split(path);
+    if (parts.empty()) {
+      return {EC::InvalidArg,
+              AMStr::fmt("Path split failed, get empty parts: {}", path)};
+    }
+    if (parts.size() == 1) {
+      return mkdir(AMFSI::MkdirArgs{path}, control).rcm;
+    }
+
+    std::string current_path = parts.front();
+    for (size_t i = 1; i < parts.size(); i++) {
+      if (control.IsInterrupted()) {
+        return {EC::Terminate, "Interrupted by user"};
+      }
+      if (control.IsTimeout()) {
+        return {EC::OperationTimeout, "Operation timed out"};
+      }
+      current_path = AMPathStr::join(current_path, parts[i], SepType::Unix);
+      auto stat_res = stat(AMFSI::StatArgs{current_path, false}, control);
+      if (stat_res.rcm.first == EC::Success) {
+        if (stat_res.info.type == PathType::DIR) {
+          continue;
+        }
+        return {
+            EC::PathAlreadyExists,
+            AMStr::fmt("Path exists and is not a directory: {}", current_path)};
+      }
+
+      auto mk_res = mkdir(AMFSI::MkdirArgs{current_path}, control);
+      if (mk_res.rcm.first != EC::Success) {
+        return mk_res.rcm;
+      }
     }
     return {EC::Success, ""};
   }
@@ -3031,7 +2597,7 @@ public:
           "AMSFTPIOCore requires non-null config and control ports");
     }
 #ifdef _WIN32
-    AMInitWSA();
+    detail::AMInitWSA();
 #endif
     auto req = request_atomic_.lock();
     req->protocol = ClientProtocol::SFTP;
@@ -3040,62 +2606,546 @@ public:
     }
   }
 
-  // Get RTT (Round Trip Time), return average (ms)
-  // Measure via a simple SFTP operation
-  double GetRTT(ssize_t times = 5) override {
-    if (times <= 0)
-      times = 1;
-    std::lock_guard<std::recursive_mutex> lock(mtx);
+  AMFSI::UpdateOSTypeResult UpdateOSType(
+      const AMFSI::UpdateOSTypeArgs &args,
+      const AMDomain::client::ClientControlComponent &control) override {
+    (void)args;
+    AMFSI::UpdateOSTypeResult out = {};
+    if (control.IsTimeout()) {
+      out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      out.os_type = OS_TYPE::Unknown;
+      return out;
+    }
+    out.os_type = UpdateOSTypeCache_(true);
+    out.rcm = {EC::Success, ""};
+    return out;
+  }
 
-    if (!session || !sftp) {
-      return -1.0;
+  AMFSI::UpdateHomeDirResult UpdateHomeDir(
+      const AMFSI::UpdateHomeDirArgs &args,
+      const AMDomain::client::ClientControlComponent &control) override {
+    (void)args;
+    AMFSI::UpdateHomeDirResult out = {};
+    if (control.IsTimeout()) {
+      out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      out.home_dir = "";
+      return out;
+    }
+    out.home_dir = UpdateHomeDirCache_();
+    SetCachedHomeDir_(out.home_dir);
+    out.rcm = {EC::Success, ""};
+    return out;
+  }
+
+  AMFSI::CheckResult
+  Check(const AMFSI::CheckArgs &args,
+        const AMDomain::client::ClientControlComponent &control) override {
+    (void)args;
+    AMFSI::CheckResult out = {};
+    out.status = GetState().first;
+    if (control.IsTimeout()) {
+      out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      SetState({AMDomain::client::ClientStatus::ConnectionBroken, out.rcm});
+      out.status = AMDomain::client::ClientStatus::ConnectionBroken;
+      return out;
+    }
+    out.rcm = stat(AMFSI::StatArgs{".", false}, control).rcm;
+    AMDomain::client::ClientStatus status =
+        out.rcm.first == EC::Success
+            ? AMDomain::client::ClientStatus::OK
+            : (out.rcm.first == EC::NotInitialized
+                   ? AMDomain::client::ClientStatus::NotInitialized
+                   : (out.rcm.first == EC::NoConnection
+                          ? AMDomain::client::ClientStatus::NoConnection
+                          : AMDomain::client::ClientStatus::ConnectionBroken));
+    SetState({status, out.rcm});
+    out.status = status;
+    return out;
+  }
+
+  AMFSI::ConnectResult
+  Connect(const AMFSI::ConnectArgs &args,
+          const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::ConnectResult out = {};
+    out.status = GetState().first;
+    if (control.IsTimeout()) {
+      out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      return out;
+    }
+    const AMDomain::client::ClientState prev_state = GetState();
+    out.rcm = BaseConnect(args.force, control);
+    if (isok(out.rcm) &&
+        prev_state.first != AMDomain::client::ClientStatus::OK) {
+      (void)UpdateOSType({}, control);
+      (void)UpdateHomeDir({}, control);
+    }
+    AMDomain::client::ClientStatus status =
+        out.rcm.first == EC::Success
+            ? AMDomain::client::ClientStatus::OK
+            : (out.rcm.first == EC::NotInitialized
+                   ? AMDomain::client::ClientStatus::NotInitialized
+                   : (out.rcm.first == EC::NoConnection
+                          ? AMDomain::client::ClientStatus::NoConnection
+                          : AMDomain::client::ClientStatus::ConnectionBroken));
+    SetState({status, out.rcm});
+    out.status = status;
+    return out;
+  }
+
+  AMFSI::RTTResult
+  GetRTT(const AMFSI::GetRTTArgs &args,
+         const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::RTTResult out = {};
+    if (control.IsTimeout()) {
+      out.rcm = {EC::OperationTimeout, "Operation timed out"};
+      out.rtt_ms = -1.0;
+      return out;
+    }
+    if (control.IsInterrupted()) {
+      out.rcm = {EC::Terminate, "Interrupted by user"};
+      out.rtt_ms = -1.0;
+      return out;
     }
 
-    std::vector<double> rtts;
-    rtts.reserve(times);
+    ssize_t times = args.times <= 0 ? 1 : args.times;
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!session || !sftp) {
+      out.rcm = {EC::OperationUnsupported, "GetRTT not supported"};
+      out.rtt_ms = -1.0;
+      return out;
+    }
 
-    // Use libssh2_sftp_stat to measure RTT (minimal-overhead SFTP op)
+    std::vector<double> rtts = {};
+    rtts.reserve(static_cast<size_t>(times));
+
     LIBSSH2_SFTP_ATTRIBUTES attrs;
     libssh2_session_set_blocking(session, 0);
 
     for (ssize_t i = 0; i < times; i++) {
-      if ((control_part_ && control_part_->IsInterrupted())) {
-        break;
+      if (control.IsInterrupted()) {
+        out.rcm = {EC::Terminate, "Interrupted by user"};
+        out.rtt_ms = -1.0;
+        return out;
+      }
+      if (control.IsTimeout()) {
+        out.rcm = {EC::OperationTimeout, "Operation timed out"};
+        out.rtt_ms = -1.0;
+        return out;
       }
 
-      double start = (static_cast<double>(AMTime::miliseconds()) / 1000.0);
-      auto stat_res = nb_call(-1, AMTime::miliseconds(), [&] {
-        return libssh2_sftp_stat(sftp, "/", &attrs);
-      });
-      if (stat_res.status != WaitResult::Ready) {
-        break;
+      const double t0 = static_cast<double>(AMTime::miliseconds()) / 1000.0;
+      auto stat_res = nb_call(
+          control, [&] { return libssh2_sftp_stat(sftp, "/", &attrs); });
+      if (!stat_res.ok()) {
+        out.rcm =
+            ErrorRecord(stat_res, TraceLevel::Error, "/", "libssh2_sftp_stat",
+                        "Get RTT probe failed: {error}");
+        out.rtt_ms = -1.0;
+        return out;
       }
-
       if (stat_res.value == 0) {
-        double end = (static_cast<double>(AMTime::miliseconds()) / 1000.0);
-        rtts.push_back(end - start);
+        const double t1 = static_cast<double>(AMTime::miliseconds()) / 1000.0;
+        rtts.push_back((t1 - t0) * 1000.0);
       }
     }
 
     if (rtts.empty()) {
-      return -1.0;
+      out.rcm = {EC::OperationUnsupported, "GetRTT not supported"};
+      out.rtt_ms = -1.0;
+      return out;
     }
-
-    // Compute average
     double sum = 0.0;
-    for (double rtt : rtts) {
-      sum += rtt;
+    for (double v : rtts) {
+      sum += v;
     }
-    return sum * (double)1000.0 / static_cast<double>(rtts.size());
+    out.rtt_ms = sum / static_cast<double>(rtts.size());
+    out.rcm = {EC::Success, ""};
+    return out;
   }
 
-  CR ConductCmd(const std::string &cmd, int max_time_ms = 3000,
-                amf interrupt_flag = nullptr) override {
+  AMFSI::RunResult
+  ConductCmd(const AMFSI::ConductCmdArgs &args,
+             const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::RunResult out = {};
+    const CR cmd_result = ConductCmdCore_(args.cmd, control, args.processor);
+    out.rcm = cmd_result.first;
+    out.output = cmd_result.second.first;
+    out.exit_code = cmd_result.second.second;
+    return out;
+  }
+
+  AMFSI::StatResult
+  stat(const AMFSI::StatArgs &args,
+       const AMDomain::client::ClientControlComponent &control) override {
+    if (control.IsTimeout()) {
+      return {ECM{EC::OperationTimeout, "Operation timed out"}, {}};
+    }
+    ECM rcm = _precheck(args.path, control);
+    if (rcm.first != EC::Success) {
+      return {rcm, PathInfo()};
+    }
     std::lock_guard<std::recursive_mutex> lock(mtx);
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
+    if (!sftp) {
+      return {ECM{EC::NoConnection, "SFTP not initialized"}, PathInfo()};
+    }
+    LIBSSH2_SFTP_ATTRIBUTES attrs;
+    NBResult<int> stat_res;
+    if (args.trace_link) {
+      stat_res = nb_call(control, [&] {
+        return libssh2_sftp_stat(sftp, args.path.c_str(), &attrs);
+      });
+    } else {
+      stat_res = nb_call(control, [&] {
+        return libssh2_sftp_lstat(sftp, args.path.c_str(), &attrs);
+      });
+    }
+    ECM rcm2 = ErrorRecord(stat_res, TraceLevel::Error, args.path,
+                           "libssh2_sftp_stat", "Get stat failed: {error}");
+    if (rcm2.first != EC::Success) {
+      return {rcm2, PathInfo()};
+    }
+    return {rcm, FormatStat(args.path, attrs)};
+  }
+
+  AMFSI::ListResult
+  listdir(const AMFSI::ListdirArgs &args,
+          const AMDomain::client::ClientControlComponent &control) override {
+    if (control.IsTimeout()) {
+      return {ECM{EC::OperationTimeout, "Operation timed out"}, {}};
+    }
+
+    ECM rcm = _precheck(args.path, control);
+    if (rcm.first != EC::Success) {
+      return {rcm, {}};
+    }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!sftp) {
+      return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
+    }
+
+    LIBSSH2_SFTP_ATTRIBUTES attrs;
+    std::vector<std::pair<std::string, LIBSSH2_SFTP_ATTRIBUTES>> raw_list = {};
+    LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
+    std::string name;
+    ECM rcm2 = {EC::Success, ""};
+    const size_t buffer_size = 4096;
+    std::vector<char> filename_buffer(buffer_size, 0);
+
+    auto open_res = nb_call(control, [&] {
+      return libssh2_sftp_open_ex(sftp, args.path.c_str(), args.path.size(), 0,
+                                  LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
+    });
+    rcm2 = ErrorRecord(open_res, TraceLevel::Error, args.path,
+                       "libssh2_sftp_open_ex",
+                       "Open directory {target} failed: {error}");
+    if (rcm2.first != EC::Success) {
+      return {rcm2, {}};
+    }
+    sftp_handle = open_res.value;
+
+    while (true) {
+      if (control.IsTimeout()) {
+        rcm2 = ECM{EC::OperationTimeout,
+                   AMStr::fmt("Path: {} readdir timeout", args.path)};
+        break;
+      }
+      if (control.IsInterrupted()) {
+        rcm2 = ECM{EC::Terminate, AMStr::fmt("Path: {} readdir interrupted by "
+                                             "user",
+                                             args.path)};
+        break;
+      }
+      auto read_res = nb_call(control, [&] {
+        return libssh2_sftp_readdir_ex(sftp_handle, filename_buffer.data(),
+                                       buffer_size, nullptr, 0, &attrs);
+      });
+      rcm2 = ErrorRecord(read_res, TraceLevel::Error, args.path,
+                         "libssh2_sftp_readdir_ex",
+                         "Path: {} readdir failed: {error}");
+      if (rcm2.first != EC::Success) {
+        if (rcm2.first == EC::PermissionDenied) {
+          continue;
+        }
+        break;
+      }
+      if (read_res.value == 0) {
+        break;
+      }
+
+      name.assign(filename_buffer.data(), static_cast<size_t>(read_res.value));
+      if (name == "." || name == ".." || name.empty()) {
+        continue;
+      }
+      raw_list.emplace_back(AMPathStr::join(args.path, name), attrs);
+    }
+
+    if (sftp_handle) {
+      libssh2_sftp_close_handle(sftp_handle);
+    }
+    if (rcm2.first != EC::Success) {
+      return {rcm2, {}};
+    }
+
+    std::vector<PathInfo> entries(raw_list.size());
+    for (size_t i = 0; i < raw_list.size(); i++) {
+      entries[i] = FormatStat(raw_list[i].first, raw_list[i].second);
+    }
+    return {ECM{EC::Success, ""}, entries};
+  }
+
+  AMFSI::ListNamesResult
+  listnames(const AMFSI::ListNamesArgs &args,
+            const AMDomain::client::ClientControlComponent &control) override {
+    if (control.IsTimeout()) {
+      return {ECM{EC::OperationTimeout, "Operation timed out"}, {}};
+    }
+
+    ECM rcm = _precheck(args.path, control);
+    if (rcm.first != EC::Success) {
+      return {rcm, {}};
+    }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!sftp) {
+      return {ECM{EC::NoConnection, "SFTP not initialized"}, {}};
+    }
+
+    LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
+    std::string name;
+    ECM rcm2 = {EC::Success, ""};
+    const size_t buffer_size = 4096;
+    std::vector<char> filename_buffer(buffer_size, 0);
+    std::vector<std::string> names = {};
+
+    auto open_res = nb_call(control, [&] {
+      return libssh2_sftp_open_ex(sftp, args.path.c_str(), args.path.size(), 0,
+                                  LIBSSH2_SFTP_OPENDIR, LIBSSH2_FXF_READ);
+    });
+    rcm2 = ErrorRecord(open_res, TraceLevel::Error, args.path,
+                       "libssh2_sftp_open_ex",
+                       "Open directory {target} failed: {error}");
+    if (rcm2.first != EC::Success) {
+      return {rcm2, {}};
+    }
+    sftp_handle = open_res.value;
+
+    while (true) {
+      if (control.IsTimeout()) {
+        rcm2 = ECM{EC::OperationTimeout,
+                   AMStr::fmt("Path: {} readdir timeout", args.path)};
+        break;
+      }
+      if (control.IsInterrupted()) {
+        rcm2 = ECM{EC::Terminate, AMStr::fmt("Path: {} readdir interrupted by "
+                                             "user",
+                                             args.path)};
+        break;
+      }
+      auto read_res = nb_call(control, [&] {
+        return libssh2_sftp_readdir_ex(sftp_handle, filename_buffer.data(),
+                                       buffer_size, nullptr, 0, nullptr);
+      });
+      rcm2 = ErrorRecord(read_res, TraceLevel::Error, args.path,
+                         "libssh2_sftp_readdir_ex",
+                         "Path: {} readdir failed: {error}");
+      if (rcm2.first != EC::Success) {
+        if (rcm2.first == EC::PermissionDenied) {
+          continue;
+        }
+        break;
+      }
+      if (read_res.value == 0) {
+        break;
+      }
+
+      name.assign(filename_buffer.data(), static_cast<size_t>(read_res.value));
+      if (name == "." || name == ".." || name.empty()) {
+        continue;
+      }
+      names.push_back(name);
+    }
+
+    if (sftp_handle) {
+      libssh2_sftp_close_handle(sftp_handle);
+    }
+    if (rcm2.first != EC::Success) {
+      return {rcm2, {}};
+    }
+    return {ECM{EC::Success, ""}, std::move(names)};
+  }
+
+  /*
+   * Deprecated orchestration APIs (migration reference only):
+   * AMFSI::GetsizeResult
+   * getsize(const AMFSI::GetsizeArgs &args,
+   *         const AMDomain::client::ClientControlComponent &control);
+   * AMFSI::FindResult
+   * find(const AMFSI::FindArgs &args,
+   *      const AMDomain::client::ClientControlComponent &control);
+   * ECM mkdirs(const AMFSI::MkdirsArgs &args,
+   *            const AMDomain::client::ClientControlComponent &control);
+   * AMFSI::DeleteResult
+   * remove(const AMFSI::RemoveArgs &args,
+   *        const AMDomain::client::ClientControlComponent &control);
+   * ECM saferm(const AMFSI::SafermArgs &args,
+   *            const AMDomain::client::ClientControlComponent &control);
+   * ECM copy(const AMFSI::CopyArgs &args,
+   *          const AMDomain::client::ClientControlComponent &control);
+   * AMFSI::IWalkResult
+   * iwalk(const AMFSI::IWalkArgs &args,
+   *       const AMDomain::client::ClientControlComponent &control);
+   * AMFSI::WalkResult
+   * walk(const AMFSI::WalkArgs &args,
+   *      const AMDomain::client::ClientControlComponent &control);
+   */
+
+  AMFSI::MkdirResult
+  mkdir(const AMFSI::MkdirArgs &args,
+        const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::MkdirResult out = {};
+    if (control.IsTimeout()) {
+      out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      return out;
+    }
+    ECM rcm = _precheck(args.path, control);
+    if (rcm.first != EC::Success) {
+      out.rcm = rcm;
+      return out;
+    }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    auto stat_res = stat(AMFSI::StatArgs{args.path, false}, control);
+    if (stat_res.rcm.first == EC::Success) {
+      if (stat_res.info.type == PathType::DIR) {
+        out.rcm = {EC::Success, ""};
+        return out;
+      }
+      out.rcm = {
+          EC::PathAlreadyExists,
+          AMStr::fmt("Path exists and is not a directory: {}", args.path)};
+      return out;
+    }
+    if (!sftp) {
+      out.rcm = {EC::NoConnection, "SFTP not initialized"};
+      return out;
+    }
+    auto nb_res = nb_call(control, [&] {
+      return libssh2_sftp_mkdir_ex(sftp, args.path.c_str(), args.path.size(),
+                                   0740);
+    });
+    out.rcm = ErrorRecord(nb_res, TraceLevel::Error, args.path,
+                          "libssh2_sftp_mkdir_ex",
+                          "Create directory \"{target}\" failed: {error}");
+    return out;
+  }
+
+  AMFSI::RMResult
+  rmdir(const AMFSI::RmdirArgs &args,
+        const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::RMResult out = {};
+    if (control.IsTimeout()) {
+      out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      return out;
+    }
+    ECM rcm = _precheck(args.path, control);
+    if (rcm.first != EC::Success) {
+      out.rcm = rcm;
+      return out;
+    }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!sftp) {
+      out.rcm = {EC::NoConnection, "SFTP not initialized"};
+      return out;
+    }
+    auto nb_res = nb_call(
+        control, [&] { return libssh2_sftp_rmdir(sftp, args.path.c_str()); });
+    out.rcm =
+        ErrorRecord(nb_res, TraceLevel::Error, args.path, "libssh2_sftp_rmdir",
+                    "Remove directory failed: {error}");
+    return out;
+  }
+
+  AMFSI::RMResult
+  rmfile(const AMFSI::RmfileArgs &args,
+         const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::RMResult out = {};
+    if (control.IsTimeout()) {
+      out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      return out;
+    }
+    ECM rcm = _precheck(args.path, control);
+    if (rcm.first != EC::Success) {
+      out.rcm = rcm;
+      return out;
+    }
+
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!sftp) {
+      out.rcm = {EC::NoConnection, "SFTP not initialized"};
+      return out;
+    }
+    auto nb_res = nb_call(
+        control, [&] { return libssh2_sftp_unlink(sftp, args.path.c_str()); });
+    out.rcm =
+        ErrorRecord(nb_res, TraceLevel::Error, args.path, "libssh2_sftp_unlink",
+                    "Unlink \"{target}\" failed: {error}");
+    return out;
+  }
+
+  AMFSI::MoveResult
+  rename(const AMFSI::RenameArgs &args,
+         const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::MoveResult out = {};
+    if (control.IsTimeout()) {
+      out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      return out;
+    }
+    ECM rcm0 = _precheck(args.src, control);
+    if (rcm0.first != EC::Success) {
+      out.rcm = rcm0;
+      return out;
+    }
+    ECM rcm1 = _precheck(args.dst, control);
+    if (rcm1.first != EC::Success) {
+      out.rcm = rcm1;
+      return out;
+    }
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (args.mkdir) {
+      rcm0 = MkdirsCore_(AMPathStr::dirname(args.dst), control);
+      if (rcm0.first != EC::Success) {
+        out.rcm = rcm0;
+        return out;
+      }
+    }
+    if (!sftp) {
+      out.rcm = {EC::NoConnection, "SFTP not initialized"};
+      return out;
+    }
+    auto nb_res = nb_call(control, [&] {
+      return libssh2_sftp_rename_ex(
+          sftp, args.src.c_str(), args.src.size(), args.dst.c_str(),
+          args.dst.size(),
+          args.overwrite
+              ? (LIBSSH2_SFTP_RENAME_OVERWRITE | LIBSSH2_SFTP_RENAME_NATIVE)
+              : LIBSSH2_SFTP_RENAME_NATIVE);
+    });
+    out.rcm = ErrorRecord(
+        nb_res, TraceLevel::Error, AMStr::fmt("{} -> {}", args.src, args.dst),
+        "libssh2_sftp_rename_ex", "Rename {target} failed: {error}");
+    return out;
+  }
+
+  CR ConductCmdCore_(
+      const std::string &cmd,
+      const AMDomain::client::ClientControlComponent &control,
+      const AMFSI::ConductCmdArgs::OutputProcessor &processor = {}) {
+    const int max_time_ms = ResolveTimeoutMs_(control);
+    std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (control.IsInterrupted()) {
       return {ECM{EC::Terminate, "Operation aborted before command sent"},
               {"", -1}};
+    }
+    if (control.IsTimeout()) {
+      return {ECM{EC::OperationTimeout, "Operation timed out"}, {"", -1}};
     }
 
     enum class CmdStage { BeforeSend, AwaitOutput, ReadingOutput, AwaitExit };
@@ -3115,14 +3165,10 @@ public:
     // Set non-blocking mode
     libssh2_session_set_blocking(session, 0);
 
-    SafeChannel sf;
+    detail::SafeChannel sf;
     ECM init_rcm = sf.Init(
-        session,
-        [this, interrupt_flag]() {
-          return ((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-                  (control_part_ && control_part_->IsInterrupted()));
-        },
-        max_time_ms, time_start);
+        session, [&control]() { return control.IsInterrupted(); }, max_time_ms,
+        time_start);
     if (init_rcm.first != EC::Success) {
       return {std::move(init_rcm), {"", -1}};
     }
@@ -3133,9 +3179,7 @@ public:
 
     // 1. Execute command
     exec_res = nb_call(
-        max_time_ms, time_start,
-        [&] { return libssh2_channel_exec(sf.channel, cmd.c_str()); },
-        interrupt_flag);
+        control, [&] { return libssh2_channel_exec(sf.channel, cmd.c_str()); });
     if (!exec_res.ok()) {
       wr = exec_res.status;
       goto cleanup;
@@ -3148,13 +3192,10 @@ public:
     stage = CmdStage::AwaitOutput;
     // 2. Read output
     while (true) {
-      read_res = nb_call(
-          max_time_ms, time_start,
-          [&] {
-            return libssh2_channel_read(sf.channel, buffer.data(),
-                                        buffer.size() - 1);
-          },
-          interrupt_flag);
+      read_res = nb_call(control, [&] {
+        return libssh2_channel_read(sf.channel, buffer.data(),
+                                    buffer.size() - 1);
+      });
       if (!read_res.ok()) {
         wr = read_res.status;
         goto cleanup;
@@ -3162,7 +3203,11 @@ public:
       nbytes = read_res.value;
 
       if (nbytes > 0) {
-        output.append(buffer.data(), static_cast<size_t>(nbytes));
+        const std::string chunk(buffer.data(), static_cast<size_t>(nbytes));
+        output.append(chunk);
+        if (processor) {
+          (void)CallCallbackSafe(processor, std::string_view(chunk));
+        }
         has_output = true;
         stage = CmdStage::ReadingOutput;
       } else if (nbytes == 0) {
@@ -3182,9 +3227,7 @@ public:
     }
 
     // 4. Close channel non-blocking
-    close_res = nb_call(
-        max_time_ms, time_start, [&] { return sf.close_nonblock(); },
-        interrupt_flag);
+    close_res = nb_call(control, [&] { return sf.close_nonblock(); });
 
     if (!close_res.ok()) {
       wr = close_res.status;
@@ -3244,25 +3287,30 @@ public:
         cached != OS_TYPE::Unknown) {
       return cached;
     }
-    auto [rcm2, out2] =
-        ConductCmd("powershell -NoProfile -Command "
-                   "\"[System.Environment]::OSVersion.VersionString\"",
-                   3000);
-    int code = out2.second;
-    std::string out_str = out2.first;
-    if (out_str.find("Windows") != std::string::npos) {
+    const auto win_control =
+        AMDomain::client::MakeClientControlComponent(nullptr, 3000);
+    auto [win_ecm, win_out] =
+        ConductCmdCore_("powershell -NoProfile -Command "
+                        "\"[System.Environment]::OSVersion.VersionString\"",
+                        win_control);
+    int code = win_out.second;
+    std::string out_str = win_out.first;
+    if (win_ecm.first == EC::Success &&
+        out_str.find("Windows") != std::string::npos) {
       SetCachedOSType_(OS_TYPE::Windows);
       return OS_TYPE::Windows;
     }
 
-    auto [rcm, out] = ConductCmd("uname -s", 3000);
-    if (rcm.first != EC::Success) {
+    const auto uname_control =
+        AMDomain::client::MakeClientControlComponent(nullptr, 3000);
+    auto [uname_ecm, uname_out] = ConductCmdCore_("uname -s", uname_control);
+    if (uname_ecm.first != EC::Success) {
       SetCachedOSType_(OS_TYPE::Uncertain);
       return OS_TYPE::Uncertain;
     }
-    code = out.second;
+    code = uname_out.second;
     if (code == 0) {
-      out_str = AMStr::lowercase(out.first);
+      out_str = AMStr::lowercase(uname_out.first);
       if (out_str.find("cygwin") != std::string::npos) {
         cached = OS_TYPE::Windows;
       } else if (out_str.find("darwin") != std::string::npos) {
@@ -3292,7 +3340,9 @@ public:
     }
 
     std::string cmd = AMStr::fmt("id -un {}", std::to_string(uid));
-    auto [rcm, cr] = ConductCmd(cmd, 3000);
+    const auto control =
+        AMDomain::client::MakeClientControlComponent(nullptr, 3000);
+    auto [rcm, cr] = ConductCmdCore_(cmd, control);
     if (rcm.first != EC::Success) {
       return "unknown";
     }
@@ -3309,7 +3359,9 @@ public:
     if (!cached_home_dir.empty()) {
       return cached_home_dir;
     }
-    auto [rcm, path_obj] = realpath(".", 3000, -1);
+    const auto control =
+        AMDomain::client::MakeClientControlComponent(nullptr, 3000);
+    auto [rcm, path_obj] = ResolveRealpathCore_(".", control);
     if (rcm.first == EC::Success) {
       SetCachedHomeDir_(path_obj);
       return path_obj;
@@ -3331,595 +3383,9 @@ public:
     }
   }
 
-  ECM Connect(bool force = false, int timeout_ms = -1, int64_t start_time = -1,
-              amf interrupt_flag = nullptr) override {
-    const AMDomain::client::ClientState prev_state = GetState();
-    ECM ecm = BaseConnect(force, timeout_ms, start_time, interrupt_flag);
-    if (isok(ecm) && prev_state.first != AMDomain::client::ClientStatus::OK) {
-      (void)UpdateOSType(timeout_ms, start_time, interrupt_flag);
-      (void)UpdateHomeDir(timeout_ms, start_time, interrupt_flag);
-    }
-    AMDomain::client::ClientStatus status =
-        ecm.first == EC::Success
-            ? AMDomain::client::ClientStatus::OK
-            : (ecm.first == EC::NotInitialized
-                   ? AMDomain::client::ClientStatus::NotInitialized
-                   : (ecm.first == EC::NoConnection
-                          ? AMDomain::client::ClientStatus::NoConnection
-                          : AMDomain::client::ClientStatus::ConnectionBroken));
-    SetState({status, ecm});
-    return ecm;
-  }
-
-  // Parse and return absolute path,
-  // ~ is resolved in client; .. and . are resolved by server; such symbols
-  // require path to exist
-  std::pair<ECM, std::string> realpath(const std::string &path,
-                                       int timeout_ms = -1,
-                                       int64_t start_time = -1,
-                                       amf interrupt_flag = nullptr) override {
-    auto pathf = path;
-    ECM rcm = _precheck(path, interrupt_flag);
-    if (rcm.first != EC::Success) {
-      return {rcm, ""};
-    }
-    if (std::regex_search(path, std::regex("^~[\\\\/]"))) {
-      // Resolve ~ symbol
-      pathf = AMPathStr::join(UpdateHomeDirCache_(), pathf.substr(1),
-                              SepType::Unix);
-    } else if (path == "~") {
-      return {ECM{EC::Success, ""}, UpdateHomeDirCache_()};
-    }
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-
-    auto [rcm2, path_t] =
-        lib_realpath(path, timeout_ms, start_time, interrupt_flag);
-    if (rcm2.first != EC::Success) {
-      return {rcm2, ""};
-    }
-    if (UpdateOSTypeCache_() == OS_TYPE::Windows) {
-      // Windows server may prepend / or \ to path; remove it
-      return {rcm2, path_t.substr(1)};
-    }
-    return {rcm2, path_t};
-  }
-
-  std::pair<ECM, std::unordered_map<std::string, ECM>>
-  chmod(const std::string &path, std::variant<std::string, size_t> mode,
-        bool recursive = false, int timeout_ms = -1, int64_t start_time = -1,
-        amf interrupt_flag = nullptr) override {
-    if (static_cast<int>(UpdateOSTypeCache_()) <= 0) {
-      return {ECM{EC::UnImplentedMethod, "Chmod only supported on Unix System"},
-              {}};
-    }
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    auto [rcm, attrs] =
-        lib_getstat(path, false, timeout_ms, start_time, interrupt_flag);
-    if (rcm.first != EC::Success) {
-      return {rcm, {}};
-    }
-    if (!(attrs.flags & LIBSSH2_SFTP_ATTR_PERMISSIONS)) {
-      return {ECM{EC::NoPermissionAttribute,
-                  "stat does not have permission attribute"},
-              {}};
-    }
-
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return {ECM{EC::Terminate, "Interrupted by user, no action conducted"},
-              {}};
-    }
-    std::unordered_map<std::string, ECM> ecm_map{};
-    size_t mode_int;
-    if (std::holds_alternative<std::string>(mode)) {
-      if (!AMStr::IsModeValid(std::get<std::string>(mode))) {
-        return {ECM{EC::InvalidArg, AMStr::fmt("Invalid mode: {}",
-                                               std::get<std::string>(mode))},
-                {}};
-      }
-      mode_int = AMStr::ModeTrans(std::get<std::string>(mode));
-    } else if (std::holds_alternative<size_t>(mode)) {
-      if (!AMStr::IsModeValid(std::get<size_t>(mode))) {
-        return {ECM{EC::InvalidArg,
-                    AMStr::fmt("Invalid mode: {}",
-                               std::to_string(std::get<size_t>(mode)))},
-                {}};
-      }
-      mode_int = std::get<size_t>(mode);
-    } else {
-      return {ECM{EC::InvalidArg, AMStr::fmt("Invalid mode data type")}, {}};
-    }
-    _chmod(path, mode_int, recursive, ecm_map, attrs, timeout_ms, start_time,
-           interrupt_flag);
-    return {ECM{EC::Success, ""}, ecm_map};
-  }
-
-  // Get path info (with AMFS::abspath)
-  SR stat(const std::string &path, bool trace_link = false, int timeout_ms = -1,
-          int64_t start_time = -1, amf interrupt_flag = nullptr) override {
-    ECM rcm = _precheck(path, interrupt_flag);
-    if (rcm.first != EC::Success) {
-      return {rcm, PathInfo()};
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    auto [rcm2, attrs] =
-        lib_getstat(path, trace_link, timeout_ms, start_time, interrupt_flag);
-    if (rcm2.first != EC::Success) {
-      return {rcm2, PathInfo()};
-    }
-    return {rcm, FormatStat(path, attrs)};
-  }
-
-  std::pair<ECM, std::vector<PathInfo>>
-  listdir(const std::string &path, int timeout_ms = -1, int64_t start_time = -1,
-          amf interrupt_flag = nullptr) override {
-    ECM rcm = _precheck(path, interrupt_flag);
-
-    if (rcm.first != EC::Success) {
-      return {rcm, {}};
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    auto [rcm2, attr_list] =
-        lib_listdir(path, timeout_ms, start_time, interrupt_flag);
-    if (rcm2.first != EC::Success) {
-      return {rcm2, {}};
-    }
-    std::vector<PathInfo> file_list(attr_list.size());
-    for (size_t i = 0; i < attr_list.size(); i++) {
-      file_list[i] = FormatStat(attr_list[i].first, attr_list[i].second);
-    }
-    return {rcm2, file_list};
-  }
-
-  // Create one-level directory (with AMFS::abspath)
-  ECM mkdir(const std::string &path, int timeout_ms = -1,
-            int64_t start_time = -1, amf interrupt_flag = nullptr) override {
-    ECM rcm = _precheck(path, interrupt_flag);
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    auto [rcm2, attrs] =
-        lib_getstat(path, false, timeout_ms, start_time, interrupt_flag);
-    if (rcm2.first == EC::Success) {
-      if (isdir(attrs)) {
-        return {EC::Success, ""};
-      } else {
-        return {EC::PathAlreadyExists,
-                AMStr::fmt("Path exists and is not a directory: {}", path)};
-      }
-    }
-    return lib_mkdir(path, timeout_ms, start_time, interrupt_flag);
-  }
-
-  // Recursively create nested directories until error (with AMFS::abspath)
-  ECM mkdirs(const std::string &path, int timeout_ms = -1,
-             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
-    ECM rcm = _precheck(path, interrupt_flag);
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    std::vector<std::string> parts = AMPathStr::split(path);
-    if (parts.empty()) {
-      return {EC::InvalidArg,
-              AMStr::fmt("Path split failed, get empty parts: {}", path)};
-    } else if (parts.size() == 1) {
-      return lib_mkdir(path, timeout_ms, start_time, interrupt_flag);
-    }
-
-    std::string current_path = parts.front();
-    for (size_t i = 1; i < parts.size(); i++) {
-      current_path = AMPathStr::join(current_path, parts[i], SepType::Unix);
-      auto [rcm2, attrs] = lib_getstat(current_path, false, timeout_ms,
-                                       start_time, interrupt_flag);
-      if (rcm2.first == EC::Success) {
-        if (isdir(attrs)) {
-          continue;
-        } else {
-          return {EC::PathAlreadyExists,
-                  AMStr::fmt("Path exists and is not a directory: {}",
-                             current_path)};
-        }
-      }
-      rcm = lib_mkdir(current_path, timeout_ms, start_time, interrupt_flag);
-      if (rcm.first != EC::Success) {
-        return rcm;
-      }
-    }
-    return rcm;
-  }
-
-  ECM rmfile(const std::string &path, int timeout_ms = -1,
-             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
-    ECM rcm = _precheck(path, interrupt_flag);
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    return lib_unlink(path, timeout_ms, start_time, interrupt_flag);
-  }
-
-  ECM rmdir(const std::string &path, int timeout_ms = -1,
-            int64_t start_time = -1, amf interrupt_flag = nullptr) override {
-    ECM rcm = _precheck(path, interrupt_flag);
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    return lib_rmdir(path, timeout_ms, start_time, interrupt_flag);
-  }
-
-  // Delete file or directory (with AMFS::abspath)
-  std::pair<ECM, RMR> remove(const std::string &path,
-                             AMFS::WalkErrorCallback error_callback = nullptr,
-                             int timeout_ms = -1, int64_t start_time = -1,
-                             amf interrupt_flag = nullptr) override {
-    ECM rcm0 = _precheck(path, interrupt_flag);
-    if (rcm0.first != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, rcm0);
-      }
-      return {rcm0, {}};
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    RMR errors = {};
-    auto [rcm, sr] =
-        lib_getstat(path, false, timeout_ms, start_time, interrupt_flag);
-    if (rcm.first != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, rcm);
-      }
-      return {rcm, {}};
-    }
-    _rm(path, sr, errors, error_callback, timeout_ms, start_time,
-        interrupt_flag);
-    return {ECM{EC::Success, ""}, errors};
-  }
-
-  // Rename original path to new path (with AMFS::abspath)
-  ECM rename(const std::string &src, const std::string &dst, bool mkdir = true,
-             bool overwrite = false, int timeout_ms = -1,
-             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
-    ECM rcm0 = _precheck(src, interrupt_flag);
-    if (rcm0.first != EC::Success) {
-      return rcm0;
-    }
-    ECM rcm1 = _precheck(dst, interrupt_flag);
-    if (rcm1.first != EC::Success) {
-      return rcm1;
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    if (mkdir) {
-      rcm0 = mkdirs(AMPathStr::dirname(dst), timeout_ms, start_time,
-                    interrupt_flag);
-      if (rcm0.first != EC::Success) {
-        return rcm0;
-      }
-    }
-    return lib_rename(src, dst, overwrite, timeout_ms, start_time,
-                      interrupt_flag);
-  }
-
-  // Safely delete file/dir by moving into trash_dir
-  ECM saferm(const std::string &path, int timeout_ms = -1,
-             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
-    ECM rcm0 = _precheck(path, interrupt_flag);
-    if (rcm0.first != EC::Success) {
-      return rcm0;
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    ConRequest request = request_atomic_.lock().load();
-    if (request.trash_dir.empty()) {
-      return {EC::InvalidArg, "Trash directory not set"};
-    }
-    auto [rcm1, info] =
-        lib_getstat(path, false, timeout_ms, start_time, interrupt_flag);
-    if (rcm1.first != EC::Success) {
-      return rcm1;
-    }
-    std::string base = AMPathStr::basename(path);
-    std::string base_name = base;
-    std::string base_ext = "";
-    std::string target_path;
-
-    if (!isdir(info)) {
-      auto base_info = AMPathStr::split_basename(base);
-      base_name = base_info.first;
-      base_ext = base_info.second;
-    }
-
-    // Get current time in format 2026-01-01-19-06
-    std::string current_time =
-        FormatTime(std::time(nullptr), "%Y-%m-%d-%H-%M-%S");
-
-    target_path = AMPathStr::join(request.trash_dir, current_time,
-                                  base_name + "." + base_ext);
-    size_t i = 1;
-    std::string base_name_tmp = base_name;
-
-    while (true) {
-      auto [rcm, _] =
-          stat(target_path, false, timeout_ms, start_time, interrupt_flag);
-      if (rcm.first == EC::PathNotExist) {
-        break;
-      }
-      if (rcm.first != EC::Success) {
-        return rcm;
-      }
-      base_name_tmp = base_name + "(" + std::to_string(i) + ")";
-      target_path = AMPathStr::join(request.trash_dir, current_time,
-                                    (base_name_tmp + ".") += base_ext);
-      i++;
-    }
-
-    rcm0 = mkdirs(AMPathStr::join(request.trash_dir, current_time), timeout_ms,
-                  start_time, interrupt_flag);
-    if (rcm0.first != EC::Success) {
-      return rcm0;
-    }
-
-    return lib_rename(path, target_path, false, timeout_ms, start_time,
-                      interrupt_flag);
-  }
-
-  // Move source path to destination folder
-
   /*
-  ECM copy(const std::string &src, const std::string &dst,
-           bool need_mkdir = false, int timeout_ms = -1) override {
-    if (!sftp) {
-      return ECM{EC::NoConnection, "SFTP not initialized"};
-    }
-    std::string srcf = src;
-    std::string dstf = dst;
-    if (srcf.empty() || dstf.empty()) {
-      return std::make_pair(EC::InvalidArg,
-                            AMStr::fmt("Invalid path: {} or {}", srcf,
-  dstf));
-    }
-    auto [rcm, br] = exists(srcf);
-    if (rcm.first != EC::Success) {
-      return rcm;
-    }
-    if (!br) {
-      return {EC::PathNotExist, AMStr::fmt("Src not exists: {}", srcf)};
-    }
-
-    auto [rcm2, br2] = is_dir(dstf);
-    if (rcm2.first != EC::Success) {
-      if (rcm2.first == EC::PathNotExist) {
-        if (need_mkdir) {
-          ECM ecm = mkdirs(dstf);
-          if (ecm.first != EC::Success) {
-            return ecm;
-          }
-        } else {
-          return {EC::ParentDirectoryNotExist,
-                  AMStr::fmt("Dst dir not exists: {}", dstf)};
-        }
-      }
-    } else if (!br2) {
-      return {EC::NotADirectory,
-              AMStr::fmt("Dst exists but not a directory: {}", dstf)};
-    }
-
-    std::string dst_path = AMPathStr::join(dstf, AMPathStr::basename(srcf));
-    auto [rcm0, sbr0] = exists(dst_path);
-
-    if (rcm0.first != EC::Success) {
-      return rcm0;
-    }
-    if (sbr0) {
-      return {EC::PathAlreadyExists,
-              AMStr::fmt("Dst {} already has path named {}", dstf,
-                          AMPathStr::basename(srcf))};
-    }
-
-    std::string command = "cp -r \"" + srcf + "\" \"" + dstf + "\"";
-
-    auto [rcm3, resp] = ConductCmd(command);
-
-    if (rcm3.first != EC::Success) {
-      return rcm3;
-    }
-
-    if (resp.second != 0) {
-      std::string msg =
-          AMStr::fmt("Copy cmd conducted failed with exit code: {}, error:
-  {}", resp.second, resp.first); trace(TraceLevel::Error,
-  EC::InhostCopyFailed, AMStr::fmt("{}@{}->{}", res_data.nickname, srcf,
-  dstf), "Copy", msg); return {EC::InhostCopyFailed, msg};
-    }
-
-    return {EC::Success, ""};
-  }*/
-
-  // Recursively walk all files and nested dirs under a path, return
-  // vector<PathInfo>
-  std::pair<ECM, WRI> iwalk(const std::string &path, bool show_all = false,
-                            bool ignore_sepcial_file = true,
-                            AMFS::WalkErrorCallback error_callback = nullptr,
-                            int timeout_ms = -1, int64_t start_time = -1,
-                            amf interrupt_flag = nullptr) override {
-    ECM rcm = _precheck(path, interrupt_flag);
-    RMR errors = {};
-    if (rcm.first != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, rcm);
-      }
-      return {rcm, {WRV{}, errors}};
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    auto [rcm2, attrs] =
-        lib_getstat(path, false, timeout_ms, start_time, interrupt_flag);
-    if (rcm2.first != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, rcm2);
-      }
-      errors.emplace_back(path, rcm2);
-      return {rcm2, {WRV{}, errors}};
-    }
-    if (!isdir(attrs)) {
-      if (!show_all && ignore_sepcial_file && !isreg(attrs)) {
-        return {ECM{EC::Success, ""}, {WRV{}, errors}};
-      }
-      return {ECM{EC::Success, ""}, {WRV{FormatStat(path, attrs)}, errors}};
-    }
-    // get all files and deepest folders
-    WRV result = {};
-    _iwalk(path, attrs, result, errors, show_all, ignore_sepcial_file,
-           error_callback, timeout_ms, start_time, interrupt_flag);
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      ECM out = {EC::Terminate, "Interrupted by user"};
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, out);
-      }
-      return {out, {result, errors}};
-    }
-    return {ECM{EC::Success, ""}, {result, errors}};
-  }
-
-  // Actual walk function, returns vector of ([root_path, part1, part2, ...],
-  // PathInfo)
-  std::pair<ECM, WRDR> walk(const std::string &path, int max_depth = -1,
-                            bool show_all = false,
-                            bool ignore_special_file = false,
-                            AMFS::WalkErrorCallback error_callback = nullptr,
-                            int timeout_ms = -1, int64_t start_time = -1,
-                            amf interrupt_flag = nullptr) override {
-    ECM rcm0 = _precheck(path, interrupt_flag);
-    RMR errors = {};
-    if (rcm0.first != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, rcm0);
-      }
-      return {rcm0, {WRD{}, errors}};
-    }
-    std::lock_guard<std::recursive_mutex> lock(mtx);
-    start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
-    auto [rcm, br] = stat(path, false, timeout_ms, start_time, interrupt_flag);
-    if (rcm.first != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, rcm);
-      }
-      errors.emplace_back(path, rcm);
-      return {rcm, {WRD{}, errors}};
-    } else if (br.type != PathType::DIR) {
-      ECM out = {EC::NotADirectory, "Path is not a directory"};
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, out);
-      }
-      errors.emplace_back(path, out);
-      return {out, {WRD{}, errors}};
-    }
-    WRD result_dict = {};
-    std::vector<std::string> parts = {path};
-    _walk(parts, result_dict, errors, 0, max_depth, show_all,
-          ignore_special_file, error_callback, timeout_ms, start_time,
-          interrupt_flag);
-    // Print type of result_dict
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, out);
-      }
-      return {out, {result_dict, errors}};
-    }
-    return {ECM{EC::Success, ""}, {result_dict, errors}};
-  }
-
-  [[nodiscard]] bool IsInterrupted() const override {
-    return control_part_ ? control_part_->IsInterrupted() : false;
-  }
-
-  OS_TYPE UpdateOSType(int timeout_ms = -1, int64_t start_time = -1,
-                       amf interrupt_flag = nullptr) override {
-    (void)timeout_ms;
-    (void)start_time;
-    (void)interrupt_flag;
-    return UpdateOSTypeCache_(true);
-  }
-
-  std::string UpdateHomeDir(int timeout_ms = -1, int64_t start_time = -1,
-                            amf interrupt_flag = nullptr) override {
-    (void)timeout_ms;
-    (void)start_time;
-    (void)interrupt_flag;
-    const std::string home_dir = UpdateHomeDirCache_();
-    SetCachedHomeDir_(home_dir);
-    return home_dir;
-  }
-
-  [[nodiscard]] std::pair<ECM, WRV>
-  listdir(const std::string &path, int timeout_ms = -1,
-          int64_t start_time = -1, amf interrupt_flag = nullptr) const override {
-    return const_cast<AMSFTPIOCore *>(this)->listdir(path, timeout_ms,
-                                                     start_time, interrupt_flag);
-  }
-
-  ECM copy(const std::string &src, const std::string &dst,
-           bool need_mkdir = false, int timeout_ms = -1,
-           amf interrupt_flag = nullptr) override {
-    (void)src;
-    (void)dst;
-    (void)need_mkdir;
-    (void)timeout_ms;
-    (void)interrupt_flag;
-    return {EC::OperationUnsupported,
-            "SFTP client does not support server-side copy"};
-  }
-
-  [[nodiscard]] std::pair<ECM, WRI>
-  iwalk(const std::string &path, bool show_all = false,
-        bool ignore_special_file = true,
-        AMFS::WalkErrorCallback error_callback = nullptr,
-        int timeout_ms = -1, int64_t start_time = -1,
-        amf interrupt_flag = nullptr) const override {
-    return const_cast<AMSFTPIOCore *>(this)->iwalk(
-        path, show_all, ignore_special_file, error_callback, timeout_ms,
-        start_time, interrupt_flag);
-  }
-
-  int64_t getsize(const std::string &path, bool ignore_special_file = true,
-                  int timeout_ms = -1, int64_t start_time = -1,
-                  amf interrupt_flag = nullptr) override {
-    auto [rcm, pack] = iwalk(path, true, ignore_special_file, nullptr,
-                             timeout_ms, start_time, interrupt_flag);
-    if (rcm.first != EC::Success ||
-        ((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return -1;
-    }
-    int64_t size = 0;
-    for (const auto &item : pack.first) {
-      size += static_cast<int64_t>(item.size);
-    }
-    return size;
-  }
-
-  std::vector<PathInfo> find(const std::string &path,
-                             SearchType type = SearchType::All,
-                             int timeout_ms = -1, int64_t start_time = -1,
-                             amf interrupt_flag = nullptr) override {
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return {};
-    }
-    return BasePathMatch::find(path, type, timeout_ms, start_time,
-                               interrupt_flag);
-  }
+   * Deprecated legacy-signature APIs were removed from AMSFTPIOCore to align
+   * with the Args+ControlComponent IOCore pattern used by AMFTPIOCore.
+   */
 };
 } // namespace AMInfra::client::SFTP
