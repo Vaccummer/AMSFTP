@@ -1,44 +1,27 @@
 #pragma once
-
 #include <array>
 #include <filesystem>
 #include <stdexcept>
-#include <unordered_map>
-#include <unordered_set>
-
-// Internal dependencies
-#include "infrastructure/client/common/Base.hpp"
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 #ifndef _WIN32
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <pwd.h>
 #include <signal.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
+// Internal dependencies
+#include "infrastructure/client/common/Base.hpp"
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace AMInfra::client::LOCAL {
 class AMLocalIOCore : public ClientIOBase, BasePathMatch {
 private:
-  AMAtomic<ConRequest> &request_atomic_;
-  [[nodiscard]] bool IsInterrupted() const override {
-    return control_part_ ? control_part_->IsInterrupted() : false;
-  }
-
-  [[nodiscard]] int64_t NormalizeStartTime_(int64_t start_time) const {
-    return start_time == -1 ? AMTime::miliseconds() : start_time;
-  }
-
-  [[nodiscard]] bool IsTimedOut_(int timeout_ms, int64_t start_time) const {
-    return timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms;
-  }
-
   void SetState_(const AMDomain::client::ClientState &state) {
     if (config_part_) {
       config_part_->SetState(state);
@@ -99,85 +82,6 @@ private:
     return perms;
   }
 
-  void _remove(const std::string &path, RMR &errors,
-               AMFS::WalkErrorCallback error_callback = nullptr,
-               int timeout_ms = -1, int64_t start_time = -1,
-               amf interrupt_flag = nullptr) {
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      ECM out = {EC::Terminate, "Interrupted by user"};
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, out);
-      }
-      errors.emplace_back(path, out);
-      return;
-    }
-    if (IsTimedOut_(timeout_ms, start_time)) {
-      ECM out = {EC::OperationTimeout, "remove timeout"};
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, out);
-      }
-      errors.emplace_back(path, out);
-      return;
-    }
-
-    std::error_code ec;
-    auto [error, listing] =
-        listdir(path, timeout_ms, start_time, interrupt_flag);
-    if (error.first != EC::Success) {
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, error);
-      }
-      errors.emplace_back(path, error);
-      return;
-    }
-
-    for (const auto &entry : listing) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-           (control_part_ && control_part_->IsInterrupted()))) {
-        ECM out = {EC::Terminate, "Interrupted by user"};
-        if (error_callback && *error_callback) {
-          (*error_callback)(entry.path, out);
-        }
-        errors.emplace_back(entry.path, out);
-        return;
-      }
-      if (IsTimedOut_(timeout_ms, start_time)) {
-        ECM out = {EC::OperationTimeout, "remove timeout"};
-        if (error_callback && *error_callback) {
-          (*error_callback)(entry.path, out);
-        }
-        errors.emplace_back(entry.path, out);
-        return;
-      }
-      if (entry.type == PathType::DIR) {
-        _remove(entry.path, errors, error_callback, timeout_ms, start_time,
-                interrupt_flag);
-      } else {
-        fs::remove(entry.path, ec);
-        if (ec) {
-          ECM out = {fec(ec), AMStr::fmt("remove {} failed: {}", entry.path,
-                                         ec.message())};
-          if (error_callback && *error_callback) {
-            (*error_callback)(entry.path, out);
-          }
-          errors.emplace_back(entry.path, out);
-          ec.clear();
-        }
-      }
-    }
-
-    fs::remove(fs::path(path), ec);
-    if (ec) {
-      ECM out = {fec(ec),
-                 AMStr::fmt("remove {} failed: {}", path, ec.message())};
-      if (error_callback && *error_callback) {
-        (*error_callback)(path, out);
-      }
-      errors.emplace_back(path, out);
-    }
-  }
-
 #ifdef _WIN32
   std::string ResolveRealCasePath_(const std::string &path,
                                    bool follow_links) const {
@@ -222,126 +126,12 @@ private:
   }
 #endif
 
-public:
-  AMLocalIOCore(AMDomain::client::IClientConfigPort *config_port,
-                AMDomain::client::IClientControlToken *control_port,
-                TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
-      : ClientIOBase(config_port, control_port),
-        request_atomic_((config_port != nullptr)
-                            ? config_port->RequestAtomic()
-                            : throw std::invalid_argument(
-                                  "AMLocalIOCore requires non-null config "
-                                  "port")) {
-    if (control_port == nullptr) {
-      throw std::invalid_argument(
-          "AMLocalIOCore requires non-null task control port");
-    }
-    if (request_atomic_.lock()->protocol != ClientProtocol::LOCAL) {
-      throw std::invalid_argument(
-          "AMLocalIOCore requires LOCAL protocol request");
-    }
-    RegisterTraceCallback(std::move(trace_cb));
-    RegisterAuthCallback(std::move(auth_cb));
-    if (config_part_ && config_part_->GetHomeDir().empty()) {
-      config_part_->SetHomeDir(AMFS::HomePath());
-    }
-    (void)UpdateOSType();
-    SetState_({AMDomain::client::ClientStatus::NotInitialized,
-               {EC::NotInitialized, "Client Not Initialized"}});
-  }
-
-  ~AMLocalIOCore() override = default;
-  OS_TYPE UpdateOSType([[maybe_unused]] int timeout_ms = -1,
-                       [[maybe_unused]] int64_t start_time = -1,
-                       [[maybe_unused]] amf interrupt_flag = nullptr) override {
 #ifdef _WIN32
-    OS_TYPE out = OS_TYPE::Windows;
-#elif defined(_WIN64)
-    OS_TYPE out = OS_TYPE::Windows;
-#elif defined(__linux__) || defined(__gnu_linux__)
-    OS_TYPE out = OS_TYPE::Linux;
-#elif defined(__APPLE__) && defined(__MACH__)
-    OS_TYPE out = OS_TYPE::MacOS;
-#elif defined(__FreeBSD__)
-    OS_TYPE out = OS_TYPE::FreeBSD;
-#else
-    OS_TYPE out = OS_TYPE::Unknown;
-#endif
-    if (config_part_) {
-      config_part_->SetOSType(out);
-    }
-    return out;
-  }
+  AMFSI::RunResult ConductCmdWindowsBackend_(
+      const AMFSI::ConductCmdArgs &args,
+      const AMDomain::client::ClientControlComponent &control) {
+    AMFSI::RunResult out = {};
 
-  std::string
-  UpdateHomeDir([[maybe_unused]] int timeout_ms = -1,
-                [[maybe_unused]] int64_t start_time = -1,
-                [[maybe_unused]] amf interrupt_flag = nullptr) override {
-    const std::string home_dir = AMFS::HomePath();
-    if (config_part_) {
-      config_part_->SetHomeDir(home_dir);
-    }
-    return home_dir;
-  }
-
-  ECM Check(int timeout_ms = -1, int64_t start_time = -1,
-            amf interrupt_flag = nullptr) override {
-    start_time = NormalizeStartTime_(start_time);
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      ECM out = {EC::Terminate, "Check interrupted by user"};
-      SetState_({AMDomain::client::ClientStatus::ConnectionBroken, out});
-      return out;
-    }
-    if (IsTimedOut_(timeout_ms, start_time)) {
-      ECM out = {EC::OperationTimeout, "check timeout"};
-      SetState_({AMDomain::client::ClientStatus::ConnectionBroken, out});
-      return out;
-    }
-    SetState_({AMDomain::client::ClientStatus::OK, {EC::Success, ""}});
-    return {EC::Success, ""};
-  }
-
-  ECM Connect(bool force = false, int timeout_ms = -1, int64_t start_time = -1,
-              amf interrupt_flag = nullptr) override {
-    start_time = NormalizeStartTime_(start_time);
-    if (!force) {
-      ECM rcm = Check(timeout_ms, start_time, interrupt_flag);
-      if (rcm.first == EC::Success) {
-        (void)UpdateOSType(timeout_ms, start_time, interrupt_flag);
-        (void)UpdateHomeDir(timeout_ms, start_time, interrupt_flag);
-        return rcm;
-      }
-    }
-
-    ECM rcm = Check(timeout_ms, start_time, interrupt_flag);
-    if (rcm.first == EC::Success) {
-      (void)UpdateOSType(timeout_ms, start_time, interrupt_flag);
-      (void)UpdateHomeDir(timeout_ms, start_time, interrupt_flag);
-      SetState_({AMDomain::client::ClientStatus::OK, {EC::Success, ""}});
-      return {EC::Success, ""};
-    }
-
-    AMDomain::client::ClientStatus status =
-        rcm.first == EC::NoConnection || rcm.first == EC::ConnectionLost
-            ? AMDomain::client::ClientStatus::NoConnection
-            : AMDomain::client::ClientStatus::ConnectionBroken;
-    SetState_({status, rcm});
-    return rcm;
-  }
-
-  double GetRTT([[maybe_unused]] ssize_t times = 5) override { return 0.0; }
-
-  CR ConductCmd(const std::string &cmd, int max_time_ms = 3000,
-                amf interrupt_flag = nullptr) override {
-    int64_t start_time = AMTime::miliseconds();
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return {ECM{EC::Terminate, "Operation aborted before command sent"},
-              {"", -1}};
-    }
-
-#ifdef _WIN32
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof(sa);
     sa.lpSecurityDescriptor = nullptr;
@@ -350,7 +140,10 @@ public:
     HANDLE read_pipe = nullptr;
     HANDLE write_pipe = nullptr;
     if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
-      return {ECM{EC::UnknownError, "CreatePipe failed"}, {"", -1}};
+      out.rcm = {EC::UnknownError, "CreatePipe failed"};
+      out.output = "";
+      out.exit_code = -1;
+      return out;
     }
     SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
 
@@ -364,7 +157,7 @@ public:
 
     PROCESS_INFORMATION pi;
     ZeroMemory(&pi, sizeof(pi));
-    std::wstring wcmd = AMStr::wstr(cmd);
+    std::wstring wcmd = AMStr::wstr(args.cmd);
     std::vector<wchar_t> cmd_buf(wcmd.begin(), wcmd.end());
     cmd_buf.push_back(L'\0');
 
@@ -375,7 +168,10 @@ public:
 
     if (!created) {
       CloseHandle(read_pipe);
-      return {ECM{EC::UnknownError, "CreateProcess failed"}, {"", -1}};
+      out.rcm = {EC::UnknownError, "CreateProcess failed"};
+      out.output = "";
+      out.exit_code = -1;
+      return out;
     }
 
     HANDLE job_handle = CreateJobObjectW(nullptr, nullptr);
@@ -400,10 +196,95 @@ public:
     bool finished = false;
     bool interrupted = false;
     bool timed_out = false;
+    enum class WinOutEncoding { Unknown, Utf16Le, Oem };
+    WinOutEncoding encoding = WinOutEncoding::Unknown;
+    bool utf16_bom_checked = false;
+    std::string probe;
+    std::string utf16_pending;
+
+    const auto detect_utf16le = [&](const std::string &bytes) {
+      if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF &&
+          static_cast<unsigned char>(bytes[1]) == 0xFE) {
+        return true;
+      }
+      size_t pair_count = 0;
+      size_t odd_zero = 0;
+      size_t even_zero = 0;
+      for (size_t i = 0; i + 1 < bytes.size() && pair_count < 8; i += 2) {
+        ++pair_count;
+        if (static_cast<unsigned char>(bytes[i]) == 0U) {
+          ++even_zero;
+        }
+        if (static_cast<unsigned char>(bytes[i + 1]) == 0U) {
+          ++odd_zero;
+        }
+      }
+      return pair_count >= 2 && odd_zero >= pair_count - 1 && even_zero == 0;
+    };
+
+    const auto decode_utf16le_bytes = [&](std::string &raw_bytes) {
+      if (!utf16_bom_checked) {
+        utf16_bom_checked = true;
+        if (raw_bytes.size() >= 2 &&
+            static_cast<unsigned char>(raw_bytes[0]) == 0xFF &&
+            static_cast<unsigned char>(raw_bytes[1]) == 0xFE) {
+          raw_bytes.erase(0, 2);
+        }
+      }
+
+      const size_t even_size = raw_bytes.size() & ~static_cast<size_t>(1);
+      if (even_size == 0) {
+        return std::string{};
+      }
+      std::wstring ws;
+      ws.reserve(even_size / 2);
+      for (size_t i = 0; i < even_size; i += 2) {
+        const auto lo = static_cast<unsigned char>(raw_bytes[i]);
+        const auto hi = static_cast<unsigned char>(raw_bytes[i + 1]);
+        const wchar_t ch =
+            static_cast<wchar_t>(static_cast<unsigned int>(lo) |
+                                 (static_cast<unsigned int>(hi) << 8U));
+        ws.push_back(ch);
+      }
+      raw_bytes.erase(0, even_size);
+      return AMStr::wstr(ws);
+    };
+
+    const auto emit_chunk = [&](const char *data, size_t size) {
+      if (size == 0) {
+        return;
+      }
+      std::string current(data, size);
+      if (encoding == WinOutEncoding::Unknown) {
+        probe.append(current);
+        if (probe.size() < 4) {
+          return;
+        }
+        encoding = detect_utf16le(probe) ? WinOutEncoding::Utf16Le
+                                         : WinOutEncoding::Oem;
+        current.swap(probe);
+        probe.clear();
+      }
+
+      std::string text_utf8;
+      if (encoding == WinOutEncoding::Utf16Le) {
+        utf16_pending.append(current);
+        text_utf8 = decode_utf16le_bytes(utf16_pending);
+      } else {
+        text_utf8 = std::move(current);
+      }
+
+      if (text_utf8.empty()) {
+        return;
+      }
+      output.append(text_utf8);
+      if (args.processor) {
+        args.processor(text_utf8);
+      }
+    };
 
     while (true) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-           (control_part_ && control_part_->IsInterrupted()))) {
+      if (control.IsInterrupted()) {
         if (job_handle) {
           (void)TerminateJobObject(job_handle, 1);
         } else {
@@ -413,8 +294,7 @@ public:
         finished = true;
         break;
       }
-      if (max_time_ms > 0 &&
-          AMTime::miliseconds() - start_time >= max_time_ms) {
+      if (control.IsTimeout()) {
         if (job_handle) {
           (void)TerminateJobObject(job_handle, 1);
         } else {
@@ -435,7 +315,7 @@ public:
         if (ReadFile(read_pipe, buffer.data(), chunk_size, &read_bytes,
                      nullptr) &&
             read_bytes > 0) {
-          output.append(buffer.data(), static_cast<size_t>(read_bytes));
+          emit_chunk(buffer.data(), static_cast<size_t>(read_bytes));
         }
       }
 
@@ -468,7 +348,7 @@ public:
             read_bytes == 0) {
           break;
         }
-        output.append(buffer.data(), static_cast<size_t>(read_bytes));
+        emit_chunk(buffer.data(), static_cast<size_t>(read_bytes));
       }
     }
 
@@ -479,32 +359,66 @@ public:
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
 
+    if (encoding == WinOutEncoding::Unknown && !probe.empty()) {
+      std::string tail = std::move(probe);
+      if (!tail.empty()) {
+        output.append(tail);
+        if (args.processor) {
+          args.processor(tail);
+        }
+      }
+      probe.clear();
+    } else if (encoding == WinOutEncoding::Utf16Le && !utf16_pending.empty()) {
+      std::string tail = decode_utf16le_bytes(utf16_pending);
+      if (!tail.empty()) {
+        output.append(tail);
+        if (args.processor) {
+          args.processor(tail);
+        }
+      }
+    }
+
     if (interrupted) {
-      return {ECM{EC::Terminate, "Command interrupted"},
-              { output,
-                exit_status }};
+      out.rcm = {EC::Terminate, "Command interrupted"};
+      out.output = std::move(output);
+      out.exit_code = exit_status;
+      return out;
     }
     if (timed_out) {
-      return {ECM{EC::OperationTimeout, "Command timed out"},
-              { output,
-                exit_status }};
+      out.rcm = {EC::OperationTimeout, "Command timed out"};
+      out.output = std::move(output);
+      out.exit_code = exit_status;
+      return out;
     }
-    return {ECM{EC::Success, ""}, { output, exit_status }};
+    out.rcm = {EC::Success, ""};
+    out.output = std::move(output);
+    out.exit_code = exit_status;
+    return out;
+  }
 #else
+  AMFSI::RunResult ConductCmdPosixBackend_(
+      const AMFSI::ConductCmdArgs &args,
+      const AMDomain::client::ClientControlComponent &control) {
+    AMFSI::RunResult out = {};
+
     int pipefd[2] = {-1, -1};
     if (pipe(pipefd) != 0) {
-      return {ECM{fec(std::error_code(errno, std::generic_category())),
-                  "pipe failed"},
-              {"", -1}};
+      out.rcm = {fec(std::error_code(errno, std::generic_category())),
+                 "pipe failed"};
+      out.output = "";
+      out.exit_code = -1;
+      return out;
     }
 
     pid_t pid = fork();
     if (pid < 0) {
       close(pipefd[0]);
       close(pipefd[1]);
-      return {ECM{fec(std::error_code(errno, std::generic_category())),
-                  "fork failed"},
-              {"", -1}};
+      out.rcm = {fec(std::error_code(errno, std::generic_category())),
+                 "fork failed"};
+      out.output = "";
+      out.exit_code = -1;
+      return out;
     }
 
     if (pid == 0) {
@@ -512,7 +426,7 @@ public:
       dup2(pipefd[1], STDERR_FILENO);
       close(pipefd[0]);
       close(pipefd[1]);
-      execl("/bin/sh", "sh", "-c", cmd.c_str(), (char *)nullptr);
+      execl("/bin/sh", "sh", "-c", args.cmd.c_str(), (char *)nullptr);
       _exit(127);
     }
 
@@ -528,6 +442,12 @@ public:
     bool child_exited = false;
     bool interrupted = false;
     bool timed_out = false;
+    const auto emit_chunk = [&](const char *data, size_t size) {
+      output.append(data, size);
+      if (args.processor) {
+        args.processor(std::string_view(data, size));
+      }
+    };
 
     auto kill_child = [&](int sig) {
       if (!child_exited) {
@@ -536,35 +456,41 @@ public:
     };
 
     while (true) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-           (control_part_ && control_part_->IsInterrupted()))) {
+      if (control.IsInterrupted()) {
         kill_child(SIGKILL);
         interrupted = true;
         break;
       }
-      if (max_time_ms > 0 &&
-          AMTime::miliseconds() - start_time >= max_time_ms) {
+      if (control.IsTimeout()) {
         kill_child(SIGKILL);
         timed_out = true;
         break;
       }
 
-      bool read_any = false;
-      while (true) {
-        ssize_t n = read(pipefd[0], buffer.data(), buffer.size());
-        if (n > 0) {
-          output.append(buffer.data(), static_cast<size_t>(n));
-          read_any = true;
-          continue;
-        }
-        if (n == 0) {
+      pollfd pfd;
+      pfd.fd = pipefd[0];
+      pfd.events = POLLIN | POLLHUP;
+      pfd.revents = 0;
+      int pr = poll(&pfd, 1, 10);
+      if (pr > 0 && (pfd.revents & (POLLIN | POLLHUP)) != 0) {
+        while (true) {
+          ssize_t n = read(pipefd[0], buffer.data(), buffer.size());
+          if (n > 0) {
+            emit_chunk(buffer.data(), static_cast<size_t>(n));
+            continue;
+          }
+          if (n == 0) {
+            child_exited = true;
+            break;
+          }
+          if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            break;
+          }
           child_exited = true;
           break;
         }
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-          break;
-        }
-        break;
+      } else if (pr < 0 && errno != EINTR) {
+        child_exited = true;
       }
 
       int status = 0;
@@ -582,16 +508,12 @@ public:
         while (true) {
           ssize_t n = read(pipefd[0], buffer.data(), buffer.size());
           if (n > 0) {
-            output.append(buffer.data(), static_cast<size_t>(n));
+            emit_chunk(buffer.data(), static_cast<size_t>(n));
             continue;
           }
           break;
         }
         break;
-      }
-
-      if (!read_any) {
-        usleep(10000);
       }
     }
 
@@ -600,7 +522,6 @@ public:
     if (!child_exited) {
       int status = 0;
       if (waitpid(pid, &status, 0) == pid) {
-        child_exited = true;
         if (WIFEXITED(status)) {
           exit_status = WEXITSTATUS(status);
         } else if (WIFSIGNALED(status)) {
@@ -610,164 +531,169 @@ public:
     }
 
     if (interrupted) {
-      return {ECM{EC::Terminate, "Command interrupted"},
-              { output,
-                exit_status }};
+      out.rcm = {EC::Terminate, "Command interrupted"};
+      out.output = std::move(output);
+      out.exit_code = exit_status;
+      return out;
     }
     if (timed_out) {
-      return {ECM{EC::OperationTimeout, "Command timed out"},
-              { output,
-                exit_status }};
+      out.rcm = {EC::OperationTimeout, "Command timed out"};
+      out.output = std::move(output);
+      out.exit_code = exit_status;
+      return out;
     }
+    out.rcm = {EC::Success, ""};
+    out.output = std::move(output);
+    out.exit_code = exit_status;
+    return out;
+  }
+#endif
 
-    return {ECM{EC::Success, ""}, { output, exit_status }};
+public:
+  AMLocalIOCore(AMDomain::client::IClientConfigPort *config_port,
+                AMDomain::client::IClientControlToken *control_port,
+                TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
+      : ClientIOBase(config_port, control_port) {
+    if (control_port == nullptr) {
+      throw std::invalid_argument(
+          "AMLocalIOCore requires non-null task control port");
+    }
+    if (request_atomic_.lock()->protocol != ClientProtocol::LOCAL) {
+      throw std::invalid_argument(
+          "AMLocalIOCore requires LOCAL protocol request");
+    }
+    RegisterTraceCallback(std::move(trace_cb));
+    RegisterAuthCallback(std::move(auth_cb));
+    if (config_part_ && config_part_->GetHomeDir().empty()) {
+      config_part_->SetHomeDir(AMFS::HomePath());
+    }
+    (void)UpdateOSType({}, {});
+    SetState_({AMDomain::client::ClientStatus::OK, {EC::Success, ""}});
+  }
+
+  ~AMLocalIOCore() override = default;
+  AMFSI::UpdateOSTypeResult UpdateOSType(
+      const AMFSI::UpdateOSTypeArgs &args,
+      const AMDomain::client::ClientControlComponent &control) override {
+    (void)args;
+    AMFSI::UpdateOSTypeResult out = {};
+#ifdef _WIN32
+    out.os_type = OS_TYPE::Windows;
+#elif defined(_WIN64)
+    out.os_type = OS_TYPE::Windows;
+#elif defined(__linux__) || defined(__gnu_linux__)
+    out.os_type = OS_TYPE::Linux;
+#elif defined(__APPLE__) && defined(__MACH__)
+    out.os_type = OS_TYPE::MacOS;
+#elif defined(__FreeBSD__)
+    out.os_type = OS_TYPE::FreeBSD;
+#else
+    out.os_type = OS_TYPE::Unknown;
+#endif
+    if (config_part_) {
+      config_part_->SetOSType(out.os_type);
+    }
+    out.rcm = {EC::Success, ""};
+    return out;
+  }
+
+  AMFSI::UpdateHomeDirResult UpdateHomeDir(
+      const AMFSI::UpdateHomeDirArgs &args,
+      const AMDomain::client::ClientControlComponent &control) override {
+    (void)args;
+    AMFSI::UpdateHomeDirResult out = {};
+    if (control.IsTimeout()) {
+      out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      out.home_dir = "";
+      return out;
+    }
+    out.home_dir = AMFS::HomePath();
+    if (config_part_) {
+      config_part_->SetHomeDir(out.home_dir);
+    }
+    out.rcm = {EC::Success, ""};
+    return out;
+  }
+
+  AMFSI::CheckResult
+  Check(const AMFSI::CheckArgs &args,
+        const AMDomain::client::ClientControlComponent &control) override {
+    (void)args;
+    (void)control;
+    AMFSI::CheckResult out = {};
+    out.rcm = {EC::Success, ""};
+    return out;
+  }
+
+  AMFSI::ConnectResult
+  Connect(const AMFSI::ConnectArgs &args,
+          const AMDomain::client::ClientControlComponent &control) override {
+    (void)args;
+    AMFSI::ConnectResult out = {};
+    out.rcm = {EC::Success, ""};
+    return out;
+  }
+
+  AMFSI::RTTResult
+  GetRTT(const AMFSI::GetRTTArgs &args,
+         const AMDomain::client::ClientControlComponent &control) override {
+    (void)args;
+    (void)control;
+    AMFSI::RTTResult out = {};
+    out.rtt_ms = 0.0;
+    out.rcm = {EC::UnImplentedMethod,
+               "GetRTT is not supported for local client"};
+    return out;
+  }
+
+  AMFSI::RunResult
+  ConductCmd(const AMFSI::ConductCmdArgs &args,
+             const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::RunResult out = {};
+    if (control.IsTimeout()) {
+      out.rcm = {EC::OperationTimeout, "Operation timed out"};
+      out.output = "";
+      out.exit_code = -1;
+      return out;
+    }
+    if (control.IsInterrupted()) {
+      out.rcm = {EC::Terminate, "Interrupted by user"};
+      out.output = "";
+      out.exit_code = -1;
+      return out;
+    }
+#ifdef _WIN32
+    return ConductCmdWindowsBackend_(args, control);
+#else
+    return ConductCmdPosixBackend_(args, control);
 #endif
   }
 
-  std::pair<ECM, std::string> realpath(const std::string &path,
-                                       int timeout_ms = -1,
-                                       int64_t start_time = -1,
-                                       amf interrupt_flag = nullptr) override {
-    start_time = NormalizeStartTime_(start_time);
-    if (path.empty()) {
-      return {{EC::InvalidArg, "Invalid empty path"}, ""};
+  AMFSI::StatResult
+  stat(const AMFSI::StatArgs &args,
+       const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::StatResult out = {};
+    if (args.path.empty()) {
+      out.rcm = {EC::InvalidArg, "Invalid empty path"};
+      out.info = {};
+      return out;
     }
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return {{EC::Terminate, "Interrupted by user"}, ""};
-    }
-    if (IsTimedOut_(timeout_ms, start_time)) {
-      return {{EC::OperationTimeout, "realpath timeout"}, ""};
-    }
-
     std::error_code ec;
-    fs::path p(path);
-    if (!fs::exists(p, ec)) {
+    if (!fs::exists(fs::path(args.path), ec)) {
       if (ec) {
-        return {{fec(ec), ec.message()}, ""};
-      }
-      return {{EC::PathNotExist, AMStr::fmt("Path not found: {}", path)}, ""};
-    }
-
-    fs::path resolved = fs::canonical(p, ec);
-    if (ec) {
-      ec.clear();
-      resolved = fs::absolute(p, ec);
-      if (ec) {
-        return {{fec(ec), ec.message()}, ""};
-      }
-      resolved = resolved.lexically_normal();
-    }
-
-    return {{EC::Success, ""}, resolved.string()};
-  }
-
-  AMDomain::client::ChmodResult
-  chmod(const std::string &path, std::variant<std::string, size_t> mode,
-        bool recursive = false, int timeout_ms = -1, int64_t start_time = -1,
-        amf interrupt_flag = nullptr) override {
-    start_time = NormalizeStartTime_(start_time);
-    std::unordered_map<std::string, ECM> results = {};
-    if (path.empty()) {
-      return {{EC::InvalidArg, "Invalid empty path"}, results};
-    }
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return {{EC::Terminate, "Interrupted by user"}, results};
-    }
-    if (IsTimedOut_(timeout_ms, start_time)) {
-      return {{EC::OperationTimeout, "chmod timeout"}, results};
-    }
-
-    size_t mode_int = 0;
-    if (std::holds_alternative<std::string>(mode)) {
-      mode_int = AMStr::ModeTrans(std::get<std::string>(mode));
-    } else {
-      mode_int = std::get<size_t>(mode);
-    }
-
-    const fs::perms perms = ToFsPerms_(mode_int);
-    bool has_fail = false;
-
-    auto apply_one = [&](const fs::path &target) {
-      std::error_code ec;
-      fs::permissions(target, perms, fs::perm_options::replace, ec);
-      if (ec) {
-        has_fail = true;
-        results[target.string()] =
-            ECM{fec(ec), AMStr::fmt("chmod {} failed: {}", target.string(),
-                                    ec.message())};
+        out.rcm = {fec(ec),
+                   AMStr::fmt("stat {} failed: {}", args.path, ec.message())};
       } else {
-        results[target.string()] = ECM{EC::Success, ""};
+        out.rcm = {EC::PathNotExist, "Path not found: " + args.path};
       }
-    };
-
-    apply_one(fs::path(path));
-
-    if (recursive) {
-      std::error_code ec;
-      fs::recursive_directory_iterator it(path, ec);
-      fs::recursive_directory_iterator end;
-      if (ec) {
-        return {
-            {fec(ec), AMStr::fmt("chmod {} failed: {}", path, ec.message())},
-            results};
-      }
-      for (; it != end; it.increment(ec)) {
-        if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-             (control_part_ && control_part_->IsInterrupted()))) {
-          return {{EC::Terminate, "Interrupted by user"}, results};
-        }
-        if (IsTimedOut_(timeout_ms, start_time)) {
-          return {{EC::OperationTimeout, "chmod timeout"}, results};
-        }
-        if (ec) {
-          has_fail = true;
-          results[it->path().string()] = ECM{fec(ec), ec.message()};
-          ec.clear();
-          continue;
-        }
-        apply_one(it->path());
-      }
-    }
-
-    if (has_fail) {
-      return {
-          {EC::CommonFailure,
-           AMStr::fmt("chmod partially failed on {} entries", results.size())},
-          results};
-    }
-    return {{EC::Success, ""}, results};
-  }
-
-  SR stat(const std::string &path, bool trace_link = false, int timeout_ms = -1,
-          int64_t start_time = -1, amf interrupt_flag = nullptr) override {
-    start_time = NormalizeStartTime_(start_time);
-    if (path.empty()) {
-      return {ECM{EC::InvalidArg, "Invalid empty path"}, PathInfo()};
-    }
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return {ECM{EC::Terminate, "Interrupted by user"}, PathInfo()};
-    }
-    if (IsTimedOut_(timeout_ms, start_time)) {
-      return {ECM{EC::OperationTimeout, "stat timeout"}, PathInfo()};
-    }
-
-    std::error_code ec;
-    if (!fs::exists(fs::path(path), ec)) {
-      if (ec) {
-        return {
-            ECM{fec(ec), AMStr::fmt("stat {} failed: {}", path, ec.message())},
-            PathInfo()};
-      }
-      return {ECM{EC::PathNotExist, "Path not found: " + path}, PathInfo()};
+      out.info = {};
+      return out;
     }
 
     PathInfo info;
-    std::string pathf = path;
+    std::string pathf = args.path;
 #ifdef _WIN32
-    std::string real_path = ResolveRealCasePath_(path, trace_link);
+    std::string real_path = ResolveRealCasePath_(args.path, args.trace_link);
     if (!real_path.empty()) {
       pathf = std::move(real_path);
     }
@@ -779,18 +705,19 @@ public:
     info.dir = p.parent_path().string();
 
     fs::file_status status;
-    if (trace_link) {
+    if (args.trace_link) {
       status = fs::status(p, ec);
     } else {
       status = fs::symlink_status(p, ec);
     }
 
     if (ec) {
-      ECM rcm = {fec(ec),
+      out.rcm = {fec(ec),
                  AMStr::fmt("Stat {} failed: {}", pathf, ec.message())};
-      trace(AMDomain::client::TraceLevel::Error, rcm.first, pathf, "stat",
-            rcm.second);
-      return {rcm, info};
+      trace(AMDomain::client::TraceLevel::Error, out.rcm.first, pathf, "stat",
+            out.rcm.second);
+      out.info = info;
+      return out;
     }
 
     info.type = cast_fs_type(status.type());
@@ -819,18 +746,17 @@ public:
     info.owner = AMFS::GetFileOwner(AMStr::wstr(pathf));
 #else
     struct stat file_stat;
-    if (::stat(path.c_str(), &file_stat) == -1) {
-      return {ECM{fec(std::error_code(errno, std::generic_category())),
-                  "Fail to stat file: " + std::string(strerror(errno))},
-              info};
+    if (::stat(args.path.c_str(), &file_stat) == -1) {
+      out.rcm = {fec(std::error_code(errno, std::generic_category())),
+                 "Fail to stat file: " + std::string(strerror(errno))};
+      out.info = info;
+      return out;
     }
 
     struct passwd *pw = getpwuid(file_stat.st_uid);
     info.owner = pw ? pw->pw_name : std::to_string(file_stat.st_uid);
-
     info.mode_int = static_cast<size_t>(file_stat.st_mode) & 0777U;
     info.mode_str = AMStr::ModeTrans(info.mode_int);
-
     info.access_time = timespec_to_double(file_stat.st_atim);
     info.modify_time = timespec_to_double(file_stat.st_mtim);
 #ifdef __APPLE__
@@ -838,80 +764,272 @@ public:
 #endif
 #endif
 
-    return {{EC::Success, ""}, info};
+    out.rcm = {EC::Success, ""};
+    out.info = info;
+    return out;
   }
 
-  std::pair<ECM, std::vector<PathInfo>>
-  listdir(const std::string &path, int timeout_ms = -1, int64_t start_time = -1,
-          amf interrupt_flag = nullptr) override {
-    start_time = NormalizeStartTime_(start_time);
-    std::vector<PathInfo> result = {};
-    if (path.empty()) {
-      return {ECM{EC::InvalidArg, "Invalid empty path"}, result};
+  AMFSI::ListResult
+  listdir(const AMFSI::ListdirArgs &args,
+          const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::ListResult out = {};
+    if (args.path.empty()) {
+      out.rcm = {EC::InvalidArg, "Invalid empty path"};
+      out.entries = {};
+      return out;
     }
-
-    fs::path p(path);
-    if (!fs::exists(p)) {
-      ECM rcm = {EC::PathNotExist, AMStr::fmt("Path not found: {}", path)};
-      trace(AMDomain::client::TraceLevel::Error, EC::PathNotExist, path,
-            "listdir", rcm.second);
-      return {rcm, result};
-    }
-    if (!fs::is_directory(p)) {
-      ECM rcm = {EC::NotADirectory,
-                 AMStr::fmt("Path is not a directory: {}", path)};
-      trace(AMDomain::client::TraceLevel::Error, EC::NotADirectory, path,
-            "listdir", rcm.second);
-      return {rcm, result};
-    }
-
+    std::vector<PathInfo> entries = {};
     std::error_code ec;
-    fs::directory_iterator it(p, ec);
+    fs::directory_iterator it(args.path, ec);
+
     if (ec) {
-      ECM rcm = {fec(ec),
-                 AMStr::fmt("listdir {} failed: {}", path, ec.message())};
-      trace(AMDomain::client::TraceLevel::Error, rcm.first, path, "listdir",
-            rcm.second);
-      return {rcm, result};
+      out.rcm = {fec(ec),
+                 AMStr::fmt("listdir {} failed: {}", args.path, ec.message())};
+      trace(AMDomain::client::TraceLevel::Error, out.rcm.first, args.path,
+            "listdir", out.rcm.second);
+      out.entries = {};
+      return out;
     }
 
     for (const auto &entry : it) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-           (control_part_ && control_part_->IsInterrupted()))) {
-        return {ECM{EC::Terminate, "Listdir interrupted by user"}, result};
+      if (control.IsInterrupted()) {
+        out.rcm = {EC::Terminate, "Listdir interrupted by user"};
+        out.entries = std::move(entries);
+        return out;
       }
-      if (IsTimedOut_(timeout_ms, start_time)) {
-        return {ECM{EC::OperationTimeout, "Listdir timeout"}, result};
+      if (control.IsTimeout()) {
+        out.rcm = {EC::OperationTimeout, "Listdir operation timed out"};
+        out.entries = std::move(entries);
+        return out;
       }
-      auto [error, info] = stat(entry.path().string(), false, timeout_ms,
-                                start_time, interrupt_flag);
-      if (error.first != EC::Success) {
+
+      auto stat_res =
+          stat(AMFSI::StatArgs{entry.path().string(), false}, control);
+      if (stat_res.rcm.first != EC::Success) {
         continue;
       }
-      result.push_back(info);
+      entries.push_back(std::move(stat_res.info));
     }
-
-    return {ECM{EC::Success, ""}, result};
+    out.rcm = {EC::Success, ""};
+    out.entries = std::move(entries);
+    return out;
   }
 
-  [[nodiscard]] std::pair<ECM, WRV>
-  listdir(const std::string &path, int timeout_ms = -1,
-          int64_t start_time = -1, amf interrupt_flag = nullptr) const override {
-    return const_cast<AMLocalIOCore *>(this)->listdir(path, timeout_ms,
-                                                      start_time,
-                                                      interrupt_flag);
+  AMFSI::ListNamesResult
+  listnames(const AMFSI::ListNamesArgs &args,
+            const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::ListNamesResult out = {};
+    if (args.path.empty()) {
+      out.rcm = {EC::InvalidArg, "Invalid empty path"};
+      out.names = {};
+      return out;
+    }
+    std::error_code ec;
+    fs::directory_iterator it(args.path, ec);
+    if (ec) {
+      out.rcm = {fec(ec), AMStr::fmt("listnames {} failed: {}", args.path,
+                                     ec.message())};
+      trace(AMDomain::client::TraceLevel::Error, out.rcm.first, args.path,
+            "listnames", out.rcm.second);
+      out.names = {};
+      return out;
+    }
+
+    std::vector<std::string> names = {};
+    for (const auto &entry : it) {
+      if (control.IsInterrupted()) {
+        out.rcm = {EC::Terminate, "Listnames interrupted by user"};
+        out.names = std::move(names);
+        return out;
+      }
+      if (control.IsTimeout()) {
+        out.rcm = {EC::OperationTimeout, "Listnames operation timed out"};
+        out.names = std::move(names);
+        return out;
+      }
+      names.push_back(entry.path().filename().string());
+    }
+    out.rcm = {EC::Success, ""};
+    out.names = std::move(names);
+    return out;
+  }
+
+  AMFSI::MkdirResult
+  mkdir(const AMFSI::MkdirArgs &args,
+        const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::MkdirResult out = {};
+    if (args.path.empty()) {
+      out.rcm = {EC::InvalidArg, "Invalid empty path"};
+      return out;
+    }
+    std::error_code ec;
+    fs::create_directory(fs::path(args.path), ec);
+    if (ec) {
+      ECM rcm = {fec(ec),
+                 AMStr::fmt("mkdir {} failed: {}", args.path, ec.message())};
+      trace(AMDomain::client::TraceLevel::Error, rcm.first, args.path, "mkdir",
+            rcm.second);
+      out.rcm = rcm;
+      return out;
+    }
+    out.rcm = {EC::Success, ""};
+    return out;
+  }
+
+  AMFSI::RMResult
+  rmdir(const AMFSI::RmdirArgs &args,
+        const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::RMResult out = {};
+    std::error_code ec;
+    fs::remove(fs::path(args.path), ec);
+    if (ec) {
+      out.rcm = {fec(ec),
+                 AMStr::fmt("rmdir {} failed: {}", args.path, ec.message())};
+      return out;
+    }
+    out.rcm = {EC::Success, ""};
+    return out;
+  }
+
+  AMFSI::RMResult
+  rmfile(const AMFSI::RmfileArgs &args,
+         const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::RMResult out = {};
+    if (control.IsTimeout()) {
+      out.rcm = {EC::OperationTimeout, "Operation timed out"};
+      return out;
+    }
+    std::error_code ec;
+    fs::remove(fs::path(args.path), ec);
+    if (ec) {
+      out.rcm = {fec(ec),
+                 AMStr::fmt("rmfile {} failed: {}", args.path, ec.message())};
+      return out;
+    }
+    out.rcm = {EC::Success, ""};
+    return out;
+  }
+
+  AMFSI::MoveResult
+  rename(const AMFSI::RenameArgs &args,
+         const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::MoveResult out = {};
+    std::error_code ec;
+    fs::rename(fs::path(args.src), fs::path(args.dst), ec);
+    if (ec == std::errc::cross_device_link) {
+      out.rcm = {EC::OperationUnsupported,
+                 AMStr::fmt("rename {} to {} failed: cross-device link",
+                            args.src, args.dst)};
+      return out;
+    }
+    if (ec) {
+      out.rcm = {fec(ec), AMStr::fmt("rename {} to {} failed: {}", args.src,
+                                     args.dst, ec.message())};
+      return out;
+    }
+    out.rcm = {EC::Success, ""};
+    return out;
+  }
+
+  // legacy functions, will be moved to application layer in the future
+  /*
+  _remove(const std::string &path, RMR &errors, ...)
+  iwalk(const std::string &path, bool show_all, bool ignore_special_file, ...)
+  walk(const std::string &path, int max_depth, bool show_all, ...)
+  getsize(const std::string &path, bool ignore_special_file, ...)
+  find(const std::string &path, SearchType type, ...)
+  mkdirs(const std::string &path, ...)
+  remove(const std::string &path, AMFS::WalkErrorCallback error_callback, ...)
+  saferm(const std::string &path, ...)
+  copy(const std::string &src, const std::string &dst, ...)
+
+  void _remove(const std::string &path, RMR &errors,
+               AMFS::WalkErrorCallback error_callback = nullptr,
+               int timeout_ms = -1, int64_t start_time = -1,
+               amf interrupt_flag = nullptr) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
+      ECM out = {EC::Terminate, "Interrupted by user"};
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, out);
+      }
+      errors.emplace_back(path, out);
+      return;
+    }
+    if (IsTimedOut_(timeout_ms, start_time)) {
+      ECM out = {EC::OperationTimeout, "remove timeout"};
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, out);
+      }
+      errors.emplace_back(path, out);
+      return;
+    }
+
+    std::error_code ec;
+    auto [error, listing] =
+        ListdirPath_(path, timeout_ms, start_time, interrupt_flag);
+    if (error.first != EC::Success) {
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, error);
+      }
+      errors.emplace_back(path, error);
+      return;
+    }
+
+    for (const auto &entry : listing) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
+        ECM out = {EC::Terminate, "Interrupted by user"};
+        if (error_callback && *error_callback) {
+          (*error_callback)(entry.path, out);
+        }
+        errors.emplace_back(entry.path, out);
+        return;
+      }
+      if (IsTimedOut_(timeout_ms, start_time)) {
+        ECM out = {EC::OperationTimeout, "remove timeout"};
+        if (error_callback && *error_callback) {
+          (*error_callback)(entry.path, out);
+        }
+        errors.emplace_back(entry.path, out);
+        return;
+      }
+      if (entry.type == PathType::DIR) {
+        _remove(entry.path, errors, error_callback, timeout_ms, start_time,
+                interrupt_flag);
+      } else {
+        fs::remove(entry.path, ec);
+        if (ec) {
+          ECM out = {fec(ec), AMStr::fmt("remove {} failed: {}", entry.path,
+                                         ec.message())};
+          if (error_callback && *error_callback) {
+            (*error_callback)(entry.path, out);
+          }
+          errors.emplace_back(entry.path, out);
+          ec.clear();
+        }
+      }
+    }
+
+    fs::remove(fs::path(path), ec);
+    if (ec) {
+      ECM out = {fec(ec),
+                 AMStr::fmt("remove {} failed: {}", path, ec.message())};
+      if (error_callback && *error_callback) {
+        (*error_callback)(path, out);
+      }
+      errors.emplace_back(path, out);
+    }
   }
   std::pair<ECM, WRI> iwalk(const std::string &path, bool show_all = false,
                             bool ignore_special_file = true,
                             AMFS::WalkErrorCallback error_callback = nullptr,
                             int timeout_ms = -1, int64_t start_time = -1,
-                            amf interrupt_flag = nullptr) override {
+                            amf interrupt_flag = nullptr) {
     start_time = NormalizeStartTime_(start_time);
     std::vector<PathInfo> result = {};
     RMR errors = {};
 
     auto [error, info] =
-        stat(path, false, timeout_ms, start_time, interrupt_flag);
+        StatPath_(path, false, timeout_ms, start_time, interrupt_flag);
     if (error.first != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, error);
@@ -935,8 +1053,7 @@ public:
     fs::recursive_directory_iterator it(path, ec);
     fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-           (control_part_ && control_part_->IsInterrupted()))) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
         ECM out = {EC::Terminate, "iwalk interrupted by user"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
@@ -1026,7 +1143,7 @@ public:
     for (const auto &dir : all_dirs) {
       if (has_subdir.find(dir) == has_subdir.end()) {
         auto [stat_err, stat_info] =
-            stat(dir, false, timeout_ms, start_time, interrupt_flag);
+            StatPath_(dir, false, timeout_ms, start_time, interrupt_flag);
         if (stat_err.first == EC::Success) {
           result.push_back(stat_info);
         } else {
@@ -1044,9 +1161,8 @@ public:
   [[nodiscard]] std::pair<ECM, WRI>
   iwalk(const std::string &path, bool show_all = false,
         bool ignore_special_file = true,
-        AMFS::WalkErrorCallback error_callback = nullptr,
-        int timeout_ms = -1, int64_t start_time = -1,
-        amf interrupt_flag = nullptr) const override {
+        AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
+        int64_t start_time = -1, amf interrupt_flag = nullptr) const {
     return const_cast<AMLocalIOCore *>(this)->iwalk(
         path, show_all, ignore_special_file, error_callback, timeout_ms,
         start_time, interrupt_flag);
@@ -1057,13 +1173,13 @@ public:
                             bool ignore_special_file = false,
                             AMFS::WalkErrorCallback error_callback = nullptr,
                             int timeout_ms = -1, int64_t start_time = -1,
-                            amf interrupt_flag = nullptr) override {
+                            amf interrupt_flag = nullptr) {
     start_time = NormalizeStartTime_(start_time);
     WRD result = {};
     RMR errors = {};
 
     auto [error, info] =
-        stat(path, false, timeout_ms, start_time, interrupt_flag);
+        StatPath_(path, false, timeout_ms, start_time, interrupt_flag);
     if (error.first != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, error);
@@ -1125,8 +1241,7 @@ public:
     fs::recursive_directory_iterator it(root_norm, ec);
     fs::recursive_directory_iterator end;
     for (; it != end; it.increment(ec)) {
-      if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-           (control_part_ && control_part_->IsInterrupted()))) {
+      if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
         ECM out = {EC::Terminate, "Interrupted by user, no action conducted"};
         if (error_callback && *error_callback) {
           (*error_callback)(path, out);
@@ -1165,8 +1280,8 @@ public:
         continue;
       }
 
-      auto [stat_ecm, entry_info] = stat(entry_path.string(), false, timeout_ms,
-                                         start_time, interrupt_flag);
+      auto [stat_ecm, entry_info] = StatPath_(
+          entry_path.string(), false, timeout_ms, start_time, interrupt_flag);
       if (stat_ecm.first != EC::Success) {
         const std::string parent_key =
             normalize_key(entry_path.parent_path().lexically_normal().string());
@@ -1241,10 +1356,10 @@ public:
   }
   int64_t getsize(const std::string &path, bool ignore_special_file = true,
                   int timeout_ms = -1, int64_t start_time = -1,
-                  amf interrupt_flag = nullptr) override {
+                  amf interrupt_flag = nullptr) {
     start_time = NormalizeStartTime_(start_time);
     auto [rcm, info] =
-        stat(path, false, timeout_ms, start_time, interrupt_flag);
+        StatPath_(path, false, timeout_ms, start_time, interrupt_flag);
     if (rcm.first != EC::Success) {
       return -1;
     }
@@ -1255,8 +1370,7 @@ public:
     auto [walk_rcm, pack] = iwalk(path, true, ignore_special_file, nullptr,
                                   timeout_ms, start_time, interrupt_flag);
     if (walk_rcm.first != EC::Success ||
-        ((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
+        ((interrupt_flag && interrupt_flag->IsInterrupted()))) {
       return -1;
     }
 
@@ -1270,49 +1384,21 @@ public:
   std::vector<PathInfo> find(const std::string &path,
                              SearchType type = SearchType::All,
                              int timeout_ms = -1, int64_t start_time = -1,
-                             amf interrupt_flag = nullptr) override {
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
+                             amf interrupt_flag = nullptr) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
       return {};
     }
     return BasePathMatch::find(path, type, timeout_ms, start_time,
                                interrupt_flag);
   }
 
-  ECM mkdir(const std::string &path, int timeout_ms = -1,
-            int64_t start_time = -1, amf interrupt_flag = nullptr) override {
-    start_time = NormalizeStartTime_(start_time);
-    if (path.empty()) {
-      return {EC::InvalidArg, "Invalid empty path"};
-    }
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return {EC::Terminate, "Interrupted by user"};
-    }
-    if (IsTimedOut_(timeout_ms, start_time)) {
-      return {EC::OperationTimeout, "mkdir timeout"};
-    }
-
-    std::error_code ec;
-    fs::create_directory(fs::path(path), ec);
-    if (ec) {
-      ECM rcm = {fec(ec),
-                 AMStr::fmt("mkdir {} failed: {}", path, ec.message())};
-      trace(AMDomain::client::TraceLevel::Error, rcm.first, path, "mkdir",
-            rcm.second);
-      return rcm;
-    }
-    return {EC::Success, ""};
-  }
-
   ECM mkdirs(const std::string &path, int timeout_ms = -1,
-             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
+             int64_t start_time = -1, amf interrupt_flag = nullptr) {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1331,131 +1417,17 @@ public:
     return {EC::Success, ""};
   }
 
-  ECM rename(const std::string &src, const std::string &dst,
-             bool mkdir_parent = true, bool overwrite = false,
-             int timeout_ms = -1, int64_t start_time = -1,
-             amf interrupt_flag = nullptr) override {
-    start_time = NormalizeStartTime_(start_time);
-    if (src.empty() || dst.empty()) {
-      return {EC::InvalidArg, "Invalid empty path"};
-    }
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return {EC::Terminate, "Interrupted by user"};
-    }
-    if (IsTimedOut_(timeout_ms, start_time)) {
-      return {EC::OperationTimeout, "rename timeout"};
-    }
-
-    std::error_code ec;
-    auto [src_ecm, src_info] =
-        stat(src, false, timeout_ms, start_time, interrupt_flag);
-    auto [dst_ecm, dst_info] =
-        stat(dst, false, timeout_ms, start_time, interrupt_flag);
-    if (src_ecm.first != EC::Success) {
-      return {src_ecm.first, AMStr::fmt("src {} not exist", src)};
-    }
-    if (dst_ecm.first == EC::Success) {
-      if ((src_info.type == PathType::DIR && dst_info.type != PathType::DIR) ||
-          (src_info.type != PathType::DIR && dst_info.type == PathType::DIR)) {
-        return {EC::NotADirectory, "src and dst are not the same type"};
-      }
-      if (!overwrite) {
-        return {EC::PathAlreadyExists,
-                AMStr::fmt("dst {} already exists", dst)};
-      }
-    }
-
-    if (mkdir_parent) {
-      ECM mk_rcm = mkdirs(AMPathStr::dirname(dst), timeout_ms, start_time,
-                          interrupt_flag);
-      if (mk_rcm.first != EC::Success) {
-        return mk_rcm;
-      }
-    }
-
-    fs::rename(fs::path(src), fs::path(dst), ec);
-    if (ec == std::errc::cross_device_link) {
-      ec.clear();
-      if (fs::is_directory(src, ec)) {
-        fs::copy(src, dst,
-                 fs::copy_options::recursive |
-                     fs::copy_options::overwrite_existing,
-                 ec);
-        if (!ec) {
-          fs::remove_all(src, ec);
-        }
-      } else {
-        fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
-        if (!ec) {
-          fs::remove(src, ec);
-        }
-      }
-    }
-    if (ec) {
-      return {fec(ec),
-              AMStr::fmt("rename {} to {} failed: {}", src, dst, ec.message())};
-    }
-    return {EC::Success, ""};
-  }
-
-  ECM rmdir(const std::string &path, int timeout_ms = -1,
-            int64_t start_time = -1, amf interrupt_flag = nullptr) override {
-    start_time = NormalizeStartTime_(start_time);
-    if (path.empty()) {
-      return {EC::InvalidArg, "Invalid empty path"};
-    }
-    auto [error, info] =
-        stat(path, false, timeout_ms, start_time, interrupt_flag);
-    if (error.first != EC::Success) {
-      return error;
-    }
-    if (info.type != PathType::DIR) {
-      return {EC::NotADirectory, "Path is not a directory"};
-    }
-
-    std::error_code ec;
-    fs::remove(fs::path(path), ec);
-    if (ec) {
-      return {fec(ec), AMStr::fmt("rmdir {} failed: {}", path, ec.message())};
-    }
-    return {EC::Success, ""};
-  }
-
-  ECM rmfile(const std::string &path, int timeout_ms = -1,
-             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
-    start_time = NormalizeStartTime_(start_time);
-    if (path.empty()) {
-      return {EC::InvalidArg, "Invalid empty path"};
-    }
-    auto [error, info] =
-        stat(path, false, timeout_ms, start_time, interrupt_flag);
-    if (error.first != EC::Success) {
-      return error;
-    }
-    if (info.type == PathType::DIR) {
-      return {EC::NotAFile, "Path is a directory"};
-    }
-
-    std::error_code ec;
-    fs::remove(fs::path(path), ec);
-    if (ec) {
-      return {fec(ec), AMStr::fmt("rmfile {} failed: {}", path, ec.message())};
-    }
-    return {EC::Success, ""};
-  }
-
   std::pair<ECM, RMR> remove(const std::string &path,
                              AMFS::WalkErrorCallback error_callback = nullptr,
                              int timeout_ms = -1, int64_t start_time = -1,
-                             amf interrupt_flag = nullptr) override {
+                             amf interrupt_flag = nullptr) {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
       return {ECM{EC::InvalidArg, "Invalid empty path"}, RMR{}};
     }
 
     auto [error, info] =
-        stat(path, false, timeout_ms, start_time, interrupt_flag);
+        StatPath_(path, false, timeout_ms, start_time, interrupt_flag);
     if (error.first != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, error);
@@ -1480,8 +1452,7 @@ public:
       }
     }
 
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
       return {{EC::Terminate, "Interrupted by user"}, errors};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1492,13 +1463,12 @@ public:
   }
 
   ECM saferm(const std::string &path, int timeout_ms = -1,
-             int64_t start_time = -1, amf interrupt_flag = nullptr) override {
+             int64_t start_time = -1, amf interrupt_flag = nullptr) {
     start_time = NormalizeStartTime_(start_time);
     if (path.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
+    if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
       return {EC::Terminate, "Interrupted by user"};
     }
     if (IsTimedOut_(timeout_ms, start_time)) {
@@ -1511,7 +1481,7 @@ public:
     }
 
     auto [error, info] =
-        stat(path, false, timeout_ms, start_time, interrupt_flag);
+        StatPath_(path, false, timeout_ms, start_time, interrupt_flag);
     if (error.first != EC::Success) {
       return error;
     }
@@ -1559,54 +1529,9 @@ public:
       return mk_rcm;
     }
 
-    return rename(path, target_path, false, false, timeout_ms, start_time,
-                  interrupt_flag);
-  }
-
-  ECM copy(const std::string &src, const std::string &dst,
-           bool need_mkdir = false, int timeout_ms = -1,
-           amf interrupt_flag = nullptr) override {
-    int64_t start_time = AMTime::miliseconds();
-    if (src.empty() || dst.empty()) {
-      return {EC::InvalidArg, "Invalid empty path"};
-    }
-    if (((interrupt_flag && interrupt_flag->IsInterrupted()) ||
-         (control_part_ && control_part_->IsInterrupted()))) {
-      return {EC::Terminate, "Interrupted by user"};
-    }
-    if (IsTimedOut_(timeout_ms, start_time)) {
-      return {EC::OperationTimeout, "copy timeout"};
-    }
-
-    auto [src_ecm, src_info] =
-        stat(src, false, timeout_ms, start_time, interrupt_flag);
-    if (src_ecm.first != EC::Success) {
-      return src_ecm;
-    }
-
-    if (need_mkdir) {
-      ECM mk_rcm = mkdirs(AMPathStr::dirname(dst), timeout_ms, start_time,
-                          interrupt_flag);
-      if (mk_rcm.first != EC::Success) {
-        return mk_rcm;
-      }
-    }
-
-    std::error_code ec;
-    if (src_info.type == PathType::DIR) {
-      fs::copy(src, dst,
-               fs::copy_options::recursive |
-                   fs::copy_options::overwrite_existing,
-               ec);
-    } else {
-      fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
-    }
-
-    if (ec) {
-      return {fec(ec),
-              AMStr::fmt("copy {} to {} failed: {}", src, dst, ec.message())};
-    }
-    return {EC::Success, ""};
-  }
+    return rename(AMFSI::RenameArgs{path, target_path, false, false},
+                  AMDomain::client::MakeClientControlComponent(
+                      std::move(interrupt_flag), timeout_ms, start_time));
+  }*/
 };
 } // namespace AMInfra::client::LOCAL
