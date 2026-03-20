@@ -23,12 +23,13 @@ enum class ClientProtocol { UnInitilized = -1, SFTP = 1, FTP = 2, LOCAL = 3 };
  */
 struct ClientMetaData {
   enum class Attr {
-    login_dir = 1,
-    cwd = 2,
-    cmd_prefix = 3,
-    wrap_cmd = 4,
+    trash_dir = 1,
+    login_dir = 2,
+    cwd = 3,
+    cmd_prefix = 4,
+    wrap_cmd = 5,
   };
-
+  std::string trash_dir = "";
   std::string login_dir = "";
   std::string cwd = "";
   std::string cmd_prefix = "";
@@ -37,11 +38,12 @@ struct ClientMetaData {
   using MemberPtr =
       std::variant<std::string ClientMetaData::*, bool ClientMetaData::*>;
   using Value = std::variant<std::string, bool>;
-  static_assert(magic_enum::enum_count<Attr>() == 4,
+  static_assert(magic_enum::enum_count<Attr>() == 5,
                 "ClientMetaData::members must stay aligned with Attr values");
   static constexpr std::array<MemberPtr, magic_enum::enum_count<Attr>()>
-      members{&ClientMetaData::login_dir, &ClientMetaData::cwd,
-              &ClientMetaData::cmd_prefix, &ClientMetaData::wrap_cmd};
+      members{&ClientMetaData::trash_dir, &ClientMetaData::login_dir,
+              &ClientMetaData::cwd, &ClientMetaData::cmd_prefix,
+              &ClientMetaData::wrap_cmd};
 
   [[nodiscard]] std::vector<std::pair<Attr, Value>> GetDict() const {
     std::vector<std::pair<Attr, Value>> out;
@@ -137,19 +139,19 @@ struct ClientMetaData {
  */
 struct ConRequest {
   enum class Attr {
-    nickname = 3,
     protocol = 1,
+    nickname = 3,
     hostname = 5,
     username = 7,
     port = 9,
     password = 11,
     buffer_size = 13,
-    trash_dir = 15,
     keyfile = 17,
     compression = 19,
   };
+  using ClientNickname = std::string;
 
-  std::string nickname = "";
+  ClientNickname nickname = "";
   ClientProtocol protocol = ClientProtocol::SFTP;
   std::string hostname = "";
   std::string username = "";
@@ -158,32 +160,29 @@ struct ConRequest {
   std::string keyfile = "";
   int64_t buffer_size = 0;
   bool compression = false;
-  std::string trash_dir = "";
   ConRequest() = default;
   static constexpr auto FieldNames = magic_enum::enum_values<Attr>();
   using MemberPtr =
       std::variant<std::string ConRequest::*, ClientProtocol ConRequest::*,
                    int64_t ConRequest::*, bool ConRequest::*>;
   using Value = std::variant<std::string, ClientProtocol, int64_t, bool>;
-  static_assert(magic_enum::enum_count<Attr>() == 10,
+  static_assert(magic_enum::enum_count<Attr>() == 9,
                 "ConRequest::members must stay aligned with Attr values");
   static constexpr std::array<MemberPtr, magic_enum::enum_count<Attr>()>
       members{&ConRequest::protocol,    &ConRequest::nickname,
               &ConRequest::hostname,    &ConRequest::username,
               &ConRequest::port,        &ConRequest::password,
-              &ConRequest::buffer_size, &ConRequest::trash_dir,
-              &ConRequest::keyfile,     &ConRequest::compression};
+              &ConRequest::buffer_size, &ConRequest::keyfile,
+              &ConRequest::compression};
 
   ConRequest(ClientProtocol protocol, std::string nickname,
              std::string hostname, std::string username, int port = 22,
              std::string password = "", std::string keyfile = "",
-             bool compression = false, std::string trash_dir = "",
-             int64_t buffer_size = 0)
+             bool compression = false, int64_t buffer_size = 0)
       : nickname(std::move(nickname)), hostname(std::move(hostname)),
-        trash_dir(std::move(trash_dir)), buffer_size(buffer_size),
-        protocol(protocol), port(port), username(std::move(username)),
-        password(std::move(password)), keyfile(std::move(keyfile)),
-        compression(std::move(compression)) {}
+        buffer_size(buffer_size), protocol(protocol), port(port),
+        username(std::move(username)), password(std::move(password)),
+        keyfile(std::move(keyfile)), compression(std::move(compression)) {}
 
   [[nodiscard]] std::vector<std::pair<Attr, Value>> GetDict() const {
     std::vector<std::pair<Attr, Value>> out;
