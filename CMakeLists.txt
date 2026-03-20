@@ -45,6 +45,9 @@ file(GLOB_RECURSE AMSFTP_SOURCES CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/src/Isocline/isocline.c"
 )
 list(APPEND AMSFTP_SOURCES "${PROJECT_SOURCE_DIR}/src/Isocline/isocline.c")
+list(APPEND AMSFTP_SOURCES
+  "${PROJECT_SOURCE_DIR}/src/infrastructure/client/ClientMaintainer.cpp"
+)
 
 add_executable(amsftp ${AMSFTP_SOURCES})
 

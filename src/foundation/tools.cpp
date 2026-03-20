@@ -691,11 +691,11 @@ bool GetEnv(std::string_view key, std::string *target) {
 } // namespace AMStr
 
 namespace AMJson {
-bool DelKey(AMJson::Json &root, const std::vector<std::string> &path) {
+bool DelKey(Json &root, const std::vector<std::string> &path) {
   if (path.empty()) {
     return false;
   }
-  AMJson::Json *node = &root;
+  Json *node = &root;
   for (size_t i = 0; i < path.size(); ++i) {
     const std::string &seg = path[i];
     if (!node->is_object()) {
@@ -915,11 +915,7 @@ double seconds() {
       .count();
 }
 
-int64_t miliseconds() {
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-             std::chrono::steady_clock::now().time_since_epoch())
-      .count();
-}
+double miliseconds() { return seconds() * 1000.0; }
 
 std::string Str(std::string_view format, std::optional<double> timestamp) {
   const double stamp = timestamp.has_value() ? *timestamp : seconds();

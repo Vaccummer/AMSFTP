@@ -2,9 +2,7 @@
 
 #include "domain/client/ClientPort.hpp"
 #include "domain/filesystem/FileSystemModel.hpp"
-
 #include <cstdint>
-#include <memory>
 #include <string>
 #include <utility>
 
@@ -29,7 +27,7 @@ public:
   ParsePathTarget(const std::string &input,
                   AMDomain::client::IClientRuntimePort &runtime_port,
                   AMDomain::client::IClientPathPort &path_port,
-                  amf interrupt_flag = nullptr);
+                  AMDomain::client::amf interrupt_flag = nullptr);
 
   /**
    * @brief Resolve one ready client for command planning/execution.
@@ -38,7 +36,7 @@ public:
   ResolveReadyClient(AMDomain::client::IClientRuntimePort &runtime_port,
                      AMDomain::client::IClientLifecyclePort &lifecycle_port,
                      const std::string &nickname,
-                     std::shared_ptr<TaskControlToken> control_token = nullptr,
+                     AMDomain::client::amf control_token = nullptr,
                      int timeout_ms = -1, int64_t start_time = -1);
 
   /**
@@ -50,7 +48,7 @@ public:
                    AMDomain::client::IClientRuntimePort &runtime_port,
                    AMDomain::client::IClientLifecyclePort &lifecycle_port,
                    AMDomain::client::IClientPathPort &path_port,
-                   std::shared_ptr<TaskControlToken> control_token = nullptr,
+                   AMDomain::client::amf control_token = nullptr,
                    int timeout_ms = -1, int64_t start_time = -1);
 };
 } // namespace AMApplication::filesystem

@@ -1,1118 +1,906 @@
 #include "application/client/ClientAppService.hpp"
 
-#include "domain/client/ClientDomainService.hpp"
-#include "domain/host/HostDomainService.hpp"
-#include "domain/host/HostManager.hpp"
+#include "ClientPublicPool.hpp"
+
 #include "foundation/Path.hpp"
 #include "foundation/tools/auth.hpp"
 #include "foundation/tools/string.hpp"
-#include <filesystem>
-#include <mutex>
-#include <unordered_map>
+#include "foundation/tools/time.hpp"
 
 namespace AMApplication::client {
 namespace {
 using ECM = std::pair<ErrorCode, std::string>;
 using EC = ErrorCode;
 using ClientHandle = AMDomain::client::ClientHandle;
+using ClientState = AMDomain::client::ClientState;
+using ClientStatus = AMDomain::client::ClientStatus;
 using ClientWorkdirState = AMDomain::client::ClientWorkdirState;
-using ClientConnectContext = AMDomain::client::ClientConnectContext;
-using ClientConnectOptions = AMDomain::client::ClientConnectOptions;
-using ClientProtocol = AMDomain::client::ClientProtocol;
-using KnownHostCallback = AMDomain::client::KnownHostCallback;
-using AuthCallback = AMDomain::client::AuthCallback;
-using TraceCallback = AMDomain::client::TraceCallback;
-using DisconnectCallback =
-    std::function<void(const ClientHandle &, const ECM &)>;
+using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using HostConfig = AMDomain::host::HostConfig;
-using ConRequest = AMDomain::client::ConRequest;
+using ConRequest = AMDomain::host::ConRequest;
+using ClientProtocol = AMDomain::host::ClientProtocol;
 
-/**
- * @brief Normalize one nickname to canonical runtime form.
- */
-std::string NormalizeNickname_(const std::string &nickname) {
-  return AMDomain::client::ClientDomainService::NormalizeNickname(nickname);
+bool IsInterrupted(const AMDomain::client::amf &interrupt_flag) {
+  return interrupt_flag && interrupt_flag->IsInterrupted();
+}
+} // namespace
+
+ClientAppService::ClientAppService() : ClientAppService(ClientServiceArg{}) {}
+
+ClientAppService::ClientAppService(ClientServiceArg arg)
+    : init_arg_(std::move(arg)),
+      disconnect_cb_(init_arg_.disconnect_callback),
+      trace_cb_(init_arg_.trace_callback), auth_cb_(init_arg_.auth_callback),
+      known_host_cb_(init_arg_.known_host_callback) {
+  maintainer_ = AMDomain::client::CreateClientMaintainer(
+      init_arg_.heartbeat_interval_s, init_arg_.heartbeat_timeout_ms,
+      disconnect_cb_, {});
+  if (maintainer_) {
+    maintainer_->SetCheckTimeout(init_arg_.heartbeat_timeout_ms);
+    if (init_arg_.heartbeat_interval_s > 0) {
+      maintainer_->SetHeartbeatInterval(init_arg_.heartbeat_interval_s);
+      maintainer_->StartHeartbeat();
+    }
+  }
+
+  transfer_pool_ = std::make_shared<ClientPublicPool>(
+      [this](const std::string &nickname, int timeout_ms, int64_t start_time) {
+        return CreateTransferClient(nickname, timeout_ms, start_time);
+      });
 }
 
-/**
- * @brief Return true when one nickname targets the local profile.
- */
-bool IsLocalNickname_(const std::string &nickname) {
+ClientAppService::~ClientAppService() = default;
+
+ClientAppService::ECM ClientAppService::Init() {
+  auto *host_config_manager = init_arg_.host_config_manager;
+  if (!host_config_manager) {
+    return {EC::Success, ""};
+  }
+
+  auto [cfg_rcm, local_cfg] = host_config_manager->GetLocalConfig();
+  if (!isok(cfg_rcm)) {
+    return cfg_rcm;
+  }
+
+  auto [create_rcm, local_client] = CreateClient(local_cfg);
+  if (!isok(create_rcm) || !local_client) {
+    return create_rcm;
+  }
+
+  const auto connect = local_client->IOPort().Connect(
+      AMDomain::filesystem::ConnectArgs{false}, BuildControl_());
+  if (!isok(connect.rcm)) {
+    return connect.rcm;
+  }
+
+  ECM add_rcm = AddClient(local_client, true);
+  if (!isok(add_rcm)) {
+    return add_rcm;
+  }
+
+  SetWorkdirState("local", NormalizeWorkdirState_(
+                                {local_client->ConfigPort().GetHomeDir(),
+                                 local_cfg.metadata.login_dir,
+                                 local_cfg.metadata.cwd}));
+  return {EC::Success, ""};
+}
+
+ClientAppService::ClientServiceArg ClientAppService::GetInitArg() const {
+  std::lock_guard<std::mutex> callback_lock(callback_mtx_);
+  std::lock_guard<std::mutex> registry_lock(registry_mtx_);
+  ClientServiceArg arg = init_arg_;
+  arg.disconnect_callback = disconnect_cb_;
+  arg.trace_callback = trace_cb_;
+  arg.auth_callback = auth_cb_;
+  arg.known_host_callback = known_host_cb_;
+  return arg;
+}
+
+ClientAppService::ClientHandle
+ClientAppService::GetClient(const std::string &nickname) const {
+  const std::string key = NormalizeNickname_(nickname);
+  if (IsLocalNickname_(key)) {
+    return GetLocalClient();
+  }
+  if (!maintainer_) {
+    return nullptr;
+  }
+  return maintainer_->GetClient(key);
+}
+
+ClientAppService::ClientHandle ClientAppService::GetLocalClient() const {
+  std::lock_guard<std::mutex> lock(registry_mtx_);
+  return local_client_;
+}
+
+ClientAppService::ClientHandle ClientAppService::GetCurrentClient() const {
+  std::lock_guard<std::mutex> lock(registry_mtx_);
+  return current_client_ ? current_client_ : local_client_;
+}
+
+std::string ClientAppService::GetCurrentNickname() const {
+  ClientHandle current = GetCurrentClient();
+  if (!current) {
+    return "local";
+  }
+  return NormalizeNickname_(current->ConfigPort().GetNickname());
+}
+
+std::string ClientAppService::CurrentNickname() const {
+  return GetCurrentNickname();
+}
+
+std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
+ClientAppService::CreateClient(const HostConfig &config) {
+  KnownHostCallback known_host_cb = {};
+  TraceCallback trace_cb = {};
+  AuthCallback auth_cb = {};
+  std::vector<std::string> private_keys;
+  {
+    std::lock_guard<std::mutex> callback_lock(callback_mtx_);
+    std::lock_guard<std::mutex> registry_lock(registry_mtx_);
+    known_host_cb = known_host_cb_;
+    trace_cb = trace_cb_;
+    auth_cb = auth_cb_;
+    private_keys = init_arg_.private_keys;
+  }
+
+  auto [create_rcm, client] =
+      AMDomain::client::CreateClient(config.request, known_host_cb, trace_cb,
+                                     auth_cb, private_keys);
+  if (!isok(create_rcm) || !client) {
+    return {create_rcm, nullptr};
+  }
+  ApplyCallbacksToClient_(client);
+  return {create_rcm, client};
+}
+
+ClientAppService::ECM ClientAppService::AddClient(ClientHandle client,
+                                                  bool overwrite) {
+  if (!client) {
+    return {EC::InvalidHandle, "Client handle is null"};
+  }
+
+  ApplyCallbacksToClient_(client);
+  const std::string nickname =
+      NormalizeNickname_(client->ConfigPort().GetNickname());
+  if (nickname.empty()) {
+    return {EC::InvalidArg, "Client nickname is empty"};
+  }
+
+  if (IsLocalNickname_(nickname)) {
+    std::lock_guard<std::mutex> lock(registry_mtx_);
+    if (!local_client_ || overwrite) {
+      local_client_ = client;
+    }
+    if (!current_client_ || IsLocalNickname_(current_client_->ConfigPort().GetNickname()) ||
+        overwrite) {
+      current_client_ = local_client_;
+    }
+    return {EC::Success, ""};
+  }
+
+  if (!maintainer_) {
+    return {EC::InvalidHandle, "Client maintainer is not initialized"};
+  }
+  const bool added = maintainer_->AddClient(client, overwrite);
+  if (!added) {
+    return {EC::TargetAlreadyExists,
+            AMStr::fmt("Client already exists: {}", nickname)};
+  }
+
+  std::lock_guard<std::mutex> lock(registry_mtx_);
+  if (!current_client_) {
+    current_client_ = client;
+  }
+  return {EC::Success, ""};
+}
+
+ClientAppService::ClientState
+ClientAppService::CheckClient(const std::string &nickname, bool reconnect,
+                              bool update) {
+  ClientHandle client = GetClient(nickname);
+  if (!client) {
+    return {ClientStatus::NotInitialized,
+            {EC::ClientNotFound,
+             AMStr::fmt("Client not found: {}", NormalizeNickname_(nickname))}};
+  }
+  return CheckClientInternal_(client, reconnect, update, BuildControl_());
+}
+
+std::map<std::string, ClientAppService::ClientHandle>
+ClientAppService::GetClients() const {
+  std::map<std::string, ClientHandle> clients = {};
+  if (maintainer_) {
+    clients = maintainer_->GetAllClients();
+  }
+
+  const ClientHandle local = GetLocalClient();
+  if (local) {
+    clients["local"] = local;
+  }
+  return clients;
+}
+
+ClientAppService::ECM ClientAppService::RemoveClient(
+    const std::string &nickname) {
+  const std::string key = NormalizeNickname_(nickname);
+  if (IsLocalNickname_(key)) {
+    return {EC::InvalidArg, "Local client cannot be removed"};
+  }
+
+  if (!maintainer_) {
+    return {EC::InvalidHandle, "Client maintainer is not initialized"};
+  }
+  if (!maintainer_->RemoveClient(key)) {
+    return {EC::ClientNotFound, AMStr::fmt("Client not found: {}", key)};
+  }
+
+  std::lock_guard<std::mutex> lock(registry_mtx_);
+  public_clients_.erase(key);
+  if (current_client_ &&
+      NormalizeNickname_(current_client_->ConfigPort().GetNickname()) == key) {
+    current_client_ = local_client_;
+  }
+  return {EC::Success, ""};
+}
+
+std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
+ClientAppService::GetPublicClient(const std::string &nickname) {
+  const std::string key = NormalizeNickname_(nickname);
+
+  while (true) {
+    ClientID candidate_id;
+    ClientHandle candidate = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(registry_mtx_);
+      auto bucket_it = public_clients_.find(key);
+      if (bucket_it == public_clients_.end() || bucket_it->second.empty()) {
+        return {{EC::ClientNotFound,
+                 AMStr::fmt("No public client found for {}", key)},
+                nullptr};
+      }
+      auto it = bucket_it->second.begin();
+      candidate_id = it->first;
+      candidate = it->second;
+    }
+
+    if (!candidate) {
+      std::lock_guard<std::mutex> lock(registry_mtx_);
+      auto bucket_it = public_clients_.find(key);
+      if (bucket_it != public_clients_.end()) {
+        bucket_it->second.erase(candidate_id);
+        if (bucket_it->second.empty()) {
+          public_clients_.erase(bucket_it);
+        }
+      }
+      continue;
+    }
+
+    const ClientState state =
+        CheckClientInternal_(candidate, false, true, BuildControl_());
+    if (state.status == ClientStatus::OK && isok(state.rcm)) {
+      return {state.rcm, candidate};
+    }
+
+    std::lock_guard<std::mutex> lock(registry_mtx_);
+    auto bucket_it = public_clients_.find(key);
+    if (bucket_it != public_clients_.end()) {
+      bucket_it->second.erase(candidate_id);
+      if (bucket_it->second.empty()) {
+        public_clients_.erase(bucket_it);
+      }
+    }
+  }
+}
+
+ClientAppService::ECM
+ClientAppService::AddPublicClient(const ClientHandle &client) {
+  if (!client) {
+    return {EC::InvalidHandle, "Client handle is null"};
+  }
+  const std::string nickname =
+      NormalizeNickname_(client->ConfigPort().GetNickname());
+  const ClientID id = client->GetUID();
+  if (nickname.empty()) {
+    return {EC::InvalidArg, "Client nickname is empty"};
+  }
+  if (id.empty()) {
+    return {EC::InvalidArg, "Client UID is empty"};
+  }
+
+  ApplyCallbacksToClient_(client);
+
+  std::lock_guard<std::mutex> lock(registry_mtx_);
+  public_clients_[nickname][id] = client;
+  return {EC::Success, ""};
+}
+
+void ClientAppService::SetPublicClientCallback(
+    std::optional<DisconnectCallback> disconnect_cb,
+    std::optional<TraceCallback> trace_cb,
+    std::optional<KnownHostCallback> known_host_cb,
+    std::optional<AuthCallback> auth_cb) {
+  {
+    std::lock_guard<std::mutex> callback_lock(callback_mtx_);
+    std::lock_guard<std::mutex> registry_lock(registry_mtx_);
+    if (disconnect_cb.has_value()) {
+      disconnect_cb_ = std::move(*disconnect_cb);
+      init_arg_.disconnect_callback = disconnect_cb_;
+    }
+    if (trace_cb.has_value()) {
+      trace_cb_ = std::move(*trace_cb);
+      init_arg_.trace_callback = trace_cb_;
+    }
+    if (known_host_cb.has_value()) {
+      known_host_cb_ = std::move(*known_host_cb);
+      init_arg_.known_host_callback = known_host_cb_;
+    }
+    if (auth_cb.has_value()) {
+      auth_cb_ = std::move(*auth_cb);
+      init_arg_.auth_callback = auth_cb_;
+    }
+  }
+
+  if (maintainer_ && disconnect_cb.has_value()) {
+    maintainer_->SetDisconnectCallback(disconnect_cb_);
+  }
+}
+
+void ClientAppService::SetHeartbeatTimeoutMs(int timeout_ms) {
+  const int clamped = static_cast<int>(
+      AMDomain::client::MaintainerService::ClampHeartbeatTimeoutMs(timeout_ms));
+  {
+    std::lock_guard<std::mutex> lock(registry_mtx_);
+    init_arg_.heartbeat_timeout_ms = clamped;
+  }
+  if (maintainer_) {
+    maintainer_->SetCheckTimeout(clamped);
+  }
+}
+
+int ClientAppService::HeartbeatTimeoutMs() const {
+  std::lock_guard<std::mutex> lock(registry_mtx_);
+  return init_arg_.heartbeat_timeout_ms;
+}
+
+void ClientAppService::SetHeartbeatIntervalS(int interval_s) {
+  {
+    std::lock_guard<std::mutex> lock(registry_mtx_);
+    init_arg_.heartbeat_interval_s = interval_s;
+  }
+
+  if (!maintainer_) {
+    return;
+  }
+  if (interval_s <= 0) {
+    maintainer_->PauseHeartbeat();
+    return;
+  }
+
+  const int clamped = static_cast<int>(
+      AMDomain::client::MaintainerService::ClampHeartbeatIntervalS(interval_s));
+  maintainer_->SetHeartbeatInterval(clamped);
+  maintainer_->StartHeartbeat();
+}
+
+int ClientAppService::HeartbeatIntervalS() const {
+  std::lock_guard<std::mutex> lock(registry_mtx_);
+  return init_arg_.heartbeat_interval_s;
+}
+
+void ClientAppService::SetKnownHostCallback(KnownHostCallback cb) {
+  SetPublicClientCallback(std::nullopt, std::nullopt,
+                          std::optional<KnownHostCallback>(std::move(cb)),
+                          std::nullopt);
+}
+
+void ClientAppService::SetAuthCallback(AuthCallback cb) {
+  SetPublicClientCallback(std::nullopt, std::nullopt, std::nullopt,
+                          std::optional<AuthCallback>(std::move(cb)));
+}
+
+void ClientAppService::SetDisconnectCallback(DisconnectCallback cb) {
+  SetPublicClientCallback(std::optional<DisconnectCallback>(std::move(cb)),
+                          std::nullopt, std::nullopt, std::nullopt);
+}
+
+void ClientAppService::SetTraceCallback(TraceCallback cb) {
+  SetPublicClientCallback(std::nullopt,
+                          std::optional<TraceCallback>(std::move(cb)),
+                          std::nullopt, std::nullopt);
+}
+
+void ClientAppService::SetInteractiveFlag(
+    const std::shared_ptr<std::atomic<bool>> &flag) {
+  if (!flag) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(registry_mtx_);
+  interactive_flag_ = flag;
+}
+
+std::shared_ptr<std::atomic<bool>> ClientAppService::GetInteractiveFlag() const {
+  std::lock_guard<std::mutex> lock(registry_mtx_);
+  return interactive_flag_;
+}
+
+std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort>
+ClientAppService::PublicPool() const {
+  return transfer_pool_;
+}
+
+std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
+ClientAppService::CreateTransferClient(const std::string &nickname,
+                                       int timeout_ms,
+                                       int64_t start_time) {
+  auto [public_rcm, public_client] = GetPublicClient(nickname);
+  if (isok(public_rcm) && public_client) {
+    return {public_rcm, public_client};
+  }
+
+  const std::string key = NormalizeNickname_(nickname);
+  if (auto existing = GetClient(key)) {
+    const ClientState state = CheckClientInternal_(
+        existing, false, true, BuildControl_(nullptr, timeout_ms, start_time));
+    if (isok(state.rcm)) {
+      (void)AddPublicClient(existing);
+      return {state.rcm, existing};
+    }
+  }
+
+  auto *host_config_manager = init_arg_.host_config_manager;
+  if (!host_config_manager) {
+    return {public_rcm, nullptr};
+  }
+
+  std::pair<ECM, HostConfig> cfg =
+      IsLocalNickname_(key) ? host_config_manager->GetLocalConfig()
+                            : host_config_manager->GetClientConfig(key);
+  if (!isok(cfg.first)) {
+    return {cfg.first, nullptr};
+  }
+
+  auto [create_rcm, client] = CreateClient(cfg.second);
+  if (!isok(create_rcm) || !client) {
+    return {create_rcm, nullptr};
+  }
+
+  auto connect_res = client->IOPort().Connect(
+      AMDomain::filesystem::ConnectArgs{false},
+      BuildControl_(nullptr, timeout_ms, start_time));
+  if (!isok(connect_res.rcm)) {
+    return {connect_res.rcm, client};
+  }
+
+  ECM add_public_rcm = AddPublicClient(client);
+  if (!isok(add_public_rcm)) {
+    return {add_public_rcm, client};
+  }
+  return {ECM{EC::Success, ""}, client};
+}
+
+void ClientAppService::SetCurrentClient(const ClientHandle &client) {
+  std::lock_guard<std::mutex> lock(registry_mtx_);
+  current_client_ = client ? client : local_client_;
+}
+
+std::vector<std::string> ClientAppService::GetClientNames() const {
+  std::vector<std::string> names = {};
+  auto clients = GetClients();
+  names.reserve(clients.size());
+  for (const auto &entry : clients) {
+    names.push_back(entry.first);
+  }
+  return names;
+}
+
+std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
+ClientAppService::ConnectNickname(const std::string &nickname,
+                                  const ClientConnectOptions &options,
+                                  TraceCallback trace_cb,
+                                  amf interrupt_flag) {
+  if (IsInterrupted(interrupt_flag)) {
+    return {{EC::Terminate, "Interrupted by user"}, nullptr};
+  }
+
+  const std::string key = NormalizeNickname_(nickname);
+  if (!options.force) {
+    if (auto existing = GetClient(key)) {
+      const ClientState state = CheckClientInternal_(
+          existing, false, false,
+          BuildControl_(interrupt_flag,
+                        options.timeout_seconds > 0
+                            ? options.timeout_seconds * 1000
+                            : -1,
+                        AMTime::miliseconds()));
+      if (isok(state.rcm)) {
+        return {state.rcm, existing};
+      }
+    }
+  }
+
+  auto *host_config_manager = init_arg_.host_config_manager;
+  if (!host_config_manager) {
+    return {{EC::InvalidHandle, "Host config manager is not bound"}, nullptr};
+  }
+
+  auto cfg = IsLocalNickname_(key) ? host_config_manager->GetLocalConfig()
+                                   : host_config_manager->GetClientConfig(key);
+  if (!isok(cfg.first)) {
+    return {cfg.first, nullptr};
+  }
+
+  auto [create_rcm, client] = CreateClient(cfg.second);
+  if (!isok(create_rcm) || !client) {
+    return {create_rcm, nullptr};
+  }
+  if (trace_cb) {
+    client->IOPort().RegisterTraceCallback(std::move(trace_cb));
+  }
+
+  auto connect_res = client->IOPort().Connect(
+      AMDomain::filesystem::ConnectArgs{options.force},
+      BuildControl_(interrupt_flag,
+                    options.timeout_seconds > 0 ? options.timeout_seconds * 1000
+                                                : -1,
+                    AMTime::miliseconds()));
+  if (!isok(connect_res.rcm)) {
+    return {connect_res.rcm, client};
+  }
+
+  if (options.register_to_manager) {
+    ECM add_rcm = AddClient(client, true);
+    if (!isok(add_rcm)) {
+      return {add_rcm, client};
+    }
+  }
+
+  const ClientWorkdirState init_state =
+      NormalizeWorkdirState_({client->ConfigPort().GetHomeDir(),
+                              cfg.second.metadata.login_dir,
+                              cfg.second.metadata.cwd});
+  (void)SetWorkdirState(key, init_state);
+  return {{EC::Success, ""}, client};
+}
+
+std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
+ClientAppService::ConnectRequest(const ClientConnectContext &context,
+                                 TraceCallback trace_cb,
+                                 amf interrupt_flag) {
+  if (IsInterrupted(interrupt_flag)) {
+    return {{EC::Terminate, "Interrupted by user"}, nullptr};
+  }
+
+  HostConfig cfg = {};
+  cfg.request = context.request;
+  cfg.request.nickname = NormalizeNickname_(cfg.request.nickname);
+  if (cfg.request.nickname.empty()) {
+    cfg.request.nickname = "local";
+  }
+  if (cfg.request.keyfile.empty() && !context.private_keys.empty()) {
+    cfg.request.keyfile = context.private_keys.front();
+  }
+  if (!cfg.request.password.empty() &&
+      !AMAuth::IsEncrypted(cfg.request.password)) {
+    cfg.request.password = AMAuth::EncryptPassword(cfg.request.password);
+  }
+
+  auto [create_rcm, client] = CreateClient(cfg);
+  if (!isok(create_rcm) || !client) {
+    return {create_rcm, nullptr};
+  }
+  if (trace_cb) {
+    client->IOPort().RegisterTraceCallback(std::move(trace_cb));
+  }
+
+  auto connect_res = client->IOPort().Connect(
+      AMDomain::filesystem::ConnectArgs{context.options.force},
+      BuildControl_(interrupt_flag,
+                    context.options.timeout_seconds > 0
+                        ? context.options.timeout_seconds * 1000
+                        : -1,
+                    AMTime::miliseconds()));
+  if (!isok(connect_res.rcm)) {
+    return {connect_res.rcm, client};
+  }
+
+  if (context.options.register_to_manager) {
+    ECM add_rcm = AddClient(client, true);
+    if (!isok(add_rcm)) {
+      return {add_rcm, client};
+    }
+  }
+
+  return {{EC::Success, ""}, client};
+}
+
+std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
+ClientAppService::EnsureClient(const std::string &nickname,
+                               amf interrupt_flag) {
+  if (IsInterrupted(interrupt_flag)) {
+    return {{EC::Terminate, "Interrupted by user"}, nullptr};
+  }
+
+  const std::string key = NormalizeNickname_(nickname);
+  if (auto client = GetClient(key)) {
+    const ClientState state =
+        CheckClientInternal_(client, true, false, BuildControl_(interrupt_flag));
+    return {state.rcm, client};
+  }
+
+  ClientConnectOptions options = {};
+  options.force = false;
+  options.quiet = true;
+  options.register_to_manager = true;
+  return ConnectNickname(key, options, {}, interrupt_flag);
+}
+
+std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
+ClientAppService::CheckClient(const std::string &nickname, bool update,
+                              amf interrupt_flag, int timeout_ms,
+                              int64_t start_time) {
+  if (IsInterrupted(interrupt_flag)) {
+    return {{EC::Terminate, "Interrupted by user"}, nullptr};
+  }
+
+  ClientHandle client = GetClient(nickname);
+  if (!client) {
+    return {{EC::ClientNotFound,
+             AMStr::fmt("Client not found: {}", NormalizeNickname_(nickname))},
+            nullptr};
+  }
+
+  const ClientState state = CheckClientInternal_(
+      client, false, update,
+      BuildControl_(interrupt_flag, timeout_ms, start_time));
+  return {state.rcm, client};
+}
+
+ClientAppService::ParsedClientPath
+ClientAppService::ParseScopedPath(const std::string &input,
+                                  amf interrupt_flag) {
+  if (IsInterrupted(interrupt_flag)) {
+    return {"", "", nullptr, {EC::Terminate, "Interrupted by user"}};
+  }
+
+  std::string nickname;
+  std::string path;
+  if (!input.empty() && input.front() == '@') {
+    nickname = "local";
+    path = input.substr(1);
+  } else {
+    const size_t at_pos = input.find('@');
+    if (at_pos == std::string::npos) {
+      nickname = GetCurrentNickname();
+      path = input;
+    } else {
+      nickname = NormalizeNickname_(input.substr(0, at_pos));
+      path = input.substr(at_pos + 1);
+    }
+  }
+
+  if (nickname.empty()) {
+    nickname = "local";
+  }
+
+  ClientHandle client = GetClient(nickname);
+  if (client) {
+    return {nickname, path, client, {EC::Success, ""}};
+  }
+
+  auto *host_config_manager = init_arg_.host_config_manager;
+  if (!IsLocalNickname_(nickname) && host_config_manager &&
+      !host_config_manager->HostExists(nickname)) {
+    return {nickname, path, nullptr,
+            {EC::HostConfigNotFound,
+             AMStr::fmt("Host config not found: {}", nickname)}};
+  }
+
+  return {nickname, path, nullptr,
+          {EC::ClientNotFound,
+           AMStr::fmt("Client not created: {}", nickname)}};
+}
+
+std::string ClientAppService::ResolveClientPath(const std::string &path,
+                                                const ClientHandle &client) const {
+  return BuildAbsolutePath(client ? client : GetCurrentClient(), path);
+}
+
+ClientAppService::ClientWorkdirState
+ClientAppService::GetWorkdirState(const std::string &nickname) const {
+  const std::string key =
+      NormalizeNickname_(nickname.empty() ? GetCurrentNickname() : nickname);
+  std::lock_guard<std::mutex> lock(workdir_mtx_);
+  auto it = workdir_states_.find(key);
+  if (it == workdir_states_.end()) {
+    return {};
+  }
+  return it->second;
+}
+
+ClientAppService::ECM
+ClientAppService::SetWorkdirState(const std::string &nickname,
+                                  const ClientWorkdirState &state) {
+  const std::string key =
+      NormalizeNickname_(nickname.empty() ? GetCurrentNickname() : nickname);
+  std::lock_guard<std::mutex> lock(workdir_mtx_);
+  workdir_states_[key] = NormalizeWorkdirState_(state);
+  return {EC::Success, ""};
+}
+
+std::string ClientAppService::GetOrInitWorkdir(const ClientHandle &client) {
+  if (!client) {
+    return "";
+  }
+
+  const std::string key = NormalizeNickname_(client->ConfigPort().GetNickname());
+  ClientWorkdirState state = GetWorkdirState(key);
+  state.home_dir = AMPathStr::UnifyPathSep(client->ConfigPort().GetHomeDir(), "/");
+  if (state.home_dir.empty()) {
+    state.home_dir = state.login_dir;
+  }
+  if (state.login_dir.empty()) {
+    state.login_dir = state.home_dir;
+  }
+  if (state.cwd.empty()) {
+    state.cwd = state.login_dir;
+  }
+  state = NormalizeWorkdirState_(state);
+  (void)SetWorkdirState(key, state);
+  return state.cwd;
+}
+
+std::string ClientAppService::BuildAbsolutePath(const ClientHandle &client,
+                                                const std::string &path) const {
+  if (!client) {
+    return path;
+  }
+
+  ClientWorkdirState state = GetWorkdirState(client->ConfigPort().GetNickname());
+  state.home_dir = AMPathStr::UnifyPathSep(client->ConfigPort().GetHomeDir(), "/");
+  if (state.home_dir.empty()) {
+    state.home_dir = state.login_dir;
+  }
+  if (state.login_dir.empty()) {
+    state.login_dir = state.home_dir;
+  }
+  if (state.cwd.empty()) {
+    state.cwd = state.login_dir;
+  }
+
+  if (path.empty()) {
+    return state.cwd;
+  }
+  return AMFS::abspath(path, true, state.home_dir, state.cwd, "/");
+}
+
+std::string ClientAppService::NormalizeNickname_(const std::string &nickname) {
+  const std::string stripped = AMStr::Strip(nickname);
+  if (IsLocalNickname_(stripped)) {
+    return "local";
+  }
+  return stripped;
+}
+
+bool ClientAppService::IsLocalNickname_(const std::string &nickname) {
   return AMDomain::host::HostManagerService::IsLocalNickname(nickname);
 }
 
-/**
- * @brief Normalize one nickname to application runtime key form.
- */
-std::string NormalizeRuntimeNickname_(const std::string &nickname) {
-  return IsLocalNickname_(nickname) ? std::string("local")
-                                    : NormalizeNickname_(nickname);
+ClientAppService::ClientStatus
+ClientAppService::StatusFromEcm_(const ECM &rcm) {
+  if (isok(rcm)) {
+    return ClientStatus::OK;
+  }
+  if (rcm.first == EC::NotInitialized) {
+    return ClientStatus::NotInitialized;
+  }
+  if (rcm.first == EC::NoConnection) {
+    return ClientStatus::NoConnection;
+  }
+  return ClientStatus::ConnectionBroken;
 }
 
-/**
- * @brief Return true when one task-control flag is already interrupted.
- */
-bool IsInterrupted_(const amf &interrupt_flag) {
-  return interrupt_flag && !interrupt_flag->IsRunning();
-}
-
-/**
- * @brief Build one interrupted result pair.
- */
-std::pair<ECM, ClientHandle> InterruptedResult_() {
-  return {Err(EC::Terminate, "Interrupted by user"), nullptr};
-}
-
-/**
- * @brief Build one interrupted status.
- */
-ECM InterruptedStatus_() { return Err(EC::Terminate, "Interrupted by user"); }
-
-/**
- * @brief Return current epoch milliseconds when caller omitted start time.
- */
-int64_t ResolveStartTime_(int64_t start_time) {
-  return start_time >= 0 ? start_time : AMTime::miliseconds();
-}
-
-/**
- * @brief Normalize one stored workdir state to canonical separators.
- */
-ClientWorkdirState NormalizeWorkdirState_(ClientWorkdirState state) {
+ClientAppService::ClientWorkdirState
+ClientAppService::NormalizeWorkdirState_(ClientWorkdirState state) {
   state.home_dir = AMPathStr::UnifyPathSep(state.home_dir, "/");
   state.login_dir = AMPathStr::UnifyPathSep(state.login_dir, "/");
   state.cwd = AMPathStr::UnifyPathSep(state.cwd, "/");
   return state;
 }
 
-/**
- * @brief Build workdir state from persisted host config.
- */
-ClientWorkdirState WorkdirStateFromHostConfig_(const HostConfig &config) {
-  ClientWorkdirState state{};
-  state.home_dir = "";
-  state.login_dir = config.metadata.login_dir;
-  state.cwd = config.metadata.cwd;
-  return NormalizeWorkdirState_(std::move(state));
+ClientControlComponent
+ClientAppService::BuildControl_(amf interrupt_flag, int timeout_ms,
+                                int64_t start_time) const {
+  AMDomain::client::amf token = interrupt_flag;
+  {
+    std::lock_guard<std::mutex> lock(registry_mtx_);
+    if (!token) {
+      token = init_arg_.control_token_port;
+    }
+  }
+  return AMDomain::client::MakeClientControlComponent(std::move(token),
+                                                       timeout_ms, start_time);
 }
-} // namespace
 
-/**
- * @brief Private implementation for client application service.
- */
-class ClientAppService::Impl {
-public:
-  /**
-   * @brief Construct implementation from host config manager and client factory.
-   */
-  Impl(AMDomain::host::AMHostConfigManager &host_config_manager,
-       AMDomain::client::IClientFactoryPort &client_factory)
-      : host_config_manager_(host_config_manager),
-        client_factory_(client_factory),
-        public_pool_(std::make_shared<ClientPublicPool>(
-            [this](const std::string &nickname, int timeout_ms,
-                   int64_t start_time) {
-              return CreateTransferClient_(nickname, timeout_ms, start_time);
-            })) {}
-
-  /**
-   * @brief Initialize local runtime state and maintainer registry.
-   */
-  ECM Init() {
-    auto [cfg_rcm, local_cfg] = host_config_manager_.GetLocalConfig();
-    if (!isok(cfg_rcm)) {
-      return cfg_rcm;
-    }
-
-    auto [create_rcm, local_client] = CreateClient_(local_cfg.request);
-    if (!isok(create_rcm) || !local_client) {
-      return create_rcm;
-    }
-
-    ECM connect_rcm = local_client->IOPort().Connect(false);
-    if (!isok(connect_rcm)) {
-      return connect_rcm;
-    }
-
-    {
-      std::lock_guard<std::mutex> lock(session_mtx_);
-      local_client_ = local_client;
-      current_client_ = local_client;
-      workdir_states_[NormalizeRuntimeNickname_(local_cfg.request.nickname)] =
-          WorkdirStateFromHostConfig_(local_cfg);
-    }
-
-    const int timeout_ms =
-        AMDomain::client::ClientDomainService::ClampHeartbeatTimeoutMs(
-            heartbeat_timeout_ms_);
-    maintainer_ = std::make_unique<ClientMaintainer>(
-        60, timeout_ms, SnapshotDisconnectCallback_());
-
-    (void)GetOrInitWorkdir(local_client);
-    return Ok();
+void ClientAppService::ApplyCallbacksToClient_(const ClientHandle &client,
+                                               TraceCallback trace_override) {
+  if (!client) {
+    return;
   }
 
-  /**
-   * @brief Set heartbeat timeout for application-owned maintainer.
-   */
-  void SetHeartbeatTimeoutMs(int timeout_ms) {
-    heartbeat_timeout_ms_ =
-        AMDomain::client::ClientDomainService::ClampHeartbeatTimeoutMs(
-            timeout_ms);
-  }
+  TraceCallback trace = trace_override;
+  AuthCallback auth = {};
+  KnownHostCallback known_host = {};
 
-  /**
-   * @brief Return heartbeat timeout.
-   */
-  [[nodiscard]] int HeartbeatTimeoutMs() const { return heartbeat_timeout_ms_; }
-
-  /**
-   * @brief Set known-host callback provider.
-   */
-  void SetKnownHostCallback(KnownHostCallback cb) {
+  {
     std::lock_guard<std::mutex> lock(callback_mtx_);
-    known_host_cb_ = std::move(cb);
+    if (!trace) {
+      trace = trace_cb_;
+    }
+    auth = auth_cb_;
+    known_host = known_host_cb_;
   }
 
-  /**
-   * @brief Set auth callback provider.
-   */
-  void SetAuthCallback(AuthCallback cb) {
-    std::lock_guard<std::mutex> lock(callback_mtx_);
-    auth_cb_ = std::move(cb);
+  if (trace) {
+    client->IOPort().RegisterTraceCallback(std::move(trace));
+  }
+  if (auth) {
+    client->IOPort().RegisterAuthCallback(std::move(auth));
+  }
+  if (known_host) {
+    client->IOPort().RegisterKnownHostCallback(std::move(known_host));
+  }
+}
+
+ClientState ClientAppService::CheckClientInternal_(
+    const ClientHandle &client, bool reconnect, bool update,
+    const ClientControlComponent &control) const {
+  if (!client) {
+    return {ClientStatus::NotInitialized,
+            {EC::InvalidHandle, "Client handle is null"}};
   }
 
-  /**
-   * @brief Set disconnect callback provider.
-   */
-  void SetDisconnectCallback(DisconnectCallback cb) {
-    {
-      std::lock_guard<std::mutex> lock(callback_mtx_);
-      disconnect_cb_ = std::move(cb);
-    }
-    if (maintainer_) {
-      maintainer_->SetDisconnectCallback(SnapshotDisconnectCallback_());
-    }
-  }
-
-  /**
-   * @brief Bind shared interactive-state flag.
-   */
-  void SetInteractiveFlag(const std::shared_ptr<std::atomic<bool>> &flag) {
-    if (!flag) {
-      return;
-    }
-    std::lock_guard<std::mutex> lock(session_mtx_);
-    interactive_flag_ = flag;
-  }
-
-  /**
-   * @brief Return bound interactive-state flag.
-   */
-  [[nodiscard]] std::shared_ptr<std::atomic<bool>> GetInteractiveFlag() const {
-    std::lock_guard<std::mutex> lock(session_mtx_);
-    return interactive_flag_;
-  }
-
-  /**
-   * @brief Return maintainer reference.
-   */
-  [[nodiscard]] ClientMaintainer &Maintainer() { return *maintainer_; }
-
-  /**
-   * @brief Return maintainer reference.
-   */
-  [[nodiscard]] const ClientMaintainer &Maintainer() const {
-    return *maintainer_;
-  }
-
-  /**
-   * @brief Return shared transfer client pool.
-   */
-  [[nodiscard]] std::shared_ptr<ClientPublicPool> PublicPool() const {
-    return public_pool_;
-  }
-
-  /**
-   * @brief Create one transfer-only client instance by nickname.
-   */
-  std::pair<ECM, ClientHandle> CreateTransferClient(const std::string &nickname,
-                                                    int timeout_ms,
-                                                    int64_t start_time) {
-    return CreateTransferClient_(nickname, timeout_ms, start_time);
-  }
-
-  /**
-   * @brief Return one client by nickname.
-   */
-  [[nodiscard]] ClientHandle GetClient(const std::string &nickname) const {
-    const std::string key = NormalizeRuntimeNickname_(nickname);
-    if (IsLocalNickname_(key)) {
-      return GetLocalClient();
-    }
-    return maintainer_ ? maintainer_->GetClient(key) : nullptr;
-  }
-
-  /**
-   * @brief Return local client instance.
-   */
-  [[nodiscard]] ClientHandle GetLocalClient() const {
-    std::lock_guard<std::mutex> lock(session_mtx_);
-    return local_client_;
-  }
-
-  /**
-   * @brief Return current active client instance.
-   */
-  [[nodiscard]] ClientHandle GetCurrentClient() const {
-    std::lock_guard<std::mutex> lock(session_mtx_);
-    return current_client_ ? current_client_ : local_client_;
-  }
-
-  /**
-   * @brief Return current active nickname.
-   */
-  [[nodiscard]] std::string CurrentNickname() const {
-    ClientHandle client = GetCurrentClient();
-    return client ? NormalizeRuntimeNickname_(client->ConfigPort().GetNickname())
-                  : std::string("local");
-  }
-
-  /**
-   * @brief Set current active client instance.
-   */
-  void SetCurrentClient(const ClientHandle &client) {
-    std::lock_guard<std::mutex> lock(session_mtx_);
-    current_client_ = client ? client : local_client_;
-  }
-
-  /**
-   * @brief Return all client nicknames.
-   */
-  [[nodiscard]] std::vector<std::string> GetClientNames() const {
-    std::vector<std::string> names = {};
-    if (GetLocalClient()) {
-      names.emplace_back("local");
-    }
-    if (!maintainer_) {
-      return names;
-    }
-    auto registered = maintainer_->GetNicknames();
-    for (const auto &name : registered) {
-      if (!IsLocalNickname_(name)) {
-        names.push_back(name);
-      }
-    }
-    return names;
-  }
-
-  /**
-   * @brief Return all client handles.
-   */
-  [[nodiscard]] std::vector<ClientHandle> GetClients() const {
-    std::vector<ClientHandle> clients = {};
-    if (auto local = GetLocalClient()) {
-      clients.push_back(local);
-    }
-    if (!maintainer_) {
-      return clients;
-    }
-    auto registered = maintainer_->GetClients();
-    for (const auto &client : registered) {
-      if (client && !IsLocalNickname_(client->ConfigPort().GetNickname())) {
-        clients.push_back(client);
-      }
-    }
-    return clients;
-  }
-
-  /**
-   * @brief Connect one configured nickname.
-   */
-  std::pair<ECM, ClientHandle>
-  ConnectNickname(const std::string &nickname,
-                  const ClientConnectOptions &options,
-                  TraceCallback trace_cb, amf interrupt_flag) {
-    if (IsInterrupted_(interrupt_flag)) {
-      return InterruptedResult_();
-    }
-
-    const std::string key = NormalizeRuntimeNickname_(nickname);
-    if (IsLocalNickname_(key)) {
-      return {Ok(), GetLocalClient()};
-    }
-
-    auto [cfg_rcm, host_cfg] = host_config_manager_.GetClientConfig(key);
-    if (!isok(cfg_rcm)) {
-      return {cfg_rcm, nullptr};
-    }
-
-    auto [create_rcm, client] =
-        CreateClient_(host_cfg.request, std::move(trace_cb));
-    if (!isok(create_rcm) || !client) {
-      return {create_rcm, nullptr};
-    }
-
-    ECM connect_rcm = client->IOPort().Connect(
-        options.force,
-        options.timeout_seconds > 0 ? options.timeout_seconds * 1000 : -1,
-        ResolveStartTime_(-1));
-    if (!isok(connect_rcm)) {
-      return {connect_rcm, client};
-    }
-
-    ECM state_rcm = ApplyInitialState_(key, client, host_cfg.metadata);
-    if (!isok(state_rcm)) {
-      return {state_rcm, client};
-    }
-
-    if (options.register_to_manager && maintainer_) {
-      ECM add_rcm = maintainer_->AddClient(client, true);
-      if (!isok(add_rcm)) {
-        return {add_rcm, client};
-      }
-    }
-    return {Ok(), client};
-  }
-
-  /**
-   * @brief Connect one explicit request payload.
-   */
-  std::pair<ECM, ClientHandle>
-  ConnectRequest(const ClientConnectContext &context, TraceCallback trace_cb,
-                 amf interrupt_flag) {
-    if (IsInterrupted_(interrupt_flag)) {
-      return InterruptedResult_();
-    }
-
-    ConRequest request = context.request;
-    request.nickname = NormalizeRuntimeNickname_(request.nickname);
-    if (request.keyfile.empty() && !context.private_keys.empty()) {
-      request.keyfile = context.private_keys.front();
-    }
-    if (!request.password.empty() && !AMAuth::IsEncrypted(request.password)) {
-      request.password = AMAuth::EncryptPassword(request.password);
-    }
-
-    ECM validate_rcm =
-        AMDomain::client::ClientDomainService::ValidateConnectRequest(
-            request, true);
-    if (!isok(validate_rcm)) {
-      return {validate_rcm, nullptr};
-    }
-
-    auto [create_rcm, client] = CreateClient_(request, std::move(trace_cb));
-    if (!isok(create_rcm) || !client) {
-      return {create_rcm, nullptr};
-    }
-
-    ECM connect_rcm = client->IOPort().Connect(
-        context.options.force,
-        context.options.timeout_seconds > 0 ? context.options.timeout_seconds * 1000
-                                            : -1,
-        ResolveStartTime_(-1));
-    if (!isok(connect_rcm)) {
-      return {connect_rcm, client};
-    }
-
-    HostConfig entry{};
-    entry.request = request;
-    auto [state_rcm, state] = ResolveInitialState_(client, entry.metadata);
-    if (!isok(state_rcm)) {
-      return {state_rcm, client};
-    }
-    {
-      std::lock_guard<std::mutex> lock(session_mtx_);
-      workdir_states_[request.nickname] = state;
-    }
-
-    entry.metadata = PersistedMetadataForState_(state);
-    ECM save_rcm = host_config_manager_.AddHost(entry, true);
-    if (!isok(save_rcm)) {
-      return {save_rcm, client};
-    }
-
-    if (IsLocalNickname_(request.nickname)) {
-      std::lock_guard<std::mutex> lock(session_mtx_);
-      const bool current_is_local =
-          !current_client_ || IsLocalNickname_(current_client_->ConfigPort().GetNickname());
-      local_client_ = client;
-      if (current_is_local) {
-        current_client_ = client;
-      }
-    } else if (context.options.register_to_manager && maintainer_) {
-      ECM add_rcm = maintainer_->AddClient(client, true);
-      if (!isok(add_rcm)) {
-        return {add_rcm, client};
-      }
-    }
-    return {Ok(), client};
-  }
-
-  /**
-   * @brief Ensure one client exists and is connected.
-   */
-  std::pair<ECM, ClientHandle>
-  EnsureClient(const std::string &nickname, amf interrupt_flag) {
-    if (IsInterrupted_(interrupt_flag)) {
-      return InterruptedResult_();
-    }
-
-    const std::string key = NormalizeRuntimeNickname_(nickname);
-    if (IsLocalNickname_(key)) {
-      return {Ok(), GetLocalClient()};
-    }
-
-    ClientHandle existing = GetClient(key);
-    if (!existing) {
-      ClientConnectOptions options{};
-      options.force = false;
-      options.quiet = true;
-      options.register_to_manager = true;
-      return ConnectNickname(key, options, {}, interrupt_flag);
-    }
-
-    ECM connect_rcm = existing->IOPort().Connect(false);
-    if (!isok(connect_rcm)) {
-      return {connect_rcm, existing};
-    }
-    return {Ok(), existing};
-  }
-
-  /**
-   * @brief Check one client by nickname.
-   */
-  std::pair<ECM, ClientHandle>
-  CheckClient(const std::string &nickname, bool update, amf interrupt_flag,
-              int timeout_ms, int64_t start_time) {
-    if (IsInterrupted_(interrupt_flag)) {
-      return InterruptedResult_();
-    }
-
-    ClientHandle client = GetClient(nickname);
-    if (!client) {
-      const std::string display = NormalizeRuntimeNickname_(nickname);
-      return {Err(EC::ClientNotFound,
-                  AMStr::fmt("Client not found: {}", display.empty() ? "local" : display)),
-              nullptr};
-    }
-
-    if (!update) {
-      const auto state = client->ConfigPort().GetState();
-      if (state.first == AMDomain::client::ClientStatus::OK) {
-        return {Ok(), client};
-      }
-    }
-
-    ECM check_rcm = client->IOPort().Check(timeout_ms, ResolveStartTime_(start_time));
-    return {check_rcm, client};
-  }
-
-  /**
-   * @brief Remove one client from runtime registry.
-   */
-  ECM RemoveClient(const std::string &nickname) {
-    const std::string key = NormalizeRuntimeNickname_(nickname);
-    if (IsLocalNickname_(key)) {
-      return Err(EC::InvalidArg, "Local client cannot be removed");
-    }
-    if (!maintainer_) {
-      return Err(EC::InvalidHandle, "Client maintainer is not initialized");
-    }
-    ECM remove_rcm = maintainer_->RemoveClient(key);
-    if (!isok(remove_rcm)) {
-      return remove_rcm;
-    }
-    std::lock_guard<std::mutex> lock(session_mtx_);
-    workdir_states_.erase(key);
-    if (current_client_ && current_client_->ConfigPort().GetNickname() == key) {
-      current_client_ = local_client_;
-    }
-    return Ok();
-  }
-
-  /**
-   * @brief Parse one raw path token into nickname/path/client form.
-   */
-  [[nodiscard]] AMDomain::client::ParsedClientPath
-  ParseScopedPath(const std::string &input, amf interrupt_flag) {
-    if (IsInterrupted_(interrupt_flag)) {
-      return {"", "", nullptr, InterruptedStatus_()};
-    }
-
-    const std::string current_nickname = CurrentNickname();
-    const auto scoped = AMDomain::client::ClientDomainService::ParseScopedPath(
-        input, current_nickname);
-    ECM validate_rcm =
-        AMDomain::client::ClientDomainService::ValidateScopedPath(scoped);
-    if (!isok(validate_rcm)) {
-      return {scoped.nickname, scoped.path, nullptr, validate_rcm};
-    }
-
-    if (IsLocalNickname_(scoped.nickname)) {
-      return {"local", scoped.path, GetLocalClient(), Ok()};
-    }
-
-    ClientHandle client = GetClient(scoped.nickname);
-    if (!client) {
-      if (!host_config_manager_.HostExists(scoped.nickname)) {
-        return {scoped.nickname, scoped.path, nullptr,
-                Err(EC::HostConfigNotFound,
-                    AMStr::fmt("Host config not found: {}", scoped.nickname))};
-      }
-      return {scoped.nickname, scoped.path, nullptr,
-              Err(EC::ClientNotFound,
-                  AMStr::fmt("Client not created: {}", scoped.nickname))};
-    }
-    return {scoped.nickname, scoped.path, client, Ok()};
-  }
-
-  /**
-   * @brief Resolve one raw path against a client into absolute path.
-   */
-  [[nodiscard]] std::string
-  ResolveClientPath(const std::string &path,
-                    const ClientHandle &client) const {
-    ClientHandle resolved_client = client ? client : GetCurrentClient();
-    return BuildAbsolutePath(resolved_client, path);
-  }
-
-  /**
-   * @brief Return stored workdir state for one nickname.
-   */
-  [[nodiscard]] ClientWorkdirState
-  GetWorkdirState(const std::string &nickname) const {
-    const std::string key = NormalizeRuntimeNickname_(nickname.empty() ? CurrentNickname()
-                                                                       : nickname);
-    {
-      std::lock_guard<std::mutex> lock(session_mtx_);
-      const auto it = workdir_states_.find(key);
-      if (it != workdir_states_.end()) {
-        return it->second;
-      }
-    }
-
-    ClientWorkdirState state = LoadPersistedState_(key);
-    std::lock_guard<std::mutex> lock(session_mtx_);
-    workdir_states_[key] = state;
+  const auto persist_state = [&client](const ClientState &state) {
+    client->ConfigPort().SetState(state);
     return state;
+  };
+
+  if (control.IsInterrupted()) {
+    return persist_state(
+        {StatusFromEcm_({EC::Terminate, "Interrupted by user"}),
+         {EC::Terminate, "Interrupted by user"}});
+  }
+  if (control.IsTimeout()) {
+    return persist_state(
+        {StatusFromEcm_({EC::OperationTimeout, "Operation timed out"}),
+         {EC::OperationTimeout, "Operation timed out"}});
   }
 
-  /**
-   * @brief Store workdir state for one nickname.
-   */
-  ECM SetWorkdirState(const std::string &nickname,
-                      const ClientWorkdirState &state) {
-    const std::string key = NormalizeRuntimeNickname_(nickname.empty() ? CurrentNickname()
-                                                                       : nickname);
-    const ClientWorkdirState normalized = NormalizeWorkdirState_(state);
-    {
-      std::lock_guard<std::mutex> lock(session_mtx_);
-      workdir_states_[key] = normalized;
+  if (!update) {
+    const ClientState cached = client->ConfigPort().GetState();
+    if (cached.status == ClientStatus::OK && isok(cached.rcm)) {
+      return cached;
     }
-    return PersistWorkdirState_(key, normalized);
+    if (!reconnect) {
+      return cached;
+    }
+  } else {
+    const auto update_os = client->IOPort().UpdateOSType({}, control);
+    ClientState state = {StatusFromEcm_(update_os.rcm), update_os.rcm};
+    if (isok(state.rcm) || !reconnect) {
+      return persist_state(state);
+    }
   }
 
-  /**
-   * @brief Return current workdir, initializing when absent.
-   */
-  [[nodiscard]] std::string GetOrInitWorkdir(const ClientHandle &client) {
-    if (!client) {
-      return {};
-    }
-
-    const std::string nickname = NormalizeRuntimeNickname_(client->ConfigPort().GetNickname());
-    ClientWorkdirState state = GetWorkdirState(nickname);
-    state.home_dir = AMPathStr::UnifyPathSep(client->ConfigPort().GetHomeDir(), "/");
-    if (state.home_dir.empty()) {
-      state.home_dir = AMPathStr::UnifyPathSep(client->IOPort().UpdateHomeDir(), "/");
-    }
-    if (state.login_dir.empty()) {
-      state.login_dir = state.home_dir;
-    }
-    if (!state.login_dir.empty() && !PathIsDir_(client, state.login_dir)) {
-      state.login_dir = state.home_dir;
-    }
-    if (state.cwd.empty()) {
-      state.cwd = state.login_dir;
-    }
-    state.cwd = AMDomain::client::ClientDomainService::ResolveAbsolutePath(
-        state.cwd, state, "/");
-    if (state.login_dir.empty()) {
-      state.login_dir = state.cwd;
-    }
-    if (!state.login_dir.empty() && !AMPathStr::IsAbs(state.login_dir, "/")) {
-      state.login_dir = AMDomain::client::ClientDomainService::ResolveAbsolutePath(
-          state.login_dir, state, "/");
-    }
-    (void)SetWorkdirState(nickname, state);
-    return state.cwd;
+  const auto connect =
+      client->IOPort().Connect(AMDomain::filesystem::ConnectArgs{true}, control);
+  if (!isok(connect.rcm)) {
+    return persist_state({StatusFromEcm_(connect.rcm), connect.rcm});
   }
 
-  /**
-   * @brief Build absolute path from client workdir/home context.
-   */
-  [[nodiscard]] std::string BuildAbsolutePath(const ClientHandle &client,
-                                              const std::string &path) const {
-    if (!client) {
-      return path;
-    }
-    ClientWorkdirState state = GetWorkdirState(client->ConfigPort().GetNickname());
-    state.home_dir = AMPathStr::UnifyPathSep(client->ConfigPort().GetHomeDir(), "/");
-    if (state.home_dir.empty()) {
-      state.home_dir = state.login_dir;
-    }
-    if (state.cwd.empty()) {
-      state.cwd = AMDomain::client::ClientDomainService::ResolveWorkdir(state, "/");
-    }
-    return AMDomain::client::ClientDomainService::ResolveAbsolutePath(path, state,
-                                                                      "/");
-  }
-
-private:
-  /**
-   * @brief Return one snapshot of known-host callback.
-   */
-  [[nodiscard]] KnownHostCallback SnapshotKnownHostCallback_() const {
-    std::lock_guard<std::mutex> lock(callback_mtx_);
-    return known_host_cb_;
-  }
-
-  /**
-   * @brief Return one snapshot of auth callback.
-   */
-  [[nodiscard]] AuthCallback SnapshotAuthCallback_() const {
-    std::lock_guard<std::mutex> lock(callback_mtx_);
-    return auth_cb_;
-  }
-
-  /**
-   * @brief Return one snapshot of disconnect callback.
-   */
-  [[nodiscard]] DisconnectCallback SnapshotDisconnectCallback_() const {
-    std::lock_guard<std::mutex> lock(callback_mtx_);
-    return disconnect_cb_;
-  }
-
-  /**
-   * @brief Create one concrete client and register current runtime callbacks.
-   */
-  std::pair<ECM, ClientHandle> CreateClient_(const ConRequest &request,
-                                             TraceCallback trace_cb = {}) {
-    auto [create_rcm, client] = client_factory_.CreateClient(request);
-    if (!isok(create_rcm) || !client) {
-      return {create_rcm, nullptr};
-    }
-    if (trace_cb) {
-      client->IOPort().RegisterTraceCallback(std::move(trace_cb));
-    }
-    if (auto auth_cb = SnapshotAuthCallback_()) {
-      client->IOPort().RegisterAuthCallback(std::move(auth_cb));
-    }
-    if (auto known_host_cb = SnapshotKnownHostCallback_()) {
-      client->IOPort().RegisterKnownHostCallback(std::move(known_host_cb));
-    }
-    return {Ok(), client};
-  }
-
-  /**
-   * @brief Create and connect one transfer-only pooled client by nickname.
-   */
-  std::pair<ECM, ClientHandle>
-  CreateTransferClient_(const std::string &nickname, int timeout_ms,
-                        int64_t start_time) {
-    const std::string key = NormalizeRuntimeNickname_(nickname);
-    auto load_cfg = [&]() -> std::pair<ECM, HostConfig> {
-      if (IsLocalNickname_(key)) {
-        return host_config_manager_.GetLocalConfig();
-      }
-      return host_config_manager_.GetClientConfig(key);
-    };
-
-    auto [cfg_rcm, host_cfg] = load_cfg();
-    if (!isok(cfg_rcm)) {
-      return {cfg_rcm, nullptr};
-    }
-
-    auto [create_rcm, client] = CreateClient_(host_cfg.request);
-    if (!isok(create_rcm) || !client) {
-      return {create_rcm, nullptr};
-    }
-
-    ECM connect_rcm = client->IOPort().Connect(false, timeout_ms,
-                                               ResolveStartTime_(start_time));
-    if (!isok(connect_rcm)) {
-      return {connect_rcm, client};
-    }
-    return {Ok(), client};
-  }
-
-  /**
-   * @brief Load persisted workdir state from host config.
-   */
-  [[nodiscard]] ClientWorkdirState
-  LoadPersistedState_(const std::string &nickname) const {
-    if (IsLocalNickname_(nickname)) {
-      auto [rcm, cfg] = host_config_manager_.GetLocalConfig();
-      return isok(rcm) ? WorkdirStateFromHostConfig_(cfg) : ClientWorkdirState{};
-    }
-    auto [rcm, cfg] = host_config_manager_.GetClientConfig(nickname);
-    return isok(rcm) ? WorkdirStateFromHostConfig_(cfg) : ClientWorkdirState{};
-  }
-
-  /**
-   * @brief Persist one workdir state snapshot back into host config.
-   */
-  ECM PersistWorkdirState_(const std::string &nickname,
-                           const ClientWorkdirState &state) {
-    auto load_cfg = [&]() -> std::pair<ECM, HostConfig> {
-      if (IsLocalNickname_(nickname)) {
-        return host_config_manager_.GetLocalConfig();
-      }
-      return host_config_manager_.GetClientConfig(nickname);
-    };
-
-    auto [cfg_rcm, cfg] = load_cfg();
-    if (!isok(cfg_rcm)) {
-      return cfg_rcm;
-    }
-    cfg.metadata.login_dir = state.login_dir;
-    cfg.metadata.cwd = state.cwd;
-    return host_config_manager_.AddHost(cfg, true);
-  }
-
-  /**
-   * @brief Return persisted metadata snapshot for one nickname.
-   */
-  [[nodiscard]] AMDomain::host::ClientMetaData
-  PersistedMetadataForState_(const ClientWorkdirState &state) const {
-    AMDomain::host::ClientMetaData metadata{};
-    metadata.login_dir = state.login_dir;
-    metadata.cwd = state.cwd;
-    return metadata;
-  }
-
-  /**
-   * @brief Return true when one path currently exists as a directory.
-   */
-  [[nodiscard]] bool PathIsDir_(const ClientHandle &client,
-                                const std::string &path) const {
-    if (!client || path.empty()) {
-      return false;
-    }
-    if (client->ConfigPort().GetProtocol() == ClientProtocol::LOCAL) {
-      std::error_code ec;
-      return std::filesystem::exists(path, ec) &&
-             std::filesystem::is_directory(path, ec);
-    }
-    auto [rcm, info] = client->IOPort().stat(path, false);
-    return isok(rcm) && info.type == PathType::DIR;
-  }
-
-  /**
-   * @brief Apply initial persisted login/cwd state after connect.
-   */
-  ECM ApplyInitialState_(const std::string &nickname, const ClientHandle &client,
-                         const AMDomain::host::ClientMetaData &metadata) {
-    auto [state_rcm, state] = ResolveInitialState_(client, metadata);
-    if (!isok(state_rcm)) {
-      return state_rcm;
-    }
-    return SetWorkdirState(nickname, state);
-  }
-
-  /**
-   * @brief Resolve initial runtime workdir state from client + metadata.
-   */
-  std::pair<ECM, ClientWorkdirState>
-  ResolveInitialState_(const ClientHandle &client,
-                       const AMDomain::host::ClientMetaData &metadata) {
-    if (!client) {
-      return {Err(EC::InvalidHandle, "null client handle"), {}};
-    }
-    ClientWorkdirState state = NormalizeWorkdirState_(
-        {client->ConfigPort().GetHomeDir(), metadata.login_dir, metadata.cwd});
-    if (state.home_dir.empty()) {
-      state.home_dir = AMPathStr::UnifyPathSep(client->IOPort().UpdateHomeDir(), "/");
-    }
-    if (state.login_dir.empty()) {
-      state.login_dir = state.home_dir;
-    }
-    if (!state.login_dir.empty() && !PathIsDir_(client, state.login_dir)) {
-      state.login_dir = state.home_dir;
-    }
-    if (state.cwd.empty()) {
-      state.cwd = state.login_dir;
-    }
-    state.cwd = AMDomain::client::ClientDomainService::ResolveAbsolutePath(
-        state.cwd, state, "/");
-    if (!state.login_dir.empty() && !AMPathStr::IsAbs(state.login_dir, "/")) {
-      state.login_dir = AMDomain::client::ClientDomainService::ResolveAbsolutePath(
-          state.login_dir, state, "/");
-    }
-    return {Ok(), state};
-  }
-
-private:
-  AMDomain::host::AMHostConfigManager &host_config_manager_;
-  AMDomain::client::IClientFactoryPort &client_factory_;
-  mutable std::mutex callback_mtx_;
-  KnownHostCallback known_host_cb_ = {};
-  AuthCallback auth_cb_ = {};
-  DisconnectCallback disconnect_cb_ = {};
-  mutable std::mutex session_mtx_;
-  std::shared_ptr<std::atomic<bool>> interactive_flag_ =
-      std::make_shared<std::atomic<bool>>(false);
-  ClientHandle local_client_ = nullptr;
-  ClientHandle current_client_ = nullptr;
-  mutable std::unordered_map<std::string, ClientWorkdirState> workdir_states_;
-  int heartbeat_timeout_ms_ = 100;
-  std::unique_ptr<ClientMaintainer> maintainer_;
-  std::shared_ptr<ClientPublicPool> public_pool_;
-};
-
-/**
- * @brief Construct app service from host config manager and client factory.
- */
-ClientAppService::ClientAppService(
-    AMDomain::host::AMHostConfigManager &host_config_manager,
-    AMDomain::client::IClientFactoryPort &client_factory)
-    : impl_(std::make_unique<Impl>(host_config_manager, client_factory)) {}
-
-/**
- * @brief Destroy app service.
- */
-ClientAppService::~ClientAppService() = default;
-
-/**
- * @brief Initialize local/current client state and maintainer registry.
- */
-ECM ClientAppService::Init() { return impl_->Init(); }
-
-/**
- * @brief Set heartbeat timeout for application-owned maintainer.
- */
-void ClientAppService::SetHeartbeatTimeoutMs(int timeout_ms) {
-  impl_->SetHeartbeatTimeoutMs(timeout_ms);
+  const auto refresh = client->IOPort().UpdateOSType({}, control);
+  return persist_state({StatusFromEcm_(refresh.rcm), refresh.rcm});
 }
 
-/**
- * @brief Return current heartbeat timeout.
- */
-int ClientAppService::HeartbeatTimeoutMs() const {
-  return impl_->HeartbeatTimeoutMs();
-}
-
-/**
- * @brief Set known-host callback provider.
- */
-void ClientAppService::SetKnownHostCallback(KnownHostCallback cb) {
-  impl_->SetKnownHostCallback(std::move(cb));
-}
-
-/**
- * @brief Set auth callback provider.
- */
-void ClientAppService::SetAuthCallback(AuthCallback cb) {
-  impl_->SetAuthCallback(std::move(cb));
-}
-
-/**
- * @brief Set disconnect callback provider.
- */
-void ClientAppService::SetDisconnectCallback(DisconnectCallback cb) {
-  impl_->SetDisconnectCallback(std::move(cb));
-}
-
-/**
- * @brief Bind shared interactive-state flag.
- */
-void ClientAppService::SetInteractiveFlag(
-    const std::shared_ptr<std::atomic<bool>> &flag) {
-  impl_->SetInteractiveFlag(flag);
-}
-
-/**
- * @brief Return bound interactive-state flag.
- */
-std::shared_ptr<std::atomic<bool>> ClientAppService::GetInteractiveFlag() const {
-  return impl_->GetInteractiveFlag();
-}
-
-/**
- * @brief Return current maintainer reference.
- */
-ClientMaintainer &ClientAppService::Maintainer() { return impl_->Maintainer(); }
-
-/**
- * @brief Return current maintainer reference.
- */
-const ClientMaintainer &ClientAppService::Maintainer() const {
-  return impl_->Maintainer();
-}
-
-/**
- * @brief Return shared transfer client pool.
- */
-std::shared_ptr<ClientPublicPool> ClientAppService::PublicPool() const {
-  return impl_->PublicPool();
-}
-
-/**
- * @brief Create one transfer-only client instance by nickname.
- */
-std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
-ClientAppService::CreateTransferClient(const std::string &nickname,
-                                       int timeout_ms,
-                                       int64_t start_time) {
-  return impl_->CreateTransferClient(nickname, timeout_ms, start_time);
-}
-
-/**
- * @brief Return one client by nickname.
- */
-ClientAppService::ClientHandle
-ClientAppService::GetClient(const std::string &nickname) const {
-  return impl_->GetClient(nickname);
-}
-
-/**
- * @brief Return local client instance.
- */
-ClientAppService::ClientHandle ClientAppService::GetLocalClient() const {
-  return impl_->GetLocalClient();
-}
-
-/**
- * @brief Return current active client instance.
- */
-ClientAppService::ClientHandle ClientAppService::GetCurrentClient() const {
-  return impl_->GetCurrentClient();
-}
-
-/**
- * @brief Return current active nickname.
- */
-std::string ClientAppService::CurrentNickname() const {
-  return impl_->CurrentNickname();
-}
-
-/**
- * @brief Set current active client instance.
- */
-void ClientAppService::SetCurrentClient(const ClientHandle &client) {
-  impl_->SetCurrentClient(client);
-}
-
-/**
- * @brief Return all client nicknames.
- */
-std::vector<std::string> ClientAppService::GetClientNames() const {
-  return impl_->GetClientNames();
-}
-
-/**
- * @brief Return all client handles.
- */
-std::vector<ClientAppService::ClientHandle> ClientAppService::GetClients() const {
-  return impl_->GetClients();
-}
-
-/**
- * @brief Connect one configured nickname.
- */
-std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
-ClientAppService::ConnectNickname(const std::string &nickname,
-                                  const ClientConnectOptions &options,
-                                  TraceCallback trace_cb,
-                                  amf interrupt_flag) {
-  return impl_->ConnectNickname(nickname, options, std::move(trace_cb),
-                                interrupt_flag);
-}
-
-/**
- * @brief Connect one explicit request payload.
- */
-std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
-ClientAppService::ConnectRequest(const ClientConnectContext &context,
-                                 TraceCallback trace_cb,
-                                 amf interrupt_flag) {
-  return impl_->ConnectRequest(context, std::move(trace_cb), interrupt_flag);
-}
-
-/**
- * @brief Ensure one client exists and is connected.
- */
-std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
-ClientAppService::EnsureClient(const std::string &nickname,
-                               amf interrupt_flag) {
-  return impl_->EnsureClient(nickname, interrupt_flag);
-}
-
-/**
- * @brief Check one client by nickname.
- */
-std::pair<ClientAppService::ECM, ClientAppService::ClientHandle>
-ClientAppService::CheckClient(const std::string &nickname, bool update,
-                              amf interrupt_flag, int timeout_ms,
-                              int64_t start_time) {
-  return impl_->CheckClient(nickname, update, interrupt_flag, timeout_ms,
-                            start_time);
-}
-
-/**
- * @brief Remove one client from runtime registry.
- */
-ClientAppService::ECM ClientAppService::RemoveClient(
-    const std::string &nickname) {
-  return impl_->RemoveClient(nickname);
-}
-
-/**
- * @brief Parse one raw path token into nickname/path/client form.
- */
-ClientAppService::ParsedClientPath
-ClientAppService::ParseScopedPath(const std::string &input,
-                                  amf interrupt_flag) {
-  return impl_->ParseScopedPath(input, interrupt_flag);
-}
-
-/**
- * @brief Resolve one raw path into absolute path.
- */
-std::string ClientAppService::ResolveClientPath(
-    const std::string &path, const ClientHandle &client) const {
-  return impl_->ResolveClientPath(path, client);
-}
-
-/**
- * @brief Return stored workdir state for one nickname.
- */
-ClientAppService::ClientWorkdirState ClientAppService::GetWorkdirState(
-    const std::string &nickname) const {
-  return impl_->GetWorkdirState(nickname);
-}
-
-/**
- * @brief Store workdir state for one nickname.
- */
-ClientAppService::ECM ClientAppService::SetWorkdirState(
-    const std::string &nickname, const ClientWorkdirState &state) {
-  return impl_->SetWorkdirState(nickname, state);
-}
-
-/**
- * @brief Return current workdir, initializing when absent.
- */
-std::string ClientAppService::GetOrInitWorkdir(const ClientHandle &client) {
-  return impl_->GetOrInitWorkdir(client);
-}
-
-/**
- * @brief Build absolute path from client workdir/home context.
- */
-std::string ClientAppService::BuildAbsolutePath(const ClientHandle &client,
-                                                const std::string &path) const {
-  return impl_->BuildAbsolutePath(client, path);
-}
 } // namespace AMApplication::client

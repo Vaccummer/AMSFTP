@@ -23,7 +23,7 @@ public:
   /**
    * @brief Initialize completer state.
    */
-  ECM Init() override {
+  ECM Init() {
     Install();
     return Ok();
   }

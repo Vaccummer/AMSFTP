@@ -50,7 +50,7 @@ int AMInfraCliSignalMonitor::LastSignal() const {
 }
 
 bool AMInfraCliSignalMonitor::RegisterHook(const std::string &name,
-                                           const SignalHook &hook) {
+                                           const AMDomain::signal::SignalHook &hook) {
   if (name.empty()) {
     return false;
   }
@@ -139,7 +139,7 @@ void AMInfraCliSignalMonitor::Run_() {
     const int signum = GlobalSignalInt.exchange(0);
     if (signum != 0) {
       last_handled_signal_.store(signum, std::memory_order_relaxed);
-      std::vector<SignalHook> hooks;
+      std::vector<AMDomain::signal::SignalHook> hooks;
       {
         std::lock_guard<std::mutex> lock(hooks_mtx_);
         hooks.reserve(hooks_.size());
@@ -148,7 +148,8 @@ void AMInfraCliSignalMonitor::Run_() {
         }
       }
       std::sort(hooks.begin(), hooks.end(),
-                [](const SignalHook &a, const SignalHook &b) {
+                [](const AMDomain::signal::SignalHook &a,
+                   const AMDomain::signal::SignalHook &b) {
                   return a.priority > b.priority;
                 });
       for (const auto &hook : hooks) {

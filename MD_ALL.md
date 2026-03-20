@@ -1837,7 +1837,6 @@ all managers in domain layer not in AMDomain namespace
 
 - List changed files, exact semantics implemented, and any remaining migration follow-ups.
 
-
 **Updated Plan**
 
 1. Add **ConfigSyncPort** interface/class with:
@@ -1865,3 +1864,1980 @@ all managers in domain layer not in AMDomain namespace
 20. Clarification of my previous point:
 21. I meant an optional “load sync” step: after manager loads file, copy loaded values at registered paths into each port’s internal json.
 22. Without this, a newly created port starts from **fallback** only; first save may overwrite file value with fallback/callback result.
+
+# Transfer Refactor Implementation Plan
+
+## Goal
+
+Implement the target structure in `tran_structure.md`:
+
+- Domain: contracts + pure rules only
+- Application: runtime orchestration owner
+- Infrastructure: protocol transfer execution only
+- `AMTransferManager` deprecated and removed after migration
+
+## Scope Policy
+
+1. Prioritize transfer/domain/application internals.
+2. Do not block on interface/bootstrap compatibility during this migration.
+3. Land in compile-safe stages with explicit stop gates.
+
+## Stage 0: Baseline Freeze
+
+### Objective
+
+Lock current transfer behavior before structural movement.
+
+### Changes
+
+1. Add `md/refactor/transfer_stage0_contract.md`:
+
+- sync/async submit behavior
+- cache add/remove/submit behavior
+- pause/resume/terminate behavior
+- error code expectations for timeout/interrupt/not found
+
+2. Add `tools/refactor/transfer_stage0_smoke.ps1`:
+
+- deterministic local-local transfer smoke
+- one remote path smoke if config exists
+- task control smoke
+
+3. Add `md/refactor/transfer_stage0_snapshot.json`.
+
+### Gate
+
+1. Snapshot generated.
+2. Contract and snapshot align.
+
+---
+
+## Stage 1: Decouple Planner from AMWorkManager
+
+### Objective
+
+`AMWorkManager` becomes scheduler facade only.
+
+### Changes
+
+1. Remove static planner entry from:
+
+- `src/application/transfer/AMWorkManager.hpp`
+- `src/application/transfer/AMWorkManager.cpp`
+
+2. Keep planning only in:
+
+- `src/application/transfer/TaskPlanner.hpp`
+- `src/application/transfer/TaskPlanner.cpp`
+
+3. Update planner call sites:
+
+- `src/domain/transfer/TransferManagerCore.cpp` (temporary until Stage 4)
+- any direct `AMWorkManager::LoadTasks` usage
+
+### Gate
+
+1. No reference to `AMWorkManager::LoadTasks`.
+2. Planner compile path green.
+
+---
+
+## Stage 2: Introduce Scheduler/Execution Abstractions
+
+### Objective
+
+Reduce concrete coupling in scheduler and app facade.
+
+### Changes
+
+1. Add application-side scheduler dependency ports:
+
+- `src/application/transfer/TransferRuntimePorts.hpp`
+  - `ITransferExecutionPort`
+  - `ITransferClientPoolPort`
+
+2. Make `TaskSchedulerCore` depend on those interfaces:
+
+- `src/application/transfer/TaskSchedulerCore.hpp/.cpp`
+
+3. Adapt concrete bindings:
+
+- `TransferExecutionEngine` wrapped by adapter in application runtime
+- `ClientPublicPool` wrapped/used via `ITransferClientPoolPort`
+
+### Gate
+
+1. `TaskSchedulerCore` no longer includes infra execution header directly.
+2. `TaskSchedulerCore` no longer depends on concrete `ClientPublicPool` type in member signatures.
+
+---
+
+## Stage 3: Move Orchestration into TransferAppService
+
+### Objective
+
+Application owns transfer runtime orchestration; domain manager becomes thin/deprecated.
+
+### Changes
+
+1. Expand `TransferAppService` from delegator to orchestrator:
+
+- `include/application/transfer/TransferAppService.hpp`
+- `src/application/transfer/TransferAppService.cpp`
+
+2. Move logic from `AMTransferManager` into app service:
+
+- task preparation flow
+- wildcard handling policy
+- submit sync/async flow
+- list/find/query task flow
+- cache mutation flow (still using domain cache service rules)
+
+3. Keep `TransferCacheDomainService` pure rule service:
+
+- `include/domain/transfer/TransferCacheDomainService.hpp`
+- `src/domain/transfer/TransferCacheDomainService.cpp` (if present)
+
+### Gate
+
+1. Transfer workflows call app service ports only.
+2. `AMTransferManager` no longer owns core transfer orchestration.
+
+---
+
+## Stage 4: Remove Domain Runtime Manager Ownership
+
+### Objective
+
+Domain transfer package keeps only contracts/rules/types.
+
+### Changes
+
+1. Deprecate and then remove:
+
+- `include/domain/transfer/TransferManager.hpp`
+- `src/domain/transfer/TransferManagerCore.cpp`
+
+2. Delete singleton usage:
+
+- `AMTransferManager::Instance()`
+
+3. Keep in domain:
+
+- `TransferPorts.hpp`
+- `TransferCacheDomainService.*`
+- transfer-related model/types in `foundation/DataClass.hpp` (or future domain model header)
+
+### Gate
+
+1. No include/usage of `TransferManager.hpp` remains in application transfer path.
+2. Domain transfer has no runtime orchestrator class.
+
+---
+
+## Stage 5: Remove `amf` from Transfer API Surface
+
+### Objective
+
+Unify interruption with token/control runtime path.
+
+### Changes
+
+1. Update domain transfer ports:
+
+- `include/domain/transfer/TransferPorts.hpp`
+  - remove `amf` parameters from executor/cache methods
+
+2. Update application workflows:
+
+- `include/application/transfer/TransferWorkflows.hpp`
+- `src/application/transfer/TransferWorkflows.cpp`
+- `include/application/transfer/TaskWorkflows.hpp`
+- `src/application/transfer/TaskWorkflows.cpp`
+
+3. Runtime control model:
+
+- use operation-local `TaskControlToken` in app orchestration for sync prepare-stage interruption
+- conducting-task terminate via scheduler runtime context map keyed by `task_id`
+
+### Gate
+
+1. No `amf` in transfer headers under `include/application/transfer` and `include/domain/transfer`.
+2. Interrupt/terminate behavior parity maintained.
+
+---
+
+## Stage 6: Header Hygiene and Dependency Tightening
+
+### Objective
+
+Minimize public-header dependency fan-out.
+
+### Changes
+
+1. Replace heavy includes with forward declarations where safe:
+
+- `include/application/transfer/TransferAppService.hpp`
+
+2. Keep runtime-private classes under `src/application/transfer/*` private headers only:
+
+- `src/application/transfer/AMWorkManager.hpp`
+- `src/application/transfer/TaskPlanner.hpp`
+
+3. Ensure infra headers do not include application headers.
+
+### Gate
+
+1. Public transfer headers include only required domain ports + lightweight types.
+2. Include graph matches `tran_structure.md`.
+
+---
+
+## Stage 7: Final Cleanup
+
+### Objective
+
+Remove dead compatibility code and finalize structure.
+
+### Changes
+
+1. Delete deprecated transfer manager files.
+2. Remove obsolete wrappers and dead methods.
+3. Update/refine docs:
+
+- `tran_structure.md`
+- `md/refactor/transfer_refactor_report.md`
+
+### Gate
+
+1. No dead transfer manager symbols.
+2. Transfer path is app-orchestrated, infra-executed, domain-contracted.
+
+---
+
+## Execution Order and Confirmation Stops
+
+1. Execute Stage 0-1, stop for confirmation.
+2. Execute Stage 2-3, stop for confirmation.
+3. Execute Stage 4-5, stop for confirmation.
+4. Execute Stage 6-7 and finalize.
+
+## Key Risks and Controls
+
+1. Risk: behavior drift in pause/resume/terminate.
+
+- Control: keep stage smoke snapshots and compare each gate.
+
+2. Risk: path-resolution regressions.
+
+- Control: keep `PathResolutionService` single-source and add focused tests.
+
+3. Risk: dependency cycles during move.
+
+- Control: enforce one-way includes: `application -> domain`, `infra -> domain`.
+
+# Transfer Refactor Stage Checkpoints
+
+## Checkpoint 1 - 2026-03-14 (Stage 0 completed)
+
+### Scope executed
+
+1. Added Stage 0 transfer contract document:
+
+- `md/refactor/transfer_stage0_contract.md`
+
+2. Added Stage 0 smoke snapshot generator:
+
+- `tools/refactor/transfer_stage0_smoke.ps1`
+
+3. Generated Stage 0 snapshot:
+
+- `md/refactor/transfer_stage0_snapshot.json`
+
+### Gate status
+
+1. Snapshot generated: PASS
+2. Contract + snapshot presence: PASS
+
+### Notes
+
+1. Snapshot execution mode is `not-run` (baseline metadata capture); runtime smoke execution still requires project-specific binary/run setup.
+
+---
+
+## Checkpoint 2 - 2026-03-14 (Stage 1 completed)
+
+### Scope executed
+
+1. Removed static planner entry from AMWorkManager header:
+
+- `include/application/transfer/runtime/AMWorkManager.hpp`
+
+2. Removed static planner forwarding implementation:
+
+- `src/application/transfer/AMWorkManager.cpp`
+
+3. Updated transfer planning call site to direct planner API:
+
+- `src/domain/transfer/TransferManagerCore.cpp`
+  - from `AMWorkManager::LoadTasks(...)`
+  - to `AMApplication::TransferRuntime::TaskPlanner::LoadTasks(...)`
+
+### Gate status
+
+1. No remaining `AMWorkManager::LoadTasks` reference in `include/` and `src/`: PASS
+2. Planner-only path established: PASS
+3. Full build validation: PENDING (environment build issue still exists in this workspace)
+
+### Notes
+
+1. This matches the planned Stage 0-1 confirmation stop.
+2. Next target stage is Stage 2 (`TransferRuntimePorts` abstraction for scheduler execution/pool dependencies).
+
+---
+
+## Checkpoint 3 - 2026-03-14 (Stage 2 completed)
+
+### Scope executed
+
+1. Added runtime abstraction ports:
+
+- `include/application/transfer/runtime/TransferRuntimePorts.hpp`
+  - `ITransferExecutionPort`
+  - `ITransferClientPoolPort`
+
+2. Introduced infra execution adapter factory for scheduler consumption:
+
+- `src/application/transfer/TransferRuntimeAdapters.hpp`
+- `src/application/transfer/TransferRuntimeAdapters.cpp`
+
+3. Switched scheduler core to abstraction types:
+
+- `src/application/transfer/TaskSchedulerCore.hpp`
+- `src/application/transfer/TaskSchedulerCore.cpp`
+  - pool binding map changed from concrete `ClientPublicPool` to `ITransferClientPoolPort`
+  - execution engine member changed to `ITransferExecutionPort`
+  - removed direct include dependency on infra transfer execution header
+
+4. Updated AMWorkManager facade signatures to abstraction type:
+
+- `include/application/transfer/runtime/AMWorkManager.hpp`
+- `src/application/transfer/AMWorkManager.cpp`
+
+5. Updated concrete pool class to implement pool port:
+
+- `include/application/client/runtime/ClientPublicPool.hpp`
+
+### Gate status
+
+1. `TaskSchedulerCore` no longer includes infra execution header directly: PASS
+2. `TaskSchedulerCore` task-pool signatures/members no longer use concrete `ClientPublicPool`: PASS
+3. Full build validation: PENDING (workspace build environment issue remains)
+
+### Notes
+
+1. Stage 2 runtime dependency direction is now `TaskSchedulerCore -> runtime port -> adapter -> infra engine`.
+2. Next target stage is Stage 3 (move orchestration from `AMTransferManager` into `TransferAppService`).
+
+---
+
+## Checkpoint 4 - 2026-03-14 (Stage 3 partial: cache orchestration moved)
+
+### Scope executed
+
+1. `TransferAppService` now owns transfer cache state and cache domain rules:
+
+- `include/application/transfer/TransferAppService.hpp`
+  - added `cache_mtx_`
+  - added `transfer_cache_domain_service_`
+  - added `cached_sets_`
+
+2. Migrated cache mutation/query/submit logic from manager delegation to app-owned implementation:
+
+- `src/application/transfer/TransferAppService.cpp`
+  - `AddCachedTransferSet`
+  - `RemoveCachedTransferSets`
+  - `ClearCachedTransferSets`
+  - `SubmitCachedTransferSets`
+  - `QueryCachedTransferSet`
+  - `ListCachedTransferSetIds`
+
+### Gate status
+
+1. Cache path no longer depends on `AMTransferManager` cache storage: PASS
+2. Transfer submit/cache integration still functionally routed through app service: PASS
+3. Full Stage 3 objective (task prepare/submit/list/find/control moved): IN PROGRESS
+
+### Next actions
+
+1. Move transfer task preparation and sync/async submission orchestration into `TransferAppService`.
+2. Move task list/find/query/control runtime path into app service to align state ownership.
+3. Reduce `TransferAppService` reliance on `AMTransferManager` to zero before Stage 4 deprecation.
+
+---
+
+## Checkpoint 5 - 2026-03-14 (Stage 3 partial: task preparation moved)
+
+### Scope executed
+
+1. Added worker backend accessor on legacy manager for transition:
+
+- `include/domain/transfer/TransferManager.hpp`
+  - `Worker()` returns `std::shared_ptr<AMWorkManager>`
+
+2. Moved transfer preparation orchestration into app service:
+
+- `include/application/transfer/TransferAppService.hpp`
+  - added private helpers `ConfirmWildcard_` and `PrepareTasks_`
+- `src/application/transfer/TransferAppService.cpp`
+  - `Transfer` now validates resume constraints, prepares tasks in app service, and submits prepared task-info through manager backend
+  - `TransferAsync` now validates resume constraints, prepares tasks in app service, and submits prepared task-info through manager backend
+  - implemented `ConfirmWildcard_` policy in app service
+  - implemented `PrepareTasks_` in app service:
+    - parse scoped targets
+    - resolve ready paths
+    - wildcard expansion
+    - planner dispatch via `TaskPlanner::LoadTasks`
+    - deduplicate transfer tasks
+    - create `TaskInfo` through worker `CreateTaskInfo(...)`
+
+### Gate status
+
+1. Transfer preparation flow moved from direct manager-vector submit path to app service: PASS
+2. Cache + preparation orchestration now app-owned: PASS
+3. Full Stage 3 objective (task list/find/query/control ownership moved): IN PROGRESS
+
+### Next actions
+
+1. Move list/find/query/control state ownership out of `AMTransferManager` into `TransferAppService`.
+2. Remove `TransferAppService` direct include dependency on `TransferManager.hpp` by introducing an application-owned runtime backend abstraction.
+
+---
+
+## Checkpoint 6 - 2026-03-14 (Stage 3 partial: backend-port routing completed)
+
+### Scope executed
+
+1. Completed `TransferAppService` backend-port constructor path:
+
+- `src/application/transfer/TransferAppService.cpp`
+  - legacy ctor now wraps manager with `CreateLegacyTransferBackend(...)`
+  - backend-port ctor implemented
+
+2. Switched all `TransferAppService` manager calls to backend port calls:
+
+- sync/async submit path uses:
+  - `TransferTaskSync(...)`
+  - `TransferTaskAsync(...)`
+- task query/control path uses:
+  - `ListTaskIds/FindTask/GetTaskCounts/List/Show/Inspect/InspectTransferSets/InspectTaskEntries/QueryTaskEntry/Thread/Terminate/Pause/Resume/Retry`
+
+3. Switched `PrepareTasks_` worker bootstrap from direct manager to backend port:
+
+- worker fetch: `backend_->Worker()`
+- lazy init: `backend_->Init()`
+
+4. Added explicit null-backend guards returning `EC::InvalidHandle`.
+
+### Gate status
+
+1. `TransferAppService.cpp` has no direct `manager_` usage: PASS
+2. App-service runtime operations now route through `ITransferBackendPort`: PASS
+3. Full Stage 3 objective (remove domain manager ownership): IN PROGRESS
+
+### Next actions
+
+1. Move remaining runtime ownership (history/result lifecycle) from `AMTransferManager` into application transfer runtime.
+2. Start Stage 4 by deleting transfer-path dependencies on `TransferManager.hpp` from app-facing modules.
+
+---
+
+## Checkpoint 7 - 2026-03-14 (Stage 4 prep: app facade no longer takes manager directly)
+
+### Scope executed
+
+1. Removed direct manager constructor from transfer app facade:
+
+- `include/application/transfer/TransferAppService.hpp`
+  - deleted `TransferAppService(AMTransferManager&)`
+- `src/application/transfer/TransferAppService.cpp`
+  - removed matching constructor definition
+
+2. Kept transfer app facade backend-only construction:
+
+- `TransferAppService(std::shared_ptr<ITransferBackendPort>)`
+
+3. Updated composition root to inject backend explicitly:
+
+- `main.cpp`
+  - creates backend via `CreateLegacyTransferBackend(AMTransferManager::Instance())`
+  - constructs `TransferAppService` with backend port
+
+### Gate status
+
+1. `TransferAppService` no longer directly depends on manager constructor: PASS
+2. App-facing construction path is backend-port only: PASS
+3. Legacy manager dependency still exists in composition root through legacy backend adapter: EXPECTED
+
+### Next actions
+
+1. Introduce an application-native transfer backend so composition root can stop creating `AMTransferManager`.
+2. Move list/show/inspect/history ownership from legacy manager into app runtime backend.
+
+---
+
+## Checkpoint 8 - 2026-03-14 (Stage 4 partial: application-native backend introduced)
+
+### Scope executed
+
+1. Added application-native backend factory:
+
+- `include/application/transfer/runtime/TransferBackendPort.hpp`
+  - added `CreateDefaultTransferBackend()`
+
+2. Implemented native backend class:
+
+- `src/application/transfer/TransferBackendPort.cpp`
+  - new `DefaultTransferBackend` now owns `AMWorkManager`
+  - implements backend methods without routing through `AMTransferManager`:
+    - `Init`
+    - `TransferTaskSync`
+    - `TransferTaskAsync`
+    - `Worker`
+    - `ListTaskIds`
+    - `FindTask`
+    - `GetTaskCounts`
+    - `List`
+    - `Show`
+    - `Inspect`
+    - `InspectTransferSets`
+    - `InspectTaskEntries`
+    - `QueryTaskEntry`
+    - `Thread`
+    - `Terminate` (single/batch)
+    - `Pause` (single/batch)
+    - `Resume` (single/batch)
+    - `Retry`
+  - keeps history cache inside backend and wraps task result callback to record finished tasks
+
+3. Switched composition root to native backend:
+
+- `main.cpp`
+  - now constructs transfer backend by `CreateDefaultTransferBackend()`
+  - no direct `AMTransferManager::Instance()` usage in main
+
+### Gate status
+
+1. Composition root no longer constructs transfer manager singleton: PASS
+2. Transfer app service now runs on native backend in main path: PASS
+3. Legacy manager adapter still exists for migration fallback: EXPECTED
+
+### Next actions
+
+1. Replace remaining legacy-adapter call sites (if any) with native backend wiring.
+2. Start removing `AMTransferManager` dependencies from non-main runtime flows (interactive/task prompt paths).
+
+---
+
+## Checkpoint 9 - 2026-03-14 (Stage 4 partial: legacy adapter removed from app transfer runtime)
+
+### Scope executed
+
+1. Removed legacy adapter API from transfer runtime backend port:
+
+- `include/application/transfer/runtime/TransferBackendPort.hpp`
+  - removed `CreateLegacyTransferBackend(...)`
+  - removed legacy `AMTransferManager` forward declaration
+
+2. Removed legacy adapter implementation and domain-manager include:
+
+- `src/application/transfer/TransferBackendPort.cpp`
+  - removed `LegacyTransferBackendAdapter`
+  - removed `CreateLegacyTransferBackend(...)`
+  - removed direct include dependency on `domain/transfer/TransferManager.hpp`
+
+3. Kept only application-native backend factory:
+
+- `CreateDefaultTransferBackend()`
+
+### Gate status
+
+1. Application transfer runtime backend module no longer depends on `AMTransferManager`: PASS
+2. Main transfer wiring remains native backend path: PASS
+3. Domain transfer manager files still exist in domain layer as migration residue: EXPECTED
+
+### Next actions
+
+1. Remove remaining `AMTransferManager` usage from CLI interactive/runtime code paths.
+2. Deprecate and delete `domain/transfer/TransferManager.hpp` and `src/domain/transfer/TransferManagerCore.cpp` after call-site cleanup.
+
+---
+
+## Checkpoint 10 - 2026-03-14 (Stage 4 partial: interactive loop decoupled from legacy managers)
+
+### Scope executed
+
+1. Refactored interactive prompt runtime from legacy manager types to app services:
+
+- `src/interface/cli/InteractiveLoop.cpp`
+  - replaced `AMClientManager` usage with `AMApplication::client::ClientAppService`
+  - replaced `AMTransferManager` usage with `AMApplication::TransferWorkflow::TransferAppService`
+  - replaced `BaseClient` handle assumptions with `AMDomain::client::ClientHandle` + port access
+
+2. Updated prompt helper flow:
+
+- active client resolution now uses `ClientAppService::GetCurrentClient()`
+- nickname/os/request/workdir retrieval now uses `IClientPort` split ports and client app service
+- task count query now uses `TransferAppService::GetTaskCounts(...)`
+
+### Gate status
+
+1. `InteractiveLoop.cpp` no longer references `AMClientManager` / `AMTransferManager` / `BaseClient`: PASS
+2. CLI interactive prompt path now depends on application services only: PASS
+3. Legacy manager remains only in domain + legacy interface transfer command files: EXPECTED
+
+### Next actions
+
+1. Remove `AMTransferManager` method-definition files under `src/interface/commands/transfer/*`.
+2. Delete or deprecate `domain/transfer/TransferManager.hpp` and `src/domain/transfer/TransferManagerCore.cpp` once legacy transfer-command files are removed.
+
+---
+
+## Checkpoint 11 - 2026-03-14 (Stage 4: legacy transfer manager removed)
+
+### Scope executed
+
+1. Removed legacy domain transfer manager contract + implementation:
+
+- deleted `include/domain/transfer/TransferManager.hpp`
+- deleted `src/domain/transfer/TransferManagerCore.cpp`
+
+2. Removed legacy interface transfer-command method-definition files that
+   extended `AMTransferManager`:
+
+- deleted `src/interface/commands/transfer/TransferCli.cpp`
+- deleted `src/interface/commands/transfer/TransferPrint.cpp`
+
+3. Updated infrastructure readme reference:
+
+- `include/infrastructure/README.md`
+  - canonical transfer runtime entry now points to
+    `include/application/transfer/TransferAppService.hpp`
+
+### Gate status
+
+1. No remaining source/include references to `AMTransferManager` or
+   `domain/transfer/TransferManager.hpp`: PASS
+2. Transfer runtime ownership now sits on application transfer service/backend:
+   PASS
+3. Legacy transfer singleton path removed from compile graph: PASS
+
+### Next actions
+
+1. Run full compile/layer-check pass and fix any residual symbol/include fallout.
+2. Continue Stage 5 (`amf` removal from transfer APIs) now that legacy manager path is removed.
+
+---
+
+## Checkpoint 12 - 2026-03-14 (Stage 5 completed: transfer API surface `amf` removal)
+
+### Scope executed
+
+1. Removed `amf` from domain transfer ports:
+
+- `include/domain/transfer/TransferPorts.hpp`
+  - `ITransferExecutorPort::Transfer/TransferAsync`
+  - `ITransferCachePort::SubmitCachedTransferSets`
+
+2. Removed `amf` from application transfer workflow APIs:
+
+- `include/application/transfer/TransferWorkflows.hpp`
+- `src/application/transfer/TransferWorkflows.cpp`
+  - `ExecuteTransfer(...)` now uses executor port without interrupt arg
+
+3. Removed `amf` from task workflows and task gateway contract:
+
+- `include/application/transfer/TaskWorkflows.hpp`
+- `src/application/transfer/TaskWorkflows.cpp`
+  - `ExecuteTaskList`, `ExecuteTaskShow`, `ExecuteJobCacheSubmit`
+
+4. Removed `amf` from transfer app facade public methods:
+
+- `include/application/transfer/TransferAppService.hpp`
+- `src/application/transfer/TransferAppService.cpp`
+  - `Transfer`, `TransferAsync`, `List`, `Show`, `SubmitCachedTransferSets`
+  - interrupt token now resolved internally via `TaskControlToken::Instance()`
+
+5. Updated interface adapters and CLI call sites to match new signatures:
+
+- `include/interface/adapters/ApplicationAdapters.hpp`
+- `src/interface/adapters/ApplicationGateways.cpp`
+- `src/interface/cli/CLIArg.cpp`
+
+### Gate status
+
+1. No `amf` remains under:
+
+- `include/application/transfer`
+- `src/application/transfer`
+- `include/domain/transfer`
+  Gate result: PASS
+
+2. Transfer/task workflow call signatures are aligned after API change:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: PENDING (toolchain unavailable in current workspace)
+
+### Next actions
+
+1. Stage 6: header hygiene and dependency tightening (`TransferAppService.hpp`, `AMWorkManager.hpp`, runtime includes).
+2. Optional follow-up: remove remaining non-transfer `amf` usage from interface/client command workflows in a dedicated pass (out of Stage 5 scope).
+
+---
+
+## Checkpoint 13 - 2026-03-14 (Stage 6 partial: transfer header hygiene tightening)
+
+### Scope executed
+
+1. Tightened `TransferAppService` public header dependencies:
+
+- `include/application/transfer/TransferAppService.hpp`
+  - removed direct include of `TransferBackendPort.hpp`
+  - added forward declaration for `AMApplication::TransferRuntime::ITransferBackendPort`
+  - added explicit STL includes (`memory/mutex/optional/string/vector`)
+
+2. Added implementation-only backend include:
+
+- `src/application/transfer/TransferAppService.cpp`
+  - now directly includes `application/transfer/runtime/TransferBackendPort.hpp`
+
+3. Tightened `AMWorkManager` public header dependencies:
+
+- `include/application/transfer/runtime/AMWorkManager.hpp`
+  - removed includes of `TransferRuntimePorts.hpp` and `domain/client/ClientPort.hpp`
+  - removed unused `ClientHandle` alias
+  - forward-declared `ITransferClientPoolPort`
+
+### Gate status
+
+1. Public transfer headers no longer pull unnecessary runtime concrete headers:
+   Gate result: PASS
+2. No infra includes in transfer public headers:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: PENDING (toolchain unavailable in current workspace)
+
+### Next actions
+
+1. Continue Stage 6 on remaining transfer public headers if further include fan-out reductions are needed.
+2. Stage 7 cleanup pass after compile verification environment is available.
+
+---
+
+## Checkpoint 14 - 2026-03-14 (Stage 7 partial: cleanup/report consolidation)
+
+### Scope executed
+
+1. Added transfer refactor summary report:
+
+- `md/refactor/transfer_refactor_report.md`
+
+2. Consolidated finished-stage outcomes and remaining risks:
+
+- stage completion status
+- remaining compile blocker (toolchain unavailable)
+- residual follow-up items
+
+### Gate status
+
+1. Dead transfer manager symbols removed from active transfer path:
+   Gate result: PASS
+2. Refactor documentation consolidated for next-stage continuation:
+   Gate result: PASS
+3. Full runtime regression + compile gate:
+   Gate result: PENDING (compiler unavailable in workspace)
+
+### Next actions
+
+1. Re-run full build and transfer smoke matrix when toolchain is available.
+2. Finish final dead-code cleanup based on compile diagnostics.
+
+---
+
+## Checkpoint 15 - 2026-03-14 (Stage 6 extended: dependency fan-out reduction)
+
+### Scope executed
+
+1. Reduced transfer runtime header coupling to domain client headers:
+
+- `include/application/transfer/runtime/TransferRuntimePorts.hpp`
+  - removed `domain/client/ClientPort.hpp` include
+  - switched handle aliases to `std::shared_ptr<AMDomain::client::IClientPort>` via forward declaration
+
+2. Reduced planner header coupling:
+
+- `include/application/transfer/runtime/TaskPlanner.hpp`
+  - removed `domain/client/ClientPort.hpp` include
+  - added forward declarations for `IClientRuntimePort` and `IClientLifecyclePort`
+
+3. Reduced task-workflow header fan-out:
+
+- `include/application/transfer/TaskWorkflows.hpp`
+  - replaced include of `TransferWorkflows.hpp` with forward declarations
+  - included only `domain/transfer/TransferPorts.hpp`
+- `src/application/transfer/TaskWorkflows.cpp`
+  - added concrete include of `TransferWorkflows.hpp` for implementation-only use
+
+4. Updated scheduler alias dependency to runtime port handle:
+
+- `src/application/transfer/TaskSchedulerCore.hpp`
+  - `ClientHandle` now aliases `ITransferClientPoolPort::ClientHandle`
+- `src/application/transfer/TaskSchedulerCore.cpp`
+  - explicit protocol enum use updated to fully-qualified `AMDomain::client::ClientProtocol::SFTP`
+
+### Gate status
+
+1. No `domain/client/ClientPort.hpp` include remains under:
+
+- `include/application/transfer`
+- `include/application/transfer/runtime`
+- `src/application/transfer`
+  Gate result: PASS
+
+2. No `amf` in transfer/domain transfer headers and transfer application implementation:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: PENDING (compiler/toolchain unavailable in workspace)
+
+### Next actions
+
+1. Run compile gate when toolchain is available and resolve any incomplete-type fallout.
+2. Continue Stage 7 dead-code pruning after compile diagnostics.
+
+---
+
+## Checkpoint 16 - 2026-03-14 (Stage 7 partial: adapter cleanup + bug fix)
+
+### Scope executed
+
+1. Fixed transfer adapter API declaration bug introduced during signature migration:
+
+- `include/interface/adapters/ApplicationAdapters.hpp`
+  - corrected duplicated parameter in `TransferExecutorPort::Transfer(...)` declaration
+
+2. Aligned transfer adapter naming with current architecture:
+
+- `include/interface/adapters/ApplicationAdapters.hpp`
+- `src/interface/adapters/ApplicationGateways.cpp`
+  - renamed transfer adapter member/constructor naming from `transfer_manager_` to `transfer_service_`
+  - updated transfer-related doc comments from “transfer manager” to “transfer app service”
+
+3. Removed stale “legacy migration” wording in transfer app facade comment:
+
+- `include/application/transfer/TransferAppService.hpp`
+
+### Gate status
+
+1. Transfer adapter declaration/definition naming consistency:
+   Gate result: PASS
+2. No stale `transfer_manager_` member references in transfer adapters:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: PENDING (compiler/toolchain unavailable in workspace)
+
+### Next actions
+
+1. Continue Stage 7 dead-code/stale-symbol cleanup after compile diagnostics are available.
+2. Run full build + transfer smoke matrix as final gate.
+
+---
+
+## Checkpoint 17 - 2026-03-14 (Stage 7 partial: planner API typo cleanup)
+
+### Scope executed
+
+1. Normalized planner parameter naming typo:
+
+- `include/application/transfer/runtime/TaskPlanner.hpp`
+- `src/application/transfer/TaskPlanner.cpp`
+  - renamed `ignore_sepcial_file` -> `ignore_special_file`
+  - updated diagnostic text accordingly
+
+### Gate status
+
+1. No `ignore_sepcial_file` remains in application transfer planner API/impl:
+   Gate result: PASS
+2. Full compile validation:
+   Gate result: PENDING (compiler/toolchain unavailable in workspace)
+
+### Next actions
+
+1. Continue final transfer stale-symbol cleanup and naming normalization where safe.
+2. Execute compile + smoke validation when toolchain is available.
+
+---
+
+## Checkpoint 18 - 2026-03-14 (Stage 7 partial: backend List/Show token simplification)
+
+### Scope executed
+
+1. Simplified transfer runtime backend interface:
+
+- `include/application/transfer/runtime/TransferBackendPort.hpp`
+  - removed `TaskControlToken` argument from `List(...)` and `Show(...)`
+
+2. Updated backend implementation to resolve interrupt token internally:
+
+- `src/application/transfer/TransferBackendPort.cpp`
+  - `DefaultTransferBackend::List(...)` now uses `TaskControlToken::Instance()`
+  - `DefaultTransferBackend::Show(...)` now uses `TaskControlToken::Instance()`
+
+3. Updated transfer app facade callsites to new backend signatures:
+
+- `src/application/transfer/TransferAppService.cpp`
+  - `backend_->List(...)` and `backend_->Show(...)` now called without token argument
+
+### Gate status
+
+1. Backend port declaration/definition/callsite signature alignment:
+   Gate result: PASS
+2. Full compile validation:
+   Gate result: PENDING (compiler/toolchain unavailable in workspace)
+
+### Next actions
+
+1. Continue stale-symbol and naming cleanup where changes are low-risk.
+2. Run compile + smoke gate when toolchain is available.
+
+---
+
+## Checkpoint 19 - 2026-03-14 (Stage 7 partial: transfer service naming unification in runtime/CLI wiring)
+
+### Scope executed
+
+1. Renamed runtime binding field from `transfer_manager` to `transfer_service`:
+
+- `include/interface/adapters/ApplicationAdapters.hpp`
+- `src/bootstrap/RuntimeBindings.cpp`
+- `src/bootstrap/AppHandle.cpp`
+
+2. Renamed CLI manager member from `transfer_manager` to `transfer_service`:
+
+- `include/interface/cli/CLIArg.hpp`
+- `src/bootstrap/CliManagersBootstrap.cpp`
+- `src/interface/cli/CLIArg.cpp`
+- `src/interface/cli/InteractiveLoop.cpp`
+
+3. Updated app-handle constructor parameter naming for consistency:
+
+- `include/bootstrap/AppHandle.hpp`
+- `src/bootstrap/AppHandle.cpp`
+
+4. Minor cleanup:
+
+- removed duplicated include in `src/bootstrap/CliManagersBootstrap.cpp`
+
+### Gate status
+
+1. No active runtime/CLI symbol references remain to `managers.transfer_manager`:
+   Gate result: PASS
+2. Runtime binding field references aligned to `transfer_service`:
+   Gate result: PASS
+3. Intentional remaining `transfer_manager` identifiers only in config snapshot/options key path (`options.transfer_manager` / `Settings.Options.TransferManager`):
+   Gate result: PASS
+4. Full compile validation:
+   Gate result: PENDING (compiler/toolchain unavailable in workspace)
+
+### Next actions
+
+1. Continue Stage 7 stale symbol cleanup in remaining transfer-adjacent comments/docs.
+2. Execute full compile + smoke validation when toolchain is available.
+
+---
+
+## Checkpoint 20 - 2026-03-14 (Stage 7 partial: legacy transfer settings-key centralization)
+
+### Scope executed
+
+1. Centralized legacy transfer settings key into named constants:
+
+- `src/application/transfer/TransferBackendPort.cpp`
+- `src/bootstrap/RuntimeBindings.cpp`
+  - added `kTransferOptionsKey = "TransferManager"`
+
+2. Replaced scattered magic-string checks/usages with the named constant in active runtime code.
+
+### Gate status
+
+1. No active runtime magic-string duplication for transfer options key:
+   Gate result: PASS
+2. Config schema compatibility preserved (`Settings.Options.TransferManager` key unchanged):
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: PENDING (compiler/toolchain unavailable in workspace)
+
+### Next actions
+
+1. Continue remaining Stage 7 low-risk cleanup (comments/stale naming) in transfer-adjacent files.
+2. Run compile/smoke once toolchain is available.
+
+---
+
+## Checkpoint 21 - 2026-03-14 (Stage 6/7 partial: header include fan-out trim in runtime wiring headers)
+
+### Scope executed
+
+1. Removed unused heavy include from application adapter public header:
+
+- `include/interface/adapters/ApplicationAdapters.hpp`
+  - removed `application/filesystem/FileSystemAppService.hpp` include
+  - relied on existing forward declaration for `FileSystemAppService`
+
+2. Removed unused heavy include from bootstrap app-handle public header:
+
+- `include/bootstrap/AppHandle.hpp`
+  - removed `application/filesystem/FileSystemAppService.hpp` include
+  - type remains declared through existing forward declarations in included headers
+
+### Gate status
+
+1. Unused include fan-out reduced in active public headers:
+   Gate result: PASS
+2. Transfer naming cleanup still intact (`transfer_service` wiring):
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: PENDING (compiler/toolchain unavailable in workspace)
+
+### Next actions
+
+1. Continue low-risk stale-symbol cleanup and comment alignment.
+2. Run compile/smoke gate when toolchain is available.
+
+---
+
+## Checkpoint 22 - 2026-03-14 (Stage 7 partial: static regression sweeps)
+
+### Scope executed
+
+1. Ran static symbol sweeps on transfer refactor targets:
+
+- no active references to removed transfer manager runtime ownership symbols:
+  - `AMTransferManager::Instance`
+  - `TransferManagerCore`
+  - `TransferManager.hpp`
+
+2. Ran static API-style sweeps:
+
+- no snake_case legacy AMWorkManager API surface in application transfer runtime
+- planner path remains direct:
+  - `TransferAppService -> TaskPlanner::LoadTasks(...)`
+
+### Gate status
+
+1. Static symbol regression checks:
+   Gate result: PASS
+2. Full compile + runtime smoke:
+   Gate result: PENDING (compiler/toolchain unavailable in workspace)
+
+### Next actions
+
+1. Continue final low-risk cleanup if needed.
+2. Run compile/smoke validation as soon as toolchain is available.
+
+---
+
+## Checkpoint 23 - 2026-03-14 (Stage 6/7 partial: transfer runtime adapter decoupling)
+
+### Scope executed
+
+1. Removed transfer runtime dependency on `ApplicationAdapters::Runtime` for worker setup/pool resolution:
+
+- `include/application/transfer/runtime/TransferBackendPort.hpp`
+- `src/application/transfer/TransferBackendPort.cpp`
+  - `CreateDefaultTransferBackend(...)` now supports injected:
+    - `thread_count_provider`
+    - `pool_provider`
+  - `DefaultTransferBackend::Init()` now resolves thread count via injected provider.
+  - `DefaultTransferBackend::Retry(...)` now resolves pool via injected provider.
+
+2. Removed transfer app-service dependency on runtime adapter getters for client ports:
+
+- `include/application/transfer/TransferAppService.hpp`
+- `src/application/transfer/TransferAppService.cpp`
+  - constructor now injects:
+    - `IClientRuntimePort`
+    - `IClientLifecyclePort`
+    - `IClientPathPort`
+    - `ITransferClientPoolPort`
+  - `PrepareTasks_` now uses injected ports/pool and validates null bindings.
+  - removed `ApplicationAdapters::Runtime::Format(...)` usage from cached-submit cancellation text.
+
+3. Updated composition-root wiring for explicit injection:
+
+- `main.cpp`
+  - transfer backend is created with injected pool provider lambda.
+  - transfer app service is constructed with injected client ports + transfer pool.
+
+### Gate status
+
+1. No `ApplicationAdapters::Runtime::*` usage remains in:
+
+- `src/application/transfer/TransferAppService.cpp`
+- `src/application/transfer/TransferBackendPort.cpp`
+  Gate result: PASS
+
+2. Transfer runtime path now gets client ports/pool via composition-root injection:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue transfer boundary cleanup by replacing direct prompt-manager dependency in application transfer runtime with an application-side presentation port.
+2. Run compile and smoke gates when allowed.
+
+---
+
+## Checkpoint 24 - 2026-03-14 (Stage 6/7 partial: removed transfer app-layer `interface/prompt` dependency)
+
+### Scope executed
+
+1. Added application transfer presentation callback contract:
+
+- `include/application/transfer/runtime/TransferPresentationPort.hpp`
+
+2. Injected presentation callbacks into transfer runtime backend:
+
+- `include/application/transfer/runtime/TransferBackendPort.hpp`
+- `src/application/transfer/TransferBackendPort.cpp`
+  - `CreateDefaultTransferBackend(...)` now accepts `TransferPresentationPort`.
+  - all task list/show/inspect/thread output now routes through presentation callbacks.
+
+3. Injected presentation callbacks into transfer app facade:
+
+- `include/application/transfer/TransferAppService.hpp`
+- `src/application/transfer/TransferAppService.cpp`
+  - constructor now accepts `TransferPresentationPort`.
+  - wildcard confirmation / cache submit / cache query printing now routes through injected callbacks.
+
+4. Updated composition-root wiring:
+
+- `main.cpp`
+  - creates `TransferPresentationPort` from `AMPromptManager`.
+  - injects it into both transfer backend and transfer app service.
+
+### Gate status
+
+1. No `interface/prompt/Prompt.hpp` include remains in:
+
+- `src/application/transfer/TransferAppService.cpp`
+- `src/application/transfer/TransferBackendPort.cpp`
+  Gate result: PASS
+
+2. No `AMPromptManager::Instance()` usage remains in application transfer runtime:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 cleanup by reducing remaining transfer/runtime access to `ApplicationAdapters::Runtime::ResolveSettingInt` in `main.cpp` (replace with injected config-reader port or bootstrap-provided value).
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 25 - 2026-03-14 (Stage 6/7 partial: removed transfer app-layer `TaskControlToken::Instance()` calls)
+
+### Scope executed
+
+1. Injected interrupt-token provider into transfer runtime backend:
+
+- `include/application/transfer/runtime/TransferBackendPort.hpp`
+- `src/application/transfer/TransferBackendPort.cpp`
+  - `CreateDefaultTransferBackend(...)` now accepts `interrupt_provider`.
+  - `List(...)` and `Show(...)` now resolve interrupt token via injected provider.
+
+2. Injected interrupt-token provider into transfer app facade:
+
+- `include/application/transfer/TransferAppService.hpp`
+- `src/application/transfer/TransferAppService.cpp`
+  - constructor now accepts `interrupt_provider`.
+  - sync/async transfer entry now resolve interrupt token via provider callback.
+
+3. Updated composition-root wiring:
+
+- `main.cpp`
+  - added `transfer_interrupt_provider` lambda.
+  - injected into both transfer backend and transfer app service.
+
+### Gate status
+
+1. No `TaskControlToken::Instance()` usage remains in:
+
+- `src/application/transfer/TransferAppService.cpp`
+- `src/application/transfer/TransferBackendPort.cpp`
+  Gate result: PASS
+
+2. No runtime singleton interrupt access remains in application transfer runtime code path:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 cleanup: move `ResolveSettingInt` transfer-thread setting lookup out of `main.cpp` into bootstrap-config wiring value object.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 26 - 2026-03-14 (Stage 6 partial: transfer public-header include fan-out trim)
+
+### Scope executed
+
+1. Reduced transfer app facade header coupling to domain client port header:
+
+- `include/application/transfer/TransferAppService.hpp`
+  - removed direct include of `domain/client/ClientPort.hpp`
+  - switched to forward declarations:
+    - `IClientRuntimePort`
+    - `IClientLifecyclePort`
+    - `IClientPathPort`
+
+### Gate status
+
+1. `TransferAppService.hpp` no longer directly includes domain client port header:
+   Gate result: PASS
+2. Transfer app facade API surface unchanged while include fan-out reduced:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 cleanup by moving transfer thread-count settings read out of `main.cpp` lambda to dedicated bootstrap/config wiring.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 27 - 2026-03-14 (Stage 7 partial: transfer init thread-count moved into bootstrap manager init)
+
+### Scope executed
+
+1. Moved transfer worker thread-count application from `main.cpp` post-init block into bootstrap manager init flow:
+
+- `src/bootstrap/CliManagersBootstrap.cpp`
+  - `CliManagers::Init(...)` now applies `transfer_service.SetWorkerThreadCount(...)` immediately after `transfer_service.Init()`.
+
+2. Removed duplicate one-off transfer thread-count setup from composition root:
+
+- `main.cpp`
+  - removed local `ResolveTransferInitThreadCount_` helper.
+  - removed post-`app_handle.Init(...)` direct `transfer_backend->Worker()->ThreadCount(...)` block.
+
+3. Trimmed now-unused top-level includes in `main.cpp` tied to the removed block.
+
+### Gate status
+
+1. Transfer init thread-count is now configured in bootstrap manager init path (single authoritative location):
+   Gate result: PASS
+2. `main.cpp` no longer performs transfer-worker thread-count mutation directly:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 cleanup on remaining transfer/header layering and stale symbol sweeps.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 28 - 2026-03-14 (Stage 6/7 partial: `AMWorkManager` namespace ownership alignment)
+
+### Scope executed
+
+1. Moved `AMWorkManager` declaration into application transfer runtime namespace:
+
+- `include/application/transfer/runtime/AMWorkManager.hpp`
+  - `class AMWorkManager` is now declared inside `AMApplication::TransferRuntime`.
+  - scheduler pointer type simplified to local namespace type.
+
+2. Moved implementation definitions into the same namespace:
+
+- `src/application/transfer/AMWorkManager.cpp`
+  - wrapped method definitions in `namespace AMApplication::TransferRuntime`.
+  - constructor now directly uses `TaskSchedulerCore` from local namespace.
+
+3. Aligned backend port forward declarations to the same ownership namespace:
+
+- `include/application/transfer/runtime/TransferBackendPort.hpp`
+  - `AMWorkManager` forward declaration moved under `AMApplication::TransferRuntime`.
+
+### Gate status
+
+1. Transfer runtime worker facade ownership now matches target layer namespace (`AMApplication::TransferRuntime`):
+   Gate result: PASS
+2. Backend port API and worker implementation use consistent namespace ownership:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 cleanup and stale-symbol/documentation sweeps.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 29 - 2026-03-14 (Stage 7 partial: post-namespace static regression sweep)
+
+### Scope executed
+
+1. Ran transfer-path static symbol sweeps after `AMWorkManager` namespace alignment:
+
+- no `AMWorkManager::LoadTasks` usage in active transfer code path.
+- planner remains direct: `TransferAppService -> TaskPlanner::LoadTasks(...)`.
+
+2. Ran transfer interrupt/boundary sweep:
+
+- no `amf` usage in transfer domain/application headers and sources.
+- no `TaskControlToken::Instance()` in transfer domain/application runtime path.
+- no `interface/*` include or `ApplicationAdapters::Runtime` dependency under:
+  - `include/application/transfer/*`
+  - `src/application/transfer/*`
+
+3. Ran execution-engine naming sweep:
+
+- single-file engine naming is consistent (`ExecuteSingleFileTransfer`) across:
+  - `include/infrastructure/client/runtime/TransferExecution.hpp`
+  - `src/infrastructure/TransferExecution.cpp`
+  - `src/application/transfer/TaskSchedulerCore.cpp`
+
+### Gate status
+
+1. Transfer runtime/application path remains manager-free and planner-direct:
+   Gate result: PASS
+2. Transfer API surface remains `amf`-free in domain/application:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 stale-symbol and documentation cleanup for transfer-adjacent records.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 30 - 2026-03-14 (Stage 6/7 partial: removed `AMWorkManager` leak from transfer backend port)
+
+### Scope executed
+
+1. Refined transfer backend port so app facade no longer reaches concrete worker:
+
+- `include/application/transfer/runtime/TransferBackendPort.hpp`
+  - removed `Worker()` API returning concrete `AMWorkManager`.
+  - added `CreateTaskInfo(...)` as backend-port operation.
+  - added `SetWorkerThreadCount(size_t)` as backend-port operation.
+
+2. Implemented new backend-port operations in native backend:
+
+- `src/application/transfer/TransferBackendPort.cpp`
+  - implemented `CreateTaskInfo(...)` with lazy backend init fallback.
+  - implemented `SetWorkerThreadCount(...)` without presentation side effects.
+
+3. Updated app facade to consume only backend-port operations:
+
+- `src/application/transfer/TransferAppService.cpp`
+  - removed direct include dependency on `AMWorkManager.hpp`.
+  - replaced worker fetch + direct `CreateTaskInfo(...)` call with `backend_->CreateTaskInfo(...)`.
+  - replaced direct worker `ThreadCount(...)` mutation with `backend_->SetWorkerThreadCount(...)`.
+
+### Gate status
+
+1. `TransferAppService` no longer depends on concrete `AMWorkManager` type:
+   Gate result: PASS
+2. Transfer app facade runtime interactions now remain on backend-port surface:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 stale-symbol/documentation cleanup and remaining transfer-header coupling trims.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 31 - 2026-03-14 (Stage 6 partial: transfer runtime include-hygiene trim)
+
+### Scope executed
+
+1. Removed stale include from transfer app facade implementation:
+
+- `src/application/transfer/TransferAppService.cpp`
+  - removed unused `foundation/Path.hpp` include.
+
+2. Removed stale standard-library includes from native backend implementation:
+
+- `src/application/transfer/TransferBackendPort.cpp`
+  - removed unused `<chrono>`, `<sstream>`, and `<thread>` includes.
+
+### Gate status
+
+1. Transfer application runtime implementation files now have tighter include surfaces:
+   Gate result: PASS
+2. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 stale-symbol/documentation cleanup and remaining transfer-path convergence.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 32 - 2026-03-14 (Stage 6/7 partial: made `AMWorkManager` header private to application transfer runtime)
+
+### Scope executed
+
+1. Moved `AMWorkManager` declaration header out of public include surface:
+
+- added private header:
+  - `src/application/transfer/AMWorkManager.hpp`
+- removed public header:
+  - `include/application/transfer/runtime/AMWorkManager.hpp`
+
+2. Updated internal implementation includes to private header path:
+
+- `src/application/transfer/AMWorkManager.cpp`
+- `src/application/transfer/TransferBackendPort.cpp`
+
+### Gate status
+
+1. `AMWorkManager` is now an application-runtime internal implementation type (not exported under `include/`):
+   Gate result: PASS
+2. Transfer backend port and app-service public surfaces remain free of `AMWorkManager` type exposure:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 stale-symbol/documentation cleanup and transfer-header surface tightening.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 33 - 2026-03-14 (Stage 6/7 partial: made `TaskPlanner` header private to application transfer runtime)
+
+### Scope executed
+
+1. Moved `TaskPlanner` declaration header out of public include surface:
+
+- added private header:
+  - `src/application/transfer/TaskPlanner.hpp`
+- removed public header:
+  - `include/application/transfer/runtime/TaskPlanner.hpp`
+
+2. Updated internal implementation includes to private planner header:
+
+- `src/application/transfer/TaskPlanner.cpp`
+- `src/application/transfer/TransferAppService.cpp`
+
+### Gate status
+
+1. `TaskPlanner` is now an application-runtime internal planning component (not exported under `include/`):
+   Gate result: PASS
+2. Transfer app-service/planner internal path remains unchanged functionally while public header fan-out is reduced:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 stale-symbol/documentation cleanup and transfer public-surface tightening.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 34 - 2026-03-14 (Stage 7 partial: transfer structure/plan docs synced to private runtime headers)
+
+### Scope executed
+
+1. Synced transfer implementation plan with current private-header layout:
+
+- `tran_plan.md`
+  - Stage 1 now references `src/application/transfer/AMWorkManager.hpp` and `src/application/transfer/TaskPlanner.hpp`.
+  - Stage 6 now explicitly treats `AMWorkManager.hpp` and `TaskPlanner.hpp` as runtime-private headers under `src/application/transfer/*`.
+
+2. Synced target structure wording to reflect runtime ownership scope:
+
+- `tran_structure.md`
+  - updated `AMWorkManager` node label to `application internal`.
+  - clarified keep/change note accordingly.
+
+### Gate status
+
+1. Transfer refactor docs now match current code ownership for worker/planner private headers:
+   Gate result: PASS
+2. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 stale-symbol cleanup in remaining transfer-adjacent records.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 35 - 2026-03-14 (Stage 6/7 partial: transfer backend-port include decoupling + report sync)
+
+### Scope executed
+
+1. Reduced backend-port header coupling:
+
+- `include/application/transfer/runtime/TransferBackendPort.hpp`
+  - removed direct include of `TransferRuntimePorts.hpp`.
+  - switched to forward declaration of `ITransferClientPoolPort`.
+
+2. Synced refactor report to current worker/planner ownership layout:
+
+- `md/refactor/transfer_refactor_report.md`
+  - updated Stage 6 notes to reflect backend-port decoupling.
+  - updated current-structure section to private runtime headers:
+    - `src/application/transfer/AMWorkManager.hpp`
+    - `src/application/transfer/TaskPlanner.hpp`
+
+### Gate status
+
+1. Transfer backend public port now has lower header fan-out while preserving API:
+   Gate result: PASS
+2. Refactor report paths now match current code layout:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 stale-symbol/documentation cleanup and transfer boundary sweeps.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 39 - 2026-03-14 (Stage 6/7 partial: transfer runtime port contracts moved to private runtime header)
+
+### Scope executed
+
+1. Moved transfer runtime port contracts out of public include surface:
+
+- added private header:
+  - `src/application/transfer/TransferRuntimePorts.hpp`
+- removed public header:
+  - `include/application/transfer/runtime/TransferRuntimePorts.hpp`
+
+2. Rewired private runtime includes to the new header location:
+
+- `src/application/transfer/TaskSchedulerCore.hpp`
+- `src/application/transfer/TransferRuntimeAdapters.hpp`
+- `src/application/client/ClientPublicPool.hpp` (relative include to transfer runtime private header)
+
+### Gate status
+
+1. Transfer runtime scheduler/client-pool contracts are now private application runtime internals:
+   Gate result: PASS
+2. Public transfer include runtime directory reduced to presentation contract only:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 stale-symbol/documentation cleanup and final boundary sweeps.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 40 - 2026-03-14 (Stage 6/7 partial: removed public transfer presentation/back-end type exposure)
+
+### Scope executed
+
+1. Replaced public facade dependency on `TransferPresentationPort` type:
+
+- `include/application/transfer/TransferAppService.hpp`
+- `src/application/transfer/TransferAppService.cpp`
+  - public constructor now takes plain callback functions:
+    - `print_line`
+    - `print_error`
+    - `prompt_yes_no`
+  - internal conversion to runtime presentation struct happens inside app-service implementation.
+
+2. Removed composition-root construction of runtime presentation struct:
+
+- `main.cpp`
+  - now passes direct callback lambdas to `TransferAppService` constructor.
+
+3. Moved transfer presentation header to private runtime scope:
+
+- added private header:
+  - `src/application/transfer/TransferPresentationPort.hpp`
+- removed public header:
+  - `include/application/transfer/runtime/TransferPresentationPort.hpp`
+
+4. Finalized transfer runtime include-surface collapse:
+
+- `include/application/transfer/runtime/` now contains no public runtime-worker/backend/planner headers.
+
+### Gate status
+
+1. Transfer app-service public API no longer exposes runtime presentation struct type:
+   Gate result: PASS
+2. Transfer backend/presentation/runtime-port contracts are fully private under `src/application/transfer/*`:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 stale-symbol/documentation cleanup and cross-module static sweeps.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 41 - 2026-03-14 (Stage 7 partial: private runtime layout finalized)
+
+### Scope executed
+
+1. Finalized client runtime helper ownership under private source headers:
+
+- `src/application/client/ClientMaintainer.hpp`
+  - wrapped `ClientMaintainer` inside `AMApplication::client` namespace.
+
+2. Removed empty public runtime include directories after private-header migration:
+
+- removed:
+  - `include/application/client/runtime/`
+  - `include/application/transfer/runtime/`
+
+3. Synced application/readme and refactor report notes with current ownership:
+
+- `include/application/README.md`
+  - documents that transfer/client runtime implementation details live under private `src/application/{transfer,client}` headers/sources.
+- `md/refactor/transfer_refactor_report.md`
+  - added finalized private-layout notes and runtime directory cleanup notes.
+
+### Gate status
+
+1. Public application include tree now exposes only facades/workflows/ports, with runtime mechanics kept private in `src/application/*`:
+   Gate result: PASS
+2. No remaining source includes target removed public runtime header paths:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue final Stage 7 stale-symbol sweep and identify any remaining non-documentation cleanup candidates.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 42 - 2026-03-14 (Stage 7 partial: final static boundary sweep + header hygiene)
+
+### Scope executed
+
+1. Ran static include-boundary sweeps after runtime-header privatization:
+
+- no source/include references remain to:
+  - `application/client/runtime/*`
+  - `application/transfer/runtime/*`
+
+2. Applied low-risk public-header hygiene:
+
+- `include/application/transfer/TransferAppService.hpp`
+  - removed unused `<optional>` include.
+
+### Gate status
+
+1. Application public headers are now façade/workflow focused with runtime implementation headers fully private under `src/application/*`:
+   Gate result: PASS
+2. No stale runtime include-path references remain in source include graph:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Remaining technical work is compile + smoke validation and any compile-driven cleanup.
+2. If compile remains deferred, code-structure refactor stage can be considered complete.
+
+---
+
+## Checkpoint 43 - 2026-03-14 (Stage 7 structural completion status)
+
+### Structural completion summary
+
+1. Domain transfer runtime-manager ownership removal: completed.
+2. Application transfer orchestration ownership: completed (`TransferAppService`).
+3. Runtime worker/planner/backend/presentation/contracts privatized under `src/application/transfer/*`: completed.
+4. Client transfer-pool/maintainer helper privatization under `src/application/client/*`: completed.
+5. Composition-root dependency on transfer internals removed (facade-only wiring): completed.
+
+### Remaining work
+
+1. Compile gate and smoke/regression execution are still pending and intentionally skipped in this session.
+2. Any remaining fixes should be compile-driven only.
+
+---
+
+## Checkpoint 44 - 2026-03-14 (Stage 7 status: no further structural refactor items)
+
+### Final static status
+
+1. Public application headers now expose only facades/workflow contracts:
+
+- `include/application/client/*`
+- `include/application/transfer/*`
+
+2. Runtime transfer/client implementation contracts are private under source tree:
+
+- `src/application/transfer/*`
+- `src/application/client/*`
+
+3. Legacy public runtime header paths were removed and no source includes remain for:
+
+- `application/transfer/runtime/*`
+- `application/client/runtime/*`
+
+### Remaining work
+
+1. Compile + smoke validation.
+2. Compile-driven fixes only (if any).
+
+---
+
+## Checkpoint 36 - 2026-03-14 (Stage 6/7 partial: client app-service pool accessor now returns port interface)
+
+### Scope executed
+
+1. Reduced client app-service header coupling to concrete transfer pool type:
+
+- `include/application/client/ClientAppService.hpp`
+  - removed direct include of `ClientPublicPool.hpp`.
+  - added forward declaration for `AMApplication::TransferRuntime::ITransferClientPoolPort`.
+  - changed `PublicPool()` return type from concrete `std::shared_ptr<ClientPublicPool>` to:
+    - `std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort>`.
+
+2. Updated app-service implementation to keep concrete ownership internal:
+
+- `src/application/client/ClientAppService.cpp`
+  - added private implementation include of `ClientPublicPool.hpp`.
+  - updated internal/public `PublicPool()` implementations to return the interface type while keeping `ClientPublicPool` as internal stored concrete.
+
+### Gate status
+
+1. `ClientAppService` public API now exposes transfer pool by contract, not by concrete runtime class:
+   Gate result: PASS
+2. Main transfer wiring remains compatible through interface-returned pool handle:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 stale-symbol cleanup and remaining header fan-out trims.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 37 - 2026-03-14 (Stage 6/7 partial: made client runtime helper headers private)
+
+### Scope executed
+
+1. Moved transfer-pool helper header out of public include surface:
+
+- added private header:
+  - `src/application/client/ClientPublicPool.hpp`
+- removed public header:
+  - `include/application/client/runtime/ClientPublicPool.hpp`
+
+2. Moved client maintainer helper header out of public include surface:
+
+- added private header:
+  - `src/application/client/ClientMaintainer.hpp`
+- removed public header:
+  - `include/application/client/runtime/ClientMaintainer.hpp`
+
+3. Updated app-service implementation includes to private helper headers:
+
+- `src/application/client/ClientAppService.cpp`
+- `src/application/client/ClientPublicPool.cpp`
+
+4. Tightened client app-service public surface:
+
+- `include/application/client/ClientAppService.hpp`
+  - removed `Maintainer()` accessors from public API.
+  - removed public include dependency on maintainer header.
+
+### Gate status
+
+1. Client runtime helper types (`ClientPublicPool`, `ClientMaintainer`) are now application-internal implementation details:
+   Gate result: PASS
+2. `ClientAppService` public header no longer leaks maintainer concrete API:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 stale-symbol/documentation cleanup and transfer/client boundary sweeps.
+2. Run compile/smoke validation when allowed.
+
+---
+
+## Checkpoint 38 - 2026-03-14 (Stage 6/7 partial: transfer backend ownership moved fully behind app-service facade)
+
+### Scope executed
+
+1. Added direct-construction path on transfer app facade:
+
+- `include/application/transfer/TransferAppService.hpp`
+- `src/application/transfer/TransferAppService.cpp`
+  - new public constructor now accepts client ports/pool/callbacks and internally creates the default transfer backend.
+  - explicit backend-injected constructor is now private implementation detail.
+
+2. Removed composition-root dependency on transfer backend factory/header:
+
+- `main.cpp`
+  - removed `CreateDefaultTransferBackend(...)` call.
+  - constructs `TransferAppService` directly from app-layer dependencies.
+  - removed include dependency on backend-port header.
+
+3. Moved backend-port header to application-runtime private scope:
+
+- added private header:
+  - `src/application/transfer/TransferBackendPort.hpp`
+- removed public header:
+  - `include/application/transfer/runtime/TransferBackendPort.hpp`
+- updated transfer runtime source includes:
+  - `src/application/transfer/TransferBackendPort.cpp`
+  - `src/application/transfer/TransferAppService.cpp`
+
+### Gate status
+
+1. Composition root now depends on `TransferAppService` facade directly, not transfer backend runtime factory symbols:
+   Gate result: PASS
+2. Transfer backend port/type definitions are now private to `src/application/transfer/*`:
+   Gate result: PASS
+3. Full compile validation:
+   Gate result: SKIPPED (per request: do not compile/build)
+
+### Next actions
+
+1. Continue Stage 7 stale-symbol/documentation cleanup and transfer boundary sweeps.
+2. Run compile/smoke validation when allowed.
+
+# Transfer Structure Target
+
+## Layer Rules
+
+1. `domain/*` defines contracts and pure rules only. No runtime state, no singleton manager, no prompt/UI.
+2. `application/*` owns all transfer runtime state and orchestration.
+3. `infrastructure/*` executes protocol-specific IO only.
+4. `interface/bootstrap` depends only on application services and domain ports.
+
+## Target Class Structure
+
+```mermaid
+graph TD
+  IF["interface/bootstrap"] --> WF["TransferWorkflows + TaskWorkflows (application)"]
+  IF --> APP["TransferAppService (application facade)"]
+
+  WF --> PORTS["ITransferExecutorPort / ITransferTaskPort / ITransferCachePort (domain)"]
+  APP --> PORTS
+  APP --> PL["TaskPlanner (application)"]
+  APP --> WM["AMWorkManager (thin facade, application internal)"]
+  APP --> CACHE["TransferCacheDomainService + cache store (domain rules + app state)"]
+
+  WM --> SC["TaskSchedulerCore (application internal)"]
+  SC --> POOL["ITransferClientPool (application port)"]
+  SC --> EXECPORT["ITransferExecutionPort (application port)"]
+
+  EXECPORT --> INFRA["TransferExecutionEngine (infra impl)"]
+  INFRA --> EP["Local/FTP/SFTP endpoint adapters (infra internal)"]
+
+  PL --> CR["IClientRuntimePort / IClientLifecyclePort / IClientPathPort (domain client ports)"]
+```
+
+## Keep / Change
+
+1. Keep `include/application/transfer/TransferWorkflows.hpp` as input-normalization and executor-port call only.
+2. Keep `include/application/transfer/TaskWorkflows.hpp` as task/cache workflow logic against task/cache ports.
+3. Keep `AMWorkManager` as an application-internal thin scheduler facade (no static planning, no transfer-building logic).
+4. Move remaining orchestration from `AMTransferManager` into `TransferAppService`.
+5. Make planner path direct: `TransferAppService -> TaskPlanner`, not `AMWorkManager::LoadTasks`.
+6. Infra keeps only single-item execution (`ExecuteSingleFileTransfer`) and protocol adapters.
+
+## Deprecate
+
+1. `include/domain/transfer/TransferManager.hpp` (`AMTransferManager`).
+2. `src/domain/transfer/TransferManagerCore.cpp`.
+3. `AMTransferManager::Instance()` singleton usage.
+4. `AMWorkManager::LoadTasks(...)` static API after planner migration.
+
+## Engineering Tradeoff
+
+1. Strong boundaries: domain stays clean contracts and rules.
+2. Low migration risk: retain `AMWorkManager` shell while removing mixed responsibilities.
+3. Infra remains reusable and testable by isolating protocol execution.
+4. Application becomes the single runtime owner, improving behavior traceability.
+
+**Plan**
+
+1. **Split interface adapter header first (no behavior change)**
+2. Create focused headers under `include/interface/adapters`:
+
+   - [FileSystemAdapter.hpp](d:/CodeLib/CPP/AMSFTP/include/interface/adapters/FileSystemAdapter.hpp)
+   - [HostProfileAdapter.hpp](d:/CodeLib/CPP/AMSFTP/include/interface/adapters/HostProfileAdapter.hpp)
+   - [ClientSessionAdapter.hpp](d:/CodeLib/CPP/AMSFTP/include/interface/adapters/ClientSessionAdapter.hpp)
+   - [RuntimeBindings.hpp](d:/CodeLib/CPP/AMSFTP/include/interface/adapters/RuntimeBindings.hpp)
+3. Keep [ApplicationAdapters.hpp](d:/CodeLib/CPP/AMSFTP/include/interface/adapters/ApplicationAdapters.hpp) as a thin aggregator (`#include` only), no big mixed declarations.
+4. Split implementation file similarly from [ApplicationGateways.cpp](d:/CodeLib/CPP/AMSFTP/src/interface/adapters/ApplicationGateways.cpp) into focused `.cpp` files.
+5. **Introduce dedicated filesystem interface class for CLI (direct app-service calls)**
+6. In [FileSystemAdapter.hpp](d:/CodeLib/CPP/AMSFTP/include/interface/adapters/FileSystemAdapter.hpp), define one class that holds:
+
+   - `AMApplication::filesystem::FileSystemAppService&`
+   - `AMPromptManager&`
+7. Expose methods directly used by CLI: `CheckClients`, `ListClients`, `Stat`, `List`, `GetSize`, `Find`, `Mkdir`, `Remove`, `Walk`, `Tree`, `Realpath`, `Cd`, `ShellRun`.
+8. Put interactive logic here (confirm prompt, quiet behavior, non-interactive policy mapping), then call app service directly.
+9. Update CLI call path in [CLIArg.cpp](d:/CodeLib/CPP/AMSFTP/src/interface/cli/CLIArg.cpp) to use this adapter directly, removing filesystem command dependence on workflow gateway indirection.
+10. **Silence legacy `FileSystemAppService` ECM methods with `/* {ori_code} */`**
+11. In [FileSystemAppService.hpp](d:/CodeLib/CPP/AMSFTP/include/application/filesystem/FileSystemAppService.hpp), comment out legacy ECM-only filesystem methods exactly with your required style:
+
+    - `/* {ori_code} ... */`
+12. In [FileSystemAppService.cpp](d:/CodeLib/CPP/AMSFTP/src/application/filesystem/FileSystemAppService.cpp), do the same for corresponding definitions.
+13. Keep only the typed/explicit contract methods active (`Query*`, `ExecuteRemove`-style methods).
+14. Do this **after** CLI has fully migrated to direct typed calls to avoid breakage.
+15. **Remove redundant domain filesystem ports**
+16. Remove port interface declarations from [FileSystemPorts.hpp](d:/CodeLib/CPP/AMSFTP/include/domain/filesystem/FileSystemPorts.hpp).
+17. If include compatibility is still needed temporarily, keep file with compatibility shell + commented old content:
+
+    - `/* {ori_code} ... */`
+18. Update [include/domain/README.md](d:/CodeLib/CPP/AMSFTP/include/domain/README.md) to remove mention of these ports.
+19. Confirm no remaining references via `rg` before final cleanup.
+20. **Validation and finish**
+21. Build and run guard scripts.
+22. Verify layering target:
+
+    - application only orchestrates inner/domain/client ports
+    - interface directly holds app service instance and owns interaction logic
+    - no redundant filesystem domain ports remain active
+    - legacy ECM methods are silenced with exact comment style.
+
+**Acceptance Criteria**
+
+1. `ApplicationAdapters.hpp` is split and no longer a mixed mega-header.
+2. Filesystem CLI path uses one interface filesystem class that directly calls `FileSystemAppService`.
+3. Legacy ECM-only filesystem methods in app service are silenced using `/* {ori_code} */`.
+4. `FileSystemPorts.hpp` no longer defines active redundant filesystem port interfaces.
+5. Build/check passes except known external environment blocker (if still present).

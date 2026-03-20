@@ -18,7 +18,6 @@
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 
-
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
@@ -583,7 +582,6 @@ using WalkErrorCallback =
     std::shared_ptr<std::function<void(const std::string &, const ECM &)>>;
 using WRD =
     std::vector<std::pair<std::vector<std::string>, std::vector<PathInfo>>>;
-using amf = std::shared_ptr<TaskControlToken>;
 using EC = ErrorCode;
 using ECM = std::pair<ErrorCode, std::string>;
 using WER = std::vector<std::pair<std::string, ECM>>;
@@ -809,8 +807,7 @@ inline std::pair<ECM, PathInfo> stat(const std::string &path,
 }
 
 inline std::pair<ECM, std::vector<PathInfo>>
-listdir(const std::string &path, amf interrupt_flag = nullptr,
-        int timeout_ms = -1,
+listdir(const std::string &path, int timeout_ms = -1,
         std::chrono::steady_clock::time_point start_time =
             std::chrono::steady_clock::now()) {
   std::string pathf = path;
@@ -835,9 +832,9 @@ listdir(const std::string &path, amf interrupt_flag = nullptr,
         result};
   }
   for (const auto &entry : dir_iter) {
-    if (interrupt_flag && !interrupt_flag->IsRunning()) {
-      return {ECM{EC::Terminate, "Listdir interrupted by user"}, result};
-    }
+    // if (interrupt_flag && !interrupt_flag->IsRunning()) {
+    //   return {ECM{EC::Terminate, "Listdir interrupted by user"}, result};
+    // }
     if (timeout_ms > 0 && std::chrono::steady_clock::now() - start_time >
                               std::chrono::milliseconds(timeout_ms)) {
       return {ECM{EC::OperationTimeout, "Listdir timeout"}, result};

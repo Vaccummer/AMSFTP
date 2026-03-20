@@ -14,34 +14,39 @@ namespace {
 using ECM = std::pair<ErrorCode, std::string>;
 using EC = ErrorCode;
 using ClientHandle = AMDomain::client::ClientHandle;
-using ParsedClientPath = AMDomain::client::ParsedClientPath;
-using ConfirmPolicy = AMDomain::filesystem::ConfirmPolicy;
-using RemoveRequest = AMDomain::filesystem::RemoveRequest;
 using RemoveResult = AMDomain::filesystem::RemoveResult;
-using StatPathsResult = AMDomain::filesystem::StatPathsResult;
+using StatPathResult = AMDomain::filesystem::StatPathResult;
 using ListPathResult = AMDomain::filesystem::ListPathResult;
-using GetSizeResult = AMDomain::filesystem::GetSizeResult;
+using GetSizeEntryResult = AMDomain::filesystem::GetSizeEntryResult;
 using FindResult = AMDomain::filesystem::FindResult;
 using WalkQueryResult = AMDomain::filesystem::WalkQueryResult;
-using TreeQueryResult = AMDomain::filesystem::TreeQueryResult;
 using RealpathQueryResult = AMDomain::filesystem::RealpathQueryResult;
+using RttQueryResult = AMDomain::filesystem::RttQueryResult;
 using WalkPayload = AMDomain::filesystem::WalkPayload;
 using ListPathPayload = AMDomain::filesystem::ListPathPayload;
 using SizeEntry = AMDomain::filesystem::SizeEntry;
 using RealpathEntry = AMDomain::filesystem::RealpathEntry;
+using amf = AMApplication::filesystem::amf;
 
 /**
  * @brief Return true when the external interrupt flag is terminated.
  */
-bool IsInterrupted_(const amf &interrupt_flag) {
-  return interrupt_flag && !interrupt_flag->IsRunning();
+bool IsInterrupted_(amf interrupt_flag) {
+  return interrupt_flag && interrupt_flag->IsInterrupted();
 }
 
 /**
- * @brief Merge per-item operation status by keeping latest failure.
+ * @brief Adapt task-level interrupt token into client control token.
  */
-ECM MergeStatus_(const ECM &current, const ECM &next) {
-  return isok(next) ? current : next;
+AMDomain::client::amf ToClientInterrupt_(amf interrupt_flag) {
+  return interrupt_flag;
+}
+
+AMDomain::filesystem::ClientIOControlArgs
+MakeControlArgs_(amf interrupt_flag, int timeout_ms = -1,
+                 int64_t start_time = -1) {
+  return AMDomain::client::MakeClientIOControlArgs(
+      ToClientInterrupt_(interrupt_flag), timeout_ms, start_time);
 }
 
 /**
@@ -53,219 +58,114 @@ public:
    * @brief Construct backend from split runtime/lifecycle/path client ports.
    */
   DefaultFileSystemBackend(AMDomain::client::IClientRuntimePort &runtime_port,
-                           AMDomain::client::IClientLifecyclePort &lifecycle_port,
                            AMDomain::client::IClientPathPort &path_port)
-      : runtime_port_(runtime_port), lifecycle_port_(lifecycle_port),
-        path_port_(path_port) {}
+      : runtime_port_(runtime_port), path_port_(path_port) {}
 
-  ECM CheckClients(const std::vector<std::string> &nicknames, bool detail,
-                   amf interrupt_flag) override {
-    (void)detail;
+  /**
+   * @brief Query RTT for current client with typed payload.
+   */
+  RttQueryResult QueryRtt(int times, amf interrupt_flag) override {
     if (IsInterrupted_(interrupt_flag)) {
-      return Err(EC::Terminate, "Interrupted by user");
+      return {Err(EC::Terminate, "Interrupted by user"), 0.0};
     }
-    std::vector<std::string> targets = nicknames;
-    if (targets.empty()) {
-      targets = runtime_port_.GetClientNames();
+    auto client = runtime_port_.GetCurrentClient();
+    if (!client) {
+      return {Err(EC::ClientNotFound, "Current client not found"), 0.0};
     }
-    if (targets.empty()) {
-      return Err(EC::ClientNotFound, "No client to check");
+    const auto rtt_res = client->IOPort().GetRTT({times, MakeControlArgs_(
+                                                             interrupt_flag)});
+    if (!isok(rtt_res.rcm)) {
+      return {rtt_res.rcm, 0.0};
     }
-
-    ECM status = Ok();
-    for (const auto &name : targets) {
-      if (IsInterrupted_(interrupt_flag)) {
-        return Err(EC::Terminate, "Interrupted by user");
-      }
-      auto [rcm, _client] =
-          lifecycle_port_.CheckClient(name, true, interrupt_flag);
-      status = MergeStatus_(status, rcm);
-    }
-    return status;
-  }
-
-  ECM ListClients(bool detail, amf interrupt_flag) override {
-    return CheckClients({}, detail, interrupt_flag);
-  }
-
-  ECM DisconnectClients(const std::vector<std::string> &nicknames) override {
-    if (nicknames.empty()) {
-      return Err(EC::InvalidArg, "No nickname is given");
-    }
-    ECM status = Ok();
-    for (const auto &name : nicknames) {
-      status = MergeStatus_(status, lifecycle_port_.RemoveClient(name));
-    }
-    return status;
-  }
-
-  ECM StatPaths(const std::vector<std::string> &paths, amf interrupt_flag,
-                int timeout_ms) override {
-    return QueryStatPaths(paths, interrupt_flag, timeout_ms).rcm;
-  }
-
-  ECM ListPath(const std::string &path, bool list_like, bool show_all,
-               amf interrupt_flag, int timeout_ms) override {
-    return QueryListPath(path, list_like, show_all, interrupt_flag, timeout_ms)
-        .rcm;
-  }
-
-  ECM GetSize(const std::vector<std::string> &paths, amf interrupt_flag,
-              int timeout_ms) override {
-    return QueryGetSize(paths, interrupt_flag, timeout_ms).rcm;
-  }
-
-  ECM Find(const std::string &path, SearchType type, amf interrupt_flag,
-           int timeout_ms) override {
-    return QueryFind(path, type, interrupt_flag, timeout_ms).rcm;
-  }
-
-  ECM Mkdir(const std::vector<std::string> &paths, amf interrupt_flag,
-            int timeout_ms) override {
-    if (paths.empty()) {
-      return Err(EC::InvalidArg, "No path is given");
-    }
-    ECM status = Ok();
-    for (const auto &raw : paths) {
-      if (IsInterrupted_(interrupt_flag)) {
-        return Err(EC::Terminate, "Interrupted by user");
-      }
-      auto [parse_rcm, client, abs_path] = ResolvePath_(raw, interrupt_flag);
-      if (!isok(parse_rcm) || !client) {
-        status = MergeStatus_(status, parse_rcm);
-        continue;
-      }
-      status = MergeStatus_(status, client->IOPort().mkdirs(abs_path, timeout_ms, -1));
-    }
-    return status;
-  }
-
-  ECM Remove(const std::vector<std::string> &paths, bool permanent, bool force,
-             bool quiet, amf interrupt_flag, int timeout_ms) override {
-    RemoveRequest request = {};
-    request.paths = paths;
-    request.permanent = permanent;
-    request.confirm_policy =
-        force ? ConfirmPolicy::AutoApprove : ConfirmPolicy::RequireConfirm;
-    request.quiet = quiet;
-    request.timeout_ms = timeout_ms;
-    return ExecuteRemove(request, interrupt_flag).rcm;
+    return {Ok(), rtt_res.rtt_ms};
   }
 
   /**
-   * @brief Execute remove request with explicit confirmation policy.
+   * @brief Create directory for explicit client target.
    */
-  RemoveResult ExecuteRemove(const RemoveRequest &request,
-                             amf interrupt_flag) override {
-    if (request.paths.empty()) {
-      return {Err(EC::InvalidArg, "No path is given"), {}};
+  ECM MkdirForClient(const std::string &nickname, const std::string &path,
+                     amf interrupt_flag, int timeout_ms) override {
+    auto [parse_rcm, client, abs_path] =
+        ResolvePathForClient_(nickname, path, interrupt_flag);
+    if (!isok(parse_rcm) || !client) {
+      return parse_rcm;
     }
-    if (request.confirm_policy == ConfirmPolicy::DenyIfConfirmNeeded) {
-      return {Err(EC::ConfigCanceled, "remove denied by confirmation policy"),
-              {}};
-    }
-    if (request.confirm_policy == ConfirmPolicy::RequireConfirm) {
-      return {Err(EC::ConfigCanceled,
-                  "remove requires explicit confirmation in interface layer"),
-              {}};
-    }
-    ECM status = Ok();
-    for (const auto &raw : request.paths) {
-      if (IsInterrupted_(interrupt_flag)) {
-        return {Err(EC::Terminate, "Interrupted by user"), {}};
-      }
-      auto [parse_rcm, client, abs_path] = ResolvePath_(raw, interrupt_flag);
-      if (!isok(parse_rcm) || !client) {
-        status = MergeStatus_(status, parse_rcm);
-        continue;
-      }
-      if (request.permanent) {
-        auto [rcm, _errors] =
-            client->IOPort().remove(abs_path, nullptr, request.timeout_ms, -1);
-        status = MergeStatus_(status, rcm);
-      } else {
-        status = MergeStatus_(
-            status, client->IOPort().saferm(abs_path, request.timeout_ms, -1));
-      }
-    }
-    return {status, {}};
-  }
-
-  ECM Walk(const std::string &path, bool only_file, bool only_dir,
-           bool show_all, bool ignore_special_file, bool quiet,
-           amf interrupt_flag, int timeout_ms) override {
-    return QueryWalk(path, only_file, only_dir, show_all, ignore_special_file,
-                     quiet, interrupt_flag, timeout_ms)
-        .rcm;
-  }
-
-  ECM Tree(const std::string &path, int max_depth, bool only_dir,
-           bool show_all, bool ignore_special_file, bool quiet,
-           amf interrupt_flag, int timeout_ms) override {
-    return QueryTree(path, max_depth, only_dir, show_all, ignore_special_file,
-                     quiet, interrupt_flag, timeout_ms)
-        .rcm;
-  }
-
-  ECM Realpath(const std::string &path, amf interrupt_flag,
-               int timeout_ms) override {
-    return QueryRealpath(path, interrupt_flag, timeout_ms).rcm;
+    return client->IOPort().mkdirs(
+        {abs_path, MakeControlArgs_(interrupt_flag, timeout_ms, -1)});
   }
 
   /**
-   * @brief Query stat information for multiple paths with typed payload.
+   * @brief Remove one path for explicit client target.
    */
-  StatPathsResult QueryStatPaths(const std::vector<std::string> &paths,
-                                 amf interrupt_flag,
-                                 int timeout_ms) override {
-    if (paths.empty()) {
-      return {Err(EC::InvalidArg, "No path is given"), {}};
-    }
-    ECM status = Ok();
-    std::vector<PathInfo> items = {};
-    for (const auto &raw : paths) {
-      if (IsInterrupted_(interrupt_flag)) {
-        return {Err(EC::Terminate, "Interrupted by user"), std::move(items)};
-      }
-      auto [parse_rcm, client, abs_path] = ResolvePath_(raw, interrupt_flag);
-      if (!isok(parse_rcm) || !client) {
-        status = MergeStatus_(status, parse_rcm);
-        continue;
-      }
-      auto [rcm, info] = client->IOPort().stat(abs_path, false, timeout_ms, -1);
-      status = MergeStatus_(status, rcm);
-      if (isok(rcm)) {
-        items.emplace_back(std::move(info));
-      }
-    }
-    return {status, std::move(items)};
-  }
-
-  /**
-   * @brief Query list payload for one path with target metadata and entries.
-   */
-  ListPathResult QueryListPath(const std::string &path, bool list_like,
-                               bool show_all, amf interrupt_flag,
-                               int timeout_ms) override {
-    (void)list_like;
-    const std::string raw = path.empty() ? "." : path;
-    auto [parse_rcm, client, abs_path] = ResolvePath_(raw, interrupt_flag);
+  RemoveResult ExecuteRemoveForClient(const std::string &nickname,
+                                      const std::string &path, bool permanent,
+                                      bool quiet, amf interrupt_flag,
+                                      int timeout_ms) override {
+    (void)quiet;
+    auto [parse_rcm, client, abs_path] =
+        ResolvePathForClient_(nickname, path, interrupt_flag);
     if (!isok(parse_rcm) || !client) {
       return {parse_rcm, {}};
     }
-    auto [rcm, info] = client->IOPort().stat(abs_path, false, timeout_ms, -1);
-    if (!isok(rcm)) {
-      return {rcm, {}};
+    if (permanent) {
+      auto remove_res = client->IOPort().remove(
+          {abs_path, nullptr, MakeControlArgs_(interrupt_flag, timeout_ms, -1)});
+      return {remove_res.rcm, {}};
+    }
+    return {client->IOPort().saferm(
+                {abs_path, MakeControlArgs_(interrupt_flag, timeout_ms, -1)}),
+            {}};
+  }
+
+  /**
+   * @brief Query stat for explicit client target.
+   */
+  StatPathResult QueryStatPath(const std::string &nickname,
+                               const std::string &path, amf interrupt_flag,
+                               int timeout_ms) override {
+    auto [parse_rcm, client, abs_path] =
+        ResolvePathForClient_(nickname, path, interrupt_flag);
+    if (!isok(parse_rcm) || !client) {
+      return {parse_rcm, {}};
+    }
+    auto stat_res = client->IOPort().stat(
+        {abs_path, false, MakeControlArgs_(interrupt_flag, timeout_ms, -1)});
+    if (!isok(stat_res.rcm)) {
+      return {stat_res.rcm, {}};
+    }
+    return {Ok(), std::move(stat_res.info)};
+  }
+
+  /**
+   * @brief Query list payload for explicit client target.
+   */
+  ListPathResult QueryListPathForClient(const std::string &nickname,
+                                        const std::string &path, bool list_like,
+                                        bool show_all, amf interrupt_flag,
+                                        int timeout_ms) override {
+    (void)list_like;
+    auto [parse_rcm, client, abs_path] =
+        ResolvePathForClient_(nickname, path.empty() ? "." : path, interrupt_flag);
+    if (!isok(parse_rcm) || !client) {
+      return {parse_rcm, {}};
+    }
+
+    auto stat_res = client->IOPort().stat(
+        {abs_path, false, MakeControlArgs_(interrupt_flag, timeout_ms, -1)});
+    if (!isok(stat_res.rcm)) {
+      return {stat_res.rcm, {}};
     }
     ListPathPayload payload = {};
-    payload.target = info;
-    if (info.type != PathType::DIR) {
+    payload.target = stat_res.info;
+    if (stat_res.info.type != PathType::DIR) {
       return {Ok(), std::move(payload)};
     }
-    auto [list_rcm, entries] = client->IOPort().listdir(abs_path, timeout_ms, -1);
-    if (!isok(list_rcm)) {
-      return {list_rcm, std::move(payload)};
+    auto list_res = client->IOPort().listdir(
+        {abs_path, MakeControlArgs_(interrupt_flag, timeout_ms, -1)});
+    if (!isok(list_res.rcm)) {
+      return {list_res.rcm, std::move(payload)};
     }
+    auto entries = std::move(list_res.entries);
     if (!show_all) {
       entries.erase(
           std::remove_if(entries.begin(), entries.end(),
@@ -279,75 +179,78 @@ public:
   }
 
   /**
-   * @brief Query recursive sizes for multiple paths with typed payload.
+   * @brief Query size for explicit client target.
    */
-  GetSizeResult QueryGetSize(const std::vector<std::string> &paths,
-                             amf interrupt_flag, int timeout_ms) override {
-    if (paths.empty()) {
-      return {Err(EC::InvalidArg, "No path is given"), {}};
-    }
-    ECM status = Ok();
-    std::vector<SizeEntry> items = {};
-    for (const auto &raw : paths) {
-      if (IsInterrupted_(interrupt_flag)) {
-        return {Err(EC::Terminate, "Interrupted by user"), std::move(items)};
-      }
-      auto [parse_rcm, client, abs_path] = ResolvePath_(raw, interrupt_flag);
-      if (!isok(parse_rcm) || !client) {
-        status = MergeStatus_(status, parse_rcm);
-        continue;
-      }
-      auto [stat_rcm, _stat_info] =
-          client->IOPort().stat(abs_path, false, timeout_ms, -1);
-      if (!isok(stat_rcm)) {
-        status = MergeStatus_(status, stat_rcm);
-        continue;
-      }
-      const int64_t size = client->IOPort().getsize(abs_path, true, timeout_ms, -1);
-      SizeEntry item = {};
-      item.raw = raw;
-      item.abs_path = abs_path;
-      item.size = size;
-      items.emplace_back(std::move(item));
-    }
-    return {status, std::move(items)};
-  }
-
-  /**
-   * @brief Query find records for one pattern path.
-   */
-  FindResult QueryFind(const std::string &path, SearchType type,
-                       amf interrupt_flag, int timeout_ms) override {
-    auto [parse_rcm, client, abs_path] = ResolvePath_(path, interrupt_flag);
+  GetSizeEntryResult QueryGetSizeForClient(const std::string &nickname,
+                                           const std::string &path,
+                                           amf interrupt_flag,
+                                           int timeout_ms) override {
+    auto [parse_rcm, client, abs_path] =
+        ResolvePathForClient_(nickname, path, interrupt_flag);
     if (!isok(parse_rcm) || !client) {
       return {parse_rcm, {}};
     }
-    auto [stat_rcm, _stat_info] =
-        client->IOPort().stat(abs_path, false, timeout_ms, -1);
-    if (!isok(stat_rcm)) {
-      return {stat_rcm, {}};
+    auto stat_res = client->IOPort().stat(
+        {abs_path, false, MakeControlArgs_(interrupt_flag, timeout_ms, -1)});
+    if (!isok(stat_res.rcm)) {
+      return {stat_res.rcm, {}};
     }
-    return {Ok(), client->IOPort().find(abs_path, type, timeout_ms, -1)};
+    SizeEntry item = {};
+    item.raw = path;
+    item.abs_path = abs_path;
+    auto size_res = client->IOPort().getsize(
+        {abs_path, true, MakeControlArgs_(interrupt_flag, timeout_ms, -1)});
+    if (!isok(size_res.rcm)) {
+      return {size_res.rcm, {}};
+    }
+    item.size = size_res.size;
+    return {Ok(), std::move(item)};
   }
 
   /**
-   * @brief Query walk records and flatten filtered entries.
+   * @brief Query find for explicit client target.
    */
-  WalkQueryResult QueryWalk(const std::string &path, bool only_file,
-                            bool only_dir, bool show_all,
-                            bool ignore_special_file, bool quiet,
-                            amf interrupt_flag, int timeout_ms) override {
+  FindResult QueryFindForClient(const std::string &nickname,
+                                const std::string &path, SearchType type,
+                                amf interrupt_flag, int timeout_ms) override {
+    auto [parse_rcm, client, abs_path] =
+        ResolvePathForClient_(nickname, path, interrupt_flag);
+    if (!isok(parse_rcm) || !client) {
+      return {parse_rcm, {}};
+    }
+    auto stat_res = client->IOPort().stat(
+        {abs_path, false, MakeControlArgs_(interrupt_flag, timeout_ms, -1)});
+    if (!isok(stat_res.rcm)) {
+      return {stat_res.rcm, {}};
+    }
+    auto find_res = client->IOPort().find(
+        {abs_path, type, MakeControlArgs_(interrupt_flag, timeout_ms, -1)});
+    if (!isok(find_res.rcm)) {
+      return {find_res.rcm, {}};
+    }
+    return {Ok(), std::move(find_res.entries)};
+  }
+
+  /**
+   * @brief Query walk for explicit client target.
+   */
+  WalkQueryResult QueryWalkForClient(
+      const std::string &nickname, const std::string &path, bool only_file,
+      bool only_dir, bool show_all, bool ignore_special_file, bool quiet,
+      amf interrupt_flag, int timeout_ms) override {
     (void)quiet;
-    auto [parse_rcm, client, abs_path] = ResolvePath_(path, interrupt_flag);
+    auto [parse_rcm, client, abs_path] =
+        ResolvePathForClient_(nickname, path, interrupt_flag);
     if (!isok(parse_rcm) || !client) {
       return {parse_rcm, {}};
     }
 
-    auto [rcm, walk_res] = client->IOPort().iwalk(
-        abs_path, show_all, ignore_special_file, nullptr, timeout_ms, -1);
+    auto walk_res = client->IOPort().iwalk(
+        {abs_path, show_all, ignore_special_file, nullptr,
+         MakeControlArgs_(interrupt_flag, timeout_ms, -1)});
     WalkPayload payload = {};
-    payload.errors = walk_res.second;
-    for (const auto &info : walk_res.first) {
+    payload.errors = walk_res.errors;
+    for (const auto &info : walk_res.entries) {
       if (only_file && info.type != PathType::FILE) {
         continue;
       }
@@ -356,89 +259,57 @@ public:
       }
       payload.items.emplace_back(info);
     }
-    return {rcm, std::move(payload)};
+    return {walk_res.rcm, std::move(payload)};
   }
 
   /**
-   * @brief Query tree records and flatten branch results.
+   * @brief Query realpath for explicit client target.
    */
-  TreeQueryResult QueryTree(const std::string &path, int max_depth,
-                            bool only_dir, bool show_all,
-                            bool ignore_special_file, bool quiet,
-                            amf interrupt_flag, int timeout_ms) override {
-    (void)quiet;
-    auto [parse_rcm, client, abs_path] = ResolvePath_(path, interrupt_flag);
+  RealpathQueryResult QueryRealpathForClient(const std::string &nickname,
+                                             const std::string &path,
+                                             amf interrupt_flag,
+                                             int timeout_ms) override {
+    auto [parse_rcm, client, abs_path] =
+        ResolvePathForClient_(nickname, path, interrupt_flag);
     if (!isok(parse_rcm) || !client) {
       return {parse_rcm, {}};
     }
-
-    auto [rcm, walk_res] = client->IOPort().walk(abs_path, max_depth, show_all,
-                                                 ignore_special_file, nullptr,
-                                                 timeout_ms, -1);
-    WalkPayload payload = {};
-    payload.errors = walk_res.second;
-    for (const auto &branch : walk_res.first) {
-      for (const auto &info : branch.second) {
-        if (only_dir && info.type != PathType::DIR) {
-          continue;
-        }
-        payload.items.emplace_back(info);
-      }
-    }
-    return {rcm, std::move(payload)};
-  }
-
-  /**
-   * @brief Query realpath with typed result payload.
-   */
-  RealpathQueryResult QueryRealpath(const std::string &path, amf interrupt_flag,
-                                    int timeout_ms) override {
-    auto [parse_rcm, client, abs_path] = ResolvePath_(path, interrupt_flag);
-    if (!isok(parse_rcm) || !client) {
-      return {parse_rcm, {}};
-    }
-    auto [rcm, real] = client->IOPort().realpath(abs_path, timeout_ms, -1);
-    if (!isok(rcm)) {
-      return {rcm, {}};
+    auto real_res = client->IOPort().realpath(
+        {abs_path, MakeControlArgs_(interrupt_flag, timeout_ms, -1)});
+    if (!isok(real_res.rcm)) {
+      return {real_res.rcm, {}};
     }
     RealpathEntry entry = {};
     entry.raw = path;
-    entry.abs_path = real;
+    entry.abs_path = real_res.path;
     return {Ok(), std::move(entry)};
   }
 
-  ECM TestRtt(int times, amf interrupt_flag) override {
-    if (IsInterrupted_(interrupt_flag)) {
-      return Err(EC::Terminate, "Interrupted by user");
-    }
-    auto client = runtime_port_.GetCurrentClient();
-    if (!client) {
-      return Err(EC::ClientNotFound, "Current client not found");
-    }
-    (void)client->IOPort().GetRTT(times);
-    return Ok();
-  }
-
-  ECM Cd(const std::string &path, amf interrupt_flag,
-         bool from_history) override {
+  /**
+   * @brief Change workdir for explicit client target.
+   */
+  ECM CdForClient(const std::string &nickname, const std::string &path,
+                  amf interrupt_flag, bool from_history) override {
     (void)from_history;
-    auto [parse_rcm, client, abs_path] =
-        ResolvePath_(path.empty() ? "." : path, interrupt_flag);
+    auto [parse_rcm, client, abs_path] = ResolvePathForClient_(
+        nickname, path.empty() ? "." : path, interrupt_flag);
     if (!isok(parse_rcm) || !client) {
       return parse_rcm;
     }
-    auto [stat_rcm, stat_info] = client->IOPort().stat(abs_path, false, -1, -1);
-    if (!isok(stat_rcm)) {
-      return stat_rcm;
+    auto stat_res =
+        client->IOPort().stat({abs_path, false, MakeControlArgs_(interrupt_flag)});
+    if (!isok(stat_res.rcm)) {
+      return stat_res.rcm;
     }
-    if (stat_info.type != PathType::DIR) {
+    if (stat_res.info.type != PathType::DIR) {
       return Err(EC::NotADirectory, "Target is not a directory");
     }
 
-    const std::string nickname = client->ConfigPort().GetNickname();
-    auto state = path_port_.GetWorkdirState(nickname);
+    const std::string key = nickname.empty() ? client->ConfigPort().GetNickname()
+                                             : nickname;
+    auto state = path_port_.GetWorkdirState(key);
     state.cwd = abs_path;
-    auto set_rcm = path_port_.SetWorkdirState(nickname, state);
+    auto set_rcm = path_port_.SetWorkdirState(key, state);
     if (!isok(set_rcm)) {
       return set_rcm;
     }
@@ -456,43 +327,52 @@ public:
     if (!client) {
       return {Err(EC::ClientNotFound, "Current client not found"), {"", -1}};
     }
-    return client->IOPort().ConductCmd(cmd, max_time_ms);
+    auto run_res = client->IOPort().ConductCmd(
+        {cmd, max_time_ms, MakeControlArgs_(interrupt_flag)});
+    return {run_res.rcm, {run_res.output, run_res.exit_code}};
   }
 
 private:
   /**
-   * @brief Resolve one raw filesystem token into client handle + absolute path.
+   * @brief Resolve explicit client target into client handle + absolute path.
    */
   std::tuple<ECM, ClientHandle, std::string>
-  ResolvePath_(const std::string &raw, amf interrupt_flag) {
+  ResolvePathForClient_(const std::string &nickname, const std::string &path,
+                        amf interrupt_flag) {
     if (IsInterrupted_(interrupt_flag)) {
       return {Err(EC::Terminate, "Interrupted by user"), nullptr, ""};
     }
-    ParsedClientPath parsed = path_port_.ParseScopedPath(raw, interrupt_flag);
-    const ECM &parse_rcm = std::get<3>(parsed);
-    if (!isok(parse_rcm)) {
-      return {parse_rcm, nullptr, ""};
+
+    ClientHandle client = nullptr;
+    if (nickname.empty()) {
+      client = runtime_port_.GetCurrentClient();
+      if (!client) {
+        client = runtime_port_.GetLocalClient();
+      }
+    } else {
+      client = runtime_port_.GetClient(nickname);
     }
-    auto client = std::get<2>(parsed);
     if (!client) {
-      return {Err(EC::ClientNotFound, "Resolved client is null"), nullptr, ""};
+      return {Err(EC::ClientNotFound, "Resolved client is null"), nullptr,
+              ""};
     }
-    const std::string &relative = std::get<1>(parsed);
+
+    const std::string relative = path.empty() ? "." : path;
     const std::string abs_path = path_port_.BuildAbsolutePath(client, relative);
     return {Ok(), client, abs_path};
   }
 
   AMDomain::client::IClientRuntimePort &runtime_port_;
-  AMDomain::client::IClientLifecyclePort &lifecycle_port_;
   AMDomain::client::IClientPathPort &path_port_;
 };
 } // namespace
 
 std::shared_ptr<IFileSystemBackendPort> CreateDefaultFileSystemBackend(
     AMDomain::client::IClientRuntimePort &runtime_port,
-    AMDomain::client::IClientLifecyclePort &lifecycle_port,
     AMDomain::client::IClientPathPort &path_port) {
-  return std::make_shared<DefaultFileSystemBackend>(runtime_port, lifecycle_port,
-                                                    path_port);
+  return std::make_shared<DefaultFileSystemBackend>(runtime_port, path_port);
 }
 } // namespace AMApplication::filesystem::runtime
+
+
+

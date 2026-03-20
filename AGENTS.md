@@ -30,13 +30,6 @@
 - Pure C++ project, include in "./include", source files in "./src", "main.cpp" in root, and "test.cpp" in "./test"
 - using "mvsc" compiler currently, but codes had better to be platform independent
 
-## Coding Style & Naming Conventions
-
-- C++ style is enforced by `.clang-format` (LLVM base, 4-space indent, 120 column limit, no tabs, C++17).
-- Keep file and type naming consistent with existing patterns (e.g., `AM*` prefixes for library components).
-- Prefer one class per header where practical; keep public API headers tidy and stable.
-- Write detailed comment on every function, use /**/ to wrap it
-
 ## Library Docmentation Lookup
 
 - use "context7" to look up the use of certain library
@@ -44,23 +37,6 @@
 - "D:\Compiler\vcpkg\installed\x64-windows"
 - If you need source code of certain library, query user in the command line, he will give you the path.
 
-## Helper Functions
+## Extra Rules
 
-+ The termianl uses powershell7, you can use built in functions
-+ Quick Commit function **fcommit**, use it when you make big changes"
-
-function  fcommit { param([string]$message)"...}
-
-+ File Search Function **find** ,  use like  "find test.cpp"
-
-## What you should do
-
-**User instructions will be placed in a file named **`action.md`. The file path remains unchanged, but the user will modify its content before each execution. If the user simply requests "execute my instruction," you should read and carry out the task specified in `action.md`. If the user provides explicit, concrete instructions instead, follow those instructions directly.
-
-## Don't Build Without My Specific Command!
-
-## Don't Build Without My Specific Command!
-
-## Show your plan and ask questionbefore conduct!
-
-## Show your plan and ask question before conduct!
+folder "./AgentRestriction" in project root defines project structure and code format or rules, you must check them

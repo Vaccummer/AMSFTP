@@ -19,13 +19,13 @@ struct AppHandle : NonCopyableNonMovable {
             AMDomain::host::AMKnownHostsManager &known_hosts_manager,
             AMLoggerManagerPort &log_manager,
             AMApplication::client::ClientAppService &client_service,
-            AMApplication::TransferWorkflow::TransferAppService &transfer_manager,
-            AMDomain::filesystem::AMFileSystem &filesystem);
+            AMApplication::TransferWorkflow::TransferAppService
+                &transfer_service);
 
   /**
    * @brief Initialize process-lifetime services and bind runtime adapters.
    */
-  ECM Init(const amf &task_control_token);
+  ECM Init(amf task_control_token);
 
   /**
    * @brief Clear process-lifetime runtime adapter bindings.

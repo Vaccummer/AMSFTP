@@ -1,4 +1,5 @@
 #include "infrastructure/log/FileLoggerWriter.hpp"
+#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include <system_error>
 #include <utility>

@@ -26,9 +26,9 @@ Manager contracts used by CLI/bootstrap wiring are canonical under `include/doma
 
 - `include/domain/client/ClientManager.hpp`
 - `include/domain/host/HostManager.hpp`
-- `include/domain/transfer/TransferManager.hpp`
+- `include/application/transfer/TransferAppService.hpp`
 - `include/domain/var/VarManager.hpp`
-- `include/domain/filesystem/FileSystemManager.hpp`
+- `include/application/filesystem/FileSystemAppService.hpp`
 
 Legacy `include/AMManager/*.hpp` include prefixes are removed from first-party
 sources and should not be reintroduced.

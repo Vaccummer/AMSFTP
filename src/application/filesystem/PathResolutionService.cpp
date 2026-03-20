@@ -20,15 +20,14 @@ std::string NormalizePathNickname_(const std::string &nickname) {
  */
 PathResolutionService::PathResolveResult PathResolutionService::ParsePathTarget(
     const std::string &input, AMDomain::client::IClientRuntimePort &runtime_port,
-    AMDomain::client::IClientPathPort &path_port, amf interrupt_flag) {
+    AMDomain::client::IClientPathPort &path_port,
+    AMDomain::client::amf interrupt_flag) {
   PathResolveResult result{};
-  result.target.raw = input;
 
   const auto scoped = AMDomain::client::ClientDomainService::ParseScopedPath(
       input, runtime_port.CurrentNickname());
   result.target.nickname = NormalizePathNickname_(scoped.nickname);
   result.target.path = scoped.path;
-  result.target.has_explicit_nickname = scoped.explicit_client;
 
   auto [nickname, path, client, rcm] =
       path_port.ParseScopedPath(input, interrupt_flag);
@@ -46,12 +45,11 @@ std::pair<PathResolutionService::ECM, PathResolutionService::ClientHandle>
 PathResolutionService::ResolveReadyClient(
     AMDomain::client::IClientRuntimePort &runtime_port,
     AMDomain::client::IClientLifecyclePort &lifecycle_port,
-    const std::string &nickname,
-    std::shared_ptr<TaskControlToken> control_token, int timeout_ms,
-    int64_t start_time) {
+    const std::string &nickname, AMDomain::client::amf control_token,
+    int timeout_ms, int64_t start_time) {
   using ClientStatus = AMDomain::client::ClientStatus;
 
-  if (control_token && !control_token->IsRunning()) {
+  if (control_token && control_token->IsInterrupted()) {
     return {ECM{ErrorCode::Terminate, "Interrupted during client preparation"},
             nullptr};
   }
@@ -75,9 +73,10 @@ PathResolutionService::ResolveReadyClient(
   }
 
   const auto state = client->ConfigPort().GetState();
-  rcm = state.second;
-  if (state.first != ClientStatus::OK || rcm.first != ErrorCode::Success) {
-    rcm = client->IOPort().Check(timeout_ms, start_time);
+  rcm = state.rcm;
+  if (state.status != ClientStatus::OK || rcm.first != ErrorCode::Success) {
+    rcm = client->IOPort().Check({AMDomain::client::MakeClientIOControlArgs(
+        control_token, timeout_ms, start_time)});
   }
   return {rcm, client};
 }
@@ -90,8 +89,7 @@ PathResolutionService::PathResolveResult PathResolutionService::ResolveReadyPath
     const std::string &input, AMDomain::client::IClientRuntimePort &runtime_port,
     AMDomain::client::IClientLifecyclePort &lifecycle_port,
     AMDomain::client::IClientPathPort &path_port,
-    std::shared_ptr<TaskControlToken> control_token, int timeout_ms,
-    int64_t start_time) {
+    AMDomain::client::amf control_token, int timeout_ms, int64_t start_time) {
   PathResolveResult result =
       ParsePathTarget(input, runtime_port, path_port, control_token);
   if (!isok(result.rcm)) {

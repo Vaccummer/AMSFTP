@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/client/ClientModel.hpp"
+#include "domain/filesystem/ClientIOPortInterfaceArgs.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/DataClass.hpp"
 #include "foundation/Enum.hpp"
@@ -14,17 +15,15 @@
 #include <tuple>
 #include <type_traits>
 #include <typeindex>
-#include <unordered_map>
 #include <utility>
-#include <variant>
 #include <vector>
 
 namespace AMDomain::client {
 class IClientPort;
 class IClientControlToken;
+class IClientTimeoutPort;
 
 using ClientHandle = std::shared_ptr<IClientPort>;
-
 using CB =
     std::shared_ptr<std::function<void(std::string, std::string, std::string)>>;
 using WalkErrorCallback =
@@ -32,18 +31,12 @@ using WalkErrorCallback =
 using WRD =
     std::vector<std::pair<std::vector<std::string>, std::vector<PathInfo>>>;
 using amf = std::shared_ptr<IClientControlToken>;
+using timeoutf = std::shared_ptr<IClientTimeoutPort>;
 using EC = ErrorCode;
 using ECM = std::pair<ErrorCode, std::string>;
-using ClientState = std::pair<ClientStatus, ECM>;
 using WER = std::vector<std::pair<std::string, ECM>>;
 using WRI = std::pair<std::vector<PathInfo>, WER>;
 using RemoveErrors = std::vector<std::pair<std::string, ECM>>;
-using StatResult = std::pair<ECM, PathInfo>;
-using ListResult = std::pair<ECM, std::vector<PathInfo>>;
-using IWalkResult = std::pair<ECM, WRI>;
-using WalkResult = std::pair<ECM, std::pair<WRD, WER>>;
-using ChmodResult = std::pair<ECM, std::unordered_map<std::string, ECM>>;
-using CommandResult = std::pair<ECM, std::pair<std::string, int>>;
 using ClientProtocol = host::ClientProtocol;
 using KnownHostQuery = host::KnownHostQuery;
 using KnownHostCallback = std::function<ECM(const KnownHostQuery &)>;
@@ -56,6 +49,9 @@ using ParsedClientPath =
     std::tuple<std::string, std::string, ClientHandle, ECM>;
 using DisconnectCallback =
     std::function<void(const ClientHandle &, const ECM &)>;
+
+amf CreateClientControlToken();
+timeoutf CreateClientTimeoutPort();
 
 /**
  * @brief Port for runtime metadata access.
@@ -305,7 +301,89 @@ public:
   /**
    * @brief Unregister one wake callback token.
    */
-  virtual void UnregisterWakeup(size_t token) = 0;
+  virtual bool UnregisterWakeup(size_t token) = 0;
+};
+
+class ControlTokenWakeupSafeGaurd {
+private:
+  const amf &control_token_;
+  size_t wake_token_ = 0;
+
+public:
+  explicit ControlTokenWakeupSafeGaurd(const amf &control_token,
+                                       std::function<void()> wake_cb)
+      : control_token_(control_token) {
+    if (control_token_) {
+      wake_token_ = control_token_->RegisterWakeup(std::move(wake_cb));
+    }
+  }
+
+  ~ControlTokenWakeupSafeGaurd() {
+    if (wake_token_ != 0 && control_token_) {
+      control_token_->UnregisterWakeup(wake_token_);
+    }
+  }
+};
+
+/**
+ * @brief Port for timeout-budget tracking.
+ */
+class IClientTimeoutPort {
+public:
+  /**
+   * @brief Virtual destructor for polymorphic use.
+   */
+  virtual ~IClientTimeoutPort() = default;
+
+  /**
+   * @brief Return true when timeout budget has elapsed.
+   */
+  [[nodiscard]] virtual bool IsTimeout() const = 0;
+
+  /**
+   * @brief Return remaining timeout budget in milliseconds.
+   * When SetTimeout is called with a negative value, there is no timeout and
+   * this returns std::nullopt.
+   * When timed out, this returns 0.
+   * Otherwise this returns remaining milliseconds.
+   */
+  [[nodiscard]] virtual std::optional<unsigned int> RemainTimeMs() const = 0;
+
+  /**
+   * @brief Set timeout budget in milliseconds.
+   * @param timeout_ms Timeout budget in milliseconds; negative value means
+   * no timeout.
+   */
+  virtual void SetTimeout(float timeout_ms) = 0;
+};
+
+class ClientControlComponent {
+private:
+  amf control_port = nullptr;
+  timeoutf timeout_port = nullptr;
+
+public:
+  ClientControlComponent(amf control_port = nullptr,
+                         timeoutf timeout_port = nullptr)
+      : control_port(std::move(control_port)),
+        timeout_port(std::move(timeout_port)) {}
+
+  [[nodiscard]] bool IsInterrupted() const {
+    return (control_port && control_port->IsInterrupted());
+  }
+
+  [[nodiscard]] bool IsTimeout() const {
+    return (timeout_port && timeout_port->IsTimeout());
+  }
+
+  [[nodiscard]] std::optional<unsigned int> RemainingTimeMs() const {
+    if (timeout_port) {
+      return timeout_port->RemainTimeMs();
+    }
+    return std::nullopt;
+  }
+
+  [[nodiscard]] const amf &ControlToken() const { return control_port; }
 };
 
 /**
@@ -351,159 +429,121 @@ public:
   /**
    * @brief Update and return remote/local OS type.
    */
-  virtual OSType UpdateOSType(int timeout_ms = -1, int64_t start_time = -1,
-                              amf interrupt_flag = nullptr) = 0;
+  virtual AMDomain::filesystem::UpdateOSTypeResult
+  UpdateOSType(const AMDomain::filesystem::UpdateOSTypeArgs &args = {},
+               const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Update and return home directory.
    */
-  virtual std::string UpdateHomeDir(int timeout_ms = -1,
-                                    int64_t start_time = -1,
-                                    amf interrupt_flag = nullptr) = 0;
+  virtual AMDomain::filesystem::UpdateHomeDirResult
+  UpdateHomeDir(const AMDomain::filesystem::UpdateHomeDirArgs &args = {},
+                const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Validate connection health.
    */
-  virtual ECM Check(int timeout_ms = -1, int64_t start_time = -1,
-                    amf interrupt_flag = nullptr) = 0;
+  virtual AMDomain::filesystem::CheckResult
+  Check(const AMDomain::filesystem::CheckArgs &args = {},
+        const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Connect or reconnect this client.
    */
-  virtual ECM Connect(bool force = false, int timeout_ms = -1,
-                      int64_t start_time = -1,
-                      amf interrupt_flag = nullptr) = 0;
+  virtual AMDomain::filesystem::ConnectResult
+  Connect(const AMDomain::filesystem::ConnectArgs &args = {},
+          const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Measure round trip time when supported.
    */
-  virtual double GetRTT(ssize_t times = 5) = 0;
+  virtual AMDomain::filesystem::RTTResult
+  GetRTT(const AMDomain::filesystem::GetRTTArgs &args = {},
+         const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Execute command and return output + exit code when supported.
    */
-  virtual CommandResult ConductCmd(const std::string &cmd,
-                                   int max_time_ms = 3000,
-                                   amf interrupt_flag = nullptr) = 0;
-
-  /**
-   * @brief Resolve path to real absolute path when supported.
-   */
-  virtual std::pair<ECM, std::string>
-  realpath(const std::string &path, int timeout_ms = -1,
-           int64_t start_time = -1, amf interrupt_flag = nullptr) = 0;
-
-  /**
-   * @brief Change mode for path(s) when supported.
-   */
-  virtual ChmodResult chmod(const std::string &path,
-                            std::variant<std::string, size_t> mode,
-                            bool recursive = false, int timeout_ms = -1,
-                            int64_t start_time = -1,
-                            amf interrupt_flag = nullptr) = 0;
+  virtual AMDomain::filesystem::RunResult
+  ConductCmd(const AMDomain::filesystem::ConductCmdArgs &args,
+             const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Query path metadata.
    */
-  virtual StatResult stat(const std::string &path, bool trace_link = false,
-                          int timeout_ms = -1, int64_t start_time = -1,
-                          amf interrupt_flag = nullptr) = 0;
+  virtual AMDomain::filesystem::StatResult
+  stat(const AMDomain::filesystem::StatArgs &args,
+       const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief List one directory.
    */
-  virtual ListResult listdir(const std::string &path, int timeout_ms = -1,
-                             int64_t start_time = -1,
-                             amf interrupt_flag = nullptr) = 0;
+  virtual AMDomain::filesystem::ListResult
+  listdir(const AMDomain::filesystem::ListdirArgs &args,
+          const ClientControlComponent &control = {}) = 0;
 
   /**
-   * @brief Compute recursive total size for a path.
+   * @brief List one directory and return only entry names.
    */
-  virtual int64_t getsize(const std::string &path,
-                          bool ignore_special_file = true, int timeout_ms = -1,
-                          int64_t start_time = -1,
-                          amf interrupt_flag = nullptr) = 0;
-
-  /**
-   * @brief Find entries by wildcard path pattern.
-   */
-  virtual std::vector<PathInfo> find(const std::string &path,
-                                     SearchType type = SearchType::All,
-                                     int timeout_ms = -1,
-                                     int64_t start_time = -1,
-                                     amf interrupt_flag = nullptr) = 0;
+  virtual AMDomain::filesystem::ListNamesResult
+  listnames(const AMDomain::filesystem::ListNamesArgs &args,
+            const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Create one directory.
    */
-  virtual ECM mkdir(const std::string &path, int timeout_ms = -1,
-                    int64_t start_time = -1, amf interrupt_flag = nullptr) = 0;
-
-  /**
-   * @brief Create directory tree.
-   */
-  virtual ECM mkdirs(const std::string &path, int timeout_ms = -1,
-                     int64_t start_time = -1, amf interrupt_flag = nullptr) = 0;
+  virtual AMDomain::filesystem::MkdirResult
+  mkdir(const AMDomain::filesystem::MkdirArgs &args,
+        const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Remove one directory.
    */
-  virtual ECM rmdir(const std::string &path, int timeout_ms = -1,
-                    int64_t start_time = -1, amf interrupt_flag = nullptr) = 0;
+  virtual AMDomain::filesystem::RMResult
+  rmdir(const AMDomain::filesystem::RmdirArgs &args,
+        const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Remove one file.
    */
-  virtual ECM rmfile(const std::string &path, int timeout_ms = -1,
-                     int64_t start_time = -1, amf interrupt_flag = nullptr) = 0;
+  virtual AMDomain::filesystem::RMResult
+  rmfile(const AMDomain::filesystem::RmfileArgs &args,
+         const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Rename or move one path.
    */
-  virtual ECM rename(const std::string &src, const std::string &dst,
-                     bool mkdir = true, bool overwrite = false,
-                     int timeout_ms = -1, int64_t start_time = -1,
-                     amf interrupt_flag = nullptr) = 0;
+  virtual AMDomain::filesystem::MoveResult
+  rename(const AMDomain::filesystem::RenameArgs &args,
+         const ClientControlComponent &control = {}) = 0;
 
   /**
-   * @brief Remove one path recursively.
+   * Deprecated orchestration APIs (migration reference only):
+   * virtual AMDomain::filesystem::GetsizeResult
+   * getsize(const AMDomain::filesystem::GetsizeArgs &args,
+   *         const ClientControlComponent &control = {}) = 0;
+   * virtual AMDomain::filesystem::FindResult
+   * find(const AMDomain::filesystem::FindArgs &args,
+   *      const ClientControlComponent &control = {}) = 0;
+   * virtual ECM
+   * mkdirs(const AMDomain::filesystem::MkdirsArgs &args,
+   *        const ClientControlComponent &control = {}) = 0;
+   * virtual AMDomain::filesystem::DeleteResult
+   * remove(const AMDomain::filesystem::RemoveArgs &args,
+   *        const ClientControlComponent &control = {}) = 0;
+   * virtual ECM
+   * saferm(const AMDomain::filesystem::SafermArgs &args,
+   *        const ClientControlComponent &control = {}) = 0;
+   * virtual ECM
+   * copy(const AMDomain::filesystem::CopyArgs &args,
+   *      const ClientControlComponent &control = {}) = 0;
+   * virtual AMDomain::filesystem::IWalkResult
+   * iwalk(const AMDomain::filesystem::IWalkArgs &args,
+   *       const ClientControlComponent &control = {}) = 0;
+   * virtual AMDomain::filesystem::WalkResult
+   * walk(const AMDomain::filesystem::WalkArgs &args,
+   *      const ClientControlComponent &control = {}) = 0;
    */
-  virtual std::pair<ECM, RemoveErrors>
-  remove(const std::string &path, WalkErrorCallback error_callback = nullptr,
-         int timeout_ms = -1, int64_t start_time = -1,
-         amf interrupt_flag = nullptr) = 0;
-
-  /**
-   * @brief Safe-remove one path.
-   */
-  virtual ECM saferm(const std::string &path, int timeout_ms = -1,
-                     int64_t start_time = -1, amf interrupt_flag = nullptr) = 0;
-
-  /**
-   * @brief Copy one path in-host when supported.
-   */
-  virtual ECM copy(const std::string &src, const std::string &dst,
-                   bool need_mkdir = false, int timeout_ms = -1,
-                   amf interrupt_flag = nullptr) = 0;
-
-  /**
-   * @brief Walk and return flattened leaf-oriented view.
-   */
-  virtual IWalkResult iwalk(const std::string &path, bool show_all = false,
-                            bool ignore_special_file = true,
-                            WalkErrorCallback error_callback = nullptr,
-                            int timeout_ms = -1, int64_t start_time = -1,
-                            amf interrupt_flag = nullptr) = 0;
-
-  /**
-   * @brief Walk and return tree-oriented view.
-   */
-  virtual WalkResult walk(const std::string &path, int max_depth = -1,
-                          bool show_all = false,
-                          bool ignore_special_file = false,
-                          WalkErrorCallback error_callback = nullptr,
-                          int timeout_ms = -1, int64_t start_time = -1,
-                          amf interrupt_flag = nullptr) = 0;
 };
 
 /**
@@ -566,16 +606,8 @@ public:
 using ClientID = IClientPort::ID;
 using ClientName = std::string;
 
-std::pair<ECM, std::shared_ptr<IClientPort>>
-CreateClient(const ConRequest &request,
-             KnownHostCallback known_host_cb = nullptr,
-             TraceCallback trace_cb = nullptr, AuthCallback auth_cb = nullptr,
-             const std::vector<std::string> &private_keys = {});
-
 class IClientMaintainerPort {
 public:
-  static constexpr int max_heartbeat_timeout_ms = 10000;
-  static constexpr int min_heartbeat_timeout_ms = 5;
   /**
    * @brief Virtual destructor for polymorphic use.
    */
@@ -612,6 +644,23 @@ public:
 
   virtual void StartHeartbeat() = 0;
 };
+
+[[nodiscard]] float ResolveTimeoutBudgetMs(int timeout_ms,
+                                           int64_t start_time = -1);
+
+[[nodiscard]] ClientControlComponent
+MakeClientControlComponent(amf interrupt_flag = nullptr, int timeout_ms = -1,
+                           int64_t start_time = -1);
+
+[[nodiscard]] ClientControlComponent
+MakeClientIOControlArgs(amf interrupt_flag = nullptr, int timeout_ms = -1,
+                        int64_t start_time = -1);
+
+std::pair<ECM, ClientHandle>
+CreateClient(const ConRequest &request,
+             KnownHostCallback known_host_cb = nullptr,
+             TraceCallback trace_cb = nullptr, AuthCallback auth_cb = nullptr,
+             const std::vector<std::string> &private_keys = {});
 
 std::unique_ptr<IClientMaintainerPort>
 CreateClientMaintainer(int heartbeat_interval_s = 60,

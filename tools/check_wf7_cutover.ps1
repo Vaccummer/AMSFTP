@@ -1,7 +1,8 @@
 param(
     [string]$RepoRoot = ".",
     [switch]$IncludeSingletonCompat,
-    [switch]$IncludeManagerCompat
+    [switch]$IncludeManagerCompat,
+    [switch]$IncludeFilesystemRefactorGuard
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,6 +29,8 @@ $codeGlobs = @(
 #    AMManager/{Config,Logger,SignalMonitor}.hpp
 # 4) full AMManager compatibility removal can be enabled explicitly:
 #    -IncludeManagerCompat (forbids AMManager/*).
+# 5) filesystem active-path refactor guard can be enabled explicitly:
+#    -IncludeFilesystemRefactorGuard.
 $prefixRules = @(
     "AMBase",
     "AMCLI",
@@ -76,11 +79,30 @@ Write-Host "WF-7 cutover check root: $repoFull"
 Write-Host ("Prefix rules: {0}" -f $prefixRules.Count)
 Write-Host ("Header rules: {0}" -f $headerRules.Count)
 Write-Host ("Total enforced rules: {0}" -f ($prefixRules.Count + $headerRules.Count))
+Write-Host ("Filesystem refactor guard enabled: {0}" -f ($IncludeFilesystemRefactorGuard.IsPresent))
 
-if ($violations.Count -gt 0) {
+$filesystemGuardFailed = $false
+if ($IncludeFilesystemRefactorGuard) {
+    $guardScript = Join-Path $PSScriptRoot "check_filesystem_refactor_guards.ps1"
+    if (-not (Test-Path $guardScript)) {
+        Write-Host ("WF-7 filesystem guard script missing: {0}" -f $guardScript) -ForegroundColor Red
+        $filesystemGuardFailed = $true
+    }
+    else {
+        & $guardScript -RepoRoot $repoFull
+        if ($LASTEXITCODE -ne 0) {
+            $filesystemGuardFailed = $true
+        }
+    }
+}
+
+if ($violations.Count -gt 0 -or $filesystemGuardFailed) {
     Write-Host ("WF-7 cutover violations: {0}" -f $violations.Count) -ForegroundColor Red
     foreach ($v in $violations | Sort-Object Rule, Match) {
         Write-Host ("  ERROR {0} -> {1}" -f $v.Rule, $v.Match) -ForegroundColor Red
+    }
+    if ($filesystemGuardFailed) {
+        Write-Host "  ERROR filesystem refactor guard failed" -ForegroundColor Red
     }
     exit 1
 }

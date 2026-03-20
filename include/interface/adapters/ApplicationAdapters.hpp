@@ -10,7 +10,6 @@
 #include "application/transfer/TaskWorkflows.hpp"
 #include "application/transfer/TransferWorkflows.hpp"
 #include "application/var/VarWorkflows.hpp"
-#include "interface/adapters/FileCommandGateway.dep.hpp"
 #include "interface/adapters/FileSystemAdapter.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "domain/config/ConfigModel.hpp"
@@ -50,9 +49,6 @@ struct TaskSummaryView;
 struct TaskEntryView;
 struct TransferSetView;
 struct TaskView;
-}
-namespace AMApplication::filesystem {
-class FileSystemAppService;
 }
 
 namespace AMInterface::ApplicationAdapters {
@@ -229,12 +225,10 @@ class ClientSessionGateway final
     : public AMApplication::ClientWorkflow::IClientSessionGateway {
 public:
   /**
-   * @brief Construct gateway from client app service and filesystem app
-   * service.
+   * @brief Construct gateway from client app service.
    */
-  ClientSessionGateway(AMApplication::client::ClientAppService &client_service,
-                       AMApplication::filesystem::FileSystemAppService
-                           &filesystem_service);
+  explicit ClientSessionGateway(
+      AMApplication::client::ClientAppService &client_service);
   ~ClientSessionGateway() override = default;
 
   ECM ConnectNickname(const std::string &nickname, bool force,
@@ -259,29 +253,6 @@ public:
 
 private:
   AMApplication::client::ClientAppService &client_service_;
-  AMApplication::filesystem::FileSystemAppService &filesystem_service_;
-};
-
-/**
- * @brief Path-substitution workflow port backed by var substitution port.
- */
-class PathSubstitutionPort final
-    : public AMApplication::TransferWorkflow::IPathSubstitutionPort {
-public:
-  /**
-   * @brief Construct path substitutor from a var substitution port.
-   */
-  explicit PathSubstitutionPort(
-      const AMDomain::var::IVarSubstitutionPort &substitution_port);
-  ~PathSubstitutionPort() override = default;
-
-  [[nodiscard]] std::string
-  SubstitutePathLike(const std::string &raw) const override;
-  [[nodiscard]] std::vector<std::string>
-  SubstitutePathLike(const std::vector<std::string> &raw) const override;
-
-private:
-  const AMDomain::var::IVarSubstitutionPort &substitution_port_;
 };
 
 /**
@@ -342,7 +313,7 @@ public:
       AMPromptManager &prompt_manager,
       AMApplication::TransferWorkflow::TransferConfirmPolicy confirm_policy =
           AMApplication::TransferWorkflow::TransferConfirmPolicy::RequireConfirm,
-      std::shared_ptr<TaskControlToken> task_control_token = nullptr);
+      AMDomain::client::amf task_control_token = nullptr);
   ~TransferExecutorPort() override = default;
 
   ECM Transfer(const std::vector<UserTransferSet> &transfer_sets,
@@ -355,7 +326,7 @@ private:
   AMPromptManager *prompt_manager_ = nullptr;
   AMApplication::TransferWorkflow::TransferConfirmPolicy confirm_policy_ =
       AMApplication::TransferWorkflow::TransferConfirmPolicy::RequireConfirm;
-  std::shared_ptr<TaskControlToken> task_control_token_ = nullptr;
+  AMDomain::client::amf task_control_token_ = nullptr;
 };
 
 /**
@@ -368,7 +339,7 @@ public:
    */
   TaskGateway(AMApplication::TransferWorkflow::TransferAppService &transfer_service,
               AMPromptManager &prompt_manager,
-              std::shared_ptr<TaskControlToken> task_control_token = nullptr);
+              AMDomain::client::amf task_control_token = nullptr);
   ~TaskGateway() override = default;
 
   ECM ListTasks(bool pending, bool suspend, bool finished,
@@ -403,7 +374,7 @@ private:
 
   AMApplication::TransferWorkflow::TransferAppService &transfer_service_;
   AMPromptManager *prompt_manager_ = nullptr;
-  std::shared_ptr<TaskControlToken> task_control_token_ = nullptr;
+  AMDomain::client::amf task_control_token_ = nullptr;
 };
 
 /**
@@ -435,7 +406,6 @@ struct RuntimeBindings {
   AMPromptManager *prompt_manager = nullptr;
   AMApplication::config::AMConfigAppService *config_service = nullptr;
   AMInterface::style::AMStyleService *style_service = nullptr;
-  AMApplication::filesystem::FileSystemAppService *filesystem_service = nullptr;
 };
 
 /**

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "application/client/runtime/ClientPublicPool.hpp"
+#include "TransferRuntimePorts.hpp"
+#include "domain/transfer/TransferPort.hpp"
 #include "foundation/DataClass.hpp"
 
 #include <atomic>
@@ -16,19 +17,15 @@
 #include <utility>
 #include <vector>
 
-namespace AMInfra::ClientRuntime {
-class TransferExecutionEngine;
-}
-
 namespace AMApplication::TransferRuntime {
 
-class TaskSchedulerCore {
+class [[deprecated("Use AMInfra::ClientRuntime::TransferExecutionPool instead")]]
+TaskSchedulerCore {
 public:
   using ECM = std::pair<ErrorCode, std::string>;
   using EC = ErrorCode;
   using TaskId = std::string;
-  using ClientHandle = AMDomain::client::ClientHandle;
-  using ClientProtocol = AMDomain::client::ClientProtocol;
+  using ClientHandle = ITransferClientPoolPort::ClientHandle;
 
   /**
    * @brief Construct a scheduler core with one default worker thread.
@@ -51,7 +48,7 @@ public:
   ECM GracefulTerminate(int timeout_ms = 5000);
 
   /**
-   * @brief Set or get the chunk size used by transit transfers.
+   * @brief Set or get the chunk size used by transfer execution.
    */
   size_t ChunkSize(int64_t size = -1);
 
@@ -75,8 +72,7 @@ public:
    */
   std::shared_ptr<TaskInfo>
   CreateTaskInfo(std::shared_ptr<TASKS> tasks,
-                 const std::shared_ptr<AMApplication::client::ClientPublicPool>
-                     &pool,
+                 const std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort> &pool,
                  TransferCallback callback = TransferCallback(),
                  ssize_t buffer_size = -1, bool quiet = false,
                  int thread_id = -1);
@@ -188,19 +184,18 @@ private:
    * @brief Bind one task id to a transfer pool instance.
    */
   void SetTaskPool_(const TaskId &task_id,
-                    const std::shared_ptr<AMApplication::client::ClientPublicPool>
-                        &pool);
+                    const std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort> &pool);
 
   /**
    * @brief Get transfer pool snapshot for one task id.
    */
-  std::shared_ptr<AMApplication::client::ClientPublicPool>
+  std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort>
   GetTaskPool_(const TaskId &task_id) const;
 
   /**
    * @brief Remove and return transfer pool binding for one task id.
    */
-  std::shared_ptr<AMApplication::client::ClientPublicPool>
+  std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort>
   TakeTaskPool_(const TaskId &task_id);
 
   /**
@@ -275,6 +270,11 @@ private:
    */
   static std::string CanonicalTaskNickname_(const std::string &nickname);
 
+  struct TaskClientCollection {
+    std::unordered_map<std::string, ClientHandle> primary_clients = {};
+    std::unordered_map<std::string, ClientHandle> secondary_clients = {};
+  };
+
   /**
    * @brief Collect distinct client nicknames required by one task.
    */
@@ -284,17 +284,13 @@ private:
   /**
    * @brief Acquire the pooled clients required by one task execution pass.
    */
-  std::pair<ECM, std::unordered_map<std::string, ClientHandle>>
+  std::pair<ECM, TaskClientCollection>
   AcquireTaskClients_(const std::shared_ptr<TaskInfo> &task_info,
-                      const std::shared_ptr<AMApplication::client::ClientPublicPool>
-                          &pool);
+                      const std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort> &pool);
 
-  /**
-   * @brief Resolve one client handle from the acquired task client map.
-   */
-  ClientHandle ResolveTaskClient_(
-      const std::unordered_map<std::string, ClientHandle> &clients,
-      const std::string &nickname) const;
+  ClientHandle ResolveTaskClient_(const TaskClientCollection &clients,
+                                  const std::string &nickname,
+                                  bool prefer_secondary) const;
 
   /**
    * @brief Run one worker loop for the assigned thread index.
@@ -323,8 +319,7 @@ private:
   mutable std::mutex registry_mtx_;
   std::unordered_map<TaskId, std::shared_ptr<TaskInfo>> task_registry_;
   mutable std::mutex task_pool_mtx_;
-  std::unordered_map<TaskId, std::shared_ptr<AMApplication::client::ClientPublicPool>>
-      task_pools_;
+  std::unordered_map<TaskId, std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort>> task_pools_;
 
   mutable std::mutex result_mtx_;
   std::unordered_map<TaskId, std::shared_ptr<TaskInfo>> results_;
@@ -336,8 +331,7 @@ private:
   std::vector<std::shared_ptr<TaskInfo>> conducting_infos_;
   size_t chunk_size_ = 256 * AMKB;
   std::atomic<bool> is_deconstruct{false};
-  std::unique_ptr<AMInfra::ClientRuntime::TransferExecutionEngine>
-      execution_engine_;
+  std::unique_ptr<AMDomain::transfer::ITransferExecutionPort> execution_engine_;
 };
 
 } // namespace AMApplication::TransferRuntime

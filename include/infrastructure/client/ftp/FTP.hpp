@@ -269,6 +269,75 @@ inline PathInfo ParseListLine(const std::string &line,
   return {};
 }
 
+inline std::string ParseListName(const std::string &line) {
+  if (line.empty()) {
+    return "";
+  }
+  std::string linef = line;
+  if (!linef.empty() && linef.back() == '\r') {
+    linef.pop_back();
+  }
+
+  size_t first_nonspace = 0;
+  while (first_nonspace < linef.size() &&
+         std::isspace(static_cast<unsigned char>(linef[first_nonspace]))) {
+    first_nonspace++;
+  }
+  if (first_nonspace >= linef.size()) {
+    return "";
+  }
+
+  const char first_char = linef[first_nonspace];
+
+  // DOS/IIS style: date time <DIR>|size name
+  if (std::isdigit(static_cast<unsigned char>(first_char))) {
+    size_t pos = first_nonspace;
+    for (int token = 0; token < 3; token++) {
+      const size_t token_end = linef.find_first_of(" \t", pos);
+      if (token_end == std::string::npos) {
+        return "";
+      }
+      pos = linef.find_first_not_of(" \t", token_end);
+      if (pos == std::string::npos) {
+        return "";
+      }
+    }
+    std::string name = linef.substr(pos);
+    while (!name.empty() &&
+           (std::isspace(static_cast<unsigned char>(name.back())) ||
+            name.back() == '\r')) {
+      name.pop_back();
+    }
+    return name;
+  }
+
+  // Unix style: perms links owner group size month day time|year name
+  if (first_char == 'd' || first_char == '-' || first_char == 'l' ||
+      first_char == 'c' || first_char == 'b' || first_char == 'p' ||
+      first_char == 's') {
+    std::istringstream iss(linef.substr(first_nonspace));
+    std::string perms, links, owner, group, size_str, month, day, time_or_year;
+    if (!(iss >> perms >> links >> owner >> group >> size_str >> month >> day >>
+          time_or_year)) {
+      return "";
+    }
+    std::string name;
+    std::getline(iss >> std::ws, name);
+    if (!name.empty() && name.back() == '\r') {
+      name.pop_back();
+    }
+    if (!name.empty() && !perms.empty() && perms[0] == 'l') {
+      const size_t arrow_pos = name.find(" -> ");
+      if (arrow_pos != std::string::npos) {
+        name = name.substr(0, arrow_pos);
+      }
+    }
+    return name;
+  }
+
+  return "";
+}
+
 inline double ParseMListTime_(const std::string &value) {
   if (value.length() < 14) {
     return 0.0;
@@ -456,6 +525,15 @@ inline PathInfo ParseMLSDLine(const std::string &line,
   return info;
 }
 
+inline std::string ParseMLSDName(const std::string &line) {
+  std::string facts;
+  std::string filename;
+  if (!SplitMLSDFactsAndName_(line, &facts, &filename)) {
+    return "";
+  }
+  return filename;
+}
+
 // Parse MLST response format
 // Format: type=file;size=1024;modify=20210315120000;perm=rwx; filename
 inline PathInfo ParseMLSTLine(const std::string &line,
@@ -549,7 +627,6 @@ inline std::string BuildBaseUrl(const ConRequest &request) {
 
 class FTPBase : public ClientIOBase {
 protected:
-  AMAtomic<ConRequest> &request_atomic_;
   CURL *curl = nullptr;
   CURLM *multi = nullptr; // Reused multi handle
   mutable std::recursive_mutex mtx;
@@ -580,12 +657,7 @@ public:
   FTPBase(AMDomain::client::IClientConfigPort *config_port,
           AMDomain::client::IClientControlToken *control_port,
           TraceCallback trace_cb = {}, AuthCallback auth_cb = {})
-      : ClientIOBase(config_port, control_port),
-        request_atomic_(
-            (config_port != nullptr)
-                ? config_port->RequestAtomic()
-                : throw std::invalid_argument(
-                      "AMFTPIOCore requires non-null config port")) {
+      : ClientIOBase(config_port, control_port) {
     if (control_port == nullptr) {
       throw std::invalid_argument(
           "AMFTPIOCore requires non-null task control port");
@@ -1168,72 +1240,114 @@ public:
     return {ECM{EC::Success, ""}, file_list};
   }
 
-  ECM LibRmfile(const AMFSI::RmfileArgs &args,
-                const AMDomain::client::ClientControlComponent &control) {
+  std::pair<ECM, std::vector<std::string>>
+  MLSD_ListNames(const AMFSI::ListNamesArgs &args,
+                 const AMDomain::client::ClientControlComponent &control) {
     const std::string &path = args.path;
-    ECM ecm = SetupPath(path, false);
-    if (ecm.first != EC::Success) {
-      return ecm;
+    if (!curl || !multi) {
+      return {ECM{EC::NoConnection, "CURL not initialized"}, {}};
     }
 
-    struct curl_slist *commands = nullptr;
-    commands = curl_slist_append(commands, AMStr::fmt("DELE {}", path).c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    SetupPath(path, true);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "MLSD");
+
+    detail::MemoryStruct chunk;
+    chunk.memory = (char *)malloc(1);
+    chunk.size = 0;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
     auto nb_res = NbPerform(control);
-
-    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
-    curl_slist_free_all(commands);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, nullptr);
 
     if (!nb_res.ok()) {
-      return NBResultToECM(nb_res);
+      free(chunk.memory);
+      return {NBResultToECM(nb_res), {}};
     }
     if (nb_res.value != CURLE_OK) {
-      ECM out = {detail::GetFTPErrorCode(nb_res.value),
-                 AMStr::fmt("rmfile {} failed: {}", path,
-                            curl_easy_strerror(nb_res.value))};
-      trace(AMDomain::client::TraceLevel::Error, out.first, path, "rmfile",
-            out.second);
-      return out;
+      free(chunk.memory);
+      long response_code = 0;
+      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+      if (response_code == 500 || response_code == 502 ||
+          nb_res.value == CURLE_QUOTE_ERROR ||
+          nb_res.value == CURLE_FTP_COULDNT_RETR_FILE) {
+        return {ECM{EC::OperationUnsupported, "MLSD not supported"}, {}};
+      }
+      if (response_code == 550) {
+        return {ECM{EC::PathNotExist, AMStr::fmt("Path not found: {}", path)},
+                {}};
+      }
+      return {ECM{EC::FTPListFailed, curl_easy_strerror(nb_res.value)}, {}};
     }
-    return {EC::Success, ""};
+
+    std::string listing(chunk.memory, chunk.size);
+    free(chunk.memory);
+
+    std::vector<std::string> names;
+    std::istringstream iss(listing);
+    std::string line;
+    while (std::getline(iss, line)) {
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      if (line.empty()) {
+        continue;
+      }
+      std::string name = detail::parse::ParseMLSDName(line);
+      if (!name.empty() && name != "." && name != "..") {
+        names.push_back(std::move(name));
+      }
+    }
+    return {ECM{EC::Success, ""}, names};
   }
 
-  ECM LibRmdir(const AMFSI::RmdirArgs &args,
-               const AMDomain::client::ClientControlComponent &control) {
+  std::pair<ECM, std::vector<std::string>>
+  Common_ListNames(const AMFSI::ListNamesArgs &args,
+                   const AMDomain::client::ClientControlComponent &control) {
     const std::string &path = args.path;
-
-    ECM ecm = SetupPath("", true);
+    ECM ecm = SetupPath(path, true);
     if (ecm.first != EC::Success) {
-      return ecm;
+      return {ecm, {}};
     }
 
-    struct curl_slist *commands = nullptr;
-    std::string rmd_cmd = AMStr::fmt("RMD {}", detail::MlistPath(path));
-    commands = curl_slist_append(commands, rmd_cmd.c_str());
-    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+    detail::MemoryStruct chunk;
+    chunk.memory = (char *)malloc(1);
+    chunk.size = 0;
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 
     auto nb_res = NbPerform(control);
-
-    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
-    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
-    curl_slist_free_all(commands);
-
     if (!nb_res.ok()) {
-      return NBResultToECM(nb_res);
+      free(chunk.memory);
+      return {NBResultToECM(nb_res), {}};
     }
     if (nb_res.value != CURLE_OK) {
-      ECM out = {detail::GetFTPErrorCode(nb_res.value),
-                 AMStr::fmt("rmdir {} failed: {}", path,
-                            curl_easy_strerror(nb_res.value))};
-      trace(AMDomain::client::TraceLevel::Error, out.first, path, "rmdir",
-            out.second);
-      return out;
+      free(chunk.memory);
+      return {
+          ECM{detail::GetFTPErrorCode(nb_res.value),
+              AMStr::fmt("List failed: {}", curl_easy_strerror(nb_res.value))},
+          {}};
     }
-    return {EC::Success, ""};
+
+    std::string listing(chunk.memory, chunk.size);
+    free(chunk.memory);
+
+    std::vector<std::string> names;
+    std::istringstream iss(listing);
+    std::string line;
+    while (std::getline(iss, line)) {
+      if (!line.empty() && line.back() == '\r') {
+        line.pop_back();
+      }
+      if (line.empty()) {
+        continue;
+      }
+      std::string name = detail::parse::ParseListName(line);
+      if (!name.empty() && name != "." && name != "..") {
+        names.push_back(std::move(name));
+      }
+    }
+    return {ECM{EC::Success, ""}, names};
   }
 
   CURL *GetCURL() { return curl; }
@@ -1315,6 +1429,7 @@ public:
         const AMDomain::client::ClientControlComponent &control) override {
     (void)args;
     AMFSI::CheckResult out = {};
+    out.status = config_part_->GetState().status;
     if (control.IsTimeout()) {
       out.rcm = {EC::OperationTimeout, "Operation timed out"};
       return out;
@@ -1327,6 +1442,11 @@ public:
     ECM ecm = SetupPath("", true);
     if (ecm.first != EC::Success) {
       out.rcm = ecm;
+      if (out.rcm.first == EC::NoConnection) {
+        out.status = AMDomain::client::ClientStatus::NoConnection;
+      } else {
+        out.status = AMDomain::client::ClientStatus::ConnectionBroken;
+      }
       return out;
     }
     struct detail::MemoryStruct chunk;
@@ -1339,14 +1459,25 @@ public:
     free(chunk.memory);
     if (!nb_res.ok()) {
       out.rcm = NBResultToECM(nb_res);
+      if (out.rcm.first == EC::NoConnection) {
+        out.status = AMDomain::client::ClientStatus::NoConnection;
+      } else {
+        out.status = AMDomain::client::ClientStatus::ConnectionBroken;
+      }
       return out;
     }
     if (nb_res.value == CURLE_OK) {
       out.rcm = {EC::Success, ""};
+      out.status = AMDomain::client::ClientStatus::OK;
       return out;
     }
     out.rcm = {detail::GetFTPErrorCode(nb_res.value),
                AMStr::fmt("Check error: {}", curl_easy_strerror(nb_res.value))};
+    if (out.rcm.first == EC::NoConnection) {
+      out.status = AMDomain::client::ClientStatus::NoConnection;
+    } else {
+      out.status = AMDomain::client::ClientStatus::ConnectionBroken;
+    }
     trace(AMDomain::client::TraceLevel::Error, out.rcm.first, "/", "Check",
           out.rcm.second);
     return out;
@@ -1356,6 +1487,7 @@ public:
   Connect(const AMFSI::ConnectArgs &args,
           const AMDomain::client::ClientControlComponent &control) override {
     AMFSI::ConnectResult out = {};
+    out.status = config_part_->GetState().status;
     if (control.IsTimeout()) {
       out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
       return out;
@@ -1367,9 +1499,10 @@ public:
     }
 
     const auto state = config_part_->GetState();
-    if (!args.force && state.first == AMDomain::client::ClientStatus::OK &&
+    if (!args.force && state.status == AMDomain::client::ClientStatus::OK &&
         Check({}, control).rcm.first == EC::Success) {
       out.rcm = {EC::Success, ""};
+      out.status = AMDomain::client::ClientStatus::OK;
       return out;
     }
 
@@ -1390,6 +1523,7 @@ public:
     curl = curl_easy_init();
     if (!curl) {
       out.rcm = {EC::NoConnection, "CURL easy init failed"};
+      out.status = AMDomain::client::ClientStatus::NoConnection;
       return out;
     }
     multi = curl_multi_init();
@@ -1397,6 +1531,7 @@ public:
       curl_easy_cleanup(curl);
       curl = nullptr;
       out.rcm = {EC::NoConnection, "CURL multi init failed"};
+      out.status = AMDomain::client::ClientStatus::NoConnection;
       return out;
     }
 
@@ -1408,7 +1543,9 @@ public:
                             password_enc, password_correct));
     };
 
-    out.rcm = Check({}, control).rcm;
+    auto check_res = Check({}, control);
+    out.rcm = check_res.rcm;
+    out.status = check_res.status;
     if (out.rcm.first == EC::AuthFailed) {
       int trials = 0;
       while (trials < 2 && out.rcm.first == EC::AuthFailed) {
@@ -1423,7 +1560,9 @@ public:
         request.password = password_enc;
         request_atomic_.lock().store(request);
 
-        out.rcm = Check({}, control).rcm;
+        check_res = Check({}, control);
+        out.rcm = check_res.rcm;
+        out.status = check_res.status;
         if (out.rcm.first == EC::Success) {
           NotifyAuth(false, password_enc, true);
           break;
@@ -1444,9 +1583,11 @@ public:
               ? AMDomain::client::ClientStatus::NoConnection
               : AMDomain::client::ClientStatus::ConnectionBroken;
       SetState_({status, out.rcm});
+      out.status = status;
       return out;
     }
     SetState_({AMDomain::client::ClientStatus::OK, {EC::Success, ""}});
+    out.status = AMDomain::client::ClientStatus::OK;
     (void)UpdateOSType({}, control);
     trace(AMDomain::client::TraceLevel::Info, EC::Success,
           config_part_->GetNickname(), "Connect", "Connect success");
@@ -1523,34 +1664,6 @@ public:
         ECM{EC::OperationUnsupported, "FTP client does not support ConductCmd"};
     res.output = "";
     res.exit_code = -1;
-    return res;
-  }
-
-  AMFSI::RealpathResult
-  realpath(const AMFSI::RealpathArgs &args,
-           const AMDomain::client::ClientControlComponent &control) override {
-    AMFSI::RealpathResult res;
-    if (args.path.empty()) {
-      res.rcm = {EC::Success, ""};
-      res.path = GetHomeDir_();
-      return res;
-    }
-    const std::string home_dir = GetHomeDir_();
-    std::string resolved = AMFS::abspath(args.path, true, home_dir, home_dir);
-    if (resolved.empty()) {
-      res.rcm = {EC::InvalidArg, AMStr::fmt("Invalid path: {}", args.path)};
-      return res;
-    }
-    res.rcm = {EC::Success, ""};
-    res.path = resolved;
-    return res;
-  }
-
-  AMFSI::ChmodResult
-  chmod(const AMFSI::ChmodArgs &args,
-        const AMDomain::client::ClientControlComponent &control) override {
-    AMFSI::ChmodResult res;
-    res.rcm = {EC::OperationUnsupported, "FTP client does not support chmod"};
     return res;
   }
 
@@ -1638,6 +1751,35 @@ public:
     return {rcm, info};
   }
 
+  AMFSI::ListNamesResult
+  listnames(const AMFSI::ListNamesArgs &args,
+            const AMDomain::client::ClientControlComponent &control) override {
+    if (control.IsTimeout()) {
+      return {ECM{EC::OperationTimeout, "Operation timed out"}, {}};
+    }
+    if (mlsd_state_ != CapabilityState::Unsupported) {
+      auto [ecm, names] = MLSD_ListNames(args, control);
+      if (ecm.first == EC::Success) {
+        mlsd_state_ = CapabilityState::Supported;
+        return {ecm, names};
+      }
+      if (ecm.first == EC::OperationUnsupported) {
+        mlsd_state_ = CapabilityState::Unsupported;
+      } else if (ecm.first == EC::Terminate ||
+                 ecm.first == EC::OperationTimeout ||
+                 ecm.first == EC::PathNotExist) {
+        return {ecm, {}};
+      }
+    }
+
+    auto [rcm, names] = Common_ListNames(args, control);
+    if (rcm.first != EC::Success) {
+      trace(AMDomain::client::TraceLevel::Error, rcm.first, args.path,
+            "listnames", rcm.second);
+    }
+    return {rcm, names};
+  }
+
   AMFSI::MkdirResult
   mkdir(const AMFSI::MkdirArgs &args,
         const AMDomain::client::ClientControlComponent &control) override {
@@ -1715,7 +1857,38 @@ public:
                     AMStr::fmt("Path is not a directory: {}", args.path)};
       return out;
     }
-    out.rcm = LibRmdir(args, control);
+    ECM ecm = SetupPath("", true);
+    if (ecm.first != EC::Success) {
+      out.rcm = ecm;
+      return out;
+    }
+
+    struct curl_slist *commands = nullptr;
+    std::string rmd_cmd = AMStr::fmt("RMD {}", detail::MlistPath(args.path));
+    commands = curl_slist_append(commands, rmd_cmd.c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+
+    auto nb_res = NbPerform(control);
+
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
+    curl_slist_free_all(commands);
+
+    if (!nb_res.ok()) {
+      out.rcm = NBResultToECM(nb_res);
+      return out;
+    }
+    if (nb_res.value != CURLE_OK) {
+      out.rcm = {detail::GetFTPErrorCode(nb_res.value),
+                 AMStr::fmt("rmdir {} failed: {}", args.path,
+                            curl_easy_strerror(nb_res.value))};
+      trace(AMDomain::client::TraceLevel::Error, out.rcm.first, args.path,
+            "rmdir", out.rcm.second);
+      return out;
+    }
+
+    out.rcm = {EC::Success, ""};
     return out;
   }
 
@@ -1743,7 +1916,39 @@ public:
           ECM{EC::NotAFile, AMStr::fmt("Path is not a file: {}", args.path)};
       return out;
     }
-    out.rcm = LibRmfile(args, control);
+
+    ECM ecm = SetupPath(args.path, false);
+    if (ecm.first != EC::Success) {
+      out.rcm = ecm;
+      return out;
+    }
+
+    struct curl_slist *commands = nullptr;
+    commands =
+        curl_slist_append(commands, AMStr::fmt("DELE {}", args.path).c_str());
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, commands);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+
+    auto nb_res = NbPerform(control);
+
+    curl_easy_setopt(curl, CURLOPT_POSTQUOTE, nullptr);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 0L);
+    curl_slist_free_all(commands);
+
+    if (!nb_res.ok()) {
+      out.rcm = NBResultToECM(nb_res);
+      return out;
+    }
+    if (nb_res.value != CURLE_OK) {
+      out.rcm = {detail::GetFTPErrorCode(nb_res.value),
+                 AMStr::fmt("rmfile {} failed: {}", args.path,
+                            curl_easy_strerror(nb_res.value))};
+      trace(AMDomain::client::TraceLevel::Error, out.rcm.first, args.path,
+            "rmfile", out.rcm.second);
+      return out;
+    }
+
+    out.rcm = {EC::Success, ""};
     return out;
   }
 
@@ -2257,7 +2462,7 @@ public:
       return;
     }
     if (info.type != PathType::DIR) {
-      ECM rc = LibRmfile(AMFSI::RmfileArgs{info.path}, control);
+      ECM rc = rmfile(AMFSI::RmfileArgs{info.path}, control).rcm;
       if (rc.first != EC::Success) {
         errors.emplace_back(info.path, rc);
       }
@@ -2278,7 +2483,7 @@ public:
       _rm(itemf, errors, error_callback, control);
     }
     // Delete directory after removing all contents
-    ECM rc = LibRmdir(AMFSI::RmdirArgs{info.path}, control);
+    ECM rc = rmdir(AMFSI::RmdirArgs{info.path}, control).rcm;
     if (rc.first != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(info.path, rc);

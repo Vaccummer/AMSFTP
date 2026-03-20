@@ -6,10 +6,6 @@
 inline static constexpr ssize_t AMKB = 1024;
 inline static constexpr ssize_t AMMB = 1024 * 1024;
 inline static constexpr ssize_t AMGB = 1024 * 1024 * 1024;
-inline static constexpr ssize_t AMDefaultLocalBufferSize = 1024 * 1024 * 16;
-inline static constexpr ssize_t AMDefaultRemoteBufferSize = 1024 * 1024 * 8;
-inline static constexpr ssize_t AMMinBufferSize = 1024 * 512;
-inline static constexpr ssize_t AMMaxBufferSize = 1024 * 1024 * 512;
 
 enum class ErrorCode {
   Success = 0,
@@ -189,8 +185,6 @@ enum class PathType {
 enum class SearchType { All = 0, File = 1, Directory = 2 };
 
 enum class SepType { Unix = 0, Windows = 1 };
-
-enum class TaskStatus { Pending, Conducting, Paused, Finished };
 
 enum class MapType { Read = 0, Write = 1 };
 

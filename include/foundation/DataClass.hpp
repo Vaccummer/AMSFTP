@@ -2,7 +2,6 @@
 // standard library
 #include <algorithm>
 #include <csignal>
-#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -21,8 +20,6 @@ using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 using ECM = std::pair<EC, std::string>;
 
-namespace fs = std::filesystem;
-
 template <typename T> using sptr = std::shared_ptr<T>;
 
 template <typename T> struct NBResult {
@@ -38,6 +35,9 @@ template <typename T> struct NBResult {
   }
   [[nodiscard]] bool is_error() const { return status == WaitResult::Error; }
 };
+
+template <typename Key, typename Value>
+using OrderDict = std::vector<std::pair<Key, Value>>;
 
 struct AMTokenSpan {
   size_t start = 0;
@@ -210,16 +210,14 @@ public:
   NonCopyableNonMovable() = default;
 };
 
-template <typename T> struct ECMResult {
+struct ECMResult {
+  ECMResult() = default;
+  ECMResult(ECM result) : rcm(std::move(result)) {}
+
   /**
    * @brief Result status code and detail message.
    */
   ECM rcm = {EC::Success, ""};
-
-  /**
-   * @brief Typed result payload data.
-   */
-  T data = {};
 
   /**
    * @brief Return true when status is success.
@@ -227,4 +225,5 @@ template <typename T> struct ECMResult {
   [[nodiscard]] bool ok() const { return rcm.first == EC::Success; }
 
   operator bool() const { return ok(); }
+  operator ECM() const { return rcm; }
 };

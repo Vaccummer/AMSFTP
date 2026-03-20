@@ -1348,7 +1348,9 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
       }
 
       if (task.path_type == PathType::DIR) {
-        task.rcm = dst_client->IOPort().mkdirs(task.dst);
+        task.rcm = dst_client->IOPort().mkdirs(
+            AMDomain::filesystem::MkdirsArgs{task.dst},
+            AMDomain::client::ClientControlComponent{});
         task.IsFinished = true;
         continue;
       }
@@ -1366,18 +1368,20 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
           }
           continue;
         }
-        auto [dst_rcm, dst_info] = dst_client->IOPort().stat(task.dst, false);
-        if (dst_rcm.first != EC::Success) {
+        auto dst_stat = dst_client->IOPort().stat(
+            AMDomain::filesystem::StatArgs{task.dst, false},
+            AMDomain::client::ClientControlComponent{});
+        if (dst_stat.rcm.first != EC::Success) {
           task.rcm = {EC::InvalidOffset, "Dst stat failed but offset is given"};
           task.IsFinished = true;
           goto OffsetErrorCB;
         }
-        if (dst_info.type == PathType::DIR) {
+        if (dst_stat.info.type == PathType::DIR) {
           task.rcm = {EC::NotAFile, "Dst already exists but is a directory"};
           task.IsFinished = true;
           goto OffsetErrorCB;
         }
-        if (resume_offset > dst_info.size) {
+        if (resume_offset > dst_stat.info.size) {
           task.rcm = {EC::InvalidOffset, "Offset exceeds dst file size"};
           task.IsFinished = true;
           goto OffsetErrorCB;

@@ -2,9 +2,10 @@
 #include "TaskSchedulerCore.hpp"
 
 #include "domain/client/ClientDomainService.hpp"
+#include "domain/client/ClientPort.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/time.hpp"
-#include "infrastructure/client/runtime/TransferExecution.hpp"
+
 
 #include <algorithm>
 #include <chrono>
@@ -61,7 +62,8 @@ bool TaskSchedulerCore::HasPendingTasksLocked() const {
 
 void TaskSchedulerCore::SetTaskPool_(
     const TaskId &task_id,
-    const std::shared_ptr<AMApplication::client::ClientPublicPool> &pool) {
+    const std::shared_ptr<
+        AMApplication::TransferRuntime::ITransferClientPoolPort> &pool) {
   if (task_id.empty()) {
     return;
   }
@@ -73,7 +75,7 @@ void TaskSchedulerCore::SetTaskPool_(
   }
 }
 
-std::shared_ptr<AMApplication::client::ClientPublicPool>
+std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort>
 TaskSchedulerCore::GetTaskPool_(const TaskId &task_id) const {
   if (task_id.empty()) {
     return nullptr;
@@ -86,7 +88,7 @@ TaskSchedulerCore::GetTaskPool_(const TaskId &task_id) const {
   return it->second;
 }
 
-std::shared_ptr<AMApplication::client::ClientPublicPool>
+std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort>
 TaskSchedulerCore::TakeTaskPool_(const TaskId &task_id) {
   if (task_id.empty()) {
     return nullptr;
@@ -394,8 +396,8 @@ ssize_t TaskSchedulerCore::CalculateBufferSize(const ClientHandle &src_client,
                            AMMinBufferSize);
 }
 
-std::string TaskSchedulerCore::CanonicalTaskNickname_(
-    const std::string &nickname) {
+std::string
+TaskSchedulerCore::CanonicalTaskNickname_(const std::string &nickname) {
   if (nickname.empty() ||
       AMDomain::host::HostManagerService::IsLocalNickname(nickname)) {
     return "local";
@@ -424,29 +426,80 @@ std::vector<std::string> TaskSchedulerCore::CollectTaskNicknames_(
   return nicknames;
 }
 
-std::pair<TaskSchedulerCore::ECM,
-          std::unordered_map<std::string, TaskSchedulerCore::ClientHandle>>
+std::pair<TaskSchedulerCore::ECM, TaskSchedulerCore::TaskClientCollection>
 TaskSchedulerCore::AcquireTaskClients_(
     const std::shared_ptr<TaskInfo> &task_info,
-    const std::shared_ptr<AMApplication::client::ClientPublicPool> &pool) {
+    const std::shared_ptr<
+        AMApplication::TransferRuntime::ITransferClientPoolPort> &pool) {
   if (!task_info) {
-    return {{EC::InvalidArg, "TaskInfo is nullptr"}, {}};
+    return {{EC::InvalidArg, "TaskInfo is nullptr"}, TaskClientCollection{}};
   }
   if (!pool) {
-    return {{EC::InvalidHandle, "Transfer client pool is not bound"}, {}};
+    return {{EC::InvalidHandle, "Transfer client pool is not bound"},
+            TaskClientCollection{}};
   }
-  return pool->AcquireClients(task_info->id, CollectTaskNicknames_(task_info));
+
+  auto [acquire_rcm, primary] =
+      pool->AcquireClients(task_info->id, CollectTaskNicknames_(task_info));
+  if (acquire_rcm.first != EC::Success) {
+    return {acquire_rcm, TaskClientCollection{}};
+  }
+
+  TaskClientCollection collection;
+  collection.primary_clients = std::move(primary);
+
+  std::unordered_set<std::string> same_host_nicknames;
+  if (task_info->tasks) {
+    for (const auto &task : *(task_info->tasks)) {
+      const std::string src_key = CanonicalTaskNickname_(task.src_host);
+      const std::string dst_key = CanonicalTaskNickname_(task.dst_host);
+      if (!src_key.empty() && src_key == dst_key) {
+        same_host_nicknames.insert(src_key);
+      }
+    }
+  }
+
+  for (const auto &nickname : same_host_nicknames) {
+    auto [extra_rcm, extra_client] =
+        pool->AcquireClient(task_info->id, nickname, -1, -1, true);
+    if (extra_rcm.first != EC::Success || !extra_client) {
+      if (extra_rcm.first == EC::Success) {
+        extra_rcm = {
+            EC::InvalidHandle,
+            AMStr::fmt("Failed to acquire extra client for {}", nickname)};
+      }
+      return {extra_rcm, TaskClientCollection{}};
+    }
+    auto primary_it = collection.primary_clients.find(nickname);
+    if (primary_it != collection.primary_clients.end() && primary_it->second &&
+        primary_it->second->GetUID() == extra_client->GetUID()) {
+      return {{EC::InvalidHandle,
+               AMStr::fmt("Acquire extra client for {} returned same id {}",
+                          nickname, extra_client->GetUID())},
+              TaskClientCollection{}};
+    }
+    collection.secondary_clients[nickname] = std::move(extra_client);
+  }
+  return {{EC::Success, ""}, std::move(collection)};
 }
 
-TaskSchedulerCore::ClientHandle TaskSchedulerCore::ResolveTaskClient_(
-    const std::unordered_map<std::string, ClientHandle> &clients,
-    const std::string &nickname) const {
+TaskSchedulerCore::ClientHandle
+TaskSchedulerCore::ResolveTaskClient_(const TaskClientCollection &clients,
+                                      const std::string &nickname,
+                                      bool prefer_secondary) const {
   const std::string key = CanonicalTaskNickname_(nickname);
-  auto it = clients.find(key);
-  if (it == clients.end()) {
+  if (prefer_secondary) {
+    auto secondary_it = clients.secondary_clients.find(key);
+    if (secondary_it != clients.secondary_clients.end()) {
+      return secondary_it->second;
+    }
     return nullptr;
   }
-  return it->second;
+  auto primary_it = clients.primary_clients.find(key);
+  if (primary_it == clients.primary_clients.end()) {
+    return nullptr;
+  }
+  return primary_it->second;
 }
 
 void TaskSchedulerCore::WorkerLoop(size_t thread_index) {
@@ -549,8 +602,12 @@ void TaskSchedulerCore::ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
       continue;
     }
 
-    auto src_client = ResolveTaskClient_(task_clients, task.src_host);
-    auto dst_client = ResolveTaskClient_(task_clients, task.dst_host);
+    const std::string src_key = CanonicalTaskNickname_(task.src_host);
+    const std::string dst_key = CanonicalTaskNickname_(task.dst_host);
+    const bool same_host_transfer = !src_key.empty() && src_key == dst_key;
+    auto src_client = ResolveTaskClient_(task_clients, task.src_host, false);
+    auto dst_client =
+        ResolveTaskClient_(task_clients, task.dst_host, same_host_transfer);
     if (!src_client || !dst_client) {
       task.rcm = {EC::ClientNotFound, "Task client is not available in pool"};
       task.IsFinished = true;
@@ -562,7 +619,7 @@ void TaskSchedulerCore::ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
     }
 
     if (task.path_type == PathType::DIR) {
-      task.rcm = dst_client->IOPort().mkdirs(task.dst);
+      task.rcm = dst_client->IOPort().mkdirs({task.dst, {}});
       task.IsFinished = true;
       continue;
     }
@@ -580,18 +637,18 @@ void TaskSchedulerCore::ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
         }
         continue;
       }
-      auto [dst_rcm, dst_info] = dst_client->IOPort().stat(task.dst, false);
-      if (dst_rcm.first != EC::Success) {
+      auto dst_stat = dst_client->IOPort().stat({task.dst, false, {}});
+      if (dst_stat.rcm.first != EC::Success) {
         task.rcm = {EC::InvalidOffset, "Dst stat failed but offset is given"};
         task.IsFinished = true;
         goto OffsetErrorCB;
       }
-      if (dst_info.type == PathType::DIR) {
+      if (dst_stat.info.type == PathType::DIR) {
         task.rcm = {EC::NotAFile, "Dst already exists but is a directory"};
         task.IsFinished = true;
         goto OffsetErrorCB;
       }
-      if (resume_offset > dst_info.size) {
+      if (resume_offset > dst_stat.info.size) {
         task.rcm = {EC::InvalidOffset, "Offset exceeds dst file size"};
         task.IsFinished = true;
         goto OffsetErrorCB;
@@ -612,18 +669,12 @@ void TaskSchedulerCore::ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
                                                   std::memory_order_relaxed);
     }
 
-    if (src_client->GetUID() == dst_client->GetUID() &&
-        src_client->ConfigPort().GetProtocol() == ClientProtocol::SFTP) {
-      pd.ring_buffer = nullptr;
-    } else {
-      pd.ring_buffer = std::make_shared<StreamRingBuffer>(CalculateBufferSize(
-          src_client, dst_client,
-          task_info->buffer_size.load(std::memory_order_relaxed)));
-    }
+    pd.ring_buffer = std::make_shared<StreamRingBuffer>(CalculateBufferSize(
+        src_client, dst_client,
+        task_info->buffer_size.load(std::memory_order_relaxed)));
 
-    task.rcm = execution_engine_->ExecuteSingleFileTransfer(src_client,
-                                                            dst_client,
-                                                            task_info);
+    task.rcm = execution_engine_->TransferSignleFile(src_client, dst_client,
+                                                     task_info);
     if (pd.is_pause_only()) {
       task.rcm = {EC::TransferPause, "Task paused by user"};
       task_info->SetStatus(TaskStatus::Paused);
@@ -665,11 +716,7 @@ void TaskSchedulerCore::ExecuteTask(std::shared_ptr<TaskInfo> task_info) {
 
 TaskSchedulerCore::TaskSchedulerCore()
     : execution_engine_(
-          std::make_unique<AMInfra::ClientRuntime::TransferExecutionEngine>(
-              chunk_size_, [this](const std::shared_ptr<TaskInfo> &task_info,
-                                  WkProgressData &pd, bool force) {
-                InnerCallback(task_info, pd, force);
-              })) {
+          AMDomain::transfer::CreateDefaultTransferExecutionPort()) {
   affinity_queues_.resize(1);
   conducting_by_thread_.resize(1);
   conducting_infos_.resize(1);
@@ -721,7 +768,6 @@ size_t TaskSchedulerCore::ChunkSize(int64_t size) {
     return chunk_size_;
   }
   chunk_size_ = std::min<size_t>(static_cast<size_t>(size), 4 * AMMB);
-  execution_engine_->SetChunkSize(chunk_size_);
   return chunk_size_;
 }
 
@@ -824,7 +870,8 @@ TaskSchedulerCore::Submit(std::shared_ptr<TaskInfo> task_info) {
 
 std::shared_ptr<TaskInfo> TaskSchedulerCore::CreateTaskInfo(
     std::shared_ptr<TASKS> tasks,
-    const std::shared_ptr<AMApplication::client::ClientPublicPool> &pool,
+    const std::shared_ptr<
+        AMApplication::TransferRuntime::ITransferClientPoolPort> &pool,
     TransferCallback callback, ssize_t buffer_size, bool quiet, int thread_id) {
   auto task_info = std::make_shared<TaskInfo>(quiet);
   task_info->id = GenerateTaskId_();
@@ -838,7 +885,6 @@ std::shared_ptr<TaskInfo> TaskSchedulerCore::CreateTaskInfo(
   task_info->affinity_thread.store(thread_id, std::memory_order_relaxed);
   return task_info;
 }
-
 
 std::optional<TaskStatus> TaskSchedulerCore::GetStatus(const TaskId &id) const {
   {

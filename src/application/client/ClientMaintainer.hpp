@@ -16,6 +16,7 @@
 #include <utility>
 #include <vector>
 
+namespace AMApplication::client {
 class ClientMaintainer {
 public:
   using ECM = std::pair<ErrorCode, std::string>;
@@ -79,8 +80,8 @@ private:
         if (!client) {
           continue;
         }
-        ECM rcm =
-            client->IOPort().Check(heartbeat_timeout_ms, AMTime::miliseconds());
+        ECM rcm = client->IOPort().Check({AMDomain::client::MakeClientIOControlArgs(
+            nullptr, heartbeat_timeout_ms, AMTime::miliseconds())});
         if (rcm.first != EC::Success && callback) {
           (void)CallCallbackSafe(callback, client, rcm);
         }
@@ -147,9 +148,7 @@ public:
   /**
    * @brief Destroy maintainer and stop heartbeat worker deterministically.
    */
-  ~ClientMaintainer() {
-    StopHeartbeat_();
-  }
+  ~ClientMaintainer() { StopHeartbeat_(); }
 
   /**
    * @brief Get current host nicknames snapshot.
@@ -184,7 +183,8 @@ public:
   }
 
   /**
-   * @brief Get all clients when nickname filter is empty, otherwise return matched clients.
+   * @brief Get all clients when nickname filter is empty, otherwise return
+   * matched clients.
    */
   std::vector<ClientHandle>
   GetClients(const std::vector<std::string> &nicknames = {}) const {
@@ -252,3 +252,4 @@ public:
     disconnect_cb_ = std::move(callback);
   }
 };
+} // namespace AMApplication::client

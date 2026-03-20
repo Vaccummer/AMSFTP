@@ -1,5 +1,7 @@
 #include "domain/client/ClientDomainService.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "foundation/Path.hpp"
+#include "foundation/tools/time.hpp"
 #include "foundation/tools/string.hpp"
 
 namespace AMDomain::client {
@@ -12,6 +14,35 @@ std::string NormalizePath_(const std::string &value,
   return AMPathStr::UnifyPathSep(value, path_sep);
 }
 } // namespace
+
+float ResolveTimeoutBudgetMs(int timeout_ms, int64_t start_time) {
+  if (timeout_ms <= 0) {
+    return static_cast<float>(timeout_ms);
+  }
+  if (start_time < 0) {
+    return static_cast<float>(timeout_ms);
+  }
+  const float remain = static_cast<float>(timeout_ms) -
+                       static_cast<float>(AMTime::miliseconds() - start_time);
+  return remain > 0.0f ? remain : 0.0f;
+}
+
+ClientControlComponent MakeClientControlComponent(amf interrupt_flag,
+                                                  int timeout_ms,
+                                                  int64_t start_time) {
+  timeoutf timeout_port = CreateClientTimeoutPort();
+  if (timeout_port) {
+    timeout_port->SetTimeout(ResolveTimeoutBudgetMs(timeout_ms, start_time));
+  }
+  return ClientControlComponent(std::move(interrupt_flag),
+                                std::move(timeout_port));
+}
+
+ClientControlComponent MakeClientIOControlArgs(amf interrupt_flag, int timeout_ms,
+                                               int64_t start_time) {
+  return MakeClientControlComponent(std::move(interrupt_flag), timeout_ms,
+                                    start_time);
+}
 
 /**
  * @brief Clamp heartbeat timeout to legal range.
@@ -127,11 +158,11 @@ ECM ClientDomainService::ValidateConnectRequest(
       request.protocol == AMDomain::host::ClientProtocol::LOCAL) {
     return Err(EC::InvalidArg, "local protocol is not allowed here");
   }
-  std::string error_info;
-  if (!request.IsValid(&error_info)) {
-    return Err(EC::InvalidArg,
-               error_info.empty() ? std::string("invalid connect request")
-                                  : error_info);
+  ECM validate_rcm = AMDomain::host::HostService::ValidateConfig(request);
+  if (!isok(validate_rcm)) {
+    return Err(EC::InvalidArg, validate_rcm.second.empty()
+                                   ? std::string("invalid connect request")
+                                   : validate_rcm.second);
   }
   return Ok();
 }

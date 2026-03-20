@@ -4,13 +4,12 @@
 #include "application/client/ClientAppService.hpp"
 #include "domain/log/LoggerManager.hpp"
 #include "foundation/DataClass.hpp"
-#include "infrastructure/client/runtime/ClientFactoryAdapter.hpp"
 #include "infrastructure/signal_monitor/SignalMonitor.hpp"
-#include "domain/filesystem/FileSystemManager.hpp"
 #include "domain/host/HostManager.hpp"
 #include "application/transfer/TransferAppService.hpp"
 #include "interface/cli/CLIBind.hpp"
 #include "interface/cli/InteractiveLoop.hpp"
+#include "interface/prompt/Prompt.hpp"
 #include <atomic>
 #include <exception>
 #include <filesystem>
@@ -49,17 +48,17 @@ int main(int argc, char **argv) {
     AMDomain::host::AMHostConfigManager host_config_manager{};
     AMDomain::host::AMKnownHostsManager known_hosts_manager{};
     AMLoggerManager log_manager{};
-    AMInfra::ClientRuntime::ClientFactoryAdapter client_factory(
-        host_config_manager);
-    AMApplication::client::ClientAppService client_service(
-        host_config_manager, client_factory);
-    auto &transfer_manager = AMDomain::transfer::AMTransferManager::Instance();
-    AMApplication::TransferWorkflow::TransferAppService transfer_service(transfer_manager);
-    auto &filesystem = AMDomain::filesystem::AMFileSystem::Instance();
+    AMApplication::client::ClientAppService::ClientServiceArg client_arg = {};
+    client_arg.heartbeat_interval_s = 60;
+    client_arg.heartbeat_timeout_ms = 100;
+    client_arg.host_config_manager = &host_config_manager;
+    AMApplication::client::ClientAppService client_service(std::move(client_arg));
+
+    AMApplication::TransferWorkflow::TransferAppService transfer_service(
+        client_service, client_service.PublicPool());
     AMBootstrap::AppHandle app_handle(
         signal_monitor, prompt_manager, host_config_manager,
-        known_hosts_manager, log_manager, client_service, transfer_service,
-        filesystem);
+        known_hosts_manager, log_manager, client_service, transfer_service);
     AMBootstrap::SessionHandle session_handle;
     ECM init_rcm = app_handle.Init(session_handle.task_control_token);
     if (!isok(init_rcm)) {

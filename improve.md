@@ -1,19 +1,44 @@
-Give me a concrete and detailed plan:
-include/infrastructure/Config.hpp
-AMInfraConfigManager needs to refactor:
 
-1. domain layer ConfigManager
+@include\domain\client_tmp
 
-init with dict<DocumentKind, tuple<json_path, schema_path, schema_data_str>> and AsyncWriteSchedulerPort
+@include\infrastructure\client\runtime\IOCore.hpp
 
-hold a dict <DocumentKind, DocumentState>
-DocumentState add an attr to store schema string data(cause in the last stage, i will hard code schema in the programm, schema path is actually schema_data output path)
-implement functions has similar signatures to SuperHandlePort:
-for example:
-Json read/write function add an extra arg  DocumentKind
-Json dump function add arg  DocumentKind and bool async
+refactor ressult mixed with legacy functions confuse me , so i add a new folder to store the refactor result
+
+Ports:
+
+## port for client
+
+remove cwd, or login_dir related function. that's upper layer responsibility, this layer only exposes functions to operate metadata
 
 
-2. json data detach port
 
-some classed may directly read Json
+Manager:
+
++ hold Attr
+
+1. <nicname, client> dict
+2. private keys
+3. heartbeat set
+4. heartbeat thread
+
+refer to IOCore.hpp ClientMaintainer, you can view it as a base templete for ClientManager, but you can't use it. IOCore.hpp will be deprecated in the future cause it has too many functions that shall not belong to Infra layer
+
+Query-Like Function:
+
+1. use nickname to get client port
+2. check nickname exists
+3. get local client
+4. get clients dict
+5. get heartbeat set
+6. get private keys in use
+
+Set-Like Function:
+
+1. add/remove private keys
+2. set heartbeat args
+3. set client disconnect callback
+4. set client pass query callback
+5. Create Client
+6. Add Client
+7. Remove Client

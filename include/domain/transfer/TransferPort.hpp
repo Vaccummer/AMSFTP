@@ -5,12 +5,7 @@
 #include <memory>
 #include <unordered_map>
 
-namespace AMDomain::client {
-class IClientPort;
-}
-
 namespace AMDomain::transfer {
-
 class ITransferPoolPort {
 public:
   virtual ~ITransferPoolPort() = default;

@@ -332,7 +332,8 @@ public:
             AMDomain::host::KnownHostQuery query{
                 "",       hostname, static_cast<int>(port_num),
                 protocol, username, fingerprint};
-            if (!query.IsValid()) {
+            if (!isok(AMDomain::host::KnownHostRules::ValidateKnownHostQuery(
+                    query))) {
               continue;
             }
 
@@ -496,6 +497,8 @@ public:
     *typed = {};
 
     const Json options = OptionsRoot_(root);
+    (void)AMJson::QueryKey(options, {"ClientManager", "heartbeat_interval_s"},
+                           &typed->client_manager.heartbeat_interval_s);
     (void)AMJson::QueryKey(options, {"ClientManager", "heartbeat_timeout_ms"},
                            &typed->client_manager.heartbeat_timeout_ms);
     (void)AMJson::QueryKey(options, {"TransferManager", "init_thread_num"},
@@ -524,6 +527,8 @@ public:
       *root = Json::object();
     }
 
+    (*root)["Options"]["ClientManager"]["heartbeat_interval_s"] =
+        typed->client_manager.heartbeat_interval_s;
     (*root)["Options"]["ClientManager"]["heartbeat_timeout_ms"] =
         typed->client_manager.heartbeat_timeout_ms;
     (*root)["Options"]["TransferManager"]["init_thread_num"] =

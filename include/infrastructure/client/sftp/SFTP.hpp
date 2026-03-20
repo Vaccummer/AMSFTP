@@ -2098,11 +2098,11 @@ public:
     ConRequest request = request_atomic_.lock().load();
     const AMDomain::client::ClientState current_state = GetState();
     const bool connected =
-        (current_state.first == AMDomain::client::ClientStatus::OK) &&
+        (current_state.status == AMDomain::client::ClientStatus::OK) &&
         session != nullptr && sftp != nullptr;
     if (connected) {
       if (!force) {
-        return current_state.second;
+        return current_state.rcm;
       }
       Disconnect();
     }
@@ -2642,7 +2642,7 @@ public:
         const AMDomain::client::ClientControlComponent &control) override {
     (void)args;
     AMFSI::CheckResult out = {};
-    out.status = GetState().first;
+    out.status = GetState().status;
     if (control.IsTimeout()) {
       out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
       SetState({AMDomain::client::ClientStatus::ConnectionBroken, out.rcm});
@@ -2667,7 +2667,7 @@ public:
   Connect(const AMFSI::ConnectArgs &args,
           const AMDomain::client::ClientControlComponent &control) override {
     AMFSI::ConnectResult out = {};
-    out.status = GetState().first;
+    out.status = GetState().status;
     if (control.IsTimeout()) {
       out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
       return out;
@@ -2675,7 +2675,7 @@ public:
     const AMDomain::client::ClientState prev_state = GetState();
     out.rcm = BaseConnect(args.force, control);
     if (isok(out.rcm) &&
-        prev_state.first != AMDomain::client::ClientStatus::OK) {
+        prev_state.status != AMDomain::client::ClientStatus::OK) {
       (void)UpdateOSType({}, control);
       (void)UpdateHomeDir({}, control);
     }

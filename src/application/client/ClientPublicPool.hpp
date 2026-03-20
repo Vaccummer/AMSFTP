@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../transfer/TransferRuntimePorts.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "foundation/DataClass.hpp"
 
@@ -15,7 +16,8 @@ namespace AMApplication::client {
 /**
  * @brief Transfer-only reusable client pool with per-task lease control.
  */
-class ClientPublicPool final : private NonCopyableNonMovable {
+class ClientPublicPool final : private NonCopyableNonMovable,
+                               public AMApplication::TransferRuntime::ITransferClientPoolPort {
 public:
   using ECM = std::pair<ErrorCode, std::string>;
   using ClientHandle = AMDomain::client::ClientHandle;
@@ -45,7 +47,8 @@ public:
    */
   std::pair<ECM, ClientHandle>
   AcquireClient(const std::string &task_id, const std::string &nickname,
-                int timeout_ms = -1, int64_t start_time = -1);
+                int timeout_ms = -1, int64_t start_time = -1,
+                bool force_new_instance = false) override;
 
   /**
    * @brief Acquire all distinct clients required by one task.
@@ -53,12 +56,12 @@ public:
   std::pair<ECM, std::unordered_map<std::string, ClientHandle>>
   AcquireClients(const std::string &task_id,
                  const std::vector<std::string> &nicknames,
-                 int timeout_ms = -1, int64_t start_time = -1);
+                 int timeout_ms = -1, int64_t start_time = -1) override;
 
   /**
    * @brief Release all leased clients owned by one task.
    */
-  void ReleaseTask(const std::string &task_id);
+  void ReleaseTask(const std::string &task_id) override;
 
 private:
   static inline constexpr const char *kLeaseDataName_ = "transfer.lease";

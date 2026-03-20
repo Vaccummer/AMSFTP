@@ -1,4 +1,5 @@
 #include "domain/host/HostManager.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/auth.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include <cstdint>
@@ -190,7 +191,7 @@ ECM cls::Rename(const std::string &old_nickname,
   if (IsLocalNickname_(old_nickname)) {
     return Err(EC::OperationUnsupported, "local host cannot be renamed");
   }
-  if (!AMDomain::host::ValidateNickname(new_nickname)) {
+  if (!AMDomain::host::HostService::ValidateNickname(new_nickname)) {
     return Err(EC::InvalidArg,
                "invalid new nickname, pattern is [a-zA-Z0-9_-]+");
   }

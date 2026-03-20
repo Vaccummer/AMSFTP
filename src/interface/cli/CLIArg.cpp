@@ -12,6 +12,8 @@
 #include <iostream>
 
 namespace {
+using ClientPath = AMDomain::filesystem::ClientPath;
+
 /**
  * @brief Resolve the task-control token from session context.
  */
@@ -151,7 +153,7 @@ ECM ResolveTransferEndpoint_(
     AMApplication::client::ClientAppService &client_service,
     const AMDomain::var::IVarSubstitutionPort &substitution_port,
     const std::string &raw, AMDomain::client::amf interrupt_flag,
-    TransferEndpoint *out_endpoint) {
+    ClientPath *out_endpoint) {
   if (!out_endpoint) {
     return Err(EC::InvalidArg, "null transfer endpoint output");
   }
@@ -246,7 +248,7 @@ TransferCliBuildResult BuildTransferArgsFromCli_(
   out.build_args.srcs.clear();
   out.build_args.srcs.reserve(normalized_src_tokens.size());
   for (const auto &token : normalized_src_tokens) {
-    TransferEndpoint endpoint = {};
+    ClientPath endpoint = {};
     ECM resolve_rcm = ResolveTransferEndpoint_(
         client_service, substitution_port, token, interrupt_flag, &endpoint);
     if (!isok(resolve_rcm)) {
@@ -256,7 +258,7 @@ TransferCliBuildResult BuildTransferArgsFromCli_(
     out.build_args.srcs.push_back(std::move(endpoint));
   }
 
-  TransferEndpoint dst_endpoint = {};
+  ClientPath dst_endpoint = {};
   ECM dst_rcm = ResolveTransferEndpoint_(client_service, substitution_port,
                                          normalized_dst_token, interrupt_flag,
                                          &dst_endpoint);
