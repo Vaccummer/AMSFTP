@@ -1,4 +1,4 @@
-#include "application/client/runtime/ClientPublicPool.hpp"
+#include "ClientPublicPool.hpp"
 
 #include "domain/client/ClientDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
@@ -150,7 +150,9 @@ std::pair<ECM, ClientHandle> ClientPublicPool::TryAcquireExistingLocked_(
     WriteLeaseStateLocked_(metadata, lease);
     metadata_lock.unlock();
 
-    ECM check_rcm = client->IOPort().Check(timeout_ms, start_time);
+    ECM check_rcm = client->IOPort().Check(
+        {AMDomain::client::MakeClientIOControlArgs(nullptr, timeout_ms,
+                                                   start_time)});
     if (check_rcm.first == EC::Success) {
       TrackTaskLeaseLocked_(task_id, client);
       return {ECM{EC::Success, ""}, client};
@@ -174,7 +176,7 @@ std::pair<ECM, ClientHandle> ClientPublicPool::TryAcquireExistingLocked_(
  */
 std::pair<ECM, ClientHandle> ClientPublicPool::AcquireClient(
     const std::string &task_id, const std::string &nickname, int timeout_ms,
-    int64_t start_time) {
+    int64_t start_time, bool force_new_instance) {
   if (task_id.empty()) {
     return {ECM{EC::InvalidArg, "Task id is empty"}, nullptr};
   }
@@ -183,7 +185,7 @@ std::pair<ECM, ClientHandle> ClientPublicPool::AcquireClient(
     return {ECM{EC::InvalidArg, "Client nickname is empty"}, nullptr};
   }
 
-  {
+  if (!force_new_instance) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto [reuse_rcm, reused] =
         TryAcquireExistingLocked_(task_id, key, timeout_ms, start_time);
@@ -207,7 +209,9 @@ std::pair<ECM, ClientHandle> ClientPublicPool::AcquireClient(
     return {create_rcm, nullptr};
   }
 
-  ECM check_rcm = created->IOPort().Check(timeout_ms, start_time);
+  ECM check_rcm = created->IOPort().Check(
+      {AMDomain::client::MakeClientIOControlArgs(nullptr, timeout_ms,
+                                                 start_time)});
   if (check_rcm.first != EC::Success) {
     return {check_rcm, nullptr};
   }
@@ -267,7 +271,6 @@ void ClientPublicPool::ReleaseTask(const std::string &task_id) {
     if (!client) {
       continue;
     }
-    const std::string key = CanonicalNickname_(client->ConfigPort().GetNickname());
     auto &metadata = client->MetaDataPort();
     std::unique_lock<std::shared_mutex> metadata_lock(metadata.Mutex());
     ClientLeaseState lease = ReadLeaseStateLocked_(metadata);
@@ -275,11 +278,6 @@ void ClientPublicPool::ReleaseTask(const std::string &task_id) {
       WriteLeaseStateLocked_(metadata, ClientLeaseState{});
     }
     metadata_lock.unlock();
-
-    if (client->ConfigPort().GetState().first !=
-        AMDomain::client::ClientStatus::OK) {
-      RemoveClientLocked_(key, client);
-    }
   }
 }
 } // namespace AMApplication::client

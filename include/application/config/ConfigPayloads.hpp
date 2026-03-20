@@ -21,6 +21,7 @@ struct AutoBackupSettings {
  * @brief Typed subtree for `Settings.Options.ClientManager`.
  */
 struct ClientManagerOptions {
+  int heartbeat_interval_s = 60;
   int heartbeat_timeout_ms = 100;
 };
 

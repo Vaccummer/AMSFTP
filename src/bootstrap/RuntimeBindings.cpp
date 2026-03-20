@@ -546,6 +546,9 @@ std::string Runtime::ResolveSettingString(const std::vector<std::string> &path,
       if (path.size() == 3 && path[1] == "ClientManager" && path[2] == "heartbeat_timeout_ms") {
         return std::to_string(options.client_manager.heartbeat_timeout_ms);
       }
+      if (path.size() == 3 && path[1] == "ClientManager" && path[2] == "heartbeat_interval_s") {
+        return std::to_string(options.client_manager.heartbeat_interval_s);
+      }
       if (path.size() == 3 && path[1] == kTransferOptionsKey) {
         if (path[2] == "init_thread_num") {
           return std::to_string(options.transfer_manager.init_thread_num);

@@ -4,11 +4,10 @@
 #include "application/transfer/TransferAppService.hpp"
 #include "application/var/VarWorkflows.hpp"
 #include "application/config/ConfigPayloads.hpp"
-#include "domain/filesystem/FileSystemManager.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostManager.hpp"
 #include "domain/log/LoggerPorts.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
-#include "application/transfer/TransferAppService.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include "infrastructure/log/FileLoggerWriter.hpp"
@@ -34,6 +33,39 @@ int ResolveClientHeartbeatTimeoutMs_(
   }
   if (value > 10000) {
     return 10000;
+  }
+  return value;
+}
+
+/**
+ * @brief Resolve configured client heartbeat interval in seconds.
+ *
+ * Value `<= 0` means heartbeat disabled.
+ */
+int ResolveClientHeartbeatIntervalS_(
+    AMApplication::config::AMConfigAppService &config_service) {
+  AMApplication::config::SettingsOptionsSnapshot options = {};
+  if (!config_service.Read(&options)) {
+    return 60;
+  }
+  return options.client_manager.heartbeat_interval_s;
+}
+
+/**
+ * @brief Resolve initial transfer worker thread count from config snapshot.
+ */
+int ResolveTransferInitThreadCount_(
+    AMApplication::config::AMConfigAppService &config_service) {
+  AMApplication::config::SettingsOptionsSnapshot options = {};
+  if (!config_service.Read(&options)) {
+    return 1;
+  }
+  int value = options.transfer_manager.init_thread_num;
+  if (value < 1) {
+    value = 1;
+  }
+  if (value > 128) {
+    value = 128;
   }
   return value;
 }
@@ -106,7 +138,7 @@ constexpr const char *kSessionControlHook = "SESSION_CONTROL_TOKEN";
  * @brief Build hook callback that updates the bound session token status.
  */
 AMDomain::signal::SignalHook BuildSessionControlHook_(
-    const amf &task_control_token) {
+    amf task_control_token) {
   AMDomain::signal::SignalHook hook;
   hook.callback = [token_weak = std::weak_ptr<TaskControlToken>(task_control_token)](
                       int signum) {
@@ -143,8 +175,8 @@ CliManagers::CliManagers(AMSignalMonitorPort &signal_monitor_ref,
                          AMApplication::VarWorkflow::VarAppService &var_service_ref,
                          AMLoggerManagerPort &log_manager_ref,
                          AMApplication::client::ClientAppService &client_service_ref,
-                         AMApplication::TransferWorkflow::TransferAppService &transfer_manager_ref,
-                         AMDomain::filesystem::AMFileSystem &filesystem_ref)
+                         AMApplication::TransferWorkflow::TransferAppService
+                             &transfer_service_ref)
     : signal_monitor(signal_monitor_ref), config_service(config_service_ref),
       style_service(style_service_ref),
       prompt_manager(prompt_manager_ref),
@@ -152,12 +184,12 @@ CliManagers::CliManagers(AMSignalMonitorPort &signal_monitor_ref,
       known_hosts_manager(known_hosts_manager_ref),
       var_service(var_service_ref), log_manager(log_manager_ref),
       client_service(client_service_ref),
-      transfer_manager(transfer_manager_ref), filesystem(filesystem_ref) {}
+      transfer_service(transfer_service_ref) {}
 
 /**
  * @brief Initialize all bound managers in dependency-safe order.
  */
-ECM CliManagers::Init(const amf &task_control_token) {
+ECM CliManagers::Init(amf task_control_token) {
   if (!task_control_token) {
     return Err(EC::InvalidArg, "CliManagers::Init requires task control token");
   }
@@ -188,13 +220,15 @@ ECM CliManagers::Init(const amf &task_control_token) {
   if (!isok(rcm)) {
     return rcm;
   }
+  client_service.SetHeartbeatIntervalS(
+      ResolveClientHeartbeatIntervalS_(config_service));
   client_service.SetHeartbeatTimeoutMs(
       ResolveClientHeartbeatTimeoutMs_(config_service));
   client_service.SetInteractiveFlag(
       std::make_shared<std::atomic<bool>>(false));
   client_service.SetKnownHostCallback(
       [this](const AMDomain::client::KnownHostQuery &query) -> ECM {
-        if (!query.IsValid()) {
+        if (!isok(AMDomain::host::KnownHostRules::ValidateKnownHostQuery(query))) {
           return Err(EC::InvalidArg, "invalid known host query");
         }
         auto stored = query;
@@ -277,11 +311,17 @@ ECM CliManagers::Init(const amf &task_control_token) {
   if (!isok(rcm)) {
     return rcm;
   }
-  rcm = transfer_manager.Init();
+  rcm = transfer_service.Init();
   if (!isok(rcm)) {
     return rcm;
   }
-  return filesystem.Init();
+  const int transfer_threads = ResolveTransferInitThreadCount_(config_service);
+  rcm = transfer_service.SetWorkerThreadCount(
+      static_cast<size_t>(transfer_threads));
+  if (!isok(rcm)) {
+    return rcm;
+  }
+  return Ok();
 }
 
 

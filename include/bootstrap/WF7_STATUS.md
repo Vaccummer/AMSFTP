@@ -2,9 +2,9 @@
 
 ## 1) Problem Statement / Non-goals
 
-- Problem: keep WF-7 cutover checks and migration metrics reliable after legacy
-  compatibility header folders are removed, and finish include cutover of
-  legacy manager header prefixes.
+- Problem: keep WF-7 cutover checks and migration metrics reliable across
+  legacy compatibility header layout changes (including retained deprecated
+  shim paths), and finish include cutover of legacy manager header prefixes.
 - Non-goals in this pass:
   - runtime behavior changes.
 
@@ -42,10 +42,14 @@
       `AMManager/{Config,Logger,SignalMonitor}.hpp`
   - added full manager-compat gate:
     - `-IncludeManagerCompat` forbids `AMManager/*`
+  - added optional filesystem-refactor gate integration:
+    - `-IncludeFilesystemRefactorGuard` executes
+      `tools/check_filesystem_refactor_guards.ps1`
 - output now reports prefix/header rule counts.
 - `tools/report_legacy_includes.ps1`
   - switched to direct include-pattern scanning and aggregation.
-  - now reports legacy usage even when legacy header directories are absent.
+  - now reports legacy usage whether compatibility header directories are
+    absent or retained as deprecated shims.
 - Source include cutover:
   - replaced legacy manager singleton-compat includes with infrastructure
     includes in `src/{domain,interface,bootstrap}/*`.
@@ -80,6 +84,9 @@
   - 0 violations for `AMManager/{Config,Logger,SignalMonitor}.hpp`
 - manager-compat mode now passes:
   - 0 violations (`AMManager/*`)
+- filesystem-guard integrated mode now passes:
+  - `check_wf7_cutover -IncludeFilesystemRefactorGuard`
+  - filesystem active-path refactor guard: PASS
 - `report_legacy_includes` now reports actionable totals:
   - `AMBase`: 0
   - `AMCLI`: 0

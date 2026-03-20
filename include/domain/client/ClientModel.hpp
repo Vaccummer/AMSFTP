@@ -196,4 +196,9 @@ struct TraceInfo {
         action(std::move(action)), message(std::move(message)),
         request(std::move(request)), timestamp(AMTime::seconds()) {}
 };
+
+struct ClientState {
+  ClientStatus status = ClientStatus::NotInitialized;
+  ECM rcm = ECM(ErrorCode::Success, "");
+};
 } // namespace AMDomain::client

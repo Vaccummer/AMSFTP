@@ -1,4 +1,5 @@
 #include "application/transfer/TaskWorkflows.hpp"
+#include "application/transfer/TransferWorkflows.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include <unordered_set>
@@ -46,25 +47,25 @@ ECM EnsureInteractive(const SessionMode &mode) {
  * @brief Run task list workflow.
  */
 ECM ExecuteTaskList(ITaskGateway &gateway, const TaskListFilter &filter,
-                    const SessionMode &mode, amf interrupt_flag) {
+                    const SessionMode &mode) {
   ECM ready = EnsureInteractive(mode);
   if (!isok(ready)) {
     return ready;
   }
   return gateway.ListTasks(filter.pending, filter.suspend, filter.finished,
-                           filter.conducting, interrupt_flag);
+                           filter.conducting);
 }
 
 /**
  * @brief Run task show workflow.
  */
 ECM ExecuteTaskShow(ITaskGateway &gateway, const std::vector<std::string> &ids,
-                    const SessionMode &mode, amf interrupt_flag) {
+                    const SessionMode &mode) {
   ECM ready = EnsureInteractive(mode);
   if (!isok(ready)) {
     return ready;
   }
-  return gateway.ShowTasks(ids, interrupt_flag);
+  return gateway.ShowTasks(ids);
 }
 
 /**
@@ -171,7 +172,6 @@ ECM ExecuteTaskRetry(ITaskGateway &gateway, const TaskRetryOptions &options,
 JobCacheAddResult
 ExecuteJobCacheAdd(ITaskGateway &gateway,
                    const TransferWorkflow::TransferBuildArgs &build_args,
-                   const TransferWorkflow::IPathSubstitutionPort &substitutor,
                    const SessionMode &mode) {
   JobCacheAddResult out = {};
   ECM ready = EnsureInteractive(mode);
@@ -180,8 +180,7 @@ ExecuteJobCacheAdd(ITaskGateway &gateway,
     return out;
   }
 
-  out.rcm = TransferWorkflow::BuildTransferSet(build_args, substitutor, false,
-                                               &out.transfer_set, nullptr);
+  out.rcm = TransferWorkflow::BuildTransferSet(build_args, &out.transfer_set);
   if (!isok(out.rcm)) {
     return out;
   }
@@ -227,7 +226,7 @@ ECM ExecuteJobCacheClear(ITaskGateway &gateway, const SessionMode &mode) {
  */
 ECM ExecuteJobCacheSubmit(ITaskGateway &gateway,
                           const JobCacheSubmitOptions &options,
-                          const SessionMode &mode, amf interrupt_flag) {
+                          const SessionMode &mode) {
   ECM ready = EnsureInteractive(mode);
   if (!isok(ready)) {
     return ready;
@@ -238,7 +237,7 @@ ECM ExecuteJobCacheSubmit(ITaskGateway &gateway,
   if (!isok(rcm)) {
     return rcm;
   }
-  return gateway.SubmitCachedTransferSets(options.quiet, interrupt_flag,
+  return gateway.SubmitCachedTransferSets(options.quiet,
                                           options.is_async || suffix_async);
 }
 

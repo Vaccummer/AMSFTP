@@ -1,5 +1,6 @@
 #include "interface/completion/Searcher.hpp"
 #include "interface/completion/SearcherCommon.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "interface/adapters/ApplicationAdapters.hpp"
 #include <algorithm>
@@ -361,8 +362,10 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   if (HasTarget(ctx, AMCompletionTarget::HostAttr)) {
-    std::vector<std::string> fields(configkn::fileds.begin(),
-                                    configkn::fileds.end());
+    std::vector<std::string> fields = {
+        "nickname",    "hostname",   "username",  "port",      "protocol",
+        "password",    "buffer_size", "compression", "cmd_prefix", "wrap_cmd",
+        "keyfile",     "trash_dir",  "login_dir"};
     for (const auto &match : BuildGeneralMatch(fields, prefix)) {
       const std::string &field = fields[match.index];
       AMCompletionCandidate candidate;

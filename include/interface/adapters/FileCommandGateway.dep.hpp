@@ -1,33 +1,34 @@
 #pragma once
 
+#pragma message("AMSFTP deprecated header: include/interface/adapters/FileCommandGateway.dep.hpp; prefer interface/adapters/FileSystemAdapter.hpp")
+#ifdef __GNUC__
+#warning "AMSFTP deprecated header: include/interface/adapters/FileCommandGateway.dep.hpp; prefer interface/adapters/FileSystemAdapter.hpp"
+#endif
+
 #include "application/client/FileCommandWorkflows.hpp"
-#include "application/filesystem/FileSystemAppService.hpp"
+#include "application/client/ClientAppService.hpp"
 #include "foundation/DataClass.hpp"
 #include <string>
 #include <utility>
 #include <vector>
 
-#if !defined(AMSFTP_SUPPRESS_DEPRECATED_HEADER_NOTICE)
-#if defined(_MSC_VER)
-#pragma message("AMSFTP deprecated header: include/interface/adapters/FileCommandGateway.dep.hpp; prefer interface/adapters/FileSystemAdapter.hpp::FileSystemCliAdapter")
-#elif defined(__clang__) || defined(__GNUC__)
-#warning "AMSFTP deprecated header: include/interface/adapters/FileCommandGateway.dep.hpp; prefer interface/adapters/FileSystemAdapter.hpp::FileSystemCliAdapter"
-#endif
-#endif
-
 namespace AMInterface::ApplicationAdapters {
+using EC = ErrorCode;
+
 /**
- * @brief Deprecated workflow gateway kept for compatibility.
+ * @brief Deprecated compatibility gateway over filesystem app service.
+ *
+ * Use `FileSystemCliAdapter` instead for active interface-path calls.
  */
-class [[deprecated("Use FileSystemCliAdapter for direct interface-to-app calls")]]
-FileCommandGateway final
+class [[deprecated("Use FileSystemCliAdapter from FileSystemAdapter.hpp")]]
+    FileCommandGateway final
     : public AMApplication::FileCommandWorkflow::IFileCommandGateway {
 public:
   /**
-   * @brief Construct gateway from filesystem app service.
+   * @brief Construct deprecated gateway from client app service.
    */
   explicit FileCommandGateway(
-      AMApplication::filesystem::FileSystemAppService &filesystem_service);
+      AMApplication::client::ClientAppService &client_service);
 
   ECM CheckClients(const std::vector<std::string> &nicknames, bool detail,
                    amf interrupt_flag = nullptr) override;
@@ -41,8 +42,8 @@ public:
               amf interrupt_flag = nullptr, int timeout_ms = -1) override;
   ECM Find(const std::string &path, SearchType type = SearchType::All,
            amf interrupt_flag = nullptr, int timeout_ms = -1) override;
-  ECM Mkdir(const std::vector<std::string> &paths, amf interrupt_flag = nullptr,
-            int timeout_ms = -1) override;
+  ECM Mkdir(const std::vector<std::string> &paths,
+            amf interrupt_flag = nullptr, int timeout_ms = -1) override;
   ECM Remove(const std::vector<std::string> &paths, bool permanent, bool force,
              bool quiet = false, amf interrupt_flag = nullptr,
              int timeout_ms = -1) override;
@@ -64,6 +65,6 @@ public:
            amf interrupt_flag = nullptr) override;
 
 private:
-  AMApplication::filesystem::FileSystemAppService &filesystem_service_;
+  AMApplication::client::ClientAppService &client_service_;
 };
 } // namespace AMInterface::ApplicationAdapters

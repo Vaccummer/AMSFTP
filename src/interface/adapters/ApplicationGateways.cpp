@@ -1357,30 +1357,6 @@ ECM ClientSessionGateway::ListPath(const std::string &path, bool list_like,
 }
 
 /**
- * @brief Construct path-substitution port from a var substitution port.
- */
-PathSubstitutionPort::PathSubstitutionPort(
-    const AMDomain::var::IVarSubstitutionPort &substitution_port)
-    : substitution_port_(substitution_port) {}
-
-/**
- * @brief Substitute one path-like token.
- */
-std::string PathSubstitutionPort::SubstitutePathLike(
-    const std::string &raw) const {
-  return substitution_port_.SubstitutePathLike(raw);
-}
-
-/**
- * @brief Substitute path-like tokens in one vector.
- */
-std::vector<std::string>
-PathSubstitutionPort::SubstitutePathLike(
-    const std::vector<std::string> &raw) const {
-  return substitution_port_.SubstitutePathLike(raw);
-}
-
-/**
  * @brief Return true when an active completer instance exists.
  */
 bool CompletionGateway::HasActiveCompleter() const {
@@ -1450,6 +1426,13 @@ std::string DisplayHost_(const std::string &nickname) {
 }
 
 /**
+ * @brief Render transfer endpoint in `nick@path` form.
+ */
+std::string RenderEndpoint_(const AMDomain::filesystem::ClientPath &endpoint) {
+  return AMStr::fmt("{}@{}", DisplayHost_(endpoint.nickname), endpoint.path);
+}
+
+/**
  * @brief Parse entry id in `<task_id>:<1-based-index>` format.
  */
 bool ParseEntryId_(const std::string &entry_id, std::string *task_id,
@@ -1482,9 +1465,9 @@ bool ParseEntryId_(const std::string &entry_id, std::string *task_id,
 void PrintTransferSet_(AMPromptManager &prompt,
                        const AMApplication::TransferWorkflow::TransferSetView &set) {
   for (const auto &src : set.srcs) {
-    prompt.Print(src);
+    prompt.Print(RenderEndpoint_(src));
   }
-  prompt.FmtPrint(" ->  {}", set.dst);
+  prompt.FmtPrint(" ->  {}", RenderEndpoint_(set.dst));
   prompt.FmtPrint("clone = {}", set.clone ? "true" : "false");
   prompt.FmtPrint("mkdir = {}", set.mkdir ? "true" : "false");
   prompt.FmtPrint("overwrite = {}", set.overwrite ? "true" : "false");
@@ -1655,11 +1638,12 @@ void TaskGateway::PrintTaskSets_(
     prompt_manager_->FmtPrint(
         "  Set {} dst={} clone={} mkdir={} overwrite={} ignore_special={} "
         "resume={}",
-        std::to_string(set.index), set.dst, set.clone ? "true" : "false",
+        std::to_string(set.index), RenderEndpoint_(set.dst),
+        set.clone ? "true" : "false",
         set.mkdir ? "true" : "false", set.overwrite ? "true" : "false",
         set.ignore_special_file ? "true" : "false", set.resume ? "true" : "false");
     for (const auto &src : set.srcs) {
-      prompt_manager_->FmtPrint("    src: {}", src);
+      prompt_manager_->FmtPrint("    src: {}", RenderEndpoint_(src));
     }
   }
 }

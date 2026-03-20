@@ -1,4 +1,8 @@
 #include "domain/var/VarDomainService.hpp"
+#include "domain/host/HostDomainService.hpp"
+#include "domain/host/HostModel.hpp"
+#include "foundation/tools/enum_related.hpp"
+#include "foundation/tools/string.hpp"
 #include <algorithm>
 #include <unordered_set>
 
@@ -299,7 +303,7 @@ bool VarDomainService::IsValidDomainName_(const std::string &domain) const {
   if (domain == varsetkn::kPublic) {
     return true;
   }
-  return configkn::ValidateNickname(domain);
+  return AMDomain::host::HostService::ValidateNickname(domain);
 }
 } // namespace AMDomain::var
 

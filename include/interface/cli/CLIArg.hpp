@@ -29,9 +29,6 @@ class VarAppService;
 namespace AMApplication::TransferWorkflow {
 class TransferAppService;
 }
-namespace AMApplication::filesystem {
-class FileSystemAppService;
-}
 namespace CLI {
 class App;
 }
@@ -54,14 +51,13 @@ struct CliManagers : public NonCopyableNonMovable {
               AMApplication::VarWorkflow::VarAppService &var_service,
               AMLoggerManagerPort &log_manager,
               AMApplication::client::ClientAppService &client_service,
-              AMApplication::TransferWorkflow::TransferAppService &transfer_service,
-              AMApplication::filesystem::FileSystemAppService
-                  &filesystem_service);
+              AMApplication::TransferWorkflow::TransferAppService
+                  &transfer_service);
 
   /**
    * @brief Initialize all bound managers in dependency-safe order.
    */
-  ECM Init(const amf &task_control_token);
+  ECM Init(amf task_control_token);
 
   AMSignalMonitorPort &signal_monitor;
   AMApplication::config::AMConfigAppService &config_service;
@@ -73,7 +69,6 @@ struct CliManagers : public NonCopyableNonMovable {
   AMLoggerManagerPort &log_manager;
   AMApplication::client::ClientAppService &client_service;
   AMApplication::TransferWorkflow::TransferAppService &transfer_service;
-  AMApplication::filesystem::FileSystemAppService &filesystem_service;
 };
 
 /**

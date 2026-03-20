@@ -17,23 +17,19 @@ using EC = AMDomain::client::EC;
 using DisconnectCallback = AMDomain::client::DisconnectCallback;
 
 [[nodiscard]] ClientName NormalizeClientName(const ClientName &name) {
-  return AMDomain::client::ClientDomainService::NormalizeNickname(name);
+  const std::string normalized = AMStr::Strip(name);
+  const std::string lower = AMStr::lowercase(normalized);
+  return (lower.empty() || lower == "local") ? "local" : normalized;
 }
 
 [[nodiscard]] int ClampHeartbeatInterval(int interval_s) {
-  return interval_s < 1 ? 1 : interval_s;
+  return static_cast<int>(
+      AMDomain::client::MaintainerService::ClampHeartbeatIntervalS(interval_s));
 }
 
 [[nodiscard]] int ClampCheckTimeout(int timeout_ms) {
-  if (timeout_ms <
-      AMDomain::client::IClientMaintainerPort::min_heartbeat_timeout_ms) {
-    return AMDomain::client::IClientMaintainerPort::min_heartbeat_timeout_ms;
-  }
-  if (timeout_ms >
-      AMDomain::client::IClientMaintainerPort::max_heartbeat_timeout_ms) {
-    return AMDomain::client::IClientMaintainerPort::max_heartbeat_timeout_ms;
-  }
-  return timeout_ms;
+  return static_cast<int>(
+      AMDomain::client::MaintainerService::ClampHeartbeatTimeoutMs(timeout_ms));
 }
 
 [[nodiscard]] std::map<ClientName, ClientHandle>
@@ -52,7 +48,11 @@ SnapshotDisconnectCallback(AMAtomic<DisconnectCallback> &disconnect_cb) {
   if (!client) {
     return {EC::InvalidHandle, "Client handle is null"};
   }
-  return client->IOPort().Check(timeout_ms, AMTime::miliseconds());
+  return client
+      ->IOPort()
+      .Check({}, AMDomain::client::MakeClientControlComponent(
+                    nullptr, timeout_ms, AMTime::miliseconds()))
+      .rcm;
 }
 } // namespace
 

@@ -1,10 +1,13 @@
 #pragma once
 
-#include "application/transfer/TransferWorkflows.hpp"
 #include "foundation/DataClass.hpp"
 #include <cstddef>
 #include <string>
 #include <vector>
+
+namespace AMApplication::TransferWorkflow {
+struct TransferBuildArgs;
+} // namespace AMApplication::TransferWorkflow
 
 namespace AMApplication::TaskWorkflow {
 /**
@@ -95,9 +98,6 @@ struct JobCacheQueryResult {
   std::vector<size_t> queried_indices;
 };
 
-/**
- * @brief Application gateway for task/job operations.
- */
 class ITaskGateway {
 public:
   /**
@@ -109,13 +109,12 @@ public:
    * @brief List tasks by status filters.
    */
   virtual ECM ListTasks(bool pending, bool suspend, bool finished,
-                        bool conducting, amf interrupt_flag = nullptr) = 0;
+                        bool conducting) = 0;
 
   /**
    * @brief Show one or more tasks.
    */
-  virtual ECM ShowTasks(const std::vector<std::string> &ids,
-                        amf interrupt_flag = nullptr) = 0;
+  virtual ECM ShowTasks(const std::vector<std::string> &ids) = 0;
 
   /**
    * @brief Inspect one task.
@@ -183,8 +182,7 @@ public:
   /**
    * @brief Submit cached transfer sets.
    */
-  virtual ECM SubmitCachedTransferSets(bool quiet, amf interrupt_flag = nullptr,
-                                       bool is_async = false) = 0;
+  virtual ECM SubmitCachedTransferSets(bool quiet, bool is_async = false) = 0;
 
   /**
    * @brief Query one cached transfer set by index.
@@ -198,27 +196,18 @@ public:
   ListCachedTransferSetIds() const = 0;
 };
 
-/**
- * @brief Return true when mode requires interactive-only behavior.
- */
 [[nodiscard]] bool IsInteractiveMode(const SessionMode &mode);
 
-/**
- * @brief Enforce interactive-only command precondition.
- */
 ECM EnsureInteractive(const SessionMode &mode);
 
-/**
- * @brief Run task list workflow.
- */
 ECM ExecuteTaskList(ITaskGateway &gateway, const TaskListFilter &filter,
-                    const SessionMode &mode, amf interrupt_flag = nullptr);
+                    const SessionMode &mode);
 
 /**
  * @brief Run task show workflow.
  */
 ECM ExecuteTaskShow(ITaskGateway &gateway, const std::vector<std::string> &ids,
-                    const SessionMode &mode, amf interrupt_flag = nullptr);
+                    const SessionMode &mode);
 
 /**
  * @brief Run task inspect workflow.
@@ -257,7 +246,6 @@ ECM ExecuteTaskRetry(ITaskGateway &gateway, const TaskRetryOptions &options,
 JobCacheAddResult
 ExecuteJobCacheAdd(ITaskGateway &gateway,
                    const TransferWorkflow::TransferBuildArgs &build_args,
-                   const TransferWorkflow::IPathSubstitutionPort &substitutor,
                    const SessionMode &mode);
 
 /**
@@ -277,8 +265,7 @@ ECM ExecuteJobCacheClear(ITaskGateway &gateway, const SessionMode &mode);
  */
 ECM ExecuteJobCacheSubmit(ITaskGateway &gateway,
                           const JobCacheSubmitOptions &options,
-                          const SessionMode &mode,
-                          amf interrupt_flag = nullptr);
+                          const SessionMode &mode);
 
 /**
  * @brief Run job cache query workflow.

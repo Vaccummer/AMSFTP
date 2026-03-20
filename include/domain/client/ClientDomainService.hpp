@@ -1,75 +1,62 @@
 #pragma once
-#include "domain/client/ClientModel.hpp"
-#include <string>
+#include "domain/client/ClientPort.hpp"
+#include <cstdint>
 
-namespace AMDomain::client {
-/**
- * @brief Domain service for client nickname/path/workdir business rules.
- */
-class ClientDomainService {
-public:
-  /**
-   * @brief Minimum legal heartbeat timeout in milliseconds.
-   */
-  static constexpr int kHeartbeatTimeoutMinMs = 10;
+namespace AMDomain::client::ClientService {
+constexpr int64_t AMDefaultLocalBufferSize = 1024 * 1024 * 16;
+constexpr int64_t AMDefaultRemoteBufferSize = 1024 * 1024 * 8;
+constexpr int64_t AMMinBufferSize = 1024 * 32;
+constexpr int64_t AMMaxBufferSize = 1024 * 1024 * 1024;
+constexpr float AMDefaultTimeoutMs = -1.0f;
 
-  /**
-   * @brief Maximum legal heartbeat timeout in milliseconds.
-   */
-  static constexpr int kHeartbeatTimeoutMaxMs = 10000;
-
-  /**
-   * @brief Clamp heartbeat timeout to legal range.
-   */
-  [[nodiscard]] static int ClampHeartbeatTimeoutMs(int timeout_ms);
-
-  /**
-   * @brief Return true when nickname maps to local client.
-   */
-  [[nodiscard]] static bool IsLocalNickname(const std::string &nickname);
-
-  /**
-   * @brief Normalize user-provided nickname for comparisons.
-   */
-  [[nodiscard]] static std::string
-  NormalizeNickname(const std::string &nickname);
-
-  /**
-   * @brief Parse one user path token into scoped nickname/path form.
-   *
-   * Supported forms:
-   * - `@path` => local path
-   * - `nickname@path` => explicit remote/local nickname path
-   * - `path` => implicit current-client path
-   */
-  [[nodiscard]] static ScopedPath
-  ParseScopedPath(const std::string &input,
-                  const std::string &current_nickname);
-
-  /**
-   * @brief Validate one parsed scoped path.
-   */
-  [[nodiscard]] static ECM ValidateScopedPath(const ScopedPath &scoped_path);
-
-  /**
-   * @brief Resolve effective workdir from client state snapshot.
-   */
-  [[nodiscard]] static std::string
-  ResolveWorkdir(const ClientWorkdirState &state,
-                 const std::string &path_sep = "/");
-
-  /**
-   * @brief Resolve one input path into absolute path using workdir state.
-   */
-  [[nodiscard]] static std::string
-  ResolveAbsolutePath(const std::string &path, const ClientWorkdirState &state,
-                      const std::string &path_sep = "/");
-
-  /**
-   * @brief Validate connect request at domain boundary.
-   */
-  [[nodiscard]] static ECM
-  ValidateConnectRequest(const AMDomain::host::ConRequest &request,
-                         bool allow_local_protocol = false);
+inline int64_t ClampBufferSize(int64_t size, bool is_local) {
+  if (size <= 0) {
+    return is_local ? AMDefaultLocalBufferSize : AMDefaultRemoteBufferSize;
+  }
+  if (size <= AMMinBufferSize) {
+    return AMMinBufferSize;
+  }
+  if (size > AMMaxBufferSize) {
+    return AMMaxBufferSize;
+  }
+  return size;
 };
-} // namespace AMDomain::client
+
+inline ClientID GenerateID(ClientProtocol protocol) {
+  static std::atomic<uint64_t> counter{0};
+  const uint64_t id = counter.fetch_add(1, std::memory_order_relaxed);
+  switch (protocol) {
+  case ClientProtocol::SFTP:
+    return AMStr::fmt("SFTP-{}", id);
+  case ClientProtocol::FTP:
+    return AMStr::fmt("FTP-{}", id);
+  case ClientProtocol::LOCAL:
+    return AMStr::fmt("LOCAL-{}", id);
+  default:
+    return "";
+  }
+}
+
+} // namespace AMDomain::client::ClientService
+
+namespace AMDomain::client::MaintainerService {
+static constexpr int HeartbeatTimeoutMinMs = 10;
+static constexpr int HeartbeatTimeoutMaxMs = 10000;
+static constexpr int HeartbeatIntervalMinS = 1;
+static constexpr int HeartbeatIntervalMaxS = 3600;
+
+[[nodiscard]] inline unsigned int ClampHeartbeatTimeoutMs(int timeout_ms) {
+  return timeout_ms < HeartbeatTimeoutMinMs
+             ? HeartbeatTimeoutMinMs
+             : (timeout_ms > HeartbeatTimeoutMaxMs ? HeartbeatTimeoutMaxMs
+                                                   : timeout_ms);
+};
+
+[[nodiscard]] inline unsigned int ClampHeartbeatIntervalS(int interval_s) {
+  return interval_s < HeartbeatIntervalMinS
+             ? HeartbeatIntervalMinS
+             : (interval_s > HeartbeatIntervalMaxS ? HeartbeatIntervalMaxS
+                                                   : interval_s);
+};
+
+} // namespace AMDomain::client::MaintainerService

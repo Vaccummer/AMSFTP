@@ -1,5 +1,6 @@
 #include "application/host/HostProfileWorkflows.hpp"
 
+#include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
@@ -15,12 +16,10 @@ ECM ValidateConfigAddNickname(const IHostProfileGateway &gateway,
     return Err(EC::InvalidArg, "null nickname output");
   }
   std::string value = AMStr::Strip(raw);
-  std::string err_msg;
-  EC err_code = EC::InvalidArg;
-  if (!configkn::ValidateHostAttrValue(configkn::HostAttr::Nickname, value,
-                                       &value, &err_msg, true, true,
-                                       &err_code)) {
-    return Err(err_code, err_msg);
+  ECM validate_rcm = AMDomain::host::HostService::ValidateFieldValue(
+      AMDomain::host::ConRequest::Attr::nickname, value);
+  if (!isok(validate_rcm)) {
+    return validate_rcm;
   }
   if (AMStr::lowercase(value) == "local") {
     return Err(EC::InvalidArg, "Nickname 'local' is reserved");
@@ -45,7 +44,7 @@ ECM ValidateConfigProfileNickname(const IHostProfileGateway &gateway,
   if (value.empty()) {
     return Err(EC::InvalidArg, "empty profile nickname");
   }
-  if (!configkn::ValidateNickname(value)) {
+  if (!AMDomain::host::HostService::ValidateNickname(value)) {
     return Err(EC::InvalidArg, "invalid profile nickname");
   }
   if (!gateway.HostExists(value)) {

@@ -1,24 +1,33 @@
 #pragma once
 
+#include "domain/filesystem/FileSystemModel.hpp"
 #include "domain/transfer/TransferPorts.hpp"
-#include "foundation/DataClass.hpp"
 #include <string>
 #include <vector>
 
 namespace AMApplication::TransferWorkflow {
 /**
+ * @brief Explicit confirmation policy for transfer operations.
+ */
+enum class TransferConfirmPolicy {
+  RequireConfirm,
+  AutoApprove,
+  DenyIfConfirmNeeded
+};
+
+/**
  * @brief Application-facing transfer input payload.
  */
 struct TransferBuildArgs {
   /**
-   * @brief Source path arguments from command/input.
+   * @brief Explicit source endpoints from interface normalization.
    */
-  std::vector<std::string> srcs;
+  std::vector<AMDomain::filesystem::ClientPath> srcs;
 
   /**
-   * @brief Optional destination argument.
+   * @brief Optional explicit destination endpoint.
    */
-  std::string output;
+  AMDomain::filesystem::ClientPath output;
 
   /**
    * @brief Enable overwrite behavior.
@@ -61,9 +70,9 @@ struct TransferExecutionOptions {
   bool quiet = false;
 
   /**
-   * @brief Whether trailing `&` should be interpreted as async marker.
+   * @brief Confirmation policy passed from interface to application.
    */
-  bool accept_ampersand_suffix = false;
+  TransferConfirmPolicy confirm_policy = TransferConfirmPolicy::RequireConfirm;
 };
 
 /**
@@ -87,29 +96,6 @@ struct TransferExecutionResult {
 };
 
 /**
- * @brief Port for path-like substitution.
- */
-class IPathSubstitutionPort {
-public:
-  /**
-   * @brief Virtual destructor for polymorphic substitution port.
-   */
-  virtual ~IPathSubstitutionPort() = default;
-
-  /**
-   * @brief Substitute one path-like token.
-   */
-  [[nodiscard]] virtual std::string
-  SubstitutePathLike(const std::string &raw) const = 0;
-
-  /**
-   * @brief Substitute multiple path-like tokens.
-   */
-  [[nodiscard]] virtual std::vector<std::string>
-  SubstitutePathLike(const std::vector<std::string> &raw) const = 0;
-};
-
-/**
  * @brief Validate optional trailing async suffix.
  *
  * @param async_suffix Optional suffix token.
@@ -120,34 +106,24 @@ ECM ValidateAsyncSuffix(const std::string &async_suffix,
                         bool *out_suffix_async);
 
 /**
- * @brief Build one normalized user transfer set from input arguments.
+ * @brief Build one normalized user transfer set from explicit endpoints.
  *
- * @param args Raw transfer input.
- * @param substitutor Path substitution port.
- * @param accept_ampersand_suffix Whether `&` suffix is consumed from sources.
+ * @param args Explicit transfer input.
  * @param out_set Built transfer set.
- * @param out_suffix_async Whether async suffix was detected.
  * @return Validation/build result.
  */
-ECM BuildTransferSet(const TransferBuildArgs &args,
-                     const IPathSubstitutionPort &substitutor,
-                     bool accept_ampersand_suffix, UserTransferSet *out_set,
-                     bool *out_suffix_async = nullptr);
+ECM BuildTransferSet(const TransferBuildArgs &args, UserTransferSet *out_set);
 
 /**
  * @brief Execute transfer workflow using domain transfer executor port.
  *
- * @param args Raw transfer input.
+ * @param args Explicit transfer input.
  * @param options Execution policy flags.
- * @param substitutor Path substitution port.
  * @param executor Domain transfer executor.
- * @param interrupt_flag Optional task-control token.
  * @return Execution status plus normalized payload.
  */
 TransferExecutionResult
 ExecuteTransfer(const TransferBuildArgs &args,
                 const TransferExecutionOptions &options,
-                const IPathSubstitutionPort &substitutor,
-                AMDomain::transfer::ITransferExecutorPort &executor,
-                amf interrupt_flag = nullptr);
+                AMDomain::transfer::ITransferExecutorPort &executor);
 } // namespace AMApplication::TransferWorkflow

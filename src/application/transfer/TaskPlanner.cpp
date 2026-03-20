@@ -1,7 +1,5 @@
-#include "application/transfer/runtime/TaskPlanner.hpp"
+#include "TaskPlanner.hpp"
 
-#include "application/filesystem/PathResolutionService.hpp"
-#include "domain/host/HostDomainService.hpp"
 #include "foundation/Path.hpp"
 #include "foundation/tools/time.hpp"
 
@@ -12,39 +10,29 @@ namespace AMApplication::TransferRuntime {
 
 /**
  * @brief Plan concrete transfer tasks from source/destination paths and
- * client runtime context.
+ * prepared client handles.
  */
 std::pair<TaskPlanner::ECM, TASKS>
 TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
-                       AMDomain::client::IClientRuntimePort &runtime_port,
-                       AMDomain::client::IClientLifecyclePort &lifecycle_port,
+                       const AMDomain::client::ClientHandle &src_client,
+                       const AMDomain::client::ClientHandle &dst_client,
                        const std::string &src_host, const std::string &dst_host,
                        bool clone, bool overwrite, bool mkdir,
-                       bool ignore_sepcial_file, bool resume,
-                       std::shared_ptr<TaskControlToken> control_token,
+                       bool ignore_special_file, bool resume,
+                       AMDomain::client::amf control_token,
                        int timeout_ms, int64_t start_time) {
   using EC = ErrorCode;
   start_time = start_time == -1 ? AMTime::miliseconds() : start_time;
   TASKS tasks = {};
 
-  auto [rc1, src_client] =
-      AMApplication::filesystem::PathResolutionService::ResolveReadyClient(
-          runtime_port, lifecycle_port, src_host, control_token, timeout_ms,
-          start_time);
-  if (rc1.first != EC::Success) {
-    return {rc1, tasks};
-  }
-
-  auto [rc2, dst_client] =
-      AMApplication::filesystem::PathResolutionService::ResolveReadyClient(
-          runtime_port, lifecycle_port, dst_host, control_token, timeout_ms,
-          start_time);
-  if (rc2.first != EC::Success) {
-    return {rc2, tasks};
+  if (!src_client || !dst_client) {
+    return {ECM{EC::InvalidHandle, "LoadTasks requires ready client handles"},
+            tasks};
   }
 
   auto [rc3, src_stat] =
-      src_client->IOPort().stat(src, false, timeout_ms, start_time);
+      src_client->IOPort().stat(src, false, timeout_ms, start_time,
+                                control_token);
   if (rc3.first != EC::Success) {
     return {rc3, tasks};
   }
@@ -66,9 +54,9 @@ TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
   }
 
   if (src_stat.type != PathType::DIR) {
-    if (ignore_sepcial_file && src_stat.type != PathType::FILE) {
+    if (ignore_special_file && src_stat.type != PathType::FILE) {
       return {ECM{EC::NotAFile, AMStr::fmt("Src is not a common file and "
-                                           "ignore_sepcial_file is true: {}",
+                                           "ignore_special_file is true: {}",
                                            srcf)},
               {}};
     }
@@ -80,7 +68,8 @@ TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
                 tasks};
       }
       auto [dst_stat_rcm, dst_info] =
-          dst_client->IOPort().stat(dstf, false, timeout_ms, start_time);
+          dst_client->IOPort().stat(dstf, false, timeout_ms, start_time,
+                                    control_token);
       if (dst_stat_rcm.first != EC::Success) {
         return {ECM{EC::PathNotExist,
                     AMStr::fmt("Resume requires dst to exist: {}", dstf)},
@@ -104,7 +93,8 @@ TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
     }
 
     auto [rcm4, dst_parent_info] = dst_client->IOPort().stat(
-        AMPathStr::dirname(dstf), false, timeout_ms, start_time);
+        AMPathStr::dirname(dstf), false, timeout_ms, start_time,
+        control_token);
     if (rcm4.first != EC::Success && !mkdir) {
       return {ECM{EC::ParentDirectoryNotExist,
                   AMStr::fmt("Dst parent path not exists: {}",
@@ -120,7 +110,8 @@ TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
 
     if (rcm4.first == EC::Success) {
       auto [rcm5, dst_info] =
-          dst_client->IOPort().stat(dstf, false, timeout_ms, start_time);
+          dst_client->IOPort().stat(dstf, false, timeout_ms, start_time,
+                                    control_token);
       if (rcm5.first == EC::Success) {
         if (dst_info.type == PathType::DIR) {
           return {ECM{EC::NotAFile,
@@ -140,7 +131,8 @@ TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
                        src_stat.type);
     if (resume) {
       auto [dst_stat_rcm, dst_info] =
-          dst_client->IOPort().stat(dstf, false, timeout_ms, start_time);
+          dst_client->IOPort().stat(dstf, false, timeout_ms, start_time,
+                                    control_token);
       if (dst_stat_rcm.first != EC::Success ||
           dst_info.type != PathType::FILE) {
         return {ECM{EC::InvalidArg,
@@ -153,7 +145,8 @@ TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
   }
 
   auto [rcm6, dst_info] =
-      dst_client->IOPort().stat(dstf, false, timeout_ms, start_time);
+      dst_client->IOPort().stat(dstf, false, timeout_ms, start_time,
+                                control_token);
   if (rcm6.first != EC::Success && !mkdir) {
     return {ECM{EC::ParentDirectoryNotExist,
                 AMStr::fmt("Dst parent path not exists: {}", dstf)},
@@ -167,7 +160,8 @@ TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
   }
 
   auto [rcm7, src_pack] = src_client->IOPort().iwalk(srcf, true, false, nullptr,
-                                                     timeout_ms, start_time);
+                                                     timeout_ms, start_time,
+                                                     control_token);
   if (rcm7.first != EC::Success) {
     return {rcm7, tasks};
   }
@@ -178,7 +172,7 @@ TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
   TransferTask taskt;
   std::string dst_n;
   for (auto &item : src_paths) {
-    if (control_token && !control_token->IsRunning()) {
+    if (control_token && control_token->IsInterrupted()) {
       return {ECM{EC::Terminate, "Load tasks interrupted by user"}, tasks};
     }
     if (timeout_ms > 0 && AMTime::miliseconds() - start_time >= timeout_ms) {
@@ -189,7 +183,8 @@ TaskPlanner::LoadTasks(const std::string &src, const std::string &dst,
     dst_n = AMPathStr::join(
         dstf, std::filesystem::relative(item.path, base_path).string());
     auto [rcm8, dst_info2] =
-        dst_client->IOPort().stat(dst_n, false, timeout_ms, start_time);
+        dst_client->IOPort().stat(dst_n, false, timeout_ms, start_time,
+                                  control_token);
     if (rcm8.first == EC::Success) {
       if (dst_info2.type == PathType::DIR) {
         taskt = TransferTask(item.path, dst_n, src_host, dst_host, item.size,

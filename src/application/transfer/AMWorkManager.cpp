@@ -1,18 +1,16 @@
-#include "application/transfer/runtime/AMWorkManager.hpp"
+#include "AMWorkManager.hpp"
 
-#include "application/transfer/runtime/TaskPlanner.hpp"
 #include "TaskSchedulerCore.hpp"
 
 #include <memory>
 #include <utility>
 
+namespace AMApplication::TransferRuntime {
 /**
  * @brief Construct one application-owned work manager facade.
  */
 AMWorkManager::AMWorkManager()
-    : scheduler_(
-          std::make_unique<AMApplication::TransferRuntime::TaskSchedulerCore>()) {
-}
+    : scheduler_(std::make_unique<TaskSchedulerCore>()) {}
 
 /**
  * @brief Destroy one application-owned work manager facade.
@@ -70,7 +68,7 @@ AMWorkManager::ECM AMWorkManager::Submit(std::shared_ptr<TaskInfo> task_info) {
  */
 std::shared_ptr<TaskInfo> AMWorkManager::CreateTaskInfo(
     std::shared_ptr<TASKS> tasks,
-    const std::shared_ptr<AMApplication::client::ClientPublicPool> &pool,
+    const std::shared_ptr<ITransferClientPoolPort> &pool,
     TransferCallback callback, ssize_t buffer_size, bool quiet, int thread_id) {
   return scheduler_->CreateTaskInfo(std::move(tasks), pool, std::move(callback),
                                     buffer_size, quiet, thread_id);
@@ -179,22 +177,4 @@ std::vector<std::shared_ptr<TaskInfo>>
 AMWorkManager::GetConductingTasks() const {
   return scheduler_->GetConductingTasks();
 }
-
-/**
- * @brief Plan transfer tasks through the extracted application planner.
- */
-std::pair<AMWorkManager::ECM, TASKS>
-AMWorkManager::LoadTasks(const std::string &src, const std::string &dst,
-                         AMDomain::client::IClientRuntimePort &runtime_port,
-                         AMDomain::client::IClientLifecyclePort &lifecycle_port,
-                         const std::string &src_host,
-                         const std::string &dst_host, bool clone,
-                         bool overwrite, bool mkdir,
-                         bool ignore_sepcial_file, bool resume,
-                         std::shared_ptr<TaskControlToken> control_token,
-                         int timeout_ms, int64_t start_time) {
-  return AMApplication::TransferRuntime::TaskPlanner::LoadTasks(
-      src, dst, runtime_port, lifecycle_port, src_host, dst_host, clone,
-      overwrite, mkdir, ignore_sepcial_file, resume, std::move(control_token),
-      timeout_ms, start_time);
-}
+} // namespace AMApplication::TransferRuntime

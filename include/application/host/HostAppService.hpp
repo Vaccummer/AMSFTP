@@ -1,18 +1,19 @@
 #pragma once
 #include "domain/host/HostModel.hpp"
-#include "domain/host/HostPorts.hpp"
 #include "foundation/DataClass.hpp"
 #include <map>
 #include <string>
 #include <vector>
 
-namespace AMDomain::host {
+namespace AMApplication::host {
 /**
  * @brief Host configuration manager for host map and local profile state.
  */
 class AMHostAppService : public NonCopyableNonMovable {
 public:
-  using HostConfigMap = std::map<std::string, HostConfig>;
+  using HostConfigMap = std::map<std::string, AMDomain::host::HostConfig>;
+  using HostConfigArg = AMDomain::host::HostConfigArg;
+  using HostConfig = AMDomain::host::HostConfig;
 
   explicit AMHostAppService() = default;
   virtual ~AMHostAppService() override = default;
@@ -83,7 +84,6 @@ private:
   ECM PersistSnapshot_(const HostConfigArg &snapshot, bool dump_async = true);
   void ResetSnapshotCache_();
 
-  IHostConfigSnapshotStore *snapshot_store_ = nullptr;
   mutable HostConfigMap host_configs_ = {};
   mutable HostConfig local_config_ = {};
   mutable std::vector<std::string> private_keys_ = {};
@@ -95,6 +95,9 @@ private:
  */
 class AMKnownHostsAppService : public NonCopyableNonMovable {
 public:
+  using KnownHostQuery = AMDomain::host::KnownHostQuery;
+  using KnownHostMap = AMDomain::host::KnownHostMap;
+  using KnownHostEntryArg = AMDomain::host::KnownHostEntryArg;
   explicit AMKnownHostsAppService() = default;
   virtual ~AMKnownHostsAppService() override = default;
 
@@ -124,8 +127,7 @@ private:
                        bool dump_async = true);
   void ResetSnapshotCache_();
 
-  IKnownHostSnapshotStore *snapshot_store_ = nullptr;
   mutable KnownHostMap known_hosts_ = {};
   mutable bool snapshot_loaded_ = false;
 };
-} // namespace AMDomain::host
+} // namespace AMApplication::host

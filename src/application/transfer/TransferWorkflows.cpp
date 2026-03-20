@@ -1,7 +1,27 @@
 #include "application/transfer/TransferWorkflows.hpp"
 #include "foundation/tools/enum_related.hpp"
+#include "foundation/tools/string.hpp"
 
 namespace AMApplication::TransferWorkflow {
+namespace {
+using ClientPath = AMDomain::filesystem::ClientPath;
+
+/**
+ * @brief Validate one explicit transfer endpoint payload.
+ */
+ECM ValidateEndpoint_(const ClientPath &endpoint,
+                      const std::string &label) {
+  const std::string name = label.empty() ? std::string("endpoint") : label;
+  if (endpoint.nickname.empty()) {
+    return Err(EC::InvalidArg, AMStr::fmt("{} nickname is empty", name));
+  }
+  if (endpoint.path.empty()) {
+    return Err(EC::InvalidArg, AMStr::fmt("{} path is empty", name));
+  }
+  return Ok();
+}
+} // namespace
+
 /**
  * @brief Validate optional trailing async suffix.
  */
@@ -22,56 +42,60 @@ ECM ValidateAsyncSuffix(const std::string &async_suffix,
 }
 
 /**
- * @brief Build one normalized user transfer set from input arguments.
+ * @brief Build one normalized user transfer set from explicit endpoints.
  */
-ECM BuildTransferSet(const TransferBuildArgs &args,
-                     const IPathSubstitutionPort &substitutor,
-                     bool accept_ampersand_suffix, UserTransferSet *out_set,
-                     bool *out_suffix_async) {
+ECM BuildTransferSet(const TransferBuildArgs &args, UserTransferSet *out_set) {
   if (!out_set) {
     return Err(EC::InvalidArg, "null transfer output");
   }
 
-  bool suffix_async = false;
-  std::vector<std::string> raw_srcs = args.srcs;
-  if (accept_ampersand_suffix && !raw_srcs.empty() && raw_srcs.back() == "&") {
-    suffix_async = true;
-    raw_srcs.pop_back();
-  }
-
-  if (raw_srcs.empty()) {
+  if (args.srcs.empty()) {
     return Err(EC::InvalidArg, "cp requires at least one source");
   }
 
-  const std::vector<std::string> resolved_srcs =
-      substitutor.SubstitutePathLike(raw_srcs);
-  const std::string resolved_output =
-      substitutor.SubstitutePathLike(args.output);
-
-  std::vector<std::string> transfer_srcs;
-  std::string transfer_dst;
-  if (resolved_output.empty()) {
-    if (resolved_srcs.size() != 2) {
+  std::vector<ClientPath> transfer_srcs = {};
+  ClientPath transfer_dst = {};
+  if (args.output.path.empty()) {
+    if (args.srcs.size() != 2) {
       return Err(EC::InvalidArg,
                  "cp requires exactly 2 paths when --output is omitted");
     }
-    transfer_srcs = {resolved_srcs.front()};
-    transfer_dst = resolved_srcs.back();
+    transfer_srcs = {args.srcs.front()};
+    transfer_dst = args.srcs.back();
   } else {
-    transfer_srcs = resolved_srcs;
-    transfer_dst = resolved_output;
+    transfer_srcs = args.srcs;
+    transfer_dst = args.output;
   }
 
-  out_set->srcs = std::move(transfer_srcs);
-  out_set->dst = std::move(transfer_dst);
+  ECM dst_rcm = ValidateEndpoint_(transfer_dst, "dst");
+  if (!isok(dst_rcm)) {
+    return dst_rcm;
+  }
+  for (size_t i = 0; i < transfer_srcs.size(); ++i) {
+    ECM src_rcm = ValidateEndpoint_(
+        transfer_srcs[i], AMStr::fmt("src[{}]", std::to_string(i)));
+    if (!isok(src_rcm)) {
+      return src_rcm;
+    }
+  }
+
+  std::vector<AMDomain::client::ScopedPath> normalized_srcs = {};
+  normalized_srcs.reserve(transfer_srcs.size());
+  for (const auto &src : transfer_srcs) {
+    AMDomain::client::ScopedPath scoped = {};
+    scoped.explicit_client = true;
+    scoped.nickname = src.nickname;
+    scoped.path = src.path;
+    normalized_srcs.push_back(std::move(scoped));
+  }
+  out_set->srcs = std::move(normalized_srcs);
+  out_set->dst = AMDomain::client::ScopedPath{
+      true, transfer_dst.nickname, transfer_dst.path};
   out_set->mkdir = !args.no_mkdir;
   out_set->overwrite = args.overwrite;
   out_set->clone = args.clone;
   out_set->ignore_special_file = !args.include_special;
   out_set->resume = args.resume;
-  if (out_suffix_async) {
-    *out_suffix_async = suffix_async;
-  }
   return Ok();
 }
 
@@ -80,25 +104,21 @@ ECM BuildTransferSet(const TransferBuildArgs &args,
  */
 TransferExecutionResult ExecuteTransfer(
     const TransferBuildArgs &args, const TransferExecutionOptions &options,
-    const IPathSubstitutionPort &substitutor,
-    AMDomain::transfer::ITransferExecutorPort &executor, amf interrupt_flag) {
+    AMDomain::transfer::ITransferExecutorPort &executor) {
+  (void)options.confirm_policy;
   TransferExecutionResult out = {};
-  bool suffix_async = false;
-  out.rcm = BuildTransferSet(args, substitutor, options.accept_ampersand_suffix,
-                             &out.transfer_set, &suffix_async);
+  out.rcm = BuildTransferSet(args, &out.transfer_set);
   if (!isok(out.rcm)) {
     return out;
   }
 
-  out.run_async = options.run_async_from_context || suffix_async;
+  out.run_async = options.run_async_from_context;
   if (out.run_async) {
-    out.rcm = executor.TransferAsync({out.transfer_set}, options.quiet,
-                                     interrupt_flag);
+    out.rcm = executor.TransferAsync({out.transfer_set}, options.quiet);
     return out;
   }
 
-  out.rcm =
-      executor.Transfer({out.transfer_set}, options.quiet, interrupt_flag);
+  out.rcm = executor.Transfer({out.transfer_set}, options.quiet);
   return out;
 }
 } // namespace AMApplication::TransferWorkflow

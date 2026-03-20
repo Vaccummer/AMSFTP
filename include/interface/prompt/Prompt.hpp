@@ -204,7 +204,7 @@ public:
 
   ~AMPromptManager() override = default;
 
-  ECM Init() override {
+  ECM Init() {
     CollectHistory_();
     InitIsoclineConfig();
     return Ok();

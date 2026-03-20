@@ -9,10 +9,16 @@ Current headers:
 - `application/client/ClientSessionWorkflows.hpp`
 - `domain/client/ClientPort.hpp`
 - `application/client/FileCommandWorkflows.hpp`
+- `application/filesystem/FileSystemWorkflows.hpp` (deprecated compatibility shim)
 - `application/var/VarWorkflows.hpp`
 - `application/completion/CompletionWorkflows.hpp`
 - `application/transfer/TransferWorkflows.hpp`
 - `application/transfer/TaskWorkflows.hpp`
+
+Filesystem migration note:
+- Preferred runtime facade: `application/filesystem/FileSystemAppService.hpp`
+- Preferred workflow contracts: `application/client/{ClientSessionWorkflows,FileCommandWorkflows}.hpp`
+- Compatibility only: `application/filesystem/FileSystemWorkflows.hpp` (deprecated shim)
 
 WF4 notes:
 
@@ -20,3 +26,6 @@ WF4 notes:
 - Interface-layer command handlers should map parser/runtime state into these
   workflow payloads.
 - Bootstrap/WF6 is responsible for wiring concrete adapters to these ports.
+- Runtime implementation details for transfer/client orchestration are kept in
+  `src/application/{transfer,client}/*` private headers/sources and are not
+  exported as public application API headers.

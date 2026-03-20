@@ -1,7 +1,5 @@
 #pragma once
 
-#include "application/client/runtime/ClientPublicPool.hpp"
-#include "domain/client/ClientPort.hpp"
 #include "foundation/DataClass.hpp"
 
 #include <memory>
@@ -14,13 +12,11 @@
 
 namespace AMApplication::TransferRuntime {
 class TaskSchedulerCore;
-}
-
+class ITransferClientPoolPort;
 class AMWorkManager {
 public:
   using ECM = std::pair<ErrorCode, std::string>;
   using TaskId = std::string;
-  using ClientHandle = AMDomain::client::ClientHandle;
 
   /**
    * @brief Construct a work manager backed by the application scheduler core.
@@ -67,8 +63,7 @@ public:
    */
   std::shared_ptr<TaskInfo>
   CreateTaskInfo(std::shared_ptr<TASKS> tasks,
-                 const std::shared_ptr<AMApplication::client::ClientPublicPool>
-                     &pool,
+                 const std::shared_ptr<ITransferClientPoolPort> &pool,
                  TransferCallback callback = TransferCallback(),
                  ssize_t buffer_size = -1, bool quiet = false,
                  int thread_id = -1);
@@ -152,19 +147,7 @@ public:
   [[nodiscard]] std::vector<std::shared_ptr<TaskInfo>>
   GetConductingTasks() const;
 
-  /**
-   * @brief Plan transfer tasks through the extracted application planner.
-   */
-  static std::pair<ECM, TASKS>
-  LoadTasks(const std::string &src, const std::string &dst,
-            AMDomain::client::IClientRuntimePort &runtime_port,
-            AMDomain::client::IClientLifecyclePort &lifecycle_port,
-            const std::string &src_host = "", const std::string &dst_host = "",
-            bool clone = false, bool overwrite = false, bool mkdir = true,
-            bool ignore_sepcial_file = true, bool resume = false,
-            std::shared_ptr<TaskControlToken> control_token = nullptr,
-            int timeout_ms = -1, int64_t start_time = -1);
-
 private:
-  std::unique_ptr<AMApplication::TransferRuntime::TaskSchedulerCore> scheduler_;
+  std::unique_ptr<TaskSchedulerCore> scheduler_;
 };
+} // namespace AMApplication::TransferRuntime

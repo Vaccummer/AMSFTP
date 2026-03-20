@@ -4,19 +4,16 @@
 #include <algorithm>
 #include <string>
 
+using AMDomain::host::ClientProtocol;
+using AMDomain::host::HostConfig;
+using AMDomain::host::HostConfigArg;
+using AMDomain::host::KnownHostEntryArg;
+using AMDomain::host::KnownHostMap;
+using AMDomain::host::KnownHostQuery;
+
 namespace {
-AMDomain::host::HostDomainService &HostDomainService_() {
-  static AMDomain::host::HostDomainService service;
-  return service;
-}
-
-AMDomain::host::KnownHostService &KnownHostService_() {
-  static AMDomain::host::KnownHostService service;
-  return service;
-}
-
 bool IsLocalNickname_(const std::string &nickname) {
-  return HostDomainService_().IsLocalNickname(nickname);
+  return AMDomain::host::HostService::IsLocalNickname(nickname);
 }
 } // namespace
 
@@ -29,11 +26,11 @@ ECM AMDomain::host::AMHostConfigManager::Init(
     const HostConfigArg &host_config_arg) {
   std::string validate_error;
   for (const auto &[nickname, cfg] : host_config_arg.host_configs) {
-    if (HostDomainService_().IsLocalNickname(nickname)) {
+    if (AMDomain::host::HostService::IsLocalNickname(nickname)) {
       return Err(EC::InvalidArg,
                  AMStr::fmt("non-local map contains local nickname: {}", nickname));
     }
-    if (!HostDomainService_().IsValidConfig(cfg, &validate_error)) {
+    if (!AMDomain::host::HostService::IsValidConfig(cfg, &validate_error)) {
       return Err(EC::InvalidArg,
                  AMStr::fmt("invalid host config '{}': {}", nickname,
                             validate_error.empty() ? "invalid config"
@@ -43,14 +40,14 @@ ECM AMDomain::host::AMHostConfigManager::Init(
 
   if (!host_config_arg.local_config.request.nickname.empty()) {
     const HostConfig &local_cfg = host_config_arg.local_config;
-    if (!HostDomainService_().IsLocalNickname(local_cfg.request.nickname)) {
+    if (!AMDomain::host::HostService::IsLocalNickname(local_cfg.request.nickname)) {
       return Err(EC::InvalidArg,
                  "local config nickname must be 'local' (case-insensitive)");
     }
     if (local_cfg.request.protocol != ClientProtocol::LOCAL) {
       return Err(EC::InvalidArg, "local config protocol must be LOCAL");
     }
-    if (!HostDomainService_().IsValidConfig(local_cfg, &validate_error)) {
+    if (!AMDomain::host::HostService::IsValidConfig(local_cfg, &validate_error)) {
       return Err(EC::InvalidArg,
                  validate_error.empty() ? "invalid local config"
                                         : validate_error);
@@ -139,8 +136,8 @@ std::pair<ECM, HostConfig> AMDomain::host::AMHostConfigManager::GetClientConfig(
   if (!isok(load_rcm)) {
     return {load_rcm, {}};
   }
-  return HostDomainService_().GetConfigByNickname(host_configs_, nickname,
-                                                  &local_config_);
+  return AMDomain::host::HostService::GetConfigByNickname(host_configs_, nickname,
+                                                          &local_config_);
 }
 
 std::pair<ECM, HostConfig> AMDomain::host::AMHostConfigManager::GetLocalConfig() {
@@ -173,7 +170,7 @@ ECM AMDomain::host::AMHostConfigManager::AddHost(const HostConfig &entry,
   }
 
   std::string validate_error;
-  if (!HostDomainService_().IsValidConfig(entry, &validate_error)) {
+  if (!AMDomain::host::HostService::IsValidConfig(entry, &validate_error)) {
     return Err(EC::InvalidArg,
                validate_error.empty() ? "invalid host config" : validate_error);
   }
@@ -223,8 +220,8 @@ bool AMDomain::host::AMHostConfigManager::HostExists(
   if (!isok(EnsureSnapshotLoaded_())) {
     return false;
   }
-  return HostDomainService_().NicknameExists(host_configs_, nickname,
-                                             &local_config_);
+  return AMDomain::host::HostService::NicknameExists(host_configs_, nickname,
+                                                     &local_config_);
 }
 
 std::vector<std::string> AMDomain::host::AMHostConfigManager::ListNames() const {
@@ -346,7 +343,7 @@ ECM AMDomain::host::AMKnownHostsManager::FindKnownHost(
       return ECM{EC::HostConfigNotFound,
                  "fingerprint not found for given host query"};
     }
-    return KnownHostService_().ResolveKnownHostQuery(
+    return AMDomain::host::KnownHostRules::ResolveKnownHostQuery(
         &query, it->second.GetFingerprint());
   };
 
@@ -370,12 +367,13 @@ ECM AMDomain::host::AMKnownHostsManager::UpsertKnownHost(
 
   std::string fingerprint;
   ECM validate_rcm =
-      KnownHostService_().ValidateKnownHostUpsert(query, &fingerprint);
+      AMDomain::host::KnownHostRules::ValidateKnownHostUpsert(query, &fingerprint);
   if (validate_rcm.first != EC::Success) {
     return validate_rcm;
   }
 
-  if (!overwrite && KnownHostService_().QueryExists(known_hosts_, query)) {
+  if (!overwrite &&
+      AMDomain::host::KnownHostRules::QueryExists(known_hosts_, query)) {
     return Err(EC::KeyAlreadyExists, "known-host entry already exists");
   }
 

@@ -28,6 +28,13 @@ private:
     }
   }
 
+  [[nodiscard]] AMDomain::client::ClientStatus CurrentStatus_() const {
+    if (!config_part_) {
+      return AMDomain::client::ClientStatus::NotInitialized;
+    }
+    return config_part_->GetState().status;
+  }
+
   [[nodiscard]] std::string GetHomeDir_() {
     std::string home_dir = config_part_ ? config_part_->GetHomeDir() : "";
     if (home_dir.empty()) {
@@ -619,9 +626,19 @@ public:
   Check(const AMFSI::CheckArgs &args,
         const AMDomain::client::ClientControlComponent &control) override {
     (void)args;
-    (void)control;
     AMFSI::CheckResult out = {};
+    out.status = CurrentStatus_();
+    if (control.IsTimeout()) {
+      out.rcm = {EC::OperationTimeout, "Operation timed out"};
+      return out;
+    }
+    if (control.IsInterrupted()) {
+      out.rcm = {EC::Terminate, "Interrupted by user"};
+      return out;
+    }
     out.rcm = {EC::Success, ""};
+    out.status = AMDomain::client::ClientStatus::OK;
+    SetState_({out.status, out.rcm});
     return out;
   }
 
@@ -630,7 +647,18 @@ public:
           const AMDomain::client::ClientControlComponent &control) override {
     (void)args;
     AMFSI::ConnectResult out = {};
+    out.status = CurrentStatus_();
+    if (control.IsTimeout()) {
+      out.rcm = {EC::OperationTimeout, "Operation timed out"};
+      return out;
+    }
+    if (control.IsInterrupted()) {
+      out.rcm = {EC::Terminate, "Interrupted by user"};
+      return out;
+    }
     out.rcm = {EC::Success, ""};
+    out.status = AMDomain::client::ClientStatus::OK;
+    SetState_({out.status, out.rcm});
     return out;
   }
 

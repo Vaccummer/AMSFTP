@@ -1,4 +1,5 @@
 #include "interface/parser/TokenTypeAnalyzer.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "domain/var/VarModel.hpp"
 #include "foundation/DataClass.hpp"
@@ -144,18 +145,15 @@ AMTokenType ClassifyNicknameTokenType_(const std::string &nickname_raw) {
 AMTokenType
 ClassifyNewHostNicknameTokenType_(const std::string &nickname_raw) {
   const std::string nickname = AMStr::Strip(nickname_raw);
-  std::string normalized;
-  std::string error_msg;
-  EC code = EC::InvalidArg;
-  if (!configkn::ValidateHostAttrValue(configkn::HostAttr::Nickname, nickname,
-                                       &normalized, &error_msg, true, true,
-                                       &code)) {
+  ECM validate_rcm = AMDomain::host::HostService::ValidateFieldValue(
+      AMDomain::host::ConRequest::Attr::nickname, nickname);
+  if (!isok(validate_rcm)) {
     return AMTokenType::InvalidValue;
   }
-  if (AMStr::lowercase(normalized) == "local") {
+  if (AMStr::lowercase(nickname) == "local") {
     return AMTokenType::InvalidValue;
   }
-  if (Runtime::HostExists(normalized)) {
+  if (Runtime::HostExists(nickname)) {
     return AMTokenType::InvalidValue;
   }
   return AMTokenType::ValidValue;
