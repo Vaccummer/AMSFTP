@@ -9,9 +9,6 @@ Set-Location $repoFull
 
 $searchScopes = @(
     "main.cpp",
-    "include/application",
-    "include/interface",
-    "include/bootstrap",
     "src/application",
     "src/interface",
     "src/bootstrap"
@@ -70,7 +67,7 @@ function Is-AllowedCompatibilityBridge {
     }
 
     if ($RuleItem -eq "application/filesystem/dep/FileSystemWorkflows.dep.hpp" `
-            -and $filePath -eq "include/application/filesystem/FileSystemWorkflows.hpp") {
+            -and $filePath -eq "src/application/filesystem/dep/FileSystemWorkflows.hpp") {
         return $true
     }
     return $false

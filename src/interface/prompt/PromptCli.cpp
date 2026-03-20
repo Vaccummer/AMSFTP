@@ -1,6 +1,6 @@
 #include "Isocline/isocline.h"
 #include "interface/adapters/ApplicationAdapters.hpp"
-#include "foundation/DataClass.hpp"
+#include "foundation/core/DataClass.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include "interface/style/StyleManager.hpp"
 #include "interface/parser/TokenTypeAnalyzer.hpp"

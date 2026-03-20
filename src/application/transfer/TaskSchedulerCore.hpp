@@ -2,7 +2,7 @@
 
 #include "TransferRuntimePorts.hpp"
 #include "domain/transfer/TransferPort.hpp"
-#include "foundation/DataClass.hpp"
+#include "foundation/core/DataClass.hpp"
 
 #include <atomic>
 #include <condition_variable>

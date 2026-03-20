@@ -2,7 +2,7 @@
 #include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "domain/var/VarModel.hpp"
-#include "foundation/DataClass.hpp"
+#include "foundation/core/DataClass.hpp"
 #include "foundation/tools/time.hpp"
 #include "interface/adapters/ApplicationAdapters.hpp"
 #include "interface/parser/CommandTree.hpp"

@@ -5,7 +5,7 @@
 #include "infrastructure/controller/ClientControlTokenAdapter.hpp"
 #include "application/config/ConfigPayloads.hpp"
 #include "domain/config/ConfigModel.hpp"
-#include "foundation/Path.hpp"
+#include "foundation/core/Path.hpp"
 #include "foundation/tools/auth.hpp"
 #include "foundation/tools/json.hpp"
 #include "domain/host/HostManager.hpp"

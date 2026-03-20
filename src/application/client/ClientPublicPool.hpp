@@ -2,7 +2,7 @@
 
 #include "../transfer/TransferRuntimePorts.hpp"
 #include "domain/client/ClientPort.hpp"
-#include "foundation/DataClass.hpp"
+#include "foundation/core/DataClass.hpp"
 
 #include <functional>
 #include <list>

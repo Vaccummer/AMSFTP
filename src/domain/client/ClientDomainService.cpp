@@ -1,6 +1,6 @@
 #include "domain/client/ClientDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
-#include "foundation/Path.hpp"
+#include "foundation/core/Path.hpp"
 #include "foundation/tools/time.hpp"
 #include "foundation/tools/string.hpp"
 

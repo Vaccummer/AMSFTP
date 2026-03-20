@@ -1,7 +1,7 @@
 #pragma once
 
 #include "domain/client/ClientPort.hpp"
-#include "foundation/DataClass.hpp"
+#include "foundation/core/DataClass.hpp"
 #include "foundation/tools/time.hpp"
 #include <algorithm>
 #include <atomic>

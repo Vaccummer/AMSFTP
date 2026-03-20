@@ -29,31 +29,19 @@ endif()
 # ========= Source Files =========
 file(GLOB_RECURSE AMSFTP_SOURCES CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/main.cpp"
-  "${PROJECT_SOURCE_DIR}/src/interface/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/interface/*/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/interface/*/*/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/base/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/domain/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/domain/*/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/application/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/application/*/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/infrastructure/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/infrastructure/config/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/infrastructure/host/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/bootstrap/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/bootstrap/*/*.cpp"
-  "${PROJECT_SOURCE_DIR}/src/Isocline/isocline.c"
+  "${PROJECT_SOURCE_DIR}/src/*.cpp"
+  "${PROJECT_SOURCE_DIR}/src/*.cc"
+  "${PROJECT_SOURCE_DIR}/src/*.cxx"
 )
-list(APPEND AMSFTP_SOURCES "${PROJECT_SOURCE_DIR}/src/Isocline/isocline.c")
 list(APPEND AMSFTP_SOURCES
-  "${PROJECT_SOURCE_DIR}/src/infrastructure/client/ClientMaintainer.cpp"
+  "${PROJECT_SOURCE_DIR}/src/third_party/Isocline/isocline.c"
 )
 
 add_executable(amsftp ${AMSFTP_SOURCES})
 
 target_include_directories(amsftp PRIVATE
-  "${PROJECT_SOURCE_DIR}/include"
-  "${PROJECT_SOURCE_DIR}/include/third_party"
+  "${PROJECT_SOURCE_DIR}/src"
+  "${PROJECT_SOURCE_DIR}/src/third_party"
 )
 
 # ========= Link (all via vcpkg targets) =========
@@ -89,12 +77,13 @@ add_compile_definitions(NOMINMAX)
 #   "${PROJECT_SOURCE_DIR}/src/*.cc"
 #   "${PROJECT_SOURCE_DIR}/src/*.cxx"
 # )
-# list(APPEND AMTEST_SOURCES "${PROJECT_SOURCE_DIR}/src/Isocline/isocline.c")
+# list(APPEND AMTEST_SOURCES "${PROJECT_SOURCE_DIR}/src/third_party/Isocline/isocline.c")
 
 # add_executable(amtest ${AMTEST_SOURCES})
 
 # target_include_directories(amtest PRIVATE
-#   "${PROJECT_SOURCE_DIR}/include"
+#   "${PROJECT_SOURCE_DIR}/src"
+#   "${PROJECT_SOURCE_DIR}/src/third_party"
 # )
 
 # target_link_libraries(amtest PRIVATE

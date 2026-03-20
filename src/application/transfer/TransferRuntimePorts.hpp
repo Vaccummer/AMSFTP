@@ -1,7 +1,7 @@
 #pragma once
 
 #include "domain/transfer/TransferPort.hpp"
-#include "foundation/DataClass.hpp"
+#include "foundation/core/DataClass.hpp"
 
 #include <cstdint>
 #include <functional>
