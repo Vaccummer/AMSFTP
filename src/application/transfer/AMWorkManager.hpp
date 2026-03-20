@@ -1,6 +1,6 @@
 #pragma once
 
-#include "foundation/DataClass.hpp"
+#include "foundation/core/DataClass.hpp"
 
 #include <memory>
 #include <optional>

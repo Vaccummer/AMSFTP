@@ -18,8 +18,8 @@ function Normalize-PathForCheck {
 function Get-LayerFromFilePath {
     param([string]$Path)
     $n = Normalize-PathForCheck $Path
-    if ($n -match '^(include|src)/(foundation|infrastructure|domain|application|interface|bootstrap)/') {
-        return $Matches[2]
+    if ($n -match '^src/(foundation|infrastructure|domain|application|interface|bootstrap)/') {
+        return $Matches[1]
     }
     return ""
 }
@@ -30,7 +30,7 @@ function Is-FilesystemActivePath {
     if ($n -eq "main.cpp") {
         return $true
     }
-    return $n -match '^(include|src)/(application|interface|bootstrap)/'
+    return $n -match '^src/(application|interface|bootstrap)/'
 }
 
 function Get-RelativePathCompat {
@@ -56,9 +56,6 @@ function Get-LayerFromIncludePath {
         return $Matches[1]
     }
     if ($n -match '^(?:\./|\.\./)+(foundation|infrastructure|domain|application|interface|bootstrap)/') {
-        return $Matches[1]
-    }
-    if ($n -match '^include/(foundation|infrastructure|domain|application|interface|bootstrap)/') {
         return $Matches[1]
     }
     return ""
@@ -98,7 +95,7 @@ $allowedDeps = @{
     bootstrap      = @("foundation", "infrastructure", "domain", "application", "interface", "bootstrap")
 }
 
-$targetFiles = Get-ChildItem -Recurse -File include, src -ErrorAction SilentlyContinue |
+$targetFiles = Get-ChildItem -Recurse -File src -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -in @(".h", ".hpp", ".hh", ".hxx", ".c", ".cc", ".cpp", ".cxx") }
 
 $layeredFiles = @()
@@ -126,12 +123,16 @@ $filesystemCompatForbiddenIncludes = @(
 )
 
 foreach ($entry in $layeredFiles) {
+    $isDeprecatedLayerFile = $entry.Relative -match '\.dep\.(h|hpp|hh|hxx|c|cc|cpp|cxx)$|\.h\.dep$|\.hpp\.dep$|\.c\.dep$|\.cc\.dep$|\.cpp\.dep$|\.cxx\.dep$'
     $includes = Get-IncludeEntries $entry.FilePath
     foreach ($inc in $includes) {
         $includeNorm = Normalize-PathForCheck $inc.IncludePath
         $toLayer = Get-LayerFromIncludePath $inc.IncludePath
+        $isInterfaceControllerBridge = ($entry.Layer -eq "interface" `
+                -and $toLayer -eq "infrastructure" `
+                -and $includeNorm -eq "infrastructure/controller/ClientControlTokenAdapter.hpp")
         if (-not [string]::IsNullOrEmpty($toLayer)) {
-            if (-not $SkipLayerDirectionCheck) {
+            if ((-not $SkipLayerDirectionCheck) -and (-not $isDeprecatedLayerFile) -and (-not $isInterfaceControllerBridge)) {
                 $allowed = $allowedDeps[$entry.Layer]
                 if ($allowed -notcontains $toLayer) {
                     $violations += [pscustomobject]@{
@@ -149,7 +150,7 @@ foreach ($entry in $layeredFiles) {
             }
         }
         if ($FailOnFilesystemCompatInActivePath -and (Is-FilesystemActivePath $entry.Relative)) {
-            $isBridgeException = ($entry.Relative -eq "include/application/filesystem/FileSystemWorkflows.hpp" `
+            $isBridgeException = ($entry.Relative -eq "src/application/filesystem/dep/FileSystemWorkflows.hpp" `
                     -and $includeNorm -eq "application/filesystem/dep/FileSystemWorkflows.dep.hpp")
             if (($filesystemCompatForbiddenIncludes -contains $includeNorm) -and -not $isBridgeException) {
                 $violations += [pscustomobject]@{

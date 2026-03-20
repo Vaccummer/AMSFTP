@@ -31,7 +31,7 @@ function Get-RelativePathCompat {
 $repoFull = (Resolve-Path $RepoRoot).Path
 Set-Location $repoFull
 
-$targetFiles = Get-ChildItem -Recurse -File include/application/transfer, src/application/transfer -ErrorAction SilentlyContinue |
+$targetFiles = Get-ChildItem -Recurse -File src/application/transfer -ErrorAction SilentlyContinue |
     Where-Object { $_.Extension -in @(".h", ".hpp", ".c", ".cc", ".cpp", ".cxx") }
 
 $forbiddenRules = @(

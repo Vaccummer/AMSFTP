@@ -1,6 +1,6 @@
 #include "domain/client/ClientDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
-#include "foundation/DataClass.hpp"
+#include "foundation/core/DataClass.hpp"
 #include "infrastructure/client/transfer/core.hpp"
 
 #include "foundation/tools/time.hpp"

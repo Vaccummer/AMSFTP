@@ -2,7 +2,7 @@
 
 #include "ClientPublicPool.hpp"
 
-#include "foundation/Path.hpp"
+#include "foundation/core/Path.hpp"
 #include "foundation/tools/auth.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"

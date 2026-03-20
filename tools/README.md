@@ -5,7 +5,7 @@ Repository utility scripts for migration checks and compatibility reports.
 ## Layer and Legacy Checks
 
 1. `check_layers.ps1`
-- Layer-direction checker for `include/` + `src/`.
+- Layer-direction checker for `src/`.
 - Legacy include strict mode: `-FailOnLegacyInclude`.
 - Filesystem active-path compatibility strict mode:
   `-FailOnFilesystemCompatInActivePath`.
@@ -38,10 +38,9 @@ D:\Powershell\7\pwsh.exe -NoProfile -File tools/check_wf7_cutover.ps1 -IncludeFi
 1. `check_filesystem_refactor_guards.ps1`
 - Enforces no reintroduction of filesystem compatibility headers/types in active paths:
   - `main.cpp`
-  - `include/{application,interface,bootstrap}`
   - `src/{application,interface,bootstrap}`
 - Keeps explicit compatibility bridge exception:
-  `include/application/filesystem/FileSystemWorkflows.hpp` ->
+  `src/application/filesystem/dep/FileSystemWorkflows.hpp` ->
   `application/filesystem/dep/FileSystemWorkflows.dep.hpp`.
 
 Example:

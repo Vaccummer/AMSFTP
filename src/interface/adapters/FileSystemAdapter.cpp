@@ -1,6 +1,6 @@
 #include "interface/adapters/FileSystemAdapter.hpp"
 
-#include "foundation/Path.hpp"
+#include "foundation/core/Path.hpp"
 #include "foundation/tools/string.hpp"
 #include "interface/prompt/Prompt.hpp"
 
