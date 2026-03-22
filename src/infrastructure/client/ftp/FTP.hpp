@@ -641,7 +641,7 @@ protected:
     return home_dir;
   }
 
-  void SetState_(const AMDomain::client::ClientState &state) {
+  void SetState_(const AMDomain::filesystem::CheckResult &state) {
     config_part_->SetState(state);
   }
 
@@ -1582,11 +1582,11 @@ public:
           (out.rcm.first == EC::NoConnection)
               ? AMDomain::client::ClientStatus::NoConnection
               : AMDomain::client::ClientStatus::ConnectionBroken;
-      SetState_({status, out.rcm});
+      SetState_({out.rcm, status});
       out.status = status;
       return out;
     }
-    SetState_({AMDomain::client::ClientStatus::OK, {EC::Success, ""}});
+    SetState_({{EC::Success, ""}, AMDomain::client::ClientStatus::OK});
     out.status = AMDomain::client::ClientStatus::OK;
     (void)UpdateOSType({}, control);
     trace(AMDomain::client::TraceLevel::Info, EC::Success,

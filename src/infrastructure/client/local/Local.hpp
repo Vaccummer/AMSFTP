@@ -22,7 +22,7 @@
 namespace AMInfra::client::LOCAL {
 class AMLocalIOCore : public ClientIOBase, BasePathMatch {
 private:
-  void SetState_(const AMDomain::client::ClientState &state) {
+  void SetState_(const AMDomain::filesystem::CheckResult &state) {
     if (config_part_) {
       config_part_->SetState(state);
     }
@@ -575,7 +575,7 @@ public:
       config_part_->SetHomeDir(AMFS::HomePath());
     }
     (void)UpdateOSType({}, {});
-    SetState_({AMDomain::client::ClientStatus::OK, {EC::Success, ""}});
+    SetState_({{EC::Success, ""}, AMDomain::client::ClientStatus::OK});
   }
 
   ~AMLocalIOCore() override = default;
@@ -638,7 +638,7 @@ public:
     }
     out.rcm = {EC::Success, ""};
     out.status = AMDomain::client::ClientStatus::OK;
-    SetState_({out.status, out.rcm});
+    SetState_({out.rcm, out.status});
     return out;
   }
 
@@ -658,7 +658,7 @@ public:
     }
     out.rcm = {EC::Success, ""};
     out.status = AMDomain::client::ClientStatus::OK;
-    SetState_({out.status, out.rcm});
+    SetState_({out.rcm, out.status});
     return out;
   }
 
