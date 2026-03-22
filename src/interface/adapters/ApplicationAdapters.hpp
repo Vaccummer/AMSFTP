@@ -18,6 +18,7 @@
 #include "domain/var/VarModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/tools/bar.hpp"
+#include "interface/style/StyleIndex.hpp"
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -641,7 +642,7 @@ ECM LoadConfig(AMDomain::config::DocumentKind kind, bool strict);
  * @brief Format text through interface style service.
  */
 [[nodiscard]] std::string Format(const std::string &text,
-                                 const std::string &style_key,
+                                 AMInterface::style::StyleIndex style_index,
                                  const PathInfo *path_info = nullptr);
 
 /**

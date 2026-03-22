@@ -1,78 +1,103 @@
 #include "interface/style/StyleManager.hpp"
 
-#include "foundation/tools/enum_related.hpp"
+#include "domain/style/StyleDomainService.hpp"
 #include "foundation/tools/string.hpp"
+
 #include <algorithm>
 #include <unordered_map>
+#include <variant>
 
 namespace AMInterface::style {
-ECM AMStyleService::Init(
-    AMApplication::config::AMConfigAppService *config_service) {
-  if (!config_service) {
-    return Err(EC::InvalidArg, "config service is null");
+namespace detail {
+const std::string *
+ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
+                         StyleIndex style_index) {
+  switch (style_index) {
+  case StyleIndex::Protocol:
+    return &cfg.input_highlight.protocol;
+  case StyleIndex::Abort:
+    return &cfg.input_highlight.abort;
+  case StyleIndex::Common:
+    return &cfg.input_highlight.common;
+  case StyleIndex::Module:
+    return &cfg.input_highlight.module;
+  case StyleIndex::Command:
+    return &cfg.input_highlight.command;
+  case StyleIndex::IllegalCommand:
+    return &cfg.input_highlight.illegal_command;
+  case StyleIndex::Option:
+    return &cfg.input_highlight.option;
+  case StyleIndex::String:
+    return &cfg.input_highlight.string;
+  case StyleIndex::PublicVarname:
+    return &cfg.input_highlight.public_varname;
+  case StyleIndex::PrivateVarname:
+    return &cfg.input_highlight.private_varname;
+  case StyleIndex::NonexistentVarname:
+    return &cfg.input_highlight.nonexistent_varname;
+  case StyleIndex::VarValue:
+    return &cfg.input_highlight.varvalue;
+  case StyleIndex::Nickname:
+    return &cfg.input_highlight.nickname;
+  case StyleIndex::UnestablishedNickname:
+    return &cfg.input_highlight.unestablished_nickname;
+  case StyleIndex::NonexistentNickname:
+    return &cfg.input_highlight.nonexistent_nickname;
+  case StyleIndex::ValidNewNickname:
+    return &cfg.input_highlight.valid_new_nickname;
+  case StyleIndex::InvalidNewNickname:
+    return &cfg.input_highlight.invalid_new_nickname;
+  case StyleIndex::BuiltinArg:
+    return &cfg.input_highlight.builtin_arg;
+  case StyleIndex::NonexistentBuiltinArg:
+    return &cfg.input_highlight.nonexistent_builtin_arg;
+  case StyleIndex::Username:
+    return &cfg.input_highlight.username;
+  case StyleIndex::AtSign:
+    return &cfg.input_highlight.atsign;
+  case StyleIndex::DollarSign:
+    return &cfg.input_highlight.dollarsign;
+  case StyleIndex::EqualSign:
+    return &cfg.input_highlight.equalsign;
+  case StyleIndex::EscapedSign:
+    return &cfg.input_highlight.escapedsign;
+  case StyleIndex::BangSign:
+    return &cfg.input_highlight.bangsign;
+  case StyleIndex::ShellCmd:
+    return &cfg.input_highlight.shell_cmd;
+  case StyleIndex::Cwd:
+    return &cfg.input_highlight.cwd;
+  case StyleIndex::Number:
+    return &cfg.input_highlight.number;
+  case StyleIndex::Timestamp:
+    return &cfg.input_highlight.timestamp;
+  case StyleIndex::PathLike:
+    return &cfg.input_highlight.path_like;
+  case StyleIndex::PromptUn:
+    return &cfg.cli_prompt.shortcut.un;
+  case StyleIndex::PromptAt:
+    return &cfg.cli_prompt.shortcut.at;
+  case StyleIndex::PromptHn:
+    return &cfg.cli_prompt.shortcut.hn;
+  case StyleIndex::PromptEn:
+    return &cfg.cli_prompt.shortcut.en;
+  case StyleIndex::PromptNn:
+    return &cfg.cli_prompt.shortcut.nn;
+  case StyleIndex::PromptCwd:
+    return &cfg.cli_prompt.shortcut.cwd;
+  case StyleIndex::PromptDs:
+    return &cfg.cli_prompt.shortcut.ds;
+  case StyleIndex::PromptWhite:
+    return &cfg.cli_prompt.shortcut.white;
+  case StyleIndex::Error:
+    return &cfg.system_info.error;
+  case StyleIndex::None:
+  default:
+    return nullptr;
   }
-  {
-    std::lock_guard<std::mutex> lock(mtx_);
-    config_service_ = config_service;
-  }
-
-  ECM reload_rcm = ReloadFromConfigService();
-  if (!isok(reload_rcm)) {
-    return reload_rcm;
-  }
-
-  {
-    std::lock_guard<std::mutex> lock(mtx_);
-    initialized_ = true;
-  }
-  return Ok();
 }
 
-ECM AMStyleService::ReloadFromConfigService() {
-  AMApplication::config::AMConfigAppService *config_service = nullptr;
-  {
-    std::lock_guard<std::mutex> lock(mtx_);
-    config_service = config_service_;
-  }
-  if (!config_service) {
-    return Err(EC::ConfigNotInitialized, "config service is not bound");
-  }
-
-  AMStyleSnapshot snapshot = {};
-  if (!config_service->Read(&snapshot)) {
-    return Err(EC::ConfigLoadFailed, "failed to load style settings");
-  }
-  snapshot.Normalize();
-
-  std::lock_guard<std::mutex> lock(mtx_);
-  snapshot_ = std::move(snapshot);
-  progress_bar_style_.reset();
-  return Ok();
-}
-
-std::string
-AMStyleService::ResolveInputStyleTag_(const std::string &style_name) const {
-  const std::string trimmed = AMStr::Strip(style_name);
-  if (trimmed.empty()) {
-    return "";
-  }
-
-  auto it = snapshot_.input_highlight.find(trimmed);
-  if (it != snapshot_.input_highlight.end()) {
-    return NormalizeStyleTag_(it->second);
-  }
-
-  if (trimmed.rfind("Prompt.", 0) == 0) {
-    const std::string shortcut_key = trimmed.substr(7);
-    auto shortcut_it = snapshot_.cli_prompt.shortcut.find(shortcut_key);
-    if (shortcut_it != snapshot_.cli_prompt.shortcut.end()) {
-      return NormalizeStyleTag_(shortcut_it->second);
-    }
-  }
-  return "";
-}
-
-std::string AMStyleService::NormalizeStyleTag_(const std::string &raw_tag) {
+std::string NormalizeStyleTag(const std::string &raw_tag) {
   std::string trimmed = AMStr::Strip(raw_tag);
   if (trimmed.empty()) {
     return "";
@@ -86,77 +111,49 @@ std::string AMStyleService::NormalizeStyleTag_(const std::string &raw_tag) {
   if (trimmed.back() != ']') {
     trimmed.push_back(']');
   }
+  if (!AMDomain::style::services::IsStyleString(trimmed)) {
+    return "";
+  }
   return trimmed;
 }
 
-std::string AMStyleService::ApplyStyleTag_(const std::string &tag,
-                                           const std::string &text) {
+std::string ApplyStyleTag(const std::string &tag, const std::string &text) {
   if (tag.empty()) {
     return text;
   }
   return tag + text + "[/]";
 }
 
-std::string AMStyleService::Format(const std::string &ori_str,
-                                   const std::string &style_name,
-                                   const PathInfo *path_info) const {
-  std::lock_guard<std::mutex> lock(mtx_);
-  const std::string escaped = AMStr::BBCEscape(ori_str);
-
-  if (!path_info) {
-    return ApplyStyleTag_(ResolveInputStyleTag_(style_name), escaped);
+std::string ResolveInputStyleTag(const AMDomain::style::StyleConfig &cfg,
+                                 StyleIndex style_index) {
+  const auto *raw_tag = ResolveInputStyleByIndex(cfg, style_index);
+  if (!raw_tag) {
+    return "";
   }
-
-  std::string path_key = "regular";
-  if (path_info->path.empty()) {
-    path_key = "nonexistent";
-  } else {
-    switch (path_info->type) {
-    case PathType::DIR:
-      path_key = "dir";
-      break;
-    case PathType::SYMLINK:
-      path_key = "symlink";
-      break;
-    case PathType::FILE:
-      path_key = "regular";
-      break;
-    default:
-      path_key = "otherspecial";
-      break;
-    }
-  }
-
-  auto path_it = snapshot_.path.find(path_key);
-  if (path_it != snapshot_.path.end()) {
-    const std::string path_tag = NormalizeStyleTag_(path_it->second);
-    if (!path_tag.empty()) {
-      return ApplyStyleTag_(path_tag, escaped);
-    }
-  }
-
-  return ApplyStyleTag_(ResolveInputStyleTag_(style_name), escaped);
+  return NormalizeStyleTag(*raw_tag);
 }
 
-std::string AMStyleService::FormatUtf8Table(
-    const std::vector<std::string> &keys,
-    const std::vector<std::vector<std::string>> &rows) const {
-  std::lock_guard<std::mutex> lock(mtx_);
-  const size_t left =
-      static_cast<size_t>(std::max<int64_t>(0, snapshot_.table.left_padding));
-  const size_t right =
-      static_cast<size_t>(std::max<int64_t>(0, snapshot_.table.right_padding));
-  const size_t top =
-      static_cast<size_t>(std::max<int64_t>(0, snapshot_.table.top_padding));
-  const size_t bottom =
-      static_cast<size_t>(std::max<int64_t>(0, snapshot_.table.bottom_padding));
+std::string ResolvePathStyleTag(const AMDomain::style::StyleConfig &cfg,
+                                const PathInfo *path_info) {
+  if (!path_info) {
+    return "";
+  }
 
-  return AMStr::FormatUtf8Table(keys, rows, snapshot_.table.color, left, right,
-                                top, bottom);
+  const std::string *path_tag = &cfg.path.regular;
+  if (path_info->path.empty()) {
+    path_tag = &cfg.path.nonexistent;
+  } else if (path_info->type == PathType::DIR) {
+    path_tag = &cfg.path.dir;
+  } else if (path_info->type == PathType::SYMLINK) {
+    path_tag = &cfg.path.symlink;
+  } else if (path_info->type != PathType::FILE) {
+    path_tag = &cfg.path.otherspecial;
+  }
+  return NormalizeStyleTag(*path_tag);
 }
 
 std::variant<indicators::Color, std::string>
-AMStyleService::ParseProgressBarColor_(const std::string &value) {
+ParseProgressBarColor(const std::string &value) {
   const std::string trimmed = AMStr::Strip(value);
   if (trimmed.empty()) {
     return indicators::Color::unspecified;
@@ -179,60 +176,95 @@ AMStyleService::ParseProgressBarColor_(const std::string &value) {
       {"white", indicators::Color::white},
       {"grey", indicators::Color::grey},
   };
-  auto it = color_map.find(token);
+  const auto it = color_map.find(token);
   if (it == color_map.end()) {
     return indicators::Color::unspecified;
   }
   return it->second;
 }
 
-AMProgressBarStyle AMStyleService::BuildProgressBarStyle_() const {
+AMProgressBarStyle
+BuildProgressBarStyle(const AMDomain::style::StyleConfig &cfg) {
   AMProgressBarStyle style{};
-  const auto &cfg = snapshot_.progress_bar;
-  style.bar_width = static_cast<size_t>(std::max<int64_t>(1, cfg.bar_width));
-  style.width_offset = static_cast<int>(cfg.width_offset);
-  style.start = cfg.lborder;
-  style.end = cfg.rborder;
-  style.fill = cfg.fill.empty() ? "█" : cfg.fill;
-  style.lead = cfg.head.empty() ? "▓" : cfg.head;
-  style.remainder = cfg.remain;
-  style.color = ParseProgressBarColor_(cfg.color);
-  style.show_percentage = cfg.show_percentage;
-  style.show_elapsed_time = cfg.show_elapsed_time;
-  style.show_remaining_time = cfg.show_remaining_time;
+  style.bar_width =
+      static_cast<size_t>(std::max<int64_t>(1, cfg.progress_bar.bar_width));
+  style.width_offset = static_cast<int>(cfg.progress_bar.width_offset);
+  style.start = cfg.progress_bar.lborder;
+  style.end = cfg.progress_bar.rborder;
+  style.fill = cfg.progress_bar.fill.empty() ? "█" : cfg.progress_bar.fill;
+  style.lead = cfg.progress_bar.head.empty() ? "▓" : cfg.progress_bar.head;
+  style.remainder = cfg.progress_bar.remain;
+  style.color = ParseProgressBarColor(cfg.progress_bar.color);
+  style.show_percentage = cfg.progress_bar.show_percentage;
+  style.show_elapsed_time = cfg.progress_bar.show_elapsed_time;
+  style.show_remaining_time = cfg.progress_bar.show_remaining_time;
   return style;
+}
+} // namespace detail
+
+AMStyleService::AMStyleService(StyleConfigArg arg)
+    : init_arg_(std::move(arg)),
+      progress_bar_style_(std::optional<AMProgressBarStyle>{}) {}
+
+ECM AMStyleService::Init() {
+  auto style_guard = init_arg_.lock();
+  AMDomain::style::services::NormalizeStyleConfigArg(&style_guard.get());
+  progress_bar_style_.lock().store(std::nullopt);
+  return ECM{EC::Success, ""};
+}
+
+void AMStyleService::SetInitArg(StyleConfigArg arg) {
+  init_arg_.lock().store(std::move(arg));
+}
+
+StyleConfigArg AMStyleService::GetInitArg() const {
+  return init_arg_.lock().load();
+}
+
+std::string AMStyleService::Format(const std::string &ori_str,
+                                   StyleIndex style_index,
+                                   const PathInfo *path_info) const {
+  const auto cfg = init_arg_.lock().load().style;
+  const std::string escaped = AMStr::BBCEscape(ori_str);
+  const std::string path_tag = detail::ResolvePathStyleTag(cfg, path_info);
+  if (!path_tag.empty()) {
+    return detail::ApplyStyleTag(path_tag, escaped);
+  }
+  return detail::ApplyStyleTag(detail::ResolveInputStyleTag(cfg, style_index),
+                               escaped);
+}
+
+std::string AMStyleService::FormatUtf8Table(
+    const std::vector<std::string> &keys,
+    const std::vector<std::vector<std::string>> &rows) const {
+  const auto cfg = init_arg_.lock().load().style.table;
+  const size_t left =
+      static_cast<size_t>(std::max<int64_t>(0, cfg.left_padding));
+  const size_t right =
+      static_cast<size_t>(std::max<int64_t>(0, cfg.right_padding));
+  const size_t top = static_cast<size_t>(std::max<int64_t>(0, cfg.top_padding));
+  const size_t bottom =
+      static_cast<size_t>(std::max<int64_t>(0, cfg.bottom_padding));
+  return AMStr::FormatUtf8Table(keys, rows, cfg.color, left, right, top,
+                                bottom);
 }
 
 AMProgressBar AMStyleService::CreateProgressBar(int64_t total_size,
                                                 const std::string &prefix) {
-  std::lock_guard<std::mutex> lock(mtx_);
-  if (!progress_bar_style_) {
-    progress_bar_style_ = BuildProgressBarStyle_();
+  {
+    const auto cached = progress_bar_style_.lock().load();
+    if (cached.has_value()) {
+      return AMProgressBar(total_size, prefix, cached.value());
+    }
   }
-  return AMProgressBar(total_size, prefix, *progress_bar_style_);
-}
 
-std::string AMStyleService::ResolveCorePromptTemplate() const {
-  std::lock_guard<std::mutex> lock(mtx_);
-  return snapshot_.cli_prompt.prompt_template.core_prompt;
-}
+  const auto cfg = init_arg_.lock().load().style;
+  const AMProgressBarStyle built = detail::BuildProgressBarStyle(cfg);
 
-std::string AMStyleService::ResolveHistorySearchPrompt() const {
-  std::lock_guard<std::mutex> lock(mtx_);
-  return snapshot_.cli_prompt.prompt_template.history_search_prompt;
-}
-
-std::string AMStyleService::ResolveShortcutStyle(const std::string &key) const {
-  std::lock_guard<std::mutex> lock(mtx_);
-  auto it = snapshot_.cli_prompt.shortcut.find(key);
-  if (it == snapshot_.cli_prompt.shortcut.end()) {
-    return "";
+  auto cached = progress_bar_style_.lock();
+  if (!cached->has_value()) {
+    cached->emplace(built);
   }
-  return it->second;
-}
-
-AMStyleSnapshot AMStyleService::Snapshot() const {
-  std::lock_guard<std::mutex> lock(mtx_);
-  return snapshot_;
+  return AMProgressBar(total_size, prefix, cached->value());
 }
 } // namespace AMInterface::style

@@ -1,6 +1,7 @@
 #include "interface/adapters/ApplicationAdapters.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include "application/client/ClientAppService.hpp"
+#include "application/config/StyleSettings.hpp"
 #include "infrastructure/controller/ClientControlTokenAdapter.hpp"
 #include "application/config/ConfigPayloads.hpp"
 #include "domain/host/HostManager.hpp"
@@ -332,9 +333,11 @@ Runtime::ConnectNickname(const std::string &nickname, bool force,
   options.force = force;
   options.quiet = true;
   options.register_to_manager = register_to_manager;
+  const AMDomain::client::ClientControlComponent control =
+      AMDomain::client::MakeClientControlComponent(
+          AMInfra::controller::AdaptClientInterruptFlag(interrupt_flag));
   return client_service->ConnectNickname(
-      nickname, options, {},
-      AMInfra::controller::AdaptClientInterruptFlag(interrupt_flag));
+      nickname, options, {}, control);
 }
 
 /**
@@ -348,8 +351,11 @@ Runtime::ConnectRequest(const AMDomain::client::ClientConnectContext &context,
   if (!client_service) {
     return {Err(EC::InvalidHandle, "Runtime client app service is not bound"), nullptr};
   }
+  const AMDomain::client::ClientControlComponent control =
+      AMDomain::client::MakeClientControlComponent(
+          AMInfra::controller::AdaptClientInterruptFlag(interrupt_flag));
   return client_service->ConnectRequest(
-      context, {}, AMInfra::controller::AdaptClientInterruptFlag(interrupt_flag));
+      context, {}, control);
 }
 
 /**
@@ -457,85 +463,85 @@ Runtime::ResolvePromptPathOptions(const std::string &nickname) {
  */
 std::string Runtime::ResolveSettingString(const std::vector<std::string> &path,
                                           const std::string &fallback) {
-  AMInterface::style::AMStyleService *style_service =
-      RuntimeBindingState_().style_service.load(std::memory_order_acquire);
   AMApplication::config::AMConfigAppService *config_service =
       RuntimeBindingState_().config_service.load(std::memory_order_acquire);
 
-  if (path.size() >= 2 && path[0] == "Style" && style_service) {
-    const auto snapshot = style_service->Snapshot();
-    if (path[1] == "CompleteMenu" && path.size() == 3) {
-      const std::string &field = path[2];
-      if (field == "item_select_sign") {
-        return snapshot.complete_menu.item_select_sign;
-      }
-      if (field == "order_num_style") {
-        return snapshot.complete_menu.order_num_style;
-      }
-      if (field == "help_style") {
-        return snapshot.complete_menu.help_style;
-      }
-      if (field == "number_pick") {
-        return snapshot.complete_menu.number_pick ? "true" : "false";
-      }
-      if (field == "auto_fillin") {
-        return snapshot.complete_menu.auto_fillin ? "true" : "false";
-      }
-    }
-    if (path[1] == "CLIPrompt") {
-      if (path.size() == 3) {
+  if (path.size() >= 2 && path[0] == "Style" && config_service) {
+    AMApplication::config::AMStyleSnapshot snapshot = {};
+    if (config_service->Read(&snapshot)) {
+      if (path[1] == "CompleteMenu" && path.size() == 3) {
         const std::string &field = path[2];
-        if (field == "format") {
-          return snapshot.cli_prompt.prompt_template.core_prompt;
+        if (field == "item_select_sign") {
+          return snapshot.complete_menu.item_select_sign;
         }
-        auto it = snapshot.cli_prompt.named_styles.find(field);
-        if (it != snapshot.cli_prompt.named_styles.end()) {
+        if (field == "order_num_style") {
+          return snapshot.complete_menu.order_num_style;
+        }
+        if (field == "help_style") {
+          return snapshot.complete_menu.help_style;
+        }
+        if (field == "number_pick") {
+          return snapshot.complete_menu.number_pick ? "true" : "false";
+        }
+        if (field == "auto_fillin") {
+          return snapshot.complete_menu.auto_fillin ? "true" : "false";
+        }
+      }
+      if (path[1] == "CLIPrompt") {
+        if (path.size() == 3) {
+          const std::string &field = path[2];
+          if (field == "format") {
+            return snapshot.cli_prompt.prompt_template.core_prompt;
+          }
+          auto it = snapshot.cli_prompt.named_styles.find(field);
+          if (it != snapshot.cli_prompt.named_styles.end()) {
+            return it->second;
+          }
+        }
+        if (path.size() == 4 && (path[2] == "template" || path[2] == "templete")) {
+          if (path[3] == "core_prompt") {
+            return snapshot.cli_prompt.prompt_template.core_prompt;
+          }
+          if (path[3] == "history_search_prompt") {
+            return snapshot.cli_prompt.prompt_template.history_search_prompt;
+          }
+        }
+        if (path.size() == 4 && path[2] == "shortcut") {
+          auto it = snapshot.cli_prompt.shortcut.find(path[3]);
+          if (it != snapshot.cli_prompt.shortcut.end()) {
+            return it->second;
+          }
+        }
+        if (path.size() == 4 && path[2] == "icons") {
+          auto it = snapshot.cli_prompt.icons.find(path[3]);
+          if (it != snapshot.cli_prompt.icons.end()) {
+            return it->second;
+          }
+        }
+      }
+      if (path.size() == 3 && path[1] == "InputHighlight") {
+        auto it = snapshot.input_highlight.find(path[2]);
+        if (it != snapshot.input_highlight.end()) {
           return it->second;
         }
       }
-      if (path.size() == 4 && (path[2] == "template" || path[2] == "templete")) {
-        if (path[3] == "core_prompt") {
-          return snapshot.cli_prompt.prompt_template.core_prompt;
-        }
-        if (path[3] == "history_search_prompt") {
-          return snapshot.cli_prompt.prompt_template.history_search_prompt;
-        }
-      }
-      if (path.size() == 4 && path[2] == "shortcut") {
-        auto it = snapshot.cli_prompt.shortcut.find(path[3]);
-        if (it != snapshot.cli_prompt.shortcut.end()) {
+      if (path.size() == 3 && path[1] == "ValueQueryHighlight") {
+        auto it = snapshot.value_query_highlight.find(path[2]);
+        if (it != snapshot.value_query_highlight.end()) {
           return it->second;
         }
       }
-      if (path.size() == 4 && path[2] == "icons") {
-        auto it = snapshot.cli_prompt.icons.find(path[3]);
-        if (it != snapshot.cli_prompt.icons.end()) {
+      if (path.size() == 3 && path[1] == "Path") {
+        auto it = snapshot.path.find(path[2]);
+        if (it != snapshot.path.end()) {
           return it->second;
         }
       }
-    }
-    if (path.size() == 3 && path[1] == "InputHighlight") {
-      auto it = snapshot.input_highlight.find(path[2]);
-      if (it != snapshot.input_highlight.end()) {
-        return it->second;
-      }
-    }
-    if (path.size() == 3 && path[1] == "ValueQueryHighlight") {
-      auto it = snapshot.value_query_highlight.find(path[2]);
-      if (it != snapshot.value_query_highlight.end()) {
-        return it->second;
-      }
-    }
-    if (path.size() == 3 && path[1] == "Path") {
-      auto it = snapshot.path.find(path[2]);
-      if (it != snapshot.path.end()) {
-        return it->second;
-      }
-    }
-    if (path.size() == 3 && path[1] == "SystemInfo") {
-      auto it = snapshot.system_info.find(path[2]);
-      if (it != snapshot.system_info.end()) {
-        return it->second;
+      if (path.size() == 3 && path[1] == "SystemInfo") {
+        auto it = snapshot.system_info.find(path[2]);
+        if (it != snapshot.system_info.end()) {
+          return it->second;
+        }
       }
     }
   }
@@ -645,11 +651,11 @@ ECM Runtime::LoadConfig(AMDomain::config::DocumentKind kind, bool strict) {
  * @brief Format text through interface style service.
  */
 std::string Runtime::Format(const std::string &text,
-                            const std::string &style_key,
+                            AMInterface::style::StyleIndex style_index,
                             const PathInfo *path_info) {
   AMInterface::style::AMStyleService *style_service =
       RuntimeBindingState_().style_service.load(std::memory_order_acquire);
-  return style_service ? style_service->Format(text, style_key, path_info)
+  return style_service ? style_service->Format(text, style_index, path_info)
                        : text;
 }
 
@@ -735,7 +741,7 @@ void Runtime::ResumeSignalHook(const std::string &name) {
  * @brief Style one filesystem path display item.
  */
 std::string Runtime::StylePath(const PathInfo &info, const std::string &name) {
-  return Runtime::Format(name, "", &info);
+  return Runtime::Format(name, AMInterface::style::StyleIndex::None, &info);
 }
 } // namespace AMInterface::ApplicationAdapters
 
