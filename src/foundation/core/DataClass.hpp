@@ -227,3 +227,10 @@ struct ECMResult {
   operator bool() const { return ok(); }
   operator ECM() const { return rcm; }
 };
+
+template <typename T> struct ECMData : ECMResult {
+  ECMData() = default;
+  ECMData(T data, ECM result = {EC::Success, ""})
+      : ECMResult(std::move(result)), data(std::move(data)) {}
+  T data;
+};
