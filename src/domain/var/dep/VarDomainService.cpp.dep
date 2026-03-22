@@ -1,6 +1,5 @@
 #include "domain/var/VarDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
-#include "domain/host/HostModel.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include <algorithm>
@@ -56,7 +55,8 @@ VarInfo VarDomainService::GetVar(const std::string &domain,
   return {domain, name, var_it->second};
 }
 
-std::vector<VarInfo> VarDomainService::FindByName(const std::string &name) const {
+std::vector<VarInfo>
+VarDomainService::FindByName(const std::string &name) const {
   std::vector<VarInfo> out;
   if (!varsetkn::IsValidVarname(name)) {
     return out;
@@ -208,8 +208,9 @@ std::vector<std::string> VarDomainService::ListNames() const {
   return names;
 }
 
-std::string VarDomainService::SubstitutePathLike(
-    const std::string &input, const std::string &current_domain) const {
+std::string
+VarDomainService::SubstitutePathLike(const std::string &input,
+                                     const std::string &current_domain) const {
   if (input.empty()) {
     return input;
   }
@@ -306,4 +307,3 @@ bool VarDomainService::IsValidDomainName_(const std::string &domain) const {
   return AMDomain::host::HostService::ValidateNickname(domain);
 }
 } // namespace AMDomain::var
-
