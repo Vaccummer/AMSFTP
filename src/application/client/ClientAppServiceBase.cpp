@@ -4,7 +4,7 @@
 
 namespace AMApplication::client {
 ClientAppServiceBase::ClientAppServiceBase(ClientServiceArg arg)
-    : init_arg_(std::move(arg)), control_component_(ClientControlComponent{}),
+    : init_arg_(std::move(arg)), control_token_(nullptr),
       private_keys_(std::vector<std::string>{}),
       maintainer_callbacks_(ClientCallbacks{}),
       public_callbacks_(ClientCallbacks{}) {}
@@ -35,32 +35,20 @@ int ClientAppServiceBase::HeartbeatIntervalS() const {
   return init_arg_.lock().load().heartbeat_interval_s;
 }
 
-void ClientAppServiceBase::RegisterControlComponent(
-    ClientControlComponent control_component) {
-  control_component_.lock().store(std::move(control_component));
+void ClientAppServiceBase::RegisterControlComponent(amf control_token) {
+  control_token_.lock().store(std::move(control_token));
 }
 
-ClientControlComponent ClientAppServiceBase::GetControlComponent() const {
-  return control_component_.lock().load();
-}
-
-ClientControlComponent ClientAppServiceBase::ResolveControl(
-    const std::optional<ClientControlComponent> &control_component,
-    int timeout_ms) const {
-  if (control_component.has_value()) {
-    return *control_component;
-  }
-
-  const ClientControlComponent base_component = GetControlComponent();
-  if (timeout_ms < 0) {
-    return base_component;
-  }
-
+ClientControlComponent
+ClientAppServiceBase::GetControlComponent(std::optional<amf> control_token,
+                                          int timeout_ms) const {
+  amf token = control_token ? *control_token : control_token_.lock().load();
   return AMDomain::client::MakeClientControlComponent(
-      base_component.ControlToken(), timeout_ms, AMTime::miliseconds());
+      std::move(token), timeout_ms, AMTime::miliseconds());
 }
 
-void ClientAppServiceBase::SetPrivateKeys(std::vector<std::string> private_keys) {
+void ClientAppServiceBase::SetPrivateKeys(
+    std::vector<std::string> private_keys) {
   private_keys_.lock().store(std::move(private_keys));
 }
 
@@ -112,11 +100,13 @@ void ClientAppServiceBase::RegisterPublicCallbacks(
   callbacks.store(std::move(value));
 }
 
-ClientAppServiceBase::ClientCallbacks ClientAppServiceBase::GetMaintainerCallbacks() const {
+ClientAppServiceBase::ClientCallbacks
+ClientAppServiceBase::GetMaintainerCallbacks() const {
   return maintainer_callbacks_.lock().load();
 }
 
-ClientAppServiceBase::ClientCallbacks ClientAppServiceBase::GetPublicCallbacks() const {
+ClientAppServiceBase::ClientCallbacks
+ClientAppServiceBase::GetPublicCallbacks() const {
   return public_callbacks_.lock().load();
 }
 } // namespace AMApplication::client

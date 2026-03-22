@@ -38,11 +38,10 @@ public:
   virtual void SetHeartbeatIntervalS(int interval_s);
   [[nodiscard]] virtual int HeartbeatIntervalS() const;
 
-  void RegisterControlComponent(ClientControlComponent control_component);
-  [[nodiscard]] ClientControlComponent GetControlComponent() const;
+  void RegisterControlComponent(amf control_token);
   [[nodiscard]] ClientControlComponent
-  ResolveControl(const std::optional<ClientControlComponent> &control_component,
-                 int timeout_ms = -1) const;
+  GetControlComponent(std::optional<amf> control_token = std::nullopt,
+                      int timeout_ms = -1) const;
 
   void SetPrivateKeys(std::vector<std::string> private_keys);
   [[nodiscard]] std::vector<std::string> GetPrivateKeys() const;
@@ -63,7 +62,7 @@ public:
 
 protected:
   mutable AMAtomic<ClientServiceArg> init_arg_ = {};
-  mutable AMAtomic<ClientControlComponent> control_component_ = {};
+  mutable AMAtomic<amf> control_token_ = {};
   mutable AMAtomic<std::vector<std::string>> private_keys_ = {};
   mutable AMAtomic<ClientCallbacks> maintainer_callbacks_ = {};
   mutable AMAtomic<ClientCallbacks> public_callbacks_ = {};
