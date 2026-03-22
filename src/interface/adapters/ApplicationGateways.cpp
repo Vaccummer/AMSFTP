@@ -103,9 +103,10 @@ std::string DefaultUsernameForProtocol_(ClientProtocol protocol) {
  */
 std::string StyledNickname_(const std::string &nickname) {
   const bool created = static_cast<bool>(Runtime::GetClient(nickname));
-  const std::string style_key =
-      created ? "nickname" : "unestablished_nickname";
-  return Runtime::Format(nickname, style_key);
+  const AMInterface::style::StyleIndex style_index =
+      created ? AMInterface::style::StyleIndex::Nickname
+              : AMInterface::style::StyleIndex::UnestablishedNickname;
+  return Runtime::Format(nickname, style_index);
 }
 
 /**
@@ -771,7 +772,8 @@ ECM HostProfileGateway::ListPrivateKeys(bool detail) {
     const std::string abs_path = AMFS::abspath(keys[i], true, AMFS::HomePath());
     auto [stat_rcm, info] = AMFS::stat(abs_path, false);
     const PathInfo *info_ptr = isok(stat_rcm) ? &info : nullptr;
-    const std::string styled_path = Runtime::Format(abs_path, "", info_ptr);
+    const std::string styled_path =
+        Runtime::Format(abs_path, AMInterface::style::StyleIndex::None, info_ptr);
     prompt_manager_.Print(AMStr::fmt("[{}]  {}", i, styled_path));
   }
   return Ok();
@@ -792,7 +794,8 @@ ECM HostProfileGateway::ShowConfigSource() {
     const PathInfo *info_ptr = isok(rcm) ? &info : nullptr;
     prompt_manager_.Print(
         AMStr::fmt("{} = {}", config_label,
-                   Runtime::Format(config_path, "dir", info_ptr)));
+                   Runtime::Format(config_path, AMInterface::style::StyleIndex::None,
+                                   info_ptr)));
   }
   if (Runtime::GetConfigDataPath(DocumentKind::Settings, &settings_path_obj)) {
     const std::string settings_path = settings_path_obj.string();
@@ -800,7 +803,9 @@ ECM HostProfileGateway::ShowConfigSource() {
     const PathInfo *info_ptr = isok(rcm) ? &info : nullptr;
     prompt_manager_.Print(
         AMStr::fmt("{} = {}", settings_label,
-                   Runtime::Format(settings_path, "dir", info_ptr)));
+                   Runtime::Format(settings_path,
+                                   AMInterface::style::StyleIndex::None,
+                                   info_ptr)));
   }
   return Ok();
 }
@@ -1112,11 +1117,13 @@ ECM ClientSessionGateway::ConnectNickname(const std::string &nickname,
                                           amf interrupt_flag) {
   const AMDomain::client::amf client_interrupt =
       ToClientInterrupt_(interrupt_flag);
+  const AMDomain::client::ClientControlComponent control =
+      AMDomain::client::MakeClientControlComponent(client_interrupt);
   AMDomain::client::ClientConnectOptions options{};
   options.force = force;
   options.register_to_manager = true;
   auto [rcm, client] =
-      client_service_.ConnectNickname(nickname, options, {}, client_interrupt);
+      client_service_.ConnectNickname(nickname, options, {}, control);
   if (!isok(rcm)) {
     return rcm;
   }
@@ -1131,8 +1138,11 @@ ECM ClientSessionGateway::ConnectNickname(const std::string &nickname,
  */
 ECM ClientSessionGateway::ChangeCurrentClient(const std::string &nickname,
                                               amf interrupt_flag) {
+  const AMDomain::client::ClientControlComponent control =
+      AMDomain::client::MakeClientControlComponent(
+          ToClientInterrupt_(interrupt_flag));
   auto [rcm, client] =
-      client_service_.EnsureClient(nickname, ToClientInterrupt_(interrupt_flag));
+      client_service_.EnsureClient(nickname, control);
   if (!isok(rcm)) {
     return rcm;
   }
@@ -1151,6 +1161,8 @@ ECM ClientSessionGateway::ConnectSftp(const std::string &nickname,
                                       amf interrupt_flag) {
   const AMDomain::client::amf client_interrupt =
       ToClientInterrupt_(interrupt_flag);
+  const AMDomain::client::ClientControlComponent control =
+      AMDomain::client::MakeClientControlComponent(client_interrupt);
   const size_t at_pos = user_at_host.find('@');
   if (at_pos == std::string::npos || at_pos == 0 ||
       at_pos + 1 >= user_at_host.size()) {
@@ -1165,7 +1177,7 @@ ECM ClientSessionGateway::ConnectSftp(const std::string &nickname,
   context.request.password = password;
   context.request.keyfile = keyfile;
   auto [rcm, client] =
-      client_service_.ConnectRequest(context, {}, client_interrupt);
+      client_service_.ConnectRequest(context, {}, control);
   if (!isok(rcm)) {
     return rcm;
   }
@@ -1183,6 +1195,8 @@ ECM ClientSessionGateway::ConnectFtp(const std::string &nickname,
                                      amf interrupt_flag) {
   const AMDomain::client::amf client_interrupt =
       ToClientInterrupt_(interrupt_flag);
+  const AMDomain::client::ClientControlComponent control =
+      AMDomain::client::MakeClientControlComponent(client_interrupt);
   const size_t at_pos = user_at_host.find('@');
   if (at_pos == std::string::npos || at_pos == 0 ||
       at_pos + 1 >= user_at_host.size()) {
@@ -1197,7 +1211,7 @@ ECM ClientSessionGateway::ConnectFtp(const std::string &nickname,
   context.request.password = password;
   context.request.keyfile = keyfile;
   auto [rcm, client] =
-      client_service_.ConnectRequest(context, {}, client_interrupt);
+      client_service_.ConnectRequest(context, {}, control);
   if (!isok(rcm)) {
     return rcm;
   }
@@ -1211,6 +1225,8 @@ ECM ClientSessionGateway::ConnectFtp(const std::string &nickname,
 ECM ClientSessionGateway::ListClients(bool detail, amf interrupt_flag) {
   const AMDomain::client::amf client_interrupt =
       ToClientInterrupt_(interrupt_flag);
+  const AMDomain::client::ClientControlComponent control =
+      AMDomain::client::MakeClientControlComponent(client_interrupt);
   if (interrupt_flag && !interrupt_flag->IsRunning()) {
     return Err(EC::Terminate, "Interrupted by user");
   }
@@ -1226,8 +1242,9 @@ ECM ClientSessionGateway::ListClients(bool detail, amf interrupt_flag) {
     if (interrupt_flag && !interrupt_flag->IsRunning()) {
       return Err(EC::Terminate, "Interrupted by user");
     }
-    auto [check_rcm, _client] =
-        client_service_.CheckClient(name, detail, client_interrupt, -1, -1);
+    const auto check_result =
+        client_service_.CheckClient(name, false, detail, control);
+    const ECM &check_rcm = check_result.rcm;
     if (!isok(check_rcm)) {
       status = check_rcm;
       report << name << " : " << check_rcm.second << '\n';

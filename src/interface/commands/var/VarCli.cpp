@@ -37,7 +37,7 @@ ECM ParseVarToken_(const std::string &token, VarRef *ref) {
  * @brief Format variable output style.
  */
 std::string FormatVarText_(const std::string &text) {
-  return Runtime::Format(text, "UserVars");
+  return Runtime::Format(text, AMInterface::style::StyleIndex::None);
 }
 
 /**

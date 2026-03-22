@@ -348,7 +348,8 @@ ECM AMProfileManager::Edit(const std::string &nickname) {
   const AMPromptProfileArgs builtin_defaults{};
   const auto print_abort = [&prompt, this]() {
     prompt.FmtPrint("{}\n",
-                    AMInterface::ApplicationAdapters::Runtime::Format("Input Abort", "abort"));
+                    AMInterface::ApplicationAdapters::Runtime::Format(
+                        "Input Abort", AMInterface::style::StyleIndex::Abort));
   };
 
   const std::map<std::string, std::string> bool_literals = {

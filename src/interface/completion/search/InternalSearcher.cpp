@@ -141,15 +141,15 @@ bool ParseVarZonePrefix_(const std::string &prefix, std::string *out_prefix,
 /**
  * @brief Classify one zone name into style key.
  */
-std::string ZoneStyleKey_(const std::string &zone, bool domain_exists,
-                          bool host_exists) {
+AMInterface::style::StyleIndex
+ZoneStyleKey_(const std::string &zone, bool domain_exists, bool host_exists) {
   if (domain_exists || zone == varsetkn::kPublic) {
-    return "nickname";
+    return AMInterface::style::StyleIndex::Nickname;
   }
   if (host_exists) {
-    return "unestablished_nickname";
+    return AMInterface::style::StyleIndex::UnestablishedNickname;
   }
-  return "nonexistent_nickname";
+  return AMInterface::style::StyleIndex::NonexistentNickname;
 }
 } // namespace
 
@@ -206,7 +206,8 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate_ref.varname = item.varname;
       AMCompletionCandidate candidate;
       candidate.insert_text = varsetkn::BuildVarToken(candidate_ref, true);
-      candidate.display = Runtime::Format(candidate.insert_text, "public_varname");
+      candidate.display = Runtime::Format(
+          candidate.insert_text, AMInterface::style::StyleIndex::PublicVarname);
       candidate.help =
           AMStr::fmt("[{}] {}", item.domain, RenderVarValue_(item.varvalue));
       candidate.kind = AMCompletionKind::VariableName;
@@ -276,9 +277,9 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       } else {
         candidate.insert_text = item.zone;
       }
-      const std::string style_key =
+      const AMInterface::style::StyleIndex style_index =
           ZoneStyleKey_(item.zone, item.domain_exists, item.host_exists);
-      candidate.display = Runtime::Format(item.zone, style_key);
+      candidate.display = Runtime::Format(item.zone, style_index);
       candidate.kind = AMCompletionKind::VarZone;
       candidate.help.clear();
       candidate.score = match.score_bias;
@@ -313,9 +314,10 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       AMCompletionCandidate candidate;
       candidate.insert_text =
           path_nickname_context ? name_item.name + "@" : name_item.name;
-      const std::string style_key =
-          name_item.created ? "nickname" : "unestablished_nickname";
-      candidate.display = Runtime::Format(name_item.name, style_key);
+      const AMInterface::style::StyleIndex style_index =
+          name_item.created ? AMInterface::style::StyleIndex::Nickname
+                            : AMInterface::style::StyleIndex::UnestablishedNickname;
+      candidate.display = Runtime::Format(name_item.name, style_index);
       candidate.kind = AMCompletionKind::ClientName;
       const int uncreated_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + uncreated_bias;
@@ -347,9 +349,10 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       AMCompletionCandidate candidate;
       candidate.insert_text =
           path_nickname_context ? name_item.name + "@" : name_item.name;
-      const std::string style_key =
-          name_item.created ? "nickname" : "unestablished_nickname";
-      candidate.display = Runtime::Format(name_item.name, style_key);
+      const AMInterface::style::StyleIndex style_index =
+          name_item.created ? AMInterface::style::StyleIndex::Nickname
+                            : AMInterface::style::StyleIndex::UnestablishedNickname;
+      candidate.display = Runtime::Format(name_item.name, style_index);
       candidate.kind = AMCompletionKind::HostNickname;
       const int uncreated_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + uncreated_bias;

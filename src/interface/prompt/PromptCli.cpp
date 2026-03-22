@@ -171,10 +171,13 @@ std::string NormalizePromptStyleForIc_(const std::string &raw) {
  * @brief Apply CLIPrompt shortcut styles as isocline named styles.
  */
 void ApplyPromptShortcutStyles_() {
-  const auto snapshot =
-      AMInterface::ApplicationAdapters::Runtime::StyleServiceOrThrow().Snapshot();
-  for (const auto &[key, value] : snapshot.cli_prompt.shortcut) {
-    const std::string fmt = NormalizePromptStyleForIc_(value);
+  static const std::vector<std::string> keys = {
+      "un", "at", "hn", "en", "nn", "cwd", "ds", "white"};
+  for (const auto &key : keys) {
+    const std::string raw =
+        AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
+            {"Style", "CLIPrompt", "shortcut", key}, "");
+    const std::string fmt = NormalizePromptStyleForIc_(raw);
     if (fmt.empty()) {
       continue;
     }

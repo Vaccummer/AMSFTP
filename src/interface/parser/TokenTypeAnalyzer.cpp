@@ -410,10 +410,12 @@ std::string FormatPathSegment_(const std::string &segment, AMTokenType type) {
     return segment;
   }
   if (type == AMTokenType::Path) {
-    return Runtime::Format(segment, "path_like", nullptr);
+    return Runtime::Format(segment, AMInterface::style::StyleIndex::PathLike,
+                           nullptr);
   }
   PathInfo info = BuildPathInfoForTokenType_(type);
-  return Runtime::Format(segment, "path_like", &info);
+  return Runtime::Format(segment, AMInterface::style::StyleIndex::PathLike,
+                         &info);
 }
 
 } // namespace
