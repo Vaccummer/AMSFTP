@@ -24,10 +24,9 @@ ClientAppService::~ClientAppService() = default;
 ECM ClientAppService::Init(ClientHandle local_client) {
   const ClientServiceArg init_arg = GetInitArg();
   const ClientCallbacks public_callbacks = GetPublicCallbacks();
-  this->maintainer_ =
-      CreateClientMaintainer(init_arg.heartbeat_interval_s,
-                             init_arg.heartbeat_timeout_ms,
-                             public_callbacks.disconnect, {});
+  this->maintainer_ = CreateClientMaintainer(init_arg.heartbeat_interval_s,
+                                             init_arg.heartbeat_timeout_ms,
+                                             public_callbacks.disconnect, {});
   if (local_client) {
     ECM add_local_rcm = AddClient(local_client, true);
     if (!isok(add_local_rcm)) {
@@ -65,18 +64,25 @@ std::string ClientAppService::CurrentNickname() const {
   return GetCurrentNickname();
 }
 
-std::pair<ECM, ClientHandle>
-ClientAppService::CreateClient(const HostConfig &config) {
+ECMData<ClientHandle>
+ClientAppService::CreateClient(const HostConfig &config,
+                               const ClientControlComponent &control) {
   auto [callbacks, private_keys] = SnapshotCreateContext_(false);
 
   auto [create_rcm, client] = AMDomain::client::CreateClient(
       config.request, callbacks.known_host, callbacks.trace, callbacks.auth,
       private_keys);
   if (!isok(create_rcm) || !client) {
-    return {create_rcm, nullptr};
+    return {nullptr, create_rcm};
   }
   ApplyCallbacksToClient_(client, callbacks);
-  return {create_rcm, client};
+
+  auto connect_result =
+      client->IOPort().Connect(AMDomain::filesystem::ConnectArgs{}, control);
+  if (!isok(connect_result.rcm)) {
+    return {nullptr, connect_result.rcm};
+  }
+  return {client, connect_result.rcm};
 }
 
 ECM ClientAppService::AddClient(ClientHandle client, bool overwrite) {
@@ -131,8 +137,10 @@ std::optional<CheckResult> ClientAppService::CheckClient(
   if (!client) {
     return std::nullopt;
   }
-  return CheckClientInternal_(client, reconnect, update,
-                              ResolveControl(control_component, timeout_ms));
+  const ClientControlComponent resolved_control =
+      control_component ? *control_component
+                        : GetControlComponent(std::nullopt, timeout_ms);
+  return CheckClientInternal_(client, reconnect, update, resolved_control);
 }
 
 std::map<std::string, ClientHandle> ClientAppService::GetClients() const {
@@ -205,8 +213,8 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
       continue;
     }
 
-    auto state = CheckClientInternal_(candidate, false, true,
-                                      ResolveControl(std::nullopt));
+    auto state =
+        CheckClientInternal_(candidate, false, true, GetControlComponent());
     if (state.status == ClientStatus::OK && isok(state.rcm)) {
       return {state.rcm, candidate};
     }

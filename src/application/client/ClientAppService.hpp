@@ -16,8 +16,6 @@ class ITransferClientPoolPort;
 namespace AMApplication::client {
 using ClientHandle = AMDomain::client::ClientHandle;
 using CheckResult = AMDomain::filesystem::CheckResult;
-using ClientConnectOptions = AMDomain::client::ClientConnectOptions;
-using ClientConnectContext = AMDomain::client::ClientConnectContext;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using HostConfig = AMDomain::host::HostConfig;
 using ClientID = AMDomain::client::ClientID;
@@ -42,8 +40,9 @@ public:
   [[nodiscard]] std::string GetCurrentNickname() const;
   [[nodiscard]] std::string CurrentNickname() const;
 
-  std::pair<ECM, ClientHandle>
-  CreateClient(const AMDomain::host::HostConfig &config);
+  ECMData<ClientHandle>
+  CreateClient(const AMDomain::host::HostConfig &config,
+               const ClientControlComponent &control);
   ECM AddClient(ClientHandle client, bool overwrite);
   [[nodiscard]] std::optional<CheckResult>
   CheckClient(const std::string &nickname, bool reconnect, bool update,
