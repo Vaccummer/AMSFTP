@@ -1,0 +1,159 @@
+#pragma once
+#include <cstdint>
+#include <string>
+
+namespace AMDomain::style {
+
+struct CompleteMenuStyle {
+  int64_t maxnum = 999;
+  int64_t maxrows_perpage = 5;
+  std::string item_select_sign = ">";
+  bool number_pick = false;
+  bool auto_fillin = false;
+  std::string order_num_style = "";
+  std::string help_style = "";
+  int64_t complete_delay_ms = 100;
+  int64_t async_workers = 2;
+};
+
+struct TableStyle {
+  std::string color = "#00adb5";
+  int64_t left_padding = 1;
+  int64_t right_padding = 1;
+  int64_t top_padding = 0;
+  int64_t bottom_padding = 0;
+  int64_t refresh_interval_ms = 300;
+  int64_t speed_window_size = 25;
+};
+
+struct ProgressBarStyle {
+  std::string lborder = "";
+  std::string rborder = "";
+  std::string fill = "#";
+  std::string head = ">";
+  std::string remain = " ";
+  std::string color = "#08d9d6";
+  int64_t refresh_interval_ms = 300;
+  int64_t speed_window_size = 25;
+  int64_t bar_width = 10;
+  int64_t width_offset = 12;
+  bool show_percentage = true;
+  bool show_elapsed_time = true;
+  bool show_remaining_time = true;
+};
+
+struct PromptTemplateStyle {
+  std::string core_prompt = "";
+  std::string history_search_prompt = "history search";
+};
+
+struct CLIPromptShortcutStyle {
+  std::string un = "";
+  std::string at = "";
+  std::string hn = "";
+  std::string en = "";
+  std::string nn = "";
+  std::string cwd = "";
+  std::string ds = "";
+  std::string white = "";
+};
+
+struct CLIPromptIconsStyle {
+  std::string windows = "";
+  std::string linux = "";
+  std::string macos = "";
+};
+
+struct CLIPromptNamedStyles {
+  std::string un = "";
+  std::string at = "";
+  std::string hn = "";
+  std::string en = "";
+  std::string nn = "";
+  std::string cwd = "";
+  std::string ds = "";
+  std::string white = "";
+};
+
+struct CLIPromptStyle {
+  // deprecated: use named_styles
+  CLIPromptShortcutStyle shortcut = {};
+  CLIPromptIconsStyle icons = {};
+  CLIPromptNamedStyles named_styles = {};
+  PromptTemplateStyle prompt_template = {};
+};
+
+struct InputHighlightStyle {
+  std::string protocol = "";
+  std::string abort = "";
+  std::string common = "";
+  std::string module = "";
+  std::string command = "";
+  std::string illegal_command = "";
+  std::string option = "";
+  std::string string = "";
+  std::string public_varname = "";
+  std::string private_varname = "";
+  std::string nonexistent_varname = "";
+  std::string varvalue = "";
+  std::string nickname = "";
+  std::string unestablished_nickname = "";
+  std::string nonexistent_nickname = "";
+  std::string valid_new_nickname = "";
+  std::string invalid_new_nickname = "";
+  std::string builtin_arg = "";
+  std::string nonexistent_builtin_arg = "";
+  std::string username = "";
+  std::string atsign = "";
+  std::string dollarsign = "";
+  std::string equalsign = "";
+  std::string escapedsign = "";
+  std::string bangsign = "";
+  std::string shell_cmd = "";
+  std::string cwd = "";
+  std::string number = "";
+  std::string timestamp = "";
+  std::string path_like = "";
+};
+
+struct ValueQueryHighlightStyle {
+  std::string valid_value = "";
+  std::string invalid_value = "";
+  std::string prompt_style = "";
+};
+
+struct PathHighlightStyle {
+  std::string path_str = "";
+  std::string root = "";
+  std::string node_dir_name = "";
+  std::string filename = "";
+  std::string dir = "";
+  std::string regular = "";
+  std::string symlink = "";
+  std::string otherspecial = "";
+  std::string nonexistent = "";
+};
+
+struct SystemInfoStyle {
+  std::string info = "";
+  std::string success = "";
+  std::string error = "";
+  std::string warning = "";
+};
+
+struct StyleConfig {
+  CompleteMenuStyle complete_menu = {};
+  TableStyle table = {};
+  ProgressBarStyle progress_bar = {};
+  CLIPromptStyle cli_prompt = {};
+  InputHighlightStyle input_highlight = {};
+  ValueQueryHighlightStyle value_query_highlight = {};
+  PathHighlightStyle path = {};
+  SystemInfoStyle system_info = {};
+};
+
+struct StyleConfigArg {
+  StyleConfig style = {};
+};
+
+} // namespace AMDomain::style
