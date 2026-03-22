@@ -11,8 +11,12 @@
 // 3rd party library
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <magic_enum/magic_enum.hpp>
 #include <map>
+#include <set>
+#include <unordered_map>
+#include <unordered_set>
 
 // #define _DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR // in case mutex constructor is
 // not constexpr in some environments (like pybind11's embedded MSVC 2015),
@@ -62,7 +66,7 @@ using TraceInfo = AMDomain::client::TraceInfo;
 using ConRequest = AMDomain::host::ConRequest;
 using ClientProtocol = AMDomain::host::ClientProtocol;
 using ClientStatus = AMDomain::client::ClientStatus;
-using ClientState = AMDomain::client::ClientState;
+using CheckResult = AMDomain::filesystem::CheckResult;
 using AuthCBInfo = AMDomain::client::AuthCBInfo;
 using OS_TYPE = AMDomain::client::OS_TYPE;
 using KnownHostQuery = AMDomain::client::KnownHostQuery;
@@ -813,6 +817,506 @@ public:
   }
 };
 
+class BasePathSearchV2 {
+protected:
+  /**
+   * @brief Return true when current client operation is interrupted.
+   */
+  [[nodiscard]] virtual bool IsInterrupted() const = 0;
+  [[nodiscard]] virtual SR stat(const std::string &path,
+                                bool trace_link = false, int timeout_ms = -1,
+                                int64_t start_time = -1,
+                                amf interrupt_flag = nullptr) = 0;
+  [[nodiscard]] virtual std::pair<ECM, WRV>
+  listdir(const std::string &path, int timeout_ms = -1, int64_t start_time = -1,
+          amf interrupt_flag = nullptr) const = 0;
+  [[nodiscard]] virtual std::pair<ECM, WRI>
+  iwalk(const std::string &path, bool show_all = false,
+        bool ignore_special_file = true,
+        AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
+        int64_t start_time = -1, amf interrupt_flag = nullptr) const = 0;
+
+private:
+  struct SearchRequest {
+    std::string pattern = ".";
+    SearchType type = SearchType::All;
+    int timeout_ms = -1;
+    int64_t start_time = -1;
+    amf interrupt_flag = nullptr;
+  };
+
+  struct SearchPlan {
+    std::string literal_root = ".";
+    std::vector<std::string> segments = {};
+  };
+
+  struct CompiledSegment {
+    enum class Kind {
+      Literal = 0,
+      Star = 1,
+      DoubleStar = 2,
+      CharClass = 3,
+    };
+    Kind kind = Kind::Literal;
+    std::string raw = "";
+    std::shared_ptr<std::wregex> regex = nullptr;
+  };
+
+  struct SearchCursor {
+    PathInfo node = {};
+    size_t segment_index = 0;
+  };
+
+  struct SearchStats {
+    size_t scanned_dirs = 0;
+    size_t visited_nodes = 0;
+    size_t matched_nodes = 0;
+  };
+
+private:
+  [[nodiscard]] static bool IsTimedOut_(int timeout_ms, int64_t start_time) {
+    if (timeout_ms <= 0 || start_time < 0) {
+      return false;
+    }
+    return AMTime::miliseconds() - start_time >= timeout_ms;
+  }
+
+  [[nodiscard]] bool ShouldStop_(const SearchRequest &request) const {
+    if (request.interrupt_flag && request.interrupt_flag->IsInterrupted()) {
+      return true;
+    }
+    return IsInterrupted() || IsTimedOut_(request.timeout_ms, request.start_time);
+  }
+
+  [[nodiscard]] static bool IsDoubleStarPattern_(const std::string &pattern) {
+    return pattern == "**";
+  }
+
+  [[nodiscard]] static bool IsMatchPattern_(const std::string &pattern) {
+    return pattern.find('*') != std::string::npos ||
+           (pattern.find('<') != std::string::npos &&
+            pattern.find('>') != std::string::npos);
+  }
+
+  [[nodiscard]] static bool TypeAccepted_(SearchType type, PathType node_type) {
+    return type == SearchType::All ||
+           (type == SearchType::Directory && node_type == PathType::DIR) ||
+           (type == SearchType::File && node_type == PathType::FILE);
+  }
+
+  [[nodiscard]] static std::wstring
+  BuildSegmentRegex_(const std::string &segment) {
+    std::string regex = "^";
+    const auto append_escaped = [&regex](char c) {
+      switch (c) {
+      case '\\':
+      case '^':
+      case '$':
+      case '.':
+      case '|':
+      case '?':
+      case '+':
+      case '(':
+      case ')':
+      case '[':
+      case ']':
+      case '{':
+      case '}':
+        regex.push_back('\\');
+        break;
+      default:
+        break;
+      }
+      regex.push_back(c);
+    };
+
+    for (size_t i = 0; i < segment.size(); ++i) {
+      const char c = segment[i];
+      if (c == '*') {
+        regex += ".*";
+        continue;
+      }
+      if (c == '<') {
+        const size_t close = segment.find('>', i + 1);
+        if (close != std::string::npos && close > i + 1) {
+          regex.push_back('[');
+          regex += segment.substr(i + 1, close - i - 1);
+          regex.push_back(']');
+          i = close;
+          continue;
+        }
+      }
+      append_escaped(c);
+    }
+    regex.push_back('$');
+    return AMStr::wstr(regex);
+  }
+
+  [[nodiscard]] static CompiledSegment
+  CompileSegment_(const std::string &segment) {
+    CompiledSegment out = {};
+    out.raw = segment;
+    if (IsDoubleStarPattern_(segment)) {
+      out.kind = CompiledSegment::Kind::DoubleStar;
+      return out;
+    }
+    if (!IsMatchPattern_(segment)) {
+      out.kind = CompiledSegment::Kind::Literal;
+      return out;
+    }
+    out.kind = (segment.find('<') != std::string::npos &&
+                segment.find('>') != std::string::npos)
+                   ? CompiledSegment::Kind::CharClass
+                   : CompiledSegment::Kind::Star;
+    try {
+      out.regex = std::make_shared<std::wregex>(BuildSegmentRegex_(segment));
+    } catch (const std::regex_error &) {
+      out.regex = nullptr;
+    }
+    return out;
+  }
+
+  [[nodiscard]] static bool SegmentHit_(const CompiledSegment &segment,
+                                        const std::string &name) {
+    if (segment.kind == CompiledSegment::Kind::DoubleStar) {
+      return true;
+    }
+    if (segment.kind == CompiledSegment::Kind::Literal) {
+      return name == segment.raw;
+    }
+    if (!segment.regex) {
+      return false;
+    }
+    try {
+      return std::regex_match(AMStr::wstr(name), *segment.regex);
+    } catch (const std::regex_error &) {
+      return false;
+    }
+  }
+
+  [[nodiscard]] SearchPlan ParseQuery_(const SearchRequest &request) const {
+    SearchPlan plan = {};
+    const std::string pattern =
+        AMStr::Strip(request.pattern).empty() ? "." : request.pattern;
+    const std::vector<std::string> parts = AMPathStr::split(pattern);
+    if (parts.empty()) {
+      plan.literal_root = ".";
+      return plan;
+    }
+
+    if (parts.size() == 1 && IsMatchPattern_(parts[0])) {
+      plan.literal_root = ".";
+      plan.segments.push_back(parts[0]);
+      return plan;
+    }
+
+    plan.literal_root = parts[0];
+    bool wildcard_started = false;
+    for (size_t i = 1; i < parts.size(); ++i) {
+      if (!wildcard_started && !IsMatchPattern_(parts[i])) {
+        plan.literal_root = AMPathStr::join(plan.literal_root, parts[i]);
+      } else {
+        wildcard_started = true;
+        plan.segments.push_back(parts[i]);
+      }
+    }
+    return plan;
+  }
+
+  [[nodiscard]] std::vector<CompiledSegment>
+  CompilePlan_(const SearchPlan &plan) const {
+    std::vector<CompiledSegment> out = {};
+    out.reserve(plan.segments.size());
+    for (const auto &segment : plan.segments) {
+      CompiledSegment compiled = CompileSegment_(segment);
+      if (!out.empty() &&
+          out.back().kind == CompiledSegment::Kind::DoubleStar &&
+          compiled.kind == CompiledSegment::Kind::DoubleStar) {
+        continue;
+      }
+      out.push_back(std::move(compiled));
+    }
+    return out;
+  }
+
+  [[nodiscard]] static std::string BuildCursorStateKey_(const SearchCursor &cursor) {
+    return cursor.node.path + '\x1F' + std::to_string(cursor.segment_index);
+  }
+
+  static bool PushCursorState_(std::deque<SearchCursor> &pending,
+                               std::unordered_set<std::string> &visited,
+                               const SearchCursor &cursor) {
+    const std::string key = BuildCursorStateKey_(cursor);
+    if (!visited.insert(key).second) {
+      return false;
+    }
+    pending.push_back(cursor);
+    return true;
+  }
+
+  [[nodiscard]] static bool
+  MatchPartsWithGlobStar_(const std::vector<std::string> &parts,
+                          const std::vector<CompiledSegment> &segments) {
+    if (segments.empty()) {
+      return parts.empty();
+    }
+
+    std::deque<std::pair<size_t, size_t>> pending = {};
+    std::set<std::pair<size_t, size_t>> visited = {};
+    pending.emplace_back(0, 0);
+    visited.emplace(0, 0);
+
+    while (!pending.empty()) {
+      const auto [part_index, seg_index] = pending.front();
+      pending.pop_front();
+
+      if (seg_index >= segments.size()) {
+        if (part_index >= parts.size()) {
+          return true;
+        }
+        continue;
+      }
+
+      const CompiledSegment &segment = segments[seg_index];
+      if (segment.kind == CompiledSegment::Kind::DoubleStar) {
+        const std::pair<size_t, size_t> zero_consume = {part_index,
+                                                         seg_index + 1};
+        if (visited.insert(zero_consume).second) {
+          pending.push_back(zero_consume);
+        }
+        if (part_index < parts.size()) {
+          const std::pair<size_t, size_t> one_consume = {part_index + 1,
+                                                         seg_index};
+          if (visited.insert(one_consume).second) {
+            pending.push_back(one_consume);
+          }
+        }
+        continue;
+      }
+
+      if (part_index >= parts.size()) {
+        continue;
+      }
+      if (!SegmentHit_(segment, parts[part_index])) {
+        continue;
+      }
+      const std::pair<size_t, size_t> next_state = {part_index + 1,
+                                                     seg_index + 1};
+      if (visited.insert(next_state).second) {
+        pending.push_back(next_state);
+      }
+    }
+    return false;
+  }
+
+  [[nodiscard]] static std::vector<PathInfo>
+  CanonicalizeResults_(std::vector<PathInfo> results) {
+    std::stable_sort(results.begin(), results.end(),
+                     [](const PathInfo &a, const PathInfo &b) {
+                       return a.path < b.path;
+                     });
+    results.erase(std::unique(results.begin(), results.end(),
+                              [](const PathInfo &a, const PathInfo &b) {
+                                return a.path == b.path;
+                              }),
+                  results.end());
+    return results;
+  }
+
+  [[nodiscard]] std::vector<PathInfo>
+  ExecuteSearch_(const SearchPlan &plan,
+                 const std::vector<CompiledSegment> &segments,
+                 const SearchRequest &request, SearchStats &stats) {
+    std::vector<PathInfo> results = {};
+    std::unordered_set<std::string> matched_paths = {};
+    const auto push_result = [&](const PathInfo &node) {
+      if (!TypeAccepted_(request.type, node.type)) {
+        return;
+      }
+      if (!matched_paths.insert(node.path).second) {
+        return;
+      }
+      results.push_back(node);
+      ++stats.matched_nodes;
+    };
+    auto [error, root_info] =
+        stat(plan.literal_root, false, request.timeout_ms, request.start_time,
+             request.interrupt_flag);
+    if (error.first != EC::Success) {
+      return results;
+    }
+
+    if (segments.empty()) {
+      push_result(root_info);
+      return CanonicalizeResults_(std::move(results));
+    }
+
+    std::deque<SearchCursor> pending = {};
+    std::unordered_set<std::string> visited = {};
+    std::unordered_map<std::string, WRV> dir_children_cache = {};
+    PushCursorState_(pending, visited, SearchCursor{root_info, 0});
+
+    while (!pending.empty()) {
+      if (ShouldStop_(request)) {
+        break;
+      }
+      const SearchCursor cursor = pending.front();
+      pending.pop_front();
+
+      if (cursor.segment_index >= segments.size()) {
+        push_result(cursor.node);
+        continue;
+      }
+
+      const CompiledSegment &segment = segments[cursor.segment_index];
+      if (segment.kind == CompiledSegment::Kind::DoubleStar) {
+        PushCursorState_(pending, visited,
+                         SearchCursor{cursor.node, cursor.segment_index + 1});
+        if (cursor.node.type != PathType::DIR) {
+          continue;
+        }
+
+        WRV *children = nullptr;
+        auto cache_it = dir_children_cache.find(cursor.node.path);
+        if (cache_it != dir_children_cache.end()) {
+          children = &(cache_it->second);
+        } else {
+          ++stats.scanned_dirs;
+          auto [error, sub_list] =
+              listdir(cursor.node.path, request.timeout_ms, request.start_time,
+                      request.interrupt_flag);
+          if (error.first != EC::Success) {
+            continue;
+          }
+          auto insert_it =
+              dir_children_cache.emplace(cursor.node.path, std::move(sub_list))
+                  .first;
+          children = &(insert_it->second);
+        }
+        for (const auto &sub : *children) {
+          if (ShouldStop_(request)) {
+            break;
+          }
+          ++stats.visited_nodes;
+          PushCursorState_(pending, visited,
+                           SearchCursor{sub, cursor.segment_index});
+        }
+        continue;
+      }
+
+      if (cursor.node.type != PathType::DIR) {
+        continue;
+      }
+
+      WRV *children = nullptr;
+      auto cache_it = dir_children_cache.find(cursor.node.path);
+      if (cache_it != dir_children_cache.end()) {
+        children = &(cache_it->second);
+      } else {
+        ++stats.scanned_dirs;
+        auto [error, sub_list] =
+            listdir(cursor.node.path, request.timeout_ms, request.start_time,
+                    request.interrupt_flag);
+        if (error.first != EC::Success) {
+          continue;
+        }
+        auto insert_it =
+            dir_children_cache.emplace(cursor.node.path, std::move(sub_list))
+                .first;
+        children = &(insert_it->second);
+      }
+
+      for (const auto &sub : *children) {
+        if (ShouldStop_(request)) {
+          break;
+        }
+        ++stats.visited_nodes;
+        if (!SegmentHit_(segment, sub.name)) {
+          continue;
+        }
+        PushCursorState_(pending, visited,
+                         SearchCursor{sub, cursor.segment_index + 1});
+      }
+    }
+
+    return CanonicalizeResults_(std::move(results));
+  }
+
+public:
+  /**
+   * @brief Return current wildcard match rules as plain text.
+   */
+  [[nodiscard]] static std::string MatchRuleText() {
+    return "* matches within one path segment; ** matches zero or more path "
+           "segments; <...> maps to character class [...].";
+  }
+
+  /**
+   * @brief Pure string matcher for tests (filesystem-independent).
+   */
+  [[nodiscard]] static bool
+  MatchPathPatternLiteral(const std::string &path, const std::string &pattern) {
+    const std::vector<std::string> path_parts = AMPathStr::split(path);
+    const std::vector<std::string> pattern_parts = AMPathStr::split(pattern);
+    if (path_parts.empty() || pattern_parts.empty()) {
+      return path_parts.empty() && pattern_parts.empty();
+    }
+
+    size_t pi = 0;
+    size_t mi = 0;
+    while (pi < path_parts.size() && mi < pattern_parts.size() &&
+           !IsMatchPattern_(pattern_parts[mi])) {
+      if (path_parts[pi] != pattern_parts[mi]) {
+        return false;
+      }
+      ++pi;
+      ++mi;
+    }
+
+    if (mi >= pattern_parts.size()) {
+      return pi == path_parts.size();
+    }
+
+    std::vector<CompiledSegment> segments = {};
+    segments.reserve(pattern_parts.size() - mi);
+    for (; mi < pattern_parts.size(); ++mi) {
+      CompiledSegment compiled = CompileSegment_(pattern_parts[mi]);
+      if (!segments.empty() &&
+          segments.back().kind == CompiledSegment::Kind::DoubleStar &&
+          compiled.kind == CompiledSegment::Kind::DoubleStar) {
+        continue;
+      }
+      segments.push_back(std::move(compiled));
+    }
+
+    const std::vector<std::string> relative_parts(path_parts.begin() + pi,
+                                                  path_parts.end());
+    return MatchPartsWithGlobStar_(relative_parts, segments);
+  }
+
+  [[nodiscard]] static bool IsUseMatch(const std::string &pattern) {
+    return IsMatchPattern_(pattern);
+  }
+
+  std::vector<PathInfo> find(const std::string &path,
+                             SearchType type = SearchType::All,
+                             int timeout_ms = -1, int64_t start_time = -1,
+                             amf interrupt_flag = nullptr) {
+    SearchRequest request = {};
+    request.pattern = AMStr::Strip(path).empty() ? "." : path;
+    request.type = type;
+    request.timeout_ms = timeout_ms;
+    request.start_time =
+        (start_time < 0) ? AMTime::miliseconds() : start_time;
+    request.interrupt_flag = std::move(interrupt_flag);
+
+    SearchPlan plan = ParseQuery_(request);
+    const std::vector<CompiledSegment> segments = CompilePlan_(plan);
+    SearchStats stats = {};
+    return ExecuteSearch_(plan, segments, request, stats);
+  }
+};
+
 class ClientMetaDataStore : public AMDomain::client::IClientMetaDataPort {
 private:
   using TypeVarStore = std::unordered_map<std::type_index, std::any>;
@@ -897,16 +1401,13 @@ public:
 class ClientConfigStore : public AMDomain::client::IClientConfigPort {
 private:
   mutable AMAtomic<ConRequest> request_;
-  mutable AMAtomic<ClientState> state_;
+  mutable AMAtomic<CheckResult> state_;
   std::atomic<OS_TYPE> os_type_{OS_TYPE::Uncertain};
   mutable AMAtomic<std::string> home_dir_;
 
 public:
   explicit ClientConfigStore(ConRequest request)
-      : request_(std::move(request)),
-        state_(ClientState{ClientStatus::NotInitialized,
-                           ECM{EC::NotInitialized, "Client Not Initialized"}}),
-        home_dir_(std::string{}) {}
+      : request_(std::move(request)), home_dir_(std::string{}) {}
 
   [[nodiscard]] ConRequest GetRequest() const override {
     return request_.lock().load();
@@ -924,9 +1425,9 @@ public:
     return request_;
   }
 
-  [[nodiscard]] AMAtomic<ClientState> &StateAtomic() override { return state_; }
+  [[nodiscard]] AMAtomic<CheckResult> &StateAtomic() override { return state_; }
 
-  [[nodiscard]] const AMAtomic<ClientState> &StateAtomic() const override {
+  [[nodiscard]] const AMAtomic<CheckResult> &StateAtomic() const override {
     return state_;
   }
 
@@ -945,12 +1446,12 @@ public:
     req->nickname = nickname;
   }
 
-  [[nodiscard]] ClientState GetState() const override {
+  [[nodiscard]] CheckResult GetState() const override {
     auto st = state_.lock();
     return st.load();
   }
 
-  void SetState(const ClientState &state) override {
+  void SetState(const CheckResult &state) override {
     auto st = state_.lock();
     st.store(state);
   }

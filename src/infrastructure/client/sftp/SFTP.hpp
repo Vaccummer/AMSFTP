@@ -369,7 +369,7 @@ public:
     amf flag = interrupt_flag;
     if (this->LegacyInterruptCheck_(flag)) {
       ECM rcm = {EC::Terminate, "Check interrupted"};
-      SetState(rcm);
+      SetState({rcm, AMDomain::client::ClientStatus::ConnectionBroken});
       return rcm;
     }
     (void)timeout_ms;
@@ -377,17 +377,17 @@ public:
     if (!session || sock == INVALID_SOCKET ||
         !has_connected.load(std::memory_order_relaxed)) {
       ECM rcm = {EC::NoConnection, "Session not connected"};
-      SetState(rcm);
+      SetState({rcm, AMDomain::client::ClientStatus::NoConnection});
       return rcm;
     }
 
     if (!IsTerminalAlive()) {
       ECM rcm = {EC::NoConnection, "Terminal not initialized"};
-      SetState(rcm);
+      SetState({rcm, AMDomain::client::ClientStatus::NoConnection});
       return rcm;
     }
 
-    SetState({EC::Success, ""});
+    SetState({{EC::Success, ""}, AMDomain::client::ClientStatus::OK});
     return {EC::Success, ""};
   }
 
@@ -1584,7 +1584,7 @@ using KnownHostCallback = AMDomain::client::KnownHostCallback;
 class SFTPSessionBase : public ClientIOBase {
 protected:
   using amf = AMDomain::client::amf;
-  AMAtomic<AMDomain::client::ClientState> &state_atomic_;
+  AMAtomic<AMDomain::filesystem::CheckResult> &state_atomic_;
   mutable std::recursive_mutex mtx;
   detail::InterruptWakeBridge interrupt_wake_;
   SOCKET sock = INVALID_SOCKET;
@@ -1597,11 +1597,11 @@ protected:
         config_part_->GetRequest(), AMDomain::client::TraceSource::Client));
   }
 
-  void SetState(const AMDomain::client::ClientState &state) {
+  void SetState(const AMDomain::filesystem::CheckResult &state) {
     state_atomic_.lock().store(state);
   }
 
-  [[nodiscard]] AMDomain::client::ClientState GetState() const {
+  [[nodiscard]] AMDomain::filesystem::CheckResult GetState() const {
     return state_atomic_.lock().load();
   }
 
@@ -1792,8 +1792,8 @@ private:
       sock = INVALID_SOCKET;
     }
     state_atomic_.lock().store(
-        {AMDomain::client::ClientStatus::NoConnection,
-         {EC::NoConnection, "Connection not established"}});
+        {{EC::NoConnection, "Connection not established"},
+         AMDomain::client::ClientStatus::NoConnection});
   }
 
 public:
@@ -2081,7 +2081,7 @@ public:
                    : (rcm.first == EC::NoConnection
                           ? AMDomain::client::ClientStatus::NoConnection
                           : AMDomain::client::ClientStatus::ConnectionBroken));
-    SetState({status, rcm});
+    SetState({rcm, status});
     return rcm;
   }
 
@@ -2096,7 +2096,7 @@ public:
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     ConRequest request = request_atomic_.lock().load();
-    const AMDomain::client::ClientState current_state = GetState();
+    const AMDomain::filesystem::CheckResult current_state = GetState();
     const bool connected =
         (current_state.status == AMDomain::client::ClientStatus::OK) &&
         session != nullptr && sftp != nullptr;
@@ -2386,7 +2386,7 @@ public:
     }
     sftp = sftp_init_res.value;
 
-    SetState({AMDomain::client::ClientStatus::OK, {EC::Success, ""}});
+    SetState({{EC::Success, ""}, AMDomain::client::ClientStatus::OK});
     libssh2_session_set_blocking(session, 0);
     return {EC::Success, ""};
   }
@@ -2645,7 +2645,7 @@ public:
     out.status = GetState().status;
     if (control.IsTimeout()) {
       out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
-      SetState({AMDomain::client::ClientStatus::ConnectionBroken, out.rcm});
+      SetState({out.rcm, AMDomain::client::ClientStatus::ConnectionBroken});
       out.status = AMDomain::client::ClientStatus::ConnectionBroken;
       return out;
     }
@@ -2658,7 +2658,7 @@ public:
                    : (out.rcm.first == EC::NoConnection
                           ? AMDomain::client::ClientStatus::NoConnection
                           : AMDomain::client::ClientStatus::ConnectionBroken));
-    SetState({status, out.rcm});
+    SetState({out.rcm, status});
     out.status = status;
     return out;
   }
@@ -2672,7 +2672,7 @@ public:
       out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
       return out;
     }
-    const AMDomain::client::ClientState prev_state = GetState();
+    const AMDomain::filesystem::CheckResult prev_state = GetState();
     out.rcm = BaseConnect(args.force, control);
     if (isok(out.rcm) &&
         prev_state.status != AMDomain::client::ClientStatus::OK) {
@@ -2687,7 +2687,7 @@ public:
                    : (out.rcm.first == EC::NoConnection
                           ? AMDomain::client::ClientStatus::NoConnection
                           : AMDomain::client::ClientStatus::ConnectionBroken));
-    SetState({status, out.rcm});
+    SetState({out.rcm, status});
     out.status = status;
     return out;
   }
