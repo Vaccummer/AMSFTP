@@ -1,16 +1,21 @@
 #pragma once
 
-#include "application/config/ConfigBackupUseCase.hpp"
-#include "application/config/ConfigStorePort.hpp"
+#include "domain/config/ConfigModel.hpp"
+#include "domain/config/ConfigStorePort.hpp"
 #include "foundation/core/DataClass.hpp"
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <type_traits>
 #include <typeindex>
+#include <vector>
 
 namespace AMApplication::config {
+using IConfigStorePort = AMDomain::config::IConfigStorePort;
+using ConfigBackupSet = AMDomain::config::ConfigBackupSet;
+using ConfigStoreInitArg = AMDomain::config::ConfigStoreInitArg;
 /**
  * @brief Application service orchestrating config store operations.
  */
@@ -19,15 +24,29 @@ public:
   using DumpErrorCallback = std::function<void(ECM)>;
 
   /**
-   * @brief Construct one app service with optional bound dependencies.
+   * @brief Construct one app service with store init payload.
    */
-  explicit AMConfigAppService(IConfigStorePort *store = nullptr,
-                              AMConfigBackupUseCase *backup_use_case = nullptr);
+  explicit AMConfigAppService(ConfigStoreInitArg init_arg = {});
 
   /**
-   * @brief Bind store and use-case dependencies.
+   * @brief Build one owned config store from init arg.
    */
-  void Bind(IConfigStorePort *store, AMConfigBackupUseCase *backup_use_case);
+  ECM Init();
+
+  /**
+   * @brief Update store init payload used by Init().
+   */
+  void SetInitArg(ConfigStoreInitArg init_arg);
+
+  /**
+   * @brief Return current store init payload.
+   */
+  [[nodiscard]] ConfigStoreInitArg GetInitArg() const;
+
+  /**
+   * @brief Bind store dependency.
+   */
+  void Bind(IConfigStorePort *store);
 
   /**
    * @brief Load one document or all documents from store.
@@ -62,9 +81,17 @@ public:
   [[nodiscard]] bool IsDirty(AMDomain::config::DocumentKind kind) const;
 
   /**
-   * @brief Execute auto-backup use-case.
+   * @brief Execute one backup cycle when policy conditions are met.
    */
   ECM BackupIfNeeded();
+
+  std::vector<ECM>
+  Backup(const std::vector<AMDomain::config::DocumentKind> &kinds = {});
+
+  /**
+   * @brief Return true when current backup policy requires a backup now.
+   */
+  [[nodiscard]] bool IsBackupNeeded() const;
 
   /**
    * @brief Submit one asynchronous write task.
@@ -88,10 +115,9 @@ public:
   ECM EnsureDirectory(const std::filesystem::path &dir);
 
   /**
-   * @brief Prune old backups matching naming convention.
+   * @brief Prune old backup timestamp folders under one backup directory.
    */
-  void PruneBackupFiles(const std::filesystem::path &dir,
-                        const std::string &prefix, const std::string &suffix,
+  void PruneBackupFiles(const std::filesystem::path &bak_dir,
                         int64_t max_count);
 
   /**
@@ -102,8 +128,15 @@ public:
     if (!out || !store_) {
       return false;
     }
-    return store_->Read(std::type_index(typeid(ValueT)),
-                        static_cast<void *>(out));
+    const bool ok =
+        store_->Read(std::type_index(typeid(ValueT)), static_cast<void *>(out));
+    if constexpr (std::is_same_v<ValueT, ConfigBackupSet>) {
+      if (ok) {
+        auto backup_set = backup_set_.lock();
+        backup_set.store(*out);
+      }
+    }
+    return ok;
   }
 
   /**
@@ -114,8 +147,15 @@ public:
     if (!store_) {
       return false;
     }
-    return store_->Write(std::type_index(typeid(ValueT)),
-                         static_cast<const void *>(&value));
+    const bool ok = store_->Write(std::type_index(typeid(ValueT)),
+                                  static_cast<const void *>(&value));
+    if constexpr (std::is_same_v<ValueT, ConfigBackupSet>) {
+      if (ok) {
+        auto backup_set = backup_set_.lock();
+        backup_set.store(value);
+      }
+    }
+    return ok;
   }
 
   /**
@@ -126,13 +166,44 @@ public:
     if (!store_) {
       return false;
     }
-    return store_->Erase(std::type_index(typeid(ValueT)),
-                         static_cast<const void *>(&value));
+    const bool ok = store_->Erase(std::type_index(typeid(ValueT)),
+                                  static_cast<const void *>(&value));
+    if constexpr (std::is_same_v<ValueT, ConfigBackupSet>) {
+      if (ok) {
+        auto backup_set = backup_set_.lock();
+        backup_set.store(ConfigBackupSet{});
+      }
+    }
+    return ok;
   }
 
 private:
+  struct BackupTargets {
+    std::filesystem::path backup_dir = {};
+    std::filesystem::path stamp_dir = {};
+    std::filesystem::path config_file = {};
+    std::filesystem::path settings_file = {};
+    std::filesystem::path known_hosts_file = {};
+    std::filesystem::path history_file = {};
+  };
+
+  [[nodiscard]] ConfigBackupSet LoadBackupSet_() const;
+  [[nodiscard]] BackupTargets BuildBackupTargets_(int64_t backup_time_s) const;
+  void PruneBackupFolders_(const std::filesystem::path &bak_dir,
+                           int64_t max_count);
+  static void CleanupLegacyBackupFiles_(const std::filesystem::path &bak_dir);
+  static bool IsBackupSetEqual_(const ConfigBackupSet &lhs,
+                                const ConfigBackupSet &rhs);
+  static std::vector<AMDomain::config::DocumentKind>
+  ResolveBackupKinds_(const std::vector<AMDomain::config::DocumentKind> &kinds);
+  [[nodiscard]] std::filesystem::path
+  ResolveBackupPath_(const BackupTargets &targets,
+                     AMDomain::config::DocumentKind kind) const;
+
+  mutable AMAtomic<ConfigStoreInitArg> init_arg_ = {};
+  mutable AMAtomic<ConfigBackupSet> backup_set_ = {};
+  std::unique_ptr<IConfigStorePort> owned_store_ = nullptr;
   IConfigStorePort *store_ = nullptr;
-  AMConfigBackupUseCase *backup_use_case_ = nullptr;
   DumpErrorCallback dump_error_cb_;
 };
 } // namespace AMApplication::config
