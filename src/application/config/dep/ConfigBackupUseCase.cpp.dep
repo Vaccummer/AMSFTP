@@ -1,10 +1,9 @@
-#include "application/config/ConfigBackupUseCase.hpp"
+#include "application/config/ConfigBackupUseCase.hpp.dep"
 
 #include "application/config/ConfigAppService.hpp"
 #include "application/config/ConfigPayloads.hpp"
 #include "domain/config/ConfigRules.hpp"
 #include "foundation/tools/enum_related.hpp"
-#include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
 
 namespace AMApplication::config {
@@ -26,9 +25,8 @@ ECM AMConfigBackupUseCase::Execute(AMConfigAppService *service) {
   settings.interval_s =
       AMDomain::config::AMConfigRules::ClampBackupIntervalSeconds(
           settings.interval_s);
-  settings.max_backup_count =
-      AMDomain::config::AMConfigRules::ClampBackupCount(
-          settings.max_backup_count);
+  settings.max_backup_count = AMDomain::config::AMConfigRules::ClampBackupCount(
+      settings.max_backup_count);
   const auto now_s = static_cast<int64_t>(AMTime::seconds());
   settings.last_backup_time_s =
       AMDomain::config::AMConfigRules::ClampLastBackupTimestamp(
@@ -87,22 +85,21 @@ ECM AMConfigBackupUseCase::Execute(AMConfigAppService *service) {
   const std::filesystem::path known_hosts_backup =
       backup_dir / ("known_hosts-" + stamp + ".toml.bak");
 
-  service->SubmitWriteTask([service, config_backup, settings_backup,
-                            known_hosts_backup]() -> ECM {
-    ECM rcm =
-        service->Dump(AMDomain::config::DocumentKind::Config,
-                      config_backup.string(), false);
-    if (!isok(rcm)) {
-      return rcm;
-    }
-    rcm = service->Dump(AMDomain::config::DocumentKind::Settings,
-                        settings_backup.string(), false);
-    if (!isok(rcm)) {
-      return rcm;
-    }
-    return service->Dump(AMDomain::config::DocumentKind::KnownHosts,
-                         known_hosts_backup.string(), false);
-  });
+  service->SubmitWriteTask(
+      [service, config_backup, settings_backup, known_hosts_backup]() -> ECM {
+        ECM rcm = service->Dump(AMDomain::config::DocumentKind::Config,
+                                config_backup.string(), false);
+        if (!isok(rcm)) {
+          return rcm;
+        }
+        rcm = service->Dump(AMDomain::config::DocumentKind::Settings,
+                            settings_backup.string(), false);
+        if (!isok(rcm)) {
+          return rcm;
+        }
+        return service->Dump(AMDomain::config::DocumentKind::KnownHosts,
+                             known_hosts_backup.string(), false);
+      });
 
   return service->Dump(AMDomain::config::DocumentKind::Settings, "", true);
 }

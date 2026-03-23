@@ -1,21 +1,13 @@
 #pragma once
-
 #include "application/config/StyleSettings.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
 
 namespace AMApplication::config {
-/**
- * @brief Typed subtree for `Settings.Options.AutoConfigBackup`.
- */
-struct AutoBackupSettings {
-  bool enabled = true;
-  int64_t interval_s = 60;
-  int64_t max_backup_count = 3;
-  int64_t last_backup_time_s = 0;
-};
+using ConfigBackupSet = AMDomain::config::ConfigBackupSet;
 
 /**
  * @brief Typed subtree for `Settings.Options.ClientManager`.
@@ -56,7 +48,7 @@ struct SettingsOptionsSnapshot {
   TransferManagerOptions transfer_manager{};
   FileSystemOptions filesystem{};
   LogManagerOptions log_manager{};
-  AutoBackupSettings auto_config_backup{};
+  ConfigBackupSet auto_config_backup{};
 };
 
 /**
