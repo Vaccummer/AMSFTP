@@ -1,8 +1,8 @@
 #pragma once
 
-#include "application/config/ConfigStorePort.hpp"
-#include "infrastructure/config/ConfigDocumentHandle.hpp"
+#include "domain/config/ConfigStorePort.hpp"
 #include "foundation/core/DataClass.hpp"
+#include "infrastructure/config/ConfigDocumentHandle.hpp"
 #include "infrastructure/writer/WriteDispatcher.hpp"
 #include <memory>
 #include <mutex>
@@ -13,7 +13,7 @@ namespace AMInfra::config {
 /**
  * @brief cfgffi-backed config store implementation for application service.
  */
-class AMTomlConfigStore final : public AMApplication::config::IConfigStorePort {
+class AMTomlConfigStore final : public AMDomain::config::IConfigStorePort {
 public:
   /**
    * @brief Construct one empty store.
@@ -28,8 +28,7 @@ public:
   /**
    * @brief Configure infrastructure layout before application operations run.
    */
-  ECM Configure(const std::filesystem::path &root_dir,
-                const ConfigStoreLayout &layout);
+  ECM Configure(const AMDomain::config::ConfigStoreInitArg &arg);
 
   ECM Load(std::optional<AMDomain::config::DocumentKind> kind,
            bool force) override;
@@ -44,18 +43,8 @@ public:
   [[nodiscard]] bool
   IsDirty(AMDomain::config::DocumentKind kind) const override;
 
-  [[nodiscard]] bool
-  GetDataPath(AMDomain::config::DocumentKind kind,
-              std::filesystem::path *out) const override;
-
-  [[nodiscard]] bool Read(const std::type_index &type,
-                          void *out) const override;
-
-  [[nodiscard]] bool Write(const std::type_index &type,
-                           const void *in) override;
-
-  [[nodiscard]] bool Erase(const std::type_index &type,
-                           const void *in) override;
+  [[nodiscard]] bool GetDataPath(AMDomain::config::DocumentKind kind,
+                                 std::filesystem::path *out) const override;
 
   void SetDumpErrorCallback(DumpErrorCallback cb) override;
 
@@ -65,9 +54,17 @@ public:
 
   ECM EnsureDirectory(const std::filesystem::path &dir) override;
 
-  void PruneBackupFiles(const std::filesystem::path &dir,
-                        const std::string &prefix, const std::string &suffix,
+  void PruneBackupFiles(const std::filesystem::path &bak_dir,
                         int64_t max_count) override;
+
+  [[nodiscard]] bool Read(const std::type_index &type,
+                          void *out) const override;
+
+  [[nodiscard]] bool Write(const std::type_index &type,
+                           const void *in) override;
+
+  [[nodiscard]] bool Erase(const std::type_index &type,
+                           const void *in) override;
 
 private:
   [[nodiscard]] std::shared_ptr<IConfigDocumentHandle>

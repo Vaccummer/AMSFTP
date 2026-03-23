@@ -5,30 +5,17 @@
 #include "foundation/tools/json.hpp"
 #include <chrono>
 #include <filesystem>
-#include <mutex>
-#include <string>
-#include <type_traits>
-#include <unordered_map>
 
 namespace AMInfra::config {
-/**
- * @brief Infrastructure bootstrap data for one persisted config document.
- */
-struct ConfigDocumentSpec {
-  AMDomain::config::DocumentKind kind = AMDomain::config::DocumentKind::Config;
-  std::filesystem::path data_path;
-  std::string schema_json = "{}";
-};
-
-using ConfigStoreLayout =
-    std::unordered_map<AMDomain::config::DocumentKind, ConfigDocumentSpec>;
+using ConfigDocumentSpec = AMDomain::config::ConfigDocumentSpec;
+using ConfigStoreLayout = AMDomain::config::ConfigStoreLayout;
 
 /**
  * @brief Infrastructure contract for one persisted config document handle.
  */
 class IConfigDocumentHandle : NonCopyableNonMovable {
 public:
-  ~IConfigDocumentHandle() = default;
+  ~IConfigDocumentHandle() override = default;
 
   /**
    * @brief Initialize handle from resolved infrastructure document spec.

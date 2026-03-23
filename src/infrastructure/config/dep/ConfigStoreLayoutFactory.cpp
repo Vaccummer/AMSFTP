@@ -36,28 +36,29 @@ std::string ReadSchemaJson_(const std::filesystem::path &schema_path) {
 
 namespace AMInfra::config {
 /**
- * @brief Build default document layout rooted at one project directory.
+ * @brief Build default config-store init arg rooted at one project directory.
  */
-ConfigStoreLayout
-BuildDefaultConfigStoreLayout(const std::filesystem::path &root_dir) {
-  ConfigStoreLayout layout;
-  layout[AMDomain::config::DocumentKind::Config] = {
+AMDomain::config::ConfigStoreInitArg
+BuildDefaultConfigStoreInitArg(const std::filesystem::path &root_dir) {
+  AMDomain::config::ConfigStoreInitArg out = {};
+  out.root_dir = root_dir;
+  out.layout[AMDomain::config::DocumentKind::Config] = {
       AMDomain::config::DocumentKind::Config,
       root_dir / "config" / "config.toml",
       ReadSchemaJson_(root_dir / "config" / "schema" / "config.schema.json")};
-  layout[AMDomain::config::DocumentKind::Settings] = {
+  out.layout[AMDomain::config::DocumentKind::Settings] = {
       AMDomain::config::DocumentKind::Settings,
       root_dir / "config" / "settings.toml",
       ReadSchemaJson_(root_dir / "config" / "schema" / "settings.schema.json")};
-  layout[AMDomain::config::DocumentKind::KnownHosts] = {
+  out.layout[AMDomain::config::DocumentKind::KnownHosts] = {
       AMDomain::config::DocumentKind::KnownHosts,
       root_dir / "config" / "internal" / "known_hosts.toml",
       ReadSchemaJson_(root_dir / "config" / "schema" /
                       "known_hosts.schema.json")};
-  layout[AMDomain::config::DocumentKind::History] = {
+  out.layout[AMDomain::config::DocumentKind::History] = {
       AMDomain::config::DocumentKind::History,
       root_dir / "config" / "internal" / "history.toml",
       kHistorySchemaJson};
-  return layout;
+  return out;
 }
 } // namespace AMInfra::config

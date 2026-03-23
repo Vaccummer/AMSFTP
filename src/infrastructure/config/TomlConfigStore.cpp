@@ -5,6 +5,7 @@
 #include "internal/ArgCodecRegistry.hpp"
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <vector>
 
 namespace {
@@ -14,27 +15,46 @@ constexpr std::array<DocumentKind, 4> kRequiredKinds = {
     DocumentKind::Config, DocumentKind::Settings, DocumentKind::KnownHosts,
     DocumentKind::History};
 
-/**
- * @brief Return true when file name matches backup naming pattern.
- */
-bool MatchBackupName_(const std::string &name, const std::string &prefix,
-                      const std::string &suffix) {
-  if (name.size() < prefix.size() + suffix.size()) {
+bool IsBackupStampFolder_(const std::string &name) {
+  if (name.size() != 16) {
     return false;
   }
-  if (name.compare(0, prefix.size(), prefix) != 0) {
+  constexpr std::array<size_t, 4> kDashPos = {4, 7, 10, 13};
+  for (size_t i = 0; i < name.size(); ++i) {
+    const bool is_dash = std::find(kDashPos.begin(), kDashPos.end(), i) !=
+                         kDashPos.end();
+    if (is_dash) {
+      if (name[i] != '-') {
+        return false;
+      }
+      continue;
+    }
+    if (!std::isdigit(static_cast<unsigned char>(name[i]))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool LessByFolderName_(const std::filesystem::path &lhs,
+                       const std::filesystem::path &rhs) {
+  return lhs.filename().string() < rhs.filename().string();
+}
+
+bool IsBackupStampDirectory_(const std::filesystem::directory_entry &entry,
+                             std::error_code &ec) {
+  if (!entry.is_directory(ec) || ec) {
     return false;
   }
-  return name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+  return IsBackupStampFolder_(entry.path().filename().string());
 }
 } // namespace
 
 namespace AMInfra::config {
-ECM AMTomlConfigStore::Configure(const std::filesystem::path &root_dir,
-                                 const ConfigStoreLayout &layout) {
+ECM AMTomlConfigStore::Configure(const AMDomain::config::ConfigStoreInitArg &arg) {
   Close();
-  root_dir_ = root_dir;
-  layout_ = layout;
+  root_dir_ = arg.root_dir;
+  layout_ = arg.layout;
 
   for (const auto kind : kRequiredKinds) {
     if (layout_.find(kind) == layout_.end()) {
@@ -234,7 +254,9 @@ void AMTomlConfigStore::SubmitWriteTask(std::function<ECM()> task) {
   });
 }
 
-std::filesystem::path AMTomlConfigStore::ProjectRoot() const { return root_dir_; }
+std::filesystem::path AMTomlConfigStore::ProjectRoot() const {
+  return root_dir_;
+}
 
 ECM AMTomlConfigStore::EnsureDirectory(const std::filesystem::path &dir) {
   std::error_code ec;
@@ -245,40 +267,33 @@ ECM AMTomlConfigStore::EnsureDirectory(const std::filesystem::path &dir) {
   return Ok();
 }
 
-void AMTomlConfigStore::PruneBackupFiles(const std::filesystem::path &dir,
-                                         const std::string &prefix,
-                                         const std::string &suffix,
+void AMTomlConfigStore::PruneBackupFiles(const std::filesystem::path &bak_dir,
                                          int64_t max_count) {
   if (max_count <= 0) {
     return;
   }
   std::error_code ec;
-  if (!std::filesystem::exists(dir, ec) || ec) {
+  if (!std::filesystem::exists(bak_dir, ec) || ec) {
     return;
   }
-  std::vector<std::filesystem::path> items;
-  for (const auto &entry : std::filesystem::directory_iterator(dir, ec)) {
+  std::vector<std::filesystem::path> stamp_dirs = {};
+  for (const auto &entry : std::filesystem::directory_iterator(bak_dir, ec)) {
     if (ec) {
       break;
     }
-    if (!entry.is_regular_file(ec) || ec) {
+    if (!IsBackupStampDirectory_(entry, ec)) {
       continue;
     }
-    const std::string name = entry.path().filename().string();
-    if (MatchBackupName_(name, prefix, suffix)) {
-      items.push_back(entry.path());
-    }
+    stamp_dirs.push_back(entry.path());
   }
-  if (items.size() <= static_cast<size_t>(max_count)) {
+  if (stamp_dirs.size() <= static_cast<size_t>(max_count)) {
     return;
   }
-  std::sort(items.begin(), items.end(),
-            [](const std::filesystem::path &a, const std::filesystem::path &b) {
-              return a.filename().string() < b.filename().string();
-            });
-  const size_t remove_count = items.size() - static_cast<size_t>(max_count);
+  std::sort(stamp_dirs.begin(), stamp_dirs.end(), LessByFolderName_);
+  const size_t remove_count =
+      stamp_dirs.size() - static_cast<size_t>(max_count);
   for (size_t i = 0; i < remove_count; ++i) {
-    std::filesystem::remove(items[i], ec);
+    std::filesystem::remove_all(stamp_dirs[i], ec);
   }
 }
 
