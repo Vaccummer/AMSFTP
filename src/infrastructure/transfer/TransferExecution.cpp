@@ -1,7 +1,5 @@
-#include "domain/client/ClientDomainService.hpp"
-#include "domain/host/HostDomainService.hpp"
 #include "foundation/core/DataClass.hpp"
-#include "infrastructure/client/transfer/core.hpp"
+#include "infrastructure/transfer/core.hpp"
 
 #include "foundation/tools/time.hpp"
 #include "infrastructure/client/ftp/FTP.hpp"
@@ -27,6 +25,7 @@
 
 // TransferRuntimeProgress
 namespace AMInfra::transfer {
+
 TransferRuntimeProgress::TransferRuntimeProgress(TaskHandle task)
     : task_info(std::move(task)) {}
 
@@ -62,16 +61,22 @@ void TransferRuntimeProgress::CallInnerCallback(bool force) {
                     cur_task->dst_host));
   }
 
-  if (!ctrl_opt.has_value() || !task_info->Core.control_token) {
+  if (!ctrl_opt.has_value()) {
     return;
   }
 
   switch (*ctrl_opt) {
   case TransferControl::Running:
-    task_info->Core.control_token->ClearInterrupt();
+    if (!task_info->IsTerminateRequested()) {
+      task_info->SetRunningIntent();
+      task_info->ClearInterrupt();
+    }
+    break;
+  case TransferControl::Pause:
+    task_info->RequestPause();
     break;
   case TransferControl::Terminate:
-    task_info->Core.control_token->RequestInterrupt();
+    task_info->RequestInterrupt();
     break;
   default:
     break;
@@ -97,6 +102,14 @@ TransferTask *TransferRuntimeProgress::GetCurrentTask() const {
 } // namespace AMInfra::transfer
 
 namespace {
+constexpr size_t AMDefaultLocalBufferSize =
+    AMDomain::client::ClientService::AMDefaultLocalBufferSize;
+constexpr size_t AMDefaultRemoteBufferSize =
+    AMDomain::client::ClientService::AMDefaultRemoteBufferSize;
+constexpr size_t AMMinBufferSize =
+    AMDomain::client::ClientService::AMMinBufferSize;
+constexpr size_t AMMaxBufferSize =
+    AMDomain::client::ClientService::AMMaxBufferSize;
 using ECM = std::pair<ErrorCode, std::string>;
 using EC = ErrorCode;
 using ClientHandle = AMInfra::transfer::ClientHandle;
@@ -105,7 +118,7 @@ using TaskInfo = AMDomain::transfer::TaskInfo;
 using TaskHandle = AMInfra::transfer::TaskHandle;
 using ClientProtocol = AMDomain::client::ClientProtocol;
 using AMSFTPIOCore = AMInfra::client::SFTP::AMSFTPIOCore;
-using SocketWaitType = AMInfra::client::SFTP::SocketWaitType;
+using SocketWaitType = AMInfra::client::SFTP::detail::SocketWaitType;
 using AMFTPIOCore = AMInfra::client::FTP::AMFTPIOCore;
 using TransferTask = AMDomain::transfer::TransferTask;
 using TaskStatus = AMDomain::transfer::TaskStatus;
@@ -114,19 +127,12 @@ using TaskRegistry = AMAtomic<std::unordered_map<TaskId, TaskHandle>>;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 
 bool IsTaskInterrupted_(const RuntimeProgress &pd) {
-  return pd.task_info && pd.task_info->Core.control_token &&
-         pd.task_info->Core.control_token->IsInterrupted();
+  return pd.task_info && pd.task_info->IsInterrupted();
 }
 
 void RequestTaskInterrupt_(RuntimeProgress &pd) {
-  if (pd.task_info && pd.task_info->Core.control_token) {
-    pd.task_info->Core.control_token->RequestInterrupt();
-  }
-}
-
-void ClearTaskInterrupt_(RuntimeProgress &pd) {
-  if (pd.task_info && pd.task_info->Core.control_token) {
-    pd.task_info->Core.control_token->ClearInterrupt();
+  if (pd.task_info) {
+    pd.task_info->RequestInterrupt();
   }
 }
 
@@ -150,8 +156,8 @@ bool IsTaskIdUsedHelper(const TaskId &task_id, TaskRegistry &task_registry,
 }
 
 bool ShouldSkipTaskHelper(const TaskHandle &task_info) {
-  if (task_info && task_info->Core.control_token &&
-      task_info->Core.control_token->IsInterrupted()) {
+  if (task_info && task_info->IsInterrupted() &&
+      !task_info->IsPauseRequested()) {
     task_info->SetResult({EC::Terminate, "Task terminated before start"});
     task_info->SetStatus(TaskStatus::Finished);
     task_info->Time.finish.store(AMTime::seconds(), std::memory_order_relaxed);
@@ -173,7 +179,9 @@ ssize_t CalculateBufferSizeHelper(const ClientHandle &src_client,
   const ssize_t src_size = resolve_buffer_hint(src_client);
   const ssize_t dst_size = resolve_buffer_hint(dst_client);
   const bool is_local = !src_client && !dst_client;
-  if (provided_size > AMMinBufferSize && provided_size < AMMaxBufferSize) {
+  if (provided_size >
+          AMDomain::client::ClientService::AMDefaultLocalBufferSize &&
+      provided_size < AMMaxBufferSize) {
     return provided_size;
   }
   if (src_size < 0 && dst_size < 0) {
@@ -195,7 +203,7 @@ ssize_t CalculateBufferSizeHelper(const ClientHandle &src_client,
 ClientHandle ResolveTaskClientHelper(const TransferClientContainer &clients,
                                      const std::string &nickname,
                                      bool prefer_secondary) {
-  const std::string key = nickname;
+  const std::string key = nickname.empty() ? std::string("local") : nickname;
   auto it = clients.find(key);
   if (it == clients.end()) {
     return nullptr;
@@ -228,6 +236,7 @@ public:
   LIBSSH2_SFTP_HANDLE *sftp_handle = nullptr;
   AMSFTPIOCore *client = nullptr;
   RuntimeProgress *pd = nullptr;
+  AMDomain::client::ClientControlComponent control = {};
 
   // Common members
   std::string path;
@@ -269,6 +278,11 @@ public:
     this->client = client;
     this->is_sftp = (client != nullptr);
     this->pd = progress;
+    if (pd && pd->task_info) {
+      control = pd->task_info->Core.control;
+    } else {
+      control = {};
+    }
 
     if (is_sftp) {
       // SFTP file
@@ -281,12 +295,12 @@ public:
         if (truncate) {
           flags |= LIBSSH2_FXF_TRUNC | LIBSSH2_FXF_CREAT;
         }
-        nb_res = client->nb_call(-1, AMTime::miliseconds(), [&]() {
+        nb_res = client->nb_call(control, [&]() {
           return libssh2_sftp_open(client->sftp, path.c_str(), flags, 0744);
         });
         sftp_handle = nb_res.value;
       } else {
-        nb_res = client->nb_call(-1, AMTime::miliseconds(), [&]() {
+        nb_res = client->nb_call(control, [&]() {
           return libssh2_sftp_open(client->sftp, path.c_str(), LIBSSH2_FXF_READ,
                                    0400);
         });
@@ -408,14 +422,12 @@ public:
     if (to_read > 0) {
       if (is_sftp) {
         // SFTP read (non-blocking)
+        std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
         while (true) {
           if (IsTaskInterrupted_(*pd)) {
             return {-1, {EC::Terminate, "Task terminated by user"}};
           }
-          {
-            std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
-            bytes_read = libssh2_sftp_read(sftp_handle, write_ptr, to_read);
-          }
+          bytes_read = libssh2_sftp_read(sftp_handle, write_ptr, to_read);
           if (bytes_read > 0) {
             pd->ring_buffer->commit_write(bytes_read);
             offset += bytes_read;
@@ -425,8 +437,8 @@ public:
             return {0, {EC::EndOfFile, "End of file"}};
           }
           if (bytes_read == LIBSSH2_ERROR_EAGAIN) {
-            WaitResult wr = client->wait_for_socket(SocketWaitType::Read,
-                                                    AMTime::miliseconds(), 200);
+            WaitResult wr =
+                client->wait_for_socket(SocketWaitType::Read, control);
             if (wr == WaitResult::Error) {
               return {
                   -1,
@@ -512,8 +524,8 @@ public:
             return {0, {EC::EndOfFile, "End of file"}};
           }
           if (bytes_written == LIBSSH2_ERROR_EAGAIN) {
-            WaitResult wr = client->wait_for_socket(SocketWaitType::Write,
-                                                    AMTime::miliseconds(), 200);
+            WaitResult wr =
+                client->wait_for_socket(SocketWaitType::Write, control);
             if (wr == WaitResult::Error) {
               return {
                   LIBSSH2_ERROR_EAGAIN,
@@ -1064,9 +1076,7 @@ void TransferExecutionPool::CancelPendingTasksOnExit_(
       }
       auto task_info = it->second;
       task_registry->erase(it);
-      if (task_info->Core.control_token) {
-        task_info->Core.control_token->RequestInterrupt();
-      }
+      task_info->RequestInterrupt();
       task_info->State.rcm.lock().store({EC::Terminate, reason});
       task_info->Time.finish.store(AMTime::seconds(),
                                    std::memory_order_relaxed);
@@ -1267,6 +1277,11 @@ void TransferExecutionPool::WorkerLoop(size_t thread_index) {
 
     ExecuteTask(task_info);
 
+    if (task_info->GetStatus() == TaskStatus::Paused) {
+      ClearConducting(thread_index);
+      continue;
+    }
+
     {
       auto task_registry = task_registry_.lock();
       task_registry->erase(task_info->id);
@@ -1306,10 +1321,14 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
     return;
   }
   const auto &task_clients = task_info->Core.clients;
-
+  bool paused_requested = false;
   {
     auto tasks_locked = task_info->Core.tasks.lock();
     for (auto &task : *tasks_locked) {
+      if (task_info->IsPauseRequested()) {
+        paused_requested = true;
+        break;
+      }
       if (IsTaskInterrupted_(pd)) {
         task.rcm = {EC::Terminate, "Task terminated by user"};
         task.IsFinished = true;
@@ -1321,22 +1340,13 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
       }
 
       const std::string src_key =
-          (task.src_host.empty() ||
-           AMDomain::host::HostManagerService::IsLocalNickname(task.src_host))
-              ? "local"
-              : AMDomain::client::ClientDomainService::NormalizeNickname(
-                    task.src_host);
+          task.src_host.empty() ? std::string("local") : task.src_host;
       const std::string dst_key =
-          (task.dst_host.empty() ||
-           AMDomain::host::HostManagerService::IsLocalNickname(task.dst_host))
-              ? "local"
-              : AMDomain::client::ClientDomainService::NormalizeNickname(
-                    task.dst_host);
-      const bool same_host_transfer = !src_key.empty() && src_key == dst_key;
-      auto src_client =
-          ResolveTaskClientHelper(task_clients, task.src_host, false);
-      auto dst_client = ResolveTaskClientHelper(task_clients, task.dst_host,
-                                                same_host_transfer);
+          task.dst_host.empty() ? std::string("local") : task.dst_host;
+      const bool same_host_transfer = src_key == dst_key;
+      auto src_client = ResolveTaskClientHelper(task_clients, src_key, false);
+      auto dst_client =
+          ResolveTaskClientHelper(task_clients, dst_key, same_host_transfer);
       if (!src_client || !dst_client) {
         task.rcm = {EC::ClientNotFound, "Task client is not available in pool"};
         task.IsFinished = true;
@@ -1344,14 +1354,6 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
           task_info->Set.callback.CallError(ErrorCBInfo(
               task.rcm, task.src, task.dst, task.src_host, task.dst_host));
         }
-        continue;
-      }
-
-      if (task.path_type == PathType::DIR) {
-        task.rcm = dst_client->IOPort().mkdirs(
-            AMDomain::filesystem::MkdirsArgs{task.dst},
-            AMDomain::client::ClientControlComponent{});
-        task.IsFinished = true;
         continue;
       }
 
@@ -1370,7 +1372,7 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
         }
         auto dst_stat = dst_client->IOPort().stat(
             AMDomain::filesystem::StatArgs{task.dst, false},
-            AMDomain::client::ClientControlComponent{});
+            task_info->Core.control);
         if (dst_stat.rcm.first != EC::Success) {
           task.rcm = {EC::InvalidOffset, "Dst stat failed but offset is given"};
           task.IsFinished = true;
@@ -1397,7 +1399,8 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
     PassOffsetCheck:
       task_info->Size.cur_task_transferred.store(resume_offset,
                                                  std::memory_order_relaxed);
-      if (resume_offset > 0) {
+      if (resume_offset > 0 &&
+          !task_info->Set.keep_start_time.load(std::memory_order_relaxed)) {
         task_info->Size.transferred.fetch_add(resume_offset,
                                               std::memory_order_relaxed);
       }
@@ -1409,6 +1412,13 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
 
       task.rcm =
           transfer_engine_.TransferSignleFile(src_client, dst_client, pd);
+      if (task_info->IsPauseRequested() && task.rcm.first == EC::Terminate) {
+        task.rcm = {EC::Success, ""};
+        task.IsFinished = false;
+        paused_requested = true;
+        pd.CallInnerCallback(true);
+        break;
+      }
       task.IsFinished = true;
       if (task.rcm.first == EC::Success) {
         task_info->Size.success_filenum.fetch_add(1, std::memory_order_relaxed);
@@ -1421,6 +1431,13 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
 
       pd.CallInnerCallback(true);
     }
+  }
+
+  if (paused_requested) {
+    task_info->SetResult({EC::Success, "Task paused"});
+    task_info->Core.cur_task.store(nullptr, std::memory_order_relaxed);
+    task_info->SetStatus(TaskStatus::Paused);
+    return;
   }
 
   if (!IsTaskInterrupted_(pd)) {
@@ -1442,6 +1459,7 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
   } else {
     task_info->SetResult({EC::Terminate, "Task terminated by user"});
   }
+  task_info->Core.cur_task.store(nullptr, std::memory_order_relaxed);
   task_info->SetStatus(TaskStatus::Finished);
   task_info->Time.finish.store(AMTime::seconds(), std::memory_order_relaxed);
 }
@@ -1465,10 +1483,33 @@ ECM TransferExecutionPool::Shutdown(int timeout_ms) {
   {
     std::lock_guard<std::mutex> lock(conducting_mtx_);
     for (const auto &info : conducting_infos_) {
-      if (info && info->Core.control_token) {
-        info->Core.control_token->RequestInterrupt();
+      if (info) {
+        info->RequestInterrupt();
       }
     }
+  }
+  std::vector<TaskHandle> paused_tasks;
+  {
+    auto task_registry = task_registry_.lock();
+    for (auto it = task_registry->begin(); it != task_registry->end();) {
+      const TaskHandle &task_info = it->second;
+      if (!task_info || task_info->GetStatus() != TaskStatus::Paused) {
+        ++it;
+        continue;
+      }
+      task_info->RequestInterrupt();
+      task_info->SetResult(
+          {EC::Terminate, "Task canceled while shutting down"});
+      task_info->SetStatus(TaskStatus::Finished);
+      task_info->Time.finish.store(AMTime::seconds(),
+                                   std::memory_order_relaxed);
+      task_info->Set.OnWhichThread.store(-1, std::memory_order_relaxed);
+      paused_tasks.push_back(task_info);
+      it = task_registry->erase(it);
+    }
+  }
+  for (const auto &task_info : paused_tasks) {
+    HandleCompletedTask(task_info);
   }
   {
     std::unique_lock<std::mutex> lock(conducting_mtx_);
@@ -1573,6 +1614,8 @@ ECM TransferExecutionPool::Submit(TaskHandle task_info,
     return {EC::InvalidArg, "Task ID is empty or already used"};
   }
   task_info->ResetCompletionDispatch();
+  task_info->State.intent.store(AMDomain::transfer::ControlIntent::Running,
+                                std::memory_order_relaxed);
   task_info->Time.submit.store(AMTime::seconds(), std::memory_order_relaxed);
   task_info->SetStatus(TaskStatus::Pending);
   task_info->CalTotalSize();
@@ -1618,17 +1661,125 @@ TransferExecutionPool::GetStatus(const TaskId &id) const {
 }
 
 ECM TransferExecutionPool::Pause(const TaskId &id, int timeout_ms) {
-  (void)id;
-  (void)timeout_ms;
-  return {EC::OperationUnsupported,
-          "Pause is deprecated in TransferExecutionPool"};
+  TaskHandle existing = nullptr;
+  {
+    auto task_registry = task_registry_.lock();
+    auto it = task_registry->find(id);
+    if (it != task_registry->end()) {
+      existing = it->second;
+    }
+  }
+  if (!existing) {
+    return {EC::TaskNotFound, AMStr::fmt("Task not found: {}", id)};
+  }
+  TaskStatus status_t = existing->GetStatus();
+  if (status_t == TaskStatus::Pending) {
+    return {EC::OperationUnsupported,
+            AMStr::fmt("Task is still pending: {}", id)};
+  }
+  if (status_t == TaskStatus::Finished) {
+    return {EC::OperationUnsupported,
+            AMStr::fmt("Task is already finished: {}", id)};
+  }
+  if (existing->IsTerminateRequested()) {
+    return {EC::OperationUnsupported,
+            AMStr::fmt("Task terminate requested: {}", id)};
+  }
+  if (status_t == TaskStatus::Paused || existing->IsPauseRequested()) {
+    return {EC::Success, AMStr::fmt("Task already paused: {}", id)};
+  }
+  existing->RequestPause();
+  const int64_t start = AMTime::miliseconds();
+  while (timeout_ms < 0 || (AMTime::miliseconds() - start) < timeout_ms) {
+    status_t = existing->GetStatus();
+    if (status_t == TaskStatus::Paused) {
+      return {EC::Success, ""};
+    }
+    if (status_t == TaskStatus::Finished) {
+      return {EC::OperationUnsupported,
+              AMStr::fmt("Task is already finished: {}", id)};
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  }
+  return {EC::OperationTimeout, AMStr::fmt("Task pause timeout: {}", id)};
 }
 
 ECM TransferExecutionPool::Resume(const TaskId &id, int timeout_ms) {
-  (void)id;
-  (void)timeout_ms;
-  return {EC::OperationUnsupported,
-          "Resume is deprecated in TransferExecutionPool"};
+  TaskHandle existing = nullptr;
+  {
+    auto task_registry = task_registry_.lock();
+    auto it = task_registry->find(id);
+    if (it != task_registry->end()) {
+      existing = it->second;
+    }
+  }
+  if (!existing) {
+    return {EC::TaskNotFound, AMStr::fmt("Task not found: {}", id)};
+  }
+  TaskStatus status_t = existing->GetStatus();
+  if (status_t == TaskStatus::Pending) {
+    return {EC::OperationUnsupported,
+            AMStr::fmt("Task is still pending: {}", id)};
+  }
+  if (status_t == TaskStatus::Finished) {
+    return {EC::OperationUnsupported,
+            AMStr::fmt("Task is already finished: {}", id)};
+  }
+  if (existing->IsTerminateRequested()) {
+    return {EC::OperationUnsupported,
+            AMStr::fmt("Task terminate requested: {}", id)};
+  }
+  if (existing->IsPauseRequested() && status_t != TaskStatus::Paused) {
+    const int64_t start = AMTime::miliseconds();
+    while (timeout_ms < 0 || (AMTime::miliseconds() - start) < timeout_ms) {
+      status_t = existing->GetStatus();
+      if (status_t == TaskStatus::Paused) {
+        break;
+      }
+      if (status_t == TaskStatus::Finished) {
+        return {EC::OperationUnsupported,
+                AMStr::fmt("Task is already finished: {}", id)};
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    if (status_t != TaskStatus::Paused) {
+      return {EC::OperationTimeout, AMStr::fmt("Task pause timeout: {}", id)};
+    }
+  }
+  status_t = existing->GetStatus();
+  if (status_t == TaskStatus::Paused || existing->IsPauseRequested()) {
+    existing->SetRunningIntent();
+    existing->ClearInterrupt();
+    const int64_t release_start = AMTime::miliseconds();
+    int on_thread = existing->Set.OnWhichThread.load(std::memory_order_relaxed);
+    while (on_thread >= 0 && (timeout_ms < 0 || (AMTime::miliseconds() -
+                                                 release_start) < timeout_ms)) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      on_thread = existing->Set.OnWhichThread.load(std::memory_order_relaxed);
+    }
+    if (on_thread >= 0) {
+      return {EC::OperationTimeout,
+              AMStr::fmt("Task resume wait timeout: {}", id)};
+    }
+    existing->Set.keep_start_time.store(true, std::memory_order_relaxed);
+    existing->SetStatus(TaskStatus::Pending);
+    existing->Set.OnWhichThread.store(-1, std::memory_order_relaxed);
+    const int requested_thread_id =
+        existing->Set.affinity_thread.load(std::memory_order_relaxed);
+    const size_t active_count =
+        desired_thread_count_.load(std::memory_order_relaxed);
+    const bool affinity_valid =
+        requested_thread_id >= 0 &&
+        static_cast<size_t>(requested_thread_id) < active_count &&
+        static_cast<size_t>(requested_thread_id) < affinity_queues_.size();
+    const TaskAssignType assign_type =
+        affinity_valid ? TaskAssignType::Affinity : TaskAssignType::Public;
+    const int affinity_id = affinity_valid ? requested_thread_id : -1;
+    RegisterTask(existing, assign_type, affinity_id);
+    queue_cv_.notify_all();
+    return {EC::Success, ""};
+  }
+  return {EC::Success, AMStr::fmt("Task is conducting: {}", id)};
 }
 
 std::pair<TaskHandle, ECM> TransferExecutionPool::Terminate(const TaskId &id,
@@ -1650,27 +1801,28 @@ std::pair<TaskHandle, ECM> TransferExecutionPool::Terminate(const TaskId &id,
              AMStr::fmt("Task already finished: {}", id)}};
   }
 
-  if (existing->GetStatus() == TaskStatus::Pending) {
+  if (existing->GetStatus() == TaskStatus::Pending ||
+      existing->GetStatus() == TaskStatus::Paused) {
     std::lock_guard<std::mutex> queue_lock(queue_mtx_);
     auto task_registry = task_registry_.lock();
     auto it = task_registry->find(id);
     if (it != task_registry->end() && it->second) {
       const auto &task_info = it->second;
-      const int affinity_thread =
-          task_info->Set.affinity_thread.load(std::memory_order_relaxed);
-      const TaskAssignType assign_type =
-          task_info->Set.assign_type.load(std::memory_order_relaxed);
-      if (assign_type == TaskAssignType::Affinity && affinity_thread >= 0 &&
-          static_cast<size_t>(affinity_thread) < affinity_queues_.size()) {
-        affinity_queues_[static_cast<size_t>(affinity_thread)].remove(id);
-      } else {
-        public_queue_.remove(id);
+      if (task_info->GetStatus() == TaskStatus::Pending) {
+        const int affinity_thread =
+            task_info->Set.affinity_thread.load(std::memory_order_relaxed);
+        const TaskAssignType assign_type =
+            task_info->Set.assign_type.load(std::memory_order_relaxed);
+        if (assign_type == TaskAssignType::Affinity && affinity_thread >= 0 &&
+            static_cast<size_t>(affinity_thread) < affinity_queues_.size()) {
+          affinity_queues_[static_cast<size_t>(affinity_thread)].remove(id);
+        } else {
+          public_queue_.remove(id);
+        }
       }
       task_registry->erase(it);
-      if (task_info->Core.control_token) {
-        task_info->Core.control_token->RequestInterrupt();
-      }
-      task_info->SetResult({EC::Terminate, "Task terminated before start"});
+      task_info->RequestInterrupt();
+      task_info->SetResult({EC::Terminate, "Task terminated"});
       task_info->SetStatus(TaskStatus::Finished);
       task_info->Time.finish.store(AMTime::seconds(),
                                    std::memory_order_relaxed);
@@ -1681,9 +1833,7 @@ std::pair<TaskHandle, ECM> TransferExecutionPool::Terminate(const TaskId &id,
     }
   }
 
-  if (existing->Core.control_token) {
-    existing->Core.control_token->RequestInterrupt();
-  }
+  existing->RequestInterrupt();
 
   const int64_t start_ms = AMTime::miliseconds();
   while (timeout_ms < 0 || (AMTime::miliseconds() - start_ms) < timeout_ms) {
