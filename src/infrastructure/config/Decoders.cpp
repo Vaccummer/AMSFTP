@@ -403,16 +403,15 @@ public:
 } // namespace host_codec
 
 namespace settings_codec {
-using AMApplication::config::AutoBackupSettings;
 using AMApplication::config::SettingsOptionsSnapshot;
 using AMApplication::config::UserVarsSnapshot;
+using AMDomain::config::ConfigBackupSet;
 
 Json OptionsRoot_(const Json &root) {
   return codec_common::QueryObjectAt_(root, {"Options"});
 }
 
-void DecodeAutoBackupSettings_(const Json &json,
-                               AutoBackupSettings *out) {
+void DecodeConfigBackupSet_(const Json &json, ConfigBackupSet *out) {
   if (!out || !json.is_object()) {
     return;
   }
@@ -422,7 +421,7 @@ void DecodeAutoBackupSettings_(const Json &json,
   (void)AMJson::QueryKey(json, {"last_backup_time_s"}, &out->last_backup_time_s);
 }
 
-Json EncodeAutoBackupSettings_(const AutoBackupSettings &in) {
+Json EncodeConfigBackupSet_(const ConfigBackupSet &in) {
   Json out = Json::object();
   out["enabled"] = in.enabled;
   out["interval_s"] = in.interval_s;
@@ -431,10 +430,10 @@ Json EncodeAutoBackupSettings_(const AutoBackupSettings &in) {
   return out;
 }
 
-class AutoBackupSettingsCodec final : public AMInfra::config::IArgCodec {
+class ConfigBackupSetCodec final : public AMInfra::config::IArgCodec {
 public:
   [[nodiscard]] std::type_index Type() const override {
-    return std::type_index(typeid(AutoBackupSettings));
+    return std::type_index(typeid(ConfigBackupSet));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -444,12 +443,13 @@ public:
   [[nodiscard]] bool Decode(const Json &root, void *out,
                             std::string *error) const override {
     if (!out) {
-      return codec_common::Fail_(error, "null output AutoBackupSettings");
+      return codec_common::Fail_(error, "null output ConfigBackupSet");
     }
-    auto *typed = static_cast<AutoBackupSettings *>(out);
+    auto *typed = static_cast<ConfigBackupSet *>(out);
     *typed = {};
-    DecodeAutoBackupSettings_(codec_common::QueryObjectAt_(root, {"Options", "AutoConfigBackup"}),
-                              typed);
+    DecodeConfigBackupSet_(
+        codec_common::QueryObjectAt_(root, {"Options", "AutoConfigBackup"}),
+        typed);
     return true;
   }
 
@@ -457,13 +457,13 @@ public:
                             std::string *error) const override {
     if (!in || !root) {
       return codec_common::Fail_(error,
-                                 "null input AutoBackupSettings or root json");
+                                 "null input ConfigBackupSet or root json");
     }
-    const auto *typed = static_cast<const AutoBackupSettings *>(in);
+    const auto *typed = static_cast<const ConfigBackupSet *>(in);
     if (!root->is_object()) {
       *root = Json::object();
     }
-    (*root)["Options"]["AutoConfigBackup"] = EncodeAutoBackupSettings_(*typed);
+    (*root)["Options"]["AutoConfigBackup"] = EncodeConfigBackupSet_(*typed);
     return true;
   }
 
@@ -511,8 +511,9 @@ public:
                            &typed->log_manager.client_trace_level);
     (void)AMJson::QueryKey(options, {"LogManager", "program_trace_level"},
                            &typed->log_manager.program_trace_level);
-    DecodeAutoBackupSettings_(codec_common::QueryObjectAt_(options, {"AutoConfigBackup"}),
-                              &typed->auto_config_backup);
+    DecodeConfigBackupSet_(
+        codec_common::QueryObjectAt_(options, {"AutoConfigBackup"}),
+        &typed->auto_config_backup);
     return true;
   }
 
@@ -542,7 +543,7 @@ public:
     (*root)["Options"]["LogManager"]["program_trace_level"] =
         typed->log_manager.program_trace_level;
     (*root)["Options"]["AutoConfigBackup"] =
-        EncodeAutoBackupSettings_(typed->auto_config_backup);
+        EncodeConfigBackupSet_(typed->auto_config_backup);
     return true;
   }
 
@@ -1074,7 +1075,7 @@ namespace AMInfra::config {
 ArgCodecRegistry::ArgCodecRegistry() {
   codecs_.push_back(std::make_unique<host_codec::HostConfigArgCodec>());
   codecs_.push_back(std::make_unique<host_codec::KnownHostEntryArgCodec>());
-  codecs_.push_back(std::make_unique<settings_codec::AutoBackupSettingsCodec>());
+  codecs_.push_back(std::make_unique<settings_codec::ConfigBackupSetCodec>());
   codecs_.push_back(std::make_unique<settings_codec::SettingsOptionsSnapshotCodec>());
   codecs_.push_back(std::make_unique<settings_codec::UserVarsSnapshotCodec>());
   codecs_.push_back(std::make_unique<prompt_codec::PromptProfileDocumentCodec>());
