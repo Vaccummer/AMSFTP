@@ -1,5 +1,6 @@
 #pragma once
 
+#include "domain/config/ConfigModel.hpp"
 #include <cstdint>
 
 namespace AMDomain::config {
@@ -23,5 +24,10 @@ public:
    */
   [[nodiscard]] static int64_t ClampLastBackupTimestamp(int64_t last_backup_s,
                                                         int64_t now_s);
+
+  /**
+   * @brief Normalize one backup policy set in-place.
+   */
+  static void NormalizeBackupSet(ConfigBackupSet *set, int64_t now_s);
 };
 } // namespace AMDomain::config
