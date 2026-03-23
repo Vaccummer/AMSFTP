@@ -20,7 +20,7 @@ public:
   /**
    * @brief Ensure worker thread is stopped before destruction.
    */
-  ~AMInfraAsyncWriter() { Stop(); }
+  ~AMInfraAsyncWriter() override { Stop(); }
 
   /**
    * @brief Start worker thread when not already running.
