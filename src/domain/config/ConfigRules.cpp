@@ -35,4 +35,14 @@ int64_t AMConfigRules::ClampLastBackupTimestamp(int64_t last_backup_s,
   }
   return last_backup_s;
 }
+
+void AMConfigRules::NormalizeBackupSet(ConfigBackupSet *set, int64_t now_s) {
+  if (!set) {
+    return;
+  }
+  set->interval_s = ClampBackupIntervalSeconds(set->interval_s);
+  set->max_backup_count = ClampBackupCount(set->max_backup_count);
+  set->last_backup_time_s =
+      ClampLastBackupTimestamp(set->last_backup_time_s, now_s);
+}
 } // namespace AMDomain::config
