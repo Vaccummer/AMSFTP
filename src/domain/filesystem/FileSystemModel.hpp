@@ -1,35 +1,26 @@
 #pragma once
-#include "domain/filesystem/ClientIOPortInterfaceArgs.hpp"
+#include "domain/client/ClientPort.hpp"
+#include "domain/host/HostModel.hpp"
 
 namespace AMDomain::filesystem {
+using ClientNickname = AMDomain::host::ConRequest::ClientNickname;
+using ClientHandle = AMDomain::client::ClientHandle;
 
-struct SizeEntry {
-  std::string raw = "";
-  std::string abs_path = "";
-  int64_t size = -1;
+struct FilesystemArg {
+  int max_cd_history = 1;
 };
 
-struct RealpathEntry {
-  std::string raw = "";
-  std::string abs_path = "";
+struct ClientPath {
+  ClientNickname nickname = "";
+  std::string path = "";
+  ClientHandle client = nullptr;
+  ECM rcm = ECM{EC::Success, ""};
+  bool is_wildcard = false;
+  bool userpath = false; // true if the path is a userpath (e.g. ~/foo)
+  bool resolved = false;
 };
 
-struct ListPathPayload {
-  PathInfo target = {};
-  std::vector<PathInfo> entries = {};
-};
-
-struct WalkPayload {
-  std::vector<PathInfo> items = {};
-  ErrorList errors = {};
-};
-
-using RemoveResult = std::pair<ECM, ErrorList>;
 using StatPathResult = std::pair<ECM, PathInfo>;
-using ListPathResult = std::pair<ECM, ListPathPayload>;
-using GetSizeEntryResult = std::pair<ECM, SizeEntry>;
-using WalkQueryResult = std::pair<ECM, WalkPayload>;
-using RealpathQueryResult = std::pair<ECM, RealpathEntry>;
 using RttQueryResult = std::pair<ECM, double>;
 
 } // namespace AMDomain::filesystem

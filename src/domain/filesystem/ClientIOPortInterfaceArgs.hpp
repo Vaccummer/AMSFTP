@@ -22,6 +22,7 @@ using OS_TYPE = AMDomain::client::OS_TYPE;
 using ClientStatus = AMDomain::client::ClientStatus;
 using CdResult = ECMResult;
 using MkdirResult = ECMResult;
+using MkdirsResult = ECMResult;
 using MoveResult = ECMResult;
 using RMResult = ECMResult;
 
@@ -88,6 +89,9 @@ struct UpdateHomeDirResult : ECMResult {
 
 struct CheckResult : ECMResult {
   ClientStatus status = ClientStatus::NotInitialized;
+  CheckResult(const ECM &ecm, ClientStatus status)
+      : ECMResult(ecm), status(status) {}
+  CheckResult() = default;
   [[nodiscard]] operator ECM() const { return rcm; }
 };
 

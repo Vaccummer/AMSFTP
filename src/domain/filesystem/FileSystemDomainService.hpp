@@ -1,12 +1,23 @@
 #pragma once
-#include "domain/host/HostModel.hpp"
+#include "ClientIOPortInterfaceArgs.hpp"
 #include "foundation/tools/string.hpp"
 #include <string>
 
 namespace AMDomain::filesystem::services {
 
+inline bool HasWildcard(const std::string &path) {
+  return path.find('*') != std::string::npos ||
+         (path.find('<') != std::string::npos &&
+          path.find('>') != std::string::npos);
+}
+
+inline bool IsPathNotExistError(ErrorCode ec) {
+  return ec == ErrorCode::PathNotExist || ec == ErrorCode::FileNotExist;
+}
+
 [[nodiscard]] static std::string
-BuildShellCommand(const std::string &command, const std::string &cmd_prefix,
+BuildShellCommand(OS_TYPE os_type, const std::string &cwd,
+                  const std::string &command, const std::string &cmd_prefix,
                   bool wrap_cmd) {
   return cmd_prefix.empty()
              ? command
@@ -15,9 +26,4 @@ BuildShellCommand(const std::string &command, const std::string &cmd_prefix,
                          : AMStr::fmt("{}{}", cmd_prefix, command));
 };
 
-[[nodiscard]] static std::string
-BuildShellCommand(const std::string &command,
-                  const AMDomain::host::ClientMetaData &metadata) {
-  return BuildShellCommand(command, metadata.cmd_prefix, metadata.wrap_cmd);
-};
 } // namespace AMDomain::filesystem::services
