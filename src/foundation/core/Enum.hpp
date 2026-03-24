@@ -85,6 +85,22 @@ enum class ErrorCode {
   NotADirectory = 19,
   InvalidFilename = 20,
   SymlinkLoop = 21,
+  // FTP Server Error
+  UnsupportFTPProtocol = 47,
+  IllegealURLFormat = 81,
+  NetworkError = 82,
+  FTPConnectFailed = 48,
+  FTPWriteError = 81,
+  FTPReadError = 96,
+  FTPSendError = 91,
+  FTPRecvError = 92,
+  IllegealSeverReply = 93,
+  FTPMkdirFailed = 49,
+  FTPRenameFailed = 50,
+  FTPUploadFailed = 51,
+  FTPDownloadFailed = 52,
+  FTPListFailed = 53,
+
   // following codes are AM Custom Error
   UnknownError = 22,
   SocketCreateError = 23,
@@ -126,23 +142,6 @@ enum class ErrorCode {
   InvalidOffset = 108,
   ProgrammInitializeFailed = 109,
   TargetAlreadyExists = 110,
-
-  // FTP Server Error
-  UnsupportFTPProtocol = 47,
-  IllegealURLFormat = 81,
-  NetworkError = 82,
-  FTPConnectFailed = 48,
-  FTPWriteError = 81,
-  FTPReadError = 96,
-
-  FTPSendError = 91,
-  FTPRecvError = 92,
-  IllegealSeverReply,
-  FTPMkdirFailed = 49,
-  FTPRenameFailed = 50,
-  FTPUploadFailed = 51,
-  FTPDownloadFailed = 52,
-  FTPListFailed = 53,
 };
 
 enum class WaitResult {
@@ -235,3 +234,18 @@ enum class AMTokenType {
 };
 
 enum class TraceSource { Client = 0, Programm = 1 };
+
+using EC = ErrorCode;
+
+struct AMError {
+  ErrorCode first;
+  std::string second;
+  AMError(EC code, std::string message)
+      : first(code), second(std::move(message)) {}
+  AMError() : first(EC::Success), second("") {}
+  [[nodiscard]] EC code() const { return this->first; }
+  [[nodiscard]] const std::string &message() const { return this->second; }
+  operator bool() const { return code() == EC::Success; }
+};
+
+using ECM = AMError;

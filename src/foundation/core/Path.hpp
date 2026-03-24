@@ -20,7 +20,6 @@
 
 using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
-using ECM = std::pair<EC, std::string>;
 namespace fs = std::filesystem;
 
 namespace AMPathStr {
