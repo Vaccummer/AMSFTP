@@ -1,14 +1,16 @@
-#include "foundation/core/DataClass.hpp"
 #include "foundation/tools/auth.hpp"
+#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/json.hpp"
 #include <array>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <regex>
 #include <sstream>
 
 namespace {
+namespace fs = std::filesystem;
 int HexToInt_(char c) {
   if (c >= '0' && c <= '9') {
     return c - '0';
@@ -909,6 +911,7 @@ std::string DecryptPassword(const std::string &stored) {
 } // namespace AMAuth
 
 namespace AMTime {
+
 double seconds() {
   return std::chrono::duration<double>(
              std::chrono::system_clock::now().time_since_epoch())
@@ -964,15 +967,6 @@ std::string FormatTimeHM(double timestamp) {
   }
   return AMTime::Str("%H:%M", timestamp);
 }
-
-bool isok(const ECM &ecm) { return ecm.first == EC::Success; }
-
-ECM Ok() {
-  const static ECM ok_instance{EC::Success, ""};
-  return ok_instance;
-}
-
-ECM Err(EC code, const std::string &msg) { return {code, msg}; }
 
 PathType cast_fs_type(const fs::file_type &type) {
   switch (type) {

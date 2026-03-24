@@ -6,7 +6,6 @@
 #include <mutex>
 #include <string>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 
 // project header
@@ -15,10 +14,6 @@
 // 3rd party library
 #include <libssh2.h>
 #include <libssh2_sftp.h>
-
-using EC = ErrorCode;
-using result_map = std::unordered_map<std::string, ErrorCode>;
-using ECM = std::pair<EC, std::string>;
 
 template <typename T> using sptr = std::shared_ptr<T>;
 
@@ -186,6 +181,13 @@ public:
         access_time(std::move(access_time)),
         modify_time(std::move(modify_time)), type(std::move(type)),
         mode_int(std::move(mode_int)), mode_str(std::move(mode_str)) {}
+  [[nodiscard]] bool is_dir() const { return type == PathType::DIR; }
+  [[nodiscard]] bool is_file() const { return type != PathType::DIR; }
+  [[nodiscard]] bool is_symlink() const { return type == PathType::SYMLINK; }
+  [[nodiscard]] bool is_special() const {
+    return type != PathType::DIR && type != PathType::FILE;
+  }
+  [[nodiscard]] bool is_regular() const { return type == PathType::FILE; }
 };
 
 class NonCopyable {
