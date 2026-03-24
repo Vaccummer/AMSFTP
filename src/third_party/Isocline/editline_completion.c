@@ -300,6 +300,12 @@ again:
     edit_resize(env, eb);
   }
   sbuf_clear(eb->extra);
+
+  if (c == KEY_EVENT_COMPLETE && env->refresh_request) {
+    edit_process_refresh_request(env, eb);
+    c = 0;
+    goto done;
+  }
   
   // direct selection?
   if (env->complete_number_pick && c >= '1' && c <= '9') {
