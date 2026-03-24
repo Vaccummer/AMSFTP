@@ -53,6 +53,9 @@ struct ic_env_s {
   const char*     completion_page_marker; // optional marker appended to completion page info
   bool            edit_active;      // is an editline session currently active?
   bool            refresh_request;  // request a soft refresh on next key cycle
+  volatile long   async_lock;       // spin lock for async queues
+  struct ic_async_msg_s* async_print_head; // queued async print messages
+  struct ic_async_msg_s* async_print_tail; // queued async print messages
   bool            no_multiline_indent; // indent continuation lines to line up under the initial prompt 
   bool            no_help;          // show short help line for history search etc.
   bool            no_hint;          // allow hinting?
@@ -71,5 +74,8 @@ ic_private char*        ic_editline(ic_env_t* env, const char* prompt_text,
 ic_private ic_env_t*    ic_get_env(void);
 ic_private const char*  ic_env_get_auto_braces(ic_env_t* env);
 ic_private const char*  ic_env_get_match_braces(ic_env_t* env);
+ic_private bool         ic_env_async_print_push(ic_env_t* env, const char* s);
+ic_private char*        ic_env_async_print_pop(ic_env_t* env);
+ic_private bool         ic_env_async_print_pending(ic_env_t* env);
 
 #endif // IC_ENV_H

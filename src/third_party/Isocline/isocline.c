@@ -43,6 +43,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <sched.h>
+#endif
 
 #include "Isocline/isocline.h"
 #include "Isocline/common.h"
@@ -69,6 +74,85 @@ static bool ic_atexit_registered = false;
 static ic_malloc_fun_t* ic_custom_malloc = NULL;
 static ic_realloc_fun_t* ic_custom_realloc = NULL;
 static ic_free_fun_t* ic_custom_free = NULL;
+
+typedef struct ic_async_msg_s {
+  char* text;
+  struct ic_async_msg_s* next;
+} ic_async_msg_t;
+
+static void ic_async_lock_(volatile long* lk) {
+  if (lk == NULL) return;
+#if defined(_WIN32)
+  while (InterlockedExchange((volatile LONG*)lk, 1L) != 0L) {
+    Sleep(0);
+  }
+#else
+  while (__sync_lock_test_and_set(lk, 1L) != 0L) {
+    sched_yield();
+  }
+#endif
+}
+
+static void ic_async_unlock_(volatile long* lk) {
+  if (lk == NULL) return;
+#if defined(_WIN32)
+  InterlockedExchange((volatile LONG*)lk, 0L);
+#else
+  __sync_lock_release(lk);
+#endif
+}
+
+ic_private bool ic_env_async_print_push(ic_env_t* env, const char* s) {
+  if (env == NULL || env->mem == NULL || s == NULL) return false;
+  ic_async_msg_t* msg = mem_zalloc_tp(env->mem, ic_async_msg_t);
+  if (msg == NULL) return false;
+  msg->text = mem_strdup(env->mem, s);
+  if (msg->text == NULL) {
+    mem_free(env->mem, msg);
+    return false;
+  }
+  msg->next = NULL;
+
+  ic_async_lock_(&env->async_lock);
+  if (env->async_print_tail == NULL) {
+    env->async_print_head = msg;
+    env->async_print_tail = msg;
+  }
+  else {
+    env->async_print_tail->next = msg;
+    env->async_print_tail = msg;
+  }
+  ic_async_unlock_(&env->async_lock);
+  return true;
+}
+
+ic_private char* ic_env_async_print_pop(ic_env_t* env) {
+  if (env == NULL || env->mem == NULL) return NULL;
+  ic_async_msg_t* msg = NULL;
+  char* text = NULL;
+  ic_async_lock_(&env->async_lock);
+  msg = env->async_print_head;
+  if (msg != NULL) {
+    env->async_print_head = msg->next;
+    if (env->async_print_head == NULL) {
+      env->async_print_tail = NULL;
+    }
+  }
+  ic_async_unlock_(&env->async_lock);
+  if (msg == NULL) return NULL;
+  text = msg->text;
+  mem_free(env->mem, msg);
+  return text;
+}
+
+ic_private bool ic_env_async_print_pending(ic_env_t* env) {
+  if (env == NULL) return false;
+  bool pending = false;
+  ic_async_lock_(&env->async_lock);
+  pending = (env->async_print_head != NULL);
+  ic_async_unlock_(&env->async_lock);
+  return pending;
+}
 
 
 //-------------------------------------------------------------
@@ -204,6 +288,22 @@ ic_public bool ic_async_stop(void) {
 ic_public bool ic_request_refresh_async(void) {
   ic_env_t* env = ic_get_env(); if (env==NULL) return false;
   if (env->tty==NULL || !env->edit_active) return false;
+  env->refresh_request = true;
+  if (!tty_async_complete(env->tty)) {
+    env->refresh_request = false;
+    return false;
+  }
+  return true;
+}
+
+ic_public bool ic_print_async(const char* s) {
+  ic_env_t* env = ic_get_env(); if (env==NULL || s == NULL) return false;
+  if (env->bbcode == NULL || env->term == NULL) return false;
+  if (!env->edit_active || env->tty == NULL) {
+    bbcode_print(env->bbcode, s);
+    return true;
+  }
+  if (!ic_env_async_print_push(env, s)) return false;
   env->refresh_request = true;
   if (!tty_async_complete(env->tty)) {
     env->refresh_request = false;
@@ -732,6 +832,10 @@ static bool ic_profile_unregister_(ic_profile_t* profile);
 
 static void ic_env_free(ic_env_t* env) {
   if (env == NULL) return;
+  char* async_msg = NULL;
+  while ((async_msg = ic_env_async_print_pop(env)) != NULL) {
+    mem_free(env->mem, async_msg);
+  }
   history_save(env->history);
   history_free(env->history);
   completions_free(env->completions);

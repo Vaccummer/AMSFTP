@@ -702,6 +702,59 @@ static void edit_refresh_hint(ic_env_t *env, editor_t *eb) {
   }
 }
 
+// Handle async refresh requests (including queued async prints) while editing.
+// Keeps typed input intact and redraws prompt state after printing.
+static bool edit_process_refresh_request(ic_env_t *env, editor_t *eb) {
+  if (!env->refresh_request) {
+    return false;
+  }
+
+  env->refresh_request = false;
+  if (!ic_env_async_print_pending(env)) {
+    edit_refresh(env, eb);
+    return true;
+  }
+
+  editor_clear_hint(eb);
+  sbuf_clear(eb->extra);
+  completions_clear(env->completions);
+  buffer_mode_t bmode = term_set_buffer_mode(env->term, BUFFERED);
+  edit_clear(env, eb);
+
+  stringbuf_t *async_out = sbuf_new(env->mem);
+  char *msg = NULL;
+  while ((msg = ic_env_async_print_pop(env)) != NULL) {
+    if (async_out != NULL) {
+      sbuf_append(async_out, msg);
+      if (msg[0] != 0) {
+        const ssize_t len = ic_strlen(msg);
+        if (len <= 0 || msg[len - 1] != '\n') {
+          sbuf_append_char(async_out, '\n');
+        }
+      }
+    } else {
+      bbcode_print(env->bbcode, msg);
+      if (msg[0] != 0) {
+        const ssize_t len = ic_strlen(msg);
+        if (len <= 0 || msg[len - 1] != '\n') {
+          term_writeln(env->term, "");
+        }
+      }
+    }
+    mem_free(env->mem, msg);
+  }
+  if (async_out != NULL) {
+    bbcode_print(env->bbcode, sbuf_string(async_out));
+    sbuf_free(async_out);
+  }
+
+  eb->cur_rows = 0;
+  eb->cur_row = 0;
+  edit_refresh(env, eb);
+  term_set_buffer_mode(env->term, bmode);
+  return true;
+}
+
 //-------------------------------------------------------------
 // Edit operations
 //-------------------------------------------------------------
@@ -1310,14 +1363,15 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
         edit_generate_completions(env, &eb, true);
         break;
       case KEY_EVENT_COMPLETE:
+        if (edit_process_refresh_request(env, &eb)) {
+          break;
+        }
         edit_generate_completions(env, &eb, false);
         break;
 
       // completion, history, help, undo
       case KEY_TAB:
-        if (env->refresh_request) {
-          env->refresh_request = false;
-          edit_refresh(env, &eb);
+        if (edit_process_refresh_request(env, &eb)) {
           break;
         }
         edit_generate_completions(env, &eb, false);

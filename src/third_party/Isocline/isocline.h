@@ -722,6 +722,12 @@ bool ic_async_stop(void);
 /// Returns `true` if the refresh request was delivered.
 bool ic_request_refresh_async(void);
 
+/// Thread-safe way to print output while readline is active.
+/// The message is queued and rendered by the active edit loop without
+/// disturbing already typed input.
+/// Returns `true` when the message was queued (and refresh wake-up delivered).
+bool ic_print_async(const char* s);
+
 /// Returns true if an editline session is currently active.
 bool ic_is_editline_active(void);
 
