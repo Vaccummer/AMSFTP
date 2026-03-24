@@ -579,7 +579,7 @@ inline std::string MlistPath(const std::string &path, bool is_dir = false) {
   return pathf;
 }
 
-inline EC GetFTPErrorCode(CURLcode curl_code) {
+inline EC CastCurlEC(CURLcode curl_code) {
   switch (curl_code) {
   case CURLE_OK:
     return EC::Success;
@@ -811,6 +811,96 @@ public:
     return {EC::CommonFailure, curl_easy_strerror(nb_res.value)};
   }
 
+  [[nodiscard]] ECM GetECM(CURLcode curl_code, const std::string &command = "",
+                           bool *has_response_code = nullptr) const {
+    if (has_response_code) {
+      *has_response_code = false;
+    }
+    if (curl_code == CURLE_OK) {
+      return {EC::Success, ""};
+    }
+    if (curl == nullptr) {
+      return {EC::NoConnection, "curl handle is invalid"};
+    }
+
+    long response_code = 0;
+    if (curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code) ==
+            CURLE_OK &&
+        response_code > 0) {
+      if (has_response_code) {
+        *has_response_code = true;
+      }
+      const std::string cmd = AMStr::lowercase(command);
+      EC ec = EC::CommonFailure;
+      std::string msg =
+          AMStr::fmt("FTP server returned response code {}", response_code);
+      switch (response_code) {
+      case 421:
+        ec = EC::ConnectionLost;
+        msg = "FTP server closed control connection (421)";
+        break;
+      case 425:
+      case 426:
+        ec = EC::FTPRecvError;
+        msg = AMStr::fmt("FTP data transfer failed ({})", response_code);
+        break;
+      case 430:
+      case 530:
+      case 532:
+        ec = EC::AuthFailed;
+        msg = AMStr::fmt("FTP authentication failed ({})", response_code);
+        break;
+      case 450:
+        ec = EC::PathUsingByOthers;
+        msg = "FTP file is unavailable (450)";
+        break;
+      case 451:
+        ec = EC::CommonFailure;
+        msg = "FTP server aborted operation (451)";
+        break;
+      case 452:
+      case 552:
+        ec = EC::FilesystemNoSpace;
+        msg = AMStr::fmt("FTP server reports insufficient storage ({})",
+                         response_code);
+        break;
+      case 500:
+      case 501:
+      case 502:
+      case 503:
+      case 504:
+        ec = EC::OperationUnsupported;
+        msg = AMStr::fmt("FTP command is invalid or unsupported ({})",
+                         response_code);
+        break;
+      case 550:
+        if (cmd == "mkd" || cmd.rfind("mkd", 0) == 0) {
+          ec = EC::PathAlreadyExists;
+          msg = "FTP directory already exists or cannot be created (550)";
+        } else {
+          ec = EC::PathNotExist;
+          msg = "FTP path does not exist or is inaccessible (550)";
+        }
+        break;
+      case 551:
+        ec = EC::InvalidArg;
+        msg = "FTP request has invalid parameters (551)";
+        break;
+      case 553:
+        ec = EC::InvalidFilename;
+        msg = "FTP filename is invalid (553)";
+        break;
+      default:
+        ec = EC::UnknownError;
+        msg = AMStr::fmt("Unexpected FTP response code {}", response_code);
+        break;
+      }
+      return {ec, msg};
+    }
+
+    return {detail::CastCurlEC(curl_code), curl_easy_strerror(curl_code)};
+  }
+
   static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb,
                                     void *userp) {
     size_t realsize = size * nmemb;
@@ -928,7 +1018,7 @@ public:
     }
     if (nb_res.value != CURLE_OK) {
       free(header_chunk.memory);
-      return {{detail::GetFTPErrorCode(nb_res.value),
+      return {{detail::CastCurlEC(nb_res.value),
                AMStr::fmt("SYST failed: {}", curl_easy_strerror(nb_res.value))},
               ""};
     }
@@ -1000,7 +1090,7 @@ public:
     }
     if (nb_res.value != CURLE_OK) {
       free(header_chunk.memory);
-      ECM rcm = {detail::GetFTPErrorCode(nb_res.value),
+      ECM rcm = {detail::CastCurlEC(nb_res.value),
                  AMStr::fmt("MLST {} error: {}", path,
                             curl_easy_strerror(nb_res.value))};
       trace(AMDomain::client::TraceLevel::Error, rcm.first, path, "MLST",
@@ -1112,7 +1202,7 @@ public:
       return {ECM{EC::Success, ""}, info};
     }
 
-    return {ECM{detail::GetFTPErrorCode(nb_res.value),
+    return {ECM{detail::CastCurlEC(nb_res.value),
                 AMStr::fmt("Common_libstat {} error: {}", path,
                            curl_easy_strerror(nb_res.value))},
             {}};
@@ -1208,7 +1298,7 @@ public:
     if (nb_res.value != CURLE_OK) {
       free(chunk.memory);
       return {
-          ECM{detail::GetFTPErrorCode(nb_res.value),
+          ECM{detail::CastCurlEC(nb_res.value),
               AMStr::fmt("List failed: {}", curl_easy_strerror(nb_res.value))},
           {}};
     }
@@ -1324,7 +1414,7 @@ public:
     if (nb_res.value != CURLE_OK) {
       free(chunk.memory);
       return {
-          ECM{detail::GetFTPErrorCode(nb_res.value),
+          ECM{detail::CastCurlEC(nb_res.value),
               AMStr::fmt("List failed: {}", curl_easy_strerror(nb_res.value))},
           {}};
     }
@@ -1471,7 +1561,7 @@ public:
       out.status = AMDomain::client::ClientStatus::OK;
       return out;
     }
-    out.rcm = {detail::GetFTPErrorCode(nb_res.value),
+    out.rcm = {detail::CastCurlEC(nb_res.value),
                AMStr::fmt("Check error: {}", curl_easy_strerror(nb_res.value))};
     if (out.rcm.first == EC::NoConnection) {
       out.status = AMDomain::client::ClientStatus::NoConnection;
@@ -1816,15 +1906,114 @@ public:
       out.rcm = NBResultToECM(nb_res);
       return out;
     }
-    if (nb_res.value != CURLE_OK) {
-      ecm = {detail::GetFTPErrorCode(nb_res.value),
-             AMStr::fmt("mkdir {} failed: {}", args.path,
-                        curl_easy_strerror(nb_res.value))};
-      trace(AMDomain::client::TraceLevel::Error, ecm.first, args.path, "mkdir",
-            ecm.second);
-      out.rcm = ecm;
+    if (nb_res.value == CURLE_OK) {
+      out.rcm = ECM{EC::Success, ""};
       return out;
     }
+
+    bool has_response_code = false;
+    const ECM mkdir_rcm = GetECM(nb_res.value, "MKD", &has_response_code);
+    if (!has_response_code) {
+      trace(AMDomain::client::TraceLevel::Error, mkdir_rcm.first, args.path,
+            "mkdir", mkdir_rcm.second);
+      out.rcm = mkdir_rcm;
+      return out;
+    }
+
+    auto stat_res = stat(AMFSI::StatArgs{args.path, false}, control);
+    if (stat_res.rcm.first == EC::Success) {
+      if (stat_res.info.type == PathType::DIR) {
+        out.rcm = ECM{EC::Success, ""};
+        return out;
+      }
+      out.rcm = {
+          EC::PathAlreadyExists,
+          AMStr::fmt("Path exists and is not a directory: {}", args.path)};
+      return out;
+    }
+    if (stat_res.rcm.first == EC::Terminate ||
+        stat_res.rcm.first == EC::OperationTimeout) {
+      out.rcm = stat_res.rcm;
+      return out;
+    }
+
+    trace(AMDomain::client::TraceLevel::Error, mkdir_rcm.first, args.path,
+          "mkdir", mkdir_rcm.second);
+    out.rcm = mkdir_rcm;
+    return out;
+  }
+
+  AMFSI::MkdirsResult
+  mkdirs(const AMFSI::MkdirsArgs &args,
+         const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::MkdirsResult out = {};
+    if (control.IsTimeout()) {
+      out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      return out;
+    }
+    if (control.IsInterrupted()) {
+      out.rcm = ECM{EC::Terminate, "Interrupted by user"};
+      return out;
+    }
+    if (args.path.empty()) {
+      out.rcm = ECM{EC::InvalidArg, "Invalid empty path"};
+      return out;
+    }
+
+    const auto parts = AMPathStr::split(args.path);
+    if (parts.empty()) {
+      out.rcm = ECM{EC::InvalidArg,
+                    AMStr::fmt("Path split failed for {}", args.path)};
+      return out;
+    }
+
+    std::string current_path = "";
+    for (const auto &part : parts) {
+      if (part.empty() || part == ".") {
+        continue;
+      }
+      if (part == "/") {
+        current_path = "/";
+        continue;
+      }
+      if (control.IsTimeout()) {
+        out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+        return out;
+      }
+      if (control.IsInterrupted()) {
+        out.rcm = ECM{EC::Terminate, "Interrupted by user"};
+        return out;
+      }
+
+      if (current_path.empty()) {
+        current_path = part;
+      } else {
+        current_path = AMPathStr::join(current_path, part);
+      }
+
+      // auto stat_res = stat(AMFSI::StatArgs{current_path, false}, control);
+      // if (stat_res.rcm.first == EC::Success) {
+      //   if (stat_res.info.type == PathType::DIR) {
+      //     continue;
+      //   }
+      //   out.rcm = ECM{
+      //       EC::PathAlreadyExists,
+      //       AMStr::fmt("Path exists and is not a directory: {}",
+      //       current_path)};
+      //   return out;
+      // }
+      // if (stat_res.rcm.first != EC::PathNotExist) {
+      //   out.rcm = stat_res.rcm;
+      //   return out;
+      // }
+
+      auto mk_res = mkdir(AMFSI::MkdirArgs{current_path}, control);
+      if (mk_res.rcm.first != EC::Success) {
+        out.rcm = mk_res.rcm;
+        return out;
+      }
+    }
+
     out.rcm = ECM{EC::Success, ""};
     return out;
   }
@@ -1880,7 +2069,7 @@ public:
       return out;
     }
     if (nb_res.value != CURLE_OK) {
-      out.rcm = {detail::GetFTPErrorCode(nb_res.value),
+      out.rcm = {detail::CastCurlEC(nb_res.value),
                  AMStr::fmt("rmdir {} failed: {}", args.path,
                             curl_easy_strerror(nb_res.value))};
       trace(AMDomain::client::TraceLevel::Error, out.rcm.first, args.path,
@@ -1940,7 +2129,7 @@ public:
       return out;
     }
     if (nb_res.value != CURLE_OK) {
-      out.rcm = {detail::GetFTPErrorCode(nb_res.value),
+      out.rcm = {detail::CastCurlEC(nb_res.value),
                  AMStr::fmt("rmfile {} failed: {}", args.path,
                             curl_easy_strerror(nb_res.value))};
       trace(AMDomain::client::TraceLevel::Error, out.rcm.first, args.path,
