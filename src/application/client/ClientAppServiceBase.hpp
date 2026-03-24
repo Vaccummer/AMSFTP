@@ -5,11 +5,9 @@
 #include <functional>
 #include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace AMApplication::client {
-using ECM = std::pair<ErrorCode, std::string>;
 using ClientServiceArg = AMDomain::client::ClientServiceArg;
 using amf = AMDomain::client::amf;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;
