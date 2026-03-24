@@ -5,6 +5,7 @@
   found in the "LICENSE" file at the root of this distribution.
 -----------------------------------------------------------------------------*/
 #include <inttypes.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h> // getenv
@@ -600,10 +601,39 @@ static bool term_write_direct(term_t *term, const char *s, ssize_t n) {
 
 // direct write to the console without further processing
 static bool term_write_console(term_t *term, const char *s, ssize_t n) {
+  if (s == NULL || n <= 0) {
+    return true;
+  }
+
+  // Prefer UTF-16 console writes when writing to an interactive console.
+  // This improves rendering for private-use glyphs (for example Nerd Font icons).
+  if (term->is_utf8 && n <= (ssize_t)INT_MAX) {
+    DWORD mode = 0;
+    if (GetConsoleMode(term->hcon, &mode)) {
+      const int slen = (int)n;
+      int wlen = MultiByteToWideChar(CP_UTF8, 0, s, slen, NULL, 0);
+      if (wlen > 0) {
+        WCHAR *wbuf =
+            (WCHAR *)HeapAlloc(GetProcessHeap(), 0, to_size_t(wlen) * sizeof(WCHAR));
+        if (wbuf != NULL) {
+          DWORD written_w = 0;
+          if (MultiByteToWideChar(CP_UTF8, 0, s, slen, wbuf, wlen) == wlen &&
+              WriteConsoleW(term->hcon, wbuf, (DWORD)wlen, &written_w, NULL) &&
+              written_w == (DWORD)wlen) {
+            HeapFree(GetProcessHeap(), 0, wbuf);
+            return true;
+          }
+          HeapFree(GetProcessHeap(), 0, wbuf);
+        }
+      }
+    }
+  }
+
+  // Fallback for redirected output or conversion failures.
   DWORD written;
   // WriteConsoleA(term->hcon, s, (DWORD)(to_size_t(n)), &written, NULL);
   WriteFile(term->hcon, s, (DWORD)(to_size_t(n)), &written,
-            NULL); // so it can be redirected
+             NULL); // so it can be redirected
   return (written == (DWORD)(to_size_t(n)));
 }
 
