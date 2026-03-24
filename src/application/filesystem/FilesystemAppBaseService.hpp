@@ -6,6 +6,7 @@
 #include <list>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace AMApplication::filesystem {
@@ -41,6 +42,8 @@ public:
 
   [[nodiscard]] ECMData<ClientHandle>
   GetClient(const std::string &nickname, const ClientControlComponent &control);
+  [[nodiscard]] ECMData<ClientHandle>
+  GetTransferClient(const std::string &nickname);
 
   ECM ResolvePath(ClientPath &path, const ClientControlComponent &control);
 
@@ -49,11 +52,60 @@ public:
                   bool error_stop = true);
 
 protected:
+  struct BaseIOCache {
+    struct KeyHash {
+      size_t operator()(const ClientPath &key) const noexcept;
+    };
+
+    struct KeyEq {
+      bool operator()(const ClientPath &lhs,
+                      const ClientPath &rhs) const noexcept;
+    };
+
+    using StatCacheMap =
+        std::unordered_map<ClientPath, ECMData<PathInfo>, KeyHash, KeyEq>;
+    using ListdirCacheMap =
+        std::unordered_map<ClientPath, ECMData<std::vector<PathInfo>>, KeyHash,
+                           KeyEq>;
+    using ListnamesCacheMap =
+        std::unordered_map<ClientPath, ECMData<std::vector<std::string>>,
+                           KeyHash, KeyEq>;
+
+    AMAtomic<StatCacheMap> stat_cache = {};
+    AMAtomic<ListdirCacheMap> listdir_cache = {};
+    AMAtomic<ListnamesCacheMap> listnames_cache = {};
+  };
+
+  [[nodiscard]] ECMData<PathInfo>
+  BaseStat(ClientHandle client, const std::string &nickname,
+           const std::string &abs_path, const ClientControlComponent &control);
+  [[nodiscard]] ECMData<std::vector<PathInfo>>
+  BaseListdir(ClientHandle client, const std::string &nickname,
+              const std::string &abs_path,
+              const ClientControlComponent &control);
+  [[nodiscard]] ECMData<std::vector<std::string>>
+  BaseListNames(ClientHandle client, const std::string &nickname,
+                const std::string &abs_path,
+                const ClientControlComponent &control);
+
+  void ClearBaseIOCache();
+  void ClearBaseIOCacheByNickname(const std::string &nickname);
+  void ClearBaseIOCacheByPath(const std::string &nickname,
+                              const std::string &abs_path);
+
   [[nodiscard]] AMAtomic<std::list<ClientPath>> &CdHistory();
   [[nodiscard]] const AMAtomic<std::list<ClientPath>> &CdHistory() const;
+
+  [[nodiscard]] ClientPath
+  BuildBaseCacheKey(ClientHandle client, const std::string &nickname,
+                    const std::string &abs_path) const;
+  [[nodiscard]] static std::vector<std::string>
+  BuildBaseListNames(const std::vector<PathInfo> &entries);
+
   mutable AMAtomic<FilesystemArg> init_arg_ = {};
   std::shared_ptr<HostAppService> host_service_ = nullptr;
   std::shared_ptr<ClientAppService> client_service_ = nullptr;
   AMAtomic<std::list<ClientPath>> cd_history_ = {};
+  BaseIOCache base_io_cache_ = {};
 };
 } // namespace AMApplication::filesystem
