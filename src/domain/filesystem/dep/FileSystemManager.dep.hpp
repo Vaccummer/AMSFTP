@@ -169,4 +169,3 @@ private:
   std::list<std::string> cd_history_;
 };
 } // namespace AMDomain::filesystem
-
