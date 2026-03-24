@@ -12,8 +12,6 @@ namespace AMInfra::client::maintainer {
 namespace {
 using ClientHandle = AMDomain::client::ClientHandle;
 using ClientName = AMDomain::client::ClientName;
-using ECM = AMDomain::client::ECM;
-using EC = AMDomain::client::EC;
 using DisconnectCallback = AMDomain::client::DisconnectCallback;
 
 [[nodiscard]] ClientName NormalizeClientName(const ClientName &name) {
@@ -48,10 +46,9 @@ SnapshotDisconnectCallback(AMAtomic<DisconnectCallback> &disconnect_cb) {
   if (!client) {
     return {EC::InvalidHandle, "Client handle is null"};
   }
-  return client
-      ->IOPort()
+  return client->IOPort()
       .Check({}, AMDomain::client::MakeClientControlComponent(
-                    nullptr, timeout_ms, AMTime::miliseconds()))
+                     nullptr, timeout_ms, AMTime::miliseconds()))
       .rcm;
 }
 } // namespace
@@ -77,7 +74,7 @@ ClientMaintainer::GetClient(const ClientName &name) {
   return it == clients->end() ? nullptr : it->second;
 }
 
-ClientMaintainer::ECM ClientMaintainer::CheckClient(const ClientName &name) {
+ECM ClientMaintainer::CheckClient(const ClientName &name) {
   const ClientName normalized = NormalizeClientName(name);
   auto client = GetClient(normalized);
   if (!client) {
