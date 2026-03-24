@@ -4,7 +4,6 @@
 #include "domain/filesystem/ClientIOPortInterfaceArgs.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/core/DataClass.hpp"
-#include "foundation/core/Enum.hpp"
 #include <any>
 #include <functional>
 #include <map>
@@ -32,8 +31,6 @@ using WRD =
     std::vector<std::pair<std::vector<std::string>, std::vector<PathInfo>>>;
 using amf = std::shared_ptr<IClientControlToken>;
 using timeoutf = std::shared_ptr<IClientTimeoutPort>;
-using EC = ErrorCode;
-using ECM = std::pair<ErrorCode, std::string>;
 using WER = std::vector<std::pair<std::string, ECM>>;
 using WRI = std::pair<std::vector<PathInfo>, WER>;
 using RemoveErrors = std::vector<std::pair<std::string, ECM>>;
@@ -58,6 +55,22 @@ timeoutf CreateClientTimeoutPort();
  */
 class IClientMetaDataPort {
 public:
+  struct LockGaurd {
+  private:
+    std::shared_mutex &mutex_;
+
+  public:
+    ~LockGaurd() { mutex_.unlock(); };
+    explicit LockGaurd(std::shared_mutex &mutex) : mutex_(mutex) {
+      mutex_.lock();
+    }
+    void Unlock() { mutex_.unlock(); }
+
+    void Relock() {
+      Unlock();
+      mutex_.lock();
+    }
+  };
   /**
    * @brief Virtual destructor for polymorphic use.
    */
@@ -67,6 +80,10 @@ public:
    * @brief Return metadata mutex for external lock coordination.
    */
   [[nodiscard]] virtual std::shared_mutex &Mutex() const = 0;
+
+  [[nodiscard]] virtual LockGaurd GetLockGaurd() const {
+    return LockGaurd(Mutex());
+  }
 
   /**
    * @brief Store one named runtime data blob.
@@ -115,11 +132,20 @@ public:
    */
   virtual bool EraseNamedData(const std::string &name) = 0;
 
+  virtual bool EraseTypedData(const std::type_index &type_key) = 0;
+
+  template <typename T> [[nodiscard]] bool EraseTypedData() {
+    using ValueT = std::decay_t<T>;
+    static_assert(!std::is_reference_v<ValueT>,
+                  "EraseTypedData expects value-like type");
+    return EraseTypedData(std::type_index(typeid(ValueT)));
+  }
+
   /**
    * @brief Store one typed runtime value.
    */
   template <typename T>
-  [[nodiscard]] bool StoreTypedValue(T &&value, bool overwrite = true) {
+  [[nodiscard]] bool StoreTypedValue(T value, bool overwrite = true) {
     using ValueT = std::decay_t<T>;
     static_assert(!std::is_reference_v<ValueT>,
                   "StoreTypedValue expects value-like type");
@@ -130,8 +156,9 @@ public:
   /**
    * @brief Query one typed runtime value.
    */
-  template <typename T> [[nodiscard]] T *QueryTypedValue(bool &type_exists) {
+  template <typename T> [[nodiscard]] T *QueryTypedValue() {
     using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    bool type_exists = false;
     std::any *payload =
         QueryTypedData(std::type_index(typeid(ValueT)), type_exists);
     if (!payload) {
@@ -143,9 +170,9 @@ public:
   /**
    * @brief Query one typed runtime value (const overload).
    */
-  template <typename T>
-  [[nodiscard]] const T *QueryTypedValue(bool &type_exists) const {
+  template <typename T> [[nodiscard]] const T *QueryTypedValue() const {
     using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    bool type_exists = false;
     const std::any *payload =
         QueryTypedData(std::type_index(typeid(ValueT)), type_exists);
     if (!payload) {
@@ -215,12 +242,14 @@ public:
   /**
    * @brief Return atomic state storage for advanced coordinated updates.
    */
-  [[nodiscard]] virtual AMAtomic<ClientState> &StateAtomic() = 0;
+  [[nodiscard]] virtual AMAtomic<AMDomain::filesystem::CheckResult> &
+  StateAtomic() = 0;
 
   /**
    * @brief Return atomic state storage for read-only coordinated access.
    */
-  [[nodiscard]] virtual const AMAtomic<ClientState> &StateAtomic() const = 0;
+  [[nodiscard]] virtual const AMAtomic<AMDomain::filesystem::CheckResult> &
+  StateAtomic() const = 0;
 
   /**
    * @brief Return protocol kind.
@@ -230,7 +259,7 @@ public:
   /**
    * @brief Return cached state from last check/connect action.
    */
-  [[nodiscard]] virtual ClientState GetState() const = 0;
+  [[nodiscard]] virtual AMDomain::filesystem::CheckResult GetState() const = 0;
 
   /**
    * @brief Return remote/local OS type.
@@ -255,7 +284,7 @@ public:
   /**
    * @brief Update cached state from last check/connect action.
    */
-  virtual void SetState(const ClientState &state) = 0;
+  virtual void SetState(const AMDomain::filesystem::CheckResult &state) = 0;
 
   /**
    * @brief Update remote/local OS type.
@@ -497,6 +526,13 @@ public:
         const ClientControlComponent &control = {}) = 0;
 
   /**
+   * @brief Create multi-level directories.
+   */
+  virtual AMDomain::filesystem::MkdirsResult
+  mkdirs(const AMDomain::filesystem::MkdirsArgs &args,
+         const ClientControlComponent &control = {}) = 0;
+
+  /**
    * @brief Remove one directory.
    */
   virtual AMDomain::filesystem::RMResult
@@ -525,9 +561,6 @@ public:
    * virtual AMDomain::filesystem::FindResult
    * find(const AMDomain::filesystem::FindArgs &args,
    *      const ClientControlComponent &control = {}) = 0;
-   * virtual ECM
-   * mkdirs(const AMDomain::filesystem::MkdirsArgs &args,
-   *        const ClientControlComponent &control = {}) = 0;
    * virtual AMDomain::filesystem::DeleteResult
    * remove(const AMDomain::filesystem::RemoveArgs &args,
    *        const ClientControlComponent &control = {}) = 0;
