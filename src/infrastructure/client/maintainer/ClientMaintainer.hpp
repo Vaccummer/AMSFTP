@@ -17,8 +17,6 @@ class ClientMaintainer final : public AMDomain::client::IClientMaintainerPort,
 public:
   using ClientHandle = AMDomain::client::ClientHandle;
   using ClientName = AMDomain::client::ClientName;
-  using ECM = AMDomain::client::ECM;
-  using EC = AMDomain::client::EC;
   using DisconnectCallback =
       std::function<void(const ClientHandle &, const ECM &)>;
 

@@ -2100,7 +2100,6 @@ public:
       return out;
     }
     if (stat_res.info.type != PathType::FILE) {
-
       out.rcm =
           ECM{EC::NotAFile, AMStr::fmt("Path is not a file: {}", args.path)};
       return out;

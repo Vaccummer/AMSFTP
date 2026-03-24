@@ -904,6 +904,37 @@ public:
     return out;
   }
 
+  AMFSI::MkdirsResult
+  mkdirs(const AMFSI::MkdirsArgs &args,
+         const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::MkdirsResult out = {};
+    if (args.path.empty()) {
+      out.rcm = {EC::InvalidArg, "Invalid empty path"};
+      return out;
+    }
+    if (control.IsInterrupted()) {
+      out.rcm = {EC::Terminate, "Interrupted by user"};
+      return out;
+    }
+    if (control.IsTimeout()) {
+      out.rcm = {EC::OperationTimeout, "Operation timed out"};
+      return out;
+    }
+
+    std::error_code ec;
+    fs::create_directories(fs::path(args.path), ec);
+    if (ec) {
+      out.rcm = {fec(ec),
+                 AMStr::fmt("mkdirs {} failed: {}", args.path, ec.message())};
+      trace(AMDomain::client::TraceLevel::Error, out.rcm.first, args.path,
+            "mkdirs", out.rcm.second);
+      return out;
+    }
+
+    out.rcm = {EC::Success, ""};
+    return out;
+  }
+
   AMFSI::RMResult
   rmdir(const AMFSI::RmdirArgs &args,
         const AMDomain::client::ClientControlComponent &control) override {
