@@ -1,29 +1,23 @@
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "application/filesystem/FilesystemAppBaseService.hpp"
+#include "domain/filesystem/FileSystemDomainService.hpp"
 #include "foundation/core/Path.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 
 #include <algorithm>
+#include <string>
 
 namespace AMApplication::filesystem {
 namespace {
 using ClientHandle = AMDomain::client::ClientHandle;
 using ClientMetaData = AMDomain::host::ClientMetaData;
 
-void HashCombine_(size_t &seed, size_t value) {
-  seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-}
-
 bool IsDrivePart_(const std::string &part) {
   return part.size() == 2 &&
          ((part[0] >= 'A' && part[0] <= 'Z') ||
           (part[0] >= 'a' && part[0] <= 'z')) &&
          part[1] == ':';
-}
-
-bool IsPathNotExistError_(ErrorCode ec) {
-  return ec == ErrorCode::PathNotExist || ec == ErrorCode::FileNotExist;
 }
 
 std::string ResolveWorkdir_(const ClientMetaData &metadata,
@@ -122,102 +116,6 @@ FilesystemAppService::FilesystemAppService(
     : FilesystemAppBaseService(arg, std::move(host_service),
                                std::move(client_service)) {}
 
-size_t FilesystemAppService::IOCache::KeyHash::operator()(
-    const ClientPath &key) const noexcept {
-  size_t seed = 0;
-  HashCombine_(seed, std::hash<std::string>{}(key.nickname));
-  HashCombine_(seed, std::hash<std::string>{}(key.path));
-  return seed;
-}
-
-bool FilesystemAppService::IOCache::KeyEq::operator()(
-    const ClientPath &lhs, const ClientPath &rhs) const noexcept {
-  return lhs.nickname == rhs.nickname && lhs.path == rhs.path;
-}
-
-ClientPath
-FilesystemAppService::BuildCacheKey(ClientHandle client,
-                                    const std::string &nickname,
-                                    const std::string &abs_path) const {
-  ClientPath key = {};
-  key.client = nullptr;
-  key.nickname = client ? AMStr::Strip(client->ConfigPort().GetNickname())
-                        : AMStr::Strip(nickname);
-  key.path = abs_path;
-  key.rcm = Ok();
-  return key;
-}
-
-void FilesystemAppService::InvalidateParentListCache(
-    ClientHandle client, const std::string &nickname,
-    const std::string &abs_path) {
-  const std::string parent = AMPathStr::dirname(abs_path);
-  if (parent.empty()) {
-    return;
-  }
-  const ClientPath parent_key = BuildCacheKey(client, nickname, parent);
-  {
-    auto listdir_guard = io_cache_.listdir_cache.lock();
-    listdir_guard.get().erase(parent_key);
-  }
-  {
-    auto listnames_guard = io_cache_.listnames_cache.lock();
-    listnames_guard.get().erase(parent_key);
-  }
-}
-
-void FilesystemAppService::InvalidateClientCache(ClientHandle client) {
-  if (!client) {
-    return;
-  }
-
-  const std::string target_nickname =
-      AMStr::Strip(client->ConfigPort().GetNickname());
-  {
-    auto stat_guard = io_cache_.stat_cache.lock();
-    auto &stat_cache = stat_guard.get();
-    for (auto it = stat_cache.begin(); it != stat_cache.end();) {
-      if (it->first.nickname == target_nickname) {
-        it = stat_cache.erase(it);
-      } else {
-        ++it;
-      }
-    }
-  }
-  {
-    auto listdir_guard = io_cache_.listdir_cache.lock();
-    auto &listdir_cache = listdir_guard.get();
-    for (auto it = listdir_cache.begin(); it != listdir_cache.end();) {
-      if (it->first.nickname == target_nickname) {
-        it = listdir_cache.erase(it);
-      } else {
-        ++it;
-      }
-    }
-  }
-  {
-    auto listnames_guard = io_cache_.listnames_cache.lock();
-    auto &listnames_cache = listnames_guard.get();
-    for (auto it = listnames_cache.begin(); it != listnames_cache.end();) {
-      if (it->first.nickname == target_nickname) {
-        it = listnames_cache.erase(it);
-      } else {
-        ++it;
-      }
-    }
-  }
-}
-
-std::vector<std::string>
-FilesystemAppService::BuildListNames(const std::vector<PathInfo> &entries) {
-  std::vector<std::string> names = {};
-  names.reserve(entries.size());
-  for (const auto &item : entries) {
-    names.push_back(item.name);
-  }
-  return names;
-}
-
 ECMData<ClientPath>
 FilesystemAppService::GetCwd(const ClientControlComponent &control) {
   ClientPath out = {};
@@ -271,13 +169,6 @@ ECM FilesystemAppService::ChangeDir(ClientPath path,
                AMStr::fmt("Not a directory: {}", abs_target));
   }
 
-  {
-    const ClientPath cache_key =
-        BuildCacheKey(client, path.nickname, abs_target);
-    auto stat_guard = io_cache_.stat_cache.lock();
-    stat_guard.get()[cache_key] = {stat_result.info, stat_result.rcm};
-  }
-
   meta_guard.Relock();
   metadata = client->MetaDataPort().QueryTypedValue<ClientMetaData>();
   if (!metadata) {
@@ -322,32 +213,12 @@ FilesystemAppService::Stat(std::vector<ClientPath> paths,
       item.rcm = Err(EC::InvalidHandle, "Resolved client is null");
     }
     if (entry.client && isok(item.rcm)) {
-      const std::string abs_path = entry.path;
-      item.target.path = abs_path;
-      const ClientPath cache_key =
-          BuildCacheKey(entry.client, entry.nickname, abs_path);
-      bool cache_hit = false;
-      {
-        auto stat_guard = io_cache_.stat_cache.lock();
-        auto &stat_cache = stat_guard.get();
-        auto cached = stat_cache.find(cache_key);
-        if (cached != stat_cache.end()) {
-          item.rcm = cached->second.rcm;
-          if (isok(item.rcm)) {
-            item.info = cached->second.data;
-          }
-          cache_hit = true;
-        }
-      }
-      if (!cache_hit) {
-        auto stat_result =
-            entry.client->IOPort().stat({abs_path, false}, control);
-        item.rcm = stat_result.rcm;
-        if (isok(item.rcm)) {
-          item.info = stat_result.info;
-          auto stat_guard = io_cache_.stat_cache.lock();
-          stat_guard.get()[cache_key] = {item.info, item.rcm};
-        }
+      item.target.path = entry.path;
+      auto stat_result =
+          BaseStat(entry.client, entry.nickname, entry.path, control);
+      item.rcm = stat_result.rcm;
+      if (isok(item.rcm)) {
+        item.info = stat_result.data;
       }
     }
     if (isok(first_error) && !isok(item.rcm)) {
@@ -369,44 +240,7 @@ FilesystemAppService::Listdir(ClientPath path,
                 ? Err(EC::InvalidHandle, "Resolved client is null")
                 : resolve_rcm};
   }
-
-  const std::string abs_path = path.path;
-  const ClientPath cache_key =
-      BuildCacheKey(path.client, path.nickname, abs_path);
-  {
-    auto listdir_guard = io_cache_.listdir_cache.lock();
-    auto &listdir_cache = listdir_guard.get();
-    auto cached = listdir_cache.find(cache_key);
-    if (cached != listdir_cache.end()) {
-      return {cached->second.data, cached->second.rcm};
-    }
-  }
-
-  auto list_result = path.client->IOPort().listdir({abs_path}, control);
-  if (isok(list_result.rcm)) {
-    const std::vector<std::string> names = BuildListNames(list_result.entries);
-    {
-      auto listdir_guard = io_cache_.listdir_cache.lock();
-      listdir_guard.get()[cache_key] = {list_result.entries, list_result.rcm};
-    }
-    {
-      auto listnames_guard = io_cache_.listnames_cache.lock();
-      listnames_guard.get()[cache_key] = {names, Ok()};
-    }
-    {
-      auto stat_guard = io_cache_.stat_cache.lock();
-      auto &stat_cache = stat_guard.get();
-      for (const auto &item : list_result.entries) {
-        if (item.path.empty()) {
-          continue;
-        }
-        const ClientPath child_key =
-            BuildCacheKey(path.client, path.nickname, item.path);
-        stat_cache[child_key] = {item, Ok()};
-      }
-    }
-  }
-  return {std::move(list_result.entries), list_result.rcm};
+  return BaseListdir(path.client, path.nickname, path.path, control);
 }
 
 ECMData<std::vector<std::string>>
@@ -419,45 +253,7 @@ FilesystemAppService::ListNames(ClientPath path,
                 ? Err(EC::InvalidHandle, "Resolved client is null")
                 : resolve_rcm};
   }
-
-  const std::string abs_path = path.path;
-  const ClientPath cache_key =
-      BuildCacheKey(path.client, path.nickname, abs_path);
-  {
-    auto listnames_guard = io_cache_.listnames_cache.lock();
-    auto &listnames_cache = listnames_guard.get();
-    auto cached = listnames_cache.find(cache_key);
-    if (cached != listnames_cache.end()) {
-      return {cached->second.data, cached->second.rcm};
-    }
-  }
-
-  bool has_listdir_cached = false;
-  std::vector<std::string> listdir_names = {};
-  {
-    auto listdir_guard = io_cache_.listdir_cache.lock();
-    auto &listdir_cache = listdir_guard.get();
-    auto list_cached = listdir_cache.find(cache_key);
-    if (list_cached != listdir_cache.end()) {
-      if (!isok(list_cached->second.rcm)) {
-        return {{}, list_cached->second.rcm};
-      }
-      listdir_names = BuildListNames(list_cached->second.data);
-      has_listdir_cached = true;
-    }
-  }
-  if (has_listdir_cached) {
-    auto listnames_guard = io_cache_.listnames_cache.lock();
-    listnames_guard.get()[cache_key] = {listdir_names, Ok()};
-    return {std::move(listdir_names), Ok()};
-  }
-
-  auto list_result = path.client->IOPort().listnames({abs_path}, control);
-  if (isok(list_result.rcm)) {
-    auto listnames_guard = io_cache_.listnames_cache.lock();
-    listnames_guard.get()[cache_key] = {list_result.names, list_result.rcm};
-  }
-  return {std::move(list_result.names), list_result.rcm};
+  return BaseListNames(path.client, path.nickname, path.path, control);
 }
 
 ECM FilesystemAppService::Mkdirs(ClientPath path,
@@ -475,40 +271,17 @@ ECM FilesystemAppService::Mkdirs(ClientPath path,
   }
   const std::vector<std::string> targets = AMPathStr::split(path.path);
 
-  const std::string nickname = path.nickname;
   for (const auto &target : targets) {
-    const ClientPath cache_key = BuildCacheKey(client, nickname, target);
-
-    bool cache_hit = false;
-    {
-      auto stat_guard = io_cache_.stat_cache.lock();
-      auto &stat_cache = stat_guard.get();
-      auto cached = stat_cache.find(cache_key);
-      if (cached != stat_cache.end()) {
-        if (isok(cached->second.rcm)) {
-          cache_hit = true;
-        }
-        if (cache_hit && cached->second.data.type != PathType::DIR) {
-          return Err(EC::NotADirectory,
-                     AMStr::fmt("Not a directory: {}", target));
-        }
-      }
-    }
-    if (cache_hit) {
-      continue;
-    }
-
     auto stat_result = client->IOPort().stat({target, false}, control);
     if (isok(stat_result.rcm)) {
       if (stat_result.info.type != PathType::DIR) {
         return Err(EC::NotADirectory,
                    AMStr::fmt("Not a directory: {}", target));
       }
-      auto stat_guard = io_cache_.stat_cache.lock();
-      stat_guard.get()[cache_key] = {stat_result.info, stat_result.rcm};
       continue;
     }
-    if (!IsPathNotExistError_(stat_result.rcm.first)) {
+    if (!AMDomain::filesystem::services::IsPathNotExistError(
+            stat_result.rcm.first)) {
       return stat_result.rcm;
     }
 
@@ -516,20 +289,6 @@ ECM FilesystemAppService::Mkdirs(ClientPath path,
     if (!isok(mkdir_result.rcm)) {
       return mkdir_result.rcm;
     }
-
-    {
-      auto stat_guard = io_cache_.stat_cache.lock();
-      stat_guard.get().erase(cache_key);
-    }
-    {
-      auto listdir_guard = io_cache_.listdir_cache.lock();
-      listdir_guard.get().erase(cache_key);
-    }
-    {
-      auto listnames_guard = io_cache_.listnames_cache.lock();
-      listnames_guard.get().erase(cache_key);
-    }
-    InvalidateParentListCache(client, nickname, target);
   }
   return Ok();
 }
@@ -617,7 +376,8 @@ RunResult FilesystemAppService::ShellRun(
   ClientMetaData metadata = {};
   {
     auto meta_guard = client->MetaDataPort().GetLockGaurd();
-    auto *metadata_ptr = client->MetaDataPort().QueryTypedValue<ClientMetaData>();
+    auto *metadata_ptr =
+        client->MetaDataPort().QueryTypedValue<ClientMetaData>();
     if (!metadata_ptr) {
       out.rcm = Err(EC::CommonFailure, "Client metadata not found");
       return out;
@@ -637,4 +397,5 @@ RunResult FilesystemAppService::ShellRun(
   out = client->IOPort().ConductCmd({final_cmd, {}}, control);
   return out;
 }
+
 } // namespace AMApplication::filesystem

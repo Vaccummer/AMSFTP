@@ -1,20 +1,54 @@
 #pragma once
 #include "application/filesystem/FilesystemAppBaseService.hpp"
-
 #include "domain/filesystem/ClientIOPortInterfaceArgs.hpp"
-
+#include "domain/transfer/TransferDomainModel.hpp"
 #include <functional>
-#include <unordered_map>
+#include <map>
 
 namespace AMApplication::filesystem {
 using ClientPath = AMDomain::filesystem::ClientPath;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using FilesystemArg = AMDomain::filesystem::FilesystemArg;
 using RunResult = AMDomain::filesystem::RunResult;
+using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
+using TASKS = std::vector<AMDomain::transfer::TransferTask>;
 struct PathStatItem {
   ClientPath target = {};
   ECM rcm = {EC::Success, ""};
   PathInfo info = {};
+};
+
+struct TransferPath {
+  ClientPath target = {};
+  ClientHandle client = nullptr;
+  std::vector<PathInfo> raw_paths = {};
+  std::vector<PathInfo> paths = {};
+  ECM rcm = {EC::Success, ""};
+};
+
+struct SourceResolveResult {
+  std::map<std::string, TransferPath> data = {};
+  std::map<std::string, ClientPath> error_data = {};
+  ECM rcm = {EC::Success, ""};
+};
+
+struct BuildTransferTaskOptions {
+  bool clone = false;
+  bool mkdir = true;
+  bool ignore_special_file = true;
+  bool resume = false;
+};
+
+struct BuildTransferTaskResult {
+  struct WarningItem {
+    std::string src = {};
+    std::string dst = {};
+    ECM rcm = {EC::Success, ""};
+  };
+
+  TASKS dir_tasks = {};
+  TASKS file_tasks = {};
+  std::vector<WarningItem> warnings = {};
 };
 
 class FilesystemAppService final : public FilesystemAppBaseService {
@@ -49,41 +83,16 @@ public:
        std::function<void(const ClientPath &)> on_enter_dir = {},
        std::function<void(const ClientPath &, ECM)> on_error = {});
 
-private:
-  struct IOCache {
-    struct KeyHash {
-      size_t operator()(const ClientPath &key) const noexcept;
-    };
+  [[nodiscard]] ECMData<TransferPath>
+  ResolveTransferDst(ClientPath dst, const ClientControlComponent &control);
 
-    struct KeyEq {
-      bool operator()(const ClientPath &lhs,
-                      const ClientPath &rhs) const noexcept;
-    };
+  [[nodiscard]] ECMData<SourceResolveResult> ResolveTransferSrc(
+      std::vector<ClientPath> srcs, TransferClientContainer *clients,
+      const ClientControlComponent &control, bool error_stop = true);
 
-    using StatCacheMap =
-        std::unordered_map<ClientPath, ECMData<PathInfo>, KeyHash, KeyEq>;
-    using ListdirCacheMap =
-        std::unordered_map<ClientPath, ECMData<std::vector<PathInfo>>, KeyHash,
-                           KeyEq>;
-    using ListnamesCacheMap =
-        std::unordered_map<ClientPath, ECMData<std::vector<std::string>>,
-                           KeyHash, KeyEq>;
-
-    AMAtomic<StatCacheMap> stat_cache = {};
-    AMAtomic<ListdirCacheMap> listdir_cache = {};
-    AMAtomic<ListnamesCacheMap> listnames_cache = {};
-  };
-
-  [[nodiscard]] ClientPath BuildCacheKey(ClientHandle client,
-                                         const std::string &nickname,
-                                         const std::string &abs_path) const;
-  void InvalidateParentListCache(ClientHandle client,
-                                 const std::string &nickname,
-                                 const std::string &abs_path);
-  void InvalidateClientCache(ClientHandle client);
-  [[nodiscard]] static std::vector<std::string>
-  BuildListNames(const std::vector<PathInfo> &entries);
-
-  IOCache io_cache_ = {};
+  [[nodiscard]] ECMData<BuildTransferTaskResult>
+  BuildTransferTasks(const SourceResolveResult &src, const TransferPath &dst,
+                     const ClientControlComponent &control,
+                     const BuildTransferTaskOptions &opt);
 };
 } // namespace AMApplication::filesystem
