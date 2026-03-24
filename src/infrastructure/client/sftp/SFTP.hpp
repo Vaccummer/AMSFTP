@@ -1791,9 +1791,10 @@ private:
 #endif
       sock = INVALID_SOCKET;
     }
-    state_atomic_.lock().store(
-        {{EC::NoConnection, "Connection not established"},
-         AMDomain::client::ClientStatus::NoConnection});
+    AMDomain::filesystem::CheckResult res;
+    res.rcm = {EC::NoConnection, "Connection closed"};
+    res.status = AMDomain::client::ClientStatus::NoConnection;
+    state_atomic_.lock().store(res);
   }
 
 public:
@@ -2543,47 +2544,6 @@ protected:
     return {rcm, path_t};
   }
 
-  ECM MkdirsCore_(const std::string &path,
-                  const AMDomain::client::ClientControlComponent &control) {
-    if (path.empty()) {
-      return {EC::Success, ""};
-    }
-    std::vector<std::string> parts = AMPathStr::split(path);
-    if (parts.empty()) {
-      return {EC::InvalidArg,
-              AMStr::fmt("Path split failed, get empty parts: {}", path)};
-    }
-    if (parts.size() == 1) {
-      return mkdir(AMFSI::MkdirArgs{path}, control).rcm;
-    }
-
-    std::string current_path = parts.front();
-    for (size_t i = 1; i < parts.size(); i++) {
-      if (control.IsInterrupted()) {
-        return {EC::Terminate, "Interrupted by user"};
-      }
-      if (control.IsTimeout()) {
-        return {EC::OperationTimeout, "Operation timed out"};
-      }
-      current_path = AMPathStr::join(current_path, parts[i], SepType::Unix);
-      auto stat_res = stat(AMFSI::StatArgs{current_path, false}, control);
-      if (stat_res.rcm.first == EC::Success) {
-        if (stat_res.info.type == PathType::DIR) {
-          continue;
-        }
-        return {
-            EC::PathAlreadyExists,
-            AMStr::fmt("Path exists and is not a directory: {}", current_path)};
-      }
-
-      auto mk_res = mkdir(AMFSI::MkdirArgs{current_path}, control);
-      if (mk_res.rcm.first != EC::Success) {
-        return mk_res.rcm;
-      }
-    }
-    return {EC::Success, ""};
-  }
-
 public:
   AMSFTPIOCore(AMDomain::client::IClientConfigPort *config_port,
                AMDomain::client::IClientControlToken *control_port,
@@ -2601,9 +2561,6 @@ public:
 #endif
     auto req = request_atomic_.lock();
     req->protocol = ClientProtocol::SFTP;
-    if (req->trash_dir.empty()) {
-      req->trash_dir = ".AMSFTP_Trash";
-    }
   }
 
   AMFSI::UpdateOSTypeResult UpdateOSType(
@@ -3012,6 +2969,30 @@ public:
       return out;
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
+    if (!sftp) {
+      out.rcm = {EC::NoConnection, "SFTP not initialized"};
+      return out;
+    }
+    auto nb_res = nb_call(control, [&] {
+      return libssh2_sftp_mkdir_ex(sftp, args.path.c_str(), args.path.size(),
+                                   0740);
+    });
+    if (nb_res.ok() && nb_res.value >= 0) {
+      out.rcm = {EC::Success, ""};
+      return out;
+    }
+    if (nb_res.is_timeout() || nb_res.is_interrupted() || nb_res.is_error()) {
+      out.rcm = ErrorRecord(nb_res, TraceLevel::Error, args.path,
+                            "libssh2_sftp_mkdir_ex",
+                            "Create directory \"{target}\" failed: {error}");
+      return out;
+    }
+    const EC mkdir_ec = GetLastEC();
+    const std::string mkdir_errmsg = GetLastErrorMsg();
+    const ECM mkdir_rcm = {mkdir_ec,
+                           AMStr::fmt("Create directory \"{}\" failed: {}",
+                                      args.path, mkdir_errmsg)};
+
     auto stat_res = stat(AMFSI::StatArgs{args.path, false}, control);
     if (stat_res.rcm.first == EC::Success) {
       if (stat_res.info.type == PathType::DIR) {
@@ -3021,19 +3002,76 @@ public:
       out.rcm = {
           EC::PathAlreadyExists,
           AMStr::fmt("Path exists and is not a directory: {}", args.path)};
+      trace(TraceLevel::Error, out.rcm.first, args.path,
+            "libssh2_sftp_mkdir_ex", out.rcm.second);
       return out;
     }
-    if (!sftp) {
-      out.rcm = {EC::NoConnection, "SFTP not initialized"};
+    if (stat_res.rcm.first == EC::Terminate ||
+        stat_res.rcm.first == EC::OperationTimeout) {
+      out.rcm = stat_res.rcm;
+      trace(TraceLevel::Error, out.rcm.first, args.path,
+            "libssh2_sftp_mkdir_ex", out.rcm.second);
       return out;
     }
-    auto nb_res = nb_call(control, [&] {
-      return libssh2_sftp_mkdir_ex(sftp, args.path.c_str(), args.path.size(),
-                                   0740);
-    });
-    out.rcm = ErrorRecord(nb_res, TraceLevel::Error, args.path,
-                          "libssh2_sftp_mkdir_ex",
-                          "Create directory \"{target}\" failed: {error}");
+
+    trace(TraceLevel::Error, mkdir_rcm.first, args.path,
+          "libssh2_sftp_mkdir_ex", mkdir_rcm.second);
+    out.rcm = mkdir_rcm;
+    return out;
+  }
+
+  AMFSI::MkdirsResult
+  mkdirs(const AMFSI::MkdirsArgs &args,
+         const AMDomain::client::ClientControlComponent &control) override {
+    AMFSI::MkdirsResult out = {};
+    if (control.IsTimeout()) {
+      out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      return out;
+    }
+    ECM rcm = _precheck(args.path, control);
+    if (rcm.first != EC::Success) {
+      out.rcm = rcm;
+      return out;
+    }
+    std::vector<std::string> parts = AMPathStr::split(args.path);
+    if (parts.empty()) {
+      out.rcm =
+          ECM{EC::InvalidArg,
+              AMStr::fmt("Path split failed, get empty parts: {}", args.path)};
+      return out;
+    }
+
+    std::string current_path = "";
+    for (const auto &part : parts) {
+      if (part.empty() || part == ".") {
+        continue;
+      }
+      if (part == "/") {
+        current_path = "/";
+        continue;
+      }
+      if (control.IsInterrupted()) {
+        out.rcm = ECM{EC::Terminate, "Interrupted by user"};
+        return out;
+      }
+      if (control.IsTimeout()) {
+        out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+        return out;
+      }
+
+      if (current_path.empty()) {
+        current_path = part;
+      } else {
+        current_path = AMPathStr::join(current_path, part, SepType::Unix);
+      }
+
+      auto mk_res = mkdir(AMFSI::MkdirArgs{current_path}, control);
+      if (mk_res.rcm.first != EC::Success) {
+        out.rcm = mk_res.rcm;
+        return out;
+      }
+    }
+    out.rcm = ECM{EC::Success, ""};
     return out;
   }
 
@@ -3110,9 +3148,10 @@ public:
     }
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (args.mkdir) {
-      rcm0 = MkdirsCore_(AMPathStr::dirname(args.dst), control);
-      if (rcm0.first != EC::Success) {
-        out.rcm = rcm0;
+      auto mk_res =
+          mkdirs(AMFSI::MkdirsArgs{AMPathStr::dirname(args.dst)}, control);
+      if (mk_res.rcm.first != EC::Success) {
+        out.rcm = mk_res.rcm;
         return out;
       }
     }
