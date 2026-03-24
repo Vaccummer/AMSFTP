@@ -52,7 +52,7 @@ public:
   [[nodiscard]] std::map<std::string, ClientHandle> GetClients() const;
   ECM RemoveClient(const std::string &nickname);
 
-  std::pair<ECM, ClientHandle> GetPublicClient(const std::string &nickname);
+  ECMData<ClientHandle> GetPublicClient(const std::string &nickname);
   ECM AddPublicClient(const ClientHandle &client);
 
   [[nodiscard]] std::shared_ptr<

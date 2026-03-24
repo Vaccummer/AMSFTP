@@ -29,7 +29,7 @@ ECM ClientAppService::Init(ClientHandle local_client) {
                                              public_callbacks.disconnect, {});
   if (local_client) {
     ECM add_local_rcm = AddClient(local_client, true);
-    if (!isok(add_local_rcm)) {
+    if (!add_local_rcm) {
       return add_local_rcm;
     }
     return {EC::Success, ""};
@@ -38,6 +38,9 @@ ECM ClientAppService::Init(ClientHandle local_client) {
 }
 
 ClientHandle ClientAppService::GetClient(const std::string &nickname) const {
+  if (IsLocalNickname(nickname)) {
+    return GetLocalClient();
+  }
   if (!maintainer_) {
     return nullptr;
   }
@@ -181,20 +184,18 @@ ECM ClientAppService::RemoveClient(const std::string &nickname) {
   return {EC::Success, ""};
 }
 
-std::pair<ECM, ClientHandle>
+ECMData<ClientHandle>
 ClientAppService::GetPublicClient(const std::string &nickname) {
-  const std::string key = nickname;
-
   while (true) {
     ClientID candidate_id;
     ClientHandle candidate = nullptr;
     {
       auto public_clients = public_clients_.lock();
-      auto bucket_it = public_clients->find(key);
+      auto bucket_it = public_clients->find(nickname);
       if (bucket_it == public_clients->end() || bucket_it->second.empty()) {
-        return {{EC::ClientNotFound,
-                 AMStr::fmt("No public client found for {}", key)},
-                nullptr};
+        return {nullptr,
+                {EC::ClientNotFound,
+                 AMStr::fmt("No public client found for {}", nickname)}};
       }
       auto it = bucket_it->second.begin();
       candidate_id = it->first;
@@ -203,7 +204,7 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
 
     if (!candidate) {
       auto public_clients = public_clients_.lock();
-      auto bucket_it = public_clients->find(key);
+      auto bucket_it = public_clients->find(nickname);
       if (bucket_it != public_clients->end()) {
         bucket_it->second.erase(candidate_id);
         if (bucket_it->second.empty()) {
@@ -213,14 +214,13 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
       continue;
     }
 
-    auto state =
-        CheckClientInternal_(candidate, false, true, GetControlComponent());
+    auto state = candidate->ConfigPort().GetState();
     if (state.status == ClientStatus::OK && isok(state.rcm)) {
-      return {state.rcm, candidate};
+      return {candidate, state.rcm};
     }
 
     auto public_clients = public_clients_.lock();
-    auto bucket_it = public_clients->find(key);
+    auto bucket_it = public_clients->find(nickname);
     if (bucket_it != public_clients->end()) {
       bucket_it->second.erase(candidate_id);
       if (bucket_it->second.empty()) {
