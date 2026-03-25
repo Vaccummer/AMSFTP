@@ -72,6 +72,12 @@ bool ic_profile_use(ic_profile_t* profile);
 /// Get the current active profile (lazily creates the default profile if needed).
 ic_profile_t* ic_profile_current(void);
 ///
+/// Set a human-readable profile name (copied internally, may be truncated).
+void ic_profile_set_name(ic_profile_t* profile, const char* name);
+///
+/// Get profile name (never NULL for valid profiles; empty string if unnamed).
+const char* ic_profile_get_name(const ic_profile_t* profile);
+///
 /// \}
 
 
