@@ -346,12 +346,20 @@ static bool prim_add_completion(ic_env_t *env, void *funenv,
                          delete_before, delete_after);
 }
 
+ic_public bool ic_set_default_completer_p(ic_profile_t* profile,
+                                          ic_completer_fun_t *completer,
+                                          void *arg) {
+  ic_env_t *env = ic_get_env_for_profile(profile);
+  if (env == NULL) {
+    return false;
+  }
+  completions_set_completer(env->completions, completer, arg);
+  return true;
+}
+
 ic_public void ic_set_default_completer(ic_completer_fun_t *completer,
                                         void *arg) {
-  ic_env_t *env = ic_get_env();
-  if (env == NULL)
-    return;
-  completions_set_completer(env->completions, completer, arg);
+  (void)ic_set_default_completer_p(ic_profile_current(), completer, arg);
 }
 
 ic_private ssize_t completions_generate(struct ic_env_s *env,

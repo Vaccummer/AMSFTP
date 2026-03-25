@@ -72,6 +72,7 @@ ic_private char*        ic_editline(ic_env_t* env, const char* prompt_text,
                                     const char* initial_text);
 
 ic_private ic_env_t*    ic_get_env(void);
+ic_private ic_env_t*    ic_get_env_for_profile(ic_profile_t* profile);
 ic_private const char*  ic_env_get_auto_braces(ic_env_t* env);
 ic_private const char*  ic_env_get_match_braces(ic_env_t* env);
 ic_private bool         ic_env_async_print_push(ic_env_t* env, const char* s);
