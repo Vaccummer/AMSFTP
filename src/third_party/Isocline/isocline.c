@@ -950,6 +950,23 @@ ic_public void ic_set_default_highlighter_p(ic_profile_t *profile,
   env->highlighter_arg = arg;
 }
 
+ic_public bool ic_get_default_highlighter_p(ic_profile_t *profile,
+                                            ic_highlight_fun_t **highlighter,
+                                            void **arg) {
+  if (highlighter != NULL)
+    *highlighter = NULL;
+  if (arg != NULL)
+    *arg = NULL;
+  ic_env_t *env = ic_get_env_for_profile(profile);
+  if (env == NULL)
+    return false;
+  if (highlighter != NULL)
+    *highlighter = env->highlighter;
+  if (arg != NULL)
+    *arg = env->highlighter_arg;
+  return true;
+}
+
 ic_public void ic_set_default_highlighter(ic_highlight_fun_t *highlighter,
                                           void *arg) {
   ic_set_default_highlighter_p(ic_profile_current(), highlighter, arg);
