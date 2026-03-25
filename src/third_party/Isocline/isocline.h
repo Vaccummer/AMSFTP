@@ -782,8 +782,12 @@ void ic_history_add_p(ic_profile_t *profile, const char *entry);
 
 bool ic_set_default_completer_p(ic_profile_t *profile,
                                 ic_completer_fun_t *completer, void *arg);
+bool ic_get_default_completer_p(ic_profile_t *profile,
+                                ic_completer_fun_t **completer, void **arg);
 void ic_set_default_highlighter_p(ic_profile_t *profile,
                                   ic_highlight_fun_t *highlighter, void *arg);
+bool ic_get_default_highlighter_p(ic_profile_t *profile,
+                                  ic_highlight_fun_t **highlighter, void **arg);
 
 void ic_set_prompt_marker_p(ic_profile_t *profile, const char *prompt_marker,
                             const char *continuation_prompt_marker);

@@ -357,6 +357,23 @@ ic_public bool ic_set_default_completer_p(ic_profile_t* profile,
   return true;
 }
 
+ic_public bool ic_get_default_completer_p(ic_profile_t *profile,
+                                          ic_completer_fun_t **completer,
+                                          void **arg) {
+  if (completer != NULL) {
+    *completer = NULL;
+  }
+  if (arg != NULL) {
+    *arg = NULL;
+  }
+  ic_env_t *env = ic_get_env_for_profile(profile);
+  if (env == NULL || env->completions == NULL) {
+    return false;
+  }
+  completions_get_completer(env->completions, completer, arg);
+  return true;
+}
+
 ic_public void ic_set_default_completer(ic_completer_fun_t *completer,
                                         void *arg) {
   (void)ic_set_default_completer_p(ic_profile_current(), completer, arg);
