@@ -59,6 +59,7 @@
 /** Runtime profile that owns one independent Isocline environment. */
 struct ic_profile_s {
   ic_env_t* env;
+  char name[128];
   struct ic_profile_s* next;
 };
 
@@ -68,6 +69,7 @@ static ic_profile_t* ic_profiles = NULL;
 static ic_profile_t* ic_current_profile = NULL;
 /** Lazily created default runtime profile. */
 static ic_profile_t* ic_default_profile = NULL;
+static long ic_profile_seq = 0;
 /** Ensure atexit registration happens once. */
 static bool ic_atexit_registered = false;
 /** Optional custom allocation callbacks used for new profiles. */
@@ -829,6 +831,7 @@ static ic_profile_t* ic_profile_create_internal_(ic_malloc_fun_t* _malloc,
                                                  ic_free_fun_t* _free);
 static bool ic_profile_contains_(const ic_profile_t* profile);
 static bool ic_profile_unregister_(ic_profile_t* profile);
+static void ic_profile_set_name_internal_(ic_profile_t* profile, const char* name);
 
 static void ic_env_free(ic_env_t* env) {
   if (env == NULL) return;
@@ -953,8 +956,22 @@ static ic_profile_t* ic_profile_create_internal_(ic_malloc_fun_t* _malloc,
     return NULL;
   }
   profile->env = env;
+  profile->name[0] = 0;
   profile->next = NULL;
   return profile;
+}
+
+static void ic_profile_set_name_internal_(ic_profile_t* profile, const char* name) {
+  if (profile == NULL) {
+    return;
+  }
+  if (name == NULL) {
+    name = "";
+  }
+  if (!ic_strncpy(profile->name, (ssize_t)(sizeof(profile->name)), name,
+                  (ssize_t)(sizeof(profile->name) - 1))) {
+    profile->name[sizeof(profile->name) - 1] = 0;
+  }
 }
 
 /**
@@ -1017,6 +1034,7 @@ static void ic_ensure_default_profile_(void) {
   ic_profiles = profile;
   ic_default_profile = profile;
   ic_current_profile = profile;
+  ic_profile_set_name_internal_(profile, "default");
   ic_register_atexit_();
 }
 
@@ -1048,8 +1066,15 @@ ic_public ic_profile_t* ic_profile_new(void) {
 
   profile->next = ic_profiles;
   ic_profiles = profile;
+  {
+    char pname[64];
+    ic_profile_seq++;
+    snprintf(pname, sizeof(pname), "profile-%ld", ic_profile_seq);
+    ic_profile_set_name_internal_(profile, pname);
+  }
   if (ic_default_profile == NULL) {
     ic_default_profile = profile;
+    ic_profile_set_name_internal_(profile, "default");
   }
   if (ic_current_profile == NULL) {
     ic_current_profile = profile;
@@ -1112,6 +1137,23 @@ ic_public bool ic_profile_use(ic_profile_t* profile) {
 ic_public ic_profile_t* ic_profile_current(void) {
   ic_ensure_default_profile_();
   return ic_current_profile;
+}
+
+ic_public void ic_profile_set_name(ic_profile_t* profile, const char* name) {
+  if (profile == NULL) {
+    return;
+  }
+  if (!ic_profile_contains_(profile)) {
+    return;
+  }
+  ic_profile_set_name_internal_(profile, name);
+}
+
+ic_public const char* ic_profile_get_name(const ic_profile_t* profile) {
+  if (profile == NULL) {
+    return "";
+  }
+  return profile->name;
 }
 
 /**
