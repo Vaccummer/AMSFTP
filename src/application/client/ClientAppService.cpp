@@ -10,9 +10,106 @@ namespace {
 using ClientStatus = AMDomain::client::ClientStatus;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using HostConfig = AMDomain::host::HostConfig;
+using HostConfigManager = AMApplication::host::AMHostAppService;
 using AMDomain::host::HostService::IsLocalNickname;
 
+std::string JoinCandidates_(const std::vector<std::string> &candidates) {
+  std::string out = {};
+  for (size_t i = 0; i < candidates.size(); ++i) {
+    if (i > 0) {
+      out += ", ";
+    }
+    out += candidates[i];
+  }
+  return out;
+}
+
+ECMData<HostConfig>
+ResolveHostConfig_(HostConfigManager *host_config_manager,
+                   const std::string &nickname, bool case_sensitive) {
+  if (!host_config_manager) {
+    return {HostConfig{},
+            Err(EC::InvalidHandle, "Host config manager is not bound")};
+  }
+
+  auto [cfg_rcm, cfg] = host_config_manager->GetClientConfig(nickname);
+  if (isok(cfg_rcm) || case_sensitive) {
+    return {cfg, cfg_rcm};
+  }
+
+  const std::string lowered = AMStr::lowercase(AMStr::Strip(nickname));
+  std::vector<std::string> matched_names = {};
+  for (const auto &name : host_config_manager->ListNames()) {
+    if (AMStr::lowercase(AMStr::Strip(name)) == lowered) {
+      matched_names.push_back(name);
+    }
+  }
+  if (matched_names.empty()) {
+    return {HostConfig{},
+            Err(EC::ClientNotFound,
+                AMStr::fmt("Host config not found: {}", nickname))};
+  }
+  if (matched_names.size() > 1) {
+    return {HostConfig{},
+            Err(EC::ClientNotFound,
+                AMStr::fmt("Ambiguous host config nickname [{}], candidates: {}",
+                           nickname, JoinCandidates_(matched_names)))};
+  }
+  auto [matched_rcm, matched_cfg] =
+      host_config_manager->GetClientConfig(matched_names.front());
+  return {matched_cfg, matched_rcm};
+}
 } // namespace
+
+ClientAppService::ScopedConnectHooksGuard::ScopedConnectHooksGuard(
+    ClientAppService *service, ConnectHooks hooks)
+    : service_(service), previous_hooks_({}), active_(false) {
+  if (!service_) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(service_->connect_hooks_mutex_);
+  previous_hooks_ = service_->connect_hooks_;
+  service_->connect_hooks_ = std::move(hooks);
+  active_ = true;
+}
+
+ClientAppService::ScopedConnectHooksGuard::ScopedConnectHooksGuard(
+    ScopedConnectHooksGuard &&other) noexcept
+    : service_(other.service_),
+      previous_hooks_(std::move(other.previous_hooks_)),
+      active_(other.active_) {
+  other.service_ = nullptr;
+  other.active_ = false;
+}
+
+ClientAppService::ScopedConnectHooksGuard &
+ClientAppService::ScopedConnectHooksGuard::operator=(
+    ScopedConnectHooksGuard &&other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+  reset();
+  service_ = other.service_;
+  previous_hooks_ = std::move(other.previous_hooks_);
+  active_ = other.active_;
+  other.service_ = nullptr;
+  other.active_ = false;
+  return *this;
+}
+
+ClientAppService::ScopedConnectHooksGuard::~ScopedConnectHooksGuard() {
+  reset();
+}
+
+void ClientAppService::ScopedConnectHooksGuard::reset() {
+  if (!active_ || !service_) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(service_->connect_hooks_mutex_);
+  service_->connect_hooks_ = previous_hooks_;
+  active_ = false;
+  service_ = nullptr;
+}
 
 ClientAppService::ClientAppService() : ClientAppService(ClientServiceArg{}) {}
 
@@ -37,14 +134,46 @@ ECM ClientAppService::Init(ClientHandle local_client) {
   return {EC::InvalidArg, "Client handle is null"};
 }
 
-ClientHandle ClientAppService::GetClient(const std::string &nickname) const {
+ECMData<ClientHandle> ClientAppService::GetClient(const std::string &nickname,
+                                                  bool case_sensitive) const {
   if (IsLocalNickname(nickname)) {
-    return GetLocalClient();
+    ClientHandle local = GetLocalClient();
+    if (!local) {
+      return {nullptr, Err(EC::ClientNotFound, "Local client not found")};
+    }
+    return {local, Ok()};
   }
   if (!maintainer_) {
-    return nullptr;
+    return {nullptr,
+            Err(EC::InvalidHandle, "Client maintainer is not initialized")};
   }
-  return maintainer_->GetClient(nickname);
+  ClientHandle client = maintainer_->GetClient(nickname);
+  if (client) {
+    return {client, Ok()};
+  }
+  if (!case_sensitive) {
+    const std::string lowered = AMStr::lowercase(AMStr::Strip(nickname));
+    std::vector<std::string> matched_names = {};
+    ClientHandle matched_client = nullptr;
+    for (const auto &entry : maintainer_->GetAllClients()) {
+      if (AMStr::lowercase(entry.first) != lowered) {
+        continue;
+      }
+      matched_names.push_back(entry.first);
+      matched_client = entry.second;
+    }
+    if (matched_names.size() == 1 && matched_client) {
+      return {matched_client, Ok()};
+    }
+    if (matched_names.size() > 1) {
+      return {nullptr,
+              Err(EC::ClientNotFound,
+                  AMStr::fmt("Ambiguous client nickname [{}], candidates: {}",
+                             nickname, JoinCandidates_(matched_names)))};
+    }
+  }
+  return {nullptr, Err(EC::ClientNotFound,
+                       AMStr::fmt("Client not found: {}", nickname))};
 }
 
 ClientHandle ClientAppService::GetLocalClient() const {
@@ -67,9 +196,15 @@ std::string ClientAppService::CurrentNickname() const {
   return GetCurrentNickname();
 }
 
+void ClientAppService::BindHostConfigManager(
+    HostConfigManager *host_config_manager) {
+  host_config_manager_ = host_config_manager;
+}
+
 ECMData<ClientHandle>
 ClientAppService::CreateClient(const HostConfig &config,
-                               const ClientControlComponent &control) {
+                               const ClientControlComponent &control,
+                               bool silent) {
   auto [callbacks, private_keys] = SnapshotCreateContext_(false);
 
   auto [create_rcm, client] = AMDomain::client::CreateClient(
@@ -80,12 +215,84 @@ ClientAppService::CreateClient(const HostConfig &config,
   }
   ApplyCallbacksToClient_(client, callbacks);
 
+  const ConnectHooks hooks = SnapshotConnectHooks_();
+  if (hooks.before_connect) {
+    (void)CallCallbackSafe(hooks.before_connect, config, client, silent);
+  }
   auto connect_result =
       client->IOPort().Connect(AMDomain::filesystem::ConnectArgs{}, control);
+  if (hooks.after_connect) {
+    (void)CallCallbackSafe(hooks.after_connect, config, client, silent,
+                           connect_result.rcm);
+  }
   if (!isok(connect_result.rcm)) {
     return {nullptr, connect_result.rcm};
   }
   return {client, connect_result.rcm};
+}
+
+ECMData<ClientHandle>
+ClientAppService::EnsureClient(const std::string &nickname, bool case_sensitive,
+                               bool silent) {
+  const ClientControlComponent control =
+      GetControlComponent(std::nullopt, -1);
+  return EnsureClient(nickname, control, case_sensitive, silent);
+}
+
+ECMData<ClientHandle> ClientAppService::EnsureClient(
+    const std::string &nickname, const ClientControlComponent &control,
+    bool case_sensitive, bool silent) {
+  auto client_result = GetClient(nickname, case_sensitive);
+  if (isok(client_result.rcm) && client_result.data) {
+    return client_result;
+  }
+  if (client_result.rcm.first != EC::ClientNotFound) {
+    return client_result;
+  }
+
+  auto config_result =
+      ResolveHostConfig_(host_config_manager_, nickname, case_sensitive);
+  if (!isok(config_result.rcm)) {
+    return {nullptr, config_result.rcm};
+  }
+
+  auto create_result = CreateClient(config_result.data, control, silent);
+  if (!isok(create_result.rcm) || !create_result.data) {
+    return create_result;
+  }
+
+  ECM add_rcm = AddClient(create_result.data, false);
+  if (isok(add_rcm)) {
+    return {create_result.data, Ok()};
+  }
+  if (add_rcm.first == EC::TargetAlreadyExists) {
+    auto existing =
+        GetClient(create_result.data->ConfigPort().GetNickname(), true);
+    if (isok(existing.rcm) && existing.data) {
+      return existing;
+    }
+  }
+  return {create_result.data, add_rcm};
+}
+
+ECMData<ClientHandle>
+ClientAppService::ChangeClient(const std::string &nickname,
+                               const ClientControlComponent &control,
+                               bool silent) {
+  const std::string current_nickname = GetCurrentNickname();
+  if (!current_nickname.empty() && current_nickname == nickname) {
+    ClientHandle current = GetCurrentClient();
+    if (current) {
+      return {current, Ok()};
+    }
+  }
+
+  auto client_result = EnsureClient(nickname, control, false, silent);
+  if (!isok(client_result.rcm) || !client_result.data) {
+    return client_result;
+  }
+  SetCurrentClient(client_result.data);
+  return {client_result.data, Ok()};
 }
 
 ECM ClientAppService::AddClient(ClientHandle client, bool overwrite) {
@@ -136,14 +343,15 @@ std::optional<CheckResult> ClientAppService::CheckClient(
     const std::string &nickname, bool reconnect, bool update,
     const std::optional<ClientControlComponent> &control_component,
     int timeout_ms) {
-  ClientHandle client = GetClient(nickname);
-  if (!client) {
+  auto client_result = GetClient(nickname);
+  if (!isok(client_result.rcm) || !client_result.data) {
     return std::nullopt;
   }
   const ClientControlComponent resolved_control =
       control_component ? *control_component
                         : GetControlComponent(std::nullopt, timeout_ms);
-  return CheckClientInternal_(client, reconnect, update, resolved_control);
+  return CheckClientInternal_(client_result.data, reconnect, update,
+                              resolved_control);
 }
 
 std::map<std::string, ClientHandle> ClientAppService::GetClients() const {
@@ -250,11 +458,13 @@ ECM ClientAppService::AddPublicClient(const ClientHandle &client) {
   return {EC::Success, ""};
 }
 
+ClientAppService::ScopedConnectHooksGuard
+ClientAppService::UseScopedConnectHooks(ConnectHooks hooks) {
+  return {this, std::move(hooks)};
+}
+
 void ClientAppService::SetCurrentClient(const ClientHandle &client) {
-  auto runtime_clients = runtime_clients_.lock();
-  auto cache = runtime_clients.load();
-  cache.current = client ? client : cache.local;
-  runtime_clients.store(cache);
+  runtime_clients_.lock()->current = client;
 }
 
 std::vector<std::string> ClientAppService::GetClientNames() const {
@@ -296,6 +506,11 @@ ClientAppService::SnapshotCreateContext_(bool for_public_pool) const {
       for_public_pool ? GetPublicCallbacks() : GetMaintainerCallbacks();
   std::vector<std::string> private_keys = GetPrivateKeys();
   return {std::move(callbacks), std::move(private_keys)};
+}
+
+ClientAppService::ConnectHooks ClientAppService::SnapshotConnectHooks_() const {
+  std::lock_guard<std::mutex> lock(connect_hooks_mutex_);
+  return connect_hooks_;
 }
 
 CheckResult ClientAppService::CheckClientInternal_(

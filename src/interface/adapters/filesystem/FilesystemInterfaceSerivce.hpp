@@ -1,4 +1,5 @@
 #pragma once
+#include "application/client/ClientAppService.hpp"
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/core/Enum.hpp"
@@ -40,6 +41,7 @@ struct FilesystemMkdirsArg {
 class FilesystemInterfaceSerivce final : public NonCopyableNonMovable {
 public:
   FilesystemInterfaceSerivce(
+      AMApplication::client::ClientAppService &client_service,
       AMApplication::filesystem::FilesystemAppService &filesystem_service,
       AMInterface::style::AMStyleService &style_service,
       AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
@@ -62,6 +64,7 @@ public:
                  &control_opt = std::nullopt) const;
 
 private:
+  AMApplication::client::ClientAppService &client_service_;
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;
   AMInterface::style::AMStyleService &style_service_;
   AMInterface::prompt::AMPromptIOManager &prompt_io_manager_;

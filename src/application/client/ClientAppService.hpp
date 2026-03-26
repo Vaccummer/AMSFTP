@@ -1,11 +1,14 @@
 #pragma once
 
 #include "application/client/ClientAppServiceBase.hpp"
+#include "application/host/HostAppService.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/core/DataClass.hpp"
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -18,6 +21,7 @@ using ClientHandle = AMDomain::client::ClientHandle;
 using CheckResult = AMDomain::filesystem::CheckResult;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using HostConfig = AMDomain::host::HostConfig;
+using HostConfigManager = AMApplication::host::AMHostAppService;
 using ClientID = AMDomain::client::ClientID;
 using ClientNickname = AMDomain::host::ConRequest::ClientNickname;
 using ClientContainer = std::map<std::string, std::map<ClientID, ClientHandle>>;
@@ -29,20 +33,60 @@ struct ClientHanleCache {
 
 class ClientAppService : public ClientAppServiceBase {
 public:
+  using BeforeConnectCallback =
+      std::function<void(const HostConfig &, const ClientHandle &, bool)>;
+  using AfterConnectCallback = std::function<void(
+      const HostConfig &, const ClientHandle &, bool, const ECM &)>;
+  struct ConnectHooks {
+    BeforeConnectCallback before_connect = {};
+    AfterConnectCallback after_connect = {};
+  };
+
+  class ScopedConnectHooksGuard final {
+  public:
+    ScopedConnectHooksGuard() = default;
+    ScopedConnectHooksGuard(ClientAppService *service, ConnectHooks hooks);
+    ScopedConnectHooksGuard(ScopedConnectHooksGuard &&other) noexcept;
+    ScopedConnectHooksGuard &
+    operator=(ScopedConnectHooksGuard &&other) noexcept;
+    ~ScopedConnectHooksGuard();
+
+    ScopedConnectHooksGuard(const ScopedConnectHooksGuard &) = delete;
+    ScopedConnectHooksGuard &
+    operator=(const ScopedConnectHooksGuard &) = delete;
+
+    void reset();
+
+  private:
+    ClientAppService *service_ = nullptr;
+    ConnectHooks previous_hooks_ = {};
+    bool active_ = false;
+  };
+
   ClientAppService();
   explicit ClientAppService(ClientServiceArg arg);
   ~ClientAppService() override;
 
   ECM Init(ClientHandle local_client);
-  [[nodiscard]] ClientHandle GetClient(const std::string &nickname) const;
+  [[nodiscard]] ECMData<ClientHandle>
+  GetClient(const std::string &nickname, bool case_sensitive = true) const;
   [[nodiscard]] ClientHandle GetLocalClient() const;
   [[nodiscard]] ClientHandle GetCurrentClient() const;
   [[nodiscard]] std::string GetCurrentNickname() const;
   [[nodiscard]] std::string CurrentNickname() const;
 
-  ECMData<ClientHandle>
-  CreateClient(const AMDomain::host::HostConfig &config,
-               const ClientControlComponent &control);
+  void BindHostConfigManager(HostConfigManager *host_config_manager);
+  ECMData<ClientHandle> CreateClient(const AMDomain::host::HostConfig &config,
+                                     const ClientControlComponent &control,
+                                     bool silent = false);
+  [[nodiscard]] ECMData<ClientHandle> EnsureClient(const std::string &nickname,
+                                                   bool case_sensitive = true,
+                                                   bool silent = false);
+  [[nodiscard]] ECMData<ClientHandle>
+  EnsureClient(const std::string &nickname,
+               const ClientControlComponent &control,
+               bool case_sensitive = true, bool silent = false);
+
   ECM AddClient(ClientHandle client, bool overwrite);
   [[nodiscard]] std::optional<CheckResult>
   CheckClient(const std::string &nickname, bool reconnect, bool update,
@@ -58,7 +102,12 @@ public:
   [[nodiscard]] std::shared_ptr<
       AMApplication::TransferRuntime::ITransferClientPoolPort>
   PublicPool() const;
+  [[nodiscard]] ScopedConnectHooksGuard
+  UseScopedConnectHooks(ConnectHooks hooks);
 
+  ECMData<ClientHandle> ChangeClient(const std::string &nickname,
+                                     const ClientControlComponent &control,
+                                     bool silent = false);
   void SetCurrentClient(const ClientHandle &client);
   [[nodiscard]] std::vector<std::string> GetClientNames() const;
 
@@ -71,11 +120,15 @@ private:
       const AMDomain::client::ClientControlComponent &control) const;
   [[nodiscard]] std::pair<ClientCallbacks, std::vector<std::string>>
   SnapshotCreateContext_(bool for_public_pool) const;
+  [[nodiscard]] ConnectHooks SnapshotConnectHooks_() const;
 
 private:
   mutable AMAtomic<ClientHanleCache> runtime_clients_ = {};
   std::unique_ptr<AMDomain::client::IClientMaintainerPort> maintainer_ =
       nullptr;
   mutable AMAtomic<ClientContainer> public_clients_ = {};
+  HostConfigManager *host_config_manager_ = nullptr;
+  mutable std::mutex connect_hooks_mutex_ = {};
+  ConnectHooks connect_hooks_ = {};
 };
 } // namespace AMApplication::client

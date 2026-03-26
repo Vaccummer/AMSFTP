@@ -4,9 +4,7 @@
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
 #include "interface/style/StyleManager.hpp"
-
 #include <algorithm>
-#include <cctype>
 #include <functional>
 #include <iomanip>
 #include <sstream>
@@ -29,13 +27,6 @@ ResolveControl_(AMDomain::client::amf default_interrupt_flag,
 
 std::string MakePathKey_(const ClientPath &path) {
   return path.nickname + "@" + path.path;
-}
-
-std::string Lowercase_(std::string text) {
-  std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) {
-    return static_cast<char>(std::tolower(ch));
-  });
-  return text;
 }
 
 bool IsHiddenName_(const std::string &name) {
@@ -177,9 +168,8 @@ void PrintLsLongEntries(
                                : (info.type == PathType::SYMLINK ? 'l' : '-');
     const std::string mode = std::string(1, type_char) + info.mode_str;
     const std::string size_str = AMStr::FormatSize(info.size);
-    const std::string styled_name =
-        style_service.Format(info.name, AMInterface::style::StyleIndex::None,
-                             &info);
+    const std::string styled_name = style_service.Format(
+        info.name, AMInterface::style::StyleIndex::None, &info);
 
     std::ostringstream line;
     line << std::left << std::setw(static_cast<int>(mode_width)) << mode << "  "
@@ -232,13 +222,13 @@ SplitPathsResult_ CollectUniqueSplitPaths_(
 } // namespace
 
 FilesystemInterfaceSerivce::FilesystemInterfaceSerivce(
+    AMApplication::client::ClientAppService &client_service,
     AMApplication::filesystem::FilesystemAppService &filesystem_service,
     AMInterface::style::AMStyleService &style_service,
     AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
     AMDomain::client::amf default_interrupt_flag)
-    : filesystem_service_(filesystem_service),
-      style_service_(style_service),
-      prompt_io_manager_(prompt_io_manager),
+    : client_service_(client_service), filesystem_service_(filesystem_service),
+      style_service_(style_service), prompt_io_manager_(prompt_io_manager),
       default_interrupt_flag_(std::move(default_interrupt_flag)) {}
 
 ECMData<ClientPath>
@@ -365,7 +355,7 @@ ECM FilesystemInterfaceSerivce::Ls(
     }
     std::sort(names.begin(), names.end(),
               [](const std::string &lhs, const std::string &rhs) {
-                return Lowercase_(lhs) < Lowercase_(rhs);
+                return AMStr::lowercase(lhs) < AMStr::lowercase(rhs);
               });
     interface_print::PrintLsNamesGrid(prompt_io_manager_, names);
     return Ok();
@@ -394,7 +384,7 @@ ECM FilesystemInterfaceSerivce::Ls(
               if (lhs_rank != rhs_rank) {
                 return lhs_rank < rhs_rank;
               }
-              return Lowercase_(lhs.name) < Lowercase_(rhs.name);
+              return AMStr::lowercase(lhs.name) < AMStr::lowercase(rhs.name);
             });
   interface_print::PrintLsLongEntries(prompt_io_manager_, style_service_,
                                       entries);
@@ -412,14 +402,47 @@ ECM FilesystemInterfaceSerivce::Cd(
                                     split_result.rcm);
     return split_result.rcm;
   }
-  ECM rcm = filesystem_service_.ChangeDir(split_result.data, control,
-                                          arg.from_history);
-  if (!isok(rcm)) {
+  std::string current_nickname = filesystem_service_.CurrentNickname();
+  if (current_nickname.empty()) {
+    current_nickname = "local";
+  }
+
+  if (split_result.data.nickname == current_nickname) {
+    ECM rcm = filesystem_service_.ChangeDir(split_result.data, control,
+                                            arg.from_history);
+    if (!isok(rcm)) {
+      interface_print::PrintPathError(
+          prompt_io_manager_,
+          interface_print::BuildPathLabel(split_result.data), rcm);
+    }
+    return rcm;
+  }
+
+  auto ensure_result = client_service_.EnsureClient(split_result.data.nickname,
+                                                    control, false, true);
+  if (!isok(ensure_result.rcm) || !ensure_result.data) {
+    interface_print::PrintPathError(
+        prompt_io_manager_, split_result.data.nickname, ensure_result.rcm);
+    return ensure_result.rcm;
+  }
+
+  ECM change_dir_rcm = filesystem_service_.ChangeDir(split_result.data, control,
+                                                     arg.from_history);
+  if (!isok(change_dir_rcm)) {
     interface_print::PrintPathError(
         prompt_io_manager_, interface_print::BuildPathLabel(split_result.data),
-        rcm);
+        change_dir_rcm);
+    return change_dir_rcm;
   }
-  return rcm;
+
+  client_service_.SetCurrentClient(ensure_result.data);
+  ECM prompt_change_rcm = prompt_io_manager_.ChangeClient(
+      ensure_result.data->ConfigPort().GetNickname());
+  if (!isok(prompt_change_rcm)) {
+    interface_print::PrintPathError(
+        prompt_io_manager_, split_result.data.nickname, prompt_change_rcm);
+  }
+  return prompt_change_rcm;
 }
 
 ECM FilesystemInterfaceSerivce::Mkdirs(
