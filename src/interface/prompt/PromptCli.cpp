@@ -1,82 +1,19 @@
 #include "Isocline/isocline.h"
-#include "interface/adapters/ApplicationAdapters.hpp"
-#include "foundation/core/DataClass.hpp"
-#include "interface/prompt/Prompt.hpp"
-#include "interface/style/StyleManager.hpp"
+#include "foundation/tools/string.hpp"
 #include "interface/parser/TokenTypeAnalyzer.hpp"
+#include "interface/prompt/Prompt.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
 #include <mutex>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <sys/stat.h>
 
-
-#ifdef _WIN32
-#include <conio.h>
-#include <windows.h>
-#else
-#include <termios.h>
-#include <unistd.h>
-#endif
+namespace AMInterface::prompt {
 
 namespace {
-/**
- * @brief Temporarily disable ENABLE_PROCESSED_INPUT while Prompt() reads
- * stdin on Windows.
- *
- * This limits Ctrl+C key processing suppression strictly to prompt input
- * scope and restores the previous console mode on scope exit.
- */
-class ScopedPromptProcessedInputGuard_ {
-public:
-  /**
-   * @brief Capture stdin mode and clear ENABLE_PROCESSED_INPUT when possible.
-   */
-  ScopedPromptProcessedInputGuard_() {
-#ifdef _WIN32
-    input_handle_ = GetStdHandle(STD_INPUT_HANDLE);
-    if (input_handle_ == INVALID_HANDLE_VALUE || input_handle_ == nullptr) {
-      return;
-    }
-    if (!GetConsoleMode(input_handle_, &original_mode_)) {
-      return;
-    }
-    const DWORD desired_mode = original_mode_ & ~ENABLE_PROCESSED_INPUT;
-    if (desired_mode == original_mode_) {
-      return;
-    }
-    if (!SetConsoleMode(input_handle_, desired_mode)) {
-      return;
-    }
-    applied_ = true;
-#endif
-  }
-
-  /**
-   * @brief Restore stdin console mode when this guard changed it.
-   */
-  ~ScopedPromptProcessedInputGuard_() {
-#ifdef _WIN32
-    if (!applied_) {
-      return;
-    }
-    if (input_handle_ == INVALID_HANDLE_VALUE || input_handle_ == nullptr) {
-      return;
-    }
-    (void)SetConsoleMode(input_handle_, original_mode_);
-#endif
-  }
-
-private:
-#ifdef _WIN32
-  HANDLE input_handle_ = INVALID_HANDLE_VALUE;
-  DWORD original_mode_ = 0;
-  bool applied_ = false;
-#endif
-};
-
 /**
  * @brief Bridge isocline highlight callbacks to the token analyzer.
  *
@@ -128,114 +65,36 @@ void PromptNoComplete_(ic_completion_env_t *cenv, const char *prefix) {
  */
 struct PromptValueQueryContext {
   const std::function<bool(const std::string &)> *checker = nullptr;
-  const std::vector<std::string> *candidates = nullptr;
-  const std::map<std::string, std::string> *literals = nullptr;
+  const std::vector<std::pair<std::string, std::string>> *candidates = nullptr;
   std::string valid_tag;
   std::string invalid_tag;
 };
 
-/**
- * @brief Normalize a configured style into a bbcode opening tag.
- */
-std::string NormalizeStyleTag_(const std::string &raw) {
-  std::string trimmed = AMStr::Strip(raw);
-  if (trimmed.empty()) {
-    return "";
-  }
-  if (trimmed.find("[/") != std::string::npos) {
-    return "";
-  }
-  if (trimmed.front() != '[') {
-    trimmed.insert(trimmed.begin(), '[');
-  }
-  if (trimmed.back() != ']') {
-    trimmed.push_back(']');
-  }
-  return trimmed;
-}
-
-/**
- * @brief Normalize prompt style for ic_style_def.
- *
- * Accepts both `#RRGGBB b` and `[#RRGGBB b]` forms.
- */
-std::string NormalizePromptStyleForIc_(const std::string &raw) {
-  std::string trimmed = AMStr::Strip(raw);
-  if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']') {
-    trimmed = AMStr::Strip(trimmed.substr(1, trimmed.size() - 2));
-  }
-  return trimmed;
-}
-
-/**
- * @brief Apply CLIPrompt shortcut styles as isocline named styles.
- */
-void ApplyPromptShortcutStyles_() {
-  static const std::vector<std::string> keys = {
-      "un", "at", "hn", "en", "nn", "cwd", "ds", "white"};
-  for (const auto &key : keys) {
-    const std::string raw =
-        AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-            {"Style", "CLIPrompt", "shortcut", key}, "");
-    const std::string fmt = NormalizePromptStyleForIc_(raw);
-    if (fmt.empty()) {
-      continue;
-    }
-    ic_style_def(key.c_str(), fmt.c_str());
-  }
-}
-
-/**
- * @brief Resolve incremental history-search prompt text from settings.
- */
-std::string ResolveHistorySearchPrompt_() {
-  std::string prompt =
-      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-          {"Style", "CLIPrompt", "template", "history_search_prompt"}, "");
-  if (!prompt.empty()) {
-    return prompt;
-  }
-  prompt = AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-      {"Style", "CLIPrompt", "templete", "history_search_prompt"}, "");
-  if (!prompt.empty()) {
-    return prompt;
-  }
-  return "history search";
-}
-
-/**
- * @brief Apply abort style to isocline warning channel for query prompts.
- *
- * The warning style is used by isocline diagnostics (including Ctrl+C abort
- * notices in query-mode input paths).
- */
-void ApplyQueryAbortWarningStyle_() {
-  std::string abort_style =
-      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-          {"Style", "InputHighlight", "abort"}, "");
-  abort_style = NormalizePromptStyleForIc_(abort_style);
-  if (abort_style.empty()) {
-    return;
-  }
-  ic_style_def("warning", abort_style.c_str());
-}
-
-/**
- * @brief Escape bbcode-sensitive characters for formatted highlight output.
- */
-std::string EscapeBbcodeText_(const std::string &text) {
-  std::string escaped;
-  escaped.reserve(text.size() * 2);
-  for (char c : text) {
-    if (c == '\\') {
-      escaped.append("\\\\");
-    } else if (c == '[') {
-      escaped.append("\\[");
-    } else {
-      escaped.push_back(c);
+class ScopedAtomicFlag_ {
+public:
+  explicit ScopedAtomicFlag_(std::atomic<bool> *flag, bool value = true)
+      : flag_(flag) {
+    if (flag_ != nullptr) {
+      old_ = flag_->exchange(value, std::memory_order_relaxed);
+      armed_ = true;
     }
   }
-  return escaped;
+
+  ~ScopedAtomicFlag_() {
+    if (armed_ && flag_ != nullptr) {
+      flag_->store(old_, std::memory_order_relaxed);
+    }
+  }
+
+private:
+  std::atomic<bool> *flag_ = nullptr;
+  bool old_ = false;
+  bool armed_ = false;
+};
+
+std::shared_ptr<IsoclineProfile>
+CurrentProfile_(IsoclineProfileManager &profile_manager) {
+  return profile_manager.CurrentProfile();
 }
 
 /**
@@ -261,7 +120,7 @@ void PromptValueQueryHighlight_(ic_highlight_env_t *henv, const char *input,
   std::string formatted;
   formatted.reserve(text.size() + tag.size() + 4);
   formatted.append(tag);
-  formatted.append(EscapeBbcodeText_(text));
+  formatted.append(AMStr::BBCEscape(text));
   formatted.append("[/]");
   ic_highlight_formatted(henv, input, formatted.c_str());
 }
@@ -287,7 +146,7 @@ void PromptValueQueryComplete_(ic_completion_env_t *cenv, const char *prefix) {
     return;
   }
   std::string input(input_c);
-  size_t cur = static_cast<size_t>(cursor);
+  auto cur = static_cast<size_t>(cursor);
   if (cur > input.size()) {
     cur = input.size();
   }
@@ -307,111 +166,334 @@ void PromptValueQueryComplete_(ic_completion_env_t *cenv, const char *prefix) {
   const long delete_before = static_cast<long>(cur - token_start);
   const long delete_after = static_cast<long>(token_end - cur);
 
-  if (ctx->literals && !ctx->literals->empty()) {
-    for (const auto &entry : *ctx->literals) {
-      const std::string &candidate = entry.first;
-      if (!token_prefix.empty() && candidate.rfind(token_prefix, 0) != 0) {
-        continue;
-      }
-      const char *help = entry.second.empty() ? nullptr : entry.second.c_str();
-      ic_add_completion_prim(cenv, candidate.c_str(), nullptr, help,
-                             delete_before, delete_after);
-    }
-    return;
-  }
-
   if (!ctx->candidates || ctx->candidates->empty()) {
     return;
   }
-  for (const auto &candidate : *ctx->candidates) {
+  for (const auto &candidate_item : *ctx->candidates) {
+    const std::string &candidate = candidate_item.first;
     if (!token_prefix.empty() && candidate.rfind(token_prefix, 0) != 0) {
       continue;
     }
-    ic_add_completion_prim(cenv, candidate.c_str(), nullptr, nullptr,
+    const char *help =
+        candidate_item.second.empty() ? nullptr : candidate_item.second.c_str();
+    ic_add_completion_prim(cenv, candidate.c_str(), nullptr, help,
                            delete_before, delete_after);
   }
 }
 
-static const std::string ickey = "ic-prompt";
-
-/**
- * @brief Apply CorePrompt profile-local isocline settings.
- */
-void ApplyCoreProfileSettings_(const AMPromptProfileArgs &profile) {
-  ic_set_prompt_marker(profile.prompt.marker.c_str(),
-                       profile.prompt.continuation_marker.c_str());
-  ApplyPromptShortcutStyles_();
-  const std::string history_search_prompt = ResolveHistorySearchPrompt_();
-  ic_set_history_search_prompt(history_search_prompt.c_str());
-  ic_enable_multiline(profile.prompt.enable_multiline);
-  ic_enable_history_duplicates(profile.history.enable_duplicates);
-
-  ic_enable_hint(profile.inline_hint.enable);
-  ic_set_hint_delay(std::max(0, profile.inline_hint.render_delay_ms));
-  ic_set_hint_search_delay(std::max(0, profile.inline_hint.search_delay_ms));
-  ic_set_highlight_delay(std::max(0, profile.highlight.delay_ms));
-}
-
 } // namespace
 
-void AMPromptManager::PrintRaw(const std::string &text, bool append_newline) {
+void PromptIOManager::PrintRaw(const std::string &text) {
   std::string out = text;
-  if (append_newline && (out.empty() || out.back() != '\n')) {
-    out.push_back('\n');
+
+  if (io_state_.refresh_occupied_lines_.load(std::memory_order_relaxed) <= 0) {
+    if (ic_is_editline_active() && ic_print_async(out.c_str())) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+    if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+      (void)profile->Use();
+    }
+    PrintSyncLocked_(out);
+    return;
   }
-  std::lock_guard<std::mutex> lock(print_mutex_);
-  ic_print(out.c_str());
-  ic_term_flush();
+
+  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+  PrintInsertAndRepaintLocked_(out);
+  if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
+      io_state_.secure_phase_.load(std::memory_order_relaxed)) {
+    (void)ic_request_refresh_async();
+  }
 }
 
-void AMPromptManager::Print(const std::string &text) {
-  std::string output = text;
-  if (output.empty() || output.back() != '\n') {
-    output.push_back('\n');
-  }
+void PromptIOManager::Print(const std::string &text) {
+  std::string output = EnsureTrailingNewline_(text);
 
   if (IsCacheOutputOnly()) {
-    std::lock_guard<std::mutex> lock(cached_output_mutex_);
-    cached_output_ += output;
+    std::lock_guard<std::mutex> lock(io_state_.cached_output_mutex_);
+    io_state_.cached_output_ += output;
     return;
   }
 
+  if (io_state_.refresh_occupied_lines_.load(std::memory_order_relaxed) <= 0) {
+    if (ic_is_editline_active() && ic_print_async(output.c_str())) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+    if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+      (void)profile->Use();
+    }
+    PrintSyncLocked_(output);
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+  if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+    (void)profile->Use();
+  }
+  PrintInsertAndRepaintLocked_(output);
+  if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
+      io_state_.secure_phase_.load(std::memory_order_relaxed)) {
+    (void)ic_request_refresh_async();
+  }
+}
+
+void PromptIOManager::FlushCachedOutput() {
+  std::string output;
   {
-    std::lock_guard<std::mutex> lock(print_mutex_);
-    ic_print(output.c_str());
-    ic_term_flush();
+    std::lock_guard<std::mutex> lock(io_state_.cached_output_mutex_);
+    if (io_state_.cached_output_.empty()) {
+      return;
+    }
+    output.swap(io_state_.cached_output_);
   }
-}
 
-void AMPromptManager::FlushCachedOutput() {
-  if (cached_output_.empty()) {
+  if (output.empty()) {
     return;
   }
-  std::lock_guard<std::mutex> lock1(print_mutex_);
-  std::lock_guard<std::mutex> lock2(cached_output_mutex_);
-  ic_print("\x1b[0m");
-  ic_print(cached_output_.c_str());
-  ic_print("\x1b[0m");
-  ic_term_flush();
-  cached_output_.clear();
+  PrintRaw(output);
 }
 
-void AMPromptManager::SetCacheOutputOnly(bool enabled) {
+void PromptIOManager::SetCacheOutputOnly(bool enabled) {
   if (enabled) {
-    cache_output_lock_depth_.fetch_add(1, std::memory_order_relaxed);
+    io_state_.cache_output_lock_depth_.fetch_add(1, std::memory_order_relaxed);
     return;
   }
-  cache_output_lock_depth_.fetch_sub(1, std::memory_order_relaxed);
-  if (cache_output_lock_depth_.load(std::memory_order_relaxed) == 0) {
+  io_state_.cache_output_lock_depth_.fetch_sub(1, std::memory_order_relaxed);
+  if (io_state_.cache_output_lock_depth_.load(std::memory_order_relaxed) == 0) {
     FlushCachedOutput();
   }
 }
 
-bool AMPromptManager::IsCacheOutputOnly() const {
-  return cache_output_lock_depth_.load(std::memory_order_relaxed) > 0;
+bool PromptIOManager::IsCacheOutputOnly() const {
+  return io_state_.cache_output_lock_depth_.load(std::memory_order_relaxed) > 0;
 }
 
-void AMPromptManager::ErrorFormat(const std::string &error_name,
+void PromptIOManager::SetRefreshDiffMode(bool enabled) {
+  io_state_.refresh_diff_mode_.store(enabled, std::memory_order_relaxed);
+}
+
+bool PromptIOManager::IsRefreshDiffMode() const {
+  return io_state_.refresh_diff_mode_.load(std::memory_order_relaxed);
+}
+
+std::string PromptIOManager::EnsureTrailingNewline_(const std::string &text) {
+  if (!text.empty() && text.back() == '\n') {
+    return text;
+  }
+  return text + "\n";
+}
+
+bool PromptIOManager::IsAsciiText_(const std::string &text) {
+  return std::all_of(text.begin(), text.end(), [](char ch) {
+    return (static_cast<unsigned char>(ch) < 128);
+  });
+}
+
+size_t PromptIOManager::CommonPrefixAscii_(const std::string &lhs,
+                                           const std::string &rhs) {
+  const size_t limit = std::min(lhs.size(), rhs.size());
+  size_t i = 0;
+
+  while (i < limit && lhs[i] == rhs[i]) {
+    ++i;
+  }
+  return i;
+}
+
+void PromptIOManager::AppendMoveUpRows_(std::string *frame, int rows) {
+  if (frame == nullptr || rows <= 0) {
+    return;
+  }
+  *frame += "\r\x1b[" + std::to_string(rows) + "A";
+}
+
+void PromptIOManager::AppendClearRows_(std::string *frame, int rows) {
+  if (frame == nullptr || rows <= 0) {
+    return;
+  }
+  for (int i = 0; i < rows; ++i) {
+    *frame += "\x1b[2K\r";
+    *frame += "\n";
+  }
+}
+
+void PromptIOManager::AppendRowDiffUpdate_(std::string *frame,
+                                           const std::string &old_line,
+                                           const std::string &new_line) const {
+  if (frame == nullptr) {
+    return;
+  }
+  if (old_line == new_line) {
+    *frame += "\x1b[1B\r";
+    return;
+  }
+
+  if (!IsAsciiText_(old_line) || !IsAsciiText_(new_line)) {
+    *frame += "\x1b[2K\r";
+    *frame += new_line;
+    *frame += "\x1b[1B\r";
+    return;
+  }
+
+  const size_t common_prefix = CommonPrefixAscii_(old_line, new_line);
+  if (common_prefix == 0) {
+    *frame += "\x1b[2K\r";
+    *frame += new_line;
+    *frame += "\x1b[1B\r";
+    return;
+  }
+
+  *frame += "\r\x1b[" + std::to_string(common_prefix) + "C";
+  *frame += "\x1b[K";
+  if (common_prefix < new_line.size()) {
+    *frame += new_line.substr(common_prefix);
+  }
+  *frame += "\x1b[1B\r";
+}
+
+void PromptIOManager::PrintSyncLocked_(const std::string &text) {
+  if (text.find('\x1b') != std::string::npos) {
+    ic_term_write(text.c_str());
+  } else {
+    ic_print(text.c_str());
+  }
+  ic_term_flush();
+}
+
+void PromptIOManager::PrintInsertAndRepaintLocked_(const std::string &msg) {
+  const int old_rows = painted_refresh_rows_;
+  if (old_rows <= 0) {
+    PrintSyncLocked_(msg);
+    return;
+  }
+
+  const int new_rows = static_cast<int>(refresh_lines_.size());
+  const int total_rows = std::max(old_rows, new_rows);
+  const bool diff_mode =
+      io_state_.refresh_diff_mode_.load(std::memory_order_relaxed);
+
+  std::string frame;
+  AppendMoveUpRows_(&frame, old_rows);
+  frame += "\x1b[2K\r";
+  frame += msg;
+  for (int i = 0; i < total_rows; ++i) {
+    const std::string old_line =
+        (i < old_rows && static_cast<size_t>(i) < painted_refresh_lines_.size())
+            ? painted_refresh_lines_[static_cast<size_t>(i)]
+            : std::string{};
+    const std::string new_line =
+        (i < new_rows) ? refresh_lines_[static_cast<size_t>(i)] : std::string{};
+
+    if (diff_mode) {
+      AppendRowDiffUpdate_(&frame, old_line, new_line);
+      continue;
+    }
+    frame += "\x1b[2K\r";
+    frame += new_line;
+    frame += "\x1b[1B\r";
+  }
+  AppendMoveUpRows_(&frame, total_rows - new_rows);
+  PrintSyncLocked_(frame);
+  painted_refresh_rows_ = new_rows;
+  painted_refresh_lines_ = refresh_lines_;
+}
+
+void PromptIOManager::RepaintRefreshLocked_() {
+  const int new_rows = static_cast<int>(refresh_lines_.size());
+  const int old_rows = painted_refresh_rows_;
+  if (new_rows <= 0 && old_rows <= 0) {
+    painted_refresh_rows_ = 0;
+    return;
+  }
+
+  const int total_rows = std::max(old_rows, new_rows);
+  const bool diff_mode =
+      io_state_.refresh_diff_mode_.load(std::memory_order_relaxed);
+  std::string frame;
+  AppendMoveUpRows_(&frame, old_rows);
+  for (int i = 0; i < total_rows; ++i) {
+    const std::string old_line =
+        (i < old_rows && static_cast<size_t>(i) < painted_refresh_lines_.size())
+            ? painted_refresh_lines_[static_cast<size_t>(i)]
+            : std::string{};
+    const std::string new_line =
+        (i < new_rows) ? refresh_lines_[static_cast<size_t>(i)] : std::string{};
+
+    if (diff_mode) {
+      AppendRowDiffUpdate_(&frame, old_line, new_line);
+      continue;
+    }
+    frame += "\x1b[2K\r";
+    frame += new_line;
+    frame += "\x1b[1B\r";
+  }
+  AppendMoveUpRows_(&frame, total_rows - new_rows);
+  PrintSyncLocked_(frame);
+  painted_refresh_rows_ = new_rows;
+  painted_refresh_lines_ = refresh_lines_;
+}
+
+void PromptIOManager::ClearRefreshLocked_() {
+  if (painted_refresh_rows_ <= 0) {
+    refresh_lines_.clear();
+    painted_refresh_lines_.clear();
+    return;
+  }
+
+  std::string frame;
+  AppendMoveUpRows_(&frame, painted_refresh_rows_);
+  AppendClearRows_(&frame, painted_refresh_rows_);
+  PrintSyncLocked_(frame);
+
+  painted_refresh_rows_ = 0;
+  refresh_lines_.clear();
+  painted_refresh_lines_.clear();
+}
+
+void PromptIOManager::RefreshBegin(int lines) {
+  const int occupied = std::max(0, lines);
+  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+  if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+    (void)profile->Use();
+  }
+  io_state_.refresh_occupied_lines_.store(occupied, std::memory_order_relaxed);
+  refresh_lines_.assign(static_cast<size_t>(occupied), "");
+  RepaintRefreshLocked_();
+}
+
+void PromptIOManager::RefreshRender(
+    const std::vector<std::optional<std::string>> &lines) {
+  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+  io_state_.refresh_occupied_lines_.store(static_cast<int>(lines.size()),
+                                          std::memory_order_relaxed);
+
+  const size_t old_size = refresh_lines_.size();
+  refresh_lines_.resize(lines.size(), "");
+  for (size_t i = 0; i < lines.size(); ++i) {
+    if (lines[i].has_value()) {
+      refresh_lines_[i] = lines[i].value();
+    } else if (i >= old_size) {
+      refresh_lines_[i].clear();
+    }
+  }
+  RepaintRefreshLocked_();
+  if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
+      io_state_.secure_phase_.load(std::memory_order_relaxed)) {
+    (void)ic_request_refresh_async();
+  }
+}
+
+void PromptIOManager::RefreshEnd() {
+  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+  if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+    (void)profile->Use();
+  }
+  ClearRefreshLocked_();
+  io_state_.refresh_occupied_lines_.store(0, std::memory_order_relaxed);
+}
+
+void PromptIOManager::ErrorFormat(const std::string &error_name,
                                   const std::string &error_msg, bool is_exit,
                                   int exit_code) {
   std::ostringstream body;
@@ -428,28 +510,27 @@ void AMPromptManager::ErrorFormat(const std::string &error_name,
   }
 }
 
-void AMPromptManager::ErrorFormat(const std::pair<ErrorCode, std::string> &rcm,
-                                  bool is_exit) {
+void PromptIOManager::ErrorFormat(const ECM &rcm, bool is_exit) {
   ErrorFormat(AMStr::ToString(rcm.first), rcm.second, is_exit,
               static_cast<int>(rcm.first));
 }
 
 /** Prompt for a yes/no response. */
-bool AMPromptManager::PromptYesNo(const std::string &prompt, bool *canceled) {
-  std::string answer;
-  if (!Prompt(prompt, "", &answer)) {
-    if (canceled) {
-      *canceled = true;
-    }
-    return false;
+bool PromptIOManager::PromptYesNo(const std::string &prompt, bool *canceled) {
+  std::string answer = "";
+  bool is_cancel =
+      LiteralPrompt(prompt, "", &answer, {{"y", "yes"}, {"n", "no"}});
+  if (canceled) {
+    *canceled = !is_cancel;
   }
-  AMStr::VStrip(answer);
-  AMStr::vlowercase(answer);
-  return answer == "y" || answer == "yes";
+  return answer == "y";
 }
 
-void AMPromptManager::ClearScreen(bool clear_scrollback) {
-  std::lock_guard<std::mutex> lock(print_mutex_);
+void PromptIOManager::ClearScreen(bool clear_scrollback) {
+  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+  if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
+    (void)profile->Use();
+  }
   if (clear_scrollback) {
     ic_print("\x1b[3J");
   }
@@ -457,8 +538,8 @@ void AMPromptManager::ClearScreen(bool clear_scrollback) {
   ic_term_flush();
 }
 
-void AMPromptManager::UseAlternateScreen(bool enable) {
-  std::lock_guard<std::mutex> lock(print_mutex_);
+void PromptIOManager::UseAlternateScreen(bool enable) {
+  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
   if (enable) {
     ic_print("\x1b[?1049h");
   } else {
@@ -468,7 +549,7 @@ void AMPromptManager::UseAlternateScreen(bool enable) {
 }
 
 /** Prompt for a line of input with optional defaults.
-bool AMPromptManager::PromptLine(const std::string &prompt, std::string *out,
+bool PromptIOManager::PromptLine(const std::string &prompt, std::string *out,
                                  const std::string &default_value,
                                  bool allow_empty, bool *canceled,
                                  bool show_default) {
@@ -504,40 +585,21 @@ bool AMPromptManager::PromptLine(const std::string &prompt, std::string *out,
 }
 */
 
-bool AMPromptManager::Prompt(
+bool PromptIOManager::Prompt(
     const std::string &prompt, const std::string &placeholder,
     std::string *out_input,
     const std::function<bool(const std::string &)> &checker,
-    const std::vector<std::string> &candidates) {
-
+    const std::vector<std::pair<std::string, std::string>> &candidates) {
   if (!out_input) {
     return true;
   }
-  const std::string target =
-      active_core_nickname_.empty() ? "local" : active_core_nickname_;
-  (void)UseCorePromptProfileForClient_(target);
-  const AMPromptProfileArgs *active_profile = GetCurrentPromptProfileArgs();
-  std::string query_prompt_style =
-      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-          {"Style", "ValueQueryHighlight", "prompt_style"}, "");
-  query_prompt_style = NormalizePromptStyleForIc_(query_prompt_style);
-  if (!query_prompt_style.empty()) {
-    ic_style_def(ickey.c_str(), query_prompt_style.c_str());
-  }
-  ApplyQueryAbortWarningStyle_();
 
   PromptValueQueryContext query_ctx;
   query_ctx.checker = checker ? &checker : nullptr;
   query_ctx.candidates = candidates.empty() ? nullptr : &candidates;
   if (query_ctx.checker) {
-    std::string valid_raw =
-        AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-            {"Style", "ValueQueryHighlight", "valid_value"}, "");
-    std::string invalid_raw =
-        AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-            {"Style", "ValueQueryHighlight", "invalid_value"}, "");
-    query_ctx.valid_tag = NormalizeStyleTag_(valid_raw);
-    query_ctx.invalid_tag = NormalizeStyleTag_(invalid_raw);
+    query_ctx.valid_tag = "[" + kvars::valid_value_key + "]";
+    query_ctx.invalid_tag = "[" + kvars::invalid_value_key + "]";
   }
 
   ic_completer_fun_t *completer = &PromptNoComplete_;
@@ -553,21 +615,45 @@ bool AMPromptManager::Prompt(
     highlighter_arg = &query_ctx;
   }
 
-  auto lock = AMPrintLockGuard::Lock();
-  auto hooklock = AMPromptHookGuard::Lock();
-  ScopedPromptProcessedInputGuard_ processed_input_guard;
-  (void)processed_input_guard;
+  // ScopedPrintCacheLockGuard_ lock(*this);
+  // ScopedPromptHookGuard_ hooklock;
+  // ScopedPromptProcessedInputGuard_ processed_input_guard;
+  // (void)processed_input_guard;
   const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
-  char *line =
-      ic_readline_ex_with_initial(prompt.c_str(), completer, completer_arg,
-                                  highlighter, highlighter_arg, initial);
-  if (active_profile) {
-    ApplyCoreProfileSettings_(*active_profile);
+  char *line = nullptr;
+  ScopedAtomicFlag_ prompt_active_guard(&io_state_.prompt_active_);
+  auto profile = CurrentProfile_(isocline_profile_manager_);
+  if (profile && profile->Use()) {
+    std::optional<ic_completer_fun_t *> completer_opt = std::nullopt;
+    std::optional<void *> completer_data_opt = std::nullopt;
+    if (completer != nullptr || completer_arg != nullptr) {
+      completer_opt = completer;
+      completer_data_opt = completer_arg;
+    }
+    auto completer_guard =
+        profile->TemporarySetCompleter(completer_opt, completer_data_opt);
+    (void)completer_guard;
+
+    std::optional<ic_highlight_fun_t *> highlighter_opt = std::nullopt;
+    std::optional<void *> highlighter_data_opt = std::nullopt;
+    if (highlighter != nullptr || highlighter_arg != nullptr) {
+      highlighter_opt = highlighter;
+      highlighter_data_opt = highlighter_arg;
+    }
+    auto highlighter_guard =
+        profile->TemporarySetHighlighter(highlighter_opt, highlighter_data_opt);
+    (void)highlighter_guard;
+
+    line = ic_readline_ex(prompt.c_str(), initial);
+  } else {
+    ic_set_default_completer(completer, completer_arg);
+    ic_set_default_highlighter(highlighter, highlighter_arg);
+    line = ic_readline_ex(prompt.c_str(), initial);
   }
   if (!line) {
     return false;
   }
-  ic_history_remove_last();
+  // isocline_profile_manager_.RemoveLastHistoryEntry();
   *out_input = std::string(line);
   ic_free(line);
   return true;
@@ -576,176 +662,74 @@ bool AMPromptManager::Prompt(
 /**
  * @brief Prompt for one literal value using a literal->help dictionary.
  */
-bool AMPromptManager::LiteralPrompt(
+bool PromptIOManager::LiteralPrompt(
     const std::string &prompt, const std::string &placeholder,
     std::string *out_input,
-    const std::map<std::string, std::string> &literals) {
-  if (!out_input) {
-    return true;
-  }
-  const std::string target =
-      active_core_nickname_.empty() ? "local" : active_core_nickname_;
-  (void)UseCorePromptProfileForClient_(target);
-  const AMPromptProfileArgs *active_profile = GetCurrentPromptProfileArgs();
-  std::string query_prompt_style =
-      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-          {"Style", "ValueQueryHighlight", "prompt_style"}, "");
-  query_prompt_style = NormalizePromptStyleForIc_(query_prompt_style);
-  if (!query_prompt_style.empty()) {
-    ic_style_def(ickey.c_str(), query_prompt_style.c_str());
-  }
-  ApplyQueryAbortWarningStyle_();
-
+    const std::vector<std::pair<std::string, std::string>> &literals) {
   std::function<bool(const std::string &)> literal_checker;
   if (!literals.empty()) {
     literal_checker = [&literals](const std::string &text) {
-      return literals.find(AMStr::Strip(text)) != literals.end();
+      const std::string normalized = AMStr::Strip(text);
+      return std::any_of(
+          literals.begin(), literals.end(),
+          [&normalized](const auto &item) { return item.first == normalized; });
     };
   }
-
-  PromptValueQueryContext query_ctx;
-  query_ctx.checker = literal_checker ? &literal_checker : nullptr;
-  query_ctx.literals = literals.empty() ? nullptr : &literals;
-  if (query_ctx.checker) {
-    std::string valid_raw =
-        AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-            {"Style", "ValueQueryHighlight", "valid_value"}, "");
-    std::string invalid_raw =
-        AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-            {"Style", "ValueQueryHighlight", "invalid_value"}, "");
-    query_ctx.valid_tag = NormalizeStyleTag_(valid_raw);
-    query_ctx.invalid_tag = NormalizeStyleTag_(invalid_raw);
-  }
-
-  ic_completer_fun_t *completer = &PromptNoComplete_;
-  void *completer_arg = nullptr;
-  if (query_ctx.literals) {
-    completer = &PromptValueQueryComplete_;
-    completer_arg = &query_ctx;
-  }
-  ic_highlight_fun_t *highlighter = &PromptNoHighlight_;
-  void *highlighter_arg = nullptr;
-  if (query_ctx.checker) {
-    highlighter = &PromptValueQueryHighlight_;
-    highlighter_arg = &query_ctx;
-  }
-
-  auto lock = AMPrintLockGuard::Lock();
-  auto hooklock = AMPromptHookGuard::Lock();
-  const char *initial = placeholder.empty() ? nullptr : placeholder.c_str();
-  char *line =
-      ic_readline_ex_with_initial(prompt.c_str(), completer, completer_arg,
-                                  highlighter, highlighter_arg, initial);
-  if (active_profile) {
-    ApplyCoreProfileSettings_(*active_profile);
-  }
-  if (!line) {
-    return false;
-  }
-  ic_history_remove_last();
-  *out_input = std::string(line);
-  ic_free(line);
-  return true;
+  return Prompt(prompt, placeholder, out_input, literal_checker, literals);
 }
 
 /**
  * @brief Prompt for a command line using the shared readline handle.
  */
-bool AMPromptManager::PromptCore(const std::string &prompt,
+bool PromptIOManager::PromptCore(const std::string &prompt,
                                  std::string *out_input) {
-  AMPromptHookGuard::Lock();
 
   if (!out_input) {
     return true;
   }
-  const std::string target =
-      active_core_nickname_.empty() ? "local" : active_core_nickname_;
-  (void)UseCorePromptProfileForClient_(target);
-  auto lock = AMPrintLockGuard::Lock();
-  auto hooklock = AMPromptHookGuard::Lock();
-  char *line =
-      ic_readline_ex(prompt.c_str(), nullptr, nullptr,
-                     &AMTokenTypeAnalyzer::PromptHighlighter_, nullptr);
-  ic_history_remove_last();
+  // ScopedPrintCacheLockGuard_ lock(*this);
+  // ScopedPromptHookGuard_ hooklock;
+  char *line = nullptr;
+  ScopedAtomicFlag_ prompt_active_guard(&io_state_.prompt_active_);
+  auto profile = CurrentProfile_(isocline_profile_manager_);
+  if (profile && profile->Use()) {
+    std::optional<ic_highlight_fun_t *> highlighter_opt =
+        &AMTokenTypeAnalyzer::PromptHighlighter_;
+    std::optional<void *> highlighter_data_opt = nullptr;
+    auto highlighter_guard =
+        profile->TemporarySetHighlighter(highlighter_opt, highlighter_data_opt);
+    (void)highlighter_guard;
+    line = ic_readline_ex(prompt.c_str(), nullptr);
+  } else {
+    ic_set_default_highlighter(&AMTokenTypeAnalyzer::PromptHighlighter_,
+                               nullptr);
+    line = ic_readline_ex(prompt.c_str(), nullptr);
+  }
   if (!line) {
-
     return false;
   }
+  // isocline_profile_manager_.RemoveLastHistoryEntry();
   *out_input = std::string(line);
   ic_free(line);
-
   return true;
 }
 
-bool AMPromptManager::SecurePrompt(const std::string &prompt,
+bool PromptIOManager::SecurePrompt(const std::string &prompt,
                                    std::string *out_input) {
-
   if (!out_input) {
     return true;
   }
   out_input->clear();
-  auto lock = AMPrintLockGuard::Lock();
-  auto hooklock = AMPromptHookGuard::Lock();
-  std::string password;
-  std::cout << prompt << std::flush;
-#ifdef _WIN32
-  while (true) {
-    int ch = _getch();
-    if (ch == 3 || (TaskControlToken::Instance() &&
-                    !TaskControlToken::Instance()->IsRunning())) {
-      std::cout << "\n";
-      return false;
-    }
-    if (ch == '\r' || ch == '\n') {
-      break;
-    }
-    if (ch == '\b') {
-      if (!password.empty()) {
-        password.pop_back();
-        std::cout << "\b \b" << std::flush;
-      }
-      continue;
-    }
-    if (ch == 0 || ch == 224) {
-      (void)_getch();
-      continue;
-    }
-    password.push_back(static_cast<char>(ch));
-    std::cout << "*" << std::flush;
+  ScopedAtomicFlag_ secure_phase_guard(&io_state_.secure_phase_);
+
+  auto profile = CurrentProfile_(isocline_profile_manager_);
+  char *line = ic_readline_secure(prompt.c_str(), nullptr);
+  if (!line) {
+    return false;
   }
-#else
-  termios oldt{};
-  termios newt{};
-  tcgetattr(STDIN_FILENO, &oldt);
-  newt = oldt;
-  newt.c_lflag &= static_cast<unsigned long>(~(ECHO | ICANON));
-  tcsetattr(STDIN_FILENO, TCSANOW, &newt);
-  while (true) {
-    int ch = ::getchar();
-    if (ch == 3 || (TaskControlToken::Instance() &&
-                    !TaskControlToken::Instance()->IsRunning())) {
-      tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-      std::cout << "\n";
-      return false;
-    }
-    if (ch == '\n' || ch == '\r' || ch == EOF) {
-      break;
-    }
-    if (ch == 127 || ch == 8) {
-      if (!password.empty()) {
-        password.pop_back();
-        std::cout << "\b \b" << std::flush;
-      }
-      continue;
-    }
-    password.push_back(static_cast<char>(ch));
-    std::cout << "*" << std::flush;
-  }
-  tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
-#endif
-  std::cout << "\n";
-  *out_input = std::move(password);
+  *out_input = std::string(line);
+  ic_free(line);
   return true;
 }
 
-
+} // namespace AMInterface::prompt
