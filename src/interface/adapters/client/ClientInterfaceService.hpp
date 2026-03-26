@@ -1,0 +1,108 @@
+#pragma once
+
+#include "application/client/ClientAppService.hpp"
+#include "application/host/HostAppService.hpp"
+#include "domain/client/ClientPort.hpp"
+#include "foundation/core/DataClass.hpp"
+#include "interface/prompt/Prompt.hpp"
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace AMInterface::client {
+using ClientAppService = AMApplication::client::ClientAppService;
+using AMHostConfigManager = AMApplication::host::AMHostAppService;
+using AMKnownHostsManager = AMApplication::host::AMKnownHostsAppService;
+using AMPromptIOManager = AMInterface::prompt::AMPromptIOManager;
+using ClientControlComponent = AMDomain::client::ClientControlComponent;
+using amf = AMDomain::client::amf;
+using ClientHandle = AMDomain::client::ClientHandle;
+using HostConfig = AMDomain::host::HostConfig;
+
+struct ConnectRequest {
+  std::vector<std::string> nicknames = {};
+  bool force = false;
+};
+
+struct ChangeClientRequest {
+  std::string nickname = "";
+  bool quiet = false;
+};
+
+struct ProtocolConnectRequest {
+  std::string nickname = "";
+  std::string user_at_host = "";
+  int64_t port = 0;
+  std::string password = "";
+  std::string keyfile = "";
+};
+
+struct RemoveClientsRequest {
+  std::vector<std::string> nicknames = {};
+};
+
+struct CheckClientsRequest {
+  std::vector<std::string> nicknames = {};
+  bool detail = false;
+};
+
+class ClientConnectSpinner;
+
+class ClientInterfaceService final : public NonCopyableNonMovable {
+public:
+  ClientInterfaceService(ClientAppService &client_service,
+                         AMHostConfigManager &host_config_manager,
+                         AMKnownHostsManager &known_hosts_manager,
+                         AMPromptIOManager &prompt_io_manager);
+  ~ClientInterfaceService() override;
+
+  void SetDefaultControlToken(const amf &token);
+  [[nodiscard]] amf GetDefaultControlToken() const;
+  void BindInteractionCallbacks();
+
+  [[nodiscard]] ECMData<ClientHandle>
+  UICreateClient(const HostConfig &config,
+                 const ClientControlComponent &control, bool quiet);
+
+  ECM Connect(
+      const ConnectRequest &request,
+      const std::optional<ClientControlComponent> &component = std::nullopt);
+  ECM ChangeClient(
+      const ChangeClientRequest &request,
+      const std::optional<ClientControlComponent> &component = std::nullopt);
+  ECM ConnectSftp(
+      const ProtocolConnectRequest &request,
+      const std::optional<ClientControlComponent> &component = std::nullopt);
+  ECM ConnectFtp(
+      const ProtocolConnectRequest &request,
+      const std::optional<ClientControlComponent> &component = std::nullopt);
+  ECM RemoveClients(
+      const RemoveClientsRequest &request,
+      const std::optional<ClientControlComponent> &component = std::nullopt);
+  ECM CheckClients(
+      const CheckClientsRequest &request,
+      const std::optional<ClientControlComponent> &component = std::nullopt);
+
+private:
+  [[nodiscard]] ClientControlComponent
+  ResolveControl_(const std::optional<ClientControlComponent> &component) const;
+  [[nodiscard]] ECM
+  ConnectProtocol_(const ProtocolConnectRequest &request,
+                   AMDomain::host::ClientProtocol protocol,
+                   const std::optional<ClientControlComponent> &component);
+
+  ClientAppService &client_service_;
+  AMHostConfigManager &host_config_manager_;
+  AMKnownHostsManager &known_hosts_manager_;
+  AMPromptIOManager &prompt_io_manager_;
+  std::unique_ptr<ClientConnectSpinner> spinner_ = nullptr;
+  ClientAppService::ScopedConnectHooksGuard connect_hooks_guard_ = {};
+  amf default_control_token_ = nullptr;
+};
+} // namespace AMInterface::client
+
+namespace AMInterface::ApplicationAdapters {
+using ClientInterfaceService = AMInterface::client::ClientInterfaceService;
+}
