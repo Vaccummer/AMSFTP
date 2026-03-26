@@ -1,345 +1,155 @@
 #pragma once
-#include "application/config/ConfigPayloads.hpp"
+#include "application/prompt/PromptHistoryManager.hpp"
+#include "application/prompt/PromptProfileManager.hpp"
+#include "application/style/StyleAppService.hpp"
+#include "domain/prompt/PromptDomainModel.hpp"
+#include "domain/transfer/TransferDomainModel.hpp"
 #include "foundation/core/DataClass.hpp"
-#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
-#include "Isocline/isocline.h"
+#include "interface/prompt/IsoclineProfile.hpp"
 #include <atomic>
 #include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
-
-#include <unordered_map>
-#include <unordered_set>
+#include <sys/stat.h>
+#include <utility>
 #include <vector>
 
-/**
- * @brief Full prompt profile argument bundle.
- */
-struct AMPromptProfileArgs {
-  /** Prompt rendering arguments for one profile. */
-  struct Prompt {
-    std::string marker = "";
-    std::string continuation_marker = ">";
-    bool enable_multiline = false;
-  };
+namespace AMInterface::prompt {
+using AMApplication::prompt::PromptHistoryManager;
+using AMApplication::prompt::PromptProfileManager;
+using AMApplication::style::AMStyleConfigManager;
+using AMDomain::prompt::PromptProfileSettings;
 
-  /** History arguments for one profile. */
-  struct History {
-    bool enable = true;
-    bool enable_duplicates = true;
-    int max_count = 30;
-  };
+namespace kvars {
+static const std::string inline_hint_key = "ic-hint";
+static const std::string default_prompt_key = "ic-prompt";
+static const std::string invalid_value_key = "typein_invalid_value";
+static const std::string valid_value_key = "typein_valid_value";
+static const std::string default_profile_name = "*";
+} // namespace kvars
 
-  /** InlineHint arguments for one profile. */
-  struct InlineHint {
-    /** InlineHint path arguments for one profile. */
-    struct Path {
-      bool enable = true;
-      bool use_async = false;
-      size_t timeout_ms = 600;
-    };
+class IsoclineProfileManager : NonCopyableNonMovable {
+public:
+  IsoclineProfileManager(PromptProfileManager &profile_manager,
+                         PromptHistoryManager &history_manager,
+                         AMStyleConfigManager &style_config_manager);
+  ~IsoclineProfileManager() override;
 
-    bool enable = true;
-    int render_delay_ms = 30;
-    int search_delay_ms = 0;
-    Path path{};
-  };
+  ECM Init();
+  void AddHistoryEntry(const std::string &line);
+  void RemoveLastHistoryEntry();
+  ECM ChangeClient(const std::string &nickname);
+  [[nodiscard]] std::shared_ptr<IsoclineProfile> CurrentProfile() const;
+  [[nodiscard]] std::string CurrentNickname() const;
+  [[nodiscard]] PromptProfileSettings CurrentProfileArgs() const;
 
-  /** Completion arguments for one profile. */
-  struct Complete {
-    /** Completion searcher path arguments for one profile. */
-    struct Path {
-      bool use_async = false;
-      size_t timeout_ms = 3000;
-    };
+private:
+  friend class PromptIOManager;
 
-    Path path{};
-  };
-
-  /** Highlight arguments for one profile. */
-  struct Highlight {
-    /** Highlight path arguments for one profile. */
-    struct Path {
-      bool enable = true;
-      size_t timeout_ms = 1000;
-    };
-
-    int delay_ms = 0;
-    Path path{};
-  };
-
-  std::string name = "*";
-  bool from_default = false;
-  ic_profile_t *ic_profile = nullptr;
-  Prompt prompt{};
-  History history{};
-  InlineHint inline_hint{};
-  Complete complete{};
-  Highlight highlight{};
-
-  /**
-   * @brief Initialize this profile from typed settings with fallback defaults.
-   */
-  void Init(const AMApplication::config::PromptProfileSettings &settings,
-            const AMPromptProfileArgs &defaults);
-
-  /**
-   * @brief Convert this runtime profile into one typed config payload.
-   */
-  [[nodiscard]] AMApplication::config::PromptProfileSettings ToSettings() const;
+  [[nodiscard]] std::shared_ptr<IsoclineProfile>
+  BuildProfile_(const std::string &nickname,
+                const PromptProfileSettings &profile_args,
+                const AMDomain::style::StyleConfigArg &style_arg,
+                const std::vector<std::string> &history_records) const;
+  void WriteBackCurrentProfile_();
+  PromptProfileManager &profile_manager_;
+  PromptHistoryManager &history_manager_;
+  AMStyleConfigManager &style_config_manager_;
+  mutable std::mutex profiles_mtx_;
+  std::map<std::string, std::shared_ptr<IsoclineProfile>> profile_cache_ = {};
+  std::shared_ptr<IsoclineProfile> current_profile_ = nullptr;
+  std::string current_nickname_ = kvars::default_profile_name;
+  PromptProfileSettings current_profile_args_ = {};
 };
 
-class AMProfileManager {
+class PromptIOManager : NonCopyableNonMovable {
 public:
-  /**
-   * @brief Reload prompt profile args from settings.
-   */
-  ECM ReloadPromptProfiles();
-  /**
-   * @brief Interactively edit one prompt profile by nickname.
-   *
-   * Missing profiles are initialized from the star profile and persisted as
-   * explicit entries.
-   */
-  ECM Edit(const std::string &nickname);
+  explicit PromptIOManager(IsoclineProfileManager &isocline_profile_manager)
+      : isocline_profile_manager_(isocline_profile_manager) {}
+  ~PromptIOManager() override = default;
 
-  /**
-   * @brief Resolve prompt profile args for a client nickname.
-   *
-   * Falls back to the star profile when the nickname profile is missing.
-   */
-  [[nodiscard]] AMPromptProfileArgs &
-  ResolvePromptProfileArgs(const std::string &nickname);
-  /**
-   * @brief Return current active prompt profile args.
-   *
-   * Returns nullptr when there is no active client profile entry.
-   */
-  [[nodiscard]] AMPromptProfileArgs *GetCurrentPromptProfileArgs();
-  /**
-   * @brief Return current active prompt profile args (const overload).
-   *
-   * Returns nullptr when there is no active client profile entry.
-   */
-  [[nodiscard]] const AMPromptProfileArgs *GetCurrentPromptProfileArgs() const;
+  ECM Init() { return ChangeClient(kvars::default_profile_name); }
 
-protected:
-  AMProfileManager() = default;
-  virtual ~AMProfileManager();
-
-  /**
-   * @brief Collect current history into a list.
-   */
-  void CollectHistory_();
-  /**
-   * @brief Ensure runtime profile entry exists for one client.
-   *
-   * Missing clients are created from star profile and marked `from_default`.
-   */
-  AMPromptProfileArgs &
-  EnsurePromptProfileForClient_(const std::string &nickname);
-  /**
-   * @brief Ensure the specified client has a dedicated CorePrompt profile.
-   */
-  ic_profile_t *EnsureCorePromptProfileForClient_(const std::string &nickname);
-  /**
-   * @brief Switch active isocline profile to the target client CorePrompt
-   * profile.
-   */
-  bool UseCorePromptProfileForClient_(const std::string &nickname);
-
-  /**
-   * @brief Ensure prompt profiles are loaded.
-   */
-  void EnsurePromptProfilesLoaded_();
-
-  /**
-   * @brief Build profile args from one typed settings object with fallback defaults.
-   */
-  [[nodiscard]] AMPromptProfileArgs
-  BuildPromptProfileArgs_(
-      const AMApplication::config::PromptProfileSettings &settings,
-      const AMPromptProfileArgs &defaults) const;
-
-  mutable std::mutex profile_mtx_;
-  bool profiles_loaded_ = false;
-  AMPromptProfileArgs default_prompt_profile_args_{};
-  std::unordered_map<std::string, AMPromptProfileArgs> prompt_profiles_;
-  std::unordered_map<std::string, std::vector<std::string>> history_map_;
-  std::unordered_set<std::string> history_seeded_clients_;
-  std::string active_core_nickname_ = "local";
-  ic_profile_t *core_prompt_profile_ = nullptr;
-};
-
-class AMProfileCLI : public AMProfileManager {
-public:
-  /**
-   * @brief Edit one host prompt profile for CLI usage.
-   *
-   * The nickname must exist in HostManager.
-   */
-  ECM Edit(const std::string &nickname);
-
-  /**
-   * @brief Query prompt profile settings for one or more host nicknames.
-   *
-   * Every nickname must exist in HostManager.
-   */
-  ECM Get(const std::vector<std::string> &nicknames);
-
-protected:
-  AMProfileCLI() = default;
-  ~AMProfileCLI() override = default;
-};
-
-class AMPromptManager : public AMProfileCLI, NonCopyableNonMovable {
-public:
-  inline static AMPromptManager &Instance() {
-    static AMPromptManager instance;
-    return instance;
-  }
-
-  ~AMPromptManager() override = default;
-
-  ECM Init() {
-    CollectHistory_();
-    InitIsoclineConfig();
-    return Ok();
+  ECM ChangeClient(const std::string &nickname) {
+    return isocline_profile_manager_.ChangeClient(nickname);
   }
 
   void Print(const std::string &text);
 
   template <typename... Args> void FmtPrint(Args &&...args) {
     std::string output = AMStr::fmt(std::forward<Args>(args)...);
-    Print(output); // Print now recieve a single string, no sep or end needed
+    Print(output);
   }
 
   void ErrorFormat(const std::string &error_name, const std::string &error_msg,
                    bool is_exit = false, int exit_code = 0);
+  void ErrorFormat(const ECM &rcm, bool is_exit = false);
+  void PrintTaskResult(
+      const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info);
 
-  void ErrorFormat(const std::pair<ErrorCode, std::string> &rcm,
-                   bool is_exit = false);
-
-  /** Prompt for a yes/no response. */
-  bool PromptYesNo(const std::string &prompt, bool *canceled);
-
-  /**
-   * @brief Prompt for sensitive input with masked characters.
-   */
-  bool SecurePrompt(const std::string &prompt, std::string *out_input);
-
-  void PrintTaskResult(const std::shared_ptr<TaskInfo> &task_info);
-
-  /**
-   * @brief Flush cached output collected while progress bars are active.
-   */
-  void FlushCachedOutput();
-
-  /**
-   * @brief Adjust print-cache lock depth.
-   *
-   * enabled=true  -> lock depth +1
-   * enabled=false -> lock depth -1 (clamped at 0)
-   */
-  void SetCacheOutputOnly(bool enabled);
-
-  /**
-   * @brief Return whether Print currently caches output only.
-   */
-  [[nodiscard]] bool IsCacheOutputOnly() const;
-
-  /**
-   * @brief Print output immediately, bypassing cache checks.
-   */
-  void PrintRaw(const std::string &text, bool append_newline = true);
-
-  /**
-   * @brief Clear the terminal screen (optionally full reset).
-   */
+  void PrintRaw(const std::string &text);
+  void RefreshBegin(int lines);
+  void RefreshRender(const std::vector<std::optional<std::string>> &lines);
+  void RefreshEnd();
   void ClearScreen(bool clear_scrollback = false);
-
-  /**
-   * @brief Enter/leave the alternate screen buffer.
-   */
   void UseAlternateScreen(bool enable);
 
-  /**
-   * @brief Prompt for one value with optional checker and completion source.
-   *
-   * checker: validates current input for query-mode highlighting.
-   * candidates: query-mode completion source.
-   */
-  bool Prompt(const std::string &prompt, const std::string &placeholder,
-              std::string *out_input,
-              const std::function<bool(const std::string &)> &checker = {},
-              const std::vector<std::string> &candidates = {});
-  /**
-   * @brief Prompt for one literal value using a literal->help dictionary.
-   *
-   * The same literal map is used for:
-   * - validation/highlight (valid when input matches one literal key)
-   * - completion source (insert key, show help from value)
-   */
-  bool LiteralPrompt(const std::string &prompt, const std::string &placeholder,
-                     std::string *out_input,
-                     const std::map<std::string, std::string> &literals);
-  /**
-   * @brief Flush current history back into ConfigManager.
-   */
-  void FlushHistory();
-  /**
-   * @brief Enable or disable history for the current active client.
-   */
-  void SetHistoryEnabled(bool enabled);
-  /**
-   * @brief Add a history entry to the current active client.
-   */
-  void AddHistoryEntry(const std::string &line);
-  /**
-   * @brief Switch CorePrompt profile/history to the specified client nickname.
-   */
-  ECM ChangeClient(const std::string &nickname);
-  /**
-   * @brief Prompt for a command line using the shared readline handle.
-   */
+  bool SecurePrompt(const std::string &prompt, std::string *out_input);
+  bool PromptYesNo(const std::string &prompt, bool *canceled);
+  bool Prompt(
+      const std::string &prompt, const std::string &placeholder,
+      std::string *out_input,
+      const std::function<bool(const std::string &)> &checker = {},
+      const std::vector<std::pair<std::string, std::string>> &candidates = {});
+  bool LiteralPrompt(
+      const std::string &prompt, const std::string &placeholder,
+      std::string *out_input,
+      const std::vector<std::pair<std::string, std::string>> &literals);
   bool PromptCore(const std::string &prompt, std::string *out_input);
 
-private:
-  void InitIsoclineConfig();
-  std::mutex print_mutex_;
-  std::string cached_output_;
-  std::mutex cached_output_mutex_;
-  std::atomic<int> cache_output_lock_depth_{0};
-};
-
-class AMPrintLockGuard : NonCopyableNonMovable {
-public:
-  static AMPrintLockGuard Lock() { return AMPrintLockGuard(); }
-
-  explicit AMPrintLockGuard() : prompt_(AMPromptManager::Instance()) {
-    prompt_.SetCacheOutputOnly(true);
-  }
-
-  ~AMPrintLockGuard() override { prompt_.SetCacheOutputOnly(false); }
+  ECM Edit(const std::string &nickname);
+  ECM Get(const std::vector<std::string> &nicknames);
+  void FlushCachedOutput();
+  void SetCacheOutputOnly(bool enabled);
+  [[nodiscard]] bool IsCacheOutputOnly() const;
+  void SetRefreshDiffMode(bool enabled);
+  [[nodiscard]] bool IsRefreshDiffMode() const;
 
 private:
-  AMPromptManager &prompt_;
+  struct IOState {
+    std::mutex print_mutex_;
+    std::string cached_output_;
+    std::mutex cached_output_mutex_;
+    std::atomic<int> cache_output_lock_depth_{0};
+    std::atomic<int> refresh_occupied_lines_{0};
+    std::atomic<bool> prompt_active_{false};
+    std::atomic<bool> secure_phase_{false};
+    std::atomic<bool> refresh_diff_mode_{true};
+  };
+
+  static std::string EnsureTrailingNewline_(const std::string &text);
+  static bool IsAsciiText_(const std::string &text);
+  static size_t CommonPrefixAscii_(const std::string &lhs,
+                                   const std::string &rhs);
+  static void AppendMoveUpRows_(std::string *frame, int rows);
+  static void AppendClearRows_(std::string *frame, int rows);
+  void AppendRowDiffUpdate_(std::string *frame, const std::string &old_line,
+                            const std::string &new_line) const;
+  void PrintSyncLocked_(const std::string &text);
+  void PrintInsertAndRepaintLocked_(const std::string &msg);
+  void RepaintRefreshLocked_();
+  void ClearRefreshLocked_();
+  ECM EditProfile_(const std::string &nickname);
+
+  IsoclineProfileManager &isocline_profile_manager_;
+  IOState io_state_{};
+  std::vector<std::string> refresh_lines_;
+  std::vector<std::string> painted_refresh_lines_;
+  int painted_refresh_rows_ = 0;
 };
 
-struct AMPromptHookGuard {
-  /**
-   * @brief Silence global hooks and enable prompt-scope hook handlers.
-   */
-  AMPromptHookGuard();
-  /**
-   * @brief Restore global hook state and silence prompt-scope handlers.
-   */
-  ~AMPromptHookGuard();
-  /**
-   * @brief Return a scoped prompt hook guard.
-   */
-  static AMPromptHookGuard Lock() { return AMPromptHookGuard(); }
-};
+} // namespace AMInterface::prompt
