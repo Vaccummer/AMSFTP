@@ -31,11 +31,63 @@ struct FilesystemLsArg {
 
 struct FilesystemCdArg {
   std::string raw_path = {};
-  bool from_history = false;
 };
 
 struct FilesystemMkdirsArg {
   std::vector<std::string> raw_paths = {};
+};
+
+struct FilesystemGetSizeArg {
+  std::vector<std::string> raw_paths = {};
+};
+
+struct FilesystemTreeArg {
+  std::string raw_path = {};
+  int max_depth = -1;
+  bool only_dir = false;
+  bool show_all = false;
+  bool ignore_special_file = true;
+  bool quiet = false;
+};
+
+struct FilesystemTestRTTArg {
+  int times = 1;
+};
+
+struct FilesystemShellRunArg {
+  std::string cmd = {};
+  int max_time_s = -1;
+};
+
+struct FilesystemRenameArg {
+  std::string target = {};
+  std::string dst = {};
+  bool mkdir = true;
+  bool overwrite = false;
+};
+
+struct FilesystemMoveArg {
+  std::string target = {};
+  std::string dst = {};
+  bool mkdir = true;
+  bool overwrite = false;
+};
+
+struct FilesystemSafermArg {
+  std::vector<std::string> targets = {};
+};
+
+struct FilesystemRmfileArg {
+  std::vector<std::string> targets = {};
+};
+
+struct FilesystemRmdirArg {
+  std::vector<std::string> targets = {};
+};
+
+struct FilesystemPermanentRemoveArg {
+  std::vector<std::string> targets = {};
+  bool quiet = false;
 };
 
 class FilesystemInterfaceSerivce final : public NonCopyableNonMovable {
@@ -62,8 +114,41 @@ public:
   ECM Mkdirs(const FilesystemMkdirsArg &arg,
              const std::optional<AMDomain::client::ClientControlComponent>
                  &control_opt = std::nullopt) const;
+  ECM GetSize(const FilesystemGetSizeArg &arg,
+              const std::optional<AMDomain::client::ClientControlComponent>
+                  &control_opt = std::nullopt) const;
+  ECM Tree(const FilesystemTreeArg &arg,
+           const std::optional<AMDomain::client::ClientControlComponent>
+               &control_opt = std::nullopt) const;
+  ECM TestRTT(const FilesystemTestRTTArg &arg,
+              const std::optional<AMDomain::client::ClientControlComponent>
+                  &control_opt = std::nullopt) const;
+  ECM ShellRun(const FilesystemShellRunArg &arg,
+               const std::optional<AMDomain::client::ClientControlComponent>
+                   &control_opt = std::nullopt) const;
+  ECM Rename(const FilesystemRenameArg &arg,
+             const std::optional<AMDomain::client::ClientControlComponent>
+                 &control_opt = std::nullopt) const;
+  ECM Move(const FilesystemMoveArg &arg,
+           const std::optional<AMDomain::client::ClientControlComponent>
+               &control_opt = std::nullopt) const;
+  ECM Saferm(const FilesystemSafermArg &arg,
+             const std::optional<AMDomain::client::ClientControlComponent>
+                 &control_opt = std::nullopt) const;
+  ECM Rmfile(const FilesystemRmfileArg &arg,
+             const std::optional<AMDomain::client::ClientControlComponent>
+                 &control_opt = std::nullopt) const;
+  ECM Rmdir(const FilesystemRmdirArg &arg,
+            const std::optional<AMDomain::client::ClientControlComponent>
+                &control_opt = std::nullopt) const;
+  ECM PermanentRemove(
+      const FilesystemPermanentRemoveArg &arg,
+      const std::optional<AMDomain::client::ClientControlComponent>
+          &control_opt = std::nullopt) const;
 
 private:
+  [[nodiscard]] ECMData<ClientPath> MatchOne(const ClientPath &path) const;
+
   AMApplication::client::ClientAppService &client_service_;
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;
   AMInterface::style::AMStyleService &style_service_;
