@@ -43,8 +43,9 @@ struct RemoveClientsRequest {
   std::vector<std::string> nicknames = {};
 };
 
-struct CheckClientsRequest {
+struct ListClientsRequest {
   std::vector<std::string> nicknames = {};
+  bool check = false;
   bool detail = false;
 };
 
@@ -81,9 +82,18 @@ public:
   ECM RemoveClients(
       const RemoveClientsRequest &request,
       const std::optional<ClientControlComponent> &component = std::nullopt);
-  ECM CheckClients(
-      const CheckClientsRequest &request,
+  ECM ListClients(
+      const ListClientsRequest &request,
       const std::optional<ClientControlComponent> &component = std::nullopt);
+  ECM ListPrivateKeys(bool detail);
+  ECM AddHost(const std::string &nickname);
+  ECM ModifyHost(const std::string &nickname);
+  ECM RenameHost(const std::string &old_nickname,
+                 const std::string &new_nickname);
+  ECM RemoveHosts(const std::vector<std::string> &nicknames);
+  ECM SetHostValue(const std::string &nickname, const std::string &attrname,
+                   const std::string &value);
+  ECM ListHosts(bool detail);
 
 private:
   [[nodiscard]] ClientControlComponent
