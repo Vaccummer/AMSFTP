@@ -1,5 +1,6 @@
 #include "interface/adapters/filesystem/FilesystemInterfaceSerivce.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "foundation/core/Path.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
@@ -21,6 +22,14 @@ ECM MergeStatus_(const ECM &current, const ECM &next) {
   return isok(next) ? current : next;
 }
 
+std::string NormalizeNickname_(const std::string &nickname) {
+  return AMDomain::host::HostService::NormalizeNickname(nickname);
+}
+
+std::string NormalizePath_(const std::string &path) {
+  return AMDomain::filesystem::services::NormalizePath(path);
+}
+
 AMDomain::client::ClientControlComponent
 ResolveControl_(AMDomain::client::amf default_interrupt_flag,
                 const std::optional<AMDomain::client::ClientControlComponent>
@@ -31,7 +40,7 @@ ResolveControl_(AMDomain::client::amf default_interrupt_flag,
 }
 
 std::string MakePathKey_(const ClientPath &path) {
-  return path.nickname + "@" + path.path;
+  return NormalizeNickname_(path.nickname) + "@" + NormalizePath_(path.path);
 }
 
 bool IsHiddenName_(const std::string &name) {
@@ -79,10 +88,13 @@ std::string FormatStatTime(double value) {
 }
 
 std::string BuildPathLabel(const ClientPath &path) {
+  const std::string normalized_path = NormalizePath_(path.path);
+  const std::string display_path =
+      normalized_path.empty() ? path.path : normalized_path;
   if (path.nickname.empty()) {
-    return path.path;
+    return display_path;
   }
-  return AMStr::fmt("{}@{}", path.nickname, path.path);
+  return AMStr::fmt("{}@{}", NormalizeNickname_(path.nickname), display_path);
 }
 
 void PrintPathError(AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
@@ -341,21 +353,21 @@ FilesystemInterfaceSerivce::FilesystemInterfaceSerivce(
 ECMData<ClientPath>
 FilesystemInterfaceSerivce::SplitRawPath(const std::string &token) const {
   ClientPath out = {};
-  const size_t at_pos = token.find('@');
-  if (!token.empty() && token.front() == '@') {
+  const std::string normalized_token = AMStr::Strip(token);
+  const size_t at_pos = normalized_token.find('@');
+  if (!normalized_token.empty() && normalized_token.front() == '@') {
     out.nickname = "local";
-    out.path = token.substr(1);
+    out.path = normalized_token.substr(1);
   } else if (at_pos == std::string::npos) {
     out.nickname = filesystem_service_.CurrentNickname();
-    out.path = token;
+    out.path = normalized_token;
   } else {
-    out.nickname = token.substr(0, at_pos);
-    out.path = token.substr(at_pos + 1);
+    out.nickname = normalized_token.substr(0, at_pos);
+    out.path = normalized_token.substr(at_pos + 1);
   }
 
-  if (out.nickname.empty()) {
-    out.nickname = "local";
-  }
+  out.nickname = NormalizeNickname_(out.nickname);
+  out.path = NormalizePath_(out.path);
   if (out.path.empty()) {
     out.path = ".";
   }
@@ -383,6 +395,9 @@ FilesystemInterfaceSerivce::MatchOne(const ClientPath &path) const {
       });
 
   if (matched_count == 1) {
+    first_matched_path.nickname =
+        NormalizeNickname_(first_matched_path.nickname);
+    first_matched_path.path = NormalizePath_(first_matched_path.path);
     return {std::move(first_matched_path), Ok()};
   }
   if (matched_count > 1) {
@@ -587,9 +602,9 @@ ECM FilesystemInterfaceSerivce::Tree(
     return rcm;
   }
 
-  std::string root_key = root_stat.data.path;
+  std::string root_key = NormalizePath_(root_stat.data.path);
   if (root_key.empty()) {
-    root_key = target.path.empty() ? "." : target.path;
+    root_key = target.path.empty() ? "." : NormalizePath_(target.path);
   }
 
   std::unordered_map<std::string, TreeNode_> tree_nodes = {};
@@ -615,8 +630,8 @@ ECM FilesystemInterfaceSerivce::Tree(
     }
 
     ClientPath current = {};
-    current.nickname = target.nickname;
-    current.path = current_dir;
+    current.nickname = NormalizeNickname_(target.nickname);
+    current.path = NormalizePath_(current_dir);
     current.client = target.client;
     current.rcm = Ok();
 
@@ -646,7 +661,9 @@ ECM FilesystemInterfaceSerivce::Tree(
       if (entry.type == PathType::DIR) {
         PathInfo dir_info = entry;
         if (dir_info.path.empty()) {
-          dir_info.path = AMPathStr::join(current_dir, dir_info.name);
+          dir_info.path = NormalizePath_(AMPathStr::join(current_dir, dir_info.name));
+        } else {
+          dir_info.path = NormalizePath_(dir_info.path);
         }
         node.dirs.push_back(dir_info);
         tree_nodes.try_emplace(dir_info.path);
@@ -662,7 +679,10 @@ ECM FilesystemInterfaceSerivce::Tree(
 
       PathInfo file_info = entry;
       if (file_info.path.empty()) {
-        file_info.path = AMPathStr::join(current_dir, file_info.name);
+        file_info.path =
+            NormalizePath_(AMPathStr::join(current_dir, file_info.name));
+      } else {
+        file_info.path = NormalizePath_(file_info.path);
       }
       node.files.push_back(std::move(file_info));
     }
@@ -680,7 +700,7 @@ ECM FilesystemInterfaceSerivce::Tree(
   }
 
   PathInfo root_info = root_stat.data;
-  root_info.path = root_key;
+  root_info.path = NormalizePath_(root_key);
   const std::string root_line =
       style_service_.Format(interface_print::BuildPathLabel(target),
                             AMInterface::style::StyleIndex::None, &root_info);
@@ -700,10 +720,7 @@ ECM FilesystemInterfaceSerivce::TestRTT(
   }
 
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  std::string nickname = filesystem_service_.CurrentNickname();
-  if (nickname.empty()) {
-    nickname = "local";
-  }
+  std::string nickname = NormalizeNickname_(filesystem_service_.CurrentNickname());
 
   auto rtt_result = filesystem_service_.TestRTT(nickname, control, arg.times);
   if (!isok(rtt_result.rcm)) {
@@ -743,10 +760,7 @@ ECM FilesystemInterfaceSerivce::ShellRun(
         base_control.ControlToken(), safe_seconds * 1000);
   }
 
-  std::string nickname = filesystem_service_.CurrentNickname();
-  if (nickname.empty()) {
-    nickname = "local";
-  }
+  std::string nickname = NormalizeNickname_(filesystem_service_.CurrentNickname());
 
   std::string final_cmd = {};
   auto shell_result = filesystem_service_.ShellRun(nickname, "", command,
@@ -908,7 +922,8 @@ ECM FilesystemInterfaceSerivce::Move(
   }
 
   ClientPath final_dst = dst_dir;
-  final_dst.path = AMPathStr::join(dst_dir.path, AMPathStr::basename(src.path));
+  final_dst.path =
+      NormalizePath_(AMPathStr::join(dst_dir.path, AMPathStr::basename(src.path)));
   FilesystemRenameArg rename_arg = {};
   rename_arg.target = interface_print::BuildPathLabel(src);
   rename_arg.dst = interface_print::BuildPathLabel(final_dst);
@@ -1206,8 +1221,10 @@ ECM FilesystemInterfaceSerivce::Ls(
       if (target.nickname.empty()) {
         target.nickname = filesystem_service_.CurrentNickname();
       }
-      if (target.nickname.empty()) {
-        target.nickname = "local";
+      target.nickname = NormalizeNickname_(target.nickname);
+      target.path = NormalizePath_(target.path);
+      if (target.path.empty()) {
+        target.path = ".";
       }
     } else {
       auto split_result = SplitRawPath("/");
@@ -1236,6 +1253,11 @@ ECM FilesystemInterfaceSerivce::Ls(
       return match_result.rcm;
     }
     target = std::move(match_result.data);
+  }
+  target.nickname = NormalizeNickname_(target.nickname);
+  target.path = NormalizePath_(target.path);
+  if (target.path.empty()) {
+    target.path = ".";
   }
 
   if (!arg.list_like) {
@@ -1329,11 +1351,14 @@ ECM FilesystemInterfaceSerivce::Cd(
       target = std::move(match_result.data);
     }
   }
-
-  std::string current_nickname = filesystem_service_.CurrentNickname();
-  if (current_nickname.empty()) {
-    current_nickname = "local";
+  target.nickname = NormalizeNickname_(target.nickname);
+  target.path = NormalizePath_(target.path);
+  if (target.path.empty()) {
+    target.path = ".";
   }
+
+  std::string current_nickname =
+      NormalizeNickname_(filesystem_service_.CurrentNickname());
 
   if (target.nickname == current_nickname) {
     ECM rcm = filesystem_service_.ChangeDir(target, control, from_history);

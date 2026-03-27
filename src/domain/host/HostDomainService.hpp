@@ -26,6 +26,8 @@ inline ClientProtocol StrToProtocol(const std::string &protocol_str) {
   return IsNicknameValid(nickname);
 }
 
+void vNormalizeNickname(std::string &nickname);
+[[nodiscard]] std::string NormalizeNickname(const std::string &nickname);
 [[nodiscard]] bool IsLocalNickname(const std::string &nickname);
 
 [[nodiscard]] bool NicknameExists(const HostConfigMap &host_configs,
