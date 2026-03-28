@@ -4,7 +4,7 @@
 
 namespace AMApplication::client {
 ClientAppServiceBase::ClientAppServiceBase(ClientServiceArg arg)
-    : init_arg_(std::move(arg)), control_token_(nullptr),
+    : init_arg_(std::move(arg)), config_dirty_(false), control_token_(nullptr),
       private_keys_(std::vector<std::string>{}),
       maintainer_callbacks_(ClientCallbacks{}),
       public_callbacks_(ClientCallbacks{}) {}
@@ -13,11 +13,24 @@ ClientServiceArg ClientAppServiceBase::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
+bool ClientAppServiceBase::IsConfigDirty() const {
+  return config_dirty_.lock().load();
+}
+
+void ClientAppServiceBase::ClearConfigDirty() {
+  config_dirty_.lock().store(false);
+}
+
+ClientServiceArg ClientAppServiceBase::ExportConfigSnapshot() const {
+  return GetInitArg();
+}
+
 void ClientAppServiceBase::SetHeartbeatTimeoutMs(int timeout_ms) {
   auto init_arg = init_arg_.lock();
   auto value = init_arg.load();
   value.heartbeat_timeout_ms = timeout_ms;
   init_arg.store(value);
+  config_dirty_.lock().store(true);
 }
 
 int ClientAppServiceBase::HeartbeatTimeoutMs() const {
@@ -29,6 +42,7 @@ void ClientAppServiceBase::SetHeartbeatIntervalS(int interval_s) {
   auto value = init_arg.load();
   value.heartbeat_interval_s = interval_s;
   init_arg.store(value);
+  config_dirty_.lock().store(true);
 }
 
 int ClientAppServiceBase::HeartbeatIntervalS() const {

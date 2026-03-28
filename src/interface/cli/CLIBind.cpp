@@ -311,6 +311,8 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
         ->expected(1, -1);
   }
   if (stat_node) {
+    stat_node->AddFlag("-L", "--trace-link", args.stat->trace_link,
+                       "Trace symlink target instead of link itself");
     stat_node->AddPositionalRule(0, Sem::Path, true);
   }
 
@@ -918,7 +920,12 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   ctx.command_name = command_name;
 
   BaseArgStruct *selected = args.active;
-  ctx.rcm = selected->Run(managers, ctx);
+  const ECM run_rcm = selected->Run(managers, ctx);
+  const ECM sync_rcm = managers.config_service.FlushDirtyParticipants();
+  ctx.rcm = run_rcm;
+  if (isok(ctx.rcm) && !isok(sync_rcm)) {
+    ctx.rcm = sync_rcm;
+  }
   selected->reset();
   args.active = nullptr;
   store_exit_code(static_cast<int>(ctx.rcm.first));

@@ -8,7 +8,8 @@ using EC = ErrorCode;
 }
 
 VarAppService::VarAppService(VarSetArg init_arg)
-    : init_arg_(std::move(init_arg)), store_(VarSetArg{}) {}
+    : init_arg_(std::move(init_arg)), store_(VarSetArg{}),
+      config_dirty_(false) {}
 
 ECM VarAppService::Init() {
   const VarSetArg init_arg = init_arg_.lock().load();
@@ -17,6 +18,16 @@ ECM VarAppService::Init() {
 }
 
 VarSetArg VarAppService::GetInitArg() const { return init_arg_.lock().load(); }
+
+bool VarAppService::IsConfigDirty() const {
+  return config_dirty_.lock().load();
+}
+
+void VarAppService::ClearConfigDirty() { config_dirty_.lock().store(false); }
+
+VarSetArg VarAppService::ExportConfigSnapshot() const {
+  return store_.lock().load();
+}
 
 ECMData<VarInfo> VarAppService::GetVar(const std::string &zone_name,
                                        const std::string &varname) const {
@@ -116,6 +127,7 @@ ECM VarAppService::AddVar(const VarInfo &info) {
   }
   auto store = store_.lock();
   store->set[info.domain][info.varname] = info.varvalue;
+  config_dirty_.lock().store(true);
   return Ok();
 }
 
@@ -137,6 +149,7 @@ ECM VarAppService::DelVar(const std::string &zone_name,
   }
 
   zone_it->second.erase(var_it);
+  config_dirty_.lock().store(true);
   return Ok();
 }
 } // namespace AMApplication::var

@@ -14,14 +14,17 @@ struct PromptProfileQueryResult {
   PromptProfileSettings profile = {};
 };
 
-class AMPromptProfileManager : public NonCopyableNonMovable {
+class PromptProfileManager : public NonCopyableNonMovable {
 public:
-  explicit AMPromptProfileManager(PromptProfileArg arg = {});
-  ~AMPromptProfileManager() override = default;
+  explicit PromptProfileManager(PromptProfileArg arg = {});
+  ~PromptProfileManager() override = default;
 
   ECM Init();
 
   [[nodiscard]] PromptProfileArg GetInitArg() const;
+  [[nodiscard]] bool IsConfigDirty() const;
+  void ClearConfigDirty();
+  [[nodiscard]] PromptProfileArg ExportConfigSnapshot() const;
 
   void SetInitArg(PromptProfileArg arg);
 
@@ -30,5 +33,6 @@ public:
 
 private:
   mutable AMAtomic<PromptProfileArg> init_arg_ = {};
+  mutable AMAtomic<bool> config_dirty_ = {};
 };
 } // namespace AMApplication::prompt

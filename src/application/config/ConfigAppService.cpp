@@ -142,6 +142,12 @@ void AMConfigAppService::CloseHandles() {
   }
   auto backup_set = backup_set_.lock();
   backup_set.store(ConfigBackupSet{});
+  {
+    std::lock_guard<std::mutex> lock(sync_participants_mtx_);
+    sync_participants_.clear();
+    next_sync_participant_id_ = 1;
+    sync_flush_running_ = false;
+  }
 }
 
 /**
@@ -290,6 +296,95 @@ void AMConfigAppService::SubmitWriteTask(std::function<ECM()> task) {
     return;
   }
   store_->SubmitWriteTask(std::move(task));
+}
+
+ECMData<AMConfigAppService::SyncParticipantId>
+AMConfigAppService::RegisterSyncParticipantImpl_(
+    AMDomain::config::ConfigPayloadTag tag, std::function<bool()> is_dirty,
+    std::function<ECM()> flush_once, std::function<void()> clear_dirty) {
+  if (!is_dirty || !flush_once || !clear_dirty) {
+    return {0, Err(EC::InvalidArg, "invalid sync participant callbacks")};
+  }
+
+  std::lock_guard<std::mutex> lock(sync_participants_mtx_);
+  const SyncParticipantId id = next_sync_participant_id_++;
+  SyncParticipant participant = {};
+  participant.id = id;
+  participant.tag = tag;
+  participant.is_dirty = std::move(is_dirty);
+  participant.flush_once = std::move(flush_once);
+  participant.clear_dirty = std::move(clear_dirty);
+  sync_participants_.push_back(std::move(participant));
+  return {id, Ok()};
+}
+
+ECM AMConfigAppService::UnregisterSyncParticipant(
+    SyncParticipantId participant_id) {
+  std::lock_guard<std::mutex> lock(sync_participants_mtx_);
+  const auto it = std::remove_if(
+      sync_participants_.begin(), sync_participants_.end(),
+      [participant_id](const SyncParticipant &participant) {
+        return participant.id == participant_id;
+      });
+  if (it == sync_participants_.end()) {
+    return Err(EC::InvalidArg, "sync participant not found");
+  }
+  sync_participants_.erase(it, sync_participants_.end());
+  return Ok();
+}
+
+ECM AMConfigAppService::FlushDirtyParticipants() {
+  if (!store_) {
+    return Err(EC::ConfigNotInitialized, "config store is not bound");
+  }
+
+  std::vector<SyncParticipant> participants = {};
+  {
+    std::lock_guard<std::mutex> lock(sync_participants_mtx_);
+    if (sync_flush_running_) {
+      return Err(EC::BadOperationOrder, "sync flush already running");
+    }
+    sync_flush_running_ = true;
+    participants = sync_participants_;
+  }
+
+  auto reset_running = [this]() {
+    std::lock_guard<std::mutex> lock(sync_participants_mtx_);
+    sync_flush_running_ = false;
+  };
+  struct SyncFlushGuard {
+    std::function<void()> fn = {};
+    ~SyncFlushGuard() {
+      if (fn) {
+        fn();
+      }
+    }
+  } guard{reset_running};
+
+  ECM first_error = Ok();
+  for (const SyncParticipant &participant : participants) {
+    if (!participant.is_dirty || !participant.flush_once ||
+        !participant.clear_dirty) {
+      if (isok(first_error)) {
+        first_error =
+            Err(EC::InvalidArg, "invalid sync participant callbacks");
+      }
+      continue;
+    }
+    if (!participant.is_dirty()) {
+      continue;
+    }
+    const ECM flush_rcm = participant.flush_once();
+    if (!isok(flush_rcm)) {
+      if (isok(first_error)) {
+        first_error = flush_rcm;
+      }
+      continue;
+    }
+    participant.clear_dirty();
+  }
+
+  return first_error;
 }
 
 /**
