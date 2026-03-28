@@ -1,55 +1,98 @@
 #pragma once
 
+#include "domain/arg/ArgStructTag.hpp"
+#include "domain/config/ConfigModel.hpp"
 #include "foundation/tools/json.hpp"
-#include "IArgCodec.hpp"
 
-#include <memory>
 #include <string>
-#include <typeindex>
 #include <unordered_map>
-#include <vector>
 
 namespace AMInfra::config {
 /**
- * @brief Immutable registry that maps runtime payload types to codec strategies.
+ * @brief Strategy interface for one typed payload <-> document-json conversion.
  */
-class ArgCodecRegistry {
+class IArgCodec {
 public:
-  /**
-   * @brief Return shared singleton registry instance.
-   */
-  [[nodiscard]] static const ArgCodecRegistry &Instance();
+  virtual ~IArgCodec() = default;
 
   /**
-   * @brief Lookup codec by runtime payload type.
+   * @brief Return payload tag this codec handles.
    */
-  [[nodiscard]] const IArgCodec *Find(const std::type_index &type) const;
+  [[nodiscard]] virtual AMDomain::config::ConfigPayloadTag Tag() const = 0;
 
-private:
   /**
-   * @brief Construct registry with all built-in codecs.
+   * @brief Return document kind this codec belongs to.
    */
-  ArgCodecRegistry();
+  [[nodiscard]] virtual AMDomain::config::DocumentKind Kind() const = 0;
 
-  std::vector<std::unique_ptr<IArgCodec>> codecs_ = {};
-  std::unordered_map<std::type_index, const IArgCodec *> map_ = {};
+  /**
+   * @brief Decode one JSON root into output payload.
+   */
+  [[nodiscard]] virtual bool Decode(const Json &root, void *out,
+                                    std::string *error) const = 0;
+
+  /**
+   * @brief Encode one payload into JSON root.
+   */
+  [[nodiscard]] virtual bool Encode(const void *in, Json *root,
+                                    std::string *error) const = 0;
+
+  /**
+   * @brief Erase one payload subtree from JSON root.
+   */
+  [[nodiscard]] virtual bool Erase(const void *in, Json *root,
+                                   std::string *error) const = 0;
 };
 
 /**
- * @brief Decode JSON root into one typed payload by runtime type.
+ * @brief Registry mapping payload tags to codec implementations.
  */
-[[nodiscard]] bool DecodeArg(const std::type_index &type, const Json &root,
-                             void *out, std::string *error = nullptr);
+class ArgCodecRegistry {
+public:
+  ArgCodecRegistry() = default;
+  explicit ArgCodecRegistry(
+      std::unordered_map<AMDomain::config::ConfigPayloadTag,
+                         const IArgCodec *> map);
+
+  /**
+   * @brief Lookup codec by payload tag.
+   */
+  [[nodiscard]] const IArgCodec *
+  Find(AMDomain::config::ConfigPayloadTag tag) const;
+
+private:
+  std::unordered_map<AMDomain::config::ConfigPayloadTag, const IArgCodec *> map_ =
+      {};
+};
 
 /**
- * @brief Encode one typed payload into JSON root by runtime type.
+ * @brief Build the full codec lookup map.
  */
-[[nodiscard]] bool EncodeArg(const std::type_index &type, const void *in,
-                             Json *root, std::string *error = nullptr);
+[[nodiscard]] std::unordered_map<AMDomain::config::ConfigPayloadTag,
+                                 const IArgCodec *>
+BuildCodecMap();
 
 /**
- * @brief Erase one typed payload subtree from JSON root by runtime type.
+ * @brief Decode JSON root into one typed payload by payload tag.
  */
-[[nodiscard]] bool EraseArg(const std::type_index &type, const void *in,
-                            Json *root, std::string *error = nullptr);
+[[nodiscard]] bool DecodeArg(const ArgCodecRegistry &registry,
+                             AMDomain::config::ConfigPayloadTag tag,
+                             const Json &root, void *out,
+                             std::string *error = nullptr);
+
+/**
+ * @brief Encode one typed payload into JSON root by payload tag.
+ */
+[[nodiscard]] bool EncodeArg(const ArgCodecRegistry &registry,
+                             AMDomain::config::ConfigPayloadTag tag,
+                             const void *in, Json *root,
+                             std::string *error = nullptr);
+
+/**
+ * @brief Erase one typed payload subtree from JSON root by payload tag.
+ */
+[[nodiscard]] bool EraseArg(const ArgCodecRegistry &registry,
+                            AMDomain::config::ConfigPayloadTag tag,
+                            const void *in, Json *root,
+                            std::string *error = nullptr);
 } // namespace AMInfra::config

@@ -4,7 +4,6 @@
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/time.hpp"
 #include <algorithm>
-#include <typeindex>
 #include <utility>
 #include <vector>
 
@@ -334,7 +333,7 @@ ConfigBackupSet AMConfigAppService::LoadBackupSet_() const {
   if (!store_) {
     return loaded;
   }
-  if (store_->Read(std::type_index(typeid(ConfigBackupSet)),
+  if (store_->Read(AMDomain::config::ConfigPayloadTag::ConfigBackupSet,
                    static_cast<void *>(&loaded))) {
     auto backup_set = backup_set_.lock();
     backup_set.store(loaded);
