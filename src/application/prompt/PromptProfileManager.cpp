@@ -13,29 +13,42 @@ std::string ResolveProfileZone_(const std::string &zone) {
 }
 } // namespace
 
-AMPromptProfileManager::AMPromptProfileManager(PromptProfileArg arg)
-    : init_arg_(std::move(arg)) {
+PromptProfileManager::PromptProfileManager(PromptProfileArg arg)
+    : init_arg_(std::move(arg)), config_dirty_(false) {
   auto guard = init_arg_.lock();
   AMDomain::prompt::services::NormalizePromptProfileArg(&guard.get());
 }
 
-ECM AMPromptProfileManager::Init() {
+ECM PromptProfileManager::Init() {
   auto guard = init_arg_.lock();
   AMDomain::prompt::services::NormalizePromptProfileArg(&guard.get());
   return Ok();
 }
 
-PromptProfileArg AMPromptProfileManager::GetInitArg() const {
+PromptProfileArg PromptProfileManager::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
-void AMPromptProfileManager::SetInitArg(PromptProfileArg arg) {
+bool PromptProfileManager::IsConfigDirty() const {
+  return config_dirty_.lock().load();
+}
+
+void PromptProfileManager::ClearConfigDirty() {
+  config_dirty_.lock().store(false);
+}
+
+PromptProfileArg PromptProfileManager::ExportConfigSnapshot() const {
+  return GetInitArg();
+}
+
+void PromptProfileManager::SetInitArg(PromptProfileArg arg) {
   AMDomain::prompt::services::NormalizePromptProfileArg(&arg);
   init_arg_.lock().store(std::move(arg));
+  config_dirty_.lock().store(true);
 }
 
 PromptProfileQueryResult
-AMPromptProfileManager::GetZoneProfile(const std::string &zone) const {
+PromptProfileManager::GetZoneProfile(const std::string &zone) const {
   auto guard = init_arg_.lock();
   auto &set = guard->set;
   const std::string requested_zone = ResolveProfileZone_(zone);
@@ -54,9 +67,8 @@ AMPromptProfileManager::GetZoneProfile(const std::string &zone) const {
     PromptProfileSettings default_profile = {};
     AMDomain::prompt::services::NormalizePromptProfileSettings(
         &default_profile);
-    fallback_it = set
-                      .emplace(AMDomain::prompt::kPromptProfileDefault,
-                               std::move(default_profile))
+    fallback_it = set.emplace(AMDomain::prompt::kPromptProfileDefault,
+                              std::move(default_profile))
                       .first;
   }
 

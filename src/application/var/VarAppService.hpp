@@ -23,6 +23,9 @@ public:
 
   ECM Init();
   [[nodiscard]] VarSetArg GetInitArg() const;
+  [[nodiscard]] bool IsConfigDirty() const;
+  void ClearConfigDirty();
+  [[nodiscard]] VarSetArg ExportConfigSnapshot() const;
   [[nodiscard]] ECMData<VarInfo> GetVar(const std::string &zone_name,
                                         const std::string &varname) const;
   [[nodiscard]] ECMData<VarInfoList>
@@ -38,5 +41,6 @@ public:
 private:
   mutable AMAtomic<VarSetArg> init_arg_ = {};
   mutable AMAtomic<VarSetArg> store_ = {};
+  mutable AMAtomic<bool> config_dirty_ = {};
 };
 } // namespace AMApplication::var

@@ -4,8 +4,10 @@
 #include "domain/config/ConfigModel.hpp"
 #include "domain/config/ConfigStorePort.hpp"
 #include "foundation/core/DataClass.hpp"
+#include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <memory>
 #include <optional>
 #include <string>
@@ -15,7 +17,7 @@
 namespace AMDomain::host {
 struct HostConfigArg;
 struct KnownHostEntryArg;
-}
+} // namespace AMDomain::host
 namespace AMDomain::client {
 struct ClientServiceArg;
 }
@@ -28,7 +30,7 @@ struct VarSetArg;
 namespace AMDomain::prompt {
 struct PromptProfileArg;
 struct PromptHistoryArg;
-}
+} // namespace AMDomain::prompt
 namespace AMDomain::style {
 struct StyleConfigArg;
 }
@@ -144,6 +146,7 @@ template <> struct ConfigPayloadTagTraits<ConfigStoreInitArg> {
 class AMConfigAppService : NonCopyable {
 public:
   using DumpErrorCallback = std::function<void(ECM)>;
+  using SyncParticipantId = uint64_t;
 
   /**
    * @brief Construct one app service with store init payload.
@@ -221,6 +224,50 @@ public:
   void SubmitWriteTask(std::function<ECM()> task);
 
   /**
+   * @brief Register one typed sync participant.
+   */
+  template <typename T>
+  [[nodiscard]] ECMData<SyncParticipantId>
+  RegisterSyncParticipant(std::function<bool()> is_dirty,
+                          std::function<T()> pull_snapshot,
+                          std::function<void()> clear_dirty) {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    const auto tag = detail::ResolveConfigPayloadTag<ValueT>();
+    if (!tag.has_value()) {
+      return {
+          0, Err(EC::InvalidArg,
+                 "sync participant type is not mapped to config payload")};
+    }
+    if (!is_dirty || !pull_snapshot || !clear_dirty) {
+      return {0, Err(EC::InvalidArg, "invalid sync participant callbacks")};
+    }
+
+    std::function<ECM()> flush_once =
+        [this, pull_snapshot = std::move(pull_snapshot)]() -> ECM {
+      const ValueT snapshot = pull_snapshot();
+      if (!Write<ValueT>(snapshot)) {
+        return Err(EC::ConfigDumpFailed,
+                   "failed to write sync participant payload");
+      }
+      return Ok();
+    };
+
+    return RegisterSyncParticipantImpl_(tag.value(), std::move(is_dirty),
+                                        std::move(flush_once),
+                                        std::move(clear_dirty));
+  }
+
+  /**
+   * @brief Unregister one sync participant by id.
+   */
+  ECM UnregisterSyncParticipant(SyncParticipantId participant_id);
+
+  /**
+   * @brief Flush all dirty sync participants into config JSON.
+   */
+  ECM FlushDirtyParticipants();
+
+  /**
    * @brief Return data file path for one document.
    */
   [[nodiscard]] bool GetDataPath(AMDomain::config::DocumentKind kind,
@@ -276,7 +323,8 @@ public:
     if (!tag.has_value()) {
       return false;
     }
-    const bool ok = store_->Write(tag.value(), static_cast<const void *>(&value));
+    const bool ok =
+        store_->Write(tag.value(), static_cast<const void *>(&value));
     if constexpr (std::is_same_v<ValueT, ConfigBackupSet>) {
       if (ok) {
         auto backup_set = backup_set_.lock();
@@ -298,7 +346,8 @@ public:
     if (!tag.has_value()) {
       return false;
     }
-    const bool ok = store_->Erase(tag.value(), static_cast<const void *>(&value));
+    const bool ok =
+        store_->Erase(tag.value(), static_cast<const void *>(&value));
     if constexpr (std::is_same_v<ValueT, ConfigBackupSet>) {
       if (ok) {
         auto backup_set = backup_set_.lock();
@@ -309,6 +358,21 @@ public:
   }
 
 private:
+  struct SyncParticipant {
+    SyncParticipantId id = 0;
+    AMDomain::config::ConfigPayloadTag tag =
+        AMDomain::config::ConfigPayloadTag::ConfigStoreInitArg;
+    std::function<bool()> is_dirty = {};
+    std::function<ECM()> flush_once = {};
+    std::function<void()> clear_dirty = {};
+  };
+
+  [[nodiscard]] ECMData<SyncParticipantId>
+  RegisterSyncParticipantImpl_(AMDomain::config::ConfigPayloadTag tag,
+                               std::function<bool()> is_dirty,
+                               std::function<ECM()> flush_once,
+                               std::function<void()> clear_dirty);
+
   struct BackupTargets {
     std::filesystem::path backup_dir = {};
     std::filesystem::path stamp_dir = {};
@@ -336,5 +400,9 @@ private:
   std::unique_ptr<IConfigStorePort> owned_store_ = nullptr;
   IConfigStorePort *store_ = nullptr;
   DumpErrorCallback dump_error_cb_;
+  mutable std::mutex sync_participants_mtx_ = {};
+  std::vector<SyncParticipant> sync_participants_ = {};
+  uint64_t next_sync_participant_id_ = 1;
+  bool sync_flush_running_ = false;
 };
 } // namespace AMApplication::config

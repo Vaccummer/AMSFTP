@@ -13,14 +13,17 @@ struct PromptHistoryQueryResult {
   std::vector<std::string> history = {};
 };
 
-class AMPromptHistoryManager : public NonCopyableNonMovable {
+class PromptHistoryManager : public NonCopyableNonMovable {
 public:
-  explicit AMPromptHistoryManager(PromptHistoryArg arg = {});
-  ~AMPromptHistoryManager() override = default;
+  explicit PromptHistoryManager(PromptHistoryArg arg = {});
+  ~PromptHistoryManager() override = default;
 
   ECM Init();
 
   [[nodiscard]] PromptHistoryArg GetInitArg() const;
+  [[nodiscard]] bool IsConfigDirty() const;
+  void ClearConfigDirty();
+  [[nodiscard]] PromptHistoryArg ExportConfigSnapshot() const;
 
   void SetInitArg(PromptHistoryArg arg);
 
@@ -35,5 +38,6 @@ public:
 
 private:
   mutable AMAtomic<PromptHistoryArg> init_arg_ = {};
+  mutable AMAtomic<bool> config_dirty_ = {};
 };
 } // namespace AMApplication::prompt
