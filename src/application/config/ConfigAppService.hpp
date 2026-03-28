@@ -1,5 +1,6 @@
 #pragma once
 
+#include "domain/arg/ArgStructTag.hpp"
 #include "domain/config/ConfigModel.hpp"
 #include "domain/config/ConfigStorePort.hpp"
 #include "foundation/core/DataClass.hpp"
@@ -9,13 +10,134 @@
 #include <optional>
 #include <string>
 #include <type_traits>
-#include <typeindex>
 #include <vector>
 
+namespace AMDomain::host {
+struct HostConfigArg;
+struct KnownHostEntryArg;
+}
+namespace AMDomain::client {
+struct ClientServiceArg;
+}
+namespace AMDomain::filesystem {
+struct FilesystemArg;
+}
+namespace AMDomain::var {
+struct VarSetArg;
+}
+namespace AMDomain::prompt {
+struct PromptProfileArg;
+struct PromptHistoryArg;
+}
+namespace AMDomain::style {
+struct StyleConfigArg;
+}
+
 namespace AMApplication::config {
+struct SettingsOptionsSnapshot;
+struct UserVarsSnapshot;
+struct PromptProfileDocument;
+struct PromptHistoryDocument;
+struct AMStyleSnapshot;
+
 using IConfigStorePort = AMDomain::config::IConfigStorePort;
 using ConfigBackupSet = AMDomain::config::ConfigBackupSet;
 using ConfigStoreInitArg = AMDomain::config::ConfigStoreInitArg;
+
+namespace detail {
+template <typename T> struct ConfigPayloadTagTraits {
+  static constexpr bool kMapped = false;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::ConfigStoreInitArg;
+};
+
+template <typename T>
+[[nodiscard]] constexpr std::optional<AMDomain::config::ConfigPayloadTag>
+ResolveConfigPayloadTag() {
+  using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+  if constexpr (ConfigPayloadTagTraits<ValueT>::kMapped) {
+    return ConfigPayloadTagTraits<ValueT>::kTag;
+  }
+  return std::nullopt;
+}
+
+template <> struct ConfigPayloadTagTraits<AMDomain::host::HostConfigArg> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::HostConfigArg;
+};
+template <> struct ConfigPayloadTagTraits<AMDomain::host::KnownHostEntryArg> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::KnownHostEntryArg;
+};
+template <> struct ConfigPayloadTagTraits<ConfigBackupSet> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::ConfigBackupSet;
+};
+template <> struct ConfigPayloadTagTraits<SettingsOptionsSnapshot> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::SettingsOptionsSnapshot;
+};
+template <> struct ConfigPayloadTagTraits<UserVarsSnapshot> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::UserVarsSnapshot;
+};
+template <> struct ConfigPayloadTagTraits<PromptProfileDocument> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::PromptProfileDocument;
+};
+template <> struct ConfigPayloadTagTraits<PromptHistoryDocument> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::PromptHistoryDocument;
+};
+template <> struct ConfigPayloadTagTraits<AMStyleSnapshot> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::StyleSnapshot;
+};
+template <> struct ConfigPayloadTagTraits<AMDomain::client::ClientServiceArg> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::ClientServiceArg;
+};
+template <> struct ConfigPayloadTagTraits<AMDomain::filesystem::FilesystemArg> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::FilesystemArg;
+};
+template <> struct ConfigPayloadTagTraits<AMDomain::var::VarSetArg> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::VarSetArg;
+};
+template <> struct ConfigPayloadTagTraits<AMDomain::prompt::PromptProfileArg> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::PromptProfileArg;
+};
+template <> struct ConfigPayloadTagTraits<AMDomain::prompt::PromptHistoryArg> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::PromptHistoryArg;
+};
+template <> struct ConfigPayloadTagTraits<AMDomain::style::StyleConfigArg> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::StyleConfigArg;
+};
+template <> struct ConfigPayloadTagTraits<ConfigStoreInitArg> {
+  static constexpr bool kMapped = true;
+  static constexpr AMDomain::config::ConfigPayloadTag kTag =
+      AMDomain::config::ConfigPayloadTag::ConfigStoreInitArg;
+};
+} // namespace detail
+
 /**
  * @brief Application service orchestrating config store operations.
  */
@@ -128,8 +250,11 @@ public:
     if (!out || !store_) {
       return false;
     }
-    const bool ok =
-        store_->Read(std::type_index(typeid(ValueT)), static_cast<void *>(out));
+    const auto tag = detail::ResolveConfigPayloadTag<ValueT>();
+    if (!tag.has_value()) {
+      return false;
+    }
+    const bool ok = store_->Read(tag.value(), static_cast<void *>(out));
     if constexpr (std::is_same_v<ValueT, ConfigBackupSet>) {
       if (ok) {
         auto backup_set = backup_set_.lock();
@@ -147,8 +272,11 @@ public:
     if (!store_) {
       return false;
     }
-    const bool ok = store_->Write(std::type_index(typeid(ValueT)),
-                                  static_cast<const void *>(&value));
+    const auto tag = detail::ResolveConfigPayloadTag<ValueT>();
+    if (!tag.has_value()) {
+      return false;
+    }
+    const bool ok = store_->Write(tag.value(), static_cast<const void *>(&value));
     if constexpr (std::is_same_v<ValueT, ConfigBackupSet>) {
       if (ok) {
         auto backup_set = backup_set_.lock();
@@ -166,8 +294,11 @@ public:
     if (!store_) {
       return false;
     }
-    const bool ok = store_->Erase(std::type_index(typeid(ValueT)),
-                                  static_cast<const void *>(&value));
+    const auto tag = detail::ResolveConfigPayloadTag<ValueT>();
+    if (!tag.has_value()) {
+      return false;
+    }
+    const bool ok = store_->Erase(tag.value(), static_cast<const void *>(&value));
     if constexpr (std::is_same_v<ValueT, ConfigBackupSet>) {
       if (ok) {
         auto backup_set = backup_set_.lock();

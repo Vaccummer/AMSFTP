@@ -3,10 +3,10 @@
 #include "domain/config/ConfigStorePort.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "infrastructure/config/ConfigDocumentHandle.hpp"
+#include "infrastructure/config/internal/ArgCodecRegistry.hpp"
 #include "infrastructure/writer/WriteDispatcher.hpp"
 #include <memory>
 #include <mutex>
-#include <typeindex>
 #include <unordered_map>
 
 namespace AMInfra::config {
@@ -57,13 +57,13 @@ public:
   void PruneBackupFiles(const std::filesystem::path &bak_dir,
                         int64_t max_count) override;
 
-  [[nodiscard]] bool Read(const std::type_index &type,
+  [[nodiscard]] bool Read(AMDomain::config::ConfigPayloadTag tag,
                           void *out) const override;
 
-  [[nodiscard]] bool Write(const std::type_index &type,
+  [[nodiscard]] bool Write(AMDomain::config::ConfigPayloadTag tag,
                            const void *in) override;
 
-  [[nodiscard]] bool Erase(const std::type_index &type,
+  [[nodiscard]] bool Erase(AMDomain::config::ConfigPayloadTag tag,
                            const void *in) override;
 
 private:
@@ -82,6 +82,7 @@ private:
       handles_;
   mutable std::mutex mtx_;
   AMInfraAsyncWriter writer_;
+  ArgCodecRegistry codec_registry_ = {};
   DumpErrorCallback dump_error_cb_;
   bool initialized_ = false;
 };

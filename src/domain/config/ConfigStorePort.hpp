@@ -1,12 +1,12 @@
 #pragma once
 
+#include "domain/arg/ArgStructTag.hpp"
 #include "domain/config/ConfigModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
-#include <typeindex>
 
 namespace AMDomain::config {
 /**
@@ -81,19 +81,19 @@ public:
   /**
    * @brief Read one typed payload from store.
    */
-  [[nodiscard]] virtual bool Read(const std::type_index &type,
+  [[nodiscard]] virtual bool Read(AMDomain::config::ConfigPayloadTag tag,
                                   void *out) const = 0;
 
   /**
    * @brief Write one typed payload into store.
    */
-  [[nodiscard]] virtual bool Write(const std::type_index &type,
+  [[nodiscard]] virtual bool Write(AMDomain::config::ConfigPayloadTag tag,
                                    const void *in) = 0;
 
   /**
    * @brief Erase one typed payload subtree from store.
    */
-  [[nodiscard]] virtual bool Erase(const std::type_index &type,
+  [[nodiscard]] virtual bool Erase(AMDomain::config::ConfigPayloadTag tag,
                                    const void *in) = 0;
 };
 

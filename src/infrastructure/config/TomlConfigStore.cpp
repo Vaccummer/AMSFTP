@@ -2,7 +2,6 @@
 
 #include "foundation/tools/enum_related.hpp"
 #include "infrastructure/config/SuperTomlHandle.hpp"
-#include "internal/ArgCodecRegistry.hpp"
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -55,6 +54,7 @@ ECM AMTomlConfigStore::Configure(const AMDomain::config::ConfigStoreInitArg &arg
   Close();
   root_dir_ = arg.root_dir;
   layout_ = arg.layout;
+  codec_registry_ = ArgCodecRegistry(BuildCodecMap());
 
   for (const auto kind : kRequiredKinds) {
     if (layout_.find(kind) == layout_.end()) {
@@ -168,11 +168,12 @@ bool AMTomlConfigStore::GetDataPath(AMDomain::config::DocumentKind kind,
   return true;
 }
 
-bool AMTomlConfigStore::Read(const std::type_index &type, void *out) const {
+bool AMTomlConfigStore::Read(AMDomain::config::ConfigPayloadTag tag,
+                             void *out) const {
   if (!out) {
     return false;
   }
-  const IArgCodec *codec = ArgCodecRegistry::Instance().Find(type);
+  const IArgCodec *codec = codec_registry_.Find(tag);
   if (!codec) {
     return false;
   }
@@ -184,14 +185,15 @@ bool AMTomlConfigStore::Read(const std::type_index &type, void *out) const {
   if (!handle->GetJson(&root)) {
     return false;
   }
-  return DecodeArg(type, root, out, nullptr);
+  return DecodeArg(codec_registry_, tag, root, out, nullptr);
 }
 
-bool AMTomlConfigStore::Write(const std::type_index &type, const void *in) {
+bool AMTomlConfigStore::Write(AMDomain::config::ConfigPayloadTag tag,
+                              const void *in) {
   if (!in) {
     return false;
   }
-  const IArgCodec *codec = ArgCodecRegistry::Instance().Find(type);
+  const IArgCodec *codec = codec_registry_.Find(tag);
   if (!codec) {
     return false;
   }
@@ -203,17 +205,18 @@ bool AMTomlConfigStore::Write(const std::type_index &type, const void *in) {
   if (!handle->GetJson(&root)) {
     return false;
   }
-  if (!EncodeArg(type, in, &root, nullptr)) {
+  if (!EncodeArg(codec_registry_, tag, in, &root, nullptr)) {
     return false;
   }
   return handle->SetJson(root);
 }
 
-bool AMTomlConfigStore::Erase(const std::type_index &type, const void *in) {
+bool AMTomlConfigStore::Erase(AMDomain::config::ConfigPayloadTag tag,
+                              const void *in) {
   if (!in) {
     return false;
   }
-  const IArgCodec *codec = ArgCodecRegistry::Instance().Find(type);
+  const IArgCodec *codec = codec_registry_.Find(tag);
   if (!codec) {
     return false;
   }
@@ -225,7 +228,7 @@ bool AMTomlConfigStore::Erase(const std::type_index &type, const void *in) {
   if (!handle->GetJson(&root)) {
     return false;
   }
-  if (!EraseArg(type, in, &root, nullptr)) {
+  if (!EraseArg(codec_registry_, tag, in, &root, nullptr)) {
     return false;
   }
   return handle->SetJson(root);
