@@ -17,6 +17,13 @@ ECM VarAppService::Init() {
   return Ok();
 }
 
+ECM VarAppService::LoadFromSnapshot(const VarSetArg &snapshot) {
+  init_arg_.lock().store(snapshot);
+  store_.lock().store(snapshot);
+  config_dirty_.lock().store(false);
+  return Ok();
+}
+
 VarSetArg VarAppService::GetInitArg() const { return init_arg_.lock().load(); }
 
 bool VarAppService::IsConfigDirty() const {
