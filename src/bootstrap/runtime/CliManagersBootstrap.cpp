@@ -1,11 +1,14 @@
 #include "interface/cli/CLIArg.hpp"
 #include "application/client/ClientAppService.hpp"
 #include "application/config/ConfigAppService.hpp"
+#include "application/filesystem/FilesystemAppService.hpp"
+#include "application/host/HostAppService.hpp"
 #include "application/transfer/TransferAppService.hpp"
-#include "application/var/VarWorkflows.hpp"
+#include "application/var/VarAppService.hpp"
 #include "application/config/ConfigPayloads.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostManager.hpp"
+#include "domain/var/VarModel.hpp"
 #include "domain/log/LoggerPorts.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
 #include "foundation/tools/enum_related.hpp"
@@ -169,21 +172,29 @@ AMDomain::signal::SignalHook BuildSessionControlHook_(
 CliManagers::CliManagers(AMSignalMonitorPort &signal_monitor_ref,
                          AMApplication::config::AMConfigAppService &config_service_ref,
                          AMInterface::style::AMStyleService &style_service_ref,
-                         AMPromptManager &prompt_manager_ref,
+                         AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager_ref,
+                         AMInterface::prompt::AMPromptIOManager &prompt_io_manager_ref,
+                         AMApplication::host::AMHostAppService &host_service_ref,
+                         AMApplication::host::AMKnownHostsAppService &known_hosts_service_ref,
                          AMDomain::host::AMHostConfigManager &host_config_manager_ref,
                          AMDomain::host::AMKnownHostsManager &known_hosts_manager_ref,
-                         AMApplication::VarWorkflow::VarAppService &var_service_ref,
+                         AMApplication::var::VarAppService &var_service_ref,
                          AMLoggerManagerPort &log_manager_ref,
                          AMApplication::client::ClientAppService &client_service_ref,
+                         AMApplication::filesystem::FilesystemAppService &filesystem_service_ref,
                          AMApplication::TransferWorkflow::TransferAppService
                              &transfer_service_ref)
     : signal_monitor(signal_monitor_ref), config_service(config_service_ref),
       style_service(style_service_ref),
-      prompt_manager(prompt_manager_ref),
+      prompt_profile_history_manager(prompt_profile_history_manager_ref),
+      prompt_io_manager(prompt_io_manager_ref),
+      host_service(host_service_ref),
+      known_hosts_service(known_hosts_service_ref),
       host_config_manager(host_config_manager_ref),
       known_hosts_manager(known_hosts_manager_ref),
       var_service(var_service_ref), log_manager(log_manager_ref),
       client_service(client_service_ref),
+      filesystem_service(filesystem_service_ref),
       transfer_service(transfer_service_ref) {}
 
 /**
@@ -193,6 +204,8 @@ ECM CliManagers::Init(amf task_control_token) {
   if (!task_control_token) {
     return Err(EC::InvalidArg, "CliManagers::Init requires task control token");
   }
+  client_service.BindHostConfigManager(&host_service);
+  client_service.RegisterControlComponent(task_control_token);
   (void)signal_monitor.UnregisterHook(kSessionControlHook);
   (void)signal_monitor.RegisterHook(kSessionControlHook,
                                     BuildSessionControlHook_(task_control_token));
@@ -200,7 +213,11 @@ ECM CliManagers::Init(amf task_control_token) {
   if (!isok(rcm)) {
     return rcm;
   }
-  rcm = prompt_manager.Init();
+  rcm = prompt_profile_history_manager.Init();
+  if (!isok(rcm)) {
+    return rcm;
+  }
+  rcm = prompt_io_manager.Init();
   if (!isok(rcm)) {
     return rcm;
   }
@@ -208,13 +225,24 @@ ECM CliManagers::Init(amf task_control_token) {
   if (!isok(local_rcm)) {
     return local_rcm;
   }
+  client_service.SetPrivateKeys(host_config_manager.PrivateKeys());
   rcm = known_hosts_manager.Init();
   if (!isok(rcm)) {
     return rcm;
   }
-  rcm = var_service.LoadVars();
+  AMDomain::var::VarSetArg var_snapshot = {};
+  (void)config_service.Read(&var_snapshot);
+  rcm = var_service.LoadFromSnapshot(var_snapshot);
   if (!isok(rcm)) {
     return rcm;
+  }
+  auto sync_rcm =
+      config_service.RegisterSyncParticipant<AMDomain::var::VarSetArg>(
+          [this]() { return var_service.IsConfigDirty(); },
+          [this]() { return var_service.ExportConfigSnapshot(); },
+          [this]() { var_service.ClearConfigDirty(); });
+  if (!isok(sync_rcm.rcm)) {
+    return sync_rcm.rcm;
   }
   rcm = ConfigureLogger_(log_manager, config_service);
   if (!isok(rcm)) {
@@ -241,13 +269,13 @@ ECM CliManagers::Init(amf task_control_token) {
               interactive_flag &&
               interactive_flag->load(std::memory_order_relaxed);
           if (is_interactive) {
-            prompt_manager.FmtPrint(
+            prompt_io_manager.FmtPrint(
                 "Unknown host: {}:{}  User: {} Protocol: [!se][{}][/se]",
                 query.hostname, query.port, query.username, query.protocol);
-            prompt_manager.FmtPrint("Fingerprint: {}",
+            prompt_io_manager.FmtPrint("Fingerprint: {}",
                                     AMStr::Strip(query.GetFingerprint()));
             accepted =
-                prompt_manager.PromptYesNo("Trust this host key? (y/N): ",
+                prompt_io_manager.PromptYesNo("Trust this host key? (y/N): ",
                                            &canceled);
           }
           if (canceled || !accepted) {
@@ -272,7 +300,7 @@ ECM CliManagers::Init(amf task_control_token) {
             info.request.nickname.empty() ? "unknown" : info.request.nickname;
         if (info.NeedPassword) {
           std::string password;
-          if (!prompt_manager.SecurePrompt(
+          if (!prompt_io_manager.SecurePrompt(
                   AMStr::fmt("Password required [{}]: ", client_name),
                   &password)) {
             return std::string();
@@ -283,7 +311,7 @@ ECM CliManagers::Init(amf task_control_token) {
           if (info.password_n.empty()) {
             return std::nullopt;
           }
-          prompt_manager.FmtPrint("Wrong password [{}]", client_name);
+          prompt_io_manager.FmtPrint("Wrong password [{}]", client_name);
           return std::nullopt;
         }
         auto cfg = host_config_manager.GetClientConfig(client_name);
@@ -299,7 +327,7 @@ ECM CliManagers::Init(amf task_control_token) {
         if (!client || isok(ecm)) {
           return;
         }
-        prompt_manager.ErrorFormat(
+        prompt_io_manager.ErrorFormat(
             ECM{ecm.first,
                 AMStr::fmt("Client disconnected [{}]: {}",
                            client->ConfigPort().GetNickname(),
@@ -323,6 +351,8 @@ ECM CliManagers::Init(amf task_control_token) {
   }
   return Ok();
 }
+
+
 
 
 

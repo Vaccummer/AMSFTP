@@ -22,6 +22,7 @@ public:
   ~VarAppService() override = default;
 
   ECM Init();
+  ECM LoadFromSnapshot(const VarSetArg &snapshot);
   [[nodiscard]] VarSetArg GetInitArg() const;
   [[nodiscard]] bool IsConfigDirty() const;
   void ClearConfigDirty();

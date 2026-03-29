@@ -1,14 +1,15 @@
 #include "interface/cli/CLIArg.hpp"
 #include "interface/adapters/ApplicationAdapters.hpp"
+#include "interface/adapters/client/ClientInterfaceService.hpp"
+#include "interface/adapters/filesystem/FilesystemInterfaceSerivce.hpp"
+#include "interface/adapters/var/VarInterfaceService.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include "infrastructure/controller/ClientControlTokenAdapter.hpp"
 #include "application/client/ClientSessionWorkflows.hpp"
 #include "application/completion/CompletionWorkflows.hpp"
-#include "application/config/CliConfigSaveWorkflows.hpp"
 #include "application/host/HostProfileWorkflows.hpp"
 #include "application/transfer/TaskWorkflows.hpp"
 #include "application/transfer/TransferWorkflows.hpp"
-#include "application/var/VarWorkflows.hpp"
 #include <iostream>
 
 namespace {
@@ -60,7 +61,7 @@ ECM ValidateConfigAddNickname_(
 
 ECM ResolveConfigAddNickname_(
     const AMApplication::HostProfileWorkflow::IHostProfileGateway &gateway,
-    AMPromptManager &prompt, const std::string &arg_nickname,
+    AMInterface::prompt::AMPromptIOManager &prompt, const std::string &arg_nickname,
     std::string *normalized) {
   if (!normalized) {
     return Err(EC::InvalidArg, "null nickname output");
@@ -105,7 +106,8 @@ ECM ValidateConfigProfileNickname_(
 
 ECM ResolveConfigProfileNickname_(
     const AMApplication::HostProfileWorkflow::IHostProfileGateway &gateway,
-    AMPromptManager &prompt, const std::vector<std::string> &candidates,
+    AMInterface::prompt::AMPromptIOManager &prompt,
+    const std::vector<std::string> &candidates,
     const std::string &arg_nickname, std::string *normalized) {
   if (!normalized) {
     return Err(EC::InvalidArg, "null nickname output");
@@ -115,10 +117,16 @@ ECM ResolveConfigProfileNickname_(
     return ValidateConfigProfileNickname_(gateway, seeded, normalized);
   }
 
+  std::vector<std::pair<std::string, std::string>> prompt_candidates;
+  prompt_candidates.reserve(candidates.size());
+  for (const auto &item : candidates) {
+    prompt_candidates.emplace_back(item, "");
+  }
+
   while (true) {
     std::string input;
     if (!prompt.Prompt("Profile nickname(host): ", "", &input, {},
-                       candidates)) {
+                       prompt_candidates)) {
       return Err(EC::ConfigCanceled, "profile edit canceled");
     }
     input = AMStr::Strip(input);
@@ -134,16 +142,20 @@ ECM ResolveConfigProfileNickname_(
 }
 
 std::string SubstitutePathLikeArg_(
-    const AMDomain::var::IVarSubstitutionPort &substitution_port,
+    const CliManagers &managers,
     const std::string &raw) {
-  return substitution_port.SubstitutePathLike(raw);
+  AMInterface::var::VarInterfaceService var_interface(
+      managers.var_service, managers.client_service, managers.prompt_io_manager);
+  return var_interface.SubstitutePathLike(raw);
 }
 
 std::vector<std::string>
 SubstitutePathLikeArgs_(
-    const AMDomain::var::IVarSubstitutionPort &substitution_port,
+    const CliManagers &managers,
     const std::vector<std::string> &raw) {
-  return substitution_port.SubstitutePathLike(raw);
+  AMInterface::var::VarInterfaceService var_interface(
+      managers.var_service, managers.client_service, managers.prompt_io_manager);
+  return var_interface.SubstitutePathLike(raw);
 }
 
 /**
@@ -151,15 +163,13 @@ SubstitutePathLikeArgs_(
  */
 ECM ResolveTransferEndpoint_(
     AMApplication::client::ClientAppService &client_service,
-    const AMDomain::var::IVarSubstitutionPort &substitution_port,
     const std::string &raw, AMDomain::client::amf interrupt_flag,
     ClientPath *out_endpoint) {
   if (!out_endpoint) {
     return Err(EC::InvalidArg, "null transfer endpoint output");
   }
 
-  const std::string token =
-      AMStr::Strip(substitution_port.SubstitutePathLike(raw));
+  const std::string token = AMStr::Strip(raw);
   if (token.empty()) {
     return Err(EC::InvalidArg, "Transfer path is empty");
   }
@@ -174,8 +184,12 @@ ECM ResolveTransferEndpoint_(
   std::string path = std::get<1>(parsed);
   AMDomain::client::ClientHandle client = std::get<2>(parsed);
   if (!client) {
-    client = nickname.empty() ? client_service.GetCurrentClient()
-                              : client_service.GetClient(nickname);
+    if (nickname.empty()) {
+      client = client_service.GetCurrentClient();
+    } else {
+      auto resolved_client = client_service.GetClient(nickname, true);
+      client = isok(resolved_client.rcm) ? resolved_client.data : nullptr;
+    }
   }
   if (!client && nickname.empty()) {
     client = client_service.GetLocalClient();
@@ -207,15 +221,14 @@ struct TransferCliBuildResult {
 };
 
 TransferCliBuildResult BuildTransferArgsFromCli_(
-    AMApplication::client::ClientAppService &client_service,
-    const AMDomain::var::IVarSubstitutionPort &substitution_port,
+    const CliManagers &managers,
     const std::vector<std::string> &raw_srcs, const std::string &raw_output,
     bool accept_ampersand_suffix, bool overwrite, bool no_mkdir, bool clone,
     bool include_special, bool resume, AMDomain::client::amf interrupt_flag) {
   TransferCliBuildResult out = {};
 
   std::vector<std::string> src_tokens =
-      SubstitutePathLikeArgs_(substitution_port, raw_srcs);
+      SubstitutePathLikeArgs_(managers, raw_srcs);
   if (accept_ampersand_suffix && !src_tokens.empty() &&
       src_tokens.back() == "&") {
     out.suffix_async = true;
@@ -228,7 +241,7 @@ TransferCliBuildResult BuildTransferArgsFromCli_(
   }
 
   const std::string output_token =
-      AMStr::Strip(SubstitutePathLikeArg_(substitution_port, raw_output));
+      AMStr::Strip(SubstitutePathLikeArg_(managers, raw_output));
   std::vector<std::string> normalized_src_tokens = {};
   std::string normalized_dst_token = {};
   if (output_token.empty()) {
@@ -249,8 +262,8 @@ TransferCliBuildResult BuildTransferArgsFromCli_(
   out.build_args.srcs.reserve(normalized_src_tokens.size());
   for (const auto &token : normalized_src_tokens) {
     ClientPath endpoint = {};
-    ECM resolve_rcm = ResolveTransferEndpoint_(
-        client_service, substitution_port, token, interrupt_flag, &endpoint);
+    ECM resolve_rcm = ResolveTransferEndpoint_(managers.client_service, token,
+                                               interrupt_flag, &endpoint);
     if (!isok(resolve_rcm)) {
       out.rcm = resolve_rcm;
       return out;
@@ -259,9 +272,9 @@ TransferCliBuildResult BuildTransferArgsFromCli_(
   }
 
   ClientPath dst_endpoint = {};
-  ECM dst_rcm = ResolveTransferEndpoint_(client_service, substitution_port,
-                                         normalized_dst_token, interrupt_flag,
-                                         &dst_endpoint);
+  ECM dst_rcm =
+      ResolveTransferEndpoint_(managers.client_service, normalized_dst_token,
+                               interrupt_flag, &dst_endpoint);
   if (!isok(dst_rcm)) {
     out.rcm = dst_rcm;
     return out;
@@ -327,7 +340,7 @@ ECM ConfigLsArgs::Run(const CliManagers &managers,
                       const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_config_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_io_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigLs(gateway, detail);
 }
 
@@ -337,7 +350,7 @@ ECM ConfigKeysArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_config_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_io_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigKeys(gateway, true);
 }
 
@@ -347,7 +360,7 @@ ECM ConfigDataArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_config_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_io_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigData(gateway);
 }
 
@@ -357,7 +370,7 @@ ECM ConfigGetArgs::Run(const CliManagers &managers,
                        const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_config_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_io_manager);
   AMInterface::ApplicationAdapters::CurrentClientPort client_port(
       managers.client_service);
   return AMApplication::HostProfileWorkflow::ExecuteConfigGet(gateway,
@@ -370,9 +383,9 @@ ECM ConfigAddArgs::Run(const CliManagers &managers,
                        const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_config_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_io_manager);
   std::string resolved;
-  ECM rcm = ResolveConfigAddNickname_(gateway, managers.prompt_manager, nickname,
+  ECM rcm = ResolveConfigAddNickname_(gateway, managers.prompt_io_manager, nickname,
                                       &resolved);
   if (!isok(rcm)) {
     PrintRunError_(rcm);
@@ -389,7 +402,7 @@ ECM ConfigEditArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_config_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_io_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigEdit(gateway,
                                                                nickname);
 }
@@ -400,7 +413,7 @@ ECM ConfigRenameArgs::Run(const CliManagers &managers,
                           const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_config_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_io_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigRename(gateway,
                                                                  old_name,
                                                                  new_name);
@@ -415,7 +428,7 @@ ECM ConfigRemoveArgs::Run(const CliManagers &managers,
                           const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_config_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_io_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigRemove(gateway,
                                                                  names);
 }
@@ -426,7 +439,7 @@ ECM ConfigSetArgs::Run(const CliManagers &managers,
                        const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_config_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_io_manager);
   return AMApplication::HostProfileWorkflow::ExecuteConfigSet(
       gateway, nickname, attrname, value);
 }
@@ -440,14 +453,11 @@ void ConfigSetArgs::reset() {
 ECM ConfigSaveArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
-  AMInterface::ApplicationAdapters::HostConfigSaver host_saver(
-      managers.host_config_manager);
-  AMInterface::ApplicationAdapters::VarConfigSaver var_saver(
-      managers.var_service);
-  AMInterface::ApplicationAdapters::PromptConfigSaver prompt_saver(
-      managers.prompt_manager);
-  return AMApplication::ConfigWorkflow::SaveAllFromCli(host_saver, var_saver,
-                                                       prompt_saver);
+  ECM rcm = managers.config_service.FlushDirtyParticipants();
+  if (!isok(rcm)) {
+    return rcm;
+  }
+  return managers.config_service.DumpAll(false);
 }
 
 void ConfigSaveArgs::reset() {}
@@ -456,11 +466,11 @@ ECM ConfigProfileSetArgs::Run(const CliManagers &managers,
                               const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_config_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_io_manager);
   const std::vector<std::string> candidates = gateway.ListHostNames();
   std::string target;
   ECM rcm = ResolveConfigProfileNickname_(
-      gateway, managers.prompt_manager, candidates, nickname, &target);
+      gateway, managers.prompt_io_manager, candidates, nickname, &target);
   if (!isok(rcm)) {
     PrintRunError_(rcm);
     return rcm;
@@ -477,7 +487,7 @@ ECM ProfileEditArgs::Run(const CliManagers &managers,
                          const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_config_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_io_manager);
   ECM rcm = AMApplication::HostProfileWorkflow::ExecuteProfileEdit(gateway,
                                                                    nickname);
   PrintRunError_(rcm);
@@ -490,7 +500,7 @@ ECM ProfileGetArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::HostProfileGateway gateway(
-      managers.host_config_manager, managers.prompt_manager);
+      managers.host_config_manager, managers.prompt_io_manager);
   ECM rcm = AMApplication::HostProfileWorkflow::ExecuteProfileGet(gateway,
                                                                   nicknames);
   PrintRunError_(rcm);
@@ -500,36 +510,33 @@ ECM ProfileGetArgs::Run(const CliManagers &managers,
 void ProfileGetArgs::reset() { nicknames.clear(); }
 
 ECM StatArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
-  (void)ctx;
-  AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
+  AMInterface::filesystem::FilesystemInterfaceSerivce filesystem(
+      managers.client_service, managers.filesystem_service, managers.style_service,
+      managers.prompt_io_manager,
+      ResolveTransferInterruptFlag_(ctx));
   const std::vector<std::string> resolved =
-      SubstitutePathLikeArgs_(managers.var_service, paths);
-  ECM rcm = filesystem.StatPaths(resolved, ResolveTransferInterruptFlag_(ctx));
-  PrintRunError_(rcm);
-  return rcm;
+      SubstitutePathLikeArgs_(managers, paths);
+  AMInterface::filesystem::FilesystemStatArg arg = {};
+  arg.raw_paths = resolved;
+  arg.trace_link = trace_link;
+  return filesystem.Stat(arg);
 }
 
-void StatArgs::reset() { paths.clear(); }
+void StatArgs::reset() {
+  paths.clear();
+  trace_link = false;
+}
 
 ECM LsArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
-  (void)ctx;
-  AMInterface::ApplicationAdapters::ClientPathGateway client_path(
-      managers.client_service);
-  AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
-  std::string query_path =
-      AMStr::Strip(SubstitutePathLikeArg_(managers.var_service, path));
-  if (query_path.empty()) {
-    query_path = client_path.CurrentWorkdir();
-  }
-  if (query_path.empty()) {
-    query_path = "/";
-  }
-  ECM rcm = filesystem.ListPath(query_path, list_like, show_all,
-                                ResolveTransferInterruptFlag_(ctx));
-  PrintRunError_(rcm);
-  return rcm;
+  AMInterface::filesystem::FilesystemInterfaceSerivce filesystem(
+      managers.client_service, managers.filesystem_service, managers.style_service,
+      managers.prompt_io_manager,
+      ResolveTransferInterruptFlag_(ctx));
+  AMInterface::filesystem::FilesystemLsArg arg = {};
+  arg.raw_path = SubstitutePathLikeArg_(managers, path);
+  arg.list_like = list_like;
+  arg.show_all = show_all;
+  return filesystem.Ls(arg);
 }
 
 void LsArgs::reset() {
@@ -541,9 +548,9 @@ void LsArgs::reset() {
 ECM SizeArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_io_manager);
   const std::vector<std::string> resolved =
-      SubstitutePathLikeArgs_(managers.var_service, paths);
+      SubstitutePathLikeArgs_(managers, paths);
   ECM rcm = filesystem.GetSize(resolved, ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
   return rcm;
@@ -554,8 +561,8 @@ void SizeArgs::reset() { paths.clear(); }
 ECM FindArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
-  const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
+      managers.client_service, managers.prompt_io_manager);
+  const std::string resolved = SubstitutePathLikeArg_(managers, path);
   ECM rcm =
       filesystem.Find(resolved, SearchType::All, ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
@@ -566,14 +573,13 @@ void FindArgs::reset() { path.clear(); }
 
 ECM MkdirArgs::Run(const CliManagers &managers,
                    const CliRunContext &ctx) const {
-  (void)ctx;
-  AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
-  const std::vector<std::string> resolved =
-      SubstitutePathLikeArgs_(managers.var_service, paths);
-  ECM rcm = filesystem.Mkdir(resolved, ResolveTransferInterruptFlag_(ctx));
-  PrintRunError_(rcm);
-  return rcm;
+  AMInterface::filesystem::FilesystemInterfaceSerivce filesystem(
+      managers.client_service, managers.filesystem_service, managers.style_service,
+      managers.prompt_io_manager,
+      ResolveTransferInterruptFlag_(ctx));
+  AMInterface::filesystem::FilesystemMkdirsArg arg = {};
+  arg.raw_paths = SubstitutePathLikeArgs_(managers, paths);
+  return filesystem.Mkdirs(arg);
 }
 
 void MkdirArgs::reset() { paths.clear(); }
@@ -581,9 +587,9 @@ void MkdirArgs::reset() { paths.clear(); }
 ECM RmArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_io_manager);
   const std::vector<std::string> resolved =
-      SubstitutePathLikeArgs_(managers.var_service, paths);
+      SubstitutePathLikeArgs_(managers, paths);
   ECM rcm = filesystem.Remove(resolved, permanent, quiet,
                               ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
@@ -599,8 +605,8 @@ void RmArgs::reset() {
 ECM WalkArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
-  const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
+      managers.client_service, managers.prompt_io_manager);
+  const std::string resolved = SubstitutePathLikeArg_(managers, path);
   ECM rcm = filesystem.Walk(resolved, only_file, only_dir, show_all,
                             !include_special, quiet,
                             ResolveTransferInterruptFlag_(ctx));
@@ -620,8 +626,8 @@ void WalkArgs::reset() {
 ECM TreeArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
-  const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
+      managers.client_service, managers.prompt_io_manager);
+  const std::string resolved = SubstitutePathLikeArg_(managers, path);
   ECM rcm = filesystem.Tree(resolved, depth, only_dir, show_all,
                             !include_special, quiet,
                             ResolveTransferInterruptFlag_(ctx));
@@ -642,8 +648,8 @@ ECM RealpathArgs::Run(const CliManagers &managers,
                       const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
-  const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
+      managers.client_service, managers.prompt_io_manager);
+  const std::string resolved = SubstitutePathLikeArg_(managers, path);
   return filesystem.Realpath(resolved, ResolveTransferInterruptFlag_(ctx));
 }
 
@@ -652,7 +658,7 @@ void RealpathArgs::reset() { path.clear(); }
 ECM RttArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_io_manager);
   ECM rcm = filesystem.TestRtt(times, ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
   return rcm;
@@ -663,7 +669,7 @@ void RttArgs::reset() { times = 1; }
 ECM ClearArgs::Run(const CliManagers &managers,
                    const CliRunContext &ctx) const {
   (void)ctx;
-  managers.prompt_manager.ClearScreen(all);
+  managers.prompt_io_manager.ClearScreen(all);
   return {EC::Success, ""};
 }
 
@@ -671,9 +677,8 @@ void ClearArgs::reset() { all = false; }
 
 ECM CpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   auto build = BuildTransferArgsFromCli_(
-      managers.client_service, managers.var_service, srcs, output, true,
-      overwrite, no_mkdir, clone, include_special, resume,
-      ResolveTransferInterruptFlag_(ctx));
+      managers, srcs, output, true, overwrite, no_mkdir, clone, include_special,
+      resume, ResolveTransferInterruptFlag_(ctx));
   if (!isok(build.rcm)) {
     PrintRunError_(build.rcm);
     return build.rcm;
@@ -685,7 +690,7 @@ ECM CpArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   options.confirm_policy = BuildTransferConfirmPolicy_(ctx, quiet);
 
   AMInterface::ApplicationAdapters::TransferExecutorPort executor(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       options.confirm_policy,
       ResolveTransferInterruptFlag_(ctx));
   auto result = AMApplication::TransferWorkflow::ExecuteTransfer(
@@ -758,7 +763,7 @@ ECM CheckArgs::Run(const CliManagers &managers,
                    const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_io_manager);
   ECM rcm =
       filesystem.CheckClients(nicknames, detail, ResolveTransferInterruptFlag_(ctx));
   PrintRunError_(rcm);
@@ -795,10 +800,13 @@ ECM DisconnectArgs::Run(const CliManagers &managers,
 void DisconnectArgs::reset() { nicknames.clear(); }
 
 ECM CdArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
-  AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
-  const std::string resolved = SubstitutePathLikeArg_(managers.var_service, path);
-  ECM rcm = filesystem.Cd(resolved, ResolveTransferInterruptFlag_(ctx), false);
+  AMInterface::filesystem::FilesystemInterfaceSerivce filesystem(
+      managers.client_service, managers.filesystem_service, managers.style_service,
+      managers.prompt_io_manager,
+      ResolveTransferInterruptFlag_(ctx));
+  AMInterface::filesystem::FilesystemCdArg arg = {};
+  arg.raw_path = SubstitutePathLikeArg_(managers, path);
+  ECM rcm = filesystem.Cd(arg);
   SetEnterInteractive_(ctx, isok(rcm));
   return rcm;
 }
@@ -825,7 +833,7 @@ void ConnectArgs::reset() {
 ECM CmdArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::ApplicationAdapters::FileSystemCliAdapter filesystem(
-      managers.client_service, managers.prompt_manager);
+      managers.client_service, managers.prompt_io_manager);
   if (timeout_ms <= 0) {
     ECM rcm = Err(EC::InvalidArg, "timeout_ms must be > 0");
     PrintRunError_(rcm);
@@ -845,9 +853,9 @@ ECM CmdArgs::Run(const CliManagers &managers, const CliRunContext &ctx) const {
   }
 
   if (!shell.second.first.empty()) {
-    managers.prompt_manager.Print(shell.second.first);
+    managers.prompt_io_manager.Print(shell.second.first);
   }
-  managers.prompt_manager.FmtPrint("Command exit with code {}",
+  managers.prompt_io_manager.FmtPrint("Command exit with code {}",
                                    shell.second.second);
   return shell.first;
 }
@@ -877,8 +885,15 @@ void ExitArgs::reset() { force = false; }
 ECM VarGetArgs::Run(const CliManagers &managers,
                     const CliRunContext &ctx) const {
   (void)ctx;
-  return AMInterface::ApplicationAdapters::RunVarGet(
-      managers.var_service, managers.prompt_manager, varname);
+  AMInterface::var::VarInterfaceService var_interface(
+      managers.var_service, managers.client_service, managers.prompt_io_manager);
+  auto info = var_interface.ResolveLookupToken(varname);
+  if (!isok(info.rcm)) {
+    return info.rcm;
+  }
+  managers.prompt_io_manager.FmtPrint("{}:{} = {}", info.data.domain,
+                                      info.data.varname, info.data.varvalue);
+  return Ok();
 }
 
 void VarGetArgs::reset() { varname.clear(); }
@@ -886,8 +901,14 @@ void VarGetArgs::reset() { varname.clear(); }
 ECM VarDefArgs::Run(const CliManagers &managers,
                     const CliRunContext &ctx) const {
   (void)ctx;
-  return AMInterface::ApplicationAdapters::RunVarDef(
-      managers.var_service, managers.prompt_manager, global, varname, value);
+  AMInterface::var::VarInterfaceService var_interface(
+      managers.var_service, managers.client_service, managers.prompt_io_manager);
+  auto target = var_interface.ResolveDefineTarget(global, varname);
+  if (!isok(target.rcm)) {
+    return target.rcm;
+  }
+  target.data.varvalue = value;
+  return managers.var_service.AddVar(target.data);
 }
 
 void VarDefArgs::reset() {
@@ -899,8 +920,60 @@ void VarDefArgs::reset() {
 ECM VarDelArgs::Run(const CliManagers &managers,
                     const CliRunContext &ctx) const {
   (void)ctx;
-  return AMInterface::ApplicationAdapters::RunVarDel(
-      managers.var_service, managers.prompt_manager, all, tokens);
+  if (tokens.empty() || tokens.size() > 2) {
+    return Err(EC::InvalidArg, "var del requires one var token or [zone token]");
+  }
+
+  AMInterface::var::VarInterfaceService var_interface(
+      managers.var_service, managers.client_service, managers.prompt_io_manager);
+  std::string zone_override = {};
+  std::string token_expr = tokens.front();
+  if (tokens.size() == 2) {
+    zone_override = AMStr::Strip(tokens.front());
+    token_expr = tokens.back();
+  }
+
+  auto parsed = var_interface.ParseVarTokenExpression(token_expr);
+  if (!isok(parsed.rcm)) {
+    return parsed.rcm;
+  }
+
+  if (all) {
+    auto all_vars = managers.var_service.GetAllVar();
+    if (!isok(all_vars.rcm)) {
+      return all_vars.rcm;
+    }
+    ECM last = Ok();
+    bool removed_any = false;
+    for (const auto &[zone_name, zone_vars] : all_vars.data) {
+      if (zone_vars.find(parsed.data.varname) == zone_vars.end()) {
+        continue;
+      }
+      ECM del_rcm = managers.var_service.DelVar(zone_name, parsed.data.varname);
+      if (!isok(del_rcm)) {
+        last = del_rcm;
+        continue;
+      }
+      removed_any = true;
+    }
+    if (!removed_any) {
+      return Err(EC::InvalidArg, "variable not found");
+    }
+    return last;
+  }
+
+  std::string resolved_zone = {};
+  if (!zone_override.empty()) {
+    resolved_zone = zone_override;
+  } else if (parsed.data.explicit_domain) {
+    resolved_zone = parsed.data.domain;
+  } else {
+    resolved_zone = AMStr::Strip(managers.client_service.CurrentNickname());
+    if (resolved_zone.empty()) {
+      resolved_zone = "local";
+    }
+  }
+  return managers.var_service.DelVar(resolved_zone, parsed.data.varname);
 }
 
 void VarDelArgs::reset() {
@@ -911,8 +984,37 @@ void VarDelArgs::reset() {
 ECM VarLsArgs::Run(const CliManagers &managers,
                    const CliRunContext &ctx) const {
   (void)ctx;
-  return AMInterface::ApplicationAdapters::RunVarLs(
-      managers.var_service, managers.prompt_manager, sections);
+  auto print_zone = [&managers](const std::string &zone_name,
+                                const AMApplication::var::ZoneVarInfoMap &zone_vars) {
+    for (const auto &[name, info] : zone_vars) {
+      (void)name;
+      managers.prompt_io_manager.FmtPrint("{}:{} = {}", zone_name, info.varname,
+                                          info.varvalue);
+    }
+  };
+
+  if (sections.empty()) {
+    auto all_vars = managers.var_service.GetAllVar();
+    if (!isok(all_vars.rcm)) {
+      return all_vars.rcm;
+    }
+    for (const auto &[zone_name, zone_vars] : all_vars.data) {
+      print_zone(zone_name, zone_vars);
+    }
+    return Ok();
+  }
+
+  ECM last = Ok();
+  for (const std::string &zone : sections) {
+    auto zone_vars = managers.var_service.EnumerateZone(zone);
+    if (!isok(zone_vars.rcm)) {
+      last = zone_vars.rcm;
+      managers.prompt_io_manager.ErrorFormat(zone_vars.rcm);
+      continue;
+    }
+    print_zone(zone, zone_vars.data);
+  }
+  return last;
 }
 
 void VarLsArgs::reset() { sections.clear(); }
@@ -925,7 +1027,7 @@ ECM CompleteCacheClearArgs::Run(const CliManagers &managers,
   if (!isok(rcm)) {
     return rcm;
   }
-  managers.prompt_manager.Print("Completion cache "
+  managers.prompt_io_manager.Print("Completion cache "
                                 "cleared.");
   return Ok();
 }
@@ -935,7 +1037,7 @@ void CompleteCacheClearArgs::reset() {}
 ECM TaskListArgs::Run(const CliManagers &managers,
                       const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       ResolveTransferInterruptFlag_(ctx));
   AMApplication::TaskWorkflow::TaskListFilter filter{};
   filter.pending = pending;
@@ -956,7 +1058,7 @@ void TaskListArgs::reset() {
 ECM TaskShowArgs::Run(const CliManagers &managers,
                       const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       ResolveTransferInterruptFlag_(ctx));
   return AMApplication::TaskWorkflow::ExecuteTaskShow(
       gateway, ids, BuildTaskSessionMode_(ctx));
@@ -967,7 +1069,7 @@ void TaskShowArgs::reset() { ids.clear(); }
 ECM TaskInspectArgs::Run(const CliManagers &managers,
                          const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       ResolveTransferInterruptFlag_(ctx));
   AMApplication::TaskWorkflow::TaskInspectOptions options{};
   options.id = id;
@@ -986,7 +1088,7 @@ void TaskInspectArgs::reset() {
 ECM TaskThreadArgs::Run(const CliManagers &managers,
                         const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       ResolveTransferInterruptFlag_(ctx));
   return AMApplication::TaskWorkflow::ExecuteTaskThread(
       gateway, num, BuildTaskSessionMode_(ctx));
@@ -997,12 +1099,11 @@ void TaskThreadArgs::reset() { num = -1; }
 ECM TaskCacheAddArgs::Run(const CliManagers &managers,
                           const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       ResolveTransferInterruptFlag_(ctx));
   auto build = BuildTransferArgsFromCli_(
-      managers.client_service, managers.var_service, srcs, output, false,
-      overwrite, no_mkdir, clone, include_special, resume,
-      ResolveTransferInterruptFlag_(ctx));
+      managers, srcs, output, false, overwrite, no_mkdir, clone, include_special,
+      resume, ResolveTransferInterruptFlag_(ctx));
   if (!isok(build.rcm)) {
     return build.rcm;
   }
@@ -1010,7 +1111,7 @@ ECM TaskCacheAddArgs::Run(const CliManagers &managers,
   auto result = AMApplication::TaskWorkflow::ExecuteJobCacheAdd(
       gateway, build.build_args, BuildTaskSessionMode_(ctx));
   if (isok(result.rcm)) {
-    managers.prompt_manager.FmtPrint("✅ job add {}", std::to_string(result.index));
+    managers.prompt_io_manager.FmtPrint("✅ job add {}", std::to_string(result.index));
   }
   return result.rcm;
 }
@@ -1028,13 +1129,13 @@ void TaskCacheAddArgs::reset() {
 ECM TaskCacheRmArgs::Run(const CliManagers &managers,
                          const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       ResolveTransferInterruptFlag_(ctx));
   auto result = AMApplication::TaskWorkflow::ExecuteJobCacheRemove(
       gateway, indices, BuildTaskSessionMode_(ctx));
   if (isok(result.rcm)) {
     for (size_t index : result.removed_indices) {
-      managers.prompt_manager.FmtPrint("✅ job rm {}", std::to_string(index));
+      managers.prompt_io_manager.FmtPrint("✅ job rm {}", std::to_string(index));
     }
   }
   return result.rcm;
@@ -1045,12 +1146,12 @@ void TaskCacheRmArgs::reset() { indices.clear(); }
 ECM TaskCacheClearArgs::Run(const CliManagers &managers,
                             const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       ResolveTransferInterruptFlag_(ctx));
   ECM rcm = AMApplication::TaskWorkflow::ExecuteJobCacheClear(
       gateway, BuildTaskSessionMode_(ctx));
   if (isok(rcm)) {
-    managers.prompt_manager.Print("✅ job "
+    managers.prompt_io_manager.Print("✅ job "
                                   "cleared");
   }
   return rcm;
@@ -1061,7 +1162,7 @@ void TaskCacheClearArgs::reset() {}
 ECM TaskCacheSubmitArgs::Run(const CliManagers &managers,
                              const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       ResolveTransferInterruptFlag_(ctx));
   AMApplication::TaskWorkflow::JobCacheSubmitOptions options{};
   options.is_async = is_async;
@@ -1080,7 +1181,7 @@ void TaskCacheSubmitArgs::reset() {
 ECM TaskUserSetArgs::Run(const CliManagers &managers,
                          const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       ResolveTransferInterruptFlag_(ctx));
   auto result = AMApplication::TaskWorkflow::ExecuteJobCacheQuery(
       gateway, indices, BuildTaskSessionMode_(ctx));
@@ -1092,7 +1193,7 @@ void TaskUserSetArgs::reset() { indices.clear(); }
 ECM TaskEntryArgs::Run(const CliManagers &managers,
                        const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       ResolveTransferInterruptFlag_(ctx));
   return AMApplication::TaskWorkflow::ExecuteTaskEntryQuery(
       gateway, ids, BuildTaskSessionMode_(ctx));
@@ -1103,7 +1204,7 @@ void TaskEntryArgs::reset() { ids.clear(); }
 ECM TaskControlArgs::Run(const CliManagers &managers,
                          const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       ResolveTransferInterruptFlag_(ctx));
   AMApplication::TaskWorkflow::TaskControlAction workflow_action =
       AMApplication::TaskWorkflow::TaskControlAction::Terminate;
@@ -1131,7 +1232,7 @@ void TaskControlArgs::reset() {
 ECM TaskRetryArgs::Run(const CliManagers &managers,
                        const CliRunContext &ctx) const {
   AMInterface::ApplicationAdapters::TaskGateway gateway(
-      managers.transfer_service, managers.prompt_manager,
+      managers.transfer_service, managers.prompt_io_manager,
       ResolveTransferInterruptFlag_(ctx));
   AMApplication::TaskWorkflow::TaskRetryOptions options{};
   options.id = id;
@@ -1150,5 +1251,7 @@ void TaskRetryArgs::reset() {
   quiet = false;
   indices.clear();
 }
+
+
 
 

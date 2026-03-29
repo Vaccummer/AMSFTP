@@ -7,6 +7,7 @@
 #include "foundation/core/Path.hpp"
 #include "foundation/tools/time.hpp"
 #include "interface/adapters/ApplicationAdapters.hpp"
+#include "interface/adapters/var/VarInterfaceService.hpp"
 #include "interface/cli/CLIBind.hpp"
 #include "interface/parser/CommandPreprocess.hpp"
 #include "interface/completion/Proxy.hpp"
@@ -1389,7 +1390,8 @@ std::string BuildPrompt_(
  *
  * This makes external edits effective without requiring process restart.
  */
-ECM ReloadSettingsIfUpdated_(AMPromptManager &prompt) {
+ECM ReloadSettingsIfUpdated_(
+    AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager) {
   std::filesystem::path settings_path;
   if (!AMInterface::ApplicationAdapters::Runtime::GetConfigDataPath(
           AMDomain::config::DocumentKind::Settings, &settings_path) ||
@@ -1426,7 +1428,7 @@ ECM ReloadSettingsIfUpdated_(AMPromptManager &prompt) {
   if (load_rcm.first != EC::Success) {
     return load_rcm;
   }
-  (void)prompt.ReloadPromptProfiles();
+  (void)prompt_profile_history_manager;
   last_write_time = current_write_time;
   return Ok();
 }
@@ -1465,7 +1467,7 @@ static void SplitPromptForReadline_(const std::string &full_prompt,
 /**
  * @brief Print an ECM error message if the code is not Success.
  */
-void PrintECM_(AMPromptManager &prompt, const ECM &rcm) {
+void PrintECM_(AMInterface::prompt::AMPromptIOManager &prompt, const ECM &rcm) {
   if (rcm.first == EC::Success) {
     return;
   }
@@ -1604,11 +1606,15 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
     }
   };
 
-  AMPromptManager &prompt = managers.prompt_manager;
+  AMInterface::prompt::AMPromptIOManager &prompt = managers.prompt_io_manager;
+  AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager =
+      managers.prompt_profile_history_manager;
   AMApplication::client::ClientAppService &client_service =
       managers.client_service;
   AMApplication::TransferWorkflow::TransferAppService &transfer_service =
       managers.transfer_service;
+  AMInterface::var::VarInterfaceService var_interface_service(
+      managers.var_service, managers.client_service, managers.prompt_io_manager);
   const amf task_control_token = ctx.task_control_token;
   if (!task_control_token) {
     ctx.rcm = Err(EC::InvalidArg, "Session task control token is not bound");
@@ -1626,12 +1632,14 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
       break;
     }
 
-    ECM reload_settings_rcm = ReloadSettingsIfUpdated_(prompt);
+    ECM reload_settings_rcm =
+        ReloadSettingsIfUpdated_(prompt_profile_history_manager);
     if (reload_settings_rcm.first != EC::Success) {
       PrintECM_(prompt, reload_settings_rcm);
     }
 
-    ECM change_rcm = prompt.ChangeClient(client_service.CurrentNickname());
+    ECM change_rcm =
+        prompt_profile_history_manager.ChangeClient(client_service.CurrentNickname());
     if (change_rcm.first != EC::Success) {
       PrintECM_(prompt, change_rcm);
     }
@@ -1669,7 +1677,7 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
     if (trimmed.empty()) {
       continue;
     }
-    prompt.AddHistoryEntry(line);
+    prompt_profile_history_manager.AddHistoryEntry(line);
 
     bool is_shell = false;
     std::string shell_command;
@@ -1713,7 +1721,7 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
       if (cli_args.empty()) {
         continue;
       }
-      (void)AMInputPreprocess::ExpandVarShortcutTokens(&cli_args);
+      (void)var_interface_service.RewriteVarShortcutTokens(&cli_args);
       // CLI11 consumes args via pop_back, so reverse to preserve order.
       std::reverse(cli_args.begin(), cli_args.end());
       app.parse(cli_args);
@@ -1762,7 +1770,8 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
     }
   }
 
-  prompt.FlushHistory();
+  (void)prompt_profile_history_manager.ChangeClient(
+      prompt_profile_history_manager.CurrentNickname());
   if (!skip_loop_exit_callbacks) {
     AMInteractiveEventRegistry::Instance().RunOnInteractiveLoopExit();
   }
@@ -1771,5 +1780,6 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
   }
   return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;
 }
+
 
 

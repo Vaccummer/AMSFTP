@@ -15,15 +15,25 @@ class AMConfigAppService;
 namespace AMApplication::client {
 class ClientAppService;
 }
+namespace AMApplication::filesystem {
+class FilesystemAppService;
+}
+namespace AMApplication::host {
+class AMHostAppService;
+class AMKnownHostsAppService;
+}
 namespace AMInterface::style {
 class AMStyleService;
 }
-class AMPromptManager;
+namespace AMInterface::prompt {
+class IsoclineProfileManager;
+class AMPromptIOManager;
+}
 namespace AMDomain::host {
 class AMHostConfigManager;
 class AMKnownHostsManager;
 }
-namespace AMApplication::VarWorkflow {
+namespace AMApplication::var {
 class VarAppService;
 }
 namespace AMApplication::TransferWorkflow {
@@ -45,12 +55,16 @@ struct CliManagers : public NonCopyableNonMovable {
   CliManagers(AMSignalMonitorPort &signal_monitor,
               AMApplication::config::AMConfigAppService &config_service,
               AMInterface::style::AMStyleService &style_service,
-              AMPromptManager &prompt_manager,
+              AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager,
+              AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+              AMApplication::host::AMHostAppService &host_service,
+              AMApplication::host::AMKnownHostsAppService &known_hosts_service,
               AMDomain::host::AMHostConfigManager &host_config_manager,
               AMDomain::host::AMKnownHostsManager &known_hosts_manager,
-              AMApplication::VarWorkflow::VarAppService &var_service,
+              AMApplication::var::VarAppService &var_service,
               AMLoggerManagerPort &log_manager,
               AMApplication::client::ClientAppService &client_service,
+              AMApplication::filesystem::FilesystemAppService &filesystem_service,
               AMApplication::TransferWorkflow::TransferAppService
                   &transfer_service);
 
@@ -62,12 +76,16 @@ struct CliManagers : public NonCopyableNonMovable {
   AMSignalMonitorPort &signal_monitor;
   AMApplication::config::AMConfigAppService &config_service;
   AMInterface::style::AMStyleService &style_service;
-  AMPromptManager &prompt_manager;
+  AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager;
+  AMInterface::prompt::AMPromptIOManager &prompt_io_manager;
+  AMApplication::host::AMHostAppService &host_service;
+  AMApplication::host::AMKnownHostsAppService &known_hosts_service;
   AMDomain::host::AMHostConfigManager &host_config_manager;
   AMDomain::host::AMKnownHostsManager &known_hosts_manager;
-  AMApplication::VarWorkflow::VarAppService &var_service;
+  AMApplication::var::VarAppService &var_service;
   AMLoggerManagerPort &log_manager;
   AMApplication::client::ClientAppService &client_service;
+  AMApplication::filesystem::FilesystemAppService &filesystem_service;
   AMApplication::TransferWorkflow::TransferAppService &transfer_service;
 };
 
@@ -318,6 +336,7 @@ struct ProfileGetArgs : BaseArgStruct {
  */
 struct StatArgs : BaseArgStruct {
   std::vector<std::string> paths;
+  bool trace_link = false;
   /**
    * @brief Execute stat for target paths.
    */
@@ -1157,6 +1176,8 @@ struct CliCommands {
   CLI::App *resume_cmd = nullptr;
   CliArgsPool *args = nullptr;
 };
+
+
 
 
 

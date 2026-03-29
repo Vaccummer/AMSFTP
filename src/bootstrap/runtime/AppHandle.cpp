@@ -10,20 +10,29 @@ namespace AMBootstrap {
  * @brief Construct app handle from explicit manager references.
  */
 AppHandle::AppHandle(AMSignalMonitorPort &signal_monitor,
-                     AMPromptManager &prompt_manager,
+                     AMApplication::host::AMHostAppService &host_service,
+                     AMApplication::host::AMKnownHostsAppService &known_hosts_service,
+                     AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager,
+                     AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
                      AMDomain::host::AMHostConfigManager &host_config_manager,
                      AMDomain::host::AMKnownHostsManager &known_hosts_manager,
                      AMLoggerManagerPort &log_manager,
                      AMApplication::client::ClientAppService &client_service,
+                     AMApplication::filesystem::FilesystemAppService &filesystem_service,
                      AMApplication::TransferWorkflow::TransferAppService
                          &transfer_service)
-    : config_(), host_config_store_(), known_host_store_(),
-      var_repository_(config_.ConfigService()),
-      current_var_domain_provider_(client_service),
-      var_service(var_repository_, current_var_domain_provider_),
+    : host_service_(host_service), known_hosts_service_(known_hosts_service),
+      config_(), host_config_store_(), known_host_store_(),
+      runtime_var_repository_(config_.ConfigService()),
+      runtime_var_domain_provider_(client_service),
+      runtime_var_service_(runtime_var_repository_, runtime_var_domain_provider_),
+      var_service({}),
       managers(signal_monitor, config_.ConfigService(), config_.StyleService(),
-               prompt_manager, host_config_manager, known_hosts_manager,
-               var_service, log_manager, client_service, transfer_service) {}
+               prompt_profile_history_manager, prompt_io_manager,
+               host_service_, known_hosts_service_,
+               host_config_manager, known_hosts_manager,
+               var_service, log_manager, client_service, filesystem_service,
+               transfer_service) {}
 
 /**
  * @brief Initialize process-lifetime services and bind runtime adapters.
@@ -45,15 +54,30 @@ ECM AppHandle::Init(amf task_control_token) {
   managers.host_config_manager.BindSnapshotStore(&host_config_store_);
   managers.known_hosts_manager.BindSnapshotStore(&known_host_store_);
 
+  rcm = host_service_.Init(managers.host_config_manager.GetInitArg());
+  if (!isok(rcm)) {
+    return rcm;
+  }
+  rcm = managers.filesystem_service.Init();
+  if (!isok(rcm)) {
+    return rcm;
+  }
+  rcm = runtime_var_service_.LoadVars();
+  if (!isok(rcm)) {
+    return rcm;
+  }
+
   AMInterface::ApplicationAdapters::Runtime::RuntimeBindings bindings{};
   bindings.host_config_manager = &managers.host_config_manager;
   bindings.known_hosts_manager = &managers.known_hosts_manager;
   bindings.client_service = &managers.client_service;
   bindings.transfer_service = &managers.transfer_service;
-  bindings.var_query = &var_service;
-  bindings.var_substitution = &var_service;
+  bindings.var_query = &runtime_var_service_;
+  bindings.var_substitution = &runtime_var_service_;
   bindings.signal_monitor = &managers.signal_monitor;
-  bindings.prompt_manager = &managers.prompt_manager;
+  bindings.prompt_profile_history_manager =
+      &managers.prompt_profile_history_manager;
+  bindings.prompt_io_manager = &managers.prompt_io_manager;
   bindings.config_service = &config_.ConfigService();
   bindings.style_service = &config_.StyleService();
   AMInterface::ApplicationAdapters::Runtime::Bind(bindings);
@@ -74,6 +98,8 @@ void AppHandle::ResetRuntimeBindings() {
   AMInterface::ApplicationAdapters::Runtime::Reset();
 }
 } // namespace AMBootstrap
+
+
 
 
 
