@@ -27,6 +27,22 @@ struct ConfigBackupSet {
 };
 
 /**
+ * @brief Settings payload for `Options.TransferManager`.
+ */
+struct TransferManagerArg {
+  int init_thread_num = 1;
+  int max_thread_num = 16;
+};
+
+/**
+ * @brief Settings payload for `Options.LogManager`.
+ */
+struct LogManagerArg {
+  int client_trace_level = 4;
+  int program_trace_level = 4;
+};
+
+/**
  * @brief Store bootstrap data for one persisted config document.
  */
 struct ConfigDocumentSpec {

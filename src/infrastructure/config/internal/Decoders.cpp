@@ -6,9 +6,9 @@
 #include "domain/host/HostModel.hpp"
 #include "domain/prompt/PromptDomainModel.hpp"
 #include "domain/style/StyleDomainModel.hpp"
+#include "domain/style/StyleDomainService.hpp"
 #include "domain/var/VarModel.hpp"
-#include "application/config/dep/ConfigPayloads.hpp"
-#include "application/config/dep/StyleSettings.hpp"
+#include "foundation/tools/json.hpp"
 #include "foundation/tools/string.hpp"
 #include "infrastructure/config/internal/ArgCodecRegistry.hpp"
 #include <algorithm>
@@ -413,10 +413,10 @@ public:
 } // namespace host_codec
 
 namespace settings_codec {
-using AMApplication::config::SettingsOptionsSnapshot;
-using AMApplication::config::UserVarsSnapshot;
 using AMDomain::client::ClientServiceArg;
 using AMDomain::config::ConfigBackupSet;
+using AMDomain::config::LogManagerArg;
+using AMDomain::config::TransferManagerArg;
 using AMDomain::filesystem::FilesystemArg;
 using AMDomain::var::VarSetArg;
 
@@ -442,34 +442,6 @@ Json EncodeConfigBackupSet_(const ConfigBackupSet &in) {
   out["max_backup_count"] = in.max_backup_count;
   out["last_backup_time_s"] = in.last_backup_time_s;
   return out;
-}
-
-void CopyUserVarsSnapshotToVarSetArg_(const UserVarsSnapshot &snapshot,
-                                      VarSetArg *out) {
-  if (!out) {
-    return;
-  }
-  out->set.clear();
-  for (const auto &[domain, vars] : snapshot.domains) {
-    auto &target_vars = out->set[domain];
-    for (const auto &[name, value] : vars) {
-      target_vars[name] = value;
-    }
-  }
-}
-
-void CopyVarSetArgToUserVarsSnapshot_(const VarSetArg &arg,
-                                      UserVarsSnapshot *out) {
-  if (!out) {
-    return;
-  }
-  out->domains.clear();
-  for (const auto &[domain, vars] : arg.set) {
-    auto &target_vars = out->domains[domain];
-    for (const auto &[name, value] : vars) {
-      target_vars[name] = value;
-    }
-  }
 }
 
 class ConfigBackupSetCodec final : public AMInfra::config::IArgCodec {
@@ -520,10 +492,10 @@ public:
   }
 };
 
-class SettingsOptionsSnapshotCodec final : public AMInfra::config::IArgCodec {
+class TransferManagerArgCodec final : public AMInfra::config::IArgCodec {
 public:
   [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::SettingsOptionsSnapshot;
+    return ConfigPayloadTag::TransferManagerArg;
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -533,114 +505,16 @@ public:
   [[nodiscard]] bool Decode(const Json &root, void *out,
                             std::string *error) const override {
     if (!out) {
-      return codec_common::Fail_(error, "null output SettingsOptionsSnapshot");
+      return codec_common::Fail_(error, "null output TransferManagerArg");
     }
-    auto *typed = static_cast<SettingsOptionsSnapshot *>(out);
+    auto *typed = static_cast<TransferManagerArg *>(out);
     *typed = {};
 
     const Json options = OptionsRoot_(root);
-    (void)AMJson::QueryKey(options, {"ClientManager", "heartbeat_interval_s"},
-                           &typed->client_manager.heartbeat_interval_s);
-    (void)AMJson::QueryKey(options, {"ClientManager", "heartbeat_timeout_ms"},
-                           &typed->client_manager.heartbeat_timeout_ms);
     (void)AMJson::QueryKey(options, {"TransferManager", "init_thread_num"},
-                           &typed->transfer_manager.init_thread_num);
+                           &typed->init_thread_num);
     (void)AMJson::QueryKey(options, {"TransferManager", "max_thread_num"},
-                           &typed->transfer_manager.max_thread_num);
-    (void)AMJson::QueryKey(options, {"FileSystem", "max_cd_history"},
-                           &typed->filesystem.max_cd_history);
-    (void)AMJson::QueryKey(options, {"LogManager", "client_trace_level"},
-                           &typed->log_manager.client_trace_level);
-    (void)AMJson::QueryKey(options, {"LogManager", "program_trace_level"},
-                           &typed->log_manager.program_trace_level);
-    DecodeConfigBackupSet_(
-        codec_common::QueryObjectAt_(options, {"AutoConfigBackup"}),
-        &typed->auto_config_backup);
-    return true;
-  }
-
-  [[nodiscard]] bool Encode(const void *in, Json *root,
-                            std::string *error) const override {
-    if (!in || !root) {
-      return codec_common::Fail_(
-          error, "null input SettingsOptionsSnapshot or root json");
-    }
-    const auto *typed = static_cast<const SettingsOptionsSnapshot *>(in);
-    if (!root->is_object()) {
-      *root = Json::object();
-    }
-
-    (*root)["Options"]["ClientManager"]["heartbeat_interval_s"] =
-        typed->client_manager.heartbeat_interval_s;
-    (*root)["Options"]["ClientManager"]["heartbeat_timeout_ms"] =
-        typed->client_manager.heartbeat_timeout_ms;
-    (*root)["Options"]["TransferManager"]["init_thread_num"] =
-        typed->transfer_manager.init_thread_num;
-    (*root)["Options"]["TransferManager"]["max_thread_num"] =
-        typed->transfer_manager.max_thread_num;
-    (*root)["Options"]["FileSystem"]["max_cd_history"] =
-        typed->filesystem.max_cd_history;
-    (*root)["Options"]["LogManager"]["client_trace_level"] =
-        typed->log_manager.client_trace_level;
-    (*root)["Options"]["LogManager"]["program_trace_level"] =
-        typed->log_manager.program_trace_level;
-    (*root)["Options"]["AutoConfigBackup"] =
-        EncodeConfigBackupSet_(typed->auto_config_backup);
-    return true;
-  }
-
-  [[nodiscard]] bool Erase(const void *in, Json *root,
-                           std::string *error) const override {
-    (void)in;
-    if (!root) {
-      return codec_common::Fail_(error, "null root json");
-    }
-    (void)AMJson::DelKey(*root, {"Options"});
-    return true;
-  }
-};
-
-class UserVarsSnapshotCodec final : public AMInfra::config::IArgCodec {
-public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::UserVarsSnapshot;
-  }
-
-  [[nodiscard]] DocumentKind Kind() const override {
-    return DocumentKind::Settings;
-  }
-
-  [[nodiscard]] bool Decode(const Json &root, void *out,
-                            std::string *error) const override {
-    if (!out) {
-      return codec_common::Fail_(error, "null output UserVarsSnapshot");
-    }
-    auto *typed = static_cast<UserVarsSnapshot *>(out);
-    typed->domains.clear();
-
-    const Json user_vars = codec_common::QueryObjectAt_(root, {"UserVars"});
-    for (auto it = user_vars.begin(); it != user_vars.end(); ++it) {
-      if (it.value().is_object()) {
-        if (it.key() != varsetkn::kPublic &&
-            !varsetkn::IsValidZoneName(it.key())) {
-          continue;
-        }
-        auto &vars = typed->domains[it.key()];
-        for (auto vit = it.value().begin(); vit != it.value().end(); ++vit) {
-          if (!varsetkn::IsValidVarname(vit.key())) {
-            continue;
-          }
-          vars[vit.key()] = codec_common::ScalarToString_(vit.value());
-        }
-        continue;
-      }
-
-      if (!varsetkn::IsValidVarname(it.key())) {
-        continue;
-      }
-      typed->domains[varsetkn::kPublic][it.key()] =
-          codec_common::ScalarToString_(it.value());
-    }
+                           &typed->max_thread_num);
     return true;
   }
 
@@ -648,21 +522,17 @@ public:
                             std::string *error) const override {
     if (!in || !root) {
       return codec_common::Fail_(error,
-                                 "null input UserVarsSnapshot or root json");
+                                 "null input TransferManagerArg or root json");
     }
-    const auto *typed = static_cast<const UserVarsSnapshot *>(in);
+    const auto *typed = static_cast<const TransferManagerArg *>(in);
     if (!root->is_object()) {
       *root = Json::object();
     }
-    Json out = Json::object();
-    for (const auto &[domain, vars] : typed->domains) {
-      Json section = Json::object();
-      for (const auto &[name, value] : vars) {
-        section[name] = value;
-      }
-      out[domain] = std::move(section);
-    }
-    (*root)["UserVars"] = std::move(out);
+
+    (*root)["Options"]["TransferManager"]["init_thread_num"] =
+        typed->init_thread_num;
+    (*root)["Options"]["TransferManager"]["max_thread_num"] =
+        typed->max_thread_num;
     return true;
   }
 
@@ -672,7 +542,62 @@ public:
     if (!root) {
       return codec_common::Fail_(error, "null root json");
     }
-    (void)AMJson::DelKey(*root, {"UserVars"});
+    (void)AMJson::DelKey(*root, {"Options", "TransferManager"});
+    return true;
+  }
+};
+
+class LogManagerArgCodec final : public AMInfra::config::IArgCodec {
+public:
+  [[nodiscard]] ConfigPayloadTag Tag() const override {
+    return ConfigPayloadTag::LogManagerArg;
+  }
+
+  [[nodiscard]] DocumentKind Kind() const override {
+    return DocumentKind::Settings;
+  }
+
+  [[nodiscard]] bool Decode(const Json &root, void *out,
+                            std::string *error) const override {
+    if (!out) {
+      return codec_common::Fail_(error, "null output LogManagerArg");
+    }
+    auto *typed = static_cast<LogManagerArg *>(out);
+    *typed = {};
+
+    const Json options = OptionsRoot_(root);
+    (void)AMJson::QueryKey(options, {"LogManager", "client_trace_level"},
+                           &typed->client_trace_level);
+    (void)AMJson::QueryKey(options, {"LogManager", "program_trace_level"},
+                           &typed->program_trace_level);
+    return true;
+  }
+
+  [[nodiscard]] bool Encode(const void *in, Json *root,
+                            std::string *error) const override {
+    if (!in || !root) {
+      return codec_common::Fail_(error,
+                                 "null input LogManagerArg or root json");
+    }
+    const auto *typed = static_cast<const LogManagerArg *>(in);
+    if (!root->is_object()) {
+      *root = Json::object();
+    }
+
+    (*root)["Options"]["LogManager"]["client_trace_level"] =
+        typed->client_trace_level;
+    (*root)["Options"]["LogManager"]["program_trace_level"] =
+        typed->program_trace_level;
+    return true;
+  }
+
+  [[nodiscard]] bool Erase(const void *in, Json *root,
+                           std::string *error) const override {
+    (void)in;
+    if (!root) {
+      return codec_common::Fail_(error, "null root json");
+    }
+    (void)AMJson::DelKey(*root, {"Options", "LogManager"});
     return true;
   }
 };
@@ -795,12 +720,29 @@ public:
     }
     auto *typed = static_cast<VarSetArg *>(out);
     typed->set.clear();
-    UserVarsSnapshot snapshot = {};
-    UserVarsSnapshotCodec snapshot_codec = {};
-    if (!snapshot_codec.Decode(root, &snapshot, error)) {
-      return false;
+
+    const Json user_vars = codec_common::QueryObjectAt_(root, {"UserVars"});
+    for (auto it = user_vars.begin(); it != user_vars.end(); ++it) {
+      if (it.value().is_object()) {
+        if (it.key() != AMDomain::var::kPublic &&
+            !AMDomain::var::IsValidZoneName(it.key())) {
+          continue;
+        }
+        auto &vars = typed->set[it.key()];
+        for (auto vit = it.value().begin(); vit != it.value().end(); ++vit) {
+          if (!AMDomain::var::IsValidVarname(vit.key())) {
+            continue;
+          }
+          vars[vit.key()] = codec_common::ScalarToString_(vit.value());
+        }
+        continue;
+      }
+      if (!AMDomain::var::IsValidVarname(it.key())) {
+        continue;
+      }
+      typed->set[AMDomain::var::kPublic][it.key()] =
+          codec_common::ScalarToString_(it.value());
     }
-    CopyUserVarsSnapshotToVarSetArg_(snapshot, typed);
     return true;
   }
 
@@ -810,75 +752,37 @@ public:
       return codec_common::Fail_(error, "null input VarSetArg or root json");
     }
     const auto *typed = static_cast<const VarSetArg *>(in);
-    UserVarsSnapshot snapshot = {};
-    CopyVarSetArgToUserVarsSnapshot_(*typed, &snapshot);
-    UserVarsSnapshotCodec snapshot_codec = {};
-    return snapshot_codec.Encode(&snapshot, root, error);
+    if (!root->is_object()) {
+      *root = Json::object();
+    }
+    Json out = Json::object();
+    for (const auto &[domain, vars] : typed->set) {
+      Json section = Json::object();
+      for (const auto &[name, value] : vars) {
+        section[name] = value;
+      }
+      out[domain] = std::move(section);
+    }
+    (*root)["UserVars"] = std::move(out);
+    return true;
   }
 
   [[nodiscard]] bool Erase(const void *in, Json *root,
                            std::string *error) const override {
-    UserVarsSnapshotCodec snapshot_codec = {};
-    return snapshot_codec.Erase(in, root, error);
+    (void)in;
+    if (!root) {
+      return codec_common::Fail_(error, "null root json");
+    }
+    (void)AMJson::DelKey(*root, {"UserVars"});
+    return true;
   }
 };
 } // namespace settings_codec
 
 namespace prompt_codec {
-using AMApplication::config::PromptHistoryDocument;
-using AMApplication::config::PromptProfileDocument;
-using AMApplication::config::PromptProfileSettings;
 using AMDomain::prompt::PromptHistoryArg;
 using AMDomain::prompt::PromptProfileArg;
-using DomainPromptProfileSettings = AMDomain::prompt::PromptProfileSettings;
-
-void CopyPromptProfileSettings_(const PromptProfileSettings &from,
-                                DomainPromptProfileSettings *to) {
-  if (!to) {
-    return;
-  }
-  to->prompt.marker = from.prompt.marker;
-  to->prompt.continuation_marker = from.prompt.continuation_marker;
-  to->prompt.enable_multiline = from.prompt.enable_multiline;
-  to->history.enable = from.history.enable;
-  to->history.enable_duplicates = from.history.enable_duplicates;
-  to->history.max_count = from.history.max_count;
-  to->inline_hint.enable = from.inline_hint.enable;
-  to->inline_hint.render_delay_ms = from.inline_hint.render_delay_ms;
-  to->inline_hint.search_delay_ms = from.inline_hint.search_delay_ms;
-  to->inline_hint.path.enable = from.inline_hint.path.enable;
-  to->inline_hint.path.use_async = from.inline_hint.path.use_async;
-  to->inline_hint.path.timeout_ms = from.inline_hint.path.timeout_ms;
-  to->complete.path.use_async = from.complete.path.use_async;
-  to->complete.path.timeout_ms = from.complete.path.timeout_ms;
-  to->highlight.delay_ms = from.highlight.delay_ms;
-  to->highlight.path.enable = from.highlight.path.enable;
-  to->highlight.path.timeout_ms = from.highlight.path.timeout_ms;
-}
-
-void CopyPromptProfileSettings_(const DomainPromptProfileSettings &from,
-                                PromptProfileSettings *to) {
-  if (!to) {
-    return;
-  }
-  to->prompt.marker = from.prompt.marker;
-  to->prompt.continuation_marker = from.prompt.continuation_marker;
-  to->prompt.enable_multiline = from.prompt.enable_multiline;
-  to->history.enable = from.history.enable;
-  to->history.enable_duplicates = from.history.enable_duplicates;
-  to->history.max_count = from.history.max_count;
-  to->inline_hint.enable = from.inline_hint.enable;
-  to->inline_hint.render_delay_ms = from.inline_hint.render_delay_ms;
-  to->inline_hint.search_delay_ms = from.inline_hint.search_delay_ms;
-  to->inline_hint.path.enable = from.inline_hint.path.enable;
-  to->inline_hint.path.use_async = from.inline_hint.path.use_async;
-  to->inline_hint.path.timeout_ms = from.inline_hint.path.timeout_ms;
-  to->complete.path.use_async = from.complete.path.use_async;
-  to->complete.path.timeout_ms = from.complete.path.timeout_ms;
-  to->highlight.delay_ms = from.highlight.delay_ms;
-  to->highlight.path.enable = from.highlight.path.enable;
-  to->highlight.path.timeout_ms = from.highlight.path.timeout_ms;
-}
+using AMDomain::prompt::PromptProfileSettings;
 
 void DecodePromptProfileSettings_(const Json &json,
                                   PromptProfileSettings *out) {
@@ -973,129 +877,6 @@ Json EncodePromptProfileSettings_(const PromptProfileSettings &in) {
   return out;
 }
 
-class PromptProfileDocumentCodec final : public AMInfra::config::IArgCodec {
-public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::PromptProfileDocument;
-  }
-
-  [[nodiscard]] DocumentKind Kind() const override {
-    return DocumentKind::Settings;
-  }
-
-  [[nodiscard]] bool Decode(const Json &root, void *out,
-                            std::string *error) const override {
-    if (!out) {
-      return codec_common::Fail_(error, "null output PromptProfileDocument");
-    }
-    auto *typed = static_cast<PromptProfileDocument *>(out);
-    typed->profiles.clear();
-
-    const Json profile_root =
-        codec_common::QueryObjectAt_(root, {"PromptProfile"});
-    for (auto it = profile_root.begin(); it != profile_root.end(); ++it) {
-      if (!it.value().is_object()) {
-        continue;
-      }
-      PromptProfileSettings item{};
-      DecodePromptProfileSettings_(it.value(), &item);
-      typed->profiles[it.key()] = std::move(item);
-    }
-    return true;
-  }
-
-  [[nodiscard]] bool Encode(const void *in, Json *root,
-                            std::string *error) const override {
-    if (!in || !root) {
-      return codec_common::Fail_(
-          error, "null input PromptProfileDocument or root json");
-    }
-    const auto *typed = static_cast<const PromptProfileDocument *>(in);
-    if (!root->is_object()) {
-      *root = Json::object();
-    }
-    Json out = Json::object();
-    for (const auto &[name, settings] : typed->profiles) {
-      out[name] = EncodePromptProfileSettings_(settings);
-    }
-    (*root)["PromptProfile"] = std::move(out);
-    return true;
-  }
-
-  [[nodiscard]] bool Erase(const void *in, Json *root,
-                           std::string *error) const override {
-    (void)in;
-    if (!root) {
-      return codec_common::Fail_(error, "null root json");
-    }
-    (void)AMJson::DelKey(*root, {"PromptProfile"});
-    return true;
-  }
-};
-
-class PromptHistoryDocumentCodec final : public AMInfra::config::IArgCodec {
-public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::PromptHistoryDocument;
-  }
-
-  [[nodiscard]] DocumentKind Kind() const override {
-    return DocumentKind::History;
-  }
-
-  [[nodiscard]] bool Decode(const Json &root, void *out,
-                            std::string *error) const override {
-    if (!out) {
-      return codec_common::Fail_(error, "null output PromptHistoryDocument");
-    }
-    auto *typed = static_cast<PromptHistoryDocument *>(out);
-    typed->commands_by_profile.clear();
-    if (!root.is_object()) {
-      return true;
-    }
-    for (auto it = root.begin(); it != root.end(); ++it) {
-      Json commands = Json::array();
-      if (!AMJson::QueryKey(it.value(), {"commands"}, &commands) ||
-          !commands.is_array()) {
-        continue;
-      }
-      std::vector<std::string> out_commands;
-      for (const auto &item : commands) {
-        if (item.is_string()) {
-          out_commands.push_back(item.get<std::string>());
-        }
-      }
-      typed->commands_by_profile[it.key()] = std::move(out_commands);
-    }
-    return true;
-  }
-
-  [[nodiscard]] bool Encode(const void *in, Json *root,
-                            std::string *error) const override {
-    if (!in || !root) {
-      return codec_common::Fail_(
-          error, "null input PromptHistoryDocument or root json");
-    }
-    const auto *typed = static_cast<const PromptHistoryDocument *>(in);
-    Json out = Json::object();
-    for (const auto &[name, commands] : typed->commands_by_profile) {
-      out[name]["commands"] = commands;
-    }
-    *root = std::move(out);
-    return true;
-  }
-
-  [[nodiscard]] bool Erase(const void *in, Json *root,
-                           std::string *error) const override {
-    (void)in;
-    if (!root) {
-      return codec_common::Fail_(error, "null root json");
-    }
-    *root = Json::object();
-    return true;
-  }
-};
-
 class PromptProfileArgCodec final : public AMInfra::config::IArgCodec {
 public:
   [[nodiscard]] ConfigPayloadTag Tag() const override {
@@ -1113,14 +894,15 @@ public:
     }
     auto *typed = static_cast<PromptProfileArg *>(out);
     typed->set.clear();
-    PromptProfileDocument document = {};
-    PromptProfileDocumentCodec document_codec = {};
-    if (!document_codec.Decode(root, &document, error)) {
-      return false;
-    }
-    for (const auto &[zone, profile] : document.profiles) {
-      auto &entry = typed->set[zone];
-      CopyPromptProfileSettings_(profile, &entry);
+    const Json profile_root =
+        codec_common::QueryObjectAt_(root, {"PromptProfile"});
+    for (auto it = profile_root.begin(); it != profile_root.end(); ++it) {
+      if (!it.value().is_object()) {
+        continue;
+      }
+      PromptProfileSettings item{};
+      DecodePromptProfileSettings_(it.value(), &item);
+      typed->set[it.key()] = std::move(item);
     }
     return true;
   }
@@ -1132,19 +914,25 @@ public:
                                  "null input PromptProfileArg or root json");
     }
     const auto *typed = static_cast<const PromptProfileArg *>(in);
-    PromptProfileDocument document = {};
-    for (const auto &[zone, profile] : typed->set) {
-      auto &entry = document.profiles[zone];
-      CopyPromptProfileSettings_(profile, &entry);
+    if (!root->is_object()) {
+      *root = Json::object();
     }
-    PromptProfileDocumentCodec document_codec = {};
-    return document_codec.Encode(&document, root, error);
+    Json out = Json::object();
+    for (const auto &[name, settings] : typed->set) {
+      out[name] = EncodePromptProfileSettings_(settings);
+    }
+    (*root)["PromptProfile"] = std::move(out);
+    return true;
   }
 
   [[nodiscard]] bool Erase(const void *in, Json *root,
                            std::string *error) const override {
-    PromptProfileDocumentCodec document_codec = {};
-    return document_codec.Erase(in, root, error);
+    (void)in;
+    if (!root) {
+      return codec_common::Fail_(error, "null root json");
+    }
+    (void)AMJson::DelKey(*root, {"PromptProfile"});
+    return true;
   }
 };
 
@@ -1165,13 +953,22 @@ public:
     }
     auto *typed = static_cast<PromptHistoryArg *>(out);
     typed->set.clear();
-    PromptHistoryDocument document = {};
-    PromptHistoryDocumentCodec document_codec = {};
-    if (!document_codec.Decode(root, &document, error)) {
-      return false;
+    if (!root.is_object()) {
+      return true;
     }
-    for (const auto &[zone, commands] : document.commands_by_profile) {
-      typed->set[zone] = commands;
+    for (auto it = root.begin(); it != root.end(); ++it) {
+      Json commands = Json::array();
+      if (!AMJson::QueryKey(it.value(), {"commands"}, &commands) ||
+          !commands.is_array()) {
+        continue;
+      }
+      std::vector<std::string> out_commands = {};
+      for (const auto &item : commands) {
+        if (item.is_string()) {
+          out_commands.push_back(item.get<std::string>());
+        }
+      }
+      typed->set[it.key()] = std::move(out_commands);
     }
     return true;
   }
@@ -1183,31 +980,39 @@ public:
                                  "null input PromptHistoryArg or root json");
     }
     const auto *typed = static_cast<const PromptHistoryArg *>(in);
-    PromptHistoryDocument document = {};
-    for (const auto &[zone, commands] : typed->set) {
-      document.commands_by_profile[zone] = commands;
+    Json out = Json::object();
+    for (const auto &[name, commands] : typed->set) {
+      out[name]["commands"] = commands;
     }
-    PromptHistoryDocumentCodec document_codec = {};
-    return document_codec.Encode(&document, root, error);
+    *root = std::move(out);
+    return true;
   }
 
   [[nodiscard]] bool Erase(const void *in, Json *root,
                            std::string *error) const override {
-    PromptHistoryDocumentCodec document_codec = {};
-    return document_codec.Erase(in, root, error);
+    (void)in;
+    if (!root) {
+      return codec_common::Fail_(error, "null root json");
+    }
+    *root = Json::object();
+    return true;
   }
 };
 } // namespace prompt_codec
 
 namespace style_codec {
-using AMApplication::config::AMStyleCLIPromptArgs;
-using AMApplication::config::AMStyleCompleteMenuArgs;
-using AMApplication::config::AMStyleProgressBarArgs;
-using AMApplication::config::AMStyleSnapshot;
-using AMApplication::config::AMStyleTableArgs;
+using AMDomain::style::CLIPromptStyle;
+using AMDomain::style::CompleteMenuStyle;
+using AMDomain::style::InputHighlightStyle;
+using AMDomain::style::InternalStyle;
+using AMDomain::style::PathHighlightStyle;
+using AMDomain::style::ProgressBarStyle;
 using AMDomain::style::StyleConfigArg;
+using AMDomain::style::SystemInfoStyle;
+using AMDomain::style::TableStyle;
+using AMDomain::style::ValueQueryHighlightStyle;
 
-void DecodeCompleteMenu_(const Json &json, AMStyleCompleteMenuArgs *out) {
+void DecodeCompleteMenu_(const Json &json, CompleteMenuStyle *out) {
   if (!out || !json.is_object()) {
     return;
   }
@@ -1222,7 +1027,7 @@ void DecodeCompleteMenu_(const Json &json, AMStyleCompleteMenuArgs *out) {
   (void)AMJson::QueryKey(json, {"async_workers"}, &out->async_workers);
 }
 
-Json EncodeCompleteMenu_(const AMStyleCompleteMenuArgs &in) {
+Json EncodeCompleteMenu_(const CompleteMenuStyle &in) {
   Json out = Json::object();
   out["maxnum"] = in.maxnum;
   out["maxrows_perpage"] = in.maxrows_perpage;
@@ -1236,7 +1041,7 @@ Json EncodeCompleteMenu_(const AMStyleCompleteMenuArgs &in) {
   return out;
 }
 
-void DecodeTable_(const Json &json, AMStyleTableArgs *out) {
+void DecodeTable_(const Json &json, TableStyle *out) {
   if (!out || !json.is_object()) {
     return;
   }
@@ -1245,12 +1050,11 @@ void DecodeTable_(const Json &json, AMStyleTableArgs *out) {
   (void)AMJson::QueryKey(json, {"right_padding"}, &out->right_padding);
   (void)AMJson::QueryKey(json, {"top_padding"}, &out->top_padding);
   (void)AMJson::QueryKey(json, {"bottom_padding"}, &out->bottom_padding);
-  (void)AMJson::QueryKey(json, {"refresh_interval_ms"},
-                         &out->refresh_interval_ms);
+  (void)AMJson::QueryKey(json, {"refresh_interval_ms"}, &out->refresh_interval_ms);
   (void)AMJson::QueryKey(json, {"speed_window_size"}, &out->speed_window_size);
 }
 
-Json EncodeTable_(const AMStyleTableArgs &in) {
+Json EncodeTable_(const TableStyle &in) {
   Json out = Json::object();
   out["color"] = in.color;
   out["left_padding"] = in.left_padding;
@@ -1262,42 +1066,26 @@ Json EncodeTable_(const AMStyleTableArgs &in) {
   return out;
 }
 
-void DecodeProgressBar_(const Json &json, AMStyleProgressBarArgs *out) {
+void DecodeProgressBar_(const Json &json, ProgressBarStyle *out) {
   if (!out || !json.is_object()) {
     return;
   }
   (void)AMJson::QueryKey(json, {"start"}, &out->start);
   (void)AMJson::QueryKey(json, {"end"}, &out->end);
-  // backward compatible keys
-  if (out->start.empty()) {
-    (void)AMJson::QueryKey(json, {"lborder"}, &out->start);
-  }
-  if (out->end.empty()) {
-    (void)AMJson::QueryKey(json, {"rborder"}, &out->end);
-  }
   (void)AMJson::QueryKey(json, {"fill"}, &out->fill);
   (void)AMJson::QueryKey(json, {"lead"}, &out->lead);
   (void)AMJson::QueryKey(json, {"remaining"}, &out->remaining);
-  // backward compatible keys
-  if (out->lead.empty()) {
-    (void)AMJson::QueryKey(json, {"head"}, &out->lead);
-  }
-  if (out->remaining.empty()) {
-    (void)AMJson::QueryKey(json, {"remain"}, &out->remaining);
-  }
   (void)AMJson::QueryKey(json, {"color"}, &out->color);
-  (void)AMJson::QueryKey(json, {"refresh_interval_ms"},
-                         &out->refresh_interval_ms);
+  (void)AMJson::QueryKey(json, {"refresh_interval_ms"}, &out->refresh_interval_ms);
   (void)AMJson::QueryKey(json, {"speed_window_size"}, &out->speed_window_size);
   (void)AMJson::QueryKey(json, {"bar_width"}, &out->bar_width);
   (void)AMJson::QueryKey(json, {"width_offset"}, &out->width_offset);
   (void)AMJson::QueryKey(json, {"show_percentage"}, &out->show_percentage);
   (void)AMJson::QueryKey(json, {"show_elapsed_time"}, &out->show_elapsed_time);
-  (void)AMJson::QueryKey(json, {"show_remaining_time"},
-                         &out->show_remaining_time);
+  (void)AMJson::QueryKey(json, {"show_remaining_time"}, &out->show_remaining_time);
 }
 
-Json EncodeProgressBar_(const AMStyleProgressBarArgs &in) {
+Json EncodeProgressBar_(const ProgressBarStyle &in) {
   Json out = Json::object();
   out["start"] = in.start;
   out["end"] = in.end;
@@ -1315,340 +1103,220 @@ Json EncodeProgressBar_(const AMStyleProgressBarArgs &in) {
   return out;
 }
 
-void DecodeCliPrompt_(const Json &json, AMStyleCLIPromptArgs *out) {
+void DecodeCliPrompt_(const Json &json, CLIPromptStyle *out) {
   if (!out || !json.is_object()) {
     return;
   }
-  out->shortcut = codec_common::ReadStringMap_(
-      codec_common::QueryObjectAt_(json, {"shortcut"}));
-  out->icons = codec_common::ReadStringMap_(
-      codec_common::QueryObjectAt_(json, {"icons"}), true);
 
-  Json template_json = codec_common::QueryObjectAt_(json, {"template"});
-  if (template_json.empty()) {
-    template_json = codec_common::QueryObjectAt_(json, {"templete"});
-  }
-  (void)AMJson::QueryKey(template_json, {"core_prompt"},
+  (void)AMJson::QueryKey(json, {"Shortcut", "un"}, &out->shortcut.un);
+  (void)AMJson::QueryKey(json, {"Shortcut", "at"}, &out->shortcut.at);
+  (void)AMJson::QueryKey(json, {"Shortcut", "hn"}, &out->shortcut.hn);
+  (void)AMJson::QueryKey(json, {"Shortcut", "en"}, &out->shortcut.en);
+  (void)AMJson::QueryKey(json, {"Shortcut", "nn"}, &out->shortcut.nn);
+  (void)AMJson::QueryKey(json, {"Shortcut", "cwd"}, &out->shortcut.cwd);
+  (void)AMJson::QueryKey(json, {"Shortcut", "ds"}, &out->shortcut.ds);
+  (void)AMJson::QueryKey(json, {"Shortcut", "white"}, &out->shortcut.white);
+
+  (void)AMJson::QueryKey(json, {"Icons", "windows"}, &out->icons.windows);
+  (void)AMJson::QueryKey(json, {"Icons", "linux"}, &out->icons.linux);
+  (void)AMJson::QueryKey(json, {"Icons", "macos"}, &out->icons.macos);
+
+  (void)AMJson::QueryKey(json, {"NamedStyles", "un"}, &out->named_styles.un);
+  (void)AMJson::QueryKey(json, {"NamedStyles", "at"}, &out->named_styles.at);
+  (void)AMJson::QueryKey(json, {"NamedStyles", "hn"}, &out->named_styles.hn);
+  (void)AMJson::QueryKey(json, {"NamedStyles", "en"}, &out->named_styles.en);
+  (void)AMJson::QueryKey(json, {"NamedStyles", "nn"}, &out->named_styles.nn);
+  (void)AMJson::QueryKey(json, {"NamedStyles", "cwd"}, &out->named_styles.cwd);
+  (void)AMJson::QueryKey(json, {"NamedStyles", "ds"}, &out->named_styles.ds);
+  (void)AMJson::QueryKey(json, {"NamedStyles", "white"}, &out->named_styles.white);
+
+  (void)AMJson::QueryKey(json, {"template", "core_prompt"},
                          &out->prompt_template.core_prompt);
-  (void)AMJson::QueryKey(template_json, {"history_search_prompt"},
+  (void)AMJson::QueryKey(json, {"template", "history_search_prompt"},
                          &out->prompt_template.history_search_prompt);
-  if (out->prompt_template.core_prompt.empty()) {
-    (void)AMJson::QueryKey(json, {"format"}, &out->prompt_template.core_prompt);
-  }
-
-  out->named_styles.clear();
-  for (auto it = json.begin(); it != json.end(); ++it) {
-    const std::string key = it.key();
-    if (key == "shortcut" || key == "icons" || key == "template" ||
-        key == "templete") {
-      continue;
-    }
-    if (!it.value().is_string()) {
-      continue;
-    }
-    out->named_styles[key] = it.value().get<std::string>();
-  }
 }
 
-Json EncodeCliPrompt_(const AMStyleCLIPromptArgs &in) {
+Json EncodeCliPrompt_(const CLIPromptStyle &in) {
   Json out = Json::object();
-  for (const auto &[key, value] : in.named_styles) {
-    out[key] = value;
-  }
-  out["shortcut"] = codec_common::WriteStringMap_(in.shortcut);
-  out["icons"] = codec_common::WriteStringMap_(in.icons);
+  out["Shortcut"]["un"] = in.shortcut.un;
+  out["Shortcut"]["at"] = in.shortcut.at;
+  out["Shortcut"]["hn"] = in.shortcut.hn;
+  out["Shortcut"]["en"] = in.shortcut.en;
+  out["Shortcut"]["nn"] = in.shortcut.nn;
+  out["Shortcut"]["cwd"] = in.shortcut.cwd;
+  out["Shortcut"]["ds"] = in.shortcut.ds;
+  out["Shortcut"]["white"] = in.shortcut.white;
+
+  out["Icons"]["windows"] = in.icons.windows;
+  out["Icons"]["linux"] = in.icons.linux;
+  out["Icons"]["macos"] = in.icons.macos;
+
+  out["NamedStyles"]["un"] = in.named_styles.un;
+  out["NamedStyles"]["at"] = in.named_styles.at;
+  out["NamedStyles"]["hn"] = in.named_styles.hn;
+  out["NamedStyles"]["en"] = in.named_styles.en;
+  out["NamedStyles"]["nn"] = in.named_styles.nn;
+  out["NamedStyles"]["cwd"] = in.named_styles.cwd;
+  out["NamedStyles"]["ds"] = in.named_styles.ds;
+  out["NamedStyles"]["white"] = in.named_styles.white;
+
   out["template"]["core_prompt"] = in.prompt_template.core_prompt;
   out["template"]["history_search_prompt"] =
       in.prompt_template.history_search_prompt;
   return out;
 }
 
-std::string GetMapValue_(const std::map<std::string, std::string> &src,
-                         const std::string &key) {
-  const auto it = src.find(key);
-  if (it == src.end()) {
-    return "";
-  }
-  return it->second;
-}
-
-void CopyStyleSnapshotToStyleConfigArg_(const AMStyleSnapshot &snapshot,
-                                        StyleConfigArg *out) {
-  if (!out) {
+void DecodeInputHighlight_(const Json &json, InputHighlightStyle *out) {
+  if (!out || !json.is_object()) {
     return;
   }
-  out->style.complete_menu.maxnum = snapshot.complete_menu.maxnum;
-  out->style.complete_menu.maxrows_perpage = snapshot.complete_menu.maxrows_perpage;
-  out->style.complete_menu.item_select_sign = snapshot.complete_menu.item_select_sign;
-  out->style.complete_menu.number_pick = snapshot.complete_menu.number_pick;
-  out->style.complete_menu.auto_fillin = snapshot.complete_menu.auto_fillin;
-  out->style.complete_menu.order_num_style = snapshot.complete_menu.order_num_style;
-  out->style.complete_menu.help_style = snapshot.complete_menu.help_style;
-  out->style.complete_menu.complete_delay_ms = snapshot.complete_menu.complete_delay_ms;
-  out->style.complete_menu.async_workers = snapshot.complete_menu.async_workers;
-
-  out->style.table.color = snapshot.table.color;
-  out->style.table.left_padding = snapshot.table.left_padding;
-  out->style.table.right_padding = snapshot.table.right_padding;
-  out->style.table.top_padding = snapshot.table.top_padding;
-  out->style.table.bottom_padding = snapshot.table.bottom_padding;
-  out->style.table.refresh_interval_ms = snapshot.table.refresh_interval_ms;
-  out->style.table.speed_window_size = snapshot.table.speed_window_size;
-
-  out->style.progress_bar.start = snapshot.progress_bar.start;
-  out->style.progress_bar.end = snapshot.progress_bar.end;
-  out->style.progress_bar.fill = snapshot.progress_bar.fill;
-  out->style.progress_bar.lead = snapshot.progress_bar.lead;
-  out->style.progress_bar.remaining = snapshot.progress_bar.remaining;
-  out->style.progress_bar.color = snapshot.progress_bar.color;
-  out->style.progress_bar.refresh_interval_ms =
-      snapshot.progress_bar.refresh_interval_ms;
-  out->style.progress_bar.speed_window_size = snapshot.progress_bar.speed_window_size;
-  out->style.progress_bar.bar_width = snapshot.progress_bar.bar_width;
-  out->style.progress_bar.width_offset = snapshot.progress_bar.width_offset;
-  out->style.progress_bar.show_percentage = snapshot.progress_bar.show_percentage;
-  out->style.progress_bar.show_elapsed_time =
-      snapshot.progress_bar.show_elapsed_time;
-  out->style.progress_bar.show_remaining_time =
-      snapshot.progress_bar.show_remaining_time;
-
-  out->style.cli_prompt.shortcut.un = GetMapValue_(snapshot.cli_prompt.shortcut, "un");
-  out->style.cli_prompt.shortcut.at = GetMapValue_(snapshot.cli_prompt.shortcut, "at");
-  out->style.cli_prompt.shortcut.hn = GetMapValue_(snapshot.cli_prompt.shortcut, "hn");
-  out->style.cli_prompt.shortcut.en = GetMapValue_(snapshot.cli_prompt.shortcut, "en");
-  out->style.cli_prompt.shortcut.nn = GetMapValue_(snapshot.cli_prompt.shortcut, "nn");
-  out->style.cli_prompt.shortcut.cwd = GetMapValue_(snapshot.cli_prompt.shortcut, "cwd");
-  out->style.cli_prompt.shortcut.ds = GetMapValue_(snapshot.cli_prompt.shortcut, "ds");
-  out->style.cli_prompt.shortcut.white = GetMapValue_(snapshot.cli_prompt.shortcut, "white");
-  out->style.cli_prompt.icons.windows = GetMapValue_(snapshot.cli_prompt.icons, "windows");
-  out->style.cli_prompt.icons.linux = GetMapValue_(snapshot.cli_prompt.icons, "linux");
-  out->style.cli_prompt.icons.macos = GetMapValue_(snapshot.cli_prompt.icons, "macos");
-  out->style.cli_prompt.named_styles.un =
-      GetMapValue_(snapshot.cli_prompt.named_styles, "un");
-  out->style.cli_prompt.named_styles.at =
-      GetMapValue_(snapshot.cli_prompt.named_styles, "at");
-  out->style.cli_prompt.named_styles.hn =
-      GetMapValue_(snapshot.cli_prompt.named_styles, "hn");
-  out->style.cli_prompt.named_styles.en =
-      GetMapValue_(snapshot.cli_prompt.named_styles, "en");
-  out->style.cli_prompt.named_styles.nn =
-      GetMapValue_(snapshot.cli_prompt.named_styles, "nn");
-  out->style.cli_prompt.named_styles.cwd =
-      GetMapValue_(snapshot.cli_prompt.named_styles, "cwd");
-  out->style.cli_prompt.named_styles.ds =
-      GetMapValue_(snapshot.cli_prompt.named_styles, "ds");
-  out->style.cli_prompt.named_styles.white =
-      GetMapValue_(snapshot.cli_prompt.named_styles, "white");
-  out->style.cli_prompt.prompt_template.core_prompt =
-      snapshot.cli_prompt.prompt_template.core_prompt;
-  out->style.cli_prompt.prompt_template.history_search_prompt =
-      snapshot.cli_prompt.prompt_template.history_search_prompt;
-
-  out->style.input_highlight.protocol = GetMapValue_(snapshot.input_highlight, "protocol");
-  out->style.input_highlight.abort = GetMapValue_(snapshot.input_highlight, "abort");
-  out->style.input_highlight.common = GetMapValue_(snapshot.input_highlight, "common");
-  out->style.input_highlight.module = GetMapValue_(snapshot.input_highlight, "module");
-  out->style.input_highlight.command = GetMapValue_(snapshot.input_highlight, "command");
-  out->style.input_highlight.illegal_command =
-      GetMapValue_(snapshot.input_highlight, "illegal_command");
-  out->style.input_highlight.option = GetMapValue_(snapshot.input_highlight, "option");
-  out->style.input_highlight.string = GetMapValue_(snapshot.input_highlight, "string");
-  out->style.input_highlight.public_varname =
-      GetMapValue_(snapshot.input_highlight, "public_varname");
-  out->style.input_highlight.private_varname =
-      GetMapValue_(snapshot.input_highlight, "private_varname");
-  out->style.input_highlight.nonexistent_varname =
-      GetMapValue_(snapshot.input_highlight, "nonexistent_varname");
-  out->style.input_highlight.varvalue = GetMapValue_(snapshot.input_highlight, "varvalue");
-  out->style.input_highlight.nickname = GetMapValue_(snapshot.input_highlight, "nickname");
-  out->style.input_highlight.unestablished_nickname =
-      GetMapValue_(snapshot.input_highlight, "unestablished_nickname");
-  out->style.input_highlight.nonexistent_nickname =
-      GetMapValue_(snapshot.input_highlight, "nonexistent_nickname");
-  out->style.input_highlight.valid_new_nickname =
-      GetMapValue_(snapshot.input_highlight, "valid_new_nickname");
-  out->style.input_highlight.invalid_new_nickname =
-      GetMapValue_(snapshot.input_highlight, "invalid_new_nickname");
-  out->style.input_highlight.builtin_arg =
-      GetMapValue_(snapshot.input_highlight, "builtin_arg");
-  out->style.input_highlight.nonexistent_builtin_arg =
-      GetMapValue_(snapshot.input_highlight, "nonexistent_builtin_arg");
-  out->style.input_highlight.username = GetMapValue_(snapshot.input_highlight, "username");
-  out->style.input_highlight.atsign = GetMapValue_(snapshot.input_highlight, "atsign");
-  out->style.input_highlight.dollarsign =
-      GetMapValue_(snapshot.input_highlight, "dollarsign");
-  out->style.input_highlight.equalsign = GetMapValue_(snapshot.input_highlight, "equalsign");
-  out->style.input_highlight.escapedsign =
-      GetMapValue_(snapshot.input_highlight, "escapedsign");
-  out->style.input_highlight.bangsign = GetMapValue_(snapshot.input_highlight, "bangsign");
-  out->style.input_highlight.shell_cmd =
-      GetMapValue_(snapshot.input_highlight, "shell_cmd");
-  out->style.input_highlight.cwd = GetMapValue_(snapshot.input_highlight, "cwd");
-  out->style.input_highlight.number = GetMapValue_(snapshot.input_highlight, "number");
-  out->style.input_highlight.timestamp =
-      GetMapValue_(snapshot.input_highlight, "timestamp");
-  out->style.input_highlight.path_like =
-      GetMapValue_(snapshot.input_highlight, "path_like");
-
-  out->style.value_query_highlight.valid_value =
-      GetMapValue_(snapshot.value_query_highlight, "valid_value");
-  out->style.value_query_highlight.invalid_value =
-      GetMapValue_(snapshot.value_query_highlight, "invalid_value");
-  out->style.value_query_highlight.prompt_style =
-      GetMapValue_(snapshot.value_query_highlight, "prompt_style");
-
-  out->style.internal_style.inline_hint =
-      GetMapValue_(snapshot.internal_style, "inline_hint");
-  out->style.internal_style.default_prompt =
-      GetMapValue_(snapshot.internal_style, "default_prompt_style");
-  if (out->style.internal_style.default_prompt.empty()) {
-    out->style.internal_style.default_prompt =
-        GetMapValue_(snapshot.internal_style, "default_prompt");
-  }
-
-  out->style.path.path_str = GetMapValue_(snapshot.path, "path_str");
-  out->style.path.root = GetMapValue_(snapshot.path, "root");
-  out->style.path.node_dir_name = GetMapValue_(snapshot.path, "node_dir_name");
-  out->style.path.filename = GetMapValue_(snapshot.path, "filename");
-  out->style.path.dir = GetMapValue_(snapshot.path, "dir");
-  out->style.path.regular = GetMapValue_(snapshot.path, "regular");
-  out->style.path.symlink = GetMapValue_(snapshot.path, "symlink");
-  out->style.path.otherspecial = GetMapValue_(snapshot.path, "otherspecial");
-  out->style.path.nonexistent = GetMapValue_(snapshot.path, "nonexistent");
-
-  out->style.system_info.info = GetMapValue_(snapshot.system_info, "info");
-  out->style.system_info.success = GetMapValue_(snapshot.system_info, "success");
-  out->style.system_info.error = GetMapValue_(snapshot.system_info, "error");
-  out->style.system_info.warning = GetMapValue_(snapshot.system_info, "warning");
+  (void)AMJson::QueryKey(json, {"protocol"}, &out->protocol);
+  (void)AMJson::QueryKey(json, {"abort"}, &out->abort);
+  (void)AMJson::QueryKey(json, {"common"}, &out->common);
+  (void)AMJson::QueryKey(json, {"module"}, &out->module);
+  (void)AMJson::QueryKey(json, {"command"}, &out->command);
+  (void)AMJson::QueryKey(json, {"illegal_command"}, &out->illegal_command);
+  (void)AMJson::QueryKey(json, {"option"}, &out->option);
+  (void)AMJson::QueryKey(json, {"string"}, &out->string);
+  (void)AMJson::QueryKey(json, {"public_varname"}, &out->public_varname);
+  (void)AMJson::QueryKey(json, {"private_varname"}, &out->private_varname);
+  (void)AMJson::QueryKey(json, {"nonexistent_varname"}, &out->nonexistent_varname);
+  (void)AMJson::QueryKey(json, {"varvalue"}, &out->varvalue);
+  (void)AMJson::QueryKey(json, {"nickname"}, &out->nickname);
+  (void)AMJson::QueryKey(json, {"unestablished_nickname"}, &out->unestablished_nickname);
+  (void)AMJson::QueryKey(json, {"nonexistent_nickname"}, &out->nonexistent_nickname);
+  (void)AMJson::QueryKey(json, {"valid_new_nickname"}, &out->valid_new_nickname);
+  (void)AMJson::QueryKey(json, {"invalid_new_nickname"}, &out->invalid_new_nickname);
+  (void)AMJson::QueryKey(json, {"builtin_arg"}, &out->builtin_arg);
+  (void)AMJson::QueryKey(json, {"nonexistent_builtin_arg"}, &out->nonexistent_builtin_arg);
+  (void)AMJson::QueryKey(json, {"username"}, &out->username);
+  (void)AMJson::QueryKey(json, {"atsign"}, &out->atsign);
+  (void)AMJson::QueryKey(json, {"dollarsign"}, &out->dollarsign);
+  (void)AMJson::QueryKey(json, {"equalsign"}, &out->equalsign);
+  (void)AMJson::QueryKey(json, {"escapedsign"}, &out->escapedsign);
+  (void)AMJson::QueryKey(json, {"bangsign"}, &out->bangsign);
+  (void)AMJson::QueryKey(json, {"shell_cmd"}, &out->shell_cmd);
+  (void)AMJson::QueryKey(json, {"cwd"}, &out->cwd);
+  (void)AMJson::QueryKey(json, {"number"}, &out->number);
+  (void)AMJson::QueryKey(json, {"timestamp"}, &out->timestamp);
+  (void)AMJson::QueryKey(json, {"path_like"}, &out->path_like);
 }
 
-void CopyStyleConfigArgToStyleSnapshot_(const StyleConfigArg &arg,
-                                        AMStyleSnapshot *out) {
-  if (!out) {
+Json EncodeInputHighlight_(const InputHighlightStyle &in) {
+  Json out = Json::object();
+  out["protocol"] = in.protocol;
+  out["abort"] = in.abort;
+  out["common"] = in.common;
+  out["module"] = in.module;
+  out["command"] = in.command;
+  out["illegal_command"] = in.illegal_command;
+  out["option"] = in.option;
+  out["string"] = in.string;
+  out["public_varname"] = in.public_varname;
+  out["private_varname"] = in.private_varname;
+  out["nonexistent_varname"] = in.nonexistent_varname;
+  out["varvalue"] = in.varvalue;
+  out["nickname"] = in.nickname;
+  out["unestablished_nickname"] = in.unestablished_nickname;
+  out["nonexistent_nickname"] = in.nonexistent_nickname;
+  out["valid_new_nickname"] = in.valid_new_nickname;
+  out["invalid_new_nickname"] = in.invalid_new_nickname;
+  out["builtin_arg"] = in.builtin_arg;
+  out["nonexistent_builtin_arg"] = in.nonexistent_builtin_arg;
+  out["username"] = in.username;
+  out["atsign"] = in.atsign;
+  out["dollarsign"] = in.dollarsign;
+  out["equalsign"] = in.equalsign;
+  out["escapedsign"] = in.escapedsign;
+  out["bangsign"] = in.bangsign;
+  out["shell_cmd"] = in.shell_cmd;
+  out["cwd"] = in.cwd;
+  out["number"] = in.number;
+  out["timestamp"] = in.timestamp;
+  out["path_like"] = in.path_like;
+  return out;
+}
+
+void DecodeValueQueryHighlight_(const Json &json, ValueQueryHighlightStyle *out) {
+  if (!out || !json.is_object()) {
     return;
   }
-  out->complete_menu.maxnum = arg.style.complete_menu.maxnum;
-  out->complete_menu.maxrows_perpage = arg.style.complete_menu.maxrows_perpage;
-  out->complete_menu.item_select_sign = arg.style.complete_menu.item_select_sign;
-  out->complete_menu.number_pick = arg.style.complete_menu.number_pick;
-  out->complete_menu.auto_fillin = arg.style.complete_menu.auto_fillin;
-  out->complete_menu.order_num_style = arg.style.complete_menu.order_num_style;
-  out->complete_menu.help_style = arg.style.complete_menu.help_style;
-  out->complete_menu.complete_delay_ms = arg.style.complete_menu.complete_delay_ms;
-  out->complete_menu.async_workers = arg.style.complete_menu.async_workers;
+  (void)AMJson::QueryKey(json, {"valid_value"}, &out->valid_value);
+  (void)AMJson::QueryKey(json, {"invalid_value"}, &out->invalid_value);
+  (void)AMJson::QueryKey(json, {"prompt_style"}, &out->prompt_style);
+}
 
-  out->table.color = arg.style.table.color;
-  out->table.left_padding = arg.style.table.left_padding;
-  out->table.right_padding = arg.style.table.right_padding;
-  out->table.top_padding = arg.style.table.top_padding;
-  out->table.bottom_padding = arg.style.table.bottom_padding;
-  out->table.refresh_interval_ms = arg.style.table.refresh_interval_ms;
-  out->table.speed_window_size = arg.style.table.speed_window_size;
+Json EncodeValueQueryHighlight_(const ValueQueryHighlightStyle &in) {
+  Json out = Json::object();
+  out["valid_value"] = in.valid_value;
+  out["invalid_value"] = in.invalid_value;
+  out["prompt_style"] = in.prompt_style;
+  return out;
+}
 
-  out->progress_bar.start = arg.style.progress_bar.start;
-  out->progress_bar.end = arg.style.progress_bar.end;
-  out->progress_bar.fill = arg.style.progress_bar.fill;
-  out->progress_bar.lead = arg.style.progress_bar.lead;
-  out->progress_bar.remaining = arg.style.progress_bar.remaining;
-  out->progress_bar.color = arg.style.progress_bar.color;
-  out->progress_bar.refresh_interval_ms = arg.style.progress_bar.refresh_interval_ms;
-  out->progress_bar.speed_window_size = arg.style.progress_bar.speed_window_size;
-  out->progress_bar.bar_width = arg.style.progress_bar.bar_width;
-  out->progress_bar.width_offset = arg.style.progress_bar.width_offset;
-  out->progress_bar.show_percentage = arg.style.progress_bar.show_percentage;
-  out->progress_bar.show_elapsed_time = arg.style.progress_bar.show_elapsed_time;
-  out->progress_bar.show_remaining_time =
-      arg.style.progress_bar.show_remaining_time;
+void DecodeInternalStyle_(const Json &json, InternalStyle *out) {
+  if (!out || !json.is_object()) {
+    return;
+  }
+  (void)AMJson::QueryKey(json, {"inline_hint"}, &out->inline_hint);
+  if (!AMJson::QueryKey(json, {"default_prompt_style"}, &out->default_prompt)) {
+    (void)AMJson::QueryKey(json, {"default_prompt"}, &out->default_prompt);
+  }
+}
 
-  out->cli_prompt.shortcut["un"] = arg.style.cli_prompt.shortcut.un;
-  out->cli_prompt.shortcut["at"] = arg.style.cli_prompt.shortcut.at;
-  out->cli_prompt.shortcut["hn"] = arg.style.cli_prompt.shortcut.hn;
-  out->cli_prompt.shortcut["en"] = arg.style.cli_prompt.shortcut.en;
-  out->cli_prompt.shortcut["nn"] = arg.style.cli_prompt.shortcut.nn;
-  out->cli_prompt.shortcut["cwd"] = arg.style.cli_prompt.shortcut.cwd;
-  out->cli_prompt.shortcut["ds"] = arg.style.cli_prompt.shortcut.ds;
-  out->cli_prompt.shortcut["white"] = arg.style.cli_prompt.shortcut.white;
-  out->cli_prompt.icons["windows"] = arg.style.cli_prompt.icons.windows;
-  out->cli_prompt.icons["linux"] = arg.style.cli_prompt.icons.linux;
-  out->cli_prompt.icons["macos"] = arg.style.cli_prompt.icons.macos;
-  out->cli_prompt.named_styles["un"] = arg.style.cli_prompt.named_styles.un;
-  out->cli_prompt.named_styles["at"] = arg.style.cli_prompt.named_styles.at;
-  out->cli_prompt.named_styles["hn"] = arg.style.cli_prompt.named_styles.hn;
-  out->cli_prompt.named_styles["en"] = arg.style.cli_prompt.named_styles.en;
-  out->cli_prompt.named_styles["nn"] = arg.style.cli_prompt.named_styles.nn;
-  out->cli_prompt.named_styles["cwd"] = arg.style.cli_prompt.named_styles.cwd;
-  out->cli_prompt.named_styles["ds"] = arg.style.cli_prompt.named_styles.ds;
-  out->cli_prompt.named_styles["white"] = arg.style.cli_prompt.named_styles.white;
-  out->cli_prompt.prompt_template.core_prompt =
-      arg.style.cli_prompt.prompt_template.core_prompt;
-  out->cli_prompt.prompt_template.history_search_prompt =
-      arg.style.cli_prompt.prompt_template.history_search_prompt;
+Json EncodeInternalStyle_(const InternalStyle &in) {
+  Json out = Json::object();
+  out["inline_hint"] = in.inline_hint;
+  out["default_prompt_style"] = in.default_prompt;
+  return out;
+}
 
-  out->input_highlight["protocol"] = arg.style.input_highlight.protocol;
-  out->input_highlight["abort"] = arg.style.input_highlight.abort;
-  out->input_highlight["common"] = arg.style.input_highlight.common;
-  out->input_highlight["module"] = arg.style.input_highlight.module;
-  out->input_highlight["command"] = arg.style.input_highlight.command;
-  out->input_highlight["illegal_command"] =
-      arg.style.input_highlight.illegal_command;
-  out->input_highlight["option"] = arg.style.input_highlight.option;
-  out->input_highlight["string"] = arg.style.input_highlight.string;
-  out->input_highlight["public_varname"] =
-      arg.style.input_highlight.public_varname;
-  out->input_highlight["private_varname"] =
-      arg.style.input_highlight.private_varname;
-  out->input_highlight["nonexistent_varname"] =
-      arg.style.input_highlight.nonexistent_varname;
-  out->input_highlight["varvalue"] = arg.style.input_highlight.varvalue;
-  out->input_highlight["nickname"] = arg.style.input_highlight.nickname;
-  out->input_highlight["unestablished_nickname"] =
-      arg.style.input_highlight.unestablished_nickname;
-  out->input_highlight["nonexistent_nickname"] =
-      arg.style.input_highlight.nonexistent_nickname;
-  out->input_highlight["valid_new_nickname"] =
-      arg.style.input_highlight.valid_new_nickname;
-  out->input_highlight["invalid_new_nickname"] =
-      arg.style.input_highlight.invalid_new_nickname;
-  out->input_highlight["builtin_arg"] = arg.style.input_highlight.builtin_arg;
-  out->input_highlight["nonexistent_builtin_arg"] =
-      arg.style.input_highlight.nonexistent_builtin_arg;
-  out->input_highlight["username"] = arg.style.input_highlight.username;
-  out->input_highlight["atsign"] = arg.style.input_highlight.atsign;
-  out->input_highlight["dollarsign"] = arg.style.input_highlight.dollarsign;
-  out->input_highlight["equalsign"] = arg.style.input_highlight.equalsign;
-  out->input_highlight["escapedsign"] = arg.style.input_highlight.escapedsign;
-  out->input_highlight["bangsign"] = arg.style.input_highlight.bangsign;
-  out->input_highlight["shell_cmd"] = arg.style.input_highlight.shell_cmd;
-  out->input_highlight["cwd"] = arg.style.input_highlight.cwd;
-  out->input_highlight["number"] = arg.style.input_highlight.number;
-  out->input_highlight["timestamp"] = arg.style.input_highlight.timestamp;
-  out->input_highlight["path_like"] = arg.style.input_highlight.path_like;
+void DecodePathHighlight_(const Json &json, PathHighlightStyle *out) {
+  if (!out || !json.is_object()) {
+    return;
+  }
+  (void)AMJson::QueryKey(json, {"path_str"}, &out->path_str);
+  (void)AMJson::QueryKey(json, {"root"}, &out->root);
+  (void)AMJson::QueryKey(json, {"node_dir_name"}, &out->node_dir_name);
+  (void)AMJson::QueryKey(json, {"filename"}, &out->filename);
+  (void)AMJson::QueryKey(json, {"dir"}, &out->dir);
+  (void)AMJson::QueryKey(json, {"regular"}, &out->regular);
+  (void)AMJson::QueryKey(json, {"symlink"}, &out->symlink);
+  (void)AMJson::QueryKey(json, {"otherspecial"}, &out->otherspecial);
+  (void)AMJson::QueryKey(json, {"nonexistent"}, &out->nonexistent);
+}
 
-  out->value_query_highlight["valid_value"] =
-      arg.style.value_query_highlight.valid_value;
-  out->value_query_highlight["invalid_value"] =
-      arg.style.value_query_highlight.invalid_value;
-  out->value_query_highlight["prompt_style"] =
-      arg.style.value_query_highlight.prompt_style;
+Json EncodePathHighlight_(const PathHighlightStyle &in) {
+  Json out = Json::object();
+  out["path_str"] = in.path_str;
+  out["root"] = in.root;
+  out["node_dir_name"] = in.node_dir_name;
+  out["filename"] = in.filename;
+  out["dir"] = in.dir;
+  out["regular"] = in.regular;
+  out["symlink"] = in.symlink;
+  out["otherspecial"] = in.otherspecial;
+  out["nonexistent"] = in.nonexistent;
+  return out;
+}
 
-  out->internal_style["inline_hint"] = arg.style.internal_style.inline_hint;
-  out->internal_style["default_prompt_style"] =
-      arg.style.internal_style.default_prompt;
-  out->path["path_str"] = arg.style.path.path_str;
-  out->path["root"] = arg.style.path.root;
-  out->path["node_dir_name"] = arg.style.path.node_dir_name;
-  out->path["filename"] = arg.style.path.filename;
-  out->path["dir"] = arg.style.path.dir;
-  out->path["regular"] = arg.style.path.regular;
-  out->path["symlink"] = arg.style.path.symlink;
-  out->path["otherspecial"] = arg.style.path.otherspecial;
-  out->path["nonexistent"] = arg.style.path.nonexistent;
+void DecodeSystemInfo_(const Json &json, SystemInfoStyle *out) {
+  if (!out || !json.is_object()) {
+    return;
+  }
+  (void)AMJson::QueryKey(json, {"info"}, &out->info);
+  (void)AMJson::QueryKey(json, {"success"}, &out->success);
+  (void)AMJson::QueryKey(json, {"error"}, &out->error);
+  (void)AMJson::QueryKey(json, {"warning"}, &out->warning);
+}
 
-  out->system_info["info"] = arg.style.system_info.info;
-  out->system_info["success"] = arg.style.system_info.success;
-  out->system_info["error"] = arg.style.system_info.error;
-  out->system_info["warning"] = arg.style.system_info.warning;
-  out->Normalize();
+Json EncodeSystemInfo_(const SystemInfoStyle &in) {
+  Json out = Json::object();
+  out["info"] = in.info;
+  out["success"] = in.success;
+  out["error"] = in.error;
+  out["warning"] = in.warning;
+  return out;
 }
 
 class StyleSnapshotCodec final : public AMInfra::config::IArgCodec {
@@ -1664,30 +1332,34 @@ public:
   [[nodiscard]] bool Decode(const Json &root, void *out,
                             std::string *error) const override {
     if (!out) {
-      return codec_common::Fail_(error, "null output AMStyleSnapshot");
+      return codec_common::Fail_(error, "null output StyleConfigArg");
     }
-    auto *typed = static_cast<AMStyleSnapshot *>(out);
+    auto *typed = static_cast<StyleConfigArg *>(out);
     *typed = {};
 
     const Json style = codec_common::QueryObjectAt_(root, {"Style"});
     DecodeCompleteMenu_(codec_common::QueryObjectAt_(style, {"CompleteMenu"}),
-                        &typed->complete_menu);
-    DecodeTable_(codec_common::QueryObjectAt_(style, {"Table"}), &typed->table);
+                        &typed->style.complete_menu);
+    DecodeTable_(codec_common::QueryObjectAt_(style, {"Table"}),
+                 &typed->style.table);
     DecodeProgressBar_(codec_common::QueryObjectAt_(style, {"ProgressBar"}),
-                       &typed->progress_bar);
+                       &typed->style.progress_bar);
     DecodeCliPrompt_(codec_common::QueryObjectAt_(style, {"CLIPrompt"}),
-                     &typed->cli_prompt);
-    typed->input_highlight = codec_common::ReadStringMap_(
-        codec_common::QueryObjectAt_(style, {"InputHighlight"}));
-    typed->value_query_highlight = codec_common::ReadStringMap_(
-        codec_common::QueryObjectAt_(style, {"ValueQueryHighlight"}));
-    typed->internal_style = codec_common::ReadStringMap_(
-        codec_common::QueryObjectAt_(style, {"InternalStyle"}));
-    typed->path = codec_common::ReadStringMap_(
-        codec_common::QueryObjectAt_(style, {"Path"}));
-    typed->system_info = codec_common::ReadStringMap_(
-        codec_common::QueryObjectAt_(style, {"SystemInfo"}));
-    typed->Normalize();
+                     &typed->style.cli_prompt);
+    DecodeInputHighlight_(
+        codec_common::QueryObjectAt_(style, {"InputHighlight"}),
+        &typed->style.input_highlight);
+    DecodeValueQueryHighlight_(
+        codec_common::QueryObjectAt_(style, {"ValueQueryHighlight"}),
+        &typed->style.value_query_highlight);
+    DecodeInternalStyle_(codec_common::QueryObjectAt_(style, {"InternalStyle"}),
+                         &typed->style.internal_style);
+    DecodePathHighlight_(codec_common::QueryObjectAt_(style, {"Path"}),
+                         &typed->style.path);
+    DecodeSystemInfo_(codec_common::QueryObjectAt_(style, {"SystemInfo"}),
+                      &typed->style.system_info);
+
+    AMDomain::style::services::NormalizeStyleConfigArg(typed);
     return true;
   }
 
@@ -1695,25 +1367,25 @@ public:
                             std::string *error) const override {
     if (!in || !root) {
       return codec_common::Fail_(error,
-                                 "null input AMStyleSnapshot or root json");
+                                 "null input StyleConfigArg or root json");
     }
-    const auto *typed = static_cast<const AMStyleSnapshot *>(in);
+    const auto *typed = static_cast<const StyleConfigArg *>(in);
     if (!root->is_object()) {
       *root = Json::object();
     }
+
     Json style = Json::object();
-    style["CompleteMenu"] = EncodeCompleteMenu_(typed->complete_menu);
-    style["Table"] = EncodeTable_(typed->table);
-    style["ProgressBar"] = EncodeProgressBar_(typed->progress_bar);
-    style["CLIPrompt"] = EncodeCliPrompt_(typed->cli_prompt);
+    style["CompleteMenu"] = EncodeCompleteMenu_(typed->style.complete_menu);
+    style["Table"] = EncodeTable_(typed->style.table);
+    style["ProgressBar"] = EncodeProgressBar_(typed->style.progress_bar);
+    style["CLIPrompt"] = EncodeCliPrompt_(typed->style.cli_prompt);
     style["InputHighlight"] =
-        codec_common::WriteStringMap_(typed->input_highlight);
+        EncodeInputHighlight_(typed->style.input_highlight);
     style["ValueQueryHighlight"] =
-        codec_common::WriteStringMap_(typed->value_query_highlight);
-    style["InternalStyle"] =
-        codec_common::WriteStringMap_(typed->internal_style);
-    style["Path"] = codec_common::WriteStringMap_(typed->path);
-    style["SystemInfo"] = codec_common::WriteStringMap_(typed->system_info);
+        EncodeValueQueryHighlight_(typed->style.value_query_highlight);
+    style["InternalStyle"] = EncodeInternalStyle_(typed->style.internal_style);
+    style["Path"] = EncodePathHighlight_(typed->style.path);
+    style["SystemInfo"] = EncodeSystemInfo_(typed->style.system_info);
     (*root)["Style"] = std::move(style);
     return true;
   }
@@ -1741,31 +1413,14 @@ public:
 
   [[nodiscard]] bool Decode(const Json &root, void *out,
                             std::string *error) const override {
-    if (!out) {
-      return codec_common::Fail_(error, "null output StyleConfigArg");
-    }
-    auto *typed = static_cast<StyleConfigArg *>(out);
-    *typed = {};
-    AMStyleSnapshot snapshot = {};
     StyleSnapshotCodec snapshot_codec = {};
-    if (!snapshot_codec.Decode(root, &snapshot, error)) {
-      return false;
-    }
-    CopyStyleSnapshotToStyleConfigArg_(snapshot, typed);
-    return true;
+    return snapshot_codec.Decode(root, out, error);
   }
 
   [[nodiscard]] bool Encode(const void *in, Json *root,
                             std::string *error) const override {
-    if (!in || !root) {
-      return codec_common::Fail_(error,
-                                 "null input StyleConfigArg or root json");
-    }
-    const auto *typed = static_cast<const StyleConfigArg *>(in);
-    AMStyleSnapshot snapshot = {};
-    CopyStyleConfigArgToStyleSnapshot_(*typed, &snapshot);
     StyleSnapshotCodec snapshot_codec = {};
-    return snapshot_codec.Encode(&snapshot, root, error);
+    return snapshot_codec.Encode(in, root, error);
   }
 
   [[nodiscard]] bool Erase(const void *in, Json *root,
@@ -1784,32 +1439,29 @@ BuildCodecMap() {
   static const host_codec::HostConfigArgCodec host_config_codec = {};
   static const host_codec::KnownHostEntryArgCodec known_host_codec = {};
   static const settings_codec::ConfigBackupSetCodec backup_set_codec = {};
-  static const settings_codec::SettingsOptionsSnapshotCodec
-      settings_options_codec = {};
-  static const settings_codec::UserVarsSnapshotCodec user_vars_codec = {};
+  static const settings_codec::TransferManagerArgCodec transfer_manager_codec =
+      {};
+  static const settings_codec::LogManagerArgCodec log_manager_codec = {};
   static const settings_codec::ClientServiceArgCodec client_service_codec = {};
   static const settings_codec::FilesystemArgCodec filesystem_codec = {};
   static const settings_codec::VarSetArgCodec var_set_codec = {};
-  static const prompt_codec::PromptProfileDocumentCodec
-      prompt_profile_document_codec = {};
-  static const prompt_codec::PromptHistoryDocumentCodec
-      prompt_history_document_codec = {};
-  static const prompt_codec::PromptProfileArgCodec prompt_profile_arg_codec = {};
-  static const prompt_codec::PromptHistoryArgCodec prompt_history_arg_codec = {};
+  static const prompt_codec::PromptProfileArgCodec prompt_profile_arg_codec =
+      {};
+  static const prompt_codec::PromptHistoryArgCodec prompt_history_arg_codec =
+      {};
   static const style_codec::StyleSnapshotCodec style_snapshot_codec = {};
   static const style_codec::StyleConfigArgCodec style_config_arg_codec = {};
 
-  std::unordered_map<AMDomain::config::ConfigPayloadTag, const IArgCodec *> map = {};
+  std::unordered_map<AMDomain::config::ConfigPayloadTag, const IArgCodec *>
+      map = {};
   map[host_config_codec.Tag()] = &host_config_codec;
   map[known_host_codec.Tag()] = &known_host_codec;
   map[backup_set_codec.Tag()] = &backup_set_codec;
-  map[settings_options_codec.Tag()] = &settings_options_codec;
-  map[user_vars_codec.Tag()] = &user_vars_codec;
+  map[transfer_manager_codec.Tag()] = &transfer_manager_codec;
+  map[log_manager_codec.Tag()] = &log_manager_codec;
   map[client_service_codec.Tag()] = &client_service_codec;
   map[filesystem_codec.Tag()] = &filesystem_codec;
   map[var_set_codec.Tag()] = &var_set_codec;
-  map[prompt_profile_document_codec.Tag()] = &prompt_profile_document_codec;
-  map[prompt_history_document_codec.Tag()] = &prompt_history_document_codec;
   map[prompt_profile_arg_codec.Tag()] = &prompt_profile_arg_codec;
   map[prompt_history_arg_codec.Tag()] = &prompt_history_arg_codec;
   map[style_snapshot_codec.Tag()] = &style_snapshot_codec;

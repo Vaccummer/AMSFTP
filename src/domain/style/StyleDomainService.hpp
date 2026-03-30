@@ -215,11 +215,11 @@ inline void NormalizeProgressBar(ProgressBarStyle *style) {
   if (style->fill.empty()) {
     style->fill = defaults.fill;
   }
-  if (style->head.empty()) {
-    style->head = defaults.head;
+  if (style->lead.empty()) {
+    style->lead = defaults.lead;
   }
-  if (style->remain.empty()) {
-    style->remain = defaults.remain;
+  if (style->remaining.empty()) {
+    style->remaining = defaults.remaining;
   }
   if (!IsHexColorString(style->color)) {
     style->color = defaults.color;
@@ -327,6 +327,15 @@ inline void NormalizeValueQueryHighlight(ValueQueryHighlightStyle *style) {
   NormalizeStyleToken(&style->prompt_style, defaults.prompt_style);
 }
 
+inline void NormalizeInternalStyle(InternalStyle *style) {
+  if (!style) {
+    return;
+  }
+  const InternalStyle defaults = {};
+  NormalizeStyleToken(&style->inline_hint, defaults.inline_hint);
+  NormalizeStyleToken(&style->default_prompt, defaults.default_prompt);
+}
+
 inline void NormalizePathHighlight(PathHighlightStyle *style) {
   if (!style) {
     return;
@@ -364,6 +373,7 @@ inline void NormalizeStyleConfig(StyleConfig *config) {
   NormalizeCLIPrompt(&config->cli_prompt);
   NormalizeInputHighlight(&config->input_highlight);
   NormalizeValueQueryHighlight(&config->value_query_highlight);
+  NormalizeInternalStyle(&config->internal_style);
   NormalizePathHighlight(&config->path);
   NormalizeSystemInfo(&config->system_info);
 }

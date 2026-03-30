@@ -27,11 +27,11 @@ struct TableStyle {
 };
 
 struct ProgressBarStyle {
-  std::string lborder = "";
-  std::string rborder = "";
-  std::string fill = "#";
-  std::string head = ">";
-  std::string remain = " ";
+  std::string start = "";
+  std::string end = "";
+  std::string fill = "█";
+  std::string lead = "▓";
+  std::string remaining = " ";
   std::string color = "#08d9d6";
   int64_t refresh_interval_ms = 300;
   int64_t speed_window_size = 25;
@@ -122,6 +122,11 @@ struct ValueQueryHighlightStyle {
   std::string prompt_style = "";
 };
 
+struct InternalStyle {
+  std::string inline_hint = "";
+  std::string default_prompt = "";
+};
+
 struct PathHighlightStyle {
   std::string path_str = "";
   std::string root = "";
@@ -148,6 +153,7 @@ struct StyleConfig {
   CLIPromptStyle cli_prompt = {};
   InputHighlightStyle input_highlight = {};
   ValueQueryHighlightStyle value_query_highlight = {};
+  InternalStyle internal_style = {};
   PathHighlightStyle path = {};
   SystemInfoStyle system_info = {};
 };

@@ -413,10 +413,10 @@ ECM PromptIOManager::EditProfile_(const std::string &nickname) {
         builtin_defaults.highlight.path.timeout_ms;
   }
 
-  AMApplication::config::PromptProfileDocument profile_document = {};
+  AMDomain::prompt::PromptProfileArg profile_document = {};
   (void)AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Read(
       &profile_document);
-  profile_document.profiles[target] = ToConfigSettings_(working);
+  profile_document.set[target] = working;
 
   if (!AMInterface::ApplicationAdapters::Runtime::ConfigServiceOrThrow().Write(
           profile_document)) {
