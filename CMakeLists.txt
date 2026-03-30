@@ -33,6 +33,12 @@ file(GLOB_RECURSE AMSFTP_SOURCES CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/src/*.cc"
   "${PROJECT_SOURCE_DIR}/src/*.cxx"
 )
+# Exclude deprecated implementation slices from active build.
+list(FILTER AMSFTP_SOURCES EXCLUDE REGEX ".*/dep/.*\\.(cpp|cc|cxx)$")
+list(FILTER AMSFTP_SOURCES EXCLUDE REGEX ".*/.*\\.dep\\.(cpp|cc|cxx)$")
+# Temporary completion cutover: exclude legacy searchers.
+list(FILTER AMSFTP_SOURCES EXCLUDE REGEX
+  ".*/src/interface/completion/search/.*\\.(cpp|cc|cxx)$")
 list(APPEND AMSFTP_SOURCES
   "${PROJECT_SOURCE_DIR}/src/third_party/Isocline/isocline.c"
 )
@@ -60,7 +66,7 @@ target_link_libraries(amsftp PRIVATE
   CLI11::CLI11
   
 )
-add_compile_definitions(NOMINMAX)
+target_compile_definitions(amsftp PRIVATE NOMINMAX)
 # ========= Console Ctrl-C trigger tool =========
 # add_executable(ctrlc_trigger
 #   "${PROJECT_SOURCE_DIR}/src/tools/ConsoleCtrlTrigger.cpp"
@@ -108,9 +114,26 @@ find_library(CFGFFI_LIB NAMES cfgffi
     "${PROJECT_SOURCE_DIR}/tomlread/target/debug"
   NO_DEFAULT_PATH
 )
+find_file(CFGFFI_DLL NAMES cfgffi.dll
+  PATHS
+    "${PROJECT_SOURCE_DIR}/tomlread/target/release"
+    "${PROJECT_SOURCE_DIR}/tomlread/target/debug"
+  NO_DEFAULT_PATH
+)
 
 if (CFGFFI_LIB)
   target_link_libraries(amsftp PRIVATE ${CFGFFI_LIB})
+  if (CFGFFI_DLL)
+    add_custom_command(TARGET amsftp POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${CFGFFI_DLL}"
+              "$<TARGET_FILE_DIR:amsftp>/cfgffi.dll"
+      COMMENT "Copy cfgffi.dll to runtime output directory"
+      VERBATIM
+    )
+  else()
+    message(WARNING "cfgffi library found but cfgffi.dll not found; runtime may fail to start.")
+  endif()
   # target_link_libraries(amtest PRIVATE ${CFGFFI_LIB})
 else()
   message(WARNING "cfgffi library not found; build may fail if not linked elsewhere.")
