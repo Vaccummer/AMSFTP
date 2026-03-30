@@ -553,6 +553,94 @@ ECM FilesystemInterfaceSerivce::GetSize(
   return status;
 }
 
+ECM FilesystemInterfaceSerivce::Find(
+    const FilesystemFindArg &arg,
+    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const {
+  auto split_result = SplitRawPath(arg.raw_path);
+  if (!isok(split_result.rcm)) {
+    interface_print::PrintPathError(prompt_io_manager_, arg.raw_path,
+                                    split_result.rcm);
+    return split_result.rcm;
+  }
+
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  ECM status = Ok();
+  auto result = filesystem_service_.find(
+      split_result.data, SearchType::All, control, {},
+      [this, &status](const ClientPath &error_path, ECM rcm) {
+        interface_print::PrintPathError(
+            prompt_io_manager_, interface_print::BuildPathLabel(error_path),
+            rcm);
+        status = MergeStatus_(status, rcm);
+      });
+
+  if (!isok(result.rcm)) {
+    if (result.rcm.first == EC::Terminate ||
+        result.rcm.first == EC::OperationTimeout) {
+      return result.rcm;
+    }
+    status = MergeStatus_(status, result.rcm);
+  }
+
+  const std::string pattern = AMStr::Strip(arg.raw_path).empty()
+                                  ? split_result.data.path
+                                  : AMStr::Strip(arg.raw_path);
+  prompt_io_manager_.FmtPrint("Find Result for pattern {}", pattern);
+  for (const auto &entry : result.data) {
+    prompt_io_manager_.Print(entry.path);
+  }
+
+  return status;
+}
+
+ECM FilesystemInterfaceSerivce::Realpath(
+    const FilesystemRealpathArg &arg,
+    const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
+    const {
+  const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
+  std::string raw_path = AMStr::Strip(arg.raw_path);
+  if (raw_path.empty()) {
+    raw_path = ".";
+  }
+
+  auto split_result = SplitRawPath(raw_path);
+  if (!isok(split_result.rcm)) {
+    interface_print::PrintPathError(prompt_io_manager_, raw_path,
+                                    split_result.rcm);
+    return split_result.rcm;
+  }
+  if (split_result.data.is_wildcard) {
+    const ECM rcm = Err(EC::InvalidArg, "realpath does not accept wildcard path");
+    interface_print::PrintPathError(
+        prompt_io_manager_, interface_print::BuildPathLabel(split_result.data),
+        rcm);
+    return rcm;
+  }
+
+  std::vector<ClientPath> targets = {split_result.data};
+  ECM resolve_rcm = filesystem_service_.ResolvePath(targets, control, true);
+  if (!isok(resolve_rcm)) {
+    interface_print::PrintPathError(
+        prompt_io_manager_, interface_print::BuildPathLabel(split_result.data),
+        resolve_rcm);
+    return resolve_rcm;
+  }
+  if (targets.empty()) {
+    const ECM rcm = Err(EC::UnknownError, "realpath resolved empty result");
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  std::string nickname = NormalizeNickname_(targets.front().nickname);
+  std::string npath = NormalizePath_(AMStr::Strip(targets.front().path));
+  if (npath.empty()) {
+    npath = ".";
+  }
+  prompt_io_manager_.FmtPrint("{}@{}", nickname, npath);
+  return Ok();
+}
+
 ECM FilesystemInterfaceSerivce::Tree(
     const FilesystemTreeArg &arg,
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)

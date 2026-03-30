@@ -16,7 +16,8 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
     const ClientPath &path, SearchType type,
     const ClientControlComponent &control,
     std::function<void(const ClientPath &)> on_enter_dir,
-    std::function<void(const ClientPath &, ECM)> on_error) {
+    std::function<void(const ClientPath &, ECM)> on_error,
+    std::function<bool(const ClientPath &)> on_match) {
   using ClientMetaData = AMDomain::host::ClientMetaData;
   enum SegmentKind { Literal = 0, Pattern = 1, DoubleStar = 2 };
   struct CompiledSegment {
@@ -45,6 +46,16 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
   auto notify_enter = [&](const ClientPath &cp) -> ECM {
     const ECM cb_rcm = CallCallbackSafe(on_enter_dir, cp);
     return isok(cb_rcm) ? Ok() : cb_rcm;
+  };
+  auto notify_match = [&](const ClientPath &cp) -> ECMData<bool> {
+    if (!on_match) {
+      return {true, Ok()};
+    }
+    auto [keep_going, cb_rcm] = CallCallbackSafeRet<bool>(on_match, cp);
+    if (!isok(cb_rcm)) {
+      return {false, cb_rcm};
+    }
+    return {keep_going, Ok()};
   };
   const auto build_regex = [](const std::string &segment) -> std::wstring {
     std::string regex = "^";
@@ -226,17 +237,9 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
   }
 
   ECM final_rcm = Ok();
+  bool match_requested_stop = false;
   std::vector<PathInfo> results = {};
   std::unordered_set<std::string> matched_paths = {};
-  const auto push_result = [&](const PathInfo &node) {
-    if (!type_ok(node.type)) {
-      return;
-    }
-    if (!matched_paths.insert(node.path).second) {
-      return;
-    }
-    results.push_back(node);
-  };
   const auto make_client_path = [&](const std::string &p,
                                     ECM rcm) -> ClientPath {
     ClientPath cp = {};
@@ -247,6 +250,27 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
     cp.is_wildcard = false;
     cp.userpath = false;
     return cp;
+  };
+  const auto push_result = [&](const PathInfo &node) -> bool {
+    if (!type_ok(node.type)) {
+      return true;
+    }
+    if (!matched_paths.insert(node.path).second) {
+      return true;
+    }
+    results.push_back(node);
+    auto match_rcm = notify_match(make_client_path(node.path, Ok()));
+    if (!isok(match_rcm.rcm)) {
+      final_rcm = match_rcm.rcm;
+      match_requested_stop = true;
+      return false;
+    }
+    if (!match_rcm.data) {
+      final_rcm = Err(EC::Terminate, "Find terminated by on_match callback");
+      match_requested_stop = true;
+      return false;
+    }
+    return true;
   };
 
   auto stat_result = BaseStat(client, nickname, literal_root, control);
@@ -260,7 +284,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
   }
 
   if (compiled.empty()) {
-    push_result(stat_result.data);
+    (void)push_result(stat_result.data);
     std::stable_sort(
         results.begin(), results.end(),
         [](const PathInfo &a, const PathInfo &b) { return a.path < b.path; });
@@ -269,7 +293,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
                                 return a.path == b.path;
                               }),
                   results.end());
-    return {std::move(results), Ok()};
+    return {std::move(results), final_rcm};
   }
 
   std::deque<Cursor> pending = {};
@@ -286,6 +310,9 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
   push_state(Cursor{stat_result.data, 0});
 
   while (!pending.empty()) {
+    if (match_requested_stop) {
+      break;
+    }
     if (should_stop()) {
       final_rcm = current_stop_error();
       break;
@@ -294,7 +321,9 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
     pending.pop_front();
 
     if (cur.segment_index >= compiled.size()) {
-      push_result(cur.node);
+      if (!push_result(cur.node)) {
+        break;
+      }
       continue;
     }
 
@@ -337,6 +366,9 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
       }
 
       for (const auto &child : *children) {
+        if (match_requested_stop) {
+          break;
+        }
         if (should_stop()) {
           final_rcm = current_stop_error();
           break;
@@ -381,6 +413,9 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
     }
 
     for (const auto &child : *children) {
+      if (match_requested_stop) {
+        break;
+      }
       if (should_stop()) {
         final_rcm = current_stop_error();
         break;

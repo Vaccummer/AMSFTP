@@ -18,7 +18,6 @@
 #include <vector>
 
 namespace AMInfra::transfer {
-using ECM = std::pair<ErrorCode, std::string>;
 using EC = ErrorCode;
 using ProgressCBInfo = AMDomain::transfer::ProgressCBInfo;
 using ErrorCBInfo = AMDomain::transfer::ErrorCBInfo;
@@ -138,7 +137,6 @@ struct TransferRuntimeProgress {
 
 class TransferExecutionEngine final : NonCopyableNonMovable {
 public:
-  using ECM = std::pair<ErrorCode, std::string>;
   using ClientHandle = AMInfra::transfer::ClientHandle;
 
   explicit TransferExecutionEngine();

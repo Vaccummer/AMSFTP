@@ -1,7 +1,6 @@
 #pragma once
 
 #include "domain/transfer/TransferDomainModel.hpp"
-#include "foundation/core/DataClass.hpp"
 #include <memory>
 #include <unordered_map>
 

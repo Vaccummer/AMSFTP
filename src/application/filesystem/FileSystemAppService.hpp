@@ -65,9 +65,8 @@ CompactMatchedPaths_(const std::vector<PathInfo> &raw);
 
 class FilesystemAppService final : public FilesystemAppBaseService {
 public:
-  FilesystemAppService(FilesystemArg arg,
-                       std::shared_ptr<HostAppService> host_service,
-                       std::shared_ptr<ClientAppService> client_service);
+  FilesystemAppService(FilesystemArg arg, HostAppService *host_service,
+                       ClientAppService *client_service);
   ~FilesystemAppService() override = default;
 
   [[nodiscard]] ECMData<ClientPath>

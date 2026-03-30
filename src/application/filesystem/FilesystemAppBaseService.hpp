@@ -4,7 +4,6 @@
 #include "domain/filesystem/FileSystemModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include <list>
-#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -29,16 +28,14 @@ ECM AbsolutePath(ClientPath &path);
 class FilesystemAppBaseService : public NonCopyableNonMovable {
 public:
   FilesystemAppBaseService(FilesystemArg arg,
-                           std::shared_ptr<HostAppService> host_service,
-                           std::shared_ptr<ClientAppService> client_service);
+                           HostAppService *host_service,
+                           ClientAppService *client_service);
   ~FilesystemAppBaseService() override = default;
 
   ECM Init();
 
   [[nodiscard]] FilesystemArg GetInitArg() const;
-
-  [[nodiscard]] ECMData<ClientPath>
-  SplitRawPath(const std::string &token) const;
+  [[nodiscard]] std::string CurrentNickname() const;
 
   [[nodiscard]] ECMData<ClientHandle>
   GetClient(const std::string &nickname, const ClientControlComponent &control);
@@ -78,7 +75,8 @@ protected:
 
   [[nodiscard]] ECMData<PathInfo>
   BaseStat(ClientHandle client, const std::string &nickname,
-           const std::string &abs_path, const ClientControlComponent &control);
+           const std::string &abs_path, const ClientControlComponent &control,
+           bool trace_link = false);
   [[nodiscard]] ECMData<std::vector<PathInfo>>
   BaseListdir(ClientHandle client, const std::string &nickname,
               const std::string &abs_path,
@@ -96,16 +94,16 @@ protected:
   [[nodiscard]] AMAtomic<std::list<ClientPath>> &CdHistory();
   [[nodiscard]] const AMAtomic<std::list<ClientPath>> &CdHistory() const;
 
-  [[nodiscard]] ClientPath
-  BuildBaseCacheKey(ClientHandle client, const std::string &nickname,
-                    const std::string &abs_path) const;
+  [[nodiscard]] ClientPath BuildBaseCacheKey(ClientHandle client,
+                                             const std::string &nickname,
+                                             const std::string &abs_path) const;
   [[nodiscard]] static std::vector<std::string>
   BuildBaseListNames(const std::vector<PathInfo> &entries);
 
   mutable AMAtomic<FilesystemArg> init_arg_ = {};
-  std::shared_ptr<HostAppService> host_service_ = nullptr;
-  std::shared_ptr<ClientAppService> client_service_ = nullptr;
-  AMAtomic<std::list<ClientPath>> cd_history_ = {};
+  HostAppService *host_service_ = nullptr;
+  ClientAppService *client_service_ = nullptr;
+  mutable AMAtomic<std::list<ClientPath>> cd_history_ = {};
   BaseIOCache base_io_cache_ = {};
 };
 } // namespace AMApplication::filesystem

@@ -74,6 +74,7 @@ public:
   ECM TaskTerminate(const TransferTaskControlArg &arg) const;
   ECM TaskInspect(const TransferTaskInspectArg &arg) const;
   ECM TaskResult(const TransferTaskResultArg &arg) const;
+  void GetTaskCounts(size_t *pending_count, size_t *conducting_count) const;
 
 private:
   struct WildcardConfirmRequest {
@@ -112,8 +113,6 @@ private:
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;
   AMInterface::prompt::AMPromptIOManager &prompt_io_manager_;
   AMDomain::transfer::ITransferPoolPort &transfer_pool_;
-  std::function<AMDomain::client::ClientControlComponent(AMDomain::client::amf)>
-      control_component_factory_ = {};
   AMInterface::style::AMStyleService *style_service_ = nullptr;
 };
 } // namespace AMInterface::transfer
