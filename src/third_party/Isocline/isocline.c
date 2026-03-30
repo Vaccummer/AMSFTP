@@ -174,7 +174,7 @@ ic_public char *ic_readline(const char *prompt_text) {
     return NULL;
   if (!env->noedit) {
     // terminal editing enabled
-    return ic_editline(env, prompt_text, NULL); // in editline.c
+    return ic_editline(env, prompt_text, NULL, false); // in editline.c
   } else {
     // no editing capability (pipe, dumb terminal, etc)
     if (env->tty != NULL && env->term != NULL) {
@@ -200,9 +200,28 @@ ic_public char *ic_readline_ex(const char *prompt_text,
     return NULL;
   if (!env->noedit) {
     // terminal editing enabled
-    return ic_editline(env, prompt_text, initial_text); // in editline.c
+    return ic_editline(env, prompt_text, initial_text, false); // in editline.c
   }
   // no editing capability (pipe, dumb terminal, etc)
+  if (env->tty != NULL && env->term != NULL) {
+    term_start_raw(env->term);
+    if (prompt_text != NULL) {
+      term_write(env->term, prompt_text);
+    }
+    term_write(env->term, env->prompt_marker);
+    term_end_raw(env->term, false);
+  }
+  return ic_getline(env->mem);
+}
+
+ic_public char *ic_readline_secure(const char *prompt_text,
+                                   const char *initial_text) {
+  ic_env_t *env = ic_get_env();
+  if (env == NULL)
+    return NULL;
+  if (!env->noedit) {
+    return ic_editline(env, prompt_text, initial_text, true);
+  }
   if (env->tty != NULL && env->term != NULL) {
     term_start_raw(env->term);
     if (prompt_text != NULL) {

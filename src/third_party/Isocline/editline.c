@@ -41,6 +41,7 @@ typedef struct editor_s {
   ssize_t termw;
   bool modified; // has a modification happened? (used for history navigation
                  // for example)
+  bool secure_mode; // secure input mode: mask rendering and disable history use
   bool disable_undo;       // temporarily disable auto undo (for history search)
   ssize_t history_idx;     // current index in the history
   editstate_t *undo;       // undo buffer
@@ -58,16 +59,18 @@ typedef struct editor_s {
 // Main edit line
 //-------------------------------------------------------------
 static char *edit_line(ic_env_t *env, const char *prompt_text,
-                       const char *initial_text); // defined at bottom
+                       const char *initial_text,
+                       bool secure_mode); // defined at bottom
 static void edit_refresh(ic_env_t *env, editor_t *eb);
 static void edit_refresh_ex(ic_env_t *env, editor_t *eb,
                             bool force_highlight);
+static void editor_clear_hint(editor_t *eb);
 
 ic_private char *ic_editline(ic_env_t *env, const char *prompt_text,
-                             const char *initial_text) {
+                             const char *initial_text, bool secure_mode) {
   tty_start_raw(env->tty);
   term_start_raw(env->term);
-  char *line = edit_line(env, prompt_text, initial_text);
+  char *line = edit_line(env, prompt_text, initial_text, secure_mode);
   term_end_raw(env->term, false);
   tty_end_raw(env->tty);
   term_writeln(env->term, "");
@@ -284,6 +287,17 @@ static void edit_refresh_rows(ic_env_t *env, editor_t *eb, stringbuf_t *input,
                     &edit_refresh_rows_iter, &info, NULL);
 }
 
+static void edit_build_secure_mask_input(editor_t *eb, stringbuf_t *masked) {
+  if (eb == NULL || eb->input == NULL || masked == NULL) {
+    return;
+  }
+  sbuf_clear(masked);
+  const ssize_t n = sbuf_len(eb->input);
+  for (ssize_t i = 0; i < n; ++i) {
+    sbuf_append_char(masked, '*');
+  }
+}
+
 static bool edit_is_highlight_input_changed(editor_t *eb) {
   const char *input = NULL;
   ssize_t len = 0;
@@ -401,9 +415,26 @@ static void edit_refresh_ex(ic_env_t *env, editor_t *eb,
   // calculate the new cursor row and total rows needed
   ssize_t promptw, cpromptw;
   edit_get_prompt_width(env, eb, false, &promptw, &cpromptw);
+  stringbuf_t *masked_input = NULL;
+  stringbuf_t *render_input = eb->input;
+
+  if (eb->secure_mode) {
+    editor_clear_hint(eb);
+    sbuf_clear(eb->extra);
+    sbuf_clear(eb->hint_help);
+    completions_clear(env->completions);
+    masked_input = sbuf_new(eb->mem);
+    if (masked_input != NULL) {
+      edit_build_secure_mask_input(eb, masked_input);
+      render_input = masked_input;
+    }
+  }
 
   ic_highlight_fun_t *highlighter =
       (env->no_highlight ? NULL : env->highlighter);
+  if (eb->secure_mode) {
+    highlighter = NULL;
+  }
   if (edit_should_delay_highlight(env, eb, force_highlight)) {
     highlighter = NULL;
     eb->highlight_pending = true;
@@ -412,7 +443,7 @@ static void edit_refresh_ex(ic_env_t *env, editor_t *eb,
   }
 
   if (eb->attrs != NULL) {
-    highlight(env->mem, env->bbcode, sbuf_string(eb->input), eb->attrs,
+    highlight(env->mem, env->bbcode, sbuf_string(render_input), eb->attrs,
               highlighter, env->highlighter_arg);
     if (highlighter != NULL) {
       edit_update_highlight_input_snapshot(eb);
@@ -420,25 +451,25 @@ static void edit_refresh_ex(ic_env_t *env, editor_t *eb,
   }
 
   // highlight matching braces
-  if (eb->attrs != NULL && !env->no_bracematch) {
-    highlight_match_braces(sbuf_string(eb->input), eb->attrs, eb->pos,
+  if (eb->attrs != NULL && !env->no_bracematch && !eb->secure_mode) {
+    highlight_match_braces(sbuf_string(render_input), eb->attrs, eb->pos,
                            ic_env_get_match_braces(env),
                            bbcode_style(env->bbcode, "ic-bracematch"),
                            bbcode_style(env->bbcode, "ic-error"));
   }
 
   // insert hint
-  if (sbuf_len(eb->hint) > 0) {
+  if (!eb->secure_mode && sbuf_len(eb->hint) > 0) {
     if (eb->attrs != NULL) {
       attrbuf_insert_at(eb->attrs, eb->pos, sbuf_len(eb->hint),
                         bbcode_style(env->bbcode, "ic-hint"));
     }
-    sbuf_insert_at(eb->input, sbuf_string(eb->hint), eb->pos);
+    sbuf_insert_at(render_input, sbuf_string(eb->hint), eb->pos);
   }
 
   // render extra (like a completion menu)
   stringbuf_t *extra = NULL;
-  if (sbuf_len(eb->extra) > 0) {
+  if (!eb->secure_mode && sbuf_len(eb->extra) > 0) {
     extra = sbuf_new(eb->mem);
     if (extra != NULL) {
       if (sbuf_len(eb->hint_help) > 0) {
@@ -453,7 +484,8 @@ static void edit_refresh_ex(ic_env_t *env, editor_t *eb,
   // calculate rows and row/col position
   rowcol_t rc = {0};
   const ssize_t rows_input =
-      sbuf_get_rc_at_pos(eb->input, eb->termw, promptw, cpromptw, eb->pos, &rc);
+      sbuf_get_rc_at_pos(render_input, eb->termw, promptw, cpromptw, eb->pos,
+                         &rc);
   rowcol_t rc_extra = {0};
   ssize_t rows_extra = 0;
   if (extra != NULL) {
@@ -487,7 +519,7 @@ static void edit_refresh_ex(ic_env_t *env, editor_t *eb,
   // prompt
 
   // render rows
-  edit_refresh_rows(env, eb, eb->input, eb->attrs, promptw, cpromptw, false,
+  edit_refresh_rows(env, eb, render_input, eb->attrs, promptw, cpromptw, false,
                     first_row, last_row);
   if (rows_extra > 0) {
     assert(extra != NULL);
@@ -523,11 +555,14 @@ static void edit_refresh_ex(ic_env_t *env, editor_t *eb,
   term_set_buffer_mode(env->term, bmode);
 
   // restore input by removing the hint
-  sbuf_delete_at(eb->input, eb->pos, sbuf_len(eb->hint));
-  sbuf_delete_at(eb->extra, 0, sbuf_len(eb->hint_help));
+  if (!eb->secure_mode) {
+    sbuf_delete_at(render_input, eb->pos, sbuf_len(eb->hint));
+    sbuf_delete_at(eb->extra, 0, sbuf_len(eb->hint_help));
+  }
   attrbuf_clear(eb->attrs);
   attrbuf_clear(eb->attrs_extra);
   sbuf_free(extra);
+  sbuf_free(masked_input);
 
   // update previous
   eb->cur_rows = rows;
@@ -1262,7 +1297,7 @@ static code_t edit_read_key(ic_env_t *env, editor_t *eb) {
 }
 
 static char *edit_line(ic_env_t *env, const char *prompt_text,
-                       const char *initial_text) {
+                       const char *initial_text, bool secure_mode) {
   // set up an edit buffer
   editor_t eb;
   memset(&eb, 0, sizeof(eb));
@@ -1276,6 +1311,7 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
   eb.cur_rows = 1;
   eb.cur_row = 0;
   eb.modified = false;
+  eb.secure_mode = secure_mode;
   eb.prompt_text = (prompt_text != NULL ? prompt_text : "");
   eb.history_idx = 0;
   editstate_init(&eb.undo);
@@ -1360,10 +1396,16 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
         edit_resize(env, &eb);
         break;
       case KEY_EVENT_AUTOTAB:
+        if (eb.secure_mode) {
+          break;
+        }
         edit_generate_completions(env, &eb, true);
         break;
       case KEY_EVENT_COMPLETE:
         if (edit_process_refresh_request(env, &eb)) {
+          break;
+        }
+        if (eb.secure_mode) {
           break;
         }
         edit_generate_completions(env, &eb, false);
@@ -1371,6 +1413,9 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
 
       // completion, history, help, undo
       case KEY_TAB:
+        if (eb.secure_mode) {
+          break;
+        }
         if (edit_process_refresh_request(env, &eb)) {
           break;
         }
@@ -1378,12 +1423,21 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
         break;
       case KEY_CTRL_R:
       case KEY_CTRL_S:
+        if (eb.secure_mode) {
+          break;
+        }
         edit_history_search_with_current_word(env, &eb);
         break;
       case KEY_CTRL_P:
+        if (eb.secure_mode) {
+          break;
+        }
         edit_history_prev(env, &eb);
         break;
       case KEY_CTRL_N:
+        if (eb.secure_mode) {
+          break;
+        }
         edit_history_next(env, &eb);
         break;
       case KEY_CTRL_L:
@@ -1479,6 +1533,9 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
         edit_delete_all(env, &eb);
         break;
       case KEY_CTRL_X:
+        if (eb.secure_mode) {
+          break;
+        }
         edit_copy_input_to_clipboard(sbuf_string(eb.input));
         break;
 
@@ -1524,11 +1581,15 @@ static char *edit_line(ic_env_t *env, const char *prompt_text,
   }
 
   // update history
-  history_update(env->history, sbuf_string(eb.input));
-  if (res == NULL || sbuf_len(eb.input) <= 1) {
+  if (eb.secure_mode) {
     ic_history_remove_last();
-  } // no empty or single-char entries
-  history_save(env->history);
+  } else {
+    history_update(env->history, sbuf_string(eb.input));
+    if (res == NULL || sbuf_len(eb.input) <= 1) {
+      ic_history_remove_last();
+    } // no empty or single-char entries
+    history_save(env->history);
+  }
 
   // free resources
   editstate_done(env->mem, &eb.undo);

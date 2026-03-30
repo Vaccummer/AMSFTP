@@ -69,7 +69,8 @@ struct ic_env_s {
 };
 
 ic_private char*        ic_editline(ic_env_t* env, const char* prompt_text,
-                                    const char* initial_text);
+                                    const char* initial_text,
+                                    bool secure_mode);
 
 ic_private ic_env_t*    ic_get_env(void);
 ic_private ic_env_t*    ic_get_env_for_profile(ic_profile_t* profile);

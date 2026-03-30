@@ -102,6 +102,10 @@ char *ic_readline(const char *prompt_text);
     Pass NULL or empty for no initial text. */
 char *ic_readline_ex(const char *prompt_text, const char *initial_text);
 
+/** Secure readline entry.
+    Input is not echoed literally on screen and is not persisted to history. */
+char *ic_readline_secure(const char *prompt_text, const char *initial_text);
+
 /// \}
 
 //--------------------------------------------------------------
