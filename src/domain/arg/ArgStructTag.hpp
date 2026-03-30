@@ -8,9 +8,7 @@ enum class ConfigPayloadTag {
   HostConfigArg = 1,
   KnownHostEntryArg = 2,
   ConfigBackupSet = 3,
-  SettingsOptionsSnapshot = 4,
-  UserVarsSnapshot = 5,
-  PromptProfileDocument = 6,
+  TransferManagerArg = 4,
   PromptHistoryDocument = 7,
   StyleSnapshot = 8,
   ClientServiceArg = 9,
@@ -20,6 +18,7 @@ enum class ConfigPayloadTag {
   PromptHistoryArg = 13,
   StyleConfigArg = 14,
   ConfigStoreInitArg = 15,
+  LogManagerArg = 16,
 };
 } // namespace AMDomain::arg
 
