@@ -15,6 +15,8 @@ using AMDomain::host::KnownHostMap;
 using AMDomain::host::KnownHostQuery;
 using AMDomain::host::HostService::IsLocalNickname;
 using AMDomain::host::HostService::NormalizeNickname;
+using AMDomain::host::HostService::ValidateConfig;
+using AMDomain::host::HostService::ValidateNickname;
 
 HostConfig BuildDefaultLocalConfig_() {
   HostConfig cfg = {};
@@ -116,14 +118,54 @@ bool AMHostAppService::HostExists(const std::string &nickname) const {
 }
 
 ECM AMHostAppService::AddHost(const HostConfig &entry, bool overwrite) {
-  (void)entry;
-  (void)overwrite;
-  return Err(EC::InvalidArg, "AddHost not implemented yet");
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+
+  HostConfig normalized = entry;
+  normalized.request.nickname = NormalizeHostKey_(normalized.request.nickname);
+  if (!ValidateNickname(normalized.request.nickname)) {
+    return Err(EC::InvalidArg, "invalid host nickname");
+  }
+
+  ECM validate_rcm = ValidateConfig(normalized);
+  if (!isok(validate_rcm)) {
+    return validate_rcm;
+  }
+
+  if (IsLocalNickname(normalized.request.nickname)) {
+    local_config_ = normalized;
+    local_config_.request.nickname = "local";
+    local_config_.request.protocol = ClientProtocol::LOCAL;
+    return Ok();
+  }
+
+  auto it = host_configs_.find(normalized.request.nickname);
+  if (it != host_configs_.end() && !overwrite) {
+    return Err(EC::KeyAlreadyExists,
+               AMStr::fmt("host already exists: {}",
+                          normalized.request.nickname));
+  }
+  host_configs_[normalized.request.nickname] = std::move(normalized);
+  return Ok();
 }
 
 ECM AMHostAppService::DelHost(const std::string &nickname) {
-  (void)nickname;
-  return Err(EC::InvalidArg, "DelHost not implemented yet");
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+  const std::string key = NormalizeHostKey_(nickname);
+  if (IsLocalNickname(key)) {
+    return Err(EC::InvalidArg, "local host cannot be removed");
+  }
+  auto it = host_configs_.find(key);
+  if (it == host_configs_.end()) {
+    return Err(EC::HostConfigNotFound, AMStr::fmt("host not found: {}", key));
+  }
+  host_configs_.erase(it);
+  return Ok();
 }
 
 std::vector<std::string> AMHostAppService::PrivateKeys() const {
@@ -138,23 +180,35 @@ ECM AMHostAppService::List(bool detailed) const {
 }
 
 ECM AMHostAppService::Add(const std::string &nickname) {
-  (void)nickname;
-  return Err(EC::InvalidArg, "Add not implemented yet");
+  HostConfig cfg = {};
+  cfg.request.nickname = AMStr::Strip(nickname);
+  if (cfg.request.nickname.empty()) {
+    return Err(EC::InvalidArg, "nickname cannot be empty");
+  }
+  cfg.request.protocol = ClientProtocol::SFTP;
+  return AddHost(cfg, false);
 }
 
 ECM AMHostAppService::Modify(const std::string &nickname) {
-  (void)nickname;
-  return Err(EC::InvalidArg, "Modify not implemented yet");
+  if (!HostExists(nickname)) {
+    return Err(EC::HostConfigNotFound, "host not found");
+  }
+  return Ok();
 }
 
 ECM AMHostAppService::Delete(const std::string &nickname) {
-  (void)nickname;
-  return Err(EC::InvalidArg, "Delete not implemented yet");
+  return DelHost(nickname);
 }
 
 ECM AMHostAppService::Delete(const std::vector<std::string> &targets) {
-  (void)targets;
-  return Err(EC::InvalidArg, "Delete(list) not implemented yet");
+  ECM status = Ok();
+  for (const auto &name : targets) {
+    ECM rcm = DelHost(name);
+    if (!isok(rcm)) {
+      status = rcm;
+    }
+  }
+  return status;
 }
 
 ECM AMHostAppService::Query(const std::string &targets) const {
@@ -177,9 +231,30 @@ ECM AMHostAppService::Query(const std::vector<std::string> &targets) const {
 
 ECM AMHostAppService::Rename(const std::string &old_nickname,
                              const std::string &new_nickname) {
-  (void)old_nickname;
-  (void)new_nickname;
-  return Err(EC::InvalidArg, "Rename not implemented yet");
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+  const std::string old_key = NormalizeHostKey_(old_nickname);
+  const std::string new_key = NormalizeHostKey_(new_nickname);
+  if (IsLocalNickname(old_key) || IsLocalNickname(new_key)) {
+    return Err(EC::InvalidArg, "local host cannot be renamed");
+  }
+  if (!ValidateNickname(new_key)) {
+    return Err(EC::InvalidArg, "invalid new nickname");
+  }
+  auto old_it = host_configs_.find(old_key);
+  if (old_it == host_configs_.end()) {
+    return Err(EC::HostConfigNotFound, AMStr::fmt("host not found: {}", old_key));
+  }
+  if (host_configs_.find(new_key) != host_configs_.end()) {
+    return Err(EC::KeyAlreadyExists, AMStr::fmt("host already exists: {}", new_key));
+  }
+  HostConfig moved = old_it->second;
+  moved.request.nickname = new_key;
+  host_configs_.erase(old_it);
+  host_configs_[new_key] = std::move(moved);
+  return Ok();
 }
 
 ECM AMHostAppService::Src() const {
@@ -192,10 +267,82 @@ ECM AMHostAppService::Save() { return Ok(); }
 ECM AMHostAppService::SetHostValue(const std::string &nickname,
                                    const std::string &attrname,
                                    const std::string &value_str) {
-  (void)nickname;
-  (void)attrname;
-  (void)value_str;
-  return Err(EC::InvalidArg, "SetHostValue not implemented yet");
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+  const std::string key = NormalizeHostKey_(nickname);
+  HostConfig cfg = {};
+  if (IsLocalNickname(key)) {
+    cfg = local_config_;
+  } else {
+    auto it = host_configs_.find(key);
+    if (it == host_configs_.end()) {
+      return Err(EC::HostConfigNotFound, AMStr::fmt("host not found: {}", key));
+    }
+    cfg = it->second;
+  }
+
+  const std::string field = AMStr::lowercase(AMStr::Strip(attrname));
+  if (field == "hostname") {
+    cfg.request.hostname = value_str;
+  } else if (field == "username") {
+    cfg.request.username = value_str;
+  } else if (field == "port") {
+    int64_t port = 0;
+    if (!AMStr::GetNumber(value_str, &port)) {
+      return Err(EC::InvalidArg, "invalid port");
+    }
+    cfg.request.port = port;
+  } else if (field == "protocol") {
+    cfg.request.protocol =
+        AMDomain::host::HostService::StrToProtocol(AMStr::Strip(value_str));
+  } else if (field == "password") {
+    cfg.request.password = value_str;
+  } else if (field == "keyfile") {
+    cfg.request.keyfile = value_str;
+  } else if (field == "buffer_size") {
+    int64_t buffer_size = 0;
+    if (!AMStr::GetNumber(value_str, &buffer_size)) {
+      return Err(EC::InvalidArg, "invalid buffer_size");
+    }
+    cfg.request.buffer_size = buffer_size;
+  } else if (field == "compression") {
+    bool compression = false;
+    if (!AMStr::GetBool(value_str, &compression)) {
+      return Err(EC::InvalidArg, "invalid compression value");
+    }
+    cfg.request.compression = compression;
+  } else if (field == "trash_dir") {
+    cfg.metadata.trash_dir = value_str;
+  } else if (field == "login_dir") {
+    cfg.metadata.login_dir = value_str;
+  } else if (field == "cmd_prefix") {
+    cfg.metadata.cmd_prefix = value_str;
+  } else if (field == "wrap_cmd") {
+    bool wrap_cmd = false;
+    if (!AMStr::GetBool(value_str, &wrap_cmd)) {
+      return Err(EC::InvalidArg, "invalid wrap_cmd value");
+    }
+    cfg.metadata.wrap_cmd = wrap_cmd;
+  } else {
+    return Err(EC::InvalidArg, AMStr::fmt("unsupported field: {}", field));
+  }
+
+  ECM validate_rcm = ValidateConfig(cfg);
+  if (!isok(validate_rcm)) {
+    return validate_rcm;
+  }
+
+  if (IsLocalNickname(key)) {
+    local_config_ = std::move(cfg);
+    local_config_.request.nickname = "local";
+    local_config_.request.protocol = ClientProtocol::LOCAL;
+  } else {
+    cfg.request.nickname = key;
+    host_configs_[key] = std::move(cfg);
+  }
+  return Ok();
 }
 
 ECM AMHostAppService::EnsureSnapshotLoaded_() const {
