@@ -885,7 +885,8 @@ private:
     if (request.interrupt_flag && request.interrupt_flag->IsInterrupted()) {
       return true;
     }
-    return IsInterrupted() || IsTimedOut_(request.timeout_ms, request.start_time);
+    return IsInterrupted() ||
+           IsTimedOut_(request.timeout_ms, request.start_time);
   }
 
   [[nodiscard]] static bool IsDoubleStarPattern_(const std::string &pattern) {
@@ -1039,7 +1040,8 @@ private:
     return out;
   }
 
-  [[nodiscard]] static std::string BuildCursorStateKey_(const SearchCursor &cursor) {
+  [[nodiscard]] static std::string
+  BuildCursorStateKey_(const SearchCursor &cursor) {
     return cursor.node.path + '\x1F' + std::to_string(cursor.segment_index);
   }
 
@@ -1080,7 +1082,7 @@ private:
       const CompiledSegment &segment = segments[seg_index];
       if (segment.kind == CompiledSegment::Kind::DoubleStar) {
         const std::pair<size_t, size_t> zero_consume = {part_index,
-                                                         seg_index + 1};
+                                                        seg_index + 1};
         if (visited.insert(zero_consume).second) {
           pending.push_back(zero_consume);
         }
@@ -1101,7 +1103,7 @@ private:
         continue;
       }
       const std::pair<size_t, size_t> next_state = {part_index + 1,
-                                                     seg_index + 1};
+                                                    seg_index + 1};
       if (visited.insert(next_state).second) {
         pending.push_back(next_state);
       }
@@ -1111,10 +1113,9 @@ private:
 
   [[nodiscard]] static std::vector<PathInfo>
   CanonicalizeResults_(std::vector<PathInfo> results) {
-    std::stable_sort(results.begin(), results.end(),
-                     [](const PathInfo &a, const PathInfo &b) {
-                       return a.path < b.path;
-                     });
+    std::stable_sort(
+        results.begin(), results.end(),
+        [](const PathInfo &a, const PathInfo &b) { return a.path < b.path; });
     results.erase(std::unique(results.begin(), results.end(),
                               [](const PathInfo &a, const PathInfo &b) {
                                 return a.path == b.path;
@@ -1139,9 +1140,8 @@ private:
       results.push_back(node);
       ++stats.matched_nodes;
     };
-    auto [error, root_info] =
-        stat(plan.literal_root, false, request.timeout_ms, request.start_time,
-             request.interrupt_flag);
+    auto [error, root_info] = stat(plan.literal_root, false, request.timeout_ms,
+                                   request.start_time, request.interrupt_flag);
     if (error.first != EC::Success) {
       return results;
     }
@@ -1306,8 +1306,7 @@ public:
     request.pattern = AMStr::Strip(path).empty() ? "." : path;
     request.type = type;
     request.timeout_ms = timeout_ms;
-    request.start_time =
-        (start_time < 0) ? AMTime::miliseconds() : start_time;
+    request.start_time = (start_time < 0) ? AMTime::miliseconds() : start_time;
     request.interrupt_flag = std::move(interrupt_flag);
 
     SearchPlan plan = ParseQuery_(request);
@@ -1395,6 +1394,10 @@ public:
       return false;
     }
     return named_var_cache_.erase(name) > 0;
+  }
+
+  bool EraseTypedData(const std::type_index &type_key) override {
+    return type_var_cache_.erase(type_key) > 0;
   }
 };
 
@@ -1792,15 +1795,3 @@ public:
   }
 };
 } // namespace AMInfra::client
-
-namespace AMDomain::client {
-inline std::shared_ptr<IClientControlToken> CreateClientControlToken() {
-  return std::make_shared<AMInfra::client::ClientControlToken>();
-}
-
-inline std::shared_ptr<IClientTimeoutPort> CreateClientTimeoutPort() {
-  auto timeout_port = std::make_shared<AMInfra::client::ClientTimeoutPort>();
-  timeout_port->SetTimeout(AMDomain::client::ClientService::AMDefaultTimeoutMs);
-  return timeout_port;
-}
-} // namespace AMDomain::client

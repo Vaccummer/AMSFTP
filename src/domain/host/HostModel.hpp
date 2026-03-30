@@ -14,7 +14,6 @@
 
 namespace AMDomain::host {
 using EC = ErrorCode;
-using ECM = std::pair<ErrorCode, std::string>;
 
 enum class ClientProtocol { UnInitilized = -1, SFTP = 1, FTP = 2, LOCAL = 3 };
 
@@ -108,10 +107,13 @@ struct ClientMetaData {
       return false;
     };
 
-    if (attr == Attr::login_dir || attr == Attr::cwd ||
+    if (attr == Attr::trash_dir || attr == Attr::login_dir ||
+        attr == Attr::cwd ||
         attr == Attr::cmd_prefix) {
       if constexpr (std::is_assignable_v<T &, std::string>) {
-        if (attr == Attr::login_dir) {
+        if (attr == Attr::trash_dir) {
+          *out_value = trash_dir;
+        } else if (attr == Attr::login_dir) {
           *out_value = login_dir;
         } else if (attr == Attr::cwd) {
           *out_value = cwd;

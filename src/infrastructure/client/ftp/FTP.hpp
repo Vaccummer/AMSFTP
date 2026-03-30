@@ -1448,7 +1448,7 @@ public:
 };
 
 // FTP Client using libcurl
-class AMFTPIOCore : public FTPBase, BasePathMatch {
+class AMFTPIOCore : public FTPBase {
 private:
   enum class CapabilityState : int {
     Unknown = 0,

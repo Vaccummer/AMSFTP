@@ -1,6 +1,5 @@
-#pragma once
-#include "domain/client/ClientPort.hpp"
 #include "domain/client/ClientDomainService.hpp"
+#include "domain/client/ClientPort.hpp"
 #include "infrastructure/client/common/Base.hpp"
 #include "infrastructure/client/ftp/FTP.hpp"
 #include "infrastructure/client/local/Local.hpp"
@@ -36,8 +35,8 @@ CreateClient(const ConRequest &request,
   switch (normalized.protocol) {
   case ClientProtocol::SFTP:
     io_port = std::make_unique<AMInfra::client::SFTP::AMSFTPIOCore>(
-        config_port.get(), control_port.get(), private_keys, std::move(trace_cb),
-        std::move(auth_cb), std::move(known_host_cb));
+        config_port.get(), control_port.get(), private_keys,
+        std::move(trace_cb), std::move(auth_cb), std::move(known_host_cb));
     UID = ClientService::GenerateID(ClientProtocol::SFTP);
     break;
   case ClientProtocol::FTP:

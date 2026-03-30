@@ -4,6 +4,20 @@
 
 namespace AMDomain::host {
 namespace HostService {
+
+void vNormalizeNickname(std::string &nickname) {
+  AMStr::VStrip(nickname);
+  if (nickname.empty() || IsLocalNickname(nickname)) {
+    nickname = "local";
+  }
+}
+
+std::string NormalizeNickname(const std::string &nickname) {
+  std::string normalized = nickname;
+  vNormalizeNickname(normalized);
+  return normalized;
+}
+
 bool IsNicknameValid(const std::string &nickname) {
   const std::string stripped = AMStr::Strip(nickname);
   if (stripped.empty()) {
@@ -83,12 +97,6 @@ ECM ValidateConfig(const ConRequest &request) {
   }
 
   validate_rcm =
-      ValidateFieldValue(ConRequest::Attr::trash_dir, request.trash_dir);
-  if (!isok(validate_rcm)) {
-    return validate_rcm;
-  }
-
-  validate_rcm =
       ValidateFieldValue(ConRequest::Attr::buffer_size, request.buffer_size);
   if (!isok(validate_rcm)) {
     return validate_rcm;
@@ -110,6 +118,12 @@ ECM ValidateConRequest(const ConRequest &request, std::string *error_info) {
 
 ECM ValidateConfig(const ClientMetaData &metadata) {
   ECM validate_rcm =
+      ValidateFieldValue(ClientMetaData::Attr::trash_dir, metadata.trash_dir);
+  if (!isok(validate_rcm)) {
+    return validate_rcm;
+  }
+
+  validate_rcm =
       ValidateFieldValue(ClientMetaData::Attr::login_dir, metadata.login_dir);
   if (!isok(validate_rcm)) {
     return validate_rcm;
