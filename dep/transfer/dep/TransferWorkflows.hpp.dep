@@ -1,0 +1,59 @@
+#pragma once
+
+#include "domain/filesystem/FileSystemModel.hpp"
+#include "domain/transfer/TransferPorts.hpp"
+#include <string>
+#include <vector>
+
+namespace AMApplication::TransferWorkflow {
+/**
+ * @brief Explicit confirmation policy for transfer operations.
+ */
+enum class TransferConfirmPolicy {
+  RequireConfirm,
+  AutoApprove,
+  DenyIfConfirmNeeded
+};
+
+/**
+ * @brief Application-facing transfer input payload.
+ */
+struct TransferBuildArgs {
+  std::vector<AMDomain::filesystem::ClientPath> srcs = {};
+  AMDomain::filesystem::ClientPath output = {};
+  bool overwrite = false;
+  bool no_mkdir = false;
+  bool clone = false;
+  bool include_special = false;
+  bool resume = false;
+};
+
+/**
+ * @brief Input policy flags for execution workflow.
+ */
+struct TransferExecutionOptions {
+  bool run_async_from_context = false;
+  bool quiet = false;
+  TransferConfirmPolicy confirm_policy = TransferConfirmPolicy::RequireConfirm;
+};
+
+/**
+ * @brief Result of transfer execution orchestration.
+ */
+struct TransferExecutionResult {
+  ECM rcm = {EC::Success, ""};
+  bool run_async = false;
+  UserTransferSet transfer_set = {};
+};
+
+ECM ValidateAsyncSuffix(const std::string &async_suffix,
+                        bool *out_suffix_async);
+
+ECM BuildTransferSet(const TransferBuildArgs &args, UserTransferSet *out_set);
+
+TransferExecutionResult
+ExecuteTransfer(const TransferBuildArgs &args,
+                const TransferExecutionOptions &options,
+                AMDomain::transfer::ITransferExecutorPort &executor);
+} // namespace AMApplication::TransferWorkflow
+

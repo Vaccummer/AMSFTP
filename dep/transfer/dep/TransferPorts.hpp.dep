@@ -1,0 +1,79 @@
+#pragma once
+
+#include "domain/client/ClientPort.hpp"
+#include "domain/transfer/TransferDomainModel.hpp"
+#include "foundation/core/DataClass.hpp"
+#include <unordered_map>
+
+namespace AMDomain::transfer {
+/**
+ * @brief Domain port for transfer execution submission.
+ */
+class ITransferExecutorPort {
+public:
+  virtual ~ITransferExecutorPort() = default;
+  virtual ECM Transfer(const std::vector<UserTransferSet> &transfer_sets,
+                       bool quiet) = 0;
+  virtual ECM TransferAsync(const std::vector<UserTransferSet> &transfer_sets,
+                            bool quiet) = 0;
+};
+
+/**
+ * @brief Domain port for transfer task operations.
+ */
+class ITransferTaskPort {
+public:
+  using ID = TaskInfo::ID;
+  virtual ~ITransferTaskPort() = default;
+
+  [[nodiscard]] virtual std::vector<ID> ListTaskIds() const = 0;
+  [[nodiscard]] virtual std::shared_ptr<TaskInfo>
+  FindTask(const ID &task_id) const = 0;
+  virtual ECM Terminate(const ID &task_id, int timeout_ms = 5000) = 0;
+  virtual ECM Pause(const ID &task_id) = 0;
+  virtual ECM Resume(const ID &task_id) = 0;
+};
+
+/**
+ * @brief Domain port for legacy transfer-set cache operations.
+ */
+class ITransferCachePort {
+public:
+  virtual ~ITransferCachePort() = default;
+
+  virtual size_t AddCachedTransferSet(const UserTransferSet &transfer_set) = 0;
+  virtual size_t
+  RemoveCachedTransferSets(const std::vector<size_t> &set_indices) = 0;
+  virtual void ClearCachedTransferSets() = 0;
+  virtual ECM SubmitCachedTransferSets(bool quiet, bool is_async = false) = 0;
+  [[nodiscard]] virtual ECM QueryCachedTransferSet(size_t set_index) const = 0;
+  [[nodiscard]] virtual std::vector<size_t> ListCachedTransferSetIds() const = 0;
+};
+
+/**
+ * @brief Domain port for acquiring per-task transfer clients.
+ */
+class ITransferClientPoolPort {
+public:
+  using ClientHandle = AMDomain::client::ClientHandle;
+  virtual ~ITransferClientPoolPort() = default;
+
+  virtual std::pair<ECM, ClientHandle>
+  AcquireClient(const std::string &task_id, const std::string &nickname,
+                int timeout_ms = -1, int64_t start_time = -1,
+                bool force_new_instance = false) = 0;
+
+  virtual std::pair<ECM, std::unordered_map<std::string, ClientHandle>>
+  AcquireClients(const std::string &task_id,
+                 const std::vector<std::string> &nicknames,
+                 int timeout_ms = -1, int64_t start_time = -1) = 0;
+
+  virtual void ReleaseTask(const std::string &task_id) = 0;
+};
+} // namespace AMDomain::transfer
+
+using UserTransferSet = AMDomain::transfer::UserTransferSet;
+using TaskInfo = AMDomain::transfer::TaskInfo;
+using TaskStatus = AMDomain::transfer::TaskStatus;
+using TransferTask = AMDomain::transfer::TransferTask;
+

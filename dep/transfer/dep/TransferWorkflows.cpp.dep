@@ -1,0 +1,65 @@
+#include "application/transfer/TransferWorkflows.hpp"
+#include "foundation/tools/string.hpp"
+
+namespace AMApplication::TransferWorkflow {
+ECM ValidateAsyncSuffix(const std::string &async_suffix,
+                        bool *out_suffix_async) {
+  if (!out_suffix_async) {
+    return Err(EC::InvalidArg, "null output pointer for async suffix");
+  }
+  const std::string suffix = AMStr::Strip(async_suffix);
+  if (suffix.empty()) {
+    *out_suffix_async = false;
+    return Ok();
+  }
+  if (suffix == "&") {
+    *out_suffix_async = true;
+    return Ok();
+  }
+  return Err(EC::InvalidArg,
+             AMStr::fmt("Invalid async suffix: {}", async_suffix));
+}
+
+ECM BuildTransferSet(const TransferBuildArgs &args, UserTransferSet *out_set) {
+  if (!out_set) {
+    return Err(EC::InvalidArg, "null transfer-set output");
+  }
+  if (args.srcs.empty()) {
+    return Err(EC::InvalidArg, "transfer source list is empty");
+  }
+  if (args.output.path.empty()) {
+    return Err(EC::InvalidArg, "transfer output path is empty");
+  }
+
+  UserTransferSet built = {};
+  built.srcs = args.srcs;
+  built.dst = args.output;
+  built.mkdir = !args.no_mkdir;
+  built.overwrite = args.overwrite;
+  built.clone = args.clone;
+  built.ignore_special_file = !args.include_special;
+  built.resume = args.resume;
+  *out_set = std::move(built);
+  return Ok();
+}
+
+TransferExecutionResult
+ExecuteTransfer(const TransferBuildArgs &args,
+                const TransferExecutionOptions &options,
+                AMDomain::transfer::ITransferExecutorPort &executor) {
+  TransferExecutionResult out = {};
+  out.run_async = options.run_async_from_context;
+
+  ECM build_rcm = BuildTransferSet(args, &out.transfer_set);
+  if (!isok(build_rcm)) {
+    out.rcm = build_rcm;
+    return out;
+  }
+
+  const std::vector<UserTransferSet> transfer_sets = {out.transfer_set};
+  out.rcm = out.run_async ? executor.TransferAsync(transfer_sets, options.quiet)
+                          : executor.Transfer(transfer_sets, options.quiet);
+  return out;
+}
+} // namespace AMApplication::TransferWorkflow
+
