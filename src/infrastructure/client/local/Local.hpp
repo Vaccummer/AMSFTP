@@ -20,7 +20,7 @@
 #endif
 
 namespace AMInfra::client::LOCAL {
-class AMLocalIOCore : public ClientIOBase, BasePathMatch {
+class AMLocalIOCore : public ClientIOBase {
 private:
   void SetState_(const AMDomain::filesystem::CheckResult &state) {
     if (config_part_) {

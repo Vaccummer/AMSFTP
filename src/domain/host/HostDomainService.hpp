@@ -67,8 +67,7 @@ template <typename T>
                  "Invalid type for port, expected integer or string-like type");
     }
     if (attr == ConRequest::Attr::password ||
-        attr == ConRequest::Attr::keyfile ||
-        attr == ConRequest::Attr::trash_dir) {
+        attr == ConRequest::Attr::keyfile) {
       return Err(EC::InvalidArg,
                  "Invalid type for path/text field, expected string-like type");
     }
@@ -167,8 +166,7 @@ template <typename T>
     }
 
     if (attr == ConRequest::Attr::password ||
-        attr == ConRequest::Attr::keyfile ||
-        attr == ConRequest::Attr::trash_dir) {
+        attr == ConRequest::Attr::keyfile) {
       return Ok();
     }
 
@@ -200,7 +198,8 @@ template <typename T>
 [[nodiscard]] inline ECM ValidateFieldValue(ClientMetaData::Attr attr,
                                             T value) {
   auto invalid_type = [attr]() -> ECM {
-    if (attr == ClientMetaData::Attr::login_dir ||
+    if (attr == ClientMetaData::Attr::trash_dir ||
+        attr == ClientMetaData::Attr::login_dir ||
         attr == ClientMetaData::Attr::cwd ||
         attr == ClientMetaData::Attr::cmd_prefix) {
       return Err(EC::InvalidArg, "invalid type: expected string-like value");
@@ -224,7 +223,8 @@ template <typename T>
 
   if constexpr (kStringLike) {
     const std::string text_value = std::string(value);
-    if (attr == ClientMetaData::Attr::login_dir ||
+    if (attr == ClientMetaData::Attr::trash_dir ||
+        attr == ClientMetaData::Attr::login_dir ||
         attr == ClientMetaData::Attr::cwd ||
         attr == ClientMetaData::Attr::cmd_prefix) {
       return Ok();

@@ -24,9 +24,9 @@ std::string JoinCandidates_(const std::vector<std::string> &candidates) {
   return out;
 }
 
-ECMData<HostConfig>
-ResolveHostConfig_(HostConfigManager *host_config_manager,
-                   const std::string &nickname, bool case_sensitive) {
+ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
+                                       const std::string &nickname,
+                                       bool case_sensitive) {
   if (!host_config_manager) {
     return {HostConfig{},
             Err(EC::InvalidHandle, "Host config manager is not bound")};
@@ -50,10 +50,11 @@ ResolveHostConfig_(HostConfigManager *host_config_manager,
                 AMStr::fmt("Host config not found: {}", nickname))};
   }
   if (matched_names.size() > 1) {
-    return {HostConfig{},
-            Err(EC::ClientNotFound,
-                AMStr::fmt("Ambiguous host config nickname [{}], candidates: {}",
-                           nickname, JoinCandidates_(matched_names)))};
+    return {
+        HostConfig{},
+        Err(EC::ClientNotFound,
+            AMStr::fmt("Ambiguous host config nickname [{}], candidates: {}",
+                       nickname, JoinCandidates_(matched_names)))};
   }
   auto [matched_rcm, matched_cfg] =
       host_config_manager->GetClientConfig(matched_names.front());
@@ -215,6 +216,11 @@ ClientAppService::CreateClient(const HostConfig &config,
   }
   ApplyCallbacksToClient_(client, callbacks);
 
+  {
+    auto guard = client->MetaDataPort().GetLockGaurd();
+    (void)client->MetaDataPort().StoreTypedValue(config.metadata, true);
+  }
+
   const ConnectHooks hooks = SnapshotConnectHooks_();
   if (hooks.before_connect) {
     (void)CallCallbackSafe(hooks.before_connect, config, client, silent);
@@ -228,20 +234,21 @@ ClientAppService::CreateClient(const HostConfig &config,
   if (!isok(connect_result.rcm)) {
     return {nullptr, connect_result.rcm};
   }
+
   return {client, connect_result.rcm};
 }
 
 ECMData<ClientHandle>
 ClientAppService::EnsureClient(const std::string &nickname, bool case_sensitive,
                                bool silent) {
-  const ClientControlComponent control =
-      GetControlComponent(std::nullopt, -1);
+  const ClientControlComponent control = GetControlComponent(std::nullopt, -1);
   return EnsureClient(nickname, control, case_sensitive, silent);
 }
 
-ECMData<ClientHandle> ClientAppService::EnsureClient(
-    const std::string &nickname, const ClientControlComponent &control,
-    bool case_sensitive, bool silent) {
+ECMData<ClientHandle>
+ClientAppService::EnsureClient(const std::string &nickname,
+                               const ClientControlComponent &control,
+                               bool case_sensitive, bool silent) {
   auto client_result = GetClient(nickname, case_sensitive);
   if (isok(client_result.rcm) && client_result.data) {
     return client_result;
@@ -456,6 +463,11 @@ ECM ClientAppService::AddPublicClient(const ClientHandle &client) {
   auto public_clients = public_clients_.lock();
   (*public_clients)[nickname][id] = client;
   return {EC::Success, ""};
+}
+
+std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort>
+ClientAppService::PublicPool() const {
+  return nullptr;
 }
 
 ClientAppService::ScopedConnectHooksGuard

@@ -49,6 +49,12 @@ struct ListClientsRequest {
   bool detail = false;
 };
 
+struct SetHostValueRequest {
+  std::string nickname = {};
+  std::string attrname = {};
+  std::string value = {};
+};
+
 class ClientConnectSpinner;
 
 class ClientInterfaceService final : public NonCopyableNonMovable {
@@ -91,8 +97,7 @@ public:
   ECM RenameHost(const std::string &old_nickname,
                  const std::string &new_nickname);
   ECM RemoveHosts(const std::vector<std::string> &nicknames);
-  ECM SetHostValue(const std::string &nickname, const std::string &attrname,
-                   const std::string &value);
+  ECM SetHostValue(const SetHostValueRequest &request);
   ECM ListHosts(bool detail);
 
 private:
