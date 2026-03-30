@@ -57,13 +57,7 @@ struct ParsedVarToken {
   std::string varname = "";
 };
 
-namespace varsetkn {
 using VarRef = ParsedVarToken;
-inline constexpr const char *kPublic = AMDomain::var::kPublic;
-
-inline bool IsValidVarname(std::string_view varname) {
-  return AMDomain::var::IsValidVarname(varname);
-}
 
 inline bool IsValidZoneName(std::string_view zone_name) {
   if (zone_name.empty()) {
@@ -209,7 +203,7 @@ inline std::string BuildVarToken(const VarRef &ref, bool force_braced = false) {
   }
   std::string body = {};
   if (ref.explicit_domain) {
-    if (ref.domain.empty() || ref.domain == kPublic) {
+    if (ref.domain.empty() || ref.domain == AMDomain::var::kPublic) {
       body = ":" + ref.varname;
     } else {
       body = ref.domain + ":" + ref.varname;
@@ -222,5 +216,4 @@ inline std::string BuildVarToken(const VarRef &ref, bool force_braced = false) {
   }
   return "$" + body;
 }
-} // namespace varsetkn
 } // namespace AMDomain::var

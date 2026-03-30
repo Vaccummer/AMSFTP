@@ -28,9 +28,16 @@ public:
   ResolveLookupToken(const std::string &token_expr) const;
   [[nodiscard]] ECMData<VarInfo>
   ResolveDefineTarget(bool global, const std::string &token_expr) const;
+  ECM QueryAndPrintVar(const std::string &token_expr) const;
+  ECM DefineVar(bool global, const std::string &token_expr,
+                const std::string &value) const;
+  ECM DeleteVar(bool all, const std::vector<std::string> &tokens) const;
+  ECM ListVars(const std::vector<std::string> &sections) const;
   [[nodiscard]] std::string SubstitutePathLike(const std::string &raw) const;
   [[nodiscard]] std::vector<std::string>
   SubstitutePathLike(const std::vector<std::string> &raw) const;
+  void VSubstitutePathLike(std::string &raw) const;
+  void VSubstitutePathLike(std::vector<std::string> &raw) const;
   bool RewriteVarShortcutTokens(std::vector<std::string> *tokens) const;
 
 private:

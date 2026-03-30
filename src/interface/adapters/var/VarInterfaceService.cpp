@@ -36,9 +36,9 @@ bool ParseShortcutVarToken_(const std::string &token, ShortcutVarKind *out_kind,
   }
 
   size_t end = 0;
-  AMDomain::var::varsetkn::VarRef ref = {};
-  if (!AMDomain::var::varsetkn::ParseVarRefAt(trimmed, 0, trimmed.size(), false,
-                                               true, &end, &ref) ||
+  AMDomain::var::VarRef ref = {};
+  if (!AMDomain::var::ParseVarRefAt(trimmed, 0, trimmed.size(), false, true,
+                                    &end, &ref) ||
       !ref.valid || end != trimmed.size()) {
     return false;
   }
@@ -53,7 +53,7 @@ bool ParseShortcutVarToken_(const std::string &token, ShortcutVarKind *out_kind,
   }
 
   *out_kind = ShortcutVarKind::GetVar;
-  *out_var_token = AMDomain::var::varsetkn::BuildVarToken(ref);
+  *out_var_token = AMDomain::var::BuildVarToken(ref);
   return true;
 }
 
@@ -105,8 +105,8 @@ VarInterfaceService::ParseVarTokenExpression(const std::string &expr) const {
 
   size_t end = 0;
   ParsedVarToken parsed = {};
-  if (!AMDomain::var::varsetkn::ParseVarRefAt(trimmed, 0, trimmed.size(), false,
-                                               false, &end, &parsed) ||
+  if (!AMDomain::var::ParseVarRefAt(trimmed, 0, trimmed.size(), false, false,
+                                    &end, &parsed) ||
       end != trimmed.size() || !parsed.valid || parsed.varname.empty()) {
     return {{}, Err(EC::InvalidArg, "invalid variable token")};
   }
@@ -155,7 +155,8 @@ VarInterfaceService::ResolveDefineTarget(bool global,
     return {{}, parsed.rcm};
   }
   if (global && parsed.data.explicit_domain) {
-    return {{}, Err(EC::InvalidArg, "cannot combine --global with explicit zone")};
+    return {{},
+            Err(EC::InvalidArg, "cannot combine --global with explicit zone")};
   }
 
   VarInfo target = {};
@@ -168,10 +169,122 @@ VarInterfaceService::ResolveDefineTarget(bool global,
   return {target, Ok()};
 }
 
+ECM VarInterfaceService::QueryAndPrintVar(const std::string &token_expr) const {
+  auto info = ResolveLookupToken(token_expr);
+  if (!isok(info.rcm)) {
+    return info.rcm;
+  }
+  prompt_io_manager_.FmtPrint("{}:{} = {}", info.data.domain, info.data.varname,
+                              info.data.varvalue);
+  return Ok();
+}
+
+ECM VarInterfaceService::DefineVar(bool global, const std::string &token_expr,
+                                   const std::string &value) const {
+  auto target = ResolveDefineTarget(global, token_expr);
+  if (!isok(target.rcm)) {
+    return target.rcm;
+  }
+  target.data.varvalue = value;
+  return var_service_.AddVar(target.data);
+}
+
+ECM VarInterfaceService::DeleteVar(bool all,
+                                   const std::vector<std::string> &tokens) const {
+  if (tokens.empty() || tokens.size() > 2) {
+    return Err(EC::InvalidArg, "var del requires one var token or [zone token]");
+  }
+
+  std::string zone_override = {};
+  std::string token_expr = tokens.front();
+  if (tokens.size() == 2) {
+    zone_override = AMStr::Strip(tokens.front());
+    token_expr = tokens.back();
+  }
+
+  auto parsed = ParseVarTokenExpression(token_expr);
+  if (!isok(parsed.rcm)) {
+    return parsed.rcm;
+  }
+
+  if (all) {
+    auto all_vars = var_service_.GetAllVar();
+    if (!isok(all_vars.rcm)) {
+      return all_vars.rcm;
+    }
+    ECM last = Ok();
+    bool removed_any = false;
+    for (const auto &[zone_name, zone_vars] : all_vars.data) {
+      if (zone_vars.find(parsed.data.varname) == zone_vars.end()) {
+        continue;
+      }
+      ECM del_rcm = var_service_.DelVar(zone_name, parsed.data.varname);
+      if (!isok(del_rcm)) {
+        last = del_rcm;
+        continue;
+      }
+      removed_any = true;
+    }
+    if (!removed_any) {
+      return Err(EC::InvalidArg, "variable not found");
+    }
+    return last;
+  }
+
+  std::string resolved_zone = {};
+  if (!zone_override.empty()) {
+    resolved_zone = zone_override;
+  } else if (parsed.data.explicit_domain) {
+    resolved_zone = parsed.data.domain;
+  } else {
+    resolved_zone = AMStr::Strip(client_service_.CurrentNickname());
+    if (resolved_zone.empty()) {
+      resolved_zone = "local";
+    }
+  }
+  return var_service_.DelVar(resolved_zone, parsed.data.varname);
+}
+
+ECM VarInterfaceService::ListVars(
+    const std::vector<std::string> &sections) const {
+  const auto print_zone =
+      [this](const std::string &zone_name,
+             const AMApplication::var::ZoneVarInfoMap &zone_vars) {
+        for (const auto &[name, info] : zone_vars) {
+          (void)name;
+          prompt_io_manager_.FmtPrint("{}:{} = {}", zone_name, info.varname,
+                                      info.varvalue);
+        }
+      };
+
+  if (sections.empty()) {
+    auto all_vars = var_service_.GetAllVar();
+    if (!isok(all_vars.rcm)) {
+      return all_vars.rcm;
+    }
+    for (const auto &[zone_name, zone_vars] : all_vars.data) {
+      print_zone(zone_name, zone_vars);
+    }
+    return Ok();
+  }
+
+  ECM last = Ok();
+  for (const std::string &zone : sections) {
+    auto zone_vars = var_service_.EnumerateZone(zone);
+    if (!isok(zone_vars.rcm)) {
+      last = zone_vars.rcm;
+      continue;
+    }
+    print_zone(zone, zone_vars.data);
+  }
+  return last;
+}
+
 ECMData<std::string>
 VarInterfaceService::LookupVarValue_(const ParsedVarToken &token,
                                      const AllVarInfoMap &all_vars) const {
-  auto lookup_zone = [&](const std::string &zone) -> std::optional<std::string> {
+  auto lookup_zone =
+      [&](const std::string &zone) -> std::optional<std::string> {
     const auto zone_it = all_vars.find(zone);
     if (zone_it == all_vars.end()) {
       return std::nullopt;
@@ -228,8 +341,8 @@ std::string VarInterfaceService::SubstitutePathLikeWithSnapshot_(
 
     size_t end = i;
     ParsedVarToken ref = {};
-    if (!AMDomain::var::varsetkn::ParseVarRefAt(raw, i, raw.size(), true, true,
-                                                 &end, &ref) ||
+    if (!AMDomain::var::ParseVarRefAt(raw, i, raw.size(), true, true, &end,
+                                      &ref) ||
         !ref.valid || end <= i || ref.varname.empty()) {
       out.push_back('$');
       continue;
@@ -247,7 +360,8 @@ std::string VarInterfaceService::SubstitutePathLikeWithSnapshot_(
   return out;
 }
 
-std::string VarInterfaceService::SubstitutePathLike(const std::string &raw) const {
+std::string
+VarInterfaceService::SubstitutePathLike(const std::string &raw) const {
   auto all_vars = var_service_.GetAllVar();
   if (!isok(all_vars.rcm)) {
     return raw;
@@ -255,8 +369,8 @@ std::string VarInterfaceService::SubstitutePathLike(const std::string &raw) cons
   return SubstitutePathLikeWithSnapshot_(raw, all_vars.data);
 }
 
-std::vector<std::string>
-VarInterfaceService::SubstitutePathLike(const std::vector<std::string> &raw) const {
+std::vector<std::string> VarInterfaceService::SubstitutePathLike(
+    const std::vector<std::string> &raw) const {
   auto all_vars = var_service_.GetAllVar();
   if (!isok(all_vars.rcm)) {
     return raw;
@@ -266,6 +380,25 @@ VarInterfaceService::SubstitutePathLike(const std::vector<std::string> &raw) con
     item = SubstitutePathLikeWithSnapshot_(item, all_vars.data);
   }
   return out;
+}
+
+void VarInterfaceService::VSubstitutePathLike(std::string &raw) const {
+  auto all_vars = var_service_.GetAllVar();
+  if (!isok(all_vars.rcm)) {
+    return;
+  }
+  raw = SubstitutePathLikeWithSnapshot_(raw, all_vars.data);
+}
+
+void VarInterfaceService::VSubstitutePathLike(
+    std::vector<std::string> &raw) const {
+  auto all_vars = var_service_.GetAllVar();
+  if (!isok(all_vars.rcm)) {
+    return;
+  }
+  for (std::string &item : raw) {
+    item = SubstitutePathLikeWithSnapshot_(item, all_vars.data);
+  }
 }
 
 bool VarInterfaceService::RewriteVarShortcutTokens(
@@ -300,7 +433,8 @@ bool VarInterfaceService::RewriteVarShortcutTokens(
     if (eq == std::string::npos) {
       return false;
     }
-    if (!ParseShortcutVarToken_(src[0].substr(0, eq), &kind, &var_token, &zone) ||
+    if (!ParseShortcutVarToken_(src[0].substr(0, eq), &kind, &var_token,
+                                &zone) ||
         kind != ShortcutVarKind::GetVar) {
       return false;
     }
