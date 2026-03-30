@@ -1,5 +1,6 @@
 #pragma once
 #include "domain/client/ClientPort.hpp"
+#include "domain/filesystem/FileSystemModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include <atomic>
 #include <cstddef>
@@ -13,7 +14,6 @@ class TaskInfo;
 class TransferTask;
 using Cache = std::vector<std::optional<UserTransferSet>>;
 using TASKS = std::vector<TransferTask>;
-using amf = AMDomain::client::amf;
 using Client = AMDomain::client::IClientPort;
 using TransferClientContainer = std::unordered_map<
     std::string,
@@ -21,7 +21,9 @@ using TransferClientContainer = std::unordered_map<
                  std::pair<std::shared_ptr<Client>, std::shared_ptr<Client>>>>;
 using ResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
 using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
+using ClientPath = AMDomain::filesystem::ClientPath;
 enum class TaskStatus { Pending, Conducting, Paused, Finished };
+enum class ControlIntent { Running, Pause, Terminate };
 
 struct ProgressCBInfo {
   std::string src;
@@ -43,13 +45,13 @@ struct ProgressCBInfo {
 };
 
 struct ErrorCBInfo {
-  std::pair<ErrorCode, std::string> ecm;
+  ECM ecm;
   std::string src;
   std::string dst;
   std::string src_host;
   std::string dst_host;
-  ErrorCBInfo(std::pair<ErrorCode, std::string> ecm, std::string src,
-              std::string dst, std::string src_host, std::string dst_host)
+  ErrorCBInfo(ECM ecm, std::string src, std::string dst,
+              std::string src_host, std::string dst_host)
       : ecm(std::move(ecm)), src(std::move(src)), dst(std::move(dst)),
         src_host(std::move(src_host)), dst_host(std::move(dst_host)) {}
 };
@@ -132,6 +134,7 @@ struct TransferTask {
   std::string dst_host;
   size_t size;
   PathType path_type = PathType::FILE;
+  bool overwrite = false;
   bool IsFinished = false;
   ECM rcm = ECM(EC::Success, "");
   size_t transferred = 0; // Current file transferred size
@@ -153,6 +156,7 @@ struct TaskTime {
 struct TaskState {
   AMAtomic<ECM> rcm = AMAtomic<ECM>(ECM{EC::Success, ""});
   std::atomic<TaskStatus> status{TaskStatus::Pending};
+  std::atomic<ControlIntent> intent{ControlIntent::Running};
 };
 
 struct TaskSize {
@@ -167,7 +171,7 @@ struct TaskSize {
 
 struct TaskCoreData {
   AMAtomic<TASKS> tasks = AMAtomic<TASKS>(TASKS());
-  amf control_token = nullptr;
+  AMDomain::client::ClientControlComponent control = {};
   std::atomic<TransferTask *> cur_task{nullptr};
   TransferClientContainer clients;
   std::vector<std::string> nicknames;
@@ -273,20 +277,52 @@ struct TaskInfo {
     return State.status.load(std::memory_order_relaxed);
   }
 
+  ControlIntent GetIntent() const {
+    return State.intent.load(std::memory_order_relaxed);
+  }
+
+  bool IsPauseRequested() const { return GetIntent() == ControlIntent::Pause; }
+
+  bool IsTerminateRequested() const {
+    return GetIntent() == ControlIntent::Terminate;
+  }
+
   void RequestInterrupt() {
-    if (Core.control_token) {
-      Core.control_token->RequestInterrupt();
+    State.intent.store(ControlIntent::Terminate, std::memory_order_relaxed);
+    const auto &token = Core.control.ControlToken();
+    if (token) {
+      token->RequestInterrupt();
     }
   }
 
   void ClearInterrupt() {
-    if (Core.control_token) {
-      Core.control_token->ClearInterrupt();
+    const auto &token = Core.control.ControlToken();
+    if (token) {
+      token->ClearInterrupt();
     }
   }
 
+  void SetRunningIntent() {
+    if (IsTerminateRequested()) {
+      return;
+    }
+    State.intent.store(ControlIntent::Running, std::memory_order_relaxed);
+  }
+
   bool IsInterrupted() const {
-    return Core.control_token && Core.control_token->IsInterrupted();
+    return GetIntent() != ControlIntent::Running ||
+           Core.control.IsInterrupted();
+  }
+
+  void RequestPause() {
+    if (IsTerminateRequested()) {
+      return;
+    }
+    State.intent.store(ControlIntent::Pause, std::memory_order_relaxed);
+    const auto &token = Core.control.ControlToken();
+    if (token) {
+      token->RequestInterrupt();
+    }
   }
 
   void SetStatus(TaskStatus new_status) { State.status.store(new_status); }
@@ -304,12 +340,12 @@ public:
   /**
    * @brief The list of explicit source endpoints.
    */
-  std::vector<AMDomain::client::ScopedPath> srcs = {};
+  std::vector<ClientPath> srcs = {};
 
   /**
    * @brief Explicit destination endpoint for all sources in this Set.
    */
-  AMDomain::client::ScopedPath dst = {};
+  ClientPath dst = {};
 
   /**
    * @brief Whether to create missing destination directories.
@@ -338,9 +374,8 @@ public:
 
   UserTransferSet() = default;
 
-  UserTransferSet(std::vector<AMDomain::client::ScopedPath> srcs,
-                  AMDomain::client::ScopedPath dst, bool mkdir, bool overwrite,
-                  bool ignore_special_file, bool resume = false)
+  UserTransferSet(std::vector<ClientPath> srcs, ClientPath dst, bool mkdir,
+                  bool overwrite, bool ignore_special_file, bool resume = false)
       : srcs(std::move(srcs)), dst(std::move(dst)), mkdir(mkdir),
         overwrite(overwrite), ignore_special_file(ignore_special_file),
         resume(resume) {}

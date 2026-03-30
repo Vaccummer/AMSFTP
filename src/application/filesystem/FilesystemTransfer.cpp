@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <deque>
-#include <unordered_map>
 #include <unordered_set>
 #include <variant>
 
@@ -31,27 +30,6 @@ std::string JoinPathParts_(const std::vector<std::string> &parts,
     out = AMPathStr::join(out, parts[i]);
   }
   return out;
-}
-
-bool IsDescendantPath_(const std::string &candidate,
-                       const std::string &ancestor) {
-  if (candidate.empty() || ancestor.empty()) {
-    return false;
-  }
-  const std::vector<std::string> candidate_parts = AMPathStr::split(candidate);
-  const std::vector<std::string> ancestor_parts = AMPathStr::split(ancestor);
-  if (candidate_parts.empty() || ancestor_parts.empty()) {
-    return false;
-  }
-  if (candidate_parts.size() < ancestor_parts.size()) {
-    return false;
-  }
-  for (size_t i = 0; i < ancestor_parts.size(); ++i) {
-    if (candidate_parts[i] != ancestor_parts[i]) {
-      return false;
-    }
-  }
-  return true;
 }
 
 ECM PutSingleClientToContainer_(TransferClientContainer *clients,
@@ -90,66 +68,6 @@ bool RecordFirstErrorPath_(std::map<std::string, ClientPath> *error_data,
   ClientPath error_path = path;
   error_path.rcm = rcm;
   return error_data->emplace(nickname, std::move(error_path)).second;
-}
-
-std::vector<PathInfo> CompactMatchedPaths_(const std::vector<PathInfo> &raw) {
-  std::unordered_map<std::string, PathInfo> dedup = {};
-  dedup.reserve(raw.size());
-  for (const auto &item : raw) {
-    const std::string key = item.path;
-    if (key.empty()) {
-      continue;
-    }
-    auto it = dedup.find(key);
-    if (it == dedup.end()) {
-      dedup.emplace(key, item);
-      continue;
-    }
-    if (it->second.type != PathType::DIR && item.type == PathType::DIR) {
-      it->second = item;
-    }
-  }
-
-  std::vector<PathInfo> candidates = {};
-  candidates.reserve(dedup.size());
-  for (auto &entry : dedup) {
-    candidates.push_back(std::move(entry.second));
-  }
-  std::stable_sort(candidates.begin(), candidates.end(),
-                   [](const PathInfo &lhs, const PathInfo &rhs) {
-                     const size_t lhs_depth = AMPathStr::split(lhs.path).size();
-                     const size_t rhs_depth = AMPathStr::split(rhs.path).size();
-                     if (lhs_depth != rhs_depth) {
-                       return lhs_depth < rhs_depth;
-                     }
-                     return lhs.path < rhs.path;
-                   });
-
-  std::vector<PathInfo> compacted = {};
-  compacted.reserve(candidates.size());
-  std::vector<std::string> dir_roots = {};
-  for (const auto &item : candidates) {
-    const std::string item_key = item.path;
-    bool covered = false;
-    for (const auto &root : dir_roots) {
-      if (IsDescendantPath_(item_key, root)) {
-        covered = true;
-        break;
-      }
-    }
-    if (covered) {
-      continue;
-    }
-    compacted.push_back(item);
-    if (item.type == PathType::DIR) {
-      dir_roots.push_back(item_key);
-    }
-  }
-  std::stable_sort(compacted.begin(), compacted.end(),
-                   [](const PathInfo &lhs, const PathInfo &rhs) {
-                     return lhs.path < rhs.path;
-                   });
-  return compacted;
 }
 
 std::string RelativeFrom_(const std::string &root, const std::string &target) {

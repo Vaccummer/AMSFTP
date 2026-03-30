@@ -45,7 +45,7 @@ void TransferRuntimeProgress::CallInnerCallback(bool force) {
   }
   cb_time = now;
 
-  std::pair<ErrorCode, std::string> cb_error = {ErrorCode::Success, ""};
+  ECM cb_error = {ErrorCode::Success, ""};
   auto ctrl_opt = task_info->Set.callback.CallProgress(
       ProgressCBInfo(
           cur_task->src, cur_task->dst, cur_task->src_host, cur_task->dst_host,
@@ -110,7 +110,7 @@ constexpr size_t AMMinBufferSize =
     AMDomain::client::ClientService::AMMinBufferSize;
 constexpr size_t AMMaxBufferSize =
     AMDomain::client::ClientService::AMMaxBufferSize;
-using ECM = std::pair<ErrorCode, std::string>;
+using ECM = ECM;
 using EC = ErrorCode;
 using ClientHandle = AMInfra::transfer::ClientHandle;
 using RuntimeProgress = AMInfra::transfer::TransferRuntimeProgress;
@@ -1005,7 +1005,7 @@ TransferExecutionEngine::~TransferExecutionEngine() = default;
 /**
  * @brief Execute one prepared single-file transfer task.
  */
-TransferExecutionEngine::ECM TransferExecutionEngine::TransferSignleFile(
+ECM TransferExecutionEngine::TransferSignleFile(
     ClientHandle src_client, ClientHandle dst_client,
     RuntimeProgress &runtime_progress) const {
   TransferExecutionHelper helper;

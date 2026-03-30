@@ -97,10 +97,10 @@ ECM AbsolutePath(ClientPath &path) {
 } // namespace ClientOperationHelper
 
 FilesystemAppBaseService::FilesystemAppBaseService(
-    FilesystemArg arg, std::shared_ptr<HostAppService> host_service,
-    std::shared_ptr<ClientAppService> client_service)
-    : init_arg_(arg), host_service_(std::move(host_service)),
-      client_service_(std::move(client_service)),
+    FilesystemArg arg, HostAppService *host_service,
+    ClientAppService *client_service)
+    : init_arg_(arg), host_service_(host_service),
+      client_service_(client_service),
       cd_history_(std::list<ClientPath>{}) {
   if (!host_service_) {
     throw std::invalid_argument("host_service is null");
@@ -149,7 +149,8 @@ std::vector<std::string> FilesystemAppBaseService::BuildBaseListNames(
 
 ECMData<PathInfo> FilesystemAppBaseService::BaseStat(
     ClientHandle client, const std::string &nickname,
-    const std::string &abs_path, const ClientControlComponent &control) {
+    const std::string &abs_path, const ClientControlComponent &control,
+    bool trace_link) {
   if (!client) {
     return {{}, Err(EC::InvalidHandle, "Client handle is null")};
   }
@@ -158,7 +159,7 @@ ECMData<PathInfo> FilesystemAppBaseService::BaseStat(
   }
 
   const ClientPath cache_key = BuildBaseCacheKey(client, nickname, abs_path);
-  {
+  if (!trace_link) {
     auto cache_guard = base_io_cache_.stat_cache.lock();
     const auto &cache = cache_guard.get();
     auto it = cache.find(cache_key);
@@ -167,13 +168,13 @@ ECMData<PathInfo> FilesystemAppBaseService::BaseStat(
     }
   }
 
-  auto stat_result = client->IOPort().stat({abs_path, false}, control);
+  auto stat_result = client->IOPort().stat({abs_path, trace_link}, control);
   if (!isok(stat_result.rcm)) {
     return {{}, stat_result.rcm};
   }
 
   ECMData<PathInfo> out = {stat_result.info, stat_result.rcm};
-  {
+  if (!trace_link) {
     auto cache_guard = base_io_cache_.stat_cache.lock();
     cache_guard.get()[cache_key] = out;
   }
@@ -367,36 +368,11 @@ FilesystemArg FilesystemAppBaseService::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
-ECMData<ClientPath>
-FilesystemAppBaseService::SplitRawPath(const std::string &token) const {
+std::string FilesystemAppBaseService::CurrentNickname() const {
   if (!client_service_) {
-    return {ClientPath{}, Err(EC::InvalidHandle, "client service is null")};
+    return "";
   }
-
-  ClientPath out = {};
-  const size_t at_pos = token.find('@');
-  if (!token.empty() && token.front() == '@') {
-    out.nickname = "local";
-    out.path = token.substr(1);
-  } else if (at_pos == std::string::npos) {
-    out.nickname = client_service_->CurrentNickname();
-    out.path = token;
-  } else {
-    out.nickname = token.substr(0, at_pos);
-    out.path = token.substr(at_pos + 1);
-  }
-
-  if (out.nickname.empty()) {
-    out.nickname = "local";
-  }
-  if (out.path.empty()) {
-    out.path = ".";
-  }
-
-  out.is_wildcard = AMDomain::filesystem::services::HasWildcard(out.path);
-  out.userpath = !out.path.empty() && out.path.front() == '~';
-
-  return {std::move(out), Ok()};
+  return client_service_->CurrentNickname();
 }
 
 ECMData<ClientHandle> FilesystemAppBaseService::GetClient(
@@ -411,9 +387,9 @@ ECMData<ClientHandle> FilesystemAppBaseService::GetClient(
     return {nullptr, Err(EC::InvalidArg, "Client nickname is empty")};
   }
 
-  ClientHandle existing = client_service_->GetClient(nickname);
-  if (existing) {
-    return {existing, Ok()};
+  auto existing = client_service_->GetClient(nickname, true);
+  if (isok(existing.rcm) && existing.data) {
+    return existing;
   }
 
   if (!host_service_->HostExists(nickname)) {
@@ -434,18 +410,18 @@ ECMData<ClientHandle> FilesystemAppBaseService::GetClient(
 
   const ECM add_rcm = client_service_->AddClient(create_result.data, false);
   if (!isok(add_rcm)) {
-    ClientHandle raced = client_service_->GetClient(nickname);
-    if (raced) {
-      return {raced, Ok()};
+    auto raced = client_service_->GetClient(nickname, true);
+    if (isok(raced.rcm) && raced.data) {
+      return raced;
     }
     return {nullptr, add_rcm};
   }
 
-  ClientHandle resolved = client_service_->GetClient(nickname);
-  if (!resolved) {
-    resolved = create_result.data;
+  auto resolved = client_service_->GetClient(nickname, true);
+  if (!isok(resolved.rcm) || !resolved.data) {
+    resolved = {create_result.data, Ok()};
   }
-  return {resolved, Ok()};
+  return resolved;
 }
 
 ECMData<ClientHandle>

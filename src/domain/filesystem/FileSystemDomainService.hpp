@@ -1,9 +1,18 @@
 #pragma once
 #include "ClientIOPortInterfaceArgs.hpp"
+#include "foundation/core/Path.hpp"
 #include "foundation/tools/string.hpp"
 #include <string>
 
 namespace AMDomain::filesystem::services {
+
+inline std::string NormalizePath(const std::string &path) {
+  if (path.empty()) {
+    return "";
+  }
+  std::string normalized = AMStr::Strip(path);
+  return AMPathStr::UnifyPathSep(normalized, "/");
+}
 
 inline bool HasWildcard(const std::string &path) {
   return path.find('*') != std::string::npos ||

@@ -137,8 +137,8 @@ bool IsStopError_(ErrorCode ec) {
   return ec == ErrorCode::Terminate || ec == ErrorCode::OperationTimeout;
 }
 
-void AddPathError_(std::vector<std::pair<ClientPath, ECM>> *errors,
-                   ECM *status, const ClientPath &path, const ECM &rcm) {
+void AddPathError_(std::vector<std::pair<ClientPath, ECM>> *errors, ECM *status,
+                   const ClientPath &path, const ECM &rcm) {
   if (errors) {
     errors->push_back({path, rcm});
   }
@@ -224,10 +224,9 @@ std::vector<PathInfo> CompactMatchedPaths_(const std::vector<PathInfo> &raw) {
 }
 
 FilesystemAppService::FilesystemAppService(
-    FilesystemArg arg, std::shared_ptr<HostAppService> host_service,
-    std::shared_ptr<ClientAppService> client_service)
-    : FilesystemAppBaseService(arg, std::move(host_service),
-                               std::move(client_service)) {}
+    FilesystemArg arg, HostAppService *host_service,
+    ClientAppService *client_service)
+    : FilesystemAppBaseService(arg, host_service, client_service) {}
 
 ECMData<ClientPath>
 FilesystemAppService::GetCwd(const ClientControlComponent &control) {
@@ -255,7 +254,7 @@ FilesystemAppService::GetCwd(const ClientControlComponent &control) {
 }
 
 ECMData<ClientPath> FilesystemAppService::PeekCdHistory() const {
-  auto history = CdHistory().lock();
+  auto history = cd_history_.lock();
   auto list = history.load();
   if (list.empty()) {
     return {ClientPath{}, Err(EC::InvalidArg, "cd history is empty")};
@@ -320,15 +319,13 @@ ECM FilesystemAppService::ChangeDir(ClientPath path,
   return Ok();
 }
 
-ECMData<PathInfo> FilesystemAppService::Stat(ClientPath path,
-                                             const ClientControlComponent &control,
-                                             bool trace_link) {
+ECMData<PathInfo> FilesystemAppService::Stat(
+    ClientPath path, const ClientControlComponent &control, bool trace_link) {
   ECM resolve_rcm = ResolvePath(path, control);
   if (!isok(resolve_rcm) || !path.client) {
-    return {PathInfo{},
-            isok(resolve_rcm)
-                ? Err(EC::InvalidHandle, "Resolved client is null")
-                : resolve_rcm};
+    return {PathInfo{}, isok(resolve_rcm)
+                            ? Err(EC::InvalidHandle, "Resolved client is null")
+                            : resolve_rcm};
   }
   return BaseStat(path.client, path.nickname, path.path, control, trace_link);
 }
@@ -416,10 +413,9 @@ FilesystemAppService::ResolveTrashDir(ClientPath source,
                                       const ClientControlComponent &control) {
   const ECM resolve_rcm = ResolvePath(source, control);
   if (!isok(resolve_rcm) || !source.client) {
-    return {ClientPath{},
-            isok(resolve_rcm)
-                ? Err(EC::InvalidHandle, "Resolved client is null")
-                : resolve_rcm};
+    return {ClientPath{}, isok(resolve_rcm) ? Err(EC::InvalidHandle,
+                                                  "Resolved client is null")
+                                            : resolve_rcm};
   }
 
   std::string trash_dir = {};
@@ -428,7 +424,8 @@ FilesystemAppService::ResolveTrashDir(ClientPath source,
     auto *metadata =
         source.client->MetaDataPort().QueryTypedValue<ClientMetaData>();
     if (!metadata) {
-      return {ClientPath{}, Err(EC::CommonFailure, "Client metadata not found")};
+      return {ClientPath{},
+              Err(EC::CommonFailure, "Client metadata not found")};
     }
     trash_dir = AMStr::Strip(metadata->trash_dir);
     meta_guard.Unlock();
@@ -490,8 +487,8 @@ ECM FilesystemAppService::Rename(const ClientPath &src, const ClientPath &dst,
 
   const std::string dst_parent = AMPathStr::dirname(resolved_dst.path);
   if (!dst_parent.empty()) {
-    auto parent_stat = resolved_src.client->IOPort().stat({dst_parent, false},
-                                                          control);
+    auto parent_stat =
+        resolved_src.client->IOPort().stat({dst_parent, false}, control);
     if (!isok(parent_stat.rcm)) {
       if (AMDomain::filesystem::services::IsPathNotExistError(
               parent_stat.rcm.first)) {
@@ -499,8 +496,8 @@ ECM FilesystemAppService::Rename(const ClientPath &src, const ClientPath &dst,
           return Err(EC::ParentDirectoryNotExist,
                      AMStr::fmt("Parent directory not found: {}", dst_parent));
         }
-        auto mkdir_result = resolved_src.client->IOPort().mkdirs({dst_parent},
-                                                                 control);
+        auto mkdir_result =
+            resolved_src.client->IOPort().mkdirs({dst_parent}, control);
         if (!isok(mkdir_result.rcm)) {
           return mkdir_result.rcm;
         }
@@ -522,9 +519,9 @@ ECM FilesystemAppService::Rename(const ClientPath &src, const ClientPath &dst,
                             resolved_dst.path));
     }
     if (!overwrite) {
-      return Err(EC::PathAlreadyExists,
-                 AMStr::fmt("Destination already exists: {}",
-                            resolved_dst.path));
+      return Err(
+          EC::PathAlreadyExists,
+          AMStr::fmt("Destination already exists: {}", resolved_dst.path));
     }
   } else if (!AMDomain::filesystem::services::IsPathNotExistError(
                  dst_stat.rcm.first)) {
@@ -551,8 +548,9 @@ ECM FilesystemAppService::Rename(const ClientPath &src, const ClientPath &dst,
   return Ok();
 }
 
-ECMData<RmfilePlan> FilesystemAppService::PrepareRmfile(
-    std::vector<ClientPath> targets, const ClientControlComponent &control) {
+ECMData<RmfilePlan>
+FilesystemAppService::PrepareRmfile(std::vector<ClientPath> targets,
+                                    const ClientControlComponent &control) {
   RmfilePlan plan = {};
   ECM status = Ok();
   if (targets.empty()) {
@@ -578,15 +576,17 @@ ECMData<RmfilePlan> FilesystemAppService::PrepareRmfile(
 
     target.path = target.path.empty() ? "." : target.path;
     target.is_wildcard =
-        target.is_wildcard || AMDomain::filesystem::services::HasWildcard(target.path);
+        target.is_wildcard ||
+        AMDomain::filesystem::services::HasWildcard(target.path);
     target.userpath = !target.path.empty() && target.path.front() == '~';
 
     if (target.is_wildcard) {
-      auto find_result = find(
-          target, SearchType::All, control, {},
-          [&plan, &status](const ClientPath &error_path, ECM error_rcm) {
-            AddPathError_(&plan.precheck_errors, &status, error_path, error_rcm);
-          });
+      auto find_result =
+          find(target, SearchType::All, control, {},
+               [&plan, &status](const ClientPath &error_path, ECM error_rcm) {
+                 AddPathError_(&plan.precheck_errors, &status, error_path,
+                               error_rcm);
+               });
       if (!isok(find_result.rcm)) {
         AddPathError_(&plan.precheck_errors, &status, target, find_result.rcm);
         if (IsStopError_(find_result.rcm.first)) {
@@ -656,9 +656,9 @@ ECMData<RmfilePlan> FilesystemAppService::PrepareRmfile(
       continue;
     }
     if (stat_result.data.type == PathType::DIR) {
-      const ECM rcm = Err(
-          EC::NotAFile,
-          AMStr::fmt("rmfile does not accept directories: {}", target.path));
+      const ECM rcm =
+          Err(EC::NotAFile, AMStr::fmt("rmfile does not accept directories: {}",
+                                       target.path));
       AddPathError_(&plan.precheck_errors, &status, target, rcm);
       continue;
     }
@@ -712,7 +712,8 @@ FilesystemAppService::ExecuteRmfile(
       continue;
     }
 
-    auto stat_result = target.client->IOPort().stat({target.path, false}, control);
+    auto stat_result =
+        target.client->IOPort().stat({target.path, false}, control);
     if (!isok(stat_result.rcm)) {
       AddPathError_(&errors, &status, target, stat_result.rcm);
       if (on_error) {
@@ -724,9 +725,9 @@ FilesystemAppService::ExecuteRmfile(
       continue;
     }
     if (stat_result.info.type == PathType::DIR) {
-      const ECM rcm = Err(
-          EC::NotAFile,
-          AMStr::fmt("rmfile does not accept directories: {}", target.path));
+      const ECM rcm =
+          Err(EC::NotAFile, AMStr::fmt("rmfile does not accept directories: {}",
+                                       target.path));
       AddPathError_(&errors, &status, target, rcm);
       if (on_error) {
         on_error(target, rcm);
@@ -755,10 +756,9 @@ FilesystemAppService::ExecuteRmfile(
   return {std::move(errors), status};
 }
 
-ECMData<std::vector<std::pair<ClientPath, ECM>>>
-FilesystemAppService::Rmdir(std::vector<ClientPath> targets,
-                            const ClientControlComponent &control,
-                            std::function<void(const ClientPath &, ECM)> on_error) {
+ECMData<std::vector<std::pair<ClientPath, ECM>>> FilesystemAppService::Rmdir(
+    std::vector<ClientPath> targets, const ClientControlComponent &control,
+    std::function<void(const ClientPath &, ECM)> on_error) {
   std::vector<std::pair<ClientPath, ECM>> errors = {};
   ECM status = Ok();
   if (targets.empty()) {
@@ -790,7 +790,8 @@ FilesystemAppService::Rmdir(std::vector<ClientPath> targets,
       continue;
     }
 
-    auto stat_result = target.client->IOPort().stat({target.path, false}, control);
+    auto stat_result =
+        target.client->IOPort().stat({target.path, false}, control);
     if (!isok(stat_result.rcm)) {
       AddPathError_(&errors, &status, target, stat_result.rcm);
       if (on_error) {
@@ -802,9 +803,9 @@ FilesystemAppService::Rmdir(std::vector<ClientPath> targets,
       continue;
     }
     if (stat_result.info.type != PathType::DIR) {
-      const ECM rcm = Err(EC::NotADirectory,
-                          AMStr::fmt("rmdir only accepts directories: {}",
-                                     target.path));
+      const ECM rcm =
+          Err(EC::NotADirectory,
+              AMStr::fmt("rmdir only accepts directories: {}", target.path));
       AddPathError_(&errors, &status, target, rcm);
       if (on_error) {
         on_error(target, rcm);
@@ -859,15 +860,17 @@ ECMData<PermanentRemovePlan> FilesystemAppService::PreparePermanentRemove(
 
     target.path = target.path.empty() ? "." : target.path;
     target.is_wildcard =
-        target.is_wildcard || AMDomain::filesystem::services::HasWildcard(target.path);
+        target.is_wildcard ||
+        AMDomain::filesystem::services::HasWildcard(target.path);
     target.userpath = !target.path.empty() && target.path.front() == '~';
 
     if (target.is_wildcard) {
-      auto find_result = find(
-          target, SearchType::All, control, {},
-          [&plan, &status](const ClientPath &error_path, ECM error_rcm) {
-            AddPathError_(&plan.precheck_errors, &status, error_path, error_rcm);
-          });
+      auto find_result =
+          find(target, SearchType::All, control, {},
+               [&plan, &status](const ClientPath &error_path, ECM error_rcm) {
+                 AddPathError_(&plan.precheck_errors, &status, error_path,
+                               error_rcm);
+               });
       if (!isok(find_result.rcm)) {
         AddPathError_(&plan.precheck_errors, &status, target, find_result.rcm);
         if (IsStopError_(find_result.rcm.first)) {
@@ -920,9 +923,9 @@ ECMData<PermanentRemovePlan> FilesystemAppService::PreparePermanentRemove(
         continue;
       }
 
-      const std::string group_key = root.nickname.empty()
-                                        ? (nickname.empty() ? "local" : nickname)
-                                        : root.nickname;
+      const std::string group_key =
+          root.nickname.empty() ? (nickname.empty() ? "local" : nickname)
+                                : root.nickname;
       plan.grouped_display_paths[group_key].push_back(root);
 
       const auto push_delete = [&](const ClientPath &path) {
@@ -1036,7 +1039,8 @@ FilesystemAppService::ExecutePermanentRemove(
       return {std::move(errors), Err(EC::Terminate, "Interrupted by user")};
     }
     if (control.IsTimeout()) {
-      return {std::move(errors), Err(EC::OperationTimeout, "Operation timed out")};
+      return {std::move(errors),
+              Err(EC::OperationTimeout, "Operation timed out")};
     }
 
     ClientPath current = item;
@@ -1059,7 +1063,8 @@ FilesystemAppService::ExecutePermanentRemove(
       on_progress(current);
     }
 
-    auto stat_result = current.client->IOPort().stat({current.path, false}, control);
+    auto stat_result =
+        current.client->IOPort().stat({current.path, false}, control);
     if (!isok(stat_result.rcm)) {
       AddPathError_(&errors, &status, current, stat_result.rcm);
       if (on_error) {
@@ -1118,20 +1123,22 @@ FilesystemAppService::Saferm(std::vector<ClientPath> targets,
       return {std::move(errors), Err(EC::Terminate, "Interrupted by user")};
     }
     if (control.IsTimeout()) {
-      return {std::move(errors), Err(EC::OperationTimeout, "Operation timed out")};
+      return {std::move(errors),
+              Err(EC::OperationTimeout, "Operation timed out")};
     }
 
     target.path = target.path.empty() ? "." : target.path;
-    target.is_wildcard = target.is_wildcard ||
-                         AMDomain::filesystem::services::HasWildcard(target.path);
+    target.is_wildcard =
+        target.is_wildcard ||
+        AMDomain::filesystem::services::HasWildcard(target.path);
     target.userpath = !target.path.empty() && target.path.front() == '~';
 
     if (target.is_wildcard) {
-      auto find_result = find(
-          target, SearchType::All, control, {},
-          [&errors, &status](const ClientPath &error_path, ECM error_rcm) {
-            AddSafermError_(&errors, &status, error_path, error_rcm);
-          });
+      auto find_result =
+          find(target, SearchType::All, control, {},
+               [&errors, &status](const ClientPath &error_path, ECM error_rcm) {
+                 AddSafermError_(&errors, &status, error_path, error_rcm);
+               });
       if (!isok(find_result.rcm)) {
         AddSafermError_(&errors, &status, target, find_result.rcm);
       }
@@ -1181,7 +1188,8 @@ FilesystemAppService::Saferm(std::vector<ClientPath> targets,
       return {std::move(errors), Err(EC::Terminate, "Interrupted by user")};
     }
     if (control.IsTimeout()) {
-      return {std::move(errors), Err(EC::OperationTimeout, "Operation timed out")};
+      return {std::move(errors),
+              Err(EC::OperationTimeout, "Operation timed out")};
     }
 
     const std::string &nickname = source.nickname;
@@ -1202,10 +1210,9 @@ FilesystemAppService::Saferm(std::vector<ClientPath> targets,
             prepare_rcm = trash_stat.rcm;
           }
         } else if (trash_stat.data.type != PathType::DIR) {
-          prepare_rcm =
-              Err(EC::NotADirectory,
-                  AMStr::fmt("Trash path is not a directory: {}",
-                             trash_stat.data.path));
+          prepare_rcm = Err(EC::NotADirectory,
+                            AMStr::fmt("Trash path is not a directory: {}",
+                                       trash_stat.data.path));
         }
 
         if (isok(prepare_rcm)) {
@@ -1253,8 +1260,8 @@ FilesystemAppService::Saferm(std::vector<ClientPath> targets,
     dst.nickname = nickname;
     bool found_unique = false;
     for (size_t index = 0; index < 100000; ++index) {
-      dst.path =
-          AMPathStr::join(bucket_dir.path, BuildSuffixName_(base_name, ext_name, index));
+      dst.path = AMPathStr::join(bucket_dir.path,
+                                 BuildSuffixName_(base_name, ext_name, index));
       auto dst_stat = Stat(dst, control, false);
       if (!isok(dst_stat.rcm)) {
         if (AMDomain::filesystem::services::IsPathNotExistError(
@@ -1282,10 +1289,11 @@ FilesystemAppService::Saferm(std::vector<ClientPath> targets,
   return {std::move(errors), status};
 }
 
-RunResult FilesystemAppService::ShellRun(
-    const std::string &nickname, const std::string &workdir,
-    const std::string &cmd, const ClientControlComponent &control,
-    std::string *final_cmd_out) {
+RunResult FilesystemAppService::ShellRun(const std::string &nickname,
+                                         const std::string &workdir,
+                                         const std::string &cmd,
+                                         const ClientControlComponent &control,
+                                         std::string *final_cmd_out) {
   RunResult out = {};
   if (AMStr::Strip(cmd).empty()) {
     out.rcm = Err(EC::InvalidArg, "Command is empty");

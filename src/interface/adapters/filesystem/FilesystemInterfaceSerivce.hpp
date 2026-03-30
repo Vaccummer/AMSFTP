@@ -41,6 +41,14 @@ struct FilesystemGetSizeArg {
   std::vector<std::string> raw_paths = {};
 };
 
+struct FilesystemFindArg {
+  std::string raw_path = {};
+};
+
+struct FilesystemRealpathArg {
+  std::string raw_path = {};
+};
+
 struct FilesystemTreeArg {
   std::string raw_path = {};
   int max_depth = -1;
@@ -117,6 +125,12 @@ public:
   ECM GetSize(const FilesystemGetSizeArg &arg,
               const std::optional<AMDomain::client::ClientControlComponent>
                   &control_opt = std::nullopt) const;
+  ECM Find(const FilesystemFindArg &arg,
+           const std::optional<AMDomain::client::ClientControlComponent>
+               &control_opt = std::nullopt) const;
+  ECM Realpath(const FilesystemRealpathArg &arg,
+               const std::optional<AMDomain::client::ClientControlComponent>
+                   &control_opt = std::nullopt) const;
   ECM Tree(const FilesystemTreeArg &arg,
            const std::optional<AMDomain::client::ClientControlComponent>
                &control_opt = std::nullopt) const;
