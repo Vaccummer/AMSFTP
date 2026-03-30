@@ -1,0 +1,718 @@
+#include "application/transfer/TransferAppService.hpp"
+#include "application/client/ClientAppService.hpp"
+#include "application/filesystem/FilesystemAppService.hpp"
+#include "foundation/tools/string.hpp"
+#include "foundation/tools/time.hpp"
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <unordered_set>
+
+namespace AMApplication::TransferWorkflow {
+namespace {
+using EC = ErrorCode;
+using ClientPath = AMDomain::filesystem::ClientPath;
+using TransferTask = AMDomain::transfer::TransferTask;
+using TaskStatus = AMDomain::transfer::TaskStatus;
+using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
+using ClientHandle = AMDomain::client::ClientHandle;
+
+constexpr int kTaskPollIntervalMs = 80;
+
+std::string NormalizeHostKey_(const std::string &nickname) {
+  const std::string host = AMStr::Strip(nickname);
+  return host.empty() ? std::string("local") : host;
+}
+
+std::string BuildTransferTaskKey_(const TransferTask &task) {
+  return AMStr::fmt("{}\t{}\t{}\t{}\t{}", task.src_host, task.src, task.dst_host,
+                    task.dst, static_cast<int>(task.path_type));
+}
+
+void DedupTasks_(std::vector<TransferTask> *tasks) {
+  if (!tasks || tasks->empty()) {
+    return;
+  }
+  std::unordered_set<std::string> seen = {};
+  std::vector<TransferTask> dedup = {};
+  dedup.reserve(tasks->size());
+  for (const auto &task : *tasks) {
+    const std::string key = BuildTransferTaskKey_(task);
+    if (seen.insert(key).second) {
+      dedup.push_back(task);
+    }
+  }
+  tasks->swap(dedup);
+}
+
+void PutPrimaryClient_(TransferClientContainer *clients,
+                       const std::string &nickname, const ClientHandle &client) {
+  if (!clients || !client) {
+    return;
+  }
+  auto &slot = (*clients)[NormalizeHostKey_(nickname)];
+  if (std::holds_alternative<ClientHandle>(slot)) {
+    auto &primary = std::get<ClientHandle>(slot);
+    if (!primary) {
+      primary = client;
+    }
+    return;
+  }
+  auto &pair_slot = std::get<std::pair<ClientHandle, ClientHandle>>(slot);
+  if (!pair_slot.first) {
+    pair_slot.first = client;
+  }
+}
+
+void PutSecondaryClient_(TransferClientContainer *clients,
+                         const std::string &nickname,
+                         const ClientHandle &client) {
+  if (!clients || !client) {
+    return;
+  }
+  auto &slot = (*clients)[NormalizeHostKey_(nickname)];
+  if (std::holds_alternative<ClientHandle>(slot)) {
+    ClientHandle primary = std::get<ClientHandle>(slot);
+    slot = std::make_pair(primary ? primary : client, client);
+    return;
+  }
+  auto &pair_slot = std::get<std::pair<ClientHandle, ClientHandle>>(slot);
+  if (!pair_slot.first) {
+    pair_slot.first = client;
+  }
+  if (!pair_slot.second) {
+    pair_slot.second = client;
+  }
+}
+} // namespace
+
+TransferAppService::TransferAppService(
+    AMApplication::client::ClientAppService &client_service,
+    std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort>
+        transfer_pool,
+    std::shared_ptr<AMApplication::filesystem::FilesystemAppService>
+        filesystem_service)
+    : client_service_(&client_service),
+      filesystem_service_(std::move(filesystem_service)),
+      transfer_pool_(std::move(transfer_pool)),
+      runtime_pool_(AMDomain::transfer::CreateTransferPoolPort()) {}
+
+ECM TransferAppService::Init() {
+  if (!runtime_pool_) {
+    return Err(EC::InvalidHandle, "Transfer runtime pool is not initialized");
+  }
+  return Ok();
+}
+
+ECM TransferAppService::Transfer(
+    const std::vector<UserTransferSet> &transfer_sets, bool quiet) {
+  return TransferWithControl(transfer_sets, quiet, nullptr);
+}
+
+ECM TransferAppService::TransferAsync(
+    const std::vector<UserTransferSet> &transfer_sets, bool quiet) {
+  return TransferAsyncWithControl(transfer_sets, quiet, nullptr);
+}
+
+ECM TransferAppService::TransferWithControl(
+    const std::vector<UserTransferSet> &transfer_sets, bool quiet,
+    AMDomain::client::amf control_token, TransferConfirmPolicy confirm_policy,
+    const WildcardConfirmFn &confirm_wildcard, std::vector<ECM> *warnings) {
+  if (!client_service_) {
+    return Err(EC::InvalidHandle, "Client app service is not bound");
+  }
+  const AMDomain::client::ClientControlComponent control =
+      client_service_->GetControlComponent(control_token, -1);
+  std::vector<WildcardConfirmRequest> confirm_requests = {};
+  auto [prepare_rcm, task_info] =
+      PrepareTasks_(transfer_sets, quiet, control, &confirm_requests, warnings);
+  if (!isok(prepare_rcm)) {
+    return prepare_rcm;
+  }
+
+  ECM confirm_rcm =
+      ResolveWildcardConfirm_(confirm_requests, confirm_policy, confirm_wildcard);
+  if (!isok(confirm_rcm)) {
+    return confirm_rcm;
+  }
+
+  const ECM submit_rcm =
+      runtime_pool_->Submit(task_info, task_info->Core.clients);
+  if (!isok(submit_rcm)) {
+    return submit_rcm;
+  }
+  return WaitTask_(task_info->id, control);
+}
+
+ECM TransferAppService::TransferAsyncWithControl(
+    const std::vector<UserTransferSet> &transfer_sets, bool quiet,
+    AMDomain::client::amf control_token, TransferConfirmPolicy confirm_policy,
+    const WildcardConfirmFn &confirm_wildcard, std::vector<ECM> *warnings) {
+  if (!client_service_) {
+    return Err(EC::InvalidHandle, "Client app service is not bound");
+  }
+  const AMDomain::client::ClientControlComponent control =
+      client_service_->GetControlComponent(control_token, -1);
+  std::vector<WildcardConfirmRequest> confirm_requests = {};
+  auto [prepare_rcm, task_info] =
+      PrepareTasks_(transfer_sets, quiet, control, &confirm_requests, warnings);
+  if (!isok(prepare_rcm)) {
+    return prepare_rcm;
+  }
+  ECM confirm_rcm =
+      ResolveWildcardConfirm_(confirm_requests, confirm_policy, confirm_wildcard);
+  if (!isok(confirm_rcm)) {
+    return confirm_rcm;
+  }
+  return runtime_pool_->Submit(task_info, task_info->Core.clients);
+}
+
+std::vector<TransferAppService::ID> TransferAppService::ListTaskIds() const {
+  std::vector<ID> ids = {};
+  if (!runtime_pool_) {
+    return ids;
+  }
+  std::unordered_set<ID> seen = {};
+  auto add_ids = [&ids, &seen](const auto &map_data) {
+    for (const auto &[id, task_info] : map_data) {
+      if (!task_info || id.empty()) {
+        continue;
+      }
+      if (seen.insert(id).second) {
+        ids.push_back(id);
+      }
+    }
+  };
+  add_ids(runtime_pool_->GetPendingTasks());
+  add_ids(runtime_pool_->GetConductingTasks());
+  add_ids(runtime_pool_->GetAllHistoryTasks());
+  std::sort(ids.begin(), ids.end());
+  return ids;
+}
+
+TaskSummaryView
+TransferAppService::BuildTaskSummaryView_(const std::shared_ptr<TaskInfo> &task_info) {
+  TaskSummaryView out = {};
+  if (!task_info) {
+    return out;
+  }
+  out.id = task_info->id;
+  out.status = task_info->GetStatus();
+  out.result = task_info->GetResult();
+  out.success_filenum =
+      task_info->Size.success_filenum.load(std::memory_order_relaxed);
+  out.filenum = task_info->Size.filenum.load(std::memory_order_relaxed);
+  out.total_transferred_size =
+      task_info->Size.transferred.load(std::memory_order_relaxed);
+  out.total_size = task_info->Size.total.load(std::memory_order_relaxed);
+  out.submit_time = task_info->Time.submit.load(std::memory_order_relaxed);
+  out.start_time = task_info->Time.start.load(std::memory_order_relaxed);
+  out.finished_time = task_info->Time.finish.load(std::memory_order_relaxed);
+  out.running_thread = task_info->Set.OnWhichThread.load(std::memory_order_relaxed);
+  return out;
+}
+
+ECM TransferAppService::ListTaskSummaries(
+    std::vector<TaskSummaryView> *out_summaries) const {
+  if (!out_summaries) {
+    return Err(EC::InvalidArg, "null task summary output");
+  }
+  out_summaries->clear();
+  if (!runtime_pool_) {
+    return Err(EC::InvalidHandle, "Transfer runtime pool is not initialized");
+  }
+  for (const auto &id : ListTaskIds()) {
+    auto task_info = FindTask(id);
+    if (!task_info) {
+      continue;
+    }
+    out_summaries->push_back(BuildTaskSummaryView_(task_info));
+  }
+  return Ok();
+}
+
+std::shared_ptr<TaskInfo> TransferAppService::FindTask(const ID &task_id) const {
+  if (!runtime_pool_ || task_id.empty()) {
+    return nullptr;
+  }
+  auto active = runtime_pool_->GetActiveTask(task_id);
+  if (active) {
+    return active;
+  }
+  return runtime_pool_->GetResultTask(task_id, false);
+}
+
+ECM TransferAppService::GetTaskView(const ID &task_id, bool include_sets,
+                                    bool include_entries,
+                                    TaskView *out_view) const {
+  if (!out_view) {
+    return Err(EC::InvalidArg, "null task view output");
+  }
+  auto task_info = FindTask(task_id);
+  if (!task_info) {
+    return Err(EC::TaskNotFound, AMStr::fmt("Task not found: {}", task_id));
+  }
+
+  out_view->summary = BuildTaskSummaryView_(task_info);
+  out_view->entries.clear();
+  out_view->transfer_sets.clear();
+
+  if (include_entries) {
+    auto tasks = task_info->Core.tasks.lock();
+    size_t index = 1;
+    out_view->entries.reserve(tasks->size());
+    for (const auto &task : *tasks) {
+      TaskEntryView row = {};
+      row.index = index++;
+      row.path_type = task.path_type;
+      row.src_host = task.src_host;
+      row.src = task.src;
+      row.dst_host = task.dst_host;
+      row.dst = task.dst;
+      row.size = task.size;
+      row.transferred = task.transferred;
+      row.result = task.rcm;
+      out_view->entries.push_back(std::move(row));
+    }
+  }
+
+  if (include_sets && task_info->Set.transfer_sets) {
+    size_t index = 1;
+    out_view->transfer_sets.reserve(task_info->Set.transfer_sets->size());
+    for (const auto &set : *task_info->Set.transfer_sets) {
+      TransferSetView row = {};
+      row.index = index++;
+      row.srcs = set.srcs;
+      row.dst = set.dst;
+      row.clone = set.clone;
+      row.mkdir = set.mkdir;
+      row.overwrite = set.overwrite;
+      row.ignore_special_file = set.ignore_special_file;
+      row.resume = set.resume;
+      out_view->transfer_sets.push_back(std::move(row));
+    }
+  }
+  return Ok();
+}
+
+void TransferAppService::GetTaskCounts(size_t *pending_count,
+                                       size_t *conducting_count) const {
+  if (pending_count) {
+    *pending_count = 0;
+  }
+  if (conducting_count) {
+    *conducting_count = 0;
+  }
+  if (!runtime_pool_) {
+    return;
+  }
+  if (pending_count) {
+    *pending_count = runtime_pool_->GetPendingTasks().size();
+  }
+  if (conducting_count) {
+    *conducting_count = runtime_pool_->GetConductingTasks().size();
+  }
+}
+
+ECM TransferAppService::Thread(int num) {
+  if (!runtime_pool_) {
+    return Err(EC::InvalidHandle, "Transfer runtime pool is not initialized");
+  }
+  if (num < 0) {
+    return ECM{EC::Success,
+               std::to_string(runtime_pool_->ThreadCount(0))};
+  }
+  const size_t new_count =
+      runtime_pool_->ThreadCount(static_cast<size_t>(std::max(1, num)));
+  return ECM{EC::Success, std::to_string(new_count)};
+}
+
+ECM TransferAppService::SetWorkerThreadCount(size_t count) {
+  if (!runtime_pool_) {
+    return Err(EC::InvalidHandle, "Transfer runtime pool is not initialized");
+  }
+  runtime_pool_->ThreadCount(count);
+  return Ok();
+}
+
+ECM TransferAppService::Terminate(const std::vector<ID> &task_ids,
+                                  int timeout_ms) {
+  if (task_ids.empty()) {
+    return Err(EC::InvalidArg, "Task id list is empty");
+  }
+  ECM status = Ok();
+  for (const auto &task_id : task_ids) {
+    ECM rcm = Terminate(task_id, timeout_ms);
+    if (!isok(rcm)) {
+      status = rcm;
+    }
+  }
+  return status;
+}
+
+ECM TransferAppService::Terminate(const ID &task_id, int timeout_ms) {
+  if (!runtime_pool_) {
+    return Err(EC::InvalidHandle, "Transfer runtime pool is not initialized");
+  }
+  return runtime_pool_->Terminate(task_id, timeout_ms).second;
+}
+
+ECM TransferAppService::Pause(const std::vector<ID> &task_ids) {
+  if (task_ids.empty()) {
+    return Err(EC::InvalidArg, "Task id list is empty");
+  }
+  ECM status = Ok();
+  for (const auto &task_id : task_ids) {
+    ECM rcm = Pause(task_id);
+    if (!isok(rcm)) {
+      status = rcm;
+    }
+  }
+  return status;
+}
+
+ECM TransferAppService::Pause(const ID &task_id) {
+  if (!runtime_pool_) {
+    return Err(EC::InvalidHandle, "Transfer runtime pool is not initialized");
+  }
+  return runtime_pool_->Pause(task_id);
+}
+
+ECM TransferAppService::Resume(const std::vector<ID> &task_ids) {
+  if (task_ids.empty()) {
+    return Err(EC::InvalidArg, "Task id list is empty");
+  }
+  ECM status = Ok();
+  for (const auto &task_id : task_ids) {
+    ECM rcm = Resume(task_id);
+    if (!isok(rcm)) {
+      status = rcm;
+    }
+  }
+  return status;
+}
+
+ECM TransferAppService::Resume(const ID &task_id) {
+  if (!runtime_pool_) {
+    return Err(EC::InvalidHandle, "Transfer runtime pool is not initialized");
+  }
+  return runtime_pool_->Resume(task_id);
+}
+
+ECM TransferAppService::Retry(const ID &task_id, bool is_async, bool quiet,
+                              const std::vector<int> &indices) {
+  (void)indices;
+  TaskView task_view = {};
+  ECM view_rcm = GetTaskView(task_id, true, false, &task_view);
+  if (!isok(view_rcm)) {
+    return view_rcm;
+  }
+  if (task_view.transfer_sets.empty()) {
+    return Err(EC::InvalidArg,
+               AMStr::fmt("Task {} has no transfer sets", task_id));
+  }
+  std::vector<UserTransferSet> transfer_sets = {};
+  transfer_sets.reserve(task_view.transfer_sets.size());
+  for (const auto &set : task_view.transfer_sets) {
+    UserTransferSet transfer_set = {};
+    transfer_set.srcs = set.srcs;
+    transfer_set.dst = set.dst;
+    transfer_set.clone = set.clone;
+    transfer_set.mkdir = set.mkdir;
+    transfer_set.overwrite = set.overwrite;
+    transfer_set.ignore_special_file = set.ignore_special_file;
+    transfer_set.resume = set.resume;
+    transfer_sets.push_back(std::move(transfer_set));
+  }
+  return is_async ? TransferAsync(transfer_sets, quiet)
+                  : Transfer(transfer_sets, quiet);
+}
+
+ECM TransferAppService::CacheDeprecatedError_() {
+  return Err(EC::OperationUnsupported,
+             "Transfer cache is deprecated; use direct transfer submit "
+             "(sync/async).");
+}
+
+size_t TransferAppService::AddCachedTransferSet(
+    const UserTransferSet &transfer_set) {
+  (void)transfer_set;
+  return 0;
+}
+
+size_t TransferAppService::RemoveCachedTransferSets(
+    const std::vector<size_t> &set_indices) {
+  (void)set_indices;
+  return 0;
+}
+
+size_t TransferAppService::RemoveCachedTransferSets(
+    const std::vector<size_t> &set_indices, std::vector<ECM> *warnings) {
+  (void)set_indices;
+  if (warnings) {
+    warnings->push_back(CacheDeprecatedError_());
+  }
+  return 0;
+}
+
+void TransferAppService::ClearCachedTransferSets() {}
+
+ECM TransferAppService::SubmitCachedTransferSets(bool quiet, bool is_async) {
+  (void)quiet;
+  (void)is_async;
+  return CacheDeprecatedError_();
+}
+
+ECM TransferAppService::QueryCachedTransferSet(size_t set_index) const {
+  (void)set_index;
+  return CacheDeprecatedError_();
+}
+
+ECM TransferAppService::GetCachedTransferSet(size_t set_index,
+                                             UserTransferSet *out_set) const {
+  (void)set_index;
+  (void)out_set;
+  return CacheDeprecatedError_();
+}
+
+ECM TransferAppService::GetCachedTransferSetView(size_t set_index,
+                                                 TransferSetView *out_view) const {
+  (void)set_index;
+  (void)out_view;
+  return CacheDeprecatedError_();
+}
+
+std::vector<size_t> TransferAppService::ListCachedTransferSetIds() const {
+  return {};
+}
+
+std::vector<UserTransferSet> TransferAppService::SnapshotCachedTransferSets() const {
+  return {};
+}
+
+std::vector<TransferSetView>
+TransferAppService::SnapshotCachedTransferSetViews() const {
+  return {};
+}
+
+ECM TransferAppService::SubmitCachedTransferSetsWithControl(
+    bool quiet, bool is_async, AMDomain::client::amf control_token,
+    TransferConfirmPolicy confirm_policy, const WildcardConfirmFn &confirm_wildcard,
+    std::vector<ECM> *warnings) {
+  (void)quiet;
+  (void)is_async;
+  (void)control_token;
+  (void)confirm_policy;
+  (void)confirm_wildcard;
+  if (warnings) {
+    warnings->push_back(CacheDeprecatedError_());
+  }
+  return CacheDeprecatedError_();
+}
+
+std::string TransferAppService::BuildTaskId_() {
+  static std::atomic<uint64_t> seq{1};
+  const uint64_t id = seq.fetch_add(1, std::memory_order_relaxed);
+  return AMStr::fmt("T{}-{}", static_cast<uint64_t>(AMTime::miliseconds()), id);
+}
+
+std::pair<ECM, std::shared_ptr<TaskInfo>> TransferAppService::PrepareTasks_(
+    const std::vector<UserTransferSet> &transfer_sets, bool quiet,
+    const AMDomain::client::ClientControlComponent &control,
+    std::vector<WildcardConfirmRequest> *confirm_requests,
+    std::vector<ECM> *warnings) const {
+  if (!filesystem_service_) {
+    return {Err(EC::InvalidHandle, "Filesystem app service is not bound"),
+            nullptr};
+  }
+  if (transfer_sets.empty()) {
+    return {Err(EC::InvalidArg, "Transfer set list is empty"), nullptr};
+  }
+
+  std::vector<TransferTask> all_tasks = {};
+  TransferClientContainer clients = {};
+  std::unordered_set<std::string> nicknames = {};
+
+  for (const auto &set : transfer_sets) {
+    if (control.IsInterrupted()) {
+      return {Err(EC::Terminate, "Interrupted before task generation"), nullptr};
+    }
+    if (control.IsTimeout()) {
+      return {Err(EC::OperationTimeout, "Timeout before task generation"),
+              nullptr};
+    }
+
+    if (confirm_requests) {
+      for (const auto &src : set.srcs) {
+        if (!src.is_wildcard) {
+          continue;
+        }
+        auto find_result =
+            filesystem_service_->find(src, SearchType::All, control);
+        if (!isok(find_result.rcm)) {
+          return {find_result.rcm, nullptr};
+        }
+        confirm_requests->push_back(
+            {find_result.data, src.nickname, set.dst.nickname});
+      }
+    }
+
+    auto resolved_dst = filesystem_service_->ResolveTransferDst(set.dst, control);
+    if (!isok(resolved_dst.rcm)) {
+      return {resolved_dst.rcm, nullptr};
+    }
+
+    auto resolved_src =
+        filesystem_service_->ResolveTransferSrc(set.srcs, &clients, control, true);
+    if (!isok(resolved_src.rcm)) {
+      return {resolved_src.rcm, nullptr};
+    }
+
+    for (const auto &[nickname, transfer_path] : resolved_src.data.data) {
+      if (transfer_path.client) {
+        PutPrimaryClient_(&clients, nickname, transfer_path.client);
+      }
+      nicknames.insert(NormalizeHostKey_(nickname));
+    }
+    if (resolved_dst.data.client) {
+      PutPrimaryClient_(&clients, resolved_dst.data.target.nickname,
+                        resolved_dst.data.client);
+      nicknames.insert(NormalizeHostKey_(resolved_dst.data.target.nickname));
+    }
+
+    AMApplication::filesystem::BuildTransferTaskOptions options = {};
+    options.clone = set.clone;
+    options.mkdir = set.mkdir;
+    options.ignore_special_file = set.ignore_special_file;
+    options.resume = set.resume;
+
+    auto build_result = filesystem_service_->BuildTransferTasks(
+        resolved_src.data, resolved_dst.data, control, options);
+    if (!isok(build_result.rcm)) {
+      return {build_result.rcm, nullptr};
+    }
+    for (auto &task : build_result.data.dir_tasks) {
+      task.overwrite = set.overwrite;
+    }
+    for (auto &task : build_result.data.file_tasks) {
+      task.overwrite = set.overwrite;
+    }
+    all_tasks.insert(all_tasks.end(), build_result.data.dir_tasks.begin(),
+                     build_result.data.dir_tasks.end());
+    all_tasks.insert(all_tasks.end(), build_result.data.file_tasks.begin(),
+                     build_result.data.file_tasks.end());
+    if (warnings) {
+      for (const auto &warning : build_result.data.warnings) {
+        warnings->push_back(
+            Err(warning.rcm.first,
+                AMStr::fmt("{} -> {}: {}", warning.src, warning.dst,
+                           warning.rcm.second)));
+      }
+    }
+  }
+
+  for (const auto &task : all_tasks) {
+    const std::string src_host = NormalizeHostKey_(task.src_host);
+    const std::string dst_host = NormalizeHostKey_(task.dst_host);
+    if (src_host != dst_host) {
+      continue;
+    }
+    auto it = clients.find(src_host);
+    if (it == clients.end()) {
+      continue;
+    }
+    ClientHandle src_client = nullptr;
+    if (std::holds_alternative<ClientHandle>(it->second)) {
+      src_client = std::get<ClientHandle>(it->second);
+    } else {
+      auto pair_slot = std::get<std::pair<ClientHandle, ClientHandle>>(it->second);
+      src_client = pair_slot.first ? pair_slot.first : pair_slot.second;
+    }
+    if (src_client) {
+      PutSecondaryClient_(&clients, src_host, src_client);
+    }
+  }
+
+  DedupTasks_(&all_tasks);
+  if (all_tasks.empty()) {
+    return {Err(EC::InvalidArg, "No transfer task generated"), nullptr};
+  }
+
+  auto task_info = std::make_shared<TaskInfo>();
+  task_info->id = BuildTaskId_();
+  task_info->Set.quiet = quiet;
+  task_info->Core.control = control;
+  task_info->Set.transfer_sets =
+      std::make_shared<std::vector<UserTransferSet>>(transfer_sets);
+  {
+    auto task_lock = task_info->Core.tasks.lock();
+    task_lock.store(all_tasks);
+  }
+  task_info->Core.clients = clients;
+  task_info->Core.nicknames.assign(nicknames.begin(), nicknames.end());
+  task_info->CalTotalSize(true);
+  task_info->CalFileNum(true);
+  return {Ok(), task_info};
+}
+
+ECM TransferAppService::ResolveWildcardConfirm_(
+    const std::vector<WildcardConfirmRequest> &confirm_requests,
+    TransferConfirmPolicy confirm_policy,
+    const WildcardConfirmFn &confirm_wildcard) const {
+  if (confirm_requests.empty()) {
+    return Ok();
+  }
+  if (confirm_policy == TransferConfirmPolicy::AutoApprove) {
+    return Ok();
+  }
+  if (confirm_policy == TransferConfirmPolicy::DenyIfConfirmNeeded) {
+    return Err(EC::ConfigCanceled,
+               "Transfer requires confirmation but session is non-interactive");
+  }
+  if (!confirm_wildcard) {
+    return Err(EC::ConfigCanceled,
+               "Transfer wildcard confirmation callback is not set");
+  }
+  for (const auto &request : confirm_requests) {
+    const bool confirmed =
+        confirm_wildcard(request.matches, request.src_host, request.dst_host);
+    if (!confirmed) {
+      return Err(EC::ConfigCanceled, "Transfer canceled by user");
+    }
+  }
+  return Ok();
+}
+
+ECM TransferAppService::WaitTask_(
+    const ID &task_id, const AMDomain::client::ClientControlComponent &control) const {
+  if (!runtime_pool_) {
+    return Err(EC::InvalidHandle, "Transfer runtime pool is not initialized");
+  }
+  while (true) {
+    if (control.IsInterrupted()) {
+      (void)runtime_pool_->Terminate(task_id, 1000);
+      return Err(EC::Terminate, "Transfer interrupted");
+    }
+    if (control.IsTimeout()) {
+      (void)runtime_pool_->Terminate(task_id, 1000);
+      return Err(EC::OperationTimeout, "Transfer timeout");
+    }
+
+    std::shared_ptr<TaskInfo> done = runtime_pool_->GetResultTask(task_id, false);
+    if (done) {
+      return done->GetResult();
+    }
+
+    auto status = runtime_pool_->GetStatus(task_id);
+    if (!status.has_value()) {
+      return Err(EC::TaskNotFound, AMStr::fmt("Task not found: {}", task_id));
+    }
+    if (*status == TaskStatus::Finished) {
+      done = runtime_pool_->GetResultTask(task_id, false);
+      return done ? done->GetResult() : Ok();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(kTaskPollIntervalMs));
+  }
+}
+} // namespace AMApplication::TransferWorkflow

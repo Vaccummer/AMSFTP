@@ -1,0 +1,131 @@
+#pragma once
+
+#include "application/transfer/TransferWorkflows.hpp"
+#include "foundation/core/DataClass.hpp"
+#include <cstddef>
+#include <string>
+#include <vector>
+
+namespace AMApplication::TaskWorkflow {
+struct SessionMode {
+  bool enforce_interactive = false;
+  bool current_interactive = false;
+  std::string command_name = {};
+};
+
+struct TaskListFilter {
+  bool pending = false;
+  bool suspend = false;
+  bool finished = false;
+  bool conducting = false;
+};
+
+struct TaskInspectOptions {
+  std::string id = {};
+  bool set = false;
+  bool entry = false;
+};
+
+struct TaskRetryOptions {
+  std::string id = {};
+  bool is_async = false;
+  bool quiet = false;
+  std::vector<int> indices = {};
+};
+
+enum class TaskControlAction { Terminate, Pause, Resume };
+
+struct JobCacheSubmitOptions {
+  bool is_async = false;
+  bool quiet = false;
+  std::string async_suffix = {};
+};
+
+struct JobCacheAddResult {
+  ECM rcm = {EC::Success, ""};
+  size_t index = 0;
+  UserTransferSet transfer_set = {};
+};
+
+struct JobCacheRemoveResult {
+  ECM rcm = {EC::Success, ""};
+  std::vector<size_t> removed_indices = {};
+};
+
+struct JobCacheQueryResult {
+  ECM rcm = {EC::Success, ""};
+  std::vector<size_t> queried_indices = {};
+};
+
+class ITaskGateway {
+public:
+  virtual ~ITaskGateway() = default;
+  virtual ECM ListTasks(bool pending, bool suspend, bool finished,
+                        bool conducting) = 0;
+  virtual ECM ShowTasks(const std::vector<std::string> &ids) = 0;
+  virtual ECM InspectTask(const std::string &id, bool show_sets,
+                          bool show_entries) = 0;
+  virtual ECM InspectTaskSets(const std::string &id) = 0;
+  virtual ECM InspectTaskEntries(const std::string &id) = 0;
+  virtual ECM QueryTaskEntry(const std::string &entry_id) = 0;
+  virtual ECM Thread(int num = -1) = 0;
+  virtual ECM TerminateTasks(const std::vector<std::string> &ids) = 0;
+  virtual ECM PauseTasks(const std::vector<std::string> &ids) = 0;
+  virtual ECM ResumeTasks(const std::vector<std::string> &ids) = 0;
+  virtual ECM RetryTask(const std::string &id, bool is_async, bool quiet,
+                        const std::vector<int> &indices) = 0;
+  virtual size_t AddCachedTransferSet(const UserTransferSet &transfer_set) = 0;
+  virtual size_t
+  RemoveCachedTransferSets(const std::vector<size_t> &indices) = 0;
+  virtual void ClearCachedTransferSets() = 0;
+  virtual ECM SubmitCachedTransferSets(bool quiet, bool is_async = false) = 0;
+  virtual ECM QueryCachedTransferSet(size_t index) = 0;
+  [[nodiscard]] virtual std::vector<size_t> ListCachedTransferSetIds() const = 0;
+};
+
+[[nodiscard]] bool IsInteractiveMode(const SessionMode &mode);
+
+ECM EnsureInteractive(const SessionMode &mode);
+
+ECM ExecuteTaskList(ITaskGateway &gateway, const TaskListFilter &filter,
+                    const SessionMode &mode);
+
+ECM ExecuteTaskShow(ITaskGateway &gateway, const std::vector<std::string> &ids,
+                    const SessionMode &mode);
+
+ECM ExecuteTaskInspect(ITaskGateway &gateway, const TaskInspectOptions &options,
+                       const SessionMode &mode);
+
+ECM ExecuteTaskEntryQuery(ITaskGateway &gateway,
+                          const std::vector<std::string> &entry_ids,
+                          const SessionMode &mode);
+
+ECM ExecuteTaskThread(ITaskGateway &gateway, int num, const SessionMode &mode);
+
+ECM ExecuteTaskControl(ITaskGateway &gateway,
+                       const std::vector<std::string> &ids,
+                       TaskControlAction action, const SessionMode &mode);
+
+ECM ExecuteTaskRetry(ITaskGateway &gateway, const TaskRetryOptions &options,
+                     const SessionMode &mode);
+
+JobCacheAddResult
+ExecuteJobCacheAdd(ITaskGateway &gateway,
+                   const TransferWorkflow::TransferBuildArgs &build_args,
+                   const SessionMode &mode);
+
+JobCacheRemoveResult ExecuteJobCacheRemove(ITaskGateway &gateway,
+                                           const std::vector<size_t> &indices,
+                                           const SessionMode &mode);
+
+ECM ExecuteJobCacheClear(ITaskGateway &gateway, const SessionMode &mode);
+
+ECM ExecuteJobCacheSubmit(ITaskGateway &gateway,
+                          const JobCacheSubmitOptions &options,
+                          const SessionMode &mode);
+
+JobCacheQueryResult ExecuteJobCacheQuery(ITaskGateway &gateway,
+                                         const std::vector<size_t> &indices,
+                                         const SessionMode &mode);
+} // namespace AMApplication::TaskWorkflow
+
