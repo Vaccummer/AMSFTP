@@ -400,15 +400,37 @@ AMKnownHostsAppService::KnownHosts() const {
 }
 
 ECM AMKnownHostsAppService::FindKnownHost(KnownHostQuery &query) const {
-  (void)query;
-  return Err(EC::HostConfigNotFound, "known host entry not found");
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+  ECM validate_rcm = AMDomain::host::KnownHostRules::ValidateConfig(query);
+  if (!isok(validate_rcm)) {
+    return validate_rcm;
+  }
+  const auto key = AMDomain::host::KnownHostRules::BuildKnownHostKey(query);
+  auto it = known_hosts_.find(key);
+  if (it == known_hosts_.end()) {
+    return Err(EC::HostConfigNotFound, "known host entry not found");
+  }
+  query = it->second;
+  return Ok();
 }
 
 ECM AMKnownHostsAppService::UpsertKnownHost(const KnownHostQuery &query,
                                             bool overwrite) {
-  (void)overwrite;
-  const std::string key = query.username + "@" + query.hostname + ":" +
-                          std::to_string(query.port);
+  ECM load_rcm = EnsureSnapshotLoaded_();
+  if (!isok(load_rcm)) {
+    return load_rcm;
+  }
+  ECM validate_rcm = AMDomain::host::KnownHostRules::ValidateConfig(query);
+  if (!isok(validate_rcm)) {
+    return validate_rcm;
+  }
+  const auto key = AMDomain::host::KnownHostRules::BuildKnownHostKey(query);
+  if (!overwrite && known_hosts_.find(key) != known_hosts_.end()) {
+    return Err(EC::KeyAlreadyExists, "known host entry already exists");
+  }
   known_hosts_[key] = query;
   return Ok();
 }
