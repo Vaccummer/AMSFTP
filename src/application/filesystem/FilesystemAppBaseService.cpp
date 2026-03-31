@@ -11,9 +11,73 @@ namespace {
 using ClientHandle = AMDomain::client::ClientHandle;
 using ClientMetaData = AMDomain::host::ClientMetaData;
 using HostConfig = AMDomain::host::HostConfig;
+constexpr const char *kTransferLeaseKey = "transfer.lease";
 
 void HashCombine_(size_t &seed, size_t value) {
   seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
+}
+
+ECM AcquireTransferLease_(const ClientHandle &client) {
+  if (!client) {
+    return Err(EC::InvalidHandle, "Client handle is null");
+  }
+  auto &meta = client->MetaDataPort();
+
+  bool lease_acquired = false;
+  bool lease_missing = false;
+  bool type_mismatch = false;
+  meta.MutateNamedValue<bool>(
+      kTransferLeaseKey, [&](bool *leased, bool name_found, bool type_match) {
+        if (!name_found) {
+          lease_missing = true;
+          return;
+        }
+        if (!type_match || !leased) {
+          type_mismatch = true;
+          return;
+        }
+        if (!*leased) {
+          *leased = true;
+          lease_acquired = true;
+        }
+      });
+
+  if (type_mismatch) {
+    return Err(EC::CommonFailure, "transfer.lease metadata type is invalid");
+  }
+  if (lease_acquired) {
+    return Ok();
+  }
+
+  if (lease_missing) {
+    if (meta.StoreNamedData(kTransferLeaseKey, std::any(true), false)) {
+      return Ok();
+    }
+    bool retry_acquired = false;
+    bool retry_type_mismatch = false;
+    meta.MutateNamedValue<bool>(
+        kTransferLeaseKey, [&](bool *leased, bool name_found, bool type_match) {
+          if (!name_found) {
+            return;
+          }
+          if (!type_match || !leased) {
+            retry_type_mismatch = true;
+            return;
+          }
+          if (!*leased) {
+            *leased = true;
+            retry_acquired = true;
+          }
+        });
+    if (retry_type_mismatch) {
+      return Err(EC::CommonFailure, "transfer.lease metadata type is invalid");
+    }
+    if (retry_acquired) {
+      return Ok();
+    }
+  }
+
+  return Err(EC::PathUsingByOthers, "Client is already leased");
 }
 } // namespace
 
@@ -50,14 +114,11 @@ ECMData<std::string> GetClientCwd(ClientHandle client,
     return {"", Err(EC::InvalidHandle, "Client handle is null")};
   }
   std::string cwd = "";
-  {
-    auto meta_guard = client->MetaDataPort().GetLockGaurd();
-    auto *metadata = client->MetaDataPort().QueryTypedValue<ClientMetaData>();
-    if (!metadata) {
-      return {"", Err(EC::CommonFailure, "Client metadata not found")};
-    }
-    cwd = metadata->cwd;
+  auto metadata = client->MetaDataPort().QueryTypedValue<ClientMetaData>();
+  if (!metadata.has_value()) {
+    return {"", Err(EC::CommonFailure, "Client metadata not found")};
   }
+  cwd = metadata->cwd;
   if (!cwd.empty()) {
     return {cwd, Ok()};
   }
@@ -457,10 +518,9 @@ FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
   }
 
   {
-    auto &metadata = create_result.data->MetaDataPort();
-    auto guard = metadata.GetLockGaurd();
-    if (!metadata.StoreNamedData("transfer.lease", std::any(true), true)) {
-      return {nullptr, Err(EC::CommonFailure, "Failed to mark transfer lease")};
+    const ECM lease_rcm = AcquireTransferLease_(create_result.data);
+    if (!isok(lease_rcm)) {
+      return {nullptr, lease_rcm};
     }
   }
 

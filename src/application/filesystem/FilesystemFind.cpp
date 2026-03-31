@@ -1,5 +1,5 @@
 #include "application/filesystem/FilesystemAppService.hpp"
-
+#include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/core/Path.hpp"
 #include "foundation/tools/enum_related.hpp"
@@ -147,14 +147,23 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
   };
   const auto workdir_from_meta = [](const ClientMetaData &meta,
                                     const std::string &home) -> std::string {
-    if (!meta.cwd.empty()) {
-      return meta.cwd;
+    const std::string normalized_cwd =
+        AMDomain::filesystem::services::NormalizePath(AMStr::Strip(meta.cwd));
+    if (!normalized_cwd.empty()) {
+      return normalized_cwd;
     }
-    if (!meta.login_dir.empty()) {
-      return meta.login_dir;
+
+    const std::string normalized_login_dir =
+        AMDomain::filesystem::services::NormalizePath(
+            AMStr::Strip(meta.login_dir));
+    if (!normalized_login_dir.empty()) {
+      return normalized_login_dir;
     }
-    if (!home.empty()) {
-      return home;
+
+    const std::string normalized_home =
+        AMDomain::filesystem::services::NormalizePath(AMStr::Strip(home));
+    if (!normalized_home.empty()) {
+      return normalized_home;
     }
     return ".";
   };
@@ -191,10 +200,10 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
 
   ClientMetaData metadata = {};
   {
-    auto &meta_port = client->MetaDataPort();
-    auto lock = meta_port.GetLockGaurd();
-    if (auto *value = meta_port.QueryTypedValue<ClientMetaData>(); value) {
-      metadata = *value;
+    auto metadata_value =
+        client->MetaDataPort().QueryTypedValue<ClientMetaData>();
+    if (metadata_value.has_value()) {
+      metadata = *metadata_value;
     }
   }
   const std::string home_dir = client->ConfigPort().GetHomeDir();
@@ -360,8 +369,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
           continue;
         }
         auto insert_it =
-            dir_cache.emplace(cur.node.path, std::move(list_result.data))
-                .first;
+            dir_cache.emplace(cur.node.path, std::move(list_result.data)).first;
         children = &(insert_it->second);
       }
 
@@ -407,8 +415,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
         continue;
       }
       auto insert_it =
-          dir_cache.emplace(cur.node.path, std::move(list_result.data))
-              .first;
+          dir_cache.emplace(cur.node.path, std::move(list_result.data)).first;
       children = &(insert_it->second);
     }
 

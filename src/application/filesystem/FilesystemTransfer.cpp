@@ -8,7 +8,6 @@
 #include <algorithm>
 #include <deque>
 #include <unordered_set>
-#include <variant>
 
 namespace AMApplication::filesystem {
 namespace {
@@ -45,16 +44,8 @@ ECM PutSingleClientToContainer_(TransferClientContainer *clients,
     return Err(EC::InvalidHandle, "Client handle is null");
   }
   auto &slot = (*clients)[nickname];
-  if (std::holds_alternative<ClientHandle>(slot)) {
-    auto &primary = std::get<ClientHandle>(slot);
-    if (!primary) {
-      primary = client;
-    }
-    return Ok();
-  }
-  auto &pair_slot = std::get<std::pair<ClientHandle, ClientHandle>>(slot);
-  if (!pair_slot.first) {
-    pair_slot.first = client;
+  if (!slot.first) {
+    slot.first = client;
   }
   return Ok();
 }
@@ -196,11 +187,7 @@ ECMData<SourceResolveResult> FilesystemAppService::ResolveTransferSrc(
     if (it == clients->end()) {
       return nullptr;
     }
-    if (std::holds_alternative<ClientHandle>(it->second)) {
-      return std::get<ClientHandle>(it->second);
-    }
-    const auto &pair_slot =
-        std::get<std::pair<ClientHandle, ClientHandle>>(it->second);
+    const auto &pair_slot = it->second;
     if (pair_slot.first) {
       return pair_slot.first;
     }

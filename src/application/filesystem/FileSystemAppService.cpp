@@ -25,14 +25,23 @@ bool IsDrivePart_(const std::string &part) {
 
 std::string ResolveWorkdir_(const ClientMetaData &metadata,
                             const std::string &home_dir) {
-  if (!metadata.cwd.empty()) {
-    return metadata.cwd;
+  const std::string normalized_cwd =
+      AMDomain::filesystem::services::NormalizePath(AMStr::Strip(metadata.cwd));
+  if (!normalized_cwd.empty()) {
+    return normalized_cwd;
   }
-  if (!metadata.login_dir.empty()) {
-    return metadata.login_dir;
+
+  const std::string normalized_login_dir =
+      AMDomain::filesystem::services::NormalizePath(
+          AMStr::Strip(metadata.login_dir));
+  if (!normalized_login_dir.empty()) {
+    return normalized_login_dir;
   }
-  if (!home_dir.empty()) {
-    return home_dir;
+
+  const std::string normalized_home =
+      AMDomain::filesystem::services::NormalizePath(AMStr::Strip(home_dir));
+  if (!normalized_home.empty()) {
+    return normalized_home;
   }
   return ".";
 }
@@ -330,6 +339,91 @@ FilesystemAppService::GetCwd(const ClientControlComponent &control) {
   return {std::move(out), Ok()};
 }
 
+ECM FilesystemAppService::EnsureClientWorkdir(
+    ClientHandle client, const ClientControlComponent &control) {
+  if (!client) {
+    return Err(EC::InvalidHandle, "Client handle is null");
+  }
+  auto metadata_opt = client->MetaDataPort().QueryTypedValue<ClientMetaData>();
+  if (!metadata_opt.has_value()) {
+    return Err(EC::CommonFailure, "Client metadata not found");
+  }
+  ClientMetaData metadata = *metadata_opt;
+
+  const std::string normalized_home = AMDomain::filesystem::services::NormalizePath(
+      AMStr::Strip(client->ConfigPort().GetHomeDir()));
+  const auto try_resolve_dir =
+      [&](const std::string &raw_candidate) -> ECMData<std::string> {
+    const std::string normalized_candidate =
+        AMDomain::filesystem::services::NormalizePath(
+            AMStr::Strip(raw_candidate));
+    if (normalized_candidate.empty()) {
+      return {"", Err(EC::InvalidArg, "empty workdir candidate")};
+    }
+    std::string absolute_path =
+        ResolveAbsolutePath_(client, metadata, normalized_candidate);
+    absolute_path =
+        AMDomain::filesystem::services::NormalizePath(absolute_path);
+    if (absolute_path.empty()) {
+      return {"", Err(EC::InvalidArg, "invalid workdir candidate")};
+    }
+
+    auto stat_result = client->IOPort().stat({absolute_path, false}, control);
+    if (!isok(stat_result.rcm)) {
+      return {"", stat_result.rcm};
+    }
+    if (stat_result.info.type != PathType::DIR) {
+      return {"", Err(EC::NotADirectory,
+                      AMStr::fmt("Not a directory: {}", absolute_path))};
+    }
+
+    std::string resolved =
+        AMDomain::filesystem::services::NormalizePath(stat_result.info.path);
+    if (resolved.empty()) {
+      resolved = absolute_path;
+    }
+    return {resolved, Ok()};
+  };
+
+  std::string resolved_workdir = {};
+  if (!AMStr::Strip(metadata.cwd).empty()) {
+    auto cwd_result = try_resolve_dir(metadata.cwd);
+    if (isok(cwd_result.rcm)) {
+      resolved_workdir = std::move(cwd_result.data);
+    }
+  }
+  if (resolved_workdir.empty() && !AMStr::Strip(metadata.login_dir).empty()) {
+    auto login_result = try_resolve_dir(metadata.login_dir);
+    if (isok(login_result.rcm)) {
+      resolved_workdir = std::move(login_result.data);
+    }
+  }
+  if (resolved_workdir.empty() && !normalized_home.empty()) {
+    auto home_result = try_resolve_dir(normalized_home);
+    if (isok(home_result.rcm)) {
+      resolved_workdir = std::move(home_result.data);
+    }
+  }
+
+  if (resolved_workdir.empty()) {
+    resolved_workdir = normalized_home.empty() ? "." : normalized_home;
+  }
+
+  bool metadata_updated = false;
+  client->MetaDataPort().MutateTypeValue<ClientMetaData>(
+      [&](ClientMetaData *meta) {
+        if (!meta) {
+          return;
+        }
+        meta->cwd = resolved_workdir;
+        metadata_updated = true;
+      });
+  if (!metadata_updated) {
+    return Err(EC::CommonFailure, "Client metadata not found");
+  }
+  return Ok();
+}
+
 ECMData<ClientPath> FilesystemAppService::PeekCdHistory() const {
   auto history = cd_history_.lock();
   auto list = history.load();
@@ -363,6 +457,14 @@ ECM FilesystemAppService::ChangeDir(ClientPath path,
     return Err(EC::NotADirectory,
                AMStr::fmt("Not a directory: {}", abs_target));
   }
+  std::string resolved_target =
+      AMDomain::filesystem::services::NormalizePath(stat_result.info.path);
+  if (resolved_target.empty()) {
+    resolved_target = AMDomain::filesystem::services::NormalizePath(abs_target);
+  }
+  if (resolved_target.empty()) {
+    resolved_target = abs_target;
+  }
 
   bool metadata_updated = false;
   client->MetaDataPort().MutateTypeValue<ClientMetaData>(
@@ -370,7 +472,7 @@ ECM FilesystemAppService::ChangeDir(ClientPath path,
         if (!meta) {
           return;
         }
-        meta->cwd = abs_target;
+        meta->cwd = resolved_target;
         metadata_updated = true;
       });
   if (!metadata_updated) {
@@ -379,7 +481,7 @@ ECM FilesystemAppService::ChangeDir(ClientPath path,
 
   client_service_->SetCurrentClient(client);
 
-  if (!from_history && !prev_cwd.empty() && prev_cwd != abs_target) {
+  if (!from_history && !prev_cwd.empty() && prev_cwd != resolved_target) {
     auto history = CdHistory().lock();
     auto list = history.load();
     ClientPath entry = {};
