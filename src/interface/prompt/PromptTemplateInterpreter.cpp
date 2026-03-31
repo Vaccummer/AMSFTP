@@ -31,6 +31,21 @@ bool IsIdentifierChar_(char ch) {
          ch == '.' || ch == '-' || ch == ':';
 }
 
+std::string HighlightErrorAt_(const std::string &source, size_t offset) {
+  if (source.empty()) {
+    return "[b][/]";
+  }
+  const size_t index = std::min(offset, source.size() - 1);
+  std::string out;
+  out.reserve(source.size() + 7);
+  out.append(source, 0, index);
+  out += "[b]";
+  out.push_back(source[index]);
+  out += "[/]";
+  out.append(source, index + 1, std::string::npos);
+  return out;
+}
+
 class Parser final {
 public:
   explicit Parser(const std::string &source) : source_(source) {}
@@ -447,8 +462,14 @@ PromptTemplateInterpreter::Parse(const std::string &input) const {
   Parser parser(input);
   PromptTemplateParseResult result = parser.Parse();
   if (result.diagnostics.HasError()) {
+    const auto &diag = result.diagnostics.items.front();
+    const size_t index =
+        (input.empty() ? static_cast<size_t>(0)
+                       : std::min(diag.offset, input.size() - 1));
+    const std::string msg = AMStr::fmt(
+        "{} at {} of {}", diag.message, index, HighlightErrorAt_(input, index));
     return {std::move(result),
-            Err(EC::InvalidArg, "template grammar diagnostics found")};
+            Err(EC::InvalidArg, msg)};
   }
   return {std::move(result), Ok()};
 }
