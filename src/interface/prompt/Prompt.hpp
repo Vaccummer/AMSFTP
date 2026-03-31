@@ -18,6 +18,10 @@
 #include <utility>
 #include <vector>
 
+namespace AMInterface::parser {
+class TokenTypeAnalyzer;
+}
+
 namespace AMInterface::prompt {
 using AMApplication::prompt::PromptHistoryManager;
 using AMApplication::prompt::PromptProfileManager;
@@ -109,7 +113,15 @@ public:
       const std::string &prompt, const std::string &placeholder,
       std::string *out_input,
       const std::vector<std::pair<std::string, std::string>> &literals);
-  bool PromptCore(const std::string &prompt, std::string *out_input);
+  /**
+   * @brief Read one command line using a full rendered prompt string.
+   *
+   * When @p prompt contains newline separators, PromptCore prints all leading
+   * lines and only passes the last line into readline as the editable prompt.
+   */
+  bool PromptCore(
+      const std::string &prompt, std::string *out_input,
+      AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer = nullptr);
 
   ECM Edit(const std::string &nickname);
   ECM Get(const std::vector<std::string> &nicknames);
@@ -129,6 +141,9 @@ private:
     std::atomic<bool> prompt_active_{false};
     std::atomic<bool> secure_phase_{false};
     std::atomic<bool> refresh_diff_mode_{true};
+    std::atomic<bool> refresh_detached_mode_{false};
+    std::string active_prompt_header_;
+    std::atomic<bool> has_active_prompt_header_{false};
   };
 
   static std::string EnsureTrailingNewline_(const std::string &text);
@@ -139,6 +154,10 @@ private:
   static void AppendClearRows_(std::string *frame, int rows);
   void AppendRowDiffUpdate_(std::string *frame, const std::string &old_line,
                             const std::string &new_line) const;
+  void SetActivePromptHeader_(const std::string &header);
+  void ClearActivePromptHeader_();
+  [[nodiscard]] bool ShouldReplayPromptHeader_() const;
+  [[nodiscard]] std::string BuildReplayFrame_(const std::string &msg);
   void PrintSyncLocked_(const std::string &text);
   void PrintInsertAndRepaintLocked_(const std::string &msg);
   void RepaintRefreshLocked_();
@@ -150,6 +169,12 @@ private:
   std::vector<std::string> refresh_lines_;
   std::vector<std::string> painted_refresh_lines_;
   int painted_refresh_rows_ = 0;
+};
+
+class AMPromptIOManager final : public PromptIOManager {
+public:
+  using PromptIOManager::PromptIOManager;
+  ~AMPromptIOManager() override = default;
 };
 
 } // namespace AMInterface::prompt

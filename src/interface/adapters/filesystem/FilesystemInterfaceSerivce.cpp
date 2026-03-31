@@ -494,13 +494,24 @@ ECM FilesystemInterfaceSerivce::GetSize(
       target = std::move(match_result.data);
     }
 
-    const std::string label = interface_print::BuildPathLabel(target);
     auto pre_stat = filesystem_service_.Stat(target, control, false);
     if (!pre_stat.rcm) {
+      const std::string label = interface_print::BuildPathLabel(target);
       interface_print::PrintPathError(prompt_io_manager_, label, pre_stat.rcm);
       status = MergeStatus_(status, pre_stat.rcm);
       continue;
     }
+    ClientPath display_target = target;
+    display_target.nickname = NormalizeNickname_(display_target.nickname);
+    if (!pre_stat.data.path.empty()) {
+      display_target.path = NormalizePath_(pre_stat.data.path);
+    } else {
+      display_target.path = NormalizePath_(display_target.path);
+    }
+    if (display_target.path.empty()) {
+      display_target.path = ".";
+    }
+    const std::string label = interface_print::BuildPathLabel(display_target);
 
     if (pre_stat.data.type != PathType::DIR) {
       prompt_io_manager_.Print(
@@ -538,7 +549,9 @@ ECM FilesystemInterfaceSerivce::GetSize(
     if (refresh_started) {
       prompt_io_manager_.RefreshEnd();
     }
-
+    if (!has_progress && isok(size_result.rcm)) {
+      latest_size = AMStr::FormatSize(size_result.data);
+    }
     prompt_io_manager_.Print(AMStr::fmt("{} {}", label, latest_size));
 
     if (!size_result.rcm) {

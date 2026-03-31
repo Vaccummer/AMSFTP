@@ -26,7 +26,7 @@ namespace {
 //   if (!henv || !input || !arg) {
 //     return;
 //   }
-//   AMTokenTypeAnalyzer &analyzer = AMTokenTypeAnalyzer::Instance();
+//   AMInterface::parser::TokenTypeAnalyzer &analyzer = ...;
 //   std::string formatted;
 //   analyzer.HighlightFormatted(input, &formatted);
 //   if (formatted.empty()) {
@@ -69,6 +69,29 @@ struct PromptValueQueryContext {
   std::string valid_tag;
   std::string invalid_tag;
 };
+
+void SplitPromptForReadline_(const std::string &full_prompt,
+                             std::string *header, std::string *line) {
+  if (header) {
+    header->clear();
+  }
+  if (!line) {
+    return;
+  }
+  line->clear();
+  if (full_prompt.empty()) {
+    return;
+  }
+  const size_t split = full_prompt.find_last_of('\n');
+  if (split == std::string::npos) {
+    *line = full_prompt;
+    return;
+  }
+  if (header) {
+    *header = full_prompt.substr(0, split);
+  }
+  *line = full_prompt.substr(split + 1);
+}
 
 class ScopedAtomicFlag_ {
 public:
@@ -185,16 +208,30 @@ void PromptValueQueryComplete_(ic_completion_env_t *cenv, const char *prefix) {
 
 void PromptIOManager::PrintRaw(const std::string &text) {
   std::string out = text;
+  const bool replay_prompt_header = ShouldReplayPromptHeader_();
+  std::string replay_frame;
+  if (replay_prompt_header) {
+    replay_frame = BuildReplayFrame_(out);
+  }
 
   if (io_state_.refresh_occupied_lines_.load(std::memory_order_relaxed) <= 0) {
-    if (ic_is_editline_active() && ic_print_async(out.c_str())) {
+    if (!replay_prompt_header && ic_is_editline_active() &&
+        ic_print_async(out.c_str())) {
       return;
     }
     std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
     if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
       (void)profile->Use();
     }
-    PrintSyncLocked_(out);
+    if (replay_prompt_header) {
+      PrintSyncLocked_(replay_frame);
+      if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
+          io_state_.secure_phase_.load(std::memory_order_relaxed)) {
+        (void)ic_request_refresh_async();
+      }
+    } else {
+      PrintSyncLocked_(out);
+    }
     return;
   }
 
@@ -208,6 +245,11 @@ void PromptIOManager::PrintRaw(const std::string &text) {
 
 void PromptIOManager::Print(const std::string &text) {
   std::string output = EnsureTrailingNewline_(text);
+  const bool replay_prompt_header = ShouldReplayPromptHeader_();
+  std::string replay_frame;
+  if (replay_prompt_header) {
+    replay_frame = BuildReplayFrame_(output);
+  }
 
   if (IsCacheOutputOnly()) {
     std::lock_guard<std::mutex> lock(io_state_.cached_output_mutex_);
@@ -216,14 +258,23 @@ void PromptIOManager::Print(const std::string &text) {
   }
 
   if (io_state_.refresh_occupied_lines_.load(std::memory_order_relaxed) <= 0) {
-    if (ic_is_editline_active() && ic_print_async(output.c_str())) {
+    if (!replay_prompt_header && ic_is_editline_active() &&
+        ic_print_async(output.c_str())) {
       return;
     }
     std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
     if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
       (void)profile->Use();
     }
-    PrintSyncLocked_(output);
+    if (replay_prompt_header) {
+      PrintSyncLocked_(replay_frame);
+      if (io_state_.prompt_active_.load(std::memory_order_relaxed) ||
+          io_state_.secure_phase_.load(std::memory_order_relaxed)) {
+        (void)ic_request_refresh_async();
+      }
+    } else {
+      PrintSyncLocked_(output);
+    }
     return;
   }
 
@@ -299,6 +350,47 @@ size_t PromptIOManager::CommonPrefixAscii_(const std::string &lhs,
     ++i;
   }
   return i;
+}
+
+void PromptIOManager::SetActivePromptHeader_(const std::string &header) {
+  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+  io_state_.active_prompt_header_ = header;
+  io_state_.has_active_prompt_header_.store(!header.empty(),
+                                            std::memory_order_relaxed);
+}
+
+void PromptIOManager::ClearActivePromptHeader_() {
+  std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+  io_state_.active_prompt_header_.clear();
+  io_state_.has_active_prompt_header_.store(false, std::memory_order_relaxed);
+}
+
+bool PromptIOManager::ShouldReplayPromptHeader_() const {
+  return io_state_.prompt_active_.load(std::memory_order_relaxed) &&
+         io_state_.has_active_prompt_header_.load(std::memory_order_relaxed);
+}
+
+std::string PromptIOManager::BuildReplayFrame_(const std::string &msg) {
+  if (!ShouldReplayPromptHeader_()) {
+    return msg;
+  }
+
+  std::string header;
+  {
+    std::lock_guard<std::mutex> lock(io_state_.print_mutex_);
+    header = io_state_.active_prompt_header_;
+  }
+  if (header.empty()) {
+    return msg;
+  }
+
+  std::string out = msg;
+  if (!out.empty() && out.back() != '\n') {
+    out.push_back('\n');
+  }
+  out += header;
+  out.push_back('\n');
+  return out;
 }
 
 void PromptIOManager::AppendMoveUpRows_(std::string *frame, int rows) {
@@ -457,6 +549,15 @@ void PromptIOManager::RefreshBegin(int lines) {
   if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
     (void)profile->Use();
   }
+  const bool detached_mode =
+      occupied > 0 && painted_refresh_rows_ <= 0 &&
+      !io_state_.prompt_active_.load(std::memory_order_relaxed) &&
+      !io_state_.secure_phase_.load(std::memory_order_relaxed);
+  io_state_.refresh_detached_mode_.store(detached_mode,
+                                         std::memory_order_relaxed);
+  if (detached_mode) {
+    PrintSyncLocked_("\n");
+  }
   io_state_.refresh_occupied_lines_.store(occupied, std::memory_order_relaxed);
   refresh_lines_.assign(static_cast<size_t>(occupied), "");
   RepaintRefreshLocked_();
@@ -489,7 +590,16 @@ void PromptIOManager::RefreshEnd() {
   if (auto profile = CurrentProfile_(isocline_profile_manager_); profile) {
     (void)profile->Use();
   }
+  const bool detached_mode =
+      io_state_.refresh_detached_mode_.exchange(false,
+                                                std::memory_order_relaxed);
+  const int cleared_rows = painted_refresh_rows_;
   ClearRefreshLocked_();
+  if (detached_mode && cleared_rows > 0) {
+    std::string frame;
+    AppendMoveUpRows_(&frame, cleared_rows);
+    PrintSyncLocked_(frame);
+  }
   io_state_.refresh_occupied_lines_.store(0, std::memory_order_relaxed);
 }
 
@@ -681,12 +791,23 @@ bool PromptIOManager::LiteralPrompt(
 /**
  * @brief Prompt for a command line using the shared readline handle.
  */
-bool PromptIOManager::PromptCore(const std::string &prompt,
-                                 std::string *out_input) {
+bool PromptIOManager::PromptCore(
+    const std::string &prompt, std::string *out_input,
+    AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer) {
 
   if (!out_input) {
     return true;
   }
+  out_input->clear();
+
+  std::string prompt_header;
+  std::string prompt_line;
+  SplitPromptForReadline_(prompt, &prompt_header, &prompt_line);
+  if (!prompt_header.empty()) {
+    Print(prompt_header);
+  }
+  SetActivePromptHeader_(prompt_header);
+
   // ScopedPrintCacheLockGuard_ lock(*this);
   // ScopedPromptHookGuard_ hooklock;
   char *line = nullptr;
@@ -694,23 +815,26 @@ bool PromptIOManager::PromptCore(const std::string &prompt,
   auto profile = CurrentProfile_(isocline_profile_manager_);
   if (profile && profile->Use()) {
     std::optional<ic_highlight_fun_t *> highlighter_opt =
-        &AMTokenTypeAnalyzer::PromptHighlighter_;
-    std::optional<void *> highlighter_data_opt = nullptr;
+        &AMInterface::parser::TokenTypeAnalyzer::PromptHighlighter_;
+    std::optional<void *> highlighter_data_opt = token_type_analyzer;
     auto highlighter_guard =
         profile->TemporarySetHighlighter(highlighter_opt, highlighter_data_opt);
     (void)highlighter_guard;
-    line = ic_readline_ex(prompt.c_str(), nullptr);
+    line = ic_readline_ex(prompt_line.c_str(), nullptr);
   } else {
-    ic_set_default_highlighter(&AMTokenTypeAnalyzer::PromptHighlighter_,
-                               nullptr);
-    line = ic_readline_ex(prompt.c_str(), nullptr);
+    ic_set_default_highlighter(
+        &AMInterface::parser::TokenTypeAnalyzer::PromptHighlighter_,
+        token_type_analyzer);
+    line = ic_readline_ex(prompt_line.c_str(), nullptr);
   }
   if (!line) {
+    ClearActivePromptHeader_();
     return false;
   }
   // isocline_profile_manager_.RemoveLastHistoryEntry();
   *out_input = std::string(line);
   ic_free(line);
+  ClearActivePromptHeader_();
   return true;
 }
 
