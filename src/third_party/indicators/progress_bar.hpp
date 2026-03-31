@@ -141,17 +141,19 @@ public:
     }
   }
 
-  void set_progress(size_t new_progress) {
+  void set_progress(size_t new_progress, bool auto_print = true) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       progress_ = new_progress;
     }
 
     save_start_time();
-    print_progress();
+    if (auto_print) {
+      print_progress();
+    }
   }
 
-  void tick() {
+  void tick(bool auto_print = true) {
     {
       std::lock_guard<std::mutex> lock{mutex_};
       const auto type = get_value<details::ProgressBarOption::progress_type>();
@@ -161,7 +163,9 @@ public:
         progress_ -= 1;
     }
     save_start_time();
-    print_progress();
+    if (auto_print) {
+      print_progress();
+    }
   }
 
   size_t current() {
@@ -176,9 +180,11 @@ public:
     return get_value<details::ProgressBarOption::completed>();
   }
 
-  void mark_as_completed() {
+  void mark_as_completed(bool auto_print = true) {
     get_value<details::ProgressBarOption::completed>() = true;
-    print_progress();
+    if (auto_print) {
+      print_progress();
+    }
   }
 
 private:
@@ -280,7 +286,59 @@ private:
     return {result, result_size};
   }
 
+  void update_state_for_render_(bool from_multi_progress) {
+    const auto type = get_value<details::ProgressBarOption::progress_type>();
+    const auto min_progress =
+        get_value<details::ProgressBarOption::min_progress>();
+    const auto max_progress =
+        get_value<details::ProgressBarOption::max_progress>();
+
+    if (multi_progress_mode_ && !from_multi_progress) {
+      if ((type == ProgressType::incremental && progress_ >= max_progress) ||
+          (type == ProgressType::decremental && progress_ <= min_progress)) {
+        get_value<details::ProgressBarOption::completed>() = true;
+      }
+      return;
+    }
+
+    auto now = std::chrono::high_resolution_clock::now();
+    if (!get_value<details::ProgressBarOption::completed>()) {
+      elapsed_ = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          now - start_time_point_);
+    }
+
+    if ((type == ProgressType::incremental && progress_ >= max_progress) ||
+        (type == ProgressType::decremental && progress_ <= min_progress)) {
+      get_value<details::ProgressBarOption::completed>() = true;
+    }
+  }
+
+  std::string build_progress_text_() {
+    std::ostringstream os;
+    os << get_prefix_text().first;
+    os << get_value<details::ProgressBarOption::start>();
+
+    const auto max_progress =
+        get_value<details::ProgressBarOption::max_progress>();
+    const double denom = (max_progress == 0) ? 1.0 : double(max_progress);
+    details::ProgressScaleWriter writer{
+        os, get_value<details::ProgressBarOption::bar_width>(),
+        get_value<details::ProgressBarOption::fill>(),
+        get_value<details::ProgressBarOption::lead>(),
+        get_value<details::ProgressBarOption::remainder>()};
+    writer.write(double(progress_) / denom * 100.0f);
+    os << get_value<details::ProgressBarOption::end>();
+    os << get_postfix_text().first;
+    return os.str();
+  }
+
 public:
+  std::string render_progress_line(bool from_multi_progress = false) {
+    std::lock_guard<std::mutex> lock{mutex_};
+    update_state_for_render_(from_multi_progress);
+    return build_progress_text_();
+  }
+
   void print_progress(bool from_multi_progress = false) {
     std::lock_guard<std::mutex> lock{mutex_};
 
@@ -316,12 +374,13 @@ public:
 
     os << get_value<details::ProgressBarOption::start>();
 
+    const double denom = (max_progress == 0) ? 1.0 : double(max_progress);
     details::ProgressScaleWriter writer{
         os, get_value<details::ProgressBarOption::bar_width>(),
         get_value<details::ProgressBarOption::fill>(),
         get_value<details::ProgressBarOption::lead>(),
         get_value<details::ProgressBarOption::remainder>()};
-    writer.write(double(progress_) / double(max_progress) * 100.0f);
+    writer.write(double(progress_) / denom * 100.0f);
 
     os << get_value<details::ProgressBarOption::end>();
 
