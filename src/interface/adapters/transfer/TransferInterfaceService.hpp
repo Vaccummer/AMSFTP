@@ -5,6 +5,7 @@
 #include "domain/transfer/TransferPort.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -23,7 +24,7 @@ struct TransferRunArg {
   std::vector<AMDomain::transfer::UserTransferSet> transfer_sets = {};
   bool quiet = false;
   bool run_async = false;
-  AMDomain::client::amf control_token = nullptr;
+  int timeout_ms = -1;
   TransferConfirmPolicy confirm_policy = TransferConfirmPolicy::RequireConfirm;
 };
 
@@ -66,7 +67,13 @@ public:
       AMInterface::style::AMStyleService *style_service = nullptr);
   ~TransferInterfaceService() override = default;
 
-  ECM Transfer(const TransferRunArg &arg) const;
+  void SetDefaultControlToken(const AMDomain::client::amf &token);
+  [[nodiscard]] AMDomain::client::amf GetDefaultControlToken() const;
+
+  ECM Transfer(
+      const TransferRunArg &arg,
+      const std::optional<AMDomain::client::ClientControlComponent> &component =
+          std::nullopt) const;
   ECM TaskList(const TransferTaskListArg &arg) const;
   ECM TaskShow(const TransferTaskShowArg &arg) const;
   ECM TaskPause(const TransferTaskControlArg &arg) const;
@@ -94,7 +101,9 @@ private:
   void PrintTaskSets_(
       const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info) const;
   [[nodiscard]] AMDomain::client::ClientControlComponent
-  ResolveControl_(AMDomain::client::amf token) const;
+  ResolveControl_(
+      const std::optional<AMDomain::client::ClientControlComponent> &component,
+      int timeout_ms) const;
   [[nodiscard]] ECM
   ConfirmWildcard_(const std::vector<WildcardConfirmRequest> &requests,
                    TransferConfirmPolicy policy) const;
@@ -104,7 +113,7 @@ private:
                  std::shared_ptr<AMDomain::transfer::TaskInfo> *out_task_info,
                  std::vector<ECM> *warnings) const;
   [[nodiscard]] ECM
-  WaitTask_(const AMDomain::transfer::TaskInfo::ID &task_id,
+  WaitTask_(const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info,
             const AMDomain::client::ClientControlComponent &control) const;
   [[nodiscard]] std::shared_ptr<AMDomain::transfer::TaskInfo>
   FindTask_(const std::string &task_id) const;
@@ -114,5 +123,6 @@ private:
   AMInterface::prompt::AMPromptIOManager &prompt_io_manager_;
   AMDomain::transfer::ITransferPoolPort &transfer_pool_;
   AMInterface::style::AMStyleService *style_service_ = nullptr;
+  AMDomain::client::amf default_control_token_ = nullptr;
 };
 } // namespace AMInterface::transfer
