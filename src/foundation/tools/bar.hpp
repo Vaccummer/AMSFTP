@@ -281,7 +281,7 @@ public:
     UpdatePrefixLocked_();
     bar_.set_option(indicators::option::PrefixText{prefix_field_});
     bar_.set_option(indicators::option::PostfixText{postfix_});
-    bar_.set_progress(static_cast<size_t>(current_size_));
+    bar_.set_progress(static_cast<size_t>(current_size_), false);
   }
 
   /**
@@ -296,7 +296,20 @@ public:
     UpdatePrefixLocked_();
     bar_.set_option(indicators::option::PrefixText{prefix_field_});
     bar_.set_option(indicators::option::PostfixText{postfix_});
-    bar_.set_progress(static_cast<size_t>(current_size_));
+    bar_.set_progress(static_cast<size_t>(current_size_), false);
+  }
+
+  /**
+   * @brief Render one full progress bar line without terminal cursor side
+   * effects.
+   */
+  std::string RenderLine() {
+    std::lock_guard<std::mutex> lock(mtx_);
+    UpdatePostfixLocked_();
+    UpdatePrefixLocked_();
+    bar_.set_option(indicators::option::PrefixText{prefix_field_});
+    bar_.set_option(indicators::option::PostfixText{postfix_});
+    return bar_.render_progress_line();
   }
 
   /**
@@ -349,6 +362,10 @@ public:
    */
   void Print(bool from_group = false) {
     std::lock_guard<std::mutex> lock(mtx_);
+    UpdatePostfixLocked_();
+    UpdatePrefixLocked_();
+    bar_.set_option(indicators::option::PrefixText{prefix_field_});
+    bar_.set_option(indicators::option::PostfixText{postfix_});
     if (!from_group && !showing_) {
       showing_ = true;
       active_count_.fetch_add(1, std::memory_order_relaxed);
