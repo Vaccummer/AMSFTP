@@ -1,8 +1,10 @@
 #include "interface/adapters/transfer/TransferInterfaceService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
+#include "foundation/core/Path.hpp"
+#include "foundation/tools/bar.hpp"
 #include "foundation/tools/string.hpp"
-#include "foundation/tools/time.hpp"
+#include "interface/style/StyleManager.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -20,6 +22,7 @@ using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 using ClientHandle = AMDomain::client::ClientHandle;
 
 constexpr int kTaskPollIntervalMs = 80;
+constexpr int kMinTaskRefreshIntervalMs = 30;
 
 std::string NormalizeNickname_(const std::string &nickname) {
   return AMDomain::host::HostService::NormalizeNickname(nickname);
@@ -57,8 +60,7 @@ void DedupTasks_(std::vector<TransferTask> *tasks) {
 
 std::string BuildTaskId_() {
   static std::atomic<uint64_t> seq{1};
-  const uint64_t id = seq.fetch_add(1, std::memory_order_relaxed);
-  return AMStr::fmt("T{}-{}", static_cast<uint64_t>(AMTime::miliseconds()), id);
+  return AMStr::ToString(seq.fetch_add(1, std::memory_order_relaxed));
 }
 
 void PutPrimaryClient_(TransferClientContainer *clients,
@@ -69,16 +71,8 @@ void PutPrimaryClient_(TransferClientContainer *clients,
   }
   const std::string key = DisplayHost_(nickname);
   auto &slot = (*clients)[key];
-  if (std::holds_alternative<ClientHandle>(slot)) {
-    auto &primary = std::get<ClientHandle>(slot);
-    if (!primary) {
-      primary = client;
-    }
-    return;
-  }
-  auto &pair_slot = std::get<std::pair<ClientHandle, ClientHandle>>(slot);
-  if (!pair_slot.first) {
-    pair_slot.first = client;
+  if (!slot.first) {
+    slot.first = client;
   }
 }
 
@@ -90,18 +84,64 @@ void PutSecondaryClient_(TransferClientContainer *clients,
   }
   const std::string key = DisplayHost_(nickname);
   auto &slot = (*clients)[key];
-  if (std::holds_alternative<ClientHandle>(slot)) {
-    ClientHandle primary = std::get<ClientHandle>(slot);
-    slot = std::make_pair(primary ? primary : client, client);
+  if (!slot.first) {
+    slot.first = client;
+  }
+  if (!slot.second) {
+    slot.second = client;
+  }
+}
+
+void PutDestinationClient_(TransferClientContainer *clients,
+                           const std::string &nickname,
+                           const ClientHandle &client) {
+  if (!clients || !client) {
     return;
   }
-  auto &pair_slot = std::get<std::pair<ClientHandle, ClientHandle>>(slot);
-  if (!pair_slot.first) {
-    pair_slot.first = client;
+  const std::string key = DisplayHost_(nickname);
+  auto &slot = (*clients)[key];
+  if (!slot.first) {
+    slot.first = client;
   }
-  if (!pair_slot.second) {
-    pair_slot.second = client;
+  slot.second = client;
+}
+
+int ResolveTransferProgressRefreshMs_(
+    const AMInterface::style::AMStyleService *style_service) {
+  int refresh_ms = kTaskPollIntervalMs;
+  if (style_service != nullptr) {
+    refresh_ms = static_cast<int>(
+        style_service->GetInitArg().style.progress_bar.refresh_interval_ms);
   }
+  return std::max(kMinTaskRefreshIntervalMs, refresh_ms);
+}
+
+size_t ResolveTransferProgressSpeedWindow_(
+    const AMInterface::style::AMStyleService *style_service) {
+  size_t window = 25;
+  if (style_service != nullptr) {
+    const auto value =
+        style_service->GetInitArg().style.progress_bar.speed_window_size;
+    if (value > 0) {
+      window = static_cast<size_t>(value);
+    }
+  }
+  return std::max<size_t>(1, window);
+}
+
+std::string BuildTransferProgressPrefix_(
+    const std::shared_ptr<TaskInfo> &task_info) {
+  if (!task_info) {
+    return "Task";
+  }
+  auto *cur_task = task_info->Core.cur_task.load(std::memory_order_relaxed);
+  if (cur_task == nullptr) {
+    return AMStr::fmt("Task {}", task_info->id);
+  }
+  const std::string src_host = DisplayHost_(cur_task->src_host);
+  const std::string dst_host = DisplayHost_(cur_task->dst_host);
+  return AMStr::fmt("{}@{} -> {}@{}", src_host, AMPathStr::basename(cur_task->src),
+                    dst_host, AMPathStr::basename(cur_task->dst));
 }
 } // namespace
 
@@ -114,7 +154,18 @@ TransferInterfaceService::TransferInterfaceService(
     AMInterface::style::AMStyleService *style_service)
     : filesystem_service_(filesystem_service),
       prompt_io_manager_(prompt_io_manager), transfer_pool_(transfer_pool),
-      style_service_(style_service) {}
+      style_service_(style_service) {
+  (void)control_component_factory;
+}
+
+void TransferInterfaceService::SetDefaultControlToken(
+    const AMDomain::client::amf &token) {
+  default_control_token_ = token;
+}
+
+AMDomain::client::amf TransferInterfaceService::GetDefaultControlToken() const {
+  return default_control_token_;
+}
 
 const char *TransferInterfaceService::TaskStatusText_(
     AMDomain::transfer::TaskStatus status) {
@@ -143,9 +194,14 @@ const char *TransferInterfaceService::PathTypeText_(PathType type) {
   }
 }
 
-ClientControlComponent
-TransferInterfaceService::ResolveControl_(AMDomain::client::amf token) const {
-  return AMDomain::client::MakeClientControlComponent(token, -1);
+ClientControlComponent TransferInterfaceService::ResolveControl_(
+    const std::optional<ClientControlComponent> &component,
+    int timeout_ms) const {
+  if (component.has_value()) {
+    return *component;
+  }
+  return AMDomain::client::MakeClientControlComponent(default_control_token_,
+                                                      timeout_ms);
 }
 
 void TransferInterfaceService::PrintTaskSummary_(
@@ -304,17 +360,10 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     if (!isok(resolved_src.rcm)) {
       return resolved_src.rcm;
     }
-
-    for (const auto &[nickname, transfer_path] : resolved_src.data.data) {
-      if (transfer_path.client) {
-        PutPrimaryClient_(&clients, nickname, transfer_path.client);
-      }
-      nicknames.insert(DisplayHost_(nickname));
-    }
     if (resolved_dst.data.client) {
-      PutPrimaryClient_(&clients, resolved_dst.data.target.nickname,
-                        resolved_dst.data.client);
-      nicknames.insert(DisplayHost_(resolved_dst.data.target.nickname));
+      PutDestinationClient_(&clients, resolved_dst.data.target.nickname,
+                            resolved_dst.data.client);
+      nicknames.insert(resolved_dst.data.target.nickname);
     }
 
     AMApplication::filesystem::BuildTransferTaskOptions options = {};
@@ -358,14 +407,9 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     if (it == clients.end()) {
       continue;
     }
-    ClientHandle src_client = nullptr;
-    if (std::holds_alternative<ClientHandle>(it->second)) {
-      src_client = std::get<ClientHandle>(it->second);
-    } else {
-      auto pair_slot =
-          std::get<std::pair<ClientHandle, ClientHandle>>(it->second);
-      src_client = pair_slot.first ? pair_slot.first : pair_slot.second;
-    }
+    const auto &pair_slot = it->second;
+    ClientHandle src_client =
+        pair_slot.first ? pair_slot.first : pair_slot.second;
     if (src_client) {
       PutSecondaryClient_(&clients, src_host, src_client);
     }
@@ -396,31 +440,86 @@ ECM TransferInterfaceService::BuildTaskInfo_(
 }
 
 ECM TransferInterfaceService::WaitTask_(
-    const TaskInfo::ID &task_id, const ClientControlComponent &control) const {
+    const std::shared_ptr<TaskInfo> &task_info,
+    const ClientControlComponent &control) const {
+  if (!task_info) {
+    return Err(EC::InvalidArg, "TaskInfo is null");
+  }
+
+  const bool show_progress = !task_info->Set.quiet;
+  const int refresh_ms = ResolveTransferProgressRefreshMs_(style_service_);
+  const size_t speed_window = ResolveTransferProgressSpeedWindow_(style_service_);
+
+  struct ScopedRefresh_ {
+    AMInterface::prompt::AMPromptIOManager *prompt = nullptr;
+    bool active = false;
+    ~ScopedRefresh_() {
+      if (active && prompt != nullptr) {
+        prompt->RefreshEnd();
+      }
+    }
+  } scoped_refresh{&prompt_io_manager_, false};
+
+  auto build_bar = [this, &task_info]() -> AMProgressBar {
+    const int64_t total_size =
+        static_cast<int64_t>(task_info->Size.total.load(std::memory_order_relaxed));
+    const std::string prefix = BuildTransferProgressPrefix_(task_info);
+    if (style_service_ != nullptr) {
+      return style_service_->CreateProgressBar(total_size, prefix);
+    }
+    return AMProgressBar(total_size, prefix);
+  };
+
+  AMProgressBar progress_bar = build_bar();
+  if (show_progress) {
+    progress_bar.SetSpeedWindowSize(speed_window);
+    prompt_io_manager_.RefreshBegin(1);
+    scoped_refresh.active = true;
+  }
+
   while (true) {
     if (control.IsInterrupted()) {
-      (void)transfer_pool_.Terminate(task_id, 1000);
+      (void)transfer_pool_.Terminate(task_info->id, 1000);
       return Err(EC::Terminate, "Transfer interrupted");
     }
     if (control.IsTimeout()) {
-      (void)transfer_pool_.Terminate(task_id, 1000);
+      (void)transfer_pool_.Terminate(task_info->id, 1000);
       return Err(EC::OperationTimeout, "Transfer timeout");
     }
 
-    auto done = transfer_pool_.GetResultTask(task_id, false);
-    if (done) {
-      return done->GetResult();
+    if (show_progress) {
+      const int64_t total_size =
+          static_cast<int64_t>(task_info->Size.total.load(std::memory_order_relaxed));
+      const int64_t transferred = static_cast<int64_t>(
+          task_info->Size.transferred.load(std::memory_order_relaxed));
+      progress_bar.SetTotal(total_size);
+      progress_bar.SetPrefix(BuildTransferProgressPrefix_(task_info));
+      progress_bar.SetProgress(transferred);
+      prompt_io_manager_.RefreshRender({progress_bar.RenderLine()});
     }
 
-    auto status = transfer_pool_.GetStatus(task_id);
-    if (!status.has_value()) {
-      return Err(EC::TaskNotFound, AMStr::fmt("Task not found: {}", task_id));
+    const auto status = task_info->GetStatus();
+    if (status == AMDomain::transfer::TaskStatus::Finished) {
+      std::string final_line;
+      if (show_progress) {
+        const int64_t total_size = static_cast<int64_t>(
+            task_info->Size.total.load(std::memory_order_relaxed));
+        const int64_t transferred = static_cast<int64_t>(
+            task_info->Size.transferred.load(std::memory_order_relaxed));
+        progress_bar.SetTotal(total_size);
+        progress_bar.SetPrefix(BuildTransferProgressPrefix_(task_info));
+        progress_bar.SetProgress(transferred);
+        final_line = progress_bar.RenderLine();
+        prompt_io_manager_.RefreshRender({final_line});
+        scoped_refresh.active = false;
+        prompt_io_manager_.RefreshEnd();
+        if (!final_line.empty()) {
+          prompt_io_manager_.Print(final_line);
+        }
+      }
+      return task_info->GetResult();
     }
-    if (*status == AMDomain::transfer::TaskStatus::Finished) {
-      done = transfer_pool_.GetResultTask(task_id, false);
-      return done ? done->GetResult() : Ok();
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(kTaskPollIntervalMs));
+    std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
   }
 }
 
@@ -436,9 +535,12 @@ TransferInterfaceService::FindTask_(const std::string &task_id) const {
   return transfer_pool_.GetResultTask(task_id, false);
 }
 
-ECM TransferInterfaceService::Transfer(const TransferRunArg &arg) const {
-  const ClientControlComponent control = ResolveControl_(arg.control_token);
+ECM TransferInterfaceService::Transfer(
+    const TransferRunArg &arg,
+    const std::optional<ClientControlComponent> &component) const {
 
+  const ClientControlComponent control =
+      ResolveControl_(component, arg.timeout_ms);
   std::vector<WildcardConfirmRequest> confirm_requests = {};
   for (const auto &set : arg.transfer_sets) {
     for (const auto &src : set.srcs) {
@@ -481,12 +583,11 @@ ECM TransferInterfaceService::Transfer(const TransferRunArg &arg) const {
   if (!isok(submit_rcm)) {
     return submit_rcm;
   }
-  prompt_io_manager_.FmtPrint("Submitted task {}", task_info->id);
-
   if (arg.run_async) {
+    prompt_io_manager_.FmtPrint("Submitted task {}", task_info->id);
     return Ok();
   }
-  return WaitTask_(task_info->id, control);
+  return WaitTask_(task_info, control);
 }
 
 ECM TransferInterfaceService::TaskList(const TransferTaskListArg &arg) const {
