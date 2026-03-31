@@ -17,8 +17,7 @@ using TASKS = std::vector<TransferTask>;
 using Client = AMDomain::client::IClientPort;
 using TransferClientContainer = std::unordered_map<
     std::string,
-    std::variant<std::shared_ptr<Client>,
-                 std::pair<std::shared_ptr<Client>, std::shared_ptr<Client>>>>;
+    std::pair<std::shared_ptr<Client>, std::shared_ptr<Client>>>;
 using ResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
 using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
 using ClientPath = AMDomain::filesystem::ClientPath;

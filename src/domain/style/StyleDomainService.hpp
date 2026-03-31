@@ -5,6 +5,7 @@
 #include <cctype>
 #include <limits>
 #include <string_view>
+#include <utility>
 
 namespace AMDomain::style::services {
 namespace detail {
@@ -28,6 +29,16 @@ namespace detail {
     --end;
   }
   return text.substr(begin, end - begin);
+}
+
+[[nodiscard]] inline std::string LowerTrim(std::string_view text) {
+  const std::string_view trimmed = TrimView(text);
+  std::string out(trimmed.begin(), trimmed.end());
+  std::transform(out.begin(), out.end(), out.begin(),
+                 [](unsigned char ch) -> char {
+                   return static_cast<char>(std::tolower(ch));
+                 });
+  return out;
 }
 
 [[nodiscard]] inline bool NextToken(std::string_view text, size_t *cursor,
@@ -240,15 +251,17 @@ inline void NormalizeCLIPromptShortcut(CLIPromptShortcutStyle *style) {
   if (!style) {
     return;
   }
-  const CLIPromptShortcutStyle defaults = {};
-  NormalizeStyleToken(&style->un, defaults.un);
-  NormalizeStyleToken(&style->at, defaults.at);
-  NormalizeStyleToken(&style->hn, defaults.hn);
-  NormalizeStyleToken(&style->en, defaults.en);
-  NormalizeStyleToken(&style->nn, defaults.nn);
-  NormalizeStyleToken(&style->cwd, defaults.cwd);
-  NormalizeStyleToken(&style->ds, defaults.ds);
-  NormalizeStyleToken(&style->white, defaults.white);
+  CLIPromptShortcutStyle normalized = {};
+  for (const auto &[raw_key, raw_value] : *style) {
+    const std::string key = detail::LowerTrim(raw_key);
+    if (key.empty()) {
+      continue;
+    }
+    std::string value = raw_value;
+    NormalizeStyleToken(&value);
+    normalized[key] = std::move(value);
+  }
+  *style = std::move(normalized);
 }
 
 inline void NormalizeCLIPromptNamedStyles(CLIPromptNamedStyles *style) {

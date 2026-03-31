@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <map>
 #include <string>
 
 namespace AMDomain::style {
@@ -47,16 +48,7 @@ struct PromptTemplateStyle {
   std::string history_search_prompt = "history search";
 };
 
-struct CLIPromptShortcutStyle {
-  std::string un = "";
-  std::string at = "";
-  std::string hn = "";
-  std::string en = "";
-  std::string nn = "";
-  std::string cwd = "";
-  std::string ds = "";
-  std::string white = "";
-};
+using CLIPromptShortcutStyle = std::map<std::string, std::string>;
 
 struct CLIPromptIconsStyle {
   std::string windows = "";

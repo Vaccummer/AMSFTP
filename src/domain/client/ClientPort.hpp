@@ -9,7 +9,6 @@
 #include <map>
 #include <memory>
 #include <optional>
-#include <shared_mutex>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -55,35 +54,23 @@ timeoutf CreateClientTimeoutPort();
  */
 class IClientMetaDataPort {
 public:
-  struct LockGaurd {
-  private:
-    std::shared_mutex &mutex_;
+  using RawTypeMutator = std::function<void(std::any *, bool)>;
+  using RawNamedMutator = std::function<void(std::any *, bool, bool)>;
 
-  public:
-    ~LockGaurd() { mutex_.unlock(); };
-    explicit LockGaurd(std::shared_mutex &mutex) : mutex_(mutex) {
-      mutex_.lock();
-    }
-    void Unlock() { mutex_.unlock(); }
+  template <typename T> using TypeValueMutator = std::function<void(T *)>;
+  template <typename T>
+  using NamedValueMutator = std::function<void(T *, bool, bool)>;
 
-    void Relock() {
-      Unlock();
-      mutex_.lock();
-    }
+  template <typename T> struct NamedValueQueryResult {
+    std::optional<T> value = std::nullopt;
+    bool name_found = false;
+    bool type_match = false;
   };
+
   /**
    * @brief Virtual destructor for polymorphic use.
    */
   virtual ~IClientMetaDataPort() = default;
-
-  /**
-   * @brief Return metadata mutex for external lock coordination.
-   */
-  [[nodiscard]] virtual std::shared_mutex &Mutex() const = 0;
-
-  [[nodiscard]] virtual LockGaurd GetLockGaurd() const {
-    return LockGaurd(Mutex());
-  }
 
   /**
    * @brief Store one named runtime data blob.
@@ -100,32 +87,27 @@ public:
   /**
    * @brief Query one named runtime data blob.
    */
-  [[nodiscard]] virtual std::pair<bool, std::any>
+  [[nodiscard]] virtual std::optional<std::any>
   QueryNamedData(const std::string &name) const = 0;
 
   /**
-   * @brief Query one named runtime blob by pointer.
+   * @brief Query one type-indexed runtime data blob.
    */
-  [[nodiscard]] virtual std::any *QueryNamedData(const std::string &name,
-                                                 bool &name_exists) = 0;
+  [[nodiscard]] virtual std::optional<std::any>
+  QueryTypedData(const std::type_index &type_key) const = 0;
 
   /**
-   * @brief Query one named runtime blob by pointer (const overload).
+   * @brief Mutate one type-indexed runtime data blob.
    */
-  [[nodiscard]] virtual const std::any *
-  QueryNamedData(const std::string &name, bool &name_exists) const = 0;
+  virtual void MutateTypedData(const std::type_index &type_key,
+                               RawTypeMutator mutator) = 0;
 
   /**
-   * @brief Query one type-indexed runtime blob by pointer.
+   * @brief Mutate one named runtime data blob with type-match status.
    */
-  [[nodiscard]] virtual std::any *
-  QueryTypedData(const std::type_index &type_key, bool &type_exists) = 0;
-
-  /**
-   * @brief Query one type-indexed runtime blob by pointer (const overload).
-   */
-  [[nodiscard]] virtual const std::any *
-  QueryTypedData(const std::type_index &type_key, bool &type_exists) const = 0;
+  virtual void MutateNamedData(const std::string &name,
+                               const std::type_index &type_key,
+                               RawNamedMutator mutator) = 0;
 
   /**
    * @brief Erase one named runtime data blob.
@@ -156,56 +138,78 @@ public:
   /**
    * @brief Query one typed runtime value.
    */
-  template <typename T> [[nodiscard]] T *QueryTypedValue() {
+  template <typename T> [[nodiscard]] std::optional<T> QueryTypedValue() const {
     using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
-    bool type_exists = false;
-    std::any *payload =
-        QueryTypedData(std::type_index(typeid(ValueT)), type_exists);
-    if (!payload) {
-      return nullptr;
+    auto payload_opt = QueryTypedData(std::type_index(typeid(ValueT)));
+    if (!payload_opt.has_value()) {
+      return std::nullopt;
     }
-    return std::any_cast<ValueT>(payload);
-  }
-
-  /**
-   * @brief Query one typed runtime value (const overload).
-   */
-  template <typename T> [[nodiscard]] const T *QueryTypedValue() const {
-    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
-    bool type_exists = false;
-    const std::any *payload =
-        QueryTypedData(std::type_index(typeid(ValueT)), type_exists);
-    if (!payload) {
-      return nullptr;
+    auto &payload = *payload_opt;
+    if (auto *typed = std::any_cast<ValueT>(&payload); typed != nullptr) {
+      return *typed;
     }
-    return std::any_cast<ValueT>(payload);
+    return std::nullopt;
   }
 
   /**
    * @brief Query one named typed runtime value.
    */
   template <typename T>
-  [[nodiscard]] T *QueryNamedValue(const std::string &name, bool &name_exists) {
+  [[nodiscard]] NamedValueQueryResult<T>
+  QueryNamedValue(const std::string &name) const {
     using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
-    std::any *payload = QueryNamedData(name, name_exists);
-    if (!payload) {
-      return nullptr;
+    NamedValueQueryResult<ValueT> out = {};
+    auto payload_opt = QueryNamedData(name);
+    out.name_found = payload_opt.has_value();
+    if (!payload_opt.has_value()) {
+      out.type_match = false;
+      return out;
     }
-    return std::any_cast<ValueT>(payload);
+    auto &payload = *payload_opt;
+    out.type_match = (std::any_cast<ValueT>(&payload) != nullptr);
+    if (out.type_match) {
+      out.value = *std::any_cast<ValueT>(&payload);
+    }
+
+    return out;
   }
 
   /**
-   * @brief Query one named typed runtime value (const overload).
+   * @brief Mutate one typed runtime value in-place.
+   */
+  template <typename T> void MutateTypeValue(TypeValueMutator<T> mutator) {
+    using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
+    if (!mutator) {
+      return;
+    }
+    MutateTypedData(std::type_index(typeid(ValueT)),
+                    [&mutator](std::any *payload, bool type_found) {
+                      ValueT *typed = nullptr;
+                      if (type_found && payload != nullptr) {
+                        typed = std::any_cast<ValueT>(payload);
+                      }
+                      mutator(typed);
+                    });
+  }
+
+  /**
+   * @brief Mutate one named typed runtime value in-place.
    */
   template <typename T>
-  [[nodiscard]] const T *QueryNamedValue(const std::string &name,
-                                         bool &name_exists) const {
+  void MutateNamedValue(const std::string &name, NamedValueMutator<T> mutator) {
     using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
-    const std::any *payload = QueryNamedData(name, name_exists);
-    if (!payload) {
-      return nullptr;
+    if (!mutator) {
+      return;
     }
-    return std::any_cast<ValueT>(payload);
+    MutateNamedData(
+        name, std::type_index(typeid(ValueT)),
+        [&mutator](std::any *payload, bool name_found, bool type_match) {
+          ValueT *typed = nullptr;
+          if (name_found && type_match && payload != nullptr) {
+            typed = std::any_cast<ValueT>(payload);
+          }
+          mutator(typed, name_found, type_match);
+        });
   }
 };
 
