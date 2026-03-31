@@ -1,4 +1,5 @@
 #include "interface/prompt/IsoclineProfile.hpp"
+#include "foundation/tools/string.hpp"
 #include <algorithm>
 #include <utility>
 
@@ -58,6 +59,41 @@ void ApplyProfileInitData_(
       style_arg.style.value_query_highlight.invalid_value);
   (void)profile->DefineStyle(kInlineHintStyleKey,
                              style_arg.style.internal_style.inline_hint);
+
+  // Register prompt shortcut styles (dynamic map keys).
+  for (const auto &[key, value] : style_arg.style.cli_prompt.shortcut) {
+    if (key.empty() || AMStr::Strip(value).empty()) {
+      continue;
+    }
+    (void)profile->DefineStyle(key, value);
+  }
+
+  // Register named styles as stable aliases.
+  const auto &named = style_arg.style.cli_prompt.named_styles;
+  if (!AMStr::Strip(named.un).empty()) {
+    (void)profile->DefineStyle("un", named.un);
+  }
+  if (!AMStr::Strip(named.at).empty()) {
+    (void)profile->DefineStyle("at", named.at);
+  }
+  if (!AMStr::Strip(named.hn).empty()) {
+    (void)profile->DefineStyle("hn", named.hn);
+  }
+  if (!AMStr::Strip(named.en).empty()) {
+    (void)profile->DefineStyle("en", named.en);
+  }
+  if (!AMStr::Strip(named.nn).empty()) {
+    (void)profile->DefineStyle("nn", named.nn);
+  }
+  if (!AMStr::Strip(named.cwd).empty()) {
+    (void)profile->DefineStyle("cwd", named.cwd);
+  }
+  if (!AMStr::Strip(named.ds).empty()) {
+    (void)profile->DefineStyle("ds", named.ds);
+  }
+  if (!AMStr::Strip(named.white).empty()) {
+    (void)profile->DefineStyle("white", named.white);
+  }
 
   const int max_history =
       std::min(std::max(1, profile_args.history.max_count), 200);
@@ -362,7 +398,15 @@ bool IsoclineProfile::DefineStyle(const std::string &name,
   if (profile_ == nullptr) {
     return false;
   }
-  ic_style_def_p(profile_, name.c_str(), fmt.c_str());
+  std::string style_fmt = AMStr::Strip(fmt);
+  if (style_fmt.size() >= 2 && style_fmt.front() == '[' &&
+      style_fmt.back() == ']') {
+    style_fmt = AMStr::Strip(style_fmt.substr(1, style_fmt.size() - 2));
+  }
+  if (name.empty() || style_fmt.empty()) {
+    return false;
+  }
+  ic_style_def_p(profile_, name.c_str(), style_fmt.c_str());
   return true;
 }
 
