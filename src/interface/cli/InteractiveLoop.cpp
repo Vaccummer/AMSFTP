@@ -1,16 +1,14 @@
 #include "interface/cli/InteractiveLoop.hpp"
 #include "application/client/ClientAppService.hpp"
-#include "infrastructure/controller/ClientControlTokenAdapter.hpp"
-#include "application/transfer/TransferAppService.hpp"
 #include "domain/config/ConfigModel.hpp"
-#include "foundation/core/DataClass.hpp"
 #include "foundation/core/Path.hpp"
 #include "foundation/tools/time.hpp"
-#include "interface/adapters/ApplicationAdapters.hpp"
-#include "interface/adapters/var/VarInterfaceService.hpp"
 #include "interface/cli/CLIBind.hpp"
-#include "interface/parser/CommandPreprocess.hpp"
 #include "interface/completion/Proxy.hpp"
+#include "interface/parser/CommandPreprocess.hpp"
+#include "interface/parser/CommandTree.hpp"
+#include "interface/parser/TokenTypeAnalyzer.hpp"
+#include "interface/prompt/CLICorePrompt.hpp"
 #include <algorithm>
 #include <cctype>
 #include <chrono>
@@ -22,8 +20,158 @@
 #include <unordered_map>
 #include <vector>
 
+namespace AMInterface::cli {
+
 namespace {
 using OS_TYPE = AMDomain::client::OS_TYPE;
+using DocumentKind = AMDomain::config::DocumentKind;
+
+std::string ResolveStyleSettingString_(
+    const AMInterface::style::AMStyleService &style_service,
+    const std::vector<std::string> &path, const std::string &fallback = "") {
+  if (path.size() < 3 || AMStr::lowercase(path[0]) != "style") {
+    return fallback;
+  }
+
+  const auto style = style_service.GetInitArg().style;
+  const std::string group = AMStr::lowercase(path[1]);
+  if (group == "cliprompt") {
+    auto shortcut_lookup = [&style](const std::string &key,
+                                    const std::string &fallback_value = "") {
+      const auto it = style.cli_prompt.shortcut.find(key);
+      if (it == style.cli_prompt.shortcut.end()) {
+        return fallback_value;
+      }
+      return it->second;
+    };
+
+    if (path.size() == 4) {
+      const std::string section = AMStr::lowercase(path[2]);
+      const std::string key = AMStr::lowercase(path[3]);
+      if (section == "icons") {
+        if (key == "windows") {
+          return style.cli_prompt.icons.windows;
+        }
+        if (key == "linux") {
+          return style.cli_prompt.icons.linux;
+        }
+        if (key == "macos") {
+          return style.cli_prompt.icons.macos;
+        }
+        return fallback;
+      }
+      if (section == "shortcut") {
+        return shortcut_lookup(key, fallback);
+      }
+      if (section == "namedstyles" || section == "named_styles") {
+        if (key == "un") {
+          return style.cli_prompt.named_styles.un;
+        }
+        if (key == "at") {
+          return style.cli_prompt.named_styles.at;
+        }
+        if (key == "hn") {
+          return style.cli_prompt.named_styles.hn;
+        }
+        if (key == "en") {
+          return style.cli_prompt.named_styles.en;
+        }
+        if (key == "nn") {
+          return style.cli_prompt.named_styles.nn;
+        }
+        if (key == "cwd") {
+          return style.cli_prompt.named_styles.cwd;
+        }
+        if (key == "ds") {
+          return style.cli_prompt.named_styles.ds;
+        }
+        if (key == "white") {
+          return style.cli_prompt.named_styles.white;
+        }
+        return fallback;
+      }
+      if (section == "template" || section == "templete") {
+        if (key == "core_prompt") {
+          return style.cli_prompt.prompt_template.core_prompt;
+        }
+        if (key == "history_search_prompt") {
+          return style.cli_prompt.prompt_template.history_search_prompt;
+        }
+        return fallback;
+      }
+      return fallback;
+    }
+
+    if (path.size() == 3) {
+      const std::string key = AMStr::lowercase(path[2]);
+      if (key == "format") {
+        return style.cli_prompt.prompt_template.core_prompt;
+      }
+      if (key == "username" || key == "un") {
+        return style.cli_prompt.named_styles.un.empty()
+                   ? shortcut_lookup("un")
+                   : style.cli_prompt.named_styles.un;
+      }
+      if (key == "hostname" || key == "hn") {
+        return style.cli_prompt.named_styles.hn.empty()
+                   ? shortcut_lookup("hn")
+                   : style.cli_prompt.named_styles.hn;
+      }
+      if (key == "nickname" || key == "nn") {
+        return style.cli_prompt.named_styles.nn.empty()
+                   ? shortcut_lookup("nn")
+                   : style.cli_prompt.named_styles.nn;
+      }
+      if (key == "cwd") {
+        return style.cli_prompt.named_styles.cwd.empty()
+                   ? shortcut_lookup("cwd")
+                   : style.cli_prompt.named_styles.cwd;
+      }
+      if (key == "dollarsign" || key == "ds") {
+        return style.cli_prompt.named_styles.ds.empty()
+                   ? shortcut_lookup("ds")
+                   : style.cli_prompt.named_styles.ds;
+      }
+      if (key == "at") {
+        return style.cli_prompt.named_styles.at.empty()
+                   ? shortcut_lookup("at")
+                   : style.cli_prompt.named_styles.at;
+      }
+      if (key == "en") {
+        return style.cli_prompt.named_styles.en.empty()
+                   ? shortcut_lookup("en")
+                   : style.cli_prompt.named_styles.en;
+      }
+      if (key == "white") {
+        return style.cli_prompt.named_styles.white.empty()
+                   ? shortcut_lookup("white")
+                   : style.cli_prompt.named_styles.white;
+      }
+      return fallback;
+    }
+  }
+
+  if (group == "systeminfo" || group == "system_info") {
+    if (path.size() != 3) {
+      return fallback;
+    }
+    const std::string key = AMStr::lowercase(path[2]);
+    if (key == "info") {
+      return style.system_info.info;
+    }
+    if (key == "success") {
+      return style.system_info.success;
+    }
+    if (key == "error") {
+      return style.system_info.error;
+    }
+    if (key == "warning") {
+      return style.system_info.warning;
+    }
+  }
+
+  return fallback;
+}
 
 /**
  * @brief Track prompt rendering state across iterations.
@@ -276,8 +424,9 @@ bool TryBuildAnsiStyleCode_(const std::string &raw, std::string *ansi_code) {
  * @param ansi_code Output ANSI escape sequence when resolved.
  * @return True if a style was resolved; false otherwise.
  */
-bool ResolvePromptStyleAnsi_(const std::string &tag_name,
-                             std::string *ansi_code) {
+bool ResolvePromptStyleAnsi_(
+    const AMInterface::style::AMStyleService &style_service,
+    const std::string &tag_name, std::string *ansi_code) {
   if (!ansi_code) {
     return false;
   }
@@ -291,11 +440,11 @@ bool ResolvePromptStyleAnsi_(const std::string &tag_name,
     return true;
   }
 
-  auto raw = AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-      {"Style", "CLIPrompt", trimmed}, "");
+  auto raw = ResolveStyleSettingString_(style_service,
+                                        {"Style", "CLIPrompt", trimmed}, "");
   if (raw.empty()) {
-    raw = AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-        {"Style", "CLIPrompt", "shortcut", trimmed}, "");
+    raw = ResolveStyleSettingString_(
+        style_service, {"Style", "CLIPrompt", "shortcut", trimmed}, "");
   }
   if (raw.empty()) {
     return false;
@@ -309,20 +458,20 @@ bool ResolvePromptStyleAnsi_(const std::string &tag_name,
  * Supports both legacy `Style.CLIPrompt.format` and the newer
  * `Style.CLIPrompt.templete.core_prompt` layout.
  */
-std::string ResolveCorePromptFormat_() {
-  std::string format =
-      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-          {"Style", "CLIPrompt", "templete", "core_prompt"}, "");
+std::string ResolveCorePromptFormat_(
+    const AMInterface::style::AMStyleService &style_service) {
+  std::string format = ResolveStyleSettingString_(
+      style_service, {"Style", "CLIPrompt", "templete", "core_prompt"}, "");
   if (!format.empty()) {
     return format;
   }
-  format = AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-      {"Style", "CLIPrompt", "template", "core_prompt"}, "");
+  format = ResolveStyleSettingString_(
+      style_service, {"Style", "CLIPrompt", "template", "core_prompt"}, "");
   if (!format.empty()) {
     return format;
   }
-  return AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-      {"Style", "CLIPrompt", "format"}, "");
+  return ResolveStyleSettingString_(style_service,
+                                    {"Style", "CLIPrompt", "format"}, "");
 }
 
 /**
@@ -818,7 +967,8 @@ bool EvaluatePromptExpression_(const std::string &expression) {
  * @return Rendered segment text.
  */
 std::string
-RenderPromptSegment_(const std::string &format, size_t *index,
+RenderPromptSegment_(const AMInterface::style::AMStyleService &style_service,
+                     const std::string &format, size_t *index,
                      const std::unordered_map<std::string, std::string> &vars,
                      std::vector<std::string> *style_stack, bool enable_styles,
                      bool stop_on_brace) {
@@ -850,7 +1000,7 @@ RenderPromptSegment_(const std::string &format, size_t *index,
         if (cursor < format.size() && format[cursor] == '{') {
           ++cursor;
           std::string cond = RenderPromptSegment_(
-              format, &cursor, vars, nullptr, false, true);
+              style_service, format, &cursor, vars, nullptr, false, true);
           bool truthy = EvaluatePromptExpression_(cond);
 
           if (cursor >= format.size() || format[cursor] != '{') {
@@ -860,8 +1010,8 @@ RenderPromptSegment_(const std::string &format, size_t *index,
           }
           ++cursor;
           std::string branch_true =
-              RenderPromptSegment_(format, &cursor, vars, style_stack,
-                                   enable_styles, true);
+              RenderPromptSegment_(style_service, format, &cursor, vars,
+                                   style_stack, enable_styles, true);
 
           if (cursor >= format.size() || format[cursor] != '{') {
             output.push_back('{');
@@ -870,8 +1020,8 @@ RenderPromptSegment_(const std::string &format, size_t *index,
           }
           ++cursor;
           std::string branch_false =
-              RenderPromptSegment_(format, &cursor, vars, style_stack,
-                                   enable_styles, true);
+              RenderPromptSegment_(style_service, format, &cursor, vars,
+                                   style_stack, enable_styles, true);
 
           if (cursor < format.size() && format[cursor] == '}') {
             ++cursor;
@@ -932,7 +1082,7 @@ RenderPromptSegment_(const std::string &format, size_t *index,
       }
 
       std::string ansi_code;
-      if (ResolvePromptStyleAnsi_(tag, &ansi_code)) {
+      if (ResolvePromptStyleAnsi_(style_service, tag, &ansi_code)) {
         if (style_stack) {
           style_stack->push_back(ansi_code);
         }
@@ -960,12 +1110,13 @@ RenderPromptSegment_(const std::string &format, size_t *index,
  * @return Rendered prompt string with ANSI escape sequences.
  */
 std::string
-RenderPromptFormat_(const std::string &format,
+RenderPromptFormat_(const AMInterface::style::AMStyleService &style_service,
+                    const std::string &format,
                     const std::unordered_map<std::string, std::string> &vars) {
   size_t index = 0;
   std::vector<std::string> style_stack;
-  std::string rendered =
-      RenderPromptSegment_(format, &index, vars, &style_stack, true, false);
+  std::string rendered = RenderPromptSegment_(style_service, format, &index,
+                                              vars, &style_stack, true, false);
   for (const auto &style : style_stack) {
     if (!style.empty()) {
       rendered += "\x1b[0m";
@@ -1162,14 +1313,16 @@ bool TryExtractTaggedText_(const std::string &tagged, std::string *extracted) {
  * @param text Raw text to style.
  * @return Styled text with ANSI escape sequences when possible.
  */
-std::string ApplyStyleFromConfig_(const std::vector<std::string> &path,
-                                  const std::string &text) {
+std::string
+ApplyStyleFromConfig_(const std::vector<std::string> &path,
+                      const std::string &text,
+                      const AMInterface::style::AMStyleService &style_service) {
   if (text.empty()) {
     return text;
   }
 
-  std::string raw = AMStr::Strip(
-      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(path, ""));
+  std::string raw =
+      AMStr::Strip(ResolveStyleSettingString_(style_service, path));
   if (raw.empty()) {
     return text;
   }
@@ -1246,9 +1399,47 @@ ResolveUserHost_(const AMDomain::client::ClientHandle &client) {
 }
 
 /**
+ * @brief Resolve prompt cwd from client runtime metadata.
+ */
+std::string ResolvePromptCwd_(const AMDomain::client::ClientHandle &client) {
+  if (!client) {
+    return "/";
+  }
+
+  auto normalize = [](const std::string &raw) {
+    std::string path = AMStr::Strip(raw);
+    if (path.empty()) {
+      return std::string();
+    }
+    return AMPathStr::UnifyPathSep(path, "/");
+  };
+
+  auto metadata =
+      client->MetaDataPort().QueryTypedValue<AMDomain::host::ClientMetaData>();
+  if (metadata.has_value()) {
+    std::string cwd = normalize(metadata->cwd);
+    if (!cwd.empty()) {
+      return cwd;
+    }
+    cwd = normalize(metadata->login_dir);
+    if (!cwd.empty()) {
+      return cwd;
+    }
+  }
+
+  const std::string home = normalize(client->ConfigPort().GetHomeDir());
+  if (!home.empty()) {
+    return home;
+  }
+  return "/";
+}
+
+/**
  * @brief Select the system icon from settings based on OS type.
  */
-std::string ResolveSysIcon_(OS_TYPE os_type) {
+std::string
+ResolveSysIcon_(const AMInterface::style::AMStyleService &style_service,
+                OS_TYPE os_type) {
   std::string key = "windows";
   switch (os_type) {
   case OS_TYPE::Windows:
@@ -1265,9 +1456,8 @@ std::string ResolveSysIcon_(OS_TYPE os_type) {
     break;
   }
 
-  std::string icon =
-      AMInterface::ApplicationAdapters::Runtime::ResolveSettingString(
-          {"Style", "CLIPrompt", "icons", key}, "");
+  std::string icon = ResolveStyleSettingString_(
+      style_service, {"Style", "CLIPrompt", "icons", key});
   if (icon.empty()) {
     icon = "💻";
   }
@@ -1285,10 +1475,11 @@ std::string ResolveSysIcon_(OS_TYPE os_type) {
 /**
  * @brief Build the prompt string and update cached prefix when needed.
  */
-std::string BuildPrompt_(
-    PromptState &state,
-    AMApplication::client::ClientAppService &client_service,
-    AMApplication::TransferWorkflow::TransferAppService &transfer_service) {
+std::string
+BuildPrompt_(PromptState &state,
+             AMApplication::client::ClientAppService &client_service,
+             const AMInterface::style::AMStyleService &style_service,
+             const std::function<void(size_t *, size_t *)> &get_task_counts) {
   auto client = ResolveActiveClient_(client_service);
   std::string nickname =
       client ? client->ConfigPort().GetNickname() : std::string("local");
@@ -1307,15 +1498,15 @@ std::string BuildPrompt_(
         os_type = OS_TYPE::Unknown;
       }
     }
-    std::string sysicon = ResolveSysIcon_(os_type);
+    std::string sysicon = ResolveSysIcon_(style_service, os_type);
     auto [username, hostname] = ResolveUserHost_(client);
     state.cached_sysicon = sysicon;
     state.cached_username = username;
     state.cached_hostname = hostname;
-    std::string styled_user =
-        ApplyStyleFromConfig_({"Style", "CLIPrompt", "username"}, username);
-    std::string styled_host =
-        ApplyStyleFromConfig_({"Style", "CLIPrompt", "hostname"}, hostname);
+    std::string styled_user = ApplyStyleFromConfig_(
+        {"Style", "CLIPrompt", "username"}, username, style_service);
+    std::string styled_host = ApplyStyleFromConfig_(
+        {"Style", "CLIPrompt", "hostname"}, hostname, style_service);
     state.cached_prefix =
         AMStr::fmt("{} {}@{}", sysicon, styled_user, styled_host);
     state.last_nickname = nickname;
@@ -1329,11 +1520,11 @@ std::string BuildPrompt_(
       ok ? "" : std::string(magic_enum::enum_name(state.last_rcm.first));
 
   std::string workdir = "/";
-  if (client) {
-    workdir = client_service.GetOrInitWorkdir(client);
-  }
+  // if (client) {
+  //   workdir = client_service.GetOrInitWorkdir(client);
+  // }
 
-  const std::string format = ResolveCorePromptFormat_();
+  const std::string format = ResolveCorePromptFormat_(style_service);
   if (!format.empty()) {
     std::unordered_map<std::string, std::string> vars;
     vars["$sysicon"] = state.cached_sysicon;
@@ -1346,7 +1537,9 @@ std::string BuildPrompt_(
     vars["$ec_name"] = ec_name;
     size_t pending_count = 0;
     size_t running_count = 0;
-    transfer_service.GetTaskCounts(&pending_count, &running_count);
+    if (get_task_counts) {
+      get_task_counts(&pending_count, &running_count);
+    }
     const size_t total_tasks = pending_count + running_count;
     const std::string time_now =
         FormatTime(static_cast<size_t>(AMTime::seconds()), "%H:%M:%S");
@@ -1356,30 +1549,31 @@ std::string BuildPrompt_(
     vars["$time_now"] = time_now;
     vars["$task_num"] = std::to_string(total_tasks);
     vars["$time_clock"] = time_now;
-    const std::string rendered = RenderPromptFormat_(format, vars);
+    const std::string rendered =
+        RenderPromptFormat_(style_service, format, vars);
     if (!rendered.empty()) {
       return rendered;
     }
   }
 
-  const std::string styled_elapsed =
-      ApplyStyleFromConfig_({"Style", "SystemInfo", "info"}, elapsed);
+  const std::string styled_elapsed = ApplyStyleFromConfig_(
+      {"Style", "SystemInfo", "info"}, elapsed, style_service);
   const std::string styled_status = ApplyStyleFromConfig_(
-      {"Style", "SystemInfo", ok ? "success" : "error"}, status);
+      {"Style", "SystemInfo", ok ? "success" : "error"}, status, style_service);
   std::string line1 = AMStr::fmt("{}  {}  {}", state.cached_prefix,
                                  styled_elapsed, styled_status);
   if (!ec_name.empty()) {
-    const std::string styled_ec =
-        ApplyStyleFromConfig_({"Style", "SystemInfo", "error"}, ec_name);
+    const std::string styled_ec = ApplyStyleFromConfig_(
+        {"Style", "SystemInfo", "error"}, ec_name, style_service);
     line1 += " " + styled_ec;
   }
 
-  const std::string styled_nickname =
-      ApplyStyleFromConfig_({"Style", "CLIPrompt", "nickname"}, nickname);
-  const std::string styled_cwd =
-      ApplyStyleFromConfig_({"Style", "CLIPrompt", "cwd"}, workdir);
-  const std::string styled_dollar =
-      ApplyStyleFromConfig_({"Style", "CLIPrompt", "dollarsign"}, "$");
+  const std::string styled_nickname = ApplyStyleFromConfig_(
+      {"Style", "CLIPrompt", "nickname"}, nickname, style_service);
+  const std::string styled_cwd = ApplyStyleFromConfig_(
+      {"Style", "CLIPrompt", "cwd"}, workdir, style_service);
+  const std::string styled_dollar = ApplyStyleFromConfig_(
+      {"Style", "CLIPrompt", "dollarsign"}, "$", style_service);
   std::string line2 =
       AMStr::fmt("({}){} {}", styled_nickname, styled_cwd, styled_dollar);
   return line1 + "\n" + line2 + " ";
@@ -1391,10 +1585,14 @@ std::string BuildPrompt_(
  * This makes external edits effective without requiring process restart.
  */
 ECM ReloadSettingsIfUpdated_(
-    AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager) {
+    AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager,
+    AMApplication::config::AMConfigAppService &config_service,
+    bool *reloaded = nullptr) {
+  if (reloaded) {
+    *reloaded = false;
+  }
   std::filesystem::path settings_path;
-  if (!AMInterface::ApplicationAdapters::Runtime::GetConfigDataPath(
-          AMDomain::config::DocumentKind::Settings, &settings_path) ||
+  if (!config_service.GetDataPath(DocumentKind::Settings, &settings_path) ||
       settings_path.empty()) {
     return Ok();
   }
@@ -1418,50 +1616,20 @@ ECM ReloadSettingsIfUpdated_(
   }
 
   // Avoid clobbering in-memory updates that have not been dumped yet.
-  if (AMInterface::ApplicationAdapters::Runtime::IsConfigDirty(
-          AMDomain::config::DocumentKind::Settings)) {
+  if (config_service.IsDirty(DocumentKind::Settings)) {
     return Ok();
   }
 
-  ECM load_rcm = AMInterface::ApplicationAdapters::Runtime::LoadConfig(
-      AMDomain::config::DocumentKind::Settings, true);
+  ECM load_rcm = config_service.Load(DocumentKind::Settings, true);
   if (load_rcm.first != EC::Success) {
     return load_rcm;
   }
   (void)prompt_profile_history_manager;
   last_write_time = current_write_time;
+  if (reloaded) {
+    *reloaded = true;
+  }
   return Ok();
-}
-
-/**
- * @brief Split a potentially multi-line prompt into a header and a single input
- * line.
- *
- * @param full_prompt Full prompt text that may contain newline separators.
- * @param header Output header string to print before readline (empty if none).
- * @param line Output single-line prompt to pass into ic_readline.
- */
-static void SplitPromptForReadline_(const std::string &full_prompt,
-                                    std::string *header, std::string *line) {
-  if (header) {
-    header->clear();
-  }
-  if (!line) {
-    return;
-  }
-  line->clear();
-  if (full_prompt.empty()) {
-    return;
-  }
-  const size_t split = full_prompt.find_last_of('\n');
-  if (split == std::string::npos) {
-    *line = full_prompt;
-    return;
-  }
-  if (header) {
-    *header = full_prompt.substr(0, split);
-  }
-  *line = full_prompt.substr(split + 1);
 }
 
 /**
@@ -1480,25 +1648,6 @@ void PrintECM_(AMInterface::prompt::AMPromptIOManager &prompt, const ECM &rcm) {
 }
 
 /**
- * @brief Execute a shell command via filesystem shell runner and return the
- * raw result.
- */
-CR ExecuteShellCommand_(
-    AMApplication::client::ClientAppService &client_service,
-    const std::string &command, amf task_control_token) {
-  const AMDomain::client::amf client_interrupt =
-      AMInfra::controller::AdaptClientInterruptFlag(task_control_token);
-  if (task_control_token && !task_control_token->IsRunning()) {
-    return {Err(EC::Terminate, "Interrupted by user"), {"", -1}};
-  }
-  auto client = client_service.GetCurrentClient();
-  if (!client) {
-    return {Err(EC::ClientNotFound, "Current client not found"), {"", -1}};
-  }
-  return client->IOPort().ConductCmd(command, -1, client_interrupt);
-}
-
-/**
  * @brief Update prompt state with the latest result and elapsed duration.
  */
 void UpdatePromptState_(PromptState &state, const ECM &rcm,
@@ -1508,15 +1657,55 @@ void UpdatePromptState_(PromptState &state, const ECM &rcm,
       std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
   state.last_elapsed = AMStr::fmt("{}ms", ms);
 }
-} // namespace
 
-/**
- * @brief Return singleton registry instance.
- */
-AMInteractiveEventRegistry &AMInteractiveEventRegistry::Instance() {
-  static AMInteractiveEventRegistry ins;
-  return ins;
+void RegisterPromptGetters_(AMInterface::prompt::CLIPromtRender &core_prompt,
+                            const CLIServices &managers) {
+  core_prompt.RegisterGetter("cwd", [&managers]() {
+    auto client = managers.client_service->GetCurrentClient();
+    return ResolvePromptCwd_(client);
+  });
+  core_prompt.RegisterGetter("username", [&managers]() {
+    auto client = ResolveActiveClient_(managers.client_service.Get());
+    return ResolveUserHost_(client).first;
+  });
+  core_prompt.RegisterGetter("hostname", [&managers]() {
+    auto client = ResolveActiveClient_(managers.client_service.Get());
+    return ResolveUserHost_(client).second;
+  });
+  core_prompt.RegisterGetter("os_type", [&managers]() {
+    OS_TYPE os_type = OS_TYPE::Unknown;
+    auto client = ResolveActiveClient_(managers.client_service.Get());
+    if (client) {
+      try {
+        os_type = client->ConfigPort().GetOSType();
+      } catch (const std::exception &) {
+        os_type = OS_TYPE::Unknown;
+      }
+    }
+    switch (os_type) {
+    case OS_TYPE::Linux:
+      return std::string("linux");
+    case OS_TYPE::MacOS:
+      return std::string("macos");
+    case OS_TYPE::Windows:
+    default:
+      return std::string("windows");
+    }
+  });
+  core_prompt.RegisterGetter("task_pending", [&managers]() {
+    size_t pending_count = 0;
+    size_t running_count = 0;
+    managers.transfer_service->GetTaskCounts(&pending_count, &running_count);
+    return std::to_string(pending_count);
+  });
+  core_prompt.RegisterGetter("task_running", [&managers]() {
+    size_t pending_count = 0;
+    size_t running_count = 0;
+    managers.transfer_service->GetTaskCounts(&pending_count, &running_count);
+    return std::to_string(running_count);
+  });
 }
+} // namespace
 
 /**
  * @brief Register callback into one callback vector.
@@ -1594,175 +1783,142 @@ void AMInteractiveEventRegistry::RunOnInteractiveLoopExit() {
 /**
  * @brief Run the core interactive loop until the user exits.
  */
-int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
-                       CliRunContext &ctx) {
-  if (ctx.is_interactive) {
-    ctx.is_interactive->store(true, std::memory_order_relaxed);
-  }
+int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
+                       AMInterface::parser::CommandNode &command_tree,
+                       const CLIServices &managers, CliRunContext &ctx) {
   bool skip_loop_exit_callbacks = false;
+  const amf &cflag = ctx.task_control_token;
+
   auto store_exit_code = [&ctx](int code) {
     if (ctx.exit_code) {
       ctx.exit_code->store(code, std::memory_order_relaxed);
     }
   };
 
-  AMInterface::prompt::AMPromptIOManager &prompt = managers.prompt_io_manager;
-  AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager =
-      managers.prompt_profile_history_manager;
-  AMApplication::client::ClientAppService &client_service =
-      managers.client_service;
-  AMApplication::TransferWorkflow::TransferAppService &transfer_service =
-      managers.transfer_service;
-  AMInterface::var::VarInterfaceService var_interface_service(
-      managers.var_service, managers.client_service, managers.prompt_io_manager);
-  const amf task_control_token = ctx.task_control_token;
-  if (!task_control_token) {
-    ctx.rcm = Err(EC::InvalidArg, "Session task control token is not bound");
-    store_exit_code(static_cast<int>(ctx.rcm.first));
-    return static_cast<int>(EC::InvalidArg);
-  }
+  AMInterface::parser::TokenTypeAnalyzer token_type_analyzer;
+  token_type_analyzer.SetCommandTree(&command_tree);
+  AMInterface::parser::AMInputPreprocess input_preprocess(
+      managers.var_interface_service.Get(), token_type_analyzer);
 
-  AMCompleter completer{};
+  AMCompleter completer{&command_tree, &token_type_analyzer,
+                        &managers.interactive_event_registry};
   completer.Install();
 
-  PromptState prompt_state;
+  AMInterface::prompt::CLIPromtRender core_prompt(managers.style_service.Get());
+  RegisterPromptGetters_(core_prompt, managers);
+
+  ECM last_dispatch_result = Ok();
+  int64_t last_dispatch_elapsed_ms = 0;
+  AMInterface::prompt::CLIPromtRender::RenderArg prompt_arg = {};
 
   while (true) {
-    if (task_control_token->IsKill()) {
-      break;
-    }
-
-    ECM reload_settings_rcm =
-        ReloadSettingsIfUpdated_(prompt_profile_history_manager);
-    if (reload_settings_rcm.first != EC::Success) {
-      PrintECM_(prompt, reload_settings_rcm);
-    }
-
-    ECM change_rcm =
-        prompt_profile_history_manager.ChangeClient(client_service.CurrentNickname());
-    if (change_rcm.first != EC::Success) {
-      PrintECM_(prompt, change_rcm);
-    }
-
-    const std::string prompt_text =
-        BuildPrompt_(prompt_state, client_service, transfer_service);
-
-    std::string prompt_header;
-    std::string prompt_line;
-    SplitPromptForReadline_(prompt_text, &prompt_header, &prompt_line);
-
-    if (!prompt_header.empty()) {
-      std::cout << prompt_header << std::endl;
-    }
-
-    std::string line;
-    (void)AMInterface::ApplicationAdapters::Runtime::BackupConfigIfNeeded();
-
-    // monitor.SilenceHook("GLOBAL");
-    // monitor.ResumeHook("COREPROMPT");
-
-    bool canceled = !prompt.PromptCore(prompt_line, &line);
-
-    // monitor.SilenceHook("COREPROMPT");
-    // monitor.ResumeHook("GLOBAL");
-    AMInteractiveEventRegistry::Instance().RunOnCorePromptReturn();
-
-    if (canceled) {
+    if (cflag->IsInterrupted()) {
+      cflag->ClearInterrupt();
       continue;
     }
 
-    const auto input_confirmed = std::chrono::steady_clock::now();
+    // bool settings_reloaded = false;
+    // ECM reload_settings_rcm =
+    //     ReloadSettingsIfUpdated_(prompt_profile_history_manager,
+    //                              managers.config_service,
+    //                              &settings_reloaded);
+    // if (reload_settings_rcm.first != EC::Success) {
+    //   PrintECM_(prompt, reload_settings_rcm);
+    // } else if (settings_reloaded) {
+    //   core_prompt.InvalidateCache();
+    // }
+
+    prompt_arg.current_nickname =
+        AMStr::Strip(managers.client_service->CurrentNickname());
+    prompt_arg.elapsed_time_ms = last_dispatch_elapsed_ms;
+    prompt_arg.result = last_dispatch_result;
+
+    const std::string prompt_text = core_prompt.Render(prompt_arg);
+    std::string line;
+    (void)managers.config_service->BackupIfNeeded();
+
+    // monitor.SilenceHook("GLOBAL");
+    // monitor.ResumeHook("COREPROMPT");
+    // ctx.task_control_token->ClearInterrupt();
+    bool canceled = !managers.prompt_io_manager->PromptCore(
+        prompt_text, &line, &token_type_analyzer);
+    // ctx.task_control_token->ClearInterrupt();
+    // monitor.SilenceHook("COREPROMPT");
+    // monitor.ResumeHook("GLOBAL");
+    managers.interactive_event_registry.RunOnCorePromptReturn();
+
+    if (canceled) {
+      last_dispatch_result = Ok();
+      last_dispatch_elapsed_ms = 0;
+      continue;
+    }
 
     std::string trimmed = AMStr::Strip(line);
     if (trimmed.empty()) {
       continue;
     }
-    prompt_profile_history_manager.AddHistoryEntry(line);
-
-    bool is_shell = false;
-    std::string shell_command;
-    ECM shell_parse =
-        AMInputPreprocess::ParseShellPrefix(trimmed, &shell_command, &is_shell);
-    if (shell_parse.first != EC::Success) {
-      PrintECM_(prompt, shell_parse);
-      store_exit_code(static_cast<int>(shell_parse.first));
-      const auto iter_end = std::chrono::steady_clock::now();
-      UpdatePromptState_(prompt_state, shell_parse, iter_end - input_confirmed);
-      continue;
-    }
-
-    if (is_shell) {
-      CR shell_result = ExecuteShellCommand_(client_service, shell_command,
-                                             task_control_token);
-      if (shell_result.first.first == EC::Success) {
-        const std::string &msg = shell_result.second.first;
-        if (!msg.empty()) {
-          prompt.Print(msg);
-        }
-        prompt.FmtPrint("\nCommand exit with code {}",
-                        shell_result.second.second);
-      } else {
-        PrintECM_(prompt, shell_result.first);
-      }
-      store_exit_code(static_cast<int>(shell_result.first.first));
-      const auto shell_end = std::chrono::steady_clock::now();
-      UpdatePromptState_(prompt_state, shell_result.first,
-                         shell_end - input_confirmed);
-      continue;
-    }
-
-    CLI::App app{"AMSFTP Interactive Terminal", app_name};
-    CliArgsPool args_pool;
-    CliCommands cli_commands = BindCliOptions(app, args_pool);
-
+    const auto dispatch_begin = AMTime::SteadyNow();
     try {
-      std::vector<std::string> cli_args =
-          AMInputPreprocess::SplitCliTokens(trimmed);
+      auto prep = input_preprocess.Preprocess(trimmed);
+      if (prep.rcm.first != EC::Success) {
+        PrintECM_(managers.prompt_io_manager.Get(), prep.rcm);
+        store_exit_code(static_cast<int>(prep.rcm.first));
+        last_dispatch_result = prep.rcm;
+        last_dispatch_elapsed_ms = std::max<int64_t>(
+            0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
+        continue;
+      }
+      std::vector<std::string> cli_args = std::move(prep.data);
       if (cli_args.empty()) {
         continue;
       }
-      (void)var_interface_service.RewriteVarShortcutTokens(&cli_args);
       // CLI11 consumes args via pop_back, so reverse to preserve order.
       std::reverse(cli_args.begin(), cli_args.end());
+      app.clear();
       app.parse(cli_args);
     } catch (const CLI::CallForHelp &e) {
-      prompt.Print(app.help());
+      managers.prompt_io_manager->Print(app.help());
       ECM parse_rcm = {EC::Success, ""};
       store_exit_code(e.get_exit_code());
-      const auto iter_end = std::chrono::steady_clock::now();
-      UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
+      last_dispatch_result = parse_rcm;
+      last_dispatch_elapsed_ms = std::max<int64_t>(
+          0, std::chrono::duration_cast<std::chrono::milliseconds>(
+                 std::chrono::steady_clock::now() - dispatch_begin)
+                 .count());
       continue;
     } catch (const CLI::CallForAllHelp &e) {
-      prompt.Print(app.help("", CLI::AppFormatMode::All));
+      managers.prompt_io_manager->Print(app.help("", CLI::AppFormatMode::All));
       ECM parse_rcm = {EC::Success, ""};
       store_exit_code(e.get_exit_code());
-      const auto iter_end = std::chrono::steady_clock::now();
-      UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
+      last_dispatch_result = parse_rcm;
+      last_dispatch_elapsed_ms =
+          AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow());
       continue;
     } catch (const CLI::CallForVersion &e) {
-      prompt.Print(app.version());
+      managers.prompt_io_manager->Print(app.version());
       ECM parse_rcm = {EC::Success, ""};
       store_exit_code(e.get_exit_code());
-      const auto iter_end = std::chrono::steady_clock::now();
-      UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
+      last_dispatch_result = parse_rcm;
+      last_dispatch_elapsed_ms = std::max<int64_t>(
+          0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
       continue;
     } catch (const CLI::ParseError &e) {
       const std::string parse_msg = e.what();
-      prompt.Print(parse_msg);
+      managers.prompt_io_manager->Print(parse_msg);
       ECM parse_rcm = {EC::InvalidArg, parse_msg};
       store_exit_code(static_cast<int>(parse_rcm.first));
-      const auto iter_end = std::chrono::steady_clock::now();
-      UpdatePromptState_(prompt_state, parse_rcm, iter_end - input_confirmed);
+      last_dispatch_result = parse_rcm;
+      last_dispatch_elapsed_ms = std::max<int64_t>(
+          0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
       continue;
     }
-    task_control_token->Reset();
-    DispatchCliCommands(cli_commands, managers, ctx, false, true);
-    if (task_control_token->IsKill()) {
-      break;
-    }
-    const auto exec_end = std::chrono::steady_clock::now();
-    task_control_token->Reset();
-    UpdatePromptState_(prompt_state, ctx.rcm, exec_end - input_confirmed);
+
+    ctx.async = false;
+    ctx.enforce_interactive = true;
+    DispatchCliCommands(cli_commands, managers, ctx);
+    last_dispatch_result = ctx.rcm;
+    last_dispatch_elapsed_ms = std::max<int64_t>(
+        0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
 
     if (ctx.request_exit) {
       skip_loop_exit_callbacks = ctx.skip_loop_exit_callbacks;
@@ -1770,16 +1926,11 @@ int RunInteractiveLoop(const std::string &app_name, const CliManagers &managers,
     }
   }
 
-  (void)prompt_profile_history_manager.ChangeClient(
-      prompt_profile_history_manager.CurrentNickname());
   if (!skip_loop_exit_callbacks) {
-    AMInteractiveEventRegistry::Instance().RunOnInteractiveLoopExit();
+    managers.interactive_event_registry.RunOnInteractiveLoopExit();
   }
-  if (ctx.is_interactive) {
-    ctx.is_interactive->store(false, std::memory_order_relaxed);
-  }
+  ctx.is_interactive->store(false, std::memory_order_relaxed);
   return ctx.exit_code ? ctx.exit_code->load(std::memory_order_relaxed) : 0;
 }
 
-
-
+} // namespace AMInterface::cli
