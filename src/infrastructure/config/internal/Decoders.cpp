@@ -102,6 +102,7 @@ inline constexpr const char *kCwdKey = "cwd";
 inline constexpr const char *kKeyFileKey = "keyfile";
 inline constexpr const char *kCompressionKey = "compression";
 inline constexpr const char *kCmdPrefixKey = "cmd_prefix";
+inline constexpr const char *kCmdTemplateKey = "cmd_template";
 inline constexpr const char *kWrapCmdKey = "wrap_cmd";
 inline constexpr int kDefaultSFTPPort = 22;
 inline constexpr int kDefaultFTPPort = 21;
@@ -126,7 +127,15 @@ bool DecodeHostConfig_(const std::string &nickname, const Json &json,
   (void)AMJson::QueryKey(json, {kCompressionKey}, &cfg.request.compression);
   (void)AMJson::QueryKey(json, {kLoginDirKey}, &cfg.metadata.login_dir);
   (void)AMJson::QueryKey(json, {kCwdKey}, &cfg.metadata.cwd);
-  (void)AMJson::QueryKey(json, {kCmdPrefixKey}, &cfg.metadata.cmd_prefix);
+  bool has_cmd_template = false;
+  std::string cmd_template = {};
+  has_cmd_template =
+      AMJson::QueryKey(json, {kCmdTemplateKey}, &cmd_template);
+  if (has_cmd_template) {
+    cfg.metadata.cmd_prefix = cmd_template;
+  } else {
+    (void)AMJson::QueryKey(json, {kCmdPrefixKey}, &cfg.metadata.cmd_prefix);
+  }
   (void)AMJson::QueryKey(json, {kWrapCmdKey}, &cfg.metadata.wrap_cmd);
 
   std::string protocol_str = "sftp";
@@ -172,7 +181,7 @@ Json EncodeHostConfig_(const AMDomain::host::HostConfig &cfg) {
   out[kCwdKey] = cfg.metadata.cwd;
   out[kKeyFileKey] = cfg.request.keyfile;
   out[kCompressionKey] = cfg.request.compression;
-  out[kCmdPrefixKey] = cfg.metadata.cmd_prefix;
+  out[kCmdTemplateKey] = cfg.metadata.cmd_prefix;
   out[kWrapCmdKey] = cfg.metadata.wrap_cmd;
   return out;
 }
@@ -1108,57 +1117,86 @@ void DecodeCliPrompt_(const Json &json, CLIPromptStyle *out) {
     return;
   }
 
-  (void)AMJson::QueryKey(json, {"Shortcut", "un"}, &out->shortcut.un);
-  (void)AMJson::QueryKey(json, {"Shortcut", "at"}, &out->shortcut.at);
-  (void)AMJson::QueryKey(json, {"Shortcut", "hn"}, &out->shortcut.hn);
-  (void)AMJson::QueryKey(json, {"Shortcut", "en"}, &out->shortcut.en);
-  (void)AMJson::QueryKey(json, {"Shortcut", "nn"}, &out->shortcut.nn);
-  (void)AMJson::QueryKey(json, {"Shortcut", "cwd"}, &out->shortcut.cwd);
-  (void)AMJson::QueryKey(json, {"Shortcut", "ds"}, &out->shortcut.ds);
-  (void)AMJson::QueryKey(json, {"Shortcut", "white"}, &out->shortcut.white);
+  Json shortcut = codec_common::QueryObjectAt_(json, {"shortcut"});
+  if (!shortcut.is_object()) {
+    shortcut = codec_common::QueryObjectAt_(json, {"Shortcut"});
+  }
+  if (shortcut.is_object()) {
+    out->shortcut = codec_common::ReadStringMap_(shortcut, true);
+  }
 
-  (void)AMJson::QueryKey(json, {"Icons", "windows"}, &out->icons.windows);
-  (void)AMJson::QueryKey(json, {"Icons", "linux"}, &out->icons.linux);
-  (void)AMJson::QueryKey(json, {"Icons", "macos"}, &out->icons.macos);
+  Json icons = codec_common::QueryObjectAt_(json, {"icons"});
+  if (!icons.is_object()) {
+    icons = codec_common::QueryObjectAt_(json, {"Icons"});
+  }
+  (void)AMJson::QueryKey(icons, {"windows"}, &out->icons.windows);
+  (void)AMJson::QueryKey(icons, {"linux"}, &out->icons.linux);
+  (void)AMJson::QueryKey(icons, {"macos"}, &out->icons.macos);
 
-  (void)AMJson::QueryKey(json, {"NamedStyles", "un"}, &out->named_styles.un);
-  (void)AMJson::QueryKey(json, {"NamedStyles", "at"}, &out->named_styles.at);
-  (void)AMJson::QueryKey(json, {"NamedStyles", "hn"}, &out->named_styles.hn);
-  (void)AMJson::QueryKey(json, {"NamedStyles", "en"}, &out->named_styles.en);
-  (void)AMJson::QueryKey(json, {"NamedStyles", "nn"}, &out->named_styles.nn);
-  (void)AMJson::QueryKey(json, {"NamedStyles", "cwd"}, &out->named_styles.cwd);
-  (void)AMJson::QueryKey(json, {"NamedStyles", "ds"}, &out->named_styles.ds);
-  (void)AMJson::QueryKey(json, {"NamedStyles", "white"}, &out->named_styles.white);
+  Json named = codec_common::QueryObjectAt_(json, {"named_styles"});
+  if (!named.is_object()) {
+    named = codec_common::QueryObjectAt_(json, {"NamedStyles"});
+  }
+  if (!named.is_object()) {
+    named = codec_common::QueryObjectAt_(json, {"namedstyles"});
+  }
+  (void)AMJson::QueryKey(named, {"un"}, &out->named_styles.un);
+  (void)AMJson::QueryKey(named, {"at"}, &out->named_styles.at);
+  (void)AMJson::QueryKey(named, {"hn"}, &out->named_styles.hn);
+  (void)AMJson::QueryKey(named, {"en"}, &out->named_styles.en);
+  (void)AMJson::QueryKey(named, {"nn"}, &out->named_styles.nn);
+  (void)AMJson::QueryKey(named, {"cwd"}, &out->named_styles.cwd);
+  (void)AMJson::QueryKey(named, {"ds"}, &out->named_styles.ds);
+  (void)AMJson::QueryKey(named, {"white"}, &out->named_styles.white);
 
-  (void)AMJson::QueryKey(json, {"template", "core_prompt"},
+  Json template_json = codec_common::QueryObjectAt_(json, {"template"});
+  if (!template_json.is_object()) {
+    template_json = codec_common::QueryObjectAt_(json, {"Template"});
+  }
+  (void)AMJson::QueryKey(template_json, {"core_prompt"},
                          &out->prompt_template.core_prompt);
-  (void)AMJson::QueryKey(json, {"template", "history_search_prompt"},
+  (void)AMJson::QueryKey(template_json, {"history_search_prompt"},
                          &out->prompt_template.history_search_prompt);
+
+  // Backward compatibility: accept misspelled "templete" section.
+  if (out->prompt_template.core_prompt.empty() ||
+      out->prompt_template.history_search_prompt.empty()) {
+    Json templete_json = codec_common::QueryObjectAt_(json, {"templete"});
+    if (!templete_json.is_object()) {
+      templete_json = codec_common::QueryObjectAt_(json, {"Templete"});
+    }
+    if (out->prompt_template.core_prompt.empty()) {
+      (void)AMJson::QueryKey(templete_json, {"core_prompt"},
+                             &out->prompt_template.core_prompt);
+    }
+    if (out->prompt_template.history_search_prompt.empty()) {
+      (void)AMJson::QueryKey(templete_json, {"history_search_prompt"},
+                             &out->prompt_template.history_search_prompt);
+    }
+  }
+
+  // Backward compatibility: accept legacy flat "format" key.
+  if (out->prompt_template.core_prompt.empty()) {
+    (void)AMJson::QueryKey(json, {"format"}, &out->prompt_template.core_prompt);
+  }
 }
 
 Json EncodeCliPrompt_(const CLIPromptStyle &in) {
   Json out = Json::object();
-  out["Shortcut"]["un"] = in.shortcut.un;
-  out["Shortcut"]["at"] = in.shortcut.at;
-  out["Shortcut"]["hn"] = in.shortcut.hn;
-  out["Shortcut"]["en"] = in.shortcut.en;
-  out["Shortcut"]["nn"] = in.shortcut.nn;
-  out["Shortcut"]["cwd"] = in.shortcut.cwd;
-  out["Shortcut"]["ds"] = in.shortcut.ds;
-  out["Shortcut"]["white"] = in.shortcut.white;
+  out["shortcut"] = codec_common::WriteStringMap_(in.shortcut);
 
-  out["Icons"]["windows"] = in.icons.windows;
-  out["Icons"]["linux"] = in.icons.linux;
-  out["Icons"]["macos"] = in.icons.macos;
+  out["icons"]["windows"] = in.icons.windows;
+  out["icons"]["linux"] = in.icons.linux;
+  out["icons"]["macos"] = in.icons.macos;
 
-  out["NamedStyles"]["un"] = in.named_styles.un;
-  out["NamedStyles"]["at"] = in.named_styles.at;
-  out["NamedStyles"]["hn"] = in.named_styles.hn;
-  out["NamedStyles"]["en"] = in.named_styles.en;
-  out["NamedStyles"]["nn"] = in.named_styles.nn;
-  out["NamedStyles"]["cwd"] = in.named_styles.cwd;
-  out["NamedStyles"]["ds"] = in.named_styles.ds;
-  out["NamedStyles"]["white"] = in.named_styles.white;
+  out["named_styles"]["un"] = in.named_styles.un;
+  out["named_styles"]["at"] = in.named_styles.at;
+  out["named_styles"]["hn"] = in.named_styles.hn;
+  out["named_styles"]["en"] = in.named_styles.en;
+  out["named_styles"]["nn"] = in.named_styles.nn;
+  out["named_styles"]["cwd"] = in.named_styles.cwd;
+  out["named_styles"]["ds"] = in.named_styles.ds;
+  out["named_styles"]["white"] = in.named_styles.white;
 
   out["template"]["core_prompt"] = in.prompt_template.core_prompt;
   out["template"]["history_search_prompt"] =
@@ -1338,6 +1376,11 @@ public:
     *typed = {};
 
     const Json style = codec_common::QueryObjectAt_(root, {"Style"});
+    Json global_shortcut = codec_common::QueryObjectAt_(style, {"shortcut"});
+    if (!global_shortcut.is_object()) {
+      global_shortcut = codec_common::QueryObjectAt_(style, {"Shortcut"});
+    }
+
     DecodeCompleteMenu_(codec_common::QueryObjectAt_(style, {"CompleteMenu"}),
                         &typed->style.complete_menu);
     DecodeTable_(codec_common::QueryObjectAt_(style, {"Table"}),
@@ -1346,6 +1389,15 @@ public:
                        &typed->style.progress_bar);
     DecodeCliPrompt_(codec_common::QueryObjectAt_(style, {"CLIPrompt"}),
                      &typed->style.cli_prompt);
+    if (global_shortcut.is_object()) {
+      auto shortcut_map = codec_common::ReadStringMap_(global_shortcut, true);
+      for (auto &[key, value] : shortcut_map) {
+        if (typed->style.cli_prompt.shortcut.find(key) ==
+            typed->style.cli_prompt.shortcut.end()) {
+          typed->style.cli_prompt.shortcut[key] = std::move(value);
+        }
+      }
+    }
     DecodeInputHighlight_(
         codec_common::QueryObjectAt_(style, {"InputHighlight"}),
         &typed->style.input_highlight);
@@ -1378,6 +1430,7 @@ public:
     style["CompleteMenu"] = EncodeCompleteMenu_(typed->style.complete_menu);
     style["Table"] = EncodeTable_(typed->style.table);
     style["ProgressBar"] = EncodeProgressBar_(typed->style.progress_bar);
+    style["shortcut"] = codec_common::WriteStringMap_(typed->style.cli_prompt.shortcut);
     style["CLIPrompt"] = EncodeCliPrompt_(typed->style.cli_prompt);
     style["InputHighlight"] =
         EncodeInputHighlight_(typed->style.input_highlight);

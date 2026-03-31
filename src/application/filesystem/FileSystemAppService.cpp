@@ -89,19 +89,96 @@ std::string EscapeDoubleQuote_(const std::string &text) {
   return AMStr::replace_all(text, "\"", "\\\"");
 }
 
+std::string RenderCmdTemplate_(const std::string &templ, const std::string &cmd,
+                               const std::string &escaped_cmd,
+                               const std::string &nickname,
+                               const std::string &username,
+                               const std::string &cwd) {
+  std::string out;
+  out.reserve(templ.size() + cmd.size());
+
+  for (size_t i = 0; i < templ.size();) {
+    const char ch = templ[i];
+    if (ch == '`') {
+      if (i + 1 < templ.size()) {
+        out.push_back(templ[i + 1]);
+        i += 2;
+      } else {
+        out.push_back('`');
+        ++i;
+      }
+      continue;
+    }
+
+    if (ch == '{' && i + 1 < templ.size() && templ[i + 1] == '$') {
+      size_t j = i + 2;
+      std::string key;
+      bool found_close = false;
+      while (j < templ.size()) {
+        if (templ[j] == '`') {
+          if (j + 1 < templ.size()) {
+            key.push_back(templ[j + 1]);
+            j += 2;
+            continue;
+          }
+          ++j;
+          continue;
+        }
+        if (templ[j] == '}') {
+          found_close = true;
+          break;
+        }
+        key.push_back(templ[j]);
+        ++j;
+      }
+
+      if (found_close) {
+        const std::string norm_key = AMStr::lowercase(AMStr::Strip(key));
+        if (norm_key == "cmd") {
+          out += cmd;
+        } else if (norm_key == "escaped_cmd") {
+          out += escaped_cmd;
+        } else if (norm_key == "nickname") {
+          out += nickname;
+        } else if (norm_key == "username") {
+          out += username;
+        } else if (norm_key == "cwd") {
+          out += cwd;
+        } else {
+          out.append(templ, i, j - i + 1);
+        }
+        i = j + 1;
+        continue;
+      }
+    }
+
+    out.push_back(ch);
+    ++i;
+  }
+  return out;
+}
+
 std::string BuildShellRunCmd_(AMDomain::client::OS_TYPE os_type,
                               const std::string &cwd,
                               const std::string &command,
-                              const std::string &cmd_prefix, bool wrap_cmd) {
+                              const std::string &cmd_prefix, bool wrap_cmd,
+                              const std::string &nickname,
+                              const std::string &username) {
+  const std::string escaped_cmd = AMStr::replace_all(command, "\"", "'");
+  if (cmd_prefix.find("{$") != std::string::npos) {
+    return RenderCmdTemplate_(cmd_prefix, command, escaped_cmd, nickname,
+                              username, cwd);
+  }
+
   std::string final_cmd = command;
   const std::string shell_cwd = AMStr::Strip(cwd);
   if (!shell_cwd.empty()) {
     if (os_type == AMDomain::client::OS_TYPE::Windows) {
-      final_cmd = AMStr::fmt("cd /d \"{}\" && {}",
-                             EscapeDoubleQuote_(shell_cwd), final_cmd);
+      final_cmd =
+          AMStr::fmt("cd \"{}\";{}", EscapeDoubleQuote_(shell_cwd), final_cmd);
     } else {
-      final_cmd = AMStr::fmt("cd \"{}\" && {}", EscapeDoubleQuote_(shell_cwd),
-                             final_cmd);
+      final_cmd =
+          AMStr::fmt("cd \"{}\"&&{}", EscapeDoubleQuote_(shell_cwd), final_cmd);
     }
   }
   if (cmd_prefix.empty()) {
@@ -223,9 +300,9 @@ std::vector<PathInfo> CompactMatchedPaths_(const std::vector<PathInfo> &raw) {
   return compacted;
 }
 
-FilesystemAppService::FilesystemAppService(
-    FilesystemArg arg, HostAppService *host_service,
-    ClientAppService *client_service)
+FilesystemAppService::FilesystemAppService(FilesystemArg arg,
+                                           HostAppService *host_service,
+                                           ClientAppService *client_service)
     : FilesystemAppBaseService(arg, host_service, client_service) {}
 
 ECMData<ClientPath>
@@ -272,14 +349,11 @@ ECM FilesystemAppService::ChangeDir(ClientPath path,
   }
   ClientHandle client = path.client;
 
-  auto meta_guard = client->MetaDataPort().GetLockGaurd();
-  auto *metadata = client->MetaDataPort().QueryTypedValue<ClientMetaData>();
-
-  if (!metadata) {
+  auto metadata = client->MetaDataPort().QueryTypedValue<ClientMetaData>();
+  if (!metadata.has_value()) {
     return Err(EC::CommonFailure, "Client metadata not found");
   }
   const std::string prev_cwd = metadata->cwd;
-  meta_guard.Unlock();
   const std::string abs_target = path.path;
   auto stat_result = client->IOPort().stat({abs_target, false}, control);
   if (!isok(stat_result.rcm)) {
@@ -290,13 +364,18 @@ ECM FilesystemAppService::ChangeDir(ClientPath path,
                AMStr::fmt("Not a directory: {}", abs_target));
   }
 
-  meta_guard.Relock();
-  metadata = client->MetaDataPort().QueryTypedValue<ClientMetaData>();
-  if (!metadata) {
+  bool metadata_updated = false;
+  client->MetaDataPort().MutateTypeValue<ClientMetaData>(
+      [&](ClientMetaData *meta) {
+        if (!meta) {
+          return;
+        }
+        meta->cwd = abs_target;
+        metadata_updated = true;
+      });
+  if (!metadata_updated) {
     return Err(EC::CommonFailure, "Client metadata not found");
   }
-  metadata->cwd = abs_target;
-  meta_guard.Unlock();
 
   client_service_->SetCurrentClient(client);
 
@@ -420,15 +499,13 @@ FilesystemAppService::ResolveTrashDir(ClientPath source,
 
   std::string trash_dir = {};
   {
-    auto meta_guard = source.client->MetaDataPort().GetLockGaurd();
-    auto *metadata =
+    auto metadata =
         source.client->MetaDataPort().QueryTypedValue<ClientMetaData>();
-    if (!metadata) {
+    if (!metadata.has_value()) {
       return {ClientPath{},
               Err(EC::CommonFailure, "Client metadata not found")};
     }
     trash_dir = AMStr::Strip(metadata->trash_dir);
-    meta_guard.Unlock();
   }
   if (trash_dir.empty()) {
     trash_dir = "~/.AMSFTP_Trash";
@@ -1320,24 +1397,34 @@ RunResult FilesystemAppService::ShellRun(const std::string &nickname,
 
   ClientMetaData metadata = {};
   {
-    auto meta_guard = client->MetaDataPort().GetLockGaurd();
-    auto *metadata_ptr =
+    auto metadata_value =
         client->MetaDataPort().QueryTypedValue<ClientMetaData>();
-    if (!metadata_ptr) {
+    if (!metadata_value.has_value()) {
       out.rcm = Err(EC::CommonFailure, "Client metadata not found");
       return out;
     }
-    metadata = *metadata_ptr;
-    meta_guard.Unlock();
+    metadata = *metadata_value;
   }
 
   std::string shell_cwd = AMStr::Strip(workdir);
+  const bool template_mode =
+      metadata.cmd_prefix.find("{$") != std::string::npos;
   if (!shell_cwd.empty()) {
     shell_cwd = ResolveAbsolutePath_(client, metadata, shell_cwd);
+  } else if (template_mode) {
+    shell_cwd = ResolveWorkdir_(metadata, client->ConfigPort().GetHomeDir());
   }
 
+  std::string effective_nickname =
+      AMStr::Strip(client->ConfigPort().GetNickname());
+  if (effective_nickname.empty()) {
+    effective_nickname = resolved_nickname;
+  }
+  const std::string effective_username =
+      client->ConfigPort().GetRequest().username;
   const std::string final_cmd = BuildShellRunCmd_(
-      os_type, shell_cwd, cmd, metadata.cmd_prefix, metadata.wrap_cmd);
+      os_type, shell_cwd, cmd, metadata.cmd_prefix, metadata.wrap_cmd,
+      effective_nickname, effective_username);
   if (final_cmd_out != nullptr) {
     *final_cmd_out = final_cmd;
   }
