@@ -1,13 +1,14 @@
 #pragma once
 #define _WINSOCKAPI_
 
-#include "foundation/tools/string.hpp"
 #include "Isocline/isocline.h"
+#include "foundation/tools/string.hpp"
 #include "third_party/indicators/color.hpp"
 #include "third_party/indicators/cursor_control.hpp"
 #include "third_party/indicators/progress_bar.hpp"
 #include "third_party/indicators/setting.hpp"
 #include "third_party/indicators/terminal_size.hpp"
+
 
 #include <algorithm>
 #include <atomic>
@@ -466,7 +467,7 @@ private:
                           : 0;
 
     std::string size_part = AMStr::fmt("{}/{}", FormatSize_(current_size_, 2),
-                                         FormatSize_(total_size_, 2));
+                                       FormatSize_(total_size_, 2));
     std::vector<std::string> bracket_parts;
     if (show_elapsed_time_ || show_remaining_time_) {
       std::string time_part;
@@ -492,8 +493,8 @@ private:
       bracket_oss << bracket_parts[i];
     }
     if (show_percentage_) {
-      postfix_ = AMStr::fmt("{} | {} [{}]", FormatPercent_(percent),
-                              size_part, bracket_oss.str());
+      postfix_ = AMStr::fmt("{} | {} [{}]", FormatPercent_(percent), size_part,
+                            bracket_oss.str());
     } else {
       postfix_ = AMStr::fmt("{} [{}]", size_part, bracket_oss.str());
     }
