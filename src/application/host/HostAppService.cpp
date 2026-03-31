@@ -63,7 +63,9 @@ ECM AMHostAppService::Init(const HostConfigArg &host_config_arg) {
   return Ok();
 }
 
-HostConfigArg AMHostAppService::GetInitArg() const { return SnapshotFromCache_(); }
+HostConfigArg AMHostAppService::GetInitArg() const {
+  return SnapshotFromCache_();
+}
 
 std::pair<ECM, HostConfig>
 AMHostAppService::GetClientConfig(const std::string &nickname) {
@@ -73,7 +75,7 @@ AMHostAppService::GetClientConfig(const std::string &nickname) {
   }
   const std::string key = NormalizeHostKey_(nickname);
   if (IsLocalNickname(key)) {
-    return {Err(EC::InvalidArg, "use GetLocalConfig for local nickname"), {}};
+    return {Ok(), local_config_};
   }
   auto it = host_configs_.find(key);
   if (it == host_configs_.end()) {
@@ -143,9 +145,8 @@ ECM AMHostAppService::AddHost(const HostConfig &entry, bool overwrite) {
 
   auto it = host_configs_.find(normalized.request.nickname);
   if (it != host_configs_.end() && !overwrite) {
-    return Err(EC::KeyAlreadyExists,
-               AMStr::fmt("host already exists: {}",
-                          normalized.request.nickname));
+    return Err(EC::KeyAlreadyExists, AMStr::fmt("host already exists: {}",
+                                                normalized.request.nickname));
   }
   host_configs_[normalized.request.nickname] = std::move(normalized);
   return Ok();
@@ -245,10 +246,12 @@ ECM AMHostAppService::Rename(const std::string &old_nickname,
   }
   auto old_it = host_configs_.find(old_key);
   if (old_it == host_configs_.end()) {
-    return Err(EC::HostConfigNotFound, AMStr::fmt("host not found: {}", old_key));
+    return Err(EC::HostConfigNotFound,
+               AMStr::fmt("host not found: {}", old_key));
   }
   if (host_configs_.find(new_key) != host_configs_.end()) {
-    return Err(EC::KeyAlreadyExists, AMStr::fmt("host already exists: {}", new_key));
+    return Err(EC::KeyAlreadyExists,
+               AMStr::fmt("host already exists: {}", new_key));
   }
   HostConfig moved = old_it->second;
   moved.request.nickname = new_key;

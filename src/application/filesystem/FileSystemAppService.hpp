@@ -11,6 +11,7 @@ using ClientPath = AMDomain::filesystem::ClientPath;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using FilesystemArg = AMDomain::filesystem::FilesystemArg;
 using RunResult = AMDomain::filesystem::RunResult;
+using ClientHandle = AMDomain::client::ClientHandle;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 using TASKS = std::vector<AMDomain::transfer::TransferTask>;
 struct TransferPath {
@@ -71,6 +72,8 @@ public:
 
   [[nodiscard]] ECMData<ClientPath>
   GetCwd(const ClientControlComponent &control);
+  ECM EnsureClientWorkdir(ClientHandle client,
+                          const ClientControlComponent &control);
   [[nodiscard]] ECMData<ClientPath> PeekCdHistory() const;
   ECM ChangeDir(ClientPath path, const ClientControlComponent &control,
                 bool from_history = false);

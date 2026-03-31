@@ -12,6 +12,7 @@ using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using HostConfig = AMDomain::host::HostConfig;
 using HostConfigManager = AMApplication::host::AMHostAppService;
 using AMDomain::host::HostService::IsLocalNickname;
+constexpr const char *kTransferLeaseKey = "transfer.lease";
 
 std::string JoinCandidates_(const std::vector<std::string> &candidates) {
   std::string out = {};
@@ -59,6 +60,70 @@ ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
   auto [matched_rcm, matched_cfg] =
       host_config_manager->GetClientConfig(matched_names.front());
   return {matched_cfg, matched_rcm};
+}
+
+ECM AcquireTransferLease_(const ClientHandle &client) {
+  if (!client) {
+    return Err(EC::InvalidHandle, "Client handle is null");
+  }
+
+  auto &meta = client->MetaDataPort();
+  bool lease_acquired = false;
+  bool lease_missing = false;
+  bool type_mismatch = false;
+
+  meta.MutateNamedValue<bool>(
+      kTransferLeaseKey, [&](bool *leased, bool name_found, bool type_match) {
+        if (!name_found) {
+          lease_missing = true;
+          return;
+        }
+        if (!type_match || !leased) {
+          type_mismatch = true;
+          return;
+        }
+        if (!*leased) {
+          *leased = true;
+          lease_acquired = true;
+        }
+      });
+
+  if (type_mismatch) {
+    return Err(EC::CommonFailure, "transfer.lease metadata type is invalid");
+  }
+  if (lease_acquired) {
+    return Ok();
+  }
+
+  if (lease_missing) {
+    if (meta.StoreNamedData(kTransferLeaseKey, std::any(true), false)) {
+      return Ok();
+    }
+    bool retry_acquired = false;
+    bool retry_type_mismatch = false;
+    meta.MutateNamedValue<bool>(
+        kTransferLeaseKey, [&](bool *leased, bool name_found, bool type_match) {
+          if (!name_found) {
+            return;
+          }
+          if (!type_match || !leased) {
+            retry_type_mismatch = true;
+            return;
+          }
+          if (!*leased) {
+            *leased = true;
+            retry_acquired = true;
+          }
+        });
+    if (retry_type_mismatch) {
+      return Err(EC::CommonFailure, "transfer.lease metadata type is invalid");
+    }
+    if (retry_acquired) {
+      return Ok();
+    }
+  }
+
+  return Err(EC::PathUsingByOthers, "Client is already leased");
 }
 } // namespace
 
@@ -216,10 +281,7 @@ ClientAppService::CreateClient(const HostConfig &config,
   }
   ApplyCallbacksToClient_(client, callbacks);
 
-  {
-    auto guard = client->MetaDataPort().GetLockGaurd();
-    (void)client->MetaDataPort().StoreTypedValue(config.metadata, true);
-  }
+  (void)client->MetaDataPort().StoreTypedValue(config.metadata, true);
 
   const ConnectHooks hooks = SnapshotConnectHooks_();
   if (hooks.before_connect) {
@@ -401,48 +463,70 @@ ECM ClientAppService::RemoveClient(const std::string &nickname) {
 
 ECMData<ClientHandle>
 ClientAppService::GetPublicClient(const std::string &nickname) {
-  while (true) {
-    ClientID candidate_id;
-    ClientHandle candidate = nullptr;
-    {
-      auto public_clients = public_clients_.lock();
-      auto bucket_it = public_clients->find(nickname);
-      if (bucket_it == public_clients->end() || bucket_it->second.empty()) {
-        return {nullptr,
-                {EC::ClientNotFound,
-                 AMStr::fmt("No public client found for {}", nickname)}};
-      }
-      auto it = bucket_it->second.begin();
-      candidate_id = it->first;
-      candidate = it->second;
+  std::vector<std::pair<ClientID, ClientHandle>> candidates = {};
+  {
+    auto public_clients = public_clients_.lock();
+    auto bucket_it = public_clients->find(nickname);
+    if (bucket_it == public_clients->end() || bucket_it->second.empty()) {
+      return {nullptr,
+              {EC::ClientNotFound,
+               AMStr::fmt("No public client found for {}", nickname)}};
     }
+    candidates.reserve(bucket_it->second.size());
+    for (const auto &entry : bucket_it->second) {
+      candidates.push_back(entry);
+    }
+  }
 
+  std::vector<ClientID> stale_ids = {};
+  bool has_leased_client = false;
+  ECM status = Ok();
+  for (const auto &[candidate_id, candidate] : candidates) {
     if (!candidate) {
-      auto public_clients = public_clients_.lock();
-      auto bucket_it = public_clients->find(nickname);
-      if (bucket_it != public_clients->end()) {
-        bucket_it->second.erase(candidate_id);
-        if (bucket_it->second.empty()) {
-          public_clients->erase(bucket_it);
-        }
-      }
+      stale_ids.push_back(candidate_id);
       continue;
     }
 
     auto state = candidate->ConfigPort().GetState();
-    if (state.status == ClientStatus::OK && isok(state.rcm)) {
-      return {candidate, state.rcm};
+    if (!(state.status == ClientStatus::OK && isok(state.rcm))) {
+      stale_ids.push_back(candidate_id);
+      continue;
     }
 
+    const ECM lease_rcm = AcquireTransferLease_(candidate);
+    if (isok(lease_rcm)) {
+      return {candidate, state.rcm};
+    }
+    if (lease_rcm.first == EC::PathUsingByOthers) {
+      has_leased_client = true;
+      continue;
+    }
+    status = lease_rcm;
+  }
+
+  if (!stale_ids.empty()) {
     auto public_clients = public_clients_.lock();
     auto bucket_it = public_clients->find(nickname);
     if (bucket_it != public_clients->end()) {
-      bucket_it->second.erase(candidate_id);
+      for (const auto &id : stale_ids) {
+        bucket_it->second.erase(id);
+      }
       if (bucket_it->second.empty()) {
         public_clients->erase(bucket_it);
       }
     }
   }
+
+  if (has_leased_client) {
+    return {nullptr, Err(EC::PathUsingByOthers,
+                         AMStr::fmt("All public clients for {} are leased",
+                                    nickname))};
+  }
+  if (!isok(status)) {
+    return {nullptr, status};
+  }
+  return {nullptr, Err(EC::ClientNotFound,
+                       AMStr::fmt("No public client found for {}", nickname))};
 }
 
 ECM ClientAppService::AddPublicClient(const ClientHandle &client) {
