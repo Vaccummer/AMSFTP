@@ -1,12 +1,21 @@
 #pragma once
 #include "foundation/core/DataClass.hpp"
 #include "Isocline/isocline.h"
+#include "interface/parser/TokenAnalyzerRuntime.hpp"
+#include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
+namespace AMInterface::cli {
+class AMInteractiveEventRegistry;
+}
+
+namespace AMInterface::parser {
+
 class CommandNode;
 
-class AMTokenTypeAnalyzer : public NonCopyableNonMovable {
+class TokenTypeAnalyzer : public NonCopyableNonMovable {
 public:
   /**
    * @brief Token parsed from input split stage.
@@ -20,15 +29,25 @@ public:
     AMTokenType type = AMTokenType::Unset;
   };
 
-  /**
-   * @brief Construct a token analyzer bound to the config manager.
-   */
-  static AMTokenTypeAnalyzer &Instance() {
-    static AMTokenTypeAnalyzer ins;
-    return ins;
-  }
+  ~TokenTypeAnalyzer() override = default;
+  TokenTypeAnalyzer() = default;
+  explicit TokenTypeAnalyzer(std::shared_ptr<ITokenAnalyzerRuntime> runtime)
+      : runtime_(std::move(runtime)) {}
 
-  ~AMTokenTypeAnalyzer() override = default;
+  /**
+   * @brief Set command tree used by highlight/semantic routing.
+   */
+  void SetCommandTree(const CommandNode *command_tree) {
+    command_tree_ = command_tree;
+  }
+  void SetRuntime(std::shared_ptr<ITokenAnalyzerRuntime> runtime) {
+    runtime_ = std::move(runtime);
+  }
+  [[nodiscard]] std::shared_ptr<ITokenAnalyzerRuntime> Runtime() const {
+    return runtime_;
+  }
+  void BindInteractiveEventRegistry(
+      AMInterface::cli::AMInteractiveEventRegistry *registry);
 
   /**
    * @brief Build a bbcode-formatted string for isocline highlighting.
@@ -48,7 +67,7 @@ public:
    *
    * This function does not perform style/semantic classification.
    */
-  static std::vector<AMToken> SplitToken(const std::string &input);
+  std::vector<AMToken> SplitToken(const std::string &input) const;
 
   /**
    * @brief Clear SplitToken/TokenizeStyle caches.
@@ -56,11 +75,6 @@ public:
   static void ClearTokenCache();
 
 private:
-  AMTokenTypeAnalyzer() = default;
-
-  void EnsureCliCache();
-  void BuildCliCache();
-
   std::vector<AMToken> TokenizeStyle(const std::string &input);
   bool ParseVarTokenAt(const std::string &input, size_t pos, size_t limit,
                        size_t *out_end) const;
@@ -73,5 +87,10 @@ private:
                           const CommandNode *node) const;
   [[nodiscard]] int PriorityForType(AMTokenType type) const;
 
-  bool cli_cache_ready_ = false;
+  const CommandNode *command_tree_ = nullptr;
+  std::shared_ptr<ITokenAnalyzerRuntime> runtime_ = nullptr;
+  bool token_cache_hook_registered_ = false;
+  std::function<void()> token_cache_clear_callback_ = {};
 };
+
+} // namespace AMInterface::parser
