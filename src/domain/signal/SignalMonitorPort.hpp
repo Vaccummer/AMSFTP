@@ -2,6 +2,7 @@
 
 #include "foundation/core/DataClass.hpp"
 #include <functional>
+#include <memory>
 #include <string>
 
 namespace AMDomain::signal {
@@ -18,13 +19,13 @@ struct SignalHook {
 /**
  * @brief Domain port for CLI signal monitor hook orchestration.
  */
-class AMSignalMonitorPort : public NonCopyableNonMovable {
+class SignalMonitor : public NonCopyableNonMovable {
 public:
   /**
    * @brief Hook container for one signal subscriber.
    */
 
-  ~AMSignalMonitorPort() = default;
+  ~SignalMonitor() override = default;
 
   /**
    * @brief Install handlers and start monitor worker.
@@ -67,9 +68,15 @@ public:
    */
   virtual bool SetHookPriority(const std::string &name, int priority) = 0;
 };
+
+/**
+ * @brief Build the default signal-monitor port implementation.
+ */
+std::unique_ptr<SignalMonitor> BuildSignalMonitorPort();
 } // namespace AMDomain::signal
 
 /**
- * @brief Backward-compatible global alias for gradual migration.
+ * @brief Backward-compatible global alias.
  */
-using AMSignalMonitorPort = AMDomain::signal::AMSignalMonitorPort;
+using SignalMonitor = AMDomain::signal::SignalMonitor;
+using AMSignalMonitorPort = AMDomain::signal::SignalMonitor;
