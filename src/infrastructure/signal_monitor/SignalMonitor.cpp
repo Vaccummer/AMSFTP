@@ -1,21 +1,26 @@
-#include "foundation/tools/enum_related.hpp"
 #include "infrastructure/signal_monitor/SignalMonitor.hpp"
 #include <algorithm>
 #include <chrono>
+#include <foundation/tools/enum_related.hpp>
+#include <memory>
 #include <utility>
 #include <vector>
 
+namespace {
 std::atomic<int> GlobalSignalInt{0};
+} // namespace
+
+namespace AMInfra::signal {
 
 /** Stop worker resources during teardown. */
-AMInfraCliSignalMonitor::~AMInfraCliSignalMonitor() { Stop(); }
+SignalMonitorImpl::~SignalMonitorImpl() { Stop(); }
 
-void AMInfraCliSignalMonitor::InstallHandlers() {
+void SignalMonitorImpl::InstallHandlers() {
 #ifdef _WIN32
-  SetConsoleCtrlHandler(AMInfraCliSignalMonitor::ConsoleCtrlHandler_, TRUE);
+  SetConsoleCtrlHandler(SignalMonitorImpl::ConsoleCtrlHandler_, TRUE);
 #else
   struct sigaction sa{};
-  sa.sa_handler = AMInfraCliSignalMonitor::SignalHandler;
+  sa.sa_handler = SignalMonitorImpl::SignalHandler;
   sigemptyset(&sa.sa_mask);
   sa.sa_flags = SA_RESTART;
   sigaction(SIGINT, &sa, nullptr);
@@ -25,32 +30,32 @@ void AMInfraCliSignalMonitor::InstallHandlers() {
 #endif
 }
 
-void AMInfraCliSignalMonitor::Start() {
+void SignalMonitorImpl::Start() {
   if (running_.exchange(true, std::memory_order_acq_rel)) {
     return;
   }
   worker_ = std::thread([this]() { Run_(); });
 }
 
-ECM AMInfraCliSignalMonitor::Init() {
+ECM SignalMonitorImpl::Init() {
   InstallHandlers();
   Start();
   return Ok();
 }
 
-void AMInfraCliSignalMonitor::Stop() {
+void SignalMonitorImpl::Stop() {
   running_.store(false, std::memory_order_release);
   if (worker_.joinable()) {
     worker_.join();
   }
 }
 
-int AMInfraCliSignalMonitor::LastSignal() const {
+int SignalMonitorImpl::LastSignal() const {
   return last_handled_signal_.load(std::memory_order_relaxed);
 }
 
-bool AMInfraCliSignalMonitor::RegisterHook(const std::string &name,
-                                           const AMDomain::signal::SignalHook &hook) {
+bool SignalMonitorImpl::RegisterHook(const std::string &name,
+                                     const AMDomain::signal::SignalHook &hook) {
   if (name.empty()) {
     return false;
   }
@@ -62,7 +67,7 @@ bool AMInfraCliSignalMonitor::RegisterHook(const std::string &name,
   return true;
 }
 
-bool AMInfraCliSignalMonitor::UnregisterHook(const std::string &name) {
+bool SignalMonitorImpl::UnregisterHook(const std::string &name) {
   if (name.empty()) {
     return false;
   }
@@ -70,7 +75,7 @@ bool AMInfraCliSignalMonitor::UnregisterHook(const std::string &name) {
   return hooks_.erase(name) > 0;
 }
 
-bool AMInfraCliSignalMonitor::SilenceHook(const std::string &name) {
+bool SignalMonitorImpl::SilenceHook(const std::string &name) {
   if (name.empty()) {
     return false;
   }
@@ -83,7 +88,7 @@ bool AMInfraCliSignalMonitor::SilenceHook(const std::string &name) {
   return true;
 }
 
-bool AMInfraCliSignalMonitor::ResumeHook(const std::string &name) {
+bool SignalMonitorImpl::ResumeHook(const std::string &name) {
   if (name.empty()) {
     return false;
   }
@@ -96,8 +101,7 @@ bool AMInfraCliSignalMonitor::ResumeHook(const std::string &name) {
   return true;
 }
 
-bool AMInfraCliSignalMonitor::SetHookPriority(const std::string &name,
-                                              int priority) {
+bool SignalMonitorImpl::SetHookPriority(const std::string &name, int priority) {
   if (name.empty()) {
     return false;
   }
@@ -110,12 +114,8 @@ bool AMInfraCliSignalMonitor::SetHookPriority(const std::string &name,
   return true;
 }
 
-void AMInfraCliSignalMonitor::SignalHandler(int signum) {
-  GlobalSignalInt.store(signum);
-}
-
 #ifdef _WIN32
-BOOL WINAPI AMInfraCliSignalMonitor::ConsoleCtrlHandler_(DWORD type) {
+BOOL WINAPI SignalMonitorImpl::ConsoleCtrlHandler_(DWORD type) {
   switch (type) {
   case CTRL_C_EVENT:
     GlobalSignalInt.store(SIGINT);
@@ -130,11 +130,17 @@ BOOL WINAPI AMInfraCliSignalMonitor::ConsoleCtrlHandler_(DWORD type) {
     return FALSE;
   }
 }
+#else
+void SignalMonitorImpl::SignalHandler(int signal_num) {
+  if (signal_num == SIGINT || signal_num == SIGTERM) {
+    GlobalSignalInt.store(signal_num);
+  }
+}
 #endif
 
-AMInfraCliSignalMonitor::AMInfraCliSignalMonitor() = default;
+SignalMonitorImpl::SignalMonitorImpl() = default;
 
-void AMInfraCliSignalMonitor::Run_() {
+void SignalMonitorImpl::Run_() {
   while (running_.load(std::memory_order_acquire)) {
     const int signum = GlobalSignalInt.exchange(0);
     if (signum != 0) {
@@ -167,3 +173,13 @@ void AMInfraCliSignalMonitor::Run_() {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 }
+
+} // namespace AMInfra::signal
+
+namespace AMDomain::signal {
+
+std::unique_ptr<SignalMonitor> BuildSignalMonitorPort() {
+  return std::make_unique<AMInfra::signal::SignalMonitorImpl>();
+}
+
+} // namespace AMDomain::signal

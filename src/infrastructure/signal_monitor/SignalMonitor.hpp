@@ -15,20 +15,22 @@
 // program headers
 #include "domain/signal/SignalMonitorPort.hpp"
 
+namespace AMInfra::signal {
+
 /**
  * @brief Signal monitor that safely transfers signal events to a worker thread.
  */
-class AMInfraCliSignalMonitor : public AMSignalMonitorPort {
+class SignalMonitorImpl final : public AMDomain::signal::SignalMonitor {
 public:
   /**
    * @brief Stop the worker thread on destruction.
    */
-  ~AMInfraCliSignalMonitor();
+  ~SignalMonitorImpl() override;
 
   /**
    * @brief Construct signal monitor.
    */
-  AMInfraCliSignalMonitor();
+  SignalMonitorImpl();
 
   /**
    * @brief Install signal handlers for SIGINT/SIGTERM.
@@ -78,27 +80,30 @@ public:
    */
   bool SetHookPriority(const std::string &name, int priority) override;
 
-  /**
-   * @brief Signal handler to record the signal number.
-   */
-  static void SignalHandler(int signum);
-
 private:
 #ifdef _WIN32
   /**
    * @brief Console control handler for CTRL+C/CTRL+BREAK.
    */
   static BOOL WINAPI ConsoleCtrlHandler_(DWORD type);
+#else
+  static void SignalHandler(int signal_num);
 #endif
-private:
+
   /**
    * @brief Worker loop that consumes recorded signals.
    */
   void Run_();
-
   std::atomic<bool> running_{false};
   std::atomic<int> last_handled_signal_{0};
   std::thread worker_;
   mutable std::mutex hooks_mtx_;
   std::unordered_map<std::string, AMDomain::signal::SignalHook> hooks_;
 };
+
+} // namespace AMInfra::signal
+
+/**
+ * @brief Backward-compatible alias for legacy call sites.
+ */
+using AMInfraCliSignalMonitor = AMInfra::signal::SignalMonitorImpl;
