@@ -1,3 +1,4 @@
+#include "domain/client/ClientDomainService.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "infrastructure/client/common/Base.hpp"
 
@@ -12,4 +13,3 @@ timeoutf CreateClientTimeoutPort() {
   return timeout_port;
 }
 } // namespace AMDomain::client
-

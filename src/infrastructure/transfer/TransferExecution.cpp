@@ -1,10 +1,10 @@
 #include "foundation/core/DataClass.hpp"
 #include "infrastructure/transfer/core.hpp"
 
+#include "domain/client/ClientDomainService.hpp"
 #include "foundation/tools/time.hpp"
 #include "infrastructure/client/ftp/FTP.hpp"
 #include "infrastructure/client/sftp/SFTP.hpp"
-
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -193,7 +193,7 @@ ssize_t CalculateBufferSizeHelper(const ClientHandle &src_client,
   }
   if (src_size > 0 && dst_size > 0) {
     return std::max<ssize_t>(
-        std::min<ssize_t>({src_size, dst_size, AMMaxBufferSize}),
+        std::min<ssize_t>({src_size, dst_size, (ssize_t)AMMaxBufferSize}),
         AMMinBufferSize);
   }
   return std::max<ssize_t>(std::min<ssize_t>(dst_size, AMMaxBufferSize),
@@ -208,15 +208,7 @@ ClientHandle ResolveTaskClientHelper(const TransferClientContainer &clients,
   if (it == clients.end()) {
     return nullptr;
   }
-  const auto &holder = it->second;
-  if (std::holds_alternative<ClientHandle>(holder)) {
-    if (prefer_secondary) {
-      return nullptr;
-    }
-    return std::get<ClientHandle>(holder);
-  }
-  const auto &pair_clients =
-      std::get<std::pair<ClientHandle, ClientHandle>>(holder);
+  const auto &pair_clients = it->second;
   if (prefer_secondary) {
     return pair_clients.second;
   }
@@ -776,7 +768,7 @@ public:
       }
       while (file_handle.offset < file_handle.file_size &&
              !IsTaskInterrupted_(pd)) {
-        while (pd.ring_buffer->full() && !IsTaskInterrupted_(pd)) {
+        while (pd.ring_buffer->empty() && !IsTaskInterrupted_(pd)) {
           std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         if (IsTaskInterrupted_(pd)) {
