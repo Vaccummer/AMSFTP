@@ -1,6 +1,5 @@
 #pragma once
 // project header
-#include "domain/client/ClientDomainService.hpp"
 #include "domain/client/ClientModel.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "domain/host/HostModel.hpp"
@@ -14,7 +13,10 @@
 #include <deque>
 #include <magic_enum/magic_enum.hpp>
 #include <map>
+#include <mutex>
 #include <set>
+#include <shared_mutex>
+#include <typeindex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -1325,12 +1327,10 @@ private:
   NamedVarStore named_var_cache_;
 
 public:
-  [[nodiscard]] std::shared_mutex &Mutex() const override {
-    return var_cache_mtx_;
-  }
-
-  bool StoreTypedData(const std::type_index &type_key, std::any value,
-                      bool overwrite = true) override {
+  [[nodiscard]] bool StoreTypedData(const std::type_index &type_key,
+                                    std::any value,
+                                    bool overwrite = true) override {
+    std::unique_lock<std::shared_mutex> lock(var_cache_mtx_);
     auto it = type_var_cache_.find(type_key);
     if (it != type_var_cache_.end() && !overwrite) {
       return false;
@@ -1339,25 +1339,34 @@ public:
     return true;
   }
 
-  std::any *QueryTypedData(const std::type_index &type_key,
-                           bool &type_exists) override {
+  [[nodiscard]] std::optional<std::any>
+  QueryTypedData(const std::type_index &type_key) const override {
+    std::shared_lock<std::shared_mutex> lock(var_cache_mtx_);
     auto it = type_var_cache_.find(type_key);
-    type_exists = (it != type_var_cache_.end());
-    return type_exists ? &(it->second) : nullptr;
+    if (it == type_var_cache_.end()) {
+      return std::nullopt;
+    }
+    return it->second;
   }
 
-  const std::any *QueryTypedData(const std::type_index &type_key,
-                                 bool &type_exists) const override {
+  void MutateTypedData(const std::type_index &type_key,
+                       RawTypeMutator mutator) override {
+    if (!mutator) {
+      return;
+    }
+    std::unique_lock<std::shared_mutex> lock(var_cache_mtx_);
     auto it = type_var_cache_.find(type_key);
-    type_exists = (it != type_var_cache_.end());
-    return type_exists ? &(it->second) : nullptr;
+    const bool type_found = (it != type_var_cache_.end());
+    std::any *payload = type_found ? &(it->second) : nullptr;
+    mutator(payload, type_found);
   }
 
-  bool StoreNamedData(const std::string &name, std::any value,
-                      bool overwrite = true) override {
+  [[nodiscard]] bool StoreNamedData(const std::string &name, std::any value,
+                                    bool overwrite = true) override {
     if (name.empty()) {
       return false;
     }
+    std::unique_lock<std::shared_mutex> lock(var_cache_mtx_);
     auto it = named_var_cache_.find(name);
     if (it != named_var_cache_.end() && !overwrite) {
       return false;
@@ -1366,37 +1375,43 @@ public:
     return true;
   }
 
-  std::pair<bool, std::any>
+  [[nodiscard]] std::optional<std::any>
   QueryNamedData(const std::string &name) const override {
+    std::shared_lock<std::shared_mutex> lock(var_cache_mtx_);
     auto it = named_var_cache_.find(name);
     if (it == named_var_cache_.end()) {
-      return {false, std::any{}};
+      return std::nullopt;
     }
-    return {true, it->second};
+    return it->second;
   }
 
-  std::any *QueryNamedData(const std::string &name,
-                           bool &name_exists) override {
+  void MutateNamedData(const std::string &name, const std::type_index &type_key,
+                       RawNamedMutator mutator) override {
+    if (!mutator) {
+      return;
+    }
+    std::unique_lock<std::shared_mutex> lock(var_cache_mtx_);
     auto it = named_var_cache_.find(name);
-    name_exists = (it != named_var_cache_.end());
-    return name_exists ? &(it->second) : nullptr;
+    const bool name_found = (it != named_var_cache_.end());
+    bool type_match = false;
+    std::any *payload = nullptr;
+    if (name_found) {
+      type_match = (std::type_index(typeid(it->second)) == type_key);
+      payload = type_match ? &(it->second) : nullptr;
+    }
+    mutator(payload, name_found, type_match);
   }
 
-  const std::any *QueryNamedData(const std::string &name,
-                                 bool &name_exists) const override {
-    auto it = named_var_cache_.find(name);
-    name_exists = (it != named_var_cache_.end());
-    return name_exists ? &(it->second) : nullptr;
-  }
-
-  bool EraseNamedData(const std::string &name) override {
+  [[nodiscard]] bool EraseNamedData(const std::string &name) override {
     if (name.empty()) {
       return false;
     }
+    std::unique_lock<std::shared_mutex> lock(var_cache_mtx_);
     return named_var_cache_.erase(name) > 0;
   }
 
-  bool EraseTypedData(const std::type_index &type_key) override {
+  [[nodiscard]] bool EraseTypedData(const std::type_index &type_key) override {
+    std::unique_lock<std::shared_mutex> lock(var_cache_mtx_);
     return type_var_cache_.erase(type_key) > 0;
   }
 };
