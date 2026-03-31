@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "private_keys": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "HOSTS": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "hostname": {
+            "type": "string"
+          },
+          "username": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "password": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "sftp",
+              "ftp",
+              "local"
+            ]
+          },
+          "buffer_size": {
+            "type": "integer"
+          },
+          "trash_dir": {
+            "type": "string"
+          },
+          "login_dir": {
+            "type": "string"
+          },
+          "keyfile": {
+            "type": "string"
+          },
+          "compression": {
+            "type": "boolean"
+          },
+          "cmd_prefix": {
+            "type": "string"
+          },
+          "cmd_template": {
+            "type": "string"
+          },
+          "wrap_cmd": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
