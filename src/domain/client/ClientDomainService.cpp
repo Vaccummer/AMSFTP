@@ -24,11 +24,11 @@ ClientControlComponent MakeClientControlComponent(amf interrupt_flag,
   if (timeout_port) {
     timeout_port->SetTimeout(ResolveTimeoutBudgetMs(timeout_ms, start_time));
   }
-  return ClientControlComponent(std::move(interrupt_flag),
-                                std::move(timeout_port));
+  return {std::move(interrupt_flag), std::move(timeout_port)};
 }
 
-ClientControlComponent MakeClientIOControlArgs(amf interrupt_flag, int timeout_ms,
+ClientControlComponent MakeClientIOControlArgs(amf interrupt_flag,
+                                               int timeout_ms,
                                                int64_t start_time) {
   return MakeClientControlComponent(std::move(interrupt_flag), timeout_ms,
                                     start_time);
