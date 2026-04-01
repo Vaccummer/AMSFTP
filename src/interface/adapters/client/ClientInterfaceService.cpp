@@ -3,7 +3,7 @@
 #include "domain/client/ClientDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "foundation/core/Enum.hpp"
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/auth.hpp"
 #include "foundation/tools/string.hpp"
 #include <algorithm>
@@ -218,9 +218,8 @@ std::string ResolveClientCwd_(const ClientHandle &client) {
     return ".";
   }
   std::string cwd = "";
-  const ClientMetaData *metadata =
-      client->MetaDataPort().QueryTypedValue<ClientMetaData>();
-  if (metadata) {
+  const auto metadata = client->MetaDataPort().QueryTypedValue<ClientMetaData>();
+  if (metadata.has_value()) {
     cwd = AMStr::Strip(metadata->cwd);
   }
   if (cwd.empty()) {
@@ -880,10 +879,11 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
 } // namespace
 
 ClientInterfaceService::ClientInterfaceService(
-    ClientAppService &client_service, AMHostConfigManager &host_config_manager,
+    ClientAppService &client_service, FilesystemAppService &filesystem_service,
+    AMHostConfigManager &host_config_manager,
     AMKnownHostsManager &known_hosts_manager,
     AMPromptIOManager &prompt_io_manager)
-    : client_service_(client_service),
+    : client_service_(client_service), filesystem_service_(filesystem_service),
       host_config_manager_(host_config_manager),
       known_hosts_manager_(known_hosts_manager),
       prompt_io_manager_(prompt_io_manager),
@@ -1008,7 +1008,7 @@ ClientControlComponent ClientInterfaceService::ResolveControl_(
   if (component.has_value()) {
     return component.value();
   }
-  return AMDomain::client::MakeClientControlComponent(default_control_token_);
+  return AMDomain::client::ClientControlComponent(default_control_token_);
 }
 
 ECM ClientInterfaceService::Connect(
@@ -1115,6 +1115,11 @@ ECM ClientInterfaceService::ChangeClient(
   auto changed = client_service_.ChangeClient(nickname, control, request.quiet);
   if (!isok(changed.rcm) || !changed.data) {
     return changed.rcm;
+  }
+  ECM ensure_cwd_rcm =
+      filesystem_service_.EnsureClientWorkdir(changed.data, control);
+  if (!isok(ensure_cwd_rcm)) {
+    return ensure_cwd_rcm;
   }
   return prompt_io_manager_.ChangeClient(
       changed.data->ConfigPort().GetNickname());
@@ -1453,7 +1458,8 @@ ECM ClientInterfaceService::ListPrivateKeys(bool detail) {
 
   prompt_io_manager_.Print("[SSH Private Keys]");
   for (size_t i = 0; i < keys.size(); ++i) {
-    const std::string abs_path = AMFS::abspath(keys[i], true, AMFS::HomePath());
+    const std::string abs_path =
+        AMPath::abspath(keys[i], true, AMPath::HomePath());
     prompt_io_manager_.Print(AMStr::fmt("[{}]  {}", i, abs_path));
   }
   return Ok();

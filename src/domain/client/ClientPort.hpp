@@ -401,6 +401,14 @@ public:
       : control_port(std::move(control_port)),
         timeout_port(std::move(timeout_port)) {}
 
+  ClientControlComponent(amf control_port, int timeout_ms = -1)
+      : control_port(std::move(control_port)),
+        timeout_port(CreateClientTimeoutPort()) {
+    if (timeout_port) {
+      timeout_port->SetTimeout(static_cast<float>(timeout_ms));
+    }
+  }
+
   [[nodiscard]] bool IsInterrupted() const {
     return (control_port && control_port->IsInterrupted());
   }
@@ -681,17 +689,6 @@ public:
 
   virtual void StartHeartbeat() = 0;
 };
-
-[[nodiscard]] float ResolveTimeoutBudgetMs(int timeout_ms,
-                                           int64_t start_time = -1);
-
-[[nodiscard]] ClientControlComponent
-MakeClientControlComponent(amf interrupt_flag = nullptr, int timeout_ms = -1,
-                           int64_t start_time = -1);
-
-[[nodiscard]] ClientControlComponent
-MakeClientIOControlArgs(amf interrupt_flag = nullptr, int timeout_ms = -1,
-                        int64_t start_time = -1);
 
 std::pair<ECM, ClientHandle>
 CreateClient(const ConRequest &request,

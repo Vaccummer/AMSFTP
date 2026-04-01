@@ -1,7 +1,7 @@
 #include "interface/adapters/transfer/TransferInterfaceService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/bar.hpp"
 #include "foundation/tools/string.hpp"
 #include "interface/style/StyleManager.hpp"
@@ -140,8 +140,8 @@ std::string BuildTransferProgressPrefix_(
   }
   const std::string src_host = DisplayHost_(cur_task->src_host);
   const std::string dst_host = DisplayHost_(cur_task->dst_host);
-  return AMStr::fmt("{}@{} -> {}@{}", src_host, AMPathStr::basename(cur_task->src),
-                    dst_host, AMPathStr::basename(cur_task->dst));
+  return AMStr::fmt("{}@{} -> {}@{}", src_host, AMPath::basename(cur_task->src),
+                    dst_host, AMPath::basename(cur_task->dst));
 }
 } // namespace
 
@@ -200,8 +200,7 @@ ClientControlComponent TransferInterfaceService::ResolveControl_(
   if (component.has_value()) {
     return *component;
   }
-  return AMDomain::client::MakeClientControlComponent(default_control_token_,
-                                                      timeout_ms);
+  return AMDomain::client::ClientControlComponent(default_control_token_, timeout_ms);
 }
 
 void TransferInterfaceService::PrintTaskSummary_(
