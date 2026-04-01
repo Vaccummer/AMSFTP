@@ -17,7 +17,6 @@
 
 namespace {
 using DocumentKind = AMDomain::config::DocumentKind;
-using ConfigPayloadTag = AMDomain::config::ConfigPayloadTag;
 using AMDomain::client::ClientService::AMDefaultLocalBufferSize;
 using AMDomain::client::ClientService::AMDefaultRemoteBufferSize;
 using AMDomain::client::ClientService::AMMaxBufferSize;
@@ -188,8 +187,8 @@ Json EncodeHostConfig_(const AMDomain::host::HostConfig &cfg) {
 
 class HostConfigArgCodec final : public AMInfra::config::IArgCodec {
 public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::HostConfigArg;
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(AMDomain::host::HostConfigArg));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -288,8 +287,8 @@ public:
 
 class KnownHostEntryArgCodec final : public AMInfra::config::IArgCodec {
 public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::KnownHostEntryArg;
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(AMDomain::host::KnownHostEntryArg));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -455,8 +454,8 @@ Json EncodeConfigBackupSet_(const ConfigBackupSet &in) {
 
 class ConfigBackupSetCodec final : public AMInfra::config::IArgCodec {
 public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::ConfigBackupSet;
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(ConfigBackupSet));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -503,8 +502,8 @@ public:
 
 class TransferManagerArgCodec final : public AMInfra::config::IArgCodec {
 public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::TransferManagerArg;
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(TransferManagerArg));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -558,8 +557,8 @@ public:
 
 class LogManagerArgCodec final : public AMInfra::config::IArgCodec {
 public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::LogManagerArg;
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(LogManagerArg));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -613,8 +612,8 @@ public:
 
 class ClientServiceArgCodec final : public AMInfra::config::IArgCodec {
 public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::ClientServiceArg;
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(ClientServiceArg));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -666,8 +665,8 @@ public:
 
 class FilesystemArgCodec final : public AMInfra::config::IArgCodec {
 public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::FilesystemArg;
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(FilesystemArg));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -714,8 +713,8 @@ public:
 
 class VarSetArgCodec final : public AMInfra::config::IArgCodec {
 public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::VarSetArg;
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(VarSetArg));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -888,8 +887,8 @@ Json EncodePromptProfileSettings_(const PromptProfileSettings &in) {
 
 class PromptProfileArgCodec final : public AMInfra::config::IArgCodec {
 public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::PromptProfileArg;
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(PromptProfileArg));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -947,8 +946,8 @@ public:
 
 class PromptHistoryArgCodec final : public AMInfra::config::IArgCodec {
 public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::PromptHistoryArg;
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(PromptHistoryArg));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -1359,8 +1358,8 @@ Json EncodeSystemInfo_(const SystemInfoStyle &in) {
 
 class StyleSnapshotCodec final : public AMInfra::config::IArgCodec {
 public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::StyleSnapshot;
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(StyleConfigArg));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -1456,8 +1455,8 @@ public:
 
 class StyleConfigArgCodec final : public AMInfra::config::IArgCodec {
 public:
-  [[nodiscard]] ConfigPayloadTag Tag() const override {
-    return ConfigPayloadTag::StyleConfigArg;
+  [[nodiscard]] std::type_index TypeKey() const override {
+    return std::type_index(typeid(StyleConfigArg));
   }
 
   [[nodiscard]] DocumentKind Kind() const override {
@@ -1487,7 +1486,7 @@ public:
 } // namespace
 
 namespace AMInfra::config {
-std::unordered_map<AMDomain::config::ConfigPayloadTag, const IArgCodec *>
+std::unordered_map<std::type_index, const IArgCodec *>
 BuildCodecMap() {
   static const host_codec::HostConfigArgCodec host_config_codec = {};
   static const host_codec::KnownHostEntryArgCodec known_host_codec = {};
@@ -1502,23 +1501,20 @@ BuildCodecMap() {
       {};
   static const prompt_codec::PromptHistoryArgCodec prompt_history_arg_codec =
       {};
-  static const style_codec::StyleSnapshotCodec style_snapshot_codec = {};
   static const style_codec::StyleConfigArgCodec style_config_arg_codec = {};
 
-  std::unordered_map<AMDomain::config::ConfigPayloadTag, const IArgCodec *>
-      map = {};
-  map[host_config_codec.Tag()] = &host_config_codec;
-  map[known_host_codec.Tag()] = &known_host_codec;
-  map[backup_set_codec.Tag()] = &backup_set_codec;
-  map[transfer_manager_codec.Tag()] = &transfer_manager_codec;
-  map[log_manager_codec.Tag()] = &log_manager_codec;
-  map[client_service_codec.Tag()] = &client_service_codec;
-  map[filesystem_codec.Tag()] = &filesystem_codec;
-  map[var_set_codec.Tag()] = &var_set_codec;
-  map[prompt_profile_arg_codec.Tag()] = &prompt_profile_arg_codec;
-  map[prompt_history_arg_codec.Tag()] = &prompt_history_arg_codec;
-  map[style_snapshot_codec.Tag()] = &style_snapshot_codec;
-  map[style_config_arg_codec.Tag()] = &style_config_arg_codec;
+  std::unordered_map<std::type_index, const IArgCodec *> map = {};
+  map[host_config_codec.TypeKey()] = &host_config_codec;
+  map[known_host_codec.TypeKey()] = &known_host_codec;
+  map[backup_set_codec.TypeKey()] = &backup_set_codec;
+  map[transfer_manager_codec.TypeKey()] = &transfer_manager_codec;
+  map[log_manager_codec.TypeKey()] = &log_manager_codec;
+  map[client_service_codec.TypeKey()] = &client_service_codec;
+  map[filesystem_codec.TypeKey()] = &filesystem_codec;
+  map[var_set_codec.TypeKey()] = &var_set_codec;
+  map[prompt_profile_arg_codec.TypeKey()] = &prompt_profile_arg_codec;
+  map[prompt_history_arg_codec.TypeKey()] = &prompt_history_arg_codec;
+  map[style_config_arg_codec.TypeKey()] = &style_config_arg_codec;
   return map;
 }
 } // namespace AMInfra::config

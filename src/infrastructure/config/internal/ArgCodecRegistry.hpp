@@ -1,10 +1,10 @@
 #pragma once
 
-#include "domain/arg/ArgStructTag.hpp"
 #include "domain/config/ConfigModel.hpp"
 #include "foundation/tools/json.hpp"
 
 #include <string>
+#include <typeindex>
 #include <unordered_map>
 
 namespace AMInfra::config {
@@ -16,9 +16,9 @@ public:
   virtual ~IArgCodec() = default;
 
   /**
-   * @brief Return payload tag this codec handles.
+   * @brief Return RTTI key for the payload this codec handles.
    */
-  [[nodiscard]] virtual AMDomain::config::ConfigPayloadTag Tag() const = 0;
+  [[nodiscard]] virtual std::type_index TypeKey() const = 0;
 
   /**
    * @brief Return document kind this codec belongs to.
@@ -45,54 +45,51 @@ public:
 };
 
 /**
- * @brief Registry mapping payload tags to codec implementations.
+ * @brief Registry mapping RTTI keys to codec implementations.
  */
 class ArgCodecRegistry {
 public:
   ArgCodecRegistry() = default;
   explicit ArgCodecRegistry(
-      std::unordered_map<AMDomain::config::ConfigPayloadTag,
-                         const IArgCodec *> map);
+      std::unordered_map<std::type_index, const IArgCodec *> map);
 
   /**
-   * @brief Lookup codec by payload tag.
+   * @brief Lookup codec by RTTI key.
    */
   [[nodiscard]] const IArgCodec *
-  Find(AMDomain::config::ConfigPayloadTag tag) const;
+  Find(const std::type_index &type_key) const;
 
 private:
-  std::unordered_map<AMDomain::config::ConfigPayloadTag, const IArgCodec *> map_ =
-      {};
+  std::unordered_map<std::type_index, const IArgCodec *> map_ = {};
 };
 
 /**
  * @brief Build the full codec lookup map.
  */
-[[nodiscard]] std::unordered_map<AMDomain::config::ConfigPayloadTag,
-                                 const IArgCodec *>
+[[nodiscard]] std::unordered_map<std::type_index, const IArgCodec *>
 BuildCodecMap();
 
 /**
- * @brief Decode JSON root into one typed payload by payload tag.
+ * @brief Decode JSON root into one typed payload by RTTI key.
  */
 [[nodiscard]] bool DecodeArg(const ArgCodecRegistry &registry,
-                             AMDomain::config::ConfigPayloadTag tag,
+                             const std::type_index &type_key,
                              const Json &root, void *out,
                              std::string *error = nullptr);
 
 /**
- * @brief Encode one typed payload into JSON root by payload tag.
+ * @brief Encode one typed payload into JSON root by RTTI key.
  */
 [[nodiscard]] bool EncodeArg(const ArgCodecRegistry &registry,
-                             AMDomain::config::ConfigPayloadTag tag,
+                             const std::type_index &type_key,
                              const void *in, Json *root,
                              std::string *error = nullptr);
 
 /**
- * @brief Erase one typed payload subtree from JSON root by payload tag.
+ * @brief Erase one typed payload subtree from JSON root by RTTI key.
  */
 [[nodiscard]] bool EraseArg(const ArgCodecRegistry &registry,
-                            AMDomain::config::ConfigPayloadTag tag,
+                            const std::type_index &type_key,
                             const void *in, Json *root,
                             std::string *error = nullptr);
 } // namespace AMInfra::config

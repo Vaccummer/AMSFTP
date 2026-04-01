@@ -7,6 +7,7 @@
 #include "infrastructure/writer/WriteDispatcher.hpp"
 #include <memory>
 #include <mutex>
+#include <typeindex>
 #include <unordered_map>
 
 namespace AMInfra::config {
@@ -57,13 +58,13 @@ public:
   void PruneBackupFiles(const std::filesystem::path &bak_dir,
                         int64_t max_count) override;
 
-  [[nodiscard]] bool Read(AMDomain::config::ConfigPayloadTag tag,
+  [[nodiscard]] bool Read(const std::type_index &type_key,
                           void *out) const override;
 
-  [[nodiscard]] bool Write(AMDomain::config::ConfigPayloadTag tag,
+  [[nodiscard]] bool Write(const std::type_index &type_key,
                            const void *in) override;
 
-  [[nodiscard]] bool Erase(AMDomain::config::ConfigPayloadTag tag,
+  [[nodiscard]] bool Erase(const std::type_index &type_key,
                            const void *in) override;
 
 private:

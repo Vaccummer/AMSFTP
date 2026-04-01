@@ -12,12 +12,12 @@ bool Fail_(std::string *error, const std::string &msg) {
 
 namespace AMInfra::config {
 ArgCodecRegistry::ArgCodecRegistry(
-    std::unordered_map<AMDomain::config::ConfigPayloadTag, const IArgCodec *> map)
+    std::unordered_map<std::type_index, const IArgCodec *> map)
     : map_(std::move(map)) {}
 
 const IArgCodec *
-ArgCodecRegistry::Find(AMDomain::config::ConfigPayloadTag tag) const {
-  auto it = map_.find(tag);
+ArgCodecRegistry::Find(const std::type_index &type_key) const {
+  auto it = map_.find(type_key);
   if (it == map_.end()) {
     return nullptr;
   }
@@ -25,31 +25,31 @@ ArgCodecRegistry::Find(AMDomain::config::ConfigPayloadTag tag) const {
 }
 
 bool DecodeArg(const ArgCodecRegistry &registry,
-               AMDomain::config::ConfigPayloadTag tag, const Json &root,
+               const std::type_index &type_key, const Json &root,
                void *out, std::string *error) {
-  const IArgCodec *codec = registry.Find(tag);
+  const IArgCodec *codec = registry.Find(type_key);
   if (!codec) {
-    return Fail_(error, "codec not found for payload tag");
+    return Fail_(error, "codec not found for type key");
   }
   return codec->Decode(root, out, error);
 }
 
 bool EncodeArg(const ArgCodecRegistry &registry,
-               AMDomain::config::ConfigPayloadTag tag, const void *in,
+               const std::type_index &type_key, const void *in,
                Json *root, std::string *error) {
-  const IArgCodec *codec = registry.Find(tag);
+  const IArgCodec *codec = registry.Find(type_key);
   if (!codec) {
-    return Fail_(error, "codec not found for payload tag");
+    return Fail_(error, "codec not found for type key");
   }
   return codec->Encode(in, root, error);
 }
 
 bool EraseArg(const ArgCodecRegistry &registry,
-              AMDomain::config::ConfigPayloadTag tag, const void *in, Json *root,
+              const std::type_index &type_key, const void *in, Json *root,
               std::string *error) {
-  const IArgCodec *codec = registry.Find(tag);
+  const IArgCodec *codec = registry.Find(type_key);
   if (!codec) {
-    return Fail_(error, "codec not found for payload tag");
+    return Fail_(error, "codec not found for type key");
   }
   return codec->Erase(in, root, error);
 }

@@ -300,8 +300,8 @@ void AMConfigAppService::SubmitWriteTask(std::function<ECM()> task) {
 
 ECMData<AMConfigAppService::SyncParticipantId>
 AMConfigAppService::RegisterSyncParticipantImpl_(
-    AMDomain::config::ConfigPayloadTag tag, std::function<bool()> is_dirty,
-    std::function<ECM()> flush_once, std::function<void()> clear_dirty) {
+    std::function<bool()> is_dirty, std::function<ECM()> flush_once,
+    std::function<void()> clear_dirty) {
   if (!is_dirty || !flush_once || !clear_dirty) {
     return {0, Err(EC::InvalidArg, "invalid sync participant callbacks")};
   }
@@ -310,7 +310,6 @@ AMConfigAppService::RegisterSyncParticipantImpl_(
   const SyncParticipantId id = next_sync_participant_id_++;
   SyncParticipant participant = {};
   participant.id = id;
-  participant.tag = tag;
   participant.is_dirty = std::move(is_dirty);
   participant.flush_once = std::move(flush_once);
   participant.clear_dirty = std::move(clear_dirty);
@@ -428,7 +427,7 @@ ConfigBackupSet AMConfigAppService::LoadBackupSet_() const {
   if (!store_) {
     return loaded;
   }
-  if (store_->Read(AMDomain::config::ConfigPayloadTag::ConfigBackupSet,
+  if (store_->Read(std::type_index(typeid(ConfigBackupSet)),
                    static_cast<void *>(&loaded))) {
     auto backup_set = backup_set_.lock();
     backup_set.store(loaded);

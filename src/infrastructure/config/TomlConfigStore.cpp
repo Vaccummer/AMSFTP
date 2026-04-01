@@ -168,12 +168,12 @@ bool AMTomlConfigStore::GetDataPath(AMDomain::config::DocumentKind kind,
   return true;
 }
 
-bool AMTomlConfigStore::Read(AMDomain::config::ConfigPayloadTag tag,
+bool AMTomlConfigStore::Read(const std::type_index &type_key,
                              void *out) const {
   if (!out) {
     return false;
   }
-  const IArgCodec *codec = codec_registry_.Find(tag);
+  const IArgCodec *codec = codec_registry_.Find(type_key);
   if (!codec) {
     return false;
   }
@@ -185,15 +185,15 @@ bool AMTomlConfigStore::Read(AMDomain::config::ConfigPayloadTag tag,
   if (!handle->GetJson(&root)) {
     return false;
   }
-  return DecodeArg(codec_registry_, tag, root, out, nullptr);
+  return DecodeArg(codec_registry_, type_key, root, out, nullptr);
 }
 
-bool AMTomlConfigStore::Write(AMDomain::config::ConfigPayloadTag tag,
+bool AMTomlConfigStore::Write(const std::type_index &type_key,
                               const void *in) {
   if (!in) {
     return false;
   }
-  const IArgCodec *codec = codec_registry_.Find(tag);
+  const IArgCodec *codec = codec_registry_.Find(type_key);
   if (!codec) {
     return false;
   }
@@ -205,18 +205,18 @@ bool AMTomlConfigStore::Write(AMDomain::config::ConfigPayloadTag tag,
   if (!handle->GetJson(&root)) {
     return false;
   }
-  if (!EncodeArg(codec_registry_, tag, in, &root, nullptr)) {
+  if (!EncodeArg(codec_registry_, type_key, in, &root, nullptr)) {
     return false;
   }
   return handle->SetJson(root);
 }
 
-bool AMTomlConfigStore::Erase(AMDomain::config::ConfigPayloadTag tag,
+bool AMTomlConfigStore::Erase(const std::type_index &type_key,
                               const void *in) {
   if (!in) {
     return false;
   }
-  const IArgCodec *codec = codec_registry_.Find(tag);
+  const IArgCodec *codec = codec_registry_.Find(type_key);
   if (!codec) {
     return false;
   }
@@ -228,7 +228,7 @@ bool AMTomlConfigStore::Erase(AMDomain::config::ConfigPayloadTag tag,
   if (!handle->GetJson(&root)) {
     return false;
   }
-  if (!EraseArg(codec_registry_, tag, in, &root, nullptr)) {
+  if (!EraseArg(codec_registry_, type_key, in, &root, nullptr)) {
     return false;
   }
   return handle->SetJson(root);
