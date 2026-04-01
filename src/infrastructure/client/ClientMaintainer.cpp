@@ -1,7 +1,6 @@
 #include "infrastructure/client/maintainer/ClientMaintainer.hpp"
 #include "domain/client/ClientDomainService.hpp"
 #include "foundation/tools/string.hpp"
-#include "foundation/tools/time.hpp"
 
 #include <chrono>
 #include <string>
@@ -47,8 +46,7 @@ SnapshotDisconnectCallback(AMAtomic<DisconnectCallback> &disconnect_cb) {
     return {EC::InvalidHandle, "Client handle is null"};
   }
   return client->IOPort()
-      .Check({}, AMDomain::client::MakeClientControlComponent(
-                     nullptr, timeout_ms, AMTime::miliseconds()))
+      .Check({}, AMDomain::client::ClientControlComponent(nullptr, timeout_ms))
       .rcm;
 }
 } // namespace

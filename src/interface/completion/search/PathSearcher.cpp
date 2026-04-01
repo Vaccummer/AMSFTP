@@ -67,7 +67,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     }
     auto list_result = client->IOPort().listdir(
         {path.dir_abs},
-        AMDomain::client::MakeClientControlComponent(nullptr, timeout_ms));
+        AMDomain::client::ClientControlComponent(nullptr, timeout_ms));
     if (list_result.rcm.first != EC::Success) {
       return result;
     }
@@ -110,7 +110,7 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     const int timeout = request.timeout_ms > 0 ? request.timeout_ms : 5000;
     auto list_result = client->IOPort().listdir(
         {path.dir_abs},
-        AMDomain::client::MakeClientControlComponent(interrupt_flag, timeout));
+        AMDomain::client::ClientControlComponent(interrupt_flag, timeout));
     if (list_result.rcm.first != EC::Success || request.IsInterrupted()) {
       return false;
     }

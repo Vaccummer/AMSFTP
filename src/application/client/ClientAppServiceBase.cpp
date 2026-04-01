@@ -1,7 +1,5 @@
 #include "application/client/ClientAppServiceBase.hpp"
 
-#include "foundation/tools/time.hpp"
-
 namespace AMApplication::client {
 ClientAppServiceBase::ClientAppServiceBase(ClientServiceArg arg)
     : init_arg_(std::move(arg)), config_dirty_(false), control_token_(nullptr),
@@ -57,8 +55,8 @@ ClientControlComponent
 ClientAppServiceBase::GetControlComponent(std::optional<amf> control_token,
                                           int timeout_ms) const {
   amf token = control_token ? *control_token : control_token_.lock().load();
-  return AMDomain::client::MakeClientControlComponent(
-      std::move(token), timeout_ms, AMTime::miliseconds());
+  return AMDomain::client::ClientControlComponent(
+      std::move(token), timeout_ms);
 }
 
 void ClientAppServiceBase::SetPrivateKeys(

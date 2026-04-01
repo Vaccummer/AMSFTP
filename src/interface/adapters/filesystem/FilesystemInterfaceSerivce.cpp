@@ -1,7 +1,7 @@
 #include "interface/adapters/filesystem/FilesystemInterfaceSerivce.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
@@ -35,7 +35,7 @@ ResolveControl_(AMDomain::client::amf default_interrupt_flag,
                 const std::optional<AMDomain::client::ClientControlComponent>
                     &control_opt) {
   return control_opt.has_value() ? control_opt.value()
-                                 : AMDomain::client::MakeClientControlComponent(
+                                 : AMDomain::client::ClientControlComponent(
                                        default_interrupt_flag, -1);
 }
 
@@ -137,28 +137,35 @@ void PrintStatBlock(AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
 }
 
 void PrintLsNamesGrid(AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
-                      const std::vector<std::string> &names) {
+                      AMInterface::style::AMStyleService &style_service,
+                      const std::vector<PathInfo> &entries) {
   constexpr size_t kMaxWidth = 80;
   size_t max_len = 0;
-  for (const auto &name : names) {
-    max_len = std::max(max_len, name.size());
+  std::vector<std::string> styled_names = {};
+  styled_names.reserve(entries.size());
+  for (const auto &entry : entries) {
+    max_len = std::max(max_len, entry.name.size());
+    styled_names.push_back(style_service.Format(
+        entry.name, AMInterface::style::StyleIndex::None, &entry));
   }
   const size_t col_width = (max_len == 0 ? 1 : max_len + 2);
   const size_t columns =
       std::max<size_t>(1, kMaxWidth / (col_width == 0 ? 1 : col_width));
-  const size_t rows = (names.size() + columns - 1) / columns;
+  const size_t rows = (entries.size() + columns - 1) / columns;
 
   for (size_t row = 0; row < rows; ++row) {
     std::ostringstream line;
     for (size_t col = 0; col < columns; ++col) {
       const size_t idx = row + col * rows;
-      if (idx >= names.size()) {
+      if (idx >= entries.size()) {
         continue;
       }
-      line << names[idx];
-      if (col + 1 < columns && idx + rows < names.size()) {
+      line << styled_names[idx];
+      if (col + 1 < columns && idx + rows < entries.size()) {
         const size_t pad =
-            col_width > names[idx].size() ? col_width - names[idx].size() : 1;
+            col_width > entries[idx].name.size()
+                ? col_width - entries[idx].name.size()
+                : 1;
         line << std::string(pad, ' ');
       }
     }
@@ -383,7 +390,7 @@ FilesystemInterfaceSerivce::MatchOne(const ClientPath &path) const {
   size_t matched_count = 0;
   ClientPath first_matched_path = {};
   auto control =
-      AMDomain::client::MakeClientControlComponent(default_interrupt_flag_, -1);
+      AMDomain::client::ClientControlComponent(default_interrupt_flag_, -1);
   auto find_result = filesystem_service_.find(
       path, SearchType::All, control, {}, {},
       [&matched_count, &first_matched_path](const ClientPath &matched) -> bool {
@@ -762,7 +769,7 @@ ECM FilesystemInterfaceSerivce::Tree(
       if (entry.type == PathType::DIR) {
         PathInfo dir_info = entry;
         if (dir_info.path.empty()) {
-          dir_info.path = NormalizePath_(AMPathStr::join(current_dir, dir_info.name));
+          dir_info.path = NormalizePath_(AMPath::join(current_dir, dir_info.name));
         } else {
           dir_info.path = NormalizePath_(dir_info.path);
         }
@@ -781,7 +788,7 @@ ECM FilesystemInterfaceSerivce::Tree(
       PathInfo file_info = entry;
       if (file_info.path.empty()) {
         file_info.path =
-            NormalizePath_(AMPathStr::join(current_dir, file_info.name));
+            NormalizePath_(AMPath::join(current_dir, file_info.name));
       } else {
         file_info.path = NormalizePath_(file_info.path);
       }
@@ -857,7 +864,7 @@ ECM FilesystemInterfaceSerivce::ShellRun(
   if (arg.max_time_s >= 0) {
     constexpr int kMaxSafeSeconds = std::numeric_limits<int>::max() / 1000;
     const int safe_seconds = std::min(arg.max_time_s, kMaxSafeSeconds);
-    run_control = AMDomain::client::MakeClientControlComponent(
+    run_control = AMDomain::client::ClientControlComponent(
         base_control.ControlToken(), safe_seconds * 1000);
   }
 
@@ -1024,7 +1031,7 @@ ECM FilesystemInterfaceSerivce::Move(
 
   ClientPath final_dst = dst_dir;
   final_dst.path =
-      NormalizePath_(AMPathStr::join(dst_dir.path, AMPathStr::basename(src.path)));
+      NormalizePath_(AMPath::join(dst_dir.path, AMPath::basename(src.path)));
   FilesystemRenameArg rename_arg = {};
   rename_arg.target = interface_print::BuildPathLabel(src);
   rename_arg.dst = interface_print::BuildPathLabel(final_dst);
@@ -1362,7 +1369,7 @@ ECM FilesystemInterfaceSerivce::Ls(
   }
 
   if (!arg.list_like) {
-    auto list_result = filesystem_service_.ListNames(target, control);
+    auto list_result = filesystem_service_.Listdir(target, control);
     if (!isok(list_result.rcm)) {
       interface_print::PrintPathError(prompt_io_manager_,
                                       interface_print::BuildPathLabel(target),
@@ -1370,19 +1377,20 @@ ECM FilesystemInterfaceSerivce::Ls(
       return list_result.rcm;
     }
 
-    std::vector<std::string> names = {};
-    names.reserve(list_result.data.size());
-    for (const auto &name : list_result.data) {
-      if (!arg.show_all && IsHiddenName_(name)) {
+    std::vector<PathInfo> entries = {};
+    entries.reserve(list_result.data.size());
+    for (const auto &entry : list_result.data) {
+      if (!arg.show_all && IsHiddenName_(entry.name)) {
         continue;
       }
-      names.push_back(name);
+      entries.push_back(entry);
     }
-    std::sort(names.begin(), names.end(),
-              [](const std::string &lhs, const std::string &rhs) {
-                return AMStr::lowercase(lhs) < AMStr::lowercase(rhs);
+    std::sort(entries.begin(), entries.end(),
+              [](const PathInfo &lhs, const PathInfo &rhs) {
+                return AMStr::lowercase(lhs.name) < AMStr::lowercase(rhs.name);
               });
-    interface_print::PrintLsNamesGrid(prompt_io_manager_, names);
+    interface_print::PrintLsNamesGrid(prompt_io_manager_, style_service_,
+                                      entries);
     return Ok();
   }
 

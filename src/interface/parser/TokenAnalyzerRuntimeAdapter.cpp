@@ -2,7 +2,7 @@
 
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostModel.hpp"
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 
 namespace AMInterface::parser {
@@ -105,7 +105,7 @@ std::string TokenAnalyzerRuntimeAdapter::BuildPath(
     metadata = *metadata_opt;
   }
   const std::string cwd = ResolveWorkdir_(metadata, home_dir);
-  return AMFS::abspath(input, true, home_dir, cwd);
+  return AMPath::abspath(input, true, home_dir, cwd);
 }
 
 ECMData<PathInfo> TokenAnalyzerRuntimeAdapter::StatPath(
@@ -115,7 +115,7 @@ ECMData<PathInfo> TokenAnalyzerRuntimeAdapter::StatPath(
     return {PathInfo{}, Err(EC::InvalidHandle, "client is null")};
   }
   auto control =
-      AMDomain::client::MakeClientControlComponent(nullptr, timeout_ms);
+      AMDomain::client::ClientControlComponent(nullptr, timeout_ms);
   auto stat_result = client->IOPort().stat({abs_path, false}, control);
   return {stat_result.info, stat_result.rcm};
 }

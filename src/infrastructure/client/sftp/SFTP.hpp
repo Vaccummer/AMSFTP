@@ -1761,7 +1761,7 @@ private:
     trace(TraceLevel::Debug, EC::Success, "~/.ssh", "LoadDefaultPrivateKeys",
           "Shared private keys not provided, loading default private keys from "
           "~/.ssh");
-    auto [error, listd] = AMFS::listdir(AMFS::abspath("~/.ssh"));
+    auto [error, listd] = AMPath::listdir(AMPath::abspath("~/.ssh"));
     for (auto &info : listd) {
       if (info.type == PathType::FILE) {
         if (detail::IsValidKey(info.path)) {
@@ -2071,8 +2071,8 @@ public:
   ECM Check(int timeout_ms = -1, int64_t start_time = -1,
             amf interrupt_flag = nullptr) {
     auto rcm = stat(AMFSI::StatArgs{".", false},
-                    AMDomain::client::MakeClientControlComponent(
-                        std::move(interrupt_flag), timeout_ms, start_time))
+                    AMDomain::client::ClientControlComponent(
+                        std::move(interrupt_flag), timeout_ms))
                    .rcm;
     AMDomain::client::ClientStatus status =
         rcm.first == EC::Success
@@ -2440,8 +2440,8 @@ private:
                       const LIBSSH2_SFTP_ATTRIBUTES &attrs) {
     PathInfo info;
     info.path = path;
-    info.name = AMPathStr::basename(path);
-    info.dir = AMPathStr::dirname(path);
+    info.name = AMPath::basename(path);
+    info.dir = AMPath::dirname(path);
 
     if (attrs.flags & LIBSSH2_SFTP_ATTR_SIZE) {
       info.size = attrs.filesize;
@@ -2833,7 +2833,7 @@ public:
       if (name == "." || name == ".." || name.empty()) {
         continue;
       }
-      raw_list.emplace_back(AMPathStr::join(args.path, name), attrs);
+      raw_list.emplace_back(AMPath::join(args.path, name), attrs);
     }
 
     if (sftp_handle) {
@@ -3033,7 +3033,7 @@ public:
       out.rcm = rcm;
       return out;
     }
-    std::vector<std::string> parts = AMPathStr::split(args.path);
+    std::vector<std::string> parts = AMPath::split(args.path);
     if (parts.empty()) {
       out.rcm =
           ECM{EC::InvalidArg,
@@ -3062,7 +3062,7 @@ public:
       if (current_path.empty()) {
         current_path = part;
       } else {
-        current_path = AMPathStr::join(current_path, part, SepType::Unix);
+        current_path = AMPath::join(current_path, part, SepType::Unix);
       }
 
       auto mk_res = mkdir(AMFSI::MkdirArgs{current_path}, control);
@@ -3149,7 +3149,7 @@ public:
     std::lock_guard<std::recursive_mutex> lock(mtx);
     if (args.mkdir) {
       auto mk_res =
-          mkdirs(AMFSI::MkdirsArgs{AMPathStr::dirname(args.dst)}, control);
+          mkdirs(AMFSI::MkdirsArgs{AMPath::dirname(args.dst)}, control);
       if (mk_res.rcm.first != EC::Success) {
         out.rcm = mk_res.rcm;
         return out;
@@ -3327,7 +3327,7 @@ public:
       return cached;
     }
     const auto win_control =
-        AMDomain::client::MakeClientControlComponent(nullptr, 3000);
+        AMDomain::client::ClientControlComponent(nullptr, 3000);
     auto [win_ecm, win_out] =
         ConductCmdCore_("powershell -NoProfile -Command "
                         "\"[System.Environment]::OSVersion.VersionString\"",
@@ -3341,7 +3341,7 @@ public:
     }
 
     const auto uname_control =
-        AMDomain::client::MakeClientControlComponent(nullptr, 3000);
+        AMDomain::client::ClientControlComponent(nullptr, 3000);
     auto [uname_ecm, uname_out] = ConductCmdCore_("uname -s", uname_control);
     if (uname_ecm.first != EC::Success) {
       SetCachedOSType_(OS_TYPE::Uncertain);
@@ -3380,7 +3380,7 @@ public:
 
     std::string cmd = AMStr::fmt("id -un {}", std::to_string(uid));
     const auto control =
-        AMDomain::client::MakeClientControlComponent(nullptr, 3000);
+        AMDomain::client::ClientControlComponent(nullptr, 3000);
     auto [rcm, cr] = ConductCmdCore_(cmd, control);
     if (rcm.first != EC::Success) {
       return "unknown";
@@ -3399,7 +3399,7 @@ public:
       return cached_home_dir;
     }
     const auto control =
-        AMDomain::client::MakeClientControlComponent(nullptr, 3000);
+        AMDomain::client::ClientControlComponent(nullptr, 3000);
     auto [rcm, path_obj] = ResolveRealpathCore_(".", control);
     if (rcm.first == EC::Success) {
       SetCachedHomeDir_(path_obj);
