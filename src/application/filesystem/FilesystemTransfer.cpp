@@ -170,14 +170,12 @@ ECMData<DstResolveResult> FilesystemAppService::ResolveTransferDst(
   }
 
   dst.path = abs_result.data;
+  dst.is_wildcard = AMDomain::filesystem::services::HasWildcard(dst.path);
+  dst.is_user_path = !dst.path.empty() && dst.path.front() == '~';
   out.target = dst;
   out.resolved_target.target = dst;
   out.resolved_target.abs_path = dst.path;
   out.resolved_target.client = transfer_client.data;
-  out.resolved_target.is_wildcard =
-      AMDomain::filesystem::services::HasWildcard(dst.path);
-  out.resolved_target.is_user_path =
-      !dst.path.empty() && dst.path.front() == '~';
 
   auto stat_result =
       BaseStat(transfer_client.data, dst.nickname, dst.path, control);
@@ -247,15 +245,14 @@ ECMData<SourceResolveResult> FilesystemAppService::ResolveTransferSrc(
       continue;
     }
     src.path = abs_result.data;
+    src.is_wildcard = is_wildcard;
+    src.is_user_path = !src.path.empty() && src.path.front() == '~';
 
     auto &host_entry = out.data[src.nickname];
     if (!host_entry.resolved_target.client) {
       host_entry.resolved_target.target = src;
       host_entry.resolved_target.abs_path = src.path;
       host_entry.resolved_target.client = src_transfer.data;
-      host_entry.resolved_target.is_wildcard = is_wildcard;
-      host_entry.resolved_target.is_user_path =
-          !src.path.empty() && src.path.front() == '~';
     }
 
     if (is_wildcard) {

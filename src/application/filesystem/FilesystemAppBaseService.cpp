@@ -1,8 +1,8 @@
 #include "application/filesystem/FilesystemAppBaseService.hpp"
+#include "application/filesystem/FilesystemAppService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
-#include "domain/host/HostDomainService.hpp"
-#include "foundation/tools/path.hpp"
 #include "foundation/tools/enum_related.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 
 #include <stdexcept>
@@ -10,172 +10,18 @@
 namespace AMApplication::filesystem {
 namespace {
 using ClientHandle = AMDomain::client::ClientHandle;
-using ClientMetaData = AMDomain::host::ClientMetaData;
-constexpr const char *kTransferLeaseKey = "transfer.lease";
 
 void HashCombine_(size_t &seed, size_t value) {
   seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
 }
-
-ECM AcquireTransferLease_(const ClientHandle &client) {
-  if (!client) {
-    return Err(EC::InvalidHandle, "Client handle is null");
-  }
-  auto &meta = client->MetaDataPort();
-
-  bool lease_acquired = false;
-  bool lease_missing = false;
-  bool type_mismatch = false;
-  meta.MutateNamedValue<bool>(
-      kTransferLeaseKey, [&](bool *leased, bool name_found, bool type_match) {
-        if (!name_found) {
-          lease_missing = true;
-          return;
-        }
-        if (!type_match || !leased) {
-          type_mismatch = true;
-          return;
-        }
-        if (!*leased) {
-          *leased = true;
-          lease_acquired = true;
-        }
-      });
-
-  if (type_mismatch) {
-    return Err(EC::CommonFailure, "transfer.lease metadata type is invalid");
-  }
-  if (lease_acquired) {
-    return Ok();
-  }
-
-  if (lease_missing) {
-    if (meta.StoreNamedData(kTransferLeaseKey, std::any(true), false)) {
-      return Ok();
-    }
-    bool retry_acquired = false;
-    bool retry_type_mismatch = false;
-    meta.MutateNamedValue<bool>(
-        kTransferLeaseKey, [&](bool *leased, bool name_found, bool type_match) {
-          if (!name_found) {
-            return;
-          }
-          if (!type_match || !leased) {
-            retry_type_mismatch = true;
-            return;
-          }
-          if (!*leased) {
-            *leased = true;
-            retry_acquired = true;
-          }
-        });
-    if (retry_type_mismatch) {
-      return Err(EC::CommonFailure, "transfer.lease metadata type is invalid");
-    }
-    if (retry_acquired) {
-      return Ok();
-    }
-  }
-
-  return Err(EC::PathUsingByOthers, "Client is already leased");
-}
 } // namespace
-
-namespace ClientOperationHelper {
-ECMData<std::string> GetClientHome(ClientHandle client,
-                                   const ClientControlComponent &control) {
-  if (!client) {
-    return {"", Err(EC::InvalidHandle, "Client handle is null")};
-  }
-
-  std::string home = AMStr::Strip(client->ConfigPort().GetHomeDir());
-  if (home.empty()) {
-    auto update_result = client->IOPort().UpdateHomeDir({}, control);
-    if (!isok(update_result.rcm)) {
-      return {"", update_result.rcm};
-    }
-    home = AMStr::Strip(update_result.home_dir);
-    if (home.empty()) {
-      home = AMStr::Strip(client->ConfigPort().GetHomeDir());
-    } else {
-      client->ConfigPort().SetHomeDir(home);
-    }
-  }
-
-  if (home.empty()) {
-    return {"", Err(EC::CommonFailure, "Client home directory is empty")};
-  }
-  return {home, Ok()};
-}
-
-ECMData<std::string> GetClientCwd(ClientHandle client,
-                                  const ClientControlComponent &control) {
-  if (!client) {
-    return {"", Err(EC::InvalidHandle, "Client handle is null")};
-  }
-  std::string cwd = "";
-  auto metadata = client->MetaDataPort().QueryTypedValue<ClientMetaData>();
-  if (!metadata.has_value()) {
-    return {"", Err(EC::CommonFailure, "Client metadata not found")};
-  }
-  cwd = metadata->cwd;
-  if (!cwd.empty()) {
-    return {cwd, Ok()};
-  }
-  auto home_res = GetClientHome(client, control);
-  if (!isok(home_res.rcm)) {
-    return {"", home_res.rcm};
-  }
-  const std::string home = home_res.data;
-  if (home.empty()) {
-    return {"", Err(EC::CommonFailure,
-                    "Metadata is empty and fallback home directory is empty")};
-  }
-  return {home, Ok()};
-}
-
-ECMData<std::string> ResolveAbsolutePath(
-    ClientHandle client, const std::string &raw_path,
-    const ClientControlComponent &control) {
-  if (!client) {
-    return {"", Err(EC::InvalidHandle, "Client handle is null")};
-  }
-  auto home_result = GetClientHome(client, control);
-  if (!isok(home_result.rcm)) {
-    return {"", home_result.rcm};
-  }
-  auto cwd_result = GetClientCwd(client, control);
-  if (!isok(cwd_result.rcm)) {
-    return {"", cwd_result.rcm};
-  }
-
-  const std::string input = raw_path.empty() ? "." : raw_path;
-  const std::string abs_path =
-      AMPath::abspath(input, true, home_result.data, cwd_result.data);
-  return {AMDomain::filesystem::services::NormalizePath(abs_path), Ok()};
-}
-
-ECM AbsolutePath(ClientPath &path) {
-  if (!path.client) {
-    return Err(EC::InvalidHandle, "Client handle is null");
-  }
-
-  auto abs_result = ResolveAbsolutePath(path.client, path.path, {});
-  if (!isok(abs_result.rcm)) {
-    return abs_result.rcm;
-  }
-  path.path = abs_result.data;
-  path.rcm = Ok();
-  return Ok();
-}
-} // namespace ClientOperationHelper
 
 FilesystemAppBaseService::FilesystemAppBaseService(
     FilesystemArg arg, HostAppService *host_service,
     ClientAppService *client_service)
-    : init_arg_(arg), host_service_(host_service),
-      client_service_(client_service),
-      cd_history_(std::list<ClientPath>{}) {
+    : AMApplication::config::IConfigSyncPort(typeid(FilesystemArg)),
+      init_arg_(arg), host_service_(host_service),
+      client_service_(client_service), cd_history_(std::deque<PathTarget>{}) {
   if (!host_service_) {
     throw std::invalid_argument("host_service is null");
   }
@@ -197,14 +43,12 @@ bool FilesystemAppBaseService::BaseIOCache::KeyEq::operator()(
   return lhs.nickname == rhs.nickname && lhs.path == rhs.path;
 }
 
-PathTarget FilesystemAppBaseService::BuildBaseCacheKey(
-    const std::string &nickname, const std::string &abs_path) const {
+PathTarget
+FilesystemAppBaseService::BuildBaseCacheKey(const std::string &nickname,
+                                            const std::string &abs_path) const {
   PathTarget key = {};
-  key.nickname = AMDomain::host::HostService::NormalizeNickname(nickname);
-  key.path = AMDomain::filesystem::services::NormalizePath(abs_path);
-  if (key.path.empty()) {
-    key.path = ".";
-  }
+  key.nickname = nickname;
+  key.path = abs_path;
   return key;
 }
 
@@ -300,7 +144,8 @@ ECMData<std::vector<PathInfo>> FilesystemAppBaseService::BaseListdir(
       }
       const std::string child_nickname =
           nickname.empty() ? client->ConfigPort().GetNickname() : nickname;
-      const PathTarget child_key = BuildBaseCacheKey(child_nickname, entry.path);
+      const PathTarget child_key =
+          BuildBaseCacheKey(child_nickname, entry.path);
       cache[child_key] = {entry, Ok()};
     }
   }
@@ -376,8 +221,7 @@ void FilesystemAppBaseService::ClearBaseIOCacheByNickname(
   if (nickname.empty()) {
     return;
   }
-  const std::string normalized_nickname =
-      AMDomain::host::HostService::NormalizeNickname(nickname);
+  const std::string normalized_nickname = nickname;
   {
     auto cache_guard = base_io_cache_.stat_cache.lock();
     auto &cache = cache_guard.get();
@@ -446,6 +290,17 @@ ECM FilesystemAppBaseService::Init() {
 
 FilesystemArg FilesystemAppBaseService::GetInitArg() const {
   return init_arg_.lock().load();
+}
+
+ECM FilesystemAppBaseService::FlushTo(
+    AMApplication::config::ConfigAppService *config_service) {
+  if (config_service == nullptr) {
+    return Err(EC::InvalidArg, "config service is null");
+  }
+  if (!config_service->Write<FilesystemArg>(GetInitArg())) {
+    return Err(EC::ConfigDumpFailed, "failed to flush filesystem config");
+  }
+  return Ok();
 }
 
 std::string FilesystemAppBaseService::CurrentNickname() const {
@@ -534,7 +389,7 @@ FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
   }
 
   {
-    const ECM lease_rcm = AcquireTransferLease_(create_result.data);
+    const ECM lease_rcm = ClientAppService::TryLeaseClient(create_result.data);
     if (!isok(lease_rcm)) {
       return {nullptr, lease_rcm};
     }
@@ -547,32 +402,32 @@ FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
   return {create_result.data, Ok()};
 }
 
-ECMData<ResolvedPath> FilesystemAppBaseService::ResolvePath(
-    const PathTarget &target, const ClientControlComponent &control,
-    ClientHandle preferred_client) {
+ECMData<ResolvedPath>
+FilesystemAppBaseService::ResolvePath(const PathTarget &target,
+                                      const ClientControlComponent &control,
+                                      ClientHandle preferred_client) {
   if (!client_service_) {
     return {ResolvedPath{}, Err(EC::InvalidHandle, "client service is null")};
   }
 
   ResolvedPath out = {};
-  out.target.path = AMDomain::filesystem::services::NormalizePath(
-      target.path.empty() ? "." : target.path);
+  out.target = target;
   if (out.target.path.empty()) {
     out.target.path = ".";
   }
-  out.target.nickname = AMDomain::host::HostService::NormalizeNickname(
-      AMStr::Strip(target.nickname));
+  out.target.is_wildcard =
+      AMDomain::filesystem::services::HasWildcard(out.target.path);
+  out.target.is_user_path =
+      !out.target.path.empty() && out.target.path.front() == '~';
 
   if (preferred_client) {
     out.client = preferred_client;
     if (out.target.nickname.empty()) {
-      out.target.nickname = AMDomain::host::HostService::NormalizeNickname(
-          preferred_client->ConfigPort().GetNickname());
+      out.target.nickname = preferred_client->ConfigPort().GetNickname();
     }
   } else {
     if (out.target.nickname.empty()) {
-      out.target.nickname = AMDomain::host::HostService::NormalizeNickname(
-          client_service_->CurrentNickname());
+      out.target.nickname = client_service_->CurrentNickname();
     }
     auto get_result = GetClient(out.target.nickname, control);
     if (!isok(get_result.rcm) || !get_result.data) {
@@ -584,80 +439,39 @@ ECMData<ResolvedPath> FilesystemAppBaseService::ResolvePath(
     out.client = get_result.data;
   }
 
-  out.is_wildcard = AMDomain::filesystem::services::HasWildcard(out.target.path);
-  out.is_user_path =
-      !out.target.path.empty() && out.target.path.front() == '~';
-
-  auto abs_result = ClientOperationHelper::ResolveAbsolutePath(
+  auto abs_result = FilesystemAppService::ResolveAbsolutePath(
       out.client, out.target.path, control);
   if (!isok(abs_result.rcm)) {
     return {ResolvedPath{}, abs_result.rcm};
   }
   out.abs_path = abs_result.data;
   out.target.path = out.abs_path;
-
-  if (out.target.nickname.empty() && out.client) {
-    out.target.nickname = AMDomain::host::HostService::NormalizeNickname(
-        out.client->ConfigPort().GetNickname());
-  }
+  out.target.is_wildcard =
+      AMDomain::filesystem::services::HasWildcard(out.target.path);
+  out.target.is_user_path =
+      !out.target.path.empty() && out.target.path.front() == '~';
 
   return {std::move(out), Ok()};
 }
 
-ECM FilesystemAppBaseService::ResolvePath(
-    ClientPath &path, const AMDomain::client::ClientControlComponent &control) {
-  if (path.resolved && path.client) {
-    path.rcm = Ok();
-    return Ok();
-  }
-
-  PathTarget target = {};
-  target.nickname = path.nickname;
-  target.path = path.path;
-  auto resolved = ResolvePath(target, control, path.client);
-  if (!isok(resolved.rcm)) {
-    path.rcm = resolved.rcm;
-    path.client = nullptr;
-    path.resolved = false;
-    return resolved.rcm;
-  }
-
-  path.nickname = resolved.data.target.nickname;
-  path.path = resolved.data.abs_path;
-  path.client = resolved.data.client;
-  path.is_wildcard = resolved.data.is_wildcard;
-  path.userpath = resolved.data.is_user_path;
-  path.rcm = Ok();
-  path.resolved = true;
-  return Ok();
-}
-
-ECM FilesystemAppBaseService::ResolvePath(
-    std::vector<ClientPath> &paths,
-    const AMDomain::client::ClientControlComponent &control, bool error_stop) {
-  ECM status = Ok();
-
-  for (auto &entry : paths) {
-    const ECM rcm = ResolvePath(entry, control);
-    if (!isok(rcm)) {
-      if (error_stop) {
-        return rcm;
-      }
-      if (isok(status)) {
-        status = rcm;
-      }
+std::vector<ECMData<ResolvedPath>> FilesystemAppBaseService::ResolvePath(
+    const std::vector<PathTarget> &targets,
+    const AMDomain::client::ClientControlComponent &control) {
+  std::vector<ECMData<ResolvedPath>> out = {};
+  out.reserve(targets.size());
+  for (const auto &target : targets) {
+    if (control.IsInterrupted()) {
+      out.emplace_back(ResolvedPath{},
+                       Err(EC::Terminate, "Interrupted by user"));
+      continue;
     }
+    if (control.IsTimeout()) {
+      out.emplace_back(ResolvedPath{},
+                       Err(EC::OperationTimeout, "Operation timed out"));
+      continue;
+    }
+    out.push_back(ResolvePath(target, control));
   }
-
-  return status;
-}
-
-AMAtomic<std::list<ClientPath>> &FilesystemAppBaseService::CdHistory() {
-  return cd_history_;
-}
-
-const AMAtomic<std::list<ClientPath>> &
-FilesystemAppBaseService::CdHistory() const {
-  return cd_history_;
+  return out;
 }
 } // namespace AMApplication::filesystem
