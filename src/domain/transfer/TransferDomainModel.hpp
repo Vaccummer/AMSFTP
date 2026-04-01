@@ -2,25 +2,153 @@
 #include "domain/client/ClientPort.hpp"
 #include "domain/filesystem/FileSystemModel.hpp"
 #include "foundation/core/DataClass.hpp"
+#include "foundation/tools/enum_related.hpp"
+#include "foundation/tools/string.hpp"
 #include <atomic>
 #include <cstddef>
+#include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
+
 
 namespace AMDomain::transfer {
 class UserTransferSet;
 class TaskInfo;
 class TransferTask;
-using Cache = std::vector<std::optional<UserTransferSet>>;
+using AMDomain::filesystem::PathTarget;
 using TASKS = std::vector<TransferTask>;
-using Client = AMDomain::client::IClientPort;
-using TransferClientContainer = std::unordered_map<
-    std::string,
-    std::pair<std::shared_ptr<Client>, std::shared_ptr<Client>>>;
-using ResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
 using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
-using ClientPath = AMDomain::filesystem::ClientPath;
+using ResultCallback = std::function<void(std::shared_ptr<TaskInfo>)>;
+
+struct TransferClientHolder {
+  ClientHandle src = nullptr;
+  ClientHandle dst = nullptr;
+};
+
+class TransferClientContainer final {
+public:
+  [[nodiscard]] ECM AddSrcClient(const std::string &nickname,
+                                 ClientHandle client) {
+    if (!client) {
+      return Err(ErrorCode::InvalidHandle, "Source client handle is null");
+    }
+    const std::string key = NormalizeNickname_(nickname);
+    auto &slot = holders_[key];
+    if (slot.dst && slot.dst == client) {
+      return Err(ErrorCode::InvalidArg,
+                 AMStr::fmt("Source and destination clients must be different "
+                            "for host {}",
+                            key));
+    }
+    if (!slot.src) {
+      slot.src = std::move(client);
+    }
+    return Ok();
+  }
+
+  [[nodiscard]] ECM AddDstClient(const std::string &nickname,
+                                 ClientHandle client) {
+    if (!client) {
+      return Err(ErrorCode::InvalidHandle, "Destination client handle is null");
+    }
+    const std::string key = NormalizeNickname_(nickname);
+    auto &slot = holders_[key];
+    if (slot.src && slot.src == client) {
+      return Err(ErrorCode::InvalidArg,
+                 AMStr::fmt("Source and destination clients must be different "
+                            "for host {}",
+                            key));
+    }
+    if (!slot.dst) {
+      slot.dst = std::move(client);
+    }
+    return Ok();
+  }
+
+  [[nodiscard]] std::optional<TransferClientHolder>
+  GetClient(const std::string &nickname) const {
+    const std::string key = NormalizeNickname_(nickname);
+    auto it = holders_.find(key);
+    if (it == holders_.end()) {
+      return std::nullopt;
+    }
+    return it->second;
+  }
+
+  [[nodiscard]] ClientHandle GetSrcClient(const std::string &nickname) const {
+    auto holder = GetClient(nickname);
+    if (!holder.has_value()) {
+      return nullptr;
+    }
+    return holder->src;
+  }
+
+  [[nodiscard]] ClientHandle GetDstClient(const std::string &nickname) const {
+    auto holder = GetClient(nickname);
+    if (!holder.has_value()) {
+      return nullptr;
+    }
+    return holder->dst;
+  }
+
+  [[nodiscard]] bool empty() const { return holders_.empty(); }
+
+  void ReleaseClient(const std::string &nickname) {
+    const std::string key = NormalizeNickname_(nickname);
+    auto it = holders_.find(key);
+    if (it == holders_.end()) {
+      return;
+    }
+    std::unordered_set<AMDomain::client::IClientPort *> released = {};
+    ReleaseClientLease_(it->second.src, &released);
+    ReleaseClientLease_(it->second.dst, &released);
+    holders_.erase(it);
+  }
+
+  void ReleaseAll() {
+    std::unordered_set<AMDomain::client::IClientPort *> released = {};
+    for (auto &entry : holders_) {
+      ReleaseClientLease_(entry.second.src, &released);
+      ReleaseClientLease_(entry.second.dst, &released);
+    }
+    holders_.clear();
+  }
+
+private:
+  static std::string NormalizeNickname_(const std::string &nickname) {
+    return nickname.empty() ? std::string("local") : nickname;
+  }
+
+  static void ReleaseClientLease_(
+      const ClientHandle &client,
+      std::unordered_set<AMDomain::client::IClientPort *> *released) {
+    if (!client) {
+      return;
+    }
+    auto *raw = client.get();
+    if (released != nullptr && !released->insert(raw).second) {
+      return;
+    }
+    bool wrote = false;
+    client->MetaDataPort().MutateNamedValue<bool>(
+        "transfer.lease", [&](bool *leased, bool name_found, bool type_match) {
+          if (name_found && type_match && leased) {
+            *leased = false;
+            wrote = true;
+          }
+        });
+    if (!wrote) {
+      (void)client->MetaDataPort().StoreNamedData("transfer.lease",
+                                                  std::any(false), true);
+    }
+  }
+
+private:
+  std::unordered_map<std::string, TransferClientHolder> holders_ = {};
+};
+
 enum class TaskStatus { Pending, Conducting, Paused, Finished };
 enum class ControlIntent { Running, Pause, Terminate };
 
@@ -57,8 +185,8 @@ struct ErrorCBInfo {
   std::string dst;
   std::string src_host;
   std::string dst_host;
-  ErrorCBInfo(ECM ecm, std::string src, std::string dst,
-              std::string src_host, std::string dst_host)
+  ErrorCBInfo(ECM ecm, std::string src, std::string dst, std::string src_host,
+              std::string dst_host)
       : ecm(std::move(ecm)), src(std::move(src)), dst(std::move(dst)),
         src_host(std::move(src_host)), dst_host(std::move(dst_host)) {}
 };
@@ -347,12 +475,12 @@ public:
   /**
    * @brief The list of explicit source endpoints.
    */
-  std::vector<ClientPath> srcs = {};
+  std::vector<PathTarget> srcs = {};
 
   /**
    * @brief Explicit destination endpoint for all sources in this Set.
    */
-  ClientPath dst = {};
+  PathTarget dst = {};
 
   /**
    * @brief Whether to create missing destination directories.
@@ -381,7 +509,7 @@ public:
 
   UserTransferSet() = default;
 
-  UserTransferSet(std::vector<ClientPath> srcs, ClientPath dst, bool mkdir,
+  UserTransferSet(std::vector<PathTarget> srcs, PathTarget dst, bool mkdir,
                   bool overwrite, bool ignore_special_file, bool resume = false)
       : srcs(std::move(srcs)), dst(std::move(dst)), mkdir(mkdir),
         overwrite(overwrite), ignore_special_file(ignore_special_file),

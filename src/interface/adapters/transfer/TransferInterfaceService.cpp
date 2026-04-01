@@ -19,7 +19,6 @@ using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using TaskInfo = AMDomain::transfer::TaskInfo;
 using TransferTask = AMDomain::transfer::TransferTask;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
-using ClientHandle = AMDomain::client::ClientHandle;
 
 constexpr int kTaskPollIntervalMs = 80;
 constexpr int kMinTaskRefreshIntervalMs = 30;
@@ -61,49 +60,6 @@ void DedupTasks_(std::vector<TransferTask> *tasks) {
 std::string BuildTaskId_() {
   static std::atomic<uint64_t> seq{1};
   return AMStr::ToString(seq.fetch_add(1, std::memory_order_relaxed));
-}
-
-void PutPrimaryClient_(TransferClientContainer *clients,
-                       const std::string &nickname,
-                       const ClientHandle &client) {
-  if (!clients || !client) {
-    return;
-  }
-  const std::string key = DisplayHost_(nickname);
-  auto &slot = (*clients)[key];
-  if (!slot.first) {
-    slot.first = client;
-  }
-}
-
-void PutSecondaryClient_(TransferClientContainer *clients,
-                         const std::string &nickname,
-                         const ClientHandle &client) {
-  if (!clients || !client) {
-    return;
-  }
-  const std::string key = DisplayHost_(nickname);
-  auto &slot = (*clients)[key];
-  if (!slot.first) {
-    slot.first = client;
-  }
-  if (!slot.second) {
-    slot.second = client;
-  }
-}
-
-void PutDestinationClient_(TransferClientContainer *clients,
-                           const std::string &nickname,
-                           const ClientHandle &client) {
-  if (!clients || !client) {
-    return;
-  }
-  const std::string key = DisplayHost_(nickname);
-  auto &slot = (*clients)[key];
-  if (!slot.first) {
-    slot.first = client;
-  }
-  slot.second = client;
 }
 
 int ResolveTransferProgressRefreshMs_(
@@ -338,6 +294,16 @@ ECM TransferInterfaceService::BuildTaskInfo_(
 
   std::vector<TransferTask> all_tasks = {};
   TransferClientContainer clients = {};
+  struct ScopedClientRelease_ {
+    TransferClientContainer *clients = nullptr;
+    bool commit = false;
+    ~ScopedClientRelease_() {
+      if (!commit && clients != nullptr) {
+        clients->ReleaseAll();
+      }
+    }
+  } scoped_client_release{&clients, false};
+
   std::unordered_set<std::string> nicknames = {};
 
   for (const auto &set : arg.transfer_sets) {
@@ -349,7 +315,7 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     }
 
     auto resolved_dst =
-        filesystem_service_.ResolveTransferDst(set.dst, control);
+        filesystem_service_.ResolveTransferDst(set.dst, &clients, control);
     if (!isok(resolved_dst.rcm)) {
       return resolved_dst.rcm;
     }
@@ -359,10 +325,17 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     if (!isok(resolved_src.rcm)) {
       return resolved_src.rcm;
     }
-    if (resolved_dst.data.client) {
-      PutDestinationClient_(&clients, resolved_dst.data.target.nickname,
-                            resolved_dst.data.client);
-      nicknames.insert(resolved_dst.data.target.nickname);
+    for (const auto &[host, grouped_errors] : resolved_src.data.error_data) {
+      for (const auto &[error_path, error_rcm] : grouped_errors) {
+        if (!warnings) {
+          continue;
+        }
+        const std::string display_host = DisplayHost_(host);
+        const std::string display_path = NormalizePath_(error_path.path);
+        warnings->push_back(Err(
+            error_rcm.first,
+            AMStr::fmt("{}@{}: {}", display_host, display_path, error_rcm.second)));
+      }
     }
 
     AMApplication::filesystem::BuildTransferTaskOptions options = {};
@@ -386,6 +359,7 @@ ECM TransferInterfaceService::BuildTaskInfo_(
                      build_result.data.dir_tasks.end());
     all_tasks.insert(all_tasks.end(), build_result.data.file_tasks.begin(),
                      build_result.data.file_tasks.end());
+    nicknames.insert(DisplayHost_(resolved_dst.data.target.nickname));
     if (warnings) {
       for (const auto &warning : build_result.data.warnings) {
         warnings->push_back(
@@ -396,27 +370,14 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     }
   }
 
-  for (const auto &task : all_tasks) {
-    const std::string src_host = DisplayHost_(task.src_host);
-    const std::string dst_host = DisplayHost_(task.dst_host);
-    if (src_host != dst_host) {
-      continue;
-    }
-    auto it = clients.find(src_host);
-    if (it == clients.end()) {
-      continue;
-    }
-    const auto &pair_slot = it->second;
-    ClientHandle src_client =
-        pair_slot.first ? pair_slot.first : pair_slot.second;
-    if (src_client) {
-      PutSecondaryClient_(&clients, src_host, src_client);
-    }
-  }
-
   DedupTasks_(&all_tasks);
   if (all_tasks.empty()) {
     return Err(EC::InvalidArg, "No transfer task generated");
+  }
+
+  for (const auto &task : all_tasks) {
+    nicknames.insert(DisplayHost_(task.src_host));
+    nicknames.insert(DisplayHost_(task.dst_host));
   }
 
   auto task_info = std::make_shared<TaskInfo>();
@@ -430,7 +391,8 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     auto tasks_lock = task_info->Core.tasks.lock();
     tasks_lock.store(all_tasks);
   }
-  task_info->Core.clients = clients;
+  task_info->Core.clients = std::move(clients);
+  scoped_client_release.commit = true;
   task_info->Core.nicknames.assign(nicknames.begin(), nicknames.end());
   task_info->CalTotalSize(true);
   task_info->CalFileNum(true);
@@ -579,6 +541,7 @@ ECM TransferInterfaceService::Transfer(
   const ECM submit_rcm =
       transfer_pool_.Submit(task_info, task_info->Core.clients);
   if (!isok(submit_rcm)) {
+    task_info->Core.clients.ReleaseAll();
     return submit_rcm;
   }
   if (arg.run_async) {

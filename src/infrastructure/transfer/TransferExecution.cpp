@@ -202,17 +202,11 @@ ssize_t CalculateBufferSizeHelper(const ClientHandle &src_client,
 
 ClientHandle ResolveTaskClientHelper(const TransferClientContainer &clients,
                                      const std::string &nickname,
-                                     bool prefer_secondary) {
-  const std::string key = nickname.empty() ? std::string("local") : nickname;
-  auto it = clients.find(key);
-  if (it == clients.end()) {
-    return nullptr;
+                                     bool use_dst_role) {
+  if (use_dst_role) {
+    return clients.GetDstClient(nickname);
   }
-  const auto &pair_clients = it->second;
-  if (prefer_secondary) {
-    return pair_clients.second;
-  }
-  return pair_clients.first;
+  return clients.GetSrcClient(nickname);
 }
 
 class UnionFileHandle {
@@ -1190,6 +1184,7 @@ void TransferExecutionPool::HandleCompletedTask(const TaskHandle &task_info) {
   if (!task_info || !task_info->TryMarkCompletionDispatched()) {
     return;
   }
+  task_info->Core.clients.ReleaseAll();
   if (task_info->Callback.result) {
     CallCallbackSafe(task_info->Callback.result, task_info);
     return;
@@ -1335,10 +1330,8 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
           task.src_host.empty() ? std::string("local") : task.src_host;
       const std::string dst_key =
           task.dst_host.empty() ? std::string("local") : task.dst_host;
-      const bool same_host_transfer = src_key == dst_key;
       auto src_client = ResolveTaskClientHelper(task_clients, src_key, false);
-      auto dst_client =
-          ResolveTaskClientHelper(task_clients, dst_key, same_host_transfer);
+      auto dst_client = ResolveTaskClientHelper(task_clients, dst_key, true);
       if (!src_client || !dst_client) {
         task.rcm = {EC::ClientNotFound, "Task client is not available in pool"};
         task.IsFinished = true;
