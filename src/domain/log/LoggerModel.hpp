@@ -23,9 +23,4 @@ struct LogManagerArg {
   int program_trace_level = 4;
 };
 
-/**
- * @brief Backward-compatible alias kept during logger-type rename migration.
- */
-using LoggerKey = LoggerType;
-
 } // namespace AMDomain::log

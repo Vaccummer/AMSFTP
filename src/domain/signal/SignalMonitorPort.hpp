@@ -1,5 +1,4 @@
 #pragma once
-
 #include "foundation/core/DataClass.hpp"
 #include <functional>
 #include <memory>
@@ -74,9 +73,3 @@ public:
  */
 std::unique_ptr<SignalMonitor> BuildSignalMonitorPort();
 } // namespace AMDomain::signal
-
-/**
- * @brief Backward-compatible global alias.
- */
-using SignalMonitor = AMDomain::signal::SignalMonitor;
-using AMSignalMonitorPort = AMDomain::signal::SignalMonitor;

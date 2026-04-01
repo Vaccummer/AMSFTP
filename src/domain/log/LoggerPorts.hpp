@@ -1,6 +1,5 @@
 #pragma once
-
-#include "domain/log/LoggerModel.hpp"
+#include "foundation/core/DataClass.hpp"
 #include <filesystem>
 #include <functional>
 #include <memory>

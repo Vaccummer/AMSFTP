@@ -401,7 +401,7 @@ public:
       : control_port(std::move(control_port)),
         timeout_port(std::move(timeout_port)) {}
 
-  ClientControlComponent(amf control_port, int timeout_ms = -1)
+  ClientControlComponent(amf control_port, int timeout_ms)
       : control_port(std::move(control_port)),
         timeout_port(CreateClientTimeoutPort()) {
     if (timeout_port) {
