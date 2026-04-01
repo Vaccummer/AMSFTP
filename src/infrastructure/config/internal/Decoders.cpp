@@ -4,8 +4,10 @@
 #include "domain/filesystem/FileSystemModel.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
+#include "domain/log/LoggerModel.hpp"
 #include "domain/prompt/PromptDomainModel.hpp"
 #include "domain/style/StyleDomainModel.hpp"
+#include "domain/transfer/TransferDomainModel.hpp"
 #include "domain/style/StyleDomainService.hpp"
 #include "domain/var/VarModel.hpp"
 #include "foundation/tools/json.hpp"
@@ -423,8 +425,8 @@ public:
 namespace settings_codec {
 using AMDomain::client::ClientServiceArg;
 using AMDomain::config::ConfigBackupSet;
-using AMDomain::config::LogManagerArg;
-using AMDomain::config::TransferManagerArg;
+using AMDomain::log::LogManagerArg;
+using AMDomain::transfer::TransferManagerArg;
 using AMDomain::filesystem::FilesystemArg;
 using AMDomain::var::VarSetArg;
 

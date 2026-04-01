@@ -1,6 +1,6 @@
 #include "application/config/ConfigAppService.hpp"
 
-#include "domain/config/ConfigRules.hpp"
+#include "domain/config/ConfigDomainService.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/time.hpp"
 #include <algorithm>
@@ -182,7 +182,7 @@ ECM AMConfigAppService::BackupIfNeeded() {
   const auto now_s = static_cast<int64_t>(AMTime::seconds());
   ConfigBackupSet backup_set = LoadBackupSet_();
   const ConfigBackupSet before_normalize = backup_set;
-  AMDomain::config::AMConfigRules::NormalizeBackupSet(&backup_set, now_s);
+  AMDomain::config::service::NormalizeBackupSet(&backup_set, now_s);
   const bool normalized_changed =
       !IsBackupSetEqual_(backup_set, before_normalize);
   if (normalized_changed && !Write(backup_set)) {
@@ -209,7 +209,7 @@ bool AMConfigAppService::IsBackupNeeded() const {
   }
   const auto now_s = static_cast<int64_t>(AMTime::seconds());
   ConfigBackupSet backup_set = LoadBackupSet_();
-  AMDomain::config::AMConfigRules::NormalizeBackupSet(&backup_set, now_s);
+  AMDomain::config::service::NormalizeBackupSet(&backup_set, now_s);
   if (!backup_set.enabled) {
     return false;
   }
@@ -230,7 +230,7 @@ std::vector<ECM> AMConfigAppService::Backup(
 
   const auto now_s = static_cast<int64_t>(AMTime::seconds());
   ConfigBackupSet backup_set = LoadBackupSet_();
-  AMDomain::config::AMConfigRules::NormalizeBackupSet(&backup_set, now_s);
+  AMDomain::config::service::NormalizeBackupSet(&backup_set, now_s);
 
   const BackupTargets targets = BuildBackupTargets_(now_s);
   if (targets.backup_dir.empty()) {
