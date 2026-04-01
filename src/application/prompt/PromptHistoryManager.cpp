@@ -9,7 +9,8 @@ using EC = ErrorCode;
 } // namespace
 
 PromptHistoryManager::PromptHistoryManager(PromptHistoryArg arg)
-    : init_arg_(std::move(arg)), config_dirty_(false) {}
+    : AMApplication::config::IConfigSyncPort(typeid(PromptHistoryArg)),
+      init_arg_(std::move(arg)) {}
 
 ECM PromptHistoryManager::Init() { return Ok(); }
 
@@ -17,12 +18,15 @@ PromptHistoryArg PromptHistoryManager::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
-bool PromptHistoryManager::IsConfigDirty() const {
-  return config_dirty_.lock().load();
-}
-
-void PromptHistoryManager::ClearConfigDirty() {
-  config_dirty_.lock().store(false);
+ECM PromptHistoryManager::FlushTo(
+    AMApplication::config::ConfigAppService *config_service) {
+  if (config_service == nullptr) {
+    return Err(EC::InvalidArg, "config service is null");
+  }
+  if (!config_service->Write<PromptHistoryArg>(ExportConfigSnapshot())) {
+    return Err(EC::ConfigDumpFailed, "failed to flush prompt history config");
+  }
+  return Ok();
 }
 
 PromptHistoryArg PromptHistoryManager::ExportConfigSnapshot() const {
@@ -31,7 +35,7 @@ PromptHistoryArg PromptHistoryManager::ExportConfigSnapshot() const {
 
 void PromptHistoryManager::SetInitArg(PromptHistoryArg arg) {
   init_arg_.lock().store(std::move(arg));
-  config_dirty_.lock().store(true);
+  MarkConfigDirty();
 }
 
 ECMData<PromptHistoryQueryResult>
@@ -61,7 +65,7 @@ ECM PromptHistoryManager::SetZoneHistory(const std::string &zone,
                                          std::vector<std::string> history) {
   auto guard = init_arg_.lock();
   guard->set[zone] = std::move(history);
-  config_dirty_.lock().store(true);
+  MarkConfigDirty();
   return Ok();
 }
 
@@ -73,7 +77,7 @@ ECM PromptHistoryManager::AppendZoneHistory(const std::string &zone,
   auto guard = init_arg_.lock();
   auto &bucket = guard->set[zone];
   bucket.push_back(entry);
-  config_dirty_.lock().store(true);
+  MarkConfigDirty();
   return Ok();
 }
 
@@ -85,7 +89,7 @@ ECM PromptHistoryManager::ClearZoneHistory(const std::string &zone) {
                AMStr::fmt("Prompt history zone not found: {}", zone));
   }
   it->second.clear();
-  config_dirty_.lock().store(true);
+  MarkConfigDirty();
   return Ok();
 }
 

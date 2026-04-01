@@ -8,8 +8,8 @@ using EC = ErrorCode;
 }
 
 VarAppService::VarAppService(VarSetArg init_arg)
-    : init_arg_(std::move(init_arg)), store_(VarSetArg{}),
-      config_dirty_(false) {}
+    : AMApplication::config::IConfigSyncPort(typeid(VarSetArg)),
+      init_arg_(std::move(init_arg)), store_(VarSetArg{}) {}
 
 ECM VarAppService::Init() {
   const VarSetArg init_arg = init_arg_.lock().load();
@@ -17,23 +17,17 @@ ECM VarAppService::Init() {
   return Ok();
 }
 
-ECM VarAppService::LoadFromSnapshot(const VarSetArg &snapshot) {
-  init_arg_.lock().store(snapshot);
-  store_.lock().store(snapshot);
-  config_dirty_.lock().store(false);
-  return Ok();
-}
-
 VarSetArg VarAppService::GetInitArg() const { return init_arg_.lock().load(); }
 
-bool VarAppService::IsConfigDirty() const {
-  return config_dirty_.lock().load();
-}
-
-void VarAppService::ClearConfigDirty() { config_dirty_.lock().store(false); }
-
-VarSetArg VarAppService::ExportConfigSnapshot() const {
-  return store_.lock().load();
+ECM VarAppService::FlushTo(
+    AMApplication::config::ConfigAppService *config_service) {
+  if (config_service == nullptr) {
+    return Err(EC::InvalidArg, "config service is null");
+  }
+  if (!config_service->Write<VarSetArg>(store_.lock().load())) {
+    return Err(EC::ConfigDumpFailed, "failed to flush var config");
+  }
+  return Ok();
 }
 
 ECMData<VarInfo> VarAppService::GetVar(const std::string &zone_name,
@@ -134,7 +128,7 @@ ECM VarAppService::AddVar(const VarInfo &info) {
   }
   auto store = store_.lock();
   store->set[info.domain][info.varname] = info.varvalue;
-  config_dirty_.lock().store(true);
+  MarkConfigDirty();
   return Ok();
 }
 
@@ -156,7 +150,7 @@ ECM VarAppService::DelVar(const std::string &zone_name,
   }
 
   zone_it->second.erase(var_it);
-  config_dirty_.lock().store(true);
+  MarkConfigDirty();
   return Ok();
 }
 } // namespace AMApplication::var
