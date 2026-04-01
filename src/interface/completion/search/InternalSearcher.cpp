@@ -1,6 +1,7 @@
 #include "interface/completion/CompletionRuntime.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
+#include "domain/var/VarDomainService.hpp"
 #include "interface/completion/Searcher.hpp"
 #include "interface/completion/SearcherCommon.hpp"
 #include <algorithm>

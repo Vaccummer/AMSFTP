@@ -9,7 +9,7 @@
 #include "domain/style/StyleDomainModel.hpp"
 #include "domain/transfer/TransferDomainModel.hpp"
 #include "domain/style/StyleDomainService.hpp"
-#include "domain/var/VarModel.hpp"
+#include "domain/var/VarDomainService.hpp"
 #include "foundation/tools/json.hpp"
 #include "foundation/tools/string.hpp"
 #include "infrastructure/config/internal/ArgCodecRegistry.hpp"
