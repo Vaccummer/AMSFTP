@@ -39,7 +39,7 @@ ResolveControl_(AMDomain::client::amf default_interrupt_flag,
                                        default_interrupt_flag, -1);
 }
 
-std::string MakePathKey_(const ClientPath &path) {
+std::string MakePathKey_(const PathTarget &path) {
   return NormalizeNickname_(path.nickname) + "@" + NormalizePath_(path.path);
 }
 
@@ -70,7 +70,7 @@ bool IsAlreadyExistsError_(ErrorCode ec) {
 }
 
 struct SplitPathsResult_ {
-  std::vector<ClientPath> valid_paths = {};
+  std::vector<PathTarget> valid_paths = {};
   ECM status = Ok();
 };
 
@@ -87,7 +87,7 @@ std::string FormatStatTime(double value) {
   return FormatTime(static_cast<size_t>(value), "%Y/%m/%d %H:%M:%S");
 }
 
-std::string BuildPathLabel(const ClientPath &path) {
+std::string BuildPathLabel(const PathTarget &path) {
   const std::string normalized_path = NormalizePath_(path.path);
   const std::string display_path =
       normalized_path.empty() ? path.path : normalized_path;
@@ -299,7 +299,7 @@ void PrintPermanentRemovePlan(
 
 void PrintGroupedClientPaths(
     AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
-    const std::map<std::string, std::vector<ClientPath>> &grouped_paths) {
+    const std::map<std::string, std::vector<PathTarget>> &grouped_paths) {
   for (const auto &[nickname, paths] : grouped_paths) {
     prompt_io_manager.Print(AMStr::fmt("{}:", nickname));
     for (const auto &path : paths) {
@@ -311,7 +311,7 @@ void PrintGroupedClientPaths(
 
 SplitPathsResult_ CollectUniqueSplitPaths_(
     const std::vector<std::string> &raw_paths,
-    const std::function<ECMData<ClientPath>(const std::string &)> &splitter,
+    const std::function<ECMData<PathTarget>(const std::string &)> &splitter,
     const AMDomain::client::ClientControlComponent &control,
     AMInterface::prompt::AMPromptIOManager &prompt_io_manager) {
   SplitPathsResult_ out = {};
@@ -357,22 +357,6 @@ FilesystemInterfaceSerivce::FilesystemInterfaceSerivce(
       style_service_(style_service), prompt_io_manager_(prompt_io_manager),
       default_interrupt_flag_(std::move(default_interrupt_flag)) {}
 
-ECMData<ClientPath>
-FilesystemInterfaceSerivce::SplitRawPath(const std::string &token) const {
-  auto target_result = SplitRawTarget(token);
-  if (!isok(target_result.rcm)) {
-    return {ClientPath{}, target_result.rcm};
-  }
-
-  ClientPath out = {};
-  out.nickname = target_result.data.nickname;
-  out.path = target_result.data.path;
-  out.is_wildcard = AMDomain::filesystem::services::HasWildcard(out.path);
-  out.userpath = !out.path.empty() && out.path.front() == '~';
-  out.rcm = Ok();
-  return {std::move(out), Ok()};
-}
-
 ECMData<PathTarget>
 FilesystemInterfaceSerivce::SplitRawTarget(const std::string &token) const {
   PathTarget out = {};
@@ -398,15 +382,15 @@ FilesystemInterfaceSerivce::SplitRawTarget(const std::string &token) const {
   return {std::move(out), Ok()};
 }
 
-ECMData<ClientPath>
-FilesystemInterfaceSerivce::MatchOne(const ClientPath &path) const {
+ECMData<PathTarget>
+FilesystemInterfaceSerivce::MatchOne(const PathTarget &path) const {
   size_t matched_count = 0;
-  ClientPath first_matched_path = {};
+  PathTarget first_matched_path = {};
   auto control =
       AMDomain::client::ClientControlComponent(default_interrupt_flag_, -1);
   auto find_result = filesystem_service_.find(
       path, SearchType::All, control, {}, {},
-      [&matched_count, &first_matched_path](const ClientPath &matched) -> bool {
+      [&matched_count, &first_matched_path](const PathTarget &matched) -> bool {
         ++matched_count;
         if (matched_count == 1) {
           first_matched_path = matched;
@@ -421,15 +405,15 @@ FilesystemInterfaceSerivce::MatchOne(const ClientPath &path) const {
     return {std::move(first_matched_path), Ok()};
   }
   if (matched_count > 1) {
-    return {ClientPath{},
+    return {PathTarget{},
             Err(EC::InvalidArg,
                 AMStr::fmt("Wildcard path must match exactly one target: {}@{}",
                            path.nickname, path.path))};
   }
   if (!find_result.rcm) {
-    return {ClientPath{}, find_result.rcm};
+    return {PathTarget{}, find_result.rcm};
   }
-  return {ClientPath{}, Err(EC::InvalidArg,
+  return {PathTarget{}, Err(EC::InvalidArg,
                             AMStr::fmt("Wildcard path matched no target: {}@{}",
                                        path.nickname, path.path))};
 }
@@ -447,7 +431,7 @@ ECM FilesystemInterfaceSerivce::Stat(
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   auto split_paths = CollectUniqueSplitPaths_(
       arg.raw_paths,
-      [this](const std::string &raw_path) { return SplitRawPath(raw_path); },
+      [this](const std::string &raw_path) { return SplitRawTarget(raw_path); },
       control, prompt_io_manager_);
   if (split_paths.status.first == EC::Terminate) {
     return split_paths.status;
@@ -486,7 +470,7 @@ ECM FilesystemInterfaceSerivce::GetSize(
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   auto split_paths = CollectUniqueSplitPaths_(
       arg.raw_paths,
-      [this](const std::string &raw_path) { return SplitRawPath(raw_path); },
+      [this](const std::string &raw_path) { return SplitRawTarget(raw_path); },
       control, prompt_io_manager_);
   if (split_paths.status.first == EC::Terminate) {
     return split_paths.status;
@@ -501,8 +485,8 @@ ECM FilesystemInterfaceSerivce::GetSize(
       return Err(EC::OperationTimeout, "Operation timed out");
     }
 
-    ClientPath target = path;
-    if (target.is_wildcard) {
+    PathTarget target = path;
+    if (AMDomain::filesystem::services::HasWildcard(target.path)) {
       auto match_result = MatchOne(target);
       if (!isok(match_result.rcm)) {
         interface_print::PrintPathError(prompt_io_manager_,
@@ -521,7 +505,7 @@ ECM FilesystemInterfaceSerivce::GetSize(
       status = MergeStatus_(status, pre_stat.rcm);
       continue;
     }
-    ClientPath display_target = target;
+    PathTarget display_target = target;
     display_target.nickname = NormalizeNickname_(display_target.nickname);
     if (!pre_stat.data.path.empty()) {
       display_target.path = NormalizePath_(pre_stat.data.path);
@@ -549,7 +533,7 @@ ECM FilesystemInterfaceSerivce::GetSize(
     auto size_result = filesystem_service_.GetSize(
         target, control,
         [this, &label, &latest_size,
-         &has_progress](const ClientPath &, int64_t current_size) -> bool {
+         &has_progress](const PathTarget &, int64_t current_size) -> bool {
           const std::string formatted = AMStr::FormatSize(current_size);
           if (has_progress && formatted == latest_size) {
             return true;
@@ -560,7 +544,7 @@ ECM FilesystemInterfaceSerivce::GetSize(
               {AMStr::fmt("{} {}", label, latest_size)});
           return true;
         },
-        [this](const ClientPath &error_path, ECM rcm) {
+        [this](const PathTarget &error_path, ECM rcm) {
           interface_print::PrintPathError(
               prompt_io_manager_, interface_print::BuildPathLabel(error_path),
               rcm);
@@ -590,7 +574,7 @@ ECM FilesystemInterfaceSerivce::Find(
     const FilesystemFindArg &arg,
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
-  auto split_result = SplitRawPath(arg.raw_path);
+  auto split_result = SplitRawTarget(arg.raw_path);
   if (!isok(split_result.rcm)) {
     interface_print::PrintPathError(prompt_io_manager_, arg.raw_path,
                                     split_result.rcm);
@@ -601,7 +585,7 @@ ECM FilesystemInterfaceSerivce::Find(
   ECM status = Ok();
   auto result = filesystem_service_.find(
       split_result.data, SearchType::All, control, {},
-      [this, &status](const ClientPath &error_path, ECM rcm) {
+      [this, &status](const PathTarget &error_path, ECM rcm) {
         interface_print::PrintPathError(
             prompt_io_manager_, interface_print::BuildPathLabel(error_path),
             rcm);
@@ -637,13 +621,13 @@ ECM FilesystemInterfaceSerivce::Realpath(
     raw_path = ".";
   }
 
-  auto split_result = SplitRawPath(raw_path);
+  auto split_result = SplitRawTarget(raw_path);
   if (!isok(split_result.rcm)) {
     interface_print::PrintPathError(prompt_io_manager_, raw_path,
                                     split_result.rcm);
     return split_result.rcm;
   }
-  if (split_result.data.is_wildcard) {
+  if (AMDomain::filesystem::services::HasWildcard(split_result.data.path)) {
     const ECM rcm = Err(EC::InvalidArg, "realpath does not accept wildcard path");
     interface_print::PrintPathError(
         prompt_io_manager_, interface_print::BuildPathLabel(split_result.data),
@@ -651,22 +635,16 @@ ECM FilesystemInterfaceSerivce::Realpath(
     return rcm;
   }
 
-  std::vector<ClientPath> targets = {split_result.data};
-  ECM resolve_rcm = filesystem_service_.ResolvePath(targets, control, true);
-  if (!isok(resolve_rcm)) {
+  auto resolve_result = filesystem_service_.ResolvePath(split_result.data, control);
+  if (!isok(resolve_result.rcm)) {
     interface_print::PrintPathError(
         prompt_io_manager_, interface_print::BuildPathLabel(split_result.data),
-        resolve_rcm);
-    return resolve_rcm;
-  }
-  if (targets.empty()) {
-    const ECM rcm = Err(EC::UnknownError, "realpath resolved empty result");
-    prompt_io_manager_.ErrorFormat(rcm);
-    return rcm;
+        resolve_result.rcm);
+    return resolve_result.rcm;
   }
 
-  std::string nickname = NormalizeNickname_(targets.front().nickname);
-  std::string npath = NormalizePath_(AMStr::Strip(targets.front().path));
+  std::string nickname = NormalizeNickname_(resolve_result.data.target.nickname);
+  std::string npath = NormalizePath_(AMStr::Strip(resolve_result.data.abs_path));
   if (npath.empty()) {
     npath = ".";
   }
@@ -694,14 +672,14 @@ ECM FilesystemInterfaceSerivce::Tree(
     return Ok();
   };
 
-  auto split_result = SplitRawPath(arg.raw_path);
+  auto split_result = SplitRawTarget(arg.raw_path);
   if (!isok(split_result.rcm)) {
     print_error(arg.raw_path, split_result.rcm);
     return split_result.rcm;
   }
-  ClientPath target = std::move(split_result.data);
+  PathTarget target = std::move(split_result.data);
 
-  if (target.is_wildcard) {
+  if (AMDomain::filesystem::services::HasWildcard(target.path)) {
     auto match_result = MatchOne(target);
     if (!isok(match_result.rcm)) {
       print_error(interface_print::BuildPathLabel(target), match_result.rcm);
@@ -750,12 +728,9 @@ ECM FilesystemInterfaceSerivce::Tree(
       continue;
     }
 
-    ClientPath current = {};
+    PathTarget current = {};
     current.nickname = NormalizeNickname_(target.nickname);
     current.path = NormalizePath_(current_dir);
-    current.client = target.client;
-    current.rcm = Ok();
-
     auto list_result = filesystem_service_.Listdir(current, control);
     if (!isok(list_result.rcm)) {
       traversal_errors.emplace_back(interface_print::BuildPathLabel(current),
@@ -907,14 +882,14 @@ ECM FilesystemInterfaceSerivce::Rename(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  auto src_split = SplitRawPath(arg.target);
+  auto src_split = SplitRawTarget(arg.target);
   if (!isok(src_split.rcm)) {
     interface_print::PrintPathError(prompt_io_manager_, arg.target,
                                     src_split.rcm);
     return src_split.rcm;
   }
-  ClientPath src = std::move(src_split.data);
-  if (src.is_wildcard) {
+  PathTarget src = std::move(src_split.data);
+  if (AMDomain::filesystem::services::HasWildcard(src.path)) {
     auto match_result = MatchOne(src);
     if (!isok(match_result.rcm)) {
       interface_print::PrintPathError(prompt_io_manager_,
@@ -925,13 +900,13 @@ ECM FilesystemInterfaceSerivce::Rename(
     src = std::move(match_result.data);
   }
 
-  auto dst_split = SplitRawPath(arg.dst);
+  auto dst_split = SplitRawTarget(arg.dst);
   if (!isok(dst_split.rcm)) {
     interface_print::PrintPathError(prompt_io_manager_, arg.dst, dst_split.rcm);
     return dst_split.rcm;
   }
-  ClientPath dst = std::move(dst_split.data);
-  if (dst.is_wildcard) {
+  PathTarget dst = std::move(dst_split.data);
+  if (AMDomain::filesystem::services::HasWildcard(dst.path)) {
     const ECM rcm =
         Err(EC::InvalidArg, "Destination wildcard is not supported");
     interface_print::PrintPathError(prompt_io_manager_, arg.dst, rcm);
@@ -974,14 +949,14 @@ ECM FilesystemInterfaceSerivce::Move(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  auto src_split = SplitRawPath(arg.target);
+  auto src_split = SplitRawTarget(arg.target);
   if (!src_split.rcm) {
     interface_print::PrintPathError(prompt_io_manager_, arg.target,
                                     src_split.rcm);
     return src_split.rcm;
   }
-  ClientPath src = std::move(src_split.data);
-  if (src.is_wildcard) {
+  PathTarget src = std::move(src_split.data);
+  if (AMDomain::filesystem::services::HasWildcard(src.path)) {
     auto match_result = MatchOne(src);
     if (!isok(match_result.rcm)) {
       interface_print::PrintPathError(prompt_io_manager_,
@@ -992,13 +967,13 @@ ECM FilesystemInterfaceSerivce::Move(
     src = std::move(match_result.data);
   }
 
-  auto dst_split = SplitRawPath(arg.dst);
+  auto dst_split = SplitRawTarget(arg.dst);
   if (!isok(dst_split.rcm)) {
     interface_print::PrintPathError(prompt_io_manager_, arg.dst, dst_split.rcm);
     return dst_split.rcm;
   }
-  ClientPath dst_dir = std::move(dst_split.data);
-  if (dst_dir.is_wildcard) {
+  PathTarget dst_dir = std::move(dst_split.data);
+  if (AMDomain::filesystem::services::HasWildcard(dst_dir.path)) {
     const ECM rcm =
         Err(EC::InvalidArg, "Destination wildcard is not supported");
     interface_print::PrintPathError(prompt_io_manager_, arg.dst, rcm);
@@ -1042,7 +1017,7 @@ ECM FilesystemInterfaceSerivce::Move(
     return rcm;
   }
 
-  ClientPath final_dst = dst_dir;
+  PathTarget final_dst = dst_dir;
   final_dst.path =
       NormalizePath_(AMPath::join(dst_dir.path, AMPath::basename(src.path)));
   FilesystemRenameArg rename_arg = {};
@@ -1064,7 +1039,7 @@ ECM FilesystemInterfaceSerivce::Saferm(
   }
 
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  std::vector<ClientPath> targets = {};
+  std::vector<PathTarget> targets = {};
   targets.reserve(arg.targets.size());
   ECM status = Ok();
   for (const auto &token : arg.targets) {
@@ -1075,7 +1050,7 @@ ECM FilesystemInterfaceSerivce::Saferm(
       return Err(EC::OperationTimeout, "Operation timed out");
     }
 
-    auto split_result = SplitRawPath(token);
+    auto split_result = SplitRawTarget(token);
     if (!split_result.rcm) {
       interface_print::PrintPathError(prompt_io_manager_, token,
                                       split_result.rcm);
@@ -1105,7 +1080,7 @@ ECM FilesystemInterfaceSerivce::Rmfile(
   }
 
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  std::vector<ClientPath> targets = {};
+  std::vector<PathTarget> targets = {};
   targets.reserve(arg.targets.size());
   std::unordered_set<std::string> seen = {};
   ECM status = Ok();
@@ -1118,7 +1093,7 @@ ECM FilesystemInterfaceSerivce::Rmfile(
       return Err(EC::OperationTimeout, "Operation timed out");
     }
 
-    auto split_result = SplitRawPath(token);
+    auto split_result = SplitRawTarget(token);
     if (!isok(split_result.rcm)) {
       interface_print::PrintPathError(prompt_io_manager_, token,
                                       split_result.rcm);
@@ -1126,8 +1101,8 @@ ECM FilesystemInterfaceSerivce::Rmfile(
       continue;
     }
 
-    ClientPath target = std::move(split_result.data);
-    if (target.is_wildcard) {
+    PathTarget target = std::move(split_result.data);
+    if (AMDomain::filesystem::services::HasWildcard(target.path)) {
       auto match_result = MatchOne(target);
       if (!isok(match_result.rcm)) {
         interface_print::PrintPathError(prompt_io_manager_,
@@ -1174,7 +1149,7 @@ ECM FilesystemInterfaceSerivce::Rmfile(
   }
 
   auto execute_result = filesystem_service_.ExecuteRmfile(
-      prepare_result.data, control, [this](const ClientPath &path, ECM rcm) {
+      prepare_result.data, control, [this](const PathTarget &path, ECM rcm) {
         interface_print::PrintPathError(
             prompt_io_manager_, interface_print::BuildPathLabel(path), rcm);
       });
@@ -1192,7 +1167,7 @@ ECM FilesystemInterfaceSerivce::Rmdir(
   }
 
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  std::vector<ClientPath> targets = {};
+  std::vector<PathTarget> targets = {};
   targets.reserve(arg.targets.size());
   std::unordered_set<std::string> seen = {};
   ECM status = Ok();
@@ -1205,7 +1180,7 @@ ECM FilesystemInterfaceSerivce::Rmdir(
       return Err(EC::OperationTimeout, "Operation timed out");
     }
 
-    auto split_result = SplitRawPath(token);
+    auto split_result = SplitRawTarget(token);
     if (!isok(split_result.rcm)) {
       interface_print::PrintPathError(prompt_io_manager_, token,
                                       split_result.rcm);
@@ -1213,8 +1188,8 @@ ECM FilesystemInterfaceSerivce::Rmdir(
       continue;
     }
 
-    ClientPath target = std::move(split_result.data);
-    if (target.is_wildcard) {
+    PathTarget target = std::move(split_result.data);
+    if (AMDomain::filesystem::services::HasWildcard(target.path)) {
       auto match_result = MatchOne(target);
       if (!isok(match_result.rcm)) {
         interface_print::PrintPathError(prompt_io_manager_,
@@ -1234,7 +1209,7 @@ ECM FilesystemInterfaceSerivce::Rmdir(
   }
 
   auto rmdir_result = filesystem_service_.Rmdir(
-      std::move(targets), control, [this](const ClientPath &path, ECM rcm) {
+      std::move(targets), control, [this](const PathTarget &path, ECM rcm) {
         interface_print::PrintPathError(
             prompt_io_manager_, interface_print::BuildPathLabel(path), rcm);
       });
@@ -1254,7 +1229,7 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
   }
 
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  std::vector<ClientPath> targets = {};
+  std::vector<PathTarget> targets = {};
   targets.reserve(arg.targets.size());
   ECM status = Ok();
 
@@ -1266,7 +1241,7 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
       return Err(EC::OperationTimeout, "Operation timed out");
     }
 
-    auto split_result = SplitRawPath(token);
+    auto split_result = SplitRawTarget(token);
     if (!isok(split_result.rcm)) {
       if (!arg.quiet) {
         interface_print::PrintPathError(prompt_io_manager_, token,
@@ -1311,11 +1286,11 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
   prompt_io_manager_.RefreshBegin(1);
   auto execute_result = filesystem_service_.ExecutePermanentRemove(
       prepare_result.data, control,
-      [this](const ClientPath &path) {
+      [this](const PathTarget &path) {
         prompt_io_manager_.RefreshRender(
             {AMStr::fmt("Removing {}", interface_print::BuildPathLabel(path))});
       },
-      [this, &arg](const ClientPath &path, ECM rcm) {
+      [this, &arg](const PathTarget &path, ECM rcm) {
         if (!arg.quiet) {
           interface_print::PrintPathError(
               prompt_io_manager_, interface_print::BuildPathLabel(path), rcm);
@@ -1331,14 +1306,11 @@ ECM FilesystemInterfaceSerivce::Ls(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  ClientPath target = {};
+  PathTarget target = {};
   if (AMStr::Strip(arg.raw_path).empty()) {
     auto cwd_result = filesystem_service_.GetCwd(control);
     if (isok(cwd_result.rcm) && !cwd_result.data.path.empty()) {
       target = cwd_result.data;
-      if (target.nickname.empty() && target.client) {
-        target.nickname = target.client->ConfigPort().GetNickname();
-      }
       if (target.nickname.empty()) {
         target.nickname = filesystem_service_.CurrentNickname();
       }
@@ -1348,8 +1320,8 @@ ECM FilesystemInterfaceSerivce::Ls(
         target.path = ".";
       }
     } else {
-      auto split_result = SplitRawPath("/");
-      if (!split_result) {
+      auto split_result = SplitRawTarget("/");
+      if (!isok(split_result.rcm)) {
         interface_print::PrintPathError(prompt_io_manager_, "/",
                                         split_result.rcm);
         return split_result.rcm;
@@ -1357,7 +1329,7 @@ ECM FilesystemInterfaceSerivce::Ls(
       target = std::move(split_result.data);
     }
   } else {
-    auto split_result = SplitRawPath(arg.raw_path);
+    auto split_result = SplitRawTarget(arg.raw_path);
     if (!isok(split_result.rcm)) {
       interface_print::PrintPathError(prompt_io_manager_, arg.raw_path,
                                       split_result.rcm);
@@ -1365,7 +1337,7 @@ ECM FilesystemInterfaceSerivce::Ls(
     }
     target = std::move(split_result.data);
   }
-  if (target.is_wildcard) {
+  if (AMDomain::filesystem::services::HasWildcard(target.path)) {
     auto match_result = MatchOne(target);
     if (!isok(match_result.rcm)) {
       interface_print::PrintPathError(prompt_io_manager_,
@@ -1445,7 +1417,7 @@ ECM FilesystemInterfaceSerivce::Cd(
   const std::string raw_path = AMStr::Strip(arg.raw_path);
   const bool from_history = (raw_path == "-");
 
-  ClientPath target = {};
+  PathTarget target = {};
   if (from_history) {
     auto history_result = filesystem_service_.PeekCdHistory();
     if (!isok(history_result.rcm)) {
@@ -1455,14 +1427,14 @@ ECM FilesystemInterfaceSerivce::Cd(
     }
     target = std::move(history_result.data);
   } else {
-    auto split_result = SplitRawPath(arg.raw_path);
-    if (!split_result) {
+    auto split_result = SplitRawTarget(arg.raw_path);
+    if (!isok(split_result.rcm)) {
       interface_print::PrintPathError(prompt_io_manager_, arg.raw_path,
                                       split_result.rcm);
       return split_result.rcm;
     }
     target = split_result.data;
-    if (target.is_wildcard) {
+    if (AMDomain::filesystem::services::HasWildcard(target.path)) {
       auto match_result = MatchOne(target);
       if (!isok(match_result.rcm)) {
         interface_print::PrintPathError(prompt_io_manager_,
@@ -1531,7 +1503,7 @@ ECM FilesystemInterfaceSerivce::Mkdirs(
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   auto split_paths = CollectUniqueSplitPaths_(
       arg.raw_paths,
-      [this](const std::string &raw_path) { return SplitRawPath(raw_path); },
+      [this](const std::string &raw_path) { return SplitRawTarget(raw_path); },
       control, prompt_io_manager_);
   if (split_paths.status.first == EC::Terminate) {
     return split_paths.status;

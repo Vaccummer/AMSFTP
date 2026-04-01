@@ -544,7 +544,6 @@ ECM TransferInterfaceService::Transfer(
   for (const auto &set : arg.transfer_sets) {
     for (const auto &src : set.srcs) {
       const bool has_wildcard =
-          src.is_wildcard ||
           AMDomain::filesystem::services::HasWildcard(src.path);
       if (!has_wildcard) {
         continue;

@@ -7,7 +7,7 @@
 
 namespace AMInterface::cli {
 namespace {
-using ClientPath = AMDomain::filesystem::ClientPath;
+using PathTarget = AMDomain::filesystem::PathTarget;
 using TransferConfirmPolicy = AMInterface::transfer::TransferConfirmPolicy;
 
 void SetEnterInteractive_(const CliRunContext &ctx, bool value) {
@@ -26,7 +26,8 @@ void SetSkipLoopExitCallbacks_(const CliRunContext &ctx, bool value) {
  * @brief Resolve one raw transfer token into explicit endpoint payload.
  */
 ECM ResolveTransferEndpoint_(const CLIServices &managers,
-                             const std::string &raw, ClientPath *out_endpoint) {
+                             const std::string &raw,
+                             PathTarget *out_endpoint) {
   if (!out_endpoint) {
     return Err(EC::InvalidArg, "null transfer endpoint output");
   }
@@ -37,7 +38,7 @@ ECM ResolveTransferEndpoint_(const CLIServices &managers,
   }
 
   auto split_result =
-      managers.filesystem_interface_service->SplitRawPath(token);
+      managers.filesystem_interface_service->SplitRawTarget(token);
   if (!isok(split_result.rcm)) {
     return split_result.rcm;
   }
@@ -91,10 +92,10 @@ TransferCliBuildResult BuildTransferArgsFromCli_(
     normalized_dst_token = output_token;
   }
 
-  std::vector<ClientPath> src_endpoints = {};
+  std::vector<PathTarget> src_endpoints = {};
   src_endpoints.reserve(normalized_src_tokens.size());
   for (const auto &token : normalized_src_tokens) {
-    ClientPath endpoint = {};
+    PathTarget endpoint = {};
     ECM resolve_rcm = ResolveTransferEndpoint_(managers, token, &endpoint);
     if (!isok(resolve_rcm)) {
       out.rcm = resolve_rcm;
@@ -103,7 +104,7 @@ TransferCliBuildResult BuildTransferArgsFromCli_(
     src_endpoints.push_back(std::move(endpoint));
   }
 
-  ClientPath dst_endpoint = {};
+  PathTarget dst_endpoint = {};
   ECM dst_rcm =
       ResolveTransferEndpoint_(managers, normalized_dst_token, &dst_endpoint);
   if (!isok(dst_rcm)) {
