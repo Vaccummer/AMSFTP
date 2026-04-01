@@ -44,6 +44,9 @@ ECM HostAppService::Init(const HostConfigArg &host_config_arg) {
   } else {
     local_config_ = std::move(local_candidate);
   }
+  if (host_configs_.find(AMDomain::host::klocalname) == host_configs_.end()) {
+    host_configs_[AMDomain::host::klocalname] = local_config_;
+  }
 
   private_keys_ = host_config_arg.private_keys;
   return Ok();
@@ -107,9 +110,8 @@ ECMData<HostConfig> HostAppService::GetClientConfig(const std::string &nickname,
     }
   }
 
-  return {HostConfig{},
-          Err(EC::HostConfigNotFound,
-              AMStr::fmt("host not found: {}", normalized_key))};
+  return {HostConfig{}, Err(EC::HostConfigNotFound,
+                            AMStr::fmt("host not found: {}", normalized_key))};
 }
 
 ECMData<HostConfig> HostAppService::GetLocalConfig() {
@@ -239,7 +241,7 @@ ECM KnownHostsAppService::FindKnownHost(KnownHostQuery &query) const {
 }
 
 ECM KnownHostsAppService::UpsertKnownHost(const KnownHostQuery &query,
-                                            bool overwrite) {
+                                          bool overwrite) {
   ECM load_rcm = EnsureSnapshotLoaded_();
   if (!isok(load_rcm)) {
     return load_rcm;
@@ -277,7 +279,7 @@ KnownHostEntryArg KnownHostsAppService::SnapshotFromCache_() const {
 }
 
 ECM KnownHostsAppService::PersistSnapshot_(const KnownHostEntryArg &snapshot,
-                                             bool dump_async) {
+                                           bool dump_async) {
   (void)dump_async;
   return Init(snapshot.entries);
 }
@@ -287,4 +289,3 @@ void KnownHostsAppService::ResetSnapshotCache_() {
   snapshot_loaded_ = false;
 }
 } // namespace AMApplication::host
-
