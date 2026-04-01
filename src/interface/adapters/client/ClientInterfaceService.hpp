@@ -6,6 +6,7 @@
 #include "domain/client/ClientPort.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "interface/prompt/Prompt.hpp"
+#include "interface/style/StyleManager.hpp"
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -16,8 +17,9 @@ namespace AMInterface::client {
 using ClientAppService = AMApplication::client::ClientAppService;
 using FilesystemAppService = AMApplication::filesystem::FilesystemAppService;
 using AMHostConfigManager = AMApplication::host::HostAppService;
-using AMKnownHostsManager = AMApplication::host::AMKnownHostsAppService;
+using AMKnownHostsManager = AMApplication::host::KnownHostsAppService;
 using AMPromptIOManager = AMInterface::prompt::AMPromptIOManager;
+using AMStyleService = AMInterface::style::AMStyleService;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using amf = AMDomain::client::amf;
 using ClientHandle = AMDomain::client::ClientHandle;
@@ -51,6 +53,11 @@ struct ListClientsRequest {
   bool detail = false;
 };
 
+struct CheckClientsRequest {
+  std::vector<std::string> nicknames = {};
+  bool detail = false;
+};
+
 struct SetHostValueRequest {
   std::string nickname = {};
   std::string attrname = {};
@@ -65,16 +72,13 @@ public:
                          FilesystemAppService &filesystem_service,
                          AMHostConfigManager &host_config_manager,
                          AMKnownHostsManager &known_hosts_manager,
-                         AMPromptIOManager &prompt_io_manager);
+                         AMPromptIOManager &prompt_io_manager,
+                         AMStyleService &style_service);
   ~ClientInterfaceService() override;
 
   void SetDefaultControlToken(const amf &token);
   [[nodiscard]] amf GetDefaultControlToken() const;
   void BindInteractionCallbacks();
-
-  [[nodiscard]] ECMData<ClientHandle>
-  UICreateClient(const HostConfig &config,
-                 const ClientControlComponent &control, bool quiet);
 
   ECM Connect(
       const ConnectRequest &request,
@@ -93,6 +97,9 @@ public:
       const std::optional<ClientControlComponent> &component = std::nullopt);
   ECM ListClients(
       const ListClientsRequest &request,
+      const std::optional<ClientControlComponent> &component = std::nullopt);
+  ECM CheckClients(
+      const CheckClientsRequest &request,
       const std::optional<ClientControlComponent> &component = std::nullopt);
   ECM ListPrivateKeys(bool detail);
   ECM AddHost(const std::string &nickname);
@@ -116,11 +123,9 @@ private:
   AMHostConfigManager &host_config_manager_;
   AMKnownHostsManager &known_hosts_manager_;
   AMPromptIOManager &prompt_io_manager_;
+  AMStyleService &style_service_;
   std::unique_ptr<ClientConnectSpinner> spinner_ = nullptr;
   amf default_control_token_ = nullptr;
 };
 } // namespace AMInterface::client
 
-namespace AMInterface::ApplicationAdapters {
-using ClientInterfaceService = AMInterface::client::ClientInterfaceService;
-}

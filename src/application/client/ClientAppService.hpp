@@ -54,6 +54,17 @@ public:
 
   [[nodiscard]] std::string CurrentNickname() const;
 
+  void RegisterMaintainerCallbacks(
+      std::optional<DisconnectCallback> disconnect_cb = std::nullopt,
+      std::optional<TraceCallback> trace_cb = std::nullopt,
+      std::optional<KnownHostCallback> known_host_cb = std::nullopt,
+      std::optional<AuthCallback> auth_cb = std::nullopt);
+  void RegisterPublicCallbacks(
+      std::optional<DisconnectCallback> disconnect_cb = std::nullopt,
+      std::optional<TraceCallback> trace_cb = std::nullopt,
+      std::optional<KnownHostCallback> known_host_cb = std::nullopt,
+      std::optional<AuthCallback> auth_cb = std::nullopt);
+
   void BindHostConfigManager(HostConfigManager *host_config_manager);
   ECMData<ClientHandle> CreateClient(const AMDomain::host::HostConfig &config,
                                      const ClientControlComponent &control,
