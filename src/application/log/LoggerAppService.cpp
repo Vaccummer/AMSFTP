@@ -1,4 +1,6 @@
 #include "application/log/LoggerAppService.hpp"
+#include "domain/log/LoggerDomainService.hpp"
+#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
 #include <sstream>
@@ -6,10 +8,7 @@
 
 namespace AMApplication::log {
 namespace {
-/**
- * @brief Return default trace level when one logger type has no explicit value.
- */
-constexpr int kDefaultTraceLevel = 4;
+using AMDomain::log::service::kDefaultTraceLevel;
 } // namespace
 
 LoggerAppService::LoggerAppService(
@@ -63,7 +62,8 @@ void LoggerAppService::SetErrorReporter(ErrorReporter reporter) {
   error_reporter_ = std::move(reporter);
 }
 
-int LoggerAppService::GetTraceLevel(AMDomain::log::LoggerType logger_type) const {
+int LoggerAppService::GetTraceLevel(
+    AMDomain::log::LoggerType logger_type) const {
   std::lock_guard<std::mutex> lock(mtx_);
   auto iter = trace_levels_.find(logger_type);
   if (iter == trace_levels_.end()) {
@@ -74,7 +74,7 @@ int LoggerAppService::GetTraceLevel(AMDomain::log::LoggerType logger_type) const
 
 int LoggerAppService::SetTraceLevel(AMDomain::log::LoggerType logger_type,
                                     int value) {
-  const int clamped = AMDomain::log::LoggerDomainService::ClampTraceLevel(value);
+  const int clamped = AMDomain::log::service::ClampTraceLevel(value);
   std::lock_guard<std::mutex> lock(mtx_);
   trace_levels_[logger_type] = clamped;
   return clamped;
@@ -90,8 +90,8 @@ ECM LoggerAppService::Trace(AMDomain::log::LoggerType logger_type,
     std::lock_guard<std::mutex> lock(mtx_);
     auto writer_iter = logger_map_.find(logger_type);
     if (writer_iter == logger_map_.end() || !writer_iter->second) {
-      return Err(EC::InvalidArg, AMStr::fmt("Logger writer {} is not registered",
-                                            logger_type));
+      return Err(EC::InvalidArg,
+                 AMStr::fmt("Logger writer {} is not registered", logger_type));
     }
     writer = writer_iter->second;
     scheduler = scheduler_;
@@ -103,16 +103,15 @@ ECM LoggerAppService::Trace(AMDomain::log::LoggerType logger_type,
   }
 
   AMDomain::log::TraceInfo normalized = info;
-  normalized.source = AMDomain::log::LoggerDomainService::ResolveSource(logger_type);
-  if (AMDomain::log::LoggerDomainService::ToLevelInt(normalized.level) >
-      trace_level) {
+  normalized.source = AMDomain::log::service::ResolveSource(logger_type);
+  if (AMDomain::log::service::ToLevelInt(normalized.level) > trace_level) {
     return Ok();
   }
   const std::string line = BuildLogLine_(normalized);
 
   auto write_task = [writer, line, normalized, reporter]() {
     ECM write_rcm = writer->WriteLine(line);
-    if (!isok(write_rcm)) {
+    if (!write_rcm) {
       ReportError_(reporter, normalized, write_rcm);
     }
   };
@@ -132,7 +131,7 @@ ECM LoggerAppService::Trace(AMDomain::log::LoggerType logger_type,
                             std::optional<AMDomain::log::ConRequest> request) {
   AMDomain::log::TraceInfo trace(
       level, error_code, nickname, target, action, msg, std::move(request),
-      AMDomain::log::LoggerDomainService::ResolveSource(logger_type));
+      AMDomain::log::service::ResolveSource(logger_type));
   return Trace(logger_type, trace);
 }
 
@@ -153,13 +152,13 @@ ECM LoggerAppService::WriteLine(AMDomain::log::LoggerType logger_type,
   }
 
   AMDomain::log::TraceInfo normalized;
-  normalized.source = AMDomain::log::LoggerDomainService::ResolveSource(logger_type);
+  normalized.source = AMDomain::log::service::ResolveSource(logger_type);
   normalized.level = AMDomain::log::TraceLevel::Info;
   normalized.message = line;
 
   auto write_task = [writer, line, normalized, reporter]() {
     ECM write_rcm = writer->WriteLine(line);
-    if (!isok(write_rcm)) {
+    if (!write_rcm) {
       ReportError_(reporter, normalized, write_rcm);
     }
   };
@@ -176,7 +175,7 @@ std::function<void(const AMDomain::log::TraceInfo &)>
 LoggerAppService::TraceCallbackFunc(AMDomain::log::LoggerType logger_type) {
   return [this, logger_type](const AMDomain::log::TraceInfo &info) {
     ECM trace_rcm = Trace(logger_type, info);
-    if (!isok(trace_rcm)) {
+    if (!trace_rcm) {
       ErrorReporter reporter = {};
       {
         std::lock_guard<std::mutex> lock(mtx_);
@@ -191,7 +190,7 @@ std::function<void(const std::string &)>
 LoggerAppService::WriteLineCallbackFunc(AMDomain::log::LoggerType logger_type) {
   return [this, logger_type](const std::string &line) {
     ECM write_rcm = WriteLine(logger_type, line);
-    if (!isok(write_rcm)) {
+    if (!write_rcm) {
       ErrorReporter reporter = {};
       {
         std::lock_guard<std::mutex> lock(mtx_);
@@ -201,7 +200,7 @@ LoggerAppService::WriteLineCallbackFunc(AMDomain::log::LoggerType logger_type) {
         return;
       }
       AMDomain::log::TraceInfo info;
-      info.source = AMDomain::log::LoggerDomainService::ResolveSource(logger_type);
+      info.source = AMDomain::log::service::ResolveSource(logger_type);
       info.level = AMDomain::log::TraceLevel::Info;
       info.message = line;
       ReportError_(reporter, info, write_rcm);
@@ -209,8 +208,8 @@ LoggerAppService::WriteLineCallbackFunc(AMDomain::log::LoggerType logger_type) {
   };
 }
 
-std::string LoggerAppService::BuildLogLine_(
-    const AMDomain::log::TraceInfo &info) {
+std::string
+LoggerAppService::BuildLogLine_(const AMDomain::log::TraceInfo &info) {
   const double stamp = info.timestamp > 0 ? info.timestamp : AMTime::seconds();
   const std::string time_str =
       FormatTime(static_cast<size_t>(stamp), "%Y/%m/%d %H:%M:%S");
