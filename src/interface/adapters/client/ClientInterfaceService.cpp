@@ -989,8 +989,7 @@ void ClientInterfaceService::BindInteractionCallbacks() {
       spinner_->Stop();
     }
   };
-  connect_hooks_guard_ =
-      client_service_.UseScopedConnectHooks(std::move(hooks));
+  client_service_.SetConnectHooks(std::move(hooks));
 }
 
 ECMData<ClientHandle>

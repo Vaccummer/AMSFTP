@@ -1,6 +1,7 @@
 #pragma once
 
 #include "application/client/ClientAppService.hpp"
+#include "application/filesystem/FilesystemAppService.hpp"
 #include "application/host/HostAppService.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "foundation/core/DataClass.hpp"
@@ -13,6 +14,7 @@
 
 namespace AMInterface::client {
 using ClientAppService = AMApplication::client::ClientAppService;
+using FilesystemAppService = AMApplication::filesystem::FilesystemAppService;
 using AMHostConfigManager = AMApplication::host::AMHostAppService;
 using AMKnownHostsManager = AMApplication::host::AMKnownHostsAppService;
 using AMPromptIOManager = AMInterface::prompt::AMPromptIOManager;
@@ -60,6 +62,7 @@ class ClientConnectSpinner;
 class ClientInterfaceService final : public NonCopyableNonMovable {
 public:
   ClientInterfaceService(ClientAppService &client_service,
+                         FilesystemAppService &filesystem_service,
                          AMHostConfigManager &host_config_manager,
                          AMKnownHostsManager &known_hosts_manager,
                          AMPromptIOManager &prompt_io_manager);
@@ -109,11 +112,11 @@ private:
                    const std::optional<ClientControlComponent> &component);
 
   ClientAppService &client_service_;
+  FilesystemAppService &filesystem_service_;
   AMHostConfigManager &host_config_manager_;
   AMKnownHostsManager &known_hosts_manager_;
   AMPromptIOManager &prompt_io_manager_;
   std::unique_ptr<ClientConnectSpinner> spinner_ = nullptr;
-  ClientAppService::ScopedConnectHooksGuard connect_hooks_guard_ = {};
   amf default_control_token_ = nullptr;
 };
 } // namespace AMInterface::client

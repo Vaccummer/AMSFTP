@@ -15,14 +15,7 @@ using AMDomain::host::HostService::IsLocalNickname;
 constexpr const char *kTransferLeaseKey = "transfer.lease";
 
 std::string JoinCandidates_(const std::vector<std::string> &candidates) {
-  std::string out = {};
-  for (size_t i = 0; i < candidates.size(); ++i) {
-    if (i > 0) {
-      out += ", ";
-    }
-    out += candidates[i];
-  }
-  return out;
+  return AMStr::join(candidates, ", ");
 }
 
 ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
@@ -126,58 +119,6 @@ ECM AcquireTransferLease_(const ClientHandle &client) {
   return Err(EC::PathUsingByOthers, "Client is already leased");
 }
 } // namespace
-
-ClientAppService::ScopedConnectHooksGuard::ScopedConnectHooksGuard(
-    ClientAppService *service, ConnectHooks hooks)
-    : service_(service), previous_hooks_({}), active_(false) {
-  if (!service_) {
-    return;
-  }
-  std::lock_guard<std::mutex> lock(service_->connect_hooks_mutex_);
-  previous_hooks_ = service_->connect_hooks_;
-  service_->connect_hooks_ = std::move(hooks);
-  active_ = true;
-}
-
-ClientAppService::ScopedConnectHooksGuard::ScopedConnectHooksGuard(
-    ScopedConnectHooksGuard &&other) noexcept
-    : service_(other.service_),
-      previous_hooks_(std::move(other.previous_hooks_)),
-      active_(other.active_) {
-  other.service_ = nullptr;
-  other.active_ = false;
-}
-
-ClientAppService::ScopedConnectHooksGuard &
-ClientAppService::ScopedConnectHooksGuard::operator=(
-    ScopedConnectHooksGuard &&other) noexcept {
-  if (this == &other) {
-    return *this;
-  }
-  reset();
-  service_ = other.service_;
-  previous_hooks_ = std::move(other.previous_hooks_);
-  active_ = other.active_;
-  other.service_ = nullptr;
-  other.active_ = false;
-  return *this;
-}
-
-ClientAppService::ScopedConnectHooksGuard::~ScopedConnectHooksGuard() {
-  reset();
-}
-
-void ClientAppService::ScopedConnectHooksGuard::reset() {
-  if (!active_ || !service_) {
-    return;
-  }
-  std::lock_guard<std::mutex> lock(service_->connect_hooks_mutex_);
-  service_->connect_hooks_ = previous_hooks_;
-  active_ = false;
-  service_ = nullptr;
-}
-
-ClientAppService::ClientAppService() : ClientAppService(ClientServiceArg{}) {}
 
 ClientAppService::ClientAppService(ClientServiceArg arg)
     : ClientAppServiceBase(std::move(arg)) {}
@@ -518,9 +459,9 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
   }
 
   if (has_leased_client) {
-    return {nullptr, Err(EC::PathUsingByOthers,
-                         AMStr::fmt("All public clients for {} are leased",
-                                    nickname))};
+    return {nullptr,
+            Err(EC::PathUsingByOthers,
+                AMStr::fmt("All public clients for {} are leased", nickname))};
   }
   if (!isok(status)) {
     return {nullptr, status};
@@ -549,14 +490,9 @@ ECM ClientAppService::AddPublicClient(const ClientHandle &client) {
   return {EC::Success, ""};
 }
 
-std::shared_ptr<AMApplication::TransferRuntime::ITransferClientPoolPort>
-ClientAppService::PublicPool() const {
-  return nullptr;
-}
-
-ClientAppService::ScopedConnectHooksGuard
-ClientAppService::UseScopedConnectHooks(ConnectHooks hooks) {
-  return {this, std::move(hooks)};
+void ClientAppService::SetConnectHooks(ConnectHooks hooks) {
+  std::lock_guard<std::mutex> lock(connect_hooks_mutex_);
+  connect_hooks_ = std::move(hooks);
 }
 
 void ClientAppService::SetCurrentClient(const ClientHandle &client) {
@@ -571,6 +507,96 @@ std::vector<std::string> ClientAppService::GetClientNames() const {
     names.push_back(entry.first);
   }
   return names;
+}
+
+std::optional<ClientMetaData>
+ClientAppService::GetClientMetadata(const ClientHandle &client) {
+  if (!client) {
+    return std::nullopt;
+  }
+  return client->MetaDataPort().QueryTypedValue<ClientMetaData>();
+}
+
+ECM ClientAppService::SetClientMetadata(const ClientHandle &client,
+                                        const ClientMetaData &metadata) {
+  if (!client) {
+    return Err(EC::InvalidHandle, "Client handle is null");
+  }
+  const bool ok = client->MetaDataPort().StoreTypedValue(metadata, true);
+  if (!ok) {
+    return Err(EC::CommonFailure, "Failed to store client metadata");
+  }
+  return Ok();
+}
+
+ECMData<std::string> ClientAppService::GetClientCwd(const ClientHandle &client) {
+  if (!client) {
+    return {"", Err(EC::InvalidHandle, "Client handle is null")};
+  }
+  auto meta_opt = GetClientMetadata(client);
+  if (!meta_opt.has_value()) {
+    return {"", Err(EC::CommonFailure, "Client metadata not found")};
+  }
+  return {meta_opt->cwd, Ok()};
+}
+
+ECM ClientAppService::SetClientCwd(const ClientHandle &client,
+                                   const std::string &cwd) {
+  if (!client) {
+    return Err(EC::InvalidHandle, "Client handle is null");
+  }
+  bool updated = false;
+  client->MetaDataPort().MutateTypeValue<ClientMetaData>(
+      [&](ClientMetaData *meta) {
+        if (!meta) {
+          return;
+        }
+        meta->cwd = cwd;
+        updated = true;
+      });
+  if (updated) {
+    return Ok();
+  }
+
+  ClientMetaData meta = {};
+  meta.cwd = cwd;
+  return SetClientMetadata(client, meta);
+}
+
+ECM ClientAppService::TryLeaseClient(const ClientHandle &client) {
+  return AcquireTransferLease_(client);
+}
+
+ECM ClientAppService::TryReturnClient(const ClientHandle &client) {
+  if (!client) {
+    return Err(EC::InvalidHandle, "Client handle is null");
+  }
+  auto &meta = client->MetaDataPort();
+  bool released = false;
+  bool lease_missing = false;
+  bool type_mismatch = false;
+
+  meta.MutateNamedValue<bool>(
+      kTransferLeaseKey, [&](bool *leased, bool name_found, bool type_match) {
+        if (!name_found) {
+          lease_missing = true;
+          return;
+        }
+        if (!type_match || !leased) {
+          type_mismatch = true;
+          return;
+        }
+        *leased = false;
+        released = true;
+      });
+
+  if (type_mismatch) {
+    return Err(EC::CommonFailure, "transfer.lease metadata type is invalid");
+  }
+  if (released || lease_missing) {
+    return Ok();
+  }
+  return Ok();
 }
 
 void ClientAppService::ApplyCallbacksToClient_(const ClientHandle &client,
