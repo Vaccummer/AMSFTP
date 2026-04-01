@@ -24,6 +24,14 @@ using ClientPath = AMDomain::filesystem::ClientPath;
 enum class TaskStatus { Pending, Conducting, Paused, Finished };
 enum class ControlIntent { Running, Pause, Terminate };
 
+/**
+ * @brief Settings payload for `Options.TransferManager`.
+ */
+struct TransferManagerArg {
+  int init_thread_num = 1;
+  int max_thread_num = 16;
+};
+
 struct ProgressCBInfo {
   std::string src;
   std::string dst;

@@ -16,6 +16,14 @@ enum class LoggerType {
 };
 
 /**
+ * @brief Settings payload for `Options.LogManager`.
+ */
+struct LogManagerArg {
+  int client_trace_level = 4;
+  int program_trace_level = 4;
+};
+
+/**
  * @brief Backward-compatible alias kept during logger-type rename migration.
  */
 using LoggerKey = LoggerType;
