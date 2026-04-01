@@ -1,35 +1,39 @@
 #include "application/style/StyleAppService.hpp"
-
 #include "domain/style/StyleDomainService.hpp"
+#include "foundation/tools/enum_related.hpp"
 
 namespace AMApplication::style {
-AMStyleConfigManager::AMStyleConfigManager(StyleConfigArg arg)
-    : init_arg_(std::move(arg)), config_dirty_(false) {}
+StyleConfigManager::StyleConfigManager(StyleConfigArg arg)
+    : AMApplication::config::IConfigSyncPort(typeid(StyleConfigArg)),
+      init_arg_(std::move(arg)) {}
 
-ECM AMStyleConfigManager::Init() {
+ECM StyleConfigManager::Init() {
   auto guard = init_arg_.lock();
   AMDomain::style::services::NormalizeStyleConfigArg(&guard.get());
   return {EC::Success, ""};
 }
 
-StyleConfigArg AMStyleConfigManager::GetInitArg() const {
+StyleConfigArg StyleConfigManager::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
-bool AMStyleConfigManager::IsConfigDirty() const {
-  return config_dirty_.lock().load();
+ECM StyleConfigManager::FlushTo(
+    AMApplication::config::ConfigAppService *config_service) {
+  if (config_service == nullptr) {
+    return Err(EC::InvalidArg, "config service is null");
+  }
+  if (!config_service->Write<StyleConfigArg>(ExportConfigSnapshot())) {
+    return Err(EC::ConfigDumpFailed, "failed to flush style config");
+  }
+  return Ok();
 }
 
-void AMStyleConfigManager::ClearConfigDirty() {
-  config_dirty_.lock().store(false);
-}
-
-StyleConfigArg AMStyleConfigManager::ExportConfigSnapshot() const {
+StyleConfigArg StyleConfigManager::ExportConfigSnapshot() const {
   return GetInitArg();
 }
 
-void AMStyleConfigManager::SetInitArg(StyleConfigArg arg) {
+void StyleConfigManager::SetInitArg(StyleConfigArg arg) {
   init_arg_.lock().store(std::move(arg));
-  config_dirty_.lock().store(true);
+  MarkConfigDirty();
 }
 } // namespace AMApplication::style

@@ -2,7 +2,8 @@
 
 namespace AMApplication::client {
 ClientAppServiceBase::ClientAppServiceBase(ClientServiceArg arg)
-    : init_arg_(std::move(arg)), control_token_(nullptr),
+    : AMApplication::config::IConfigSyncPort(typeid(ClientServiceArg)),
+      init_arg_(std::move(arg)), control_token_(nullptr),
       private_keys_(std::vector<std::string>{}),
       maintainer_callbacks_(ClientCallbacks{}),
       public_callbacks_(ClientCallbacks{}) {}
@@ -11,12 +12,15 @@ ClientServiceArg ClientAppServiceBase::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
-bool ClientAppServiceBase::IsConfigDirty() const {
-  return config_dirty_.load(std::memory_order_acquire);
-}
-
-void ClientAppServiceBase::ClearConfigDirty() {
-  config_dirty_.store(false, std::memory_order_release);
+ECM ClientAppServiceBase::FlushTo(
+    AMApplication::config::ConfigAppService *config_service) {
+  if (config_service == nullptr) {
+    return Err(EC::InvalidArg, "config service is null");
+  }
+  if (!config_service->Write<ClientServiceArg>(GetInitArg())) {
+    return Err(EC::ConfigDumpFailed, "failed to flush client config");
+  }
+  return Ok();
 }
 
 void ClientAppServiceBase::SetHeartbeatTimeoutMs(int timeout_ms) {
@@ -24,7 +28,7 @@ void ClientAppServiceBase::SetHeartbeatTimeoutMs(int timeout_ms) {
   auto value = init_arg.load();
   value.heartbeat_timeout_ms = timeout_ms;
   init_arg.store(value);
-  config_dirty_.store(true, std::memory_order_release);
+  MarkConfigDirty();
 }
 
 int ClientAppServiceBase::HeartbeatTimeoutMs() const {
@@ -36,7 +40,7 @@ void ClientAppServiceBase::SetHeartbeatIntervalS(int interval_s) {
   auto value = init_arg.load();
   value.heartbeat_interval_s = interval_s;
   init_arg.store(value);
-  config_dirty_.store(true, std::memory_order_release);
+  MarkConfigDirty();
 }
 
 int ClientAppServiceBase::HeartbeatIntervalS() const {

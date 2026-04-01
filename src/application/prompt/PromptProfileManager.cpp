@@ -14,7 +14,8 @@ std::string ResolveProfileZone_(const std::string &zone) {
 } // namespace
 
 PromptProfileManager::PromptProfileManager(PromptProfileArg arg)
-    : init_arg_(std::move(arg)), config_dirty_(false) {
+    : AMApplication::config::IConfigSyncPort(typeid(PromptProfileArg)),
+      init_arg_(std::move(arg)) {
   auto guard = init_arg_.lock();
   AMDomain::prompt::services::NormalizePromptProfileArg(&guard.get());
 }
@@ -29,12 +30,15 @@ PromptProfileArg PromptProfileManager::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
-bool PromptProfileManager::IsConfigDirty() const {
-  return config_dirty_.lock().load();
-}
-
-void PromptProfileManager::ClearConfigDirty() {
-  config_dirty_.lock().store(false);
+ECM PromptProfileManager::FlushTo(
+    AMApplication::config::ConfigAppService *config_service) {
+  if (config_service == nullptr) {
+    return Err(EC::InvalidArg, "config service is null");
+  }
+  if (!config_service->Write<PromptProfileArg>(ExportConfigSnapshot())) {
+    return Err(EC::ConfigDumpFailed, "failed to flush prompt profile config");
+  }
+  return Ok();
 }
 
 PromptProfileArg PromptProfileManager::ExportConfigSnapshot() const {
@@ -44,7 +48,7 @@ PromptProfileArg PromptProfileManager::ExportConfigSnapshot() const {
 void PromptProfileManager::SetInitArg(PromptProfileArg arg) {
   AMDomain::prompt::services::NormalizePromptProfileArg(&arg);
   init_arg_.lock().store(std::move(arg));
-  config_dirty_.lock().store(true);
+  MarkConfigDirty();
 }
 
 PromptProfileQueryResult

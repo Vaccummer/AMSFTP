@@ -1,4 +1,5 @@
 #pragma once
+#include "application/config/ConfigAppService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include <map>
@@ -9,13 +10,13 @@ namespace AMApplication::host {
 /**
  * @brief Host configuration manager for host map and local profile state.
  */
-class HostAppService : public NonCopyableNonMovable {
+class HostAppService : public AMApplication::config::IConfigSyncPort {
 public:
   using HostConfigMap = std::map<std::string, AMDomain::host::HostConfig>;
   using HostConfigArg = AMDomain::host::HostConfigArg;
   using HostConfig = AMDomain::host::HostConfig;
 
-  explicit HostAppService() = default;
+  explicit HostAppService() : IConfigSyncPort(typeid(HostConfigArg)) {}
   ~HostAppService() override = default;
 
   /**
@@ -27,12 +28,13 @@ public:
    * @brief Return host config payload including map and local config.
    */
   [[nodiscard]] HostConfigArg GetInitArg() const;
+  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
 
   /**
    * @brief Return one host config by nickname.
    */
-  [[nodiscard]] ECMData<HostConfig>
-  GetClientConfig(const std::string &nickname, bool case_sensitive);
+  [[nodiscard]] ECMData<HostConfig> GetClientConfig(const std::string &nickname,
+                                                    bool case_sensitive);
 
   /**
    * @brief Return local host config currently cached in manager.
@@ -68,13 +70,14 @@ public:
 /**
  * @brief Known-host manager for fingerprint query/upsert operations.
  */
-class AMKnownHostsAppService : public NonCopyableNonMovable {
+class KnownHostsAppService : public AMApplication::config::IConfigSyncPort {
 public:
   using KnownHostQuery = AMDomain::host::KnownHostQuery;
   using KnownHostMap = AMDomain::host::KnownHostMap;
   using KnownHostEntryArg = AMDomain::host::KnownHostEntryArg;
-  explicit AMKnownHostsAppService() = default;
-  virtual ~AMKnownHostsAppService() override = default;
+  explicit KnownHostsAppService()
+      : IConfigSyncPort(typeid(KnownHostEntryArg)) {}
+  ~KnownHostsAppService() override = default;
 
   /**
    * @brief Initialize manager by loading known-host snapshot from store.
@@ -90,6 +93,7 @@ public:
    * @brief Return in-memory known-host mapping.
    */
   [[nodiscard]] const KnownHostMap &KnownHosts() const;
+  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
 
   [[nodiscard]] ECM FindKnownHost(KnownHostQuery &query) const;
   ECM UpsertKnownHost(const KnownHostQuery &query, bool overwrite = true);
