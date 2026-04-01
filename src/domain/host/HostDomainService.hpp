@@ -8,7 +8,7 @@
 namespace AMDomain::host {
 inline constexpr int DefaultSFTPPort = 22;
 inline constexpr int DefaultFTPPort = 21;
-
+inline const std::string klocalname = "local";
 namespace HostService {
 using HostConfigMap = std::map<std::string, HostConfig>;
 
