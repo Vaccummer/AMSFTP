@@ -2,7 +2,7 @@
 
 namespace AMApplication::client {
 ClientAppServiceBase::ClientAppServiceBase(ClientServiceArg arg)
-    : init_arg_(std::move(arg)), config_dirty_(false), control_token_(nullptr),
+    : init_arg_(std::move(arg)), control_token_(nullptr),
       private_keys_(std::vector<std::string>{}),
       maintainer_callbacks_(ClientCallbacks{}),
       public_callbacks_(ClientCallbacks{}) {}
@@ -12,15 +12,11 @@ ClientServiceArg ClientAppServiceBase::GetInitArg() const {
 }
 
 bool ClientAppServiceBase::IsConfigDirty() const {
-  return config_dirty_.lock().load();
+  return config_dirty_.load(std::memory_order_acquire);
 }
 
 void ClientAppServiceBase::ClearConfigDirty() {
-  config_dirty_.lock().store(false);
-}
-
-ClientServiceArg ClientAppServiceBase::ExportConfigSnapshot() const {
-  return GetInitArg();
+  config_dirty_.store(false, std::memory_order_release);
 }
 
 void ClientAppServiceBase::SetHeartbeatTimeoutMs(int timeout_ms) {
@@ -28,7 +24,7 @@ void ClientAppServiceBase::SetHeartbeatTimeoutMs(int timeout_ms) {
   auto value = init_arg.load();
   value.heartbeat_timeout_ms = timeout_ms;
   init_arg.store(value);
-  config_dirty_.lock().store(true);
+  config_dirty_.store(true, std::memory_order_release);
 }
 
 int ClientAppServiceBase::HeartbeatTimeoutMs() const {
@@ -40,7 +36,7 @@ void ClientAppServiceBase::SetHeartbeatIntervalS(int interval_s) {
   auto value = init_arg.load();
   value.heartbeat_interval_s = interval_s;
   init_arg.store(value);
-  config_dirty_.lock().store(true);
+  config_dirty_.store(true, std::memory_order_release);
 }
 
 int ClientAppServiceBase::HeartbeatIntervalS() const {
@@ -55,8 +51,7 @@ ClientControlComponent
 ClientAppServiceBase::GetControlComponent(std::optional<amf> control_token,
                                           int timeout_ms) const {
   amf token = control_token ? *control_token : control_token_.lock().load();
-  return AMDomain::client::ClientControlComponent(
-      std::move(token), timeout_ms);
+  return {std::move(token), timeout_ms};
 }
 
 void ClientAppServiceBase::SetPrivateKeys(

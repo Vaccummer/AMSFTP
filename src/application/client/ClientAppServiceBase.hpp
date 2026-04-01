@@ -3,6 +3,7 @@
 #include "domain/client/ClientPort.hpp"
 
 #include <functional>
+#include <atomic>
 #include <optional>
 #include <string>
 #include <vector>
@@ -32,7 +33,6 @@ public:
   [[nodiscard]] ClientServiceArg GetInitArg() const;
   [[nodiscard]] bool IsConfigDirty() const;
   void ClearConfigDirty();
-  [[nodiscard]] ClientServiceArg ExportConfigSnapshot() const;
 
   virtual void SetHeartbeatTimeoutMs(int timeout_ms);
   [[nodiscard]] virtual int HeartbeatTimeoutMs() const;
@@ -63,7 +63,7 @@ public:
 
 protected:
   mutable AMAtomic<ClientServiceArg> init_arg_ = {};
-  mutable AMAtomic<bool> config_dirty_ = {};
+  mutable std::atomic<bool> config_dirty_{false};
   mutable AMAtomic<amf> control_token_ = {};
   mutable AMAtomic<std::vector<std::string>> private_keys_ = {};
   mutable AMAtomic<ClientCallbacks> maintainer_callbacks_ = {};
