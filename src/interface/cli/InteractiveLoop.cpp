@@ -1,7 +1,7 @@
 #include "interface/cli/InteractiveLoop.hpp"
 #include "application/client/ClientAppService.hpp"
 #include "domain/config/ConfigModel.hpp"
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/time.hpp"
 #include "interface/cli/CLIBind.hpp"
 #include "interface/completion/CompletionRuntimeAdapter.hpp"
@@ -90,7 +90,7 @@ std::string ResolvePromptCwd_(const AMDomain::client::ClientHandle &client) {
     if (path.empty()) {
       return std::string();
     }
-    return AMPathStr::UnifyPathSep(path, "/");
+    return AMPath::UnifyPathSep(path, "/");
   };
 
   auto metadata =

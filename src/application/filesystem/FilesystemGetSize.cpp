@@ -1,6 +1,6 @@
 #include "application/filesystem/FilesystemAppService.hpp"
 
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 
@@ -40,7 +40,7 @@ std::string ResolveEntryPath_(const std::string &parent,
   if (parent.empty()) {
     return entry.name;
   }
-  return AMPathStr::join(parent, entry.name);
+  return AMPath::join(parent, entry.name);
 }
 
 ClientPath BuildCallbackPath_(const std::string &nickname, ClientHandle client,

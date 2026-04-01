@@ -1,6 +1,6 @@
 #include "application/filesystem/FilesystemAppBaseService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 
@@ -151,7 +151,7 @@ ECM AbsolutePath(ClientPath &path) {
   }
 
   const std::string input = path.path.empty() ? "." : path.path;
-  path.path = AMFS::abspath(input, true, home_result.data, cwd_result.data);
+  path.path = AMPath::abspath(input, true, home_result.data, cwd_result.data);
   path.rcm = Ok();
   return Ok();
 }

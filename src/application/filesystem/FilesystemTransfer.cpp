@@ -1,7 +1,7 @@
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
 
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 
@@ -26,7 +26,7 @@ std::string JoinPathParts_(const std::vector<std::string> &parts,
   }
   std::string out = parts[begin];
   for (size_t i = begin + 1; i < parts.size(); ++i) {
-    out = AMPathStr::join(out, parts[i]);
+    out = AMPath::join(out, parts[i]);
   }
   return out;
 }
@@ -65,8 +65,8 @@ std::string RelativeFrom_(const std::string &root, const std::string &target) {
   if (root == target) {
     return "";
   }
-  const std::vector<std::string> root_parts = AMPathStr::split(root);
-  const std::vector<std::string> target_parts = AMPathStr::split(target);
+  const std::vector<std::string> root_parts = AMPath::split(root);
+  const std::vector<std::string> target_parts = AMPath::split(target);
   if (!root_parts.empty() && !target_parts.empty() &&
       target_parts.size() >= root_parts.size()) {
     bool is_prefix = true;
@@ -80,7 +80,7 @@ std::string RelativeFrom_(const std::string &root, const std::string &target) {
       return JoinPathParts_(target_parts, root_parts.size());
     }
   }
-  return AMPathStr::basename(target);
+  return AMPath::basename(target);
 }
 
 std::string BuildTaskKey_(const AMDomain::transfer::TransferTask &task) {
@@ -443,8 +443,8 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
                   AMStr::fmt("Unsupported source type: {}", source_root.path)));
           continue;
         }
-        const std::string mapped_root = AMPathStr::join(
-            dst.target.path, AMPathStr::basename(source_root.path));
+        const std::string mapped_root =
+            AMPath::join(dst.target.path, AMPath::basename(source_root.path));
         pending.push_back(PendingState{src_host, transfer_path.client,
                                        source_root, source_root, mapped_root});
       }
@@ -467,7 +467,7 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
     const std::string rel = RelativeFrom_(state.root.path, state.node.path);
     const std::string mapped_dst =
         rel.empty() ? state.mapped_root
-                    : AMPathStr::join(state.mapped_root, rel);
+                    : AMPath::join(state.mapped_root, rel);
 
     if (state.src_host == dst_host && state.node.path == mapped_dst) {
       continue;
@@ -545,9 +545,9 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
       continue;
     }
 
-    const std::string parent_path = AMPathStr::dirname(mapped_dst).empty()
+    const std::string parent_path = AMPath::dirname(mapped_dst).empty()
                                         ? "."
-                                        : AMPathStr::dirname(mapped_dst);
+                                        : AMPath::dirname(mapped_dst);
     auto parent_stat = BaseStat(dst.client, dst_host, parent_path, control);
     if (isok(parent_stat.rcm)) {
       if (parent_stat.data.type != PathType::DIR) {

@@ -33,7 +33,7 @@ fn to_c_string(s: String) -> *mut c_char {
 }
 
 #[no_mangle]
-pub extern "C" fn cfgffi_free_string(p: *mut c_char) {
+pub extern "C" fn RustTomlFreeString(p: *mut c_char) {
     if p.is_null() {
         return;
     }
@@ -41,7 +41,7 @@ pub extern "C" fn cfgffi_free_string(p: *mut c_char) {
 }
 
 #[no_mangle]
-pub extern "C" fn cfgffi_free_handle(h: *mut ConfigHandle) {
+pub extern "C" fn RustTomlFreeHandle(h: *mut ConfigHandle) {
     if h.is_null() {
         return;
     }
@@ -49,7 +49,7 @@ pub extern "C" fn cfgffi_free_handle(h: *mut ConfigHandle) {
 }
 
 #[no_mangle]
-pub extern "C" fn cfgffi_get_json(h: *const ConfigHandle) -> *mut c_char {
+pub extern "C" fn RustTomlGetJson(h: *const ConfigHandle) -> *mut c_char {
     if h.is_null() {
         return ptr::null_mut();
     }
@@ -58,7 +58,7 @@ pub extern "C" fn cfgffi_get_json(h: *const ConfigHandle) -> *mut c_char {
 }
 
 #[no_mangle]
-pub extern "C" fn cfgffi_get_toml(h: *const ConfigHandle) -> *mut c_char {
+pub extern "C" fn RustTomlGetToml(h: *const ConfigHandle) -> *mut c_char {
     if h.is_null() {
         return ptr::null_mut();
     }
@@ -67,7 +67,7 @@ pub extern "C" fn cfgffi_get_toml(h: *const ConfigHandle) -> *mut c_char {
 }
 
 #[no_mangle]
-pub extern "C" fn cfgffi_read(
+pub extern "C" fn RustTomlRead(
     path: *const c_char,
     schema_json: *const c_char,
     out_err: *mut *mut c_char,
@@ -139,7 +139,7 @@ pub extern "C" fn cfgffi_read(
 }
 
 #[no_mangle]
-pub extern "C" fn cfgffi_write(
+pub extern "C" fn RustTomlWrite(
     h: *mut ConfigHandle,
     out_path: *const c_char,
     new_json: *const c_char,
@@ -202,7 +202,7 @@ pub extern "C" fn cfgffi_write(
 }
 
 #[no_mangle]
-pub extern "C" fn cfgffi_write_inplace(
+pub extern "C" fn RustTomlWriteInplace(
     h: *mut ConfigHandle,
     new_json: *const c_char,
     out_err: *mut *mut c_char,
@@ -218,11 +218,11 @@ pub extern "C" fn cfgffi_write_inplace(
         hh.src_path.clone()
     };
     let c_out_path = CString::new(out_path).unwrap();
-    cfgffi_write(h, c_out_path.as_ptr(), new_json, out_err)
+    RustTomlWrite(h, c_out_path.as_ptr(), new_json, out_err)
 }
 
 #[no_mangle]
-pub extern "C" fn cfgffi_debug_order(
+pub extern "C" fn RustTomlDebugOrder(
     path: *const c_char,
     schema_json: *const c_char,
     out_err: *mut *mut c_char,

@@ -2,7 +2,7 @@
 
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostModel.hpp"
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 #include <algorithm>
 #include <unordered_set>
@@ -164,7 +164,7 @@ std::string CompletionRuntimeAdapter::BuildPath(
     metadata = *metadata_opt;
   }
   const std::string cwd = ResolveWorkdir_(metadata, home_dir);
-  return AMFS::abspath(input, true, home_dir, cwd);
+  return AMPath::abspath(input, true, home_dir, cwd);
 }
 
 std::string CompletionRuntimeAdapter::Format(

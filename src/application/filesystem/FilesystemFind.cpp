@@ -1,7 +1,7 @@
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostModel.hpp"
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 
@@ -209,12 +209,12 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
   const std::string home_dir = client->ConfigPort().GetHomeDir();
   const std::string cwd = workdir_from_meta(metadata, home_dir);
   const std::string abs_pattern =
-      AMFS::abspath(raw_pattern, true, home_dir, cwd);
+      AMPath::abspath(raw_pattern, true, home_dir, cwd);
 
   std::string literal_root = ".";
   std::vector<std::string> segments = {};
   {
-    const std::vector<std::string> parts = AMPathStr::split(abs_pattern);
+    const std::vector<std::string> parts = AMPath::split(abs_pattern);
     if (!parts.empty()) {
       if (parts.size() == 1 && is_match_pattern(parts[0])) {
         literal_root = ".";
@@ -224,7 +224,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
         bool wildcard_started = false;
         for (size_t i = 1; i < parts.size(); ++i) {
           if (!wildcard_started && !is_match_pattern(parts[i])) {
-            literal_root = AMPathStr::join(literal_root, parts[i]);
+            literal_root = AMPath::join(literal_root, parts[i]);
           } else {
             wildcard_started = true;
             segments.push_back(parts[i]);

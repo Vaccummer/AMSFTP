@@ -38,7 +38,7 @@ private:
   [[nodiscard]] std::string GetHomeDir_() {
     std::string home_dir = config_part_ ? config_part_->GetHomeDir() : "";
     if (home_dir.empty()) {
-      home_dir = AMFS::HomePath();
+      home_dir = AMPath::HomePath();
       if (config_part_) {
         config_part_->SetHomeDir(home_dir);
       }
@@ -572,7 +572,7 @@ public:
     RegisterTraceCallback(std::move(trace_cb));
     RegisterAuthCallback(std::move(auth_cb));
     if (config_part_ && config_part_->GetHomeDir().empty()) {
-      config_part_->SetHomeDir(AMFS::HomePath());
+      config_part_->SetHomeDir(AMPath::HomePath());
     }
     (void)UpdateOSType({}, {});
     SetState_({{EC::Success, ""}, AMDomain::client::ClientStatus::OK});
@@ -614,7 +614,7 @@ public:
       out.home_dir = "";
       return out;
     }
-    out.home_dir = AMFS::HomePath();
+    out.home_dir = AMPath::HomePath();
     if (config_part_) {
       config_part_->SetHomeDir(out.home_dir);
     }
@@ -758,7 +758,7 @@ public:
     }
 
 #ifdef _WIN32
-    if (AMFS::is_readonly(AMStr::wstr(pathf))) {
+    if (AMPath::is_readonly(AMStr::wstr(pathf))) {
       info.mode_int = 0300;
       info.mode_str = "r--------";
     } else {
@@ -767,11 +767,11 @@ public:
     }
 
     auto [create_time, access_time, modify_time] =
-        AMFS::GetTime(AMStr::wstr(pathf));
+        AMPath::GetTime(AMStr::wstr(pathf));
     info.create_time = create_time;
     info.access_time = access_time;
     info.modify_time = modify_time;
-    info.owner = AMFS::GetFileOwner(AMStr::wstr(pathf));
+    info.owner = AMPath::GetFileOwner(AMStr::wstr(pathf));
 #else
     struct stat file_stat;
     if (::stat(args.path.c_str(), &file_stat) == -1) {
@@ -998,12 +998,12 @@ public:
   getsize(const std::string &path, bool ignore_special_file, ...)
   find(const std::string &path, SearchType type, ...)
   mkdirs(const std::string &path, ...)
-  remove(const std::string &path, AMFS::WalkErrorCallback error_callback, ...)
+  remove(const std::string &path, AMPath::WalkErrorCallback error_callback, ...)
   saferm(const std::string &path, ...)
   copy(const std::string &src, const std::string &dst, ...)
 
   void _remove(const std::string &path, RMR &errors,
-               AMFS::WalkErrorCallback error_callback = nullptr,
+               AMPath::WalkErrorCallback error_callback = nullptr,
                int timeout_ms = -1, int64_t start_time = -1,
                amf interrupt_flag = nullptr) {
     if (((interrupt_flag && interrupt_flag->IsInterrupted()))) {
@@ -1080,7 +1080,7 @@ public:
   }
   std::pair<ECM, WRI> iwalk(const std::string &path, bool show_all = false,
                             bool ignore_special_file = true,
-                            AMFS::WalkErrorCallback error_callback = nullptr,
+                            AMPath::WalkErrorCallback error_callback = nullptr,
                             int timeout_ms = -1, int64_t start_time = -1,
                             amf interrupt_flag = nullptr) {
     start_time = NormalizeStartTime_(start_time);
@@ -1220,7 +1220,7 @@ public:
   [[nodiscard]] std::pair<ECM, WRI>
   iwalk(const std::string &path, bool show_all = false,
         bool ignore_special_file = true,
-        AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
+        AMPath::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
         int64_t start_time = -1, amf interrupt_flag = nullptr) const {
     return const_cast<AMLocalIOCore *>(this)->iwalk(
         path, show_all, ignore_special_file, error_callback, timeout_ms,
@@ -1230,7 +1230,7 @@ public:
   std::pair<ECM, WRDR> walk(const std::string &path, int max_depth = -1,
                             bool show_all = false,
                             bool ignore_special_file = false,
-                            AMFS::WalkErrorCallback error_callback = nullptr,
+                            AMPath::WalkErrorCallback error_callback = nullptr,
                             int timeout_ms = -1, int64_t start_time = -1,
                             amf interrupt_flag = nullptr) {
     start_time = NormalizeStartTime_(start_time);
@@ -1477,7 +1477,7 @@ public:
   }
 
   std::pair<ECM, RMR> remove(const std::string &path,
-                             AMFS::WalkErrorCallback error_callback = nullptr,
+                             AMPath::WalkErrorCallback error_callback = nullptr,
                              int timeout_ms = -1, int64_t start_time = -1,
                              amf interrupt_flag = nullptr) {
     start_time = NormalizeStartTime_(start_time);
@@ -1545,12 +1545,12 @@ public:
       return error;
     }
 
-    std::string base = AMPathStr::basename(path);
+    std::string base = AMPath::basename(path);
     std::string base_name = base;
     std::string base_ext = "";
 
     if (info.type != PathType::DIR) {
-      auto base_info = AMPathStr::split_basename(base);
+      auto base_info = AMPath::split_basename(base);
       base_name = base_info.first;
       base_ext = base_info.second;
     }
@@ -1562,7 +1562,7 @@ public:
       return base_ext.empty() ? name : (name + "." + base_ext);
     };
 
-    std::string target_path = AMPathStr::join(request.trash_dir, current_time,
+    std::string target_path = AMPath::join(request.trash_dir, current_time,
                                               build_target_name(base_name));
 
     size_t i = 1;
@@ -1577,20 +1577,20 @@ public:
         break;
       }
       std::string base_name_tmp = base_name + "(" + std::to_string(i) + ")";
-      target_path = AMPathStr::join(request.trash_dir, current_time,
+      target_path = AMPath::join(request.trash_dir, current_time,
                                     build_target_name(base_name_tmp));
       ++i;
     }
 
-    ECM mk_rcm = mkdirs(AMPathStr::join(request.trash_dir, current_time),
+    ECM mk_rcm = mkdirs(AMPath::join(request.trash_dir, current_time),
                         timeout_ms, start_time, interrupt_flag);
     if (mk_rcm.first != EC::Success) {
       return mk_rcm;
     }
 
     return rename(AMFSI::RenameArgs{path, target_path, false, false},
-                  AMDomain::client::MakeClientControlComponent(
-                      std::move(interrupt_flag), timeout_ms, start_time));
+                  AMDomain::client::ClientControlComponent(
+                      std::move(interrupt_flag), timeout_ms));
   }*/
 };
 } // namespace AMInfra::client::LOCAL
