@@ -11,6 +11,9 @@
 namespace AMApplication::filesystem {
 using FilesystemArg = AMDomain::filesystem::FilesystemArg;
 using ClientPath = AMDomain::filesystem::ClientPath;
+using PathTarget = AMDomain::filesystem::PathTarget;
+using ResolvedPath = AMDomain::filesystem::ResolvedPath;
+using PathEntry = AMDomain::filesystem::PathEntry;
 using ClientHandle = AMDomain::client::ClientHandle;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using HostAppService = AMApplication::host::HostAppService;
@@ -21,14 +24,16 @@ ECMData<std::string> GetClientHome(ClientHandle client,
                                    const ClientControlComponent &control);
 ECMData<std::string> GetClientCwd(ClientHandle client,
                                   const ClientControlComponent &control);
+ECMData<std::string> ResolveAbsolutePath(ClientHandle client,
+                                         const std::string &raw_path,
+                                         const ClientControlComponent &control);
 
 ECM AbsolutePath(ClientPath &path);
 } // namespace ClientOperationHelper
 
 class FilesystemAppBaseService : public NonCopyableNonMovable {
 public:
-  FilesystemAppBaseService(FilesystemArg arg,
-                           HostAppService *host_service,
+  FilesystemAppBaseService(FilesystemArg arg, HostAppService *host_service,
                            ClientAppService *client_service);
   ~FilesystemAppBaseService() override = default;
 
@@ -42,6 +47,10 @@ public:
   [[nodiscard]] ECMData<ClientHandle>
   GetTransferClient(const std::string &nickname);
 
+  [[nodiscard]] ECMData<ResolvedPath>
+  ResolvePath(const PathTarget &target, const ClientControlComponent &control,
+              ClientHandle preferred_client = nullptr);
+
   ECM ResolvePath(ClientPath &path, const ClientControlComponent &control);
 
   ECM ResolvePath(std::vector<ClientPath> &paths,
@@ -51,21 +60,21 @@ public:
 protected:
   struct BaseIOCache {
     struct KeyHash {
-      size_t operator()(const ClientPath &key) const noexcept;
+      size_t operator()(const PathTarget &key) const noexcept;
     };
 
     struct KeyEq {
-      bool operator()(const ClientPath &lhs,
-                      const ClientPath &rhs) const noexcept;
+      bool operator()(const PathTarget &lhs,
+                      const PathTarget &rhs) const noexcept;
     };
 
     using StatCacheMap =
-        std::unordered_map<ClientPath, ECMData<PathInfo>, KeyHash, KeyEq>;
+        std::unordered_map<PathTarget, ECMData<PathInfo>, KeyHash, KeyEq>;
     using ListdirCacheMap =
-        std::unordered_map<ClientPath, ECMData<std::vector<PathInfo>>, KeyHash,
+        std::unordered_map<PathTarget, ECMData<std::vector<PathInfo>>, KeyHash,
                            KeyEq>;
     using ListnamesCacheMap =
-        std::unordered_map<ClientPath, ECMData<std::vector<std::string>>,
+        std::unordered_map<PathTarget, ECMData<std::vector<std::string>>,
                            KeyHash, KeyEq>;
 
     AMAtomic<StatCacheMap> stat_cache = {};
@@ -92,11 +101,12 @@ protected:
                               const std::string &abs_path);
 
   [[nodiscard]] AMAtomic<std::list<ClientPath>> &CdHistory();
+
   [[nodiscard]] const AMAtomic<std::list<ClientPath>> &CdHistory() const;
 
-  [[nodiscard]] ClientPath BuildBaseCacheKey(ClientHandle client,
-                                             const std::string &nickname,
+  [[nodiscard]] PathTarget BuildBaseCacheKey(const std::string &nickname,
                                              const std::string &abs_path) const;
+
   [[nodiscard]] static std::vector<std::string>
   BuildBaseListNames(const std::vector<PathInfo> &entries);
 
