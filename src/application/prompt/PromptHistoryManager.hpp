@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/prompt/PromptDomainModel.hpp"
+#include "application/config/ConfigAppService.hpp"
 #include "foundation/core/DataClass.hpp"
 
 namespace AMApplication::prompt {
@@ -13,7 +14,7 @@ struct PromptHistoryQueryResult {
   std::vector<std::string> history = {};
 };
 
-class PromptHistoryManager : public NonCopyableNonMovable {
+class PromptHistoryManager : public AMApplication::config::IConfigSyncPort {
 public:
   explicit PromptHistoryManager(PromptHistoryArg arg = {});
   ~PromptHistoryManager() override = default;
@@ -21,8 +22,7 @@ public:
   ECM Init();
 
   [[nodiscard]] PromptHistoryArg GetInitArg() const;
-  [[nodiscard]] bool IsConfigDirty() const;
-  void ClearConfigDirty();
+  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
   [[nodiscard]] PromptHistoryArg ExportConfigSnapshot() const;
 
   void SetInitArg(PromptHistoryArg arg);
@@ -38,6 +38,5 @@ public:
 
 private:
   mutable AMAtomic<PromptHistoryArg> init_arg_ = {};
-  mutable AMAtomic<bool> config_dirty_ = {};
 };
 } // namespace AMApplication::prompt

@@ -39,13 +39,13 @@ namespace AMApplication::config {
 /**
  * @brief Construct one app service with store init payload.
  */
-AMConfigAppService::AMConfigAppService(ConfigStoreInitArg init_arg)
+ConfigAppService::ConfigAppService(ConfigStoreInitArg init_arg)
     : init_arg_(std::move(init_arg)) {}
 
 /**
  * @brief Build one owned config store from init arg.
  */
-ECM AMConfigAppService::Init() {
+ECM ConfigAppService::Init() {
   const ConfigStoreInitArg init_arg = init_arg_.lock().load();
   auto store_data = AMDomain::config::CreateConfigStorePort(init_arg);
   if (!isok(store_data.rcm) || !store_data.data) {
@@ -69,19 +69,19 @@ ECM AMConfigAppService::Init() {
   return Ok();
 }
 
-void AMConfigAppService::SetInitArg(ConfigStoreInitArg init_arg) {
+void ConfigAppService::SetInitArg(ConfigStoreInitArg init_arg) {
   auto guard = init_arg_.lock();
   guard.store(std::move(init_arg));
 }
 
-ConfigStoreInitArg AMConfigAppService::GetInitArg() const {
+ConfigStoreInitArg ConfigAppService::GetInitArg() const {
   return init_arg_.lock().load();
 }
 
 /**
  * @brief Bind store dependency.
  */
-void AMConfigAppService::Bind(IConfigStorePort *store) {
+void ConfigAppService::Bind(IConfigStorePort *store) {
   owned_store_.reset();
   store_ = store;
   {
@@ -100,7 +100,7 @@ void AMConfigAppService::Bind(IConfigStorePort *store) {
 /**
  * @brief Load one document or all documents from store.
  */
-ECM AMConfigAppService::Load(std::optional<AMDomain::config::DocumentKind> kind,
+ECM ConfigAppService::Load(std::optional<AMDomain::config::DocumentKind> kind,
                              bool force) {
   if (!store_) {
     return Err(EC::ConfigNotInitialized, "config store is not bound");
@@ -111,7 +111,7 @@ ECM AMConfigAppService::Load(std::optional<AMDomain::config::DocumentKind> kind,
 /**
  * @brief Dump one document; optional async scheduling.
  */
-ECM AMConfigAppService::Dump(AMDomain::config::DocumentKind kind,
+ECM ConfigAppService::Dump(AMDomain::config::DocumentKind kind,
                              const std::string &dst_path, bool async) {
   if (!store_) {
     return Err(EC::ConfigNotInitialized, "config store is not bound");
@@ -122,7 +122,7 @@ ECM AMConfigAppService::Dump(AMDomain::config::DocumentKind kind,
 /**
  * @brief Dump all documents; optional async scheduling.
  */
-ECM AMConfigAppService::DumpAll(bool async) {
+ECM ConfigAppService::DumpAll(bool async) {
   if (!store_) {
     return Err(EC::ConfigNotInitialized, "config store is not bound");
   }
@@ -132,7 +132,7 @@ ECM AMConfigAppService::DumpAll(bool async) {
 /**
  * @brief Close store resources and reset app state.
  */
-void AMConfigAppService::CloseHandles() {
+void ConfigAppService::CloseHandles() {
   if (store_) {
     store_->Close();
   }
@@ -153,7 +153,7 @@ void AMConfigAppService::CloseHandles() {
 /**
  * @brief Bind callback invoked on write/dump failures.
  */
-void AMConfigAppService::SetDumpErrorCallback(DumpErrorCallback cb) {
+void ConfigAppService::SetDumpErrorCallback(DumpErrorCallback cb) {
   dump_error_cb_ = std::move(cb);
   if (store_) {
     store_->SetDumpErrorCallback([this](const ECM &err) {
@@ -167,14 +167,14 @@ void AMConfigAppService::SetDumpErrorCallback(DumpErrorCallback cb) {
 /**
  * @brief Return whether one document is dirty in store.
  */
-bool AMConfigAppService::IsDirty(AMDomain::config::DocumentKind kind) const {
+bool ConfigAppService::IsDirty(AMDomain::config::DocumentKind kind) const {
   return store_ && store_->IsDirty(kind);
 }
 
 /**
  * @brief Execute one backup cycle when policy conditions are met.
  */
-ECM AMConfigAppService::BackupIfNeeded() {
+ECM ConfigAppService::BackupIfNeeded() {
   if (!store_) {
     return Err(EC::ConfigNotInitialized, "config store is not bound");
   }
@@ -203,7 +203,7 @@ ECM AMConfigAppService::BackupIfNeeded() {
   return Ok();
 }
 
-bool AMConfigAppService::IsBackupNeeded() const {
+bool ConfigAppService::IsBackupNeeded() const {
   if (!store_) {
     return false;
   }
@@ -220,7 +220,7 @@ bool AMConfigAppService::IsBackupNeeded() const {
   return true;
 }
 
-std::vector<ECM> AMConfigAppService::Backup(
+std::vector<ECM> ConfigAppService::Backup(
     const std::vector<AMDomain::config::DocumentKind> &kinds) {
   std::vector<ECM> out = {};
   if (!store_) {
@@ -288,7 +288,7 @@ std::vector<ECM> AMConfigAppService::Backup(
 /**
  * @brief Submit one asynchronous write task.
  */
-void AMConfigAppService::SubmitWriteTask(std::function<ECM()> task) {
+void ConfigAppService::SubmitWriteTask(std::function<ECM()> task) {
   if (!store_) {
     if (task) {
       (void)task();
@@ -298,27 +298,23 @@ void AMConfigAppService::SubmitWriteTask(std::function<ECM()> task) {
   store_->SubmitWriteTask(std::move(task));
 }
 
-ECMData<AMConfigAppService::SyncParticipantId>
-AMConfigAppService::RegisterSyncParticipantImpl_(
-    std::function<bool()> is_dirty, std::function<ECM()> flush_once,
-    std::function<void()> clear_dirty) {
-  if (!is_dirty || !flush_once || !clear_dirty) {
-    return {0, Err(EC::InvalidArg, "invalid sync participant callbacks")};
+ECMData<ConfigAppService::SyncParticipantId>
+ConfigAppService::RegisterSyncPort(IConfigSyncPort *port) {
+  if (port == nullptr) {
+    return {0, Err(EC::InvalidArg, "sync port is null")};
   }
-
   std::lock_guard<std::mutex> lock(sync_participants_mtx_);
+  for (const auto &participant : sync_participants_) {
+    if (participant.port == port) {
+      return {participant.id, Ok()};
+    }
+  }
   const SyncParticipantId id = next_sync_participant_id_++;
-  SyncParticipant participant = {};
-  participant.id = id;
-  participant.is_dirty = std::move(is_dirty);
-  participant.flush_once = std::move(flush_once);
-  participant.clear_dirty = std::move(clear_dirty);
-  sync_participants_.push_back(std::move(participant));
+  sync_participants_.push_back({id, port});
   return {id, Ok()};
 }
 
-ECM AMConfigAppService::UnregisterSyncParticipant(
-    SyncParticipantId participant_id) {
+ECM ConfigAppService::UnregisterSyncPort(SyncParticipantId participant_id) {
   std::lock_guard<std::mutex> lock(sync_participants_mtx_);
   const auto it = std::remove_if(
       sync_participants_.begin(), sync_participants_.end(),
@@ -326,13 +322,13 @@ ECM AMConfigAppService::UnregisterSyncParticipant(
         return participant.id == participant_id;
       });
   if (it == sync_participants_.end()) {
-    return Err(EC::InvalidArg, "sync participant not found");
+    return Err(EC::InvalidArg, "sync port not found");
   }
   sync_participants_.erase(it, sync_participants_.end());
   return Ok();
 }
 
-ECM AMConfigAppService::FlushDirtyParticipants() {
+ECM ConfigAppService::FlushDirtyParticipants() {
   if (!store_) {
     return Err(EC::ConfigNotInitialized, "config store is not bound");
   }
@@ -362,25 +358,23 @@ ECM AMConfigAppService::FlushDirtyParticipants() {
 
   ECM first_error = Ok();
   for (const SyncParticipant &participant : participants) {
-    if (!participant.is_dirty || !participant.flush_once ||
-        !participant.clear_dirty) {
+    if (participant.port == nullptr) {
       if (isok(first_error)) {
-        first_error =
-            Err(EC::InvalidArg, "invalid sync participant callbacks");
+        first_error = Err(EC::InvalidArg, "invalid sync participant");
       }
       continue;
     }
-    if (!participant.is_dirty()) {
+    if (!participant.port->IsConfigDirty()) {
       continue;
     }
-    const ECM flush_rcm = participant.flush_once();
+    const ECM flush_rcm = participant.port->FlushTo(this);
     if (!isok(flush_rcm)) {
       if (isok(first_error)) {
         first_error = flush_rcm;
       }
       continue;
     }
-    participant.clear_dirty();
+    participant.port->ClearConfigDirty();
   }
 
   return first_error;
@@ -389,7 +383,7 @@ ECM AMConfigAppService::FlushDirtyParticipants() {
 /**
  * @brief Return data file path for one document.
  */
-bool AMConfigAppService::GetDataPath(AMDomain::config::DocumentKind kind,
+bool ConfigAppService::GetDataPath(AMDomain::config::DocumentKind kind,
                                      std::filesystem::path *value) const {
   return store_ && value && store_->GetDataPath(kind, value);
 }
@@ -397,14 +391,14 @@ bool AMConfigAppService::GetDataPath(AMDomain::config::DocumentKind kind,
 /**
  * @brief Return project root path.
  */
-std::filesystem::path AMConfigAppService::ProjectRoot() const {
+std::filesystem::path ConfigAppService::ProjectRoot() const {
   return store_ ? store_->ProjectRoot() : std::filesystem::path();
 }
 
 /**
  * @brief Ensure one directory exists.
  */
-ECM AMConfigAppService::EnsureDirectory(const std::filesystem::path &dir) {
+ECM ConfigAppService::EnsureDirectory(const std::filesystem::path &dir) {
   if (!store_) {
     return Err(EC::ConfigNotInitialized, "config store is not bound");
   }
@@ -414,7 +408,7 @@ ECM AMConfigAppService::EnsureDirectory(const std::filesystem::path &dir) {
 /**
  * @brief Prune old backup timestamp folders under one backup directory.
  */
-void AMConfigAppService::PruneBackupFiles(const std::filesystem::path &bak_dir,
+void ConfigAppService::PruneBackupFiles(const std::filesystem::path &bak_dir,
                                           int64_t max_count) {
   if (!store_) {
     return;
@@ -422,7 +416,7 @@ void AMConfigAppService::PruneBackupFiles(const std::filesystem::path &bak_dir,
   store_->PruneBackupFiles(bak_dir, max_count);
 }
 
-ConfigBackupSet AMConfigAppService::LoadBackupSet_() const {
+ConfigBackupSet ConfigAppService::LoadBackupSet_() const {
   ConfigBackupSet loaded = backup_set_.lock().load();
   if (!store_) {
     return loaded;
@@ -435,8 +429,8 @@ ConfigBackupSet AMConfigAppService::LoadBackupSet_() const {
   return loaded;
 }
 
-AMConfigAppService::BackupTargets
-AMConfigAppService::BuildBackupTargets_(int64_t backup_time_s) const {
+ConfigAppService::BackupTargets
+ConfigAppService::BuildBackupTargets_(int64_t backup_time_s) const {
   BackupTargets out = {};
   const std::filesystem::path root_dir = ProjectRoot();
   if (root_dir.empty()) {
@@ -454,7 +448,7 @@ AMConfigAppService::BuildBackupTargets_(int64_t backup_time_s) const {
   return out;
 }
 
-void AMConfigAppService::PruneBackupFolders_(
+void ConfigAppService::PruneBackupFolders_(
     const std::filesystem::path &bak_dir, int64_t max_count) {
   if (!store_) {
     return;
@@ -462,7 +456,7 @@ void AMConfigAppService::PruneBackupFolders_(
   store_->PruneBackupFiles(bak_dir, max_count);
 }
 
-void AMConfigAppService::CleanupLegacyBackupFiles_(
+void ConfigAppService::CleanupLegacyBackupFiles_(
     const std::filesystem::path &bak_dir) {
   std::error_code ec;
   if (!std::filesystem::exists(bak_dir, ec) || ec) {
@@ -483,14 +477,14 @@ void AMConfigAppService::CleanupLegacyBackupFiles_(
   }
 }
 
-bool AMConfigAppService::IsBackupSetEqual_(const ConfigBackupSet &lhs,
+bool ConfigAppService::IsBackupSetEqual_(const ConfigBackupSet &lhs,
                                            const ConfigBackupSet &rhs) {
   return lhs.enabled == rhs.enabled && lhs.interval_s == rhs.interval_s &&
          lhs.max_backup_count == rhs.max_backup_count &&
          lhs.last_backup_time_s == rhs.last_backup_time_s;
 }
 
-std::vector<DocumentKind> AMConfigAppService::ResolveBackupKinds_(
+std::vector<DocumentKind> ConfigAppService::ResolveBackupKinds_(
     const std::vector<DocumentKind> &kinds) {
   if (kinds.empty()) {
     return {DocumentKind::Config, DocumentKind::Settings,
@@ -508,7 +502,7 @@ std::vector<DocumentKind> AMConfigAppService::ResolveBackupKinds_(
 }
 
 std::filesystem::path
-AMConfigAppService::ResolveBackupPath_(const BackupTargets &targets,
+ConfigAppService::ResolveBackupPath_(const BackupTargets &targets,
                                        DocumentKind kind) const {
   if (kind == DocumentKind::Config) {
     return targets.config_file;
@@ -525,3 +519,4 @@ AMConfigAppService::ResolveBackupPath_(const BackupTargets &targets,
   return {};
 }
 } // namespace AMApplication::config
+

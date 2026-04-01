@@ -1,21 +1,21 @@
 #pragma once
 
 #include "domain/style/StyleDomainModel.hpp"
+#include "application/config/ConfigAppService.hpp"
 #include "foundation/core/DataClass.hpp"
 
 namespace AMApplication::style {
 using StyleConfigArg = AMDomain::style::StyleConfigArg;
 
-class AMStyleConfigManager : public NonCopyableNonMovable {
+class StyleConfigManager : public AMApplication::config::IConfigSyncPort {
 public:
-  explicit AMStyleConfigManager(StyleConfigArg arg = {});
-  ~AMStyleConfigManager() override = default;
+  explicit StyleConfigManager(StyleConfigArg arg = {});
+  ~StyleConfigManager() override = default;
 
   virtual ECM Init();
 
   [[nodiscard]] StyleConfigArg GetInitArg() const;
-  [[nodiscard]] bool IsConfigDirty() const;
-  void ClearConfigDirty();
+  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
   [[nodiscard]] StyleConfigArg ExportConfigSnapshot() const;
 
   void SetInitArg(StyleConfigArg arg);
@@ -27,6 +27,6 @@ public:
 
 protected:
   mutable AMAtomic<StyleConfigArg> init_arg_ = {};
-  mutable AMAtomic<bool> config_dirty_ = {};
 };
 } // namespace AMApplication::style
+

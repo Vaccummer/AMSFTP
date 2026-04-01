@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/client/ClientPort.hpp"
+#include "application/config/ConfigAppService.hpp"
 
 #include <functional>
 #include <atomic>
@@ -18,7 +19,7 @@ using KnownHostCallback = AMDomain::client::KnownHostCallback;
 using DisconnectCallback =
     std::function<void(const AMDomain::client::ClientHandle &, const ECM &)>;
 
-class ClientAppServiceBase : public NonCopyableNonMovable {
+class ClientAppServiceBase : public AMApplication::config::IConfigSyncPort {
 public:
   struct ClientCallbacks {
     DisconnectCallback disconnect = {};
@@ -31,8 +32,7 @@ public:
   ~ClientAppServiceBase() override = default;
 
   [[nodiscard]] ClientServiceArg GetInitArg() const;
-  [[nodiscard]] bool IsConfigDirty() const;
-  void ClearConfigDirty();
+  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
 
   virtual void SetHeartbeatTimeoutMs(int timeout_ms);
   [[nodiscard]] virtual int HeartbeatTimeoutMs() const;
@@ -63,7 +63,6 @@ public:
 
 protected:
   mutable AMAtomic<ClientServiceArg> init_arg_ = {};
-  mutable std::atomic<bool> config_dirty_{false};
   mutable AMAtomic<amf> control_token_ = {};
   mutable AMAtomic<std::vector<std::string>> private_keys_ = {};
   mutable AMAtomic<ClientCallbacks> maintainer_callbacks_ = {};

@@ -1,7 +1,6 @@
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "application/filesystem/FilesystemAppBaseService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
-#include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
@@ -251,8 +250,8 @@ ECM FilesystemAppService::EnsureClientWorkdir(
     if (!isok(absolute_result.rcm)) {
       return {"", absolute_result.rcm};
     }
-    std::string absolute_path = AMDomain::filesystem::services::NormalizePath(
-        absolute_result.data);
+    std::string absolute_path =
+        AMDomain::filesystem::services::NormalizePath(absolute_result.data);
     if (absolute_path.empty()) {
       return {"", Err(EC::InvalidArg, "invalid workdir candidate")};
     }
@@ -745,8 +744,7 @@ FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
       const ECM rcm =
           Err(EC::NotAFile, AMStr::fmt("rmfile does not accept directories: {}",
                                        resolved.abs_path));
-      AddPathError_(&plan.precheck_errors, &status, resolved.target,
-                    rcm);
+      AddPathError_(&plan.precheck_errors, &status, resolved.target, rcm);
       continue;
     }
 
@@ -1368,9 +1366,10 @@ FilesystemAppService::Saferm(std::vector<PathTarget> targets,
   return {std::move(errors), status};
 }
 
-RunResult FilesystemAppService::ShellRun(const std::string &nickname,
-                                         const std::string &cmd,
-                                         const ClientControlComponent &control) {
+RunResult
+FilesystemAppService::ShellRun(const std::string &nickname,
+                               const std::string &cmd,
+                               const ClientControlComponent &control) {
   RunResult out = {};
   if (AMStr::Strip(cmd).empty()) {
     out.rcm = Err(EC::InvalidArg, "Command is empty");
