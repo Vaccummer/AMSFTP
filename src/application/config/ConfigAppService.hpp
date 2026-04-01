@@ -1,6 +1,5 @@
 #pragma once
 
-#include "domain/arg/ArgStructTag.hpp"
 #include "domain/config/ConfigModel.hpp"
 #include "domain/config/ConfigStorePort.hpp"
 #include "foundation/core/DataClass.hpp"
@@ -12,6 +11,7 @@
 #include <optional>
 #include <string>
 #include <type_traits>
+#include <typeindex>
 #include <vector>
 
 namespace AMDomain::host {
@@ -36,97 +36,9 @@ struct StyleConfigArg;
 }
 
 namespace AMApplication::config {
-struct PromptHistoryDocument;
-using AMStyleSnapshot = AMDomain::style::StyleConfigArg;
-
 using IConfigStorePort = AMDomain::config::IConfigStorePort;
 using ConfigBackupSet = AMDomain::config::ConfigBackupSet;
 using ConfigStoreInitArg = AMDomain::config::ConfigStoreInitArg;
-
-namespace detail {
-template <typename T> struct ConfigPayloadTagTraits {
-  static constexpr bool kMapped = false;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::ConfigStoreInitArg;
-};
-
-template <typename T>
-[[nodiscard]] constexpr std::optional<AMDomain::config::ConfigPayloadTag>
-ResolveConfigPayloadTag() {
-  using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
-  if constexpr (ConfigPayloadTagTraits<ValueT>::kMapped) {
-    return ConfigPayloadTagTraits<ValueT>::kTag;
-  }
-  return std::nullopt;
-}
-
-template <> struct ConfigPayloadTagTraits<AMDomain::host::HostConfigArg> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::HostConfigArg;
-};
-template <> struct ConfigPayloadTagTraits<AMDomain::host::KnownHostEntryArg> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::KnownHostEntryArg;
-};
-template <> struct ConfigPayloadTagTraits<ConfigBackupSet> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::ConfigBackupSet;
-};
-template <>
-struct ConfigPayloadTagTraits<AMDomain::config::TransferManagerArg> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::TransferManagerArg;
-};
-template <> struct ConfigPayloadTagTraits<AMDomain::config::LogManagerArg> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::LogManagerArg;
-};
-template <> struct ConfigPayloadTagTraits<PromptHistoryDocument> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::PromptHistoryDocument;
-};
-template <> struct ConfigPayloadTagTraits<AMDomain::client::ClientServiceArg> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::ClientServiceArg;
-};
-template <> struct ConfigPayloadTagTraits<AMDomain::filesystem::FilesystemArg> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::FilesystemArg;
-};
-template <> struct ConfigPayloadTagTraits<AMDomain::var::VarSetArg> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::VarSetArg;
-};
-template <> struct ConfigPayloadTagTraits<AMDomain::prompt::PromptProfileArg> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::PromptProfileArg;
-};
-template <> struct ConfigPayloadTagTraits<AMDomain::prompt::PromptHistoryArg> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::PromptHistoryArg;
-};
-template <> struct ConfigPayloadTagTraits<AMDomain::style::StyleConfigArg> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::StyleConfigArg;
-};
-template <> struct ConfigPayloadTagTraits<ConfigStoreInitArg> {
-  static constexpr bool kMapped = true;
-  static constexpr AMDomain::config::ConfigPayloadTag kTag =
-      AMDomain::config::ConfigPayloadTag::ConfigStoreInitArg;
-};
-} // namespace detail
 
 /**
  * @brief Application service orchestrating config store operations.
@@ -220,11 +132,6 @@ public:
                           std::function<T()> pull_snapshot,
                           std::function<void()> clear_dirty) {
     using ValueT = std::remove_cv_t<std::remove_reference_t<T>>;
-    const auto tag = detail::ResolveConfigPayloadTag<ValueT>();
-    if (!tag.has_value()) {
-      return {0, Err(EC::InvalidArg,
-                     "sync participant type is not mapped to config payload")};
-    }
     if (!is_dirty || !pull_snapshot || !clear_dirty) {
       return {0, Err(EC::InvalidArg, "invalid sync participant callbacks")};
     }
@@ -239,7 +146,7 @@ public:
       return Ok();
     };
 
-    return RegisterSyncParticipantImpl_(tag.value(), std::move(is_dirty),
+    return RegisterSyncParticipantImpl_(std::move(is_dirty),
                                         std::move(flush_once),
                                         std::move(clear_dirty));
   }
@@ -284,11 +191,8 @@ public:
     if (!out || !store_) {
       return false;
     }
-    const auto tag = detail::ResolveConfigPayloadTag<ValueT>();
-    if (!tag.has_value()) {
-      return false;
-    }
-    const bool ok = store_->Read(tag.value(), static_cast<void *>(out));
+    const bool ok =
+        store_->Read(std::type_index(typeid(ValueT)), static_cast<void *>(out));
     if constexpr (std::is_same_v<ValueT, ConfigBackupSet>) {
       if (ok) {
         auto backup_set = backup_set_.lock();
@@ -306,12 +210,8 @@ public:
     if (!store_) {
       return false;
     }
-    const auto tag = detail::ResolveConfigPayloadTag<ValueT>();
-    if (!tag.has_value()) {
-      return false;
-    }
-    const bool ok =
-        store_->Write(tag.value(), static_cast<const void *>(&value));
+    const bool ok = store_->Write(std::type_index(typeid(ValueT)),
+                                  static_cast<const void *>(&value));
     if constexpr (std::is_same_v<ValueT, ConfigBackupSet>) {
       if (ok) {
         auto backup_set = backup_set_.lock();
@@ -329,12 +229,8 @@ public:
     if (!store_) {
       return false;
     }
-    const auto tag = detail::ResolveConfigPayloadTag<ValueT>();
-    if (!tag.has_value()) {
-      return false;
-    }
-    const bool ok =
-        store_->Erase(tag.value(), static_cast<const void *>(&value));
+    const bool ok = store_->Erase(std::type_index(typeid(ValueT)),
+                                  static_cast<const void *>(&value));
     if constexpr (std::is_same_v<ValueT, ConfigBackupSet>) {
       if (ok) {
         auto backup_set = backup_set_.lock();
@@ -347,16 +243,14 @@ public:
 private:
   struct SyncParticipant {
     SyncParticipantId id = 0;
-    AMDomain::config::ConfigPayloadTag tag =
-        AMDomain::config::ConfigPayloadTag::ConfigStoreInitArg;
     std::function<bool()> is_dirty = {};
     std::function<ECM()> flush_once = {};
     std::function<void()> clear_dirty = {};
   };
 
   [[nodiscard]] ECMData<SyncParticipantId> RegisterSyncParticipantImpl_(
-      AMDomain::config::ConfigPayloadTag tag, std::function<bool()> is_dirty,
-      std::function<ECM()> flush_once, std::function<void()> clear_dirty);
+      std::function<bool()> is_dirty, std::function<ECM()> flush_once,
+      std::function<void()> clear_dirty);
 
   struct BackupTargets {
     std::filesystem::path backup_dir = {};
