@@ -1,5 +1,6 @@
 #pragma once
 #include "interface/parser/TokenTypeAnalyzer.hpp"
+#include "interface/parser/CommandTree.hpp"
 #include <foundation/core/Enum.hpp>
 #include <atomic>
 #include <condition_variable>
@@ -17,6 +18,12 @@
 
 struct ic_completion_env_s;
 using ic_completion_env_t = ic_completion_env_s;
+namespace AMInterface::cli {
+class AMInteractiveEventRegistry;
+}
+namespace AMInterface::completion {
+class ICompletionRuntime;
+}
 
 /**
  * @brief Completion target classification used for search-engine routing.
@@ -108,11 +115,11 @@ struct AMCompletionContext {
   size_t cursor = 0;
   uint64_t request_id = 0;
   AMCompletionSource source = AMCompletionSource::Unknown;
-  std::vector<AMTokenTypeAnalyzer::AMToken> tokens;
+  std::vector<AMInterface::parser::TokenTypeAnalyzer::AMToken> tokens;
   size_t token_index = 0;
   bool has_token = false;
   bool cursor_in_token = false;
-  AMTokenTypeAnalyzer::AMToken token;
+  AMInterface::parser::TokenTypeAnalyzer::AMToken token;
   std::string token_raw;
   std::string token_text;
   std::string token_prefix_raw;
@@ -126,6 +133,7 @@ struct AMCompletionContext {
   std::vector<std::string> args;
   std::vector<AMCompletionTarget> targets;
   bool forbid_cache = false;
+  const AMInterface::parser::CommandNode *command_tree = nullptr;
   const AMCompletionArgs *completion_args = nullptr;
 };
 
@@ -234,7 +242,9 @@ struct AMSearchEngineRegistration {
  * @brief Build the default completion search-engine registration set.
  */
 std::vector<AMSearchEngineRegistration>
-AMBuildDefaultSearchEngineRegistrations();
+AMBuildDefaultSearchEngineRegistrations(
+    std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
+    AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry);
 
 /**
  * @brief Core completion engine that orchestrates parsing, dispatch, and async
@@ -242,7 +252,15 @@ AMBuildDefaultSearchEngineRegistrations();
  */
 class AMCompleteEngine {
 public:
-  AMCompleteEngine() {
+  AMCompleteEngine(
+      const AMInterface::parser::CommandNode *command_tree,
+      AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer,
+      std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
+      AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry =
+          nullptr)
+      : command_tree_(command_tree), token_type_analyzer_(token_type_analyzer),
+        runtime_(std::move(runtime)),
+        interactive_event_registry_(interactive_event_registry) {
     StartAsyncWorkers_();
     Init();
   }
@@ -251,9 +269,15 @@ public:
    * @brief Register built-in search engines.
    */
   void Init() {
-    auto registrations = AMBuildDefaultSearchEngineRegistrations();
-    for (const auto &entry : registrations) {
-      RegisterSearchEngine(entry.targets, entry.engine);
+    {
+      std::lock_guard<std::mutex> lock(engines_mtx_);
+      engines_.clear();
+      engines_by_target_.clear();
+    }
+    for (const auto &registration :
+         AMBuildDefaultSearchEngineRegistrations(runtime_,
+                                                 interactive_event_registry_)) {
+      RegisterSearchEngine(registration.targets, registration.engine);
     }
     EnsurePromptReturnCancelHookRegistered_();
   }
@@ -317,9 +341,12 @@ private:
    * @brief Find the token that owns the cursor.
    */
   bool
-  FindTokenAtCursor_(const std::vector<AMTokenTypeAnalyzer::AMToken> &tokens,
-                     size_t cursor, AMTokenTypeAnalyzer::AMToken *out,
-                     size_t *out_index) const;
+  FindTokenAtCursor_(
+      const std::vector<AMInterface::parser::TokenTypeAnalyzer::AMToken>
+          &tokens,
+      size_t cursor,
+      AMInterface::parser::TokenTypeAnalyzer::AMToken *out,
+      size_t *out_index) const;
 
   /**
    * @brief Build the completion context for the current input.
@@ -412,6 +439,13 @@ private:
   std::condition_variable async_queue_cv_;
   std::deque<AMCompletionAsyncRequest> async_queue_;
   std::vector<std::thread> async_workers_;
+
+  const AMInterface::parser::CommandNode *command_tree_ = nullptr;
+  AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer_ = nullptr;
+  std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime_ =
+      nullptr;
+  AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry_ =
+      nullptr;
 
   std::mutex async_results_mtx_;
   std::unordered_map<uint64_t, std::vector<AMCompletionAsyncResult>>

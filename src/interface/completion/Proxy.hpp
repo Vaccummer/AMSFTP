@@ -1,9 +1,20 @@
 #pragma once
 #include "foundation/core/DataClass.hpp"
 #include "foundation/tools/enum_related.hpp"
+#include <memory>
 
 class AMCompleteEngine;
 struct ic_completion_env_s;
+namespace AMInterface::cli {
+class AMInteractiveEventRegistry;
+}
+namespace AMInterface::completion {
+class ICompletionRuntime;
+}
+namespace AMInterface::parser {
+class CommandNode;
+class TokenTypeAnalyzer;
+} // namespace AMInterface::parser
 
 /**
  * @brief Completion coordinator for interactive input.
@@ -13,7 +24,12 @@ public:
   /**
    * @brief Construct completer facade.
    */
-  AMCompleter();
+  AMCompleter(AMInterface::parser::CommandNode *command_tree,
+              AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer,
+              std::shared_ptr<AMInterface::completion::ICompletionRuntime>
+                  runtime,
+              AMInterface::cli::AMInteractiveEventRegistry
+                  *interactive_event_registry = nullptr);
 
   /**
    * @brief Stop the async worker and release resources.

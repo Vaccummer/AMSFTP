@@ -7,6 +7,9 @@
 #include <limits>
 
 namespace AMSearcherDetail {
+using AMInterface::parser::AMCommandArgSemantic;
+using AMInterface::parser::CommandNode;
+
 /**
  * @brief Match result entry containing source index and score bias.
  */
@@ -298,7 +301,10 @@ struct CommandState {
  */
 inline CommandState ResolveCommandState(const AMCompletionContext &ctx) {
   CommandState state;
-  CommandNode &command_tree = CommandNode::Instance();
+  const CommandNode *command_tree = ctx.command_tree;
+  if (!command_tree) {
+    return state;
+  }
   std::vector<std::string> before;
   before.reserve(ctx.token_index);
   for (size_t i = 0; i < ctx.tokens.size() && i < ctx.token_index; ++i) {
@@ -313,7 +319,7 @@ inline CommandState ResolveCommandState(const AMCompletionContext &ctx) {
 
   state.command_path = before[0];
   state.command_tokens = 1;
-  if (before.size() >= 2 && command_tree.IsModule(before[0]) &&
+  if (before.size() >= 2 && command_tree->IsModule(before[0]) &&
       !StartsWithLongOption(before[1]) && !StartsWithShortOption(before[1])) {
     state.command_path += " " + before[1];
     state.command_tokens = 2;
@@ -358,7 +364,7 @@ inline CommandState ResolveCommandState(const AMCompletionContext &ctx) {
       const size_t eq_pos = token.find('=');
       const std::string option_name =
           eq_pos == std::string::npos ? token : token.substr(0, eq_pos);
-      const auto rule = command_tree.ResolveOptionValueRule(
+      const auto rule = command_tree->ResolveOptionValueRule(
           state.command_path, option_name, '\0', 0);
       if (rule.has_value()) {
         set_pending_option_value(
@@ -371,7 +377,7 @@ inline CommandState ResolveCommandState(const AMCompletionContext &ctx) {
       const std::string body = token.substr(1);
       if (!body.empty()) {
         for (size_t cidx = 0; cidx < body.size(); ++cidx) {
-          const auto rule = command_tree.ResolveOptionValueRule(
+          const auto rule = command_tree->ResolveOptionValueRule(
               state.command_path, "", body[cidx], 0);
           if (!rule.has_value()) {
             continue;
@@ -390,15 +396,19 @@ inline CommandState ResolveCommandState(const AMCompletionContext &ctx) {
 /**
  * @brief Return true when current argument state expects a path value.
  */
-inline bool IsPathSemanticState(const CommandState &state) {
+inline bool IsPathSemanticState(const AMCompletionContext &ctx,
+                                const CommandState &state) {
   if (state.command_path.empty()) {
     return false;
   }
-  CommandNode &command_tree = CommandNode::Instance();
+  const CommandNode *command_tree = ctx.command_tree;
+  if (!command_tree) {
+    return false;
+  }
   if (state.pending_value_rule.has_value()) {
     return IsPathSemantic(state.pending_value_rule->semantic);
   }
-  const auto semantic = command_tree.ResolvePositionalSemantic(
+  const auto semantic = command_tree->ResolvePositionalSemantic(
       state.command_path, state.arg_index);
   return semantic.has_value() && IsPathSemantic(*semantic);
 }
