@@ -58,7 +58,8 @@ bool ParseJson_(const std::string &text, Json *out, std::string *error) {
 /**
  * @brief Initialize handle with document kind, path and schema.
  */
-ECM AMInfraSuperTomlHandle::Init(const AMInfra::config::ConfigDocumentSpec &spec) {
+ECM AMInfraSuperTomlHandle::Init(
+    const AMInfra::config::ConfigDocumentSpec &spec) {
   std::lock_guard<std::mutex> lock(mtx_);
 
   if (rust_toml_handle_) {
@@ -88,9 +89,8 @@ ECM AMInfraSuperTomlHandle::Init(const AMInfra::config::ConfigDocumentSpec &spec
   }
 
   char *err = nullptr;
-  rust_toml_handle_ =
-      RustTomlRead(spec_.data_path.string().c_str(), spec_.schema_json.c_str(),
-                   &err);
+  rust_toml_handle_ = RustTomlRead(spec_.data_path.string().c_str(),
+                                   spec_.schema_json.c_str(), &err);
   if (!rust_toml_handle_) {
     std::string msg = err ? err : "RustTomlRead failed";
     if (err) {
@@ -194,9 +194,9 @@ ECM AMInfraSuperTomlHandle::DumpTo(const std::filesystem::path &dst_path) {
     if (err) {
       RustTomlFreeString(err);
     }
-    return Err(EC::ConfigDumpFailed,
-               AMStr::fmt("failed to dump config to {}: {}", dst_path.string(),
-                          msg));
+    return Err(
+        EC::ConfigDumpFailed,
+        AMStr::fmt("failed to dump config to {}: {}", dst_path.string(), msg));
   }
   if (err) {
     RustTomlFreeString(err);
