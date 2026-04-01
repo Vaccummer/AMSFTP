@@ -1,92 +1,120 @@
 #pragma once
-#include "domain/log/LoggerPorts.hpp"
+#include "CLI/App.hpp"
+#include "application/log/LoggerAppService.hpp"
+#include "application/client/ClientAppService.hpp"
+#include "application/config/ConfigAppService.hpp"
+#include "application/filesystem/FilesystemAppService.hpp"
+#include "application/host/HostAppService.hpp"
+#include "application/var/VarAppService.hpp"
+#include "domain/client/ClientPort.hpp"
 #include "domain/signal/SignalMonitorPort.hpp"
 #include "foundation/core/DataClass.hpp"
+#include "interface/adapters/client/ClientInterfaceService.hpp"
+#include "interface/adapters/filesystem/FilesystemInterfaceSerivce.hpp"
+#include "interface/adapters/transfer/TransferInterfaceService.hpp"
+#include "interface/adapters/var/VarInterfaceService.hpp"
+#include "interface/cli/InteractiveEventRegistry.hpp"
+#include "interface/prompt/Prompt.hpp"
+#include "interface/style/StyleManager.hpp"
 #include <atomic>
-#include <cstddef>
-#include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
-namespace AMApplication::config {
-class AMConfigAppService;
-}
-namespace AMApplication::client {
-class ClientAppService;
-}
-namespace AMApplication::filesystem {
-class FilesystemAppService;
-}
-namespace AMApplication::host {
-class AMHostAppService;
-class AMKnownHostsAppService;
-}
-namespace AMInterface::style {
-class AMStyleService;
-}
-namespace AMInterface::prompt {
-class IsoclineProfileManager;
-class AMPromptIOManager;
-}
-namespace AMDomain::host {
-class AMHostConfigManager;
-class AMKnownHostsManager;
-}
-namespace AMApplication::var {
-class VarAppService;
-}
-namespace AMApplication::TransferWorkflow {
-class TransferAppService;
-}
-namespace CLI {
-class App;
-}
+namespace AMInterface::cli {
+
+using amf = std::shared_ptr<AMDomain::client::IClientControlToken>;
 
 struct CliRunContext;
+
+template <typename T> class ServiceHolder final : public NonCopyableNonMovable {
+public:
+  ServiceHolder() = default;
+  ~ServiceHolder() override = default;
+
+  void SetInstance(std::unique_ptr<T> instance) const {
+    instance_ = std::move(instance);
+  }
+
+  [[nodiscard]] bool IsReady() const { return instance_ != nullptr; }
+
+  T &Get() const {
+    if (!instance_) {
+      throw std::runtime_error("Service is not initialized");
+    }
+    return *instance_;
+  }
+
+  T *operator->() const { return &Get(); }
+  operator T &() const { return Get(); }
+
+private:
+  mutable std::unique_ptr<T> instance_ = nullptr;
+};
 
 /**
  * @brief Manager references for CLI dispatch.
  */
-struct CliManagers : public NonCopyableNonMovable {
+struct CLIServices : public NonCopyableNonMovable {
+
   /**
    * @brief Bind manager references used by CLI entry points.
    */
-  CliManagers(AMSignalMonitorPort &signal_monitor,
-              AMApplication::config::AMConfigAppService &config_service,
-              AMInterface::style::AMStyleService &style_service,
-              AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager,
-              AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
-              AMApplication::host::AMHostAppService &host_service,
-              AMApplication::host::AMKnownHostsAppService &known_hosts_service,
-              AMDomain::host::AMHostConfigManager &host_config_manager,
-              AMDomain::host::AMKnownHostsManager &known_hosts_manager,
-              AMApplication::var::VarAppService &var_service,
-              AMLoggerManagerPort &log_manager,
-              AMApplication::client::ClientAppService &client_service,
-              AMApplication::filesystem::FilesystemAppService &filesystem_service,
-              AMApplication::TransferWorkflow::TransferAppService
-                  &transfer_service);
+  CLIServices() = default;
 
   /**
    * @brief Initialize all bound managers in dependency-safe order.
    */
   ECM Init(amf task_control_token);
 
-  AMSignalMonitorPort &signal_monitor;
-  AMApplication::config::AMConfigAppService &config_service;
-  AMInterface::style::AMStyleService &style_service;
-  AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager;
-  AMInterface::prompt::AMPromptIOManager &prompt_io_manager;
-  AMApplication::host::AMHostAppService &host_service;
-  AMApplication::host::AMKnownHostsAppService &known_hosts_service;
-  AMDomain::host::AMHostConfigManager &host_config_manager;
-  AMDomain::host::AMKnownHostsManager &known_hosts_manager;
-  AMApplication::var::VarAppService &var_service;
-  AMLoggerManagerPort &log_manager;
-  AMApplication::client::ClientAppService &client_service;
-  AMApplication::filesystem::FilesystemAppService &filesystem_service;
-  AMApplication::TransferWorkflow::TransferAppService &transfer_service;
+  void SetPromptProfileManager(
+      std::unique_ptr<AMApplication::prompt::PromptProfileManager> manager)
+      const;
+  void SetPromptHistoryManager(
+      std::unique_ptr<AMApplication::prompt::PromptHistoryManager> manager)
+      const;
+  [[nodiscard]] AMApplication::prompt::PromptProfileManager &
+  PromptProfileManager() const;
+  [[nodiscard]] AMApplication::prompt::PromptHistoryManager &
+  PromptHistoryManager() const;
+
+  mutable ServiceHolder<AMDomain::signal::SignalMonitor> signal_monitor = {};
+  mutable ServiceHolder<AMApplication::config::AMConfigAppService>
+      config_service = {};
+  mutable ServiceHolder<AMInterface::style::AMStyleService> style_service = {};
+  mutable ServiceHolder<AMInterface::prompt::IsoclineProfileManager>
+      prompt_profile_history_manager = {};
+  mutable ServiceHolder<AMInterface::prompt::AMPromptIOManager>
+      prompt_io_manager = {};
+  mutable ServiceHolder<AMApplication::host::AMHostAppService> host_service =
+      {};
+  mutable ServiceHolder<AMApplication::host::AMKnownHostsAppService>
+      known_hosts_service = {};
+  mutable ServiceHolder<AMApplication::var::VarAppService> var_service = {};
+  mutable ServiceHolder<AMApplication::log::LoggerAppService> log_manager = {};
+  mutable ServiceHolder<AMApplication::client::ClientAppService>
+      client_service = {};
+  mutable ServiceHolder<AMApplication::filesystem::FilesystemAppService>
+      filesystem_service = {};
+  mutable ServiceHolder<AMInterface::client::ClientInterfaceService>
+      client_interface_service = {};
+  mutable ServiceHolder<AMInterface::filesystem::FilesystemInterfaceSerivce>
+      filesystem_interface_service = {};
+  mutable ServiceHolder<AMInterface::var::VarInterfaceService>
+      var_interface_service = {};
+  mutable ServiceHolder<AMDomain::transfer::ITransferPoolPort> transfer_pool =
+      {};
+  mutable ServiceHolder<AMInterface::transfer::TransferInterfaceService>
+      transfer_service = {};
+  mutable AMInteractiveEventRegistry interactive_event_registry = {};
+
+private:
+  mutable ServiceHolder<AMApplication::prompt::PromptProfileManager>
+      prompt_profile_manager_ = {};
+  mutable ServiceHolder<AMApplication::prompt::PromptHistoryManager>
+      prompt_history_manager_ = {};
 };
 
 /**
@@ -103,8 +131,10 @@ struct CliRunContext : NonCopyableNonMovable {
   mutable bool request_exit = false;
   mutable bool skip_loop_exit_callbacks = false;
   amf task_control_token = nullptr;
-  std::shared_ptr<std::atomic<int>> exit_code;
-  std::shared_ptr<std::atomic<bool>> is_interactive = nullptr;
+  std::shared_ptr<std::atomic<int>> exit_code =
+      std::make_shared<std::atomic<int>>(0);
+  std::shared_ptr<std::atomic<bool>> is_interactive =
+      std::make_shared<std::atomic<bool>>(false);
 };
 
 /**
@@ -115,7 +145,7 @@ struct BaseArgStruct {
   /**
    * @brief Execute this parsed command payload.
    */
-  [[nodiscard]] virtual ECM Run(const CliManagers &managers,
+  [[nodiscard]] virtual ECM Run(const CLIServices &managers,
                                 const CliRunContext &ctx) const = 0;
   /**
    * @brief Reset this payload to parser defaults.
@@ -131,7 +161,7 @@ struct ConfigLsArgs : BaseArgStruct {
   /**
    * @brief Execute config ls with optional detail flag.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-ls arguments to defaults.
@@ -146,7 +176,7 @@ struct ConfigKeysArgs : BaseArgStruct {
   /**
    * @brief Execute config keys.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-keys arguments to defaults.
@@ -161,7 +191,7 @@ struct ConfigDataArgs : BaseArgStruct {
   /**
    * @brief Execute config data.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-data arguments to defaults.
@@ -173,11 +203,11 @@ struct ConfigDataArgs : BaseArgStruct {
  * @brief CLI argument container for config get.
  */
 struct ConfigGetArgs : BaseArgStruct {
-  std::vector<std::string> nicknames;
+  AMInterface::client::ListClientsRequest request = {};
   /**
    * @brief Execute config get with optional nickname list.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-get arguments to defaults.
@@ -193,7 +223,7 @@ struct ConfigAddArgs : BaseArgStruct {
   /**
    * @brief Execute config add.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-add arguments to defaults.
@@ -209,7 +239,7 @@ struct ConfigEditArgs : BaseArgStruct {
   /**
    * @brief Execute config edit for a nickname.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-edit arguments to defaults.
@@ -226,7 +256,7 @@ struct ConfigRenameArgs : BaseArgStruct {
   /**
    * @brief Execute config rename.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-rename arguments to defaults.
@@ -242,7 +272,7 @@ struct ConfigRemoveArgs : BaseArgStruct {
   /**
    * @brief Execute config remove for target names.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-remove arguments to defaults.
@@ -254,13 +284,11 @@ struct ConfigRemoveArgs : BaseArgStruct {
  * @brief CLI argument container for config set.
  */
 struct ConfigSetArgs : BaseArgStruct {
-  std::string nickname;
-  std::string attrname;
-  std::string value;
+  AMInterface::client::SetHostValueRequest request = {};
   /**
    * @brief Execute config set for a host attribute.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-set arguments to defaults.
@@ -275,7 +303,7 @@ struct ConfigSaveArgs : BaseArgStruct {
   /**
    * @brief Execute config save.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset config-save arguments to defaults.
@@ -291,7 +319,7 @@ struct ConfigProfileSetArgs : BaseArgStruct {
   /**
    * @brief Execute config profile set.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset config profile set arguments to defaults.
@@ -307,7 +335,7 @@ struct ProfileEditArgs : BaseArgStruct {
   /**
    * @brief Execute profile edit for a host nickname.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset profile-edit arguments to defaults.
@@ -323,7 +351,7 @@ struct ProfileGetArgs : BaseArgStruct {
   /**
    * @brief Execute profile get for one or more host nicknames.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset profile-get arguments to defaults.
@@ -335,12 +363,11 @@ struct ProfileGetArgs : BaseArgStruct {
  * @brief CLI argument container for stat.
  */
 struct StatArgs : BaseArgStruct {
-  std::vector<std::string> paths;
-  bool trace_link = false;
+  AMInterface::filesystem::FilesystemStatArg request = {};
   /**
    * @brief Execute stat for target paths.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset stat arguments to defaults.
@@ -352,13 +379,11 @@ struct StatArgs : BaseArgStruct {
  * @brief CLI argument container for ls.
  */
 struct LsArgs : BaseArgStruct {
-  std::string path;
-  bool list_like = false;
-  bool show_all = false;
+  AMInterface::filesystem::FilesystemLsArg request = {};
   /**
    * @brief Execute ls for a path or current workdir.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset ls arguments to defaults.
@@ -370,11 +395,11 @@ struct LsArgs : BaseArgStruct {
  * @brief CLI argument container for size.
  */
 struct SizeArgs : BaseArgStruct {
-  std::vector<std::string> paths;
+  AMInterface::filesystem::FilesystemGetSizeArg request = {};
   /**
    * @brief Execute size for target paths.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset size arguments to defaults.
@@ -390,7 +415,7 @@ struct FindArgs : BaseArgStruct {
   /**
    * @brief Execute find for a path.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset find arguments to defaults.
@@ -402,11 +427,11 @@ struct FindArgs : BaseArgStruct {
  * @brief CLI argument container for mkdir.
  */
 struct MkdirArgs : BaseArgStruct {
-  std::vector<std::string> paths;
+  AMInterface::filesystem::FilesystemMkdirsArg request = {};
   /**
    * @brief Execute mkdir for target paths.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset mkdir arguments to defaults.
@@ -424,7 +449,7 @@ struct RmArgs : BaseArgStruct {
   /**
    * @brief Execute rm for target paths.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset rm arguments to defaults.
@@ -433,40 +458,15 @@ struct RmArgs : BaseArgStruct {
 };
 
 /**
- * @brief CLI argument container for walk.
- */
-struct WalkArgs : BaseArgStruct {
-  std::string path;
-  bool only_file = false;
-  bool only_dir = false;
-  bool show_all = false;
-  bool include_special = false;
-  bool quiet = false;
-  /**
-   * @brief Execute walk for a path.
-   */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
-                        const CliRunContext &ctx) const override;
-  /**
-   * @brief Reset walk arguments to defaults.
-   */
-  void reset() override;
-};
-
-/**
  * @brief CLI argument container for tree.
  */
 struct TreeArgs : BaseArgStruct {
-  std::string path;
-  int depth = -1;
-  bool only_dir = false;
-  bool show_all = false;
+  AMInterface::filesystem::FilesystemTreeArg request = {};
   bool include_special = false;
-  bool quiet = false;
   /**
    * @brief Execute tree for a path.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset tree arguments to defaults.
@@ -482,7 +482,7 @@ struct RealpathArgs : BaseArgStruct {
   /**
    * @brief Execute realpath for a target path.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset realpath arguments to defaults.
@@ -494,11 +494,11 @@ struct RealpathArgs : BaseArgStruct {
  * @brief CLI argument container for rtt.
  */
 struct RttArgs : BaseArgStruct {
-  int times = 1;
+  AMInterface::filesystem::FilesystemTestRTTArg request = {};
   /**
    * @brief Execute rtt with sample count.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset rtt arguments to defaults.
@@ -514,7 +514,7 @@ struct ClearArgs : BaseArgStruct {
   /**
    * @brief Execute clear screen.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset clear arguments to defaults.
@@ -528,6 +528,7 @@ struct ClearArgs : BaseArgStruct {
 struct CpArgs : BaseArgStruct {
   std::vector<std::string> srcs;
   std::string output;
+  int timeout_ms = -1;
   bool overwrite = false;
   bool no_mkdir = false;
   bool clone = false;
@@ -537,7 +538,7 @@ struct CpArgs : BaseArgStruct {
   /**
    * @brief Execute cp transfer.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset cp arguments to defaults.
@@ -550,13 +551,15 @@ struct CpArgs : BaseArgStruct {
  */
 struct SftpArgs : BaseArgStruct {
   std::vector<std::string> targets;
-  int64_t port = 22;
-  std::string password;
-  std::string keyfile;
+  AMInterface::client::ProtocolConnectRequest request = [] {
+    AMInterface::client::ProtocolConnectRequest req = {};
+    req.port = 22;
+    return req;
+  }();
   /**
    * @brief Execute sftp connection.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset sftp arguments to defaults.
@@ -569,13 +572,15 @@ struct SftpArgs : BaseArgStruct {
  */
 struct FtpArgs : BaseArgStruct {
   std::vector<std::string> targets;
-  int64_t port = 21;
-  std::string password;
-  std::string keyfile;
+  AMInterface::client::ProtocolConnectRequest request = [] {
+    AMInterface::client::ProtocolConnectRequest req = {};
+    req.port = 21;
+    return req;
+  }();
   /**
    * @brief Execute ftp connection.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset ftp arguments to defaults.
@@ -587,11 +592,11 @@ struct FtpArgs : BaseArgStruct {
  * @brief CLI argument container for clients.
  */
 struct ClientsArgs : BaseArgStruct {
-  bool detail = false;
+  AMInterface::client::ListClientsRequest request = {};
   /**
    * @brief Execute clients list.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset clients arguments to defaults.
@@ -603,12 +608,11 @@ struct ClientsArgs : BaseArgStruct {
  * @brief CLI argument container for check.
  */
 struct CheckArgs : BaseArgStruct {
-  std::vector<std::string> nicknames;
-  bool detail = false;
+  AMInterface::client::ListClientsRequest request = {};
   /**
    * @brief Execute client check.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset check arguments to defaults.
@@ -620,11 +624,11 @@ struct CheckArgs : BaseArgStruct {
  * @brief CLI argument container for ch.
  */
 struct ChangeClientArgs : BaseArgStruct {
-  std::string nickname;
+  AMInterface::client::ChangeClientRequest request = {};
   /**
    * @brief Execute client change.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset change-client arguments to defaults.
@@ -636,11 +640,11 @@ struct ChangeClientArgs : BaseArgStruct {
  * @brief CLI argument container for disconnect.
  */
 struct DisconnectArgs : BaseArgStruct {
-  std::vector<std::string> nicknames;
+  AMInterface::client::RemoveClientsRequest request = {};
   /**
    * @brief Execute client disconnect.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset disconnect arguments to defaults.
@@ -652,11 +656,11 @@ struct DisconnectArgs : BaseArgStruct {
  * @brief CLI argument container for cd.
  */
 struct CdArgs : BaseArgStruct {
-  std::string path;
+  AMInterface::filesystem::FilesystemCdArg request = {};
   /**
    * @brief Execute cd.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset cd arguments to defaults.
@@ -668,12 +672,11 @@ struct CdArgs : BaseArgStruct {
  * @brief CLI argument container for connect.
  */
 struct ConnectArgs : BaseArgStruct {
-  std::vector<std::string> nicknames;
-  bool force = false;
+  AMInterface::client::ConnectRequest request = {};
   /**
    * @brief Execute connect.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset connect arguments to defaults.
@@ -685,12 +688,12 @@ struct ConnectArgs : BaseArgStruct {
  * @brief CLI argument container for cmd.
  */
 struct CmdArgs : BaseArgStruct {
-  int timeout_ms = 5000;
-  std::string cmd_str;
+  int timeout_ms = -1;
+  AMInterface::filesystem::FilesystemShellRunArg request = {};
   /**
    * @brief Execute one shell command on current SFTP/local client.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset cmd arguments to defaults.
@@ -705,7 +708,7 @@ struct BashArgs : BaseArgStruct {
   /**
    * @brief Enter interactive mode.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset bash arguments to defaults.
@@ -721,7 +724,7 @@ struct ExitArgs : BaseArgStruct {
   /**
    * @brief Request interactive-loop exit.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset exit arguments to defaults.
@@ -737,7 +740,7 @@ struct VarGetArgs : BaseArgStruct {
   /**
    * @brief Execute `var get`.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset args to defaults.
@@ -755,7 +758,7 @@ struct VarDefArgs : BaseArgStruct {
   /**
    * @brief Execute `var def`.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset args to defaults.
@@ -772,7 +775,7 @@ struct VarDelArgs : BaseArgStruct {
   /**
    * @brief Execute `var del`.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset args to defaults.
@@ -788,7 +791,7 @@ struct VarLsArgs : BaseArgStruct {
   /**
    * @brief Execute `var ls`.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset args to defaults.
@@ -803,7 +806,7 @@ struct CompleteCacheClearArgs : BaseArgStruct {
   /**
    * @brief Execute completion cache clear.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset completion cache clear arguments to defaults.
@@ -822,7 +825,7 @@ struct TaskListArgs : BaseArgStruct {
   /**
    * @brief Execute task list.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-list arguments to defaults.
@@ -838,7 +841,7 @@ struct TaskShowArgs : BaseArgStruct {
   /**
    * @brief Execute task show.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-show arguments to defaults.
@@ -856,7 +859,7 @@ struct TaskInspectArgs : BaseArgStruct {
   /**
    * @brief Execute task inspect.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-inspect arguments to defaults.
@@ -872,97 +875,10 @@ struct TaskThreadArgs : BaseArgStruct {
   /**
    * @brief Execute task thread update/query.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-thread arguments to defaults.
-   */
-  void reset() override;
-};
-
-/**
- * @brief CLI argument container for task cache add.
- */
-struct TaskCacheAddArgs : BaseArgStruct {
-  std::vector<std::string> srcs;
-  std::string output;
-  bool overwrite = false;
-  bool no_mkdir = false;
-  bool clone = false;
-  bool include_special = false;
-  bool resume = false;
-  /**
-   * @brief Execute task cache add.
-   */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
-                        const CliRunContext &ctx) const override;
-  /**
-   * @brief Reset task-cache-add arguments to defaults.
-   */
-  void reset() override;
-};
-
-/**
- * @brief CLI argument container for task cache rm.
- */
-struct TaskCacheRmArgs : BaseArgStruct {
-  std::vector<size_t> indices;
-  /**
-   * @brief Execute task cache remove.
-   */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
-                        const CliRunContext &ctx) const override;
-  /**
-   * @brief Reset task-cache-rm arguments to defaults.
-   */
-  void reset() override;
-};
-
-/**
- * @brief CLI argument container for task cache clear.
- */
-struct TaskCacheClearArgs : BaseArgStruct {
-  /**
-   * @brief Execute task cache clear.
-   */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
-                        const CliRunContext &ctx) const override;
-  /**
-   * @brief Reset task-cache-clear arguments to defaults.
-   */
-  void reset() override;
-};
-
-/**
- * @brief CLI argument container for task cache submit.
- */
-struct TaskCacheSubmitArgs : BaseArgStruct {
-  bool is_async = false;
-  bool quiet = false;
-  std::string async_suffix;
-  /**
-   * @brief Execute task cache submit.
-   */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
-                        const CliRunContext &ctx) const override;
-  /**
-   * @brief Reset task-cache-submit arguments to defaults.
-   */
-  void reset() override;
-};
-
-/**
- * @brief CLI argument container for task userset.
- */
-struct TaskUserSetArgs : BaseArgStruct {
-  std::vector<size_t> indices;
-  /**
-   * @brief Execute task userset query.
-   */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
-                        const CliRunContext &ctx) const override;
-  /**
-   * @brief Reset task-userset arguments to defaults.
    */
   void reset() override;
 };
@@ -975,7 +891,7 @@ struct TaskEntryArgs : BaseArgStruct {
   /**
    * @brief Execute task entry query.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-entry arguments to defaults.
@@ -993,7 +909,7 @@ struct TaskControlArgs : BaseArgStruct {
   /**
    * @brief Execute task control action.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-control arguments to defaults.
@@ -1012,7 +928,7 @@ struct TaskRetryArgs : BaseArgStruct {
   /**
    * @brief Execute task retry.
    */
-  [[nodiscard]] ECM Run(const CliManagers &managers,
+  [[nodiscard]] ECM Run(const CLIServices &managers,
                         const CliRunContext &ctx) const override;
   /**
    * @brief Reset task-retry arguments to defaults.
@@ -1052,7 +968,6 @@ struct CliArgsPool {
   std::shared_ptr<FindArgs> find = std::make_shared<FindArgs>();
   std::shared_ptr<MkdirArgs> mkdir = std::make_shared<MkdirArgs>();
   std::shared_ptr<RmArgs> rm = std::make_shared<RmArgs>();
-  std::shared_ptr<WalkArgs> walk = std::make_shared<WalkArgs>();
   std::shared_ptr<TreeArgs> tree = std::make_shared<TreeArgs>();
   std::shared_ptr<RealpathArgs> realpath = std::make_shared<RealpathArgs>();
   std::shared_ptr<RttArgs> rtt = std::make_shared<RttArgs>();
@@ -1082,16 +997,6 @@ struct CliArgsPool {
       std::make_shared<TaskInspectArgs>();
   std::shared_ptr<TaskThreadArgs> task_thread =
       std::make_shared<TaskThreadArgs>();
-  std::shared_ptr<TaskCacheAddArgs> task_cache_add =
-      std::make_shared<TaskCacheAddArgs>();
-  std::shared_ptr<TaskCacheRmArgs> task_cache_rm =
-      std::make_shared<TaskCacheRmArgs>();
-  std::shared_ptr<TaskCacheClearArgs> task_cache_clear =
-      std::make_shared<TaskCacheClearArgs>();
-  std::shared_ptr<TaskCacheSubmitArgs> task_cache_submit =
-      std::make_shared<TaskCacheSubmitArgs>();
-  std::shared_ptr<TaskUserSetArgs> task_userset =
-      std::make_shared<TaskUserSetArgs>();
   std::shared_ptr<TaskEntryArgs> task_entry = std::make_shared<TaskEntryArgs>();
   std::shared_ptr<TaskControlArgs> task_terminate =
       std::make_shared<TaskControlArgs>();
@@ -1130,7 +1035,6 @@ struct CliCommands {
   CLI::App *find_cmd = nullptr;
   CLI::App *mkdir_cmd = nullptr;
   CLI::App *rm_cmd = nullptr;
-  CLI::App *walk_cmd = nullptr;
   CLI::App *tree_cmd = nullptr;
   CLI::App *realpath_cmd = nullptr;
   CLI::App *rtt_cmd = nullptr;
@@ -1158,16 +1062,10 @@ struct CliCommands {
   CLI::App *complete_cache_cmd = nullptr;
   CLI::App *complete_cache_clear = nullptr;
   CLI::App *task_cmd = nullptr;
-  CLI::App *task_cache_cmd = nullptr;
-  CLI::App *task_cache_add = nullptr;
-  CLI::App *task_cache_rm = nullptr;
-  CLI::App *task_cache_clear = nullptr;
-  CLI::App *task_cache_submit = nullptr;
   CLI::App *task_list_cmd = nullptr;
   CLI::App *task_show_cmd = nullptr;
   CLI::App *task_inspect_cmd = nullptr;
   CLI::App *task_thread_cmd = nullptr;
-  CLI::App *task_userset_cmd = nullptr;
   CLI::App *task_query_cmd = nullptr;
   CLI::App *task_terminate_cmd = nullptr;
   CLI::App *task_pause_cmd = nullptr;
@@ -1177,9 +1075,4 @@ struct CliCommands {
   CliArgsPool *args = nullptr;
 };
 
-
-
-
-
-
-
+} // namespace AMInterface::cli

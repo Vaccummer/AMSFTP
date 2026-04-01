@@ -1,6 +1,5 @@
 #pragma once
 #include "domain/log/LoggerModel.hpp"
-#include <string>
 
 namespace AMDomain::log {
 
@@ -23,10 +22,5 @@ public:
    * @brief Resolve default source by logger type.
    */
   [[nodiscard]] static TraceSource ResolveSource(LoggerType logger_type);
-
-  /**
-   * @brief Build one log line text from structured trace info.
-   */
-  [[nodiscard]] static std::string BuildLogLine(const TraceInfo &info);
 };
 } // namespace AMDomain::log
