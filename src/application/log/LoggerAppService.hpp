@@ -1,6 +1,6 @@
 #pragma once
 
-#include "domain/log/LoggerDomainService.hpp"
+#include "domain/log/LoggerModel.hpp"
 #include "domain/log/LoggerPorts.hpp"
 #include "domain/writer/IWriteSchedulerPort.hpp"
 #include <functional>
@@ -126,10 +126,5 @@ private:
   std::shared_ptr<IWriteSchedulerPort> scheduler_ = nullptr;
   ErrorReporter error_reporter_ = {};
 };
-
-/**
- * @brief Backward-compatible alias kept for typo-tolerant migration.
- */
-using LoggerAppSerive = LoggerAppService;
 
 } // namespace AMApplication::log

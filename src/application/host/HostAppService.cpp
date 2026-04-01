@@ -57,6 +57,17 @@ HostConfigArg HostAppService::GetInitArg() const {
   return out;
 }
 
+ECM HostAppService::FlushTo(
+    AMApplication::config::ConfigAppService *config_service) {
+  if (config_service == nullptr) {
+    return Err(EC::InvalidArg, "config service is null");
+  }
+  if (!config_service->Write<HostConfigArg>(GetInitArg())) {
+    return Err(EC::ConfigDumpFailed, "failed to flush host config");
+  }
+  return Ok();
+}
+
 ECMData<HostConfig> HostAppService::GetClientConfig(const std::string &nickname,
                                                     bool case_sensitive) {
   const std::string key = AMStr::Strip(nickname);
@@ -147,6 +158,7 @@ ECM HostAppService::AddHost(const HostConfig &entry, bool overwrite) {
     local_config_ = normalized;
     local_config_.request.nickname = "local";
     local_config_.request.protocol = ClientProtocol::LOCAL;
+    MarkConfigDirty();
     return Ok();
   }
 
@@ -156,6 +168,7 @@ ECM HostAppService::AddHost(const HostConfig &entry, bool overwrite) {
                                                 normalized.request.nickname));
   }
   host_configs_[normalized.request.nickname] = std::move(normalized);
+  MarkConfigDirty();
   return Ok();
 }
 
@@ -169,6 +182,7 @@ ECM HostAppService::DelHost(const std::string &nickname) {
     return Err(EC::HostConfigNotFound, AMStr::fmt("host not found: {}", key));
   }
   host_configs_.erase(it);
+  MarkConfigDirty();
   return Ok();
 }
 
@@ -176,25 +190,37 @@ std::vector<std::string> HostAppService::PrivateKeys() const {
   return private_keys_;
 }
 
-ECM AMKnownHostsAppService::Init() {
+ECM KnownHostsAppService::Init() {
   known_hosts_.clear();
   snapshot_loaded_ = true;
   return Ok();
 }
 
-ECM AMKnownHostsAppService::Init(const KnownHostMap &known_hosts) {
+ECM KnownHostsAppService::Init(const KnownHostMap &known_hosts) {
   known_hosts_ = known_hosts;
   snapshot_loaded_ = true;
   return Ok();
 }
 
-const AMKnownHostsAppService::KnownHostMap &
-AMKnownHostsAppService::KnownHosts() const {
+const KnownHostsAppService::KnownHostMap &
+KnownHostsAppService::KnownHosts() const {
   (void)EnsureSnapshotLoaded_();
   return known_hosts_;
 }
 
-ECM AMKnownHostsAppService::FindKnownHost(KnownHostQuery &query) const {
+ECM KnownHostsAppService::FlushTo(
+    AMApplication::config::ConfigAppService *config_service) {
+  if (config_service == nullptr) {
+    return Err(EC::InvalidArg, "config service is null");
+  }
+  const KnownHostEntryArg snapshot = SnapshotFromCache_();
+  if (!config_service->Write<KnownHostEntryArg>(snapshot)) {
+    return Err(EC::ConfigDumpFailed, "failed to flush known-hosts config");
+  }
+  return Ok();
+}
+
+ECM KnownHostsAppService::FindKnownHost(KnownHostQuery &query) const {
   ECM load_rcm = EnsureSnapshotLoaded_();
   if (!isok(load_rcm)) {
     return load_rcm;
@@ -212,7 +238,7 @@ ECM AMKnownHostsAppService::FindKnownHost(KnownHostQuery &query) const {
   return Ok();
 }
 
-ECM AMKnownHostsAppService::UpsertKnownHost(const KnownHostQuery &query,
+ECM KnownHostsAppService::UpsertKnownHost(const KnownHostQuery &query,
                                             bool overwrite) {
   ECM load_rcm = EnsureSnapshotLoaded_();
   if (!isok(load_rcm)) {
@@ -227,14 +253,15 @@ ECM AMKnownHostsAppService::UpsertKnownHost(const KnownHostQuery &query,
     return Err(EC::KeyAlreadyExists, "known host entry already exists");
   }
   known_hosts_[key] = query;
+  MarkConfigDirty();
   return Ok();
 }
 
-ECM AMKnownHostsAppService::EnsureSnapshotLoaded_() const {
+ECM KnownHostsAppService::EnsureSnapshotLoaded_() const {
   return snapshot_loaded_ ? Ok() : LoadSnapshot_();
 }
 
-ECM AMKnownHostsAppService::LoadSnapshot_() const {
+ECM KnownHostsAppService::LoadSnapshot_() const {
   if (snapshot_loaded_) {
     return Ok();
   }
@@ -243,20 +270,21 @@ ECM AMKnownHostsAppService::LoadSnapshot_() const {
   return Ok();
 }
 
-KnownHostEntryArg AMKnownHostsAppService::SnapshotFromCache_() const {
+KnownHostEntryArg KnownHostsAppService::SnapshotFromCache_() const {
   KnownHostEntryArg out = {};
   out.entries = known_hosts_;
   return out;
 }
 
-ECM AMKnownHostsAppService::PersistSnapshot_(const KnownHostEntryArg &snapshot,
+ECM KnownHostsAppService::PersistSnapshot_(const KnownHostEntryArg &snapshot,
                                              bool dump_async) {
   (void)dump_async;
   return Init(snapshot.entries);
 }
 
-void AMKnownHostsAppService::ResetSnapshotCache_() {
+void KnownHostsAppService::ResetSnapshotCache_() {
   known_hosts_.clear();
   snapshot_loaded_ = false;
 }
 } // namespace AMApplication::host
+

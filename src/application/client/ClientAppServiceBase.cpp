@@ -1,5 +1,5 @@
 #include "application/client/ClientAppServiceBase.hpp"
-
+#include "foundation/tools/enum_related.hpp"
 namespace AMApplication::client {
 ClientAppServiceBase::ClientAppServiceBase(ClientServiceArg arg)
     : AMApplication::config::IConfigSyncPort(typeid(ClientServiceArg)),

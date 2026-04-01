@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/var/VarModel.hpp"
+#include "application/config/ConfigAppService.hpp"
 #include "foundation/core/DataClass.hpp"
 
 #include <map>
@@ -16,17 +17,14 @@ using ZoneVarInfoMap = std::map<std::string, VarInfo>;
 using AllVarInfoMap = std::map<std::string, ZoneVarInfoMap>;
 using VarInfoList = std::vector<VarInfo>;
 
-class VarAppService final : public NonCopyableNonMovable {
+class VarAppService final : public AMApplication::config::IConfigSyncPort {
 public:
   explicit VarAppService(VarSetArg init_arg = {});
   ~VarAppService() override = default;
 
   ECM Init();
-  ECM LoadFromSnapshot(const VarSetArg &snapshot);
   [[nodiscard]] VarSetArg GetInitArg() const;
-  [[nodiscard]] bool IsConfigDirty() const;
-  void ClearConfigDirty();
-  [[nodiscard]] VarSetArg ExportConfigSnapshot() const;
+  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
   [[nodiscard]] ECMData<VarInfo> GetVar(const std::string &zone_name,
                                         const std::string &varname) const;
   [[nodiscard]] ECMData<VarInfoList>
@@ -42,6 +40,5 @@ public:
 private:
   mutable AMAtomic<VarSetArg> init_arg_ = {};
   mutable AMAtomic<VarSetArg> store_ = {};
-  mutable AMAtomic<bool> config_dirty_ = {};
 };
 } // namespace AMApplication::var

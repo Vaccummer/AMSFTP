@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/prompt/PromptDomainModel.hpp"
+#include "application/config/ConfigAppService.hpp"
 #include "foundation/core/DataClass.hpp"
 
 namespace AMApplication::prompt {
@@ -14,7 +15,7 @@ struct PromptProfileQueryResult {
   PromptProfileSettings profile = {};
 };
 
-class PromptProfileManager : public NonCopyableNonMovable {
+class PromptProfileManager : public AMApplication::config::IConfigSyncPort {
 public:
   explicit PromptProfileManager(PromptProfileArg arg = {});
   ~PromptProfileManager() override = default;
@@ -22,8 +23,7 @@ public:
   ECM Init();
 
   [[nodiscard]] PromptProfileArg GetInitArg() const;
-  [[nodiscard]] bool IsConfigDirty() const;
-  void ClearConfigDirty();
+  ECM FlushTo(AMApplication::config::ConfigAppService *config_service) override;
   [[nodiscard]] PromptProfileArg ExportConfigSnapshot() const;
 
   void SetInitArg(PromptProfileArg arg);
@@ -33,6 +33,5 @@ public:
 
 private:
   mutable AMAtomic<PromptProfileArg> init_arg_ = {};
-  mutable AMAtomic<bool> config_dirty_ = {};
 };
 } // namespace AMApplication::prompt
