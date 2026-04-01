@@ -9,7 +9,6 @@
 #include <vector>
 
 namespace AMInterface::filesystem {
-using ClientPath = AMDomain::filesystem::ClientPath;
 using PathTarget = AMDomain::filesystem::PathTarget;
 using ResolvedPath = AMDomain::filesystem::ResolvedPath;
 }
@@ -110,8 +109,6 @@ public:
       AMDomain::client::amf default_interrupt_flag = nullptr);
   ~FilesystemInterfaceSerivce() override = default;
 
-  [[nodiscard]] ECMData<ClientPath>
-  SplitRawPath(const std::string &token) const;
   [[nodiscard]] ECMData<PathTarget>
   SplitRawTarget(const std::string &token) const;
   ECM Stat(const FilesystemStatArg &arg,
@@ -165,7 +162,7 @@ public:
           &control_opt = std::nullopt) const;
 
 private:
-  [[nodiscard]] ECMData<ClientPath> MatchOne(const ClientPath &path) const;
+  [[nodiscard]] ECMData<PathTarget> MatchOne(const PathTarget &path) const;
 
   AMApplication::client::ClientAppService &client_service_;
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;
