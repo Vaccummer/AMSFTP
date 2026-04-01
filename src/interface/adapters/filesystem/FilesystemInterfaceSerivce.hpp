@@ -10,6 +10,8 @@
 
 namespace AMInterface::filesystem {
 using ClientPath = AMDomain::filesystem::ClientPath;
+using PathTarget = AMDomain::filesystem::PathTarget;
+using ResolvedPath = AMDomain::filesystem::ResolvedPath;
 }
 
 namespace AMInterface::style {
@@ -110,6 +112,8 @@ public:
 
   [[nodiscard]] ECMData<ClientPath>
   SplitRawPath(const std::string &token) const;
+  [[nodiscard]] ECMData<PathTarget>
+  SplitRawTarget(const std::string &token) const;
   ECM Stat(const FilesystemStatArg &arg,
            const std::optional<AMDomain::client::ClientControlComponent>
                &control_opt = std::nullopt) const;

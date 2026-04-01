@@ -359,7 +359,23 @@ FilesystemInterfaceSerivce::FilesystemInterfaceSerivce(
 
 ECMData<ClientPath>
 FilesystemInterfaceSerivce::SplitRawPath(const std::string &token) const {
+  auto target_result = SplitRawTarget(token);
+  if (!isok(target_result.rcm)) {
+    return {ClientPath{}, target_result.rcm};
+  }
+
   ClientPath out = {};
+  out.nickname = target_result.data.nickname;
+  out.path = target_result.data.path;
+  out.is_wildcard = AMDomain::filesystem::services::HasWildcard(out.path);
+  out.userpath = !out.path.empty() && out.path.front() == '~';
+  out.rcm = Ok();
+  return {std::move(out), Ok()};
+}
+
+ECMData<PathTarget>
+FilesystemInterfaceSerivce::SplitRawTarget(const std::string &token) const {
+  PathTarget out = {};
   const std::string normalized_token = AMStr::Strip(token);
   const size_t at_pos = normalized_token.find('@');
   if (!normalized_token.empty() && normalized_token.front() == '@') {
@@ -379,9 +395,6 @@ FilesystemInterfaceSerivce::SplitRawPath(const std::string &token) const {
     out.path = ".";
   }
 
-  out.is_wildcard = AMDomain::filesystem::services::HasWildcard(out.path);
-  out.userpath = !out.path.empty() && out.path.front() == '~';
-  out.rcm = Ok();
   return {std::move(out), Ok()};
 }
 
