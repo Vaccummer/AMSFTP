@@ -1,6 +1,7 @@
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "application/filesystem/FilesystemAppBaseService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
+#include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
@@ -15,188 +16,6 @@ namespace AMApplication::filesystem {
 namespace {
 using ClientHandle = AMDomain::client::ClientHandle;
 using ClientMetaData = AMDomain::host::ClientMetaData;
-
-bool IsDrivePart_(const std::string &part) {
-  return part.size() == 2 &&
-         ((part[0] >= 'A' && part[0] <= 'Z') ||
-          (part[0] >= 'a' && part[0] <= 'z')) &&
-         part[1] == ':';
-}
-
-std::string ResolveWorkdir_(const ClientMetaData &metadata,
-                            const std::string &home_dir) {
-  const std::string normalized_cwd =
-      AMDomain::filesystem::services::NormalizePath(AMStr::Strip(metadata.cwd));
-  if (!normalized_cwd.empty()) {
-    return normalized_cwd;
-  }
-
-  const std::string normalized_login_dir =
-      AMDomain::filesystem::services::NormalizePath(
-          AMStr::Strip(metadata.login_dir));
-  if (!normalized_login_dir.empty()) {
-    return normalized_login_dir;
-  }
-
-  const std::string normalized_home =
-      AMDomain::filesystem::services::NormalizePath(AMStr::Strip(home_dir));
-  if (!normalized_home.empty()) {
-    return normalized_home;
-  }
-  return ".";
-}
-
-std::string ResolveAbsolutePath_(ClientHandle client,
-                                 const ClientMetaData &metadata,
-                                 const std::string &raw_path) {
-  const std::string input = raw_path.empty() ? "." : raw_path;
-  const std::string home_dir = client ? client->ConfigPort().GetHomeDir() : "";
-  const std::string cwd = ResolveWorkdir_(metadata, home_dir);
-  return AMPath::abspath(input, true, home_dir, cwd);
-}
-
-std::vector<std::string> BuildMkdirTargets_(const std::string &abs_path,
-                                            const std::string &sep) {
-  std::vector<std::string> parts = AMPath::split(abs_path);
-  if (parts.empty()) {
-    return {};
-  }
-
-  std::vector<std::string> targets = {};
-  std::string current = "";
-  size_t index = 0;
-  if (parts[0] == "/") {
-    current = "/";
-    index = 1;
-  } else if (IsDrivePart_(parts[0])) {
-    current = parts[0] + sep;
-    index = 1;
-  } else {
-    current = parts[0];
-    targets.push_back(current);
-    index = 1;
-  }
-
-  for (; index < parts.size(); ++index) {
-    if (current.empty()) {
-      current = parts[index];
-    } else if (current == "/") {
-      current += parts[index];
-    } else if (!current.empty() &&
-               (current.back() == '/' || current.back() == '\\')) {
-      current += parts[index];
-    } else {
-      current += sep + parts[index];
-    }
-    targets.push_back(current);
-  }
-
-  return targets;
-}
-
-std::string EscapeDoubleQuote_(const std::string &text) {
-  return AMStr::replace_all(text, "\"", "\\\"");
-}
-
-std::string RenderCmdTemplate_(const std::string &templ, const std::string &cmd,
-                               const std::string &escaped_cmd,
-                               const std::string &nickname,
-                               const std::string &username,
-                               const std::string &cwd) {
-  std::string out;
-  out.reserve(templ.size() + cmd.size());
-
-  for (size_t i = 0; i < templ.size();) {
-    const char ch = templ[i];
-    if (ch == '`') {
-      if (i + 1 < templ.size()) {
-        out.push_back(templ[i + 1]);
-        i += 2;
-      } else {
-        out.push_back('`');
-        ++i;
-      }
-      continue;
-    }
-
-    if (ch == '{' && i + 1 < templ.size() && templ[i + 1] == '$') {
-      size_t j = i + 2;
-      std::string key;
-      bool found_close = false;
-      while (j < templ.size()) {
-        if (templ[j] == '`') {
-          if (j + 1 < templ.size()) {
-            key.push_back(templ[j + 1]);
-            j += 2;
-            continue;
-          }
-          ++j;
-          continue;
-        }
-        if (templ[j] == '}') {
-          found_close = true;
-          break;
-        }
-        key.push_back(templ[j]);
-        ++j;
-      }
-
-      if (found_close) {
-        const std::string norm_key = AMStr::lowercase(AMStr::Strip(key));
-        if (norm_key == "cmd") {
-          out += cmd;
-        } else if (norm_key == "escaped_cmd") {
-          out += escaped_cmd;
-        } else if (norm_key == "nickname") {
-          out += nickname;
-        } else if (norm_key == "username") {
-          out += username;
-        } else if (norm_key == "cwd") {
-          out += cwd;
-        } else {
-          out.append(templ, i, j - i + 1);
-        }
-        i = j + 1;
-        continue;
-      }
-    }
-
-    out.push_back(ch);
-    ++i;
-  }
-  return out;
-}
-
-std::string BuildShellRunCmd_(AMDomain::client::OS_TYPE os_type,
-                              const std::string &cwd,
-                              const std::string &command,
-                              const std::string &cmd_prefix, bool wrap_cmd,
-                              const std::string &nickname,
-                              const std::string &username) {
-  const std::string escaped_cmd = AMStr::replace_all(command, "\"", "'");
-  if (cmd_prefix.find("{$") != std::string::npos) {
-    return RenderCmdTemplate_(cmd_prefix, command, escaped_cmd, nickname,
-                              username, cwd);
-  }
-
-  std::string final_cmd = command;
-  const std::string shell_cwd = AMStr::Strip(cwd);
-  if (!shell_cwd.empty()) {
-    if (os_type == AMDomain::client::OS_TYPE::Windows) {
-      final_cmd =
-          AMStr::fmt("cd \"{}\";{}", EscapeDoubleQuote_(shell_cwd), final_cmd);
-    } else {
-      final_cmd =
-          AMStr::fmt("cd \"{}\"&&{}", EscapeDoubleQuote_(shell_cwd), final_cmd);
-    }
-  }
-  if (cmd_prefix.empty()) {
-    return final_cmd;
-  }
-  return wrap_cmd ? AMStr::fmt("{}\"{}\"", cmd_prefix,
-                               AMStr::replace_all(final_cmd, "\"", "'"))
-                  : AMStr::fmt("{}{}", cmd_prefix, final_cmd);
-}
 
 bool IsDescendantPath_(const std::string &candidate,
                        const std::string &ancestor) {
@@ -236,14 +55,6 @@ void AddPathError_(std::vector<std::pair<PathTarget, ECM>> *errors, ECM *status,
 void AddSafermError_(std::vector<std::pair<PathTarget, ECM>> *errors,
                      ECM *status, const PathTarget &path, const ECM &rcm) {
   AddPathError_(errors, status, path, rcm);
-}
-
-PathTarget ToPathTarget_(const ResolvedPath &resolved) {
-  PathTarget out = resolved.target;
-  if (!resolved.abs_path.empty()) {
-    out.path = resolved.abs_path;
-  }
-  return out;
 }
 
 std::string BuildSuffixName_(const std::string &base_name,
@@ -406,9 +217,10 @@ FilesystemAppService::GetCwd(const ClientControlComponent &control) {
   if (!isok(res.rcm)) {
     return {std::move(out), res.rcm};
   }
-  out.nickname = AMDomain::host::HostService::NormalizeNickname(
-      client->ConfigPort().GetNickname());
+  out.nickname = client->ConfigPort().GetNickname();
   out.path = res.data;
+  out.is_wildcard = AMDomain::filesystem::services::HasWildcard(out.path);
+  out.is_user_path = !out.path.empty() && out.path.front() == '~';
   return {std::move(out), Ok()};
 }
 
@@ -434,10 +246,13 @@ ECM FilesystemAppService::EnsureClientWorkdir(
     if (normalized_candidate.empty()) {
       return {"", Err(EC::InvalidArg, "empty workdir candidate")};
     }
-    std::string absolute_path =
-        ResolveAbsolutePath_(client, metadata, normalized_candidate);
-    absolute_path =
-        AMDomain::filesystem::services::NormalizePath(absolute_path);
+    auto absolute_result =
+        ResolveAbsolutePath(client, normalized_candidate, control);
+    if (!isok(absolute_result.rcm)) {
+      return {"", absolute_result.rcm};
+    }
+    std::string absolute_path = AMDomain::filesystem::services::NormalizePath(
+        absolute_result.data);
     if (absolute_path.empty()) {
       return {"", Err(EC::InvalidArg, "invalid workdir candidate")};
     }
@@ -545,7 +360,7 @@ ECM FilesystemAppService::ChangeDir(PathTarget path,
     auto history = cd_history_.lock();
     auto list = history.load();
     PathTarget entry = {};
-    entry.nickname = AMStr::Strip(client->ConfigPort().GetNickname());
+    entry.nickname = client->ConfigPort().GetNickname();
     entry.path = prev_cwd;
     list.push_front(std::move(entry));
     const size_t limit =
@@ -723,7 +538,7 @@ ECM FilesystemAppService::Rename(const PathTarget &src, const PathTarget &dst,
 
   PathTarget dst_target = dst;
   ClientHandle preferred_dst_client = nullptr;
-  if (AMStr::Strip(dst_target.nickname).empty()) {
+  if (dst_target.nickname.empty()) {
     dst_target.nickname = resolved_src.target.nickname;
     preferred_dst_client = resolved_src.client;
   }
@@ -841,10 +656,6 @@ FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
       return {std::move(plan), rcm};
     }
 
-    target.nickname =
-        AMDomain::host::HostService::NormalizeNickname(target.nickname);
-    target.path = AMDomain::filesystem::services::NormalizePath(
-        target.path.empty() ? "." : target.path);
     if (target.path.empty()) {
       target.path = ".";
     }
@@ -871,10 +682,13 @@ FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
       for (const auto &entry : find_result.data) {
         PathTarget item = {};
         item.nickname = target.nickname;
-        item.path = AMDomain::filesystem::services::NormalizePath(entry.path);
+        item.path = entry.path;
         if (item.path.empty()) {
           item.path = ".";
         }
+        item.is_wildcard =
+            AMDomain::filesystem::services::HasWildcard(item.path);
+        item.is_user_path = !item.path.empty() && item.path.front() == '~';
         expanded_targets.push_back(std::move(item));
       }
       continue;
@@ -919,7 +733,7 @@ FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
     auto stat_result = BaseStat(resolved.client, resolved.target.nickname,
                                 resolved.abs_path, control, false);
     if (!isok(stat_result.rcm)) {
-      AddPathError_(&plan.precheck_errors, &status, ToPathTarget_(resolved),
+      AddPathError_(&plan.precheck_errors, &status, resolved.target,
                     stat_result.rcm);
       if (IsStopError_(stat_result.rcm.first)) {
         plan.rcm = stat_result.rcm;
@@ -931,12 +745,12 @@ FilesystemAppService::PrepareRmfile(std::vector<PathTarget> targets,
       const ECM rcm =
           Err(EC::NotAFile, AMStr::fmt("rmfile does not accept directories: {}",
                                        resolved.abs_path));
-      AddPathError_(&plan.precheck_errors, &status, ToPathTarget_(resolved),
+      AddPathError_(&plan.precheck_errors, &status, resolved.target,
                     rcm);
       continue;
     }
 
-    PathTarget display = ToPathTarget_(resolved);
+    PathTarget display = resolved.target;
     const std::string group_key =
         display.nickname.empty() ? "local" : display.nickname;
     plan.grouped_display_paths[group_key].push_back(display);
@@ -970,7 +784,7 @@ FilesystemAppService::ExecuteRmfile(
               Err(EC::OperationTimeout, "Operation timed out")};
     }
 
-    PathTarget target = ToPathTarget_(resolved);
+    PathTarget target = resolved.target;
     if (!resolved.client) {
       const ECM rcm = Err(EC::InvalidHandle, "Resolved client is null");
       AddPathError_(&errors, &status, target, rcm);
@@ -1060,7 +874,7 @@ ECMData<std::vector<std::pair<PathTarget, ECM>>> FilesystemAppService::Rmdir(
     }
 
     const ResolvedPath &resolved = resolved_result.data;
-    PathTarget display = ToPathTarget_(resolved);
+    PathTarget display = resolved.target;
     auto stat_result =
         resolved.client->IOPort().stat({resolved.abs_path, false}, control);
     if (!isok(stat_result.rcm)) {
@@ -1130,10 +944,6 @@ ECMData<PermanentRemovePlan> FilesystemAppService::PreparePermanentRemove(
       return {std::move(plan), rcm};
     }
 
-    target.nickname =
-        AMDomain::host::HostService::NormalizeNickname(target.nickname);
-    target.path = AMDomain::filesystem::services::NormalizePath(
-        target.path.empty() ? "." : target.path);
     if (target.path.empty()) {
       target.path = ".";
     }
@@ -1196,7 +1006,7 @@ ECMData<PermanentRemovePlan> FilesystemAppService::PreparePermanentRemove(
       }
 
       const ResolvedPath resolved_root = root_resolved.data;
-      PathTarget display_root = ToPathTarget_(resolved_root);
+      PathTarget display_root = resolved_root.target;
       const std::string group_key =
           display_root.nickname.empty()
               ? (nickname.empty() ? "local" : nickname)
@@ -1239,7 +1049,7 @@ ECMData<PermanentRemovePlan> FilesystemAppService::PreparePermanentRemove(
         StackFrame frame = std::move(stack.back());
         stack.pop_back();
         ResolvedPath current = std::move(frame.path);
-        PathTarget current_display = ToPathTarget_(current);
+        PathTarget current_display = current.target;
 
         if (!frame.expanded) {
           auto stat_result = BaseStat(current.client, current.target.nickname,
@@ -1279,11 +1089,10 @@ ECMData<PermanentRemovePlan> FilesystemAppService::PreparePermanentRemove(
                     });
           for (auto it = children.rbegin(); it != children.rend(); ++it) {
             ResolvedPath child = current;
-            child.abs_path =
-                AMDomain::filesystem::services::NormalizePath(it->path);
+            child.abs_path = it->path;
             child.target.path = child.abs_path;
-            child.is_wildcard = false;
-            child.is_user_path = false;
+            child.target.is_wildcard = false;
+            child.target.is_user_path = false;
             stack.push_back({std::move(child), false});
           }
           continue;
@@ -1323,7 +1132,7 @@ FilesystemAppService::ExecutePermanentRemove(
               Err(EC::OperationTimeout, "Operation timed out")};
     }
 
-    PathTarget current_display = ToPathTarget_(item);
+    PathTarget current_display = item.target;
     if (!item.client) {
       const ECM rcm = Err(EC::InvalidHandle, "Resolved client is null");
       AddPathError_(&errors, &status, current_display, rcm);
@@ -1401,10 +1210,6 @@ FilesystemAppService::Saferm(std::vector<PathTarget> targets,
               Err(EC::OperationTimeout, "Operation timed out")};
     }
 
-    target.nickname =
-        AMDomain::host::HostService::NormalizeNickname(target.nickname);
-    target.path = AMDomain::filesystem::services::NormalizePath(
-        target.path.empty() ? "." : target.path);
     if (target.path.empty()) {
       target.path = ".";
     }
@@ -1564,10 +1369,8 @@ FilesystemAppService::Saferm(std::vector<PathTarget> targets,
 }
 
 RunResult FilesystemAppService::ShellRun(const std::string &nickname,
-                                         const std::string &workdir,
                                          const std::string &cmd,
-                                         const ClientControlComponent &control,
-                                         std::string *final_cmd_out) {
+                                         const ClientControlComponent &control) {
   RunResult out = {};
   if (AMStr::Strip(cmd).empty()) {
     out.rcm = Err(EC::InvalidArg, "Command is empty");
@@ -1581,51 +1384,7 @@ RunResult FilesystemAppService::ShellRun(const std::string &nickname,
     return out;
   }
   ClientHandle client = get_result.data;
-
-  AMDomain::client::OS_TYPE os_type = client->ConfigPort().GetOSType();
-  if (os_type == AMDomain::client::OS_TYPE::Unknown) {
-    auto os_result = client->IOPort().UpdateOSType({}, control);
-    if (!isok(os_result.rcm)) {
-      out.rcm = os_result.rcm;
-      return out;
-    }
-    os_type = os_result.os_type;
-  }
-
-  ClientMetaData metadata = {};
-  {
-    auto metadata_value = ClientAppService::GetClientMetadata(client);
-    if (!metadata_value.has_value()) {
-      out.rcm = Err(EC::CommonFailure, "Client metadata not found");
-      return out;
-    }
-    metadata = *metadata_value;
-  }
-
-  std::string shell_cwd = AMStr::Strip(workdir);
-  const bool template_mode =
-      metadata.cmd_prefix.find("{$") != std::string::npos;
-  if (!shell_cwd.empty()) {
-    shell_cwd = ResolveAbsolutePath_(client, metadata, shell_cwd);
-  } else if (template_mode) {
-    shell_cwd = ResolveWorkdir_(metadata, client->ConfigPort().GetHomeDir());
-  }
-
-  std::string effective_nickname =
-      AMStr::Strip(client->ConfigPort().GetNickname());
-  if (effective_nickname.empty()) {
-    effective_nickname = resolved_nickname;
-  }
-  const std::string effective_username =
-      client->ConfigPort().GetRequest().username;
-  const std::string final_cmd = BuildShellRunCmd_(
-      os_type, shell_cwd, cmd, metadata.cmd_prefix, metadata.wrap_cmd,
-      effective_nickname, effective_username);
-  if (final_cmd_out != nullptr) {
-    *final_cmd_out = final_cmd;
-  }
-
-  out = client->IOPort().ConductCmd({final_cmd, {}}, control);
+  out = client->IOPort().ConductCmd({cmd, {}}, control);
   return out;
 }
 

@@ -1,7 +1,7 @@
 #include "application/filesystem/FilesystemAppService.hpp"
 
-#include "foundation/tools/path.hpp"
 #include "foundation/tools/enum_related.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 
 #include <cstdint>
@@ -43,37 +43,35 @@ std::string ResolveEntryPath_(const std::string &parent,
   return AMPath::join(parent, entry.name);
 }
 
-ClientPath BuildCallbackPath_(const std::string &nickname, ClientHandle client,
-                              const std::string &path, const ECM &rcm) {
-  ClientPath out = {};
+PathTarget BuildCallbackPath_(const std::string &nickname,
+                              const std::string &path) {
+  PathTarget out = {};
   out.nickname = nickname;
   out.path = path;
-  out.client = client;
-  out.rcm = rcm;
   return out;
 }
 
 } // namespace
 
 ECMData<int64_t> FilesystemAppService::GetSize(
-    ClientPath path, const ClientControlComponent &control,
-    std::function<bool(const ClientPath &, int64_t)> on_progress,
-    std::function<void(const ClientPath &, ECM)> on_error) {
+    const PathTarget &path, const ClientControlComponent &control,
+    std::function<bool(const PathTarget &, int64_t)> on_progress,
+    std::function<void(const PathTarget &, ECM)> on_error) {
   int64_t total_size = 0;
   ECM last_error = Ok();
 
-  const ECM resolve_rcm = ResolvePath(path, control);
-  if (!isok(resolve_rcm) || !path.client) {
-    return {total_size,
-            isok(resolve_rcm)
-                ? Err(EC::InvalidHandle, "Resolved client is null")
-                : resolve_rcm};
+  auto resolved_result = ResolvePath(path, control);
+  if (!isok(resolved_result.rcm) || !resolved_result.data.client) {
+    return {total_size, isok(resolved_result.rcm)
+                            ? Err(EC::InvalidHandle, "Resolved client is null")
+                            : resolved_result.rcm};
   }
+  const auto &resolved = resolved_result.data;
 
-  ClientHandle client = path.client;
-  std::string nickname = AMStr::Strip(path.nickname);
+  ClientHandle client = resolved.client;
+  std::string nickname = resolved.target.nickname;
   if (nickname.empty()) {
-    nickname = AMStr::Strip(client->ConfigPort().GetNickname());
+    nickname = client->ConfigPort().GetNickname();
   }
   if (nickname.empty()) {
     nickname = "local";
@@ -82,8 +80,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
   const auto notify_error = [&](const std::string &error_path,
                                 const ECM &rcm) -> ECM {
     UpdateLastError_(&last_error, rcm);
-    const ClientPath callback_path =
-        BuildCallbackPath_(nickname, client, error_path, rcm);
+    const PathTarget callback_path = BuildCallbackPath_(nickname, error_path);
     const ECM cb_rcm = CallCallbackSafe(on_error, callback_path, rcm);
     if (!isok(cb_rcm)) {
       UpdateLastError_(&last_error, cb_rcm);
@@ -96,8 +93,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
     if (!on_progress) {
       return Ok();
     }
-    const ClientPath callback_path =
-        BuildCallbackPath_(nickname, client, current_path, Ok());
+    const PathTarget callback_path = BuildCallbackPath_(nickname, current_path);
     auto [keep_going, cb_rcm] =
         CallCallbackSafeRet<bool>(on_progress, callback_path, total_size);
     if (!isok(cb_rcm)) {
@@ -118,9 +114,9 @@ ECMData<int64_t> FilesystemAppService::GetSize(
     return {total_size, stop_rcm};
   }
 
-  auto root_stat = BaseStat(client, nickname, path.path, control, false);
+  auto root_stat = BaseStat(client, nickname, resolved.abs_path, control, false);
   if (!isok(root_stat.rcm)) {
-    const ECM cb_rcm = notify_error(path.path, root_stat.rcm);
+    const ECM cb_rcm = notify_error(resolved.abs_path, root_stat.rcm);
     if (!isok(cb_rcm)) {
       return {total_size, cb_rcm};
     }
@@ -129,7 +125,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
 
   if (root_stat.data.type != PathType::DIR) {
     total_size = static_cast<int64_t>(root_stat.data.size);
-    const ECM cb_rcm = notify_progress(path.path);
+    const ECM cb_rcm = notify_progress(resolved.abs_path);
     if (!isok(cb_rcm)) {
       return {total_size, cb_rcm};
     }
@@ -138,10 +134,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
 
   std::string root_dir = root_stat.data.path;
   if (root_dir.empty()) {
-    root_dir = path.path;
-  }
-  if (root_dir.empty()) {
-    root_dir = ".";
+    root_dir = resolved.abs_path.empty() ? "." : resolved.abs_path;
   }
 
   std::deque<std::string> pending_dirs = {root_dir};
@@ -149,7 +142,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
 
   while (!pending_dirs.empty()) {
     const ECM loop_stop_rcm = CurrentStopError_(control);
-    if (!isok(loop_stop_rcm)) {
+    if (!loop_stop_rcm) {
       UpdateLastError_(&last_error, loop_stop_rcm);
       return {total_size, last_error};
     }
@@ -158,7 +151,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
     pending_dirs.pop_front();
 
     auto list_result = BaseListdir(client, nickname, current_dir, control);
-    if (!isok(list_result.rcm)) {
+    if (!list_result.rcm) {
       const ECM cb_rcm = notify_error(current_dir, list_result.rcm);
       if (!isok(cb_rcm)) {
         return {total_size, cb_rcm};

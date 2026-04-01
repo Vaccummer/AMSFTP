@@ -1,8 +1,8 @@
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostModel.hpp"
-#include "foundation/tools/path.hpp"
 #include "foundation/tools/enum_related.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 
 #include <algorithm>
@@ -12,23 +12,27 @@
 #include <unordered_set>
 
 namespace AMApplication::filesystem {
+
+namespace {
+using ClientMetaData = AMDomain::host::ClientMetaData;
+enum SegmentKind { Literal = 0, Pattern = 1, DoubleStar = 2 };
+struct CompiledSegment {
+  SegmentKind kind = Literal;
+  std::string raw = "";
+  std::shared_ptr<std::wregex> regex = nullptr;
+};
+struct Cursor {
+  PathInfo node = {};
+  size_t segment_index = 0;
+};
+} // namespace
+
 ECMData<std::vector<PathInfo>> FilesystemAppService::find(
-    const ClientPath &path, SearchType type,
+    const PathTarget &path, SearchType type,
     const ClientControlComponent &control,
-    std::function<void(const ClientPath &)> on_enter_dir,
-    std::function<void(const ClientPath &, ECM)> on_error,
-    std::function<bool(const ClientPath &)> on_match) {
-  using ClientMetaData = AMDomain::host::ClientMetaData;
-  enum SegmentKind { Literal = 0, Pattern = 1, DoubleStar = 2 };
-  struct CompiledSegment {
-    SegmentKind kind = Literal;
-    std::string raw = "";
-    std::shared_ptr<std::wregex> regex = nullptr;
-  };
-  struct Cursor {
-    PathInfo node = {};
-    size_t segment_index = 0;
-  };
+    std::function<void(const PathTarget &)> on_enter_dir,
+    std::function<void(const PathTarget &, ECM)> on_error,
+    std::function<bool(const PathTarget &)> on_match) {
 
   const auto current_stop_error = [&control]() -> ECM {
     if (control.IsInterrupted()) {
@@ -39,15 +43,15 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
     }
     return Ok();
   };
-  auto notify_error = [&](const ClientPath &cp, ECM rcm) -> ECM {
+  auto notify_error = [&](const PathTarget &cp, ECM rcm) -> ECM {
     const ECM cb_rcm = CallCallbackSafe(on_error, cp, rcm);
     return isok(cb_rcm) ? Ok() : cb_rcm;
   };
-  auto notify_enter = [&](const ClientPath &cp) -> ECM {
+  auto notify_enter = [&](const PathTarget &cp) -> ECM {
     const ECM cb_rcm = CallCallbackSafe(on_enter_dir, cp);
     return isok(cb_rcm) ? Ok() : cb_rcm;
   };
-  auto notify_match = [&](const ClientPath &cp) -> ECMData<bool> {
+  auto notify_match = [&](const PathTarget &cp) -> ECMData<bool> {
     if (!on_match) {
       return {true, Ok()};
     }
@@ -167,14 +171,6 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
     }
     return ".";
   };
-  const auto normalize_nickname =
-      [](const std::string &nickname) -> std::string {
-    const std::string trimmed = AMStr::Strip(nickname);
-    if (trimmed.empty()) {
-      return "local";
-    }
-    return trimmed;
-  };
   const auto type_ok = [type](PathType node_type) -> bool {
     return type == SearchType::All ||
            (type == SearchType::Directory && node_type == PathType::DIR) ||
@@ -185,26 +181,27 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
     return !isok(stop_rcm);
   };
 
-  std::vector<ClientPath> resolved = {path};
-  ECM resolve_rcm = ResolvePath(resolved, control, true);
-  if (!isok(resolve_rcm) || resolved.empty() || !resolved[0].client) {
+  auto resolved_result = ResolvePath(path, control);
+  if (!isok(resolved_result.rcm) || !resolved_result.data.client) {
     return {{},
-            isok(resolve_rcm)
+            isok(resolved_result.rcm)
                 ? Err(EC::InvalidHandle, "Resolved client is null")
-                : resolve_rcm};
+                : resolved_result.rcm};
   }
+  const auto &resolved = resolved_result.data;
 
-  AMDomain::client::ClientHandle client = resolved[0].client;
-  std::string nickname = normalize_nickname(resolved[0].nickname);
-  std::string raw_pattern = resolved[0].path.empty() ? "." : resolved[0].path;
+  AMDomain::client::ClientHandle client = resolved.client;
+  std::string nickname = resolved.target.nickname;
+  if (nickname.empty()) {
+    nickname = "local";
+  }
+  std::string raw_pattern =
+      resolved.abs_path.empty() ? "." : resolved.abs_path;
 
   ClientMetaData metadata = {};
-  {
-    auto metadata_value =
-        client->MetaDataPort().QueryTypedValue<ClientMetaData>();
-    if (metadata_value.has_value()) {
-      metadata = *metadata_value;
-    }
+  auto metadata_value = ClientAppService::GetClientMetadata(client);
+  if (metadata_value.has_value()) {
+    metadata = *metadata_value;
   }
   const std::string home_dir = client->ConfigPort().GetHomeDir();
   const std::string cwd = workdir_from_meta(metadata, home_dir);
@@ -249,16 +246,11 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
   bool match_requested_stop = false;
   std::vector<PathInfo> results = {};
   std::unordered_set<std::string> matched_paths = {};
-  const auto make_client_path = [&](const std::string &p,
-                                    ECM rcm) -> ClientPath {
-    ClientPath cp = {};
-    cp.nickname = nickname;
-    cp.path = p;
-    cp.client = client;
-    cp.rcm = std::move(rcm);
-    cp.is_wildcard = false;
-    cp.userpath = false;
-    return cp;
+  const auto make_path_target = [&](const std::string &p) -> PathTarget {
+    PathTarget out = {};
+    out.nickname = nickname;
+    out.path = p;
+    return out;
   };
   const auto push_result = [&](const PathInfo &node) -> bool {
     if (!type_ok(node.type)) {
@@ -268,7 +260,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
       return true;
     }
     results.push_back(node);
-    auto match_rcm = notify_match(make_client_path(node.path, Ok()));
+    auto match_rcm = notify_match(make_path_target(node.path));
     if (!isok(match_rcm.rcm)) {
       final_rcm = match_rcm.rcm;
       match_requested_stop = true;
@@ -284,7 +276,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
 
   auto stat_result = BaseStat(client, nickname, literal_root, control);
   if (!isok(stat_result.rcm)) {
-    ClientPath error_path = make_client_path(literal_root, stat_result.rcm);
+    PathTarget error_path = make_path_target(literal_root);
     const ECM cb_rcm = notify_error(error_path, stat_result.rcm);
     if (!isok(cb_rcm)) {
       return {std::move(results), cb_rcm};
@@ -348,7 +340,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
       if (cache_it != dir_cache.end()) {
         children = &(cache_it->second);
       } else {
-        ClientPath enter_dir = make_client_path(cur.node.path, Ok());
+        PathTarget enter_dir = make_path_target(cur.node.path);
         const ECM enter_cb_rcm = notify_enter(enter_dir);
         if (!isok(enter_cb_rcm)) {
           return {std::move(results), enter_cb_rcm};
@@ -360,8 +352,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
           if (isok(final_rcm)) {
             final_rcm = list_result.rcm;
           }
-          ClientPath error_path =
-              make_client_path(cur.node.path, list_result.rcm);
+          PathTarget error_path = make_path_target(cur.node.path);
           const ECM error_cb_rcm = notify_error(error_path, list_result.rcm);
           if (!isok(error_cb_rcm)) {
             return {std::move(results), error_cb_rcm};
@@ -395,7 +386,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
     if (cache_it != dir_cache.end()) {
       children = &(cache_it->second);
     } else {
-      ClientPath enter_dir = make_client_path(cur.node.path, Ok());
+      PathTarget enter_dir = make_path_target(cur.node.path);
       const ECM enter_cb_rcm = notify_enter(enter_dir);
       if (!isok(enter_cb_rcm)) {
         return {std::move(results), enter_cb_rcm};
@@ -406,8 +397,7 @@ ECMData<std::vector<PathInfo>> FilesystemAppService::find(
         if (isok(final_rcm)) {
           final_rcm = list_result.rcm;
         }
-        ClientPath error_path =
-            make_client_path(cur.node.path, list_result.rcm);
+        PathTarget error_path = make_path_target(cur.node.path);
         const ECM error_cb_rcm = notify_error(error_path, list_result.rcm);
         if (!isok(error_cb_rcm)) {
           return {std::move(results), error_cb_rcm};
