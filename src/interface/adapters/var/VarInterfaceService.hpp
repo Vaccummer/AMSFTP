@@ -2,7 +2,7 @@
 
 #include "application/client/ClientAppService.hpp"
 #include "application/var/VarAppService.hpp"
-#include "domain/var/VarModel.hpp"
+#include "domain/var/VarDomainService.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include <string>

@@ -1,7 +1,7 @@
 #include "interface/parser/TokenTypeAnalyzer.hpp"
 
 #include "domain/host/HostDomainService.hpp"
-#include "domain/var/VarModel.hpp"
+#include "domain/var/VarDomainService.hpp"
 #include "foundation/tools/string.hpp"
 #include "interface/cli/InteractiveEventRegistry.hpp"
 #include "interface/parser/CommandTree.hpp"

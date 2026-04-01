@@ -1,5 +1,5 @@
 #pragma once
-#include "domain/writer/AsyncWriteSchedulerPort.hpp"
+#include "domain/writer/IWriteSchedulerPort.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -10,7 +10,7 @@
  * @brief Infrastructure async writer for config/log persistence tasks.
  */
 class AMInfraAsyncWriter final
-    : public AMDomain::writer::AMAsyncWriteSchedulerPort {
+    : public AMDomain::writer::IWriteSchedulerPort {
 public:
   /**
    * @brief Construct an idle dispatcher.
