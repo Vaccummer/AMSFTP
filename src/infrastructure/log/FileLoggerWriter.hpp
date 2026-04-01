@@ -8,7 +8,7 @@
 /**
  * @brief Concrete infrastructure writer backed by file stream append I/O.
  */
-class AMInfraFileLoggerWriter final : public AMDomain::log::AMLoggerWritePort {
+class AMInfraFileLoggerWriter final : public AMDomain::log::ILoggerWritePort {
 public:
   /**
    * @brief Construct writer with optional initial output path.

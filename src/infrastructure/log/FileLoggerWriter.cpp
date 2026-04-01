@@ -145,3 +145,11 @@ void AMInfraFileLoggerWriter::ReportError_(const ECM &rcm) {
     reporter(rcm);
   }
 }
+
+namespace AMDomain::log {
+
+std::unique_ptr<ILoggerWritePort> BuildLoggerWritePort() {
+  return std::make_unique<AMInfraFileLoggerWriter>();
+}
+
+} // namespace AMDomain::log
