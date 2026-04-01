@@ -34,12 +34,6 @@ template <typename T> struct NBResult {
 template <typename Key, typename Value>
 using OrderDict = std::vector<std::pair<Key, Value>>;
 
-struct AMTokenSpan {
-  size_t start = 0;
-  size_t end = 0;
-  AMTokenType type = AMTokenType::Common;
-};
-
 enum class ControlSignal : int {
   Running = 0,
   Pause = 1,
@@ -169,7 +163,7 @@ public:
   PathType type = PathType::FILE;
   size_t mode_int = 00;
   std::string mode_str = "r--------";
-  PathInfo() : name(""), path(""), dir(""), owner(""), mode_int(0) {}
+  PathInfo() : name(""), path(""), dir(""), owner("") {}
 
   PathInfo(std::string name, std::string path, std::string dir,
            std::string owner, size_t size, double create_time,
