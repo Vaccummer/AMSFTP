@@ -4,7 +4,7 @@
 #include "infrastructure/config/ConfigDocumentHandle.hpp"
 
 /**
- * @brief Concrete cfgffi-backed TOML handle with in-memory Json cache.
+ * @brief Concrete RustToml-backed TOML handle with in-memory Json cache.
  */
 class AMInfraSuperTomlHandle final
     : public AMInfra::config::IConfigDocumentHandle {
@@ -15,7 +15,7 @@ public:
   AMInfraSuperTomlHandle() = default;
 
   /**
-   * @brief Release cfgffi resources.
+   * @brief Release RustToml resources.
    */
   ~AMInfraSuperTomlHandle() { Close(); }
 
@@ -63,7 +63,7 @@ public:
 private:
   mutable std::mutex mtx_;
   AMInfra::config::ConfigDocumentSpec spec_{};
-  ConfigHandle *cfgffi_handle_ = nullptr;
+  ConfigHandle *rust_toml_handle_ = nullptr;
   Json json_ = Json::object();
   bool is_dirty_ = false;
   std::chrono::system_clock::time_point last_modified_{};

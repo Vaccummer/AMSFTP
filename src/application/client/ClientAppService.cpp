@@ -1,7 +1,7 @@
 #include "application/client/ClientAppService.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "domain/host/HostDomainService.hpp"
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 #include <optional>
 

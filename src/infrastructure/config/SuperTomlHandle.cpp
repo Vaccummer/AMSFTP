@@ -61,9 +61,9 @@ bool ParseJson_(const std::string &text, Json *out, std::string *error) {
 ECM AMInfraSuperTomlHandle::Init(const AMInfra::config::ConfigDocumentSpec &spec) {
   std::lock_guard<std::mutex> lock(mtx_);
 
-  if (cfgffi_handle_) {
-    cfgffi_free_handle(cfgffi_handle_);
-    cfgffi_handle_ = nullptr;
+  if (rust_toml_handle_) {
+    RustTomlFreeHandle(rust_toml_handle_);
+    rust_toml_handle_ = nullptr;
   }
 
   spec_ = spec;
@@ -88,22 +88,23 @@ ECM AMInfraSuperTomlHandle::Init(const AMInfra::config::ConfigDocumentSpec &spec
   }
 
   char *err = nullptr;
-  cfgffi_handle_ =
-      cfgffi_read(spec_.data_path.string().c_str(), spec_.schema_json.c_str(), &err);
-  if (!cfgffi_handle_) {
-    std::string msg = err ? err : "cfgffi_read failed";
+  rust_toml_handle_ =
+      RustTomlRead(spec_.data_path.string().c_str(), spec_.schema_json.c_str(),
+                   &err);
+  if (!rust_toml_handle_) {
+    std::string msg = err ? err : "RustTomlRead failed";
     if (err) {
-      cfgffi_free_string(err);
+      RustTomlFreeString(err);
     }
     return Err(EC::ConfigLoadFailed,
                AMStr::fmt("failed to read config file {}: {}",
                           spec_.data_path.string(), msg));
   }
   if (err) {
-    cfgffi_free_string(err);
+    RustTomlFreeString(err);
   }
 
-  char *json_c = cfgffi_get_json(cfgffi_handle_);
+  char *json_c = RustTomlGetJson(rust_toml_handle_);
   if (!json_c) {
     return Err(EC::ConfigLoadFailed,
                AMStr::fmt("failed to read config json from {}",
@@ -111,7 +112,7 @@ ECM AMInfraSuperTomlHandle::Init(const AMInfra::config::ConfigDocumentSpec &spec
   }
 
   std::string json_text(json_c);
-  cfgffi_free_string(json_c);
+  RustTomlFreeString(json_c);
 
   Json parsed = Json::object();
   if (!ParseJson_(json_text, &parsed, &error)) {
@@ -141,7 +142,7 @@ bool AMInfraSuperTomlHandle::GetJson(Json *out) const {
  */
 bool AMInfraSuperTomlHandle::SetJson(const Json &json) {
   std::lock_guard<std::mutex> lock(mtx_);
-  if (!cfgffi_handle_) {
+  if (!rust_toml_handle_) {
     return false;
   }
   json_ = json;
@@ -160,7 +161,7 @@ ECM AMInfraSuperTomlHandle::DumpInplace() { return DumpTo(spec_.data_path); }
  */
 ECM AMInfraSuperTomlHandle::DumpTo(const std::filesystem::path &dst_path) {
   std::lock_guard<std::mutex> lock(mtx_);
-  if (!cfgffi_handle_) {
+  if (!rust_toml_handle_) {
     return Err(EC::ConfigNotInitialized, "config handle not initialized");
   }
   if (dst_path.empty()) {
@@ -182,23 +183,23 @@ ECM AMInfraSuperTomlHandle::DumpTo(const std::filesystem::path &dst_path) {
   char *err = nullptr;
   int rc = 0;
   if (dst_path == spec_.data_path) {
-    rc = cfgffi_write_inplace(cfgffi_handle_, payload.c_str(), &err);
+    rc = RustTomlWriteInplace(rust_toml_handle_, payload.c_str(), &err);
   } else {
-    rc = cfgffi_write(cfgffi_handle_, dst_path.string().c_str(),
-                      payload.c_str(), &err);
+    rc = RustTomlWrite(rust_toml_handle_, dst_path.string().c_str(),
+                       payload.c_str(), &err);
   }
 
   if (rc != 0) {
     std::string msg = err ? err : "cfgffi write failed";
     if (err) {
-      cfgffi_free_string(err);
+      RustTomlFreeString(err);
     }
     return Err(EC::ConfigDumpFailed,
                AMStr::fmt("failed to dump config to {}: {}", dst_path.string(),
                           msg));
   }
   if (err) {
-    cfgffi_free_string(err);
+    RustTomlFreeString(err);
   }
 
   is_dirty_ = false;
@@ -206,13 +207,13 @@ ECM AMInfraSuperTomlHandle::DumpTo(const std::filesystem::path &dst_path) {
 }
 
 /**
- * @brief Close underlying cfgffi handle and reset state.
+ * @brief Close underlying RustToml handle and reset state.
  */
 void AMInfraSuperTomlHandle::Close() {
   std::lock_guard<std::mutex> lock(mtx_);
-  if (cfgffi_handle_) {
-    cfgffi_free_handle(cfgffi_handle_);
-    cfgffi_handle_ = nullptr;
+  if (rust_toml_handle_) {
+    RustTomlFreeHandle(rust_toml_handle_);
+    rust_toml_handle_ = nullptr;
   }
   spec_ = {};
   json_ = Json::object();

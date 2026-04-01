@@ -1,6 +1,6 @@
 #pragma once
 #include "ClientIOPortInterfaceArgs.hpp"
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 #include <string>
 
@@ -11,7 +11,7 @@ inline std::string NormalizePath(const std::string &path) {
     return "";
   }
   std::string normalized = AMStr::Strip(path);
-  return AMPathStr::UnifyPathSep(normalized, "/");
+  return AMPath::UnifyPathSep(normalized, "/");
 }
 
 inline bool HasWildcard(const std::string &path) {

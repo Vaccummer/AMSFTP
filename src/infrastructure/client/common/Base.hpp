@@ -5,7 +5,7 @@
 #include "domain/host/HostModel.hpp"
 #include "foundation/core/DataClass.hpp"
 #include "foundation/core/Enum.hpp"
-#include "foundation/core/Path.hpp"
+#include "foundation/tools/path.hpp"
 
 // 3rd party library
 #include <algorithm>
@@ -86,8 +86,8 @@ using WalkErrorCallback =
 using WRD =
     std::vector<std::pair<std::vector<std::string>,
                           std::vector<PathInfo>>>; // walk func return type
-using WRI = std::pair<WRV, AMFS::WER>;             // iwalk data + errors
-using WRDR = std::pair<WRD, AMFS::WER>;            // walk data + errors
+using WRI = std::pair<WRV, AMPath::WER>;           // iwalk data + errors
+using WRDR = std::pair<WRD, AMPath::WER>;          // walk data + errors
 using WR = std::pair<ECM, WRI>;                    // iwalk func return type
 using SIZER = std::pair<ECM, size_t>;              // getsize func return type
 using TraceCallback = std::function<void(const TraceInfo &)>;
@@ -540,7 +540,7 @@ protected:
   [[nodiscard]] virtual std::pair<ECM, WRI>
   iwalk(const std::string &path, bool show_all = false,
         bool ignore_special_file = true,
-        AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
+        AMPath::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
         int64_t start_time = -1, amf interrupt_flag = nullptr) const = 0;
 
 private:
@@ -603,7 +603,7 @@ private:
           continue;
         }
         // sub.path relative to path.path
-        relative_parts = AMPathStr::split(sub.path.substr(path.path.size()));
+        relative_parts = AMPath::split(sub.path.substr(path.path.size()));
         if (walk_match(relative_parts, match_parts, match_index)) {
           results.push_back(sub);
         }
@@ -671,7 +671,7 @@ private:
     pattern_new = _rep(pattern_new, "*", star_rep);
     pattern_new = _rep(pattern_new, "<", less_rep);
     pattern_new = _rep(pattern_new, ">", greater_rep);
-    pattern_new = AMPathStr::RegexEscape(pattern_new);
+    pattern_new = AMPath::RegexEscape(pattern_new);
     // Replace star_rep in path with .*, less_rep with [, and greater_rep with
     // ]; do not use regex replacement
     pattern_new = _rep(pattern_new, star_rep, ".*");
@@ -722,8 +722,8 @@ public:
    */
   [[nodiscard]] static bool
   MatchPathPatternLiteral(const std::string &path, const std::string &pattern) {
-    const std::vector<std::string> path_parts = AMPathStr::split(path);
-    const std::vector<std::string> pattern_parts = AMPathStr::split(pattern);
+    const std::vector<std::string> path_parts = AMPath::split(path);
+    const std::vector<std::string> pattern_parts = AMPath::split(pattern);
     if (path_parts.empty() || pattern_parts.empty()) {
       return path_parts.empty() && pattern_parts.empty();
     }
@@ -774,7 +774,7 @@ public:
                              int timeout_ms = -1, int64_t start_time = -1,
                              amf interrupt_flag = nullptr) {
     std::vector<PathInfo> results = {};
-    auto parts = AMPathStr::split(path);
+    auto parts = AMPath::split(path);
     if (parts.empty()) {
       return results;
     } else if (parts.size() == 1) {
@@ -800,7 +800,7 @@ public:
       // When there is no * < >, join with cur_path; otherwise, stop joining and
       // add to match_parts
       if (!is_stop && !IsUseMatch(parts[i])) {
-        cur_path = AMPathStr::join(cur_path, parts[i]);
+        cur_path = AMPath::join(cur_path, parts[i]);
       } else {
         is_stop = true;
         match_parts.push_back(parts[i]);
@@ -835,7 +835,7 @@ protected:
   [[nodiscard]] virtual std::pair<ECM, WRI>
   iwalk(const std::string &path, bool show_all = false,
         bool ignore_special_file = true,
-        AMFS::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
+        AMPath::WalkErrorCallback error_callback = nullptr, int timeout_ms = -1,
         int64_t start_time = -1, amf interrupt_flag = nullptr) const = 0;
 
 private:
@@ -1001,7 +1001,7 @@ private:
     SearchPlan plan = {};
     const std::string pattern =
         AMStr::Strip(request.pattern).empty() ? "." : request.pattern;
-    const std::vector<std::string> parts = AMPathStr::split(pattern);
+    const std::vector<std::string> parts = AMPath::split(pattern);
     if (parts.empty()) {
       plan.literal_root = ".";
       return plan;
@@ -1017,7 +1017,7 @@ private:
     bool wildcard_started = false;
     for (size_t i = 1; i < parts.size(); ++i) {
       if (!wildcard_started && !IsMatchPattern_(parts[i])) {
-        plan.literal_root = AMPathStr::join(plan.literal_root, parts[i]);
+        plan.literal_root = AMPath::join(plan.literal_root, parts[i]);
       } else {
         wildcard_started = true;
         plan.segments.push_back(parts[i]);
@@ -1258,8 +1258,8 @@ public:
    */
   [[nodiscard]] static bool
   MatchPathPatternLiteral(const std::string &path, const std::string &pattern) {
-    const std::vector<std::string> path_parts = AMPathStr::split(path);
-    const std::vector<std::string> pattern_parts = AMPathStr::split(pattern);
+    const std::vector<std::string> path_parts = AMPath::split(path);
+    const std::vector<std::string> pattern_parts = AMPath::split(pattern);
     if (path_parts.empty() || pattern_parts.empty()) {
       return path_parts.empty() && pattern_parts.empty();
     }

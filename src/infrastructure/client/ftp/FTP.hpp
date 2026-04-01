@@ -164,7 +164,7 @@ inline PathInfo ParseDOSListLine(const std::string &line,
     return info;
 
   info.name = name;
-  info.path = AMPathStr::join(dir_path, name, SepType::Unix);
+  info.path = AMPath::join(dir_path, name, SepType::Unix);
   info.dir = dir_path;
 
   return info;
@@ -203,7 +203,7 @@ inline PathInfo ParseUnixListLine(const std::string &line,
   }
 
   info.name = name;
-  info.path = AMPathStr::join(dir_path, name, SepType::Unix);
+  info.path = AMPath::join(dir_path, name, SepType::Unix);
   info.dir = dir_path;
   info.owner = owner;
 
@@ -519,7 +519,7 @@ inline PathInfo ParseMLSDLine(const std::string &line,
 
   info.name = filename;
   info.dir = dir_path;
-  info.path = AMPathStr::join(dir_path, filename, SepType::Unix);
+  info.path = AMPath::join(dir_path, filename, SepType::Unix);
   ParseMListFacts_(facts, &info, false);
 
   return info;
@@ -541,8 +541,8 @@ inline PathInfo ParseMLSTLine(const std::string &line,
   PathInfo info;
   info.type = PathType::Unknown;
   info.path = path;
-  info.name = AMPathStr::basename(path);
-  info.dir = AMPathStr::dirname(path);
+  info.name = AMPath::basename(path);
+  info.dir = AMPath::dirname(path);
 
   std::string linef = line;
   if (!linef.empty() && linef.back() == '\r') {
@@ -564,7 +564,7 @@ inline PathInfo ParseMLSTLine(const std::string &line,
 } // namespace parse
 
 inline std::string MlistPath(const std::string &path, bool is_dir = false) {
-  std::string pathf = AMPathStr::UnifyPathSep(path, "/");
+  std::string pathf = AMPath::UnifyPathSep(path, "/");
   // Replace spaces with %20
   AMStr::vreplace_all(pathf, " ", "%20");
   while (!pathf.empty() && (pathf.back() == '/' || pathf.back() == '\\')) {
@@ -1151,8 +1151,8 @@ public:
     if (nb_res.ok() && nb_res.value == CURLE_OK) {
       PathInfo info;
       info.path = path;
-      info.name = AMPathStr::basename(path);
-      info.dir = AMPathStr::dirname(path);
+      info.name = AMPath::basename(path);
+      info.dir = AMPath::dirname(path);
       info.type = PathType::DIR;
       info.size = 0;
       return {ECM{EC::Success, ""}, info};
@@ -1188,8 +1188,8 @@ public:
     if (nb_res.value == CURLE_OK) {
       PathInfo info;
       info.path = path;
-      info.name = AMPathStr::basename(path);
-      info.dir = AMPathStr::dirname(path);
+      info.name = AMPath::basename(path);
+      info.dir = AMPath::dirname(path);
       info.type = PathType::FILE;
       curl_off_t filesize = 0;
       curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &filesize);
@@ -1960,7 +1960,7 @@ public:
       return out;
     }
 
-    const auto parts = AMPathStr::split(args.path);
+    const auto parts = AMPath::split(args.path);
     if (parts.empty()) {
       out.rcm = ECM{EC::InvalidArg,
                     AMStr::fmt("Path split failed for {}", args.path)};
@@ -1988,7 +1988,7 @@ public:
       if (current_path.empty()) {
         current_path = part;
       } else {
-        current_path = AMPathStr::join(current_path, part);
+        current_path = AMPath::join(current_path, part);
       }
 
       // auto stat_res = stat(AMFSI::StatArgs{current_path, false}, control);
@@ -2157,8 +2157,8 @@ public:
     // legacy checks before performing rename
     /*
     const std::string home_dir = GetHomeDir_();
-    std::string srcf = AMFS::abspath(args.src, true, home_dir, home_dir);
-    std::string dstf = AMFS::abspath(args.dst, true, home_dir, home_dir);
+    std::string srcf = AMPath::abspath(args.src, true, home_dir, home_dir);
+    std::string dstf = AMPath::abspath(args.dst, true, home_dir, home_dir);
     if (srcf.empty() || dstf.empty()) {
       out.rcm = {EC::InvalidArg,
                  AMStr::fmt("Invalid path: {} or {}", srcf, dstf)};
@@ -2189,7 +2189,7 @@ public:
         return out;
       }
     } else if (args.mkdir) {
-      ECM ecm = mkdirs(AMFSI::MkdirsArgs{AMPathStr::dirname(dstf)}, control);
+      ECM ecm = mkdirs(AMFSI::MkdirsArgs{AMPath::dirname(dstf)}, control);
       if (ecm.first != EC::Success) {
         out.rcm = ecm;
         return out;
@@ -2264,7 +2264,7 @@ public:
     if (control.IsTimeout()) {
       return ECM{EC::OperationTimeout, "Operation timed out"};
     }
-    auto parts = AMPathStr::split(args.path);
+    auto parts = AMPath::split(args.path);
     if (parts.empty()) {
       return {EC::InvalidArg, "Invalid empty path"};
     }
@@ -2280,7 +2280,7 @@ public:
       if (control.IsTimeout()) {
         return {EC::OperationTimeout, "Operation timed out"};
       }
-      current_path = AMPathStr::join(current_path, parts[i]);
+      current_path = AMPath::join(current_path, parts[i]);
       ECM ecm = mkdir(AMFSI::MkdirArgs{current_path}, control);
       if (ecm.first != EC::Success) {
         return ecm;
@@ -2366,7 +2366,7 @@ public:
 
   void _iwalk(const PathInfo &info, WRV &result, RMR &errors, bool show_all,
               bool ignore_special_file,
-              const AMFS::WalkErrorCallback &error_callback,
+              const AMPath::WalkErrorCallback &error_callback,
               const AMDomain::client::ClientControlComponent &control) {
     if (control.IsInterrupted() || control.IsTimeout()) {
       return;
@@ -2415,7 +2415,7 @@ public:
 
   std::pair<ECM, WRI>
   iwalk(const std::string &path, bool show_all, bool ignore_special_file,
-        const AMFS::WalkErrorCallback &error_callback,
+        const AMPath::WalkErrorCallback &error_callback,
         const AMDomain::client::ClientControlComponent &control) {
     if (control.IsTimeout()) {
       return {ECM{EC::OperationTimeout, "Operation timed out"}, {WRV{}, RMR{}}};
@@ -2466,7 +2466,7 @@ public:
   void _walk(const std::vector<std::string> &parts, WRD &result, RMR &errors,
              int cur_depth, int max_depth, bool show_all,
              bool ignore_special_file,
-             const AMFS::WalkErrorCallback &error_callback,
+             const AMPath::WalkErrorCallback &error_callback,
              const AMDomain::client::ClientControlComponent &control) {
     if (control.IsInterrupted() || control.IsTimeout()) {
       return;
@@ -2474,7 +2474,7 @@ public:
     if (max_depth != -1 && cur_depth > max_depth) {
       return;
     }
-    std::string pathf = AMPathStr::join(parts);
+    std::string pathf = AMPath::join(parts);
     auto [rcm2, list_info] = listdir(AMFSI::ListdirArgs{pathf}, control);
     if (rcm2.first != EC::Success) {
       if (rcm2.first != EC::OperationTimeout) {
@@ -2522,7 +2522,7 @@ public:
 
   std::pair<ECM, WRDR>
   walk(const std::string &path, int max_depth, bool show_all,
-       bool ignore_special_file, const AMFS::WalkErrorCallback &error_callback,
+       bool ignore_special_file, const AMPath::WalkErrorCallback &error_callback,
        const AMDomain::client::ClientControlComponent &control) {
     if (control.IsTimeout()) {
       return {ECM{EC::OperationTimeout, "Operation timed out"}, {WRD{}, RMR{}}};
@@ -2582,7 +2582,7 @@ public:
     if (control.IsInterrupted() || control.IsTimeout()) {
       return results;
     }
-    auto parts = AMPathStr::split(path);
+    auto parts = AMPath::split(path);
     if (parts.empty()) {
       return results;
     } else if (parts.size() == 1) {
@@ -2602,7 +2602,7 @@ public:
 
     for (size_t i = 1; i < parts.size(); i++) {
       if (!is_stop && !BasePathMatch::IsUseMatch(parts[i])) {
-        cur_path = AMPathStr::join(cur_path, parts[i]);
+        cur_path = AMPath::join(cur_path, parts[i]);
       } else {
         is_stop = true;
         match_parts.push_back(parts[i]);
@@ -2644,7 +2644,7 @@ public:
   }
 
   void _rm(const PathInfo &info, RMR &errors,
-           const AMFS::WalkErrorCallback &error_callback,
+           const AMPath::WalkErrorCallback &error_callback,
            const AMDomain::client::ClientControlComponent &control) {
     if (control.IsInterrupted() || control.IsTimeout()) {
       return;

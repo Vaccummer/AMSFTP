@@ -22,7 +22,7 @@ using EC = ErrorCode;
 using result_map = std::unordered_map<std::string, ErrorCode>;
 namespace fs = std::filesystem;
 
-namespace AMPathStr {
+namespace AMPath {
 inline std::string GetPathSep(const std::string &path) {
 #ifdef AMForceUsingUnixSep
   // force to use unix path separator
@@ -475,9 +475,9 @@ inline std::string basename(const std::string &path) {
   fs::path p(pathf);
   return p.filename().string();
 }
-} // namespace AMPathStr
+} // namespace AMPath
 
-namespace AMFS {
+namespace AMPath {
 #ifdef _WIN32
 struct FileTimes {
   double creation_time; // Creation time
@@ -617,8 +617,8 @@ inline std::string abspath(const std::string &path,
                            const std::string &home = "",
                            const std::string &cwd = "",
                            const std::string &sep = "") {
-  std::string new_path = AMPathStr::UnifyPathSep(path, sep);
-  std::string new_sep = sep.empty() ? AMPathStr::GetPathSep(path) : sep;
+  std::string new_path = AMPath::UnifyPathSep(path, sep);
+  std::string new_sep = sep.empty() ? AMPath::GetPathSep(path) : sep;
   const bool drive_only = new_path.size() == 2 &&
                           ((new_path[0] >= 'A' && new_path[0] <= 'Z') ||
                            (new_path[0] >= 'a' && new_path[0] <= 'z')) &&
@@ -626,19 +626,19 @@ inline std::string abspath(const std::string &path,
   if (drive_only) {
     return new_path + new_sep;
   }
-  if (AMPathStr::IsAbs(new_path, sep) && !parsing_home) {
+  if (AMPath::IsAbs(new_path, sep) && !parsing_home) {
     return new_path;
   }
-  if (!AMPathStr::IsAbs(new_path, new_sep)) {
+  if (!AMPath::IsAbs(new_path, new_sep)) {
     const std::string base = cwd.empty() ? CWD() : cwd;
-    new_path = AMPathStr::join(base, new_path);
+    new_path = AMPath::join(base, new_path);
   }
   const bool drive_root_anchor = new_path.size() >= 3 &&
                                  ((new_path[0] >= 'A' && new_path[0] <= 'Z') ||
                                   (new_path[0] >= 'a' && new_path[0] <= 'z')) &&
                                  new_path[1] == ':' &&
                                  (new_path[2] == '/' || new_path[2] == '\\');
-  std::vector<std::string> parts = AMPathStr::split(new_path);
+  std::vector<std::string> parts = AMPath::split(new_path);
   if (parts.empty()) {
     return "";
   }
@@ -670,7 +670,7 @@ inline std::string abspath(const std::string &path,
     new_sep = "/";
   } else if (parts[0] == "~" && parsing_home) {
     std::string hm = home.empty() ? HomePath() : home;
-    for (const auto &seg : AMPathStr::split(hm)) {
+    for (const auto &seg : AMPath::split(hm)) {
       new_parts.push_back(seg);
     }
     parts.erase(parts.begin());
@@ -846,4 +846,4 @@ listdir(const std::string &path, int timeout_ms = -1,
   }
   return {ECM{EC::Success, ""}, result};
 }
-} // namespace AMFS
+} // namespace AMPath
