@@ -15,7 +15,7 @@
 namespace AMInterface::client {
 using ClientAppService = AMApplication::client::ClientAppService;
 using FilesystemAppService = AMApplication::filesystem::FilesystemAppService;
-using AMHostConfigManager = AMApplication::host::AMHostAppService;
+using AMHostConfigManager = AMApplication::host::HostAppService;
 using AMKnownHostsManager = AMApplication::host::AMKnownHostsAppService;
 using AMPromptIOManager = AMInterface::prompt::AMPromptIOManager;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;

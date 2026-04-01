@@ -457,14 +457,12 @@ ECMData<ClientHandle> FilesystemAppBaseService::GetClient(
     return {nullptr, Err(EC::HostConfigNotFound,
                          AMStr::fmt("Host config not found: {}", nickname))};
   }
-  std::pair<ECM, HostConfig> host_cfg =
-      host_service_->GetClientConfig(nickname);
-
-  if (!isok(host_cfg.first)) {
-    return {nullptr, host_cfg.first};
+  auto host_cfg = host_service_->GetClientConfig(nickname, true);
+  if (!isok(host_cfg.rcm)) {
+    return {nullptr, host_cfg.rcm};
   }
 
-  auto create_result = client_service_->CreateClient(host_cfg.second, control);
+  auto create_result = client_service_->CreateClient(host_cfg.data, control);
   if (!isok(create_result.rcm) || !create_result.data) {
     return {create_result.data, create_result.rcm};
   }
@@ -505,14 +503,13 @@ FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
     return {nullptr, Err(EC::HostConfigNotFound,
                          AMStr::fmt("Host config not found: {}", nickname))};
   }
-  std::pair<ECM, HostConfig> host_cfg =
-      host_service_->GetClientConfig(nickname);
-  if (!isok(host_cfg.first)) {
-    return {nullptr, host_cfg.first};
+  auto host_cfg = host_service_->GetClientConfig(nickname, true);
+  if (!isok(host_cfg.rcm)) {
+    return {nullptr, host_cfg.rcm};
   }
 
   auto create_result =
-      client_service_->CreateClient(host_cfg.second, ClientControlComponent{});
+      client_service_->CreateClient(host_cfg.data, ClientControlComponent{});
   if (!isok(create_result.rcm) || !create_result.data) {
     return {create_result.data, create_result.rcm};
   }

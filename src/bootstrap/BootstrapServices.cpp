@@ -44,7 +44,7 @@ struct ConfigSnapshots final {
 struct AppServiceBuildState final {
   std::unique_ptr<AMApplication::config::AMConfigAppService> config_service =
       nullptr;
-  std::unique_ptr<AMApplication::host::AMHostAppService> host_service =
+  std::unique_ptr<AMApplication::host::HostAppService> host_service =
       nullptr;
   std::unique_ptr<AMApplication::host::AMKnownHostsAppService>
       known_hosts_service = nullptr;
@@ -129,7 +129,7 @@ ConfigSnapshots ReadConfigSnapshots_(
 
 void BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
                                    AppServiceBuildState *state) {
-  state->host_service = std::make_unique<AMApplication::host::AMHostAppService>();
+  state->host_service = std::make_unique<AMApplication::host::HostAppService>();
   {
     const ECM rcm = state->host_service->Init(snapshots.host_config_arg);
     if (!isok(rcm)) {
@@ -280,11 +280,11 @@ ECM BuildTransferInterfaceService_(
 void BootstrapLocalClient_(const AMInterface::cli::amf &task_control_token,
                            const AppServiceBuildState &app_state) {
   auto local_cfg_result = app_state.host_service->GetLocalConfig();
-  if (isok(local_cfg_result.first)) {
+  if (isok(local_cfg_result.rcm)) {
     const auto control =
         AMDomain::client::ClientControlComponent(task_control_token, -1);
     auto local_client_result = app_state.client_service->CreateClient(
-        local_cfg_result.second, control, true);
+        local_cfg_result.data, control, true);
     if (isok(local_client_result.rcm) && local_client_result.data) {
       ECM rcm = app_state.client_service->Init(local_client_result.data);
       if (!isok(rcm)) {
@@ -304,7 +304,7 @@ void BootstrapLocalClient_(const AMInterface::cli::amf &task_control_token,
     return;
   }
   PrintBootstrapWarn(AMStr::fmt("resolve local host config failed: {}",
-                                local_cfg_result.first.second));
+                                local_cfg_result.rcm.second));
 }
 
 void BuildAndInitSignalMonitor_(

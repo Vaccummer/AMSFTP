@@ -88,7 +88,7 @@ struct CLIServices : public NonCopyableNonMovable {
       prompt_profile_history_manager = {};
   mutable ServiceHolder<AMInterface::prompt::AMPromptIOManager>
       prompt_io_manager = {};
-  mutable ServiceHolder<AMApplication::host::AMHostAppService> host_service =
+  mutable ServiceHolder<AMApplication::host::HostAppService> host_service =
       {};
   mutable ServiceHolder<AMApplication::host::AMKnownHostsAppService>
       known_hosts_service = {};

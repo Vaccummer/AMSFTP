@@ -10,13 +10,9 @@ namespace {
 using ClientStatus = AMDomain::client::ClientStatus;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;
 using HostConfig = AMDomain::host::HostConfig;
-using HostConfigManager = AMApplication::host::AMHostAppService;
+using HostConfigManager = AMApplication::host::HostAppService;
 using AMDomain::host::HostService::IsLocalNickname;
 constexpr const char *kTransferLeaseKey = "transfer.lease";
-
-std::string JoinCandidates_(const std::vector<std::string> &candidates) {
-  return AMStr::join(candidates, ", ");
-}
 
 ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
                                        const std::string &nickname,
@@ -26,33 +22,13 @@ ECMData<HostConfig> ResolveHostConfig_(HostConfigManager *host_config_manager,
             Err(EC::InvalidHandle, "Host config manager is not bound")};
   }
 
-  auto [cfg_rcm, cfg] = host_config_manager->GetClientConfig(nickname);
-  if (isok(cfg_rcm) || case_sensitive) {
-    return {cfg, cfg_rcm};
+  auto cfg_result = host_config_manager->GetClientConfig(nickname, case_sensitive);
+  if (isok(cfg_result.rcm)) {
+    return cfg_result;
   }
-
-  const std::string lowered = AMStr::lowercase(AMStr::Strip(nickname));
-  std::vector<std::string> matched_names = {};
-  for (const auto &name : host_config_manager->ListNames()) {
-    if (AMStr::lowercase(AMStr::Strip(name)) == lowered) {
-      matched_names.push_back(name);
-    }
-  }
-  if (matched_names.empty()) {
-    return {HostConfig{},
-            Err(EC::ClientNotFound,
-                AMStr::fmt("Host config not found: {}", nickname))};
-  }
-  if (matched_names.size() > 1) {
-    return {
-        HostConfig{},
-        Err(EC::ClientNotFound,
-            AMStr::fmt("Ambiguous host config nickname [{}], candidates: {}",
-                       nickname, JoinCandidates_(matched_names)))};
-  }
-  auto [matched_rcm, matched_cfg] =
-      host_config_manager->GetClientConfig(matched_names.front());
-  return {matched_cfg, matched_rcm};
+  return {HostConfig{},
+          Err(EC::ClientNotFound,
+              AMStr::fmt("Host config not found: {}", nickname))};
 }
 
 ECM AcquireTransferLease_(const ClientHandle &client) {
@@ -176,7 +152,7 @@ ECMData<ClientHandle> ClientAppService::GetClient(const std::string &nickname,
       return {nullptr,
               Err(EC::ClientNotFound,
                   AMStr::fmt("Ambiguous client nickname [{}], candidates: {}",
-                             nickname, JoinCandidates_(matched_names)))};
+                             nickname, AMStr::join(matched_names, ", ")))};
     }
   }
   return {nullptr, Err(EC::ClientNotFound,
@@ -234,7 +210,7 @@ ClientAppService::CreateClient(const HostConfig &config,
     (void)CallCallbackSafe(hooks.after_connect, config, client, silent,
                            connect_result.rcm);
   }
-  if (!isok(connect_result.rcm)) {
+  if (!connect_result.rcm) {
     return {nullptr, connect_result.rcm};
   }
 
@@ -529,7 +505,8 @@ ECM ClientAppService::SetClientMetadata(const ClientHandle &client,
   return Ok();
 }
 
-ECMData<std::string> ClientAppService::GetClientCwd(const ClientHandle &client) {
+ECMData<std::string>
+ClientAppService::GetClientCwd(const ClientHandle &client) {
   if (!client) {
     return {"", Err(EC::InvalidHandle, "Client handle is null")};
   }
