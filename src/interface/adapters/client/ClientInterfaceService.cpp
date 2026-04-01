@@ -566,7 +566,8 @@ ECM ResolveHostConfig_(AMHostConfigManager &host_config_manager,
 void PrintHostCompact_(
     AMPromptIOManager &prompt, AMStyleService &style_service,
     const std::vector<std::string> &nicknames,
-    const std::unordered_set<std::string> *established_nicknames = nullptr) {
+    const std::unordered_set<std::string> *established_nicknames = nullptr,
+    const std::unordered_set<std::string> *configured_nicknames = nullptr) {
   if (nicknames.empty()) {
     prompt.Print("");
     return;
@@ -593,8 +594,15 @@ void PrintHostCompact_(
         established_nicknames != nullptr &&
         established_nicknames->find(normalized_nickname) !=
             established_nicknames->end();
-    const auto style_index = established ? AMInterface::style::StyleIndex::Nickname
-                                         : AMInterface::style::StyleIndex::UnestablishedNickname;
+    const bool configured =
+        configured_nicknames != nullptr &&
+        configured_nicknames->find(normalized_nickname) !=
+            configured_nicknames->end();
+    const auto style_index =
+        established
+            ? AMInterface::style::StyleIndex::Nickname
+            : (configured ? AMInterface::style::StyleIndex::UnestablishedNickname
+                          : AMInterface::style::StyleIndex::NonexistentNickname);
     line << style_service.Format(nickname, style_index);
     current_width += display_len;
   }
@@ -1463,7 +1471,16 @@ ECM ClientInterfaceService::ListClients(
   }
 
   if (!request.detail) {
-    hostui::PrintHostCompact_(prompt_io_manager_, style_service_, resolved_names);
+    std::unordered_set<std::string> established_set = {};
+    established_set.reserve(resolved_names.size());
+    for (const auto &name : resolved_names) {
+      const std::string normalized = NormalizeNickname(name);
+      if (!normalized.empty()) {
+        established_set.insert(normalized);
+      }
+    }
+    hostui::PrintHostCompact_(prompt_io_manager_, style_service_, resolved_names,
+                              &established_set, nullptr);
     return status;
   }
 
@@ -1927,7 +1944,17 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
 }
 
 ECM ClientInterfaceService::ListHosts(bool detail) {
-  const std::vector<std::string> nicknames = host_config_manager_.ListNames();
+  std::vector<std::string> nicknames = host_config_manager_.ListNames();
+  bool has_local = false;
+  for (const auto &name : nicknames) {
+    if (IsLocalNickname(name)) {
+      has_local = true;
+      break;
+    }
+  }
+  if (!has_local) {
+    nicknames.emplace_back("local");
+  }
   if (!detail) {
     const std::vector<std::string> established =
         client_service_.GetClientNames();
@@ -1942,8 +1969,16 @@ ECM ClientInterfaceService::ListHosts(bool detail) {
     if (client_service_.GetLocalClient()) {
       established_set.insert("local");
     }
+    std::unordered_set<std::string> configured_set = {};
+    configured_set.reserve(nicknames.size());
+    for (const auto &name : nicknames) {
+      const std::string normalized = NormalizeNickname(name);
+      if (!normalized.empty()) {
+        configured_set.insert(normalized);
+      }
+    }
     hostui::PrintHostCompact_(prompt_io_manager_, style_service_, nicknames,
-                              &established_set);
+                              &established_set, &configured_set);
     return Ok();
   }
 
