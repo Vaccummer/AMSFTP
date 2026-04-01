@@ -179,6 +179,30 @@ std::string ClientAppService::CurrentNickname() const {
   return GetCurrentNickname();
 }
 
+void ClientAppService::RegisterMaintainerCallbacks(
+    std::optional<DisconnectCallback> disconnect_cb,
+    std::optional<TraceCallback> trace_cb,
+    std::optional<KnownHostCallback> known_host_cb,
+    std::optional<AuthCallback> auth_cb) {
+  ClientAppServiceBase::RegisterMaintainerCallbacks(
+      disconnect_cb, trace_cb, known_host_cb, auth_cb);
+  if (maintainer_ && disconnect_cb.has_value()) {
+    maintainer_->SetDisconnectCallback(*disconnect_cb);
+  }
+}
+
+void ClientAppService::RegisterPublicCallbacks(
+    std::optional<DisconnectCallback> disconnect_cb,
+    std::optional<TraceCallback> trace_cb,
+    std::optional<KnownHostCallback> known_host_cb,
+    std::optional<AuthCallback> auth_cb) {
+  ClientAppServiceBase::RegisterPublicCallbacks(disconnect_cb, trace_cb,
+                                                known_host_cb, auth_cb);
+  if (maintainer_ && disconnect_cb.has_value()) {
+    maintainer_->SetDisconnectCallback(*disconnect_cb);
+  }
+}
+
 void ClientAppService::BindHostConfigManager(
     HostConfigManager *host_config_manager) {
   host_config_manager_ = host_config_manager;

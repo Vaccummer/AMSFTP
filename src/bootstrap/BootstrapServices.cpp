@@ -42,11 +42,11 @@ struct ConfigSnapshots final {
 };
 
 struct AppServiceBuildState final {
-  std::unique_ptr<AMApplication::config::AMConfigAppService> config_service =
+  std::unique_ptr<AMApplication::config::ConfigAppService> config_service =
       nullptr;
   std::unique_ptr<AMApplication::host::HostAppService> host_service =
       nullptr;
-  std::unique_ptr<AMApplication::host::AMKnownHostsAppService>
+  std::unique_ptr<AMApplication::host::KnownHostsAppService>
       known_hosts_service = nullptr;
   std::unique_ptr<AMApplication::client::ClientAppService> client_service =
       nullptr;
@@ -99,7 +99,7 @@ ECM BuildRunContext_(AMInterface::cli::CliRunContext *run_ctx) {
   return Ok();
 }
 
-void InitAndLoadConfigService_(AMApplication::config::AMConfigAppService *service,
+void InitAndLoadConfigService_(AMApplication::config::ConfigAppService *service,
                                const fs::path &root_dir) {
   service->SetInitArg(BuildConfigInitArg(root_dir));
   ECM rcm = service->Init();
@@ -114,7 +114,7 @@ void InitAndLoadConfigService_(AMApplication::config::AMConfigAppService *servic
 }
 
 ConfigSnapshots ReadConfigSnapshots_(
-    AMApplication::config::AMConfigAppService *service) {
+    AMApplication::config::ConfigAppService *service) {
   ConfigSnapshots snapshots = {};
   (void)service->Read(&snapshots.host_config_arg);
   (void)service->Read(&snapshots.known_hosts_arg);
@@ -138,7 +138,7 @@ void BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
   }
 
   state->known_hosts_service =
-      std::make_unique<AMApplication::host::AMKnownHostsAppService>();
+      std::make_unique<AMApplication::host::KnownHostsAppService>();
   {
     const ECM rcm =
         state->known_hosts_service->Init(snapshots.known_hosts_arg.entries);
@@ -223,14 +223,43 @@ void BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
   }
 }
 
+void RegisterConfigSyncPorts_(AppServiceBuildState *state) {
+  if (state == nullptr || state->config_service == nullptr) {
+    return;
+  }
+
+  auto register_port = [&](AMApplication::config::IConfigSyncPort *port,
+                           const std::string &name) {
+    if (port == nullptr) {
+      PrintBootstrapWarn(AMStr::fmt("skip registering sync port: {}", name));
+      return;
+    }
+    auto result = state->config_service->RegisterSyncPort(port);
+    if (!isok(result.rcm)) {
+      PrintBootstrapWarn(
+          AMStr::fmt("register sync port {} failed: {}", name, result.rcm.second));
+    }
+  };
+
+  register_port(state->host_service.get(), "HostAppService");
+  register_port(state->known_hosts_service.get(), "KnownHostsAppService");
+  register_port(state->client_service.get(), "ClientAppService");
+  register_port(state->filesystem_service.get(), "FilesystemAppService");
+  register_port(state->var_service.get(), "VarAppService");
+  register_port(state->prompt_profile_manager.get(), "PromptProfileManager");
+  register_port(state->prompt_history_manager.get(), "PromptHistoryManager");
+  register_port(state->style_service.get(), "StyleConfigManager");
+}
+
 AppServiceBuildState BuildApplicationServices_(const fs::path &root_dir) {
   AppServiceBuildState state = {};
   state.config_service =
-      std::make_unique<AMApplication::config::AMConfigAppService>();
+      std::make_unique<AMApplication::config::ConfigAppService>();
   InitAndLoadConfigService_(state.config_service.get(), root_dir);
   const ConfigSnapshots snapshots = ReadConfigSnapshots_(state.config_service.get());
   BuildCoreApplicationServices_(snapshots, &state);
   BuildPromptAndStyleServices_(snapshots, &state);
+  RegisterConfigSyncPorts_(&state);
   return state;
 }
 
@@ -240,8 +269,8 @@ void BuildClientInterfaceServices_(
   state->client_interface_service =
       std::make_unique<AMInterface::client::ClientInterfaceService>(
           *app_state.client_service, *app_state.filesystem_service,
-          *app_state.host_service,
-          *app_state.known_hosts_service, *app_state.prompt_io_manager);
+          *app_state.host_service, *app_state.known_hosts_service,
+          *app_state.prompt_io_manager, *app_state.style_service);
   state->client_interface_service->SetDefaultControlToken(task_control_token);
   state->client_interface_service->BindInteractionCallbacks();
 
@@ -441,3 +470,5 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
 }
 
 } // namespace AMBootstrap
+
+
