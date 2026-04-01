@@ -477,16 +477,16 @@ ECM ResolveHostConfig_(AMHostConfigManager &host_config_manager,
   if (!out) {
     return Err(EC::InvalidArg, "null host config output");
   }
-  std::pair<ECM, HostConfig> result = {};
+  ECMData<HostConfig> result = {};
   if (IsLocalNickname(nickname)) {
     result = host_config_manager.GetLocalConfig();
   } else {
-    result = host_config_manager.GetClientConfig(nickname);
+    result = host_config_manager.GetClientConfig(nickname, true);
   }
-  if (!isok(result.first)) {
-    return result.first;
+  if (!isok(result.rcm)) {
+    return result.rcm;
   }
-  *out = result.second;
+  *out = result.data;
   return Ok();
 }
 
@@ -960,14 +960,14 @@ void ClientInterfaceService::BindInteractionCallbacks() {
       return std::nullopt;
     }
 
-    auto cfg = host_config_manager_.GetClientConfig(client_name);
-    if (isok(cfg.first)) {
+    auto cfg = host_config_manager_.GetClientConfig(client_name, true);
+    if (isok(cfg.rcm)) {
       std::string password = info.password_n;
       if (!password.empty() && !AMAuth::IsEncrypted(password)) {
         password = AMAuth::EncryptPassword(password);
       }
-      cfg.second.request.password = password;
-      (void)host_config_manager_.AddHost(cfg.second, true);
+      cfg.data.request.password = password;
+      (void)host_config_manager_.AddHost(cfg.data, true);
     }
     return std::nullopt;
   };
@@ -1078,13 +1078,13 @@ ECM ClientInterfaceService::Connect(
       continue;
     }
 
-    auto [cfg_rcm, cfg] = host_config_manager_.GetClientConfig(nickname);
-    if (!isok(cfg_rcm)) {
-      status = MergeStatus_(status, cfg_rcm);
+    auto cfg_result = host_config_manager_.GetClientConfig(nickname, true);
+    if (!isok(cfg_result.rcm)) {
+      status = MergeStatus_(status, cfg_result.rcm);
       continue;
     }
 
-    auto created = UICreateClient(cfg, control, false);
+    auto created = UICreateClient(cfg_result.data, control, false);
     if (!isok(created.rcm) || !created.data) {
       status = MergeStatus_(status, created.rcm);
       continue;
@@ -1370,19 +1370,18 @@ ECM ClientInterfaceService::ListClients(
   }
 
   auto print_host_detail = [this, &status](const std::string &nickname) {
-    std::pair<ECM, HostConfig> config_data = {};
+    ECMData<HostConfig> config_data = {};
     if (IsLocalNickname(nickname)) {
       config_data = host_config_manager_.GetLocalConfig();
     } else {
-      config_data = host_config_manager_.GetClientConfig(nickname);
+      config_data = host_config_manager_.GetClientConfig(nickname, true);
     }
-    if (!isok(config_data.first)) {
-      prompt_io_manager_.ErrorFormat(config_data.first);
-      status = MergeStatus_(status, config_data.first);
+    if (!isok(config_data.rcm)) {
+      prompt_io_manager_.ErrorFormat(config_data.rcm);
+      status = MergeStatus_(status, config_data.rcm);
       return;
     }
-    render::PrintHostConfigDetail(prompt_io_manager_, nickname,
-                                  config_data.second);
+    render::PrintHostConfigDetail(prompt_io_manager_, nickname, config_data.data);
   };
 
   if (!request.check && request.detail) {
@@ -1558,7 +1557,21 @@ ECM ClientInterfaceService::RenameHost(const std::string &old_nickname,
     return rcm;
   }
 
-  rcm = host_config_manager_.Rename(old_nickname, new_nickname);
+  HostConfig old_cfg = {};
+  rcm = hostui::ResolveHostConfig_(host_config_manager_, old_nickname, &old_cfg);
+  if (!isok(rcm)) {
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+  old_cfg.request.nickname = NormalizeNickname(new_nickname);
+
+  rcm = host_config_manager_.AddHost(old_cfg, false);
+  if (!isok(rcm)) {
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  rcm = host_config_manager_.DelHost(old_nickname);
   if (!isok(rcm)) {
     prompt_io_manager_.ErrorFormat(rcm);
   }
@@ -1672,8 +1685,59 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
   }
 
   const std::string old_value = hostui::HostFieldDisplay_(before, field);
-  const ECM set_rcm =
-      host_config_manager_.SetHostValue(nickname, field, resolved_value);
+  HostConfig updated = before;
+  ECM set_rcm = Ok();
+  if (field == "hostname") {
+    updated.request.hostname = resolved_value;
+  } else if (field == "username") {
+    updated.request.username = resolved_value;
+  } else if (field == "port") {
+    int64_t port = 0;
+    if (!AMStr::GetNumber(resolved_value, &port)) {
+      set_rcm = Err(EC::InvalidArg, "invalid port");
+    } else {
+      updated.request.port = port;
+    }
+  } else if (field == "protocol") {
+    updated.request.protocol =
+        AMDomain::host::HostService::StrToProtocol(AMStr::Strip(resolved_value));
+  } else if (field == "password") {
+    updated.request.password = resolved_value;
+  } else if (field == "keyfile") {
+    updated.request.keyfile = resolved_value;
+  } else if (field == "buffer_size") {
+    int64_t buffer_size = 0;
+    if (!AMStr::GetNumber(resolved_value, &buffer_size)) {
+      set_rcm = Err(EC::InvalidArg, "invalid buffer_size");
+    } else {
+      updated.request.buffer_size = buffer_size;
+    }
+  } else if (field == "compression") {
+    bool compression = false;
+    if (!AMStr::GetBool(resolved_value, &compression)) {
+      set_rcm = Err(EC::InvalidArg, "invalid compression value");
+    } else {
+      updated.request.compression = compression;
+    }
+  } else if (field == "trash_dir") {
+    updated.metadata.trash_dir = resolved_value;
+  } else if (field == "login_dir") {
+    updated.metadata.login_dir = resolved_value;
+  } else if (field == "cmd_prefix") {
+    updated.metadata.cmd_prefix = resolved_value;
+  } else if (field == "wrap_cmd") {
+    bool wrap_cmd = false;
+    if (!AMStr::GetBool(resolved_value, &wrap_cmd)) {
+      set_rcm = Err(EC::InvalidArg, "invalid wrap_cmd value");
+    } else {
+      updated.metadata.wrap_cmd = wrap_cmd;
+    }
+  } else {
+    set_rcm = Err(EC::InvalidArg, "unsupported property name");
+  }
+  if (isok(set_rcm)) {
+    set_rcm = host_config_manager_.AddHost(updated, true);
+  }
   if (!isok(set_rcm)) {
     prompt_io_manager_.ErrorFormat(set_rcm);
     return set_rcm;

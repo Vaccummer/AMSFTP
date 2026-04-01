@@ -9,14 +9,14 @@ namespace AMApplication::host {
 /**
  * @brief Host configuration manager for host map and local profile state.
  */
-class AMHostAppService : public NonCopyableNonMovable {
+class HostAppService : public NonCopyableNonMovable {
 public:
   using HostConfigMap = std::map<std::string, AMDomain::host::HostConfig>;
   using HostConfigArg = AMDomain::host::HostConfigArg;
   using HostConfig = AMDomain::host::HostConfig;
 
-  explicit AMHostAppService() = default;
-  virtual ~AMHostAppService() override = default;
+  explicit HostAppService() = default;
+  ~HostAppService() override = default;
 
   /**
    * @brief Initialize manager from explicit host config payload.
@@ -31,13 +31,13 @@ public:
   /**
    * @brief Return one host config by nickname.
    */
-  [[nodiscard]] std::pair<ECM, HostConfig>
-  GetClientConfig(const std::string &nickname);
+  [[nodiscard]] ECMData<HostConfig>
+  GetClientConfig(const std::string &nickname, bool case_sensitive);
 
   /**
    * @brief Return local host config currently cached in manager.
    */
-  [[nodiscard]] std::pair<ECM, HostConfig> GetLocalConfig();
+  [[nodiscard]] ECMData<HostConfig> GetLocalConfig();
 
   /**
    * @brief Return all non-local host configs keyed by nickname.
@@ -60,34 +60,9 @@ public:
 
   [[nodiscard]] std::vector<std::string> PrivateKeys() const;
 
-  // legacy APIs for CLI commands; to be refactored into application or
-  // interface layer
-  ECM List(bool detailed = true) const;
-  ECM Add(const std::string &nickname = "");
-  ECM Modify(const std::string &nickname);
-  ECM Delete(const std::string &nickname);
-  ECM Delete(const std::vector<std::string> &targets);
-  ECM Query(const std::string &targets) const;
-  ECM Query(const std::vector<std::string> &targets) const;
-  ECM Rename(const std::string &old_nickname, const std::string &new_nickname);
-  ECM Src() const;
-  [[nodiscard]] ECM Save();
-  ECM SetHostValue(const std::string &nickname, const std::string &attrname,
-                   const std::string &value_str);
-  // legacy APIs for CLI commands; to be refactored into application or
-  // interface layer
-
-private:
-  ECM EnsureSnapshotLoaded_() const;
-  ECM LoadSnapshot_() const;
-  [[nodiscard]] HostConfigArg SnapshotFromCache_() const;
-  ECM PersistSnapshot_(const HostConfigArg &snapshot, bool dump_async = true);
-  void ResetSnapshotCache_();
-
   mutable HostConfigMap host_configs_ = {};
   mutable HostConfig local_config_ = {};
   mutable std::vector<std::string> private_keys_ = {};
-  mutable bool snapshot_loaded_ = false;
 };
 
 /**

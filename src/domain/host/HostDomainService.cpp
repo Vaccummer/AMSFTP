@@ -5,6 +5,19 @@
 namespace AMDomain::host {
 namespace HostService {
 
+const HostConfig &LocalConfigFallback() {
+  static const HostConfig kFallback = []() {
+    HostConfig cfg = {};
+    cfg.request.nickname = "local";
+    cfg.request.protocol = ClientProtocol::LOCAL;
+    cfg.request.hostname = "localhost";
+    cfg.request.username = "local";
+    cfg.request.port = 0;
+    return cfg;
+  }();
+  return kFallback;
+}
+
 void vNormalizeNickname(std::string &nickname) {
   AMStr::VStrip(nickname);
   if (nickname.empty() || IsLocalNickname(nickname)) {

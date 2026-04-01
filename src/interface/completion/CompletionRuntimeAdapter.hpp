@@ -15,7 +15,7 @@ class CompletionRuntimeAdapter final : public ICompletionRuntime {
 public:
   CompletionRuntimeAdapter(
       AMApplication::client::ClientAppService &client_service,
-      AMApplication::host::AMHostAppService &host_service,
+      AMApplication::host::HostAppService &host_service,
       AMApplication::var::VarAppService &var_service,
       AMInterface::var::VarInterfaceService &var_interface_service,
       AMInterface::style::AMStyleService &style_service,
@@ -61,7 +61,7 @@ public:
 
 private:
   AMApplication::client::ClientAppService &client_service_;
-  AMApplication::host::AMHostAppService &host_service_;
+  AMApplication::host::HostAppService &host_service_;
   AMApplication::var::VarAppService &var_service_;
   AMInterface::var::VarInterfaceService &var_interface_service_;
   AMInterface::style::AMStyleService &style_service_;

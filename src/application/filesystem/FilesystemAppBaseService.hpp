@@ -13,7 +13,7 @@ using FilesystemArg = AMDomain::filesystem::FilesystemArg;
 using ClientPath = AMDomain::filesystem::ClientPath;
 using ClientHandle = AMDomain::client::ClientHandle;
 using ClientControlComponent = AMDomain::client::ClientControlComponent;
-using HostAppService = AMApplication::host::AMHostAppService;
+using HostAppService = AMApplication::host::HostAppService;
 using ClientAppService = AMApplication::client::ClientAppService;
 
 namespace ClientOperationHelper {

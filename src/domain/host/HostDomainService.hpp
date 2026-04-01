@@ -12,6 +12,8 @@ inline constexpr int DefaultFTPPort = 21;
 namespace HostService {
 using HostConfigMap = std::map<std::string, HostConfig>;
 
+[[nodiscard]] const HostConfig &LocalConfigFallback();
+
 inline ClientProtocol StrToProtocol(const std::string &protocol_str) {
   auto key = AMStr::uppercase(AMStr::Strip(protocol_str));
   auto it = magic_enum::enum_cast<ClientProtocol>(key);
