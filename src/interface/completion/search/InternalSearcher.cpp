@@ -1,14 +1,14 @@
-#include "interface/completion/Searcher.hpp"
-#include "interface/completion/SearcherCommon.hpp"
+#include "interface/completion/CompletionRuntime.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "domain/host/HostModel.hpp"
-#include "interface/adapters/ApplicationAdapters.hpp"
+#include "interface/completion/Searcher.hpp"
+#include "interface/completion/SearcherCommon.hpp"
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 
+
 using namespace AMSearcherDetail;
-namespace Runtime = AMInterface::ApplicationAdapters::Runtime;
 
 using AMDomain::var::VarInfo;
 
@@ -45,8 +45,13 @@ struct HostLikeNameInfo {
  * @brief Build unified nickname list: created clients first, then uncreated
  * configured hosts.
  */
-std::vector<HostLikeNameInfo> CollectHostLikeNames_() {
+std::vector<HostLikeNameInfo>
+CollectHostLikeNames_(
+    const AMInterface::completion::ICompletionRuntime *runtime) {
   std::vector<HostLikeNameInfo> names;
+  if (!runtime) {
+    return names;
+  }
   std::unordered_set<std::string> seen;
 
   auto add_name = [&](const std::string &name, bool created) {
@@ -57,14 +62,14 @@ std::vector<HostLikeNameInfo> CollectHostLikeNames_() {
     names.push_back({name, created});
   };
 
-  std::vector<std::string> created_names = Runtime::ListClientNames();
+  std::vector<std::string> created_names = runtime->ListClientNames();
   std::sort(created_names.begin(), created_names.end());
   for (const auto &name : created_names) {
     add_name(name, true);
   }
   add_name("local", true);
 
-  std::vector<std::string> configured_names = Runtime::ListHostNames();
+  std::vector<std::string> configured_names = runtime->ListHostNames();
   std::sort(configured_names.begin(), configured_names.end());
   for (const auto &name : configured_names) {
     add_name(name, false);
@@ -77,7 +82,7 @@ std::vector<HostLikeNameInfo> CollectHostLikeNames_() {
  * @brief Parse variable completion prefix from token prefix text.
  */
 bool ParseVarCompletionPrefix_(const std::string &prefix,
-                               varsetkn::VarRef *out_ref) {
+                               AMDomain::var::VarRef *out_ref) {
   if (!out_ref || prefix.empty() || prefix.front() != '$') {
     return false;
   }
@@ -102,9 +107,9 @@ bool ParseVarCompletionPrefix_(const std::string &prefix,
     return true;
   }
   size_t end = 0;
-  varsetkn::VarRef ref{};
-  if (!varsetkn::ParseVarRefAt(prefix, 0, prefix.size(), true, true, &end,
-                               &ref) ||
+  AMDomain::var::VarRef ref{};
+  if (!AMDomain::var::ParseVarRefAt(prefix, 0, prefix.size(), true, true, &end,
+                                    &ref) ||
       !ref.valid || end != prefix.size()) {
     return false;
   }
@@ -143,7 +148,7 @@ bool ParseVarZonePrefix_(const std::string &prefix, std::string *out_prefix,
  */
 AMInterface::style::StyleIndex
 ZoneStyleKey_(const std::string &zone, bool domain_exists, bool host_exists) {
-  if (domain_exists || zone == varsetkn::kPublic) {
+  if (domain_exists || zone == AMDomain::var::kPublic) {
     return AMInterface::style::StyleIndex::Nickname;
   }
   if (host_exists) {
@@ -159,25 +164,29 @@ ZoneStyleKey_(const std::string &zone, bool domain_exists, bool host_exists) {
 AMCompletionCollectResult
 AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   AMCompletionCollectResult result;
+  const auto *runtime = runtime_.get();
+  if (!runtime) {
+    return result;
+  }
   const std::string prefix = ctx.token_prefix;
 
   if (HasTarget(ctx, AMCompletionTarget::VariableName)) {
-    varsetkn::VarRef prefix_ref{};
+    AMDomain::var::VarRef prefix_ref{};
     if (!ParseVarCompletionPrefix_(prefix, &prefix_ref)) {
       return result;
     }
 
     std::vector<VarInfo> items;
     if (prefix_ref.explicit_domain) {
-      items = Runtime::ListVarsByDomain(prefix_ref.domain);
+      items = runtime->ListVarsByDomain(prefix_ref.domain);
     } else {
-      const std::string current_domain = Runtime::CurrentVarDomain();
+      const std::string current_domain = runtime->CurrentVarDomain();
       std::unordered_map<std::string, VarInfo> by_name;
-      auto private_vars = Runtime::ListVarsByDomain(current_domain);
+      auto private_vars = runtime->ListVarsByDomain(current_domain);
       for (const auto &item : private_vars) {
         by_name[item.varname] = item;
       }
-      auto public_vars = Runtime::ListVarsByDomain(varsetkn::kPublic);
+      auto public_vars = runtime->ListVarsByDomain(AMDomain::var::kPublic);
       for (const auto &item : public_vars) {
         if (by_name.find(item.varname) == by_name.end()) {
           by_name[item.varname] = item;
@@ -202,11 +211,11 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     const std::string name_prefix = prefix_ref.varname;
     for (const auto &match : BuildGeneralMatch(keys, name_prefix)) {
       const auto &item = items[match.index];
-      varsetkn::VarRef candidate_ref = prefix_ref;
+      AMDomain::var::VarRef candidate_ref = prefix_ref;
       candidate_ref.varname = item.varname;
       AMCompletionCandidate candidate;
-      candidate.insert_text = varsetkn::BuildVarToken(candidate_ref, true);
-      candidate.display = Runtime::Format(
+      candidate.insert_text = AMDomain::var::BuildVarToken(candidate_ref, true);
+      candidate.display = runtime->Format(
           candidate.insert_text, AMInterface::style::StyleIndex::PublicVarname);
       candidate.help =
           AMStr::fmt("[{}] {}", item.domain, RenderVarValue_(item.varvalue));
@@ -249,15 +258,15 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       zones.push_back({zone, domain_exists, host_exists});
     };
 
-    const auto domains = Runtime::ListVarDomains();
+    const auto domains = runtime->ListVarDomains();
     for (const auto &domain : domains) {
-      append_zone(domain, true, Runtime::HostExists(domain));
+      append_zone(domain, true, runtime->HostExists(domain));
     }
-    const auto hosts = Runtime::ListHostNames();
+    const auto hosts = runtime->ListHostNames();
     for (const auto &host : hosts) {
-      append_zone(host, Runtime::HasVarDomain(host), true);
+      append_zone(host, runtime->HasVarDomain(host), true);
     }
-    append_zone(varsetkn::kPublic, true, true);
+    append_zone(AMDomain::var::kPublic, true, true);
 
     std::vector<std::string> keys;
     keys.reserve(zones.size());
@@ -269,17 +278,19 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       const auto &item = zones[match.index];
       AMCompletionCandidate candidate;
       if (mode == VarZonePrefixMode::Dollar) {
-        candidate.insert_text =
-            (item.zone == varsetkn::kPublic) ? "$:" : ("$" + item.zone + ":");
+        candidate.insert_text = (item.zone == AMDomain::var::kPublic)
+                                    ? "$:"
+                                    : ("$" + item.zone + ":");
       } else if (mode == VarZonePrefixMode::BracedDollar) {
-        candidate.insert_text =
-            (item.zone == varsetkn::kPublic) ? "${:" : ("${" + item.zone + ":");
+        candidate.insert_text = (item.zone == AMDomain::var::kPublic)
+                                    ? "${:"
+                                    : ("${" + item.zone + ":");
       } else {
         candidate.insert_text = item.zone;
       }
       const AMInterface::style::StyleIndex style_index =
           ZoneStyleKey_(item.zone, item.domain_exists, item.host_exists);
-      candidate.display = Runtime::Format(item.zone, style_index);
+      candidate.display = runtime->Format(item.zone, style_index);
       candidate.kind = AMCompletionKind::VarZone;
       candidate.help.clear();
       candidate.score = match.score_bias;
@@ -301,7 +312,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       }
     }
 
-    std::vector<HostLikeNameInfo> names = CollectHostLikeNames_();
+    std::vector<HostLikeNameInfo> names = CollectHostLikeNames_(runtime);
 
     std::vector<std::string> keys;
     keys.reserve(names.size());
@@ -315,9 +326,10 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.insert_text =
           path_nickname_context ? name_item.name + "@" : name_item.name;
       const AMInterface::style::StyleIndex style_index =
-          name_item.created ? AMInterface::style::StyleIndex::Nickname
-                            : AMInterface::style::StyleIndex::UnestablishedNickname;
-      candidate.display = Runtime::Format(name_item.name, style_index);
+          name_item.created
+              ? AMInterface::style::StyleIndex::Nickname
+              : AMInterface::style::StyleIndex::UnestablishedNickname;
+      candidate.display = runtime->Format(name_item.name, style_index);
       candidate.kind = AMCompletionKind::ClientName;
       const int uncreated_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + uncreated_bias;
@@ -338,7 +350,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
         host_prefix = prefix.substr(0, at_pos);
       }
     }
-    std::vector<HostLikeNameInfo> names = CollectHostLikeNames_();
+    std::vector<HostLikeNameInfo> names = CollectHostLikeNames_(runtime);
     std::vector<std::string> keys;
     keys.reserve(names.size());
     for (const auto &item : names) {
@@ -350,9 +362,10 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.insert_text =
           path_nickname_context ? name_item.name + "@" : name_item.name;
       const AMInterface::style::StyleIndex style_index =
-          name_item.created ? AMInterface::style::StyleIndex::Nickname
-                            : AMInterface::style::StyleIndex::UnestablishedNickname;
-      candidate.display = Runtime::Format(name_item.name, style_index);
+          name_item.created
+              ? AMInterface::style::StyleIndex::Nickname
+              : AMInterface::style::StyleIndex::UnestablishedNickname;
+      candidate.display = runtime->Format(name_item.name, style_index);
       candidate.kind = AMCompletionKind::HostNickname;
       const int uncreated_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + uncreated_bias;
@@ -366,9 +379,9 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
   if (HasTarget(ctx, AMCompletionTarget::HostAttr)) {
     std::vector<std::string> fields = {
-        "nickname",    "hostname",   "username",  "port",      "protocol",
-        "password",    "buffer_size", "compression", "cmd_prefix", "wrap_cmd",
-        "keyfile",     "trash_dir",  "login_dir"};
+        "nickname", "hostname",    "username",    "port",       "protocol",
+        "password", "buffer_size", "compression", "cmd_prefix", "wrap_cmd",
+        "keyfile",  "trash_dir",   "login_dir"};
     for (const auto &match : BuildGeneralMatch(fields, prefix)) {
       const std::string &field = fields[match.index];
       AMCompletionCandidate candidate;
@@ -385,7 +398,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   }
 
   if (HasTarget(ctx, AMCompletionTarget::TaskId)) {
-    auto ids = Runtime::ListTaskIds();
+    auto ids = runtime->ListTaskIds();
     std::vector<std::string> keys = ids;
     for (const auto &match : BuildGeneralMatch(keys, prefix)) {
       const std::string &id = ids[match.index];
@@ -418,4 +431,3 @@ void AMInternalSearchEngine::SortCandidates(
                      return lhs.insert_text < rhs.insert_text;
                    });
 }
-

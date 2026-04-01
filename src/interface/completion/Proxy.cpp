@@ -31,8 +31,14 @@ AMCompletionSource MapCompletionSource_(ic_completion_source_t source) {
 /**
  * @brief Construct completer facade.
  */
-AMCompleter::AMCompleter() {
-  engine_ = std::make_unique<AMCompleteEngine>();
+AMCompleter::AMCompleter(
+    AMInterface::parser::CommandNode *command_tree,
+    AMInterface::parser::TokenTypeAnalyzer *token_type_analyzer,
+    std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
+    AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry) {
+  engine_ = std::make_unique<AMCompleteEngine>(
+      command_tree, token_type_analyzer, std::move(runtime),
+      interactive_event_registry);
   SetActive(this);
 }
 

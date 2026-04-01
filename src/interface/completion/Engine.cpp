@@ -1,14 +1,11 @@
 #include "interface/completion/Engine.hpp"
-#include "interface/completion/Proxy.hpp"
-#include "interface/cli/InteractiveLoop.hpp"
-#include "interface/adapters/ApplicationAdapters.hpp"
 #include "Isocline/isocline.h"
+#include "interface/cli/InteractiveEventRegistry.hpp"
+#include "interface/completion/Proxy.hpp"
 #include <algorithm>
 #include <chrono>
 #include <climits>
 #include <iterator>
-
-namespace Runtime = AMInterface::ApplicationAdapters::Runtime;
 
 namespace {
 /**
@@ -163,15 +160,13 @@ void AMCompleteEngine::HandleCompletion(ic_completion_env_t *cenv,
  * @brief Load completion configuration from settings.
  */
 void AMCompleteEngine::LoadConfig() {
-  int max_items =
-      Runtime::ResolveSettingInt({"Style", "CompleteMenu", "maxnum"}, -1);
+  int max_items = 999;
   if (max_items <= 0) {
     max_items = -1;
   }
   args_.complete_max_items = max_items;
 
-  int max_rows = Runtime::ResolveSettingInt(
-      {"Style", "CompleteMenu", "maxrows_perpage"}, 9);
+  int max_rows = 9;
   if (max_rows == 0) {
     max_rows = 9;
   }
@@ -182,8 +177,7 @@ void AMCompleteEngine::LoadConfig() {
 
   auto read_bool = [](const std::vector<std::string> &path,
                       bool default_value) {
-    std::string value = Runtime::ResolveSettingString(
-        path, default_value ? "true" : "false");
+    std::string value = "false";
     value = AMStr::lowercase(AMStr::Strip(value));
     if (value == "true" || value == "1" || value == "yes" || value == "on") {
       return true;
@@ -198,24 +192,16 @@ void AMCompleteEngine::LoadConfig() {
       read_bool({"Style", "CompleteMenu", "number_pick"}, true);
   args_.complete_auto_fill =
       read_bool({"Style", "CompleteMenu", "auto_fillin"}, true);
-  args_.complete_select_sign = Runtime::ResolveSettingString(
-      {"Style", "CompleteMenu", "item_select_sign"}, "");
-  args_.complete_order_num_style =
-      NormalizeStyleForIc_(Runtime::ResolveSettingString(
-          {"Style", "CompleteMenu", "order_num_style"}, ""));
-  args_.complete_help_style =
-      NormalizeStyleForIc_(
-          Runtime::ResolveSettingString({"Style", "CompleteMenu", "help_style"},
-                                        ""));
+  args_.complete_select_sign = "*";
+  args_.complete_order_num_style = "";
+  args_.complete_help_style = "";
 
-  args_.complete_delay_ms = Runtime::ResolveSettingInt(
-      {"Style", "CompleteMenu", "complete_delay_ms"}, 100);
+  args_.complete_delay_ms = 100;
   if (args_.complete_delay_ms < 0) {
     args_.complete_delay_ms = 0;
   }
 
-  int async_workers =
-      Runtime::ResolveSettingInt({"Style", "CompleteMenu", "async_workers"}, 2);
+  int async_workers = 2;
   if (async_workers < 1) {
     async_workers = 1;
   }
@@ -223,12 +209,10 @@ void AMCompleteEngine::LoadConfig() {
   const bool worker_changed = args_.complete_async_workers != worker_count;
   args_.complete_async_workers = worker_count;
 
-  std::string command_tag =
-      Runtime::ResolveSettingString({"Style", "InputHighlight", "command"}, "");
+  std::string command_tag = "";
   args_.input_tag_command = NormalizeStyleTag_(command_tag);
 
-  std::string module_tag =
-      Runtime::ResolveSettingString({"Style", "InputHighlight", "module"}, "");
+  std::string module_tag = "";
   args_.input_tag_module = NormalizeStyleTag_(module_tag);
 
   if (worker_changed) {
@@ -357,12 +341,13 @@ void AMCompleteEngine::RestartAsyncWorkers_() {
  * PromptCore return.
  */
 void AMCompleteEngine::EnsurePromptReturnCancelHookRegistered_() {
-  if (prompt_return_cancel_hook_registered_) {
+  if (prompt_return_cancel_hook_registered_ ||
+      interactive_event_registry_ == nullptr) {
     return;
   }
   prompt_return_cancel_callback_ = [this]() { CancelPendingAsyncRequests_(); };
-  auto &registry = AMInteractiveEventRegistry::Instance();
-  registry.RegisterOnCorePromptReturn(&prompt_return_cancel_callback_);
+  interactive_event_registry_->RegisterOnCorePromptReturn(
+      &prompt_return_cancel_callback_);
   prompt_return_cancel_hook_registered_ = true;
 }
 
@@ -524,4 +509,3 @@ void AMCompleteEngine::AsyncWorkerLoop_() {
     (void)ic_request_completion_menu_async();
   }
 }
-

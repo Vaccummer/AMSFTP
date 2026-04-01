@@ -33,12 +33,12 @@ file(GLOB_RECURSE AMSFTP_SOURCES CONFIGURE_DEPENDS
   "${PROJECT_SOURCE_DIR}/src/*.cc"
   "${PROJECT_SOURCE_DIR}/src/*.cxx"
 )
+# Exclude legacy trees from active build.
+list(FILTER AMSFTP_SOURCES EXCLUDE REGEX ".*/legacy/.*\\.(cpp|cc|cxx)$")
+list(FILTER AMSFTP_SOURCES EXCLUDE REGEX ".*/\\.legacy/.*\\.(cpp|cc|cxx)$")
 # Exclude deprecated implementation slices from active build.
 list(FILTER AMSFTP_SOURCES EXCLUDE REGEX ".*/dep/.*\\.(cpp|cc|cxx)$")
 list(FILTER AMSFTP_SOURCES EXCLUDE REGEX ".*/.*\\.dep\\.(cpp|cc|cxx)$")
-# Temporary completion cutover: exclude legacy searchers.
-list(FILTER AMSFTP_SOURCES EXCLUDE REGEX
-  ".*/src/interface/completion/search/.*\\.(cpp|cc|cxx)$")
 list(APPEND AMSFTP_SOURCES
   "${PROJECT_SOURCE_DIR}/src/third_party/Isocline/isocline.c"
 )

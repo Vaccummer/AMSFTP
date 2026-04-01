@@ -8,6 +8,10 @@
 #include <iterator>
 #include <unordered_set>
 
+using AMInterface::parser::AMCommandArgSemantic;
+using AMInterface::parser::CommandNode;
+using AMInterface::parser::TokenTypeAnalyzer;
+
 namespace {
 /**
  * @brief Unescape backtick-escaped sequences.
@@ -179,12 +183,12 @@ bool ParseShortcutVarToken_(const std::string &raw_token,
   if (trimmed.empty()) {
     return false;
   }
-  varsetkn::VarRef ref{};
-  if (!varsetkn::ParseVarToken(trimmed, &ref) || !ref.valid) {
+  AMDomain::var::VarRef ref{};
+  if (!AMDomain::var::ParseVarToken(trimmed, &ref) || !ref.valid) {
     return false;
   }
   if (normalized_token) {
-    *normalized_token = varsetkn::BuildVarToken(ref);
+    *normalized_token = AMDomain::var::BuildVarToken(ref);
   }
   return true;
 }
@@ -196,13 +200,13 @@ bool ParseShortcutVarToken_(const std::string &raw_token,
  * `$name`, `$zone:name`, `${name`, `${zone:name`.
  */
 bool ParseLeadingVarRef_(const std::string &text, size_t *out_end,
-                         varsetkn::VarRef *out_ref) {
+                         AMDomain::var::VarRef *out_ref) {
   if (text.empty() || text.front() != '$') {
     return false;
   }
   size_t parsed_end = 0;
-  varsetkn::VarRef ref{};
-  if (!varsetkn::ParseVarRefAt(text, 0, text.size(), true, true, &parsed_end,
+  AMDomain::var::VarRef ref{};
+  if (!AMDomain::var::ParseVarRefAt(text, 0, text.size(), true, true, &parsed_end,
                                &ref) ||
       !ref.valid) {
     return false;
@@ -331,7 +335,10 @@ VarShortcutMode DetectVarShortcutMode_(const AMCompletionContext &ctx) {
  */
 CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
   CommandState state;
-  CommandNode &command_tree = CommandNode::Instance();
+  const CommandNode *command_tree = ctx.command_tree;
+  if (!command_tree) {
+    return state;
+  }
   std::vector<std::string> before;
   before.reserve(ctx.token_index);
 
@@ -353,20 +360,20 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
       continue;
     }
     if (state.command_path.empty()) {
-      if (command_tree.IsModule(text)) {
+      if (command_tree->IsModule(text)) {
         state.module = text;
         state.has_module = true;
         state.command_path = text;
         state.command_tokens = i + 1;
-        node = command_tree.FindNode(state.command_path);
+        node = command_tree->FindNode(state.command_path);
         continue;
       }
-      if (command_tree.IsTopCommand(text)) {
+      if (command_tree->IsTopCommand(text)) {
         state.cmd = text;
         state.has_cmd = true;
         state.command_path = text;
         state.command_tokens = i + 1;
-        node = command_tree.FindNode(state.command_path);
+        node = command_tree->FindNode(state.command_path);
         continue;
       }
       state.unknown_before_command = true;
@@ -378,7 +385,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
       state.cmd = state.command_path;
       state.has_cmd = true;
       state.command_tokens = i + 1;
-      node = command_tree.FindNode(state.command_path);
+      node = command_tree->FindNode(state.command_path);
       continue;
     }
 
@@ -441,7 +448,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
         ++state.arg_index;
         continue;
       }
-      const auto value_rule = command_tree.ResolveOptionValueRule(
+      const auto value_rule = command_tree->ResolveOptionValueRule(
           state.command_path, option_name, '\0', 0);
       if (eq_pos != std::string::npos) {
         if (!value_rule.has_value()) {
@@ -477,7 +484,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
           break;
         }
         const auto rule =
-            command_tree.ResolveOptionValueRule(state.command_path, "", c, 0);
+            command_tree->ResolveOptionValueRule(state.command_path, "", c, 0);
         if (rule.has_value()) {
           any_value_rule = true;
         }
@@ -490,7 +497,7 @@ CommandState ResolveCommandState_(const AMCompletionContext &ctx) {
       }
 
       if (body.size() == 1) {
-        const auto rule = command_tree.ResolveOptionValueRule(
+        const auto rule = command_tree->ResolveOptionValueRule(
             state.command_path, "", body[0], 0);
         state.options.push_back(std::string("-") + body[0]);
         if (rule.has_value()) {
@@ -553,8 +560,8 @@ MapSemanticToTarget_(AMCommandArgSemantic semantic) {
  * @brief Find the token that owns the cursor.
  */
 bool AMCompleteEngine::FindTokenAtCursor_(
-    const std::vector<AMTokenTypeAnalyzer::AMToken> &tokens, size_t cursor,
-    AMTokenTypeAnalyzer::AMToken *out, size_t *out_index) const {
+    const std::vector<TokenTypeAnalyzer::AMToken> &tokens, size_t cursor,
+    TokenTypeAnalyzer::AMToken *out, size_t *out_index) const {
   for (size_t i = 0; i < tokens.size(); ++i) {
     const auto &tok = tokens[i];
     const size_t begin = tok.quoted ? tok.content_start : tok.start;
@@ -580,13 +587,14 @@ bool AMCompleteEngine::FindTokenAtCursor_(
 AMCompletionContext
 AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   AMCompletionContext ctx;
-  CommandNode &command_tree = CommandNode::Instance();
+  const CommandNode *command_tree = command_tree_;
   ctx.input = request.input;
   ctx.cursor = request.cursor;
   ctx.request_id = request.request_id;
   ctx.source = (request.source == AMCompletionSource::Unknown)
                    ? AMCompletionSource::Tab
                    : request.source;
+  ctx.command_tree = command_tree;
   ctx.completion_args = &args_;
 
   std::string trimmed = AMStr::Strip(request.input);
@@ -594,10 +602,14 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     ctx.targets = {AMCompletionTarget::Disabled};
     return ctx;
   }
+  if (!token_type_analyzer_) {
+    ctx.targets = {AMCompletionTarget::Disabled};
+    return ctx;
+  }
 
-  const std::vector<AMTokenTypeAnalyzer::AMToken> all_tokens =
-      AMTokenTypeAnalyzer::SplitToken(request.input);
-  AMTokenTypeAnalyzer::AMToken token;
+  const std::vector<TokenTypeAnalyzer::AMToken> all_tokens =
+      token_type_analyzer_->SplitToken(request.input);
+  TokenTypeAnalyzer::AMToken token;
   size_t token_index = all_tokens.size();
   const bool has_token =
       FindTokenAtCursor_(all_tokens, request.cursor, &token, &token_index);
@@ -708,21 +720,22 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
 
   CommandState state = ResolveCommandState_(ctx);
   const std::string current_prefix = ctx.has_token ? ctx.token_prefix : "";
-  if (!current_prefix.empty() && ctx.token_index == state.command_tokens) {
+  if (command_tree && !current_prefix.empty() &&
+      ctx.token_index == state.command_tokens) {
     if (!state.has_module && !state.has_cmd) {
-      if (command_tree.IsModule(current_prefix)) {
+      if (command_tree->IsModule(current_prefix)) {
         state.module = current_prefix;
         state.has_module = true;
         state.command_path = current_prefix;
         state.command_tokens = ctx.token_index + 1;
-      } else if (command_tree.IsTopCommand(current_prefix)) {
+      } else if (command_tree->IsTopCommand(current_prefix)) {
         state.cmd = current_prefix;
         state.has_cmd = true;
         state.command_path = current_prefix;
         state.command_tokens = ctx.token_index + 1;
       }
     } else if (state.has_module && !state.has_cmd) {
-      const auto *node = command_tree.FindNode(state.command_path);
+      const auto *node = command_tree->FindNode(state.command_path);
       if (node &&
           node->subcommands.find(current_prefix) != node->subcommands.end()) {
         state.command_path += " " + current_prefix;
@@ -749,8 +762,12 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     ctx.targets = {AMCompletionTarget::Subcommand};
     return ctx;
   }
+  if (!command_tree) {
+    ctx.targets = {AMCompletionTarget::Disabled};
+    return ctx;
+  }
 
-  const auto *cmd_node = command_tree.FindNode(state.command_path);
+  const auto *cmd_node = command_tree->FindNode(state.command_path);
   const bool cursor_is_bare_dashdash =
       ctx.has_token && ctx.token_prefix == "--";
   const bool cursor_is_long_option_prefix =
@@ -777,7 +794,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
         cmd_node && cmd_node->long_options.find(cursor_long_name) !=
                         cmd_node->long_options.end();
     if (cursor_valid_long_option) {
-      cursor_long_value_rule = command_tree.ResolveOptionValueRule(
+      cursor_long_value_rule = command_tree->ResolveOptionValueRule(
           state.command_path, cursor_long_name, '\0', 0);
       if (cursor_long_has_inline_value && !cursor_long_value_rule.has_value()) {
         cursor_valid_long_option = false;
@@ -804,7 +821,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
           break;
         }
         const auto rule =
-            command_tree.ResolveOptionValueRule(state.command_path, "", c, 0);
+            command_tree->ResolveOptionValueRule(state.command_path, "", c, 0);
         if (rule.has_value()) {
           any_value_rule = true;
         }
@@ -857,8 +874,8 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
     return ctx;
   }
   if (!semantic.has_value() && !state.command_path.empty()) {
-    semantic = command_tree.ResolvePositionalSemantic(state.command_path,
-                                                      state.arg_index);
+    semantic = command_tree->ResolvePositionalSemantic(state.command_path,
+                                                       state.arg_index);
   }
 
   const auto semantic_target =

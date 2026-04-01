@@ -1,6 +1,7 @@
 #pragma once
 #include "foundation/core/DataClass.hpp"
 #include "interface/completion/Engine.hpp"
+#include <memory>
 #include <chrono>
 #include <functional>
 #include <list>
@@ -8,7 +9,12 @@
 #include <unordered_map>
 #include <vector>
 
-class CommandNode;
+namespace AMInterface::cli {
+class AMInteractiveEventRegistry;
+}
+namespace AMInterface::completion {
+class ICompletionRuntime;
+}
 
 /**
  * @brief Command and option completion search engine.
@@ -32,7 +38,7 @@ public:
                       std::vector<AMCompletionCandidate> &items) override;
 
 private:
-  using CommandNode = ::CommandNode;
+  using CommandNode = AMInterface::parser::CommandNode;
 
   /**
    * @brief Build styled command/module display text.
@@ -59,7 +65,10 @@ public:
   /**
    * @brief Construct internal-value search engine.
    */
-  AMInternalSearchEngine() = default;
+  explicit AMInternalSearchEngine(
+      std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime =
+          nullptr)
+      : runtime_(std::move(runtime)) {}
 
   /**
    * @brief Collect internal-value candidates.
@@ -74,6 +83,8 @@ public:
                       std::vector<AMCompletionCandidate> &items) override;
 
 private:
+  std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime_ =
+      nullptr;
 };
 
 /**
@@ -84,7 +95,10 @@ public:
   /**
    * @brief Construct path search engine.
    */
-  AMPathSearchEngine() = default;
+  explicit AMPathSearchEngine(
+      std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime =
+          nullptr)
+      : runtime_(std::move(runtime)) {}
 
   /**
    * @brief Collect path candidates or async path requests.
@@ -136,6 +150,8 @@ public:
    * @brief Register temp-cache clear callbacks for PromptCore return/exit.
    */
   void RegisterCacheClearOnCorePromptReturn();
+  void SetInteractiveEventRegistry(
+      AMInterface::cli::AMInteractiveEventRegistry *registry);
 
 private:
   /**
@@ -242,6 +258,10 @@ private:
   std::unordered_map<std::string,
                      std::unordered_map<std::string, TempCacheEntry>>
       temp_cache_;
+  std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime_ =
+      nullptr;
+  AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry_ =
+      nullptr;
   std::function<void()> temp_cache_clear_callback_;
   bool temp_cache_hook_registered_ = false;
 };
