@@ -5,7 +5,11 @@
 #include "foundation/core/DataClass.hpp"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <deque>
+#include <future>
+#include <functional>
 #include <list>
 #include <memory>
 #include <mutex>
@@ -30,6 +34,13 @@ using ClientHandle = std::shared_ptr<AMDomain::client::IClientPort>;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 using TransferTask = AMDomain::transfer::TransferTask;
 
+struct TransferBufferPolicy {
+  size_t default_buffer_size =
+      AMDomain::client::ClientService::AMDefaultRemoteBufferSize;
+  size_t min_buffer_size = AMDomain::client::ClientService::AMMinBufferSize;
+  size_t max_buffer_size = AMDomain::client::ClientService::AMMaxBufferSize;
+};
+
 class StreamRingBuffer {
 private:
   /**
@@ -42,6 +53,8 @@ private:
   size_t capacity_ = 0;
   std::atomic<size_t> head_{0}; // Consumer read position
   std::atomic<size_t> tail_{0}; // Producer write position
+  mutable std::mutex wait_mtx_;
+  mutable std::condition_variable wait_cv_;
 
 public:
   /**
@@ -87,6 +100,7 @@ public:
    */
   void commit_write(size_t len) {
     tail_.fetch_add(len, std::memory_order_release);
+    wait_cv_.notify_all();
   }
 
   /**
@@ -107,6 +121,7 @@ public:
    */
   void commit_read(size_t len) {
     head_.fetch_add(len, std::memory_order_release);
+    wait_cv_.notify_all();
   }
 
   /**
@@ -123,11 +138,42 @@ public:
    * @brief Get the effective capacity of the buffer.
    */
   size_t get_capacity() const { return capacity_; }
+
+  void Reset() {
+    head_.store(0, std::memory_order_relaxed);
+    tail_.store(0, std::memory_order_relaxed);
+    NotifyAll();
+  }
+
+  void NotifyAll() const { wait_cv_.notify_all(); }
+
+  bool WaitWritable(const std::function<bool()> &should_stop = {},
+                    int wait_ms = 50) const {
+    if (writable() > 0) {
+      return true;
+    }
+    std::unique_lock<std::mutex> lock(wait_mtx_);
+    wait_cv_.wait_for(lock, std::chrono::milliseconds(std::max(1, wait_ms)),
+                      [&]() { return writable() > 0 || (should_stop && should_stop()); });
+    return writable() > 0;
+  }
+
+  bool WaitReadable(const std::function<bool()> &should_stop = {},
+                    int wait_ms = 50) const {
+    if (available() > 0) {
+      return true;
+    }
+    std::unique_lock<std::mutex> lock(wait_mtx_);
+    wait_cv_.wait_for(lock, std::chrono::milliseconds(std::max(1, wait_ms)),
+                      [&]() { return available() > 0 || (should_stop && should_stop()); });
+    return available() > 0;
+  }
 };
 
 struct TransferRuntimeProgress {
   TaskHandle task_info = nullptr;
   std::shared_ptr<StreamRingBuffer> ring_buffer = nullptr;
+  std::atomic<bool> io_abort{false};
   double cb_time = 0.0;
   explicit TransferRuntimeProgress(TaskHandle task_info = nullptr);
   void CallInnerCallback(bool force = false);
@@ -139,11 +185,37 @@ class TransferExecutionEngine final : NonCopyableNonMovable {
 public:
   using ClientHandle = AMInfra::transfer::ClientHandle;
 
-  explicit TransferExecutionEngine();
+  explicit TransferExecutionEngine(
+      const TransferBufferPolicy &buffer_policy = {});
   ~TransferExecutionEngine() override;
 
+  void ExecuteTask(const TaskHandle &task_info);
+
   ECM TransferSignleFile(ClientHandle src_client, ClientHandle dst_client,
-                         TransferRuntimeProgress &runtime_progress) const;
+                         TransferRuntimeProgress &runtime_progress);
+
+private:
+  struct ReadJob {
+    ClientHandle src_client = nullptr;
+    TaskHandle task_info = nullptr;
+    TransferRuntimeProgress *runtime_progress = nullptr;
+    std::promise<ECM> promise = {};
+  };
+
+  void ReadLoop_();
+  std::future<ECM> EnqueueReadJob_(ClientHandle src_client,
+                                   const TaskHandle &task_info,
+                                   TransferRuntimeProgress *runtime_progress);
+  [[nodiscard]] size_t ResolveTaskBufferSize_(
+      const TaskHandle &task_info) const;
+
+private:
+  TransferBufferPolicy buffer_policy_ = {};
+  mutable std::mutex read_queue_mtx_ = {};
+  std::condition_variable read_queue_cv_ = {};
+  std::deque<ReadJob> read_queue_ = {};
+  std::thread read_thread_ = {};
+  std::atomic<bool> read_running_{true};
 };
 
 class TransferExecutionPool final
@@ -158,7 +230,8 @@ public:
   using ClientHandle = AMInfra::transfer::ClientHandle;
   using TransferClientContainer = AMInfra::transfer::TransferClientContainer;
 
-  explicit TransferExecutionPool();
+  explicit TransferExecutionPool(
+      const AMDomain::transfer::TransferManagerArg &arg = {});
   ~TransferExecutionPool() override;
 
   ECM Shutdown(int timeout_ms = 5000) override;
@@ -166,7 +239,7 @@ public:
 
   std::unordered_map<size_t, bool> GetThreadIDs() const override;
 
-  ECM Submit(TaskHandle task_info, TransferClientContainer clients) override;
+  ECM Submit(TaskHandle task_info) override;
 
   [[nodiscard]] std::optional<TaskStatus>
   GetStatus(const TaskId &id) const override;
@@ -214,8 +287,6 @@ private:
 
   void WorkerLoop(size_t thread_index);
 
-  void ExecuteTask(const TaskHandle &task_info);
-
   std::unordered_map<TaskId, TaskHandle> GetRegistryCopy() const;
 
   std::atomic<bool> running_{true};
@@ -237,7 +308,8 @@ private:
   std::unordered_set<TaskId> conducting_tasks_;
   std::vector<TaskId> conducting_by_thread_;
   std::vector<TaskHandle> conducting_infos_;
-  TransferExecutionEngine transfer_engine_ = TransferExecutionEngine();
+  AMDomain::transfer::TransferManagerArg manager_arg_ = {};
+  std::vector<std::unique_ptr<TransferExecutionEngine>> engines_ = {};
   std::atomic<bool> is_deconstruct{false};
 };
 } // namespace AMInfra::transfer

@@ -16,8 +16,7 @@ public:
   [[nodiscard]] virtual std::unordered_map<size_t, bool>
   GetThreadIDs() const = 0;
 
-  virtual ECM Submit(std::shared_ptr<TaskInfo> task_info,
-                     TransferClientContainer clients) = 0;
+  virtual ECM Submit(std::shared_ptr<TaskInfo> task_info) = 0;
 
   [[nodiscard]] virtual std::optional<TaskStatus>
   GetStatus(const TaskInfo::ID &id) const = 0;
@@ -56,5 +55,6 @@ public:
   Terminate(const TaskInfo::ID &id, int timeout_ms = 5000) = 0;
 };
 
-std::unique_ptr<ITransferPoolPort> CreateTransferPoolPort();
+std::unique_ptr<ITransferPoolPort>
+CreateTransferPoolPort(const TransferManagerArg &arg = {});
 } // namespace AMDomain::transfer

@@ -522,6 +522,12 @@ public:
                            &typed->init_thread_num);
     (void)AMJson::QueryKey(options, {"TransferManager", "max_thread_num"},
                            &typed->max_thread_num);
+    (void)AMJson::QueryKey(options, {"TransferManager", "buffer_size"},
+                           &typed->buffer_size);
+    (void)AMJson::QueryKey(options, {"TransferManager", "min_buffer"},
+                           &typed->min_buffer);
+    (void)AMJson::QueryKey(options, {"TransferManager", "max_buffer"},
+                           &typed->max_buffer);
     return true;
   }
 
@@ -540,6 +546,9 @@ public:
         typed->init_thread_num;
     (*root)["Options"]["TransferManager"]["max_thread_num"] =
         typed->max_thread_num;
+    (*root)["Options"]["TransferManager"]["buffer_size"] = typed->buffer_size;
+    (*root)["Options"]["TransferManager"]["min_buffer"] = typed->min_buffer;
+    (*root)["Options"]["TransferManager"]["max_buffer"] = typed->max_buffer;
     return true;
   }
 
