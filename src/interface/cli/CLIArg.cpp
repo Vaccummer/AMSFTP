@@ -412,6 +412,90 @@ void CpArgs::reset() {
   quiet = false;
 }
 
+ECM CloneArgs::Run(const CLIServices &managers,
+                   const CliRunContext &ctx) const {
+  const std::vector<std::string> raw_srcs = {src};
+  auto build =
+      BuildTransferArgsFromCli_(managers, raw_srcs, dst, false, overwrite,
+                                false, true, false, resume);
+  if (!(build.rcm)) {
+    return build.rcm;
+  }
+
+  AMInterface::transfer::TransferRunArg arg = {};
+  arg.transfer_sets = std::move(build.transfer_sets);
+  arg.quiet = quiet;
+  arg.run_async = ctx.async;
+  arg.timeout_ms = -1;
+  arg.confirm_policy = BuildTransferConfirmPolicy_(ctx, quiet);
+  const auto component = AMDomain::client::ClientControlComponent(
+      ctx.task_control_token, arg.timeout_ms);
+  return managers.transfer_service->Transfer(arg, component);
+}
+
+void CloneArgs::reset() {
+  src.clear();
+  dst.clear();
+  overwrite = false;
+  resume = false;
+  quiet = false;
+}
+
+ECM WgetArgs::Run(const CLIServices &managers,
+                  const CliRunContext &ctx) const {
+  std::string src_token = src;
+  std::string dst_token = dst;
+  managers.var_interface_service->VSubstitutePathLike(src_token);
+  managers.var_interface_service->VSubstitutePathLike(dst_token);
+
+  AMInterface::transfer::HttpGetArg arg = {};
+  arg.src_url = AMStr::Strip(src_token);
+  if (arg.src_url.empty()) {
+    return Err(EC::InvalidArg, "", "", "wget requires one source URL");
+  }
+
+  dst_token = AMStr::Strip(dst_token);
+  bool suffix_async = false;
+  if (dst_token == "&") {
+    suffix_async = true;
+    dst_token.clear();
+  }
+  if (!dst_token.empty()) {
+    PathTarget dst_target = {};
+    ECM dst_rcm = ResolveTransferEndpoint_(managers, dst_token, &dst_target);
+    if (!(dst_rcm)) {
+      return dst_rcm;
+    }
+    arg.dst_target = std::move(dst_target);
+  }
+
+  arg.resume = resume;
+  arg.overwrite = overwrite;
+  arg.quiet = quiet;
+  arg.bear_token = bear_token;
+  arg.proxy = proxy;
+  arg.https_proxy = sproxy;
+  arg.run_async = ctx.async || suffix_async;
+  arg.timeout_ms = timeout_ms;
+  arg.confirm_policy = BuildTransferConfirmPolicy_(ctx, quiet);
+
+  const auto component = AMDomain::client::ClientControlComponent(
+      ctx.task_control_token, arg.timeout_ms);
+  return managers.transfer_service->HttpGet(arg, component);
+}
+
+void WgetArgs::reset() {
+  src.clear();
+  dst.clear();
+  bear_token.clear();
+  proxy.clear();
+  sproxy.clear();
+  timeout_ms = -1;
+  resume = false;
+  overwrite = false;
+  quiet = false;
+}
+
 ECM SftpArgs::Run(const CLIServices &managers, const CliRunContext &ctx) const {
   if (targets.empty() || targets.size() > 2) {
     return Err(EC::InvalidArg, "", "", "sftp requires user@host or nickname user@host");

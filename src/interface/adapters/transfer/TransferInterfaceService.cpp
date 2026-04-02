@@ -1,9 +1,11 @@
 #include "interface/adapters/transfer/TransferInterfaceService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
-#include "foundation/tools/path.hpp"
 #include "foundation/tools/bar.hpp"
+#include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
+#include "foundation/tools/time.hpp"
+#include "infrastructure/client/http/HTTP.hpp"
 #include "interface/style/StyleManager.hpp"
 
 #include <algorithm>
@@ -34,6 +36,43 @@ std::string NormalizePath_(const std::string &path) {
 std::string DisplayHost_(const std::string &nickname) {
   const std::string normalized = NormalizeNickname_(nickname);
   return normalized.empty() ? std::string("local") : normalized;
+}
+
+bool StartsWith_(const std::string &value, const std::string &prefix) {
+  return value.size() >= prefix.size() &&
+         std::equal(prefix.begin(), prefix.end(), value.begin());
+}
+
+bool IsHttpUrl_(const std::string &url) {
+  const std::string lower = AMStr::lowercase(AMStr::Strip(url));
+  return StartsWith_(lower, "http://") || StartsWith_(lower, "https://");
+}
+
+std::string UrlWithoutQueryFragment_(const std::string &url) {
+  const size_t query = url.find('?');
+  const size_t fragment = url.find('#');
+  size_t cut = std::string::npos;
+  if (query != std::string::npos) {
+    cut = query;
+  }
+  if (fragment != std::string::npos) {
+    cut = (cut == std::string::npos) ? fragment : std::min(cut, fragment);
+  }
+  return (cut == std::string::npos) ? url : url.substr(0, cut);
+}
+
+bool IsDirectoryUrl_(const std::string &url) {
+  const std::string clean = UrlWithoutQueryFragment_(AMStr::Strip(url));
+  return !clean.empty() && clean.back() == '/';
+}
+
+std::string UrlBasename_(const std::string &url) {
+  const std::string clean = UrlWithoutQueryFragment_(AMStr::Strip(url));
+  const size_t slash = clean.find_last_of('/');
+  if (slash == std::string::npos || slash + 1 >= clean.size()) {
+    return "";
+  }
+  return clean.substr(slash + 1);
 }
 
 std::string BuildTaskKey_(const TransferTask &task) {
@@ -85,19 +124,137 @@ size_t ResolveTransferProgressSpeedWindow_(
   return std::max<size_t>(1, window);
 }
 
-std::string BuildTransferProgressPrefix_(
-    const std::shared_ptr<TaskInfo> &task_info) {
+std::string
+BuildTransferProgressPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
   if (!task_info) {
     return "Task";
   }
-  auto *cur_task = task_info->Core.cur_task.load(std::memory_order_relaxed);
-  if (cur_task == nullptr) {
+  auto cur_task = task_info->GetCurrentTaskSnapshot();
+  if (!cur_task.has_value()) {
     return AMStr::fmt("Task {}", task_info->id);
   }
   const std::string src_host = DisplayHost_(cur_task->src_host);
   const std::string dst_host = DisplayHost_(cur_task->dst_host);
   return AMStr::fmt("{}@{} -> {}@{}", src_host, AMPath::basename(cur_task->src),
                     dst_host, AMPath::basename(cur_task->dst));
+}
+
+std::string ResolveStopLabel_(EC code) {
+  if (code == EC::OperationTimeout) {
+    return "Timeout";
+  }
+  return "Terminated";
+}
+
+int64_t ResolveElapsedMs_(const std::shared_ptr<TaskInfo> &task_info) {
+  if (!task_info) {
+    return 0;
+  }
+  const double start_s = task_info->Time.start.load(std::memory_order_relaxed);
+  if (start_s <= 0.0) {
+    return 0;
+  }
+  double finish_s = task_info->Time.finish.load(std::memory_order_relaxed);
+  if (finish_s <= 0.0 || finish_s < start_s) {
+    finish_s = AMTime::seconds();
+  }
+  const int64_t elapsed_ms =
+      static_cast<int64_t>((finish_s - start_s) * 1000.0);
+  return std::max<int64_t>(0, elapsed_ms);
+}
+
+std::string FormatElapsedMs_(int64_t elapsed_ms) {
+  const int64_t total_sec = std::max<int64_t>(0, elapsed_ms / 1000);
+  const int64_t hours = total_sec / 3600;
+  const int64_t mins = (total_sec % 3600) / 60;
+  const int64_t secs = total_sec % 60;
+  const auto p2 = [](int64_t v) -> std::string {
+    if (v >= 0 && v < 10) {
+      return "0" + std::to_string(v);
+    }
+    return std::to_string(v);
+  };
+  if (hours > 0) {
+    return AMStr::fmt("{}:{}:{}", p2(hours), p2(mins), p2(secs));
+  }
+  return AMStr::fmt("{}:{}", p2(mins), p2(secs));
+}
+
+bool PrintWaitTaskResultSummary_(
+    AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
+    const std::shared_ptr<TaskInfo> &task_info, const ECM &result) {
+  if (!task_info || task_info->Set.quiet) {
+    return false;
+  }
+
+  const auto file_tasks = task_info->Core.file_tasks.lock().load();
+  const auto total_transferred =
+      task_info->Size.transferred.load(std::memory_order_relaxed);
+  const auto total_size = task_info->Size.total.load(std::memory_order_relaxed);
+
+  if (result.code == EC::Terminate || result.code == EC::OperationTimeout) {
+    const std::string msg = result.error.empty() ? result.msg() : result.error;
+    prompt_io_manager.FmtPrint("❌ {} {}/{} {}", ResolveStopLabel_(result.code),
+                               AMStr::FormatSize(total_transferred),
+                               AMStr::FormatSize(total_size), msg);
+    return true;
+  }
+
+  if (file_tasks.size() == 1) {
+    const auto &entry = file_tasks.front();
+    if (entry.rcm.code == EC::Success) {
+      prompt_io_manager.FmtPrint("✅ {}/{}",
+                                 AMStr::FormatSize(entry.transferred),
+                                 AMStr::FormatSize(entry.size));
+      return true;
+    }
+    const ECM line_rcm = (entry.rcm.code == EC::Success) ? result : entry.rcm;
+    const std::string err_msg =
+        line_rcm.error.empty() ? line_rcm.msg() : line_rcm.error;
+    prompt_io_manager.FmtPrint("❌ {} {}/{}  {}",
+                               AMStr::ToString(line_rcm.code),
+                               AMStr::FormatSize(entry.transferred),
+                               AMStr::FormatSize(entry.size), err_msg);
+    return true;
+  }
+
+  if (file_tasks.size() > 1) {
+    size_t success = 0;
+    size_t failed = 0;
+    for (const auto &entry : file_tasks) {
+      const std::string src_host = DisplayHost_(entry.src_host);
+      const std::string src_path = NormalizePath_(entry.src);
+      const bool has_size = entry.size > 0;
+      if (entry.rcm.code == EC::Success) {
+        ++success;
+        continue;
+      }
+
+      ++failed;
+      if (has_size) {
+        prompt_io_manager.FmtPrint("❌ \\[{}] {} {}", src_host, src_path,
+                                   AMStr::FormatSize(entry.size));
+      } else {
+        prompt_io_manager.FmtPrint("❌ \\[{}] {}", src_host, src_path);
+      }
+      const std::string err_msg =
+          entry.rcm.error.empty() ? entry.rcm.msg() : entry.rcm.error;
+      prompt_io_manager.FmtPrint("    {}: {}", AMStr::ToString(entry.rcm.code),
+                                 err_msg);
+    }
+
+    const std::string size_summary =
+        AMStr::fmt("{}/{}", AMStr::FormatSize(total_transferred),
+                   AMStr::FormatSize(total_size));
+    const std::string elapsed = FormatElapsedMs_(ResolveElapsedMs_(task_info));
+    prompt_io_manager.FmtPrint(
+        "Summary: {} total | {} success | {} failed | {} | {}",
+        std::to_string(file_tasks.size()), std::to_string(success),
+        std::to_string(failed), size_summary, elapsed);
+    return true;
+  }
+
+  return false;
 }
 } // namespace
 
@@ -156,7 +313,7 @@ ClientControlComponent TransferInterfaceService::ResolveControl_(
   if (component.has_value()) {
     return *component;
   }
-  return AMDomain::client::ClientControlComponent(default_control_token_, timeout_ms);
+  return {default_control_token_, timeout_ms};
 }
 
 void TransferInterfaceService::PrintTaskSummary_(
@@ -166,15 +323,13 @@ void TransferInterfaceService::PrintTaskSummary_(
   }
   prompt_io_manager_.FmtPrint(
       "Task {} [{}] files {}/{} size {}/{} result {} {}", task_info->id,
-      TaskStatusText_(task_info->GetStatus()),
-      std::to_string(
-          task_info->Size.success_filenum.load(std::memory_order_relaxed)),
-      std::to_string(task_info->Size.filenum.load(std::memory_order_relaxed)),
+      task_info->GetStatus(),
+      task_info->Size.success_filenum.load(std::memory_order_relaxed),
+      task_info->Size.filenum.load(std::memory_order_relaxed),
       AMStr::FormatSize(
           task_info->Size.transferred.load(std::memory_order_relaxed)),
       AMStr::FormatSize(task_info->Size.total.load(std::memory_order_relaxed)),
-      AMStr::ToString(task_info->GetResult().code),
-      task_info->GetResult().error);
+      task_info->GetResult().code, task_info->GetResult().error);
 }
 
 void TransferInterfaceService::PrintTaskSummaryDetailed_(
@@ -198,13 +353,31 @@ void TransferInterfaceService::PrintTaskEntries_(
   if (!task_info) {
     return;
   }
-  auto task_lock = task_info->Core.tasks.lock();
-  if (task_lock->empty()) {
+  auto dir_tasks = task_info->Core.dir_tasks.lock().load();
+  auto file_tasks = task_info->Core.file_tasks.lock().load();
+  if (dir_tasks.empty() && file_tasks.empty()) {
     prompt_io_manager_.FmtPrint("Task {} has no entries.", task_info->id);
     return;
   }
   size_t index = 1;
-  for (const auto &entry : *task_lock) {
+  if (!dir_tasks.empty()) {
+    prompt_io_manager_.FmtPrint("  [Directories]");
+  }
+  for (const auto &entry : dir_tasks) {
+    prompt_io_manager_.FmtPrint(
+        "  [{}] {}:{} {}@{} -> {}@{} size={} transferred={} overwrite={} "
+        "result={} {}",
+        std::to_string(index++), task_info->id, PathTypeText_(entry.path_type),
+        DisplayHost_(entry.src_host), NormalizePath_(entry.src),
+        DisplayHost_(entry.dst_host), NormalizePath_(entry.dst),
+        AMStr::FormatSize(entry.size), AMStr::FormatSize(entry.transferred),
+        entry.overwrite ? "true" : "false", AMStr::ToString(entry.rcm.code),
+        entry.rcm.msg());
+  }
+  if (!file_tasks.empty()) {
+    prompt_io_manager_.FmtPrint("  [Files]");
+  }
+  for (const auto &entry : file_tasks) {
     prompt_io_manager_.FmtPrint(
         "  [{}] {}:{} {}@{} -> {}@{} size={} transferred={} overwrite={} "
         "result={} {}",
@@ -253,7 +426,8 @@ ECM TransferInterfaceService::ConfirmWildcard_(
     return OK;
   }
   if (policy == TransferConfirmPolicy::DenyIfConfirmNeeded) {
-    return Err(EC::ConfigCanceled, "", "", "Transfer requires confirmation but confirm policy denied");
+    return Err(EC::ConfigCanceled, "", "",
+               "Transfer requires confirmation but confirm policy denied");
   }
   for (const auto &request : requests) {
     if (request.matches.empty()) {
@@ -291,7 +465,8 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     return Err(EC::InvalidArg, "", "", "Transfer set list is empty");
   }
 
-  std::vector<TransferTask> all_tasks = {};
+  std::vector<TransferTask> all_dir_tasks = {};
+  std::vector<TransferTask> all_file_tasks = {};
   TransferClientContainer clients = {};
   struct ScopedClientRelease_ {
     TransferClientContainer *clients = nullptr;
@@ -310,7 +485,8 @@ ECM TransferInterfaceService::BuildTaskInfo_(
       return Err(EC::Terminate, "", "", "Interrupted before task generation");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, "", "", "Timeout before task generation");
+      return Err(EC::OperationTimeout, "", "",
+                 "Timeout before task generation");
     }
 
     auto resolved_dst =
@@ -331,7 +507,9 @@ ECM TransferInterfaceService::BuildTaskInfo_(
         }
         const std::string display_host = DisplayHost_(host);
         const std::string display_path = NormalizePath_(error_path.path);
-        warnings->push_back(Err(error_rcm.code, "", "", AMStr::fmt("{}@{}: {}", display_host, display_path, error_rcm.msg())));
+        warnings->push_back(Err(error_rcm.code, "", "",
+                                AMStr::fmt("{}@{}: {}", display_host,
+                                           display_path, error_rcm.msg())));
       }
     }
 
@@ -352,26 +530,34 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     for (auto &task : build_result.data.file_tasks) {
       task.overwrite = set.overwrite;
     }
-    all_tasks.insert(all_tasks.end(), build_result.data.dir_tasks.begin(),
-                     build_result.data.dir_tasks.end());
-    all_tasks.insert(all_tasks.end(), build_result.data.file_tasks.begin(),
-                     build_result.data.file_tasks.end());
+    all_dir_tasks.insert(all_dir_tasks.end(),
+                         build_result.data.dir_tasks.begin(),
+                         build_result.data.dir_tasks.end());
+    all_file_tasks.insert(all_file_tasks.end(),
+                          build_result.data.file_tasks.begin(),
+                          build_result.data.file_tasks.end());
     nicknames.insert(DisplayHost_(resolved_dst.data.target.nickname));
     if (warnings) {
       for (const auto &warning : build_result.data.warnings) {
         warnings->push_back(
-            Err(warning.rcm.code, "", "", AMStr::fmt("{} -> {}: {}", NormalizePath_(warning.src),
+            Err(warning.rcm.code, "", "",
+                AMStr::fmt("{} -> {}: {}", NormalizePath_(warning.src),
                            NormalizePath_(warning.dst), warning.rcm.msg())));
       }
     }
   }
 
-  DedupTasks_(&all_tasks);
-  if (all_tasks.empty()) {
+  DedupTasks_(&all_dir_tasks);
+  DedupTasks_(&all_file_tasks);
+  if (all_dir_tasks.empty() && all_file_tasks.empty()) {
     return Err(EC::InvalidArg, "", "", "No transfer task generated");
   }
 
-  for (const auto &task : all_tasks) {
+  for (const auto &task : all_dir_tasks) {
+    nicknames.insert(DisplayHost_(task.src_host));
+    nicknames.insert(DisplayHost_(task.dst_host));
+  }
+  for (const auto &task : all_file_tasks) {
     nicknames.insert(DisplayHost_(task.src_host));
     nicknames.insert(DisplayHost_(task.dst_host));
   }
@@ -379,14 +565,22 @@ ECM TransferInterfaceService::BuildTaskInfo_(
   auto task_info = std::make_shared<TaskInfo>();
   task_info->id = BuildTaskId_();
   task_info->Set.quiet = arg.quiet;
-  task_info->Core.control = control;
+  int task_timeout_ms = -1;
+  if (const auto remain_ms = control.RemainingTimeMs(); remain_ms.has_value()) {
+    task_timeout_ms = static_cast<int>(*remain_ms);
+  }
+  auto task_control_token = AMDomain::client::CreateClientControlToken();
+  if (!task_control_token) {
+    return Err(EC::InvalidHandle, "", "",
+               "failed to create transfer task control token");
+  }
+  task_info->Core.control =
+      ClientControlComponent(task_control_token, task_timeout_ms);
   task_info->Set.transfer_sets =
       std::make_shared<std::vector<AMDomain::transfer::UserTransferSet>>(
           arg.transfer_sets);
-  {
-    auto tasks_lock = task_info->Core.tasks.lock();
-    tasks_lock.store(all_tasks);
-  }
+  task_info->Core.dir_tasks.lock().store(all_dir_tasks);
+  task_info->Core.file_tasks.lock().store(all_file_tasks);
   task_info->Core.clients = std::move(clients);
   scoped_client_release.commit = true;
   task_info->Core.nicknames.assign(nicknames.begin(), nicknames.end());
@@ -400,12 +594,13 @@ ECM TransferInterfaceService::WaitTask_(
     const std::shared_ptr<TaskInfo> &task_info,
     const ClientControlComponent &control) const {
   if (!task_info) {
-    return Err(EC::InvalidArg, "", "", "TaskInfo is null");
+    return {EC::InvalidArg, "", "", "TaskInfo is null"};
   }
 
   const bool show_progress = !task_info->Set.quiet;
   const int refresh_ms = ResolveTransferProgressRefreshMs_(style_service_);
-  const size_t speed_window = ResolveTransferProgressSpeedWindow_(style_service_);
+  const size_t speed_window =
+      ResolveTransferProgressSpeedWindow_(style_service_);
 
   struct ScopedRefresh_ {
     AMInterface::prompt::AMPromptIOManager *prompt = nullptr;
@@ -417,9 +612,19 @@ ECM TransferInterfaceService::WaitTask_(
     }
   } scoped_refresh{&prompt_io_manager_, false};
 
+  struct ScopedCursor_ {
+    AMInterface::prompt::AMPromptIOManager *prompt = nullptr;
+    bool hidden = false;
+    ~ScopedCursor_() {
+      if (hidden && prompt != nullptr) {
+        prompt->SetCursorVisible(true);
+      }
+    }
+  } scoped_cursor{&prompt_io_manager_, false};
+
   auto build_bar = [this, &task_info]() -> AMProgressBar {
-    const int64_t total_size =
-        static_cast<int64_t>(task_info->Size.total.load(std::memory_order_relaxed));
+    const auto total_size = static_cast<int64_t>(
+        task_info->Size.total.load(std::memory_order_relaxed));
     const std::string prefix = BuildTransferProgressPrefix_(task_info);
     if (style_service_ != nullptr) {
       return style_service_->CreateProgressBar(total_size, prefix);
@@ -428,54 +633,79 @@ ECM TransferInterfaceService::WaitTask_(
   };
 
   AMProgressBar progress_bar = build_bar();
+  std::string final_line = "";
+  std::string last_progress_line = "";
   if (show_progress) {
     progress_bar.SetSpeedWindowSize(speed_window);
+    prompt_io_manager_.SetCursorVisible(false);
+    scoped_cursor.hidden = true;
     prompt_io_manager_.RefreshBegin(1);
     scoped_refresh.active = true;
   }
 
+  auto finalize_and_return = [&](ECM rcm) -> ECM {
+    if (show_progress) {
+      progress_bar.SetTotal(
+          task_info->Size.total.load(std::memory_order_relaxed));
+      progress_bar.SetPrefix(BuildTransferProgressPrefix_(task_info));
+      progress_bar.SetProgress(
+          task_info->Size.transferred.load(std::memory_order_relaxed));
+      const std::string candidate_line = progress_bar.RenderLine();
+      if (!last_progress_line.empty() &&
+          candidate_line.size() < last_progress_line.size()) {
+        final_line = last_progress_line;
+      } else {
+        final_line = candidate_line;
+      }
+      prompt_io_manager_.RefreshRender({final_line});
+      scoped_refresh.active = false;
+      prompt_io_manager_.RefreshEnd();
+      if (!final_line.empty()) {
+        prompt_io_manager_.Print(final_line);
+      }
+    }
+    if (scoped_cursor.hidden) {
+      prompt_io_manager_.SetCursorVisible(true);
+      scoped_cursor.hidden = false;
+    }
+    const bool printed_summary =
+        PrintWaitTaskResultSummary_(prompt_io_manager_, task_info, rcm);
+    if (!printed_summary && !(rcm)) {
+      prompt_io_manager_.ErrorFormat(rcm);
+    }
+    return rcm;
+  };
+
   while (true) {
+    const auto status = task_info->GetStatus();
+    if (status == AMDomain::transfer::TaskStatus::Finished) {
+      const ECM result = task_info->GetResult();
+      return finalize_and_return(result);
+    }
+
     if (control.IsInterrupted()) {
       (void)transfer_pool_.Terminate(task_info->id, 1000);
-      return Err(EC::Terminate, "", "", "Transfer interrupted");
+      return finalize_and_return(
+          Err(EC::Terminate, "", "", "Task is terminated by user"));
     }
     if (control.IsTimeout()) {
       (void)transfer_pool_.Terminate(task_info->id, 1000);
-      return Err(EC::OperationTimeout, "", "", "Transfer timeout");
+      return finalize_and_return(
+          Err(EC::OperationTimeout, "", "", "Task timeout"));
     }
 
     if (show_progress) {
-      const int64_t total_size =
-          static_cast<int64_t>(task_info->Size.total.load(std::memory_order_relaxed));
-      const int64_t transferred = static_cast<int64_t>(
+      const auto total_size = static_cast<int64_t>(
+          task_info->Size.total.load(std::memory_order_relaxed));
+      const auto transferred = static_cast<int64_t>(
           task_info->Size.transferred.load(std::memory_order_relaxed));
       progress_bar.SetTotal(total_size);
       progress_bar.SetPrefix(BuildTransferProgressPrefix_(task_info));
       progress_bar.SetProgress(transferred);
-      prompt_io_manager_.RefreshRender({progress_bar.RenderLine()});
+      last_progress_line = progress_bar.RenderLine();
+      prompt_io_manager_.RefreshRender({last_progress_line});
     }
 
-    const auto status = task_info->GetStatus();
-    if (status == AMDomain::transfer::TaskStatus::Finished) {
-      std::string final_line;
-      if (show_progress) {
-        const int64_t total_size = static_cast<int64_t>(
-            task_info->Size.total.load(std::memory_order_relaxed));
-        const int64_t transferred = static_cast<int64_t>(
-            task_info->Size.transferred.load(std::memory_order_relaxed));
-        progress_bar.SetTotal(total_size);
-        progress_bar.SetPrefix(BuildTransferProgressPrefix_(task_info));
-        progress_bar.SetProgress(transferred);
-        final_line = progress_bar.RenderLine();
-        prompt_io_manager_.RefreshRender({final_line});
-        scoped_refresh.active = false;
-        prompt_io_manager_.RefreshEnd();
-        if (!final_line.empty()) {
-          prompt_io_manager_.Print(final_line);
-        }
-      }
-      return task_info->GetResult();
-    }
     std::this_thread::sleep_for(std::chrono::milliseconds(refresh_ms));
   }
 }
@@ -498,6 +728,9 @@ ECM TransferInterfaceService::Transfer(
 
   const ClientControlComponent control =
       ResolveControl_(component, arg.timeout_ms);
+  if (const auto &token = control.ControlToken(); token) {
+    token->ClearInterrupt();
+  }
   std::vector<WildcardConfirmRequest> confirm_requests = {};
   for (const auto &set : arg.transfer_sets) {
     for (const auto &src : set.srcs) {
@@ -531,11 +764,176 @@ ECM TransferInterfaceService::Transfer(
     return build_rcm;
   }
   if (!task_info) {
-    return Err(EC::InvalidHandle, "", "", "BuildTaskInfo returned null task");
+    return {EC::InvalidHandle, "", "", "BuildTaskInfo returned null task"};
   }
 
-  const ECM submit_rcm =
-      transfer_pool_.Submit(task_info, task_info->Core.clients);
+  const ECM submit_rcm = transfer_pool_.Submit(task_info);
+  if (!(submit_rcm)) {
+    task_info->Core.clients.ReleaseAll();
+    return submit_rcm;
+  }
+  if (arg.run_async) {
+    prompt_io_manager_.FmtPrint("Submitted task {}", task_info->id);
+    return OK;
+  }
+  return WaitTask_(task_info, control);
+}
+
+ECM TransferInterfaceService::HttpGet(
+    const HttpGetArg &arg,
+    const std::optional<ClientControlComponent> &component) const {
+  const ClientControlComponent control =
+      ResolveControl_(component, arg.timeout_ms);
+  if (const auto &token = control.ControlToken(); token) {
+    token->ClearInterrupt();
+  }
+
+  const std::string src_url = AMStr::Strip(arg.src_url);
+  const std::string src_url_lower = AMStr::lowercase(src_url);
+  if (src_url.empty()) {
+    return Err(EC::InvalidArg, "wget", "", "Source URL is empty");
+  }
+  if (!IsHttpUrl_(src_url)) {
+    return Err(EC::InvalidArg, "wget", src_url,
+               "Only http:// and https:// are supported");
+  }
+  if (IsDirectoryUrl_(src_url)) {
+    return Err(EC::NotAFile, "wget", src_url,
+               "HTTP directory URL is unsupported");
+  }
+
+  const std::string suggested_name = [&]() -> std::string {
+    const std::string name = AMStr::Strip(UrlBasename_(src_url));
+    return name.empty() ? std::string("download.bin") : name;
+  }();
+
+  auto plan_result = filesystem_service_.BuildHttpDownloadPlan(
+      arg.dst_target, suggested_name, control);
+  if (!(plan_result.rcm)) {
+    return plan_result.rcm;
+  }
+  const auto &plan = plan_result.data;
+  if (!plan.resolved_target.client) {
+    return Err(EC::InvalidHandle, "wget", src_url, "Destination client is null");
+  }
+  if (plan.final_target.is_wildcard) {
+    return Err(EC::InvalidArg, "wget", plan.final_target.path,
+               "Destination wildcard is invalid");
+  }
+
+  const bool dst_exists = plan.dst_info.has_value();
+  if (dst_exists && !arg.overwrite) {
+    if (arg.confirm_policy == TransferConfirmPolicy::DenyIfConfirmNeeded) {
+      return Err(EC::ConfigCanceled, "wget", plan.final_target.path,
+                 "Overwrite requires confirmation but denied");
+    }
+    if (arg.confirm_policy == TransferConfirmPolicy::RequireConfirm) {
+      bool canceled = false;
+      const bool confirmed = prompt_io_manager_.PromptYesNo(
+          AMStr::fmt("Destination exists: {}. Overwrite? (y/N): ",
+                     plan.final_target.path),
+          &canceled);
+      if (!confirmed || canceled) {
+        return Err(EC::ConfigCanceled, "wget", plan.final_target.path,
+                   "Overwrite canceled by user");
+      }
+    }
+  }
+
+  std::string effective_proxy = arg.proxy;
+  if (StartsWith_(src_url_lower, "https://") &&
+      !AMStr::Strip(arg.https_proxy).empty()) {
+    effective_proxy = arg.https_proxy;
+  }
+  auto [http_client_rcm, http_client] =
+      AMInfra::client::HTTP::CreateTransientHttpSourceClient(
+          src_url, effective_proxy, arg.bear_token);
+  if (!(http_client_rcm) || !http_client) {
+    return http_client_rcm;
+  }
+
+  auto src_stat = http_client->IOPort().stat({src_url, false}, control);
+  if (!(src_stat.rcm)) {
+    return src_stat.rcm;
+  }
+  if (src_stat.data.info.type != PathType::FILE) {
+    return Err(EC::NotAFile, "wget", src_url, "HTTP source is not a file");
+  }
+  if (auto *http_io =
+          dynamic_cast<AMInfra::client::HTTP::AMHTTPIOCore *>(
+              &http_client->IOPort());
+      http_io != nullptr && !http_io->HasKnownSize()) {
+    return Err(EC::OperationUnsupported, "wget", src_url,
+               "HTTP source size is unknown; Content-Length is required");
+  }
+
+  size_t resume_offset = 0;
+  if (arg.resume && dst_exists) {
+    resume_offset = plan.dst_info->size;
+    if (src_stat.data.info.size > 0 && resume_offset >= src_stat.data.info.size) {
+      resume_offset = 0;
+    } else if (auto *http_io =
+                   dynamic_cast<AMInfra::client::HTTP::AMHTTPIOCore *>(
+                       &http_client->IOPort());
+               http_io != nullptr) {
+      if (!http_io->SupportsRange()) {
+        resume_offset = 0;
+      }
+    } else {
+      resume_offset = 0;
+    }
+  }
+
+  auto task_info = std::make_shared<TaskInfo>();
+  task_info->id = BuildTaskId_();
+  task_info->Set.quiet = arg.quiet;
+  int task_timeout_ms = -1;
+  if (const auto remain_ms = control.RemainingTimeMs(); remain_ms.has_value()) {
+    task_timeout_ms = static_cast<int>(*remain_ms);
+  }
+  auto task_control_token = AMDomain::client::CreateClientControlToken();
+  if (!task_control_token) {
+    return Err(EC::InvalidHandle, "wget", src_url,
+               "failed to create transfer task control token");
+  }
+  task_info->Core.control =
+      ClientControlComponent(task_control_token, task_timeout_ms);
+
+  AMDomain::transfer::TransferTask file_task = {};
+  file_task.src = src_url;
+  file_task.src_host = AMInfra::client::HTTP::kTransientSourceNickname;
+  file_task.dst = plan.resolved_target.abs_path;
+  file_task.dst_host = plan.resolved_target.target.nickname;
+  file_task.size = src_stat.data.info.size;
+  file_task.path_type = PathType::FILE;
+  file_task.overwrite = arg.overwrite || dst_exists;
+  file_task.transferred = resume_offset;
+
+  {
+    auto dir_guard = task_info->Core.dir_tasks.lock();
+    dir_guard.store(std::vector<AMDomain::transfer::TransferTask>{});
+  }
+  {
+    auto file_guard = task_info->Core.file_tasks.lock();
+    file_guard.store(std::vector<AMDomain::transfer::TransferTask>{file_task});
+  }
+  const ECM add_src_rcm =
+      task_info->Core.clients.AddSrcClient(file_task.src_host, http_client);
+  if (!(add_src_rcm)) {
+    task_info->Core.clients.ReleaseAll();
+    return add_src_rcm;
+  }
+  const ECM add_dst_rcm = task_info->Core.clients.AddDstClient(
+      file_task.dst_host, plan.resolved_target.client);
+  if (!(add_dst_rcm)) {
+    task_info->Core.clients.ReleaseAll();
+    return add_dst_rcm;
+  }
+  task_info->Core.nicknames = {file_task.src_host, file_task.dst_host};
+  task_info->CalTotalSize(true);
+  task_info->CalFileNum(true);
+
+  const ECM submit_rcm = transfer_pool_.Submit(task_info);
   if (!(submit_rcm)) {
     task_info->Core.clients.ReleaseAll();
     return submit_rcm;
@@ -601,7 +999,8 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
   for (const auto &id : arg.ids) {
     auto task_info = FindTask_(id);
     if (!task_info) {
-      status = Err(EC::TaskNotFound, "", "", AMStr::fmt("Task not found: {}", id));
+      status =
+          Err(EC::TaskNotFound, "", "", AMStr::fmt("Task not found: {}", id));
       prompt_io_manager_.ErrorFormat(status);
       continue;
     }
@@ -694,8 +1093,8 @@ ECM TransferInterfaceService::TaskResult(
   for (const auto &id : arg.ids) {
     auto task_info = transfer_pool_.GetResultTask(id, arg.remove);
     if (!task_info) {
-      status =
-          Err(EC::TaskNotFound, "", "", AMStr::fmt("Task result not found: {}", id));
+      status = Err(EC::TaskNotFound, "", "",
+                   AMStr::fmt("Task result not found: {}", id));
       prompt_io_manager_.ErrorFormat(status);
       continue;
     }

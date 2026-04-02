@@ -28,6 +28,20 @@ struct TransferRunArg {
   TransferConfirmPolicy confirm_policy = TransferConfirmPolicy::RequireConfirm;
 };
 
+struct HttpGetArg {
+  std::string src_url = {};
+  std::optional<AMDomain::filesystem::PathTarget> dst_target = std::nullopt;
+  std::string proxy = {};
+  std::string https_proxy = {};
+  std::string bear_token = {};
+  bool resume = false;
+  bool overwrite = false;
+  bool quiet = false;
+  bool run_async = false;
+  int timeout_ms = -1;
+  TransferConfirmPolicy confirm_policy = TransferConfirmPolicy::RequireConfirm;
+};
+
 struct TransferTaskListArg {
   bool pending = false;
   bool suspend = false;
@@ -72,6 +86,10 @@ public:
 
   ECM Transfer(
       const TransferRunArg &arg,
+      const std::optional<AMDomain::client::ClientControlComponent> &component =
+          std::nullopt) const;
+  ECM HttpGet(
+      const HttpGetArg &arg,
       const std::optional<AMDomain::client::ClientControlComponent> &component =
           std::nullopt) const;
   ECM TaskList(const TransferTaskListArg &arg) const;
