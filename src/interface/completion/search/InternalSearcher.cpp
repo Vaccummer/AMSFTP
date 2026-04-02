@@ -90,20 +90,16 @@ bool ParseVarCompletionPrefix_(const std::string &prefix,
   if (prefix == "$") {
     out_ref->valid = true;
     out_ref->braced = false;
-    out_ref->has_closing_brace = false;
     out_ref->explicit_domain = false;
     out_ref->domain.clear();
-    out_ref->zone_token.clear();
     out_ref->varname.clear();
     return true;
   }
   if (prefix == "${") {
     out_ref->valid = true;
     out_ref->braced = true;
-    out_ref->has_closing_brace = false;
     out_ref->explicit_domain = false;
     out_ref->domain.clear();
-    out_ref->zone_token.clear();
     out_ref->varname.clear();
     return true;
   }

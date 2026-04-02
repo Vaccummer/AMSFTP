@@ -22,7 +22,7 @@
 namespace AMInfra::client::LOCAL {
 class AMLocalIOCore : public ClientIOBase {
 private:
-  void SetState_(const AMDomain::filesystem::CheckResult &state) {
+  void SetState_(const ECMData<AMDomain::filesystem::CheckResult> &state) {
     if (config_part_) {
       config_part_->SetState(state);
     }
@@ -32,7 +32,7 @@ private:
     if (!config_part_) {
       return AMDomain::client::ClientStatus::NotInitialized;
     }
-    return config_part_->GetState().status;
+    return config_part_->GetState().data.status;
   }
 
   [[nodiscard]] std::string GetHomeDir_() {
@@ -134,10 +134,10 @@ private:
 #endif
 
 #ifdef _WIN32
-  AMFSI::RunResult ConductCmdWindowsBackend_(
+  ECMData<AMFSI::RunResult> ConductCmdWindowsBackend_(
       const AMFSI::ConductCmdArgs &args,
       const AMDomain::client::ClientControlComponent &control) {
-    AMFSI::RunResult out = {};
+    ECMData<AMFSI::RunResult> out = {};
 
     SECURITY_ATTRIBUTES sa;
     sa.nLength = sizeof(sa);
@@ -148,8 +148,8 @@ private:
     HANDLE write_pipe = nullptr;
     if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
       out.rcm = {EC::UnknownError, "CreatePipe failed"};
-      out.output = "";
-      out.exit_code = -1;
+      out.data.output = "";
+      out.data.exit_code = -1;
       return out;
     }
     SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
@@ -176,8 +176,8 @@ private:
     if (!created) {
       CloseHandle(read_pipe);
       out.rcm = {EC::UnknownError, "CreateProcess failed"};
-      out.output = "";
-      out.exit_code = -1;
+      out.data.output = "";
+      out.data.exit_code = -1;
       return out;
     }
 
@@ -387,33 +387,33 @@ private:
 
     if (interrupted) {
       out.rcm = {EC::Terminate, "Command interrupted"};
-      out.output = std::move(output);
-      out.exit_code = exit_status;
+      out.data.output = std::move(output);
+      out.data.exit_code = exit_status;
       return out;
     }
     if (timed_out) {
       out.rcm = {EC::OperationTimeout, "Command timed out"};
-      out.output = std::move(output);
-      out.exit_code = exit_status;
+      out.data.output = std::move(output);
+      out.data.exit_code = exit_status;
       return out;
     }
-    out.rcm = {EC::Success, ""};
-    out.output = std::move(output);
-    out.exit_code = exit_status;
+    out.rcm = OK;
+    out.data.output = std::move(output);
+    out.data.exit_code = exit_status;
     return out;
   }
 #else
-  AMFSI::RunResult ConductCmdPosixBackend_(
+  ECMData<AMFSI::RunResult> ConductCmdPosixBackend_(
       const AMFSI::ConductCmdArgs &args,
       const AMDomain::client::ClientControlComponent &control) {
-    AMFSI::RunResult out = {};
+    ECMData<AMFSI::RunResult> out = {};
 
     int pipefd[2] = {-1, -1};
     if (pipe(pipefd) != 0) {
       out.rcm = {fec(std::error_code(errno, std::generic_category())),
                  "pipe failed"};
-      out.output = "";
-      out.exit_code = -1;
+      out.data.output = "";
+      out.data.exit_code = -1;
       return out;
     }
 
@@ -423,8 +423,8 @@ private:
       close(pipefd[1]);
       out.rcm = {fec(std::error_code(errno, std::generic_category())),
                  "fork failed"};
-      out.output = "";
-      out.exit_code = -1;
+      out.data.output = "";
+      out.data.exit_code = -1;
       return out;
     }
 
@@ -539,19 +539,19 @@ private:
 
     if (interrupted) {
       out.rcm = {EC::Terminate, "Command interrupted"};
-      out.output = std::move(output);
-      out.exit_code = exit_status;
+      out.data.output = std::move(output);
+      out.data.exit_code = exit_status;
       return out;
     }
     if (timed_out) {
       out.rcm = {EC::OperationTimeout, "Command timed out"};
-      out.output = std::move(output);
-      out.exit_code = exit_status;
+      out.data.output = std::move(output);
+      out.data.exit_code = exit_status;
       return out;
     }
-    out.rcm = {EC::Success, ""};
-    out.output = std::move(output);
-    out.exit_code = exit_status;
+    out.rcm = OK;
+    out.data.output = std::move(output);
+    out.data.exit_code = exit_status;
     return out;
   }
 #endif
@@ -575,59 +575,59 @@ public:
       config_part_->SetHomeDir(AMPath::HomePath());
     }
     (void)UpdateOSType({}, {});
-    SetState_({{EC::Success, ""}, AMDomain::client::ClientStatus::OK});
+    SetState_({OK, AMDomain::client::ClientStatus::OK});
   }
 
   ~AMLocalIOCore() override = default;
-  AMFSI::UpdateOSTypeResult UpdateOSType(
+  ECMData<AMFSI::UpdateOSTypeResult> UpdateOSType(
       const AMFSI::UpdateOSTypeArgs &args,
       const AMDomain::client::ClientControlComponent &control) override {
     (void)args;
-    AMFSI::UpdateOSTypeResult out = {};
+    ECMData<AMFSI::UpdateOSTypeResult> out = {};
 #ifdef _WIN32
-    out.os_type = OS_TYPE::Windows;
+    out.data.os_type = OS_TYPE::Windows;
 #elif defined(_WIN64)
-    out.os_type = OS_TYPE::Windows;
+    out.data.os_type = OS_TYPE::Windows;
 #elif defined(__linux__) || defined(__gnu_linux__)
-    out.os_type = OS_TYPE::Linux;
+    out.data.os_type = OS_TYPE::Linux;
 #elif defined(__APPLE__) && defined(__MACH__)
-    out.os_type = OS_TYPE::MacOS;
+    out.data.os_type = OS_TYPE::MacOS;
 #elif defined(__FreeBSD__)
-    out.os_type = OS_TYPE::FreeBSD;
+    out.data.os_type = OS_TYPE::FreeBSD;
 #else
-    out.os_type = OS_TYPE::Unknown;
+    out.data.os_type = OS_TYPE::Unknown;
 #endif
     if (config_part_) {
-      config_part_->SetOSType(out.os_type);
+      config_part_->SetOSType(out.data.os_type);
     }
-    out.rcm = {EC::Success, ""};
+    out.rcm = OK;
     return out;
   }
 
-  AMFSI::UpdateHomeDirResult UpdateHomeDir(
+  ECMData<AMFSI::UpdateHomeDirResult> UpdateHomeDir(
       const AMFSI::UpdateHomeDirArgs &args,
       const AMDomain::client::ClientControlComponent &control) override {
     (void)args;
-    AMFSI::UpdateHomeDirResult out = {};
+    ECMData<AMFSI::UpdateHomeDirResult> out = {};
     if (control.IsTimeout()) {
       out.rcm = ECM{EC::OperationTimeout, "Operation timed out"};
-      out.home_dir = "";
+      out.data.home_dir = "";
       return out;
     }
-    out.home_dir = AMPath::HomePath();
+    out.data.home_dir = AMPath::HomePath();
     if (config_part_) {
-      config_part_->SetHomeDir(out.home_dir);
+      config_part_->SetHomeDir(out.data.home_dir);
     }
-    out.rcm = {EC::Success, ""};
+    out.rcm = OK;
     return out;
   }
 
-  AMFSI::CheckResult
+  ECMData<AMFSI::CheckResult>
   Check(const AMFSI::CheckArgs &args,
         const AMDomain::client::ClientControlComponent &control) override {
     (void)args;
-    AMFSI::CheckResult out = {};
-    out.status = CurrentStatus_();
+    ECMData<AMFSI::CheckResult> out = {};
+    out.data.status = CurrentStatus_();
     if (control.IsTimeout()) {
       out.rcm = {EC::OperationTimeout, "Operation timed out"};
       return out;
@@ -636,18 +636,18 @@ public:
       out.rcm = {EC::Terminate, "Interrupted by user"};
       return out;
     }
-    out.rcm = {EC::Success, ""};
-    out.status = AMDomain::client::ClientStatus::OK;
-    SetState_({out.rcm, out.status});
+    out.rcm = OK;
+    out.data.status = AMDomain::client::ClientStatus::OK;
+    SetState_({out.rcm, out.data.status});
     return out;
   }
 
-  AMFSI::ConnectResult
+  ECMData<AMFSI::ConnectResult>
   Connect(const AMFSI::ConnectArgs &args,
           const AMDomain::client::ClientControlComponent &control) override {
     (void)args;
-    AMFSI::ConnectResult out = {};
-    out.status = CurrentStatus_();
+    ECMData<AMFSI::ConnectResult> out = {};
+    out.data.status = CurrentStatus_();
     if (control.IsTimeout()) {
       out.rcm = {EC::OperationTimeout, "Operation timed out"};
       return out;
@@ -656,38 +656,38 @@ public:
       out.rcm = {EC::Terminate, "Interrupted by user"};
       return out;
     }
-    out.rcm = {EC::Success, ""};
-    out.status = AMDomain::client::ClientStatus::OK;
-    SetState_({out.rcm, out.status});
+    out.rcm = OK;
+    out.data.status = AMDomain::client::ClientStatus::OK;
+    SetState_({out.rcm, out.data.status});
     return out;
   }
 
-  AMFSI::RTTResult
+  ECMData<AMFSI::RTTResult>
   GetRTT(const AMFSI::GetRTTArgs &args,
          const AMDomain::client::ClientControlComponent &control) override {
     (void)args;
     (void)control;
-    AMFSI::RTTResult out = {};
-    out.rtt_ms = 0.0;
+    ECMData<AMFSI::RTTResult> out = {};
+    out.data.rtt_ms = 0.0;
     out.rcm = {EC::UnImplentedMethod,
                "GetRTT is not supported for local client"};
     return out;
   }
 
-  AMFSI::RunResult
+  ECMData<AMFSI::RunResult>
   ConductCmd(const AMFSI::ConductCmdArgs &args,
              const AMDomain::client::ClientControlComponent &control) override {
-    AMFSI::RunResult out = {};
+    ECMData<AMFSI::RunResult> out = {};
     if (control.IsTimeout()) {
       out.rcm = {EC::OperationTimeout, "Operation timed out"};
-      out.output = "";
-      out.exit_code = -1;
+      out.data.output = "";
+      out.data.exit_code = -1;
       return out;
     }
     if (control.IsInterrupted()) {
       out.rcm = {EC::Terminate, "Interrupted by user"};
-      out.output = "";
-      out.exit_code = -1;
+      out.data.output = "";
+      out.data.exit_code = -1;
       return out;
     }
 #ifdef _WIN32
@@ -697,13 +697,13 @@ public:
 #endif
   }
 
-  AMFSI::StatResult
+  ECMData<AMFSI::StatResult>
   stat(const AMFSI::StatArgs &args,
        const AMDomain::client::ClientControlComponent &control) override {
-    AMFSI::StatResult out = {};
+    ECMData<AMFSI::StatResult> out = {};
     if (args.path.empty()) {
       out.rcm = {EC::InvalidArg, "Invalid empty path"};
-      out.info = {};
+      out.data.info = {};
       return out;
     }
     std::error_code ec;
@@ -714,7 +714,7 @@ public:
       } else {
         out.rcm = {EC::PathNotExist, "Path not found: " + args.path};
       }
-      out.info = {};
+      out.data.info = {};
       return out;
     }
 
@@ -742,9 +742,9 @@ public:
     if (ec) {
       out.rcm = {fec(ec),
                  AMStr::fmt("Stat {} failed: {}", pathf, ec.message())};
-      trace(AMDomain::client::TraceLevel::Error, out.rcm.first, pathf, "stat",
-            out.rcm.second);
-      out.info = info;
+      trace(AMDomain::client::TraceLevel::Error, out.rcm.code, pathf, "stat",
+            out.rcm.error);
+      out.data.info = info;
       return out;
     }
 
@@ -777,7 +777,7 @@ public:
     if (::stat(args.path.c_str(), &file_stat) == -1) {
       out.rcm = {fec(std::error_code(errno, std::generic_category())),
                  "Fail to stat file: " + std::string(strerror(errno))};
-      out.info = info;
+      out.data.info = info;
       return out;
     }
 
@@ -792,64 +792,101 @@ public:
 #endif
 #endif
 
-    out.rcm = {EC::Success, ""};
-    out.info = info;
+    out.rcm = OK;
+    out.data.info = info;
     return out;
   }
 
-  AMFSI::ListResult
+  ECMData<AMFSI::ListResult>
   listdir(const AMFSI::ListdirArgs &args,
           const AMDomain::client::ClientControlComponent &control) override {
-    AMFSI::ListResult out = {};
+    ECMData<AMFSI::ListResult> out = {};
     if (args.path.empty()) {
       out.rcm = {EC::InvalidArg, "Invalid empty path"};
-      out.entries = {};
+      out.data.entries = {};
+      return out;
+    }
+    std::error_code ec;
+    if (!fs::exists(fs::path(args.path), ec)) {
+      if (ec) {
+        out.rcm.code = fec(ec);
+        out.rcm.error = ec.message();
+        out.rcm.target = args.path;
+        out.rcm.operation = "listdir";
+        out.rcm.raw_error = {RawErrorSource::Filesystem, ec.value()};
+      } else {
+        out.rcm.code = EC::PathNotExist;
+        out.rcm.error = "Path not found: " + args.path;
+        out.rcm.target = args.path;
+        out.rcm.operation = "listdir";
+      }
+      trace(AMDomain::client::TraceLevel::Error, out.rcm.code, args.path,
+            "listdir", out.rcm.error);
+      return out;
+    } else if (!fs::is_directory(fs::path(args.path), ec)) {
+      if (ec) {
+        out.rcm.code = fec(ec);
+        out.rcm.error = ec.message();
+        out.rcm.target = args.path;
+        out.rcm.operation = "listdir";
+        out.rcm.raw_error = {RawErrorSource::Filesystem, ec.value()};
+      } else {
+        out.rcm.code = EC::NotADirectory;
+        out.rcm.error = "Path is not a directory";
+        out.rcm.target = args.path;
+        out.rcm.operation = "listdir";
+      }
+      trace(AMDomain::client::TraceLevel::Error, out.rcm.code, args.path,
+            "listdir", out.rcm.error);
       return out;
     }
     std::vector<PathInfo> entries = {};
-    std::error_code ec;
+
     fs::directory_iterator it(args.path, ec);
 
     if (ec) {
-      out.rcm = {fec(ec),
-                 AMStr::fmt("listdir {} failed: {}", args.path, ec.message())};
-      trace(AMDomain::client::TraceLevel::Error, out.rcm.first, args.path,
-            "listdir", out.rcm.second);
-      out.entries = {};
+      out.rcm.code = fec(ec);
+      out.rcm.error = ec.message();
+      out.rcm.target = args.path;
+      out.rcm.operation = "listdir";
+      out.rcm.raw_error = {RawErrorSource::Filesystem, ec.value()};
+      trace(AMDomain::client::TraceLevel::Error, out.rcm.code, args.path,
+            "listdir", out.rcm.error);
+      out.data.entries = {};
       return out;
     }
 
     for (const auto &entry : it) {
       if (control.IsInterrupted()) {
         out.rcm = {EC::Terminate, "Listdir interrupted by user"};
-        out.entries = std::move(entries);
+        out.data.entries = std::move(entries);
         return out;
       }
       if (control.IsTimeout()) {
         out.rcm = {EC::OperationTimeout, "Listdir operation timed out"};
-        out.entries = std::move(entries);
+        out.data.entries = std::move(entries);
         return out;
       }
 
       auto stat_res =
           stat(AMFSI::StatArgs{entry.path().string(), false}, control);
-      if (stat_res.rcm.first != EC::Success) {
+      if (stat_res.rcm.code != EC::Success) {
         continue;
       }
-      entries.push_back(std::move(stat_res.info));
+      entries.push_back(std::move(stat_res.data.info));
     }
-    out.rcm = {EC::Success, ""};
-    out.entries = std::move(entries);
+    out.rcm = OK;
+    out.data.entries = std::move(entries);
     return out;
   }
 
-  AMFSI::ListNamesResult
+  ECMData<AMFSI::ListNamesResult>
   listnames(const AMFSI::ListNamesArgs &args,
             const AMDomain::client::ClientControlComponent &control) override {
-    AMFSI::ListNamesResult out = {};
+    ECMData<AMFSI::ListNamesResult> out = {};
     if (args.path.empty()) {
       out.rcm = {EC::InvalidArg, "Invalid empty path"};
-      out.names = {};
+      out.data.names = {};
       return out;
     }
     std::error_code ec;
@@ -857,9 +894,9 @@ public:
     if (ec) {
       out.rcm = {fec(ec), AMStr::fmt("listnames {} failed: {}", args.path,
                                      ec.message())};
-      trace(AMDomain::client::TraceLevel::Error, out.rcm.first, args.path,
-            "listnames", out.rcm.second);
-      out.names = {};
+      trace(AMDomain::client::TraceLevel::Error, out.rcm.code, args.path,
+            "listnames", out.rcm.error);
+      out.data.names = {};
       return out;
     }
 
@@ -867,25 +904,25 @@ public:
     for (const auto &entry : it) {
       if (control.IsInterrupted()) {
         out.rcm = {EC::Terminate, "Listnames interrupted by user"};
-        out.names = std::move(names);
+        out.data.names = std::move(names);
         return out;
       }
       if (control.IsTimeout()) {
         out.rcm = {EC::OperationTimeout, "Listnames operation timed out"};
-        out.names = std::move(names);
+        out.data.names = std::move(names);
         return out;
       }
       names.push_back(entry.path().filename().string());
     }
-    out.rcm = {EC::Success, ""};
-    out.names = std::move(names);
+    out.rcm = OK;
+    out.data.names = std::move(names);
     return out;
   }
 
-  AMFSI::MkdirResult
+  ECMData<AMFSI::MkdirResult>
   mkdir(const AMFSI::MkdirArgs &args,
         const AMDomain::client::ClientControlComponent &control) override {
-    AMFSI::MkdirResult out = {};
+    ECMData<AMFSI::MkdirResult> out = {};
     if (args.path.empty()) {
       out.rcm = {EC::InvalidArg, "Invalid empty path"};
       return out;
@@ -895,19 +932,19 @@ public:
     if (ec) {
       ECM rcm = {fec(ec),
                  AMStr::fmt("mkdir {} failed: {}", args.path, ec.message())};
-      trace(AMDomain::client::TraceLevel::Error, rcm.first, args.path, "mkdir",
-            rcm.second);
+      trace(AMDomain::client::TraceLevel::Error, rcm.code, args.path, "mkdir",
+            rcm.error);
       out.rcm = rcm;
       return out;
     }
-    out.rcm = {EC::Success, ""};
+    out.rcm = OK;
     return out;
   }
 
-  AMFSI::MkdirsResult
+  ECMData<AMFSI::MkdirsResult>
   mkdirs(const AMFSI::MkdirsArgs &args,
          const AMDomain::client::ClientControlComponent &control) override {
-    AMFSI::MkdirsResult out = {};
+    ECMData<AMFSI::MkdirsResult> out = {};
     if (args.path.empty()) {
       out.rcm = {EC::InvalidArg, "Invalid empty path"};
       return out;
@@ -926,19 +963,19 @@ public:
     if (ec) {
       out.rcm = {fec(ec),
                  AMStr::fmt("mkdirs {} failed: {}", args.path, ec.message())};
-      trace(AMDomain::client::TraceLevel::Error, out.rcm.first, args.path,
-            "mkdirs", out.rcm.second);
+      trace(AMDomain::client::TraceLevel::Error, out.rcm.code, args.path,
+            "mkdirs", out.rcm.error);
       return out;
     }
 
-    out.rcm = {EC::Success, ""};
+    out.rcm = OK;
     return out;
   }
 
-  AMFSI::RMResult
+  ECMData<AMFSI::RMResult>
   rmdir(const AMFSI::RmdirArgs &args,
         const AMDomain::client::ClientControlComponent &control) override {
-    AMFSI::RMResult out = {};
+    ECMData<AMFSI::RMResult> out = {};
     std::error_code ec;
     fs::remove(fs::path(args.path), ec);
     if (ec) {
@@ -946,14 +983,14 @@ public:
                  AMStr::fmt("rmdir {} failed: {}", args.path, ec.message())};
       return out;
     }
-    out.rcm = {EC::Success, ""};
+    out.rcm = OK;
     return out;
   }
 
-  AMFSI::RMResult
+  ECMData<AMFSI::RMResult>
   rmfile(const AMFSI::RmfileArgs &args,
          const AMDomain::client::ClientControlComponent &control) override {
-    AMFSI::RMResult out = {};
+    ECMData<AMFSI::RMResult> out = {};
     if (control.IsTimeout()) {
       out.rcm = {EC::OperationTimeout, "Operation timed out"};
       return out;
@@ -965,14 +1002,14 @@ public:
                  AMStr::fmt("rmfile {} failed: {}", args.path, ec.message())};
       return out;
     }
-    out.rcm = {EC::Success, ""};
+    out.rcm = OK;
     return out;
   }
 
-  AMFSI::MoveResult
+  ECMData<AMFSI::MoveResult>
   rename(const AMFSI::RenameArgs &args,
          const AMDomain::client::ClientControlComponent &control) override {
-    AMFSI::MoveResult out = {};
+    ECMData<AMFSI::MoveResult> out = {};
     std::error_code ec;
     fs::rename(fs::path(args.src), fs::path(args.dst), ec);
     if (ec == std::errc::cross_device_link) {
@@ -986,7 +1023,7 @@ public:
                                      args.dst, ec.message())};
       return out;
     }
-    out.rcm = {EC::Success, ""};
+    out.rcm = OK;
     return out;
   }
 
@@ -1026,7 +1063,7 @@ public:
     std::error_code ec;
     auto [error, listing] =
         ListdirPath_(path, timeout_ms, start_time, interrupt_flag);
-    if (error.first != EC::Success) {
+    if (error.code != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, error);
       }
@@ -1089,7 +1126,7 @@ public:
 
     auto [error, info] =
         StatPath_(path, false, timeout_ms, start_time, interrupt_flag);
-    if (error.first != EC::Success) {
+    if (error.code != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, error);
       }
@@ -1164,7 +1201,7 @@ public:
       if (is_file) {
         auto [stat_err, stat_info] = stat(
             entry_path.string(), false, timeout_ms, start_time, interrupt_flag);
-        if (stat_err.first == EC::Success) {
+        if (stat_err.code == EC::Success) {
           result.push_back(stat_info);
         } else {
           if (error_callback && *error_callback) {
@@ -1203,7 +1240,7 @@ public:
       if (has_subdir.find(dir) == has_subdir.end()) {
         auto [stat_err, stat_info] =
             StatPath_(dir, false, timeout_ms, start_time, interrupt_flag);
-        if (stat_err.first == EC::Success) {
+        if (stat_err.code == EC::Success) {
           result.push_back(stat_info);
         } else {
           if (error_callback && *error_callback) {
@@ -1214,7 +1251,7 @@ public:
       }
     }
 
-    return {ECM{EC::Success, ""}, {result, errors}};
+    return {ECMOK, {result, errors}};
   }
 
   [[nodiscard]] std::pair<ECM, WRI>
@@ -1239,7 +1276,7 @@ public:
 
     auto [error, info] =
         StatPath_(path, false, timeout_ms, start_time, interrupt_flag);
-    if (error.first != EC::Success) {
+    if (error.code != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, error);
       }
@@ -1341,7 +1378,7 @@ public:
 
       auto [stat_ecm, entry_info] = StatPath_(
           entry_path.string(), false, timeout_ms, start_time, interrupt_flag);
-      if (stat_ecm.first != EC::Success) {
+      if (stat_ecm.code != EC::Success) {
         const std::string parent_key =
             normalize_key(entry_path.parent_path().lexically_normal().string());
         dir_states[parent_key].has_entry = true;
@@ -1411,7 +1448,7 @@ public:
       result.emplace_back(build_parts(dir_key), std::move(files));
     }
 
-    return {{EC::Success, ""}, {result, errors}};
+    return {OK, {result, errors}};
   }
   int64_t getsize(const std::string &path, bool ignore_special_file = true,
                   int timeout_ms = -1, int64_t start_time = -1,
@@ -1419,7 +1456,7 @@ public:
     start_time = NormalizeStartTime_(start_time);
     auto [rcm, info] =
         StatPath_(path, false, timeout_ms, start_time, interrupt_flag);
-    if (rcm.first != EC::Success) {
+    if (rcm.code != EC::Success) {
       return -1;
     }
     if (info.type != PathType::DIR) {
@@ -1428,7 +1465,7 @@ public:
 
     auto [walk_rcm, pack] = iwalk(path, true, ignore_special_file, nullptr,
                                   timeout_ms, start_time, interrupt_flag);
-    if (walk_rcm.first != EC::Success ||
+    if (walk_rcm.code != EC::Success ||
         ((interrupt_flag && interrupt_flag->IsInterrupted()))) {
       return -1;
     }
@@ -1469,11 +1506,11 @@ public:
     if (ec) {
       ECM rcm = {fec(ec),
                  AMStr::fmt("mkdirs {} failed: {}", path, ec.message())};
-      trace(AMDomain::client::TraceLevel::Error, rcm.first, path, "mkdirs",
-            rcm.second);
+      trace(AMDomain::client::TraceLevel::Error, rcm.code, path, "mkdirs",
+            rcm.error);
       return rcm;
     }
-    return {EC::Success, ""};
+    return OK;
   }
 
   std::pair<ECM, RMR> remove(const std::string &path,
@@ -1487,7 +1524,7 @@ public:
 
     auto [error, info] =
         StatPath_(path, false, timeout_ms, start_time, interrupt_flag);
-    if (error.first != EC::Success) {
+    if (error.code != EC::Success) {
       if (error_callback && *error_callback) {
         (*error_callback)(path, error);
       }
@@ -1518,7 +1555,7 @@ public:
       return {{EC::OperationTimeout, "remove timeout"}, errors};
     }
 
-    return {ECM{EC::Success, ""}, errors};
+    return {ECMOK, errors};
   }
 
   ECM saferm(const std::string &path, int timeout_ms = -1,
@@ -1541,7 +1578,7 @@ public:
 
     auto [error, info] =
         StatPath_(path, false, timeout_ms, start_time, interrupt_flag);
-    if (error.first != EC::Success) {
+    if (error.code != EC::Success) {
       return error;
     }
 
@@ -1584,7 +1621,7 @@ public:
 
     ECM mk_rcm = mkdirs(AMPath::join(request.trash_dir, current_time),
                         timeout_ms, start_time, interrupt_flag);
-    if (mk_rcm.first != EC::Success) {
+    if (mk_rcm.code != EC::Success) {
       return mk_rcm;
     }
 

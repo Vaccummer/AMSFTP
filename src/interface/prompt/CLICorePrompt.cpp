@@ -1,5 +1,5 @@
 #include "interface/prompt/CLICorePrompt.hpp"
-
+#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
 
@@ -11,7 +11,8 @@
 namespace AMInterface::prompt {
 namespace {
 
-std::string ResolvePromptTemplate_(const AMInterface::style::AMStyleService &s) {
+std::string
+ResolvePromptTemplate_(const AMInterface::style::AMStyleService &s) {
   const auto style = s.GetInitArg().style.cli_prompt.prompt_template;
   if (!style.core_prompt.empty()) {
     return style.core_prompt;
@@ -21,7 +22,8 @@ std::string ResolvePromptTemplate_(const AMInterface::style::AMStyleService &s) 
 
 } // namespace
 
-CLIPromtRender::CLIPromtRender(AMInterface::style::AMStyleService &style_service)
+CLIPromtRender::CLIPromtRender(
+    AMInterface::style::AMStyleService &style_service)
     : style_service_(style_service) {
   RegisterDefaultGetters_();
 }
@@ -57,7 +59,7 @@ std::string CLIPromtRender::Render(const RenderArg &arg) {
   }
 
   const auto rendered = RenderPromptFormat_(arg);
-  if (!isok(rendered.rcm)) {
+  if (!(rendered.rcm)) {
     state_.cached_render = BuildFallbackPrompt_(arg);
   } else {
     state_.cached_render = rendered.data;
@@ -81,7 +83,9 @@ const CLIPromtRender::RuntimeState &CLIPromtRender::State() const {
   return state_;
 }
 
-bool CLIPromtRender::HasCachedRender() const { return state_.has_cached_render; }
+bool CLIPromtRender::HasCachedRender() const {
+  return state_.has_cached_render;
+}
 
 const std::string &CLIPromtRender::GetCachedRender() const {
   return state_.cached_render;
@@ -145,13 +149,13 @@ std::string CLIPromtRender::ResolveKeywordValue_(const std::string &key,
     return AMStr::fmt("{}ms", std::max<int64_t>(0, arg.elapsed_time_ms));
   }
   if (normalized == "success") {
-    return arg.result.first == EC::Success ? "1" : "";
+    return arg.result.code == EC::Success ? "1" : "";
   }
   if (normalized == "ec_name") {
-    if (arg.result.first == EC::Success) {
+    if (arg.result.code == EC::Success) {
       return "";
     }
-    return std::string(magic_enum::enum_name(arg.result.first));
+    return std::string(magic_enum::enum_name(arg.result.code));
   }
 
   const auto it = getters_.find(normalized);
@@ -169,7 +173,8 @@ std::string CLIPromtRender::ResolveCorePromptFormat_() const {
   return ResolvePromptTemplate_(style_service_);
 }
 
-ECMData<std::string> CLIPromtRender::RenderPromptFormat_(const RenderArg &arg) const {
+ECMData<std::string>
+CLIPromtRender::RenderPromptFormat_(const RenderArg &arg) const {
   PromptVarMap vars = state_.required_vars;
   for (auto &entry : vars) {
     entry.second = ResolveKeywordValue_(entry.first, arg);
@@ -196,7 +201,7 @@ void CLIPromtRender::RefreshTemplateCache_() {
   state_.has_cached_render = false;
 
   auto parsed = interpreter_.Parse(fmt);
-  state_.parse_ok = isok(parsed.rcm) && !parsed.data.diagnostics.HasError();
+  state_.parse_ok = (parsed.rcm) && !parsed.data.diagnostics.HasError();
   state_.parsed_context = std::move(parsed.data.context);
   state_.required_vars = std::move(parsed.data.required_vars);
   state_.diagnostics = std::move(parsed.data.diagnostics);

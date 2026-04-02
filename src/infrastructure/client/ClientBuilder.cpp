@@ -55,7 +55,7 @@ CreateClient(const ConRequest &request,
     return {{EC::InvalidArg, "Unsupported client protocol"}, nullptr};
   }
 
-  return {{EC::Success, ""},
+  return {OK,
           std::make_shared<AMInfra::client::BaseClient>(
               std::move(metadata_port), std::move(config_port),
               std::move(control_port), std::move(io_port), UID)};

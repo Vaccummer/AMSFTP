@@ -1,4 +1,5 @@
 #pragma once
+#include "CLI/App.hpp"
 #include "interface/cli/CLIArg.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -9,6 +10,8 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+namespace AMInterface::parser {
 
 /**
  * @brief Semantic type for command argument completion/highlight routing.
@@ -54,11 +57,6 @@ public:
   };
 
   /**
-   * @brief Return singleton root command node.
-   */
-  static CommandNode &Instance();
-
-  /**
    * @brief Initialize node tree from CLI11 root app.
    */
   void Init(CLI::App &app);
@@ -78,8 +76,8 @@ public:
    */
   template <typename T>
   CommandNode *AddFunction(const std::string &name, const std::string &help,
-                           CliArgsPool &args,
-                           std::shared_ptr<T> CliArgsPool::*member) {
+                           AMInterface::cli::CliArgsPool &args,
+                           std::shared_ptr<T> AMInterface::cli::CliArgsPool::*member) {
     CommandNode *child = AddFunction(name, help);
     if (!child || !child->app) {
       return child;
@@ -334,7 +332,9 @@ private:
   CommandNode *FindChild_(const std::string &child);
 
   /**
-   * @brief Root CLI11 app (valid on singleton root).
+   * @brief Root CLI11 app (valid on root node).
    */
   CLI::App *root_app_ = nullptr;
 };
+
+} // namespace AMInterface::parser

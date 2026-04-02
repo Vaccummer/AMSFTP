@@ -10,7 +10,7 @@ StyleConfigManager::StyleConfigManager(StyleConfigArg arg)
 ECM StyleConfigManager::Init() {
   auto guard = init_arg_.lock();
   AMDomain::style::services::NormalizeStyleConfigArg(&guard.get());
-  return {EC::Success, ""};
+  return OK;
 }
 
 StyleConfigArg StyleConfigManager::GetInitArg() const {
@@ -20,12 +20,12 @@ StyleConfigArg StyleConfigManager::GetInitArg() const {
 ECM StyleConfigManager::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "config service is null");
+    return Err(EC::InvalidArg, "", "", "config service is null");
   }
   if (!config_service->Write<StyleConfigArg>(ExportConfigSnapshot())) {
-    return Err(EC::ConfigDumpFailed, "failed to flush style config");
+    return Err(EC::ConfigDumpFailed, "", "", "failed to flush style config");
   }
-  return Ok();
+  return OK;
 }
 
 StyleConfigArg StyleConfigManager::ExportConfigSnapshot() const {

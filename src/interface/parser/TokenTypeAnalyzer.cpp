@@ -136,7 +136,7 @@ ClassifyNewHostNicknameTokenType_(std::shared_ptr<ITokenAnalyzerRuntime> runtime
   const std::string nickname = AMStr::Strip(nickname_raw);
   ECM validate_rcm = AMDomain::host::HostService::ValidateFieldValue(
       AMDomain::host::ConRequest::Attr::nickname, nickname);
-  if (!isok(validate_rcm)) {
+  if (!(validate_rcm)) {
     return AMTokenType::InvalidValue;
   }
   if (AMDomain::host::HostService::IsLocalNickname(nickname)) {
@@ -492,11 +492,11 @@ AMTokenType VarNameTypeFor_(std::shared_ptr<ITokenAnalyzerRuntime> runtime,
   }
   const std::string domain = runtime->CurrentVarDomain();
   auto scoped = runtime->GetVar(domain, name);
-  if (isok(scoped.rcm)) {
+  if ((scoped.rcm)) {
     return AMTokenType::VarName;
   }
   auto pub = runtime->GetVar(AMDomain::var::kPublic, name);
-  return isok(pub.rcm) ? AMTokenType::VarName : AMTokenType::VarNameMissing;
+  return (pub.rcm) ? AMTokenType::VarName : AMTokenType::VarNameMissing;
 }
 
 /** Validate token against option set for one command node. */
@@ -926,7 +926,7 @@ public:
           !ref.varname.empty()) {
         if (ref.explicit_domain && runtime_) {
           auto scoped = runtime_->GetVar(ref.domain, ref.varname);
-          token.type = isok(scoped.rcm) ? AMTokenType::VarName
+          token.type = (scoped.rcm) ? AMTokenType::VarName
                                         : AMTokenType::VarNameMissing;
         } else {
           token.type = VarNameTypeFor_(runtime_, ref.varname);
@@ -1038,10 +1038,10 @@ public:
           ToClientTimeoutMs_(profile.highlight_timeout_ms, 1000);
 
       auto stat_result = runtime_->StatPath(path_client, abs_path, timeout_ms);
-      if (isok(stat_result.rcm)) {
+      if ((stat_result.rcm)) {
         token.type = ToPathTokenType_(stat_result.data.type);
-      } else if (stat_result.rcm.first == EC::FileNotExist ||
-                 stat_result.rcm.first == EC::PathNotExist) {
+      } else if (stat_result.rcm.code == EC::FileNotExist ||
+                 stat_result.rcm.code == EC::PathNotExist) {
         token.type = AMTokenType::Nonexistentpath;
       } else {
         token.type = AMTokenType::Special;
@@ -1168,7 +1168,7 @@ public:
         }
         if (explicit_domain && runtime_) {
           auto scoped = runtime_->GetVar(ref.domain, varname);
-          return isok(scoped.rcm) ? AMTokenType::VarName
+          return (scoped.rcm) ? AMTokenType::VarName
                                   : AMTokenType::VarNameMissing;
         }
         return VarNameTypeFor_(runtime_, varname);

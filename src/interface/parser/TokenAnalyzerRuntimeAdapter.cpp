@@ -43,7 +43,7 @@ AMDomain::client::ClientHandle TokenAnalyzerRuntimeAdapter::LocalClient() const 
 AMDomain::client::ClientHandle
 TokenAnalyzerRuntimeAdapter::GetClient(const std::string &nickname) const {
   auto client = client_service_.GetClient(nickname, true);
-  if (!isok(client.rcm)) {
+  if (!(client.rcm)) {
     return nullptr;
   }
   return client.data;
@@ -55,7 +55,7 @@ bool TokenAnalyzerRuntimeAdapter::HostExists(const std::string &nickname) const 
 
 bool TokenAnalyzerRuntimeAdapter::HasVarDomain(const std::string &zone) const {
   auto all_vars = var_service_.GetAllVar();
-  if (!isok(all_vars.rcm)) {
+  if (!(all_vars.rcm)) {
     return false;
   }
   return all_vars.data.find(zone) != all_vars.data.end();
@@ -112,12 +112,12 @@ ECMData<PathInfo> TokenAnalyzerRuntimeAdapter::StatPath(
     AMDomain::client::ClientHandle client, const std::string &abs_path,
     int timeout_ms) const {
   if (!client) {
-    return {PathInfo{}, Err(EC::InvalidHandle, "client is null")};
+    return {PathInfo{}, Err(EC::InvalidHandle, "", "", "client is null")};
   }
   auto control =
       AMDomain::client::ClientControlComponent(nullptr, timeout_ms);
   auto stat_result = client->IOPort().stat({abs_path, false}, control);
-  return {stat_result.info, stat_result.rcm};
+  return {stat_result.data.info, stat_result.rcm};
 }
 
 std::string TokenAnalyzerRuntimeAdapter::FormatPath(
@@ -251,3 +251,4 @@ std::string TokenAnalyzerRuntimeAdapter::ResolveSettingString(
 }
 
 } // namespace AMInterface::parser
+

@@ -1,15 +1,13 @@
+#include "domain/client/ClientPort.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
-#include "domain/client/ClientPort.hpp"
-#include "interface/completion/CompletionRuntime.hpp"
 #include "interface/cli/InteractiveEventRegistry.hpp"
+#include "interface/completion/CompletionRuntime.hpp"
 #include "interface/completion/Searcher.hpp"
 #include "interface/completion/SearcherCommon.hpp"
 #include <algorithm>
 
-
 using namespace AMSearcherDetail;
-
 
 /**
  * @brief Collect path candidates or async path requests.
@@ -61,19 +59,20 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
   if (!use_async) {
     AMDomain::client::ClientHandle client =
-        path.remote ? runtime->GetClient(path.nickname) : runtime->LocalClient();
+        path.remote ? runtime->GetClient(path.nickname)
+                    : runtime->LocalClient();
     if (!client) {
       return result;
     }
     auto list_result = client->IOPort().listdir(
         {path.dir_abs},
         AMDomain::client::ClientControlComponent(nullptr, timeout_ms));
-    if (list_result.rcm.first != EC::Success) {
+    if (list_result.rcm.code != EC::Success) {
       return result;
     }
 
-    StoreTempCache_(key, list_result.entries);
-    AppendPathCandidates_(path, list_result.entries, &result.candidates.items);
+    StoreTempCache_(key, list_result.data.entries);
+    AppendPathCandidates_(path, list_result.data.entries, &result.candidates.items);
     if (!result.candidates.items.empty()) {
       SortCandidates(ctx, result.candidates.items);
     }
@@ -102,7 +101,8 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     }
 
     AMDomain::client::ClientHandle client =
-        path.remote ? runtime->GetClient(path.nickname) : runtime->LocalClient();
+        path.remote ? runtime->GetClient(path.nickname)
+                    : runtime->LocalClient();
     if (!client) {
       return false;
     }
@@ -111,14 +111,14 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     auto list_result = client->IOPort().listdir(
         {path.dir_abs},
         AMDomain::client::ClientControlComponent(interrupt_flag, timeout));
-    if (list_result.rcm.first != EC::Success || request.IsInterrupted()) {
+    if (list_result.rcm.code != EC::Success || request.IsInterrupted()) {
       return false;
     }
 
-    StoreTempCache_(key, list_result.entries);
+    StoreTempCache_(key, list_result.data.entries);
 
     std::vector<AMCompletionCandidate> candidates;
-    AppendPathCandidates_(path, list_result.entries, &candidates);
+    AppendPathCandidates_(path, list_result.data.entries, &candidates);
     if (!candidates.empty()) {
       SortCandidates(AMCompletionContext{}, candidates);
     }
@@ -305,8 +305,8 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
 
   const auto current_client = runtime_->CurrentClient();
   const bool current_remote =
-      current_client &&
-      current_client->ConfigPort().GetProtocol() != ClientProtocol::LOCAL;
+      current_client && current_client->ConfigPort().GetProtocol() !=
+                            AMDomain::host::ClientProtocol::LOCAL;
 
   bool force_local = false;
   std::string nickname;
@@ -371,7 +371,8 @@ AMPathSearchEngine::BuildPathContext_(const std::string &token_prefix,
   path.base = path.header + path.dir_raw;
 
   AMDomain::client::ClientHandle client =
-      path.remote ? runtime_->GetClient(path.nickname) : runtime_->LocalClient();
+      path.remote ? runtime_->GetClient(path.nickname)
+                  : runtime_->LocalClient();
   if (!client) {
     return path;
   }
@@ -499,8 +500,7 @@ void AMPathSearchEngine::StoreTempCache_(const CacheKey &key,
   temp_cache_[key.nickname][key.dir] = TempCacheEntry{items};
 }
 
-std::vector<AMSearchEngineRegistration>
-AMBuildDefaultSearchEngineRegistrations(
+std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
     std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
     AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry) {
   std::vector<AMSearchEngineRegistration> out;
@@ -524,3 +524,4 @@ AMBuildDefaultSearchEngineRegistrations(
   out.push_back({{AMCompletionTarget::Path}, path_engine});
   return out;
 }
+

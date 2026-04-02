@@ -15,7 +15,7 @@ AMInfraFileLoggerWriter::AMInfraFileLoggerWriter(
   }
   std::lock_guard<std::mutex> lock(mtx_);
   ECM open_rcm = EnsureStreamOpen_();
-  if (!isok(open_rcm)) {
+  if (!(open_rcm)) {
     SetLastError_(open_rcm);
   }
 }
@@ -25,19 +25,19 @@ AMInfraFileLoggerWriter::AMInfraFileLoggerWriter(
  */
 ECM AMInfraFileLoggerWriter::SetPath(const std::filesystem::path &path) {
   if (path.empty()) {
-    ECM invalid = Err(EC::InvalidArg, "Logger writer path cannot be empty");
+    ECM invalid = Err(EC::InvalidArg, "", "", "Logger writer path cannot be empty");
     SetLastError_(invalid);
     ReportError_(invalid);
     return invalid;
   }
   std::lock_guard<std::mutex> lock(mtx_);
   if (path_ == path) {
-    return Ok();
+    return OK;
   }
   CloseUnlocked_();
   path_ = path;
-  SetLastError_({EC::Success, ""});
-  return Ok();
+  SetLastError_(OK);
+  return OK;
 }
 
 /**
@@ -54,7 +54,7 @@ std::filesystem::path AMInfraFileLoggerWriter::Path() const {
 ECM AMInfraFileLoggerWriter::Write(const std::string &line) {
   std::lock_guard<std::mutex> lock(mtx_);
   ECM open_rcm = EnsureStreamOpen_();
-  if (!isok(open_rcm)) {
+  if (!(open_rcm)) {
     SetLastError_(open_rcm);
     ReportError_(open_rcm);
     return open_rcm;
@@ -62,8 +62,7 @@ ECM AMInfraFileLoggerWriter::Write(const std::string &line) {
   stream_ << line << std::endl;
   stream_.flush();
   if (stream_.bad() || stream_.fail()) {
-    ECM write_rcm = Err(EC::LocalFileError,
-                        AMStr::fmt("Failed to write log file {}",
+    ECM write_rcm = Err(EC::LocalFileError, "", "", AMStr::fmt("Failed to write log file {}",
                                    path_.string().empty() ? "<empty>"
                                                           : path_.string()));
     stream_.clear();
@@ -71,8 +70,8 @@ ECM AMInfraFileLoggerWriter::Write(const std::string &line) {
     ReportError_(write_rcm);
     return write_rcm;
   }
-  SetLastError_({EC::Success, ""});
-  return Ok();
+  SetLastError_(OK);
+  return OK;
 }
 
 /**
@@ -96,18 +95,17 @@ void AMInfraFileLoggerWriter::Close() {
  */
 ECM AMInfraFileLoggerWriter::EnsureStreamOpen_() {
   if (stream_.is_open()) {
-    return Ok();
+    return OK;
   }
   if (path_.empty()) {
-    return Err(EC::InvalidArg, "Logger writer path is not configured");
+    return Err(EC::InvalidArg, "", "", "Logger writer path is not configured");
   }
   std::error_code ec;
   const std::filesystem::path parent_path = path_.parent_path();
   if (!parent_path.empty()) {
     std::filesystem::create_directories(parent_path, ec);
     if (ec) {
-      return Err(EC::LocalFileError,
-                 AMStr::fmt("Failed to create log directory {}: {}",
+      return Err(EC::LocalFileError, "", "", AMStr::fmt("Failed to create log directory {}: {}",
                             parent_path.string(), ec.message()));
     }
   }
@@ -115,10 +113,9 @@ ECM AMInfraFileLoggerWriter::EnsureStreamOpen_() {
   stream_.clear();
   stream_.open(path_, std::ios::app);
   if (!stream_.is_open()) {
-    return Err(EC::LocalFileError,
-               AMStr::fmt("Failed to open log file {}", path_.string()));
+    return Err(EC::LocalFileError, "", "", AMStr::fmt("Failed to open log file {}", path_.string()));
   }
-  return Ok();
+  return OK;
 }
 
 /**

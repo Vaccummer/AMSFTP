@@ -101,7 +101,7 @@ public:
   ECM CheckClients(
       const CheckClientsRequest &request,
       const std::optional<ClientControlComponent> &component = std::nullopt);
-  ECM ListPrivateKeys(bool detail);
+  ECM ListPrivateKeys();
   ECM AddHost(const std::string &nickname);
   ECM ModifyHost(const std::string &nickname);
   ECM RenameHost(const std::string &old_nickname,

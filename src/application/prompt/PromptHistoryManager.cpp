@@ -12,7 +12,7 @@ PromptHistoryManager::PromptHistoryManager(PromptHistoryArg arg)
     : AMApplication::config::IConfigSyncPort(typeid(PromptHistoryArg)),
       init_arg_(std::move(arg)) {}
 
-ECM PromptHistoryManager::Init() { return Ok(); }
+ECM PromptHistoryManager::Init() { return OK; }
 
 PromptHistoryArg PromptHistoryManager::GetInitArg() const {
   return init_arg_.lock().load();
@@ -21,12 +21,12 @@ PromptHistoryArg PromptHistoryManager::GetInitArg() const {
 ECM PromptHistoryManager::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "config service is null");
+    return Err(EC::InvalidArg, "", "", "config service is null");
   }
   if (!config_service->Write<PromptHistoryArg>(ExportConfigSnapshot())) {
-    return Err(EC::ConfigDumpFailed, "failed to flush prompt history config");
+    return Err(EC::ConfigDumpFailed, "", "", "failed to flush prompt history config");
   }
-  return Ok();
+  return OK;
 }
 
 PromptHistoryArg PromptHistoryManager::ExportConfigSnapshot() const {
@@ -48,7 +48,7 @@ PromptHistoryManager::GetZoneHistory(const std::string &zone) const {
     out.resolved_zone = zone;
     out.from_fallback = false;
     out.history = zone_it->second;
-    return {std::move(out), Ok()};
+    return {std::move(out), OK};
   }
 
   PromptHistoryQueryResult out = {};
@@ -57,8 +57,7 @@ PromptHistoryManager::GetZoneHistory(const std::string &zone) const {
   out.from_fallback = false;
   out.history = {};
   return {std::move(out),
-          Err(EC::PathNotExist,
-              AMStr::fmt("Prompt history not found for zone: {}", zone))};
+          Err(EC::PathNotExist, "", "", AMStr::fmt("Prompt history not found for zone: {}", zone))};
 }
 
 ECM PromptHistoryManager::SetZoneHistory(const std::string &zone,
@@ -66,31 +65,30 @@ ECM PromptHistoryManager::SetZoneHistory(const std::string &zone,
   auto guard = init_arg_.lock();
   guard->set[zone] = std::move(history);
   MarkConfigDirty();
-  return Ok();
+  return OK;
 }
 
 ECM PromptHistoryManager::AppendZoneHistory(const std::string &zone,
                                             const std::string &entry) {
   if (entry.empty()) {
-    return Err(EC::InvalidArg, "Prompt history entry is empty");
+    return Err(EC::InvalidArg, "", "", "Prompt history entry is empty");
   }
   auto guard = init_arg_.lock();
   auto &bucket = guard->set[zone];
   bucket.push_back(entry);
   MarkConfigDirty();
-  return Ok();
+  return OK;
 }
 
 ECM PromptHistoryManager::ClearZoneHistory(const std::string &zone) {
   auto guard = init_arg_.lock();
   auto it = guard->set.find(zone);
   if (it == guard->set.end()) {
-    return Err(EC::PathNotExist,
-               AMStr::fmt("Prompt history zone not found: {}", zone));
+    return Err(EC::PathNotExist, "", "", AMStr::fmt("Prompt history zone not found: {}", zone));
   }
   it->second.clear();
   MarkConfigDirty();
-  return Ok();
+  return OK;
 }
 
 } // namespace AMApplication::prompt

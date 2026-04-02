@@ -14,16 +14,16 @@ namespace {
 
 ECM CurrentStopError_(const ClientControlComponent &control) {
   if (control.IsInterrupted()) {
-    return Err(EC::Terminate, "Operation interrupted");
+    return Err(EC::Terminate, "", "", "Operation interrupted");
   }
   if (control.IsTimeout()) {
-    return Err(EC::OperationTimeout, "Operation timed out");
+    return Err(EC::OperationTimeout, "", "", "Operation timed out");
   }
-  return Ok();
+  return OK;
 }
 
 void UpdateLastError_(ECM *last_error, const ECM &next) {
-  if (last_error == nullptr || isok(next)) {
+  if (last_error == nullptr || (next)) {
     return;
   }
   *last_error = next;
@@ -58,12 +58,12 @@ ECMData<int64_t> FilesystemAppService::GetSize(
     std::function<bool(const PathTarget &, int64_t)> on_progress,
     std::function<void(const PathTarget &, ECM)> on_error) {
   int64_t total_size = 0;
-  ECM last_error = Ok();
+  ECM last_error = OK;
 
   auto resolved_result = ResolvePath(path, control);
-  if (!isok(resolved_result.rcm) || !resolved_result.data.client) {
-    return {total_size, isok(resolved_result.rcm)
-                            ? Err(EC::InvalidHandle, "Resolved client is null")
+  if (!(resolved_result.rcm) || !resolved_result.data.client) {
+    return {total_size, (resolved_result.rcm)
+                            ? Err(EC::InvalidHandle, "", "", "Resolved client is null")
                             : resolved_result.rcm};
   }
   const auto &resolved = resolved_result.data;
@@ -82,42 +82,42 @@ ECMData<int64_t> FilesystemAppService::GetSize(
     UpdateLastError_(&last_error, rcm);
     const PathTarget callback_path = BuildCallbackPath_(nickname, error_path);
     const ECM cb_rcm = CallCallbackSafe(on_error, callback_path, rcm);
-    if (!isok(cb_rcm)) {
+    if (!(cb_rcm)) {
       UpdateLastError_(&last_error, cb_rcm);
       return cb_rcm;
     }
-    return Ok();
+    return OK;
   };
 
   const auto notify_progress = [&](const std::string &current_path) -> ECM {
     if (!on_progress) {
-      return Ok();
+      return OK;
     }
     const PathTarget callback_path = BuildCallbackPath_(nickname, current_path);
     auto [keep_going, cb_rcm] =
         CallCallbackSafeRet<bool>(on_progress, callback_path, total_size);
-    if (!isok(cb_rcm)) {
+    if (!(cb_rcm)) {
       UpdateLastError_(&last_error, cb_rcm);
       return cb_rcm;
     }
     if (!keep_going) {
       const ECM stop_rcm =
-          Err(EC::Terminate, "GetSize terminated by on_progress callback");
+          Err(EC::Terminate, "", "", "GetSize terminated by on_progress callback");
       UpdateLastError_(&last_error, stop_rcm);
       return stop_rcm;
     }
-    return Ok();
+    return OK;
   };
 
   const ECM stop_rcm = CurrentStopError_(control);
-  if (!isok(stop_rcm)) {
+  if (!(stop_rcm)) {
     return {total_size, stop_rcm};
   }
 
   auto root_stat = BaseStat(client, nickname, resolved.abs_path, control, false);
-  if (!isok(root_stat.rcm)) {
+  if (!(root_stat.rcm)) {
     const ECM cb_rcm = notify_error(resolved.abs_path, root_stat.rcm);
-    if (!isok(cb_rcm)) {
+    if (!(cb_rcm)) {
       return {total_size, cb_rcm};
     }
     return {total_size, last_error};
@@ -126,7 +126,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
   if (root_stat.data.type != PathType::DIR) {
     total_size = static_cast<int64_t>(root_stat.data.size);
     const ECM cb_rcm = notify_progress(resolved.abs_path);
-    if (!isok(cb_rcm)) {
+    if (!(cb_rcm)) {
       return {total_size, cb_rcm};
     }
     return {total_size, last_error};
@@ -153,7 +153,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
     auto list_result = BaseListdir(client, nickname, current_dir, control);
     if (!list_result.rcm) {
       const ECM cb_rcm = notify_error(current_dir, list_result.rcm);
-      if (!isok(cb_rcm)) {
+      if (!(cb_rcm)) {
         return {total_size, cb_rcm};
       }
       continue;
@@ -161,7 +161,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
 
     for (const auto &entry : list_result.data) {
       const ECM item_stop_rcm = CurrentStopError_(control);
-      if (!isok(item_stop_rcm)) {
+      if (!(item_stop_rcm)) {
         UpdateLastError_(&last_error, item_stop_rcm);
         return {total_size, last_error};
       }
@@ -183,7 +183,7 @@ ECMData<int64_t> FilesystemAppService::GetSize(
       if (total_size != previous) {
         const ECM cb_rcm =
             notify_progress(entry_path.empty() ? current_dir : entry_path);
-        if (!isok(cb_rcm)) {
+        if (!(cb_rcm)) {
           return {total_size, cb_rcm};
         }
       }

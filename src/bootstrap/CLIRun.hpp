@@ -59,7 +59,7 @@ inline int RunCLI(BootstrapServices &runtime, int argc, char **argv) {
 
   return runtime.run_ctx.exit_code
              ? runtime.run_ctx.exit_code->load(std::memory_order_relaxed)
-             : static_cast<int>(runtime.run_ctx.rcm.first);
+             : static_cast<int>(runtime.run_ctx.rcm.code);
 }
 
 } // namespace AMBootstrap

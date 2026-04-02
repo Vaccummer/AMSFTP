@@ -58,25 +58,25 @@ ECM AMTomlConfigStore::Configure(const AMDomain::config::ConfigStoreInitArg &arg
 
   for (const auto kind : kRequiredKinds) {
     if (layout_.find(kind) == layout_.end()) {
-      return Err(EC::ConfigNotInitialized, "missing document layout");
+      return Err(EC::ConfigNotInitialized, "", "", "missing document layout");
     }
   }
   writer_.Start();
   initialized_ = true;
-  return Ok();
+  return OK;
 }
 
 ECM AMTomlConfigStore::Load(std::optional<AMDomain::config::DocumentKind> kind,
                             bool force) {
   if (!initialized_) {
-    return Err(EC::ConfigNotInitialized, "config store is not initialized");
+    return Err(EC::ConfigNotInitialized, "", "", "config store is not initialized");
   }
 
   auto load_one = [this, force](AMDomain::config::DocumentKind target) -> ECM {
     if (!force) {
       auto existing = GetHandle_(target);
       if (existing) {
-        return Ok();
+        return OK;
       }
     }
     return LoadDocument_(target);
@@ -87,11 +87,11 @@ ECM AMTomlConfigStore::Load(std::optional<AMDomain::config::DocumentKind> kind,
   }
   for (const auto current : kRequiredKinds) {
     ECM rcm = load_one(current);
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       return rcm;
     }
   }
-  return Ok();
+  return OK;
 }
 
 ECM AMTomlConfigStore::Dump(AMDomain::config::DocumentKind kind,
@@ -101,21 +101,21 @@ ECM AMTomlConfigStore::Dump(AMDomain::config::DocumentKind kind,
     SubmitWriteTask([this, kind, dst_copy]() -> ECM {
       return Dump(kind, dst_copy, false);
     });
-    return Ok();
+    return OK;
   }
 
   auto handle = GetHandle_(kind);
   if (!handle) {
-    ECM rcm = Err(EC::ConfigNotInitialized, "document handle not initialized");
+    ECM rcm = Err(EC::ConfigNotInitialized, "", "", "document handle not initialized");
     NotifyDumpError_(rcm);
     return rcm;
   }
   if (dst_path.empty() && !handle->IsDirty()) {
-    return Ok();
+    return OK;
   }
 
   ECM rcm = dst_path.empty() ? handle->DumpInplace() : handle->DumpTo(dst_path);
-  if (!isok(rcm)) {
+  if (!(rcm)) {
     NotifyDumpError_(rcm);
   }
   return rcm;
@@ -124,15 +124,15 @@ ECM AMTomlConfigStore::Dump(AMDomain::config::DocumentKind kind,
 ECM AMTomlConfigStore::DumpAll(bool async) {
   if (async) {
     SubmitWriteTask([this]() -> ECM { return DumpAll(false); });
-    return Ok();
+    return OK;
   }
   for (const auto kind : kRequiredKinds) {
     ECM rcm = Dump(kind, {}, false);
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       return rcm;
     }
   }
-  return Ok();
+  return OK;
 }
 
 void AMTomlConfigStore::Close() {
@@ -244,14 +244,14 @@ void AMTomlConfigStore::SubmitWriteTask(std::function<ECM()> task) {
   }
   if (!writer_.IsRunning()) {
     ECM rcm = task();
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       NotifyDumpError_(rcm);
     }
     return;
   }
   writer_.Submit([this, task = std::move(task)]() mutable {
     ECM rcm = task();
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       NotifyDumpError_(rcm);
     }
   });
@@ -265,9 +265,9 @@ ECM AMTomlConfigStore::EnsureDirectory(const std::filesystem::path &dir) {
   std::error_code ec;
   std::filesystem::create_directories(dir, ec);
   if (ec) {
-    return Err(EC::ConfigDumpFailed, ec.message());
+    return Err(EC::ConfigDumpFailed, "", "", ec.message());
   }
-  return Ok();
+  return OK;
 }
 
 void AMTomlConfigStore::PruneBackupFiles(const std::filesystem::path &bak_dir,
@@ -326,21 +326,21 @@ ECM AMTomlConfigStore::LoadDocument_(AMDomain::config::DocumentKind kind) {
     std::lock_guard<std::mutex> lock(mtx_);
     auto spec_it = layout_.find(kind);
     if (spec_it == layout_.end()) {
-      return Err(EC::ConfigNotInitialized, "missing document layout");
+      return Err(EC::ConfigNotInitialized, "", "", "missing document layout");
     }
     spec = spec_it->second;
   }
 
   auto handle = std::make_shared<AMInfraSuperTomlHandle>();
   ECM rcm = handle->Init(spec);
-  if (!isok(rcm)) {
+  if (!(rcm)) {
     return rcm;
   }
   {
     std::lock_guard<std::mutex> lock(mtx_);
     handles_[kind] = std::move(handle);
   }
-  return Ok();
+  return OK;
 }
 
 void AMTomlConfigStore::NotifyDumpError_(const ECM &err) const {

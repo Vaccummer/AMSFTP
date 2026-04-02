@@ -61,7 +61,7 @@ public:
   /**
    * @brief Clear last writer-level ECM state to success.
    */
-  void ClearLastError() { SetLastError_({EC::Success, ""}); }
+  void ClearLastError() { SetLastError_(OK); }
 
 protected:
   /**
@@ -74,7 +74,7 @@ protected:
 
 private:
   mutable std::mutex error_mtx_;
-  ECM last_error_ = {EC::Success, ""};
+  ECM last_error_ = OK;
 };
 
 /**

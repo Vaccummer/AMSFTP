@@ -92,24 +92,24 @@ void BuildCliRuntimeState_(BootstrapServices *runtime,
 ECM BuildRunContext_(AMInterface::cli::CliRunContext *run_ctx) {
   run_ctx->task_control_token = AMDomain::client::CreateClientControlToken();
   if (!run_ctx->task_control_token) {
-    return Err(EC::InvalidHandle, "failed to create task control token");
+    return Err(EC::InvalidHandle, "", "", "failed to create task control token");
   }
   run_ctx->exit_code = std::make_shared<std::atomic<int>>(0);
   run_ctx->is_interactive = std::make_shared<std::atomic<bool>>(false);
-  return Ok();
+  return OK;
 }
 
 void InitAndLoadConfigService_(AMApplication::config::ConfigAppService *service,
                                const fs::path &root_dir) {
   service->SetInitArg(BuildConfigInitArg(root_dir));
   ECM rcm = service->Init();
-  if (!isok(rcm)) {
-    PrintBootstrapWarn(AMStr::fmt("config init failed: {}", rcm.second));
+  if (!(rcm)) {
+    PrintBootstrapWarn(AMStr::fmt("config init failed: {}", rcm.msg()));
     return;
   }
   rcm = service->Load(std::nullopt, true);
-  if (!isok(rcm)) {
-    PrintBootstrapWarn(AMStr::fmt("config load failed: {}", rcm.second));
+  if (!(rcm)) {
+    PrintBootstrapWarn(AMStr::fmt("config load failed: {}", rcm.msg()));
   }
 }
 
@@ -132,8 +132,8 @@ void BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
   state->host_service = std::make_unique<AMApplication::host::HostAppService>();
   {
     const ECM rcm = state->host_service->Init(snapshots.host_config_arg);
-    if (!isok(rcm)) {
-      PrintBootstrapWarn(AMStr::fmt("host init failed: {}", rcm.second));
+    if (!(rcm)) {
+      PrintBootstrapWarn(AMStr::fmt("host init failed: {}", rcm.msg()));
     }
   }
 
@@ -142,8 +142,8 @@ void BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
   {
     const ECM rcm =
         state->known_hosts_service->Init(snapshots.known_hosts_arg.entries);
-    if (!isok(rcm)) {
-      PrintBootstrapWarn(AMStr::fmt("known-hosts init failed: {}", rcm.second));
+    if (!(rcm)) {
+      PrintBootstrapWarn(AMStr::fmt("known-hosts init failed: {}", rcm.msg()));
     }
   }
 
@@ -161,8 +161,8 @@ void BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
       std::make_unique<AMApplication::var::VarAppService>(snapshots.var_arg);
   {
     const ECM rcm = state->var_service->Init();
-    if (!isok(rcm)) {
-      PrintBootstrapWarn(AMStr::fmt("var init failed: {}", rcm.second));
+    if (!(rcm)) {
+      PrintBootstrapWarn(AMStr::fmt("var init failed: {}", rcm.msg()));
     }
   }
 }
@@ -174,9 +174,9 @@ void BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
           snapshots.prompt_profile_arg);
   {
     const ECM rcm = state->prompt_profile_manager->Init();
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       PrintBootstrapWarn(
-          AMStr::fmt("prompt profile init failed: {}", rcm.second));
+          AMStr::fmt("prompt profile init failed: {}", rcm.msg()));
     }
   }
 
@@ -185,9 +185,9 @@ void BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
           snapshots.prompt_history_arg);
   {
     const ECM rcm = state->prompt_history_manager->Init();
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       PrintBootstrapWarn(
-          AMStr::fmt("prompt history init failed: {}", rcm.second));
+          AMStr::fmt("prompt history init failed: {}", rcm.msg()));
     }
   }
 
@@ -195,8 +195,8 @@ void BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
       std::make_unique<AMInterface::style::AMStyleService>(snapshots.style_arg);
   {
     const ECM rcm = state->style_service->Init();
-    if (!isok(rcm)) {
-      PrintBootstrapWarn(AMStr::fmt("style init failed: {}", rcm.second));
+    if (!(rcm)) {
+      PrintBootstrapWarn(AMStr::fmt("style init failed: {}", rcm.msg()));
     }
   }
 
@@ -206,9 +206,9 @@ void BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
           *state->style_service);
   {
     const ECM rcm = state->prompt_profile_history_manager->Init();
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       PrintBootstrapWarn(
-          AMStr::fmt("isocline profile init failed: {}", rcm.second));
+          AMStr::fmt("isocline profile init failed: {}", rcm.msg()));
     }
   }
 
@@ -217,8 +217,8 @@ void BuildPromptAndStyleServices_(const ConfigSnapshots &snapshots,
           *state->prompt_profile_history_manager);
   {
     const ECM rcm = state->prompt_io_manager->Init();
-    if (!isok(rcm)) {
-      PrintBootstrapWarn(AMStr::fmt("prompt io init failed: {}", rcm.second));
+    if (!(rcm)) {
+      PrintBootstrapWarn(AMStr::fmt("prompt io init failed: {}", rcm.msg()));
     }
   }
 }
@@ -235,9 +235,9 @@ void RegisterConfigSyncPorts_(AppServiceBuildState *state) {
       return;
     }
     auto result = state->config_service->RegisterSyncPort(port);
-    if (!isok(result.rcm)) {
+    if (!(result.rcm)) {
       PrintBootstrapWarn(
-          AMStr::fmt("register sync port {} failed: {}", name, result.rcm.second));
+          AMStr::fmt("register sync port {} failed: {}", name, result.rcm.msg()));
     }
   };
 
@@ -277,8 +277,9 @@ void BuildClientInterfaceServices_(
   state->filesystem_interface_service =
       std::make_unique<AMInterface::filesystem::FilesystemInterfaceSerivce>(
           *app_state.client_service, *app_state.filesystem_service,
-          *app_state.style_service, *app_state.prompt_io_manager,
-          task_control_token);
+          *app_state.style_service, *app_state.prompt_io_manager);
+  state->filesystem_interface_service->SetDefaultControlToken(
+      task_control_token);
 
   state->var_interface_service =
       std::make_unique<AMInterface::var::VarInterfaceService>(
@@ -291,7 +292,7 @@ ECM BuildTransferInterfaceService_(
     const AppServiceBuildState &app_state, InterfaceServiceBuildState *state) {
   state->transfer_pool = AMDomain::transfer::CreateTransferPoolPort();
   if (!state->transfer_pool) {
-    return Err(EC::InvalidHandle, "failed to create transfer pool");
+    return Err(EC::InvalidHandle, "", "", "failed to create transfer pool");
   }
 
   state->transfer_service =
@@ -303,37 +304,37 @@ ECM BuildTransferInterfaceService_(
           },
           app_state.style_service.get());
   state->transfer_service->SetDefaultControlToken(task_control_token);
-  return Ok();
+  return OK;
 }
 
 void BootstrapLocalClient_(const AMInterface::cli::amf &task_control_token,
                            const AppServiceBuildState &app_state) {
   auto local_cfg_result = app_state.host_service->GetLocalConfig();
-  if (isok(local_cfg_result.rcm)) {
+  if ((local_cfg_result.rcm)) {
     const auto control =
         AMDomain::client::ClientControlComponent(task_control_token, -1);
     auto local_client_result = app_state.client_service->CreateClient(
         local_cfg_result.data, control, true);
-    if (isok(local_client_result.rcm) && local_client_result.data) {
+    if ((local_client_result.rcm) && local_client_result.data) {
       ECM rcm = app_state.client_service->Init(local_client_result.data);
-      if (!isok(rcm)) {
-        PrintBootstrapWarn(AMStr::fmt("client init failed: {}", rcm.second));
+      if (!(rcm)) {
+        PrintBootstrapWarn(AMStr::fmt("client init failed: {}", rcm.msg()));
       } else {
         const ECM ensure_rcm = app_state.filesystem_service->EnsureClientWorkdir(
             local_client_result.data, control);
-        if (!isok(ensure_rcm)) {
+        if (!(ensure_rcm)) {
           PrintBootstrapWarn(
-              AMStr::fmt("ensure local workdir failed: {}", ensure_rcm.second));
+              AMStr::fmt("ensure local workdir failed: {}", ensure_rcm.msg()));
         }
       }
-    } else if (!isok(local_client_result.rcm)) {
+    } else if (!(local_client_result.rcm)) {
       PrintBootstrapWarn(AMStr::fmt("local client create failed: {}",
-                                    local_client_result.rcm.second));
+                                    local_client_result.rcm.msg()));
     }
     return;
   }
   PrintBootstrapWarn(AMStr::fmt("resolve local host config failed: {}",
-                                local_cfg_result.rcm.second));
+                                local_cfg_result.rcm.msg()));
 }
 
 void BuildAndInitSignalMonitor_(
@@ -364,7 +365,7 @@ void BuildAndInitSignalMonitor_(
   state->signal_monitor->RegisterHook("ControlToken", hook);
   const ECM rcm = state->signal_monitor->Init();
   if (!rcm) {
-    PrintBootstrapWarn(AMStr::fmt("signal monitor init failed: {}", rcm.second));
+    PrintBootstrapWarn(AMStr::fmt("signal monitor init failed: {}", rcm.msg()));
     throw std::runtime_error("failed to initialize signal monitor");
   }
 }
@@ -436,7 +437,7 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
 
   {
     const ECM rcm = BuildRunContext_(&runtime->run_ctx);
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       return {nullptr, rcm};
     }
   }
@@ -449,7 +450,7 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
   {
     const ECM rcm = BuildTransferInterfaceService_(
         runtime->run_ctx.task_control_token, app_state, &interface_state);
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       return {nullptr, rcm};
     }
   }
@@ -461,12 +462,12 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
 
   {
     const ECM rcm = runtime->managers.Init(runtime->run_ctx.task_control_token);
-    if (!isok(rcm)) {
-      PrintBootstrapWarn(AMStr::fmt("cli manager init failed: {}", rcm.second));
+    if (!(rcm)) {
+      PrintBootstrapWarn(AMStr::fmt("cli manager init failed: {}", rcm.msg()));
     }
   }
 
-  return {std::move(runtime), Ok()};
+  return {std::move(runtime), OK};
 }
 
 } // namespace AMBootstrap

@@ -1,4 +1,5 @@
 #pragma once
+#include "application/style/StyleAppService.hpp"
 
 #include "domain/style/StyleDomainModel.hpp"
 #include "foundation/core/DataClass.hpp"
@@ -12,13 +13,12 @@
 namespace AMInterface::style {
 using StyleConfigArg = AMDomain::style::StyleConfigArg;
 
-class AMStyleService : NonCopyableNonMovable {
+class AMStyleService : public AMApplication::style::StyleConfigManager {
 public:
   explicit AMStyleService(StyleConfigArg arg = {});
   ~AMStyleService() override = default;
 
-  ECM Init();
-  [[nodiscard]] StyleConfigArg GetInitArg() const;
+  ECM Init() override;
 
   [[nodiscard]] std::string Format(const std::string &ori_str,
                                    StyleIndex style_index,
@@ -30,8 +30,7 @@ public:
                                                 const std::string &prefix);
 
 private:
-  void SetInitArg(StyleConfigArg arg);
-  mutable AMAtomic<StyleConfigArg> init_arg_ = {};
   AMAtomic<std::optional<AMProgressBarStyle>> progress_bar_style_ = {};
 };
 } // namespace AMInterface::style
+

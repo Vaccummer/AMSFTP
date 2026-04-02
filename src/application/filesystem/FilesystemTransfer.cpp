@@ -2,7 +2,6 @@
 #include "domain/filesystem/FileSystemDomainService.hpp"
 
 #include "foundation/tools/path.hpp"
-#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 
 #include <algorithm>
@@ -100,34 +99,35 @@ AcquireSourceTransferClient_(FilesystemAppService *service,
                              TransferClientContainer *clients,
                              const std::string &nickname) {
   if (!service || !clients) {
-    return {nullptr, Err(EC::InvalidArg, "Transfer resolver deps are null")};
+    return {nullptr,
+            Err(EC::InvalidArg, "", "", "Transfer resolver deps are null")};
   }
   if (nickname.empty()) {
-    return {nullptr, Err(EC::InvalidArg, "Source nickname is empty")};
+    return {nullptr, Err(EC::InvalidArg, "", "", "Source nickname is empty")};
   }
 
   if (auto existing = clients->GetSrcClient(nickname)) {
-    return {existing, Ok()};
+    return {existing, OK};
   }
 
   auto first = service->GetTransferClient(nickname);
-  if (!isok(first.rcm) || !first.data) {
+  if (!(first.rcm) || !first.data) {
     return first;
   }
   const ECM add_first_rcm = clients->AddSrcClient(nickname, first.data);
-  if (isok(add_first_rcm)) {
+  if ((add_first_rcm)) {
     return first;
   }
-  if (add_first_rcm.first != EC::InvalidArg) {
+  if (add_first_rcm.code != EC::InvalidArg) {
     return {nullptr, add_first_rcm};
   }
 
   auto second = service->GetTransferClient(nickname);
-  if (!isok(second.rcm) || !second.data) {
+  if (!(second.rcm) || !second.data) {
     return second;
   }
   const ECM add_second_rcm = clients->AddSrcClient(nickname, second.data);
-  if (!isok(add_second_rcm)) {
+  if (!(add_second_rcm)) {
     return {nullptr, add_second_rcm};
   }
   return second;
@@ -139,33 +139,35 @@ ECMData<DstResolveResult> FilesystemAppService::ResolveTransferDst(
     const ClientControlComponent &control) {
   if (!clients) {
     return {DstResolveResult{},
-            Err(EC::InvalidArg, "Transfer client container pointer is null")};
+            Err(EC::InvalidArg, "", "",
+                "Transfer client container pointer is null")};
   }
 
   DstResolveResult out = {};
 
   auto transfer_client = GetTransferClient(dst.nickname);
-  if (!isok(transfer_client.rcm) || !transfer_client.data) {
+  if (!(transfer_client.rcm) || !transfer_client.data) {
     return {std::move(out), transfer_client.rcm};
   }
 
   ECM add_dst_rcm = clients->AddDstClient(dst.nickname, transfer_client.data);
-  if (!isok(add_dst_rcm) && add_dst_rcm.first == EC::InvalidArg) {
+  if (!(add_dst_rcm) && add_dst_rcm.code == EC::InvalidArg) {
     auto second_client = GetTransferClient(dst.nickname);
-    if (!isok(second_client.rcm) || !second_client.data) {
+    if (!(second_client.rcm) || !second_client.data) {
       return {std::move(out), second_client.rcm};
     }
     add_dst_rcm = clients->AddDstClient(dst.nickname, second_client.data);
-    if (!isok(add_dst_rcm)) {
+    if (!(add_dst_rcm)) {
       return {std::move(out), add_dst_rcm};
     }
     transfer_client = second_client;
-  } else if (!isok(add_dst_rcm)) {
+  } else if (!(add_dst_rcm)) {
     return {std::move(out), add_dst_rcm};
   }
 
-  auto abs_result = ResolveAbsolutePath(transfer_client.data, dst.path, control);
-  if (!isok(abs_result.rcm)) {
+  auto abs_result =
+      ResolveAbsolutePath(transfer_client.data, dst.path, control);
+  if (!(abs_result.rcm)) {
     return {std::move(out), abs_result.rcm};
   }
 
@@ -179,13 +181,13 @@ ECMData<DstResolveResult> FilesystemAppService::ResolveTransferDst(
 
   auto stat_result =
       BaseStat(transfer_client.data, dst.nickname, dst.path, control);
-  if (isok(stat_result.rcm)) {
+  if ((stat_result.rcm)) {
     out.dst_info = stat_result.data;
-    return {std::move(out), Ok()};
+    return {std::move(out), OK};
   }
   if (AMDomain::filesystem::services::IsPathNotExistError(
-          stat_result.rcm.first)) {
-    return {std::move(out), Ok()};
+          stat_result.rcm.code)) {
+    return {std::move(out), OK};
   }
   return {std::move(out), stat_result.rcm};
 }
@@ -195,27 +197,27 @@ ECMData<SourceResolveResult> FilesystemAppService::ResolveTransferSrc(
     const ClientControlComponent &control, bool error_stop) {
   SourceResolveResult out = {};
   if (!clients) {
-    return {std::move(out),
-            Err(EC::InvalidArg, "Transfer client container pointer is null")};
+    return {std::move(out), Err(EC::InvalidArg, "", "",
+                                "Transfer client container pointer is null")};
   }
   if (srcs.empty()) {
-    return {std::move(out), Err(EC::InvalidArg, "Source path list is empty")};
+    return {std::move(out),
+            Err(EC::InvalidArg, "", "", "Source path list is empty")};
   }
 
-  ECM first_error = Ok();
+  ECM first_error = OK;
   const auto mark_error = [&](const std::string &nickname,
-                              const PathTarget &error_path,
-                              const ECM &rcm) {
+                              const PathTarget &error_path, const ECM &rcm) {
     const std::string key = nickname.empty() ? std::string("local") : nickname;
     out.error_data[key].push_back({error_path, rcm});
-    if (isok(first_error)) {
+    if ((first_error)) {
       first_error = rcm;
     }
   };
 
   for (auto &src : srcs) {
     if (src.nickname.empty()) {
-      const ECM rcm = Err(EC::InvalidArg, "Source nickname is empty");
+      const ECM rcm = Err(EC::InvalidArg, "", "", "Source nickname is empty");
       mark_error(src.nickname, src, rcm);
       if (error_stop) {
         return {std::move(out), rcm};
@@ -225,7 +227,7 @@ ECMData<SourceResolveResult> FilesystemAppService::ResolveTransferSrc(
 
     auto src_transfer =
         AcquireSourceTransferClient_(this, clients, src.nickname);
-    if (!isok(src_transfer.rcm) || !src_transfer.data) {
+    if (!(src_transfer.rcm) || !src_transfer.data) {
       mark_error(src.nickname, src, src_transfer.rcm);
       if (error_stop) {
         return {std::move(out), src_transfer.rcm};
@@ -237,7 +239,7 @@ ECMData<SourceResolveResult> FilesystemAppService::ResolveTransferSrc(
     const bool is_wildcard =
         AMDomain::filesystem::services::HasWildcard(src.path);
     auto abs_result = ResolveAbsolutePath(src_transfer.data, src.path, control);
-    if (!isok(abs_result.rcm)) {
+    if (!(abs_result.rcm)) {
       mark_error(src.nickname, src, abs_result.rcm);
       if (error_stop) {
         return {std::move(out), abs_result.rcm};
@@ -257,7 +259,7 @@ ECMData<SourceResolveResult> FilesystemAppService::ResolveTransferSrc(
 
     if (is_wildcard) {
       auto find_result = find(src, SearchType::All, control);
-      if (!isok(find_result.rcm)) {
+      if (!(find_result.rcm)) {
         mark_error(src.nickname, src, find_result.rcm);
         if (error_stop) {
           return {std::move(out), find_result.rcm};
@@ -266,7 +268,7 @@ ECMData<SourceResolveResult> FilesystemAppService::ResolveTransferSrc(
       }
       if (find_result.data.empty()) {
         const ECM miss_rcm =
-            Err(EC::PathNotExist,
+            Err(EC::PathNotExist, "", "",
                 AMStr::fmt("Source wildcard path matched no entries: {}",
                            src.path));
         mark_error(src.nickname, src, miss_rcm);
@@ -280,7 +282,7 @@ ECMData<SourceResolveResult> FilesystemAppService::ResolveTransferSrc(
 
     auto stat_result =
         BaseStat(src_transfer.data, src.nickname, src.path, control);
-    if (!isok(stat_result.rcm)) {
+    if (!(stat_result.rcm)) {
       mark_error(src.nickname, src, stat_result.rcm);
       if (error_stop) {
         return {std::move(out), stat_result.rcm};
@@ -297,10 +299,10 @@ ECMData<SourceResolveResult> FilesystemAppService::ResolveTransferSrc(
       if (err_path.path.empty()) {
         err_path.path = ".";
       }
-      mark_error(nickname, err_path,
-                 Err(EC::PathNotExist,
-                     AMStr::fmt("No valid source entries remain for {}",
-                                nickname)));
+      mark_error(
+          nickname, err_path,
+          Err(EC::PathNotExist, "", "",
+              AMStr::fmt("No valid source entries remain for {}", nickname)));
     }
   }
 
@@ -316,25 +318,26 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
 
   if (!dst.resolved_target.client) {
     return {std::move(out),
-            Err(EC::InvalidHandle, "Destination client is null")};
+            Err(EC::InvalidHandle, "", "", "Destination client is null")};
   }
   if (dst.target.path.empty()) {
-    return {std::move(out), Err(EC::InvalidArg, "Destination path is empty")};
+    return {std::move(out),
+            Err(EC::InvalidArg, "", "", "Destination path is empty")};
   }
 
   const std::string dst_host = dst.target.nickname;
   const auto check_stop = [&control]() -> ECM {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "BuildTransferTasks interrupted");
+      return Err(EC::Terminate, "", "", "BuildTransferTasks interrupted");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, "BuildTransferTasks timed out");
+      return Err(EC::OperationTimeout, "", "", "BuildTransferTasks timed out");
     }
-    return Ok();
+    return OK;
   };
   auto append_warning = [&out](std::string src_path, std::string dst_path,
                                ECM rcm) {
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       out.warnings.push_back(
           {std::move(src_path), std::move(dst_path), std::move(rcm)});
     }
@@ -353,7 +356,7 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
   if (opt.clone) {
     if (src.data.size() != 1) {
       return {std::move(out),
-              Err(EC::InvalidArg,
+              Err(EC::InvalidArg, "", "",
                   AMStr::fmt("Clone mode requires exactly one source host, got "
                              "{}",
                              src.data.size()))};
@@ -361,12 +364,12 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
     const auto &[src_host, source_data] = *src.data.begin();
     if (!source_data.resolved_target.client) {
       return {std::move(out),
-              Err(EC::InvalidHandle,
+              Err(EC::InvalidHandle, "", "",
                   AMStr::fmt("Clone source client is null: {}", src_host))};
     }
     if (source_data.paths.size() != 1) {
       return {std::move(out),
-              Err(EC::InvalidArg,
+              Err(EC::InvalidArg, "", "",
                   AMStr::fmt("Clone mode requires exactly one compacted source "
                              "path, got {}",
                              source_data.paths.size()))};
@@ -375,7 +378,7 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
     const PathInfo source_root = source_data.paths.front();
     if (opt.ignore_special_file && source_root.is_special()) {
       return {std::move(out),
-              Err(EC::NotAFile,
+              Err(EC::NotAFile, "", "",
                   AMStr::fmt("Unsupported source type: {}", source_root.path))};
     }
 
@@ -384,7 +387,7 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
       const bool dst_is_dir = dst.dst_info->type == PathType::DIR;
       if (src_is_dir != dst_is_dir) {
         return {std::move(out),
-                Err(EC::NotADirectory,
+                Err(EC::NotADirectory, "", "",
                     AMStr::fmt("Clone type conflict: src {} -> dst {}",
                                source_root.path, dst.target.path))};
       }
@@ -395,13 +398,13 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
   } else {
     for (const auto &[src_host, source_data] : src.data) {
       const ECM stop_rcm = check_stop();
-      if (!isok(stop_rcm)) {
+      if (!(stop_rcm)) {
         return {std::move(out), stop_rcm};
       }
       if (!source_data.resolved_target.client) {
         append_warning(
             "", source_data.resolved_target.target.path,
-            Err(EC::InvalidHandle,
+            Err(EC::InvalidHandle, "", "",
                 AMStr::fmt("Source client is null for host {}", src_host)));
         continue;
       }
@@ -409,13 +412,14 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
         if (opt.ignore_special_file && source_root.is_special()) {
           append_warning(
               source_root.path, "",
-              Err(EC::NotAFile,
+              Err(EC::NotAFile, "", "",
                   AMStr::fmt("Unsupported source type: {}", source_root.path)));
           continue;
         }
         const std::string mapped_root =
             AMPath::join(dst.target.path, AMPath::basename(source_root.path));
-        pending.push_back(PendingState{src_host, source_data.resolved_target.client,
+        pending.push_back(PendingState{src_host,
+                                       source_data.resolved_target.client,
                                        source_root, source_root, mapped_root});
       }
     }
@@ -423,7 +427,7 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
 
   while (!pending.empty()) {
     const ECM stop_rcm = check_stop();
-    if (!isok(stop_rcm)) {
+    if (!(stop_rcm)) {
       return {std::move(out), stop_rcm};
     }
 
@@ -431,13 +435,12 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
     pending.pop_front();
     if (!state.src_client) {
       append_warning("", state.node.path,
-                     Err(EC::InvalidHandle, "Source client is null"));
+                     Err(EC::InvalidHandle, "", "", "Source client is null"));
       continue;
     }
     const std::string rel = RelativeFrom_(state.root.path, state.node.path);
     const std::string mapped_dst =
-        rel.empty() ? state.mapped_root
-                    : AMPath::join(state.mapped_root, rel);
+        rel.empty() ? state.mapped_root : AMPath::join(state.mapped_root, rel);
 
     if (state.src_host == dst_host && state.node.path == mapped_dst) {
       continue;
@@ -446,7 +449,7 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
     if (opt.ignore_special_file && state.node.is_special()) {
       append_warning(
           state.node.path, mapped_dst,
-          Err(EC::NotAFile,
+          Err(EC::NotAFile, "", "",
               AMStr::fmt("Unsupported source node type: {}", state.node.path)));
       continue;
     }
@@ -454,17 +457,17 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
     if (state.node.type == PathType::DIR) {
       auto dst_stat =
           BaseStat(dst.resolved_target.client, dst_host, mapped_dst, control);
-      const bool dst_exists = isok(dst_stat.rcm);
+      const bool dst_exists = (dst_stat.rcm);
       if (dst_exists && dst_stat.data.type != PathType::DIR) {
         append_warning(state.node.path, mapped_dst,
-                       Err(EC::NotADirectory,
+                       Err(EC::NotADirectory, "", "",
                            AMStr::fmt("Directory/file type conflict: {} -> {}",
                                       state.node.path, mapped_dst)));
         continue;
       }
       if (!dst_exists && !AMDomain::filesystem::services::IsPathNotExistError(
-                             dst_stat.rcm.first)) {
-        if (IsStopError_(dst_stat.rcm.first)) {
+                             dst_stat.rcm.code)) {
+        if (IsStopError_(dst_stat.rcm.code)) {
           return {std::move(out), dst_stat.rcm};
         }
         append_warning(state.node.path, mapped_dst, dst_stat.rcm);
@@ -473,8 +476,8 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
 
       auto list_result = BaseListdir(state.src_client, state.src_host,
                                      state.node.path, control);
-      if (!isok(list_result.rcm)) {
-        if (IsStopError_(list_result.rcm.first)) {
+      if (!(list_result.rcm)) {
+        if (IsStopError_(list_result.rcm.code)) {
           return {std::move(out), list_result.rcm};
         }
         append_warning(state.node.path, mapped_dst, list_result.rcm);
@@ -485,7 +488,7 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
         if (!opt.mkdir) {
           append_warning(
               state.node.path, mapped_dst,
-              Err(EC::ParentDirectoryNotExist,
+              Err(EC::ParentDirectoryNotExist, "", "",
                   AMStr::fmt("Skip empty directory {} because mkdir=false",
                              mapped_dst)));
           continue;
@@ -511,34 +514,33 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
     if (!state.node.is_regular()) {
       append_warning(
           state.node.path, mapped_dst,
-          Err(EC::NotAFile,
+          Err(EC::NotAFile, "", "",
               AMStr::fmt("Unsupported source file type: {}", state.node.path)));
       continue;
     }
 
-    const std::string parent_path = AMPath::dirname(mapped_dst).empty()
-                                        ? "."
-                                        : AMPath::dirname(mapped_dst);
+    const std::string parent_path =
+        AMPath::dirname(mapped_dst).empty() ? "." : AMPath::dirname(mapped_dst);
     auto parent_stat =
         BaseStat(dst.resolved_target.client, dst_host, parent_path, control);
-    if (isok(parent_stat.rcm)) {
+    if ((parent_stat.rcm)) {
       if (parent_stat.data.type != PathType::DIR) {
         append_warning(state.node.path, mapped_dst,
-                       Err(EC::NotADirectory,
+                       Err(EC::NotADirectory, "", "",
                            AMStr::fmt("Destination parent is not directory: {}",
                                       parent_path)));
         continue;
       }
     } else if (!AMDomain::filesystem::services::IsPathNotExistError(
-                   parent_stat.rcm.first)) {
-      if (IsStopError_(parent_stat.rcm.first)) {
+                   parent_stat.rcm.code)) {
+      if (IsStopError_(parent_stat.rcm.code)) {
         return {std::move(out), parent_stat.rcm};
       }
       append_warning(state.node.path, mapped_dst, parent_stat.rcm);
       continue;
     } else if (!opt.mkdir) {
       append_warning(state.node.path, mapped_dst,
-                     Err(EC::ParentDirectoryNotExist,
+                     Err(EC::ParentDirectoryNotExist, "", "",
                          AMStr::fmt("Destination parent does not exist: {}",
                                     parent_path)));
       continue;
@@ -546,17 +548,17 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
 
     auto dst_stat =
         BaseStat(dst.resolved_target.client, dst_host, mapped_dst, control);
-    const bool dst_exists = isok(dst_stat.rcm);
+    const bool dst_exists = (dst_stat.rcm);
     if (dst_exists && dst_stat.data.type == PathType::DIR) {
       append_warning(
           state.node.path, mapped_dst,
-          Err(EC::NotAFile,
+          Err(EC::NotAFile, "", "",
               AMStr::fmt("Destination is directory: {}", mapped_dst)));
       continue;
     }
     if (!dst_exists && !AMDomain::filesystem::services::IsPathNotExistError(
-                           dst_stat.rcm.first)) {
-      if (IsStopError_(dst_stat.rcm.first)) {
+                           dst_stat.rcm.code)) {
+      if (IsStopError_(dst_stat.rcm.code)) {
         return {std::move(out), dst_stat.rcm};
       }
       append_warning(state.node.path, mapped_dst, dst_stat.rcm);
@@ -565,7 +567,7 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
     if (dst_exists && !dst_stat.data.is_regular()) {
       append_warning(
           state.node.path, mapped_dst,
-          Err(EC::NotAFile,
+          Err(EC::NotAFile, "", "",
               AMStr::fmt("Destination type mismatch: {}", mapped_dst)));
       continue;
     }
@@ -577,30 +579,30 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
 
     if (opt.resume) {
       if (state.node.type != PathType::FILE) {
-        append_warning(
-            state.node.path, mapped_dst,
-            Err(EC::NotAFile, AMStr::fmt("Resume only supports file source: {}",
-                                         state.node.path)));
+        append_warning(state.node.path, mapped_dst,
+                       Err(EC::NotAFile, "", "",
+                           AMStr::fmt("Resume only supports file source: {}",
+                                      state.node.path)));
         continue;
       }
       if (!dst_exists) {
         append_warning(state.node.path, mapped_dst,
-                       Err(EC::PathNotExist,
+                       Err(EC::PathNotExist, "", "",
                            AMStr::fmt("Resume requires destination file: {}",
                                       mapped_dst)));
         continue;
       }
       if (dst_stat.data.type != PathType::FILE) {
-        append_warning(
-            state.node.path, mapped_dst,
-            Err(EC::NotAFile, AMStr::fmt("Resume requires destination file: {}",
-                                         mapped_dst)));
+        append_warning(state.node.path, mapped_dst,
+                       Err(EC::NotAFile, "", "",
+                           AMStr::fmt("Resume requires destination file: {}",
+                                      mapped_dst)));
         continue;
       }
       if (dst_stat.data.size > state.node.size) {
         append_warning(
             state.node.path, mapped_dst,
-            Err(EC::InvalidArg,
+            Err(EC::InvalidArg, "", "",
                 AMStr::fmt("Resume invalid: dst {} > src {} for {}",
                            dst_stat.data.size, state.node.size, mapped_dst)));
         continue;
@@ -616,6 +618,6 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
 
   DedupAndSortTasks_(&out.dir_tasks);
   DedupAndSortTasks_(&out.file_tasks);
-  return {std::move(out), Ok()};
+  return {std::move(out), OK};
 }
 } // namespace AMApplication::filesystem

@@ -2,7 +2,6 @@
 #include "domain/client/ClientPort.hpp"
 #include "domain/filesystem/FileSystemModel.hpp"
 #include "foundation/core/DataClass.hpp"
-#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include <atomic>
 #include <cstddef>
@@ -11,7 +10,6 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
 
 namespace AMDomain::transfer {
 class UserTransferSet;
@@ -32,12 +30,13 @@ public:
   [[nodiscard]] ECM AddSrcClient(const std::string &nickname,
                                  ClientHandle client) {
     if (!client) {
-      return Err(ErrorCode::InvalidHandle, "Source client handle is null");
+      return Err(ErrorCode::InvalidHandle, "", "",
+                 "Source client handle is null");
     }
     const std::string key = NormalizeNickname_(nickname);
     auto &slot = holders_[key];
     if (slot.dst && slot.dst == client) {
-      return Err(ErrorCode::InvalidArg,
+      return Err(ErrorCode::InvalidArg, "", "",
                  AMStr::fmt("Source and destination clients must be different "
                             "for host {}",
                             key));
@@ -45,18 +44,19 @@ public:
     if (!slot.src) {
       slot.src = std::move(client);
     }
-    return Ok();
+    return OK;
   }
 
   [[nodiscard]] ECM AddDstClient(const std::string &nickname,
                                  ClientHandle client) {
     if (!client) {
-      return Err(ErrorCode::InvalidHandle, "Destination client handle is null");
+      return Err(ErrorCode::InvalidHandle, "", "",
+                 "Destination client handle is null");
     }
     const std::string key = NormalizeNickname_(nickname);
     auto &slot = holders_[key];
     if (slot.src && slot.src == client) {
-      return Err(ErrorCode::InvalidArg,
+      return Err(ErrorCode::InvalidArg, "", "",
                  AMStr::fmt("Source and destination clients must be different "
                             "for host {}",
                             key));
@@ -64,7 +64,7 @@ public:
     if (!slot.dst) {
       slot.dst = std::move(client);
     }
-    return Ok();
+    return OK;
   }
 
   [[nodiscard]] std::optional<TransferClientHolder>
@@ -241,7 +241,7 @@ struct TransferCallback {
   std::optional<TransferControl> CallProgress(const ProgressCBInfo &info,
                                               ECM *cb_error = nullptr) const {
     if (cb_error) {
-      *cb_error = {EC::Success, ""};
+      *cb_error = OK;
     }
     if (!progress_cb) {
       return std::nullopt;
@@ -289,7 +289,7 @@ struct TaskTime {
 };
 
 struct TaskState {
-  AMAtomic<ECM> rcm = AMAtomic<ECM>(ECM{EC::Success, ""});
+  AMAtomic<ECM> rcm = AMAtomic<ECM>(OK);
   std::atomic<TaskStatus> status{TaskStatus::Pending};
   std::atomic<ControlIntent> intent{ControlIntent::Running};
 };

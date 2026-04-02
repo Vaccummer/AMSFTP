@@ -15,12 +15,12 @@ ClientServiceArg ClientAppServiceBase::GetInitArg() const {
 ECM ClientAppServiceBase::FlushTo(
     AMApplication::config::ConfigAppService *config_service) {
   if (config_service == nullptr) {
-    return Err(EC::InvalidArg, "config service is null");
+    return Err(EC::InvalidArg, "", "", "config service is null");
   }
   if (!config_service->Write<ClientServiceArg>(GetInitArg())) {
-    return Err(EC::ConfigDumpFailed, "failed to flush client config");
+    return Err(EC::ConfigDumpFailed, "", "", "failed to flush client config");
   }
-  return Ok();
+  return OK;
 }
 
 void ClientAppServiceBase::SetHeartbeatTimeoutMs(int timeout_ms) {

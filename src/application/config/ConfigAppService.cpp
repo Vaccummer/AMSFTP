@@ -48,9 +48,9 @@ ConfigAppService::ConfigAppService(ConfigStoreInitArg init_arg)
 ECM ConfigAppService::Init() {
   const ConfigStoreInitArg init_arg = init_arg_.lock().load();
   auto store_data = AMDomain::config::CreateConfigStorePort(init_arg);
-  if (!isok(store_data.rcm) || !store_data.data) {
-    return isok(store_data.rcm)
-               ? Err(EC::ConfigNotInitialized, "failed to create config store")
+  if (!(store_data.rcm) || !store_data.data) {
+    return (store_data.rcm)
+               ? Err(EC::ConfigNotInitialized, "", "", "failed to create config store")
                : store_data.rcm;
   }
   owned_store_ = std::move(store_data.data);
@@ -66,7 +66,7 @@ ECM ConfigAppService::Init() {
       }
     });
   }
-  return Ok();
+  return OK;
 }
 
 void ConfigAppService::SetInitArg(ConfigStoreInitArg init_arg) {
@@ -103,7 +103,7 @@ void ConfigAppService::Bind(IConfigStorePort *store) {
 ECM ConfigAppService::Load(std::optional<AMDomain::config::DocumentKind> kind,
                              bool force) {
   if (!store_) {
-    return Err(EC::ConfigNotInitialized, "config store is not bound");
+    return Err(EC::ConfigNotInitialized, "", "", "config store is not bound");
   }
   return store_->Load(kind, force);
 }
@@ -114,7 +114,7 @@ ECM ConfigAppService::Load(std::optional<AMDomain::config::DocumentKind> kind,
 ECM ConfigAppService::Dump(AMDomain::config::DocumentKind kind,
                              const std::string &dst_path, bool async) {
   if (!store_) {
-    return Err(EC::ConfigNotInitialized, "config store is not bound");
+    return Err(EC::ConfigNotInitialized, "", "", "config store is not bound");
   }
   return store_->Dump(kind, std::filesystem::path(dst_path), async);
 }
@@ -124,7 +124,7 @@ ECM ConfigAppService::Dump(AMDomain::config::DocumentKind kind,
  */
 ECM ConfigAppService::DumpAll(bool async) {
   if (!store_) {
-    return Err(EC::ConfigNotInitialized, "config store is not bound");
+    return Err(EC::ConfigNotInitialized, "", "", "config store is not bound");
   }
   return store_->DumpAll(async);
 }
@@ -176,7 +176,7 @@ bool ConfigAppService::IsDirty(AMDomain::config::DocumentKind kind) const {
  */
 ECM ConfigAppService::BackupIfNeeded() {
   if (!store_) {
-    return Err(EC::ConfigNotInitialized, "config store is not bound");
+    return Err(EC::ConfigNotInitialized, "", "", "config store is not bound");
   }
 
   const auto now_s = static_cast<int64_t>(AMTime::seconds());
@@ -186,21 +186,21 @@ ECM ConfigAppService::BackupIfNeeded() {
   const bool normalized_changed =
       !IsBackupSetEqual_(backup_set, before_normalize);
   if (normalized_changed && !Write(backup_set)) {
-    return Err(EC::ConfigDumpFailed, "failed to update backup policy settings");
+    return Err(EC::ConfigDumpFailed, "", "", "failed to update backup policy settings");
   }
   if (!IsBackupNeeded()) {
     if (normalized_changed) {
       return Dump(DocumentKind::Settings, "", true);
     }
-    return Ok();
+    return OK;
   }
   const std::vector<ECM> rcms = Backup({});
   for (const ECM &rcm : rcms) {
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       return rcm;
     }
   }
-  return Ok();
+  return OK;
 }
 
 bool ConfigAppService::IsBackupNeeded() const {
@@ -224,7 +224,7 @@ std::vector<ECM> ConfigAppService::Backup(
     const std::vector<AMDomain::config::DocumentKind> &kinds) {
   std::vector<ECM> out = {};
   if (!store_) {
-    out.push_back(Err(EC::ConfigNotInitialized, "config store is not bound"));
+    out.push_back(Err(EC::ConfigNotInitialized, "", "", "config store is not bound"));
     return out;
   }
 
@@ -235,17 +235,17 @@ std::vector<ECM> ConfigAppService::Backup(
   const BackupTargets targets = BuildBackupTargets_(now_s);
   if (targets.backup_dir.empty()) {
     out.push_back(
-        Err(EC::ConfigDumpFailed, "project root is empty, cannot backup"));
+        Err(EC::ConfigDumpFailed, "", "", "project root is empty, cannot backup"));
     return out;
   }
 
   const ECM mk_bak_rcm = EnsureDirectory(targets.backup_dir);
-  if (!isok(mk_bak_rcm)) {
+  if (!(mk_bak_rcm)) {
     out.push_back(mk_bak_rcm);
     return out;
   }
   const ECM mk_stamp_rcm = EnsureDirectory(targets.stamp_dir);
-  if (!isok(mk_stamp_rcm)) {
+  if (!(mk_stamp_rcm)) {
     out.push_back(mk_stamp_rcm);
     return out;
   }
@@ -257,11 +257,11 @@ std::vector<ECM> ConfigAppService::Backup(
     const std::filesystem::path dst_path = ResolveBackupPath_(targets, kind);
     if (dst_path.empty()) {
       has_dump_error = true;
-      out.push_back(Err(EC::InvalidArg, "unsupported backup document kind"));
+      out.push_back(Err(EC::InvalidArg, "", "", "unsupported backup document kind"));
       continue;
     }
     const ECM rcm = Dump(kind, dst_path.string(), false);
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       has_dump_error = true;
     }
     out.push_back(rcm);
@@ -270,7 +270,7 @@ std::vector<ECM> ConfigAppService::Backup(
     backup_set.last_backup_time_s = now_s;
     if (!Write(backup_set)) {
       out.push_back(
-          Err(EC::ConfigDumpFailed, "failed to update backup timestamp"));
+          Err(EC::ConfigDumpFailed, "", "", "failed to update backup timestamp"));
       return out;
     }
 
@@ -278,7 +278,7 @@ std::vector<ECM> ConfigAppService::Backup(
     PruneBackupFolders_(targets.backup_dir, backup_set.max_backup_count);
 
     const ECM dump_settings_rcm = Dump(DocumentKind::Settings, "", true);
-    if (!isok(dump_settings_rcm)) {
+    if (!(dump_settings_rcm)) {
       out.push_back(dump_settings_rcm);
     }
   }
@@ -301,17 +301,17 @@ void ConfigAppService::SubmitWriteTask(std::function<ECM()> task) {
 ECMData<ConfigAppService::SyncParticipantId>
 ConfigAppService::RegisterSyncPort(IConfigSyncPort *port) {
   if (port == nullptr) {
-    return {0, Err(EC::InvalidArg, "sync port is null")};
+    return {0, Err(EC::InvalidArg, "", "", "sync port is null")};
   }
   std::lock_guard<std::mutex> lock(sync_participants_mtx_);
   for (const auto &participant : sync_participants_) {
     if (participant.port == port) {
-      return {participant.id, Ok()};
+      return {participant.id, OK};
     }
   }
   const SyncParticipantId id = next_sync_participant_id_++;
   sync_participants_.push_back({id, port});
-  return {id, Ok()};
+  return {id, OK};
 }
 
 ECM ConfigAppService::UnregisterSyncPort(SyncParticipantId participant_id) {
@@ -322,22 +322,22 @@ ECM ConfigAppService::UnregisterSyncPort(SyncParticipantId participant_id) {
         return participant.id == participant_id;
       });
   if (it == sync_participants_.end()) {
-    return Err(EC::InvalidArg, "sync port not found");
+    return Err(EC::InvalidArg, "", "", "sync port not found");
   }
   sync_participants_.erase(it, sync_participants_.end());
-  return Ok();
+  return OK;
 }
 
 ECM ConfigAppService::FlushDirtyParticipants() {
   if (!store_) {
-    return Err(EC::ConfigNotInitialized, "config store is not bound");
+    return Err(EC::ConfigNotInitialized, "", "", "config store is not bound");
   }
 
   std::vector<SyncParticipant> participants = {};
   {
     std::lock_guard<std::mutex> lock(sync_participants_mtx_);
     if (sync_flush_running_) {
-      return Err(EC::BadOperationOrder, "sync flush already running");
+      return Err(EC::BadOperationOrder, "", "", "sync flush already running");
     }
     sync_flush_running_ = true;
     participants = sync_participants_;
@@ -356,11 +356,11 @@ ECM ConfigAppService::FlushDirtyParticipants() {
     }
   } guard{reset_running};
 
-  ECM first_error = Ok();
+  ECM first_error = OK;
   for (const SyncParticipant &participant : participants) {
     if (participant.port == nullptr) {
-      if (isok(first_error)) {
-        first_error = Err(EC::InvalidArg, "invalid sync participant");
+      if ((first_error)) {
+        first_error = Err(EC::InvalidArg, "", "", "invalid sync participant");
       }
       continue;
     }
@@ -368,8 +368,8 @@ ECM ConfigAppService::FlushDirtyParticipants() {
       continue;
     }
     const ECM flush_rcm = participant.port->FlushTo(this);
-    if (!isok(flush_rcm)) {
-      if (isok(first_error)) {
+    if (!(flush_rcm)) {
+      if ((first_error)) {
         first_error = flush_rcm;
       }
       continue;
@@ -400,7 +400,7 @@ std::filesystem::path ConfigAppService::ProjectRoot() const {
  */
 ECM ConfigAppService::EnsureDirectory(const std::filesystem::path &dir) {
   if (!store_) {
-    return Err(EC::ConfigNotInitialized, "config store is not bound");
+    return Err(EC::ConfigNotInitialized, "", "", "config store is not bound");
   }
   return store_->EnsureDirectory(dir);
 }

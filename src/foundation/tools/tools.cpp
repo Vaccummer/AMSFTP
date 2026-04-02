@@ -995,51 +995,50 @@ EC fec(const std::error_code &ec) {
   if (!ec) {
     return EC::Success;
   }
-  auto errc = static_cast<std::errc>(ec.value());
-  switch (errc) {
-  case std::errc::no_such_file_or_directory:
-    return EC::FileNotExist;
-  case std::errc::permission_denied:
+  if (ec == std::errc::no_such_file_or_directory) {
+    return EC::PathNotExist;
+  } else if (ec == std::errc::permission_denied) {
     return EC::PermissionDenied;
-  case std::errc::file_exists:
+  } else if (ec == std::errc::file_exists) {
     return EC::PathAlreadyExists;
-  case std::errc::not_a_directory:
+  } else if (ec == std::errc::not_a_directory) {
     return EC::NotADirectory;
-  case std::errc::is_a_directory:
+  } else if (ec == std::errc::is_a_directory) {
     return EC::NotAFile;
-  case std::errc::directory_not_empty:
+  } else if (ec == std::errc::directory_not_empty) {
     return EC::DirNotEmpty;
-  case std::errc::no_space_on_device:
+  } else if (ec == std::errc::no_space_on_device) {
     return EC::FilesystemNoSpace;
-  case std::errc::read_only_file_system:
+  } else if (ec == std::errc::read_only_file_system) {
     return EC::FileWriteProtected;
-  case std::errc::too_many_symbolic_link_levels:
+  } else if (ec == std::errc::too_many_symbolic_link_levels) {
     return EC::SymlinkLoop;
-  case std::errc::filename_too_long:
+  } else if (ec == std::errc::filename_too_long) {
     return EC::InvalidFilename;
-  case std::errc::invalid_argument:
+  } else if (ec == std::errc::invalid_argument) {
     return EC::InvalidArg;
-  case std::errc::io_error:
+  } else if (ec == std::errc::io_error) {
     return EC::LocalFileError;
-  case std::errc::not_supported:
-  case std::errc::operation_not_supported:
+  } else if (ec == std::errc::not_supported ||
+             ec == std::errc::operation_not_supported) {
     return EC::OperationUnsupported;
-  case std::errc::timed_out:
+  } else if (ec == std::errc::timed_out) {
     return EC::OperationTimeout;
-  case std::errc::connection_refused:
-  case std::errc::network_unreachable:
-  case std::errc::host_unreachable:
+  } else if (ec == std::errc::connection_refused ||
+             ec == std::errc::network_unreachable ||
+             ec == std::errc::host_unreachable) {
     return EC::NoConnection;
-  case std::errc::connection_reset:
+  } else if (ec == std::errc::connection_reset) {
     return EC::ConnectionLost;
-  default:
+  } else {
     return EC::UnknownError;
   }
 }
 
 ECM fecm(const std::error_code &ec) {
   if (!ec) {
-    return {EC::Success, ""};
+    return OK;
   }
-  return {fec(ec), ec.message()};
+  return {fec(ec), "", "", ec.message(),
+          RawError{RawErrorSource::Filesystem, ec.value()}};
 }

@@ -44,7 +44,7 @@ AMDomain::client::ClientHandle CompletionRuntimeAdapter::LocalClient() const {
 AMDomain::client::ClientHandle
 CompletionRuntimeAdapter::GetClient(const std::string &nickname) const {
   auto client = client_service_.GetClient(nickname, true);
-  if (!isok(client.rcm)) {
+  if (!(client.rcm)) {
     return nullptr;
   }
   return client.data;
@@ -65,7 +65,7 @@ bool CompletionRuntimeAdapter::HostExists(const std::string &nickname) const {
 std::vector<std::string> CompletionRuntimeAdapter::ListVarDomains() const {
   std::vector<std::string> out = {};
   auto all_vars = var_service_.GetAllVar();
-  if (!isok(all_vars.rcm)) {
+  if (!(all_vars.rcm)) {
     return out;
   }
   out.reserve(all_vars.data.size());
@@ -78,7 +78,7 @@ std::vector<std::string> CompletionRuntimeAdapter::ListVarDomains() const {
 
 bool CompletionRuntimeAdapter::HasVarDomain(const std::string &zone) const {
   auto all_vars = var_service_.GetAllVar();
-  if (!isok(all_vars.rcm)) {
+  if (!(all_vars.rcm)) {
     return false;
   }
   return all_vars.data.find(zone) != all_vars.data.end();
@@ -96,7 +96,7 @@ std::vector<AMDomain::var::VarInfo>
 CompletionRuntimeAdapter::ListVarsByDomain(const std::string &domain) const {
   std::vector<AMDomain::var::VarInfo> out = {};
   auto zone = var_service_.EnumerateZone(domain);
-  if (!isok(zone.rcm)) {
+  if (!(zone.rcm)) {
     return out;
   }
   out.reserve(zone.data.size());

@@ -90,8 +90,7 @@ ECM LoggerAppService::Trace(AMDomain::log::LoggerType logger_type,
     std::lock_guard<std::mutex> lock(mtx_);
     auto writer_iter = logger_map_.find(logger_type);
     if (writer_iter == logger_map_.end() || !writer_iter->second) {
-      return Err(EC::InvalidArg,
-                 AMStr::fmt("Logger writer {} is not registered", logger_type));
+      return Err(EC::InvalidArg, "", "", AMStr::fmt("Logger writer {} is not registered", logger_type));
     }
     writer = writer_iter->second;
     scheduler = scheduler_;
@@ -105,7 +104,7 @@ ECM LoggerAppService::Trace(AMDomain::log::LoggerType logger_type,
   AMDomain::log::TraceInfo normalized = info;
   normalized.source = AMDomain::log::service::ResolveSource(logger_type);
   if (AMDomain::log::service::ToLevelInt(normalized.level) > trace_level) {
-    return Ok();
+    return OK;
   }
   const std::string line = BuildLogLine_(normalized);
 
@@ -120,7 +119,7 @@ ECM LoggerAppService::Trace(AMDomain::log::LoggerType logger_type,
   } else {
     write_task();
   }
-  return Ok();
+  return OK;
 }
 
 ECM LoggerAppService::Trace(AMDomain::log::LoggerType logger_type,
@@ -144,7 +143,7 @@ ECM LoggerAppService::WriteLine(AMDomain::log::LoggerType logger_type,
     std::lock_guard<std::mutex> lock(mtx_);
     auto writer_iter = logger_map_.find(logger_type);
     if (writer_iter == logger_map_.end() || !writer_iter->second) {
-      return Err(EC::InvalidArg, "Logger writer is not registered");
+      return Err(EC::InvalidArg, "", "", "Logger writer is not registered");
     }
     writer = writer_iter->second;
     scheduler = scheduler_;
@@ -168,7 +167,7 @@ ECM LoggerAppService::WriteLine(AMDomain::log::LoggerType logger_type,
   } else {
     write_task();
   }
-  return Ok();
+  return OK;
 }
 
 std::function<void(const AMDomain::log::TraceInfo &)>

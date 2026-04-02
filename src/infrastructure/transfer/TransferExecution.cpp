@@ -54,7 +54,7 @@ void TransferRuntimeProgress::CallInnerCallback(bool force) {
           task_info->Size.total.load(std::memory_order_relaxed)),
       &cb_error);
 
-  if (cb_error.first != ErrorCode::Success &&
+  if (cb_error.code != ErrorCode::Success &&
       task_info->Set.callback.need_error_cb) {
     task_info->Set.callback.CallError(
         ErrorCBInfo(cb_error, cur_task->src, cur_task->dst, cur_task->src_host,
@@ -316,9 +316,11 @@ public:
                                 nullptr, creation, flags, nullptr);
 
       if (file_handle == INVALID_HANDLE_VALUE) {
+        const int win_ec = static_cast<int>(GetLastError());
         return {EC::LocalFileOpenError,
                 AMStr::fmt("Failed to open local file \"{}\": error code {}",
-                           path, GetLastError())};
+                           path, win_ec),
+                RawError{RawErrorSource::WindowsAPI, win_ec}};
       }
 #else
       int flags = is_write ? O_RDWR : O_RDONLY;
@@ -335,7 +337,7 @@ public:
 #endif
     }
 
-    return {EC::Success, ""};
+    return OK;
   }
 
   [[nodiscard]] bool IsValid() const {
@@ -359,7 +361,7 @@ public:
     }
     if (new_offset == 0) {
       offset = 0;
-      return {EC::Success, ""};
+      return OK;
     }
     if (is_sftp) {
       if (!client) {
@@ -369,19 +371,21 @@ public:
       libssh2_sftp_seek64(sftp_handle,
                           static_cast<libssh2_uint64_t>(new_offset));
       offset = new_offset;
-      return {EC::Success, ""};
+      return OK;
     }
 #ifdef _WIN32
     LARGE_INTEGER li;
     li.QuadPart = static_cast<LONGLONG>(new_offset);
     LARGE_INTEGER new_pos;
     if (!SetFilePointerEx(file_handle, li, &new_pos, FILE_BEGIN)) {
+      const int win_ec = static_cast<int>(GetLastError());
       return {EC::LocalFileReadError,
               AMStr::fmt("Seek local file \"{}\" failed: error code {}", path,
-                         GetLastError())};
+                         win_ec),
+              RawError{RawErrorSource::WindowsAPI, win_ec}};
     }
     offset = static_cast<size_t>(new_pos.QuadPart);
-    return {EC::Success, ""};
+    return OK;
 #else
     off_t res = lseek(file_handle, static_cast<off_t>(new_offset), SEEK_SET);
     if (res == static_cast<off_t>(-1)) {
@@ -390,7 +394,7 @@ public:
                          strerror(errno))};
     }
     offset = static_cast<size_t>(res);
-    return {EC::Success, ""};
+    return OK;
 #endif
   }
 
@@ -417,7 +421,7 @@ public:
           if (bytes_read > 0) {
             pd->ring_buffer->commit_write(bytes_read);
             offset += bytes_read;
-            return {bytes_read, {EC::Success, ""}};
+            return {bytes_read, OK};
           }
           if (bytes_read == 0) {
             return {0, {EC::EndOfFile, "End of file"}};
@@ -447,15 +451,17 @@ public:
         DWORD bytes_read = 0;
         if (!ReadFile(file_handle, write_ptr, static_cast<DWORD>(to_read),
                       &bytes_read, nullptr)) {
+          const int win_ec = static_cast<int>(GetLastError());
           return {-1,
                   {EC::LocalFileReadError,
                    AMStr::fmt("Read local file \"{}\" failed: error code {}",
-                              path, GetLastError())}};
+                              path, win_ec),
+                   RawError{RawErrorSource::WindowsAPI, win_ec}}};
         }
         if (bytes_read > 0) {
           pd->ring_buffer->commit_write(bytes_read);
           offset += bytes_read;
-          return {static_cast<int>(bytes_read), {EC::Success, ""}};
+          return {static_cast<int>(bytes_read), OK};
         } else {
           return {0, {EC::EndOfFile, "End of file"}};
         }
@@ -464,7 +470,7 @@ public:
         if (bytes_read > 0) {
           pd->ring_buffer->commit_write(bytes_read);
           offset += bytes_read;
-          return {static_cast<int>(bytes_read), {EC::Success, ""}};
+          return {static_cast<int>(bytes_read), OK};
         } else if (bytes_read == 0) {
           return {0, {EC::EndOfFile, "End of file"}};
         } else {
@@ -476,7 +482,7 @@ public:
 #endif
       }
     }
-    return {0, {EC::Success, ""}};
+    return {0, OK};
   }
 
   std::pair<ssize_t, ECM> Write() {
@@ -504,7 +510,7 @@ public:
           if (bytes_written > 0) {
             pd->ring_buffer->commit_read(bytes_written);
             offset += bytes_written;
-            return {bytes_written, {EC::Success, ""}};
+            return {bytes_written, OK};
           }
           if (bytes_written == 0) {
             return {0, {EC::EndOfFile, "End of file"}};
@@ -535,15 +541,17 @@ public:
         DWORD bytes_written = 0;
         if (!WriteFile(file_handle, read_ptr, static_cast<DWORD>(to_write),
                        &bytes_written, nullptr)) {
+          const int win_ec = static_cast<int>(GetLastError());
           return {-1,
                   {EC::LocalFileWriteError,
                    AMStr::fmt("Write local file \"{}\" failed: error code {}",
-                              path, GetLastError())}};
+                              path, win_ec),
+                   RawError{RawErrorSource::WindowsAPI, win_ec}}};
         }
         if (bytes_written > 0) {
           pd->ring_buffer->commit_read(bytes_written);
           offset += bytes_written;
-          return {static_cast<int>(bytes_written), {EC::Success, ""}};
+          return {static_cast<int>(bytes_written), OK};
         } else {
           return {0, {EC::EndOfFile, "End of file"}};
         }
@@ -552,7 +560,7 @@ public:
         if (bytes_written > 0) {
           pd->ring_buffer->commit_read(bytes_written);
           offset += bytes_written;
-          return {static_cast<int>(bytes_written), {EC::Success, ""}};
+          return {static_cast<int>(bytes_written), OK};
         } else if (bytes_written == 0) {
           return {0, {EC::EndOfFile, "End of file"}};
         } else {
@@ -564,7 +572,7 @@ public:
 #endif
       }
     }
-    return {0, {EC::Success, ""}};
+    return {0, OK};
   }
 };
 
@@ -603,14 +611,14 @@ public:
       UnionFileHandle file_handle;
       ECM rcm = file_handle.Init(task->src, task->size, clientf, false, true,
                                  true, &pd);
-      if (rcm.first != EC::Success) {
+      if (rcm.code != EC::Success) {
         RequestTaskInterrupt_(pd);
         task->rcm = rcm;
         return;
       }
       if (task->transferred > 0) {
         ECM seek_rcm = file_handle.Seek(task->transferred);
-        if (seek_rcm.first != EC::Success) {
+        if (seek_rcm.code != EC::Success) {
           RequestTaskInterrupt_(pd);
           task->rcm = seek_rcm;
           return;
@@ -628,7 +636,7 @@ public:
           return;
         }
         auto [bytes_read, ecm] = file_handle.Read();
-        if (ecm.first != EC::Success && ecm.first != EC::EndOfFile) {
+        if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
           RequestTaskInterrupt_(pd);
           task->rcm = ecm;
           return;
@@ -638,14 +646,14 @@ public:
       UnionFileHandle file_handle;
       ECM rcm = file_handle.Init(task->src, task->size, nullptr, false, true,
                                  true, &pd);
-      if (rcm.first != EC::Success) {
+      if (rcm.code != EC::Success) {
         RequestTaskInterrupt_(pd);
         task->rcm = rcm;
         return;
       }
       if (task->transferred > 0) {
         ECM seek_rcm = file_handle.Seek(task->transferred);
-        if (seek_rcm.first != EC::Success) {
+        if (seek_rcm.code != EC::Success) {
           RequestTaskInterrupt_(pd);
           task->rcm = seek_rcm;
           return;
@@ -660,7 +668,7 @@ public:
           return;
         }
         auto [bytes_read, ecm] = file_handle.Read();
-        if (ecm.first != EC::Success && ecm.first != EC::EndOfFile) {
+        if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
           RequestTaskInterrupt_(pd);
           task->rcm = ecm;
           return;
@@ -677,7 +685,7 @@ public:
       std::shared_ptr<AMFTPIOCore> client_ftp(client_ftp_raw,
                                               [](AMFTPIOCore *) {});
       FTPDownloadSet(client_ftp, task->src, FTPToBufferWk, &pd);
-      if (out_rcm.first != EC::Success) {
+      if (out_rcm.code != EC::Success) {
         RequestTaskInterrupt_(pd);
         task->rcm = out_rcm;
       }
@@ -703,14 +711,14 @@ public:
       const bool resume = task->transferred > 0;
       ECM rcm = file_handle.Init(task->dst, task->size, clientf, true, true,
                                  !resume, &pd);
-      if (rcm.first != EC::Success) {
+      if (rcm.code != EC::Success) {
         RequestTaskInterrupt_(pd);
         task->rcm = rcm;
         return;
       }
       if (resume) {
         ECM seek_rcm = file_handle.Seek(task->transferred);
-        if (seek_rcm.first != EC::Success) {
+        if (seek_rcm.code != EC::Success) {
           RequestTaskInterrupt_(pd);
           task->rcm = seek_rcm;
           return;
@@ -726,7 +734,7 @@ public:
           return;
         }
         auto [bytes_write, ecm] = file_handle.Write();
-        if (ecm.first != EC::Success && ecm.first != EC::EndOfFile) {
+        if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
           RequestTaskInterrupt_(pd);
           task->rcm = ecm;
           return;
@@ -747,14 +755,14 @@ public:
       const bool resume = task->transferred > 0;
       ECM rcm = file_handle.Init(task->dst, task->size, nullptr, true, true,
                                  !resume, &pd);
-      if (rcm.first != EC::Success) {
+      if (rcm.code != EC::Success) {
         RequestTaskInterrupt_(pd);
         task->rcm = rcm;
         return;
       }
       if (resume) {
         ECM seek_rcm = file_handle.Seek(task->transferred);
-        if (seek_rcm.first != EC::Success) {
+        if (seek_rcm.code != EC::Success) {
           RequestTaskInterrupt_(pd);
           task->rcm = seek_rcm;
           return;
@@ -769,7 +777,7 @@ public:
           return;
         }
         auto [bytes_write, ecm] = file_handle.Write();
-        if (ecm.first != EC::Success && ecm.first != EC::EndOfFile) {
+        if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
           RequestTaskInterrupt_(pd);
           task->rcm = ecm;
           return;
@@ -796,7 +804,7 @@ public:
       std::shared_ptr<AMFTPIOCore> client_ftp(client_ftp_raw,
                                               [](AMFTPIOCore *) {});
       FTPUploadSet(client_ftp, task->dst, &pd, BufferToFTPWk);
-      if (out_rcm.first != EC::Success) {
+      if (out_rcm.code != EC::Success) {
         RequestTaskInterrupt_(pd);
         task->rcm = out_rcm;
       }
@@ -905,7 +913,7 @@ public:
     }
     const size_t resume_offset = cur_task->transferred;
     ECM ecm = client->SetupPath(dst, false);
-    if (ecm.first != EC::Success) {
+    if (ecm.code != EC::Success) {
       cur_task->rcm = ecm;
       RequestTaskInterrupt_(*pd);
       return;
@@ -930,7 +938,8 @@ public:
     } else if (res != CURLE_OK) {
       cur_task->rcm =
           ECM{EC::FTPUploadFailed,
-              AMStr::fmt("Upload failed: {}", curl_easy_strerror(res))};
+              AMStr::fmt("Upload failed: {}", curl_easy_strerror(res)),
+              RawError{RawErrorSource::Curl, static_cast<int>(res)}};
       RequestTaskInterrupt_(*pd);
     }
   }
@@ -950,7 +959,7 @@ public:
     }
     const size_t resume_offset = cur_task->transferred;
     ECM ecm = client->SetupPath(src, false);
-    if (ecm.first != EC::Success) {
+    if (ecm.code != EC::Success) {
       cur_task->rcm = ecm;
       RequestTaskInterrupt_(*pd);
       return;
@@ -966,7 +975,8 @@ public:
     } else if (res != CURLE_OK) {
       cur_task->rcm =
           ECM{EC::FTPDownloadFailed,
-              AMStr::fmt("Download failed: {}", curl_easy_strerror(res))};
+              AMStr::fmt("Download failed: {}", curl_easy_strerror(res)),
+              RawError{RawErrorSource::Curl, static_cast<int>(res)}};
       RequestTaskInterrupt_(*pd);
     }
   }
@@ -1034,7 +1044,7 @@ ECM TransferExecutionEngine::TransferSignleFile(
   task->transferred =
       task_info->Size.cur_task_transferred.load(std::memory_order_relaxed);
 
-  if (task->rcm.first != EC::Success) {
+  if (task->rcm.code != EC::Success) {
     return task->rcm;
   }
 
@@ -1358,17 +1368,17 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
         auto dst_stat = dst_client->IOPort().stat(
             AMDomain::filesystem::StatArgs{task.dst, false},
             task_info->Core.control);
-        if (dst_stat.rcm.first != EC::Success) {
+        if (dst_stat.rcm.code != EC::Success) {
           task.rcm = {EC::InvalidOffset, "Dst stat failed but offset is given"};
           task.IsFinished = true;
           goto OffsetErrorCB;
         }
-        if (dst_stat.info.type == PathType::DIR) {
+        if (dst_stat.data.info.type == PathType::DIR) {
           task.rcm = {EC::NotAFile, "Dst already exists but is a directory"};
           task.IsFinished = true;
           goto OffsetErrorCB;
         }
-        if (resume_offset > dst_stat.info.size) {
+        if (resume_offset > dst_stat.data.info.size) {
           task.rcm = {EC::InvalidOffset, "Offset exceeds dst file size"};
           task.IsFinished = true;
           goto OffsetErrorCB;
@@ -1397,19 +1407,19 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
 
       task.rcm =
           transfer_engine_.TransferSignleFile(src_client, dst_client, pd);
-      if (task_info->IsPauseRequested() && task.rcm.first == EC::Terminate) {
-        task.rcm = {EC::Success, ""};
+      if (task_info->IsPauseRequested() && task.rcm.code == EC::Terminate) {
+        task.rcm = OK;
         task.IsFinished = false;
         paused_requested = true;
         pd.CallInnerCallback(true);
         break;
       }
       task.IsFinished = true;
-      if (task.rcm.first == EC::Success) {
+      if (task.rcm.code == EC::Success) {
         task_info->Size.success_filenum.fetch_add(1, std::memory_order_relaxed);
-      } else if (task.rcm.first != EC::Success &&
+      } else if (task.rcm.code != EC::Success &&
                  task_info->Set.callback.need_error_cb &&
-                 task.rcm.first != EC::Terminate) {
+                 task.rcm.code != EC::Terminate) {
         task_info->Set.callback.CallError(ErrorCBInfo(
             task.rcm, task.src, task.dst, task.src_host, task.dst_host));
       }
@@ -1430,7 +1440,7 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
     {
       auto tasks_locked = task_info->Core.tasks.lock();
       for (auto &task : *tasks_locked) {
-        if (task.rcm.first != EC::Success) {
+        if (task.rcm.code != EC::Success) {
           any_error = true;
           task_info->SetResult(task.rcm);
           break;
@@ -1439,7 +1449,7 @@ void TransferExecutionPool::ExecuteTask(const TaskHandle &task_info) {
     }
 
     if (!any_error) {
-      task_info->SetResult({EC::Success, ""});
+      task_info->SetResult(OK);
     }
   } else {
     task_info->SetResult({EC::Terminate, "Task terminated by user"});
@@ -1460,7 +1470,7 @@ TransferExecutionPool::~TransferExecutionPool() { (void)Shutdown(3000); }
 
 ECM TransferExecutionPool::Shutdown(int timeout_ms) {
   if (is_deconstruct.load(std::memory_order_relaxed)) {
-    return {EC::Success, ""};
+    return OK;
   }
   running_.store(false, std::memory_order_relaxed);
   CancelPendingTasksOnExit_();
@@ -1516,7 +1526,7 @@ ECM TransferExecutionPool::Shutdown(int timeout_ms) {
     }
   }
   is_deconstruct.store(true, std::memory_order_relaxed);
-  return {EC::Success, ""};
+  return OK;
 }
 
 size_t TransferExecutionPool::ThreadCount(size_t new_count) {
@@ -1623,7 +1633,7 @@ ECM TransferExecutionPool::Submit(TaskHandle task_info,
 
   RegisterTask(task_info, assign_type, affinity_id);
   queue_cv_.notify_all();
-  return {EC::Success, ""};
+  return OK;
 }
 
 std::optional<TaskStatus>
@@ -1678,7 +1688,7 @@ ECM TransferExecutionPool::Pause(const TaskId &id, int timeout_ms) {
   while (timeout_ms < 0 || (AMTime::miliseconds() - start) < timeout_ms) {
     status_t = existing->GetStatus();
     if (status_t == TaskStatus::Paused) {
-      return {EC::Success, ""};
+      return OK;
     }
     if (status_t == TaskStatus::Finished) {
       return {EC::OperationUnsupported,
@@ -1762,7 +1772,7 @@ ECM TransferExecutionPool::Resume(const TaskId &id, int timeout_ms) {
     const int affinity_id = affinity_valid ? requested_thread_id : -1;
     RegisterTask(existing, assign_type, affinity_id);
     queue_cv_.notify_all();
-    return {EC::Success, ""};
+    return OK;
   }
   return {EC::Success, AMStr::fmt("Task is conducting: {}", id)};
 }
@@ -1814,7 +1824,7 @@ std::pair<TaskHandle, ECM> TransferExecutionPool::Terminate(const TaskId &id,
       task_info->Set.OnWhichThread.store(-1, std::memory_order_relaxed);
       queue_cv_.notify_all();
       HandleCompletedTask(task_info);
-      return {task_info, {EC::Success, ""}};
+      return {task_info, OK};
     }
   }
 
@@ -1823,7 +1833,7 @@ std::pair<TaskHandle, ECM> TransferExecutionPool::Terminate(const TaskId &id,
   const int64_t start_ms = AMTime::miliseconds();
   while (timeout_ms < 0 || (AMTime::miliseconds() - start_ms) < timeout_ms) {
     if (existing->GetStatus() == TaskStatus::Finished) {
-      return {existing, {EC::Success, ""}};
+      return {existing, OK};
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
@@ -1927,3 +1937,4 @@ std::unique_ptr<ITransferPoolPort> CreateTransferPoolPort() {
   return std::make_unique<AMInfra::transfer::TransferExecutionPool>();
 }
 } // namespace AMDomain::transfer
+

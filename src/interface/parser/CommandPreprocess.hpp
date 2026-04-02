@@ -11,10 +11,21 @@ namespace AMInterface::parser {
 
 class TokenTypeAnalyzer;
 
+struct ResolvedCharMeta {
+  bool escaped = false;
+  char escaped_from = '\0';
+};
+
+struct ResolvedStringMeta {
+  std::string value = {};
+  std::vector<ResolvedCharMeta> chars = {};
+};
+
 class AMInputPreprocess : public NonCopyableNonMovable {
 public:
-  AMInputPreprocess(AMInterface::var::VarInterfaceService &var_interface_service,
-                    TokenTypeAnalyzer &token_type_analyzer)
+  AMInputPreprocess(
+      AMInterface::var::VarInterfaceService &var_interface_service,
+      TokenTypeAnalyzer &token_type_analyzer)
       : var_interface_service_(var_interface_service),
         token_type_analyzer_(token_type_analyzer) {}
   ~AMInputPreprocess() override = default;
@@ -37,8 +48,18 @@ public:
    *    `{"var", "def", "<lhs>", "<value>"}`
    * 3) fallback tokenization via SplitCliTokens.
    */
-  ECMData<std::vector<std::string>>
+  [[nodiscard]] ECMData<std::vector<std::string>>
   Preprocess(const std::string &input) const;
+
+  /**
+   * @brief Resolve backtick escapes and emit per-character metadata.
+   *
+   * This helper is used by downstream token consumers that need to distinguish
+   * literal symbols from escaped symbols (for example `@` in path tokens).
+   * Current escape targets: `$`, `@`, '`', '"', '\''.
+   */
+  [[nodiscard]] static ECMData<ResolvedStringMeta>
+  ResolveStringMeta(const std::string &input);
 
   /**
    * @brief Rewrite `$` shortcut tokens into canonical `var` commands.

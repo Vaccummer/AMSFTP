@@ -20,84 +20,82 @@ using WalkErrorCallback =
     std::shared_ptr<std::function<void(const std::string &, const ECM &)>>;
 using OS_TYPE = AMDomain::client::OS_TYPE;
 using ClientStatus = AMDomain::client::ClientStatus;
-using CdResult = ECMResult;
-using MkdirResult = ECMResult;
-using MkdirsResult = ECMResult;
-using MoveResult = ECMResult;
-using RMResult = ECMResult;
+using EmptyResult = std::monostate;
+using CdResult = EmptyResult;
+using MkdirResult = EmptyResult;
+using MkdirsResult = EmptyResult;
+using MoveResult = EmptyResult;
+using RMResult = EmptyResult;
 
-struct StatResult : ECMResult {
+struct StatResult {
   PathInfo info = {};
 };
 
-struct ListResult : ECMResult {
+struct ListResult {
   std::vector<PathInfo> entries = {};
 };
 
-struct ListNamesResult : ECMResult {
+struct ListNamesResult {
   std::vector<std::string> names = {};
 };
 
-struct GetsizeResult : ECMResult {
+struct GetsizeResult {
   int64_t size = -1;
 };
 
-struct FindResult : ECMResult {
+struct FindResult {
   std::vector<PathInfo> entries = {};
 };
 
-struct DeleteResult : ECMResult {
+struct DeleteResult {
   ErrorList errors = {};
 };
 
-struct RunResult : ECMResult {
+struct RunResult {
   std::string output = "";
   int exit_code = -1;
 };
 
-struct RTTResult : ECMResult {
+struct RTTResult {
   double rtt_ms = -1.0;
 };
 
-struct RealpathResult : ECMResult {
+struct RealpathResult {
   std::string path = "";
 };
 
-struct ChmodResult : ECMResult {
+struct ChmodResult {
   OrderDict<std::string, ECM> results = {};
 };
 
-struct IWalkResult : ECMResult {
+struct IWalkResult {
   std::vector<PathInfo> entries = {};
   ErrorList errors = {};
 };
 
-struct WalkResult : ECMResult {
+struct WalkResult {
   WalkTree tree = {};
   ErrorList errors = {};
 };
 
-struct UpdateOSTypeResult : ECMResult {
+struct UpdateOSTypeResult {
   OS_TYPE os_type = OS_TYPE::Unknown;
   [[nodiscard]] operator OS_TYPE() const { return os_type; }
 };
 
-struct UpdateHomeDirResult : ECMResult {
+struct UpdateHomeDirResult {
   std::string home_dir = "";
   [[nodiscard]] operator std::string() const { return home_dir; }
 };
 
-struct CheckResult : ECMResult {
+struct CheckResult {
   ClientStatus status = ClientStatus::NotInitialized;
-  CheckResult(const ECM &ecm, ClientStatus status)
-      : ECMResult(ecm), status(status) {}
   CheckResult() = default;
-  [[nodiscard]] operator ECM() const { return rcm; }
+  CheckResult(ClientStatus value) : status(value) {}
 };
 
-struct ConnectResult : ECMResult {
+struct ConnectResult {
   ClientStatus status = ClientStatus::NotInitialized;
-  [[nodiscard]] operator ECM() const { return rcm; }
 };
 
 struct UpdateOSTypeArgs {};
