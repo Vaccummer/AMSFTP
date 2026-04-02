@@ -2,9 +2,9 @@
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostDomainService.hpp"
 #include "foundation/tools/path.hpp"
-#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
+#include "interface/parser/CommandPreprocess.hpp"
 #include "interface/style/StyleManager.hpp"
 #include <algorithm>
 #include <cstdint>
@@ -13,21 +13,16 @@
 #include <iomanip>
 #include <limits>
 #include <sstream>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
 namespace AMInterface::filesystem {
 namespace {
+using AMDomain::filesystem::services::NormalizePath;
+using AMDomain::host::HostService::NormalizeNickname;
 ECM MergeStatus_(const ECM &current, const ECM &next) {
-  return isok(next) ? current : next;
-}
-
-std::string NormalizeNickname_(const std::string &nickname) {
-  return AMDomain::host::HostService::NormalizeNickname(nickname);
-}
-
-std::string NormalizePath_(const std::string &path) {
-  return AMDomain::filesystem::services::NormalizePath(path);
+  return (next) ? current : next;
 }
 
 AMDomain::client::ClientControlComponent
@@ -40,7 +35,7 @@ ResolveControl_(AMDomain::client::amf default_interrupt_flag,
 }
 
 std::string MakePathKey_(const PathTarget &path) {
-  return NormalizeNickname_(path.nickname) + "@" + NormalizePath_(path.path);
+  return path.nickname + "@" + path.path;
 }
 
 bool IsHiddenName_(const std::string &name) {
@@ -64,15 +59,67 @@ bool HasExplicitNickname_(const std::string &token) {
   return token.find('@') != std::string::npos;
 }
 
+bool IsValidNicknameToken_(const std::string &nickname_token) {
+  const std::string nickname = AMStr::Strip(nickname_token);
+  if (nickname.empty()) {
+    return false;
+  }
+  return AMDomain::host::HostService::ValidateNickname(nickname);
+}
+
+size_t FindFirstNonEscapedAt_(
+    const AMInterface::parser::ResolvedStringMeta &resolved) {
+  for (size_t i = 0; i < resolved.value.size(); ++i) {
+    if (resolved.value[i] != '@') {
+      continue;
+    }
+    if (i < resolved.chars.size() && resolved.chars[i].escaped) {
+      continue;
+    }
+    return i;
+  }
+  return std::string::npos;
+}
+
 bool IsAlreadyExistsError_(ErrorCode ec) {
   return ec == ErrorCode::PathAlreadyExists ||
          ec == ErrorCode::TargetAlreadyExists;
 }
 
-struct SplitPathsResult_ {
-  std::vector<PathTarget> valid_paths = {};
-  ECM status = Ok();
-};
+std::string SubstituteTemplateVars_(
+    const std::string &cmd_template,
+    const std::unordered_map<std::string, std::string> &vars) {
+  if (cmd_template.empty()) {
+    return cmd_template;
+  }
+  std::string out = {};
+  out.reserve(cmd_template.size());
+
+  size_t i = 0;
+  while (i < cmd_template.size()) {
+    if (cmd_template[i] == '{' && i + 1 < cmd_template.size() &&
+        cmd_template[i + 1] == '$') {
+      const size_t close = cmd_template.find('}', i + 2);
+      if (close == std::string::npos) {
+        out.append(cmd_template.substr(i));
+        break;
+      }
+      const std::string key =
+          AMStr::Strip(cmd_template.substr(i + 2, close - (i + 2)));
+      const auto it = vars.find(key);
+      if (it != vars.end()) {
+        out.append(it->second);
+      } else {
+        out.append(cmd_template.substr(i, close - i + 1));
+      }
+      i = close + 1;
+      continue;
+    }
+    out.push_back(cmd_template[i]);
+    ++i;
+  }
+  return out;
+}
 
 struct TreeNode_ {
   std::vector<PathInfo> dirs = {};
@@ -88,25 +135,30 @@ std::string FormatStatTime(double value) {
 }
 
 std::string BuildPathLabel(const PathTarget &path) {
-  const std::string normalized_path = NormalizePath_(path.path);
-  const std::string display_path =
-      normalized_path.empty() ? path.path : normalized_path;
+  const std::string display_path = path.path.empty() ? "." : path.path;
   if (path.nickname.empty()) {
     return display_path;
   }
-  return AMStr::fmt("{}@{}", NormalizeNickname_(path.nickname), display_path);
+  return AMStr::fmt("{}@{}", path.nickname, display_path);
 }
 
-void PrintPathError(AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
-                    const std::string &label, const ECM &rcm) {
-  if (label.empty()) {
-    prompt_io_manager.ErrorFormat(rcm);
-    return;
+std::string
+BuildStyledPathLabel(AMInterface::style::AMStyleService &style_service,
+                     const PathTarget &path,
+                     const PathInfo *path_info = nullptr) {
+  const std::string display_path = path.path.empty() ? "." : path.path;
+  const std::string styled_path = style_service.Format(
+      display_path, AMInterface::style::StyleIndex::None, path_info);
+
+  const std::string nickname = path.nickname;
+  if (nickname.empty()) {
+    return styled_path;
   }
-  const std::string detail =
-      rcm.second.empty() ? AMStr::ToString(rcm.first) : rcm.second;
-  prompt_io_manager.ErrorFormat(
-      Err(rcm.first, AMStr::fmt("{}: {}", label, detail)));
+  const std::string styled_nickname =
+      style_service.Format(nickname, AMInterface::style::StyleIndex::Nickname);
+  const std::string styled_at =
+      style_service.Format("@", AMInterface::style::StyleIndex::AtSign);
+  return styled_nickname + styled_at + styled_path;
 }
 
 std::string FormatStatBlock(const PathInfo &info) {
@@ -162,10 +214,9 @@ void PrintLsNamesGrid(AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
       }
       line << styled_names[idx];
       if (col + 1 < columns && idx + rows < entries.size()) {
-        const size_t pad =
-            col_width > entries[idx].name.size()
-                ? col_width - entries[idx].name.size()
-                : 1;
+        const size_t pad = col_width > entries[idx].name.size()
+                               ? col_width - entries[idx].name.size()
+                               : 1;
         line << std::string(pad, ' ');
       }
     }
@@ -308,78 +359,84 @@ void PrintGroupedClientPaths(
   }
 }
 } // namespace interface_print
-
-SplitPathsResult_ CollectUniqueSplitPaths_(
-    const std::vector<std::string> &raw_paths,
-    const std::function<ECMData<PathTarget>(const std::string &)> &splitter,
-    const AMDomain::client::ClientControlComponent &control,
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager) {
-  SplitPathsResult_ out = {};
-  out.valid_paths.reserve(raw_paths.size());
-  std::unordered_set<std::string> seen_valid = {};
-  std::unordered_set<std::string> seen_error = {};
-
-  for (const auto &raw_path : raw_paths) {
-    if (control.IsInterrupted()) {
-      out.status = Err(EC::Terminate, "Interrupted by user");
-      out.valid_paths.clear();
-      return out;
-    }
-
-    auto split_result = splitter(raw_path);
-    if (!isok(split_result.rcm)) {
-      if (seen_error.insert(raw_path).second) {
-        interface_print::PrintPathError(prompt_io_manager, raw_path,
-                                        split_result.rcm);
-      }
-      out.status = MergeStatus_(out.status, split_result.rcm);
-      continue;
-    }
-
-    const std::string key = MakePathKey_(split_result.data);
-    if (!seen_valid.insert(key).second) {
-      continue;
-    }
-    out.valid_paths.push_back(std::move(split_result.data));
-  }
-
-  return out;
-}
 } // namespace
 
 FilesystemInterfaceSerivce::FilesystemInterfaceSerivce(
     AMApplication::client::ClientAppService &client_service,
     AMApplication::filesystem::FilesystemAppService &filesystem_service,
     AMInterface::style::AMStyleService &style_service,
-    AMInterface::prompt::AMPromptIOManager &prompt_io_manager,
-    AMDomain::client::amf default_interrupt_flag)
+    AMInterface::prompt::AMPromptIOManager &prompt_io_manager)
     : client_service_(client_service), filesystem_service_(filesystem_service),
       style_service_(style_service), prompt_io_manager_(prompt_io_manager),
-      default_interrupt_flag_(std::move(default_interrupt_flag)) {}
+      default_interrupt_flag_(nullptr) {}
+
+void FilesystemInterfaceSerivce::SetDefaultControlToken(
+    const AMDomain::client::amf &token) {
+  default_interrupt_flag_ = token;
+}
+
+AMDomain::client::amf
+FilesystemInterfaceSerivce::GetDefaultControlToken() const {
+  return default_interrupt_flag_;
+}
 
 ECMData<PathTarget>
 FilesystemInterfaceSerivce::SplitRawTarget(const std::string &token) const {
   PathTarget out = {};
-  const std::string normalized_token = AMStr::Strip(token);
-  const size_t at_pos = normalized_token.find('@');
-  if (!normalized_token.empty() && normalized_token.front() == '@') {
-    out.nickname = "local";
-    out.path = normalized_token.substr(1);
-  } else if (at_pos == std::string::npos) {
-    out.nickname = filesystem_service_.CurrentNickname();
-    out.path = normalized_token;
-  } else {
-    out.nickname = normalized_token.substr(0, at_pos);
-    out.path = normalized_token.substr(at_pos + 1);
+  const std::string stripped_token = AMStr::Strip(token);
+  auto resolved_result =
+      AMInterface::parser::AMInputPreprocess::ResolveStringMeta(stripped_token);
+  if (!(resolved_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(
+        Err(resolved_result.rcm.code, "", "", resolved_result.rcm.msg()));
+    return {PathTarget{}, resolved_result.rcm};
   }
 
-  out.nickname = NormalizeNickname_(out.nickname);
-  out.path = NormalizePath_(out.path);
+  const auto &resolved = resolved_result.data;
+  const size_t at_pos = FindFirstNonEscapedAt_(resolved);
+  if (at_pos == std::string::npos) {
+    // Rule 1: no '@' -> current nickname + full token as path.
+    out.nickname = filesystem_service_.CurrentNickname();
+    out.path = resolved.value;
+  } else if (resolved.value == "@") {
+    // Rule 5: only '@' -> local@.
+    out.nickname = "local";
+    out.path = ".";
+  } else if (at_pos == 0) {
+    // Rule 4: '@' at head -> local + remaining path.
+    out.nickname = "local";
+    out.path = resolved.value.substr(1);
+  } else {
+    const std::string nickname_part = resolved.value.substr(0, at_pos);
+    if (!IsValidNicknameToken_(nickname_part)) {
+      // Rule 2.1 / 3.1 fallback to rule 1 when nickname is invalid.
+      out.nickname = filesystem_service_.CurrentNickname();
+      out.path = resolved.value;
+    } else {
+      // Rule 2.2 / 3.2: split at first '@'; trailing '@' means path='.'.
+      out.nickname = nickname_part;
+      out.path = resolved.value.substr(at_pos + 1);
+      if (out.path.empty()) {
+        out.path = ".";
+      }
+    }
+  }
+
+  // Final strip + normalize.
+  out.nickname = NormalizeNickname(AMStr::Strip(out.nickname));
+  if (out.nickname.empty()) {
+    out.nickname =
+        NormalizeNickname(AMStr::Strip(filesystem_service_.CurrentNickname()));
+  }
+  if (out.nickname.empty()) {
+    out.nickname = "local";
+  }
+  out.path = NormalizePath(AMStr::Strip(out.path));
   if (out.path.empty()) {
     out.path = ".";
   }
 
-  return {std::move(out), Ok()};
+  return {std::move(out), OK};
 }
 
 ECMData<PathTarget>
@@ -399,21 +456,18 @@ FilesystemInterfaceSerivce::MatchOne(const PathTarget &path) const {
       });
 
   if (matched_count == 1) {
-    first_matched_path.nickname =
-        NormalizeNickname_(first_matched_path.nickname);
-    first_matched_path.path = NormalizePath_(first_matched_path.path);
-    return {std::move(first_matched_path), Ok()};
+    return {std::move(first_matched_path), OK};
   }
   if (matched_count > 1) {
     return {PathTarget{},
-            Err(EC::InvalidArg,
+            Err(EC::InvalidArg, "", "",
                 AMStr::fmt("Wildcard path must match exactly one target: {}@{}",
                            path.nickname, path.path))};
   }
   if (!find_result.rcm) {
     return {PathTarget{}, find_result.rcm};
   }
-  return {PathTarget{}, Err(EC::InvalidArg,
+  return {PathTarget{}, Err(EC::InvalidArg, "", "",
                             AMStr::fmt("Wildcard path matched no target: {}@{}",
                                        path.nickname, path.path))};
 }
@@ -423,31 +477,41 @@ ECM FilesystemInterfaceSerivce::Stat(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.raw_paths.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, "No path is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No path is given");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
 
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  auto split_paths = CollectUniqueSplitPaths_(
-      arg.raw_paths,
-      [this](const std::string &raw_path) { return SplitRawTarget(raw_path); },
-      control, prompt_io_manager_);
-  if (split_paths.status.first == EC::Terminate) {
-    return split_paths.status;
-  }
-  ECM status = split_paths.status;
-
-  for (const auto &path : split_paths.valid_paths) {
+  std::vector<PathTarget> split_paths = {};
+  split_paths.reserve(arg.raw_paths.size());
+  std::unordered_set<std::string> seen_split_error = {};
+  ECM status = OK;
+  for (const auto &raw_path : arg.raw_paths) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
+    }
+    auto split_result = SplitRawTarget(raw_path);
+    if (!(split_result.rcm)) {
+      if (seen_split_error.insert(raw_path).second) {
+        prompt_io_manager_.ErrorFormat(split_result.rcm);
+      }
+      status = MergeStatus_(status, split_result.rcm);
+      continue;
+    }
+    split_paths.push_back(std::move(split_result.data));
+  }
+  const auto valid_paths =
+      AMDomain::filesystem::services::DedupPathTargets(split_paths);
+
+  for (const auto &path : valid_paths) {
+    if (control.IsInterrupted()) {
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
 
     auto stat_result = filesystem_service_.Stat(path, control, arg.trace_link);
-    if (!isok(stat_result.rcm)) {
-      interface_print::PrintPathError(prompt_io_manager_,
-                                      interface_print::BuildPathLabel(path),
-                                      stat_result.rcm);
+    if (!(stat_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(stat_result.rcm);
       status = MergeStatus_(status, stat_result.rcm);
       continue;
     }
@@ -462,36 +526,46 @@ ECM FilesystemInterfaceSerivce::GetSize(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.raw_paths.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, "No path is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No path is given");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
 
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  auto split_paths = CollectUniqueSplitPaths_(
-      arg.raw_paths,
-      [this](const std::string &raw_path) { return SplitRawTarget(raw_path); },
-      control, prompt_io_manager_);
-  if (split_paths.status.first == EC::Terminate) {
-    return split_paths.status;
-  }
-  ECM status = split_paths.status;
-
-  for (const auto &path : split_paths.valid_paths) {
+  std::vector<PathTarget> split_paths = {};
+  split_paths.reserve(arg.raw_paths.size());
+  std::unordered_set<std::string> seen_split_error = {};
+  ECM status = OK;
+  for (const auto &raw_path : arg.raw_paths) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
+    }
+    auto split_result = SplitRawTarget(raw_path);
+    if (!(split_result.rcm)) {
+      if (seen_split_error.insert(raw_path).second) {
+        prompt_io_manager_.ErrorFormat(split_result.rcm);
+      }
+      status = MergeStatus_(status, split_result.rcm);
+      continue;
+    }
+    split_paths.push_back(std::move(split_result.data));
+  }
+  const auto valid_paths =
+      AMDomain::filesystem::services::DedupPathTargets(split_paths);
+
+  for (const auto &path : valid_paths) {
+    if (control.IsInterrupted()) {
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
 
     PathTarget target = path;
     if (AMDomain::filesystem::services::HasWildcard(target.path)) {
       auto match_result = MatchOne(target);
-      if (!isok(match_result.rcm)) {
-        interface_print::PrintPathError(prompt_io_manager_,
-                                        interface_print::BuildPathLabel(target),
-                                        match_result.rcm);
+      if (!(match_result.rcm)) {
+        prompt_io_manager_.ErrorFormat(match_result.rcm);
         status = MergeStatus_(status, match_result.rcm);
         continue;
       }
@@ -501,25 +575,25 @@ ECM FilesystemInterfaceSerivce::GetSize(
     auto pre_stat = filesystem_service_.Stat(target, control, false);
     if (!pre_stat.rcm) {
       const std::string label = interface_print::BuildPathLabel(target);
-      interface_print::PrintPathError(prompt_io_manager_, label, pre_stat.rcm);
+      prompt_io_manager_.ErrorFormat(pre_stat.rcm);
       status = MergeStatus_(status, pre_stat.rcm);
       continue;
     }
     PathTarget display_target = target;
-    display_target.nickname = NormalizeNickname_(display_target.nickname);
     if (!pre_stat.data.path.empty()) {
-      display_target.path = NormalizePath_(pre_stat.data.path);
+      display_target.path = pre_stat.data.path;
     } else {
-      display_target.path = NormalizePath_(display_target.path);
+      display_target.path = display_target.path;
     }
     if (display_target.path.empty()) {
       display_target.path = ".";
     }
-    const std::string label = interface_print::BuildPathLabel(display_target);
+    const std::string styled_label = interface_print::BuildStyledPathLabel(
+        style_service_, display_target, &pre_stat.data);
 
     if (pre_stat.data.type != PathType::DIR) {
-      prompt_io_manager_.Print(
-          AMStr::fmt("{} {}", label, AMStr::FormatSize(pre_stat.data.size)));
+      prompt_io_manager_.Print(AMStr::fmt(
+          "{} {}", styled_label, AMStr::FormatSize(pre_stat.data.size)));
       continue;
     }
 
@@ -528,11 +602,12 @@ ECM FilesystemInterfaceSerivce::GetSize(
     bool refresh_started = false;
     prompt_io_manager_.RefreshBegin(1);
     refresh_started = true;
-    prompt_io_manager_.RefreshRender({AMStr::fmt("{} {}", label, latest_size)});
+    prompt_io_manager_.RefreshRender(
+        {AMStr::fmt("{} {}", styled_label, latest_size)});
 
     auto size_result = filesystem_service_.GetSize(
         target, control,
-        [this, &label, &latest_size,
+        [this, &styled_label, &latest_size,
          &has_progress](const PathTarget &, int64_t current_size) -> bool {
           const std::string formatted = AMStr::FormatSize(current_size);
           if (has_progress && formatted == latest_size) {
@@ -541,27 +616,25 @@ ECM FilesystemInterfaceSerivce::GetSize(
           has_progress = true;
           latest_size = formatted;
           prompt_io_manager_.RefreshRender(
-              {AMStr::fmt("{} {}", label, latest_size)});
+              {AMStr::fmt("{} {}", styled_label, latest_size)});
           return true;
         },
         [this](const PathTarget &error_path, ECM rcm) {
-          interface_print::PrintPathError(
-              prompt_io_manager_, interface_print::BuildPathLabel(error_path),
-              rcm);
+          prompt_io_manager_.ErrorFormat(rcm);
         });
 
     if (refresh_started) {
       prompt_io_manager_.RefreshEnd();
     }
-    if (!has_progress && isok(size_result.rcm)) {
+    if (!has_progress && (size_result.rcm)) {
       latest_size = AMStr::FormatSize(size_result.data);
     }
-    prompt_io_manager_.Print(AMStr::fmt("{} {}", label, latest_size));
+    prompt_io_manager_.Print(AMStr::fmt("{} {}", styled_label, latest_size));
 
     if (!size_result.rcm) {
       status = MergeStatus_(status, size_result.rcm);
-      if (size_result.rcm.first == EC::Terminate ||
-          size_result.rcm.first == EC::OperationTimeout) {
+      if (size_result.rcm.code == EC::Terminate ||
+          size_result.rcm.code == EC::OperationTimeout) {
         return size_result.rcm;
       }
     }
@@ -575,26 +648,23 @@ ECM FilesystemInterfaceSerivce::Find(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   auto split_result = SplitRawTarget(arg.raw_path);
-  if (!isok(split_result.rcm)) {
-    interface_print::PrintPathError(prompt_io_manager_, arg.raw_path,
-                                    split_result.rcm);
+  if (!(split_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(split_result.rcm);
     return split_result.rcm;
   }
 
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  ECM status = Ok();
+  ECM status = OK;
   auto result = filesystem_service_.find(
       split_result.data, SearchType::All, control, {},
       [this, &status](const PathTarget &error_path, ECM rcm) {
-        interface_print::PrintPathError(
-            prompt_io_manager_, interface_print::BuildPathLabel(error_path),
-            rcm);
+        prompt_io_manager_.ErrorFormat(rcm);
         status = MergeStatus_(status, rcm);
       });
 
-  if (!isok(result.rcm)) {
-    if (result.rcm.first == EC::Terminate ||
-        result.rcm.first == EC::OperationTimeout) {
+  if (!(result.rcm)) {
+    if (result.rcm.code == EC::Terminate ||
+        result.rcm.code == EC::OperationTimeout) {
       return result.rcm;
     }
     status = MergeStatus_(status, result.rcm);
@@ -603,9 +673,11 @@ ECM FilesystemInterfaceSerivce::Find(
   const std::string pattern = AMStr::Strip(arg.raw_path).empty()
                                   ? split_result.data.path
                                   : AMStr::Strip(arg.raw_path);
-  prompt_io_manager_.FmtPrint("Find Result for pattern {}", pattern);
+  prompt_io_manager_.FmtPrint("Find {} Result for pattern \"{}\"",
+                              result.data.size(), pattern);
   for (const auto &entry : result.data) {
-    prompt_io_manager_.Print(entry.path);
+    prompt_io_manager_.Print(style_service_.Format(
+        entry.path, AMInterface::style::StyleIndex::None, &entry));
   }
 
   return status;
@@ -622,34 +694,37 @@ ECM FilesystemInterfaceSerivce::Realpath(
   }
 
   auto split_result = SplitRawTarget(raw_path);
-  if (!isok(split_result.rcm)) {
-    interface_print::PrintPathError(prompt_io_manager_, raw_path,
-                                    split_result.rcm);
+  if (!(split_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(split_result.rcm);
     return split_result.rcm;
   }
-  if (AMDomain::filesystem::services::HasWildcard(split_result.data.path)) {
-    const ECM rcm = Err(EC::InvalidArg, "realpath does not accept wildcard path");
-    interface_print::PrintPathError(
-        prompt_io_manager_, interface_print::BuildPathLabel(split_result.data),
-        rcm);
+
+  auto client_result =
+      client_service_.GetClient(split_result.data.nickname, true);
+  if (!(client_result.rcm) || !client_result.data) {
+    const ECM rcm = (client_result.rcm)
+                        ? Err(EC::ClientNotFound, "", "",
+                              AMStr::fmt("Client not found: {}",
+                                         split_result.data.nickname))
+                        : client_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
 
-  auto resolve_result = filesystem_service_.ResolvePath(split_result.data, control);
-  if (!isok(resolve_result.rcm)) {
-    interface_print::PrintPathError(
-        prompt_io_manager_, interface_print::BuildPathLabel(split_result.data),
-        resolve_result.rcm);
-    return resolve_result.rcm;
+  auto abs_result =
+      AMApplication::filesystem::FilesystemAppService::ResolveAbsolutePath(
+          client_result.data, split_result.data.path, control);
+  if (!(abs_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(abs_result.rcm);
+    return abs_result.rcm;
   }
 
-  std::string nickname = NormalizeNickname_(resolve_result.data.target.nickname);
-  std::string npath = NormalizePath_(AMStr::Strip(resolve_result.data.abs_path));
+  std::string npath = AMStr::Strip(abs_result.data);
   if (npath.empty()) {
     npath = ".";
   }
-  prompt_io_manager_.FmtPrint("{}@{}", nickname, npath);
-  return Ok();
+  prompt_io_manager_.Print(npath);
+  return OK;
 }
 
 ECM FilesystemInterfaceSerivce::Tree(
@@ -659,21 +734,21 @@ ECM FilesystemInterfaceSerivce::Tree(
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   const auto print_error = [&](const std::string &label, const ECM &rcm) {
     if (!arg.quiet) {
-      interface_print::PrintPathError(prompt_io_manager_, label, rcm);
+      prompt_io_manager_.ErrorFormat(rcm);
     }
   };
   const auto stop_error = [&control]() -> ECM {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
-    return Ok();
+    return OK;
   };
 
   auto split_result = SplitRawTarget(arg.raw_path);
-  if (!isok(split_result.rcm)) {
+  if (!(split_result.rcm)) {
     print_error(arg.raw_path, split_result.rcm);
     return split_result.rcm;
   }
@@ -681,7 +756,7 @@ ECM FilesystemInterfaceSerivce::Tree(
 
   if (AMDomain::filesystem::services::HasWildcard(target.path)) {
     auto match_result = MatchOne(target);
-    if (!isok(match_result.rcm)) {
+    if (!(match_result.rcm)) {
       print_error(interface_print::BuildPathLabel(target), match_result.rcm);
       return match_result.rcm;
     }
@@ -689,21 +764,21 @@ ECM FilesystemInterfaceSerivce::Tree(
   }
 
   auto root_stat = filesystem_service_.Stat(target, control, false);
-  if (!isok(root_stat.rcm)) {
+  if (!(root_stat.rcm)) {
     print_error(interface_print::BuildPathLabel(target), root_stat.rcm);
     return root_stat.rcm;
   }
   if (arg.only_dir && root_stat.data.type != PathType::DIR) {
-    const ECM rcm = Err(EC::NotADirectory,
+    const ECM rcm = Err(EC::NotADirectory, "", "",
                         AMStr::fmt("Not a directory: {}",
                                    interface_print::BuildPathLabel(target)));
     print_error(interface_print::BuildPathLabel(target), rcm);
     return rcm;
   }
 
-  std::string root_key = NormalizePath_(root_stat.data.path);
+  std::string root_key = root_stat.data.path;
   if (root_key.empty()) {
-    root_key = target.path.empty() ? "." : NormalizePath_(target.path);
+    root_key = target.path.empty() ? "." : target.path;
   }
 
   std::unordered_map<std::string, TreeNode_> tree_nodes = {};
@@ -713,11 +788,11 @@ ECM FilesystemInterfaceSerivce::Tree(
   std::unordered_set<std::string> visited = {};
   visited.insert(root_key);
   std::vector<std::pair<std::string, ECM>> traversal_errors = {};
-  ECM status = Ok();
+  ECM status = OK;
 
   while (!pending.empty()) {
     const ECM check_rcm = stop_error();
-    if (!isok(check_rcm)) {
+    if (!(check_rcm)) {
       return check_rcm;
     }
 
@@ -729,10 +804,10 @@ ECM FilesystemInterfaceSerivce::Tree(
     }
 
     PathTarget current = {};
-    current.nickname = NormalizeNickname_(target.nickname);
-    current.path = NormalizePath_(current_dir);
+    current.nickname = target.nickname;
+    current.path = current_dir;
     auto list_result = filesystem_service_.Listdir(current, control);
-    if (!isok(list_result.rcm)) {
+    if (!(list_result.rcm)) {
       traversal_errors.emplace_back(interface_print::BuildPathLabel(current),
                                     list_result.rcm);
       status = MergeStatus_(status, list_result.rcm);
@@ -742,7 +817,7 @@ ECM FilesystemInterfaceSerivce::Tree(
     auto &node = tree_nodes[current_dir];
     for (const auto &entry : list_result.data) {
       const ECM item_check_rcm = stop_error();
-      if (!isok(item_check_rcm)) {
+      if (!(item_check_rcm)) {
         return item_check_rcm;
       }
 
@@ -757,9 +832,7 @@ ECM FilesystemInterfaceSerivce::Tree(
       if (entry.type == PathType::DIR) {
         PathInfo dir_info = entry;
         if (dir_info.path.empty()) {
-          dir_info.path = NormalizePath_(AMPath::join(current_dir, dir_info.name));
-        } else {
-          dir_info.path = NormalizePath_(dir_info.path);
+          dir_info.path = AMPath::join(current_dir, dir_info.name);
         }
         node.dirs.push_back(dir_info);
         tree_nodes.try_emplace(dir_info.path);
@@ -775,10 +848,7 @@ ECM FilesystemInterfaceSerivce::Tree(
 
       PathInfo file_info = entry;
       if (file_info.path.empty()) {
-        file_info.path =
-            NormalizePath_(AMPath::join(current_dir, file_info.name));
-      } else {
-        file_info.path = NormalizePath_(file_info.path);
+        file_info.path = AMPath::join(current_dir, file_info.name);
       }
       node.files.push_back(std::move(file_info));
     }
@@ -786,8 +856,7 @@ ECM FilesystemInterfaceSerivce::Tree(
 
   if (!arg.quiet) {
     for (const auto &item : traversal_errors) {
-      interface_print::PrintPathError(prompt_io_manager_, item.first,
-                                      item.second);
+      prompt_io_manager_.ErrorFormat(item.second);
     }
   }
 
@@ -796,7 +865,7 @@ ECM FilesystemInterfaceSerivce::Tree(
   }
 
   PathInfo root_info = root_stat.data;
-  root_info.path = NormalizePath_(root_key);
+  root_info.path = root_key;
   const std::string root_line =
       style_service_.Format(interface_print::BuildPathLabel(target),
                             AMInterface::style::StyleIndex::None, &root_info);
@@ -810,16 +879,16 @@ ECM FilesystemInterfaceSerivce::TestRTT(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.times <= 0) {
-    const ECM rcm = Err(EC::InvalidArg, "times must be > 0");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "times must be > 0");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
 
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  std::string nickname = NormalizeNickname_(filesystem_service_.CurrentNickname());
+  std::string nickname = filesystem_service_.CurrentNickname();
 
   auto rtt_result = filesystem_service_.TestRTT(nickname, control, arg.times);
-  if (!isok(rtt_result.rcm)) {
+  if (!(rtt_result.rcm)) {
     prompt_io_manager_.ErrorFormat(rtt_result.rcm);
     return rtt_result.rcm;
   }
@@ -827,7 +896,7 @@ ECM FilesystemInterfaceSerivce::TestRTT(
   std::ostringstream out;
   out << std::fixed << std::setprecision(2) << rtt_result.data;
   prompt_io_manager_.FmtPrint("RTT: {} ms", out.str());
-  return Ok();
+  return OK;
 }
 
 ECM FilesystemInterfaceSerivce::ShellRun(
@@ -836,12 +905,12 @@ ECM FilesystemInterfaceSerivce::ShellRun(
     const {
   const std::string command = AMStr::Strip(arg.cmd);
   if (command.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, "cmd cannot be empty");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "cmd cannot be empty");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
   if (arg.max_time_s < -1) {
-    const ECM rcm = Err(EC::InvalidArg, "max_time_s must be >= -1");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "max_time_s must be >= -1");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -856,25 +925,60 @@ ECM FilesystemInterfaceSerivce::ShellRun(
         base_control.ControlToken(), safe_seconds * 1000);
   }
 
-  std::string nickname = NormalizeNickname_(filesystem_service_.CurrentNickname());
-
-  std::string final_cmd = {};
-  auto shell_result = filesystem_service_.ShellRun(nickname, "", command,
-                                                   run_control, &final_cmd);
-
-  if (!final_cmd.empty()) {
-    prompt_io_manager_.FmtPrint("Final cmd: {}", final_cmd);
+  std::string nickname = filesystem_service_.CurrentNickname();
+  if (nickname.empty()) {
+    nickname = "local";
   }
-  if (!shell_result.output.empty()) {
-    prompt_io_manager_.Print(shell_result.output);
-  }
-  prompt_io_manager_.FmtPrint("Exit with code {}", shell_result.exit_code);
 
-  if (!isok(shell_result.rcm)) {
+  std::string final_cmd = command;
+  auto metadata_client_result = client_service_.GetClient(nickname, true);
+  if ((metadata_client_result.rcm) && metadata_client_result.data) {
+    auto metadata_opt =
+        AMApplication::client::ClientAppService::GetClientMetadata(
+            metadata_client_result.data);
+    if (metadata_opt.has_value()) {
+      const std::string cmd_template = AMStr::Strip(metadata_opt->cmd_prefix);
+      if (!cmd_template.empty()) {
+        std::unordered_map<std::string, std::string> vars = {};
+        const auto dict = metadata_opt->GetStrDict();
+        vars.reserve(dict.size() + 2);
+        for (const auto &entry : dict) {
+          vars[entry.first] = entry.second;
+        }
+        vars["cmd"] = command;
+        vars["escaped_cmd"] = command;
+        final_cmd = SubstituteTemplateVars_(cmd_template, vars);
+      }
+    }
+  }
+
+  prompt_io_manager_.FmtPrint("Final cmd: {}", final_cmd);
+
+  auto client_result = filesystem_service_.GetClient(nickname, run_control);
+  if (!(client_result.rcm) || !client_result.data) {
+    const ECM rcm = (client_result.rcm) ? Err(EC::InvalidHandle, "", "",
+                                              "Resolved client is null")
+                                        : client_result.rcm;
+    prompt_io_manager_.ErrorFormat(rcm);
+    return rcm;
+  }
+
+  auto shell_result = client_result.data->IOPort().ConductCmd(
+      {final_cmd,
+       [this](std::string_view chunk) {
+         if (chunk.empty()) {
+           return;
+         }
+         prompt_io_manager_.PrintRaw(std::string(chunk));
+       }},
+      run_control);
+  prompt_io_manager_.FmtPrint("Exit with code {}", shell_result.data.exit_code);
+
+  if (!(shell_result.rcm)) {
     prompt_io_manager_.ErrorFormat(shell_result.rcm);
     return shell_result.rcm;
   }
-  return Ok();
+  return OK;
 }
 
 ECM FilesystemInterfaceSerivce::Rename(
@@ -883,33 +987,30 @@ ECM FilesystemInterfaceSerivce::Rename(
     const {
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   auto src_split = SplitRawTarget(arg.target);
-  if (!isok(src_split.rcm)) {
-    interface_print::PrintPathError(prompt_io_manager_, arg.target,
-                                    src_split.rcm);
+  if (!(src_split.rcm)) {
+    prompt_io_manager_.ErrorFormat(src_split.rcm);
     return src_split.rcm;
   }
   PathTarget src = std::move(src_split.data);
   if (AMDomain::filesystem::services::HasWildcard(src.path)) {
     auto match_result = MatchOne(src);
-    if (!isok(match_result.rcm)) {
-      interface_print::PrintPathError(prompt_io_manager_,
-                                      interface_print::BuildPathLabel(src),
-                                      match_result.rcm);
+    if (!(match_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(match_result.rcm);
       return match_result.rcm;
     }
     src = std::move(match_result.data);
   }
 
   auto dst_split = SplitRawTarget(arg.dst);
-  if (!isok(dst_split.rcm)) {
-    interface_print::PrintPathError(prompt_io_manager_, arg.dst, dst_split.rcm);
+  if (!(dst_split.rcm)) {
+    prompt_io_manager_.ErrorFormat(dst_split.rcm);
     return dst_split.rcm;
   }
   PathTarget dst = std::move(dst_split.data);
   if (AMDomain::filesystem::services::HasWildcard(dst.path)) {
     const ECM rcm =
-        Err(EC::InvalidArg, "Destination wildcard is not supported");
-    interface_print::PrintPathError(prompt_io_manager_, arg.dst, rcm);
+        Err(EC::InvalidArg, "", "", "Destination wildcard is not supported");
+    prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
   if (!HasExplicitNickname_(arg.dst)) {
@@ -921,25 +1022,23 @@ ECM FilesystemInterfaceSerivce::Rename(
   };
 
   ECM rename_rcm = run_rename(arg.overwrite);
-  if (!isok(rename_rcm) && !arg.overwrite &&
-      IsAlreadyExistsError_(rename_rcm.first)) {
+  if (!(rename_rcm) && !arg.overwrite &&
+      IsAlreadyExistsError_(rename_rcm.code)) {
     bool canceled = false;
     const std::string prompt =
         AMStr::fmt("Destination exists [{}], overwrite? (y/N): ",
                    interface_print::BuildPathLabel(dst));
     const bool approved = prompt_io_manager_.PromptYesNo(prompt, &canceled);
     if (!approved) {
-      const ECM cancel_rcm = Err(EC::ConfigCanceled, "Rename canceled");
-      interface_print::PrintPathError(
-          prompt_io_manager_, interface_print::BuildPathLabel(src), cancel_rcm);
+      const ECM cancel_rcm = Err(EC::ConfigCanceled, "", "", "Rename canceled");
+      prompt_io_manager_.ErrorFormat(cancel_rcm);
       return cancel_rcm;
     }
     rename_rcm = run_rename(true);
   }
 
-  if (!isok(rename_rcm)) {
-    interface_print::PrintPathError(
-        prompt_io_manager_, interface_print::BuildPathLabel(src), rename_rcm);
+  if (!(rename_rcm)) {
+    prompt_io_manager_.ErrorFormat(rename_rcm);
   }
   return rename_rcm;
 }
@@ -951,32 +1050,29 @@ ECM FilesystemInterfaceSerivce::Move(
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   auto src_split = SplitRawTarget(arg.target);
   if (!src_split.rcm) {
-    interface_print::PrintPathError(prompt_io_manager_, arg.target,
-                                    src_split.rcm);
+    prompt_io_manager_.ErrorFormat(src_split.rcm);
     return src_split.rcm;
   }
   PathTarget src = std::move(src_split.data);
   if (AMDomain::filesystem::services::HasWildcard(src.path)) {
     auto match_result = MatchOne(src);
-    if (!isok(match_result.rcm)) {
-      interface_print::PrintPathError(prompt_io_manager_,
-                                      interface_print::BuildPathLabel(src),
-                                      match_result.rcm);
+    if (!(match_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(match_result.rcm);
       return match_result.rcm;
     }
     src = std::move(match_result.data);
   }
 
   auto dst_split = SplitRawTarget(arg.dst);
-  if (!isok(dst_split.rcm)) {
-    interface_print::PrintPathError(prompt_io_manager_, arg.dst, dst_split.rcm);
+  if (!(dst_split.rcm)) {
+    prompt_io_manager_.ErrorFormat(dst_split.rcm);
     return dst_split.rcm;
   }
   PathTarget dst_dir = std::move(dst_split.data);
   if (AMDomain::filesystem::services::HasWildcard(dst_dir.path)) {
     const ECM rcm =
-        Err(EC::InvalidArg, "Destination wildcard is not supported");
-    interface_print::PrintPathError(prompt_io_manager_, arg.dst, rcm);
+        Err(EC::InvalidArg, "", "", "Destination wildcard is not supported");
+    prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
   if (!HasExplicitNickname_(arg.dst)) {
@@ -984,42 +1080,35 @@ ECM FilesystemInterfaceSerivce::Move(
   }
 
   auto dst_stat = filesystem_service_.Stat(dst_dir, control, false);
-  if (!isok(dst_stat.rcm)) {
+  if (!(dst_stat.rcm)) {
     if (AMDomain::filesystem::services::IsPathNotExistError(
-            dst_stat.rcm.first)) {
+            dst_stat.rcm.code)) {
       if (!arg.mkdir) {
         const ECM rcm =
-            Err(EC::PathNotExist,
+            Err(EC::PathNotExist, "", "",
                 AMStr::fmt("Destination directory not found: {}",
                            interface_print::BuildPathLabel(dst_dir)));
-        interface_print::PrintPathError(
-            prompt_io_manager_, interface_print::BuildPathLabel(dst_dir), rcm);
+        prompt_io_manager_.ErrorFormat(rcm);
         return rcm;
       }
       ECM mkdir_rcm = filesystem_service_.Mkdirs(dst_dir, control);
-      if (!isok(mkdir_rcm)) {
-        interface_print::PrintPathError(
-            prompt_io_manager_, interface_print::BuildPathLabel(dst_dir),
-            mkdir_rcm);
+      if (!(mkdir_rcm)) {
+        prompt_io_manager_.ErrorFormat(mkdir_rcm);
         return mkdir_rcm;
       }
     } else {
-      interface_print::PrintPathError(prompt_io_manager_,
-                                      interface_print::BuildPathLabel(dst_dir),
-                                      dst_stat.rcm);
+      prompt_io_manager_.ErrorFormat(dst_stat.rcm);
       return dst_stat.rcm;
     }
   } else if (dst_stat.data.type != PathType::DIR) {
-    const ECM rcm = Err(EC::NotADirectory,
+    const ECM rcm = Err(EC::NotADirectory, "", "",
                         AMStr::fmt("Not a directory: {}", dst_stat.data.path));
-    interface_print::PrintPathError(
-        prompt_io_manager_, interface_print::BuildPathLabel(dst_dir), rcm);
+    prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
 
   PathTarget final_dst = dst_dir;
-  final_dst.path =
-      NormalizePath_(AMPath::join(dst_dir.path, AMPath::basename(src.path)));
+  final_dst.path = AMPath::join(dst_dir.path, AMPath::basename(src.path));
   FilesystemRenameArg rename_arg = {};
   rename_arg.target = interface_print::BuildPathLabel(src);
   rename_arg.dst = interface_print::BuildPathLabel(final_dst);
@@ -1033,7 +1122,7 @@ ECM FilesystemInterfaceSerivce::Saferm(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.targets.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, "No target is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No target is given");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1041,19 +1130,18 @@ ECM FilesystemInterfaceSerivce::Saferm(
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   std::vector<PathTarget> targets = {};
   targets.reserve(arg.targets.size());
-  ECM status = Ok();
+  ECM status = OK;
   for (const auto &token : arg.targets) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
 
     auto split_result = SplitRawTarget(token);
     if (!split_result.rcm) {
-      interface_print::PrintPathError(prompt_io_manager_, token,
-                                      split_result.rcm);
+      prompt_io_manager_.ErrorFormat(split_result.rcm);
       status = MergeStatus_(status, split_result.rcm);
       continue;
     }
@@ -1062,9 +1150,7 @@ ECM FilesystemInterfaceSerivce::Saferm(
 
   auto saferm_result = filesystem_service_.Saferm(std::move(targets), control);
   for (const auto &entry : saferm_result.data) {
-    interface_print::PrintPathError(
-        prompt_io_manager_, interface_print::BuildPathLabel(entry.first),
-        entry.second);
+    prompt_io_manager_.ErrorFormat(entry.second);
   }
   return MergeStatus_(status, saferm_result.rcm);
 }
@@ -1074,7 +1160,7 @@ ECM FilesystemInterfaceSerivce::Rmfile(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.targets.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, "No target is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No target is given");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1083,20 +1169,19 @@ ECM FilesystemInterfaceSerivce::Rmfile(
   std::vector<PathTarget> targets = {};
   targets.reserve(arg.targets.size());
   std::unordered_set<std::string> seen = {};
-  ECM status = Ok();
+  ECM status = OK;
 
   for (const auto &token : arg.targets) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
 
     auto split_result = SplitRawTarget(token);
-    if (!isok(split_result.rcm)) {
-      interface_print::PrintPathError(prompt_io_manager_, token,
-                                      split_result.rcm);
+    if (!(split_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(split_result.rcm);
       status = MergeStatus_(status, split_result.rcm);
       continue;
     }
@@ -1104,10 +1189,8 @@ ECM FilesystemInterfaceSerivce::Rmfile(
     PathTarget target = std::move(split_result.data);
     if (AMDomain::filesystem::services::HasWildcard(target.path)) {
       auto match_result = MatchOne(target);
-      if (!isok(match_result.rcm)) {
-        interface_print::PrintPathError(prompt_io_manager_,
-                                        interface_print::BuildPathLabel(target),
-                                        match_result.rcm);
+      if (!(match_result.rcm)) {
+        prompt_io_manager_.ErrorFormat(match_result.rcm);
         status = MergeStatus_(status, match_result.rcm);
         continue;
       }
@@ -1124,15 +1207,13 @@ ECM FilesystemInterfaceSerivce::Rmfile(
   auto prepare_result =
       filesystem_service_.PrepareRmfile(std::move(targets), control);
   for (const auto &entry : prepare_result.data.precheck_errors) {
-    interface_print::PrintPathError(
-        prompt_io_manager_, interface_print::BuildPathLabel(entry.first),
-        entry.second);
+    prompt_io_manager_.ErrorFormat(entry.second);
   }
 
   status = MergeStatus_(status, prepare_result.rcm);
-  if (!isok(prepare_result.rcm) &&
-      (prepare_result.rcm.first == EC::Terminate ||
-       prepare_result.rcm.first == EC::OperationTimeout)) {
+  if (!(prepare_result.rcm) &&
+      (prepare_result.rcm.code == EC::Terminate ||
+       prepare_result.rcm.code == EC::OperationTimeout)) {
     return status;
   }
   if (prepare_result.data.grouped_display_paths.empty()) {
@@ -1145,13 +1226,12 @@ ECM FilesystemInterfaceSerivce::Rmfile(
   const bool confirmed = prompt_io_manager_.PromptYesNo(
       "Are you sure to remove these file paths? (y/n): ", &canceled);
   if (canceled || !confirmed) {
-    return Err(EC::ConfigCanceled, "rmfile canceled");
+    return Err(EC::ConfigCanceled, "", "", "rmfile canceled");
   }
 
   auto execute_result = filesystem_service_.ExecuteRmfile(
       prepare_result.data, control, [this](const PathTarget &path, ECM rcm) {
-        interface_print::PrintPathError(
-            prompt_io_manager_, interface_print::BuildPathLabel(path), rcm);
+        prompt_io_manager_.ErrorFormat(rcm);
       });
   return MergeStatus_(status, execute_result.rcm);
 }
@@ -1161,7 +1241,7 @@ ECM FilesystemInterfaceSerivce::Rmdir(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.targets.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, "No target is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No target is given");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
@@ -1170,20 +1250,19 @@ ECM FilesystemInterfaceSerivce::Rmdir(
   std::vector<PathTarget> targets = {};
   targets.reserve(arg.targets.size());
   std::unordered_set<std::string> seen = {};
-  ECM status = Ok();
+  ECM status = OK;
 
   for (const auto &token : arg.targets) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
 
     auto split_result = SplitRawTarget(token);
-    if (!isok(split_result.rcm)) {
-      interface_print::PrintPathError(prompt_io_manager_, token,
-                                      split_result.rcm);
+    if (!(split_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(split_result.rcm);
       status = MergeStatus_(status, split_result.rcm);
       continue;
     }
@@ -1191,10 +1270,8 @@ ECM FilesystemInterfaceSerivce::Rmdir(
     PathTarget target = std::move(split_result.data);
     if (AMDomain::filesystem::services::HasWildcard(target.path)) {
       auto match_result = MatchOne(target);
-      if (!isok(match_result.rcm)) {
-        interface_print::PrintPathError(prompt_io_manager_,
-                                        interface_print::BuildPathLabel(target),
-                                        match_result.rcm);
+      if (!(match_result.rcm)) {
+        prompt_io_manager_.ErrorFormat(match_result.rcm);
         status = MergeStatus_(status, match_result.rcm);
         continue;
       }
@@ -1210,8 +1287,7 @@ ECM FilesystemInterfaceSerivce::Rmdir(
 
   auto rmdir_result = filesystem_service_.Rmdir(
       std::move(targets), control, [this](const PathTarget &path, ECM rcm) {
-        interface_print::PrintPathError(
-            prompt_io_manager_, interface_print::BuildPathLabel(path), rcm);
+        prompt_io_manager_.ErrorFormat(rcm);
       });
   return MergeStatus_(status, rmdir_result.rcm);
 }
@@ -1221,7 +1297,7 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.targets.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, "No target is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No target is given");
     if (!arg.quiet) {
       prompt_io_manager_.ErrorFormat(rcm);
     }
@@ -1231,21 +1307,20 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
   std::vector<PathTarget> targets = {};
   targets.reserve(arg.targets.size());
-  ECM status = Ok();
+  ECM status = OK;
 
   for (const auto &token : arg.targets) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "Interrupted by user");
+      return Err(EC::Terminate, "", "", "Interrupted by user");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, "Operation timed out");
+      return Err(EC::OperationTimeout, "", "", "Operation timed out");
     }
 
     auto split_result = SplitRawTarget(token);
-    if (!isok(split_result.rcm)) {
+    if (!(split_result.rcm)) {
       if (!arg.quiet) {
-        interface_print::PrintPathError(prompt_io_manager_, token,
-                                        split_result.rcm);
+        prompt_io_manager_.ErrorFormat(split_result.rcm);
       }
       status = MergeStatus_(status, split_result.rcm);
       continue;
@@ -1257,16 +1332,14 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
       filesystem_service_.PreparePermanentRemove(std::move(targets), control);
   if (!arg.quiet) {
     for (const auto &entry : prepare_result.data.precheck_errors) {
-      interface_print::PrintPathError(
-          prompt_io_manager_, interface_print::BuildPathLabel(entry.first),
-          entry.second);
+      prompt_io_manager_.ErrorFormat(entry.second);
     }
   }
 
   status = MergeStatus_(status, prepare_result.rcm);
-  if (!isok(prepare_result.rcm) &&
-      (prepare_result.rcm.first == EC::Terminate ||
-       prepare_result.rcm.first == EC::OperationTimeout)) {
+  if (!(prepare_result.rcm) &&
+      (prepare_result.rcm.code == EC::Terminate ||
+       prepare_result.rcm.code == EC::OperationTimeout)) {
     return MergeStatus_(status, prepare_result.rcm);
   }
 
@@ -1280,7 +1353,7 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
   const bool confirmed = prompt_io_manager_.PromptYesNo(
       "Are you sure to permanantly remove these paths? (y/n): ", &canceled);
   if (canceled || !confirmed) {
-    return Err(EC::ConfigCanceled, "permanent remove canceled");
+    return Err(EC::ConfigCanceled, "", "", "permanent remove canceled");
   }
 
   prompt_io_manager_.RefreshBegin(1);
@@ -1292,8 +1365,7 @@ ECM FilesystemInterfaceSerivce::PermanentRemove(
       },
       [this, &arg](const PathTarget &path, ECM rcm) {
         if (!arg.quiet) {
-          interface_print::PrintPathError(
-              prompt_io_manager_, interface_print::BuildPathLabel(path), rcm);
+          prompt_io_manager_.ErrorFormat(rcm);
         }
       });
   prompt_io_manager_.RefreshEnd();
@@ -1309,56 +1381,46 @@ ECM FilesystemInterfaceSerivce::Ls(
   PathTarget target = {};
   if (AMStr::Strip(arg.raw_path).empty()) {
     auto cwd_result = filesystem_service_.GetCwd(control);
-    if (isok(cwd_result.rcm) && !cwd_result.data.path.empty()) {
+    if ((cwd_result.rcm) && !cwd_result.data.path.empty()) {
       target = cwd_result.data;
       if (target.nickname.empty()) {
         target.nickname = filesystem_service_.CurrentNickname();
       }
-      target.nickname = NormalizeNickname_(target.nickname);
-      target.path = NormalizePath_(target.path);
       if (target.path.empty()) {
         target.path = ".";
       }
     } else {
       auto split_result = SplitRawTarget("/");
-      if (!isok(split_result.rcm)) {
-        interface_print::PrintPathError(prompt_io_manager_, "/",
-                                        split_result.rcm);
+      if (!(split_result.rcm)) {
+        prompt_io_manager_.ErrorFormat(split_result.rcm);
         return split_result.rcm;
       }
       target = std::move(split_result.data);
     }
   } else {
     auto split_result = SplitRawTarget(arg.raw_path);
-    if (!isok(split_result.rcm)) {
-      interface_print::PrintPathError(prompt_io_manager_, arg.raw_path,
-                                      split_result.rcm);
+    if (!(split_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(split_result.rcm);
       return split_result.rcm;
     }
     target = std::move(split_result.data);
   }
   if (AMDomain::filesystem::services::HasWildcard(target.path)) {
     auto match_result = MatchOne(target);
-    if (!isok(match_result.rcm)) {
-      interface_print::PrintPathError(prompt_io_manager_,
-                                      interface_print::BuildPathLabel(target),
-                                      match_result.rcm);
+    if (!(match_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(match_result.rcm);
       return match_result.rcm;
     }
     target = std::move(match_result.data);
   }
-  target.nickname = NormalizeNickname_(target.nickname);
-  target.path = NormalizePath_(target.path);
   if (target.path.empty()) {
     target.path = ".";
   }
 
   if (!arg.list_like) {
     auto list_result = filesystem_service_.Listdir(target, control);
-    if (!isok(list_result.rcm)) {
-      interface_print::PrintPathError(prompt_io_manager_,
-                                      interface_print::BuildPathLabel(target),
-                                      list_result.rcm);
+    if (!(list_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(list_result.rcm);
       return list_result.rcm;
     }
 
@@ -1376,14 +1438,12 @@ ECM FilesystemInterfaceSerivce::Ls(
               });
     interface_print::PrintLsNamesGrid(prompt_io_manager_, style_service_,
                                       entries);
-    return Ok();
+    return OK;
   }
 
   auto list_result = filesystem_service_.Listdir(target, control);
-  if (!isok(list_result.rcm)) {
-    interface_print::PrintPathError(prompt_io_manager_,
-                                    interface_print::BuildPathLabel(target),
-                                    list_result.rcm);
+  if (!(list_result.rcm)) {
+    prompt_io_manager_.ErrorFormat(list_result.rcm);
     return list_result.rcm;
   }
 
@@ -1406,7 +1466,7 @@ ECM FilesystemInterfaceSerivce::Ls(
             });
   interface_print::PrintLsLongEntries(prompt_io_manager_, style_service_,
                                       entries);
-  return Ok();
+  return OK;
 }
 
 ECM FilesystemInterfaceSerivce::Cd(
@@ -1420,45 +1480,37 @@ ECM FilesystemInterfaceSerivce::Cd(
   PathTarget target = {};
   if (from_history) {
     auto history_result = filesystem_service_.PeekCdHistory();
-    if (!isok(history_result.rcm)) {
-      interface_print::PrintPathError(prompt_io_manager_, "-",
-                                      history_result.rcm);
+    if (!(history_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(history_result.rcm);
       return history_result.rcm;
     }
     target = std::move(history_result.data);
   } else {
     auto split_result = SplitRawTarget(arg.raw_path);
-    if (!isok(split_result.rcm)) {
-      interface_print::PrintPathError(prompt_io_manager_, arg.raw_path,
-                                      split_result.rcm);
+    if (!(split_result.rcm)) {
+      prompt_io_manager_.ErrorFormat(split_result.rcm);
       return split_result.rcm;
     }
     target = split_result.data;
     if (AMDomain::filesystem::services::HasWildcard(target.path)) {
       auto match_result = MatchOne(target);
-      if (!isok(match_result.rcm)) {
-        interface_print::PrintPathError(prompt_io_manager_,
-                                        interface_print::BuildPathLabel(target),
-                                        match_result.rcm);
+      if (!(match_result.rcm)) {
+        prompt_io_manager_.ErrorFormat(match_result.rcm);
         return match_result.rcm;
       }
       target = std::move(match_result.data);
     }
   }
-  target.nickname = NormalizeNickname_(target.nickname);
-  target.path = NormalizePath_(target.path);
   if (target.path.empty()) {
     target.path = ".";
   }
 
-  std::string current_nickname =
-      NormalizeNickname_(filesystem_service_.CurrentNickname());
+  std::string current_nickname = filesystem_service_.CurrentNickname();
 
   if (target.nickname == current_nickname) {
     ECM rcm = filesystem_service_.ChangeDir(target, control, from_history);
-    if (!isok(rcm)) {
-      interface_print::PrintPathError(
-          prompt_io_manager_, interface_print::BuildPathLabel(target), rcm);
+    if (!(rcm)) {
+      prompt_io_manager_.ErrorFormat(rcm);
     }
     return rcm;
   }
@@ -1466,17 +1518,14 @@ ECM FilesystemInterfaceSerivce::Cd(
   auto ensure_result =
       client_service_.EnsureClient(target.nickname, control, false, true);
   if (!ensure_result.rcm || !ensure_result.data) {
-    interface_print::PrintPathError(prompt_io_manager_, target.nickname,
-                                    ensure_result.rcm);
+    prompt_io_manager_.ErrorFormat(ensure_result.rcm);
     return ensure_result.rcm;
   }
 
   ECM change_dir_rcm =
       filesystem_service_.ChangeDir(target, control, from_history);
   if (!change_dir_rcm) {
-    interface_print::PrintPathError(prompt_io_manager_,
-                                    interface_print::BuildPathLabel(target),
-                                    change_dir_rcm);
+    prompt_io_manager_.ErrorFormat(change_dir_rcm);
     return change_dir_rcm;
   }
 
@@ -1484,8 +1533,7 @@ ECM FilesystemInterfaceSerivce::Cd(
   ECM prompt_change_rcm = prompt_io_manager_.ChangeClient(
       ensure_result.data->ConfigPort().GetNickname());
   if (!prompt_change_rcm) {
-    interface_print::PrintPathError(prompt_io_manager_, target.nickname,
-                                    prompt_change_rcm);
+    prompt_io_manager_.ErrorFormat(prompt_change_rcm);
   }
   return prompt_change_rcm;
 }
@@ -1495,29 +1543,40 @@ ECM FilesystemInterfaceSerivce::Mkdirs(
     const std::optional<AMDomain::client::ClientControlComponent> &control_opt)
     const {
   if (arg.raw_paths.empty()) {
-    const ECM rcm = Err(EC::InvalidArg, "No path is given");
+    const ECM rcm = Err(EC::InvalidArg, "", "", "No path is given");
     prompt_io_manager_.ErrorFormat(rcm);
     return rcm;
   }
 
   const auto control = ResolveControl_(default_interrupt_flag_, control_opt);
-  auto split_paths = CollectUniqueSplitPaths_(
-      arg.raw_paths,
-      [this](const std::string &raw_path) { return SplitRawTarget(raw_path); },
-      control, prompt_io_manager_);
-  if (split_paths.status.first == EC::Terminate) {
-    return split_paths.status;
-  }
-  ECM status = split_paths.status;
-
-  for (const auto &path : split_paths.valid_paths) {
+  std::vector<PathTarget> split_paths = {};
+  split_paths.reserve(arg.raw_paths.size());
+  std::unordered_set<std::string> seen_split_error = {};
+  ECM status = OK;
+  for (const auto &raw_path : arg.raw_paths) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "Interrupted by user");
+      return {EC::Terminate, "", "", "Interrupted by user"};
+    }
+    auto split_result = SplitRawTarget(raw_path);
+    if (!(split_result.rcm)) {
+      if (seen_split_error.insert(raw_path).second) {
+        prompt_io_manager_.ErrorFormat(split_result.rcm);
+      }
+      status = MergeStatus_(status, split_result.rcm);
+      continue;
+    }
+    split_paths.push_back(std::move(split_result.data));
+  }
+  const auto valid_paths =
+      AMDomain::filesystem::services::DedupPathTargets(split_paths);
+
+  for (const auto &path : valid_paths) {
+    if (control.IsInterrupted()) {
+      return {EC::Terminate, "", "", "Interrupted by user"};
     }
     ECM rcm = filesystem_service_.Mkdirs(path, control);
-    if (!isok(rcm)) {
-      interface_print::PrintPathError(
-          prompt_io_manager_, interface_print::BuildPathLabel(path), rcm);
+    if (!(rcm)) {
+      prompt_io_manager_.ErrorFormat(rcm);
       status = MergeStatus_(status, rcm);
     }
   }

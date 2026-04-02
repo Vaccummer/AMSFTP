@@ -25,7 +25,7 @@ class TokenTypeAnalyzer;
 namespace AMInterface::prompt {
 using AMApplication::prompt::PromptHistoryManager;
 using AMApplication::prompt::PromptProfileManager;
-using AMApplication::style::AMStyleConfigManager;
+using AMApplication::style::StyleConfigManager;
 using AMDomain::prompt::PromptProfileSettings;
 
 namespace kvars {
@@ -40,7 +40,7 @@ class IsoclineProfileManager : NonCopyableNonMovable {
 public:
   IsoclineProfileManager(PromptProfileManager &profile_manager,
                          PromptHistoryManager &history_manager,
-                         AMStyleConfigManager &style_config_manager);
+                         StyleConfigManager &style_config_manager);
   ~IsoclineProfileManager() override;
 
   ECM Init();
@@ -62,7 +62,7 @@ private:
   void WriteBackCurrentProfile_();
   PromptProfileManager &profile_manager_;
   PromptHistoryManager &history_manager_;
-  AMStyleConfigManager &style_config_manager_;
+  StyleConfigManager &style_config_manager_;
   mutable std::mutex profiles_mtx_;
   std::map<std::string, std::shared_ptr<IsoclineProfile>> profile_cache_ = {};
   std::shared_ptr<IsoclineProfile> current_profile_ = nullptr;
@@ -178,3 +178,4 @@ public:
 };
 
 } // namespace AMInterface::prompt
+

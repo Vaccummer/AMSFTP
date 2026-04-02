@@ -69,49 +69,49 @@ bool NicknameExists(const HostConfigMap &host_configs,
 ECM ValidateConfig(const ConRequest &request) {
   ECM validate_rcm =
       ValidateFieldValue(ConRequest::Attr::nickname, request.nickname);
-  if (!isok(validate_rcm)) {
+  if (!(validate_rcm)) {
     return validate_rcm;
   }
 
   validate_rcm =
       ValidateFieldValue(ConRequest::Attr::protocol, request.protocol);
-  if (!isok(validate_rcm)) {
+  if (!(validate_rcm)) {
     return validate_rcm;
   }
 
   if (request.protocol != ClientProtocol::LOCAL) {
     validate_rcm =
         ValidateFieldValue(ConRequest::Attr::hostname, request.hostname);
-    if (!isok(validate_rcm)) {
+    if (!(validate_rcm)) {
       return validate_rcm;
     }
 
     validate_rcm =
         ValidateFieldValue(ConRequest::Attr::username, request.username);
-    if (!isok(validate_rcm)) {
+    if (!(validate_rcm)) {
       return validate_rcm;
     }
 
     validate_rcm = ValidateFieldValue(ConRequest::Attr::port, request.port);
-    if (!isok(validate_rcm)) {
+    if (!(validate_rcm)) {
       return validate_rcm;
     }
   }
 
   validate_rcm =
       ValidateFieldValue(ConRequest::Attr::password, request.password);
-  if (!isok(validate_rcm)) {
+  if (!(validate_rcm)) {
     return validate_rcm;
   }
 
   validate_rcm = ValidateFieldValue(ConRequest::Attr::keyfile, request.keyfile);
-  if (!isok(validate_rcm)) {
+  if (!(validate_rcm)) {
     return validate_rcm;
   }
 
   validate_rcm =
       ValidateFieldValue(ConRequest::Attr::buffer_size, request.buffer_size);
-  if (!isok(validate_rcm)) {
+  if (!(validate_rcm)) {
     return validate_rcm;
   }
 
@@ -122,8 +122,8 @@ ECM ValidateConRequest(const ConRequest &request, std::string *error_info) {
   ECM validate_rcm = ValidateConfig(request);
   if (error_info) {
     error_info->clear();
-    if (!isok(validate_rcm)) {
-      *error_info = validate_rcm.second;
+    if (!(validate_rcm)) {
+      *error_info = validate_rcm.error;
     }
   }
   return validate_rcm;
@@ -132,24 +132,24 @@ ECM ValidateConRequest(const ConRequest &request, std::string *error_info) {
 ECM ValidateConfig(const ClientMetaData &metadata) {
   ECM validate_rcm =
       ValidateFieldValue(ClientMetaData::Attr::trash_dir, metadata.trash_dir);
-  if (!isok(validate_rcm)) {
+  if (!(validate_rcm)) {
     return validate_rcm;
   }
 
   validate_rcm =
       ValidateFieldValue(ClientMetaData::Attr::login_dir, metadata.login_dir);
-  if (!isok(validate_rcm)) {
+  if (!(validate_rcm)) {
     return validate_rcm;
   }
 
   validate_rcm = ValidateFieldValue(ClientMetaData::Attr::cwd, metadata.cwd);
-  if (!isok(validate_rcm)) {
+  if (!(validate_rcm)) {
     return validate_rcm;
   }
 
   validate_rcm =
       ValidateFieldValue(ClientMetaData::Attr::cmd_prefix, metadata.cmd_prefix);
-  if (!isok(validate_rcm)) {
+  if (!(validate_rcm)) {
     return validate_rcm;
   }
 
@@ -158,25 +158,25 @@ ECM ValidateConfig(const ClientMetaData &metadata) {
 
 ECM ValidateConfig(const HostConfig &config) {
   ECM validate_rcm = ValidateConfig(config.request);
-  if (!isok(validate_rcm)) {
+  if (!(validate_rcm)) {
     return validate_rcm;
   }
   return ValidateConfig(config.metadata);
 }
 
 bool IsValidConfig(const ConRequest &request, std::string *error_info) {
-  return isok(ValidateConRequest(request, error_info));
+  return (ValidateConRequest(request, error_info));
 }
 
 bool IsValidConfig(const HostConfig &config, std::string *error_info) {
   ECM validate_rcm = ValidateConfig(config);
   if (error_info) {
     error_info->clear();
-    if (!isok(validate_rcm)) {
-      *error_info = validate_rcm.second;
+    if (!(validate_rcm)) {
+      *error_info = validate_rcm.error;
     }
   }
-  return isok(validate_rcm);
+  return (validate_rcm);
 }
 
 std::pair<ECM, HostConfig>
@@ -186,24 +186,23 @@ GetConfigByNickname(const HostConfigMap &host_configs,
   const std::string key = AMStr::Strip(nickname);
   if (key.empty()) {
     return {
-        Err(EC::HostConfigNotFound, "host config not found: empty nickname"),
+        Err(EC::HostConfigNotFound, "", "", "host config not found: empty nickname"),
         {}};
   }
 
   if (IsLocalNickname(key)) {
     if (!local_config || local_config->request.nickname.empty()) {
-      return {Err(EC::HostConfigNotFound, "local host config not found"), {}};
+      return {Err(EC::HostConfigNotFound, "", "", "local host config not found"), {}};
     }
-    return {Ok(), *local_config};
+    return {OK, *local_config};
   }
 
   auto it = host_configs.find(key);
   if (it == host_configs.end()) {
-    return {Err(EC::HostConfigNotFound,
-                AMStr::fmt("host config not found: {}", key)),
+    return {Err(EC::HostConfigNotFound, "", "", AMStr::fmt("host config not found: {}", key)),
             {}};
   }
-  return {Ok(), it->second};
+  return {OK, it->second};
 }
 } // namespace HostService
 
@@ -211,7 +210,7 @@ namespace KnownHostRules {
 ECM ValidateConfig(const KnownHostQuery &request) {
   ECM validate_rcm =
       ValidateFieldValue(KnownHostQuery::Attr::hostname, request.hostname);
-  if (!isok(validate_rcm)) {
+  if (!(validate_rcm)) {
     return validate_rcm;
   }
   return ValidateFieldValue(KnownHostQuery::Attr::port, request.port);

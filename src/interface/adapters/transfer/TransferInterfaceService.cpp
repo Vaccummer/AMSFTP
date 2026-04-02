@@ -173,8 +173,8 @@ void TransferInterfaceService::PrintTaskSummary_(
       AMStr::FormatSize(
           task_info->Size.transferred.load(std::memory_order_relaxed)),
       AMStr::FormatSize(task_info->Size.total.load(std::memory_order_relaxed)),
-      AMStr::ToString(task_info->GetResult().first),
-      task_info->GetResult().second);
+      AMStr::ToString(task_info->GetResult().code),
+      task_info->GetResult().error);
 }
 
 void TransferInterfaceService::PrintTaskSummaryDetailed_(
@@ -212,8 +212,8 @@ void TransferInterfaceService::PrintTaskEntries_(
         DisplayHost_(entry.src_host), NormalizePath_(entry.src),
         DisplayHost_(entry.dst_host), NormalizePath_(entry.dst),
         AMStr::FormatSize(entry.size), AMStr::FormatSize(entry.transferred),
-        entry.overwrite ? "true" : "false", AMStr::ToString(entry.rcm.first),
-        entry.rcm.second);
+        entry.overwrite ? "true" : "false", AMStr::ToString(entry.rcm.code),
+        entry.rcm.msg());
   }
 }
 
@@ -247,14 +247,13 @@ ECM TransferInterfaceService::ConfirmWildcard_(
     const std::vector<WildcardConfirmRequest> &requests,
     TransferConfirmPolicy policy) const {
   if (requests.empty()) {
-    return Ok();
+    return OK;
   }
   if (policy == TransferConfirmPolicy::AutoApprove) {
-    return Ok();
+    return OK;
   }
   if (policy == TransferConfirmPolicy::DenyIfConfirmNeeded) {
-    return Err(EC::ConfigCanceled,
-               "Transfer requires confirmation but confirm policy denied");
+    return Err(EC::ConfigCanceled, "", "", "Transfer requires confirmation but confirm policy denied");
   }
   for (const auto &request : requests) {
     if (request.matches.empty()) {
@@ -274,10 +273,10 @@ ECM TransferInterfaceService::ConfirmWildcard_(
     const bool accepted =
         prompt_io_manager_.PromptYesNo("Continue transfer? (y/N): ", &canceled);
     if (!accepted || canceled) {
-      return Err(EC::ConfigCanceled, "Transfer canceled by user");
+      return Err(EC::ConfigCanceled, "", "", "Transfer canceled by user");
     }
   }
-  return Ok();
+  return OK;
 }
 
 ECM TransferInterfaceService::BuildTaskInfo_(
@@ -285,11 +284,11 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     std::shared_ptr<TaskInfo> *out_task_info,
     std::vector<ECM> *warnings) const {
   if (!out_task_info) {
-    return Err(EC::InvalidArg, "null output task info");
+    return Err(EC::InvalidArg, "", "", "null output task info");
   }
   *out_task_info = nullptr;
   if (arg.transfer_sets.empty()) {
-    return Err(EC::InvalidArg, "Transfer set list is empty");
+    return Err(EC::InvalidArg, "", "", "Transfer set list is empty");
   }
 
   std::vector<TransferTask> all_tasks = {};
@@ -308,21 +307,21 @@ ECM TransferInterfaceService::BuildTaskInfo_(
 
   for (const auto &set : arg.transfer_sets) {
     if (control.IsInterrupted()) {
-      return Err(EC::Terminate, "Interrupted before task generation");
+      return Err(EC::Terminate, "", "", "Interrupted before task generation");
     }
     if (control.IsTimeout()) {
-      return Err(EC::OperationTimeout, "Timeout before task generation");
+      return Err(EC::OperationTimeout, "", "", "Timeout before task generation");
     }
 
     auto resolved_dst =
         filesystem_service_.ResolveTransferDst(set.dst, &clients, control);
-    if (!isok(resolved_dst.rcm)) {
+    if (!(resolved_dst.rcm)) {
       return resolved_dst.rcm;
     }
 
     auto resolved_src = filesystem_service_.ResolveTransferSrc(
         set.srcs, &clients, control, true);
-    if (!isok(resolved_src.rcm)) {
+    if (!(resolved_src.rcm)) {
       return resolved_src.rcm;
     }
     for (const auto &[host, grouped_errors] : resolved_src.data.error_data) {
@@ -332,9 +331,7 @@ ECM TransferInterfaceService::BuildTaskInfo_(
         }
         const std::string display_host = DisplayHost_(host);
         const std::string display_path = NormalizePath_(error_path.path);
-        warnings->push_back(Err(
-            error_rcm.first,
-            AMStr::fmt("{}@{}: {}", display_host, display_path, error_rcm.second)));
+        warnings->push_back(Err(error_rcm.code, "", "", AMStr::fmt("{}@{}: {}", display_host, display_path, error_rcm.msg())));
       }
     }
 
@@ -346,7 +343,7 @@ ECM TransferInterfaceService::BuildTaskInfo_(
 
     auto build_result = filesystem_service_.BuildTransferTasks(
         resolved_src.data, resolved_dst.data, control, options);
-    if (!isok(build_result.rcm)) {
+    if (!(build_result.rcm)) {
       return build_result.rcm;
     }
     for (auto &task : build_result.data.dir_tasks) {
@@ -363,16 +360,15 @@ ECM TransferInterfaceService::BuildTaskInfo_(
     if (warnings) {
       for (const auto &warning : build_result.data.warnings) {
         warnings->push_back(
-            Err(warning.rcm.first,
-                AMStr::fmt("{} -> {}: {}", NormalizePath_(warning.src),
-                           NormalizePath_(warning.dst), warning.rcm.second)));
+            Err(warning.rcm.code, "", "", AMStr::fmt("{} -> {}: {}", NormalizePath_(warning.src),
+                           NormalizePath_(warning.dst), warning.rcm.msg())));
       }
     }
   }
 
   DedupTasks_(&all_tasks);
   if (all_tasks.empty()) {
-    return Err(EC::InvalidArg, "No transfer task generated");
+    return Err(EC::InvalidArg, "", "", "No transfer task generated");
   }
 
   for (const auto &task : all_tasks) {
@@ -397,14 +393,14 @@ ECM TransferInterfaceService::BuildTaskInfo_(
   task_info->CalTotalSize(true);
   task_info->CalFileNum(true);
   *out_task_info = task_info;
-  return Ok();
+  return OK;
 }
 
 ECM TransferInterfaceService::WaitTask_(
     const std::shared_ptr<TaskInfo> &task_info,
     const ClientControlComponent &control) const {
   if (!task_info) {
-    return Err(EC::InvalidArg, "TaskInfo is null");
+    return Err(EC::InvalidArg, "", "", "TaskInfo is null");
   }
 
   const bool show_progress = !task_info->Set.quiet;
@@ -441,11 +437,11 @@ ECM TransferInterfaceService::WaitTask_(
   while (true) {
     if (control.IsInterrupted()) {
       (void)transfer_pool_.Terminate(task_info->id, 1000);
-      return Err(EC::Terminate, "Transfer interrupted");
+      return Err(EC::Terminate, "", "", "Transfer interrupted");
     }
     if (control.IsTimeout()) {
       (void)transfer_pool_.Terminate(task_info->id, 1000);
-      return Err(EC::OperationTimeout, "Transfer timeout");
+      return Err(EC::OperationTimeout, "", "", "Transfer timeout");
     }
 
     if (show_progress) {
@@ -512,7 +508,7 @@ ECM TransferInterfaceService::Transfer(
       }
       auto find_result =
           filesystem_service_.find(src, SearchType::All, control);
-      if (!isok(find_result.rcm)) {
+      if (!(find_result.rcm)) {
         return find_result.rcm;
       }
       confirm_requests.push_back(
@@ -521,7 +517,7 @@ ECM TransferInterfaceService::Transfer(
   }
 
   ECM confirm_rcm = ConfirmWildcard_(confirm_requests, arg.confirm_policy);
-  if (!isok(confirm_rcm)) {
+  if (!(confirm_rcm)) {
     return confirm_rcm;
   }
 
@@ -531,22 +527,22 @@ ECM TransferInterfaceService::Transfer(
   for (const auto &warning : warnings) {
     prompt_io_manager_.ErrorFormat(warning);
   }
-  if (!isok(build_rcm)) {
+  if (!(build_rcm)) {
     return build_rcm;
   }
   if (!task_info) {
-    return Err(EC::InvalidHandle, "BuildTaskInfo returned null task");
+    return Err(EC::InvalidHandle, "", "", "BuildTaskInfo returned null task");
   }
 
   const ECM submit_rcm =
       transfer_pool_.Submit(task_info, task_info->Core.clients);
-  if (!isok(submit_rcm)) {
+  if (!(submit_rcm)) {
     task_info->Core.clients.ReleaseAll();
     return submit_rcm;
   }
   if (arg.run_async) {
     prompt_io_manager_.FmtPrint("Submitted task {}", task_info->id);
-    return Ok();
+    return OK;
   }
   return WaitTask_(task_info, control);
 }
@@ -594,18 +590,18 @@ ECM TransferInterfaceService::TaskList(const TransferTaskListArg &arg) const {
   if (shown == 0) {
     prompt_io_manager_.Print("No transfer task matched.");
   }
-  return Ok();
+  return OK;
 }
 
 ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
   if (arg.ids.empty()) {
     return TaskList({});
   }
-  ECM status = Ok();
+  ECM status = OK;
   for (const auto &id : arg.ids) {
     auto task_info = FindTask_(id);
     if (!task_info) {
-      status = Err(EC::TaskNotFound, AMStr::fmt("Task not found: {}", id));
+      status = Err(EC::TaskNotFound, "", "", AMStr::fmt("Task not found: {}", id));
       prompt_io_manager_.ErrorFormat(status);
       continue;
     }
@@ -618,12 +614,12 @@ ECM TransferInterfaceService::TaskShow(const TransferTaskShowArg &arg) const {
 ECM TransferInterfaceService::TaskPause(
     const TransferTaskControlArg &arg) const {
   if (arg.ids.empty()) {
-    return Err(EC::InvalidArg, "task ids are required");
+    return Err(EC::InvalidArg, "", "", "task ids are required");
   }
-  ECM status = Ok();
+  ECM status = OK;
   for (const auto &id : arg.ids) {
     ECM rcm = transfer_pool_.Pause(id, arg.timeout_ms);
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       status = rcm;
       prompt_io_manager_.ErrorFormat(rcm);
     }
@@ -634,12 +630,12 @@ ECM TransferInterfaceService::TaskPause(
 ECM TransferInterfaceService::TaskResume(
     const TransferTaskControlArg &arg) const {
   if (arg.ids.empty()) {
-    return Err(EC::InvalidArg, "task ids are required");
+    return Err(EC::InvalidArg, "", "", "task ids are required");
   }
-  ECM status = Ok();
+  ECM status = OK;
   for (const auto &id : arg.ids) {
     ECM rcm = transfer_pool_.Resume(id, arg.timeout_ms);
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       status = rcm;
       prompt_io_manager_.ErrorFormat(rcm);
     }
@@ -650,13 +646,13 @@ ECM TransferInterfaceService::TaskResume(
 ECM TransferInterfaceService::TaskTerminate(
     const TransferTaskControlArg &arg) const {
   if (arg.ids.empty()) {
-    return Err(EC::InvalidArg, "task ids are required");
+    return Err(EC::InvalidArg, "", "", "task ids are required");
   }
-  ECM status = Ok();
+  ECM status = OK;
   for (const auto &id : arg.ids) {
     auto [task_info, rcm] = transfer_pool_.Terminate(id, arg.timeout_ms);
     (void)task_info;
-    if (!isok(rcm)) {
+    if (!(rcm)) {
       status = rcm;
       prompt_io_manager_.ErrorFormat(rcm);
     }
@@ -668,11 +664,11 @@ ECM TransferInterfaceService::TaskInspect(
     const TransferTaskInspectArg &arg) const {
   const std::string id = AMStr::Strip(arg.id);
   if (id.empty()) {
-    return Err(EC::InvalidArg, "task id is required");
+    return Err(EC::InvalidArg, "", "", "task id is required");
   }
   auto task_info = FindTask_(id);
   if (!task_info) {
-    return Err(EC::TaskNotFound, AMStr::fmt("Task not found: {}", id));
+    return Err(EC::TaskNotFound, "", "", AMStr::fmt("Task not found: {}", id));
   }
 
   const bool include_sets =
@@ -686,20 +682,20 @@ ECM TransferInterfaceService::TaskInspect(
   if (include_entries) {
     PrintTaskEntries_(task_info);
   }
-  return Ok();
+  return OK;
 }
 
 ECM TransferInterfaceService::TaskResult(
     const TransferTaskResultArg &arg) const {
   if (arg.ids.empty()) {
-    return Err(EC::InvalidArg, "task ids are required");
+    return Err(EC::InvalidArg, "", "", "task ids are required");
   }
-  ECM status = Ok();
+  ECM status = OK;
   for (const auto &id : arg.ids) {
     auto task_info = transfer_pool_.GetResultTask(id, arg.remove);
     if (!task_info) {
       status =
-          Err(EC::TaskNotFound, AMStr::fmt("Task result not found: {}", id));
+          Err(EC::TaskNotFound, "", "", AMStr::fmt("Task result not found: {}", id));
       prompt_io_manager_.ErrorFormat(status);
       continue;
     }

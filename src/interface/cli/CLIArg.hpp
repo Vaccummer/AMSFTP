@@ -81,7 +81,7 @@ struct CLIServices : public NonCopyableNonMovable {
   PromptHistoryManager() const;
 
   mutable ServiceHolder<AMDomain::signal::SignalMonitor> signal_monitor = {};
-  mutable ServiceHolder<AMApplication::config::AMConfigAppService>
+  mutable ServiceHolder<AMApplication::config::ConfigAppService>
       config_service = {};
   mutable ServiceHolder<AMInterface::style::AMStyleService> style_service = {};
   mutable ServiceHolder<AMInterface::prompt::IsoclineProfileManager>
@@ -90,7 +90,7 @@ struct CLIServices : public NonCopyableNonMovable {
       prompt_io_manager = {};
   mutable ServiceHolder<AMApplication::host::HostAppService> host_service =
       {};
-  mutable ServiceHolder<AMApplication::host::AMKnownHostsAppService>
+  mutable ServiceHolder<AMApplication::host::KnownHostsAppService>
       known_hosts_service = {};
   mutable ServiceHolder<AMApplication::var::VarAppService> var_service = {};
   mutable ServiceHolder<AMApplication::log::LoggerAppService> log_manager = {};
@@ -123,7 +123,7 @@ private:
 struct CliRunContext : NonCopyableNonMovable {
   CliRunContext() = default;
   ~CliRunContext() override = default;
-  ECM rcm = {EC::Success, ""};
+  ECM rcm = OK;
   bool async = false;
   bool enforce_interactive = false;
   std::string command_name;
@@ -608,7 +608,7 @@ struct ClientsArgs : BaseArgStruct {
  * @brief CLI argument container for check.
  */
 struct CheckArgs : BaseArgStruct {
-  AMInterface::client::ListClientsRequest request = {};
+  AMInterface::client::CheckClientsRequest request = {};
   /**
    * @brief Execute client check.
    */

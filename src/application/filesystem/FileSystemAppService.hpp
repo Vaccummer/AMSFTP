@@ -46,7 +46,7 @@ struct BuildTransferTaskResult {
   struct WarningItem {
     std::string src = {};
     std::string dst = {};
-    ECM rcm = {EC::Success, ""};
+    ECM rcm = OK;
   };
 
   TASKS dir_tasks = {};
@@ -58,14 +58,14 @@ struct PermanentRemovePlan {
   std::map<std::string, std::vector<PathTarget>> grouped_display_paths = {};
   std::vector<ResolvedPath> ordered_delete_paths = {};
   std::vector<std::pair<PathTarget, ECM>> precheck_errors = {};
-  ECM rcm = {EC::Success, ""};
+  ECM rcm = OK;
 };
 
 struct RmfilePlan {
   std::map<std::string, std::vector<PathTarget>> grouped_display_paths = {};
   std::vector<ResolvedPath> validated_targets = {};
   std::vector<std::pair<PathTarget, ECM>> precheck_errors = {};
-  ECM rcm = {EC::Success, ""};
+  ECM rcm = OK;
 };
 
 [[nodiscard]] std::vector<PathInfo>
@@ -141,9 +141,6 @@ public:
   [[nodiscard]] ECMData<std::vector<std::pair<PathTarget, ECM>>>
   Saferm(std::vector<PathTarget> targets,
          const ClientControlComponent &control);
-  [[nodiscard]] RunResult ShellRun(const std::string &nickname,
-                                   const std::string &cmd,
-                                   const ClientControlComponent &control);
   [[nodiscard]] ECMData<std::vector<PathInfo>>
   find(const PathTarget &path, SearchType type,
        const ClientControlComponent &control,

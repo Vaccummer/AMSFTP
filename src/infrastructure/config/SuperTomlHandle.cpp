@@ -69,7 +69,7 @@ ECM AMInfraSuperTomlHandle::Init(
 
   spec_ = spec;
   if (spec_.data_path.empty()) {
-    return Err(EC::ConfigLoadFailed, "config path is empty");
+    return Err(EC::ConfigLoadFailed, "", "", "config path is empty");
   }
 
   spec_.schema_json = AMStr::Strip(spec_.schema_json);
@@ -83,8 +83,7 @@ ECM AMInfraSuperTomlHandle::Init(
 
   std::string error;
   if (!EnsureFileExists_(spec_.data_path, &error)) {
-    return Err(EC::ConfigLoadFailed,
-               AMStr::fmt("failed to prepare config file {}: {}",
+    return Err(EC::ConfigLoadFailed, "", "", AMStr::fmt("failed to prepare config file {}: {}",
                           spec_.data_path.string(), error));
   }
 
@@ -96,8 +95,7 @@ ECM AMInfraSuperTomlHandle::Init(
     if (err) {
       RustTomlFreeString(err);
     }
-    return Err(EC::ConfigLoadFailed,
-               AMStr::fmt("failed to read config file {}: {}",
+    return Err(EC::ConfigLoadFailed, "", "", AMStr::fmt("failed to read config file {}: {}",
                           spec_.data_path.string(), msg));
   }
   if (err) {
@@ -106,8 +104,7 @@ ECM AMInfraSuperTomlHandle::Init(
 
   char *json_c = RustTomlGetJson(rust_toml_handle_);
   if (!json_c) {
-    return Err(EC::ConfigLoadFailed,
-               AMStr::fmt("failed to read config json from {}",
+    return Err(EC::ConfigLoadFailed, "", "", AMStr::fmt("failed to read config json from {}",
                           spec_.data_path.string()));
   }
 
@@ -116,13 +113,12 @@ ECM AMInfraSuperTomlHandle::Init(
 
   Json parsed = Json::object();
   if (!ParseJson_(json_text, &parsed, &error)) {
-    return Err(EC::ConfigLoadFailed,
-               AMStr::fmt("failed to parse config json from {}: {}",
+    return Err(EC::ConfigLoadFailed, "", "", AMStr::fmt("failed to parse config json from {}: {}",
                           spec_.data_path.string(), error));
   }
 
   json_ = std::move(parsed);
-  return Ok();
+  return OK;
 }
 
 /**
@@ -162,10 +158,10 @@ ECM AMInfraSuperTomlHandle::DumpInplace() { return DumpTo(spec_.data_path); }
 ECM AMInfraSuperTomlHandle::DumpTo(const std::filesystem::path &dst_path) {
   std::lock_guard<std::mutex> lock(mtx_);
   if (!rust_toml_handle_) {
-    return Err(EC::ConfigNotInitialized, "config handle not initialized");
+    return Err(EC::ConfigNotInitialized, "", "", "config handle not initialized");
   }
   if (dst_path.empty()) {
-    return Err(EC::ConfigDumpFailed, "destination path is empty");
+    return Err(EC::ConfigDumpFailed, "", "", "destination path is empty");
   }
 
   std::error_code ec;
@@ -173,8 +169,7 @@ ECM AMInfraSuperTomlHandle::DumpTo(const std::filesystem::path &dst_path) {
   if (!parent.empty()) {
     std::filesystem::create_directories(parent, ec);
     if (ec) {
-      return Err(EC::ConfigDumpFailed,
-                 AMStr::fmt("failed to create directory for {}: {}",
+      return Err(EC::ConfigDumpFailed, "", "", AMStr::fmt("failed to create directory for {}: {}",
                             dst_path.string(), ec.message()));
     }
   }
@@ -194,16 +189,14 @@ ECM AMInfraSuperTomlHandle::DumpTo(const std::filesystem::path &dst_path) {
     if (err) {
       RustTomlFreeString(err);
     }
-    return Err(
-        EC::ConfigDumpFailed,
-        AMStr::fmt("failed to dump config to {}: {}", dst_path.string(), msg));
+    return Err(EC::ConfigDumpFailed, "", "", AMStr::fmt("failed to dump config to {}: {}", dst_path.string(), msg));
   }
   if (err) {
     RustTomlFreeString(err);
   }
 
   is_dirty_ = false;
-  return Ok();
+  return OK;
 }
 
 /**

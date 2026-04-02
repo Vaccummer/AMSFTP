@@ -17,7 +17,7 @@ public:
   struct RenderArg {
     std::string current_nickname = "local";
     int64_t elapsed_time_ms = 0;
-    ECM result = {EC::Success, ""};
+    ECM result = OK;
   };
 
   struct RuntimeState {

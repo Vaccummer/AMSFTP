@@ -10,7 +10,8 @@ namespace {
 /**
  * @brief Restore backtick escapes and strip syntactic quote delimiters.
  *
- * Keep `` `$`` intact so escaped variable shorthand is not expanded later.
+ * In preprocess tokenization, only quote escapes are restored (`"` / `\'`).
+ * Other backtick escapes are kept as literal text for downstream resolvers.
  */
 std::string UnescapeCliToken_(const std::string &token) {
   if (token.empty()) {
@@ -23,13 +24,12 @@ std::string UnescapeCliToken_(const std::string &token) {
     const char c = token[i];
     if (c == '`' && i + 1 < token.size()) {
       const char next = token[i + 1];
-      if (next == '$') {
-        out.push_back('`');
-        out.push_back('$');
-      } else {
+      if (next == '"' || next == '\'') {
         out.push_back(next);
+        ++i;
+        continue;
       }
-      ++i;
+      out.push_back(c);
       continue;
     }
     if (c == '"' || c == '\'') {
@@ -47,6 +47,32 @@ std::string UnescapeCliToken_(const std::string &token) {
   return out;
 }
 
+ResolvedStringMeta ResolveStringMetaImpl_(const std::string &text) {
+  ResolvedStringMeta out = {};
+  out.value.reserve(text.size());
+  out.chars.reserve(text.size());
+
+  for (size_t i = 0; i < text.size(); ++i) {
+    const char c = text[i];
+    if (c == '`' && i + 1 < text.size()) {
+      const char next = text[i + 1];
+      if (next == '$' || next == '@' || next == '`' || next == '"' ||
+          next == '\'') {
+        out.value.push_back(next);
+        out.chars.push_back(ResolvedCharMeta{true, next});
+        ++i;
+        continue;
+      }
+      out.value.push_back(c);
+      out.chars.push_back(ResolvedCharMeta{false, '\0'});
+      continue;
+    }
+    out.value.push_back(c);
+    out.chars.push_back(ResolvedCharMeta{false, '\0'});
+  }
+  return out;
+}
+
 size_t FindFirstUnescapedChar_(const std::string &text, char target) {
   for (size_t i = 0; i < text.size(); ++i) {
     if (text[i] == '`' && i + 1 < text.size()) {
@@ -58,23 +84,6 @@ size_t FindFirstUnescapedChar_(const std::string &text, char target) {
     }
   }
   return std::string::npos;
-}
-
-std::string UnescapeAllBackticks_(const std::string &text) {
-  if (text.empty()) {
-    return text;
-  }
-  std::string out;
-  out.reserve(text.size());
-  for (size_t i = 0; i < text.size(); ++i) {
-    if (text[i] == '`' && i + 1 < text.size()) {
-      out.push_back(text[i + 1]);
-      ++i;
-      continue;
-    }
-    out.push_back(text[i]);
-  }
-  return out;
 }
 
 } // namespace
@@ -106,16 +115,16 @@ ECMData<std::vector<std::string>>
 AMInputPreprocess::Preprocess(const std::string &input) const {
   const std::string trimmed = AMStr::Strip(input);
   if (trimmed.empty()) {
-    return {{}, Ok()};
+    return {{}, OK};
   }
 
   // Branch 1: shell shorthand `!cmd` -> {"cmd", "<cmd>", ...}
   if (!trimmed.empty() && trimmed.front() == '!') {
     const std::string command = AMStr::Strip(trimmed.substr(1));
     if (command.empty()) {
-      return {{}, Err(EC::InvalidArg, "Empty shell command")};
+      return {{}, Err(EC::InvalidArg, "", "", "Empty shell command")};
     }
-    return {{"cmd", command}, Ok()};
+    return {{"cmd", command}, OK};
   }
 
   // Branch 2: var define shorthand `$name=value` / `${zone:name}=value`
@@ -123,20 +132,25 @@ AMInputPreprocess::Preprocess(const std::string &input) const {
   if (eq != std::string::npos) {
     const std::string lhs = AMStr::Strip(trimmed.substr(0, eq));
     if (!lhs.empty() && lhs.front() == '$' &&
-        isok(var_interface_service_.ParseVarTokenExpression(lhs).rcm)) {
+        (var_interface_service_.ParseVarTokenExpression(lhs).rcm)) {
       const std::string rhs_raw = AMStr::Strip(trimmed.substr(eq + 1));
-      const std::string rhs = UnescapeAllBackticks_(rhs_raw);
-      return {{"var", "def", lhs, rhs}, Ok()};
+      const std::string rhs = UnescapeCliToken_(rhs_raw);
+      return {{"var", "def", lhs, rhs}, OK};
     }
   }
 
   // Branch 3: normal token split.
-  return {SplitCliTokens(input), Ok()};
+  return {SplitCliTokens(input), OK};
 }
 
 bool AMInputPreprocess::RewriteVarShortcutTokens(
     std::vector<std::string> *tokens) const {
   return var_interface_service_.RewriteVarShortcutTokens(tokens);
+}
+
+ECMData<ResolvedStringMeta>
+AMInputPreprocess::ResolveStringMeta(const std::string &input) {
+  return {ResolveStringMetaImpl_(input), OK};
 }
 
 } // namespace AMInterface::parser

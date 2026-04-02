@@ -102,7 +102,7 @@ void ClientMaintainer::RemoveDisconnectedClients() {
 
   for (const auto &entry : clients_snapshot) {
     const ECM check_rcm = CheckClientNow(entry.second, timeout_ms);
-    if (check_rcm.first == EC::Success) {
+    if (check_rcm.code == EC::Success) {
       continue;
     }
     to_remove.push_back(entry.first);
@@ -240,7 +240,7 @@ void ClientMaintainer::HeartbeatLoop_() {
         break;
       }
       const ECM check_rcm = CheckClientNow(entry.second, timeout_ms);
-      if (check_rcm.first != EC::Success && callback) {
+      if (check_rcm.code != EC::Success && callback) {
         (void)CallCallbackSafe(callback, entry.second, check_rcm);
       }
     }

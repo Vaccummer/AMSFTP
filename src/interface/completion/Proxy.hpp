@@ -41,7 +41,7 @@ public:
    */
   ECM Init() {
     Install();
-    return Ok();
+    return OK;
   }
 
   /**

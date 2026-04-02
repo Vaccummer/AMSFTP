@@ -81,7 +81,7 @@ public:
 
   ECM AddClient(ClientHandle client, bool overwrite);
 
-  [[nodiscard]] std::optional<CheckResult>
+  [[nodiscard]] std::optional<ECMData<CheckResult>>
   CheckClient(const std::string &nickname, bool reconnect, bool update,
               const std::optional<ClientControlComponent> &control_component =
                   std::nullopt,
@@ -118,7 +118,7 @@ private:
   void ApplyCallbacksToClient_(const ClientHandle &client,
                                const ClientCallbacks &callbacks,
                                TraceCallback trace_override = {});
-  [[nodiscard]] CheckResult CheckClientInternal_(
+  [[nodiscard]] ECMData<CheckResult> CheckClientInternal_(
       const ClientHandle &client, bool reconnect, bool update,
       const AMDomain::client::ClientControlComponent &control) const;
   [[nodiscard]] std::pair<ClientCallbacks, std::vector<std::string>>

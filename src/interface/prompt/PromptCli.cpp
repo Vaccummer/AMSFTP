@@ -621,8 +621,8 @@ void PromptIOManager::ErrorFormat(const std::string &error_name,
 }
 
 void PromptIOManager::ErrorFormat(const ECM &rcm, bool is_exit) {
-  ErrorFormat(AMStr::ToString(rcm.first), rcm.second, is_exit,
-              static_cast<int>(rcm.first));
+  ErrorFormat(AMStr::ToString(rcm.code), rcm.msg(), is_exit,
+              static_cast<int>(rcm.code));
 }
 
 /** Prompt for a yes/no response. */

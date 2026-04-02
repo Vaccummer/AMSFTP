@@ -120,7 +120,7 @@ std::string ResolvePromptCwd_(const AMDomain::client::ClientHandle &client) {
  */
 ECM ReloadSettingsIfUpdated_(
     AMInterface::prompt::IsoclineProfileManager &prompt_profile_history_manager,
-    AMApplication::config::AMConfigAppService &config_service,
+    AMApplication::config::ConfigAppService &config_service,
     bool *reloaded = nullptr) {
   if (reloaded) {
     *reloaded = false;
@@ -128,14 +128,14 @@ ECM ReloadSettingsIfUpdated_(
   std::filesystem::path settings_path;
   if (!config_service.GetDataPath(DocumentKind::Settings, &settings_path) ||
       settings_path.empty()) {
-    return Ok();
+    return OK;
   }
 
   std::error_code ec;
   const auto current_write_time =
       std::filesystem::last_write_time(settings_path, ec);
   if (ec) {
-    return Ok();
+    return OK;
   }
 
   static std::filesystem::file_time_type last_write_time{};
@@ -143,19 +143,19 @@ ECM ReloadSettingsIfUpdated_(
   if (!has_last_write_time) {
     last_write_time = current_write_time;
     has_last_write_time = true;
-    return Ok();
+    return OK;
   }
   if (current_write_time <= last_write_time) {
-    return Ok();
+    return OK;
   }
 
   // Avoid clobbering in-memory updates that have not been dumped yet.
   if (config_service.IsDirty(DocumentKind::Settings)) {
-    return Ok();
+    return OK;
   }
 
   ECM load_rcm = config_service.Load(DocumentKind::Settings, true);
-  if (load_rcm.first != EC::Success) {
+  if (load_rcm.code != EC::Success) {
     return load_rcm;
   }
   (void)prompt_profile_history_manager;
@@ -163,22 +163,23 @@ ECM ReloadSettingsIfUpdated_(
   if (reloaded) {
     *reloaded = true;
   }
-  return Ok();
+  return OK;
 }
 
 /**
  * @brief Print an ECM error message if the code is not Success.
  */
 void PrintECM_(AMInterface::prompt::AMPromptIOManager &prompt, const ECM &rcm) {
-  if (rcm.first == EC::Success) {
+  if (rcm.code == EC::Success) {
     return;
   }
-  std::string name = std::string(magic_enum::enum_name(rcm.first));
-  if (rcm.second.empty()) {
+  std::string name = std::string(magic_enum::enum_name(rcm.code));
+  const std::string message = rcm.msg();
+  if (message.empty()) {
     prompt.FmtPrint("❌ {}", name);
     return;
   }
-  prompt.FmtPrint("❌ {}: {}", name, rcm.second);
+  prompt.FmtPrint("❌ {}: {}", name, message);
 }
 
 void RegisterPromptGetters_(AMInterface::prompt::CLIPromtRender &core_prompt,
@@ -345,7 +346,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
   AMInterface::prompt::CLIPromtRender core_prompt(managers.style_service.Get());
   RegisterPromptGetters_(core_prompt, managers);
 
-  ECM last_dispatch_result = Ok();
+  ECM last_dispatch_result = OK;
   int64_t last_dispatch_elapsed_ms = 0;
   AMInterface::prompt::CLIPromtRender::RenderArg prompt_arg = {};
 
@@ -360,7 +361,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     //     ReloadSettingsIfUpdated_(prompt_profile_history_manager,
     //                              managers.config_service,
     //                              &settings_reloaded);
-    // if (reload_settings_rcm.first != EC::Success) {
+    // if (reload_settings_rcm.code != EC::Success) {
     //   PrintECM_(prompt, reload_settings_rcm);
     // } else if (settings_reloaded) {
     //   core_prompt.InvalidateCache();
@@ -386,7 +387,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     managers.interactive_event_registry.RunOnCorePromptReturn();
 
     if (canceled) {
-      last_dispatch_result = Ok();
+      last_dispatch_result = OK;
       last_dispatch_elapsed_ms = 0;
       continue;
     }
@@ -398,9 +399,9 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
     const auto dispatch_begin = AMTime::SteadyNow();
     try {
       auto prep = input_preprocess.Preprocess(trimmed);
-      if (prep.rcm.first != EC::Success) {
+      if (prep.rcm.code != EC::Success) {
         PrintECM_(managers.prompt_io_manager.Get(), prep.rcm);
-        store_exit_code(static_cast<int>(prep.rcm.first));
+        store_exit_code(static_cast<int>(prep.rcm.code));
         last_dispatch_result = prep.rcm;
         last_dispatch_elapsed_ms = std::max<int64_t>(
             0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
@@ -416,7 +417,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       app.parse(cli_args);
     } catch (const CLI::CallForHelp &e) {
       managers.prompt_io_manager->Print(app.help());
-      ECM parse_rcm = {EC::Success, ""};
+      ECM parse_rcm = OK;
       store_exit_code(e.get_exit_code());
       last_dispatch_result = parse_rcm;
       last_dispatch_elapsed_ms = std::max<int64_t>(
@@ -426,7 +427,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       continue;
     } catch (const CLI::CallForAllHelp &e) {
       managers.prompt_io_manager->Print(app.help("", CLI::AppFormatMode::All));
-      ECM parse_rcm = {EC::Success, ""};
+      ECM parse_rcm = OK;
       store_exit_code(e.get_exit_code());
       last_dispatch_result = parse_rcm;
       last_dispatch_elapsed_ms =
@@ -434,7 +435,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       continue;
     } catch (const CLI::CallForVersion &e) {
       managers.prompt_io_manager->Print(app.version());
-      ECM parse_rcm = {EC::Success, ""};
+      ECM parse_rcm = OK;
       store_exit_code(e.get_exit_code());
       last_dispatch_result = parse_rcm;
       last_dispatch_elapsed_ms = std::max<int64_t>(
@@ -444,7 +445,7 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
       const std::string parse_msg = e.what();
       managers.prompt_io_manager->Print(parse_msg);
       ECM parse_rcm = {EC::InvalidArg, parse_msg};
-      store_exit_code(static_cast<int>(parse_rcm.first));
+      store_exit_code(static_cast<int>(parse_rcm.code));
       last_dispatch_result = parse_rcm;
       last_dispatch_elapsed_ms = std::max<int64_t>(
           0, AMTime::IntervalMS(dispatch_begin, AMTime::SteadyNow()));
@@ -472,3 +473,4 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
 }
 
 } // namespace AMInterface::cli
+

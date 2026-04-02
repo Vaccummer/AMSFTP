@@ -513,8 +513,7 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
   if (commands.ch_cmd) {
     commands.ch_cmd
         ->add_option("nickname", args.ch->request.nickname, "Client nickname")
-        ->required()
-        ->expected(1, 1);
+        ->expected(0, 1);
   }
   if (ch_node) {
     ch_node->AddPositionalRule(0, Sem::ClientName, false);
@@ -782,7 +781,7 @@ CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args,
  */
 void DispatchCliCommands(const CliCommands &cli_commands,
                          const CLIServices &managers, CliRunContext &ctx) {
-  ctx.rcm = {EC::Success, ""};
+  ctx.rcm = OK;
   ctx.enter_interactive = false;
   ctx.request_exit = false;
   ctx.skip_loop_exit_callbacks = false;
@@ -797,14 +796,14 @@ void DispatchCliCommands(const CliCommands &cli_commands,
     const std::string msg = "CLI args pool is not initialized";
     std::cerr << msg << std::endl;
     ctx.rcm = {EC::UnknownError, msg};
-    store_exit_code(static_cast<int>(ctx.rcm.first));
+    store_exit_code(static_cast<int>(ctx.rcm.code));
     return;
   }
   if (!ctx.task_control_token) {
     const std::string msg = "CLI session task control token is not initialized";
     std::cerr << msg << std::endl;
     ctx.rcm = {EC::InvalidArg, msg};
-    store_exit_code(static_cast<int>(ctx.rcm.first));
+    store_exit_code(static_cast<int>(ctx.rcm.code));
     if (cli_commands.args) {
       cli_commands.args->active = nullptr;
     }
@@ -826,7 +825,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
     std::string msg = "No valid command provided";
     std::cerr << msg << std::endl;
     ctx.rcm = {EC::InvalidArg, msg};
-    store_exit_code(static_cast<int>(ctx.rcm.first));
+    store_exit_code(static_cast<int>(ctx.rcm.code));
     args.active = nullptr;
     return;
   }
@@ -844,7 +843,7 @@ void DispatchCliCommands(const CliCommands &cli_commands,
     }
     std::cerr << msg << std::endl;
     ctx.rcm = {EC::InvalidArg, msg};
-    store_exit_code(static_cast<int>(ctx.rcm.first));
+    store_exit_code(static_cast<int>(ctx.rcm.code));
     args.active = nullptr;
     return;
   }
@@ -855,12 +854,12 @@ void DispatchCliCommands(const CliCommands &cli_commands,
   const ECM run_rcm = selected->Run(managers, ctx);
   const ECM sync_rcm = managers.config_service->FlushDirtyParticipants();
   ctx.rcm = run_rcm;
-  if (isok(ctx.rcm) && !isok(sync_rcm)) {
+  if ((ctx.rcm) && !(sync_rcm)) {
     ctx.rcm = sync_rcm;
   }
   selected->reset();
   args.active = nullptr;
-  store_exit_code(static_cast<int>(ctx.rcm.first));
+  store_exit_code(static_cast<int>(ctx.rcm.code));
   return;
 }
 

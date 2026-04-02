@@ -4,7 +4,6 @@
 #include <string>
 
 namespace AMDomain::var {
-using ECM = std::pair<ErrorCode, std::string>;
 using VarSet = std::map<std::string, std::map<std::string, std::string>>;
 inline constexpr const char *kRoot = "UserVars";
 inline constexpr const char *kPublic = "*";

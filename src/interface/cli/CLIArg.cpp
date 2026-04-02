@@ -29,28 +29,28 @@ ECM ResolveTransferEndpoint_(const CLIServices &managers,
                              const std::string &raw,
                              PathTarget *out_endpoint) {
   if (!out_endpoint) {
-    return Err(EC::InvalidArg, "null transfer endpoint output");
+    return Err(EC::InvalidArg, "", "", "null transfer endpoint output");
   }
 
   const std::string token = AMStr::Strip(raw);
   if (token.empty()) {
-    return Err(EC::InvalidArg, "Transfer path is empty");
+    return Err(EC::InvalidArg, "", "", "Transfer path is empty");
   }
 
   auto split_result =
       managers.filesystem_interface_service->SplitRawTarget(token);
-  if (!isok(split_result.rcm)) {
+  if (!(split_result.rcm)) {
     return split_result.rcm;
   }
   *out_endpoint = std::move(split_result.data);
-  return Ok();
+  return OK;
 }
 
 /**
  * @brief Build explicit transfer args from raw CLI cp/job inputs.
  */
 struct TransferCliBuildResult {
-  ECM rcm = Ok();
+  ECM rcm = OK;
   std::vector<AMDomain::transfer::UserTransferSet> transfer_sets = {};
   bool suffix_async = false;
 };
@@ -70,7 +70,7 @@ TransferCliBuildResult BuildTransferArgsFromCli_(
   }
 
   if (src_tokens.empty()) {
-    out.rcm = Err(EC::InvalidArg, "cp requires at least one source");
+    out.rcm = Err(EC::InvalidArg, "", "", "cp requires at least one source");
     return out;
   }
 
@@ -81,8 +81,7 @@ TransferCliBuildResult BuildTransferArgsFromCli_(
   std::string normalized_dst_token = {};
   if (output_token.empty()) {
     if (src_tokens.size() != 2) {
-      out.rcm = Err(EC::InvalidArg,
-                    "cp requires exactly 2 paths when --output is omitted");
+      out.rcm = Err(EC::InvalidArg, "", "", "cp requires exactly 2 paths when --output is omitted");
       return out;
     }
     normalized_src_tokens = {src_tokens.front()};
@@ -97,7 +96,7 @@ TransferCliBuildResult BuildTransferArgsFromCli_(
   for (const auto &token : normalized_src_tokens) {
     PathTarget endpoint = {};
     ECM resolve_rcm = ResolveTransferEndpoint_(managers, token, &endpoint);
-    if (!isok(resolve_rcm)) {
+    if (!(resolve_rcm)) {
       out.rcm = resolve_rcm;
       return out;
     }
@@ -107,7 +106,7 @@ TransferCliBuildResult BuildTransferArgsFromCli_(
   PathTarget dst_endpoint = {};
   ECM dst_rcm =
       ResolveTransferEndpoint_(managers, normalized_dst_token, &dst_endpoint);
-  if (!isok(dst_rcm)) {
+  if (!(dst_rcm)) {
     out.rcm = dst_rcm;
     return out;
   }
@@ -145,7 +144,7 @@ TransferConfirmPolicy BuildTransferConfirmPolicy_(const CliRunContext &ctx,
 ECM UnsupportedCommand_(AMInterface::prompt::AMPromptIOManager &prompt,
                         const std::string &message) {
   (void)prompt;
-  const ECM rcm = Err(EC::OperationUnsupported, message);
+  const ECM rcm = Err(EC::OperationUnsupported, "", "", message);
   return rcm;
 }
 
@@ -170,7 +169,7 @@ ECM ConfigKeysArgs::Run(const CLIServices &managers,
     header += AMStr::ToString(key) + "\t";
   }
   managers.prompt_io_manager->Print(header);
-  return Ok();
+  return OK;
 }
 
 void ConfigKeysArgs::reset() {}
@@ -241,7 +240,7 @@ ECM ConfigSaveArgs::Run(const CLIServices &managers,
                         const CliRunContext &ctx) const {
   (void)ctx;
   ECM rcm = managers.config_service->FlushDirtyParticipants();
-  if (!isok(rcm)) {
+  if (!(rcm)) {
     return rcm;
   }
   return managers.config_service->DumpAll(false);
@@ -253,7 +252,7 @@ ECM ConfigProfileSetArgs::Run(const CLIServices &managers,
                               const CliRunContext &ctx) const {
   (void)ctx;
   AMInterface::client::ChangeClientRequest request = {};
-  request.nickname = nickname;
+  request.nickname = AMStr::Strip(nickname).empty() ? "local" : nickname;
   request.quiet = false;
   return managers.client_interface_service->ChangeClient(request);
 }
@@ -380,7 +379,7 @@ ECM ClearArgs::Run(const CLIServices &managers,
                    const CliRunContext &ctx) const {
   (void)ctx;
   managers.prompt_io_manager->ClearScreen(all);
-  return {EC::Success, ""};
+  return OK;
 }
 
 void ClearArgs::reset() { all = false; }
@@ -389,7 +388,7 @@ ECM CpArgs::Run(const CLIServices &managers, const CliRunContext &ctx) const {
   auto build =
       BuildTransferArgsFromCli_(managers, srcs, output, true, overwrite,
                                 no_mkdir, clone, include_special, resume);
-  if (!isok(build.rcm)) {
+  if (!(build.rcm)) {
     return build.rcm;
   }
 
@@ -418,7 +417,7 @@ void CpArgs::reset() {
 
 ECM SftpArgs::Run(const CLIServices &managers, const CliRunContext &ctx) const {
   if (targets.empty() || targets.size() > 2) {
-    return Err(EC::InvalidArg, "sftp requires user@host or nickname user@host");
+    return Err(EC::InvalidArg, "", "", "sftp requires user@host or nickname user@host");
   }
   auto request = this->request;
   if (targets.size() == 2) {
@@ -440,7 +439,7 @@ void SftpArgs::reset() {
 
 ECM FtpArgs::Run(const CLIServices &managers, const CliRunContext &ctx) const {
   if (targets.empty() || targets.size() > 2) {
-    return Err(EC::InvalidArg, "ftp requires user@host or nickname user@host");
+    return Err(EC::InvalidArg, "", "", "ftp requires user@host or nickname user@host");
   }
 
   auto request = this->request;
@@ -451,7 +450,7 @@ ECM FtpArgs::Run(const CLIServices &managers, const CliRunContext &ctx) const {
     request.user_at_host = targets[0];
   }
   ECM rcm = managers.client_interface_service->ConnectFtp(request);
-  SetEnterInteractive_(ctx, isok(rcm));
+  SetEnterInteractive_(ctx, (rcm));
   return rcm;
 }
 
@@ -474,17 +473,19 @@ void ClientsArgs::reset() { request = {}; }
 ECM CheckArgs::Run(const CLIServices &managers,
                    const CliRunContext &ctx) const {
   (void)ctx;
-  auto request = this->request;
-  request.check = true;
-  return managers.client_interface_service->ListClients(request);
+  return managers.client_interface_service->CheckClients(request);
 }
 
 void CheckArgs::reset() { request = {}; }
 
 ECM ChangeClientArgs::Run(const CLIServices &managers,
                           const CliRunContext &ctx) const {
+  auto request = this->request;
+  if (AMStr::Strip(request.nickname).empty()) {
+    request.nickname = "local";
+  }
   ECM rcm = managers.client_interface_service->ChangeClient(request);
-  SetEnterInteractive_(ctx, isok(rcm));
+  SetEnterInteractive_(ctx, (rcm));
   return rcm;
 }
 
@@ -503,7 +504,7 @@ ECM CdArgs::Run(const CLIServices &managers, const CliRunContext &ctx) const {
   auto arg = request;
   managers.var_interface_service->VSubstitutePathLike(arg.raw_path);
   ECM rcm = managers.filesystem_interface_service->Cd(arg);
-  SetEnterInteractive_(ctx, isok(rcm));
+  SetEnterInteractive_(ctx, (rcm));
   return rcm;
 }
 
@@ -512,7 +513,7 @@ void CdArgs::reset() { request = {}; }
 ECM ConnectArgs::Run(const CLIServices &managers,
                      const CliRunContext &ctx) const {
   ECM rcm = managers.client_interface_service->Connect(request);
-  SetEnterInteractive_(ctx, isok(rcm));
+  SetEnterInteractive_(ctx, (rcm));
   return rcm;
 }
 
@@ -522,10 +523,10 @@ ECM CmdArgs::Run(const CLIServices &managers, const CliRunContext &ctx) const {
   (void)ctx;
   const std::string command = AMStr::Strip(request.cmd);
   if (command.empty()) {
-    return Err(EC::InvalidArg, "cmd cannot be empty");
+    return Err(EC::InvalidArg, "", "", "cmd cannot be empty");
   }
   if (timeout_ms == 0) {
-    return Err(EC::InvalidArg, "timeout_ms cannot be 0");
+    return Err(EC::InvalidArg, "", "", "timeout_ms cannot be 0");
   }
   auto arg = request;
   arg.cmd = command;
@@ -541,7 +542,7 @@ void CmdArgs::reset() {
 ECM BashArgs::Run(const CLIServices &managers, const CliRunContext &ctx) const {
   (void)managers;
   SetEnterInteractive_(ctx, true);
-  return {EC::Success, ""};
+  return OK;
 }
 
 void BashArgs::reset() {}
@@ -550,7 +551,7 @@ ECM ExitArgs::Run(const CLIServices &managers, const CliRunContext &ctx) const {
   (void)managers;
   SetRequestExit_(ctx, true);
   SetSkipLoopExitCallbacks_(ctx, force);
-  return {EC::Success, ""};
+  return OK;
 }
 
 void ExitArgs::reset() { force = false; }
@@ -688,7 +689,7 @@ ECM TaskControlArgs::Run(const CLIServices &managers,
   case TaskControlArgs::Action::Resume:
     return managers.transfer_service->TaskResume(arg);
   default:
-    return Err(EC::InvalidArg, "Unknown task control action");
+    return Err(EC::InvalidArg, "", "", "Unknown task control action");
   }
 }
 

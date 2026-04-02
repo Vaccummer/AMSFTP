@@ -591,7 +591,7 @@ private:
       std::vector<std::string> relative_parts;
       auto [error, sub_pack] = iwalk(path.path, true, true, nullptr, timeout_ms,
                                      start_time, interrupt_flag);
-      if (error.first != EC::Success) {
+      if (error.code != EC::Success) {
         return;
       }
       for (auto &sub : sub_pack.first) {
@@ -614,7 +614,7 @@ private:
     const bool is_match_mode = IsMatchPattern_(cur_pattern);
     auto [error, sub_list] =
         listdir(path.path, timeout_ms, start_time, interrupt_flag);
-    if (error.first != EC::Success) {
+    if (error.code != EC::Success) {
       return;
     }
 
@@ -780,10 +780,10 @@ public:
     } else if (parts.size() == 1) {
       auto [error, info] =
           stat(parts[0], false, timeout_ms, start_time, interrupt_flag);
-      if (error.first != EC::Success) {
+      if (error.code != EC::Success) {
         return {};
       }
-      if (error.first == EC::Success &&
+      if (error.code == EC::Success &&
           (type == SearchType::All ||
            (type == SearchType::Directory && info.type == PathType::DIR) ||
            (type == SearchType::File && info.type == PathType::FILE))) {
@@ -810,7 +810,7 @@ public:
     // Check whether cur_path exists
     auto [error, info] =
         stat(cur_path, false, timeout_ms, start_time, interrupt_flag);
-    if (error.first != EC::Success) {
+    if (error.code != EC::Success) {
       return {};
     }
     _find(results, info, match_parts, 0, type, timeout_ms, start_time,
@@ -1144,7 +1144,7 @@ private:
     };
     auto [error, root_info] = stat(plan.literal_root, false, request.timeout_ms,
                                    request.start_time, request.interrupt_flag);
-    if (error.first != EC::Success) {
+    if (error.code != EC::Success) {
       return results;
     }
 
@@ -1187,7 +1187,7 @@ private:
           auto [error, sub_list] =
               listdir(cursor.node.path, request.timeout_ms, request.start_time,
                       request.interrupt_flag);
-          if (error.first != EC::Success) {
+          if (error.code != EC::Success) {
             continue;
           }
           auto insert_it =
@@ -1219,7 +1219,7 @@ private:
         auto [error, sub_list] =
             listdir(cursor.node.path, request.timeout_ms, request.start_time,
                     request.interrupt_flag);
-        if (error.first != EC::Success) {
+        if (error.code != EC::Success) {
           continue;
         }
         auto insert_it =
@@ -1419,7 +1419,7 @@ public:
 class ClientConfigStore : public AMDomain::client::IClientConfigPort {
 private:
   mutable AMAtomic<ConRequest> request_;
-  mutable AMAtomic<CheckResult> state_;
+  mutable AMAtomic<ECMData<CheckResult>> state_;
   std::atomic<OS_TYPE> os_type_{OS_TYPE::Uncertain};
   mutable AMAtomic<std::string> home_dir_;
 
@@ -1443,9 +1443,12 @@ public:
     return request_;
   }
 
-  [[nodiscard]] AMAtomic<CheckResult> &StateAtomic() override { return state_; }
+  [[nodiscard]] AMAtomic<ECMData<CheckResult>> &StateAtomic() override {
+    return state_;
+  }
 
-  [[nodiscard]] const AMAtomic<CheckResult> &StateAtomic() const override {
+  [[nodiscard]] const AMAtomic<ECMData<CheckResult>> &
+  StateAtomic() const override {
     return state_;
   }
 
@@ -1464,12 +1467,12 @@ public:
     req->nickname = nickname;
   }
 
-  [[nodiscard]] CheckResult GetState() const override {
+  [[nodiscard]] ECMData<CheckResult> GetState() const override {
     auto st = state_.lock();
     return st.load();
   }
 
-  void SetState(const CheckResult &state) override {
+  void SetState(const ECMData<CheckResult> &state) override {
     auto st = state_.lock();
     st.store(state);
   }
@@ -1704,10 +1707,10 @@ protected:
       cb = known_host_cb.load();
     }
     if (!cb) {
-      return {EC::Success, ""};
+      return OK;
     }
     auto [res, cb_ecm] = CallCallbackSafeRet<ECM>(cb, known_host_info);
-    if (cb_ecm.first != EC::Success) {
+    if (cb_ecm.code != EC::Success) {
       return cb_ecm;
     }
     return res;

@@ -2,13 +2,7 @@
 #include "CLI/CLI.hpp"
 #include <utility>
 
-/**
- * @brief Return singleton root command node.
- */
-CommandNode &CommandNode::Instance() {
-  static CommandNode instance;
-  return instance;
-}
+namespace AMInterface::parser {
 
 /**
  * @brief Initialize node tree from CLI11 root app.
@@ -550,3 +544,4 @@ CommandNode *CommandNode::FindChild_(const std::string &child) {
   return it->second.get();
 }
 
+} // namespace AMInterface::parser

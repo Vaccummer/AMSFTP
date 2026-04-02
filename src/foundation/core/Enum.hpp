@@ -2,6 +2,9 @@
 #include <libssh2.h>
 #include <libssh2_sftp.h>
 #include <magic_enum/magic_enum.hpp>
+#include <optional>
+#include <string>
+#include <utility>
 
 inline static constexpr ssize_t AMKB = 1024;
 inline static constexpr ssize_t AMMB = 1024 * 1024;
@@ -44,7 +47,7 @@ enum class ErrorCode {
   InvalidArg = -34,
   InvalidPollType = -35,
   PublicKeyProtocolError = -36,
-  SSHEAGAIN = -37,
+  SSHEAGAIN = LIBSSH2_ERROR_EAGAIN,
   BufferTooSmall = -38,
   BadOperationOrder = -39,
   CompressionError = -40,
@@ -82,9 +85,10 @@ enum class ErrorCode {
   UsernameNotExists = 16,
   PathUsingByOthers = 17,
   DirNotEmpty = 18,
-  NotADirectory = 19,
+  NotADirectory = LIBSSH2_FX_NOT_A_DIRECTORY,
   InvalidFilename = 20,
   SymlinkLoop = 21,
+
   // FTP Server Error
   UnsupportFTPProtocol = 47,
   IllegealURLFormat = 81,
@@ -102,6 +106,7 @@ enum class ErrorCode {
   FTPListFailed = 53,
 
   // following codes are AM Custom Error
+  ParentDirectoryNotExist = 21,
   UnknownError = 22,
   SocketCreateError = 23,
   SocketConnectTimeout = 24,
@@ -110,7 +115,6 @@ enum class ErrorCode {
   SessionHandshakeFailed = 27,
   NoSession = 28,
   NotAFile = 29,
-  ParentDirectoryNotExist = 30,
   InhostCopyFailed = 31,
   LocalFileMapError = 32,
   LocalFileOpenError = 33,
@@ -237,15 +241,75 @@ enum class TraceSource { Client = 0, Programm = 1 };
 
 using EC = ErrorCode;
 
-struct AMError {
-  ErrorCode first;
-  std::string second;
-  AMError(EC code, std::string message)
-      : first(code), second(std::move(message)) {}
-  AMError() : first(EC::Success), second("") {}
-  [[nodiscard]] EC code() const { return this->first; }
-  [[nodiscard]] const std::string &message() const { return this->second; }
-  operator bool() const { return code() == EC::Success; }
+enum class RawErrorSource {
+  Unknown = 0,
+  Libssh2 = 1,
+  Curl = 2,
+  Filesystem = 3,
+  WindowsAPI = 4,
 };
 
+struct RawError {
+  RawErrorSource source = RawErrorSource::Unknown;
+  int code = 0;
+};
+
+struct AMError {
+  ErrorCode code = EC::Success;
+  std::string operation = "";
+  std::string target = "";
+  std::string error = "";
+  std::optional<RawError> raw_error = std::nullopt;
+
+  AMError() = default;
+
+  AMError(EC ec, std::string err)
+      : code(ec), operation(""), target(""), error(std::move(err)) {}
+
+  AMError(EC ec, std::string op, std::string tgt, std::string err)
+      : code(ec), operation(std::move(op)), target(std::move(tgt)),
+        error(std::move(err)) {}
+
+  AMError(EC ec, std::string err, RawError raw)
+      : code(ec), operation(""), target(""), error(std::move(err)),
+        raw_error(raw) {}
+
+  AMError(EC ec, std::string op, std::string tgt, std::string err, RawError raw)
+      : code(ec), operation(std::move(op)), target(std::move(tgt)),
+        error(std::move(err)), raw_error(raw) {}
+
+  operator bool() const { return code == EC::Success; }
+
+  [[nodiscard]] std::string msg() const {
+    const bool has_operation = !operation.empty();
+    const bool has_target = !target.empty();
+    const bool has_error = !error.empty();
+
+    if (has_operation && has_target && has_error) {
+      return operation + " on " + target + " error: " + error;
+    }
+    if (has_operation && has_error) {
+      return operation + " error: " + error;
+    }
+    if (has_target && has_error) {
+      return target + " error: " + error;
+    }
+    if (has_error) {
+      return error;
+    }
+    if (has_operation && has_target) {
+      return operation + " on " + target;
+    }
+    if (has_operation) {
+      return operation;
+    }
+    if (has_target) {
+      return target;
+    }
+    return std::string(magic_enum::enum_name(code));
+  }
+};
+
+static const AMError OK = AMError{EC::Success, ""};
+using Err = AMError;
 using ECM = AMError;

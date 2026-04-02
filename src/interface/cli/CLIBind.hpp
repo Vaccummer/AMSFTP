@@ -1,15 +1,20 @@
 #pragma once
 #include "interface/cli/CLIArg.hpp"
+#include "interface/parser/CommandTree.hpp"
+
+namespace AMInterface::cli {
 
 /**
  * @brief Bind all CLI options into the argument pool.
  */
-CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args);
+CliCommands BindCliOptions(CLI::App &app, CliArgsPool &args,
+                           AMInterface::parser::CommandNode &command_tree);
 
 /**
  * @brief Dispatch CLI commands based on parsed state.
  */
 void DispatchCliCommands(const CliCommands &cli_commands,
-                         const CliManagers &managers, CliRunContext &ctx,
-                         bool async = false,
-                         bool enforce_interactive = false);
+                         const CLIServices &managers, CliRunContext &ctx);
+
+} // namespace AMInterface::cli
+

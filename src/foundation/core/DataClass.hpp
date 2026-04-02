@@ -7,7 +7,6 @@
 #include <string>
 #include <type_traits>
 #include <utility>
-
 // project header
 #include "foundation/core/Enum.hpp"
 
@@ -29,6 +28,7 @@ template <typename T> struct NBResult {
     return status == WaitResult::Interrupted;
   }
   [[nodiscard]] bool is_error() const { return status == WaitResult::Error; }
+  operator bool() const { return ok(); }
 };
 
 template <typename Key, typename Value>
@@ -59,7 +59,7 @@ ECM CallCallbackSafe(const Fn &fn, Args &&...args) {
   }
   try {
     fn(std::forward<Args>(args)...);
-    return {EC::Success, ""};
+    return OK;
   } catch (const std::exception &e) {
     return {EC::PyCBError, e.what()};
   } catch (...) {
@@ -70,10 +70,10 @@ ECM CallCallbackSafe(const Fn &fn, Args &&...args) {
 template <typename Ret, typename Fn, typename... Args>
 std::pair<Ret, ECM> CallCallbackSafeRet(const Fn &fn, Args &&...args) {
   if (!fn) {
-    return {Ret{}, {EC::Success, ""}};
+    return {Ret{}, OK};
   }
   try {
-    return {fn(std::forward<Args>(args)...), {EC::Success, ""}};
+    return {fn(std::forward<Args>(args)...), OK};
   } catch (const std::exception &e) {
     return {Ret{}, {EC::PyCBError, e.what()}};
   } catch (...) {
@@ -206,27 +206,31 @@ public:
   NonCopyableNonMovable() = default;
 };
 
-struct ECMResult {
-  ECMResult() = default;
-  ECMResult(ECM result) : rcm(std::move(result)) {}
+template <typename T, typename = void>
+struct HasECMMemberRcm : std::false_type {};
 
-  /**
-   * @brief Result status code and detail message.
-   */
-  ECM rcm = {EC::Success, ""};
+template <typename T>
+struct HasECMMemberRcm<T, std::void_t<decltype(std::declval<T>().rcm)>>
+    : std::is_same<std::decay_t<decltype(std::declval<T>().rcm)>, ECM> {};
 
-  /**
-   * @brief Return true when status is success.
-   */
-  [[nodiscard]] bool ok() const { return rcm.first == EC::Success; }
+template <typename T> struct ECMData {
+  T data;
+  ECM rcm = {};
+  ECMData() = default;
+  ECMData(ECM result) : data(), rcm(std::move(result)) {}
+  ECMData(ECM result, T data) : data(std::move(data)), rcm(std::move(result)) {}
+  ECMData(T data, ECM result = {})
+      : data(std::move(data)), rcm(std::move(result)) {
+    if constexpr (HasECMMemberRcm<T>::value) {
+      if (rcm.code == EC::Success && this->data.rcm.code != EC::Success) {
+        rcm = this->data.rcm;
+      }
+    }
+  }
 
+  [[nodiscard]] bool ok() const { return rcm.code == EC::Success; }
+  static ECMData OK(T v) { return ECMData(std::move(v), ECM{}); }
   operator bool() const { return ok(); }
   operator ECM() const { return rcm; }
-};
-
-template <typename T> struct ECMData : ECMResult {
-  ECMData() = default;
-  ECMData(T data, ECM result = {EC::Success, ""})
-      : ECMResult(std::move(result)), data(std::move(data)) {}
-  T data;
+  T &operator*() const { return data; }
 };

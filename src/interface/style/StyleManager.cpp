@@ -1,5 +1,4 @@
 #include "interface/style/StyleManager.hpp"
-
 #include "domain/style/StyleDomainService.hpp"
 #include "foundation/tools/string.hpp"
 
@@ -9,6 +8,16 @@
 
 namespace AMInterface::style {
 namespace detail {
+const std::string *
+LookupPromptShortcut_(const AMDomain::style::StyleConfig &cfg,
+                      const std::string &key) {
+  const auto it = cfg.cli_prompt.shortcut.find(key);
+  if (it == cfg.cli_prompt.shortcut.end()) {
+    return nullptr;
+  }
+  return &it->second;
+}
+
 const std::string *
 ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
                          StyleIndex style_index) {
@@ -74,21 +83,21 @@ ResolveInputStyleByIndex(const AMDomain::style::StyleConfig &cfg,
   case StyleIndex::PathLike:
     return &cfg.input_highlight.path_like;
   case StyleIndex::PromptUn:
-    return &cfg.cli_prompt.shortcut.un;
+    return LookupPromptShortcut_(cfg, "un");
   case StyleIndex::PromptAt:
-    return &cfg.cli_prompt.shortcut.at;
+    return LookupPromptShortcut_(cfg, "at");
   case StyleIndex::PromptHn:
-    return &cfg.cli_prompt.shortcut.hn;
+    return LookupPromptShortcut_(cfg, "hn");
   case StyleIndex::PromptEn:
-    return &cfg.cli_prompt.shortcut.en;
+    return LookupPromptShortcut_(cfg, "en");
   case StyleIndex::PromptNn:
-    return &cfg.cli_prompt.shortcut.nn;
+    return LookupPromptShortcut_(cfg, "nn");
   case StyleIndex::PromptCwd:
-    return &cfg.cli_prompt.shortcut.cwd;
+    return LookupPromptShortcut_(cfg, "cwd");
   case StyleIndex::PromptDs:
-    return &cfg.cli_prompt.shortcut.ds;
+    return LookupPromptShortcut_(cfg, "ds");
   case StyleIndex::PromptWhite:
-    return &cfg.cli_prompt.shortcut.white;
+    return LookupPromptShortcut_(cfg, "white");
   case StyleIndex::Error:
     return &cfg.system_info.error;
   case StyleIndex::None:
@@ -189,11 +198,11 @@ BuildProgressBarStyle(const AMDomain::style::StyleConfig &cfg) {
   style.bar_width =
       static_cast<size_t>(std::max<int64_t>(1, cfg.progress_bar.bar_width));
   style.width_offset = static_cast<int>(cfg.progress_bar.width_offset);
-  style.start = cfg.progress_bar.lborder;
-  style.end = cfg.progress_bar.rborder;
+  style.start = cfg.progress_bar.start;
+  style.end = cfg.progress_bar.end;
   style.fill = cfg.progress_bar.fill.empty() ? "█" : cfg.progress_bar.fill;
-  style.lead = cfg.progress_bar.head.empty() ? "▓" : cfg.progress_bar.head;
-  style.remainder = cfg.progress_bar.remain;
+  style.lead = cfg.progress_bar.lead.empty() ? "▓" : cfg.progress_bar.lead;
+  style.remainder = cfg.progress_bar.remaining;
   style.color = ParseProgressBarColor(cfg.progress_bar.color);
   style.show_percentage = cfg.progress_bar.show_percentage;
   style.show_elapsed_time = cfg.progress_bar.show_elapsed_time;
@@ -203,28 +212,22 @@ BuildProgressBarStyle(const AMDomain::style::StyleConfig &cfg) {
 } // namespace detail
 
 AMStyleService::AMStyleService(StyleConfigArg arg)
-    : init_arg_(std::move(arg)),
+    : StyleConfigManager(std::move(arg)),
       progress_bar_style_(std::optional<AMProgressBarStyle>{}) {}
 
 ECM AMStyleService::Init() {
-  auto style_guard = init_arg_.lock();
-  AMDomain::style::services::NormalizeStyleConfigArg(&style_guard.get());
+  ECM rcm = StyleConfigManager::Init();
+  if (!rcm) {
+    return rcm;
+  }
   progress_bar_style_.lock().store(std::nullopt);
-  return ECM{EC::Success, ""};
-}
-
-void AMStyleService::SetInitArg(StyleConfigArg arg) {
-  init_arg_.lock().store(std::move(arg));
-}
-
-StyleConfigArg AMStyleService::GetInitArg() const {
-  return init_arg_.lock().load();
+  return rcm;
 }
 
 std::string AMStyleService::Format(const std::string &ori_str,
                                    StyleIndex style_index,
                                    const PathInfo *path_info) const {
-  const auto cfg = init_arg_.lock().load().style;
+  const auto cfg = init_arg_.lock()->style;
   const std::string escaped = AMStr::BBCEscape(ori_str);
   const std::string path_tag = detail::ResolvePathStyleTag(cfg, path_info);
   if (!path_tag.empty()) {
@@ -237,7 +240,7 @@ std::string AMStyleService::Format(const std::string &ori_str,
 std::string AMStyleService::FormatUtf8Table(
     const std::vector<std::string> &keys,
     const std::vector<std::vector<std::string>> &rows) const {
-  const auto cfg = init_arg_.lock().load().style.table;
+  const auto cfg = GetInitArg().style.table;
   const size_t left =
       static_cast<size_t>(std::max<int64_t>(0, cfg.left_padding));
   const size_t right =
@@ -258,7 +261,7 @@ AMProgressBar AMStyleService::CreateProgressBar(int64_t total_size,
     }
   }
 
-  const auto cfg = init_arg_.lock().load().style;
+  const auto cfg = GetInitArg().style;
   const AMProgressBarStyle built = detail::BuildProgressBarStyle(cfg);
 
   auto cached = progress_bar_style_.lock();
@@ -268,3 +271,4 @@ AMProgressBar AMStyleService::CreateProgressBar(int64_t total_size,
   return AMProgressBar(total_size, prefix, cached->value());
 }
 } // namespace AMInterface::style
+

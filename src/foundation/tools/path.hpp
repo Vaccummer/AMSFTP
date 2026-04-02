@@ -582,7 +582,6 @@ using WalkErrorCallback =
 using WRD =
     std::vector<std::pair<std::vector<std::string>, std::vector<PathInfo>>>;
 using EC = ErrorCode;
-using ECM = std::pair<ErrorCode, std::string>;
 using WER = std::vector<std::pair<std::string, ECM>>;
 using WRI = std::pair<std::vector<PathInfo>, WER>;
 
@@ -732,7 +731,7 @@ inline ECM mkdirs(const std::string &path) {
   if (ec) {
     return {fec(ec), AMStr::fmt("Mkdir {} failed: {}", path, ec.message())};
   }
-  return ECM{EC::Success, ""};
+  return OK;
 }
 
 inline std::pair<ECM, PathInfo> stat(const std::string &path,
@@ -802,7 +801,7 @@ inline std::pair<ECM, PathInfo> stat(const std::string &path,
 #ifdef __APPLE__
   info.create_time = timespec_to_double(file_stat.st_birthtimespec);
 #endif
-  return {{EC::Success, ""}, info};
+  return {OK, info};
 }
 
 inline std::pair<ECM, std::vector<PathInfo>>
@@ -839,11 +838,11 @@ listdir(const std::string &path, int timeout_ms = -1,
       return {ECM{EC::OperationTimeout, "Listdir timeout"}, result};
     }
     auto [error, info] = stat(entry.path().string(), false);
-    if (error.first != EC::Success) {
+    if (error.code != EC::Success) {
       continue;
     }
     result.push_back(info);
   }
-  return {ECM{EC::Success, ""}, result};
+  return {OK, result};
 }
 } // namespace AMPath

@@ -40,7 +40,7 @@ void SignalMonitorImpl::Start() {
 ECM SignalMonitorImpl::Init() {
   InstallHandlers();
   Start();
-  return Ok();
+  return OK;
 }
 
 void SignalMonitorImpl::Stop() {

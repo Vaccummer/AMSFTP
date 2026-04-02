@@ -100,7 +100,7 @@ ECMData<ParsedVarToken>
 VarInterfaceService::ParseVarTokenExpression(const std::string &expr) const {
   const std::string trimmed = AMStr::Strip(expr);
   if (trimmed.empty()) {
-    return {{}, Err(EC::InvalidArg, "variable token is empty")};
+    return {{}, Err(EC::InvalidArg, "", "", "variable token is empty")};
   }
 
   size_t end = 0;
@@ -108,9 +108,9 @@ VarInterfaceService::ParseVarTokenExpression(const std::string &expr) const {
   if (!AMDomain::var::ParseVarRefAt(trimmed, 0, trimmed.size(), false, false,
                                     &end, &parsed) ||
       end != trimmed.size() || !parsed.valid || parsed.varname.empty()) {
-    return {{}, Err(EC::InvalidArg, "invalid variable token")};
+    return {{}, Err(EC::InvalidArg, "", "", "invalid variable token")};
   }
-  return {parsed, Ok()};
+  return {parsed, OK};
 }
 
 std::string VarInterfaceService::ResolveCurrentDomain_() const {
@@ -124,24 +124,24 @@ std::string VarInterfaceService::ResolveCurrentDomain_() const {
 ECMData<VarInfo>
 VarInterfaceService::ResolveLookupToken(const std::string &token_expr) const {
   auto parsed = ParseVarTokenExpression(token_expr);
-  if (!isok(parsed.rcm)) {
+  if (!(parsed.rcm)) {
     return {{}, parsed.rcm};
   }
 
   if (parsed.data.explicit_domain) {
     const auto all_vars = var_service_.GetAllVar();
-    if (!isok(all_vars.rcm)) {
+    if (!(all_vars.rcm)) {
       return {{}, all_vars.rcm};
     }
     const auto zone_it = all_vars.data.find(parsed.data.domain);
     if (zone_it == all_vars.data.end()) {
-      return {{}, Err(EC::InvalidArg, "target variable zone not found")};
+      return {{}, Err(EC::InvalidArg, "", "", "target variable zone not found")};
     }
     const auto var_it = zone_it->second.find(parsed.data.varname);
     if (var_it == zone_it->second.end()) {
-      return {{}, Err(EC::InvalidArg, "variable not found in target zone")};
+      return {{}, Err(EC::InvalidArg, "", "", "variable not found in target zone")};
     }
-    return {var_it->second, Ok()};
+    return {var_it->second, OK};
   }
 
   return var_service_.GetVar(ResolveCurrentDomain_(), parsed.data.varname);
@@ -151,12 +151,12 @@ ECMData<VarInfo>
 VarInterfaceService::ResolveDefineTarget(bool global,
                                          const std::string &token_expr) const {
   auto parsed = ParseVarTokenExpression(token_expr);
-  if (!isok(parsed.rcm)) {
+  if (!(parsed.rcm)) {
     return {{}, parsed.rcm};
   }
   if (global && parsed.data.explicit_domain) {
     return {{},
-            Err(EC::InvalidArg, "cannot combine --global with explicit zone")};
+            Err(EC::InvalidArg, "", "", "cannot combine --global with explicit zone")};
   }
 
   VarInfo target = {};
@@ -166,23 +166,23 @@ VarInterfaceService::ResolveDefineTarget(bool global,
                                 : ResolveCurrentDomain_());
   target.varname = parsed.data.varname;
   target.varvalue = "";
-  return {target, Ok()};
+  return {target, OK};
 }
 
 ECM VarInterfaceService::QueryAndPrintVar(const std::string &token_expr) const {
   auto info = ResolveLookupToken(token_expr);
-  if (!isok(info.rcm)) {
+  if (!(info.rcm)) {
     return info.rcm;
   }
   prompt_io_manager_.FmtPrint("{}:{} = {}", info.data.domain, info.data.varname,
                               info.data.varvalue);
-  return Ok();
+  return OK;
 }
 
 ECM VarInterfaceService::DefineVar(bool global, const std::string &token_expr,
                                    const std::string &value) const {
   auto target = ResolveDefineTarget(global, token_expr);
-  if (!isok(target.rcm)) {
+  if (!(target.rcm)) {
     return target.rcm;
   }
   target.data.varvalue = value;
@@ -192,7 +192,7 @@ ECM VarInterfaceService::DefineVar(bool global, const std::string &token_expr,
 ECM VarInterfaceService::DeleteVar(bool all,
                                    const std::vector<std::string> &tokens) const {
   if (tokens.empty() || tokens.size() > 2) {
-    return Err(EC::InvalidArg, "var del requires one var token or [zone token]");
+    return Err(EC::InvalidArg, "", "", "var del requires one var token or [zone token]");
   }
 
   std::string zone_override = {};
@@ -203,30 +203,30 @@ ECM VarInterfaceService::DeleteVar(bool all,
   }
 
   auto parsed = ParseVarTokenExpression(token_expr);
-  if (!isok(parsed.rcm)) {
+  if (!(parsed.rcm)) {
     return parsed.rcm;
   }
 
   if (all) {
     auto all_vars = var_service_.GetAllVar();
-    if (!isok(all_vars.rcm)) {
+    if (!(all_vars.rcm)) {
       return all_vars.rcm;
     }
-    ECM last = Ok();
+    ECM last = OK;
     bool removed_any = false;
     for (const auto &[zone_name, zone_vars] : all_vars.data) {
       if (zone_vars.find(parsed.data.varname) == zone_vars.end()) {
         continue;
       }
       ECM del_rcm = var_service_.DelVar(zone_name, parsed.data.varname);
-      if (!isok(del_rcm)) {
+      if (!(del_rcm)) {
         last = del_rcm;
         continue;
       }
       removed_any = true;
     }
     if (!removed_any) {
-      return Err(EC::InvalidArg, "variable not found");
+      return Err(EC::InvalidArg, "", "", "variable not found");
     }
     return last;
   }
@@ -259,19 +259,19 @@ ECM VarInterfaceService::ListVars(
 
   if (sections.empty()) {
     auto all_vars = var_service_.GetAllVar();
-    if (!isok(all_vars.rcm)) {
+    if (!(all_vars.rcm)) {
       return all_vars.rcm;
     }
     for (const auto &[zone_name, zone_vars] : all_vars.data) {
       print_zone(zone_name, zone_vars);
     }
-    return Ok();
+    return OK;
   }
 
-  ECM last = Ok();
+  ECM last = OK;
   for (const std::string &zone : sections) {
     auto zone_vars = var_service_.EnumerateZone(zone);
-    if (!isok(zone_vars.rcm)) {
+    if (!(zone_vars.rcm)) {
       last = zone_vars.rcm;
       continue;
     }
@@ -299,20 +299,20 @@ VarInterfaceService::LookupVarValue_(const ParsedVarToken &token,
   if (token.explicit_domain) {
     auto explicit_value = lookup_zone(token.domain);
     if (!explicit_value.has_value()) {
-      return {"", Err(EC::InvalidArg, "variable not found")};
+      return {"", Err(EC::InvalidArg, "", "", "variable not found")};
     }
-    return {explicit_value.value(), Ok()};
+    return {explicit_value.value(), OK};
   }
 
   auto current_value = lookup_zone(ResolveCurrentDomain_());
   if (current_value.has_value()) {
-    return {current_value.value(), Ok()};
+    return {current_value.value(), OK};
   }
   auto public_value = lookup_zone(AMDomain::var::kPublic);
   if (public_value.has_value()) {
-    return {public_value.value(), Ok()};
+    return {public_value.value(), OK};
   }
-  return {"", Err(EC::InvalidArg, "variable not found")};
+  return {"", Err(EC::InvalidArg, "", "", "variable not found")};
 }
 
 std::string VarInterfaceService::SubstitutePathLikeWithSnapshot_(
@@ -349,7 +349,7 @@ std::string VarInterfaceService::SubstitutePathLikeWithSnapshot_(
     }
 
     const auto value = LookupVarValue_(ref, all_vars);
-    if (isok(value.rcm)) {
+    if ((value.rcm)) {
       out.append(value.data);
     } else {
       out.append(raw.substr(i, end - i));
@@ -363,7 +363,7 @@ std::string VarInterfaceService::SubstitutePathLikeWithSnapshot_(
 std::string
 VarInterfaceService::SubstitutePathLike(const std::string &raw) const {
   auto all_vars = var_service_.GetAllVar();
-  if (!isok(all_vars.rcm)) {
+  if (!(all_vars.rcm)) {
     return raw;
   }
   return SubstitutePathLikeWithSnapshot_(raw, all_vars.data);
@@ -372,7 +372,7 @@ VarInterfaceService::SubstitutePathLike(const std::string &raw) const {
 std::vector<std::string> VarInterfaceService::SubstitutePathLike(
     const std::vector<std::string> &raw) const {
   auto all_vars = var_service_.GetAllVar();
-  if (!isok(all_vars.rcm)) {
+  if (!(all_vars.rcm)) {
     return raw;
   }
   std::vector<std::string> out = raw;
@@ -384,7 +384,7 @@ std::vector<std::string> VarInterfaceService::SubstitutePathLike(
 
 void VarInterfaceService::VSubstitutePathLike(std::string &raw) const {
   auto all_vars = var_service_.GetAllVar();
-  if (!isok(all_vars.rcm)) {
+  if (!(all_vars.rcm)) {
     return;
   }
   raw = SubstitutePathLikeWithSnapshot_(raw, all_vars.data);
@@ -393,7 +393,7 @@ void VarInterfaceService::VSubstitutePathLike(std::string &raw) const {
 void VarInterfaceService::VSubstitutePathLike(
     std::vector<std::string> &raw) const {
   auto all_vars = var_service_.GetAllVar();
-  if (!isok(all_vars.rcm)) {
+  if (!(all_vars.rcm)) {
     return;
   }
   for (std::string &item : raw) {

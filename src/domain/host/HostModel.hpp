@@ -97,7 +97,7 @@ struct ClientMetaData {
     }
 
     if (rcm) {
-      *rcm = {EC::Success, ""};
+      *rcm = OK;
     }
 
     auto fail = [rcm](const std::string &msg) -> bool {
@@ -429,7 +429,7 @@ public:
     }
 
     if (rcm) {
-      *rcm = {EC::Success, ""};
+      *rcm = OK;
     }
 
     auto fail = [rcm](const std::string &msg) -> bool {

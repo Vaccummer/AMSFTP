@@ -246,13 +246,13 @@ public:
   /**
    * @brief Return atomic state storage for advanced coordinated updates.
    */
-  [[nodiscard]] virtual AMAtomic<AMDomain::filesystem::CheckResult> &
+  [[nodiscard]] virtual AMAtomic<ECMData<AMDomain::filesystem::CheckResult>> &
   StateAtomic() = 0;
 
   /**
    * @brief Return atomic state storage for read-only coordinated access.
    */
-  [[nodiscard]] virtual const AMAtomic<AMDomain::filesystem::CheckResult> &
+  [[nodiscard]] virtual const AMAtomic<ECMData<AMDomain::filesystem::CheckResult>> &
   StateAtomic() const = 0;
 
   /**
@@ -263,7 +263,8 @@ public:
   /**
    * @brief Return cached state from last check/connect action.
    */
-  [[nodiscard]] virtual AMDomain::filesystem::CheckResult GetState() const = 0;
+  [[nodiscard]] virtual ECMData<AMDomain::filesystem::CheckResult>
+  GetState() const = 0;
 
   /**
    * @brief Return remote/local OS type.
@@ -288,7 +289,8 @@ public:
   /**
    * @brief Update cached state from last check/connect action.
    */
-  virtual void SetState(const AMDomain::filesystem::CheckResult &state) = 0;
+  virtual void
+  SetState(const ECMData<AMDomain::filesystem::CheckResult> &state) = 0;
 
   /**
    * @brief Update remote/local OS type.
@@ -425,6 +427,18 @@ public:
   }
 
   [[nodiscard]] const amf &ControlToken() const { return control_port; }
+
+  [[nodiscard]] bool CheckStop(ECM &rcm) const {
+    if (IsInterrupted()) {
+      rcm = ECM{EC::Terminate, "Operation interrupted by user"};
+      return true;
+    }
+    if (IsTimeout()) {
+      rcm = ECM{EC::OperationTimeout, "Operation timed out"};
+      return true;
+    }
+    return false;
+  }
 };
 
 /**
@@ -470,98 +484,98 @@ public:
   /**
    * @brief Update and return remote/local OS type.
    */
-  virtual AMDomain::filesystem::UpdateOSTypeResult
+  virtual ECMData<AMDomain::filesystem::UpdateOSTypeResult>
   UpdateOSType(const AMDomain::filesystem::UpdateOSTypeArgs &args = {},
                const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Update and return home directory.
    */
-  virtual AMDomain::filesystem::UpdateHomeDirResult
+  virtual ECMData<AMDomain::filesystem::UpdateHomeDirResult>
   UpdateHomeDir(const AMDomain::filesystem::UpdateHomeDirArgs &args = {},
                 const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Validate connection health.
    */
-  virtual AMDomain::filesystem::CheckResult
+  virtual ECMData<AMDomain::filesystem::CheckResult>
   Check(const AMDomain::filesystem::CheckArgs &args = {},
         const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Connect or reconnect this client.
    */
-  virtual AMDomain::filesystem::ConnectResult
+  virtual ECMData<AMDomain::filesystem::ConnectResult>
   Connect(const AMDomain::filesystem::ConnectArgs &args = {},
           const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Measure round trip time when supported.
    */
-  virtual AMDomain::filesystem::RTTResult
+  virtual ECMData<AMDomain::filesystem::RTTResult>
   GetRTT(const AMDomain::filesystem::GetRTTArgs &args = {},
          const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Execute command and return output + exit code when supported.
    */
-  virtual AMDomain::filesystem::RunResult
+  virtual ECMData<AMDomain::filesystem::RunResult>
   ConductCmd(const AMDomain::filesystem::ConductCmdArgs &args,
              const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Query path metadata.
    */
-  virtual AMDomain::filesystem::StatResult
+  virtual ECMData<AMDomain::filesystem::StatResult>
   stat(const AMDomain::filesystem::StatArgs &args,
        const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief List one directory.
    */
-  virtual AMDomain::filesystem::ListResult
+  virtual ECMData<AMDomain::filesystem::ListResult>
   listdir(const AMDomain::filesystem::ListdirArgs &args,
           const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief List one directory and return only entry names.
    */
-  virtual AMDomain::filesystem::ListNamesResult
+  virtual ECMData<AMDomain::filesystem::ListNamesResult>
   listnames(const AMDomain::filesystem::ListNamesArgs &args,
             const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Create one directory.
    */
-  virtual AMDomain::filesystem::MkdirResult
+  virtual ECMData<AMDomain::filesystem::MkdirResult>
   mkdir(const AMDomain::filesystem::MkdirArgs &args,
         const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Create multi-level directories.
    */
-  virtual AMDomain::filesystem::MkdirsResult
+  virtual ECMData<AMDomain::filesystem::MkdirsResult>
   mkdirs(const AMDomain::filesystem::MkdirsArgs &args,
          const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Remove one directory.
    */
-  virtual AMDomain::filesystem::RMResult
+  virtual ECMData<AMDomain::filesystem::RMResult>
   rmdir(const AMDomain::filesystem::RmdirArgs &args,
         const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Remove one file.
    */
-  virtual AMDomain::filesystem::RMResult
+  virtual ECMData<AMDomain::filesystem::RMResult>
   rmfile(const AMDomain::filesystem::RmfileArgs &args,
          const ClientControlComponent &control = {}) = 0;
 
   /**
    * @brief Rename or move one path.
    */
-  virtual AMDomain::filesystem::MoveResult
+  virtual ECMData<AMDomain::filesystem::MoveResult>
   rename(const AMDomain::filesystem::RenameArgs &args,
          const ClientControlComponent &control = {}) = 0;
 

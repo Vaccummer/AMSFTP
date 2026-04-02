@@ -8,10 +8,10 @@ ECMData<std::unique_ptr<IConfigStorePort>>
 CreateConfigStorePort(const ConfigStoreInitArg &arg) {
   auto store = std::make_unique<AMInfra::config::AMTomlConfigStore>();
   ECM rcm = store->Configure(arg);
-  if (!isok(rcm)) {
+  if (!(rcm)) {
     return {nullptr, rcm};
   }
   std::unique_ptr<IConfigStorePort> port(std::move(store));
-  return {std::move(port), Ok()};
+  return {std::move(port), OK};
 }
 } // namespace AMDomain::config

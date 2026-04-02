@@ -413,9 +413,9 @@ public:
         msg += name;
         first = false;
       }
-      return {std::string{}, Err(EC::InvalidArg, msg)};
+      return {std::string{}, Err(EC::InvalidArg, "", "", msg)};
     }
-    return {out, Ok()};
+    return {out, OK};
   }
 
 private:
@@ -469,9 +469,9 @@ PromptTemplateInterpreter::Parse(const std::string &input) const {
     const std::string msg = AMStr::fmt(
         "{} at {} of {}", diag.message, index, HighlightErrorAt_(input, index));
     return {std::move(result),
-            Err(EC::InvalidArg, msg)};
+            Err(EC::InvalidArg, "", "", msg)};
   }
-  return {std::move(result), Ok()};
+  return {std::move(result), OK};
 }
 
 ECMData<std::string>

@@ -19,10 +19,10 @@ int main(int argc, char **argv) {
 
     if (!build_result.ok() || !build_result.data) {
       const EC ec =
-          build_result.ok() ? EC::InvalidHandle : build_result.rcm.first;
+          build_result.ok() ? EC::InvalidHandle : build_result.rcm.code;
       const std::string detail = build_result.ok()
                                      ? "bootstrap service build returned null"
-                                     : build_result.rcm.second;
+                                     : build_result.rcm.msg();
       AMBootstrap::PrintBootstrapWarn(detail);
       return static_cast<int>(ec);
     }
