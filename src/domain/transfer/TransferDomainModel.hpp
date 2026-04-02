@@ -1,4 +1,5 @@
 #pragma once
+#include "domain/client/ClientDomainService.hpp"
 #include "domain/client/ClientPort.hpp"
 #include "domain/filesystem/FileSystemModel.hpp"
 #include "foundation/core/DataClass.hpp"
@@ -158,6 +159,10 @@ enum class ControlIntent { Running, Pause, Terminate };
 struct TransferManagerArg {
   int init_thread_num = 1;
   int max_thread_num = 16;
+  size_t buffer_size =
+      AMDomain::client::ClientService::AMDefaultRemoteBufferSize;
+  size_t min_buffer = AMDomain::client::ClientService::AMMinBufferSize;
+  size_t max_buffer = AMDomain::client::ClientService::AMMaxBufferSize;
 };
 
 struct ProgressCBInfo {
@@ -305,9 +310,10 @@ struct TaskSize {
 };
 
 struct TaskCoreData {
-  AMAtomic<TASKS> tasks = AMAtomic<TASKS>(TASKS());
+  AMAtomic<TASKS> dir_tasks = AMAtomic<TASKS>(TASKS());
+  AMAtomic<TASKS> file_tasks = AMAtomic<TASKS>(TASKS());
   AMDomain::client::ClientControlComponent control = {};
-  std::atomic<TransferTask *> cur_task{nullptr};
+  AMAtomic<TransferTask *> cur_task = AMAtomic<TransferTask *>(nullptr);
   TransferClientContainer clients;
   std::vector<std::string> nicknames;
 };
@@ -347,6 +353,14 @@ struct TaskInfo {
   TaskStruct::TaskCoreData Core;
   TaskStruct::TaskSet Set;
   TaskStruct::TaskCallback Callback;
+  struct CurrentTaskSnapshot {
+    std::string src = {};
+    std::string dst = {};
+    std::string src_host = {};
+    std::string dst_host = {};
+    size_t size = 0;
+    size_t transferred = 0;
+  };
 
   /**
    * @brief Construct a task info with optional quiet flag.
@@ -365,9 +379,9 @@ struct TaskInfo {
       return current;
     }
     current = 0;
-    auto taks_l = Core.tasks.lock();
+    auto task_l = Core.file_tasks.lock();
 
-    for (const auto &task : *taks_l) {
+    for (const auto &task : *task_l) {
       current += task.size;
     }
     Size.total.store(current, std::memory_order_relaxed);
@@ -386,7 +400,7 @@ struct TaskInfo {
       return current;
     }
     current = 0;
-    auto local_tasks = Core.tasks.lock();
+    auto local_tasks = Core.file_tasks.lock();
     for (const auto &task : *local_tasks) {
       if (task.path_type == PathType::FILE) {
         current += 1;
@@ -465,6 +479,32 @@ struct TaskInfo {
   void SetResult(const ECM &new_rcm) { State.rcm.lock().store(new_rcm); }
 
   ECM GetResult() { return State.rcm.lock().load(); }
+
+  void SetCurrentTask(TransferTask *task) { Core.cur_task.lock().store(task); }
+
+  void ClearCurrentTask() { Core.cur_task.lock().store(nullptr); }
+
+  [[nodiscard]] TransferTask *GetCurrentTask() const {
+    auto guard = const_cast<AMAtomic<TransferTask *> &>(Core.cur_task).lock();
+    return guard.load();
+  }
+
+  [[nodiscard]] std::optional<CurrentTaskSnapshot>
+  GetCurrentTaskSnapshot() const {
+    auto guard = const_cast<AMAtomic<TransferTask *> &>(Core.cur_task).lock();
+    TransferTask *task = guard.load();
+    if (!task) {
+      return std::nullopt;
+    }
+    CurrentTaskSnapshot out = {};
+    out.src = task->src;
+    out.dst = task->dst;
+    out.src_host = task->src_host;
+    out.dst_host = task->dst_host;
+    out.size = task->size;
+    out.transferred = task->transferred;
+    return out;
+  }
 };
 
 /**

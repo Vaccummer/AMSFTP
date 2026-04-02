@@ -39,6 +39,7 @@ struct ConfigSnapshots final {
   AMDomain::prompt::PromptProfileArg prompt_profile_arg = {};
   AMDomain::prompt::PromptHistoryArg prompt_history_arg = {};
   AMDomain::style::StyleConfigArg style_arg = {};
+  AMDomain::transfer::TransferManagerArg transfer_manager_arg = {};
 };
 
 struct AppServiceBuildState final {
@@ -62,6 +63,7 @@ struct AppServiceBuildState final {
       prompt_profile_history_manager = nullptr;
   std::unique_ptr<AMInterface::prompt::AMPromptIOManager> prompt_io_manager =
       nullptr;
+  AMDomain::transfer::TransferManagerArg transfer_manager_arg = {};
 };
 
 struct InterfaceServiceBuildState final {
@@ -124,11 +126,13 @@ ConfigSnapshots ReadConfigSnapshots_(
   (void)service->Read(&snapshots.prompt_profile_arg);
   (void)service->Read(&snapshots.prompt_history_arg);
   (void)service->Read(&snapshots.style_arg);
+  (void)service->Read(&snapshots.transfer_manager_arg);
   return snapshots;
 }
 
 void BuildCoreApplicationServices_(const ConfigSnapshots &snapshots,
                                    AppServiceBuildState *state) {
+  state->transfer_manager_arg = snapshots.transfer_manager_arg;
   state->host_service = std::make_unique<AMApplication::host::HostAppService>();
   {
     const ECM rcm = state->host_service->Init(snapshots.host_config_arg);
@@ -290,7 +294,8 @@ void BuildClientInterfaceServices_(
 ECM BuildTransferInterfaceService_(
     const AMInterface::cli::amf &task_control_token,
     const AppServiceBuildState &app_state, InterfaceServiceBuildState *state) {
-  state->transfer_pool = AMDomain::transfer::CreateTransferPoolPort();
+  state->transfer_pool =
+      AMDomain::transfer::CreateTransferPoolPort(app_state.transfer_manager_arg);
   if (!state->transfer_pool) {
     return Err(EC::InvalidHandle, "", "", "failed to create transfer pool");
   }
@@ -471,5 +476,4 @@ BuildBootstrapServices(const std::string &app_name, const fs::path &root_dir) {
 }
 
 } // namespace AMBootstrap
-
 

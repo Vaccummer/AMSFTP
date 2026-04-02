@@ -185,10 +185,7 @@ void ConfigDataArgs::reset() {}
 ECM ConfigGetArgs::Run(const CLIServices &managers,
                        const CliRunContext &ctx) const {
   (void)ctx;
-  auto request = this->request;
-  request.check = false;
-  request.detail = true;
-  return managers.client_interface_service->ListClients(request);
+  return managers.client_interface_service->ListHosts(request.nicknames, true);
 }
 
 void ConfigGetArgs::reset() { request = {}; }

@@ -1902,14 +1902,46 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
 }
 
 ECM ClientInterfaceService::ListHosts(bool detail) {
-  std::vector<std::string> nicknames = host_config_manager_.ListNames();
-  bool has_local = false;
-  for (const auto &name : nicknames) {
-    if (IsLocalNickname(name)) {
-      has_local = true;
-      break;
+  return ListHosts({}, detail);
+}
+
+ECM ClientInterfaceService::ListHosts(const std::vector<std::string> &filters,
+                                      bool detail) {
+  std::vector<std::string> nicknames = {};
+  if (filters.empty()) {
+    nicknames = host_config_manager_.ListNames();
+  } else {
+    std::unordered_set<std::string> seen = {};
+    for (const auto &raw_name : filters) {
+      const std::string stripped = AMStr::Strip(raw_name);
+      if (stripped.empty()) {
+        continue;
+      }
+      const std::string normalized = NormalizeNickname(stripped);
+      if (normalized.empty()) {
+        continue;
+      }
+
+      std::string resolved = normalized;
+      if (IsLocalNickname(normalized)) {
+        resolved = "local";
+      } else {
+        auto host_result = host_config_manager_.GetClientConfig(normalized, false);
+        if (!(host_result.rcm)) {
+          return host_result.rcm;
+        }
+        resolved = NormalizeNickname(host_result.data.request.nickname);
+        if (resolved.empty()) {
+          resolved = normalized;
+        }
+      }
+
+      if (seen.insert(resolved).second) {
+        nicknames.push_back(resolved);
+      }
     }
   }
+
   if (!detail) {
     const std::vector<std::string> established =
         client_service_.GetClientNames();
