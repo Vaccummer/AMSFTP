@@ -144,6 +144,22 @@ bool HostAppService::HostExists(const std::string &nickname) const {
   return host_configs_.find(key) != host_configs_.end();
 }
 
+ECMData<std::string>
+HostAppService::CheckNicknameAvailable(const std::string &nickname) const {
+  const std::string normalized = NormalizeNickname(AMStr::Strip(nickname));
+  if (normalized.empty() || !ValidateNickname(normalized)) {
+    return {"", Err(EC::InvalidArg, "invalid host nickname")};
+  }
+  if (IsLocalNickname(normalized)) {
+    return {"", Err(EC::InvalidArg, "Nickname 'local' is reserved")};
+  }
+  if (host_configs_.find(normalized) != host_configs_.end()) {
+    return {"", Err(EC::KeyAlreadyExists,
+                    AMStr::fmt("host already exists: {}", normalized))};
+  }
+  return {normalized, Ok()};
+}
+
 ECM HostAppService::AddHost(const HostConfig &entry, bool overwrite) {
   HostConfig normalized = entry;
   normalized.request.nickname = NormalizeNickname(normalized.request.nickname);

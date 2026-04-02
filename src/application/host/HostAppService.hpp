@@ -49,6 +49,8 @@ public:
   [[nodiscard]] std::vector<std::string> ListNames() const;
 
   [[nodiscard]] bool HostExists(const std::string &nickname) const;
+  [[nodiscard]] ECMData<std::string>
+  CheckNicknameAvailable(const std::string &nickname) const;
 
   /**
    * @brief Add one host config into map/storage; optionally allow overwrite.
