@@ -311,7 +311,7 @@ void PrintHostConfigDetail(AMPromptIOManager &prompt,
       continue;
     }
     std::string render_value = field.second;
-    if (field.first == "cmd_prefix") {
+    if (field.first == "cmd_template") {
       render_value = "\"" + render_value + "\"";
     } else if (render_value.empty()) {
       render_value = "\"\"";
@@ -635,11 +635,8 @@ std::string HostFieldDisplay_(const HostConfig &entry,
   if (field == "compression") {
     return entry.request.compression ? "true" : "false";
   }
-  if (field == "cmd_prefix") {
-    return entry.metadata.cmd_prefix;
-  }
-  if (field == "wrap_cmd") {
-    return entry.metadata.wrap_cmd ? "true" : "false";
+  if (field == "cmd_template") {
+    return entry.metadata.cmd_template;
   }
   if (field == "keyfile") {
     return entry.request.keyfile;
@@ -795,12 +792,8 @@ ECM PromptAddHostConfig_(AMPromptIOManager &prompt,
     return Err(EC::ConfigCanceled, "", "", "input canceled");
   }
   if (!PromptHostText_(prompt,
-                       "cmd_prefix(optional): ", entry.metadata.cmd_prefix,
-                       &entry.metadata.cmd_prefix, true)) {
-    return Err(EC::ConfigCanceled, "", "", "input canceled");
-  }
-  if (!PromptHostBool_(prompt, "wrap_cmd(true/false): ",
-                       entry.metadata.wrap_cmd, &entry.metadata.wrap_cmd)) {
+                       "cmd_template(optional): ", entry.metadata.cmd_template,
+                       &entry.metadata.cmd_template, true)) {
     return Err(EC::ConfigCanceled, "", "", "input canceled");
   }
 
@@ -946,12 +939,8 @@ ECM PromptModifyHostConfig_(AMPromptIOManager &prompt,
     return Err(EC::ConfigCanceled, "", "", "input canceled");
   }
   if (!PromptHostText_(prompt,
-                       "cmd_prefix(optional): ", entry.metadata.cmd_prefix,
-                       &entry.metadata.cmd_prefix, true)) {
-    return Err(EC::ConfigCanceled, "", "", "input canceled");
-  }
-  if (!PromptHostBool_(prompt, "wrap_cmd(true/false): ",
-                       entry.metadata.wrap_cmd, &entry.metadata.wrap_cmd)) {
+                       "cmd_template(optional): ", entry.metadata.cmd_template,
+                       &entry.metadata.cmd_template, true)) {
     return Err(EC::ConfigCanceled, "", "", "input canceled");
   }
 
@@ -1816,7 +1805,7 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
 
   static const std::vector<std::string> kAllowedFields = {
       "hostname",    "username",   "port",      "buffer_size",
-      "compression", "cmd_prefix", "wrap_cmd",  "protocol",
+      "compression", "cmd_template", "protocol",
       "password",    "keyfile",    "trash_dir", "login_dir"};
   bool field_validated = false;
   for (const auto &allowed : kAllowedFields) {
@@ -1887,15 +1876,8 @@ ECM ClientInterfaceService::SetHostValue(const SetHostValueRequest &request) {
     updated.metadata.trash_dir = resolved_value;
   } else if (field == "login_dir") {
     updated.metadata.login_dir = resolved_value;
-  } else if (field == "cmd_prefix") {
-    updated.metadata.cmd_prefix = resolved_value;
-  } else if (field == "wrap_cmd") {
-    bool wrap_cmd = false;
-    if (!AMStr::GetBool(resolved_value, &wrap_cmd)) {
-      set_rcm = Err(EC::InvalidArg, "", "", "invalid wrap_cmd value");
-    } else {
-      updated.metadata.wrap_cmd = wrap_cmd;
-    }
+  } else if (field == "cmd_template") {
+    updated.metadata.cmd_template = resolved_value;
   } else {
     set_rcm = Err(EC::InvalidArg, "", "", "unsupported property name");
   }
@@ -1973,4 +1955,3 @@ ECM ClientInterfaceService::ListHosts(bool detail) {
   return OK;
 }
 } // namespace AMInterface::client
-

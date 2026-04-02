@@ -148,12 +148,12 @@ ECM ValidateConfig(const ClientMetaData &metadata) {
   }
 
   validate_rcm =
-      ValidateFieldValue(ClientMetaData::Attr::cmd_prefix, metadata.cmd_prefix);
+      ValidateFieldValue(ClientMetaData::Attr::cmd_template,
+                         metadata.cmd_template);
   if (!(validate_rcm)) {
     return validate_rcm;
   }
-
-  return ValidateFieldValue(ClientMetaData::Attr::wrap_cmd, metadata.wrap_cmd);
+  return OK;
 }
 
 ECM ValidateConfig(const HostConfig &config) {

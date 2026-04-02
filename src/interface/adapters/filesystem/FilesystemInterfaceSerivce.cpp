@@ -937,7 +937,7 @@ ECM FilesystemInterfaceSerivce::ShellRun(
         AMApplication::client::ClientAppService::GetClientMetadata(
             metadata_client_result.data);
     if (metadata_opt.has_value()) {
-      const std::string cmd_template = AMStr::Strip(metadata_opt->cmd_prefix);
+      const std::string cmd_template = AMStr::Strip(metadata_opt->cmd_template);
       if (!cmd_template.empty()) {
         std::unordered_map<std::string, std::string> vars = {};
         const auto dict = metadata_opt->GetStrDict();

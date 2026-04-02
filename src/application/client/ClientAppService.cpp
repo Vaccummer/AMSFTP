@@ -177,10 +177,12 @@ std::string ClientAppService::GetCurrentNickname() const {
     if (!local) {
       return "local";
     }
-    const std::string local_nickname = AMStr::Strip(local->ConfigPort().GetNickname());
+    const std::string local_nickname =
+        AMStr::Strip(local->ConfigPort().GetNickname());
     return local_nickname.empty() ? std::string("local") : local_nickname;
   }
-  const std::string current_nickname = AMStr::Strip(current->ConfigPort().GetNickname());
+  const std::string current_nickname =
+      AMStr::Strip(current->ConfigPort().GetNickname());
   if (!current_nickname.empty()) {
     return current_nickname;
   }
@@ -188,7 +190,8 @@ std::string ClientAppService::GetCurrentNickname() const {
   if (!local) {
     return "local";
   }
-  const std::string local_nickname = AMStr::Strip(local->ConfigPort().GetNickname());
+  const std::string local_nickname =
+      AMStr::Strip(local->ConfigPort().GetNickname());
   return local_nickname.empty() ? std::string("local") : local_nickname;
 }
 
@@ -238,7 +241,8 @@ ClientAppService::CreateClient(const HostConfig &config,
     return {nullptr, create_rcm};
   }
   if (!client) {
-    return {nullptr, Err(EC::InvalidHandle, "", "", "CreateClient returned null client")};
+    return {nullptr, Err(EC::InvalidHandle, "", "",
+                         "CreateClient returned null client")};
   }
   ApplyCallbacksToClient_(client, callbacks);
 
@@ -456,6 +460,18 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
 
     const ECM lease_rcm = AcquireTransferLease_(candidate);
     if ((lease_rcm)) {
+      auto managed_result = GetClient(nickname, true);
+      if ((managed_result.rcm) && managed_result.data &&
+          managed_result.data != candidate) {
+        auto metadata_opt = GetClientMetadata(managed_result.data);
+        if (metadata_opt.has_value()) {
+          const ECM sync_rcm = SetClientMetadata(candidate, *metadata_opt);
+          if (!(sync_rcm)) {
+            (void)TryReturnClient(candidate);
+            return {nullptr, sync_rcm};
+          }
+        }
+      }
       return {candidate, state.rcm};
     }
     if (lease_rcm.code == EC::PathUsingByOthers) {
@@ -503,6 +519,18 @@ ECM ClientAppService::AddPublicClient(const ClientHandle &client) {
     return {EC::InvalidArg, "Client UID is empty"};
   }
 
+  auto managed_result = GetClient(nickname, true);
+  if ((managed_result.rcm) && managed_result.data &&
+      managed_result.data != client) {
+    auto metadata_opt = GetClientMetadata(managed_result.data);
+    if (metadata_opt.has_value()) {
+      const ECM sync_rcm = SetClientMetadata(client, *metadata_opt);
+      if (!(sync_rcm)) {
+        return sync_rcm;
+      }
+    }
+  }
+
   ApplyCallbacksToClient_(client, GetPublicCallbacks());
 
   auto public_clients = public_clients_.lock();
@@ -540,11 +568,11 @@ ClientAppService::GetClientMetadata(const ClientHandle &client) {
 ECM ClientAppService::SetClientMetadata(const ClientHandle &client,
                                         const ClientMetaData &metadata) {
   if (!client) {
-    return Err(EC::InvalidHandle, "", "", "Client handle is null");
+    return {EC::InvalidHandle, "", "", "Client handle is null"};
   }
   const bool ok = client->MetaDataPort().StoreTypedValue(metadata, true);
   if (!ok) {
-    return Err(EC::CommonFailure, "", "", "Failed to store client metadata");
+    return {EC::CommonFailure, "", "", "Failed to store client metadata"};
   }
   return OK;
 }
@@ -552,7 +580,7 @@ ECM ClientAppService::SetClientMetadata(const ClientHandle &client,
 ECMData<std::string>
 ClientAppService::GetClientCwd(const ClientHandle &client) {
   if (!client) {
-    return {"", Err(EC::InvalidHandle, "", "", "Client handle is null")};
+    return {"", {EC::InvalidHandle, "", "", "Client handle is null"}};
   }
   auto meta_opt = GetClientMetadata(client);
   if (!meta_opt.has_value()) {

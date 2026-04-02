@@ -188,11 +188,8 @@ template <typename T>
     if (attr == ClientMetaData::Attr::trash_dir ||
         attr == ClientMetaData::Attr::login_dir ||
         attr == ClientMetaData::Attr::cwd ||
-        attr == ClientMetaData::Attr::cmd_prefix) {
+        attr == ClientMetaData::Attr::cmd_template) {
       return Err(EC::InvalidArg, "", "", "invalid type: expected string-like value");
-    }
-    if (attr == ClientMetaData::Attr::wrap_cmd) {
-      return Err(EC::InvalidArg, "", "", "invalid type: expected bool or string-like");
     }
     return Err(EC::InvalidArg, "", "", AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
   };
@@ -200,26 +197,11 @@ template <typename T>
   using DT = std::decay_t<T>;
   constexpr bool kStringLike = std::is_constructible_v<std::string, T>;
 
-  if constexpr (std::is_same_v<DT, bool>) {
-    if (attr == ClientMetaData::Attr::wrap_cmd) {
-      return OK;
-    }
-    return invalid_type();
-  }
-
   if constexpr (kStringLike) {
-    const std::string text_value = std::string(value);
     if (attr == ClientMetaData::Attr::trash_dir ||
         attr == ClientMetaData::Attr::login_dir ||
         attr == ClientMetaData::Attr::cwd ||
-        attr == ClientMetaData::Attr::cmd_prefix) {
-      return OK;
-    }
-    if (attr == ClientMetaData::Attr::wrap_cmd) {
-      bool parsed = false;
-      if (!AMStr::GetBool(text_value, &parsed)) {
-        return Err(EC::InvalidArg, "", "", "wrap_cmd must be true or false");
-      }
+        attr == ClientMetaData::Attr::cmd_template) {
       return OK;
     }
     return Err(EC::InvalidArg, "", "", AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));
