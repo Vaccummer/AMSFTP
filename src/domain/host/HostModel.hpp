@@ -25,24 +25,20 @@ struct ClientMetaData {
     trash_dir = 1,
     login_dir = 2,
     cwd = 3,
-    cmd_prefix = 4,
-    wrap_cmd = 5,
+    cmd_template = 4,
   };
   std::string trash_dir = "";
   std::string login_dir = "";
   std::string cwd = "";
-  std::string cmd_prefix = "";
-  bool wrap_cmd = false;
+  std::string cmd_template = "";
   static constexpr auto FieldNames = magic_enum::enum_values<Attr>();
-  using MemberPtr =
-      std::variant<std::string ClientMetaData::*, bool ClientMetaData::*>;
-  using Value = std::variant<std::string, bool>;
-  static_assert(magic_enum::enum_count<Attr>() == 5,
+  using MemberPtr = std::variant<std::string ClientMetaData::*>;
+  using Value = std::variant<std::string>;
+  static_assert(magic_enum::enum_count<Attr>() == 4,
                 "ClientMetaData::members must stay aligned with Attr values");
   static constexpr std::array<MemberPtr, magic_enum::enum_count<Attr>()>
       members{&ClientMetaData::trash_dir, &ClientMetaData::login_dir,
-              &ClientMetaData::cwd, &ClientMetaData::cmd_prefix,
-              &ClientMetaData::wrap_cmd};
+              &ClientMetaData::cwd, &ClientMetaData::cmd_template};
 
   [[nodiscard]] std::vector<std::pair<Attr, Value>> GetDict() const {
     std::vector<std::pair<Attr, Value>> out;
@@ -72,12 +68,9 @@ struct ClientMetaData {
       const std::string value = std::visit(
           [](const auto &item) -> std::string {
             using VT = std::decay_t<decltype(item)>;
-            static_assert(std::is_same_v<VT, bool> ||
-                              std::is_same_v<VT, std::string>,
+            static_assert(std::is_same_v<VT, std::string>,
                           "Unsupported type in ClientMetaData::Value");
-            if constexpr (std::is_same_v<VT, bool>) {
-              return item ? "true" : "false";
-            } else if constexpr (std::is_same_v<VT, std::string>) {
+            if constexpr (std::is_same_v<VT, std::string>) {
               return item;
             }
           },
@@ -109,7 +102,7 @@ struct ClientMetaData {
 
     if (attr == Attr::trash_dir || attr == Attr::login_dir ||
         attr == Attr::cwd ||
-        attr == Attr::cmd_prefix) {
+        attr == Attr::cmd_template) {
       if constexpr (std::is_assignable_v<T &, std::string>) {
         if (attr == Attr::trash_dir) {
           *out_value = trash_dir;
@@ -118,19 +111,11 @@ struct ClientMetaData {
         } else if (attr == Attr::cwd) {
           *out_value = cwd;
         } else {
-          *out_value = cmd_prefix;
+          *out_value = cmd_template;
         }
         return true;
       }
       return fail("type mismatch: expected std::string output type");
-    }
-
-    if (attr == Attr::wrap_cmd) {
-      if constexpr (std::is_same_v<T, bool>) {
-        *out_value = wrap_cmd;
-        return true;
-      }
-      return fail("type mismatch: expected bool output type for wrap_cmd");
     }
 
     return fail(AMStr::fmt("Unknown field attr: {}", static_cast<int>(attr)));

@@ -102,9 +102,8 @@ inline constexpr const char *kLoginDirKey = "login_dir";
 inline constexpr const char *kCwdKey = "cwd";
 inline constexpr const char *kKeyFileKey = "keyfile";
 inline constexpr const char *kCompressionKey = "compression";
-inline constexpr const char *kCmdPrefixKey = "cmd_prefix";
 inline constexpr const char *kCmdTemplateKey = "cmd_template";
-inline constexpr const char *kWrapCmdKey = "wrap_cmd";
+inline constexpr const char *kCmdPrefixKey = "cmd_prefix";
 inline constexpr int kDefaultSFTPPort = 22;
 inline constexpr int kDefaultFTPPort = 21;
 
@@ -133,11 +132,10 @@ bool DecodeHostConfig_(const std::string &nickname, const Json &json,
   has_cmd_template =
       AMJson::QueryKey(json, {kCmdTemplateKey}, &cmd_template);
   if (has_cmd_template) {
-    cfg.metadata.cmd_prefix = cmd_template;
+    cfg.metadata.cmd_template = cmd_template;
   } else {
-    (void)AMJson::QueryKey(json, {kCmdPrefixKey}, &cfg.metadata.cmd_prefix);
+    (void)AMJson::QueryKey(json, {kCmdPrefixKey}, &cfg.metadata.cmd_template);
   }
-  (void)AMJson::QueryKey(json, {kWrapCmdKey}, &cfg.metadata.wrap_cmd);
 
   std::string protocol_str = "sftp";
   (void)AMJson::QueryKey(json, {kProtocolKey}, &protocol_str);
@@ -182,8 +180,7 @@ Json EncodeHostConfig_(const AMDomain::host::HostConfig &cfg) {
   out[kCwdKey] = cfg.metadata.cwd;
   out[kKeyFileKey] = cfg.request.keyfile;
   out[kCompressionKey] = cfg.request.compression;
-  out[kCmdTemplateKey] = cfg.metadata.cmd_prefix;
-  out[kWrapCmdKey] = cfg.metadata.wrap_cmd;
+  out[kCmdTemplateKey] = cfg.metadata.cmd_template;
   return out;
 }
 

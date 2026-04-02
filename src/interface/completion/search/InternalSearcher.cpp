@@ -377,7 +377,7 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
   if (HasTarget(ctx, AMCompletionTarget::HostAttr)) {
     std::vector<std::string> fields = {
         "nickname", "hostname",    "username",    "port",       "protocol",
-        "password", "buffer_size", "compression", "cmd_prefix", "wrap_cmd",
+        "password", "buffer_size", "compression", "cmd_template",
         "keyfile",  "trash_dir",   "login_dir"};
     for (const auto &match : BuildGeneralMatch(fields, prefix)) {
       const std::string &field = fields[match.index];

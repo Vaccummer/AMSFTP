@@ -1,10 +1,8 @@
 #include "application/filesystem/FilesystemAppBaseService.hpp"
 #include "application/filesystem/FilesystemAppService.hpp"
 #include "domain/filesystem/FileSystemDomainService.hpp"
-#include "foundation/tools/enum_related.hpp"
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
-
 #include <stdexcept>
 
 namespace AMApplication::filesystem {
@@ -126,7 +124,8 @@ ECMData<std::vector<PathInfo>> FilesystemAppBaseService::BaseListdir(
   }
 
   std::vector<std::string> names = BuildBaseListNames(list_result.data.entries);
-  ECMData<std::vector<PathInfo>> out = {list_result.data.entries, list_result.rcm};
+  ECMData<std::vector<PathInfo>> out = {list_result.data.entries,
+                                        list_result.rcm};
   {
     auto cache_guard = base_io_cache_.listdir_cache.lock();
     cache_guard.get()[cache_key] = out;
@@ -195,7 +194,8 @@ ECMData<std::vector<std::string>> FilesystemAppBaseService::BaseListNames(
     return {{}, list_result.rcm};
   }
 
-  ECMData<std::vector<std::string>> out = {list_result.data.names, list_result.rcm};
+  ECMData<std::vector<std::string>> out = {list_result.data.names,
+                                           list_result.rcm};
   auto cache_guard = base_io_cache_.listnames_cache.lock();
   cache_guard.get()[cache_key] = out;
   return out;
@@ -279,7 +279,8 @@ void FilesystemAppBaseService::ClearBaseIOCacheByPath(
 
 ECM FilesystemAppBaseService::Init() {
   if (!host_service_ || !client_service_) {
-    return Err(EC::InvalidHandle, "", "", "filesystem app base service deps are null");
+    return Err(EC::InvalidHandle, "", "",
+               "filesystem app base service deps are null");
   }
   const FilesystemArg arg = init_arg_.lock().load();
   if (arg.max_cd_history <= 0) {
@@ -298,7 +299,8 @@ ECM FilesystemAppBaseService::FlushTo(
     return Err(EC::InvalidArg, "", "", "config service is null");
   }
   if (!config_service->Write<FilesystemArg>(GetInitArg())) {
-    return Err(EC::ConfigDumpFailed, "", "", "failed to flush filesystem config");
+    return Err(EC::ConfigDumpFailed, "", "",
+               "failed to flush filesystem config");
   }
   return OK;
 }
@@ -314,7 +316,8 @@ ECMData<ClientHandle> FilesystemAppBaseService::GetClient(
     const std::string &nickname,
     const AMDomain::client::ClientControlComponent &control) {
   if (!host_service_ || !client_service_) {
-    return {nullptr, Err(EC::InvalidHandle, "", "", "filesystem app base service deps are null")};
+    return {nullptr, Err(EC::InvalidHandle, "", "",
+                         "filesystem app base service deps are null")};
   }
 
   if (nickname.empty()) {
@@ -327,7 +330,8 @@ ECMData<ClientHandle> FilesystemAppBaseService::GetClient(
   }
 
   if (!host_service_->HostExists(nickname)) {
-    return {nullptr, Err(EC::HostConfigNotFound, "", "", AMStr::fmt("Host config not found: {}", nickname))};
+    return {nullptr, Err(EC::HostConfigNotFound, "", "",
+                         AMStr::fmt("Host config not found: {}", nickname))};
   }
   auto host_cfg = host_service_->GetClientConfig(nickname, true);
   if (!(host_cfg.rcm)) {
@@ -358,7 +362,8 @@ ECMData<ClientHandle> FilesystemAppBaseService::GetClient(
 ECMData<ClientHandle>
 FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
   if (!host_service_ || !client_service_) {
-    return {nullptr, Err(EC::InvalidHandle, "", "", "filesystem app base service deps are null")};
+    return {nullptr, Err(EC::InvalidHandle, "", "",
+                         "filesystem app base service deps are null")};
   }
 
   if (nickname.empty()) {
@@ -371,7 +376,8 @@ FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
   }
 
   if (!host_service_->HostExists(nickname)) {
-    return {nullptr, Err(EC::HostConfigNotFound, "", "", AMStr::fmt("Host config not found: {}", nickname))};
+    return {nullptr, Err(EC::HostConfigNotFound, "", "",
+                         AMStr::fmt("Host config not found: {}", nickname))};
   }
   auto host_cfg = host_service_->GetClientConfig(nickname, true);
   if (!(host_cfg.rcm)) {
@@ -393,6 +399,7 @@ FilesystemAppBaseService::GetTransferClient(const std::string &nickname) {
 
   const ECM add_rcm = client_service_->AddPublicClient(create_result.data);
   if (!(add_rcm)) {
+    (void)ClientAppService::TryReturnClient(create_result.data);
     return {nullptr, add_rcm};
   }
   return {create_result.data, OK};
@@ -403,7 +410,8 @@ FilesystemAppBaseService::ResolvePath(const PathTarget &target,
                                       const ClientControlComponent &control,
                                       ClientHandle preferred_client) {
   if (!client_service_) {
-    return {ResolvedPath{}, Err(EC::InvalidHandle, "", "", "client service is null")};
+    return {ResolvedPath{},
+            Err(EC::InvalidHandle, "", "", "client service is null")};
   }
 
   ResolvedPath out = {};
@@ -426,11 +434,10 @@ FilesystemAppBaseService::ResolvePath(const PathTarget &target,
       out.target.nickname = client_service_->CurrentNickname();
     }
     auto get_result = GetClient(out.target.nickname, control);
-    if (!(get_result.rcm) || !get_result.data) {
-      return {ResolvedPath{},
-              (get_result.rcm)
-                  ? Err(EC::InvalidHandle, "", "", "Resolved client is null")
-                  : get_result.rcm};
+    if (!get_result.rcm || !get_result.data) {
+      return {ResolvedPath{}, (get_result.rcm) ? Err(EC::InvalidHandle, "", "",
+                                                     "Resolved client is null")
+                                               : get_result.rcm};
     }
     out.client = get_result.data;
   }
@@ -462,8 +469,8 @@ std::vector<ECMData<ResolvedPath>> FilesystemAppBaseService::ResolvePath(
       continue;
     }
     if (control.IsTimeout()) {
-      out.emplace_back(ResolvedPath{},
-                       Err(EC::OperationTimeout, "", "", "Operation timed out"));
+      out.emplace_back(ResolvedPath{}, Err(EC::OperationTimeout, "", "",
+                                           "Operation timed out"));
       continue;
     }
     out.push_back(ResolvePath(target, control));
@@ -471,4 +478,3 @@ std::vector<ECMData<ResolvedPath>> FilesystemAppBaseService::ResolvePath(
   return out;
 }
 } // namespace AMApplication::filesystem
-
