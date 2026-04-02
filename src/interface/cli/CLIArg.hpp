@@ -547,6 +547,50 @@ struct CpArgs : BaseArgStruct {
 };
 
 /**
+ * @brief CLI argument container for clone (cp -c).
+ */
+struct CloneArgs : BaseArgStruct {
+  std::string src;
+  std::string dst;
+  bool overwrite = false;
+  bool resume = false;
+  bool quiet = false;
+  /**
+   * @brief Execute clone transfer.
+   */
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override;
+  /**
+   * @brief Reset clone arguments to defaults.
+   */
+  void reset() override;
+};
+
+/**
+ * @brief CLI argument container for wget (HTTP download).
+ */
+struct WgetArgs : BaseArgStruct {
+  std::string src;
+  std::string dst;
+  std::string bear_token;
+  std::string proxy;
+  std::string sproxy;
+  int timeout_ms = -1;
+  bool resume = false;
+  bool overwrite = false;
+  bool quiet = false;
+  /**
+   * @brief Execute wget transfer.
+   */
+  [[nodiscard]] ECM Run(const CLIServices &managers,
+                        const CliRunContext &ctx) const override;
+  /**
+   * @brief Reset wget arguments to defaults.
+   */
+  void reset() override;
+};
+
+/**
  * @brief CLI argument container for sftp.
  */
 struct SftpArgs : BaseArgStruct {
@@ -973,6 +1017,8 @@ struct CliArgsPool {
   std::shared_ptr<RttArgs> rtt = std::make_shared<RttArgs>();
   std::shared_ptr<ClearArgs> clear = std::make_shared<ClearArgs>();
   std::shared_ptr<CpArgs> cp = std::make_shared<CpArgs>();
+  std::shared_ptr<CloneArgs> clone = std::make_shared<CloneArgs>();
+  std::shared_ptr<WgetArgs> wget = std::make_shared<WgetArgs>();
   std::shared_ptr<SftpArgs> sftp = std::make_shared<SftpArgs>();
   std::shared_ptr<FtpArgs> ftp = std::make_shared<FtpArgs>();
   std::shared_ptr<ClientsArgs> clients = std::make_shared<ClientsArgs>();
@@ -1040,6 +1086,8 @@ struct CliCommands {
   CLI::App *rtt_cmd = nullptr;
   CLI::App *clear_cmd = nullptr;
   CLI::App *cp_cmd = nullptr;
+  CLI::App *clone_cmd = nullptr;
+  CLI::App *wget_cmd = nullptr;
   CLI::App *sftp_cmd = nullptr;
   CLI::App *ftp_cmd = nullptr;
   CLI::App *client_cmd = nullptr;

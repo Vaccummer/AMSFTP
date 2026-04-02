@@ -469,6 +469,61 @@ void BindFilesystemCommands(CommandNode *root, CliArgsPool &args,
     cp_node->AddPositionalRule(0, Sem::Path, true);
   }
 
+  CommandNode *clone_node = root->AddFunction(
+      "clone", "Clone one source to one destination (cp -c)", args,
+      &CliArgsPool::clone);
+  commands.clone_cmd = clone_node ? clone_node->app : nullptr;
+  if (commands.clone_cmd) {
+    commands.clone_cmd->add_option("src", args.clone->src, "Source path")
+        ->required()
+        ->expected(1, 1);
+    commands.clone_cmd->add_option("dst", args.clone->dst, "Destination path")
+        ->required()
+        ->expected(1, 1);
+  }
+  if (clone_node) {
+    clone_node->AddFlag("-f", "--force", args.clone->overwrite,
+                        "Overwrite existing targets");
+    clone_node->AddFlag("-r", "--resume", args.clone->resume,
+                        "Resume from existing destination file");
+    clone_node->AddFlag("-q", "--quiet", args.clone->quiet,
+                        "Suppress transfer output");
+    clone_node->AddPositionalRule(0, Sem::Path, false);
+    clone_node->AddPositionalRule(1, Sem::Path, false);
+  }
+
+  CommandNode *wget_node = root->AddFunction(
+      "wget", "Download one HTTP/HTTPS URL", args, &CliArgsPool::wget);
+  commands.wget_cmd = wget_node ? wget_node->app : nullptr;
+  if (commands.wget_cmd) {
+    commands.wget_cmd
+        ->add_option("src", args.wget->src, "Source URL (http/https)")
+        ->required()
+        ->expected(1, 1);
+    commands.wget_cmd
+        ->add_option("dst", args.wget->dst, "Destination path target")
+        ->expected(0, 1);
+  }
+  if (wget_node) {
+    wget_node->AddOption("-t", "--timeout", args.wget->timeout_ms, 1, 1,
+                         Sem::None,
+                         "Transfer timeout in milliseconds (<=0 means no "
+                         "timeout)");
+    wget_node->AddOption("-b", "--bear", args.wget->bear_token, 1, 1,
+                         Sem::None, "Bearer token");
+    wget_node->AddOption("-p", "--proxy", args.wget->proxy, 1, 1, Sem::None,
+                         "HTTP proxy");
+    wget_node->AddOption("-s", "--sproxy", args.wget->sproxy, 1, 1, Sem::None,
+                         "HTTPS proxy");
+    wget_node->AddFlag("-r", "--resume", args.wget->resume,
+                       "Resume from existing destination file when possible");
+    wget_node->AddFlag("-f", "--force", args.wget->overwrite,
+                       "Overwrite existing destination file");
+    wget_node->AddFlag("-q", "--quiet", args.wget->quiet,
+                       "Suppress transfer output");
+    wget_node->AddPositionalRule(1, Sem::Path, false);
+  }
+
   CommandNode *sftp_node = root->AddFunction("sftp", "Connect to SFTP host",
                                              args, &CliArgsPool::sftp);
   commands.sftp_cmd = sftp_node ? sftp_node->app : nullptr;
