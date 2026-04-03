@@ -5,6 +5,7 @@
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/string.hpp"
 #include "foundation/tools/time.hpp"
+#include "foundation/tools/url.hpp"
 #include "infrastructure/client/http/HTTP.hpp"
 #include "interface/style/StyleManager.hpp"
 
@@ -36,43 +37,6 @@ std::string NormalizePath_(const std::string &path) {
 std::string DisplayHost_(const std::string &nickname) {
   const std::string normalized = NormalizeNickname_(nickname);
   return normalized.empty() ? std::string("local") : normalized;
-}
-
-bool StartsWith_(const std::string &value, const std::string &prefix) {
-  return value.size() >= prefix.size() &&
-         std::equal(prefix.begin(), prefix.end(), value.begin());
-}
-
-bool IsHttpUrl_(const std::string &url) {
-  const std::string lower = AMStr::lowercase(AMStr::Strip(url));
-  return StartsWith_(lower, "http://") || StartsWith_(lower, "https://");
-}
-
-std::string UrlWithoutQueryFragment_(const std::string &url) {
-  const size_t query = url.find('?');
-  const size_t fragment = url.find('#');
-  size_t cut = std::string::npos;
-  if (query != std::string::npos) {
-    cut = query;
-  }
-  if (fragment != std::string::npos) {
-    cut = (cut == std::string::npos) ? fragment : std::min(cut, fragment);
-  }
-  return (cut == std::string::npos) ? url : url.substr(0, cut);
-}
-
-bool IsDirectoryUrl_(const std::string &url) {
-  const std::string clean = UrlWithoutQueryFragment_(AMStr::Strip(url));
-  return !clean.empty() && clean.back() == '/';
-}
-
-std::string UrlBasename_(const std::string &url) {
-  const std::string clean = UrlWithoutQueryFragment_(AMStr::Strip(url));
-  const size_t slash = clean.find_last_of('/');
-  if (slash == std::string::npos || slash + 1 >= clean.size()) {
-    return "";
-  }
-  return clean.substr(slash + 1);
 }
 
 std::string BuildTaskKey_(const TransferTask &task) {
@@ -135,7 +99,12 @@ BuildTransferProgressPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
   }
   const std::string src_host = DisplayHost_(cur_task->src_host);
   const std::string dst_host = DisplayHost_(cur_task->dst_host);
-  return AMStr::fmt("{}@{} -> {}@{}", src_host, AMPath::basename(cur_task->src),
+  const std::string src_name =
+      AMUrl::IsHttpUrl(cur_task->src)
+          ? (AMUrl::Basename(cur_task->src).empty() ? cur_task->src
+                                                    : AMUrl::Basename(cur_task->src))
+          : AMPath::basename(cur_task->src);
+  return AMStr::fmt("{}@{} -> {}@{}", src_host, src_name,
                     dst_host, AMPath::basename(cur_task->dst));
 }
 
@@ -782,6 +751,12 @@ ECM TransferInterfaceService::Transfer(
 ECM TransferInterfaceService::HttpGet(
     const HttpGetArg &arg,
     const std::optional<ClientControlComponent> &component) const {
+  const auto fail = [this](const ECM &rcm) -> ECM {
+    if (!(rcm)) {
+      prompt_io_manager_.ErrorFormat(rcm);
+    }
+    return rcm;
+  };
   const ClientControlComponent control =
       ResolveControl_(component, arg.timeout_ms);
   if (const auto &token = control.ControlToken(); token) {
@@ -789,43 +764,43 @@ ECM TransferInterfaceService::HttpGet(
   }
 
   const std::string src_url = AMStr::Strip(arg.src_url);
-  const std::string src_url_lower = AMStr::lowercase(src_url);
   if (src_url.empty()) {
-    return Err(EC::InvalidArg, "wget", "", "Source URL is empty");
+    return fail(Err(EC::InvalidArg, "wget", "", "Source URL is empty"));
   }
-  if (!IsHttpUrl_(src_url)) {
-    return Err(EC::InvalidArg, "wget", src_url,
-               "Only http:// and https:// are supported");
+  if (!AMUrl::IsHttpUrl(src_url)) {
+    return fail(Err(EC::InvalidArg, "wget", src_url,
+                    "Only http:// and https:// are supported"));
   }
-  if (IsDirectoryUrl_(src_url)) {
-    return Err(EC::NotAFile, "wget", src_url,
-               "HTTP directory URL is unsupported");
+  if (AMUrl::IsDirectoryUrl(src_url)) {
+    return fail(Err(EC::NotAFile, "wget", src_url,
+                    "HTTP directory URL is unsupported"));
   }
 
   const std::string suggested_name = [&]() -> std::string {
-    const std::string name = AMStr::Strip(UrlBasename_(src_url));
+    const std::string name = AMStr::Strip(AMUrl::Basename(src_url));
     return name.empty() ? std::string("download.bin") : name;
   }();
 
   auto plan_result = filesystem_service_.BuildHttpDownloadPlan(
       arg.dst_target, suggested_name, control);
   if (!(plan_result.rcm)) {
-    return plan_result.rcm;
+    return fail(plan_result.rcm);
   }
   const auto &plan = plan_result.data;
   if (!plan.resolved_target.client) {
-    return Err(EC::InvalidHandle, "wget", src_url, "Destination client is null");
+    return fail(
+        Err(EC::InvalidHandle, "wget", src_url, "Destination client is null"));
   }
   if (plan.final_target.is_wildcard) {
-    return Err(EC::InvalidArg, "wget", plan.final_target.path,
-               "Destination wildcard is invalid");
+    return fail(Err(EC::InvalidArg, "wget", plan.final_target.path,
+                    "Destination wildcard is invalid"));
   }
 
   const bool dst_exists = plan.dst_info.has_value();
   if (dst_exists && !arg.overwrite) {
     if (arg.confirm_policy == TransferConfirmPolicy::DenyIfConfirmNeeded) {
-      return Err(EC::ConfigCanceled, "wget", plan.final_target.path,
-                 "Overwrite requires confirmation but denied");
+      return fail(Err(EC::ConfigCanceled, "wget", plan.final_target.path,
+                      "Overwrite requires confirmation but denied"));
     }
     if (arg.confirm_policy == TransferConfirmPolicy::RequireConfirm) {
       bool canceled = false;
@@ -834,53 +809,99 @@ ECM TransferInterfaceService::HttpGet(
                      plan.final_target.path),
           &canceled);
       if (!confirmed || canceled) {
-        return Err(EC::ConfigCanceled, "wget", plan.final_target.path,
-                   "Overwrite canceled by user");
+        return fail(Err(EC::ConfigCanceled, "wget", plan.final_target.path,
+                        "Overwrite canceled by user"));
       }
     }
   }
 
   std::string effective_proxy = arg.proxy;
-  if (StartsWith_(src_url_lower, "https://") &&
+  if (AMUrl::IsHttpsUrl(src_url) &&
       !AMStr::Strip(arg.https_proxy).empty()) {
     effective_proxy = arg.https_proxy;
   }
+  int max_redirect = arg.redirect_times;
+  if (max_redirect < 0) {
+    max_redirect = filesystem_service_.GetInitArg().wget_max_redirect;
+  }
+  max_redirect = std::max(0, max_redirect);
+  std::string request_username = AMStr::Strip(arg.username);
+  if (request_username.empty()) {
+    request_username = AMUrl::ExtractUsername(src_url);
+  }
   auto [http_client_rcm, http_client] =
       AMInfra::client::HTTP::CreateTransientHttpSourceClient(
-          src_url, effective_proxy, arg.bear_token);
+          src_url, effective_proxy, arg.bear_token, request_username,
+          max_redirect);
   if (!(http_client_rcm) || !http_client) {
-    return http_client_rcm;
+    return fail(http_client_rcm);
   }
 
-  auto src_stat = http_client->IOPort().stat({src_url, false}, control);
+  auto *http_io =
+      dynamic_cast<AMInfra::client::HTTP::AMHTTPIOCore *>(&http_client->IOPort());
+  if (http_io == nullptr) {
+    return fail(Err(EC::InvalidHandle, "wget", src_url,
+                    "HTTP IO port implementation mismatch"));
+  }
+  auto redirect_result =
+      http_io->ResolveRedirectChain(src_url, max_redirect, control);
+  if (!redirect_result.rcm) {
+    return fail(redirect_result.rcm);
+  }
+  const std::string effective_src_url =
+      AMStr::Strip(redirect_result.data.final_url).empty()
+          ? src_url
+          : redirect_result.data.final_url;
+  bool metadata_updated = false;
+  http_client->MetaDataPort().MutateTypeValue<
+      AMInfra::client::HTTP::HttpRuntimeMetadata>(
+      [&effective_src_url, &metadata_updated](
+          AMInfra::client::HTTP::HttpRuntimeMetadata *meta) {
+        if (meta == nullptr) {
+          return;
+        }
+        meta->effective_url = effective_src_url;
+        metadata_updated = true;
+      });
+  if (!metadata_updated) {
+    (void)http_client->MetaDataPort().StoreTypedValue(
+        AMInfra::client::HTTP::HttpRuntimeMetadata{
+            true, src_url, effective_src_url, effective_proxy, max_redirect},
+        true);
+  }
+
+  auto src_stat = http_client->IOPort().stat({effective_src_url, false}, control);
   if (!(src_stat.rcm)) {
-    return src_stat.rcm;
+    return fail(src_stat.rcm);
   }
   if (src_stat.data.info.type != PathType::FILE) {
-    return Err(EC::NotAFile, "wget", src_url, "HTTP source is not a file");
+    return fail(Err(EC::NotAFile, "wget", effective_src_url,
+                    "HTTP source is not a file"));
   }
-  if (auto *http_io =
-          dynamic_cast<AMInfra::client::HTTP::AMHTTPIOCore *>(
-              &http_client->IOPort());
-      http_io != nullptr && !http_io->HasKnownSize()) {
-    return Err(EC::OperationUnsupported, "wget", src_url,
-               "HTTP source size is unknown; Content-Length is required");
+
+  if (src_stat.data.info.size == 0 &&
+      redirect_result.data.content_length.has_value() &&
+      *redirect_result.data.content_length > 0) {
+    src_stat.data.info.size =
+        static_cast<size_t>(*redirect_result.data.content_length);
   }
 
   size_t resume_offset = 0;
   if (arg.resume && dst_exists) {
     resume_offset = plan.dst_info->size;
-    if (src_stat.data.info.size > 0 && resume_offset >= src_stat.data.info.size) {
+    if (src_stat.data.info.size > 0 &&
+        resume_offset >= src_stat.data.info.size) {
       resume_offset = 0;
-    } else if (auto *http_io =
-                   dynamic_cast<AMInfra::client::HTTP::AMHTTPIOCore *>(
-                       &http_client->IOPort());
-               http_io != nullptr) {
-      if (!http_io->SupportsRange()) {
+    } else {
+      auto resume_probe =
+          http_io->ProbeResumeSupport(effective_src_url, resume_offset, control);
+      if (resume_probe.rcm.code == EC::Terminate ||
+          resume_probe.rcm.code == EC::OperationTimeout) {
+        return fail(resume_probe.rcm);
+      }
+      if (!(resume_probe.rcm) || !resume_probe.data) {
         resume_offset = 0;
       }
-    } else {
-      resume_offset = 0;
     }
   }
 
@@ -893,15 +914,15 @@ ECM TransferInterfaceService::HttpGet(
   }
   auto task_control_token = AMDomain::client::CreateClientControlToken();
   if (!task_control_token) {
-    return Err(EC::InvalidHandle, "wget", src_url,
-               "failed to create transfer task control token");
+    return fail(Err(EC::InvalidHandle, "wget", src_url,
+                    "failed to create transfer task control token"));
   }
   task_info->Core.control =
       ClientControlComponent(task_control_token, task_timeout_ms);
 
   AMDomain::transfer::TransferTask file_task = {};
-  file_task.src = src_url;
-  file_task.src_host = AMInfra::client::HTTP::kTransientSourceNickname;
+  file_task.src = effective_src_url;
+  file_task.src_host = http_client->ConfigPort().GetNickname();
   file_task.dst = plan.resolved_target.abs_path;
   file_task.dst_host = plan.resolved_target.target.nickname;
   file_task.size = src_stat.data.info.size;
@@ -921,13 +942,13 @@ ECM TransferInterfaceService::HttpGet(
       task_info->Core.clients.AddSrcClient(file_task.src_host, http_client);
   if (!(add_src_rcm)) {
     task_info->Core.clients.ReleaseAll();
-    return add_src_rcm;
+    return fail(add_src_rcm);
   }
   const ECM add_dst_rcm = task_info->Core.clients.AddDstClient(
       file_task.dst_host, plan.resolved_target.client);
   if (!(add_dst_rcm)) {
     task_info->Core.clients.ReleaseAll();
-    return add_dst_rcm;
+    return fail(add_dst_rcm);
   }
   task_info->Core.nicknames = {file_task.src_host, file_task.dst_host};
   task_info->CalTotalSize(true);
@@ -936,7 +957,7 @@ ECM TransferInterfaceService::HttpGet(
   const ECM submit_rcm = transfer_pool_.Submit(task_info);
   if (!(submit_rcm)) {
     task_info->Core.clients.ReleaseAll();
-    return submit_rcm;
+    return fail(submit_rcm);
   }
   if (arg.run_async) {
     prompt_io_manager_.FmtPrint("Submitted task {}", task_info->id);
