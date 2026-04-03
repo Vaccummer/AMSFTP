@@ -1,4 +1,4 @@
-#include "interface/parser/TokenAnalyzerRuntimeAdapter.hpp"
+#include "interface/token_analyser/TokenAnalyzerRuntimeAdapter.hpp"
 
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostModel.hpp"
@@ -126,128 +126,76 @@ std::string TokenAnalyzerRuntimeAdapter::FormatPath(
                                path_info);
 }
 
-std::string TokenAnalyzerRuntimeAdapter::ResolveSettingString(
-    const std::vector<std::string> &path,
-    const std::string &default_value) const {
+std::string TokenAnalyzerRuntimeAdapter::ResolveInputHighlightStyle(
+    AMTokenType type, const std::string &default_value) const {
   const auto style_cfg = style_service_.GetInitArg().style;
-  if (path.size() < 3 || path[0] != "Style") {
+  switch (type) {
+  case AMTokenType::Module:
+    return style_cfg.input_highlight.module;
+  case AMTokenType::Command:
+    return style_cfg.input_highlight.command;
+  case AMTokenType::VarName:
+    return style_cfg.input_highlight.public_varname;
+  case AMTokenType::VarNameMissing:
+    return style_cfg.input_highlight.nonexistent_varname;
+  case AMTokenType::VarValue:
+    return style_cfg.input_highlight.varvalue;
+  case AMTokenType::Nickname:
+    return style_cfg.input_highlight.nickname;
+  case AMTokenType::UnestablishedNickname:
+    return style_cfg.input_highlight.unestablished_nickname;
+  case AMTokenType::NonexistentNickname:
+    return style_cfg.input_highlight.nonexistent_nickname;
+  case AMTokenType::BuiltinArg:
+    return style_cfg.input_highlight.builtin_arg;
+  case AMTokenType::ValidValue:
+    return style_cfg.input_highlight.valid_new_nickname;
+  case AMTokenType::InvalidValue:
+    return style_cfg.input_highlight.invalid_new_nickname;
+  case AMTokenType::String:
+    return style_cfg.input_highlight.string;
+  case AMTokenType::Option:
+    return style_cfg.input_highlight.option;
+  case AMTokenType::AtSign:
+    return style_cfg.input_highlight.atsign;
+  case AMTokenType::DollarSign:
+    return style_cfg.input_highlight.dollarsign;
+  case AMTokenType::EqualSign:
+    return style_cfg.input_highlight.equalsign;
+  case AMTokenType::EscapeSign:
+    return style_cfg.input_highlight.escapedsign;
+  case AMTokenType::Path:
+    return style_cfg.input_highlight.path_like;
+  case AMTokenType::BangSign:
+    return style_cfg.input_highlight.bangsign;
+  case AMTokenType::ShellCmd:
+    return style_cfg.input_highlight.shell_cmd;
+  case AMTokenType::IllegalCommand:
+    return style_cfg.input_highlight.illegal_command;
+  case AMTokenType::Common:
+    return style_cfg.input_highlight.common;
+  default:
     return default_value;
   }
+}
 
-  const std::string &section = path[1];
-  const std::string &key = path[2];
-
-  if (section == "InputHighlight") {
-    if (key == "module") {
-      return style_cfg.input_highlight.module;
-    }
-    if (key == "command") {
-      return style_cfg.input_highlight.command;
-    }
-    if (key == "public_varname") {
-      return style_cfg.input_highlight.public_varname;
-    }
-    if (key == "nonexistent_varname") {
-      return style_cfg.input_highlight.nonexistent_varname;
-    }
-    if (key == "varvalue") {
-      return style_cfg.input_highlight.varvalue;
-    }
-    if (key == "nickname") {
-      return style_cfg.input_highlight.nickname;
-    }
-    if (key == "unestablished_nickname") {
-      return style_cfg.input_highlight.unestablished_nickname;
-    }
-    if (key == "nonexistent_nickname") {
-      return style_cfg.input_highlight.nonexistent_nickname;
-    }
-    if (key == "builtin_arg") {
-      return style_cfg.input_highlight.builtin_arg;
-    }
-    if (key == "valid_new_nickname") {
-      return style_cfg.input_highlight.valid_new_nickname;
-    }
-    if (key == "invalid_new_nickname") {
-      return style_cfg.input_highlight.invalid_new_nickname;
-    }
-    if (key == "string") {
-      return style_cfg.input_highlight.string;
-    }
-    if (key == "option") {
-      return style_cfg.input_highlight.option;
-    }
-    if (key == "atsign") {
-      return style_cfg.input_highlight.atsign;
-    }
-    if (key == "dollarsign") {
-      return style_cfg.input_highlight.dollarsign;
-    }
-    if (key == "leftbrace") {
-      return default_value;
-    }
-    if (key == "rightbrace") {
-      return default_value;
-    }
-    if (key == "colonsign") {
-      return default_value;
-    }
-    if (key == "equalsign") {
-      return style_cfg.input_highlight.equalsign;
-    }
-    if (key == "escapedsign") {
-      return style_cfg.input_highlight.escapedsign;
-    }
-    if (key == "path_like") {
-      return style_cfg.input_highlight.path_like;
-    }
-    if (key == "file" || key == "dir" || key == "symlink" ||
-        key == "special" || key == "nonexistentpath") {
-      return default_value;
-    }
-    if (key == "bangsign") {
-      return style_cfg.input_highlight.bangsign;
-    }
-    if (key == "shell_cmd") {
-      return style_cfg.input_highlight.shell_cmd;
-    }
-    if (key == "illegal_command") {
-      return style_cfg.input_highlight.illegal_command;
-    }
-    if (key == "common") {
-      return style_cfg.input_highlight.common;
-    }
+std::string TokenAnalyzerRuntimeAdapter::ResolvePathHighlightStyle(
+    AMTokenType type, const std::string &default_value) const {
+  const auto style_cfg = style_service_.GetInitArg().style;
+  switch (type) {
+  case AMTokenType::File:
+    return style_cfg.path.regular;
+  case AMTokenType::Dir:
+    return style_cfg.path.dir;
+  case AMTokenType::Symlink:
+    return style_cfg.path.symlink;
+  case AMTokenType::Special:
+    return style_cfg.path.otherspecial;
+  case AMTokenType::Nonexistentpath:
+    return style_cfg.path.nonexistent;
+  default:
     return default_value;
   }
-
-  if (section == "Path") {
-    if (key == "regular") {
-      return style_cfg.path.regular;
-    }
-    if (key == "dir") {
-      return style_cfg.path.dir;
-    }
-    if (key == "symlink") {
-      return style_cfg.path.symlink;
-    }
-    if (key == "otherspecial") {
-      return style_cfg.path.otherspecial;
-    }
-    if (key == "nonexistent") {
-      return style_cfg.path.nonexistent;
-    }
-    return default_value;
-  }
-
-  if (section == "shortcut") {
-    const auto it = style_cfg.cli_prompt.shortcut.find(key);
-    if (it != style_cfg.cli_prompt.shortcut.end()) {
-      return it->second;
-    }
-    return default_value;
-  }
-
-  return default_value;
 }
 
 } // namespace AMInterface::parser

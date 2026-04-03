@@ -5,7 +5,7 @@
 #include "application/prompt/PromptProfileManager.hpp"
 #include "application/var/VarAppService.hpp"
 #include "interface/adapters/var/VarInterfaceService.hpp"
-#include "interface/parser/TokenAnalyzerRuntime.hpp"
+#include "interface/token_analyser/TokenAnalyzerRuntime.hpp"
 #include "interface/style/StyleManager.hpp"
 
 namespace AMInterface::parser {
@@ -48,8 +48,11 @@ public:
   FormatPath(const std::string &segment,
              const PathInfo *path_info) const override;
   [[nodiscard]] std::string
-  ResolveSettingString(const std::vector<std::string> &path,
-                       const std::string &default_value) const override;
+  ResolveInputHighlightStyle(AMTokenType type,
+                             const std::string &default_value) const override;
+  [[nodiscard]] std::string
+  ResolvePathHighlightStyle(AMTokenType type,
+                            const std::string &default_value) const override;
 
 private:
   AMApplication::client::ClientAppService &client_service_;
@@ -61,3 +64,4 @@ private:
 };
 
 } // namespace AMInterface::parser
+

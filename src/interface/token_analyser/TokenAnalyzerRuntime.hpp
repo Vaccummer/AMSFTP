@@ -42,8 +42,11 @@ public:
   [[nodiscard]] virtual std::string
   FormatPath(const std::string &segment, const PathInfo *path_info) const = 0;
   [[nodiscard]] virtual std::string
-  ResolveSettingString(const std::vector<std::string> &path,
-                       const std::string &default_value) const = 0;
+  ResolveInputHighlightStyle(AMTokenType type,
+                             const std::string &default_value) const = 0;
+  [[nodiscard]] virtual std::string
+  ResolvePathHighlightStyle(AMTokenType type,
+                            const std::string &default_value) const = 0;
 };
 
 } // namespace AMInterface::parser

@@ -1,7 +1,7 @@
 #include "interface/parser/CommandPreprocess.hpp"
 #include "foundation/tools/string.hpp"
 #include "interface/adapters/var/VarInterfaceService.hpp"
-#include "interface/parser/TokenTypeAnalyzer.hpp"
+#include "interface/token_analyser/TokenTypeAnalyzer.hpp"
 
 using EC = ErrorCode;
 
@@ -154,3 +154,4 @@ AMInputPreprocess::ResolveStringMeta(const std::string &input) {
 }
 
 } // namespace AMInterface::parser
+
