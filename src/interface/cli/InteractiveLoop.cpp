@@ -5,11 +5,11 @@
 #include "foundation/tools/time.hpp"
 #include "interface/cli/CLIBind.hpp"
 #include "interface/completion/CompletionRuntimeAdapter.hpp"
-#include "interface/completion/Proxy.hpp"
+#include "interface/completion/Engine.hpp"
 #include "interface/parser/CommandPreprocess.hpp"
-#include "interface/parser/TokenAnalyzerRuntimeAdapter.hpp"
+#include "interface/token_analyser/TokenAnalyzerRuntimeAdapter.hpp"
 #include "interface/parser/CommandTree.hpp"
-#include "interface/parser/TokenTypeAnalyzer.hpp"
+#include "interface/token_analyser/TokenTypeAnalyzer.hpp"
 #include "interface/prompt/CLICorePrompt.hpp"
 #include <algorithm>
 #include <chrono>
@@ -338,10 +338,11 @@ int RunInteractiveLoop(CLI::App &app, const CliCommands &cli_commands,
   AMInterface::parser::AMInputPreprocess input_preprocess(
       managers.var_interface_service.Get(), token_type_analyzer);
 
-  AMCompleter completer{&command_tree, &token_type_analyzer,
-                        completion_runtime,
-                        &managers.interactive_event_registry};
-  completer.Install();
+  AMInterface::completer::AMCompleteEngine completion_engine{
+      &command_tree, &token_type_analyzer, completion_runtime,
+      &managers.interactive_event_registry};
+  completion_engine.LoadConfig();
+  completion_engine.Install();
 
   AMInterface::prompt::CLIPromtRender core_prompt(managers.style_service.Get());
   RegisterPromptGetters_(core_prompt, managers);

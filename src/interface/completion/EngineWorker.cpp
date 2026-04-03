@@ -1,39 +1,28 @@
-#include "interface/parser/CommandTree.hpp"
-#include "interface/completion/Engine.hpp"
-#include "interface/parser/TokenTypeAnalyzer.hpp"
-#include "domain/var/VarDomainService.hpp"
 #include "Isocline/isocline.h"
+#include "domain/var/VarDomainService.hpp"
+#include "interface/completion/CompletionRuntime.hpp"
+#include "interface/completion/Engine.hpp"
+#include "interface/parser/CommandTree.hpp"
+#include "interface/token_analyser/TokenTypeAnalyzer.hpp"
+#include "interface/token_analyser/shared/InputTextRules.hpp"
 #include <algorithm>
 #include <cctype>
 #include <iterator>
+#include <limits>
+#include <unordered_map>
 #include <unordered_set>
 
 using AMInterface::parser::AMCommandArgSemantic;
 using AMInterface::parser::CommandNode;
 using AMInterface::parser::TokenTypeAnalyzer;
 
+namespace AMInterface::completer {
 namespace {
 /**
  * @brief Unescape backtick-escaped sequences.
  */
 std::string UnescapeBackticks_(const std::string &text) {
-  if (text.empty()) {
-    return text;
-  }
-  std::string out;
-  out.reserve(text.size());
-  for (size_t i = 0; i < text.size(); ++i) {
-    if (text[i] == '`' && i + 1 < text.size()) {
-      const char next = text[i + 1];
-      if (next == '$' || next == '"' || next == '\'' || next == '`') {
-        out.push_back(next);
-        ++i;
-        continue;
-      }
-    }
-    out.push_back(text[i]);
-  }
-  return out;
+  return AMInterface::parser::shared::UnescapeBackticks(text, false);
 }
 
 /**
@@ -206,8 +195,8 @@ bool ParseLeadingVarRef_(const std::string &text, size_t *out_end,
   }
   size_t parsed_end = 0;
   AMDomain::var::VarRef ref{};
-  if (!AMDomain::var::ParseVarRefAt(text, 0, text.size(), true, true, &parsed_end,
-                               &ref) ||
+  if (!AMDomain::var::ParseVarRefAt(text, 0, text.size(), true, true,
+                                    &parsed_end, &ref) ||
       !ref.valid) {
     return false;
   }
@@ -245,18 +234,7 @@ enum class VarShortcutMode { None, Query, Define };
  * @brief Return true if text looks like path input.
  */
 bool IsPathLikeText_(const std::string &text) {
-  if (text.empty()) {
-    return false;
-  }
-  if (text[0] == '/' || text[0] == '\\' || text[0] == '~') {
-    return true;
-  }
-  if (text.size() >= 2 && std::isalpha(static_cast<unsigned char>(text[0])) &&
-      text[1] == ':') {
-    return true;
-  }
-  return text.find('/') != std::string::npos ||
-         text.find('\\') != std::string::npos;
+  return AMInterface::parser::shared::IsPathLikeText(text, false);
 }
 
 /**
@@ -591,9 +569,7 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   ctx.input = request.input;
   ctx.cursor = request.cursor;
   ctx.request_id = request.request_id;
-  ctx.source = (request.source == AMCompletionSource::Unknown)
-                   ? AMCompletionSource::Tab
-                   : request.source;
+  ctx.mode = request.mode;
   ctx.command_tree = command_tree;
   ctx.completion_args = &args_;
 
@@ -921,6 +897,117 @@ AMCompleteEngine::BuildContext_(const AMCompletionRequest &request) const {
   return ctx;
 }
 
+AMCompleteEngine::CompletionModePolicy
+AMCompleteEngine::ResolveModePolicy_(const AMCompletionContext &ctx,
+                                     AMCompletionTarget target) const {
+  CompletionModePolicy out = {};
+  out.enabled = true;
+  out.use_async = false;
+  out.timeout_ms = 0;
+  out.search_delay_ms =
+      (ctx.mode == AMCompletionMode::Complete) ? args_.complete_delay_ms : 0;
+
+  if (!runtime_) {
+    return out;
+  }
+
+  const auto options =
+      runtime_->ResolvePromptPathOptions(ResolvePolicyNickname_(ctx));
+  const auto &mode = (ctx.mode == AMCompletionMode::InlineHint)
+                         ? options.inline_hint
+                         : options.complete;
+  out.enabled = mode.enable;
+  out.use_async = mode.use_async;
+  if (mode.timeout_ms == 0) {
+    out.timeout_ms = 0;
+  } else if (mode.timeout_ms >
+             static_cast<size_t>(std::numeric_limits<int>::max())) {
+    out.timeout_ms = std::numeric_limits<int>::max();
+  } else {
+    out.timeout_ms = static_cast<int>(mode.timeout_ms);
+  }
+  if (ctx.mode == AMCompletionMode::InlineHint) {
+    out.search_delay_ms = std::max(0, mode.delay_ms);
+  } else if (mode.delay_ms > 0) {
+    out.search_delay_ms = mode.delay_ms;
+  }
+  if (target != AMCompletionTarget::Path) {
+    out.use_async = false;
+    out.timeout_ms = 0;
+  }
+  return out;
+}
+
+std::string
+AMCompleteEngine::ResolvePolicyNickname_(const AMCompletionContext &ctx) const {
+  const size_t at_pos = ctx.token_prefix.find('@');
+  if (at_pos != std::string::npos) {
+    if (at_pos == 0) {
+      return "local";
+    }
+    std::string inline_nickname =
+        AMStr::Strip(ctx.token_prefix.substr(0, at_pos));
+    if (!inline_nickname.empty()) {
+      return inline_nickname;
+    }
+  }
+  if (!runtime_) {
+    return "local";
+  }
+  auto current = runtime_->CurrentClient();
+  if (!current) {
+    return "local";
+  }
+  std::string nickname = AMStr::Strip(current->ConfigPort().GetNickname());
+  if (nickname.empty()) {
+    nickname = "local";
+  }
+  return nickname;
+}
+
+void AMCompleteEngine::FinalizeCandidates_(const AMCompletionContext &ctx,
+                                           AMCompletionCandidates *out) const {
+  if (!out || out->items.empty()) {
+    return;
+  }
+
+  auto &items = out->items;
+  std::stable_sort(
+      items.begin(), items.end(), [](const auto &lhs, const auto &rhs) {
+        if (lhs.score != rhs.score) {
+          return lhs.score < rhs.score;
+        }
+        if (lhs.kind != rhs.kind) {
+          return static_cast<int>(lhs.kind) < static_cast<int>(rhs.kind);
+        }
+        if (lhs.insert_text != rhs.insert_text) {
+          return lhs.insert_text < rhs.insert_text;
+        }
+        if (lhs.display != rhs.display) {
+          return lhs.display < rhs.display;
+        }
+        return lhs.help < rhs.help;
+      });
+
+  std::unordered_set<std::string> seen;
+  std::vector<AMCompletionCandidate> deduped;
+  deduped.reserve(items.size());
+  for (auto &item : items) {
+    const std::string key =
+        AMStr::fmt("{}|{}|{}|{}", static_cast<int>(item.kind), item.insert_text,
+                   item.display, item.help);
+    if (!seen.insert(key).second) {
+      continue;
+    }
+    deduped.push_back(std::move(item));
+  }
+  items = std::move(deduped);
+
+  if (ctx.mode == AMCompletionMode::InlineHint && items.size() != 1) {
+    items.clear();
+  }
+}
+
 /**
  * @brief Dispatch completion requests to registered search engines.
  */
@@ -929,74 +1016,99 @@ void AMCompleteEngine::DispatchCandidates_(const AMCompletionContext &ctx,
   if (ctx.targets.empty()) {
     return;
   }
-  for (const auto &target : ctx.targets) {
+  for (auto target : ctx.targets) {
     if (target == AMCompletionTarget::Disabled) {
       return;
     }
   }
-  ConsumeAsyncResults_(ctx, out);
-  if (!out.items.empty()) {
-    return;
-  }
-  const bool force_sync = (ctx.source == AMCompletionSource::InlineHint);
 
-  std::unordered_set<const AMCompletionSearchEngine *> used_engines;
-  for (const auto &target : ctx.targets) {
+  ConsumeAsyncResults_(ctx, out);
+
+  std::vector<std::pair<std::shared_ptr<AMCompletionSearchEngine>,
+                        std::vector<AMCompletionTarget>>>
+      grouped_engines;
+  std::unordered_map<const AMCompletionSearchEngine *, size_t> grouped_index;
+  for (auto target : ctx.targets) {
     auto engine = ResolveSearchEngine_(target);
     if (!engine) {
       continue;
     }
-    if (!used_engines.insert(engine.get()).second) {
+    auto it = grouped_index.find(engine.get());
+    if (it == grouped_index.end()) {
+      grouped_index[engine.get()] = grouped_engines.size();
+      grouped_engines.push_back({engine, {target}});
+      continue;
+    }
+    grouped_engines[it->second].second.push_back(target);
+  }
+
+  bool scheduled_async = false;
+  for (auto &entry : grouped_engines) {
+    auto engine = entry.first;
+    auto targets = entry.second;
+    if (!engine || targets.empty()) {
       continue;
     }
 
     AMCompletionContext scoped = ctx;
-    scoped.targets.clear();
-    scoped.targets.push_back(target);
-    if ((target == AMCompletionTarget::ClientName ||
-         target == AMCompletionTarget::HostNickname) &&
-        ContextHasTarget_(ctx, AMCompletionTarget::Path)) {
+    scoped.targets = std::move(targets);
+    if ((ContextHasTarget_(scoped, AMCompletionTarget::ClientName) ||
+         ContextHasTarget_(scoped, AMCompletionTarget::HostNickname)) &&
+        ContextHasTarget_(ctx, AMCompletionTarget::Path) &&
+        !ContextHasTarget_(scoped, AMCompletionTarget::Path)) {
       scoped.targets.push_back(AMCompletionTarget::Path);
     }
 
-    AMCompletionCollectResult collected = engine->CollectCandidates(scoped);
-    if (!collected.candidates.items.empty()) {
-      out.items.insert(
-          out.items.end(),
-          std::make_move_iterator(collected.candidates.items.begin()),
-          std::make_move_iterator(collected.candidates.items.end()));
-      out.from_cache = collected.candidates.from_cache;
-      ConsumeAsyncResults_(scoped, out);
-      return;
+    const CompletionModePolicy policy =
+        ResolveModePolicy_(ctx, scoped.targets.front());
+    if (ctx.mode == AMCompletionMode::InlineHint && !policy.enabled) {
+      continue;
+    }
+    scoped.timeout_ms = policy.timeout_ms;
+    scoped.search_delay_ms = policy.search_delay_ms;
+
+    if (policy.use_async) {
+      auto cancel_flag = AMDomain::client::CreateClientControlToken();
+      scoped.control_token = cancel_flag;
+      scoped.async_search = true;
+      AMCompletionAsyncJob job;
+      job.request_id = ctx.request_id;
+      job.mode = ctx.mode;
+      job.target = scoped.targets.front();
+      job.context = std::move(scoped);
+      job.source_engine = engine;
+      job.interrupt_flag = [flag = cancel_flag]() {
+        return !flag || flag->IsInterrupted();
+      };
+      job.interrupt_cancel = [flag = cancel_flag]() {
+        if (flag) {
+          flag->RequestInterrupt();
+        }
+      };
+      ScheduleAsyncJob_(std::move(job));
+      scheduled_async = true;
+      continue;
     }
 
-    if (collected.async_request.has_value()) {
-      AMCompletionAsyncRequest request = std::move(*collected.async_request);
-      request.request_id = ctx.request_id;
-      request.source_engine = engine;
-      if (request.target == AMCompletionTarget::Disabled) {
-        request.target = target;
-      }
-      if (request.target == AMCompletionTarget::Disabled || !request.search) {
-        continue;
-      }
-      if (force_sync) {
-        AMCompletionAsyncResult sync_result;
-        sync_result.request_id = request.request_id;
-        sync_result.target = request.target;
-        sync_result.source_engine = engine;
-        if (request.Search(&sync_result) && !sync_result.candidates.empty()) {
-          out.items.insert(
-              out.items.end(),
-              std::make_move_iterator(sync_result.candidates.begin()),
-              std::make_move_iterator(sync_result.candidates.end()));
-          return;
-        }
-        continue;
-      }
-      ScheduleAsyncRequest_(std::move(request));
-      return;
+    scoped.control_token = nullptr;
+    scoped.async_search = false;
+    AMCompletionCandidates collected = engine->CollectCandidates(scoped);
+    if (!collected.items.empty()) {
+      engine->SortCandidates(scoped, collected.items);
+      out.from_cache = out.from_cache || collected.from_cache;
+      out.items.insert(out.items.end(),
+                       std::make_move_iterator(collected.items.begin()),
+                       std::make_move_iterator(collected.items.end()));
     }
+  }
+
+  if (!out.items.empty()) {
+    FinalizeCandidates_(ctx, &out);
+    return;
+  }
+
+  if (!scheduled_async) {
+    return;
   }
 }
 
@@ -1031,4 +1143,4 @@ void AMCompleteEngine::EmitCandidates_(ic_completion_env_t *cenv,
   }
 }
 
-
+} // namespace AMInterface::completer

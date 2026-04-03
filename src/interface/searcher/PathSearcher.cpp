@@ -1,20 +1,21 @@
 #include "domain/client/ClientPort.hpp"
 #include "foundation/tools/string.hpp"
-#include "foundation/tools/time.hpp"
 #include "interface/cli/InteractiveEventRegistry.hpp"
 #include "interface/completion/CompletionRuntime.hpp"
-#include "interface/completion/Searcher.hpp"
-#include "interface/completion/SearcherCommon.hpp"
+#include "interface/searcher/Searcher.hpp"
+#include "interface/searcher/SearcherCommon.hpp"
 #include <algorithm>
 
-using namespace AMSearcherDetail;
+using namespace AMInterface::searcher::detail;
+
+namespace AMInterface::searcher {
 
 /**
- * @brief Collect path candidates or async path requests.
+ * @brief Collect path candidates.
  */
-AMCompletionCollectResult
+AMCompletionCandidates
 AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
-  AMCompletionCollectResult result;
+  AMCompletionCandidates result;
   const auto *runtime = runtime_.get();
   if (!runtime) {
     return result;
@@ -35,103 +36,39 @@ AMPathSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
     return result;
   }
 
-  const auto profile = runtime->ResolvePromptPathOptions(path.nickname);
-  const bool hint_request = (ctx.source == AMCompletionSource::InlineHint);
-  if (hint_request && !profile.inline_hint_enable) {
-    return result;
-  }
-  const size_t configured_timeout = hint_request
-                                        ? profile.inline_hint_timeout_ms
-                                        : profile.complete_timeout_ms;
-  const int timeout_ms = ToClientTimeoutMs(configured_timeout, 0);
-  const bool use_async = hint_request ? false : profile.complete_use_async;
+  const int timeout_ms = ToClientTimeoutMs(
+      ctx.timeout_ms > 0 ? static_cast<size_t>(ctx.timeout_ms) : 0, 0);
 
   CacheKey key{path.nickname, path.dir_abs};
   std::vector<PathInfo> listed;
   if (LookupTempCache_(key, &listed)) {
-    AppendPathCandidates_(path, listed, &result.candidates.items);
-    if (!result.candidates.items.empty()) {
-      SortCandidates(ctx, result.candidates.items);
-      result.candidates.from_cache = true;
+    AppendPathCandidates_(path, listed, &result.items);
+    if (!result.items.empty()) {
+      SortCandidates(ctx, result.items);
+      result.from_cache = true;
       return result;
     }
   }
 
-  if (!use_async) {
-    AMDomain::client::ClientHandle client =
-        path.remote ? runtime->GetClient(path.nickname)
-                    : runtime->LocalClient();
-    if (!client) {
-      return result;
-    }
-    auto list_result = client->IOPort().listdir(
-        {path.dir_abs},
-        AMDomain::client::ClientControlComponent(nullptr, timeout_ms));
-    if (list_result.rcm.code != EC::Success) {
-      return result;
-    }
-
-    StoreTempCache_(key, list_result.data.entries);
-    AppendPathCandidates_(path, list_result.data.entries, &result.candidates.items);
-    if (!result.candidates.items.empty()) {
-      SortCandidates(ctx, result.candidates.items);
-    }
+  AMDomain::client::ClientHandle client =
+      path.remote ? runtime->GetClient(path.nickname) : runtime->LocalClient();
+  if (!client) {
     return result;
   }
 
-  AMCompletionAsyncRequest request;
-  request.request_id = ctx.request_id;
-  request.timeout_ms = timeout_ms;
-  request.target = AMCompletionTarget::Path;
-  auto interrupt_flag = AMDomain::client::CreateClientControlToken();
-  request.interrupt_flag = [flag = interrupt_flag]() {
-    return !flag || flag->IsInterrupted();
-  };
-  request.interrupt_cancel = [flag = interrupt_flag]() {
-    if (flag) {
-      flag->RequestInterrupt();
-    }
-  };
+  auto list_result =
+      client->IOPort().listdir({path.dir_abs},
+                               AMDomain::client::ClientControlComponent(
+                                   ctx.control_token, timeout_ms));
+  if (list_result.rcm.code != EC::Success) {
+    return result;
+  }
 
-  request.search = [this, runtime, path, key,
-                    interrupt_flag](const AMCompletionAsyncRequest &request,
-                                    AMCompletionAsyncResult *out) -> bool {
-    if (request.IsInterrupted()) {
-      return false;
-    }
-
-    AMDomain::client::ClientHandle client =
-        path.remote ? runtime->GetClient(path.nickname)
-                    : runtime->LocalClient();
-    if (!client) {
-      return false;
-    }
-
-    const int timeout = request.timeout_ms > 0 ? request.timeout_ms : 5000;
-    auto list_result = client->IOPort().listdir(
-        {path.dir_abs},
-        AMDomain::client::ClientControlComponent(interrupt_flag, timeout));
-    if (list_result.rcm.code != EC::Success || request.IsInterrupted()) {
-      return false;
-    }
-
-    StoreTempCache_(key, list_result.data.entries);
-
-    std::vector<AMCompletionCandidate> candidates;
-    AppendPathCandidates_(path, list_result.data.entries, &candidates);
-    if (!candidates.empty()) {
-      SortCandidates(AMCompletionContext{}, candidates);
-    }
-
-    if (out) {
-      out->request_id = request.request_id;
-      out->target = request.target;
-      out->candidates = std::move(candidates);
-    }
-    return true;
-  };
-
-  result.async_request = std::move(request);
+  StoreTempCache_(key, list_result.data.entries);
+  AppendPathCandidates_(path, list_result.data.entries, &result.items);
+  if (!result.items.empty()) {
+    SortCandidates(ctx, result.items);
+  }
   return result;
 }
 
@@ -500,28 +437,33 @@ void AMPathSearchEngine::StoreTempCache_(const CacheKey &key,
   temp_cache_[key.nickname][key.dir] = TempCacheEntry{items};
 }
 
+} // namespace AMInterface::searcher
+
+namespace AMInterface::completer {
 std::vector<AMSearchEngineRegistration> AMBuildDefaultSearchEngineRegistrations(
     std::shared_ptr<AMInterface::completion::ICompletionRuntime> runtime,
     AMInterface::cli::AMInteractiveEventRegistry *interactive_event_registry) {
   std::vector<AMSearchEngineRegistration> out;
 
-  auto command_engine = std::make_shared<AMCommandSearchEngine>();
+  auto command_engine = std::make_shared<AMInterface::searcher::AMCommandSearchEngine>();
   out.push_back(
       {{AMCompletionTarget::TopCommand, AMCompletionTarget::Subcommand,
         AMCompletionTarget::LongOption, AMCompletionTarget::ShortOption},
        command_engine});
 
-  auto internal_engine = std::make_shared<AMInternalSearchEngine>(runtime);
+  auto internal_engine =
+      std::make_shared<AMInterface::searcher::AMInternalSearchEngine>(runtime);
   out.push_back(
       {{AMCompletionTarget::VariableName, AMCompletionTarget::ClientName,
         AMCompletionTarget::HostNickname, AMCompletionTarget::HostAttr,
         AMCompletionTarget::TaskId, AMCompletionTarget::VarZone},
        internal_engine});
 
-  auto path_engine = std::make_shared<AMPathSearchEngine>(runtime);
+  auto path_engine = std::make_shared<AMInterface::searcher::AMPathSearchEngine>(runtime);
   path_engine->SetInteractiveEventRegistry(interactive_event_registry);
   path_engine->RegisterCacheClearOnCorePromptReturn();
   out.push_back({{AMCompletionTarget::Path}, path_engine});
   return out;
 }
 
+} // namespace AMInterface::completer

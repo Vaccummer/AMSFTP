@@ -6,9 +6,11 @@
 #include <cctype>
 #include <limits>
 
-namespace AMSearcherDetail {
+namespace AMInterface::searcher::detail {
 using AMInterface::parser::AMCommandArgSemantic;
 using AMInterface::parser::CommandNode;
+using AMInterface::completer::AMCompletionContext;
+using AMInterface::completer::AMCompletionTarget;
 
 /**
  * @brief Match result entry containing source index and score bias.
@@ -413,4 +415,4 @@ inline bool IsPathSemanticState(const AMCompletionContext &ctx,
   return semantic.has_value() && IsPathSemantic(*semantic);
 }
 
-} // namespace AMSearcherDetail
+} // namespace AMInterface::searcher::detail

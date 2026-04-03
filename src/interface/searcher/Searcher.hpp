@@ -15,6 +15,15 @@ class AMInteractiveEventRegistry;
 namespace AMInterface::completion {
 class ICompletionRuntime;
 }
+namespace AMInterface::searcher {
+using AMInterface::completer::AMCompletionArgs;
+using AMInterface::completer::AMCompletionCandidate;
+using AMInterface::completer::AMCompletionCandidates;
+using AMInterface::completer::AMCompletionContext;
+using AMInterface::completer::AMCompletionKind;
+using AMInterface::completer::AMCompletionSearchEngine;
+using AMInterface::completer::AMCompletionTarget;
+using AMInterface::completer::AMSearchEngineRegistration;
 
 /**
  * @brief Command and option completion search engine.
@@ -28,7 +37,7 @@ public:
   /**
    * @brief Collect command-related candidates.
    */
-  AMCompletionCollectResult
+  AMCompletionCandidates
   CollectCandidates(const AMCompletionContext &ctx) override;
 
   /**
@@ -73,7 +82,7 @@ public:
   /**
    * @brief Collect internal-value candidates.
    */
-  AMCompletionCollectResult
+  AMCompletionCandidates
   CollectCandidates(const AMCompletionContext &ctx) override;
 
   /**
@@ -101,9 +110,9 @@ public:
       : runtime_(std::move(runtime)) {}
 
   /**
-   * @brief Collect path candidates or async path requests.
+   * @brief Collect path candidates.
    */
-  AMCompletionCollectResult
+  AMCompletionCandidates
   CollectCandidates(const AMCompletionContext &ctx) override;
 
   /**
@@ -265,3 +274,5 @@ private:
   std::function<void()> temp_cache_clear_callback_;
   bool temp_cache_hook_registered_ = false;
 };
+
+} // namespace AMInterface::searcher

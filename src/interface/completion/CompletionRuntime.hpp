@@ -1,6 +1,7 @@
 #pragma once
 
 #include "domain/client/ClientPort.hpp"
+#include "domain/transfer/TransferDomainModel.hpp"
 #include "domain/var/VarModel.hpp"
 #include "interface/style/StyleIndex.hpp"
 #include <cstddef>
@@ -9,19 +10,25 @@
 #include <vector>
 
 namespace AMInterface::completion {
-
+using TASKID = AMDomain::transfer::TaskInfo::ID;
 class ICompletionRuntime {
 public:
+  struct ModePolicy {
+    bool enable = true;
+    bool use_async = false;
+    size_t timeout_ms = 0;
+    int delay_ms = 0;
+  };
+
   struct PromptPathOptions {
-    bool inline_hint_enable = true;
-    size_t inline_hint_timeout_ms = 600;
-    bool complete_use_async = false;
-    size_t complete_timeout_ms = 3000;
+    ModePolicy complete = {};
+    ModePolicy inline_hint = {};
   };
 
   virtual ~ICompletionRuntime() = default;
 
-  [[nodiscard]] virtual AMDomain::client::ClientHandle CurrentClient() const = 0;
+  [[nodiscard]] virtual AMDomain::client::ClientHandle
+  CurrentClient() const = 0;
   [[nodiscard]] virtual AMDomain::client::ClientHandle LocalClient() const = 0;
   [[nodiscard]] virtual AMDomain::client::ClientHandle
   GetClient(const std::string &nickname) const = 0;
@@ -36,7 +43,7 @@ public:
   [[nodiscard]] virtual std::vector<AMDomain::var::VarInfo>
   ListVarsByDomain(const std::string &domain) const = 0;
 
-  [[nodiscard]] virtual std::vector<std::string> ListTaskIds() const = 0;
+  [[nodiscard]] virtual std::vector<TASKID> ListTaskIds() const = 0;
 
   [[nodiscard]] virtual PromptPathOptions
   ResolvePromptPathOptions(const std::string &nickname) const = 0;

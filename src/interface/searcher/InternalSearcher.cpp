@@ -1,15 +1,16 @@
 #include "domain/var/VarDomainService.hpp"
 #include "interface/completion/CompletionRuntime.hpp"
-#include "interface/completion/Searcher.hpp"
-#include "interface/completion/SearcherCommon.hpp"
+#include "interface/searcher/Searcher.hpp"
+#include "interface/searcher/SearcherCommon.hpp"
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 
-using namespace AMSearcherDetail;
+using namespace AMInterface::searcher::detail;
 
 using AMDomain::var::VarInfo;
 
+namespace AMInterface::searcher {
 namespace {
 using TASKID = AMDomain::transfer::TaskInfo::ID;
 enum class VarZonePrefixMode {
@@ -155,9 +156,9 @@ ZoneStyleKey_(const std::string &zone, bool domain_exists, bool host_exists) {
 /**
  * @brief Collect internal-value candidates.
  */
-AMCompletionCollectResult
+AMCompletionCandidates
 AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
-  AMCompletionCollectResult result;
+  AMCompletionCandidates result;
   const auto *runtime = runtime_.get();
   if (!runtime) {
     return result;
@@ -215,10 +216,10 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
           AMStr::fmt("[{}] {}", item.domain, RenderVarValue_(item.varvalue));
       candidate.kind = AMCompletionKind::VariableName;
       candidate.score = match.score_bias;
-      result.candidates.items.push_back(std::move(candidate));
+      result.items.push_back(std::move(candidate));
     }
-    if (!result.candidates.items.empty()) {
-      SortCandidates(ctx, result.candidates.items);
+    if (!result.items.empty()) {
+      SortCandidates(ctx, result.items);
     }
     return result;
   }
@@ -288,10 +289,10 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.kind = AMCompletionKind::VarZone;
       candidate.help.clear();
       candidate.score = match.score_bias;
-      result.candidates.items.push_back(std::move(candidate));
+      result.items.push_back(std::move(candidate));
     }
-    if (!result.candidates.items.empty()) {
-      SortCandidates(ctx, result.candidates.items);
+    if (!result.items.empty()) {
+      SortCandidates(ctx, result.items);
     }
     return result;
   }
@@ -327,10 +328,10 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.kind = AMCompletionKind::ClientName;
       const int uncreated_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + uncreated_bias;
-      result.candidates.items.push_back(std::move(candidate));
+      result.items.push_back(std::move(candidate));
     }
-    if (!result.candidates.items.empty()) {
-      SortCandidates(ctx, result.candidates.items);
+    if (!result.items.empty()) {
+      SortCandidates(ctx, result.items);
     }
     return result;
   }
@@ -363,10 +364,10 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.kind = AMCompletionKind::HostNickname;
       const int uncreated_bias = name_item.created ? 0 : 100;
       candidate.score = match.score_bias + uncreated_bias;
-      result.candidates.items.push_back(std::move(candidate));
+      result.items.push_back(std::move(candidate));
     }
-    if (!result.candidates.items.empty()) {
-      SortCandidates(ctx, result.candidates.items);
+    if (!result.items.empty()) {
+      SortCandidates(ctx, result.items);
     }
     return result;
   }
@@ -383,10 +384,10 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.display = field;
       candidate.kind = AMCompletionKind::HostAttr;
       candidate.score = match.score_bias;
-      result.candidates.items.push_back(std::move(candidate));
+      result.items.push_back(std::move(candidate));
     }
-    if (!result.candidates.items.empty()) {
-      SortCandidates(ctx, result.candidates.items);
+    if (!result.items.empty()) {
+      SortCandidates(ctx, result.items);
     }
     return result;
   }
@@ -405,12 +406,12 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.display = AMStr::ToString(id);
       candidate.kind = AMCompletionKind::TaskId;
       candidate.score = match.score_bias;
-      result.candidates.items.push_back(std::move(candidate));
+      result.items.push_back(std::move(candidate));
     }
   }
 
-  if (!result.candidates.items.empty()) {
-    SortCandidates(ctx, result.candidates.items);
+  if (!result.items.empty()) {
+    SortCandidates(ctx, result.items);
   }
   return result;
 }
@@ -429,3 +430,5 @@ void AMInternalSearchEngine::SortCandidates(
                      return lhs.insert_text < rhs.insert_text;
                    });
 }
+
+} // namespace AMInterface::searcher
