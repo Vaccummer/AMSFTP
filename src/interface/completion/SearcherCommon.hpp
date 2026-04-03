@@ -1,7 +1,7 @@
 #pragma once
-#include "interface/parser/CommandTree.hpp"
-#include "interface/completion/Engine.hpp"
 #include "foundation/tools/string.hpp"
+#include "interface/completion/Engine.hpp"
+#include "interface/parser/CommandTree.hpp"
 #include <algorithm>
 #include <cctype>
 #include <limits>
