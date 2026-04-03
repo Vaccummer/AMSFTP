@@ -1,6 +1,6 @@
 #include "Isocline/isocline.h"
 #include "foundation/tools/string.hpp"
-#include "interface/parser/TokenTypeAnalyzer.hpp"
+#include "interface/token_analyser/TokenTypeAnalyzer.hpp"
 #include "interface/prompt/Prompt.hpp"
 #include <algorithm>
 #include <cctype>

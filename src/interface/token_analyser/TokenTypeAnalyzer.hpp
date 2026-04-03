@@ -1,7 +1,8 @@
 #pragma once
 #include "foundation/core/DataClass.hpp"
 #include "Isocline/isocline.h"
-#include "interface/parser/TokenAnalyzerRuntime.hpp"
+#include "interface/token_analyser/TokenAnalyzerRuntime.hpp"
+#include "interface/token_analyser/model/RawToken.hpp"
 #include <functional>
 #include <memory>
 #include <string>
@@ -17,17 +18,7 @@ class CommandNode;
 
 class TokenTypeAnalyzer : public NonCopyableNonMovable {
 public:
-  /**
-   * @brief Token parsed from input split stage.
-   */
-  struct AMToken {
-    size_t start = 0;
-    size_t end = 0;
-    size_t content_start = 0;
-    size_t content_end = 0;
-    bool quoted = false;
-    AMTokenType type = AMTokenType::Unset;
-  };
+  using AMToken = AMInterface::parser::model::RawToken;
 
   ~TokenTypeAnalyzer() override = default;
   TokenTypeAnalyzer() = default;
@@ -94,3 +85,4 @@ private:
 };
 
 } // namespace AMInterface::parser
+
