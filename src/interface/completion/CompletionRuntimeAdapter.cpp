@@ -1,5 +1,4 @@
 #include "interface/completion/CompletionRuntimeAdapter.hpp"
-
 #include "domain/filesystem/FileSystemDomainService.hpp"
 #include "domain/host/HostModel.hpp"
 #include "foundation/tools/path.hpp"
@@ -104,19 +103,18 @@ CompletionRuntimeAdapter::ListVarsByDomain(const std::string &domain) const {
     (void)name;
     out.push_back(info);
   }
-  std::sort(out.begin(), out.end(),
-            [](const auto &lhs, const auto &rhs) {
-              return lhs.varname < rhs.varname;
-            });
+  std::sort(out.begin(), out.end(), [](const auto &lhs, const auto &rhs) {
+    return lhs.varname < rhs.varname;
+  });
   return out;
 }
 
-std::vector<std::string> CompletionRuntimeAdapter::ListTaskIds() const {
-  std::vector<std::string> out = {};
-  std::unordered_set<std::string> seen = {};
+std::vector<TASKID> CompletionRuntimeAdapter::ListTaskIds() const {
+  std::vector<TASKID> out = {};
+  std::unordered_set<TASKID> seen = {};
   const auto add_ids = [&out, &seen](const auto &tasks) {
     for (const auto &[id, task] : tasks) {
-      if (id.empty() || !task) {
+      if (!task) {
         continue;
       }
       if (seen.insert(id).second) {
@@ -137,10 +135,15 @@ CompletionRuntimeAdapter::ResolvePromptPathOptions(
     const std::string &nickname) const {
   auto query = prompt_profile_manager_.GetZoneProfile(nickname);
   PromptPathOptions out = {};
-  out.inline_hint_enable = query.profile.inline_hint.path.enable;
-  out.inline_hint_timeout_ms = query.profile.inline_hint.path.timeout_ms;
-  out.complete_use_async = query.profile.complete.path.use_async;
-  out.complete_timeout_ms = query.profile.complete.path.timeout_ms;
+  out.inline_hint.enable =
+      query.profile.inline_hint.enable && query.profile.inline_hint.path.enable;
+  out.inline_hint.use_async = query.profile.inline_hint.path.use_async;
+  out.inline_hint.timeout_ms = query.profile.inline_hint.path.timeout_ms;
+  out.inline_hint.delay_ms = query.profile.inline_hint.search_delay_ms;
+  out.complete.enable = true;
+  out.complete.use_async = query.profile.complete.path.use_async;
+  out.complete.timeout_ms = query.profile.complete.path.timeout_ms;
+  out.complete.delay_ms = 0;
   return out;
 }
 
@@ -149,8 +152,9 @@ CompletionRuntimeAdapter::SubstitutePathLike(const std::string &raw) const {
   return var_interface_service_.SubstitutePathLike(raw);
 }
 
-std::string CompletionRuntimeAdapter::BuildPath(
-    AMDomain::client::ClientHandle client, const std::string &raw_path) const {
+std::string
+CompletionRuntimeAdapter::BuildPath(AMDomain::client::ClientHandle client,
+                                    const std::string &raw_path) const {
   if (!client) {
     return NormalizePath_(raw_path);
   }
@@ -168,15 +172,15 @@ std::string CompletionRuntimeAdapter::BuildPath(
 }
 
 std::string CompletionRuntimeAdapter::Format(
-    const std::string &text,
-    AMInterface::style::StyleIndex style_index) const {
+    const std::string &text, AMInterface::style::StyleIndex style_index) const {
   return style_service_.Format(text, style_index);
 }
 
-std::string CompletionRuntimeAdapter::FormatPath(
-    const std::string &segment, const PathInfo *path_info) const {
-  return style_service_.Format(segment, AMInterface::style::StyleIndex::PathLike,
-                               path_info);
+std::string
+CompletionRuntimeAdapter::FormatPath(const std::string &segment,
+                                     const PathInfo *path_info) const {
+  return style_service_.Format(
+      segment, AMInterface::style::StyleIndex::PathLike, path_info);
 }
 
 } // namespace AMInterface::completion

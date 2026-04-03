@@ -10,7 +10,7 @@
 #include "interface/style/StyleManager.hpp"
 
 namespace AMInterface::completion {
-
+using TASKID = AMDomain::transfer::TaskInfo::ID;
 class CompletionRuntimeAdapter final : public ICompletionRuntime {
 public:
   CompletionRuntimeAdapter(
@@ -22,7 +22,8 @@ public:
       AMApplication::prompt::PromptProfileManager &prompt_profile_manager,
       AMDomain::transfer::ITransferPoolPort &transfer_pool)
       : client_service_(client_service), host_service_(host_service),
-        var_service_(var_service), var_interface_service_(var_interface_service),
+        var_service_(var_service),
+        var_interface_service_(var_interface_service),
         style_service_(style_service),
         prompt_profile_manager_(prompt_profile_manager),
         transfer_pool_(transfer_pool) {}
@@ -43,7 +44,7 @@ public:
   [[nodiscard]] std::vector<AMDomain::var::VarInfo>
   ListVarsByDomain(const std::string &domain) const override;
 
-  [[nodiscard]] std::vector<std::string> ListTaskIds() const override;
+  [[nodiscard]] std::vector<TASKID> ListTaskIds() const override;
 
   [[nodiscard]] PromptPathOptions
   ResolvePromptPathOptions(const std::string &nickname) const override;

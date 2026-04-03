@@ -1,12 +1,12 @@
 #include "interface/completion/Engine.hpp"
 #include "Isocline/isocline.h"
 #include "interface/cli/InteractiveEventRegistry.hpp"
-#include "interface/completion/Proxy.hpp"
 #include <algorithm>
 #include <chrono>
 #include <climits>
 #include <iterator>
 
+namespace AMInterface::completer {
 namespace {
 /**
  * @brief Normalize a configured style into a bbcode opening tag.
@@ -54,27 +54,39 @@ bool HasTarget_(const AMCompletionContext &ctx, AMCompletionTarget target) {
   return std::find(ctx.targets.begin(), ctx.targets.end(), target) !=
          ctx.targets.end();
 }
+
+AMCompletionMode MapCompletionMode_(ic_completion_source_t source) {
+  switch (source) {
+  case IC_COMPLETION_SOURCE_INLINE_HINT:
+    return AMCompletionMode::InlineHint;
+  case IC_COMPLETION_SOURCE_TAB:
+  case IC_COMPLETION_SOURCE_UNKNOWN:
+  default:
+    return AMCompletionMode::Complete;
+  }
+}
+
+void IsoclineCompleteCallback_(ic_completion_env_t *cenv, const char *prefix) {
+  (void)prefix;
+  if (!cenv) {
+    return;
+  }
+  void *raw = ic_completion_arg(cenv);
+  if (!raw) {
+    return;
+  }
+  auto *engine = static_cast<AMCompleteEngine *>(raw);
+  long cursor = 0;
+  const char *input = ic_completion_input(cenv, &cursor);
+  if (!input || cursor < 0) {
+    return;
+  }
+  const AMCompletionMode mode =
+      MapCompletionMode_(ic_completion_source(cenv));
+  engine->HandleCompletion(cenv, std::string(input),
+                           static_cast<size_t>(cursor), mode);
+}
 } // namespace
-
-/**
- * @brief Execute the request-specific search routine.
- */
-bool AMCompletionAsyncRequest::Search(AMCompletionAsyncResult *out) const {
-  if (IsInterrupted()) {
-    return false;
-  }
-  if (!search) {
-    return false;
-  }
-  return search(*this, out);
-}
-
-/**
- * @brief Return true when the request has been interrupted.
- */
-bool AMCompletionAsyncRequest::IsInterrupted() const {
-  return interrupt_flag ? interrupt_flag() : true;
-}
 
 /**
  * @brief Default cache-clear hook for engines without cache state.
@@ -85,7 +97,7 @@ void AMCompletionSearchEngine::ClearCache() {}
  * @brief Install the completer into isocline.
  */
 void AMCompleteEngine::Install() {
-  ic_set_default_completer(&AMCompleter::IsoclineCompleter, nullptr);
+  ic_set_default_completer(&IsoclineCompleteCallback_, this);
   ic_enable_completion_sort(false);
   ic_enable_completion_preview(true);
   const std::string order_num_style = NormalizeStyleForIc_(
@@ -134,13 +146,13 @@ void AMCompleteEngine::ClearCache() {
  */
 void AMCompleteEngine::HandleCompletion(ic_completion_env_t *cenv,
                                         const std::string &input, size_t cursor,
-                                        AMCompletionSource source) {
+                                        AMCompletionMode mode) {
   AMCompletionRequest request;
   request.cenv = cenv;
   request.input = input;
   request.cursor = cursor;
-  request.request_id = NextRequestId_(input, cursor, source);
-  request.source = source;
+  request.request_id = NextRequestId_(input, cursor, mode);
+  request.mode = mode;
 
   AMCompletionContext ctx = BuildContext_(request);
   ic_set_completion_page_marker(nullptr);
@@ -253,19 +265,15 @@ void AMCompleteEngine::RegisterSearchEngine(
  */
 uint64_t AMCompleteEngine::NextRequestId_(const std::string &input,
                                           size_t cursor,
-                                          AMCompletionSource source) {
-  const AMCompletionSource normalized_source =
-      (source == AMCompletionSource::Unknown) ? AMCompletionSource::Tab
-                                              : source;
+                                          AMCompletionMode mode) {
   std::lock_guard<std::mutex> lock(request_mtx_);
-  if (input == last_input_ && cursor == last_cursor_ &&
-      normalized_source == last_source_) {
+  if (input == last_input_ && cursor == last_cursor_ && mode == last_mode_) {
     return last_request_id_;
   }
 
   last_input_ = input;
   last_cursor_ = cursor;
-  last_source_ = normalized_source;
+  last_mode_ = mode;
   last_request_id_ =
       request_counter_.fetch_add(1, std::memory_order_relaxed) + 1;
   current_request_id_.store(last_request_id_, std::memory_order_relaxed);
@@ -354,7 +362,7 @@ void AMCompleteEngine::EnsurePromptReturnCancelHookRegistered_() {
 /**
  * @brief Push an async request into the worker queue.
  */
-void AMCompleteEngine::ScheduleAsyncRequest_(AMCompletionAsyncRequest request) {
+void AMCompleteEngine::ScheduleAsyncJob_(AMCompletionAsyncJob request) {
   if (!request.interrupt_flag) {
     return;
   }
@@ -429,10 +437,25 @@ void AMCompleteEngine::ConsumeAsyncResults_(const AMCompletionContext &ctx,
     }
   }
 
+  const AMCompletionTarget policy_target =
+      HasTarget_(ctx, AMCompletionTarget::Path) ? AMCompletionTarget::Path
+                                                : AMCompletionTarget::Disabled;
+  const CompletionModePolicy policy = ResolveModePolicy_(ctx, policy_target);
+  if (ctx.mode == AMCompletionMode::InlineHint && !policy.enabled) {
+    return;
+  }
+  if (!policy.use_async) {
+    return;
+  }
+
   for (auto &result : consumed) {
+    if (result.mode != ctx.mode) {
+      continue;
+    }
     if (result.candidates.empty()) {
       continue;
     }
+    out.from_cache = out.from_cache || result.from_cache;
     out.items.insert(out.items.end(),
                      std::make_move_iterator(result.candidates.begin()),
                      std::make_move_iterator(result.candidates.end()));
@@ -444,7 +467,7 @@ void AMCompleteEngine::ConsumeAsyncResults_(const AMCompletionContext &ctx,
  */
 void AMCompleteEngine::AsyncWorkerLoop_() {
   while (true) {
-    AMCompletionAsyncRequest request;
+    AMCompletionAsyncJob request;
     {
       std::unique_lock<std::mutex> lock(async_queue_mtx_);
       async_queue_cv_.wait(lock, [this]() {
@@ -466,9 +489,9 @@ void AMCompleteEngine::AsyncWorkerLoop_() {
       continue;
     }
 
-    if (args_.complete_delay_ms > 0) {
+    if (request.context.search_delay_ms > 0) {
       std::this_thread::sleep_for(
-          std::chrono::milliseconds(args_.complete_delay_ms));
+          std::chrono::milliseconds(request.context.search_delay_ms));
       if (request.IsInterrupted()) {
         continue;
       }
@@ -476,27 +499,21 @@ void AMCompleteEngine::AsyncWorkerLoop_() {
 
     AMCompletionAsyncResult result;
     result.request_id = request.request_id;
+    result.mode = request.mode;
     result.target = request.target;
     result.source_engine = request.source_engine;
-
-    if (!request.Search(&result)) {
+    auto engine = request.source_engine.lock();
+    if (!engine) {
+      continue;
+    }
+    AMCompletionCandidates collected = engine->CollectCandidates(request.context);
+    if (request.IsInterrupted() || collected.items.empty()) {
       continue;
     }
 
-    if (request.IsInterrupted()) {
-      continue;
-    }
-
-    if (result.request_id == 0) {
-      result.request_id = request.request_id;
-    }
-    if (result.target == AMCompletionTarget::Disabled &&
-        request.target != AMCompletionTarget::Disabled) {
-      result.target = request.target;
-    }
-    if (result.source_engine.expired()) {
-      result.source_engine = request.source_engine;
-    }
+    engine->SortCandidates(request.context, collected.items);
+    result.candidates = std::move(collected.items);
+    result.from_cache = collected.from_cache;
 
     if (result.request_id != CurrentRequestId()) {
       continue;
@@ -509,3 +526,5 @@ void AMCompleteEngine::AsyncWorkerLoop_() {
     (void)ic_request_completion_menu_async();
   }
 }
+
+} // namespace AMInterface::completer

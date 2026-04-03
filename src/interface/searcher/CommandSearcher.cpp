@@ -1,8 +1,10 @@
-#include "interface/completion/Searcher.hpp"
-#include "interface/completion/SearcherCommon.hpp"
+#include "interface/searcher/Searcher.hpp"
+#include "interface/searcher/SearcherCommon.hpp"
 #include <algorithm>
 
-using namespace AMSearcherDetail;
+using namespace AMInterface::searcher::detail;
+
+namespace AMInterface::searcher {
 
 namespace {
 /**
@@ -23,9 +25,9 @@ int CommandKindRank_(AMCompletionKind kind) {
 /**
  * @brief Collect command-related candidates.
  */
-AMCompletionCollectResult
+AMCompletionCandidates
 AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
-  AMCompletionCollectResult result;
+  AMCompletionCandidates result;
   const CommandNode *command_tree = ctx.command_tree;
   if (!command_tree) {
     return result;
@@ -67,7 +69,7 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.kind =
           item.is_module ? AMCompletionKind::Module : AMCompletionKind::Command;
       candidate.score = (item.is_module ? 0 : 1) + match.score_bias;
-      result.candidates.items.push_back(std::move(candidate));
+      result.items.push_back(std::move(candidate));
     }
   }
 
@@ -98,7 +100,7 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.help = item.help;
       candidate.kind = AMCompletionKind::Command;
       candidate.score = match.score_bias;
-      result.candidates.items.push_back(std::move(candidate));
+      result.items.push_back(std::move(candidate));
     }
   }
 
@@ -124,7 +126,7 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.help = item.help;
       candidate.kind = AMCompletionKind::Option;
       candidate.score = match.score_bias;
-      result.candidates.items.push_back(std::move(candidate));
+      result.items.push_back(std::move(candidate));
     }
   }
 
@@ -151,12 +153,12 @@ AMCommandSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
       candidate.help = item.help;
       candidate.kind = AMCompletionKind::Option;
       candidate.score = match.score_bias;
-      result.candidates.items.push_back(std::move(candidate));
+      result.items.push_back(std::move(candidate));
     }
   }
 
-  if (!result.candidates.items.empty()) {
-    SortCandidates(ctx, result.candidates.items);
+  if (!result.items.empty()) {
+    SortCandidates(ctx, result.items);
   }
   return result;
 }
@@ -261,4 +263,6 @@ void AMCommandSearchEngine::ParseCommandPath_(const AMCompletionContext &ctx,
     *out_consumed = consumed;
   }
 }
+
+} // namespace AMInterface::searcher
 
