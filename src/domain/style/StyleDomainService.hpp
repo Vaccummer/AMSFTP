@@ -220,20 +220,36 @@ inline void NormalizeProgressBar(ProgressBarStyle *style) {
     return;
   }
   const ProgressBarStyle defaults = {};
-  style->bar_width = std::max<int64_t>(1, style->bar_width);
   style->refresh_interval_ms = std::max<int64_t>(1, style->refresh_interval_ms);
-  style->speed_window_size = std::max<int64_t>(1, style->speed_window_size);
-  if (style->fill.empty()) {
-    style->fill = defaults.fill;
+  style->prefix_fixed_width = std::max<int64_t>(0, style->prefix_fixed_width);
+  style->bar.bar_width = std::max<int64_t>(1, style->bar.bar_width);
+  style->speed.speed_num_fixed_width =
+      std::max<int64_t>(0, style->speed.speed_num_fixed_width);
+  style->speed.speed_num_max_float_digits =
+      std::max<int64_t>(0, style->speed.speed_num_max_float_digits);
+  style->speed.speed_window_ms = std::max<int64_t>(1, style->speed.speed_window_ms);
+  style->size.totol_size_fixed_width =
+      std::max<int64_t>(0, style->size.totol_size_fixed_width);
+  style->size.totol_size_max_float_digits =
+      std::max<int64_t>(0, style->size.totol_size_max_float_digits);
+  style->size.transferred_size_fixed_width =
+      std::max<int64_t>(0, style->size.transferred_size_fixed_width);
+  style->size.transferred_size_max_float_digits =
+      std::max<int64_t>(0, style->size.transferred_size_max_float_digits);
+  if (style->prefix_template.empty()) {
+    style->prefix_template = defaults.prefix_template;
   }
-  if (style->lead.empty()) {
-    style->lead = defaults.lead;
+  if (style->bar_template.empty()) {
+    style->bar_template = defaults.bar_template;
   }
-  if (style->remaining.empty()) {
-    style->remaining = defaults.remaining;
+  if (style->bar.fill.empty()) {
+    style->bar.fill = defaults.bar.fill;
   }
-  if (!IsHexColorString(style->color)) {
-    style->color = defaults.color;
+  if (style->bar.lead.empty()) {
+    style->bar.lead = defaults.bar.lead;
+  }
+  if (style->bar.remaining.empty()) {
+    style->bar.remaining = defaults.bar.remaining;
   }
 }
 

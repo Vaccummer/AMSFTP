@@ -106,6 +106,7 @@ inline constexpr const char *kCmdTemplateKey = "cmd_template";
 inline constexpr const char *kCmdPrefixKey = "cmd_prefix";
 inline constexpr int kDefaultSFTPPort = 22;
 inline constexpr int kDefaultFTPPort = 21;
+inline constexpr int kDefaultHTTPPort = 80;
 
 bool DecodeHostConfig_(const std::string &nickname, const Json &json,
                        AMDomain::host::HostConfig *out, std::string *error) {
@@ -147,10 +148,13 @@ bool DecodeHostConfig_(const std::string &nickname, const Json &json,
       parsed_port <= 65535) {
     cfg.request.port = parsed_port;
   } else {
-    cfg.request.port =
-        (cfg.request.protocol == AMDomain::host::ClientProtocol::FTP)
-            ? kDefaultFTPPort
-            : kDefaultSFTPPort;
+    if (cfg.request.protocol == AMDomain::host::ClientProtocol::FTP) {
+      cfg.request.port = kDefaultFTPPort;
+    } else if (cfg.request.protocol == AMDomain::host::ClientProtocol::HTTP) {
+      cfg.request.port = kDefaultHTTPPort;
+    } else {
+      cfg.request.port = kDefaultSFTPPort;
+    }
   }
 
   int64_t parsed_buffer_size = 0;
@@ -691,6 +695,8 @@ public:
     const Json options = OptionsRoot_(root);
     (void)AMJson::QueryKey(options, {"FileSystem", "max_cd_history"},
                            &typed->max_cd_history);
+    (void)AMJson::QueryKey(options, {"FileSystem", "wget_max_redirect"},
+                           &typed->wget_max_redirect);
     return true;
   }
 
@@ -705,6 +711,8 @@ public:
       *root = Json::object();
     }
     (*root)["Options"]["FileSystem"]["max_cd_history"] = typed->max_cd_history;
+    (*root)["Options"]["FileSystem"]["wget_max_redirect"] =
+        typed->wget_max_redirect;
     return true;
   }
 
@@ -1086,36 +1094,68 @@ void DecodeProgressBar_(const Json &json, ProgressBarStyle *out) {
   if (!out || !json.is_object()) {
     return;
   }
-  (void)AMJson::QueryKey(json, {"start"}, &out->start);
-  (void)AMJson::QueryKey(json, {"end"}, &out->end);
-  (void)AMJson::QueryKey(json, {"fill"}, &out->fill);
-  (void)AMJson::QueryKey(json, {"lead"}, &out->lead);
-  (void)AMJson::QueryKey(json, {"remaining"}, &out->remaining);
-  (void)AMJson::QueryKey(json, {"color"}, &out->color);
-  (void)AMJson::QueryKey(json, {"refresh_interval_ms"}, &out->refresh_interval_ms);
-  (void)AMJson::QueryKey(json, {"speed_window_size"}, &out->speed_window_size);
-  (void)AMJson::QueryKey(json, {"bar_width"}, &out->bar_width);
-  (void)AMJson::QueryKey(json, {"width_offset"}, &out->width_offset);
-  (void)AMJson::QueryKey(json, {"show_percentage"}, &out->show_percentage);
-  (void)AMJson::QueryKey(json, {"show_elapsed_time"}, &out->show_elapsed_time);
-  (void)AMJson::QueryKey(json, {"show_remaining_time"}, &out->show_remaining_time);
+  (void)AMJson::QueryKey(json, {"prefix_template"}, &out->prefix_template);
+  (void)AMJson::QueryKey(json, {"bar_template"}, &out->bar_template);
+  (void)AMJson::QueryKey(json, {"refresh_interval_ms"},
+                         &out->refresh_interval_ms);
+  if (!AMJson::QueryKey(json, {"prefix_fixed_width"},
+                        &out->prefix_fixed_width)) {
+    // backward compatibility
+    (void)AMJson::QueryKey(json, {"width_offset"}, &out->prefix_fixed_width);
+  }
+
+  const Json bar = codec_common::QueryObjectAt_(json, {"Bar"});
+  (void)AMJson::QueryKey(bar, {"fill"}, &out->bar.fill);
+  (void)AMJson::QueryKey(bar, {"lead"}, &out->bar.lead);
+  (void)AMJson::QueryKey(bar, {"remaining"}, &out->bar.remaining);
+  (void)AMJson::QueryKey(bar, {"bar_width"}, &out->bar.bar_width);
+
+  const Json speed = codec_common::QueryObjectAt_(json, {"Speed"});
+  (void)AMJson::QueryKey(speed, {"speed_num_fixed_width"},
+                         &out->speed.speed_num_fixed_width);
+  (void)AMJson::QueryKey(speed, {"speed_num_max_float_digits"},
+                         &out->speed.speed_num_max_float_digits);
+  (void)AMJson::QueryKey(speed, {"speed_window_ms"},
+                         &out->speed.speed_window_ms);
+
+  const Json size = codec_common::QueryObjectAt_(json, {"Size"});
+  (void)AMJson::QueryKey(size, {"totol_size_fixed_width"},
+                         &out->size.totol_size_fixed_width);
+  // compatibility key
+  (void)AMJson::QueryKey(size, {"total_size_fixed_width"},
+                         &out->size.totol_size_fixed_width);
+  (void)AMJson::QueryKey(size, {"totol_size_max_float_digits"},
+                         &out->size.totol_size_max_float_digits);
+  // compatibility key
+  (void)AMJson::QueryKey(size, {"total_size_max_float_digits"},
+                         &out->size.totol_size_max_float_digits);
+  (void)AMJson::QueryKey(size, {"transferred_size_fixed_width"},
+                         &out->size.transferred_size_fixed_width);
+  (void)AMJson::QueryKey(size, {"transferred_size_max_float_digits"},
+                         &out->size.transferred_size_max_float_digits);
 }
 
 Json EncodeProgressBar_(const ProgressBarStyle &in) {
   Json out = Json::object();
-  out["start"] = in.start;
-  out["end"] = in.end;
-  out["fill"] = in.fill;
-  out["lead"] = in.lead;
-  out["remaining"] = in.remaining;
-  out["color"] = in.color;
+  out["prefix_template"] = in.prefix_template;
+  out["bar_template"] = in.bar_template;
   out["refresh_interval_ms"] = in.refresh_interval_ms;
-  out["speed_window_size"] = in.speed_window_size;
-  out["bar_width"] = in.bar_width;
-  out["width_offset"] = in.width_offset;
-  out["show_percentage"] = in.show_percentage;
-  out["show_elapsed_time"] = in.show_elapsed_time;
-  out["show_remaining_time"] = in.show_remaining_time;
+  out["prefix_fixed_width"] = in.prefix_fixed_width;
+  out["Bar"]["fill"] = in.bar.fill;
+  out["Bar"]["lead"] = in.bar.lead;
+  out["Bar"]["remaining"] = in.bar.remaining;
+  out["Bar"]["bar_width"] = in.bar.bar_width;
+  out["Speed"]["speed_num_fixed_width"] = in.speed.speed_num_fixed_width;
+  out["Speed"]["speed_num_max_float_digits"] =
+      in.speed.speed_num_max_float_digits;
+  out["Speed"]["speed_window_ms"] = in.speed.speed_window_ms;
+  out["Size"]["totol_size_fixed_width"] = in.size.totol_size_fixed_width;
+  out["Size"]["totol_size_max_float_digits"] =
+      in.size.totol_size_max_float_digits;
+  out["Size"]["transferred_size_fixed_width"] =
+      in.size.transferred_size_fixed_width;
+  out["Size"]["transferred_size_max_float_digits"] =
+      in.size.transferred_size_max_float_digits;
   return out;
 }
 

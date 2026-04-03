@@ -3,8 +3,6 @@
 #include "foundation/tools/string.hpp"
 
 #include <algorithm>
-#include <unordered_map>
-#include <variant>
 
 namespace AMInterface::style {
 namespace detail {
@@ -161,52 +159,36 @@ std::string ResolvePathStyleTag(const AMDomain::style::StyleConfig &cfg,
   return NormalizeStyleTag(*path_tag);
 }
 
-std::variant<indicators::Color, std::string>
-ParseProgressBarColor(const std::string &value) {
-  const std::string trimmed = AMStr::Strip(value);
-  if (trimmed.empty()) {
-    return indicators::Color::unspecified;
-  }
-  if (trimmed.front() == '#') {
-    auto ansi = AMStr::HexToAnsi(trimmed);
-    if (ansi) {
-      return *ansi;
-    }
-  }
-  const std::string token = AMStr::lowercase(trimmed);
-  static const std::unordered_map<std::string, indicators::Color> color_map = {
-      {"unspecified", indicators::Color::unspecified},
-      {"red", indicators::Color::red},
-      {"green", indicators::Color::green},
-      {"yellow", indicators::Color::yellow},
-      {"blue", indicators::Color::blue},
-      {"magenta", indicators::Color::magenta},
-      {"cyan", indicators::Color::cyan},
-      {"white", indicators::Color::white},
-      {"grey", indicators::Color::grey},
-  };
-  const auto it = color_map.find(token);
-  if (it == color_map.end()) {
-    return indicators::Color::unspecified;
-  }
-  return it->second;
-}
-
 AMProgressBarStyle
 BuildProgressBarStyle(const AMDomain::style::StyleConfig &cfg) {
   AMProgressBarStyle style{};
+  style.prefix_template = cfg.progress_bar.prefix_template;
+  style.bar_template = cfg.progress_bar.bar_template;
+  style.refresh_interval_ms =
+      std::max<int64_t>(1, cfg.progress_bar.refresh_interval_ms);
+  style.prefix_fixed_width =
+      static_cast<int>(cfg.progress_bar.prefix_fixed_width);
+  style.fill =
+      cfg.progress_bar.bar.fill.empty() ? "█" : cfg.progress_bar.bar.fill;
+  style.lead =
+      cfg.progress_bar.bar.lead.empty() ? "▓" : cfg.progress_bar.bar.lead;
+  style.remaining = cfg.progress_bar.bar.remaining;
   style.bar_width =
-      static_cast<size_t>(std::max<int64_t>(1, cfg.progress_bar.bar_width));
-  style.width_offset = static_cast<int>(cfg.progress_bar.width_offset);
-  style.start = cfg.progress_bar.start;
-  style.end = cfg.progress_bar.end;
-  style.fill = cfg.progress_bar.fill.empty() ? "█" : cfg.progress_bar.fill;
-  style.lead = cfg.progress_bar.lead.empty() ? "▓" : cfg.progress_bar.lead;
-  style.remainder = cfg.progress_bar.remaining;
-  style.color = ParseProgressBarColor(cfg.progress_bar.color);
-  style.show_percentage = cfg.progress_bar.show_percentage;
-  style.show_elapsed_time = cfg.progress_bar.show_elapsed_time;
-  style.show_remaining_time = cfg.progress_bar.show_remaining_time;
+      static_cast<size_t>(std::max<int64_t>(1, cfg.progress_bar.bar.bar_width));
+  style.speed_num_fixed_width = static_cast<size_t>(
+      std::max<int64_t>(0, cfg.progress_bar.speed.speed_num_fixed_width));
+  style.speed_num_max_float_digits = static_cast<int>(
+      std::max<int64_t>(0, cfg.progress_bar.speed.speed_num_max_float_digits));
+  style.speed_window_ms =
+      std::max<int64_t>(1, cfg.progress_bar.speed.speed_window_ms);
+  style.totol_size_fixed_width = static_cast<size_t>(
+      std::max<int64_t>(0, cfg.progress_bar.size.totol_size_fixed_width));
+  style.totol_size_max_float_digits = static_cast<int>(
+      std::max<int64_t>(0, cfg.progress_bar.size.totol_size_max_float_digits));
+  style.transferred_size_fixed_width = static_cast<size_t>(
+      std::max<int64_t>(0, cfg.progress_bar.size.transferred_size_fixed_width));
+  style.transferred_size_max_float_digits = static_cast<int>(std::max<int64_t>(
+      0, cfg.progress_bar.size.transferred_size_max_float_digits));
   return style;
 }
 } // namespace detail
@@ -252,12 +234,16 @@ std::string AMStyleService::FormatUtf8Table(
                                 bottom);
 }
 
-AMProgressBar AMStyleService::CreateProgressBar(int64_t total_size,
-                                                const std::string &prefix) {
+std::unique_ptr<BaseProgressBar>
+AMStyleService::CreateProgressBar(int64_t total_size,
+                                  const std::string &prefix) {
+  (void)prefix;
   {
     const auto cached = progress_bar_style_.lock().load();
     if (cached.has_value()) {
-      return AMProgressBar(total_size, prefix, cached.value());
+      auto bar = std::make_unique<BaseProgressBar>(cached.value());
+      bar->SetTotal(total_size);
+      return bar;
     }
   }
 
@@ -268,7 +254,8 @@ AMProgressBar AMStyleService::CreateProgressBar(int64_t total_size,
   if (!cached->has_value()) {
     cached->emplace(built);
   }
-  return AMProgressBar(total_size, prefix, cached->value());
+  auto bar = std::make_unique<BaseProgressBar>(cached->value());
+  bar->SetTotal(total_size);
+  return bar;
 }
 } // namespace AMInterface::style
-

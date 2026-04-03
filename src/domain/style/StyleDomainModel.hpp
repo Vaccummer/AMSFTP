@@ -28,19 +28,29 @@ struct TableStyle {
 };
 
 struct ProgressBarStyle {
-  std::string start = "";
-  std::string end = "";
-  std::string fill = "█";
-  std::string lead = "▓";
-  std::string remaining = " ";
-  std::string color = "#08d9d6";
+  std::string prefix_template = "{$filename}";
+  std::string bar_template =
+      "{$progressbar} {$percentage}%!{$transferred}/{$total} "
+      "\\[{$elapsed}<{$remaining} {$speed}\\]";
   int64_t refresh_interval_ms = 300;
-  int64_t speed_window_size = 25;
-  int64_t bar_width = 10;
-  int64_t width_offset = 12;
-  bool show_percentage = true;
-  bool show_elapsed_time = true;
-  bool show_remaining_time = true;
+  int64_t prefix_fixed_width = 20;
+  struct Bar {
+    std::string fill = "█";
+    std::string lead = "▓";
+    std::string remaining = " ";
+    int64_t bar_width = 30;
+  } bar = {};
+  struct Speed {
+    int64_t speed_num_fixed_width = 7;
+    int64_t speed_num_max_float_digits = 1;
+    int64_t speed_window_ms = 7000;
+  } speed = {};
+  struct Size {
+    int64_t totol_size_fixed_width = 5;
+    int64_t totol_size_max_float_digits = 1;
+    int64_t transferred_size_fixed_width = 5;
+    int64_t transferred_size_max_float_digits = 1;
+  } size = {};
 };
 
 struct PromptTemplateStyle {
