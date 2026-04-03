@@ -99,6 +99,11 @@ BuildTransferProgressPrefix_(const std::shared_ptr<TaskInfo> &task_info) {
   }
   const std::string src_host = DisplayHost_(cur_task->src_host);
   const std::string dst_host = DisplayHost_(cur_task->dst_host);
+  if (AMUrl::IsHttpUrl(cur_task->src)) {
+    const std::string dst_name = AMPath::basename(cur_task->dst);
+    return AMStr::fmt("{}@{}", dst_host,
+                      dst_name.empty() ? cur_task->dst : dst_name);
+  }
   const std::string src_name =
       AMUrl::IsHttpUrl(cur_task->src)
           ? (AMUrl::Basename(cur_task->src).empty() ? cur_task->src
