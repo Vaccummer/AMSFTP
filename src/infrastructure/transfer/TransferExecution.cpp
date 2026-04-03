@@ -2,6 +2,7 @@
 #include "foundation/tools/path.hpp"
 #include "foundation/tools/time.hpp"
 #include "infrastructure/client/ftp/FTP.hpp"
+#include "infrastructure/client/http/HTTP.hpp"
 #include "infrastructure/client/sftp/SFTP.hpp"
 #include "infrastructure/transfer/core.hpp"
 
@@ -112,12 +113,14 @@ using ClientProtocol = AMDomain::client::ClientProtocol;
 using AMSFTPIOCore = AMInfra::client::SFTP::AMSFTPIOCore;
 using SocketWaitType = AMInfra::client::SFTP::detail::SocketWaitType;
 using AMFTPIOCore = AMInfra::client::FTP::AMFTPIOCore;
+using AMHTTPIOCore = AMInfra::client::HTTP::AMHTTPIOCore;
 using TransferTask = AMDomain::transfer::TransferTask;
 using TaskStatus = AMDomain::transfer::TaskStatus;
 using TaskId = TaskInfo::ID;
 using TaskRegistry = AMAtomic<std::unordered_map<TaskId, TaskHandle>>;
 using TransferClientContainer = AMDomain::transfer::TransferClientContainer;
 using TransferBufferPolicy = AMInfra::transfer::TransferBufferPolicy;
+constexpr const char *kHttpUserAgent = "amsftp-wget/1.0";
 
 bool IsTaskInterrupted_(const RuntimeProgress &pd) {
   return pd.io_abort.load(std::memory_order_relaxed) ||
@@ -571,100 +574,39 @@ public:
     if (!task) {
       return;
     }
-    if (client->ConfigPort().GetProtocol() == ClientProtocol::SFTP) {
-      auto *clientf = dynamic_cast<AMSFTPIOCore *>(&client->IOPort());
-      if (clientf == nullptr) {
+
+    if (auto *client_http = dynamic_cast<AMHTTPIOCore *>(&client->IOPort());
+        client_http != nullptr) {
+      ReadHttpToBuffer_(client_http, *task, pd);
+      return;
+    }
+
+    switch (client->ConfigPort().GetProtocol()) {
+    case ClientProtocol::SFTP: {
+      auto *client_sftp = dynamic_cast<AMSFTPIOCore *>(&client->IOPort());
+      if (client_sftp == nullptr) {
         SignalTaskIoAbort_(pd);
         task->rcm = {EC::InvalidArg, "SFTP IO port implementation mismatch"};
         return;
       }
-      UnionFileHandle file_handle;
-      ECM rcm = file_handle.Init(task->src, task->size, clientf, false, true,
-                                 true, &pd);
-      if (rcm.code != EC::Success) {
-        SignalTaskIoAbort_(pd);
-        task->rcm = rcm;
-        return;
-      }
-      if (task->transferred > 0) {
-        ECM seek_rcm = file_handle.Seek(task->transferred);
-        if (seek_rcm.code != EC::Success) {
-          SignalTaskIoAbort_(pd);
-          task->rcm = seek_rcm;
-          return;
-        }
-      }
-      std::lock_guard<std::recursive_mutex> lock(clientf->TransferMutex());
-      libssh2_session_set_blocking(clientf->session, 0);
-      while (file_handle.offset < file_handle.file_size &&
-             !IsTaskInterrupted_(pd)) {
-        while (pd.ring_buffer->full() && !IsTaskInterrupted_(pd) &&
-               file_handle.offset < file_handle.file_size) {
-          (void)pd.ring_buffer->WaitWritable([&]() {
-            return IsTaskInterrupted_(pd) ||
-                   file_handle.offset >= file_handle.file_size;
-          });
-        }
-        if (IsTaskInterrupted_(pd)) {
-          return;
-        }
-        auto [bytes_read, ecm] = file_handle.Read();
-        if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
-          SignalTaskIoAbort_(pd);
-          task->rcm = ecm;
-          return;
-        }
-      }
-    } else if (client->ConfigPort().GetProtocol() == ClientProtocol::LOCAL) {
-      UnionFileHandle file_handle;
-      ECM rcm = file_handle.Init(task->src, task->size, nullptr, false, true,
-                                 true, &pd);
-      if (rcm.code != EC::Success) {
-        SignalTaskIoAbort_(pd);
-        task->rcm = rcm;
-        return;
-      }
-      if (task->transferred > 0) {
-        ECM seek_rcm = file_handle.Seek(task->transferred);
-        if (seek_rcm.code != EC::Success) {
-          SignalTaskIoAbort_(pd);
-          task->rcm = seek_rcm;
-          return;
-        }
-      }
-      while (file_handle.offset < file_handle.file_size) {
-        while (pd.ring_buffer->full() && !IsTaskInterrupted_(pd) &&
-               file_handle.offset < file_handle.file_size) {
-          (void)pd.ring_buffer->WaitWritable([&]() {
-            return IsTaskInterrupted_(pd) ||
-                   file_handle.offset >= file_handle.file_size;
-          });
-        }
-        if (IsTaskInterrupted_(pd)) {
-          return;
-        }
-        auto [bytes_read, ecm] = file_handle.Read();
-        if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
-          SignalTaskIoAbort_(pd);
-          task->rcm = ecm;
-          return;
-        }
-      }
-    } else if (client->ConfigPort().GetProtocol() == ClientProtocol::FTP) {
-      auto *client_ftp_raw = dynamic_cast<AMFTPIOCore *>(&client->IOPort());
-      if (client_ftp_raw == nullptr) {
+      ReadSftpToBuffer_(client_sftp, *task, pd);
+      return;
+    }
+    case ClientProtocol::LOCAL:
+      ReadLocalToBuffer_(*task, pd);
+      return;
+    case ClientProtocol::FTP: {
+      auto *client_ftp = dynamic_cast<AMFTPIOCore *>(&client->IOPort());
+      if (client_ftp == nullptr) {
         SignalTaskIoAbort_(pd);
         task->rcm = {EC::InvalidArg, "FTP IO port implementation mismatch"};
         return;
       }
-      ECM out_rcm;
-      std::shared_ptr<AMFTPIOCore> client_ftp(client_ftp_raw,
-                                              [](AMFTPIOCore *) {});
-      FTPDownloadSet(client_ftp, task->src, FTPToBufferWk, &pd);
-      if (out_rcm.code != EC::Success) {
-        SignalTaskIoAbort_(pd);
-        task->rcm = out_rcm;
-      }
+      ReadFtpToBuffer_(client_ftp, *task, pd);
+      return;
+    }
+    default:
+      return;
     }
   }
 
@@ -678,117 +620,389 @@ public:
     if (!task) {
       return;
     }
-    if (client->ConfigPort().GetProtocol() == ClientProtocol::SFTP) {
-      auto *clientf = dynamic_cast<AMSFTPIOCore *>(&client->IOPort());
-      if (clientf == nullptr) {
+
+    switch (client->ConfigPort().GetProtocol()) {
+    case ClientProtocol::SFTP: {
+      auto *client_sftp = dynamic_cast<AMSFTPIOCore *>(&client->IOPort());
+      if (client_sftp == nullptr) {
         SignalTaskIoAbort_(pd);
         task->rcm = {EC::InvalidArg, "SFTP IO port implementation mismatch"};
         return;
       }
-      UnionFileHandle file_handle;
-      const bool resume = task->transferred > 0;
-      ECM rcm = file_handle.Init(task->dst, task->size, clientf, true, true,
-                                 !resume, &pd);
-      if (rcm.code != EC::Success) {
-        SignalTaskIoAbort_(pd);
-        task->rcm = rcm;
-        return;
-      }
-      if (resume) {
-        ECM seek_rcm = file_handle.Seek(task->transferred);
-        if (seek_rcm.code != EC::Success) {
-          SignalTaskIoAbort_(pd);
-          task->rcm = seek_rcm;
-          return;
-        }
-      }
-      libssh2_session_set_blocking(clientf->session, 0);
-      while (file_handle.offset < file_handle.file_size &&
-             !IsTaskInterrupted_(pd)) {
-        while (pd.ring_buffer->empty() && !IsTaskInterrupted_(pd)) {
-          (void)pd.ring_buffer->WaitReadable(
-              [&]() { return IsTaskInterrupted_(pd); });
-        }
-        if (IsTaskInterrupted_(pd)) {
-          return;
-        }
-        auto [bytes_write, ecm] = file_handle.Write();
-        if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
-          SignalTaskIoAbort_(pd);
-          task->rcm = ecm;
-          return;
-        }
-        if (bytes_write > 0) {
-          task_info->Size.transferred.fetch_add(
-              static_cast<size_t>(bytes_write), std::memory_order_relaxed);
-          task_info->Size.cur_task_transferred.store(
-              static_cast<size_t>(file_handle.offset),
-              std::memory_order_relaxed);
-        }
-        task->transferred = task_info->Size.cur_task_transferred.load(
-            std::memory_order_relaxed);
-        EmitProgress(task_info, pd, false);
-      }
-    } else if (client->ConfigPort().GetProtocol() == ClientProtocol::LOCAL) {
-      UnionFileHandle file_handle;
-      const bool resume = task->transferred > 0;
-      ECM rcm = file_handle.Init(task->dst, task->size, nullptr, true, true,
-                                 !resume, &pd);
-      if (rcm.code != EC::Success) {
-        SignalTaskIoAbort_(pd);
-        task->rcm = rcm;
-        return;
-      }
-      if (resume) {
-        ECM seek_rcm = file_handle.Seek(task->transferred);
-        if (seek_rcm.code != EC::Success) {
-          SignalTaskIoAbort_(pd);
-          task->rcm = seek_rcm;
-          return;
-        }
-      }
-      while (file_handle.offset < file_handle.file_size &&
-             !IsTaskInterrupted_(pd)) {
-        while (pd.ring_buffer->empty() && !IsTaskInterrupted_(pd)) {
-          (void)pd.ring_buffer->WaitReadable(
-              [&]() { return IsTaskInterrupted_(pd); });
-        }
-        if (IsTaskInterrupted_(pd)) {
-          return;
-        }
-        auto [bytes_write, ecm] = file_handle.Write();
-        if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
-          SignalTaskIoAbort_(pd);
-          task->rcm = ecm;
-          return;
-        }
-        if (bytes_write > 0) {
-          task_info->Size.transferred.fetch_add(
-              static_cast<size_t>(bytes_write), std::memory_order_relaxed);
-          task_info->Size.cur_task_transferred.store(
-              static_cast<size_t>(file_handle.offset),
-              std::memory_order_relaxed);
-        }
-        task->transferred = task_info->Size.cur_task_transferred.load(
-            std::memory_order_relaxed);
-        EmitProgress(task_info, pd, false);
-      }
-    } else if (client->ConfigPort().GetProtocol() == ClientProtocol::FTP) {
-      auto *client_ftp_raw = dynamic_cast<AMFTPIOCore *>(&client->IOPort());
-      if (client_ftp_raw == nullptr) {
+      WriteBufferToSftp_(client_sftp, task_info, *task, pd);
+      return;
+    }
+    case ClientProtocol::LOCAL:
+      WriteBufferToLocal_(task_info, *task, pd);
+      return;
+    case ClientProtocol::FTP: {
+      auto *client_ftp = dynamic_cast<AMFTPIOCore *>(&client->IOPort());
+      if (client_ftp == nullptr) {
         SignalTaskIoAbort_(pd);
         task->rcm = {EC::InvalidArg, "FTP IO port implementation mismatch"};
         return;
       }
-      ECM out_rcm;
-      std::shared_ptr<AMFTPIOCore> client_ftp(client_ftp_raw,
-                                              [](AMFTPIOCore *) {});
-      FTPUploadSet(client_ftp, task->dst, &pd, BufferToFTPWk);
-      if (out_rcm.code != EC::Success) {
+      WriteBufferToFtp_(client_ftp, *task, pd);
+      return;
+    }
+    default:
+      return;
+    }
+  }
+
+private:
+  static bool WaitWritableUntilReady_(RuntimeProgress &pd,
+                                      const UnionFileHandle &file_handle) {
+    while (pd.ring_buffer->full() && !IsTaskInterrupted_(pd) &&
+           file_handle.offset < file_handle.file_size) {
+      (void)pd.ring_buffer->WaitWritable([&]() {
+        return IsTaskInterrupted_(pd) ||
+               file_handle.offset >= file_handle.file_size;
+      });
+    }
+    return !IsTaskInterrupted_(pd);
+  }
+
+  static bool WaitReadableUntilReady_(RuntimeProgress &pd) {
+    while (pd.ring_buffer->empty() && !IsTaskInterrupted_(pd)) {
+      (void)pd.ring_buffer->WaitReadable(
+          [&]() { return IsTaskInterrupted_(pd); });
+    }
+    return !IsTaskInterrupted_(pd);
+  }
+
+  void ReadHttpToBuffer_(AMHTTPIOCore *client_http, const TransferTask &task,
+                         RuntimeProgress &pd) const {
+    HTTPDownloadSet(client_http, task.src, &pd);
+  }
+
+  void ReadSftpToBuffer_(AMSFTPIOCore *client_sftp, TransferTask &task,
+                         RuntimeProgress &pd) const {
+    UnionFileHandle file_handle = {};
+    ECM rcm = file_handle.Init(task.src, task.size, client_sftp, false, true,
+                               true, &pd);
+    if (rcm.code != EC::Success) {
+      SignalTaskIoAbort_(pd);
+      task.rcm = rcm;
+      return;
+    }
+    if (task.transferred > 0) {
+      ECM seek_rcm = file_handle.Seek(task.transferred);
+      if (seek_rcm.code != EC::Success) {
         SignalTaskIoAbort_(pd);
-        task->rcm = out_rcm;
+        task.rcm = seek_rcm;
+        return;
       }
     }
+    std::lock_guard<std::recursive_mutex> lock(client_sftp->TransferMutex());
+    libssh2_session_set_blocking(client_sftp->session, 0);
+    while (file_handle.offset < file_handle.file_size &&
+           !IsTaskInterrupted_(pd)) {
+      if (!WaitWritableUntilReady_(pd, file_handle)) {
+        return;
+      }
+      auto [bytes_read, ecm] = file_handle.Read();
+      (void)bytes_read;
+      if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
+        SignalTaskIoAbort_(pd);
+        task.rcm = ecm;
+        return;
+      }
+    }
+  }
+
+  void ReadLocalToBuffer_(TransferTask &task, RuntimeProgress &pd) const {
+    UnionFileHandle file_handle = {};
+    ECM rcm =
+        file_handle.Init(task.src, task.size, nullptr, false, true, true, &pd);
+    if (rcm.code != EC::Success) {
+      SignalTaskIoAbort_(pd);
+      task.rcm = rcm;
+      return;
+    }
+    if (task.transferred > 0) {
+      ECM seek_rcm = file_handle.Seek(task.transferred);
+      if (seek_rcm.code != EC::Success) {
+        SignalTaskIoAbort_(pd);
+        task.rcm = seek_rcm;
+        return;
+      }
+    }
+    while (file_handle.offset < file_handle.file_size && !IsTaskInterrupted_(pd)) {
+      if (!WaitWritableUntilReady_(pd, file_handle)) {
+        return;
+      }
+      auto [bytes_read, ecm] = file_handle.Read();
+      (void)bytes_read;
+      if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
+        SignalTaskIoAbort_(pd);
+        task.rcm = ecm;
+        return;
+      }
+    }
+  }
+
+  void ReadFtpToBuffer_(AMFTPIOCore *client_ftp, const TransferTask &task,
+                        RuntimeProgress &pd) const {
+    FTPDownloadSet(client_ftp, task.src, FTPToBufferWk, &pd);
+  }
+
+  void UpdateTaskWriteProgress_(TaskHandle task_info, TransferTask &task,
+                                const UnionFileHandle &file_handle,
+                                RuntimeProgress &pd) const {
+    if (!task_info) {
+      return;
+    }
+    task_info->Size.transferred.fetch_add(static_cast<size_t>(file_handle.offset) -
+                                              task.transferred,
+                                          std::memory_order_relaxed);
+    task_info->Size.cur_task_transferred.store(
+        static_cast<size_t>(file_handle.offset), std::memory_order_relaxed);
+    task.transferred = task_info->Size.cur_task_transferred.load(
+        std::memory_order_relaxed);
+    EmitProgress(task_info, pd, false);
+  }
+
+  void WriteBufferToSftp_(AMSFTPIOCore *client_sftp, TaskHandle task_info,
+                          TransferTask &task, RuntimeProgress &pd) const {
+    UnionFileHandle file_handle = {};
+    const bool resume = task.transferred > 0;
+    ECM rcm = file_handle.Init(task.dst, task.size, client_sftp, true, true,
+                               !resume, &pd);
+    if (rcm.code != EC::Success) {
+      SignalTaskIoAbort_(pd);
+      task.rcm = rcm;
+      return;
+    }
+    if (resume) {
+      ECM seek_rcm = file_handle.Seek(task.transferred);
+      if (seek_rcm.code != EC::Success) {
+        SignalTaskIoAbort_(pd);
+        task.rcm = seek_rcm;
+        return;
+      }
+    }
+    libssh2_session_set_blocking(client_sftp->session, 0);
+    while (file_handle.offset < file_handle.file_size && !IsTaskInterrupted_(pd)) {
+      if (!WaitReadableUntilReady_(pd)) {
+        return;
+      }
+      auto [bytes_write, ecm] = file_handle.Write();
+      if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
+        SignalTaskIoAbort_(pd);
+        task.rcm = ecm;
+        return;
+      }
+      if (bytes_write > 0) {
+        UpdateTaskWriteProgress_(task_info, task, file_handle, pd);
+      }
+    }
+  }
+
+  void WriteBufferToLocal_(TaskHandle task_info, TransferTask &task,
+                           RuntimeProgress &pd) const {
+    UnionFileHandle file_handle = {};
+    const bool resume = task.transferred > 0;
+    ECM rcm =
+        file_handle.Init(task.dst, task.size, nullptr, true, true, !resume, &pd);
+    if (rcm.code != EC::Success) {
+      SignalTaskIoAbort_(pd);
+      task.rcm = rcm;
+      return;
+    }
+    if (resume) {
+      ECM seek_rcm = file_handle.Seek(task.transferred);
+      if (seek_rcm.code != EC::Success) {
+        SignalTaskIoAbort_(pd);
+        task.rcm = seek_rcm;
+        return;
+      }
+    }
+    while (file_handle.offset < file_handle.file_size && !IsTaskInterrupted_(pd)) {
+      if (!WaitReadableUntilReady_(pd)) {
+        return;
+      }
+      auto [bytes_write, ecm] = file_handle.Write();
+      if (ecm.code != EC::Success && ecm.code != EC::EndOfFile) {
+        SignalTaskIoAbort_(pd);
+        task.rcm = ecm;
+        return;
+      }
+      if (bytes_write > 0) {
+        UpdateTaskWriteProgress_(task_info, task, file_handle, pd);
+      }
+    }
+  }
+
+  void WriteBufferToFtp_(AMFTPIOCore *client_ftp, const TransferTask &task,
+                         RuntimeProgress &pd) const {
+    FTPUploadSet(client_ftp, task.dst, &pd, BufferToFTPWk);
+  }
+
+  static size_t HTTPToBufferWk(char *ptr, size_t size, size_t nmemb,
+                               void *userdata) {
+    auto *pd = static_cast<RuntimeProgress *>(userdata);
+    if (!pd || !ptr) {
+      return 0;
+    }
+    auto *cur_task = pd->GetCurrentTask();
+    if (!cur_task) {
+      return 0;
+    }
+
+    const size_t total = size * nmemb;
+    size_t copied = 0;
+    while (copied < total) {
+      if (IsTaskInterrupted_(*pd)) {
+        return 0;
+      }
+      while (pd->ring_buffer->writable() == 0 && !IsTaskInterrupted_(*pd)) {
+        (void)pd->ring_buffer->WaitWritable(
+            [&]() { return IsTaskInterrupted_(*pd); });
+      }
+      if (IsTaskInterrupted_(*pd)) {
+        return 0;
+      }
+      auto [write_ptr, write_len] = pd->ring_buffer->get_write_ptr();
+      const size_t to_write = std::min<size_t>(write_len, total - copied);
+      if (to_write == 0) {
+        continue;
+      }
+      try {
+        memcpy(write_ptr, ptr + copied, to_write);
+      } catch (const std::exception &e) {
+        SignalTaskIoAbort_(*pd);
+        cur_task->rcm =
+            Err(EC::BufferWriteError, "http.read", cur_task->src, e.what());
+        return 0;
+      }
+      pd->ring_buffer->commit_write(to_write);
+      copied += to_write;
+    }
+    return total;
+  }
+
+  static int HTTPProgressWk(void *userdata, curl_off_t dltotal,
+                            curl_off_t dlnow, curl_off_t ultotal,
+                            curl_off_t ulnow) {
+    (void)dltotal;
+    (void)dlnow;
+    (void)ultotal;
+    (void)ulnow;
+    auto *pd = static_cast<RuntimeProgress *>(userdata);
+    if (!pd || !pd->task_info) {
+      return 0;
+    }
+    if (IsTaskInterrupted_(*pd)) {
+      return 1;
+    }
+    if (pd->task_info->Core.control.IsTimeout()) {
+      return 1;
+    }
+    return 0;
+  }
+
+  static void HTTPDownloadSet(AMHTTPIOCore *client_http, const std::string &src,
+                              RuntimeProgress *pd) {
+    if (!client_http || !pd) {
+      return;
+    }
+    TransferTask *cur_task = pd->GetCurrentTask();
+    if (!cur_task) {
+      SignalTaskIoAbort_(*pd);
+      return;
+    }
+
+    CURL *curl = curl_easy_init();
+    if (!curl) {
+      cur_task->rcm =
+          Err(EC::InvalidHandle, "http.download", src, "curl_easy_init failed");
+      SignalTaskIoAbort_(*pd);
+      return;
+    }
+
+    curl_easy_setopt(curl, CURLOPT_URL, src.c_str());
+    curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, kHttpUserAgent);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, HTTPToBufferWk);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, pd);
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, HTTPProgressWk);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, pd);
+    const std::string proxy = client_http->Proxy();
+    if (!proxy.empty()) {
+      curl_easy_setopt(curl, CURLOPT_PROXY, proxy.c_str());
+    }
+
+    struct curl_slist *headers = nullptr;
+    const std::string bearer_token = client_http->BearerToken();
+    if (!bearer_token.empty()) {
+      headers = curl_slist_append(
+          headers,
+          AMStr::fmt("Authorization: Bearer {}", bearer_token).c_str());
+      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    }
+
+    const size_t resume_offset = cur_task->transferred;
+    std::string range_header = {};
+    if (resume_offset > 0) {
+      range_header = AMStr::fmt("bytes={}-", resume_offset);
+      curl_easy_setopt(curl, CURLOPT_RANGE, range_header.c_str());
+    }
+
+    const CURLcode curl_rcm = curl_easy_perform(curl);
+    long response = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response);
+
+    if (headers) {
+      curl_slist_free_all(headers);
+    }
+    curl_easy_cleanup(curl);
+
+    if (pd->task_info && pd->task_info->Core.control.IsTimeout()) {
+      cur_task->rcm =
+          Err(EC::OperationTimeout, "http.download", src, "Task timeout");
+      SignalTaskIoAbort_(*pd);
+      return;
+    }
+    if (pd->task_info && (pd->task_info->IsTerminateRequested() ||
+                          pd->task_info->Core.control.IsInterrupted())) {
+      cur_task->rcm =
+          Err(EC::Terminate, "http.download", src, "Task terminated by user");
+      SignalTaskIoAbort_(*pd);
+      return;
+    }
+    if (curl_rcm != CURLE_OK) {
+      cur_task->rcm = Err(
+          EC::NetworkError, "http.download", src, curl_easy_strerror(curl_rcm),
+          RawError{RawErrorSource::Curl, static_cast<int>(curl_rcm)});
+      SignalTaskIoAbort_(*pd);
+      return;
+    }
+    if (response >= 400) {
+      if (response == 404) {
+        cur_task->rcm = Err(EC::PathNotExist, "http.download", src,
+                            "Remote file not found");
+      } else if (response == 401 || response == 403) {
+        cur_task->rcm = Err(EC::PermissionDenied, "http.download", src,
+                            "Permission denied");
+      } else if (response == 416) {
+        cur_task->rcm = Err(EC::InvalidOffset, "http.download", src,
+                            "Invalid resume offset");
+      } else {
+        cur_task->rcm = Err(EC::CommonFailure, "http.download", src,
+                            AMStr::fmt("HTTP status {}", response));
+      }
+      SignalTaskIoAbort_(*pd);
+      return;
+    }
+    if (resume_offset > 0 && response != 206) {
+      cur_task->rcm = Err(EC::InvalidOffset, "http.download", src,
+                          "Server does not support resume range request");
+      SignalTaskIoAbort_(*pd);
+      return;
+    }
+    cur_task->rcm = OK;
   }
 
   // Static callbacks for FTP using RuntimeProgress
@@ -883,9 +1097,12 @@ public:
   }
 
   // Upload with ProgressData (legacy - for AMSFTPWorker)
-  static void FTPUploadSet(std::shared_ptr<AMFTPIOCore> client,
-                           const std::string &dst, RuntimeProgress *pd,
+  static void FTPUploadSet(AMFTPIOCore *client, const std::string &dst,
+                           RuntimeProgress *pd,
                            curl_read_callback read_callback) {
+    if (!client || !pd) {
+      return;
+    }
     std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
 
     TransferTask *cur_task = pd->GetCurrentTask();
@@ -927,10 +1144,12 @@ public:
   }
 
   // Download with ProgressData (legacy - for AMSFTPWorker)
-  static void FTPDownloadSet(std::shared_ptr<AMFTPIOCore> client,
-                             const std::string &src,
+  static void FTPDownloadSet(AMFTPIOCore *client, const std::string &src,
                              curl_write_callback write_callback,
                              RuntimeProgress *pd) {
+    if (!client || !pd) {
+      return;
+    }
     std::lock_guard<std::recursive_mutex> lock(client->TransferMutex());
 
     TransferTask *cur_task = pd->GetCurrentTask();
@@ -1077,14 +1296,23 @@ ECM TransferExecutionEngine::TransferSignleFile(
   }
   const auto src_protocol = src_client->ConfigPort().GetProtocol();
   const auto dst_protocol = dst_client->ConfigPort().GetProtocol();
+  const bool src_is_http =
+      dynamic_cast<AMHTTPIOCore *>(&src_client->IOPort()) != nullptr;
 
   const auto is_supported = [](ClientProtocol protocol) {
     return protocol == ClientProtocol::LOCAL ||
            protocol == ClientProtocol::FTP || protocol == ClientProtocol::SFTP;
   };
 
-  if (!is_supported(src_protocol) || !is_supported(dst_protocol)) {
-    return {EC::OperationUnsupported, "Unsupported client protocol"};
+  const bool src_supported = is_supported(src_protocol) || src_is_http;
+  const bool dst_supported = is_supported(dst_protocol);
+  if (!src_supported || !dst_supported) {
+    return {EC::OperationUnsupported, "transfer.single_file",
+            AMStr::fmt("{} -> {}", task->src, task->dst),
+            AMStr::fmt("Unsupported protocol (src={}{} dst={})",
+                       AMStr::ToString(src_protocol),
+                       src_is_http ? "/http" : "",
+                       AMStr::ToString(dst_protocol))};
   }
 
   if (src_client->GetUID() == dst_client->GetUID()) {
@@ -1092,6 +1320,37 @@ ECM TransferExecutionEngine::TransferSignleFile(
             "TransferSignleFile requires different source/destination client "
             "IDs"};
   }
+
+  if (auto *http_io = dynamic_cast<AMHTTPIOCore *>(&src_client->IOPort());
+      http_io != nullptr && task->transferred > 0) {
+    const size_t resume_offset = task->transferred;
+    bool can_resume = false;
+    auto probe = http_io->ProbeResumeSupport(task->src, resume_offset,
+                                             task_info->Core.control);
+    if (probe.rcm.code == EC::Terminate ||
+        probe.rcm.code == EC::OperationTimeout) {
+      return probe.rcm;
+    }
+    if ((probe.rcm) && probe.data) {
+      can_resume = true;
+    }
+    if (task->size > 0 && resume_offset >= task->size) {
+      can_resume = false;
+    }
+    if (!can_resume) {
+      const size_t current_offset =
+          task_info->Size.cur_task_transferred.load(std::memory_order_relaxed);
+      if (current_offset > 0 &&
+          !task_info->Set.keep_start_time.load(std::memory_order_relaxed)) {
+        task_info->Size.transferred.fetch_sub(current_offset,
+                                              std::memory_order_relaxed);
+      }
+      task->transferred = 0;
+      task_info->Size.cur_task_transferred.store(0, std::memory_order_relaxed);
+    }
+  }
+
+  const size_t begin_transferred = task->transferred;
 
   std::future<ECM> read_future = EnqueueReadJob_(src_client, task_info, &pd);
   helper.BufferToX(dst_client, task_info, pd);
@@ -1119,6 +1378,14 @@ ECM TransferExecutionEngine::TransferSignleFile(
 
   if (task->rcm.code != EC::Success) {
     return task->rcm;
+  }
+
+  if (task->size == 0) {
+    if (task->transferred > begin_transferred) {
+      return task->rcm;
+    }
+    return Err(EC::CommonFailure, "transfer.single_file", task->src,
+               "No data received from source");
   }
 
   if (task->transferred == task->size) {
