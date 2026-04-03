@@ -85,12 +85,18 @@ void TransferRuntimeProgress::CallInnerCallback(bool force) {
 }
 
 void TransferRuntimeProgress::UpdateSize(size_t delta) const {
-  if (!task_info) {
+  if (!task_info || delta == 0) {
     return;
   }
-  task_info->Size.cur_task_transferred.fetch_add(delta,
-                                                 std::memory_order_relaxed);
+  const size_t current = task_info->Size.cur_task_transferred.fetch_add(
+                             delta, std::memory_order_relaxed) +
+                         delta;
   task_info->Size.transferred.fetch_add(delta, std::memory_order_relaxed);
+  auto cur_guard = task_info->Core.cur_task.lock();
+  auto *cur_task = cur_guard.load();
+  if (cur_task != nullptr) {
+    cur_task->transferred = current;
+  }
 }
 
 TransferTask *TransferRuntimeProgress::GetCurrentTask() const {
@@ -728,7 +734,8 @@ private:
         return;
       }
     }
-    while (file_handle.offset < file_handle.file_size && !IsTaskInterrupted_(pd)) {
+    while (file_handle.offset < file_handle.file_size &&
+           !IsTaskInterrupted_(pd)) {
       if (!WaitWritableUntilReady_(pd, file_handle)) {
         return;
       }
@@ -747,19 +754,12 @@ private:
     FTPDownloadSet(client_ftp, task.src, FTPToBufferWk, &pd);
   }
 
-  void UpdateTaskWriteProgress_(TaskHandle task_info, TransferTask &task,
-                                const UnionFileHandle &file_handle,
-                                RuntimeProgress &pd) const {
-    if (!task_info) {
+  void UpdateTaskWriteProgress_(TaskHandle task_info, RuntimeProgress &pd,
+                                size_t written_size) const {
+    if (!task_info || written_size == 0) {
       return;
     }
-    task_info->Size.transferred.fetch_add(static_cast<size_t>(file_handle.offset) -
-                                              task.transferred,
-                                          std::memory_order_relaxed);
-    task_info->Size.cur_task_transferred.store(
-        static_cast<size_t>(file_handle.offset), std::memory_order_relaxed);
-    task.transferred = task_info->Size.cur_task_transferred.load(
-        std::memory_order_relaxed);
+    pd.UpdateSize(written_size);
     EmitProgress(task_info, pd, false);
   }
 
@@ -783,7 +783,8 @@ private:
       }
     }
     libssh2_session_set_blocking(client_sftp->session, 0);
-    while (file_handle.offset < file_handle.file_size && !IsTaskInterrupted_(pd)) {
+    while (file_handle.offset < file_handle.file_size &&
+           !IsTaskInterrupted_(pd)) {
       if (!WaitReadableUntilReady_(pd)) {
         return;
       }
@@ -794,7 +795,8 @@ private:
         return;
       }
       if (bytes_write > 0) {
-        UpdateTaskWriteProgress_(task_info, task, file_handle, pd);
+        UpdateTaskWriteProgress_(task_info, pd,
+                                 static_cast<size_t>(bytes_write));
       }
     }
   }
@@ -803,8 +805,8 @@ private:
                            RuntimeProgress &pd) const {
     UnionFileHandle file_handle = {};
     const bool resume = task.transferred > 0;
-    ECM rcm =
-        file_handle.Init(task.dst, task.size, nullptr, true, true, !resume, &pd);
+    ECM rcm = file_handle.Init(task.dst, task.size, nullptr, true, true,
+                               !resume, &pd);
     if (rcm.code != EC::Success) {
       SignalTaskIoAbort_(pd);
       task.rcm = rcm;
@@ -818,7 +820,8 @@ private:
         return;
       }
     }
-    while (file_handle.offset < file_handle.file_size && !IsTaskInterrupted_(pd)) {
+    while (file_handle.offset < file_handle.file_size &&
+           !IsTaskInterrupted_(pd)) {
       if (!WaitReadableUntilReady_(pd)) {
         return;
       }
@@ -829,7 +832,8 @@ private:
         return;
       }
       if (bytes_write > 0) {
-        UpdateTaskWriteProgress_(task_info, task, file_handle, pd);
+        UpdateTaskWriteProgress_(task_info, pd,
+                                 static_cast<size_t>(bytes_write));
       }
     }
   }
@@ -1822,12 +1826,12 @@ void TransferExecutionPool::ClearConducting(size_t thread_index) {
     std::lock_guard<std::mutex> lock(conducting_mtx_);
     if (thread_index < conducting_by_thread_.size()) {
       const TaskId id = conducting_by_thread_[thread_index];
-      if (!id.empty()) {
+      if (id != 0) {
         conducting_tasks_.erase(id);
         removed_task = true;
       }
       finished_info = conducting_infos_[thread_index];
-      conducting_by_thread_[thread_index].clear();
+      conducting_by_thread_[thread_index] = 0;
       conducting_infos_[thread_index] = nullptr;
     }
   }
@@ -2055,7 +2059,7 @@ std::unordered_map<size_t, bool> TransferExecutionPool::GetThreadIDs() const {
   std::lock_guard<std::mutex> lock(conducting_mtx_);
   for (size_t i = 0; i < count; ++i) {
     const bool busy =
-        i < conducting_by_thread_.size() && !conducting_by_thread_[i].empty();
+        i < conducting_by_thread_.size() && conducting_by_thread_[i] != 0;
     states.emplace(i, busy);
   }
   return states;
@@ -2077,10 +2081,10 @@ ECM TransferExecutionPool::Submit(TaskHandle task_info) {
     return {EC::InvalidArg, "Transfer clients is empty"};
   }
 
-  if (task_info->id.empty() ||
+  if (task_info->id == 0 ||
       IsTaskIdUsedHelper(task_info->id, task_registry_, results_,
                          conducting_mtx_, conducting_tasks_)) {
-    return {EC::InvalidArg, "Task ID is empty or already used"};
+    return {EC::InvalidArg, "Task ID is invalid or already used"};
   }
   task_info->ResetCompletionDispatch();
   task_info->State.intent.store(AMDomain::transfer::ControlIntent::Running,
@@ -2380,7 +2384,7 @@ TransferExecutionPool::GetConductingTasks() const {
   std::lock_guard<std::mutex> lock(conducting_mtx_);
   out.reserve(conducting_infos_.size());
   for (const auto &task : conducting_infos_) {
-    if (task && !task->id.empty()) {
+    if (task && task->id != 0) {
       out.emplace(task->id, task);
     }
   }

@@ -552,6 +552,7 @@ struct CpArgs : BaseArgStruct {
 struct CloneArgs : BaseArgStruct {
   std::string src;
   std::string dst;
+  std::string async_suffix;
   bool overwrite = false;
   bool resume = false;
   bool quiet = false;
@@ -575,6 +576,7 @@ struct WgetArgs : BaseArgStruct {
   std::string bear_token;
   std::string proxy;
   std::string sproxy;
+  int redirect_times = -1;
   int timeout_ms = -1;
   bool resume = false;
   bool overwrite = false;
@@ -881,7 +883,7 @@ struct TaskListArgs : BaseArgStruct {
  * @brief CLI argument container for task show.
  */
 struct TaskShowArgs : BaseArgStruct {
-  std::vector<std::string> ids;
+  std::vector<size_t> ids;
   /**
    * @brief Execute task show.
    */
@@ -897,7 +899,7 @@ struct TaskShowArgs : BaseArgStruct {
  * @brief CLI argument container for task inspect.
  */
 struct TaskInspectArgs : BaseArgStruct {
-  std::string id;
+  size_t id = 0;
   bool set = false;
   bool entry = false;
   /**
@@ -931,7 +933,7 @@ struct TaskThreadArgs : BaseArgStruct {
  * @brief CLI argument container for task query.
  */
 struct TaskEntryArgs : BaseArgStruct {
-  std::vector<std::string> ids;
+  std::vector<size_t> ids;
   /**
    * @brief Execute task entry query.
    */
@@ -948,7 +950,7 @@ struct TaskEntryArgs : BaseArgStruct {
  */
 struct TaskControlArgs : BaseArgStruct {
   enum class Action { Terminate, Pause, Resume };
-  std::vector<std::string> ids;
+  std::vector<size_t> ids;
   Action action = Action::Terminate;
   /**
    * @brief Execute task control action.

@@ -31,9 +31,11 @@ struct TransferRunArg {
 struct HttpGetArg {
   std::string src_url = {};
   std::optional<AMDomain::filesystem::PathTarget> dst_target = std::nullopt;
+  std::string username = {};
   std::string proxy = {};
   std::string https_proxy = {};
   std::string bear_token = {};
+  int redirect_times = -1;
   bool resume = false;
   bool overwrite = false;
   bool quiet = false;
@@ -50,22 +52,22 @@ struct TransferTaskListArg {
 };
 
 struct TransferTaskShowArg {
-  std::vector<std::string> ids = {};
+  std::vector<AMDomain::transfer::TaskInfo::ID> ids = {};
 };
 
 struct TransferTaskControlArg {
-  std::vector<std::string> ids = {};
+  std::vector<AMDomain::transfer::TaskInfo::ID> ids = {};
   int timeout_ms = 5000;
 };
 
 struct TransferTaskInspectArg {
-  std::string id = {};
+  AMDomain::transfer::TaskInfo::ID id = 0;
   bool show_sets = true;
   bool show_entries = true;
 };
 
 struct TransferTaskResultArg {
-  std::vector<std::string> ids = {};
+  std::vector<AMDomain::transfer::TaskInfo::ID> ids = {};
   bool remove = false;
 };
 
@@ -134,7 +136,7 @@ private:
   WaitTask_(const std::shared_ptr<AMDomain::transfer::TaskInfo> &task_info,
             const AMDomain::client::ClientControlComponent &control) const;
   [[nodiscard]] std::shared_ptr<AMDomain::transfer::TaskInfo>
-  FindTask_(const std::string &task_id) const;
+  FindTask_(AMDomain::transfer::TaskInfo::ID task_id) const;
 
 private:
   AMApplication::filesystem::FilesystemAppService &filesystem_service_;

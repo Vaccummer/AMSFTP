@@ -341,12 +341,12 @@ struct TaskInfo {
    * @brief Callback invoked when the task completes.
    */
 
-  using ID = std::string;
+  using ID = size_t;
 
   /**
    * @brief Unique task identifier.
    */
-  ID id = "";
+  ID id = 0;
   TaskStruct::TaskTime Time;
   TaskStruct::TaskState State;
   TaskStruct::TaskSize Size;

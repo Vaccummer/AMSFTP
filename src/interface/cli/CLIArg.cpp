@@ -414,9 +414,16 @@ void CpArgs::reset() {
 
 ECM CloneArgs::Run(const CLIServices &managers,
                    const CliRunContext &ctx) const {
-  const std::vector<std::string> raw_srcs = {src};
+  std::vector<std::string> raw_srcs = {src};
+  const std::string suffix = AMStr::Strip(async_suffix);
+  if (!suffix.empty()) {
+    if (suffix != "&") {
+      return Err(EC::InvalidArg, "", "", "clone async suffix must be '&'");
+    }
+    raw_srcs.push_back(suffix);
+  }
   auto build =
-      BuildTransferArgsFromCli_(managers, raw_srcs, dst, false, overwrite,
+      BuildTransferArgsFromCli_(managers, raw_srcs, dst, true, overwrite,
                                 false, true, false, resume);
   if (!(build.rcm)) {
     return build.rcm;
@@ -425,7 +432,7 @@ ECM CloneArgs::Run(const CLIServices &managers,
   AMInterface::transfer::TransferRunArg arg = {};
   arg.transfer_sets = std::move(build.transfer_sets);
   arg.quiet = quiet;
-  arg.run_async = ctx.async;
+  arg.run_async = ctx.async || build.suffix_async;
   arg.timeout_ms = -1;
   arg.confirm_policy = BuildTransferConfirmPolicy_(ctx, quiet);
   const auto component = AMDomain::client::ClientControlComponent(
@@ -436,6 +443,7 @@ ECM CloneArgs::Run(const CLIServices &managers,
 void CloneArgs::reset() {
   src.clear();
   dst.clear();
+  async_suffix.clear();
   overwrite = false;
   resume = false;
   quiet = false;
@@ -475,6 +483,7 @@ ECM WgetArgs::Run(const CLIServices &managers,
   arg.bear_token = bear_token;
   arg.proxy = proxy;
   arg.https_proxy = sproxy;
+  arg.redirect_times = redirect_times;
   arg.run_async = ctx.async || suffix_async;
   arg.timeout_ms = timeout_ms;
   arg.confirm_policy = BuildTransferConfirmPolicy_(ctx, quiet);
@@ -490,6 +499,7 @@ void WgetArgs::reset() {
   bear_token.clear();
   proxy.clear();
   sproxy.clear();
+  redirect_times = -1;
   timeout_ms = -1;
   resume = false;
   overwrite = false;
@@ -730,7 +740,7 @@ ECM TaskInspectArgs::Run(const CLIServices &managers,
 }
 
 void TaskInspectArgs::reset() {
-  id.clear();
+  id = 0;
   set = false;
   entry = false;
 }

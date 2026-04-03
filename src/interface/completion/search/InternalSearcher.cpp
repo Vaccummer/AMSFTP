@@ -1,19 +1,17 @@
-#include "interface/completion/CompletionRuntime.hpp"
-#include "domain/host/HostDomainService.hpp"
-#include "domain/host/HostModel.hpp"
 #include "domain/var/VarDomainService.hpp"
+#include "interface/completion/CompletionRuntime.hpp"
 #include "interface/completion/Searcher.hpp"
 #include "interface/completion/SearcherCommon.hpp"
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 
-
 using namespace AMSearcherDetail;
 
 using AMDomain::var::VarInfo;
 
 namespace {
+using TASKID = AMDomain::transfer::TaskInfo::ID;
 enum class VarZonePrefixMode {
   Plain = 0,
   Dollar,
@@ -46,8 +44,7 @@ struct HostLikeNameInfo {
  * @brief Build unified nickname list: created clients first, then uncreated
  * configured hosts.
  */
-std::vector<HostLikeNameInfo>
-CollectHostLikeNames_(
+std::vector<HostLikeNameInfo> CollectHostLikeNames_(
     const AMInterface::completion::ICompletionRuntime *runtime) {
   std::vector<HostLikeNameInfo> names;
   if (!runtime) {
@@ -376,9 +373,9 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
   if (HasTarget(ctx, AMCompletionTarget::HostAttr)) {
     std::vector<std::string> fields = {
-        "nickname", "hostname",    "username",    "port",       "protocol",
-        "password", "buffer_size", "compression", "cmd_template",
-        "keyfile",  "trash_dir",   "login_dir"};
+        "nickname",     "hostname", "username",    "port",
+        "protocol",     "password", "buffer_size", "compression",
+        "cmd_template", "keyfile",  "trash_dir",   "login_dir"};
     for (const auto &match : BuildGeneralMatch(fields, prefix)) {
       const std::string &field = fields[match.index];
       AMCompletionCandidate candidate;
@@ -396,12 +393,16 @@ AMInternalSearchEngine::CollectCandidates(const AMCompletionContext &ctx) {
 
   if (HasTarget(ctx, AMCompletionTarget::TaskId)) {
     auto ids = runtime->ListTaskIds();
-    std::vector<std::string> keys = ids;
+    std::vector<std::string> keys = {};
+    keys.reserve(ids.size());
+    for (const auto &id : ids) {
+      keys.push_back(AMStr::ToString(id));
+    }
     for (const auto &match : BuildGeneralMatch(keys, prefix)) {
-      const std::string &id = ids[match.index];
+      const TASKID &id = ids[match.index];
       AMCompletionCandidate candidate;
-      candidate.insert_text = id;
-      candidate.display = id;
+      candidate.insert_text = AMStr::ToString(id);
+      candidate.display = AMStr::ToString(id);
       candidate.kind = AMCompletionKind::TaskId;
       candidate.score = match.score_bias;
       result.candidates.items.push_back(std::move(candidate));
