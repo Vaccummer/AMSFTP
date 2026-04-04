@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace AMApplication::filesystem {
@@ -138,8 +139,7 @@ ECMData<DstResolveResult> FilesystemAppService::ResolveTransferDst(
     PathTarget dst, TransferClientContainer *clients,
     const ClientControlComponent &control) {
   if (!clients) {
-    return {DstResolveResult{},
-            Err(EC::InvalidArg, "", "",
+    return {Err(EC::InvalidArg, "", "",
                 "Transfer client container pointer is null")};
   }
 
@@ -151,7 +151,7 @@ ECMData<DstResolveResult> FilesystemAppService::ResolveTransferDst(
   }
 
   ECM add_dst_rcm = clients->AddDstClient(dst.nickname, transfer_client.data);
-  if (!(add_dst_rcm) && add_dst_rcm.code == EC::InvalidArg) {
+  if (!add_dst_rcm && add_dst_rcm.code == EC::InvalidArg) {
     auto second_client = GetTransferClient(dst.nickname);
     if (!(second_client.rcm) || !second_client.data) {
       return {std::move(out), second_client.rcm};
@@ -161,13 +161,13 @@ ECMData<DstResolveResult> FilesystemAppService::ResolveTransferDst(
       return {std::move(out), add_dst_rcm};
     }
     transfer_client = second_client;
-  } else if (!(add_dst_rcm)) {
+  } else if (!add_dst_rcm) {
     return {std::move(out), add_dst_rcm};
   }
 
   auto abs_result =
       ResolveAbsolutePath(transfer_client.data, dst.path, control);
-  if (!(abs_result.rcm)) {
+  if (!abs_result.rcm) {
     return {std::move(out), abs_result.rcm};
   }
 
@@ -181,7 +181,7 @@ ECMData<DstResolveResult> FilesystemAppService::ResolveTransferDst(
 
   auto stat_result =
       BaseStat(transfer_client.data, dst.nickname, dst.path, control);
-  if ((stat_result.rcm)) {
+  if (stat_result.rcm) {
     out.dst_info = stat_result.data;
     return {std::move(out), OK};
   }
@@ -209,7 +209,7 @@ ECMData<SourceResolveResult> FilesystemAppService::ResolveTransferSrc(
   const auto mark_error = [&](const std::string &nickname,
                               const PathTarget &error_path, const ECM &rcm) {
     const std::string key = nickname.empty() ? std::string("local") : nickname;
-    out.error_data[key].push_back({error_path, rcm});
+    out.error_data[key].emplace_back(error_path, rcm);
     if ((first_error)) {
       first_error = rcm;
     }
@@ -227,7 +227,7 @@ ECMData<SourceResolveResult> FilesystemAppService::ResolveTransferSrc(
 
     auto src_transfer =
         AcquireSourceTransferClient_(this, clients, src.nickname);
-    if (!(src_transfer.rcm) || !src_transfer.data) {
+    if (!src_transfer.rcm || !src_transfer.data) {
       mark_error(src.nickname, src, src_transfer.rcm);
       if (error_stop) {
         return {std::move(out), src_transfer.rcm};
@@ -239,7 +239,7 @@ ECMData<SourceResolveResult> FilesystemAppService::ResolveTransferSrc(
     const bool is_wildcard =
         AMDomain::filesystem::services::HasWildcard(src.path);
     auto abs_result = ResolveAbsolutePath(src_transfer.data, src.path, control);
-    if (!(abs_result.rcm)) {
+    if (!abs_result.rcm) {
       mark_error(src.nickname, src, abs_result.rcm);
       if (error_stop) {
         return {std::move(out), abs_result.rcm};
@@ -341,6 +341,34 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
       out.warnings.push_back(
           {std::move(src_path), std::move(dst_path), std::move(rcm)});
     }
+  };
+
+  std::unordered_map<std::string, ECMData<PathInfo>> dst_stat_cache = {};
+  dst_stat_cache.reserve(256);
+  const auto query_dst_stat = [&](const std::string &path) -> ECMData<PathInfo> {
+    auto it = dst_stat_cache.find(path);
+    if (it != dst_stat_cache.end()) {
+      return it->second;
+    }
+    auto stat_res = BaseStat(dst.resolved_target.client, dst_host, path, control);
+    dst_stat_cache.emplace(path, stat_res);
+    return stat_res;
+  };
+
+  std::unordered_map<std::string, ECMData<std::vector<PathInfo>>> src_list_cache =
+      {};
+  src_list_cache.reserve(256);
+  const auto query_src_listdir =
+      [&](const std::string &host, const ClientHandle &client,
+          const std::string &path) -> ECMData<std::vector<PathInfo>> {
+    const std::string key = host + "\t" + path;
+    auto it = src_list_cache.find(key);
+    if (it != src_list_cache.end()) {
+      return it->second;
+    }
+    auto list_res = BaseListdir(client, host, path, control);
+    src_list_cache.emplace(key, list_res);
+    return list_res;
   };
 
   struct PendingState {
@@ -455,8 +483,7 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
     }
 
     if (state.node.type == PathType::DIR) {
-      auto dst_stat =
-          BaseStat(dst.resolved_target.client, dst_host, mapped_dst, control);
+      auto dst_stat = query_dst_stat(mapped_dst);
       const bool dst_exists = (dst_stat.rcm);
       if (dst_exists && dst_stat.data.type != PathType::DIR) {
         append_warning(state.node.path, mapped_dst,
@@ -474,8 +501,8 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
         continue;
       }
 
-      auto list_result = BaseListdir(state.src_client, state.src_host,
-                                     state.node.path, control);
+      auto list_result =
+          query_src_listdir(state.src_host, state.src_client, state.node.path);
       if (!(list_result.rcm)) {
         if (IsStopError_(list_result.rcm.code)) {
           return {std::move(out), list_result.rcm};
@@ -521,8 +548,7 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
 
     const std::string parent_path =
         AMPath::dirname(mapped_dst).empty() ? "." : AMPath::dirname(mapped_dst);
-    auto parent_stat =
-        BaseStat(dst.resolved_target.client, dst_host, parent_path, control);
+    auto parent_stat = query_dst_stat(parent_path);
     if ((parent_stat.rcm)) {
       if (parent_stat.data.type != PathType::DIR) {
         append_warning(state.node.path, mapped_dst,
@@ -546,8 +572,7 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
       continue;
     }
 
-    auto dst_stat =
-        BaseStat(dst.resolved_target.client, dst_host, mapped_dst, control);
+    auto dst_stat = query_dst_stat(mapped_dst);
     const bool dst_exists = (dst_stat.rcm);
     if (dst_exists && dst_stat.data.type == PathType::DIR) {
       append_warning(
@@ -619,5 +644,94 @@ FilesystemAppService::BuildTransferTasks(const SourceResolveResult &src,
   DedupAndSortTasks_(&out.dir_tasks);
   DedupAndSortTasks_(&out.file_tasks);
   return {std::move(out), OK};
+}
+
+ECMData<HttpDownloadPlan> FilesystemAppService::BuildHttpDownloadPlan(
+    const std::optional<PathTarget> &dst_target,
+    const std::string &suggested_filename,
+    const ClientControlComponent &control) {
+  HttpDownloadPlan out = {};
+  PathTarget base_target = {};
+  const bool use_cwd_default = !dst_target.has_value();
+
+  if (dst_target.has_value()) {
+    base_target = *dst_target;
+  } else {
+    auto cwd_result = GetCwd(control);
+    if (!(cwd_result.rcm)) {
+      return {std::move(out), cwd_result.rcm};
+    }
+    base_target = cwd_result.data;
+  }
+
+  if (base_target.is_wildcard ||
+      AMDomain::filesystem::services::HasWildcard(base_target.path)) {
+    return {std::move(out),
+            Err(EC::InvalidArg, "", "", "wget destination cannot be wildcard")};
+  }
+
+  auto resolved_base = ResolvePath(base_target, control);
+  if (!(resolved_base.rcm) || !resolved_base.data.client) {
+    return {std::move(out),
+            (resolved_base.rcm)
+                ? Err(EC::InvalidHandle, "", "", "Resolved client is null")
+                : resolved_base.rcm};
+  }
+
+  const std::string final_name =
+      AMStr::Strip(suggested_filename).empty() ? "download.bin"
+                                               : suggested_filename;
+  PathTarget final_target = resolved_base.data.target;
+  std::string final_abs_path = resolved_base.data.abs_path;
+
+  auto base_stat =
+      BaseStat(resolved_base.data.client, resolved_base.data.target.nickname,
+               resolved_base.data.abs_path, control);
+  if (use_cwd_default) {
+    if (!(base_stat.rcm)) {
+      return {std::move(out), base_stat.rcm};
+    }
+    if (base_stat.data.type != PathType::DIR) {
+      return {std::move(out),
+              Err(EC::NotADirectory, "", "", AMStr::fmt("cwd is not directory: {}",
+                                                        resolved_base.data.abs_path))};
+    }
+    final_abs_path = AMPath::join(resolved_base.data.abs_path, final_name);
+    final_target.path = final_abs_path;
+    final_target.is_wildcard = false;
+    final_target.is_user_path = false;
+  } else if ((base_stat.rcm) && base_stat.data.type == PathType::DIR) {
+    final_abs_path = AMPath::join(resolved_base.data.abs_path, final_name);
+    final_target.path = final_abs_path;
+    final_target.is_wildcard = false;
+    final_target.is_user_path = false;
+  } else if (!(base_stat.rcm) &&
+             !AMDomain::filesystem::services::IsPathNotExistError(
+                 base_stat.rcm.code)) {
+    return {std::move(out), base_stat.rcm};
+  }
+
+  out.final_target = final_target;
+  out.resolved_target = resolved_base.data;
+  out.resolved_target.target = final_target;
+  out.resolved_target.abs_path = final_abs_path;
+
+  auto final_stat = BaseStat(resolved_base.data.client,
+                             resolved_base.data.target.nickname, final_abs_path,
+                             control);
+  if ((final_stat.rcm)) {
+    out.dst_info = final_stat.data;
+    if (out.dst_info->type == PathType::DIR) {
+      return {std::move(out),
+              Err(EC::NotAFile, "", "",
+                  AMStr::fmt("Destination is directory: {}", final_abs_path))};
+    }
+    return {std::move(out), OK};
+  }
+  if (AMDomain::filesystem::services::IsPathNotExistError(final_stat.rcm.code)) {
+    out.dst_info = std::nullopt;
+    return {std::move(out), OK};
+  }
+  return {std::move(out), final_stat.rcm};
 }
 } // namespace AMApplication::filesystem

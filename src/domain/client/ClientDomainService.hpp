@@ -5,7 +5,7 @@
 namespace AMDomain::client::ClientService {
 constexpr int64_t AMDefaultLocalBufferSize = 1024 * 1024 * 16;
 constexpr int64_t AMDefaultRemoteBufferSize = 1024 * 1024 * 8;
-constexpr int64_t AMMinBufferSize = 1024 * 32;
+constexpr int64_t AMMinBufferSize = 1024 * 4;
 constexpr int64_t AMMaxBufferSize = 1024 * 1024 * 1024;
 constexpr float AMDefaultTimeoutMs = -1.0f;
 

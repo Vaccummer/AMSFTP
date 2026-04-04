@@ -15,7 +15,13 @@
 namespace AMDomain::host {
 using EC = ErrorCode;
 
-enum class ClientProtocol { UnInitilized = -1, SFTP = 1, FTP = 2, LOCAL = 3 };
+enum class ClientProtocol {
+  UnInitilized = -1,
+  SFTP = 1,
+  FTP = 2,
+  LOCAL = 3,
+  HTTP = 4
+};
 
 /**
  * @brief Client runtime metadata bound to one host profile.

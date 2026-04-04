@@ -58,6 +58,9 @@ ECM AcquireTransferLease_(const ClientHandle &client) {
       });
 
   if (type_mismatch) {
+    if (meta.StoreNamedData(kTransferLeaseKey, std::any(true), true)) {
+      return OK;
+    }
     return Err(EC::CommonFailure, "", "",
                "transfer.lease metadata type is invalid");
   }
@@ -452,12 +455,6 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
       continue;
     }
 
-    auto state = candidate->ConfigPort().GetState();
-    if (!(state.data.status == ClientStatus::OK && (state.rcm))) {
-      stale_ids.push_back(candidate_id);
-      continue;
-    }
-
     const ECM lease_rcm = AcquireTransferLease_(candidate);
     if ((lease_rcm)) {
       auto managed_result = GetClient(nickname, true);
@@ -472,7 +469,7 @@ ClientAppService::GetPublicClient(const std::string &nickname) {
           }
         }
       }
-      return {candidate, state.rcm};
+      return {candidate, OK};
     }
     if (lease_rcm.code == EC::PathUsingByOthers) {
       has_leased_client = true;
@@ -640,6 +637,9 @@ ECM ClientAppService::TryReturnClient(const ClientHandle &client) {
       });
 
   if (type_mismatch) {
+    if (meta.StoreNamedData(kTransferLeaseKey, std::any(false), true)) {
+      return OK;
+    }
     return Err(EC::CommonFailure, "", "",
                "transfer.lease metadata type is invalid");
   }
